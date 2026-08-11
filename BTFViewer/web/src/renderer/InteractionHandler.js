@@ -458,6 +458,11 @@ export class InteractionHandler {
   }
 
   _onMouseDown(e) {
+    // Context menu / overlay UI live inside the interaction root (canvas-wrap);
+    // do not treat their presses as timeline clicks (would place a cursor).
+    if (e.target?.closest?.('.context-menu, .scrollbar-track, .overview-popup')) {
+      return
+    }
     if (e.button === 1) {
       const trace = this._opts.getTrace()
       if (!trace) return

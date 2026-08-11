@@ -754,6 +754,8 @@ class TimelineView(QGraphicsView):
     mark_dragging        = Signal(str, int, int)  # kind, id, new_ns - live during drag
     bookmark_requested          = Signal(int)   # ns at right-click position
     annotation_requested        = Signal(int)   # ns at right-click position
+    explain_region_requested    = Signal()      # explain cursor region with AI
+    ask_ai_event_requested       = Signal(object)  # {task, core, start, stop, ns}
     clear_bookmarks_requested   = Signal()      # clear all bookmarks
     clear_annotations_requested = Signal()      # clear all annotations
     pre_change                  = Signal()      # emitted before any cursor/mark mutation
@@ -3066,6 +3068,17 @@ class TimelineView(QGraphicsView):
                 lambda _t=_seg_task, _c=hit_seg.core: self._scene.set_highlighted_task(
                     _task_merge_key(_t), locked=True, core_name=_c, ref_ns=hit_seg.start)
             )
+            menu.addAction(
+                _svg_icon("M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4.414l-2.707 2.707A1 1 0 0 1 0 14.586V2zm2-1a1 1 0 0 0-1 1v10.586L3.293 10.5H14a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H2z", _icon_color),
+                "Ask AI about this event",
+                lambda _t=_seg_task, _c=hit_seg.core, _s=hit_seg, _ns=ns: self.ask_ai_event_requested.emit({
+                    "task": _task_display_name(_t),
+                    "core": _c,
+                    "start": _s.start,
+                    "stop": _s.end,
+                    "ns": _ns,
+                })
+            )
             menu.addSeparator()
 
         # Place cursor
@@ -3088,6 +3101,12 @@ class TimelineView(QGraphicsView):
                 "Clear all cursors",
                 lambda: (self.pre_change.emit(), self._scene.clear_cursors(),
                          self.cursors_changed.emit([]))
+            )
+        if len(self._scene.cursor_times()) >= 2:
+            menu.addAction(
+                _svg_icon("M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4.414l-2.707 2.707A1 1 0 0 1 0 14.586V2zm2-1a1 1 0 0 0-1 1v10.586L3.293 10.5H14a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H2z", _icon_color),
+                "Explain this region with AI",
+                lambda: self.explain_region_requested.emit()
             )
         if self._scene._trace is not None:
             menu.addSeparator()

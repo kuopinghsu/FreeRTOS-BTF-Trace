@@ -6946,6 +6946,7 @@ class _AnalysisFindingsDialog(QDialog):
         self._scope_title = scope_title or ""
         self.wants_ai_query = False
         self._ai_needs_settings = False
+        self.wants_ai_finding_id = ""
         self.setWindowTitle(f"Analysis Findings{self._scope_title}")
         self.setModal(True)
         self.setMinimumSize(520, 360)
@@ -6962,12 +6963,14 @@ class _AnalysisFindingsDialog(QDialog):
         list_w.setWordWrap(True)
         list_w.setSpacing(4)
         list_w.setUniformItemSizes(False)
+        self._list_w = list_w
         if self._findings:
             for f in self._findings:
                 sev = f.get("severity", "info")
                 title = str(f.get("title", "Finding"))
                 text = str(f.get("text", ""))
                 item = QListWidgetItem(f"{title} — {text}")
+                item.setData(Qt.ItemDataRole.UserRole, f.get("id") or "")
                 if sev == "error":
                     item.setForeground(QBrush(QColor("#c0392b")))
                 elif sev == "warning":
@@ -6994,6 +6997,23 @@ class _AnalysisFindingsDialog(QDialog):
             "Enable AI Assistant in Settings → AI")
         rca_btn.clicked.connect(
             lambda: self._query_with_ai(ai_enabled, "root_cause"))
+        verify_btn = buttons.addButton(
+            "Verify with AI…", QDialogButtonBox.ButtonRole.ActionRole)
+        verify_btn.setToolTip(
+            "Open the AI Assistant and verify the selected finding with evidence"
+            if ai_enabled else
+            "Enable AI Assistant in Settings → AI")
+        verify_btn.clicked.connect(
+            lambda: self._query_with_ai(ai_enabled, "verify"))
+        auto_btn = buttons.addButton(
+            "Auto investigate…", QDialogButtonBox.ButtonRole.ActionRole)
+        auto_btn.setToolTip(
+            "Run the automatic investigate → correlate → critical-path → "
+            "what-if/optimize workflow"
+            if ai_enabled else
+            "Enable AI Assistant in Settings → AI")
+        auto_btn.clicked.connect(
+            lambda: self._query_with_ai(ai_enabled, "auto_investigate"))
         ai_btn = buttons.addButton(
             "Query with AI…", QDialogButtonBox.ButtonRole.ActionRole)
         ai_btn.setToolTip(
@@ -7016,6 +7036,12 @@ class _AnalysisFindingsDialog(QDialog):
     def _query_with_ai(self, ai_enabled: bool, template_id: str = "findings") -> None:
         self.wants_ai_query = True
         self.wants_ai_template = template_id or "findings"
+        self.wants_ai_finding_id = ""
+        if template_id in ("verify", "auto_investigate"):
+            item = self._list_w.currentItem()
+            if item is not None:
+                self.wants_ai_finding_id = str(
+                    item.data(Qt.ItemDataRole.UserRole) or "")
         self._ai_needs_settings = not ai_enabled
         self.accept()
 

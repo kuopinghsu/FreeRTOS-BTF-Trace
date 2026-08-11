@@ -55,7 +55,15 @@ function inlineToHtml(text) {
   const out = []
   for (const [kind, val] of parts) {
     if (kind === 'c') {
-      out.push(stash(`<code>${escapeHtml(val)}</code>`))
+      // Models often wrap jump:TIME in backticks; keep those clickable.
+      const jm = String(val || '').trim().match(/^jump:([0-9]+(?:\.[0-9]+)?)$/)
+      if (jm) {
+        out.push(stash(
+          `<a href="${btfJumpHref(jm[1])}" class="ai-jump" data-jump="${jm[1]}">jump:${jm[1]}</a>`,
+        ))
+      } else {
+        out.push(stash(`<code>${escapeHtml(val)}</code>`))
+      }
       continue
     }
     let seg = val

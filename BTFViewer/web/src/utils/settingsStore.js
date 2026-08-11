@@ -42,6 +42,8 @@ import {
 } from './ollamaClient.js'
 
 const SETTINGS_KEY = 'btf-viewer-settings-v1'
+// Separate key: baseline profiles grow with usage and are not GUI prefs.
+const AI_BASELINE_KEY = 'btf-viewer-ai-baseline-v1'
 
 export { MAX_CURSORS }
 
@@ -231,6 +233,25 @@ export function shouldReplaceDeadlinesText(currentText, incomingMap) {
   const incoming = formatDeadlinesText(incomingMap)
   const currentParsed = formatDeadlinesText(parseDeadlinesText(currentText))
   return incoming !== currentParsed
+}
+
+/** Historical per-task baseline profile (see aiInvestigation.js updateBaselineProfile). */
+export function loadAiBaselineProfile() {
+  try {
+    const raw = localStorage.getItem(AI_BASELINE_KEY)
+    const data = raw ? JSON.parse(raw) : null
+    return (data && typeof data === 'object') ? data : {}
+  } catch {
+    return {}
+  }
+}
+
+export function saveAiBaselineProfile(profile) {
+  try {
+    localStorage.setItem(AI_BASELINE_KEY, JSON.stringify(profile || {}))
+  } catch {
+    /* quota / private mode */
+  }
 }
 
 /** Resize every tab's cursor array to match maxCursors. */

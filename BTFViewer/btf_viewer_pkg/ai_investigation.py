@@ -26,6 +26,7 @@ _TOOL_STEP_MAP: Dict[str, Tuple[str, ...]] = {
     "query_raw_metric": ("metrics",),
     "search_timeline": ("metrics",),
     "correlate_events": ("metrics", "related"),
+    "find_critical_path": ("metrics", "validate"),
     "compare_performance": ("metrics", "validate"),
     "trigger_compare": ("metrics", "related"),
     "set_cursors": ("narrow",),
@@ -46,7 +47,8 @@ _TOOL_STEP_MAP: Dict[str, Tuple[str, ...]] = {
 }
 
 _AGENT_TEMPLATE_IDS = frozenset({
-    "investigate", "root_cause", "what_if", "optimize", "diagnostic_report",
+    "investigate", "root_cause", "verify", "what_if", "optimize",
+    "diagnostic_report", "auto_investigate",
 })
 
 _FINDING_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
@@ -266,6 +268,7 @@ def build_investigate_context(
             "findings": [],
             "focus": None,
             "hypotheses": [],
+            "alternatives": [],
             "suggested_tools": [],
             "plan": default_investigation_plan(),
             "evidence_chain": format_findings_evidence_chain([]),
@@ -275,6 +278,7 @@ def build_investigate_context(
     text = str(focus.get("text") or "")
     sev = str(focus.get("severity") or "info")
     hypotheses = _hypotheses_for_finding(title, text)
+    alternatives = _alternatives_from_hypotheses(hypotheses)
     suggested = _suggested_tools_for_finding(title, text, depth)
     related = [
         {"id": f.get("id"), "severity": f.get("severity"), "title": f.get("title")}
@@ -296,6 +300,7 @@ def build_investigate_context(
         },
         "related_findings": related,
         "hypotheses": hypotheses[: max(1, depth + 1)],
+        "alternatives": alternatives[: max(1, depth + 1)],
         "suggested_tools": suggested,
         "depth": depth,
         "evidence_chain": format_findings_evidence_chain([focus]),
@@ -303,6 +308,13 @@ def build_investigate_context(
         "ranked_anomalies": (anomalies.get("anomalies") or [])[: max(3, depth)],
         "plan": plan,
     }
+    score_data = compute_evidence_score(
+        graph["finding"].get("evidence"),
+        alternatives=graph.get("alternatives"),
+        evidence_chain=graph.get("evidence_chain"),
+    )
+    graph["evidence_score"] = score_data["score"]
+    graph["evidence_score_breakdown"] = score_data["breakdown"]
     return {
         "ok": True,
         "message": (
@@ -311,6 +323,23 @@ def build_investigate_context(
         ),
         **graph,
     }
+
+
+def _alternatives_from_hypotheses(
+    hypotheses: Sequence[dict],
+) -> List[Dict[str, str]]:
+    """Ranked alternative explanations derived from heuristic hypotheses."""
+    alts: List[Dict[str, str]] = []
+    for i, h in enumerate(hypotheses or []):
+        if not isinstance(h, dict):
+            continue
+        hyp = str(h.get("hypothesis") or "").strip()
+        if not hyp:
+            continue
+        why = str(h.get("why") or "").strip()
+        status = "plausible" if i == 0 else "untested"
+        alts.append({"hypothesis": hyp, "status": status, "why": why})
+    return alts
 
 
 def _hypotheses_for_finding(title: str, text: str) -> List[Dict[str, str]]:
@@ -662,6 +691,136 @@ def detect_anomalies(
     }
 
 
+_MERMAID_LABEL_STRIP_RE = re.compile(r'["\[\]{}()|]')
+
+
+def _mermaid_safe_label(text: Any, limit: int = 48) -> str:
+    """Strip mermaid delimiter characters so a label is safe as a node body."""
+    cleaned = _MERMAID_LABEL_STRIP_RE.sub("", str(text or "").replace("\n", " ")).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return (cleaned or "Step")[:limit]
+
+
+def investigation_tree_mermaid(
+    chain: Optional[Sequence[Dict[str, Any]]] = None,
+    hypotheses: Optional[Sequence[Dict[str, Any]]] = None,
+) -> str:
+    """Render a root-cause chain + hypotheses as a mermaid ``graph TD`` snippet.
+
+    Rectangles are the ``root_cause_chain`` steps (in order); rounded nodes
+    branch off the first (finding) step for each alternative hypothesis.
+    Rendered the same way as any other diagram (``mermaid_block_html`` /
+    ``formatAiMessageHtml``). Kept in sync with
+    ``web/src/utils/aiInvestigation.js`` ``investigationTreeMermaid``.
+    """
+    chain_items = [c for c in (chain or []) if isinstance(c, dict)]
+    hyp_items = [h for h in (hypotheses or []) if isinstance(h, dict)]
+    if not chain_items and not hyp_items:
+        return ""
+    lines = ["graph TD"]
+    node_ids: List[str] = []
+    for i, step in enumerate(chain_items):
+        nid = f"S{i}"
+        label = _mermaid_safe_label(step.get("label") or f"Step {i + 1}")
+        lines.append(f"{nid}[{label}]")
+        node_ids.append(nid)
+    for i in range(1, len(node_ids)):
+        lines.append(f"{node_ids[i - 1]} --> {node_ids[i]}")
+    anchor = node_ids[0] if node_ids else None
+    for j, h in enumerate(hyp_items):
+        nid = f"H{j}"
+        label = _mermaid_safe_label(h.get("hypothesis") or f"Hypothesis {j + 1}")
+        lines.append(f"{nid}({label})")
+        if anchor:
+            lines.append(f"{anchor} --> {nid}")
+    return "\n".join(lines)
+
+
+def evidence_score_bar(score: Any, width: int = 10) -> str:
+    """Text meter for the AI Evidence Score, e.g. ``████████░░ 82%``."""
+    try:
+        pct = max(0, min(100, int(round(float(score)))))
+    except (TypeError, ValueError):
+        pct = 0
+    filled = max(0, min(width, int(round(width * pct / 100.0))))
+    return "█" * filled + "░" * (width - filled) + f" {pct}%"
+
+
+def compute_evidence_score(
+    evidence: Optional[Sequence[Dict[str, Any]]] = None,
+    *,
+    alternatives: Optional[Sequence[Dict[str, Any]]] = None,
+    evidence_chain: str = "",
+    checks: Optional[Sequence[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Heuristic 0-100 "AI Evidence Score" for an investigation conclusion.
+
+    **Not a statistical confidence interval** — a coarse heuristic to help
+    triage how much concrete evidence backs a conclusion (label it
+    "AI Evidence Score — heuristic" in the UI). Kept in sync with
+    ``web/src/utils/aiInvestigation.js`` ``computeEvidenceScore``.
+
+    Factors:
+
+    - +40 at least one evidence item carries a concrete ``time`` (jump:TIME)
+    - +25 timeline correlation — evidence spans ≥2 kinds (``"kind: detail"``
+      labels, as produced by ``correlate_events`` / ``find_critical_path``),
+      or an evidence-chain narrative is present
+    - +15 metric correlation — a verification checklist backs the
+      conclusion (``compare_performance`` / ``check_budget`` style checks)
+    - −5 per untested alternative hypothesis (max −15)
+    - −10 no evidence at all (neither items nor a chain)
+    """
+    ev = [e for e in (evidence or []) if isinstance(e, dict)]
+    alts = [a for a in (alternatives or []) if isinstance(a, dict)]
+    chks = [c for c in (checks or []) if isinstance(c, dict)]
+    chain_text = str(evidence_chain or "").strip()
+    breakdown: List[Dict[str, Any]] = []
+    score = 0
+
+    has_times = any(e.get("time") is not None for e in ev)
+    if has_times:
+        score += 40
+        breakdown.append({"label": "Direct evidence times (jump:TIME)", "delta": 40})
+
+    kinds = set()
+    for e in ev:
+        label = str(e.get("label") or "")
+        if ":" in label:
+            kind = label.split(":", 1)[0].strip().lower()
+            if kind:
+                kinds.add(kind)
+    has_timeline_corr = len(kinds) >= 2 or bool(chain_text)
+    if has_timeline_corr:
+        score += 25
+        breakdown.append({"label": "Timeline correlation", "delta": 25})
+
+    if chks:
+        score += 15
+        breakdown.append({"label": "Metric correlation", "delta": 15})
+
+    untested = [a for a in alts if str(a.get("status") or "").lower() == "untested"]
+    if untested:
+        penalty = min(15, 5 * len(untested))
+        score -= penalty
+        breakdown.append({
+            "label": f"{len(untested)} alternative(s) untested",
+            "delta": -penalty,
+        })
+
+    if not ev and not chain_text:
+        score -= 10
+        breakdown.append({"label": "Missing direct evidence", "delta": -10})
+
+    score = max(0, min(100, score))
+    return {
+        "score": score,
+        "label": "AI Evidence Score — heuristic",
+        "bar": evidence_score_bar(score),
+        "breakdown": breakdown,
+    }
+
+
 def build_root_cause_chain(finding: Optional[dict]) -> List[Dict[str, Any]]:
     """Heuristic Finding → cause steps for the Root Cause Chain UI/tool data."""
     if not finding:
@@ -774,6 +933,279 @@ def build_correlation_timeline(
     }
 
 
+_CRITICAL_PATH_KIND_ORDER: Dict[str, int] = {
+    "blocking": 0,
+    "sync": 1,
+    "priority": 2,
+    "execution": 3,
+    "migration": 4,
+    "search": 5,
+}
+
+
+def build_critical_path(
+    events: Sequence[dict],
+    *,
+    task: str = "",
+    timestamp: Optional[float] = None,
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """Turn correlate events into a causal critical-path step list."""
+    limit = max(1, min(40, int(limit or 20)))
+    rows: List[dict] = []
+    for ev in events or []:
+        if not isinstance(ev, dict):
+            continue
+        try:
+            t = float(ev.get("time"))
+        except (TypeError, ValueError):
+            continue
+        rows.append({
+            "time": t,
+            "kind": str(ev.get("kind") or "event"),
+            "detail": str(ev.get("detail") or ev.get("note") or ""),
+            "task": str(ev.get("task") or task or ""),
+        })
+    if not rows:
+        return {
+            "ok": False,
+            "message": "No events in scope for critical path",
+            "task": task,
+            "path": [],
+            "confidence": "Low",
+            "mermaid": "",
+            "graph_nodes": [],
+            "blocking_steps": [],
+            "preemption_steps": [],
+        }
+    if timestamp is not None:
+        ts = float(timestamp)
+        rows.sort(
+            key=lambda r: (
+                abs(r["time"] - ts),
+                _CRITICAL_PATH_KIND_ORDER.get(r["kind"], 9),
+                r["time"],
+            ),
+        )
+    else:
+        rows.sort(
+            key=lambda r: (
+                r["time"],
+                _CRITICAL_PATH_KIND_ORDER.get(r["kind"], 9),
+            ),
+        )
+    rows = rows[:limit]
+    kind_labels = {
+        "blocking": "Blocked / off-CPU",
+        "sync": "Sync / mutex",
+        "priority": "Priority inheritance",
+        "execution": "On-CPU execution",
+        "migration": "Core migration",
+        "search": "Timeline match",
+    }
+    path: List[Dict[str, Any]] = []
+    for i, ev in enumerate(rows, start=1):
+        label = kind_labels.get(ev["kind"], ev["kind"])
+        detail = ev["detail"]
+        path.append({
+            "step": i,
+            "time": ev["time"],
+            "detail": f"{label}: {detail}" if detail else label,
+            "kind": ev["kind"],
+        })
+    kinds = {r["kind"] for r in rows}
+    if len(kinds) >= 3 and len(rows) >= 4:
+        confidence = "High"
+    elif len(rows) >= 2:
+        confidence = "Medium"
+    else:
+        confidence = "Low"
+    # Blocking = off-CPU waits; preemption = priority boosts / migrations that
+    # reshuffled who ran (best-effort from this task's own event stream).
+    blocking_steps = [p for p in path if p["kind"] == "blocking"]
+    preemption_steps = [p for p in path if p["kind"] in ("priority", "migration")]
+    graph_nodes = [
+        {"id": f"S{p['step']}", "label": p["detail"], "kind": p["kind"], "time": p["time"]}
+        for p in path
+    ]
+    mermaid = ""
+    if len(graph_nodes) >= 2:
+        lines = ["graph LR"]
+        for node in graph_nodes:
+            safe = str(node["label"]).replace('"', "'")[:80]
+            lines.append(f'  {node["id"]}["{safe}"]')
+        for a, b in zip(graph_nodes, graph_nodes[1:]):
+            lines.append(f'  {a["id"]} --> {b["id"]}')
+        mermaid = "\n".join(lines)
+    return {
+        "ok": True,
+        "message": f"{len(path)} step critical path for {task or 'task'}",
+        "task": task,
+        "timestamp": timestamp,
+        "path": path,
+        "confidence": confidence,
+        "mermaid": mermaid,
+        "graph_nodes": graph_nodes,
+        "blocking_steps": blocking_steps,
+        "preemption_steps": preemption_steps,
+    }
+
+
+def extract_evidence_panel_payload(
+    tool_name: str,
+    result: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Normalize investigation tool results for the Evidence panel UI."""
+    if not isinstance(result, dict) or not result.get("ok"):
+        return None
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    for key in (
+        "finding", "hypotheses", "alternatives", "evidence_chain",
+        "events", "path", "checks", "confidence", "task", "correlation",
+        "root_cause_chain",
+    ):
+        if key not in data and key in result:
+            data[key] = result[key]
+    name = str(tool_name or "")
+    payload: Dict[str, Any] = {}
+
+    if name == "investigate" or data.get("finding") or data.get("hypotheses"):
+        finding = data.get("finding") if isinstance(data.get("finding"), dict) else {}
+        payload["conclusion"] = str(finding.get("title") or data.get("conclusion") or "")
+        payload["subtitle"] = str(finding.get("text") or "")
+        ev_items: List[Dict[str, Any]] = []
+        for ev in finding.get("evidence") or []:
+            if isinstance(ev, dict):
+                ev_items.append({
+                    "label": str(ev.get("label") or ev.get("text") or "evidence"),
+                    "time": ev.get("time"),
+                })
+        if ev_items:
+            payload["evidence"] = ev_items
+        elif data.get("evidence_chain"):
+            payload["evidence_chain"] = str(data.get("evidence_chain") or "")
+        payload["alternatives"] = list(data.get("alternatives") or [])
+        payload["confidence"] = str(data.get("confidence") or "Medium")
+        if data.get("hypotheses"):
+            payload["hypotheses"] = list(data.get("hypotheses") or [])
+        if data.get("root_cause_chain"):
+            payload["root_cause_chain"] = list(data.get("root_cause_chain") or [])
+    elif name == "find_critical_path" or data.get("path"):
+        task = str(data.get("task") or "")
+        payload["conclusion"] = f"Critical path: {task}" if task else "Critical path"
+        payload["evidence"] = [
+            {"label": str(p.get("detail") or ""), "time": p.get("time")}
+            for p in (data.get("path") or [])
+            if isinstance(p, dict)
+        ]
+        payload["confidence"] = str(data.get("confidence") or "Medium")
+    elif name == "correlate_events" or data.get("events"):
+        task = str(data.get("task") or "")
+        payload["conclusion"] = f"Correlated events: {task}" if task else "Correlated events"
+        payload["evidence"] = [
+            {
+                "label": f"{e.get('kind')}: {e.get('detail')}",
+                "time": e.get("time"),
+            }
+            for e in (data.get("events") or [])[:15]
+            if isinstance(e, dict)
+        ]
+        corr = data.get("correlation")
+        payload["confidence"] = (
+            f"Correlation {corr}" if corr is not None else "Medium"
+        )
+    elif name == "compare_performance" or data.get("checks"):
+        primary = data.get("primary")
+        if isinstance(primary, dict):
+            payload["conclusion"] = str(primary.get("label") or "Performance comparison")
+        else:
+            payload["conclusion"] = "Performance comparison"
+        payload["confidence"] = str(data.get("confidence") or "Medium")
+        payload["checks"] = list(data.get("checks") or [])
+
+    if not (
+        payload.get("conclusion")
+        or payload.get("evidence")
+        or payload.get("evidence_chain")
+        or payload.get("alternatives")
+        or payload.get("checks")
+    ):
+        return None
+    score_data = compute_evidence_score(
+        payload.get("evidence"),
+        alternatives=payload.get("alternatives"),
+        evidence_chain=payload.get("evidence_chain"),
+        checks=payload.get("checks"),
+    )
+    payload["evidence_score"] = score_data["score"]
+    payload["evidence_score_breakdown"] = score_data["breakdown"]
+    payload["evidence_score_bar"] = score_data["bar"]
+    return payload
+
+
+_REGRESSION_TYPES: Tuple[str, ...] = (
+    "execution", "scheduling", "synchronization", "migration",
+    "load_balance", "unknown",
+)
+
+_REGRESSION_TYPE_BY_METRIC: Dict[str, str] = {
+    "migrations": "migration",
+    "migrated_tasks": "migration",
+    "load_balance_score": "load_balance",
+    "load_balance_sigma": "load_balance",
+    "missed_ticks": "scheduling",
+    "tick_health": "scheduling",
+    "context_switches": "scheduling",
+    "blocking_max_us": "synchronization",
+    "response_us": "synchronization",
+    "wcet_us": "execution",
+    "exec_max_us": "execution",
+}
+
+_REGRESSION_TYPE_KEYWORDS: Tuple[Tuple[str, str], ...] = (
+    ("migrat", "migration"),
+    ("load_balance", "load_balance"),
+    ("load balance", "load_balance"),
+    ("tick", "scheduling"),
+    ("context_switch", "scheduling"),
+    ("mutex", "synchronization"),
+    ("block", "synchronization"),
+    ("inversion", "synchronization"),
+    ("inherit", "synchronization"),
+    ("wcet", "execution"),
+    ("exec", "execution"),
+    ("cpu", "execution"),
+)
+
+
+def classify_regression_type(
+    checks: Optional[Sequence[dict]] = None,
+    primary: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Best-effort ``regression_type`` from the primary/failing metric delta(s)."""
+    def _type_for(check: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(check, dict):
+            return ""
+        mid = str(check.get("id") or "").strip().lower()
+        if mid in _REGRESSION_TYPE_BY_METRIC:
+            return _REGRESSION_TYPE_BY_METRIC[mid]
+        blob = f"{check.get('id') or ''} {check.get('label') or ''}".lower()
+        for kw, rtype in _REGRESSION_TYPE_KEYWORDS:
+            if kw in blob:
+                return rtype
+        return ""
+
+    rtype = _type_for(primary)
+    if rtype:
+        return rtype
+    for c in checks or []:
+        if isinstance(c, dict) and c.get("status") == "fail":
+            rtype = _type_for(c)
+            if rtype:
+                return rtype
+    return "unknown"
+
+
 def compare_performance_metrics(
     candidate: Dict[str, Any],
     baseline: Dict[str, Any],
@@ -795,6 +1227,7 @@ def compare_performance_metrics(
     confidence = "High" if primary and primary.get("status") == "fail" else (
         "Medium" if primary else "Low"
     )
+    regression_type = classify_regression_type(result.get("checks"), primary)
     return {
         "ok": True,
         "message": str(result.get("summary") or "compared"),
@@ -804,6 +1237,7 @@ def compare_performance_metrics(
         "checks": result.get("checks") or [],
         "primary_regression": primary,
         "confidence": confidence,
+        "regression_type": regression_type,
         "evidence_quality": (
             "Directly observed" if primary else "Insufficient evidence"
         ),
@@ -814,6 +1248,375 @@ def compare_performance_metrics(
         "report": format_regression_report(
             result, title=f"{label_a} vs {label_b}",
         ),
+    }
+
+
+_MUTEX_ADDR_RE = re.compile(r"mutex\D{0,12}(0x[0-9a-fA-F]+)", re.IGNORECASE)
+
+
+def _pi_context_from_findings(
+    findings: Sequence[dict],
+    low: str,
+    mediums: Sequence[str],
+) -> Tuple[str, str]:
+    """Best-effort ``(mutex_addr, high_task)`` scan of finding text.
+
+    PI episodes only track the boosted (``low``) task and its ``medium``
+    interlopers; the blocked high-priority waiter and mutex identity, when
+    known, usually only show up in the free-text Analysis Findings.
+    """
+    exclude = {str(low or "").lower()} | {str(m or "").lower() for m in mediums}
+    for f in findings or []:
+        blob = f"{f.get('title') or ''} {f.get('text') or ''}"
+        if str(low or "").lower() not in blob.lower():
+            continue
+        mutex = ""
+        m = _MUTEX_ADDR_RE.search(blob)
+        if m:
+            mutex = m.group(1)
+        high = ""
+        for tok in re.findall(r"\b[A-Za-z_][\w]*\[[0-9]+\]", blob):
+            if tok.lower() not in exclude:
+                high = tok
+                break
+        if mutex or high:
+            return mutex, high
+    return "", ""
+
+
+def detect_priority_inversion(
+    episodes: Sequence[dict],
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    task: str = "",
+    window: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Best-effort priority-inversion detection from PI episodes + findings.
+
+    ``episodes`` are raw priority_inheritance rows (see ``query_raw_metric``),
+    each carrying its own ``task`` label. Only episodes flagged
+    ``inversion_suspect`` are reported; mutex address and the blocked
+    high-priority task are inferred from ``findings`` text when available.
+    ``window`` is an optional minimum-duration hint (ns) used to drop
+    inversion episodes too short to matter.
+    """
+    task = str(task or "").strip()
+    rows = [e for e in (episodes or []) if isinstance(e, dict)]
+
+    def _row_matches_task(e: dict) -> bool:
+        if str(e.get("task") or "").strip().lower() == task.lower():
+            return True
+        for m in e.get("medium_tasks") or []:
+            label = m.get("label") if isinstance(m, dict) else m
+            if str(label or "").strip().lower() == task.lower():
+                return True
+        return False
+
+    if task:
+        rows = [e for e in rows if _row_matches_task(e)]
+
+    win: Optional[float] = None
+    if window is not None:
+        try:
+            win = float(window)
+        except (TypeError, ValueError):
+            win = None
+
+    def _duration(e: dict) -> Optional[float]:
+        dur = e.get("duration")
+        if dur is not None:
+            try:
+                return float(dur)
+            except (TypeError, ValueError):
+                return None
+        start, stop = e.get("start"), e.get("stop")
+        if start is None or stop is None:
+            return None
+        try:
+            return float(stop) - float(start)
+        except (TypeError, ValueError):
+            return None
+
+    if win and win > 0:
+        rows = [e for e in rows if (_duration(e) is None or _duration(e) >= win)]
+
+    suspects = [e for e in rows if e.get("inversion_suspect")]
+    items = enrich_findings_with_ids(findings) if findings else []
+    inversions: List[Dict[str, Any]] = []
+    for e in suspects:
+        low_label = str(e.get("task") or task or "").strip() or "?"
+        mediums = [
+            str(m.get("label") if isinstance(m, dict) else m).strip()
+            for m in (e.get("medium_tasks") or [])
+        ]
+        mediums = [m for m in mediums if m]
+        mutex, high = _pi_context_from_findings(items, low_label, mediums)
+        start = e.get("start")
+        stop = e.get("stop")
+        duration = e.get("duration")
+        if duration is None and start is not None and stop is not None:
+            try:
+                duration = int(stop) - int(start)
+            except (TypeError, ValueError):
+                duration = None
+        inversions.append({
+            "high": high,
+            "medium": mediums[0] if mediums else "",
+            "medium_tasks": mediums,
+            "low": low_label,
+            "mutex": mutex,
+            "time": start,
+            "duration": duration,
+            "base_pri": e.get("base_pri"),
+            "peak_pri": e.get("peak_pri"),
+            "pattern": e.get("pattern") or "",
+        })
+    inversions.sort(key=lambda r: (r.get("time") is None, r.get("time")))
+    if not rows:
+        confidence = "Low"
+    elif any(inv.get("high") and inv.get("mutex") for inv in inversions):
+        confidence = "High"
+    elif inversions:
+        confidence = "Medium"
+    else:
+        confidence = "Low"
+    focus_task = task or (inversions[0]["low"] if inversions else "")
+    return {
+        "ok": True,
+        "message": (
+            f"{len(inversions)} priority inversion(s) detected"
+            if inversions else "No priority inversion suspects in scope"
+        ),
+        "task": task,
+        "inversions": inversions,
+        "count": len(inversions),
+        "confidence": confidence,
+        "suggested_tools": [
+            {
+                "name": "query_raw_metric",
+                "arguments": {"task": focus_task, "metric": "priority_inheritance"},
+                "reason": "Inspect raw PI boost episodes",
+            },
+            {
+                "name": "correlate_events",
+                "arguments": {"task": focus_task},
+                "reason": "Cross-task timeline around the inversion",
+            },
+        ] if focus_task else [],
+    }
+
+
+_STOPWORDS = frozenset({
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with",
+    "is", "are", "this", "that", "at", "by", "from", "into", "than", "was",
+    "were", "has", "have", "had", "its", "it's", "task", "tasks",
+})
+
+_RELATED_METRIC_KEYWORDS: Dict[str, Tuple[str, ...]] = {
+    "priority_inheritance": ("inversion", "inherit", "priority", "l/m/h", "mutex", "boost"),
+    "execution": ("wcet", "cpu", "execution", "spike", "slice"),
+    "migrations": ("migrat", "thrash", "bounc", "core"),
+    "blocking": ("block", "latency", "wait", "dispatch"),
+    "sync": ("mutex", "semaphore", "lock", "sync"),
+    "findings": (),
+}
+
+
+def _finding_keywords(f: dict) -> set:
+    blob = f"{f.get('title') or ''} {f.get('text') or ''}".lower()
+    tokens = re.findall(r"[a-z][a-z0-9_]{3,}", blob)
+    return {t for t in tokens if t not in _STOPWORDS}
+
+
+def _finding_evidence_times(f: dict) -> List[float]:
+    times: List[float] = []
+    for ev in f.get("evidence") or []:
+        if isinstance(ev, dict) and ev.get("time") is not None:
+            try:
+                times.append(float(ev.get("time")))
+            except (TypeError, ValueError):
+                continue
+    return times
+
+
+def find_related_findings(
+    findings: Sequence[dict],
+    *,
+    finding_id: str = "",
+    task: str = "",
+    metric: str = "",
+    window: Optional[float] = None,
+    limit: int = 10,
+) -> Dict[str, Any]:
+    """Relate enriched findings by shared task, keyword, or severity adjacency."""
+    limit = max(1, min(40, int(limit or 10)))
+    items = enrich_findings_with_ids(findings)
+    if not items:
+        return {
+            "ok": False,
+            "message": "No Analysis Findings in scope",
+            "focus": None,
+            "related": [],
+            "count": 0,
+        }
+    focus = resolve_finding(items, finding_id) if finding_id else None
+    task = str(task or "").strip()
+    metric_key = str(metric or "").strip().lower()
+    keywords = set(_RELATED_METRIC_KEYWORDS.get(metric_key, ()))
+    focus_task = ""
+    focus_keywords: set = set()
+    focus_times: List[float] = []
+    if focus is not None:
+        focus_task = str(focus.get("task") or _guess_task_name(str(focus.get("text") or ""))).strip()
+        focus_keywords = _finding_keywords(focus)
+        focus_times = _finding_evidence_times(focus)
+
+    win: Optional[float] = None
+    if window is not None:
+        try:
+            win = float(window)
+        except (TypeError, ValueError):
+            win = None
+
+    scored: List[Tuple[float, dict, List[str]]] = []
+    for f in items:
+        if focus is not None and f.get("id") == focus.get("id"):
+            continue
+        reasons: List[str] = []
+        score = 0.0
+        f_task = str(f.get("task") or _guess_task_name(str(f.get("text") or ""))).strip()
+        if task and f_task and f_task.lower() == task.lower():
+            score += 2.0
+            reasons.append(f"shares task {f_task}")
+        if focus_task and f_task and f_task.lower() == focus_task.lower() and not (
+            task and f_task.lower() == task.lower()
+        ):
+            score += 2.0
+            reasons.append(f"shares task {f_task}")
+        if keywords:
+            blob = f"{f.get('title')} {f.get('text')}".lower()
+            hits = sorted(k for k in keywords if k in blob)
+            if hits:
+                score += 1.0 * len(hits)
+                reasons.append(f"mentions {', '.join(hits)}")
+        if focus_keywords:
+            shared = sorted(focus_keywords & _finding_keywords(f))
+            if shared:
+                score += 0.5 * len(shared)
+                reasons.append(f"shared keyword(s): {', '.join(shared)}")
+        if win and win > 0 and focus_times:
+            f_times = _finding_evidence_times(f)
+            if any(abs(t - ft) <= win for t in focus_times for ft in f_times):
+                score += 1.0
+                reasons.append("within time window")
+        if focus is not None and not reasons:
+            f_rank = _SEV_RANK.get(str(f.get("severity") or "info").lower(), 3)
+            focus_rank = _SEV_RANK.get(str(focus.get("severity") or "info").lower(), 3)
+            if abs(f_rank - focus_rank) <= 1:
+                score += 0.25
+                reasons.append("adjacent severity")
+        if score > 0:
+            scored.append((score, f, reasons))
+    scored.sort(key=lambda row: -row[0])
+    related = [
+        {
+            "id": f.get("id"),
+            "title": f.get("title"),
+            "severity": f.get("severity"),
+            "task": f.get("task") or _guess_task_name(str(f.get("text") or "")),
+            "score": round(score, 2),
+            "reasons": reasons,
+        }
+        for score, f, reasons in scored[:limit]
+    ]
+    return {
+        "ok": True,
+        "message": (
+            f"{len(related)} related finding(s)"
+            + (f" for {focus.get('id')}" if focus else "")
+        ),
+        "focus": (
+            {"id": focus.get("id"), "title": focus.get("title")} if focus else None
+        ),
+        "related": related,
+        "count": len(related),
+    }
+
+
+_COMPARE_TASK_METRIC_FIELDS: Dict[str, Tuple[str, ...]] = {
+    "execution": ("count", "total", "max", "mean"),
+    "blocking": ("count", "total", "max"),
+    "migrations": ("count",),
+    "priority_inheritance": ("count",),
+}
+
+
+def compare_tasks_metrics(
+    task_a: str,
+    task_b: str,
+    data_a: Dict[str, Any],
+    data_b: Dict[str, Any],
+    *,
+    metrics: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """Compare two tasks' execution/blocking/migrations/priority metrics.
+
+    ``data_a`` / ``data_b`` are ``{metric: {field: value}}`` maps as returned
+    by ``query_raw_metric`` for each metric (e.g. ``execution.count/total/
+    max/mean``). Metrics with no data on either side are skipped.
+    """
+    wanted = [m for m in (metrics or list(_COMPARE_TASK_METRIC_FIELDS)) if m in _COMPARE_TASK_METRIC_FIELDS]
+    if not wanted:
+        wanted = list(_COMPARE_TASK_METRIC_FIELDS)
+    data_a = data_a or {}
+    data_b = data_b or {}
+    rows: List[Dict[str, Any]] = []
+    for metric in wanted:
+        da = data_a.get(metric) if isinstance(data_a.get(metric), dict) else {}
+        db = data_b.get(metric) if isinstance(data_b.get(metric), dict) else {}
+        if not da and not db:
+            continue
+        for field in _COMPARE_TASK_METRIC_FIELDS[metric]:
+            va = da.get(field)
+            vb = db.get(field)
+            delta = None
+            pct = None
+            if isinstance(va, (int, float)) and isinstance(vb, (int, float)):
+                delta = va - vb
+                pct = (100.0 * delta / vb) if vb else (100.0 if va else 0.0)
+            rows.append({
+                "metric": metric,
+                "field": field,
+                "a": va,
+                "b": vb,
+                "delta": delta,
+                "delta_pct": round(pct, 1) if pct is not None else None,
+            })
+    ranked = sorted(
+        (r for r in rows if r.get("delta_pct") is not None),
+        key=lambda r: -abs(r["delta_pct"]),
+    )
+    primary = ranked[0] if ranked else None
+    if primary and abs(primary["delta_pct"] or 0) >= 25:
+        confidence = "High"
+    elif primary:
+        confidence = "Medium"
+    else:
+        confidence = "Low"
+    return {
+        "ok": True,
+        "message": f"Compared {task_a} vs {task_b} across {len(wanted)} metric group(s)",
+        "task_a": task_a,
+        "task_b": task_b,
+        "rows": rows,
+        "primary_difference": primary,
+        "confidence": confidence,
+        "suggested_tools": [
+            {"name": "correlate_events", "arguments": {"task": task_a},
+             "reason": f"Timeline for {task_a}"},
+            {"name": "correlate_events", "arguments": {"task": task_b},
+             "reason": f"Timeline for {task_b}"},
+        ],
     }
 
 
@@ -1051,6 +1854,29 @@ def build_optimization_advice(
     }
 
 
+_REGRESSION_CLASSIFICATION_MAP: Dict[str, str] = {
+    "migrations": "thrashing",
+    "migrated_tasks": "thrashing",
+    "load_balance": "load_imbalance",
+    "missed_ticks": "tick_health",
+}
+
+_REGRESSION_CLASSIFICATION_LABELS: Dict[str, str] = {
+    "thrashing": "Core thrashing / migration regression",
+    "load_imbalance": "Load balance regression",
+    "tick_health": "Tick health regression",
+    "unclassified": "Unclassified regression",
+    "none": "No regression",
+}
+
+
+def classify_regression(primary: Optional[Dict[str, Any]]) -> str:
+    """Coarse category id for a compare_performance ``primary_regression`` check."""
+    if not primary:
+        return "none"
+    return _REGRESSION_CLASSIFICATION_MAP.get(str(primary.get("id") or ""), "unclassified")
+
+
 def explain_regression(
     compare: Dict[str, Any],
     findings: Optional[Sequence[dict]] = None,
@@ -1061,6 +1887,19 @@ def explain_regression(
     failed = bool(compare.get("failed"))
     label_a = compare.get("label_a") or "A"
     label_b = compare.get("label_b") or "B"
+    classification = classify_regression(primary if failed else None)
+    regression_type = str(
+        compare.get("regression_type") or classify_regression_type(compare.get("checks"), primary)
+    )
+    causal_chain: List[Dict[str, Any]] = []
+    if primary:
+        synthetic_finding = {
+            "id": "regression_primary",
+            "title": f"Regression: {primary.get('label')}",
+            "text": f"{primary.get('label')} changed — {primary.get('detail')}",
+            "severity": "error" if failed else "info",
+        }
+        causal_chain = build_root_cause_chain(synthetic_finding)
     lines = [
         f"# Regression explanation — {label_a} vs {label_b}",
         "",
@@ -1079,6 +1918,16 @@ def explain_regression(
         mark = {"pass": "✓", "fail": "✗", "skip": "·"}.get(c.get("status"), "?")
         lines.append(f"- {mark} {c.get('label')}: {c.get('detail')}")
     lines.append("")
+    lines.extend([
+        "## Classification",
+        _REGRESSION_CLASSIFICATION_LABELS.get(classification, "Unclassified regression"),
+        "",
+    ])
+    if causal_chain:
+        lines.append("## Causal chain")
+        for step in causal_chain:
+            lines.append(f"- **{step.get('label')}**: {step.get('detail') or ''}".rstrip())
+        lines.append("")
     anomalies = detect_anomalies(findings or [], limit=5) if findings else {"anomalies": []}
     if anomalies.get("anomalies"):
         lines.append("## Related findings on candidate")
@@ -1091,17 +1940,36 @@ def explain_regression(
         f"{conf} — {compare.get('evidence_quality') or 'Directly observed metric deltas'}",
         "",
     ])
+    suggested_tools = [
+        {"name": "correlate_events", "arguments": {}, "reason": "Timeline for worst metric"},
+        {"name": "investigate", "arguments": {}, "reason": "Root-cause chain"},
+    ]
+    if classification == "thrashing":
+        suggested_tools.append({
+            "name": "optimize_experiment", "arguments": {},
+            "reason": "Rank pin / affinity candidates for the thrashing task",
+        })
+    elif classification == "load_imbalance":
+        suggested_tools.append({
+            "name": "analyze_traces", "arguments": {},
+            "reason": "Rank all loaded traces by scheduling behavior",
+        })
+    elif classification == "tick_health":
+        suggested_tools.append({
+            "name": "check_budget", "arguments": {},
+            "reason": "Verify WCET/response/deadline budgets after tick regressions",
+        })
     return {
         "ok": True,
         "message": "Regression explained" if failed else "No regression to explain",
         "failed": failed,
         "markdown": "\n".join(lines),
         "primary_regression": primary,
+        "classification": classification,
+        "regression_type": regression_type,
+        "causal_chain": causal_chain,
         "confidence": conf,
-        "suggested_tools": [
-            {"name": "correlate_events", "arguments": {}, "reason": "Timeline for worst metric"},
-            {"name": "investigate", "arguments": {}, "reason": "Root-cause chain"},
-        ],
+        "suggested_tools": suggested_tools,
     }
 
 
@@ -1128,8 +1996,20 @@ def build_investigation_replay(
     tools_run: Optional[Sequence[str]] = None,
     conclusion: str = "",
     evidence_times: Optional[Sequence[float]] = None,
+    trace_name: str = "",
+    scope: str = "",
+    queries: Optional[Sequence[Dict[str, Any]]] = None,
+    evidence: Optional[Sequence[Dict[str, Any]]] = None,
+    confidence: str = "",
+    alternatives: Optional[Sequence[Dict[str, Any]]] = None,
+    timestamp: str = "",
 ) -> Dict[str, Any]:
-    """Structured investigation replay card for UI / export."""
+    """Structured investigation replay card for UI / export.
+
+    Additive fields (*trace_name*, *scope*, *queries*, *evidence*,
+    *confidence*, *alternatives*, *timestamp*) make this usable as a full
+    investigation export package (see ``build_investigation_package``).
+    """
     tools_run = [str(t) for t in (tools_run or []) if t]
     plan = plan or default_investigation_plan(
         goal=f"Investigate: {(finding or {}).get('title') or 'finding'}"
@@ -1164,6 +2044,8 @@ def build_investigation_replay(
     return {
         "ok": True,
         "message": "Investigation replay",
+        "trace_name": str(trace_name or ""),
+        "scope": str(scope or ""),
         "finding": {
             "id": (finding or {}).get("id"),
             "title": (finding or {}).get("title"),
@@ -1171,10 +2053,55 @@ def build_investigation_replay(
         } if finding else None,
         "steps": steps,
         "tools_run": tools_run,
+        "queries": [dict(q) for q in (queries or []) if isinstance(q, dict)],
+        "evidence": [dict(e) for e in (evidence or []) if isinstance(e, dict)],
         "conclusion": str(conclusion or "").strip(),
+        "confidence": str(confidence or "").strip(),
+        "alternatives": [dict(a) for a in (alternatives or []) if isinstance(a, dict)],
         "evidence_times": times[:20],
+        "timestamp": str(timestamp or "").strip(),
         "suggested_tools": suggested,
     }
+
+
+def build_investigation_package(
+    *,
+    trace_name: str = "",
+    scope: str = "",
+    finding: Optional[dict] = None,
+    plan: Optional[Dict[str, Any]] = None,
+    tools_run: Optional[Sequence[str]] = None,
+    queries: Optional[Sequence[Dict[str, Any]]] = None,
+    evidence: Optional[Sequence[Dict[str, Any]]] = None,
+    conclusion: str = "",
+    confidence: str = "",
+    alternatives: Optional[Sequence[Dict[str, Any]]] = None,
+    evidence_times: Optional[Sequence[float]] = None,
+    timestamp: str = "",
+) -> Dict[str, Any]:
+    """Full JSON-serialisable investigation replay/export package.
+
+    Thin wrapper over ``build_investigation_replay`` that adds a schema /
+    version envelope for ``export_investigation`` / ``export_report``
+    (format=json).
+    """
+    package = dict(build_investigation_replay(
+        finding=finding,
+        plan=plan,
+        tools_run=tools_run,
+        conclusion=conclusion,
+        evidence_times=evidence_times,
+        trace_name=trace_name,
+        scope=scope,
+        queries=queries,
+        evidence=evidence,
+        confidence=confidence,
+        alternatives=alternatives,
+        timestamp=timestamp,
+    ))
+    package["schema"] = "btf-investigation-package"
+    package["version"] = 1
+    return package
 
 
 def estimate_what_if(
@@ -1722,4 +2649,323 @@ def run_optimization_experiments(
             {"name": "bookmark_finding", "arguments": {},
              "reason": "Mark evidence on timeline"},
         ],
+    }
+
+
+# --- Historical baseline learning (lightweight) --------------------------
+
+_BASELINE_METRIC_KEYS: Tuple[str, ...] = (
+    "wcet_us", "blocking_us", "migrations", "response_us",
+)
+
+
+def _empty_baseline_profile() -> Dict[str, Any]:
+    return {"version": 1, "samples": 0, "tasks": {}}
+
+
+def update_baseline_profile(
+    profile: Optional[Dict[str, Any]],
+    snapshot: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Merge a metrics snapshot into a running-mean/std baseline profile.
+
+    ``snapshot`` is ``{"tasks": {task: {wcet_us?, blocking_us?, migrations?,
+    response_us?}}}``. Uses Welford's online algorithm so the profile only
+    stores ``n`` / ``mean`` / ``m2`` per task/metric — no raw history.
+    """
+    if isinstance(profile, dict):
+        out = {
+            "version": int(profile.get("version") or 1),
+            "samples": int(profile.get("samples") or 0),
+            "tasks": {
+                str(t): {
+                    str(k): dict(v) for k, v in (m or {}).items() if isinstance(v, dict)
+                }
+                for t, m in (profile.get("tasks") or {}).items()
+                if isinstance(m, dict)
+            },
+        }
+    else:
+        out = _empty_baseline_profile()
+    tasks_in = snapshot.get("tasks") if isinstance(snapshot, dict) else None
+    if not isinstance(tasks_in, dict) or not tasks_in:
+        return out
+    for task, metrics in tasks_in.items():
+        if not isinstance(metrics, dict):
+            continue
+        task = str(task).strip()
+        if not task:
+            continue
+        bucket = out["tasks"].setdefault(task, {})
+        for key in _BASELINE_METRIC_KEYS:
+            val = metrics.get(key)
+            if val is None:
+                continue
+            try:
+                x = float(val)
+            except (TypeError, ValueError):
+                continue
+            stat = bucket.setdefault(key, {"n": 0, "mean": 0.0, "m2": 0.0})
+            n = int(stat.get("n", 0)) + 1
+            mean = float(stat.get("mean", 0.0))
+            m2 = float(stat.get("m2", 0.0))
+            delta = x - mean
+            mean += delta / n
+            m2 += delta * (x - mean)
+            stat["n"] = n
+            stat["mean"] = mean
+            stat["m2"] = m2
+    out["samples"] = int(out.get("samples", 0)) + 1
+    return out
+
+
+def score_against_baseline(
+    profile: Optional[Dict[str, Any]],
+    snapshot: Dict[str, Any],
+    *,
+    z_threshold: float = 2.0,
+) -> Dict[str, Any]:
+    """Per-task/metric z-scores of *snapshot* vs a baseline profile.
+
+    Flags entries where ``|z| > z_threshold`` (default 2). Tasks/metrics
+    without at least 2 baseline samples are reported with ``z=None``.
+    """
+    z_threshold = float(z_threshold or 2.0)
+    tasks_profile = (profile or {}).get("tasks") if isinstance(profile, dict) else {}
+    tasks_profile = tasks_profile if isinstance(tasks_profile, dict) else {}
+    tasks_in = snapshot.get("tasks") if isinstance(snapshot, dict) else None
+    tasks_in = tasks_in if isinstance(tasks_in, dict) else {}
+    scores: List[Dict[str, Any]] = []
+    flagged: List[Dict[str, Any]] = []
+    for task, metrics in tasks_in.items():
+        if not isinstance(metrics, dict):
+            continue
+        task = str(task).strip()
+        base_bucket = tasks_profile.get(task)
+        base_bucket = base_bucket if isinstance(base_bucket, dict) else {}
+        for key in _BASELINE_METRIC_KEYS:
+            val = metrics.get(key)
+            if val is None:
+                continue
+            try:
+                x = float(val)
+            except (TypeError, ValueError):
+                continue
+            stat = base_bucket.get(key)
+            row: Dict[str, Any] = {
+                "task": task, "metric": key, "value": x,
+                "n": 0, "mean": None, "std": None, "z": None, "flag": False,
+            }
+            if isinstance(stat, dict) and int(stat.get("n", 0)) >= 2:
+                n = int(stat["n"])
+                mean = float(stat.get("mean", 0.0))
+                variance = float(stat.get("m2", 0.0)) / max(1, n - 1)
+                std = variance ** 0.5
+                row["n"] = n
+                row["mean"] = round(mean, 4)
+                row["std"] = round(std, 4)
+                if std > 1e-9:
+                    z = (x - mean) / std
+                    row["z"] = round(z, 3)
+                    row["flag"] = abs(z) > z_threshold
+                else:
+                    row["z"] = 0.0
+            scores.append(row)
+            if row["flag"]:
+                flagged.append(row)
+    flagged.sort(key=lambda r: -abs(r.get("z") or 0.0))
+    return {
+        "ok": True,
+        "message": (
+            f"{len(scores)} metric score(s); {len(flagged)} flagged "
+            f"(|z|>{z_threshold:g})"
+        ),
+        "scores": scores,
+        "flagged": flagged,
+        "z_threshold": z_threshold,
+        "has_baseline": bool(tasks_profile),
+        "suggested_tools": (
+            [{"name": "investigate", "arguments": {},
+              "reason": "Drill into flagged task"}] if flagged else []
+        ),
+    }
+
+
+# --- AI-generated validation experiments ----------------------------------
+
+def recommend_validation_experiments(
+    findings: Sequence[dict],
+    *,
+    finding_id: str = "",
+    task: str = "",
+    limit: int = 5,
+) -> Dict[str, Any]:
+    """Suggest simulation / firmware / measurement experiments from findings.
+
+    Heuristics: thrash/migration → pin, mutex/inversion → shorten critical
+    section, WCET spike → profile+trim, load imbalance → rebalance,
+    deadline/budget → re-check budgets.
+    """
+    limit = max(1, min(20, int(limit or 5)))
+    items = enrich_findings_with_ids(findings)
+    focus: Optional[dict] = None
+    if finding_id:
+        focus = resolve_finding(items, finding_id)
+    if focus is None and task:
+        want = task.strip().lower()
+        for f in items:
+            t = str(f.get("task") or _guess_task_name(str(f.get("text") or "")) or "")
+            if t and t.lower() == want:
+                focus = f
+                break
+    if focus is not None:
+        pool: List[dict] = [focus]
+    elif items:
+        anomalies = detect_anomalies(items, limit=max(3, limit))
+        pool = [
+            {
+                "id": a.get("id"), "title": a.get("title"), "text": a.get("text"),
+                "severity": a.get("severity"), "task": a.get("task"),
+            }
+            for a in anomalies.get("anomalies") or []
+        ]
+    else:
+        pool = []
+
+    experiments: List[Dict[str, Any]] = []
+    seen_titles: set = set()
+
+    def add(title: str, kind: str, steps: Sequence[str], rationale: str, fid: Any) -> None:
+        if title in seen_titles:
+            return
+        seen_titles.add(title)
+        experiments.append({
+            "title": title,
+            "kind": kind,
+            "steps": [str(s) for s in steps],
+            "rationale": rationale,
+            "evidence_finding": fid,
+        })
+
+    for f in pool:
+        if len(experiments) >= limit:
+            break
+        title = str(f.get("title") or "")
+        text = str(f.get("text") or "")
+        blob = f"{title} {text}".lower()
+        t = str(f.get("task") or _guess_task_name(text) or task or "").strip()
+        fid = f.get("id")
+        tname = t or "the hot task"
+        if "thrash" in blob or "migrat" in blob or "bounc" in blob:
+            add(
+                f"Simulate pinning {tname} to its dominant core",
+                "simulation",
+                [f"what_if(change='pin {tname} to Core_N')",
+                 "Compare migrations / load-balance deltas"],
+                "Migration/thrash finding suggests core affinity fixes the bounce",
+                fid,
+            )
+            add(
+                f"Pin {tname} in firmware (vTaskCoreAffinitySet)",
+                "firmware",
+                [f"Call vTaskCoreAffinitySet({tname}, mask) at startup / after creation",
+                 "Re-run the same workload and re-capture a trace"],
+                "Confirms the simulated affinity fix on real hardware",
+                fid,
+            )
+            add(
+                f"Measure migration rate for {tname} before/after the affinity fix",
+                "measurement",
+                ["Capture baseline trace", "Apply the affinity fix",
+                 "Capture candidate trace", "Run compare_performance A vs B"],
+                "Directly measures whether thrashing is resolved",
+                fid,
+            )
+        elif "block" in blob or "mutex" in blob or "inversion" in blob or "inherit" in blob:
+            add(
+                f"Simulate reduced lock contention for {tname}",
+                "simulation",
+                [f"what_if(change='reduce mutex contention 50% for {tname}')",
+                 "Compare blocking Max / response deltas"],
+                "Blocking/mutex finding suggests shortening the critical section",
+                fid,
+            )
+            add(
+                f"Shorten the critical section for {tname} (firmware)",
+                "firmware",
+                ["Reduce work performed while the mutex is held",
+                 "Or switch to a priority-inheritance mutex "
+                 "(xSemaphoreCreateMutex, not a binary semaphore)"],
+                "Addresses priority inversion / long hold times at the source",
+                fid,
+            )
+            add(
+                f"Measure blocking Max for {tname} before/after the fix",
+                "measurement",
+                ["Capture baseline trace", "Apply the fix",
+                 "Capture candidate trace",
+                 f"query_raw_metric(task={tname}, metric=blocking) on both"],
+                "Confirms blocking wait actually dropped",
+                fid,
+            )
+        elif "wcet" in blob or "spike" in blob or "execution" in blob or "cpu" in blob:
+            add(
+                f"Profile execution slices for {tname}",
+                "measurement",
+                [f"query_raw_metric(task={tname}, metric=execution)",
+                 "Jump to the Max slice and inspect surrounding events"],
+                "WCET/CPU spike finding needs a profiling pass before code changes",
+                fid,
+            )
+            add(
+                f"Trim or split the long slice on {tname} (firmware)",
+                "firmware",
+                ["Break the long critical section / loop into smaller chunks",
+                 "Re-measure Max execution after the change"],
+                "Directly reduces WCET at the source",
+                fid,
+            )
+        elif "load" in blob or "balance" in blob:
+            add(
+                "Simulate rebalanced task placement",
+                "simulation",
+                ["optimize_experiment() to rank candidate placements",
+                 "Compare Load Balance Score deltas"],
+                "Load-balance finding suggests a placement change",
+                fid,
+            )
+            add(
+                "Measure Load Balance Score before/after static affinity",
+                "measurement",
+                ["Capture baseline trace", "Apply static core assignment",
+                 "Capture candidate trace", "Run analyze_traces or compare_performance"],
+                "Confirms the placement change improves balance",
+                fid,
+            )
+        elif "deadline" in blob or "budget" in blob:
+            add(
+                f"Re-check budget compliance for {tname} after a fix",
+                "measurement",
+                ["check_budget() with the configured WCET/response/deadline budgets"],
+                "Deadline/budget finding needs a direct budget re-check",
+                fid,
+            )
+        else:
+            add(
+                f"Investigate {title or 'this finding'} further",
+                "measurement",
+                ["investigate(finding_id) for a root-cause chain",
+                 "correlate_events for supporting evidence"],
+                "No specialised heuristic match — needs more evidence first",
+                fid,
+            )
+    experiments = experiments[:limit]
+    return {
+        "ok": True,
+        "message": f"{len(experiments)} validation experiment(s) suggested",
+        "experiments": experiments,
+        "disclaimer": (
+            "Simulation / estimate — not measured behavior; firmware steps "
+            "are suggestions to implement and re-trace, not applied automatically"
+        ),
     }

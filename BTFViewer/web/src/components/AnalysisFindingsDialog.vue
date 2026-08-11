@@ -33,7 +33,11 @@
           <li
             v-for="(f, i) in findings"
             :key="i"
-            :class="`sev-${f.severity || 'info'}`"
+            :class="[
+              `sev-${f.severity || 'info'}`,
+              { selected: selectedId === (f.id || '') && (f.id || '') },
+            ]"
+            @click="selectedId = f.id || ''"
           >
             <strong>{{ f.title }}</strong> — {{ f.text }}
           </li>
@@ -71,6 +75,26 @@
             type="button"
             class="analysis-btn"
             :title="aiEnabled
+              ? 'Open the AI Assistant and verify the selected finding with evidence'
+              : 'Enable AI Assistant in Settings → AI'"
+            @click="emit('query-ai', { template: 'verify', findingId: selectedId })"
+          >
+            Verify with AI…
+          </button>
+          <button
+            type="button"
+            class="analysis-btn"
+            :title="aiEnabled
+              ? 'Run the automatic investigate → correlate → critical-path → what-if/optimize workflow'
+              : 'Enable AI Assistant in Settings → AI'"
+            @click="emit('query-ai', { template: 'auto_investigate', findingId: selectedId })"
+          >
+            Auto investigate…
+          </button>
+          <button
+            type="button"
+            class="analysis-btn"
+            :title="aiEnabled
               ? 'Open the AI Assistant and walk through these Analysis Findings'
               : 'Enable AI Assistant in Settings → AI'"
             @click="emit('query-ai', 'findings')"
@@ -101,6 +125,7 @@
 </template>
 
 <script setup>
+import { ref } from 'vue'
 import { formatAnalysisFindingsText } from '../utils/workflowAnalysis.js'
 
 const props = defineProps({
@@ -110,6 +135,8 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['close', 'query-ai'])
+
+const selectedId = ref('')
 
 function _stamp() {
   const d = new Date()
@@ -199,6 +226,14 @@ function saveAsText() {
   margin: 8px 0;
   line-height: 1.45;
   font-size: 13px;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 2px 4px;
+  margin-left: -4px;
+}
+
+.analysis-list li.selected {
+  background: var(--tb-btn-hover, rgba(255, 255, 255, 0.08));
 }
 
 .analysis-list .sev-warning { color: #d68910; }

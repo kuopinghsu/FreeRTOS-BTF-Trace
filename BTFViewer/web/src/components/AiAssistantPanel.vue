@@ -251,6 +251,20 @@
     </div>
 
     <div
+      v-if="evidencePanel"
+      class="ai-evidence"
+    >
+      <div class="ai-section-label">
+        Evidence / Reasoning
+      </div>
+      <div
+        class="ai-evidence-body"
+        v-html="evidencePanelHtml"
+        @click="onMsgClick"
+      />
+    </div>
+
+    <div
       ref="logRef"
       class="ai-log"
       @contextmenu.prevent="onLogContextMenu"
@@ -466,6 +480,7 @@ import {
   resolveAiSettings,
 } from '../utils/ollamaClient.js'
 import {
+  AI_TOOL_EXPORT_INVESTIGATION,
   aiViewerTools,
   buildAiReportCsv,
   buildAiReportHtml,
@@ -479,13 +494,18 @@ import {
   toolBatchAutoRuns,
   toolResultMessage,
   validateToolCall,
+  btfJumpHref,
 } from '../utils/aiTools.js'
 import {
+  buildInvestigationPackage,
   completeInvestigationPlan,
   defaultInvestigationPlan,
+  extractEvidencePanelPayload,
+  investigationTreeMermaid,
   isAgentTemplate,
   markPlanStepsFromTools,
 } from '../utils/aiInvestigation.js'
+import { mermaidBlockHtml } from '../utils/aiMermaid.js'
 import {
   aiFileStamp,
   aiRoleLabel,
@@ -546,6 +566,94 @@ let toolRound = 0
 let batchSeq = 0
 let activeTemplateId = ''
 const investigationPlan = ref(null)
+const evidencePanel = ref(null)
+
+function escapeHtml(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+function formatEvidenceHtml(data) {
+  if (!data) return ''
+  const lines = []
+  const conclusion = String(data.conclusion || '').trim()
+  if (conclusion) lines.push(`<strong>${escapeHtml(conclusion)}</strong>`)
+  const subtitle = String(data.subtitle || '').trim()
+  if (subtitle) lines.push(escapeHtml(subtitle.slice(0, 320)))
+  for (const ev of data.evidence || []) {
+    if (!ev || typeof ev !== 'object') continue
+    const label = escapeHtml(ev.label || 'item')
+    const t = ev.time
+    if (t != null && Number.isFinite(Number(t))) {
+      const n = Number(t)
+      const token = Number.isInteger(n) ? String(Math.trunc(n)) : String(n)
+      lines.push(
+        `• ${label} `
+        + `<a href="${btfJumpHref(n)}" class="ai-jump" data-jump="${token}">jump:${token}</a>`,
+      )
+    } else {
+      lines.push(`• ${label}`)
+    }
+  }
+  if (data.evidence_chain) {
+    lines.push('<strong>Evidence chain</strong>')
+    lines.push(escapeHtml(String(data.evidence_chain)).replace(/\n/g, '<br/>'))
+  }
+  if (data.confidence) {
+    lines.push(`<strong>Confidence:</strong> ${escapeHtml(String(data.confidence))}`)
+  }
+  if (data.evidence_score != null) {
+    const bar = String(data.evidence_score_bar || '')
+    lines.push(
+      '<strong>AI Evidence Score — heuristic:</strong> '
+      + `<span class="ai-evidence-score">${escapeHtml(bar)}</span>`,
+    )
+  }
+  for (const alt of data.alternatives || []) {
+    if (!alt || typeof alt !== 'object') continue
+    if (!lines.some(l => l.includes('Alternative hypotheses'))) {
+      lines.push('<strong>Alternative hypotheses</strong>')
+    }
+    lines.push(
+      `• <em>${escapeHtml(alt.hypothesis || '')}</em> `
+      + `(${escapeHtml(alt.status || 'untested')}) — ${escapeHtml(alt.why || '')}`,
+    )
+  }
+  for (const c of data.checks || []) {
+    if (!c || typeof c !== 'object') continue
+    if (!lines.some(l => l.includes('Verification checklist'))) {
+      lines.push('<strong>Verification checklist</strong>')
+    }
+    const label = escapeHtml(c.label || c.metric || 'check')
+    lines.push(
+      `• ${label}: ${escapeHtml(c.status || '')} — ${escapeHtml(c.detail || '')}`,
+    )
+  }
+  const chain = data.root_cause_chain || []
+  const hyps = data.hypotheses || []
+  if (chain.length || hyps.length) {
+    const treeSrc = investigationTreeMermaid(chain, hyps)
+    if (treeSrc) {
+      lines.push('<strong>Investigation tree</strong>')
+      lines.push(mermaidBlockHtml(treeSrc))
+    }
+  }
+  return lines.join('<br/>')
+}
+
+const evidencePanelHtml = computed(() => formatEvidenceHtml(evidencePanel.value))
+
+function setEvidencePanel(data) {
+  evidencePanel.value = data || null
+}
+
+function updateEvidenceFromToolResult(name, res) {
+  const payload = extractEvidencePanelPayload(name, res)
+  if (payload) setEvidencePanel(payload)
+}
 
 function planMark(status) {
   return ({ done: '✓', active: '●', pending: '○' })[status] || '○'
@@ -828,9 +936,68 @@ function saveConversationAs(format) {
   status.value = `Saved conversation to ${name}`
 }
 
-function exportAiReport(args = {}) {
+function collectConversationToolsRun() {
+  const out = []
+  for (const m of messages.value) {
+    for (const t of (m.tools || [])) {
+      if (t && t.status === 'applied' && t.name) out.push(String(t.name))
+    }
+  }
+  return out
+}
+
+function collectConversationEvidenceTimes() {
+  const out = []
+  for (const m of messages.value) {
+    if (m.role === 'assistant') out.push(...extractJumpTimes(String(m.content || '')))
+  }
+  return out
+}
+
+function exportInvestigationFile(args, meta) {
+  const findingId = String(args.finding_id || '').trim()
+  let conclusion = String(args.conclusion || '').trim()
+  let toolsRun = Array.isArray(args.tools_run) ? args.tools_run.filter(Boolean).map(String) : []
+  let evidenceTimes = Array.isArray(args.evidence_times)
+    ? args.evidence_times.filter(t => typeof t === 'number')
+    : []
+  if (!toolsRun.length) toolsRun = collectConversationToolsRun()
+  if (!evidenceTimes.length) evidenceTimes = collectConversationEvidenceTimes()
+  if (!conclusion) {
+    for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+      const m = messages.value[i]
+      if (m.role === 'assistant' && String(m.content || '').trim()) {
+        conclusion = String(m.content).trim().slice(0, 2000)
+        break
+      }
+    }
+  }
+  const finding = findingId ? { id: findingId, title: findingId } : null
+  const pkg = buildInvestigationPackage({
+    traceName: meta.file || '',
+    scope: meta.scope || '',
+    finding,
+    plan: investigationPlan.value,
+    toolsRun,
+    conclusion,
+    evidenceTimes,
+    timestamp: new Date().toISOString(),
+  })
+  const data = JSON.stringify(pkg, null, 2)
+  const fname = `ai-investigation-${aiFileStamp()}.json`
+  const url = URL.createObjectURL(new Blob([data], { type: 'application/json;charset=utf-8' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fname
+  link.click()
+  URL.revokeObjectURL(url)
+  status.value = `Saved investigation to ${fname}`
+  return { ok: true, message: `Saved investigation package to ${fname}`, path: fname }
+}
+
+function exportAiReport(toolName, args = {}) {
   let fmt = String(args.format || 'html').trim().toLowerCase()
-  if (fmt !== 'csv') fmt = 'html'
+  if (fmt !== 'csv' && fmt !== 'json') fmt = 'html'
   let gui = {}
   if (typeof props.getGuiState === 'function') {
     try { gui = { ...(props.getGuiState() || {}) } } catch (err) {
@@ -858,6 +1025,9 @@ function exportAiReport(args = {}) {
   delete gui.cores
   delete gui.scope
   const annotations = Array.isArray(gui.annotations) ? gui.annotations : []
+  if (toolName === AI_TOOL_EXPORT_INVESTIGATION || fmt === 'json') {
+    return exportInvestigationFile(args, meta)
+  }
   const stamp = aiFileStamp()
   let data
   let name
@@ -907,6 +1077,7 @@ function clear() {
   error.value = ''
   status.value = ''
   mermaidZoom.value = null
+  evidencePanel.value = null
 }
 
 function stop() {
@@ -986,6 +1157,20 @@ async function buildCompareCtx(idA, idB) {
 }
 
 async function ask(prompt) {
+  draft.value = prompt
+  await send()
+}
+
+async function askTemplate(templateId, promptOverride = '') {
+  const t = templates.find(x => x.id === templateId)
+  const prompt = promptOverride || t?.prompt || ''
+  if (!prompt) return
+  activeTemplateId = templateId || ''
+  if (isAgentTemplate(templateId)) {
+    setInvestigationPlan(defaultInvestigationPlan(String(prompt).slice(0, 80)))
+  } else {
+    setInvestigationPlan(null)
+  }
   draft.value = prompt
   await send()
 }
@@ -1099,7 +1284,7 @@ function commitBatch(batchId, skipped) {
         : []
       let hi = 0
       results = msg.tools.map((t) => {
-        if (isExportTool(t.name)) return exportAiReport(t.arguments || {})
+        if (isExportTool(t.name)) return exportAiReport(t.name, t.arguments || {})
         const res = hostResults[hi] || { ok: false, message: 'missing tool result' }
         hi += 1
         return res
@@ -1118,6 +1303,15 @@ function commitBatch(batchId, skipped) {
       name: t.name,
       content: results[i] || { ok: false, message: '' },
     }))
+    const toolName = String(t.name || '')
+    if (
+      toolName === 'investigate'
+      || toolName === 'correlate_events'
+      || toolName === 'find_critical_path'
+      || toolName === 'compare_performance'
+    ) {
+      updateEvidenceFromToolResult(toolName, results[i] || {})
+    }
   })
   return results
 }
@@ -1205,6 +1399,7 @@ async function send(overrideQuery = null, overrideCtx = null) {
           span: ctx.span || '',
           cores: ctx.cores ?? '',
           scope: ctx.scope || '',
+          cursors: ctx.cursors || [],
         }),
       },
     ]
@@ -1263,6 +1458,7 @@ defineExpose({
   refreshLoadedTabs,
   refreshCoreAvailability,
   ask,
+  askTemplate,
   askCompare,
   clear,
   saveConversationAs,
@@ -1279,6 +1475,7 @@ defineExpose({
   min-height: 0;
   padding: 6px;
   box-sizing: border-box;
+  font-size: var(--ui-font-size);
 }
 .ai-header {
   display: flex;
@@ -1286,7 +1483,7 @@ defineExpose({
   gap: 8px;
   flex-shrink: 0;
 }
-.ai-title { font-weight: 600; font-size: 13px; }
+.ai-title { font-weight: 600; font-size: 1.08em; }
 .ai-auth-chip {
   margin-left: 4px;
   background: transparent;
@@ -1295,7 +1492,7 @@ defineExpose({
   border-radius: 10px;
   padding: 1px 8px;
   font: inherit;
-  font-size: 11px;
+  font-size: 0.92em;
   cursor: pointer;
 }
 .ai-auth-chip:hover {
@@ -1374,7 +1571,8 @@ defineExpose({
   border: none;
   color: var(--accent, #2a6fb2);
   cursor: pointer;
-  font-size: 12px;
+  font: inherit;
+  font-size: inherit;
   padding: 2px 6px;
 }
 .ai-link-btn:disabled {
@@ -1383,19 +1581,19 @@ defineExpose({
 }
 .ai-hint {
   margin: 0;
-  font-size: 11px;
+  font-size: 0.92em;
   color: var(--muted, #8a96a8);
   line-height: 1.35;
 }
 .ai-hint code {
-  font-size: 10px;
+  font-size: 0.9em;
   background: rgba(127, 127, 127, 0.15);
   padding: 0 3px;
   border-radius: 3px;
 }
 .ai-section-label {
   font-weight: 600;
-  font-size: 12px;
+  font-size: inherit;
 }
 /* Three columns: keep the log usable; scroll if the panel is very short. */
 .ai-templates {
@@ -1420,7 +1618,7 @@ defineExpose({
   box-sizing: border-box;
 }
 .ai-plan {
-  font-size: 11px;
+  font-size: 0.92em;
   color: var(--fg, #dbe2ea);
   background: rgba(26, 34, 45, 0.85);
   border: 1px solid var(--border, #2c3645);
@@ -1429,6 +1627,22 @@ defineExpose({
   flex-shrink: 0;
   max-height: 160px;
   overflow-y: auto;
+}
+.ai-evidence {
+  font-size: 0.92em;
+  color: var(--fg, #dbe2ea);
+  background: rgba(26, 34, 45, 0.85);
+  border: 1px solid var(--border, #2c3645);
+  border-radius: 6px;
+  padding: 6px 8px;
+  flex-shrink: 0;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.ai-evidence-body {
+  color: #c5d0dc;
+  font-size: inherit;
+  line-height: 1.45;
 }
 .ai-plan-goal {
   margin-bottom: 4px;
@@ -1449,7 +1663,8 @@ defineExpose({
 .ai-plan-steps li.plan-active { color: var(--accent, #5b9bd5); font-weight: 600; }
 .plan-mark { width: 1em; flex: 0 0 auto; }
 .ai-tpl-btn, .ai-btn {
-  font-size: 12px;
+  font: inherit;
+  font-size: inherit;
   padding: 5px 8px;
   border-radius: 6px;
   border: 1px solid var(--border, #3a4658);
@@ -1487,7 +1702,7 @@ defineExpose({
   border-radius: 8px;
   padding: 8px;
   background: var(--panel-inset, #1a2230);
-  font-size: 12px;
+  font-size: inherit;
   line-height: 1.4;
 }
 .ai-ctx-menu {
@@ -1510,7 +1725,7 @@ defineExpose({
   color: inherit;
   cursor: pointer;
   font: inherit;
-  font-size: 12px;
+  font-size: inherit;
   padding: 5px 10px;
   text-align: left;
 }
@@ -1653,24 +1868,32 @@ defineExpose({
   gap: 6px;
   align-items: center;
 }
-.ai-msg-body :deep(.ai-mermaid) {
+.ai-msg-body :deep(.ai-mermaid),
+.ai-evidence-body :deep(.ai-mermaid) {
   margin: 8px 0;
   overflow-x: auto;
 }
-.ai-msg-body :deep(.ai-mermaid-zoom) {
+.ai-msg-body :deep(.ai-mermaid-zoom),
+.ai-evidence-body :deep(.ai-mermaid-zoom) {
   cursor: zoom-in;
   display: inline-block;
   text-decoration: none;
 }
 .ai-msg-body :deep(.ai-mermaid-svg svg),
-.ai-msg-body :deep(.ai-mermaid-img) {
+.ai-msg-body :deep(.ai-mermaid-img),
+.ai-evidence-body :deep(.ai-mermaid-svg svg),
+.ai-evidence-body :deep(.ai-mermaid-img) {
   max-width: 100%;
   height: auto;
   border-radius: 4px;
 }
-.ai-msg-body :deep(.ai-mermaid-links) {
+.ai-msg-body :deep(.ai-mermaid-links),
+.ai-evidence-body :deep(.ai-mermaid-links) {
   margin: 4px 0 0;
   font-size: 11px;
+}
+.ai-evidence-body :deep(.ai-evidence-score) {
+  font-family: Menlo, Consolas, Monaco, 'Courier New', monospace;
 }
 .ai-mermaid-overlay {
   position: fixed;
@@ -1723,7 +1946,7 @@ defineExpose({
   box-sizing: border-box;
   resize: vertical;
   min-height: 64px;
-  font-size: 12px;
+  font-size: inherit;
   font-family: inherit;
   border-radius: 6px;
   border: 1px solid var(--border, #3a4658);
@@ -1738,7 +1961,7 @@ defineExpose({
 }
 .ai-spacer { flex: 1; }
 .ai-status {
-  font-size: 11px;
+  font-size: 0.92em;
   color: var(--muted, #8a96a8);
   min-height: 1.2em;
 }

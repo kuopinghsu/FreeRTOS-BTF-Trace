@@ -87,6 +87,10 @@
         v-if="contextMenu.visible"
         class="context-menu"
         :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+        @mousedown.stop
+        @mouseup.stop
+        @click.stop
+        @contextmenu.prevent.stop
         @mouseleave="contextMenu.visible = false"
       >
         <template v-if="contextMenu.segment">
@@ -108,13 +112,19 @@
           >
             Select in Legend
           </div>
+          <div
+            class="ctx-item"
+            @click="onCtxAskAiEvent"
+          >
+            Ask AI about this event
+          </div>
           <div class="ctx-sep" />
         </template>
         <div
           class="ctx-item"
           @click="onCtxPlaceCursor"
         >
-          Place cursor here
+          Place cursor here{{ ctxTimeLabel ? `  (${ctxTimeLabel})` : '' }}
         </div>
         <div
           v-if="hasPlacedCursors"
@@ -130,6 +140,13 @@
         >
           Clear all cursors
         </div>
+        <div
+          v-if="hasTwoCursors"
+          class="ctx-item"
+          @click="onCtxExplainRegion"
+        >
+          Explain this region with AI
+        </div>
         <div class="ctx-sep" />
         <div
           class="ctx-item"
@@ -144,7 +161,7 @@
           >
             <path d="M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.74.439L8 13.069l-5.26 2.87A.5.5 0 0 1 2 15.5V2zm2-1a1 1 0 0 0-1 1v12.566l4.26-2.325a.5.5 0 0 1 .48 0L12 14.566V2a1 1 0 0 0-1-1H4z" />
           </svg>
-          Add Bookmark
+          Add Bookmark here{{ ctxTimeLabel ? `  (${ctxTimeLabel})` : '' }}
         </div>
         <div
           class="ctx-item"
@@ -159,8 +176,25 @@
           >
             <path d="M8 0 12 4 8 8 4 4 8 0zm0 9 4 4-4 3-4-3 4-4z" />
           </svg>
-          Add Annotation
+          Add Annotation here{{ ctxTimeLabel ? `  (${ctxTimeLabel})` : '' }}
         </div>
+        <template v-if="hasBookmarks || hasAnnotations">
+          <div class="ctx-sep" />
+          <div
+            v-if="hasBookmarks"
+            class="ctx-item"
+            @click="onCtxClearBookmarks"
+          >
+            Clear all bookmarks
+          </div>
+          <div
+            v-if="hasAnnotations"
+            class="ctx-item"
+            @click="onCtxClearAnnotations"
+          >
+            Clear all annotations
+          </div>
+        </template>
         <div
           class="ctx-item"
           @click="onCopyCursorTime"
@@ -291,7 +325,8 @@ const props = defineProps({
 const emit = defineEmits([
   'viewportChange', 'cursorsChange', 'hoverTimeChange', 'highlightChange', 'highlightClick',
   'segmentClick', 'clearSelection', 'addBookmark', 'addAnnotation', 'markMove', 'copyScreenshot',
-  'beforeCursorChange', 'beforeMarkChange', 'labelWidthChange',
+  'beforeCursorChange', 'beforeMarkChange', 'labelWidthChange', 'explainRegion', 'askAiEvent',
+  'clearBookmarks', 'clearAnnotations',
 ])
 
 // ---- Template refs -------------------------------------------------------
@@ -463,6 +498,15 @@ const ctxSegmentTaskName = computed(() => {
 })
 
 const hasPlacedCursors = computed(() => props.cursors.some(c => c != null))
+const hasTwoCursors = computed(() => props.cursors.filter(c => c != null).length >= 2)
+const hasBookmarks = computed(() =>
+  (props.options.marks || []).some(m => m && m.type !== 'annotation'))
+const hasAnnotations = computed(() =>
+  (props.options.marks || []).some(m => m && m.type === 'annotation'))
+const ctxTimeLabel = computed(() => {
+  if (!props.trace || contextMenu.ns == null) return ''
+  return formatTime(contextMenu.ns, props.trace.timeScale, props.timeDecimals)
+})
 
 // ---- Scrollbars & navigator popup ----------------------------------------
 const SCROLLBAR_SIZE   = 10          // px – scrollbar track thickness
@@ -969,6 +1013,11 @@ function onCtxClearCursors() {
   _handler?.clearAllCursors()
 }
 
+function onCtxExplainRegion() {
+  contextMenu.visible = false
+  emit('explainRegion')
+}
+
 function onAddBookmark() {
   contextMenu.visible = false
   emit('addBookmark', contextMenu.ns)
@@ -977,6 +1026,16 @@ function onAddBookmark() {
 function onAddAnnotation() {
   contextMenu.visible = false
   emit('addAnnotation', contextMenu.ns)
+}
+
+function onCtxClearBookmarks() {
+  contextMenu.visible = false
+  emit('clearBookmarks')
+}
+
+function onCtxClearAnnotations() {
+  contextMenu.visible = false
+  emit('clearAnnotations')
 }
 
 function onCopyCursorTime() {
@@ -1003,6 +1062,19 @@ function onCtxSelectInLegend() {
   const seg = contextMenu.segment
   if (!seg) return
   emit('highlightClick', taskMergeKey(seg.task))
+}
+
+function onCtxAskAiEvent() {
+  contextMenu.visible = false
+  const seg = contextMenu.segment
+  if (!seg) return
+  emit('askAiEvent', {
+    task: ctxSegmentTaskName.value || seg.task,
+    core: seg.core,
+    start: seg.start,
+    stop: seg.end,
+    ns: contextMenu.ns,
+  })
 }
 
 function onCopyScreenshot() {

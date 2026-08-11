@@ -150,6 +150,26 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         self.assertTrue(dlg.wants_ai_query)
         self.assertFalse(dlg._ai_needs_settings)
 
+    def test_analysis_dialog_auto_investigate_button(self):
+        from PySide6.QtWidgets import QApplication, QPushButton
+        from btf_viewer_pkg.stats import _AnalysisFindingsDialog
+
+        if QApplication.instance() is None:
+            QApplication([])
+        findings = [{"id": "f1", "severity": "warning", "title": "Load imbalance", "text": "σ high"}]
+        dlg = _AnalysisFindingsDialog(findings, " (scoped)", ai_enabled=True)
+        labels = [b.text().replace("&", "") for b in dlg.findChildren(QPushButton)]
+        self.assertIn("Auto investigate…", labels)
+        dlg._list_w.setCurrentRow(0)
+        auto_btn = next(
+            b for b in dlg.findChildren(QPushButton)
+            if "Auto investigate" in b.text().replace("&", "")
+        )
+        auto_btn.click()
+        self.assertTrue(dlg.wants_ai_query)
+        self.assertEqual(dlg.wants_ai_template, "auto_investigate")
+        self.assertEqual(dlg.wants_ai_finding_id, "f1")
+
     def test_analysis_dialog_query_ai_opens_settings_when_disabled(self):
         from PySide6.QtWidgets import QApplication, QPushButton
         from btf_viewer_pkg.stats import _AnalysisFindingsDialog

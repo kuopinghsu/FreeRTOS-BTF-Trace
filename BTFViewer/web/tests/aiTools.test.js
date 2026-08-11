@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   AI_RAW_METRIC_PRIORITY,
+  AI_TOOL_COMPARE_TASKS,
+  AI_TOOL_DETECT_PRIORITY_INVERSION,
+  AI_TOOL_FIND_RELATED_FINDINGS,
   AI_TOOL_SYSTEM_ADDENDUM,
   AI_VIEWER_TOOL_NAMES,
   GEMINI_SKIP_THOUGHT_SIGNATURE,
@@ -10,6 +13,9 @@ import {
   btfJumpHref,
   buildAiReportCsv,
   buildAiReportHtml,
+  compareTasksHost,
+  detectPriorityInversionHost,
+  findRelatedFindingsFinding,
   parseBtfHighlightHref,
   parseBtfJumpHref,
   extractToolCalls,
@@ -376,5 +382,122 @@ describe('aiTools', () => {
       model: 'gemini-2.5-flash',
       preset: 'ollama',
     }), false)
+  })
+
+  it('validates and summarises the Phase 2 tools (parity with ai_tools.py)', () => {
+    assert.ok(AI_VIEWER_TOOL_NAMES.includes(AI_TOOL_DETECT_PRIORITY_INVERSION))
+    assert.ok(AI_VIEWER_TOOL_NAMES.includes(AI_TOOL_FIND_RELATED_FINDINGS))
+    assert.ok(AI_VIEWER_TOOL_NAMES.includes(AI_TOOL_COMPARE_TASKS))
+    assert.equal(toolMutatesGui(AI_TOOL_DETECT_PRIORITY_INVERSION), false)
+    assert.equal(toolMutatesGui(AI_TOOL_FIND_RELATED_FINDINGS), false)
+    assert.equal(toolMutatesGui(AI_TOOL_COMPARE_TASKS), false)
+    assert.equal(toolBatchAutoRuns([{ name: AI_TOOL_DETECT_PRIORITY_INVERSION }]), true)
+    assert.equal(toolBatchAutoRuns([{ name: AI_TOOL_FIND_RELATED_FINDINGS }]), true)
+    assert.equal(toolBatchAutoRuns([{ name: AI_TOOL_COMPARE_TASKS }]), true)
+
+    const inv = validateToolCall(AI_TOOL_DETECT_PRIORITY_INVERSION, { task: 'Low[266]', window: '5000' })
+    assert.equal(inv.error, '')
+    assert.equal(inv.args.task, 'Low[266]')
+    assert.equal(inv.args.window, 5000)
+    assert.match(summariseToolCall(AI_TOOL_DETECT_PRIORITY_INVERSION, inv.args), /Low\[266\]/)
+
+    const rel = validateToolCall(AI_TOOL_FIND_RELATED_FINDINGS, { limit: 200 })
+    assert.equal(rel.error, '')
+    assert.equal(rel.args.limit, 40)
+    assert.equal(typeof summariseToolCall(AI_TOOL_FIND_RELATED_FINDINGS, rel.args), 'string')
+
+    const cmp = validateToolCall(AI_TOOL_COMPARE_TASKS, { task_a: 'Low[266]', task_b: 'High[268]' })
+    assert.equal(cmp.error, '')
+    assert.equal(cmp.args.task_a, 'Low[266]')
+    assert.equal(cmp.args.task_b, 'High[268]')
+    assert.match(summariseToolCall(AI_TOOL_COMPARE_TASKS, cmp.args), /Low\[266\]/)
+    assert.ok(validateToolCall(AI_TOOL_COMPARE_TASKS, { task_a: '', task_b: 'High[268]' }).error)
+    assert.ok(validateToolCall(AI_TOOL_COMPARE_TASKS, { task_a: 'A', task_b: 'B', metrics: 'nope' }).error)
+  })
+
+  it('detectPriorityInversionHost gathers episodes from the trace and scores confidence', () => {
+    const mk = '\x00266\x00Low'
+    const ep = {
+      mk, taskLabel: 'Low[266]', basePri: 1, peakPri: 5,
+      startNs: 3100000, stopNs: 3134000, inherited: true,
+      inversionSuspect: true, mediumTasks: [{ label: 'Med[267]' }],
+      pattern: 'Mutex inherit L/M/H (Med[267])',
+    }
+    const trace = {
+      taskRepr: new Map([[mk, 'Low[266]']]),
+      priorityEpisodes: [ep],
+    }
+    const findings = [
+      {
+        severity: 'warning',
+        title: 'Priority inversion suspected',
+        text: 'Low[266] holds mutex(0x80018700) blocking High[268] while Med[267] preempts',
+      },
+    ]
+    const result = detectPriorityInversionHost(trace, findings)
+    assert.equal(result.ok, true)
+    assert.equal(result.data.count, 1)
+    const row = result.data.inversions[0]
+    assert.equal(row.low, 'Low[266]')
+    assert.equal(row.medium, 'Med[267]')
+    assert.equal(row.high, 'High[268]')
+    assert.equal(row.mutex, '0x80018700')
+    assert.equal(row.duration, 34000)
+    assert.equal(result.data.confidence, 'High')
+    assert.equal(detectPriorityInversionHost(null).ok, false)
+  })
+
+  it('findRelatedFindingsFinding scores shared task and keywords', () => {
+    const findings = [
+      {
+        id: 'thrashing', severity: 'warning',
+        title: 'Excessive bouncing / core thrashing',
+        text: 'CS[28] migrates heavily between cores', task: 'CS[28]',
+      },
+      {
+        id: 'wcet_spike', severity: 'warning',
+        title: 'Anomaly: WCET spike',
+        text: 'CS[28] Max/Avg spike observed', task: 'CS[28]',
+      },
+      {
+        id: 'unrelated', severity: 'info',
+        title: 'Note', text: 'Nothing to see here', task: 'Idle[1]',
+      },
+    ]
+    const result = findRelatedFindingsFinding(findings, { findingId: 'thrashing' })
+    assert.equal(result.ok, true)
+    assert.equal(result.data.focus.id, 'thrashing')
+    const ids = result.data.related.map(r => r.id)
+    assert.ok(ids.includes('wcet_spike'))
+    assert.ok(!ids.includes('thrashing'))
+    assert.equal(findRelatedFindingsFinding([]).ok, false)
+  })
+
+  it('compareTasksHost queries both tasks and builds delta rows', () => {
+    const mkA = '\x00266\x00Low'
+    const mkB = '\x00268\x00High'
+    const epA = {
+      mk: mkA, taskLabel: 'Low[266]', basePri: 1, peakPri: 1,
+      startNs: 1000, stopNs: 1100, inherited: false, inversionSuspect: false, mediumTasks: [],
+    }
+    const trace = {
+      tasks: ['Low[266]', 'High[268]'],
+      taskRepr: new Map([[mkA, 'Low[266]'], [mkB, 'High[268]']]),
+      segByMergeKey: new Map([
+        [mkA, [{ task: 'Low[266]', start: 0, end: 100000, core: 'Core_0' }]],
+        [mkB, [{ task: 'High[268]', start: 0, end: 50000, core: 'Core_0' }]],
+      ]),
+      priorityEpisodes: [epA],
+      priorityEpisodesByMk: new Map([[mkA, [epA]]]),
+      migrationsByMk: new Map(),
+      stiEvents: [],
+    }
+    const result = compareTasksHost(trace, 'Low[266]', 'High[268]')
+    assert.equal(result.ok, true)
+    assert.equal(result.data.task_a, 'Low[266]')
+    assert.equal(result.data.task_b, 'High[268]')
+    assert.ok(Array.isArray(result.data.rows))
+    assert.equal(compareTasksHost(trace, '', 'High[268]').ok, false)
+    assert.equal(compareTasksHost(null, 'A', 'B').ok, false)
   })
 })

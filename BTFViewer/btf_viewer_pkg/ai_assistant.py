@@ -25,6 +25,8 @@ from .ai_mermaid import (
     mermaid_to_svg,
 )
 from .ai_tools import (
+    AI_TOOL_EXPORT_INVESTIGATION,
+    AI_TOOL_EXPORT_REPORT,
     AI_TOOL_SYSTEM_ADDENDUM,
     ai_viewer_tools,
     btf_jump_href,
@@ -53,8 +55,11 @@ from .ai_tools import (
     validate_tool_call,
 )
 from .ai_investigation import (
+    build_investigation_package,
     complete_investigation_plan,
     default_investigation_plan,
+    extract_evidence_panel_payload,
+    investigation_tree_mermaid,
     is_agent_template,
     mark_plan_steps_from_tools,
 )
@@ -169,9 +174,11 @@ AI_SYSTEM_PROMPT = (
     "For every important conclusion, cite evidence (metric names, counts, "
     "jump:TIME ranges) and state confidence as High, Medium, or Low — and "
     "whether the evidence is Directly observed, Strong correlation, Possible "
-    "explanation, or Insufficient evidence. Do not invent numbers that are "
-    "not in the findings, tool results, or Trace Compare tables. "
-    "Keep answers concise. "
+    "explanation, or Insufficient evidence. Do not invent numbers, task names, "
+    "or jump:TIME timestamps that are not in the findings, tool results, or "
+    "Trace Compare tables. If a Cursor region window is listed, only cite "
+    "jump:TIME values inside that window (or say the window has no matching "
+    "evidence). Keep answers concise. "
     + AI_TOOL_SYSTEM_ADDENDUM
 )
 
@@ -237,6 +244,29 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "missing. Set cursors around the worst episode, highlight the "
         "victim task, and answer with Root cause, Evidence (bullet list with "
         "jump:TIME), Confidence, and Suggested fix.",
+    ),
+    (
+        "verify",
+        "Verify finding",
+        "Verify the selected Analysis Finding. Call investigate(finding_id=ID) "
+        "first (use the finding_id given in the user message). Then collect "
+        "evidence with query_raw_metric / correlate_events / search_timeline as "
+        "needed. Place cursors and zoom_to_range on the strongest evidence. "
+        "Finish with a verdict: Confirmed, Rejected, or Inconclusive; list "
+        "Evidence as jump:TIME bullets; Confidence (High/Medium/Low); "
+        "Alternatives considered; and one next check.",
+    ),
+    (
+        "explain_region",
+        "Explain region",
+        "Explain the current timeline cursor region (scope C1–Cn — see the "
+        "Cursor region window in context). Stay strictly inside that window: "
+        "every jump:TIME you cite must fall between C1 and Cn. Identify "
+        "longest blocking, migrations, priority changes, wakeups, mutex "
+        "contention, deadline issues, idle gaps, and CPU imbalance in this "
+        "window. Call correlate_events and query_raw_metric as needed. Use "
+        "only in-window jump:TIME evidence (or state that tools found none). "
+        "End with: Summary, Top issues, Evidence, Suggested next action.",
     ),
     (
         AI_COMPARE_TEMPLATE_ID,
@@ -337,7 +367,53 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Are there deadline or CPU-budget concerns in the findings? What "
         "should the engineer measure next?",
     ),
+    (
+        "auto_investigate",
+        "Auto investigate",
+        "Automatically investigate and confirm the top finding end-to-end. "
+        "Call investigate(finding_id) first, then correlate_events on the "
+        "same window. Call find_critical_path to build the causal chain, or "
+        "detect_priority_inversion instead when investigate flags a "
+        "priority-inversion finding. Place cursors and zoom_to_range on the "
+        "strongest evidence. Then call what_if or optimize_experiment to "
+        "test a concrete mitigation. Finish with a verdict — Confirmed, "
+        "Rejected, or Inconclusive — Evidence as jump:TIME bullets, "
+        "Confidence (High/Medium/Low), and one recommended experiment to "
+        "run next.",
+    ),
 )
+
+# "Ask AI about this event" (timeline segment context menu) — intentionally
+# kept out of AI_TEMPLATE_QUESTIONS so it does not show in the template grid.
+# Keep in sync with web/src/utils/ollamaClient.js ASK_EVENT_PROMPT.
+ASK_EVENT_PROMPT = (
+    "Explain the timeline event for task {task} on {core} around jump:{ns} "
+    "(segment {start}-{stop}). Call correlate_events and query_raw_metric as "
+    "needed. Cite jump:TIME evidence."
+)
+
+
+def compose_ask_event_prompt(event: Optional[Dict[str, Any]]) -> str:
+    """Build the ``ASK_EVENT_PROMPT`` from a timeline segment hit dict.
+
+    *event*: ``{task, core, start, stop, ns}`` as emitted by
+    ``TimelineView.ask_ai_event_requested`` / the web segment context menu.
+    """
+    event = event or {}
+
+    def _num(key: str) -> str:
+        v = event.get(key)
+        try:
+            n = float(v)
+        except (TypeError, ValueError):
+            return "?"
+        return str(int(n)) if n.is_integer() else str(n)
+
+    task = str(event.get("task") or "").strip() or "the selected task"
+    core = str(event.get("core") or "").strip() or "its core"
+    return ASK_EVENT_PROMPT.format(
+        task=task, core=core, ns=_num("ns"), start=_num("start"), stop=_num("stop"),
+    )
 
 # Every provider is reached over its OpenAI-compatible /chat/completions API,
 # including Ollama (http://localhost:11434/v1).
@@ -990,18 +1066,82 @@ def ai_auth_status(
     }
 
 
+def format_jump_time_token(value: Any) -> str:
+    """Format a trace timestamp for ``jump:TIME`` tokens."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if v.is_integer():
+        return str(int(v))
+    return f"{v:g}"
+
+
+def placed_cursor_times(cursors: Optional[Sequence[Any]] = None) -> List[float]:
+    """Sorted numeric cursor times (skip nulls)."""
+    out: List[float] = []
+    for c in cursors or []:
+        if c is None or c == "":
+            continue
+        try:
+            out.append(float(c))
+        except (TypeError, ValueError):
+            continue
+    out.sort()
+    return out
+
+
+def cursor_region_bounds(
+    cursors: Optional[Sequence[Any]] = None,
+) -> Optional[Tuple[float, float]]:
+    """``(lo, hi)`` from earliest/latest placed cursor, or None if <2."""
+    placed = placed_cursor_times(cursors)
+    if len(placed) < 2:
+        return None
+    lo, hi = placed[0], placed[-1]
+    if hi <= lo:
+        return None
+    return lo, hi
+
+
+def append_explain_region_bounds(
+    prompt: str,
+    cursors: Optional[Sequence[Any]] = None,
+) -> str:
+    """Append an explicit C1–Cn jump window to the Explain-region prompt."""
+    bounds = cursor_region_bounds(cursors)
+    if not bounds:
+        return str(prompt or "")
+    lo, hi = bounds
+    lo_s, hi_s = format_jump_time_token(lo), format_jump_time_token(hi)
+    extra = (
+        f"Cursor region window: jump:{lo_s} … jump:{hi_s}. "
+        "ONLY cite jump:TIME evidence inside this window. "
+        "If tools return no in-window events, say the region has no matching "
+        "evidence — do not invent timestamps or task names."
+    )
+    base = str(prompt or "").rstrip()
+    return f"{base}\n\n{extra}" if base else extra
+
+
 def normalize_ai_context(ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Accept snake_case or camelCase context keys (Desktop / Web parity)."""
     c = dict(ctx or {})
     findings = c.get("findings_text")
     if findings is None or findings == "":
         findings = c.get("findingsText", "")
+    cursors = c.get("cursors")
+    if cursors is None:
+        cursors = []
+    elif not isinstance(cursors, (list, tuple)):
+        cursors = [cursors]
     return {
         "findings_text": findings or "",
         "span": c.get("span", "") or "",
         "cores": c.get("cores", ""),
         "scope": c.get("scope", "") or "",
         "metrics": c.get("metrics"),
+        "cursors": list(cursors),
     }
 
 
@@ -1054,7 +1194,15 @@ def _md_inline_to_html_escaped(text: str) -> str:
     out_chunks: List[str] = []
     for kind, val in parts:
         if kind == "c":
-            out_chunks.append(_stash(f"<code>{html.escape(val)}</code>"))
+            # Models often wrap jump:TIME in backticks; keep those clickable.
+            jm = _JUMP_RE.fullmatch(val.strip())
+            if jm:
+                out_chunks.append(_stash(
+                    f'<a href="{btf_jump_href(jm.group(1))}" class="ai-jump">'
+                    f"jump:{jm.group(1)}</a>"
+                ))
+            else:
+                out_chunks.append(_stash(f"<code>{html.escape(val)}</code>"))
             continue
         seg = val
         seglast = 0
@@ -1482,6 +1630,7 @@ _AI_LOG_STYLE = (
     ".ai-tool-card{color:#e6d48a;}"
     "img.ai-mermaid-img{max-width:100%;height:auto;border-radius:4px;}"
     "a.ai-mermaid-zoom{cursor:zoom-in;text-decoration:none;}"
+    ".ai-evidence-score{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;}"
 )
 
 
@@ -1711,6 +1860,7 @@ def build_ai_user_message(
     span: str = "",
     cores: Any = "",
     scope: str = "",
+    cursors: Optional[Sequence[Any]] = None,
 ) -> str:
     """Assemble the user turn: context + question."""
     parts = ["### System Trace Context"]
@@ -1720,6 +1870,22 @@ def build_ai_user_message(
         parts.append(f"- Cores: {cores}")
     if scope:
         parts.append(f"- Statistics scope: {scope}")
+    placed = placed_cursor_times(cursors)
+    if placed:
+        labels = ", ".join(
+            f"C{i + 1}=jump:{format_jump_time_token(t)}"
+            for i, t in enumerate(placed)
+        )
+        parts.append(f"- Timeline cursors: {labels}")
+        bounds = cursor_region_bounds(placed)
+        if bounds:
+            lo_s = format_jump_time_token(bounds[0])
+            hi_s = format_jump_time_token(bounds[1])
+            parts.append(
+                f"- Cursor region window: jump:{lo_s} … jump:{hi_s} "
+                "(only cite jump:TIME evidence inside this window when "
+                "explaining the region)"
+            )
     parts.append("")
     parts.append("### Analysis Findings")
     parts.append((findings_text or "No findings for the current scope.").rstrip())
@@ -1741,6 +1907,7 @@ def _build_chat_messages(
     span: str = "",
     cores: Any = "",
     scope: str = "",
+    cursors: Optional[Sequence[Any]] = None,
     response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
     history: Optional[Sequence[Dict[str, str]]] = None,
 ) -> List[Dict[str, str]]:
@@ -1762,6 +1929,7 @@ def _build_chat_messages(
             span=span,
             cores=cores,
             scope=scope,
+            cursors=cursors,
         ),
     })
     return messages
@@ -2551,6 +2719,25 @@ def create_ai_assistant_panel(
             self._plan_view.hide()
             mid_lay.addWidget(self._plan_view)
 
+            self._evidence_label = QLabel("Evidence / Reasoning")
+            self._evidence_label.setStyleSheet("font-weight:600;margin-top:2px;")
+            self._evidence_label.hide()
+            mid_lay.addWidget(self._evidence_label)
+            self._evidence_view = QTextBrowser()
+            self._evidence_view.setReadOnly(True)
+            self._evidence_view.setOpenExternalLinks(False)
+            self._evidence_view.setOpenLinks(False)
+            self._evidence_view.setWordWrapMode(QTextOption.WrapMode.WordWrap)
+            self._evidence_view.setMaximumHeight(160)
+            self._evidence_view.setStyleSheet(
+                "color:#c5d0dc;font-size:11px;background:#1a222d;"
+                "border:1px solid #2c3645;border-radius:6px;padding:6px;"
+            )
+            self._evidence_view.hide()
+            self._evidence_view.document().setDefaultStyleSheet(_AI_LOG_STYLE)
+            self._evidence_view.anchorClicked.connect(self._on_jump_link)
+            mid_lay.addWidget(self._evidence_view)
+
             self.refresh_template_availability()
 
             self._log = QTextBrowser()
@@ -2871,6 +3058,7 @@ def create_ai_assistant_panel(
             self._tool_round = 0
             self._log.clear()
             self._status.setText("")
+            self._clear_evidence_panel()
             self._refresh_tool_bar()
 
         def _show_log_menu(self, pos) -> None:
@@ -2947,10 +3135,85 @@ def create_ai_assistant_panel(
                 return
             self._status.setText(f"Saved conversation to {os.path.basename(path)}")
 
-        def _export_ai_report(self, args: Dict[str, Any]) -> Dict[str, Any]:
-            """Write findings + GUI state + conversation (export_report tool)."""
-            fmt = str((args or {}).get("format") or "html").strip().lower()
-            if fmt not in ("html", "csv"):
+        def _collect_conversation_tools_run(self) -> List[str]:
+            """Tool names successfully applied so far this session, in order."""
+            out: List[str] = []
+            for e in self._entries:
+                for t in ai_entry_tools(e):
+                    if isinstance(t, dict) and t.get("status") == "applied":
+                        nm = str(t.get("name") or "")
+                        if nm:
+                            out.append(nm)
+            return out
+
+        def _collect_conversation_evidence_times(self) -> List[float]:
+            """jump:TIME evidence timestamps cited across assistant replies."""
+            out: List[float] = []
+            for e in self._entries:
+                if ai_entry_role(e) == "assistant":
+                    out.extend(extract_jump_times(ai_entry_text(e)))
+            return out
+
+        def _export_investigation_package(
+            self, args: Dict[str, Any], *, meta: Dict[str, str],
+        ) -> Dict[str, Any]:
+            """Build + save the JSON investigation replay package."""
+            finding_id = str((args or {}).get("finding_id") or "").strip()
+            conclusion = str((args or {}).get("conclusion") or "").strip()
+            tools_run = [str(t) for t in ((args or {}).get("tools_run") or []) if t]
+            evidence_times = [
+                float(t) for t in ((args or {}).get("evidence_times") or [])
+                if isinstance(t, (int, float))
+            ]
+            if not tools_run:
+                tools_run = self._collect_conversation_tools_run()
+            if not evidence_times:
+                evidence_times = self._collect_conversation_evidence_times()
+            if not conclusion:
+                for e in reversed(self._entries):
+                    if ai_entry_role(e) == "assistant":
+                        text = ai_entry_text(e).strip()
+                        if text:
+                            conclusion = text[:2000]
+                            break
+            finding = {"id": finding_id, "title": finding_id} if finding_id else None
+            package = build_investigation_package(
+                trace_name=meta.get("file", ""),
+                scope=meta.get("scope", ""),
+                finding=finding,
+                plan=self._investigation_plan,
+                tools_run=tools_run,
+                conclusion=conclusion,
+                evidence_times=evidence_times,
+                timestamp=datetime.datetime.now().isoformat(),
+            )
+            data = json.dumps(package, ensure_ascii=True, indent=2)
+            start = f"ai-investigation-{_ai_file_stamp()}.json"
+            path, _selected = QFileDialog.getSaveFileName(
+                self, "Export Investigation", start, "JSON (*.json);;All files (*)")
+            if not path:
+                return tool_result_payload(False, "Export cancelled")
+            if not path.lower().endswith(".json"):
+                path += ".json"
+            try:
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(data)
+            except OSError as exc:
+                return tool_result_payload(False, f"Could not write file: {exc}")
+            base = os.path.basename(path)
+            self._status.setText(f"Saved investigation to {base}")
+            return tool_result_payload(
+                True, f"Saved investigation package to {base}", path=path)
+
+        def _export_ai_report(
+            self, name: str, args: Dict[str, Any],
+        ) -> Dict[str, Any]:
+            """Write findings + GUI state + conversation (export_report /
+            export_investigation tools)."""
+            name = str(name or AI_TOOL_EXPORT_REPORT)
+            args = args or {}
+            fmt = str(args.get("format") or "html").strip().lower()
+            if fmt not in ("html", "csv", "json"):
                 fmt = "html"
             gui: Dict[str, Any] = {}
             if on_gui_state:
@@ -2973,6 +3236,8 @@ def create_ai_assistant_panel(
             annotations = (
                 gui.get("annotations") if isinstance(gui.get("annotations"), list) else []
             )
+            if name == AI_TOOL_EXPORT_INVESTIGATION or fmt == "json":
+                return self._export_investigation_package(args, meta=meta)
             stamp = _ai_file_stamp()
             if fmt == "csv":
                 start = f"ai-report-{stamp}.csv"
@@ -3123,14 +3388,35 @@ def create_ai_assistant_panel(
             super().showEvent(event)
             self.refresh_enabled_state()
 
-        def query_template(self, template_id: str) -> None:
+        def query_template(self, template_id: str, *, finding_id: str = "") -> None:
             """Run a built-in AI template by id (toolbar Analysis / inspector)."""
             prompt = next(
                 (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS if tid == template_id),
                 "",
             )
             if prompt:
+                fid = str(finding_id or "").strip()
+                if fid:
+                    prompt = f"{prompt}\n\nfinding_id={fid}"
+                if template_id == "explain_region" and get_context:
+                    try:
+                        cursors = (get_context() or {}).get("cursors") or []
+                    except Exception:
+                        cursors = []
+                    prompt = append_explain_region_bounds(prompt, cursors)
                 self._use_template(template_id, prompt)
+
+        def ask_event(self, event: Dict[str, Any]) -> None:
+            """Timeline context menu → Ask AI about this event."""
+            prompt = compose_ask_event_prompt(event)
+            self._use_template("ask_event", prompt)
+
+        def ask(self, prompt: str) -> None:
+            """Generic programmatic ask (composed prompt, no fixed template)."""
+            prompt = str(prompt or "").strip()
+            if not prompt:
+                return
+            self._use_template("", prompt)
 
         def query_analysis_findings(self) -> None:
             """Run the Analysis Findings template (toolbar Analysis → Query with AI)."""
@@ -3188,6 +3474,100 @@ def create_ai_assistant_panel(
             self._plan_label.hide()
             self._plan_view.hide()
             self._plan_view.clear()
+
+        def set_evidence_panel(self, data: Optional[dict]) -> None:
+            """Show structured evidence / reasoning from investigation tools."""
+            if not data:
+                self._clear_evidence_panel()
+                return
+            lines: List[str] = []
+            conclusion = str(data.get("conclusion") or "").strip()
+            if conclusion:
+                lines.append(f"<b>{html.escape(conclusion)}</b>")
+            subtitle = str(data.get("subtitle") or "").strip()
+            if subtitle:
+                lines.append(html.escape(subtitle[:320]))
+            evidence = data.get("evidence") or []
+            if evidence:
+                lines.append("<br/><b>Evidence</b>")
+                for ev in evidence:
+                    if not isinstance(ev, dict):
+                        continue
+                    label = html.escape(str(ev.get("label") or "item"))
+                    t = ev.get("time")
+                    if t is not None:
+                        try:
+                            tn = float(t)
+                            token = str(int(tn)) if tn.is_integer() else str(tn)
+                            lines.append(
+                                f"• {label} "
+                                f'<a href="{btf_jump_href(tn)}" class="ai-jump">'
+                                f"jump:{token}</a>"
+                            )
+                        except (TypeError, ValueError):
+                            lines.append(f"• {label}")
+                    else:
+                        lines.append(f"• {label}")
+            chain = str(data.get("evidence_chain") or "").strip()
+            if chain:
+                lines.append("<br/><b>Evidence chain</b>")
+                lines.append(
+                    html.escape(chain).replace("\n", "<br/>")
+                )
+            conf = data.get("confidence")
+            if conf:
+                lines.append(f"<br/><b>Confidence:</b> {html.escape(str(conf))}")
+            score = data.get("evidence_score")
+            if score is not None:
+                bar = str(data.get("evidence_score_bar") or "")
+                lines.append(
+                    "<br/><b>AI Evidence Score — heuristic:</b> "
+                    f'<span class="ai-evidence-score">{html.escape(bar)}</span>'
+                )
+            alts = data.get("alternatives") or []
+            if alts:
+                lines.append("<br/><b>Alternative hypotheses</b>")
+                for alt in alts:
+                    if not isinstance(alt, dict):
+                        continue
+                    hyp = html.escape(str(alt.get("hypothesis") or ""))
+                    status = html.escape(str(alt.get("status") or "untested"))
+                    why = html.escape(str(alt.get("why") or ""))
+                    lines.append(f"• <i>{hyp}</i> ({status}) — {why}")
+            checks = data.get("checks") or []
+            if checks:
+                lines.append("<br/><b>Verification checklist</b>")
+                for c in checks:
+                    if not isinstance(c, dict):
+                        continue
+                    label = html.escape(
+                        str(c.get("label") or c.get("metric") or "check")
+                    )
+                    status = html.escape(str(c.get("status") or ""))
+                    detail = html.escape(str(c.get("detail") or ""))
+                    lines.append(f"• {label}: {status} — {detail}")
+            chain = data.get("root_cause_chain") or []
+            hyps = data.get("hypotheses") or []
+            if chain or hyps:
+                tree_src = investigation_tree_mermaid(chain, hyps)
+                if tree_src:
+                    lines.append("<br/><b>Investigation tree</b>")
+                    lines.append(mermaid_block_html(tree_src, as_img=True, zoomable=True))
+            self._evidence_view.setHtml("<br/>".join(lines))
+            self._evidence_label.show()
+            self._evidence_view.show()
+
+        def _clear_evidence_panel(self) -> None:
+            self._evidence_label.hide()
+            self._evidence_view.hide()
+            self._evidence_view.clear()
+
+        def _update_evidence_from_tool_result(
+            self, name: str, res: Dict[str, Any],
+        ) -> None:
+            payload = extract_evidence_panel_payload(name, res)
+            if payload:
+                self.set_evidence_panel(payload)
 
         def _advance_investigation_plan(self, tool_names: Sequence[str]) -> None:
             if not self._investigation_plan:
@@ -3366,6 +3746,7 @@ def create_ai_assistant_panel(
                 for t in tools:
                     if is_export_tool(str(t.get("name") or "")):
                         results.append(self._export_ai_report(
+                            str(t.get("name") or ""),
                             t.get("arguments") if isinstance(t.get("arguments"), dict) else {}))
                     else:
                         res = (
@@ -3396,6 +3777,17 @@ def create_ai_assistant_panel(
                         res if isinstance(res, dict) else tool_result_payload(False, str(res))
                     ),
                 ))
+                tool_name = str(t.get("name") or "")
+                if tool_name in (
+                    "investigate",
+                    "correlate_events",
+                    "find_critical_path",
+                    "compare_performance",
+                ):
+                    self._update_evidence_from_tool_result(
+                        tool_name,
+                        res if isinstance(res, dict) else {},
+                    )
             if skipped:
                 self._status.setText("Skipped GUI actions.")
                 self._cleanup_worker()
@@ -3497,6 +3889,7 @@ def create_ai_assistant_panel(
                 span=ctx.get("span", ""),
                 cores=ctx.get("cores", ""),
                 scope=ctx.get("scope", ""),
+                cursors=ctx.get("cursors"),
                 response_language=cfg.get(
                     "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ),

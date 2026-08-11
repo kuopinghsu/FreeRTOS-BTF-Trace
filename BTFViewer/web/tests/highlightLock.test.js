@@ -60,3 +60,48 @@ describe('Statistics scope checkbox label', () => {
     assert.doesNotMatch(src, /Limit to cursor range \(C1–Cn\)/)
   })
 })
+
+describe('Timeline context menu mark clears', () => {
+  it('matches desktop Clear all bookmarks / annotations', () => {
+    const vue = readFileSync(
+      new URL('../src/components/TimelinePanel.vue', import.meta.url),
+      'utf8',
+    )
+    const app = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
+    assert.match(vue, /Clear all bookmarks/)
+    assert.match(vue, /Clear all annotations/)
+    assert.match(vue, /clearBookmarks/)
+    assert.match(vue, /clearAnnotations/)
+    assert.match(app, /@clear-bookmarks="onClearBookmarks"/)
+    assert.match(app, /@clear-annotations="onClearAnnotations"/)
+  })
+
+  it('stops menu presses from reaching the timeline interaction root', () => {
+    const vue = readFileSync(
+      new URL('../src/components/TimelinePanel.vue', import.meta.url),
+      'utf8',
+    )
+    const handler = readFileSync(
+      new URL('../src/renderer/InteractionHandler.js', import.meta.url),
+      'utf8',
+    )
+    assert.match(vue, /@mousedown\.stop/)
+    assert.match(handler, /\.context-menu/)
+    assert.match(handler, /closest\?\.?\(/)
+  })
+})
+
+describe('AI panel UI font size', () => {
+  it('template buttons follow --ui-font-size', () => {
+    const vue = readFileSync(
+      new URL('../src/components/AiAssistantPanel.vue', import.meta.url),
+      'utf8',
+    )
+    assert.match(vue, /\.ai-panel\s*\{[^}]*font-size:\s*var\(--ui-font-size\)/s)
+    assert.match(vue, /\.ai-tpl-btn,\s*\.ai-btn\s*\{[^}]*font-size:\s*inherit/s)
+    assert.doesNotMatch(
+      vue,
+      /\.ai-tpl-btn,\s*\.ai-btn\s*\{[^}]*font-size:\s*\d+px/s,
+    )
+  })
+})

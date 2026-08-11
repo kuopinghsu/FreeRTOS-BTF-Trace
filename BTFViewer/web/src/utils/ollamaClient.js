@@ -30,9 +30,11 @@ export const AI_SYSTEM_PROMPT =
   'For every important conclusion, cite evidence (metric names, counts, ' +
   'jump:TIME ranges) and state confidence as High, Medium, or Low — and ' +
   'whether the evidence is Directly observed, Strong correlation, Possible ' +
-  'explanation, or Insufficient evidence. Do not invent numbers that are ' +
-  'not in the findings, tool results, or Trace Compare tables. ' +
-  'Keep answers concise. '
+  'explanation, or Insufficient evidence. Do not invent numbers, task names, ' +
+  'or jump:TIME timestamps that are not in the findings, tool results, or ' +
+  'Trace Compare tables. If a Cursor region window is listed, only cite ' +
+  'jump:TIME values inside that window (or say the window has no matching ' +
+  'evidence). Keep answers concise. '
   + AI_TOOL_SYSTEM_ADDENDUM
 
 /** Preferred reply languages — keep in sync with btf_viewer_pkg/ai_assistant.py */
@@ -101,6 +103,31 @@ export const AI_TEMPLATE_QUESTIONS = [
       'missing. Set cursors around the worst episode, highlight the ' +
       'victim task, and answer with Root cause, Evidence (bullet list with ' +
       'jump:TIME), Confidence, and Suggested fix.',
+  },
+  {
+    id: 'verify',
+    label: 'Verify finding',
+    prompt:
+      'Verify the selected Analysis Finding. Call investigate(finding_id=ID) ' +
+      'first (use the finding_id given in the user message). Then collect ' +
+      'evidence with query_raw_metric / correlate_events / search_timeline as ' +
+      'needed. Place cursors and zoom_to_range on the strongest evidence. ' +
+      'Finish with a verdict: Confirmed, Rejected, or Inconclusive; list ' +
+      'Evidence as jump:TIME bullets; Confidence (High/Medium/Low); ' +
+      'Alternatives considered; and one next check.',
+  },
+  {
+    id: 'explain_region',
+    label: 'Explain region',
+    prompt:
+      'Explain the current timeline cursor region (scope C1–Cn — see the '
+      + 'Cursor region window in context). Stay strictly inside that window: '
+      + 'every jump:TIME you cite must fall between C1 and Cn. Identify '
+      + 'longest blocking, migrations, priority changes, wakeups, mutex '
+      + 'contention, deadline issues, idle gaps, and CPU imbalance in this '
+      + 'window. Call correlate_events and query_raw_metric as needed. Use '
+      + 'only in-window jump:TIME evidence (or state that tools found none). '
+      + 'End with: Summary, Top issues, Evidence, Suggested next action.',
   },
   {
     id: AI_COMPARE_TEMPLATE_ID,
@@ -214,7 +241,51 @@ export const AI_TEMPLATE_QUESTIONS = [
       'Are there deadline or CPU-budget concerns in the findings? What ' +
       'should the engineer measure next?',
   },
+  {
+    id: 'auto_investigate',
+    label: 'Auto investigate',
+    prompt:
+      'Automatically investigate and confirm the top finding end-to-end. ' +
+      'Call investigate(finding_id) first, then correlate_events on the ' +
+      'same window. Call find_critical_path to build the causal chain, or ' +
+      'detect_priority_inversion instead when investigate flags a ' +
+      'priority-inversion finding. Place cursors and zoom_to_range on the ' +
+      'strongest evidence. Then call what_if or optimize_experiment to ' +
+      'test a concrete mitigation. Finish with a verdict — Confirmed, ' +
+      'Rejected, or Inconclusive — Evidence as jump:TIME bullets, ' +
+      'Confidence (High/Medium/Low), and one recommended experiment to ' +
+      'run next.',
+  },
 ]
+
+// "Ask AI about this event" (timeline segment context menu) — intentionally
+// kept out of AI_TEMPLATE_QUESTIONS so it does not show in the template grid.
+// Keep in sync with btf_viewer_pkg/ai_assistant.py ASK_EVENT_PROMPT.
+export const ASK_EVENT_PROMPT =
+  'Explain the timeline event for task {task} on {core} around jump:{ns} ' +
+  '(segment {start}-{stop}). Call correlate_events and query_raw_metric as ' +
+  'needed. Cite jump:TIME evidence.'
+
+/**
+ * Build the ASK_EVENT_PROMPT from a timeline segment hit
+ * ({ task, core, start, stop, ns }).
+ */
+export function composeAskEventPrompt(event) {
+  const ev = event || {}
+  const num = (key) => {
+    const n = Number(ev[key])
+    if (!Number.isFinite(n)) return '?'
+    return Number.isInteger(n) ? String(n) : String(n)
+  }
+  const task = String(ev.task || '').trim() || 'the selected task'
+  const core = String(ev.core || '').trim() || 'its core'
+  return ASK_EVENT_PROMPT
+    .replace('{task}', task)
+    .replace('{core}', core)
+    .replace('{ns}', num('ns'))
+    .replace('{start}', num('start'))
+    .replace('{stop}', num('stop'))
+}
 
 // Every provider is reached over its OpenAI-compatible /chat/completions API,
 // including Ollama (http://localhost:11434/v1).
@@ -617,13 +688,91 @@ export function resolveAiApiKey(apiKey = '') {
  */
 export function normalizeAiContext(ctx = {}) {
   const c = ctx && typeof ctx === 'object' ? ctx : {}
+  let cursors = c.cursors
+  if (cursors == null) cursors = []
+  else if (!Array.isArray(cursors)) cursors = [cursors]
   return {
     findingsText: String(c.findingsText ?? c.findings_text ?? ''),
     span: String(c.span ?? ''),
     cores: c.cores ?? '',
     scope: String(c.scope ?? ''),
     metrics: c.metrics ?? null,
+    cursors,
   }
+}
+
+export function formatJumpTimeToken(value) {
+  const v = Number(value)
+  if (!Number.isFinite(v)) return String(value)
+  if (Number.isInteger(v)) return String(v)
+  return String(v)
+}
+
+export function placedCursorTimes(cursors = []) {
+  return (cursors || [])
+    .filter(c => c != null && c !== '')
+    .map(c => Number(c))
+    .filter(n => Number.isFinite(n))
+    .sort((a, b) => a - b)
+}
+
+export function cursorRegionBounds(cursors = []) {
+  const placed = placedCursorTimes(cursors)
+  if (placed.length < 2) return null
+  const lo = placed[0]
+  const hi = placed[placed.length - 1]
+  if (hi <= lo) return null
+  return { lo, hi }
+}
+
+export function appendExplainRegionBounds(prompt, cursors = []) {
+  const bounds = cursorRegionBounds(cursors)
+  if (!bounds) return String(prompt || '')
+  const loS = formatJumpTimeToken(bounds.lo)
+  const hiS = formatJumpTimeToken(bounds.hi)
+  const extra = (
+    `Cursor region window: jump:${loS} … jump:${hiS}. `
+    + 'ONLY cite jump:TIME evidence inside this window. '
+    + 'If tools return no in-window events, say the region has no matching '
+    + 'evidence — do not invent timestamps or task names.'
+  )
+  const base = String(prompt || '').trimEnd()
+  return base ? `${base}\n\n${extra}` : extra
+}
+
+export function buildAiUserMessage(query, ctx = {}) {
+  const parts = ['### System Trace Context']
+  if (ctx.span) parts.push(`- Trace Span: ${ctx.span}`)
+  if (ctx.cores != null && ctx.cores !== '') parts.push(`- Cores: ${ctx.cores}`)
+  if (ctx.scope) parts.push(`- Statistics scope: ${ctx.scope}`)
+  const placed = placedCursorTimes(ctx.cursors)
+  if (placed.length) {
+    const labels = placed
+      .map((t, i) => `C${i + 1}=jump:${formatJumpTimeToken(t)}`)
+      .join(', ')
+    parts.push(`- Timeline cursors: ${labels}`)
+    const bounds = cursorRegionBounds(placed)
+    if (bounds) {
+      parts.push(
+        `- Cursor region window: jump:${formatJumpTimeToken(bounds.lo)} … `
+        + `jump:${formatJumpTimeToken(bounds.hi)} `
+        + '(only cite jump:TIME evidence inside this window when '
+        + 'explaining the region)',
+      )
+    }
+  }
+  parts.push('')
+  parts.push('### Analysis Findings')
+  parts.push((ctx.findingsText || 'No findings for the current scope.').trimEnd())
+  parts.push('')
+  if (ctx.metrics) {
+    parts.push('### Extracted Relevant Metrics')
+    parts.push(JSON.stringify(ctx.metrics, null, 2))
+    parts.push('')
+  }
+  parts.push('### User Question')
+  parts.push(String(query || '').trim())
+  return parts.join('\n')
 }
 
 export function aiRequestHeaders(apiKey = '', baseUrl = '') {
@@ -775,27 +924,8 @@ export function aiSameOriginProxyBase(presetId, configuredUrl) {
 
 /**
  * @param {string} query
- * @param {{ findingsText?: string, metrics?: object, span?: string, cores?: any, scope?: string }} ctx
+ * @param {{ findingsText?: string, metrics?: object, span?: string, cores?: any, scope?: string, cursors?: any[] }} ctx
  */
-export function buildAiUserMessage(query, ctx = {}) {
-  const parts = ['### System Trace Context']
-  if (ctx.span) parts.push(`- Trace Span: ${ctx.span}`)
-  if (ctx.cores != null && ctx.cores !== '') parts.push(`- Cores: ${ctx.cores}`)
-  if (ctx.scope) parts.push(`- Statistics scope: ${ctx.scope}`)
-  parts.push('')
-  parts.push('### Analysis Findings')
-  parts.push((ctx.findingsText || 'No findings for the current scope.').trimEnd())
-  parts.push('')
-  if (ctx.metrics) {
-    parts.push('### Extracted Relevant Metrics')
-    parts.push(JSON.stringify(ctx.metrics, null, 2))
-    parts.push('')
-  }
-  parts.push('### User Question')
-  parts.push(String(query || '').trim())
-  return parts.join('\n')
-}
-
 function aiHttpErrorTip(status, detail = '', baseUrl = '') {
   const low = String(detail || '').toLowerCase()
   const host = String(baseUrl || '').toLowerCase()
@@ -957,6 +1087,7 @@ export async function aiChatCompletion({
   span = '',
   cores = '',
   scope = '',
+  cursors = null,
   baseUrl = DEFAULT_AI_BASE_URL,
   model = DEFAULT_AI_MODEL,
   apiKey = '',
@@ -988,6 +1119,7 @@ export async function aiChatCompletion({
         span,
         cores,
         scope,
+        cursors,
       }),
     },
   ])

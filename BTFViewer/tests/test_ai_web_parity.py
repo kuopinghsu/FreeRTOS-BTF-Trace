@@ -103,6 +103,12 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("def run_optimization_experiments", inv_py)
         self.assertIn("buildInvestigateContext", inv_js)
         self.assertIn("def build_investigate_context", inv_py)
+        self.assertIn("buildCriticalPath", inv_js)
+        self.assertIn("def build_critical_path", inv_py)
+        tools_js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
+        tools_py = (BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8")
+        self.assertIn("find_critical_path", tools_js)
+        self.assertIn("AI_TOOL_FIND_CRITICAL_PATH", tools_py)
         self.assertIn("evaluateRegression", inv_js)
         self.assertIn("def evaluate_regression", inv_py)
         dlg = (BTF_ROOT / "web/src/components/AnalysisFindingsDialog.vue").read_text(
@@ -136,10 +142,12 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn(
             "`clear_marks` / `reset_view` / `search_timeline` / "
             "`trigger_compare` / `investigate` / `detect_anomalies` / "
-            "`correlate_events` / `compare_performance` / `generate_report` / "
-            "`check_budget` / `optimize` / `regression_explain` / "
+            "`correlate_events` / `find_critical_path` / `compare_performance` / "
+            "`generate_report` / `check_budget` / `optimize` / `regression_explain` / "
             "`investigation_replay` / `what_if` / `optimize_experiment` / "
-            "`analyze_traces` / `bookmark_finding`",
+            "`analyze_traces` / `baseline_score` / `recommend_experiments` / "
+            "`export_investigation` / `bookmark_finding` / `detect_priority_inversion` / "
+            "`find_related_findings` / `compare_tasks`",
             ai_md,
         )
         self.assertNotIn("Max≪Avg", readme)
@@ -196,10 +204,12 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn(
             "`clear_marks` / `reset_view` / `search_timeline` / "
             "`trigger_compare` / `investigate` / `detect_anomalies` / "
-            "`correlate_events` / `compare_performance` / `generate_report` / "
-            "`check_budget` / `optimize` / `regression_explain` / "
+            "`correlate_events` / `find_critical_path` / `compare_performance` / "
+            "`generate_report` / `check_budget` / `optimize` / `regression_explain` / "
             "`investigation_replay` / `what_if` / `optimize_experiment` / "
-            "`analyze_traces` / `bookmark_finding`",
+            "`analyze_traces` / `baseline_score` / `recommend_experiments` / "
+            "`export_investigation` / `bookmark_finding` / `detect_priority_inversion` / "
+            "`find_related_findings` / `compare_tasks`",
             ai_md,
         )
         self.assertIn("Save selection as BTF", readme)
@@ -621,6 +631,49 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("sanitizeHtmlTableBlock", js)
         self.assertIn("Pipe **Markdown tables**", ai_md)
         self.assertIn("In-chat Markdown / HTML tables", ai_md)
+
+    def test_phase3_host_dispatch_matches_web(self) -> None:
+        """baseline_score / recommend_experiments / PI / related / compare_tasks
+        must be dispatched by both mainwindow.py and App.vue's dispatchAiTool."""
+        mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
+        app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
+        for const in (
+            "AI_TOOL_BASELINE_SCORE", "AI_TOOL_RECOMMEND_EXPERIMENTS",
+            "AI_TOOL_DETECT_PRIORITY_INVERSION", "AI_TOOL_FIND_RELATED_FINDINGS",
+            "AI_TOOL_COMPARE_TASKS",
+        ):
+            self.assertIn(f"if name == {const}:", mw)
+            self.assertIn(f"if (name === {const}) {{", app)
+        self.assertIn("def _ai_load_baseline_profile", mw)
+        self.assertIn("def _ai_save_baseline_profile", mw)
+        self.assertIn("baseline_profile", mw)
+        self.assertIn("loadAiBaselineProfile", app)
+        self.assertIn("saveAiBaselineProfile", app)
+        self.assertIn("loadAiBaselineProfile", (BTF_ROOT / "web/src/utils/settingsStore.js").read_text(encoding="utf-8"))
+        self.assertIn("btf-viewer-ai-baseline-v1", (BTF_ROOT / "web/src/utils/settingsStore.js").read_text(encoding="utf-8"))
+
+    def test_export_investigation_json_matches_web(self) -> None:
+        """export_investigation / export_report(format=json) must build the
+        same investigation package + trigger a real file save on both sides."""
+        assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(encoding="utf-8")
+        panel = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(encoding="utf-8")
+        self.assertIn("build_investigation_package", assist)
+        self.assertIn("buildInvestigationPackage", panel)
+        self.assertIn("AI_TOOL_EXPORT_INVESTIGATION", assist)
+        self.assertIn("AI_TOOL_EXPORT_INVESTIGATION", panel)
+        self.assertIn('fmt == "json"', assist)
+        self.assertIn("fmt === 'json'", panel)
+        self.assertIn("_export_investigation_package", assist)
+        self.assertIn("exportInvestigationFile", panel)
+
+    def test_auto_investigate_findings_dialog_button_matches_web(self) -> None:
+        stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
+        dlg = (BTF_ROOT / "web/src/components/AnalysisFindingsDialog.vue").read_text(
+            encoding="utf-8")
+        self.assertIn("Auto investigate…", stats)
+        self.assertIn("Auto investigate…", dlg)
+        self.assertIn('"auto_investigate"', stats)
+        self.assertIn("'auto_investigate'", dlg)
 
 
 if __name__ == "__main__":

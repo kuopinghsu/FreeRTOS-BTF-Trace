@@ -27,6 +27,13 @@ describe('aiMarkdown', () => {
     assert.equal(html.includes('<tag>'), false)
   })
 
+  it('promotes backtick-wrapped jump tokens to links', () => {
+    const html = markdownToSafeHtml('關注 `jump:1501325` 附近')
+    assert.match(html, /href="btfjump:time\/1501325"/)
+    assert.match(html, /class="ai-jump"/)
+    assert.equal(html.includes('<code>jump:1501325</code>'), false)
+  })
+
   it('preserves source numbers when ordered lists are interrupted', () => {
     // Same shape as models often emit: 1. title, prose, bullet, then 2./3.
     const html = markdownToSafeHtml(

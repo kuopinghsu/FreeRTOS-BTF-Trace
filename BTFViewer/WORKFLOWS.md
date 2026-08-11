@@ -633,6 +633,10 @@ Different models fail differently, which makes disagreement between them useful.
 
 **Privacy.** Prefer local Ollama for confidential traces. Use a cloud endpoint only if the findings text (and any `query_raw_metric` samples the model requests) are cleared to leave the machine: the viewer never sends the raw BTF stream, but findings and metric rows still name tasks, priorities, and timings.
 
+**Credential storage.** Desktop stores provider API keys encrypted (`enc1:…`) in `btf_viewer.rc` for this machine only. The web build keeps keys in browser `localStorage` in plaintext — fine for personal demos, not for shared kiosks. Keys are used only as HTTP auth to the endpoint; they are not pasted into the model prompt. See [AI.md — Credential storage](AI.md#endpoints-and-models).
+
+**Verify / Explain / Auto.** Analysis Findings → **Verify with AI…** runs `verify` for the selected finding; **Auto investigate…** runs `auto_investigate`. With **≥2 cursors**, the timeline context menu → **Explain this region with AI** runs `explain_region` (item hidden with fewer cursors). The AI panel **Explain region** template is always clickable: with two or more cursors the prompt includes `Cursor region window: jump:lo … jump:hi`; with none it analyses full-trace Findings. Segment context menu → **Ask AI about this event** scopes to one task/segment. Evidence / Reasoning fills when investigate / correlate / `find_critical_path` (and related tools) return.
+
 ---
 
 ## Quick-Reference: Metric to Root Cause

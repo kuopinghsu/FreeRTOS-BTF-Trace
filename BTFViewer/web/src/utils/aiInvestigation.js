@@ -19,6 +19,7 @@ const TOOL_STEP_MAP = {
   query_raw_metric: ['metrics'],
   search_timeline: ['metrics'],
   correlate_events: ['metrics', 'related'],
+  find_critical_path: ['metrics', 'validate'],
   compare_performance: ['metrics', 'validate'],
   trigger_compare: ['metrics', 'related'],
   set_cursors: ['narrow'],
@@ -39,7 +40,8 @@ const TOOL_STEP_MAP = {
 }
 
 const AGENT_TEMPLATE_IDS = new Set([
-  'investigate', 'root_cause', 'what_if', 'optimize', 'diagnostic_report',
+  'investigate', 'root_cause', 'verify', 'what_if', 'optimize',
+  'diagnostic_report', 'auto_investigate',
 ])
 
 const FINDING_ID_RE = /^[a-z][a-z0-9_]{0,47}$/
@@ -217,6 +219,22 @@ function guessTaskName(text) {
   return bracketed[0] || ''
 }
 
+function alternativesFromHypotheses(hypotheses) {
+  const alts = []
+  for (let i = 0; i < (hypotheses || []).length; i += 1) {
+    const h = hypotheses[i]
+    if (!h || typeof h !== 'object') continue
+    const hyp = String(h.hypothesis || '').trim()
+    if (!hyp) continue
+    alts.push({
+      hypothesis: hyp,
+      status: i === 0 ? 'plausible' : 'untested',
+      why: String(h.why || '').trim(),
+    })
+  }
+  return alts
+}
+
 function hypothesesForFinding(title, text) {
   const blob = `${title} ${text}`.toLowerCase()
   const hyps = []
@@ -304,6 +322,7 @@ export function buildInvestigateContext(findings, findingId = '', { depth = 2 } 
       findings: [],
       focus: null,
       hypotheses: [],
+      alternatives: [],
       suggested_tools: [],
       plan: defaultInvestigationPlan(),
       evidence_chain: formatFindingsEvidenceChain([]),
@@ -313,6 +332,7 @@ export function buildInvestigateContext(findings, findingId = '', { depth = 2 } 
   const text = String(focus.text || '')
   const sev = String(focus.severity || 'info')
   const hypotheses = hypothesesForFinding(title, text)
+  const alternatives = alternativesFromHypotheses(hypotheses)
   const suggested = suggestedToolsForFinding(title, text, d)
   const related = items
     .filter(f => f.id !== focus.id)
@@ -322,6 +342,12 @@ export function buildInvestigateContext(findings, findingId = '', { depth = 2 } 
   plan = markPlanStepsFromTools(plan, ['investigate'])
   const chain = buildRootCauseChain(focus)
   const anomalies = detectAnomalies(items, { limit: Math.max(3, d + 2) })
+  const evidenceChainText = formatFindingsEvidenceChain([focus])
+  const alternativesSlice = alternatives.slice(0, Math.max(1, d + 1))
+  const scoreData = computeEvidenceScore(focus.evidence || [], {
+    alternatives: alternativesSlice,
+    evidenceChain: evidenceChainText,
+  })
   return {
     ok: true,
     message: `Investigation context for ${focus.id} (${hypotheses.length} hypotheses, ${suggested.length} suggested tools)`,
@@ -335,13 +361,206 @@ export function buildInvestigateContext(findings, findingId = '', { depth = 2 } 
     },
     related_findings: related,
     hypotheses: hypotheses.slice(0, Math.max(1, d + 1)),
+    alternatives: alternativesSlice,
     suggested_tools: suggested,
     depth: d,
-    evidence_chain: formatFindingsEvidenceChain([focus]),
+    evidence_chain: evidenceChainText,
     root_cause_chain: chain,
     ranked_anomalies: (anomalies.anomalies || []).slice(0, Math.max(3, d)),
     plan,
+    evidence_score: scoreData.score,
+    evidence_score_breakdown: scoreData.breakdown,
   }
+}
+
+const CRITICAL_PATH_KIND_ORDER = {
+  blocking: 0,
+  sync: 1,
+  priority: 2,
+  execution: 3,
+  migration: 4,
+  search: 5,
+}
+
+export function buildCriticalPath(events, {
+  task = '', timestamp = null, limit = 20,
+} = {}) {
+  const lim = Math.max(1, Math.min(40, Number(limit) || 20))
+  let rows = []
+  for (const ev of events || []) {
+    if (!ev || typeof ev !== 'object') continue
+    const t = Number(ev.time)
+    if (!Number.isFinite(t)) continue
+    rows.push({
+      time: t,
+      kind: String(ev.kind || 'event'),
+      detail: String(ev.detail || ev.note || ''),
+      task: String(ev.task || task || ''),
+    })
+  }
+  if (!rows.length) {
+    return {
+      ok: false,
+      message: 'No events in scope for critical path',
+      task,
+      path: [],
+      confidence: 'Low',
+      mermaid: '',
+      graph_nodes: [],
+      blocking_steps: [],
+      preemption_steps: [],
+    }
+  }
+  if (timestamp != null && Number.isFinite(Number(timestamp))) {
+    const ts = Number(timestamp)
+    rows.sort((a, b) => {
+      const da = Math.abs(a.time - ts) - Math.abs(b.time - ts)
+      if (da !== 0) return da
+      const ka = CRITICAL_PATH_KIND_ORDER[a.kind] ?? 9
+      const kb = CRITICAL_PATH_KIND_ORDER[b.kind] ?? 9
+      if (ka !== kb) return ka - kb
+      return a.time - b.time
+    })
+  } else {
+    rows.sort((a, b) => {
+      const ka = CRITICAL_PATH_KIND_ORDER[a.kind] ?? 9
+      const kb = CRITICAL_PATH_KIND_ORDER[b.kind] ?? 9
+      if (ka !== kb) return ka - kb
+      return a.time - b.time
+    })
+  }
+  rows = rows.slice(0, lim)
+  const kindLabels = {
+    blocking: 'Blocked / off-CPU',
+    sync: 'Sync / mutex',
+    priority: 'Priority inheritance',
+    execution: 'On-CPU execution',
+    migration: 'Core migration',
+    search: 'Timeline match',
+  }
+  const path = rows.map((ev, i) => {
+    const label = kindLabels[ev.kind] || ev.kind
+    const detail = ev.detail
+    return {
+      step: i + 1,
+      time: ev.time,
+      detail: detail ? `${label}: ${detail}` : label,
+      kind: ev.kind,
+    }
+  })
+  const kinds = new Set(rows.map(r => r.kind))
+  let confidence = 'Low'
+  if (kinds.size >= 3 && rows.length >= 4) confidence = 'High'
+  else if (rows.length >= 2) confidence = 'Medium'
+  // Blocking = off-CPU waits; preemption = priority boosts / migrations that
+  // reshuffled who ran (best-effort from this task's own event stream).
+  const blockingSteps = path.filter(p => p.kind === 'blocking')
+  const preemptionSteps = path.filter(p => p.kind === 'priority' || p.kind === 'migration')
+  const graphNodes = path.map(p => ({
+    id: `S${p.step}`, label: p.detail, kind: p.kind, time: p.time,
+  }))
+  let mermaid = ''
+  if (graphNodes.length >= 2) {
+    const lines = ['graph LR']
+    for (const node of graphNodes) {
+      const safe = String(node.label).replace(/["[\]{}()]/g, "'").slice(0, 80)
+      lines.push(`  ${node.id}["${safe}"]`)
+    }
+    for (let i = 0; i < graphNodes.length - 1; i++) {
+      lines.push(`  ${graphNodes[i].id} --> ${graphNodes[i + 1].id}`)
+    }
+    mermaid = lines.join('\n')
+  }
+  return {
+    ok: true,
+    message: `${path.length} step critical path for ${task || 'task'}`,
+    task,
+    timestamp,
+    path,
+    confidence,
+    mermaid,
+    graph_nodes: graphNodes,
+    blocking_steps: blockingSteps,
+    preemption_steps: preemptionSteps,
+  }
+}
+
+export function extractEvidencePanelPayload(toolName, result) {
+  if (!result || typeof result !== 'object' || !result.ok) return null
+  const data = result.data && typeof result.data === 'object' ? { ...result.data } : {}
+  for (const key of [
+    'finding', 'hypotheses', 'alternatives', 'evidence_chain',
+    'events', 'path', 'checks', 'confidence', 'task', 'correlation',
+    'root_cause_chain',
+  ]) {
+    if (!(key in data) && key in result) data[key] = result[key]
+  }
+  const name = String(toolName || '')
+  const payload = {}
+
+  if (name === 'investigate' || data.finding || data.hypotheses) {
+    const finding = data.finding && typeof data.finding === 'object' ? data.finding : {}
+    payload.conclusion = String(finding.title || data.conclusion || '')
+    payload.subtitle = String(finding.text || '')
+    const evItems = []
+    for (const ev of finding.evidence || []) {
+      if (!ev || typeof ev !== 'object') continue
+      evItems.push({
+        label: String(ev.label || ev.text || 'evidence'),
+        time: ev.time,
+      })
+    }
+    if (evItems.length) payload.evidence = evItems
+    else if (data.evidence_chain) payload.evidence_chain = String(data.evidence_chain)
+    payload.alternatives = [...(data.alternatives || [])]
+    payload.confidence = String(data.confidence || 'Medium')
+    if (data.hypotheses?.length) payload.hypotheses = [...data.hypotheses]
+    if (data.root_cause_chain?.length) payload.root_cause_chain = [...data.root_cause_chain]
+  } else if (name === 'find_critical_path' || data.path) {
+    const task = String(data.task || '')
+    payload.conclusion = task ? `Critical path: ${task}` : 'Critical path'
+    payload.evidence = (data.path || [])
+      .filter(p => p && typeof p === 'object')
+      .map(p => ({ label: String(p.detail || ''), time: p.time }))
+    payload.confidence = String(data.confidence || 'Medium')
+  } else if (name === 'correlate_events' || data.events) {
+    const task = String(data.task || '')
+    payload.conclusion = task ? `Correlated events: ${task}` : 'Correlated events'
+    payload.evidence = (data.events || [])
+      .slice(0, 15)
+      .filter(e => e && typeof e === 'object')
+      .map(e => ({
+        label: `${e.kind}: ${e.detail}`,
+        time: e.time,
+      }))
+    payload.confidence = data.correlation != null
+      ? `Correlation ${data.correlation}`
+      : 'Medium'
+  } else if (name === 'compare_performance' || data.checks) {
+    const primary = data.primary
+    payload.conclusion = primary && typeof primary === 'object'
+      ? String(primary.label || 'Performance comparison')
+      : 'Performance comparison'
+    payload.confidence = String(data.confidence || 'Medium')
+    payload.checks = [...(data.checks || [])]
+  }
+
+  if (!(
+    payload.conclusion
+    || payload.evidence
+    || payload.evidence_chain
+    || payload.alternatives?.length
+    || payload.checks?.length
+  )) return null
+  const scoreData = computeEvidenceScore(payload.evidence || [], {
+    alternatives: payload.alternatives || [],
+    evidenceChain: payload.evidence_chain || '',
+    checks: payload.checks || [],
+  })
+  payload.evidence_score = scoreData.score
+  payload.evidence_score_breakdown = scoreData.breakdown
+  payload.evidence_score_bar = scoreData.bar
+  return payload
 }
 
 export function evaluateRegression(candidate, baseline, { rules = DEFAULT_REGRESSION_RULES } = {}) {
@@ -545,6 +764,412 @@ export function detectAnomalies(findings, { limit = 10 } = {}) {
   }
 }
 
+const MUTEX_ADDR_RE = /mutex\D{0,12}(0x[0-9a-fA-F]+)/i
+
+function piContextFromFindings(findings, low, mediums) {
+  const exclude = new Set([String(low || '').toLowerCase(), ...(mediums || []).map(m => String(m || '').toLowerCase())])
+  for (const f of findings || []) {
+    const blob = `${f.title || ''} ${f.text || ''}`
+    if (!blob.toLowerCase().includes(String(low || '').toLowerCase())) continue
+    let mutex = ''
+    const m = MUTEX_ADDR_RE.exec(blob)
+    if (m) mutex = m[1]
+    let high = ''
+    for (const tok of blob.match(/\b[A-Za-z_]\w*\[[0-9]+\]/g) || []) {
+      if (!exclude.has(tok.toLowerCase())) { high = tok; break }
+    }
+    if (mutex || high) return [mutex, high]
+  }
+  return ['', '']
+}
+
+export function detectPriorityInversion(episodes, findings = null, {
+  task = '', window = null,
+} = {}) {
+  const taskS = String(task || '').trim()
+  let rows = (episodes || []).filter(e => e && typeof e === 'object')
+
+  const rowMatchesTask = (e) => {
+    if (String(e.task || '').trim().toLowerCase() === taskS.toLowerCase()) return true
+    for (const m of e.medium_tasks || []) {
+      const label = (m && typeof m === 'object') ? m.label : m
+      if (String(label || '').trim().toLowerCase() === taskS.toLowerCase()) return true
+    }
+    return false
+  }
+  if (taskS) rows = rows.filter(rowMatchesTask)
+
+  let win = null
+  if (window != null) {
+    const w = Number(window)
+    if (Number.isFinite(w)) win = w
+  }
+  const duration = (e) => {
+    if (e.duration != null) {
+      const d = Number(e.duration)
+      return Number.isFinite(d) ? d : null
+    }
+    if (e.start == null || e.stop == null) return null
+    const d = Number(e.stop) - Number(e.start)
+    return Number.isFinite(d) ? d : null
+  }
+  if (win && win > 0) {
+    rows = rows.filter(e => { const d = duration(e); return d == null || d >= win })
+  }
+
+  const suspects = rows.filter(e => e.inversion_suspect)
+  const items = findings ? enrichFindingsWithIds(findings) : []
+  const inversions = []
+  for (const e of suspects) {
+    const lowLabel = String(e.task || taskS || '').trim() || '?'
+    const mediums = (e.medium_tasks || [])
+      .map(m => String((m && typeof m === 'object') ? m.label : m).trim())
+      .filter(Boolean)
+    const [mutex, high] = piContextFromFindings(items, lowLabel, mediums)
+    const start = e.start
+    const stop = e.stop
+    let dur = e.duration
+    if (dur == null && start != null && stop != null) {
+      const d = Number(stop) - Number(start)
+      dur = Number.isFinite(d) ? d : null
+    }
+    inversions.push({
+      high,
+      medium: mediums[0] || '',
+      medium_tasks: mediums,
+      low: lowLabel,
+      mutex,
+      time: start,
+      duration: dur,
+      base_pri: e.base_pri,
+      peak_pri: e.peak_pri,
+      pattern: e.pattern || '',
+    })
+  }
+  inversions.sort((a, b) => {
+    const at = a.time == null, bt = b.time == null
+    if (at !== bt) return at ? 1 : -1
+    return (a.time ?? 0) - (b.time ?? 0)
+  })
+  let confidence
+  if (!rows.length) confidence = 'Low'
+  else if (inversions.some(inv => inv.high && inv.mutex)) confidence = 'High'
+  else if (inversions.length) confidence = 'Medium'
+  else confidence = 'Low'
+  const focusTask = taskS || (inversions.length ? inversions[0].low : '')
+  return {
+    ok: true,
+    message: inversions.length
+      ? `${inversions.length} priority inversion(s) detected`
+      : 'No priority inversion suspects in scope',
+    task: taskS,
+    inversions,
+    count: inversions.length,
+    confidence,
+    suggested_tools: focusTask ? [
+      {
+        name: 'query_raw_metric',
+        arguments: { task: focusTask, metric: 'priority_inheritance' },
+        reason: 'Inspect raw PI boost episodes',
+      },
+      {
+        name: 'correlate_events',
+        arguments: { task: focusTask },
+        reason: 'Cross-task timeline around the inversion',
+      },
+    ] : [],
+  }
+}
+
+const STOPWORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'on', 'for', 'with',
+  'is', 'are', 'this', 'that', 'at', 'by', 'from', 'into', 'than', 'was',
+  'were', 'has', 'have', 'had', 'its', "it's", 'task', 'tasks',
+])
+
+const RELATED_METRIC_KEYWORDS = {
+  priority_inheritance: ['inversion', 'inherit', 'priority', 'l/m/h', 'mutex', 'boost'],
+  execution: ['wcet', 'cpu', 'execution', 'spike', 'slice'],
+  migrations: ['migrat', 'thrash', 'bounc', 'core'],
+  blocking: ['block', 'latency', 'wait', 'dispatch'],
+  sync: ['mutex', 'semaphore', 'lock', 'sync'],
+  findings: [],
+}
+
+function findingKeywords(f) {
+  const blob = `${f.title || ''} ${f.text || ''}`.toLowerCase()
+  const tokens = blob.match(/[a-z][a-z0-9_]{3,}/g) || []
+  return new Set(tokens.filter(t => !STOPWORDS.has(t)))
+}
+
+function findingEvidenceTimes(f) {
+  const times = []
+  for (const ev of f.evidence || []) {
+    if (ev && typeof ev === 'object' && ev.time != null) {
+      const t = Number(ev.time)
+      if (Number.isFinite(t)) times.push(t)
+    }
+  }
+  return times
+}
+
+export function findRelatedFindings(findings, {
+  findingId = '', task = '', metric = '', window = null, limit = 10,
+} = {}) {
+  const lim = Math.max(1, Math.min(40, Number(limit) || 10))
+  const items = enrichFindingsWithIds(findings)
+  if (!items.length) {
+    return {
+      ok: false, message: 'No Analysis Findings in scope', focus: null, related: [], count: 0,
+    }
+  }
+  const focus = findingId ? resolveFinding(items, findingId) : null
+  const taskS = String(task || '').trim()
+  const metricKey = String(metric || '').trim().toLowerCase()
+  const keywords = new Set(RELATED_METRIC_KEYWORDS[metricKey] || [])
+  let focusTask = ''
+  let focusKeywords = new Set()
+  let focusTimes = []
+  if (focus) {
+    focusTask = String(focus.task || guessTaskName(String(focus.text || ''))).trim()
+    focusKeywords = findingKeywords(focus)
+    focusTimes = findingEvidenceTimes(focus)
+  }
+  let win = null
+  if (window != null) {
+    const w = Number(window)
+    if (Number.isFinite(w)) win = w
+  }
+  const scored = []
+  for (const f of items) {
+    if (focus && f.id === focus.id) continue
+    const reasons = []
+    let score = 0
+    const fTask = String(f.task || guessTaskName(String(f.text || ''))).trim()
+    if (taskS && fTask && fTask.toLowerCase() === taskS.toLowerCase()) {
+      score += 2.0
+      reasons.push(`shares task ${fTask}`)
+    }
+    if (focusTask && fTask && fTask.toLowerCase() === focusTask.toLowerCase()
+      && !(taskS && fTask.toLowerCase() === taskS.toLowerCase())) {
+      score += 2.0
+      reasons.push(`shares task ${fTask}`)
+    }
+    if (keywords.size) {
+      const blob = `${f.title} ${f.text}`.toLowerCase()
+      const hits = [...keywords].filter(k => blob.includes(k)).sort()
+      if (hits.length) {
+        score += 1.0 * hits.length
+        reasons.push(`mentions ${hits.join(', ')}`)
+      }
+    }
+    if (focusKeywords.size) {
+      const shared = [...focusKeywords].filter(k => findingKeywords(f).has(k)).sort()
+      if (shared.length) {
+        score += 0.5 * shared.length
+        reasons.push(`shared keyword(s): ${shared.join(', ')}`)
+      }
+    }
+    if (win && win > 0 && focusTimes.length) {
+      const fTimes = findingEvidenceTimes(f)
+      if (focusTimes.some(t => fTimes.some(ft => Math.abs(t - ft) <= win))) {
+        score += 1.0
+        reasons.push('within time window')
+      }
+    }
+    if (focus && !reasons.length) {
+      const fRank = SEV_RANK[String(f.severity || 'info').toLowerCase()] ?? 3
+      const focusRank = SEV_RANK[String(focus.severity || 'info').toLowerCase()] ?? 3
+      if (Math.abs(fRank - focusRank) <= 1) {
+        score += 0.25
+        reasons.push('adjacent severity')
+      }
+    }
+    if (score > 0) scored.push([score, f, reasons])
+  }
+  scored.sort((a, b) => b[0] - a[0])
+  const related = scored.slice(0, lim).map(([score, f, reasons]) => ({
+    id: f.id,
+    title: f.title,
+    severity: f.severity,
+    task: f.task || guessTaskName(String(f.text || '')),
+    score: Math.round(score * 100) / 100,
+    reasons,
+  }))
+  return {
+    ok: true,
+    message: `${related.length} related finding(s)`
+      + (focus ? ` for ${focus.id}` : ''),
+    focus: focus ? { id: focus.id, title: focus.title } : null,
+    related,
+    count: related.length,
+  }
+}
+
+const COMPARE_TASK_METRIC_FIELDS = {
+  execution: ['count', 'total', 'max', 'mean'],
+  blocking: ['count', 'total', 'max'],
+  migrations: ['count'],
+  priority_inheritance: ['count'],
+}
+
+export function compareTasksMetrics(taskA, taskB, dataA, dataB, { metrics = null } = {}) {
+  let wanted = (metrics || Object.keys(COMPARE_TASK_METRIC_FIELDS))
+    .filter(m => COMPARE_TASK_METRIC_FIELDS[m])
+  if (!wanted.length) wanted = Object.keys(COMPARE_TASK_METRIC_FIELDS)
+  const da = dataA || {}
+  const db = dataB || {}
+  const rows = []
+  for (const metric of wanted) {
+    const ma = (da[metric] && typeof da[metric] === 'object') ? da[metric] : {}
+    const mb = (db[metric] && typeof db[metric] === 'object') ? db[metric] : {}
+    if (!Object.keys(ma).length && !Object.keys(mb).length) continue
+    for (const field of COMPARE_TASK_METRIC_FIELDS[metric]) {
+      const va = ma[field]
+      const vb = mb[field]
+      let delta = null
+      let pct = null
+      if (typeof va === 'number' && typeof vb === 'number') {
+        delta = va - vb
+        pct = vb ? (100.0 * delta / vb) : (va ? 100.0 : 0.0)
+      }
+      rows.push({
+        metric,
+        field,
+        a: va ?? null,
+        b: vb ?? null,
+        delta,
+        delta_pct: pct != null ? Math.round(pct * 10) / 10 : null,
+      })
+    }
+  }
+  const ranked = rows.filter(r => r.delta_pct != null).sort((a, b) => Math.abs(b.delta_pct) - Math.abs(a.delta_pct))
+  const primary = ranked.length ? ranked[0] : null
+  let confidence
+  if (primary && Math.abs(primary.delta_pct || 0) >= 25) confidence = 'High'
+  else if (primary) confidence = 'Medium'
+  else confidence = 'Low'
+  return {
+    ok: true,
+    message: `Compared ${taskA} vs ${taskB} across ${wanted.length} metric group(s)`,
+    task_a: taskA,
+    task_b: taskB,
+    rows,
+    primary_difference: primary,
+    confidence,
+    suggested_tools: [
+      { name: 'correlate_events', arguments: { task: taskA }, reason: `Timeline for ${taskA}` },
+      { name: 'correlate_events', arguments: { task: taskB }, reason: `Timeline for ${taskB}` },
+    ],
+  }
+}
+
+const MERMAID_LABEL_STRIP_RE = /["[\]{}()|]/g
+
+function mermaidSafeLabel(text, limit = 48) {
+  const cleaned = String(text ?? '').replace(/\n/g, ' ').replace(MERMAID_LABEL_STRIP_RE, '').trim()
+    .replace(/\s+/g, ' ')
+  return (cleaned || 'Step').slice(0, limit)
+}
+
+/**
+ * Render a root-cause chain + hypotheses as a mermaid `graph TD` snippet.
+ * Kept in sync with btf_viewer_pkg/ai_investigation.py investigation_tree_mermaid.
+ */
+export function investigationTreeMermaid(chain = [], hypotheses = []) {
+  const chainItems = (chain || []).filter(c => c && typeof c === 'object')
+  const hypItems = (hypotheses || []).filter(h => h && typeof h === 'object')
+  if (!chainItems.length && !hypItems.length) return ''
+  const lines = ['graph TD']
+  const nodeIds = []
+  chainItems.forEach((step, i) => {
+    const nid = `S${i}`
+    const label = mermaidSafeLabel(step.label || `Step ${i + 1}`)
+    lines.push(`${nid}[${label}]`)
+    nodeIds.push(nid)
+  })
+  for (let i = 1; i < nodeIds.length; i++) {
+    lines.push(`${nodeIds[i - 1]} --> ${nodeIds[i]}`)
+  }
+  const anchor = nodeIds[0] || null
+  hypItems.forEach((h, j) => {
+    const nid = `H${j}`
+    const label = mermaidSafeLabel(h.hypothesis || `Hypothesis ${j + 1}`)
+    lines.push(`${nid}(${label})`)
+    if (anchor) lines.push(`${anchor} --> ${nid}`)
+  })
+  return lines.join('\n')
+}
+
+/** Text meter for the AI Evidence Score, e.g. `████████░░ 82%`. */
+export function evidenceScoreBar(score, width = 10) {
+  const pct = Math.max(0, Math.min(100, Math.round(Number(score) || 0)))
+  const filled = Math.max(0, Math.min(width, Math.round(width * pct / 100)))
+  return '█'.repeat(filled) + '░'.repeat(width - filled) + ` ${pct}%`
+}
+
+/**
+ * Heuristic 0-100 "AI Evidence Score" for an investigation conclusion.
+ * NOT a statistical confidence interval — see
+ * btf_viewer_pkg/ai_investigation.py compute_evidence_score for the factor
+ * list (kept in sync here).
+ */
+export function computeEvidenceScore(evidence = [], {
+  alternatives = [], evidenceChain = '', checks = [],
+} = {}) {
+  const ev = (evidence || []).filter(e => e && typeof e === 'object')
+  const alts = (alternatives || []).filter(a => a && typeof a === 'object')
+  const chks = (checks || []).filter(c => c && typeof c === 'object')
+  const chainText = String(evidenceChain || '').trim()
+  const breakdown = []
+  let score = 0
+
+  const hasTimes = ev.some(e => e.time != null)
+  if (hasTimes) {
+    score += 40
+    breakdown.push({ label: 'Direct evidence times (jump:TIME)', delta: 40 })
+  }
+
+  const kinds = new Set()
+  for (const e of ev) {
+    const label = String(e.label || '')
+    if (label.includes(':')) {
+      const kind = label.split(':', 1)[0].trim().toLowerCase()
+      if (kind) kinds.add(kind)
+    }
+  }
+  const hasTimelineCorr = kinds.size >= 2 || !!chainText
+  if (hasTimelineCorr) {
+    score += 25
+    breakdown.push({ label: 'Timeline correlation', delta: 25 })
+  }
+
+  if (chks.length) {
+    score += 15
+    breakdown.push({ label: 'Metric correlation', delta: 15 })
+  }
+
+  const untested = alts.filter(a => String(a.status || '').toLowerCase() === 'untested')
+  if (untested.length) {
+    const penalty = Math.min(15, 5 * untested.length)
+    score -= penalty
+    breakdown.push({ label: `${untested.length} alternative(s) untested`, delta: -penalty })
+  }
+
+  if (!ev.length && !chainText) {
+    score -= 10
+    breakdown.push({ label: 'Missing direct evidence', delta: -10 })
+  }
+
+  score = Math.max(0, Math.min(100, score))
+  return {
+    score,
+    label: 'AI Evidence Score — heuristic',
+    bar: evidenceScoreBar(score),
+    breakdown,
+  }
+}
+
 export function buildRootCauseChain(finding) {
   if (!finding) return []
   const title = String(finding.title || '')
@@ -658,6 +1283,57 @@ export function buildCorrelationTimeline(events, {
   }
 }
 
+const REGRESSION_TYPE_BY_METRIC = {
+  migrations: 'migration',
+  migrated_tasks: 'migration',
+  load_balance_score: 'load_balance',
+  load_balance_sigma: 'load_balance',
+  missed_ticks: 'scheduling',
+  tick_health: 'scheduling',
+  context_switches: 'scheduling',
+  blocking_max_us: 'synchronization',
+  response_us: 'synchronization',
+  wcet_us: 'execution',
+  exec_max_us: 'execution',
+}
+
+const REGRESSION_TYPE_KEYWORDS = [
+  ['migrat', 'migration'],
+  ['load_balance', 'load_balance'],
+  ['load balance', 'load_balance'],
+  ['tick', 'scheduling'],
+  ['context_switch', 'scheduling'],
+  ['mutex', 'synchronization'],
+  ['block', 'synchronization'],
+  ['inversion', 'synchronization'],
+  ['inherit', 'synchronization'],
+  ['wcet', 'execution'],
+  ['exec', 'execution'],
+  ['cpu', 'execution'],
+]
+
+export function classifyRegressionType(checks = [], primary = null) {
+  const typeFor = (check) => {
+    if (!check || typeof check !== 'object') return ''
+    const mid = String(check.id || '').trim().toLowerCase()
+    if (REGRESSION_TYPE_BY_METRIC[mid]) return REGRESSION_TYPE_BY_METRIC[mid]
+    const blob = `${check.id || ''} ${check.label || ''}`.toLowerCase()
+    for (const [kw, rtype] of REGRESSION_TYPE_KEYWORDS) {
+      if (blob.includes(kw)) return rtype
+    }
+    return ''
+  }
+  let rtype = typeFor(primary)
+  if (rtype) return rtype
+  for (const c of checks || []) {
+    if (c && c.status === 'fail') {
+      rtype = typeFor(c)
+      if (rtype) return rtype
+    }
+  }
+  return 'unknown'
+}
+
 export function comparePerformanceMetrics(candidate, baseline, {
   labelA = 'A', labelB = 'B',
 } = {}) {
@@ -673,6 +1349,7 @@ export function comparePerformanceMetrics(candidate, baseline, {
   const confidence = primary && primary.status === 'fail'
     ? 'High'
     : (primary ? 'Medium' : 'Low')
+  const regressionType = classifyRegressionType(result.checks, primary)
   return {
     ok: true,
     message: String(result.summary || 'compared'),
@@ -682,6 +1359,7 @@ export function comparePerformanceMetrics(candidate, baseline, {
     checks: result.checks || [],
     primary_regression: primary,
     confidence,
+    regression_type: regressionType,
     evidence_quality: primary ? 'Directly observed' : 'Insufficient evidence',
     suggested_tools: [
       { name: 'investigate', arguments: {}, reason: 'Drill into top finding' },
@@ -906,12 +1584,45 @@ export function buildOptimizationAdvice(findings, { limit = 5 } = {}) {
   }
 }
 
+const REGRESSION_CLASSIFICATION_MAP = {
+  migrations: 'thrashing',
+  migrated_tasks: 'thrashing',
+  load_balance: 'load_imbalance',
+  missed_ticks: 'tick_health',
+}
+
+const REGRESSION_CLASSIFICATION_LABELS = {
+  thrashing: 'Core thrashing / migration regression',
+  load_imbalance: 'Load balance regression',
+  tick_health: 'Tick health regression',
+  unclassified: 'Unclassified regression',
+  none: 'No regression',
+}
+
+export function classifyRegression(primary) {
+  if (!primary) return 'none'
+  return REGRESSION_CLASSIFICATION_MAP[String(primary.id || '')] || 'unclassified'
+}
+
 export function explainRegression(compare, findings = null) {
   const cmp = { ...(compare || {}) }
   const primary = cmp.primary_regression || {}
   const failed = !!cmp.failed
   const labelA = cmp.label_a || 'A'
   const labelB = cmp.label_b || 'B'
+  const classification = classifyRegression(failed ? primary : null)
+  const regressionType = String(
+    cmp.regression_type || classifyRegressionType(cmp.checks, primary),
+  )
+  let causalChain = []
+  if (primary && (primary.label || primary.detail)) {
+    causalChain = buildRootCauseChain({
+      id: 'regression_primary',
+      title: `Regression: ${primary.label}`,
+      text: `${primary.label} changed — ${primary.detail}`,
+      severity: failed ? 'error' : 'info',
+    })
+  }
   const lines = [
     `# Regression explanation — ${labelA} vs ${labelB}`,
     '',
@@ -932,6 +1643,18 @@ export function explainRegression(compare, findings = null) {
     lines.push(`- ${mark} ${c.label}: ${c.detail}`)
   }
   lines.push('')
+  lines.push(
+    '## Classification',
+    REGRESSION_CLASSIFICATION_LABELS[classification] || 'Unclassified regression',
+    '',
+  )
+  if (causalChain.length) {
+    lines.push('## Causal chain')
+    for (const step of causalChain) {
+      lines.push(`- **${step.label}**: ${step.detail || ''}`.trimEnd())
+    }
+    lines.push('')
+  }
   const anomalies = findings
     ? detectAnomalies(findings, { limit: 5 })
     : { anomalies: [] }
@@ -948,17 +1671,37 @@ export function explainRegression(compare, findings = null) {
     `${conf} — ${cmp.evidence_quality || 'Directly observed metric deltas'}`,
     '',
   )
+  const suggestedTools = [
+    { name: 'correlate_events', arguments: {}, reason: 'Timeline for worst metric' },
+    { name: 'investigate', arguments: {}, reason: 'Root-cause chain' },
+  ]
+  if (classification === 'thrashing') {
+    suggestedTools.push({
+      name: 'optimize_experiment', arguments: {},
+      reason: 'Rank pin / affinity candidates for the thrashing task',
+    })
+  } else if (classification === 'load_imbalance') {
+    suggestedTools.push({
+      name: 'analyze_traces', arguments: {},
+      reason: 'Rank all loaded traces by scheduling behavior',
+    })
+  } else if (classification === 'tick_health') {
+    suggestedTools.push({
+      name: 'check_budget', arguments: {},
+      reason: 'Verify WCET/response/deadline budgets after tick regressions',
+    })
+  }
   return {
     ok: true,
     message: failed ? 'Regression explained' : 'No regression to explain',
     failed,
     markdown: lines.join('\n'),
     primary_regression: primary,
+    classification,
+    regression_type: regressionType,
+    causal_chain: causalChain,
     confidence: conf,
-    suggested_tools: [
-      { name: 'correlate_events', arguments: {}, reason: 'Timeline for worst metric' },
-      { name: 'investigate', arguments: {}, reason: 'Root-cause chain' },
-    ],
+    suggested_tools: suggestedTools,
   }
 }
 
@@ -979,6 +1722,13 @@ export function buildInvestigationReplay({
   toolsRun = null,
   conclusion = '',
   evidenceTimes = null,
+  traceName = '',
+  scope = '',
+  queries = null,
+  evidence = null,
+  confidence = '',
+  alternatives = null,
+  timestamp = '',
 } = {}) {
   const tools = (toolsRun || []).map(t => String(t)).filter(Boolean)
   let planOut = plan || defaultInvestigationPlan(
@@ -1011,15 +1761,55 @@ export function buildInvestigationReplay({
   return {
     ok: true,
     message: 'Investigation replay',
+    trace_name: String(traceName || ''),
+    scope: String(scope || ''),
     finding: finding
       ? { id: finding.id, title: finding.title, severity: finding.severity }
       : null,
     steps,
     tools_run: tools,
+    queries: (queries || []).filter(q => q && typeof q === 'object').map(q => ({ ...q })),
+    evidence: (evidence || []).filter(e => e && typeof e === 'object').map(e => ({ ...e })),
     conclusion: String(conclusion || '').trim(),
+    confidence: String(confidence || '').trim(),
+    alternatives: (alternatives || []).filter(a => a && typeof a === 'object').map(a => ({ ...a })),
     evidence_times: times.slice(0, 20),
+    timestamp: String(timestamp || '').trim(),
     suggested_tools: suggested,
   }
+}
+
+export function buildInvestigationPackage({
+  traceName = '',
+  scope = '',
+  finding = null,
+  plan = null,
+  toolsRun = null,
+  queries = null,
+  evidence = null,
+  conclusion = '',
+  confidence = '',
+  alternatives = null,
+  evidenceTimes = null,
+  timestamp = '',
+} = {}) {
+  const pkg = buildInvestigationReplay({
+    finding,
+    plan,
+    toolsRun,
+    conclusion,
+    evidenceTimes,
+    traceName,
+    scope,
+    queries,
+    evidence,
+    confidence,
+    alternatives,
+    timestamp,
+  })
+  pkg.schema = 'btf-investigation-package'
+  pkg.version = 1
+  return pkg
 }
 
 export function estimateWhatIf({
@@ -1547,5 +2337,282 @@ export function runOptimizationExperiments({
     experiments: results,
     best,
     suggested_tools: suggested,
+  }
+}
+
+// --- Historical baseline learning (lightweight) ---------------------------
+
+const BASELINE_METRIC_KEYS = ['wcet_us', 'blocking_us', 'migrations', 'response_us']
+
+function emptyBaselineProfile() {
+  return { version: 1, samples: 0, tasks: {} }
+}
+
+export function updateBaselineProfile(profile, snapshot) {
+  let out
+  if (profile && typeof profile === 'object') {
+    const tasksIn = (profile.tasks && typeof profile.tasks === 'object') ? profile.tasks : {}
+    const tasksOut = {}
+    for (const [t, m] of Object.entries(tasksIn)) {
+      if (!m || typeof m !== 'object') continue
+      const bucket = {}
+      for (const [k, v] of Object.entries(m)) {
+        if (v && typeof v === 'object') bucket[String(k)] = { ...v }
+      }
+      tasksOut[String(t)] = bucket
+    }
+    out = {
+      version: Number(profile.version) || 1,
+      samples: Number(profile.samples) || 0,
+      tasks: tasksOut,
+    }
+  } else {
+    out = emptyBaselineProfile()
+  }
+  const tasksIn = (snapshot && typeof snapshot === 'object') ? snapshot.tasks : null
+  if (!tasksIn || typeof tasksIn !== 'object' || !Object.keys(tasksIn).length) {
+    return out
+  }
+  for (const [taskRaw, metrics] of Object.entries(tasksIn)) {
+    if (!metrics || typeof metrics !== 'object') continue
+    const task = String(taskRaw).trim()
+    if (!task) continue
+    if (!out.tasks[task]) out.tasks[task] = {}
+    const bucket = out.tasks[task]
+    for (const key of BASELINE_METRIC_KEYS) {
+      const val = metrics[key]
+      if (val == null) continue
+      const x = Number(val)
+      if (!Number.isFinite(x)) continue
+      const stat = bucket[key] || { n: 0, mean: 0.0, m2: 0.0 }
+      const n = Number(stat.n || 0) + 1
+      let mean = Number(stat.mean || 0.0)
+      let m2 = Number(stat.m2 || 0.0)
+      const delta = x - mean
+      mean += delta / n
+      m2 += delta * (x - mean)
+      bucket[key] = { n, mean, m2 }
+    }
+  }
+  out.samples = Number(out.samples || 0) + 1
+  return out
+}
+
+export function scoreAgainstBaseline(profile, snapshot, { zThreshold = 2.0 } = {}) {
+  const z_threshold = Number(zThreshold) || 2.0
+  const tasksProfile = (profile && typeof profile === 'object' && profile.tasks
+    && typeof profile.tasks === 'object') ? profile.tasks : {}
+  const tasksIn = (snapshot && typeof snapshot === 'object' && snapshot.tasks
+    && typeof snapshot.tasks === 'object') ? snapshot.tasks : {}
+  const scores = []
+  const flagged = []
+  for (const [taskRaw, metrics] of Object.entries(tasksIn)) {
+    if (!metrics || typeof metrics !== 'object') continue
+    const task = String(taskRaw).trim()
+    const baseBucket = (tasksProfile[task] && typeof tasksProfile[task] === 'object')
+      ? tasksProfile[task] : {}
+    for (const key of BASELINE_METRIC_KEYS) {
+      const val = metrics[key]
+      if (val == null) continue
+      const x = Number(val)
+      if (!Number.isFinite(x)) continue
+      const stat = baseBucket[key]
+      const row = {
+        task, metric: key, value: x,
+        n: 0, mean: null, std: null, z: null, flag: false,
+      }
+      if (stat && typeof stat === 'object' && Number(stat.n || 0) >= 2) {
+        const n = Number(stat.n)
+        const mean = Number(stat.mean || 0.0)
+        const variance = Number(stat.m2 || 0.0) / Math.max(1, n - 1)
+        const std = Math.sqrt(variance)
+        row.n = n
+        row.mean = Math.round(mean * 10000) / 10000
+        row.std = Math.round(std * 10000) / 10000
+        if (std > 1e-9) {
+          const z = (x - mean) / std
+          row.z = Math.round(z * 1000) / 1000
+          row.flag = Math.abs(z) > z_threshold
+        } else {
+          row.z = 0.0
+        }
+      }
+      scores.push(row)
+      if (row.flag) flagged.push(row)
+    }
+  }
+  flagged.sort((a, b) => Math.abs(b.z || 0) - Math.abs(a.z || 0))
+  return {
+    ok: true,
+    message: `${scores.length} metric score(s); ${flagged.length} flagged `
+      + `(|z|>${z_threshold})`,
+    scores,
+    flagged,
+    z_threshold,
+    has_baseline: Object.keys(tasksProfile).length > 0,
+    suggested_tools: flagged.length
+      ? [{ name: 'investigate', arguments: {}, reason: 'Drill into flagged task' }]
+      : [],
+  }
+}
+
+// --- AI-generated validation experiments ----------------------------------
+
+export function recommendValidationExperiments(findings, {
+  findingId = '', task = '', limit = 5,
+} = {}) {
+  const lim = Math.max(1, Math.min(20, Number(limit) || 5))
+  const items = enrichFindingsWithIds(findings || [])
+  let focus = null
+  if (findingId) focus = resolveFinding(items, findingId)
+  if (!focus && task) {
+    const want = String(task).trim().toLowerCase()
+    for (const f of items) {
+      const t = String(f.task || guessTaskName(String(f.text || '')) || '')
+      if (t && t.toLowerCase() === want) { focus = f; break }
+    }
+  }
+  let pool
+  if (focus) {
+    pool = [focus]
+  } else if (items.length) {
+    const anomalies = detectAnomalies(items, { limit: Math.max(3, lim) })
+    pool = (anomalies.anomalies || []).map(a => ({
+      id: a.id, title: a.title, text: a.text, severity: a.severity, task: a.task,
+    }))
+  } else {
+    pool = []
+  }
+
+  const experiments = []
+  const seenTitles = new Set()
+  const add = (title, kind, steps, rationale, fid) => {
+    if (seenTitles.has(title)) return
+    seenTitles.add(title)
+    experiments.push({
+      title,
+      kind,
+      steps: (steps || []).map(s => String(s)),
+      rationale,
+      evidence_finding: fid,
+    })
+  }
+
+  for (const f of pool) {
+    if (experiments.length >= lim) break
+    const title = String(f.title || '')
+    const text = String(f.text || '')
+    const blob = `${title} ${text}`.toLowerCase()
+    const t = String(f.task || guessTaskName(text) || task || '').trim()
+    const fid = f.id
+    const tname = t || 'the hot task'
+    if (/thrash|migrat|bounc/.test(blob)) {
+      add(
+        `Simulate pinning ${tname} to its dominant core`,
+        'simulation',
+        [`what_if(change='pin ${tname} to Core_N')`, 'Compare migrations / load-balance deltas'],
+        'Migration/thrash finding suggests core affinity fixes the bounce',
+        fid,
+      )
+      add(
+        `Pin ${tname} in firmware (vTaskCoreAffinitySet)`,
+        'firmware',
+        [`Call vTaskCoreAffinitySet(${tname}, mask) at startup / after creation`,
+          'Re-run the same workload and re-capture a trace'],
+        'Confirms the simulated affinity fix on real hardware',
+        fid,
+      )
+      add(
+        `Measure migration rate for ${tname} before/after the affinity fix`,
+        'measurement',
+        ['Capture baseline trace', 'Apply the affinity fix',
+          'Capture candidate trace', 'Run compare_performance A vs B'],
+        'Directly measures whether thrashing is resolved',
+        fid,
+      )
+    } else if (/block|mutex|inversion|inherit/.test(blob)) {
+      add(
+        `Simulate reduced lock contention for ${tname}`,
+        'simulation',
+        [`what_if(change='reduce mutex contention 50% for ${tname}')`,
+          'Compare blocking Max / response deltas'],
+        'Blocking/mutex finding suggests shortening the critical section',
+        fid,
+      )
+      add(
+        `Shorten the critical section for ${tname} (firmware)`,
+        'firmware',
+        ['Reduce work performed while the mutex is held',
+          'Or switch to a priority-inheritance mutex (xSemaphoreCreateMutex, not a binary semaphore)'],
+        'Addresses priority inversion / long hold times at the source',
+        fid,
+      )
+      add(
+        `Measure blocking Max for ${tname} before/after the fix`,
+        'measurement',
+        ['Capture baseline trace', 'Apply the fix', 'Capture candidate trace',
+          `query_raw_metric(task=${tname}, metric=blocking) on both`],
+        'Confirms blocking wait actually dropped',
+        fid,
+      )
+    } else if (/wcet|spike|execution|cpu/.test(blob)) {
+      add(
+        `Profile execution slices for ${tname}`,
+        'measurement',
+        [`query_raw_metric(task=${tname}, metric=execution)`,
+          'Jump to the Max slice and inspect surrounding events'],
+        'WCET/CPU spike finding needs a profiling pass before code changes',
+        fid,
+      )
+      add(
+        `Trim or split the long slice on ${tname} (firmware)`,
+        'firmware',
+        ['Break the long critical section / loop into smaller chunks',
+          'Re-measure Max execution after the change'],
+        'Directly reduces WCET at the source',
+        fid,
+      )
+    } else if (/load|balance/.test(blob)) {
+      add(
+        'Simulate rebalanced task placement',
+        'simulation',
+        ['optimize_experiment() to rank candidate placements',
+          'Compare Load Balance Score deltas'],
+        'Load-balance finding suggests a placement change',
+        fid,
+      )
+      add(
+        'Measure Load Balance Score before/after static affinity',
+        'measurement',
+        ['Capture baseline trace', 'Apply static core assignment',
+          'Capture candidate trace', 'Run analyze_traces or compare_performance'],
+        'Confirms the placement change improves balance',
+        fid,
+      )
+    } else if (/deadline|budget/.test(blob)) {
+      add(
+        `Re-check budget compliance for ${tname} after a fix`,
+        'measurement',
+        ['check_budget() with the configured WCET/response/deadline budgets'],
+        'Deadline/budget finding needs a direct budget re-check',
+        fid,
+      )
+    } else {
+      add(
+        `Investigate ${title || 'this finding'} further`,
+        'measurement',
+        ['investigate(finding_id) for a root-cause chain', 'correlate_events for supporting evidence'],
+        'No specialised heuristic match — needs more evidence first',
+        fid,
+      )
+    }
+  }
+  const finalExperiments = experiments.slice(0, lim)
+  return {
+    ok: true,
+    message: `${finalExperiments.length} validation experiment(s) suggested`,
+    experiments: finalExperiments,
+    disclaimer: 'Simulation / estimate — not measured behavior; firmware steps '
+      + 'are suggestions to implement and re-trace, not applied automatically',
   }
 }

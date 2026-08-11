@@ -16,8 +16,9 @@ Heading level: ![](../images/readme/h2.svg) section · ![](../images/readme/h3.s
 | Section | |
 |---------|--|
 | [How it works](#how-it-works) | Context, evidence, investigation plan |
-| [Workflows and use cases](#workflows-and-use-cases) | End-to-end flows, symptom → tools, what-if / optimize |
+| [Workflows and use cases](#workflows-and-use-cases) | End-to-end, verify / explain / auto, symptom → tools |
 | [Endpoints and models](#endpoints-and-models) | Ollama / cloud, context size, local models |
+| [AI capability / model matrix](#capability-matrix) | Local 3B vs 7B+ vs cloud, which model to pick |
 | [GUI tools](#gui-tools) | Tool schema and Apply / Undo |
 | [Diagrams](#diagrams) | Mermaid and tables in replies |
 | [Desktop vs web](#desktop-vs-web) | Parity matrix |
@@ -34,9 +35,11 @@ The **AI** tab answers diagnostic questions using structured **Analysis Findings
 
 When a question needs granular per-task time-series, the model can call `query_raw_metric` to pull a scoped series on demand (still never the raw BTF file). `search_timeline` locates STI / tag / task timestamps like Find. `trigger_compare` returns Trace Compare CSV when two tabs are open. `detect_anomalies` ranks Findings as Critical / Warning / Info. `correlate_events` merges blocking / execution / migration / sync / priority events for one task. `compare_performance` returns structured A vs B deltas (two tabs). `regression_explain` narrates the primary A vs B change. `investigate` builds a root-cause chain plus hypotheses and suggested tools. `generate_report` returns typed engineering markdown (then `export_report` to save). `check_budget` compares WCET/response/deadline budgets; `optimize` returns qualitative mitigations; `what_if` runs a heuristic slice-replay simulator; `optimize_experiment` ranks automatic candidates; `analyze_traces` ranks all open tabs; `bookmark_finding` pins semantic investigation marks; `investigation_replay` summarises a completed investigation. Query-only batches (`query_raw_metric`, `search_timeline`, `trigger_compare`, `investigate`, `detect_anomalies`, `correlate_events`, `compare_performance`, `generate_report`, `check_budget`, `optimize`, `regression_explain`, `investigation_replay`, `what_if`, `optimize_experiment`, `analyze_traces`) run immediately; mixed GUI batches wait for **Apply** unless **Auto-apply GUI actions** is on.
 
-Important conclusions should cite evidence (`jump:TIME`, metric names) and state **confidence** (High / Medium / Low) plus evidence quality (Directly observed / Strong correlation / Possible explanation / Insufficient evidence). The system prompt asks the model not to invent numbers absent from findings, tool results, or Trace Compare tables.
+Important conclusions should cite evidence (`jump:TIME`, metric names) and state **confidence** (High / Medium / Low) plus evidence quality (Directly observed / Strong correlation / Possible explanation / Insufficient evidence). The system prompt asks the model not to invent numbers, task names, or `jump:TIME` values absent from findings, tool results, or Trace Compare tables — and, when a **Cursor region window** is listed, to cite only times inside that window.
 
 **Investigate / Root cause / What-if / Optimize / Diagnostic report** show an **Investigation plan** checklist in the AI panel (steps advance as tools run; the final text reply marks remaining steps done). Analysis Findings may include anomaly rows (WCET Max≫Avg spikes, extreme migration bursts).
+
+Right-click a timeline segment → **Ask AI about this event** to ask about that exact task/segment (`Explain the timeline event for task … around jump:TIME`), same as Explain region but scoped to one segment. With **≥2 cursors**, the timeline context menu also offers **Explain this region with AI** (`explain_region`); the AI panel **Explain region** template is always available — without two cursors it runs on full-trace Findings (no region window). When cursors are placed, the prompt includes an explicit **Cursor region window** (`jump:lo … jump:hi`) so replies should stay in-window. When `investigate` returns a root-cause chain and hypotheses, the Evidence panel renders a small **Investigation tree** (`graph TD` — chain steps as boxes, hypotheses branching off the finding) plus an **AI Evidence Score — heuristic** text meter (`████████░░ 82%`): +40 for direct evidence times, +25 timeline correlation, +15 metric correlation, −5 per untested alternative (max −15), −10 with no evidence at all. It is a coarse triage aid, **not** a statistical confidence interval — always confirm on the timeline.
 
 Natural-language timeline questions (e.g. “find STI wait around TaskA”) are answered via **`search_timeline`** — no separate search UI.
 
@@ -49,19 +52,34 @@ Recommended ask order ([WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow)): tr
 
 Same flow on **Desktop** and **Web**. Panel chrome: [README → AI Assistant](README.md#ai-assistant). Ladder and ask-order tables: [WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow).
 
+| In this section | |
+|-----------------|--|
+| [End-to-end flow](#end-to-end-flow) | Load → Findings → AI → verify on timeline |
+| [Investigation workflow](#investigation-workflow) | Triage → Investigate / Auto / Verify → evidence |
+| [Explain region and Ask event](#explain-region-and-ask-event) | C1–Cn window and segment context menus |
+| [What-if and optimize](#what-if-and-optimize-workflow) | Heuristic slice-replay (not FreeRTOS) |
+| [Use cases](#use-cases) | Symptom → template / tools |
+| [Worked examples](#worked-examples) | Thrash, contention, regression, region, PI |
+| [Simulator limits](#simulator-limits) | What `what_if` does and does not do |
+
 <a id="end-to-end-flow" name="end-to-end-flow">&#x200B;</a>
 ### End-to-end flow ![](../images/readme/h3.svg)
 
 ```text
 ① Load trace → Statistics (optional cursors + Limit to C1–Cn)
 ② Toolbar Analysis → Findings for that scope
-③ AI: Triage / Investigate / Root cause  →  Apply GUI cards, click jump:TIME
-④ Confirm on timeline + named Statistics sections
-⑤ What-if / Optimize (heuristic estimates)  →  only after the cause matches the timeline
-⑥ Diagnostic report / export_report  →  or CLI analyze for CI baselines
+③ AI entry (pick one):
+     • Triage / Investigate / Root cause / Auto investigate…
+     • Verify with AI… (selected finding)
+     • Explain this region with AI (≥2 cursors) or Explain region template
+     • Ask AI about this event (segment)
+④ Apply GUI cards → click jump:TIME → Evidence / Reasoning (score + tree)
+⑤ Confirm on timeline + named Statistics sections
+⑥ What-if / Optimize / recommend_experiments  →  only after the cause matches
+⑦ Diagnostic report / export_report / export_investigation  →  or CLI analyze
 ```
 
-Do not ask for mitigations before the timeline agrees with the finding. Empty or mis-scoped Statistics produce confident nonsense.
+Do not ask for mitigations before the timeline agrees with the finding. Empty or mis-scoped Statistics produce confident nonsense. Prefer built-in templates: they already name metrics and units.
 
 <a id="investigation-workflow" name="investigation-workflow">&#x200B;</a>
 ### Investigation workflow ![](../images/readme/h3.svg)
@@ -69,24 +87,41 @@ Do not ask for mitigations before the timeline agrees with the finding. Empty or
 | Step | Template or tool | Why |
 |------|------------------|-----|
 | 1 | **Triage findings** / `detect_anomalies` | Rank Critical / Warning / Info |
-| 2 | **Investigate** / `investigate` | Root-cause chain, hypotheses, suggested tools |
-| 3 | `correlate_events` + `query_raw_metric` | Merge blocking / execution / migrations / sync / PI for one task |
-| 4 | `set_cursors` / `zoom_to_range` / `highlight_task` | Narrow the timeline (Apply unless auto-apply is on) |
-| 5 | `bookmark_finding` | Pin root_cause / evidence / correlated / reference marks |
-| 6 | `investigation_replay` / `generate_report` | Structured close-out; optional `export_report` |
+| 2 | **Investigate** / `investigate` — or Findings **Auto investigate…** | Root-cause chain, hypotheses, alternatives, suggested tools |
+| 3 | **Verify finding** / Findings **Verify with AI…** | Confirmed / Rejected / Inconclusive with jump:TIME evidence |
+| 4 | `correlate_events` + `query_raw_metric` | Merge blocking / execution / migrations / sync / PI for one task |
+| 5 | `find_critical_path` / `detect_priority_inversion` | Preempt/block path; L/M/H inversion suspects |
+| 6 | `find_related_findings` / `compare_tasks` | Adjacent findings; side-by-side task deltas |
+| 7 | `set_cursors` / `zoom_to_range` / `highlight_task` / `bookmark_finding` | Narrow the timeline (Apply unless auto-apply is on) |
+| 8 | Evidence panel | Investigation tree + **AI Evidence Score — heuristic** |
+| 9 | `investigation_replay` / `generate_report` / `export_investigation` | Structured close-out; optional `export_report` |
 
 **Root cause** walks deadline/WCET → preemption → blocking → mutex → inheritance → migration for the top finding. Use it when triage already named a suspect task.
+
+**Auto investigate** chains verify-style steps for one finding (investigate → correlate → critical path / PI as needed) and advances the Investigation plan checklist. Use **Verify** when you already have a finding id and want a short verdict.
+
+<a id="explain-region-and-ask-event" name="explain-region-and-ask-event">&#x200B;</a>
+### Explain region and Ask event ![](../images/readme/h3.svg)
+
+| Entry | When it appears | Scope |
+|-------|-----------------|-------|
+| Timeline → **Explain this region with AI** | Only with **≥2 cursors** | C1–Cn; prompt gets `Cursor region window: jump:lo … jump:hi` |
+| AI panel → **Explain region** | Always | Same window when ≥2 cursors; **full-trace Findings** if none |
+| Timeline segment → **Ask AI about this event** | Segment under the pointer | One task / core / segment around `jump:TIME` |
+
+Stay inside the stated window: every `jump:TIME` in the reply should fall between C1 and Cn (or the model should say the window has no matching evidence). Enable **Limit to C1–Cn** so Statistics / Findings / `query_raw_metric` match that window. Clicking a `jump:TIME` outside the cursors usually means the model invented or reused a full-trace time — discard it and re-ask with cursors + scoped Findings.
 
 <a id="what-if-and-optimize-workflow" name="what-if-and-optimize-workflow">&#x200B;</a>
 ### What-if and optimize workflow ![](../images/readme/h3.svg)
 
-`what_if` and `optimize_experiment` are **heuristic slice-replay** tools: they reallocate measured execution slices, scale migrations / blocking, and adjust core-util balance. They are **not** a FreeRTOS kernel or deterministic scheduler. Every result carries a disclaimer.
+`what_if` and `optimize_experiment` are **heuristic slice-replay** tools: they reallocate measured execution slices, scale migrations / blocking, and adjust core-util balance. They are **not** a FreeRTOS kernel or deterministic scheduler. Every result carries a disclaimer. After a promising estimate, `recommend_experiments` suggests validation steps (simulation / firmware / measurement).
 
 | Goal | What to run | Typical change phrases |
 |------|-------------|------------------------|
 | One concrete idea | **What-if** → `what_if` | `pin CS[28] to Core_0`, `raise priority of Low[266]`, `reduce mutex contention 50%` |
 | Rank several ideas | **Optimize** → `optimize_experiment` (then optional `optimize` for qualitative notes) | Host picks pin-to-dominant / quiet core, contention −50%, priority up, migrations −50% |
 | Soft advice only | `optimize` | Finding-text mitigations without scored experiments |
+| What to try next on the bench | `recommend_experiments` | Validation experiments from findings heuristics |
 
 **Reading the payload:** compare `baseline` vs `simulated` (migrations, blocking_ns, load_balance_score) and the `deltas.cost` ranking. Lower cost is better in the experiment list. Treat Medium confidence as “worth trying on the bench”; Low means the phrase was vague or slices were thin.
 
@@ -96,13 +131,21 @@ Do not ask for mitigations before the timeline agrees with the finding. Empty or
 | Situation | Before you ask | Template / tools | Then verify |
 |-----------|----------------|------------------|-------------|
 | Unknown — first look | Full-trace or cursor-scoped Findings | **Triage findings** → **Investigate** | Named Statistics sections; `jump:TIME` |
+| Confirm one finding | Select it in Analysis Findings | **Verify with AI…** / **Verify finding** | Evidence panel; timeline |
+| Explain a time window | ≥2 cursors; **Limit to C1–Cn** on | Context menu or **Explain region** | Only `jump:TIME` inside C1–Cn |
+| One segment / ISR slice | Right-click the segment | **Ask AI about this event** | That task’s row; nearby STI |
+| Auto walk a finding | Select finding → **Auto investigate…** | `auto_investigate` | Investigation plan + Evidence |
 | Migration thrash / ping-pong | Scope thrash window; Findings mention the task | **Migration thrash** → `correlate_events` → **What-if** pin / **Optimize** | Migrations Rate/Ping; Heatmap / Chord; Core Affinity |
+| Priority inversion / PI boost | Inheritance finding or PI episodes in scope | **Priority inversion** / `detect_priority_inversion` → `find_critical_path` | Priority Inheritance; Mutex hold |
 | High blocking / mutex wait | Scope the stall; suspect task known | **Highest latency** → `query_raw_metric` blocking/sync → **What-if** contention / priority | Blocking Max; Mutex hold; Priority Inheritance |
 | WCET / deadline pressure | Thresholds set in Display → Analysis | **WCET / hot CPU** or **Deadline / budget** → `check_budget` | Execution Max jump; Deadlines section |
+| Compare two tasks | Both names known | `compare_tasks` | Execution / Blocking / Migrations side-by-side |
+| Related findings | One finding selected | `find_related_findings` | Shared task / metric / nearby times |
 | Load imbalance across cores | Multi-core util in Findings | **Core balance** → `analyze_traces` (multi-tab) or **What-if** pin to quiet core | Load Balance Score; Concurrent Active; Core Time Breakdown |
 | A vs B build regression | Two tabs open | **Trace Compare** → `compare_performance` / `regression_explain` | Trace Compare pages; same scope on both builds |
+| Drift vs saved baseline | Baseline profile stored (rc / localStorage) | `baseline_score` | Flags `\|z\|>2`; re-capture if needed |
 | Rank all open traces | ≥2 loaded tabs | `analyze_traces` | Best tab vs Migrations / LB / missed ticks |
-| Write-up for a review | Cause already confirmed | **Diagnostic report** → `generate_report` → `export_report` | Saved HTML/CSV; evidence times bookmarked |
+| Write-up for a review | Cause already confirmed | **Diagnostic report** → `generate_report` → `export_report` / `export_investigation` | Saved HTML/CSV/JSON; evidence times bookmarked |
 | CI gate vs baseline | Desktop CLI | [`analyze`](#cli-regression-gate) `--fail-on-regression` (optional `--ai`) | Exit code + markdown narrative |
 
 <a id="worked-examples" name="worked-examples">&#x200B;</a>
@@ -132,6 +175,22 @@ Do not ask for mitigations before the timeline agrees with the finding. Empty or
 3. Act only on High/Medium confidence deltas that Statistics on both tabs reproduce.
 4. Optional: `optimize_experiment` on the candidate’s hottest task to sketch mitigations (still heuristic).
 
+<a id="example-explain-region" name="example-explain-region">&#x200B;</a>
+#### Cursor window → Explain region ![](../images/readme/h4.svg)
+
+1. Place **C1** / **C2** on the phase of interest (e.g. 1.060 s … 1.120 s); enable **Limit to C1–Cn**; re-open Analysis.
+2. Right-click the timeline → **Explain this region with AI** (or AI panel → **Explain region**).
+3. Confirm the user turn lists `Cursor region window: jump:lo … jump:hi`. Reject any `jump:TIME` outside that window.
+4. Follow up with `correlate_events` / `query_raw_metric` on tasks named in-window; bookmark evidence times.
+
+<a id="example-verify-pi" name="example-verify-pi">&#x200B;</a>
+#### Priority inversion finding → Verify ![](../images/readme/h4.svg)
+
+1. Open Analysis Findings; select a Priority Inheritance / inversion row.
+2. **Verify with AI…** (or **Auto investigate…** for a longer chain).
+3. Expect `detect_priority_inversion` / `query_raw_metric` (priority_inheritance) / `find_critical_path`; read the Evidence score and investigation tree.
+4. Click in-scope `jump:TIME` links; confirm L/M/H on the timeline and in Priority Inheritance statistics.
+
 <a id="simulator-limits" name="simulator-limits">&#x200B;</a>
 ### Simulator limits ![](../images/readme/h3.svg)
 
@@ -156,12 +215,71 @@ Any OpenAI-compatible endpoint works, including Ollama (`http://localhost:11434/
 
 Keys may also come from the environment as `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `OLLAMA_API_KEY` (`VITE_*` prefixed on the web). A local Ollama endpoint needs no key.
 
+<a id="capability-matrix" name="capability-matrix">&#x200B;</a>
+### AI capability / model matrix ![](../images/readme/h3.svg)
+
+| Capability | Local 3B | Local 7B+ | Cloud |
+|---|:--:|:--:|:--:|
+| Basic Q&A | ✓ | ✓ | ✓ |
+| Tool calling | △ | ✓ | ✓ |
+| Investigation (`investigate` / root-cause chain / hypotheses) | △ | ✓ | ✓ |
+| Complex reasoning (multi-step correlation, alternatives) | △ | ✓ | ✓ |
+| Large traces (big Findings card / long chat history) | △ | △ | ✓ |
+| What-if / optimize (`what_if`, `optimize_experiment`) | ✓ | ✓ | ✓ |
+
+✓ reliable · △ inconsistent — works sometimes but often skips native tool calls, hallucinates numbers, or truncates on long context; always verify against the timeline before trusting a result.
+
+**Which model should I use?**
+
+| If you… | Use |
+|---|---|
+| Want quick triage / a sanity check | Local 3B (shipped `phi4-mini:3.8b`) — fast, no key, but confirm every claim on the timeline |
+| Need reliable tool calling (Investigate, Root cause, Verify, Explain region, Auto investigate, Ask AI about this event, What-if, Optimize) | Local 7B+ (`qwen2.5:7b`, `qwen2.5:14b`, `llama3.1:8b`, or larger) |
+| Have a large scope (many findings, long chat) or want the strongest reasoning | Cloud (`gpt-4o`, Gemini, DeepSeek, Grok) — mind the [privacy](#what-leaves-the-machine) trade-off |
+| Handle confidential traces | Local Ollama regardless of size — nothing leaves the machine |
+
+3B-class local models often skip native tool calls and emit a fenced ` ```btftool ` block instead — the viewer renders the same GUI cards either way (see [GUI tools](#gui-tools)) — but investigation-heavy templates (Investigate / Root cause / Verify / Explain region / Auto investigate / Ask AI about this event / What-if / Optimize) need a tool-capable model to reliably chain multiple calls.
+
+### Credential storage
+
+| | Desktop | Web |
+|--|---------|-----|
+| Where keys live | `[ai] *_api_key` in `btf_viewer.rc` next to the viewer | Browser `localStorage` (`btf-viewer-settings-v1`) |
+| At rest | Encrypted as `enc1:…` (machine-bound; not portable to another host) | **Plaintext** in localStorage — treat as convenience only |
+| Sent to the model | Never as a chat field; only as the HTTP `Authorization` / API header to the configured endpoint | Same |
+| Clear | Settings → AI → clear key, or delete `btf_viewer.rc` AI keys | Settings → Reset / clear site data |
+
+### What leaves the machine
+
+```text
+What AI receives
+✓ Analysis Findings (titles, severities, task names, heuristic text)
+✓ Selected metrics / tool results the model requests
+✓ Scoped timeline search hits and correlate windows
+✓ Trace Compare CSV when that template runs
+✓ User question + short chat history
+
+What AI does NOT receive
+✗ Raw .btf / .btf.gz file bytes
+✗ The full unrequested event stream
+✗ API keys inside the prompt body
+```
+
+| | Local Ollama | Cloud endpoint |
+|--|--------------|----------------|
+| Trace file stays local | ✓ | ✓ |
+| Findings / metrics leave the machine | No (loopback) | Yes — to that vendor |
+| Raw BTF uploaded | No | No |
+| API key required | Usually no | Usually yes |
+
+Prefer local Ollama for confidential traces. Redact sensitive task names in annotations before using a cloud preset.
+
 ---
 
 <a id="gui-tools" name="gui-tools">&#x200B;</a>
 ## GUI tools ![](../images/readme/h2.svg)
 
-The model may call several tools in one turn; they apply as a single batch. With **Auto-apply GUI actions** off (default in **Settings → AI**), each mutating batch shows **Apply** / **Skip** and **Undo**, plus **Apply GUI actions** under the log. Read-only `query_raw_metric` / `search_timeline` / `trigger_compare` / `investigate` / `detect_anomalies` / `correlate_events` / `compare_performance` / `generate_report` / `check_budget` / `optimize` / `regression_explain` / `investigation_replay` / `what_if` / `optimize_experiment` / `analyze_traces` batches run immediately (no Apply card).
+The model may call several tools in one turn; they apply as a single batch. With **Auto-apply GUI actions** off (default in **Settings → AI**), each mutating batch shows **Apply** / **Skip** and **Undo**, plus **Apply GUI actions** under the log. Read-only `query_raw_metric` / `search_timeline` / `trigger_compare` / `investigate` / `detect_anomalies` / `correlate_events` / `find_critical_path` / `compare_performance` / `generate_report` / `check_budget` / `optimize` / `regression_explain` / `investigation_replay` / `what_if` / `optimize_experiment` / `analyze_traces` / `baseline_score` / `recommend_experiments` / `detect_priority_inversion` / `find_related_findings` / `compare_tasks` batches run immediately (no Apply card).
 
 | Tool | Parameters / targets | Effect |
 |------|----------------------|--------|
@@ -172,7 +290,7 @@ The model may call several tools in one turn; they apply as a single batch. With
 | `open_corridor_inspector` | optional `core_from` / `core_to` (`Core_0`, `0`, `c0`, `Core 0`) | Open Migration Inspector; aliases resolve the same way |
 | `add_annotation` | `time`, `note` (≤240 chars) | Pin an orange timeline note at a timestamp (stays on the current right-panel tab) |
 | `query_raw_metric` | `task`, `metric` (`priority_inheritance`, `execution`, `migrations`, `blocking`, `sync`, `findings`) | Read-only: return the per-task series for the current Statistics scope (up to 40 rows) |
-| `export_report` | optional `format` (`html` / `csv`) | Download HTML or CSV bundling Analysis Findings, mermaid diagrams from the chat, annotations, and GUI state (cursors / highlight / view). |
+| `export_report` | optional `format` (`html` / `csv` / `json`) | Download HTML/CSV/JSON bundling Analysis Findings, mermaid diagrams from the chat, annotations, and GUI state (cursors / highlight / view); `json` saves a full investigation package (see `export_investigation`). |
 | `clear_marks` | optional `what` (`annotations` / `cursors` / `bookmarks` / `all` / `everything`) | Clear AI clutter. `all` (default) drops annotations + cursors; `everything` also clears bookmarks |
 | `reset_view` | (none) | Fit the timeline to the full span and clear the task highlight (marks stay) |
 | `search_timeline` | `query`; optional `mode` (`contains` / `exact` / `regex` / `sti` / `tags` / `intervals` / `lifecycle` / `pointers` / `migrations`) | Find-panel search; returns matching timestamps (up to 40) |
@@ -180,16 +298,23 @@ The model may call several tools in one turn; they apply as a single batch. With
 | `investigate` | optional `finding_id`, `depth` (1–5) | Read-only: investigation graph with root-cause chain, hypotheses, ranked anomalies, suggested tools |
 | `detect_anomalies` | optional `limit` (1–40) | Read-only: rank Analysis Findings as Critical / Warning / Info |
 | `correlate_events` | `task`; optional `around_time`, `window` | Read-only: merge blocking / execution / migration / sync / priority / Find hits into one timeline |
-| `compare_performance` | optional `tab_a` / `tab_b` | Read-only: structured A vs B metric deltas + confidence (two tabs) |
+| `find_critical_path` | `task`; optional `timestamp`, `window` (default 2000) | Read-only: preempt/block/mutex critical path around a timestamp; also returns a `mermaid` graph (`graph LR`), `graph_nodes` (id/label/kind/time), and split `blocking_steps` / `preemption_steps` arrays |
+| `compare_performance` | optional `tab_a` / `tab_b` | Read-only: structured A vs B metric deltas + confidence (two tabs); `data.regression_type` classifies the primary delta as `execution` / `scheduling` / `synchronization` / `migration` / `load_balance` / `unknown` (legacy `classification` values like `thrashing` / `load_imbalance` / `tick_health` are preserved alongside it) |
 | `generate_report` | optional `report_type`, `finding_id` | Read-only: typed engineering markdown (`executive` / `performance` / `root_cause` / `regression` / `optimization` / `bug` / `ci`); call `export_report` to save |
 | `check_budget` | optional `budgets`, `tasks` | Read-only: compare per-task WCET/response/deadline metrics against budgets (host builds rows from findings when `tasks` omitted) |
 | `optimize` | optional `limit` (default 5) | Read-only: evidence-backed mitigation ideas (estimate disclaimer) |
-| `regression_explain` | optional `tab_a` / `tab_b` | Read-only: compare two tabs then narrate the primary regression |
+| `regression_explain` | optional `tab_a` / `tab_b` | Read-only: compare two tabs then narrate the primary regression; includes the same `regression_type` classification |
 | `bookmark_finding` | `time`, `kind` (`root_cause` / `evidence` / `correlated` / `reference`); optional `note` | GUI: pin a semantic investigation annotation (Apply required) |
 | `investigation_replay` | optional `finding_id`, `conclusion`, `tools_run`, `evidence_times` | Read-only: structured investigation replay card |
 | `what_if` | `change`; optional `task` | Read-only: heuristic slice-replay what-if (migrations / blocking / load balance; not FreeRTOS kernel) |
 | `optimize_experiment` | optional `task`, `limit` (1–12, default 5) | Read-only: run ranked automatic pin/priority/contention/migration experiments |
 | `analyze_traces` | (none) | Read-only: rank all loaded tabs by scheduling behavior |
+| `baseline_score` | optional `task`, `baseline`, `snapshot` | Read-only: score current per-task metrics (WCET/blocking/migrations/response) against the stored historical baseline; flags `\|z\|>2` |
+| `recommend_experiments` | optional `finding_id`, `task`, `limit` (1–20, default 5) | Read-only: suggest simulation / firmware / measurement validation experiments from findings heuristics |
+| `export_investigation` | optional `finding_id`, `conclusion`, `tools_run`, `evidence_times` | Download the completed investigation (finding, tools run, queries, evidence, conclusion, confidence, alternatives) as a JSON package |
+| `detect_priority_inversion` | optional `task`, `window` | Read-only: scan priority-inheritance boost episodes for L/M/H inversion suspects (high/medium/low task, mutex, time, duration) |
+| `find_related_findings` | optional `finding_id`, `task`, `metric`, `window`, `limit` (1–40, default 10) | Read-only: relate Analysis Findings by shared task, metric keyword, evidence-time proximity, or severity adjacency |
+| `compare_tasks` | `task_a`, `task_b`; optional `metrics` | Read-only: side-by-side execution/blocking/migrations/priority-inheritance delta table between two tasks |
 
 Models without native tool calling can emit a fenced ` ```btftool ` JSON block (same cards). Prefer a tool-capable model (see [Endpoints and models](#endpoints-and-models), or `gpt-4o` / Gemini) if native calls stay silent.
 
@@ -200,7 +325,7 @@ After **Apply**, **Undo last actions** restores zoom / view / highlight / inspec
 <a id="diagrams" name="diagrams">&#x200B;</a>
 ## Diagrams ![](../images/readme/h2.svg)
 
-Replies may include ` ```mermaid ` **sequence** diagrams (mutex take/give, block/resume, priority boost / L/M/H) and `graph LR` / **flowchart** core-migration graphs (counts on edges). Pipe **Markdown tables** (and a sanitized HTML `<table>` copied from Findings) render as HTML tables in the reply pane.
+Replies may include ` ```mermaid ` **sequence** diagrams (mutex take/give, block/resume, priority boost / L/M/H) and `graph LR` / **flowchart** core-migration graphs (counts on edges). Pipe **Markdown tables** (and a sanitized HTML `<table>` copied from Findings) render as HTML tables in the reply pane. The Evidence panel adds its own auto-generated `graph TD` **Investigation tree** (root-cause chain steps as boxes, alternative hypotheses as rounded nodes branching off the finding) whenever `investigate` returns a chain — same renderer, same click/zoom rules below.
 
 - Click a **task** node to lock-highlight that timeline row (`Low[266] (Core 0)` resolves to `Low[266]`).
 - Click a **core** node (`Core_0`, `C0`, `C1`) to switch to Core View and scroll to that core.
@@ -218,11 +343,15 @@ Replies may include ` ```mermaid ` **sequence** diagrams (mutex take/give, block
 |------|---------|-----|
 | Native tools + ` ```btftool ` | Same schema and cards | Same |
 | `add_annotation` / `query_raw_metric` / `export_report` | Marks + scoped series + save dialog | Same (browser download) |
-| `clear_marks` / `reset_view` / `search_timeline` / `trigger_compare` / `investigate` / `detect_anomalies` / `correlate_events` / `compare_performance` / `generate_report` / `check_budget` / `optimize` / `regression_explain` / `investigation_replay` / `what_if` / `optimize_experiment` / `analyze_traces` / `bookmark_finding` | Same | Same (compare overlay; search uses Find; investigation tools are read-only except `bookmark_finding`) |
+| `clear_marks` / `reset_view` / `search_timeline` / `trigger_compare` / `investigate` / `detect_anomalies` / `correlate_events` / `find_critical_path` / `compare_performance` / `generate_report` / `check_budget` / `optimize` / `regression_explain` / `investigation_replay` / `what_if` / `optimize_experiment` / `analyze_traces` / `baseline_score` / `recommend_experiments` / `export_investigation` / `bookmark_finding` / `detect_priority_inversion` / `find_related_findings` / `compare_tasks` | Same | Same (compare overlay; search uses Find; investigation tools are read-only except `bookmark_finding`) |
 | `highlight_task` / corridor cores | Same resolve rules | Same |
 | In-chat mermaid figure | Data-URI image + node hit-test | Inline SVG node clicks |
 | In-chat Markdown / HTML tables | Same rendered table | Same |
 | Zoom window + link row | Scroll to zoom + link row | Same |
+| Ask AI about this event (segment context menu) | Same composed prompt, `panel.ask_event(...)` | Same, `askTemplate('ask_event', prompt)` |
+| Explain this region with AI (≥2 cursors) | Same `explain_region` + injected `jump:lo…hi` window | Same |
+| Investigation tree (Evidence panel) | Same `graph TD` generator, rendered inline | Same |
+| AI Evidence Score — heuristic | Text meter in Evidence panel | Same |
 | Authentication | Settings → AI → None / API key / Sign in; panel chip + 401 CTAs until a successful turn | Same (`VITE_*` env keys) |
 | Self-signed TLS | **Allow self-signed TLS** per preset skips HTTPS certificate checks | Persist the same flag + tip; browsers still verify — trust the cert, use `http://`, or use Desktop |
 | Model picker | Editable combo; refresh fills and opens the dropdown | Same |

@@ -242,6 +242,9 @@ The right-panel **AI** tab asks diagnostic questions over **Analysis Findings** 
 |----------|----------|
 | **Investigate** | Rank hypotheses, call tools, place cursors / zoom / highlight, then conclude with confidence |
 | **Root cause** | Walk deadline/WCET → preemption → blocking → mutex → inheritance → migration for the top finding |
+| **Verify finding** | Confirm or reject a selected Analysis Finding (`finding_id`); also **Verify with AI…** in Findings |
+| **Explain region** | Diagnose the C1–Cn cursor window (timeline menu needs ≥2 cursors; template alone uses full trace if none) |
+| **Auto investigate** | Walk verify → correlate → critical path / PI for a finding; also **Auto investigate…** in Findings |
 | **Task profile** | Behaviour summary for the hottest / most problematic task |
 | **Diagnostic report** | Structured engineering write-up; pair with `export_report` to save |
 | **What-if** | Heuristic slice-replay for a concrete change (pin / priority / contention); labelled — not FreeRTOS kernel |

@@ -33,10 +33,12 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     _ai_log_document_html,
     _format_ai_log_html,
     ai_chat_completion,
+    append_explain_region_bounds,
     apply_ai_preset,
     build_ai_system_prompt,
     build_ai_user_message,
     ai_jump_annotation_note,
+    cursor_region_bounds,
     extract_jump_times,
     format_ai_conversation_html,
     format_ai_conversation_markdown,
@@ -68,15 +70,22 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(AI_TEMPLATE_QUESTIONS[1][1], "Investigate")
         self.assertEqual(ids[2], "root_cause")
         self.assertEqual(AI_TEMPLATE_QUESTIONS[2][1], "Root cause")
-        self.assertEqual(ids[3], "compare")
-        self.assertEqual(AI_TEMPLATE_QUESTIONS[3][1], "Trace Compare")
+        self.assertEqual(ids[3], "verify")
+        self.assertEqual(AI_TEMPLATE_QUESTIONS[3][1], "Verify finding")
+        self.assertEqual(ids[4], "explain_region")
+        self.assertEqual(AI_TEMPLATE_QUESTIONS[4][1], "Explain region")
+        self.assertEqual(ids[5], "compare")
+        self.assertEqual(AI_TEMPLATE_QUESTIONS[5][1], "Trace Compare")
         self.assertIn("triage", ids)
         self.assertIn("task_profile", ids)
         self.assertIn("diagnostic_report", ids)
         self.assertIn("what_if", ids)
         self.assertIn("optimize", ids)
         self.assertIn("migrations", ids)
-        self.assertEqual(AI_TEMPLATE_QUESTIONS[4][1], "Triage findings")
+        self.assertEqual(AI_TEMPLATE_QUESTIONS[6][1], "Triage findings")
+        self.assertIn("auto_investigate", ids)
+        self.assertEqual(AI_TEMPLATE_QUESTIONS[-1][0], "auto_investigate")
+        self.assertEqual(AI_TEMPLATE_QUESTIONS[-1][1], "Auto investigate")
         self.assertNotIn("tooldemo", ids)
 
     def test_templates_match_web_ollama_client(self) -> None:
@@ -96,7 +105,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
             label, expr = m.group(2), m.group(3)
             prompt = "".join(re.findall(r"'([^']*)'", expr))
             web.append((tid, label, prompt))
-            if tid == "deadlines":
+            if tid == "auto_investigate":
                 break
         self.assertEqual(list(AI_TEMPLATE_QUESTIONS), web)
 
@@ -482,6 +491,20 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertIn("Why thrash?", msg)
         self.assertIn("2.358 s", msg)
         self.assertIn("(cursor range)", msg)
+
+    def test_user_message_includes_cursor_region(self) -> None:
+        msg = build_ai_user_message(
+            "Explain region",
+            findings_text="none",
+            cursors=[1060000, 1120000],
+        )
+        self.assertIn("C1=jump:1060000", msg)
+        self.assertIn("C2=jump:1120000", msg)
+        self.assertIn("Cursor region window: jump:1060000 … jump:1120000", msg)
+        self.assertEqual(cursor_region_bounds([1120000, 1060000]), (1060000.0, 1120000.0))
+        bounded = append_explain_region_bounds("Explain.", [1060000, 1120000])
+        self.assertIn("jump:1060000 … jump:1120000", bounded)
+        self.assertIn("ONLY cite jump:TIME", bounded)
 
     def test_extract_jump_times(self) -> None:
         self.assertEqual(extract_jump_times("see jump:1805120 and jump:99.5"), [1805120.0, 99.5])
@@ -909,6 +932,11 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertIn("<strong>bold</strong>", html_out)
         self.assertIn("<code>code</code>", html_out)
         self.assertIn('href="btfjump:time/42"', html_out)
+        # Backtick-wrapped jump tokens must still be clickable links.
+        coded_jump = markdown_to_safe_html("關注 `jump:1501325` 附近")
+        self.assertIn('href="btfjump:time/1501325"', coded_jump)
+        self.assertIn('class="ai-jump"', coded_jump)
+        self.assertNotIn("<code>jump:1501325</code>", coded_jump)
         self.assertIn("<ul>", html_out)
         self.assertIn("&lt;tag&gt;", html_out)
         self.assertNotIn("<tag>", html_out)
@@ -970,12 +998,15 @@ class AiAssistantHelpersTests(unittest.TestCase):
             "span": "1 s",
             "cores": 2,
             "scope": "full",
+            "cursors": [10, 20],
         })
         self.assertEqual(ctx["findings_text"], "hello")
         self.assertEqual(ctx["span"], "1 s")
         self.assertEqual(ctx["cores"], 2)
+        self.assertEqual(ctx["cursors"], [10, 20])
         snake = normalize_ai_context({"findings_text": "x"})
         self.assertEqual(snake["findings_text"], "x")
+        self.assertEqual(snake["cursors"], [])
 
     def test_conversation_export_formats(self) -> None:
         entries = [

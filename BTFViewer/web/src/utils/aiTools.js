@@ -8,19 +8,26 @@ import { btfHtmlReportDocument } from './htmlReport.js'
 import {
   analyzeMultiTraces,
   buildCorrelationTimeline,
+  buildCriticalPath,
+  buildInvestigationPackage,
   buildInvestigationReplay,
   buildInvestigateContext,
   buildOptimizationAdvice,
   checkTaskBudgets,
   comparePerformanceMetrics,
+  compareTasksMetrics,
   detectAnomalies,
+  detectPriorityInversion,
   estimateWhatIf,
   explainRegression,
+  findRelatedFindings,
   formatBookmarkLabel,
   generateStructuredReport,
   maxToolRoundsForTemplate,
+  recommendValidationExperiments,
   resolveFinding,
   runOptimizationExperiments,
+  scoreAgainstBaseline,
   simulateWhatIf,
   snapshotFromSummary,
 } from './aiInvestigation.js'
@@ -41,6 +48,7 @@ export const AI_TOOL_TRIGGER_COMPARE = 'trigger_compare'
 export const AI_TOOL_INVESTIGATE = 'investigate'
 export const AI_TOOL_DETECT_ANOMALIES = 'detect_anomalies'
 export const AI_TOOL_CORRELATE_EVENTS = 'correlate_events'
+export const AI_TOOL_FIND_CRITICAL_PATH = 'find_critical_path'
 export const AI_TOOL_COMPARE_PERFORMANCE = 'compare_performance'
 export const AI_TOOL_GENERATE_REPORT = 'generate_report'
 export const AI_TOOL_CHECK_BUDGET = 'check_budget'
@@ -51,6 +59,12 @@ export const AI_TOOL_INVESTIGATION_REPLAY = 'investigation_replay'
 export const AI_TOOL_WHAT_IF = 'what_if'
 export const AI_TOOL_OPTIMIZE_EXPERIMENT = 'optimize_experiment'
 export const AI_TOOL_ANALYZE_TRACES = 'analyze_traces'
+export const AI_TOOL_BASELINE_SCORE = 'baseline_score'
+export const AI_TOOL_RECOMMEND_EXPERIMENTS = 'recommend_experiments'
+export const AI_TOOL_EXPORT_INVESTIGATION = 'export_investigation'
+export const AI_TOOL_DETECT_PRIORITY_INVERSION = 'detect_priority_inversion'
+export const AI_TOOL_FIND_RELATED_FINDINGS = 'find_related_findings'
+export const AI_TOOL_COMPARE_TASKS = 'compare_tasks'
 
 export const AI_VIEWER_TOOL_NAMES = [
   AI_TOOL_SET_CURSORS,
@@ -68,6 +82,7 @@ export const AI_VIEWER_TOOL_NAMES = [
   AI_TOOL_INVESTIGATE,
   AI_TOOL_DETECT_ANOMALIES,
   AI_TOOL_CORRELATE_EVENTS,
+  AI_TOOL_FIND_CRITICAL_PATH,
   AI_TOOL_COMPARE_PERFORMANCE,
   AI_TOOL_GENERATE_REPORT,
   AI_TOOL_CHECK_BUDGET,
@@ -78,6 +93,12 @@ export const AI_VIEWER_TOOL_NAMES = [
   AI_TOOL_WHAT_IF,
   AI_TOOL_OPTIMIZE_EXPERIMENT,
   AI_TOOL_ANALYZE_TRACES,
+  AI_TOOL_BASELINE_SCORE,
+  AI_TOOL_RECOMMEND_EXPERIMENTS,
+  AI_TOOL_EXPORT_INVESTIGATION,
+  AI_TOOL_DETECT_PRIORITY_INVERSION,
+  AI_TOOL_FIND_RELATED_FINDINGS,
+  AI_TOOL_COMPARE_TASKS,
 ]
 
 export const AI_BOOKMARK_KINDS = [
@@ -179,12 +200,14 @@ export const AI_TOOL_SYSTEM_ADDENDUM =
   + 'answer. Valid tools: set_cursors, zoom_to_range, highlight_task, '
   + 'set_view_mode, open_corridor_inspector, add_annotation, query_raw_metric, '
   + 'export_report, clear_marks, reset_view, search_timeline, trigger_compare, '
-  + 'investigate, detect_anomalies, correlate_events, compare_performance, '
+  + 'investigate, detect_anomalies, correlate_events, find_critical_path, compare_performance, '
   + 'generate_report, check_budget, optimize, regression_explain, '
-  + 'bookmark_finding, investigation_replay, what_if, optimize_experiment, analyze_traces. '
+  + 'bookmark_finding, investigation_replay, what_if, optimize_experiment, analyze_traces, '
+  + 'baseline_score, recommend_experiments, export_investigation, '
+  + 'detect_priority_inversion, find_related_findings, compare_tasks. '
   + 'For root-cause or Investigate templates: call detect_anomalies and '
   + 'investigate(finding_id) first for a root-cause chain, then '
-  + 'correlate_events / query_raw_metric / search_timeline, then set_cursors '
+  + 'correlate_events / query_raw_metric / search_timeline / find_critical_path, then set_cursors '
   + '+ zoom_to_range + highlight_task on the worst episode before concluding. '
   + 'Use compare_performance for structured A vs B deltas (two tabs); '
   + 'regression_explain after compare to narrate the primary change. '
@@ -194,6 +217,16 @@ export const AI_TOOL_SYSTEM_ADDENDUM =
   + 'evidence-backed mitigations; what_if for heuristic slice-replay simulation; optimize_experiment to rank automatic candidates; '
   + 'analyze_traces to rank all open tabs; bookmark_finding to pin semantic '
   + 'marks; investigation_replay to summarise a completed investigation. '
+  + 'Use baseline_score to compare current per-task metrics against a stored '
+  + 'historical baseline (flags |z|>2); recommend_experiments to suggest '
+  + 'simulation / firmware / measurement validation experiments; '
+  + 'export_investigation to save the full investigation as JSON. '
+  + 'Use detect_priority_inversion to scan priority-inheritance boost '
+  + 'episodes for L/M/H inversion suspects (high/medium/low task, mutex, '
+  + 'time, duration); find_related_findings to relate Analysis Findings by '
+  + 'shared task, metric keyword, evidence-time proximity, or severity '
+  + 'adjacency; compare_tasks for a side-by-side execution/blocking/'
+  + 'migrations/priority delta table between two tasks. '
   + 'Use query_raw_metric when you need the exact per-task '
   + 'series (priority-inheritance episodes, execution slices, migrations, '
   + 'blocking gaps, sync STI, or findings lines) instead of the summarised '
@@ -416,8 +449,10 @@ export function aiViewerTools() {
           properties: {
             format: {
               type: 'string',
-              enum: ['html', 'csv'],
-              description: 'html (default) or csv.',
+              enum: ['html', 'csv', 'json'],
+              description:
+                'html (default), csv, or json (full investigation '
+                + 'package — see export_investigation).',
             },
           },
         },
@@ -571,6 +606,34 @@ export function aiViewerTools() {
             window: {
               type: 'number',
               description: 'Half-width around around_time (trace units).',
+            },
+          },
+          required: ['task'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_FIND_CRITICAL_PATH,
+        description:
+          'Build a preempt/block/mutex critical path for a task around '
+          + 'a timestamp by correlating blocking, sync, priority, execution, '
+          + 'and migration events.',
+        parameters: {
+          type: 'object',
+          properties: {
+            task: {
+              type: 'string',
+              description: 'Task display name, id, or merge key.',
+            },
+            timestamp: {
+              type: 'number',
+              description: 'Optional center time (trace units).',
+            },
+            window: {
+              type: 'number',
+              description: 'Half-width around timestamp (default 2000).',
             },
           },
           required: ['task'],
@@ -807,6 +870,186 @@ export function aiViewerTools() {
           'Rank all loaded trace tabs by scheduling behavior '
           + '(load balance, migrations, missed ticks).',
         parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_BASELINE_SCORE,
+        description:
+          'Score current per-task metrics (WCET, blocking, '
+          + 'migrations, response) against a stored historical '
+          + 'baseline; flags entries where |z| > 2.',
+        parameters: {
+          type: 'object',
+          properties: {
+            task: {
+              type: 'string',
+              description: 'Optional focus task filter.',
+            },
+            baseline: {
+              type: 'object',
+              description:
+                "Optional baseline profile object (defaults to the host's stored profile).",
+            },
+            snapshot: {
+              type: 'object',
+              description:
+                'Optional {tasks: {task: {wcet_us, blocking_us, migrations, response_us}}} '
+                + "snapshot (defaults to the host's current trace metrics).",
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_RECOMMEND_EXPERIMENTS,
+        description:
+          'Suggest validation experiments (simulation / firmware / '
+          + 'measurement) for a finding or task, using heuristics '
+          + '(thrash→pin, mutex→shorten critical section, etc.).',
+        parameters: {
+          type: 'object',
+          properties: {
+            finding_id: {
+              type: 'string',
+              description: 'Finding id / index / title substring.',
+            },
+            task: {
+              type: 'string',
+              description: 'Optional focus task.',
+            },
+            limit: {
+              type: 'integer',
+              description: 'Max experiments (1–20, default 5).',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_EXPORT_INVESTIGATION,
+        description:
+          'Download the completed investigation (finding, tools '
+          + 'run, queries, evidence, conclusion, confidence, '
+          + 'alternatives) as a JSON package.',
+        parameters: {
+          type: 'object',
+          properties: {
+            finding_id: {
+              type: 'string',
+              description: 'Finding id / index / title substring.',
+            },
+            conclusion: {
+              type: 'string',
+              description: 'Short investigation conclusion text.',
+            },
+            tools_run: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Tool names already executed.',
+            },
+            evidence_times: {
+              type: 'array',
+              items: { type: 'number' },
+              description: 'Evidence timestamps for cursor replay.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_DETECT_PRIORITY_INVERSION,
+        description:
+          'Scan priority-inheritance boost episodes flagged as '
+          + 'inversion suspects (L/M/H pattern) and return '
+          + 'high/medium/low task, mutex, time, and duration for each.',
+        parameters: {
+          type: 'object',
+          properties: {
+            task: {
+              type: 'string',
+              description:
+                'Optional focus task (low or medium task name); omit to scan all tasks.',
+            },
+            window: {
+              type: 'number',
+              description:
+                'Optional minimum episode duration (ns) to ignore trivial boosts.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_FIND_RELATED_FINDINGS,
+        description:
+          'Relate Analysis Findings by shared task, metric keyword, '
+          + 'evidence-time proximity, or severity adjacency.',
+        parameters: {
+          type: 'object',
+          properties: {
+            finding_id: {
+              type: 'string',
+              description: 'Focus finding id / index / title substring.',
+            },
+            task: {
+              type: 'string',
+              description: 'Optional task filter.',
+            },
+            metric: {
+              type: 'string',
+              description:
+                'Optional metric filter: priority_inheritance|execution|migrations|blocking|sync|findings.',
+            },
+            window: {
+              type: 'number',
+              description:
+                'Optional evidence-time proximity window (ns) relative to the focus finding.',
+            },
+            limit: {
+              type: 'integer',
+              description: 'Max related findings (1–40, default 10).',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_COMPARE_TASKS,
+        description:
+          "Compare two tasks' execution / blocking / migrations / "
+          + 'priority-inheritance metrics side by side with deltas.',
+        parameters: {
+          type: 'object',
+          properties: {
+            task_a: {
+              type: 'string',
+              description: 'First task display name, id, or merge key.',
+            },
+            task_b: {
+              type: 'string',
+              description: 'Second task display name, id, or merge key.',
+            },
+            metrics: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                'Optional subset of execution|blocking|migrations|priority_inheritance (default all).',
+            },
+          },
+          required: ['task_a', 'task_b'],
+        },
       },
     },
   ]
@@ -1325,7 +1568,8 @@ export function validateToolCall(name, args) {
     let fmt = String(a.format || 'html').trim().toLowerCase()
     if (fmt === 'htm' || fmt === 'html') fmt = 'html'
     else if (fmt === 'csv') fmt = 'csv'
-    else return { args: null, error: 'format must be "html" or "csv"' }
+    else if (fmt === 'json') fmt = 'json'
+    else return { args: null, error: 'format must be "html", "csv", or "json"' }
     return { args: { format: fmt }, error: '' }
   }
   if (name === AI_TOOL_CLEAR_MARKS) {
@@ -1392,6 +1636,22 @@ export function validateToolCall(name, args) {
       const t = Number(a.around_time)
       if (!Number.isFinite(t)) return { args: null, error: 'around_time must be a number' }
       out.around_time = t
+    }
+    if (a.window != null && String(a.window).trim() !== '') {
+      const w = Number(a.window)
+      if (!Number.isFinite(w)) return { args: null, error: 'window must be a number' }
+      out.window = Math.max(0, w)
+    }
+    return { args: out, error: '' }
+  }
+  if (name === AI_TOOL_FIND_CRITICAL_PATH) {
+    const task = String(a.task || '').trim()
+    if (!task) return { args: null, error: 'task must be a non-empty string' }
+    const out = { task, timestamp: null, window: 2000 }
+    if (a.timestamp != null && String(a.timestamp).trim() !== '') {
+      const t = Number(a.timestamp)
+      if (!Number.isFinite(t)) return { args: null, error: 'timestamp must be a number' }
+      out.timestamp = t
     }
     if (a.window != null && String(a.window).trim() !== '') {
       const w = Number(a.window)
@@ -1516,6 +1776,94 @@ export function validateToolCall(name, args) {
     }
   }
   if (name === AI_TOOL_ANALYZE_TRACES) return { args: {}, error: '' }
+  if (name === AI_TOOL_BASELINE_SCORE) {
+    if (a.baseline != null && (typeof a.baseline !== 'object' || Array.isArray(a.baseline))) {
+      return { args: null, error: 'baseline must be an object' }
+    }
+    if (a.snapshot != null && (typeof a.snapshot !== 'object' || Array.isArray(a.snapshot))) {
+      return { args: null, error: 'snapshot must be an object' }
+    }
+    const out = { task: String(a.task || '').trim() }
+    if (a.baseline && typeof a.baseline === 'object') out.baseline = a.baseline
+    if (a.snapshot && typeof a.snapshot === 'object') out.snapshot = a.snapshot
+    return { args: out, error: '' }
+  }
+  if (name === AI_TOOL_RECOMMEND_EXPERIMENTS) {
+    let limit = Number(a.limit ?? 5)
+    if (!Number.isFinite(limit)) {
+      return { args: null, error: 'limit must be an integer 1–20' }
+    }
+    return {
+      args: {
+        finding_id: String(a.finding_id || '').trim(),
+        task: String(a.task || '').trim(),
+        limit: Math.max(1, Math.min(20, Math.trunc(limit))),
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_EXPORT_INVESTIGATION) {
+    const toolsRun = a.tools_run || []
+    if (!Array.isArray(toolsRun)) {
+      return { args: null, error: 'tools_run must be an array of strings' }
+    }
+    const evidence = a.evidence_times || []
+    if (!Array.isArray(evidence)) {
+      return { args: null, error: 'evidence_times must be an array of numbers' }
+    }
+    return {
+      args: {
+        finding_id: String(a.finding_id || '').trim(),
+        conclusion: String(a.conclusion || '').trim(),
+        tools_run: toolsRun.map(t => String(t)).filter(Boolean),
+        evidence_times: asFloatList(evidence),
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_DETECT_PRIORITY_INVERSION) {
+    const out = { task: String(a.task || '').trim(), window: null }
+    if (a.window != null && String(a.window).trim() !== '') {
+      const w = Number(a.window)
+      if (!Number.isFinite(w)) return { args: null, error: 'window must be a number' }
+      out.window = Math.max(0, w)
+    }
+    return { args: out, error: '' }
+  }
+  if (name === AI_TOOL_FIND_RELATED_FINDINGS) {
+    let limit = Number(a.limit ?? 10)
+    if (!Number.isFinite(limit)) {
+      return { args: null, error: 'limit must be an integer 1–40' }
+    }
+    const out = {
+      finding_id: String(a.finding_id || '').trim(),
+      task: String(a.task || '').trim(),
+      metric: String(a.metric || '').trim().toLowerCase(),
+      window: null,
+      limit: Math.max(1, Math.min(40, Math.trunc(limit))),
+    }
+    if (a.window != null && String(a.window).trim() !== '') {
+      const w = Number(a.window)
+      if (!Number.isFinite(w)) return { args: null, error: 'window must be a number' }
+      out.window = Math.max(0, w)
+    }
+    return { args: out, error: '' }
+  }
+  if (name === AI_TOOL_COMPARE_TASKS) {
+    const taskA = String(a.task_a || '').trim()
+    const taskB = String(a.task_b || '').trim()
+    if (!taskA || !taskB) {
+      return { args: null, error: 'task_a and task_b must be non-empty strings' }
+    }
+    if (a.metrics != null && !Array.isArray(a.metrics)) {
+      return { args: null, error: 'metrics must be an array' }
+    }
+    const out = { task_a: taskA, task_b: taskB }
+    if (Array.isArray(a.metrics)) {
+      out.metrics = a.metrics.map(m => String(m || '').trim().toLowerCase()).filter(Boolean)
+    }
+    return { args: out, error: '' }
+  }
   return { args: null, error: `unknown tool ${JSON.stringify(name)}` }
 }
 
@@ -1596,6 +1944,16 @@ export function summariseToolCall(name, args) {
   if (name === AI_TOOL_CORRELATE_EVENTS) {
     return `Correlate events for ${String(a.task || '?').trim() || '?'}`
   }
+  if (name === AI_TOOL_FIND_CRITICAL_PATH) {
+    const task = String(a.task || '?').trim() || '?'
+    const ts = a.timestamp
+    if (ts != null && Number.isFinite(Number(ts))) {
+      const n = Number(ts)
+      const label = Number.isInteger(n) ? String(Math.trunc(n)) : String(n)
+      return `Find critical path for ${task} @ ${label}`
+    }
+    return `Find critical path for ${task}`
+  }
   if (name === AI_TOOL_COMPARE_PERFORMANCE) {
     return 'Compare performance (A vs B)'
   }
@@ -1632,6 +1990,33 @@ export function summariseToolCall(name, args) {
     return `Optimize experiment (${task || 'auto'}, limit ${a.limit ?? 5})`
   }
   if (name === AI_TOOL_ANALYZE_TRACES) return 'Analyze loaded traces'
+  if (name === AI_TOOL_BASELINE_SCORE) {
+    const task = String(a.task || '').trim()
+    return `Baseline score (${task || 'all tasks'})`
+  }
+  if (name === AI_TOOL_RECOMMEND_EXPERIMENTS) {
+    const fid = String(a.finding_id || '').trim()
+    const task = String(a.task || '').trim()
+    const label = fid || task || 'top finding'
+    return `Recommend experiments (${label})`
+  }
+  if (name === AI_TOOL_EXPORT_INVESTIGATION) return 'Export investigation (JSON)'
+  if (name === AI_TOOL_DETECT_PRIORITY_INVERSION) {
+    const task = String(a.task || '').trim()
+    return `Detect priority inversion (${task || 'all tasks'})`
+  }
+  if (name === AI_TOOL_FIND_RELATED_FINDINGS) {
+    const fid = String(a.finding_id || '').trim()
+    const task = String(a.task || '').trim()
+    const metric = String(a.metric || '').trim()
+    const label = fid || task || metric || 'top finding'
+    return `Find related findings (${label})`
+  }
+  if (name === AI_TOOL_COMPARE_TASKS) {
+    const aTask = String(a.task_a || '?').trim() || '?'
+    const bTask = String(a.task_b || '?').trim() || '?'
+    return `Compare tasks ${aTask} vs ${bTask}`
+  }
   return String(name || '').replace(/_/g, ' ')
 }
 
@@ -1772,6 +2157,7 @@ export function isQueryTool(name) {
     AI_TOOL_INVESTIGATE,
     AI_TOOL_DETECT_ANOMALIES,
     AI_TOOL_CORRELATE_EVENTS,
+    AI_TOOL_FIND_CRITICAL_PATH,
     AI_TOOL_COMPARE_PERFORMANCE,
     AI_TOOL_GENERATE_REPORT,
     AI_TOOL_CHECK_BUDGET,
@@ -1781,11 +2167,16 @@ export function isQueryTool(name) {
     AI_TOOL_WHAT_IF,
     AI_TOOL_OPTIMIZE_EXPERIMENT,
     AI_TOOL_ANALYZE_TRACES,
+    AI_TOOL_BASELINE_SCORE,
+    AI_TOOL_RECOMMEND_EXPERIMENTS,
+    AI_TOOL_DETECT_PRIORITY_INVERSION,
+    AI_TOOL_FIND_RELATED_FINDINGS,
+    AI_TOOL_COMPARE_TASKS,
   ].includes(String(name || ''))
 }
 
 export function isExportTool(name) {
-  return String(name || '') === AI_TOOL_EXPORT_REPORT
+  return String(name || '') === AI_TOOL_EXPORT_REPORT || String(name || '') === AI_TOOL_EXPORT_INVESTIGATION
 }
 
 export function toolMutatesGui(name) {
@@ -2270,6 +2661,34 @@ export function correlateTaskEvents(trace, task, {
   return { ok, message, data }
 }
 
+export function findCriticalPathTask(trace, task, {
+  timestamp = null,
+  window = 2000,
+  annotations = [],
+} = {}) {
+  if (!trace) return { ok: false, message: 'No trace loaded' }
+  const taskName = String(task || '').trim()
+  if (!taskName) return { ok: false, message: 'task is required' }
+  const corr = correlateTaskEvents(trace, taskName, {
+    aroundTime: timestamp,
+    window: Number(window) || 2000,
+    annotations,
+  })
+  if (!corr.ok) return corr
+  const data = corr.data && typeof corr.data === 'object' ? corr.data : {}
+  const ctx = buildCriticalPath(data.events || [], {
+    task: taskName,
+    timestamp,
+  })
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const out = { ...ctx }
+  delete out.ok
+  delete out.message
+  out.correlation = data.correlation
+  return { ok, message, data: out }
+}
+
 export function detectAnomaliesFinding(findings, { limit = 10 } = {}) {
   const ctx = detectAnomalies(findings, { limit })
   const ok = !!ctx.ok
@@ -2451,4 +2870,155 @@ export function analyzeTracesSnapshots(snapshots) {
   delete data.ok
   delete data.message
   return { ok, message, data }
+}
+
+export function baselineScoreFinding(snapshot, { profile = null, task = '' } = {}) {
+  let scoped = snapshot
+  const taskS = String(task || '').trim()
+  if (taskS) {
+    const tasks = (snapshot && typeof snapshot === 'object' && snapshot.tasks
+      && typeof snapshot.tasks === 'object') ? snapshot.tasks : {}
+    scoped = { tasks: Object.fromEntries(Object.entries(tasks).filter(([k]) => k === taskS)) }
+  }
+  const ctx = scoreAgainstBaseline(profile, scoped)
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const data = { ...ctx }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+export function recommendExperimentsFinding(findings, { findingId = '', task = '', limit = 5 } = {}) {
+  const ctx = recommendValidationExperiments(findings, { findingId, task, limit })
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const data = { ...ctx }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+function mediumLabelsFromEpisode(ep) {
+  const list = ep?.medium_tasks || ep?.mediumTasks || []
+  return list.map((item) => {
+    if (typeof item === 'string') return item
+    if (item && typeof item === 'object') return String(item.label || item.mk || '')
+    return ''
+  }).filter(Boolean)
+}
+
+function gatherPriorityEpisodes(trace, { task = '', lo = null, hi = null } = {}) {
+  const out = []
+  if (!trace) return out
+  const taskS = String(task || '').trim()
+  let mkFilter = null
+  if (taskS) {
+    const resolved = resolveTaskKey(taskS, taskCandidatesFromTrace(trace))
+    if (!resolved) return out
+    mkFilter = taskMergeKey(resolved)
+  }
+  const allEps = trace.priorityEpisodes || []
+  const reprMap = trace.taskRepr
+  for (const ep of allEps) {
+    const mk = ep?.mk
+    if (mkFilter != null && mk !== mkFilter) continue
+    const start = ep.startNs ?? ep.start_ns
+    const stop = ep.stopNs ?? ep.stop_ns
+    if (!overlapsRange(start, stop, lo, hi)) continue
+    let label = ''
+    if (reprMap && typeof reprMap.get === 'function') label = String(reprMap.get(mk) || '')
+    else if (reprMap && typeof reprMap === 'object') label = String(reprMap[mk] || '')
+    if (!label) label = String(mk || '')
+    out.push({
+      task: label,
+      start,
+      stop,
+      duration: (start == null || stop == null) ? null : Number(stop) - Number(start),
+      base_pri: ep.basePri ?? ep.base_pri,
+      peak_pri: ep.peakPri ?? ep.peak_pri,
+      inherited: Boolean(ep.inherited),
+      inversion_suspect: Boolean(ep.inversionSuspect ?? ep.inversion_suspect),
+      medium_tasks: mediumLabelsFromEpisode(ep),
+      pattern: ep.pattern || '',
+    })
+  }
+  return out
+}
+
+export function detectPriorityInversionHost(trace, findings = null, {
+  task = '', window = null, lo = null, hi = null,
+} = {}) {
+  if (!trace) return { ok: false, message: 'No trace loaded' }
+  const episodes = gatherPriorityEpisodes(trace, { task, lo, hi })
+  const ctx = detectPriorityInversion(episodes, findings, { task, window })
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const data = { ...ctx }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+export function findRelatedFindingsFinding(findings, {
+  findingId = '', task = '', metric = '', window = null, limit = 10,
+} = {}) {
+  const ctx = findRelatedFindings(findings, { findingId, task, metric, window, limit })
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const data = { ...ctx }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+const COMPARE_TASKS_METRICS = [
+  AI_RAW_METRIC_EXECUTION, AI_RAW_METRIC_BLOCKING, AI_RAW_METRIC_MIGRATIONS, AI_RAW_METRIC_PRIORITY,
+]
+
+export function compareTasksHost(trace, taskA, taskB, {
+  metrics = null, lo = null, hi = null, findingsText = '',
+} = {}) {
+  if (!trace) return { ok: false, message: 'No trace loaded' }
+  const aTask = String(taskA || '').trim()
+  const bTask = String(taskB || '').trim()
+  if (!aTask || !bTask) return { ok: false, message: 'task_a and task_b must be non-empty strings' }
+  let wanted = (metrics || []).map(m => normalizeRawMetric(m)).filter(m => COMPARE_TASKS_METRICS.includes(m))
+  if (!wanted.length) wanted = [...COMPARE_TASKS_METRICS]
+  let labelA = aTask
+  let labelB = bTask
+  const dataA = {}
+  const dataB = {}
+  for (const metric of wanted) {
+    const resA = queryRawMetric(trace, aTask, metric, { lo, hi, findingsText })
+    if (resA.ok) {
+      const d = (resA.data && typeof resA.data === 'object') ? resA.data : {}
+      dataA[metric] = d
+      labelA = String(d.task || labelA)
+    }
+    const resB = queryRawMetric(trace, bTask, metric, { lo, hi, findingsText })
+    if (resB.ok) {
+      const d = (resB.data && typeof resB.data === 'object') ? resB.data : {}
+      dataB[metric] = d
+      labelB = String(d.task || labelB)
+    }
+  }
+  const ctx = compareTasksMetrics(labelA, labelB, dataA, dataB, { metrics: wanted })
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const data = { ...ctx }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+export function exportInvestigationPackage({
+  traceName = '', scope = '', finding = null, plan = null, toolsRun = null,
+  queries = null, evidence = null, conclusion = '', confidence = '',
+  alternatives = null, evidenceTimes = null, timestamp = '',
+} = {}) {
+  return buildInvestigationPackage({
+    traceName, scope, finding, plan, toolsRun, queries, evidence,
+    conclusion, confidence, alternatives, evidenceTimes, timestamp,
+  })
 }

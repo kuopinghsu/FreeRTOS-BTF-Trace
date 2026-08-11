@@ -128,12 +128,16 @@
             @clear-selection="clearCpuLoadSelection"
             @add-bookmark="onAddBookmark"
             @add-annotation="onAddAnnotation"
+            @clear-bookmarks="onClearBookmarks"
+            @clear-annotations="onClearAnnotations"
             @mark-move="onMoveMark"
             @copy-screenshot="onCopyScreenshot"
             @export-svg="onExportSvg"
             @before-cursor-change="pushUndoSnapshot"
             @before-mark-change="pushUndoSnapshot"
             @label-width-change="onLabelWidthChange"
+            @explain-region="queryExplainRegionWithAi"
+            @ask-ai-event="queryAskAiEvent"
           />
         </div>
 
@@ -925,12 +929,17 @@ import { taskDisplayName, taskMergeKey, setColorblindMode } from './utils/colors
 import {
   AI_TOOL_ADD_ANNOTATION,
   AI_TOOL_ANALYZE_TRACES,
+  AI_TOOL_BASELINE_SCORE,
   AI_TOOL_BOOKMARK_FINDING,
   AI_TOOL_CHECK_BUDGET,
   AI_TOOL_CLEAR_MARKS,
   AI_TOOL_COMPARE_PERFORMANCE,
+  AI_TOOL_COMPARE_TASKS,
   AI_TOOL_CORRELATE_EVENTS,
+  AI_TOOL_DETECT_PRIORITY_INVERSION,
+  AI_TOOL_FIND_CRITICAL_PATH,
   AI_TOOL_DETECT_ANOMALIES,
+  AI_TOOL_FIND_RELATED_FINDINGS,
   AI_TOOL_GENERATE_REPORT,
   AI_TOOL_HIGHLIGHT_TASK,
   AI_TOOL_INVESTIGATE,
@@ -939,6 +948,7 @@ import {
   AI_TOOL_OPTIMIZE,
   AI_TOOL_OPTIMIZE_EXPERIMENT,
   AI_TOOL_QUERY_RAW_METRIC,
+  AI_TOOL_RECOMMEND_EXPERIMENTS,
   AI_TOOL_REGRESSION_EXPLAIN,
   AI_TOOL_RESET_VIEW,
   AI_TOOL_SEARCH_TIMELINE,
@@ -948,10 +958,16 @@ import {
   AI_TOOL_WHAT_IF,
   AI_TOOL_ZOOM_TO_RANGE,
   analyzeTracesSnapshots,
+  baselineScoreFinding,
+  budgetTaskRowsFromFindings,
   checkBudgetFinding,
   comparePerformanceTabs,
+  compareTasksHost,
   correlateTaskEvents,
   detectAnomaliesFinding,
+  detectPriorityInversionHost,
+  findCriticalPathTask,
+  findRelatedFindingsFinding,
   explainRegressionFromCompare,
   formatBookmarkLabel,
   generateReportFinding,
@@ -961,6 +977,7 @@ import {
   optimizeExperimentFinding,
   optimizeFinding,
   queryRawMetric,
+  recommendExperimentsFinding,
   resolveCoreKey,
   resolveTaskKey,
   searchTimelineHits,
@@ -968,7 +985,7 @@ import {
   validateToolCall,
   whatIfEstimate,
 } from './utils/aiTools.js'
-import { detectAnomalies, parseWhatIfChange, snapshotFromSummary } from './utils/aiInvestigation.js'
+import { detectAnomalies, parseWhatIfChange, snapshotFromSummary, updateBaselineProfile } from './utils/aiInvestigation.js'
 import { filterBtfTextToRange, reconstructBtfSlice } from './utils/btfSlice.js'
 import {
   DARK_MODE,
@@ -984,6 +1001,7 @@ import {
   VIEW_MODE,
 } from './config.js'
 import { loadSettings, saveSettings, applySettingsToRuntime, resizeTabCursors, normalizeSettings,
+  loadAiBaselineProfile, saveAiBaselineProfile,
 } from './utils/settingsStore.js'
 import { setTimelineLayout } from './utils/timelineLayout.js'
 import { traceIsMultiCore } from './utils/migrationAnalysis.js'
@@ -1007,7 +1025,12 @@ import {
 import { downloadPerfetto } from './utils/perfettoExport.js'
 import { normalizeStatsPins, normalizeStatsSectionOrder } from './utils/statsPins.js'
 import { computeFindHits, stepFindHitIndex } from './utils/findAnalysis.js'
-import { AI_TEMPLATE_QUESTIONS, aiJumpAnnotationNote } from './utils/ollamaClient.js'
+import {
+  AI_TEMPLATE_QUESTIONS,
+  aiJumpAnnotationNote,
+  appendExplainRegionBounds,
+  composeAskEventPrompt,
+} from './utils/ollamaClient.js'
 import { traceQualitySummary } from './utils/traceQuality.js'
 import { isBtfOpenName, loadBtfEntriesFromFile } from './utils/btfLoad.js'
 import exampleBtfB64   from 'virtual:example-btf'
@@ -2025,7 +2048,7 @@ function focusFindPanel() {
   nextTick(() => findPanelRef.value?.focusInput())
 }
 
-async function focusAiAndAsk(templateId) {
+async function focusAiAndAsk(templateIdOrPayload) {
   if (appSettings.aiEnabled === false) {
     openSettingsDialog('ai')
     return
@@ -2035,15 +2058,46 @@ async function focusAiAndAsk(templateId) {
     saveSettings(appSettings)
   }
   rightPanelTab.value = 'ai'
-  const prompt = AI_TEMPLATE_QUESTIONS.find(t => t.id === templateId)?.prompt
+  let templateId = templateIdOrPayload
+  let findingId = ''
+  let prompt = null
+  if (templateIdOrPayload && typeof templateIdOrPayload === 'object') {
+    templateId = templateIdOrPayload.template || 'findings'
+    findingId = templateIdOrPayload.findingId || ''
+    prompt = templateIdOrPayload.prompt || null
+  }
+  templateId = templateId || 'findings'
+  if (!prompt) {
+    prompt = AI_TEMPLATE_QUESTIONS.find(t => t.id === templateId)?.prompt
+    if (findingId && prompt) {
+      prompt = `${prompt}\n\nfinding_id=${findingId}`
+    }
+  }
+  if (templateId === 'explain_region' && prompt) {
+    prompt = appendExplainRegionBounds(prompt, cursors.value)
+  }
   await nextTick()
   if (!aiPanelRef.value) await nextTick()
-  if (prompt) await aiPanelRef.value?.ask?.(prompt)
+  if (prompt) {
+    if (aiPanelRef.value?.askTemplate) {
+      await aiPanelRef.value.askTemplate(templateId, prompt)
+    } else {
+      await aiPanelRef.value?.ask?.(prompt)
+    }
+  }
 }
 
-async function queryAnalysisWithAi(templateId = 'findings') {
+async function queryAnalysisWithAi(payload = 'findings') {
   analysisOpen.value = false
-  await focusAiAndAsk(templateId || 'findings')
+  await focusAiAndAsk(payload)
+}
+
+async function queryExplainRegionWithAi() {
+  await focusAiAndAsk('explain_region')
+}
+
+async function queryAskAiEvent(event) {
+  await focusAiAndAsk({ template: 'ask_event', prompt: composeAskEventPrompt(event) })
 }
 
 async function queryCorridorWithAi() {
@@ -2075,7 +2129,7 @@ async function queryCompareWithAi(payload) {
 function buildAiContext() {
   const tr = trace.value
   if (!tr) {
-    return { findingsText: 'No trace loaded.', scope: '', span: '', cores: '' }
+    return { findingsText: 'No trace loaded.', scope: '', span: '', cores: '', cursors: [] }
   }
   const scopeOn = activeTab.value?.scopeToCursors !== false
   const range = getStatsRange(cursors.value, scopeOn)
@@ -2092,6 +2146,7 @@ function buildAiContext() {
     scope: scopeLabel || 'full trace',
     span,
     cores: tr.coreNames?.length ?? tr.cores?.length ?? 0,
+    cursors: (cursors.value || []).filter(c => c != null),
   }
 }
 
@@ -2391,8 +2446,44 @@ function dispatchAiTool(name, args) {
       annotations: (marks.value || []).filter(m => m.type === 'annotation'),
     })
   }
+  if (name === AI_TOOL_FIND_CRITICAL_PATH) {
+    return findCriticalPathTask(trace.value, args.task || '', {
+      timestamp: args.timestamp ?? null,
+      window: args.window ?? 2000,
+      annotations: (marks.value || []).filter(m => m.type === 'annotation'),
+    })
+  }
   if (name === AI_TOOL_COMPARE_PERFORMANCE) {
     return compareAiPerformance(args.tab_a || '', args.tab_b || '')
+  }
+  if (name === AI_TOOL_DETECT_PRIORITY_INVERSION) {
+    const scopeOn = activeTab.value?.scopeToCursors !== false
+    const range = getStatsRange(cursors.value, scopeOn)
+    return detectPriorityInversionHost(trace.value, analysisFindings.value || [], {
+      task: args.task || '',
+      window: args.window ?? null,
+      lo: range?.lo ?? null,
+      hi: range?.hi ?? null,
+    })
+  }
+  if (name === AI_TOOL_FIND_RELATED_FINDINGS) {
+    return findRelatedFindingsFinding(analysisFindings.value || [], {
+      findingId: args.finding_id || '',
+      task: args.task || '',
+      metric: args.metric || '',
+      window: args.window ?? null,
+      limit: args.limit ?? 10,
+    })
+  }
+  if (name === AI_TOOL_COMPARE_TASKS) {
+    const scopeOn = activeTab.value?.scopeToCursors !== false
+    const range = getStatsRange(cursors.value, scopeOn)
+    return compareTasksHost(trace.value, args.task_a || '', args.task_b || '', {
+      metrics: args.metrics || null,
+      lo: range?.lo ?? null,
+      hi: range?.hi ?? null,
+      findingsText: buildAiContext().findingsText || '',
+    })
   }
   if (name === AI_TOOL_GENERATE_REPORT) {
     return generateReportFinding(analysisFindings.value || [], {
@@ -2484,7 +2575,85 @@ function dispatchAiTool(name, args) {
   if (name === AI_TOOL_ANALYZE_TRACES) {
     return analyzeAiTraces()
   }
+  if (name === AI_TOOL_BASELINE_SCORE) {
+    const task = String(args.task || '').trim()
+    let profile = args.baseline
+    if (!profile || typeof profile !== 'object') profile = loadAiBaselineProfile()
+    let snapshot = args.snapshot
+    if (!snapshot || typeof snapshot !== 'object') {
+      const scopeOn = activeTab.value?.scopeToCursors !== false
+      const range = getStatsRange(cursors.value, scopeOn)
+      snapshot = buildAiTaskMetricsSnapshot(trace.value, task, {
+        lo: range?.lo ?? null,
+        hi: range?.hi ?? null,
+        findingsText: buildAiContext().findingsText || '',
+      })
+    }
+    return baselineScoreFinding(snapshot, { profile, task })
+  }
+  if (name === AI_TOOL_RECOMMEND_EXPERIMENTS) {
+    return recommendExperimentsFinding(analysisFindings.value || [], {
+      findingId: args.finding_id || '',
+      task: args.task || '',
+      limit: args.limit ?? 5,
+    })
+  }
   throw new Error(`unknown tool ${name}`)
+}
+
+/** Lightweight {task: {wcet_us, blocking_us, migrations}} snapshot for
+ * baseline_score, mirroring mainwindow.py _ai_current_task_metrics_snapshot. */
+function buildAiTaskMetricsSnapshot(traceObj, taskFilter = '', { lo = null, hi = null, findingsText = '' } = {}) {
+  const tasks = {}
+  if (!traceObj) return { tasks }
+  const taskF = String(taskFilter || '').trim()
+  let taskNames = []
+  if (taskF) {
+    taskNames = [taskF]
+  } else {
+    const seen = new Set()
+    for (const row of budgetTaskRowsFromFindings(analysisFindings.value || [])) {
+      const t = String(row.task || '').trim()
+      if (t && !seen.has(t)) {
+        seen.add(t)
+        taskNames.push(t)
+      }
+    }
+  }
+  for (const t of taskNames.slice(0, 12)) {
+    const metrics = {}
+    let label = t
+    const execRes = queryRawMetric(traceObj, t, 'execution', { lo, hi, findingsText })
+    if (execRes.ok) {
+      const d = execRes.data || {}
+      if (d.max != null) metrics.wcet_us = Number(d.max) / 1000
+      label = String(d.task || label)
+    }
+    const blockRes = queryRawMetric(traceObj, t, 'blocking', { lo, hi, findingsText })
+    if (blockRes.ok) {
+      const d = blockRes.data || {}
+      if (d.max != null) metrics.blocking_us = Number(d.max) / 1000
+    }
+    const migRes = queryRawMetric(traceObj, t, 'migrations', { lo, hi, findingsText })
+    if (migRes.ok) {
+      const d = migRes.data || {}
+      if (d.count != null) metrics.migrations = Number(d.count)
+    }
+    if (Object.keys(metrics).length) tasks[label] = metrics
+  }
+  return { tasks }
+}
+
+/** Merge *traceObj*'s current per-task metrics into the stored baseline. */
+function updateAiBaselineFromTrace(traceObj) {
+  try {
+    const snapshot = buildAiTaskMetricsSnapshot(traceObj)
+    if (!Object.keys(snapshot.tasks || {}).length) return
+    const profile = updateBaselineProfile(loadAiBaselineProfile(), snapshot)
+    saveAiBaselineProfile(profile)
+  } catch {
+    /* best-effort; never blocks the calling tool */
+  }
 }
 
 function resolveAiTabRef(ref, defaultIdx) {
@@ -2535,6 +2704,8 @@ function compareAiPerformance(tabARef, tabBRef) {
   const nameB = tabB.name || `Tab ${tabB.id}`
   const snapA = traceSummarySnapshot(tabA.trace, ra.lo, ra.hi) || {}
   const snapB = traceSummarySnapshot(tabB.trace, rb.lo, rb.hi) || {}
+  updateAiBaselineFromTrace(tabA.trace)
+  updateAiBaselineFromTrace(tabB.trace)
   return comparePerformanceTabs(snapA, snapB, { labelA: nameA, labelB: nameB })
 }
 
@@ -2552,6 +2723,7 @@ function analyzeAiTraces() {
   const snaps = loaded.map((tab) => {
     const range = cursorRangeForCursors(tab.cursors)
     const name = tab.name || `Tab ${tab.id}`
+    updateAiBaselineFromTrace(tab.trace)
     return snapshotFromSummary(
       traceSummarySnapshot(tab.trace, range.lo, range.hi) || {},
       { name },

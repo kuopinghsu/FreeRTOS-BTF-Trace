@@ -31,19 +31,26 @@ from btf_viewer_pkg.ai_mermaid import mermaid_zoom_token  # noqa: E402
 from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_TOOL_ADD_ANNOTATION,
     AI_TOOL_ANALYZE_TRACES,
+    AI_TOOL_BASELINE_SCORE,
     AI_TOOL_BOOKMARK_FINDING,
     AI_TOOL_CHECK_BUDGET,
     AI_TOOL_CLEAR_MARKS,
     AI_TOOL_COMPARE_PERFORMANCE,
+    AI_TOOL_COMPARE_TASKS,
     AI_TOOL_CORRELATE_EVENTS,
     AI_TOOL_DETECT_ANOMALIES,
+    AI_TOOL_DETECT_PRIORITY_INVERSION,
+    AI_TOOL_EXPORT_INVESTIGATION,
     AI_TOOL_EXPORT_REPORT,
+    AI_TOOL_FIND_CRITICAL_PATH,
+    AI_TOOL_FIND_RELATED_FINDINGS,
     AI_TOOL_GENERATE_REPORT,
     AI_TOOL_INVESTIGATE,
     AI_TOOL_INVESTIGATION_REPLAY,
     AI_TOOL_OPTIMIZE,
     AI_TOOL_OPTIMIZE_EXPERIMENT,
     AI_TOOL_QUERY_RAW_METRIC,
+    AI_TOOL_RECOMMEND_EXPERIMENTS,
     AI_TOOL_REGRESSION_EXPLAIN,
     AI_TOOL_RESET_VIEW,
     AI_TOOL_SEARCH_TIMELINE,
@@ -319,6 +326,8 @@ class AiPanelUiTests(unittest.TestCase):
                  "arguments": {"limit": 5}},
                 {"id": "c15", "name": AI_TOOL_CORRELATE_EVENTS,
                  "arguments": {"task": "CS[28]"}},
+                {"id": "c15b", "name": AI_TOOL_FIND_CRITICAL_PATH,
+                 "arguments": {"task": "CS[28]"}},
                 {"id": "c16", "name": AI_TOOL_COMPARE_PERFORMANCE,
                  "arguments": {"tab_a": "0", "tab_b": "1"}},
                 {"id": "c17", "name": AI_TOOL_GENERATE_REPORT,
@@ -339,6 +348,18 @@ class AiPanelUiTests(unittest.TestCase):
                  "arguments": {"task": "CS[28]", "limit": 3}},
                 {"id": "c25", "name": AI_TOOL_ANALYZE_TRACES,
                  "arguments": {}},
+                {"id": "c26", "name": AI_TOOL_BASELINE_SCORE,
+                 "arguments": {"task": "CS[28]"}},
+                {"id": "c27", "name": AI_TOOL_RECOMMEND_EXPERIMENTS,
+                 "arguments": {"finding_id": "x", "limit": 3}},
+                {"id": "c27b", "name": AI_TOOL_EXPORT_INVESTIGATION,
+                 "arguments": {"finding_id": "x"}},
+                {"id": "c28", "name": AI_TOOL_DETECT_PRIORITY_INVERSION,
+                 "arguments": {"task": "Low[266]"}},
+                {"id": "c29", "name": AI_TOOL_FIND_RELATED_FINDINGS,
+                 "arguments": {"finding_id": "x", "limit": 5}},
+                {"id": "c30", "name": AI_TOOL_COMPARE_TASKS,
+                 "arguments": {"task_a": "Low[266]", "task_b": "High[268]"}},
             ],
         }))
         with patch.object(panel, "_continue_with_messages"):
@@ -349,7 +370,10 @@ class AiPanelUiTests(unittest.TestCase):
                 panel._on_jump_link(QUrl("btfaction:apply/b1"))
         self.assertEqual(len(executed), 1)
         names = [c["name"] for c in executed[0]]
-        host_names = [n for n in AI_VIEWER_TOOL_NAMES if n != AI_TOOL_EXPORT_REPORT]
+        host_names = [
+            n for n in AI_VIEWER_TOOL_NAMES
+            if n not in (AI_TOOL_EXPORT_REPORT, AI_TOOL_EXPORT_INVESTIGATION)
+        ]
         self.assertEqual(names, host_names)
         by_name = {c["name"]: c["arguments"] for c in executed[0]}
         self.assertEqual(by_name["set_cursors"]["timestamps"], [10.0, 20.0])
@@ -398,6 +422,72 @@ class AiPanelUiTests(unittest.TestCase):
             }))
         self.assertEqual(len(executed), 1)
         self.assertEqual(executed[0][0]["name"], AI_TOOL_QUERY_RAW_METRIC)
+
+    def test_export_report_json_writes_investigation_package(self) -> None:
+        import tempfile
+        from btf_viewer_pkg import ai_assistant as ai_assistant_mod
+
+        panel = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {"findings_text": "findings"},
+            get_settings=lambda: {"enabled": "true"},
+            on_gui_state=lambda: {
+                "findings": "findings", "file": "trace.btf",
+                "span": "1.0s", "cores": 2, "scope": "full trace",
+                "annotations": [],
+            },
+        )
+        panel._append("assistant", "Root cause confirmed. See jump:12345 for evidence.")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "investigation.json")
+            with patch.object(
+                ai_assistant_mod.QFileDialog, "getSaveFileName",
+                return_value=(path, ""),
+            ):
+                res = panel._export_ai_report(AI_TOOL_EXPORT_REPORT, {"format": "json"})
+            self.assertTrue(res.get("ok"))
+            with open(path, encoding="utf-8") as fh:
+                package = json.load(fh)
+        self.assertEqual(package.get("schema"), "btf-investigation-package")
+        self.assertEqual(package.get("trace_name"), "trace.btf")
+        self.assertEqual(package.get("scope"), "full trace")
+        self.assertIn(12345.0, package.get("evidence_times") or [])
+        self.assertIn("Root cause confirmed", package.get("conclusion") or "")
+
+    def test_export_investigation_tool_uses_model_args(self) -> None:
+        import tempfile
+        from btf_viewer_pkg import ai_assistant as ai_assistant_mod
+
+        panel = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {"findings_text": "findings"},
+            get_settings=lambda: {"enabled": "true"},
+            on_gui_state=lambda: {
+                "findings": "findings", "file": "trace.btf",
+                "span": "1.0s", "cores": 2, "scope": "full trace",
+                "annotations": [],
+            },
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "investigation.json")
+            with patch.object(
+                ai_assistant_mod.QFileDialog, "getSaveFileName",
+                return_value=(path, ""),
+            ):
+                res = panel._export_ai_report(AI_TOOL_EXPORT_INVESTIGATION, {
+                    "finding_id": "thrash_cs28",
+                    "conclusion": "Confirmed: core thrashing on CS[28]",
+                    "tools_run": ["investigate", "correlate_events"],
+                    "evidence_times": [100.0, 200.0],
+                })
+            self.assertTrue(res.get("ok"))
+            with open(path, encoding="utf-8") as fh:
+                package = json.load(fh)
+        self.assertEqual(package.get("schema"), "btf-investigation-package")
+        self.assertEqual((package.get("finding") or {}).get("id"), "thrash_cs28")
+        self.assertEqual(package.get("tools_run"), ["investigate", "correlate_events"])
+        self.assertEqual(package.get("evidence_times"), [100.0, 200.0])
+        self.assertIn("core thrashing", package.get("conclusion") or "")
 
     def test_qtextline_cursor_x_accepts_pyside_tuple(self) -> None:
         class _Line:

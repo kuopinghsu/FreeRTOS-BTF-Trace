@@ -121,7 +121,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QBrush, QColor, QCursor, QDesktopServices, QDrag, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage, QKeySequence, QLinearGradient, QPainter,
-    QPainterPath, QPainterPathStroker, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTransform, QWheelEvent,
+    QPainterPath, QPainterPathStroker, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTextOption, QTransform, QWheelEvent,
 )
 from PySide6.QtSvg import QSvgGenerator, QSvgRenderer
 from PySide6.QtWidgets import (
@@ -13438,6 +13438,8 @@ class TimelineView(QGraphicsView):
     mark_dragging        = Signal(str, int, int)  # kind, id, new_ns - live during drag
     bookmark_requested          = Signal(int)   # ns at right-click position
     annotation_requested        = Signal(int)   # ns at right-click position
+    explain_region_requested    = Signal()      # explain cursor region with AI
+    ask_ai_event_requested       = Signal(object)  # {task, core, start, stop, ns}
     clear_bookmarks_requested   = Signal()      # clear all bookmarks
     clear_annotations_requested = Signal()      # clear all annotations
     pre_change                  = Signal()      # emitted before any cursor/mark mutation
@@ -15750,6 +15752,17 @@ class TimelineView(QGraphicsView):
                 lambda _t=_seg_task, _c=hit_seg.core: self._scene.set_highlighted_task(
                     _task_merge_key(_t), locked=True, core_name=_c, ref_ns=hit_seg.start)
             )
+            menu.addAction(
+                _svg_icon("M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4.414l-2.707 2.707A1 1 0 0 1 0 14.586V2zm2-1a1 1 0 0 0-1 1v10.586L3.293 10.5H14a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H2z", _icon_color),
+                "Ask AI about this event",
+                lambda _t=_seg_task, _c=hit_seg.core, _s=hit_seg, _ns=ns: self.ask_ai_event_requested.emit({
+                    "task": _task_display_name(_t),
+                    "core": _c,
+                    "start": _s.start,
+                    "stop": _s.end,
+                    "ns": _ns,
+                })
+            )
             menu.addSeparator()
 
         # Place cursor
@@ -15772,6 +15785,12 @@ class TimelineView(QGraphicsView):
                 "Clear all cursors",
                 lambda: (self.pre_change.emit(), self._scene.clear_cursors(),
                          self.cursors_changed.emit([]))
+            )
+        if len(self._scene.cursor_times()) >= 2:
+            menu.addAction(
+                _svg_icon("M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4.414l-2.707 2.707A1 1 0 0 1 0 14.586V2zm2-1a1 1 0 0 0-1 1v10.586L3.293 10.5H14a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H2z", _icon_color),
+                "Explain this region with AI",
+                lambda: self.explain_region_requested.emit()
             )
         if self._scene._trace is not None:
             menu.addSeparator()
@@ -16828,6 +16847,7 @@ _TOOL_STEP_MAP: Dict[str, Tuple[str, ...]] = {
     "query_raw_metric": ("metrics",),
     "search_timeline": ("metrics",),
     "correlate_events": ("metrics", "related"),
+    "find_critical_path": ("metrics", "validate"),
     "compare_performance": ("metrics", "validate"),
     "trigger_compare": ("metrics", "related"),
     "set_cursors": ("narrow",),
@@ -16848,7 +16868,8 @@ _TOOL_STEP_MAP: Dict[str, Tuple[str, ...]] = {
 }
 
 _AGENT_TEMPLATE_IDS = frozenset({
-    "investigate", "root_cause", "what_if", "optimize", "diagnostic_report",
+    "investigate", "root_cause", "verify", "what_if", "optimize",
+    "diagnostic_report", "auto_investigate",
 })
 
 _FINDING_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
@@ -17068,6 +17089,7 @@ def build_investigate_context(
             "findings": [],
             "focus": None,
             "hypotheses": [],
+            "alternatives": [],
             "suggested_tools": [],
             "plan": default_investigation_plan(),
             "evidence_chain": format_findings_evidence_chain([]),
@@ -17077,6 +17099,7 @@ def build_investigate_context(
     text = str(focus.get("text") or "")
     sev = str(focus.get("severity") or "info")
     hypotheses = _hypotheses_for_finding(title, text)
+    alternatives = _alternatives_from_hypotheses(hypotheses)
     suggested = _suggested_tools_for_finding(title, text, depth)
     related = [
         {"id": f.get("id"), "severity": f.get("severity"), "title": f.get("title")}
@@ -17098,6 +17121,7 @@ def build_investigate_context(
         },
         "related_findings": related,
         "hypotheses": hypotheses[: max(1, depth + 1)],
+        "alternatives": alternatives[: max(1, depth + 1)],
         "suggested_tools": suggested,
         "depth": depth,
         "evidence_chain": format_findings_evidence_chain([focus]),
@@ -17105,6 +17129,13 @@ def build_investigate_context(
         "ranked_anomalies": (anomalies.get("anomalies") or [])[: max(3, depth)],
         "plan": plan,
     }
+    score_data = compute_evidence_score(
+        graph["finding"].get("evidence"),
+        alternatives=graph.get("alternatives"),
+        evidence_chain=graph.get("evidence_chain"),
+    )
+    graph["evidence_score"] = score_data["score"]
+    graph["evidence_score_breakdown"] = score_data["breakdown"]
     return {
         "ok": True,
         "message": (
@@ -17113,6 +17144,23 @@ def build_investigate_context(
         ),
         **graph,
     }
+
+
+def _alternatives_from_hypotheses(
+    hypotheses: Sequence[dict],
+) -> List[Dict[str, str]]:
+    """Ranked alternative explanations derived from heuristic hypotheses."""
+    alts: List[Dict[str, str]] = []
+    for i, h in enumerate(hypotheses or []):
+        if not isinstance(h, dict):
+            continue
+        hyp = str(h.get("hypothesis") or "").strip()
+        if not hyp:
+            continue
+        why = str(h.get("why") or "").strip()
+        status = "plausible" if i == 0 else "untested"
+        alts.append({"hypothesis": hyp, "status": status, "why": why})
+    return alts
 
 
 def _hypotheses_for_finding(title: str, text: str) -> List[Dict[str, str]]:
@@ -17464,6 +17512,136 @@ def detect_anomalies(
     }
 
 
+_MERMAID_LABEL_STRIP_RE = re.compile(r'["\[\]{}()|]')
+
+
+def _mermaid_safe_label(text: Any, limit: int = 48) -> str:
+    """Strip mermaid delimiter characters so a label is safe as a node body."""
+    cleaned = _MERMAID_LABEL_STRIP_RE.sub("", str(text or "").replace("\n", " ")).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return (cleaned or "Step")[:limit]
+
+
+def investigation_tree_mermaid(
+    chain: Optional[Sequence[Dict[str, Any]]] = None,
+    hypotheses: Optional[Sequence[Dict[str, Any]]] = None,
+) -> str:
+    """Render a root-cause chain + hypotheses as a mermaid ``graph TD`` snippet.
+
+    Rectangles are the ``root_cause_chain`` steps (in order); rounded nodes
+    branch off the first (finding) step for each alternative hypothesis.
+    Rendered the same way as any other diagram (``mermaid_block_html`` /
+    ``formatAiMessageHtml``). Kept in sync with
+    ``web/src/utils/aiInvestigation.js`` ``investigationTreeMermaid``.
+    """
+    chain_items = [c for c in (chain or []) if isinstance(c, dict)]
+    hyp_items = [h for h in (hypotheses or []) if isinstance(h, dict)]
+    if not chain_items and not hyp_items:
+        return ""
+    lines = ["graph TD"]
+    node_ids: List[str] = []
+    for i, step in enumerate(chain_items):
+        nid = f"S{i}"
+        label = _mermaid_safe_label(step.get("label") or f"Step {i + 1}")
+        lines.append(f"{nid}[{label}]")
+        node_ids.append(nid)
+    for i in range(1, len(node_ids)):
+        lines.append(f"{node_ids[i - 1]} --> {node_ids[i]}")
+    anchor = node_ids[0] if node_ids else None
+    for j, h in enumerate(hyp_items):
+        nid = f"H{j}"
+        label = _mermaid_safe_label(h.get("hypothesis") or f"Hypothesis {j + 1}")
+        lines.append(f"{nid}({label})")
+        if anchor:
+            lines.append(f"{anchor} --> {nid}")
+    return "\n".join(lines)
+
+
+def evidence_score_bar(score: Any, width: int = 10) -> str:
+    """Text meter for the AI Evidence Score, e.g. ``████████░░ 82%``."""
+    try:
+        pct = max(0, min(100, int(round(float(score)))))
+    except (TypeError, ValueError):
+        pct = 0
+    filled = max(0, min(width, int(round(width * pct / 100.0))))
+    return "█" * filled + "░" * (width - filled) + f" {pct}%"
+
+
+def compute_evidence_score(
+    evidence: Optional[Sequence[Dict[str, Any]]] = None,
+    *,
+    alternatives: Optional[Sequence[Dict[str, Any]]] = None,
+    evidence_chain: str = "",
+    checks: Optional[Sequence[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Heuristic 0-100 "AI Evidence Score" for an investigation conclusion.
+
+    **Not a statistical confidence interval** — a coarse heuristic to help
+    triage how much concrete evidence backs a conclusion (label it
+    "AI Evidence Score — heuristic" in the UI). Kept in sync with
+    ``web/src/utils/aiInvestigation.js`` ``computeEvidenceScore``.
+
+    Factors:
+
+    - +40 at least one evidence item carries a concrete ``time`` (jump:TIME)
+    - +25 timeline correlation — evidence spans ≥2 kinds (``"kind: detail"``
+      labels, as produced by ``correlate_events`` / ``find_critical_path``),
+      or an evidence-chain narrative is present
+    - +15 metric correlation — a verification checklist backs the
+      conclusion (``compare_performance`` / ``check_budget`` style checks)
+    - −5 per untested alternative hypothesis (max −15)
+    - −10 no evidence at all (neither items nor a chain)
+    """
+    ev = [e for e in (evidence or []) if isinstance(e, dict)]
+    alts = [a for a in (alternatives or []) if isinstance(a, dict)]
+    chks = [c for c in (checks or []) if isinstance(c, dict)]
+    chain_text = str(evidence_chain or "").strip()
+    breakdown: List[Dict[str, Any]] = []
+    score = 0
+
+    has_times = any(e.get("time") is not None for e in ev)
+    if has_times:
+        score += 40
+        breakdown.append({"label": "Direct evidence times (jump:TIME)", "delta": 40})
+
+    kinds = set()
+    for e in ev:
+        label = str(e.get("label") or "")
+        if ":" in label:
+            kind = label.split(":", 1)[0].strip().lower()
+            if kind:
+                kinds.add(kind)
+    has_timeline_corr = len(kinds) >= 2 or bool(chain_text)
+    if has_timeline_corr:
+        score += 25
+        breakdown.append({"label": "Timeline correlation", "delta": 25})
+
+    if chks:
+        score += 15
+        breakdown.append({"label": "Metric correlation", "delta": 15})
+
+    untested = [a for a in alts if str(a.get("status") or "").lower() == "untested"]
+    if untested:
+        penalty = min(15, 5 * len(untested))
+        score -= penalty
+        breakdown.append({
+            "label": f"{len(untested)} alternative(s) untested",
+            "delta": -penalty,
+        })
+
+    if not ev and not chain_text:
+        score -= 10
+        breakdown.append({"label": "Missing direct evidence", "delta": -10})
+
+    score = max(0, min(100, score))
+    return {
+        "score": score,
+        "label": "AI Evidence Score — heuristic",
+        "bar": evidence_score_bar(score),
+        "breakdown": breakdown,
+    }
+
+
 def build_root_cause_chain(finding: Optional[dict]) -> List[Dict[str, Any]]:
     """Heuristic Finding → cause steps for the Root Cause Chain UI/tool data."""
     if not finding:
@@ -17576,6 +17754,279 @@ def build_correlation_timeline(
     }
 
 
+_CRITICAL_PATH_KIND_ORDER: Dict[str, int] = {
+    "blocking": 0,
+    "sync": 1,
+    "priority": 2,
+    "execution": 3,
+    "migration": 4,
+    "search": 5,
+}
+
+
+def build_critical_path(
+    events: Sequence[dict],
+    *,
+    task: str = "",
+    timestamp: Optional[float] = None,
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """Turn correlate events into a causal critical-path step list."""
+    limit = max(1, min(40, int(limit or 20)))
+    rows: List[dict] = []
+    for ev in events or []:
+        if not isinstance(ev, dict):
+            continue
+        try:
+            t = float(ev.get("time"))
+        except (TypeError, ValueError):
+            continue
+        rows.append({
+            "time": t,
+            "kind": str(ev.get("kind") or "event"),
+            "detail": str(ev.get("detail") or ev.get("note") or ""),
+            "task": str(ev.get("task") or task or ""),
+        })
+    if not rows:
+        return {
+            "ok": False,
+            "message": "No events in scope for critical path",
+            "task": task,
+            "path": [],
+            "confidence": "Low",
+            "mermaid": "",
+            "graph_nodes": [],
+            "blocking_steps": [],
+            "preemption_steps": [],
+        }
+    if timestamp is not None:
+        ts = float(timestamp)
+        rows.sort(
+            key=lambda r: (
+                abs(r["time"] - ts),
+                _CRITICAL_PATH_KIND_ORDER.get(r["kind"], 9),
+                r["time"],
+            ),
+        )
+    else:
+        rows.sort(
+            key=lambda r: (
+                r["time"],
+                _CRITICAL_PATH_KIND_ORDER.get(r["kind"], 9),
+            ),
+        )
+    rows = rows[:limit]
+    kind_labels = {
+        "blocking": "Blocked / off-CPU",
+        "sync": "Sync / mutex",
+        "priority": "Priority inheritance",
+        "execution": "On-CPU execution",
+        "migration": "Core migration",
+        "search": "Timeline match",
+    }
+    path: List[Dict[str, Any]] = []
+    for i, ev in enumerate(rows, start=1):
+        label = kind_labels.get(ev["kind"], ev["kind"])
+        detail = ev["detail"]
+        path.append({
+            "step": i,
+            "time": ev["time"],
+            "detail": f"{label}: {detail}" if detail else label,
+            "kind": ev["kind"],
+        })
+    kinds = {r["kind"] for r in rows}
+    if len(kinds) >= 3 and len(rows) >= 4:
+        confidence = "High"
+    elif len(rows) >= 2:
+        confidence = "Medium"
+    else:
+        confidence = "Low"
+    # Blocking = off-CPU waits; preemption = priority boosts / migrations that
+    # reshuffled who ran (best-effort from this task's own event stream).
+    blocking_steps = [p for p in path if p["kind"] == "blocking"]
+    preemption_steps = [p for p in path if p["kind"] in ("priority", "migration")]
+    graph_nodes = [
+        {"id": f"S{p['step']}", "label": p["detail"], "kind": p["kind"], "time": p["time"]}
+        for p in path
+    ]
+    mermaid = ""
+    if len(graph_nodes) >= 2:
+        lines = ["graph LR"]
+        for node in graph_nodes:
+            safe = str(node["label"]).replace('"', "'")[:80]
+            lines.append(f'  {node["id"]}["{safe}"]')
+        for a, b in zip(graph_nodes, graph_nodes[1:]):
+            lines.append(f'  {a["id"]} --> {b["id"]}')
+        mermaid = "\n".join(lines)
+    return {
+        "ok": True,
+        "message": f"{len(path)} step critical path for {task or 'task'}",
+        "task": task,
+        "timestamp": timestamp,
+        "path": path,
+        "confidence": confidence,
+        "mermaid": mermaid,
+        "graph_nodes": graph_nodes,
+        "blocking_steps": blocking_steps,
+        "preemption_steps": preemption_steps,
+    }
+
+
+def extract_evidence_panel_payload(
+    tool_name: str,
+    result: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Normalize investigation tool results for the Evidence panel UI."""
+    if not isinstance(result, dict) or not result.get("ok"):
+        return None
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    for key in (
+        "finding", "hypotheses", "alternatives", "evidence_chain",
+        "events", "path", "checks", "confidence", "task", "correlation",
+        "root_cause_chain",
+    ):
+        if key not in data and key in result:
+            data[key] = result[key]
+    name = str(tool_name or "")
+    payload: Dict[str, Any] = {}
+
+    if name == "investigate" or data.get("finding") or data.get("hypotheses"):
+        finding = data.get("finding") if isinstance(data.get("finding"), dict) else {}
+        payload["conclusion"] = str(finding.get("title") or data.get("conclusion") or "")
+        payload["subtitle"] = str(finding.get("text") or "")
+        ev_items: List[Dict[str, Any]] = []
+        for ev in finding.get("evidence") or []:
+            if isinstance(ev, dict):
+                ev_items.append({
+                    "label": str(ev.get("label") or ev.get("text") or "evidence"),
+                    "time": ev.get("time"),
+                })
+        if ev_items:
+            payload["evidence"] = ev_items
+        elif data.get("evidence_chain"):
+            payload["evidence_chain"] = str(data.get("evidence_chain") or "")
+        payload["alternatives"] = list(data.get("alternatives") or [])
+        payload["confidence"] = str(data.get("confidence") or "Medium")
+        if data.get("hypotheses"):
+            payload["hypotheses"] = list(data.get("hypotheses") or [])
+        if data.get("root_cause_chain"):
+            payload["root_cause_chain"] = list(data.get("root_cause_chain") or [])
+    elif name == "find_critical_path" or data.get("path"):
+        task = str(data.get("task") or "")
+        payload["conclusion"] = f"Critical path: {task}" if task else "Critical path"
+        payload["evidence"] = [
+            {"label": str(p.get("detail") or ""), "time": p.get("time")}
+            for p in (data.get("path") or [])
+            if isinstance(p, dict)
+        ]
+        payload["confidence"] = str(data.get("confidence") or "Medium")
+    elif name == "correlate_events" or data.get("events"):
+        task = str(data.get("task") or "")
+        payload["conclusion"] = f"Correlated events: {task}" if task else "Correlated events"
+        payload["evidence"] = [
+            {
+                "label": f"{e.get('kind')}: {e.get('detail')}",
+                "time": e.get("time"),
+            }
+            for e in (data.get("events") or [])[:15]
+            if isinstance(e, dict)
+        ]
+        corr = data.get("correlation")
+        payload["confidence"] = (
+            f"Correlation {corr}" if corr is not None else "Medium"
+        )
+    elif name == "compare_performance" or data.get("checks"):
+        primary = data.get("primary")
+        if isinstance(primary, dict):
+            payload["conclusion"] = str(primary.get("label") or "Performance comparison")
+        else:
+            payload["conclusion"] = "Performance comparison"
+        payload["confidence"] = str(data.get("confidence") or "Medium")
+        payload["checks"] = list(data.get("checks") or [])
+
+    if not (
+        payload.get("conclusion")
+        or payload.get("evidence")
+        or payload.get("evidence_chain")
+        or payload.get("alternatives")
+        or payload.get("checks")
+    ):
+        return None
+    score_data = compute_evidence_score(
+        payload.get("evidence"),
+        alternatives=payload.get("alternatives"),
+        evidence_chain=payload.get("evidence_chain"),
+        checks=payload.get("checks"),
+    )
+    payload["evidence_score"] = score_data["score"]
+    payload["evidence_score_breakdown"] = score_data["breakdown"]
+    payload["evidence_score_bar"] = score_data["bar"]
+    return payload
+
+
+_REGRESSION_TYPES: Tuple[str, ...] = (
+    "execution", "scheduling", "synchronization", "migration",
+    "load_balance", "unknown",
+)
+
+_REGRESSION_TYPE_BY_METRIC: Dict[str, str] = {
+    "migrations": "migration",
+    "migrated_tasks": "migration",
+    "load_balance_score": "load_balance",
+    "load_balance_sigma": "load_balance",
+    "missed_ticks": "scheduling",
+    "tick_health": "scheduling",
+    "context_switches": "scheduling",
+    "blocking_max_us": "synchronization",
+    "response_us": "synchronization",
+    "wcet_us": "execution",
+    "exec_max_us": "execution",
+}
+
+_REGRESSION_TYPE_KEYWORDS: Tuple[Tuple[str, str], ...] = (
+    ("migrat", "migration"),
+    ("load_balance", "load_balance"),
+    ("load balance", "load_balance"),
+    ("tick", "scheduling"),
+    ("context_switch", "scheduling"),
+    ("mutex", "synchronization"),
+    ("block", "synchronization"),
+    ("inversion", "synchronization"),
+    ("inherit", "synchronization"),
+    ("wcet", "execution"),
+    ("exec", "execution"),
+    ("cpu", "execution"),
+)
+
+
+def classify_regression_type(
+    checks: Optional[Sequence[dict]] = None,
+    primary: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Best-effort ``regression_type`` from the primary/failing metric delta(s)."""
+    def _type_for(check: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(check, dict):
+            return ""
+        mid = str(check.get("id") or "").strip().lower()
+        if mid in _REGRESSION_TYPE_BY_METRIC:
+            return _REGRESSION_TYPE_BY_METRIC[mid]
+        blob = f"{check.get('id') or ''} {check.get('label') or ''}".lower()
+        for kw, rtype in _REGRESSION_TYPE_KEYWORDS:
+            if kw in blob:
+                return rtype
+        return ""
+
+    rtype = _type_for(primary)
+    if rtype:
+        return rtype
+    for c in checks or []:
+        if isinstance(c, dict) and c.get("status") == "fail":
+            rtype = _type_for(c)
+            if rtype:
+                return rtype
+    return "unknown"
+
+
 def compare_performance_metrics(
     candidate: Dict[str, Any],
     baseline: Dict[str, Any],
@@ -17597,6 +18048,7 @@ def compare_performance_metrics(
     confidence = "High" if primary and primary.get("status") == "fail" else (
         "Medium" if primary else "Low"
     )
+    regression_type = classify_regression_type(result.get("checks"), primary)
     return {
         "ok": True,
         "message": str(result.get("summary") or "compared"),
@@ -17606,6 +18058,7 @@ def compare_performance_metrics(
         "checks": result.get("checks") or [],
         "primary_regression": primary,
         "confidence": confidence,
+        "regression_type": regression_type,
         "evidence_quality": (
             "Directly observed" if primary else "Insufficient evidence"
         ),
@@ -17616,6 +18069,375 @@ def compare_performance_metrics(
         "report": format_regression_report(
             result, title=f"{label_a} vs {label_b}",
         ),
+    }
+
+
+_MUTEX_ADDR_RE = re.compile(r"mutex\D{0,12}(0x[0-9a-fA-F]+)", re.IGNORECASE)
+
+
+def _pi_context_from_findings(
+    findings: Sequence[dict],
+    low: str,
+    mediums: Sequence[str],
+) -> Tuple[str, str]:
+    """Best-effort ``(mutex_addr, high_task)`` scan of finding text.
+
+    PI episodes only track the boosted (``low``) task and its ``medium``
+    interlopers; the blocked high-priority waiter and mutex identity, when
+    known, usually only show up in the free-text Analysis Findings.
+    """
+    exclude = {str(low or "").lower()} | {str(m or "").lower() for m in mediums}
+    for f in findings or []:
+        blob = f"{f.get('title') or ''} {f.get('text') or ''}"
+        if str(low or "").lower() not in blob.lower():
+            continue
+        mutex = ""
+        m = _MUTEX_ADDR_RE.search(blob)
+        if m:
+            mutex = m.group(1)
+        high = ""
+        for tok in re.findall(r"\b[A-Za-z_][\w]*\[[0-9]+\]", blob):
+            if tok.lower() not in exclude:
+                high = tok
+                break
+        if mutex or high:
+            return mutex, high
+    return "", ""
+
+
+def detect_priority_inversion(
+    episodes: Sequence[dict],
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    task: str = "",
+    window: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Best-effort priority-inversion detection from PI episodes + findings.
+
+    ``episodes`` are raw priority_inheritance rows (see ``query_raw_metric``),
+    each carrying its own ``task`` label. Only episodes flagged
+    ``inversion_suspect`` are reported; mutex address and the blocked
+    high-priority task are inferred from ``findings`` text when available.
+    ``window`` is an optional minimum-duration hint (ns) used to drop
+    inversion episodes too short to matter.
+    """
+    task = str(task or "").strip()
+    rows = [e for e in (episodes or []) if isinstance(e, dict)]
+
+    def _row_matches_task(e: dict) -> bool:
+        if str(e.get("task") or "").strip().lower() == task.lower():
+            return True
+        for m in e.get("medium_tasks") or []:
+            label = m.get("label") if isinstance(m, dict) else m
+            if str(label or "").strip().lower() == task.lower():
+                return True
+        return False
+
+    if task:
+        rows = [e for e in rows if _row_matches_task(e)]
+
+    win: Optional[float] = None
+    if window is not None:
+        try:
+            win = float(window)
+        except (TypeError, ValueError):
+            win = None
+
+    def _duration(e: dict) -> Optional[float]:
+        dur = e.get("duration")
+        if dur is not None:
+            try:
+                return float(dur)
+            except (TypeError, ValueError):
+                return None
+        start, stop = e.get("start"), e.get("stop")
+        if start is None or stop is None:
+            return None
+        try:
+            return float(stop) - float(start)
+        except (TypeError, ValueError):
+            return None
+
+    if win and win > 0:
+        rows = [e for e in rows if (_duration(e) is None or _duration(e) >= win)]
+
+    suspects = [e for e in rows if e.get("inversion_suspect")]
+    items = enrich_findings_with_ids(findings) if findings else []
+    inversions: List[Dict[str, Any]] = []
+    for e in suspects:
+        low_label = str(e.get("task") or task or "").strip() or "?"
+        mediums = [
+            str(m.get("label") if isinstance(m, dict) else m).strip()
+            for m in (e.get("medium_tasks") or [])
+        ]
+        mediums = [m for m in mediums if m]
+        mutex, high = _pi_context_from_findings(items, low_label, mediums)
+        start = e.get("start")
+        stop = e.get("stop")
+        duration = e.get("duration")
+        if duration is None and start is not None and stop is not None:
+            try:
+                duration = int(stop) - int(start)
+            except (TypeError, ValueError):
+                duration = None
+        inversions.append({
+            "high": high,
+            "medium": mediums[0] if mediums else "",
+            "medium_tasks": mediums,
+            "low": low_label,
+            "mutex": mutex,
+            "time": start,
+            "duration": duration,
+            "base_pri": e.get("base_pri"),
+            "peak_pri": e.get("peak_pri"),
+            "pattern": e.get("pattern") or "",
+        })
+    inversions.sort(key=lambda r: (r.get("time") is None, r.get("time")))
+    if not rows:
+        confidence = "Low"
+    elif any(inv.get("high") and inv.get("mutex") for inv in inversions):
+        confidence = "High"
+    elif inversions:
+        confidence = "Medium"
+    else:
+        confidence = "Low"
+    focus_task = task or (inversions[0]["low"] if inversions else "")
+    return {
+        "ok": True,
+        "message": (
+            f"{len(inversions)} priority inversion(s) detected"
+            if inversions else "No priority inversion suspects in scope"
+        ),
+        "task": task,
+        "inversions": inversions,
+        "count": len(inversions),
+        "confidence": confidence,
+        "suggested_tools": [
+            {
+                "name": "query_raw_metric",
+                "arguments": {"task": focus_task, "metric": "priority_inheritance"},
+                "reason": "Inspect raw PI boost episodes",
+            },
+            {
+                "name": "correlate_events",
+                "arguments": {"task": focus_task},
+                "reason": "Cross-task timeline around the inversion",
+            },
+        ] if focus_task else [],
+    }
+
+
+_STOPWORDS = frozenset({
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with",
+    "is", "are", "this", "that", "at", "by", "from", "into", "than", "was",
+    "were", "has", "have", "had", "its", "it's", "task", "tasks",
+})
+
+_RELATED_METRIC_KEYWORDS: Dict[str, Tuple[str, ...]] = {
+    "priority_inheritance": ("inversion", "inherit", "priority", "l/m/h", "mutex", "boost"),
+    "execution": ("wcet", "cpu", "execution", "spike", "slice"),
+    "migrations": ("migrat", "thrash", "bounc", "core"),
+    "blocking": ("block", "latency", "wait", "dispatch"),
+    "sync": ("mutex", "semaphore", "lock", "sync"),
+    "findings": (),
+}
+
+
+def _finding_keywords(f: dict) -> set:
+    blob = f"{f.get('title') or ''} {f.get('text') or ''}".lower()
+    tokens = re.findall(r"[a-z][a-z0-9_]{3,}", blob)
+    return {t for t in tokens if t not in _STOPWORDS}
+
+
+def _finding_evidence_times(f: dict) -> List[float]:
+    times: List[float] = []
+    for ev in f.get("evidence") or []:
+        if isinstance(ev, dict) and ev.get("time") is not None:
+            try:
+                times.append(float(ev.get("time")))
+            except (TypeError, ValueError):
+                continue
+    return times
+
+
+def find_related_findings(
+    findings: Sequence[dict],
+    *,
+    finding_id: str = "",
+    task: str = "",
+    metric: str = "",
+    window: Optional[float] = None,
+    limit: int = 10,
+) -> Dict[str, Any]:
+    """Relate enriched findings by shared task, keyword, or severity adjacency."""
+    limit = max(1, min(40, int(limit or 10)))
+    items = enrich_findings_with_ids(findings)
+    if not items:
+        return {
+            "ok": False,
+            "message": "No Analysis Findings in scope",
+            "focus": None,
+            "related": [],
+            "count": 0,
+        }
+    focus = resolve_finding(items, finding_id) if finding_id else None
+    task = str(task or "").strip()
+    metric_key = str(metric or "").strip().lower()
+    keywords = set(_RELATED_METRIC_KEYWORDS.get(metric_key, ()))
+    focus_task = ""
+    focus_keywords: set = set()
+    focus_times: List[float] = []
+    if focus is not None:
+        focus_task = str(focus.get("task") or _guess_task_name(str(focus.get("text") or ""))).strip()
+        focus_keywords = _finding_keywords(focus)
+        focus_times = _finding_evidence_times(focus)
+
+    win: Optional[float] = None
+    if window is not None:
+        try:
+            win = float(window)
+        except (TypeError, ValueError):
+            win = None
+
+    scored: List[Tuple[float, dict, List[str]]] = []
+    for f in items:
+        if focus is not None and f.get("id") == focus.get("id"):
+            continue
+        reasons: List[str] = []
+        score = 0.0
+        f_task = str(f.get("task") or _guess_task_name(str(f.get("text") or ""))).strip()
+        if task and f_task and f_task.lower() == task.lower():
+            score += 2.0
+            reasons.append(f"shares task {f_task}")
+        if focus_task and f_task and f_task.lower() == focus_task.lower() and not (
+            task and f_task.lower() == task.lower()
+        ):
+            score += 2.0
+            reasons.append(f"shares task {f_task}")
+        if keywords:
+            blob = f"{f.get('title')} {f.get('text')}".lower()
+            hits = sorted(k for k in keywords if k in blob)
+            if hits:
+                score += 1.0 * len(hits)
+                reasons.append(f"mentions {', '.join(hits)}")
+        if focus_keywords:
+            shared = sorted(focus_keywords & _finding_keywords(f))
+            if shared:
+                score += 0.5 * len(shared)
+                reasons.append(f"shared keyword(s): {', '.join(shared)}")
+        if win and win > 0 and focus_times:
+            f_times = _finding_evidence_times(f)
+            if any(abs(t - ft) <= win for t in focus_times for ft in f_times):
+                score += 1.0
+                reasons.append("within time window")
+        if focus is not None and not reasons:
+            f_rank = _SEV_RANK.get(str(f.get("severity") or "info").lower(), 3)
+            focus_rank = _SEV_RANK.get(str(focus.get("severity") or "info").lower(), 3)
+            if abs(f_rank - focus_rank) <= 1:
+                score += 0.25
+                reasons.append("adjacent severity")
+        if score > 0:
+            scored.append((score, f, reasons))
+    scored.sort(key=lambda row: -row[0])
+    related = [
+        {
+            "id": f.get("id"),
+            "title": f.get("title"),
+            "severity": f.get("severity"),
+            "task": f.get("task") or _guess_task_name(str(f.get("text") or "")),
+            "score": round(score, 2),
+            "reasons": reasons,
+        }
+        for score, f, reasons in scored[:limit]
+    ]
+    return {
+        "ok": True,
+        "message": (
+            f"{len(related)} related finding(s)"
+            + (f" for {focus.get('id')}" if focus else "")
+        ),
+        "focus": (
+            {"id": focus.get("id"), "title": focus.get("title")} if focus else None
+        ),
+        "related": related,
+        "count": len(related),
+    }
+
+
+_COMPARE_TASK_METRIC_FIELDS: Dict[str, Tuple[str, ...]] = {
+    "execution": ("count", "total", "max", "mean"),
+    "blocking": ("count", "total", "max"),
+    "migrations": ("count",),
+    "priority_inheritance": ("count",),
+}
+
+
+def compare_tasks_metrics(
+    task_a: str,
+    task_b: str,
+    data_a: Dict[str, Any],
+    data_b: Dict[str, Any],
+    *,
+    metrics: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """Compare two tasks' execution/blocking/migrations/priority metrics.
+
+    ``data_a`` / ``data_b`` are ``{metric: {field: value}}`` maps as returned
+    by ``query_raw_metric`` for each metric (e.g. ``execution.count/total/
+    max/mean``). Metrics with no data on either side are skipped.
+    """
+    wanted = [m for m in (metrics or list(_COMPARE_TASK_METRIC_FIELDS)) if m in _COMPARE_TASK_METRIC_FIELDS]
+    if not wanted:
+        wanted = list(_COMPARE_TASK_METRIC_FIELDS)
+    data_a = data_a or {}
+    data_b = data_b or {}
+    rows: List[Dict[str, Any]] = []
+    for metric in wanted:
+        da = data_a.get(metric) if isinstance(data_a.get(metric), dict) else {}
+        db = data_b.get(metric) if isinstance(data_b.get(metric), dict) else {}
+        if not da and not db:
+            continue
+        for field in _COMPARE_TASK_METRIC_FIELDS[metric]:
+            va = da.get(field)
+            vb = db.get(field)
+            delta = None
+            pct = None
+            if isinstance(va, (int, float)) and isinstance(vb, (int, float)):
+                delta = va - vb
+                pct = (100.0 * delta / vb) if vb else (100.0 if va else 0.0)
+            rows.append({
+                "metric": metric,
+                "field": field,
+                "a": va,
+                "b": vb,
+                "delta": delta,
+                "delta_pct": round(pct, 1) if pct is not None else None,
+            })
+    ranked = sorted(
+        (r for r in rows if r.get("delta_pct") is not None),
+        key=lambda r: -abs(r["delta_pct"]),
+    )
+    primary = ranked[0] if ranked else None
+    if primary and abs(primary["delta_pct"] or 0) >= 25:
+        confidence = "High"
+    elif primary:
+        confidence = "Medium"
+    else:
+        confidence = "Low"
+    return {
+        "ok": True,
+        "message": f"Compared {task_a} vs {task_b} across {len(wanted)} metric group(s)",
+        "task_a": task_a,
+        "task_b": task_b,
+        "rows": rows,
+        "primary_difference": primary,
+        "confidence": confidence,
+        "suggested_tools": [
+            {"name": "correlate_events", "arguments": {"task": task_a},
+             "reason": f"Timeline for {task_a}"},
+            {"name": "correlate_events", "arguments": {"task": task_b},
+             "reason": f"Timeline for {task_b}"},
+        ],
     }
 
 
@@ -17853,6 +18675,29 @@ def build_optimization_advice(
     }
 
 
+_REGRESSION_CLASSIFICATION_MAP: Dict[str, str] = {
+    "migrations": "thrashing",
+    "migrated_tasks": "thrashing",
+    "load_balance": "load_imbalance",
+    "missed_ticks": "tick_health",
+}
+
+_REGRESSION_CLASSIFICATION_LABELS: Dict[str, str] = {
+    "thrashing": "Core thrashing / migration regression",
+    "load_imbalance": "Load balance regression",
+    "tick_health": "Tick health regression",
+    "unclassified": "Unclassified regression",
+    "none": "No regression",
+}
+
+
+def classify_regression(primary: Optional[Dict[str, Any]]) -> str:
+    """Coarse category id for a compare_performance ``primary_regression`` check."""
+    if not primary:
+        return "none"
+    return _REGRESSION_CLASSIFICATION_MAP.get(str(primary.get("id") or ""), "unclassified")
+
+
 def explain_regression(
     compare: Dict[str, Any],
     findings: Optional[Sequence[dict]] = None,
@@ -17863,6 +18708,19 @@ def explain_regression(
     failed = bool(compare.get("failed"))
     label_a = compare.get("label_a") or "A"
     label_b = compare.get("label_b") or "B"
+    classification = classify_regression(primary if failed else None)
+    regression_type = str(
+        compare.get("regression_type") or classify_regression_type(compare.get("checks"), primary)
+    )
+    causal_chain: List[Dict[str, Any]] = []
+    if primary:
+        synthetic_finding = {
+            "id": "regression_primary",
+            "title": f"Regression: {primary.get('label')}",
+            "text": f"{primary.get('label')} changed — {primary.get('detail')}",
+            "severity": "error" if failed else "info",
+        }
+        causal_chain = build_root_cause_chain(synthetic_finding)
     lines = [
         f"# Regression explanation — {label_a} vs {label_b}",
         "",
@@ -17881,6 +18739,16 @@ def explain_regression(
         mark = {"pass": "✓", "fail": "✗", "skip": "·"}.get(c.get("status"), "?")
         lines.append(f"- {mark} {c.get('label')}: {c.get('detail')}")
     lines.append("")
+    lines.extend([
+        "## Classification",
+        _REGRESSION_CLASSIFICATION_LABELS.get(classification, "Unclassified regression"),
+        "",
+    ])
+    if causal_chain:
+        lines.append("## Causal chain")
+        for step in causal_chain:
+            lines.append(f"- **{step.get('label')}**: {step.get('detail') or ''}".rstrip())
+        lines.append("")
     anomalies = detect_anomalies(findings or [], limit=5) if findings else {"anomalies": []}
     if anomalies.get("anomalies"):
         lines.append("## Related findings on candidate")
@@ -17893,17 +18761,36 @@ def explain_regression(
         f"{conf} — {compare.get('evidence_quality') or 'Directly observed metric deltas'}",
         "",
     ])
+    suggested_tools = [
+        {"name": "correlate_events", "arguments": {}, "reason": "Timeline for worst metric"},
+        {"name": "investigate", "arguments": {}, "reason": "Root-cause chain"},
+    ]
+    if classification == "thrashing":
+        suggested_tools.append({
+            "name": "optimize_experiment", "arguments": {},
+            "reason": "Rank pin / affinity candidates for the thrashing task",
+        })
+    elif classification == "load_imbalance":
+        suggested_tools.append({
+            "name": "analyze_traces", "arguments": {},
+            "reason": "Rank all loaded traces by scheduling behavior",
+        })
+    elif classification == "tick_health":
+        suggested_tools.append({
+            "name": "check_budget", "arguments": {},
+            "reason": "Verify WCET/response/deadline budgets after tick regressions",
+        })
     return {
         "ok": True,
         "message": "Regression explained" if failed else "No regression to explain",
         "failed": failed,
         "markdown": "\n".join(lines),
         "primary_regression": primary,
+        "classification": classification,
+        "regression_type": regression_type,
+        "causal_chain": causal_chain,
         "confidence": conf,
-        "suggested_tools": [
-            {"name": "correlate_events", "arguments": {}, "reason": "Timeline for worst metric"},
-            {"name": "investigate", "arguments": {}, "reason": "Root-cause chain"},
-        ],
+        "suggested_tools": suggested_tools,
     }
 
 
@@ -17930,8 +18817,20 @@ def build_investigation_replay(
     tools_run: Optional[Sequence[str]] = None,
     conclusion: str = "",
     evidence_times: Optional[Sequence[float]] = None,
+    trace_name: str = "",
+    scope: str = "",
+    queries: Optional[Sequence[Dict[str, Any]]] = None,
+    evidence: Optional[Sequence[Dict[str, Any]]] = None,
+    confidence: str = "",
+    alternatives: Optional[Sequence[Dict[str, Any]]] = None,
+    timestamp: str = "",
 ) -> Dict[str, Any]:
-    """Structured investigation replay card for UI / export."""
+    """Structured investigation replay card for UI / export.
+
+    Additive fields (*trace_name*, *scope*, *queries*, *evidence*,
+    *confidence*, *alternatives*, *timestamp*) make this usable as a full
+    investigation export package (see ``build_investigation_package``).
+    """
     tools_run = [str(t) for t in (tools_run or []) if t]
     plan = plan or default_investigation_plan(
         goal=f"Investigate: {(finding or {}).get('title') or 'finding'}"
@@ -17966,6 +18865,8 @@ def build_investigation_replay(
     return {
         "ok": True,
         "message": "Investigation replay",
+        "trace_name": str(trace_name or ""),
+        "scope": str(scope or ""),
         "finding": {
             "id": (finding or {}).get("id"),
             "title": (finding or {}).get("title"),
@@ -17973,10 +18874,55 @@ def build_investigation_replay(
         } if finding else None,
         "steps": steps,
         "tools_run": tools_run,
+        "queries": [dict(q) for q in (queries or []) if isinstance(q, dict)],
+        "evidence": [dict(e) for e in (evidence or []) if isinstance(e, dict)],
         "conclusion": str(conclusion or "").strip(),
+        "confidence": str(confidence or "").strip(),
+        "alternatives": [dict(a) for a in (alternatives or []) if isinstance(a, dict)],
         "evidence_times": times[:20],
+        "timestamp": str(timestamp or "").strip(),
         "suggested_tools": suggested,
     }
+
+
+def build_investigation_package(
+    *,
+    trace_name: str = "",
+    scope: str = "",
+    finding: Optional[dict] = None,
+    plan: Optional[Dict[str, Any]] = None,
+    tools_run: Optional[Sequence[str]] = None,
+    queries: Optional[Sequence[Dict[str, Any]]] = None,
+    evidence: Optional[Sequence[Dict[str, Any]]] = None,
+    conclusion: str = "",
+    confidence: str = "",
+    alternatives: Optional[Sequence[Dict[str, Any]]] = None,
+    evidence_times: Optional[Sequence[float]] = None,
+    timestamp: str = "",
+) -> Dict[str, Any]:
+    """Full JSON-serialisable investigation replay/export package.
+
+    Thin wrapper over ``build_investigation_replay`` that adds a schema /
+    version envelope for ``export_investigation`` / ``export_report``
+    (format=json).
+    """
+    package = dict(build_investigation_replay(
+        finding=finding,
+        plan=plan,
+        tools_run=tools_run,
+        conclusion=conclusion,
+        evidence_times=evidence_times,
+        trace_name=trace_name,
+        scope=scope,
+        queries=queries,
+        evidence=evidence,
+        confidence=confidence,
+        alternatives=alternatives,
+        timestamp=timestamp,
+    ))
+    package["schema"] = "btf-investigation-package"
+    package["version"] = 1
+    return package
 
 
 def estimate_what_if(
@@ -18525,6 +19471,325 @@ def run_optimization_experiments(
              "reason": "Mark evidence on timeline"},
         ],
     }
+
+
+# --- Historical baseline learning (lightweight) --------------------------
+
+_BASELINE_METRIC_KEYS: Tuple[str, ...] = (
+    "wcet_us", "blocking_us", "migrations", "response_us",
+)
+
+
+def _empty_baseline_profile() -> Dict[str, Any]:
+    return {"version": 1, "samples": 0, "tasks": {}}
+
+
+def update_baseline_profile(
+    profile: Optional[Dict[str, Any]],
+    snapshot: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Merge a metrics snapshot into a running-mean/std baseline profile.
+
+    ``snapshot`` is ``{"tasks": {task: {wcet_us?, blocking_us?, migrations?,
+    response_us?}}}``. Uses Welford's online algorithm so the profile only
+    stores ``n`` / ``mean`` / ``m2`` per task/metric — no raw history.
+    """
+    if isinstance(profile, dict):
+        out = {
+            "version": int(profile.get("version") or 1),
+            "samples": int(profile.get("samples") or 0),
+            "tasks": {
+                str(t): {
+                    str(k): dict(v) for k, v in (m or {}).items() if isinstance(v, dict)
+                }
+                for t, m in (profile.get("tasks") or {}).items()
+                if isinstance(m, dict)
+            },
+        }
+    else:
+        out = _empty_baseline_profile()
+    tasks_in = snapshot.get("tasks") if isinstance(snapshot, dict) else None
+    if not isinstance(tasks_in, dict) or not tasks_in:
+        return out
+    for task, metrics in tasks_in.items():
+        if not isinstance(metrics, dict):
+            continue
+        task = str(task).strip()
+        if not task:
+            continue
+        bucket = out["tasks"].setdefault(task, {})
+        for key in _BASELINE_METRIC_KEYS:
+            val = metrics.get(key)
+            if val is None:
+                continue
+            try:
+                x = float(val)
+            except (TypeError, ValueError):
+                continue
+            stat = bucket.setdefault(key, {"n": 0, "mean": 0.0, "m2": 0.0})
+            n = int(stat.get("n", 0)) + 1
+            mean = float(stat.get("mean", 0.0))
+            m2 = float(stat.get("m2", 0.0))
+            delta = x - mean
+            mean += delta / n
+            m2 += delta * (x - mean)
+            stat["n"] = n
+            stat["mean"] = mean
+            stat["m2"] = m2
+    out["samples"] = int(out.get("samples", 0)) + 1
+    return out
+
+
+def score_against_baseline(
+    profile: Optional[Dict[str, Any]],
+    snapshot: Dict[str, Any],
+    *,
+    z_threshold: float = 2.0,
+) -> Dict[str, Any]:
+    """Per-task/metric z-scores of *snapshot* vs a baseline profile.
+
+    Flags entries where ``|z| > z_threshold`` (default 2). Tasks/metrics
+    without at least 2 baseline samples are reported with ``z=None``.
+    """
+    z_threshold = float(z_threshold or 2.0)
+    tasks_profile = (profile or {}).get("tasks") if isinstance(profile, dict) else {}
+    tasks_profile = tasks_profile if isinstance(tasks_profile, dict) else {}
+    tasks_in = snapshot.get("tasks") if isinstance(snapshot, dict) else None
+    tasks_in = tasks_in if isinstance(tasks_in, dict) else {}
+    scores: List[Dict[str, Any]] = []
+    flagged: List[Dict[str, Any]] = []
+    for task, metrics in tasks_in.items():
+        if not isinstance(metrics, dict):
+            continue
+        task = str(task).strip()
+        base_bucket = tasks_profile.get(task)
+        base_bucket = base_bucket if isinstance(base_bucket, dict) else {}
+        for key in _BASELINE_METRIC_KEYS:
+            val = metrics.get(key)
+            if val is None:
+                continue
+            try:
+                x = float(val)
+            except (TypeError, ValueError):
+                continue
+            stat = base_bucket.get(key)
+            row: Dict[str, Any] = {
+                "task": task, "metric": key, "value": x,
+                "n": 0, "mean": None, "std": None, "z": None, "flag": False,
+            }
+            if isinstance(stat, dict) and int(stat.get("n", 0)) >= 2:
+                n = int(stat["n"])
+                mean = float(stat.get("mean", 0.0))
+                variance = float(stat.get("m2", 0.0)) / max(1, n - 1)
+                std = variance ** 0.5
+                row["n"] = n
+                row["mean"] = round(mean, 4)
+                row["std"] = round(std, 4)
+                if std > 1e-9:
+                    z = (x - mean) / std
+                    row["z"] = round(z, 3)
+                    row["flag"] = abs(z) > z_threshold
+                else:
+                    row["z"] = 0.0
+            scores.append(row)
+            if row["flag"]:
+                flagged.append(row)
+    flagged.sort(key=lambda r: -abs(r.get("z") or 0.0))
+    return {
+        "ok": True,
+        "message": (
+            f"{len(scores)} metric score(s); {len(flagged)} flagged "
+            f"(|z|>{z_threshold:g})"
+        ),
+        "scores": scores,
+        "flagged": flagged,
+        "z_threshold": z_threshold,
+        "has_baseline": bool(tasks_profile),
+        "suggested_tools": (
+            [{"name": "investigate", "arguments": {},
+              "reason": "Drill into flagged task"}] if flagged else []
+        ),
+    }
+
+
+# --- AI-generated validation experiments ----------------------------------
+
+def recommend_validation_experiments(
+    findings: Sequence[dict],
+    *,
+    finding_id: str = "",
+    task: str = "",
+    limit: int = 5,
+) -> Dict[str, Any]:
+    """Suggest simulation / firmware / measurement experiments from findings.
+
+    Heuristics: thrash/migration → pin, mutex/inversion → shorten critical
+    section, WCET spike → profile+trim, load imbalance → rebalance,
+    deadline/budget → re-check budgets.
+    """
+    limit = max(1, min(20, int(limit or 5)))
+    items = enrich_findings_with_ids(findings)
+    focus: Optional[dict] = None
+    if finding_id:
+        focus = resolve_finding(items, finding_id)
+    if focus is None and task:
+        want = task.strip().lower()
+        for f in items:
+            t = str(f.get("task") or _guess_task_name(str(f.get("text") or "")) or "")
+            if t and t.lower() == want:
+                focus = f
+                break
+    if focus is not None:
+        pool: List[dict] = [focus]
+    elif items:
+        anomalies = detect_anomalies(items, limit=max(3, limit))
+        pool = [
+            {
+                "id": a.get("id"), "title": a.get("title"), "text": a.get("text"),
+                "severity": a.get("severity"), "task": a.get("task"),
+            }
+            for a in anomalies.get("anomalies") or []
+        ]
+    else:
+        pool = []
+
+    experiments: List[Dict[str, Any]] = []
+    seen_titles: set = set()
+
+    def add(title: str, kind: str, steps: Sequence[str], rationale: str, fid: Any) -> None:
+        if title in seen_titles:
+            return
+        seen_titles.add(title)
+        experiments.append({
+            "title": title,
+            "kind": kind,
+            "steps": [str(s) for s in steps],
+            "rationale": rationale,
+            "evidence_finding": fid,
+        })
+
+    for f in pool:
+        if len(experiments) >= limit:
+            break
+        title = str(f.get("title") or "")
+        text = str(f.get("text") or "")
+        blob = f"{title} {text}".lower()
+        t = str(f.get("task") or _guess_task_name(text) or task or "").strip()
+        fid = f.get("id")
+        tname = t or "the hot task"
+        if "thrash" in blob or "migrat" in blob or "bounc" in blob:
+            add(
+                f"Simulate pinning {tname} to its dominant core",
+                "simulation",
+                [f"what_if(change='pin {tname} to Core_N')",
+                 "Compare migrations / load-balance deltas"],
+                "Migration/thrash finding suggests core affinity fixes the bounce",
+                fid,
+            )
+            add(
+                f"Pin {tname} in firmware (vTaskCoreAffinitySet)",
+                "firmware",
+                [f"Call vTaskCoreAffinitySet({tname}, mask) at startup / after creation",
+                 "Re-run the same workload and re-capture a trace"],
+                "Confirms the simulated affinity fix on real hardware",
+                fid,
+            )
+            add(
+                f"Measure migration rate for {tname} before/after the affinity fix",
+                "measurement",
+                ["Capture baseline trace", "Apply the affinity fix",
+                 "Capture candidate trace", "Run compare_performance A vs B"],
+                "Directly measures whether thrashing is resolved",
+                fid,
+            )
+        elif "block" in blob or "mutex" in blob or "inversion" in blob or "inherit" in blob:
+            add(
+                f"Simulate reduced lock contention for {tname}",
+                "simulation",
+                [f"what_if(change='reduce mutex contention 50% for {tname}')",
+                 "Compare blocking Max / response deltas"],
+                "Blocking/mutex finding suggests shortening the critical section",
+                fid,
+            )
+            add(
+                f"Shorten the critical section for {tname} (firmware)",
+                "firmware",
+                ["Reduce work performed while the mutex is held",
+                 "Or switch to a priority-inheritance mutex "
+                 "(xSemaphoreCreateMutex, not a binary semaphore)"],
+                "Addresses priority inversion / long hold times at the source",
+                fid,
+            )
+            add(
+                f"Measure blocking Max for {tname} before/after the fix",
+                "measurement",
+                ["Capture baseline trace", "Apply the fix",
+                 "Capture candidate trace",
+                 f"query_raw_metric(task={tname}, metric=blocking) on both"],
+                "Confirms blocking wait actually dropped",
+                fid,
+            )
+        elif "wcet" in blob or "spike" in blob or "execution" in blob or "cpu" in blob:
+            add(
+                f"Profile execution slices for {tname}",
+                "measurement",
+                [f"query_raw_metric(task={tname}, metric=execution)",
+                 "Jump to the Max slice and inspect surrounding events"],
+                "WCET/CPU spike finding needs a profiling pass before code changes",
+                fid,
+            )
+            add(
+                f"Trim or split the long slice on {tname} (firmware)",
+                "firmware",
+                ["Break the long critical section / loop into smaller chunks",
+                 "Re-measure Max execution after the change"],
+                "Directly reduces WCET at the source",
+                fid,
+            )
+        elif "load" in blob or "balance" in blob:
+            add(
+                "Simulate rebalanced task placement",
+                "simulation",
+                ["optimize_experiment() to rank candidate placements",
+                 "Compare Load Balance Score deltas"],
+                "Load-balance finding suggests a placement change",
+                fid,
+            )
+            add(
+                "Measure Load Balance Score before/after static affinity",
+                "measurement",
+                ["Capture baseline trace", "Apply static core assignment",
+                 "Capture candidate trace", "Run analyze_traces or compare_performance"],
+                "Confirms the placement change improves balance",
+                fid,
+            )
+        elif "deadline" in blob or "budget" in blob:
+            add(
+                f"Re-check budget compliance for {tname} after a fix",
+                "measurement",
+                ["check_budget() with the configured WCET/response/deadline budgets"],
+                "Deadline/budget finding needs a direct budget re-check",
+                fid,
+            )
+        else:
+            add(
+                f"Investigate {title or 'this finding'} further",
+                "measurement",
+                ["investigate(finding_id) for a root-cause chain",
+                 "correlate_events for supporting evidence"],
+                "No specialised heuristic match — needs more evidence first",
+                fid,
+            )
+    experiments = experiments[:limit]
+    return {
+        "ok": True,
+        "message": f"{len(experiments)} validation experiment(s) suggested",
+        "experiments": experiments,
+        "disclaimer": (
+            "Simulation / estimate — not measured behavior; firmware steps "
+            "are suggestions to implement and re-trace, not applied automatically"
+        ),
+    }
 # ===========================================================================
 # ai_tools
 # ===========================================================================
@@ -18544,6 +19809,7 @@ AI_TOOL_TRIGGER_COMPARE = "trigger_compare"
 AI_TOOL_INVESTIGATE = "investigate"
 AI_TOOL_DETECT_ANOMALIES = "detect_anomalies"
 AI_TOOL_CORRELATE_EVENTS = "correlate_events"
+AI_TOOL_FIND_CRITICAL_PATH = "find_critical_path"
 AI_TOOL_COMPARE_PERFORMANCE = "compare_performance"
 AI_TOOL_GENERATE_REPORT = "generate_report"
 AI_TOOL_CHECK_BUDGET = "check_budget"
@@ -18554,6 +19820,12 @@ AI_TOOL_INVESTIGATION_REPLAY = "investigation_replay"
 AI_TOOL_WHAT_IF = "what_if"
 AI_TOOL_OPTIMIZE_EXPERIMENT = "optimize_experiment"
 AI_TOOL_ANALYZE_TRACES = "analyze_traces"
+AI_TOOL_BASELINE_SCORE = "baseline_score"
+AI_TOOL_RECOMMEND_EXPERIMENTS = "recommend_experiments"
+AI_TOOL_EXPORT_INVESTIGATION = "export_investigation"
+AI_TOOL_DETECT_PRIORITY_INVERSION = "detect_priority_inversion"
+AI_TOOL_FIND_RELATED_FINDINGS = "find_related_findings"
+AI_TOOL_COMPARE_TASKS = "compare_tasks"
 
 AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_SET_CURSORS,
@@ -18571,6 +19843,7 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_INVESTIGATE,
     AI_TOOL_DETECT_ANOMALIES,
     AI_TOOL_CORRELATE_EVENTS,
+    AI_TOOL_FIND_CRITICAL_PATH,
     AI_TOOL_COMPARE_PERFORMANCE,
     AI_TOOL_GENERATE_REPORT,
     AI_TOOL_CHECK_BUDGET,
@@ -18581,6 +19854,12 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_WHAT_IF,
     AI_TOOL_OPTIMIZE_EXPERIMENT,
     AI_TOOL_ANALYZE_TRACES,
+    AI_TOOL_BASELINE_SCORE,
+    AI_TOOL_RECOMMEND_EXPERIMENTS,
+    AI_TOOL_EXPORT_INVESTIGATION,
+    AI_TOOL_DETECT_PRIORITY_INVERSION,
+    AI_TOOL_FIND_RELATED_FINDINGS,
+    AI_TOOL_COMPARE_TASKS,
 )
 
 AI_BOOKMARK_KINDS: Tuple[str, ...] = (
@@ -18694,12 +19973,14 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "answer. Valid tools: set_cursors, zoom_to_range, highlight_task, "
     "set_view_mode, open_corridor_inspector, add_annotation, query_raw_metric, "
     "export_report, clear_marks, reset_view, search_timeline, trigger_compare, "
-    "investigate, detect_anomalies, correlate_events, compare_performance, "
+    "investigate, detect_anomalies, correlate_events, find_critical_path, compare_performance, "
     "generate_report, check_budget, optimize, regression_explain, "
-    "bookmark_finding, investigation_replay, what_if, optimize_experiment, analyze_traces. "
+    "bookmark_finding, investigation_replay, what_if, optimize_experiment, analyze_traces, "
+    "baseline_score, recommend_experiments, export_investigation, "
+    "detect_priority_inversion, find_related_findings, compare_tasks. "
     "For root-cause or Investigate templates: call detect_anomalies and "
     "investigate(finding_id) first for a root-cause chain, then "
-    "correlate_events / query_raw_metric / search_timeline, then set_cursors "
+    "correlate_events / query_raw_metric / search_timeline / find_critical_path, then set_cursors "
     "+ zoom_to_range + highlight_task on the worst episode before concluding. "
     "Use compare_performance for structured A vs B deltas (two tabs); "
     "regression_explain after compare to narrate the primary change. "
@@ -18709,6 +19990,16 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "evidence-backed mitigations; what_if for heuristic slice-replay simulation; optimize_experiment to rank automatic candidates; "
     "analyze_traces to rank all open tabs; bookmark_finding to pin semantic "
     "marks; investigation_replay to summarise a completed investigation. "
+    "Use baseline_score to compare current per-task metrics against a stored "
+    "historical baseline (flags |z|>2); recommend_experiments to suggest "
+    "simulation / firmware / measurement validation experiments; "
+    "export_investigation to save the full investigation as JSON. "
+    "Use detect_priority_inversion to scan priority-inheritance boost "
+    "episodes for L/M/H inversion suspects (high/medium/low task, mutex, "
+    "time, duration); find_related_findings to relate Analysis Findings by "
+    "shared task, metric keyword, evidence-time proximity, or severity "
+    "adjacency; compare_tasks for a side-by-side execution/blocking/"
+    "migrations/priority delta table between two tasks. "
     "Use query_raw_metric when you need the exact per-task "
     "series (priority-inheritance episodes, execution slices, migrations, "
     "blocking gaps, sync STI, or findings lines) instead of the summarised "
@@ -18945,8 +20236,11 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                     "properties": {
                         "format": {
                             "type": "string",
-                            "enum": ["html", "csv"],
-                            "description": "html (default) or csv.",
+                            "enum": ["html", "csv", "json"],
+                            "description": (
+                                "html (default), csv, or json (full "
+                                "investigation package — see export_investigation)."
+                            ),
                         },
                     },
                 },
@@ -19110,6 +20404,35 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                         "window": {
                             "type": "number",
                             "description": "Half-width around around_time (trace units).",
+                        },
+                    },
+                    "required": ["task"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_FIND_CRITICAL_PATH,
+                "description": (
+                    "Build a preempt/block/mutex critical path for a task around "
+                    "a timestamp by correlating blocking, sync, priority, execution, "
+                    "and migration events."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": "Task display name, id, or merge key.",
+                        },
+                        "timestamp": {
+                            "type": "number",
+                            "description": "Optional center time (trace units).",
+                        },
+                        "window": {
+                            "type": "number",
+                            "description": "Half-width around timestamp (default 2000).",
                         },
                     },
                     "required": ["task"],
@@ -19363,6 +20686,207 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                     "(load balance, migrations, missed ticks)."
                 ),
                 "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_BASELINE_SCORE,
+                "description": (
+                    "Score current per-task metrics (WCET, blocking, "
+                    "migrations, response) against a stored historical "
+                    "baseline; flags entries where |z| > 2."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": "Optional focus task filter.",
+                        },
+                        "baseline": {
+                            "type": "object",
+                            "description": (
+                                "Optional baseline profile object (defaults "
+                                "to the host's stored profile)."
+                            ),
+                        },
+                        "snapshot": {
+                            "type": "object",
+                            "description": (
+                                "Optional {tasks: {task: {wcet_us, "
+                                "blocking_us, migrations, response_us}}} "
+                                "snapshot (defaults to the host's current "
+                                "trace metrics)."
+                            ),
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_RECOMMEND_EXPERIMENTS,
+                "description": (
+                    "Suggest validation experiments (simulation / firmware / "
+                    "measurement) for a finding or task, using heuristics "
+                    "(thrash→pin, mutex→shorten critical section, etc.)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "finding_id": {
+                            "type": "string",
+                            "description": "Finding id / index / title substring.",
+                        },
+                        "task": {
+                            "type": "string",
+                            "description": "Optional focus task.",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max experiments (1–20, default 5).",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_EXPORT_INVESTIGATION,
+                "description": (
+                    "Download the completed investigation (finding, tools "
+                    "run, queries, evidence, conclusion, confidence, "
+                    "alternatives) as a JSON package."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "finding_id": {
+                            "type": "string",
+                            "description": "Finding id / index / title substring.",
+                        },
+                        "conclusion": {
+                            "type": "string",
+                            "description": "Short investigation conclusion text.",
+                        },
+                        "tools_run": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Tool names already executed.",
+                        },
+                        "evidence_times": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": "Evidence timestamps for cursor replay.",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_DETECT_PRIORITY_INVERSION,
+                "description": (
+                    "Scan priority-inheritance boost episodes flagged as "
+                    "inversion suspects (L/M/H pattern) and return "
+                    "high/medium/low task, mutex, time, and duration for each."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": (
+                                "Optional focus task (low or medium task name); "
+                                "omit to scan all tasks."
+                            ),
+                        },
+                        "window": {
+                            "type": "number",
+                            "description": (
+                                "Optional minimum episode duration (ns) to "
+                                "ignore trivial boosts."
+                            ),
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_FIND_RELATED_FINDINGS,
+                "description": (
+                    "Relate Analysis Findings by shared task, metric keyword, "
+                    "evidence-time proximity, or severity adjacency."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "finding_id": {
+                            "type": "string",
+                            "description": "Focus finding id / index / title substring.",
+                        },
+                        "task": {
+                            "type": "string",
+                            "description": "Optional task filter.",
+                        },
+                        "metric": {
+                            "type": "string",
+                            "description": (
+                                "Optional metric filter: priority_inheritance|"
+                                "execution|migrations|blocking|sync|findings."
+                            ),
+                        },
+                        "window": {
+                            "type": "number",
+                            "description": (
+                                "Optional evidence-time proximity window (ns) "
+                                "relative to the focus finding."
+                            ),
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max related findings (1–40, default 10).",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_COMPARE_TASKS,
+                "description": (
+                    "Compare two tasks' execution / blocking / migrations / "
+                    "priority-inheritance metrics side by side with deltas."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task_a": {
+                            "type": "string",
+                            "description": "First task display name, id, or merge key.",
+                        },
+                        "task_b": {
+                            "type": "string",
+                            "description": "Second task display name, id, or merge key.",
+                        },
+                        "metrics": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Optional subset of execution|blocking|"
+                                "migrations|priority_inheritance (default all)."
+                            ),
+                        },
+                    },
+                    "required": ["task_a", "task_b"],
+                },
             },
         },
     ]
@@ -19810,6 +21334,7 @@ def is_query_tool(name: str) -> bool:
         AI_TOOL_INVESTIGATE,
         AI_TOOL_DETECT_ANOMALIES,
         AI_TOOL_CORRELATE_EVENTS,
+        AI_TOOL_FIND_CRITICAL_PATH,
         AI_TOOL_COMPARE_PERFORMANCE,
         AI_TOOL_GENERATE_REPORT,
         AI_TOOL_CHECK_BUDGET,
@@ -19819,11 +21344,16 @@ def is_query_tool(name: str) -> bool:
         AI_TOOL_WHAT_IF,
         AI_TOOL_OPTIMIZE_EXPERIMENT,
         AI_TOOL_ANALYZE_TRACES,
+        AI_TOOL_BASELINE_SCORE,
+        AI_TOOL_RECOMMEND_EXPERIMENTS,
+        AI_TOOL_DETECT_PRIORITY_INVERSION,
+        AI_TOOL_FIND_RELATED_FINDINGS,
+        AI_TOOL_COMPARE_TASKS,
     )
 
 
 def is_export_tool(name: str) -> bool:
-    return str(name or "") == AI_TOOL_EXPORT_REPORT
+    return str(name or "") in (AI_TOOL_EXPORT_REPORT, AI_TOOL_EXPORT_INVESTIGATION)
 
 
 def tool_mutates_gui(name: str) -> bool:
@@ -19919,8 +21449,10 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
             fmt = "html"
         elif fmt == "csv":
             fmt = "csv"
+        elif fmt == "json":
+            fmt = "json"
         else:
-            return None, 'format must be "html" or "csv"'
+            return None, 'format must be "html", "csv", or "json"'
         return {"format": fmt}, ""
     if name == AI_TOOL_CLEAR_MARKS:
         what = str(a.get("what") or "all").strip().lower()
@@ -19982,6 +21514,22 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
                 out["around_time"] = float(a.get("around_time"))
             except (TypeError, ValueError):
                 return None, "around_time must be a number"
+        if a.get("window") is not None and str(a.get("window")).strip() != "":
+            try:
+                out["window"] = max(0.0, float(a.get("window")))
+            except (TypeError, ValueError):
+                return None, "window must be a number"
+        return out, ""
+    if name == AI_TOOL_FIND_CRITICAL_PATH:
+        task = str(a.get("task") or "").strip()
+        if not task:
+            return None, "task must be a non-empty string"
+        out: Dict[str, Any] = {"task": task, "timestamp": None, "window": 2000.0}
+        if a.get("timestamp") is not None and str(a.get("timestamp")).strip() != "":
+            try:
+                out["timestamp"] = float(a.get("timestamp"))
+            except (TypeError, ValueError):
+                return None, "timestamp must be a number"
         if a.get("window") is not None and str(a.get("window")).strip() != "":
             try:
                 out["window"] = max(0.0, float(a.get("window")))
@@ -20086,6 +21634,82 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
         }, ""
     if name == AI_TOOL_ANALYZE_TRACES:
         return {}, ""
+    if name == AI_TOOL_BASELINE_SCORE:
+        baseline = a.get("baseline")
+        if baseline is not None and not isinstance(baseline, dict):
+            return None, "baseline must be an object"
+        snapshot = a.get("snapshot")
+        if snapshot is not None and not isinstance(snapshot, dict):
+            return None, "snapshot must be an object"
+        out: Dict[str, Any] = {"task": str(a.get("task") or "").strip()}
+        if isinstance(baseline, dict):
+            out["baseline"] = baseline
+        if isinstance(snapshot, dict):
+            out["snapshot"] = snapshot
+        return out, ""
+    if name == AI_TOOL_RECOMMEND_EXPERIMENTS:
+        lim_raw = a.get("limit", 5)
+        try:
+            limit = int(lim_raw)
+        except (TypeError, ValueError):
+            return None, "limit must be an integer 1–20"
+        return {
+            "finding_id": str(a.get("finding_id") or "").strip(),
+            "task": str(a.get("task") or "").strip(),
+            "limit": max(1, min(20, limit)),
+        }, ""
+    if name == AI_TOOL_EXPORT_INVESTIGATION:
+        tools_run = a.get("tools_run") or []
+        if not isinstance(tools_run, (list, tuple)):
+            return None, "tools_run must be an array of strings"
+        evidence = a.get("evidence_times") or []
+        if not isinstance(evidence, (list, tuple)):
+            return None, "evidence_times must be an array of numbers"
+        return {
+            "finding_id": str(a.get("finding_id") or "").strip(),
+            "conclusion": str(a.get("conclusion") or "").strip(),
+            "tools_run": [str(t) for t in tools_run if t],
+            "evidence_times": _as_float_list(list(evidence)),
+        }, ""
+    if name == AI_TOOL_DETECT_PRIORITY_INVERSION:
+        out: Dict[str, Any] = {"task": str(a.get("task") or "").strip(), "window": None}
+        if a.get("window") is not None and str(a.get("window")).strip() != "":
+            try:
+                out["window"] = max(0.0, float(a.get("window")))
+            except (TypeError, ValueError):
+                return None, "window must be a number"
+        return out, ""
+    if name == AI_TOOL_FIND_RELATED_FINDINGS:
+        lim_raw = a.get("limit", 10)
+        try:
+            limit = int(lim_raw)
+        except (TypeError, ValueError):
+            return None, "limit must be an integer 1–40"
+        out = {
+            "finding_id": str(a.get("finding_id") or "").strip(),
+            "task": str(a.get("task") or "").strip(),
+            "metric": str(a.get("metric") or "").strip().lower(),
+            "window": None,
+            "limit": max(1, min(40, limit)),
+        }
+        if a.get("window") is not None and str(a.get("window")).strip() != "":
+            try:
+                out["window"] = max(0.0, float(a.get("window")))
+            except (TypeError, ValueError):
+                return None, "window must be a number"
+        return out, ""
+    if name == AI_TOOL_COMPARE_TASKS:
+        task_a = str(a.get("task_a") or "").strip()
+        task_b = str(a.get("task_b") or "").strip()
+        if not task_a or not task_b:
+            return None, "task_a and task_b must be non-empty strings"
+        metrics = a.get("metrics")
+        if metrics is not None and not isinstance(metrics, (list, tuple)):
+            return None, "metrics must be an array"
+        out = {"task_a": task_a, "task_b": task_b}
+        if isinstance(metrics, (list, tuple)):
+            out["metrics"] = [str(m).strip().lower() for m in metrics if str(m or "").strip()]
+        return out, ""
     return None, f"unknown tool {name!r}"
 
 
@@ -20156,6 +21780,12 @@ def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
         return f"Detect anomalies (limit {a.get('limit', 10)})"
     if name == AI_TOOL_CORRELATE_EVENTS:
         return f"Correlate events for {str(a.get('task') or '?').strip() or '?'}"
+    if name == AI_TOOL_FIND_CRITICAL_PATH:
+        task = str(a.get("task") or "?").strip() or "?"
+        ts = a.get("timestamp")
+        if ts is not None:
+            return f"Find critical path for {task} @ {_fmt_trace_num(ts)}"
+        return f"Find critical path for {task}"
     if name == AI_TOOL_COMPARE_PERFORMANCE:
         return "Compare performance (A vs B)"
     if name == AI_TOOL_GENERATE_REPORT:
@@ -20187,6 +21817,29 @@ def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
         return f"Optimize experiment ({task or 'auto'}, limit {lim})"
     if name == AI_TOOL_ANALYZE_TRACES:
         return "Analyze loaded traces"
+    if name == AI_TOOL_BASELINE_SCORE:
+        task = str(a.get("task") or "").strip()
+        return f"Baseline score ({task or 'all tasks'})"
+    if name == AI_TOOL_RECOMMEND_EXPERIMENTS:
+        fid = str(a.get("finding_id") or "").strip()
+        task = str(a.get("task") or "").strip()
+        label = fid or task or "top finding"
+        return f"Recommend experiments ({label})"
+    if name == AI_TOOL_EXPORT_INVESTIGATION:
+        return "Export investigation (JSON)"
+    if name == AI_TOOL_DETECT_PRIORITY_INVERSION:
+        task = str(a.get("task") or "").strip()
+        return f"Detect priority inversion ({task or 'all tasks'})"
+    if name == AI_TOOL_FIND_RELATED_FINDINGS:
+        fid = str(a.get("finding_id") or "").strip()
+        task = str(a.get("task") or "").strip()
+        metric = str(a.get("metric") or "").strip()
+        label = fid or task or metric or "top finding"
+        return f"Find related findings ({label})"
+    if name == AI_TOOL_COMPARE_TASKS:
+        a_task = str(a.get("task_a") or "?").strip() or "?"
+        b_task = str(a.get("task_b") or "?").strip() or "?"
+        return f"Compare tasks {a_task} vs {b_task}"
     return name.replace("_", " ")
 
 
@@ -21082,6 +22735,39 @@ def correlate_task_events(
     return tool_result_payload(ok, msg, data=data)
 
 
+def find_critical_path_task(
+    trace: Any,
+    task: str,
+    *,
+    timestamp: Optional[float] = None,
+    window: float = 2000.0,
+    annotations: Optional[Sequence[Any]] = None,
+) -> Dict[str, Any]:
+    """Host helper: correlate events, then build a causal critical path."""
+    if trace is None:
+        return tool_result_payload(False, "No trace loaded")
+    task = str(task or "").strip()
+    if not task:
+        return tool_result_payload(False, "task is required")
+    corr = correlate_task_events(
+        trace,
+        task,
+        around_time=timestamp,
+        window=float(window or 2000.0),
+        annotations=annotations,
+    )
+    if not corr.get("ok"):
+        return corr
+    data = corr.get("data") if isinstance(corr.get("data"), dict) else {}
+    events = data.get("events") or []
+    ctx = build_critical_path(events, task=task, timestamp=timestamp)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    out = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    out["correlation"] = data.get("correlation")
+    return tool_result_payload(ok, msg, data=out)
+
+
 def detect_anomalies_finding(
     findings: Sequence[dict],
     *,
@@ -21316,6 +23002,191 @@ def analyze_traces_snapshots(
     snapshots: Sequence[Dict[str, Any]],
 ) -> Dict[str, Any]:
     ctx = analyze_multi_traces(snapshots)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def baseline_score_finding(
+    snapshot: Dict[str, Any],
+    *,
+    profile: Optional[Dict[str, Any]] = None,
+    task: str = "",
+) -> Dict[str, Any]:
+    task = str(task or "").strip()
+    if task:
+        tasks = snapshot.get("tasks") if isinstance(snapshot, dict) else {}
+        tasks = tasks if isinstance(tasks, dict) else {}
+        snapshot = {"tasks": {k: v for k, v in tasks.items() if k == task}}
+    ctx = score_against_baseline(profile, snapshot)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def recommend_experiments_finding(
+    findings: Sequence[dict],
+    *,
+    finding_id: str = "",
+    task: str = "",
+    limit: int = 5,
+) -> Dict[str, Any]:
+    ctx = recommend_validation_experiments(
+        findings, finding_id=finding_id, task=task, limit=limit,
+    )
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def _gather_priority_episodes(
+    trace: Any,
+    *,
+    task: str = "",
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> List[dict]:
+    """All (or one task's) priority-inheritance episodes as raw dict rows."""
+    out: List[dict] = []
+    if trace is None:
+        return out
+    task = str(task or "").strip()
+    mk_filter = None
+    if task:
+        resolved = resolve_task_key(task, _task_candidates_from_trace(trace))
+        if not resolved:
+            return out
+        try:
+            from .parser import _task_merge_key
+            mk_filter = _task_merge_key(resolved)
+        except Exception:
+            mk_filter = resolved
+    all_eps = getattr(trace, "priority_episodes", None) or getattr(
+        trace, "priorityEpisodes", None) or []
+    repr_map = getattr(trace, "task_repr", None) or getattr(trace, "taskRepr", None) or {}
+    for ep in all_eps:
+        mk = getattr(ep, "mk", None) if not isinstance(ep, dict) else ep.get("mk")
+        if mk_filter is not None and mk != mk_filter:
+            continue
+        start = getattr(ep, "start_ns", None) if not isinstance(ep, dict) else ep.get("startNs")
+        stop = getattr(ep, "stop_ns", None) if not isinstance(ep, dict) else ep.get("stopNs")
+        if not _overlaps_range(start, stop, lo, hi):
+            continue
+        label = str(repr_map.get(mk) or "") if isinstance(repr_map, dict) else ""
+        if not label:
+            label = str(mk or "")
+        base = getattr(ep, "base_pri", None) if not isinstance(ep, dict) else ep.get("basePri")
+        peak = getattr(ep, "peak_pri", None) if not isinstance(ep, dict) else ep.get("peakPri")
+        inherited = bool(
+            getattr(ep, "inherited", None) if not isinstance(ep, dict) else ep.get("inherited"))
+        suspect = bool(
+            getattr(ep, "inversion_suspect", None) if not isinstance(ep, dict)
+            else ep.get("inversionSuspect"))
+        pattern = getattr(ep, "pattern", None) if not isinstance(ep, dict) else ep.get("pattern")
+        out.append({
+            "task": label,
+            "start": start,
+            "stop": stop,
+            "duration": (None if start is None or stop is None else int(stop) - int(start)),
+            "base_pri": base,
+            "peak_pri": peak,
+            "inherited": inherited,
+            "inversion_suspect": suspect,
+            "medium_tasks": _medium_labels(ep),
+            "pattern": pattern or "",
+        })
+    return out
+
+
+def detect_priority_inversion_host(
+    trace: Any,
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    task: str = "",
+    window: Optional[float] = None,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Host helper: gather PI episodes (optionally scoped to a task) and detect inversions."""
+    if trace is None:
+        return tool_result_payload(False, "No trace loaded")
+    episodes = _gather_priority_episodes(trace, task=task, lo=lo, hi=hi)
+    ctx = detect_priority_inversion(episodes, findings, task=task, window=window)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def find_related_findings_finding(
+    findings: Sequence[dict],
+    *,
+    finding_id: str = "",
+    task: str = "",
+    metric: str = "",
+    window: Optional[float] = None,
+    limit: int = 10,
+) -> Dict[str, Any]:
+    ctx = find_related_findings(
+        findings, finding_id=finding_id, task=task, metric=metric,
+        window=window, limit=limit,
+    )
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+_COMPARE_TASKS_METRICS: Tuple[str, ...] = (
+    AI_RAW_METRIC_EXECUTION,
+    AI_RAW_METRIC_BLOCKING,
+    AI_RAW_METRIC_MIGRATIONS,
+    AI_RAW_METRIC_PRIORITY,
+)
+
+
+def compare_tasks_host(
+    trace: Any,
+    task_a: str,
+    task_b: str,
+    *,
+    metrics: Optional[Sequence[str]] = None,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+    findings_text: str = "",
+) -> Dict[str, Any]:
+    """Host helper: query execution/blocking/migrations/priority for both tasks."""
+    if trace is None:
+        return tool_result_payload(False, "No trace loaded")
+    task_a = str(task_a or "").strip()
+    task_b = str(task_b or "").strip()
+    if not task_a or not task_b:
+        return tool_result_payload(False, "task_a and task_b must be non-empty strings")
+    wanted = [
+        m for m in (normalize_raw_metric(x) for x in (metrics or ()))
+        if m in _COMPARE_TASKS_METRICS
+    ]
+    if not wanted:
+        wanted = list(_COMPARE_TASKS_METRICS)
+    label_a = task_a
+    label_b = task_b
+    data_a: Dict[str, Any] = {}
+    data_b: Dict[str, Any] = {}
+    for metric in wanted:
+        res_a = query_raw_metric(trace, task_a, metric, lo=lo, hi=hi, findings_text=findings_text)
+        if res_a.get("ok"):
+            d = res_a.get("data") if isinstance(res_a.get("data"), dict) else {}
+            data_a[metric] = d
+            label_a = str(d.get("task") or label_a)
+        res_b = query_raw_metric(trace, task_b, metric, lo=lo, hi=hi, findings_text=findings_text)
+        if res_b.get("ok"):
+            d = res_b.get("data") if isinstance(res_b.get("data"), dict) else {}
+            data_b[metric] = d
+            label_b = str(d.get("task") or label_b)
+    ctx = compare_tasks_metrics(label_a, label_b, data_a, data_b, metrics=wanted)
     ok = bool(ctx.get("ok"))
     msg = str(ctx.get("message") or ("ok" if ok else "failed"))
     data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
@@ -21993,9 +23864,11 @@ AI_SYSTEM_PROMPT = (
     "For every important conclusion, cite evidence (metric names, counts, "
     "jump:TIME ranges) and state confidence as High, Medium, or Low — and "
     "whether the evidence is Directly observed, Strong correlation, Possible "
-    "explanation, or Insufficient evidence. Do not invent numbers that are "
-    "not in the findings, tool results, or Trace Compare tables. "
-    "Keep answers concise. "
+    "explanation, or Insufficient evidence. Do not invent numbers, task names, "
+    "or jump:TIME timestamps that are not in the findings, tool results, or "
+    "Trace Compare tables. If a Cursor region window is listed, only cite "
+    "jump:TIME values inside that window (or say the window has no matching "
+    "evidence). Keep answers concise. "
     + AI_TOOL_SYSTEM_ADDENDUM
 )
 
@@ -22061,6 +23934,29 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "missing. Set cursors around the worst episode, highlight the "
         "victim task, and answer with Root cause, Evidence (bullet list with "
         "jump:TIME), Confidence, and Suggested fix.",
+    ),
+    (
+        "verify",
+        "Verify finding",
+        "Verify the selected Analysis Finding. Call investigate(finding_id=ID) "
+        "first (use the finding_id given in the user message). Then collect "
+        "evidence with query_raw_metric / correlate_events / search_timeline as "
+        "needed. Place cursors and zoom_to_range on the strongest evidence. "
+        "Finish with a verdict: Confirmed, Rejected, or Inconclusive; list "
+        "Evidence as jump:TIME bullets; Confidence (High/Medium/Low); "
+        "Alternatives considered; and one next check.",
+    ),
+    (
+        "explain_region",
+        "Explain region",
+        "Explain the current timeline cursor region (scope C1–Cn — see the "
+        "Cursor region window in context). Stay strictly inside that window: "
+        "every jump:TIME you cite must fall between C1 and Cn. Identify "
+        "longest blocking, migrations, priority changes, wakeups, mutex "
+        "contention, deadline issues, idle gaps, and CPU imbalance in this "
+        "window. Call correlate_events and query_raw_metric as needed. Use "
+        "only in-window jump:TIME evidence (or state that tools found none). "
+        "End with: Summary, Top issues, Evidence, Suggested next action.",
     ),
     (
         AI_COMPARE_TEMPLATE_ID,
@@ -22161,7 +24057,53 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Are there deadline or CPU-budget concerns in the findings? What "
         "should the engineer measure next?",
     ),
+    (
+        "auto_investigate",
+        "Auto investigate",
+        "Automatically investigate and confirm the top finding end-to-end. "
+        "Call investigate(finding_id) first, then correlate_events on the "
+        "same window. Call find_critical_path to build the causal chain, or "
+        "detect_priority_inversion instead when investigate flags a "
+        "priority-inversion finding. Place cursors and zoom_to_range on the "
+        "strongest evidence. Then call what_if or optimize_experiment to "
+        "test a concrete mitigation. Finish with a verdict — Confirmed, "
+        "Rejected, or Inconclusive — Evidence as jump:TIME bullets, "
+        "Confidence (High/Medium/Low), and one recommended experiment to "
+        "run next.",
+    ),
 )
+
+# "Ask AI about this event" (timeline segment context menu) — intentionally
+# kept out of AI_TEMPLATE_QUESTIONS so it does not show in the template grid.
+# Keep in sync with web/src/utils/ollamaClient.js ASK_EVENT_PROMPT.
+ASK_EVENT_PROMPT = (
+    "Explain the timeline event for task {task} on {core} around jump:{ns} "
+    "(segment {start}-{stop}). Call correlate_events and query_raw_metric as "
+    "needed. Cite jump:TIME evidence."
+)
+
+
+def compose_ask_event_prompt(event: Optional[Dict[str, Any]]) -> str:
+    """Build the ``ASK_EVENT_PROMPT`` from a timeline segment hit dict.
+
+    *event*: ``{task, core, start, stop, ns}`` as emitted by
+    ``TimelineView.ask_ai_event_requested`` / the web segment context menu.
+    """
+    event = event or {}
+
+    def _num(key: str) -> str:
+        v = event.get(key)
+        try:
+            n = float(v)
+        except (TypeError, ValueError):
+            return "?"
+        return str(int(n)) if n.is_integer() else str(n)
+
+    task = str(event.get("task") or "").strip() or "the selected task"
+    core = str(event.get("core") or "").strip() or "its core"
+    return ASK_EVENT_PROMPT.format(
+        task=task, core=core, ns=_num("ns"), start=_num("start"), stop=_num("stop"),
+    )
 
 # Every provider is reached over its OpenAI-compatible /chat/completions API,
 # including Ollama (http://localhost:11434/v1).
@@ -22814,18 +24756,82 @@ def ai_auth_status(
     }
 
 
+def format_jump_time_token(value: Any) -> str:
+    """Format a trace timestamp for ``jump:TIME`` tokens."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if v.is_integer():
+        return str(int(v))
+    return f"{v:g}"
+
+
+def placed_cursor_times(cursors: Optional[Sequence[Any]] = None) -> List[float]:
+    """Sorted numeric cursor times (skip nulls)."""
+    out: List[float] = []
+    for c in cursors or []:
+        if c is None or c == "":
+            continue
+        try:
+            out.append(float(c))
+        except (TypeError, ValueError):
+            continue
+    out.sort()
+    return out
+
+
+def cursor_region_bounds(
+    cursors: Optional[Sequence[Any]] = None,
+) -> Optional[Tuple[float, float]]:
+    """``(lo, hi)`` from earliest/latest placed cursor, or None if <2."""
+    placed = placed_cursor_times(cursors)
+    if len(placed) < 2:
+        return None
+    lo, hi = placed[0], placed[-1]
+    if hi <= lo:
+        return None
+    return lo, hi
+
+
+def append_explain_region_bounds(
+    prompt: str,
+    cursors: Optional[Sequence[Any]] = None,
+) -> str:
+    """Append an explicit C1–Cn jump window to the Explain-region prompt."""
+    bounds = cursor_region_bounds(cursors)
+    if not bounds:
+        return str(prompt or "")
+    lo, hi = bounds
+    lo_s, hi_s = format_jump_time_token(lo), format_jump_time_token(hi)
+    extra = (
+        f"Cursor region window: jump:{lo_s} … jump:{hi_s}. "
+        "ONLY cite jump:TIME evidence inside this window. "
+        "If tools return no in-window events, say the region has no matching "
+        "evidence — do not invent timestamps or task names."
+    )
+    base = str(prompt or "").rstrip()
+    return f"{base}\n\n{extra}" if base else extra
+
+
 def normalize_ai_context(ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Accept snake_case or camelCase context keys (Desktop / Web parity)."""
     c = dict(ctx or {})
     findings = c.get("findings_text")
     if findings is None or findings == "":
         findings = c.get("findingsText", "")
+    cursors = c.get("cursors")
+    if cursors is None:
+        cursors = []
+    elif not isinstance(cursors, (list, tuple)):
+        cursors = [cursors]
     return {
         "findings_text": findings or "",
         "span": c.get("span", "") or "",
         "cores": c.get("cores", ""),
         "scope": c.get("scope", "") or "",
         "metrics": c.get("metrics"),
+        "cursors": list(cursors),
     }
 
 
@@ -22878,7 +24884,15 @@ def _md_inline_to_html_escaped(text: str) -> str:
     out_chunks: List[str] = []
     for kind, val in parts:
         if kind == "c":
-            out_chunks.append(_stash(f"<code>{html.escape(val)}</code>"))
+            # Models often wrap jump:TIME in backticks; keep those clickable.
+            jm = _JUMP_RE.fullmatch(val.strip())
+            if jm:
+                out_chunks.append(_stash(
+                    f'<a href="{btf_jump_href(jm.group(1))}" class="ai-jump">'
+                    f"jump:{jm.group(1)}</a>"
+                ))
+            else:
+                out_chunks.append(_stash(f"<code>{html.escape(val)}</code>"))
             continue
         seg = val
         seglast = 0
@@ -23306,6 +25320,7 @@ _AI_LOG_STYLE = (
     ".ai-tool-card{color:#e6d48a;}"
     "img.ai-mermaid-img{max-width:100%;height:auto;border-radius:4px;}"
     "a.ai-mermaid-zoom{cursor:zoom-in;text-decoration:none;}"
+    ".ai-evidence-score{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;}"
 )
 
 
@@ -23535,6 +25550,7 @@ def build_ai_user_message(
     span: str = "",
     cores: Any = "",
     scope: str = "",
+    cursors: Optional[Sequence[Any]] = None,
 ) -> str:
     """Assemble the user turn: context + question."""
     parts = ["### System Trace Context"]
@@ -23544,6 +25560,22 @@ def build_ai_user_message(
         parts.append(f"- Cores: {cores}")
     if scope:
         parts.append(f"- Statistics scope: {scope}")
+    placed = placed_cursor_times(cursors)
+    if placed:
+        labels = ", ".join(
+            f"C{i + 1}=jump:{format_jump_time_token(t)}"
+            for i, t in enumerate(placed)
+        )
+        parts.append(f"- Timeline cursors: {labels}")
+        bounds = cursor_region_bounds(placed)
+        if bounds:
+            lo_s = format_jump_time_token(bounds[0])
+            hi_s = format_jump_time_token(bounds[1])
+            parts.append(
+                f"- Cursor region window: jump:{lo_s} … jump:{hi_s} "
+                "(only cite jump:TIME evidence inside this window when "
+                "explaining the region)"
+            )
     parts.append("")
     parts.append("### Analysis Findings")
     parts.append((findings_text or "No findings for the current scope.").rstrip())
@@ -23565,6 +25597,7 @@ def _build_chat_messages(
     span: str = "",
     cores: Any = "",
     scope: str = "",
+    cursors: Optional[Sequence[Any]] = None,
     response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
     history: Optional[Sequence[Dict[str, str]]] = None,
 ) -> List[Dict[str, str]]:
@@ -23586,6 +25619,7 @@ def _build_chat_messages(
             span=span,
             cores=cores,
             scope=scope,
+            cursors=cursors,
         ),
     })
     return messages
@@ -24375,6 +26409,25 @@ def create_ai_assistant_panel(
             self._plan_view.hide()
             mid_lay.addWidget(self._plan_view)
 
+            self._evidence_label = QLabel("Evidence / Reasoning")
+            self._evidence_label.setStyleSheet("font-weight:600;margin-top:2px;")
+            self._evidence_label.hide()
+            mid_lay.addWidget(self._evidence_label)
+            self._evidence_view = QTextBrowser()
+            self._evidence_view.setReadOnly(True)
+            self._evidence_view.setOpenExternalLinks(False)
+            self._evidence_view.setOpenLinks(False)
+            self._evidence_view.setWordWrapMode(QTextOption.WrapMode.WordWrap)
+            self._evidence_view.setMaximumHeight(160)
+            self._evidence_view.setStyleSheet(
+                "color:#c5d0dc;font-size:11px;background:#1a222d;"
+                "border:1px solid #2c3645;border-radius:6px;padding:6px;"
+            )
+            self._evidence_view.hide()
+            self._evidence_view.document().setDefaultStyleSheet(_AI_LOG_STYLE)
+            self._evidence_view.anchorClicked.connect(self._on_jump_link)
+            mid_lay.addWidget(self._evidence_view)
+
             self.refresh_template_availability()
 
             self._log = QTextBrowser()
@@ -24695,6 +26748,7 @@ def create_ai_assistant_panel(
             self._tool_round = 0
             self._log.clear()
             self._status.setText("")
+            self._clear_evidence_panel()
             self._refresh_tool_bar()
 
         def _show_log_menu(self, pos) -> None:
@@ -24771,10 +26825,85 @@ def create_ai_assistant_panel(
                 return
             self._status.setText(f"Saved conversation to {os.path.basename(path)}")
 
-        def _export_ai_report(self, args: Dict[str, Any]) -> Dict[str, Any]:
-            """Write findings + GUI state + conversation (export_report tool)."""
-            fmt = str((args or {}).get("format") or "html").strip().lower()
-            if fmt not in ("html", "csv"):
+        def _collect_conversation_tools_run(self) -> List[str]:
+            """Tool names successfully applied so far this session, in order."""
+            out: List[str] = []
+            for e in self._entries:
+                for t in ai_entry_tools(e):
+                    if isinstance(t, dict) and t.get("status") == "applied":
+                        nm = str(t.get("name") or "")
+                        if nm:
+                            out.append(nm)
+            return out
+
+        def _collect_conversation_evidence_times(self) -> List[float]:
+            """jump:TIME evidence timestamps cited across assistant replies."""
+            out: List[float] = []
+            for e in self._entries:
+                if ai_entry_role(e) == "assistant":
+                    out.extend(extract_jump_times(ai_entry_text(e)))
+            return out
+
+        def _export_investigation_package(
+            self, args: Dict[str, Any], *, meta: Dict[str, str],
+        ) -> Dict[str, Any]:
+            """Build + save the JSON investigation replay package."""
+            finding_id = str((args or {}).get("finding_id") or "").strip()
+            conclusion = str((args or {}).get("conclusion") or "").strip()
+            tools_run = [str(t) for t in ((args or {}).get("tools_run") or []) if t]
+            evidence_times = [
+                float(t) for t in ((args or {}).get("evidence_times") or [])
+                if isinstance(t, (int, float))
+            ]
+            if not tools_run:
+                tools_run = self._collect_conversation_tools_run()
+            if not evidence_times:
+                evidence_times = self._collect_conversation_evidence_times()
+            if not conclusion:
+                for e in reversed(self._entries):
+                    if ai_entry_role(e) == "assistant":
+                        text = ai_entry_text(e).strip()
+                        if text:
+                            conclusion = text[:2000]
+                            break
+            finding = {"id": finding_id, "title": finding_id} if finding_id else None
+            package = build_investigation_package(
+                trace_name=meta.get("file", ""),
+                scope=meta.get("scope", ""),
+                finding=finding,
+                plan=self._investigation_plan,
+                tools_run=tools_run,
+                conclusion=conclusion,
+                evidence_times=evidence_times,
+                timestamp=datetime.datetime.now().isoformat(),
+            )
+            data = json.dumps(package, ensure_ascii=True, indent=2)
+            start = f"ai-investigation-{_ai_file_stamp()}.json"
+            path, _selected = QFileDialog.getSaveFileName(
+                self, "Export Investigation", start, "JSON (*.json);;All files (*)")
+            if not path:
+                return tool_result_payload(False, "Export cancelled")
+            if not path.lower().endswith(".json"):
+                path += ".json"
+            try:
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(data)
+            except OSError as exc:
+                return tool_result_payload(False, f"Could not write file: {exc}")
+            base = os.path.basename(path)
+            self._status.setText(f"Saved investigation to {base}")
+            return tool_result_payload(
+                True, f"Saved investigation package to {base}", path=path)
+
+        def _export_ai_report(
+            self, name: str, args: Dict[str, Any],
+        ) -> Dict[str, Any]:
+            """Write findings + GUI state + conversation (export_report /
+            export_investigation tools)."""
+            name = str(name or AI_TOOL_EXPORT_REPORT)
+            args = args or {}
+            fmt = str(args.get("format") or "html").strip().lower()
+            if fmt not in ("html", "csv", "json"):
                 fmt = "html"
             gui: Dict[str, Any] = {}
             if on_gui_state:
@@ -24797,6 +26926,8 @@ def create_ai_assistant_panel(
             annotations = (
                 gui.get("annotations") if isinstance(gui.get("annotations"), list) else []
             )
+            if name == AI_TOOL_EXPORT_INVESTIGATION or fmt == "json":
+                return self._export_investigation_package(args, meta=meta)
             stamp = _ai_file_stamp()
             if fmt == "csv":
                 start = f"ai-report-{stamp}.csv"
@@ -24947,14 +27078,35 @@ def create_ai_assistant_panel(
             super().showEvent(event)
             self.refresh_enabled_state()
 
-        def query_template(self, template_id: str) -> None:
+        def query_template(self, template_id: str, *, finding_id: str = "") -> None:
             """Run a built-in AI template by id (toolbar Analysis / inspector)."""
             prompt = next(
                 (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS if tid == template_id),
                 "",
             )
             if prompt:
+                fid = str(finding_id or "").strip()
+                if fid:
+                    prompt = f"{prompt}\n\nfinding_id={fid}"
+                if template_id == "explain_region" and get_context:
+                    try:
+                        cursors = (get_context() or {}).get("cursors") or []
+                    except Exception:
+                        cursors = []
+                    prompt = append_explain_region_bounds(prompt, cursors)
                 self._use_template(template_id, prompt)
+
+        def ask_event(self, event: Dict[str, Any]) -> None:
+            """Timeline context menu → Ask AI about this event."""
+            prompt = compose_ask_event_prompt(event)
+            self._use_template("ask_event", prompt)
+
+        def ask(self, prompt: str) -> None:
+            """Generic programmatic ask (composed prompt, no fixed template)."""
+            prompt = str(prompt or "").strip()
+            if not prompt:
+                return
+            self._use_template("", prompt)
 
         def query_analysis_findings(self) -> None:
             """Run the Analysis Findings template (toolbar Analysis → Query with AI)."""
@@ -25012,6 +27164,100 @@ def create_ai_assistant_panel(
             self._plan_label.hide()
             self._plan_view.hide()
             self._plan_view.clear()
+
+        def set_evidence_panel(self, data: Optional[dict]) -> None:
+            """Show structured evidence / reasoning from investigation tools."""
+            if not data:
+                self._clear_evidence_panel()
+                return
+            lines: List[str] = []
+            conclusion = str(data.get("conclusion") or "").strip()
+            if conclusion:
+                lines.append(f"<b>{html.escape(conclusion)}</b>")
+            subtitle = str(data.get("subtitle") or "").strip()
+            if subtitle:
+                lines.append(html.escape(subtitle[:320]))
+            evidence = data.get("evidence") or []
+            if evidence:
+                lines.append("<br/><b>Evidence</b>")
+                for ev in evidence:
+                    if not isinstance(ev, dict):
+                        continue
+                    label = html.escape(str(ev.get("label") or "item"))
+                    t = ev.get("time")
+                    if t is not None:
+                        try:
+                            tn = float(t)
+                            token = str(int(tn)) if tn.is_integer() else str(tn)
+                            lines.append(
+                                f"• {label} "
+                                f'<a href="{btf_jump_href(tn)}" class="ai-jump">'
+                                f"jump:{token}</a>"
+                            )
+                        except (TypeError, ValueError):
+                            lines.append(f"• {label}")
+                    else:
+                        lines.append(f"• {label}")
+            chain = str(data.get("evidence_chain") or "").strip()
+            if chain:
+                lines.append("<br/><b>Evidence chain</b>")
+                lines.append(
+                    html.escape(chain).replace("\n", "<br/>")
+                )
+            conf = data.get("confidence")
+            if conf:
+                lines.append(f"<br/><b>Confidence:</b> {html.escape(str(conf))}")
+            score = data.get("evidence_score")
+            if score is not None:
+                bar = str(data.get("evidence_score_bar") or "")
+                lines.append(
+                    "<br/><b>AI Evidence Score — heuristic:</b> "
+                    f'<span class="ai-evidence-score">{html.escape(bar)}</span>'
+                )
+            alts = data.get("alternatives") or []
+            if alts:
+                lines.append("<br/><b>Alternative hypotheses</b>")
+                for alt in alts:
+                    if not isinstance(alt, dict):
+                        continue
+                    hyp = html.escape(str(alt.get("hypothesis") or ""))
+                    status = html.escape(str(alt.get("status") or "untested"))
+                    why = html.escape(str(alt.get("why") or ""))
+                    lines.append(f"• <i>{hyp}</i> ({status}) — {why}")
+            checks = data.get("checks") or []
+            if checks:
+                lines.append("<br/><b>Verification checklist</b>")
+                for c in checks:
+                    if not isinstance(c, dict):
+                        continue
+                    label = html.escape(
+                        str(c.get("label") or c.get("metric") or "check")
+                    )
+                    status = html.escape(str(c.get("status") or ""))
+                    detail = html.escape(str(c.get("detail") or ""))
+                    lines.append(f"• {label}: {status} — {detail}")
+            chain = data.get("root_cause_chain") or []
+            hyps = data.get("hypotheses") or []
+            if chain or hyps:
+                tree_src = investigation_tree_mermaid(chain, hyps)
+                if tree_src:
+                    lines.append("<br/><b>Investigation tree</b>")
+                    lines.append(mermaid_block_html(tree_src, as_img=True, zoomable=True))
+            self._evidence_view.setHtml("<br/>".join(lines))
+            self._evidence_label.show()
+            self._evidence_view.show()
+
+        def _clear_evidence_panel(self) -> None:
+            self._evidence_label.hide()
+            self._evidence_view.hide()
+            self._evidence_view.clear()
+
+        def _update_evidence_from_tool_result(
+            self, name: str, res: Dict[str, Any],
+        ) -> None:
+            payload = extract_evidence_panel_payload(name, res)
+            if payload:
+                self.set_evidence_panel(payload)
 
         def _advance_investigation_plan(self, tool_names: Sequence[str]) -> None:
             if not self._investigation_plan:
@@ -25190,6 +27436,7 @@ def create_ai_assistant_panel(
                 for t in tools:
                     if is_export_tool(str(t.get("name") or "")):
                         results.append(self._export_ai_report(
+                            str(t.get("name") or ""),
                             t.get("arguments") if isinstance(t.get("arguments"), dict) else {}))
                     else:
                         res = (
@@ -25220,6 +27467,17 @@ def create_ai_assistant_panel(
                         res if isinstance(res, dict) else tool_result_payload(False, str(res))
                     ),
                 ))
+                tool_name = str(t.get("name") or "")
+                if tool_name in (
+                    "investigate",
+                    "correlate_events",
+                    "find_critical_path",
+                    "compare_performance",
+                ):
+                    self._update_evidence_from_tool_result(
+                        tool_name,
+                        res if isinstance(res, dict) else {},
+                    )
             if skipped:
                 self._status.setText("Skipped GUI actions.")
                 self._cleanup_worker()
@@ -25321,6 +27579,7 @@ def create_ai_assistant_panel(
                 span=ctx.get("span", ""),
                 cores=ctx.get("cores", ""),
                 scope=ctx.get("scope", ""),
+                cursors=ctx.get("cursors"),
                 response_language=cfg.get(
                     "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ),
@@ -32334,6 +34593,7 @@ class _AnalysisFindingsDialog(QDialog):
         self._scope_title = scope_title or ""
         self.wants_ai_query = False
         self._ai_needs_settings = False
+        self.wants_ai_finding_id = ""
         self.setWindowTitle(f"Analysis Findings{self._scope_title}")
         self.setModal(True)
         self.setMinimumSize(520, 360)
@@ -32350,12 +34610,14 @@ class _AnalysisFindingsDialog(QDialog):
         list_w.setWordWrap(True)
         list_w.setSpacing(4)
         list_w.setUniformItemSizes(False)
+        self._list_w = list_w
         if self._findings:
             for f in self._findings:
                 sev = f.get("severity", "info")
                 title = str(f.get("title", "Finding"))
                 text = str(f.get("text", ""))
                 item = QListWidgetItem(f"{title} — {text}")
+                item.setData(Qt.ItemDataRole.UserRole, f.get("id") or "")
                 if sev == "error":
                     item.setForeground(QBrush(QColor("#c0392b")))
                 elif sev == "warning":
@@ -32382,6 +34644,23 @@ class _AnalysisFindingsDialog(QDialog):
             "Enable AI Assistant in Settings → AI")
         rca_btn.clicked.connect(
             lambda: self._query_with_ai(ai_enabled, "root_cause"))
+        verify_btn = buttons.addButton(
+            "Verify with AI…", QDialogButtonBox.ButtonRole.ActionRole)
+        verify_btn.setToolTip(
+            "Open the AI Assistant and verify the selected finding with evidence"
+            if ai_enabled else
+            "Enable AI Assistant in Settings → AI")
+        verify_btn.clicked.connect(
+            lambda: self._query_with_ai(ai_enabled, "verify"))
+        auto_btn = buttons.addButton(
+            "Auto investigate…", QDialogButtonBox.ButtonRole.ActionRole)
+        auto_btn.setToolTip(
+            "Run the automatic investigate → correlate → critical-path → "
+            "what-if/optimize workflow"
+            if ai_enabled else
+            "Enable AI Assistant in Settings → AI")
+        auto_btn.clicked.connect(
+            lambda: self._query_with_ai(ai_enabled, "auto_investigate"))
         ai_btn = buttons.addButton(
             "Query with AI…", QDialogButtonBox.ButtonRole.ActionRole)
         ai_btn.setToolTip(
@@ -32404,6 +34683,12 @@ class _AnalysisFindingsDialog(QDialog):
     def _query_with_ai(self, ai_enabled: bool, template_id: str = "findings") -> None:
         self.wants_ai_query = True
         self.wants_ai_template = template_id or "findings"
+        self.wants_ai_finding_id = ""
+        if template_id in ("verify", "auto_investigate"):
+            item = self._list_w.currentItem()
+            if item is not None:
+                self.wants_ai_finding_id = str(
+                    item.data(Qt.ItemDataRole.UserRole) or "")
         self._ai_needs_settings = not ai_enabled
         self.accept()
 
@@ -43783,6 +46068,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         view.mark_dragging.connect(self._on_mark_dragging)
         view.bookmark_requested.connect(self._add_bookmark_at_ns)
         view.annotation_requested.connect(self._add_annotation_at_ns)
+        view.explain_region_requested.connect(self._on_explain_region_with_ai)
+        view.ask_ai_event_requested.connect(self._on_ask_ai_event)
         view.clear_bookmarks_requested.connect(self._clear_all_bookmarks)
         view.clear_annotations_requested.connect(self._clear_all_annotations)
         view.pre_change.connect(self._push_undo_snapshot)
@@ -46871,16 +49158,30 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _ai_build_context(self) -> dict:
         if not hasattr(self, "_stats_panel") or self._trace is None:
-            return {"findings_text": "No trace loaded.", "scope": "", "span": "", "cores": ""}
+            return {
+                "findings_text": "No trace loaded.",
+                "scope": "",
+                "span": "",
+                "cores": "",
+                "cursors": [],
+            }
         findings, scope_title = self._stats_panel.build_analysis_findings()
         text = _format_analysis_findings_text(findings, scope_title)
         tr = self._trace
         span = _format_time(tr.time_max - tr.time_min, tr.time_scale)
+        cursors: list = []
+        try:
+            view = getattr(self, "_view", None)
+            if view is not None and hasattr(view, "_scene"):
+                cursors = list(view._scene.cursor_times() or [])
+        except Exception:
+            cursors = []
         return {
             "findings_text": text,
             "scope": scope_title or "full trace",
             "span": span,
             "cores": len(tr.core_names or []),
+            "cursors": cursors,
         }
 
     def _ai_list_loaded_tabs(self) -> list:
@@ -47314,6 +49615,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 window=float(args.get("window") or 0),
                 annotations=list(self._annotations or []),
             )
+        if name == AI_TOOL_FIND_CRITICAL_PATH:
+            return find_critical_path_task(
+                self._trace,
+                str(args.get("task") or ""),
+                timestamp=args.get("timestamp"),
+                window=float(args.get("window") or 2000.0),
+                annotations=list(self._annotations or []),
+            )
         if name == AI_TOOL_COMPARE_PERFORMANCE:
             return self._ai_compare_performance(
                 str(args.get("tab_a") or ""),
@@ -47478,7 +49787,174 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             )
         if name == AI_TOOL_ANALYZE_TRACES:
             return self._ai_analyze_traces()
+        if name == AI_TOOL_BASELINE_SCORE:
+            task = str(args.get("task") or "").strip()
+            profile = args.get("baseline")
+            if not isinstance(profile, dict):
+                profile = self._ai_load_baseline_profile()
+            snapshot = args.get("snapshot")
+            if not isinstance(snapshot, dict):
+                snapshot = self._ai_current_task_metrics_snapshot(task)
+            return baseline_score_finding(snapshot, profile=profile, task=task)
+        if name == AI_TOOL_RECOMMEND_EXPERIMENTS:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return recommend_experiments_finding(
+                findings,
+                finding_id=str(args.get("finding_id") or ""),
+                task=str(args.get("task") or ""),
+                limit=int(args.get("limit") or 5),
+            )
+        if name == AI_TOOL_DETECT_PRIORITY_INVERSION:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            lo = hi = None
+            panel = getattr(self, "_stats_panel", None)
+            rng = panel._stats_range() if panel is not None and hasattr(panel, "_stats_range") else None
+            if rng:
+                lo, hi, _n = rng
+            return detect_priority_inversion_host(
+                self._trace,
+                findings,
+                task=str(args.get("task") or ""),
+                window=args.get("window"),
+                lo=lo,
+                hi=hi,
+            )
+        if name == AI_TOOL_FIND_RELATED_FINDINGS:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return find_related_findings_finding(
+                findings,
+                finding_id=str(args.get("finding_id") or ""),
+                task=str(args.get("task") or ""),
+                metric=str(args.get("metric") or ""),
+                window=args.get("window"),
+                limit=int(args.get("limit") or 10),
+            )
+        if name == AI_TOOL_COMPARE_TASKS:
+            lo = hi = None
+            panel = getattr(self, "_stats_panel", None)
+            rng = panel._stats_range() if panel is not None and hasattr(panel, "_stats_range") else None
+            if rng:
+                lo, hi, _n = rng
+            findings_text = ""
+            try:
+                findings_text = str((self._ai_build_context() or {}).get("findings_text") or "")
+            except Exception:
+                findings_text = ""
+            return compare_tasks_host(
+                self._trace,
+                str(args.get("task_a") or ""),
+                str(args.get("task_b") or ""),
+                metrics=args.get("metrics"),
+                lo=lo,
+                hi=hi,
+                findings_text=findings_text,
+            )
         raise RuntimeError(f"unknown tool {name}")
+
+    def _ai_load_baseline_profile(self) -> Dict[str, Any]:
+        """Historical per-task baseline profile (``[ai] baseline_profile`` JSON)."""
+        raw = self._settings.get("ai", "baseline_profile", "")
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _ai_save_baseline_profile(self, profile: Dict[str, Any]) -> None:
+        try:
+            self._settings.set(
+                "ai", "baseline_profile",
+                json.dumps(profile, ensure_ascii=True), flush=False,
+            )
+        except Exception:
+            pass
+
+    def _ai_current_task_metrics_snapshot(
+        self, task_filter: str = "", *, trace: Any = None,
+    ) -> Dict[str, Any]:
+        """Lightweight {task: {wcet_us, blocking_us, migrations}} snapshot.
+
+        Used by ``baseline_score`` when the model does not supply its own
+        ``snapshot`` argument; also used to update the stored baseline
+        profile after analyze/compare runs.
+        """
+        tr = trace if trace is not None else self._trace
+        tasks: Dict[str, Any] = {}
+        if tr is None:
+            return {"tasks": tasks}
+        findings: list = []
+        try:
+            panel = getattr(self, "_stats_panel", None)
+            if panel is not None and hasattr(panel, "build_analysis_findings"):
+                findings, _scope = panel.build_analysis_findings()
+        except Exception:
+            findings = []
+        task_filter = str(task_filter or "").strip()
+        if task_filter:
+            task_names = [task_filter]
+        else:
+            seen: set = set()
+            task_names = []
+            for row in budget_task_rows_from_findings(findings):
+                t = str(row.get("task") or "").strip()
+                if t and t not in seen:
+                    seen.add(t)
+                    task_names.append(t)
+        for t in task_names[:12]:
+            metrics: Dict[str, Any] = {}
+            label = t
+            exec_res = query_raw_metric(tr, t, "execution")
+            if exec_res.get("ok"):
+                d = exec_res.get("data") or {}
+                if d.get("max") is not None:
+                    metrics["wcet_us"] = float(d["max"]) / 1000.0
+                label = str(d.get("task") or label)
+            block_res = query_raw_metric(tr, t, "blocking")
+            if block_res.get("ok"):
+                d = block_res.get("data") or {}
+                if d.get("max") is not None:
+                    metrics["blocking_us"] = float(d["max"]) / 1000.0
+            mig_res = query_raw_metric(tr, t, "migrations")
+            if mig_res.get("ok"):
+                d = mig_res.get("data") or {}
+                if d.get("count") is not None:
+                    metrics["migrations"] = float(d["count"])
+            if metrics:
+                tasks[label] = metrics
+        return {"tasks": tasks}
+
+    def _ai_update_baseline_from_trace(self, trace: Any) -> None:
+        """Merge *trace*'s current per-task metrics into the stored baseline."""
+        try:
+            snapshot = self._ai_current_task_metrics_snapshot(trace=trace)
+            if not snapshot.get("tasks"):
+                return
+            profile = update_baseline_profile(
+                self._ai_load_baseline_profile(), snapshot,
+            )
+            self._ai_save_baseline_profile(profile)
+        except Exception:
+            pass
 
     def _ai_compare_performance(self, tab_a: str, tab_b: str) -> dict:
         idx_a = self._ai_resolve_tab_ref(tab_a, 0)
@@ -47495,6 +49971,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         name_b = _trace_display_name(tab_b_obj.path) if tab_b_obj.path else f"Tab {idx_b + 1}"
         snap_a = _trace_summary_snapshot(tr_a, lo_a, hi_a)
         snap_b = _trace_summary_snapshot(tr_b, lo_b, hi_b)
+        self._ai_update_baseline_from_trace(tr_a)
+        self._ai_update_baseline_from_trace(tr_b)
         return compare_performance_tabs(
             snap_a, snap_b, label_a=name_a, label_b=name_b,
         )
@@ -47532,6 +50010,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 _trace_summary_snapshot(tr, lo, hi) or {},
                 name=name,
             ))
+            self._ai_update_baseline_from_trace(tr)
         if not snaps:
             raise RuntimeError("No loaded traces")
         return analyze_traces_snapshots(snaps)
@@ -47684,8 +50163,33 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._focus_ai_panel()
         panel = getattr(self, "_ai_panel", None)
         tid = getattr(dlg, "wants_ai_template", "findings") or "findings"
+        finding_id = getattr(dlg, "wants_ai_finding_id", "") or ""
         if panel is not None and hasattr(panel, "query_template"):
-            QTimer.singleShot(0, lambda: panel.query_template(tid))
+            QTimer.singleShot(
+                0,
+                lambda t=tid, fid=finding_id: panel.query_template(
+                    t, finding_id=fid),
+            )
+
+    def _on_explain_region_with_ai(self) -> None:
+        """Timeline context menu → Explain this region with AI."""
+        if not self._ai_feature_enabled():
+            self._open_settings("AI")
+            return
+        self._focus_ai_panel()
+        panel = getattr(self, "_ai_panel", None)
+        if panel is not None and hasattr(panel, "query_template"):
+            QTimer.singleShot(0, lambda: panel.query_template("explain_region"))
+
+    def _on_ask_ai_event(self, event: dict) -> None:
+        """Timeline context menu → Ask AI about this event."""
+        if not self._ai_feature_enabled():
+            self._open_settings("AI")
+            return
+        self._focus_ai_panel()
+        panel = getattr(self, "_ai_panel", None)
+        if panel is not None and hasattr(panel, "ask_event"):
+            QTimer.singleShot(0, lambda e=dict(event or {}): panel.ask_event(e))
 
     def _capture_heatmap_view_snapshot(self, tab: _TraceTab) -> None:
         """Remember timeline zoom/pan/cursors before heatmap drill-down."""

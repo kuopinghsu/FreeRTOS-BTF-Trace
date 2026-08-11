@@ -23,12 +23,17 @@ from .ai_assistant import (
 from .ai_tools import (
     AI_TOOL_ADD_ANNOTATION,
     AI_TOOL_ANALYZE_TRACES,
+    AI_TOOL_BASELINE_SCORE,
     AI_TOOL_BOOKMARK_FINDING,
     AI_TOOL_CHECK_BUDGET,
     AI_TOOL_CLEAR_MARKS,
     AI_TOOL_COMPARE_PERFORMANCE,
+    AI_TOOL_COMPARE_TASKS,
     AI_TOOL_CORRELATE_EVENTS,
+    AI_TOOL_DETECT_PRIORITY_INVERSION,
+    AI_TOOL_FIND_CRITICAL_PATH,
     AI_TOOL_DETECT_ANOMALIES,
+    AI_TOOL_FIND_RELATED_FINDINGS,
     AI_TOOL_GENERATE_REPORT,
     AI_TOOL_HIGHLIGHT_TASK,
     AI_TOOL_INVESTIGATE,
@@ -37,6 +42,7 @@ from .ai_tools import (
     AI_TOOL_OPTIMIZE,
     AI_TOOL_OPTIMIZE_EXPERIMENT,
     AI_TOOL_QUERY_RAW_METRIC,
+    AI_TOOL_RECOMMEND_EXPERIMENTS,
     AI_TOOL_REGRESSION_EXPLAIN,
     AI_TOOL_RESET_VIEW,
     AI_TOOL_SEARCH_TIMELINE,
@@ -46,10 +52,16 @@ from .ai_tools import (
     AI_TOOL_WHAT_IF,
     AI_TOOL_ZOOM_TO_RANGE,
     analyze_traces_snapshots,
+    baseline_score_finding,
+    budget_task_rows_from_findings,
     check_budget_finding,
     compare_performance_tabs,
+    compare_tasks_host,
     correlate_task_events,
     detect_anomalies_finding,
+    detect_priority_inversion_host,
+    find_critical_path_task,
+    find_related_findings_finding,
     generate_report_finding,
     investigate_finding,
     investigation_replay_finding,
@@ -57,6 +69,7 @@ from .ai_tools import (
     optimize_experiment_finding,
     optimize_finding,
     query_raw_metric,
+    recommend_experiments_finding,
     regression_explain_from_compare,
     resolve_core_key,
     resolve_task_key,
@@ -66,7 +79,11 @@ from .ai_tools import (
     validate_tool_call,
     what_if_estimate,
 )
-from .ai_investigation import format_bookmark_label, snapshot_from_summary
+from .ai_investigation import (
+    format_bookmark_label,
+    snapshot_from_summary,
+    update_baseline_profile,
+)
 from .btf_slice import (
     filter_btf_file_to_range,
     reconstruct_btf_slice,
@@ -1789,6 +1806,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         view.mark_dragging.connect(self._on_mark_dragging)
         view.bookmark_requested.connect(self._add_bookmark_at_ns)
         view.annotation_requested.connect(self._add_annotation_at_ns)
+        view.explain_region_requested.connect(self._on_explain_region_with_ai)
+        view.ask_ai_event_requested.connect(self._on_ask_ai_event)
         view.clear_bookmarks_requested.connect(self._clear_all_bookmarks)
         view.clear_annotations_requested.connect(self._clear_all_annotations)
         view.pre_change.connect(self._push_undo_snapshot)
@@ -4877,16 +4896,30 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _ai_build_context(self) -> dict:
         if not hasattr(self, "_stats_panel") or self._trace is None:
-            return {"findings_text": "No trace loaded.", "scope": "", "span": "", "cores": ""}
+            return {
+                "findings_text": "No trace loaded.",
+                "scope": "",
+                "span": "",
+                "cores": "",
+                "cursors": [],
+            }
         findings, scope_title = self._stats_panel.build_analysis_findings()
         text = _format_analysis_findings_text(findings, scope_title)
         tr = self._trace
         span = _format_time(tr.time_max - tr.time_min, tr.time_scale)
+        cursors: list = []
+        try:
+            view = getattr(self, "_view", None)
+            if view is not None and hasattr(view, "_scene"):
+                cursors = list(view._scene.cursor_times() or [])
+        except Exception:
+            cursors = []
         return {
             "findings_text": text,
             "scope": scope_title or "full trace",
             "span": span,
             "cores": len(tr.core_names or []),
+            "cursors": cursors,
         }
 
     def _ai_list_loaded_tabs(self) -> list:
@@ -5320,6 +5353,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 window=float(args.get("window") or 0),
                 annotations=list(self._annotations or []),
             )
+        if name == AI_TOOL_FIND_CRITICAL_PATH:
+            return find_critical_path_task(
+                self._trace,
+                str(args.get("task") or ""),
+                timestamp=args.get("timestamp"),
+                window=float(args.get("window") or 2000.0),
+                annotations=list(self._annotations or []),
+            )
         if name == AI_TOOL_COMPARE_PERFORMANCE:
             return self._ai_compare_performance(
                 str(args.get("tab_a") or ""),
@@ -5484,7 +5525,174 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             )
         if name == AI_TOOL_ANALYZE_TRACES:
             return self._ai_analyze_traces()
+        if name == AI_TOOL_BASELINE_SCORE:
+            task = str(args.get("task") or "").strip()
+            profile = args.get("baseline")
+            if not isinstance(profile, dict):
+                profile = self._ai_load_baseline_profile()
+            snapshot = args.get("snapshot")
+            if not isinstance(snapshot, dict):
+                snapshot = self._ai_current_task_metrics_snapshot(task)
+            return baseline_score_finding(snapshot, profile=profile, task=task)
+        if name == AI_TOOL_RECOMMEND_EXPERIMENTS:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return recommend_experiments_finding(
+                findings,
+                finding_id=str(args.get("finding_id") or ""),
+                task=str(args.get("task") or ""),
+                limit=int(args.get("limit") or 5),
+            )
+        if name == AI_TOOL_DETECT_PRIORITY_INVERSION:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            lo = hi = None
+            panel = getattr(self, "_stats_panel", None)
+            rng = panel._stats_range() if panel is not None and hasattr(panel, "_stats_range") else None
+            if rng:
+                lo, hi, _n = rng
+            return detect_priority_inversion_host(
+                self._trace,
+                findings,
+                task=str(args.get("task") or ""),
+                window=args.get("window"),
+                lo=lo,
+                hi=hi,
+            )
+        if name == AI_TOOL_FIND_RELATED_FINDINGS:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return find_related_findings_finding(
+                findings,
+                finding_id=str(args.get("finding_id") or ""),
+                task=str(args.get("task") or ""),
+                metric=str(args.get("metric") or ""),
+                window=args.get("window"),
+                limit=int(args.get("limit") or 10),
+            )
+        if name == AI_TOOL_COMPARE_TASKS:
+            lo = hi = None
+            panel = getattr(self, "_stats_panel", None)
+            rng = panel._stats_range() if panel is not None and hasattr(panel, "_stats_range") else None
+            if rng:
+                lo, hi, _n = rng
+            findings_text = ""
+            try:
+                findings_text = str((self._ai_build_context() or {}).get("findings_text") or "")
+            except Exception:
+                findings_text = ""
+            return compare_tasks_host(
+                self._trace,
+                str(args.get("task_a") or ""),
+                str(args.get("task_b") or ""),
+                metrics=args.get("metrics"),
+                lo=lo,
+                hi=hi,
+                findings_text=findings_text,
+            )
         raise RuntimeError(f"unknown tool {name}")
+
+    def _ai_load_baseline_profile(self) -> Dict[str, Any]:
+        """Historical per-task baseline profile (``[ai] baseline_profile`` JSON)."""
+        raw = self._settings.get("ai", "baseline_profile", "")
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _ai_save_baseline_profile(self, profile: Dict[str, Any]) -> None:
+        try:
+            self._settings.set(
+                "ai", "baseline_profile",
+                json.dumps(profile, ensure_ascii=True), flush=False,
+            )
+        except Exception:
+            pass
+
+    def _ai_current_task_metrics_snapshot(
+        self, task_filter: str = "", *, trace: Any = None,
+    ) -> Dict[str, Any]:
+        """Lightweight {task: {wcet_us, blocking_us, migrations}} snapshot.
+
+        Used by ``baseline_score`` when the model does not supply its own
+        ``snapshot`` argument; also used to update the stored baseline
+        profile after analyze/compare runs.
+        """
+        tr = trace if trace is not None else self._trace
+        tasks: Dict[str, Any] = {}
+        if tr is None:
+            return {"tasks": tasks}
+        findings: list = []
+        try:
+            panel = getattr(self, "_stats_panel", None)
+            if panel is not None and hasattr(panel, "build_analysis_findings"):
+                findings, _scope = panel.build_analysis_findings()
+        except Exception:
+            findings = []
+        task_filter = str(task_filter or "").strip()
+        if task_filter:
+            task_names = [task_filter]
+        else:
+            seen: set = set()
+            task_names = []
+            for row in budget_task_rows_from_findings(findings):
+                t = str(row.get("task") or "").strip()
+                if t and t not in seen:
+                    seen.add(t)
+                    task_names.append(t)
+        for t in task_names[:12]:
+            metrics: Dict[str, Any] = {}
+            label = t
+            exec_res = query_raw_metric(tr, t, "execution")
+            if exec_res.get("ok"):
+                d = exec_res.get("data") or {}
+                if d.get("max") is not None:
+                    metrics["wcet_us"] = float(d["max"]) / 1000.0
+                label = str(d.get("task") or label)
+            block_res = query_raw_metric(tr, t, "blocking")
+            if block_res.get("ok"):
+                d = block_res.get("data") or {}
+                if d.get("max") is not None:
+                    metrics["blocking_us"] = float(d["max"]) / 1000.0
+            mig_res = query_raw_metric(tr, t, "migrations")
+            if mig_res.get("ok"):
+                d = mig_res.get("data") or {}
+                if d.get("count") is not None:
+                    metrics["migrations"] = float(d["count"])
+            if metrics:
+                tasks[label] = metrics
+        return {"tasks": tasks}
+
+    def _ai_update_baseline_from_trace(self, trace: Any) -> None:
+        """Merge *trace*'s current per-task metrics into the stored baseline."""
+        try:
+            snapshot = self._ai_current_task_metrics_snapshot(trace=trace)
+            if not snapshot.get("tasks"):
+                return
+            profile = update_baseline_profile(
+                self._ai_load_baseline_profile(), snapshot,
+            )
+            self._ai_save_baseline_profile(profile)
+        except Exception:
+            pass
 
     def _ai_compare_performance(self, tab_a: str, tab_b: str) -> dict:
         idx_a = self._ai_resolve_tab_ref(tab_a, 0)
@@ -5501,6 +5709,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         name_b = _trace_display_name(tab_b_obj.path) if tab_b_obj.path else f"Tab {idx_b + 1}"
         snap_a = _trace_summary_snapshot(tr_a, lo_a, hi_a)
         snap_b = _trace_summary_snapshot(tr_b, lo_b, hi_b)
+        self._ai_update_baseline_from_trace(tr_a)
+        self._ai_update_baseline_from_trace(tr_b)
         return compare_performance_tabs(
             snap_a, snap_b, label_a=name_a, label_b=name_b,
         )
@@ -5538,6 +5748,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 _trace_summary_snapshot(tr, lo, hi) or {},
                 name=name,
             ))
+            self._ai_update_baseline_from_trace(tr)
         if not snaps:
             raise RuntimeError("No loaded traces")
         return analyze_traces_snapshots(snaps)
@@ -5690,8 +5901,33 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._focus_ai_panel()
         panel = getattr(self, "_ai_panel", None)
         tid = getattr(dlg, "wants_ai_template", "findings") or "findings"
+        finding_id = getattr(dlg, "wants_ai_finding_id", "") or ""
         if panel is not None and hasattr(panel, "query_template"):
-            QTimer.singleShot(0, lambda: panel.query_template(tid))
+            QTimer.singleShot(
+                0,
+                lambda t=tid, fid=finding_id: panel.query_template(
+                    t, finding_id=fid),
+            )
+
+    def _on_explain_region_with_ai(self) -> None:
+        """Timeline context menu → Explain this region with AI."""
+        if not self._ai_feature_enabled():
+            self._open_settings("AI")
+            return
+        self._focus_ai_panel()
+        panel = getattr(self, "_ai_panel", None)
+        if panel is not None and hasattr(panel, "query_template"):
+            QTimer.singleShot(0, lambda: panel.query_template("explain_region"))
+
+    def _on_ask_ai_event(self, event: dict) -> None:
+        """Timeline context menu → Ask AI about this event."""
+        if not self._ai_feature_enabled():
+            self._open_settings("AI")
+            return
+        self._focus_ai_panel()
+        panel = getattr(self, "_ai_panel", None)
+        if panel is not None and hasattr(panel, "ask_event"):
+            QTimer.singleShot(0, lambda e=dict(event or {}): panel.ask_event(e))
 
     def _capture_heatmap_view_snapshot(self, tab: _TraceTab) -> None:
         """Remember timeline zoom/pan/cursors before heatmap drill-down."""

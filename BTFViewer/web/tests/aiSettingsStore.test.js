@@ -1,7 +1,23 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
-import { normalizeSettings } from '../src/utils/settingsStore.js'
+import { loadAiBaselineProfile, normalizeSettings, saveAiBaselineProfile } from '../src/utils/settingsStore.js'
+
+function withMemoryLocalStorage(fn) {
+  const store = new Map()
+  const prev = globalThis.localStorage
+  globalThis.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => { store.set(k, String(v)) },
+    removeItem: (k) => { store.delete(k) },
+  }
+  try {
+    return fn()
+  } finally {
+    if (prev === undefined) delete globalThis.localStorage
+    else globalThis.localStorage = prev
+  }
+}
 
 describe('AI settings storage', () => {
   it('defaults to the Ollama preset with empty per-preset fields', () => {
@@ -89,6 +105,16 @@ describe('AI settings storage', () => {
     assert.match(src, /aiListModels/)
     assert.match(src, /Refresh model list/)
     assert.doesNotMatch(src, /<datalist/)
+  })
+
+  it('persists the AI baseline profile under its own localStorage key', () => {
+    withMemoryLocalStorage(() => {
+      assert.deepEqual(loadAiBaselineProfile(), {})
+      const profile = { version: 1, samples: 1, tasks: { 'CS[28]': { wcet_us: { n: 1, mean: 100, m2: 0 } } } }
+      saveAiBaselineProfile(profile)
+      assert.deepEqual(loadAiBaselineProfile(), profile)
+      assert.equal(globalThis.localStorage.getItem('btf-viewer-settings-v1'), null)
+    })
   })
 
   it('AI settings expose authentication method and sign-in', () => {

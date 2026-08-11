@@ -645,6 +645,27 @@ describe('AI endpoint helpers', () => {
     const { normalizeAiContext } = await import('../src/utils/ollamaClient.js')
     assert.equal(normalizeAiContext({ findings_text: 'a' }).findingsText, 'a')
     assert.equal(normalizeAiContext({ findingsText: 'b' }).findingsText, 'b')
+    assert.deepEqual(normalizeAiContext({ cursors: [1, 2] }).cursors, [1, 2])
+  })
+
+  it('buildAiUserMessage includes cursor region window', async () => {
+    const {
+      appendExplainRegionBounds,
+      buildAiUserMessage,
+      cursorRegionBounds,
+    } = await import('../src/utils/ollamaClient.js')
+    const msg = buildAiUserMessage('Explain', {
+      findingsText: 'none',
+      cursors: [1060000, 1120000],
+    })
+    assert.match(msg, /C1=jump:1060000/)
+    assert.match(msg, /C2=jump:1120000/)
+    assert.match(msg, /Cursor region window: jump:1060000 … jump:1120000/)
+    assert.deepEqual(cursorRegionBounds([1120000, 1060000]), { lo: 1060000, hi: 1120000 })
+    assert.match(
+      appendExplainRegionBounds('Explain.', [1060000, 1120000]),
+      /ONLY cite jump:TIME/,
+    )
   })
 
   it('resolveAiApiKey falls back to runtime env bag', async () => {
