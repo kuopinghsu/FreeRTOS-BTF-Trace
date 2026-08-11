@@ -61,6 +61,10 @@ export function buildAiSystemPrompt(responseLanguage = DEFAULT_AI_RESPONSE_LANGU
 
 export const AI_COMPARE_TEMPLATE_ID = 'compare'
 
+// Templates that only make sense for a multi-core (SMP) trace — keep in sync
+// with btf_viewer_pkg/ai_assistant.py AI_SMP_ONLY_TEMPLATE_IDS.
+export const AI_SMP_ONLY_TEMPLATE_IDS = new Set(['migrations', 'balance'])
+
 /** @type {{ id: string, label: string, prompt: string }[]} */
 export const AI_TEMPLATE_QUESTIONS = [
   {

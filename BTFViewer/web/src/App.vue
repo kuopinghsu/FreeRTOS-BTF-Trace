@@ -1463,6 +1463,7 @@ watch(activeTabId, (newId, oldId) => {
     scheduleRender()
     autofitCpuLoadPaneHeight()
   })
+  aiPanelRef.value?.refreshCoreAvailability?.()
 })
 
 watch(
@@ -2128,7 +2129,10 @@ function buildAiCompareContext(idA, idB) {
 
 watch(
   () => tabs.value.filter(t => t?.trace).map(t => t.id).join('|'),
-  () => { aiPanelRef.value?.refreshLoadedTabs?.() },
+  () => {
+    aiPanelRef.value?.refreshLoadedTabs?.()
+    aiPanelRef.value?.refreshCoreAvailability?.()
+  },
 )
 
 // The panel stays mounted while hidden, so catch it up on re-entry: a log
@@ -2137,6 +2141,7 @@ watch(rightPanelTab, (tab) => {
   if (tab !== 'ai') return
   nextTick(() => {
     aiPanelRef.value?.refreshLoadedTabs?.()
+    aiPanelRef.value?.refreshCoreAvailability?.()
     aiPanelRef.value?.scrollLog?.()
   })
 })

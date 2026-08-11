@@ -214,9 +214,14 @@
         :key="t.id"
         type="button"
         class="ai-tpl-btn"
-        :class="{ gray: t.id === AI_COMPARE_TEMPLATE_ID && !compareEnabled }"
+        :class="{
+          gray: (t.id === AI_COMPARE_TEMPLATE_ID && !compareEnabled)
+            || (AI_SMP_ONLY_TEMPLATE_IDS.has(t.id) && !smpEnabled),
+        }"
         :title="templateTitle(t)"
-        :disabled="busy || !aiEnabled || (t.id === AI_COMPARE_TEMPLATE_ID && !compareEnabled)"
+        :disabled="busy || !aiEnabled
+          || (t.id === AI_COMPARE_TEMPLATE_ID && !compareEnabled)
+          || (AI_SMP_ONLY_TEMPLATE_IDS.has(t.id) && !smpEnabled)"
         @click="onTemplate(t)"
       >
         {{ t.label }}
@@ -437,6 +442,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import {
   AI_COMPARE_TEMPLATE_ID,
   AI_RESPONSE_LANGUAGES,
+  AI_SMP_ONLY_TEMPLATE_IDS,
   AI_TEMPLATE_QUESTIONS,
   DEFAULT_AI_PRESET,
   DEFAULT_AI_RESPONSE_LANGUAGE,
@@ -584,6 +590,30 @@ function refreshLoadedTabs() {
 
 refreshLoadedTabs()
 
+// Cores in the currently active trace — used to gray out SMP-only templates
+// (Migration thrash, Core balance) for a single-core trace. `0` means
+// unknown/no trace loaded, treated as "don't disable".
+const currentCores = ref(0)
+
+function refreshCoreAvailability() {
+  if (typeof props.getContext !== 'function') {
+    currentCores.value = 0
+    return
+  }
+  try {
+    const ctx = props.getContext()
+    if (ctx && typeof ctx.then === 'function') return
+    const n = Number(ctx?.cores)
+    currentCores.value = Number.isFinite(n) ? n : 0
+  } catch {
+    currentCores.value = 0
+  }
+}
+
+refreshCoreAvailability()
+
+const smpEnabled = computed(() => currentCores.value === 0 || currentCores.value >= 2)
+
 const compareEnabled = computed(() => loadedTabs.value.length >= 2)
 
 const comparePickSame = computed(
@@ -617,6 +647,9 @@ const toolBarVisible = computed(() => !!(pendingBatchId.value || appliedBatchId.
 function templateTitle(t) {
   if (t.id === AI_COMPARE_TEMPLATE_ID && !compareEnabled.value) {
     return 'Open at least two BTF tabs to use Trace Compare.'
+  }
+  if (AI_SMP_ONLY_TEMPLATE_IDS.has(t.id) && !smpEnabled.value) {
+    return 'This trace has a single core — not applicable.'
   }
   return t.prompt
 }
@@ -1209,7 +1242,15 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', onDocKeyDown)
 })
 
-defineExpose({ refreshLoadedTabs, ask, askCompare, clear, saveConversationAs, scrollLog })
+defineExpose({
+  refreshLoadedTabs,
+  refreshCoreAvailability,
+  ask,
+  askCompare,
+  clear,
+  saveConversationAs,
+  scrollLog,
+})
 </script>
 
 <style scoped>

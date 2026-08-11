@@ -21673,6 +21673,10 @@ def build_ai_system_prompt(
 # (id, label, prompt) — keep in sync with web/src/utils/ollamaClient.js
 AI_COMPARE_TEMPLATE_ID = "compare"
 
+# Templates that only make sense for a multi-core (SMP) trace — keep in sync
+# with web/src/utils/ollamaClient.js AI_SMP_ONLY_TEMPLATE_IDS.
+AI_SMP_ONLY_TEMPLATE_IDS = frozenset({"migrations", "balance"})
+
 AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
     (
         "findings",
@@ -23950,6 +23954,7 @@ def create_ai_assistant_panel(
 
             self._template_btns: List[QPushButton] = []
             self._compare_btn: Optional[QPushButton] = None
+            self._smp_only_btns: Dict[str, QPushButton] = {}
             for _pos, (_tid, label, prompt) in enumerate(AI_TEMPLATE_QUESTIONS):
                 btn = QPushButton(label)
                 btn.setToolTip(prompt)
@@ -23961,6 +23966,8 @@ def create_ai_assistant_panel(
                 self._template_btns.append(btn)
                 if _tid == AI_COMPARE_TEMPLATE_ID:
                     self._compare_btn = btn
+                if _tid in AI_SMP_ONLY_TEMPLATE_IDS:
+                    self._smp_only_btns[_tid] = btn
             mid_lay.addLayout(tpl_grid)
 
             self._investigation_plan: Optional[Dict[str, Any]] = None
@@ -24504,7 +24511,27 @@ def create_ai_assistant_panel(
             return out
 
         def refresh_template_availability(self) -> None:
-            """Enable Trace Compare only when 2+ loaded tabs exist."""
+            """Enable Trace Compare only when 2+ loaded tabs exist; gray out
+            SMP-only templates (Migration thrash, Core balance) for a
+            single-core trace."""
+            disabled_base = self._busy or not self._ai_is_enabled()
+
+            for _tid, btn in self._smp_only_btns.items():
+                if disabled_base:
+                    btn.setEnabled(False)
+                    continue
+                if self._trace_is_multi_core():
+                    prompt = next(
+                        (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS if tid == _tid), ""
+                    )
+                    btn.setEnabled(True)
+                    btn.setToolTip(prompt)
+                else:
+                    btn.setEnabled(False)
+                    btn.setToolTip(
+                        "This trace has a single core — not applicable."
+                    )
+
             if self._compare_btn is None:
                 return
             n = len(self._loaded_tabs())
@@ -24512,7 +24539,7 @@ def create_ai_assistant_panel(
                 (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS if tid == AI_COMPARE_TEMPLATE_ID),
                 "Trace Compare",
             )
-            if self._busy or not self._ai_is_enabled():
+            if disabled_base:
                 self._compare_btn.setEnabled(False)
                 return
             if n < 2:
@@ -24523,6 +24550,15 @@ def create_ai_assistant_panel(
             else:
                 self._compare_btn.setEnabled(True)
                 self._compare_btn.setToolTip(prompt)
+
+        def _trace_is_multi_core(self) -> bool:
+            if not get_context:
+                return True
+            try:
+                cores = int((get_context() or {}).get("cores") or 0)
+            except Exception:
+                return True
+            return cores == 0 or cores >= 2
 
         def showEvent(self, event) -> None:  # noqa: N802
             super().showEvent(event)
@@ -34626,10 +34662,10 @@ class _StatsPanel(QWidget):
                 for r in sync_rows
             ) or '<tr><td colspan="7" class="empty">No mutex/sem activity in scope</td></tr>'
             issue_body = "".join(
-                f"<tr><td>{_esc(_format_time(i['time_ns'], trace.time_scale))}</td>"
-                f"<td>{_esc(i.get('obj_key') or '—')}</td>"
-                f"<td class=\"{_sev_class(i.get('severity', ''))}\">{_esc(i.get('kind', ''))}</td>"
+                f"<tr><td>{_esc(i.get('obj_key') or '—')}</td>"
+                f"<td>{_esc(_format_time(i['time_ns'], trace.time_scale))}</td>"
                 f"<td>{_esc(i.get('detail', ''))}</td>"
+                f"<td class=\"{_sev_class(i.get('severity', ''))}\">{_esc(i.get('kind', ''))}</td>"
                 f"<td>{_esc(i.get('task_label') or '—')}</td>"
                 f"<td>{_esc(i.get('core') or '')}</td></tr>"
                 for i in sync_issues_scoped
@@ -34648,7 +34684,7 @@ class _StatsPanel(QWidget):
     <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Bounces</th><th>Avg hold</th><th>Status</th></tr></thead>
     <tbody>{sync_body}</tbody></table>
     <h3 class=\"sub\">Pairing issues</h3>
-    <table><thead><tr><th>Time</th><th>Object</th><th>Issue</th><th>Detail</th><th>Task</th><th>Core</th></tr></thead>
+    <table><thead><tr><th>Object</th><th>Time</th><th>Detail</th><th>Issue</th><th>Task</th><th>Core</th></tr></thead>
     <tbody>{issue_body}</tbody></table>
     <h3 class=\"sub\">Hold episodes (longest first)</h3>{hold_note}
     <table><thead><tr><th>Object</th><th>Holder</th><th>Take</th><th>Give</th><th>Duration</th><th>Take core</th><th>Give core</th></tr></thead>
@@ -35140,6 +35176,10 @@ class _StatsPanel(QWidget):
         interval_rows_csv = _interval_stats_rows(trace, lo, hi)
         priority_rows_csv = _priority_stats_rows(trace, lo, hi)
         sync_rows_csv = _sync_object_stats_rows(trace, lo, hi)
+        sync_issues_csv = [
+            i for i in trace.sync_issues
+            if _sync_in_scope(i["time_ns"], lo, hi)
+        ] if trace.has_sync_object_instrumentation else []
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
         tick = _tick_health_report(trace, lo, hi)
 
@@ -35205,6 +35245,7 @@ class _StatsPanel(QWidget):
             else:
                 writer.writerow(["No STI TICK events", ""])
 
+            bd_rows_csv = _core_time_breakdown(trace, lo, hi)
             writer.writerow([])
             writer.writerow([f"Core Time Breakdown{scope_suffix}"])
             writer.writerow(["Core", "Active %", "Idle %", "Tick %", "Gap %"])
@@ -35272,6 +35313,7 @@ class _StatsPanel(QWidget):
             else:
                 writer.writerow(["No data", "", "", "", "", "", "", "", "", "", ""])
 
+            pair_rows_csv = _core_pair_rows(trace, lo, hi)
             writer.writerow([])
             writer.writerow([f"Core-Pair Migration Summary{scope_suffix}"])
             writer.writerow(["From", "To", "Count", "Bounces", "Bounce %", "Avg Gap"])
@@ -35283,7 +35325,7 @@ class _StatsPanel(QWidget):
             else:
                 writer.writerow(["No migrations in scope", "", "", "", "", ""])
 
-            bd_rows_csv = _core_time_breakdown(trace, lo, hi)
+            aff_rows_csv = _task_core_affinity_rows(trace, lo, hi)
             writer.writerow([])
             writer.writerow([f"Core Affinity{scope_suffix}"])
             writer.writerow(["Task", "Mask", "Observed Cores", "Violations"])
@@ -35293,6 +35335,7 @@ class _StatsPanel(QWidget):
             else:
                 writer.writerow(["No affinity_set events", "", "", ""])
 
+            lc_rows_csv = _task_lifecycle_rows(trace, lo, hi)
             writer.writerow([])
             writer.writerow([f"Task Lifecycle{scope_suffix}"])
             writer.writerow(["Task", "Created", "Deleted", "Susp/Res", "Alive span", "Events", "Runs"])
@@ -35305,7 +35348,6 @@ class _StatsPanel(QWidget):
             else:
                 writer.writerow(["No lifecycle events", "", "", "", "", "", ""])
 
-            aff_rows_csv = _task_core_affinity_rows(trace, lo, hi)
             # Deadlines / CPU budget
             if self._cpu_budget_pct > 0 or self._task_deadlines_ns:
                 _dl_viols_csv = _deadline_violations(
@@ -35446,6 +35488,23 @@ class _StatsPanel(QWidget):
             elif trace.has_sync_object_instrumentation:
                 writer.writerow(["No mutex/sem activity in scope", "", "", "", "", "", ""])
 
+            if trace.has_sync_object_instrumentation:
+                writer.writerow([])
+                writer.writerow([f"Pairing Issues{scope_suffix}"])
+                writer.writerow(["Object", "Time", "Detail", "Issue", "Task", "Core"])
+                if sync_issues_csv:
+                    for iss in sync_issues_csv:
+                        writer.writerow([
+                            iss.get("obj_key") or "",
+                            _us(_format_time(iss["time_ns"], trace.time_scale)),
+                            iss.get("detail", ""),
+                            iss.get("kind", ""),
+                            iss.get("task_label") or "",
+                            iss.get("core") or "",
+                        ])
+                else:
+                    writer.writerow(["No pairing issues in scope", "", "", "", "", ""])
+
             queue_rows_csv = _sync_object_stats_rows(trace, lo, hi, kind_filter="queue")
             writer.writerow([])
             writer.writerow([f"Queue{scope_suffix}"])
@@ -35459,7 +35518,6 @@ class _StatsPanel(QWidget):
             else:
                 writer.writerow(["No queue activity in scope", "", "", "", "", "", ""])
 
-            lc_rows_csv = _task_lifecycle_rows(trace, lo, hi)
             writer.writerow([])
             writer.writerow([f"Interval Analysis{scope_suffix}"])
             writer.writerow(["ID", "Label", "Count", "Min", "Avg", "Max", "p95"])
@@ -35478,8 +35536,6 @@ class _StatsPanel(QWidget):
                     writer.writerow([ch, label, count, mn, avg, mx, p95])
             else:
                 writer.writerow(["No tag data", "", "", "", "", "", ""])
-
-            pair_rows_csv = _core_pair_rows(trace, lo, hi)
 
     def _export_csv(self) -> None:
         if self._trace is None:
@@ -36339,7 +36395,7 @@ class _StatsPanel(QWidget):
                     _issues_display, _issues_cap_note = cap_stats_table_rows(
                         _sync_issues_scoped)
                     if _issues_display:
-                        issue_headers = ["Time", "Object", "Issue", "Detail", "Task", "Core"]
+                        issue_headers = ["Object", "Time", "Detail", "Issue", "Task", "Core"]
                         itable = QTableWidget(len(_issues_display), len(issue_headers))
                         itable.setHorizontalHeaderLabels(issue_headers)
                         itable.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -36357,7 +36413,7 @@ class _StatsPanel(QWidget):
                         self._apply_stats_table_theme(itable, _fs)
                         _item_bg = QBrush(self._stats_table_colors()[0])
                         _issue_align = [
-                            Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignLeft,
+                            Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignRight,
                             Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignLeft,
                             Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignLeft,
                         ]
@@ -36385,18 +36441,18 @@ class _StatsPanel(QWidget):
                         self._wire_stats_table_row_hover(itable)
                         for ri, iss in enumerate(_issues_display):
                             vals = [
-                                _format_time(iss["time_ns"], trace.time_scale),
                                 iss.get("obj_key") or "—",
-                                iss.get("kind", ""),
+                                _format_time(iss["time_ns"], trace.time_scale),
                                 iss.get("detail", ""),
+                                iss.get("kind", ""),
                                 iss.get("task_label") or "—",
                                 iss.get("core") or "",
                             ]
                             sort_keys = [
-                                iss["time_ns"],
                                 (iss.get("obj_key") or "").lower(),
-                                (iss.get("kind") or "").lower(),
+                                iss["time_ns"],
                                 (iss.get("detail") or "").lower(),
+                                (iss.get("kind") or "").lower(),
                                 (iss.get("task_label") or "").lower(),
                                 (iss.get("core") or "").lower(),
                             ]
@@ -36410,7 +36466,7 @@ class _StatsPanel(QWidget):
                                 item.setToolTip(tip)
                                 if ci == 0:
                                     item.setData(Qt.ItemDataRole.UserRole, iss)
-                                if ci == 2:
+                                if ci == 3:
                                     sev = iss.get("severity", "")
                                     if sev == "error":
                                         item.setForeground(QBrush(QColor("#E74C3C")))
@@ -43920,6 +43976,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._update_tab_actions()
         self._previous_tab_index = index
         self._update_trace_quality_banner()
+        self._sync_ai_compare_template()
 
     def _close_trace_tab(self, index: int) -> None:
         if index < 0 or index >= len(self._tabs):

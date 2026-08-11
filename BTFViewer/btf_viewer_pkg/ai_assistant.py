@@ -200,6 +200,10 @@ def build_ai_system_prompt(
 # (id, label, prompt) — keep in sync with web/src/utils/ollamaClient.js
 AI_COMPARE_TEMPLATE_ID = "compare"
 
+# Templates that only make sense for a multi-core (SMP) trace — keep in sync
+# with web/src/utils/ollamaClient.js AI_SMP_ONLY_TEMPLATE_IDS.
+AI_SMP_ONLY_TEMPLATE_IDS = frozenset({"migrations", "balance"})
+
 AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
     (
         "findings",
@@ -2477,6 +2481,7 @@ def create_ai_assistant_panel(
 
             self._template_btns: List[QPushButton] = []
             self._compare_btn: Optional[QPushButton] = None
+            self._smp_only_btns: Dict[str, QPushButton] = {}
             for _pos, (_tid, label, prompt) in enumerate(AI_TEMPLATE_QUESTIONS):
                 btn = QPushButton(label)
                 btn.setToolTip(prompt)
@@ -2488,6 +2493,8 @@ def create_ai_assistant_panel(
                 self._template_btns.append(btn)
                 if _tid == AI_COMPARE_TEMPLATE_ID:
                     self._compare_btn = btn
+                if _tid in AI_SMP_ONLY_TEMPLATE_IDS:
+                    self._smp_only_btns[_tid] = btn
             mid_lay.addLayout(tpl_grid)
 
             self._investigation_plan: Optional[Dict[str, Any]] = None
@@ -3031,7 +3038,27 @@ def create_ai_assistant_panel(
             return out
 
         def refresh_template_availability(self) -> None:
-            """Enable Trace Compare only when 2+ loaded tabs exist."""
+            """Enable Trace Compare only when 2+ loaded tabs exist; gray out
+            SMP-only templates (Migration thrash, Core balance) for a
+            single-core trace."""
+            disabled_base = self._busy or not self._ai_is_enabled()
+
+            for _tid, btn in self._smp_only_btns.items():
+                if disabled_base:
+                    btn.setEnabled(False)
+                    continue
+                if self._trace_is_multi_core():
+                    prompt = next(
+                        (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS if tid == _tid), ""
+                    )
+                    btn.setEnabled(True)
+                    btn.setToolTip(prompt)
+                else:
+                    btn.setEnabled(False)
+                    btn.setToolTip(
+                        "This trace has a single core — not applicable."
+                    )
+
             if self._compare_btn is None:
                 return
             n = len(self._loaded_tabs())
@@ -3039,7 +3066,7 @@ def create_ai_assistant_panel(
                 (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS if tid == AI_COMPARE_TEMPLATE_ID),
                 "Trace Compare",
             )
-            if self._busy or not self._ai_is_enabled():
+            if disabled_base:
                 self._compare_btn.setEnabled(False)
                 return
             if n < 2:
@@ -3050,6 +3077,15 @@ def create_ai_assistant_panel(
             else:
                 self._compare_btn.setEnabled(True)
                 self._compare_btn.setToolTip(prompt)
+
+        def _trace_is_multi_core(self) -> bool:
+            if not get_context:
+                return True
+            try:
+                cores = int((get_context() or {}).get("cores") or 0)
+            except Exception:
+                return True
+            return cores == 0 or cores >= 2
 
         def showEvent(self, event) -> None:  # noqa: N802
             super().showEvent(event)

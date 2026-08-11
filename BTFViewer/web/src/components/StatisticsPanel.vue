@@ -1626,28 +1626,28 @@
               <thead>
                 <tr>
                   <th
-                    :class="thSortClass('sync_issues', 'time')"
-                    @click="toggleTableSort('sync_issues', 'time')"
-                  >
-                    Time
-                  </th>
-                  <th
                     :class="thSortClass('sync_issues', 'object')"
                     @click="toggleTableSort('sync_issues', 'object')"
                   >
                     Object
                   </th>
                   <th
-                    :class="thSortClass('sync_issues', 'issue')"
-                    @click="toggleTableSort('sync_issues', 'issue')"
+                    :class="thSortClass('sync_issues', 'time')"
+                    @click="toggleTableSort('sync_issues', 'time')"
                   >
-                    Issue
+                    Time
                   </th>
                   <th
                     :class="thSortClass('sync_issues', 'detail')"
                     @click="toggleTableSort('sync_issues', 'detail')"
                   >
                     Detail
+                  </th>
+                  <th
+                    :class="thSortClass('sync_issues', 'issue')"
+                    @click="toggleTableSort('sync_issues', 'issue')"
+                  >
+                    Issue
                   </th>
                   <th
                     :class="thSortClass('sync_issues', 'task')"
@@ -1675,12 +1675,12 @@
                   @keydown.enter.prevent="onSyncIssueClick(iss)"
                   @keydown.space.prevent="onSyncIssueClick(iss)"
                 >
-                  <td>{{ fmtTime(iss.timeNs) }}</td>
                   <td>{{ iss.objKey || '—' }}</td>
+                  <td>{{ fmtTime(iss.timeNs) }}</td>
+                  <td>{{ iss.detail }}</td>
                   <td :class="syncIssueSeverityClass(iss.severity)">
                     {{ iss.kind }}
                   </td>
-                  <td>{{ iss.detail }}</td>
                   <td>{{ iss.taskLabel || '—' }}</td>
                   <td>{{ iss.core || '' }}</td>
                 </tr>
@@ -5122,6 +5122,27 @@ function exportCsv() {
     lines.push('No mutex/sem activity in scope,,,,,,')
   }
 
+  if (tr?.hasSyncObjectInstrumentation) {
+    lines.push('')
+    lines.push(`Pairing Issues${suffix}`)
+    lines.push('Object,Time,Detail,Issue,Task,Core')
+    const issueReportRows = syncObjectIssueRows(tr, lo, hi)
+    if (issueReportRows.length) {
+      for (const iss of issueReportRows) {
+        lines.push([
+          _csvCell(iss.objKey || ''),
+          _csvCell(formatTime(iss.timeNs, tr.timeScale)),
+          _csvCell(iss.detail),
+          _csvCell(iss.kind),
+          _csvCell(iss.taskLabel || ''),
+          _csvCell(iss.core || ''),
+        ].join(','))
+      }
+    } else {
+      lines.push('No pairing issues in scope,,,,,')
+    }
+  }
+
   const queueReportRows = syncObjectStatsRows(tr, lo, hi, { kindFilter: 'queue' })
   lines.push('')
   lines.push(`Queue${suffix}`)
@@ -5399,7 +5420,7 @@ function _renderSyncObjectReportHtml(tr, lo, hi, suffix) {
     : '<tr><td colspan="7" class="empty">No mutex/sem activity in scope</td></tr>'
   const issueBody = issues.length
     ? issues.map(iss =>
-        `<tr><td>${_htmlCell(formatTime(iss.timeNs, tr.timeScale))}</td><td>${_htmlCell(iss.objKey || '—')}</td><td class="${_issueSeverityClass(iss.severity)}">${_htmlCell(iss.kind)}</td><td>${_htmlCell(iss.detail)}</td><td>${_htmlCell(iss.taskLabel || '—')}</td><td>${_htmlCell(iss.core || '')}</td></tr>`,
+        `<tr><td>${_htmlCell(iss.objKey || '—')}</td><td>${_htmlCell(formatTime(iss.timeNs, tr.timeScale))}</td><td>${_htmlCell(iss.detail)}</td><td class="${_issueSeverityClass(iss.severity)}">${_htmlCell(iss.kind)}</td><td>${_htmlCell(iss.taskLabel || '—')}</td><td>${_htmlCell(iss.core || '')}</td></tr>`,
       ).join('')
     : '<tr><td colspan="6" class="empty">No pairing issues in scope</td></tr>'
   const holdBody = holds.length
@@ -5414,7 +5435,7 @@ function _renderSyncObjectReportHtml(tr, lo, hi, suffix) {
     <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Bounces</th><th>Avg hold</th><th>Status</th></tr></thead>
     <tbody>${summaryBody}</tbody></table>
     <h3 class="sub">Pairing issues</h3>
-    <table><thead><tr><th>Time</th><th>Object</th><th>Issue</th><th>Detail</th><th>Task</th><th>Core</th></tr></thead>
+    <table><thead><tr><th>Object</th><th>Time</th><th>Detail</th><th>Issue</th><th>Task</th><th>Core</th></tr></thead>
     <tbody>${issueBody}</tbody></table>
     <h3 class="sub">Hold episodes (longest first)</h3>
     ${holdNote}

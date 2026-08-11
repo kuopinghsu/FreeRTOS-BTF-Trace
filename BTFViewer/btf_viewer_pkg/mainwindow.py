@@ -2497,6 +2497,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._update_tab_actions()
         self._previous_tab_index = index
         self._update_trace_quality_banner()
+        self._sync_ai_compare_template()
 
     def _close_trace_tab(self, index: int) -> None:
         if index < 0 or index >= len(self._tabs):
