@@ -925,16 +925,25 @@ _IC_SETTINGS = ("M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1
                 "M8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z")
 
 # App icon - multi-colour 72x72 SVG rendered in the About dialog header.
+# Timeline lanes + amber cursor + AI insight badge (keep in sync with
+# images/btfviewer-ai-icon.svg and web htmlReport / index.html favicon).
 _APP_VERSION = "1.4.0"
 _APP_ICON_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72">'
-    '<rect x="3" y="3" width="66" height="66" rx="14" fill="#1C3A6E"/>'
-    '<rect x="10" y="17" width="29" height="7" rx="3.5" fill="#5B9BD5"/>'
-    '<rect x="16" y="28" width="22" height="7" rx="3.5" fill="#7EC8E3"/>'
-    '<rect x="10" y="39" width="36" height="7" rx="3.5" fill="#5B9BD5"/>'
-    '<rect x="20" y="50" width="18" height="7" rx="3.5" fill="#7EC8E3"/>'
-    '<rect x="46" y="13" width="2" height="46" fill="#FFC107"/>'
-    '<polygon points="42,13 50,13 46,20" fill="#FFC107"/>'
+    '<rect width="72" height="72" rx="14" fill="#1C3A6E"/>'
+    '<rect x="10" y="16" width="30" height="7" rx="3.5" fill="#5B9BD5"/>'
+    '<rect x="16" y="27" width="24" height="7" rx="3.5" fill="#7EC8E3"/>'
+    '<rect x="10" y="38" width="37" height="7" rx="3.5" fill="#5B9BD5"/>'
+    '<rect x="20" y="49" width="20" height="7" rx="3.5" fill="#7EC8E3"/>'
+    '<rect x="47" y="12" width="2.5" height="48" fill="#FFC107"/>'
+    '<polygon points="43,12 54,12 48.5,19" fill="#FFC107"/>'
+    '<circle cx="53" cy="48" r="8" fill="#12263f"/>'
+    '<circle cx="53" cy="48" r="8" fill="none" stroke="#FFC107" stroke-width="1.5"/>'
+    '<circle cx="53" cy="45" r="1.4" fill="#FFC107"/>'
+    '<circle cx="50" cy="51" r="1.4" fill="#7EC8E3"/>'
+    '<circle cx="56" cy="51" r="1.4" fill="#5B9BD5"/>'
+    '<path d="M53 45 L50 51 L56 51 Z" fill="none" stroke="#FFC107" '
+    'stroke-width="1" stroke-linejoin="round"/>'
     '</svg>'
 )
 
@@ -1009,17 +1018,40 @@ def _pixmap_from_embedded_app_icon(size: int) -> QPixmap:
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(QRectF(x * s, y * s, w * s, h * s), r * s, r * s)
 
-    _rr(3, 3, 66, 66, 14, "#1C3A6E")
-    _rr(10, 17, 29, 7, 3.5, "#5B9BD5")
-    _rr(16, 28, 22, 7, 3.5, "#7EC8E3")
-    _rr(10, 39, 36, 7, 3.5, "#5B9BD5")
-    _rr(20, 50, 18, 7, 3.5, "#7EC8E3")
-    _rr(46, 13, 2, 46, 0, "#FFC107")
+    _rr(0, 0, 72, 72, 14, "#1C3A6E")
+    _rr(10, 16, 30, 7, 3.5, "#5B9BD5")
+    _rr(16, 27, 24, 7, 3.5, "#7EC8E3")
+    _rr(10, 38, 37, 7, 3.5, "#5B9BD5")
+    _rr(20, 49, 20, 7, 3.5, "#7EC8E3")
+    _rr(47, 12, 2.5, 48, 0, "#FFC107")
     p.setBrush(QBrush(QColor("#FFC107")))
+    p.setPen(Qt.PenStyle.NoPen)
     p.drawPolygon(QPolygonF([
-        QPointF(42 * s, 13 * s),
-        QPointF(50 * s, 13 * s),
-        QPointF(46 * s, 20 * s),
+        QPointF(43 * s, 12 * s),
+        QPointF(54 * s, 12 * s),
+        QPointF(48.5 * s, 19 * s),
+    ]))
+    # AI insight badge at the cursor
+    cx, cy, rad = 53.0 * s, 48.0 * s, 8.0 * s
+    p.setBrush(QBrush(QColor("#12263f")))
+    p.drawEllipse(QPointF(cx, cy), rad, rad)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.setPen(QPen(QColor("#FFC107"), max(1.0, 1.5 * s)))
+    p.drawEllipse(QPointF(cx, cy), rad, rad)
+    p.setPen(Qt.PenStyle.NoPen)
+    for dx, dy, color in (
+        (0.0, -3.0, "#FFC107"),
+        (-3.0, 3.0, "#7EC8E3"),
+        (3.0, 3.0, "#5B9BD5"),
+    ):
+        p.setBrush(QBrush(QColor(color)))
+        p.drawEllipse(QPointF(cx + dx * s, cy + dy * s), 1.4 * s, 1.4 * s)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.setPen(QPen(QColor("#FFC107"), max(1.0, 1.0 * s)))
+    p.drawPolygon(QPolygonF([
+        QPointF(cx, cy - 3 * s),
+        QPointF(cx - 3 * s, cy + 3 * s),
+        QPointF(cx + 3 * s, cy + 3 * s),
     ]))
     p.end()
     return pm

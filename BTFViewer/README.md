@@ -3,6 +3,8 @@
 
 **Version 1.4.0** — Desktop (Python) and Web
 
+![BTFViewer AI-powered](../images/btfviewer-ai.svg)
+
 Interactive viewer for FreeRTOS context-switch traces in **Best Trace Format** (`.btf`). Open plain or compressed traces, inspect scheduling on a timeline, measure with cursors, review statistics, and export reports or screenshots.
 
 ![BTF Viewer screenshot](../images/btfviewer.png)

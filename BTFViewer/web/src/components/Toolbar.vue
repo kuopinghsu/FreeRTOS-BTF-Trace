@@ -10,66 +10,11 @@
       aria-label="About RTOS BTF Viewer"
       @click="emit('showAbout')"
     >
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 72 72"
-        xmlns="http://www.w3.org/2000/svg"
+      <span
+        class="app-name-icon"
         aria-hidden="true"
-      >
-        <rect
-          x="3"
-          y="3"
-          width="66"
-          height="66"
-          rx="14"
-          fill="#1c3a6e"
-        />
-        <rect
-          x="12"
-          y="16"
-          width="29"
-          height="7"
-          rx="3"
-          fill="#5b9bd5"
-        />
-        <rect
-          x="18"
-          y="28"
-          width="22"
-          height="7"
-          rx="3"
-          fill="#7ec8e3"
-        />
-        <rect
-          x="12"
-          y="40"
-          width="36"
-          height="7"
-          rx="3"
-          fill="#5b9bd5"
-        />
-        <rect
-          x="22"
-          y="52"
-          width="18"
-          height="7"
-          rx="3"
-          fill="#7ec8e3"
-        />
-        <rect
-          x="40"
-          y="12"
-          width="3"
-          height="46"
-          rx="1"
-          fill="#ffc107"
-        />
-        <polygon
-          points="41.5,8 38,16 45,16"
-          fill="#ffc107"
-        />
-      </svg>
+        v-html="appIconSvg"
+      />
     </button>
 
     <div class="tb-sep" />
@@ -658,6 +603,9 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } 
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { supportsFileHandles, pickAndReadBtf } from '../utils/fileOpen.js'
 import { BTF_FILE_ACCEPT, loadBtfEntriesFromFile } from '../utils/btfLoad.js'
+import { appIconSvgMarkup } from '../utils/htmlReport.js'
+
+const appIconSvg = appIconSvgMarkup(16)
 
 const props = defineProps({
   modelValue:  { type: Object,  required: true },
@@ -978,6 +926,15 @@ watch(
   align-items: center;
   justify-content: center;
   transition: background 0.15s;
+}
+.app-name-icon {
+  display: inline-flex;
+  line-height: 0;
+}
+.app-name-icon :deep(svg) {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 .app-name-btn:hover {
   background: var(--tb-btn-hover);

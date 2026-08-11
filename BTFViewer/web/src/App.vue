@@ -723,13 +723,11 @@
         aria-label="About RTOS BTF Viewer"
       >
         <div class="about-hero">
-          <div class="about-icon" aria-hidden="true">
-            <span class="bar bar-1" />
-            <span class="bar bar-2" />
-            <span class="bar bar-3" />
-            <span class="bar bar-4" />
-            <span class="marker" />
-          </div>
+          <div
+            class="about-icon"
+            aria-hidden="true"
+            v-html="aboutIconSvg"
+          />
           <div class="about-title">RTOS BTF Viewer</div>
           <div class="about-subtitle">RTOS context-switch timeline visualiser · v{{ appVersion }}</div>
         </div>
@@ -1023,6 +1021,7 @@ import {
   sessionCursorsSlotCount,
 } from './utils/sessionPortable.js'
 import { downloadPerfetto } from './utils/perfettoExport.js'
+import { appIconSvgMarkup } from './utils/htmlReport.js'
 import { normalizeStatsPins, normalizeStatsSectionOrder } from './utils/statsPins.js'
 import { computeFindHits, stepFindHitIndex } from './utils/findAnalysis.js'
 import {
@@ -1068,6 +1067,7 @@ const loadingMsg = ref('')
 const loadingFileName = ref('')
 const helpOpen   = ref(false)
 const aboutOpen  = ref(false)
+const aboutIconSvg = appIconSvgMarkup(72)
 const settingsOpen = ref(false)
 const inspectorOpen = ref(false)
 const inspectorMode = ref('heatmap') // 'heatmap' | 'chord'
@@ -4243,66 +4243,16 @@ body.row-resizing * {
 }
 
 .about-icon {
-  position: relative;
   width: 72px;
   height: 72px;
-  border-radius: 16px;
-  background: #1c3a6e;
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+  line-height: 0;
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.28));
 }
 
-.about-icon .bar {
-  position: absolute;
-  left: 12px;
-  height: 7px;
-  border-radius: 999px;
-}
-
-.about-icon .bar-1 {
-  top: 14px;
-  width: 29px;
-  background: #5b9bd5;
-}
-
-.about-icon .bar-2 {
-  top: 26px;
-  left: 18px;
-  width: 22px;
-  background: #7ec8e3;
-}
-
-.about-icon .bar-3 {
-  top: 38px;
-  width: 36px;
-  background: #5b9bd5;
-}
-
-.about-icon .bar-4 {
-  top: 50px;
-  left: 22px;
-  width: 18px;
-  background: #7ec8e3;
-}
-
-.about-icon .marker {
-  position: absolute;
-  top: 10px;
-  right: 24px;
-  width: 2px;
-  height: 46px;
-  background: #ffc107;
-}
-
-.about-icon .marker::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -3px;
-  width: 0;
-  height: 0;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 8px solid #ffc107;
+.about-icon :deep(svg) {
+  display: block;
+  width: 72px;
+  height: 72px;
 }
 
 .about-title {
