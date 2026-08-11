@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="BTFViewer AI">
+  <!-- Same language as the app icon: navy plate, lane bars, amber cursor — plus one AI cue -->
+  <rect width="256" height="256" rx="48" fill="#1C3A6E"/>
+
+  <!-- Task lanes (classic mark) -->
+  <rect x="36" y="56" width="108" height="24" rx="12" fill="#5B9BD5"/>
+  <rect x="56" y="96" width="84" height="24" rx="12" fill="#7EC8E3"/>
+  <rect x="36" y="136" width="132" height="24" rx="12" fill="#5B9BD5"/>
+  <rect x="72" y="176" width="72" height="24" rx="12" fill="#7EC8E3"/>
+
+  <!-- Playhead -->
+  <rect x="168" y="44" width="8" height="168" fill="#FFC107"/>
+  <polygon points="152,44 192,44 172,68" fill="#FFC107"/>
+
+  <!-- AI cue: compact insight badge at the cursor tip -->
+  <g transform="translate(188,168)">
+    <circle r="28" fill="#12263f"/>
+    <circle r="28" fill="none" stroke="#FFC107" stroke-width="4"/>
+    <!-- stylized “A” from three nodes (analysis), not a letterform -->
+    <circle cx="0" cy="-10" r="4.5" fill="#FFC107"/>
+    <circle cx="-10" cy="10" r="4.5" fill="#7EC8E3"/>
+    <circle cx="10" cy="10" r="4.5" fill="#5B9BD5"/>
+    <path d="M0 -10 L-10 10 L10 10 Z" fill="none" stroke="#FFC107" stroke-width="3" stroke-linejoin="round"/>
+  </g>
+</svg>
