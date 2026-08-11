@@ -24846,15 +24846,28 @@ def create_ai_assistant_panel(
                 self._cleanup_worker()
                 return
             self._tool_round += 1
-            self._continue_with_messages()
+            final_round = self._tool_round >= max_tool_rounds(self._active_template_id)
+            self._continue_with_messages(final_round=final_round)
 
-        def _continue_with_messages(self) -> None:
+        def _continue_with_messages(self, final_round: bool = False) -> None:
             cfg = self._settings_dict()
             active = resolve_ai_settings(cfg)
+            messages = list(self._chat_messages)
+            if final_round:
+                # Last allowed round: drop tools so the model must answer in
+                # text now, instead of silently hitting the round cap next.
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "You have reached the tool-call limit for this turn. "
+                        "Do not call any more tools — summarize your findings "
+                        "and give your final answer now in plain text."
+                    ),
+                })
             kwargs = {
                 "query": "",
-                "messages": list(self._chat_messages),
-                "tools": ai_viewer_tools(),
+                "messages": messages,
+                "tools": [] if final_round else ai_viewer_tools(),
                 "base_url": active["base_url"],
                 "model": active["model"],
                 "api_key": active["api_key"],

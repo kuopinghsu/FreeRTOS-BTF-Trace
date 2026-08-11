@@ -1005,10 +1005,21 @@ async function askCompare(idA, idB) {
   }
 }
 
-async function runCompletion(active) {
+async function runCompletion(active, finalRound = false) {
+  let messages = chatMessages
+  if (finalRound) {
+    // Last allowed round: drop tools so the model must answer in text
+    // now, instead of silently hitting the round cap next.
+    messages = [...chatMessages, {
+      role: 'user',
+      content: 'You have reached the tool-call limit for this turn. '
+        + 'Do not call any more tools — summarize your findings and '
+        + 'give your final answer now in plain text.',
+    }]
+  }
   return aiChatCompletion({
-    messages: chatMessages,
-    tools: aiViewerTools(),
+    messages,
+    tools: finalRound ? [] : aiViewerTools(),
     baseUrl: active.baseUrl,
     model: active.model,
     apiKey: active.apiKey,
@@ -1112,12 +1123,13 @@ async function continueAfterTools() {
     return
   }
   toolRound += 1
+  const finalRound = toolRound >= maxToolRounds(activeTemplateId || '')
   const active = resolveAiSettings({ aiPreset: props.aiPreset, aiPresets: props.aiPresets })
   busy.value = true
   status.value = `Waiting for ${aiPresetInfo(active.preset).label} (${active.model})…`
   abortCtrl = new AbortController()
   try {
-    const turn = await runCompletion(active)
+    const turn = await runCompletion(active, finalRound)
     authForced.value = false
     const pending = ingestTurn(turn)
     if (pending && pending.auto) {
