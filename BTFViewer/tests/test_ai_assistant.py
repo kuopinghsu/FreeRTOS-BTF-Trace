@@ -496,13 +496,13 @@ class AiAssistantHelpersTests(unittest.TestCase):
         html_out = _format_ai_log_html("assistant", "Open jump:1805120 next")
         self.assertIn('href="btfjump:time/1805120"', html_out)
         self.assertIn(">jump:1805120</a>", html_out)
-        self.assertIn("Assistant", html_out)
+        self.assertIn("AI Assistant", html_out)
         self.assertIn('class="ai-turn"', html_out)
         # User text is escaped (no raw tags).
         esc = _format_ai_log_html("user", "<script>x</script>")
         self.assertIn("&lt;script&gt;", esc)
         self.assertNotIn("<script>", esc)
-        self.assertIn("You", esc)
+        self.assertIn("Your prompt", esc)
 
     def test_format_ai_log_html_separates_turns(self) -> None:
         """Each turn is its own table so a new prompt cannot glue onto the last reply."""
@@ -510,9 +510,9 @@ class AiAssistantHelpersTests(unittest.TestCase):
         asst = _format_ai_log_html("assistant", "Nothing much.")
         self.assertIn("ai-bubble", user)
         self.assertIn("ai-bubble", asst)
-        self.assertIn("You", user)
-        self.assertNotIn("Assistant", user)
-        self.assertIn("Assistant", asst)
+        self.assertIn("Your prompt", user)
+        self.assertNotIn("AI Assistant", user)
+        self.assertIn("AI Assistant", asst)
         doc = _ai_log_document_html([
             ("user", "Prompt one"),
             ("assistant", "Reply one"),
@@ -804,6 +804,99 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(captured, [AI_CHAT_TIMEOUT_S])
         self.assertIn("timed out", str(ctx.exception).lower())
 
+    def test_chat_completion_retries_empty_gemini_reply(self) -> None:
+        calls = {"n": 0}
+
+        class _FakeResp:
+            def __init__(self, body: bytes) -> None:
+                self._body = body
+
+            def read(self, n: int = -1) -> bytes:
+                if not self._body:
+                    return b""
+                if n is None or n < 0:
+                    out, self._body = self._body, b""
+                    return out
+                out, self._body = self._body[:n], self._body[n:]
+                return out
+
+            def close(self) -> None:
+                return None
+
+        def _urlopen(req, timeout=None, **_kw):  # noqa: ANN001
+            calls["n"] += 1
+            if calls["n"] == 1:
+                payload = {
+                    "choices": [{
+                        "finish_reason": "stop",
+                        "index": 0,
+                        "message": {"role": "assistant"},
+                    }],
+                    "model": "models/gemini-3.1-flash-lite",
+                    "usage": {"completion_tokens": 0, "prompt_tokens": 100},
+                }
+            else:
+                payload = {
+                    "choices": [{
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "Retry worked."},
+                    }],
+                }
+            return _FakeResp(json.dumps(payload).encode("utf-8"))
+
+        with patch("btf_viewer_pkg.ai_assistant.urllib.request.urlopen", _urlopen):
+            turn = ai_chat_completion(
+                query="hi",
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+                model="gemini-3.1-flash-lite",
+                api_key="test-key",
+            )
+        self.assertEqual(calls["n"], 2)
+        self.assertEqual(turn["content"], "Retry worked.")
+
+    def test_chat_completion_empty_reply_error_is_actionable(self) -> None:
+        empty = {
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {"role": "assistant"},
+            }],
+            "model": "models/gemini-3.1-flash-lite",
+            "usage": {"completion_tokens": 0, "prompt_tokens": 9051},
+        }
+
+        class _FakeResp:
+            def __init__(self, body: bytes) -> None:
+                self._body = body
+
+            def read(self, n: int = -1) -> bytes:
+                if not self._body:
+                    return b""
+                if n is None or n < 0:
+                    out, self._body = self._body, b""
+                    return out
+                out, self._body = self._body[:n], self._body[n:]
+                return out
+
+            def close(self) -> None:
+                return None
+
+        def _urlopen(req, timeout=None, **_kw):  # noqa: ANN001
+            return _FakeResp(json.dumps(empty).encode("utf-8"))
+
+        with patch("btf_viewer_pkg.ai_assistant.urllib.request.urlopen", _urlopen):
+            with self.assertRaises(RuntimeError) as ctx:
+                ai_chat_completion(
+                    query="hi",
+                    tools=ai_viewer_tools(),
+                    base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+                    model="gemini-3.1-flash-lite",
+                    api_key="test-key",
+                )
+        msg = str(ctx.exception)
+        self.assertIn("empty assistant message", msg.lower())
+        self.assertIn("gemini", msg.lower())
+        self.assertNotIn("Unexpected OpenAI-compatible response", msg)
+
     def test_markdown_to_safe_html(self) -> None:
         html_out = markdown_to_safe_html(
             "## Title\n\n"
@@ -891,14 +984,12 @@ class AiAssistantHelpersTests(unittest.TestCase):
         ]
         md = format_ai_conversation_markdown(entries)
         self.assertTrue(md.startswith("# BTF Viewer — AI Conversation"))
-        self.assertIn("## You\n\nWhy is CS[22] late?", md)
-        self.assertIn("## Answer\n\nIt migrates at jump:1805000.", md)
-        self.assertNotIn("## Assistant", md)
+        self.assertIn("## Your prompt\n\nWhy is CS[22] late?", md)
+        self.assertIn("## AI Assistant\n\n## Answer\n\nIt migrates at jump:1805000.", md)
         self.assertTrue(md.endswith("\n"))
         txt = format_ai_conversation_text(entries)
-        self.assertIn("You:\nWhy is CS[22] late?", txt)
-        self.assertIn("## Answer\n\nIt migrates at jump:1805000.", txt)
-        self.assertNotIn("Assistant:", txt)
+        self.assertIn("Your prompt:\nWhy is CS[22] late?", txt)
+        self.assertIn("AI Assistant:\n## Answer\n\nIt migrates at jump:1805000.", txt)
         self.assertNotIn("<", txt)
 
     def test_conversation_export_html(self) -> None:
@@ -909,10 +1000,13 @@ class AiAssistantHelpersTests(unittest.TestCase):
         ]
         doc = format_ai_conversation_html(entries)
         self.assertTrue(doc.startswith("<!DOCTYPE html>"))
-        self.assertIn("<title>BTF Viewer — AI Conversation</title>", doc)
-        self.assertIn('<section class="msg user"><h3>You</h3>', doc)
-        self.assertIn('<section class="msg assistant">', doc)
-        self.assertNotIn("<h3>Assistant</h3>", doc)
+        self.assertIn("<title>BTFViewer — AI Conversation</title>", doc)
+        self.assertIn('class="report-head"', doc)
+        self.assertIn('class="brand-icon"', doc)
+        self.assertIn('fill="#1C3A6E"', doc)  # embedded app SVG
+        self.assertIn(">BTFViewer<", doc)
+        self.assertIn('<section class="msg user"><h3>Your prompt</h3>', doc)
+        self.assertIn('<section class="msg assistant"><h3>AI Assistant</h3>', doc)
         # Assistant Markdown is rendered; user text is escaped.
         self.assertIn("<h2>Answer</h2>", doc)
         self.assertIn("&lt;CS[22]&gt;", doc)

@@ -289,7 +289,7 @@ DEFAULT_WINDOW_WIDTH     = 1916
 DEFAULT_WINDOW_HEIGHT    = 1088
 DEFAULT_WINDOW_X         = 254
 DEFAULT_WINDOW_Y         = 47
-DEFAULT_DOCK_LAYOUT_VERSION = "11"
+DEFAULT_DOCK_LAYOUT_VERSION = "12"
 
 # Right-panel tab indices (Statistics / Marks / Find / Legend / AI — web parity).
 _PANEL_TAB_STATS = 0

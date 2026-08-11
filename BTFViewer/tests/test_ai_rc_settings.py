@@ -66,10 +66,11 @@ class AiRcSettingsTests(unittest.TestCase):
             written = fh.read()
         self.assertNotIn("openai_preset", written)
         self.assertNotIn("ollama_url =", written)
-        self.assertNotIn("cloud-key", written.split("gemini_api_key")[0])
-        self.assertIn("gemini_api_key = cloud-key", written)
+        self.assertNotIn("cloud-key", written)
+        self.assertIn("gemini_api_key = enc1:", written)
         # Re-reading the migrated file is stable.
         self.assertEqual(host._ai_read_settings()["preset"], "gemini")
+        self.assertEqual(host._ai_read_settings()["gemini_api_key"], "cloud-key")
 
     def test_migrates_legacy_openai_vendor_to_openai_preset(self) -> None:
         host = self._host(
@@ -87,6 +88,10 @@ class AiRcSettingsTests(unittest.TestCase):
         self.assertEqual(cfg["openai_model"], "gpt-4o-mini")
         self.assertEqual(cfg["openai_api_key"], "sk-keep")
         self.assertEqual(host._ai_read_settings()["openai_api_key"], "sk-keep")
+        with open(self._rc_path, encoding="utf-8") as fh:
+            written = fh.read()
+        self.assertNotIn("sk-keep", written)
+        self.assertIn("openai_api_key = enc1:", written)
 
     def test_legacy_openai_vendor_becomes_custom(self) -> None:
         cfg = self._host(
@@ -102,6 +107,28 @@ class AiRcSettingsTests(unittest.TestCase):
         # The vendor values must not linger as the OpenAI preset's settings.
         self.assertEqual(cfg["openai_base_url"], "")
         self.assertEqual(cfg["openai_api_key"], "")
+
+    def test_plaintext_api_key_is_encrypted_on_load(self) -> None:
+        host = self._host(
+            "[ai]\n"
+            "preset = gemini\n"
+            "gemini_api_key = plain-secret\n"
+        )
+        cfg = host._ai_read_settings()
+        self.assertEqual(cfg["gemini_api_key"], "plain-secret")
+        with open(self._rc_path, encoding="utf-8") as fh:
+            written = fh.read()
+        self.assertNotIn("plain-secret", written)
+        self.assertIn("gemini_api_key = enc1:", written)
+
+    def test_set_many_stores_encrypted_api_key(self) -> None:
+        host = self._host("[ai]\npreset = openai\n")
+        host._settings.set_many("ai", {"openai_api_key": "sk-live"})
+        self.assertEqual(host._settings.get("ai", "openai_api_key"), "sk-live")
+        with open(self._rc_path, encoding="utf-8") as fh:
+            written = fh.read()
+        self.assertNotIn("sk-live", written)
+        self.assertIn("openai_api_key = enc1:", written)
 
 
 if __name__ == "__main__":

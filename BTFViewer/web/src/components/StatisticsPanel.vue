@@ -2836,6 +2836,7 @@ import { normalizeStatsPins, normalizeStatsSectionOrder, moveStatsSection, toggl
 import { buildHistogramModel } from '../utils/histogramModel.js'
 import { plotTabsForKind, resolvePlotTabSwitch } from '../utils/plotTabs.js'
 import { classifyLoadBalance, loadBalanceGaugeImgHtml, loadBalanceMetrics } from '../utils/loadBalanceGauge.js'
+import { btfHtmlReportDocument } from '../utils/htmlReport.js'
 
 const props = defineProps({
   trace:   { type: Object, default: null },
@@ -5610,130 +5611,82 @@ function exportHtml() {
 
   const analysisHtml = renderWorkflowAnalysisHtml(analysisFindings.value, suffix)
 
-  const html = `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>BTF Statistics Report</title>
-  <style>
-    :root {
-      --bg: #e9edf3;
-      --paper: #ffffff;
-      --ink: #182230;
-      --muted: #5f6f82;
-      --line: #d9e0ea;
-      --line-strong: #c8d2e0;
-      --header: #16324f;
-      --accent: #2a6fb2;
-      --stripe: #f7f9fc;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      padding: 28px;
-      font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-      color: var(--ink);
-      background: radial-gradient(circle at top right, #f6f8fb 0%, var(--bg) 52%, #dde4ee 100%);
-    }
-    .report { max-width: 1160px; margin: 0 auto; }
-    .report-head {
-      background: linear-gradient(135deg, var(--header) 0%, #21496f 100%);
-      color: #f3f7fd;
-      border-radius: 14px;
-      padding: 20px 24px;
-      box-shadow: 0 10px 28px rgba(17, 44, 69, 0.24);
-      margin-bottom: 18px;
-    }
-    h1 { margin: 0; font-size: 28px; letter-spacing: 0.2px; }
-    .sub { margin-top: 6px; color: #cfe1f7; font-size: 13px; }
-    .kpi-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-      gap: 10px;
-      margin-bottom: 16px;
-    }
-    .kpi {
-      background: var(--paper);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 12px 14px;
-      box-shadow: 0 2px 8px rgba(30, 60, 90, 0.06);
-    }
-    .kpi .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }
-    .kpi .v { margin-top: 4px; font-size: 20px; font-weight: 700; color: #0f2b47; }
-    .report-card {
-      margin: 14px 0;
-      background: var(--paper);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 12px 14px 14px;
-      box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
-    }
-    h2 { margin: 0 0 10px 0; color: #123355; font-size: 17px; }
-    .notes { border-left: 4px solid var(--accent); }
-    .notes ul { margin: 8px 0 0 18px; padding: 0; }
-    .notes li { margin: 6px 0; line-height: 1.45; }
-    table { border-collapse: separate; border-spacing: 0; width: 100%; }
-    th, td { border-bottom: 1px solid var(--line); padding: 8px 10px; font-size: 13px; text-align: right; }
-    th:first-child, td:first-child { text-align: left; }
-    thead th {
-      background: #f1f5fb;
-      color: #284563;
-      font-weight: 600;
-      border-top: 1px solid var(--line-strong);
-      border-bottom: 1px solid var(--line-strong);
-    }
-    tbody tr:nth-child(even) td { background: var(--stripe); }
-    .empty { text-align: center !important; color: var(--muted); }
-    .detail-note { margin: 6px 0 8px; font-size: 12px; color: var(--muted); }
-    h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }
-    .sev-error, .sync-status-error { color: #c0392b; font-weight: 600; }
-    .sev-warning, .sync-status-warning { color: #d68910; font-weight: 600; }
-    .finding-info { color: var(--ink); }
-    .findings-list { margin: 8px 0 0 18px; padding: 0; }
-    .findings-list li { margin: 8px 0; line-height: 1.45; }
-    .finding-wf {
-      color: var(--muted); font-size: 11px; font-weight: 600;
-      text-transform: uppercase; letter-spacing: 0.4px;
-    }
-    .analysis-findings { border-left: 4px solid #c0392b; }
-    .sync-status-ok { color: #1e8449; }
-    .report-foot { margin-top: 14px; color: var(--muted); font-size: 12px; text-align: right; }
-    .report-toc {
-      background: var(--paper);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 12px 14px;
-      margin: 14px 0;
-      box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
-    }
-    .report-toc h2 { margin: 0 0 8px 0; }
-    .report-toc ul { margin: 0; padding: 0 0 0 18px; columns: 2; column-gap: 24px; }
-    .report-toc li { margin: 4px 0; }
-    .report-toc a { color: var(--accent); text-decoration: none; }
-    .report-toc a:hover { text-decoration: underline; }
-    details.report-card { scroll-margin-top: 12px; }
-    details.report-card > summary { cursor: pointer; list-style: none; }
-    details.report-card > summary::-webkit-details-marker { display: none; }
-    details.report-card > summary h2 { display: inline-block; margin: 0; }
-    details.report-card > summary::before {
-      content: "\\25B8";
-      display: inline-block;
-      width: 14px;
-      margin-right: 6px;
-      color: var(--accent);
-      transition: transform 0.15s ease;
-    }
-    details.report-card[open] > summary::before { transform: rotate(90deg); }
-    ${_HTML_EXPORT_UTIL_CSS}
-  </style>
-</head>
-<body>
-  <div class="report">
-    <header class="report-head">
-      <h1>BTF Statistics Report</h1>
-      <div class="sub">Generated: ${_htmlCell(new Date().toLocaleString())}</div>
-    </header>
+  const stamp = new Date().toLocaleString()
+  const statsExtraCss = `
+:root { --line-strong: #c8d2e0; --stripe: #f7f9fc; }
+.report.report-wide { max-width: 1160px; }
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.kpi {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: 0 2px 8px rgba(30, 60, 90, 0.06);
+}
+.kpi .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }
+.kpi .v { margin-top: 4px; font-size: 20px; font-weight: 700; color: #0f2b47; }
+.notes { border-left: 4px solid var(--accent); }
+.notes ul { margin: 8px 0 0 18px; padding: 0; }
+.notes li { margin: 6px 0; line-height: 1.45; }
+table { border-collapse: separate; border-spacing: 0; width: 100%; }
+th, td { border-bottom: 1px solid var(--line); padding: 8px 10px; font-size: 13px; text-align: right; }
+th:first-child, td:first-child { text-align: left; }
+thead th {
+  background: #f1f5fb;
+  color: #284563;
+  font-weight: 600;
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+}
+tbody tr:nth-child(even) td { background: var(--stripe); }
+.empty { text-align: center !important; color: var(--muted); }
+.detail-note { margin: 6px 0 8px; font-size: 12px; color: var(--muted); }
+h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }
+.sev-error { color: #c0392b; font-weight: 600; }
+.sev-warning { color: #d68910; font-weight: 600; }
+.finding-info { color: var(--ink); }
+.findings-list { margin: 8px 0 0 18px; padding: 0; }
+.findings-list li { margin: 8px 0; line-height: 1.45; }
+.finding-wf {
+  color: var(--muted); font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.4px;
+}
+.analysis-findings { border-left: 4px solid #c0392b; }
+.report-toc {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin: 14px 0;
+  box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
+}
+.report-toc h2 { margin: 0 0 8px 0; }
+.report-toc ul { margin: 0; padding: 0 0 0 18px; columns: 2; column-gap: 24px; }
+.report-toc li { margin: 4px 0; }
+.report-toc a { color: var(--accent); text-decoration: none; }
+.report-toc a:hover { text-decoration: underline; }
+details.report-card { scroll-margin-top: 12px; }
+details.report-card > summary { cursor: pointer; list-style: none; }
+details.report-card > summary::-webkit-details-marker { display: none; }
+details.report-card > summary h2 { display: inline-block; margin: 0; }
+details.report-card > summary::before {
+  content: "\\25B8";
+  display: inline-block;
+  width: 14px;
+  margin-right: 6px;
+  color: var(--accent);
+  transition: transform 0.15s ease;
+}
+details.report-card[open] > summary::before { transform: rotate(90deg); }
+${_HTML_EXPORT_UTIL_CSS}
+`.trim()
+
+  const body = `
     <section class="kpi-grid">
       <article class="kpi"><div class="k">Span${_htmlCell(suffix)}</div><div class="v">${_htmlCell(spanStr.value)}</div></article>
       <article class="kpi"><div class="k">Tasks</div><div class="v">${_htmlCell(summaryTaskCount.value.toLocaleString())}</div></article>
@@ -5906,9 +5859,7 @@ function exportHtml() {
     })() : ''}
     ${_renderIntervalReportHtml(tr, lo, hi, suffix)}
     ${_renderTagReportHtml(tr, lo, hi, suffix)}
-    <div class="report-foot">Generated by BTF Viewer</div>
-  </div>
-  <script>
+    <script>
     (function () {
       function openTarget(id) {
         var el = document.getElementById(id)
@@ -5920,9 +5871,15 @@ function exportHtml() {
       window.addEventListener('hashchange', function () { openTarget(location.hash.slice(1)) })
       if (location.hash) openTarget(location.hash.slice(1))
     })()
-  </` + `script>
-</body>
-</html>`
+    </` + `script>
+`
+
+  const html = btfHtmlReportDocument('Statistics Report', body, {
+    subtitle: `Generated: ${stamp}`,
+    extraCss: statsExtraCss,
+    docTitle: 'BTFViewer — Statistics Report',
+    reportClass: 'report-wide',
+  })
 
   const { nav, html: collapsibleHtml } = _makeCollapsibleSections(html)
   const finalHtml = collapsibleHtml.replace('<!--TOC-->', nav)

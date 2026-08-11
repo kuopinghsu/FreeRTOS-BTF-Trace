@@ -3567,6 +3567,8 @@ onMounted(async () => {
     cpuLoadPaneHeight,
     sectionHeights: statsSectionHeights,
     setCpuLoadUserSized: () => { _cpuLoadUserSized = true },
+  }, {
+    rightPanelWidth: RIGHT_PANEL_WIDTH,
   })
   rightPanelTab.value = firstVisibleRightPanelTab(appSettings)
   window.addEventListener('keydown', onGlobalKeydown)

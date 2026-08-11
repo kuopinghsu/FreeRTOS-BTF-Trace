@@ -268,7 +268,7 @@
         :class="m.role"
       >
         <div class="ai-msg-role">
-          {{ m.role === 'user' ? 'You' : 'Assistant' }}
+          {{ aiRoleLabel(m.role) }}
         </div>
         <div
           class="ai-msg-body"
@@ -280,13 +280,21 @@
           v-if="m.tools && m.tools.length"
           class="ai-tool-card"
         >
-          <p
+          <template
             v-for="t in m.tools"
             :key="t.id"
           >
-            ⚡ {{ toolLabel(t) }}
-            <span class="ai-tool-st">({{ t.status || 'pending' }})</span>
-          </p>
+            <p>
+              ⚡ {{ toolLabel(t) }}
+              <span class="ai-tool-st">({{ t.status || 'pending' }})</span>
+            </p>
+            <p
+              v-if="t.status === 'failed' && (t.result || t.error)"
+              class="ai-tool-fail"
+            >
+              {{ t.result || t.error }}
+            </p>
+          </template>
           <div
             v-if="batchPending(m)"
             class="ai-tool-actions"
@@ -480,7 +488,9 @@ import {
 } from '../utils/aiInvestigation.js'
 import {
   aiFileStamp,
+  aiRoleLabel,
   formatAiConversationHtml,
+  formatAiConversationHtmlBody,
   formatAiConversationMarkdown,
   formatAiConversationText,
   formatAiMessageHtml,
@@ -863,17 +873,12 @@ function exportAiReport(args = {}) {
     name = `ai-report-${stamp}.csv`
     mime = 'text/csv;charset=utf-8'
   } else {
-    let inner = formatAiConversationHtml(messages.value)
-    const low = inner.toLowerCase()
-    const a = low.indexOf('<body>')
-    const b = low.lastIndexOf('</body>')
-    if (a >= 0 && b > a) inner = inner.slice(a + 6, b)
     data = buildAiReportHtml({
       meta,
       gui,
       findings,
       annotations,
-      conversationHtml: inner,
+      conversationHtml: formatAiConversationHtmlBody(messages.value),
     })
     name = `ai-report-${stamp}.html`
     mime = 'text/html;charset=utf-8'
@@ -1392,11 +1397,10 @@ defineExpose({
   font-weight: 600;
   font-size: 12px;
 }
-/* Two columns: keep the log usable, but leave enough height that every
-   template label stays readable (scroll if the panel is very short). */
+/* Three columns: keep the log usable; scroll if the panel is very short. */
 .ai-templates {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 4px;
   max-height: min(42vh, 320px);
   overflow-y: auto;
@@ -1524,9 +1528,7 @@ defineExpose({
 }
 .ai-msg-role {
   font-weight: 700;
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 11px;
   margin-bottom: 4px;
 }
 .ai-msg.user .ai-msg-role { color: #6ea8e0; }
@@ -1635,6 +1637,11 @@ defineExpose({
 }
 .ai-tool-card p { margin: 2px 0; }
 .ai-tool-st { color: #8b98a8; }
+.ai-tool-fail {
+  margin: 2px 0 6px 1.2em;
+  color: #8b98a8;
+  font-size: 11px;
+}
 .ai-tool-actions {
   display: flex;
   gap: 8px;

@@ -504,7 +504,10 @@ class AiToolsTests(unittest.TestCase):
             annotations=[{"time": 1, "note": "n"}],
             conversation_html="<p>hi</p>",
         )
-        self.assertIn("AI Report", html)
+        self.assertIn("AI Diagnostic Report", html)
+        self.assertIn("BTFViewer", html)
+        self.assertIn('class="report-head"', html)
+        self.assertIn('fill="#1C3A6E"', html)
         self.assertIn("Low[266]", html)
         self.assertIn("<p>hi</p>", html)
 

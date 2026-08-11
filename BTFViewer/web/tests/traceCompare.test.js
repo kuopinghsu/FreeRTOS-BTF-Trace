@@ -228,6 +228,10 @@ describe('new compare builders', () => {
     assert.match(csv, /Sync Objects/)
 
     const html = buildCompareHtml('A.btf', 'B.btf', false, tables)
+    assert.match(html, /BTFViewer/)
+    assert.match(html, /class="report-head"/)
+    assert.match(html, /class="brand-icon"/)
+    assert.match(html, /fill="#1C3A6E"/)
     assert.match(html, /<h2>Core Util<\/h2>/)
     assert.match(html, /<h2>Execution Time<\/h2>/)
     assert.match(html, /<h2>Inter-Arrival Time<\/h2>/)

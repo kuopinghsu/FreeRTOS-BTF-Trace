@@ -51,7 +51,7 @@ class PanelTabVisibilityTest(unittest.TestCase):
                 f"show_find={find}\n"
                 "show_ai=true\n"
                 "[window]\n"
-                "dock_layout_version=11\n"
+                "dock_layout_version=12\n"
                 "maximized=false\n"
                 "width=1200\n"
                 "height=800\n"

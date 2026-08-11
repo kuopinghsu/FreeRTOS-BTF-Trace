@@ -27,6 +27,7 @@ GENERATED_BANNER = (
 # Monolith section order for the bundled single file.
 BUNDLE_MODULES: list[str] = [
     "config",
+    "html_report",
     "parser",
     "btf_slice",
     "timeline_util",
@@ -37,6 +38,7 @@ BUNDLE_MODULES: list[str] = [
     "ai_tools",
     "ai_mermaid",
     "ai_assistant",
+    "rc_secrets",
     "stats",
     "mvvm/base",
     "mvvm/models",
@@ -62,7 +64,9 @@ SECTION_MARKERS: dict[str, str] = {
     "scene": "# Scene",
     "graphics_items": "# Custom graphics items",
     "view": "# Navigator Popup",
+    "html_report": "# HTML report chrome",
     "ai_assistant": "# AI Assistant (Ollama)",
+    "rc_secrets": "# Encrypted AI API keys in btf_viewer.rc",
     "stats": "# Main Window",
     "mvvm/base": "# MVVM",
     "trace_quality": "# Trace quality metadata",
@@ -94,6 +98,7 @@ import csv
 import datetime
 import functools
 import hashlib
+import hmac
 import html
 from html.parser import HTMLParser
 import ssl
@@ -102,6 +107,9 @@ import json
 import math
 import time
 import re
+import secrets
+import getpass
+import platform
 import shutil
 import subprocess
 import tempfile

@@ -7,10 +7,11 @@
 import {
   AI_TOOL_SYSTEM_ADDENDUM,
   aiViewerTools,
+  assistantMessageText,
+  emptyChatCompletionError,
   ensureGeminiThoughtSignatures,
   extractToolCalls,
   mergeToolCalls,
-  messageContentText,
   needsGeminiThoughtSignatures,
   normalizeToolChatMessages,
   parseToolCallsFromText,
@@ -1038,6 +1039,8 @@ export async function aiChatCompletion({
   }
 
   let data
+  let useToolsActive = useTools
+  let turn = { content: '', calls: [], msg: {} }
   try {
     try {
       data = await post(payload)
@@ -1060,30 +1063,70 @@ export async function aiChatCompletion({
         'unknown field "tools"',
         "unknown field 'tools'",
       ].some(s => detail.includes(s))
-      if (useTools && [400, 404, 422].includes(code) && unsupported) {
+      if (useToolsActive && [400, 404, 422].includes(code) && unsupported) {
         delete payload.tools
         delete payload.tool_choice
+        useToolsActive = false
         data = await post(payload)
       } else {
         throw err
       }
     }
+
+    const parseTurn = (respBody) => {
+      const choice0 = respBody?.choices?.[0] || {}
+      const msg = choice0.message || respBody?.message || {}
+      let content = assistantMessageText(msg, choice0)
+      let calls = extractToolCalls(msg)
+      if (!calls.length && choice0.tool_calls) {
+        calls = extractToolCalls({ tool_calls: choice0.tool_calls })
+      }
+      const textCalls = parseToolCallsFromText(content)
+      calls = mergeToolCalls(calls, textCalls)
+      if (textCalls.length) content = stripParsedToolMarkup(content)
+      return { content, calls, msg }
+    }
+
+    turn = parseTurn(data)
+    if (!turn.content && !turn.calls.length) {
+      // Gemini occasionally returns finish_reason=stop with 0 completion tokens.
+      data = await post(payload)
+      turn = parseTurn(data)
+    }
+    if (!turn.content && !turn.calls.length && useToolsActive) {
+      const nudge = {
+        ...payload,
+        messages: [
+          ...chatMessages,
+          {
+            role: 'user',
+            content:
+              'Your previous reply was empty (no text and no tool call). '
+              + 'Answer now with a short analysis, or call a tool.',
+          },
+        ],
+      }
+      data = await post(nudge)
+      turn = parseTurn(data)
+    }
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      if (signal?.aborted && !timedOut) throw err
+      throw new Error(
+        `OpenAI-compatible request timed out after ${Math.round(timeoutMs / 1000)}s (${urlBase})`,
+        { cause: err },
+      )
+    }
+    throw err
   } finally {
     clearTimeout(timer)
     if (signal) signal.removeEventListener('abort', onAbort)
   }
-  const choice0 = data?.choices?.[0] || {}
-  const msg = choice0.message || data?.message || {}
-  let content = messageContentText(msg.content)
-  let calls = extractToolCalls(msg)
-  if (!calls.length && choice0.tool_calls) {
-    calls = extractToolCalls({ tool_calls: choice0.tool_calls })
+
+  if (!turn.content && !turn.calls.length) {
+    throw new Error(emptyChatCompletionError(data, { hadTools: Boolean(useToolsActive) }))
   }
-  const textCalls = parseToolCallsFromText(content)
-  calls = mergeToolCalls(calls, textCalls)
-  if (textCalls.length) content = stripParsedToolMarkup(content)
-  if (!content && !calls.length) throw new Error('Unexpected chat response')
-  return { content, tool_calls: calls, message: msg }
+  return { content: turn.content, tool_calls: turn.calls, message: turn.msg }
 }
 
 /**

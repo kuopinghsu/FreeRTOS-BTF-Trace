@@ -395,6 +395,46 @@ describe('AI endpoint helpers', () => {
     }
   })
 
+  it('aiChatCompletion retries empty Gemini assistant replies', async () => {
+    const { aiChatCompletion } = await import('../src/utils/ollamaClient.js')
+    const orig = globalThis.fetch
+    let n = 0
+    globalThis.fetch = async () => {
+      n += 1
+      const body = n === 1
+        ? {
+          choices: [{ finish_reason: 'stop', message: { role: 'assistant' } }],
+          model: 'models/gemini-3.1-flash-lite',
+          usage: { completion_tokens: 0, prompt_tokens: 100 },
+        }
+        : {
+          choices: [{
+            finish_reason: 'stop',
+            message: { role: 'assistant', content: 'Retry worked.' },
+          }],
+        }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => 'application/json' },
+        json: async () => body,
+        text: async () => '',
+      }
+    }
+    try {
+      const turn = await aiChatCompletion({
+        query: 'hi',
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        model: 'gemini-3.1-flash-lite',
+        apiKey: 'test-key',
+      })
+      assert.equal(n, 2)
+      assert.equal(turn.content, 'Retry worked.')
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+
   it('aiChatCompletion times out like desktop (120s default)', async () => {
     const { aiChatCompletion, AI_CHAT_TIMEOUT_MS } = await import('../src/utils/ollamaClient.js')
     assert.equal(AI_CHAT_TIMEOUT_MS, 120000)

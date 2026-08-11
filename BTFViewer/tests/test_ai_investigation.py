@@ -197,6 +197,15 @@ class AiInvestigationTests(unittest.TestCase):
             self.assertIn(name, AI_VIEWER_TOOL_NAMES)
         args, err = validate_tool_call(AI_TOOL_WHAT_IF, {"change": "pin X", "task": "X"})
         self.assertEqual(err, "")
+        self.assertEqual(args["change"], "pin X")
+        # Task-only calls (common after "run what_if on task 9") get a default pin.
+        args, err = validate_tool_call(AI_TOOL_WHAT_IF, {"task": "9"})
+        self.assertEqual(err, "")
+        self.assertEqual(args["task"], "9")
+        self.assertIn("pin 9", args["change"].lower())
+        args, err = validate_tool_call(AI_TOOL_WHAT_IF, {})
+        self.assertIsNone(args)
+        self.assertIn("change must", err)
         args, err = validate_tool_call(
             AI_TOOL_BOOKMARK_FINDING, {"time": 100, "kind": "evidence", "note": "hit"})
         self.assertEqual(err, "")

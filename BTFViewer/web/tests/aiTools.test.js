@@ -196,7 +196,10 @@ describe('aiTools', () => {
       annotations: [{ time: 1, note: 'n' }],
       conversationHtml: '<p>hi</p>',
     })
-    assert.match(html, /AI Report/)
+    assert.match(html, /AI Diagnostic Report/)
+    assert.match(html, /BTFViewer/)
+    assert.match(html, /class="report-head"/)
+    assert.match(html, /fill="#1C3A6E"/)
     assert.match(html, /Low\[266\]/)
     assert.match(html, /<p>hi<\/p>/)
   })

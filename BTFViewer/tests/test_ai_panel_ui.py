@@ -109,9 +109,9 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertIn("What is wrong?", text)
         self.assertIn("Nothing much.", text)
         self.assertIn("Second prompt", text)
-        self.assertRegex(text, r"You\s+What is wrong\?")
-        self.assertRegex(text, r"Assistant\s+Nothing much\.")
-        self.assertRegex(text, r"You\s+Second prompt")
+        self.assertRegex(text, r"Your prompt\s+What is wrong\?")
+        self.assertRegex(text, r"AI Assistant\s+Nothing much\.")
+        self.assertRegex(text, r"Your prompt\s+Second prompt")
         html = panel._log.toHtml().lower()
         # Qt may drop custom classes; bgcolor on each bubble still survives.
         self.assertGreaterEqual(html.count("#1e3348"), 2)
@@ -133,7 +133,8 @@ class AiPanelUiTests(unittest.TestCase):
         panel.copy_conversation()
         clip = QApplication.clipboard().text()
         self.assertIn("# BTF Viewer — AI Conversation", clip)
-        self.assertIn("## You", clip)
+        self.assertIn("## Your prompt", clip)
+        self.assertIn("## AI Assistant", clip)
         self.assertIn("see jump:12.", clip)
         self.assertEqual(panel._status.text(), "Copied to clipboard.")
 

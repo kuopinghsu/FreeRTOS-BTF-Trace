@@ -213,6 +213,27 @@ class SettingsInitialPageTests(unittest.TestCase):
             text = (BTF_ROOT / rel).read_text(encoding="utf-8")
             self.assertIn(needle, text, rel)
 
+    def test_bundle_includes_rc_secret_imports(self) -> None:
+        """Monolith strips per-module imports; enc1: crypto needs these."""
+        text = (BTF_ROOT / "scripts" / "bundle_viewer.py").read_text(encoding="utf-8")
+        for needle in (
+            "import secrets",
+            "import hmac",
+            "import getpass",
+            "import platform",
+        ):
+            self.assertIn(needle, text, needle)
+        bundled = BTF_ROOT / "builds" / "btf_viewer.py"
+        if bundled.is_file():
+            bundled_text = bundled.read_text(encoding="utf-8")
+            for needle in (
+                "import secrets",
+                "import hmac",
+                "import getpass",
+                "import platform",
+            ):
+                self.assertIn(needle, bundled_text, needle)
+
     def test_default_appearance(self) -> None:
         dlg = self._dlg("Appearance")
         self.addCleanup(dlg.deleteLater)

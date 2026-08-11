@@ -5,6 +5,15 @@
 
 import { mermaidBlockHtml } from './aiMermaid.js'
 import { btfJumpHref, summariseToolCall } from './aiTools.js'
+import { btfHtmlReportDocument } from './htmlReport.js'
+
+/** Visible role labels (panel + Save As). Keep in sync with ai_assistant.py. */
+export const AI_ROLE_LABEL_USER = 'Your prompt'
+export const AI_ROLE_LABEL_ASSISTANT = 'AI Assistant'
+
+export function aiRoleLabel(role) {
+  return role === 'user' ? AI_ROLE_LABEL_USER : AI_ROLE_LABEL_ASSISTANT
+}
 
 const JUMP_RE = /jump:([0-9]+(?:\.[0-9]+)?)/g
 const INLINE_CODE_RE = /`([^`\n]+)`/g
@@ -383,10 +392,7 @@ export function formatAiConversationMarkdown(entries, date = new Date()) {
   for (const entry of entries || []) {
     const role = entry.role
     const text = String(entry.content || entry.text || '').trim()
-    // User keeps a "You" heading; assistant replies omit the role label.
-    if (role === 'user') {
-      out.push('## You', '')
-    }
+    out.push(`## ${aiRoleLabel(role)}`, '')
     if (text) {
       out.push(text, '')
     }
@@ -405,10 +411,7 @@ export function formatAiConversationText(entries, date = new Date()) {
   const out = ['BTF Viewer — AI Conversation', `Saved ${conversationStamp(date)}`, '']
   for (const entry of entries || []) {
     const text = String(entry.content || entry.text || '').trim()
-    // User keeps a "You:" prefix; assistant replies omit the role label.
-    if (entry.role === 'user') {
-      out.push('You:')
-    }
+    out.push(`${aiRoleLabel(entry.role)}:`)
     if (text) out.push(text)
     for (const t of entry.tools || []) {
       const label = summariseToolCall(t.name || '', t.arguments || {})
@@ -424,19 +427,26 @@ function toolCardsHtml(tools) {
   const rows = tools.map((t) => {
     const label = escapeHtml(summariseToolCall(t.name || '', t.arguments || {}))
     const st = escapeHtml(t.status || 'pending')
-    return `<p>⚡ ${label} <span style="color:#8b98a8">(${st})</span></p>`
+    let html = `<p>⚡ ${label} <span style="color:#6b7280">(${st})</span></p>`
+    if (String(t.status || '') === 'failed') {
+      const detail = String(t.result || t.error || '').trim()
+      if (detail) {
+        html += `<p style="margin:2px 0 6px 1.2em;color:#6b7280;font-size:11px;">`
+          + `${escapeHtml(detail)}</p>`
+      }
+    }
+    return html
   }).join('')
   return `<div class="ai-tool-card" style="margin-top:8px;padding:8px 10px;`
-    + `border-left:3px solid #c9a227;background:#2a2418;color:#e6d48a;">${rows}</div>`
+    + `border-left:3px solid #c9a227;background:#fff8e8;color:#6b5508;">${rows}</div>`
 }
 
-/** Standalone HTML transcript (Markdown rendered, same styling as the panel). */
-export function formatAiConversationHtml(entries, date = new Date()) {
-  const body = (entries || []).map((entry) => {
+/** Conversation turn markup only (no document chrome). For report embedding. */
+export function formatAiConversationHtmlBody(entries) {
+  return (entries || []).map((entry) => {
     const role = entry.role
     const content = entry.content || entry.text || ''
-    // User keeps a "You" heading; assistant replies omit the role label.
-    const head = role === 'user' ? '<h3>You</h3>' : ''
+    const head = `<h3>${escapeHtml(aiRoleLabel(role))}</h3>`
     return (
       `<section class="msg ${role === 'user' ? 'user' : 'assistant'}">`
       + head
@@ -444,39 +454,21 @@ export function formatAiConversationHtml(entries, date = new Date()) {
       + '</section>'
     )
   }).join('\n')
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>BTF Viewer — AI Conversation</title>
-<style>
-body{background:#12161d;color:#dbe2ea;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;
-  font-size:13px;line-height:1.5;margin:0;padding:20px;}
-h1{font-size:18px;margin:0 0 4px;}
-.saved{color:#8b98a8;font-size:12px;margin:0 0 16px;}
-.msg{padding:12px 0;border-top:1px solid #2b3442;}
-.msg:first-of-type{border-top:none;padding-top:0;}
-.msg h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:0 0 6px;color:#8b98a8;}
-.msg.user h3{color:#6ea8e0;}
-.msg .body{padding:8px 10px;border-left:3px solid #5b9bd5;background:#1e3348;border-radius:0 6px 6px 0;}
-.msg.assistant .body{border-left-color:#3d9a72;background:#1a2620;}
-pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;padding:8px;overflow:auto;}
-code{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;font-size:12px;}
-blockquote{margin:6px 0;padding:4px 10px;border-left:3px solid #5b9bd5;color:#a8b4c4;}
-a{color:#5b9bd5;}
-table.ai-md-table{border-collapse:collapse;margin:8px 0;font-size:12px;width:100%;}
-table.ai-md-table th,table.ai-md-table td{border:1px solid #3a4658;padding:4px 8px;}
-table.ai-md-table th{background:#243044;color:#e8eef6;}
-table.ai-md-table td{background:#1a2230;color:#dbe2ea;}
-</style>
-</head>
-<body>
-<h1>BTF Viewer — AI Conversation</h1>
-<p class="saved">Saved ${conversationStamp(date)}</p>
-${body}
-</body>
-</html>
-`
+}
+
+/** Standalone HTML transcript (Markdown rendered). Keep in sync with ai_assistant.py. */
+export function formatAiConversationHtml(entries, date = new Date()) {
+  const turns = formatAiConversationHtmlBody(entries)
+  const body = (
+    '<section class="report-card">\n'
+    + '<h2>Conversation</h2>\n'
+    + `${turns}\n`
+    + '</section>'
+  )
+  return btfHtmlReportDocument('AI Conversation', body, {
+    subtitle: `Saved ${conversationStamp(date)}`,
+    docTitle: 'BTFViewer — AI Conversation',
+  })
 }
 
 /** Format a chat message; assistant = Markdown preview, user = plain. */

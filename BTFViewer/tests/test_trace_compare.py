@@ -121,6 +121,10 @@ class TraceCompareTests(unittest.TestCase):
 
         csv = _build_compare_csv("A", "B", False, tables)
         html = _build_compare_html("A", "B", False, tables)
+        self.assertIn("BTFViewer", html)
+        self.assertIn('class="report-head"', html)
+        self.assertIn('class="brand-icon"', html)
+        self.assertIn('fill="#1C3A6E"', html)
         for section in (
             "Core Utilisation", "Execution Time", "Blocking Time",
             "Inter-Arrival", "Sync Objects",

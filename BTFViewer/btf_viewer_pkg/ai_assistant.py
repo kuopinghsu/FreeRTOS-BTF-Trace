@@ -33,11 +33,12 @@ from .ai_tools import (
     canonical_assistant_tool_message,
     ensure_gemini_thought_signatures,
     extract_tool_calls,
+    empty_chat_completion_error,
     format_tool_result_content,
     is_export_tool,
     max_tool_rounds,
     merge_tool_calls,
-    message_content_text,
+    assistant_message_text,
     needs_gemini_thought_signatures,
     normalize_tool_chat_messages,
     parse_ai_auto_apply,
@@ -57,6 +58,7 @@ from .ai_investigation import (
     is_agent_template,
     mark_plan_steps_from_tools,
 )
+from .html_report import btf_html_report_document
 
 
 class OllamaCancelled(Exception):
@@ -1474,8 +1476,7 @@ _AI_LOG_STYLE = (
     "hr{border:none;border-top:1px solid #3a4658;margin:8px 0;}"
     "a{color:#5b9bd5;}"
     "table.ai-md-table{margin:8px 0;}"
-    ".ai-role{font-size:11px;font-weight:600;letter-spacing:0.06em;"
-    "text-transform:uppercase;}"
+    ".ai-role{font-size:11px;font-weight:600;}"
     ".ai-role-user{color:#6ea8e0;}"
     ".ai-role-assistant{color:#6fbf9a;}"
     ".ai-tool-card{color:#e6d48a;}"
@@ -1505,7 +1506,8 @@ def ai_entry_tools(entry: Any) -> List[Dict[str, Any]]:
     return []
 
 
-def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str) -> str:
+def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str,
+                     *, light: bool = False) -> str:
     if not tools:
         return ""
     rows: List[str] = []
@@ -1514,6 +1516,7 @@ def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str) -> str:
         if isinstance(t, dict) and t.get("status"):
             status = str(t.get("status") or status)
             break
+    st_color = "#6b7280" if light else "#8b98a8"
     for t in tools:
         if not isinstance(t, dict):
             continue
@@ -1521,7 +1524,17 @@ def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str) -> str:
         args = t.get("arguments") if isinstance(t.get("arguments"), dict) else {}
         label = html.escape(summarise_tool_call(name, args))
         st = html.escape(str(t.get("status") or status))
-        rows.append(f"<p>⚡ {label} <span style=\"color:#8b98a8\">({st})</span></p>")
+        rows.append(
+            f"<p>⚡ {label} <span style=\"color:{st_color}\">({st})</span></p>"
+        )
+        detail = ""
+        if str(t.get("status") or status) == "failed":
+            detail = str(t.get("result") or t.get("error") or "").strip()
+        if detail:
+            rows.append(
+                f"<p style=\"margin:2px 0 6px 1.2em;color:{st_color};"
+                f"font-size:11px;\">{html.escape(detail)}</p>"
+            )
     actions = ""
     if status == "pending" and batch_id:
         actions = (
@@ -1532,6 +1545,12 @@ def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str) -> str:
         actions = (
             f'<p><a href="btfaction:undo/{html.escape(batch_id)}">Undo</a></p>'
         )
+    if light:
+        return (
+            '<div class="ai-tool-card" style="margin-top:8px;padding:8px 10px;'
+            'border-left:3px solid #c9a227;background:#fff8e8;color:#6b5508;">'
+            f"{''.join(rows)}{actions}</div>"
+        )
     return (
         '<table width="100%" cellspacing="0" cellpadding="0">'
         '<tr><td bgcolor="#2a2418" class="ai-tool-card" '
@@ -1540,11 +1559,21 @@ def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str) -> str:
     )
 
 
+# Visible role labels (panel + Save As). Keep in sync with aiMarkdown.js.
+AI_ROLE_LABEL_USER = "Your prompt"
+AI_ROLE_LABEL_ASSISTANT = "AI Assistant"
+
+
+def ai_role_label(role: str) -> str:
+    """Human-readable speaker label for a chat turn."""
+    return AI_ROLE_LABEL_USER if role == "user" else AI_ROLE_LABEL_ASSISTANT
+
+
 def _format_ai_log_html(role: str, text: str, tools: Optional[Sequence[Dict[str, Any]]] = None,
                         batch_id: str = "") -> str:
     """One conversation turn as a self-contained table (Qt will not merge these)."""
     is_user = role == "user"
-    label = "You" if is_user else "Assistant"
+    label = html.escape(ai_role_label(role))
     role_cls = "ai-role-user" if is_user else "ai-role-assistant"
     # bgcolor is more reliable in QTextBrowser than CSS background on divs.
     bg = "#1e3348" if is_user else "#1a2620"
@@ -1603,10 +1632,8 @@ def format_ai_conversation_markdown(entries: Sequence[Any]) -> str:
         role = ai_entry_role(entry)
         text = (ai_entry_text(entry) or "").strip()
         tools = _tool_transcript_lines(entry)
-        # User keeps a "You" heading; assistant replies omit the role label.
-        if role == "user":
-            out.append("## You")
-            out.append("")
+        out.append(f"## {ai_role_label(role)}")
+        out.append("")
         if text:
             out.append(text)
             out.append("")
@@ -1624,9 +1651,7 @@ def format_ai_conversation_text(entries: Sequence[Any]) -> str:
         role = ai_entry_role(entry)
         text = (ai_entry_text(entry) or "").strip()
         tools = _tool_transcript_lines(entry)
-        # User keeps a "You:" prefix; assistant replies omit the role label.
-        if role == "user":
-            out.append("You:")
+        out.append(f"{ai_role_label(role)}:")
         if text:
             out.append(text)
         if tools:
@@ -1635,22 +1660,25 @@ def format_ai_conversation_text(entries: Sequence[Any]) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
-_AI_HTML_STYLE = """
-body{background:#12161d;color:#dbe2ea;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;
-  font-size:13px;line-height:1.5;margin:0;padding:20px;}
-h1{font-size:18px;margin:0 0 4px;}
-.saved{color:#8b98a8;font-size:12px;margin:0 0 16px;}
-.msg{padding:12px 0;border-top:1px solid #2b3442;}
-.msg:first-of-type{border-top:none;padding-top:0;}
-.msg h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:0 0 6px;color:#8b98a8;}
-.msg.user h3{color:#6ea8e0;}
-.msg .body{padding:8px 10px;border-left:3px solid #5b9bd5;background:#1e3348;border-radius:0 6px 6px 0;}
-.msg.assistant .body{border-left-color:#3d9a72;background:#1a2620;}
-pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;padding:8px;overflow:auto;}
-code{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;font-size:12px;}
-blockquote{margin:6px 0;padding:4px 10px;border-left:3px solid #5b9bd5;color:#a8b4c4;}
-a{color:#5b9bd5;}
-""".strip()
+_AI_HTML_STYLE = ""  # legacy; conversation HTML uses html_report chrome
+
+
+def format_ai_conversation_html_body(entries: Sequence[Any]) -> str:
+    """Conversation turn markup only (no document chrome). For report embedding."""
+    parts = []
+    for entry in entries:
+        role = ai_entry_role(entry)
+        text = ai_entry_text(entry)
+        cls = "user" if role == "user" else "assistant"
+        body = _ai_message_body_html(role, text, as_img=False) if (text or "").strip() else ""
+        cards = _tool_cards_html(ai_entry_tools(entry), "", light=True)
+        head = f"<h3>{html.escape(ai_role_label(role))}</h3>"
+        parts.append(
+            f'<section class="msg {cls}">{head}'
+            f'<div class="body">{body}{cards}</div>'
+            "</section>"
+        )
+    return "\n".join(parts)
 
 
 def format_ai_conversation_html(entries: Sequence[Any]) -> str:
@@ -1660,30 +1688,18 @@ def format_ai_conversation_html(entries: Sequence[Any]) -> str:
     ``toHtml()`` would export editor-flavoured markup instead.
     """
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    parts = []
-    for entry in entries:
-        role = ai_entry_role(entry)
-        text = ai_entry_text(entry)
-        cls = "user" if role == "user" else "assistant"
-        body = _ai_message_body_html(role, text, as_img=False) if (text or "").strip() else ""
-        cards = _tool_cards_html(ai_entry_tools(entry), "")
-        # User keeps a "You" heading; assistant replies omit the role label.
-        head = "<h3>You</h3>" if role == "user" else ""
-        parts.append(
-            f'<section class="msg {cls}">{head}'
-            f'<div class="body">{body}{cards}</div>'
-            "</section>"
-        )
-    return (
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-        "<meta charset=\"utf-8\">\n"
-        "<title>BTF Viewer — AI Conversation</title>\n"
-        f"<style>\n{_AI_HTML_STYLE}\n</style>\n"
-        "</head>\n<body>\n"
-        "<h1>BTF Viewer — AI Conversation</h1>\n"
-        f'<p class="saved">Saved {stamp}</p>\n'
-        + "\n".join(parts)
-        + "\n</body>\n</html>\n"
+    turns = format_ai_conversation_html_body(entries)
+    body = (
+        '<section class="report-card">\n'
+        "<h2>Conversation</h2>\n"
+        f"{turns}\n"
+        "</section>"
+    )
+    return btf_html_report_document(
+        "AI Conversation",
+        body,
+        subtitle=f"Saved {stamp}",
+        doc_title="BTFViewer — AI Conversation",
     )
 
 
@@ -1962,29 +1978,52 @@ def ai_chat_completion(
             payload_obj.pop("tools", None)
             payload_obj.pop("tool_choice", None)
             body = _post(payload_obj)
+            use_tools = []
         else:
             raise
 
-    choices = body.get("choices") if isinstance(body, dict) else None
-    msg: Dict[str, Any] = {}
-    choice0: Dict[str, Any] = {}
-    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
-        choice0 = choices[0]
-        raw_msg = choice0.get("message")
-        if isinstance(raw_msg, dict):
-            msg = raw_msg
-        elif not msg and isinstance(body.get("message"), dict):
-            msg = body["message"]
-    content = message_content_text(msg.get("content"))
-    calls = extract_tool_calls(msg)
-    if not calls and choice0.get("tool_calls"):
-        calls = extract_tool_calls({"tool_calls": choice0.get("tool_calls")})
-    text_calls = parse_tool_calls_from_text(content)
-    calls = merge_tool_calls(calls, text_calls)
-    if text_calls:
-        content = strip_parsed_tool_markup(content)
+    def _parse_turn(resp_body: Any) -> Tuple[str, List[Dict[str, Any]], Dict[str, Any]]:
+        choices = resp_body.get("choices") if isinstance(resp_body, dict) else None
+        msg: Dict[str, Any] = {}
+        choice0: Dict[str, Any] = {}
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            choice0 = choices[0]
+            raw_msg = choice0.get("message")
+            if isinstance(raw_msg, dict):
+                msg = raw_msg
+            elif isinstance(resp_body.get("message"), dict):
+                msg = resp_body["message"]
+        content = assistant_message_text(msg, choice0)
+        calls = extract_tool_calls(msg)
+        if not calls and choice0.get("tool_calls"):
+            calls = extract_tool_calls({"tool_calls": choice0.get("tool_calls")})
+        text_calls = parse_tool_calls_from_text(content)
+        calls = merge_tool_calls(calls, text_calls)
+        if text_calls:
+            content = strip_parsed_tool_markup(content)
+        return content, calls, msg
+
+    content, calls, msg = _parse_turn(body)
     if not content and not calls:
-        raise RuntimeError(f"Unexpected OpenAI-compatible response: {body!r}"[:500])
+        # Gemini occasionally returns finish_reason=stop with 0 completion
+        # tokens; one blind retry often recovers.
+        body = _post(payload_obj)
+        content, calls, msg = _parse_turn(body)
+    if not content and not calls and use_tools:
+        nudge = dict(payload_obj)
+        nudge["messages"] = list(messages) + [{
+            "role": "user",
+            "content": (
+                "Your previous reply was empty (no text and no tool call). "
+                "Answer now with a short analysis, or call a tool."
+            ),
+        }]
+        body = _post(nudge)
+        content, calls, msg = _parse_turn(body)
+    if not content and not calls:
+        raise RuntimeError(
+            empty_chat_completion_error(body, had_tools=bool(use_tools))
+        )
     return {"content": content, "tool_calls": calls, "message": msg}
 
 
@@ -2031,7 +2070,7 @@ def ai_chat(
             summarise_tool_call(c.get("name", ""), c.get("arguments") or {})
             for c in calls if isinstance(c, dict)
         )
-    raise RuntimeError("Unexpected OpenAI-compatible response: empty content")
+    raise RuntimeError("The model returned an empty assistant message.")
 
 
 def ai_list_models(
@@ -2470,14 +2509,14 @@ def create_ai_assistant_panel(
             tpl_label.setStyleSheet("font-weight:600;margin-top:2px;")
             mid_lay.addWidget(tpl_label)
 
-            # Two columns: the labels are short, and a single column pushed the
-            # conversation log off the bottom of a narrow dock.
+            # Three columns: short labels; keeps the conversation log usable.
             tpl_grid = QGridLayout()
             tpl_grid.setContentsMargins(0, 0, 0, 0)
             tpl_grid.setHorizontalSpacing(4)
             tpl_grid.setVerticalSpacing(4)
             tpl_grid.setColumnStretch(0, 1)
             tpl_grid.setColumnStretch(1, 1)
+            tpl_grid.setColumnStretch(2, 1)
 
             self._template_btns: List[QPushButton] = []
             self._compare_btn: Optional[QPushButton] = None
@@ -2489,7 +2528,7 @@ def create_ai_assistant_panel(
                 btn.clicked.connect(
                     lambda _=False, t=_tid, p=prompt: self._use_template(t, p)
                 )
-                tpl_grid.addWidget(btn, _pos // 2, _pos % 2)
+                tpl_grid.addWidget(btn, _pos // 3, _pos % 3)
                 self._template_btns.append(btn)
                 if _tid == AI_COMPARE_TEMPLATE_ID:
                     self._compare_btn = btn
@@ -2948,20 +2987,13 @@ def create_ai_assistant_panel(
             else:
                 start = f"ai-report-{stamp}.html"
                 filters = "HTML (*.html);;All files (*)"
-                conv_html = format_ai_conversation_html(self._entries)
-                inner = conv_html
-                if "<body>" in inner.lower():
-                    low = inner.lower()
-                    a = low.find("<body>")
-                    b = low.rfind("</body>")
-                    if a >= 0 and b > a:
-                        inner = inner[a + 6:b]
+                conv_html = format_ai_conversation_html_body(self._entries)
                 data = build_ai_report_html(
                     meta=meta,
                     gui=gui,
                     findings=findings,
                     annotations=annotations,
-                    conversation_html=inner,
+                    conversation_html=conv_html,
                 )
             path, _selected = QFileDialog.getSaveFileName(
                 self, "Export AI Report", start, filters)

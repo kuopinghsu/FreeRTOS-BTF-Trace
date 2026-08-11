@@ -30,6 +30,8 @@ from .ai_investigation import (
     simulate_what_if,
     snapshot_from_summary,
 )
+from .html_report import btf_html_report_document
+
 AI_TOOL_SET_CURSORS = "set_cursors"
 AI_TOOL_ZOOM_TO_RANGE = "zoom_to_range"
 AI_TOOL_HIGHLIGHT_TASK = "highlight_task"
@@ -903,6 +905,90 @@ def message_content_text(content: Any) -> str:
     return str(content).strip()
 
 
+def assistant_message_text(message: Any = None, choice: Any = None) -> str:
+    """Best-effort text from an OpenAI-compatible assistant choice."""
+    msg = message if isinstance(message, dict) else {}
+    choice0 = choice if isinstance(choice, dict) else {}
+    for src in (
+        msg.get("content"),
+        msg.get("refusal"),
+        msg.get("reasoning_content"),
+        msg.get("reasoning"),
+        choice0.get("text"),
+        choice0.get("content"),
+    ):
+        text = message_content_text(src)
+        if text:
+            return text
+    return ""
+
+
+def _choice_finish_reason(choice: Any) -> str:
+    if not isinstance(choice, dict):
+        return ""
+    for key in ("finish_reason", "finishReason"):
+        val = choice.get(key)
+        if val is not None and str(val).strip():
+            return str(val).strip().lower()
+    return ""
+
+
+def _usage_completion_tokens(body: Any) -> int:
+    if not isinstance(body, dict):
+        return -1
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        return -1
+    for key in ("completion_tokens", "completionTokens", "output_tokens"):
+        if key not in usage:
+            continue
+        try:
+            return int(usage[key])
+        except (TypeError, ValueError):
+            continue
+    return -1
+
+
+def empty_chat_completion_error(body: Any, *, had_tools: bool = False) -> str:
+    """Human-readable error when a chat reply has no text and no tool calls.
+
+    Avoid snake_case tokens that Markdown italicizes (``finish_reason`` →
+    ``finishreason``) when the AI log renders the message.
+    """
+    choice0: Dict[str, Any] = {}
+    if isinstance(body, dict):
+        choices = body.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            choice0 = choices[0]
+    reason = _choice_finish_reason(choice0) or "unknown"
+    tokens = _usage_completion_tokens(body)
+    model = ""
+    if isinstance(body, dict):
+        model = str(body.get("model") or "").strip()
+    model_bit = f" model={model}" if model else ""
+    token_bit = f" completion tokens={tokens}" if tokens >= 0 else ""
+
+    if reason in ("content_filter", "safety"):
+        return (
+            "The provider blocked the reply (safety / content filter)."
+            f"{model_bit}"
+        )
+
+    tips = [
+        "The model returned an empty assistant message "
+        f"(finish reason={reason}{token_bit}{model_bit}).",
+        "This is a known Gemini OpenAI-compat quirk with large prompts or tool calls.",
+        "Retry, switch to a fuller model (for example gemini-2.5-flash), "
+        "or narrow the Statistics scope.",
+    ]
+    if had_tools:
+        tips.append(
+            "Agent templates send tools; a plain Ask without tools may work "
+            "when a lite model stalls."
+        )
+    return " ".join(tips)
+
+
 # Gemini 3 OpenAI-compat requires thought_signature on the first functionCall
 # of each step. Echo the real blob; use this dummy only when the call was not
 # produced by Gemini (https://ai.google.dev/gemini-api/docs/thought-signatures).
@@ -1476,11 +1562,20 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
         }, ""
     if name == AI_TOOL_WHAT_IF:
         change = str(a.get("change") or "").strip()
+        task = str(
+            a.get("task") or a.get("task_id") or a.get("task_name_or_id") or ""
+        ).strip()
+        # Models often pass only a task id after "run what_if on task 9".
+        if not change and task:
+            change = f"pin {task} to preferred core"
         if not change:
-            return None, "change must be a non-empty string"
+            return None, (
+                "change must describe the experiment "
+                "(e.g. pin CS[9] to Core_0), or pass task for a default pin"
+            )
         return {
             "change": change,
-            "task": str(a.get("task") or "").strip(),
+            "task": task,
         }, ""
     if name == AI_TOOL_OPTIMIZE_EXPERIMENT:
         lim_raw = a.get("limit", 5)
@@ -1970,6 +2065,9 @@ def build_ai_report_html(
     conversation_html: str = "",
 ) -> str:
     """Standalone HTML report wrapping findings, GUI state, and the chat."""
+    import datetime
+
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     meta_rows = "".join(
         f"<tr><th>{_html_escape(k)}</th><td>{_html_escape(v)}</td></tr>"
         for k, v in dict(meta or {}).items()
@@ -1994,35 +2092,34 @@ def build_ai_report_html(
         f"<pre>{_html_escape(findings)}</pre>" if (findings or "").strip()
         else "<p>No findings for the current scope.</p>"
     )
-    conv = conversation_html or ""
-    return (
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-        "<meta charset=\"utf-8\">\n"
-        "<title>BTF Viewer — AI Report</title>\n"
-        "<style>\n"
-        "body{background:#12161d;color:#dbe2ea;font-family:system-ui,-apple-system,"
-        "'Segoe UI',sans-serif;font-size:13px;line-height:1.5;margin:0;padding:20px;}\n"
-        "h1{font-size:18px;margin:0 0 4px;} h2{font-size:15px;margin:20px 0 8px;}\n"
-        ".saved{color:#8b98a8;font-size:12px;margin:0 0 16px;}\n"
-        "table{border-collapse:collapse;width:100%;margin:0 0 12px;}\n"
-        "th,td{text-align:left;padding:4px 8px;border-bottom:1px solid #2b3442;"
-        "vertical-align:top;}\n"
-        "th{color:#8b98a8;font-weight:600;width:22%;}\n"
-        "pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;"
-        "padding:8px;overflow:auto;white-space:pre-wrap;}\n"
-        "a{color:#5b9bd5;}\n"
-        "</style>\n</head>\n<body>\n"
-        "<h1>BTF Viewer — AI Report</h1>\n"
-        f"<table>{meta_rows}</table>\n"
-        "<h2>GUI state</h2>\n"
-        f"<table>{''.join(gui_rows)}</table>\n"
-        "<h2>Annotations</h2>\n"
-        f"<table><tr><th>Time</th><th>Note</th></tr>{ann_rows}</table>\n"
-        "<h2>Analysis Findings</h2>\n"
+    conv = (conversation_html or "").strip()
+    body = (
+        f'<section class="report-card">\n'
+        f"<h2>Report metadata</h2>\n"
+        f'<table class="meta-table">{meta_rows or "<tr><td>None</td></tr>"}</table>\n'
+        f"</section>\n"
+        f'<section class="report-card">\n'
+        f"<h2>GUI state</h2>\n"
+        f'<table class="gui-table">{"".join(gui_rows) or "<tr><td>None</td></tr>"}</table>\n'
+        f"</section>\n"
+        f'<section class="report-card">\n'
+        f"<h2>Annotations</h2>\n"
+        f'<table class="ann-table"><tr><th>Time</th><th>Note</th></tr>{ann_rows}</table>\n'
+        f"</section>\n"
+        f'<section class="report-card">\n'
+        f"<h2>Analysis Findings</h2>\n"
         f"{findings_body}\n"
-        "<h2>Conversation</h2>\n"
+        f"</section>\n"
+        f'<section class="report-card">\n'
+        f"<h2>Conversation</h2>\n"
         f"{conv}\n"
-        "</body>\n</html>\n"
+        f"</section>\n"
+    )
+    return btf_html_report_document(
+        "AI Diagnostic Report",
+        body,
+        subtitle=f"Saved {stamp}",
+        doc_title="BTFViewer — AI Report",
     )
 
 

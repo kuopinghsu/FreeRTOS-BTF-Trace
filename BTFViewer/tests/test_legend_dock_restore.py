@@ -57,7 +57,7 @@ class LegendTabRestoreTest(unittest.TestCase):
                 "show_marks=true\n"
                 "show_find=true\n"
                 "[window]\n"
-                "dock_layout_version=11\n"
+                "dock_layout_version=12\n"
                 "maximized=false\n"
                 "width=1200\n"
                 "height=800\n"

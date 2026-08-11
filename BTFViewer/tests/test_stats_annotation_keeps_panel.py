@@ -41,7 +41,7 @@ class StatsAnnotationKeepsPanelTest(unittest.TestCase):
         with open(_RcSettings.RC_PATH, "w", encoding="utf-8") as fh:
             fh.write(
                 "[view]\nshow_stats=true\nshow_marks=true\n"
-                "[window]\ndock_layout_version=11\n"
+                "[window]\ndock_layout_version=12\n"
                 "maximized=false\nwidth=1200\nheight=800\n"
             )
 

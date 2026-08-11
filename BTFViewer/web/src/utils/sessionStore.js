@@ -226,11 +226,20 @@ export function isRestorableViewport(vp, trace) {
   return overlap >= minSpan
 }
 
-export function applySavedLayout(layout, targets) {
+/** Previous first-run default before the 3-column AI template width. */
+const LEGACY_RIGHT_PANEL_DEFAULT_W = 330
+
+export function applySavedLayout(layout, targets, defaults = {}) {
   if (!layout || !targets) return
   const { rightPanelWidth, cpuLoadPaneHeight, sectionHeights } = layout
   if (rightPanelWidth != null && targets.rightPanelWidth) {
-    targets.rightPanelWidth.value = rightPanelWidth
+    // Upgrade the old first-run default so 3-column AI templates fit.
+    const nextDefault = defaults.rightPanelWidth
+    const w = Number(rightPanelWidth)
+    targets.rightPanelWidth.value =
+      Number.isFinite(w) && w === LEGACY_RIGHT_PANEL_DEFAULT_W && nextDefault != null
+        ? nextDefault
+        : rightPanelWidth
   }
   if (cpuLoadPaneHeight != null && targets.cpuLoadPaneHeight) {
     targets.cpuLoadPaneHeight.value = cpuLoadPaneHeight

@@ -166,7 +166,9 @@ class _NavigatorPopup(QWidget):
 
 _RESIZE_EDGE_PX = 6
 _RIGHT_DOCK_MIN_W = 180  # Web parity: RIGHT_PANEL_MIN_W in web/src/App.vue
-_RIGHT_DOCK_MAX_W = 520  # Web parity: RIGHT_PANEL_MAX_W in web/src/App.vue
+# Fits the 3-column AI Templates grid (shared Statistics / AI dock).
+_RIGHT_DOCK_DEFAULT_W = 450  # Web parity: RIGHT_PANEL_WIDTH in web/src/config.js
+_RIGHT_DOCK_MAX_W = 520  # Web parity: RIGHT_PANEL_MAX_W in web/src/config.js
 
 def _relax_layout_width_constraints(lay: QLayout) -> None:
     """Stop nested layouts from preserving a previously wide minimum width."""

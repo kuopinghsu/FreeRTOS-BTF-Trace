@@ -11,6 +11,7 @@ import { syncObjectStatsRows } from './syncObjectAnalysis.js'
 import { getPlacedCursors, segFullyInRange, segOverlapNs } from './statsRange.js'
 import { tickHealthReport } from './tickHealth.js'
 import loadBalanceMetrics from './loadBalanceGauge.js'
+import { btfHtmlReportDocument } from './htmlReport.js'
 
 export function cursorRangeForCursors(cursors) {
   const placed = getPlacedCursors(cursors || [])
@@ -803,27 +804,27 @@ export function buildCompareCsv(nameA, nameB, scopeEnabled, tables = {}) {
   return lines.join('\n')
 }
 
-const _COMPARE_HTML_STYLE = `
-  :root { --bg:#e9edf3; --paper:#fff; --ink:#182230; --muted:#5f6f82; --line:#d9e0ea; --header:#16324f; }
-  * { box-sizing:border-box; }
-  body { margin:0; padding:28px; font-family:"Segoe UI",Arial,sans-serif; color:var(--ink); background:var(--bg); }
-  .report { max-width:min(1280px, 100%); margin:0 auto; }
-  .report-head { background:linear-gradient(135deg,var(--header),#21496f); color:#f3f7fd; border-radius:14px; padding:20px 24px; margin-bottom:18px; }
-  h1 { margin:0; font-size:26px; }
-  .sub { margin-top:6px; color:#cfe1f7; font-size:13px; }
-  .report-card { margin:14px 0; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:12px 14px; overflow:hidden; }
-  h2 { margin:0 0 10px; color:#123355; font-size:17px; }
-  .table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%; }
-  table { border-collapse:collapse; width:max-content; min-width:100%; }
-  th,td { border-bottom:1px solid var(--line); padding:6px 8px; font-size:12px; text-align:right; white-space:nowrap; }
-  th:first-child,td:first-child { text-align:left; }
-  thead th { background:#f1f5fb; font-weight:600; }
-  thead th:first-child, tbody td:first-child { position:sticky; left:0; background:#f1f5fb; z-index:1; }
-  tbody td:first-child { background:#fff; }
-  tbody tr:nth-child(even) td { background:#f7f9fc; }
-  tbody tr:nth-child(even) td:first-child { background:#f7f9fc; }
-  .empty { text-align:center; color:var(--muted); white-space:normal; }
-`
+const _COMPARE_HTML_EXTRA_CSS = `
+.report.report-compare { max-width: min(1280px, 100%); }
+.report-card { overflow: hidden; }
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+table { border-collapse: collapse; width: max-content; min-width: 100%; }
+th, td {
+  border-bottom: 1px solid var(--line);
+  padding: 6px 8px;
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+th:first-child, td:first-child { text-align: left; }
+thead th { background: #f1f5fb; font-weight: 600; }
+thead th:first-child, tbody td:first-child { position: sticky; left: 0; z-index: 1; }
+thead th:first-child { background: #f1f5fb; }
+tbody td:first-child { background: #fff; }
+tbody tr:nth-child(even) td { background: #f7f9fc; }
+tbody tr:nth-child(even) td:first-child { background: #f7f9fc; }
+.empty { text-align: center; color: var(--muted); white-space: normal; }
+`.trim()
 
 function _rowsOrEmpty(rows, cols, mapFn, empty) {
   if (!rows.length) return `<tr><td colspan="${cols}" class="empty">${htmlCell(empty)}</td></tr>`
@@ -879,33 +880,32 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
     r => `<tr><td>${htmlCell(r.label)}</td><td>${htmlCell(r.a)}</td><td>${htmlCell(r.b)}</td><td>${htmlCell(r.delta)}</td></tr>`,
     'No sync instrumentation in either trace')
 
-  return `<!doctype html>
-<html><head><meta charset="utf-8"/><title>BTF Trace Compare</title><style>${_COMPARE_HTML_STYLE}</style></head>
-<body><div class="report">
-  <header class="report-head">
-    <h1>Trace Compare</h1>
-    <div class="sub">${htmlCell(nameA)} vs ${htmlCell(nameB)} · ${htmlCell(scopeNote)}</div>
-  </header>
-  ${_cardHtml('Summary', '<th>Metric</th><th>Trace A</th><th>Trace B</th><th>Δ</th>', summaryHtml)}
-  ${_cardHtml('Top Tasks', '<th>Task</th><th>CPU% A</th><th>CPU% B</th><th>Δ</th>', topHtml)}
-  ${_cardHtml('Core Util', '<th>Core</th><th>Util% A</th><th>Util% B</th><th>Δ</th>', coreHtml)}
-  ${_cardHtml('Core Migrations',
-    '<th>Task</th><th>Migr A</th><th>Migr B</th><th>Δ</th><th>Rate A</th><th>Rate B</th><th>Rate Δ</th><th>Dwell A</th><th>Dwell B</th><th>Dwell Δ</th><th>Ping A</th><th>Ping B</th><th>Cores A</th><th>Cores B</th><th>Primary A</th><th>Primary B</th>',
-    migHtml)}
-  ${_cardHtml('Execution Time',
-    '<th>Task</th><th>Runs A</th><th>Runs B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ max</th>',
-    execHtml)}
-  ${_cardHtml('Blocking Time',
-    '<th>Task</th><th>Gaps A</th><th>Gaps B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ avg</th>',
-    blockHtml)}
-  ${_cardHtml('Inter-Arrival Time',
-    '<th>Task</th><th>Runs A</th><th>Runs B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ avg</th>',
-    interHtml)}
-  ${_cardHtml('Preemption Chains',
-    '<th>Victim</th><th>Count A</th><th>Count B</th><th>Δ</th><th>Total A</th><th>Total B</th>',
-    preHtml)}
-  ${_cardHtml('Sync Objects', '<th>Metric</th><th>Trace A</th><th>Trace B</th><th>Δ</th>', syncHtml)}
-</div></body></html>`
+  return btfHtmlReportDocument('Trace Compare', [
+    _cardHtml('Summary', '<th>Metric</th><th>Trace A</th><th>Trace B</th><th>Δ</th>', summaryHtml),
+    _cardHtml('Top Tasks', '<th>Task</th><th>CPU% A</th><th>CPU% B</th><th>Δ</th>', topHtml),
+    _cardHtml('Core Util', '<th>Core</th><th>Util% A</th><th>Util% B</th><th>Δ</th>', coreHtml),
+    _cardHtml('Core Migrations',
+      '<th>Task</th><th>Migr A</th><th>Migr B</th><th>Δ</th><th>Rate A</th><th>Rate B</th><th>Rate Δ</th><th>Dwell A</th><th>Dwell B</th><th>Dwell Δ</th><th>Ping A</th><th>Ping B</th><th>Cores A</th><th>Cores B</th><th>Primary A</th><th>Primary B</th>',
+      migHtml),
+    _cardHtml('Execution Time',
+      '<th>Task</th><th>Runs A</th><th>Runs B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ max</th>',
+      execHtml),
+    _cardHtml('Blocking Time',
+      '<th>Task</th><th>Gaps A</th><th>Gaps B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ avg</th>',
+      blockHtml),
+    _cardHtml('Inter-Arrival Time',
+      '<th>Task</th><th>Runs A</th><th>Runs B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ avg</th>',
+      interHtml),
+    _cardHtml('Preemption Chains',
+      '<th>Victim</th><th>Count A</th><th>Count B</th><th>Δ</th><th>Total A</th><th>Total B</th>',
+      preHtml),
+    _cardHtml('Sync Objects', '<th>Metric</th><th>Trace A</th><th>Trace B</th><th>Δ</th>', syncHtml),
+  ].join('\n'), {
+    subtitle: `${nameA} vs ${nameB} · ${scopeNote}`,
+    extraCss: _COMPARE_HTML_EXTRA_CSS,
+    docTitle: 'BTFViewer — Trace Compare',
+    reportClass: 'report-compare',
+  })
 }
 
 export function downloadCompareCsv(nameA, nameB, scopeEnabled, tables = {}) {

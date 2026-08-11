@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
+from .html_report import btf_html_report_document
 
 # ===========================================================================
 # BTF Parser
@@ -4980,28 +4981,28 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
         lines.pop()
     return "\n".join(lines)
 
-_COMPARE_HTML_STYLE = """
-  :root { --bg:#e9edf3; --paper:#fff; --ink:#182230; --muted:#5f6f82; --line:#d9e0ea; --header:#16324f; }
-  * { box-sizing:border-box; }
-  body { margin:0; padding:28px; font-family:"Segoe UI",Arial,sans-serif; color:var(--ink); background:var(--bg); }
-  .report { max-width:min(1280px, 100%); margin:0 auto; }
-  .report-head { background:linear-gradient(135deg,var(--header),#21496f); color:#f3f7fd; border-radius:14px; padding:20px 24px; margin-bottom:18px; }
-  h1 { margin:0; font-size:26px; }
-  .sub { margin-top:6px; color:#cfe1f7; font-size:13px; }
-  .report-card { margin:14px 0; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:12px 14px; overflow:hidden; }
-  h2 { margin:0 0 10px; color:#123355; font-size:17px; }
-  .table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%; }
-  table { border-collapse:collapse; width:max-content; min-width:100%; }
-  th,td { border-bottom:1px solid var(--line); padding:6px 8px; font-size:12px; text-align:right; white-space:nowrap; }
-  th:first-child,td:first-child { text-align:left; }
-  thead th { background:#f1f5fb; font-weight:600; }
-  thead th:first-child, tbody td:first-child { position:sticky; left:0; z-index:1; }
-  thead th:first-child { background:#f1f5fb; }
-  tbody td:first-child { background:#fff; }
-  tbody tr:nth-child(even) td { background:#f7f9fc; }
-  tbody tr:nth-child(even) td:first-child { background:#f7f9fc; }
-  .empty { text-align:center; color:var(--muted); white-space:normal; }
-"""
+_COMPARE_HTML_EXTRA_CSS = """
+.report.report-compare { max-width: min(1280px, 100%); }
+.report-card { overflow: hidden; }
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+table { border-collapse: collapse; width: max-content; min-width: 100%; }
+th, td {
+  border-bottom: 1px solid var(--line);
+  padding: 6px 8px;
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+th:first-child, td:first-child { text-align: left; }
+thead th { background: #f1f5fb; font-weight: 600; }
+thead th:first-child, tbody td:first-child { position: sticky; left: 0; z-index: 1; }
+thead th:first-child { background: #f1f5fb; }
+tbody td:first-child { background: #fff; }
+tbody tr:nth-child(even) td { background: #f7f9fc; }
+tbody tr:nth-child(even) td:first-child { background: #f7f9fc; }
+.empty { text-align: center; color: var(--muted); white-space: normal; }
+""".strip()
+
 
 def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
                         tables: Dict[str, List[List]]) -> str:
@@ -5064,16 +5065,14 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
               tables.get("sync", []), "No sync instrumentation in either trace"),
     ]
 
-    return f"""<!doctype html>
-<html><head><meta charset="utf-8"/><title>BTF Trace Compare</title>
-<style>{_COMPARE_HTML_STYLE}</style></head>
-<body><div class="report">
-  <header class="report-head">
-    <h1>Trace Compare</h1>
-    <div class="sub">{_esc(name_a)} vs {_esc(name_b)} · {_esc(scope_note)}</div>
-  </header>
-  {"".join(sections)}
-</div></body></html>"""
+    return btf_html_report_document(
+        "Trace Compare",
+        "\n".join(sections),
+        subtitle=f"{name_a} vs {name_b} · {scope_note}",
+        extra_css=_COMPARE_HTML_EXTRA_CSS,
+        doc_title="BTFViewer — Trace Compare",
+        report_class="report-compare",
+    )
 
 def _core_sort_key_tuple(c: str) -> tuple:
     if c.startswith("Core_"):

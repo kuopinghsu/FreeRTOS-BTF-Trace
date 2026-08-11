@@ -71,6 +71,10 @@
         </label>
       </div>
       <div class="ci-sub">{{ subtitle }}</div>
+      <div class="ci-scope-note">
+        Note: this map follows the current timeline viewport, not the full
+        trace. Press Fit (F) to show the full range.
+      </div>
 
       <div
         v-if="model.hotspot"
@@ -1080,6 +1084,13 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+.ci-scope-note {
+  font-size: 11px;
+  color: var(--fg-dim);
+  margin-top: 2px;
+  line-height: 1.35;
   flex-shrink: 0;
 }
 .ci-triage {

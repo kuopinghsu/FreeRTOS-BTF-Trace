@@ -83,6 +83,7 @@ import csv
 import datetime
 import functools
 import hashlib
+import hmac
 import html
 from html.parser import HTMLParser
 import ssl
@@ -91,6 +92,9 @@ import json
 import math
 import time
 import re
+import secrets
+import getpass
+import platform
 import shutil
 import subprocess
 import tempfile
@@ -486,7 +490,7 @@ DEFAULT_WINDOW_WIDTH     = 1916
 DEFAULT_WINDOW_HEIGHT    = 1088
 DEFAULT_WINDOW_X         = 254
 DEFAULT_WINDOW_Y         = 47
-DEFAULT_DOCK_LAYOUT_VERSION = "11"
+DEFAULT_DOCK_LAYOUT_VERSION = "12"
 
 # Right-panel tab indices (Statistics / Marks / Find / Legend / AI — web parity).
 _PANEL_TAB_STATS = 0
@@ -1097,6 +1101,260 @@ _STI_COLORS: Dict[str, QColor] = {
     # Unknown notes are assigned dynamically by _sti_color().
 }
 
+# ===========================================================================
+# HTML report chrome
+# ===========================================================================
+
+# Public aliases for exporters / tests.
+APP_VERSION = _APP_VERSION
+APP_ICON_SVG = _APP_ICON_SVG
+PRODUCT_NAME = "BTFViewer"
+PRODUCT_TAGLINE = "RTOS context-switch timeline visualiser"
+
+
+def app_icon_svg_markup(size: int = 48) -> str:
+    """Embedded app icon SVG scaled for HTML headers (no external file)."""
+    sz = max(16, int(size))
+    out = APP_ICON_SVG
+    out = re.sub(r'\bwidth="\d+"', f'width="{sz}"', out, count=1)
+    out = re.sub(r'\bheight="\d+"', f'height="{sz}"', out, count=1)
+    return out
+
+
+_BTF_HTML_REPORT_CSS = """
+:root {
+  --bg: #e9edf3;
+  --paper: #ffffff;
+  --ink: #182230;
+  --muted: #5f6f82;
+  --line: #d9e0ea;
+  --header: #16324f;
+  --accent: #2a6fb2;
+  --user-bar: #5b9bd5;
+  --asst-bar: #3d9a72;
+  --user-bg: #eef5fc;
+  --asst-bg: #eef7f2;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 28px 20px 40px;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  color: var(--ink);
+  background: radial-gradient(circle at top right, #f6f8fb 0%, var(--bg) 52%, #dde4ee 100%);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.report { max-width: 960px; margin: 0 auto; }
+.report-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: linear-gradient(135deg, var(--header) 0%, #21496f 100%);
+  color: #f3f7fd;
+  border-radius: 14px;
+  padding: 18px 22px;
+  box-shadow: 0 10px 28px rgba(17, 44, 69, 0.24);
+  margin-bottom: 18px;
+}
+.report-head .brand-icon {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  background: #1c3a6e;
+}
+.report-head .brand-icon svg { display: block; width: 48px; height: 48px; }
+.report-head .brand-text { min-width: 0; flex: 1; }
+.report-head .product {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #cfe1f7;
+  margin: 0 0 2px;
+}
+.report-head h1 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: 0.2px;
+  font-weight: 700;
+  color: #f3f7fd;
+}
+.report-head .sub {
+  margin-top: 4px;
+  color: #cfe1f7;
+  font-size: 12px;
+}
+.report-card {
+  margin: 14px 0;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px 16px;
+  box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
+}
+.report-card > h2:first-child { margin-top: 0; }
+h2 {
+  margin: 0 0 10px;
+  color: #123355;
+  font-size: 16px;
+  font-weight: 650;
+}
+.meta-table, .gui-table, .ann-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0;
+}
+.meta-table th, .meta-table td,
+.gui-table th, .gui-table td,
+.ann-table th, .ann-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.meta-table th, .gui-table th, .ann-table th {
+  color: var(--muted);
+  font-weight: 600;
+  width: 22%;
+}
+pre {
+  background: #f1f5fb;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  margin: 0;
+  color: var(--ink);
+}
+a { color: var(--accent); }
+.msg {
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+.msg:first-of-type { border-top: none; padding-top: 0; }
+.msg h3 {
+  font-size: 12px;
+  font-weight: 700;
+  margin: 0 0 6px;
+  color: var(--muted);
+}
+.msg.user h3 { color: #2a6fb2; }
+.msg.assistant h3 { color: #2f7a58; }
+.msg .body {
+  padding: 10px 12px;
+  border-left: 3px solid var(--user-bar);
+  background: var(--user-bg);
+  border-radius: 0 8px 8px 0;
+}
+.msg.assistant .body {
+  border-left-color: var(--asst-bar);
+  background: var(--asst-bg);
+}
+.msg .body pre,
+pre.code {
+  background: #1a2230;
+  border: 1px solid #3a4658;
+  color: #dbe2ea;
+  border-radius: 4px;
+  padding: 8px;
+  overflow: auto;
+}
+.msg .body code {
+  font-family: Menlo, Consolas, Monaco, "Courier New", monospace;
+  font-size: 12px;
+}
+.msg .body blockquote {
+  margin: 6px 0;
+  padding: 4px 10px;
+  border-left: 3px solid var(--accent);
+  color: #4a5d73;
+}
+table.ai-md-table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 12px;
+  width: 100%;
+}
+table.ai-md-table th, table.ai-md-table td {
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+}
+table.ai-md-table th {
+  background: #f1f5fb;
+  color: #284563;
+}
+table.ai-md-table td {
+  background: #fff;
+  color: var(--ink);
+}
+.report-foot {
+  margin-top: 18px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+""".strip()
+
+
+def btf_html_report_document(
+    title: str,
+    body_html: str,
+    *,
+    subtitle: str = "",
+    extra_css: str = "",
+    doc_title: Optional[str] = None,
+    report_class: str = "",
+) -> str:
+    """Wrap *body_html* in a professional BTFViewer report shell with SVG icon."""
+    page_title = doc_title or f"{PRODUCT_NAME} — {title}"
+    sub = subtitle.strip()
+    if not sub:
+        sub = f"{PRODUCT_TAGLINE} · v{APP_VERSION}"
+    else:
+        sub = f"{html.escape(sub)} · {PRODUCT_TAGLINE} · v{APP_VERSION}"
+    icon = app_icon_svg_markup(48)
+    css = _BTF_HTML_REPORT_CSS
+    if extra_css:
+        css = f"{css}\n{extra_css}"
+    cls = "report"
+    extra_cls = str(report_class or "").strip()
+    if extra_cls:
+        cls = f"{cls} {html.escape(extra_cls)}"
+    return (
+        "<!DOCTYPE html>\n"
+        "<html lang=\"en\">\n"
+        "<head>\n"
+        "<meta charset=\"utf-8\">\n"
+        f"<meta name=\"generator\" content=\"{html.escape(PRODUCT_NAME)} {html.escape(APP_VERSION)}\">\n"
+        f"<title>{html.escape(page_title)}</title>\n"
+        f"<style>\n{css}\n</style>\n"
+        "</head>\n"
+        "<body>\n"
+        f"<div class=\"{cls}\">\n"
+        "<header class=\"report-head\">\n"
+        f"<div class=\"brand-icon\" aria-hidden=\"true\">{icon}</div>\n"
+        "<div class=\"brand-text\">\n"
+        f"<div class=\"product\">{html.escape(PRODUCT_NAME)}</div>\n"
+        f"<h1>{html.escape(title)}</h1>\n"
+        f"<div class=\"sub\">{sub}</div>\n"
+        "</div>\n"
+        "</header>\n"
+        f"{body_html}\n"
+        "<footer class=\"report-foot\">\n"
+        f"Generated by {html.escape(PRODUCT_NAME)} {html.escape(APP_VERSION)} — "
+        f"{html.escape(PRODUCT_TAGLINE)}\n"
+        "</footer>\n"
+        "</div>\n"
+        "</body>\n"
+        "</html>\n"
+    )
 # ===========================================================================
 # BTF Parser
 # ===========================================================================
@@ -6073,28 +6331,28 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
         lines.pop()
     return "\n".join(lines)
 
-_COMPARE_HTML_STYLE = """
-  :root { --bg:#e9edf3; --paper:#fff; --ink:#182230; --muted:#5f6f82; --line:#d9e0ea; --header:#16324f; }
-  * { box-sizing:border-box; }
-  body { margin:0; padding:28px; font-family:"Segoe UI",Arial,sans-serif; color:var(--ink); background:var(--bg); }
-  .report { max-width:min(1280px, 100%); margin:0 auto; }
-  .report-head { background:linear-gradient(135deg,var(--header),#21496f); color:#f3f7fd; border-radius:14px; padding:20px 24px; margin-bottom:18px; }
-  h1 { margin:0; font-size:26px; }
-  .sub { margin-top:6px; color:#cfe1f7; font-size:13px; }
-  .report-card { margin:14px 0; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:12px 14px; overflow:hidden; }
-  h2 { margin:0 0 10px; color:#123355; font-size:17px; }
-  .table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%; }
-  table { border-collapse:collapse; width:max-content; min-width:100%; }
-  th,td { border-bottom:1px solid var(--line); padding:6px 8px; font-size:12px; text-align:right; white-space:nowrap; }
-  th:first-child,td:first-child { text-align:left; }
-  thead th { background:#f1f5fb; font-weight:600; }
-  thead th:first-child, tbody td:first-child { position:sticky; left:0; z-index:1; }
-  thead th:first-child { background:#f1f5fb; }
-  tbody td:first-child { background:#fff; }
-  tbody tr:nth-child(even) td { background:#f7f9fc; }
-  tbody tr:nth-child(even) td:first-child { background:#f7f9fc; }
-  .empty { text-align:center; color:var(--muted); white-space:normal; }
-"""
+_COMPARE_HTML_EXTRA_CSS = """
+.report.report-compare { max-width: min(1280px, 100%); }
+.report-card { overflow: hidden; }
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+table { border-collapse: collapse; width: max-content; min-width: 100%; }
+th, td {
+  border-bottom: 1px solid var(--line);
+  padding: 6px 8px;
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+th:first-child, td:first-child { text-align: left; }
+thead th { background: #f1f5fb; font-weight: 600; }
+thead th:first-child, tbody td:first-child { position: sticky; left: 0; z-index: 1; }
+thead th:first-child { background: #f1f5fb; }
+tbody td:first-child { background: #fff; }
+tbody tr:nth-child(even) td { background: #f7f9fc; }
+tbody tr:nth-child(even) td:first-child { background: #f7f9fc; }
+.empty { text-align: center; color: var(--muted); white-space: normal; }
+""".strip()
+
 
 def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
                         tables: Dict[str, List[List]]) -> str:
@@ -6157,16 +6415,14 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
               tables.get("sync", []), "No sync instrumentation in either trace"),
     ]
 
-    return f"""<!doctype html>
-<html><head><meta charset="utf-8"/><title>BTF Trace Compare</title>
-<style>{_COMPARE_HTML_STYLE}</style></head>
-<body><div class="report">
-  <header class="report-head">
-    <h1>Trace Compare</h1>
-    <div class="sub">{_esc(name_a)} vs {_esc(name_b)} · {_esc(scope_note)}</div>
-  </header>
-  {"".join(sections)}
-</div></body></html>"""
+    return btf_html_report_document(
+        "Trace Compare",
+        "\n".join(sections),
+        subtitle=f"{name_a} vs {name_b} · {scope_note}",
+        extra_css=_COMPARE_HTML_EXTRA_CSS,
+        doc_title="BTFViewer — Trace Compare",
+        report_class="report-compare",
+    )
 
 def _core_sort_key_tuple(c: str) -> tuple:
     if c.startswith("Core_"):
@@ -12594,7 +12850,9 @@ class _NavigatorPopup(QWidget):
 
 _RESIZE_EDGE_PX = 6
 _RIGHT_DOCK_MIN_W = 180  # Web parity: RIGHT_PANEL_MIN_W in web/src/App.vue
-_RIGHT_DOCK_MAX_W = 520  # Web parity: RIGHT_PANEL_MAX_W in web/src/App.vue
+# Fits the 3-column AI Templates grid (shared Statistics / AI dock).
+_RIGHT_DOCK_DEFAULT_W = 450  # Web parity: RIGHT_PANEL_WIDTH in web/src/config.js
+_RIGHT_DOCK_MAX_W = 520  # Web parity: RIGHT_PANEL_MAX_W in web/src/config.js
 
 def _relax_layout_width_constraints(lay: QLayout) -> None:
     """Stop nested layouts from preserving a previously wide minimum width."""
@@ -19144,6 +19402,90 @@ def message_content_text(content: Any) -> str:
     return str(content).strip()
 
 
+def assistant_message_text(message: Any = None, choice: Any = None) -> str:
+    """Best-effort text from an OpenAI-compatible assistant choice."""
+    msg = message if isinstance(message, dict) else {}
+    choice0 = choice if isinstance(choice, dict) else {}
+    for src in (
+        msg.get("content"),
+        msg.get("refusal"),
+        msg.get("reasoning_content"),
+        msg.get("reasoning"),
+        choice0.get("text"),
+        choice0.get("content"),
+    ):
+        text = message_content_text(src)
+        if text:
+            return text
+    return ""
+
+
+def _choice_finish_reason(choice: Any) -> str:
+    if not isinstance(choice, dict):
+        return ""
+    for key in ("finish_reason", "finishReason"):
+        val = choice.get(key)
+        if val is not None and str(val).strip():
+            return str(val).strip().lower()
+    return ""
+
+
+def _usage_completion_tokens(body: Any) -> int:
+    if not isinstance(body, dict):
+        return -1
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        return -1
+    for key in ("completion_tokens", "completionTokens", "output_tokens"):
+        if key not in usage:
+            continue
+        try:
+            return int(usage[key])
+        except (TypeError, ValueError):
+            continue
+    return -1
+
+
+def empty_chat_completion_error(body: Any, *, had_tools: bool = False) -> str:
+    """Human-readable error when a chat reply has no text and no tool calls.
+
+    Avoid snake_case tokens that Markdown italicizes (``finish_reason`` →
+    ``finishreason``) when the AI log renders the message.
+    """
+    choice0: Dict[str, Any] = {}
+    if isinstance(body, dict):
+        choices = body.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            choice0 = choices[0]
+    reason = _choice_finish_reason(choice0) or "unknown"
+    tokens = _usage_completion_tokens(body)
+    model = ""
+    if isinstance(body, dict):
+        model = str(body.get("model") or "").strip()
+    model_bit = f" model={model}" if model else ""
+    token_bit = f" completion tokens={tokens}" if tokens >= 0 else ""
+
+    if reason in ("content_filter", "safety"):
+        return (
+            "The provider blocked the reply (safety / content filter)."
+            f"{model_bit}"
+        )
+
+    tips = [
+        "The model returned an empty assistant message "
+        f"(finish reason={reason}{token_bit}{model_bit}).",
+        "This is a known Gemini OpenAI-compat quirk with large prompts or tool calls.",
+        "Retry, switch to a fuller model (for example gemini-2.5-flash), "
+        "or narrow the Statistics scope.",
+    ]
+    if had_tools:
+        tips.append(
+            "Agent templates send tools; a plain Ask without tools may work "
+            "when a lite model stalls."
+        )
+    return " ".join(tips)
+
+
 # Gemini 3 OpenAI-compat requires thought_signature on the first functionCall
 # of each step. Echo the real blob; use this dummy only when the call was not
 # produced by Gemini (https://ai.google.dev/gemini-api/docs/thought-signatures).
@@ -19717,11 +20059,20 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
         }, ""
     if name == AI_TOOL_WHAT_IF:
         change = str(a.get("change") or "").strip()
+        task = str(
+            a.get("task") or a.get("task_id") or a.get("task_name_or_id") or ""
+        ).strip()
+        # Models often pass only a task id after "run what_if on task 9".
+        if not change and task:
+            change = f"pin {task} to preferred core"
         if not change:
-            return None, "change must be a non-empty string"
+            return None, (
+                "change must describe the experiment "
+                "(e.g. pin CS[9] to Core_0), or pass task for a default pin"
+            )
         return {
             "change": change,
-            "task": str(a.get("task") or "").strip(),
+            "task": task,
         }, ""
     if name == AI_TOOL_OPTIMIZE_EXPERIMENT:
         lim_raw = a.get("limit", 5)
@@ -20211,6 +20562,9 @@ def build_ai_report_html(
     conversation_html: str = "",
 ) -> str:
     """Standalone HTML report wrapping findings, GUI state, and the chat."""
+    import datetime
+
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     meta_rows = "".join(
         f"<tr><th>{_html_escape(k)}</th><td>{_html_escape(v)}</td></tr>"
         for k, v in dict(meta or {}).items()
@@ -20235,35 +20589,34 @@ def build_ai_report_html(
         f"<pre>{_html_escape(findings)}</pre>" if (findings or "").strip()
         else "<p>No findings for the current scope.</p>"
     )
-    conv = conversation_html or ""
-    return (
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-        "<meta charset=\"utf-8\">\n"
-        "<title>BTF Viewer — AI Report</title>\n"
-        "<style>\n"
-        "body{background:#12161d;color:#dbe2ea;font-family:system-ui,-apple-system,"
-        "'Segoe UI',sans-serif;font-size:13px;line-height:1.5;margin:0;padding:20px;}\n"
-        "h1{font-size:18px;margin:0 0 4px;} h2{font-size:15px;margin:20px 0 8px;}\n"
-        ".saved{color:#8b98a8;font-size:12px;margin:0 0 16px;}\n"
-        "table{border-collapse:collapse;width:100%;margin:0 0 12px;}\n"
-        "th,td{text-align:left;padding:4px 8px;border-bottom:1px solid #2b3442;"
-        "vertical-align:top;}\n"
-        "th{color:#8b98a8;font-weight:600;width:22%;}\n"
-        "pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;"
-        "padding:8px;overflow:auto;white-space:pre-wrap;}\n"
-        "a{color:#5b9bd5;}\n"
-        "</style>\n</head>\n<body>\n"
-        "<h1>BTF Viewer — AI Report</h1>\n"
-        f"<table>{meta_rows}</table>\n"
-        "<h2>GUI state</h2>\n"
-        f"<table>{''.join(gui_rows)}</table>\n"
-        "<h2>Annotations</h2>\n"
-        f"<table><tr><th>Time</th><th>Note</th></tr>{ann_rows}</table>\n"
-        "<h2>Analysis Findings</h2>\n"
+    conv = (conversation_html or "").strip()
+    body = (
+        f'<section class="report-card">\n'
+        f"<h2>Report metadata</h2>\n"
+        f'<table class="meta-table">{meta_rows or "<tr><td>None</td></tr>"}</table>\n'
+        f"</section>\n"
+        f'<section class="report-card">\n'
+        f"<h2>GUI state</h2>\n"
+        f'<table class="gui-table">{"".join(gui_rows) or "<tr><td>None</td></tr>"}</table>\n'
+        f"</section>\n"
+        f'<section class="report-card">\n'
+        f"<h2>Annotations</h2>\n"
+        f'<table class="ann-table"><tr><th>Time</th><th>Note</th></tr>{ann_rows}</table>\n'
+        f"</section>\n"
+        f'<section class="report-card">\n'
+        f"<h2>Analysis Findings</h2>\n"
         f"{findings_body}\n"
-        "<h2>Conversation</h2>\n"
+        f"</section>\n"
+        f'<section class="report-card">\n'
+        f"<h2>Conversation</h2>\n"
         f"{conv}\n"
-        "</body>\n</html>\n"
+        f"</section>\n"
+    )
+    return btf_html_report_document(
+        "AI Diagnostic Report",
+        body,
+        subtitle=f"Saved {stamp}",
+        doc_title="BTFViewer — AI Report",
     )
 
 
@@ -22947,8 +23300,7 @@ _AI_LOG_STYLE = (
     "hr{border:none;border-top:1px solid #3a4658;margin:8px 0;}"
     "a{color:#5b9bd5;}"
     "table.ai-md-table{margin:8px 0;}"
-    ".ai-role{font-size:11px;font-weight:600;letter-spacing:0.06em;"
-    "text-transform:uppercase;}"
+    ".ai-role{font-size:11px;font-weight:600;}"
     ".ai-role-user{color:#6ea8e0;}"
     ".ai-role-assistant{color:#6fbf9a;}"
     ".ai-tool-card{color:#e6d48a;}"
@@ -22978,7 +23330,8 @@ def ai_entry_tools(entry: Any) -> List[Dict[str, Any]]:
     return []
 
 
-def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str) -> str:
+def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str,
+                     *, light: bool = False) -> str:
     if not tools:
         return ""
     rows: List[str] = []
@@ -22987,6 +23340,7 @@ def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str) -> str:
         if isinstance(t, dict) and t.get("status"):
             status = str(t.get("status") or status)
             break
+    st_color = "#6b7280" if light else "#8b98a8"
     for t in tools:
         if not isinstance(t, dict):
             continue
@@ -22994,7 +23348,17 @@ def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str) -> str:
         args = t.get("arguments") if isinstance(t.get("arguments"), dict) else {}
         label = html.escape(summarise_tool_call(name, args))
         st = html.escape(str(t.get("status") or status))
-        rows.append(f"<p>⚡ {label} <span style=\"color:#8b98a8\">({st})</span></p>")
+        rows.append(
+            f"<p>⚡ {label} <span style=\"color:{st_color}\">({st})</span></p>"
+        )
+        detail = ""
+        if str(t.get("status") or status) == "failed":
+            detail = str(t.get("result") or t.get("error") or "").strip()
+        if detail:
+            rows.append(
+                f"<p style=\"margin:2px 0 6px 1.2em;color:{st_color};"
+                f"font-size:11px;\">{html.escape(detail)}</p>"
+            )
     actions = ""
     if status == "pending" and batch_id:
         actions = (
@@ -23005,6 +23369,12 @@ def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str) -> str:
         actions = (
             f'<p><a href="btfaction:undo/{html.escape(batch_id)}">Undo</a></p>'
         )
+    if light:
+        return (
+            '<div class="ai-tool-card" style="margin-top:8px;padding:8px 10px;'
+            'border-left:3px solid #c9a227;background:#fff8e8;color:#6b5508;">'
+            f"{''.join(rows)}{actions}</div>"
+        )
     return (
         '<table width="100%" cellspacing="0" cellpadding="0">'
         '<tr><td bgcolor="#2a2418" class="ai-tool-card" '
@@ -23013,11 +23383,21 @@ def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str) -> str:
     )
 
 
+# Visible role labels (panel + Save As). Keep in sync with aiMarkdown.js.
+AI_ROLE_LABEL_USER = "Your prompt"
+AI_ROLE_LABEL_ASSISTANT = "AI Assistant"
+
+
+def ai_role_label(role: str) -> str:
+    """Human-readable speaker label for a chat turn."""
+    return AI_ROLE_LABEL_USER if role == "user" else AI_ROLE_LABEL_ASSISTANT
+
+
 def _format_ai_log_html(role: str, text: str, tools: Optional[Sequence[Dict[str, Any]]] = None,
                         batch_id: str = "") -> str:
     """One conversation turn as a self-contained table (Qt will not merge these)."""
     is_user = role == "user"
-    label = "You" if is_user else "Assistant"
+    label = html.escape(ai_role_label(role))
     role_cls = "ai-role-user" if is_user else "ai-role-assistant"
     # bgcolor is more reliable in QTextBrowser than CSS background on divs.
     bg = "#1e3348" if is_user else "#1a2620"
@@ -23076,10 +23456,8 @@ def format_ai_conversation_markdown(entries: Sequence[Any]) -> str:
         role = ai_entry_role(entry)
         text = (ai_entry_text(entry) or "").strip()
         tools = _tool_transcript_lines(entry)
-        # User keeps a "You" heading; assistant replies omit the role label.
-        if role == "user":
-            out.append("## You")
-            out.append("")
+        out.append(f"## {ai_role_label(role)}")
+        out.append("")
         if text:
             out.append(text)
             out.append("")
@@ -23097,9 +23475,7 @@ def format_ai_conversation_text(entries: Sequence[Any]) -> str:
         role = ai_entry_role(entry)
         text = (ai_entry_text(entry) or "").strip()
         tools = _tool_transcript_lines(entry)
-        # User keeps a "You:" prefix; assistant replies omit the role label.
-        if role == "user":
-            out.append("You:")
+        out.append(f"{ai_role_label(role)}:")
         if text:
             out.append(text)
         if tools:
@@ -23108,22 +23484,25 @@ def format_ai_conversation_text(entries: Sequence[Any]) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
-_AI_HTML_STYLE = """
-body{background:#12161d;color:#dbe2ea;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;
-  font-size:13px;line-height:1.5;margin:0;padding:20px;}
-h1{font-size:18px;margin:0 0 4px;}
-.saved{color:#8b98a8;font-size:12px;margin:0 0 16px;}
-.msg{padding:12px 0;border-top:1px solid #2b3442;}
-.msg:first-of-type{border-top:none;padding-top:0;}
-.msg h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:0 0 6px;color:#8b98a8;}
-.msg.user h3{color:#6ea8e0;}
-.msg .body{padding:8px 10px;border-left:3px solid #5b9bd5;background:#1e3348;border-radius:0 6px 6px 0;}
-.msg.assistant .body{border-left-color:#3d9a72;background:#1a2620;}
-pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;padding:8px;overflow:auto;}
-code{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;font-size:12px;}
-blockquote{margin:6px 0;padding:4px 10px;border-left:3px solid #5b9bd5;color:#a8b4c4;}
-a{color:#5b9bd5;}
-""".strip()
+_AI_HTML_STYLE = ""  # legacy; conversation HTML uses html_report chrome
+
+
+def format_ai_conversation_html_body(entries: Sequence[Any]) -> str:
+    """Conversation turn markup only (no document chrome). For report embedding."""
+    parts = []
+    for entry in entries:
+        role = ai_entry_role(entry)
+        text = ai_entry_text(entry)
+        cls = "user" if role == "user" else "assistant"
+        body = _ai_message_body_html(role, text, as_img=False) if (text or "").strip() else ""
+        cards = _tool_cards_html(ai_entry_tools(entry), "", light=True)
+        head = f"<h3>{html.escape(ai_role_label(role))}</h3>"
+        parts.append(
+            f'<section class="msg {cls}">{head}'
+            f'<div class="body">{body}{cards}</div>'
+            "</section>"
+        )
+    return "\n".join(parts)
 
 
 def format_ai_conversation_html(entries: Sequence[Any]) -> str:
@@ -23133,30 +23512,18 @@ def format_ai_conversation_html(entries: Sequence[Any]) -> str:
     ``toHtml()`` would export editor-flavoured markup instead.
     """
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    parts = []
-    for entry in entries:
-        role = ai_entry_role(entry)
-        text = ai_entry_text(entry)
-        cls = "user" if role == "user" else "assistant"
-        body = _ai_message_body_html(role, text, as_img=False) if (text or "").strip() else ""
-        cards = _tool_cards_html(ai_entry_tools(entry), "")
-        # User keeps a "You" heading; assistant replies omit the role label.
-        head = "<h3>You</h3>" if role == "user" else ""
-        parts.append(
-            f'<section class="msg {cls}">{head}'
-            f'<div class="body">{body}{cards}</div>'
-            "</section>"
-        )
-    return (
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-        "<meta charset=\"utf-8\">\n"
-        "<title>BTF Viewer — AI Conversation</title>\n"
-        f"<style>\n{_AI_HTML_STYLE}\n</style>\n"
-        "</head>\n<body>\n"
-        "<h1>BTF Viewer — AI Conversation</h1>\n"
-        f'<p class="saved">Saved {stamp}</p>\n'
-        + "\n".join(parts)
-        + "\n</body>\n</html>\n"
+    turns = format_ai_conversation_html_body(entries)
+    body = (
+        '<section class="report-card">\n'
+        "<h2>Conversation</h2>\n"
+        f"{turns}\n"
+        "</section>"
+    )
+    return btf_html_report_document(
+        "AI Conversation",
+        body,
+        subtitle=f"Saved {stamp}",
+        doc_title="BTFViewer — AI Conversation",
     )
 
 
@@ -23435,29 +23802,52 @@ def ai_chat_completion(
             payload_obj.pop("tools", None)
             payload_obj.pop("tool_choice", None)
             body = _post(payload_obj)
+            use_tools = []
         else:
             raise
 
-    choices = body.get("choices") if isinstance(body, dict) else None
-    msg: Dict[str, Any] = {}
-    choice0: Dict[str, Any] = {}
-    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
-        choice0 = choices[0]
-        raw_msg = choice0.get("message")
-        if isinstance(raw_msg, dict):
-            msg = raw_msg
-        elif not msg and isinstance(body.get("message"), dict):
-            msg = body["message"]
-    content = message_content_text(msg.get("content"))
-    calls = extract_tool_calls(msg)
-    if not calls and choice0.get("tool_calls"):
-        calls = extract_tool_calls({"tool_calls": choice0.get("tool_calls")})
-    text_calls = parse_tool_calls_from_text(content)
-    calls = merge_tool_calls(calls, text_calls)
-    if text_calls:
-        content = strip_parsed_tool_markup(content)
+    def _parse_turn(resp_body: Any) -> Tuple[str, List[Dict[str, Any]], Dict[str, Any]]:
+        choices = resp_body.get("choices") if isinstance(resp_body, dict) else None
+        msg: Dict[str, Any] = {}
+        choice0: Dict[str, Any] = {}
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            choice0 = choices[0]
+            raw_msg = choice0.get("message")
+            if isinstance(raw_msg, dict):
+                msg = raw_msg
+            elif isinstance(resp_body.get("message"), dict):
+                msg = resp_body["message"]
+        content = assistant_message_text(msg, choice0)
+        calls = extract_tool_calls(msg)
+        if not calls and choice0.get("tool_calls"):
+            calls = extract_tool_calls({"tool_calls": choice0.get("tool_calls")})
+        text_calls = parse_tool_calls_from_text(content)
+        calls = merge_tool_calls(calls, text_calls)
+        if text_calls:
+            content = strip_parsed_tool_markup(content)
+        return content, calls, msg
+
+    content, calls, msg = _parse_turn(body)
     if not content and not calls:
-        raise RuntimeError(f"Unexpected OpenAI-compatible response: {body!r}"[:500])
+        # Gemini occasionally returns finish_reason=stop with 0 completion
+        # tokens; one blind retry often recovers.
+        body = _post(payload_obj)
+        content, calls, msg = _parse_turn(body)
+    if not content and not calls and use_tools:
+        nudge = dict(payload_obj)
+        nudge["messages"] = list(messages) + [{
+            "role": "user",
+            "content": (
+                "Your previous reply was empty (no text and no tool call). "
+                "Answer now with a short analysis, or call a tool."
+            ),
+        }]
+        body = _post(nudge)
+        content, calls, msg = _parse_turn(body)
+    if not content and not calls:
+        raise RuntimeError(
+            empty_chat_completion_error(body, had_tools=bool(use_tools))
+        )
     return {"content": content, "tool_calls": calls, "message": msg}
 
 
@@ -23504,7 +23894,7 @@ def ai_chat(
             summarise_tool_call(c.get("name", ""), c.get("arguments") or {})
             for c in calls if isinstance(c, dict)
         )
-    raise RuntimeError("Unexpected OpenAI-compatible response: empty content")
+    raise RuntimeError("The model returned an empty assistant message.")
 
 
 def ai_list_models(
@@ -23943,14 +24333,14 @@ def create_ai_assistant_panel(
             tpl_label.setStyleSheet("font-weight:600;margin-top:2px;")
             mid_lay.addWidget(tpl_label)
 
-            # Two columns: the labels are short, and a single column pushed the
-            # conversation log off the bottom of a narrow dock.
+            # Three columns: short labels; keeps the conversation log usable.
             tpl_grid = QGridLayout()
             tpl_grid.setContentsMargins(0, 0, 0, 0)
             tpl_grid.setHorizontalSpacing(4)
             tpl_grid.setVerticalSpacing(4)
             tpl_grid.setColumnStretch(0, 1)
             tpl_grid.setColumnStretch(1, 1)
+            tpl_grid.setColumnStretch(2, 1)
 
             self._template_btns: List[QPushButton] = []
             self._compare_btn: Optional[QPushButton] = None
@@ -23962,7 +24352,7 @@ def create_ai_assistant_panel(
                 btn.clicked.connect(
                     lambda _=False, t=_tid, p=prompt: self._use_template(t, p)
                 )
-                tpl_grid.addWidget(btn, _pos // 2, _pos % 2)
+                tpl_grid.addWidget(btn, _pos // 3, _pos % 3)
                 self._template_btns.append(btn)
                 if _tid == AI_COMPARE_TEMPLATE_ID:
                     self._compare_btn = btn
@@ -24421,20 +24811,13 @@ def create_ai_assistant_panel(
             else:
                 start = f"ai-report-{stamp}.html"
                 filters = "HTML (*.html);;All files (*)"
-                conv_html = format_ai_conversation_html(self._entries)
-                inner = conv_html
-                if "<body>" in inner.lower():
-                    low = inner.lower()
-                    a = low.find("<body>")
-                    b = low.rfind("</body>")
-                    if a >= 0 and b > a:
-                        inner = inner[a + 6:b]
+                conv_html = format_ai_conversation_html_body(self._entries)
                 data = build_ai_report_html(
                     meta=meta,
                     gui=gui,
                     findings=findings,
                     annotations=annotations,
-                    conversation_html=inner,
+                    conversation_html=conv_html,
                 )
             path, _selected = QFileDialog.getSaveFileName(
                 self, "Export AI Report", start, filters)
@@ -24982,6 +25365,128 @@ def create_ai_assistant_panel(
                 worker.deleteLater()
 
     return AiAssistantPanel()
+# ===========================================================================
+# Encrypted AI API keys in btf_viewer.rc
+# ===========================================================================
+
+_PREFIX = "enc1:"
+_SALT_LEN = 16
+_NONCE_LEN = 16
+_TAG_LEN = 32
+_DK_LEN = 32
+_PBKDF2_ITERS = 120_000
+_APP_SALT = b"BTFViewer-ai-api-key-v1"
+
+_machine_material_cache: Optional[bytes] = None
+
+
+def is_encrypted_secret(value: Optional[str]) -> bool:
+    """True when *value* uses the ``enc1:`` storage encoding."""
+    return bool(value) and str(value).startswith(_PREFIX)
+
+
+def is_ai_api_key_option(section: str, key: str) -> bool:
+    """True for ``[ai]`` keys that hold provider API credentials."""
+    return section == "ai" and str(key).endswith("_api_key")
+
+
+def _machine_material() -> bytes:
+    global _machine_material_cache
+    if _machine_material_cache is not None:
+        return _machine_material_cache
+    parts = [
+        platform.node(),
+        getpass.getuser(),
+        os.path.expanduser("~"),
+    ]
+    for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+        try:
+            with open(path, "rb") as fh:
+                mid = fh.read().decode("ascii", "ignore").strip()
+            if mid:
+                parts.append(mid)
+                break
+        except OSError:
+            pass
+    if platform.system() == "Windows":
+        try:
+            import winreg  # type: ignore[import-not-found]
+
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Cryptography",
+            ) as key:
+                guid, _ = winreg.QueryValueEx(key, "MachineGuid")
+                parts.append(str(guid))
+        except Exception:
+            pass
+    _machine_material_cache = "|".join(parts).encode("utf-8", "surrogateescape")
+    return _machine_material_cache
+
+
+def _derive_key(salt: bytes) -> bytes:
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        _machine_material() + _APP_SALT,
+        salt,
+        _PBKDF2_ITERS,
+        dklen=_DK_LEN,
+    )
+
+
+def _keystream(key: bytes, nonce: bytes, length: int) -> bytes:
+    out = bytearray()
+    counter = 0
+    while len(out) < length:
+        block = hashlib.sha256(
+            key + nonce + counter.to_bytes(4, "big")
+        ).digest()
+        out.extend(block)
+        counter += 1
+    return bytes(out[:length])
+
+
+def encrypt_secret(plaintext: Optional[str]) -> str:
+    """Return an ``enc1:`` blob, or ``\"\"`` for empty input."""
+    text = (plaintext or "").strip()
+    if not text:
+        return ""
+    if is_encrypted_secret(text):
+        return text
+    salt = secrets.token_bytes(_SALT_LEN)
+    nonce = secrets.token_bytes(_NONCE_LEN)
+    key = _derive_key(salt)
+    pt = text.encode("utf-8")
+    ct = bytes(a ^ b for a, b in zip(pt, _keystream(key, nonce, len(pt))))
+    tag = hmac.new(key, salt + nonce + ct, hashlib.sha256).digest()
+    blob = base64.urlsafe_b64encode(salt + nonce + tag + ct).decode("ascii")
+    return _PREFIX + blob
+
+
+def decrypt_secret(stored: Optional[str]) -> str:
+    """Decrypt an ``enc1:`` blob, or pass plaintext legacy values through."""
+    raw = stored or ""
+    if not raw:
+        return ""
+    if not is_encrypted_secret(raw):
+        return raw
+    try:
+        blob = base64.urlsafe_b64decode(raw[len(_PREFIX):].encode("ascii"))
+        need = _SALT_LEN + _NONCE_LEN + _TAG_LEN
+        if len(blob) < need:
+            return ""
+        salt = blob[:_SALT_LEN]
+        nonce = blob[_SALT_LEN:_SALT_LEN + _NONCE_LEN]
+        tag = blob[_SALT_LEN + _NONCE_LEN:need]
+        ct = blob[need:]
+        key = _derive_key(salt)
+        expect = hmac.new(key, salt + nonce + ct, hashlib.sha256).digest()
+        if not hmac.compare_digest(tag, expect):
+            return ""
+        pt = bytes(a ^ b for a, b in zip(ct, _keystream(key, nonce, len(ct))))
+        return pt.decode("utf-8")
+    except Exception:
+        return ""
 # ===========================================================================
 # Main Window
 # ===========================================================================
@@ -29958,6 +30463,14 @@ class _CorridorInspectorDialog(QDialog):
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self._sub.setStyleSheet(f"color:{_dim_css_color(self)}; font-size:11px;")
         lay.addWidget(self._sub)
+        self._scope_note = QLabel(
+            "Note: this map follows the current timeline viewport, not the full "
+            "trace. Press Fit (F / Ctrl+0) to show the full range.")
+        self._scope_note.setObjectName("ciScopeNote")
+        self._scope_note.setWordWrap(True)
+        self._scope_note.setStyleSheet(
+            f"color:{_dim_css_color(self)}; font-size:11px;")
+        lay.addWidget(self._scope_note)
 
         self._triage = QLabel()
         self._triage.setStyleSheet(
@@ -34909,130 +35422,82 @@ class _StatsPanel(QWidget):
             analysis_findings, trace, lo, hi)
         analysis_html = _render_workflow_analysis_html(analysis_findings, scope_title)
 
-        report = f"""<!doctype html>
-<html>
-<head>
-  <meta charset=\"utf-8\" />
-  <title>BTF Statistics Report</title>
-  <style>
-        :root {{
-            --bg: #e9edf3;
-            --paper: #ffffff;
-            --ink: #182230;
-            --muted: #5f6f82;
-            --line: #d9e0ea;
-            --line-strong: #c8d2e0;
-            --header: #16324f;
-            --accent: #2a6fb2;
-            --stripe: #f7f9fc;
-        }}
-        * {{ box-sizing: border-box; }}
-        body {{
-            margin: 0;
-            padding: 28px;
-            font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-            color: var(--ink);
-            background: radial-gradient(circle at top right, #f6f8fb 0%, var(--bg) 52%, #dde4ee 100%);
-        }}
-        .report {{ max-width: 1160px; margin: 0 auto; }}
-        .report-head {{
-            background: linear-gradient(135deg, var(--header) 0%, #21496f 100%);
-            color: #f3f7fd;
-            border-radius: 14px;
-            padding: 20px 24px;
-            box-shadow: 0 10px 28px rgba(17, 44, 69, 0.24);
-            margin-bottom: 18px;
-        }}
-        h1 {{ margin: 0; font-size: 28px; letter-spacing: 0.2px; }}
-        .sub {{ margin-top: 6px; color: #cfe1f7; font-size: 13px; }}
-        .kpi-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-            gap: 10px;
-            margin-bottom: 16px;
-        }}
-        .kpi {{
-            background: var(--paper);
-            border: 1px solid var(--line);
-            border-radius: 12px;
-            padding: 12px 14px;
-            box-shadow: 0 2px 8px rgba(30, 60, 90, 0.06);
-        }}
-        .kpi .k {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }}
-        .kpi .v {{ margin-top: 4px; font-size: 20px; font-weight: 700; color: #0f2b47; }}
-        .report-card {{
-            margin: 14px 0;
-            background: var(--paper);
-            border: 1px solid var(--line);
-            border-radius: 12px;
-            padding: 12px 14px 14px;
-            box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
-        }}
-        h2 {{ margin: 0 0 10px 0; color: #123355; font-size: 17px; }}
-        .notes {{ border-left: 4px solid var(--accent); }}
-        .notes ul {{ margin: 8px 0 0 18px; padding: 0; }}
-        .notes li {{ margin: 6px 0; line-height: 1.45; }}
-        table {{ border-collapse: separate; border-spacing: 0; width: 100%; }}
-        th, td {{ border-bottom: 1px solid var(--line); padding: 8px 10px; font-size: 13px; text-align: right; }}
-        th:first-child, td:first-child {{ text-align: left; }}
-        thead th {{
-            background: #f1f5fb;
-            color: #284563;
-            font-weight: 600;
-            border-top: 1px solid var(--line-strong);
-            border-bottom: 1px solid var(--line-strong);
-        }}
-        tbody tr:nth-child(even) td {{ background: var(--stripe); }}
-        .empty {{ text-align: center !important; color: var(--muted); }}
-        .detail-note {{ margin: 6px 0 8px; font-size: 12px; color: var(--muted); }}
-        h3.sub {{ margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }}
-        .sev-error {{ color: #c0392b; font-weight: 600; }}
-        .sev-warning {{ color: #d68910; font-weight: 600; }}
-        .finding-info {{ color: var(--ink); }}
-        .findings-list {{ margin: 8px 0 0 18px; padding: 0; }}
-        .findings-list li {{ margin: 8px 0; line-height: 1.45; }}
-        .finding-wf {{
-            color: var(--muted); font-size: 11px; font-weight: 600;
-            text-transform: uppercase; letter-spacing: 0.4px;
-        }}
-        .analysis-findings {{ border-left: 4px solid #c0392b; }}
-        .report-foot {{ margin-top: 14px; color: var(--muted); font-size: 12px; text-align: right; }}
-        .report-toc {{
-            background: var(--paper);
-            border: 1px solid var(--line);
-            border-radius: 12px;
-            padding: 12px 14px;
-            margin: 14px 0;
-            box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
-        }}
-        .report-toc h2 {{ margin: 0 0 8px 0; }}
-        .report-toc ul {{ margin: 0; padding: 0 0 0 18px; columns: 2; column-gap: 24px; }}
-        .report-toc li {{ margin: 4px 0; }}
-        .report-toc a {{ color: var(--accent); text-decoration: none; }}
-        .report-toc a:hover {{ text-decoration: underline; }}
-        details.report-card {{ scroll-margin-top: 12px; }}
-        details.report-card > summary {{ cursor: pointer; list-style: none; }}
-        details.report-card > summary::-webkit-details-marker {{ display: none; }}
-        details.report-card > summary h2 {{ display: inline-block; margin: 0; }}
-        details.report-card > summary::before {{
-            content: \"\\25B8\";
-            display: inline-block;
-            width: 14px;
-            margin-right: 6px;
-            color: var(--accent);
-            transition: transform 0.15s ease;
-        }}
-        details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
-        {self._html_export_util_css()}
-  </style>
-</head>
-<body>
-    <div class=\"report\">
-        <header class=\"report-head\">
-            <h1>BTF Statistics Report</h1>
-            <div class=\"sub\">Generated: {_esc(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}</div>
-        </header>
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        stats_extra_css = f"""
+:root {{ --line-strong: #c8d2e0; --stripe: #f7f9fc; }}
+.report.report-wide {{ max-width: 1160px; }}
+.kpi-grid {{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}}
+.kpi {{
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: 0 2px 8px rgba(30, 60, 90, 0.06);
+}}
+.kpi .k {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }}
+.kpi .v {{ margin-top: 4px; font-size: 20px; font-weight: 700; color: #0f2b47; }}
+.notes {{ border-left: 4px solid var(--accent); }}
+.notes ul {{ margin: 8px 0 0 18px; padding: 0; }}
+.notes li {{ margin: 6px 0; line-height: 1.45; }}
+table {{ border-collapse: separate; border-spacing: 0; width: 100%; }}
+th, td {{ border-bottom: 1px solid var(--line); padding: 8px 10px; font-size: 13px; text-align: right; }}
+th:first-child, td:first-child {{ text-align: left; }}
+thead th {{
+  background: #f1f5fb;
+  color: #284563;
+  font-weight: 600;
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+}}
+tbody tr:nth-child(even) td {{ background: var(--stripe); }}
+.empty {{ text-align: center !important; color: var(--muted); }}
+.detail-note {{ margin: 6px 0 8px; font-size: 12px; color: var(--muted); }}
+h3.sub {{ margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }}
+.sev-error {{ color: #c0392b; font-weight: 600; }}
+.sev-warning {{ color: #d68910; font-weight: 600; }}
+.finding-info {{ color: var(--ink); }}
+.findings-list {{ margin: 8px 0 0 18px; padding: 0; }}
+.findings-list li {{ margin: 8px 0; line-height: 1.45; }}
+.finding-wf {{
+  color: var(--muted); font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.4px;
+}}
+.analysis-findings {{ border-left: 4px solid #c0392b; }}
+.report-toc {{
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin: 14px 0;
+  box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
+}}
+.report-toc h2 {{ margin: 0 0 8px 0; }}
+.report-toc ul {{ margin: 0; padding: 0 0 0 18px; columns: 2; column-gap: 24px; }}
+.report-toc li {{ margin: 4px 0; }}
+.report-toc a {{ color: var(--accent); text-decoration: none; }}
+.report-toc a:hover {{ text-decoration: underline; }}
+details.report-card {{ scroll-margin-top: 12px; }}
+details.report-card > summary {{ cursor: pointer; list-style: none; }}
+details.report-card > summary::-webkit-details-marker {{ display: none; }}
+details.report-card > summary h2 {{ display: inline-block; margin: 0; }}
+details.report-card > summary::before {{
+  content: "\\25B8";
+  display: inline-block;
+  width: 14px;
+  margin-right: 6px;
+  color: var(--accent);
+  transition: transform 0.15s ease;
+}}
+details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
+{self._html_export_util_css()}
+""".strip()
 
+        body = f"""
         <section class=\"kpi-grid\">
             <article class=\"kpi\"><div class=\"k\">Span{_esc(scope_title)}</div><div class=\"v\">{_esc(span_str)}</div></article>
             <article class=\"kpi\"><div class=\"k\">Tasks</div><div class=\"v\">{task_count:,}</div></article>
@@ -35100,8 +35565,6 @@ class _StatsPanel(QWidget):
     {queue_html}
     {interval_html}
     {tag_html}
-        <div class=\"report-foot\">Generated by BTF Viewer</div>
-    </div>
     <script>
     (function () {{
       function openTarget(id) {{
@@ -35115,9 +35578,16 @@ class _StatsPanel(QWidget):
       if (location.hash) openTarget(location.hash.slice(1))
     }})()
     </script>
-</body>
-</html>
 """
+
+        report = btf_html_report_document(
+            "Statistics Report",
+            body,
+            subtitle=f"Generated: {stamp}",
+            extra_css=stats_extra_css,
+            doc_title="BTFViewer — Statistics Report",
+            report_class="report-wide",
+        )
 
         with open(path, "w", encoding="utf-8") as f:
             nav_html, report = self._html_make_collapsible_sections(report)
@@ -37082,9 +37552,34 @@ class _RcSettings:
             self._cfg[section] = dict(keys)
         # Overlay with the user's saved file (absent keys keep their defaults).
         self._cfg.read(self.RC_PATH, encoding="utf-8")
+        # Upgrade legacy plaintext AI API keys to enc1: blobs on first load.
+        self._migrate_encrypt_ai_api_keys()
         # Write the default file on first run so the user can inspect/edit it.
         if not os.path.isfile(self.RC_PATH):
             self._flush()
+
+    def _migrate_encrypt_ai_api_keys(self) -> None:
+        """Rewrite plaintext ``[ai] *_api_key`` values as ``enc1:`` blobs."""
+        if not self._cfg.has_section("ai"):
+            return
+        changed = False
+        for key in list(self._cfg.options("ai")):
+            if not is_ai_api_key_option("ai", key):
+                continue
+            raw = self._cfg.get("ai", key, fallback="")
+            if not raw or is_encrypted_secret(raw):
+                continue
+            self._cfg.set("ai", key, encrypt_secret(raw))
+            changed = True
+        if changed:
+            self._flush()
+
+    @staticmethod
+    def _encode_rc_value(section: str, key: str, value) -> str:
+        text = "" if value is None else str(value)
+        if is_ai_api_key_option(section, key) and text.strip():
+            return encrypt_secret(text)
+        return text
 
     # ------------------------------------------------------------------ I/O
     def _flush(self) -> None:
@@ -37092,7 +37587,11 @@ class _RcSettings:
         try:
             with open(self.RC_PATH, "w", encoding="utf-8") as fh:
                 fh.write("# btf_viewer.rc - RTOS BTF Viewer settings\n")
-                fh.write("# This file is managed automatically; you may edit it by hand.\n\n")
+                fh.write("# This file is managed automatically; you may edit it by hand.\n")
+                fh.write(
+                    "# [ai] *_api_key values are stored encrypted (enc1:…) for "
+                    "this machine.\n\n"
+                )
                 self._cfg.write(fh)
             self._dirty = False
             self._last_error = ""
@@ -37114,7 +37613,10 @@ class _RcSettings:
 
     # ---------------------------------------------------------------- getters
     def get(self, section: str, key: str, fallback: str = "") -> str:
-        return self._cfg.get(section, key, fallback=fallback)
+        raw = self._cfg.get(section, key, fallback=fallback)
+        if is_ai_api_key_option(section, key):
+            return decrypt_secret(raw)
+        return raw
 
     def get_int(self, section: str, key: str, fallback: int = 0) -> int:
         try:
@@ -37139,7 +37641,7 @@ class _RcSettings:
         """Set *key* in *section* and optionally flush to disk."""
         if not self._cfg.has_section(section):
             self._cfg.add_section(section)
-        self._cfg.set(section, key, str(value))
+        self._cfg.set(section, key, self._encode_rc_value(section, key, value))
         if flush:
             self._flush()
         else:
@@ -37150,7 +37652,7 @@ class _RcSettings:
         if not self._cfg.has_section(section):
             self._cfg.add_section(section)
         for key, value in pairs.items():
-            self._cfg.set(section, key, str(value))
+            self._cfg.set(section, key, self._encode_rc_value(section, key, value))
         if flush:
             self._flush()
         else:
@@ -44083,7 +44585,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     widths.append(int(dock.width()))
         if widths:
             return max(widths)
-        return 330
+        return _RIGHT_DOCK_DEFAULT_W
 
     def _right_docks(self) -> Tuple[QDockWidget, ...]:
         dock = getattr(self, "_panel_dock", None)
@@ -44193,7 +44695,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 Default structure: one right dock with tabbed pages
                 (Statistics / Marks / Find / Legend / AI).
         """
-        self._resize_right_dock_column(520)
+        self._resize_right_dock_column(_RIGHT_DOCK_DEFAULT_W)
         self._focus_statistics_panel()
         self._relax_right_dock_content_widths()
         _wire_splitter_handle_cursors(self)
@@ -44430,17 +44932,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             s.get("window", "dock_metrics", "").strip()
             or s.get("dock_profile_metrics", _profile_key, "").strip()
         )
-        if _saved_metrics:
+        _saved_ver = s.get("window", "dock_layout_version", "0")
+        if _saved_ver != _DOCK_LAYOUT_VERSION:
+            # New layout version: drop persisted dock sizes so code defaults
+            # apply (e.g. wider right panel for 3-column AI templates).
+            s.set_many("window", {
+                "dock_state": "",
+                "dock_metrics": "",
+                "dock_layout_version": _DOCK_LAYOUT_VERSION,
+            }, flush=False)
+            self._dock_startup_needs_defaults = True
+        elif _saved_metrics:
             self._dock_startup_metrics = _saved_metrics
         else:
             self._dock_startup_needs_defaults = True
-
-        _saved_ver = s.get("window", "dock_layout_version", "0")
-        if _saved_ver != _DOCK_LAYOUT_VERSION:
-            s.set_many("window", {
-                "dock_state": "",
-                "dock_layout_version": _DOCK_LAYOUT_VERSION,
-            }, flush=False)
 
         # Panel visibility and resizeDocks run once after the window is shown.
         self._schedule_startup_dock_layout()

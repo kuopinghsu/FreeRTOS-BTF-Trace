@@ -22,6 +22,7 @@ from .config import (  # private symbols are not pulled in by import *
     normalize_stats_pins,
     normalize_stats_section_order,
 )
+from .html_report import btf_html_report_document
 from .parser import *  # noqa: F403,F401
 from .parser import (  # private symbols are not pulled in by import *
     _gini_coefficient,
@@ -93,6 +94,12 @@ from .ai_assistant import (  # noqa: F401
     parse_ai_tls_verify,
     resolve_ai_api_key,
     resolve_ai_settings,
+)
+from .rc_secrets import (
+    decrypt_secret,
+    encrypt_secret,
+    is_ai_api_key_option,
+    is_encrypted_secret,
 )
 
 
@@ -5068,6 +5075,14 @@ class _CorridorInspectorDialog(QDialog):
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self._sub.setStyleSheet(f"color:{_dim_css_color(self)}; font-size:11px;")
         lay.addWidget(self._sub)
+        self._scope_note = QLabel(
+            "Note: this map follows the current timeline viewport, not the full "
+            "trace. Press Fit (F / Ctrl+0) to show the full range.")
+        self._scope_note.setObjectName("ciScopeNote")
+        self._scope_note.setWordWrap(True)
+        self._scope_note.setStyleSheet(
+            f"color:{_dim_css_color(self)}; font-size:11px;")
+        lay.addWidget(self._scope_note)
 
         self._triage = QLabel()
         self._triage.setStyleSheet(
@@ -10019,130 +10034,82 @@ class _StatsPanel(QWidget):
             analysis_findings, trace, lo, hi)
         analysis_html = _render_workflow_analysis_html(analysis_findings, scope_title)
 
-        report = f"""<!doctype html>
-<html>
-<head>
-  <meta charset=\"utf-8\" />
-  <title>BTF Statistics Report</title>
-  <style>
-        :root {{
-            --bg: #e9edf3;
-            --paper: #ffffff;
-            --ink: #182230;
-            --muted: #5f6f82;
-            --line: #d9e0ea;
-            --line-strong: #c8d2e0;
-            --header: #16324f;
-            --accent: #2a6fb2;
-            --stripe: #f7f9fc;
-        }}
-        * {{ box-sizing: border-box; }}
-        body {{
-            margin: 0;
-            padding: 28px;
-            font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-            color: var(--ink);
-            background: radial-gradient(circle at top right, #f6f8fb 0%, var(--bg) 52%, #dde4ee 100%);
-        }}
-        .report {{ max-width: 1160px; margin: 0 auto; }}
-        .report-head {{
-            background: linear-gradient(135deg, var(--header) 0%, #21496f 100%);
-            color: #f3f7fd;
-            border-radius: 14px;
-            padding: 20px 24px;
-            box-shadow: 0 10px 28px rgba(17, 44, 69, 0.24);
-            margin-bottom: 18px;
-        }}
-        h1 {{ margin: 0; font-size: 28px; letter-spacing: 0.2px; }}
-        .sub {{ margin-top: 6px; color: #cfe1f7; font-size: 13px; }}
-        .kpi-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-            gap: 10px;
-            margin-bottom: 16px;
-        }}
-        .kpi {{
-            background: var(--paper);
-            border: 1px solid var(--line);
-            border-radius: 12px;
-            padding: 12px 14px;
-            box-shadow: 0 2px 8px rgba(30, 60, 90, 0.06);
-        }}
-        .kpi .k {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }}
-        .kpi .v {{ margin-top: 4px; font-size: 20px; font-weight: 700; color: #0f2b47; }}
-        .report-card {{
-            margin: 14px 0;
-            background: var(--paper);
-            border: 1px solid var(--line);
-            border-radius: 12px;
-            padding: 12px 14px 14px;
-            box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
-        }}
-        h2 {{ margin: 0 0 10px 0; color: #123355; font-size: 17px; }}
-        .notes {{ border-left: 4px solid var(--accent); }}
-        .notes ul {{ margin: 8px 0 0 18px; padding: 0; }}
-        .notes li {{ margin: 6px 0; line-height: 1.45; }}
-        table {{ border-collapse: separate; border-spacing: 0; width: 100%; }}
-        th, td {{ border-bottom: 1px solid var(--line); padding: 8px 10px; font-size: 13px; text-align: right; }}
-        th:first-child, td:first-child {{ text-align: left; }}
-        thead th {{
-            background: #f1f5fb;
-            color: #284563;
-            font-weight: 600;
-            border-top: 1px solid var(--line-strong);
-            border-bottom: 1px solid var(--line-strong);
-        }}
-        tbody tr:nth-child(even) td {{ background: var(--stripe); }}
-        .empty {{ text-align: center !important; color: var(--muted); }}
-        .detail-note {{ margin: 6px 0 8px; font-size: 12px; color: var(--muted); }}
-        h3.sub {{ margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }}
-        .sev-error {{ color: #c0392b; font-weight: 600; }}
-        .sev-warning {{ color: #d68910; font-weight: 600; }}
-        .finding-info {{ color: var(--ink); }}
-        .findings-list {{ margin: 8px 0 0 18px; padding: 0; }}
-        .findings-list li {{ margin: 8px 0; line-height: 1.45; }}
-        .finding-wf {{
-            color: var(--muted); font-size: 11px; font-weight: 600;
-            text-transform: uppercase; letter-spacing: 0.4px;
-        }}
-        .analysis-findings {{ border-left: 4px solid #c0392b; }}
-        .report-foot {{ margin-top: 14px; color: var(--muted); font-size: 12px; text-align: right; }}
-        .report-toc {{
-            background: var(--paper);
-            border: 1px solid var(--line);
-            border-radius: 12px;
-            padding: 12px 14px;
-            margin: 14px 0;
-            box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
-        }}
-        .report-toc h2 {{ margin: 0 0 8px 0; }}
-        .report-toc ul {{ margin: 0; padding: 0 0 0 18px; columns: 2; column-gap: 24px; }}
-        .report-toc li {{ margin: 4px 0; }}
-        .report-toc a {{ color: var(--accent); text-decoration: none; }}
-        .report-toc a:hover {{ text-decoration: underline; }}
-        details.report-card {{ scroll-margin-top: 12px; }}
-        details.report-card > summary {{ cursor: pointer; list-style: none; }}
-        details.report-card > summary::-webkit-details-marker {{ display: none; }}
-        details.report-card > summary h2 {{ display: inline-block; margin: 0; }}
-        details.report-card > summary::before {{
-            content: \"\\25B8\";
-            display: inline-block;
-            width: 14px;
-            margin-right: 6px;
-            color: var(--accent);
-            transition: transform 0.15s ease;
-        }}
-        details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
-        {self._html_export_util_css()}
-  </style>
-</head>
-<body>
-    <div class=\"report\">
-        <header class=\"report-head\">
-            <h1>BTF Statistics Report</h1>
-            <div class=\"sub\">Generated: {_esc(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}</div>
-        </header>
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        stats_extra_css = f"""
+:root {{ --line-strong: #c8d2e0; --stripe: #f7f9fc; }}
+.report.report-wide {{ max-width: 1160px; }}
+.kpi-grid {{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}}
+.kpi {{
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: 0 2px 8px rgba(30, 60, 90, 0.06);
+}}
+.kpi .k {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }}
+.kpi .v {{ margin-top: 4px; font-size: 20px; font-weight: 700; color: #0f2b47; }}
+.notes {{ border-left: 4px solid var(--accent); }}
+.notes ul {{ margin: 8px 0 0 18px; padding: 0; }}
+.notes li {{ margin: 6px 0; line-height: 1.45; }}
+table {{ border-collapse: separate; border-spacing: 0; width: 100%; }}
+th, td {{ border-bottom: 1px solid var(--line); padding: 8px 10px; font-size: 13px; text-align: right; }}
+th:first-child, td:first-child {{ text-align: left; }}
+thead th {{
+  background: #f1f5fb;
+  color: #284563;
+  font-weight: 600;
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+}}
+tbody tr:nth-child(even) td {{ background: var(--stripe); }}
+.empty {{ text-align: center !important; color: var(--muted); }}
+.detail-note {{ margin: 6px 0 8px; font-size: 12px; color: var(--muted); }}
+h3.sub {{ margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }}
+.sev-error {{ color: #c0392b; font-weight: 600; }}
+.sev-warning {{ color: #d68910; font-weight: 600; }}
+.finding-info {{ color: var(--ink); }}
+.findings-list {{ margin: 8px 0 0 18px; padding: 0; }}
+.findings-list li {{ margin: 8px 0; line-height: 1.45; }}
+.finding-wf {{
+  color: var(--muted); font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.4px;
+}}
+.analysis-findings {{ border-left: 4px solid #c0392b; }}
+.report-toc {{
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin: 14px 0;
+  box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
+}}
+.report-toc h2 {{ margin: 0 0 8px 0; }}
+.report-toc ul {{ margin: 0; padding: 0 0 0 18px; columns: 2; column-gap: 24px; }}
+.report-toc li {{ margin: 4px 0; }}
+.report-toc a {{ color: var(--accent); text-decoration: none; }}
+.report-toc a:hover {{ text-decoration: underline; }}
+details.report-card {{ scroll-margin-top: 12px; }}
+details.report-card > summary {{ cursor: pointer; list-style: none; }}
+details.report-card > summary::-webkit-details-marker {{ display: none; }}
+details.report-card > summary h2 {{ display: inline-block; margin: 0; }}
+details.report-card > summary::before {{
+  content: "\\25B8";
+  display: inline-block;
+  width: 14px;
+  margin-right: 6px;
+  color: var(--accent);
+  transition: transform 0.15s ease;
+}}
+details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
+{self._html_export_util_css()}
+""".strip()
 
+        body = f"""
         <section class=\"kpi-grid\">
             <article class=\"kpi\"><div class=\"k\">Span{_esc(scope_title)}</div><div class=\"v\">{_esc(span_str)}</div></article>
             <article class=\"kpi\"><div class=\"k\">Tasks</div><div class=\"v\">{task_count:,}</div></article>
@@ -10210,8 +10177,6 @@ class _StatsPanel(QWidget):
     {queue_html}
     {interval_html}
     {tag_html}
-        <div class=\"report-foot\">Generated by BTF Viewer</div>
-    </div>
     <script>
     (function () {{
       function openTarget(id) {{
@@ -10225,9 +10190,16 @@ class _StatsPanel(QWidget):
       if (location.hash) openTarget(location.hash.slice(1))
     }})()
     </script>
-</body>
-</html>
 """
+
+        report = btf_html_report_document(
+            "Statistics Report",
+            body,
+            subtitle=f"Generated: {stamp}",
+            extra_css=stats_extra_css,
+            doc_title="BTFViewer — Statistics Report",
+            report_class="report-wide",
+        )
 
         with open(path, "w", encoding="utf-8") as f:
             nav_html, report = self._html_make_collapsible_sections(report)
@@ -12192,9 +12164,34 @@ class _RcSettings:
             self._cfg[section] = dict(keys)
         # Overlay with the user's saved file (absent keys keep their defaults).
         self._cfg.read(self.RC_PATH, encoding="utf-8")
+        # Upgrade legacy plaintext AI API keys to enc1: blobs on first load.
+        self._migrate_encrypt_ai_api_keys()
         # Write the default file on first run so the user can inspect/edit it.
         if not os.path.isfile(self.RC_PATH):
             self._flush()
+
+    def _migrate_encrypt_ai_api_keys(self) -> None:
+        """Rewrite plaintext ``[ai] *_api_key`` values as ``enc1:`` blobs."""
+        if not self._cfg.has_section("ai"):
+            return
+        changed = False
+        for key in list(self._cfg.options("ai")):
+            if not is_ai_api_key_option("ai", key):
+                continue
+            raw = self._cfg.get("ai", key, fallback="")
+            if not raw or is_encrypted_secret(raw):
+                continue
+            self._cfg.set("ai", key, encrypt_secret(raw))
+            changed = True
+        if changed:
+            self._flush()
+
+    @staticmethod
+    def _encode_rc_value(section: str, key: str, value) -> str:
+        text = "" if value is None else str(value)
+        if is_ai_api_key_option(section, key) and text.strip():
+            return encrypt_secret(text)
+        return text
 
     # ------------------------------------------------------------------ I/O
     def _flush(self) -> None:
@@ -12202,7 +12199,11 @@ class _RcSettings:
         try:
             with open(self.RC_PATH, "w", encoding="utf-8") as fh:
                 fh.write("# btf_viewer.rc - RTOS BTF Viewer settings\n")
-                fh.write("# This file is managed automatically; you may edit it by hand.\n\n")
+                fh.write("# This file is managed automatically; you may edit it by hand.\n")
+                fh.write(
+                    "# [ai] *_api_key values are stored encrypted (enc1:…) for "
+                    "this machine.\n\n"
+                )
                 self._cfg.write(fh)
             self._dirty = False
             self._last_error = ""
@@ -12224,7 +12225,10 @@ class _RcSettings:
 
     # ---------------------------------------------------------------- getters
     def get(self, section: str, key: str, fallback: str = "") -> str:
-        return self._cfg.get(section, key, fallback=fallback)
+        raw = self._cfg.get(section, key, fallback=fallback)
+        if is_ai_api_key_option(section, key):
+            return decrypt_secret(raw)
+        return raw
 
     def get_int(self, section: str, key: str, fallback: int = 0) -> int:
         try:
@@ -12249,7 +12253,7 @@ class _RcSettings:
         """Set *key* in *section* and optionally flush to disk."""
         if not self._cfg.has_section(section):
             self._cfg.add_section(section)
-        self._cfg.set(section, key, str(value))
+        self._cfg.set(section, key, self._encode_rc_value(section, key, value))
         if flush:
             self._flush()
         else:
@@ -12260,7 +12264,7 @@ class _RcSettings:
         if not self._cfg.has_section(section):
             self._cfg.add_section(section)
         for key, value in pairs.items():
-            self._cfg.set(section, key, str(value))
+            self._cfg.set(section, key, self._encode_rc_value(section, key, value))
         if flush:
             self._flush()
         else:

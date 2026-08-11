@@ -4,6 +4,7 @@
  */
 import { taskMergeKey } from './colors.js'
 import { computeFindHits } from './findAnalysis.js'
+import { btfHtmlReportDocument } from './htmlReport.js'
 import {
   analyzeMultiTraces,
   buildCorrelationTimeline,
@@ -837,6 +838,76 @@ export function messageContentText(content) {
   return String(content).trim()
 }
 
+/** Best-effort text from an OpenAI-compatible assistant choice. */
+export function assistantMessageText(message = null, choice = null) {
+  const msg = message && typeof message === 'object' ? message : {}
+  const choice0 = choice && typeof choice === 'object' ? choice : {}
+  for (const src of [
+    msg.content,
+    msg.refusal,
+    msg.reasoning_content,
+    msg.reasoning,
+    choice0.text,
+    choice0.content,
+  ]) {
+    const text = messageContentText(src)
+    if (text) return text
+  }
+  return ''
+}
+
+function choiceFinishReason(choice) {
+  if (!choice || typeof choice !== 'object') return ''
+  for (const key of ['finish_reason', 'finishReason']) {
+    const val = choice[key]
+    if (val != null && String(val).trim()) return String(val).trim().toLowerCase()
+  }
+  return ''
+}
+
+function usageCompletionTokens(body) {
+  const usage = body && typeof body === 'object' ? body.usage : null
+  if (!usage || typeof usage !== 'object') return -1
+  for (const key of ['completion_tokens', 'completionTokens', 'output_tokens']) {
+    if (!(key in usage)) continue
+    const n = Number.parseInt(usage[key], 10)
+    if (Number.isFinite(n)) return n
+  }
+  return -1
+}
+
+/**
+ * Human-readable error when a chat reply has no text and no tool calls.
+ * Avoid snake_case that Markdown italicizes in the AI log.
+ */
+export function emptyChatCompletionError(body, { hadTools = false } = {}) {
+  const choices = body && typeof body === 'object' ? body.choices : null
+  const choice0 = Array.isArray(choices) && choices[0] && typeof choices[0] === 'object'
+    ? choices[0]
+    : {}
+  const reason = choiceFinishReason(choice0) || 'unknown'
+  const tokens = usageCompletionTokens(body)
+  const model = body && typeof body === 'object' ? String(body.model || '').trim() : ''
+  const modelBit = model ? ` model=${model}` : ''
+  const tokenBit = tokens >= 0 ? ` completion tokens=${tokens}` : ''
+
+  if (reason === 'content_filter' || reason === 'safety') {
+    return `The provider blocked the reply (safety / content filter).${modelBit}`
+  }
+
+  const tips = [
+    `The model returned an empty assistant message (finish reason=${reason}${tokenBit}${modelBit}).`,
+    'This is a known Gemini OpenAI-compat quirk with large prompts or tool calls.',
+    'Retry, switch to a fuller model (for example gemini-2.5-flash), or narrow the Statistics scope.',
+  ]
+  if (hadTools) {
+    tips.push(
+      'Agent templates send tools; a plain Ask without tools may work when a lite model stalls.',
+    )
+  }
+  return tips.join(' ')
+}
+
 export const GEMINI_SKIP_THOUGHT_SIGNATURE = 'skip_thought_signature_validator'
 
 export function thoughtSignatureFromObj(obj) {
@@ -1411,12 +1482,22 @@ export function validateToolCall(name, args) {
     }
   }
   if (name === AI_TOOL_WHAT_IF) {
-    const change = String(a.change || '').trim()
-    if (!change) return { args: null, error: 'change must be a non-empty string' }
+    let change = String(a.change || '').trim()
+    const task = String(a.task || a.task_id || a.task_name_or_id || '').trim()
+    // Models often pass only a task id after "run what_if on task 9".
+    if (!change && task) change = `pin ${task} to preferred core`
+    if (!change) {
+      return {
+        args: null,
+        error:
+          'change must describe the experiment '
+          + '(e.g. pin CS[9] to Core_0), or pass task for a default pin',
+      }
+    }
     return {
       args: {
         change,
-        task: String(a.task || '').trim(),
+        task,
       },
       error: '',
     }
@@ -1771,6 +1852,12 @@ function htmlEscape(text) {
 export function buildAiReportHtml({
   meta = {}, gui = {}, findings = '', annotations = [], conversationHtml = '',
 } = {}) {
+  const stamp = (() => {
+    const d = new Date()
+    const p = n => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+      + ` ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  })()
   const metaRows = Object.entries(meta || {}).map(
     ([k, v]) => `<tr><th>${htmlEscape(k)}</th><td>${htmlEscape(v)}</td></tr>`,
   ).join('')
@@ -1789,36 +1876,34 @@ export function buildAiReportHtml({
   const findingsBody = String(findings || '').trim()
     ? `<pre>${htmlEscape(findings)}</pre>`
     : '<p>No findings for the current scope.</p>'
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>BTF Viewer — AI Report</title>
-<style>
-body{background:#12161d;color:#dbe2ea;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px;line-height:1.5;margin:0;padding:20px;}
-h1{font-size:18px;margin:0 0 4px;} h2{font-size:15px;margin:20px 0 8px;}
-.saved{color:#8b98a8;font-size:12px;margin:0 0 16px;}
-table{border-collapse:collapse;width:100%;margin:0 0 12px;}
-th,td{text-align:left;padding:4px 8px;border-bottom:1px solid #2b3442;vertical-align:top;}
-th{color:#8b98a8;font-weight:600;width:22%;}
-pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;padding:8px;overflow:auto;white-space:pre-wrap;}
-a{color:#5b9bd5;}
-</style>
-</head>
-<body>
-<h1>BTF Viewer — AI Report</h1>
-<table>${metaRows}</table>
+  const conv = String(conversationHtml || '').trim()
+  const body = (
+    `<section class="report-card">
+<h2>Report metadata</h2>
+<table class="meta-table">${metaRows || '<tr><td>None</td></tr>'}</table>
+</section>
+<section class="report-card">
 <h2>GUI state</h2>
-<table>${guiRows}</table>
+<table class="gui-table">${guiRows || '<tr><td>None</td></tr>'}</table>
+</section>
+<section class="report-card">
 <h2>Annotations</h2>
-<table><tr><th>Time</th><th>Note</th></tr>${annRows}</table>
+<table class="ann-table"><tr><th>Time</th><th>Note</th></tr>${annRows}</table>
+</section>
+<section class="report-card">
 <h2>Analysis Findings</h2>
 ${findingsBody}
+</section>
+<section class="report-card">
 <h2>Conversation</h2>
-${conversationHtml || ''}
-</body>
-</html>
+${conv}
+</section>
 `
+  )
+  return btfHtmlReportDocument('AI Diagnostic Report', body, {
+    subtitle: `Saved ${stamp}`,
+    docTitle: 'BTFViewer — AI Report',
+  })
 }
 
 function inTimeRange(t, lo, hi) {

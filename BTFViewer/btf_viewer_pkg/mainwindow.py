@@ -2591,7 +2591,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     widths.append(int(dock.width()))
         if widths:
             return max(widths)
-        return 330
+        return _RIGHT_DOCK_DEFAULT_W
 
     def _right_docks(self) -> Tuple[QDockWidget, ...]:
         dock = getattr(self, "_panel_dock", None)
@@ -2701,7 +2701,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 Default structure: one right dock with tabbed pages
                 (Statistics / Marks / Find / Legend / AI).
         """
-        self._resize_right_dock_column(520)
+        self._resize_right_dock_column(_RIGHT_DOCK_DEFAULT_W)
         self._focus_statistics_panel()
         self._relax_right_dock_content_widths()
         _wire_splitter_handle_cursors(self)
@@ -2938,17 +2938,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             s.get("window", "dock_metrics", "").strip()
             or s.get("dock_profile_metrics", _profile_key, "").strip()
         )
-        if _saved_metrics:
+        _saved_ver = s.get("window", "dock_layout_version", "0")
+        if _saved_ver != _DOCK_LAYOUT_VERSION:
+            # New layout version: drop persisted dock sizes so code defaults
+            # apply (e.g. wider right panel for 3-column AI templates).
+            s.set_many("window", {
+                "dock_state": "",
+                "dock_metrics": "",
+                "dock_layout_version": _DOCK_LAYOUT_VERSION,
+            }, flush=False)
+            self._dock_startup_needs_defaults = True
+        elif _saved_metrics:
             self._dock_startup_metrics = _saved_metrics
         else:
             self._dock_startup_needs_defaults = True
-
-        _saved_ver = s.get("window", "dock_layout_version", "0")
-        if _saved_ver != _DOCK_LAYOUT_VERSION:
-            s.set_many("window", {
-                "dock_state": "",
-                "dock_layout_version": _DOCK_LAYOUT_VERSION,
-            }, flush=False)
 
         # Panel visibility and resizeDocks run once after the window is shown.
         self._schedule_startup_dock_layout()
