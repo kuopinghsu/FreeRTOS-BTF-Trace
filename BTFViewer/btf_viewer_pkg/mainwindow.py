@@ -5402,9 +5402,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             task = str(args.get("task") or "").strip()
             change = str(args.get("change") or "")
             if not task:
-                from .ai_investigation import _guess_task_name, parse_what_if_change
-                task = str(parse_what_if_change(change).get("task") or "").strip()
-                if not task:
+                # Bundle-safe: fall back to the monolith's already-defined globals.
+                try:
+                    from .ai_investigation import _guess_task_name, parse_what_if_change
+                except ImportError:
+                    _guess_task_name = globals().get("_guess_task_name")
+                    parse_what_if_change = globals().get("parse_what_if_change")
+                if parse_what_if_change is not None:
+                    task = str(parse_what_if_change(change).get("task") or "").strip()
+                if not task and _guess_task_name is not None:
                     task = _guess_task_name(change) or ""
             lo = hi = None
             panel = getattr(self, "_stats_panel", None)
@@ -5438,11 +5444,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 findings = []
             task = str(args.get("task") or "").strip()
             if not task:
-                from .ai_investigation import detect_anomalies, _guess_task_name
-                for a in (detect_anomalies(findings, limit=3).get("anomalies") or []):
-                    task = str(a.get("task") or _guess_task_name(str(a.get("text") or "")) or "").strip()
-                    if task:
-                        break
+                # Bundle-safe: fall back to the monolith's already-defined globals.
+                try:
+                    from .ai_investigation import detect_anomalies, _guess_task_name
+                except ImportError:
+                    detect_anomalies = globals().get("detect_anomalies")
+                    _guess_task_name = globals().get("_guess_task_name")
+                if detect_anomalies is not None:
+                    for a in (detect_anomalies(findings, limit=3).get("anomalies") or []):
+                        guessed = _guess_task_name(str(a.get("text") or "")) if _guess_task_name else ""
+                        task = str(a.get("task") or guessed or "").strip()
+                        if task:
+                            break
             lo = hi = None
             panel = getattr(self, "_stats_panel", None)
             rng = panel._stats_range() if panel is not None and hasattr(panel, "_stats_range") else None

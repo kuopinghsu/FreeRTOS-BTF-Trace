@@ -20294,18 +20294,25 @@ def search_timeline_hits(
     annotations: Optional[Sequence[Any]] = None,
 ) -> Dict[str, Any]:
     """Find-panel search for the AI ``search_timeline`` tool."""
-    from .mvvm.find_logic import recompute_find_hits
+    # Bundle-safe: the monolith merges mvvm/find_logic before this call site,
+    # so fall back to the already-defined global if the relative import fails.
+    try:
+        from .mvvm.find_logic import recompute_find_hits as _recompute_find_hits
+    except ImportError:
+        _recompute_find_hits = globals().get("recompute_find_hits") or globals().get("FIND_RECOMPUTE")
 
     q = str(query or "").strip()
     if not q:
         return tool_result_payload(False, "query must be a non-empty string")
     if trace is None:
         return tool_result_payload(False, "No trace loaded")
+    if _recompute_find_hits is None:
+        return tool_result_payload(False, "Find engine unavailable")
     find_mode = "sti" if str(mode or "").lower() in ("tags", "tag", "sti") else str(mode or "contains")
     anns: List[Any] = []
     for a in annotations or []:
         anns.append(a)
-    hits, status = recompute_find_hits(trace, q, find_mode, anns)
+    hits, status = _recompute_find_hits(trace, q, find_mode, anns)
     status_s = str(status or "")
     if status_s in ("Regex error", "Regex too long"):
         return tool_result_payload(False, status_s)
@@ -46818,9 +46825,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             task = str(args.get("task") or "").strip()
             change = str(args.get("change") or "")
             if not task:
-                from .ai_investigation import _guess_task_name, parse_what_if_change
-                task = str(parse_what_if_change(change).get("task") or "").strip()
-                if not task:
+                # Bundle-safe: fall back to the monolith's already-defined globals.
+                try:
+                    from .ai_investigation import _guess_task_name, parse_what_if_change
+                except ImportError:
+                    _guess_task_name = globals().get("_guess_task_name")
+                    parse_what_if_change = globals().get("parse_what_if_change")
+                if parse_what_if_change is not None:
+                    task = str(parse_what_if_change(change).get("task") or "").strip()
+                if not task and _guess_task_name is not None:
                     task = _guess_task_name(change) or ""
             lo = hi = None
             panel = getattr(self, "_stats_panel", None)
@@ -46854,11 +46867,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 findings = []
             task = str(args.get("task") or "").strip()
             if not task:
-                from .ai_investigation import detect_anomalies, _guess_task_name
-                for a in (detect_anomalies(findings, limit=3).get("anomalies") or []):
-                    task = str(a.get("task") or _guess_task_name(str(a.get("text") or "")) or "").strip()
-                    if task:
-                        break
+                # Bundle-safe: fall back to the monolith's already-defined globals.
+                try:
+                    from .ai_investigation import detect_anomalies, _guess_task_name
+                except ImportError:
+                    detect_anomalies = globals().get("detect_anomalies")
+                    _guess_task_name = globals().get("_guess_task_name")
+                if detect_anomalies is not None:
+                    for a in (detect_anomalies(findings, limit=3).get("anomalies") or []):
+                        guessed = _guess_task_name(str(a.get("text") or "")) if _guess_task_name else ""
+                        task = str(a.get("task") or guessed or "").strip()
+                        if task:
+                            break
             lo = hi = None
             panel = getattr(self, "_stats_panel", None)
             rng = panel._stats_range() if panel is not None and hasattr(panel, "_stats_range") else None

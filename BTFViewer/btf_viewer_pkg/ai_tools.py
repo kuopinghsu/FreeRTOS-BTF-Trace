@@ -2053,18 +2053,25 @@ def search_timeline_hits(
     annotations: Optional[Sequence[Any]] = None,
 ) -> Dict[str, Any]:
     """Find-panel search for the AI ``search_timeline`` tool."""
-    from .mvvm.find_logic import recompute_find_hits
+    # Bundle-safe: the monolith merges mvvm/find_logic before this call site,
+    # so fall back to the already-defined global if the relative import fails.
+    try:
+        from .mvvm.find_logic import recompute_find_hits as _recompute_find_hits
+    except ImportError:
+        _recompute_find_hits = globals().get("recompute_find_hits") or globals().get("FIND_RECOMPUTE")
 
     q = str(query or "").strip()
     if not q:
         return tool_result_payload(False, "query must be a non-empty string")
     if trace is None:
         return tool_result_payload(False, "No trace loaded")
+    if _recompute_find_hits is None:
+        return tool_result_payload(False, "Find engine unavailable")
     find_mode = "sti" if str(mode or "").lower() in ("tags", "tag", "sti") else str(mode or "contains")
     anns: List[Any] = []
     for a in annotations or []:
         anns.append(a)
-    hits, status = recompute_find_hits(trace, q, find_mode, anns)
+    hits, status = _recompute_find_hits(trace, q, find_mode, anns)
     status_s = str(status or "")
     if status_s in ("Regex error", "Regex too long"):
         return tool_result_payload(False, status_s)
