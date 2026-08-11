@@ -69,6 +69,30 @@ describe('computeFindHits', () => {
   })
 })
 
+describe('find mode help', () => {
+  it('exports choices aligned with FIND_MODES', async () => {
+    const {
+      FIND_MODE_CHOICES,
+      FIND_MODES,
+      findModeHelp,
+      formatFindStatus,
+      normalizeFindMode,
+    } = await import('../src/utils/findAnalysis.js')
+    assert.deepEqual(FIND_MODE_CHOICES.map(o => o.key), FIND_MODES)
+    assert.equal(normalizeFindMode('STI events'), 'sti')
+    assert.match(findModeHelp('migrations'), /migration/i)
+    assert.equal(formatFindStatus({
+      hitCount: 3, mode: 'migrations', query: 'Core_0',
+    }), '3 migration matches')
+    assert.equal(formatFindStatus({
+      hitCount: 3, hitIndex: 1, mode: 'migrations', query: 'Core_0',
+    }), '3 matches (at 2)')
+    assert.equal(formatFindStatus({
+      hitCount: 2, mode: 'sti', query: 'TICK',
+    }), '2 matches')
+  })
+})
+
 describe('stepFindHitIndex', () => {
   const hits = [100, 200, 300]
 

@@ -1952,7 +1952,8 @@ function recomputeFind() {
     trace.value,
     activeTab.value.findQuery,
     activeTab.value.findMode,
-    marks.value,
+    // Desktop Find searches annotations only (not bookmarks).
+    (marks.value || []).filter(m => m.type === 'annotation'),
   )
   activeTab.value.findHits = hits
   activeTab.value.findHitIdx = -1
@@ -2349,9 +2350,10 @@ function resolveAiTabRef(ref, defaultIdx) {
   }
   if (/^\d+$/.test(token)) {
     const n = Number(token)
-    // 0-based tab-bar / loaded-list index first (desktop parity). Tab ids start at 1.
-    if (n >= 0 && n < loaded.length) return loaded[n]
+    // Desktop: 0-based tab-bar index first (must have a loaded trace).
+    // Tab ids start at 1 — only used after index lookup fails.
     if (n >= 0 && n < tabs.value.length && tabs.value[n]?.trace) return tabs.value[n]
+    if (n >= 0 && n < loaded.length) return loaded[n]
     const byId = loaded.find(t => Number(t.id) === n)
     if (byId) return byId
   }

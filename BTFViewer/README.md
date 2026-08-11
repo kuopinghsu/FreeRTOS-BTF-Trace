@@ -146,7 +146,7 @@ Place up to **4–8** cursors (default 4; set in Settings).
 | Clear all | `Shift+C` or **Shift+right-click** |
 | Snap to boundary | **Shift+click** |
 
-With **two or more** cursors, the status bar shows a short range summary, and Statistics can limit metrics to that window (**Limit to C1–Cn**). **File → Save selection as BTF…** (web: toolbar crop) exports only the events between the earliest and latest cursor. Desktop always re-reads the source file (or zip member). Web uses the in-memory original text when still loaded; after a refresh it may **reconstruct** a subset (resume/preempt + STI) if that text was not kept.
+With **two or more** cursors, the status bar shows a short range summary, and Statistics can limit metrics to that window (**Limit to C1–Cn**). **File → Save selection as BTF…** (web: toolbar crop) exports the cursor window: both apps prefer the original BTF text (desktop re-reads the file / zip member; web uses in-memory `sourceText`), and **reconstruct** a resume/preempt + STI subset if that source is missing (e.g. web after refresh).
 
 <a id="marks-and-find" name="marks-and-find">&#x200B;</a>
 ### Marks and find ![](../images/readme/h3.svg)
@@ -156,6 +156,19 @@ With **two or more** cursors, the status bar shows a short range summary, and St
 | **Bookmarks** | Named timestamps (`Ctrl+B`) |
 | **Annotations** | Free-text notes at a time (`Ctrl+Shift+B` / `A`) |
 | **Find** | Search tasks, migrations, STI events, intervals, and more (`Ctrl+F`; `F3` / `Shift+F3` to step) |
+
+**Find modes** (match count is shown at the top of the panel; each mode has a short description under the dropdown):
+
+| Mode | Matches |
+|------|---------|
+| **Contains** | Substring on task names and annotation notes |
+| **Exact** | Whole-string task merge key / name |
+| **Regex** | Case-insensitive regex on tasks and annotations |
+| **Migrations** | Migration boundaries by task or core (`Core_0`, `CS[22]`, …) |
+| **STI** | STI channel, event, note, and core |
+| **Intervals** | Interval start/stop spans and interval STI notes |
+| **Lifecycle** | Task create / delete / suspend / resume STI |
+| **Pointers** | Mutex / semaphore / queue `0x…` pointers and sync notes |
 
 Right-click the timeline for cursor, bookmark, and annotation actions. Marks and cursors are restored with the session.
 
@@ -1657,7 +1670,7 @@ Example plots from `tracedata/example-4cores.btf.gz` (4-core SMP trace, 67 tasks
 | Copy viewport | Clipboard | Clipboard |
 | SVG | Save SVG | Save SVG |
 | Perfetto JSON | **File → Export Perfetto…** | Toolbar **Perfetto** |
-| Cursor-range `.btf` | **File → Save selection as BTF…** (C1–Cn; `.btf` / `.btf.gz`; re-reads source) | Toolbar crop (2+ cursors; `.btf` download; reconstructs after refresh if source text is gone) |
+| Cursor-range `.btf` | **File → Save selection as BTF…** (C1–Cn; `.btf` / `.btf.gz`; filter source, else reconstruct) | Toolbar crop (2+ cursors; `.btf` download; same filter / reconstruct) |
 | Statistics CSV/HTML | Statistics panel | Statistics panel |
 | Compare CSV/HTML | Trace Compare dialog | Trace Compare dialog |
 

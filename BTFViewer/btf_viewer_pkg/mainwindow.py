@@ -45,7 +45,14 @@ from .btf_slice import (
     reconstruct_btf_slice,
     write_btf_text,
 )
-from .mvvm import MainViewModel, MvvmSettingsMixin, TraceTabViewModel
+from .mvvm import (
+    FIND_MODE_CHOICES,
+    MainViewModel,
+    MvvmSettingsMixin,
+    TraceTabViewModel,
+    find_mode_help,
+    normalize_find_mode,
+)
 from .mvvm.tab_viewport import apply_viewport, viewport_from_json, viewport_to_json
 from .trace_quality import trace_quality_summary
 from .perfetto_export import export_perfetto
@@ -2050,7 +2057,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         tab.vm.stats.cursor_times = list(tab.view._scene.cursor_times())
         tab.vm.capture_viewport_from_view(tab.view)
         tab.vm.find_query = self._find_input.text()
-        tab.vm.find_mode = self._find_mode_combo.currentText()
+        tab.vm.find_query = self._find_input.text()
+        mode = self._find_mode_combo.currentData()
+        tab.vm.find_mode = str(mode) if mode else normalize_find_mode(
+            self._find_mode_combo.currentText())
         mk, kind, open_, preemptor, interval_id = self._stats_panel.capture_plot_session()
         tab.vm.set_plot_session(mk, kind, open_, preemptor, interval_id)
         self._persist_trace_state(tab.path, tab.bookmarks, tab.annotations, tab.mark_next_id)
@@ -2062,10 +2072,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._find_mode_combo.blockSignals(True)
         try:
             self._find_input.setText(tab.vm.find_query)
-            idx = self._find_mode_combo.findText(
-                tab.vm.find_mode, Qt.MatchFlag.MatchFixedString)
+            mode_key = normalize_find_mode(tab.vm.find_mode)
+            idx = self._find_mode_combo.findData(mode_key)
+            if idx < 0:
+                idx = self._find_mode_combo.findText(
+                    tab.vm.find_mode, Qt.MatchFlag.MatchFixedString)
             if idx >= 0:
                 self._find_mode_combo.setCurrentIndex(idx)
+            self._update_find_mode_help()
         finally:
             self._find_input.blockSignals(False)
             self._find_mode_combo.blockSignals(False)
@@ -3904,19 +3918,37 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         find_v = QVBoxLayout(find_host)
         find_v.setContentsMargins(6, 6, 6, 6)
         find_v.setSpacing(6)
+        self._find_status = QLabel("0 matches")
+        self._find_status.setObjectName("find_status")
+        self._find_status.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self._find_status.setStyleSheet("color:#999;")
+        find_v.addWidget(self._find_status, 0, Qt.AlignmentFlag.AlignTop)
         self._find_input = QLineEdit()
         self._find_input.setPlaceholderText("Find task, annotation, or migration…")
+        self._find_input.setToolTip(
+            "Search the active tab. Enter = next match; Shift+Enter / F3 / "
+            "Shift+F3 step hits on the timeline.")
         self._find_input.textChanged.connect(self._recompute_find_hits)
         self._find_input.returnPressed.connect(self._find_next)
         find_v.addWidget(self._find_input)
         self._find_mode_combo = QComboBox()
-        self._find_mode_combo.addItems([
-            "Contains", "Exact", "Regex", "Migrations",
-            "STI", "Intervals", "Lifecycle", "Pointers",
-        ])
+        for label, key, tip in FIND_MODE_CHOICES:
+            self._find_mode_combo.addItem(label, key)
+            idx = self._find_mode_combo.count() - 1
+            self._find_mode_combo.setItemData(idx, tip, Qt.ItemDataRole.ToolTipRole)
         self._find_mode_combo.setCurrentIndex(0)
-        self._find_mode_combo.currentIndexChanged.connect(self._recompute_find_hits)
+        self._find_mode_combo.setToolTip(
+            "Choose what the query matches. Hover an item for a short description.")
+        self._find_mode_combo.currentIndexChanged.connect(self._on_find_mode_changed)
         find_v.addWidget(self._find_mode_combo)
+        self._find_mode_help = QLabel(find_mode_help("contains"))
+        self._find_mode_help.setObjectName("find_mode_help")
+        self._find_mode_help.setWordWrap(True)
+        self._find_mode_help.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self._find_mode_help.setStyleSheet("color:#8b98a8; font-size:11px;")
+        find_v.addWidget(self._find_mode_help)
         find_btns = QHBoxLayout()
         find_btns.setContentsMargins(0, 0, 0, 0)
         find_prev = QPushButton("Previous")
@@ -3928,9 +3960,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         find_btns.addWidget(find_prev)
         find_btns.addWidget(find_next)
         find_v.addLayout(find_btns)
-        self._find_status = QLabel("0 matches")
-        self._find_status.setStyleSheet("color:#999;")
-        find_v.addWidget(self._find_status)
+        find_v.addStretch(1)
 
         # --- AI Assistant panel (tab content) ---
         self._ai_panel = create_ai_assistant_panel(
@@ -6376,12 +6406,31 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._view._scene.set_find_hits([])
             return
         vm.find_query = self._find_input.text()
-        vm.find_mode = self._find_mode_combo.currentText()
+        mode = self._find_mode_combo.currentData()
+        vm.find_mode = str(mode) if mode else normalize_find_mode(
+            self._find_mode_combo.currentText())
         status = vm.recompute_find_hits()
         self._find_status.setText(status)
+        self._find_status.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self._view._scene.set_find_hits(vm.find_hits)
         if not vm.find_hits:
             self._set_find_marker_ns(None)
+
+    def _on_find_mode_changed(self, _index: int = 0) -> None:
+        self._update_find_mode_help()
+        self._recompute_find_hits()
+
+    def _update_find_mode_help(self) -> None:
+        help_lbl = getattr(self, "_find_mode_help", None)
+        if help_lbl is None:
+            return
+        mode = self._find_mode_combo.currentData()
+        if not mode:
+            mode = self._find_mode_combo.currentText()
+        help_lbl.setText(find_mode_help(str(mode or "contains")))
+        tip = find_mode_help(str(mode or "contains"))
+        self._find_mode_combo.setToolTip(tip)
 
     def _find_next(self) -> None:
         self._step_find_hit(forward=True)

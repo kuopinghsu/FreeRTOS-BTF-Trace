@@ -7,7 +7,7 @@ from PySide6.QtCore import Signal
 
 from ..parser import BtfTrace, TraceAnnotation, TraceBookmark
 from .base import ViewModelBase
-from .find_logic import FIND_RECOMPUTE
+from .find_logic import FIND_RECOMPUTE, normalize_find_mode
 from .models import PlotSessionState, TabViewportModel, TraceTabModel
 from .stats_vm import StatsViewModel
 from .tab_viewport import apply_viewport, capture_viewport
@@ -123,7 +123,7 @@ class TraceTabViewModel(ViewModelBase):
 
     @find_mode.setter
     def find_mode(self, value: str) -> None:
-        self._model.find_mode = str(value) or "Contains"
+        self._model.find_mode = normalize_find_mode(value)
         self.find_changed.emit()
         self.changed.emit()
 

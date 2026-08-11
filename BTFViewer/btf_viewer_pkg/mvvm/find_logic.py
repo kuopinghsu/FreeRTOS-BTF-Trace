@@ -12,9 +12,82 @@ _FIND_MODES = frozenset({
     "sti", "intervals", "lifecycle", "pointers",
 })
 
+# (label, mode_key, help text) — keep order in sync with web findAnalysis.js
+# and config._PORTABLE_FIND_MODES.
+FIND_MODE_CHOICES: Tuple[Tuple[str, str, str], ...] = (
+    (
+        "Contains",
+        "contains",
+        "Substring match on task names (merge key / display name) and "
+        "annotation notes.",
+    ),
+    (
+        "Exact",
+        "exact",
+        "Whole-string match on a task merge key, raw name, or display name.",
+    ),
+    (
+        "Regex",
+        "regex",
+        "Case-insensitive regular expression on task names and annotation notes.",
+    ),
+    (
+        "Migrations",
+        "migrations",
+        "Core-migration boundaries. Match a task name or a core "
+        "(from / to), e.g. Core_0 or CS[22].",
+    ),
+    (
+        "STI",
+        "sti",
+        "Software-trace items: channel, event verb, note, and core "
+        "(tags, TICK, mutex notes, …).",
+    ),
+    (
+        "Intervals",
+        "intervals",
+        "Paired interval_start / interval_stop spans and interval STI notes "
+        "(id, task, times).",
+    ),
+    (
+        "Lifecycle",
+        "lifecycle",
+        "Task create / delete / suspend / resume STI notes on the task channel.",
+    ),
+    (
+        "Pointers",
+        "pointers",
+        "Mutex, semaphore, and queue object pointers (0x…) and sync-object notes.",
+    ),
+)
+
+_FIND_MODE_ALIASES = {
+    "sti events": "sti",
+    "sti event": "sti",
+    "tags": "sti",
+    "tag": "sti",
+}
+
 _TASK_LIFE_RE = re.compile(r"^(create|delete|suspend|resume)\b", re.IGNORECASE)
 _SYNC_NOTE_RE = re.compile(
     r"^(create|take|give|delete|send|recv)(?:\s+(0x[0-9a-f]+))?$", re.IGNORECASE)
+
+
+def normalize_find_mode(mode: str) -> str:
+    """Map a combo label or key onto one of ``_FIND_MODES``."""
+    key = str(mode or "").strip().lower()
+    key = _FIND_MODE_ALIASES.get(key, key)
+    return key if key in _FIND_MODES else "contains"
+
+
+def find_mode_help(mode: str) -> str:
+    """One-line help for the Find mode combo selection."""
+    want = normalize_find_mode(mode)
+    for _label, key, tip in FIND_MODE_CHOICES:
+        if key == want:
+            return tip
+    return FIND_MODE_CHOICES[0][2]
+
 
 def recompute_find_hits(
     trace: Optional[BtfTrace],
@@ -29,9 +102,7 @@ def recompute_find_hits(
     if not q:
         return [], "0 matches"
 
-    mode_key = mode.strip().lower()
-    if mode_key not in _FIND_MODES:
-        mode_key = "contains"
+    mode_key = normalize_find_mode(mode)
 
     if mode_key == "migrations":
         return _find_migrations(trace, q)

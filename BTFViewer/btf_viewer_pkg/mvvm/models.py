@@ -41,7 +41,7 @@ class TraceTabModel:
     find_hit_idx: int = -1
     find_marker_ns: Optional[int] = None
     find_query: str = ""
-    find_mode: str = "Contains"
+    find_mode: str = "contains"
     undo_stack: list = field(default_factory=list)
     redo_stack: list = field(default_factory=list)
     plot: PlotSessionState = field(default_factory=PlotSessionState)

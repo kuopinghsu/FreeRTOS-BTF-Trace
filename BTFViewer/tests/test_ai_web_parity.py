@@ -173,8 +173,33 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("0-based tab index", (
             BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8"))
         self.assertIn("0-based tab index", tools_js)
-        self.assertIn("0-based tab-bar / loaded-list index first", app)
+        # Desktop: tab-bar index first; web must match that order.
+        self.assertIn(
+            "0-based tab-bar index first",
+            app,
+        )
         self.assertIn("Tab ids start at 1", app)
+        self.assertIn(
+            "if 0 <= idx < len(self._tabs) and getattr(self._tabs[idx], \"trace\", None)",
+            mw,
+        )
+        self.assertIn(
+            "n < tabs.value.length && tabs.value[n]?.trace",
+            app,
+        )
+        self.assertIn("type === 'annotation'", app)
+        self.assertIn("formatFindStatus", (
+            BTF_ROOT / "web/src/utils/findAnalysis.js").read_text(encoding="utf-8"))
+        self.assertIn("formatFindStatus", (
+            BTF_ROOT / "web/src/components/FindPanel.vue").read_text(encoding="utf-8"))
+        self.assertIn("migration matches", (
+            BTF_ROOT / "btf_viewer_pkg/mvvm/find_logic.py").read_text(encoding="utf-8"))
+        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("reconstruct", readme)
+        self.assertIn("filter source, else reconstruct", readme)
+        self.assertNotIn("Desktop always re-reads the source file", readme)
+        workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
+        self.assertNotIn("Export only the raw events between the earliest", workflows)
         self.assertIn("archive.zip::", (
             BTF_ROOT / "web/src/utils/btfLoad.js").read_text(encoding="utf-8"))
         self.assertIn("onMermaidZoomWheel", panel)

@@ -1,11 +1,18 @@
 <template>
   <div class="find-panel">
+    <div
+      class="find-status"
+      :class="{ error: !!error }"
+    >
+      {{ statusText }}
+    </div>
     <input
       ref="inputRef"
       v-model="localQuery"
       class="find-input"
       type="search"
       placeholder="Find task, annotation, or migration…"
+      title="Search the active tab. Enter = next match; Shift+Enter / F3 / Shift+F3 step hits on the timeline."
       @input="onQueryChange"
       @keydown.enter.prevent="emit('next')"
       @keydown.shift.enter.prevent="emit('prev')"
@@ -13,33 +20,21 @@
     <select
       v-model="localMode"
       class="find-mode"
+      :title="modeHelp"
       @change="onModeChange"
     >
-      <option value="contains">
-        Contains
-      </option>
-      <option value="exact">
-        Exact
-      </option>
-      <option value="regex">
-        Regex
-      </option>
-      <option value="migrations">
-        Migrations
-      </option>
-      <option value="sti">
-        STI events
-      </option>
-      <option value="intervals">
-        Intervals
-      </option>
-      <option value="lifecycle">
-        Lifecycle
-      </option>
-      <option value="pointers">
-        Pointers
+      <option
+        v-for="opt in FIND_MODE_CHOICES"
+        :key="opt.key"
+        :value="opt.key"
+        :title="opt.help"
+      >
+        {{ opt.label }}
       </option>
     </select>
+    <p class="find-mode-help">
+      {{ modeHelp }}
+    </p>
     <div class="find-btns">
       <button
         type="button"
@@ -58,17 +53,12 @@
         Next
       </button>
     </div>
-    <div
-      class="find-status"
-      :class="{ error: !!error }"
-    >
-      {{ statusText }}
-    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch } from 'vue'
+import { FIND_MODE_CHOICES, findModeHelp, formatFindStatus } from '../utils/findAnalysis.js'
 
 const props = defineProps({
   query: { type: String, default: '' },
@@ -87,16 +77,15 @@ const localMode = ref(props.mode)
 watch(() => props.query, v => { localQuery.value = v })
 watch(() => props.mode, v => { localMode.value = v })
 
-const statusText = computed(() => {
-  if (props.error) return props.error
-  if (!localQuery.value.trim()) return '0 matches'
-  const label = ['migrations', 'sti', 'intervals', 'lifecycle', 'pointers'].includes(localMode.value)
-    ? `${localMode.value} matches`
-    : 'matches'
-  if (props.hitCount === 0) return `0 ${label}`
-  if (props.hitIndex >= 0) return `${props.hitCount} ${label} (at ${props.hitIndex + 1})`
-  return `${props.hitCount} ${label}`
-})
+const modeHelp = computed(() => findModeHelp(localMode.value))
+
+const statusText = computed(() => formatFindStatus({
+  hitCount: props.hitCount,
+  hitIndex: props.hitIndex,
+  mode: localMode.value,
+  query: localQuery.value,
+  error: props.error,
+}))
 
 function onQueryChange() {
   emit('update:query', localQuery.value)
@@ -125,6 +114,15 @@ defineExpose({ focusInput })
   flex: 1;
   min-height: 0;
 }
+.find-status {
+  font-size: 11px;
+  color: var(--fg-dim);
+  align-self: flex-start;
+  line-height: 1.35;
+}
+.find-status.error {
+  color: #e07070;
+}
 .find-input {
   width: 100%;
   padding: 5px 8px;
@@ -143,6 +141,12 @@ defineExpose({ focusInput })
   color: var(--fg);
   font-size: 12px;
 }
+.find-mode-help {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--fg-dim, #8b98a8);
+}
 .find-btns {
   display: flex;
   gap: 6px;
@@ -159,12 +163,5 @@ defineExpose({ focusInput })
 }
 .find-btn:hover {
   background: var(--tb-btn-hover);
-}
-.find-status {
-  font-size: 11px;
-  color: var(--fg-dim);
-}
-.find-status.error {
-  color: #e07070;
 }
 </style>

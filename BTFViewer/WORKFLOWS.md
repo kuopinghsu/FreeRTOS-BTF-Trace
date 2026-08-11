@@ -396,7 +396,7 @@ Most findings only make sense inside one phase of a trace. Place two cursors aro
 | `C` | Place a cursor at the pointer (falls back to the viewport centre) |
 | `Ctrl+R` | Zoom the view to the cursor range |
 | Cursor-scope checkbox | Recompute Statistics and Analysis for C1–Cn |
-| **File → Save selection as BTF…** / web toolbar crop | Export only the raw events between the earliest and latest cursor |
+| **File → Save selection as BTF…** / web toolbar crop | Export the cursor window (prefer original BTF text; reconstruct resume/preempt + STI if source is unavailable — see [README Export](README.md#export)) |
 
 The cursor-scope checkbox is labelled **Limit to C1–Cn** (desktop and web); it sits at the top of the Statistics panel.
 

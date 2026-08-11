@@ -36832,7 +36832,7 @@ class TraceTabModel:
     find_hit_idx: int = -1
     find_marker_ns: Optional[int] = None
     find_query: str = ""
-    find_mode: str = "Contains"
+    find_mode: str = "contains"
     undo_stack: list = field(default_factory=list)
     redo_stack: list = field(default_factory=list)
     plot: PlotSessionState = field(default_factory=PlotSessionState)
@@ -37263,9 +37263,82 @@ _FIND_MODES = frozenset({
     "sti", "intervals", "lifecycle", "pointers",
 })
 
+# (label, mode_key, help text) — keep order in sync with web findAnalysis.js
+# and config._PORTABLE_FIND_MODES.
+FIND_MODE_CHOICES: Tuple[Tuple[str, str, str], ...] = (
+    (
+        "Contains",
+        "contains",
+        "Substring match on task names (merge key / display name) and "
+        "annotation notes.",
+    ),
+    (
+        "Exact",
+        "exact",
+        "Whole-string match on a task merge key, raw name, or display name.",
+    ),
+    (
+        "Regex",
+        "regex",
+        "Case-insensitive regular expression on task names and annotation notes.",
+    ),
+    (
+        "Migrations",
+        "migrations",
+        "Core-migration boundaries. Match a task name or a core "
+        "(from / to), e.g. Core_0 or CS[22].",
+    ),
+    (
+        "STI",
+        "sti",
+        "Software-trace items: channel, event verb, note, and core "
+        "(tags, TICK, mutex notes, …).",
+    ),
+    (
+        "Intervals",
+        "intervals",
+        "Paired interval_start / interval_stop spans and interval STI notes "
+        "(id, task, times).",
+    ),
+    (
+        "Lifecycle",
+        "lifecycle",
+        "Task create / delete / suspend / resume STI notes on the task channel.",
+    ),
+    (
+        "Pointers",
+        "pointers",
+        "Mutex, semaphore, and queue object pointers (0x…) and sync-object notes.",
+    ),
+)
+
+_FIND_MODE_ALIASES = {
+    "sti events": "sti",
+    "sti event": "sti",
+    "tags": "sti",
+    "tag": "sti",
+}
+
 _TASK_LIFE_RE = re.compile(r"^(create|delete|suspend|resume)\b", re.IGNORECASE)
 _SYNC_NOTE_RE = re.compile(
     r"^(create|take|give|delete|send|recv)(?:\s+(0x[0-9a-f]+))?$", re.IGNORECASE)
+
+
+def normalize_find_mode(mode: str) -> str:
+    """Map a combo label or key onto one of ``_FIND_MODES``."""
+    key = str(mode or "").strip().lower()
+    key = _FIND_MODE_ALIASES.get(key, key)
+    return key if key in _FIND_MODES else "contains"
+
+
+def find_mode_help(mode: str) -> str:
+    """One-line help for the Find mode combo selection."""
+    want = normalize_find_mode(mode)
+    for _label, key, tip in FIND_MODE_CHOICES:
+        if key == want:
+            return tip
+    return FIND_MODE_CHOICES[0][2]
+
 
 def recompute_find_hits(
     trace: Optional[BtfTrace],
@@ -37280,9 +37353,7 @@ def recompute_find_hits(
     if not q:
         return [], "0 matches"
 
-    mode_key = mode.strip().lower()
-    if mode_key not in _FIND_MODES:
-        mode_key = "contains"
+    mode_key = normalize_find_mode(mode)
 
     if mode_key == "migrations":
         return _find_migrations(trace, q)
@@ -37638,7 +37709,7 @@ class TraceTabViewModel(ViewModelBase):
 
     @find_mode.setter
     def find_mode(self, value: str) -> None:
-        self._model.find_mode = str(value) or "Contains"
+        self._model.find_mode = normalize_find_mode(value)
         self.find_changed.emit()
         self.changed.emit()
 
@@ -37935,6 +38006,7 @@ class MvvmSettingsMixin:
 __all__ = [
     "AppSettingsModel",
     "AppSettingsViewModel",
+    "FIND_MODE_CHOICES",
     "MainViewModel",
     "MvvmSettingsMixin",
     "PlotSessionState",
@@ -37946,6 +38018,8 @@ __all__ = [
     "TraceTabModel",
     "TraceTabViewModel",
     "ViewModelBase",
+    "find_mode_help",
+    "normalize_find_mode",
     "recompute_find_hits",
 ]
 # ===========================================================================
@@ -40421,7 +40495,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         tab.vm.stats.cursor_times = list(tab.view._scene.cursor_times())
         tab.vm.capture_viewport_from_view(tab.view)
         tab.vm.find_query = self._find_input.text()
-        tab.vm.find_mode = self._find_mode_combo.currentText()
+        tab.vm.find_query = self._find_input.text()
+        mode = self._find_mode_combo.currentData()
+        tab.vm.find_mode = str(mode) if mode else normalize_find_mode(
+            self._find_mode_combo.currentText())
         mk, kind, open_, preemptor, interval_id = self._stats_panel.capture_plot_session()
         tab.vm.set_plot_session(mk, kind, open_, preemptor, interval_id)
         self._persist_trace_state(tab.path, tab.bookmarks, tab.annotations, tab.mark_next_id)
@@ -40433,10 +40510,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._find_mode_combo.blockSignals(True)
         try:
             self._find_input.setText(tab.vm.find_query)
-            idx = self._find_mode_combo.findText(
-                tab.vm.find_mode, Qt.MatchFlag.MatchFixedString)
+            mode_key = normalize_find_mode(tab.vm.find_mode)
+            idx = self._find_mode_combo.findData(mode_key)
+            if idx < 0:
+                idx = self._find_mode_combo.findText(
+                    tab.vm.find_mode, Qt.MatchFlag.MatchFixedString)
             if idx >= 0:
                 self._find_mode_combo.setCurrentIndex(idx)
+            self._update_find_mode_help()
         finally:
             self._find_input.blockSignals(False)
             self._find_mode_combo.blockSignals(False)
@@ -42275,19 +42356,37 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         find_v = QVBoxLayout(find_host)
         find_v.setContentsMargins(6, 6, 6, 6)
         find_v.setSpacing(6)
+        self._find_status = QLabel("0 matches")
+        self._find_status.setObjectName("find_status")
+        self._find_status.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self._find_status.setStyleSheet("color:#999;")
+        find_v.addWidget(self._find_status, 0, Qt.AlignmentFlag.AlignTop)
         self._find_input = QLineEdit()
         self._find_input.setPlaceholderText("Find task, annotation, or migration…")
+        self._find_input.setToolTip(
+            "Search the active tab. Enter = next match; Shift+Enter / F3 / "
+            "Shift+F3 step hits on the timeline.")
         self._find_input.textChanged.connect(self._recompute_find_hits)
         self._find_input.returnPressed.connect(self._find_next)
         find_v.addWidget(self._find_input)
         self._find_mode_combo = QComboBox()
-        self._find_mode_combo.addItems([
-            "Contains", "Exact", "Regex", "Migrations",
-            "STI", "Intervals", "Lifecycle", "Pointers",
-        ])
+        for label, key, tip in FIND_MODE_CHOICES:
+            self._find_mode_combo.addItem(label, key)
+            idx = self._find_mode_combo.count() - 1
+            self._find_mode_combo.setItemData(idx, tip, Qt.ItemDataRole.ToolTipRole)
         self._find_mode_combo.setCurrentIndex(0)
-        self._find_mode_combo.currentIndexChanged.connect(self._recompute_find_hits)
+        self._find_mode_combo.setToolTip(
+            "Choose what the query matches. Hover an item for a short description.")
+        self._find_mode_combo.currentIndexChanged.connect(self._on_find_mode_changed)
         find_v.addWidget(self._find_mode_combo)
+        self._find_mode_help = QLabel(find_mode_help("contains"))
+        self._find_mode_help.setObjectName("find_mode_help")
+        self._find_mode_help.setWordWrap(True)
+        self._find_mode_help.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self._find_mode_help.setStyleSheet("color:#8b98a8; font-size:11px;")
+        find_v.addWidget(self._find_mode_help)
         find_btns = QHBoxLayout()
         find_btns.setContentsMargins(0, 0, 0, 0)
         find_prev = QPushButton("Previous")
@@ -42299,9 +42398,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         find_btns.addWidget(find_prev)
         find_btns.addWidget(find_next)
         find_v.addLayout(find_btns)
-        self._find_status = QLabel("0 matches")
-        self._find_status.setStyleSheet("color:#999;")
-        find_v.addWidget(self._find_status)
+        find_v.addStretch(1)
 
         # --- AI Assistant panel (tab content) ---
         self._ai_panel = create_ai_assistant_panel(
@@ -44747,12 +44844,31 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._view._scene.set_find_hits([])
             return
         vm.find_query = self._find_input.text()
-        vm.find_mode = self._find_mode_combo.currentText()
+        mode = self._find_mode_combo.currentData()
+        vm.find_mode = str(mode) if mode else normalize_find_mode(
+            self._find_mode_combo.currentText())
         status = vm.recompute_find_hits()
         self._find_status.setText(status)
+        self._find_status.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self._view._scene.set_find_hits(vm.find_hits)
         if not vm.find_hits:
             self._set_find_marker_ns(None)
+
+    def _on_find_mode_changed(self, _index: int = 0) -> None:
+        self._update_find_mode_help()
+        self._recompute_find_hits()
+
+    def _update_find_mode_help(self) -> None:
+        help_lbl = getattr(self, "_find_mode_help", None)
+        if help_lbl is None:
+            return
+        mode = self._find_mode_combo.currentData()
+        if not mode:
+            mode = self._find_mode_combo.currentText()
+        help_lbl.setText(find_mode_help(str(mode or "contains")))
+        tip = find_mode_help(str(mode or "contains"))
+        self._find_mode_combo.setToolTip(tip)
 
     def _find_next(self) -> None:
         self._step_find_hit(forward=True)

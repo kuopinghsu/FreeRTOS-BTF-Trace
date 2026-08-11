@@ -11,6 +11,91 @@ export const FIND_MODES = [
   'contains', 'exact', 'regex', 'migrations',
   'sti', 'intervals', 'lifecycle', 'pointers',
 ]
+
+/** Keep order/help in sync with desktop find_logic.FIND_MODE_CHOICES. */
+export const FIND_MODE_CHOICES = [
+  {
+    label: 'Contains',
+    key: 'contains',
+    help: 'Substring match on task names (merge key / display name) and annotation notes.',
+  },
+  {
+    label: 'Exact',
+    key: 'exact',
+    help: 'Whole-string match on a task merge key, raw name, or display name.',
+  },
+  {
+    label: 'Regex',
+    key: 'regex',
+    help: 'Case-insensitive regular expression on task names and annotation notes.',
+  },
+  {
+    label: 'Migrations',
+    key: 'migrations',
+    help: 'Core-migration boundaries. Match a task name or a core (from / to), e.g. Core_0 or CS[22].',
+  },
+  {
+    label: 'STI',
+    key: 'sti',
+    help: 'Software-trace items: channel, event verb, note, and core (tags, TICK, mutex notes, …).',
+  },
+  {
+    label: 'Intervals',
+    key: 'intervals',
+    help: 'Paired interval_start / interval_stop spans and interval STI notes (id, task, times).',
+  },
+  {
+    label: 'Lifecycle',
+    key: 'lifecycle',
+    help: 'Task create / delete / suspend / resume STI notes on the task channel.',
+  },
+  {
+    label: 'Pointers',
+    key: 'pointers',
+    help: 'Mutex, semaphore, and queue object pointers (0x…) and sync-object notes.',
+  },
+]
+
+const FIND_MODE_ALIASES = {
+  'sti events': 'sti',
+  'sti event': 'sti',
+  tags: 'sti',
+  tag: 'sti',
+}
+
+export function normalizeFindMode(mode) {
+  let key = String(mode || '').trim().toLowerCase()
+  key = FIND_MODE_ALIASES[key] || key
+  return FIND_MODES.includes(key) ? key : 'contains'
+}
+
+export function findModeHelp(mode) {
+  const want = normalizeFindMode(mode)
+  return FIND_MODE_CHOICES.find(o => o.key === want)?.help || FIND_MODE_CHOICES[0].help
+}
+
+/**
+ * Status line for the Find panel (desktop find_logic / step wording).
+ * @param {{ hitCount?: number, hitIndex?: number, mode?: string, query?: string, error?: string }} opts
+ */
+export function formatFindStatus({
+  hitCount = 0,
+  hitIndex = -1,
+  mode = 'contains',
+  query = '',
+  error = '',
+} = {}) {
+  if (error) return String(error)
+  if (!String(query || '').trim()) return '0 matches'
+  const n = Number(hitCount) || 0
+  // Stepping always uses plain "matches (at k)" on desktop.
+  if (hitIndex >= 0 && n > 0) return `${n} matches (at ${hitIndex + 1})`
+  if (normalizeFindMode(mode) === 'migrations') {
+    return n === 0 ? '0 migration matches' : `${n} migration matches`
+  }
+  return `${n} matches`
+}
+
 const MAX_REGEX_LEN = 200
 
 function haystackMatches(query, mode, haystack, regexObj) {
@@ -93,7 +178,7 @@ function findPointerHits(trace, query, mode, regexObj) {
 export function computeFindHits(trace, query, mode, annotations = []) {
   if (!trace || !query?.trim()) return { hits: [], error: null }
   const q = query.trim()
-  const modeKey = (mode || 'contains').toLowerCase()
+  const modeKey = normalizeFindMode(mode)
 
   if (modeKey === 'migrations') {
     const qLower = q.toLowerCase()
