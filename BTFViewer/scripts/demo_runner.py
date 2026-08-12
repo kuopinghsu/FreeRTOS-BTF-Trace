@@ -64,7 +64,9 @@ Demo API (viewer must be started with ``BTFVIEWER_DEMO_API=1``, default port 876
     <settings page="AI"/>
 
 ``--launch`` sets ``BTFVIEWER_DEMO_API=1`` automatically. Override with
-``--demo-api-port`` / ``--no-demo-api``.
+``--demo-api-port`` / ``--no-demo-api``. When launching, if the preferred port
+cannot be bound (common under WSL mirrored networking), the runner picks a
+free localhost port and passes it to the viewer.
 
 Audio files (pre-recorded narration)::
 
@@ -87,6 +89,10 @@ Players: macOS ``afplay``, Linux ``ffplay``/``paplay``/``aplay``, Windows
 PowerShell / ``start``. Override with ``--audio-cmd 'ffplay -nodisp -autoexit'``.
 
 Move the mouse to a **screen corner** to abort (PyAutoGUI FAILSAFE).
+
+On **WSL/WSLg**, the visible cursor is Windows-owned; X11 mouse injection does
+not move it. The runner automatically drives the Windows host cursor via
+PowerShell when ``powershell.exe`` is available.
 """
 from __future__ import annotations
 
@@ -96,6 +102,7 @@ import os
 import platform
 import re
 import shlex
+import socket
 import subprocess
 import sys
 import tempfile
@@ -377,7 +384,256 @@ def _import_pyautogui():
         ) from exc
     pyautogui.FAILSAFE = True
     pyautogui.PAUSE = 0.08
+    if _is_wsl() and shutil_which("powershell.exe"):
+        try:
+            wrapped = _WslHostGui(pyautogui)
+            log(
+                "WSL/WSLg: mouse uses the Windows host cursor "
+                "(X11 XTEST moves are invisible on the Windows desktop)"
+            )
+            return wrapped
+        except Exception as exc:
+            log(f"WSL host cursor unavailable ({exc}); falling back to X11 mouse")
     return pyautogui
+
+
+def _is_wsl() -> bool:
+    if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
+        return True
+    try:
+        return "microsoft" in Path("/proc/version").read_text(encoding="utf-8").lower()
+    except OSError:
+        return False
+
+
+def _title_match_needles(title_substr: str) -> List[str]:
+    """Expand ``BTFViewer`` ↔ ``BTF Viewer`` for WSLg ``msrdc`` window titles."""
+    s = (title_substr or "").strip()
+    if not s:
+        return ["BTF Viewer"]
+    out: List[str] = []
+    for cand in (
+        s,
+        re.sub(r"(?<=[a-z])(?=[A-Z])", " ", s),
+        s.replace(" ", ""),
+        "BTF Viewer" if "btf" in s.lower() else "",
+    ):
+        c = cand.strip()
+        if c and c not in out:
+            out.append(c)
+    return out
+
+
+class _WslHostGui:
+    """PyAutoGUI-compatible wrapper: Windows cursor + keyboard via X11.
+
+    Under WSLg the visible pointer is the Windows host cursor. PyAutoGUI's
+    X11 ``XTEST`` moves only the XWayland pointer, so ``moveTo`` looks like a
+    no-op. Drive mouse via ``user32`` through a persistent ``powershell.exe``.
+    """
+
+    _PS_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class BtfDemoInput {
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+  [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
+  public struct POINT { public int X; public int Y; }
+  public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+  public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+  public const uint MOUSEEVENTF_LEFTUP = 0x0004;
+  public const uint MOUSEEVENTF_WHEEL = 0x0800;
+}
+"@
+Add-Type -AssemblyName System.Windows.Forms
+function Write-Ok([string]$s) { [Console]::Out.WriteLine($s); [Console]::Out.Flush() }
+while (($line = [Console]::In.ReadLine()) -ne $null) {
+  if ([string]::IsNullOrWhiteSpace($line)) { continue }
+  $parts = $line.Split(' ', 2)
+  $cmd = $parts[0].ToUpperInvariant()
+  try {
+    switch ($cmd) {
+      'POS' {
+        $p = New-Object BtfDemoInput+POINT
+        [void][BtfDemoInput]::GetCursorPos([ref]$p)
+        Write-Ok ("{0} {1}" -f $p.X, $p.Y)
+      }
+      'SIZE' {
+        $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+        Write-Ok ("{0} {1}" -f $b.Width, $b.Height)
+      }
+      'MOVE' {
+        $xy = $parts[1].Split(' ')
+        [void][BtfDemoInput]::SetCursorPos([int]$xy[0], [int]$xy[1])
+        Write-Ok 'OK'
+      }
+      'CLICK' {
+        $n = 1
+        if ($parts.Length -gt 1 -and $parts[1].Trim() -ne '') { $n = [int]$parts[1].Trim() }
+        for ($i = 0; $i -lt $n; $i++) {
+          [BtfDemoInput]::mouse_event([BtfDemoInput]::MOUSEEVENTF_LEFTDOWN, 0, 0, 0, [UIntPtr]::Zero)
+          [BtfDemoInput]::mouse_event([BtfDemoInput]::MOUSEEVENTF_LEFTUP, 0, 0, 0, [UIntPtr]::Zero)
+        }
+        Write-Ok 'OK'
+      }
+      'SCROLL' {
+        $clicks = [int]$parts[1].Trim()
+        [BtfDemoInput]::mouse_event([BtfDemoInput]::MOUSEEVENTF_WHEEL, 0, 0, [uint32]($clicks * 120), [UIntPtr]::Zero)
+        Write-Ok 'OK'
+      }
+      'WIN' {
+        $needle = if ($parts.Length -gt 1) { $parts[1].Trim() } else { 'BTF Viewer' }
+        $needles = $needle.Split('|')
+        $hit = $null
+        foreach ($proc in Get-Process) {
+          if ($proc.MainWindowHandle -eq 0) { continue }
+          $title = $proc.MainWindowTitle
+          if ([string]::IsNullOrWhiteSpace($title)) { continue }
+          foreach ($n in $needles) {
+            if ($n -and ($title -like ("*{0}*" -f $n))) { $hit = $proc; break }
+          }
+          if ($hit -ne $null) { break }
+        }
+        if ($hit -eq $null) { Write-Ok 'NONE'; continue }
+        $r = New-Object BtfDemoInput+RECT
+        [void][BtfDemoInput]::GetWindowRect($hit.MainWindowHandle, [ref]$r)
+        $w = $r.Right - $r.Left
+        $h = $r.Bottom - $r.Top
+        Write-Ok ("{0} {1} {2} {3}" -f $r.Left, $r.Top, $w, $h)
+      }
+      'QUIT' { break }
+      default { Write-Ok ('ERR unknown ' + $cmd) }
+    }
+  } catch {
+    Write-Ok ('ERR ' + $_.Exception.Message)
+  }
+}
+"""
+
+    def __init__(self, pag: Any):
+        self._pag = pag
+        self.FAILSAFE = bool(getattr(pag, "FAILSAFE", True))
+        self.PAUSE = float(getattr(pag, "PAUSE", 0.08))
+        self._proc = subprocess.Popen(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                self._PS_SCRIPT,
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+        )
+        # Probe — raises if powershell / user32 path is broken.
+        self.size()
+
+    def _ask(self, line: str) -> str:
+        if self._proc.poll() is not None:
+            raise RuntimeError("WSL host input helper exited")
+        assert self._proc.stdin is not None and self._proc.stdout is not None
+        self._proc.stdin.write(line.rstrip() + "\n")
+        self._proc.stdin.flush()
+        out = self._proc.stdout.readline().strip()
+        if out.startswith("ERR"):
+            raise RuntimeError(out)
+        return out
+
+    def size(self) -> Any:
+        from collections import namedtuple
+
+        w, h = (int(x) for x in self._ask("SIZE").split())
+        return namedtuple("Size", "width height")(w, h)
+
+    def position(self) -> Any:
+        from collections import namedtuple
+
+        x, y = (int(v) for v in self._ask("POS").split())
+        return namedtuple("Point", "x y")(x, y)
+
+    def _failsafe_check(self, x: int, y: int) -> None:
+        if not self.FAILSAFE:
+            return
+        try:
+            sw, sh = int(self.size()[0]), int(self.size()[1])
+        except Exception:
+            return
+        if x <= 0 or y <= 0 or x >= sw - 1 or y >= sh - 1:
+            raise RuntimeError(
+                "WSL mouse failsafe: target at screen edge "
+                f"({x},{y}); move away from corners / disable FAILSAFE"
+            )
+
+    def moveTo(self, x: int, y: int, duration: float = 0.0) -> None:
+        x, y = int(x), int(y)
+        self._failsafe_check(x, y)
+        dur = max(0.0, float(duration or 0.0))
+        if dur <= 0.05:
+            self._ask(f"MOVE {x} {y}")
+        else:
+            pos = self.position()
+            x0, y0 = int(pos.x), int(pos.y)
+            steps = max(2, int(dur / 0.02))
+            for i in range(1, steps + 1):
+                t = i / steps
+                xi = int(x0 + (x - x0) * t)
+                yi = int(y0 + (y - y0) * t)
+                self._ask(f"MOVE {xi} {yi}")
+                time.sleep(dur / steps)
+        if self.PAUSE:
+            time.sleep(self.PAUSE)
+
+    def click(self, clicks: int = 1, **_kwargs: Any) -> None:
+        self._ask(f"CLICK {max(1, int(clicks))}")
+        if self.PAUSE:
+            time.sleep(self.PAUSE)
+
+    def scroll(self, clicks: int, *args: Any, **kwargs: Any) -> None:
+        self._ask(f"SCROLL {int(clicks)}")
+        if self.PAUSE:
+            time.sleep(self.PAUSE)
+
+    def window_bounds(self, title_substr: str) -> Optional[Tuple[int, int, int, int]]:
+        needles = "|".join(_title_match_needles(title_substr))
+        raw = self._ask(f"WIN {needles}")
+        if raw == "NONE" or not raw:
+            return None
+        parts = [int(p) for p in raw.split()]
+        if len(parts) != 4 or parts[2] < 200 or parts[3] < 200:
+            return None
+        return parts[0], parts[1], parts[2], parts[3]
+
+    def close(self) -> None:
+        try:
+            if self._proc.poll() is None and self._proc.stdin:
+                self._proc.stdin.write("QUIT\n")
+                self._proc.stdin.flush()
+                self._proc.terminate()
+        except Exception:
+            pass
+
+    def hotkey(self, *args: Any, **kwargs: Any) -> None:
+        return self._pag.hotkey(*args, **kwargs)
+
+    def press(self, *args: Any, **kwargs: Any) -> None:
+        return self._pag.press(*args, **kwargs)
+
+    def write(self, *args: Any, **kwargs: Any) -> None:
+        return self._pag.write(*args, **kwargs)
+
+    def typewrite(self, *args: Any, **kwargs: Any) -> None:
+        return self._pag.typewrite(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._pag, name)
 
 
 def _window_area(bounds: Tuple[int, int, int, int]) -> int:
@@ -468,6 +724,16 @@ def detect_window(
         screen = (0, 0)
 
     candidates: List[Tuple[int, int, int, int]] = []
+    # WSLg: window lives on the Windows host (msrdc); prefer that rect so
+    # fractional targets match the cursor we drive via user32.
+    wsl_bounds = getattr(pag, "window_bounds", None)
+    if callable(wsl_bounds):
+        try:
+            got = wsl_bounds(title_substr)
+        except Exception:
+            got = None
+        if got:
+            candidates.append(got)
     for getter in (
         lambda: _window_bounds_macos(pid=pid, title_substr=title_substr),
         lambda: _window_bounds_linux(title_substr=title_substr),
@@ -1134,7 +1400,10 @@ class DemoRunner:
         except urllib.error.URLError as exc:
             raise RuntimeError(
                 f"demo API unreachable at {self.cfg.demo_api_url}: {exc}\n"
-                "Launch with BTFVIEWER_DEMO_API=1 (demo_runner --launch does this)."
+                "Launch with BTFVIEWER_DEMO_API=1 (demo_runner --launch does this).\n"
+                "If the viewer printed '[demo-api] failed to start', the port is "
+                "blocked — rerun with --launch (auto-picks a free port) or "
+                "--demo-api-port PORT."
             ) from exc
         if not body.get("ok", False):
             raise RuntimeError(f"demo API error: {body.get('error') or body}")
@@ -1445,6 +1714,50 @@ class DemoRunner:
 
 
 # ---------------------------------------------------------------------------
+# Demo API port selection
+# ---------------------------------------------------------------------------
+
+def _localhost_port_bindable(port: int, host: str = "127.0.0.1") -> bool:
+    """True if ``host:port`` can be bound exclusively for the demo API.
+
+    Do not set ``SO_REUSEADDR`` here: with it, Linux can report a port as free
+    while another process already has it bound (EADDRINUSE only appears later).
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind((host, int(port)))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
+def pick_free_demo_api_port(preferred: int = 8765, host: str = "127.0.0.1") -> int:
+    """Return ``preferred`` if free, else another bindable localhost TCP port.
+
+    Under WSL mirrored networking, Windows can reserve ports that never show up
+    in Linux ``ss``/``netstat``; bind then fails with EADDRINUSE. Prefer the
+    configured port, then nearby ports, then an OS-assigned ephemeral port.
+    """
+    preferred = int(preferred)
+    candidates: List[int] = [preferred]
+    for delta in range(1, 64):
+        candidates.append(preferred + delta)
+    for port in (18265, 18765, 19265, 28265, 28765, 38265):
+        if port not in candidates:
+            candidates.append(port)
+    for port in candidates:
+        if port <= 0 or port > 65535:
+            continue
+        if _localhost_port_bindable(port, host=host):
+            return port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return int(sock.getsockname()[1])
+
+
+# ---------------------------------------------------------------------------
 # Launch
 # ---------------------------------------------------------------------------
 
@@ -1491,6 +1804,9 @@ def launch_from_meta(
     if demo_api:
         env["BTFVIEWER_DEMO_API"] = "1"
         env["BTFVIEWER_DEMO_API_PORT"] = str(int(demo_api_port))
+    # Prefer XWayland over native Wayland so windowing matches demo tooling.
+    if _is_wsl() and not env.get("QT_QPA_PLATFORM"):
+        env["QT_QPA_PLATFORM"] = "xcb"
     log(f"launch: {' '.join(cmd)}  (cwd={cwd})")
     return subprocess.Popen(cmd, cwd=cwd, env=env)
 
@@ -1639,7 +1955,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     audio_block = bool(defaults.get("audio_block", 0.0)) or args.audio_block
     win_fixed = args.win
     demo_api_enabled = not args.no_demo_api
-    demo_api_url = f"http://127.0.0.1:{int(args.demo_api_port)}/demo"
+    demo_api_port = int(args.demo_api_port)
+    if demo_api_enabled and args.launch and not args.dry_run:
+        chosen = pick_free_demo_api_port(demo_api_port)
+        if chosen != demo_api_port:
+            log(
+                f"demo API port {demo_api_port} unavailable; using {chosen} "
+                "(WSL/Windows often reserves ports that Linux ss does not show)"
+            )
+        demo_api_port = chosen
+    demo_api_url = f"http://127.0.0.1:{demo_api_port}/demo"
     # Initial guess; refreshed after launch / focus against the real app window.
     win0 = win_fixed or detect_window(pag, title_substr=args.window_title)
     cfg = RunnerConfig(
@@ -1684,7 +2009,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 root,
                 variables,
                 demo_api=demo_api_enabled,
-                demo_api_port=args.demo_api_port,
+                demo_api_port=demo_api_port,
             )
             if proc is None:
                 log("no <launch>/<trace> in XML; continuing without launch")
@@ -1723,7 +2048,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if not cfg.dry_run:
             runner.refresh_window(force=True)
             if demo_api_enabled:
-                runner.wait_demo_api(timeout=max(8.0, args.attach_wait + 10.0))
+                ready = runner.wait_demo_api(
+                    timeout=max(8.0, args.attach_wait + 10.0))
+                if not ready:
+                    raise SystemExit(
+                        f"demo API not ready at {cfg.demo_api_url}\n"
+                        "Check the viewer console for '[demo-api] failed to start' "
+                        "(port blocked) or launch without --no-demo-api."
+                    )
         want = parse_steps(args.steps)
         steps_el = root.find("steps")
         if steps_el is None:

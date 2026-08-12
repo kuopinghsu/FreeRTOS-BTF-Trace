@@ -1579,10 +1579,19 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             try:
                 self._demo_api_server = start_demo_api(
                     self._demo_handle, parent=self)
-                print(
-                    f"[demo-api] listening on 127.0.0.1:{demo_api_port()}",
-                    flush=True,
-                )
+                listen_host, listen_port = self._demo_api_server.server_address[:2]
+                wanted = demo_api_port()
+                if int(listen_port) != int(wanted):
+                    print(
+                        f"[demo-api] port {wanted} busy; listening on "
+                        f"{listen_host}:{listen_port}",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"[demo-api] listening on {listen_host}:{listen_port}",
+                        flush=True,
+                    )
             except OSError as exc:
                 print(f"[demo-api] failed to start: {exc}", flush=True)
 

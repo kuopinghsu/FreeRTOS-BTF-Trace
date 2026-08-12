@@ -45267,9 +45267,14 @@ def start_demo_api(
     port: Optional[int] = None,
     parent: Optional[QObject] = None,
 ) -> ThreadingHTTPServer:
-    """Start a daemon HTTP server; returns the server instance."""
+    """Start a daemon HTTP server; returns the server instance.
+
+    If the preferred port cannot be bound, nearby ports are tried, then an
+    ephemeral port (``0``). Callers should read ``server.server_address[1]``
+    for the actual listen port.
+    """
     bridge = DemoApiBridge(parent=parent)
-    listen_port = demo_api_port() if port is None else int(port)
+    preferred = demo_api_port() if port is None else int(port)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *args) -> None:  # noqa: A003
@@ -45309,7 +45314,23 @@ def start_demo_api(
             except Exception as exc:
                 self._send(500, {"ok": False, "error": str(exc)})
 
-    server = ThreadingHTTPServer((host, listen_port), Handler)
+    last_exc: Optional[OSError] = None
+    candidates: list[int] = [preferred]
+    if preferred > 0:
+        for delta in range(1, 32):
+            candidates.append(preferred + delta)
+        candidates.append(0)  # ephemeral
+    for listen_port in candidates:
+        try:
+            server = ThreadingHTTPServer((host, listen_port), Handler)
+            break
+        except OSError as exc:
+            last_exc = exc
+            server = None  # type: ignore[assignment]
+    else:
+        assert last_exc is not None
+        raise last_exc
+
     thread = threading.Thread(
         target=server.serve_forever, name="btf-demo-api", daemon=True,
     )
@@ -46790,10 +46811,19 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             try:
                 self._demo_api_server = start_demo_api(
                     self._demo_handle, parent=self)
-                print(
-                    f"[demo-api] listening on 127.0.0.1:{demo_api_port()}",
-                    flush=True,
-                )
+                listen_host, listen_port = self._demo_api_server.server_address[:2]
+                wanted = demo_api_port()
+                if int(listen_port) != int(wanted):
+                    print(
+                        f"[demo-api] port {wanted} busy; listening on "
+                        f"{listen_host}:{listen_port}",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"[demo-api] listening on {listen_host}:{listen_port}",
+                        flush=True,
+                    )
             except OSError as exc:
                 print(f"[demo-api] failed to start: {exc}", flush=True)
 
