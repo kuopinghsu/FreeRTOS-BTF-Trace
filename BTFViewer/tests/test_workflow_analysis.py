@@ -130,6 +130,25 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         )
         self.assertTrue(any(f["title"].startswith("No analysis heuristics") for f in findings))
 
+    def test_analysis_dialog_uses_ui_font_size(self):
+        from PySide6.QtWidgets import QApplication, QListWidgetItem
+        from btf_viewer_pkg.config import UI_FONT_SIZE, _application_ui_font
+        from btf_viewer_pkg.stats import _AnalysisFindingsDialog
+
+        if QApplication.instance() is None:
+            QApplication([])
+        findings = [{"severity": "info", "title": "Tick OK", "text": "steady"}]
+        dlg = _AnalysisFindingsDialog(
+            findings, "", ai_enabled=False, ui_font_size=UI_FONT_SIZE)
+        expected = _application_ui_font(UI_FONT_SIZE)
+        item = dlg._list_w.item(0)
+        self.assertIsInstance(item, QListWidgetItem)
+        # Must track Settings → Display → UI font (not a hard-coded 11pt floor).
+        self.assertEqual(item.font().pointSize(), expected.pointSize())
+        self.assertEqual(item.font().pixelSize(), expected.pixelSize())
+        self.assertEqual(dlg.font().pointSize(), expected.pointSize())
+        self.assertEqual(dlg.font().pixelSize(), expected.pixelSize())
+
     def test_analysis_dialog_query_with_ai_button(self):
         from PySide6.QtWidgets import QApplication, QPushButton
         from btf_viewer_pkg.stats import _AnalysisFindingsDialog

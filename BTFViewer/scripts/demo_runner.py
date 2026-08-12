@@ -98,6 +98,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -328,7 +329,34 @@ class RunnerConfig:
     demo_api_enabled: bool = True
 
 
+def _ensure_xauthority() -> None:
+    """Avoid Xlib crash when ~/.Xauthority is missing (common on WSL).
+
+    python-xlib raises ``XauthError`` if ``XAUTHORITY`` / ``~/.Xauthority``
+    does not exist, even when the X server allows unauthenticated local
+    clients. Point at an empty private temp file instead of writing into
+    ``$HOME``.
+    """
+    if sys.platform == "darwin" or os.name == "nt":
+        return
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return
+    configured = os.environ.get("XAUTHORITY")
+    if configured and Path(configured).is_file():
+        return
+    home_auth = Path.home() / ".Xauthority"
+    if home_auth.is_file():
+        return
+    tmp = Path(tempfile.gettempdir()) / f"btfviewer-xauth-{os.getuid()}"
+    try:
+        tmp.touch(exist_ok=True)
+    except OSError:
+        return
+    os.environ["XAUTHORITY"] = str(tmp)
+
+
 def _import_pyautogui():
+    _ensure_xauthority()
     try:
         import pyautogui
     except ImportError as exc:
@@ -336,6 +364,16 @@ def _import_pyautogui():
             "pyautogui is required:\n"
             "  python3 -m pip install -r scripts/requirements-demo.txt\n"
             f"({exc})"
+        ) from exc
+    except Exception as exc:
+        display = os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY") or "(unset)"
+        raise SystemExit(
+            "pyautogui could not open the display (needed for mouse/keyboard).\n"
+            f"  DISPLAY/WAYLAND={display}\n"
+            "  On WSL: enable WSLg or an X server, then retry `make -C BTFViewer demo`.\n"
+            "  For a no-GUI check: python3 scripts/demo_runner.py "
+            "demos/demo_8cores/demo_8cores.xml --dry-run\n"
+            f"({type(exc).__name__}: {exc})"
         ) from exc
     pyautogui.FAILSAFE = True
     pyautogui.PAUSE = 0.08

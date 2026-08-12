@@ -6332,6 +6332,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         dlg = _AnalysisFindingsDialog(
             findings, scope_title, parent=self,
             ai_enabled=self._ai_feature_enabled(),
+            ui_font_size=getattr(self, "_ui_font_size_val", UI_FONT_SIZE),
         )
         self._analysis_findings_dlg = dlg
         dlg.exec()

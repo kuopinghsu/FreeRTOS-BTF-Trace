@@ -11,11 +11,13 @@ from .config import (  # private symbols are not pulled in by import *
     _IC_SECTIONS_COLLAPSE,
     _IC_SECTIONS_EXPAND,
     _IC_SECTIONS_RESET_ORDER,
+    _application_ui_font,
     _pixmap_from_embedded_app_icon,
     _stats_chevron_icon,
     _svg_icon,
     _svg_icon_markup,
     _svg_pixmap,
+    _ui_font_stylesheet_size,
     default_stats_section_order,
     is_default_stats_section_order,
     move_stats_section,
@@ -6948,7 +6950,7 @@ class _AnalysisFindingsDialog(QDialog):
     """Toolbar Analysis dialog — lists heuristic findings for the current scope."""
 
     def __init__(self, findings: List[dict], scope_title: str = "", parent=None,
-                 ai_enabled: bool = True):
+                 ai_enabled: bool = True, ui_font_size: int = UI_FONT_SIZE):
         super().__init__(parent)
         self._findings = findings or []
         self._scope_title = scope_title or ""
@@ -6958,6 +6960,11 @@ class _AnalysisFindingsDialog(QDialog):
         self.wants_ai_template = "findings"
         self.setWindowTitle(f"Analysis Findings{self._scope_title}")
         self.setModal(True)
+        # Match menus/toolbar (Settings → Display → UI / menus), not a fixed 11pt.
+        ui_pt = max(6, min(int(ui_font_size), 24))
+        ui_font = _application_ui_font(ui_pt)
+        ui_fs = _ui_font_stylesheet_size(ui_pt)
+        self.setFont(ui_font)
         # Wide enough for Ask-AI button labels (esp. "Auto investigate…") in one row.
         self.setMinimumSize(900, 480)
         self.resize(960, 600)
@@ -6969,9 +6976,11 @@ class _AnalysisFindingsDialog(QDialog):
         )
         note.setWordWrap(True)
         note.setObjectName("analysisNote")
-        note.setStyleSheet("color: #9a9a9a; font-size: 12px; padding-bottom: 2px;")
+        note.setStyleSheet(
+            f"color: #9a9a9a; font-size: {ui_fs}; padding-bottom: 2px;")
 
         list_w = QListWidget()
+        list_w.setFont(ui_font)
         list_w.setWordWrap(True)
         list_w.setSpacing(6)
         list_w.setUniformItemSizes(False)
@@ -6980,7 +6989,8 @@ class _AnalysisFindingsDialog(QDialog):
         list_w.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         list_w.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         list_w.setStyleSheet(
-            "QListWidget { padding: 8px; outline: none; border-radius: 6px; }"
+            f"QListWidget {{ padding: 8px; outline: none; border-radius: 6px;"
+            f" font-size: {ui_fs}; }}"
             "QListWidget::item {"
             "  padding: 10px 12px;"
             "  margin: 3px 0;"
@@ -7000,33 +7010,36 @@ class _AnalysisFindingsDialog(QDialog):
                 display = f"{badge}  {title}\n{text}" if text else f"{badge}  {title}"
                 item = QListWidgetItem(display)
                 item.setData(Qt.ItemDataRole.UserRole, f.get("id") or "")
-                font = item.font()
-                font.setPointSize(max(int(font.pointSize()), 11))
-                item.setFont(font)
+                item.setFont(ui_font)
                 if sev == "error":
                     item.setForeground(QBrush(QColor("#e74c3c")))
                 elif sev == "warning":
                     item.setForeground(QBrush(QColor("#e67e22")))
-                fm = QFontMetrics(font)
+                fm = QFontMetrics(ui_font)
                 wrap_w = 640
                 body_h = fm.boundingRect(
                     0, 0, wrap_w, 8000,
                     int(Qt.TextFlag.TextWordWrap),
                     display,
                 ).height()
-                item.setSizeHint(QSize(wrap_w, max(56, body_h + 22)))
+                # Scale row height with UI font (was tuned for forced 11pt).
+                pad = max(16, int(round(ui_pt * 2.0)))
+                min_h = max(40, int(round(ui_pt * 5.0)))
+                item.setSizeHint(QSize(wrap_w, max(min_h, body_h + pad)))
                 list_w.addItem(item)
             list_w.setCurrentRow(0)
         else:
             empty = QListWidgetItem("No findings for the current scope")
             empty.setFlags(Qt.ItemFlag.NoItemFlags)
+            empty.setFont(ui_font)
             list_w.addItem(empty)
 
         def _make_ai_btn(label: str, tip_on: str, tip_off: str, template: str,
                          *, primary: bool = False) -> QPushButton:
             btn = QPushButton(label)
+            btn.setFont(ui_font)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setMinimumHeight(34)
+            btn.setMinimumHeight(max(28, int(round(ui_pt * 3.2))))
             # Prefer natural text width — avoid MinimumExpanding which clips labels.
             btn.setSizePolicy(
                 QSizePolicy.Policy.Preferred,
@@ -7038,7 +7051,7 @@ class _AnalysisFindingsDialog(QDialog):
             if primary:
                 btn.setStyleSheet(
                     "QPushButton {"
-                    "  padding: 7px 16px; border-radius: 6px;"
+                    f"  padding: 7px 16px; border-radius: 6px; font-size: {ui_fs};"
                     "  background: #3498db; color: white; border: none;"
                     "  font-weight: 600;"
                     "}"
@@ -7047,7 +7060,8 @@ class _AnalysisFindingsDialog(QDialog):
                 )
             else:
                 btn.setStyleSheet(
-                    "QPushButton { padding: 7px 16px; border-radius: 6px; }"
+                    f"QPushButton {{ padding: 7px 16px; border-radius: 6px;"
+                    f" font-size: {ui_fs}; }}"
                 )
             btn.clicked.connect(
                 lambda _checked=False, t=template: self._query_with_ai(
@@ -7056,7 +7070,7 @@ class _AnalysisFindingsDialog(QDialog):
 
         ai_label = QLabel("Ask AI")
         ai_label.setStyleSheet(
-            "color: #8a8a8a; font-size: 11px; font-weight: 600;"
+            f"color: #8a8a8a; font-size: {ui_fs}; font-weight: 600;"
             " letter-spacing: 0.4px; padding-top: 2px;"
         )
 
@@ -7101,21 +7115,26 @@ class _AnalysisFindingsDialog(QDialog):
             ai_row.addWidget(btn)
         ai_row.addStretch(1)
 
+        btn_h = max(28, int(round(ui_pt * 3.2)))
         save_btn = QPushButton("Save as Text…")
-        save_btn.setMinimumHeight(34)
+        save_btn.setFont(ui_font)
+        save_btn.setMinimumHeight(btn_h)
         save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         save_btn.setToolTip("Download findings as a plain-text file")
         save_btn.setStyleSheet(
-            "QPushButton { padding: 7px 14px; border-radius: 6px; }"
+            f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
+            f" font-size: {ui_fs}; }}"
         )
         save_btn.clicked.connect(self._save_as_text)
 
         close_btn = QPushButton("Close")
-        close_btn.setMinimumHeight(34)
+        close_btn.setFont(ui_font)
+        close_btn.setMinimumHeight(btn_h)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.setDefault(True)
         close_btn.setStyleSheet(
-            "QPushButton { padding: 7px 18px; border-radius: 6px; }"
+            f"QPushButton {{ padding: 7px 18px; border-radius: 6px;"
+            f" font-size: {ui_fs}; }}"
         )
         close_btn.clicked.connect(self.reject)
 
