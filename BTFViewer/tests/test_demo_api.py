@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from btf_viewer_pkg._bootstrap import install  # noqa: E402
 
 install()
 
-from PySide6.QtCore import QEventLoop, QPoint, QTimer  # noqa: E402
+from PySide6.QtCore import QPoint  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from btf_viewer_pkg.config import (  # noqa: E402
@@ -30,6 +31,15 @@ from btf_viewer_pkg.stats import _RcSettings  # noqa: E402
 
 DEMO_XML = BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.xml"
 DEMO_BTF = BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.btf.gz"
+
+
+def _clear_override_cursors() -> None:
+    """Pop any leftover setOverrideCursor stack (e.g. abandoned WaitCursor)."""
+    app = QApplication.instance()
+    if app is None:
+        return
+    while app.overrideCursor() is not None:
+        app.restoreOverrideCursor()
 
 
 class DemoXmlUsesApiTests(unittest.TestCase):
@@ -80,8 +90,13 @@ class DemoApiUiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls._app = QApplication.instance() or QApplication([])
+        # Prior MainWindow tests close the last window; with the default
+        # quitOnLastWindowClosed, Qt posts Quit and QEventLoop.exec returns
+        # immediately — aborting BTF load waits and leaking WaitCursor.
+        cls._app.setQuitOnLastWindowClosed(False)
 
     def setUp(self) -> None:
+        _clear_override_cursors()
         self._tmpdir = tempfile.mkdtemp(prefix="btf_demo_api_")
         self._orig_rc = _RcSettings.RC_PATH
         _RcSettings.RC_PATH = os.path.join(self._tmpdir, "btf_viewer.rc")
@@ -101,27 +116,27 @@ class DemoApiUiTests(unittest.TestCase):
             )
 
     def tearDown(self) -> None:
+        _clear_override_cursors()
         _RcSettings.RC_PATH = self._orig_rc
 
     def _wait_trace_loaded(self, win: MainWindow, timeout_ms: int = 20000) -> None:
-        loop = QEventLoop()
-
-        def tick() -> None:
+        """Pump the GUI until the BTF tab is ready (avoid fragile QEventLoop)."""
+        win._open_file(str(DEMO_BTF.resolve()))
+        deadline = time.monotonic() + (timeout_ms / 1000.0)
+        while time.monotonic() < deadline:
+            self._app.processEvents()
             if (
                 win._tabs
                 and getattr(win, "_trace", None) is not None
                 and not getattr(win, "_load_in_progress", False)
             ):
-                loop.quit()
-
-        timer = QTimer()
-        timer.timeout.connect(tick)
-        timer.start(50)
-        QTimer.singleShot(timeout_ms, loop.quit)
-        win._open_file(str(DEMO_BTF.resolve()))
-        loop.exec()
-        timer.stop()
-        self.assertTrue(win._tabs)
+                break
+            time.sleep(0.02)
+        self.assertTrue(
+            win._tabs,
+            "trace load produced no tabs "
+            f"(load_in_progress={getattr(win, '_load_in_progress', None)})",
+        )
         self.assertIsNotNone(win._trace)
 
     def test_view_find_panel_and_analysis_ops(self) -> None:

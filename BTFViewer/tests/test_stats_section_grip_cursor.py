@@ -24,15 +24,30 @@ from btf_viewer_pkg.stats import _StatsSectionGrip  # noqa: E402
 from btf_viewer_pkg.view import _HoverCursor  # noqa: E402
 
 
+def _clear_override_cursors() -> None:
+    app = QApplication.instance()
+    if app is None:
+        return
+    while app.overrideCursor() is not None:
+        app.restoreOverrideCursor()
+
+
 class StatsSectionGripCursorTest(unittest.TestCase):
     _app: QApplication | None = None
 
     @classmethod
     def setUpClass(cls) -> None:
         cls._app = QApplication.instance() or QApplication([])
+        cls._app.setQuitOnLastWindowClosed(False)
+
+    def setUp(self) -> None:
+        # Earlier MainWindow load tests can leak WaitCursor into this module.
+        _clear_override_cursors()
+        _HoverCursor.hide()
 
     def tearDown(self) -> None:
         _HoverCursor.hide()
+        _clear_override_cursors()
 
     def _make_grip(self) -> tuple[QWidget, _StatsSectionGrip]:
         host = QWidget()
