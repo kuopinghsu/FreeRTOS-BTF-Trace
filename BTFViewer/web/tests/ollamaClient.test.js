@@ -7,6 +7,8 @@ import {
   AI_PRESET_OLLAMA,
   AI_PRESET_OPENAI,
   AI_TEMPLATE_QUESTIONS,
+  AI_TEMPLATE_PRIMARY_IDS,
+  AI_TEMPLATE_MENU_GROUPS,
   DEFAULT_AI_BASE_URL,
   DEFAULT_AI_PRESET,
   aiJumpAnnotationNote,
@@ -349,6 +351,19 @@ describe('AI endpoint helpers', () => {
     const migrations = AI_TEMPLATE_QUESTIONS.find(t => t.id === 'migrations')
     assert.ok(migrations)
     assert.match(migrations.prompt, /thrashing|lock-bounce/i)
+  })
+
+  it('primary chips plus More groups cover every template id', () => {
+    const menu = AI_TEMPLATE_MENU_GROUPS.flatMap(g => g.ids)
+    const all = [...AI_TEMPLATE_PRIMARY_IDS, ...menu]
+    assert.deepEqual(
+      [...all].sort(),
+      AI_TEMPLATE_QUESTIONS.map(t => t.id).sort(),
+    )
+    assert.equal(new Set(all).size, all.length)
+    assert.deepEqual(AI_TEMPLATE_PRIMARY_IDS, [
+      'investigate', 'findings', 'explain_region', 'auto_investigate',
+    ])
   })
 
   it('aiChatCompletion sends tools without tool_choice and parses btftool', async () => {

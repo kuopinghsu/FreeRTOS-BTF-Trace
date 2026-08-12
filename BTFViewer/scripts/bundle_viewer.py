@@ -52,6 +52,7 @@ BUNDLE_MODULES: list[str] = [
     "mvvm/__init__",
     "trace_quality",
     "perfetto_export",
+    "demo_api",
     "mainwindow",
     "platform",
     "cli",
@@ -71,6 +72,7 @@ SECTION_MARKERS: dict[str, str] = {
     "mvvm/base": "# MVVM",
     "trace_quality": "# Trace quality metadata",
     "perfetto_export": "# Perfetto export",
+    "demo_api": "# Demo HTTP API",
     "mainwindow": "# CPU Load Graph",
     "platform": "# Entry point",
     "cli": "# Entry point",
@@ -101,6 +103,7 @@ import hashlib
 import hmac
 import html
 from html.parser import HTMLParser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ssl
 import itertools
 import json
@@ -132,7 +135,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from PySide6.QtCore import (
     QBuffer, QByteArray, QEasingCurve, QEvent, QEventLoop, QIODevice, QLineF, QMimeData,
     QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl,
-    QPropertyAnimation, QVariantAnimation, Signal,
+    QPropertyAnimation, QVariantAnimation, Signal, Slot,
 )
 from PySide6.QtGui import (
     QBrush, QColor, QCursor, QDesktopServices, QDrag, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage, QKeySequence, QLinearGradient, QPainter,

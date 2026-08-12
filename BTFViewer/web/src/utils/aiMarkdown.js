@@ -7,12 +7,18 @@ import { mermaidBlockHtml } from './aiMermaid.js'
 import { btfJumpHref, summariseToolCall } from './aiTools.js'
 import { btfHtmlReportDocument } from './htmlReport.js'
 
+import { evidencePanelLabels } from './aiInvestigation.js'
+import { DEFAULT_AI_RESPONSE_LANGUAGE } from './ollamaClient.js'
+
 /** Visible role labels (panel + Save As). Keep in sync with ai_assistant.py. */
 export const AI_ROLE_LABEL_USER = 'Your prompt'
 export const AI_ROLE_LABEL_ASSISTANT = 'AI Assistant'
+export const AI_ROLE_LABEL_EVIDENCE = 'Evidence / Reasoning'
 
-export function aiRoleLabel(role) {
-  return role === 'user' ? AI_ROLE_LABEL_USER : AI_ROLE_LABEL_ASSISTANT
+export function aiRoleLabel(role, responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE) {
+  if (role === 'user') return AI_ROLE_LABEL_USER
+  if (role === 'evidence') return evidencePanelLabels(responseLanguage).role
+  return AI_ROLE_LABEL_ASSISTANT
 }
 
 const JUMP_RE = /jump:([0-9]+(?:\.[0-9]+)?)/g
@@ -395,12 +401,12 @@ export function aiFileStamp(date = new Date()) {
  * Markdown transcript of the conversation (assistant replies kept as-is).
  * Keep in sync with ai_assistant.py::format_ai_conversation_markdown.
  */
-export function formatAiConversationMarkdown(entries, date = new Date()) {
+export function formatAiConversationMarkdown(entries, date = new Date(), responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE) {
   const out = ['# BTF Viewer — AI Conversation', '', `_Saved ${conversationStamp(date)}_`, '']
   for (const entry of entries || []) {
     const role = entry.role
     const text = String(entry.content || entry.text || '').trim()
-    out.push(`## ${aiRoleLabel(role)}`, '')
+    out.push(`## ${aiRoleLabel(role, responseLanguage)}`, '')
     if (text) {
       out.push(text, '')
     }
@@ -415,11 +421,11 @@ export function formatAiConversationMarkdown(entries, date = new Date()) {
 }
 
 /** Plain-text transcript of the conversation. */
-export function formatAiConversationText(entries, date = new Date()) {
+export function formatAiConversationText(entries, date = new Date(), responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE) {
   const out = ['BTF Viewer — AI Conversation', `Saved ${conversationStamp(date)}`, '']
   for (const entry of entries || []) {
     const text = String(entry.content || entry.text || '').trim()
-    out.push(`${aiRoleLabel(entry.role)}:`)
+    out.push(`${aiRoleLabel(entry.role, responseLanguage)}:`)
     if (text) out.push(text)
     for (const t of entry.tools || []) {
       const label = summariseToolCall(t.name || '', t.arguments || {})
@@ -450,13 +456,14 @@ function toolCardsHtml(tools) {
 }
 
 /** Conversation turn markup only (no document chrome). For report embedding. */
-export function formatAiConversationHtmlBody(entries) {
+export function formatAiConversationHtmlBody(entries, responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE) {
   return (entries || []).map((entry) => {
     const role = entry.role
     const content = entry.content || entry.text || ''
-    const head = `<h3>${escapeHtml(aiRoleLabel(role))}</h3>`
+    const head = `<h3>${escapeHtml(aiRoleLabel(role, responseLanguage))}</h3>`
+    const cls = role === 'user' ? 'user' : (role === 'evidence' ? 'evidence' : 'assistant')
     return (
-      `<section class="msg ${role === 'user' ? 'user' : 'assistant'}">`
+      `<section class="msg ${cls}">`
       + head
       + `<div class="body">${formatAiMessageHtml(role, content, { zoomable: false })}${toolCardsHtml(entry.tools)}</div>`
       + '</section>'
@@ -465,8 +472,8 @@ export function formatAiConversationHtmlBody(entries) {
 }
 
 /** Standalone HTML transcript (Markdown rendered). Keep in sync with ai_assistant.py. */
-export function formatAiConversationHtml(entries, date = new Date()) {
-  const turns = formatAiConversationHtmlBody(entries)
+export function formatAiConversationHtml(entries, date = new Date(), responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE) {
+  const turns = formatAiConversationHtmlBody(entries, responseLanguage)
   const body = (
     '<section class="report-card">\n'
     + '<h2>Conversation</h2>\n'
@@ -482,7 +489,7 @@ export function formatAiConversationHtml(entries, date = new Date()) {
 /** Format a chat message; assistant = Markdown preview, user = plain. */
 export function formatAiMessageHtml(role, text, { inlineSvg = true, zoomable = true } = {}) {
   const body = String(text || '').trim()
-  if (role === 'assistant') {
+  if (role === 'assistant' || role === 'evidence') {
     return markdownToSafeHtml(body, { inlineSvg, zoomable }) || '<p></p>'
   }
   return escapeHtml(body)

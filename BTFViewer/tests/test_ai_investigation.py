@@ -684,6 +684,48 @@ class AiInvestigationTests(unittest.TestCase):
         self.assertIn("evidence_score_bar", payload)
         self.assertGreaterEqual(payload["evidence_score"], 40 + 25)
 
+    def test_format_evidence_panel_markdown_includes_jumps(self) -> None:
+        from btf_viewer_pkg.ai_assistant import format_ai_conversation_markdown
+        from btf_viewer_pkg.ai_investigation import format_evidence_panel_markdown
+
+        md = format_evidence_panel_markdown({
+            "conclusion": "Core thrashing on CS[28]",
+            "evidence": [{"label": "migration burst", "time": 1100000}],
+            "confidence": "High",
+            "evidence_score": 82,
+            "evidence_score_bar": "████████░░ 82%",
+        }, "Simplified Chinese (简体中文)")
+        self.assertIn("Core thrashing", md)
+        self.assertIn("jump:1100000", md)
+        self.assertIn("**证据**", md)
+        self.assertIn("**置信度:** 高", md)
+        self.assertIn("证据 / 推理", format_ai_conversation_markdown([
+            ("evidence", md),
+        ], response_language="Simplified Chinese (简体中文)"))
+
+    def test_format_evidence_panel_markdown_relocalizes_chinese_to_english(self) -> None:
+        from btf_viewer_pkg.ai_investigation import (
+            format_evidence_panel_markdown,
+            _localize_evidence_token,
+            evidence_panel_labels,
+        )
+
+        en = evidence_panel_labels("English")
+        self.assertEqual(_localize_evidence_token("中", en), "Medium")
+        self.assertEqual(_localize_evidence_token("高", en), "High")
+        self.assertEqual(
+            _localize_evidence_token("关键路径: T1", en),
+            "Critical path: T1",
+        )
+        md = format_evidence_panel_markdown({
+            "conclusion": "关键路径: T1",
+            "confidence": "中",
+            "evidence": [{"label": "hit", "time": 42}],
+        }, "English")
+        self.assertIn("Critical path: T1", md)
+        self.assertIn("**Confidence:** Medium", md)
+        self.assertIn("jump:42", md)
+
     # --- Phase 3: historical baseline learning ----------------------------
 
     def test_update_baseline_profile_merges_running_stats(self) -> None:

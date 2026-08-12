@@ -20,9 +20,14 @@ install()
 from unittest.mock import patch  # noqa: E402
 
 from PySide6.QtCore import QPoint, QUrl  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QPushButton, QScrollArea, QVBoxLayout  # noqa: E402
 
 from btf_viewer_pkg.ai_assistant import (  # noqa: E402
+    AI_TEMPLATE_MENU_GROUPS,
+    AI_TEMPLATE_PRIMARY_IDS,
+    AI_TEMPLATE_QUESTIONS,
+    ai_entry_role,
+    ai_entry_text,
     _MermaidZoomDialog,
     _qtextline_cursor_x,
     create_ai_assistant_panel,
@@ -251,15 +256,14 @@ class AiPanelUiTests(unittest.TestCase):
             }],
             "message": {"role": "assistant", "content": "Placing cursors."},
         }))
-        self.assertFalse(panel._tool_bar.isHidden())
-        self.assertFalse(panel._apply_tools_btn.isHidden())
-        self.assertFalse(panel._skip_tools_btn.isHidden())
+        # In-log Apply/Skip cards are the primary chrome; the under-log bar
+        # stays hidden when those cards exist.
+        self.assertTrue(panel._tool_bar.isHidden())
         with patch.object(panel, "_continue_with_messages"):
             panel._on_jump_link(QUrl("btfaction:apply/b1"))
         self.assertEqual(len(executed), 1)
         self.assertEqual(executed[0][0]["name"], "set_cursors")
-        self.assertFalse(panel._undo_tools_btn.isHidden())
-        self.assertTrue(panel._apply_tools_btn.isHidden())
+        self.assertTrue(panel._tool_bar.isHidden())
 
         panel2 = create_ai_assistant_panel(
             None,
@@ -527,6 +531,128 @@ class AiPanelUiTests(unittest.TestCase):
             panel._on_jump_link(QUrl(f"btfmermaid:zoom/{token}"))
             panel._on_jump_link(QUrl("btfmermaid:zoom/!!!"))
         self.assertEqual(opened, [src])
+
+    def test_chat_first_layout_stretches_log(self) -> None:
+        """Log is a direct stretch child; plan starts hidden until investigation."""
+        panel = self._panel()
+        lay = panel.layout()
+        self.assertIsInstance(lay, QVBoxLayout)
+        idx = lay.indexOf(panel._log)
+        self.assertGreaterEqual(idx, 0)
+        self.assertEqual(lay.stretch(idx), 1)
+        self.assertIs(lay.itemAt(idx).widget(), panel._log)
+        self.assertFalse(isinstance(panel._log.parentWidget(), QScrollArea))
+        self.assertTrue(panel._plan_host.isHidden())
+        panel._set_investigation_plan({
+            "goal": "Find the bottleneck",
+            "steps": [{"id": "s1", "label": "Investigate", "status": "pending"}],
+        })
+        self.assertFalse(panel._plan_host.isHidden())
+        self.assertEqual(panel._plan_view.text(), "Investigation  0/1  Investigate")
+        self.assertNotIn("Goal", panel._plan_view.text())
+        panel._set_investigation_plan({
+            "goal": "Find the bottleneck",
+            "steps": [{"id": "s1", "label": "Investigate", "status": "active"}],
+        })
+        self.assertEqual(panel._plan_view.text(), "Investigation  0/1  Investigate")
+
+    def test_primary_chips_and_more_menu_cover_all_templates(self) -> None:
+        panel = self._panel()
+        primary_labels = [b.text() for b in panel._template_btns]
+        expected_primary = [
+            next(lab for tid, lab, _p in AI_TEMPLATE_QUESTIONS if tid == pid)
+            for pid in AI_TEMPLATE_PRIMARY_IDS
+        ]
+        self.assertEqual(primary_labels, expected_primary)
+        from PySide6.QtWidgets import QWidget
+        tpl = panel.findChild(QWidget, "aiTemplates")
+        self.assertIsNotNone(tpl)
+        more = [
+            b.text() for b in tpl.findChildren(QPushButton)
+            if b.text().startswith("More templates")
+        ]
+        self.assertEqual(len(more), 1)
+        menu_ids = [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids]
+        self.assertEqual(set(panel._template_actions), set(menu_ids))
+        reachable = set(AI_TEMPLATE_PRIMARY_IDS) | set(panel._template_actions)
+        self.assertEqual(reachable, {t[0] for t in AI_TEMPLATE_QUESTIONS})
+        self.assertEqual(len(reachable), 19)
+
+    def test_evidence_syncs_to_log_for_export(self) -> None:
+        from btf_viewer_pkg.ai_assistant import format_ai_conversation_html
+
+        panel = self._panel()
+        panel._update_evidence_from_tool_result("investigate", {
+            "ok": True,
+            "data": {
+                "finding": {
+                    "title": "Migration thrash",
+                    "evidence": [{"label": "bounce", "time": 3200000.0}],
+                },
+                "confidence": "Medium",
+            },
+        })
+        self.assertEqual(len(panel._entries), 1)
+        self.assertEqual(ai_entry_role(panel._entries[0]), "evidence")
+        self.assertIn("jump:3200000", ai_entry_text(panel._entries[0]))
+        html = format_ai_conversation_html(panel._entries, "Simplified Chinese (简体中文)")
+        self.assertIn("证据 / 推理", html)
+        self.assertIn("jump:3200000", html)
+        panel._update_evidence_from_tool_result("investigate", {
+            "ok": True,
+            "data": {
+                "finding": {
+                    "title": "Updated thrash",
+                    "evidence": [{"label": "bounce", "time": 3300000.0}],
+                },
+                "confidence": "High",
+            },
+        })
+        self.assertEqual(len(panel._entries), 1)
+        self.assertIn("jump:3300000", ai_entry_text(panel._entries[0]))
+
+    def test_evidence_language_switch_chinese_to_english(self) -> None:
+        settings = {
+            "enabled": "true",
+            "response_language": "Simplified Chinese (简体中文)",
+        }
+        panel = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {},
+            get_settings=lambda: dict(settings),
+            on_save_settings=lambda patch: settings.update(patch),
+        )
+        panel._append("assistant", "结论在上方。")
+        panel._update_evidence_from_tool_result("investigate", {
+            "ok": True,
+            "data": {
+                "finding": {
+                    "title": "Migration thrash",
+                    "evidence": [{"label": "bounce", "time": 3200000.0}],
+                },
+                "confidence": "Medium",
+            },
+        })
+        self.assertEqual(ai_entry_role(panel._entries[-1]), "evidence")
+        self.assertIn("证据", ai_entry_text(panel._entries[-1]))
+        self.assertIn("中", ai_entry_text(panel._entries[-1]))
+
+        settings["response_language"] = "English"
+        panel._refresh_localized_chrome("English")
+        self.assertEqual(len(panel._entries), 2)
+        self.assertEqual(ai_entry_role(panel._entries[-1]), "evidence")
+        en = ai_entry_text(panel._entries[-1])
+        self.assertIn("Evidence", en)
+        self.assertIn("Confidence", en)
+        self.assertIn("Medium", en)
+        self.assertIn("jump:3200000", en)
+        self.assertNotIn("证据", en)
+
+        panel._append("assistant", "Final English summary.")
+        panel._pin_evidence_log_entry()
+        self.assertEqual(ai_entry_role(panel._entries[-1]), "evidence")
+        self.assertEqual(ai_entry_role(panel._entries[-2]), "assistant")
+        self.assertIn("Final English summary", ai_entry_text(panel._entries[-2]))
 
 
 if __name__ == "__main__":

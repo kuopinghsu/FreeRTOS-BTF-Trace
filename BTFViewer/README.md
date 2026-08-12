@@ -1712,6 +1712,8 @@ Shortcuts marked **(W)** are Web-only. Others work on Desktop and Web. On Web, p
 | **[WORKFLOWS.md](WORKFLOWS.md)** | Analysis playbooks and AI ask order |
 | **[AI.md](AI.md)** | AI setup, tools, diagrams, troubleshooting, CLI |
 | **[btf-viewer-slides.md](btf-viewer-slides.md)** | Presentation overview |
+| **[`scripts/demo_runner.py`](scripts/demo_runner.py)** | Generic XML → PyAutoGUI + TTS demo engine |
+| **[`demos/demo_8cores/`](demos/demo_8cores/)** | Demo pack: [`demo_8cores.xml`](demos/demo_8cores/demo_8cores.xml) + [`demo_8cores.btf.gz`](demos/demo_8cores/demo_8cores.btf.gz) + `text/` + `voice/` |
 
 <a id="developer-notes" name="developer-notes">&#x200B;</a>
 ### Developer notes ![](../images/readme/h3.svg)

@@ -56,12 +56,13 @@ FreeRTOS-Kernel/
 trace.bin
 build
 
-# Generated trace files (can be very large; regenerate with BTFViewer/scripts/gen_trace.py)
-# Keep the committed small examples in tracedata/ via negation rules.
+# Keep committed small examples in tracedata/ and demo snapshots via negation.
 *.btf
 *.vcd
 !tracedata/*.btf
 !tracedata/*.vcd
+!BTFViewer/demos/**/*.btf
+!BTFViewer/demos/**/*.btf.gz
 tracedata/trace.*
 
 # BTF viewer runtime settings (user-local, not shared)

@@ -1,13 +1,12 @@
 # Demo XML descriptions
 
-Generic GUI demos for [`../demo_runner.py`](../demo_runner.py).
+Generic GUI demos for [`../scripts/demo_runner.py`](../scripts/demo_runner.py).
 
 Each full demo lives in its own folder (XML + frozen trace + narration).
 
 | Path | Purpose |
 |------|---------|
 | [`demo_8cores/`](demo_8cores/) | 8-core BTFViewer recording demo |
-| [`minimal.example.xml`](minimal.example.xml) | Tiny template to copy |
 
 ### `demo_8cores/` layout
 
@@ -23,7 +22,7 @@ cd BTFViewer
 make bundle   # once — demo launches builds/btf_viewer.py
 make demo
 # or:
-python3 scripts/demo_runner.py scripts/demos/demo_8cores/demo_8cores.xml --launch --interactive
+python3 scripts/demo_runner.py demos/demo_8cores/demo_8cores.xml --launch --interactive
 ```
 
 Settings for the demo session are stored in `builds/btf_viewer.rc` (next to the bundled app).
@@ -39,14 +38,14 @@ cursors / zoom / statistics sections over `http://127.0.0.1:8765/demo`
 (override with `--demo-api-port`; disable with `--no-demo-api`).
 
 ```xml
-<highlight task="CS[28]"/>
+<highlight task="CS[27]"/>
 <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
 <stats_section id="health" expand="true" collapse_others="true"/>
-<jump_wcet task="CS[28]"/>
+<jump_wcet task="CS[27]"/>
 <view_mode mode="core"/>
 <cpu_load on="true"/>
 <analysis/>
-<find query="CS[28]"/>
+<find query="CS[27]"/>
 <find clear="true"/>
 <panel name="stats"/>
 <wait_audio/>

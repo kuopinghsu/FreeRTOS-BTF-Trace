@@ -197,73 +197,6 @@
       </div>
     </div>
 
-    <p class="ai-hint">
-      Uses Analysis Findings for the current Statistics scope
-      (Trace Compare template uses compare CSV).
-      Configure the endpoint in Settings → AI.
-      Prefer <code>npm run dev</code> / <code>preview</code> (proxies);
-      for <code>file://</code> set <code>OLLAMA_ORIGINS</code>.
-    </p>
-
-    <div class="ai-section-label">
-      Templates
-    </div>
-    <div class="ai-templates">
-      <button
-        v-for="t in templates"
-        :key="t.id"
-        type="button"
-        class="ai-tpl-btn"
-        :class="{
-          gray: (t.id === AI_COMPARE_TEMPLATE_ID && !compareEnabled)
-            || (AI_SMP_ONLY_TEMPLATE_IDS.has(t.id) && !smpEnabled),
-        }"
-        :title="templateTitle(t)"
-        :disabled="busy || !aiEnabled
-          || (t.id === AI_COMPARE_TEMPLATE_ID && !compareEnabled)
-          || (AI_SMP_ONLY_TEMPLATE_IDS.has(t.id) && !smpEnabled)"
-        @click="onTemplate(t)"
-      >
-        {{ t.label }}
-      </button>
-    </div>
-
-    <div
-      v-if="investigationPlan"
-      class="ai-plan"
-    >
-      <div class="ai-section-label">
-        Investigation plan
-      </div>
-      <div class="ai-plan-goal">
-        <strong>Goal:</strong> {{ investigationPlan.goal }}
-      </div>
-      <ul class="ai-plan-steps">
-        <li
-          v-for="s in investigationPlan.steps"
-          :key="s.id"
-          :class="`plan-${s.status}`"
-        >
-          <span class="plan-mark">{{ planMark(s.status) }}</span>
-          {{ s.label }}
-        </li>
-      </ul>
-    </div>
-
-    <div
-      v-if="evidencePanel"
-      class="ai-evidence"
-    >
-      <div class="ai-section-label">
-        Evidence / Reasoning
-      </div>
-      <div
-        class="ai-evidence-body"
-        v-html="evidencePanelHtml"
-        @click="onMsgClick"
-      />
-    </div>
-
     <div
       ref="logRef"
       class="ai-log"
@@ -274,6 +207,12 @@
         class="ai-empty"
       >
         Conversation appears here…
+        <span class="ai-empty-hint">
+          Uses Analysis Findings for the current Statistics scope.
+          Configure the endpoint in Settings → AI.
+          Prefer <code>npm run dev</code> / <code>preview</code> (proxies);
+          for <code>file://</code> set <code>OLLAMA_ORIGINS</code>.
+        </span>
       </div>
       <div
         v-for="(m, i) in messages"
@@ -282,11 +221,11 @@
         :class="m.role"
       >
         <div class="ai-msg-role">
-          {{ aiRoleLabel(m.role) }}
+          {{ aiRoleLabel(m.role, responseLanguage) }}
         </div>
         <div
           class="ai-msg-body"
-          :class="{ markdown: m.role === 'assistant' }"
+          :class="{ markdown: m.role === 'assistant' || m.role === 'evidence' }"
           v-html="formatMessage(m.role, m.content)"
           @click="onMsgClick"
         />
@@ -341,7 +280,64 @@
     </div>
 
     <div
-      v-if="toolBarVisible"
+      v-if="investigationPlan"
+      class="ai-plan-status"
+      :title="planStatusText"
+    >
+      {{ planStatusText }}
+    </div>
+
+    <div class="ai-templates">
+      <button
+        v-for="t in primaryTemplates"
+        :key="t.id"
+        type="button"
+        class="ai-tpl-btn"
+        :title="templateTitle(t)"
+        :disabled="busy || !aiEnabled || templateDisabled(t)"
+        @click="onTemplate(t)"
+      >
+        {{ t.label }}
+      </button>
+      <div class="ai-more-wrap">
+        <button
+          type="button"
+          class="ai-tpl-btn"
+          title="Uses Analysis Findings for the current Statistics scope. Configure the endpoint in Settings → AI."
+          @click="moreOpen = !moreOpen"
+        >
+          More templates…
+        </button>
+        <div
+          v-if="moreOpen"
+          class="ai-more-menu ai-more-menu-wide"
+        >
+          <template
+            v-for="group in templateMenuGroups"
+            :key="group.label"
+          >
+            <div class="ai-more-heading">
+              {{ group.label }}
+            </div>
+            <button
+              v-for="t in group.items"
+              :key="t.id"
+              type="button"
+              class="ai-more-item"
+              :class="{ gray: templateDisabled(t) }"
+              :title="templateTitle(t)"
+              :disabled="busy || !aiEnabled || templateDisabled(t)"
+              @click="onTemplate(t); moreOpen = false"
+            >
+              {{ t.label }}
+            </button>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-if="toolBarFallback"
       class="ai-tool-bar"
     >
       <button
@@ -465,6 +461,8 @@ import {
   AI_COMPARE_TEMPLATE_ID,
   AI_RESPONSE_LANGUAGES,
   AI_SMP_ONLY_TEMPLATE_IDS,
+  AI_TEMPLATE_MENU_GROUPS,
+  AI_TEMPLATE_PRIMARY_IDS,
   AI_TEMPLATE_QUESTIONS,
   DEFAULT_AI_PRESET,
   DEFAULT_AI_RESPONSE_LANGUAGE,
@@ -501,16 +499,15 @@ import {
   completeInvestigationPlan,
   defaultInvestigationPlan,
   extractEvidencePanelPayload,
-  investigationTreeMermaid,
+  formatEvidencePanelMarkdown,
+  formatInvestigationPlanStatus,
   isAgentTemplate,
   markPlanStepsFromTools,
 } from '../utils/aiInvestigation.js'
-import { mermaidBlockHtml } from '../utils/aiMermaid.js'
 import {
   aiFileStamp,
   aiRoleLabel,
   formatAiConversationHtml,
-  formatAiConversationHtmlBody,
   formatAiConversationMarkdown,
   formatAiConversationText,
   formatAiMessageHtml,
@@ -539,6 +536,17 @@ const props = defineProps({
 const emit = defineEmits(['openSettings', 'jump', 'highlight', 'update:responseLanguage'])
 
 const templates = AI_TEMPLATE_QUESTIONS
+const primaryTemplates = computed(() =>
+  AI_TEMPLATE_PRIMARY_IDS
+    .map(id => templates.find(t => t.id === id))
+    .filter(Boolean),
+)
+const templateMenuGroups = computed(() =>
+  AI_TEMPLATE_MENU_GROUPS.map(g => ({
+    label: g.label,
+    items: g.ids.map(id => templates.find(t => t.id === id)).filter(Boolean),
+  })),
+)
 // A language imported from JSON need not be one of the built-in choices.
 const languages = computed(() => {
   const cur = String(props.responseLanguage || '').trim()
@@ -552,6 +560,7 @@ const error = ref('')
 const status = ref('')
 const logRef = ref(null)
 const langOpen = ref(false)
+const moreOpen = ref(false)
 const langDraft = ref(props.responseLanguage || DEFAULT_AI_RESPONSE_LANGUAGE)
 const loadedTabs = ref([])
 const logMenu = reactive({ visible: false, x: 0, y: 0, hasSelection: false })
@@ -566,101 +575,38 @@ let toolRound = 0
 let batchSeq = 0
 let activeTemplateId = ''
 const investigationPlan = ref(null)
-const evidencePanel = ref(null)
+let evidencePayload = null
 
-function escapeHtml(text) {
-  return String(text ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
+const planStatusText = computed(() =>
+  formatInvestigationPlanStatus(investigationPlan.value, props.responseLanguage))
+
+function syncEvidenceLogEntry(data, language = props.responseLanguage) {
+  const text = formatEvidencePanelMarkdown(data, language)
+  if (!text) return
+  messages.value = messages.value.filter(m => m.role !== 'evidence')
+  messages.value.push({ role: 'evidence', content: text })
+  scrollLog()
 }
 
-function formatEvidenceHtml(data) {
-  if (!data) return ''
-  const lines = []
-  const conclusion = String(data.conclusion || '').trim()
-  if (conclusion) lines.push(`<strong>${escapeHtml(conclusion)}</strong>`)
-  const subtitle = String(data.subtitle || '').trim()
-  if (subtitle) lines.push(escapeHtml(subtitle.slice(0, 320)))
-  for (const ev of data.evidence || []) {
-    if (!ev || typeof ev !== 'object') continue
-    const label = escapeHtml(ev.label || 'item')
-    const t = ev.time
-    if (t != null && Number.isFinite(Number(t))) {
-      const n = Number(t)
-      const token = Number.isInteger(n) ? String(Math.trunc(n)) : String(n)
-      lines.push(
-        `• ${label} `
-        + `<a href="${btfJumpHref(n)}" class="ai-jump" data-jump="${token}">jump:${token}</a>`,
-      )
-    } else {
-      lines.push(`• ${label}`)
-    }
-  }
-  if (data.evidence_chain) {
-    lines.push('<strong>Evidence chain</strong>')
-    lines.push(escapeHtml(String(data.evidence_chain)).replace(/\n/g, '<br/>'))
-  }
-  if (data.confidence) {
-    lines.push(`<strong>Confidence:</strong> ${escapeHtml(String(data.confidence))}`)
-  }
-  if (data.evidence_score != null) {
-    const bar = String(data.evidence_score_bar || '')
-    lines.push(
-      '<strong>AI Evidence Score — heuristic:</strong> '
-      + `<span class="ai-evidence-score">${escapeHtml(bar)}</span>`,
-    )
-  }
-  for (const alt of data.alternatives || []) {
-    if (!alt || typeof alt !== 'object') continue
-    if (!lines.some(l => l.includes('Alternative hypotheses'))) {
-      lines.push('<strong>Alternative hypotheses</strong>')
-    }
-    lines.push(
-      `• <em>${escapeHtml(alt.hypothesis || '')}</em> `
-      + `(${escapeHtml(alt.status || 'untested')}) — ${escapeHtml(alt.why || '')}`,
-    )
-  }
-  for (const c of data.checks || []) {
-    if (!c || typeof c !== 'object') continue
-    if (!lines.some(l => l.includes('Verification checklist'))) {
-      lines.push('<strong>Verification checklist</strong>')
-    }
-    const label = escapeHtml(c.label || c.metric || 'check')
-    lines.push(
-      `• ${label}: ${escapeHtml(c.status || '')} — ${escapeHtml(c.detail || '')}`,
-    )
-  }
-  const chain = data.root_cause_chain || []
-  const hyps = data.hypotheses || []
-  if (chain.length || hyps.length) {
-    const treeSrc = investigationTreeMermaid(chain, hyps)
-    if (treeSrc) {
-      lines.push('<strong>Investigation tree</strong>')
-      lines.push(mermaidBlockHtml(treeSrc))
-    }
-  }
-  return lines.join('<br/>')
-}
-
-const evidencePanelHtml = computed(() => formatEvidenceHtml(evidencePanel.value))
-
-function setEvidencePanel(data) {
-  evidencePanel.value = data || null
+function removeEvidenceLogEntry() {
+  const before = messages.value.length
+  messages.value = messages.value.filter(m => m.role !== 'evidence')
+  if (messages.value.length !== before) scrollLog()
 }
 
 function updateEvidenceFromToolResult(name, res) {
   const payload = extractEvidencePanelPayload(name, res)
-  if (payload) setEvidencePanel(payload)
+  if (!payload) return
+  evidencePayload = payload
+  syncEvidenceLogEntry(payload)
 }
 
-function planMark(status) {
-  return ({ done: '✓', active: '●', pending: '○' })[status] || '○'
+function pinEvidenceLogEntry() {
+  if (evidencePayload) syncEvidenceLogEntry(evidencePayload)
 }
 
 function setInvestigationPlan(plan) {
-  investigationPlan.value = plan
+  investigationPlan.value = plan || null
 }
 
 function advanceInvestigationPlan(toolNames) {
@@ -686,7 +632,9 @@ function batchApplied(m) {
 }
 
 watch(() => props.responseLanguage, (v) => {
-  langDraft.value = v || DEFAULT_AI_RESPONSE_LANGUAGE
+  const lang = v || DEFAULT_AI_RESPONSE_LANGUAGE
+  langDraft.value = lang
+  if (evidencePayload) syncEvidenceLogEntry(evidencePayload, lang)
 })
 
 watch(langOpen, (open) => {
@@ -760,7 +708,17 @@ const appliedBatchId = computed(() => {
   return ''
 })
 
-const toolBarVisible = computed(() => !!(pendingBatchId.value || appliedBatchId.value))
+const toolBarFallback = computed(() => {
+  const hasCards = messages.value.some(m => m.tools && m.tools.length)
+  return !!(pendingBatchId.value || appliedBatchId.value) && !hasCards
+})
+
+function templateDisabled(t) {
+  if (!t) return true
+  if (t.id === AI_COMPARE_TEMPLATE_ID && !compareEnabled.value) return true
+  if (AI_SMP_ONLY_TEMPLATE_IDS.has(t.id) && !smpEnabled.value) return true
+  return false
+}
 
 function templateTitle(t) {
   if (t.id === AI_COMPARE_TEMPLATE_ID && !compareEnabled.value) {
@@ -776,6 +734,7 @@ function applyLanguage() {
   const lang = String(langDraft.value || DEFAULT_AI_RESPONSE_LANGUAGE).trim()
     || DEFAULT_AI_RESPONSE_LANGUAGE
   emit('update:responseLanguage', lang)
+  if (evidencePayload) syncEvidenceLogEntry(evidencePayload, lang)
   status.value = `Reply language: ${lang}`
   error.value = ''
   langOpen.value = false
@@ -898,7 +857,7 @@ function copySelection() {
 function copyConversation() {
   closeLogMenu()
   if (!messages.value.length) return
-  writeClipboard(formatAiConversationMarkdown(messages.value))
+  writeClipboard(formatAiConversationMarkdown(messages.value, new Date(), props.responseLanguage))
 }
 
 async function writeClipboard(text) {
@@ -916,14 +875,15 @@ function saveConversationAs(format) {
   const entries = messages.value
   let data
   let mime
+  const lang = props.responseLanguage
   if (format === 'txt') {
-    data = formatAiConversationText(entries)
+    data = formatAiConversationText(entries, new Date(), lang)
     mime = 'text/plain;charset=utf-8'
   } else if (format === 'html') {
-    data = formatAiConversationHtml(entries)
+    data = formatAiConversationHtml(entries, new Date(), lang)
     mime = 'text/html;charset=utf-8'
   } else {
-    data = formatAiConversationMarkdown(entries)
+    data = formatAiConversationMarkdown(entries, new Date(), lang)
     mime = 'text/markdown;charset=utf-8'
   }
   const name = `ai-conversation-${aiFileStamp()}.${format}`
@@ -1077,7 +1037,7 @@ function clear() {
   error.value = ''
   status.value = ''
   mermaidZoom.value = null
-  evidencePanel.value = null
+  evidencePayload = null
 }
 
 function stop() {
@@ -1253,6 +1213,7 @@ function ingestTurn(turn) {
   }
   if (text) messages.value.push({ role: 'assistant', content: text })
   finishInvestigationPlan()
+  pinEvidenceLogEntry()
   const jumps = extractJumpTimes(text)
   if (jumps.length) {
     const m = /jump:([0-9]+(?:\.[0-9]+)?)/.exec(text || '')
@@ -1579,13 +1540,14 @@ defineExpose({
   opacity: 0.4;
   cursor: not-allowed;
 }
-.ai-hint {
-  margin: 0;
+.ai-empty-hint {
+  display: block;
+  margin-top: 8px;
   font-size: 0.92em;
   color: var(--muted, #8a96a8);
   line-height: 1.35;
 }
-.ai-hint code {
+.ai-empty-hint code {
   font-size: 0.9em;
   background: rgba(127, 127, 127, 0.15);
   padding: 0 3px;
@@ -1595,73 +1557,81 @@ defineExpose({
   font-weight: 600;
   font-size: inherit;
 }
-/* Three columns: keep the log usable; scroll if the panel is very short. */
 .ai-templates {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 4px;
-  max-height: min(42vh, 320px);
-  overflow-y: auto;
-  overflow-x: hidden;
   flex-shrink: 0;
-  padding-bottom: 4px;
-  box-sizing: border-box;
 }
 .ai-tpl-btn {
   min-width: 0;
   min-height: 28px;
-  padding: 5px 8px;
+  padding: 4px 8px;
   line-height: 1.3;
-  white-space: normal;
-  overflow: visible;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   text-align: left;
   box-sizing: border-box;
 }
-.ai-plan {
-  font-size: 0.92em;
-  color: var(--fg, #dbe2ea);
-  background: rgba(26, 34, 45, 0.85);
-  border: 1px solid var(--border, #2c3645);
-  border-radius: 6px;
-  padding: 6px 8px;
+.ai-more-wrap {
+  position: relative;
   flex-shrink: 0;
-  max-height: 160px;
+}
+.ai-more-menu {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  z-index: 40;
+  min-width: 168px;
+  max-height: min(50vh, 360px);
   overflow-y: auto;
-}
-.ai-evidence {
-  font-size: 0.92em;
-  color: var(--fg, #dbe2ea);
-  background: rgba(26, 34, 45, 0.85);
-  border: 1px solid var(--border, #2c3645);
-  border-radius: 6px;
-  padding: 6px 8px;
-  flex-shrink: 0;
-  max-height: 160px;
-  overflow-y: auto;
-}
-.ai-evidence-body {
-  color: #c5d0dc;
-  font-size: inherit;
-  line-height: 1.45;
-}
-.ai-plan-goal {
   margin-bottom: 4px;
-  line-height: 1.35;
-}
-.ai-plan-steps {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.ai-plan-steps li {
+  padding: 4px;
+  background: var(--panel, #1a2230);
+  border: 1px solid var(--border, #3a4658);
+  border-radius: 7px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
   display: flex;
-  gap: 6px;
-  line-height: 1.4;
-  color: var(--muted, #8a96a8);
+  flex-direction: column;
 }
-.ai-plan-steps li.plan-done { color: #7dcea0; }
-.ai-plan-steps li.plan-active { color: var(--accent, #5b9bd5); font-weight: 600; }
-.plan-mark { width: 1em; flex: 0 0 auto; }
+.ai-more-heading {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted, #8a96a8);
+  padding: 6px 10px 2px;
+}
+.ai-more-item {
+  appearance: none;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: inherit;
+  text-align: left;
+  padding: 5px 10px;
+}
+.ai-more-item:hover:not(:disabled) {
+  background: rgba(91, 155, 213, 0.18);
+}
+.ai-more-item:disabled,
+.ai-more-item.gray {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.ai-plan-status {
+  flex-shrink: 0;
+  font-size: 0.85em;
+  color: var(--muted, #8a96a8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 1px 0;
+  line-height: 1.3;
+}
 .ai-tpl-btn, .ai-btn {
   font: inherit;
   font-size: inherit;
@@ -1696,7 +1666,7 @@ defineExpose({
 }
 .ai-log {
   flex: 1;
-  min-height: 120px;
+  min-height: 0;
   overflow: auto;
   border: 1px solid var(--border, #3a4658);
   border-radius: 8px;
@@ -1748,6 +1718,7 @@ defineExpose({
 }
 .ai-msg.user .ai-msg-role { color: #6ea8e0; }
 .ai-msg.assistant .ai-msg-role { color: #6fbf9a; }
+.ai-msg.evidence .ai-msg-role { color: #8a96a8; }
 .ai-msg-body {
   border-radius: 0 8px 8px 0;
   padding: 8px 10px;
@@ -1763,6 +1734,11 @@ defineExpose({
   color: #d5e4f7;
   background: #1a2620;
   border-left-color: #3d9a72;
+}
+.ai-msg.evidence .ai-msg-body {
+  color: #c5d0dc;
+  background: #1f2430;
+  border-left-color: #8a96a8;
 }
 .ai-msg-body.markdown :deep(h1),
 .ai-msg-body.markdown :deep(h2),
@@ -1867,33 +1843,26 @@ defineExpose({
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
+  flex-shrink: 0;
 }
-.ai-msg-body :deep(.ai-mermaid),
-.ai-evidence-body :deep(.ai-mermaid) {
+.ai-msg-body :deep(.ai-mermaid) {
   margin: 8px 0;
   overflow-x: auto;
 }
-.ai-msg-body :deep(.ai-mermaid-zoom),
-.ai-evidence-body :deep(.ai-mermaid-zoom) {
+.ai-msg-body :deep(.ai-mermaid-zoom) {
   cursor: zoom-in;
   display: inline-block;
   text-decoration: none;
 }
 .ai-msg-body :deep(.ai-mermaid-svg svg),
-.ai-msg-body :deep(.ai-mermaid-img),
-.ai-evidence-body :deep(.ai-mermaid-svg svg),
-.ai-evidence-body :deep(.ai-mermaid-img) {
+.ai-msg-body :deep(.ai-mermaid-img) {
   max-width: 100%;
   height: auto;
   border-radius: 4px;
 }
-.ai-msg-body :deep(.ai-mermaid-links),
-.ai-evidence-body :deep(.ai-mermaid-links) {
+.ai-msg-body :deep(.ai-mermaid-links) {
   margin: 4px 0 0;
   font-size: 11px;
-}
-.ai-evidence-body :deep(.ai-evidence-score) {
-  font-family: Menlo, Consolas, Monaco, 'Courier New', monospace;
 }
 .ai-mermaid-overlay {
   position: fixed;
@@ -1946,6 +1915,7 @@ defineExpose({
   box-sizing: border-box;
   resize: vertical;
   min-height: 64px;
+  flex-shrink: 0;
   font-size: inherit;
   font-family: inherit;
   border-radius: 6px;
@@ -1964,6 +1934,7 @@ defineExpose({
   font-size: 0.92em;
   color: var(--muted, #8a96a8);
   min-height: 1.2em;
+  flex-shrink: 0;
 }
 .ai-status.error { color: #e07070; }
 </style>

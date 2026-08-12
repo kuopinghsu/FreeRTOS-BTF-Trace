@@ -278,6 +278,27 @@ describe('aiTools', () => {
     assert.match(AI_TOOL_SYSTEM_ADDENDUM, /```btftool/)
   })
 
+  it('parses NDJSON ```btftool fences (several objects in one fence)', () => {
+    const text = [
+      'Focusing the segment.',
+      '```btftool',
+      '{"name": "set_cursors", "arguments": {"timestamps": [1036516, 1036826]}}',
+      '{"name": "highlight_task", "arguments": {"task_name_or_id": "CS[24]"}}',
+      '{"name": "zoom_to_range", "arguments": {"start_time": 1036400, "end_time": 1037000}}',
+      '```',
+    ].join('\n')
+    const calls = parseToolCallsFromText(text)
+    assert.deepEqual(calls.map(c => c.name), [
+      'set_cursors', 'highlight_task', 'zoom_to_range',
+    ])
+    assert.deepEqual(calls[0].arguments.timestamps, [1036516, 1036826])
+    assert.equal(calls[1].arguments.task_name_or_id, 'CS[24]')
+    assert.equal(calls[2].arguments.start_time, 1036400)
+    const stripped = stripParsedToolMarkup(text)
+    assert.doesNotMatch(stripped, /btftool|set_cursors/)
+    assert.match(stripped, /Focusing the segment/)
+  })
+
   it('resolves task keys and auto-apply default', () => {
     assert.equal(resolveTaskKey('266', ['Idle[1]', 'Low[266]']), 'Low[266]')
     const ps = '\x00228\x00PS'

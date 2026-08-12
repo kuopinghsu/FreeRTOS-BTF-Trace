@@ -240,8 +240,8 @@ export const AI_TOOL_SYSTEM_ADDENDUM =
   + '\'Simulation / estimate — not measured behavior\' and cite evidence. '
   + 'Tool timestamps use the same numeric trace time '
   + 'unit as jump:TIME. After tools run, summarise what you changed. '
-  + 'If you cannot emit a native function call, emit one fenced btftool JSON '
-  + 'object per action, for example:\n'
+  + 'If you cannot emit a native function call, emit a fenced btftool JSON '
+  + 'block: one object, a JSON array, or several objects (one per line), e.g.:\n'
   + '```btftool\n'
   + '{"name": "set_cursors", "arguments": {"timestamps": [1805120, 1810000]}}\n'
   + '```\n'
@@ -1329,6 +1329,68 @@ function toolCallFromObj(obj, idx) {
   return { id: `text_${idx}`, name, arguments: checked.args || args }
 }
 
+function loadsJsonValues(body) {
+  const src = String(body || '').trim()
+  if (!src) return []
+  try {
+    return [JSON.parse(src)]
+  } catch { /* NDJSON / multi-value fence */ }
+  const out = []
+  let idx = 0
+  const n = src.length
+  while (idx < n) {
+    while (idx < n && /\s/.test(src[idx])) idx += 1
+    if (idx >= n) break
+    try {
+      const { value, end } = rawDecodeJson(src, idx)
+      out.push(value)
+      idx = end
+    } catch {
+      break
+    }
+  }
+  return out
+}
+
+/** Minimal JSONDecoder.raw_decode equivalent for NDJSON fences. */
+function rawDecodeJson(src, start) {
+  const slice = src.slice(start)
+  // Prefer full-parse of a prefix: try expanding until JSON.parse succeeds.
+  // Objects/arrays: track brace depth; primitives: end at whitespace/newline.
+  const first = slice[0]
+  if (first === '{' || first === '[') {
+    let depth = 0
+    let inStr = false
+    let esc = false
+    for (let i = 0; i < slice.length; i += 1) {
+      const ch = slice[i]
+      if (inStr) {
+        if (esc) esc = false
+        else if (ch === '\\') esc = true
+        else if (ch === '"') inStr = false
+        continue
+      }
+      if (ch === '"') {
+        inStr = true
+        continue
+      }
+      if (ch === '{' || ch === '[') depth += 1
+      else if (ch === '}' || ch === ']') {
+        depth -= 1
+        if (depth === 0) {
+          const end = start + i + 1
+          return { value: JSON.parse(src.slice(start, end)), end }
+        }
+      }
+    }
+    throw new SyntaxError('unclosed JSON')
+  }
+  const m = slice.match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|^true|^false|^null|^"(?:\\.|[^"\\])*"/)
+  if (!m) throw new SyntaxError('invalid JSON')
+  const end = start + m[0].length
+  return { value: JSON.parse(src.slice(start, end)), end }
+}
+
 export function parseToolCallsFromText(text) {
   const out = []
   const seen = new Set()
@@ -1340,13 +1402,13 @@ export function parseToolCallsFromText(text) {
     seen.add(key)
     out.push(call)
   }
+  const addValue = (data) => {
+    if (Array.isArray(data)) data.forEach(add)
+    else add(data)
+  }
   const src = String(text || '')
   for (const m of src.matchAll(btftoolFenceRe())) {
-    try {
-      const data = JSON.parse(m[1].trim())
-      if (Array.isArray(data)) data.forEach(add)
-      else add(data)
-    } catch { /* ignore */ }
+    for (const data of loadsJsonValues(m[1])) addValue(data)
   }
   for (const m of src.matchAll(xmlToolRe())) {
     const body = String(m[1] || '').trim()

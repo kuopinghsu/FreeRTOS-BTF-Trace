@@ -33,9 +33,28 @@ describe('AI panel survives right-panel tab switches', () => {
 })
 
 describe('AI conversation turn layout', () => {
-  it('offers Apply GUI actions under the log (desktop parity)', () => {
+  it('offers Apply GUI actions as a fallback under the log (desktop parity)', () => {
     assert.match(aiPanel, /Apply GUI actions/)
     assert.match(aiPanel, /Undo last actions/)
+    assert.match(aiPanel, /toolBarFallback/)
+  })
+
+  it('is chat-first: log stretches; templates are one row plus More', () => {
+    const logAt = aiPanel.indexOf('class="ai-log"')
+    const tplAt = aiPanel.indexOf('class="ai-templates"')
+    const planAt = aiPanel.indexOf('planStatusText')
+    assert.ok(logAt >= 0 && tplAt > logAt)
+    assert.ok(planAt > logAt && planAt < tplAt)
+    assert.match(aiPanel, /\.ai-log \{ flex: 1; min-height: 0;/)
+    assert.match(aiPanel, /primaryTemplates/)
+    assert.match(aiPanel, /More templates/)
+    assert.match(aiPanel, /templateMenuGroups/)
+    assert.match(aiPanel, /class="ai-plan-status"/)
+    assert.match(aiPanel, /Language…/)
+    assert.match(aiPanel, /Settings…/)
+    assert.doesNotMatch(aiPanel, /overflowOpen/)
+    assert.match(aiPanel, /formatEvidencePanelMarkdown/)
+    assert.doesNotMatch(aiPanel, /evidencePanel/)
   })
 
   it('opens a mermaid zoom overlay from the figure', () => {

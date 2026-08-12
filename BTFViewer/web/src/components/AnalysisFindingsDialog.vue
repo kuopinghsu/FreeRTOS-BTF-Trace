@@ -24,6 +24,7 @@
       </div>
       <p class="analysis-note">
         Heuristic summary of load balance, WCET, blocking, thrashing, deadlines, tick health, and sync.
+        Select a finding before Verify or Auto investigate.
       </p>
       <div class="analysis-body">
         <ul
@@ -39,7 +40,8 @@
             ]"
             @click="selectedId = f.id || ''"
           >
-            <strong>{{ f.title }}</strong> — {{ f.text }}
+            <div class="finding-title">{{ f.title }}</div>
+            <div class="finding-text">{{ f.text }}</div>
           </li>
         </ul>
         <div
@@ -50,6 +52,7 @@
         </div>
       </div>
       <div class="analysis-footer">
+        <div class="analysis-footer-ai-label">Ask AI</div>
         <div class="analysis-footer-left">
           <button
             type="button"
@@ -169,8 +172,8 @@ function saveAsText() {
 }
 
 .analysis-dialog {
-  width: min(720px, calc(100vw - 32px));
-  max-height: min(80vh, 640px);
+  width: min(980px, calc(100vw - 24px));
+  max-height: min(84vh, 680px);
   display: flex;
   flex-direction: column;
   background: var(--panel-bg);
@@ -206,34 +209,47 @@ function saveAsText() {
 
 .analysis-note {
   margin: 0;
-  padding: 8px 14px 0;
+  padding: 10px 16px 4px;
   font-size: 12px;
+  line-height: 1.45;
   color: var(--fg-dim);
 }
 
 .analysis-body {
   flex: 1 1 auto;
   overflow: auto;
-  padding: 8px 14px 12px;
+  padding: 8px 16px 14px;
+  min-height: 180px;
 }
 
 .analysis-list {
   margin: 0;
-  padding: 0 0 0 18px;
+  padding: 0;
+  list-style: none;
 }
 
 .analysis-list li {
-  margin: 8px 0;
+  margin: 0 0 8px;
   line-height: 1.45;
   font-size: 13px;
   cursor: pointer;
-  border-radius: 4px;
-  padding: 2px 4px;
-  margin-left: -4px;
+  border-radius: 6px;
+  padding: 10px 12px;
 }
 
 .analysis-list li.selected {
   background: var(--tb-btn-hover, rgba(255, 255, 255, 0.08));
+  outline: 1px solid rgba(52, 152, 219, 0.45);
+}
+
+.finding-title {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.finding-text {
+  opacity: 0.92;
+  line-height: 1.45;
 }
 
 .analysis-list .sev-warning { color: #d68910; }
@@ -248,22 +264,32 @@ function saveAsText() {
 
 .analysis-footer {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px 14px;
   border-top: 1px solid var(--border);
+}
+
+.analysis-footer-ai-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--fg-dim);
 }
 
 .analysis-footer-left {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-wrap: nowrap;
+  gap: 10px;
+  overflow-x: auto;
 }
 
 .analysis-footer-right {
   display: flex;
+  justify-content: space-between;
   gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
 }
 
 .analysis-btn {
@@ -271,9 +297,12 @@ function saveAsText() {
   background: transparent;
   color: var(--fg);
   border-radius: 6px;
-  padding: 6px 14px;
+  padding: 8px 16px;
   font-size: 12px;
   cursor: pointer;
+  min-height: 34px;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .analysis-btn:hover {

@@ -48,7 +48,6 @@ export const AI_RESPONSE_LANGUAGES = [
   'German',
   'French',
   'Spanish',
-  'Klingon (tlhIngan Hol)',
 ]
 
 /** Keep in sync with btf_viewer_pkg/ai_assistant.py (seconds). */
@@ -67,6 +66,28 @@ export const AI_COMPARE_TEMPLATE_ID = 'compare'
 // Templates that only make sense for a multi-core (SMP) trace — keep in sync
 // with btf_viewer_pkg/ai_assistant.py AI_SMP_ONLY_TEMPLATE_IDS.
 export const AI_SMP_ONLY_TEMPLATE_IDS = new Set(['migrations', 'balance'])
+
+/** Always-visible chips (one row). Keep in sync with btf_viewer_pkg/ai_assistant.py. */
+export const AI_TEMPLATE_PRIMARY_IDS = [
+  'investigate',
+  'findings',
+  'explain_region',
+  'auto_investigate',
+]
+
+/** Overflow menu groups for templates not in AI_TEMPLATE_PRIMARY_IDS. */
+export const AI_TEMPLATE_MENU_GROUPS = [
+  { label: 'Diagnose', ids: ['root_cause', 'verify', 'triage', 'diagnostic_report'] },
+  { label: 'Compare', ids: ['compare'] },
+  {
+    label: 'Metrics',
+    ids: [
+      'task_profile', 'latency', 'wcet', 'migrations', 'balance',
+      'tick', 'priority', 'deadlines',
+    ],
+  },
+  { label: 'What-if / Optimize', ids: ['what_if', 'optimize'] },
+]
 
 /** @type {{ id: string, label: string, prompt: string }[]} */
 export const AI_TEMPLATE_QUESTIONS = [

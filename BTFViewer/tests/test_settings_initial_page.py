@@ -216,6 +216,19 @@ class SettingsInitialPageTests(unittest.TestCase):
             text = (BTF_ROOT / rel).read_text(encoding="utf-8")
             self.assertIn(needle, text, rel)
 
+    def test_bundle_includes_demo_http_server(self) -> None:
+        """Demo API needs http.server in SHARED_IMPORTS (per-module imports are stripped)."""
+        needle = "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer"
+        for rel in (
+            "btf_viewer_pkg/_imports.py",
+            "scripts/bundle_viewer.py",
+        ):
+            text = (BTF_ROOT / rel).read_text(encoding="utf-8")
+            self.assertIn(needle, text, rel)
+        bundled = BTF_ROOT / "builds" / "btf_viewer.py"
+        if bundled.is_file():
+            self.assertIn(needle, bundled.read_text(encoding="utf-8"))
+
     def test_bundle_includes_rc_secret_imports(self) -> None:
         """Monolith strips per-module imports; enc1: crypto needs these."""
         text = (BTF_ROOT / "scripts" / "bundle_viewer.py").read_text(encoding="utf-8")

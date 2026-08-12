@@ -365,7 +365,7 @@
                 ></span>
                 <label
                   class="settings-check"
-                  title="When on, tool calls from the model update the timeline immediately. When off, the chat shows Apply / Skip on each action card and Apply GUI actions under the log."
+                  title="When on, tool calls from the model update the timeline immediately. When off, the chat shows Apply / Skip on each action card."
                 >
                   <input
                     v-model="draft.aiAutoApply"

@@ -199,6 +199,8 @@ def _in_ai_actions_bar(w: QWidget) -> bool:
     while p is not None:
         if p.objectName() == "aiActions":
             return True
+        if p.objectName() == "aiTemplates":
+            return True
         p = p.parentWidget()
     return False
 

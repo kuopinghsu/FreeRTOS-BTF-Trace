@@ -257,8 +257,8 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "'Simulation / estimate — not measured behavior' and cite evidence. "
     "Tool timestamps use the same numeric trace time "
     "unit as jump:TIME. After tools run, summarise what you changed. "
-    "If you cannot emit a native function call, emit one fenced btftool JSON "
-    "object per action, for example:\n"
+    "If you cannot emit a native function call, emit a fenced btftool JSON "
+    "block: one object, a JSON array, or several objects (one per line), e.g.:\n"
     "```btftool\n"
     '{"name": "set_cursors", "arguments": {"timestamps": [1805120, 1810000]}}\n'
     "```\n"
@@ -1471,6 +1471,34 @@ def _tool_call_from_obj(obj: Any, idx: int) -> Optional[Dict[str, Any]]:
     return {"id": f"text_{idx}", "name": name, "arguments": ok or args}
 
 
+def _loads_json_values(body: str) -> List[Any]:
+    """Parse one JSON value, a JSON array, or NDJSON (several values in one fence)."""
+    src = (body or "").strip()
+    if not src:
+        return []
+    try:
+        data = json.loads(src)
+        return [data]
+    except (TypeError, ValueError):
+        pass
+    out: List[Any] = []
+    decoder = json.JSONDecoder()
+    idx = 0
+    n = len(src)
+    while idx < n:
+        while idx < n and src[idx].isspace():
+            idx += 1
+        if idx >= n:
+            break
+        try:
+            val, end = decoder.raw_decode(src, idx)
+        except ValueError:
+            break
+        out.append(val)
+        idx = end
+    return out
+
+
 def parse_tool_calls_from_text(text: str) -> List[Dict[str, Any]]:
     """Parse ```btftool fences and <tool_call> blobs (models without native tools)."""
     out: List[Dict[str, Any]] = []
@@ -1486,18 +1514,17 @@ def parse_tool_calls_from_text(text: str) -> List[Dict[str, Any]]:
         seen.add(key)
         out.append(call)
 
-    src = text or ""
-    for m in _BTFTOOL_FENCE_RE.finditer(src):
-        body = (m.group(1) or "").strip()
-        try:
-            data = json.loads(body)
-        except (TypeError, ValueError):
-            continue
+    def _add_value(data: Any) -> None:
         if isinstance(data, list):
             for item in data:
                 _add(item)
         else:
             _add(data)
+
+    src = text or ""
+    for m in _BTFTOOL_FENCE_RE.finditer(src):
+        for data in _loads_json_values(m.group(1) or ""):
+            _add_value(data)
     for m in _XML_TOOL_RE.finditer(src):
         body = (m.group(1) or "").strip()
         try:

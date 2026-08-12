@@ -6,13 +6,13 @@ hotkeys, waits, and interactive confirms.
 
 Example::
 
-    python3 scripts/demo_runner.py scripts/demos/demo_8cores/demo_8cores.xml --launch
+    python3 scripts/demo_runner.py demos/demo_8cores/demo_8cores.xml --launch
     python3 scripts/demo_runner.py demos/my_demo.xml --dry-run --steps 1-5
     python3 scripts/demo_runner.py demos/my_demo.xml --interactive --short
 
 XML overview
 ------------
-See ``scripts/demos/demo_8cores/demo_8cores.xml`` for a full example.
+See ``demos/demo_8cores/demo_8cores.xml`` for a full example.
 
 .. code-block:: xml
 
@@ -43,13 +43,13 @@ Actions: ``voice``, ``audio`` / ``play``, ``wait``, ``hotkey``, ``press``, ``typ
 
 Demo API (viewer must be started with ``BTFVIEWER_DEMO_API=1``, default port 8765)::
 
-    <highlight task="CS[28]"/>
+    <highlight task="CS[27]"/>
     <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
     <zoom_range start="3.085" end="3.310" unit="s"/>
     <stats_section id="health" expand="true" collapse_others="true"/>
     <stats_section id="block,priority" expand="true" collapse_others="true"/>
     <stats_reset/>
-    <jump_wcet task="CS[28]"/>
+    <jump_wcet task="CS[27]"/>
     <limit on="true"/>
     <clear_cursors/>
     <clear_highlight/>
@@ -59,7 +59,7 @@ Demo API (viewer must be started with ``BTFVIEWER_DEMO_API=1``, default port 876
     <cpu_load on="true"/>
     <analysis/>
     <analysis close="true"/>
-    <find query="CS[28]"/>
+    <find query="CS[27]"/>
     <find clear="true"/>
     <settings page="AI"/>
 
@@ -1511,8 +1511,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "xml",
         type=Path,
         nargs="?",
-        default=SCRIPT_DIR / "demos" / "demo_8cores" / "demo_8cores.xml",
-        help="demo description XML (default: scripts/demos/demo_8cores/demo_8cores.xml)",
+        default=BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.xml",
+        help="demo description XML (default: demos/demo_8cores/demo_8cores.xml)",
     )
     ap.add_argument("--launch", action="store_true", help="start app from <meta>/<launch> or <trace>")
     ap.add_argument("--attach-wait", type=float, default=4.0, help="wait after launch")

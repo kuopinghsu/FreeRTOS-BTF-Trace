@@ -27,6 +27,8 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     AI_PRESET_OLLAMA,
     AI_PRESET_OPENAI,
     AI_CHAT_TIMEOUT_S,
+    AI_TEMPLATE_MENU_GROUPS,
+    AI_TEMPLATE_PRIMARY_IDS,
     AI_TEMPLATE_QUESTIONS,
     DEFAULT_AI_BASE_URL,
     DEFAULT_AI_PRESET,
@@ -109,6 +111,38 @@ class AiAssistantHelpersTests(unittest.TestCase):
             if tid == "auto_investigate":
                 break
         self.assertEqual(list(AI_TEMPLATE_QUESTIONS), web)
+
+    def test_template_primary_ids_match_web_and_cover_all(self) -> None:
+        """Primary chips + More groups stay in sync with ollamaClient.js."""
+        import re
+
+        all_ids = [t[0] for t in AI_TEMPLATE_QUESTIONS]
+        menu_ids = [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids]
+        self.assertEqual(
+            list(AI_TEMPLATE_PRIMARY_IDS),
+            ["investigate", "findings", "explain_region", "auto_investigate"],
+        )
+        self.assertEqual(sorted(list(AI_TEMPLATE_PRIMARY_IDS) + menu_ids), sorted(all_ids))
+        self.assertFalse(set(AI_TEMPLATE_PRIMARY_IDS) & set(menu_ids))
+
+        js = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(encoding="utf-8")
+        prim = re.search(
+            r"export const AI_TEMPLATE_PRIMARY_IDS = \[([^\]]+)\]", js, re.S)
+        self.assertIsNotNone(prim)
+        web_primary = re.findall(r"'([^']+)'", prim.group(1))
+        self.assertEqual(list(AI_TEMPLATE_PRIMARY_IDS), web_primary)
+
+        groups = re.search(
+            r"export const AI_TEMPLATE_MENU_GROUPS = \[([\s\S]*?)\]\s*\n\n", js)
+        self.assertIsNotNone(groups)
+        web_groups = []
+        for gm in re.finditer(
+            r"label:\s*'([^']+)'\s*,\s*ids:\s*\[([^\]]+)\]", groups.group(1)
+        ):
+            web_groups.append(
+                (gm.group(1), tuple(re.findall(r"'([^']+)'", gm.group(2))))
+            )
+        self.assertEqual(list(AI_TEMPLATE_MENU_GROUPS), web_groups)
 
     def test_normalize_ai_base_url(self) -> None:
         self.assertEqual(

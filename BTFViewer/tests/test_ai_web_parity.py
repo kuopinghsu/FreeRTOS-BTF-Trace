@@ -18,6 +18,7 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     AI_LIST_MODELS_TIMEOUT_S,
     AI_SYSTEM_PROMPT,
     AI_TEST_TIMEOUT_S,
+    ASK_EVENT_PROMPT,
 )
 from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_RAW_METRIC_NAMES,
@@ -32,10 +33,39 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     ai_viewer_tools,
     is_query_tool,
     max_tool_rounds,
+    parse_tool_calls_from_text,
+    strip_parsed_tool_markup,
 )
 
 
 class AiWebParityTests(unittest.TestCase):
+    def test_response_languages_and_evidence_labels_match_web(self) -> None:
+        """Language picker + evidence chrome keys stay Desktop/Web aligned."""
+        from btf_viewer_pkg.ai_assistant import AI_RESPONSE_LANGUAGES
+        from btf_viewer_pkg.ai_investigation import EVIDENCE_PANEL_LABELS
+
+        ollama = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(
+            encoding="utf-8")
+        inv_js = (BTF_ROOT / "web/src/utils/aiInvestigation.js").read_text(
+            encoding="utf-8")
+        block = re.search(
+            r"export const AI_RESPONSE_LANGUAGES = \[([\s\S]*?)\]\n", ollama)
+        self.assertIsNotNone(block)
+        js_langs = tuple(re.findall(r"'([^']+)'", block.group(1)))
+        self.assertEqual(js_langs, AI_RESPONSE_LANGUAGES)
+        self.assertEqual(set(EVIDENCE_PANEL_LABELS), set(AI_RESPONSE_LANGUAGES))
+        for lang in AI_RESPONSE_LANGUAGES:
+            self.assertIn(lang, inv_js)
+        self.assertNotIn("Klingon", "".join(AI_RESPONSE_LANGUAGES))
+        self.assertNotIn("Klingon", inv_js)
+        self.assertNotIn("Klingon", ollama)
+        for key in (
+            "role", "evidence", "confidence", "score", "investigation",
+            "high", "medium", "low",
+        ):
+            for labels in EVIDENCE_PANEL_LABELS.values():
+                self.assertIn(key, labels)
+
     def test_timeouts_match_web(self) -> None:
         js = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(encoding="utf-8")
         self.assertIn(f"AI_CHAT_TIMEOUT_MS = {int(AI_CHAT_TIMEOUT_S * 1000)}", js)
@@ -50,6 +80,38 @@ class AiWebParityTests(unittest.TestCase):
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
         self.assertRegex(js, rf"MAX_TOOL_ROUNDS\s*=\s*{max_tool_rounds()}")
         self.assertEqual(max_tool_rounds(), 4)
+
+    def test_btftool_ndjson_and_ask_event_match_web(self) -> None:
+        """Text-tool fences + Ask-event prompt stay aligned with the web client."""
+        js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
+        ollama = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(
+            encoding="utf-8")
+        clause = "one object, a JSON array, or several objects"
+        self.assertIn(clause, AI_TOOL_SYSTEM_ADDENDUM)
+        self.assertIn(clause, js)
+        self.assertIn("function loadsJsonValues", js)
+        self.assertIn("def _loads_json_values", (
+            BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8"))
+        self.assertIn("if (textCalls.length) content = stripParsedToolMarkup", ollama)
+        self.assertIn("ASK_EVENT_PROMPT", ollama)
+        self.assertIn(ASK_EVENT_PROMPT.split("{task}")[0], ollama)
+        self.assertIn("Call correlate_events and query_raw_metric", ollama)
+        # NDJSON fence (same shape that previously leaked raw JSON in chat)
+        text = (
+            "Focusing the segment.\n"
+            "```btftool\n"
+            '{"name": "set_cursors", "arguments": {"timestamps": [1036516, 1036826]}}\n'
+            '{"name": "highlight_task", "arguments": {"task_name_or_id": "CS[24]"}}\n'
+            '{"name": "zoom_to_range", "arguments": '
+            '{"start_time": 1036400, "end_time": 1037000}}\n'
+            "```\n"
+        )
+        names = [c["name"] for c in parse_tool_calls_from_text(text)]
+        self.assertEqual(
+            names, ["set_cursors", "highlight_task", "zoom_to_range"])
+        stripped = strip_parsed_tool_markup(text)
+        self.assertNotIn("btftool", stripped)
+        self.assertIn("Focusing the segment.", stripped)
 
     def test_viewer_tool_names_and_query_set_match_web(self) -> None:
         """Desktop AI_VIEWER_TOOL_NAMES / is_query_tool stay aligned with web."""
@@ -119,7 +181,15 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("Investigate…", stats)
         self.assertIn("Root cause…", stats)
         self.assertIn("emit('query-ai', 'investigate')", dlg)
-        self.assertIn('_query_with_ai(ai_enabled, "investigate")', stats)
+        # Desktop wires templates via _make_ai_btn(..., template) → _query_with_ai.
+        self.assertRegex(
+            stats,
+            re.compile(
+                r'_make_ai_btn\(\s*"Investigate…".*?"investigate"',
+                re.DOTALL,
+            ),
+        )
+        self.assertIn("self._query_with_ai(", stats)
         self.assertIn("wants_ai_template", stats)
         readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
         ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")

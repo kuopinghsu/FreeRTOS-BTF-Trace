@@ -1143,6 +1143,420 @@ def extract_evidence_panel_payload(
     return payload
 
 
+def _evidence_jump_token(value: Any) -> str:
+    try:
+        tn = float(value)
+        return str(int(tn)) if tn.is_integer() else str(tn)
+    except (TypeError, ValueError):
+        return str(value or "")
+
+
+# UI strings for Evidence / Reasoning and plan status. Keep in sync with
+# web/src/utils/aiInvestigation.js EVIDENCE_PANEL_LABELS.
+EVIDENCE_PANEL_LABELS: Dict[str, Dict[str, str]] = {
+    "English": {
+        "role": "Evidence / Reasoning",
+        "evidence": "Evidence",
+        "evidence_chain": "Evidence chain",
+        "confidence": "Confidence",
+        "score": "AI Evidence Score — heuristic",
+        "alternatives": "Alternative hypotheses",
+        "checklist": "Verification checklist",
+        "tree": "Investigation tree",
+        "investigation": "Investigation",
+        "done": "done",
+        "critical_path": "Critical path",
+        "correlated_events": "Correlated events",
+        "performance_comparison": "Performance comparison",
+        "correlation": "Correlation",
+        "item": "item",
+        "check": "check",
+        "high": "High",
+        "medium": "Medium",
+        "low": "Low",
+        "untested": "untested",
+        "confirmed": "confirmed",
+        "rejected": "rejected",
+        "plausible": "plausible",
+    },
+    "Traditional Chinese (繁體中文)": {
+        "role": "證據 / 推理",
+        "evidence": "證據",
+        "evidence_chain": "證據鏈",
+        "confidence": "置信度",
+        "score": "AI 證據評分 — 啟發式",
+        "alternatives": "替代假設",
+        "checklist": "驗證清單",
+        "tree": "調查樹",
+        "investigation": "調查",
+        "done": "完成",
+        "critical_path": "關鍵路徑",
+        "correlated_events": "相關事件",
+        "performance_comparison": "性能對比",
+        "correlation": "相關性",
+        "item": "項目",
+        "check": "檢查",
+        "high": "高",
+        "medium": "中",
+        "low": "低",
+        "untested": "未驗證",
+        "confirmed": "已確認",
+        "rejected": "已排除",
+        "plausible": "可能",
+    },
+    "Simplified Chinese (简体中文)": {
+        "role": "证据 / 推理",
+        "evidence": "证据",
+        "evidence_chain": "证据链",
+        "confidence": "置信度",
+        "score": "AI 证据评分 — 启发式",
+        "alternatives": "替代假设",
+        "checklist": "验证清单",
+        "tree": "调查树",
+        "investigation": "调查",
+        "done": "完成",
+        "critical_path": "关键路径",
+        "correlated_events": "相关事件",
+        "performance_comparison": "性能对比",
+        "correlation": "相关性",
+        "item": "项目",
+        "check": "检查",
+        "high": "高",
+        "medium": "中",
+        "low": "低",
+        "untested": "未验证",
+        "confirmed": "已确认",
+        "rejected": "已排除",
+        "plausible": "可能",
+    },
+    "Japanese (日本語)": {
+        "role": "根拠 / 推論",
+        "evidence": "根拠",
+        "evidence_chain": "根拠チェーン",
+        "confidence": "信頼度",
+        "score": "AI 根拠スコア — ヒューリスティック",
+        "alternatives": "代替仮説",
+        "checklist": "検証チェックリスト",
+        "tree": "調査ツリー",
+        "investigation": "調査",
+        "done": "完了",
+        "critical_path": "クリティカルパス",
+        "correlated_events": "相関イベント",
+        "performance_comparison": "性能比較",
+        "correlation": "相関",
+        "item": "項目",
+        "check": "チェック",
+        "high": "高",
+        "medium": "中",
+        "low": "低",
+        "untested": "未検証",
+        "confirmed": "確認済み",
+        "rejected": "却下",
+        "plausible": "妥当",
+    },
+    "Korean (한국어)": {
+        "role": "증거 / 추론",
+        "evidence": "증거",
+        "evidence_chain": "증거 체인",
+        "confidence": "신뢰도",
+        "score": "AI 증거 점수 — 휴리스틱",
+        "alternatives": "대안 가설",
+        "checklist": "검증 체크리스트",
+        "tree": "조사 트리",
+        "investigation": "조사",
+        "done": "완료",
+        "critical_path": "크리티컬 패스",
+        "correlated_events": "상관 이벤트",
+        "performance_comparison": "성능 비교",
+        "correlation": "상관",
+        "item": "항목",
+        "check": "검사",
+        "high": "높음",
+        "medium": "중간",
+        "low": "낮음",
+        "untested": "미검증",
+        "confirmed": "확인됨",
+        "rejected": "기각",
+        "plausible": "가능",
+    },
+    "German": {
+        "role": "Belege / Begründung",
+        "evidence": "Belege",
+        "evidence_chain": "Belegkette",
+        "confidence": "Vertrauen",
+        "score": "AI-Belegscore — heuristisch",
+        "alternatives": "Alternative Hypothesen",
+        "checklist": "Prüfliste",
+        "tree": "Untersuchungsbaum",
+        "investigation": "Untersuchung",
+        "done": "fertig",
+        "critical_path": "Kritischer Pfad",
+        "correlated_events": "Korrelierte Ereignisse",
+        "performance_comparison": "Leistungsvergleich",
+        "correlation": "Korrelation",
+        "item": "Eintrag",
+        "check": "Prüfung",
+        "high": "Hoch",
+        "medium": "Mittel",
+        "low": "Niedrig",
+        "untested": "ungeprüft",
+        "confirmed": "bestätigt",
+        "rejected": "abgelehnt",
+        "plausible": "plausibel",
+    },
+    "French": {
+        "role": "Preuves / Raisonnement",
+        "evidence": "Preuves",
+        "evidence_chain": "Chaîne de preuves",
+        "confidence": "Confiance",
+        "score": "Score de preuve IA — heuristique",
+        "alternatives": "Hypothèses alternatives",
+        "checklist": "Liste de vérification",
+        "tree": "Arbre d'investigation",
+        "investigation": "Investigation",
+        "done": "terminé",
+        "critical_path": "Chemin critique",
+        "correlated_events": "Événements corrélés",
+        "performance_comparison": "Comparaison de performance",
+        "correlation": "Corrélation",
+        "item": "élément",
+        "check": "contrôle",
+        "high": "Élevée",
+        "medium": "Moyenne",
+        "low": "Faible",
+        "untested": "non testé",
+        "confirmed": "confirmé",
+        "rejected": "rejeté",
+        "plausible": "plausible",
+    },
+    "Spanish": {
+        "role": "Evidencia / Razonamiento",
+        "evidence": "Evidencia",
+        "evidence_chain": "Cadena de evidencia",
+        "confidence": "Confianza",
+        "score": "Puntuación de evidencia IA — heurística",
+        "alternatives": "Hipótesis alternativas",
+        "checklist": "Lista de verificación",
+        "tree": "Árbol de investigación",
+        "investigation": "Investigación",
+        "done": "hecho",
+        "critical_path": "Ruta crítica",
+        "correlated_events": "Eventos correlacionados",
+        "performance_comparison": "Comparación de rendimiento",
+        "correlation": "Correlación",
+        "item": "elemento",
+        "check": "comprobación",
+        "high": "Alta",
+        "medium": "Media",
+        "low": "Baja",
+        "untested": "sin probar",
+        "confirmed": "confirmado",
+        "rejected": "rechazado",
+        "plausible": "plausible",
+    },
+}
+
+
+def normalize_response_language(lang: str) -> str:
+    """Map a reply-language setting to an EVIDENCE_PANEL_LABELS key."""
+    want = (lang or "").strip()
+    if want in EVIDENCE_PANEL_LABELS:
+        return want
+    low = want.lower()
+    for key in EVIDENCE_PANEL_LABELS:
+        if key.lower() == low or key.lower() in low or low in key.lower():
+            return key
+    if "简体" in want or "simplified" in low:
+        return "Simplified Chinese (简体中文)"
+    if "繁體" in want or "繁体" in want or "traditional" in low:
+        return "Traditional Chinese (繁體中文)"
+    if "日本" in want or "japanese" in low:
+        return "Japanese (日本語)"
+    if "한국" in want or "korean" in low:
+        return "Korean (한국어)"
+    return "English"
+
+
+def evidence_panel_labels(response_language: str = "English") -> Dict[str, str]:
+    key = normalize_response_language(response_language)
+    return dict(EVIDENCE_PANEL_LABELS[key])
+
+
+_EVIDENCE_STATUS_KEYS: Tuple[str, ...] = (
+    "high", "medium", "low", "untested", "confirmed", "rejected", "plausible",
+)
+_EVIDENCE_PREFIX_KEYS: Tuple[str, ...] = (
+    "critical_path", "correlated_events", "performance_comparison",
+)
+
+
+def _canonical_evidence_status(text: str) -> Optional[str]:
+    """Map an English or already-localized status token back to its key."""
+    t = str(text or "").strip()
+    if not t:
+        return None
+    low = t.lower()
+    for key in _EVIDENCE_STATUS_KEYS:
+        if low == key:
+            return key
+    for lang_labels in EVIDENCE_PANEL_LABELS.values():
+        for key in _EVIDENCE_STATUS_KEYS:
+            if t == lang_labels.get(key):
+                return key
+    return None
+
+
+def _localize_evidence_token(text: str, labels: Dict[str, str]) -> str:
+    t = str(text or "").strip()
+    if not t:
+        return t
+    canon = _canonical_evidence_status(t)
+    if canon:
+        return labels[canon]
+    # Correlation N — accept English or any localized "Correlation" prefix.
+    for lang_labels in EVIDENCE_PANEL_LABELS.values():
+        corr = str(lang_labels.get("correlation") or "").strip()
+        if corr and (t.startswith(corr + " ") or t == corr):
+            rest = t[len(corr):].strip()
+            return f"{labels['correlation']} {rest}".strip()
+    if t.startswith("Correlation "):
+        return f"{labels['correlation']} {t[12:].strip()}"
+    english_prefixes = {
+        "critical_path": ("Critical path:", "Critical path"),
+        "correlated_events": ("Correlated events:", "Correlated events"),
+        "performance_comparison": (
+            "Performance comparison:", "Performance comparison",
+        ),
+    }
+    for lk in _EVIDENCE_PREFIX_KEYS:
+        candidates = list(english_prefixes.get(lk, ()))
+        for lang_labels in EVIDENCE_PANEL_LABELS.values():
+            localized = str(lang_labels.get(lk) or "").strip()
+            if localized:
+                candidates.extend((f"{localized}:", localized))
+        for prefix in candidates:
+            if t == prefix.rstrip(":"):
+                return labels[lk]
+            if t.startswith(prefix):
+                rest = t[len(prefix):].strip(" :")
+                if rest:
+                    return f"{labels[lk]}: {rest}"
+                return labels[lk]
+    return t
+
+
+def format_evidence_panel_markdown(
+    data: Optional[Dict[str, Any]],
+    response_language: str = "English",
+) -> str:
+    """Markdown for Evidence / Reasoning (panel + conversation log + export)."""
+    if not isinstance(data, dict):
+        return ""
+    labels = evidence_panel_labels(response_language)
+    lines: List[str] = []
+    conclusion = _localize_evidence_token(
+        str(data.get("conclusion") or "").strip(), labels)
+    if conclusion:
+        lines.append(f"**{conclusion}**")
+    subtitle = str(data.get("subtitle") or "").strip()
+    if subtitle:
+        lines.append(subtitle[:320])
+    evidence = data.get("evidence") or []
+    if evidence:
+        lines.append("")
+        lines.append(f"**{labels['evidence']}**")
+        for ev in evidence:
+            if not isinstance(ev, dict):
+                continue
+            label = str(ev.get("label") or labels["item"])
+            t = ev.get("time")
+            if t is not None:
+                token = _evidence_jump_token(t)
+                lines.append(f"- {label} jump:{token}")
+            else:
+                lines.append(f"- {label}")
+    chain = str(data.get("evidence_chain") or "").strip()
+    if chain:
+        lines.append("")
+        lines.append(f"**{labels['evidence_chain']}**")
+        lines.append(chain)
+    conf = data.get("confidence")
+    if conf:
+        lines.append("")
+        lines.append(
+            f"**{labels['confidence']}:** "
+            f"{_localize_evidence_token(str(conf), labels)}"
+        )
+    score = data.get("evidence_score")
+    if score is not None:
+        bar = str(data.get("evidence_score_bar") or "")
+        lines.append("")
+        lines.append(f"**{labels['score']}:** {bar}")
+    alts = data.get("alternatives") or []
+    if alts:
+        lines.append("")
+        lines.append(f"**{labels['alternatives']}**")
+        for alt in alts:
+            if not isinstance(alt, dict):
+                continue
+            hyp = str(alt.get("hypothesis") or "")
+            status = _localize_evidence_token(
+                str(alt.get("status") or "untested"), labels)
+            why = str(alt.get("why") or "")
+            lines.append(f"- *{hyp}* ({status}) — {why}")
+    checks = data.get("checks") or []
+    if checks:
+        lines.append("")
+        lines.append(f"**{labels['checklist']}**")
+        for c in checks:
+            if not isinstance(c, dict):
+                continue
+            label = str(c.get("label") or c.get("metric") or labels["check"])
+            status = _localize_evidence_token(str(c.get("status") or ""), labels)
+            detail = str(c.get("detail") or "")
+            lines.append(f"- {label}: {status} — {detail}")
+    root_chain = data.get("root_cause_chain") or []
+    hyps = data.get("hypotheses") or []
+    if root_chain or hyps:
+        tree_src = investigation_tree_mermaid(root_chain, hyps)
+        if tree_src:
+            lines.append("")
+            lines.append(f"**{labels['tree']}**")
+            lines.append("```mermaid")
+            lines.append(tree_src.rstrip())
+            lines.append("```")
+    return "\n".join(lines).strip()
+
+
+def format_investigation_plan_status(
+    plan: Optional[Dict[str, Any]],
+    response_language: str = "English",
+) -> str:
+    """One-line progress for the Investigation plan strip."""
+    if not isinstance(plan, dict):
+        return ""
+    labels = evidence_panel_labels(response_language)
+    steps = [s for s in (plan.get("steps") or []) if isinstance(s, dict)]
+    total = len(steps)
+    done = sum(1 for s in steps if str(s.get("status") or "") == "done")
+    active = next(
+        (s for s in steps if str(s.get("status") or "") == "active"), None)
+    if active is None:
+        active = next(
+            (s for s in steps if str(s.get("status") or "") != "done"), None)
+    step_label = str(
+        (active or {}).get("label") or (active or {}).get("id") or ""
+    ).strip()
+    inv = labels["investigation"]
+    if not total:
+        return inv
+    if done >= total:
+        return f"{inv}  {done}/{total}  {labels['done']}"
+    if step_label:
+        return f"{inv}  {done}/{total}  {step_label}"
+    return f"{inv}  {done}/{total}"
+
+
 _REGRESSION_TYPES: Tuple[str, ...] = (
     "execution", "scheduling", "synchronization", "migration",
     "load_balance", "unknown",

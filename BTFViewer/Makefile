@@ -3,6 +3,7 @@
 #   make -C BTFViewer              # builds web + desktop → builds/btf_viewer.{html,py}
 #   make -C BTFViewer bundle       # desktop only
 #   make -C BTFViewer web          # web only
+#   make -C BTFViewer demo         # guided demo (demo_8cores)
 #   make -C BTFViewer check-bundle # desktop parity check (CI)
 
 PYTHON ?= python3
@@ -23,7 +24,9 @@ MIGRATION_IMG := ../images/migration.svg
 PANDOC ?= pandoc
 DOCS := $(BUILDS)
 
-.PHONY: all help web bundle check-bundle test test-web test-all ci doc update-images
+DEMO_XML ?= demos/demo_8cores/demo_8cores.xml
+
+.PHONY: all help web bundle check-bundle test test-web test-all ci doc update-images demo
 
 help:
 	@echo "BTF Viewer — make targets"
@@ -34,13 +37,14 @@ help:
 	@echo "  make check-bundle Regenerate bundle; fail if it drifts from sources (CI)"
 	@echo "  make doc          Convert README.md + WORKFLOWS.md → builds/*.pdf (Eisvogel + XeLaTeX)"
 	@echo "  make update-images  Regenerate ../images/stats/*.svg via the desktop CLI"
+	@echo "  make demo         Run guided demo via builds/btf_viewer.py (DEMO_XML, --launch)"
 	@echo "  make test         Desktop unit tests (QT_QPA_PLATFORM=offscreen)"
 	@echo "  make test-web     Web unit tests (node --test)"
 	@echo "  make test-all     Desktop + web unit tests"
 	@echo "  make ci           test-all + check-bundle (local CI parity)"
 	@echo "  make help         Show this help"
 	@echo ""
-	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)"
+	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)  DEMO_XML=$(DEMO_XML)"
 
 
 all: web bundle
@@ -58,6 +62,13 @@ test:
 	QT_QPA_PLATFORM=offscreen \
 	QT_LOGGING_RULES='qt.qpa.fonts.warning=false;qt.qpa.offscreen.warning=false' \
 	$(PYTHON) -m unittest discover -s tests -v
+
+demo: $(OUT)
+	$(PYTHON) scripts/demo_runner.py $(DEMO_XML) --launch
+
+# Build the desktop bundle if missing (demo launches builds/btf_viewer.py).
+$(OUT):
+	$(MAKE) bundle
 
 test-web:
 	$(MAKE) -C web test

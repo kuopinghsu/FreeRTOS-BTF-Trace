@@ -60,7 +60,10 @@ from .ai_investigation import (
     build_investigation_package,
     complete_investigation_plan,
     default_investigation_plan,
+    evidence_panel_labels,
     extract_evidence_panel_payload,
+    format_evidence_panel_markdown,
+    format_investigation_plan_status,
     investigation_tree_mermaid,
     is_agent_template,
     mark_plan_steps_from_tools,
@@ -249,7 +252,6 @@ AI_RESPONSE_LANGUAGES: Tuple[str, ...] = (
     "German",
     "French",
     "Spanish",
-    "Klingon (tlhIngan Hol)",
 )
 
 
@@ -438,6 +440,45 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "run next.",
     ),
 )
+
+# Always-visible chips (one row). Keep in sync with web/src/utils/ollamaClient.js.
+AI_TEMPLATE_PRIMARY_IDS: Tuple[str, ...] = (
+    "investigate",
+    "findings",
+    "explain_region",
+    "auto_investigate",
+)
+
+# Overflow menu groups for the remaining templates (ids must cover every
+# AI_TEMPLATE_QUESTIONS entry that is not in AI_TEMPLATE_PRIMARY_IDS).
+AI_TEMPLATE_MENU_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("Diagnose", ("root_cause", "verify", "triage", "diagnostic_report")),
+    ("Compare", (AI_COMPARE_TEMPLATE_ID,)),
+    (
+        "Metrics",
+        (
+            "task_profile",
+            "latency",
+            "wcet",
+            "migrations",
+            "balance",
+            "tick",
+            "priority",
+            "deadlines",
+        ),
+    ),
+    ("What-if / Optimize", ("what_if", "optimize")),
+)
+
+
+def ai_template_by_id(tid: str) -> Optional[Tuple[str, str, str]]:
+    """Return ``(id, label, prompt)`` for *tid*, or None."""
+    want = (tid or "").strip()
+    for item in AI_TEMPLATE_QUESTIONS:
+        if item[0] == want:
+            return item
+    return None
+
 
 # "Ask AI about this event" (timeline segment context menu) — intentionally
 # kept out of AI_TEMPLATE_QUESTIONS so it does not show in the template grid.
@@ -1651,7 +1692,7 @@ def markdown_to_safe_html(text: str, *, as_img: bool = True) -> str:
 def _ai_message_body_html(role: str, text: str, *, as_img: bool = True) -> str:
     """Message body without the role prefix; assistant replies render as Markdown."""
     body_text = (text or "").strip()
-    if role == "assistant":
+    if role in ("assistant", "evidence"):
         return markdown_to_safe_html(body_text, as_img=as_img) or "<p></p>"
     esc = html.escape(body_text)
     linked = _JUMP_RE.sub(
@@ -1767,22 +1808,38 @@ def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str,
 # Visible role labels (panel + Save As). Keep in sync with aiMarkdown.js.
 AI_ROLE_LABEL_USER = "Your prompt"
 AI_ROLE_LABEL_ASSISTANT = "AI Assistant"
+AI_ROLE_LABEL_EVIDENCE = "Evidence / Reasoning"
 
 
-def ai_role_label(role: str) -> str:
+def ai_role_label(
+    role: str,
+    response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
+) -> str:
     """Human-readable speaker label for a chat turn."""
-    return AI_ROLE_LABEL_USER if role == "user" else AI_ROLE_LABEL_ASSISTANT
+    if role == "user":
+        return AI_ROLE_LABEL_USER
+    if role == "evidence":
+        return evidence_panel_labels(response_language)["role"]
+    return AI_ROLE_LABEL_ASSISTANT
 
 
-def _format_ai_log_html(role: str, text: str, tools: Optional[Sequence[Dict[str, Any]]] = None,
-                        batch_id: str = "") -> str:
+def _format_ai_log_html(
+    role: str,
+    text: str,
+    tools: Optional[Sequence[Dict[str, Any]]] = None,
+    batch_id: str = "",
+    response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
+) -> str:
     """One conversation turn as a self-contained table (Qt will not merge these)."""
     is_user = role == "user"
-    label = html.escape(ai_role_label(role))
-    role_cls = "ai-role-user" if is_user else "ai-role-assistant"
+    label = html.escape(ai_role_label(role, response_language))
+    role_cls = "ai-role-user" if is_user else (
+        "ai-role-evidence" if role == "evidence" else "ai-role-assistant")
     # bgcolor is more reliable in QTextBrowser than CSS background on divs.
-    bg = "#1e3348" if is_user else "#1a2620"
-    bar = "#5b9bd5" if is_user else "#3d9a72"
+    bg = "#1e3348" if is_user else (
+        "#1f2430" if role == "evidence" else "#1a2620")
+    bar = "#5b9bd5" if is_user else (
+        "#8a96a8" if role == "evidence" else "#3d9a72")
     body = _ai_message_body_html(role, text) if (text or "").strip() else ""
     cards = _tool_cards_html(tools or [], batch_id)
     if not body and not cards:
@@ -1796,7 +1853,10 @@ def _format_ai_log_html(role: str, text: str, tools: Optional[Sequence[Dict[str,
     )
 
 
-def _ai_log_document_html(entries: Sequence[Any]) -> str:
+def _ai_log_document_html(
+    entries: Sequence[Any],
+    response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
+) -> str:
     """Full conversation document for QTextBrowser.setHtml (avoids append merge)."""
     if not entries:
         return ""
@@ -1809,6 +1869,7 @@ def _ai_log_document_html(entries: Sequence[Any]) -> str:
             ai_entry_text(entry),
             ai_entry_tools(entry),
             str((entry.get("batch_id") if isinstance(entry, dict) else "") or ""),
+            response_language=response_language,
         ))
     return f"<html><body>{''.join(parts)}</body></html>"
 
@@ -1829,7 +1890,10 @@ def _tool_transcript_lines(entry: Any) -> List[str]:
     return lines
 
 
-def format_ai_conversation_markdown(entries: Sequence[Any]) -> str:
+def format_ai_conversation_markdown(
+    entries: Sequence[Any],
+    response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
+) -> str:
     """Markdown transcript of the conversation (assistant replies kept as-is)."""
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     out = ["# BTF Viewer — AI Conversation", "", f"_Saved {stamp}_", ""]
@@ -1837,7 +1901,7 @@ def format_ai_conversation_markdown(entries: Sequence[Any]) -> str:
         role = ai_entry_role(entry)
         text = (ai_entry_text(entry) or "").strip()
         tools = _tool_transcript_lines(entry)
-        out.append(f"## {ai_role_label(role)}")
+        out.append(f"## {ai_role_label(role, response_language)}")
         out.append("")
         if text:
             out.append(text)
@@ -1848,7 +1912,10 @@ def format_ai_conversation_markdown(entries: Sequence[Any]) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
-def format_ai_conversation_text(entries: Sequence[Any]) -> str:
+def format_ai_conversation_text(
+    entries: Sequence[Any],
+    response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
+) -> str:
     """Plain-text transcript of the conversation."""
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     out = ["BTF Viewer — AI Conversation", f"Saved {stamp}", ""]
@@ -1856,7 +1923,7 @@ def format_ai_conversation_text(entries: Sequence[Any]) -> str:
         role = ai_entry_role(entry)
         text = (ai_entry_text(entry) or "").strip()
         tools = _tool_transcript_lines(entry)
-        out.append(f"{ai_role_label(role)}:")
+        out.append(f"{ai_role_label(role, response_language)}:")
         if text:
             out.append(text)
         if tools:
@@ -1868,16 +1935,20 @@ def format_ai_conversation_text(entries: Sequence[Any]) -> str:
 _AI_HTML_STYLE = ""  # legacy; conversation HTML uses html_report chrome
 
 
-def format_ai_conversation_html_body(entries: Sequence[Any]) -> str:
+def format_ai_conversation_html_body(
+    entries: Sequence[Any],
+    response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
+) -> str:
     """Conversation turn markup only (no document chrome). For report embedding."""
     parts = []
     for entry in entries:
         role = ai_entry_role(entry)
         text = ai_entry_text(entry)
-        cls = "user" if role == "user" else "assistant"
+        cls = "user" if role == "user" else (
+            "evidence" if role == "evidence" else "assistant")
         body = _ai_message_body_html(role, text, as_img=False) if (text or "").strip() else ""
         cards = _tool_cards_html(ai_entry_tools(entry), "", light=True)
-        head = f"<h3>{html.escape(ai_role_label(role))}</h3>"
+        head = f"<h3>{html.escape(ai_role_label(role, response_language))}</h3>"
         parts.append(
             f'<section class="msg {cls}">{head}'
             f'<div class="body">{body}{cards}</div>'
@@ -1886,14 +1957,17 @@ def format_ai_conversation_html_body(entries: Sequence[Any]) -> str:
     return "\n".join(parts)
 
 
-def format_ai_conversation_html(entries: Sequence[Any]) -> str:
-    """Standalone HTML transcript (Markdown rendered, same styling as the panel).
+def format_ai_conversation_html(
+    entries: Sequence[Any],
+    response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
+) -> str:
+    """Standalone HTML transcript (Markdown rendered, same styling as the panel.
 
     Keep in sync with aiMarkdown.js::formatAiConversationHtml; Qt's own
     ``toHtml()`` would export editor-flavoured markup instead.
     """
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    turns = format_ai_conversation_html_body(entries)
+    turns = format_ai_conversation_html_body(entries, response_language)
     body = (
         '<section class="report-card">\n'
         "<h2>Conversation</h2>\n"
@@ -2685,9 +2759,10 @@ def create_ai_assistant_panel(
             title_row.addStretch(1)
             root.addLayout(title_row)
 
-            # Match web: title, then actions above the scroll area.
-            # objectName "aiActions" is excluded from dock width-relax (Ignored
-            # policy + stretch was collapsing these buttons to 0 width).
+            # Match web: title, then compact actions (Clear / Stop / Ask /
+            # Language… / Settings…). objectName "aiActions" is excluded from
+            # dock width-relax (Ignored policy + stretch was collapsing these
+            # buttons to 0 width).
             actions_host = QWidget()
             actions_host.setObjectName("aiActions")
             actions_wrap = QVBoxLayout(actions_host)
@@ -2731,11 +2806,12 @@ def create_ai_assistant_panel(
             self._send_btn.clicked.connect(self.send_current)
             row1.addWidget(self._send_btn)
             self._lang_btn = _ai_action_btn(
-                "Language…", "Preferred language for assistant replies")
+                "Language\u2026", "Preferred language for assistant replies")
             self._lang_btn.clicked.connect(self._choose_language)
             row1.addWidget(self._lang_btn)
             self._settings_btn = _ai_action_btn(
-                "Settings…", "Configure the AI preset, endpoint, and model")
+                "Settings\u2026",
+                "Configure the AI preset, endpoint, and model")
             self._settings_btn.clicked.connect(self._open_settings)
             row1.addWidget(self._settings_btn)
             row1.addStretch(1)
@@ -2743,111 +2819,122 @@ def create_ai_assistant_panel(
 
             root.addWidget(actions_host)
 
-            # Middle content scrolls so header actions (Clear / Stop / Ask) stay visible.
-            mid_scroll = QScrollArea()
-            mid_scroll.setWidgetResizable(True)
-            mid_scroll.setFrameShape(QFrame.Shape.NoFrame)
-            mid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-            mid = QWidget()
-            mid_lay = QVBoxLayout(mid)
-            mid_lay.setContentsMargins(0, 0, 0, 0)
-            mid_lay.setSpacing(6)
-
-            hint = QLabel(
-                "Uses Analysis Findings for the current Statistics scope "
-                "(Trace Compare template uses compare CSV). "
-                "Configure the endpoint in Settings → AI."
-            )
-            hint.setWordWrap(True)
-            hint.setStyleSheet("color:#999;font-size:11px;")
-            mid_lay.addWidget(hint)
-
-            tpl_label = QLabel("Templates")
-            tpl_label.setStyleSheet("font-weight:600;margin-top:2px;")
-            mid_lay.addWidget(tpl_label)
-
-            # Three columns: short labels; keeps the conversation log usable.
-            tpl_grid = QGridLayout()
-            tpl_grid.setContentsMargins(0, 0, 0, 0)
-            tpl_grid.setHorizontalSpacing(4)
-            tpl_grid.setVerticalSpacing(4)
-            tpl_grid.setColumnStretch(0, 1)
-            tpl_grid.setColumnStretch(1, 1)
-            tpl_grid.setColumnStretch(2, 1)
-
-            self._template_btns: List[QPushButton] = []
-            self._compare_btn: Optional[QPushButton] = None
-            self._smp_only_btns: Dict[str, QPushButton] = {}
-            for _pos, (_tid, label, prompt) in enumerate(AI_TEMPLATE_QUESTIONS):
-                btn = QPushButton(label)
-                btn.setToolTip(prompt)
-                btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-                btn.clicked.connect(
-                    lambda _=False, t=_tid, p=prompt: self._use_template(t, p)
-                )
-                tpl_grid.addWidget(btn, _pos // 3, _pos % 3)
-                self._template_btns.append(btn)
-                if _tid == AI_COMPARE_TEMPLATE_ID:
-                    self._compare_btn = btn
-                if _tid in AI_SMP_ONLY_TEMPLATE_IDS:
-                    self._smp_only_btns[_tid] = btn
-            mid_lay.addLayout(tpl_grid)
-
             self._investigation_plan: Optional[Dict[str, Any]] = None
+            self._evidence_payload: Optional[Dict[str, Any]] = None
             self._active_template_id = ""
-            self._plan_label = QLabel("Investigation plan")
-            self._plan_label.setStyleSheet("font-weight:600;margin-top:2px;")
-            self._plan_label.hide()
-            mid_lay.addWidget(self._plan_label)
-            self._plan_view = QLabel("")
-            self._plan_view.setWordWrap(True)
-            self._plan_view.setStyleSheet(
-                "color:#c5d0dc;font-size:11px;background:#1a222d;"
-                "border:1px solid #2c3645;border-radius:6px;padding:6px;"
-            )
-            self._plan_view.hide()
-            mid_lay.addWidget(self._plan_view)
-
-            self._evidence_label = QLabel("Evidence / Reasoning")
-            self._evidence_label.setStyleSheet("font-weight:600;margin-top:2px;")
-            self._evidence_label.hide()
-            mid_lay.addWidget(self._evidence_label)
-            self._evidence_view = QTextBrowser()
-            self._evidence_view.setReadOnly(True)
-            self._evidence_view.setOpenExternalLinks(False)
-            self._evidence_view.setOpenLinks(False)
-            self._evidence_view.setWordWrapMode(QTextOption.WrapMode.WordWrap)
-            self._evidence_view.setMaximumHeight(160)
-            self._evidence_view.setStyleSheet(
-                "color:#c5d0dc;font-size:11px;background:#1a222d;"
-                "border:1px solid #2c3645;border-radius:6px;padding:6px;"
-            )
-            self._evidence_view.hide()
-            self._evidence_view.document().setDefaultStyleSheet(_AI_LOG_STYLE)
-            self._evidence_view.anchorClicked.connect(self._on_jump_link)
-            mid_lay.addWidget(self._evidence_view)
-
-            self.refresh_template_availability()
 
             self._log = QTextBrowser()
             self._log.setReadOnly(True)
             self._log.setOpenExternalLinks(False)
             self._log.setOpenLinks(False)
-            self._log.setPlaceholderText("Conversation appears here…")
-            self._log.setMinimumHeight(100)
+            self._log.setPlaceholderText(
+                "Conversation appears here\u2026\n"
+                "Uses Analysis Findings for the current Statistics scope. "
+                "Configure the endpoint in Settings \u2192 AI."
+            )
+            self._log.setMinimumHeight(80)
+            self._log.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             self._log.document().setDefaultStyleSheet(_AI_LOG_STYLE)
             self._log.anchorClicked.connect(self._on_jump_link)
             self._log.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             self._log.customContextMenuRequested.connect(self._show_log_menu)
             self._log.viewport().installEventFilter(self)
-            mid_lay.addWidget(self._log, 1)
+            root.addWidget(self._log, 1)
+
+            self._plan_host = QWidget()
+            plan_row = QHBoxLayout(self._plan_host)
+            plan_row.setContentsMargins(0, 0, 0, 0)
+            plan_row.setSpacing(0)
+            self._plan_view = QLabel("")
+            self._plan_view.setWordWrap(False)
+            self._plan_view.setTextInteractionFlags(
+                Qt.TextInteractionFlag.NoTextInteraction)
+            self._plan_view.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self._plan_view.setStyleSheet(
+                "color:#8a96a8;font-size:11px;padding:1px 0;"
+            )
+            plan_row.addWidget(self._plan_view)
+            self._plan_host.hide()
+            root.addWidget(self._plan_host)
+
+            tpl_host = QWidget()
+            tpl_host.setObjectName("aiTemplates")
+            tpl_row = QHBoxLayout(tpl_host)
+            tpl_row.setContentsMargins(0, 0, 0, 0)
+            tpl_row.setSpacing(4)
+
+            self._template_btns: List[QPushButton] = []
+            self._template_actions: Dict[str, Any] = {}
+            self._compare_btn: Optional[QWidget] = None
+            self._smp_only_btns: Dict[str, QWidget] = {}
+
+            def _bind_template_ctrl(tid: str, ctrl) -> None:
+                if tid == AI_COMPARE_TEMPLATE_ID:
+                    self._compare_btn = ctrl
+                if tid in AI_SMP_ONLY_TEMPLATE_IDS:
+                    self._smp_only_btns[tid] = ctrl
+
+            for _tid in AI_TEMPLATE_PRIMARY_IDS:
+                item = ai_template_by_id(_tid)
+                if item is None:
+                    continue
+                _tid, label, prompt = item
+                btn = QPushButton(label)
+                btn.setToolTip(prompt)
+                btn.setSizePolicy(
+                    QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+                btn.setMinimumHeight(24)
+                btn.clicked.connect(
+                    lambda _=False, t=_tid, p=prompt: self._use_template(t, p)
+                )
+                tpl_row.addWidget(btn)
+                self._template_btns.append(btn)
+                _bind_template_ctrl(_tid, btn)
+
+            more_btn = QPushButton("More templates\u2026")
+            more_btn.setToolTip(
+                "Uses Analysis Findings for the current Statistics scope. "
+                "Configure the endpoint in Settings \u2192 AI."
+            )
+            more_btn.setSizePolicy(
+                QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            more_menu = QMenu(more_btn)
+            for group_label, ids in AI_TEMPLATE_MENU_GROUPS:
+                add_section = getattr(more_menu, "addSection", None)
+                if callable(add_section):
+                    add_section(group_label)
+                else:
+                    more_menu.addSeparator()
+                    hdr = more_menu.addAction(group_label)
+                    hdr.setEnabled(False)
+                for _tid in ids:
+                    item = ai_template_by_id(_tid)
+                    if item is None:
+                        continue
+                    _tid, label, prompt = item
+                    act = more_menu.addAction(label)
+                    act.setToolTip(prompt)
+                    act.triggered.connect(
+                        lambda _=False, t=_tid, p=prompt: self._use_template(t, p)
+                    )
+                    self._template_actions[_tid] = act
+                    _bind_template_ctrl(_tid, act)
+            more_btn.setMenu(more_menu)
+            tpl_row.addWidget(more_btn)
+            tpl_row.addStretch(1)
+            root.addWidget(tpl_host)
+
+            self.refresh_template_availability()
 
             self._tool_bar = QWidget()
             tool_row = QHBoxLayout(self._tool_bar)
             tool_row.setContentsMargins(0, 0, 0, 0)
             tool_row.setSpacing(6)
             self._apply_tools_btn = QPushButton("Apply GUI actions")
-            self._apply_tools_btn.setToolTip("Run the pending viewer tools from the last reply")
+            self._apply_tools_btn.setToolTip(
+                "Run the pending viewer tools from the last reply")
             self._apply_tools_btn.clicked.connect(self._apply_pending_tools)
             self._skip_tools_btn = QPushButton("Skip")
             self._skip_tools_btn.clicked.connect(self._skip_pending_tools)
@@ -2858,13 +2945,10 @@ def create_ai_assistant_panel(
             tool_row.addWidget(self._undo_tools_btn)
             tool_row.addStretch(1)
             self._tool_bar.hide()
-            mid_lay.addWidget(self._tool_bar)
-
-            mid_scroll.setWidget(mid)
-            root.addWidget(mid_scroll, 1)
+            root.addWidget(self._tool_bar)
 
             self._input = QPlainTextEdit()
-            self._input.setPlaceholderText("Ask about this trace… (Ctrl/Cmd+Enter to send)")
+            self._input.setPlaceholderText("Ask about this trace\u2026 (Ctrl/Cmd+Enter to send)")
             self._input.setFixedHeight(64)
             self._input.installEventFilter(self)
             self._input.textChanged.connect(self._refresh_send_btn)
@@ -3032,6 +3116,21 @@ def create_ai_assistant_panel(
             if on_save_settings:
                 on_save_settings({"response_language": lang})
             self._status.setText(f"Reply language: {lang}")
+            self._refresh_localized_chrome(lang)
+
+        def _refresh_localized_chrome(self, language: Optional[str] = None) -> None:
+            """Re-render plan/evidence when reply language changes."""
+            lang = (
+                (language or self._reply_language()).strip()
+                or DEFAULT_AI_RESPONSE_LANGUAGE
+            )
+            if self._investigation_plan:
+                self._plan_view.setText(format_investigation_plan_status(
+                    self._investigation_plan, lang))
+            if self._evidence_payload:
+                self._sync_evidence_log_entry(self._evidence_payload, lang)
+            else:
+                self._refresh_log()
 
         def _on_jump_link(self, url: QUrl) -> None:
             scheme = (url.scheme() or "").lower()
@@ -3096,10 +3195,14 @@ def create_ai_assistant_panel(
                 return
             pending = self._pending_batch_id()
             applied = self._applied_batch_id()
+            has_cards = any(ai_entry_tools(e) for e in self._entries)
+            # In-log Apply/Skip/Undo cards are the primary chrome; keep this
+            # bar only as a fallback when a batch exists without a card.
+            show = bool(pending or applied) and not has_cards
             self._apply_tools_btn.setVisible(bool(pending))
             self._skip_tools_btn.setVisible(bool(pending))
             self._undo_tools_btn.setVisible(bool(applied) and not pending)
-            bar.setVisible(bool(pending or applied))
+            bar.setVisible(show)
 
         def _apply_pending_tools(self) -> None:
             bid = self._pending_batch_id()
@@ -3116,6 +3219,10 @@ def create_ai_assistant_panel(
             if bid:
                 self._on_tool_action("undo", bid)
 
+        def _reply_language(self) -> str:
+            return str(self._settings_dict().get(
+                "response_language", DEFAULT_AI_RESPONSE_LANGUAGE))
+
         def _refresh_log(self) -> None:
             """Rebuild the log from entries. QTextBrowser.append() merges HTML blocks."""
             if not self._entries:
@@ -3123,7 +3230,8 @@ def create_ai_assistant_panel(
                 self._refresh_tool_bar()
                 return
             self._log.document().setDefaultStyleSheet(_AI_LOG_STYLE)
-            self._log.setHtml(_ai_log_document_html(self._entries))
+            lang = self._reply_language()
+            self._log.setHtml(_ai_log_document_html(self._entries, lang))
             bar = self._log.verticalScrollBar()
             bar.setValue(bar.maximum())
             self._refresh_tool_bar()
@@ -3147,7 +3255,7 @@ def create_ai_assistant_panel(
             self._tool_round = 0
             self._log.clear()
             self._status.setText("")
-            self._clear_evidence_panel()
+            self._clear_evidence_log_entry()
             self._refresh_tool_bar()
 
         def _show_log_menu(self, pos) -> None:
@@ -3177,7 +3285,8 @@ def create_ai_assistant_panel(
             if clip is None:
                 self._status.setText("Clipboard is not available.")
                 return
-            clip.setText(format_ai_conversation_markdown(self._entries))
+            clip.setText(format_ai_conversation_markdown(
+                self._entries, self._reply_language()))
             self._status.setText("Copied to clipboard.")
 
         def save_conversation_as(self, preferred: str = "") -> None:
@@ -3209,12 +3318,13 @@ def create_ai_assistant_panel(
                     ".html" if "HTML" in selected else ".md")
                 path += ext
                 lower = path.lower()
+            lang = self._reply_language()
             if lower.endswith((".html", ".htm")):
-                data = format_ai_conversation_html(self._entries)
+                data = format_ai_conversation_html(self._entries, lang)
             elif lower.endswith(".txt"):
-                data = format_ai_conversation_text(self._entries)
+                data = format_ai_conversation_text(self._entries, lang)
             else:
-                data = format_ai_conversation_markdown(self._entries)
+                data = format_ai_conversation_markdown(self._entries, lang)
             try:
                 with open(path, "w", encoding="utf-8") as fh:
                     fh.write(data)
@@ -3398,6 +3508,8 @@ def create_ai_assistant_panel(
             self._input.setReadOnly(busy or (not enabled))
             for btn in self._template_btns:
                 btn.setEnabled((not busy) and enabled)
+            for act in self._template_actions.values():
+                act.setEnabled((not busy) and enabled)
             self.refresh_template_availability()
             if (not enabled) and (not busy):
                 self._status.setText("AI is disabled in Settings → AI.")
@@ -3547,116 +3659,51 @@ def create_ai_assistant_panel(
             if not plan:
                 self._clear_investigation_plan()
                 return
-            lines = [f"<b>Goal:</b> {html.escape(str(plan.get('goal') or ''))}"]
-            for step in plan.get("steps") or []:
-                st = str(step.get("status") or "pending")
-                mark = {"done": "✓", "active": "●", "pending": "○"}.get(st, "○")
-                lines.append(
-                    f"{mark} {html.escape(str(step.get('label') or step.get('id') or ''))}"
-                )
-            self._plan_view.setText("<br/>".join(lines))
-            self._plan_label.show()
-            self._plan_view.show()
+            self._plan_view.setText(format_investigation_plan_status(
+                plan, self._reply_language()))
+            self._plan_host.show()
 
         def _clear_investigation_plan(self) -> None:
             self._investigation_plan = None
-            self._plan_label.hide()
-            self._plan_view.hide()
+            self._plan_host.hide()
             self._plan_view.clear()
 
-        def set_evidence_panel(self, data: Optional[dict]) -> None:
-            """Show structured evidence / reasoning from investigation tools."""
-            if not data:
-                self._clear_evidence_panel()
+        def _sync_evidence_log_entry(
+            self, data: dict, language: Optional[str] = None,
+        ) -> None:
+            """Structured evidence at the end of the log (exportable; no separate panel)."""
+            lang = (
+                (language or self._reply_language()).strip()
+                or DEFAULT_AI_RESPONSE_LANGUAGE
+            )
+            text = format_evidence_panel_markdown(data, lang)
+            if not text:
                 return
-            lines: List[str] = []
-            conclusion = str(data.get("conclusion") or "").strip()
-            if conclusion:
-                lines.append(f"<b>{html.escape(conclusion)}</b>")
-            subtitle = str(data.get("subtitle") or "").strip()
-            if subtitle:
-                lines.append(html.escape(subtitle[:320]))
-            evidence = data.get("evidence") or []
-            if evidence:
-                lines.append("<br/><b>Evidence</b>")
-                for ev in evidence:
-                    if not isinstance(ev, dict):
-                        continue
-                    label = html.escape(str(ev.get("label") or "item"))
-                    t = ev.get("time")
-                    if t is not None:
-                        try:
-                            tn = float(t)
-                            token = str(int(tn)) if tn.is_integer() else str(tn)
-                            lines.append(
-                                f"• {label} "
-                                f'<a href="{btf_jump_href(tn)}" class="ai-jump">'
-                                f"jump:{token}</a>"
-                            )
-                        except (TypeError, ValueError):
-                            lines.append(f"• {label}")
-                    else:
-                        lines.append(f"• {label}")
-            chain = str(data.get("evidence_chain") or "").strip()
-            if chain:
-                lines.append("<br/><b>Evidence chain</b>")
-                lines.append(
-                    html.escape(chain).replace("\n", "<br/>")
-                )
-            conf = data.get("confidence")
-            if conf:
-                lines.append(f"<br/><b>Confidence:</b> {html.escape(str(conf))}")
-            score = data.get("evidence_score")
-            if score is not None:
-                bar = str(data.get("evidence_score_bar") or "")
-                lines.append(
-                    "<br/><b>AI Evidence Score — heuristic:</b> "
-                    f'<span class="ai-evidence-score">{html.escape(bar)}</span>'
-                )
-            alts = data.get("alternatives") or []
-            if alts:
-                lines.append("<br/><b>Alternative hypotheses</b>")
-                for alt in alts:
-                    if not isinstance(alt, dict):
-                        continue
-                    hyp = html.escape(str(alt.get("hypothesis") or ""))
-                    status = html.escape(str(alt.get("status") or "untested"))
-                    why = html.escape(str(alt.get("why") or ""))
-                    lines.append(f"• <i>{hyp}</i> ({status}) — {why}")
-            checks = data.get("checks") or []
-            if checks:
-                lines.append("<br/><b>Verification checklist</b>")
-                for c in checks:
-                    if not isinstance(c, dict):
-                        continue
-                    label = html.escape(
-                        str(c.get("label") or c.get("metric") or "check")
-                    )
-                    status = html.escape(str(c.get("status") or ""))
-                    detail = html.escape(str(c.get("detail") or ""))
-                    lines.append(f"• {label}: {status} — {detail}")
-            chain = data.get("root_cause_chain") or []
-            hyps = data.get("hypotheses") or []
-            if chain or hyps:
-                tree_src = investigation_tree_mermaid(chain, hyps)
-                if tree_src:
-                    lines.append("<br/><b>Investigation tree</b>")
-                    lines.append(mermaid_block_html(tree_src, as_img=True, zoomable=True))
-            self._evidence_view.setHtml("<br/>".join(lines))
-            self._evidence_label.show()
-            self._evidence_view.show()
+            self._entries = [
+                e for e in self._entries if ai_entry_role(e) != "evidence"
+            ]
+            self._append("evidence", text)
 
-        def _clear_evidence_panel(self) -> None:
-            self._evidence_label.hide()
-            self._evidence_view.hide()
-            self._evidence_view.clear()
+        def _pin_evidence_log_entry(self) -> None:
+            """Keep evidence below the latest assistant reply."""
+            if self._evidence_payload:
+                self._sync_evidence_log_entry(self._evidence_payload)
 
         def _update_evidence_from_tool_result(
             self, name: str, res: Dict[str, Any],
         ) -> None:
             payload = extract_evidence_panel_payload(name, res)
-            if payload:
-                self.set_evidence_panel(payload)
+            if not payload:
+                return
+            self._evidence_payload = dict(payload)
+            self._sync_evidence_log_entry(self._evidence_payload)
+
+        def _clear_evidence_log_entry(self) -> None:
+            self._evidence_payload = None
+            kept = [e for e in self._entries if ai_entry_role(e) != "evidence"]
+            if len(kept) != len(self._entries):
+                self._entries = kept
+                self._refresh_log()
 
         def _advance_investigation_plan(self, tool_names: Sequence[str]) -> None:
             if not self._investigation_plan:
@@ -3783,6 +3830,7 @@ def create_ai_assistant_panel(
             if text:
                 self._append("assistant", text)
             self._finish_investigation_plan()
+            self._pin_evidence_log_entry()
             jumps = extract_jump_times(text)
             if jumps:
                 token = _JUMP_RE.search(text or "")

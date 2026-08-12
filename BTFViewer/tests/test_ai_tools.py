@@ -306,6 +306,29 @@ class AiToolsTests(unittest.TestCase):
         self.assertEqual(len(merged), 4)
         self.assertIn("```btftool", AI_TOOL_SYSTEM_ADDENDUM)
 
+    def test_parse_btftool_ndjson_fence(self) -> None:
+        """Models often emit several tool objects in one fence (not a JSON array)."""
+        text = (
+            "Focusing the segment.\n"
+            "```btftool\n"
+            '{"name": "set_cursors", "arguments": {"timestamps": [1036516, 1036826]}}\n'
+            '{"name": "highlight_task", "arguments": {"task_name_or_id": "CS[24]"}}\n'
+            '{"name": "zoom_to_range", "arguments": {"start_time": 1036400, "end_time": 1037000}}\n'
+            "```\n"
+        )
+        calls = parse_tool_calls_from_text(text)
+        self.assertEqual(
+            [c["name"] for c in calls],
+            ["set_cursors", "highlight_task", "zoom_to_range"],
+        )
+        self.assertEqual(calls[0]["arguments"]["timestamps"], [1036516.0, 1036826.0])
+        self.assertEqual(calls[1]["arguments"]["task_name_or_id"], "CS[24]")
+        self.assertEqual(calls[2]["arguments"]["start_time"], 1036400.0)
+        stripped = strip_parsed_tool_markup(text)
+        self.assertNotIn("btftool", stripped)
+        self.assertNotIn("set_cursors", stripped)
+        self.assertIn("Focusing the segment.", stripped)
+
     def test_resolve_task_key(self) -> None:
         names = ["Idle[1]", "Low[266]", "High[268]"]
         self.assertEqual(resolve_task_key("Low[266]", names), "Low[266]")

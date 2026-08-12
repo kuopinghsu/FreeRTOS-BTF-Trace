@@ -22,6 +22,7 @@ from .ai_assistant import (
     parse_ai_mcp_log,
     set_ai_mcp_log_enabled,
 )
+from .demo_api import demo_api_enabled, demo_api_port, start_demo_api
 from .ai_tools import (
     AI_TOOL_ADD_ANNOTATION,
     AI_TOOL_ANALYZE_TRACES,
@@ -1572,6 +1573,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         app = QApplication.instance()
         if app is not None:
             app.aboutToQuit.connect(self._on_app_about_to_quit)
+
+        self._demo_api_server = None
+        if demo_api_enabled():
+            try:
+                self._demo_api_server = start_demo_api(
+                    self._demo_handle, parent=self)
+                print(
+                    f"[demo-api] listening on 127.0.0.1:{demo_api_port()}",
+                    flush=True,
+                )
+            except OSError as exc:
+                print(f"[demo-api] failed to start: {exc}", flush=True)
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
@@ -5045,6 +5058,419 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             cpu.set_core_expanded(core, True)
         self._scroll_view_to_task(core)
 
+    # ------------------------------------------------------------------
+    # Demo HTTP API (opt-in via BTFVIEWER_DEMO_API=1)
+    # ------------------------------------------------------------------
+
+    def _demo_handle(self, payload: dict) -> Any:
+        """Dispatch ``POST /demo`` JSON ``{"op": ...}`` from the demo runner."""
+        op = str(payload.get("op") or "").strip().lower()
+        if op in ("ping", "health"):
+            return {
+                "ready": self._trace is not None,
+                "file": str(getattr(self, "_current_file", "") or ""),
+            }
+        if op == "highlight":
+            task = str(payload.get("task") or payload.get("name") or "")
+            self._ai_highlight_task(task)
+            return {"task": task}
+        if op == "clear_highlight":
+            self._ai_highlight_task("")
+            return {}
+        if op == "cursors":
+            times = self._demo_parse_times_payload(payload)
+            view = getattr(self, "_view", None)
+            if view is None:
+                raise RuntimeError("No timeline view")
+            max_c = max(1, int(getattr(self, "_max_cursors_val", 4) or 4))
+            times = times[:max_c]
+            view.begin_programmatic_viewport()
+            try:
+                view._scene.clear_cursors()
+                for t in times:
+                    view._scene.add_cursor(int(t))
+                view.cursors_changed.emit(view._scene.cursor_times())
+            finally:
+                view.end_programmatic_viewport()
+            if hasattr(self, "_stats_panel"):
+                self._stats_panel.set_cursor_times(
+                    view._scene.cursor_times(), refresh_stats=True)
+            if "limit" in payload:
+                self._demo_set_limit(self._demo_truthy(payload.get("limit")))
+            if self._demo_truthy(payload.get("zoom"), default=False) and len(times) >= 2:
+                self._ai_zoom_to_range(times[0], times[-1])
+            return {"cursors": list(view._scene.cursor_times())}
+        if op == "clear_cursors":
+            view = getattr(self, "_view", None)
+            if view is not None:
+                view.clear_cursors()
+            return {}
+        if op == "zoom_range":
+            lo, hi = self._demo_parse_range_payload(payload)
+            self._ai_zoom_to_range(lo, hi)
+            return {"start": lo, "end": hi}
+        if op == "fit":
+            view = getattr(self, "_view", None)
+            if view is not None:
+                view.zoom_fit()
+            return {}
+        if op == "limit":
+            on = self._demo_truthy(
+                payload.get("on", payload.get("enabled", payload.get("limit"))),
+                default=True,
+            )
+            self._demo_set_limit(on)
+            return {"limit": on}
+        if op == "stats_section":
+            return self._demo_stats_section(payload)
+        if op == "jump_wcet":
+            return self._demo_jump_wcet(
+                str(payload.get("task") or payload.get("name") or ""))
+        if op == "panel":
+            return self._demo_panel(
+                str(payload.get("name") or payload.get("tab") or "stats"))
+        if op in ("view_mode", "view"):
+            return self._demo_view_mode(
+                str(payload.get("mode") or payload.get("name") or "task"))
+        if op in ("cpu_load", "load"):
+            on = self._demo_truthy(
+                payload.get("on", payload.get("enabled", payload.get("show"))),
+                default=True,
+            )
+            return self._demo_cpu_load(on)
+        if op == "analysis":
+            return self._demo_analysis(payload)
+        if op == "find":
+            return self._demo_find(payload)
+        if op == "settings":
+            page = str(payload.get("page") or payload.get("name") or "Appearance")
+            QTimer.singleShot(0, lambda p=page: self._open_settings(p))
+            return {"settings": page}
+        if op in ("ui", "command"):
+            inner = dict(payload)
+            action = str(
+                payload.get("action") or payload.get("name") or payload.get("command")
+                or ""
+            ).strip().lower()
+            if not action or action in ("ui", "command"):
+                raise ValueError("ui/command requires action=")
+            inner["op"] = action
+            inner.pop("action", None)
+            return self._demo_handle(inner)
+        raise ValueError(f"unknown demo op {op!r}")
+
+    @staticmethod
+    def _demo_truthy(value: Any, *, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+    def _demo_parse_time_value(self, raw: Any, unit: str = "") -> int:
+        """Parse a demo time into trace time units (same as scene cursors)."""
+        if self._trace is None:
+            raise RuntimeError("No trace loaded")
+        scale = self._current_time_unit()
+        unit_l = (unit or "").strip().lower()
+        if isinstance(raw, str):
+            text = raw.strip()
+            if not text:
+                raise ValueError("empty time")
+            # Bare number with explicit unit attribute, or "3.085 s" style.
+            if unit_l in ("", "trace", "tu", "native"):
+                parsed = _parse_time_input(text)
+                if parsed is not None and any(c.isalpha() or c in "µμ" for c in text):
+                    return int(round(_from_ns(parsed, scale)))
+                try:
+                    return int(round(float(text)))
+                except ValueError as exc:
+                    raise ValueError(f"bad time {raw!r}") from exc
+            parsed = _parse_time_input(
+                text if any(c.isalpha() or c in "µμ" for c in text)
+                else f"{text} {unit_l}")
+            if parsed is None:
+                raise ValueError(f"bad time {raw!r}")
+            return int(round(_from_ns(parsed, scale)))
+        val = float(raw)
+        if unit_l in ("", "trace", "tu", "native"):
+            return int(round(val))
+        if unit_l in ("s", "sec", "secs", "second", "seconds"):
+            return int(round(_from_ns(val * 1_000_000_000.0, scale)))
+        if unit_l in ("ms", "msec", "millisecond", "milliseconds"):
+            return int(round(_from_ns(val * 1_000_000.0, scale)))
+        if unit_l in ("us", "µs", "μs", "usec", "microsecond", "microseconds"):
+            return int(round(_from_ns(val * 1_000.0, scale)))
+        if unit_l in ("ns", "nsec", "nanosecond", "nanoseconds"):
+            return int(round(_from_ns(val, scale)))
+        raise ValueError(f"unknown time unit {unit!r}")
+
+    def _demo_parse_times_payload(self, payload: dict) -> List[int]:
+        unit = str(payload.get("unit") or "")
+        raw = payload.get("times", payload.get("timestamps"))
+        if raw is None and "time" in payload:
+            raw = payload.get("time")
+        if isinstance(raw, str):
+            parts = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
+        elif isinstance(raw, (list, tuple)):
+            parts = list(raw)
+        elif raw is None:
+            parts = []
+        else:
+            parts = [raw]
+        if not parts:
+            raise ValueError("cursors requires times=")
+        return [self._demo_parse_time_value(p, unit) for p in parts]
+
+    def _demo_parse_range_payload(self, payload: dict) -> Tuple[int, int]:
+        unit = str(payload.get("unit") or "")
+        if "start" in payload and "end" in payload:
+            lo = self._demo_parse_time_value(payload.get("start"), unit)
+            hi = self._demo_parse_time_value(payload.get("end"), unit)
+        else:
+            times = self._demo_parse_times_payload(payload)
+            if len(times) < 2:
+                raise ValueError("zoom_range needs start/end or two times")
+            lo, hi = times[0], times[-1]
+        return (lo, hi) if lo <= hi else (hi, lo)
+
+    def _demo_panel(self, name: str) -> dict:
+        key = (name or "stats").strip().lower()
+        if key in ("stats", "statistics"):
+            self._focus_statistics_panel(force=True)
+        elif key == "ai":
+            self._focus_ai_panel()
+        elif key in ("find", "search"):
+            self._focus_find()
+        elif key in ("marks", "mark"):
+            self._show_marks = True
+            if hasattr(self, "_act_show_marks"):
+                self._act_show_marks.setChecked(True)
+            self._sync_panel_tab_visibility()
+            self._focus_panel_tab(_PANEL_TAB_MARKS)
+        elif key == "legend":
+            self._show_legend = True
+            if hasattr(self, "_act_show_legend"):
+                self._act_show_legend.setChecked(True)
+            self._sync_panel_tab_visibility()
+            self._focus_panel_tab(_PANEL_TAB_LEGEND)
+        else:
+            raise ValueError(f"unknown panel {name!r}")
+        return {"panel": key}
+
+    def _demo_view_mode(self, mode: str) -> dict:
+        key = (mode or "task").strip().lower()
+        if key not in ("task", "core"):
+            raise ValueError(f"view_mode must be task or core, got {mode!r}")
+        self._set_view_mode(key)
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+        # Confirm the active timeline scene followed the mode switch.
+        scene_mode = None
+        view = getattr(self, "_view", None)
+        if view is not None and hasattr(view, "_scene"):
+            scene_mode = getattr(view._scene, "_view_mode", None)
+        return {"view_mode": key, "scene": scene_mode}
+
+    def _demo_cpu_load(self, on: bool) -> dict:
+        want = bool(on)
+        btn = getattr(self, "_tb_cpu_load_btn", None)
+        if btn is not None and btn.isChecked() != want:
+            btn.setChecked(want)
+            self._toggle_cpu_load_graph()
+        elif btn is None:
+            self._show_cpu_load = want
+        return {"cpu_load": want}
+
+    def _demo_analysis(self, payload: dict) -> dict:
+        action = str(payload.get("action") or "").strip().lower()
+        if "open" in payload:
+            want_open = self._demo_truthy(payload.get("open"), default=True)
+        elif "close" in payload:
+            want_open = not self._demo_truthy(payload.get("close"), default=True)
+        elif action in ("close", "hide", "dismiss"):
+            want_open = False
+        else:
+            want_open = True
+        if want_open:
+            QTimer.singleShot(0, self._open_analysis_findings)
+            return {"analysis": "opening"}
+        dlg = getattr(self, "_analysis_findings_dlg", None)
+        if dlg is None:
+            app = QApplication.instance()
+            if app is not None:
+                for w in app.topLevelWidgets():
+                    try:
+                        title = w.windowTitle()
+                    except RuntimeError:
+                        continue
+                    if title.startswith("Analysis Findings") and w.isVisible():
+                        dlg = w
+                        break
+        if dlg is not None:
+            try:
+                dlg.reject()
+            except RuntimeError:
+                pass
+            return {"analysis": "closed", "found": True}
+        return {"analysis": "closed", "found": False}
+
+    def _demo_find(self, payload: dict) -> dict:
+        clear = self._demo_truthy(payload.get("clear"), default=False)
+        query = str(
+            payload.get("query") or payload.get("text") or payload.get("q") or ""
+        )
+        if clear:
+            query = ""
+        self._focus_find()
+        self._find_input.blockSignals(True)
+        self._find_input.setText(query)
+        self._find_input.blockSignals(False)
+        self._recompute_find_hits()
+        jumped = False
+        if query and self._demo_truthy(payload.get("next"), default=True):
+            self._find_next()
+            jumped = True
+        if not query:
+            self._set_find_marker_ns(None)
+        return {"query": query, "cleared": not query, "next": jumped}
+
+    def _demo_set_limit(self, on: bool) -> None:
+        panel = getattr(self, "_stats_panel", None)
+        if panel is None or not hasattr(panel, "_scope_cb"):
+            return
+        cb = panel._scope_cb
+        want = bool(on)
+        if cb.isChecked() == want and bool(panel._scope_to_cursors) == want:
+            return
+        cb.blockSignals(True)
+        cb.setChecked(want)
+        cb.blockSignals(False)
+        panel._on_scope_toggled(want)
+
+    def _demo_settle_ms(self, ms: int) -> None:
+        """Pump the GUI event loop for *ms* (used by demo scroll settle)."""
+        app = QApplication.instance()
+        if app is None:
+            return
+        delay = max(0, int(ms))
+        if delay <= 0:
+            app.processEvents()
+            return
+        loop = QEventLoop(self)
+        QTimer.singleShot(delay, loop.quit)
+        loop.exec()
+
+    def _demo_stats_section(self, payload: dict) -> dict:
+        panel = getattr(self, "_stats_panel", None)
+        if panel is None:
+            raise RuntimeError("No statistics panel")
+        self._focus_statistics_panel(force=True)
+        raw_ids = payload.get("id", payload.get("ids", payload.get("section", "")))
+        if isinstance(raw_ids, (list, tuple)):
+            ids = [str(x).strip() for x in raw_ids if str(x).strip()]
+        else:
+            ids = [
+                p.strip()
+                for p in str(raw_ids or "").replace(";", ",").split(",")
+                if p.strip()
+            ]
+        expand = self._demo_truthy(payload.get("expand"), default=True)
+        collapse_others = self._demo_truthy(
+            payload.get("collapse_others"), default=bool(ids))
+        scroll = str(payload.get("scroll") or "").strip().lower()
+        # Default: after expand, pin the first section near the top of the panel.
+        if not scroll and expand and ids:
+            scroll = "section"
+
+        if collapse_others:
+            pinned = set(getattr(panel, "_section_pins", []) or [])
+            if pinned:
+                panel._section_pins = [
+                    p for p in panel._section_pins if p in ids]
+                if hasattr(panel, "_sync_pin_buttons"):
+                    panel._sync_pin_buttons()
+            for key in list(panel._section_headers):
+                if key not in ids:
+                    panel._set_section_collapsed(key, True)
+
+        for sid in ids:
+            if sid not in panel._section_headers:
+                continue
+            panel._set_section_collapsed(sid, not expand)
+
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+            if hasattr(panel, "_inner") and panel._inner is not None:
+                panel._inner.adjustSize()
+                panel._inner.updateGeometry()
+            if hasattr(panel, "_update_scroll_tail_height"):
+                panel._update_scroll_tail_height()
+            app.processEvents()
+
+        if scroll in ("top", "0", "start"):
+            panel.scroll_stats_to_top()
+        elif scroll and expand and ids:
+            # Ensure bodies exist, then pin the focus section to the top.
+            for sid in ids:
+                if sid in panel._section_headers:
+                    panel._ensure_section_body(sid)
+            if app is not None:
+                app.processEvents()
+            # scroll="section" → first id; scroll="<id>" → that section when known.
+            if scroll in ("section", "focus", "1", "true", "yes"):
+                focus = ids[0]
+            elif scroll in panel._section_headers:
+                focus = scroll
+            elif scroll in ids:
+                focus = scroll
+            else:
+                focus = ids[0]
+            if focus in panel._section_headers:
+                # Settle layout in-process so the HTTP demo API returns only
+                # after the section is actually scrolled into view (QTimer
+                # fire-and-forget races with the next demo step).
+                elapsed = 0
+                for mark in (0, 50, 150, 280):
+                    self._demo_settle_ms(mark - elapsed)
+                    elapsed = mark
+                    panel.scroll_section_into_view(focus, prefer_top=True)
+
+        return {
+            "ids": ids,
+            "expand": expand,
+            "collapse_others": collapse_others,
+            "scroll": scroll,
+        }
+
+    def _demo_jump_wcet(self, task: str) -> dict:
+        if self._trace is None:
+            raise RuntimeError("No trace loaded")
+        key = (task or "").strip()
+        if not key:
+            raise ValueError("jump_wcet requires task=")
+        resolved = resolve_task_key(key, self._ai_task_candidates())
+        if not resolved:
+            raise ValueError(f"unknown task {key!r}")
+        mk = _task_merge_key(resolved)
+        self._ai_highlight_task(resolved)
+        segs = self._trace.seg_map_by_merge_key.get(mk, [])
+        seg = _find_wcet_segment(segs)
+        if seg is None:
+            return {"task": resolved, "found": False}
+        self._ai_zoom_to_range(seg.start, seg.end)
+        self._scroll_to_segment(seg)
+        return {
+            "task": resolved,
+            "found": True,
+            "start": int(seg.start),
+            "end": int(seg.end),
+        }
+
     def _ai_capture_gui_snapshot(self) -> dict:
         view = getattr(self, "_view", None)
         scene = view._scene if view is not None else None
@@ -5893,12 +6319,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Show Analysis Findings dialog for the active tab / cursor scope."""
         if self._trace is None or self._stats_panel is None:
             return
+        existing = getattr(self, "_analysis_findings_dlg", None)
+        if existing is not None:
+            try:
+                if existing.isVisible():
+                    existing.raise_()
+                    existing.activateWindow()
+                    return
+            except RuntimeError:
+                self._analysis_findings_dlg = None
         findings, scope_title = self._stats_panel.build_analysis_findings()
         dlg = _AnalysisFindingsDialog(
             findings, scope_title, parent=self,
             ai_enabled=self._ai_feature_enabled(),
         )
+        self._analysis_findings_dlg = dlg
         dlg.exec()
+        if getattr(self, "_analysis_findings_dlg", None) is dlg:
+            self._analysis_findings_dlg = None
         if not getattr(dlg, "wants_ai_query", False):
             return
         if getattr(dlg, "_ai_needs_settings", False):
@@ -7673,6 +8111,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             )
             if _ai_changed:
                 self._settings.set_many("ai", _ai_upd)
+                panel = getattr(self, "_ai_panel", None)
+                refresh = getattr(panel, "_refresh_localized_chrome", None)
+                if callable(refresh):
+                    refresh(_ai_upd.get("response_language"))
             set_ai_mcp_log_enabled(bool(dlg.ai_mcp_log))
             # Tab visibility follows Enable AI even when only that flag changed.
             self._sync_panel_tab_visibility()

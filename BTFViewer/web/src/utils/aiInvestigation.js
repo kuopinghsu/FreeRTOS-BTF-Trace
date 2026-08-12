@@ -563,6 +563,244 @@ export function extractEvidencePanelPayload(toolName, result) {
   return payload
 }
 
+function evidenceJumpToken(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return String(value ?? '')
+  return Number.isInteger(n) ? String(Math.trunc(n)) : String(n)
+}
+
+/** Keep in sync with btf_viewer_pkg/ai_investigation.py EVIDENCE_PANEL_LABELS. */
+export const EVIDENCE_PANEL_LABELS = {
+  English: {
+    role: 'Evidence / Reasoning', evidence: 'Evidence', evidence_chain: 'Evidence chain',
+    confidence: 'Confidence', score: 'AI Evidence Score — heuristic',
+    alternatives: 'Alternative hypotheses', checklist: 'Verification checklist',
+    tree: 'Investigation tree', investigation: 'Investigation', done: 'done',
+    critical_path: 'Critical path', correlated_events: 'Correlated events',
+    performance_comparison: 'Performance comparison', correlation: 'Correlation',
+    item: 'item', check: 'check', high: 'High', medium: 'Medium', low: 'Low',
+    untested: 'untested', confirmed: 'confirmed', rejected: 'rejected', plausible: 'plausible',
+  },
+  'Traditional Chinese (繁體中文)': {
+    role: '證據 / 推理', evidence: '證據', evidence_chain: '證據鏈', confidence: '置信度',
+    score: 'AI 證據評分 — 啟發式', alternatives: '替代假設', checklist: '驗證清單',
+    tree: '調查樹', investigation: '調查', done: '完成', critical_path: '關鍵路徑',
+    correlated_events: '相關事件', performance_comparison: '性能對比', correlation: '相關性',
+    item: '項目', check: '檢查', high: '高', medium: '中', low: '低',
+    untested: '未驗證', confirmed: '已確認', rejected: '已排除', plausible: '可能',
+  },
+  'Simplified Chinese (简体中文)': {
+    role: '证据 / 推理', evidence: '证据', evidence_chain: '证据链', confidence: '置信度',
+    score: 'AI 证据评分 — 启发式', alternatives: '替代假设', checklist: '验证清单',
+    tree: '调查树', investigation: '调查', done: '完成', critical_path: '关键路径',
+    correlated_events: '相关事件', performance_comparison: '性能对比', correlation: '相关性',
+    item: '项目', check: '检查', high: '高', medium: '中', low: '低',
+    untested: '未验证', confirmed: '已确认', rejected: '已排除', plausible: '可能',
+  },
+  'Japanese (日本語)': {
+    role: '根拠 / 推論', evidence: '根拠', evidence_chain: '根拠チェーン', confidence: '信頼度',
+    score: 'AI 根拠スコア — ヒューリスティック', alternatives: '代替仮説', checklist: '検証チェックリスト',
+    tree: '調査ツリー', investigation: '調査', done: '完了', critical_path: 'クリティカルパス',
+    correlated_events: '相関イベント', performance_comparison: '性能比較', correlation: '相関',
+    item: '項目', check: 'チェック', high: '高', medium: '中', low: '低',
+    untested: '未検証', confirmed: '確認済み', rejected: '却下', plausible: '妥当',
+  },
+  'Korean (한국어)': {
+    role: '증거 / 추론', evidence: '증거', evidence_chain: '증거 체인', confidence: '신뢰도',
+    score: 'AI 증거 점수 — 휴리스틱', alternatives: '대안 가설', checklist: '검증 체크리스트',
+    tree: '조사 트리', investigation: '조사', done: '완료', critical_path: '크리티컬 패스',
+    correlated_events: '상관 이벤트', performance_comparison: '성능 비교', correlation: '상관',
+    item: '항목', check: '검사', high: '높음', medium: '중간', low: '낮음',
+    untested: '미검증', confirmed: '확인됨', rejected: '기각', plausible: '가능',
+  },
+  German: {
+    role: 'Belege / Begründung', evidence: 'Belege', evidence_chain: 'Belegkette',
+    confidence: 'Vertrauen', score: 'AI-Belegscore — heuristisch',
+    alternatives: 'Alternative Hypothesen', checklist: 'Prüfliste', tree: 'Untersuchungsbaum',
+    investigation: 'Untersuchung', done: 'fertig', critical_path: 'Kritischer Pfad',
+    correlated_events: 'Korrelierte Ereignisse', performance_comparison: 'Leistungsvergleich',
+    correlation: 'Korrelation', item: 'Eintrag', check: 'Prüfung', high: 'Hoch', medium: 'Mittel',
+    low: 'Niedrig', untested: 'ungeprüft', confirmed: 'bestätigt', rejected: 'abgelehnt',
+    plausible: 'plausibel',
+  },
+  French: {
+    role: 'Preuves / Raisonnement', evidence: 'Preuves', evidence_chain: 'Chaîne de preuves',
+    confidence: 'Confiance', score: 'Score de preuve IA — heuristique',
+    alternatives: 'Hypothèses alternatives', checklist: 'Liste de vérification',
+    tree: 'Arbre d\'investigation', investigation: 'Investigation', done: 'terminé',
+    critical_path: 'Chemin critique', correlated_events: 'Événements corrélés',
+    performance_comparison: 'Comparaison de performance', correlation: 'Corrélation',
+    item: 'élément', check: 'contrôle', high: 'Élevée', medium: 'Moyenne', low: 'Faible',
+    untested: 'non testé', confirmed: 'confirmé', rejected: 'rejeté', plausible: 'plausible',
+  },
+  Spanish: {
+    role: 'Evidencia / Razonamiento', evidence: 'Evidencia', evidence_chain: 'Cadena de evidencia',
+    confidence: 'Confianza', score: 'Puntuación de evidencia IA — heurística',
+    alternatives: 'Hipótesis alternativas', checklist: 'Lista de verificación',
+    tree: 'Árbol de investigación', investigation: 'Investigación', done: 'hecho',
+    critical_path: 'Ruta crítica', correlated_events: 'Eventos correlacionados',
+    performance_comparison: 'Comparación de rendimiento', correlation: 'Correlación',
+    item: 'elemento', check: 'comprobación', high: 'Alta', medium: 'Media', low: 'Baja',
+    untested: 'sin probar', confirmed: 'confirmado', rejected: 'rechazado', plausible: 'plausible',
+  },
+}
+
+export function normalizeResponseLanguage(lang) {
+  const want = String(lang || '').trim()
+  if (want in EVIDENCE_PANEL_LABELS) return want
+  const low = want.toLowerCase()
+  for (const key of Object.keys(EVIDENCE_PANEL_LABELS)) {
+    if (key.toLowerCase() === low || key.toLowerCase().includes(low) || low.includes(key.toLowerCase())) {
+      return key
+    }
+  }
+  if (want.includes('简体') || low.includes('simplified')) return 'Simplified Chinese (简体中文)'
+  if (want.includes('繁體') || want.includes('繁体') || low.includes('traditional')) {
+    return 'Traditional Chinese (繁體中文)'
+  }
+  if (want.includes('日本') || low.includes('japanese')) return 'Japanese (日本語)'
+  if (want.includes('한국') || low.includes('korean')) return 'Korean (한국어)'
+  return 'English'
+}
+
+export function evidencePanelLabels(responseLanguage = 'English') {
+  const key = normalizeResponseLanguage(responseLanguage)
+  return { ...EVIDENCE_PANEL_LABELS[key] }
+}
+
+const EVIDENCE_STATUS_KEYS = [
+  'high', 'medium', 'low', 'untested', 'confirmed', 'rejected', 'plausible',
+]
+const EVIDENCE_PREFIX_KEYS = [
+  'critical_path', 'correlated_events', 'performance_comparison',
+]
+
+function canonicalEvidenceStatus(text) {
+  const t = String(text || '').trim()
+  if (!t) return null
+  const low = t.toLowerCase()
+  for (const key of EVIDENCE_STATUS_KEYS) {
+    if (low === key) return key
+  }
+  for (const langLabels of Object.values(EVIDENCE_PANEL_LABELS)) {
+    for (const key of EVIDENCE_STATUS_KEYS) {
+      if (t === langLabels[key]) return key
+    }
+  }
+  return null
+}
+
+function localizeEvidenceToken(text, labels) {
+  const t = String(text || '').trim()
+  if (!t) return t
+  const canon = canonicalEvidenceStatus(t)
+  if (canon) return labels[canon]
+  for (const langLabels of Object.values(EVIDENCE_PANEL_LABELS)) {
+    const corr = String(langLabels.correlation || '').trim()
+    if (corr && (t.startsWith(`${corr} `) || t === corr)) {
+      return `${labels.correlation} ${t.slice(corr.length).trim()}`.trim()
+    }
+  }
+  if (t.startsWith('Correlation ')) return `${labels.correlation} ${t.slice(12).trim()}`
+  const englishPrefixes = {
+    critical_path: ['Critical path:', 'Critical path'],
+    correlated_events: ['Correlated events:', 'Correlated events'],
+    performance_comparison: ['Performance comparison:', 'Performance comparison'],
+  }
+  for (const lk of EVIDENCE_PREFIX_KEYS) {
+    const candidates = [...(englishPrefixes[lk] || [])]
+    for (const langLabels of Object.values(EVIDENCE_PANEL_LABELS)) {
+      const localized = String(langLabels[lk] || '').trim()
+      if (localized) candidates.push(`${localized}:`, localized)
+    }
+    for (const prefix of candidates) {
+      if (t === prefix.replace(/:$/, '')) return labels[lk]
+      if (t.startsWith(prefix)) {
+        const rest = t.slice(prefix.length).trim().replace(/^:\s*/, '')
+        return rest ? `${labels[lk]}: ${rest}` : labels[lk]
+      }
+    }
+  }
+  return t
+}
+
+/** Markdown for Evidence / Reasoning (panel + conversation log + export). */
+export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') {
+  if (!data || typeof data !== 'object') return ''
+  const labels = evidencePanelLabels(responseLanguage)
+  const lines = []
+  const conclusion = localizeEvidenceToken(String(data.conclusion || '').trim(), labels)
+  if (conclusion) lines.push(`**${conclusion}**`)
+  const subtitle = String(data.subtitle || '').trim()
+  if (subtitle) lines.push(subtitle.slice(0, 320))
+  const evidence = data.evidence || []
+  if (evidence.length) {
+    lines.push('', `**${labels.evidence}**`)
+    for (const ev of evidence) {
+      if (!ev || typeof ev !== 'object') continue
+      const label = String(ev.label || labels.item)
+      if (ev.time != null && Number.isFinite(Number(ev.time))) {
+        lines.push(`- ${label} jump:${evidenceJumpToken(ev.time)}`)
+      } else {
+        lines.push(`- ${label}`)
+      }
+    }
+  }
+  if (data.evidence_chain) {
+    lines.push('', `**${labels.evidence_chain}**`, String(data.evidence_chain))
+  }
+  if (data.confidence) {
+    lines.push('', `**${labels.confidence}:** ${localizeEvidenceToken(data.confidence, labels)}`)
+  }
+  if (data.evidence_score != null) {
+    lines.push('', `**${labels.score}:** ${String(data.evidence_score_bar || '')}`)
+  }
+  for (const alt of data.alternatives || []) {
+    if (!alt || typeof alt !== 'object') continue
+    if (!lines.some(l => l === `**${labels.alternatives}**`)) {
+      lines.push('', `**${labels.alternatives}**`)
+    }
+    lines.push(
+      `- *${String(alt.hypothesis || '')}* (${localizeEvidenceToken(alt.status || 'untested', labels)}) — ${String(alt.why || '')}`,
+    )
+  }
+  for (const c of data.checks || []) {
+    if (!c || typeof c !== 'object') continue
+    if (!lines.some(l => l === `**${labels.checklist}**`)) {
+      lines.push('', `**${labels.checklist}**`)
+    }
+    const label = String(c.label || c.metric || labels.check)
+    lines.push(
+      `- ${label}: ${localizeEvidenceToken(c.status || '', labels)} — ${String(c.detail || '')}`,
+    )
+  }
+  const chain = data.root_cause_chain || []
+  const hyps = data.hypotheses || []
+  if (chain.length || hyps.length) {
+    const treeSrc = investigationTreeMermaid(chain, hyps)
+    if (treeSrc) {
+      lines.push('', `**${labels.tree}**`, '```mermaid', treeSrc.trim(), '```')
+    }
+  }
+  return lines.join('\n').trim()
+}
+
+export function formatInvestigationPlanStatus(plan, responseLanguage = 'English') {
+  if (!plan || typeof plan !== 'object') return ''
+  const labels = evidencePanelLabels(responseLanguage)
+  const steps = (plan.steps || []).filter(s => s && typeof s === 'object')
+  const total = steps.length
+  const done = steps.filter(s => String(s.status || '') === 'done').length
+  let active = steps.find(s => String(s.status || '') === 'active')
+  if (!active) active = steps.find(s => String(s.status || '') !== 'done')
+  const stepLabel = String(active?.label || active?.id || '').trim()
+  const inv = labels.investigation
+  if (!total) return inv
+  if (done >= total) return `${inv}  ${done}/${total}  ${labels.done}`
+  if (stepLabel) return `${inv}  ${done}/${total}  ${stepLabel}`
+  return `${inv}  ${done}/${total}`
+}
+
 export function evaluateRegression(candidate, baseline, { rules = DEFAULT_REGRESSION_RULES } = {}) {
   const cand = candidate?.metrics ? candidate.metrics : (candidate || {})
   const base = baseline?.metrics ? baseline.metrics : (baseline || {})

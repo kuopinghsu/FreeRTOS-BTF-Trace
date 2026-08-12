@@ -2373,6 +2373,7 @@ class _StatsPanelViewportFilter(QObject):
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if event.type() == QEvent.Type.Resize:
             self._panel._pin_main_inner_width()
+            self._panel._update_scroll_tail_height()
             QTimer.singleShot(0, self._panel.sync_util_layout)
         return False
 
@@ -6954,91 +6955,203 @@ class _AnalysisFindingsDialog(QDialog):
         self.wants_ai_query = False
         self._ai_needs_settings = False
         self.wants_ai_finding_id = ""
+        self.wants_ai_template = "findings"
         self.setWindowTitle(f"Analysis Findings{self._scope_title}")
         self.setModal(True)
-        self.setMinimumSize(520, 360)
-        self.resize(640, 480)
+        # Wide enough for Ask-AI button labels (esp. "Auto investigate…") in one row.
+        self.setMinimumSize(900, 480)
+        self.resize(960, 600)
 
         note = QLabel(
             "Heuristic summary of load balance, WCET, blocking, thrashing, "
-            "deadlines, tick health, and sync."
+            "deadlines, tick health, and sync.\n"
+            "Select a finding before Verify or Auto investigate."
         )
         note.setWordWrap(True)
         note.setObjectName("analysisNote")
+        note.setStyleSheet("color: #9a9a9a; font-size: 12px; padding-bottom: 2px;")
 
         list_w = QListWidget()
         list_w.setWordWrap(True)
-        list_w.setSpacing(4)
+        list_w.setSpacing(6)
         list_w.setUniformItemSizes(False)
+        list_w.setAlternatingRowColors(True)
+        list_w.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        list_w.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        list_w.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        list_w.setStyleSheet(
+            "QListWidget { padding: 8px; outline: none; border-radius: 6px; }"
+            "QListWidget::item {"
+            "  padding: 10px 12px;"
+            "  margin: 3px 0;"
+            "  border-radius: 6px;"
+            "}"
+            "QListWidget::item:selected {"
+            "  background: rgba(52, 152, 219, 0.30);"
+            "}"
+        )
         self._list_w = list_w
         if self._findings:
             for f in self._findings:
                 sev = f.get("severity", "info")
-                title = str(f.get("title", "Finding"))
-                text = str(f.get("text", ""))
-                item = QListWidgetItem(f"{title} — {text}")
+                title = str(f.get("title", "Finding")).strip() or "Finding"
+                text = str(f.get("text", "")).strip()
+                badge = {"error": "●", "warning": "●"}.get(str(sev), "○")
+                display = f"{badge}  {title}\n{text}" if text else f"{badge}  {title}"
+                item = QListWidgetItem(display)
                 item.setData(Qt.ItemDataRole.UserRole, f.get("id") or "")
+                font = item.font()
+                font.setPointSize(max(int(font.pointSize()), 11))
+                item.setFont(font)
                 if sev == "error":
-                    item.setForeground(QBrush(QColor("#c0392b")))
+                    item.setForeground(QBrush(QColor("#e74c3c")))
                 elif sev == "warning":
-                    item.setForeground(QBrush(QColor("#d68910")))
+                    item.setForeground(QBrush(QColor("#e67e22")))
+                fm = QFontMetrics(font)
+                wrap_w = 640
+                body_h = fm.boundingRect(
+                    0, 0, wrap_w, 8000,
+                    int(Qt.TextFlag.TextWordWrap),
+                    display,
+                ).height()
+                item.setSizeHint(QSize(wrap_w, max(56, body_h + 22)))
                 list_w.addItem(item)
+            list_w.setCurrentRow(0)
         else:
-            list_w.addItem(QListWidgetItem("No findings for the current scope"))
+            empty = QListWidgetItem("No findings for the current scope")
+            empty.setFlags(Qt.ItemFlag.NoItemFlags)
+            list_w.addItem(empty)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        self.wants_ai_template = "findings"
-        inv_btn = buttons.addButton(
-            "Investigate…", QDialogButtonBox.ButtonRole.ActionRole)
-        inv_btn.setToolTip(
-            "Open the AI Assistant and investigate the top findings with tools"
-            if ai_enabled else
-            "Enable AI Assistant in Settings → AI")
-        inv_btn.clicked.connect(
-            lambda: self._query_with_ai(ai_enabled, "investigate"))
-        rca_btn = buttons.addButton(
-            "Root cause…", QDialogButtonBox.ButtonRole.ActionRole)
-        rca_btn.setToolTip(
-            "Open the AI Assistant for evidence-driven root-cause analysis"
-            if ai_enabled else
-            "Enable AI Assistant in Settings → AI")
-        rca_btn.clicked.connect(
-            lambda: self._query_with_ai(ai_enabled, "root_cause"))
-        verify_btn = buttons.addButton(
-            "Verify with AI…", QDialogButtonBox.ButtonRole.ActionRole)
-        verify_btn.setToolTip(
-            "Open the AI Assistant and verify the selected finding with evidence"
-            if ai_enabled else
-            "Enable AI Assistant in Settings → AI")
-        verify_btn.clicked.connect(
-            lambda: self._query_with_ai(ai_enabled, "verify"))
-        auto_btn = buttons.addButton(
-            "Auto investigate…", QDialogButtonBox.ButtonRole.ActionRole)
-        auto_btn.setToolTip(
-            "Run the automatic investigate → correlate → critical-path → "
-            "what-if/optimize workflow"
-            if ai_enabled else
-            "Enable AI Assistant in Settings → AI")
-        auto_btn.clicked.connect(
-            lambda: self._query_with_ai(ai_enabled, "auto_investigate"))
-        ai_btn = buttons.addButton(
-            "Query with AI…", QDialogButtonBox.ButtonRole.ActionRole)
-        ai_btn.setToolTip(
-            "Open the AI Assistant and walk through these Analysis Findings"
-            if ai_enabled else
-            "Enable AI Assistant in Settings → AI")
-        ai_btn.clicked.connect(
-            lambda: self._query_with_ai(ai_enabled, "findings"))
-        save_btn = buttons.addButton(
-            "Save as Text…", QDialogButtonBox.ButtonRole.ActionRole)
+        def _make_ai_btn(label: str, tip_on: str, tip_off: str, template: str,
+                         *, primary: bool = False) -> QPushButton:
+            btn = QPushButton(label)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setMinimumHeight(34)
+            # Prefer natural text width — avoid MinimumExpanding which clips labels.
+            btn.setSizePolicy(
+                QSizePolicy.Policy.Preferred,
+                QSizePolicy.Policy.Fixed,
+            )
+            fm = btn.fontMetrics()
+            btn.setMinimumWidth(fm.horizontalAdvance(label) + 36)
+            btn.setToolTip(tip_on if ai_enabled else tip_off)
+            if primary:
+                btn.setStyleSheet(
+                    "QPushButton {"
+                    "  padding: 7px 16px; border-radius: 6px;"
+                    "  background: #3498db; color: white; border: none;"
+                    "  font-weight: 600;"
+                    "}"
+                    "QPushButton:hover { background: #5dade2; }"
+                    "QPushButton:pressed { background: #2e86c1; }"
+                )
+            else:
+                btn.setStyleSheet(
+                    "QPushButton { padding: 7px 16px; border-radius: 6px; }"
+                )
+            btn.clicked.connect(
+                lambda _checked=False, t=template: self._query_with_ai(
+                    ai_enabled, t))
+            return btn
+
+        ai_label = QLabel("Ask AI")
+        ai_label.setStyleSheet(
+            "color: #8a8a8a; font-size: 11px; font-weight: 600;"
+            " letter-spacing: 0.4px; padding-top: 2px;"
+        )
+
+        ai_row = QHBoxLayout()
+        ai_row.setContentsMargins(0, 0, 0, 0)
+        ai_row.setSpacing(10)
+        ai_btns = [
+            _make_ai_btn(
+                "Investigate…",
+                "Open the AI Assistant and investigate the top findings with tools",
+                "Enable AI Assistant in Settings → AI",
+                "investigate",
+                primary=True,
+            ),
+            _make_ai_btn(
+                "Root cause…",
+                "Open the AI Assistant for evidence-driven root-cause analysis",
+                "Enable AI Assistant in Settings → AI",
+                "root_cause",
+            ),
+            _make_ai_btn(
+                "Verify with AI…",
+                "Open the AI Assistant and verify the selected finding with evidence",
+                "Enable AI Assistant in Settings → AI",
+                "verify",
+            ),
+            _make_ai_btn(
+                "Auto investigate…",
+                "Run the automatic investigate → correlate → critical-path → "
+                "what-if/optimize workflow",
+                "Enable AI Assistant in Settings → AI",
+                "auto_investigate",
+            ),
+            _make_ai_btn(
+                "Query with AI…",
+                "Open the AI Assistant and walk through these Analysis Findings",
+                "Enable AI Assistant in Settings → AI",
+                "findings",
+            ),
+        ]
+        for btn in ai_btns:
+            ai_row.addWidget(btn)
+        ai_row.addStretch(1)
+
+        save_btn = QPushButton("Save as Text…")
+        save_btn.setMinimumHeight(34)
+        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        save_btn.setToolTip("Download findings as a plain-text file")
+        save_btn.setStyleSheet(
+            "QPushButton { padding: 7px 14px; border-radius: 6px; }"
+        )
         save_btn.clicked.connect(self._save_as_text)
-        buttons.rejected.connect(self.reject)
-        buttons.accepted.connect(self.accept)
+
+        close_btn = QPushButton("Close")
+        close_btn.setMinimumHeight(34)
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setDefault(True)
+        close_btn.setStyleSheet(
+            "QPushButton { padding: 7px 18px; border-radius: 6px; }"
+        )
+        close_btn.clicked.connect(self.reject)
+
+        util_row = QHBoxLayout()
+        util_row.setContentsMargins(0, 0, 0, 0)
+        util_row.setSpacing(10)
+        util_row.addWidget(save_btn)
+        util_row.addStretch(1)
+        util_row.addWidget(close_btn)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        sep.setStyleSheet("margin-top: 2px; margin-bottom: 2px;")
+
+        footer = QVBoxLayout()
+        footer.setContentsMargins(0, 4, 0, 0)
+        footer.setSpacing(8)
+        footer.addWidget(ai_label)
+        footer.addLayout(ai_row)
+        footer.addWidget(sep)
+        footer.addLayout(util_row)
 
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(12)
         lay.addWidget(note)
         lay.addWidget(list_w, 1)
-        lay.addWidget(buttons)
+        lay.addLayout(footer)
+
+        # Ensure the dialog is at least as wide as the Ask-AI button row.
+        footer_w = sum(b.minimumWidth() for b in ai_btns) + 10 * (len(ai_btns) - 1) + 48
+        if self.minimumWidth() < footer_w:
+            self.setMinimumWidth(footer_w)
+        if self.width() < footer_w:
+            self.resize(footer_w, self.height())
 
     def _query_with_ai(self, ai_enabled: bool, template_id: str = "findings") -> None:
         self.wants_ai_query = True
@@ -7204,7 +7317,12 @@ class _StatsPanel(QWidget):
         self._ilay = QVBoxLayout(self._inner)
         self._ilay.setContentsMargins(8, 6, 8, 6)
         self._ilay.setSpacing(2)
-        self._ilay.addStretch()
+        # Trailing pad so late sections can scroll up to the top of the viewport
+        # (a layout stretch collapses when content is taller than the viewport).
+        self._scroll_tail = QWidget()
+        self._scroll_tail.setObjectName("stats_scroll_tail")
+        self._scroll_tail.setMinimumHeight(0)
+        self._ilay.addWidget(self._scroll_tail)
         scroll.setWidget(self._inner)
         outer.addWidget(scroll)
         self._main_viewport_filter = _StatsPanelViewportFilter(self)
@@ -7326,6 +7444,7 @@ class _StatsPanel(QWidget):
         self._pending_sections.clear()
         self._drop_target_sid = None
         self._dragging_sid = None
+        self._scroll_tail = None
         while self._ilay.count():
             item = self._ilay.takeAt(0)
             if item.widget():
@@ -8588,6 +8707,81 @@ class _StatsPanel(QWidget):
         else:
             self._ensure_section_body(section_id)
         self._update_section_header_icon(section_id)
+
+    def _ensure_scroll_tail(self) -> QWidget:
+        """Trailing spacer that lets any section header scroll to the viewport top."""
+        tail = getattr(self, "_scroll_tail", None)
+        if tail is None:
+            tail = QWidget()
+            tail.setObjectName("stats_scroll_tail")
+            tail.setMinimumHeight(0)
+            self._ilay.addWidget(tail)
+            self._scroll_tail = tail
+        return tail
+
+    def _update_scroll_tail_height(self) -> None:
+        """Size the trailing pad to roughly one viewport so late sections can pin."""
+        if not hasattr(self, "_scroll"):
+            return
+        tail = self._ensure_scroll_tail()
+        vh = max(0, int(self._scroll.viewport().height()))
+        # Leave a small strip so the header is not flush against the bottom chrome.
+        tail.setFixedHeight(max(0, vh - 24))
+
+    def scroll_section_into_view(self, section_id: str, *, margin: int = 8,
+                                 prefer_top: bool = True) -> None:
+        """Scroll so *section_id* is visible; prefer pinning its header near the top.
+
+        Expanded tables are often taller than the viewport, so ``ensureWidgetVisible``
+        on the header alone can leave the body clipped. Pinning the header near the
+        top of the scroll area keeps the table content on screen for demos.
+        A trailing viewport-sized pad is required so sections near the end of the
+        list can actually reach the top (layout stretch alone collapses when the
+        content is taller than the viewport).
+        """
+        row = self._section_header_rows.get(section_id)
+        if row is None or not hasattr(self, "_scroll"):
+            return
+        body = self._section_bodies.get(section_id)
+        self._update_scroll_tail_height()
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+        inner = self._inner
+        if inner is not None:
+            inner.adjustSize()
+            inner.updateGeometry()
+        if app is not None:
+            app.processEvents()
+
+        bar = self._scroll.verticalScrollBar()
+        if prefer_top:
+            # Map header top into the scrollable content coordinate system.
+            origin = row.mapTo(inner, QPoint(0, 0))
+            target = max(0, int(origin.y()) - max(0, int(margin)))
+            bar.setValue(min(target, bar.maximum()))
+            # If layout still settling, fall back to ensure-visible so the
+            # header/body are at least on screen.
+            vh = max(1, int(self._scroll.viewport().height()))
+            top = int(bar.value())
+            header_y = int(row.mapTo(inner, QPoint(0, 0)).y())
+            if header_y < top or header_y > top + vh - 4:
+                self._scroll.ensureWidgetVisible(row, 0, max(0, int(margin)))
+                if body is not None and body.isVisible():
+                    self._scroll.ensureWidgetVisible(
+                        body, 0, max(0, int(margin)))
+            return
+
+        self._scroll.ensureWidgetVisible(row, 0, max(0, int(margin)))
+        if body is not None and body.isVisible():
+            self._scroll.ensureWidgetVisible(body, 0, max(0, int(margin)))
+
+    def scroll_stats_to_top(self) -> None:
+        """Scroll the statistics list to the top."""
+        if not hasattr(self, "_scroll"):
+            return
+        bar = self._scroll.verticalScrollBar()
+        bar.setValue(bar.minimum())
 
     def _toggle_section(self, section_id: str) -> None:
         if section_id in self._section_pins:
@@ -11985,7 +12179,8 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
         )
 
         self._flush_pending_sections()
-        self._ilay.addStretch()
+        self._ensure_scroll_tail()
+        self._update_scroll_tail_height()
         self.relax_content_width()
         self._util_label_col_w = self._resolve_util_label_width(
             self._util_label_col_natural)
@@ -13029,8 +13224,7 @@ class _SettingsDialog(QDialog):
         self._ai_auto_apply_cb.setChecked(bool(ai_auto_apply))
         self._ai_auto_apply_cb.setToolTip(
             "When on, tool calls from the model update the timeline immediately. "
-            "When off, the chat shows Apply / Skip on each action card and "
-            "Apply GUI actions under the log.")
+            "When off, the chat shows Apply / Skip on each action card.")
         f4.addRow("", self._ai_auto_apply_cb)
         self._ai_mcp_log_cb = QCheckBox("Log MCP messages to file")
         self._ai_mcp_log_cb.setChecked(bool(ai_mcp_log))

@@ -77,11 +77,11 @@ This section walks the ladder end to end on one trace and ends with a prioritise
 | Field | Value |
 |-------|-------|
 | File | `tracedata/example-8cores.btf.gz` |
-| Span | **2.358 s** (`#timeScale us`) |
-| Cores / tasks / segments / STI | **8** / **154** / **31 141** / **33 495** |
-| Context switches / migrations | **31 133** / **18 992** |
+| Span | **2.421 s** (`#timeScale us`) |
+| Cores / tasks / segments / STI | **8** / **163** / **31 422** / **33 513** |
+| Context switches / migrations | **31 414** / **19 018** |
 | Instrumentation | priority + sync + intervals |
-| TICK | **WARNING / TICKLESS** — CV **35.9 %**, missed ≈ **8** |
+| TICK | **WARNING / TICKLESS** — CV **36.7 %**, missed ≈ **10** |
 
 Open the **Statistics** panel and the toolbar **Analysis** dialog, then work down the ladder.
 
@@ -93,15 +93,15 @@ Open the **Statistics** panel and the toolbar **Analysis** dialog, then work dow
 
 | Metric | Measured |
 |--------|----------|
-| Mode | **TICKLESS** (CV 35.9 % ≫ 5 % threshold) |
-| Avg period / max gap | 944 µs / 2.481 ms |
-| Missed ticks (est.) | 8 |
+| Mode | **TICKLESS** (CV 36.7 % ≫ 5 % threshold) |
+| Avg period / max gap | 945 µs / 3.292 ms |
+| Missed ticks (est.) | 10 |
 
 ![Tick interval distribution — example-8cores](../images/stats/stats-tick.svg)
 
-*2496 TICK events; multi-tick gaps often fall in idle stretches between suite phases.*
+*2561 TICK events; multi-tick gaps often fall in idle stretches between suite phases.*
 
-The high coefficient of variation is expected here because tickless idle is active: the kernel deliberately suppresses ticks when no task is runnable. A large gap between ticks is therefore not by itself evidence of a lost interrupt during real work. Before chasing the eight estimated missed ticks, scope the analysis to a busy phase and re-read this section — if the mode still reports WARNING while every core is loaded, the finding is worth pursuing. The trade-offs between tickless and tickful builds are covered in [§5.2](#52-compare-two-builds).
+The high coefficient of variation is expected here because tickless idle is active: the kernel deliberately suppresses ticks when no task is runnable. A large gap between ticks is therefore not by itself evidence of a lost interrupt during real work. Before chasing the ten estimated missed ticks, scope the analysis to a busy phase and re-read this section — if the mode still reports WARNING while every core is loaded, the finding is worth pursuing. The trade-offs between tickless and tickful builds are covered in [§5.2](#52-compare-two-builds).
 
 ---
 
@@ -111,8 +111,8 @@ The high coefficient of variation is expected here because tickless idle is acti
 
 | Metric | Measured |
 |--------|----------|
-| Core_0 … Core_7 (excl. IDLE/TICK) | 68.7 … **77.3 %** |
-| Load Balance Score | **95 %** (Gini G = 0.049, σ = 6.0 %) |
+| Core_0 … Core_7 (excl. IDLE/TICK) | 56.9 … **75.1 %** |
+| Load Balance Score | **95 %** (Gini G = 0.052, σ = 6.3 %) |
 
 A Load Balance Score of 85 % or more with σ at or below 30 % counts as reasonably balanced, so imbalance is not the primary problem on this sample. Do not stop here, though: good balance and expensive migration bouncing routinely coexist, because a scheduler can keep every core equally busy precisely by moving work between them.
 
@@ -140,8 +140,9 @@ With the cores accounted for, attribute the time to tasks. **Top Tasks by CPU** 
 
 | Task | CPU % | Max slice | p95 |
 |------|-------|-----------|-----|
-| CS[28] | 15.9 % | **3.623 ms** | 1.631 ms |
-| CS[11] / CS[24] | ~15 % | ~2.5–3.3 ms | ~1.6 ms |
+| CS[27] / CS[18] | 15.1 % | ~2.9–3.5 ms | ~1.6–1.7 ms |
+| CS[28] | 15.0 % | **3.298 ms** | 1.580 ms |
+| CS[11] / CS[20] | ~15 % | ~3.5–3.6 ms | ~1.6 ms |
 
 `Med[267]` (around 6 %) and the mutex and semaphore workers (5–6 % each) round out the list.
 
@@ -161,10 +162,10 @@ Three responses are worth considering:
 
 | Task | Max block | Notes |
 |------|-----------|-------|
-| High[268] | **52.865 ms** | High waiter during inversion demo |
-| Low[266] / Med[267] | ~35–40 ms | Expected around test 8 |
+| High[268] | **52.872 ms** | High waiter during inversion demo |
+| Low[266] / Med[267] | ~35–40 ms (scoped) | Cursor window ~3.085–3.310 s |
 | CS[*] | ~5–6 ms | Peer contention + migration |
-| Runner[1] | 737 ms | Orchestrator sleep — ignore |
+| Runner[1] | 752 ms | Orchestrator sleep — ignore |
 
 Place cursors around the inversion window (the `Low`, `Med`, and `High` activity at roughly 3.085–3.310 s) and cross-check **Preemption Chain**, which names the preemptor for each victim, such as `CS[25]←CS[19]`.
 
@@ -182,10 +183,11 @@ Blocking time answers "how long was this task off-CPU". A different question —
 
 | Task | Migrations | Rate | Avg dwell | Ping |
 |------|------------|------|-----------|------|
-| CS[18] | 586 | **1692 /s** | 476 µs | 24 |
-| CS[21] / CS[12] | ~580 | ~1.6k/s | ~0.5 ms | ~20 |
+| CS[20] | 595 | **1644 /s** | 501 µs | 23 |
+| CS[18] | 569 | **1561 /s** | 511 µs | 23 |
+| CS[14] / CS[15] | ~580 | ~1.6–1.7k/s | ~0.5 ms | ~23–32 |
 
-Trace-wide: **18 992** migrations. Hottest pairs (`Core_5→Core_7`, …) are mostly **0 % lock-bounce**, which identifies this as scheduling thrash from test 1 rather than lock contention — an important distinction, because the two have different fixes.
+Trace-wide: **19 018** migrations. Hottest pairs are mostly **0 % lock-bounce**, which identifies this as scheduling thrash from test 1 rather than lock contention — an important distinction, because the two have different fixes.
 
 Read the migration columns together rather than individually:
 
@@ -221,8 +223,8 @@ Tables name *which* task and *which* pair. Toolbar **Heatmap** and **Chord** ope
 
 | Object | Holds | Bounces | Status |
 |--------|-------|---------|--------|
-| mutex `0x80021920` | 864 | 6 | Warning |
-| queue `0x80021990` | 864 | **858** | OK status, extreme bounce |
+| mutex `0x80021b80` | 864 | 9 | Warning |
+| queue `0x80021ad0` | 864 | **858** | OK status, extreme bounce |
 
 The queue is the striking row: in 858 of its 864 holds, the holder migrated to another core while still holding the object. Co-locate tasks that share a hot mutex or queue so the object stays on one core. Investigate every **Warning** row on the timeline before acting on it — in demo traces, teardown often leaves an unpaired STI event that reads as a warning.
 
@@ -230,8 +232,8 @@ The queue is the striking row: in 858 of its 864 holds, the holder migrated to a
 
 | Task | Base→Peak | Boosted time | Pattern |
 |------|-----------|--------------|---------|
-| Low[266] | 2→4 | **103.318 ms** | **Mutex inherit** |
-| PS[228] | 2→4 | 119 µs | **L/M/H pattern** |
+| Low[266] | 2→4 | **103.280 ms** | **Mutex inherit** |
+| PS[228] | 2→4 | 120 µs | **L/M/H pattern** |
 
 ![Priority inversion — red inherit stripes on Low](../images/stats/tasks-priority-low.svg)
 
@@ -247,7 +249,7 @@ The last rung checks that the system did what it was told to do:
 
 - **Core Affinity** — every `Aff[*]` mask matches the cores the task actually ran on, and the `AffM[299]` remask behaved. **No violations.**
 - **Task Lifecycle** — `SR0`…`SR3` show suspend and resume counts of **4/4**, and no task ran between its `suspend` and `resume`.
-- **Tag Analysis → `tag0_event`** — 2357 samples (avg ≈ 34 631, p95 41 936). Tag channels are only as useful as the budgets you bind them to; once a channel maps to a real limit, Trace Compare turns it into a pass/fail signal between builds.
+- **Tag Analysis → `tag0_event`** — 2420 samples (avg ≈ 34 034, p95 41 936). Tag channels are only as useful as the budgets you bind them to; once a channel maps to a real limit, Trace Compare turns it into a pass/fail signal between builds.
 
 ![tag0_event distribution](../images/stats/stats-tag0.svg)
 
@@ -262,8 +264,8 @@ Collecting the six rungs into one prioritised list gives the output an engineeri
 | P0 | CS migration thrash (~1.6k/s, dwell ~0.5 ms) | Affinity-pin hot tasks; reduce equal-priority fan-out |
 | P0 | Queue core bounces (**858**) | Co-locate producers/consumers; shorten holds |
 | P1 | L/M/H on `PS[228]`; High Max block ~53 ms | Keep inheritance; audit critical sections; set deadlines |
-| P1 | WCET CS Max ~3.6 ms vs 1 ms tick | Budget slices; verify under tickful config |
-| P2 | TICKLESS CV 35.9 % | Scope busy windows before chasing missed ticks |
+| P1 | WCET CS Max ~3.3 ms vs 1 ms tick | Budget slices; verify under tickful config |
+| P2 | TICKLESS CV 36.7 % | Scope busy windows before chasing missed ticks |
 | OK | Load Balance 95 %; Affinity + SR 4/4 | Keep as CI checks (`report` HTML) |
 
 Define success before you change anything, then capture a second trace and read the deltas in Trace Compare ([§5.2](#52-compare-two-builds)). A fix has worked when the CS migration rate and Ping count fall, queue bounces fall, the High task's maximum blocking time is stable or better, and the Load Balance Score stays at 85 % or above with σ at or below 30 %.
@@ -272,14 +274,14 @@ Define success before you change anything, then capture a second trace and read 
 
 | Ladder Rung / Step | Main Metrics & Findings | Measured Values / Observations | Key Takeaway & Action |
 | --- | --- | --- | --- |
-| **3.0 Trace Snapshot** | Overview of trace metadata, size, and system health baseline. | 8 cores, 154 tasks, 2.358 s span, 31 133 context switches, 18 992 migrations, TICK WARNING (tickless). | Establishes total trace scope and identifies tickless idle mode early. |
-| **3.1 System Health** | Trace Health (TICK) | Mode: **TICKLESS** (CV 35.9 %); Avg period: 944 µs; Max gap: 2.481 ms; Missed ticks: ~8. | High CV is normal during tickless idle; scope to a busy phase before investigating missed ticks. |
-| **3.2 Core Balance** | Core Utilisation, Load Balance Score, Core Time Breakdown, Concurrent Active Cores, Switch Overhead | Active utilization: 68.7 % – 77.3 %; **Load Balance Score: 95 %** (Gini G = 0.049, σ = 6.0 %). | System load is well balanced across cores, but migration thrashing can still coexist with good balance. |
-| **3.3 Task CPU / WCET** | Top Tasks by CPU %, Execution Time Per Slice | `CS[28]` dominated at 15.9 % CPU (Max slice: 3.623 ms); `CS[11]`/`CS[24]` ~15 % each. | Longest slices (3–4 ms) exceed 1 ms tick. Pin equal-priority tasks or enforce CPU budget thresholds. |
-| **3.4 Latency** | Blocking Time, Dispatch / Scheduling Latency, Preemption Chain | `High[268]` Max block: **52.865 ms** (during inversion demo); `CS[*]` block: ~5–6 ms. | Differentiates off-CPU blocking time from ready-to-run dispatch delay. |
-| **3.5 Concurrency** | Core Migrations, Heatmap / Chord inspector, Mutex / Semaphore / Queue, Priority Inheritance | **18 992 total migrations** (`CS[18]` at 1692/s); hottest pairs mostly **0 %** lock-bounce (test-1 thrash); Queue `0x80021990` **858 core bounces**; `Low[266]` boosted 103.3 ms. | High thrash from equal-priority workers — confirm bursts on the heatmap; extreme lock bouncing on the shared queue needs task co-location (**Lock Bounces Only**). |
+| **3.0 Trace Snapshot** | Overview of trace metadata, size, and system health baseline. | 8 cores, 163 tasks, 2.421 s span, 31 414 context switches, 19 018 migrations, TICK WARNING (tickless). | Establishes total trace scope and identifies tickless idle mode early. |
+| **3.1 System Health** | Trace Health (TICK) | Mode: **TICKLESS** (CV 36.7 %); Avg period: 945 µs; Max gap: 3.292 ms; Missed ticks: ~10. | High CV is normal during tickless idle; scope to a busy phase before investigating missed ticks. |
+| **3.2 Core Balance** | Core Utilisation, Load Balance Score, Core Time Breakdown, Concurrent Active Cores, Switch Overhead | Active utilization: 56.9 % – 75.1 %; **Load Balance Score: 95 %** (Gini G = 0.052, σ = 6.3 %). | System load is well balanced across cores, but migration thrashing can still coexist with good balance. |
+| **3.3 Task CPU / WCET** | Top Tasks by CPU %, Execution Time Per Slice | `CS[28]` ~15.0 % CPU (Max slice: 3.298 ms); peer CS workers ~15 % each. | Longest slices (3–4 ms) exceed 1 ms tick. Pin equal-priority tasks or enforce CPU budget thresholds. |
+| **3.4 Latency** | Blocking Time, Dispatch / Scheduling Latency, Preemption Chain | `High[268]` Max block: **52.872 ms** (during inversion demo); `CS[*]` block: ~5–6 ms. | Differentiates off-CPU blocking time from ready-to-run dispatch delay. |
+| **3.5 Concurrency** | Core Migrations, Heatmap / Chord inspector, Mutex / Semaphore / Queue, Priority Inheritance | **19 018 total migrations** (`CS[18]` at 1561/s); hottest pairs mostly **0 %** lock-bounce (test-1 thrash); Queue `0x80021ad0` **858 core bounces**; `Low[266]` boosted 103.3 ms. | High thrash from equal-priority workers — confirm bursts on the heatmap; extreme lock bouncing on the shared queue needs task co-location (**Lock Bounces Only**). |
 | **3.6 Compliance** | Core Affinity, Task Lifecycle, Tag Analysis | Affinity: **No violations**; Lifecycle: Suspend/Resume 4/4 counts; Tag: `tag0_event` 2357 samples. | System complied with core masks and state lifecycles correctly. |
-| **3.7 Performance Verdict** | Prioritised Engineering Action Plan | **P0:** Thrash (~1.6k/s) & Queue bounces (858); **P1:** Inversion & WCET ~3.6 ms; **P2:** TICKLESS CV. | Focus on affinity-pinning, producer/consumer co-location, and slice budgeting. |
+| **3.7 Performance Verdict** | Prioritised Engineering Action Plan | **P0:** Thrash (~1.6k/s) & Queue bounces (858); **P1:** Inversion & WCET ~3.3 ms; **P2:** TICKLESS CV. | Focus on affinity-pinning, producer/consumer co-location, and slice budgeting. |
 
 ---
 

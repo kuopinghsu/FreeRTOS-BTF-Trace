@@ -4,7 +4,7 @@
 
   Run (from BTFViewer/):
     make demo
-    # or: python3 scripts/demo_runner.py scripts/demos/demo_8cores/demo_8cores.xml
+    # or: python3 scripts/demo_runner.py demos/demo_8cores/demo_8cores.xml
     #     (add the launch flag to start builds/btf_viewer.py)
     Flags: launch, interactive, dry-run, short, skip-tags, demo-api-port (see runner -h).
     Note: XML comments must not contain double-hyphen sequences.
@@ -107,7 +107,13 @@
     <step id="4" title="Toolbar tour" tags="ui">
       <focus/>
       <audio file="${XML_DIR}/voice/04_toolbar.mp3"/>
-      <wait seconds="12" why="voice reaches Analysis paragraph"/>
+      <wait seconds="5.0" why="voice: icons H/V zoom to Task/Core"/>
+      <view_mode mode="core"/>
+      <wait seconds="1.5" why="voice: Core view"/>
+      <view_mode mode="task"/>
+      <wait seconds="1.0" why="voice: Task view"/>
+      <cpu_load on="true"/>
+      <wait seconds="4.5" why="voice: Load Heatmap Chord into Analysis"/>
       <wait seconds="5" why="voice: Analysis triage card"/>
       <panel name="stats"/>
       <wait seconds="1.5" why="voice: right panel tabs"/>
@@ -177,11 +183,11 @@
     <step id="11" title="Top Tasks WCET" tags="ladder">
       <focus/>
       <panel name="stats"/>
-      <stats_section id="tasks,exec" expand="true" collapse_others="true"/>
+      <stats_section id="tasks,exec" expand="true" collapse_others="true" scroll="exec"/>
       <audio file="${XML_DIR}/voice/11_wcet.mp3"/>
-      <highlight task="CS[28]"/>
+      <highlight task="CS[27]"/>
       <wait seconds="0.8"/>
-      <jump_wcet task="CS[28]"/>
+      <jump_wcet task="CS[27]"/>
       <wait seconds="2.0" why="WCET jump settle"/>
       <wait_audio/>
       <stats_reset/>
@@ -199,7 +205,7 @@
     <step id="13" title="Blocking Inheritance" tags="ladder">
       <focus/>
       <panel name="stats"/>
-      <stats_section id="block,priority,preemption" expand="true" collapse_others="true"/>
+      <stats_section id="block,priority,preemption" expand="true" collapse_others="true" scroll="block"/>
       <move target="timeline"/>
       <wait seconds="0.6"/>
       <audio file="${XML_DIR}/voice/13_latency.mp3"/>
@@ -220,7 +226,7 @@
       <clear_cursors/>
       <fit_view/>
       <panel name="stats"/>
-      <stats_section id="migrations,sync,queue" expand="true" collapse_others="true"/>
+      <stats_section id="migrations,sync,queue" expand="true" collapse_others="true" scroll="migrations"/>
       <highlight task="CS[18]"/>
       <wait seconds="2.0"/>
       <wait_audio/>
@@ -230,7 +236,7 @@
     <step id="15" title="Affinity Lifecycle" tags="ladder">
       <focus/>
       <panel name="stats"/>
-      <stats_section id="affinity,lifecycle" expand="true" collapse_others="true"/>
+      <stats_section id="affinity,lifecycle" expand="true" collapse_others="true" scroll="affinity"/>
       <highlight task="SR0"/>
       <audio file="${XML_DIR}/voice/15_compliance.mp3"/>
       <wait_audio/>
@@ -240,7 +246,7 @@
     <step id="16" title="Find" optional="true" tags="ui,optional">
       <focus/>
       <audio file="${XML_DIR}/voice/16_find.mp3"/>
-      <find query="CS[28]"/>
+      <find query="CS[27]"/>
       <wait_audio/>
       <find clear="true"/>
     </step>
