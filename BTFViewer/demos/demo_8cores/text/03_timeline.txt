@@ -1,0 +1,1 @@
+The centre canvas is the timeline. Each coloured bar is one run slice of a task. Hover a bar to see duration, core, and nearby slices. The status bar shows the full span — two point four two one seconds — plus how many cores are active and how many switches occurred. Times on the axis start near one point zero one four seconds, not at zero.

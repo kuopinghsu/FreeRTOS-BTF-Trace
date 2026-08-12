@@ -1,0 +1,306 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  BTFViewer demo recording script (demo_runner.py).
+
+  Run (from BTFViewer/):
+    make demo
+    # or: python3 scripts/demo_runner.py scripts/demos/demo_8cores/demo_8cores.xml
+    #     (add the launch flag to start builds/btf_viewer.py)
+    Flags: launch, interactive, dry-run, short, skip-tags, demo-api-port (see runner -h).
+    Note: XML comments must not contain double-hyphen sequences.
+    The launch flag enables BTFVIEWER_DEMO_API for highlight/cursors/stats_section
+    and UI commands (view_mode, cpu_load, analysis, find, panel). Do not click
+    toolbar icons by screen coordinate — send those as demo API events.
+    Launch uses builds/btf_viewer.py (settings: builds/btf_viewer.rc).
+
+  Trace snapshot: demo_8cores.btf.gz (frozen copy in this demo folder;
+  do not point at tracedata/example-8cores.btf.gz — that file may change).
+  Narration: text/*.txt → voice/*.mp3
+  TTS tip: write Free-RTOS (with hyphen) so speech engines say it correctly.
+  Variables: REPO, BTF, PYTHON, MOD, XML_DIR, trace, cwd (as ${name})
+  Hotkey "mod" expands to Command on macOS, Ctrl elsewhere.
+-->
+<demo name="BTFViewer demo 8cores" version="1">
+
+  <meta>
+    <title>BTFViewer demo — 8-core sample</title>
+    <description>
+      Screen-capture + pre-rendered TTS. Narration sources: text/*.txt → voice/*.mp3.
+      Trace: demo_8cores.btf.gz (frozen demo snapshot).
+    </description>
+    <cwd>${BTF}</cwd>
+    <trace>${XML_DIR}/demo_8cores.btf.gz</trace>
+    <launch cwd="${BTF}" cmd="${PYTHON} builds/btf_viewer.py ${trace}"/>
+  </meta>
+
+  <defaults after_voice="1.5" pause="0.8" ai_wait="35" move_duration="0.35" audio_block="false"/>
+
+  <targets>
+    <!-- x/y are fractions of the detected BTFViewer window (0..1), not the screen -->
+    <point name="timeline" x="0.42" y="0.42"/>
+    <point name="timeline_bar" x="0.50" y="0.38"/>
+    <point name="status" x="0.35" y="0.965"/>
+    <point name="stats_panel" x="0.84" y="0.45"/>
+    <point name="stats_tab" x="0.78" y="0.12"/>
+    <point name="ai_tab" x="0.92" y="0.12"/>
+    <point name="load_strip" x="0.45" y="0.72"/>
+    <point name="toolbar_analysis" x="0.62" y="0.055"/>
+    <point name="toolbar_settings" x="0.78" y="0.055"/>
+    <point name="toolbar_fit" x="0.28" y="0.055"/>
+    <point name="toolbar_core" x="0.40" y="0.055"/>
+    <point name="toolbar_task" x="0.37" y="0.055"/>
+    <point name="toolbar_load" x="0.43" y="0.055"/>
+    <point name="toolbar_find" x="0.52" y="0.055"/>
+    <point name="limit_checkbox" x="0.82" y="0.16"/>
+  </targets>
+
+  <macros>
+    <macro name="fit">
+      <hotkey keys="mod+0"/>
+    </macro>
+    <macro name="clear_cursors">
+      <hotkey keys="shift+c"/>
+    </macro>
+    <macro name="place_cursor">
+      <!-- params: time (seconds, e.g. 3.085) -->
+      <hotkey keys="mod+g"/>
+      <wait seconds="0.6" why="Jump to Time dialog"/>
+      <hotkey keys="mod+a"/>
+      <type text="${time} s"/>
+      <press key="enter"/>
+      <wait seconds="0.8" why="jump settle"/>
+      <press key="c"/>
+      <wait seconds="0.4" why="cursor placed"/>
+    </macro>
+    <macro name="settings">
+      <hotkey keys="mod+,"/>
+    </macro>
+  </macros>
+
+  <steps>
+
+    <step id="1" title="Title" tags="intro">
+      <focus/>
+      <wait seconds="1" why="title hold"/>
+      <audio file="${XML_DIR}/voice/01_title.mp3"/>
+      <wait seconds="2"/>
+    </step>
+
+    <step id="2" title="Open example-8cores" tags="intro">
+      <focus/>
+      <audio file="${XML_DIR}/voice/02_open.mp3"/>
+      <macro ref="fit"/>
+      <wait seconds="2" why="fit after open"/>
+    </step>
+
+    <step id="3" title="Timeline canvas" tags="ui">
+      <focus/>
+      <audio file="${XML_DIR}/voice/03_timeline.mp3"/>
+      <move target="timeline" duration="0.6"/>
+      <wait seconds="0.8"/>
+      <move target="timeline_bar" duration="0.5"/>
+      <wait seconds="1.2" why="hover tooltip"/>
+      <move target="status" duration="0.5"/>
+      <wait seconds="0.6"/>
+    </step>
+
+    <step id="4" title="Toolbar tour" tags="ui">
+      <focus/>
+      <audio file="${XML_DIR}/voice/04_toolbar.mp3"/>
+      <wait seconds="12" why="voice reaches Analysis paragraph"/>
+      <wait seconds="5" why="voice: Analysis triage card"/>
+      <panel name="stats"/>
+      <wait seconds="1.5" why="voice: right panel tabs"/>
+      <panel name="find"/>
+      <wait seconds="1.2"/>
+      <panel name="ai"/>
+      <wait_audio/>
+      <panel name="stats"/>
+    </step>
+
+    <step id="5" title="Task Core Load" tags="ui">
+      <focus/>
+      <audio file="${XML_DIR}/voice/05_views.mp3"/>
+      <cpu_load on="true"/>
+      <wait seconds="1.2" why="voice: Load strip"/>
+      <view_mode mode="core"/>
+      <wait seconds="2.0" why="voice: Core view"/>
+      <view_mode mode="task"/>
+      <wait seconds="1.5" why="voice: Task view"/>
+      <wait_audio/>
+    </step>
+
+    <step id="6" title="Fit" tags="ui">
+      <focus/>
+      <audio file="${XML_DIR}/voice/06_fit.mp3"/>
+      <macro ref="fit"/>
+      <wait seconds="1.0"/>
+    </step>
+
+    <step id="7" title="Statistics Summary" tags="ladder">
+      <focus/>
+      <panel name="stats"/>
+      <stats_section id="cores" expand="true" collapse_others="true" scroll="top"/>
+      <audio file="${XML_DIR}/voice/07_summary.mp3"/>
+      <wait_audio/>
+      <stats_reset/>
+    </step>
+
+    <step id="8" title="Analysis Findings" tags="ladder">
+      <focus/>
+      <audio file="${XML_DIR}/voice/08_analysis.mp3"/>
+      <wait seconds="2.5" why="voice: Click Analysis on the toolbar"/>
+      <analysis/>
+      <wait_audio/>
+      <analysis close="true"/>
+      <wait seconds="0.6"/>
+    </step>
+
+    <step id="9" title="Trace Health" tags="ladder">
+      <focus/>
+      <panel name="stats"/>
+      <stats_section id="health" expand="true" collapse_others="true"/>
+      <audio file="${XML_DIR}/voice/09_tick.mp3"/>
+      <wait_audio/>
+      <stats_reset/>
+    </step>
+
+    <step id="10" title="Core Utilisation" tags="ladder">
+      <focus/>
+      <panel name="stats"/>
+      <stats_section id="cores" expand="true" collapse_others="true"/>
+      <audio file="${XML_DIR}/voice/10_balance.mp3"/>
+      <wait_audio/>
+      <stats_reset/>
+    </step>
+
+    <step id="11" title="Top Tasks WCET" tags="ladder">
+      <focus/>
+      <panel name="stats"/>
+      <stats_section id="tasks,exec" expand="true" collapse_others="true"/>
+      <audio file="${XML_DIR}/voice/11_wcet.mp3"/>
+      <highlight task="CS[28]"/>
+      <wait seconds="0.8"/>
+      <jump_wcet task="CS[28]"/>
+      <wait seconds="2.0" why="WCET jump settle"/>
+      <wait_audio/>
+      <stats_reset/>
+    </step>
+
+    <step id="12" title="Cursors Limit C1-Cn" tags="ladder">
+      <focus/>
+      <audio file="${XML_DIR}/voice/12_cursors.mp3"/>
+      <fit_view/>
+      <clear_cursors/>
+      <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
+      <wait seconds="1.5"/>
+    </step>
+
+    <step id="13" title="Blocking Inheritance" tags="ladder">
+      <focus/>
+      <panel name="stats"/>
+      <stats_section id="block,priority,preemption" expand="true" collapse_others="true"/>
+      <move target="timeline"/>
+      <wait seconds="0.6"/>
+      <audio file="${XML_DIR}/voice/13_latency.mp3"/>
+      <highlight task="High"/>
+      <wait seconds="1.2"/>
+      <highlight task="Med"/>
+      <wait seconds="1.0"/>
+      <highlight task="Low"/>
+      <wait seconds="1.5"/>
+      <wait_audio/>
+      <stats_reset/>
+    </step>
+
+    <step id="14" title="Migrations Mutex" tags="ladder">
+      <focus/>
+      <audio file="${XML_DIR}/voice/14_migrations.mp3"/>
+      <limit on="false"/>
+      <clear_cursors/>
+      <fit_view/>
+      <panel name="stats"/>
+      <stats_section id="migrations,sync,queue" expand="true" collapse_others="true"/>
+      <highlight task="CS[18]"/>
+      <wait seconds="2.0"/>
+      <wait_audio/>
+      <stats_reset/>
+    </step>
+
+    <step id="15" title="Affinity Lifecycle" tags="ladder">
+      <focus/>
+      <panel name="stats"/>
+      <stats_section id="affinity,lifecycle" expand="true" collapse_others="true"/>
+      <highlight task="SR0"/>
+      <audio file="${XML_DIR}/voice/15_compliance.mp3"/>
+      <wait_audio/>
+      <stats_reset/>
+    </step>
+
+    <step id="16" title="Find" optional="true" tags="ui,optional">
+      <focus/>
+      <audio file="${XML_DIR}/voice/16_find.mp3"/>
+      <find query="CS[28]"/>
+      <wait_audio/>
+      <find clear="true"/>
+    </step>
+
+    <step id="17" title="Export" tags="ui">
+      <focus/>
+      <panel name="stats"/>
+      <confirm prompt="Point at Export CSV / HTML / Trace Compare — then continue"/>
+      <audio file="${XML_DIR}/voice/17_export.mp3"/>
+    </step>
+
+    <step id="18" title="AI setup" tags="ai">
+      <focus/>
+      <audio file="${XML_DIR}/voice/18_ai_setup.mp3"/>
+      <panel name="ai"/>
+      <wait seconds="0.5"/>
+      <macro ref="settings"/>
+      <confirm prompt="In Settings → AI: enable Gemini, Auto-apply OFF, Test connection, OK — then continue (do not show the API key)"/>
+      <press key="esc"/>
+    </step>
+
+    <step id="19" title="AI Analysis Findings" tags="ai">
+      <focus/>
+      <audio file="${XML_DIR}/voice/19_ai_findings.mp3"/>
+      <panel name="ai"/>
+      <confirm prompt="Click template Analysis Findings, wait for reply, optional jump — then continue"/>
+      <wait ai="true" why="model reply"/>
+    </step>
+
+    <step id="20" title="AI Investigate" optional="true" tags="ai,long,optional">
+      <focus/>
+      <audio file="${XML_DIR}/voice/20_ai_investigate.mp3"/>
+      <confirm prompt="Clear AI log, click Investigate, Apply tool card when shown — then continue"/>
+      <wait ai="true" why="investigate"/>
+    </step>
+
+    <step id="21" title="AI Explain region" optional="true" tags="ai,long,optional">
+      <focus/>
+      <audio file="${XML_DIR}/voice/21_ai_explain.mp3"/>
+      <fit_view/>
+      <clear_cursors/>
+      <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
+      <confirm prompt="Limit ON; click Explain region; verify jump inside C1–Cn — then continue"/>
+      <wait ai="true" why="explain region"/>
+      <limit on="false"/>
+    </step>
+
+    <step id="22" title="AI Migration thrash" tags="ai">
+      <focus/>
+      <audio file="${XML_DIR}/voice/22_ai_thrash.mp3"/>
+      <confirm prompt="Full-trace; Clear; Migration thrash template; wait for reply — then continue"/>
+      <wait ai="true" why="thrash"/>
+    </step>
+
+    <step id="23" title="Close" tags="intro">
+      <focus/>
+      <macro ref="fit"/>
+      <audio file="${XML_DIR}/voice/23_close.mp3"/>
+      <wait seconds="3" why="end hold"/>
+    </step>
+
+  </steps>
+</demo>

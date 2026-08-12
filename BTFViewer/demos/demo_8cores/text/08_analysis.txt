@@ -1,0 +1,3 @@
+Click Analysis on the toolbar.
+
+This dialog is a triage card for whatever Statistics is currently scoped to. Findings are tagged by severity — load, long run slices, blocking, migrations, tick health, sync-object bounces, and similar. Findings are not a Statistics section themselves; each one names which Statistics section to open next. The habit is: read every finding, not only the first; open that section; click Max, a chart point, or a heatmap cell to jump the timeline; then optionally ask AI to narrate the same findings. We walk the sections by hand first so you can judge the assistant later.

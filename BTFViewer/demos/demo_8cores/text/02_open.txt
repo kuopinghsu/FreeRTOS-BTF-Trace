@@ -1,0 +1,1 @@
+Open a trace from File, Open — or drag and drop onto the window. Compressed BTF files work the same as plain ones. We load the frozen eight-core demo sample that ships with this recording script.

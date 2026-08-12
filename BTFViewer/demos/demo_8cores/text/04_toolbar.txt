@@ -1,0 +1,5 @@
+The toolbar is mostly icons — hover any icon for its name. You can switch layout between Horizontal and Vertical. Zoom in, zoom one-to-one, or Fit the whole trace. Task view versus Core view. Load turns on the CPU utilisation strip under the timeline. Heatmap and Chord show migrations between cores.
+
+Now look at Analysis on the toolbar — it opens a short triage card of findings. Settings is on the far right.
+
+On the right-hand panel: Statistics, Marks, Find, Legend, and AI. We work in Statistics first, then finish on AI.

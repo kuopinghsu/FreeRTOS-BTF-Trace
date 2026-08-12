@@ -1,0 +1,1 @@
+Export HTML and CSV follow the current cursor scope, and the HTML report puts Analysis Findings near the top. Trace Compare needs two traces open in separate tabs — use it after a firmware change to see what got better or worse.

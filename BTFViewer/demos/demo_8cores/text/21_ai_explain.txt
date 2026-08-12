@@ -1,0 +1,1 @@
+Explain region looks only at the cursor window — the inversion phase we already measured. The viewer puts those time bounds into the prompt so the model should not invent times outside the cursors. Click any jump link and check the axis: it must land between the two cursors. If it seeks elsewhere, call that out — that is why we verify every AI claim on the timeline.
