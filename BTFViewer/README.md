@@ -3,7 +3,7 @@
 
 **Version 1.4.0** — Desktop (Python) and Web
 
-![BTFViewer AI-powered](../images/btfviewer-ai.svg)
+![BTFViewer AI-assisted](../images/btfviewer-ai.png)
 
 Interactive viewer for FreeRTOS context-switch traces in **Best Trace Format** (`.btf`). Open plain or compressed traces, inspect scheduling on a timeline, measure with cursors, review statistics, and export reports or screenshots.
 
@@ -1621,7 +1621,7 @@ Open **Settings** from the toolbar or `Ctrl+,`.
 | **Appearance** | Dark/light theme, fonts, colorblind-safe palette. Desktop font sizes are **pt** (HiDPI-scaled); web sizes are **CSS px**. Defaults look similar; the numbers are not interchangeable. |
 | **Display** | Show/hide Legend, Statistics, Marks, Find, AI, CPU Load; **Timeline overlays** (STI, grid, hover highlight); **Analysis thresholds** (CPU budget % and per-task deadline ns) |
 | **Layout** | Label width, row height, zoom 1:1 density, max cursors, time decimals, CPU/STI sizes |
-| **AI** | Enable, **Auto-apply GUI actions**, preset (Ollama / OpenAI / Gemini / Custom), base URL, model, authentication (none / API key / Sign in), reply language |
+| **AI** | Enable, **Auto-apply GUI actions**, **Log MCP messages to file** (Desktop debug; off by default), preset (Ollama / OpenAI / Gemini / Custom), base URL, model, authentication (none / API key / Sign in), reply language |
 
 | | Desktop | Web |
 |--|---------|-----|

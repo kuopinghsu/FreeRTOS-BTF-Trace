@@ -374,6 +374,7 @@ Replies may include ` ```mermaid ` **sequence** diagrams (mutex take/give, block
 | Raw ` ```btftool ` JSON instead of native tool calls | Model lacks (or skips) function calling | Same cards either way — **Apply** or enable **Auto-apply GUI actions**. Switch to `qwen2.5:7b` / `llama3.1:8b` / `gpt-4o` / Gemini for native calls |
 | Ask times out (over 120s) or stays on Waiting… | Cold start, CPU offload, or VRAM spill | **Stop**, warm with `ollama run MODEL`, retry. Use **Clear** between long threads. Smaller model or shorter Statistics scope if the Findings card is huge |
 | Later turns ignore earlier facts | Chat history exceeded the context window | **Clear** on the AI bar, or **Analysis → Query with AI…** for a fresh scoped prompt |
+| Need raw AI request/response dumps (Desktop) | Debugging tool rounds / provider quirks | Settings → AI → **Log MCP messages to file** (off by default). Appends to `./ai_mcp_messages.log`; delete when finished |
 
 <a id="test-connection-curl" name="test-connection-curl">&#x200B;</a>
 ### Test connection curl ![](../images/readme/h3.svg)

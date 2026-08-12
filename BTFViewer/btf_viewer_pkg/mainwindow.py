@@ -19,6 +19,8 @@ from .ai_assistant import (
     ai_jump_annotation_note,
     migrate_ai_settings,
     normalize_ai_preset,
+    parse_ai_mcp_log,
+    set_ai_mcp_log_enabled,
 )
 from .ai_tools import (
     AI_TOOL_ADD_ANNOTATION,
@@ -2980,6 +2982,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._act_theme.setText("Switch to &Dark Theme")
 
         self._refresh_zoom_ui_unit()
+        # Migrate AI rc keys and sync MCP debug-log enable from [ai] mcp_log.
+        self._ai_read_settings()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         """Re-autofit CPU load pane height when the window grows (stretch factor 0)."""
@@ -4853,7 +4857,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     @classmethod
     def _ai_setting_keys(cls) -> list:
-        keys = ["enabled", "preset", "response_language", "auto_apply"]
+        keys = ["enabled", "preset", "response_language", "auto_apply", "mcp_log"]
         keys += [
             f"{pid}_{field}"
             for pid, _label, _base, _model in AI_PRESETS
@@ -4870,6 +4874,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         cfg["response_language"] = (
             cfg["response_language"] or DEFAULT_AI_RESPONSE_LANGUAGE)
         cfg["auto_apply"] = cfg["auto_apply"] or "false"
+        cfg["mcp_log"] = cfg["mcp_log"] or "false"
 
         legacy = {k: s.get("ai", k, "") for k in self._AI_LEGACY_KEYS}
         patch = migrate_ai_settings({**cfg, **legacy})
@@ -4883,6 +4888,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             s.align_section_keys("ai", set(keys))
             s.flush()
         cfg["preset"] = normalize_ai_preset(cfg["preset"])
+        set_ai_mcp_log_enabled(parse_ai_mcp_log(cfg.get("mcp_log")))
         return cfg
 
     def _ai_save_settings_patch(self, patch: dict) -> None:
@@ -7601,6 +7607,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             response_language=_ai_cfg["response_language"],
             ai_auto_apply=str(_ai_cfg.get("auto_apply", "false")).lower()
             in ("1", "true", "yes", "on"),
+            ai_mcp_log=str(_ai_cfg.get("mcp_log", "false")).lower()
+            in ("1", "true", "yes", "on"),
             initial_page=page if isinstance(page, str) else "Appearance",
         )
         dlg.live_preview.connect(lambda: self._apply_settings_preview({
@@ -7655,6 +7663,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 "preset": dlg.ai_preset or DEFAULT_AI_PRESET,
                 "response_language": dlg.response_language or DEFAULT_AI_RESPONSE_LANGUAGE,
                 "auto_apply": str(dlg.ai_auto_apply).lower(),
+                "mcp_log": str(dlg.ai_mcp_log).lower(),
             }
             for _pid, _vals in dlg.ai_preset_settings.items():
                 for _field in AI_PRESET_FIELDS:
@@ -7664,6 +7673,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             )
             if _ai_changed:
                 self._settings.set_many("ai", _ai_upd)
+            set_ai_mcp_log_enabled(bool(dlg.ai_mcp_log))
             # Tab visibility follows Enable AI even when only that flag changed.
             self._sync_panel_tab_visibility()
             self._apply_dock_visibility_from_prefs()

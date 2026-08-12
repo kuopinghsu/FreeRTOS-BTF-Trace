@@ -20,7 +20,7 @@ from .ai_investigation import (
     save_baseline_json,
     snapshot_from_summary,
 )
-from .ai_assistant import ai_chat_completion, resolve_ai_settings
+from .ai_assistant import ai_chat_completion, parse_ai_mcp_log, resolve_ai_settings
 
 def _cli_validate_range_pair(lo: Optional[int], hi: Optional[int], label: str) -> Optional[str]:
     if (lo is None) ^ (hi is None):
@@ -1026,6 +1026,7 @@ def _cli_analyze_run(args: argparse.Namespace) -> int:
                 model=active.get("model", ""),
                 api_key=active.get("api_key", ""),
                 preset=active.get("preset", ""),
+                log_mcp=parse_ai_mcp_log(cfg.get("mcp_log")),
             )
             content = ""
             if isinstance(narrative, dict):

@@ -33,6 +33,7 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     _ai_log_document_html,
     _format_ai_log_html,
     ai_chat_completion,
+    append_ai_mcp_log,
     append_explain_region_bounds,
     apply_ai_preset,
     build_ai_system_prompt,
@@ -605,6 +606,113 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(turn["tool_calls"][0]["name"], "set_cursors")
         self.assertEqual(turn["tool_calls"][0]["arguments"]["timestamps"], [10.0, 20.0])
         self.assertNotIn("btftool", turn["content"])
+
+    def test_append_ai_mcp_log_and_chat_completion_flag(self) -> None:
+        import tempfile
+
+        class _FakeResp:
+            def __init__(self, body: bytes) -> None:
+                self._body = body
+
+            def read(self, n: int = -1) -> bytes:
+                if not self._body:
+                    return b""
+                if n is None or n < 0:
+                    out, self._body = self._body, b""
+                    return out
+                out, self._body = self._body[:n], self._body[n:]
+                return out
+
+            def close(self) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ai_mcp_messages.log")
+            append_ai_mcp_log("request", {"hello": 1}, path=path)
+            append_ai_mcp_log("response", {"ok": True}, path=path)
+            text = Path(path).read_text(encoding="utf-8")
+            self.assertIn(" request ", text)
+            self.assertIn('"hello": 1', text)
+            self.assertIn(" response ", text)
+            self.assertIn('"ok": true', text)
+
+            def _urlopen(req, timeout=None, **_kw):  # noqa: ANN001, ARG001
+                return _FakeResp(
+                    b'{"choices":[{"message":{"role":"assistant","content":"pong"}}]}'
+                )
+
+            with patch("btf_viewer_pkg.ai_assistant.urllib.request.urlopen", _urlopen), \
+                    patch("btf_viewer_pkg.ai_assistant.ai_mcp_log_path", return_value=path):
+                turn = ai_chat_completion(
+                    query="ping",
+                    messages=[{"role": "user", "content": "ping"}],
+                    base_url="http://127.0.0.1:11434/v1",
+                    model="test",
+                    log_mcp=True,
+                )
+            self.assertEqual(turn["content"], "pong")
+            logged = Path(path).read_text(encoding="utf-8")
+            self.assertIn("/chat/completions", logged)
+            self.assertIn('"content": "ping"', logged)
+            self.assertIn("pong", logged)
+
+    def test_test_connection_logs_when_enabled(self) -> None:
+        import tempfile
+
+        class _FakeResp:
+            def __init__(self, body: bytes) -> None:
+                self._body = body
+
+            def read(self, n: int = -1) -> bytes:
+                if not self._body:
+                    return b""
+                if n is None or n < 0:
+                    out, self._body = self._body, b""
+                    return out
+                out, self._body = self._body[:n], self._body[n:]
+                return out
+
+            def close(self) -> None:
+                return None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args) -> None:
+                self.close()
+
+        calls = {"n": 0}
+
+        def _urlopen(req, timeout=None, **_kw):  # noqa: ANN001, ARG001
+            calls["n"] += 1
+            url = str(getattr(req, "full_url", "") or req.get_full_url())
+            if url.endswith("/models"):
+                return _FakeResp(b'{"data":[{"id":"probe-model"}]}')
+            return _FakeResp(
+                b'{"choices":[{"message":{"role":"assistant","content":"OK"}}]}'
+            )
+
+        from btf_viewer_pkg.ai_assistant import (
+            ai_test_connection,
+            set_ai_mcp_log_enabled,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ai_mcp_messages.log")
+            set_ai_mcp_log_enabled(False)
+            with patch("btf_viewer_pkg.ai_assistant.urllib.request.urlopen", _urlopen), \
+                    patch("btf_viewer_pkg.ai_assistant.ai_mcp_log_path", return_value=path):
+                msg = ai_test_connection(
+                    base_url="http://127.0.0.1:11434/v1",
+                    model="probe-model",
+                    log_mcp=True,
+                )
+            self.assertIn("Connected", msg)
+            logged = Path(path).read_text(encoding="utf-8")
+            self.assertIn("/models", logged)
+            self.assertIn("/chat/completions", logged)
+            self.assertIn("Reply with exactly: OK", logged)
+            self.assertGreaterEqual(calls["n"], 2)
 
     def test_chat_completion_keeps_tools_on_generic_400(self) -> None:
         import io

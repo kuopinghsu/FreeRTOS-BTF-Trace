@@ -5,6 +5,7 @@ endpoint — never the raw BTF event stream.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
@@ -44,6 +45,7 @@ from .ai_tools import (
     needs_gemini_thought_signatures,
     normalize_tool_chat_messages,
     parse_ai_auto_apply,
+    parse_ai_mcp_log,
     parse_btf_highlight_href,
     parse_btf_jump_href,
     parse_tool_calls_from_text,
@@ -68,6 +70,60 @@ from .html_report import btf_html_report_document
 
 class OllamaCancelled(Exception):
     """User stopped an in-flight AI request."""
+
+
+AI_MCP_LOG_FILENAME = "ai_mcp_messages.log"
+_MCP_LOG_LOCK = threading.Lock()
+_MCP_LOG_ENABLED = False
+
+
+def ai_mcp_log_path() -> str:
+    """Path for the optional MCP message debug log (process current directory)."""
+    return os.path.join(os.getcwd(), AI_MCP_LOG_FILENAME)
+
+
+def set_ai_mcp_log_enabled(enabled: bool) -> None:
+    """Enable/disable MCP debug logging for all AI HTTP activity."""
+    global _MCP_LOG_ENABLED
+    with _MCP_LOG_LOCK:
+        _MCP_LOG_ENABLED = bool(enabled)
+
+
+def is_ai_mcp_log_enabled() -> bool:
+    return bool(_MCP_LOG_ENABLED)
+
+
+def _want_ai_mcp_log(explicit: bool = False) -> bool:
+    return bool(explicit) or is_ai_mcp_log_enabled()
+
+
+def append_ai_mcp_log(
+    kind: str,
+    data: Any,
+    *,
+    path: Optional[str] = None,
+) -> None:
+    """Append one MCP request/response record to the debug log file."""
+    dest = path or ai_mcp_log_path()
+    stamp = datetime.datetime.now().astimezone().isoformat(timespec="milliseconds")
+    label = str(kind or "message").strip() or "message"
+    try:
+        body = json.dumps(data, ensure_ascii=False, indent=2, default=str)
+    except Exception:
+        body = repr(data)
+    block = f"======== {stamp} {label} ========\n{body}\n\n"
+    with _MCP_LOG_LOCK:
+        with open(dest, "a", encoding="utf-8") as fh:
+            fh.write(block)
+
+
+def _log_ai_mcp(kind: str, data: Any, *, enabled: bool) -> None:
+    if not enabled:
+        return
+    try:
+        append_ai_mcp_log(kind, data)
+    except Exception:
+        pass
 
 
 class _MermaidZoomDialog(QDialog):
@@ -2025,6 +2081,7 @@ def ai_chat_completion(
     tls_verify: bool = True,
     cancel_event: Optional[threading.Event] = None,
     on_response: Optional[Callable[[Any], None]] = None,
+    log_mcp: bool = False,
 ) -> Dict[str, Any]:
     """One OpenAI-compatible ``/chat/completions`` round (non-streaming).
 
@@ -2068,6 +2125,8 @@ def ai_chat_completion(
         payload_obj["tools"] = use_tools
 
     def _post(body_obj: Dict[str, Any]) -> Dict[str, Any]:
+        do_log = _want_ai_mcp_log(log_mcp)
+        _log_ai_mcp("request", {"url": url, "body": body_obj}, enabled=do_log)
         payload = json.dumps(body_obj).encode("utf-8")
         req = urllib.request.Request(
             url,
@@ -2083,6 +2142,11 @@ def ai_chat_completion(
                 detail = exc.read().decode("utf-8", errors="replace")[:400]
             except Exception:
                 pass
+            _log_ai_mcp("response_error", {
+                "url": url,
+                "http_code": int(exc.code),
+                "detail": detail or str(exc.reason),
+            }, enabled=do_log)
             tip = _ai_http_error_tip(exc.code, detail, base_url=url_base)
             err = RuntimeError(
                 f"OpenAI-compatible HTTP {exc.code} at {url}: "
@@ -2114,7 +2178,9 @@ def ai_chat_completion(
             if cancel_event is not None and cancel_event.is_set():
                 raise OllamaCancelled("Stopped")
             raw = _read_http_body(resp, cancel_event=cancel_event).decode("utf-8")
-            return json.loads(raw)
+            parsed = json.loads(raw)
+            _log_ai_mcp("response", parsed, enabled=do_log)
+            return parsed
         finally:
             try:
                 resp.close()
@@ -2247,10 +2313,13 @@ def ai_list_models(
     api_key: str = "",
     *,
     tls_verify: bool = True,
+    log_mcp: bool = False,
 ) -> List[str]:
     """Return model ids from ``GET /models`` on an OpenAI-compatible API."""
     url_base = normalize_ai_base_url(base_url)
     url = url_base + "/models"
+    do_log = _want_ai_mcp_log(log_mcp)
+    _log_ai_mcp("request", {"method": "GET", "url": url}, enabled=do_log)
     req = urllib.request.Request(
         url, method="GET", headers=ai_request_headers(api_key, base_url=url_base),
     )
@@ -2258,8 +2327,14 @@ def ai_list_models(
         with ai_urlopen(req, timeout_s, tls_verify=tls_verify) as resp:
             body = json.loads(resp.read().decode("utf-8"))
     except Exception as exc:
+        _log_ai_mcp("response_error", {
+            "method": "GET",
+            "url": url,
+            "error": str(exc),
+        }, enabled=do_log)
         tip = _ai_ssl_error_tip(exc, tls_verify=tls_verify)
         raise RuntimeError(f"Cannot list models at {url}: {exc}{tip}") from exc
+    _log_ai_mcp("response", {"url": url, "body": body}, enabled=do_log)
     models: List[str] = []
     rows = body.get("data") if isinstance(body, dict) else None
     for m in rows or []:
@@ -2306,6 +2381,7 @@ def ai_test_connection(
     tls_verify: bool = True,
     timeout_s: float = AI_TEST_TIMEOUT_S,
     on_progress: Optional[Callable[[str], None]] = None,
+    log_mcp: bool = False,
 ) -> str:
     """List models, then run a tiny chat probe against the configured endpoint."""
     def _progress(msg: str) -> None:
@@ -2315,6 +2391,7 @@ def ai_test_connection(
             except Exception:
                 pass
 
+    do_log = _want_ai_mcp_log(log_mcp)
     url_base = normalize_ai_base_url(base_url)
     model_name = (model or DEFAULT_AI_MODEL).strip() or DEFAULT_AI_MODEL
     key = resolve_ai_api_key(api_key)
@@ -2331,7 +2408,7 @@ def ai_test_connection(
     try:
         served = ai_list_models(
             url_base, timeout_s=min(AI_LIST_MODELS_TIMEOUT_S, timeout_s),
-            api_key=key, tls_verify=tls_verify)
+            api_key=key, tls_verify=tls_verify, log_mcp=do_log)
     except RuntimeError as exc:
         if is_local_ai_host(url_base):
             # Only name the canonical root when the user pointed elsewhere.
@@ -2356,12 +2433,14 @@ def ai_test_connection(
     _progress(
         f"2/2 Chat probe with {model_name} (first load can take a while)…"
     )
-    payload = json.dumps({
+    body_obj = {
         "model": model_name,
         "stream": False,
         "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
         "max_tokens": 8,
-    }).encode("utf-8")
+    }
+    _log_ai_mcp("request", {"url": chat_url, "body": body_obj}, enabled=do_log)
+    payload = json.dumps(body_obj).encode("utf-8")
     req = urllib.request.Request(
         chat_url,
         data=payload,
@@ -2377,17 +2456,27 @@ def ai_test_connection(
             detail = exc.read().decode("utf-8", errors="replace")[:300]
         except Exception:
             pass
+        _log_ai_mcp("response_error", {
+            "url": chat_url,
+            "http_code": int(exc.code),
+            "detail": detail or str(exc.reason),
+        }, enabled=do_log)
         tip = _ai_http_error_tip(exc.code, detail, base_url=url_base)
         raise RuntimeError(
             f"HTTP {exc.code} at {chat_url}: {detail or exc.reason}.{tip}"
         ) from exc
     except Exception as exc:
+        _log_ai_mcp("response_error", {
+            "url": chat_url,
+            "error": str(exc),
+        }, enabled=do_log)
         tip = _ai_ssl_error_tip(exc, tls_verify=tls_verify)
         tip += _ai_timeout_error_tip(exc, timeout_s=timeout_s)
         raise RuntimeError(
             f"Chat probe failed at {chat_url}: {exc}{tip}"
         ) from exc
 
+    _log_ai_mcp("response", {"url": chat_url, "body": body}, enabled=do_log)
     reply = ""
     choices = body.get("choices") if isinstance(body, dict) else None
     if isinstance(choices, list) and choices:
@@ -3827,6 +3916,7 @@ def create_ai_assistant_panel(
                 "response_language": cfg.get(
                     "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ),
+                "log_mcp": parse_ai_mcp_log(cfg.get("mcp_log")),
             }
             self._set_busy(True)
             label = ai_preset_info(active["preset"])[1]
@@ -3911,6 +4001,7 @@ def create_ai_assistant_panel(
                 "response_language": cfg.get(
                     "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ),
+                "log_mcp": parse_ai_mcp_log(cfg.get("mcp_log")),
             }
             # Worker stays on the GUI thread; only the HTTP call runs off-thread.
             worker = _OllamaWorker(self, kwargs)

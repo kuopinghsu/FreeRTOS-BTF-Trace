@@ -80,6 +80,7 @@ from .ai_assistant import (  # noqa: F401
     DEFAULT_AI_MODEL,
     DEFAULT_AI_PRESET,
     DEFAULT_AI_RESPONSE_LANGUAGE,
+    AI_MCP_LOG_FILENAME,
     ai_auth_status,
     ai_list_models,
     ai_preset_info,
@@ -122,12 +123,14 @@ class _AiTestWorker(QObject):
         model_name: str,
         api_key: str = "",
         tls_verify: bool = True,
+        log_mcp: bool = False,
     ) -> None:
         super().__init__(parent)
         self._base_url = base_url
         self._model = model_name
         self._api_key = api_key
         self._tls_verify = tls_verify
+        self._log_mcp = bool(log_mcp)
 
     def start(self) -> None:
         threading.Thread(target=self._run, name="ai-test", daemon=True).start()
@@ -140,6 +143,7 @@ class _AiTestWorker(QObject):
                 api_key=self._api_key,
                 tls_verify=self._tls_verify,
                 on_progress=lambda s: self.progress.emit(s),
+                log_mcp=self._log_mcp,
             )
             self.finished.emit(msg)
         except Exception as exc:
@@ -159,11 +163,13 @@ class _AiListModelsWorker(QObject):
         base_url: str,
         api_key: str = "",
         tls_verify: bool = True,
+        log_mcp: bool = False,
     ) -> None:
         super().__init__(parent)
         self._base_url = base_url
         self._api_key = api_key
         self._tls_verify = tls_verify
+        self._log_mcp = bool(log_mcp)
 
     def start(self) -> None:
         threading.Thread(target=self._run, name="ai-list-models", daemon=True).start()
@@ -174,6 +180,7 @@ class _AiListModelsWorker(QObject):
                 base_url=self._base_url,
                 api_key=resolve_ai_api_key(self._api_key),
                 tls_verify=self._tls_verify,
+                log_mcp=self._log_mcp,
             )
             self.finished.emit([str(n) for n in names if n])
         except Exception as exc:
@@ -12171,6 +12178,7 @@ class _RcSettings:
                 "preset": "",
                 "response_language": DEFAULT_AI_RESPONSE_LANGUAGE,
                 "auto_apply": "false",
+                "mcp_log": "false",
             },
             **{
                 f"{_pid}_{_field}": ""
@@ -12691,6 +12699,7 @@ class _SettingsDialog(QDialog):
                  ai_preset_settings: Optional[Dict[str, Dict[str, str]]] = None,
                  response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
                  ai_auto_apply: bool = False,
+                 ai_mcp_log: bool = False,
                  initial_page: str = "Appearance"):
         super().__init__(parent, Qt.WindowType.Dialog)
         self.setWindowTitle("Settings")
@@ -13023,6 +13032,16 @@ class _SettingsDialog(QDialog):
             "When off, the chat shows Apply / Skip on each action card and "
             "Apply GUI actions under the log.")
         f4.addRow("", self._ai_auto_apply_cb)
+        self._ai_mcp_log_cb = QCheckBox("Log MCP messages to file")
+        self._ai_mcp_log_cb.setChecked(bool(ai_mcp_log))
+        self._ai_mcp_log_cb.setToolTip(
+            f"Debugging only. Appends to ./{AI_MCP_LOG_FILENAME} (can grow large).")
+        f4.addRow("", self._ai_mcp_log_cb)
+        _mcp_log_note = QLabel(
+            f"Debugging only — appends to ./{AI_MCP_LOG_FILENAME} (can grow large).")
+        _mcp_log_note.setWordWrap(True)
+        _mcp_log_note.setStyleSheet("color:#888;")
+        f4.addRow("", self._indented(_mcp_log_note))
 
         # Field values per preset; switching presets stashes the current inputs
         # so credentials survive a round trip.
@@ -13524,7 +13543,12 @@ class _SettingsDialog(QDialog):
         self._ai_model_refresh.setEnabled(False)
         self._set_ai_status(f"Listing models at {url}…")
         worker = _AiListModelsWorker(
-            self, base_url=url, api_key=api_key, tls_verify=tls_verify)
+            self,
+            base_url=url,
+            api_key=api_key,
+            tls_verify=tls_verify,
+            log_mcp=self._ai_mcp_log_cb.isChecked(),
+        )
         worker.finished.connect(
             self._on_ai_models_ok, Qt.ConnectionType.QueuedConnection)
         worker.failed.connect(
@@ -13580,6 +13604,7 @@ class _SettingsDialog(QDialog):
             model_name=model,
             api_key=api_key,
             tls_verify=tls_verify,
+            log_mcp=self._ai_mcp_log_cb.isChecked(),
         )
         # QueuedConnection: signals are emitted from a plain Python thread.
         worker.progress.connect(
@@ -13646,6 +13671,7 @@ class _SettingsDialog(QDialog):
         self._time_decimals_spin.setValue(_DEFAULT_TIME_DECIMALS)
         self._ai_enabled_cb.setChecked(True)
         self._ai_auto_apply_cb.setChecked(False)
+        self._ai_mcp_log_cb.setChecked(False)
         for _pid, _label, _base, _model in AI_PRESETS:
             self._ai_preset_values[_pid] = {
                 "base_url": _base, "model": _model, "api_key": "",
@@ -13715,6 +13741,8 @@ class _SettingsDialog(QDialog):
     def ai_enabled(self) -> bool:         return self._ai_enabled_cb.isChecked()
     @property
     def ai_auto_apply(self) -> bool:      return self._ai_auto_apply_cb.isChecked()
+    @property
+    def ai_mcp_log(self) -> bool:         return self._ai_mcp_log_cb.isChecked()
     @property
     def ai_preset(self) -> str:
         return normalize_ai_preset(self._ai_preset_combo.currentData())

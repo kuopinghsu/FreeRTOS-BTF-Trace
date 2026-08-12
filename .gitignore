@@ -66,6 +66,8 @@ tracedata/trace.*
 
 # BTF viewer runtime settings (user-local, not shared)
 btf_viewer.rc
+# Optional Desktop AI MCP debug dump (cwd; Settings → AI → Log MCP messages)
+ai_mcp_messages.log
 
 *.bak
 .DS_Store

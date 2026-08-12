@@ -2227,6 +2227,11 @@ def parse_ai_auto_apply(value: Any) -> bool:
     return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
+def parse_ai_mcp_log(value: Any) -> bool:
+    """Settings → AI MCP message debug log (default False)."""
+    return parse_ai_auto_apply(value)
+
+
 def max_tool_rounds(template_id: str = "") -> int:
     return max_tool_rounds_for_template(template_id, _MAX_TOOL_ROUNDS)
 

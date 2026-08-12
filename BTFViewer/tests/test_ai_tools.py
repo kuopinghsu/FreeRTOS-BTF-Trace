@@ -43,6 +43,7 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     normalize_raw_metric,
     normalize_tool_chat_messages,
     parse_ai_auto_apply,
+    parse_ai_mcp_log,
     parse_tool_calls_from_text,
     is_query_tool,
     query_raw_metric,
@@ -338,6 +339,12 @@ class AiToolsTests(unittest.TestCase):
         self.assertFalse(parse_ai_auto_apply(None))
         self.assertFalse(parse_ai_auto_apply("false"))
         self.assertTrue(parse_ai_auto_apply("true"))
+
+    def test_mcp_log_default_off(self) -> None:
+        self.assertFalse(parse_ai_mcp_log(None))
+        self.assertFalse(parse_ai_mcp_log("false"))
+        self.assertTrue(parse_ai_mcp_log("true"))
+        self.assertTrue(parse_ai_mcp_log("on"))
 
     def test_normalize_tool_messages_fills_gemini_function_names(self) -> None:
         asst = canonical_assistant_tool_message("Applying.", [
