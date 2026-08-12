@@ -79,7 +79,8 @@ Convert `text/*.txt` → `voice/*.mp3` with your TTS tool. Write **Free-RTOS**
 (with a hyphen) so speech engines pronounce it correctly. The runner also tries
 sibling `voice/` / `text/` folders and common extensions (`.wav`, `.m4a`, …).
 
-Default players: macOS `afplay`, else `ffplay` / `paplay` / `aplay`.  
+Default players: **stdlib on Windows** (`scripts/play_audio_clip.py` via winmm/MCI — no pip),
+else macOS `afplay`, `ffplay` / `paplay` / `aplay`. Optional `pygame` if you already have a wheel.  
 Override: `--audio-cmd 'ffplay -nodisp -autoexit'`. Skip clips: `--no-audio`.
 
 **Narration + UI overlap**

@@ -85,8 +85,9 @@ clicks. If re-detect fails, the last good box is kept (never silently replaced
 with the full screen while a real windowed box is known). Override with
 ``--win L,T,W,H`` or ``--window-title``.
 
-Players: macOS ``afplay``, Linux ``ffplay``/``paplay``/``aplay``, Windows
-PowerShell / ``start``. Override with ``--audio-cmd 'ffplay -nodisp -autoexit'``.
+Players: ``scripts/play_audio_clip.py`` (Windows: stdlib ``winmm``/MCI — no
+pip; optional pygame; else ``afplay``/``ffplay``). Override with
+``--audio-cmd 'ffplay -nodisp -autoexit'``.
 
 Move the mouse to a **screen corner** to abort (PyAutoGUI FAILSAFE).
 
@@ -134,6 +135,16 @@ def shutil_which(name: str) -> Optional[str]:
     return which(name)
 
 
+def split_cmdline(cmd: str) -> List[str]:
+    """Split a shell-like command string without mangling Windows paths.
+
+    POSIX ``shlex`` treats ``\\`` as an escape, so
+    ``C:\\Users\\...\\python.exe`` becomes ``C:Users...python.exe``.
+    Use MS-Windows rules on ``nt``.
+    """
+    return shlex.split(cmd, posix=(os.name != "nt"))
+
+
 def speak(text: str, *, no_tts: bool, tts_cmd: Optional[str], tts_rate: int,
           dry_run: bool) -> None:
     text = " ".join((text or "").split())
@@ -146,7 +157,7 @@ def speak(text: str, *, no_tts: bool, tts_cmd: Optional[str], tts_rate: int,
         time.sleep(min(2.0, 0.3 + len(text) / 1000.0))
         return
     if tts_cmd:
-        subprocess.run(shlex.split(tts_cmd) + [text], check=False)
+        subprocess.run(split_cmdline(tts_cmd) + [text], check=False)
         return
     if sys.platform == "darwin":
         subprocess.run(["say", "-r", str(tts_rate), text], check=False)
@@ -251,9 +262,57 @@ def resolve_media_path(raw: str, variables: Dict[str, str]) -> Path:
     return (Path(variables.get("XML_DIR", ".")) / p).resolve()
 
 
+def _python_audio_command(path: Path) -> Optional[List[str]]:
+    """Play via ``scripts/play_audio_clip.py`` (stdlib MCI on Windows; no pip)."""
+    helper = SCRIPT_DIR / "play_audio_clip.py"
+    if not helper.is_file():
+        return None
+    return [sys.executable, str(helper), str(path.resolve())]
+
+
+def _windows_audio_command(path: Path) -> List[str]:
+    """Last-resort Windows playback if the helper script is missing."""
+    resolved = str(path.resolve())
+    ps_path = resolved.replace("'", "''")
+    suffix = path.suffix.lower()
+    if suffix in (".wav", ".wave"):
+        ps = (
+            f"$p = New-Object System.Media.SoundPlayer -ArgumentList @('{ps_path}'); "
+            "$p.PlaySync()"
+        )
+        return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps]
+
+    ps = f"""
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName PresentationCore
+$mp = New-Object System.Windows.Media.MediaPlayer
+try {{
+  $full = (Resolve-Path -LiteralPath '{ps_path}').Path
+  $mp.Open([Uri]::new($full))
+  $deadline = [DateTime]::UtcNow.AddSeconds(10)
+  while (-not $mp.NaturalDuration.HasTimeSpan) {{
+    if ([DateTime]::UtcNow -gt $deadline) {{ throw "timeout opening audio: $full" }}
+    Start-Sleep -Milliseconds 40
+  }}
+  $ms = [Math]::Max(1, [int][Math]::Ceiling($mp.NaturalDuration.TimeSpan.TotalMilliseconds))
+  $mp.Volume = 1.0
+  $mp.Play()
+  Start-Sleep -Milliseconds $ms
+}} finally {{
+  try {{ $mp.Stop() }} catch {{}}
+  try {{ $mp.Close() }} catch {{}}
+}}
+"""
+    return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps]
+
+
 def _audio_command(path: Path, audio_cmd: Optional[str]) -> List[str]:
     if audio_cmd:
-        return shlex.split(audio_cmd) + [str(path)]
+        return split_cmdline(audio_cmd) + [str(path)]
+    # Prefer the Python helper: on Windows it uses stdlib winmm/MCI (no pygame).
+    py_cmd = _python_audio_command(path)
+    if py_cmd is not None:
+        return py_cmd
     if sys.platform == "darwin" and shutil_which("afplay"):
         return ["afplay", str(path)]
     if shutil_which("ffplay"):
@@ -263,17 +322,11 @@ def _audio_command(path: Path, audio_cmd: Optional[str]) -> List[str]:
     if shutil_which("aplay") and path.suffix.lower() in (".wav", ".wave"):
         return ["aplay", "-q", str(path)]
     if sys.platform == "win32":
-        # PowerShell SoundPlayer works for WAV; otherwise start default app and hope.
-        if path.suffix.lower() in (".wav", ".wave"):
-            ps = (
-                f"$p = New-Object System.Media.SoundPlayer '{path}'; "
-                f"$p.PlaySync()"
-            )
-            return ["powershell", "-NoProfile", "-Command", ps]
-        return ["cmd", "/c", "start", "/wait", "", str(path)]
+        return _windows_audio_command(path)
     raise RuntimeError(
-        f"No audio player found for {path}. Install afplay/ffplay/paplay, "
-        "or pass --audio-cmd 'ffplay -nodisp -autoexit'"
+        f"No audio player found for {path}.\n"
+        "  On Windows, scripts/play_audio_clip.py uses stdlib winmm (no pip).\n"
+        "  Or install ffplay, or pass --audio-cmd 'ffplay -nodisp -autoexit'"
     )
 
 
@@ -362,8 +415,36 @@ def _ensure_xauthority() -> None:
     os.environ["XAUTHORITY"] = str(tmp)
 
 
+def _enable_windows_dpi_awareness() -> None:
+    """Match PyAutoGUI coords to physical pixels (GetWindowRect / SetCursorPos)."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        return
+    except Exception:
+        pass
+    try:
+        import ctypes
+
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_AWARE
+        return
+    except Exception:
+        pass
+    try:
+        import ctypes
+
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
 def _import_pyautogui():
     _ensure_xauthority()
+    _enable_windows_dpi_awareness()
     try:
         import pyautogui
     except ImportError as exc:
@@ -763,7 +844,11 @@ def detect_window(
         w, h = max(w, 1280), max(h, 800)
         log(f"window detect fallback → synthetic {w}x{h}")
     else:
-        log(f"window detect fallback → full screen {w}x{h}")
+        log(
+            f"window detect fallback → full screen {w}x{h} "
+            "(fractional targets will be wrong if the viewer is not maximized; "
+            "pass --win L,T,W,H or ensure the window title contains 'BTF Viewer')"
+        )
     return 0, 0, w, h
 
 
@@ -841,17 +926,56 @@ def _window_bounds_macos_quartz(
 
 
 def focus_pid(pid: Optional[int]) -> None:
-    if sys.platform != "darwin" or not pid:
+    if not pid and sys.platform != "win32":
         return
-    script = (
-        f'tell application "System Events"\n'
-        f'  try\n'
-        f'    set frontmost of (first process whose unix id is {int(pid)}) to true\n'
-        f'  end try\n'
-        f'end tell'
-    )
-    subprocess.run(["osascript", "-e", script], check=False,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if sys.platform == "darwin" and pid:
+        script = (
+            f'tell application "System Events"\n'
+            f'  try\n'
+            f'    set frontmost of (first process whose unix id is {int(pid)}) to true\n'
+            f'  end try\n'
+            f'end tell'
+        )
+        subprocess.run(["osascript", "-e", script], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
+    if sys.platform == "win32":
+        # Bring the viewer to the foreground so clicks land on it.
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            EnumWindowsProc = ctypes.WINFUNCTYPE(
+                wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
+            )
+            target = ctypes.c_void_p(0)
+
+            def _cb(hwnd: int, _lparam: int) -> bool:
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                length = int(user32.GetWindowTextLengthW(hwnd)) + 1
+                if length <= 1:
+                    return True
+                buf = ctypes.create_unicode_buffer(length)
+                user32.GetWindowTextW(hwnd, buf, length)
+                if not _window_title_matches(buf.value or "", "BTFViewer"):
+                    return True
+                if pid:
+                    proc_id = wintypes.DWORD()
+                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(proc_id))
+                    if int(proc_id.value) != int(pid):
+                        # Title match is enough when pid is a python launcher child.
+                        pass
+                target.value = hwnd
+                return False  # stop enum
+
+            user32.EnumWindows(EnumWindowsProc(_cb), 0)
+            if target.value:
+                user32.ShowWindow(target.value, 9)  # SW_RESTORE
+                user32.SetForegroundWindow(target.value)
+        except Exception:
+            pass
 
 
 def _window_bounds_macos(
@@ -1010,33 +1134,106 @@ def _window_bounds_linux(
     return vals["X"], vals["Y"], vals["WIDTH"], vals["HEIGHT"]
 
 
+def _window_title_matches(title: str, title_substr: str) -> bool:
+    """True if *title* looks like the BTF Viewer (not IDE/terminal false hits)."""
+    tl = (title or "").lower()
+    if not tl:
+        return False
+    needles = [n.lower() for n in _title_match_needles(title_substr)]
+    if not any(n and n in tl for n in needles):
+        return False
+    # Avoid matching Cursor/VS Code / Terminal paths that contain "BTF".
+    deny = (
+        "cursor",
+        "visual studio",
+        "code -",
+        "windows terminal",
+        "powershell",
+        "cmd.exe",
+        " - wsl",
+    )
+    if any(d in tl for d in deny) and "viewer" not in tl:
+        return False
+    return True
+
+
 def _window_bounds_windows(
     *,
     title_substr: str = "BTFViewer",
 ) -> Optional[Tuple[int, int, int, int]]:
+    """Return (left, top, width, height) for the largest matching Win32 window.
+
+    Uses ``user32`` directly (no ``pygetwindow``). Matches ``BTFViewer`` and
+    ``BTF Viewer`` / ``RTOS BTF Viewer`` titles. Coordinates are physical
+    pixels when DPI awareness was enabled at startup.
+    """
     if sys.platform != "win32":
         return None
     try:
-        import pygetwindow as gw  # type: ignore
+        import ctypes
+        from ctypes import wintypes
     except ImportError:
         return None
+
+    user32 = ctypes.windll.user32
+    EnumWindowsProc = ctypes.WINFUNCTYPE(
+        wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
+    )
+    hits: List[Tuple[int, int, int, int, int]] = []  # score, L, T, W, H
+
+    def _cb(hwnd: int, _lparam: int) -> bool:
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = int(user32.GetWindowTextLengthW(hwnd)) + 1
+        if length <= 1:
+            return True
+        buf = ctypes.create_unicode_buffer(length)
+        user32.GetWindowTextW(hwnd, buf, length)
+        title = buf.value or ""
+        if not _window_title_matches(title, title_substr):
+            return True
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return True
+        width = int(rect.right) - int(rect.left)
+        height = int(rect.bottom) - int(rect.top)
+        if width < 200 or height < 200:
+            return True
+        score = width * height
+        if "viewer" in title.lower():
+            score *= 10
+        hits.append((score, int(rect.left), int(rect.top), width, height))
+        return True
+
     try:
-        wins = gw.getWindowsWithTitle(title_substr) or []
-        if not wins:
-            wins = [w for w in gw.getAllWindows() if title_substr.lower() in (w.title or "").lower()]
-        if not wins:
-            active = gw.getActiveWindow()
-            wins = [active] if active else []
-        for w in wins:
-            if w is None:
-                continue
-            left, top = int(w.left), int(w.top)
-            width, height = int(w.width), int(w.height)
-            if width >= 200 and height >= 200:
-                return left, top, width, height
+        user32.EnumWindows(EnumWindowsProc(_cb), 0)
     except Exception:
         return None
-    return None
+    if not hits:
+        # Fallback: pygetwindow if present (older installs).
+        try:
+            import pygetwindow as gw  # type: ignore
+        except ImportError:
+            return None
+        try:
+            for needle in _title_match_needles(title_substr):
+                wins = [
+                    w for w in (gw.getAllWindows() or [])
+                    if w and _window_title_matches(w.title or "", needle)
+                ]
+                for w in wins:
+                    width, height = int(w.width), int(w.height)
+                    if width >= 200 and height >= 200:
+                        hits.append(
+                            (width * height, int(w.left), int(w.top), width, height)
+                        )
+        except Exception:
+            return None
+    if not hits:
+        return None
+    hits.sort(key=lambda t: t[0], reverse=True)
+    _, left, top, width, height = hits[0]
+    return left, top, width, height
 
 
 def parse_win(s: str) -> Tuple[int, int, int, int]:
@@ -1787,7 +1984,7 @@ def launch_from_meta(
         cwd = variables.get("cwd", str(BTF_ROOT))
     else:
         cmd_s = expand(launch.attrib.get("cmd") or text_content(launch), variables)
-        cmd = shlex.split(cmd_s)
+        cmd = split_cmdline(cmd_s)
         cwd = expand(launch.attrib.get("cwd", variables.get("cwd", str(BTF_ROOT))), variables)
         if not cmd:
             raise SystemExit("<launch> produced an empty command")
@@ -1800,6 +1997,22 @@ def launch_from_meta(
                     f"launch viewer not found: {viewer}\n"
                     "  Run: make -C BTFViewer bundle"
                 )
+        # Prefer absolute python + viewer paths on Windows (CreateProcess clarity).
+        if os.name == "nt" and len(cmd) >= 2:
+            exe = Path(cmd[0])
+            if not exe.is_file() and cmd[0].lower() in ("python", "python.exe", "py"):
+                cmd[0] = sys.executable
+            script = Path(cmd[1])
+            if not script.is_file():
+                alt = Path(cwd) / script
+                if alt.is_file():
+                    cmd[1] = str(alt)
+            for i in range(2, len(cmd)):
+                arg = Path(cmd[i])
+                if arg.suffix.lower() in (".btf", ".gz", ".zip") and not arg.is_file():
+                    alt = Path(cwd) / arg
+                    if alt.is_file():
+                        cmd[i] = str(alt)
     env = os.environ.copy()
     if demo_api:
         env["BTFVIEWER_DEMO_API"] = "1"
