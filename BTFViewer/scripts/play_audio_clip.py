@@ -13,9 +13,31 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
+
+
+def _ignore_sigint() -> None:
+    """Parent demo_runner owns Ctrl-C; do not dump a traceback from afplay wait."""
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except Exception:
+        pass
+
+
+def _stop_proc(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=0.6)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
 
 def _play_windows_mci(path: Path) -> None:
@@ -89,7 +111,14 @@ def _play_pygame(path: Path) -> None:
 
 
 def _play_external(path: Path, cmd: list[str]) -> None:
-    subprocess.run(cmd, check=False)
+    proc = subprocess.Popen(cmd)
+    try:
+        proc.wait()
+    except KeyboardInterrupt:
+        _stop_proc(proc)
+        raise
+    finally:
+        _stop_proc(proc)
 
 
 def play_file(path: Path) -> None:
@@ -146,9 +175,12 @@ def main(argv: list[str] | None = None) -> int:
     if not args:
         print("usage: play_audio_clip.py FILE", file=sys.stderr)
         return 2
+    _ignore_sigint()
     path = Path(args[0])
     try:
         play_file(path)
+    except KeyboardInterrupt:
+        return 130
     except Exception as exc:
         print(str(exc), file=sys.stderr)
         return 1

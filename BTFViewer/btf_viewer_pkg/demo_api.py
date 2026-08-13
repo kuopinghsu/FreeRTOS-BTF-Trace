@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, Optional
@@ -30,6 +31,16 @@ def demo_api_port() -> int:
         return int(os.environ.get("BTFVIEWER_DEMO_API_PORT") or "8765")
     except ValueError:
         return 8765
+
+
+def ignore_sigint_for_demo() -> None:
+    """Keep Ctrl-C on the demo runner; do not interrupt Qt event handlers."""
+    if not demo_api_enabled():
+        return
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except Exception:
+        pass
 
 
 class DemoApiBridge(QObject):
@@ -73,6 +84,7 @@ def start_demo_api(
     ephemeral port (``0``). Callers should read ``server.server_address[1]``
     for the actual listen port.
     """
+    ignore_sigint_for_demo()
     bridge = DemoApiBridge(parent=parent)
     preferred = demo_api_port() if port is None else int(port)
 

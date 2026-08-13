@@ -90,6 +90,7 @@ pip; optional pygame; else ``afplay``/``ffplay``). Override with
 ``--audio-cmd 'ffplay -nodisp -autoexit'``.
 
 Move the mouse to a **screen corner** to abort (PyAutoGUI FAILSAFE).
+Press **Ctrl-C twice** to exit the runner (first press warns).
 
 On **WSL/WSLg**, the visible cursor is Windows-owned; X11 mouse injection does
 not move it. The runner automatically drives the Windows host cursor via
@@ -103,6 +104,7 @@ import os
 import platform
 import re
 import shlex
+import signal
 import socket
 import subprocess
 import sys
@@ -128,6 +130,64 @@ MOD = "command" if sys.platform == "darwin" else "ctrl"
 
 def log(msg: str) -> None:
     print(f"[demo] {msg}", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Ctrl-C: first press warns, second press (within the window) exits
+# ---------------------------------------------------------------------------
+
+CTRL_C_EXIT_WINDOW_S = 2.5
+
+
+class DoubleCtrlC:
+    """Require two SIGINT presses before aborting the demo."""
+
+    def __init__(self, window_s: float = CTRL_C_EXIT_WINDOW_S) -> None:
+        self.window_s = float(window_s)
+        self.exit_requested = False
+        self._armed_at = 0.0
+        self._prev = None
+
+    def install(self) -> None:
+        self._prev = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, self._on_sigint)
+
+    def restore(self) -> None:
+        if self._prev is not None:
+            signal.signal(signal.SIGINT, self._prev)
+            self._prev = None
+
+    def _on_sigint(self, signum, frame) -> None:  # noqa: ARG002
+        now = time.monotonic()
+        if self._armed_at and (now - self._armed_at) <= self.window_s:
+            self.exit_requested = True
+            raise KeyboardInterrupt
+        self._armed_at = now
+        log("Ctrl-C: press again to exit the demo")
+
+    def check(self) -> None:
+        if self.exit_requested:
+            raise KeyboardInterrupt
+
+
+_interrupt: Optional[DoubleCtrlC] = None
+
+
+def _check_interrupt() -> None:
+    hook = _interrupt
+    if hook is not None:
+        hook.check()
+
+
+def interruptible_sleep(seconds: float) -> None:
+    """Sleep that notices Ctrl-C (first press returns early; second raises)."""
+    deadline = time.monotonic() + max(0.0, float(seconds))
+    while True:
+        _check_interrupt()
+        remain = deadline - time.monotonic()
+        if remain <= 0:
+            return
+        time.sleep(min(0.2, remain))
 
 
 def shutil_which(name: str) -> Optional[str]:
@@ -330,6 +390,42 @@ def _audio_command(path: Path, audio_cmd: Optional[str]) -> List[str]:
     )
 
 
+def _popen_detached(cmd: List[str], **extra) -> subprocess.Popen:
+    """Start a child outside the runner's Ctrl-C process group."""
+    kwargs: Dict[str, Any] = dict(extra)
+    if os.name == "nt":
+        flags = int(kwargs.get("creationflags", 0) or 0)
+        kwargs["creationflags"] = flags | subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    return subprocess.Popen(cmd, **kwargs)
+
+
+def _stop_popen(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        if os.name != "nt" and proc.pid:
+            os.killpg(proc.pid, signal.SIGTERM)
+        else:
+            proc.terminate()
+    except Exception:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    try:
+        proc.wait(timeout=0.8)
+    except Exception:
+        try:
+            if os.name != "nt" and proc.pid:
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+        except Exception:
+            pass
+
+
 def play_audio(
     path: Path,
     *,
@@ -347,9 +443,19 @@ def play_audio(
     cmd = _audio_command(path, audio_cmd)
     log(f"AUDIO play {' '.join(cmd)}")
     if block:
-        subprocess.run(cmd, check=False)
+        proc = _popen_detached(cmd)
+        try:
+            while proc.poll() is None:
+                _check_interrupt()
+                try:
+                    proc.wait(timeout=0.2)
+                except subprocess.TimeoutExpired:
+                    continue
+        except KeyboardInterrupt:
+            _stop_popen(proc)
+            raise
         return None
-    return subprocess.Popen(cmd)
+    return _popen_detached(cmd)
 
 
 # ---------------------------------------------------------------------------
@@ -1439,7 +1545,7 @@ class DemoRunner:
             log(f"wait {seconds:.1f}s — {why}")
         if self.cfg.dry_run:
             return
-        time.sleep(max(0.0, seconds))
+        interruptible_sleep(max(0.0, seconds))
 
     def confirm(self, prompt: str) -> None:
         if self.cfg.dry_run:
@@ -1557,10 +1663,14 @@ class DemoRunner:
             self.cfg.bg_audio.clear()
             return
         for p in alive:
-            try:
-                p.wait()
-            except Exception:
-                pass
+            while p.poll() is None:
+                _check_interrupt()
+                try:
+                    p.wait(timeout=0.2)
+                except subprocess.TimeoutExpired:
+                    continue
+                except Exception:
+                    break
         self.cfg.bg_audio.clear()
 
     def _stop_bg_audio(self) -> None:
@@ -1569,11 +1679,7 @@ class DemoRunner:
             self.cfg.bg_audio.clear()
             return
         for p in self.cfg.bg_audio:
-            if p.poll() is None:
-                try:
-                    p.terminate()
-                except Exception:
-                    pass
+            _stop_popen(p)
         self.cfg.bg_audio.clear()
 
     # -- demo HTTP API ------------------------------------------------------
@@ -1617,6 +1723,7 @@ class DemoRunner:
         deadline = time.time() + max(1.0, timeout)
         last_err = ""
         while time.time() < deadline:
+            _check_interrupt()
             try:
                 req = urllib.request.Request(
                     health,
@@ -1636,7 +1743,7 @@ class DemoRunner:
                     last_err = str(body.get("error") or body)
             except Exception as exc:
                 last_err = str(exc)
-            time.sleep(0.4)
+            interruptible_sleep(0.4)
         log(f"demo API not ready ({last_err})")
         return False
 
@@ -1902,6 +2009,7 @@ class DemoRunner:
         self.confirm(f"Ready for step {sid}?")
         self.focus()
         for child in step:
+            _check_interrupt()
             if child.tag in ("title",):
                 continue
             self.run_action(child)
@@ -2021,7 +2129,7 @@ def launch_from_meta(
     if _is_wsl() and not env.get("QT_QPA_PLATFORM"):
         env["QT_QPA_PLATFORM"] = "xcb"
     log(f"launch: {' '.join(cmd)}  (cwd={cwd})")
-    return subprocess.Popen(cmd, cwd=cwd, env=env)
+    return _popen_detached(cmd, cwd=cwd, env=env)
 
 
 # ---------------------------------------------------------------------------
@@ -2213,9 +2321,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"audio_block={cfg.audio_block}  demo_api={cfg.demo_api_url if demo_api_enabled else 'off'}"
     )
     log("FAILSAFE: move mouse to a screen corner to abort.")
+    log("Ctrl-C twice to exit the demo.")
     log("coords: <targets> x/y are fractions of the detected app window")
 
     proc: Optional[subprocess.Popen] = None
+    runner: Optional[DemoRunner] = None
+    hook = DoubleCtrlC()
+    global _interrupt
+    _interrupt = hook
+    hook.install()
     try:
         if args.launch:
             proc = launch_from_meta(
@@ -2227,11 +2341,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if proc is None:
                 log("no <launch>/<trace> in XML; continuing without launch")
             else:
-                time.sleep(0 if cfg.dry_run else args.attach_wait)
+                interruptible_sleep(0 if cfg.dry_run else args.attach_wait)
                 focus_pid(proc.pid)
                 cfg.viewer_pid = proc.pid
                 if not cfg.dry_run:
-                    time.sleep(0.4)
+                    interruptible_sleep(0.4)
                     cfg.win = detect_window(
                         pag,
                         pid=proc.pid,
@@ -2255,7 +2369,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.countdown > 0 and not cfg.dry_run:
             for i in range(int(args.countdown), 0, -1):
                 log(f"starting in {i}…")
-                time.sleep(1)
+                interruptible_sleep(1)
 
         runner = DemoRunner(pag, cfg, viewer_pid=proc.pid if proc else cfg.viewer_pid)
         if not cfg.dry_run:
@@ -2282,6 +2396,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return sid in want or sid_n in norm
 
         for step in steps_el.findall("step"):
+            _check_interrupt()
             sid = step.attrib.get("id", "")
             if not _step_wanted(sid):
                 continue
@@ -2297,8 +2412,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     except KeyboardInterrupt:
         log("aborted")
-        return 130
+        if runner is not None:
+            try:
+                runner._stop_bg_audio()
+            except Exception:
+                pass
+        return 0
     finally:
+        hook.restore()
+        _interrupt = None
         if proc and proc.poll() is not None:
             log(f"app exited with code {proc.returncode}")
 

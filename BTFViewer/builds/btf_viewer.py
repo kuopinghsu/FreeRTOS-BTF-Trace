@@ -15872,11 +15872,14 @@ class TimelineView(QGraphicsView):
 
     def event(self, event) -> bool:  # noqa: N802
         # macOS delivers pinch gestures to QGraphicsView, not only the viewport.
-        if (event.type() == QEvent.Type.NativeGesture
-                and _is_zoom_native_gesture(event)):
-            self._apply_native_pinch_zoom(event)
-            return True
-        return super().event(event)
+        try:
+            if (event.type() == QEvent.Type.NativeGesture
+                    and _is_zoom_native_gesture(event)):
+                self._apply_native_pinch_zoom(event)
+                return True
+            return super().event(event)
+        except KeyboardInterrupt:
+            return False
 
     def _wheel_pan_deltas(self, event: QWheelEvent) -> Tuple[int, int]:
         """Return (dx, dy) for pan; macOS trackpad prefers pixelDelta."""
@@ -45232,6 +45235,16 @@ def demo_api_port() -> int:
         return 8765
 
 
+def ignore_sigint_for_demo() -> None:
+    """Keep Ctrl-C on the demo runner; do not interrupt Qt event handlers."""
+    if not demo_api_enabled():
+        return
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except Exception:
+        pass
+
+
 class DemoApiBridge(QObject):
     """Marshal demo requests onto the Qt GUI thread."""
 
@@ -45273,6 +45286,7 @@ def start_demo_api(
     ephemeral port (``0``). Callers should read ``server.server_address[1]``
     for the actual listen port.
     """
+    ignore_sigint_for_demo()
     bridge = DemoApiBridge(parent=parent)
     preferred = demo_api_port() if port is None else int(port)
 
@@ -56372,6 +56386,7 @@ def main() -> None:
     # Resolve before QApplication — Windows Qt may chdir to the script folder.
     cli_paths = _cli_gui_trace_paths(argv, base_dir=launch_cwd)
 
+    ignore_sigint_for_demo()
     _platform_preflight()
     app = _bootstrap_qt_app(sys.argv)
     _install_macos_stderr_filter()
@@ -56392,7 +56407,10 @@ def main() -> None:
     else:
         QTimer.singleShot(100, win._restore_session_tabs)
 
-    sys.exit(app.exec())
+    try:
+        raise SystemExit(app.exec())
+    except KeyboardInterrupt:
+        raise SystemExit(0)
 
 if __name__ == "__main__":
     main()

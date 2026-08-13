@@ -3155,11 +3155,14 @@ class TimelineView(QGraphicsView):
 
     def event(self, event) -> bool:  # noqa: N802
         # macOS delivers pinch gestures to QGraphicsView, not only the viewport.
-        if (event.type() == QEvent.Type.NativeGesture
-                and _is_zoom_native_gesture(event)):
-            self._apply_native_pinch_zoom(event)
-            return True
-        return super().event(event)
+        try:
+            if (event.type() == QEvent.Type.NativeGesture
+                    and _is_zoom_native_gesture(event)):
+                self._apply_native_pinch_zoom(event)
+                return True
+            return super().event(event)
+        except KeyboardInterrupt:
+            return False
 
     def _wheel_pan_deltas(self, event: QWheelEvent) -> Tuple[int, int]:
         """Return (dx, dy) for pan; macOS trackpad prefers pixelDelta."""

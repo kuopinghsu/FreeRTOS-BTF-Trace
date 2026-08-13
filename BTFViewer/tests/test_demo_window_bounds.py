@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -73,6 +74,29 @@ class DemoWindowBoundsTests(unittest.TestCase):
         boxes = self.dr._parse_l_t_w_h_list(text)
         self.assertEqual(len(boxes), 3)
         self.assertEqual(boxes[2], (1, 2, 1200, 800))
+
+
+class DoubleCtrlCTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.dr = _load_runner()
+
+    def test_first_sigint_warns_second_raises(self) -> None:
+        hook = self.dr.DoubleCtrlC(window_s=5.0)
+        hook._on_sigint(None, None)
+        self.assertFalse(hook.exit_requested)
+        with self.assertRaises(KeyboardInterrupt):
+            hook._on_sigint(None, None)
+        self.assertTrue(hook.exit_requested)
+        with self.assertRaises(KeyboardInterrupt):
+            hook.check()
+
+    def test_first_sigint_expires_after_window(self) -> None:
+        hook = self.dr.DoubleCtrlC(window_s=0.05)
+        hook._on_sigint(None, None)
+        time.sleep(0.08)
+        hook._on_sigint(None, None)
+        self.assertFalse(hook.exit_requested)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ from .ai_investigation import (
     save_baseline_json,
     snapshot_from_summary,
 )
+from .demo_api import ignore_sigint_for_demo
 from .ai_assistant import ai_chat_completion, parse_ai_mcp_log, resolve_ai_settings
 
 def _cli_validate_range_pair(lo: Optional[int], hi: Optional[int], label: str) -> Optional[str]:
@@ -1827,6 +1828,7 @@ def main() -> None:
     # Resolve before QApplication — Windows Qt may chdir to the script folder.
     cli_paths = _cli_gui_trace_paths(argv, base_dir=launch_cwd)
 
+    ignore_sigint_for_demo()
     _platform_preflight()
     app = _bootstrap_qt_app(sys.argv)
     _install_macos_stderr_filter()
@@ -1847,4 +1849,7 @@ def main() -> None:
     else:
         QTimer.singleShot(100, win._restore_session_tabs)
 
-    sys.exit(app.exec())
+    try:
+        raise SystemExit(app.exec())
+    except KeyboardInterrupt:
+        raise SystemExit(0)
