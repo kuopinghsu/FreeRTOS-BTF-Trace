@@ -1446,6 +1446,33 @@ _XML_TOOL_RE = re.compile(
 )
 
 
+def _loads_json_values(body: str) -> List[Any]:
+    """Parse one JSON value, a JSON array, or several concatenated/NDJSON values."""
+    src = (body or "").strip()
+    if not src:
+        return []
+    try:
+        return [json.loads(src)]
+    except (TypeError, ValueError):
+        pass
+    decoder = json.JSONDecoder()
+    out: List[Any] = []
+    idx = 0
+    n = len(src)
+    while idx < n:
+        while idx < n and src[idx].isspace():
+            idx += 1
+        if idx >= n:
+            break
+        try:
+            val, end = decoder.raw_decode(src, idx)
+        except ValueError:
+            break
+        out.append(val)
+        idx = end
+    return out
+
+
 def _tool_call_from_obj(obj: Any, idx: int) -> Optional[Dict[str, Any]]:
     if not isinstance(obj, dict):
         return None
@@ -1471,34 +1498,6 @@ def _tool_call_from_obj(obj: Any, idx: int) -> Optional[Dict[str, Any]]:
     return {"id": f"text_{idx}", "name": name, "arguments": ok or args}
 
 
-def _loads_json_values(body: str) -> List[Any]:
-    """Parse one JSON value, a JSON array, or NDJSON (several values in one fence)."""
-    src = (body or "").strip()
-    if not src:
-        return []
-    try:
-        data = json.loads(src)
-        return [data]
-    except (TypeError, ValueError):
-        pass
-    out: List[Any] = []
-    decoder = json.JSONDecoder()
-    idx = 0
-    n = len(src)
-    while idx < n:
-        while idx < n and src[idx].isspace():
-            idx += 1
-        if idx >= n:
-            break
-        try:
-            val, end = decoder.raw_decode(src, idx)
-        except ValueError:
-            break
-        out.append(val)
-        idx = end
-    return out
-
-
 def parse_tool_calls_from_text(text: str) -> List[Dict[str, Any]]:
     """Parse ```btftool fences and <tool_call> blobs (models without native tools)."""
     out: List[Dict[str, Any]] = []
@@ -1514,17 +1513,15 @@ def parse_tool_calls_from_text(text: str) -> List[Dict[str, Any]]:
         seen.add(key)
         out.append(call)
 
-    def _add_value(data: Any) -> None:
-        if isinstance(data, list):
-            for item in data:
-                _add(item)
-        else:
-            _add(data)
-
     src = text or ""
     for m in _BTFTOOL_FENCE_RE.finditer(src):
-        for data in _loads_json_values(m.group(1) or ""):
-            _add_value(data)
+        body = (m.group(1) or "").strip()
+        for data in _loads_json_values(body):
+            if isinstance(data, list):
+                for item in data:
+                    _add(item)
+            else:
+                _add(data)
     for m in _XML_TOOL_RE.finditer(src):
         body = (m.group(1) or "").strip()
         try:

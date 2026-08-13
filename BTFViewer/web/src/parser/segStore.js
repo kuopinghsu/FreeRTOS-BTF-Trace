@@ -331,6 +331,22 @@ export function createSegList(store, indices) {
           return false
         }
       }
+      if (prop === 'reduce') {
+        return function reduce(fn, init) {
+          const hasInit = arguments.length > 1
+          let i = 0
+          let acc = init
+          if (!hasInit) {
+            if (!idx.length) {
+              throw new TypeError('Reduce of empty SegList with no initial value')
+            }
+            acc = store.getSeg(idx[0])
+            i = 1
+          }
+          for (; i < idx.length; i++) acc = fn(acc, store.getSeg(idx[i]), i)
+          return acc
+        }
+      }
       const n = Number(prop)
       if (String(n) === prop && n >= 0 && n < idx.length) {
         return store.getSeg(idx[n])

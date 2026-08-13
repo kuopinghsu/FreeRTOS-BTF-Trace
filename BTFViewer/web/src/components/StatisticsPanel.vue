@@ -54,7 +54,10 @@
       <span class="stats-scope-label">{{ scopeRangeLabel }}</span>
     </div>
 
-    <div class="stats-body">
+    <div
+      ref="statsBodyRef"
+      class="stats-body"
+    >
     <!-- Summary and sections (require loaded trace) -->
     <template v-if="trace">
     <div class="stats-summary">
@@ -2185,6 +2188,11 @@
     >
       Open a trace file to view statistics.
     </div>
+    <div
+      ref="statsTailRef"
+      class="stats-scroll-tail"
+      aria-hidden="true"
+    />
     </div>
 
     <!-- Export (pinned footer, matches desktop stats panel) -->
@@ -2724,7 +2732,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onBeforeUnmount, nextTick } from 'vue'
 import { toBlob as domToBlob, toSvg as domToSvg } from 'html-to-image'
 import { formatTime, isStiTagChannel } from '../renderer/TimelineRenderer.js'
 import { formatTimeFixed } from '../utils/timeFormat.js'
@@ -2962,6 +2970,77 @@ function collapseAllSections() {
     if (pinnedSet.value.has(id)) continue
     flag.value = true
   }
+}
+
+const statsBodyRef = ref(null)
+const statsTailRef = ref(null)
+
+function sleepMs(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function updateScrollTailHeight() {
+  const body = statsBodyRef.value
+  const tail = statsTailRef.value
+  if (!body || !tail) return
+  tail.style.height = `${Math.max(0, body.clientHeight - 48)}px`
+}
+
+function parseDemoSectionIds(raw) {
+  if (Array.isArray(raw)) return raw.map(x => String(x).trim()).filter(Boolean)
+  return String(raw || '').replace(/;/g, ',').split(',').map(s => s.trim()).filter(Boolean)
+}
+
+async function scrollDemoSectionIntoView(scroll, ids, expand) {
+  const body = statsBodyRef.value
+  if (!body) return
+  const key = String(scroll || '').trim().toLowerCase()
+  if (['top', '0', 'start'].includes(key)) {
+    body.scrollTop = 0
+    return
+  }
+  if (!expand || !ids.length) return
+  let focus = ids[0]
+  if (key && !['section', 'focus', '1', 'true', 'yes', ''].includes(key)) {
+    if (SECTION_COLLAPSE_REFS[key] || ids.includes(key)) focus = key
+  }
+  updateScrollTailHeight()
+  let elapsed = 0
+  for (const mark of [0, 50, 150, 280]) {
+    if (mark > elapsed) await sleepMs(mark - elapsed)
+    elapsed = mark
+    await nextTick()
+    const el = body.querySelector(`[data-section-id="${focus}"]`)
+    if (!el) continue
+    const bodyRect = body.getBoundingClientRect()
+    const elRect = el.getBoundingClientRect()
+    body.scrollTop += elRect.top - bodyRect.top - 8
+  }
+}
+
+async function applyDemoSections(payload = {}) {
+  const ids = parseDemoSectionIds(payload.id ?? payload.ids ?? payload.section)
+  const expand = payload.expand !== false
+  const collapseOthers = payload.collapse_others != null
+    ? !!payload.collapse_others
+    : ids.length > 0
+  let scroll = String(payload.scroll || '').trim().toLowerCase()
+  if (!scroll && expand && ids.length) scroll = 'section'
+
+  if (collapseOthers) {
+    for (const [id, flag] of Object.entries(SECTION_COLLAPSE_REFS)) {
+      if (ids.includes(id) || pinnedSet.value.has(id)) continue
+      flag.value = true
+    }
+  }
+  for (const id of ids) {
+    const flag = SECTION_COLLAPSE_REFS[id]
+    if (flag && !pinnedSet.value.has(id)) flag.value = !expand
+  }
+  await nextTick()
+  updateScrollTailHeight()
+  await scrollDemoSectionIntoView(scroll, ids, expand)
+  return { ids, expand, collapse_others: collapseOthers, scroll }
 }
 
 function applyDeferHeavySectionCollapse(tr) {
@@ -5982,6 +6061,13 @@ watch(plotData, () => {
   plotHoverPointIndex.value = -1
   histogramScaleMode.value = 'auto'
 })
+
+defineExpose({
+  applyDemoSections,
+  scrollDemoSectionIntoView,
+  expandAllSections,
+  collapseAllSections,
+})
 </script>
 
 <style scoped>
@@ -6012,6 +6098,11 @@ watch(plotData, () => {
   min-height: 0;
   overflow-y: auto;
   padding: 8px 10px;
+}
+
+.stats-scroll-tail {
+  flex-shrink: 0;
+  pointer-events: none;
 }
 
 .stats-sections-stack {

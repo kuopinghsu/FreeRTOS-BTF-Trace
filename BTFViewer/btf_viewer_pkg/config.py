@@ -592,7 +592,8 @@ def _stats_chevron_icon(collapsed: bool, is_dark: bool = True) -> QIcon:
         )
     return _svg_icon_markup(inner, size=10)
 
-# Icon path data (16x16 viewBox, single-path SVG outlines)
+# Icon path data (16x16 viewBox, single-path SVG outlines).
+# Toolbar glyphs: keep in sync with web/src/utils/toolbarIcons.js.
 _IC_OPEN   = ("M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v.64c.57.265.94.876.856 1.546l-.64 5.124A2.5 2.5 0 0 1 12.733 15H3.267a2.5 2.5 0 0 1-2.483-2.19l-.64-5.124A1.5 1.5 0 0 1 1 6.14V3.5z"
               "M2 6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5a.5.5 0 0 0-.5.5V6z"
               "m-.367 1a.5.5 0 0 0-.496.562l.64 5.124A1.5 1.5 0 0 0 3.267 14h9.466a1.5 1.5 0 0 0 1.49-1.314l.64-5.124A.5.5 0 0 0 14.367 7H1.633z")
@@ -600,6 +601,21 @@ _IC_SAVE     = "M2 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4.5L11.5 1H
 _IC_SAVE_SVG = ("M7.5 1a.5.5 0 0 1 .5.5v8.793l2.146-2.147a.5.5 0 0 1 .708.708l-3 3"
                 "a.5.5 0 0 1-.708 0l-3-3a.5.5 0 0 1 .708-.708L7 10.293V1.5a.5.5 0 0 1 .5-.5z"
                 "M2.5 13a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5z")
+# Perfetto / Chrome Trace JSON (document with timeline ticks). Keep in sync with
+# web/src/utils/toolbarIcons.js.
+_IC_PERFETTO = (
+    "M2.5 2A1.5 1.5 0 0 0 1 3.5v9A1.5 1.5 0 0 0 2.5 14h11a1.5 1.5 0 0 0 1.5-1.5"
+    "v-9A1.5 1.5 0 0 0 13.5 2h-11zm0 1h11a.5.5 0 0 1 .5.5V5H2V3.5a.5.5 0 0 1 .5-.5z"
+    "M2 6h12v6.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V6zm2 1.5v1h2v-1H4zm3 0v1h2v-1H7z"
+    "m3 0v1h2v-1h-2zM4 10v1h5v-1H4z"
+)
+# Cursor-range BTF slice (crop). Keep in sync with web/src/utils/toolbarIcons.js.
+_IC_EXPORT_SLICE = (
+    "M3.5 1A1.5 1.5 0 0 0 2 2.5v3h1v-3a.5.5 0 0 1 .5-.5h3v-1h-3zm6 0v1h3a.5.5 0 0 1"
+    " .5.5v3h1v-3A1.5 1.5 0 0 0 12.5 1h-3zM2 10.5v3A1.5 1.5 0 0 0 3.5 15h3v-1h-3a.5.5"
+    " 0 0 1-.5-.5v-3H2zm11 0v3a.5.5 0 0 1-.5.5h-3v1h3a1.5 1.5 0 0 0 1.5-1.5v-3h-1z"
+    "M5 5h6v6H5V5z"
+)
 _IC_COPY   = "M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1zM5 0h6a1 1 0 0 1 1 1v3H4V1a1 1 0 0 1 1-1z"
 _IC_SHOT   = ("M3 3.5A1.5 1.5 0 0 1 4.5 2h7A1.5 1.5 0 0 1 13 3.5V5h1a1 1 0 0 1 1 1v6.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5V6a1 1 0 0 1 1-1h1V3.5zm1 0V5h8V3.5a.5.5 0 0 0-.5-.5h-7a.5.5 0 0 0-.5.5z"
                 "M8 7a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z")
@@ -722,6 +738,12 @@ _IC_SETTINGS = ("M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1
                 "c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31"
                 "c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34z"
                 "M8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z")
+_IC_HELP = (
+    "M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 13A6 6 0 1 1 8 2a6 6 0 0 1 0 12z"
+    "m0-3.1a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM8.2 4.2c-1.2 0-2 .8-2.1 1.9h1"
+    "c.1-.6.5-1 1.1-1 .7 0 1.1.4 1.1 1 0 .4-.2.7-.8 1.1-.8.5-1.3 1-1.3 2v.3h1"
+    "v-.2c0-.6.3-.9.9-1.3.7-.5 1.2-1 1.2-1.9 0-1.1-.9-1.9-2.1-1.9z"
+)
 
 # App icon - multi-colour 72x72 SVG rendered in the About dialog header.
 # Timeline lanes + amber cursor + AI insight badge (keep in sync with

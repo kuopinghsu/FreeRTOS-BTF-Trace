@@ -55,7 +55,8 @@ Open **Analysis** → follow findings down the ladder → stop when evidence exp
 | 1 | Open **Statistics** + toolbar **Analysis** |
 | 2 | Open only the sections named by findings |
 | 3 | Click **Max** / row / chart point / heatmap cell to jump the timeline |
-| 4 | Place cursors + **Limit to cursor range** for mixed-phase traces |
+| 4 | Place cursors + **Limit to C1–Cn** for mixed-phase traces |
+| 5 | Optional: Analysis **Investigate…** / **Verify with AI…** ([WORKFLOWS §7](WORKFLOWS.md#7-ai-assistant-flow)) |
 
 ```text
 ① Health      Trace Health (TICK)
@@ -258,7 +259,7 @@ Then check (same default order):
 **Thresholds:** Settings → Display → Analysis thresholds  
 Example: `CS[28]=2000000` (**ns**) = 2 ms on a `us` trace.
 
-**Cursors:** C1…Cn → **Limit to cursor range** → all tables + Analysis recompute.
+**Cursors:** C1…Cn → **Limit to C1–Cn** → all tables + Analysis recompute.
 
 ---
 
@@ -310,3 +311,5 @@ python builds/btf_viewer.py report ../tracedata/example-8cores.btf.gz \
 ## Analysis → ladder → evidence → fix
 
 Drill only where findings point. Scope before you escalate.
+
+AI templates follow the same ladder ([WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow)). Narrated tour: [README → Demo](README.md#demo).

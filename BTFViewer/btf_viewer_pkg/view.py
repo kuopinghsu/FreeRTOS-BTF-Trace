@@ -170,6 +170,27 @@ _RIGHT_DOCK_MIN_W = 180  # Web parity: RIGHT_PANEL_MIN_W in web/src/App.vue
 _RIGHT_DOCK_DEFAULT_W = 450  # Web parity: RIGHT_PANEL_WIDTH in web/src/config.js
 _RIGHT_DOCK_MAX_W = 520  # Web parity: RIGHT_PANEL_MAX_W in web/src/config.js
 
+
+class _RightDockHost(QWidget):
+    """Dock content wrapper so AI/stats sizeHints cannot pin the panel width."""
+
+    def __init__(self, child: QWidget, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("right_dock_host")
+        child.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        lay.addWidget(child)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(_RIGHT_DOCK_MIN_W, 200)
+
+    def sizeHint(self) -> QSize:
+        return QSize(_RIGHT_DOCK_DEFAULT_W, max(200, super().sizeHint().height()))
+
+
 def _relax_layout_width_constraints(lay: QLayout) -> None:
     """Stop nested layouts from preserving a previously wide minimum width."""
     lay.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
@@ -209,7 +230,7 @@ def _relax_widget_tree(root: QWidget) -> None:
     for w in (root, *root.findChildren(QWidget)):
         if isinstance(w, _StatsSectionGrip) or _in_legend_panel(w):
             continue
-        if w.objectName() == "stats_scope_action":
+        if w.objectName() in ("stats_scope_action", "panel_seam_resizer"):
             continue
         # AI header actions: Ignored + row stretch collapses them to 0 width.
         if _in_ai_actions_bar(w):
@@ -377,103 +398,161 @@ class _EdgeResizeCursorFilter(QObject):
                 return cursor
         return None
 
-class _DockWidthResizeFilter(QObject):
-    """Drag the central/right-dock seam to resize the right panel (web panel-resizer parity)."""
+class _PanelSeamResizer(QWidget):
+    """Dedicated hit target on the timeline / right-panel seam (web .panel-resizer).
 
-    def __init__(self, host: QWidget, win: "MainWindow", edge: str,
-                 margin: int = _RESIZE_EDGE_PX,
-                 enabled: Optional[Callable[[], bool]] = None) -> None:
+    Native QMainWindow dock separators and parent-only event filters miss this
+    seam: TimelineView / Statistics content sit on top of it and eat the mouse.
+    This overlay is a sibling of those children, raised, 8px wide.
+    """
+
+    WIDTH = 8
+
+    def __init__(self, host: QWidget, win: "MainWindow", edge: str) -> None:
         super().__init__(host)
         self._host = host
         self._win = win
-        self._edge = edge  # "left" (dock) or "right" (central pane)
-        self._margin = margin
-        self._enabled = enabled
-        self._hover_armed = False
-        self._hover_cursor: Optional[Qt.CursorShape] = None
+        self._edge = edge  # "left" (dock tabs) or "right" (central pane)
         self._dragging = False
+        self._hover = False
         self._start_global_x = 0.0
         self._start_width = 0
+        self.setObjectName("panel_seam_resizer")
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
+        self.setToolTip("Drag to resize the side panel")
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        host.installEventFilter(self)
+        self.sync_geometry()
+        self.show()
+        self.raise_()
 
-    def _active(self) -> bool:
-        if self._enabled is not None and not self._enabled():
-            return False
-        return self._win._any_visible_right_dock()
+    def _tab_bar_h(self) -> int:
+        if self._edge != "left":
+            return 0
+        bar = getattr(self._host, "tabBar", None)
+        if not callable(bar):
+            return 0
+        tb = bar()
+        if tb is None or not tb.isVisible():
+            return 0
+        return int(tb.height())
 
-    def _on_edge(self, pos: QPoint) -> bool:
-        w = self._host.width()
+    def sync_geometry(self) -> None:
+        host = self._host
+        if host is None:
+            return
+        top = self._tab_bar_h()
+        h = max(1, host.height() - top)
+        w = self.WIDTH
         if self._edge == "left":
-            return pos.x() <= self._margin
-        if self._edge == "right":
-            return pos.x() >= w - self._margin
-        return False
+            self.setGeometry(0, top, w, h)
+        else:
+            self.setGeometry(max(0, host.width() - w), 0, w, max(1, host.height()))
+        self.raise_()
 
-    def eventFilter(self, obj, event) -> bool:  # noqa: N802
-        if self._dragging and obj is not self._host:
-            et = event.type()
-            if et == QEvent.Type.MouseMove:
-                _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
-                self._apply_drag(event.globalPosition().x())
-                return True
-            if (et == QEvent.Type.MouseButtonRelease
-                    and event.button() == Qt.MouseButton.LeftButton):
-                self._end_drag()
-                return True
-            return False
-
-        if obj is not self._host:
-            return False
-
-        et = event.type()
-        if (et == QEvent.Type.MouseButtonPress
-                and event.button() == Qt.MouseButton.LeftButton
-                and self._active()
-                and self._on_edge(event.position().toPoint())):
-            self._begin_drag(event.globalPosition().x())
-            return True
-
-        if et in (QEvent.Type.MouseMove, QEvent.Type.HoverMove):
-            if self._active() and self._on_edge(event.position().toPoint()):
-                if not self._hover_armed:
-                    self._hover_armed = True
-                    self._hover_cursor = Qt.CursorShape.SizeHorCursor
-                    _HoverCursor.show(self._hover_cursor)
-            elif self._hover_armed:
-                _HoverCursor.hide(self._hover_cursor)
-                self._hover_armed = False
-                self._hover_cursor = None
-        elif et in (QEvent.Type.Leave, QEvent.Type.HoverLeave, QEvent.Type.Hide):
-            if self._hover_armed:
-                _HoverCursor.hide(self._hover_cursor)
-                self._hover_armed = False
-                self._hover_cursor = None
-        return False
+    def _event_global_x(self, event) -> float:
+        gp = event.globalPosition() if hasattr(event, "globalPosition") else None
+        if gp is not None:
+            return float(gp.x())
+        return float(event.globalX())
 
     def _begin_drag(self, global_x: float) -> None:
         self._dragging = True
+        self._hover = True
         self._win._right_dock_custom_drag = True
         self._start_global_x = global_x
         self._start_width = self._win._current_right_dock_width()
         _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
+        self.grabMouse()
         app = QApplication.instance()
         if app:
             app.installEventFilter(self)
+        self.update()
 
     def _apply_drag(self, global_x: float) -> None:
+        _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
         delta = global_x - self._start_global_x
         # Match web App.vue: nextW = startW - dx (drag left → wider right panel).
-        width = self._start_width - delta
-        self._win._apply_right_dock_width(width)
+        self._win._apply_right_dock_width(self._start_width - delta)
 
     def _end_drag(self) -> None:
+        if not self._dragging:
+            _HoverCursor.hide(Qt.CursorShape.SizeHorCursor)
+            return
         self._dragging = False
         self._win._right_dock_custom_drag = False
+        if QWidget.mouseGrabber() is self:
+            self.releaseMouse()
         app = QApplication.instance()
         if app:
             app.removeEventFilter(self)
         self._win._relax_right_dock_content_widths()
         self._win._apply_right_dock_width(self._win._current_right_dock_width())
         _wire_splitter_handle_cursors(self._win)
+        _HoverCursor.hide(Qt.CursorShape.SizeHorCursor)
+        self._hover = self.underMouse()
+        self.update()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is self._host and event.type() == QEvent.Type.Resize:
+            self.sync_geometry()
+        if not self._dragging:
+            return False
+        et = event.type()
+        if et == QEvent.Type.MouseMove:
+            if not (QApplication.mouseButtons() & Qt.MouseButton.LeftButton):
+                self._end_drag()
+                return False
+            self._apply_drag(self._event_global_x(event))
+            return False
+        if (et == QEvent.Type.MouseButtonRelease
+                and event.button() == Qt.MouseButton.LeftButton):
+            self._end_drag()
+            return False
+        return False
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if (event.button() == Qt.MouseButton.LeftButton
+                and self._win._any_visible_right_dock()):
+            self._begin_drag(self._event_global_x(event))
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._dragging:
+            self._apply_drag(self._event_global_x(event))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if self._dragging and event.button() == Qt.MouseButton.LeftButton:
+            self._end_drag()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        if not self._dragging:
+            self._hover = False
+            self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        if not self._hover and not self._dragging:
+            return
+        p = QPainter(self)
+        accent = QColor("#4C8BF5")
+        accent.setAlpha(150)
+        p.fillRect(max(0, self.width() // 2 - 1), 0, 2, self.height(), accent)
 
 class _RightDockResizeGuard(QObject):
     """Keep the main-window frame fixed when the right dock column is resized."""
@@ -486,7 +565,12 @@ class _RightDockResizeGuard(QObject):
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if obj is self._dock and event.type() == QEvent.Type.Resize:
+            sync = getattr(self._win, "_sync_panel_seam_resizers", None)
+            if callable(sync):
+                sync()
             if getattr(self._win, "_right_dock_custom_drag", False):
+                return False
+            if getattr(self._win, "_dock_width_apply_guard", False):
                 return False
             w = self._dock.width()
             if w != self._last_w:

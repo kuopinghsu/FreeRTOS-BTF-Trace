@@ -91,9 +91,14 @@ export function buildTaskLifecycleRows(stiEvents, taskRepr, lo = null, hi = null
       ? row.deleteNs - row.createNs
       : null
     const segs = segByMergeKey?.get(row.mk) ?? []
-    row.runCount = (lo != null && hi != null)
-      ? segs.reduce((n, s) => n + (segOverlapsRange(s, lo, hi) ? 1 : 0), 0)
-      : segs.length
+    let runCount = segs.length || 0
+    if (lo != null && hi != null) {
+      runCount = 0
+      for (const s of segs) {
+        if (segOverlapsRange(s, lo, hi)) runCount++
+      }
+    }
+    row.runCount = runCount
   }
   rows.sort((a, b) => (a.label || '').localeCompare(b.label || ''))
   return rows

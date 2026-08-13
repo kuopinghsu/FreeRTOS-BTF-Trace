@@ -794,7 +794,8 @@ def _stats_chevron_icon(collapsed: bool, is_dark: bool = True) -> QIcon:
         )
     return _svg_icon_markup(inner, size=10)
 
-# Icon path data (16x16 viewBox, single-path SVG outlines)
+# Icon path data (16x16 viewBox, single-path SVG outlines).
+# Toolbar glyphs: keep in sync with web/src/utils/toolbarIcons.js.
 _IC_OPEN   = ("M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v.64c.57.265.94.876.856 1.546l-.64 5.124A2.5 2.5 0 0 1 12.733 15H3.267a2.5 2.5 0 0 1-2.483-2.19l-.64-5.124A1.5 1.5 0 0 1 1 6.14V3.5z"
               "M2 6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5a.5.5 0 0 0-.5.5V6z"
               "m-.367 1a.5.5 0 0 0-.496.562l.64 5.124A1.5 1.5 0 0 0 3.267 14h9.466a1.5 1.5 0 0 0 1.49-1.314l.64-5.124A.5.5 0 0 0 14.367 7H1.633z")
@@ -802,6 +803,21 @@ _IC_SAVE     = "M2 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4.5L11.5 1H
 _IC_SAVE_SVG = ("M7.5 1a.5.5 0 0 1 .5.5v8.793l2.146-2.147a.5.5 0 0 1 .708.708l-3 3"
                 "a.5.5 0 0 1-.708 0l-3-3a.5.5 0 0 1 .708-.708L7 10.293V1.5a.5.5 0 0 1 .5-.5z"
                 "M2.5 13a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5z")
+# Perfetto / Chrome Trace JSON (document with timeline ticks). Keep in sync with
+# web/src/utils/toolbarIcons.js.
+_IC_PERFETTO = (
+    "M2.5 2A1.5 1.5 0 0 0 1 3.5v9A1.5 1.5 0 0 0 2.5 14h11a1.5 1.5 0 0 0 1.5-1.5"
+    "v-9A1.5 1.5 0 0 0 13.5 2h-11zm0 1h11a.5.5 0 0 1 .5.5V5H2V3.5a.5.5 0 0 1 .5-.5z"
+    "M2 6h12v6.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V6zm2 1.5v1h2v-1H4zm3 0v1h2v-1H7z"
+    "m3 0v1h2v-1h-2zM4 10v1h5v-1H4z"
+)
+# Cursor-range BTF slice (crop). Keep in sync with web/src/utils/toolbarIcons.js.
+_IC_EXPORT_SLICE = (
+    "M3.5 1A1.5 1.5 0 0 0 2 2.5v3h1v-3a.5.5 0 0 1 .5-.5h3v-1h-3zm6 0v1h3a.5.5 0 0 1"
+    " .5.5v3h1v-3A1.5 1.5 0 0 0 12.5 1h-3zM2 10.5v3A1.5 1.5 0 0 0 3.5 15h3v-1h-3a.5.5"
+    " 0 0 1-.5-.5v-3H2zm11 0v3a.5.5 0 0 1-.5.5h-3v1h3a1.5 1.5 0 0 0 1.5-1.5v-3h-1z"
+    "M5 5h6v6H5V5z"
+)
 _IC_COPY   = "M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1zM5 0h6a1 1 0 0 1 1 1v3H4V1a1 1 0 0 1 1-1z"
 _IC_SHOT   = ("M3 3.5A1.5 1.5 0 0 1 4.5 2h7A1.5 1.5 0 0 1 13 3.5V5h1a1 1 0 0 1 1 1v6.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5V6a1 1 0 0 1 1-1h1V3.5zm1 0V5h8V3.5a.5.5 0 0 0-.5-.5h-7a.5.5 0 0 0-.5.5z"
                 "M8 7a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z")
@@ -924,6 +940,12 @@ _IC_SETTINGS = ("M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1
                 "c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31"
                 "c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34z"
                 "M8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z")
+_IC_HELP = (
+    "M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 13A6 6 0 1 1 8 2a6 6 0 0 1 0 12z"
+    "m0-3.1a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM8.2 4.2c-1.2 0-2 .8-2.1 1.9h1"
+    "c.1-.6.5-1 1.1-1 .7 0 1.1.4 1.1 1 0 .4-.2.7-.8 1.1-.8.5-1.3 1-1.3 2v.3h1"
+    "v-.2c0-.6.3-.9.9-1.3.7-.5 1.2-1 1.2-1.9 0-1.1-.9-1.9-2.1-1.9z"
+)
 
 # App icon - multi-colour 72x72 SVG rendered in the About dialog header.
 # Timeline lanes + amber cursor + AI insight badge (keep in sync with
@@ -12887,6 +12909,27 @@ _RIGHT_DOCK_MIN_W = 180  # Web parity: RIGHT_PANEL_MIN_W in web/src/App.vue
 _RIGHT_DOCK_DEFAULT_W = 450  # Web parity: RIGHT_PANEL_WIDTH in web/src/config.js
 _RIGHT_DOCK_MAX_W = 520  # Web parity: RIGHT_PANEL_MAX_W in web/src/config.js
 
+
+class _RightDockHost(QWidget):
+    """Dock content wrapper so AI/stats sizeHints cannot pin the panel width."""
+
+    def __init__(self, child: QWidget, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("right_dock_host")
+        child.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        lay.addWidget(child)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(_RIGHT_DOCK_MIN_W, 200)
+
+    def sizeHint(self) -> QSize:
+        return QSize(_RIGHT_DOCK_DEFAULT_W, max(200, super().sizeHint().height()))
+
+
 def _relax_layout_width_constraints(lay: QLayout) -> None:
     """Stop nested layouts from preserving a previously wide minimum width."""
     lay.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
@@ -12926,7 +12969,7 @@ def _relax_widget_tree(root: QWidget) -> None:
     for w in (root, *root.findChildren(QWidget)):
         if isinstance(w, _StatsSectionGrip) or _in_legend_panel(w):
             continue
-        if w.objectName() == "stats_scope_action":
+        if w.objectName() in ("stats_scope_action", "panel_seam_resizer"):
             continue
         # AI header actions: Ignored + row stretch collapses them to 0 width.
         if _in_ai_actions_bar(w):
@@ -13094,103 +13137,161 @@ class _EdgeResizeCursorFilter(QObject):
                 return cursor
         return None
 
-class _DockWidthResizeFilter(QObject):
-    """Drag the central/right-dock seam to resize the right panel (web panel-resizer parity)."""
+class _PanelSeamResizer(QWidget):
+    """Dedicated hit target on the timeline / right-panel seam (web .panel-resizer).
 
-    def __init__(self, host: QWidget, win: "MainWindow", edge: str,
-                 margin: int = _RESIZE_EDGE_PX,
-                 enabled: Optional[Callable[[], bool]] = None) -> None:
+    Native QMainWindow dock separators and parent-only event filters miss this
+    seam: TimelineView / Statistics content sit on top of it and eat the mouse.
+    This overlay is a sibling of those children, raised, 8px wide.
+    """
+
+    WIDTH = 8
+
+    def __init__(self, host: QWidget, win: "MainWindow", edge: str) -> None:
         super().__init__(host)
         self._host = host
         self._win = win
-        self._edge = edge  # "left" (dock) or "right" (central pane)
-        self._margin = margin
-        self._enabled = enabled
-        self._hover_armed = False
-        self._hover_cursor: Optional[Qt.CursorShape] = None
+        self._edge = edge  # "left" (dock tabs) or "right" (central pane)
         self._dragging = False
+        self._hover = False
         self._start_global_x = 0.0
         self._start_width = 0
+        self.setObjectName("panel_seam_resizer")
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
+        self.setToolTip("Drag to resize the side panel")
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        host.installEventFilter(self)
+        self.sync_geometry()
+        self.show()
+        self.raise_()
 
-    def _active(self) -> bool:
-        if self._enabled is not None and not self._enabled():
-            return False
-        return self._win._any_visible_right_dock()
+    def _tab_bar_h(self) -> int:
+        if self._edge != "left":
+            return 0
+        bar = getattr(self._host, "tabBar", None)
+        if not callable(bar):
+            return 0
+        tb = bar()
+        if tb is None or not tb.isVisible():
+            return 0
+        return int(tb.height())
 
-    def _on_edge(self, pos: QPoint) -> bool:
-        w = self._host.width()
+    def sync_geometry(self) -> None:
+        host = self._host
+        if host is None:
+            return
+        top = self._tab_bar_h()
+        h = max(1, host.height() - top)
+        w = self.WIDTH
         if self._edge == "left":
-            return pos.x() <= self._margin
-        if self._edge == "right":
-            return pos.x() >= w - self._margin
-        return False
+            self.setGeometry(0, top, w, h)
+        else:
+            self.setGeometry(max(0, host.width() - w), 0, w, max(1, host.height()))
+        self.raise_()
 
-    def eventFilter(self, obj, event) -> bool:  # noqa: N802
-        if self._dragging and obj is not self._host:
-            et = event.type()
-            if et == QEvent.Type.MouseMove:
-                _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
-                self._apply_drag(event.globalPosition().x())
-                return True
-            if (et == QEvent.Type.MouseButtonRelease
-                    and event.button() == Qt.MouseButton.LeftButton):
-                self._end_drag()
-                return True
-            return False
-
-        if obj is not self._host:
-            return False
-
-        et = event.type()
-        if (et == QEvent.Type.MouseButtonPress
-                and event.button() == Qt.MouseButton.LeftButton
-                and self._active()
-                and self._on_edge(event.position().toPoint())):
-            self._begin_drag(event.globalPosition().x())
-            return True
-
-        if et in (QEvent.Type.MouseMove, QEvent.Type.HoverMove):
-            if self._active() and self._on_edge(event.position().toPoint()):
-                if not self._hover_armed:
-                    self._hover_armed = True
-                    self._hover_cursor = Qt.CursorShape.SizeHorCursor
-                    _HoverCursor.show(self._hover_cursor)
-            elif self._hover_armed:
-                _HoverCursor.hide(self._hover_cursor)
-                self._hover_armed = False
-                self._hover_cursor = None
-        elif et in (QEvent.Type.Leave, QEvent.Type.HoverLeave, QEvent.Type.Hide):
-            if self._hover_armed:
-                _HoverCursor.hide(self._hover_cursor)
-                self._hover_armed = False
-                self._hover_cursor = None
-        return False
+    def _event_global_x(self, event) -> float:
+        gp = event.globalPosition() if hasattr(event, "globalPosition") else None
+        if gp is not None:
+            return float(gp.x())
+        return float(event.globalX())
 
     def _begin_drag(self, global_x: float) -> None:
         self._dragging = True
+        self._hover = True
         self._win._right_dock_custom_drag = True
         self._start_global_x = global_x
         self._start_width = self._win._current_right_dock_width()
         _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
+        self.grabMouse()
         app = QApplication.instance()
         if app:
             app.installEventFilter(self)
+        self.update()
 
     def _apply_drag(self, global_x: float) -> None:
+        _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
         delta = global_x - self._start_global_x
         # Match web App.vue: nextW = startW - dx (drag left → wider right panel).
-        width = self._start_width - delta
-        self._win._apply_right_dock_width(width)
+        self._win._apply_right_dock_width(self._start_width - delta)
 
     def _end_drag(self) -> None:
+        if not self._dragging:
+            _HoverCursor.hide(Qt.CursorShape.SizeHorCursor)
+            return
         self._dragging = False
         self._win._right_dock_custom_drag = False
+        if QWidget.mouseGrabber() is self:
+            self.releaseMouse()
         app = QApplication.instance()
         if app:
             app.removeEventFilter(self)
         self._win._relax_right_dock_content_widths()
         self._win._apply_right_dock_width(self._win._current_right_dock_width())
         _wire_splitter_handle_cursors(self._win)
+        _HoverCursor.hide(Qt.CursorShape.SizeHorCursor)
+        self._hover = self.underMouse()
+        self.update()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is self._host and event.type() == QEvent.Type.Resize:
+            self.sync_geometry()
+        if not self._dragging:
+            return False
+        et = event.type()
+        if et == QEvent.Type.MouseMove:
+            if not (QApplication.mouseButtons() & Qt.MouseButton.LeftButton):
+                self._end_drag()
+                return False
+            self._apply_drag(self._event_global_x(event))
+            return False
+        if (et == QEvent.Type.MouseButtonRelease
+                and event.button() == Qt.MouseButton.LeftButton):
+            self._end_drag()
+            return False
+        return False
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if (event.button() == Qt.MouseButton.LeftButton
+                and self._win._any_visible_right_dock()):
+            self._begin_drag(self._event_global_x(event))
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._dragging:
+            self._apply_drag(self._event_global_x(event))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if self._dragging and event.button() == Qt.MouseButton.LeftButton:
+            self._end_drag()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        if not self._dragging:
+            self._hover = False
+            self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        if not self._hover and not self._dragging:
+            return
+        p = QPainter(self)
+        accent = QColor("#4C8BF5")
+        accent.setAlpha(150)
+        p.fillRect(max(0, self.width() // 2 - 1), 0, 2, self.height(), accent)
 
 class _RightDockResizeGuard(QObject):
     """Keep the main-window frame fixed when the right dock column is resized."""
@@ -13203,7 +13304,12 @@ class _RightDockResizeGuard(QObject):
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if obj is self._dock and event.type() == QEvent.Type.Resize:
+            sync = getattr(self._win, "_sync_panel_seam_resizers", None)
+            if callable(sync):
+                sync()
             if getattr(self._win, "_right_dock_custom_drag", False):
+                return False
+            if getattr(self._win, "_dock_width_apply_guard", False):
                 return False
             w = self._dock.width()
             if w != self._last_w:
@@ -21654,6 +21760,33 @@ _XML_TOOL_RE = re.compile(
 )
 
 
+def _loads_json_values(body: str) -> List[Any]:
+    """Parse one JSON value, a JSON array, or several concatenated/NDJSON values."""
+    src = (body or "").strip()
+    if not src:
+        return []
+    try:
+        return [json.loads(src)]
+    except (TypeError, ValueError):
+        pass
+    decoder = json.JSONDecoder()
+    out: List[Any] = []
+    idx = 0
+    n = len(src)
+    while idx < n:
+        while idx < n and src[idx].isspace():
+            idx += 1
+        if idx >= n:
+            break
+        try:
+            val, end = decoder.raw_decode(src, idx)
+        except ValueError:
+            break
+        out.append(val)
+        idx = end
+    return out
+
+
 def _tool_call_from_obj(obj: Any, idx: int) -> Optional[Dict[str, Any]]:
     if not isinstance(obj, dict):
         return None
@@ -21679,34 +21812,6 @@ def _tool_call_from_obj(obj: Any, idx: int) -> Optional[Dict[str, Any]]:
     return {"id": f"text_{idx}", "name": name, "arguments": ok or args}
 
 
-def _loads_json_values(body: str) -> List[Any]:
-    """Parse one JSON value, a JSON array, or NDJSON (several values in one fence)."""
-    src = (body or "").strip()
-    if not src:
-        return []
-    try:
-        data = json.loads(src)
-        return [data]
-    except (TypeError, ValueError):
-        pass
-    out: List[Any] = []
-    decoder = json.JSONDecoder()
-    idx = 0
-    n = len(src)
-    while idx < n:
-        while idx < n and src[idx].isspace():
-            idx += 1
-        if idx >= n:
-            break
-        try:
-            val, end = decoder.raw_decode(src, idx)
-        except ValueError:
-            break
-        out.append(val)
-        idx = end
-    return out
-
-
 def parse_tool_calls_from_text(text: str) -> List[Dict[str, Any]]:
     """Parse ```btftool fences and <tool_call> blobs (models without native tools)."""
     out: List[Dict[str, Any]] = []
@@ -21722,17 +21827,15 @@ def parse_tool_calls_from_text(text: str) -> List[Dict[str, Any]]:
         seen.add(key)
         out.append(call)
 
-    def _add_value(data: Any) -> None:
-        if isinstance(data, list):
-            for item in data:
-                _add(item)
-        else:
-            _add(data)
-
     src = text or ""
     for m in _BTFTOOL_FENCE_RE.finditer(src):
-        for data in _loads_json_values(m.group(1) or ""):
-            _add_value(data)
+        body = (m.group(1) or "").strip()
+        for data in _loads_json_values(body):
+            if isinstance(data, list):
+                for item in data:
+                    _add(item)
+            else:
+                _add(data)
     for m in _XML_TOOL_RE.finditer(src):
         body = (m.group(1) or "").strip()
         try:
@@ -46315,6 +46418,22 @@ class _CpuLoadGraph(QWidget):
 
         p.end()
 
+def _normalize_settings_page(page: str) -> str:
+    """Map a demo/API settings page name to a sidebar label.
+
+    Matches web ``demoSettingsTab``: substring match, AI before Display/Layout.
+    """
+    raw = str(page or "").strip()
+    low = raw.lower()
+    if "ai" in low:
+        return "AI"
+    if "display" in low:
+        return "Display"
+    if "layout" in low:
+        return "Layout"
+    return "Appearance"
+
+
 def _dialog_guard(fn):
     """Decorator: prevents a dialog-opening method from being entered while it
     is already running (e.g. due to spurious double-trigger on Linux/X11).
@@ -46360,18 +46479,62 @@ class _LeftTabStyle(QProxyStyle):
             return int(Qt.AlignmentFlag.AlignLeft)
         return super().styleHint(hint, option, widget, returnData)
 
-class _LeftAlignedTabBar(QTabBar):
-    """Tab bar that stays left-aligned (macOS native style centers tabs by default)."""
+class _StretchTabWidget(QTabWidget):
+    """Tab bar spans the widget so strip chrome is continuous (no leftover hole)."""
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._sync_tab_bar_width()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._sync_tab_bar_width()
+
+    def event(self, event) -> bool:  # noqa: N802
+        handled = super().event(event)
+        et = event.type()
+        if et in (QEvent.Type.LayoutRequest, QEvent.Type.ShowToParent):
+            self._sync_tab_bar_width()
+        return handled
+
+    def _sync_tab_bar_width(self) -> None:
+        tb = self.tabBar()
+        if tb is None:
+            return
+        w = max(1, self.width())
+        if tb.width() != w:
+            tb.setFixedWidth(w)
+
+
+class _ThemedTabBar(QTabBar):
+    """Fusion-aligned tab bar.
+
+    *expanding=False* keeps file tabs compact (browser-style).
+    *expanding=True* shares the strip equally (web ``.panel-tab { flex: 1 }``),
+    so hiding View → Show … tabs does not leave a leftover hole.
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None, *,
+                 expanding: bool = False) -> None:
         super().__init__(parent)
-        self.setExpanding(False)
+        self._expanding = bool(expanding)
+        self.setExpanding(self._expanding)
+        self.setDocumentMode(False)
+        self.setUsesScrollButtons(False)
+        self.setDrawBase(True)
         if sys.platform == "darwin":
             self.setStyle(_LeftTabStyle())
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
-        self.setExpanding(False)
+        self.setExpanding(self._expanding)
+
+
+class _LeftAlignedTabBar(_ThemedTabBar):
+    """Trace-file tabs: left-aligned, do not stretch across the timeline."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent, expanding=False)
 
 class _TimelinePane(QWidget):
     """Task timeline + dedicated time scrollbar row (below the canvas, above CPU split)."""
@@ -47224,7 +47387,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         for w in (tw, tb):
             pal = w.palette()
-            pal.setColor(QPalette.Window, win_bg)
+            pal.setColor(QPalette.Window, QColor(c["mid"]))
             pal.setColor(QPalette.Base, win_bg)
             pal.setColor(QPalette.Button, QColor(c["tab_bg"]))
             pal.setColor(QPalette.ButtonText, QColor(c["tab_fg"]))
@@ -47240,6 +47403,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             pal.setColor(QPalette.Base, win_bg)
             host.setPalette(pal)
             host.setAutoFillBackground(True)
+        self._unify_tab_strip_heights()
 
     def _sync_panel_tabs_theme(self, is_dark: bool) -> None:
         """Keep Statistics / Marks / Find tab surfaces in sync with the app theme."""
@@ -47250,7 +47414,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         tw = self._panel_tabs
         tb = tw.tabBar()
-        tb.setExpanding(False)
+        tb.setExpanding(True)
         if sys.platform == "darwin" and not getattr(self, "_panel_tabs_left_style_applied", False):
             tw.setStyle(_LeftTabStyle())
             tb.setStyle(_LeftTabStyle())
@@ -47261,7 +47425,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         tb.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         mid_bg = QColor(c["mid"])
         pal = tw.palette()
-        pal.setColor(QPalette.Window, win_bg)
+        pal.setColor(QPalette.Window, mid_bg)
         pal.setColor(QPalette.Base, win_bg)
         pal.setColor(QPalette.Button, QColor(c["tab_bg"]))
         pal.setColor(QPalette.ButtonText, QColor(c["tab_fg"]))
@@ -47312,10 +47476,39 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         panel_dock = getattr(self, "_panel_dock", None)
         if panel_dock is not None:
             pal = panel_dock.palette()
-            pal.setColor(QPalette.Window, win_bg)
+            pal.setColor(QPalette.Window, mid_bg)
             pal.setColor(QPalette.Base, win_bg)
             panel_dock.setPalette(pal)
             panel_dock.setAutoFillBackground(True)
+        dock_host = getattr(self, "_panel_dock_host", None)
+        if dock_host is not None:
+            pal = dock_host.palette()
+            pal.setColor(QPalette.Window, mid_bg)
+            pal.setColor(QPalette.Base, win_bg)
+            dock_host.setPalette(pal)
+            dock_host.setAutoFillBackground(True)
+        self._unify_tab_strip_heights()
+
+    def _unify_tab_strip_heights(self) -> None:
+        """Keep file tabs and panel tabs on one equal-height chrome row."""
+        if not hasattr(self, "_tab_widget") or not hasattr(self, "_panel_tabs"):
+            return
+        bars = [self._tab_widget.tabBar(), self._panel_tabs.tabBar()]
+        bars = [b for b in bars if b is not None]
+        if not bars:
+            return
+        for bar in bars:
+            bar.setMinimumHeight(0)
+            bar.setMaximumHeight(16777215)
+        h = max(bar.sizeHint().height() for bar in bars)
+        if h <= 0:
+            return
+        for bar in bars:
+            bar.setFixedHeight(h)
+        for tw in (self._tab_widget, self._panel_tabs):
+            sync = getattr(tw, "_sync_tab_bar_width", None)
+            if callable(sync):
+                sync()
 
     def _apply_view_settings(self, view: TimelineView) -> None:
         view.set_font_size(self._font_size_val)
@@ -47570,6 +47763,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         ]
         if visible and self._panel_tabs.currentIndex() not in visible:
             self._panel_tabs.setCurrentIndex(visible[0])
+        tb = self._panel_tabs.tabBar()
+        if tb is not None:
+            tb.setExpanding(True)
+        self._unify_tab_strip_heights()
         self._sync_panel_menu_checks()
 
     def _sync_panel_menu_checks(self) -> None:
@@ -47725,13 +47922,43 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         tip = self._current_file or fname
         self._status_file.setToolTip(f"{tip}\n{summary}")
 
-    def _update_tab_actions(self) -> None:
+    def _has_cursor_range(self) -> bool:
+        if self._trace is None:
+            return False
+        view = getattr(self, "_view", None)
+        scene = getattr(view, "_scene", None) if view is not None else None
+        if scene is None:
+            return False
+        try:
+            return len(scene.cursor_times()) >= 2
+        except (AttributeError, TypeError):
+            return False
+
+    def _sync_file_export_actions(self, has_range: Optional[bool] = None) -> None:
+        """Enable snapshot / SVG / Perfetto with a trace; BTF slice needs C1–Cn."""
         has_trace = self._trace is not None
+        if has_range is None:
+            has_range = self._has_cursor_range()
         for act in (
-            self._act_save_img, self._act_save_svg, self._act_copy_img,
-            self._act_export_perfetto, self._act_export_slice,
+            getattr(self, "_act_save_img", None),
+            getattr(self, "_act_save_svg", None),
+            getattr(self, "_act_copy_img", None),
+            getattr(self, "_act_export_perfetto", None),
+            getattr(self, "_tb_snap_btn", None),
+            getattr(self, "_tb_save_svg_btn", None),
+            getattr(self, "_tb_export_perfetto_btn", None),
         ):
-            act.setEnabled(has_trace)
+            if act is not None:
+                act.setEnabled(has_trace)
+        for act in (
+            getattr(self, "_act_export_slice", None),
+            getattr(self, "_tb_export_slice_btn", None),
+        ):
+            if act is not None:
+                act.setEnabled(has_trace and bool(has_range))
+
+    def _update_tab_actions(self) -> None:
+        self._sync_file_export_actions()
         if hasattr(self, "_act_close_tab"):
             has_tabs = len(self._tabs) > 0
             self._act_close_tab.setEnabled(has_tabs)
@@ -47917,16 +48144,26 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if not docks:
             return
         sizes = [w] * len(docks)
-        if self.isMaximized() or self.isFullScreen():
+        # Pin min=max during the layout pass so content sizeHints cannot keep
+        # the column stuck at the previous width (AI templates minHint ~560).
+        for dock in docks:
+            dock.setMinimumWidth(w)
+            dock.setMaximumWidth(w)
+        try:
+            if self.isMaximized() or self.isFullScreen():
+                self.resizeDocks(docks, sizes, Qt.Orientation.Horizontal)
+                return
+            # resizeDocks() on Windows can change the outer window width instead of
+            # only stealing/giving space to the central widget — pin the frame.
+            frame = self.geometry()
             self.resizeDocks(docks, sizes, Qt.Orientation.Horizontal)
-            return
-        # resizeDocks() on Windows can change the outer window width instead of
-        # only stealing/giving space to the central widget — pin the frame.
-        frame = self.geometry()
-        self.resizeDocks(docks, sizes, Qt.Orientation.Horizontal)
-        if self.geometry() != frame:
-            self.setGeometry(frame)
-            self.resizeDocks(docks, sizes, Qt.Orientation.Horizontal)
+            if self.geometry() != frame:
+                self.setGeometry(frame)
+                self.resizeDocks(docks, sizes, Qt.Orientation.Horizontal)
+        finally:
+            for dock in docks:
+                dock.setMinimumWidth(_RIGHT_DOCK_MIN_W)
+                dock.setMaximumWidth(_RIGHT_DOCK_MAX_W)
 
     def _schedule_stabilize_right_dock_layout(self) -> None:
         """Coalesce native dock splitter resizes into one stabilization pass."""
@@ -47994,6 +48231,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._focus_statistics_panel()
         self._relax_right_dock_content_widths()
         _wire_splitter_handle_cursors(self)
+        self._sync_panel_seam_resizers()
 
     def _apply_dock_metrics_sizes(self, packed: str) -> None:
         """Apply persisted dock widths/heights (visibility handled separately)."""
@@ -48012,6 +48250,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._view._scene.set_label_width(label_w)
         self._relax_right_dock_content_widths()
         _wire_splitter_handle_cursors(self)
+        self._sync_panel_seam_resizers()
 
     def _dock_profile_key(self, width: int, height: int) -> str:
         """Build a stable per-window-size key for dock/layout persistence."""
@@ -48256,6 +48495,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def resizeEvent(self, event) -> None:  # noqa: N802
         """Re-autofit CPU load pane height when the window grows (stretch factor 0)."""
         super().resizeEvent(event)
+        self._sync_panel_seam_resizers()
+        self._unify_tab_strip_heights()
         if (self._shutting_down or self._cpu_splitter_user_sized
                 or not self._show_cpu_load or self._active_tab is None):
             return
@@ -48759,7 +49000,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QSplitter::handle:horizontal {{
                 width:6px;
             }}
-            QTabWidget#trace_tab_widget {{ background:{c['win_bg']}; }}
+            QTabWidget#trace_tab_widget {{ background:{c['mid']}; }}
             QTabWidget#trace_tab_widget::tab-bar {{ alignment: left; }}
             QTabWidget#trace_tab_widget::pane {{ background:{c['win_bg']};
                          border:1px solid {c['sep']}; top:-1px; }}
@@ -48774,22 +49015,26 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                          border-bottom:2px solid {c['accent']}; }}
             QTabWidget#trace_tab_widget QTabBar#trace_tab_bar::tab:hover:!selected {{
                          background:{c['tab_hover_bg']}; color:{c['tab_hover_fg']}; }}
-            QTabWidget#panel_tab_widget {{ background:{c['win_bg']}; }}
+            QTabWidget#panel_tab_widget {{ background:{c['mid']}; }}
             QTabWidget#panel_tab_widget::tab-bar {{
-                         background:{c['mid']}; border-bottom:1px solid {c['sep']}; }}
+                         alignment: left; background:{c['mid']};
+                         border-bottom:1px solid {c['sep']}; }}
             QTabWidget#panel_tab_widget::pane {{ background:{c['win_bg']};
                          border:1px solid {c['sep']}; top:-1px; }}
             QTabWidget#panel_tab_widget QTabBar#panel_tab_bar {{
                          background:{c['mid']}; border-bottom:1px solid {c['sep']}; }}
             QTabWidget#panel_tab_widget QTabBar#panel_tab_bar::tab {{
-                         background:{c['tab_bg']}; color:{c['tab_fg']}; padding:4px 12px;
-                         border:none; border-bottom:2px solid transparent;
+                         background:{c['tab_bg']}; color:{c['tab_fg']}; padding:4px 8px;
+                         border:none; border-right:1px solid {c['sep']};
+                         border-bottom:2px solid transparent;
                          font-size:{_ui_fs}; }}
             QTabWidget#panel_tab_widget QTabBar#panel_tab_bar::tab:selected {{
                          background:{c['tab_sel_bg']}; color:{c['tab_sel_fg']};
                          border-bottom:2px solid {c['accent']}; }}
             QTabWidget#panel_tab_widget QTabBar#panel_tab_bar::tab:hover:!selected {{
                          background:{c['tab_hover_bg']}; color:{c['tab_hover_fg']}; }}
+            QWidget#right_dock_host {{ background:{c['mid']}; }}
+            QDockWidget#dock_panel {{ background:{c['mid']}; }}
             QTabWidget#marks_tab_widget {{ background:{c['win_bg']}; }}
             QTabWidget#marks_tab_widget::pane {{ background:{c['win_bg']};
                          border:1px solid {c['sep']}; top:-1px; }}
@@ -49075,15 +49320,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _wl.addWidget(_wlbl)
         self._welcome_label = _wlbl
 
-        self._tab_widget = QTabWidget()
+        self._tab_widget = _StretchTabWidget()
         self._tab_widget.setTabBar(_LeftAlignedTabBar(self._tab_widget))
         self._tab_widget.setTabsClosable(True)
         # Native document-mode tabs on macOS ignore QSS/palette theme updates.
+        self._tab_widget.setDocumentMode(False)
         if sys.platform == "darwin":
-            self._tab_widget.setDocumentMode(False)
             self._tab_widget.setStyle(_LeftTabStyle())
-        else:
-            self._tab_widget.setDocumentMode(True)
         self._tab_widget.setMovable(True)
         self._tab_widget.tabCloseRequested.connect(self._close_trace_tab)
         self._tab_widget.currentChanged.connect(self._on_trace_tab_changed)
@@ -49301,9 +49544,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         )
 
         # --- Right panel: Statistics / Marks / Find / Legend / AI (web parity) ---
-        self._panel_tabs = QTabWidget()
-        if sys.platform == "darwin":
-            self._panel_tabs.setTabBar(_LeftAlignedTabBar(self._panel_tabs))
+        self._panel_tabs = _StretchTabWidget()
+        self._panel_tabs.setTabBar(_ThemedTabBar(self._panel_tabs, expanding=True))
         self._panel_tabs.setDocumentMode(False)
         self._panel_tabs.addTab(self._stats_panel, "Statistics")
         self._panel_tabs.addTab(marks_host, "Marks")
@@ -49313,10 +49555,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         panel_dock = QDockWidget("", self)
         panel_dock.setObjectName("dock_panel")
-        panel_dock.setWidget(self._panel_tabs)
-        panel_dock.setFeatures(
-            QDockWidget.DockWidgetFeature.DockWidgetClosable
-            | QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        self._panel_dock_host = _RightDockHost(self._panel_tabs)
+        panel_dock.setWidget(self._panel_dock_host)
+        # No title bar: stats tabs sit on the same row as the trace-file tabs.
+        _hidden_title = QWidget(panel_dock)
+        _hidden_title.setObjectName("dock_hidden_title")
+        _hidden_title.setFixedHeight(0)
+        panel_dock.setTitleBarWidget(_hidden_title)
+        panel_dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
         self._apply_right_dock_min_width(panel_dock)
         panel_dock.setMinimumHeight(200)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, panel_dock)
@@ -49331,7 +49577,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # Default dock sizes are applied in _restore_settings via QTimer.singleShot
         # AFTER the window is shown, where resizeDocks() is actually effective.
 
-        # Keep runtime state in sync if the user closes a dock via its X button
+        # Visibility is Settings → Display (tabs), not a dock close button.
         self._panel_dock.visibilityChanged.connect(self._on_panel_dock_visibility_changed)
 
         self._wire_resize_cursors()
@@ -49368,34 +49614,31 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._close_trace_tab(0)
 
     def _wire_resize_cursors(self) -> None:
-        """Resize cursors on splitters and dock/central pane edges."""
-        vert = Qt.CursorShape.SizeVerCursor
-        margin = _RESIZE_EDGE_PX
-
-        def _dock_active(dock: QDockWidget):
-            return (lambda: dock.isVisible() and not dock.isFloating())
-
-        for w in (self._central_stack, self._tab_widget):
-            w.setMouseTracking(True)
-            w.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
-            filt = _DockWidthResizeFilter(
-                w, self, "right", margin, self._any_visible_right_dock)
-            w.installEventFilter(filt)
-            w._dock_width_resize_filter = filt  # prevent GC
-
-        for dock in self._right_docks():
-            dock.setMouseTracking(True)
-            dock.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
-            ok = _dock_active(dock)
-            width_filt = _DockWidthResizeFilter(dock, self, "left", margin, ok)
-            dock.installEventFilter(width_filt)
-            dock._dock_width_resize_filter = width_filt
-
+        """Resize cursors on splitters and the timeline / right-panel seam."""
+        self._central_seam_resizer = _PanelSeamResizer(
+            self._central_host, self, "right")
+        self._dock_seam_resizer = _PanelSeamResizer(
+            self._panel_tabs, self, "left")
         resize_guard = _RightDockResizeGuard(self, self._panel_dock)
         self._panel_dock.installEventFilter(resize_guard)
         self._panel_dock._dock_resize_guard = resize_guard
-
         QTimer.singleShot(0, lambda: _wire_splitter_handle_cursors(self))
+        QTimer.singleShot(0, self._sync_panel_seam_resizers)
+
+    def _sync_panel_seam_resizers(self) -> None:
+        """Keep the 8px seam grips aligned and above timeline / panel content."""
+        if getattr(self, "_shutting_down", False):
+            return
+        visible = self._any_visible_right_dock()
+        for attr in ("_central_seam_resizer", "_dock_seam_resizer"):
+            grip = getattr(self, attr, None)
+            if grip is None:
+                continue
+            if visible:
+                grip.show()
+                grip.sync_geometry()
+            else:
+                grip.hide()
 
     def _build_legend_panel(self) -> None:
         """Create the legend widget hosted in the right-panel Legend tab."""
@@ -49460,7 +49703,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._recent_menu = fm.addMenu("Open &Recent")
         self._rebuild_recent_menu()
         fm.addSeparator()
-        self._act_save_img = fm.addAction("Save as &Image (PNG)…", self._on_save_image, "Ctrl+S")
+        self._act_save_img = fm.addAction("Snapshot &Editor…", self._on_save_image, "Ctrl+S")
         self._act_save_img.setEnabled(False)
         self._act_save_svg = fm.addAction("Save as &SVG…", self._on_save_svg, "Ctrl+Shift+S")
         self._act_save_svg.setEnabled(False)
@@ -49472,7 +49715,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_export_slice = fm.addAction(
             "Save se&lection as BTF…", self._on_export_btf_slice)
         self._act_export_slice.setToolTip(
-            "Export raw BTF events between the earliest and latest cursor (C1–Cn).")
+            "Save cursor range as BTF (C1–Cn).")
         self._act_export_slice.setEnabled(False)
         self._act_close_tab = fm.addAction("Close &Tab", self._on_close_tab_action, QKeySequence.Close)
         self._act_close_tab.setEnabled(False)
@@ -49588,10 +49831,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._tb_icon_actions.append((act, ic_path))
             return act
 
-        # --- File actions ---
-        _ia("Open",     self._on_open,         _IC_OPEN,     "Open BTF trace file  (Ctrl+O)")
-        _ia("Save PNG", self._on_save_image,   _IC_SAVE,     "Open snapshot editor  (Ctrl+S)")
-        _ia("Save SVG", self._on_save_svg,     _IC_SAVE_SVG, "Save viewport as SVG  (Ctrl+Shift+S)")
+        # --- File actions (same cluster as web: Open · Snapshot · SVG · Perfetto · Slice) ---
+        _ia("Open", self._on_open, _IC_OPEN, "Open BTF trace file  (Ctrl+O)")
+        self._tb_snap_btn = _ia(
+            "Snapshot", self._on_save_image, _IC_SHOT,
+            "Open snapshot editor  (Ctrl+S)")
+        self._tb_save_svg_btn = _ia(
+            "Save SVG", self._on_save_svg, _IC_SAVE_SVG,
+            "Save viewport as SVG  (Ctrl+Shift+S)")
+        self._tb_export_perfetto_btn = _ia(
+            "Perfetto", self._on_export_perfetto, _IC_PERFETTO,
+            "Export Perfetto (Chrome Trace JSON for ui.perfetto.dev)  (Ctrl+Shift+E)")
+        self._tb_export_slice_btn = _ia(
+            "Save BTF", self._on_export_btf_slice, _IC_EXPORT_SLICE,
+            "Save cursor range as BTF (C1–Cn)")
+        self._tb_snap_btn.setEnabled(False)
+        self._tb_save_svg_btn.setEnabled(False)
+        self._tb_export_perfetto_btn.setEnabled(False)
+        self._tb_export_slice_btn.setEnabled(False)
         tb.addSeparator()
 
         # --- Layout and zoom ---
@@ -49706,10 +49963,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             _IC_THEME_LIGHT if self._is_dark else _IC_THEME_DARK,
             "Switch to light theme" if self._is_dark else "Switch to dark theme"
         )
-        tb.addSeparator()
 
-        # --- Settings button ---
+        # Push Settings / Help to the right (web toolbar parity).
+        spacer = QWidget()
+        spacer.setObjectName("toolbar_right_spacer")
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        tb.addWidget(spacer)
         _ia("Settings", self._open_settings, _IC_SETTINGS, "Open Settings  (Ctrl+,)")
+        _ia("Help", self._on_keyboard_shortcuts, _IC_HELP,
+            "Help & keyboard shortcuts")
 
     def _update_trace_quality_banner(self, trace: Optional[BtfTrace] = None) -> None:
         """Show BTF quality / version warnings above the timeline (web parity)."""
@@ -50360,6 +50622,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if view is not None:
                 view.clear_cursors()
             return {}
+        if op == "clear_bookmarks":
+            self._clear_all_bookmarks()
+            return {}
+        if op == "clear_annotations":
+            self._clear_all_annotations()
+            return {}
         if op == "zoom_range":
             lo, hi = self._demo_parse_range_payload(payload)
             self._ai_zoom_to_range(lo, hi)
@@ -50398,9 +50666,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if op == "find":
             return self._demo_find(payload)
         if op == "settings":
-            page = str(payload.get("page") or payload.get("name") or "Appearance")
-            QTimer.singleShot(0, lambda p=page: self._open_settings(p))
-            return {"settings": page}
+            return self._demo_settings(payload)
         if op in ("ui", "command"):
             inner = dict(payload)
             action = str(
@@ -50572,6 +50838,40 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 pass
             return {"analysis": "closed", "found": True}
         return {"analysis": "closed", "found": False}
+
+    def _demo_settings(self, payload: dict) -> dict:
+        action = str(payload.get("action") or "").strip().lower()
+        if "open" in payload:
+            want_open = self._demo_truthy(payload.get("open"), default=True)
+        elif "close" in payload:
+            want_open = not self._demo_truthy(payload.get("close"), default=True)
+        elif action in ("close", "hide", "dismiss"):
+            want_open = False
+        else:
+            want_open = True
+        if not want_open:
+            self._demo_close_settings()
+            return {"settings": "closing"}
+        page = _normalize_settings_page(
+            payload.get("page") or payload.get("name") or "Appearance")
+        QTimer.singleShot(0, lambda p=page: self._open_settings(p))
+        return {"settings": page}
+
+    def _demo_close_settings(self) -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        for w in app.topLevelWidgets():
+            try:
+                title = w.windowTitle()
+            except RuntimeError:
+                continue
+            if title == "Settings" and w.isVisible():
+                try:
+                    w.reject()
+                except RuntimeError:
+                    pass
+                return
 
     def _demo_find(self, payload: dict) -> dict:
         clear = self._demo_truthy(payload.get("clear"), default=False)
@@ -53233,6 +53533,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         *page* selects the sidebar page: ``Appearance``, ``Display``, ``Layout``, or ``AI``.
         """
+        page = _normalize_settings_page(page if isinstance(page, str) else "Appearance")
         _snap = {
             "is_dark":                  self._is_dark,
             "font_size":                self._font_size_val,
@@ -53507,6 +53808,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         has_range = len(times) >= 2
         self._act_zoom_range.setEnabled(has_range)
         self._tb_zoom_range_btn.setEnabled(has_range)
+        self._sync_file_export_actions(has_range=has_range)
         if self._trace is None or not has_range:
             self._range_stats_label.setText("Range: place two cursors to measure")
             self._status_range.setVisible(False)
@@ -54225,6 +54527,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _on_panel_dock_visibility_changed(self, visible: bool) -> None:
         """Clear find overlays when the entire right panel is hidden."""
+        self._sync_panel_seam_resizers()
         if not visible:
             self._recompute_find_hits()
 

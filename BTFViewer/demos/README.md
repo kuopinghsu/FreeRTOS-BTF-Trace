@@ -14,15 +14,19 @@ Each full demo lives in its own folder (XML + frozen trace + narration).
 |------|---------|
 | [`demo_8cores/demo_8cores.xml`](demo_8cores/demo_8cores.xml) | Runner script (steps / actions) |
 | [`demo_8cores/demo_8cores.btf.gz`](demo_8cores/demo_8cores.btf.gz) | Frozen trace (stable vs `tracedata/`) |
-| [`demo_8cores/text/`](demo_8cores/text/) | Narration source (`.txt`) |
-| [`demo_8cores/voice/`](demo_8cores/voice/) | Pre-rendered TTS audio (generated; gitignored) |
+| [`demo_8cores/text/<lang>/`](demo_8cores/text/en/) | Narration scripts (`.txt`), one folder per language |
+| [`demo_8cores/voice/<lang>/`](demo_8cores/voice/en/) | TTS audio + `voice.json`, one folder per language |
 
 ```bash
 cd BTFViewer
 make bundle   # once — demo launches builds/btf_viewer.py
 make demo
+# Chinese narration if voice/zh-tw/*.mp3 exist (else English fallback):
+make demo DEMO_LANG=zh-tw
 # or:
 python3 scripts/demo_runner.py demos/demo_8cores/demo_8cores.xml --launch --interactive
+python3 scripts/demo_runner.py demos/demo_8cores/demo_8cores.xml --launch --lang zh-tw
+python3 scripts/demo_voice.py status demos/demo_8cores
 ```
 
 Settings for the demo session are stored in `builds/btf_viewer.rc` (next to the bundled app).
@@ -51,6 +55,8 @@ cursors / zoom / statistics sections over `http://127.0.0.1:8765/demo`
 <wait_audio/>
 <stats_reset/>
 <clear_cursors/>
+<clear_bookmarks/>
+<clear_annotations/>
 <clear_highlight/>
 ```
 
@@ -75,9 +81,63 @@ Statistics section ids match the desktop panel (`health`, `cores`, `tasks`,
 <stop_audio/>
 ```
 
-Convert `text/*.txt` → `voice/*.mp3` with your TTS tool. Write **Free-RTOS**
-(with a hyphen) so speech engines pronounce it correctly. The runner also tries
-sibling `voice/` / `text/` folders and common extensions (`.wav`, `.m4a`, …).
+Convert `text/<lang>/*.txt` → `voice/<lang>/*.mp3` with your TTS tool (or
+`python3 scripts/demo_voice.py render …`). Write **Free-RTOS** (with a hyphen)
+so speech engines pronounce it correctly. The runner also tries common
+extensions (`.wav`, `.m4a`, `.aiff`, …).
+
+**Voice packs.** Every language uses the same layout. XML paths stay
+`voice/01_title.mp3`; the runner looks in `voice/<lang>/` first.
+
+```
+text/<lang>/01_title.txt
+voice/<lang>/01_title.mp3
+voice/<lang>/voice.json
+```
+
+Shareable zip (install/export) is always:
+
+```
+voice.json          # { "schema": "btf-demo-voice", "id": "zh-tw", "label": "中文" }
+text/01_title.txt
+voice/01_title.mp3
+```
+
+```bash
+# English is already in text/en/ and voice/en/
+python3 scripts/demo_voice.py status demos/demo_8cores
+
+# Add a language from a zip or a folder of .txt/.mp3 files
+python3 scripts/demo_voice.py install demos/demo_8cores zh-tw.zip
+python3 scripts/demo_voice.py install demos/demo_8cores ./zh-tw --lang zh-tw --label 中文
+
+# Export one language for sharing
+python3 scripts/demo_voice.py export demos/demo_8cores --lang en -o builds/demo_8cores-en.zip
+
+# Render clips from scripts (macOS say / espeak; optional ffmpeg → mp3)
+python3 scripts/demo_voice.py render demos/demo_8cores --lang zh-tw
+
+# Rewrite <languages> from folders found on disk
+python3 scripts/demo_voice.py sync-xml demos/demo_8cores
+```
+
+`install` also accepts a folder that is already `text/<lang>/` + `voice/<lang>/`,
+or loose `*.txt` / `*.mp3` with `--lang`. Playback order is `voice/<lang>/<file>`,
+then flat `voice/<file>` (legacy), then `voice/<default>/<file>`. Web shows a
+**Voice** menu on the demo bar when more than one language is listed or
+discovered. Desktop: `--lang zh-tw`, `make demo DEMO_LANG=zh-tw`, or
+`BTFVIEWER_DEMO_LANG`. Otherwise the XML ``<languages default>`` is used
+(English for `demo_8cores`).
+
+Declare languages in `<meta>` (or generate that block with `sync-xml`):
+
+```xml
+<languages default="en">
+  <language id="en" label="English"/>
+  <language id="zh-tw" label="中文"/>
+  <language id="ja" label="日本語"/>
+</languages>
+```
 
 Default players: **stdlib on Windows** (`scripts/play_audio_clip.py` via winmm/MCI — no pip),
 else macOS `afplay`, `ffplay` / `paplay` / `aplay`. Optional `pygame` if you already have a wheel.  

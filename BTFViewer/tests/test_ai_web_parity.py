@@ -304,6 +304,63 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("High, Medium, or Low", AI_SYSTEM_PROMPT)
         self.assertIn("High, Medium, or Low", ollama)
 
+    def test_ai_md_gui_tools_and_templates_match_apps(self) -> None:
+        """AI.md / README template names and GUI-tool rows stay aligned with the apps."""
+        from btf_viewer_pkg.ai_assistant import AI_TEMPLATE_QUESTIONS
+        from btf_viewer_pkg.ai_tools import is_export_tool, tool_mutates_gui
+
+        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
+        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
+        for name in AI_VIEWER_TOOL_NAMES:
+            self.assertIn(f"| `{name}` |", ai_md, name)
+
+        gui = re.search(r"## GUI tools.*?(?:\n## )", ai_md, re.S)
+        self.assertIsNotNone(gui)
+        immediate = re.search(
+            r"Read-only ((?:`[^`]+` / )+`[^`]+`) batches run immediately",
+            gui.group(0),
+        )
+        self.assertIsNotNone(immediate)
+        listed = re.findall(r"`([^`]+)`", immediate.group(1))
+        query = [n for n in AI_VIEWER_TOOL_NAMES if is_query_tool(n)]
+        self.assertEqual(listed, query)
+
+        leftover = [
+            n for n in AI_VIEWER_TOOL_NAMES
+            if not is_query_tool(n)
+            and not tool_mutates_gui(n)
+            and not is_export_tool(n)
+        ]
+        self.assertEqual(leftover, [], leftover)
+
+        docs = ai_md + readme
+        for _tid, label, _prompt in AI_TEMPLATE_QUESTIONS:
+            self.assertIn(f"**{label}**", docs, label)
+        for needle in (
+            "**Verify finding**",
+            "**Auto investigate**",
+            "Investigation plan",
+        ):
+            self.assertIn(needle, ai_md)
+            self.assertIn(needle, readme)
+
+        workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
+        slides = (BTF_ROOT / "btf-viewer-slides.md").read_text(encoding="utf-8")
+        for needle in ("Verify with AI…", "Auto investigate…", "Limit to C1–Cn"):
+            self.assertIn(needle, readme)
+            self.assertIn(needle, workflows)
+        self.assertIn("Limit to C1–Cn", slides)
+        self.assertNotIn("Limit to cursor range", slides)
+        self.assertIn("find_critical_path", workflows)
+        self.assertIn("bookmark_finding", workflows)
+        self.assertIn("export_investigation", workflows)
+        self.assertNotIn(
+            "`query_raw_metric` / `search_timeline` / `trigger_compare` run immediately",
+            workflows,
+        )
+        self.assertIn("README.md#demo", workflows)
+        self.assertIn("README.md#demo", slides)
+
     def test_new_tool_dispatch_sites_match(self) -> None:
         mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
         app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")

@@ -25,8 +25,9 @@ PANDOC ?= pandoc
 DOCS := $(BUILDS)
 
 DEMO_XML ?= demos/demo_8cores/demo_8cores.xml
+DEMO_LANG ?=
 
-.PHONY: all help web bundle check-bundle test test-web test-all ci doc update-images demo
+.PHONY: all help web bundle check-bundle test test-web test-all ci doc update-images demo demo-voice
 
 help:
 	@echo "BTF Viewer — make targets"
@@ -37,14 +38,15 @@ help:
 	@echo "  make check-bundle Regenerate bundle; fail if it drifts from sources (CI)"
 	@echo "  make doc          Convert README.md + WORKFLOWS.md → builds/*.pdf (Eisvogel + XeLaTeX)"
 	@echo "  make update-images  Regenerate ../images/stats/*.svg via the desktop CLI"
-	@echo "  make demo         Run guided demo via builds/btf_viewer.py (DEMO_XML, --launch)"
+	@echo "  make demo         Run guided demo via builds/btf_viewer.py (DEMO_XML, DEMO_LANG, --launch)"
+	@echo "  make demo-voice   Voice pack status (DEMO_XML). See scripts/demo_voice.py"
 	@echo "  make test         Desktop unit tests (QT_QPA_PLATFORM=offscreen)"
 	@echo "  make test-web     Web unit tests (node --test)"
 	@echo "  make test-all     Desktop + web unit tests"
 	@echo "  make ci           test-all + check-bundle (local CI parity)"
 	@echo "  make help         Show this help"
 	@echo ""
-	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)  DEMO_XML=$(DEMO_XML)"
+	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)  DEMO_XML=$(DEMO_XML)  DEMO_LANG=$(DEMO_LANG)"
 
 
 all: web bundle
@@ -64,10 +66,16 @@ test:
 	$(PYTHON) -m unittest discover -s tests -v
 
 demo: $(OUT)
-	$(PYTHON) scripts/demo_runner.py $(DEMO_XML) --launch
+	$(PYTHON) scripts/demo_runner.py $(DEMO_XML) --launch $(if $(DEMO_LANG),--lang $(DEMO_LANG),)
 
-# Build the desktop bundle if missing (demo launches builds/btf_viewer.py).
-$(OUT):
+demo-voice:
+	$(PYTHON) scripts/demo_voice.py status $(DEMO_XML)
+
+# Demo launches builds/btf_viewer.py; rebuild when package sources change.
+BUNDLE_SRCS := $(wildcard btf_viewer_pkg/*.py) \
+	$(wildcard btf_viewer_pkg/mvvm/*.py) \
+	scripts/bundle_viewer.py
+$(OUT): $(BUNDLE_SRCS)
 	$(MAKE) bundle
 
 test-web:

@@ -1,0 +1,132 @@
+{
+  "trace": "demo_8cores.btf.gz",
+  "timeScale": "us",
+  "lo": 3085000,
+  "hi": 3310000,
+  "taskCount": 13,
+  "segCount": 1695,
+  "scheduling": {
+    "contextSwitches": 1687,
+    "gapCount": 1687,
+    "gapSum": 23138
+  },
+  "priority": [
+    {
+      "label": "Low[266]",
+      "basePri": 2,
+      "peakPri": 4,
+      "episodeCount": 3,
+      "totalBoostNs": 102404,
+      "pattern": "Mutex inherit"
+    }
+  ],
+  "lifecycle": [
+    {
+      "label": "High[268]",
+      "createNs": 3085946,
+      "deleteNs": null,
+      "suspendCount": 0,
+      "resumeCount": 0,
+      "aliveNs": null,
+      "eventCount": 1,
+      "runCount": 6
+    },
+    {
+      "label": "Low[266]",
+      "createNs": 3085726,
+      "deleteNs": null,
+      "suspendCount": 0,
+      "resumeCount": 0,
+      "aliveNs": null,
+      "eventCount": 1,
+      "runCount": 720
+    },
+    {
+      "label": "Med[267]",
+      "createNs": 3085846,
+      "deleteNs": null,
+      "suspendCount": 0,
+      "resumeCount": 0,
+      "aliveNs": null,
+      "eventCount": 1,
+      "runCount": 871
+    },
+    {
+      "label": "PS[228]",
+      "createNs": null,
+      "deleteNs": 3086674,
+      "suspendCount": 0,
+      "resumeCount": 0,
+      "aliveNs": null,
+      "eventCount": 1,
+      "runCount": 1
+    }
+  ],
+  "block": [
+    {
+      "label": "High[268]",
+      "n": 5,
+      "min": 14149,
+      "max": 52872,
+      "sum": 188741
+    },
+    {
+      "label": "Low[266]",
+      "n": 718,
+      "min": 13,
+      "max": 39724,
+      "sum": 129412
+    },
+    {
+      "label": "Med[267]",
+      "n": 870,
+      "min": 13,
+      "max": 35310,
+      "sum": 84016
+    },
+    {
+      "label": "Runner[1]",
+      "n": 9,
+      "min": 760,
+      "max": 38886,
+      "sum": 187763
+    }
+  ],
+  "exec": [
+    {
+      "label": "High[268]",
+      "n": 6,
+      "min": 167,
+      "max": 521,
+      "sum": 1770
+    },
+    {
+      "label": "Low[266]",
+      "n": 719,
+      "min": 67,
+      "max": 338,
+      "sum": 93825
+    },
+    {
+      "label": "Med[267]",
+      "n": 871,
+      "min": 60,
+      "max": 387,
+      "sum": 105901
+    },
+    {
+      "label": "PS[228]",
+      "n": 1,
+      "min": 94,
+      "max": 94,
+      "sum": 94
+    },
+    {
+      "label": "Runner[1]",
+      "n": 10,
+      "min": 136,
+      "max": 190,
+      "sum": 1531
+    }
+  ]
+}

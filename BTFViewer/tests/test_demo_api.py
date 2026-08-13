@@ -50,8 +50,20 @@ class DemoXmlUsesApiTests(unittest.TestCase):
         self.assertIn("<view_mode", xml)
         self.assertIn("<cpu_load", xml)
         self.assertIn("<analysis", xml)
+        self.assertIn('<settings page="AI"/>', xml)
+        self.assertIn('<settings close="true"/>', xml)
         self.assertIn('<find query="CS[27]"', xml)
         self.assertIn('<find clear="true"', xml)
+        # Title step starts from a clean overlay (session leftovers).
+        step1 = re.search(r'<step id="1".*?</step>', xml, re.S)
+        self.assertIsNotNone(step1)
+        body1 = step1.group(0)
+        self.assertIn("<clear_cursors/>", body1)
+        self.assertIn("<clear_bookmarks/>", body1)
+        self.assertIn("<clear_annotations/>", body1)
+        self.assertLess(body1.index("<clear_cursors/>"), body1.index("<audio"))
+        self.assertLess(body1.index("<clear_bookmarks/>"), body1.index("<audio"))
+        self.assertLess(body1.index("<clear_annotations/>"), body1.index("<audio"))
         # Find step must not hop to Statistics after the query.
         step16 = re.search(
             r'<step id="16".*?</step>', xml, re.S)
@@ -60,6 +72,21 @@ class DemoXmlUsesApiTests(unittest.TestCase):
         self.assertIn("<find", body)
         self.assertNotIn("<click", body)
         self.assertNotIn("stats_tab", body)
+
+    def test_steps_that_place_cursors_clear_them_at_end(self) -> None:
+        xml = DEMO_XML.read_text(encoding="utf-8")
+        for match in re.finditer(r'<step id="([^"]+)".*?</step>', xml, re.S):
+            body = match.group(0)
+            last_place = max(body.rfind("<cursors"), body.rfind('ref="place_cursor"'))
+            if last_place < 0:
+                continue
+            last_clear = body.rfind("<clear_cursors/>")
+            self.assertGreater(
+                last_clear,
+                last_place,
+                f"step {match.group(1)} places cursors but does not "
+                "clear them afterwards",
+            )
 
     def test_toolbar_step_switches_task_core_view(self) -> None:
         xml = DEMO_XML.read_text(encoding="utf-8")
@@ -78,8 +105,14 @@ class DemoXmlUsesApiTests(unittest.TestCase):
             '"op": "find"',
             '"op": "view_mode"',
             '"op": "cpu_load"',
+            '"op": "settings"',
             'tag == "analysis"',
             'tag == "find"',
+            'tag == "settings"',
+            'tag == "clear_bookmarks"',
+            'tag == "clear_annotations"',
+            '"op": "clear_bookmarks"',
+            '"op": "clear_annotations"',
         ):
             self.assertIn(needle, runner)
 
@@ -190,6 +223,12 @@ class DemoApiUiTests(unittest.TestCase):
         closed = win._demo_handle({"op": "analysis", "close": True})
         self.assertEqual(closed.get("analysis"), "closed")
 
+        win._open_settings = lambda *args, **kwargs: None
+        settings = win._demo_handle({"op": "settings", "page": "AI"})
+        self.assertEqual(settings.get("settings"), "AI")
+        settings_close = win._demo_handle({"op": "settings", "close": True})
+        self.assertEqual(settings_close.get("settings"), "closing")
+
         via_ui = win._demo_handle({"op": "ui", "action": "panel", "name": "find"})
         self.assertEqual(via_ui.get("panel"), "find")
         self.assertEqual(win._panel_tabs.currentIndex(), _PANEL_TAB_FIND)
@@ -250,6 +289,33 @@ class DemoApiUiTests(unittest.TestCase):
         )
         # Prefer-top: header should sit near the top of the viewport.
         self.assertLessEqual(abs(header_y - top), 24)
+
+    def test_clear_cursors_bookmarks_and_annotations(self) -> None:
+        if not DEMO_BTF.is_file():
+            self.skipTest(f"missing demo BTF: {DEMO_BTF}")
+        win = MainWindow()
+        self.addCleanup(win.close)
+        win.show()
+        self._app.processEvents()
+        self._wait_trace_loaded(win)
+
+        win._demo_handle({"op": "cursors", "times": "3.085", "unit": "s"})
+        self._app.processEvents()
+        self.assertTrue(win._view._scene.cursor_times())
+        tmin = int(win._trace.time_min)
+        win._add_bookmark_at_ns(tmin)
+        win._add_annotation_with_note(tmin, "demo leftover", show_marks_panel=False)
+        self._app.processEvents()
+        self.assertTrue(win._bookmarks)
+        self.assertTrue(win._annotations)
+
+        win._demo_handle({"op": "clear_cursors"})
+        win._demo_handle({"op": "clear_bookmarks"})
+        win._demo_handle({"op": "clear_annotations"})
+        self._app.processEvents()
+        self.assertEqual(win._view._scene.cursor_times(), [])
+        self.assertEqual(list(win._bookmarks), [])
+        self.assertEqual(list(win._annotations), [])
 
 
 if __name__ == "__main__":

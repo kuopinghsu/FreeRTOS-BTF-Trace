@@ -27,6 +27,7 @@ Heading level: ![](../images/readme/h2.svg) section · ![](../images/readme/h3.s
 - **Export** — annotated snapshots (PNG/SVG), CSV/HTML reports, Perfetto traces
 - **Desktop CLI** — headless reports and images for scripts and CI
 - **Desktop and Web** — the same analysis workflow in a desktop app or the browser
+- **Scripted demo** — 8-core walkthrough with narration ([Demo](#demo))
 
 Metric definitions and formulas are in [Statistics & metrics](#statistics--metrics). Step-by-step diagnosis playbooks: **[WORKFLOWS.md](WORKFLOWS.md)**.
 
@@ -38,6 +39,7 @@ Metric definitions and formulas are in [Statistics & metrics](#statistics--metri
 | Section | |
 |---------|--|
 | [Quick start](#quick-start) | Install and open a trace |
+| [Demo](#demo) | Scripted tour, voice packs, recording |
 | [Using the viewer](#using-the-viewer) | Navigate, measure, and mark |
 | [Analysis](#analysis) | Findings, problem map, compare, AI |
 | [Statistics & metrics](#statistics--metrics) | Metric meaning, formulas, charts, how to diagnose |
@@ -73,7 +75,7 @@ Open the standalone build in any modern browser (no server required for typical 
 open BTFViewer/builds/btf_viewer.html   # or double-click the file
 ```
 
-Or use the [hosted demo](https://apps.kuoping.com/btf_viewer.html). Toolbar **Demo** loads a bundled sample without a file picker. To rebuild from source:
+Or use the [hosted demo](https://apps.kuoping.com/btf_viewer.html). Toolbar **Demo**, opening a demo `.xml`, and **Record** are in [Demo](#demo). To rebuild from source:
 
 ```bash
 cd BTFViewer && make web    # → builds/btf_viewer.html
@@ -89,8 +91,71 @@ cd BTFViewer && make web    # → builds/btf_viewer.html
 | `.btf` | Best Trace Format |
 | `.btf.gz` / `.gz`, `.btf.bz2` / `.bz2` | Compressed single traces |
 | `.btf.zip` / `.zip` | One or more `.btf` members — each opens in its own tab. Desktop keeps `archive.zip::member.btf` paths (re-read on launch). Web titles multi-member zips `archive.zip::member` so two archives cannot collide. |
+| `.xml` **(W)** | Demo pack script — see [Demo](#demo). |
 
 Sample traces are under `tracedata/` (for example `example-2cores.btf.gz`).
+
+---
+
+<a id="demo" name="demo">&#x200B;</a>
+## Demo ![](../images/readme/h2.svg)
+
+Scripted tour of the 8-core sample. Desktop (`make demo`) and Web (toolbar **Demo**, or **Open** the pack) share [`demos/demo_8cores/`](demos/demo_8cores/). [Try the live demo](https://apps.kuoping.com/btf_viewer.html?demo). XML actions and the demo HTTP API: **[demos/README.md](demos/README.md)**.
+
+<a id="desktop-demo" name="desktop-demo">&#x200B;</a>
+### Desktop recording ![](../images/readme/h3.svg)
+
+`make demo` launches `builds/btf_viewer.py` with the frozen pack and drives the UI through the demo API (rebuilds the bundle if `btf_viewer_pkg/` is newer).
+
+```bash
+cd BTFViewer
+make demo
+make demo DEMO_LANG=zh-tw
+python3 scripts/demo_runner.py demos/demo_8cores/demo_8cores.xml --launch --interactive
+```
+
+Narration defaults to the XML `<languages default>` (**English**). Override with `--lang`, `DEMO_LANG`, or `BTFVIEWER_DEMO_LANG`. Recording session settings go in `builds/btf_viewer.rc`. Move the mouse to a screen corner to abort (PyAutoGUI failsafe); Ctrl-C twice exits the runner.
+
+Engine: [`scripts/demo_runner.py`](scripts/demo_runner.py).
+
+<a id="web-demo-pack" name="web-demo-pack">&#x200B;</a>
+### Web pack and recording ![](../images/readme/h3.svg)
+
+Toolbar **Demo** loads the bundled sample without a file picker. **Open** a demo `.xml` (or drop the pack folder) to run the same script as desktop `make demo`. After picking the XML, choose the folder that contains it — browsers block a second file dialog on the same click, so that folder step needs its own button. The viewer then loads the pack’s `.btf.gz`, plays `voice/<lang>/*.mp3`, and drives view mode, Load, Statistics sections, highlights, cursors, and Analysis through in-app APIs. `<move>` / `<sweep>` animate a pointer overlay to the XML `<targets>` (the browser cannot move the OS cursor; hover events still fire so timeline tooltips appear). Opening a `.btf` still loads the trace as usual.
+
+**Record** uses the browser’s display capture; choose this tab and include tab audio. The mouse pointer is included (page overlay for tab capture; native pointer for window/screen). Tab capture does not include the OS pointer, so Record paints one in the page.
+
+The demo bar’s **previous / pause / next** icons skip or hold the current section (pause also holds narration; the icon switches to play to resume). **Space** pauses and resumes. **Esc** twice (within 2.5 s) stops the script.
+
+<a id="demo-voice" name="demo-voice">&#x200B;</a>
+### Voice packs ![](../images/readme/h3.svg)
+
+Every language uses the same layout. XML paths stay `voice/01_title.mp3`; the runner looks in `voice/<lang>/` first, then flat `voice/`, then `voice/<default>/`.
+
+```
+text/<lang>/01_title.txt
+voice/<lang>/01_title.mp3
+voice/<lang>/voice.json
+```
+
+Shipped languages for `demo_8cores`: **en** (English, default), **zh-tw** (中文), **ja** (日本語). On Web, a **Voice** menu on the demo bar restarts the current section in that language (remembered in the browser; otherwise the browser locale). Desktop uses the XML default unless you pass a language flag as above.
+
+```bash
+python3 scripts/demo_voice.py status demos/demo_8cores
+make demo-voice
+```
+
+Install, export, render, and `sync-xml`: [`scripts/demo_voice.py`](scripts/demo_voice.py) and **[demos/README.md](demos/README.md)**. Write **Free-RTOS** (with a hyphen) in narration scripts so speech engines pronounce it correctly.
+
+<a id="demo-pack-layout" name="demo-pack-layout">&#x200B;</a>
+### Pack layout ![](../images/readme/h3.svg)
+
+| Path | Purpose |
+|------|---------|
+| [`demos/demo_8cores/demo_8cores.xml`](demos/demo_8cores/demo_8cores.xml) | Runner script (steps / actions) |
+| [`demos/demo_8cores/demo_8cores.btf.gz`](demos/demo_8cores/demo_8cores.btf.gz) | Frozen trace (stable vs `tracedata/`) |
+| [`demos/demo_8cores/text/<lang>/`](demos/demo_8cores/text/en/) | Narration scripts (`.txt`) |
+| [`demos/demo_8cores/voice/<lang>/`](demos/demo_8cores/voice/en/) | TTS audio + `voice.json` |
 
 ---
 
@@ -117,6 +182,7 @@ Switch from the toolbar (both apps) or the **View** menu (Desktop). The last ori
 - **Pinch** (macOS) — zoom
 - **Middle-drag** — select a time range to zoom
 - **Fit** (`Ctrl+0` / `F`) — show the full trace
+- **Zoom preset** — toolbar menu: **1%**, **2%**, **5%**, **10%**, **25%**, **50%**, **75%**, **Fit** (same as Desktop; percent of the full trace that is visible)
 - **1:1** — reset to the configured zoom density
 - **Zoom to cursor range** (`Ctrl+R`) — fit between the earliest and latest placed cursor (2+ cursors)
 
@@ -148,7 +214,7 @@ Place up to **4–8** cursors (default 4; set in Settings).
 | Clear all | `Shift+C` or **Shift+right-click** |
 | Snap to boundary | **Shift+click** |
 
-With **two or more** cursors, the status bar shows a short range summary, and Statistics can limit metrics to that window (**Limit to C1–Cn**). **File → Save selection as BTF…** (web: toolbar crop) exports the cursor window: both apps prefer the original BTF text (desktop re-reads the file / zip member; web uses in-memory `sourceText`), and **reconstruct** a resume/preempt + STI subset if that source is missing (e.g. web after refresh).
+With **two or more** cursors, the status bar shows a short range summary, and Statistics can limit metrics to that window (**Limit to C1–Cn**). Toolbar crop / **File → Save selection as BTF…** exports the cursor window: both apps prefer the original BTF text (desktop re-reads the file / zip member; web uses in-memory `sourceText`), and **reconstruct** a resume/preempt + STI subset if that source is missing (e.g. web after refresh).
 
 <a id="marks-and-find" name="marks-and-find">&#x200B;</a>
 ### Marks and find ![](../images/readme/h3.svg)
@@ -194,7 +260,7 @@ Start with toolbar **Analysis** for a severity-tagged triage of the current Stat
 <a id="analysis-findings" name="analysis-findings">&#x200B;</a>
 ### Analysis Findings ![](../images/readme/h3.svg)
 
-Toolbar **Analysis** summarises likely issues for the current scope (load imbalance, WCET/CPU hotspots, blocking, priority inversion, core thrashing, deadline breaches, tick health, sync/mutex bounces, and similar). From the dialog: **Investigate…** runs an evidence-driven drill-down (tools + cursors), **Root cause…** follows the deadline→blocking→mutex chain for the top finding, **Query with AI…** walks the findings card, or **Save as Text…** for a copy. The same card appears in **Export HTML**.
+Toolbar **Analysis** summarises likely issues for the current scope (load imbalance, WCET/CPU hotspots, blocking, priority inversion, core thrashing, deadline breaches, tick health, sync/mutex bounces, and similar). From the dialog: **Investigate…** runs an evidence-driven drill-down (tools + cursors), **Root cause…** follows the deadline→blocking→mutex chain for the top finding, **Verify with AI…** / **Auto investigate…** act on the selected finding, **Query with AI…** walks the findings card, or **Save as Text…** for a copy. The same card appears in **Export HTML**.
 
 **How to act on a finding**
 
@@ -202,7 +268,7 @@ Toolbar **Analysis** summarises likely issues for the current scope (load imbala
 2. Open that section, sort by Max / Rate / Bounce as relevant.
 3. Click **Min** / **Max**, a chart point, or an inspector cell to jump the timeline.
 4. Place cursors around the phase of interest and enable **Limit to C1–Cn**.
-5. Optionally click **Investigate…** / **Root cause…** / **Query with AI…** (or open the **AI** tab) ([WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow)).
+5. Optionally click **Investigate…** / **Root cause…** / **Verify with AI…** / **Auto investigate…** / **Query with AI…** (or open the **AI** tab) ([WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow)).
 
 <a id="how-to-find-problems-quick-map" name="how-to-find-problems-quick-map">&#x200B;</a>
 ### How to find problems (quick map) ![](../images/readme/h3.svg)
@@ -233,8 +299,8 @@ The right-panel **AI** tab asks diagnostic questions over **Analysis Findings** 
 
 1. **Settings → AI** — enable the assistant, pick a preset (**Ollama**, **OpenAI**, **Google Gemini**, or **Custom**), set base URL / model, choose **Authentication** (**None (local)** / **API key** / **Sign in**), optionally **Allow self-signed TLS** (Desktop), then **Test connection**. Refresh next to **Model** lists served ids. The panel chip shows `Local` / `Key saved` / `Needs API key` / `Needs sign-in` / `Signed in`.
 2. **Import…** loads JSON from [`examples/ai`](examples/ai/README.md) (review the form, then save).
-3. Run a **template**, use **Analysis → Investigate… / Root cause… / Query with AI…**, or type a free-form question. Click `jump:TIME` in the reply to seek the timeline.
-4. Agent templates (**Investigate**, **Root cause**, **What-if**, **Optimize**, **Diagnostic report**) show an **Investigation plan** checklist (steps advance as tools run; the final reply completes the list).
+3. Run a **template**, use **Analysis → Investigate… / Root cause… / Verify with AI… / Auto investigate… / Query with AI…**, or type a free-form question. Click `jump:TIME` in the reply to seek the timeline.
+4. Agent templates (**Investigate**, **Root cause**, **Verify finding**, **Auto investigate**, **What-if**, **Optimize**, **Diagnostic report**) show an **Investigation plan** checklist (steps advance as tools run; the final reply completes the list).
 5. When the model proposes GUI actions, **Apply** / **Skip** / **Undo** (or enable **Auto-apply GUI actions**). Read-only queries (including `what_if` / `optimize_experiment`) apply immediately.
 6. Set reply language in Settings or **Language…** on the AI bar. Right-click the log to copy or **Save As…** (Markdown / text / HTML). **Clear** between unrelated questions.
 
@@ -1572,11 +1638,11 @@ Example plots from `tracedata/example-4cores.btf.gz` (4-core SMP trace, 67 tasks
 
 | Action | Desktop | Web |
 |--------|---------|-----|
-| Annotated snapshot | Snapshot Editor / Save Image | Snapshot Editor |
+| Annotated snapshot | Toolbar snapshot / **File → Snapshot Editor…** | Toolbar snapshot |
 | Copy viewport | Clipboard | Clipboard |
-| SVG | Save SVG | Save SVG |
-| Perfetto JSON | **File → Export Perfetto…** | Toolbar **Perfetto** |
-| Cursor-range `.btf` | **File → Save selection as BTF…** (C1–Cn; `.btf` / `.btf.gz`; filter source, else reconstruct) | Toolbar crop (2+ cursors; `.btf` download; same filter / reconstruct) |
+| SVG | Toolbar / **File → Save SVG** | Toolbar Save SVG |
+| Perfetto JSON | Toolbar / **File → Export Perfetto…** | Toolbar Perfetto |
+| Cursor-range `.btf` | Toolbar crop / **File → Save selection as BTF…** (C1–Cn; `.btf` / `.btf.gz`; filter source, else reconstruct) | Toolbar crop (2+ cursors; `.btf` download; same filter / reconstruct) |
 | Statistics CSV/HTML | Statistics panel | Statistics panel |
 | Compare CSV/HTML | Trace Compare dialog | Trace Compare dialog |
 
@@ -1614,7 +1680,7 @@ Run `python builds/btf_viewer.py <command> -h` for full options.
 <a id="settings" name="settings">&#x200B;</a>
 ## Settings ![](../images/readme/h2.svg)
 
-Open **Settings** from the toolbar or `Ctrl+,`.
+Open **Settings** from the toolbar or `Ctrl+,`. Toolbar **Help** opens the keyboard shortcut list (Web: also `?`).
 
 | Area | What you configure |
 |------|--------------------|
@@ -1712,8 +1778,7 @@ Shortcuts marked **(W)** are Web-only. Others work on Desktop and Web. On Web, p
 | **[WORKFLOWS.md](WORKFLOWS.md)** | Analysis playbooks and AI ask order |
 | **[AI.md](AI.md)** | AI setup, tools, diagrams, troubleshooting, CLI |
 | **[btf-viewer-slides.md](btf-viewer-slides.md)** | Presentation overview |
-| **[`scripts/demo_runner.py`](scripts/demo_runner.py)** | Generic XML → PyAutoGUI + TTS demo engine |
-| **[`demos/demo_8cores/`](demos/demo_8cores/)** | Demo pack: [`demo_8cores.xml`](demos/demo_8cores/demo_8cores.xml) + [`demo_8cores.btf.gz`](demos/demo_8cores/demo_8cores.btf.gz) + `text/` + `voice/` |
+| **[demos/README.md](demos/README.md)** | Demo XML actions, HTTP API, voice-pack tooling |
 
 <a id="developer-notes" name="developer-notes">&#x200B;</a>
 ### Developer notes ![](../images/readme/h3.svg)
@@ -1725,10 +1790,11 @@ Day-to-day users can ignore this section.
 | Rebuild Desktop + Web | `make -C BTFViewer` |
 | Desktop package only | `make -C BTFViewer bundle` → `builds/btf_viewer.py` |
 | Web only | `make -C BTFViewer web` → `builds/btf_viewer.html` |
-| Tests | `make -C BTFViewer test` |
+| Guided demo | `make -C BTFViewer demo` — see [Demo](#demo) |
+| Tests | `make -C BTFViewer test` (desktop) / `test-web` / `test-all` |
 | Dev run (Desktop) | `python -m btf_viewer_pkg [trace.btf]` from `BTFViewer/` |
 
-Edit sources under `btf_viewer_pkg/` and `web/`; commit regenerated files under `builds/` with your changes. Keep AI tool schemas and mermaid layout in sync (`ai_tools.py` / `ai_mermaid.py` ↔ `web/src/utils/aiTools.js` / `aiMermaid.js`). Synthetic traces: `scripts/gen_trace.py --help`. BTF field reference: [`TRACE_FORMAT.md`](../TRACE_FORMAT.md).
+Edit sources under `btf_viewer_pkg/` and `web/`; commit regenerated files under `builds/` with your changes. Keep AI tool schemas and mermaid layout in sync (`ai_tools.py` / `ai_mermaid.py` ↔ `web/src/utils/aiTools.js` / `aiMermaid.js`). Parser and Statistics numbers are pinned by shared goldens (`tests/fixtures/*-golden.json`) asserted from both `tests/test_parser_golden.py` / `tests/test_stats_web_parity.py` and `web/tests/`. Synthetic traces: `scripts/gen_trace.py --help`. BTF field reference: [`TRACE_FORMAT.md`](../TRACE_FORMAT.md).
 
 ---
 

@@ -1304,6 +1304,68 @@ function xmlToolRe() {
   return /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi
 }
 
+function loadsJsonValues(body) {
+  const src = String(body || '').trim()
+  if (!src) return []
+  try {
+    return [JSON.parse(src)]
+  } catch { /* NDJSON / multi-value fence */ }
+  const out = []
+  let i = 0
+  const n = src.length
+  while (i < n) {
+    while (i < n && /\s/.test(src[i])) i += 1
+    if (i >= n) break
+    const decoded = decodeOneJson(src, i)
+    if (!decoded) break
+    out.push(decoded.value)
+    i = decoded.end
+  }
+  return out
+}
+
+function decodeOneJson(src, start) {
+  let i = start
+  while (i < src.length && /\s/.test(src[i])) i += 1
+  if (i >= src.length) return null
+  const ch = src[i]
+  if (ch === '{' || ch === '[') {
+    let depth = 0
+    let inStr = false
+    let esc = false
+    for (let j = i; j < src.length; j++) {
+      const c = src[j]
+      if (inStr) {
+        if (esc) { esc = false; continue }
+        if (c === '\\') { esc = true; continue }
+        if (c === '"') inStr = false
+        continue
+      }
+      if (c === '"') { inStr = true; continue }
+      if (c === '{' || c === '[') depth += 1
+      else if (c === '}' || c === ']') {
+        depth -= 1
+        if (depth === 0) {
+          try {
+            return { value: JSON.parse(src.slice(i, j + 1)), end: j + 1 }
+          } catch {
+            return null
+          }
+        }
+      }
+    }
+    return null
+  }
+  const rest = src.slice(i)
+  const m = rest.match(/^(true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/)
+  if (!m) return null
+  try {
+    return { value: JSON.parse(m[1]), end: i + m[1].length }
+  } catch {
+    return null
+  }
+}
+
 function toolCallFromObj(obj, idx) {
   if (!obj || typeof obj !== 'object') return null
   let name = String(obj.name || obj.tool || '').trim()
@@ -1329,68 +1391,6 @@ function toolCallFromObj(obj, idx) {
   return { id: `text_${idx}`, name, arguments: checked.args || args }
 }
 
-function loadsJsonValues(body) {
-  const src = String(body || '').trim()
-  if (!src) return []
-  try {
-    return [JSON.parse(src)]
-  } catch { /* NDJSON / multi-value fence */ }
-  const out = []
-  let idx = 0
-  const n = src.length
-  while (idx < n) {
-    while (idx < n && /\s/.test(src[idx])) idx += 1
-    if (idx >= n) break
-    try {
-      const { value, end } = rawDecodeJson(src, idx)
-      out.push(value)
-      idx = end
-    } catch {
-      break
-    }
-  }
-  return out
-}
-
-/** Minimal JSONDecoder.raw_decode equivalent for NDJSON fences. */
-function rawDecodeJson(src, start) {
-  const slice = src.slice(start)
-  // Prefer full-parse of a prefix: try expanding until JSON.parse succeeds.
-  // Objects/arrays: track brace depth; primitives: end at whitespace/newline.
-  const first = slice[0]
-  if (first === '{' || first === '[') {
-    let depth = 0
-    let inStr = false
-    let esc = false
-    for (let i = 0; i < slice.length; i += 1) {
-      const ch = slice[i]
-      if (inStr) {
-        if (esc) esc = false
-        else if (ch === '\\') esc = true
-        else if (ch === '"') inStr = false
-        continue
-      }
-      if (ch === '"') {
-        inStr = true
-        continue
-      }
-      if (ch === '{' || ch === '[') depth += 1
-      else if (ch === '}' || ch === ']') {
-        depth -= 1
-        if (depth === 0) {
-          const end = start + i + 1
-          return { value: JSON.parse(src.slice(start, end)), end }
-        }
-      }
-    }
-    throw new SyntaxError('unclosed JSON')
-  }
-  const m = slice.match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|^true|^false|^null|^"(?:\\.|[^"\\])*"/)
-  if (!m) throw new SyntaxError('invalid JSON')
-  const end = start + m[0].length
-  return { value: JSON.parse(src.slice(start, end)), end }
-}
-
 export function parseToolCallsFromText(text) {
   const out = []
   const seen = new Set()
@@ -1402,13 +1402,12 @@ export function parseToolCallsFromText(text) {
     seen.add(key)
     out.push(call)
   }
-  const addValue = (data) => {
-    if (Array.isArray(data)) data.forEach(add)
-    else add(data)
-  }
   const src = String(text || '')
   for (const m of src.matchAll(btftoolFenceRe())) {
-    for (const data of loadsJsonValues(m[1])) addValue(data)
+    for (const data of loadsJsonValues(m[1])) {
+      if (Array.isArray(data)) data.forEach(add)
+      else add(data)
+    }
   }
   for (const m of src.matchAll(xmlToolRe())) {
     const body = String(m[1] || '').trim()

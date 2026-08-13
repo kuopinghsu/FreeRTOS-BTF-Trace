@@ -9,6 +9,7 @@
   >
     <!-- Toolbar -->
     <Toolbar
+      ref="toolbarRef"
       :model-value="timelineOptions"
       :trace-info="traceInfo"
       :heatmap-enabled="heatmapEnabled"
@@ -19,14 +20,21 @@
       :loading-pct="loadingPct"
       :loading-msg="loadingMsg"
       :time-scale="trace?.timeScale || 'ns'"
+      :recording="demoRecording"
+      :zoom-preset-value="zoomPresetValue"
+      :zoom-preset-options="zoomPresetOptions"
       @update:model-value="onToolbarOptionsUpdate"
       @file-error="onFileError"
       @trace-reading="onTraceReading"
       @trace-loaded="onTraceLoaded"
-      @traces-loaded="onTracesLoaded"
+      @traces-loaded="onUserTracesLoaded"
       @load-demo="onLoadDemo"
+      @demo-pack="startDemoPack"
+      @demo-folder="onDemoFolderNeeded"
+      @toggle-record="onToggleRecord"
       @zoom="onZoom"
       @fit="onFit"
+      @zoom-preset="onZoomPreset"
       @zoom1to1="onZoom1to1"
       @zoom-range="onZoomRange"
       @show-find="focusFindPanel"
@@ -44,6 +52,152 @@
       @show-about="openAboutDialog"
       @show-settings="openSettingsDialog"
     />
+
+    <div
+      v-if="demoRunning"
+      class="demo-status-banner"
+      role="status"
+    >
+      <button
+        type="button"
+        class="demo-nav-btn"
+        title="Previous section"
+        aria-label="Previous demo section"
+        tabindex="-1"
+        :disabled="!demoNavReady || !demoNav.canPrev"
+        @pointerdown.prevent.stop="onDemoPrev"
+      >
+        <svg
+          viewBox="0 0 16 16"
+          width="14"
+          height="14"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path
+            fill-rule="evenodd"
+            :d="IC.demoPrev"
+          />
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="demo-nav-btn"
+        :class="{ 'is-paused': demoPaused }"
+        :title="demoPaused ? 'Resume demo' : 'Pause demo'"
+        :aria-label="demoPaused ? 'Resume demo' : 'Pause demo'"
+        tabindex="-1"
+        :disabled="!demoNavReady"
+        @pointerdown.prevent.stop="onDemoPause"
+      >
+        <svg
+          viewBox="0 0 16 16"
+          width="14"
+          height="14"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path
+            fill-rule="evenodd"
+            :d="demoPaused ? IC.demoPlay : IC.demoPause"
+          />
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="demo-nav-btn"
+        title="Next section"
+        aria-label="Next demo section"
+        tabindex="-1"
+        :disabled="!demoNavReady || !demoNav.canNext"
+        @pointerdown.prevent.stop="onDemoNext"
+      >
+        <svg
+          viewBox="0 0 16 16"
+          width="14"
+          height="14"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path
+            fill-rule="evenodd"
+            :d="IC.demoNext"
+          />
+        </svg>
+      </button>
+      <span class="demo-status-text">{{ demoStatusText }}</span>
+      <label
+        v-if="demoVoiceLangs.length > 1"
+        class="demo-lang"
+      >
+        <span class="demo-lang-label">Voice</span>
+        <select
+          class="demo-lang-select"
+          :value="demoVoiceLang"
+          aria-label="Demo narration language"
+          @pointerdown.stop
+          @change="onDemoVoiceLang"
+        >
+          <option
+            v-for="lang in demoVoiceLangs"
+            :key="lang.id"
+            :value="lang.id"
+          >
+            {{ lang.label }}
+          </option>
+        </select>
+      </label>
+      <span class="demo-status-hint">{{ demoPaused ? 'Paused · Esc twice to stop' : 'Esc twice to stop' }}</span>
+    </div>
+
+    <div
+      v-if="demoFolderPrompt"
+      class="dialog-overlay"
+      @click.self="demoFolderPrompt = null"
+    >
+      <div
+        class="demo-folder-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Choose demo folder"
+      >
+        <div class="demo-folder-header">
+          <div class="demo-folder-title">
+            Open demo pack
+          </div>
+          <button
+            class="demo-folder-close"
+            type="button"
+            @click="demoFolderPrompt = null"
+          >
+            ✕
+          </button>
+        </div>
+        <div class="demo-folder-body">
+          The browser cannot read sibling files from
+          <strong>{{ demoFolderPrompt.xmlName }}</strong> alone.
+          Choose the folder that contains that XML, the
+          <code>.btf.gz</code>, and <code>voice/</code>
+          — or drop that folder onto the viewer.
+        </div>
+        <div class="demo-folder-footer">
+          <button
+            type="button"
+            class="demo-folder-btn primary"
+            @click="onChooseDemoFolder"
+          >
+            Choose folder
+          </button>
+          <button
+            type="button"
+            class="demo-folder-btn"
+            @click="demoFolderPrompt = null"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
 
     <div
       v-if="traceQualityText"
@@ -386,6 +540,7 @@
           >
             <div class="panel-section flex-fill">
               <StatisticsPanel
+                ref="statsPanelRef"
                 :trace="trace"
                 :cursors="cursors"
                 :tabs="tabs"
@@ -690,17 +845,20 @@
             </div>
             <div class="help-grid">
               <div class="k">
-                S
+                S / Ctrl+S
               </div><div>Open snapshot editor from the current timeline view</div>
               <div class="k">
                 Save PNG
-              </div><div>Exports the annotated snapshot; includes CPU load when Load is on</div>
+              </div><div>In the editor: export the annotated snapshot; includes CPU load when Load is on</div>
               <div class="k">
                 Export SVG
               </div><div>Exports the current view; includes CPU load when Load is on</div>
               <div class="k">
                 Perfetto / Ctrl+Shift+E
               </div><div>Download Chrome Trace JSON for ui.perfetto.dev (full trace or current viewport)</div>
+              <div class="k">
+                Save BTF
+              </div><div>Download the cursor range (C1–Cn) as a .btf slice; needs two or more cursors</div>
               <div class="k">
                 File names
               </div><div>Exports use timeline-with-load.* when CPU load is included</div>
@@ -896,7 +1054,7 @@
         v-else
         class="status-hint"
       >
-        Open a .btf trace file or click Demo to begin · Press ? for shortcuts/help
+        Open a .btf trace or demo .xml, or click Demo to begin · Press ? for shortcuts/help
       </span>
     </div>
   </div>
@@ -1032,6 +1190,18 @@ import {
 } from './utils/ollamaClient.js'
 import { traceQualitySummary } from './utils/traceQuality.js'
 import { isBtfOpenName, loadBtfEntriesFromFile } from './utils/btfLoad.js'
+import {
+  classifyOpenFiles,
+  collectDroppedFiles,
+  packFromFileMap,
+  pickDemoPack,
+} from './utils/demoPack.js'
+import { createDemoRunner, parseCursorTimes } from './utils/demoRunner.js'
+import { discoverVoiceLangs, mergeVoiceLangs, pickVoiceLang } from './utils/demoVoice.js'
+import { startDemoRecording } from './utils/demoRecorder.js'
+import { acquirePointer, dispatchClickAt, moveTo as moveDemoPointer, releasePointer } from './utils/demoPointer.js'
+import { buildZoomPresetOptions } from './utils/zoomPresets.js'
+import { IC } from './utils/toolbarIcons.js'
 import exampleBtfB64   from 'virtual:example-btf'
 
 // ---- State ---------------------------------------------------------------
@@ -1057,6 +1227,8 @@ const {
 } = useTraceTabs()
 const timelinePanelRef = ref(null)
 const findPanelRef = ref(null)
+const toolbarRef = ref(null)
+const statsPanelRef = ref(null)
 const aiPanelRef = ref(null)
 const marksPanelRef = ref(null)
 const leftPaneRef = ref(null)
@@ -1170,6 +1342,459 @@ function showToast(msg, type = 'info') {
   toastVisible.value = true
   clearTimeout(_toastTimer)
   _toastTimer = setTimeout(() => { toastVisible.value = false }, type === 'error' ? 5000 : 3000)
+}
+
+const demoRunning = ref(false)
+const demoPaused = ref(false)
+const demoRecording = ref(false)
+const demoStatusText = ref('')
+const demoNav = ref({ index: 0, total: 0, canPrev: false, canNext: false })
+const demoNavReady = ref(false)
+const demoVoiceLang = ref('en')
+const demoVoiceLangs = ref([])
+const DEMO_VOICE_LANG_KEY = 'btf-demo-voice-lang'
+const demoFolderPrompt = ref(null)
+const zoomPresetValue = ref('fit')
+const zoomPresetOptions = ref(buildZoomPresetOptions(NaN, 0))
+let _demoRunner = null
+let _demoEscAt = 0
+let _demoRecorder = null
+let _demoNavArmTimer = 0
+
+function disarmDemoNav() {
+  demoNavReady.value = false
+  if (typeof window !== 'undefined' && _demoNavArmTimer) {
+    window.clearTimeout(_demoNavArmTimer)
+    _demoNavArmTimer = 0
+  }
+}
+
+function armDemoNav() {
+  disarmDemoNav()
+  if (typeof window === 'undefined') {
+    demoNavReady.value = true
+    return
+  }
+  // The Open / folder-picker click can mouseup on this bar as it appears.
+  _demoNavArmTimer = window.setTimeout(() => {
+    _demoNavArmTimer = 0
+    if (demoRunning.value) demoNavReady.value = true
+  }, 800)
+}
+
+function demoSleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function demoWaitLoading() {
+  for (let i = 0; i < 600; i++) {
+    if (!loading.value) return
+    await demoSleep(50)
+  }
+}
+
+function demoSettingsTab(page) {
+  const p = String(page || '').toLowerCase()
+  if (p.includes('ai')) return 'ai'
+  if (p.includes('display')) return 'display'
+  if (p.includes('layout')) return 'layout'
+  return 'appearance'
+}
+
+function demoCloseOverlays() {
+  if (jumpDialogOpen.value) jumpDialogOpen.value = false
+  if (analysisOpen.value) analysisOpen.value = false
+  closeSettingsDialog()
+  if (helpOpen.value) helpOpen.value = false
+  if (aboutOpen.value) aboutOpen.value = false
+}
+
+async function demoSetPanel(name) {
+  const key = String(name || 'stats').trim().toLowerCase()
+  if (key === 'ai') {
+    if (appSettings.showAi === false) {
+      appSettings.showAi = true
+      saveSettings(appSettings)
+    }
+    if (appSettings.aiEnabled === false && !demoRunning.value) {
+      openSettingsDialog('ai')
+      return
+    }
+    rightPanelTab.value = 'ai'
+  } else if (key === 'find' || key === 'search') {
+    focusFindPanel()
+  } else if (key === 'marks' || key === 'mark') {
+    if (!appSettings.showMarks) {
+      appSettings.showMarks = true
+      saveSettings(appSettings)
+    }
+    rightPanelTab.value = 'marks'
+  } else if (key === 'legend') {
+    if (!appSettings.showLegend) {
+      appSettings.showLegend = true
+      saveSettings(appSettings)
+    }
+    rightPanelTab.value = 'legend'
+  } else {
+    if (!appSettings.showStats) {
+      appSettings.showStats = true
+      saveSettings(appSettings)
+    }
+    rightPanelTab.value = 'stats'
+  }
+  await nextTick()
+}
+
+async function demoEnsureStatsPanel() {
+  await demoSetPanel('stats')
+  for (let i = 0; i < 12; i++) {
+    if (statsPanelRef.value?.applyDemoSections) return statsPanelRef.value
+    await nextTick()
+    await demoSleep(40)
+  }
+  return statsPanelRef.value
+}
+
+function demoPointerBox() {
+  const root = document.querySelector('.app')
+  if (root?.getBoundingClientRect) return root.getBoundingClientRect()
+  return {
+    left: 0,
+    top: 0,
+    width: typeof window !== 'undefined' ? window.innerWidth : 1,
+    height: typeof window !== 'undefined' ? window.innerHeight : 1,
+  }
+}
+
+function demoHost() {
+  return {
+    toast: showToast,
+    setStatus: (text) => { demoStatusText.value = text || '' },
+    setDemoPaused: (on) => { demoPaused.value = !!on },
+    setDemoVoiceLang: (id) => { if (id) demoVoiceLang.value = id },
+    setDemoNav: (nav) => {
+      demoNav.value = nav && typeof nav === 'object'
+        ? {
+            index: Number(nav.index) || 0,
+            total: Number(nav.total) || 0,
+            canPrev: !!nav.canPrev,
+            canNext: !!nav.canNext,
+          }
+        : { index: 0, total: 0, canPrev: false, canNext: false }
+    },
+    pressEscape: async () => { demoCloseOverlays() },
+    pointerBox: demoPointerBox,
+    movePointer: async ({ x, y, duration, signal }) => {
+      acquirePointer('demo')
+      await moveDemoPointer(x, y, duration, signal)
+    },
+    clickPointer: async ({ x, y }) => {
+      acquirePointer('demo')
+      dispatchClickAt(x, y)
+    },
+    loadTraceFile: async (file) => {
+      const entries = await loadBtfEntriesFromFile(file)
+      await onTracesLoaded({ entries, sourceName: file.name })
+      await demoWaitLoading()
+      await nextTick()
+      onFit()
+    },
+    fit: async () => { onFit() },
+    setViewMode: async (mode) => {
+      const key = String(mode || 'task').toLowerCase()
+      if (key !== 'task' && key !== 'core') return
+      timelineOptions.viewMode = key
+      persistTimelineViewPrefs()
+      scheduleRender()
+      autofitCpuLoadPaneHeight()
+      await nextTick()
+    },
+    setCpuLoad: async (on) => {
+      timelineOptions.showCpuLoad = !!on
+      persistTimelineViewPrefs()
+      autofitCpuLoadPaneHeight()
+      await nextTick()
+    },
+    setPanel: demoSetPanel,
+    statsSection: async (payload) => {
+      const panel = await demoEnsureStatsPanel()
+      await panel?.applyDemoSections?.(payload)
+    },
+    statsReset: async () => {
+      const panel = await demoEnsureStatsPanel()
+      await panel?.applyDemoSections?.({
+        id: '',
+        expand: false,
+        collapse_others: true,
+        scroll: 'top',
+      })
+    },
+    highlight: async (task) => { onAiHighlight(task) },
+    clearHighlight: async () => { onAiHighlight('') },
+    jumpWcet: async (task) => {
+      onAiHighlight(task)
+      const tr = trace.value
+      if (!tr) return
+      const candidates = [
+        ...(tr.tasks || []),
+        ...(tr.tasks || []).map(t => taskMergeKey(t)),
+      ]
+      const resolved = resolveTaskKey(task, candidates)
+      if (!resolved) return
+      const mk = taskMergeKey(resolved)
+      const segs = tr.segByMergeKey?.get(mk) || []
+      let best = null
+      let maxDur = -1
+      for (const seg of segs) {
+        const dur = Number(seg.end) - Number(seg.start)
+        if (dur >= maxDur) {
+          maxDur = dur
+          best = seg
+        }
+      }
+      if (!best) return
+      highlightSegment.value = best
+      timelineOptions.highlightSegment = best
+      timelinePanelRef.value?.zoomToTimeRange(
+        best.start, best.end, 0.05, { programmatic: true, animate: true },
+      )
+      timelinePanelRef.value?.scrollToSegmentIfNeeded(best)
+      syncTimelineViewport()
+    },
+    setCursors: async ({ times, unit, limit, zoom }) => {
+      const scale = trace.value?.timeScale || 'ns'
+      const parsed = parseCursorTimes(times, unit, scale)
+      const max = appSettings.maxCursors || 4
+      const next = Array(max).fill(null)
+      parsed.slice(0, max).forEach((t, i) => { next[i] = t })
+      cursors.value = next
+      if (limit != null) onStatsScopeChange(!!limit)
+      await nextTick()
+      if (zoom && parsed.length >= 2) {
+        timelinePanelRef.value?.zoomToTimeRange(
+          parsed[0], parsed[parsed.length - 1], 0.05,
+          { programmatic: true, animate: true },
+        )
+        syncTimelineViewport()
+      }
+    },
+    clearCursors: async () => { clearCursors() },
+    clearBookmarks: async () => {
+      onClearBookmarks()
+      scheduleSessionSave()
+      scheduleRender()
+    },
+    clearAnnotations: async () => {
+      onClearAnnotations()
+      scheduleSessionSave()
+      scheduleRender()
+    },
+    setLimit: async (on) => { onStatsScopeChange(!!on) },
+    zoomRange: async ({ start, end, times, unit }) => {
+      const scale = trace.value?.timeScale || 'ns'
+      let lo
+      let hi
+      if (start && end) {
+        const t = parseCursorTimes(`${start},${end}`, unit, scale)
+        lo = t[0]
+        hi = t[1]
+      } else {
+        const t = parseCursorTimes(times, unit, scale)
+        lo = t[0]
+        hi = t[t.length - 1]
+      }
+      if (lo == null || hi == null) return
+      timelinePanelRef.value?.zoomToTimeRange(
+        lo, hi, 0.05, { programmatic: true, animate: true },
+      )
+      syncTimelineViewport()
+    },
+    openAnalysis: async ({ close } = {}) => {
+      analysisOpen.value = !close
+      await nextTick()
+    },
+    find: async ({ query, next }) => {
+      await demoSetPanel('find')
+      findQuery.value = query || ''
+      await nextTick()
+      recomputeFind()
+      if (query && next) stepFind(true)
+    },
+    openSettings: async (spec) => {
+      const close = !!(spec && typeof spec === 'object' && spec.close)
+      if (close) {
+        closeSettingsDialog()
+        await nextTick()
+        return
+      }
+      const page = spec && typeof spec === 'object'
+        ? (spec.page || spec.name)
+        : spec
+      openSettingsDialog(demoSettingsTab(page))
+      await nextTick()
+    },
+    closeSettings: async () => {
+      closeSettingsDialog()
+      await nextTick()
+    },
+  }
+}
+
+function stopDemo() {
+  _demoRunner?.abort()
+  _demoRunner = null
+  demoRunning.value = false
+  demoPaused.value = false
+  demoStatusText.value = ''
+  demoNav.value = { index: 0, total: 0, canPrev: false, canNext: false }
+  demoVoiceLangs.value = []
+  disarmDemoNav()
+  _demoEscAt = 0
+  releasePointer('demo')
+}
+
+let _demoSkipAt = 0
+
+function onDemoPrev(e) {
+  if (e && e.isTrusted === false) return
+  if (e && e.button != null && e.button !== 0) return
+  if (!demoRunning.value || !demoNavReady.value || !demoNav.value.canPrev) return
+  const now = Date.now()
+  if (now - _demoSkipAt < 400) return
+  _demoSkipAt = now
+  e?.preventDefault?.()
+  e?.stopPropagation?.()
+  _demoRunner?.skipPrev?.()
+}
+
+function onDemoNext(e) {
+  if (e && e.isTrusted === false) return
+  if (e && e.button != null && e.button !== 0) return
+  if (!demoRunning.value || !demoNavReady.value || !demoNav.value.canNext) return
+  const now = Date.now()
+  if (now - _demoSkipAt < 400) return
+  _demoSkipAt = now
+  e?.preventDefault?.()
+  e?.stopPropagation?.()
+  _demoRunner?.skipNext?.()
+}
+
+function onDemoPause(e) {
+  if (e && e.isTrusted === false) return
+  if (e && e.button != null && e.button !== 0) return
+  if (!demoRunning.value || !demoNavReady.value) return
+  e?.preventDefault?.()
+  e?.stopPropagation?.()
+  _demoRunner?.togglePause?.()
+}
+
+function onDemoVoiceLang(e) {
+  const id = String(e?.target?.value || '').trim()
+  if (!id || !demoRunning.value) return
+  demoVoiceLang.value = id
+  try { localStorage.setItem(DEMO_VOICE_LANG_KEY, id) } catch { /* ignore */ }
+  _demoRunner?.setVoiceLang?.(id)
+}
+
+function onDemoFolderNeeded(prompt) {
+  demoFolderPrompt.value = {
+    xmlName: prompt?.xmlName || 'demo.xml',
+    startIn: prompt?.startIn || null,
+  }
+}
+
+async function onChooseDemoFolder() {
+  const startIn = demoFolderPrompt.value?.startIn || null
+  try {
+    const pack = await pickDemoPack({ startIn })
+    if (!pack) return
+    demoFolderPrompt.value = null
+    await startDemoPack(pack)
+  } catch (err) {
+    showToast(err?.message || 'Failed to open demo folder', 'error')
+  }
+}
+
+async function startDemoPack(pack) {
+  if (!pack) return
+  if (!pack.traceFile) {
+    showToast('Demo pack has no .btf / .btf.gz trace', 'error')
+    return
+  }
+  stopDemo()
+  const langs = mergeVoiceLangs(
+    pack.parsed?.languages,
+    discoverVoiceLangs(pack.files),
+  )
+  demoVoiceLangs.value = langs.list
+  let preferred = ''
+  try { preferred = localStorage.getItem(DEMO_VOICE_LANG_KEY) || '' } catch { /* ignore */ }
+  if (!preferred && typeof navigator !== 'undefined') {
+    preferred = navigator.language || navigator.userLanguage || ''
+  }
+  const picked = pickVoiceLang(
+    preferred,
+    langs.list.map(l => l.id),
+    langs.defaultId,
+  )
+  demoVoiceLang.value = picked
+  const runner = createDemoRunner(demoHost(), pack, { aiWaitCapSec: 4, voiceLang: picked })
+  _demoRunner = runner
+  demoRunning.value = true
+  demoPaused.value = false
+  armDemoNav()
+  try {
+    await runner.run()
+    if (!runner.aborted) showToast('Demo finished', 'info')
+  } catch (err) {
+    console.error('Demo XML failed:', err)
+    showToast(err?.message || 'Demo failed', 'error')
+  } finally {
+    if (_demoRunner === runner) {
+      _demoRunner = null
+      demoRunning.value = false
+      demoPaused.value = false
+      demoStatusText.value = ''
+      demoNav.value = { index: 0, total: 0, canPrev: false, canNext: false }
+      disarmDemoNav()
+      releasePointer('demo')
+    }
+  }
+}
+
+async function onToggleRecord() {
+  if (demoRecording.value) {
+    const rec = _demoRecorder
+    _demoRecorder = null
+    demoRecording.value = false
+    try {
+      await rec?.stop()
+      showToast('Recording saved', 'info')
+    } catch (err) {
+      showToast(err?.message || 'Failed to save recording', 'error')
+    }
+    return
+  }
+  try {
+    showToast('Share this tab and enable tab audio so narration is captured', 'info')
+    _demoRecorder = await startDemoRecording()
+    demoRecording.value = true
+    _demoRecorder.stream?.getVideoTracks()?.[0]?.addEventListener('ended', async () => {
+      if (!demoRecording.value) return
+      const rec = _demoRecorder
+      _demoRecorder = null
+      demoRecording.value = false
+      try {
+        await rec?.stop()
+        showToast('Recording saved', 'info')
+      } catch (err) {
+        showToast(err?.message || 'Failed to save recording', 'error')
+      }
+    })
+  } catch (err) {
+    if (err?.name === 'NotAllowedError' || err?.name === 'AbortError') return
+    showToast(err?.message || 'Screen recording is not available', 'error')
+  }
 }
 
 const timelineOptions = reactive({
@@ -1286,16 +1911,22 @@ function openSettingsDialog(tab = 'appearance') {
   settingsOpen.value = true
 }
 
+function closeSettingsDialog() {
+  settingsOpen.value = false
+  const snap = settingsRevertSnapshot
+  settingsRevertSnapshot = null
+  if (!snap) return
+  try {
+    applyAppSettings(snap, { silent: true, persist: false })
+  } catch { /* keep the dialog closed even if revert fails */ }
+}
+
 function onSettingsPreview(next) {
   applyAppSettings(next, { silent: true, persist: false })
 }
 
 function onSettingsCancel() {
-  if (settingsRevertSnapshot) {
-    applyAppSettings(settingsRevertSnapshot, { silent: true, persist: false })
-    settingsRevertSnapshot = null
-  }
-  settingsOpen.value = false
+  closeSettingsDialog()
 }
 
 function onSettingsSave(next) {
@@ -1689,6 +2320,11 @@ async function parseTraceOnMainThread(text, name) {
   await attachParsedTrace(name, result, { sourceText: text })
 }
 
+async function onUserTracesLoaded(payload) {
+  stopDemo()
+  await onTracesLoaded(payload)
+}
+
 async function onTracesLoaded({ entries, sourceName }) {
   if (!entries?.length) {
     onFileError(
@@ -1836,6 +2472,24 @@ function onZoom(factor) {
 function onFit() {
   timelinePanelRef.value?.fitToTrace()
   syncTimelineViewport()
+}
+
+function onZoomPreset(value) {
+  if (!value || value === 'fit') onFit()
+  else timelinePanelRef.value?.zoomToPercent(Number(value))
+  syncTimelineViewport()
+  refreshZoomPresetUi()
+}
+
+function refreshZoomPresetUi() {
+  const snap = timelinePanelRef.value?.getZoomPresetSnapshot?.()
+  if (!snap) {
+    zoomPresetOptions.value = buildZoomPresetOptions(NaN, 0)
+    zoomPresetValue.value = 'fit'
+    return
+  }
+  zoomPresetOptions.value = snap.options
+  zoomPresetValue.value = snap.value
 }
 
 function onZoom1to1() {
@@ -2780,19 +3434,49 @@ function onDragLeave() {
 async function onFileDrop(e) {
   _dragDepth = 0
   dragOver.value = false
-  const file = e.dataTransfer?.files?.[0]
-  if (!file) return
-  if (!isBtfOpenName(file.name)) {
-    showToast('Drop a .btf file (or .gz / .bz2 / .zip)', 'error')
+  let files
+  try {
+    files = await collectDroppedFiles(e.dataTransfer)
+  } catch (err) {
+    onFileError(err?.message || 'Failed to read dropped files')
     return
   }
-  onTraceReading({ name: file.name })
-  try {
-    const entries = await loadBtfEntriesFromFile(file)
-    await onTracesLoaded({ entries, sourceName: file.name })
-  } catch (err) {
-    onFileError(`Failed to read "${file.name}"${err?.message ? `: ${err.message}` : ''}`)
+  const kind = classifyOpenFiles(files)
+  if (kind === 'demo') {
+    try {
+      await startDemoPack(await packFromFileMap(files))
+    } catch (err) {
+      showToast(err?.message || 'Failed to open demo XML', 'error')
+    }
+    return
   }
+  if (kind === 'btf') {
+    stopDemo()
+    const btfs = [...files.values()].filter(f => isBtfOpenName(f.name))
+    if (!btfs.length) return
+    if (btfs.length === 1) {
+      onTraceReading({ name: btfs[0].name })
+      try {
+        const entries = await loadBtfEntriesFromFile(btfs[0])
+        await onTracesLoaded({ entries, sourceName: btfs[0].name })
+      } catch (err) {
+        onFileError(`Failed to read "${btfs[0].name}"${err?.message ? `: ${err.message}` : ''}`)
+      }
+      return
+    }
+    try {
+      const all = []
+      for (const file of btfs) {
+        const entries = await loadBtfEntriesFromFile(file)
+        all.push(...entries)
+      }
+      await onTracesLoaded({ entries: all, sourceName: btfs[0].name })
+    } catch (err) {
+      onFileError(err?.message || 'Failed to read dropped traces')
+    }
+    return
+  }
+  showToast('Drop a .btf trace or a demo .xml pack', 'error')
 }
 
 async function onCopyClipboardDirect() {
@@ -3040,6 +3724,7 @@ function onTimelineViewportChange(vp) {
   const { programmatic, ...rest } = vp
   inspectorVpProgrammatic.value = !!programmatic
   if (activeTab.value) Object.assign(activeTab.value.timelineViewport, rest)
+  refreshZoomPresetUi()
 }
 
 let _cpuVpApplyRaf = null
@@ -3410,6 +4095,11 @@ function onGlobalKeydown(e) {
   }
 
   const mod = e.ctrlKey || e.metaKey
+  if (mod && e.key.toLowerCase() === 'o') {
+    e.preventDefault()
+    toolbarRef.value?.triggerOpen?.()
+    return
+  }
   if (mod && e.key === 'Tab') {
     e.preventDefault()
     cycleTraceTab(!e.shiftKey)
@@ -3430,6 +4120,23 @@ function onGlobalKeydown(e) {
   }
 
   if (e.key === 'Escape') {
+    if (demoFolderPrompt.value) {
+      demoFolderPrompt.value = null
+      e.preventDefault()
+      return
+    }
+    if (demoRunning.value) {
+      const now = Date.now()
+      if (now - _demoEscAt < 2500) {
+        stopDemo()
+        showToast('Demo stopped', 'info')
+      } else {
+        _demoEscAt = now
+        showToast('Esc: press again to stop the demo', 'info')
+      }
+      e.preventDefault()
+      return
+    }
     if (jumpDialogOpen.value) {
       jumpDialogOpen.value = false
       e.preventDefault()
@@ -3455,8 +4162,14 @@ function onGlobalKeydown(e) {
     return
   }
 
+  if (demoRunning.value && (e.key === ' ' || e.code === 'Space')) {
+    e.preventDefault()
+    if (demoNavReady.value) _demoRunner?.togglePause?.()
+    return
+  }
+
   if (helpOpen.value || aboutOpen.value || analysisOpen.value || settingsOpen.value
-      || jumpDialogOpen.value || snapshotEditorOpen.value) return
+      || jumpDialogOpen.value || snapshotEditorOpen.value || demoFolderPrompt.value) return
 
   if (mod && e.key === ',') {
     e.preventDefault()
@@ -3689,6 +4402,7 @@ async function loadExampleBtf() {
 }
 
 function onLoadDemo() {
+  stopDemo()
   loadExampleBtf().catch((err) => {
     console.error('Demo load failed:', err)
     showToast('Failed to load demo trace: ' + (err?.message || String(err)), 'error')
@@ -3764,6 +4478,12 @@ onBeforeUnmount(() => {
     _cpuVpApplyRaf = null
   }
   _cpuVpPending = null
+  stopDemo()
+  if (demoRecording.value) {
+    _demoRecorder?.stop?.().catch(() => {})
+    _demoRecorder = null
+    demoRecording.value = false
+  }
   window.removeEventListener('keydown', onGlobalKeydown)
 })
 
@@ -4061,6 +4781,159 @@ body {
   border-bottom: 1px solid #8a6200;
 }
 
+.demo-status-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  background: #1b3a4a;
+  color: #cdefff;
+  border-bottom: 1px solid #2a5a70;
+}
+
+.demo-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.demo-nav-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.demo-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.demo-nav-btn.is-paused {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.demo-status-text {
+  flex: 1;
+  min-width: 0;
+  margin-left: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.demo-lang {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: 6px;
+  font-size: 11px;
+  opacity: 0.9;
+}
+
+.demo-lang-label {
+  opacity: 0.7;
+}
+
+.demo-lang-select {
+  max-width: 7.5rem;
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.18);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+}
+
+.demo-lang-select:disabled {
+  opacity: 0.45;
+}
+
+.demo-status-hint {
+  flex-shrink: 0;
+  margin-left: 8px;
+  font-size: 11px;
+  opacity: 0.65;
+}
+
+.demo-folder-dialog {
+  width: min(440px, 92vw);
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.demo-folder-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.demo-folder-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.demo-folder-close {
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.demo-folder-body {
+  padding: 14px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg);
+}
+
+.demo-folder-body code {
+  font-size: 12px;
+}
+
+.demo-folder-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.demo-folder-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-bg);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.demo-folder-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #000;
+}
+
 .app.drag-over {
   outline: 2px dashed var(--accent);
   outline-offset: -4px;
@@ -4249,7 +5122,7 @@ body.row-resizing * {
   filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.28));
 }
 
-.about-icon :deep(svg) {
+.about-icon svg {
   display: block;
   width: 72px;
   height: 72px;

@@ -1069,6 +1069,22 @@ class _CpuLoadGraph(QWidget):
 
         p.end()
 
+def _normalize_settings_page(page: str) -> str:
+    """Map a demo/API settings page name to a sidebar label.
+
+    Matches web ``demoSettingsTab``: substring match, AI before Display/Layout.
+    """
+    raw = str(page or "").strip()
+    low = raw.lower()
+    if "ai" in low:
+        return "AI"
+    if "display" in low:
+        return "Display"
+    if "layout" in low:
+        return "Layout"
+    return "Appearance"
+
+
 def _dialog_guard(fn):
     """Decorator: prevents a dialog-opening method from being entered while it
     is already running (e.g. due to spurious double-trigger on Linux/X11).
@@ -1114,18 +1130,62 @@ class _LeftTabStyle(QProxyStyle):
             return int(Qt.AlignmentFlag.AlignLeft)
         return super().styleHint(hint, option, widget, returnData)
 
-class _LeftAlignedTabBar(QTabBar):
-    """Tab bar that stays left-aligned (macOS native style centers tabs by default)."""
+class _StretchTabWidget(QTabWidget):
+    """Tab bar spans the widget so strip chrome is continuous (no leftover hole)."""
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._sync_tab_bar_width()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._sync_tab_bar_width()
+
+    def event(self, event) -> bool:  # noqa: N802
+        handled = super().event(event)
+        et = event.type()
+        if et in (QEvent.Type.LayoutRequest, QEvent.Type.ShowToParent):
+            self._sync_tab_bar_width()
+        return handled
+
+    def _sync_tab_bar_width(self) -> None:
+        tb = self.tabBar()
+        if tb is None:
+            return
+        w = max(1, self.width())
+        if tb.width() != w:
+            tb.setFixedWidth(w)
+
+
+class _ThemedTabBar(QTabBar):
+    """Fusion-aligned tab bar.
+
+    *expanding=False* keeps file tabs compact (browser-style).
+    *expanding=True* shares the strip equally (web ``.panel-tab { flex: 1 }``),
+    so hiding View → Show … tabs does not leave a leftover hole.
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None, *,
+                 expanding: bool = False) -> None:
         super().__init__(parent)
-        self.setExpanding(False)
+        self._expanding = bool(expanding)
+        self.setExpanding(self._expanding)
+        self.setDocumentMode(False)
+        self.setUsesScrollButtons(False)
+        self.setDrawBase(True)
         if sys.platform == "darwin":
             self.setStyle(_LeftTabStyle())
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
-        self.setExpanding(False)
+        self.setExpanding(self._expanding)
+
+
+class _LeftAlignedTabBar(_ThemedTabBar):
+    """Trace-file tabs: left-aligned, do not stretch across the timeline."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent, expanding=False)
 
 class _TimelinePane(QWidget):
     """Task timeline + dedicated time scrollbar row (below the canvas, above CPU split)."""
@@ -1978,7 +2038,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         for w in (tw, tb):
             pal = w.palette()
-            pal.setColor(QPalette.Window, win_bg)
+            pal.setColor(QPalette.Window, QColor(c["mid"]))
             pal.setColor(QPalette.Base, win_bg)
             pal.setColor(QPalette.Button, QColor(c["tab_bg"]))
             pal.setColor(QPalette.ButtonText, QColor(c["tab_fg"]))
@@ -1994,6 +2054,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             pal.setColor(QPalette.Base, win_bg)
             host.setPalette(pal)
             host.setAutoFillBackground(True)
+        self._unify_tab_strip_heights()
 
     def _sync_panel_tabs_theme(self, is_dark: bool) -> None:
         """Keep Statistics / Marks / Find tab surfaces in sync with the app theme."""
@@ -2004,7 +2065,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         tw = self._panel_tabs
         tb = tw.tabBar()
-        tb.setExpanding(False)
+        tb.setExpanding(True)
         if sys.platform == "darwin" and not getattr(self, "_panel_tabs_left_style_applied", False):
             tw.setStyle(_LeftTabStyle())
             tb.setStyle(_LeftTabStyle())
@@ -2015,7 +2076,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         tb.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         mid_bg = QColor(c["mid"])
         pal = tw.palette()
-        pal.setColor(QPalette.Window, win_bg)
+        pal.setColor(QPalette.Window, mid_bg)
         pal.setColor(QPalette.Base, win_bg)
         pal.setColor(QPalette.Button, QColor(c["tab_bg"]))
         pal.setColor(QPalette.ButtonText, QColor(c["tab_fg"]))
@@ -2066,10 +2127,39 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         panel_dock = getattr(self, "_panel_dock", None)
         if panel_dock is not None:
             pal = panel_dock.palette()
-            pal.setColor(QPalette.Window, win_bg)
+            pal.setColor(QPalette.Window, mid_bg)
             pal.setColor(QPalette.Base, win_bg)
             panel_dock.setPalette(pal)
             panel_dock.setAutoFillBackground(True)
+        dock_host = getattr(self, "_panel_dock_host", None)
+        if dock_host is not None:
+            pal = dock_host.palette()
+            pal.setColor(QPalette.Window, mid_bg)
+            pal.setColor(QPalette.Base, win_bg)
+            dock_host.setPalette(pal)
+            dock_host.setAutoFillBackground(True)
+        self._unify_tab_strip_heights()
+
+    def _unify_tab_strip_heights(self) -> None:
+        """Keep file tabs and panel tabs on one equal-height chrome row."""
+        if not hasattr(self, "_tab_widget") or not hasattr(self, "_panel_tabs"):
+            return
+        bars = [self._tab_widget.tabBar(), self._panel_tabs.tabBar()]
+        bars = [b for b in bars if b is not None]
+        if not bars:
+            return
+        for bar in bars:
+            bar.setMinimumHeight(0)
+            bar.setMaximumHeight(16777215)
+        h = max(bar.sizeHint().height() for bar in bars)
+        if h <= 0:
+            return
+        for bar in bars:
+            bar.setFixedHeight(h)
+        for tw in (self._tab_widget, self._panel_tabs):
+            sync = getattr(tw, "_sync_tab_bar_width", None)
+            if callable(sync):
+                sync()
 
     def _apply_view_settings(self, view: TimelineView) -> None:
         view.set_font_size(self._font_size_val)
@@ -2324,6 +2414,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         ]
         if visible and self._panel_tabs.currentIndex() not in visible:
             self._panel_tabs.setCurrentIndex(visible[0])
+        tb = self._panel_tabs.tabBar()
+        if tb is not None:
+            tb.setExpanding(True)
+        self._unify_tab_strip_heights()
         self._sync_panel_menu_checks()
 
     def _sync_panel_menu_checks(self) -> None:
@@ -2479,13 +2573,43 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         tip = self._current_file or fname
         self._status_file.setToolTip(f"{tip}\n{summary}")
 
-    def _update_tab_actions(self) -> None:
+    def _has_cursor_range(self) -> bool:
+        if self._trace is None:
+            return False
+        view = getattr(self, "_view", None)
+        scene = getattr(view, "_scene", None) if view is not None else None
+        if scene is None:
+            return False
+        try:
+            return len(scene.cursor_times()) >= 2
+        except (AttributeError, TypeError):
+            return False
+
+    def _sync_file_export_actions(self, has_range: Optional[bool] = None) -> None:
+        """Enable snapshot / SVG / Perfetto with a trace; BTF slice needs C1–Cn."""
         has_trace = self._trace is not None
+        if has_range is None:
+            has_range = self._has_cursor_range()
         for act in (
-            self._act_save_img, self._act_save_svg, self._act_copy_img,
-            self._act_export_perfetto, self._act_export_slice,
+            getattr(self, "_act_save_img", None),
+            getattr(self, "_act_save_svg", None),
+            getattr(self, "_act_copy_img", None),
+            getattr(self, "_act_export_perfetto", None),
+            getattr(self, "_tb_snap_btn", None),
+            getattr(self, "_tb_save_svg_btn", None),
+            getattr(self, "_tb_export_perfetto_btn", None),
         ):
-            act.setEnabled(has_trace)
+            if act is not None:
+                act.setEnabled(has_trace)
+        for act in (
+            getattr(self, "_act_export_slice", None),
+            getattr(self, "_tb_export_slice_btn", None),
+        ):
+            if act is not None:
+                act.setEnabled(has_trace and bool(has_range))
+
+    def _update_tab_actions(self) -> None:
+        self._sync_file_export_actions()
         if hasattr(self, "_act_close_tab"):
             has_tabs = len(self._tabs) > 0
             self._act_close_tab.setEnabled(has_tabs)
@@ -2671,16 +2795,26 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if not docks:
             return
         sizes = [w] * len(docks)
-        if self.isMaximized() or self.isFullScreen():
+        # Pin min=max during the layout pass so content sizeHints cannot keep
+        # the column stuck at the previous width (AI templates minHint ~560).
+        for dock in docks:
+            dock.setMinimumWidth(w)
+            dock.setMaximumWidth(w)
+        try:
+            if self.isMaximized() or self.isFullScreen():
+                self.resizeDocks(docks, sizes, Qt.Orientation.Horizontal)
+                return
+            # resizeDocks() on Windows can change the outer window width instead of
+            # only stealing/giving space to the central widget — pin the frame.
+            frame = self.geometry()
             self.resizeDocks(docks, sizes, Qt.Orientation.Horizontal)
-            return
-        # resizeDocks() on Windows can change the outer window width instead of
-        # only stealing/giving space to the central widget — pin the frame.
-        frame = self.geometry()
-        self.resizeDocks(docks, sizes, Qt.Orientation.Horizontal)
-        if self.geometry() != frame:
-            self.setGeometry(frame)
-            self.resizeDocks(docks, sizes, Qt.Orientation.Horizontal)
+            if self.geometry() != frame:
+                self.setGeometry(frame)
+                self.resizeDocks(docks, sizes, Qt.Orientation.Horizontal)
+        finally:
+            for dock in docks:
+                dock.setMinimumWidth(_RIGHT_DOCK_MIN_W)
+                dock.setMaximumWidth(_RIGHT_DOCK_MAX_W)
 
     def _schedule_stabilize_right_dock_layout(self) -> None:
         """Coalesce native dock splitter resizes into one stabilization pass."""
@@ -2748,6 +2882,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._focus_statistics_panel()
         self._relax_right_dock_content_widths()
         _wire_splitter_handle_cursors(self)
+        self._sync_panel_seam_resizers()
 
     def _apply_dock_metrics_sizes(self, packed: str) -> None:
         """Apply persisted dock widths/heights (visibility handled separately)."""
@@ -2766,6 +2901,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._view._scene.set_label_width(label_w)
         self._relax_right_dock_content_widths()
         _wire_splitter_handle_cursors(self)
+        self._sync_panel_seam_resizers()
 
     def _dock_profile_key(self, width: int, height: int) -> str:
         """Build a stable per-window-size key for dock/layout persistence."""
@@ -3010,6 +3146,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def resizeEvent(self, event) -> None:  # noqa: N802
         """Re-autofit CPU load pane height when the window grows (stretch factor 0)."""
         super().resizeEvent(event)
+        self._sync_panel_seam_resizers()
+        self._unify_tab_strip_heights()
         if (self._shutting_down or self._cpu_splitter_user_sized
                 or not self._show_cpu_load or self._active_tab is None):
             return
@@ -3513,7 +3651,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QSplitter::handle:horizontal {{
                 width:6px;
             }}
-            QTabWidget#trace_tab_widget {{ background:{c['win_bg']}; }}
+            QTabWidget#trace_tab_widget {{ background:{c['mid']}; }}
             QTabWidget#trace_tab_widget::tab-bar {{ alignment: left; }}
             QTabWidget#trace_tab_widget::pane {{ background:{c['win_bg']};
                          border:1px solid {c['sep']}; top:-1px; }}
@@ -3528,22 +3666,26 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                          border-bottom:2px solid {c['accent']}; }}
             QTabWidget#trace_tab_widget QTabBar#trace_tab_bar::tab:hover:!selected {{
                          background:{c['tab_hover_bg']}; color:{c['tab_hover_fg']}; }}
-            QTabWidget#panel_tab_widget {{ background:{c['win_bg']}; }}
+            QTabWidget#panel_tab_widget {{ background:{c['mid']}; }}
             QTabWidget#panel_tab_widget::tab-bar {{
-                         background:{c['mid']}; border-bottom:1px solid {c['sep']}; }}
+                         alignment: left; background:{c['mid']};
+                         border-bottom:1px solid {c['sep']}; }}
             QTabWidget#panel_tab_widget::pane {{ background:{c['win_bg']};
                          border:1px solid {c['sep']}; top:-1px; }}
             QTabWidget#panel_tab_widget QTabBar#panel_tab_bar {{
                          background:{c['mid']}; border-bottom:1px solid {c['sep']}; }}
             QTabWidget#panel_tab_widget QTabBar#panel_tab_bar::tab {{
-                         background:{c['tab_bg']}; color:{c['tab_fg']}; padding:4px 12px;
-                         border:none; border-bottom:2px solid transparent;
+                         background:{c['tab_bg']}; color:{c['tab_fg']}; padding:4px 8px;
+                         border:none; border-right:1px solid {c['sep']};
+                         border-bottom:2px solid transparent;
                          font-size:{_ui_fs}; }}
             QTabWidget#panel_tab_widget QTabBar#panel_tab_bar::tab:selected {{
                          background:{c['tab_sel_bg']}; color:{c['tab_sel_fg']};
                          border-bottom:2px solid {c['accent']}; }}
             QTabWidget#panel_tab_widget QTabBar#panel_tab_bar::tab:hover:!selected {{
                          background:{c['tab_hover_bg']}; color:{c['tab_hover_fg']}; }}
+            QWidget#right_dock_host {{ background:{c['mid']}; }}
+            QDockWidget#dock_panel {{ background:{c['mid']}; }}
             QTabWidget#marks_tab_widget {{ background:{c['win_bg']}; }}
             QTabWidget#marks_tab_widget::pane {{ background:{c['win_bg']};
                          border:1px solid {c['sep']}; top:-1px; }}
@@ -3829,15 +3971,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _wl.addWidget(_wlbl)
         self._welcome_label = _wlbl
 
-        self._tab_widget = QTabWidget()
+        self._tab_widget = _StretchTabWidget()
         self._tab_widget.setTabBar(_LeftAlignedTabBar(self._tab_widget))
         self._tab_widget.setTabsClosable(True)
         # Native document-mode tabs on macOS ignore QSS/palette theme updates.
+        self._tab_widget.setDocumentMode(False)
         if sys.platform == "darwin":
-            self._tab_widget.setDocumentMode(False)
             self._tab_widget.setStyle(_LeftTabStyle())
-        else:
-            self._tab_widget.setDocumentMode(True)
         self._tab_widget.setMovable(True)
         self._tab_widget.tabCloseRequested.connect(self._close_trace_tab)
         self._tab_widget.currentChanged.connect(self._on_trace_tab_changed)
@@ -4055,9 +4195,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         )
 
         # --- Right panel: Statistics / Marks / Find / Legend / AI (web parity) ---
-        self._panel_tabs = QTabWidget()
-        if sys.platform == "darwin":
-            self._panel_tabs.setTabBar(_LeftAlignedTabBar(self._panel_tabs))
+        self._panel_tabs = _StretchTabWidget()
+        self._panel_tabs.setTabBar(_ThemedTabBar(self._panel_tabs, expanding=True))
         self._panel_tabs.setDocumentMode(False)
         self._panel_tabs.addTab(self._stats_panel, "Statistics")
         self._panel_tabs.addTab(marks_host, "Marks")
@@ -4067,10 +4206,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         panel_dock = QDockWidget("", self)
         panel_dock.setObjectName("dock_panel")
-        panel_dock.setWidget(self._panel_tabs)
-        panel_dock.setFeatures(
-            QDockWidget.DockWidgetFeature.DockWidgetClosable
-            | QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        self._panel_dock_host = _RightDockHost(self._panel_tabs)
+        panel_dock.setWidget(self._panel_dock_host)
+        # No title bar: stats tabs sit on the same row as the trace-file tabs.
+        _hidden_title = QWidget(panel_dock)
+        _hidden_title.setObjectName("dock_hidden_title")
+        _hidden_title.setFixedHeight(0)
+        panel_dock.setTitleBarWidget(_hidden_title)
+        panel_dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
         self._apply_right_dock_min_width(panel_dock)
         panel_dock.setMinimumHeight(200)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, panel_dock)
@@ -4085,7 +4228,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # Default dock sizes are applied in _restore_settings via QTimer.singleShot
         # AFTER the window is shown, where resizeDocks() is actually effective.
 
-        # Keep runtime state in sync if the user closes a dock via its X button
+        # Visibility is Settings → Display (tabs), not a dock close button.
         self._panel_dock.visibilityChanged.connect(self._on_panel_dock_visibility_changed)
 
         self._wire_resize_cursors()
@@ -4122,34 +4265,31 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._close_trace_tab(0)
 
     def _wire_resize_cursors(self) -> None:
-        """Resize cursors on splitters and dock/central pane edges."""
-        vert = Qt.CursorShape.SizeVerCursor
-        margin = _RESIZE_EDGE_PX
-
-        def _dock_active(dock: QDockWidget):
-            return (lambda: dock.isVisible() and not dock.isFloating())
-
-        for w in (self._central_stack, self._tab_widget):
-            w.setMouseTracking(True)
-            w.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
-            filt = _DockWidthResizeFilter(
-                w, self, "right", margin, self._any_visible_right_dock)
-            w.installEventFilter(filt)
-            w._dock_width_resize_filter = filt  # prevent GC
-
-        for dock in self._right_docks():
-            dock.setMouseTracking(True)
-            dock.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
-            ok = _dock_active(dock)
-            width_filt = _DockWidthResizeFilter(dock, self, "left", margin, ok)
-            dock.installEventFilter(width_filt)
-            dock._dock_width_resize_filter = width_filt
-
+        """Resize cursors on splitters and the timeline / right-panel seam."""
+        self._central_seam_resizer = _PanelSeamResizer(
+            self._central_host, self, "right")
+        self._dock_seam_resizer = _PanelSeamResizer(
+            self._panel_tabs, self, "left")
         resize_guard = _RightDockResizeGuard(self, self._panel_dock)
         self._panel_dock.installEventFilter(resize_guard)
         self._panel_dock._dock_resize_guard = resize_guard
-
         QTimer.singleShot(0, lambda: _wire_splitter_handle_cursors(self))
+        QTimer.singleShot(0, self._sync_panel_seam_resizers)
+
+    def _sync_panel_seam_resizers(self) -> None:
+        """Keep the 8px seam grips aligned and above timeline / panel content."""
+        if getattr(self, "_shutting_down", False):
+            return
+        visible = self._any_visible_right_dock()
+        for attr in ("_central_seam_resizer", "_dock_seam_resizer"):
+            grip = getattr(self, attr, None)
+            if grip is None:
+                continue
+            if visible:
+                grip.show()
+                grip.sync_geometry()
+            else:
+                grip.hide()
 
     def _build_legend_panel(self) -> None:
         """Create the legend widget hosted in the right-panel Legend tab."""
@@ -4214,7 +4354,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._recent_menu = fm.addMenu("Open &Recent")
         self._rebuild_recent_menu()
         fm.addSeparator()
-        self._act_save_img = fm.addAction("Save as &Image (PNG)…", self._on_save_image, "Ctrl+S")
+        self._act_save_img = fm.addAction("Snapshot &Editor…", self._on_save_image, "Ctrl+S")
         self._act_save_img.setEnabled(False)
         self._act_save_svg = fm.addAction("Save as &SVG…", self._on_save_svg, "Ctrl+Shift+S")
         self._act_save_svg.setEnabled(False)
@@ -4226,7 +4366,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_export_slice = fm.addAction(
             "Save se&lection as BTF…", self._on_export_btf_slice)
         self._act_export_slice.setToolTip(
-            "Export raw BTF events between the earliest and latest cursor (C1–Cn).")
+            "Save cursor range as BTF (C1–Cn).")
         self._act_export_slice.setEnabled(False)
         self._act_close_tab = fm.addAction("Close &Tab", self._on_close_tab_action, QKeySequence.Close)
         self._act_close_tab.setEnabled(False)
@@ -4342,10 +4482,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._tb_icon_actions.append((act, ic_path))
             return act
 
-        # --- File actions ---
-        _ia("Open",     self._on_open,         _IC_OPEN,     "Open BTF trace file  (Ctrl+O)")
-        _ia("Save PNG", self._on_save_image,   _IC_SAVE,     "Open snapshot editor  (Ctrl+S)")
-        _ia("Save SVG", self._on_save_svg,     _IC_SAVE_SVG, "Save viewport as SVG  (Ctrl+Shift+S)")
+        # --- File actions (same cluster as web: Open · Snapshot · SVG · Perfetto · Slice) ---
+        _ia("Open", self._on_open, _IC_OPEN, "Open BTF trace file  (Ctrl+O)")
+        self._tb_snap_btn = _ia(
+            "Snapshot", self._on_save_image, _IC_SHOT,
+            "Open snapshot editor  (Ctrl+S)")
+        self._tb_save_svg_btn = _ia(
+            "Save SVG", self._on_save_svg, _IC_SAVE_SVG,
+            "Save viewport as SVG  (Ctrl+Shift+S)")
+        self._tb_export_perfetto_btn = _ia(
+            "Perfetto", self._on_export_perfetto, _IC_PERFETTO,
+            "Export Perfetto (Chrome Trace JSON for ui.perfetto.dev)  (Ctrl+Shift+E)")
+        self._tb_export_slice_btn = _ia(
+            "Save BTF", self._on_export_btf_slice, _IC_EXPORT_SLICE,
+            "Save cursor range as BTF (C1–Cn)")
+        self._tb_snap_btn.setEnabled(False)
+        self._tb_save_svg_btn.setEnabled(False)
+        self._tb_export_perfetto_btn.setEnabled(False)
+        self._tb_export_slice_btn.setEnabled(False)
         tb.addSeparator()
 
         # --- Layout and zoom ---
@@ -4460,10 +4614,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             _IC_THEME_LIGHT if self._is_dark else _IC_THEME_DARK,
             "Switch to light theme" if self._is_dark else "Switch to dark theme"
         )
-        tb.addSeparator()
 
-        # --- Settings button ---
+        # Push Settings / Help to the right (web toolbar parity).
+        spacer = QWidget()
+        spacer.setObjectName("toolbar_right_spacer")
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        tb.addWidget(spacer)
         _ia("Settings", self._open_settings, _IC_SETTINGS, "Open Settings  (Ctrl+,)")
+        _ia("Help", self._on_keyboard_shortcuts, _IC_HELP,
+            "Help & keyboard shortcuts")
 
     def _update_trace_quality_banner(self, trace: Optional[BtfTrace] = None) -> None:
         """Show BTF quality / version warnings above the timeline (web parity)."""
@@ -5114,6 +5273,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if view is not None:
                 view.clear_cursors()
             return {}
+        if op == "clear_bookmarks":
+            self._clear_all_bookmarks()
+            return {}
+        if op == "clear_annotations":
+            self._clear_all_annotations()
+            return {}
         if op == "zoom_range":
             lo, hi = self._demo_parse_range_payload(payload)
             self._ai_zoom_to_range(lo, hi)
@@ -5152,9 +5317,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if op == "find":
             return self._demo_find(payload)
         if op == "settings":
-            page = str(payload.get("page") or payload.get("name") or "Appearance")
-            QTimer.singleShot(0, lambda p=page: self._open_settings(p))
-            return {"settings": page}
+            return self._demo_settings(payload)
         if op in ("ui", "command"):
             inner = dict(payload)
             action = str(
@@ -5326,6 +5489,40 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 pass
             return {"analysis": "closed", "found": True}
         return {"analysis": "closed", "found": False}
+
+    def _demo_settings(self, payload: dict) -> dict:
+        action = str(payload.get("action") or "").strip().lower()
+        if "open" in payload:
+            want_open = self._demo_truthy(payload.get("open"), default=True)
+        elif "close" in payload:
+            want_open = not self._demo_truthy(payload.get("close"), default=True)
+        elif action in ("close", "hide", "dismiss"):
+            want_open = False
+        else:
+            want_open = True
+        if not want_open:
+            self._demo_close_settings()
+            return {"settings": "closing"}
+        page = _normalize_settings_page(
+            payload.get("page") or payload.get("name") or "Appearance")
+        QTimer.singleShot(0, lambda p=page: self._open_settings(p))
+        return {"settings": page}
+
+    def _demo_close_settings(self) -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        for w in app.topLevelWidgets():
+            try:
+                title = w.windowTitle()
+            except RuntimeError:
+                continue
+            if title == "Settings" and w.isVisible():
+                try:
+                    w.reject()
+                except RuntimeError:
+                    pass
+                return
 
     def _demo_find(self, payload: dict) -> dict:
         clear = self._demo_truthy(payload.get("clear"), default=False)
@@ -7987,6 +8184,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         *page* selects the sidebar page: ``Appearance``, ``Display``, ``Layout``, or ``AI``.
         """
+        page = _normalize_settings_page(page if isinstance(page, str) else "Appearance")
         _snap = {
             "is_dark":                  self._is_dark,
             "font_size":                self._font_size_val,
@@ -8261,6 +8459,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         has_range = len(times) >= 2
         self._act_zoom_range.setEnabled(has_range)
         self._tb_zoom_range_btn.setEnabled(has_range)
+        self._sync_file_export_actions(has_range=has_range)
         if self._trace is None or not has_range:
             self._range_stats_label.setText("Range: place two cursors to measure")
             self._status_range.setVisible(False)
@@ -8979,6 +9178,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _on_panel_dock_visibility_changed(self, visible: bool) -> None:
         """Clear find overlays when the entire right panel is hidden."""
+        self._sync_panel_seam_resizers()
         if not visible:
             self._recompute_find_hits()
 

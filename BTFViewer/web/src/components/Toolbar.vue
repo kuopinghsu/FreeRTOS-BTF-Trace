@@ -19,7 +19,7 @@
 
     <div class="tb-sep" />
 
-    <!-- g1: File — Open · Demo · PNG · SVG · Perfetto -->
+    <!-- g1: File — Open · Snapshot · SVG · Perfetto · Slice -->
     <Teleport
       :to="overflowPanelEl ?? 'body'"
       :disabled="!overflow.g1"
@@ -31,7 +31,8 @@
         <label
           v-if="!useFsaOpen"
           class="tb-btn file-btn"
-          title="Open BTF trace file (Ctrl+O)"
+          title="Open a BTF trace or demo XML (Ctrl+O)"
+          aria-label="Open a BTF trace or demo XML (Ctrl+O)"
         >
           <svg
             viewBox="0 0 16 16"
@@ -40,12 +41,16 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.open"
+            />
           </svg>
-          <span class="tb-label">Open</span>
           <input
+            ref="fileInputRef"
             type="file"
-            :accept="BTF_FILE_ACCEPT"
+            :accept="OPEN_FILE_ACCEPT"
+            multiple
             style="display:none"
             @change="onFileChange"
           >
@@ -53,7 +58,8 @@
         <button
           v-else
           class="tb-btn"
-          title="Open BTF trace file (Ctrl+O)"
+          title="Open a BTF trace or demo XML (Ctrl+O)"
+          aria-label="Open a BTF trace or demo XML (Ctrl+O)"
           @click="onOpenClick"
         >
           <svg
@@ -63,30 +69,17 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.open"
+            />
           </svg>
-          <span class="tb-label">Open</span>
-        </button>
-        <button
-          class="tb-btn"
-          title="Load the bundled demo trace"
-          @click="emit('loadDemo')"
-        >
-          <svg
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path d="M3 2.5A1.5 1.5 0 0 1 4.5 1h7A1.5 1.5 0 0 1 13 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 13.5v-11zm3 2.354v6.292L11 8 6 4.854z" />
-          </svg>
-          <span class="tb-label">Demo</span>
         </button>
         <button
           v-if="traceInfo"
           class="tb-btn"
           title="Open snapshot editor (Ctrl+S)"
+          aria-label="Open snapshot editor (Ctrl+S)"
           @click="emit('copyScreenshot')"
         >
           <svg
@@ -96,7 +89,10 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M2 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4.5L11.5 1H2zm2 1h5v3H4V2zm4 8a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zM3 10h10v4H3v-4z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.shot"
+            />
           </svg>
         </button>
         <button
@@ -112,13 +108,16 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M7.5 1a.5.5 0 0 1 .5.5v8.793l2.146-2.147a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 0 1 .708-.708L7 10.293V1.5a.5.5 0 0 1 .5-.5zM2.5 13a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.saveSvg"
+            />
           </svg>
         </button>
         <button
           v-if="traceInfo"
           class="tb-btn"
-          title="Export Perfetto (Chrome Trace JSON for ui.perfetto.dev)"
+          title="Export Perfetto (Chrome Trace JSON for ui.perfetto.dev) (Ctrl+Shift+E)"
           @click="emit('exportPerfetto')"
         >
           <svg
@@ -128,7 +127,10 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M2.5 2A1.5 1.5 0 0 0 1 3.5v9A1.5 1.5 0 0 0 2.5 14h11a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 13.5 2h-11zm0 1h11a.5.5 0 0 1 .5.5V5H2V3.5a.5.5 0 0 1 .5-.5zM2 6h12v6.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V6zm2 1.5v1h2v-1H4zm3 0v1h2v-1H7zm3 0v1h2v-1h-2zM4 10v1h5v-1H4z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.perfetto"
+            />
           </svg>
         </button>
         <button
@@ -146,7 +148,10 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M3.5 1A1.5 1.5 0 0 0 2 2.5v3h1v-3a.5.5 0 0 1 .5-.5h3v-1h-3zm6 0v1h3a.5.5 0 0 1 .5.5v3h1v-3A1.5 1.5 0 0 0 12.5 1h-3zM2 10.5v3A1.5 1.5 0 0 0 3.5 15h3v-1h-3a.5.5 0 0 1-.5-.5v-3H2zm11 0v3a.5.5 0 0 1-.5.5h-3v1h3a1.5 1.5 0 0 0 1.5-1.5v-3h-1zM5 5h6v6H5V5z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.exportSlice"
+            />
           </svg>
         </button>
         <div class="tb-sep" />
@@ -176,7 +181,10 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M1 4h14v2H1zm0 4h14v2H1zm0 4h14v2H1z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.horiz"
+            />
           </svg>
         </button>
         <button
@@ -193,14 +201,17 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M3 1h2v14H3zm4 0h2v14H7zm4 0h2v14h-2z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.vert"
+            />
           </svg>
         </button>
         <div class="tb-sep" />
       </div>
     </Teleport>
 
-    <!-- g3: Zoom — In · Out · 1:1 · Fit · Range · Find -->
+    <!-- g3: Zoom — In · Out · 1:1 · Fit · Range · Find · preset -->
     <Teleport
       :to="overflowPanelEl ?? 'body'"
       :disabled="!overflow.g3"
@@ -221,7 +232,10 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM6 5v1.5H4.5v1H6V9h1V7.5h1.5v-1H7V5H6z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.zin"
+            />
           </svg>
         </button>
         <button
@@ -236,16 +250,31 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM4 6h5v1H4V6z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.zout"
+            />
           </svg>
         </button>
         <button
           v-if="traceInfo"
-          class="tb-btn tb-btn-text"
+          class="tb-btn"
           :title="zoom1to1Title"
+          :aria-label="zoom1to1Title"
           @click="emit('zoom1to1')"
         >
-          1:1
+          <svg
+            viewBox="0 0 16 16"
+            width="16"
+            height="16"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              fill-rule="evenodd"
+              :d="IC.oneToOne"
+            />
+          </svg>
         </button>
         <button
           class="tb-btn"
@@ -259,7 +288,10 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M1.5 1h5v1h-4v4h-1V1.5a.5.5 0 0 1 .5-.5zm13 0a.5.5 0 0 1 .5.5V6h-1V2h-4V1h4.5zM1 10h1v4h4v1H1.5a.5.5 0 0 1-.5-.5V10zm14 0v4.5a.5.5 0 0 1-.5.5H10v-1h4v-4h1z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.fit"
+            />
           </svg>
         </button>
         <button
@@ -277,7 +309,10 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M3 1h1v14H3zM12 1h1v14h-1zM4 5l3 3-3 3zM12 5l-3 3 3 3z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.expand"
+            />
           </svg>
         </button>
         <button
@@ -293,9 +328,34 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.find"
+            />
           </svg>
         </button>
+        <select
+          class="tb-zoom-preset"
+          title="Zoom preset — pick a fixed scale or Fit"
+          aria-label="Zoom preset"
+          :value="zoomPresetValue"
+          :disabled="!traceInfo"
+          @change="onZoomPresetChange"
+        >
+          <option
+            v-if="zoomPresetValue === ''"
+            value=""
+            disabled
+            hidden
+          />
+          <option
+            v-for="opt in zoomPresetOptions"
+            :key="opt.value"
+            :value="opt.value"
+          >
+            {{ opt.label }}
+          </option>
+        </select>
         <div class="tb-sep" />
       </div>
     </Teleport>
@@ -323,7 +383,10 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h11A1.5 1.5 0 0 1 15 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 13.5v-11zM4 5.5h8v1H4v-1zm0 3h8v1H4v-1zm0 3h5v1H4v-1z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.task"
+            />
           </svg>
           <span class="tb-label">Task</span>
         </button>
@@ -341,17 +404,23 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M5 1v2H3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2v2h1v-2h4v2h1v-2h2a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-2V1h-1v2H6V1H5zm-2 4h10v6H3V5zm2 1v4h6V6H5z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.core"
+            />
           </svg>
           <span class="tb-label">Core</span>
         </button>
 
         <button
-          v-if="modelValue.viewMode === 'core'"
           class="tb-btn"
-          :class="{ active: coresExpanded }"
+          :class="{
+            active: coresExpanded,
+            disabled: modelValue.viewMode !== 'core',
+          }"
+          :disabled="modelValue.viewMode !== 'core'"
           title="Expand / collapse all cores (only in Core View)"
-          @click="toggleExpandAll"
+          @click="modelValue.viewMode === 'core' && toggleExpandAll()"
         >
           <svg
             viewBox="0 0 16 16"
@@ -360,7 +429,10 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M8 1l2.5 3h-2v3h-1V4H5.5zM8 15l-2.5-3h2v-3h1V12h2.5zM2 7.5h12v1H2z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.expandAll"
+            />
           </svg>
         </button>
 
@@ -378,7 +450,10 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M1 11a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v3H1v-3zm5-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v7H6V7zm5-3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v10h-4V4z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.cpuLoad"
+            />
           </svg>
           <span class="tb-label">Load</span>
         </button>
@@ -397,7 +472,10 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M1 1h4v4H1V1zm5 0h4v4H6V1zm5 0h4v4h-4V1zM1 6h4v4H1V6zm5 0h4v4H6V6zm5 0h4v4h-4V6zM1 11h4v4H1v-4zm5 0h4v4H6v-4zm5 0h4v4h-4v-4z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.heatmap"
+            />
           </svg>
         </button>
 
@@ -415,7 +493,8 @@
           >
             <path
               fill="currentColor"
-              d="M1 1h4v4H1V1zm5 0h4v4H6V1zm5 0h4v4h-4V1zM1 6h4v4H1V6zm5 0h4v4H6V6zm5 0h4v4h-4V6zM1 11h4v4H1v-4zm5 0h4v4H6v-4zm5 0h4v4h-4v-4z"
+              fill-rule="evenodd"
+              :d="IC.heatmap"
             />
             <line
               x1="2"
@@ -453,7 +532,10 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M2 1.5A.5.5 0 0 1 2.5 1h9A1.5 1.5 0 0 1 13 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-9A.5.5 0 0 1 2 14.5v-13zM3 2v12h8.5a.5.5 0 0 0 .5-.5v-11a.5.5 0 0 0-.5-.5H3zm1.5 2h6v1h-6V4zm0 2.5h6v1h-6v-1zm0 2.5h4v1h-4V9z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.analysis"
+            />
           </svg>
           <span class="tb-label">Analysis</span>
         </button>
@@ -506,7 +588,10 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M8 1.5a.5.5 0 0 1 .5.5V3a.5.5 0 0 1-1 0V2a.5.5 0 0 1 .5-.5zM11.9 4.1a.5.5 0 0 1 0 .7l-.7.7a.5.5 0 1 1-.7-.7l.7-.7a.5.5 0 0 1 .7 0zM14 7.5a.5.5 0 0 1 0 1h-1a.5.5 0 0 1 0-1h1zM11.2 11.2a.5.5 0 0 1 .7 0l.7.7a.5.5 0 0 1-.7.7l-.7-.7a.5.5 0 0 1 0-.7zM8 12a.5.5 0 0 1 .5.5V14a.5.5 0 0 1-1 0v-1.5A.5.5 0 0 1 8 12zM4.1 11.2a.5.5 0 0 1 0 .7l-.7.7a.5.5 0 0 1-.7-.7l.7-.7a.5.5 0 0 1 .7 0zM3 7.5a.5.5 0 0 1 0 1H2a.5.5 0 0 1 0-1h1zM4.8 4.1a.5.5 0 0 1-.7 0l-.7-.7a.5.5 0 1 1 .7-.7l.7.7a.5.5 0 0 1 0 .7zM8 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.themeLight"
+            />
           </svg>
           <svg
             v-else
@@ -516,7 +601,10 @@
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M6 .278a.768.768 0 0 1 .08.858 7.208 7.208 0 0 0-.878 3.46c0 4.021 3.278 7.277 7.318 7.277.527 0 1.04-.055 1.533-.16a.787.787 0 0 1 .81.316.733.733 0 0 1-.031.893A8.349 8.349 0 0 1 8.344 16C3.734 16 0 12.286 0 7.71 0 4.266 2.114 1.312 5.124.06A.752.752 0 0 1 6 .278z" />
+            <path
+              fill-rule="evenodd"
+              :d="IC.themeDark"
+            />
           </svg>
         </button>
       </div>
@@ -565,6 +653,47 @@
 
     <button
       class="tb-btn"
+      title="Load the bundled demo trace"
+      aria-label="Load the bundled demo trace"
+      @click="emit('loadDemo')"
+    >
+      <svg
+        viewBox="0 0 16 16"
+        width="16"
+        height="16"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path
+          fill-rule="evenodd"
+          :d="IC.demo"
+        />
+      </svg>
+    </button>
+    <button
+      class="tb-btn"
+      :class="{ recording: recording }"
+      :title="recording ? 'Stop recording and download WebM' : 'Record this tab (share the tab, include tab audio; pointer is captured)'"
+      :aria-label="recording ? 'Stop recording and download WebM' : 'Record this tab'"
+      @click="emit('toggleRecord')"
+    >
+      <svg
+        viewBox="0 0 16 16"
+        width="16"
+        height="16"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <circle
+          cx="8"
+          cy="8"
+          r="5"
+        />
+      </svg>
+    </button>
+
+    <button
+      class="tb-btn"
       title="Open Settings (Ctrl+,)"
       @click="emit('showSettings')"
     >
@@ -575,8 +704,10 @@
         fill="currentColor"
         aria-hidden="true"
       >
-        <path d="M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492zM5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0z" />
-        <path d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 0 1-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 0 1-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 0 1 .52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 0 1 1.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 0 1 1.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 0 1 .52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 0 1-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 0 1-1.255-.52l-.094-.319z" />
+        <path
+          fill-rule="evenodd"
+          :d="IC.settings"
+        />
       </svg>
     </button>
 
@@ -592,7 +723,10 @@
         fill="currentColor"
         aria-hidden="true"
       >
-        <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 13A6 6 0 1 1 8 2a6 6 0 0 1 0 12zm0-3.1a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM8.2 4.2c-1.2 0-2 .8-2.1 1.9h1c.1-.6.5-1 1.1-1 .7 0 1.1.4 1.1 1 0 .4-.2.7-.8 1.1-.8.5-1.3 1-1.3 2v.3h1v-.2c0-.6.3-.9.9-1.3.7-.5 1.2-1 1.2-1.9 0-1.1-.9-1.9-2.1-1.9z" />
+        <path
+          fill-rule="evenodd"
+          :d="IC.help"
+        />
       </svg>
     </button>
   </div>
@@ -600,9 +734,11 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { IC } from '../utils/toolbarIcons.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
-import { supportsFileHandles, pickAndReadBtf } from '../utils/fileOpen.js'
-import { BTF_FILE_ACCEPT, loadBtfEntriesFromFile } from '../utils/btfLoad.js'
+import { supportsFileHandles, pickAndReadOpen, OPEN_FILE_ACCEPT } from '../utils/fileOpen.js'
+import { loadBtfEntriesFromFile } from '../utils/btfLoad.js'
+import { classifyPickedOpen } from '../utils/demoPack.js'
 import { appIconSvgMarkup } from '../utils/htmlReport.js'
 
 const appIconSvg = appIconSvgMarkup(16)
@@ -618,10 +754,15 @@ const props = defineProps({
   loadingPct:  { type: Number,  default: 0 },
   loadingMsg:  { type: String,  default: '' },
   timeScale:   { type: String, default: 'ns' },
+  recording:   { type: Boolean, default: false },
+  zoomPresetValue: { type: String, default: 'fit' },
+  zoomPresetOptions: { type: Array, default: () => [{ value: 'fit', label: 'Fit' }] },
 })
 
 const emit = defineEmits([
-  'update:modelValue', 'trace-reading', 'trace-loaded', 'traces-loaded', 'loadDemo', 'zoom', 'fit',
+  'update:modelValue', 'trace-reading', 'trace-loaded', 'traces-loaded', 'loadDemo', 'demoPack',
+  'demoFolder',
+  'toggleRecord', 'zoom', 'fit', 'zoomPreset',
   'zoom1to1', 'zoomRange', 'showFind',
   'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'exportPerfetto',
   'exportSlice',
@@ -633,6 +774,7 @@ const useFsaOpen = supportsFileHandles()
 const coresExpanded = ref(true)
 
 function toggleExpandAll() {
+  if (props.modelValue.viewMode !== 'core') return
   coresExpanded.value = !coresExpanded.value
   if (coresExpanded.value) emit('expandAll')
   else emit('collapseAll')
@@ -644,6 +786,10 @@ const zoom1to1Title = computed(() => {
   return `Zoom to 1:1 scale (${tspx} ${u}/px)`
 })
 
+function onZoomPresetChange(e) {
+  emit('zoomPreset', e.target.value)
+}
+
 async function emitLoadedEntries(file) {
   emit('trace-reading', { name: file.name })
   try {
@@ -654,18 +800,46 @@ async function emitLoadedEntries(file) {
   }
 }
 
+async function emitPickedOpen(picked) {
+  if (!picked) return
+  if (picked.kind === 'demo') {
+    emit('demoPack', picked.pack)
+    return
+  }
+  if (picked.kind === 'demo-folder') {
+    emit('demoFolder', { xmlName: picked.xmlName, startIn: picked.startIn || null })
+    return
+  }
+  if (picked.kind === 'btf' && picked.file) await emitLoadedEntries(picked.file)
+}
+
 async function onOpenClick() {
-  const file = await pickAndReadBtf()
-  if (!file) return
-  await emitLoadedEntries(file)
+  try {
+    await emitPickedOpen(await pickAndReadOpen())
+  } catch (err) {
+    emit('file-error', err?.message || 'Failed to open file')
+  }
 }
 
 async function onFileChange(e) {
-  const file = e.target.files[0]
-  if (!file) return
-  await emitLoadedEntries(file)
+  const list = [...(e.target.files || [])]
   e.target.value = ''
+  if (!list.length) return
+  const files = new Map(list.map(f => [f.name, f]))
+  try {
+    await emitPickedOpen(await classifyPickedOpen(files))
+  } catch (err) {
+    emit('file-error', err?.message || 'Failed to open file')
+  }
 }
+
+function triggerOpen() {
+  if (useFsaOpen) onOpenClick()
+  else fileInputRef.value?.click()
+}
+
+const fileInputRef = ref(null)
+defineExpose({ triggerOpen })
 
 // ---- Responsive overflow (groups → ⋯) -------------------------------------
 const toolbarEl = ref(null)
@@ -731,52 +905,64 @@ onBeforeUnmount(() => {
 })
 
 watch(
-  () => [props.modelValue.viewMode, !!props.traceInfo, props.taskFilterActive],
+  () => [
+    props.modelValue.viewMode, !!props.traceInfo, props.taskFilterActive,
+    props.zoomPresetOptions?.length,
+  ],
   queueRecompute,
 )
 </script>
 
 <style scoped>
+/* Match desktop QToolBar: 18px icons, 4px spacing, compact padding, 3px radius. */
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 4px 8px;
+  gap: 4px;
+  padding: 2px 6px;
   background: var(--tb-bg);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   user-select: none;
   container-type: inline-size;
   container-name: toolbar;
+  font-size: 11px;
 }
 
 .tb-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 4px 7px;
-  min-width: 30px;
-  min-height: 30px;
-  border: 1px solid transparent;
-  border-radius: 4px;
+  gap: 4px;
+  padding: 3px;
+  min-width: 24px;
+  min-height: 24px;
+  border: none;
+  border-radius: 3px;
   background: transparent;
   color: var(--fg);
-  font-size: 12px;
+  font-size: inherit;
   font-family: inherit;
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
   transition: background 0.1s;
 }
+.tb-btn svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
 .tb-btn:hover {
   background: var(--tb-btn-hover);
-  border-color: var(--border);
 }
 .tb-btn.active {
   background: var(--tb-btn-active);
-  border-color: var(--accent);
   color: var(--accent);
+}
+.tb-btn.recording {
+  background: var(--tb-btn-active);
+  color: #E24B4A;
 }
 .tb-btn.disabled,
 .tb-btn:disabled {
@@ -787,14 +973,15 @@ watch(
 .tb-btn-text {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  min-width: 34px;
+  min-width: 28px;
+  padding-inline: 6px;
 }
 .tb-btn-labeled {
-  padding-inline: 8px;
+  padding-inline: 6px;
 }
 .tb-label {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: inherit;
+  font-weight: 400;
   line-height: 1;
 }
 .tb-heatmap-slash-outline {
@@ -813,15 +1000,41 @@ watch(
 
 .tb-sep {
   width: 1px;
-  height: 20px;
+  height: 18px;
   background: var(--border);
-  margin: 0 2px;
+  margin: 3px 2px;
   flex-shrink: 0;
+}
+.tb-zoom-preset {
+  height: 24px;
+  min-width: 100px;
+  max-width: 110px;
+  margin: 0;
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--tb-bg);
+  color: var(--fg);
+  font-size: inherit;
+  font-family: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.tb-zoom-preset:hover:not(:disabled) {
+  background: var(--tb-btn-hover);
+}
+.tb-zoom-preset:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.tb-overflow-panel .tb-zoom-preset {
+  max-width: none;
+  width: 100%;
 }
 .tb-group {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   flex-shrink: 0;
 }
 
@@ -917,10 +1130,10 @@ watch(
   font-weight: 700;
   font-family: inherit;
   cursor: pointer;
-  padding: 4px 6px;
-  min-width: 30px;
-  min-height: 30px;
-  border-radius: 4px;
+  padding: 3px;
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: 3px;
   white-space: nowrap;
   display: inline-flex;
   align-items: center;
@@ -933,8 +1146,8 @@ watch(
 }
 .app-name-icon :deep(svg) {
   display: block;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
 }
 .app-name-btn:hover {
   background: var(--tb-btn-hover);

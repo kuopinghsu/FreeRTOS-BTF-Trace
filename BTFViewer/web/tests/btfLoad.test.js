@@ -35,6 +35,7 @@ describe('isBtfOpenName', () => {
     assert.equal(isBtfOpenName('a.BZ2'), true)
     assert.equal(isBtfOpenName('pack.zip'), true)
     assert.equal(isBtfOpenName('a.csv'), false)
+    assert.equal(isBtfOpenName('demo.xml'), false)
   })
 })
 

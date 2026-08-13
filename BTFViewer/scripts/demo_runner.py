@@ -36,7 +36,8 @@ See ``demos/demo_8cores/demo_8cores.xml`` for a full example.
 
 Actions: ``voice``, ``audio`` / ``play``, ``wait``, ``hotkey``, ``press``, ``type``,
 ``move``, ``click``, ``scroll``, ``sweep``, ``confirm``, ``focus``, ``macro``,
-``highlight``, ``clear_highlight``, ``cursors``, ``clear_cursors``, ``zoom_range``,
+``highlight``, ``clear_highlight``, ``cursors``, ``clear_cursors``,
+``clear_bookmarks``, ``clear_annotations``, ``zoom_range``,
 ``fit_view``, ``stats_section``, ``stats_reset``, ``limit``, ``jump_wcet``, ``panel``,
 ``view_mode``, ``cpu_load``, ``analysis``, ``find``, ``settings``, ``ui``, ``demo_api``,
 ``launch`` (usually from meta + ``--launch``).
@@ -52,6 +53,8 @@ Demo API (viewer must be started with ``BTFVIEWER_DEMO_API=1``, default port 876
     <jump_wcet task="CS[27]"/>
     <limit on="true"/>
     <clear_cursors/>
+    <clear_bookmarks/>
+    <clear_annotations/>
     <clear_highlight/>
     <fit_view/>
     <panel name="stats"/>
@@ -62,6 +65,7 @@ Demo API (viewer must be started with ``BTFVIEWER_DEMO_API=1``, default port 876
     <find query="CS[27]"/>
     <find clear="true"/>
     <settings page="AI"/>
+    <settings close="true"/>
 
 ``--launch`` sets ``BTFVIEWER_DEMO_API=1`` automatically. Override with
 ``--demo-api-port`` / ``--no-demo-api``. When launching, if the preferred port
@@ -76,6 +80,12 @@ Audio files (pre-recorded narration)::
     <audio file="beep.wav" block="false"/>
     <wait_audio/>
     <stop_audio/>
+
+Language: every language uses the same folders ``text/<lang>/`` and
+``voice/<lang>/`` (see ``scripts/demo_voice.py``). XML paths stay
+``voice/<file>``; the resolver tries ``voice/<lang>/``, then flat ``voice/``,
+then ``voice/<default>/``. Packs are ``voice.json`` + ``text/*.txt`` +
+``voice/*.mp3``. Declare languages in ``<meta>`` or run ``demo_voice.py sync-xml``.
 
 Window geometry: ``detect_window`` finds the BTFViewer window (pid / title /
 frontmost), preferring the **largest** on-screen window for that process so
@@ -120,6 +130,16 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 SCRIPT_DIR = Path(__file__).resolve().parent
 BTF_ROOT = SCRIPT_DIR.parent
 REPO_ROOT = BTF_ROOT.parent
+
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from demo_voice import (  # noqa: E402
+    discover_voice_langs,
+    merge_voice_langs,
+    normalize_voice_lang,
+    pick_voice_lang,
+    voice_path_candidates,
+)
 
 MOD = "command" if sys.platform == "darwin" else "ctrl"
 
@@ -230,11 +250,29 @@ def speak(text: str, *, no_tts: bool, tts_cmd: Optional[str], tts_rate: int,
     time.sleep(min(8.0, 1.5 + len(text) / 14.0))
 
 
+def preferred_voice_lang(variables: Optional[Dict[str, str]] = None) -> str:
+    """Explicit demo language only — not the process locale.
+
+    Order: ``VOICE_LANG`` / ``LANG`` extras, then ``BTFVIEWER_DEMO_LANG``.
+    Empty means the XML ``<languages default>`` (English for demo_8cores).
+    """
+    vars_ = variables or {}
+    for cand in (
+        vars_.get("VOICE_LANG"),
+        vars_.get("LANG"),
+        os.environ.get("BTFVIEWER_DEMO_LANG"),
+    ):
+        if cand and str(cand).strip():
+            return str(cand).strip()
+    return ""
+
+
 def resolve_media_path(raw: str, variables: Dict[str, str]) -> Path:
     """Resolve an audio/media path with ${vars} and search XML_DIR / CWD / BTF.
 
     If the exact path is missing, try common audio extensions and sibling
-    ``voice/`` / ``text/`` folders (per-demo layout).
+    ``voice/`` / ``text/`` folders (per-demo layout). Language-specific clips
+    under ``voice/<lang>/`` are preferred when ``LANG`` / ``VOICE_LANG`` is set.
     """
     expanded = expand(raw, variables).strip()
     p = Path(expanded).expanduser()
@@ -245,6 +283,9 @@ def resolve_media_path(raw: str, variables: Dict[str, str]) -> Path:
         Path(variables.get("REPO", ".")),
         Path("."),
     ]
+    lang = variables.get("LANG") or variables.get("VOICE_LANG") or ""
+    default_lang = variables.get("VOICE_DEFAULT") or "en"
+    roots = voice_path_candidates(p, lang, default_lang) or [p]
 
     def _candidates(path: Path) -> List[Path]:
         out: List[Path] = [path]
@@ -301,12 +342,13 @@ def resolve_media_path(raw: str, variables: Dict[str, str]) -> Path:
         return uniq
 
     search: List[Path] = []
-    if p.is_absolute():
-        search.extend(_candidates(p))
-    else:
-        for base in bases:
-            search.extend(_candidates((base / p)))
-        search.extend(_candidates(p))
+    for rootp in roots:
+        if rootp.is_absolute():
+            search.extend(_candidates(rootp))
+        else:
+            for base in bases:
+                search.extend(_candidates((base / rootp)))
+            search.extend(_candidates(rootp))
 
     for cand in search:
         try:
@@ -1409,7 +1451,7 @@ def build_variables(root: ET.Element, xml_path: Path, extras: Dict[str, str]) ->
     }
     if meta is not None:
         for child in meta:
-            if child.tag in ("title", "description", "author"):
+            if child.tag in ("title", "description", "author", "languages"):
                 continue
             if child.tag == "var":
                 name = child.attrib.get("name", "").strip()
@@ -1423,6 +1465,39 @@ def build_variables(root: ET.Element, xml_path: Path, extras: Dict[str, str]) ->
     for _ in range(3):
         vars_ = {k: expand(v, vars_) for k, v in vars_.items()}
     return vars_
+
+
+def parse_languages(root: ET.Element) -> Dict[str, Any]:
+    wrap = root.find("languages")
+    if wrap is None:
+        meta = root.find("meta")
+        if meta is not None:
+            wrap = meta.find("languages")
+    items: List[Dict[str, str]] = []
+    default_id = "en"
+    if wrap is not None:
+        default_id = (
+            normalize_voice_lang(
+                wrap.attrib.get("default") or wrap.attrib.get("lang") or "en"
+            )
+            or "en"
+        )
+        for el in wrap.findall("language"):
+            lang_id = normalize_voice_lang(
+                el.attrib.get("id") or el.attrib.get("lang") or ""
+            )
+            if not lang_id:
+                continue
+            label = (
+                el.attrib.get("label") or el.attrib.get("name") or lang_id
+            ).strip() or lang_id
+            if not any(x["id"] == lang_id for x in items):
+                items.append({"id": lang_id, "label": label})
+    if not items:
+        items.append({"id": "en", "label": "English"})
+    if not any(x["id"] == default_id for x in items):
+        default_id = items[0]["id"]
+    return {"defaultId": default_id, "list": items}
 
 
 def parse_targets(root: ET.Element) -> Dict[str, Tuple[float, float]]:
@@ -1700,6 +1775,17 @@ class DemoRunner:
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 body = json.loads(resp.read().decode("utf-8") or "{}")
+        except urllib.error.HTTPError as exc:
+            detail = str(exc)
+            try:
+                raw = exc.read().decode("utf-8")
+                parsed = json.loads(raw or "{}")
+                detail = str(parsed.get("error") or raw or detail)
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"demo API error at {self.cfg.demo_api_url}: {detail}"
+            ) from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(
                 f"demo API unreachable at {self.cfg.demo_api_url}: {exc}\n"
@@ -1854,6 +1940,10 @@ class DemoRunner:
                 self.demo_api(payload, settle=0.5)
             elif tag == "clear_cursors":
                 self.demo_api({"op": "clear_cursors"})
+            elif tag == "clear_bookmarks":
+                self.demo_api({"op": "clear_bookmarks"})
+            elif tag == "clear_annotations":
+                self.demo_api({"op": "clear_annotations"})
             elif tag == "zoom_range":
                 payload = {
                     "op": "zoom_range",
@@ -1940,11 +2030,14 @@ class DemoRunner:
                     payload["query"] = expand(text_content(el), self.cfg.vars)
                 self.demo_api(payload, settle=0.45)
             elif tag == "settings":
-                page = expand(
-                    el.attrib.get("page", el.attrib.get("name", "Appearance")),
-                    self.cfg.vars,
-                )
-                self.demo_api({"op": "settings", "page": page}, settle=0.5)
+                payload = {"op": "settings"}
+                for key in ("page", "name", "open", "close", "action"):
+                    if key in el.attrib:
+                        payload[key] = expand(el.attrib[key], self.cfg.vars)
+                if "page" not in payload and "name" not in payload and "close" not in payload:
+                    payload["page"] = "Appearance"
+                settle = 0.5 if "close" not in el.attrib else 0.4
+                self.demo_api(payload, settle=settle)
             elif tag in ("ui", "command"):
                 payload = {"op": "ui"}
                 for k, v in el.attrib.items():
@@ -2210,6 +2303,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--interactive", action="store_true")
     ap.add_argument("--no-tts", action="store_true", help="skip <voice> TTS (still logs text)")
     ap.add_argument("--no-audio", action="store_true", help="skip <audio>/<play> clips")
+    ap.add_argument(
+        "--lang",
+        default="",
+        help="narration language id (en, zh-tw, …). Default: BTFVIEWER_DEMO_LANG, "
+             "else the XML <languages default> (en). Clips: voice/<lang>/<file>, "
+             "fallback voice/<file>.",
+    )
     ap.add_argument("--tts-cmd", default=None,
                     help='TTS command prefix; text appended as one arg (e.g. "say -r 170")')
     ap.add_argument(
@@ -2260,6 +2360,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         k, v = item.split("=", 1)
         extras[k.strip()] = v
     variables = build_variables(root, xml_path, extras)
+    langs = merge_voice_langs(
+        parse_languages(root),
+        discover_voice_langs(Path(variables.get("XML_DIR", str(xml_path.parent)))),
+    )
+    picked_lang = pick_voice_lang(
+        (args.lang or "").strip() or preferred_voice_lang(variables),
+        [item["id"] for item in langs["list"]],
+        langs["defaultId"],
+    )
+    variables["LANG"] = picked_lang
+    variables["VOICE_LANG"] = picked_lang
+    variables["VOICE_DEFAULT"] = langs["defaultId"]
     defaults = parse_defaults(root)
     if args.pause is not None:
         defaults["pause"] = args.pause
@@ -2318,7 +2430,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     log(f"demo={name!r}  xml={xml_path}")
     log(
         f"window L,T,W,H={cfg.win}  platform={platform.system()}  mod={MOD}  "
-        f"audio_block={cfg.audio_block}  demo_api={cfg.demo_api_url if demo_api_enabled else 'off'}"
+        f"audio_block={cfg.audio_block}  voice={picked_lang}  "
+        f"demo_api={cfg.demo_api_url if demo_api_enabled else 'off'}"
     )
     log("FAILSAFE: move mouse to a screen corner to abort.")
     log("Ctrl-C twice to exit the demo.")

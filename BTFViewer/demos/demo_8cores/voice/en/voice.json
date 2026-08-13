@@ -1,0 +1,7 @@
+{
+  "schema": "btf-demo-voice",
+  "version": 1,
+  "id": "en",
+  "label": "English",
+  "demo": "demo_8cores"
+}

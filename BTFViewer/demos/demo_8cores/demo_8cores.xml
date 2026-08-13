@@ -15,7 +15,7 @@
 
   Trace snapshot: demo_8cores.btf.gz (frozen copy in this demo folder;
   do not point at tracedata/example-8cores.btf.gz — that file may change).
-  Narration: text/*.txt → voice/*.mp3
+  Narration: text/{lang}/*.txt → voice/{lang}/*.mp3 (see scripts/demo_voice.py)
   TTS tip: write Free-RTOS (with hyphen) so speech engines say it correctly.
   Variables: REPO, BTF, PYTHON, MOD, XML_DIR, trace, cwd (as ${name})
   Hotkey "mod" expands to Command on macOS, Ctrl elsewhere.
@@ -25,11 +25,16 @@
   <meta>
     <title>BTFViewer demo — 8-core sample</title>
     <description>
-      Screen-capture + pre-rendered TTS. Narration sources: text/*.txt → voice/*.mp3.
+      Screen-capture + pre-rendered TTS. Narration: text/{lang}/*.txt → voice/{lang}/*.mp3.
       Trace: demo_8cores.btf.gz (frozen demo snapshot).
     </description>
     <cwd>${BTF}</cwd>
     <trace>${XML_DIR}/demo_8cores.btf.gz</trace>
+    <languages default="en">
+      <language id="en" label="English"/>
+      <language id="zh-tw" label="中文"/>
+      <language id="ja" label="日本語"/>
+    </languages>
     <launch cwd="${BTF}" cmd="${PYTHON} builds/btf_viewer.py ${trace}"/>
   </meta>
 
@@ -61,6 +66,12 @@
     <macro name="clear_cursors">
       <hotkey keys="shift+c"/>
     </macro>
+    <macro name="clear_bookmarks">
+      <hotkey keys="shift+b"/>
+    </macro>
+    <macro name="clear_annotations">
+      <hotkey keys="shift+a"/>
+    </macro>
     <macro name="place_cursor">
       <!-- params: time (seconds, e.g. 3.085) -->
       <hotkey keys="mod+g"/>
@@ -81,6 +92,9 @@
 
     <step id="1" title="Title" tags="intro">
       <focus/>
+      <clear_cursors/>
+      <clear_bookmarks/>
+      <clear_annotations/>
       <wait seconds="1" why="title hold"/>
       <audio file="${XML_DIR}/voice/01_title.mp3"/>
       <wait seconds="2"/>
@@ -108,29 +122,31 @@
       <focus/>
       <audio file="${XML_DIR}/voice/04_toolbar.mp3"/>
       <wait seconds="5.0" why="voice: icons H/V zoom to Task/Core"/>
+      <wait seconds="6.0"/>
       <view_mode mode="core"/>
-      <wait seconds="1.5" why="voice: Core view"/>
+      <wait seconds="2.0" why="voice: Core view"/>
       <view_mode mode="task"/>
       <wait seconds="1.0" why="voice: Task view"/>
       <cpu_load on="true"/>
-      <wait seconds="4.5" why="voice: Load Heatmap Chord into Analysis"/>
+      <wait seconds="1.2" why="voice: Load Heatmap Chord into Analysis"/>
       <wait seconds="5" why="voice: Analysis triage card"/>
       <panel name="stats"/>
-      <wait seconds="1.5" why="voice: right panel tabs"/>
+      <wait seconds="8.5" why="voice: right panel tabs"/>
       <panel name="find"/>
-      <wait seconds="1.2"/>
+      <wait seconds="2.0"/>
       <panel name="ai"/>
-      <wait_audio/>
+      <wait seconds="2.0"/>
       <panel name="stats"/>
+      <wait_audio/>
     </step>
 
     <step id="5" title="Task Core Load" tags="ui">
       <focus/>
       <audio file="${XML_DIR}/voice/05_views.mp3"/>
       <cpu_load on="true"/>
-      <wait seconds="1.2" why="voice: Load strip"/>
+      <wait seconds="2.0" why="voice: Load strip"/>
       <view_mode mode="core"/>
-      <wait seconds="2.0" why="voice: Core view"/>
+      <wait seconds="3.0" why="voice: Core view"/>
       <view_mode mode="task"/>
       <wait seconds="1.5" why="voice: Task view"/>
       <wait_audio/>
@@ -200,6 +216,8 @@
       <clear_cursors/>
       <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
       <wait seconds="1.5"/>
+      <wait_audio/>
+      <clear_cursors/>
     </step>
 
     <step id="13" title="Blocking Inheritance" tags="ladder">
@@ -262,10 +280,10 @@
       <focus/>
       <audio file="${XML_DIR}/voice/18_ai_setup.mp3"/>
       <panel name="ai"/>
-      <wait seconds="0.5"/>
-      <macro ref="settings"/>
-      <confirm prompt="In Settings → AI: enable Gemini, Auto-apply OFF, Test connection, OK — then continue (do not show the API key)"/>
-      <press key="esc"/>
+      <wait seconds="24.5"/>
+      <settings page="AI"/>
+      <wait_audio/>
+      <settings close="true"/>
     </step>
 
     <step id="19" title="AI Analysis Findings" tags="ai">
@@ -292,6 +310,7 @@
       <confirm prompt="Limit ON; click Explain region; verify jump inside C1–Cn — then continue"/>
       <wait ai="true" why="explain region"/>
       <limit on="false"/>
+      <clear_cursors/>
     </step>
 
     <step id="22" title="AI Migration thrash" tags="ai">

@@ -25,7 +25,7 @@ Every workflow here follows the same method. Start at the system level, let the 
 
 ## 1. Load a Trace
 
-Open a trace from the command line, through **File → Open** (`Ctrl+O`), or by dragging the file onto the window. The viewer reads `.btf`, `.btf.gz`, `.bz2`, and `.zip`. The web viewer is the self-contained `builds/btf_viewer.html`; open it in a browser and load the file the same way.
+Open a trace from the command line, through **File → Open** (`Ctrl+O`), or by dragging the file onto the window. The viewer reads `.btf`, `.btf.gz`, `.bz2`, and `.zip`. The web viewer is the self-contained `builds/btf_viewer.html`; open it in a browser and load the file the same way. For a narrated UI tour of the same analyses, see [README → Demo](README.md#demo) (`make demo` / toolbar **Demo**).
 
 ```bash
 python builds/btf_viewer.py [trace.btf]
@@ -62,7 +62,7 @@ The Statistics panel is ordered to match this ladder. After the Summary it runs 
 2. Open the Statistics section that the finding names.
 3. Click a **Max** value, a scatter point, or a heatmap cell to jump the timeline to that moment. For migration findings, open toolbar **Heatmap** or **Chord** after the table.
 4. Place cursors (`C`) around the phase you care about and enable the cursor-scope checkbox so the numbers describe only that window. Zoom the timeline first if you will use the inspector — its grid follows the **visible viewport**, not cursor-scoped Statistics.
-5. Optionally click **Investigate…**, **Root cause…**, or **Query with AI…** in the Analysis dialog (or open the **AI** tab) and have a model narrate or drill into the same findings ([§7](#7-ai-assistant-flow)).
+5. Optionally click **Investigate…**, **Root cause…**, **Verify with AI…**, **Auto investigate…**, or **Query with AI…** in the Analysis dialog (or open the **AI** tab) and have a model narrate or drill into the same findings ([§7](#7-ai-assistant-flow)).
 
 **A caution about the demo traces.** `example-8cores.btf.gz` is a concatenation of deliberate stress tests, so it triggers warnings by design. Scope to a single phase before treating any warning as a product defect.
 
@@ -398,7 +398,7 @@ Most findings only make sense inside one phase of a trace. Place two cursors aro
 | `C` | Place a cursor at the pointer (falls back to the viewport centre) |
 | `Ctrl+R` | Zoom the view to the cursor range |
 | Cursor-scope checkbox | Recompute Statistics and Analysis for C1–Cn |
-| **File → Save selection as BTF…** / web toolbar crop | Export the cursor window (prefer original BTF text; reconstruct resume/preempt + STI if source is unavailable — see [README Export](README.md#export)) |
+| **File → Save selection as BTF…** / toolbar crop | Export the cursor window (prefer original BTF text; reconstruct resume/preempt + STI if source is unavailable — see [README Export](README.md#export)) |
 
 The cursor-scope checkbox is labelled **Limit to C1–Cn** (desktop and web); it sits at the top of the Statistics panel.
 
@@ -485,8 +485,8 @@ Findings and Statistics exports describe the current cursor scope, so scope firs
 |--------|-----|
 | Findings text | **Analysis → Save as Text…** |
 | Statistics CSV/HTML | Statistics → Export (uses the default section order) |
-| Perfetto JSON | **File → Export Perfetto…**, or the `perfetto` subcommand |
-| Timeline PNG/SVG | Toolbar **Save PNG** (opens the snapshot editor) or **Save SVG** |
+| Perfetto JSON | Toolbar / **File → Export Perfetto…**, or the `perfetto` subcommand |
+| Timeline PNG/SVG | Toolbar **Snapshot** (opens the snapshot editor) or **Save SVG** |
 | Headless report | `report trace.btf --output out.html --format html` |
 
 An exported HTML report is a reasonable CI artefact because **Analysis** applies fixed triggers: load imbalance (score below 70 % or σ above 30 %), WCET and blocking candidates, the L/M/H priority pattern, thrashing (high migration rate or ping count), hot lock-bounce pairs, a tick mode other than GOOD, and any sync object with a core bounce above zero.
@@ -535,7 +535,7 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 
 ## 7. AI Assistant Flow
 
-The right-panel **AI** tab turns the findings into a narrative triage. It is worth using once Analysis Findings exist, not before — the first turn only receives the **structured findings for the current Statistics scope**, plus the span and core count (not the raw BTF stream), so prompts stay compact. The model can then call `detect_anomalies`, `investigate` (root-cause chain), `correlate_events`, `query_raw_metric`, `search_timeline`, `compare_performance` / `regression_explain` / `trigger_compare`, `check_budget`, `optimize` / `what_if` / `optimize_experiment`, `analyze_traces`, `bookmark_finding`, `investigation_replay`, or `generate_report`. An empty or mis-scoped Statistics panel produces a confident answer about nothing. Panel usage: [README.md → AI Assistant](README.md#ai-assistant). Setup, tools, **workflows / use cases**, and troubleshooting: [AI.md](AI.md) ([Workflows and use cases](AI.md#workflows-and-use-cases)). Ask in this order: triage overall findings → drill into the named metric (latency, WCET, inversion) → request mitigations after the timeline agrees (§7.2).
+The right-panel **AI** tab turns the findings into a narrative triage. It is worth using once Analysis Findings exist, not before — the first turn only receives the **structured findings for the current Statistics scope**, plus the span and core count (not the raw BTF stream), so prompts stay compact. The model can then call the viewer tools in [AI.md → GUI tools](AI.md#gui-tools) (`investigate`, `correlate_events`, `query_raw_metric`, `find_critical_path`, `detect_priority_inversion`, `what_if` / `optimize_experiment`, `baseline_score`, `recommend_experiments`, `compare_tasks`, `bookmark_finding`, `export_investigation`, …). An empty or mis-scoped Statistics panel produces a confident answer about nothing. Panel usage: [README.md → AI Assistant](README.md#ai-assistant). Setup, tools, **workflows / use cases**, and troubleshooting: [AI.md](AI.md) ([Workflows and use cases](AI.md#workflows-and-use-cases)). Ask in this order: triage overall findings → drill into the named metric (latency, WCET, inversion) → request mitigations after the timeline agrees (§7.2).
 
 The flow from trace to verified answer:
 
@@ -543,7 +543,7 @@ The flow from trace to verified answer:
 ① Load trace + open Statistics
 ② (Optional) Place cursors → limit Statistics to the cursor range
 ③ Toolbar Analysis / Statistics findings for that scope
-④ Analysis → Investigate… / Root cause… / Query with AI…  (or AI tab → template / free-form Ask)
+④ Analysis → Investigate… / Root cause… / Verify with AI… / Auto investigate… / Query with AI…  (or AI tab → template / free-form Ask)
 ⑤ Context = Analysis Findings (+ span, cores, scope), or Trace Compare CSV for that template
 ⑥ Endpoint: OpenAI-compatible /chat/completions (Ollama, OpenAI, Gemini, or Custom)
 ⑦ Reply (jump:TIME + confidence; Markdown tables; optional mermaid; optional GUI tool cards)
@@ -562,7 +562,7 @@ Configuration is per preset, and the desktop and web viewers work the same way a
 | Authentication | **None (local)** / **API key** / **Sign in** (opens vendor page; paste the key). Panel chip: Local / Key saved / Needs API key / Needs sign-in / Signed in. 401 keeps Sign in / Settings CTAs until a successful turn | Same (`VITE_*` env keys) |
 | Self-signed TLS | **Allow self-signed TLS** per preset (desktop urllib skips certificate checks) | Same setting is stored; browsers still verify — trust the cert, use `http://`, or use Desktop |
 | Verify | Refresh the **Model** list, open the Model dropdown to pick a served id, then **Test connection** (chat probe, 120s). `GET /models` succeeding does not mean chat is ready — first load can be slow. Gemini tool follow-ups need a thought signature — retry a 400 that mentions `thought_signature` | Same |
-| GUI tools | **Auto-apply GUI actions** off (default) → Apply / Skip / Undo in chat, plus **Apply GUI actions** under the log. `query_raw_metric` / `search_timeline` / `trigger_compare` run immediately (read-only). `add_annotation` / `export_report` / `clear_marks` / `reset_view` follow Apply. **Ctrl/Cmd+Z** also undoes cursors/marks after Apply. Chat timeout 120s. Small models without native tools may emit ` ```btftool ` fences instead. | Same |
+| GUI tools | **Auto-apply GUI actions** off (default) → Apply / Skip / Undo in chat, plus **Apply GUI actions** under the log. Read-only tools (`query_raw_metric`, `search_timeline`, `trigger_compare`, `investigate`, `what_if`, `find_critical_path`, … — full list in [AI.md GUI tools](AI.md#gui-tools)) run immediately. Mutating GUI tools (`set_cursors`, `add_annotation`, `bookmark_finding`, `clear_marks`, `reset_view`, …) wait for Apply. `export_report` / `export_investigation` open a save dialog. **Ctrl/Cmd+Z** also undoes cursors/marks after Apply. Chat timeout 120s. Small models without native tools may emit ` ```btftool ` fences instead. | Same |
 | Share a setup | **Import…** a JSON file (`examples/ai/ollama.json`, `gemini.json`, `openai.json`, `deepseek.json`, `grok.json`, `presets.json`) | Same |
 | Show panel | **View → Show AI Assistant** / Display settings | Display → AI Assistant panel |
 
@@ -576,6 +576,8 @@ Ask in the same order as the [top-down ladder](#2-top-down-analysis-ladder), and
 |------:|----------------|-------------------|
 | 1 | **Analysis Findings** or **Triage findings** | Open each named Statistics section |
 | — | **Investigate** / **Root cause** (tools + cursors) | Apply GUI cards; click `jump:TIME`; confirm confidence vs timeline |
+| — | **Verify finding** / **Auto investigate** (Findings buttons) | Evidence panel; Investigation plan |
+| — | **Explain region** (≥2 cursors; **Limit to C1–Cn**) | Only `jump:TIME` inside C1–Cn |
 | — | **What-if** / **Optimize** | Heuristic slice-replay / ranked experiments ([AI.md](AI.md#what-if-and-optimize-workflow)); verify on timeline before firmware changes |
 | — | **Task profile** / **Diagnostic report** | Hottest task metrics; optional `export_report` |
 | — | **Trace Compare** (2+ tabs; pick if 3+) | Trace Compare pages / Statistics on both builds |

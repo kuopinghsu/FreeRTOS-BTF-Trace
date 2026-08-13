@@ -284,10 +284,7 @@ import StiTooltip  from './StiTooltip.vue'
 import SegmentTooltip from './SegmentTooltip.vue'
 import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawRangeSelect, drawRangeSelectVertical, drawMeasureRuler, drawMeasureRulerVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, drawFindHits, drawFindHitsVertical, RULER_H, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange, taskPassesRowFilter, filteredCoreViewTasks, coreViewTaskFilterActive } from '../renderer/TimelineRenderer.js'
 import { getTimelineLayout, setTimelineLayout } from '../utils/timelineLayout.js'
-
-function layout() {
-  return getTimelineLayout()
-}
+import { buildZoomPresetOptions, matchZoomPresetValue } from '../utils/zoomPresets.js'
 import { renderToSvg } from '../renderer/SvgExporter.js'
 import { captureLabelColumnBlob, captureColumnHeaderBlob } from '../renderer/labelColumnCapture.js'
 import { InteractionHandler } from '../renderer/InteractionHandler.js'
@@ -305,6 +302,10 @@ import {
   packRowLayoutWasm,
   wasmAccelReady,
 } from '../renderer/wasmAccel.js'
+
+function layout() {
+  return getTimelineLayout()
+}
 
 // ---- Props & emits -------------------------------------------------------
 const props = defineProps({
@@ -1451,10 +1452,16 @@ function zoom1to1(wasFit = false) {
   const lo = props.trace.timeMin >= 0 ? Math.max(0, props.trace.timeMin) : props.trace.timeMin
   const hi = props.trace.timeMax
   const centerNs = wasFit ? lo : getViewportCenter()
-  const axisPx = orientation.value === 'v'
+  applyCenteredSpan(lo, hi, centerNs, Math.max(1, timeAxisPx()) * tspx)
+}
+
+function timeAxisPx() {
+  return orientation.value === 'v'
     ? Math.max(1, viewport.canvasH)
     : Math.max(1, viewport.canvasW)
-  const span = axisPx * tspx
+}
+
+function applyCenteredSpan(lo, hi, centerNs, span) {
   let timeStart = centerNs - span / 2
   let timeEnd = centerNs + span / 2
   if (timeStart < lo) {
@@ -1471,6 +1478,38 @@ function zoom1to1(wasFit = false) {
   viewport.timeEnd = timeEnd
   emitViewportChange()
   scheduleRender()
+}
+
+/** Percentage of the full trace that should be visible (desktop zoom-preset combo). */
+function zoomToPercent(pct) {
+  if (!props.trace) return
+  if (pct == null || pct >= 100) {
+    fitToTrace()
+    return
+  }
+  const lo = props.trace.timeMin >= 0 ? Math.max(0, props.trace.timeMin) : props.trace.timeMin
+  const hi = props.trace.timeMax
+  const full = Math.max(1, hi - lo)
+  const axis = timeAxisPx()
+  const minTpp = layout().timescalePerPxDefault
+  const fitTpp = full / axis
+  let tpp = fitTpp * Number(pct) / 100
+  tpp = Math.max(minTpp, Math.min(tpp, fitTpp))
+  applyCenteredSpan(lo, hi, getViewportCenter(), axis * tpp)
+}
+
+function getZoomPresetSnapshot() {
+  const options = buildZoomPresetOptions(0, 0)
+  if (!props.trace) return { options, value: 'fit' }
+  const lo = props.trace.timeMin >= 0 ? Math.max(0, props.trace.timeMin) : props.trace.timeMin
+  const hi = props.trace.timeMax
+  const full = Math.max(1, hi - lo)
+  const axis = timeAxisPx()
+  const minTpp = layout().timescalePerPxDefault
+  const fitTpp = full / axis
+  const opts = buildZoomPresetOptions(fitTpp, minTpp)
+  const span = Math.max(0, viewport.timeEnd - viewport.timeStart)
+  return { options: opts, value: matchZoomPresetValue(span / full, opts) }
 }
 
 function jumpToTraceStart() {
@@ -1848,6 +1887,7 @@ function getViewport() { return { ...viewport } }
 defineExpose({
   fitToTrace, applyViewport, applyTraceViewport, ensureTraceViewport, beginLoadSettle, scheduleRender,
   zoomCenter, expandAll, collapseAll, expandCoresForMergeKeys, jumpToNs, zoomToTimeRange, zoomToCursorRange, zoom1to1,
+  zoomToPercent, getZoomPresetSnapshot,
   jumpToTraceStart, jumpToTraceEnd, jumpSegmentBoundary, scrollTimeAxis, scrollRowAxis,
   placeCursorAtCenter, placeCursorAtTime, removeNearestCursorAt, clearAllCursorsViaHandler,
   getViewport, getViewportCenter, getCoreAtViewportCenter, scrollToTask, expandCore, scrollToIntervalRow, scrollToStiChannel, scrollToSegmentIfNeeded,
