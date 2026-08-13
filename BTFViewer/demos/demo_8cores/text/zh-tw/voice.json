@@ -1,0 +1,7 @@
+{
+  "schema": "btf-demo-voice",
+  "version": 1,
+  "id": "zh-tw",
+  "label": "繁體中文",
+  "demo": "demo_8cores"
+}
