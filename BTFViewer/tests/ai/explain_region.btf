@@ -1,0 +1,3 @@
+#version 2.2.0
+#scenario explain_region
+#comment Offline AI benchmark fixture (not a measured FreeRTOS capture).

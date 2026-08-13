@@ -56,13 +56,14 @@ FreeRTOS-Kernel/
 trace.bin
 build
 
-# Keep committed small examples in tracedata/ and demo snapshots via negation.
+# Keep committed small examples in tracedata/, demo snapshots, and AI fixtures.
 *.btf
 *.vcd
 !tracedata/*.btf
 !tracedata/*.vcd
 !BTFViewer/demos/**/*.btf
 !BTFViewer/demos/**/*.btf.gz
+!BTFViewer/tests/ai/*.btf
 tracedata/trace.*
 
 # BTF viewer runtime settings (user-local, not shared)

@@ -1,0 +1,3 @@
+#version 2.2.0
+#scenario deadline_miss
+#comment Offline AI benchmark fixture (not a measured FreeRTOS capture).
