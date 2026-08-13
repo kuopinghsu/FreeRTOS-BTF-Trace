@@ -1,0 +1,183 @@
+{
+  "schema": "btf-ai-benchmark",
+  "version": 1,
+  "description": "Expected-facts cases for offline ai-test (and future live model runs). Traces sit next to this file.",
+  "cases": [
+    {
+      "id": "migration_thrash",
+      "trace": "migration_thrash.btf",
+      "question": "Why is CS[22] bouncing between cores?",
+      "expected": {
+        "finding_types": ["migration", "thrash"],
+        "tasks": ["CS[22]"],
+        "root_cause_class": "affinity",
+        "evidence": { "required_metrics": ["migrations"] },
+        "allowed_tools": ["detect_anomalies", "investigate", "correlate_events", "query_raw_metric"],
+        "forbidden": {
+          "invented_task_names": true,
+          "out_of_scope_timestamps": true
+        },
+        "pass_under": 70
+      },
+      "catalog": {
+        "tasks": ["CS[22]", "Idle[0]"],
+        "times": [1083000],
+        "cursor_lo": 1000000,
+        "cursor_hi": 1200000
+      },
+      "tools": ["investigate", "correlate_events", "query_raw_metric"],
+      "response": "CS[22] shows migration thrash around jump:1083000. Migrations bounce Core_0 ↔ Core_1; likely missing affinity. Confidence: Medium."
+    },
+    {
+      "id": "mutex_contention",
+      "trace": "mutex_contention.btf",
+      "question": "Why did TASK_A[1] stall?",
+      "expected": {
+        "finding_types": ["block", "mutex"],
+        "tasks": ["TASK_A[1]"],
+        "root_cause_class": "contention",
+        "evidence": { "required_metrics": ["blocking"] },
+        "allowed_tools": ["investigate", "query_raw_metric", "correlate_events", "detect_anomalies"],
+        "forbidden": {
+          "invented_task_names": true,
+          "out_of_scope_timestamps": true
+        },
+        "pass_under": 70
+      },
+      "catalog": {
+        "tasks": ["TASK_A[1]", "TASK_B[2]"],
+        "times": [1500000],
+        "cursor_lo": 1000000,
+        "cursor_hi": 2000000
+      },
+      "tools": ["investigate", "query_raw_metric"],
+      "response": "TASK_A[1] blocking increased; mutex contention with TASK_B[2] around jump:1500000. Confidence: High."
+    },
+    {
+      "id": "priority_inversion",
+      "trace": "priority_inversion.btf",
+      "question": "Is there a priority inversion on the shared mutex?",
+      "expected": {
+        "finding_types": ["inversion", "priority"],
+        "tasks": ["High[3]"],
+        "root_cause_class": "inversion",
+        "evidence": { "required_metrics": ["priority_inheritance"] },
+        "allowed_tools": ["detect_priority_inversion", "investigate", "query_raw_metric", "find_critical_path"],
+        "forbidden": {
+          "invented_task_names": true,
+          "out_of_scope_timestamps": true
+        },
+        "pass_under": 70
+      },
+      "catalog": {
+        "tasks": ["Low[1]", "Med[2]", "High[3]"],
+        "times": [2400],
+        "cursor_lo": 1000,
+        "cursor_hi": 4000
+      },
+      "tools": ["detect_priority_inversion", "query_raw_metric", "find_critical_path"],
+      "response": "Priority inversion: High[3] waits while Med[2] runs and Low[1] holds the mutex; priority_inheritance at jump:2400. Confidence: High."
+    },
+    {
+      "id": "deadline_miss",
+      "trace": "deadline_miss.btf",
+      "question": "Did Worker[10] miss its deadline?",
+      "expected": {
+        "finding_types": ["deadline", "wcet"],
+        "tasks": ["Worker[10]"],
+        "root_cause_class": "deadline",
+        "evidence": { "required_metrics": ["execution"] },
+        "allowed_tools": ["investigate", "check_budget", "query_raw_metric", "detect_anomalies"],
+        "forbidden": {
+          "invented_task_names": true,
+          "out_of_scope_timestamps": true
+        },
+        "pass_under": 70
+      },
+      "catalog": {
+        "tasks": ["Worker[10]", "Idle[0]"],
+        "times": [3000],
+        "cursor_lo": 1000,
+        "cursor_hi": 8000
+      },
+      "tools": ["check_budget", "query_raw_metric"],
+      "response": "Worker[10] WCET / execution slice at jump:3000 exceeds the configured deadline. Confidence: High."
+    },
+    {
+      "id": "load_imbalance",
+      "trace": "load_imbalance.btf",
+      "question": "Why is SMP load so uneven?",
+      "expected": {
+        "finding_types": ["imbalance", "load"],
+        "tasks": ["Hot[5]"],
+        "root_cause_class": "placement",
+        "evidence": { "required_metrics": ["load"] },
+        "allowed_tools": ["detect_anomalies", "investigate", "query_raw_metric"],
+        "forbidden": {
+          "invented_task_names": true,
+          "out_of_scope_timestamps": true
+        },
+        "pass_under": 70
+      },
+      "catalog": {
+        "tasks": ["Hot[5]", "Idle[1]"],
+        "times": [2000],
+        "cursor_lo": 500,
+        "cursor_hi": 5000
+      },
+      "tools": ["detect_anomalies", "investigate"],
+      "response": "Load imbalance: Hot[5] saturates Core_0 around jump:2000 while Core_1 stays idle. Placement / affinity. Confidence: Medium."
+    },
+    {
+      "id": "trace_regression",
+      "trace": "trace_regression.btf",
+      "baseline_trace": "load_imbalance.btf",
+      "question": "What regressed versus the previous build?",
+      "expected": {
+        "finding_types": ["regression", "migration"],
+        "tasks": ["Hot[5]"],
+        "root_cause_class": "regression",
+        "evidence": { "required_metrics": ["migrations"] },
+        "allowed_tools": ["compare_performance", "regression_explain", "investigate"],
+        "forbidden": {
+          "invented_task_names": true,
+          "out_of_scope_timestamps": true
+        },
+        "pass_under": 70
+      },
+      "catalog": {
+        "tasks": ["Hot[5]", "Idle[1]"],
+        "times": [2100],
+        "cursor_lo": 500,
+        "cursor_hi": 5000
+      },
+      "tools": ["compare_performance", "regression_explain"],
+      "response": "Regression: Hot[5] migrations and WCET grew versus the baseline around jump:2100. Confidence: Medium."
+    },
+    {
+      "id": "explain_region",
+      "trace": "explain_region.btf",
+      "question": "What happened inside the C1–Cn cursor window?",
+      "expected": {
+        "finding_types": ["latency", "block"],
+        "tasks": ["TaskA[7]"],
+        "root_cause_class": "blocking",
+        "evidence": { "required_metrics": ["blocking"] },
+        "allowed_tools": ["investigate", "correlate_events", "search_timeline", "query_raw_metric"],
+        "forbidden": {
+          "invented_task_names": true,
+          "out_of_scope_timestamps": true
+        },
+        "pass_under": 70
+      },
+      "catalog": {
+        "tasks": ["TaskA[7]", "TaskB[8]"],
+        "times": [1500],
+        "cursor_lo": 1000,
+        "cursor_hi": 2000
+      },
+      "tools": ["investigate", "correlate_events", "search_timeline"],
+      "response": "Inside the cursor window TaskA[7] hits a blocking latency stall at jump:1500 (mutex wait). Stay in-window; Confidence: Medium."
+    }
+  ]
+}
