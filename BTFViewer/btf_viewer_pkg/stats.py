@@ -63,6 +63,7 @@ from .timeline_util import (  # noqa: F401 — star-import skips leading _
 from .graphics_items import *  # noqa: F403,F401
 from .scene import *  # noqa: F403,F401
 from .view import *  # noqa: F403,F401
+from .ai_case import EXPLAIN_LEVELS
 from .ai_investigation import (
     append_migration_burst_anomaly,
     append_wcet_anomaly_finding,
@@ -6972,7 +6973,7 @@ class _AnalysisFindingsDialog(QDialog):
         note = QLabel(
             "Heuristic summary of load balance, WCET, blocking, thrashing, "
             "deadlines, tick health, and sync.\n"
-            "Select a finding before Verify or Auto investigate."
+            "Select a finding before Verify, Explain, or Auto investigate."
         )
         note.setWordWrap(True)
         note.setObjectName("analysisNote")
@@ -7068,6 +7069,37 @@ class _AnalysisFindingsDialog(QDialog):
                     ai_enabled, t))
             return btn
 
+        def _make_explain_btn() -> QToolButton:
+            btn = QToolButton()
+            btn.setText("Explain…")
+            btn.setFont(ui_font)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setMinimumHeight(max(28, int(round(ui_pt * 3.2))))
+            btn.setSizePolicy(
+                QSizePolicy.Policy.Preferred,
+                QSizePolicy.Policy.Fixed,
+            )
+            fm = btn.fontMetrics()
+            btn.setMinimumWidth(fm.horizontalAdvance("Explain…") + 36)
+            btn.setToolTip(
+                "Quick / Technical / Deep explanation of the selected finding"
+                if ai_enabled else "Enable AI Assistant in Settings → AI"
+            )
+            btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            btn.setStyleSheet(
+                f"QToolButton {{ padding: 7px 16px; border-radius: 6px;"
+                f" font-size: {ui_fs}; }}"
+            )
+            menu = QMenu(btn)
+            for level in EXPLAIN_LEVELS:
+                act = menu.addAction(str(level).title())
+                act.triggered.connect(
+                    lambda _=False, lv=level: self._query_with_ai(
+                        ai_enabled, "explain_finding", level=lv)
+                )
+            btn.setMenu(menu)
+            return btn
+
         ai_label = QLabel("Ask AI")
         ai_label.setStyleSheet(
             f"color: #8a8a8a; font-size: {ui_fs}; font-weight: 600;"
@@ -7097,6 +7129,7 @@ class _AnalysisFindingsDialog(QDialog):
                 "Enable AI Assistant in Settings → AI",
                 "verify",
             ),
+            _make_explain_btn(),
             _make_ai_btn(
                 "Auto investigate…",
                 "Run the automatic investigate → correlate → critical-path → "
@@ -7172,11 +7205,15 @@ class _AnalysisFindingsDialog(QDialog):
         if self.width() < footer_w:
             self.resize(footer_w, self.height())
 
-    def _query_with_ai(self, ai_enabled: bool, template_id: str = "findings") -> None:
+    def _query_with_ai(
+        self, ai_enabled: bool, template_id: str = "findings",
+        *, level: str = "",
+    ) -> None:
         self.wants_ai_query = True
         self.wants_ai_template = template_id or "findings"
         self.wants_ai_finding_id = ""
-        if template_id in ("verify", "auto_investigate"):
+        self.wants_ai_level = str(level or "")
+        if template_id in ("verify", "auto_investigate", "explain_finding"):
             item = self._list_w.currentItem()
             if item is not None:
                 self.wants_ai_finding_id = str(

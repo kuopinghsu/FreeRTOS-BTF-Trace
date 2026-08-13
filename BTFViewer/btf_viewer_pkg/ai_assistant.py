@@ -11,6 +11,7 @@ import os
 import re
 import ssl
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -39,6 +40,7 @@ from .ai_tools import (
     empty_chat_completion_error,
     format_tool_result_content,
     is_export_tool,
+    is_query_tool,
     max_tool_rounds,
     merge_tool_calls,
     assistant_message_text,
@@ -57,6 +59,7 @@ from .ai_tools import (
     validate_tool_call,
 )
 from .ai_investigation import (
+    EVIDENCE_PANEL_TOOLS,
     build_investigation_package,
     complete_investigation_plan,
     default_investigation_plan,
@@ -67,6 +70,33 @@ from .ai_investigation import (
     investigation_tree_mermaid,
     is_agent_template,
     mark_plan_steps_from_tools,
+    parse_btf_hyp_href,
+)
+from .ai_case import (
+    INVESTIGATION_MODE_LABELS,
+    INVESTIGATION_MODES,
+    accumulate_cost,
+    build_validation_catalog,
+    builtin_investigation_templates,
+    chat_usage_from_response,
+    classify_trace_privacy,
+    compare_hypotheses,
+    dump_user_investigation_templates,
+    empty_cost_meter,
+    format_capability_report,
+    format_confidence_evolution,
+    format_cost_meter,
+    format_privacy_chip,
+    status_with_cost,
+    infer_model_capability,
+    investigation_mode_plan,
+    investigation_mode_prompt,
+    investigation_template_prompt,
+    new_user_investigation_template,
+    parse_user_investigation_templates,
+    set_hypothesis_status,
+    update_case_from_tool,
+    validate_ai_response,
 )
 from .html_report import btf_html_report_document
 
@@ -426,6 +456,17 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "should the engineer measure next?",
     ),
     (
+        "explain_finding",
+        "Explain finding",
+        "Explain the selected Analysis Finding. Call explain_finding("
+        "finding_id=ID, level=LEVEL) first (use finding_id and level= from "
+        "the user message; levels: quick, technical, deep; default "
+        "technical). Then add jump:TIME "
+        "evidence from investigate or correlate_events if the explanation "
+        "is still thin. Finish with: Summary, What it means, Evidence, "
+        "What would disprove this, and one next check.",
+    ),
+    (
         "auto_investigate",
         "Auto investigate",
         "Automatically investigate and confirm the top finding end-to-end. "
@@ -441,7 +482,7 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
     ),
 )
 
-# Always-visible chips (one row). Keep in sync with web/src/utils/ollamaClient.js.
+# Always-visible wrapping chips. Keep in sync with web/src/utils/ollamaClient.js.
 AI_TEMPLATE_PRIMARY_IDS: Tuple[str, ...] = (
     "investigate",
     "findings",
@@ -452,7 +493,7 @@ AI_TEMPLATE_PRIMARY_IDS: Tuple[str, ...] = (
 # Overflow menu groups for the remaining templates (ids must cover every
 # AI_TEMPLATE_QUESTIONS entry that is not in AI_TEMPLATE_PRIMARY_IDS).
 AI_TEMPLATE_MENU_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Diagnose", ("root_cause", "verify", "triage", "diagnostic_report")),
+    ("Diagnose", ("root_cause", "verify", "explain_finding", "triage", "diagnostic_report")),
     ("Compare", (AI_COMPARE_TEMPLATE_ID,)),
     (
         "Metrics",
@@ -1312,8 +1353,9 @@ def _md_inline_to_html_escaped(text: str) -> str:
             if (
                 low.startswith("http://")
                 or low.startswith("https://")
-                or                 low.startswith("btfjump:")
+                or low.startswith("btfjump:")
                 or low.startswith("btfhighlight:")
+                or low.startswith("btfhyp:")
                 or low.startswith("mailto:")
             ):
                 buf.append(
@@ -2159,7 +2201,7 @@ def ai_chat_completion(
 ) -> Dict[str, Any]:
     """One OpenAI-compatible ``/chat/completions`` round (non-streaming).
 
-    Returns ``{"content", "tool_calls", "message"}``.
+    Returns ``{"content", "tool_calls", "message", "usage"}``.
     """
     url_base = normalize_ai_base_url(base_url)
     url = url_base + "/chat/completions"
@@ -2332,7 +2374,12 @@ def ai_chat_completion(
         raise RuntimeError(
             empty_chat_completion_error(body, had_tools=bool(use_tools))
         )
-    return {"content": content, "tool_calls": calls, "message": msg}
+    return {
+        "content": content,
+        "tool_calls": calls,
+        "message": msg,
+        "usage": chat_usage_from_response(body),
+    }
 
 
 def ai_chat(
@@ -2558,7 +2605,115 @@ def ai_test_connection(
         if isinstance(msg, dict):
             reply = str(msg.get("content") or "").strip()
     note = f" Probe reply: {reply[:40]!r}." if reply else ""
-    return f"Connected to {url_base}. Model {model_name} ready{listing_note}.{note}"
+    cap = infer_model_capability(model_name, chat_ok=True)
+    cap_txt = format_capability_report(cap)
+    return (
+        f"Connected to {url_base}. Model {model_name} ready{listing_note}.{note}"
+        + (f"\n\n{cap_txt}" if cap_txt else "")
+    )
+
+
+class _FlowLayout(QLayout):
+    """Wrap chips like web ``display:flex; flex-wrap:wrap; gap:4px``."""
+
+    def __init__(self, parent: Optional[QWidget] = None, spacing: int = 4) -> None:
+        super().__init__(parent)
+        self._items: List[Any] = []
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(int(spacing))
+
+    def addItem(self, item) -> None:  # noqa: N802
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int):  # noqa: N802
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index: int):  # noqa: N802
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self):  # noqa: N802
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        return self._do_layout(QRect(0, 0, int(width), 0), True)
+
+    def setGeometry(self, rect) -> None:  # noqa: N802
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:  # noqa: N802
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        size += QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def _do_layout(self, rect, test_only: bool) -> int:
+        left, top, right, bottom = self.getContentsMargins()
+        effective = rect.adjusted(+left, +top, -right, -bottom)
+        x = effective.x()
+        y = effective.y()
+        line_height = 0
+        space = self.spacing()
+        for item in self._items:
+            hint = item.sizeHint()
+            next_x = x + hint.width() + space
+            if line_height > 0 and next_x - space > effective.right() + 1:
+                x = effective.x()
+                y = y + line_height + space
+                next_x = x + hint.width() + space
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x = next_x
+            line_height = max(line_height, hint.height())
+        return y + line_height - rect.y() + bottom
+
+
+def _add_ai_menu_heading(menu: QMenu, label: str) -> None:
+    """Muted group label matching web ``.ai-more-heading`` (not native addSection)."""
+    hdr = menu.addAction(label)
+    hdr.setEnabled(False)
+
+
+# Chip / More-menu colors match web `.ai-tpl-btn` / `.ai-more-item` (enabled vs disabled).
+_AI_TPL_DISABLED_COLOR = "#8a96a8"
+_AI_TPL_BTN_STYLE = (
+    "QPushButton {"
+    "  color: #e8eef7;"
+    "  background: #243044;"
+    "  border: 1px solid #3a4658;"
+    "  border-radius: 6px;"
+    "  padding: 4px 8px;"
+    "}"
+    "QPushButton:disabled {"
+    f"  color: {_AI_TPL_DISABLED_COLOR};"
+    "  background: #1a2230;"
+    "  border-color: #3a4658;"
+    "}"
+    "QPushButton:hover:!disabled {"
+    "  border-color: #2a6fb2;"
+    "}"
+)
+_AI_MORE_MENU_STYLE = (
+    "QMenu::item { color: #e8eef7; padding: 5px 10px; }"
+    f"QMenu::item:disabled {{ color: {_AI_TPL_DISABLED_COLOR}; }}"
+    "QMenu::item:selected:enabled { background: rgba(91, 155, 213, 0.18); }"
+)
 
 
 def _qtextline_cursor_x(line, pos: int) -> float:
@@ -2731,6 +2886,8 @@ def create_ai_assistant_panel(
             self._tool_round = 0
             self._pending_batches: Dict[str, Dict[str, Any]] = {}
             self._batch_seq = 0
+            self._cost_meter: Dict[str, Any] = empty_cost_meter()
+            self._cost_started = 0.0
 
             root = QVBoxLayout(self)
             root.setContentsMargins(6, 6, 6, 6)
@@ -2756,6 +2913,22 @@ def create_ai_assistant_panel(
             )
             self._auth_chip.clicked.connect(self._on_auth_chip)
             title_row.addWidget(self._auth_chip)
+            self._privacy_chip = QPushButton("")
+            self._privacy_chip.setObjectName("ai_privacy_chip")
+            self._privacy_chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._privacy_chip.setToolTip(
+                "Trace privacy for the current AI endpoint")
+            self._privacy_chip.setStyleSheet(
+                "QPushButton#ai_privacy_chip {"
+                "  background: transparent; color: #8b98a8;"
+                "  border: 1px solid #3a4658; border-radius: 10px;"
+                "  padding: 1px 8px; font-size: 11px;"
+                "}"
+                "QPushButton#ai_privacy_chip:hover { color: #dbe2ea; "
+                "border-color: #5b9bd5; }"
+            )
+            self._privacy_chip.clicked.connect(self._on_auth_chip)
+            title_row.addWidget(self._privacy_chip)
             title_row.addStretch(1)
             root.addLayout(title_row)
 
@@ -2859,11 +3032,32 @@ def create_ai_assistant_panel(
             self._plan_host.hide()
             root.addWidget(self._plan_host)
 
+            mode_host = QWidget()
+            mode_host.setObjectName("aiModes")
+            mode_host.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+            mode_host.setStyleSheet(_AI_TPL_BTN_STYLE)
+            mode_row = _FlowLayout(mode_host, spacing=4)
+            self._mode_btns: List[QPushButton] = []
+            for mid in INVESTIGATION_MODES:
+                btn = QPushButton(INVESTIGATION_MODE_LABELS.get(mid, mid.title()))
+                btn.setToolTip(investigation_mode_prompt(mid))
+                btn.setSizePolicy(
+                    QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+                btn.setMinimumHeight(24)
+                btn.clicked.connect(
+                    lambda _=False, m=mid: self._run_investigation_mode(m)
+                )
+                mode_row.addWidget(btn)
+                self._mode_btns.append(btn)
+            root.addWidget(mode_host)
+
             tpl_host = QWidget()
             tpl_host.setObjectName("aiTemplates")
-            tpl_row = QHBoxLayout(tpl_host)
-            tpl_row.setContentsMargins(0, 0, 0, 0)
-            tpl_row.setSpacing(4)
+            tpl_host.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+            tpl_host.setStyleSheet(_AI_TPL_BTN_STYLE)
+            tpl_row = _FlowLayout(tpl_host, spacing=4)
 
             self._template_btns: List[QPushButton] = []
             self._template_actions: Dict[str, Any] = {}
@@ -2901,14 +3095,9 @@ def create_ai_assistant_panel(
             more_btn.setSizePolicy(
                 QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             more_menu = QMenu(more_btn)
+            more_menu.setStyleSheet(_AI_MORE_MENU_STYLE)
             for group_label, ids in AI_TEMPLATE_MENU_GROUPS:
-                add_section = getattr(more_menu, "addSection", None)
-                if callable(add_section):
-                    add_section(group_label)
-                else:
-                    more_menu.addSeparator()
-                    hdr = more_menu.addAction(group_label)
-                    hdr.setEnabled(False)
+                _add_ai_menu_heading(more_menu, group_label)
                 for _tid in ids:
                     item = ai_template_by_id(_tid)
                     if item is None:
@@ -2921,9 +3110,13 @@ def create_ai_assistant_panel(
                     )
                     self._template_actions[_tid] = act
                     _bind_template_ctrl(_tid, act)
+            _add_ai_menu_heading(more_menu, "Investigations")
+            self._investigation_template_actions: Dict[str, Any] = {}
+            self._more_menu = more_menu
+            self._save_investigation_template_action = None
+            self._rebuild_investigation_menu()
             more_btn.setMenu(more_menu)
             tpl_row.addWidget(more_btn)
-            tpl_row.addStretch(1)
             root.addWidget(tpl_host)
 
             self.refresh_template_availability()
@@ -3079,6 +3272,11 @@ def create_ai_assistant_panel(
                 preset_id=active["preset"],
             )
             self._auth_chip.setText(f"{label} · {st['label']}")
+            priv = classify_trace_privacy(
+                endpoint_is_local=is_local_ai_host(active.get("base_url", "")),
+            )
+            self._privacy_chip.setText(format_privacy_chip(priv))
+            self._privacy_chip.setToolTip(str(priv.get("note") or ""))
             needs = bool(st["needs_auth"]) or bool(getattr(self, "_auth_forced", False))
             self._auth_cta.setVisible(needs)
             url = ai_preset_signin_url(active["preset"], active.get("base_url", ""))
@@ -3090,15 +3288,42 @@ def create_ai_assistant_panel(
         def _on_auth_chip(self) -> None:
             self._open_settings()
 
+        def _mark_cost_start(self) -> None:
+            self._cost_started = time.monotonic()
+
+        def _set_status(self, msg: str) -> None:
+            self._status.setText(status_with_cost(msg, self._cost_meter))
+
+        def _record_turn_usage(self, turn: dict, calls: Sequence[Any]) -> None:
+            usage = turn.get("usage") if isinstance(turn, dict) else {}
+            if not isinstance(usage, dict):
+                usage = {}
+            names = [
+                str(c.get("name") or "")
+                for c in (calls or [])
+                if isinstance(c, dict)
+            ]
+            elapsed = 0.0
+            if self._cost_started:
+                elapsed = max(0.0, time.monotonic() - float(self._cost_started))
+            self._cost_meter = accumulate_cost(
+                self._cost_meter,
+                prompt_tokens=usage.get("prompt_tokens") or 0,
+                completion_tokens=usage.get("completion_tokens") or 0,
+                tool_calls=len(names),
+                trace_queries=sum(1 for n in names if is_query_tool(n)),
+                model_time_s=elapsed,
+            )
+
         def _open_signin_page(self) -> None:
             active = self._active_ai_settings()
             url = ai_preset_signin_url(active["preset"], active.get("base_url", ""))
             if url:
                 QDesktopServices.openUrl(QUrl(url))
-                self._status.setText(
+                self._set_status(
                     f"Opened {url}. Paste the key or token in Settings → AI.")
             else:
-                self._status.setText(
+                self._set_status(
                     "This preset has no sign-in page. Paste a token in Settings → AI.")
             self._open_settings()
 
@@ -3115,7 +3340,7 @@ def create_ai_assistant_panel(
             lang = dlg.selected_language()
             if on_save_settings:
                 on_save_settings({"response_language": lang})
-            self._status.setText(f"Reply language: {lang}")
+            self._set_status(f"Reply language: {lang}")
             self._refresh_localized_chrome(lang)
 
         def _refresh_localized_chrome(self, language: Optional[str] = None) -> None:
@@ -3158,6 +3383,11 @@ def create_ai_assistant_panel(
                 )
                 if m:
                     self._on_tool_action(m.group(1).lower(), urllib.parse.unquote(m.group(2)))
+                return
+            if scheme == "btfhyp":
+                action, hyp_id = parse_btf_hyp_href(url.toString())
+                if action:
+                    self._on_hypothesis_action(action, hyp_id)
                 return
             if scheme == "btfhighlight":
                 name = parse_btf_highlight_href(url.toString())
@@ -3254,7 +3484,8 @@ def create_ai_assistant_panel(
             self._pending_batches.clear()
             self._tool_round = 0
             self._log.clear()
-            self._status.setText("")
+            self._cost_meter = empty_cost_meter()
+            self._set_status("")
             self._clear_evidence_log_entry()
             self._refresh_tool_bar()
 
@@ -3283,11 +3514,11 @@ def create_ai_assistant_panel(
                 return
             clip = QApplication.clipboard()
             if clip is None:
-                self._status.setText("Clipboard is not available.")
+                self._set_status("Clipboard is not available.")
                 return
             clip.setText(format_ai_conversation_markdown(
                 self._entries, self._reply_language()))
-            self._status.setText("Copied to clipboard.")
+            self._set_status("Copied to clipboard.")
 
         def save_conversation_as(self, preferred: str = "") -> None:
             """Write the conversation to Markdown, plain text or HTML."""
@@ -3332,7 +3563,7 @@ def create_ai_assistant_panel(
                 QMessageBox.warning(
                     self, "Save failed", f"Could not write file:\n{exc}")
                 return
-            self._status.setText(f"Saved conversation to {os.path.basename(path)}")
+            self._set_status(f"Saved conversation to {os.path.basename(path)}")
 
         def _collect_conversation_tools_run(self) -> List[str]:
             """Tool names successfully applied so far this session, in order."""
@@ -3400,7 +3631,7 @@ def create_ai_assistant_panel(
             except OSError as exc:
                 return tool_result_payload(False, f"Could not write file: {exc}")
             base = os.path.basename(path)
-            self._status.setText(f"Saved investigation to {base}")
+            self._set_status(f"Saved investigation to {base}")
             return tool_result_payload(
                 True, f"Saved investigation package to {base}", path=path)
 
@@ -3474,14 +3705,14 @@ def create_ai_assistant_panel(
             except OSError as exc:
                 return tool_result_payload(False, f"Could not write file: {exc}")
             base = os.path.basename(path)
-            self._status.setText(f"Saved report to {base}")
+            self._set_status(f"Saved report to {base}")
             return tool_result_payload(True, f"Saved {fmt} report to {base}", path=path)
 
         def stop_query(self) -> None:
             """Abort the current AI request if one is running."""
             if not self._busy:
                 return
-            self._status.setText("Stopping…")
+            self._set_status("Stopping…")
             worker = self._worker
             if worker is not None:
                 worker.cancel()
@@ -3506,13 +3737,21 @@ def create_ai_assistant_panel(
             self._refresh_send_btn()
             self._stop_btn.setEnabled(busy)
             self._input.setReadOnly(busy or (not enabled))
+            live = (not busy) and enabled
             for btn in self._template_btns:
-                btn.setEnabled((not busy) and enabled)
+                btn.setEnabled(live)
+            for btn in getattr(self, "_mode_btns", []):
+                btn.setEnabled(live)
             for act in self._template_actions.values():
-                act.setEnabled((not busy) and enabled)
+                act.setEnabled(live)
+            for act in getattr(self, "_investigation_template_actions", {}).values():
+                act.setEnabled(live)
+            save_act = getattr(self, "_save_investigation_template_action", None)
+            if save_act is not None:
+                save_act.setEnabled(not busy)
             self.refresh_template_availability()
             if (not enabled) and (not busy):
-                self._status.setText("AI is disabled in Settings → AI.")
+                self._set_status("AI is disabled in Settings → AI.")
 
         def refresh_enabled_state(self) -> None:
             """Re-apply enable/disable after Settings → AI changes."""
@@ -3589,7 +3828,9 @@ def create_ai_assistant_panel(
             super().showEvent(event)
             self.refresh_enabled_state()
 
-        def query_template(self, template_id: str, *, finding_id: str = "") -> None:
+        def query_template(
+            self, template_id: str, *, finding_id: str = "", extra: str = "",
+        ) -> None:
             """Run a built-in AI template by id (toolbar Analysis / inspector)."""
             prompt = next(
                 (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS if tid == template_id),
@@ -3599,6 +3840,9 @@ def create_ai_assistant_panel(
                 fid = str(finding_id or "").strip()
                 if fid:
                     prompt = f"{prompt}\n\nfinding_id={fid}"
+                extra = str(extra or "").strip()
+                if extra:
+                    prompt = f"{prompt}\n\n{extra}"
                 if template_id == "explain_region" and get_context:
                     try:
                         cursors = (get_context() or {}).get("cursors") or []
@@ -3654,6 +3898,163 @@ def create_ai_assistant_panel(
             self._input.setPlainText(prompt)
             self.send_current()
 
+        def _user_investigation_templates(self) -> List[Dict[str, Any]]:
+            raw = ""
+            if get_settings:
+                try:
+                    raw = str(
+                        (get_settings() or {}).get("user_investigation_templates")
+                        or ""
+                    )
+                except Exception:
+                    raw = ""
+            return parse_user_investigation_templates(raw)
+
+        def _all_investigation_templates(self) -> List[Dict[str, Any]]:
+            return list(builtin_investigation_templates()) + self._user_investigation_templates()
+
+        def _rebuild_investigation_menu(self) -> None:
+            menu = getattr(self, "_more_menu", None)
+            if menu is None:
+                return
+            for act in list(self._investigation_template_actions.values()):
+                try:
+                    menu.removeAction(act)
+                except Exception:
+                    pass
+            self._investigation_template_actions = {}
+            save_act = getattr(self, "_save_investigation_template_action", None)
+            if save_act is not None:
+                try:
+                    menu.removeAction(save_act)
+                except Exception:
+                    pass
+            for tpl in self._all_investigation_templates():
+                act = menu.addAction(str(tpl.get("label") or tpl.get("id")))
+                act.setToolTip(investigation_template_prompt(tpl))
+                act.triggered.connect(
+                    lambda _=False, t=dict(tpl): self._run_investigation_template(t)
+                )
+                self._investigation_template_actions[str(tpl.get("id") or "")] = act
+            if save_act is None:
+                save_act = menu.addAction("Save as template\u2026")
+                save_act.setToolTip(
+                    "Save the current investigation steps as a reusable template")
+                save_act.triggered.connect(self._save_investigation_template)
+                self._save_investigation_template_action = save_act
+            else:
+                menu.addAction(save_act)
+
+        def _save_investigation_template(self) -> None:
+            steps: List[str] = []
+            plan = self._investigation_plan if isinstance(self._investigation_plan, dict) else {}
+            for s in plan.get("steps") or []:
+                if isinstance(s, dict) and s.get("id"):
+                    steps.append(str(s.get("id")))
+                elif s:
+                    steps.append(str(s))
+            if not steps:
+                case = (self._evidence_payload or {}).get("investigation_case") or {}
+                steps = [str(t) for t in (case.get("tools_executed") or []) if t]
+            name, ok = QInputDialog.getText(
+                self, "Save investigation template",
+                "Template name:",
+                text="My Investigation",
+            )
+            if not ok:
+                return
+            tpl = new_user_investigation_template(name, steps)
+            items = self._user_investigation_templates()
+            items = [it for it in items if it.get("id") != tpl["id"]]
+            items.append(tpl)
+            if on_save_settings:
+                on_save_settings({
+                    "user_investigation_templates": dump_user_investigation_templates(items),
+                })
+            self._rebuild_investigation_menu()
+
+        def _run_investigation_mode(self, mode: str) -> None:
+            if self._busy:
+                return
+            plan = investigation_mode_plan(mode)
+            label = INVESTIGATION_MODE_LABELS.get(plan["mode"], str(mode))
+            prompt = investigation_mode_prompt(plan["mode"])
+            steps = [
+                {"id": str(s), "label": str(s), "status": "pending"}
+                for s in (plan.get("tools") or []) if s
+            ]
+            self._active_template_id = str(plan.get("template") or plan["mode"])
+            if steps:
+                self._set_investigation_plan({"goal": label, "steps": steps})
+            else:
+                self._clear_investigation_plan()
+            self._input.setPlainText(prompt)
+            self.send_current()
+
+        def _on_hypothesis_action(self, action: str, hyp_id: str) -> None:
+            act = str(action or "").strip().lower()
+            hid = str(hyp_id or "").strip()
+            payload = dict(self._evidence_payload or {})
+            hyps = list(
+                payload.get("hypotheses_managed")
+                or payload.get("hypotheses")
+                or []
+            )
+            if act in ("supported", "rejected", "need_evidence", "possible"):
+                updated = set_hypothesis_status(hyps, hid, act)
+                payload["hypotheses_managed"] = updated
+                payload["hypotheses"] = updated
+                case = dict(payload.get("investigation_case") or {})
+                if case:
+                    case["hypotheses"] = updated
+                    payload["investigation_case"] = case
+                self._evidence_payload = payload
+                self._sync_evidence_log_entry(payload)
+                return
+            if act == "compare":
+                ranked = compare_hypotheses(hyps)
+                leader = ranked.get("leader") or {}
+                title = str(leader.get("hypothesis") or "Compare hypotheses")
+                payload["hypotheses_managed"] = ranked.get("ranked") or hyps
+                payload["conclusion"] = f"Leader: {title}" if title else "Compare hypotheses"
+                self._evidence_payload = payload
+                self._sync_evidence_log_entry(payload)
+                return
+            if act == "test":
+                name = hid
+                for h in hyps:
+                    if isinstance(h, dict) and str(h.get("id") or "") == hid:
+                        name = str(h.get("hypothesis") or hid)
+                        break
+                prompt = (
+                    f"Test hypothesis {name!r} (id={hid}). "
+                    "Call investigate then correlate_events and find_critical_path. "
+                    f"Then manage_hypotheses(hypothesis_id={hid}, "
+                    "status=supported|rejected|need_evidence). "
+                    "Finish with a verdict, jump:TIME evidence, and one next check."
+                )
+                self._use_template("investigate", prompt)
+
+        def _run_investigation_template(self, template: dict) -> None:
+            if self._busy:
+                return
+            tpl = template if isinstance(template, dict) else {}
+            prompt = investigation_template_prompt(tpl)
+            steps = [
+                {"id": str(s), "label": str(s), "status": "pending"}
+                for s in (tpl.get("steps") or []) if s
+            ]
+            self._active_template_id = str(tpl.get("id") or "")
+            if steps:
+                self._set_investigation_plan({
+                    "goal": str(tpl.get("label") or "Investigation"),
+                    "steps": steps,
+                })
+            else:
+                self._clear_investigation_plan()
+            self._input.setPlainText(prompt)
+            self.send_current()
+
         def _set_investigation_plan(self, plan: Optional[Dict[str, Any]]) -> None:
             self._investigation_plan = plan
             if not plan:
@@ -3689,12 +4090,56 @@ def create_ai_assistant_panel(
             if self._evidence_payload:
                 self._sync_evidence_log_entry(self._evidence_payload)
 
+        def _attach_response_validation(self, text: str) -> None:
+            """Flag invented tasks / out-of-scope jump:TIME after the final reply."""
+            src = str(text or "").strip()
+            if not src:
+                return
+            ctx = {}
+            if get_context:
+                try:
+                    ctx = normalize_ai_context(get_context() or {})
+                except Exception:
+                    ctx = {}
+            bounds = cursor_region_bounds(ctx.get("cursors"))
+            catalog = build_validation_catalog(
+                findings_text=str(ctx.get("findings_text") or ""),
+                evidence=(self._evidence_payload or {}).get("evidence"),
+                cursor_lo=bounds[0] if bounds else None,
+                cursor_hi=bounds[1] if bounds else None,
+            )
+            report = validate_ai_response(
+                src,
+                known_tasks=catalog.get("tasks"),
+                known_times=catalog.get("times"),
+                cursor_lo=catalog.get("cursor_lo"),
+                cursor_hi=catalog.get("cursor_hi"),
+            )
+            payload = dict(self._evidence_payload or {})
+            payload["validation"] = report
+            payload["cost"] = format_cost_meter(self._cost_meter)
+            if not payload.get("conclusion") and not payload.get("evidence"):
+                payload["conclusion"] = payload.get("conclusion") or ""
+            self._evidence_payload = payload
+
         def _update_evidence_from_tool_result(
             self, name: str, res: Dict[str, Any],
         ) -> None:
             payload = extract_evidence_panel_payload(name, res)
             if not payload:
                 return
+            prev = dict(self._evidence_payload or {})
+            prev_case = prev.get("investigation_case")
+            if prev_case:
+                case = update_case_from_tool(prev_case, name, res)
+                payload["investigation_case"] = case
+                payload["tool_reasons"] = case.get("tool_reasons") or []
+                payload["confidence_evolution"] = format_confidence_evolution(
+                    case.get("confidence_history"))
+            if prev.get("validation") and "validation" not in payload:
+                payload["validation"] = prev["validation"]
+            if prev.get("cost") and "cost" not in payload:
+                payload["cost"] = prev["cost"]
             self._evidence_payload = dict(payload)
             self._sync_evidence_log_entry(self._evidence_payload)
 
@@ -3727,13 +4172,13 @@ def create_ai_assistant_panel(
         ) -> None:
             tabs = self._loaded_tabs()
             if len(tabs) < 2:
-                self._status.setText("Open at least two BTF tabs to compare.")
+                self._set_status("Open at least two BTF tabs to compare.")
                 self.refresh_template_availability()
                 return
             if idx_a is not None and idx_b is not None:
                 idx_a, idx_b = int(idx_a), int(idx_b)
                 if idx_a == idx_b:
-                    self._status.setText("Choose two different traces.")
+                    self._set_status("Choose two different traces.")
                     return
             elif len(tabs) == 2:
                 idx_a = int(tabs[0]["index"])
@@ -3744,19 +4189,19 @@ def create_ai_assistant_panel(
                     return
                 idx_a, idx_b = dlg.selected_indices()
                 if idx_a == idx_b:
-                    self._status.setText("Choose two different traces.")
+                    self._set_status("Choose two different traces.")
                     return
             if not build_compare_context:
-                self._status.setText("Trace Compare is not available.")
+                self._set_status("Trace Compare is not available.")
                 return
             try:
                 ctx = dict(build_compare_context(idx_a, idx_b) or {})
             except Exception as exc:
-                self._status.setText(f"Compare context error: {exc}")
+                self._set_status(f"Compare context error: {exc}")
                 return
             ctx = normalize_ai_context(ctx)
             if not (ctx.get("findings_text") or "").strip():
-                self._status.setText("Could not build Trace Compare tables.")
+                self._set_status("Could not build Trace Compare tables.")
                 return
             self._input.clear()
             self._send_query(prompt, ctx)
@@ -3781,6 +4226,7 @@ def create_ai_assistant_panel(
                 turn = {"content": str(payload or ""), "tool_calls": []}
             text = str(turn.get("content") or "").strip()
             calls = turn.get("tool_calls") if isinstance(turn.get("tool_calls"), list) else []
+            self._record_turn_usage(turn, calls)
             if calls:
                 self._chat_messages.append(
                     canonical_assistant_tool_message(text, calls)
@@ -3823,23 +4269,24 @@ def create_ai_assistant_panel(
                     self._cleanup_worker()
                     self._apply_tool_batch(batch_id, skipped=False)
                     return
-                self._status.setText("Review GUI actions, then Apply or Skip.")
+                self._set_status("Review GUI actions, then Apply or Skip.")
                 self._cleanup_worker()
                 return
 
             if text:
                 self._append("assistant", text)
             self._finish_investigation_plan()
+            self._attach_response_validation(text)
             self._pin_evidence_log_entry()
             jumps = extract_jump_times(text)
             if jumps:
                 token = _JUMP_RE.search(text or "")
                 label = token.group(1) if token else f"{jumps[0]:g}"
-                self._status.setText(
+                self._set_status(
                     f"Done. Click jump:{label} to annotate the timeline and jump there."
                 )
             else:
-                self._status.setText("Done.")
+                self._set_status("Done.")
             self._cleanup_worker()
 
         def _on_tool_action(self, action: str, batch_id: str) -> None:
@@ -3859,7 +4306,7 @@ def create_ai_assistant_panel(
                     if 0 <= idx < len(self._entries) and isinstance(self._entries[idx], dict):
                         self._entries[idx]["tools"] = batch["tools"]
                     self._refresh_log()
-                self._status.setText("Reverted last AI GUI actions.")
+                self._set_status("Reverted last AI GUI actions.")
 
         def _apply_tool_batch(self, batch_id: str, *, skipped: bool) -> None:
             batch = self._pending_batches.get(batch_id)
@@ -3915,22 +4362,17 @@ def create_ai_assistant_panel(
                     ),
                 ))
                 tool_name = str(t.get("name") or "")
-                if tool_name in (
-                    "investigate",
-                    "correlate_events",
-                    "find_critical_path",
-                    "compare_performance",
-                ):
+                if tool_name in EVIDENCE_PANEL_TOOLS:
                     self._update_evidence_from_tool_result(
                         tool_name,
                         res if isinstance(res, dict) else {},
                     )
             if skipped:
-                self._status.setText("Skipped GUI actions.")
+                self._set_status("Skipped GUI actions.")
                 self._cleanup_worker()
                 return
             if self._tool_round >= max_tool_rounds(self._active_template_id):
-                self._status.setText("Done (tool round limit).")
+                self._set_status("Done (tool round limit).")
                 self._cleanup_worker()
                 return
             self._tool_round += 1
@@ -3968,17 +4410,18 @@ def create_ai_assistant_panel(
             }
             self._set_busy(True)
             label = ai_preset_info(active["preset"])[1]
-            self._status.setText(f"Waiting for {label} ({active['model']})…")
+            self._set_status(f"Waiting for {label} ({active['model']})…")
             worker = _OllamaWorker(self, kwargs)
             worker.finished.connect(self._on_ok, Qt.ConnectionType.QueuedConnection)
             worker.failed.connect(self._on_err, Qt.ConnectionType.QueuedConnection)
             worker.cancelled.connect(self._on_cancelled, Qt.ConnectionType.QueuedConnection)
             self._worker = worker
+            self._mark_cost_start()
             worker.start()
 
         def _on_err(self, msg: str) -> None:
             self._append("assistant", f"(Error) {msg}")
-            self._status.setText(msg.split("\n", 1)[0][:200])
+            self._set_status(msg.split("\n", 1)[0][:200])
             low = (msg or "").lower()
             if "http 401" in low or "http 403" in low or "api key required" in low:
                 self._auth_forced = True
@@ -3986,7 +4429,7 @@ def create_ai_assistant_panel(
             self._cleanup_worker()
 
         def _on_cancelled(self) -> None:
-            self._status.setText("Stopped.")
+            self._set_status("Stopped.")
             self._cleanup_worker()
 
         def send_current(self) -> None:
@@ -3997,7 +4440,7 @@ def create_ai_assistant_panel(
                 return
             cfg = self._settings_dict()
             if str(cfg.get("enabled", "true")).lower() in ("0", "false", "no", "off"):
-                self._status.setText("AI is disabled in Settings → AI.")
+                self._set_status("AI is disabled in Settings → AI.")
                 return
 
             ctx: Dict[str, Any] = {}
@@ -4005,7 +4448,7 @@ def create_ai_assistant_panel(
                 try:
                     ctx = normalize_ai_context(dict(get_context() or {}))
                 except Exception as exc:
-                    self._status.setText(f"Context error: {exc}")
+                    self._set_status(f"Context error: {exc}")
                     return
 
             self._input.clear()
@@ -4014,7 +4457,7 @@ def create_ai_assistant_panel(
         def _send_query(self, query: str, ctx: Dict[str, Any]) -> None:
             cfg = self._settings_dict()
             if str(cfg.get("enabled", "true")).lower() in ("0", "false", "no", "off"):
-                self._status.setText("AI is disabled in Settings → AI.")
+                self._set_status("AI is disabled in Settings → AI.")
                 return
 
             ctx = normalize_ai_context(ctx)
@@ -4035,7 +4478,7 @@ def create_ai_assistant_panel(
             self._set_busy(True)
             active = resolve_ai_settings(cfg)
             label = ai_preset_info(active["preset"])[1]
-            self._status.setText(f"Waiting for {label} ({active['model']})…")
+            self._set_status(f"Waiting for {label} ({active['model']})…")
 
             kwargs = {
                 "query": query,
@@ -4057,6 +4500,7 @@ def create_ai_assistant_panel(
             worker.failed.connect(self._on_err, Qt.ConnectionType.QueuedConnection)
             worker.cancelled.connect(self._on_cancelled, Qt.ConnectionType.QueuedConnection)
             self._worker = worker
+            self._mark_cost_start()
             worker.start()
 
         def _cleanup_worker(self) -> None:

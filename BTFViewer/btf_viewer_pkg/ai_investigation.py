@@ -8,6 +8,19 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .ai_case import (
+    build_evidence_graph,
+    build_investigation_case,
+    compute_evidence_coverage,
+    compute_evidence_quality,
+    enrich_hypotheses,
+    evidence_graph_mermaid,
+    evidence_quality_from_score,
+    falsification_checks,
+    format_confidence_evolution,
+    historical_knowledge_for_finding,
+)
+
 # Default checklist shown while Investigate / Root cause / agent templates run.
 INVESTIGATION_PLAN_STEPS: Tuple[Tuple[str, str], ...] = (
     ("findings", "Read Analysis Findings"),
@@ -44,11 +57,28 @@ _TOOL_STEP_MAP: Dict[str, Tuple[str, ...]] = {
     "investigation_replay": ("validate",),
     "generate_report": ("recommend",),
     "export_report": ("recommend",),
+    "explain_finding": ("findings", "hypotheses"),
+    "interpret_query": ("findings",),
+    "validate_experiment": ("validate", "recommend"),
+    "manage_hypotheses": ("hypotheses", "validate"),
 }
+
+# Tools whose results refresh the Evidence / Reasoning log. Keep in sync with
+# web/src/utils/aiInvestigation.js EVIDENCE_PANEL_TOOLS.
+EVIDENCE_PANEL_TOOLS: Tuple[str, ...] = (
+    "investigate",
+    "correlate_events",
+    "find_critical_path",
+    "compare_performance",
+    "explain_finding",
+    "interpret_query",
+    "validate_experiment",
+    "manage_hypotheses",
+)
 
 _AGENT_TEMPLATE_IDS = frozenset({
     "investigate", "root_cause", "verify", "what_if", "optimize",
-    "diagnostic_report", "auto_investigate",
+    "diagnostic_report", "auto_investigate", "explain_finding",
 })
 
 _FINDING_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
@@ -289,17 +319,23 @@ def build_investigate_context(
     plan = mark_plan_steps_from_tools(plan, ["investigate"])
     chain = build_root_cause_chain(focus)
     anomalies = detect_anomalies(items, limit=max(3, depth + 2))
+    finding = {
+        "id": focus.get("id"),
+        "severity": sev,
+        "title": title,
+        "text": text,
+        "evidence": list(focus.get("evidence") or []),
+        "task": focus.get("task") or _guess_task_name(text),
+    }
+    hyps = enrich_hypotheses(
+        hypotheses[: max(1, depth + 1)],
+        evidence=finding.get("evidence"),
+        alternatives=alternatives[: max(1, depth + 1)],
+    )
     graph = {
-        "finding": {
-            "id": focus.get("id"),
-            "severity": sev,
-            "title": title,
-            "text": text,
-            "evidence": list(focus.get("evidence") or []),
-            "task": focus.get("task") or _guess_task_name(text),
-        },
+        "finding": finding,
         "related_findings": related,
-        "hypotheses": hypotheses[: max(1, depth + 1)],
+        "hypotheses": hyps,
         "alternatives": alternatives[: max(1, depth + 1)],
         "suggested_tools": suggested,
         "depth": depth,
@@ -315,6 +351,29 @@ def build_investigate_context(
     )
     graph["evidence_score"] = score_data["score"]
     graph["evidence_score_breakdown"] = score_data["breakdown"]
+    quality = compute_evidence_quality(
+        score=score_data["score"],
+        breakdown=score_data["breakdown"],
+        evidence=graph["finding"].get("evidence"),
+        alternatives=graph.get("alternatives"),
+        evidence_chain=graph.get("evidence_chain"),
+    )
+    graph["evidence_quality"] = quality
+    graph["evidence_coverage"] = compute_evidence_coverage(
+        evidence=graph["finding"].get("evidence"),
+    )
+    graph["evidence_graph"] = build_evidence_graph(
+        finding,
+        evidence=finding.get("evidence"),
+        hypotheses=hyps,
+        chain=chain,
+    )
+    graph["falsification"] = falsification_checks(finding)
+    graph["historical_knowledge"] = historical_knowledge_for_finding(finding)
+    graph["investigation_case"] = build_investigation_case(
+        graph,
+        score_data=score_data,
+    )
     return {
         "ok": True,
         "message": (
@@ -799,7 +858,10 @@ def compute_evidence_score(
         score += 15
         breakdown.append({"label": "Metric correlation", "delta": 15})
 
-    untested = [a for a in alts if str(a.get("status") or "").lower() == "untested"]
+    untested = [
+        a for a in alts
+        if str(a.get("status") or "").lower() in ("untested", "needs_evidence")
+    ]
     if untested:
         penalty = min(15, 5 * len(untested))
         score -= penalty
@@ -813,11 +875,13 @@ def compute_evidence_score(
         breakdown.append({"label": "Missing direct evidence", "delta": -10})
 
     score = max(0, min(100, score))
+    quality = evidence_quality_from_score(score, breakdown=breakdown)
     return {
         "score": score,
         "label": "AI Evidence Score — heuristic",
         "bar": evidence_score_bar(score),
         "breakdown": breakdown,
+        "quality": quality,
     }
 
 
@@ -1062,7 +1126,7 @@ def extract_evidence_panel_payload(
     for key in (
         "finding", "hypotheses", "alternatives", "evidence_chain",
         "events", "path", "checks", "confidence", "task", "correlation",
-        "root_cause_chain",
+        "root_cause_chain", "historical_knowledge",
     ):
         if key not in data and key in result:
             data[key] = result[key]
@@ -1090,6 +1154,15 @@ def extract_evidence_panel_payload(
             payload["hypotheses"] = list(data.get("hypotheses") or [])
         if data.get("root_cause_chain"):
             payload["root_cause_chain"] = list(data.get("root_cause_chain") or [])
+        for extra in (
+            "evidence_quality", "evidence_coverage", "evidence_graph",
+            "falsification", "investigation_case", "confidence_history",
+            "historical_knowledge",
+        ):
+            if data.get(extra):
+                payload[extra] = data[extra]
+        if data.get("explanation") and not payload.get("subtitle"):
+            payload["subtitle"] = str(data.get("explanation") or "")
     elif name == "find_critical_path" or data.get("path"):
         task = str(data.get("task") or "")
         payload["conclusion"] = f"Critical path: {task}" if task else "Critical path"
@@ -1122,6 +1195,38 @@ def extract_evidence_panel_payload(
             payload["conclusion"] = "Performance comparison"
         payload["confidence"] = str(data.get("confidence") or "Medium")
         payload["checks"] = list(data.get("checks") or [])
+    elif name == "interpret_query" or data.get("interpreted_question"):
+        payload["conclusion"] = str(data.get("interpreted_question") or "")
+        scopes = [str(s) for s in (data.get("scope") or []) if s]
+        mode = str(data.get("mode") or data.get("kind") or "")
+        if scopes:
+            payload["subtitle"] = (
+                f"{mode}: {', '.join(scopes)}" if mode else ", ".join(scopes)
+            )
+        elif mode:
+            payload["subtitle"] = mode
+        payload["confidence"] = "Medium"
+    elif name == "validate_experiment" or data.get("result") in (
+        "VALIDATED", "PARTIALLY VALIDATED", "DISPROVED", "INCONCLUSIVE",
+    ):
+        result_label = str(data.get("result") or "INCONCLUSIVE")
+        payload["conclusion"] = result_label
+        payload["checks"] = [
+            {
+                "label": str(row.get("metric") or "metric"),
+                "status": str(row.get("status") or ""),
+                "detail": (
+                    f"expected {row.get('expected')} actual {row.get('actual')}"
+                ),
+            }
+            for row in (data.get("rows") or [])
+            if isinstance(row, dict)
+        ]
+        payload["confidence"] = (
+            "High" if result_label == "VALIDATED"
+            else "Low" if result_label == "DISPROVED"
+            else "Medium"
+        )
 
     if not (
         payload.get("conclusion")
@@ -1140,6 +1245,56 @@ def extract_evidence_panel_payload(
     payload["evidence_score"] = score_data["score"]
     payload["evidence_score_breakdown"] = score_data["breakdown"]
     payload["evidence_score_bar"] = score_data["bar"]
+    quality = compute_evidence_quality(
+        score=score_data["score"],
+        breakdown=score_data.get("breakdown"),
+        evidence=payload.get("evidence"),
+        alternatives=payload.get("alternatives"),
+        checks=payload.get("checks"),
+        evidence_chain=str(payload.get("evidence_chain") or ""),
+    )
+    payload["evidence_quality"] = quality
+    payload["evidence_quality_bar"] = quality.get("bar")
+    finding = data.get("finding") if isinstance(data.get("finding"), dict) else None
+    if finding is None and payload.get("conclusion"):
+        finding = {
+            "title": payload.get("conclusion"),
+            "text": payload.get("subtitle") or "",
+            "evidence": payload.get("evidence") or [],
+        }
+    case = build_investigation_case(
+        {
+            "finding": finding or {},
+            "hypotheses": payload.get("hypotheses") or [],
+            "alternatives": payload.get("alternatives") or [],
+            "evidence": payload.get("evidence") or [],
+            "root_cause_chain": payload.get("root_cause_chain") or [],
+            "plan": data.get("plan"),
+            "suggested_tools": data.get("suggested_tools") or [],
+            "checks": payload.get("checks") or [],
+            "evidence_score": score_data["score"],
+            "evidence_score_breakdown": score_data.get("breakdown"),
+            "evidence_chain": payload.get("evidence_chain") or "",
+            "message": payload.get("conclusion") or "",
+        },
+        score_data=score_data,
+        tools_run=data.get("suggested_tools") or data.get("tools_executed"),
+    )
+    payload["investigation_case"] = case
+    payload["coverage"] = case.get("evidence_coverage") or case.get("coverage")
+    payload["falsify"] = case.get("falsification") or case.get("falsify")
+    graph = case.get("evidence_graph") or {}
+    payload["graph_mermaid"] = (
+        case.get("graph_mermaid")
+        or evidence_graph_mermaid(graph.get("nodes"), graph.get("edges"))
+    )
+    payload["hypotheses_managed"] = case.get("hypotheses")
+    payload["tool_reasons"] = case.get("tool_reasons") or []
+    payload["confidence_evolution"] = format_confidence_evolution(
+        case.get("confidence_history"))
+    hk = data.get("historical_knowledge") or payload.get("historical_knowledge")
+    if hk:
+        payload["historical_knowledge"] = hk
     return payload
 
 
@@ -1149,6 +1304,40 @@ def _evidence_jump_token(value: Any) -> str:
         return str(int(tn)) if tn.is_integer() else str(tn)
     except (TypeError, ValueError):
         return str(value or "")
+
+
+_BTF_HYP_HREF_RE = re.compile(
+    r"btfhyp:(?://)?([a-z_]+)/([^?\s#]*)",
+    re.IGNORECASE,
+)
+
+
+def btf_hyp_href(action: str, hyp_id: str = "") -> str:
+    """Clickable Evidence-panel action (Support / Reject / Test / Compare)."""
+    act = re.sub(r"[^a-z_]", "", str(action or "").lower()) or "test"
+    hid = re.sub(r"[^A-Za-z0-9_.-]", "", str(hyp_id or "all")) or "all"
+    return f"btfhyp:{act}/{hid}"
+
+
+def parse_btf_hyp_href(href: Any) -> Tuple[str, str]:
+    """Parse ``btfhyp:supported/h1`` → ``(action, hypothesis_id)``."""
+    m = _BTF_HYP_HREF_RE.search(str(href or ""))
+    if not m:
+        return "", ""
+    return m.group(1).lower(), (m.group(2) or "all")
+
+
+def format_hypothesis_action_links(hyp_id: str, labels: Dict[str, str]) -> str:
+    hid = str(hyp_id or "h1")
+    parts = []
+    for action, key, fallback in (
+        ("supported", "support_action", "Support"),
+        ("rejected", "reject_action", "Reject"),
+        ("need_evidence", "need_evidence_action", "Need evidence"),
+        ("test", "test_action", "Test"),
+    ):
+        parts.append(f"[{labels.get(key, fallback)}]({btf_hyp_href(action, hid)})")
+    return " · ".join(parts)
 
 
 # UI strings for Evidence / Reasoning and plan status. Keep in sync with
@@ -1357,6 +1546,222 @@ EVIDENCE_PANEL_LABELS: Dict[str, Dict[str, str]] = {
 }
 
 
+_EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
+    "English": {
+        "quality": "Evidence Quality",
+        "coverage": "Evidence Coverage",
+        "disprove": "What would disprove this",
+        "graph": "Evidence graph",
+        "supported": "supported",
+        "possible": "possible",
+        "needs_evidence": "needs evidence",
+        "need_evidence": "needs evidence",
+        "unverified": "unverified claims",
+        "next_check": "Recommended next check",
+        "supporting": "Supporting evidence",
+        "cost": "Investigation cost",
+        "claims": "Claims",
+        "validation": "Validation",
+        "evolution": "Confidence evolution",
+        "privacy": "Privacy",
+        "historical": "Historical knowledge",
+        "previous_issue": "Previous issue",
+        "known_fix": "Known fix",
+        "last_occurrence": "Last occurrence",
+        "support_action": "Support",
+        "reject_action": "Reject",
+        "need_evidence_action": "Need evidence",
+        "test_action": "Test",
+        "compare_action": "Compare hypotheses",
+    },
+    "Traditional Chinese (繁體中文)": {
+        "quality": "證據品質",
+        "coverage": "證據覆蓋",
+        "disprove": "如何推翻此結論",
+        "graph": "證據圖",
+        "supported": "已支持",
+        "possible": "可能",
+        "needs_evidence": "需要證據",
+        "unverified": "未驗證的主張",
+        "next_check": "建議下一步",
+        "supporting": "支持證據",
+        "cost": "調查成本",
+        "claims": "主張",
+        "validation": "驗證",
+        "evolution": "置信度演進",
+        "privacy": "隱私",
+        "historical": "歷史知識",
+        "previous_issue": "先前問題",
+        "known_fix": "已知修復",
+        "last_occurrence": "上次出現",
+        "support_action": "支持",
+        "reject_action": "排除",
+        "need_evidence_action": "需要證據",
+        "test_action": "驗證",
+        "compare_action": "比較假設",
+    },
+    "Simplified Chinese (简体中文)": {
+        "quality": "证据品质",
+        "coverage": "证据覆盖",
+        "disprove": "如何推翻此结论",
+        "graph": "证据图",
+        "supported": "已支持",
+        "possible": "可能",
+        "needs_evidence": "需要证据",
+        "unverified": "未验证的主张",
+        "next_check": "建议下一步",
+        "supporting": "支持证据",
+        "cost": "调查成本",
+        "claims": "主张",
+        "validation": "验证",
+        "evolution": "置信度演进",
+        "privacy": "隐私",
+        "historical": "历史知识",
+        "previous_issue": "先前问题",
+        "known_fix": "已知修复",
+        "last_occurrence": "上次出现",
+        "support_action": "支持",
+        "reject_action": "排除",
+        "need_evidence_action": "需要证据",
+        "test_action": "验证",
+        "compare_action": "比较假设",
+    },
+    "Japanese (日本語)": {
+        "quality": "根拠の質",
+        "coverage": "根拠カバレッジ",
+        "disprove": "反証になるもの",
+        "graph": "根拠グラフ",
+        "supported": "支持",
+        "possible": "可能性あり",
+        "needs_evidence": "根拠不足",
+        "unverified": "未検証の主張",
+        "next_check": "次の確認",
+        "supporting": "支持する根拠",
+        "cost": "調査コスト",
+        "claims": "主張",
+        "validation": "検証",
+        "evolution": "信頼度の推移",
+        "privacy": "プライバシー",
+        "historical": "過去の知見",
+        "previous_issue": "過去の問題",
+        "known_fix": "既知の対策",
+        "last_occurrence": "前回の発生",
+        "support_action": "支持",
+        "reject_action": "却下",
+        "need_evidence_action": "根拠不足",
+        "test_action": "検証",
+        "compare_action": "仮説を比較",
+    },
+    "Korean (한국어)": {
+        "quality": "증거 품질",
+        "coverage": "증거 커버리지",
+        "disprove": "이 결론을 뒤집는 증거",
+        "graph": "증거 그래프",
+        "supported": "지지됨",
+        "possible": "가능",
+        "needs_evidence": "증거 필요",
+        "unverified": "미검증 주장",
+        "next_check": "다음 확인",
+        "supporting": "지지 증거",
+        "cost": "조사 비용",
+        "claims": "주장",
+        "validation": "검증",
+        "evolution": "신뢰도 변화",
+        "privacy": "개인정보",
+        "historical": "과거 지식",
+        "previous_issue": "이전 이슈",
+        "known_fix": "알려진 수정",
+        "last_occurrence": "최근 발생",
+        "support_action": "지지",
+        "reject_action": "기각",
+        "need_evidence_action": "증거 필요",
+        "test_action": "검증",
+        "compare_action": "가설 비교",
+    },
+    "German": {
+        "quality": "Belegqualität",
+        "coverage": "Belegabdeckung",
+        "disprove": "Was würde das widerlegen",
+        "graph": "Beleggraph",
+        "supported": "gestützt",
+        "possible": "möglich",
+        "needs_evidence": "Belege nötig",
+        "unverified": "unbestätigte Aussagen",
+        "next_check": "Nächster Prüfpunkt",
+        "supporting": "Stützende Belege",
+        "cost": "Untersuchungskosten",
+        "claims": "Aussagen",
+        "validation": "Validierung",
+        "evolution": "Konfidenzverlauf",
+        "privacy": "Datenschutz",
+        "historical": "Historisches Wissen",
+        "previous_issue": "Früheres Problem",
+        "known_fix": "Bekannte Lösung",
+        "last_occurrence": "Letztes Auftreten",
+        "support_action": "Stützen",
+        "reject_action": "Ablehnen",
+        "need_evidence_action": "Belege nötig",
+        "test_action": "Prüfen",
+        "compare_action": "Hypothesen vergleichen",
+    },
+    "French": {
+        "quality": "Qualité des preuves",
+        "coverage": "Couverture des preuves",
+        "disprove": "Ce qui infirmerait ceci",
+        "graph": "Graphe de preuves",
+        "supported": "étayé",
+        "possible": "possible",
+        "needs_evidence": "preuves nécessaires",
+        "unverified": "affirmations non vérifiées",
+        "next_check": "Prochaine vérification",
+        "supporting": "Preuves à l'appui",
+        "cost": "Coût d'investigation",
+        "claims": "Affirmations",
+        "validation": "Validation",
+        "evolution": "Évolution de la confiance",
+        "privacy": "Confidentialité",
+        "historical": "Connaissances historiques",
+        "previous_issue": "Problème antérieur",
+        "known_fix": "Correctif connu",
+        "last_occurrence": "Dernière occurrence",
+        "support_action": "Étayer",
+        "reject_action": "Rejeter",
+        "need_evidence_action": "Preuves nécessaires",
+        "test_action": "Tester",
+        "compare_action": "Comparer les hypothèses",
+    },
+    "Spanish": {
+        "quality": "Calidad de evidencia",
+        "coverage": "Cobertura de evidencia",
+        "disprove": "Qué refutaría esto",
+        "graph": "Grafo de evidencia",
+        "supported": "respaldado",
+        "possible": "posible",
+        "needs_evidence": "falta evidencia",
+        "unverified": "afirmaciones no verificadas",
+        "next_check": "Siguiente comprobación",
+        "supporting": "Evidencia de apoyo",
+        "cost": "Coste de investigación",
+        "claims": "Afirmaciones",
+        "validation": "Validación",
+        "evolution": "Evolución de la confianza",
+        "privacy": "Privacidad",
+        "historical": "Conocimiento histórico",
+        "previous_issue": "Incidencia previa",
+        "known_fix": "Corrección conocida",
+        "last_occurrence": "Última aparición",
+        "support_action": "Respaldar",
+        "reject_action": "Rechazar",
+        "need_evidence_action": "Falta evidencia",
+        "test_action": "Probar",
+        "compare_action": "Comparar hipótesis",
+    },
+}
+for _lang, _extra in _EVIDENCE_PANEL_EXTRA.items():
+    _extra.setdefault("need_evidence", _extra.get("needs_evidence", "needs evidence"))
+    EVIDENCE_PANEL_LABELS[_lang].update(_extra)
+
+
 def normalize_response_language(lang: str) -> str:
     """Map a reply-language setting to an EVIDENCE_PANEL_LABELS key."""
     want = (lang or "").strip()
@@ -1384,6 +1789,7 @@ def evidence_panel_labels(response_language: str = "English") -> Dict[str, str]:
 
 _EVIDENCE_STATUS_KEYS: Tuple[str, ...] = (
     "high", "medium", "low", "untested", "confirmed", "rejected", "plausible",
+    "supported", "possible", "needs_evidence", "need_evidence",
 )
 _EVIDENCE_PREFIX_KEYS: Tuple[str, ...] = (
     "critical_path", "correlated_events", "performance_comparison",
@@ -1488,12 +1894,125 @@ def format_evidence_panel_markdown(
             f"{_localize_evidence_token(str(conf), labels)}"
         )
     score = data.get("evidence_score")
-    if score is not None:
+    quality = data.get("evidence_quality")
+    if isinstance(quality, dict) and quality.get("bar"):
+        lines.append("")
+        lines.append(f"**{labels.get('quality', labels['score'])}:** {quality['bar']}")
+    elif score is not None:
         bar = str(data.get("evidence_score_bar") or "")
         lines.append("")
         lines.append(f"**{labels['score']}:** {bar}")
+    coverage = data.get("coverage")
+    if isinstance(coverage, dict) and coverage.get("bar"):
+        lines.append("")
+        lines.append(
+            f"**{labels.get('coverage', 'Evidence Coverage')}:** {coverage['bar']}"
+        )
+    falsify = data.get("falsify")
+    if isinstance(falsify, dict):
+        supporting = [s for s in (falsify.get("supporting") or []) if s]
+        disprove = [
+            s for s in (
+                falsify.get("disprove") or falsify.get("would_disprove") or []
+            ) if s
+        ]
+        if supporting:
+            lines.append("")
+            lines.append(f"**{labels.get('supporting', 'Supporting evidence')}**")
+            for s in supporting:
+                lines.append(f"- {s}")
+        if disprove:
+            lines.append("")
+            lines.append(f"**{labels.get('disprove', 'What would disprove this')}**")
+            for s in disprove:
+                lines.append(f"- {s}")
+        nxt = str(falsify.get("next_check") or "").strip()
+        if nxt:
+            lines.append("")
+            lines.append(f"**{labels.get('next_check', 'Recommended next check')}:** {nxt}")
+    hk = data.get("historical_knowledge")
+    if isinstance(hk, dict) and (
+        hk.get("previous_issue") or hk.get("message") or hk.get("flags")
+    ):
+        lines.append("")
+        lines.append(f"**{labels.get('historical', 'Historical knowledge')}**")
+        issue = str(hk.get("previous_issue") or "").strip()
+        if issue:
+            lines.append(
+                f"- {labels.get('previous_issue', 'Previous issue')}: {issue}"
+            )
+        fix = str(hk.get("known_fix") or "").strip()
+        if fix:
+            lines.append(f"- {labels.get('known_fix', 'Known fix')}: {fix}")
+        occ = str(hk.get("last_occurrence") or "").strip()
+        if occ:
+            lines.append(
+                f"- {labels.get('last_occurrence', 'Last occurrence')}: {occ}"
+            )
+        for flag in (hk.get("flags") or [])[:4]:
+            lines.append(f"- {flag}")
+        msg = str(hk.get("message") or "").strip()
+        if msg and msg not in ("No historical match", "Within historical range"):
+            lines.append(f"- {msg}")
+    validation = data.get("validation")
+    if isinstance(validation, dict) and not validation.get("ok", True):
+        n = int(validation.get("unverified") or len(validation.get("issues") or []))
+        lines.append("")
+        lines.append(
+            f"**{labels.get('validation', 'Validation')}:** "
+            f"{n} {labels.get('unverified', 'unverified claims')}"
+        )
+        for issue in (validation.get("issues") or [])[:6]:
+            if isinstance(issue, dict):
+                lines.append(
+                    f"- {issue.get('kind')}: {issue.get('detail')}"
+                )
+        for flag in (validation.get("flags") or [])[:6]:
+            lines.append(f"- {flag}")
+    cost = str(data.get("cost") or "").strip()
+    if cost:
+        lines.append("")
+        lines.append(f"**{labels.get('cost', 'Investigation cost')}:** {cost}")
+    evo = str(data.get("confidence_evolution") or "").strip()
+    if evo:
+        lines.append("")
+        lines.append(f"**{labels.get('evolution', 'Confidence evolution')}**")
+        for line in evo.splitlines():
+            if line.strip():
+                lines.append(f"- {line.strip()}")
+    reasons = data.get("tool_reasons") or []
+    if reasons:
+        lines.append("")
+        lines.append(f"**{labels.get('investigation', 'Investigation')}**")
+        for r in reasons:
+            if not isinstance(r, dict):
+                continue
+            tool = str(r.get("tool") or "")
+            why = str(r.get("reason") or "")
+            if tool:
+                lines.append(f"- {tool}: {why}")
+    hyps_m = data.get("hypotheses_managed") or []
+    if hyps_m:
+        lines.append("")
+        lines.append(f"**{labels['alternatives']}**")
+        for h in hyps_m:
+            if not isinstance(h, dict):
+                continue
+            hyp = str(h.get("hypothesis") or "")
+            status = _localize_evidence_token(
+                str(h.get("status") or "needs_evidence"), labels)
+            why = str(h.get("why") or "")
+            conf = h.get("confidence")
+            extra = f" {conf}%" if conf is not None else ""
+            hid = str(h.get("id") or "")
+            actions = format_hypothesis_action_links(hid, labels)
+            lines.append(f"- *{hyp}* ({status}{extra}) — {why} {actions}")
+        lines.append(
+            f"[{labels.get('compare_action', 'Compare hypotheses')}]"
+            f"({btf_hyp_href('compare', 'all')})"
+        )
     alts = data.get("alternatives") or []
-    if alts:
+    if alts and not hyps_m:
         lines.append("")
         lines.append(f"**{labels['alternatives']}**")
         for alt in alts:
@@ -1525,6 +2044,13 @@ def format_evidence_panel_markdown(
             lines.append("```mermaid")
             lines.append(tree_src.rstrip())
             lines.append("```")
+    graph_src = str(data.get("graph_mermaid") or "").strip()
+    if graph_src:
+        lines.append("")
+        lines.append(f"**{labels.get('graph', 'Evidence graph')}**")
+        lines.append("```mermaid")
+        lines.append(graph_src)
+        lines.append("```")
     return "\n".join(lines).strip()
 
 

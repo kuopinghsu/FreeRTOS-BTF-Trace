@@ -156,4 +156,49 @@ describe('computeEvidenceScore', () => {
     assert.ok('evidence_score_bar' in payload)
     assert.ok(payload.evidence_score >= 40 + 25)
   })
+
+  it('extracts explain_finding / interpret_query / validate_experiment / manage_hypotheses', () => {
+    const explained = extractEvidencePanelPayload('explain_finding', {
+      ok: true,
+      data: {
+        finding: { title: 'Migration thrash', text: 'CS[22] bounce' },
+        hypotheses: [{ hypothesis: 'Thrash', status: 'possible' }],
+        explanation: 'Task CS[22] is bouncing.',
+      },
+    })
+    assert.ok(explained)
+    assert.match(explained.conclusion, /Migration thrash/)
+    const interpreted = extractEvidencePanelPayload('interpret_query', {
+      ok: true,
+      data: {
+        interpreted_question: 'Why is TaskA slow?',
+        mode: 'diagnose',
+        scope: ['execution', 'blocking'],
+      },
+    })
+    assert.ok(interpreted)
+    assert.equal(interpreted.conclusion, 'Why is TaskA slow?')
+    assert.match(String(interpreted.subtitle || ''), /diagnose/)
+    const validated = extractEvidencePanelPayload('validate_experiment', {
+      ok: true,
+      data: {
+        result: 'VALIDATED',
+        rows: [
+          { metric: 'migrations', expected: -50, actual: -72, status: 'validated' },
+        ],
+      },
+    })
+    assert.ok(validated)
+    assert.equal(validated.conclusion, 'VALIDATED')
+    assert.equal(validated.checks[0].label, 'migrations')
+    const managed = extractEvidencePanelPayload('manage_hypotheses', {
+      ok: true,
+      data: {
+        finding: { title: 'Mutex contention' },
+        hypotheses: [{ hypothesis: 'Lock hold', status: 'supported' }],
+      },
+    })
+    assert.ok(managed)
+    assert.equal(managed.conclusion, 'Mutex contention')
+  })
 })

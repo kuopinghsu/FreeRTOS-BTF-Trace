@@ -36,11 +36,14 @@ from .ai_tools import (
     AI_TOOL_DETECT_PRIORITY_INVERSION,
     AI_TOOL_FIND_CRITICAL_PATH,
     AI_TOOL_DETECT_ANOMALIES,
+    AI_TOOL_EXPLAIN_FINDING,
     AI_TOOL_FIND_RELATED_FINDINGS,
     AI_TOOL_GENERATE_REPORT,
     AI_TOOL_HIGHLIGHT_TASK,
     AI_TOOL_INVESTIGATE,
     AI_TOOL_INVESTIGATION_REPLAY,
+    AI_TOOL_INTERPRET_QUERY,
+    AI_TOOL_MANAGE_HYPOTHESES,
     AI_TOOL_OPEN_CORRIDOR,
     AI_TOOL_OPTIMIZE,
     AI_TOOL_OPTIMIZE_EXPERIMENT,
@@ -52,6 +55,7 @@ from .ai_tools import (
     AI_TOOL_SET_CURSORS,
     AI_TOOL_SET_VIEW_MODE,
     AI_TOOL_TRIGGER_COMPARE,
+    AI_TOOL_VALIDATE_EXPERIMENT,
     AI_TOOL_WHAT_IF,
     AI_TOOL_ZOOM_TO_RANGE,
     analyze_traces_snapshots,
@@ -63,11 +67,14 @@ from .ai_tools import (
     correlate_task_events,
     detect_anomalies_finding,
     detect_priority_inversion_host,
+    explain_finding_tool,
     find_critical_path_task,
     find_related_findings_finding,
     generate_report_finding,
     investigate_finding,
     investigation_replay_finding,
+    interpret_query_tool,
+    manage_hypotheses_tool,
     gather_simulation_inputs,
     optimize_experiment_finding,
     optimize_finding,
@@ -79,6 +86,7 @@ from .ai_tools import (
     search_timeline_hits,
     tool_mutates_gui,
     tool_result_payload,
+    validate_experiment_tool,
     validate_tool_call,
     what_if_estimate,
 )
@@ -3120,7 +3128,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _saved_ver = s.get("window", "dock_layout_version", "0")
         if _saved_ver != _DOCK_LAYOUT_VERSION:
             # New layout version: drop persisted dock sizes so code defaults
-            # apply (e.g. wider right panel for 3-column AI templates).
+            # apply (e.g. wider right panel for wrapping AI chips).
             s.set_many("window", {
                 "dock_state": "",
                 "dock_metrics": "",
@@ -5038,7 +5046,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     @classmethod
     def _ai_setting_keys(cls) -> list:
-        keys = ["enabled", "preset", "response_language", "auto_apply", "mcp_log"]
+        keys = ["enabled", "preset", "response_language", "auto_apply", "mcp_log",
+                "user_investigation_templates"]
         keys += [
             f"{pid}_{field}"
             for pid, _label, _base, _model in AI_PRESETS
@@ -6243,6 +6252,60 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 hi=hi,
                 findings_text=findings_text,
             )
+        if name == AI_TOOL_EXPLAIN_FINDING:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return explain_finding_tool(
+                findings,
+                str(args.get("finding_id") or ""),
+                level=str(args.get("level") or "technical"),
+            )
+        if name == AI_TOOL_INTERPRET_QUERY:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            lo = hi = None
+            view = getattr(self, "_view", None)
+            times = []
+            if view is not None and hasattr(view, "_scene"):
+                times = list(view._scene.cursor_times() or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+            return interpret_query_tool(
+                str(args.get("question") or ""),
+                findings,
+                cursor_lo=lo,
+                cursor_hi=hi,
+            )
+        if name == AI_TOOL_VALIDATE_EXPERIMENT:
+            return validate_experiment_tool(
+                args.get("expected") or {},
+                args.get("actual") or {},
+            )
+        if name == AI_TOOL_MANAGE_HYPOTHESES:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return manage_hypotheses_tool(
+                findings,
+                str(args.get("hypothesis_id") or ""),
+                str(args.get("status") or ""),
+                reason=str(args.get("reason") or ""),
+                finding_id=str(args.get("finding_id") or ""),
+            )
         raise RuntimeError(f"unknown tool {name}")
 
     def _ai_load_baseline_profile(self) -> Dict[str, Any]:
@@ -6553,11 +6616,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         panel = getattr(self, "_ai_panel", None)
         tid = getattr(dlg, "wants_ai_template", "findings") or "findings"
         finding_id = getattr(dlg, "wants_ai_finding_id", "") or ""
+        level = getattr(dlg, "wants_ai_level", "") or ""
+        extra = f"level={level}" if level else ""
         if panel is not None and hasattr(panel, "query_template"):
             QTimer.singleShot(
                 0,
-                lambda t=tid, fid=finding_id: panel.query_template(
-                    t, finding_id=fid),
+                lambda t=tid, fid=finding_id, ex=extra: panel.query_template(
+                    t, finding_id=fid, extra=ex),
             )
 
     def _on_explain_region_with_ai(self) -> None:

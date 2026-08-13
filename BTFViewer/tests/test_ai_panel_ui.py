@@ -20,7 +20,9 @@ install()
 from unittest.mock import patch  # noqa: E402
 
 from PySide6.QtCore import QPoint, QUrl  # noqa: E402
-from PySide6.QtWidgets import QApplication, QPushButton, QScrollArea, QVBoxLayout  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
+    QApplication, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+)
 
 from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     AI_TEMPLATE_MENU_GROUPS,
@@ -45,6 +47,7 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_TOOL_CORRELATE_EVENTS,
     AI_TOOL_DETECT_ANOMALIES,
     AI_TOOL_DETECT_PRIORITY_INVERSION,
+    AI_TOOL_EXPLAIN_FINDING,
     AI_TOOL_EXPORT_INVESTIGATION,
     AI_TOOL_EXPORT_REPORT,
     AI_TOOL_FIND_CRITICAL_PATH,
@@ -52,6 +55,8 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_TOOL_GENERATE_REPORT,
     AI_TOOL_INVESTIGATE,
     AI_TOOL_INVESTIGATION_REPLAY,
+    AI_TOOL_INTERPRET_QUERY,
+    AI_TOOL_MANAGE_HYPOTHESES,
     AI_TOOL_OPTIMIZE,
     AI_TOOL_OPTIMIZE_EXPERIMENT,
     AI_TOOL_QUERY_RAW_METRIC,
@@ -60,6 +65,7 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_TOOL_RESET_VIEW,
     AI_TOOL_SEARCH_TIMELINE,
     AI_TOOL_TRIGGER_COMPARE,
+    AI_TOOL_VALIDATE_EXPERIMENT,
     AI_TOOL_WHAT_IF,
     AI_VIEWER_TOOL_NAMES,
 )
@@ -364,6 +370,15 @@ class AiPanelUiTests(unittest.TestCase):
                  "arguments": {"finding_id": "x", "limit": 5}},
                 {"id": "c30", "name": AI_TOOL_COMPARE_TASKS,
                  "arguments": {"task_a": "Low[266]", "task_b": "High[268]"}},
+                {"id": "c31", "name": AI_TOOL_EXPLAIN_FINDING,
+                 "arguments": {"finding_id": "x", "level": "technical"}},
+                {"id": "c32", "name": AI_TOOL_INTERPRET_QUERY,
+                 "arguments": {"question": "Why is CS[28] slow?"}},
+                {"id": "c33", "name": AI_TOOL_VALIDATE_EXPERIMENT,
+                 "arguments": {"expected": {"migrations": -70},
+                               "actual": {"migrations": -72}}},
+                {"id": "c34", "name": AI_TOOL_MANAGE_HYPOTHESES,
+                 "arguments": {"hypothesis_id": "h1", "status": "supported"}},
             ],
         }))
         with patch.object(panel, "_continue_with_messages"):
@@ -576,7 +591,7 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertEqual(set(panel._template_actions), set(menu_ids))
         reachable = set(AI_TEMPLATE_PRIMARY_IDS) | set(panel._template_actions)
         self.assertEqual(reachable, {t[0] for t in AI_TEMPLATE_QUESTIONS})
-        self.assertEqual(len(reachable), 19)
+        self.assertEqual(len(reachable), 20)
 
     def test_evidence_syncs_to_log_for_export(self) -> None:
         from btf_viewer_pkg.ai_assistant import format_ai_conversation_html
@@ -653,6 +668,165 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertEqual(ai_entry_role(panel._entries[-1]), "evidence")
         self.assertEqual(ai_entry_role(panel._entries[-2]), "assistant")
         self.assertIn("Final English summary", ai_entry_text(panel._entries[-2]))
+
+    def test_investigation_mode_chips_and_hypothesis_links(self) -> None:
+        from btf_viewer_pkg.ai_case import enrich_hypotheses
+
+        panel = self._panel()
+        host = panel.findChild(QWidget, "aiModes")
+        self.assertIsNotNone(host)
+        labels = [b.text().replace("&", "") for b in host.findChildren(QPushButton)]
+        self.assertEqual(
+            labels[:5],
+            ["Quick", "Diagnose", "Compare", "Optimize", "Report"],
+        )
+        save_act = getattr(panel, "_save_investigation_template_action", None)
+        self.assertIsNotNone(save_act)
+        self.assertIn("Save as template", save_act.text().replace("&", ""))
+
+        hyps = enrich_hypotheses([{"hypothesis": "Mutex contention", "why": "blocking"}])
+        hid = hyps[0]["id"]
+        panel._evidence_payload = {
+            "hypotheses_managed": hyps,
+            "hypotheses": hyps,
+            "conclusion": "Mutex contention",
+        }
+        panel._on_jump_link(QUrl(f"btfhyp:supported/{hid}"))
+        self.assertEqual(
+            panel._evidence_payload["hypotheses_managed"][0]["status"],
+            "supported",
+        )
+        with patch.object(panel, "send_current") as send:
+            panel._on_jump_link(QUrl(f"btfhyp:test/{hid}"))
+        send.assert_called_once()
+        self.assertIn("Test hypothesis", panel._input.toPlainText())
+
+    def test_template_ux_busy_disables_modes_and_investigations(self) -> None:
+        from btf_viewer_pkg.ai_assistant import (
+            AI_TEMPLATE_MENU_GROUPS, AI_TEMPLATE_PRIMARY_IDS,
+        )
+        from btf_viewer_pkg.ai_case import (
+            INVESTIGATION_MODE_LABELS, INVESTIGATION_MODES,
+            builtin_investigation_templates,
+        )
+
+        panel = self._panel()
+        self.assertEqual(
+            [b.text().replace("&", "") for b in panel._mode_btns],
+            [INVESTIGATION_MODE_LABELS[m] for m in INVESTIGATION_MODES],
+        )
+        self.assertEqual(
+            list(panel._template_actions),
+            [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids],
+        )
+        self.assertEqual(
+            list(panel._investigation_template_actions),
+            [t["id"] for t in builtin_investigation_templates()],
+        )
+        self.assertEqual(
+            [b.text().replace("&", "") for b in panel._template_btns],
+            [
+                next(lab for tid, lab, _p in AI_TEMPLATE_QUESTIONS if tid == pid)
+                for pid in AI_TEMPLATE_PRIMARY_IDS
+            ],
+        )
+        panel._set_busy(True)
+        self.assertFalse(panel._mode_btns[0].isEnabled())
+        self.assertFalse(panel._template_btns[0].isEnabled())
+        inv_act = next(iter(panel._investigation_template_actions.values()))
+        self.assertFalse(inv_act.isEnabled())
+        self.assertFalse(panel._save_investigation_template_action.isEnabled())
+        panel._set_busy(False)
+        self.assertTrue(panel._mode_btns[0].isEnabled())
+        self.assertTrue(panel._template_btns[0].isEnabled())
+        self.assertTrue(inv_act.isEnabled())
+        self.assertTrue(panel._save_investigation_template_action.isEnabled())
+
+    def test_mode_and_template_chips_wrap_like_web(self) -> None:
+        from PySide6.QtWidgets import QSizePolicy
+
+        from btf_viewer_pkg.view import _in_ai_actions_bar, _relax_widget_tree
+
+        panel = self._panel()
+        modes = panel.findChild(QWidget, "aiModes")
+        tpls = panel.findChild(QWidget, "aiTemplates")
+        self.assertTrue(modes.layout().hasHeightForWidth())
+        self.assertTrue(tpls.layout().hasHeightForWidth())
+        mode_h_wide = modes.layout().heightForWidth(800)
+        mode_h_narrow = modes.layout().heightForWidth(180)
+        self.assertGreater(mode_h_narrow, mode_h_wide)
+        tpl_h_wide = tpls.layout().heightForWidth(800)
+        tpl_h_narrow = tpls.layout().heightForWidth(180)
+        self.assertGreater(tpl_h_narrow, tpl_h_wide)
+
+        headings = [
+            "Diagnose", "Compare", "Metrics", "What-if / Optimize",
+            "Investigations",
+        ]
+        texts = [a.text().replace("&", "") for a in panel._more_menu.actions()]
+        pos = [texts.index(h) for h in headings]
+        self.assertEqual(pos, sorted(pos))
+        for h in headings:
+            act = next(
+                a for a in panel._more_menu.actions()
+                if a.text().replace("&", "") == h
+            )
+            self.assertFalse(act.isEnabled(), h)
+
+        _relax_widget_tree(panel)
+        for btn in panel._mode_btns + panel._template_btns:
+            self.assertTrue(_in_ai_actions_bar(btn), btn.text())
+            self.assertNotEqual(
+                btn.sizePolicy().horizontalPolicy(),
+                QSizePolicy.Policy.Ignored,
+                btn.text(),
+            )
+            self.assertGreater(btn.sizeHint().width(), 20, btn.text())
+
+    def test_status_shows_accumulated_cost_until_clear(self) -> None:
+        from btf_viewer_pkg.ai_case import accumulate_cost, empty_cost_meter
+
+        panel = self._panel()
+        panel._set_status("Done.")
+        self.assertEqual(panel._status.text(), "Done.")
+        panel._cost_meter = accumulate_cost(
+            empty_cost_meter(),
+            prompt_tokens=1000,
+            completion_tokens=200,
+            tool_calls=2,
+            model_time_s=1.5,
+        )
+        panel._set_status("Done.")
+        self.assertIn("Done.", panel._status.text())
+        self.assertIn("1.2k tok", panel._status.text())
+        self.assertIn("2 tools", panel._status.text())
+        panel._record_turn_usage(
+            {"usage": {"prompt_tokens": 50, "completion_tokens": 10}},
+            [],
+        )
+        panel._set_status("Done.")
+        self.assertIn("1.3k tok", panel._status.text())
+        panel.clear_conversation()
+        self.assertEqual(panel._status.text(), "")
+        self.assertEqual(panel._cost_meter["total_tokens"], 0)
+        self.assertEqual(panel._cost_meter["tool_calls"], 0)
+
+    def test_disabled_template_chips_use_muted_color(self) -> None:
+        from btf_viewer_pkg.ai_assistant import (
+            _AI_MORE_MENU_STYLE, _AI_TPL_BTN_STYLE, _AI_TPL_DISABLED_COLOR,
+        )
+
+        panel = self._panel()
+        self.assertEqual(_AI_TPL_DISABLED_COLOR, "#8a96a8")
+        self.assertIn("QPushButton:disabled", _AI_TPL_BTN_STYLE)
+        self.assertIn(_AI_TPL_DISABLED_COLOR, _AI_TPL_BTN_STYLE)
+        self.assertIn("QMenu::item:disabled", _AI_MORE_MENU_STYLE)
+        self.assertIn(_AI_TPL_DISABLED_COLOR, _AI_MORE_MENU_STYLE)
+        modes = panel.findChild(QWidget, "aiModes")
+        tpls = panel.findChild(QWidget, "aiTemplates")
+        self.assertIn(_AI_TPL_DISABLED_COLOR, modes.styleSheet())
+        self.assertIn(_AI_TPL_DISABLED_COLOR, tpls.styleSheet())
+        self.assertIn(_AI_TPL_DISABLED_COLOR, panel._more_menu.styleSheet())
 
 
 if __name__ == "__main__":

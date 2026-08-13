@@ -62,7 +62,7 @@ The Statistics panel is ordered to match this ladder. After the Summary it runs 
 2. Open the Statistics section that the finding names.
 3. Click a **Max** value, a scatter point, or a heatmap cell to jump the timeline to that moment. For migration findings, open toolbar **Heatmap** or **Chord** after the table.
 4. Place cursors (`C`) around the phase you care about and enable the cursor-scope checkbox so the numbers describe only that window. Zoom the timeline first if you will use the inspector — its grid follows the **visible viewport**, not cursor-scoped Statistics.
-5. Optionally click **Investigate…**, **Root cause…**, **Verify with AI…**, **Auto investigate…**, or **Query with AI…** in the Analysis dialog (or open the **AI** tab) and have a model narrate or drill into the same findings ([§7](#7-ai-assistant-flow)).
+5. Optionally click **Investigate…**, **Root cause…**, **Verify with AI…**, **Explain…**, **Auto investigate…**, or **Query with AI…** in the Analysis dialog (or open the **AI** tab) and have a model narrate or drill into the same findings ([§7](#7-ai-assistant-flow)).
 
 **A caution about the demo traces.** `example-8cores.btf.gz` is a concatenation of deliberate stress tests, so it triggers warnings by design. Scope to a single phase before treating any warning as a product defect.
 
@@ -543,7 +543,7 @@ The flow from trace to verified answer:
 ① Load trace + open Statistics
 ② (Optional) Place cursors → limit Statistics to the cursor range
 ③ Toolbar Analysis / Statistics findings for that scope
-④ Analysis → Investigate… / Root cause… / Verify with AI… / Auto investigate… / Query with AI…  (or AI tab → template / free-form Ask)
+④ Analysis → Investigate… / Root cause… / Verify with AI… / Explain… / Auto investigate… / Query with AI…  (or AI tab → template / free-form Ask)
 ⑤ Context = Analysis Findings (+ span, cores, scope), or Trace Compare CSV for that template
 ⑥ Endpoint: OpenAI-compatible /chat/completions (Ollama, OpenAI, Gemini, or Custom)
 ⑦ Reply (jump:TIME + confidence; Markdown tables; optional mermaid; optional GUI tool cards)
@@ -639,7 +639,7 @@ Different models fail differently, which makes disagreement between them useful.
 
 **Credential storage.** Desktop stores provider API keys encrypted (`enc1:…`) in `btf_viewer.rc` for this machine only. The web build keeps keys in browser `localStorage` in plaintext — fine for personal demos, not for shared kiosks. Keys are used only as HTTP auth to the endpoint; they are not pasted into the model prompt. See [AI.md — Credential storage](AI.md#endpoints-and-models).
 
-**Verify / Explain / Auto.** Analysis Findings → **Verify with AI…** runs `verify` for the selected finding; **Auto investigate…** runs `auto_investigate`. With **≥2 cursors**, the timeline context menu → **Explain this region with AI** runs `explain_region` (item hidden with fewer cursors). The AI panel **Explain region** template is always clickable: with two or more cursors the prompt includes `Cursor region window: jump:lo … jump:hi`; with none it analyses full-trace Findings. Segment context menu → **Ask AI about this event** scopes to one task/segment. Evidence / Reasoning fills when investigate / correlate / `find_critical_path` (and related tools) return.
+**Verify / Explain / Auto.** Analysis Findings → **Verify with AI…** runs `verify` for the selected finding; **Explain…** (Quick / Technical / Deep) runs `explain_finding` with `level=` in the prompt; **Auto investigate…** runs `auto_investigate`. With **≥2 cursors**, the timeline context menu → **Explain this region with AI** runs `explain_region` (item hidden with fewer cursors). The AI panel **Explain region** template is always clickable: with two or more cursors the prompt includes `Cursor region window: jump:lo … jump:hi`; with none it analyses full-trace Findings. Segment context menu → **Ask AI about this event** scopes to one task/segment. Evidence / Reasoning fills when investigate / correlate / `find_critical_path` (and related tools) return — including Evidence Quality, coverage, what would disprove this, historical knowledge when a catalog/baseline match exists, and a host-side validator after the final reply. Hypothesis rows expose Support / Reject / Need evidence / Test / Compare (`btfhyp:` links). Mode chips (**Quick** / **Diagnose** / **Compare** / **Optimize** / **Report**) start a tool sequence. **More templates → Investigations** runs reusable sequences (CPU latency, migration thrash, A/B regression) plus **Save as template…**. The panel chip shows Local vs Cloud for the current endpoint.
 
 ---
 

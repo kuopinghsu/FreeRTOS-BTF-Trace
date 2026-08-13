@@ -10,6 +10,15 @@
       >
         {{ authChipLabel }}
       </button>
+      <button
+        type="button"
+        class="ai-auth-chip"
+        data-testid="ai-privacy-chip"
+        :title="privacyChipTitle"
+        @click="emit('openSettings')"
+      >
+        {{ privacyChipLabel }}
+      </button>
     </div>
     <div class="ai-header-actions">
       <button
@@ -287,12 +296,27 @@
       {{ planStatusText }}
     </div>
 
+    <div class="ai-modes">
+      <button
+        v-for="mid in investigationModes"
+        :key="mid"
+        type="button"
+        class="ai-tpl-btn"
+        :title="investigationModePrompt(mid)"
+        :disabled="busy || !aiEnabled"
+        @click="onInvestigationMode(mid)"
+      >
+        {{ investigationModeLabel(mid) }}
+      </button>
+    </div>
+
     <div class="ai-templates">
       <button
         v-for="t in primaryTemplates"
         :key="t.id"
         type="button"
         class="ai-tpl-btn"
+        :class="{ gray: templateDisabled(t) }"
         :title="templateTitle(t)"
         :disabled="busy || !aiEnabled || templateDisabled(t)"
         @click="onTemplate(t)"
@@ -301,38 +325,69 @@
       </button>
       <div class="ai-more-wrap">
         <button
+          ref="moreBtnEl"
           type="button"
           class="ai-tpl-btn"
           title="Uses Analysis Findings for the current Statistics scope. Configure the endpoint in Settings → AI."
-          @click="moreOpen = !moreOpen"
+          @click="toggleMore"
         >
           More templates…
         </button>
-        <div
-          v-if="moreOpen"
-          class="ai-more-menu ai-more-menu-wide"
-        >
-          <template
-            v-for="group in templateMenuGroups"
-            :key="group.label"
+        <Teleport to="body">
+          <div
+            v-if="moreOpen"
+            ref="moreMenuEl"
+            class="ai-more-menu ai-more-menu-wide"
+            :style="moreMenuStyle"
           >
-            <div class="ai-more-heading">
-              {{ group.label }}
-            </div>
-            <button
-              v-for="t in group.items"
-              :key="t.id"
-              type="button"
-              class="ai-more-item"
-              :class="{ gray: templateDisabled(t) }"
-              :title="templateTitle(t)"
-              :disabled="busy || !aiEnabled || templateDisabled(t)"
-              @click="onTemplate(t); moreOpen = false"
+            <div
+              v-for="group in templateMenuGroups"
+              :key="group.label"
+              class="ai-more-col"
             >
-              {{ t.label }}
-            </button>
-          </template>
-        </div>
+              <div class="ai-more-heading">
+                {{ group.label }}
+              </div>
+              <button
+                v-for="t in group.items"
+                :key="t.id"
+                type="button"
+                class="ai-more-item"
+                :class="{ gray: templateDisabled(t) }"
+                :title="templateTitle(t)"
+                :disabled="busy || !aiEnabled || templateDisabled(t)"
+                @click="onTemplate(t); moreOpen = false"
+              >
+                {{ t.label }}
+              </button>
+            </div>
+            <div class="ai-more-col">
+              <div class="ai-more-heading">
+                Investigations
+              </div>
+              <button
+                v-for="tpl in investigationTemplates"
+                :key="tpl.id"
+                type="button"
+                class="ai-more-item"
+                :title="investigationTemplatePrompt(tpl)"
+                :disabled="busy || !aiEnabled"
+                @click="onInvestigationTemplate(tpl); moreOpen = false"
+              >
+                {{ tpl.label }}
+              </button>
+              <button
+                type="button"
+                class="ai-more-item"
+                title="Save the current investigation steps as a reusable template"
+                :disabled="busy"
+                @click="onSaveInvestigationTemplate(); moreOpen = false"
+              >
+                Save as template…
+              </button>
+            </div>
+          </div>
+        </Teleport>
       </div>
     </div>
 
@@ -473,7 +528,9 @@ import {
   aiPresetSignInUrl,
   buildAiSystemPrompt,
   buildAiUserMessage,
+  cursorRegionBounds,
   extractJumpTimes,
+  isLocalAiHost,
   normalizeAiContext,
   resolveAiSettings,
 } from '../utils/ollamaClient.js'
@@ -484,6 +541,7 @@ import {
   buildAiReportHtml,
   canonicalAssistantToolMessage,
   isExportTool,
+  isQueryTool,
   maxToolRounds,
   parseAiAutoApply,
   parseBtfHighlightHref,
@@ -495,14 +553,40 @@ import {
   btfJumpHref,
 } from '../utils/aiTools.js'
 import {
+  INVESTIGATION_MODE_LABELS,
+  INVESTIGATION_MODES,
+  accumulateCost,
+  buildValidationCatalog,
+  builtinInvestigationTemplates,
+  chatUsageFromResponse,
+  classifyTracePrivacy,
+  compareHypotheses,
+  dumpUserInvestigationTemplates,
+  emptyCostMeter,
+  formatCostMeter,
+  formatConfidenceEvolution,
+  formatPrivacyChip,
+  statusWithCost,
+  investigationModePlan,
+  investigationModePrompt,
+  investigationTemplatePrompt,
+  newUserInvestigationTemplate,
+  parseUserInvestigationTemplates,
+  setHypothesisStatus,
+  updateCaseFromTool,
+  validateAiResponse,
+} from '../utils/aiCase.js'
+import {
   buildInvestigationPackage,
   completeInvestigationPlan,
   defaultInvestigationPlan,
+  EVIDENCE_PANEL_TOOLS,
   extractEvidencePanelPayload,
   formatEvidencePanelMarkdown,
   formatInvestigationPlanStatus,
   isAgentTemplate,
   markPlanStepsFromTools,
+  parseBtfHypHref,
 } from '../utils/aiInvestigation.js'
 import {
   aiFileStamp,
@@ -512,6 +596,10 @@ import {
   formatAiConversationText,
   formatAiMessageHtml,
 } from '../utils/aiMarkdown.js'
+import {
+  loadAiUserInvestigationTemplates,
+  saveAiUserInvestigationTemplates,
+} from '../utils/settingsStore.js'
 
 const props = defineProps({
   aiEnabled: { type: Boolean, default: true },
@@ -547,6 +635,15 @@ const templateMenuGroups = computed(() =>
     items: g.ids.map(id => templates.find(t => t.id === id)).filter(Boolean),
   })),
 )
+const investigationModes = INVESTIGATION_MODES
+const userInvestigationTemplates = ref(loadAiUserInvestigationTemplates())
+const investigationTemplates = computed(() => [
+  ...builtinInvestigationTemplates(),
+  ...userInvestigationTemplates.value,
+])
+function investigationModeLabel(mid) {
+  return INVESTIGATION_MODE_LABELS[mid] || mid
+}
 // A language imported from JSON need not be one of the built-in choices.
 const languages = computed(() => {
   const cur = String(props.responseLanguage || '').trim()
@@ -561,6 +658,9 @@ const status = ref('')
 const logRef = ref(null)
 const langOpen = ref(false)
 const moreOpen = ref(false)
+const moreBtnEl = ref(null)
+const moreMenuEl = ref(null)
+const moreMenuStyle = ref({})
 const langDraft = ref(props.responseLanguage || DEFAULT_AI_RESPONSE_LANGUAGE)
 const loadedTabs = ref([])
 const logMenu = reactive({ visible: false, x: 0, y: 0, hasSelection: false })
@@ -597,12 +697,46 @@ function removeEvidenceLogEntry() {
 function updateEvidenceFromToolResult(name, res) {
   const payload = extractEvidencePanelPayload(name, res)
   if (!payload) return
+  const prev = evidencePayload || {}
+  const prevCase = prev.investigation_case
+  if (prevCase) {
+    const caseObj = updateCaseFromTool(prevCase, name, res)
+    payload.investigation_case = caseObj
+    payload.tool_reasons = caseObj.tool_reasons || []
+    payload.confidence_evolution = formatConfidenceEvolution(caseObj.confidence_history)
+  }
+  if (prev.validation && !payload.validation) payload.validation = prev.validation
+  if (prev.cost && !payload.cost) payload.cost = prev.cost
   evidencePayload = payload
   syncEvidenceLogEntry(payload)
 }
 
 function pinEvidenceLogEntry() {
   if (evidencePayload) syncEvidenceLogEntry(evidencePayload)
+}
+
+function attachResponseValidation(text) {
+  const src = String(text || '').trim()
+  if (!src) return
+  let ctx = {}
+  try {
+    ctx = normalizeAiContext(props.getContext?.() || {})
+  } catch {
+    ctx = {}
+  }
+  const bounds = cursorRegionBounds(ctx.cursors)
+  const catalog = buildValidationCatalog({
+    findingsText: String(ctx.findings_text || ctx.findingsText || ''),
+    evidence: evidencePayload?.evidence,
+    cursorLo: bounds ? bounds.lo : null,
+    cursorHi: bounds ? bounds.hi : null,
+  })
+  const report = validateAiResponse(src, catalog)
+  evidencePayload = {
+    ...(evidencePayload || {}),
+    validation: report,
+    cost: formatCostMeter(costMeter.value),
+  }
 }
 
 function setInvestigationPlan(plan) {
@@ -720,6 +854,41 @@ function templateDisabled(t) {
   return false
 }
 
+function placeMoreMenu() {
+  const btn = moreBtnEl.value
+  if (!btn) return
+  const r = btn.getBoundingClientRect()
+  const gap = 4
+  const spaceAbove = r.top
+  const spaceBelow = window.innerHeight - r.bottom
+  const maxH = Math.max(160, Math.min(560, (spaceAbove >= spaceBelow ? spaceAbove : spaceBelow) - 12))
+  const right = Math.max(8, window.innerWidth - r.right)
+  if (spaceAbove >= spaceBelow) {
+    moreMenuStyle.value = {
+      position: 'fixed',
+      right: `${right}px`,
+      bottom: `${window.innerHeight - r.top + gap}px`,
+      maxHeight: `${maxH}px`,
+    }
+  } else {
+    moreMenuStyle.value = {
+      position: 'fixed',
+      right: `${right}px`,
+      top: `${r.bottom + gap}px`,
+      maxHeight: `${maxH}px`,
+    }
+  }
+}
+
+function closeMore() {
+  moreOpen.value = false
+}
+
+function toggleMore() {
+  moreOpen.value = !moreOpen.value
+  if (moreOpen.value) nextTick(placeMoreMenu)
+}
+
 function templateTitle(t) {
   if (t.id === AI_COMPARE_TEMPLATE_ID && !compareEnabled.value) {
     return 'Open at least two BTF tabs to use Trace Compare.'
@@ -740,10 +909,14 @@ function applyLanguage() {
   langOpen.value = false
 }
 
+const costMeter = ref(emptyCostMeter())
+let costStarted = 0
+
 const statusText = computed(() => {
-  if (!props.aiEnabled) return 'AI is disabled in Settings → AI.'
-  if (error.value) return error.value
-  return status.value
+  const base = !props.aiEnabled
+    ? 'AI is disabled in Settings → AI.'
+    : (error.value || status.value)
+  return statusWithCost(base, costMeter.value)
 })
 
 const activeAi = computed(() => resolveAiSettings({
@@ -759,6 +932,11 @@ const authState = computed(() => aiAuthStatus({
 const authChipLabel = computed(() => (
   `${aiPresetInfo(activeAi.value.preset).label} · ${authState.value.label}`
 ))
+const privacyState = computed(() => classifyTracePrivacy({
+  endpointIsLocal: isLocalAiHost(activeAi.value.baseUrl),
+}))
+const privacyChipLabel = computed(() => formatPrivacyChip(privacyState.value))
+const privacyChipTitle = computed(() => String(privacyState.value.note || ''))
 const signInLabel = computed(() => aiPresetSignInLabel(activeAi.value.preset))
 const signInUrl = computed(() => (
   aiPresetSignInUrl(activeAi.value.preset, activeAi.value.baseUrl)
@@ -817,7 +995,14 @@ function onMermaidZoomWheel(ev) {
 }
 
 function onMsgClick(ev) {
-  const a = ev.target?.closest?.('a[data-jump], a[href^="btfjump:"], a[data-highlight], a[href^="btfhighlight:"]')
+  const hypA = ev.target?.closest?.('a[href^="btfhyp:"]')
+  if (hypA) {
+    ev.preventDefault()
+    const parsed = parseBtfHypHref(hypA.getAttribute('href') || '')
+    if (parsed.action) onHypothesisAction(parsed.action, parsed.hypId)
+    return
+  }
+  const a = ev.target?.closest?.('a[data-jump], a[href^="btfjump:"], a[href^="btfhyp:"], a[data-highlight], a[href^="btfhighlight:"]')
   if (a && !a.classList.contains('ai-mermaid-zoom')) {
     ev.preventDefault()
     const href = a.getAttribute('href') || ''
@@ -1035,9 +1220,10 @@ function clear() {
   chatMessages = []
   toolRound = 0
   error.value = ''
-  status.value = ''
   mermaidZoom.value = null
   evidencePayload = null
+  costMeter.value = emptyCostMeter()
+  status.value = ''
 }
 
 function stop() {
@@ -1045,6 +1231,114 @@ function stop() {
   status.value = 'Stopping…'
   error.value = ''
   abortCtrl.abort()
+}
+
+function recordTurnUsage(turn, calls) {
+  const usage = chatUsageFromResponse({ usage: turn?.usage || {} })
+  const names = (calls || []).map(c => String(c?.name || ''))
+  const elapsed = costStarted ? Math.max(0, (Date.now() - costStarted) / 1000) : 0
+  costMeter.value = accumulateCost(costMeter.value, {
+    promptTokens: usage.prompt_tokens,
+    completionTokens: usage.completion_tokens,
+    toolCalls: names.length,
+    traceQueries: names.filter(n => isQueryTool(n)).length,
+    modelTimeS: elapsed,
+  })
+}
+
+async function onInvestigationMode(mode) {
+  const plan = investigationModePlan(mode)
+  const label = investigationModeLabel(plan.mode)
+  const prompt = investigationModePrompt(plan.mode)
+  const steps = (plan.tools || []).map(s => ({
+    id: String(s), label: String(s), status: 'pending',
+  }))
+  activeTemplateId = plan.template || plan.mode
+  if (steps.length) setInvestigationPlan({ goal: label, steps })
+  else setInvestigationPlan(null)
+  draft.value = prompt
+  await send()
+}
+
+function onSaveInvestigationTemplate() {
+  let steps = []
+  if (investigationPlan.value?.steps) {
+    steps = investigationPlan.value.steps.map(s => String(s.id || s)).filter(Boolean)
+  }
+  if (!steps.length && evidencePayload?.investigation_case?.tools_executed) {
+    steps = [...evidencePayload.investigation_case.tools_executed]
+  }
+  const name = window.prompt('Template name', 'My Investigation')
+  if (name == null) return
+  const tpl = newUserInvestigationTemplate(name, steps)
+  const items = parseUserInvestigationTemplates(
+    dumpUserInvestigationTemplates(userInvestigationTemplates.value),
+  ).filter(it => it.id !== tpl.id)
+  items.push(tpl)
+  saveAiUserInvestigationTemplates(items)
+  userInvestigationTemplates.value = items
+  status.value = `Saved template “${tpl.label}”.`
+}
+
+function onHypothesisAction(action, hypId) {
+  const act = String(action || '').trim().toLowerCase()
+  const hid = String(hypId || '').trim()
+  const payload = { ...(evidencePayload || {}) }
+  const hyps = [...(payload.hypotheses_managed || payload.hypotheses || [])]
+  if (['supported', 'rejected', 'need_evidence', 'possible'].includes(act)) {
+    const updated = setHypothesisStatus(hyps, hid, act)
+    payload.hypotheses_managed = updated
+    payload.hypotheses = updated
+    if (payload.investigation_case) {
+      payload.investigation_case = { ...payload.investigation_case, hypotheses: updated }
+    }
+    evidencePayload = payload
+    syncEvidenceLogEntry(payload)
+    return
+  }
+  if (act === 'compare') {
+    const ranked = compareHypotheses(hyps)
+    const leader = ranked.leader || {}
+    payload.hypotheses_managed = ranked.ranked || hyps
+    payload.conclusion = leader.hypothesis ? `Leader: ${leader.hypothesis}` : 'Compare hypotheses'
+    evidencePayload = payload
+    syncEvidenceLogEntry(payload)
+    return
+  }
+  if (act === 'test') {
+    let name = hid
+    for (const h of hyps) {
+      if (h && String(h.id || '') === hid) {
+        name = String(h.hypothesis || hid)
+        break
+      }
+    }
+    const prompt = (
+      `Test hypothesis ${JSON.stringify(name)} (id=${hid}). `
+      + 'Call investigate then correlate_events and find_critical_path. '
+      + `Then manage_hypotheses(hypothesis_id=${hid}, `
+      + 'status=supported|rejected|need_evidence). '
+      + 'Finish with a verdict, jump:TIME evidence, and one next check.'
+    )
+    activeTemplateId = 'investigate'
+    draft.value = prompt
+    send()
+  }
+}
+
+async function onInvestigationTemplate(tpl) {
+  const prompt = investigationTemplatePrompt(tpl)
+  const steps = (tpl.steps || []).map(s => ({
+    id: String(s), label: String(s), status: 'pending',
+  }))
+  activeTemplateId = tpl.id || ''
+  if (steps.length) {
+    setInvestigationPlan({ goal: String(tpl.label || 'Investigation'), steps })
+  } else {
+    setInvestigationPlan(null)
+  }
+  draft.value = prompt
+  await send()
 }
 
 async function onTemplate(t) {
@@ -1167,6 +1461,7 @@ async function runCompletion(active, finalRound = false) {
         + 'give your final answer now in plain text.',
     }]
   }
+  costStarted = Date.now()
   return aiChatCompletion({
     messages,
     tools: finalRound ? [] : aiViewerTools(),
@@ -1183,6 +1478,7 @@ async function runCompletion(active, finalRound = false) {
 function ingestTurn(turn) {
   const text = String(turn.content || '').trim()
   const calls = Array.isArray(turn.tool_calls) ? turn.tool_calls : []
+  recordTurnUsage(turn, calls)
   if (calls.length) chatMessages.push(canonicalAssistantToolMessage(text, calls))
   else if (text) chatMessages.push({ role: 'assistant', content: text })
 
@@ -1213,6 +1509,7 @@ function ingestTurn(turn) {
   }
   if (text) messages.value.push({ role: 'assistant', content: text })
   finishInvestigationPlan()
+  attachResponseValidation(text)
   pinEvidenceLogEntry()
   const jumps = extractJumpTimes(text)
   if (jumps.length) {
@@ -1265,12 +1562,7 @@ function commitBatch(batchId, skipped) {
       content: results[i] || { ok: false, message: '' },
     }))
     const toolName = String(t.name || '')
-    if (
-      toolName === 'investigate'
-      || toolName === 'correlate_events'
-      || toolName === 'find_critical_path'
-      || toolName === 'compare_performance'
-    ) {
+    if (EVIDENCE_PANEL_TOOLS.includes(toolName)) {
       updateEvidenceFromToolResult(toolName, results[i] || {})
     }
   })
@@ -1395,6 +1687,14 @@ watch(() => props.aiEnabled, (on) => {
   if (!on) status.value = ''
 })
 
+function onDocMouseDown(ev) {
+  closeLogMenu()
+  if (!moreOpen.value) return
+  if (moreBtnEl.value?.contains(ev.target)) return
+  if (moreMenuEl.value?.contains(ev.target)) return
+  closeMore()
+}
+
 function onDocKeyDown(ev) {
   if (ev.key !== 'Escape') return
   if (mermaidZoom.value) {
@@ -1402,17 +1702,24 @@ function onDocKeyDown(ev) {
     ev.preventDefault()
     return
   }
+  if (moreOpen.value) {
+    closeMore()
+    ev.preventDefault()
+    return
+  }
   closeLogMenu()
 }
 
 onMounted(() => {
-  document.addEventListener('mousedown', closeLogMenu)
+  document.addEventListener('mousedown', onDocMouseDown)
   document.addEventListener('keydown', onDocKeyDown)
+  window.addEventListener('resize', placeMoreMenu)
 })
 
 onBeforeUnmount(() => {
-  document.removeEventListener('mousedown', closeLogMenu)
+  document.removeEventListener('mousedown', onDocMouseDown)
   document.removeEventListener('keydown', onDocKeyDown)
+  window.removeEventListener('resize', placeMoreMenu)
 })
 
 defineExpose({
@@ -1557,7 +1864,8 @@ defineExpose({
   font-weight: 600;
   font-size: inherit;
 }
-.ai-templates {
+.ai-templates,
+.ai-modes {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1580,14 +1888,9 @@ defineExpose({
   flex-shrink: 0;
 }
 .ai-more-menu {
-  position: absolute;
-  right: 0;
-  bottom: 100%;
-  z-index: 40;
+  z-index: 10100;
   min-width: 168px;
-  max-height: min(50vh, 360px);
   overflow-y: auto;
-  margin-bottom: 4px;
   padding: 4px;
   background: var(--panel, #1a2230);
   border: 1px solid var(--border, #3a4658);
@@ -1595,6 +1898,18 @@ defineExpose({
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
   display: flex;
   flex-direction: column;
+}
+.ai-more-menu-wide {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(168px, 1fr));
+  min-width: min(360px, calc(100vw - 16px));
+  max-width: min(520px, calc(100vw - 16px));
+  gap: 0 8px;
+}
+.ai-more-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 .ai-more-heading {
   font-size: 11px;
@@ -1619,7 +1934,8 @@ defineExpose({
 }
 .ai-more-item:disabled,
 .ai-more-item.gray {
-  opacity: 0.45;
+  color: var(--muted, #8a96a8);
+  opacity: 1;
   cursor: not-allowed;
 }
 .ai-plan-status {
@@ -1644,11 +1960,13 @@ defineExpose({
   text-align: left;
 }
 .ai-tpl-btn:disabled, .ai-btn:disabled {
-  opacity: 0.5;
+  color: var(--muted, #8a96a8);
+  background: var(--panel-inset, #1a2230);
+  border-color: var(--border, #3a4658);
+  opacity: 1;
   cursor: not-allowed;
 }
 .ai-tpl-btn.gray:disabled {
-  opacity: 0.35;
   color: var(--muted, #8a96a8);
 }
 .ai-tpl-btn:hover:not(:disabled), .ai-btn:hover:not(:disabled) {
@@ -1659,6 +1977,11 @@ defineExpose({
   border-color: var(--accent, #2a6fb2);
   color: #fff;
   font-weight: 600;
+}
+.ai-btn.primary:disabled {
+  background: #555555;
+  border-color: #555555;
+  color: #bbbbbb;
 }
 .ai-ask-btn {
   padding: 3px 10px;

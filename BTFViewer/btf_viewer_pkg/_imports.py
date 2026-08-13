@@ -34,6 +34,7 @@ import bz2
 import zipfile
 import io
 from contextlib import contextmanager
+from pathlib import Path
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from operator import attrgetter as _attrgetter

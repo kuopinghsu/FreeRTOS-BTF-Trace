@@ -838,6 +838,83 @@ def investigation_mode_plan(mode: str = "diagnose") -> Dict[str, Any]:
     return plan
 
 
+INVESTIGATION_MODE_LABELS: Dict[str, str] = {
+    "quick": "Quick",
+    "diagnose": "Diagnose",
+    "compare": "Compare",
+    "optimize": "Optimize",
+    "report": "Report",
+}
+
+
+def investigation_mode_prompt(mode: str = "diagnose") -> str:
+    """User prompt for an Investigation Mode chip (maps onto existing tools)."""
+    plan = investigation_mode_plan(mode)
+    listed = " → ".join(str(t) for t in (plan.get("tools") or []) if t)
+    label = INVESTIGATION_MODE_LABELS.get(plan["mode"], plan["mode"])
+    return (
+        f"{plan.get('goal') or label}. Call these tools in order: {listed}. "
+        "After each tool, update hypotheses with manage_hypotheses when the "
+        "status changes. Finish with a verdict, jump:TIME evidence, "
+        "what would disprove this, confidence, and one next check."
+    )
+
+
+def parse_user_investigation_templates(raw: Any) -> List[Dict[str, Any]]:
+    """Deserialize user-saved investigation sequences."""
+    if isinstance(raw, list):
+        items = raw
+    else:
+        try:
+            items = json.loads(str(raw or "") or "[]")
+        except json.JSONDecodeError:
+            return []
+    out: List[Dict[str, Any]] = []
+    if not isinstance(items, list):
+        return out
+    for i, it in enumerate(items):
+        if not isinstance(it, dict):
+            continue
+        label = str(it.get("label") or "").strip()
+        steps = [str(s).strip() for s in (it.get("steps") or []) if str(s).strip()]
+        if not label or not steps:
+            continue
+        tid = str(it.get("id") or "").strip()
+        if not tid:
+            tid = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_") or f"user_{i + 1}"
+        out.append({
+            "id": tid, "label": label, "steps": steps, "user": True,
+        })
+    return out
+
+
+def dump_user_investigation_templates(items: Optional[Sequence[dict]] = None) -> str:
+    rows = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        label = str(it.get("label") or "").strip()
+        steps = [str(s).strip() for s in (it.get("steps") or []) if str(s).strip()]
+        if not label or not steps:
+            continue
+        tid = str(it.get("id") or "").strip() or re.sub(
+            r"[^a-z0-9]+", "_", label.lower()).strip("_")
+        rows.append({"id": tid, "label": label, "steps": steps})
+    return json.dumps(rows, ensure_ascii=False)
+
+
+def new_user_investigation_template(
+    label: str,
+    steps: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    name = str(label or "").strip() or "My Investigation"
+    seq = [str(s).strip() for s in (steps or []) if str(s).strip()]
+    if not seq:
+        seq = list(investigation_mode_plan("diagnose").get("tools") or ["investigate"])
+    tid = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "user"
+    return {"id": tid, "label": name, "steps": seq, "user": True}
+
+
 def validate_experiment(
     expected: Optional[dict] = None,
     actual: Optional[dict] = None,
@@ -1023,6 +1100,77 @@ def format_cost_meter(meter: Optional[dict]) -> str:
         f"Model time {m.get('model_time_s') or 0}s · "
         f"Est. {usd_s}"
     )
+
+
+def _format_token_count(n: Any) -> str:
+    try:
+        count = int(n or 0)
+    except (TypeError, ValueError):
+        count = 0
+    if count >= 1000:
+        compact = f"{count / 1000.0:.1f}".rstrip("0").rstrip(".")
+        return f"{compact}k"
+    return str(count)
+
+
+def format_cost_status(meter: Optional[dict]) -> str:
+    """One-line status suffix: ``1.3k tok · 2 tools · 1.5s``."""
+    m = meter if isinstance(meter, dict) else empty_cost_meter()
+    try:
+        tokens = int(m.get("total_tokens") or 0)
+    except (TypeError, ValueError):
+        tokens = 0
+    try:
+        tools = int(m.get("tool_calls") or 0)
+    except (TypeError, ValueError):
+        tools = 0
+    try:
+        time_s = float(m.get("model_time_s") or 0)
+    except (TypeError, ValueError):
+        time_s = 0.0
+    try:
+        usd = float(m.get("estimated_usd") or 0)
+    except (TypeError, ValueError):
+        usd = 0.0
+    parts = [f"{_format_token_count(tokens)} tok"]
+    if tools:
+        parts.append(f"{tools} tools")
+    if time_s:
+        parts.append(f"{time_s:g}s")
+    if usd:
+        parts.append(f"${usd:.3f}")
+    return " · ".join(parts)
+
+
+def cost_meter_active(meter: Optional[dict]) -> bool:
+    """True when the conversation has accumulated any billable usage."""
+    m = meter if isinstance(meter, dict) else empty_cost_meter()
+    try:
+        tokens = int(m.get("total_tokens") or 0)
+    except (TypeError, ValueError):
+        tokens = 0
+    try:
+        tools = int(m.get("tool_calls") or 0)
+    except (TypeError, ValueError):
+        tools = 0
+    try:
+        time_s = float(m.get("model_time_s") or 0)
+    except (TypeError, ValueError):
+        time_s = 0.0
+    try:
+        usd = float(m.get("estimated_usd") or 0)
+    except (TypeError, ValueError):
+        usd = 0.0
+    return tokens > 0 or tools > 0 or time_s > 0 or usd > 0
+
+
+def status_with_cost(message: str, meter: Optional[dict] = None) -> str:
+    """Append the cost line to an AI status message when usage exists."""
+    text = str(message or "").strip()
+    if not cost_meter_active(meter):
+        return text
+    cost = format_cost_status(meter)
+    return f"{text} · {cost}" if text else cost
 
 
 def chat_usage_from_response(body: Any) -> Dict[str, int]:
@@ -1231,6 +1379,76 @@ def match_historical_knowledge(
             ("No historical match" if not prev else "Within historical range")
         ),
     }
+
+
+def builtin_historical_catalog() -> List[Dict[str, Any]]:
+    """Keyword catalog for common firmware investigation classes."""
+    return [
+        {
+            "keywords": ("thrash", "migration", "bounc"),
+            "issue": "Migration thrashing",
+            "fix": "Pin the task / set core affinity",
+            "build": "typical",
+        },
+        {
+            "keywords": ("mutex", "contention", "blocking"),
+            "issue": "Mutex contention",
+            "fix": "Shorten the critical section or enable priority inheritance",
+            "build": "typical",
+        },
+        {
+            "keywords": ("inversion", "inherit"),
+            "issue": "Priority inversion",
+            "fix": "Priority inheritance or priority ceiling on the mutex",
+            "build": "typical",
+        },
+        {
+            "keywords": ("imbalance", "load balance"),
+            "issue": "Load imbalance",
+            "fix": "Rebalance placement or pin heavy tasks",
+            "build": "typical",
+        },
+        {
+            "keywords": ("deadline", "budget"),
+            "issue": "Deadline miss",
+            "fix": "Trim WCET or raise the budget / period",
+            "build": "typical",
+        },
+    ]
+
+
+def historical_knowledge_for_finding(
+    finding: Optional[dict] = None,
+    *,
+    history: Optional[dict] = None,
+    current: Optional[dict] = None,
+) -> Dict[str, Any]:
+    """Match stored history, then the builtin catalog, for one finding."""
+    finding = finding if isinstance(finding, dict) else {}
+    task = str(finding.get("task") or "")
+    cur = current if isinstance(current, dict) else {}
+    hit = match_historical_knowledge(task, current=cur, history=history)
+    if hit.get("previous_issue") or hit.get("flags"):
+        return hit
+    blob = f"{finding.get('title') or ''} {finding.get('text') or ''} {task}".lower()
+    for item in builtin_historical_catalog():
+        if any(k in blob for k in (item.get("keywords") or ())):
+            issue = str(item.get("issue") or "")
+            fix = str(item.get("fix") or "")
+            build = str(item.get("build") or "")
+            return {
+                "ok": True,
+                "task": task,
+                "previous_issue": issue,
+                "known_fix": fix,
+                "last_occurrence": build,
+                "flags": [],
+                "resembles_previous": True,
+                "source": "catalog",
+                "message": f"This resembles the {issue} issue"
+                + (f" — known fix: {fix}" if fix else ""),
+            }
+    return hit
 
 
 def build_investigation_case(

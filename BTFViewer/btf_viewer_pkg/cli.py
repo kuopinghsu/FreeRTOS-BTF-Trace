@@ -13,8 +13,11 @@ from .mainwindow import *  # noqa: F403,F401
 from .perfetto_export import export_perfetto
 from .btf_slice import filter_btf_file_to_range, reconstruct_btf_slice, write_btf_text
 from .platform import *  # noqa: F403,F401
+from .ai_case import run_offline_benchmark
 from .ai_investigation import (
+    compare_performance_metrics,
     evaluate_regression,
+    explain_regression,
     format_regression_report,
     load_baseline_json,
     save_baseline_json,
@@ -199,6 +202,7 @@ Headless analysis commands (desktop only — no GUI, no Qt window):
   compare      Two-trace diff (Trace Compare dialog → Export).
   analyze      CI regression gate vs a baseline .btf or metrics JSON
                (--fail-on-regression; optional --ai narrative).
+  ai-test      Offline AI evidence/validator benchmark (tests/ai dataset).
   migrations   Core Migrations table only (CSV).
   snapshot     Export a PNG/SVG image (timeline, migration inspector, or a
                statistics metric plot) without opening the GUI.
@@ -796,6 +800,28 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         help="range end (trace time units, inclusive; must be greater than --lo)",
     )
 
+    ai_test = sub.add_parser(
+        "ai-test",
+        help="offline AI evidence/validator benchmark (no live model required)",
+        description=(
+            "Score fixture responses in a JSON dataset (file or directory) "
+            "against expected facts: finding types, task names, jump:TIME "
+            "scope, and tool lists. Does not call a live model.\n\n"
+            "  %(prog)s ai-test --dataset tests/ai\n"
+            "  %(prog)s ai-test --dataset tests/ai/dataset.json --fail-under 70\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ai_test.add_argument(
+        "--dataset", metavar="PATH",
+        default=None,
+        help="JSON file or tests/ai directory (default: tests/ai)",
+    )
+    ai_test.add_argument(
+        "--fail-under", type=int, default=70, metavar="N",
+        help="exit 1 when any case overall score is below N (default 70)",
+    )
+
     return parser, {
         "report": report,
         "compare": compare,
@@ -805,6 +831,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         "snapshot": snapshot,
         "perfetto": perfetto,
         "slice": slice_p,
+        "ai-test": ai_test,
     }
 
 def _cli_export_output_paths(output: str, fmt: Optional[str]) -> Tuple[str, str, str]:
@@ -998,10 +1025,6 @@ def _cli_analyze_run(args: argparse.Namespace) -> int:
 
     if args.ai:
         try:
-            from btf_viewer_pkg.ai_investigation import (
-                compare_performance_metrics,
-                explain_regression,
-            )
             cmp = compare_performance_metrics(
                 cand_snap, base_snap,
                 label_a=str(cand_snap.get("name") or "A"),
@@ -1770,6 +1793,30 @@ def _cli_slice_main(argv: List[str]) -> int:
     args = _make_arg_parser()[1]["slice"].parse_args(argv)
     return _cli_slice_run(args)
 
+
+def _cli_ai_test_run(args: argparse.Namespace) -> int:
+    default = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "tests", "ai",
+    )
+    path = os.path.abspath(args.dataset or default)
+    if not os.path.exists(path):
+        print(f"error: dataset not found: {path}", file=sys.stderr)
+        return 1
+    try:
+        result = run_offline_benchmark(path, fail_under=int(args.fail_under or 0))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(result["report"], end="")
+    return 0 if result.get("ok") else 1
+
+
+def _cli_ai_test_main(argv: List[str]) -> int:
+    args = _make_arg_parser()[1]["ai-test"].parse_args(argv)
+    return _cli_ai_test_run(args)
+
+
 _CLI_COMMANDS = {
     "report": _cli_report_main,
     "compare": _cli_compare_main,
@@ -1779,6 +1826,7 @@ _CLI_COMMANDS = {
     "snapshot": _cli_snapshot_main,
     "perfetto": _cli_perfetto_main,
     "slice": _cli_slice_main,
+    "ai-test": _cli_ai_test_main,
 }
 
 def _cli_gui_trace_paths(argv: List[str],

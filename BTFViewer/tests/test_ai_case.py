@@ -11,22 +11,30 @@ if str(BTF_ROOT) not in sys.path:
     sys.path.insert(0, str(BTF_ROOT))
 
 from btf_viewer_pkg.ai_case import (  # noqa: E402
+    accumulate_cost,
     builtin_investigation_templates,
     build_investigation_case,
     build_validation_catalog,
     classify_trace_privacy,
     compute_evidence_quality,
+    dump_user_investigation_templates,
+    empty_cost_meter,
     enrich_hypotheses,
     evidence_quality_band,
     falsification_checks,
     format_capability_report,
+    historical_knowledge_for_finding,
     infer_model_capability,
     interpret_investigation_query,
+    investigation_mode_prompt,
     load_benchmark_dataset,
     match_historical_knowledge,
+    new_user_investigation_template,
+    parse_user_investigation_templates,
     quality_bar,
     run_offline_benchmark,
     set_hypothesis_status,
+    status_with_cost,
     validate_ai_response,
     validate_experiment,
 )
@@ -81,6 +89,20 @@ class InvestigationCaseTests(unittest.TestCase):
         )
         self.assertEqual(q["band"], "strong")
         self.assertTrue(q["flags"]["direct_evidence"])
+
+    def test_status_with_cost_accumulates_and_hides_when_empty(self) -> None:
+        self.assertEqual(status_with_cost("Done.", empty_cost_meter()), "Done.")
+        meter = accumulate_cost(
+            empty_cost_meter(),
+            prompt_tokens=1000,
+            completion_tokens=200,
+            tool_calls=2,
+            trace_queries=1,
+            model_time_s=1.5,
+        )
+        meter = accumulate_cost(meter, prompt_tokens=50, completion_tokens=10)
+        text = status_with_cost("Done.", meter)
+        self.assertEqual(text, "Done. · 1.3k tok · 2 tools · 1.5s")
 
     def test_falsify_migration(self) -> None:
         f = falsification_checks({
@@ -143,6 +165,24 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertTrue(hit.get("ok"))
         self.assertTrue(hit.get("previous_issue") or hit.get("flags"))
 
+    def test_catalog_and_user_templates_round_trip(self) -> None:
+        catalog = historical_knowledge_for_finding({
+            "title": "Excessive bouncing / core thrashing",
+            "text": "CS[22] migrates heavily",
+        })
+        self.assertEqual(catalog.get("previous_issue"), "Migration thrashing")
+        prompt = investigation_mode_prompt("diagnose")
+        self.assertIn("investigate", prompt)
+        self.assertIn("correlate_events", prompt)
+        tpl = new_user_investigation_template(
+            "CPU Latency", ["detect_anomalies", "investigate"])
+        dumped = dump_user_investigation_templates([tpl])
+        parsed = parse_user_investigation_templates(dumped)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["label"], "CPU Latency")
+        self.assertEqual(parsed[0]["steps"], ["detect_anomalies", "investigate"])
+        self.assertTrue(parsed[0].get("user"))
+
     def test_evidence_panel_includes_quality_and_disprove(self) -> None:
         ctx = build_investigate_context(
             [{"id": "f1", "severity": "warning",
@@ -158,6 +198,9 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertIn("Evidence Quality", md)
         self.assertIn("disprove", md.lower())
         self.assertIn("Confidence evolution", md)
+        self.assertIn("Historical knowledge", md)
+        self.assertIn("btfhyp:supported", md)
+        self.assertIn("btfhyp:compare/all", md)
 
     def test_investigation_template_prompt_lists_tools(self) -> None:
         from btf_viewer_pkg.ai_case import investigation_template_prompt
@@ -220,6 +263,13 @@ class InvestigationCaseParitySurfaceTests(unittest.TestCase):
             "runOfflineBenchmark",
             "formatPrivacyChip",
             "investigationTemplatePrompt",
+            "investigationModePrompt",
+            "parseUserInvestigationTemplates",
+            "dumpUserInvestigationTemplates",
+            "historicalKnowledgeForFinding",
+            "statusWithCost",
+            "formatCostStatus",
+            "costMeterActive",
         ):
             self.assertIn(name, js, name)
 

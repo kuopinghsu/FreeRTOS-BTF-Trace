@@ -297,10 +297,25 @@ With **two or more** tabs open, **Trace Compare…** diffs summary, top tasks, u
 
 The right-panel **AI** tab asks diagnostic questions over **Analysis Findings** (or Trace Compare tables). Same panel on **Desktop** and **Web** (schema, tools, and templates stay in sync). Show it with **View → Show AI Assistant** (or Display settings). Endpoints, tools, workflows / use cases, Desktop vs Web differences, CORS, and CLI details live in **[AI.md](AI.md)** ([Workflows](AI.md#workflows-and-use-cases)). Ask order: [WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow).
 
+```text
+AI-assisted evidence-driven investigation
+│
+├── What can AI do?          Templates + tools over Findings (not the raw BTF)
+├── Common workflows         Triage → Investigate / Verify / Explain → timeline
+├── Investigation Case       Hypotheses, evidence graph, coverage, validator
+├── Evidence & confidence    Quality band (heuristic, not a probability)
+├── Tools reference          [AI.md → GUI tools](AI.md#gui-tools)
+├── Model configuration      Settings → AI; Test connection capability card
+├── Privacy                  Local / Cloud chip; findings leave the machine, not the BTF
+└── Developer / CLI          `analyze` regression gate; `ai-test` offline benchmark
+```
+
+Observe → Hypothesize → Gather evidence → Verify → Experiment → Compare → Learn → Report. Always confirm `jump:TIME` on the timeline.
+
 1. **Settings → AI** — enable the assistant, pick a preset (**Ollama**, **OpenAI**, **Google Gemini**, or **Custom**), set base URL / model, choose **Authentication** (**None (local)** / **API key** / **Sign in**), optionally **Allow self-signed TLS** (Desktop), then **Test connection**. Refresh next to **Model** lists served ids. The panel chip shows `Local` / `Key saved` / `Needs API key` / `Needs sign-in` / `Signed in`.
 2. **Import…** loads JSON from [`examples/ai`](examples/ai/README.md) (review the form, then save).
 3. Run a **template**, use **Analysis → Investigate… / Root cause… / Verify with AI… / Auto investigate… / Query with AI…**, or type a free-form question. Click `jump:TIME` in the reply to seek the timeline.
-4. Agent templates (**Investigate**, **Root cause**, **Verify finding**, **Auto investigate**, **What-if**, **Optimize**, **Diagnostic report**) show an **Investigation plan** checklist (steps advance as tools run; the final reply completes the list).
+4. Agent templates (**Investigate**, **Root cause**, **Verify finding**, **Auto investigate**, **What-if**, **Optimize**, **Diagnostic report**) show an **Investigation plan** checklist (steps advance as tools run; the final reply completes the list). Mode chips (**Quick** / **Diagnose** / **Compare** / **Optimize** / **Report**) start a tool sequence. **More → Investigations** lists built-in and saved sequences; **Save as template…** stores the current plan. Evidence hypothesis rows offer Support / Reject / Need evidence / Test / Compare. Analysis **Explain…** picks Quick / Technical / Deep.
 5. When the model proposes GUI actions, **Apply** / **Skip** / **Undo** (or enable **Auto-apply GUI actions**). Read-only queries (including `what_if` / `optimize_experiment`) apply immediately.
 6. Set reply language in Settings or **Language…** on the AI bar. Right-click the log to copy or **Save As…** (Markdown / text / HTML). **Clear** between unrelated questions.
 
@@ -311,6 +326,7 @@ The right-panel **AI** tab asks diagnostic questions over **Analysis Findings** 
 | **Investigate** | Rank hypotheses, call tools, place cursors / zoom / highlight, then conclude with confidence |
 | **Root cause** | Walk deadline/WCET → preemption → blocking → mutex → inheritance → migration for the top finding |
 | **Verify finding** | Confirm or reject a selected Analysis Finding (`finding_id`); also **Verify with AI…** in Findings |
+| **Explain finding** | Quick / technical / deep explanation of the selected finding (`explain_finding`) |
 | **Explain region** | Diagnose the C1–Cn cursor window (timeline menu needs ≥2 cursors; template alone uses full trace if none) |
 | **Auto investigate** | Walk verify → correlate → critical path / PI for a finding; also **Auto investigate…** in Findings |
 | **Task profile** | Behaviour summary for the hottest / most problematic task |
@@ -1657,6 +1673,7 @@ Same engine as the GUI, suitable for CI. Use `QT_QPA_PLATFORM=offscreen` when no
 | `report` | Full statistics CSV/HTML |
 | `compare` | Two-trace diff (two paths or one multi-BTF zip) |
 | `analyze` | CI regression gate vs baseline `.btf` or metrics JSON (`--fail-on-regression`; optional `--ai`; `--save-baseline`) — details in [AI.md](AI.md#cli-regression-gate) |
+| `ai-test` | Offline AI evidence/validator benchmark (`tests/ai` dataset) — [AI.md](AI.md#cli-regression-gate) |
 | `migrations` | Migrations table as CSV |
 | `snapshot` | PNG/SVG of timeline, migration inspector, or a metric plot |
 | `perfetto` | Chrome Trace JSON |
@@ -1791,7 +1808,7 @@ Day-to-day users can ignore this section.
 | Desktop package only | `make -C BTFViewer bundle` → `builds/btf_viewer.py` |
 | Web only | `make -C BTFViewer web` → `builds/btf_viewer.html` |
 | Guided demo | `make -C BTFViewer demo` — see [Demo](#demo) |
-| Tests | `make -C BTFViewer test` (desktop) / `test-web` / `test-all` |
+| Tests | `make -C BTFViewer test` (desktop) / `test-web` / `test-all` / `ai-test` |
 | Dev run (Desktop) | `python -m btf_viewer_pkg [trace.btf]` from `BTFViewer/` |
 
 Edit sources under `btf_viewer_pkg/` and `web/`; commit regenerated files under `builds/` with your changes. Keep AI tool schemas and mermaid layout in sync (`ai_tools.py` / `ai_mermaid.py` ↔ `web/src/utils/aiTools.js` / `aiMermaid.js`). Parser and Statistics numbers are pinned by shared goldens (`tests/fixtures/*-golden.json`) asserted from both `tests/test_parser_golden.py` / `tests/test_stats_web_parity.py` and `web/tests/`. Synthetic traces: `scripts/gen_trace.py --help`. BTF field reference: [`TRACE_FORMAT.md`](../TRACE_FORMAT.md).

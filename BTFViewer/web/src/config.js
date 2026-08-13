@@ -53,7 +53,7 @@ export const CPU_LOAD_PANE_MAX_H = 480   // Legacy cap at default row height
 export const CPU_LOAD_MAX_VISIBLE_ROWS = 8
 
 // ---- Right panel (session layout, resizable) ------------------------------
-// Wide enough for the 3-column AI Templates grid (shared Statistics / AI dock).
+// Wide enough for wrapping AI mode + template chips (shared Statistics / AI dock).
 export const RIGHT_PANEL_WIDTH = 450
 export const RIGHT_PANEL_MIN_W = 180
 export const RIGHT_PANEL_MAX_W = 520

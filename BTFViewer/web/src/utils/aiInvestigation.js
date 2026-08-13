@@ -3,6 +3,18 @@
  * Keep in sync with btf_viewer_pkg/ai_investigation.py.
  */
 
+import {
+  buildEvidenceGraph,
+  buildInvestigationCase,
+  computeEvidenceCoverage,
+  computeEvidenceQuality,
+  enrichHypotheses,
+  evidenceQualityFromScore,
+  falsificationChecks,
+  formatConfidenceEvolution,
+  historicalKnowledgeForFinding,
+} from './aiCase.js'
+
 export const INVESTIGATION_PLAN_STEPS = [
   ['findings', 'Read Analysis Findings'],
   ['hypotheses', 'Rank hypotheses'],
@@ -37,11 +49,28 @@ const TOOL_STEP_MAP = {
   investigation_replay: ['validate'],
   generate_report: ['recommend'],
   export_report: ['recommend'],
+  explain_finding: ['findings', 'hypotheses'],
+  interpret_query: ['findings'],
+  validate_experiment: ['validate', 'recommend'],
+  manage_hypotheses: ['hypotheses', 'validate'],
 }
+
+/** Tools whose results refresh the Evidence / Reasoning log. Keep in sync with
+ *  btf_viewer_pkg/ai_investigation.py EVIDENCE_PANEL_TOOLS. */
+export const EVIDENCE_PANEL_TOOLS = [
+  'investigate',
+  'correlate_events',
+  'find_critical_path',
+  'compare_performance',
+  'explain_finding',
+  'interpret_query',
+  'validate_experiment',
+  'manage_hypotheses',
+]
 
 const AGENT_TEMPLATE_IDS = new Set([
   'investigate', 'root_cause', 'verify', 'what_if', 'optimize',
-  'diagnostic_report', 'auto_investigate',
+  'diagnostic_report', 'auto_investigate', 'explain_finding',
 ])
 
 const FINDING_ID_RE = /^[a-z][a-z0-9_]{0,47}$/
@@ -344,23 +373,33 @@ export function buildInvestigateContext(findings, findingId = '', { depth = 2 } 
   const anomalies = detectAnomalies(items, { limit: Math.max(3, d + 2) })
   const evidenceChainText = formatFindingsEvidenceChain([focus])
   const alternativesSlice = alternatives.slice(0, Math.max(1, d + 1))
+  const finding = {
+    id: focus.id,
+    severity: sev,
+    title,
+    text,
+    evidence: focus.evidence || [],
+    task: focus.task || guessTaskName(text),
+  }
+  const hyps = enrichHypotheses(hypotheses.slice(0, Math.max(1, d + 1)), {
+    evidence: finding.evidence,
+    alternatives: alternativesSlice,
+  })
   const scoreData = computeEvidenceScore(focus.evidence || [], {
     alternatives: alternativesSlice,
     evidenceChain: evidenceChainText,
   })
-  return {
-    ok: true,
-    message: `Investigation context for ${focus.id} (${hypotheses.length} hypotheses, ${suggested.length} suggested tools)`,
-    finding: {
-      id: focus.id,
-      severity: sev,
-      title,
-      text,
-      evidence: focus.evidence || [],
-      task: focus.task || guessTaskName(text),
-    },
+  const quality = scoreData.quality || computeEvidenceQuality({
+    score: scoreData.score,
+    breakdown: scoreData.breakdown,
+    evidence: finding.evidence,
+    alternatives: alternativesSlice,
+    evidenceChain: evidenceChainText,
+  })
+  const graph = {
+    finding,
     related_findings: related,
-    hypotheses: hypotheses.slice(0, Math.max(1, d + 1)),
+    hypotheses: hyps,
     alternatives: alternativesSlice,
     suggested_tools: suggested,
     depth: d,
@@ -370,6 +409,19 @@ export function buildInvestigateContext(findings, findingId = '', { depth = 2 } 
     plan,
     evidence_score: scoreData.score,
     evidence_score_breakdown: scoreData.breakdown,
+    evidence_quality: quality,
+    evidence_coverage: computeEvidenceCoverage({ evidence: finding.evidence }),
+    evidence_graph: buildEvidenceGraph(finding, {
+      evidence: finding.evidence, hypotheses: hyps, chain,
+    }),
+    falsification: falsificationChecks(finding),
+    historical_knowledge: historicalKnowledgeForFinding(finding),
+  }
+  graph.investigation_case = buildInvestigationCase(graph, { scoreData })
+  return {
+    ok: true,
+    message: `Investigation context for ${focus.id} (${hypotheses.length} hypotheses, ${suggested.length} suggested tools)`,
+    ...graph,
   }
 }
 
@@ -491,7 +543,7 @@ export function extractEvidencePanelPayload(toolName, result) {
   for (const key of [
     'finding', 'hypotheses', 'alternatives', 'evidence_chain',
     'events', 'path', 'checks', 'confidence', 'task', 'correlation',
-    'root_cause_chain',
+    'root_cause_chain', 'historical_knowledge',
   ]) {
     if (!(key in data) && key in result) data[key] = result[key]
   }
@@ -516,6 +568,14 @@ export function extractEvidencePanelPayload(toolName, result) {
     payload.confidence = String(data.confidence || 'Medium')
     if (data.hypotheses?.length) payload.hypotheses = [...data.hypotheses]
     if (data.root_cause_chain?.length) payload.root_cause_chain = [...data.root_cause_chain]
+    for (const extra of [
+      'evidence_quality', 'evidence_coverage', 'evidence_graph',
+      'falsification', 'investigation_case', 'confidence_history',
+      'historical_knowledge',
+    ]) {
+      if (data[extra]) payload[extra] = data[extra]
+    }
+    if (data.explanation && !payload.subtitle) payload.subtitle = String(data.explanation)
   } else if (name === 'find_critical_path' || data.path) {
     const task = String(data.task || '')
     payload.conclusion = task ? `Critical path: ${task}` : 'Critical path'
@@ -543,6 +603,29 @@ export function extractEvidencePanelPayload(toolName, result) {
       : 'Performance comparison'
     payload.confidence = String(data.confidence || 'Medium')
     payload.checks = [...(data.checks || [])]
+  } else if (name === 'interpret_query' || data.interpreted_question) {
+    payload.conclusion = String(data.interpreted_question || '')
+    const scopes = (data.scope || []).map(s => String(s)).filter(Boolean)
+    const mode = String(data.mode || data.kind || '')
+    if (scopes.length) payload.subtitle = mode ? `${mode}: ${scopes.join(', ')}` : scopes.join(', ')
+    else if (mode) payload.subtitle = mode
+    payload.confidence = 'Medium'
+  } else if (
+    name === 'validate_experiment'
+    || ['VALIDATED', 'PARTIALLY VALIDATED', 'DISPROVED', 'INCONCLUSIVE'].includes(data.result)
+  ) {
+    const resultLabel = String(data.result || 'INCONCLUSIVE')
+    payload.conclusion = resultLabel
+    payload.checks = (data.rows || [])
+      .filter(row => row && typeof row === 'object')
+      .map(row => ({
+        label: String(row.metric || 'metric'),
+        status: String(row.status || ''),
+        detail: `expected ${row.expected} actual ${row.actual}`,
+      }))
+    payload.confidence = resultLabel === 'VALIDATED'
+      ? 'High'
+      : resultLabel === 'DISPROVED' ? 'Low' : 'Medium'
   }
 
   if (!(
@@ -560,6 +643,31 @@ export function extractEvidencePanelPayload(toolName, result) {
   payload.evidence_score = scoreData.score
   payload.evidence_score_breakdown = scoreData.breakdown
   payload.evidence_score_bar = scoreData.bar
+  const quality = scoreData.quality || evidenceQualityFromScore(
+    scoreData.score, scoreData.breakdown || [])
+  payload.evidence_quality = quality
+  payload.evidence_quality_bar = quality.bar
+  const caseObj = buildInvestigationCase({
+    finding: data.finding && typeof data.finding === 'object' ? data.finding : null,
+    hypotheses: payload.hypotheses,
+    alternatives: payload.alternatives,
+    evidence: payload.evidence,
+    conclusion: String(payload.conclusion || ''),
+    confidence: String(payload.confidence || ''),
+    scoreData,
+    checks: payload.checks,
+    plan: data.plan,
+    toolsExecuted: data.suggested_tools || data.tools_executed,
+  })
+  payload.investigation_case = caseObj
+  payload.coverage = caseObj.evidence_coverage || caseObj.coverage
+  payload.falsify = caseObj.falsification || caseObj.falsify
+  payload.graph_mermaid = caseObj.graph_mermaid
+  payload.hypotheses_managed = caseObj.hypotheses
+  payload.tool_reasons = caseObj.tool_reasons || []
+  payload.confidence_evolution = formatConfidenceEvolution(caseObj.confidence_history)
+  const hk = data.historical_knowledge || payload.historical_knowledge
+  if (hk) payload.historical_knowledge = hk
   return payload
 }
 
@@ -567,6 +675,31 @@ function evidenceJumpToken(value) {
   const n = Number(value)
   if (!Number.isFinite(n)) return String(value ?? '')
   return Number.isInteger(n) ? String(Math.trunc(n)) : String(n)
+}
+
+const BTF_HYP_HREF_RE = /btfhyp:(?:\/\/)?([a-z_]+)\/([^?\s#]*)/i
+
+export function btfHypHref(action, hypId = '') {
+  const act = String(action || '').toLowerCase().replace(/[^a-z_]/g, '') || 'test'
+  const hid = String(hypId || 'all').replace(/[^A-Za-z0-9_.-]/g, '') || 'all'
+  return `btfhyp:${act}/${hid}`
+}
+
+export function parseBtfHypHref(href) {
+  const m = BTF_HYP_HREF_RE.exec(String(href || ''))
+  if (!m) return { action: '', hypId: '' }
+  return { action: String(m[1] || '').toLowerCase(), hypId: m[2] || 'all' }
+}
+
+export function formatHypothesisActionLinks(hypId, labels = {}) {
+  const hid = String(hypId || 'h1')
+  const parts = [
+    ['supported', 'support_action', 'Support'],
+    ['rejected', 'reject_action', 'Reject'],
+    ['need_evidence', 'need_evidence_action', 'Need evidence'],
+    ['test', 'test_action', 'Test'],
+  ].map(([action, key, fallback]) => `[${labels[key] || fallback}](${btfHypHref(action, hid)})`)
+  return parts.join(' · ')
 }
 
 /** Keep in sync with btf_viewer_pkg/ai_investigation.py EVIDENCE_PANEL_LABELS. */
@@ -645,6 +778,126 @@ export const EVIDENCE_PANEL_LABELS = {
   },
 }
 
+const EVIDENCE_PANEL_EXTRA = {
+  English: {
+    quality: 'Evidence Quality', coverage: 'Evidence Coverage',
+    disprove: 'What would disprove this', graph: 'Evidence graph',
+    supported: 'supported', possible: 'possible', needs_evidence: 'needs evidence',
+    unverified: 'unverified claims', next_check: 'Recommended next check',
+    supporting: 'Supporting evidence', cost: 'Investigation cost',
+    claims: 'Claims', validation: 'Validation',
+    evolution: 'Confidence evolution', privacy: 'Privacy',
+  },
+  'Traditional Chinese (繁體中文)': {
+    quality: '證據品質', coverage: '證據覆蓋', disprove: '如何推翻此結論', graph: '證據圖',
+    supported: '已支持', possible: '可能', needs_evidence: '需要證據',
+    unverified: '未驗證的主張', next_check: '建議下一步',     supporting: '支持證據',
+    cost: '調查成本', claims: '主張', validation: '驗證',
+    evolution: '置信度演進', privacy: '隱私',
+  },
+  'Simplified Chinese (简体中文)': {
+    quality: '证据品质', coverage: '证据覆盖', disprove: '如何推翻此结论', graph: '证据图',
+    supported: '已支持', possible: '可能', needs_evidence: '需要证据',
+    unverified: '未验证的主张', next_check: '建议下一步',     supporting: '支持证据',
+    cost: '调查成本', claims: '主张', validation: '验证',
+    evolution: '置信度演进', privacy: '隐私',
+  },
+  'Japanese (日本語)': {
+    quality: '根拠の質', coverage: '根拠カバレッジ', disprove: '反証になるもの', graph: '根拠グラフ',
+    supported: '支持', possible: '可能性あり', needs_evidence: '根拠不足',
+    unverified: '未検証の主張', next_check: '次の確認',     supporting: '支持する根拠',
+    cost: '調査コスト', claims: '主張', validation: '検証',
+    evolution: '信頼度の推移', privacy: 'プライバシー',
+  },
+  'Korean (한국어)': {
+    quality: '증거 품질', coverage: '증거 커버리지', disprove: '이 결론을 뒤집는 증거', graph: '증거 그래프',
+    supported: '지지됨', possible: '가능', needs_evidence: '증거 필요',
+    unverified: '미검증 주장', next_check: '다음 확인',     supporting: '지지 증거',
+    cost: '조사 비용', claims: '주장', validation: '검증',
+    evolution: '신뢰도 변화', privacy: '개인정보',
+  },
+  German: {
+    quality: 'Belegqualität', coverage: 'Belegabdeckung', disprove: 'Was würde das widerlegen',
+    graph: 'Beleggraph', supported: 'gestützt', possible: 'möglich',
+    needs_evidence: 'Belege nötig', unverified: 'unbestätigte Aussagen',
+    next_check: 'Nächster Prüfpunkt', supporting: 'Stützende Belege',
+    cost: 'Untersuchungskosten', claims: 'Aussagen', validation: 'Validierung',
+    evolution: 'Konfidenzverlauf', privacy: 'Datenschutz',
+  },
+  French: {
+    quality: 'Qualité des preuves', coverage: 'Couverture des preuves',
+    disprove: 'Ce qui infirmerait ceci', graph: 'Graphe de preuves',
+    supported: 'étayé', possible: 'possible', needs_evidence: 'preuves nécessaires',
+    unverified: 'affirmations non vérifiées', next_check: 'Prochaine vérification',
+    supporting: 'Preuves à l\'appui', cost: 'Coût d\'investigation',
+    claims: 'Affirmations', validation: 'Validation',
+    evolution: 'Évolution de la confiance', privacy: 'Confidentialité',
+  },
+  Spanish: {
+    quality: 'Calidad de evidencia', coverage: 'Cobertura de evidencia',
+    disprove: 'Qué refutaría esto', graph: 'Grafo de evidencia',
+    supported: 'respaldado', possible: 'posible', needs_evidence: 'falta evidencia',
+    unverified: 'afirmaciones no verificadas', next_check: 'Siguiente comprobación',
+    supporting: 'Evidencia de apoyo', cost: 'Coste de investigación',
+    claims: 'Afirmaciones', validation: 'Validación',
+    evolution: 'Evolución de la confianza', privacy: 'Privacidad',
+  },
+}
+const EVIDENCE_PANEL_ACTIONS = {
+  English: {
+    historical: 'Historical knowledge', previous_issue: 'Previous issue',
+    known_fix: 'Known fix', last_occurrence: 'Last occurrence',
+    support_action: 'Support', reject_action: 'Reject',
+    need_evidence_action: 'Need evidence', test_action: 'Test',
+    compare_action: 'Compare hypotheses',
+  },
+  'Traditional Chinese (繁體中文)': {
+    historical: '歷史知識', previous_issue: '先前問題', known_fix: '已知修復',
+    last_occurrence: '上次出現', support_action: '支持', reject_action: '排除',
+    need_evidence_action: '需要證據', test_action: '驗證', compare_action: '比較假設',
+  },
+  'Simplified Chinese (简体中文)': {
+    historical: '历史知识', previous_issue: '先前问题', known_fix: '已知修复',
+    last_occurrence: '上次出现', support_action: '支持', reject_action: '排除',
+    need_evidence_action: '需要证据', test_action: '验证', compare_action: '比较假设',
+  },
+  'Japanese (日本語)': {
+    historical: '過去の知見', previous_issue: '過去の問題', known_fix: '既知の対策',
+    last_occurrence: '前回の発生', support_action: '支持', reject_action: '却下',
+    need_evidence_action: '根拠不足', test_action: '検証', compare_action: '仮説を比較',
+  },
+  'Korean (한국어)': {
+    historical: '과거 지식', previous_issue: '이전 이슈', known_fix: '알려진 수정',
+    last_occurrence: '최근 발생', support_action: '지지', reject_action: '기각',
+    need_evidence_action: '증거 필요', test_action: '검증', compare_action: '가설 비교',
+  },
+  German: {
+    historical: 'Historisches Wissen', previous_issue: 'Früheres Problem',
+    known_fix: 'Bekannte Lösung', last_occurrence: 'Letztes Auftreten',
+    support_action: 'Stützen', reject_action: 'Ablehnen',
+    need_evidence_action: 'Belege nötig', test_action: 'Prüfen',
+    compare_action: 'Hypothesen vergleichen',
+  },
+  French: {
+    historical: 'Connaissances historiques', previous_issue: 'Problème antérieur',
+    known_fix: 'Correctif connu', last_occurrence: 'Dernière occurrence',
+    support_action: 'Étayer', reject_action: 'Rejeter',
+    need_evidence_action: 'Preuves nécessaires', test_action: 'Tester',
+    compare_action: 'Comparer les hypothèses',
+  },
+  Spanish: {
+    historical: 'Conocimiento histórico', previous_issue: 'Incidencia previa',
+    known_fix: 'Corrección conocida', last_occurrence: 'Última aparición',
+    support_action: 'Respaldar', reject_action: 'Rechazar',
+    need_evidence_action: 'Falta evidencia', test_action: 'Probar',
+    compare_action: 'Comparar hipótesis',
+  },
+}
+for (const [lang, extra] of Object.entries(EVIDENCE_PANEL_EXTRA)) {
+  extra.need_evidence = extra.need_evidence || extra.needs_evidence || 'needs evidence'
+  Object.assign(EVIDENCE_PANEL_LABELS[lang], extra, EVIDENCE_PANEL_ACTIONS[lang] || {})
+}
+
 export function normalizeResponseLanguage(lang) {
   const want = String(lang || '').trim()
   if (want in EVIDENCE_PANEL_LABELS) return want
@@ -670,6 +923,7 @@ export function evidencePanelLabels(responseLanguage = 'English') {
 
 const EVIDENCE_STATUS_KEYS = [
   'high', 'medium', 'low', 'untested', 'confirmed', 'rejected', 'plausible',
+  'supported', 'possible', 'needs_evidence', 'need_evidence',
 ]
 const EVIDENCE_PREFIX_KEYS = [
   'critical_path', 'correlated_events', 'performance_comparison',
@@ -752,10 +1006,97 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
   if (data.confidence) {
     lines.push('', `**${labels.confidence}:** ${localizeEvidenceToken(data.confidence, labels)}`)
   }
-  if (data.evidence_score != null) {
+  if (data.evidence_quality?.bar) {
+    lines.push('', `**${labels.quality || labels.score}:** ${data.evidence_quality.bar}`)
+  } else if (data.evidence_score != null) {
     lines.push('', `**${labels.score}:** ${String(data.evidence_score_bar || '')}`)
   }
+  if (data.coverage?.bar) {
+    lines.push('', `**${labels.coverage || 'Evidence Coverage'}:** ${data.coverage.bar}`)
+  }
+  const falsify = data.falsify
+  if (falsify && typeof falsify === 'object') {
+    const supporting = (falsify.supporting || []).filter(Boolean)
+    const disprove = (falsify.disprove || falsify.would_disprove || []).filter(Boolean)
+    if (supporting.length) {
+      lines.push('', `**${labels.supporting || 'Supporting evidence'}**`)
+      supporting.forEach(s => lines.push(`- ${s}`))
+    }
+    if (disprove.length) {
+      lines.push('', `**${labels.disprove || 'What would disprove this'}**`)
+      disprove.forEach(s => lines.push(`- ${s}`))
+    }
+    const nxt = String(falsify.next_check || '').trim()
+    if (nxt) lines.push('', `**${labels.next_check || 'Recommended next check'}:** ${nxt}`)
+  }
+  const hk = data.historical_knowledge
+  if (hk && typeof hk === 'object' && (hk.previous_issue || hk.message || (hk.flags || []).length)) {
+    lines.push('', `**${labels.historical || 'Historical knowledge'}**`)
+    if (hk.previous_issue) {
+      lines.push(`- ${labels.previous_issue || 'Previous issue'}: ${hk.previous_issue}`)
+    }
+    if (hk.known_fix) {
+      lines.push(`- ${labels.known_fix || 'Known fix'}: ${hk.known_fix}`)
+    }
+    if (hk.last_occurrence) {
+      lines.push(`- ${labels.last_occurrence || 'Last occurrence'}: ${hk.last_occurrence}`)
+    }
+    for (const flag of (hk.flags || []).slice(0, 4)) lines.push(`- ${flag}`)
+    const msg = String(hk.message || '').trim()
+    if (msg && msg !== 'No historical match' && msg !== 'Within historical range') {
+      lines.push(`- ${msg}`)
+    }
+  }
+  const validation = data.validation
+  if (validation && typeof validation === 'object' && validation.ok === false) {
+    const n = Number(validation.unverified || (validation.issues || []).length)
+    lines.push('', `**${labels.validation || 'Validation'}:** ${n} ${labels.unverified || 'unverified claims'}`)
+    for (const issue of (validation.issues || []).slice(0, 6)) {
+      if (issue && typeof issue === 'object') {
+        lines.push(`- ${issue.kind}: ${issue.detail}`)
+      }
+    }
+    for (const flag of (validation.flags || []).slice(0, 6)) {
+      lines.push(`- ${flag}`)
+    }
+  }
+  const cost = String(data.cost || '').trim()
+  if (cost) {
+    lines.push('', `**${labels.cost || 'Investigation cost'}:** ${cost}`)
+  }
+  const evo = String(data.confidence_evolution || '').trim()
+  if (evo) {
+    lines.push('', `**${labels.evolution || 'Confidence evolution'}**`)
+    evo.split('\n').forEach((line) => {
+      if (line.trim()) lines.push(`- ${line.trim()}`)
+    })
+  }
+  const reasons = data.tool_reasons || []
+  if (reasons.length) {
+    lines.push('', `**${labels.investigation || 'Investigation'}**`)
+    for (const r of reasons) {
+      if (!r || typeof r !== 'object') continue
+      const tool = String(r.tool || '')
+      if (tool) lines.push(`- ${tool}: ${String(r.reason || '')}`)
+    }
+  }
+  const hypsM = data.hypotheses_managed || []
+  if (hypsM.length) {
+    lines.push('', `**${labels.alternatives}**`)
+    for (const h of hypsM) {
+      if (!h || typeof h !== 'object') continue
+      const extra = h.confidence != null ? ` ${h.confidence}%` : ''
+      const actions = formatHypothesisActionLinks(h.id || '', labels)
+      lines.push(
+        `- *${String(h.hypothesis || '')}* (${localizeEvidenceToken(h.status || 'needs_evidence', labels)}${extra}) — ${String(h.why || '')} ${actions}`,
+      )
+    }
+    lines.push(
+      `[${labels.compare_action || 'Compare hypotheses'}](${btfHypHref('compare', 'all')})`,
+    )
+  }
   for (const alt of data.alternatives || []) {
+    if (hypsM.length) break
     if (!alt || typeof alt !== 'object') continue
     if (!lines.some(l => l === `**${labels.alternatives}**`)) {
       lines.push('', `**${labels.alternatives}**`)
@@ -781,6 +1122,10 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
     if (treeSrc) {
       lines.push('', `**${labels.tree}**`, '```mermaid', treeSrc.trim(), '```')
     }
+  }
+  const graphSrc = String(data.graph_mermaid || '').trim()
+  if (graphSrc) {
+    lines.push('', `**${labels.graph || 'Evidence graph'}**`, '```mermaid', graphSrc, '```')
   }
   return lines.join('\n').trim()
 }
@@ -1387,7 +1732,10 @@ export function computeEvidenceScore(evidence = [], {
     breakdown.push({ label: 'Metric correlation', delta: 15 })
   }
 
-  const untested = alts.filter(a => String(a.status || '').toLowerCase() === 'untested')
+  const untested = alts.filter(a => {
+    const s = String(a.status || '').toLowerCase()
+    return s === 'untested' || s === 'needs_evidence' || s === 'need_evidence'
+  })
   if (untested.length) {
     const penalty = Math.min(15, 5 * untested.length)
     score -= penalty
@@ -1400,11 +1748,13 @@ export function computeEvidenceScore(evidence = [], {
   }
 
   score = Math.max(0, Math.min(100, score))
+  const quality = evidenceQualityFromScore(score, breakdown)
   return {
     score,
     label: 'AI Evidence Score — heuristic',
     bar: evidenceScoreBar(score),
     breakdown,
+    quality,
   }
 }
 

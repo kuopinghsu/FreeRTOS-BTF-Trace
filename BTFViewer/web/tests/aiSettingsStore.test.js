@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
-import { loadAiBaselineProfile, normalizeSettings, saveAiBaselineProfile } from '../src/utils/settingsStore.js'
+import {
+  loadAiBaselineProfile,
+  loadAiUserInvestigationTemplates,
+  normalizeSettings,
+  saveAiBaselineProfile,
+  saveAiUserInvestigationTemplates,
+} from '../src/utils/settingsStore.js'
 
 function withMemoryLocalStorage(fn) {
   const store = new Map()
@@ -114,6 +120,21 @@ describe('AI settings storage', () => {
       saveAiBaselineProfile(profile)
       assert.deepEqual(loadAiBaselineProfile(), profile)
       assert.equal(globalThis.localStorage.getItem('btf-viewer-settings-v1'), null)
+    })
+  })
+
+  it('persists user investigation templates under their own localStorage key', () => {
+    withMemoryLocalStorage(() => {
+      assert.deepEqual(loadAiUserInvestigationTemplates(), [])
+      saveAiUserInvestigationTemplates([
+        { id: 'cpu_latency', label: 'CPU Latency', steps: ['investigate', 'correlate_events'] },
+      ])
+      const loaded = loadAiUserInvestigationTemplates()
+      assert.equal(loaded.length, 1)
+      assert.equal(loaded[0].label, 'CPU Latency')
+      assert.deepEqual(loaded[0].steps, ['investigate', 'correlate_events'])
+      assert.equal(globalThis.localStorage.getItem('btf-viewer-settings-v1'), null)
+      assert.ok(globalThis.localStorage.getItem('btf-viewer-ai-user-templates-v1'))
     })
   })
 

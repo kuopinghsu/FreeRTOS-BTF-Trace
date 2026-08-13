@@ -31,6 +31,12 @@ import {
   simulateWhatIf,
   snapshotFromSummary,
 } from './aiInvestigation.js'
+import {
+  explainFindingPayload,
+  interpretInvestigationQuery,
+  setHypothesisStatus,
+  validateExperiment,
+} from './aiCase.js'
 import { coreUtilPctRows } from './traceCompare.js'
 
 export const AI_TOOL_SET_CURSORS = 'set_cursors'
@@ -65,6 +71,10 @@ export const AI_TOOL_EXPORT_INVESTIGATION = 'export_investigation'
 export const AI_TOOL_DETECT_PRIORITY_INVERSION = 'detect_priority_inversion'
 export const AI_TOOL_FIND_RELATED_FINDINGS = 'find_related_findings'
 export const AI_TOOL_COMPARE_TASKS = 'compare_tasks'
+export const AI_TOOL_EXPLAIN_FINDING = 'explain_finding'
+export const AI_TOOL_INTERPRET_QUERY = 'interpret_query'
+export const AI_TOOL_VALIDATE_EXPERIMENT = 'validate_experiment'
+export const AI_TOOL_MANAGE_HYPOTHESES = 'manage_hypotheses'
 
 export const AI_VIEWER_TOOL_NAMES = [
   AI_TOOL_SET_CURSORS,
@@ -99,6 +109,10 @@ export const AI_VIEWER_TOOL_NAMES = [
   AI_TOOL_DETECT_PRIORITY_INVERSION,
   AI_TOOL_FIND_RELATED_FINDINGS,
   AI_TOOL_COMPARE_TASKS,
+  AI_TOOL_EXPLAIN_FINDING,
+  AI_TOOL_INTERPRET_QUERY,
+  AI_TOOL_VALIDATE_EXPERIMENT,
+  AI_TOOL_MANAGE_HYPOTHESES,
 ]
 
 export const AI_BOOKMARK_KINDS = [
@@ -204,7 +218,8 @@ export const AI_TOOL_SYSTEM_ADDENDUM =
   + 'generate_report, check_budget, optimize, regression_explain, '
   + 'bookmark_finding, investigation_replay, what_if, optimize_experiment, analyze_traces, '
   + 'baseline_score, recommend_experiments, export_investigation, '
-  + 'detect_priority_inversion, find_related_findings, compare_tasks. '
+  + 'detect_priority_inversion, find_related_findings, compare_tasks, '
+  + 'explain_finding, interpret_query, validate_experiment, manage_hypotheses. '
   + 'For root-cause or Investigate templates: call detect_anomalies and '
   + 'investigate(finding_id) first for a root-cause chain, then '
   + 'correlate_events / query_raw_metric / search_timeline / find_critical_path, then set_cursors '
@@ -1049,6 +1064,102 @@ export function aiViewerTools() {
             },
           },
           required: ['task_a', 'task_b'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_EXPLAIN_FINDING,
+        description:
+          'Explain one Analysis Finding at quick, technical, or deep '
+          + 'level. Host-side: uses the finding text plus hypotheses.',
+        parameters: {
+          type: 'object',
+          properties: {
+            finding_id: {
+              type: 'string',
+              description: 'Finding id, 1-based index, or title substring.',
+            },
+            level: {
+              type: 'string',
+              enum: ['quick', 'technical', 'deep'],
+              description: 'Explanation depth (default technical).',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_INTERPRET_QUERY,
+        description:
+          'Turn a free-form question into an explicit investigation '
+          + 'scope (mode, areas, finding_id) before running tools.',
+        parameters: {
+          type: 'object',
+          properties: {
+            question: {
+              type: 'string',
+              description: "The user's natural-language question.",
+            },
+          },
+          required: ['question'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_VALIDATE_EXPERIMENT,
+        description:
+          'Compare expected experiment deltas (percent) with actual '
+          + 'A vs B / what-if results. Returns VALIDATED / PARTIALLY '
+          + 'VALIDATED / DISPROVED.',
+        parameters: {
+          type: 'object',
+          properties: {
+            expected: {
+              type: 'object',
+              description: 'Metric → expected signed percent change.',
+            },
+            actual: {
+              type: 'object',
+              description: 'Metric → measured signed percent change.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_MANAGE_HYPOTHESES,
+        description:
+          'Mark one investigation hypothesis as supported, possible, '
+          + 'rejected, or need_evidence.',
+        parameters: {
+          type: 'object',
+          properties: {
+            hypothesis_id: {
+              type: 'string',
+              description: 'Hypothesis id (h1), 1-based index, or name.',
+            },
+            status: {
+              type: 'string',
+              enum: ['supported', 'possible', 'rejected', 'need_evidence'],
+            },
+            reason: {
+              type: 'string',
+              description: 'Optional why this status was chosen.',
+            },
+            finding_id: {
+              type: 'string',
+              description: 'Finding to load hypotheses from if omitted.',
+            },
+          },
+          required: ['hypothesis_id', 'status'],
         },
       },
     },
@@ -1925,6 +2036,46 @@ export function validateToolCall(name, args) {
     }
     return { args: out, error: '' }
   }
+  if (name === AI_TOOL_EXPLAIN_FINDING) {
+    let level = String(a.level || 'technical').trim().toLowerCase() || 'technical'
+    if (!['quick', 'technical', 'deep'].includes(level)) {
+      return { args: null, error: 'level must be "quick", "technical", or "deep"' }
+    }
+    return {
+      args: {
+        finding_id: String(a.finding_id || '').trim(),
+        level,
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_INTERPRET_QUERY) {
+    const q = String(a.question || '').trim()
+    if (!q) return { args: null, error: 'question must be a non-empty string' }
+    return { args: { question: q }, error: '' }
+  }
+  if (name === AI_TOOL_VALIDATE_EXPERIMENT) {
+    const expected = a.expected && typeof a.expected === 'object' ? a.expected : {}
+    const actual = a.actual && typeof a.actual === 'object' ? a.actual : {}
+    return { args: { expected, actual }, error: '' }
+  }
+  if (name === AI_TOOL_MANAGE_HYPOTHESES) {
+    const hid = String(a.hypothesis_id || '').trim()
+    if (!hid) return { args: null, error: 'hypothesis_id must be a non-empty string' }
+    const status = String(a.status || '').trim().toLowerCase()
+    if (!['supported', 'possible', 'rejected', 'need_evidence'].includes(status)) {
+      return { args: null, error: 'status must be supported|possible|rejected|need_evidence' }
+    }
+    return {
+      args: {
+        hypothesis_id: hid,
+        status,
+        reason: String(a.reason || '').trim(),
+        finding_id: String(a.finding_id || '').trim(),
+      },
+      error: '',
+    }
+  }
   return { args: null, error: `unknown tool ${JSON.stringify(name)}` }
 }
 
@@ -2077,6 +2228,22 @@ export function summariseToolCall(name, args) {
     const aTask = String(a.task_a || '?').trim() || '?'
     const bTask = String(a.task_b || '?').trim() || '?'
     return `Compare tasks ${aTask} vs ${bTask}`
+  }
+  if (name === AI_TOOL_EXPLAIN_FINDING) {
+    const fid = String(a.finding_id || '').trim() || 'top finding'
+    const level = String(a.level || 'technical').trim() || 'technical'
+    return `Explain finding ${fid} (${level})`
+  }
+  if (name === AI_TOOL_INTERPRET_QUERY) {
+    const q = String(a.question || '').trim()
+    const shown = q.length <= 40 ? q : `${q.slice(0, 37)}…`
+    return shown ? `Interpret query ${JSON.stringify(shown)}` : 'Interpret query'
+  }
+  if (name === AI_TOOL_VALIDATE_EXPERIMENT) return 'Validate experiment (expected vs actual)'
+  if (name === AI_TOOL_MANAGE_HYPOTHESES) {
+    const hid = String(a.hypothesis_id || '').trim() || 'hypothesis'
+    const st = String(a.status || '').trim() || 'status'
+    return `Hypothesis ${hid} → ${st}`
   }
   return String(name || '').replace(/_/g, ' ')
 }
@@ -2233,6 +2400,10 @@ export function isQueryTool(name) {
     AI_TOOL_DETECT_PRIORITY_INVERSION,
     AI_TOOL_FIND_RELATED_FINDINGS,
     AI_TOOL_COMPARE_TASKS,
+    AI_TOOL_EXPLAIN_FINDING,
+    AI_TOOL_INTERPRET_QUERY,
+    AI_TOOL_VALIDATE_EXPERIMENT,
+    AI_TOOL_MANAGE_HYPOTHESES,
   ].includes(String(name || ''))
 }
 
@@ -2613,6 +2784,54 @@ export function investigateFinding(findings, findingId = '', { depth = 2 } = {})
   delete data.ok
   delete data.message
   return { ok, message, data }
+}
+
+export function explainFindingTool(findings, findingId = '', { level = 'technical' } = {}) {
+  const ctx = buildInvestigateContext(findings, findingId, { depth: 2 })
+  const payload = explainFindingPayload(ctx.finding || null, {
+    level,
+    hypotheses: ctx.hypotheses || [],
+  })
+  const ok = !!payload.ok
+  const message = String(payload.message || (ok ? 'ok' : 'failed'))
+  const data = { ...payload }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+export function interpretQueryTool(question, findings = [], { cursorLo = null, cursorHi = null } = {}) {
+  const payload = interpretInvestigationQuery(question, {
+    findings, cursorLo, cursorHi,
+  })
+  const ok = !!payload.ok
+  const message = String(payload.message || (ok ? 'ok' : 'failed'))
+  const data = { ...payload }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+export function validateExperimentTool(expected = {}, actual = {}) {
+  const payload = validateExperiment(expected, actual)
+  const ok = !!payload.ok
+  const message = String(payload.message || (ok ? 'ok' : 'failed'))
+  const data = { ...payload }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+export function manageHypothesesTool(findings, hypothesisId, status, {
+  reason = '', findingId = '',
+} = {}) {
+  const ctx = buildInvestigateContext(findings, findingId, { depth: 2 })
+  const updated = setHypothesisStatus(ctx.hypotheses || [], hypothesisId, status, { reason })
+  return {
+    ok: true,
+    message: `Updated hypothesis ${hypothesisId} → ${status}`,
+    data: { hypotheses: updated, finding: ctx.finding },
+  }
 }
 
 function eventsFromMetricPayload(payload, metric, task) {

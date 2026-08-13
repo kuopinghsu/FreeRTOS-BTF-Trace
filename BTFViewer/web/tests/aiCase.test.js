@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
+  accumulateCost,
   buildInvestigationCase,
   classifyPrivacy,
+  dumpUserInvestigationTemplates,
+  emptyCostMeter,
   evidenceQualityFromScore,
   extractClaims,
+  historicalKnowledgeForFinding,
   inferModelCapability,
   interpretQuestion,
+  investigationModePrompt,
+  newUserInvestigationTemplate,
+  parseUserInvestigationTemplates,
+  statusWithCost,
   validateAiResponse,
 } from '../src/utils/aiCase.js'
 import {
@@ -31,6 +39,9 @@ describe('aiCase investigation lifecycle', () => {
     assert.ok(payload.investigation_case)
     const md = formatEvidencePanelMarkdown(payload, 'English')
     assert.match(md, /Evidence Quality/)
+    assert.match(md, /Historical knowledge/)
+    assert.match(md, /btfhyp:supported/)
+    assert.match(md, /btfhyp:compare\/all/)
   })
 
   it('flags invented tasks and out-of-window jumps', () => {
@@ -93,5 +104,31 @@ describe('aiCase investigation lifecycle', () => {
     const result = runOfflineBenchmark(dataset, { failUnder: 50 })
     assert.equal(result.rows.length, 7)
     assert.equal(result.ok, true, result.report)
+  })
+
+  it('matches catalog knowledge and round-trips user templates', () => {
+    const hit = historicalKnowledgeForFinding({
+      title: 'Excessive bouncing / core thrashing',
+      text: 'CS[22] migrates heavily',
+    })
+    assert.equal(hit.previous_issue, 'Migration thrashing')
+    const prompt = investigationModePrompt('diagnose')
+    assert.match(prompt, /investigate/)
+    assert.match(prompt, /correlate_events/)
+    const tpl = newUserInvestigationTemplate('CPU Latency', ['detect_anomalies', 'investigate'])
+    const parsed = parseUserInvestigationTemplates(dumpUserInvestigationTemplates([tpl]))
+    assert.equal(parsed.length, 1)
+    assert.equal(parsed[0].label, 'CPU Latency')
+    assert.deepEqual(parsed[0].steps, ['detect_anomalies', 'investigate'])
+  })
+
+  it('appends accumulated cost to status until the meter is empty', () => {
+    assert.equal(statusWithCost('Done.', emptyCostMeter()), 'Done.')
+    let meter = accumulateCost(emptyCostMeter(), {
+      promptTokens: 1000, completionTokens: 200, toolCalls: 2, modelTimeS: 1.5,
+    })
+    meter = accumulateCost(meter, { promptTokens: 50, completionTokens: 10 })
+    const text = statusWithCost('Done.', meter)
+    assert.equal(text, 'Done. · 1.3k tok · 2 tools · 1.5s')
   })
 })

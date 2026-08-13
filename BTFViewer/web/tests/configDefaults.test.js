@@ -46,7 +46,7 @@ describe('config.js is the single source of web defaults', () => {
     assert.equal(normalizeSettings({ showMarks: false }).showMarks, false)
   })
 
-  it('keeps a first-run right-panel width for 3-column AI templates', () => {
+  it('keeps a first-run right-panel width for wrapping AI chips', () => {
     assert.ok(RIGHT_PANEL_WIDTH >= 420)
     assert.ok(RIGHT_PANEL_WIDTH <= 520)
   })

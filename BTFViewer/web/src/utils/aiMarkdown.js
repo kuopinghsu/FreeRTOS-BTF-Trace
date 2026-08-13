@@ -90,6 +90,7 @@ function inlineToHtml(text) {
       } else if (
         low.startsWith('btfjump:')
         || low.startsWith('btfhighlight:')
+        || low.startsWith('btfhyp:')
         || low.startsWith('mailto:')
       ) {
         buf.push(stash(`<a href="${escapeAttr(href)}">${label}</a>`))

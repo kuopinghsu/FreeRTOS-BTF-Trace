@@ -1095,11 +1095,14 @@ import {
   AI_TOOL_DETECT_PRIORITY_INVERSION,
   AI_TOOL_FIND_CRITICAL_PATH,
   AI_TOOL_DETECT_ANOMALIES,
+  AI_TOOL_EXPLAIN_FINDING,
   AI_TOOL_FIND_RELATED_FINDINGS,
   AI_TOOL_GENERATE_REPORT,
   AI_TOOL_HIGHLIGHT_TASK,
   AI_TOOL_INVESTIGATE,
   AI_TOOL_INVESTIGATION_REPLAY,
+  AI_TOOL_INTERPRET_QUERY,
+  AI_TOOL_MANAGE_HYPOTHESES,
   AI_TOOL_OPEN_CORRIDOR,
   AI_TOOL_OPTIMIZE,
   AI_TOOL_OPTIMIZE_EXPERIMENT,
@@ -1111,6 +1114,7 @@ import {
   AI_TOOL_SET_CURSORS,
   AI_TOOL_SET_VIEW_MODE,
   AI_TOOL_TRIGGER_COMPARE,
+  AI_TOOL_VALIDATE_EXPERIMENT,
   AI_TOOL_WHAT_IF,
   AI_TOOL_ZOOM_TO_RANGE,
   analyzeTracesSnapshots,
@@ -1122,6 +1126,7 @@ import {
   correlateTaskEvents,
   detectAnomaliesFinding,
   detectPriorityInversionHost,
+  explainFindingTool,
   findCriticalPathTask,
   findRelatedFindingsFinding,
   explainRegressionFromCompare,
@@ -1129,6 +1134,8 @@ import {
   generateReportFinding,
   investigateFinding,
   investigationReplayFinding,
+  interpretQueryTool,
+  manageHypothesesTool,
   gatherSimulationInputs,
   optimizeExperimentFinding,
   optimizeFinding,
@@ -1138,6 +1145,7 @@ import {
   resolveTaskKey,
   searchTimelineHits,
   toolMutatesGui,
+  validateExperimentTool,
   validateToolCall,
   whatIfEstimate,
 } from './utils/aiTools.js'
@@ -2715,16 +2723,21 @@ async function focusAiAndAsk(templateIdOrPayload) {
   let templateId = templateIdOrPayload
   let findingId = ''
   let prompt = null
+  let level = ''
   if (templateIdOrPayload && typeof templateIdOrPayload === 'object') {
     templateId = templateIdOrPayload.template || 'findings'
     findingId = templateIdOrPayload.findingId || ''
     prompt = templateIdOrPayload.prompt || null
+    level = String(templateIdOrPayload.level || '').trim()
   }
   templateId = templateId || 'findings'
   if (!prompt) {
     prompt = AI_TEMPLATE_QUESTIONS.find(t => t.id === templateId)?.prompt
     if (findingId && prompt) {
       prompt = `${prompt}\n\nfinding_id=${findingId}`
+    }
+    if (level && prompt) {
+      prompt = `${prompt}\n\nlevel=${level}`
     }
   }
   if (templateId === 'explain_region' && prompt) {
@@ -3138,6 +3151,35 @@ function dispatchAiTool(name, args) {
       hi: range?.hi ?? null,
       findingsText: buildAiContext().findingsText || '',
     })
+  }
+  if (name === AI_TOOL_EXPLAIN_FINDING) {
+    return explainFindingTool(analysisFindings.value || [], args.finding_id || '', {
+      level: args.level || 'technical',
+    })
+  }
+  if (name === AI_TOOL_INTERPRET_QUERY) {
+    const times = cursors.value || []
+    let lo = null
+    let hi = null
+    if (times.length >= 2) {
+      lo = Math.min(...times)
+      hi = Math.max(...times)
+    }
+    return interpretQueryTool(args.question || '', analysisFindings.value || [], {
+      cursorLo: lo,
+      cursorHi: hi,
+    })
+  }
+  if (name === AI_TOOL_VALIDATE_EXPERIMENT) {
+    return validateExperimentTool(args.expected || {}, args.actual || {})
+  }
+  if (name === AI_TOOL_MANAGE_HYPOTHESES) {
+    return manageHypothesesTool(
+      analysisFindings.value || [],
+      args.hypothesis_id || '',
+      args.status || '',
+      { reason: args.reason || '', findingId: args.finding_id || '' },
+    )
   }
   if (name === AI_TOOL_GENERATE_REPORT) {
     return generateReportFinding(analysisFindings.value || [], {

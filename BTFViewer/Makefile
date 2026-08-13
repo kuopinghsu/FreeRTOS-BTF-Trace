@@ -5,6 +5,7 @@
 #   make -C BTFViewer web          # web only
 #   make -C BTFViewer demo         # guided demo (demo_8cores)
 #   make -C BTFViewer check-bundle # desktop parity check (CI)
+#   make -C BTFViewer ai-test      # offline AI benchmark (tests/ai)
 
 PYTHON ?= python3
 TRACE ?= ../tracedata/example-2cores.btf.gz
@@ -26,8 +27,10 @@ DOCS := $(BUILDS)
 
 DEMO_XML ?= demos/demo_8cores/demo_8cores.xml
 DEMO_LANG ?=
+AI_DATASET ?= tests/ai
+AI_FAIL_UNDER ?= 70
 
-.PHONY: all help web bundle check-bundle test test-web test-all ci doc update-images demo demo-voice
+.PHONY: all help web bundle check-bundle test test-web test-all ai-test ci doc update-images demo demo-voice
 
 help:
 	@echo "BTF Viewer — make targets"
@@ -43,10 +46,11 @@ help:
 	@echo "  make test         Desktop unit tests (QT_QPA_PLATFORM=offscreen)"
 	@echo "  make test-web     Web unit tests (node --test)"
 	@echo "  make test-all     Desktop + web unit tests"
+	@echo "  make ai-test      Offline AI benchmark ($(AI_DATASET); AI_FAIL_UNDER=$(AI_FAIL_UNDER))"
 	@echo "  make ci           test-all + check-bundle (local CI parity)"
 	@echo "  make help         Show this help"
 	@echo ""
-	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)  DEMO_XML=$(DEMO_XML)  DEMO_LANG=$(DEMO_LANG)"
+	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)  DEMO_XML=$(DEMO_XML)  DEMO_LANG=$(DEMO_LANG)  AI_DATASET=$(AI_DATASET)  AI_FAIL_UNDER=$(AI_FAIL_UNDER)"
 
 
 all: web bundle
@@ -82,6 +86,10 @@ test-web:
 	$(MAKE) -C web test
 
 test-all: test test-web
+
+ai-test: $(OUT)
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) ai-test \
+		--dataset $(AI_DATASET) --fail-under $(AI_FAIL_UNDER)
 
 ci: test-all check-bundle
 

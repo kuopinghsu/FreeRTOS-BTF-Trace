@@ -725,6 +725,73 @@ export function investigationModePlan(mode = 'diagnose') {
   return { ...plans[want], mode: want, ok: true }
 }
 
+export const INVESTIGATION_MODE_LABELS = {
+  quick: 'Quick',
+  diagnose: 'Diagnose',
+  compare: 'Compare',
+  optimize: 'Optimize',
+  report: 'Report',
+}
+
+export function investigationModePrompt(mode = 'diagnose') {
+  const plan = investigationModePlan(mode)
+  const listed = (plan.tools || []).filter(Boolean).join(' → ')
+  const label = INVESTIGATION_MODE_LABELS[plan.mode] || plan.mode
+  return (
+    `${plan.goal || label}. Call these tools in order: ${listed}. `
+    + 'After each tool, update hypotheses with manage_hypotheses when the '
+    + 'status changes. Finish with a verdict, jump:TIME evidence, '
+    + 'what would disprove this, confidence, and one next check.'
+  )
+}
+
+export function parseUserInvestigationTemplates(raw) {
+  let items = raw
+  if (!Array.isArray(raw)) {
+    try {
+      items = JSON.parse(String(raw || '') || '[]')
+    } catch {
+      return []
+    }
+  }
+  if (!Array.isArray(items)) return []
+  const out = []
+  items.forEach((it, i) => {
+    if (!it || typeof it !== 'object') return
+    const label = String(it.label || '').trim()
+    const steps = (it.steps || []).map(s => String(s).trim()).filter(Boolean)
+    if (!label || !steps.length) return
+    let tid = String(it.id || '').trim()
+    if (!tid) {
+      tid = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `user_${i + 1}`
+    }
+    out.push({ id: tid, label, steps, user: true })
+  })
+  return out
+}
+
+export function dumpUserInvestigationTemplates(items = []) {
+  const rows = []
+  for (const it of items || []) {
+    if (!it || typeof it !== 'object') continue
+    const label = String(it.label || '').trim()
+    const steps = (it.steps || []).map(s => String(s).trim()).filter(Boolean)
+    if (!label || !steps.length) continue
+    const tid = String(it.id || '').trim()
+      || label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+    rows.push({ id: tid, label, steps })
+  }
+  return JSON.stringify(rows)
+}
+
+export function newUserInvestigationTemplate(label, steps = []) {
+  const name = String(label || '').trim() || 'My Investigation'
+  let seq = (steps || []).map(s => String(s).trim()).filter(Boolean)
+  if (!seq.length) seq = [...(investigationModePlan('diagnose').tools || ['investigate'])]
+  const tid = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'user'
+  return { id: tid, label: name, steps: seq, user: true }
+}
+
 export function validateExperiment(expected = {}, actual = {}) {
   const exp = expected && typeof expected === 'object' ? expected : {}
   const act = actual && typeof actual === 'object' ? actual : {}
@@ -852,6 +919,41 @@ export function formatCostMeter(meter = null) {
     + `Trace queries ${m.trace_queries || 0} · `
     + `Model time ${m.model_time_s || 0}s · `
     + `Est. ${usdS}`
+}
+
+function formatTokenCount(n) {
+  const count = Number(n || 0)
+  if (!Number.isFinite(count) || count < 1000) return String(Math.max(0, Math.trunc(count) || 0))
+  return `${(count / 1000).toFixed(1).replace(/\.0$/, '')}k`
+}
+
+export function formatCostStatus(meter = null) {
+  const m = meter && typeof meter === 'object' ? meter : emptyCostMeter()
+  const tokens = Number(m.total_tokens || 0)
+  const tools = Number(m.tool_calls || 0)
+  const timeS = Number(m.model_time_s || 0)
+  const usd = Number(m.estimated_usd || 0)
+  const parts = [`${formatTokenCount(tokens)} tok`]
+  if (tools) parts.push(`${tools} tools`)
+  if (timeS) parts.push(`${timeS}s`)
+  if (usd) parts.push(`$${usd.toFixed(3)}`)
+  return parts.join(' · ')
+}
+
+export function costMeterActive(meter = null) {
+  const m = meter && typeof meter === 'object' ? meter : emptyCostMeter()
+  const tokens = Number(m.total_tokens || 0)
+  const tools = Number(m.tool_calls || 0)
+  const timeS = Number(m.model_time_s || 0)
+  const usd = Number(m.estimated_usd || 0)
+  return tokens > 0 || tools > 0 || timeS > 0 || usd > 0
+}
+
+export function statusWithCost(message, meter = null) {
+  const text = String(message || '').trim()
+  if (!costMeterActive(meter)) return text
+  const cost = formatCostStatus(meter)
+  return text ? `${text} · ${cost}` : cost
 }
 
 export function chatUsageFromResponse(body) {
@@ -1023,6 +1125,70 @@ export function matchHistoricalKnowledge(task, { current = {}, history = {} } = 
       ? `This resembles the ${issue} issue${build ? ` seen in ${build}` : ''}`
       : (Object.keys(prev).length ? 'Within historical range' : 'No historical match'),
   }
+}
+
+export function builtinHistoricalCatalog() {
+  return [
+    {
+      keywords: ['thrash', 'migration', 'bounc'],
+      issue: 'Migration thrashing',
+      fix: 'Pin the task / set core affinity',
+      build: 'typical',
+    },
+    {
+      keywords: ['mutex', 'contention', 'blocking'],
+      issue: 'Mutex contention',
+      fix: 'Shorten the critical section or enable priority inheritance',
+      build: 'typical',
+    },
+    {
+      keywords: ['inversion', 'inherit'],
+      issue: 'Priority inversion',
+      fix: 'Priority inheritance or priority ceiling on the mutex',
+      build: 'typical',
+    },
+    {
+      keywords: ['imbalance', 'load balance'],
+      issue: 'Load imbalance',
+      fix: 'Rebalance placement or pin heavy tasks',
+      build: 'typical',
+    },
+    {
+      keywords: ['deadline', 'budget'],
+      issue: 'Deadline miss',
+      fix: 'Trim WCET or raise the budget / period',
+      build: 'typical',
+    },
+  ]
+}
+
+export function historicalKnowledgeForFinding(finding = null, {
+  history = {}, current = {},
+} = {}) {
+  const f = finding && typeof finding === 'object' ? finding : {}
+  const task = String(f.task || '')
+  const hit = matchHistoricalKnowledge(task, { current, history })
+  if (hit.previous_issue || (hit.flags || []).length) return hit
+  const blob = `${f.title || ''} ${f.text || ''} ${task}`.toLowerCase()
+  for (const item of builtinHistoricalCatalog()) {
+    if ((item.keywords || []).some(k => blob.includes(k))) {
+      const issue = String(item.issue || '')
+      const fix = String(item.fix || '')
+      const build = String(item.build || '')
+      return {
+        ok: true,
+        task,
+        previous_issue: issue,
+        known_fix: fix,
+        last_occurrence: build,
+        flags: [],
+        resembles_previous: true,
+        source: 'catalog',
+        message: `This resembles the ${issue} issue${fix ? ` — known fix: ${fix}` : ''}`,
+      }
+    }
+  }
+  return hit
 }
 
 export function buildInvestigationCase(investigateCtx = null, {

@@ -109,6 +109,7 @@ import bz2
 import zipfile
 import io
 from contextlib import contextmanager
+from pathlib import Path
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from operator import attrgetter as _attrgetter
@@ -12905,7 +12906,7 @@ class _NavigatorPopup(QWidget):
 
 _RESIZE_EDGE_PX = 6
 _RIGHT_DOCK_MIN_W = 180  # Web parity: RIGHT_PANEL_MIN_W in web/src/App.vue
-# Fits the 3-column AI Templates grid (shared Statistics / AI dock).
+# Wide enough for wrapping AI mode + template chips (shared Statistics / AI dock).
 _RIGHT_DOCK_DEFAULT_W = 450  # Web parity: RIGHT_PANEL_WIDTH in web/src/config.js
 _RIGHT_DOCK_MAX_W = 520  # Web parity: RIGHT_PANEL_MAX_W in web/src/config.js
 
@@ -12954,12 +12955,14 @@ def _in_legend_panel(w: QWidget) -> bool:
 
 
 def _in_ai_actions_bar(w: QWidget) -> bool:
-    """True when *w* is in the AI panel Clear/Stop/Ask bar (must keep width)."""
+    """True when *w* is in an AI chip bar that must keep its natural width.
+
+    Ignored + a stretching row collapses Quick/Diagnose mode chips and
+    wrapping template buttons to zero width (web ``flex-wrap`` parity).
+    """
     p: Optional[QWidget] = w
     while p is not None:
-        if p.objectName() == "aiActions":
-            return True
-        if p.objectName() == "aiTemplates":
+        if p.objectName() in ("aiActions", "aiTemplates", "aiModes"):
             return True
         p = p.parentWidget()
     return False
@@ -16970,6 +16973,2007 @@ class TimelineView(QGraphicsView):
 # Custom progress dialog (more reliable than QProgressDialog on macOS)
 # ---------------------------------------------------------------------------
 # ===========================================================================
+# ai_case
+# ===========================================================================
+
+HYPOTHESIS_STATUSES: Tuple[str, ...] = (
+    "supported", "possible", "rejected", "need_evidence",
+)
+EVIDENCE_QUALITY_BANDS: Tuple[str, ...] = (
+    "strong", "medium-high", "medium", "weak", "insufficient",
+)
+INVESTIGATION_MODES: Tuple[str, ...] = (
+    "quick", "diagnose", "compare", "optimize", "report",
+)
+EXPLAIN_LEVELS: Tuple[str, ...] = ("quick", "technical", "deep")
+PRIVACY_LEVELS: Tuple[str, ...] = ("local", "cloud_safe", "sensitive")
+CASE_SCHEMA = "btf-investigation-case"
+CASE_VERSION = 1
+
+_JUMP_RE = re.compile(r"jump:([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+_TASK_NAME_RE = re.compile(
+    r"\b([A-Za-z][A-Za-z0-9_.-]*\[\d+\])"
+)
+_METRIC_WORDS = (
+    "migrations", "blocking", "execution", "wcet", "latency",
+    "priority", "inheritance", "mutex", "tick", "deadline",
+    "load", "balance", "preemption", "contention", "dwell",
+)
+_KNOWN_METRICS = frozenset(_METRIC_WORDS + (
+    "priority_inheritance", "sync", "findings", "cpu", "response",
+))
+_MERMAID_STRIP_RE = re.compile(r'["[\]{}()|]')
+
+_TOOL_REASONS: Dict[str, str] = {
+    "detect_anomalies": "Rank Findings as Critical / Warning / Info before drilling in",
+    "investigate": "Build hypotheses and an evidence chain for the focus finding",
+    "correlate_events": "Check whether blocking, migrations, and sync overlap the spike",
+    "query_raw_metric": "Pull a scoped per-task series instead of guessing numbers",
+    "find_critical_path": "Walk preempt / block / mutex around the evidence time",
+    "detect_priority_inversion": "Test L/M/H inversion as an alternative to contention",
+    "search_timeline": "Locate STI / tag / task timestamps like Find",
+    "compare_performance": "Measure A vs B deltas instead of narrating them",
+    "what_if": "Score a concrete pin / priority / contention experiment",
+    "optimize_experiment": "Rank automatic mitigation candidates",
+    "explain_finding": "Produce a levelled explanation of the selected finding",
+    "interpret_query": "Turn the user's question into an explicit investigation scope",
+    "validate_experiment": "Compare expected experiment deltas with a new capture",
+    "manage_hypotheses": "Mark a hypothesis supported, rejected, or needing evidence",
+}
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _mermaid_safe_label(text: Any, limit: int = 48) -> str:
+    cleaned = _MERMAID_STRIP_RE.sub("", str(text or "").replace("\n", " "))
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return (cleaned or "Node")[:limit]
+
+
+def empty_investigation_case(
+    *,
+    question: str = "",
+    trace: str = "",
+    cursor_lo: Optional[float] = None,
+    cursor_hi: Optional[float] = None,
+    tasks: Optional[Sequence[str]] = None,
+    cores: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """Empty Investigation Case envelope."""
+    return {
+        "schema": CASE_SCHEMA,
+        "version": CASE_VERSION,
+        "question": str(question or "").strip(),
+        "scope": {
+            "trace": str(trace or "").strip(),
+            "cursor_lo": cursor_lo,
+            "cursor_hi": cursor_hi,
+            "tasks": [str(t) for t in (tasks or []) if str(t).strip()],
+            "cores": [str(c) for c in (cores or []) if str(c).strip()],
+        },
+        "suspected_findings": [],
+        "hypotheses": [],
+        "evidence": [],
+        "tools_executed": [],
+        "tool_reasons": [],
+        "evidence_timeline": [],
+        "evidence_graph": {},
+        "evidence_quality": {},
+        "evidence_coverage": {},
+        "falsification": {},
+        "confidence": "Medium",
+        "confidence_history": [],
+        "conclusion": "",
+        "alternatives_rejected": [],
+        "recommended_action": "",
+        "validation": {},
+        "mode": "diagnose",
+    }
+
+
+def _finding_blob(finding: Optional[dict]) -> str:
+    if not isinstance(finding, dict):
+        return ""
+    return f"{finding.get('title') or ''} {finding.get('text') or ''}"
+
+
+def enrich_hypotheses(
+    hypotheses: Optional[Sequence[dict]],
+    *,
+    evidence: Optional[Sequence[dict]] = None,
+    alternatives: Optional[Sequence[dict]] = None,
+) -> List[Dict[str, Any]]:
+    """Attach status / confidence / evidence_count to heuristic hypotheses."""
+    ev = [e for e in (evidence or []) if isinstance(e, dict)]
+    timed = sum(1 for e in ev if e.get("time") is not None)
+    kinds = set()
+    for e in ev:
+        label = str(e.get("label") or e.get("kind") or "")
+        kind = label.split(":", 1)[0].strip().lower() if ":" in label else label.lower()
+        if kind:
+            kinds.add(kind)
+    alt_status = {
+        str(a.get("hypothesis") or "").strip().lower(): str(a.get("status") or "").lower()
+        for a in (alternatives or []) if isinstance(a, dict)
+    }
+    out: List[Dict[str, Any]] = []
+    for i, raw in enumerate(hypotheses or []):
+        if not isinstance(raw, dict):
+            continue
+        hyp = str(raw.get("hypothesis") or "").strip()
+        if not hyp:
+            continue
+        why = str(raw.get("why") or "").strip()
+        status = str(raw.get("status") or "").strip().lower()
+        if status not in HYPOTHESIS_STATUSES:
+            mapped = alt_status.get(hyp.lower(), "")
+            if mapped == "rejected":
+                status = "rejected"
+            elif mapped == "confirmed" or (i == 0 and timed):
+                status = "supported"
+            elif i == 0:
+                status = "possible"
+            elif timed and any(k in hyp.lower() for k in kinds):
+                status = "possible"
+            else:
+                status = "need_evidence"
+        if status == "supported":
+            conf = 70 + min(25, 8 * timed) - 4 * i
+        elif status == "possible":
+            conf = 40 + min(20, 5 * timed) - 6 * i
+        elif status == "rejected":
+            conf = max(5, 18 - 4 * i)
+        else:
+            conf = 22 - 4 * i
+        out.append({
+            "id": str(raw.get("id") or f"h{i + 1}"),
+            "hypothesis": hyp,
+            "why": why,
+            "status": status,
+            "confidence": max(0, min(100, int(conf))),
+            "evidence_count": timed if status in ("supported", "possible") else 0,
+        })
+    return out
+
+
+def set_hypothesis_status(
+    hypotheses: Sequence[dict],
+    hypothesis_id: str,
+    status: str,
+    *,
+    reason: str = "",
+) -> List[Dict[str, Any]]:
+    """Return a copy with one hypothesis status updated."""
+    want = str(hypothesis_id or "").strip().lower()
+    st = str(status or "").strip().lower()
+    if st not in HYPOTHESIS_STATUSES:
+        st = "need_evidence"
+    out: List[Dict[str, Any]] = []
+    for i, h in enumerate(hypotheses or []):
+        if not isinstance(h, dict):
+            continue
+        item = dict(h)
+        hid = str(item.get("id") or f"h{i + 1}").lower()
+        name = str(item.get("hypothesis") or "").strip().lower()
+        if hid == want or name == want or str(i + 1) == want:
+            item["status"] = st
+            if reason:
+                item["why"] = str(reason).strip()
+            if st == "supported":
+                item["confidence"] = max(_safe_int(item.get("confidence"), 70), 70)
+            elif st == "rejected":
+                item["confidence"] = min(_safe_int(item.get("confidence"), 18), 25)
+        out.append(item)
+    return out
+
+
+def compare_hypotheses(hypotheses: Sequence[dict]) -> Dict[str, Any]:
+    """Rank hypotheses by status then confidence."""
+    items = [h for h in (hypotheses or []) if isinstance(h, dict)]
+    rank = {"supported": 0, "possible": 1, "need_evidence": 2, "rejected": 3}
+    ranked = sorted(
+        items,
+        key=lambda h: (
+            rank.get(str(h.get("status") or ""), 9),
+            -_safe_int(h.get("confidence")),
+        ),
+    )
+    leader = ranked[0] if ranked else None
+    return {
+        "ok": True,
+        "ranked": ranked,
+        "leader": leader,
+        "supported": [h for h in ranked if h.get("status") == "supported"],
+        "rejected": [h for h in ranked if h.get("status") == "rejected"],
+    }
+
+
+def build_evidence_graph(
+    finding: Optional[dict] = None,
+    *,
+    evidence: Optional[Sequence[dict]] = None,
+    hypotheses: Optional[Sequence[dict]] = None,
+    chain: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    """Provenance graph: finding → evidence / chain → hypotheses."""
+    nodes: List[Dict[str, Any]] = []
+    edges: List[Dict[str, Any]] = []
+    fid = "F"
+    title = ""
+    if isinstance(finding, dict):
+        title = str(finding.get("title") or finding.get("id") or "Finding")
+        nodes.append({
+            "id": fid, "kind": "finding", "label": title,
+            "time": None,
+        })
+    ev_items = [e for e in (evidence or []) if isinstance(e, dict)]
+    for i, ev in enumerate(ev_items[:12]):
+        nid = f"E{i}"
+        nodes.append({
+            "id": nid,
+            "kind": "evidence",
+            "label": str(ev.get("label") or ev.get("kind") or "evidence"),
+            "time": ev.get("time"),
+        })
+        if any(n["id"] == fid for n in nodes):
+            edges.append({"from": fid, "to": nid, "rel": "observed"})
+    for i, step in enumerate((chain or [])[:8]):
+        if not isinstance(step, dict):
+            continue
+        nid = f"C{i}"
+        nodes.append({
+            "id": nid,
+            "kind": str(step.get("kind") or "step"),
+            "label": str(step.get("label") or f"Step {i + 1}"),
+            "time": step.get("time"),
+        })
+        prev = fid if i == 0 and any(n["id"] == fid for n in nodes) else f"C{i - 1}"
+        if i == 0 and any(n["id"] == fid for n in nodes):
+            edges.append({"from": fid, "to": nid, "rel": "chain"})
+        elif i > 0:
+            edges.append({"from": prev, "to": nid, "rel": "chain"})
+    for j, h in enumerate((hypotheses or [])[:8]):
+        if not isinstance(h, dict):
+            continue
+        nid = f"H{j}"
+        status = str(h.get("status") or "possible")
+        rel = "supports" if status == "supported" else (
+            "contradicts" if status == "rejected" else "hypothesizes"
+        )
+        nodes.append({
+            "id": nid,
+            "kind": "hypothesis",
+            "label": str(h.get("hypothesis") or f"Hypothesis {j + 1}"),
+            "status": status,
+            "time": None,
+        })
+        if any(n["id"] == fid for n in nodes):
+            edges.append({"from": fid, "to": nid, "rel": rel})
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "mermaid": evidence_graph_mermaid(nodes, edges),
+    }
+
+
+def evidence_graph_mermaid(
+    nodes: Optional[Sequence[dict]] = None,
+    edges: Optional[Sequence[dict]] = None,
+) -> str:
+    items = [n for n in (nodes or []) if isinstance(n, dict) and n.get("id")]
+    if not items:
+        return ""
+    lines = ["graph TD"]
+    for n in items:
+        nid = str(n.get("id"))
+        label = _mermaid_safe_label(n.get("label") or nid)
+        kind = str(n.get("kind") or "")
+        if kind == "hypothesis":
+            lines.append(f"{nid}({label})")
+        elif kind == "evidence":
+            lines.append(f"{nid}{{{{{label}}}}}")
+        else:
+            lines.append(f"{nid}[{label}]")
+    for e in (edges or []):
+        if not isinstance(e, dict):
+            continue
+        src, dst = str(e.get("from") or ""), str(e.get("to") or "")
+        if not src or not dst:
+            continue
+        rel = str(e.get("rel") or "").strip()
+        if rel and rel not in ("observed", "chain"):
+            lines.append(f"{src} -- {rel} --> {dst}")
+        else:
+            lines.append(f"{src} --> {dst}")
+    return "\n".join(lines)
+
+
+def evidence_quality_band(score: Any) -> str:
+    """Map a 0–100 heuristic score onto a qualitative band (not a probability)."""
+    n = max(0, min(100, _safe_int(score)))
+    if n >= 80:
+        return "strong"
+    if n >= 65:
+        return "medium-high"
+    if n >= 45:
+        return "medium"
+    if n >= 25:
+        return "weak"
+    return "insufficient"
+
+
+def quality_bar(band: str, width: int = 10) -> str:
+    filled_map = {
+        "strong": width,
+        "medium-high": max(1, int(round(width * 0.8))),
+        "medium": max(1, int(round(width * 0.55))),
+        "weak": max(1, int(round(width * 0.3))),
+        "insufficient": 0,
+    }
+    filled = filled_map.get(str(band or ""), 0)
+    label = {
+        "strong": "Strong",
+        "medium-high": "Medium-High",
+        "medium": "Medium",
+        "weak": "Weak",
+        "insufficient": "Insufficient",
+    }.get(str(band or ""), "Insufficient")
+    return "█" * filled + "░" * (width - filled) + f" {label}"
+
+
+def compute_evidence_quality(
+    *,
+    score: Any = 0,
+    breakdown: Optional[Sequence[dict]] = None,
+    evidence: Optional[Sequence[dict]] = None,
+    alternatives: Optional[Sequence[dict]] = None,
+    checks: Optional[Sequence[dict]] = None,
+    evidence_chain: str = "",
+) -> Dict[str, Any]:
+    """Qualitative Evidence Quality (heuristic, not a statistical CI)."""
+    ev = [e for e in (evidence or []) if isinstance(e, dict)]
+    alts = [a for a in (alternatives or []) if isinstance(a, dict)]
+    chks = [c for c in (checks or []) if isinstance(c, dict)]
+    has_direct = any(e.get("time") is not None for e in ev)
+    kinds = set()
+    for e in ev:
+        label = str(e.get("label") or "")
+        if ":" in label:
+            kind = label.split(":", 1)[0].strip().lower()
+            if kind:
+                kinds.add(kind)
+    has_timeline = len(kinds) >= 2 or bool(str(evidence_chain or "").strip())
+    has_metric = bool(chks)
+    untested = [
+        a for a in alts
+        if str(a.get("status") or "").lower() in ("untested", "need_evidence", "")
+    ]
+    alt_mark = "yes" if alts and not untested else ("partial" if alts else "no")
+    band = evidence_quality_band(score)
+    flags = {
+        "direct_evidence": has_direct,
+        "timeline_correlation": has_timeline,
+        "metric_correlation": has_metric,
+        "alternative_tested": alt_mark,
+    }
+    return {
+        "band": band,
+        "bar": quality_bar(band),
+        "score": max(0, min(100, _safe_int(score))),
+        "label": "Evidence Quality",
+        "flags": flags,
+        "breakdown": list(breakdown or []),
+        "confidence_label": {
+            "strong": "High",
+            "medium-high": "Medium-High",
+            "medium": "Medium",
+            "weak": "Low",
+            "insufficient": "Low",
+        }.get(band, "Low"),
+    }
+
+
+def compute_evidence_coverage(
+    *,
+    claims: Optional[Sequence[dict]] = None,
+    evidence: Optional[Sequence[dict]] = None,
+    known_tasks: Optional[Sequence[str]] = None,
+    known_metrics: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """Fraction of extracted claims that are grounded in evidence / known names."""
+    claim_items = [c for c in (claims or []) if isinstance(c, dict)]
+    ev = [e for e in (evidence or []) if isinstance(e, dict)]
+    tasks = {str(t).strip().lower() for t in (known_tasks or []) if str(t).strip()}
+    metrics = {
+        str(m).strip().lower() for m in (known_metrics or _KNOWN_METRICS) if str(m).strip()
+    }
+    timed = {e.get("time") for e in ev if e.get("time") is not None}
+    total = len(claim_items) or 0
+    observed = 0
+    timeline = 0
+    metric_ok = 0
+    unverified = 0
+    for c in claim_items:
+        kind = str(c.get("kind") or "")
+        ok = bool(c.get("ok"))
+        if kind in ("timestamp", "jump"):
+            if ok or c.get("value") in timed:
+                timeline += 1
+                observed += 1
+            else:
+                unverified += 1
+        elif kind == "task":
+            name = str(c.get("value") or "").strip().lower()
+            if ok or name in tasks:
+                observed += 1
+            else:
+                unverified += 1
+        elif kind == "metric":
+            name = str(c.get("value") or "").strip().lower()
+            if ok or name in metrics:
+                metric_ok += 1
+                observed += 1
+            else:
+                unverified += 1
+        else:
+            if ok:
+                observed += 1
+            else:
+                unverified += 1
+    denom = total or 1
+    pct = int(round(100.0 * observed / denom)) if total else (100 if ev else 0)
+    if not claim_items and ev:
+        observed = min(len(ev), 7)
+        total = max(len(ev), 7)
+        timeline = sum(1 for e in ev if e.get("time") is not None)
+        pct = int(round(100.0 * min(1.0, observed / max(total, 1))))
+    return {
+        "percent": max(0, min(100, pct)),
+        "bar": (
+            "█" * max(0, min(10, int(round(10 * max(0, min(100, pct)) / 100.0))))
+            + "░" * (10 - max(0, min(10, int(round(10 * max(0, min(100, pct)) / 100.0)))))
+            + f" {max(0, min(100, pct))}%"
+        ),
+        "directly_observed": f"{observed}/{total or observed}",
+        "timeline_verified": timeline,
+        "metric_verified": metric_ok,
+        "unverified_assumptions": unverified,
+        "claims": total,
+    }
+
+
+def falsification_checks(finding: Optional[dict] = None) -> Dict[str, Any]:
+    """What evidence would disprove the leading explanation for this finding."""
+    blob = _finding_blob(finding).lower()
+    title = str((finding or {}).get("title") or "this finding") if finding else "the conclusion"
+    checks: List[str] = []
+    next_check = "Inspect the strongest jump:TIME on the timeline"
+    if "migrat" in blob or "thrash" in blob or "bounc" in blob:
+        checks = [
+            "No core-to-core hops in the cursor window for the named task",
+            "Ping-pong / bounce count is near zero in the scoped Statistics",
+            "Another task accounts for the majority of migrations",
+        ]
+        next_check = "Open Core Migrations / Heatmap around the cited jump:TIME"
+    elif "block" in blob or "latency" in blob or "mutex" in blob or "contention" in blob:
+        checks = [
+            "No corresponding mutex hold episode in the window",
+            "Latency spike occurs while the task is runnable (on-CPU)",
+            "Another task causes the majority of blocking",
+        ]
+        next_check = "Inspect mutex hold / Blocking Max around the cited jump:TIME"
+    elif "inversion" in blob or "inherit" in blob:
+        checks = [
+            "No L/M/H geometry or inherit episode in the window",
+            "The waiter is not blocked on the suspected mutex",
+            "Priority boost duration does not overlap the latency spike",
+        ]
+        next_check = "Open Priority Inheritance around the cited jump:TIME"
+    elif "wcet" in blob or "execution" in blob or "spike" in blob:
+        checks = [
+            "Max execution slice is in-family with typical (no Max≫Avg)",
+            "The long slice is an ISR / TICK, not the named task",
+            "Preemption, not payload, stretches the slice",
+        ]
+        next_check = "Jump to Execution Max and confirm the task row"
+    elif "tick" in blob or "missed" in blob:
+        checks = [
+            "Tick CV is below the 5% threshold in this scope",
+            "Large gaps are idle (tickless), not missed ticks under load",
+        ]
+        next_check = "Open Trace Health (TICK) for the scoped window"
+    elif "load" in blob or "imbalance" in blob or "balance" in blob:
+        checks = [
+            "Load Balance Score is in the green zone for this window",
+            "Concurrent-active distribution is even across cores",
+        ]
+        next_check = "Open Core Utilisation / Load Balance Score"
+    else:
+        checks = [
+            "Cited jump:TIME is outside the cursor region",
+            "Named task does not appear in scoped Statistics",
+            "The metric named in the conclusion is not present",
+        ]
+    return {
+        "conclusion": title,
+        "would_disprove": checks,
+        "disprove": checks,
+        "supporting": [],
+        "next_check": next_check,
+    }
+
+
+def extract_claims(
+    text: str,
+    *,
+    known_tasks: Optional[Sequence[str]] = None,
+    known_metrics: Optional[Sequence[str]] = None,
+    cursor_lo: Optional[float] = None,
+    cursor_hi: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """Pull task names, metrics, and jump:TIME values out of a reply."""
+    src = str(text or "")
+    tasks = {str(t).strip() for t in (known_tasks or []) if str(t).strip()}
+    tasks_l = {t.lower(): t for t in tasks}
+    metrics = {
+        str(m).strip().lower() for m in (known_metrics or _KNOWN_METRICS) if str(m).strip()
+    }
+    claims: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    def add(kind: str, value: Any, *, ok: bool, detail: str = "") -> None:
+        key = (kind, str(value))
+        if key in seen:
+            return
+        seen.add(key)
+        claims.append({"kind": kind, "value": value, "ok": ok, "detail": detail})
+
+    for m in _JUMP_RE.finditer(src):
+        try:
+            t = float(m.group(1))
+        except ValueError:
+            continue
+        in_scope = True
+        detail = ""
+        if cursor_lo is not None and t < float(cursor_lo):
+            in_scope = False
+            detail = "timestamp before cursor window"
+        if cursor_hi is not None and t > float(cursor_hi):
+            in_scope = False
+            detail = "timestamp after cursor window"
+        add("jump", t, ok=in_scope, detail=detail)
+
+    for m in _TASK_NAME_RE.finditer(src):
+        name = m.group(1)
+        if tasks:
+            ok = name.lower() in tasks_l
+            add("task", name, ok=ok, detail="" if ok else "task not in trace/findings")
+        else:
+            add("task", name, ok=True, detail="no known-task list; accepted")
+
+    low = src.lower()
+    for metric in sorted(metrics):
+        if re.search(r"\b" + re.escape(metric) + r"\b", low):
+            add("metric", metric, ok=True)
+
+    return claims
+
+
+def validate_ai_response(
+    text: str,
+    *,
+    known_tasks: Optional[Sequence[str]] = None,
+    known_metrics: Optional[Sequence[str]] = None,
+    known_times: Optional[Sequence[float]] = None,
+    cursor_lo: Optional[float] = None,
+    cursor_hi: Optional[float] = None,
+    tool_results: Optional[Sequence[dict]] = None,
+    allow_estimates: bool = True,
+) -> Dict[str, Any]:
+    """Host-side hallucination guard for an assistant reply."""
+    claims = extract_claims(
+        text,
+        known_tasks=known_tasks,
+        known_metrics=known_metrics,
+        cursor_lo=cursor_lo,
+        cursor_hi=cursor_hi,
+    )
+    times = set()
+    for t in known_times or []:
+        try:
+            times.add(float(t))
+        except (TypeError, ValueError):
+            continue
+    for res in tool_results or []:
+        if not isinstance(res, dict):
+            continue
+        data = res.get("data") if isinstance(res.get("data"), dict) else res
+        for key in ("evidence", "events", "path"):
+            for item in data.get(key) or []:
+                if isinstance(item, dict) and item.get("time") is not None:
+                    try:
+                        times.add(float(item.get("time")))
+                    except (TypeError, ValueError):
+                        continue
+    flags: List[str] = []
+    unverified = 0
+    for c in claims:
+        if c.get("kind") == "jump" and times:
+            try:
+                val = float(c.get("value"))
+            except (TypeError, ValueError):
+                continue
+            if val not in times and not any(abs(val - t) < 1e-6 for t in times):
+                # Still ok if it is inside the cursor window and tools didn't
+                # enumerate every timestamp — only flag when out of scope.
+                if not c.get("ok"):
+                    unverified += 1
+                    flags.append(f"jump:{c['value']} outside cursor window")
+        elif c.get("kind") == "task" and not c.get("ok"):
+            unverified += 1
+            flags.append(f"unknown task {c.get('value')}")
+        elif not c.get("ok"):
+            unverified += 1
+            flags.append(str(c.get("detail") or c.get("kind")))
+    low = str(text or "").lower()
+    if not allow_estimates:
+        if "what_if" in low or "optimize_experiment" in low:
+            if "estimate" not in low and "heuristic" not in low:
+                flags.append("simulator result not labelled as an estimate")
+                unverified += 1
+    ok = unverified == 0
+    return {
+        "ok": ok,
+        "claims": claims,
+        "unverified": unverified,
+        "flags": flags,
+        "message": (
+            "All extracted claims match trace scope"
+            if ok else
+            f"{unverified} claim(s) could not be verified against trace data"
+        ),
+    }
+
+
+def interpret_investigation_query(
+    question: str,
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    cursor_lo: Optional[float] = None,
+    cursor_hi: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Turn a free-form question into an explicit investigation scope."""
+    q = str(question or "").strip()
+    blob = q.lower()
+    items = [f for f in (findings or []) if isinstance(f, dict)]
+    kind = "diagnose"
+    scopes = ["execution", "blocking"]
+    if any(w in blob for w in ("compar", "regress", "vs ", "versus", "before", "after")):
+        kind = "compare"
+        scopes = ["execution", "blocking", "migrations", "tick"]
+    elif any(w in blob for w in ("optimi", "faster", "improve", "what-if", "what if", "pin")):
+        kind = "optimize"
+        scopes = ["migrations", "blocking", "execution"]
+    elif any(w in blob for w in ("report", "write-up", "summary for")):
+        kind = "report"
+        scopes = ["findings"]
+    elif any(w in blob for w in ("why", "cause", "root", "investigat", "slow")):
+        kind = "diagnose"
+        scopes = ["execution", "blocking", "migrations", "priority inheritance"]
+    elif any(w in blob for w in ("what", "explain", "triage")):
+        kind = "quick"
+        scopes = ["findings"]
+    if "migrat" in blob or "thrash" in blob:
+        if "migrations" not in scopes:
+            scopes.append("migrations")
+    if "mutex" in blob or "lock" in blob or "invert" in blob:
+        if "priority inheritance" not in scopes:
+            scopes.append("priority inheritance")
+    focus = None
+    if items:
+        focus = items[0]
+        qlow = blob
+        for f in items:
+            title = str(f.get("title") or "").lower()
+            task = str(f.get("task") or "").lower()
+            if title and title in qlow:
+                focus = f
+                break
+            if task and task in qlow:
+                focus = f
+                break
+    window = None
+    if cursor_lo is not None and cursor_hi is not None:
+        window = {"lo": cursor_lo, "hi": cursor_hi}
+    mode = kind if kind in INVESTIGATION_MODES else "diagnose"
+    return {
+        "ok": True,
+        "interpreted_question": q or "Investigate the main performance problem",
+        "kind": kind,
+        "mode": mode,
+        "scope": scopes,
+        "finding_id": str((focus or {}).get("id") or ""),
+        "task": str((focus or {}).get("task") or ""),
+        "cursor_window": window,
+        "suggested_tools": investigation_mode_plan(mode).get("tools") or [],
+        "message": f"Interpreted as {kind} investigation",
+    }
+
+
+def explain_finding_payload(
+    finding: Optional[dict],
+    *,
+    level: str = "technical",
+    hypotheses: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    """Three-level explanation of one Analysis Finding (host-side)."""
+    lv = str(level or "technical").strip().lower()
+    if lv not in EXPLAIN_LEVELS:
+        lv = "technical"
+    if not isinstance(finding, dict):
+        return {"ok": False, "message": "No finding selected", "level": lv}
+    title = str(finding.get("title") or finding.get("id") or "Finding")
+    text = str(finding.get("text") or "")
+    sev = str(finding.get("severity") or "info")
+    task = str(finding.get("task") or "")
+    hyps = enrich_hypotheses(hypotheses or [], evidence=finding.get("evidence") or [])
+    quick = f"{sev.upper()}: {title}." + (f" Focus task {task}." if task else "")
+    technical = (
+        f"{title} ({sev}). {text} "
+        "Confirm the named Statistics section, then click Max / a scatter "
+        "point to seek the timeline."
+    ).strip()
+    deep = technical
+    if hyps:
+        names = "; ".join(
+            f"{h['hypothesis']} [{h['status']}]" for h in hyps[:4]
+        )
+        deep = (
+            f"{technical} Leading hypotheses: {names}. "
+            "Call investigate → correlate_events → find_critical_path, "
+            "then verify jump:TIME inside the cursor window."
+        )
+    body = {"quick": quick, "technical": technical, "deep": deep}[lv]
+    return {
+        "ok": True,
+        "message": f"{lv} explanation of {finding.get('id') or title}",
+        "level": lv,
+        "finding": {
+            "id": finding.get("id"),
+            "severity": sev,
+            "title": title,
+            "text": text,
+            "task": task,
+            "evidence": list(finding.get("evidence") or []),
+        },
+        "hypotheses": hyps,
+        "explanation": body,
+        "levels": {
+            "quick": quick,
+            "technical": technical,
+            "deep": deep,
+        },
+    }
+
+
+def investigation_mode_plan(mode: str = "diagnose") -> Dict[str, Any]:
+    """User-facing investigation mode → goal + tool sequence."""
+    want = str(mode or "diagnose").strip().lower()
+    if want not in INVESTIGATION_MODES:
+        want = "diagnose"
+    plans = {
+        "quick": {
+            "goal": "Find the most likely problem",
+            "tools": ["detect_anomalies", "investigate"],
+            "template": "triage",
+        },
+        "diagnose": {
+            "goal": "Find cause → gather evidence → verify",
+            "tools": [
+                "investigate", "correlate_events", "find_critical_path",
+            ],
+            "template": "investigate",
+        },
+        "compare": {
+            "goal": "Explain why A differs from B",
+            "tools": ["compare_performance", "regression_explain"],
+            "template": "compare",
+        },
+        "optimize": {
+            "goal": "Find cause → propose experiments → rank them",
+            "tools": [
+                "investigate", "what_if", "optimize_experiment",
+                "recommend_experiments",
+            ],
+            "template": "optimize",
+        },
+        "report": {
+            "goal": "Turn confirmed findings into an engineering report",
+            "tools": ["generate_report", "export_report"],
+            "template": "diagnostic_report",
+        },
+    }
+    plan = dict(plans[want])
+    plan["mode"] = want
+    plan["ok"] = True
+    return plan
+
+
+INVESTIGATION_MODE_LABELS: Dict[str, str] = {
+    "quick": "Quick",
+    "diagnose": "Diagnose",
+    "compare": "Compare",
+    "optimize": "Optimize",
+    "report": "Report",
+}
+
+
+def investigation_mode_prompt(mode: str = "diagnose") -> str:
+    """User prompt for an Investigation Mode chip (maps onto existing tools)."""
+    plan = investigation_mode_plan(mode)
+    listed = " → ".join(str(t) for t in (plan.get("tools") or []) if t)
+    label = INVESTIGATION_MODE_LABELS.get(plan["mode"], plan["mode"])
+    return (
+        f"{plan.get('goal') or label}. Call these tools in order: {listed}. "
+        "After each tool, update hypotheses with manage_hypotheses when the "
+        "status changes. Finish with a verdict, jump:TIME evidence, "
+        "what would disprove this, confidence, and one next check."
+    )
+
+
+def parse_user_investigation_templates(raw: Any) -> List[Dict[str, Any]]:
+    """Deserialize user-saved investigation sequences."""
+    if isinstance(raw, list):
+        items = raw
+    else:
+        try:
+            items = json.loads(str(raw or "") or "[]")
+        except json.JSONDecodeError:
+            return []
+    out: List[Dict[str, Any]] = []
+    if not isinstance(items, list):
+        return out
+    for i, it in enumerate(items):
+        if not isinstance(it, dict):
+            continue
+        label = str(it.get("label") or "").strip()
+        steps = [str(s).strip() for s in (it.get("steps") or []) if str(s).strip()]
+        if not label or not steps:
+            continue
+        tid = str(it.get("id") or "").strip()
+        if not tid:
+            tid = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_") or f"user_{i + 1}"
+        out.append({
+            "id": tid, "label": label, "steps": steps, "user": True,
+        })
+    return out
+
+
+def dump_user_investigation_templates(items: Optional[Sequence[dict]] = None) -> str:
+    rows = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        label = str(it.get("label") or "").strip()
+        steps = [str(s).strip() for s in (it.get("steps") or []) if str(s).strip()]
+        if not label or not steps:
+            continue
+        tid = str(it.get("id") or "").strip() or re.sub(
+            r"[^a-z0-9]+", "_", label.lower()).strip("_")
+        rows.append({"id": tid, "label": label, "steps": steps})
+    return json.dumps(rows, ensure_ascii=False)
+
+
+def new_user_investigation_template(
+    label: str,
+    steps: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    name = str(label or "").strip() or "My Investigation"
+    seq = [str(s).strip() for s in (steps or []) if str(s).strip()]
+    if not seq:
+        seq = list(investigation_mode_plan("diagnose").get("tools") or ["investigate"])
+    tid = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "user"
+    return {"id": tid, "label": name, "steps": seq, "user": True}
+
+
+def validate_experiment(
+    expected: Optional[dict] = None,
+    actual: Optional[dict] = None,
+) -> Dict[str, Any]:
+    """Compare expected experiment deltas with Trace Compare / what-if actuals.
+
+    *expected* / *actual* maps metric → signed percent (negative = improvement
+    for cost-like metrics such as migrations / blocking).
+    """
+    exp = expected if isinstance(expected, dict) else {}
+    act = actual if isinstance(actual, dict) else {}
+    rows: List[Dict[str, Any]] = []
+    matched = 0
+    disagreed = 0
+    for key in sorted(set(list(exp.keys()) + list(act.keys()))):
+        e = exp.get(key)
+        a = act.get(key)
+        try:
+            e_n = float(e) if e is not None else None
+        except (TypeError, ValueError):
+            e_n = None
+        try:
+            a_n = float(a) if a is not None else None
+        except (TypeError, ValueError):
+            a_n = None
+        status = "missing"
+        if e_n is None and a_n is None:
+            status = "missing"
+        elif e_n is None:
+            status = "unspecified"
+        elif a_n is None:
+            status = "unmeasured"
+        else:
+            same_dir = (e_n == 0 and abs(a_n) < 5) or (e_n * a_n > 0) or (
+                abs(e_n) < 5 and abs(a_n) < 8
+            )
+            close = abs(a_n - e_n) <= max(10.0, abs(e_n) * 0.5)
+            if same_dir and close:
+                status = "validated"
+                matched += 1
+            elif same_dir:
+                status = "partial"
+                matched += 1
+            else:
+                status = "disproved"
+                disagreed += 1
+        rows.append({
+            "metric": str(key),
+            "expected": e_n,
+            "actual": a_n,
+            "status": status,
+        })
+    if not rows:
+        result = "INCONCLUSIVE"
+    elif disagreed and matched:
+        result = "PARTIALLY VALIDATED"
+    elif disagreed:
+        result = "DISPROVED"
+    elif matched:
+        result = "VALIDATED"
+    else:
+        result = "INCONCLUSIVE"
+    return {
+        "ok": True,
+        "result": result,
+        "rows": rows,
+        "matched": matched,
+        "disagreed": disagreed,
+        "message": f"Experiment {result}",
+    }
+
+
+def record_confidence_step(
+    history: Optional[Sequence[dict]],
+    *,
+    tool_name: str,
+    score: Any = None,
+    band: str = "",
+    note: str = "",
+) -> List[Dict[str, Any]]:
+    """Append one confidence-evolution step (audit trail)."""
+    out = [dict(s) for s in (history or []) if isinstance(s, dict)]
+    entry: Dict[str, Any] = {
+        "tool": str(tool_name or "").strip(),
+        "note": str(note or "").strip(),
+    }
+    if score is not None:
+        entry["score"] = max(0, min(100, _safe_int(score)))
+        entry["band"] = band or evidence_quality_band(score)
+    elif band:
+        entry["band"] = band
+    out.append(entry)
+    return out
+
+
+def format_confidence_evolution(history: Optional[Sequence[dict]]) -> str:
+    lines: List[str] = []
+    for i, step in enumerate(history or []):
+        if not isinstance(step, dict):
+            continue
+        tool = str(step.get("tool") or f"step {i + 1}")
+        if i == 0:
+            prefix = "Initial"
+        else:
+            prefix = f"After {tool}"
+        band = str(step.get("band") or "")
+        score = step.get("score")
+        extra = f" {score}%" if score is not None else ""
+        note = str(step.get("note") or "")
+        label = f"{prefix}: {band}{extra}".strip()
+        if note:
+            label += f" — {note}"
+        lines.append(label)
+    return "\n".join(lines)
+
+
+def tool_call_reason(tool_name: str, finding: Optional[dict] = None) -> str:
+    """Why the host / model would call this tool for the current finding."""
+    name = str(tool_name or "").strip()
+    base = _TOOL_REASONS.get(name, f"Run {name} as part of the investigation plan")
+    blob = _finding_blob(finding)
+    if blob:
+        title = str((finding or {}).get("title") or "").strip()
+        if title:
+            return f"{base}. Finding: {title}."
+    return base
+
+
+def empty_cost_meter() -> Dict[str, Any]:
+    return {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "tool_calls": 0,
+        "trace_queries": 0,
+        "model_time_s": 0.0,
+        "estimated_usd": 0.0,
+    }
+
+
+def accumulate_cost(
+    meter: Optional[dict],
+    *,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    tool_calls: int = 0,
+    trace_queries: int = 0,
+    model_time_s: float = 0.0,
+    usd_per_1k: float = 0.0,
+) -> Dict[str, Any]:
+    out = dict(meter or empty_cost_meter())
+    pt = max(0, _safe_int(prompt_tokens))
+    ct = max(0, _safe_int(completion_tokens))
+    out["prompt_tokens"] = _safe_int(out.get("prompt_tokens")) + pt
+    out["completion_tokens"] = _safe_int(out.get("completion_tokens")) + ct
+    out["total_tokens"] = out["prompt_tokens"] + out["completion_tokens"]
+    out["tool_calls"] = _safe_int(out.get("tool_calls")) + max(0, _safe_int(tool_calls))
+    out["trace_queries"] = _safe_int(out.get("trace_queries")) + max(
+        0, _safe_int(trace_queries))
+    try:
+        out["model_time_s"] = round(
+            float(out.get("model_time_s") or 0) + max(0.0, float(model_time_s or 0)),
+            3,
+        )
+    except (TypeError, ValueError):
+        pass
+    added = (pt + ct) / 1000.0 * max(0.0, float(usd_per_1k or 0))
+    try:
+        out["estimated_usd"] = round(float(out.get("estimated_usd") or 0) + added, 6)
+    except (TypeError, ValueError):
+        out["estimated_usd"] = round(added, 6)
+    return out
+
+
+def format_cost_meter(meter: Optional[dict]) -> str:
+    m = meter if isinstance(meter, dict) else empty_cost_meter()
+    usd = float(m.get("estimated_usd") or 0)
+    usd_s = f"${usd:.3f}" if usd else "—"
+    return (
+        f"Context {m.get('total_tokens') or 0} tokens · "
+        f"Tool calls {m.get('tool_calls') or 0} · "
+        f"Trace queries {m.get('trace_queries') or 0} · "
+        f"Model time {m.get('model_time_s') or 0}s · "
+        f"Est. {usd_s}"
+    )
+
+
+def _format_token_count(n: Any) -> str:
+    try:
+        count = int(n or 0)
+    except (TypeError, ValueError):
+        count = 0
+    if count >= 1000:
+        compact = f"{count / 1000.0:.1f}".rstrip("0").rstrip(".")
+        return f"{compact}k"
+    return str(count)
+
+
+def format_cost_status(meter: Optional[dict]) -> str:
+    """One-line status suffix: ``1.3k tok · 2 tools · 1.5s``."""
+    m = meter if isinstance(meter, dict) else empty_cost_meter()
+    try:
+        tokens = int(m.get("total_tokens") or 0)
+    except (TypeError, ValueError):
+        tokens = 0
+    try:
+        tools = int(m.get("tool_calls") or 0)
+    except (TypeError, ValueError):
+        tools = 0
+    try:
+        time_s = float(m.get("model_time_s") or 0)
+    except (TypeError, ValueError):
+        time_s = 0.0
+    try:
+        usd = float(m.get("estimated_usd") or 0)
+    except (TypeError, ValueError):
+        usd = 0.0
+    parts = [f"{_format_token_count(tokens)} tok"]
+    if tools:
+        parts.append(f"{tools} tools")
+    if time_s:
+        parts.append(f"{time_s:g}s")
+    if usd:
+        parts.append(f"${usd:.3f}")
+    return " · ".join(parts)
+
+
+def cost_meter_active(meter: Optional[dict]) -> bool:
+    """True when the conversation has accumulated any billable usage."""
+    m = meter if isinstance(meter, dict) else empty_cost_meter()
+    try:
+        tokens = int(m.get("total_tokens") or 0)
+    except (TypeError, ValueError):
+        tokens = 0
+    try:
+        tools = int(m.get("tool_calls") or 0)
+    except (TypeError, ValueError):
+        tools = 0
+    try:
+        time_s = float(m.get("model_time_s") or 0)
+    except (TypeError, ValueError):
+        time_s = 0.0
+    try:
+        usd = float(m.get("estimated_usd") or 0)
+    except (TypeError, ValueError):
+        usd = 0.0
+    return tokens > 0 or tools > 0 or time_s > 0 or usd > 0
+
+
+def status_with_cost(message: str, meter: Optional[dict] = None) -> str:
+    """Append the cost line to an AI status message when usage exists."""
+    text = str(message or "").strip()
+    if not cost_meter_active(meter):
+        return text
+    cost = format_cost_status(meter)
+    return f"{text} · {cost}" if text else cost
+
+
+def chat_usage_from_response(body: Any) -> Dict[str, int]:
+    """Normalize OpenAI / Gemini ``usage`` objects into token counts."""
+    usage = body.get("usage") if isinstance(body, dict) else None
+    if not isinstance(usage, dict):
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    pt = _safe_int(
+        usage.get("prompt_tokens") or usage.get("prompt_token_count") or 0)
+    ct = _safe_int(
+        usage.get("completion_tokens")
+        or usage.get("completion_token_count")
+        or usage.get("candidates_token_count")
+        or 0
+    )
+    tot = _safe_int(usage.get("total_tokens") or (pt + ct))
+    return {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": tot}
+
+
+def format_privacy_chip(priv: Optional[dict] = None) -> str:
+    level = str((priv or {}).get("level") or "local")
+    return {
+        "local": "Local",
+        "cloud_safe": "Cloud",
+        "sensitive": "Sensitive",
+    }.get(level, level.replace("_", " ").title())
+
+
+def investigation_template_prompt(template: Optional[dict] = None) -> str:
+    tpl = template if isinstance(template, dict) else {}
+    label = str(tpl.get("label") or "Investigation")
+    steps = [str(s) for s in (tpl.get("steps") or []) if s]
+    listed = " → ".join(steps) if steps else "investigate"
+    return (
+        f"Run the {label}. Call these tools in order: {listed}. "
+        "After each tool, update hypotheses with manage_hypotheses when the "
+        "status changes. Finish with a verdict, jump:TIME evidence, "
+        "what would disprove this, confidence, and one next check."
+    )
+
+
+def infer_model_capabilities(model_name: str, *, endpoint_is_local: bool = True) -> Dict[str, Any]:
+    """Heuristic capability card from the model id (no network)."""
+    name = str(model_name or "").strip().lower()
+    cloud = (not endpoint_is_local) or any(
+        k in name for k in (
+            "gpt-", "gemini", "claude", "deepseek", "grok", "o1", "o3",
+        )
+    )
+    small = bool(re.search(r"(^|[^\d])([1-3]b)\b", name)) or "mini" in name or "phi" in name
+    large_local = bool(re.search(r"([7-9]b|\d{2,}b)\b", name))
+    tool_calling = "yes" if (cloud or large_local) else ("partial" if small else "unknown")
+    chaining = "yes" if (cloud or large_local) else "partial"
+    long_ctx = "yes" if cloud else ("partial" if large_local else "partial")
+    reasoning = "yes" if cloud else ("partial" if large_local else "partial")
+    recommend = ""
+    if small:
+        recommend = "qwen2.5:7b (or larger) for Investigation"
+    elif cloud:
+        recommend = ""
+    elif large_local:
+        recommend = ""
+    return {
+        "ok": True,
+        "model": str(model_name or "").strip(),
+        "chat": "yes",
+        "structured_output": "yes" if (cloud or large_local) else "partial",
+        "tool_calling": tool_calling,
+        "multi_tool_chaining": chaining,
+        "long_context": long_ctx,
+        "complex_reasoning": reasoning,
+        "recommended": recommend,
+        "source": "heuristic",
+    }
+
+
+def classify_trace_privacy(
+    *,
+    endpoint_is_local: bool = True,
+    redact_task_names: bool = False,
+    sensitive: bool = False,
+) -> Dict[str, Any]:
+    """Local / cloud-safe / sensitive classification for the current endpoint."""
+    if sensitive:
+        level = "sensitive"
+        cloud_ok = False
+        note = "Cloud AI disabled — treat this trace as confidential"
+    elif endpoint_is_local:
+        level = "local"
+        cloud_ok = True
+        note = "Raw trace and Findings stay on this machine"
+    elif redact_task_names:
+        level = "cloud_safe"
+        cloud_ok = True
+        note = "Task names anonymized; Findings still leave the machine"
+    else:
+        level = "cloud_safe"
+        cloud_ok = True
+        note = "Findings / metrics are sent to the configured cloud endpoint"
+    return {
+        "level": level,
+        "cloud_ok": cloud_ok,
+        "endpoint_is_local": bool(endpoint_is_local),
+        "redact_task_names": bool(redact_task_names),
+        "sensitive": bool(sensitive),
+        "note": note,
+    }
+
+
+def anonymize_task_name(name: str, mapping: Optional[dict] = None) -> Tuple[str, Dict[str, str]]:
+    """Stable Task-N alias. Returns (alias, updated mapping)."""
+    src = str(name or "").strip()
+    mp = dict(mapping or {})
+    if not src:
+        return src, mp
+    if src in mp:
+        return mp[src], mp
+    alias = f"Task-{len(mp) + 1}"
+    mp[src] = alias
+    return alias, mp
+
+
+def builtin_investigation_templates() -> List[Dict[str, Any]]:
+    """Reusable tool sequences teams can run as 'My Investigation'."""
+    return [
+        {
+            "id": "cpu_latency",
+            "label": "CPU Latency Investigation",
+            "steps": [
+                "detect_anomalies",
+                "investigate",
+                "query_raw_metric",
+                "correlate_events",
+                "find_critical_path",
+                "detect_priority_inversion",
+                "generate_report",
+            ],
+        },
+        {
+            "id": "migration_thrash",
+            "label": "Migration Thrash Investigation",
+            "steps": [
+                "detect_anomalies",
+                "investigate",
+                "correlate_events",
+                "query_raw_metric",
+                "what_if",
+            ],
+        },
+        {
+            "id": "regression",
+            "label": "A/B Regression Investigation",
+            "steps": [
+                "compare_performance",
+                "regression_explain",
+                "validate_experiment",
+                "generate_report",
+            ],
+        },
+    ]
+
+
+def match_historical_knowledge(
+    task: str,
+    *,
+    current: Optional[dict] = None,
+    history: Optional[dict] = None,
+) -> Dict[str, Any]:
+    """Compare a task's current metrics with a stored baseline profile."""
+    name = str(task or "").strip()
+    cur = current if isinstance(current, dict) else {}
+    hist = history if isinstance(history, dict) else {}
+    prev = hist.get(name) if isinstance(hist.get(name), dict) else (
+        hist.get("tasks", {}).get(name) if isinstance(hist.get("tasks"), dict) else {}
+    )
+    if not isinstance(prev, dict):
+        prev = {}
+    flags: List[str] = []
+    for key in ("migrations", "migration_rate", "blocking", "wcet"):
+        try:
+            a = float(cur.get(key))
+            b = float(prev.get(key))
+        except (TypeError, ValueError):
+            continue
+        if b == 0:
+            continue
+        ratio = a / b
+        if ratio >= 2.0:
+            flags.append(f"{key} {a:g} vs typical {b:g} (×{ratio:.1f})")
+    issue = str(prev.get("issue") or prev.get("previous_issue") or "")
+    fix = str(prev.get("fix") or prev.get("known_fix") or "")
+    build = str(prev.get("build") or prev.get("last_occurrence") or "")
+    resembles = bool(issue) and bool(flags)
+    return {
+        "ok": True,
+        "task": name,
+        "previous_issue": issue,
+        "known_fix": fix,
+        "last_occurrence": build,
+        "flags": flags,
+        "resembles_previous": resembles,
+        "message": (
+            f"This resembles the {issue} issue"
+            + (f" seen in {build}" if build else "")
+            if resembles else
+            ("No historical match" if not prev else "Within historical range")
+        ),
+    }
+
+
+def builtin_historical_catalog() -> List[Dict[str, Any]]:
+    """Keyword catalog for common firmware investigation classes."""
+    return [
+        {
+            "keywords": ("thrash", "migration", "bounc"),
+            "issue": "Migration thrashing",
+            "fix": "Pin the task / set core affinity",
+            "build": "typical",
+        },
+        {
+            "keywords": ("mutex", "contention", "blocking"),
+            "issue": "Mutex contention",
+            "fix": "Shorten the critical section or enable priority inheritance",
+            "build": "typical",
+        },
+        {
+            "keywords": ("inversion", "inherit"),
+            "issue": "Priority inversion",
+            "fix": "Priority inheritance or priority ceiling on the mutex",
+            "build": "typical",
+        },
+        {
+            "keywords": ("imbalance", "load balance"),
+            "issue": "Load imbalance",
+            "fix": "Rebalance placement or pin heavy tasks",
+            "build": "typical",
+        },
+        {
+            "keywords": ("deadline", "budget"),
+            "issue": "Deadline miss",
+            "fix": "Trim WCET or raise the budget / period",
+            "build": "typical",
+        },
+    ]
+
+
+def historical_knowledge_for_finding(
+    finding: Optional[dict] = None,
+    *,
+    history: Optional[dict] = None,
+    current: Optional[dict] = None,
+) -> Dict[str, Any]:
+    """Match stored history, then the builtin catalog, for one finding."""
+    finding = finding if isinstance(finding, dict) else {}
+    task = str(finding.get("task") or "")
+    cur = current if isinstance(current, dict) else {}
+    hit = match_historical_knowledge(task, current=cur, history=history)
+    if hit.get("previous_issue") or hit.get("flags"):
+        return hit
+    blob = f"{finding.get('title') or ''} {finding.get('text') or ''} {task}".lower()
+    for item in builtin_historical_catalog():
+        if any(k in blob for k in (item.get("keywords") or ())):
+            issue = str(item.get("issue") or "")
+            fix = str(item.get("fix") or "")
+            build = str(item.get("build") or "")
+            return {
+                "ok": True,
+                "task": task,
+                "previous_issue": issue,
+                "known_fix": fix,
+                "last_occurrence": build,
+                "flags": [],
+                "resembles_previous": True,
+                "source": "catalog",
+                "message": f"This resembles the {issue} issue"
+                + (f" — known fix: {fix}" if fix else ""),
+            }
+    return hit
+
+
+def build_investigation_case(
+    investigate_ctx: Optional[dict] = None,
+    *,
+    question: str = "",
+    trace: str = "",
+    cursor_lo: Optional[float] = None,
+    cursor_hi: Optional[float] = None,
+    tools_run: Optional[Sequence[str]] = None,
+    tools_executed: Optional[Sequence[str]] = None,
+    mode: str = "diagnose",
+    score_data: Optional[dict] = None,
+    finding: Optional[dict] = None,
+    hypotheses: Optional[Sequence[dict]] = None,
+    alternatives: Optional[Sequence[dict]] = None,
+    evidence: Optional[Sequence[dict]] = None,
+    conclusion: str = "",
+    confidence: str = "",
+    checks: Optional[Sequence[dict]] = None,
+    plan: Optional[dict] = None,
+    **_extra: Any,
+) -> Dict[str, Any]:
+    """Assemble a Case from an ``investigate`` context (and optional extras)."""
+    ctx = dict(investigate_ctx) if isinstance(investigate_ctx, dict) else {}
+    if finding is not None:
+        ctx["finding"] = finding
+    if hypotheses is not None:
+        ctx["hypotheses"] = list(hypotheses)
+    if alternatives is not None:
+        ctx["alternatives"] = list(alternatives)
+    if evidence is not None:
+        ctx["evidence"] = list(evidence)
+    if checks is not None:
+        ctx["checks"] = list(checks)
+    if plan is not None:
+        ctx["plan"] = plan
+    if conclusion:
+        ctx.setdefault("conclusion", conclusion)
+    if score_data is None and isinstance(ctx.get("score_data"), dict):
+        score_data = ctx.get("score_data")
+    if score_data is None and isinstance(ctx.get("scoreData"), dict):
+        score_data = ctx.get("scoreData")
+    run = tools_run or tools_executed or ctx.get("tools_executed")
+    finding_obj = ctx.get("finding") if isinstance(ctx.get("finding"), dict) else {}
+    ev = list(
+        evidence
+        or finding_obj.get("evidence")
+        or ctx.get("evidence")
+        or []
+    )
+    hyps = enrich_hypotheses(
+        ctx.get("hypotheses") or [],
+        evidence=ev,
+        alternatives=ctx.get("alternatives") or [],
+    )
+    graph = build_evidence_graph(
+        finding_obj or None,
+        evidence=ev,
+        hypotheses=hyps,
+        chain=ctx.get("root_cause_chain") or [],
+    )
+    score = score_data if isinstance(score_data, dict) else {}
+    quality = compute_evidence_quality(
+        score=score.get("score", ctx.get("evidence_score", 0)),
+        breakdown=score.get("breakdown") or ctx.get("evidence_score_breakdown"),
+        evidence=ev,
+        alternatives=ctx.get("alternatives") or [],
+        checks=ctx.get("checks") or [],
+        evidence_chain=str(ctx.get("evidence_chain") or ""),
+    )
+    coverage = compute_evidence_coverage(evidence=ev)
+    falsify = falsification_checks(finding_obj or None)
+    if ev:
+        falsify["supporting"] = [
+            str(e.get("label") or "evidence")
+            + (f" jump:{e.get('time')}" if e.get("time") is not None else "")
+            for e in ev[:8] if isinstance(e, dict)
+        ]
+    tool_names: List[str] = []
+    for t in (run or []):
+        if isinstance(t, dict):
+            n = str(t.get("name") or "").strip()
+        else:
+            n = str(t or "").strip()
+        if n:
+            tool_names.append(n)
+    reasons = [
+        {"tool": n, "reason": tool_call_reason(n, finding_obj or None)}
+        for n in tool_names
+    ]
+    case = empty_investigation_case(
+        question=question or str(ctx.get("message") or ctx.get("question") or ""),
+        trace=trace,
+        cursor_lo=cursor_lo,
+        cursor_hi=cursor_hi,
+        tasks=[str(finding_obj.get("task") or "")] if finding_obj.get("task") else [],
+    )
+    case.update({
+        "suspected_findings": [finding_obj] if finding_obj else list(ctx.get("related_findings") or []),
+        "hypotheses": hyps,
+        "evidence": ev,
+        "tools_executed": tool_names,
+        "tool_reasons": reasons,
+        "evidence_timeline": [
+            {"time": e.get("time"), "label": e.get("label")}
+            for e in ev if isinstance(e, dict) and e.get("time") is not None
+        ],
+        "evidence_graph": graph,
+        "evidence_quality": quality,
+        "evidence_coverage": coverage,
+        "coverage": coverage,
+        "falsification": falsify,
+        "falsify": falsify,
+        "graph_mermaid": graph.get("mermaid") or "",
+        "confidence": confidence or quality.get("confidence_label") or "Medium",
+        "confidence_history": record_confidence_step(
+            [], tool_name="investigate",
+            score=quality.get("score"), band=quality.get("band"),
+            note="Initial investigation context",
+        ),
+        "conclusion": conclusion or str(finding_obj.get("title") or ""),
+        "alternatives_rejected": [
+            a for a in (ctx.get("alternatives") or [])
+            if isinstance(a, dict) and str(a.get("status") or "").lower() == "rejected"
+        ],
+        "recommended_action": str(falsify.get("next_check") or ""),
+        "mode": mode if mode in INVESTIGATION_MODES else "diagnose",
+        "plan": ctx.get("plan"),
+    })
+    return case
+
+
+def update_case_from_tool(
+    case: Optional[dict],
+    tool_name: str,
+    result: Optional[dict] = None,
+) -> Dict[str, Any]:
+    """Fold a tool result into an existing Case (confidence evolution)."""
+    out = dict(case or empty_investigation_case())
+    name = str(tool_name or "").strip()
+    tools = list(out.get("tools_executed") or [])
+    if name and name not in tools:
+        tools.append(name)
+    out["tools_executed"] = tools
+    reasons = list(out.get("tool_reasons") or [])
+    finding = None
+    suspected = out.get("suspected_findings") or []
+    if suspected and isinstance(suspected[0], dict):
+        finding = suspected[0]
+    reasons.append({"tool": name, "reason": tool_call_reason(name, finding)})
+    out["tool_reasons"] = reasons
+    data = {}
+    if isinstance(result, dict):
+        data = result.get("data") if isinstance(result.get("data"), dict) else result
+    ev = list(out.get("evidence") or [])
+    for key in ("evidence", "events", "path"):
+        for item in data.get(key) or []:
+            if isinstance(item, dict):
+                ev.append({
+                    "label": str(item.get("label") or item.get("detail") or item.get("kind") or "evidence"),
+                    "time": item.get("time"),
+                })
+    out["evidence"] = ev
+    score = None
+    if isinstance(data.get("evidence_score"), (int, float)):
+        score = data.get("evidence_score")
+    hist = record_confidence_step(
+        out.get("confidence_history"),
+        tool_name=name,
+        score=score,
+        note=str((result or {}).get("message") or "")[:160],
+    )
+    out["confidence_history"] = hist
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Benchmark / regression helpers (offline; no live model required)
+# ---------------------------------------------------------------------------
+
+BENCHMARK_METRIC_WEIGHTS: Dict[str, float] = {
+    "finding": 0.20,
+    "evidence": 0.20,
+    "tool_use": 0.15,
+    "root_cause": 0.20,
+    "calibration": 0.10,
+    "safety": 0.15,
+}
+
+
+def score_benchmark_case(
+    expected: dict,
+    *,
+    actual_finding_ids: Optional[Sequence[str]] = None,
+    actual_tasks: Optional[Sequence[str]] = None,
+    actual_tools: Optional[Sequence[str]] = None,
+    actual_conclusion: str = "",
+    validation: Optional[dict] = None,
+    evidence_quality: Optional[dict] = None,
+) -> Dict[str, Any]:
+    """Weighted diagnostic score for one expected-facts case (0–100)."""
+    exp = expected if isinstance(expected, dict) else {}
+    want_findings = [str(x).lower() for x in (exp.get("finding_types") or [])]
+    got_findings = [str(x).lower() for x in (actual_finding_ids or [])]
+    finding_hits = sum(1 for w in want_findings if any(w in g for g in got_findings))
+    finding_score = 100 if not want_findings else int(
+        round(100.0 * finding_hits / len(want_findings)))
+
+    want_tasks = [str(x).lower() for x in (exp.get("tasks") or [])]
+    got_tasks = [str(x).lower() for x in (actual_tasks or [])]
+    task_hits = sum(1 for w in want_tasks if any(w in g for g in got_tasks))
+    evidence_score = 100 if not want_tasks else int(
+        round(100.0 * task_hits / len(want_tasks)))
+    ev = exp.get("evidence") if isinstance(exp.get("evidence"), dict) else {}
+    want_metrics = [str(x).lower() for x in (ev.get("required_metrics") or [])]
+    if want_metrics:
+        blob = str(actual_conclusion or "").lower()
+        metric_hits = sum(1 for m in want_metrics if m in blob)
+        metric_score = int(round(100.0 * metric_hits / len(want_metrics)))
+        evidence_score = (
+            metric_score if not want_tasks
+            else int(round((evidence_score + metric_score) / 2.0))
+        )
+
+    allowed = [str(x) for x in (exp.get("allowed_tools") or [])]
+    got_tools = [str(x) for x in (actual_tools or [])]
+    if allowed:
+        tool_hits = sum(1 for t in got_tools if t in allowed)
+        tool_score = int(round(100.0 * tool_hits / max(len(allowed), 1)))
+        if got_tools and tool_hits == 0:
+            tool_score = 0
+        elif got_tools:
+            tool_score = max(tool_score, int(round(100.0 * tool_hits / len(got_tools))))
+    else:
+        tool_score = 100 if got_tools else 50
+
+    want_class = str(exp.get("root_cause_class") or "").lower()
+    conc = str(actual_conclusion or "").lower()
+    if not want_class:
+        root_score = 100
+    elif want_class in conc or any(w in conc for w in want_class.split()):
+        root_score = 100
+    else:
+        root_score = 0
+
+    band = str((evidence_quality or {}).get("band") or "")
+    cal = 80
+    if band in ("strong", "medium-high"):
+        cal = 90
+    elif band == "medium":
+        cal = 75
+    elif band in ("weak", "insufficient"):
+        cal = 55
+
+    val = validation if isinstance(validation, dict) else {}
+    safety = 100 if val.get("ok", True) else max(
+        0, 100 - 20 * int(val.get("unverified") or 1))
+    if exp.get("forbidden", {}).get("invented_task_names") and any(
+        c.get("kind") == "task" and not c.get("ok")
+        for c in (val.get("claims") or [])
+        if isinstance(c, dict)
+    ):
+        safety = min(safety, 40)
+
+    parts = {
+        "finding": finding_score,
+        "evidence": evidence_score,
+        "tool_use": tool_score,
+        "root_cause": root_score,
+        "calibration": cal,
+        "safety": safety,
+    }
+    overall = int(round(sum(
+        parts[k] * BENCHMARK_METRIC_WEIGHTS[k] for k in parts
+    )))
+    return {
+        "overall": max(0, min(100, overall)),
+        "parts": parts,
+    }
+
+
+def format_benchmark_score(score: dict) -> str:
+    overall = _safe_int((score or {}).get("overall"))
+    filled = max(0, min(10, int(round(overall / 10))))
+    bar = "█" * filled + "░" * (10 - filled)
+    parts = (score or {}).get("parts") or {}
+    lines = [f"Overall AI Diagnostic Score", f"{bar} {overall}", ""]
+    for key in ("finding", "evidence", "tool_use", "root_cause", "calibration", "safety"):
+        if key in parts:
+            label = {
+                "finding": "Finding",
+                "evidence": "Evidence",
+                "tool_use": "Tool use",
+                "root_cause": "Root cause",
+                "calibration": "Calibration",
+                "safety": "Safety / grounding",
+            }[key]
+            lines.append(f"{label:20} {parts[key]}")
+    return "\n".join(lines)
+
+
+def _cases_from_json_obj(raw: Any) -> List[Dict[str, Any]]:
+    if isinstance(raw, list):
+        return [c for c in raw if isinstance(c, dict)]
+    if isinstance(raw, dict) and isinstance(raw.get("cases"), list):
+        return [c for c in raw["cases"] if isinstance(c, dict)]
+    if isinstance(raw, dict) and raw.get("id"):
+        return [raw]
+    raise ValueError("benchmark dataset must be a JSON list, {cases: [...]}, or a case object")
+
+
+def load_benchmark_dataset(path: str) -> List[Dict[str, Any]]:
+    """Load ``tests/ai/dataset.json`` or a directory of JSON cases + traces."""
+    src = Path(path)
+    if src.is_dir():
+        index = src / "dataset.json"
+        if index.is_file():
+            files = [index]
+        else:
+            files = sorted(
+                p for p in src.glob("*.json")
+                if p.name != "package.json"
+            )
+        if not files:
+            raise FileNotFoundError(f"no dataset.json or *.json cases in {src}")
+        cases: List[Dict[str, Any]] = []
+        for f in files:
+            with f.open("r", encoding="utf-8") as fh:
+                cases.extend(_cases_from_json_obj(json.load(fh)))
+        root = src
+    elif src.is_file():
+        with src.open("r", encoding="utf-8") as fh:
+            cases = _cases_from_json_obj(json.load(fh))
+        root = src.parent
+    else:
+        raise FileNotFoundError(f"benchmark dataset not found: {src}")
+    seen: set = set()
+    out: List[Dict[str, Any]] = []
+    for case in cases:
+        cid = str(case.get("id") or "")
+        if cid and cid in seen:
+            continue
+        if cid:
+            seen.add(cid)
+        trace = str(case.get("trace") or "").strip()
+        if trace:
+            tp = Path(trace)
+            case = dict(case)
+            case["trace_path"] = str(tp if tp.is_absolute() else (root / tp).resolve())
+        baseline = str(case.get("baseline_trace") or case.get("baseline") or "").strip()
+        if baseline:
+            bp = Path(baseline)
+            case = dict(case)
+            case["baseline_path"] = str(bp if bp.is_absolute() else (root / bp).resolve())
+        out.append(case)
+    return out
+
+
+def evidence_quality_from_score(
+    score: Any,
+    breakdown: Optional[Sequence[dict]] = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """Alias used by the Evidence panel (same as ``compute_evidence_quality``)."""
+    return compute_evidence_quality(
+        score=score, breakdown=breakdown, **kwargs,
+    )
+
+
+def build_validation_catalog(
+    *,
+    findings_text: str = "",
+    evidence: Optional[Sequence[dict]] = None,
+    tasks: Optional[Sequence[str]] = None,
+    metrics: Optional[Sequence[str]] = None,
+    cursor_lo: Optional[float] = None,
+    cursor_hi: Optional[float] = None,
+    tool_times: Optional[Sequence[Any]] = None,
+) -> Dict[str, Any]:
+    """Known tasks / times / cursor window for ``validate_ai_response``."""
+    known_tasks = [str(t) for t in (tasks or []) if t]
+    for tok in _TASK_NAME_RE.findall(str(findings_text or "")):
+        if tok not in known_tasks:
+            known_tasks.append(tok)
+    times: List[float] = []
+    for e in evidence or []:
+        if isinstance(e, dict) and e.get("time") is not None:
+            try:
+                times.append(float(e.get("time")))
+            except (TypeError, ValueError):
+                pass
+    for t in tool_times or []:
+        try:
+            times.append(float(t))
+        except (TypeError, ValueError):
+            pass
+    lo = cursor_lo
+    hi = cursor_hi
+    try:
+        lo = float(lo) if lo is not None else None
+    except (TypeError, ValueError):
+        lo = None
+    try:
+        hi = float(hi) if hi is not None else None
+    except (TypeError, ValueError):
+        hi = None
+    return {
+        "tasks": known_tasks,
+        "metrics": sorted(str(m) for m in (metrics or _KNOWN_METRICS)),
+        "times": times,
+        "cursor_lo": lo,
+        "cursor_hi": hi,
+    }
+
+
+def infer_model_capability(
+    model_name: str,
+    *,
+    tool_call_ok: Optional[bool] = None,
+    chat_ok: bool = True,
+    endpoint_is_local: bool = True,
+) -> Dict[str, Any]:
+    cap = infer_model_capabilities(
+        model_name, endpoint_is_local=endpoint_is_local,
+    )
+    cap["chat"] = "yes" if chat_ok else "no"
+    if tool_call_ok is True:
+        cap["tool_calling"] = "yes"
+    elif tool_call_ok is False:
+        cap["tool_calling"] = "partial"
+    return cap
+
+
+def format_capability_report(cap: Optional[Dict[str, Any]] = None) -> str:
+    if not isinstance(cap, dict):
+        return ""
+    glyph = {"yes": "✓", "partial": "△", "no": "✗", "unknown": "?"}
+    def g(v: Any) -> str:
+        return glyph.get(str(v), str(v or ""))
+    lines = [
+        "Model capability",
+        "",
+        f"{g(cap.get('chat'))} Chat",
+        f"{g(cap.get('structured_output'))} Structured output",
+        f"{g(cap.get('tool_calling'))} Tool calling",
+        f"{g(cap.get('multi_tool_chaining'))} Multi-tool chaining",
+        f"{g(cap.get('long_context'))} Long context",
+        f"{g(cap.get('complex_reasoning'))} Complex reasoning",
+    ]
+    rec = str(cap.get("recommended") or "").strip()
+    if rec:
+        lines.extend(["", f"Recommended: {rec}"])
+    return "\n".join(lines)
+
+
+def format_benchmark_report(run_id: str, rows: Sequence[Dict[str, Any]]) -> str:
+    lines = [f"AI Benchmark #{run_id}", "", f"Cases: {len(rows)}", ""]
+    for row in rows:
+        name = str(row.get("id") or "?")
+        score = row.get("overall")
+        flag = "PASS" if row.get("pass") else "FAIL"
+        lines.append(f"  {name:24} {score!s:>3}  {flag}")
+    if rows:
+        avg = int(round(sum(int(r.get("overall") or 0) for r in rows) / len(rows)))
+        lines.extend(["", f"Overall {avg}"])
+    return "\n".join(lines) + "\n"
+
+
+def run_offline_benchmark(
+    dataset_path: Any,
+    *,
+    fail_under: int = 0,
+) -> Dict[str, Any]:
+    """Score fixture responses in a dataset (no live model calls)."""
+    from datetime import datetime, timezone
+    cases = load_benchmark_dataset(str(dataset_path))
+    rows: List[Dict[str, Any]] = []
+    for case in cases:
+        expected = case.get("expected") if isinstance(case.get("expected"), dict) else case
+        actual = case.get("actual") if isinstance(case.get("actual"), dict) else {}
+        response = str(actual.get("response") or case.get("response") or "")
+        catalog = actual.get("catalog") or case.get("catalog") or {}
+        report = validate_ai_response(
+            response,
+            known_tasks=catalog.get("tasks"),
+            known_times=catalog.get("times"),
+            cursor_lo=catalog.get("cursor_lo"),
+            cursor_hi=catalog.get("cursor_hi"),
+        )
+        scored = score_benchmark_case(
+            expected,
+            actual_finding_ids=list(expected.get("finding_types") or []) if (
+                any(
+                    str(ft).lower() in response.lower()
+                    for ft in (expected.get("finding_types") or [])
+                )
+            ) else [],
+            actual_tasks=report.get("claims") and [
+                str(c.get("value")) for c in report["claims"]
+                if isinstance(c, dict) and c.get("kind") == "task"
+            ] or [],
+            actual_tools=list(actual.get("tools") or case.get("tools") or []),
+            actual_conclusion=response,
+            validation=report,
+        )
+        # If finding types appear in the response, treat them as identified.
+        if expected.get("finding_types"):
+            blob = response.lower()
+            got = [
+                ft for ft in expected["finding_types"]
+                if str(ft).lower() in blob
+            ]
+            scored = score_benchmark_case(
+                expected,
+                actual_finding_ids=got,
+                actual_tasks=[
+                    str(c.get("value")) for c in (report.get("claims") or [])
+                    if isinstance(c, dict) and c.get("kind") == "task"
+                ],
+                actual_tools=list(actual.get("tools") or case.get("tools") or []),
+                actual_conclusion=response,
+                validation=report,
+            )
+        scored["id"] = case.get("id") or expected.get("id")
+        scored["pass"] = (
+            int(scored.get("overall") or 0) >= int(expected.get("pass_under") or fail_under or 70)
+            and bool(report.get("ok", True) or not (expected.get("forbidden") or {}))
+        )
+        if expected.get("forbidden", {}).get("invented_task_names") and not report.get("ok"):
+            invented = any(
+                c.get("kind") == "task" and not c.get("ok")
+                for c in (report.get("claims") or [])
+                if isinstance(c, dict)
+            )
+            if invented:
+                scored["pass"] = False
+        if expected.get("forbidden", {}).get("out_of_scope_timestamps"):
+            oos = any(
+                c.get("kind") == "jump" and not c.get("ok")
+                for c in (report.get("claims") or [])
+                if isinstance(c, dict)
+            )
+            if oos:
+                scored["pass"] = False
+        if fail_under and int(scored.get("overall") or 0) < int(fail_under):
+            scored["pass"] = False
+        scored["validation"] = report
+        rows.append(scored)
+    run_id = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
+    failed = [r for r in rows if not r.get("pass")]
+    return {
+        "run_id": run_id,
+        "rows": rows,
+        "failed": failed,
+        "report": format_benchmark_report(run_id, rows),
+        "ok": not failed,
+    }
+# ===========================================================================
 # ai_investigation
 # ===========================================================================
 
@@ -17009,11 +19013,28 @@ _TOOL_STEP_MAP: Dict[str, Tuple[str, ...]] = {
     "investigation_replay": ("validate",),
     "generate_report": ("recommend",),
     "export_report": ("recommend",),
+    "explain_finding": ("findings", "hypotheses"),
+    "interpret_query": ("findings",),
+    "validate_experiment": ("validate", "recommend"),
+    "manage_hypotheses": ("hypotheses", "validate"),
 }
+
+# Tools whose results refresh the Evidence / Reasoning log. Keep in sync with
+# web/src/utils/aiInvestigation.js EVIDENCE_PANEL_TOOLS.
+EVIDENCE_PANEL_TOOLS: Tuple[str, ...] = (
+    "investigate",
+    "correlate_events",
+    "find_critical_path",
+    "compare_performance",
+    "explain_finding",
+    "interpret_query",
+    "validate_experiment",
+    "manage_hypotheses",
+)
 
 _AGENT_TEMPLATE_IDS = frozenset({
     "investigate", "root_cause", "verify", "what_if", "optimize",
-    "diagnostic_report", "auto_investigate",
+    "diagnostic_report", "auto_investigate", "explain_finding",
 })
 
 _FINDING_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
@@ -17254,17 +19275,23 @@ def build_investigate_context(
     plan = mark_plan_steps_from_tools(plan, ["investigate"])
     chain = build_root_cause_chain(focus)
     anomalies = detect_anomalies(items, limit=max(3, depth + 2))
+    finding = {
+        "id": focus.get("id"),
+        "severity": sev,
+        "title": title,
+        "text": text,
+        "evidence": list(focus.get("evidence") or []),
+        "task": focus.get("task") or _guess_task_name(text),
+    }
+    hyps = enrich_hypotheses(
+        hypotheses[: max(1, depth + 1)],
+        evidence=finding.get("evidence"),
+        alternatives=alternatives[: max(1, depth + 1)],
+    )
     graph = {
-        "finding": {
-            "id": focus.get("id"),
-            "severity": sev,
-            "title": title,
-            "text": text,
-            "evidence": list(focus.get("evidence") or []),
-            "task": focus.get("task") or _guess_task_name(text),
-        },
+        "finding": finding,
         "related_findings": related,
-        "hypotheses": hypotheses[: max(1, depth + 1)],
+        "hypotheses": hyps,
         "alternatives": alternatives[: max(1, depth + 1)],
         "suggested_tools": suggested,
         "depth": depth,
@@ -17280,6 +19307,29 @@ def build_investigate_context(
     )
     graph["evidence_score"] = score_data["score"]
     graph["evidence_score_breakdown"] = score_data["breakdown"]
+    quality = compute_evidence_quality(
+        score=score_data["score"],
+        breakdown=score_data["breakdown"],
+        evidence=graph["finding"].get("evidence"),
+        alternatives=graph.get("alternatives"),
+        evidence_chain=graph.get("evidence_chain"),
+    )
+    graph["evidence_quality"] = quality
+    graph["evidence_coverage"] = compute_evidence_coverage(
+        evidence=graph["finding"].get("evidence"),
+    )
+    graph["evidence_graph"] = build_evidence_graph(
+        finding,
+        evidence=finding.get("evidence"),
+        hypotheses=hyps,
+        chain=chain,
+    )
+    graph["falsification"] = falsification_checks(finding)
+    graph["historical_knowledge"] = historical_knowledge_for_finding(finding)
+    graph["investigation_case"] = build_investigation_case(
+        graph,
+        score_data=score_data,
+    )
     return {
         "ok": True,
         "message": (
@@ -17764,7 +19814,10 @@ def compute_evidence_score(
         score += 15
         breakdown.append({"label": "Metric correlation", "delta": 15})
 
-    untested = [a for a in alts if str(a.get("status") or "").lower() == "untested"]
+    untested = [
+        a for a in alts
+        if str(a.get("status") or "").lower() in ("untested", "needs_evidence")
+    ]
     if untested:
         penalty = min(15, 5 * len(untested))
         score -= penalty
@@ -17778,11 +19831,13 @@ def compute_evidence_score(
         breakdown.append({"label": "Missing direct evidence", "delta": -10})
 
     score = max(0, min(100, score))
+    quality = evidence_quality_from_score(score, breakdown=breakdown)
     return {
         "score": score,
         "label": "AI Evidence Score — heuristic",
         "bar": evidence_score_bar(score),
         "breakdown": breakdown,
+        "quality": quality,
     }
 
 
@@ -18027,7 +20082,7 @@ def extract_evidence_panel_payload(
     for key in (
         "finding", "hypotheses", "alternatives", "evidence_chain",
         "events", "path", "checks", "confidence", "task", "correlation",
-        "root_cause_chain",
+        "root_cause_chain", "historical_knowledge",
     ):
         if key not in data and key in result:
             data[key] = result[key]
@@ -18055,6 +20110,15 @@ def extract_evidence_panel_payload(
             payload["hypotheses"] = list(data.get("hypotheses") or [])
         if data.get("root_cause_chain"):
             payload["root_cause_chain"] = list(data.get("root_cause_chain") or [])
+        for extra in (
+            "evidence_quality", "evidence_coverage", "evidence_graph",
+            "falsification", "investigation_case", "confidence_history",
+            "historical_knowledge",
+        ):
+            if data.get(extra):
+                payload[extra] = data[extra]
+        if data.get("explanation") and not payload.get("subtitle"):
+            payload["subtitle"] = str(data.get("explanation") or "")
     elif name == "find_critical_path" or data.get("path"):
         task = str(data.get("task") or "")
         payload["conclusion"] = f"Critical path: {task}" if task else "Critical path"
@@ -18087,6 +20151,38 @@ def extract_evidence_panel_payload(
             payload["conclusion"] = "Performance comparison"
         payload["confidence"] = str(data.get("confidence") or "Medium")
         payload["checks"] = list(data.get("checks") or [])
+    elif name == "interpret_query" or data.get("interpreted_question"):
+        payload["conclusion"] = str(data.get("interpreted_question") or "")
+        scopes = [str(s) for s in (data.get("scope") or []) if s]
+        mode = str(data.get("mode") or data.get("kind") or "")
+        if scopes:
+            payload["subtitle"] = (
+                f"{mode}: {', '.join(scopes)}" if mode else ", ".join(scopes)
+            )
+        elif mode:
+            payload["subtitle"] = mode
+        payload["confidence"] = "Medium"
+    elif name == "validate_experiment" or data.get("result") in (
+        "VALIDATED", "PARTIALLY VALIDATED", "DISPROVED", "INCONCLUSIVE",
+    ):
+        result_label = str(data.get("result") or "INCONCLUSIVE")
+        payload["conclusion"] = result_label
+        payload["checks"] = [
+            {
+                "label": str(row.get("metric") or "metric"),
+                "status": str(row.get("status") or ""),
+                "detail": (
+                    f"expected {row.get('expected')} actual {row.get('actual')}"
+                ),
+            }
+            for row in (data.get("rows") or [])
+            if isinstance(row, dict)
+        ]
+        payload["confidence"] = (
+            "High" if result_label == "VALIDATED"
+            else "Low" if result_label == "DISPROVED"
+            else "Medium"
+        )
 
     if not (
         payload.get("conclusion")
@@ -18105,6 +20201,56 @@ def extract_evidence_panel_payload(
     payload["evidence_score"] = score_data["score"]
     payload["evidence_score_breakdown"] = score_data["breakdown"]
     payload["evidence_score_bar"] = score_data["bar"]
+    quality = compute_evidence_quality(
+        score=score_data["score"],
+        breakdown=score_data.get("breakdown"),
+        evidence=payload.get("evidence"),
+        alternatives=payload.get("alternatives"),
+        checks=payload.get("checks"),
+        evidence_chain=str(payload.get("evidence_chain") or ""),
+    )
+    payload["evidence_quality"] = quality
+    payload["evidence_quality_bar"] = quality.get("bar")
+    finding = data.get("finding") if isinstance(data.get("finding"), dict) else None
+    if finding is None and payload.get("conclusion"):
+        finding = {
+            "title": payload.get("conclusion"),
+            "text": payload.get("subtitle") or "",
+            "evidence": payload.get("evidence") or [],
+        }
+    case = build_investigation_case(
+        {
+            "finding": finding or {},
+            "hypotheses": payload.get("hypotheses") or [],
+            "alternatives": payload.get("alternatives") or [],
+            "evidence": payload.get("evidence") or [],
+            "root_cause_chain": payload.get("root_cause_chain") or [],
+            "plan": data.get("plan"),
+            "suggested_tools": data.get("suggested_tools") or [],
+            "checks": payload.get("checks") or [],
+            "evidence_score": score_data["score"],
+            "evidence_score_breakdown": score_data.get("breakdown"),
+            "evidence_chain": payload.get("evidence_chain") or "",
+            "message": payload.get("conclusion") or "",
+        },
+        score_data=score_data,
+        tools_run=data.get("suggested_tools") or data.get("tools_executed"),
+    )
+    payload["investigation_case"] = case
+    payload["coverage"] = case.get("evidence_coverage") or case.get("coverage")
+    payload["falsify"] = case.get("falsification") or case.get("falsify")
+    graph = case.get("evidence_graph") or {}
+    payload["graph_mermaid"] = (
+        case.get("graph_mermaid")
+        or evidence_graph_mermaid(graph.get("nodes"), graph.get("edges"))
+    )
+    payload["hypotheses_managed"] = case.get("hypotheses")
+    payload["tool_reasons"] = case.get("tool_reasons") or []
+    payload["confidence_evolution"] = format_confidence_evolution(
+        case.get("confidence_history"))
+    hk = data.get("historical_knowledge") or payload.get("historical_knowledge")
+    if hk:
+        payload["historical_knowledge"] = hk
     return payload
 
 
@@ -18114,6 +20260,40 @@ def _evidence_jump_token(value: Any) -> str:
         return str(int(tn)) if tn.is_integer() else str(tn)
     except (TypeError, ValueError):
         return str(value or "")
+
+
+_BTF_HYP_HREF_RE = re.compile(
+    r"btfhyp:(?://)?([a-z_]+)/([^?\s#]*)",
+    re.IGNORECASE,
+)
+
+
+def btf_hyp_href(action: str, hyp_id: str = "") -> str:
+    """Clickable Evidence-panel action (Support / Reject / Test / Compare)."""
+    act = re.sub(r"[^a-z_]", "", str(action or "").lower()) or "test"
+    hid = re.sub(r"[^A-Za-z0-9_.-]", "", str(hyp_id or "all")) or "all"
+    return f"btfhyp:{act}/{hid}"
+
+
+def parse_btf_hyp_href(href: Any) -> Tuple[str, str]:
+    """Parse ``btfhyp:supported/h1`` → ``(action, hypothesis_id)``."""
+    m = _BTF_HYP_HREF_RE.search(str(href or ""))
+    if not m:
+        return "", ""
+    return m.group(1).lower(), (m.group(2) or "all")
+
+
+def format_hypothesis_action_links(hyp_id: str, labels: Dict[str, str]) -> str:
+    hid = str(hyp_id or "h1")
+    parts = []
+    for action, key, fallback in (
+        ("supported", "support_action", "Support"),
+        ("rejected", "reject_action", "Reject"),
+        ("need_evidence", "need_evidence_action", "Need evidence"),
+        ("test", "test_action", "Test"),
+    ):
+        parts.append(f"[{labels.get(key, fallback)}]({btf_hyp_href(action, hid)})")
+    return " · ".join(parts)
 
 
 # UI strings for Evidence / Reasoning and plan status. Keep in sync with
@@ -18322,6 +20502,222 @@ EVIDENCE_PANEL_LABELS: Dict[str, Dict[str, str]] = {
 }
 
 
+_EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
+    "English": {
+        "quality": "Evidence Quality",
+        "coverage": "Evidence Coverage",
+        "disprove": "What would disprove this",
+        "graph": "Evidence graph",
+        "supported": "supported",
+        "possible": "possible",
+        "needs_evidence": "needs evidence",
+        "need_evidence": "needs evidence",
+        "unverified": "unverified claims",
+        "next_check": "Recommended next check",
+        "supporting": "Supporting evidence",
+        "cost": "Investigation cost",
+        "claims": "Claims",
+        "validation": "Validation",
+        "evolution": "Confidence evolution",
+        "privacy": "Privacy",
+        "historical": "Historical knowledge",
+        "previous_issue": "Previous issue",
+        "known_fix": "Known fix",
+        "last_occurrence": "Last occurrence",
+        "support_action": "Support",
+        "reject_action": "Reject",
+        "need_evidence_action": "Need evidence",
+        "test_action": "Test",
+        "compare_action": "Compare hypotheses",
+    },
+    "Traditional Chinese (繁體中文)": {
+        "quality": "證據品質",
+        "coverage": "證據覆蓋",
+        "disprove": "如何推翻此結論",
+        "graph": "證據圖",
+        "supported": "已支持",
+        "possible": "可能",
+        "needs_evidence": "需要證據",
+        "unverified": "未驗證的主張",
+        "next_check": "建議下一步",
+        "supporting": "支持證據",
+        "cost": "調查成本",
+        "claims": "主張",
+        "validation": "驗證",
+        "evolution": "置信度演進",
+        "privacy": "隱私",
+        "historical": "歷史知識",
+        "previous_issue": "先前問題",
+        "known_fix": "已知修復",
+        "last_occurrence": "上次出現",
+        "support_action": "支持",
+        "reject_action": "排除",
+        "need_evidence_action": "需要證據",
+        "test_action": "驗證",
+        "compare_action": "比較假設",
+    },
+    "Simplified Chinese (简体中文)": {
+        "quality": "证据品质",
+        "coverage": "证据覆盖",
+        "disprove": "如何推翻此结论",
+        "graph": "证据图",
+        "supported": "已支持",
+        "possible": "可能",
+        "needs_evidence": "需要证据",
+        "unverified": "未验证的主张",
+        "next_check": "建议下一步",
+        "supporting": "支持证据",
+        "cost": "调查成本",
+        "claims": "主张",
+        "validation": "验证",
+        "evolution": "置信度演进",
+        "privacy": "隐私",
+        "historical": "历史知识",
+        "previous_issue": "先前问题",
+        "known_fix": "已知修复",
+        "last_occurrence": "上次出现",
+        "support_action": "支持",
+        "reject_action": "排除",
+        "need_evidence_action": "需要证据",
+        "test_action": "验证",
+        "compare_action": "比较假设",
+    },
+    "Japanese (日本語)": {
+        "quality": "根拠の質",
+        "coverage": "根拠カバレッジ",
+        "disprove": "反証になるもの",
+        "graph": "根拠グラフ",
+        "supported": "支持",
+        "possible": "可能性あり",
+        "needs_evidence": "根拠不足",
+        "unverified": "未検証の主張",
+        "next_check": "次の確認",
+        "supporting": "支持する根拠",
+        "cost": "調査コスト",
+        "claims": "主張",
+        "validation": "検証",
+        "evolution": "信頼度の推移",
+        "privacy": "プライバシー",
+        "historical": "過去の知見",
+        "previous_issue": "過去の問題",
+        "known_fix": "既知の対策",
+        "last_occurrence": "前回の発生",
+        "support_action": "支持",
+        "reject_action": "却下",
+        "need_evidence_action": "根拠不足",
+        "test_action": "検証",
+        "compare_action": "仮説を比較",
+    },
+    "Korean (한국어)": {
+        "quality": "증거 품질",
+        "coverage": "증거 커버리지",
+        "disprove": "이 결론을 뒤집는 증거",
+        "graph": "증거 그래프",
+        "supported": "지지됨",
+        "possible": "가능",
+        "needs_evidence": "증거 필요",
+        "unverified": "미검증 주장",
+        "next_check": "다음 확인",
+        "supporting": "지지 증거",
+        "cost": "조사 비용",
+        "claims": "주장",
+        "validation": "검증",
+        "evolution": "신뢰도 변화",
+        "privacy": "개인정보",
+        "historical": "과거 지식",
+        "previous_issue": "이전 이슈",
+        "known_fix": "알려진 수정",
+        "last_occurrence": "최근 발생",
+        "support_action": "지지",
+        "reject_action": "기각",
+        "need_evidence_action": "증거 필요",
+        "test_action": "검증",
+        "compare_action": "가설 비교",
+    },
+    "German": {
+        "quality": "Belegqualität",
+        "coverage": "Belegabdeckung",
+        "disprove": "Was würde das widerlegen",
+        "graph": "Beleggraph",
+        "supported": "gestützt",
+        "possible": "möglich",
+        "needs_evidence": "Belege nötig",
+        "unverified": "unbestätigte Aussagen",
+        "next_check": "Nächster Prüfpunkt",
+        "supporting": "Stützende Belege",
+        "cost": "Untersuchungskosten",
+        "claims": "Aussagen",
+        "validation": "Validierung",
+        "evolution": "Konfidenzverlauf",
+        "privacy": "Datenschutz",
+        "historical": "Historisches Wissen",
+        "previous_issue": "Früheres Problem",
+        "known_fix": "Bekannte Lösung",
+        "last_occurrence": "Letztes Auftreten",
+        "support_action": "Stützen",
+        "reject_action": "Ablehnen",
+        "need_evidence_action": "Belege nötig",
+        "test_action": "Prüfen",
+        "compare_action": "Hypothesen vergleichen",
+    },
+    "French": {
+        "quality": "Qualité des preuves",
+        "coverage": "Couverture des preuves",
+        "disprove": "Ce qui infirmerait ceci",
+        "graph": "Graphe de preuves",
+        "supported": "étayé",
+        "possible": "possible",
+        "needs_evidence": "preuves nécessaires",
+        "unverified": "affirmations non vérifiées",
+        "next_check": "Prochaine vérification",
+        "supporting": "Preuves à l'appui",
+        "cost": "Coût d'investigation",
+        "claims": "Affirmations",
+        "validation": "Validation",
+        "evolution": "Évolution de la confiance",
+        "privacy": "Confidentialité",
+        "historical": "Connaissances historiques",
+        "previous_issue": "Problème antérieur",
+        "known_fix": "Correctif connu",
+        "last_occurrence": "Dernière occurrence",
+        "support_action": "Étayer",
+        "reject_action": "Rejeter",
+        "need_evidence_action": "Preuves nécessaires",
+        "test_action": "Tester",
+        "compare_action": "Comparer les hypothèses",
+    },
+    "Spanish": {
+        "quality": "Calidad de evidencia",
+        "coverage": "Cobertura de evidencia",
+        "disprove": "Qué refutaría esto",
+        "graph": "Grafo de evidencia",
+        "supported": "respaldado",
+        "possible": "posible",
+        "needs_evidence": "falta evidencia",
+        "unverified": "afirmaciones no verificadas",
+        "next_check": "Siguiente comprobación",
+        "supporting": "Evidencia de apoyo",
+        "cost": "Coste de investigación",
+        "claims": "Afirmaciones",
+        "validation": "Validación",
+        "evolution": "Evolución de la confianza",
+        "privacy": "Privacidad",
+        "historical": "Conocimiento histórico",
+        "previous_issue": "Incidencia previa",
+        "known_fix": "Corrección conocida",
+        "last_occurrence": "Última aparición",
+        "support_action": "Respaldar",
+        "reject_action": "Rechazar",
+        "need_evidence_action": "Falta evidencia",
+        "test_action": "Probar",
+        "compare_action": "Comparar hipótesis",
+    },
+}
+for _lang, _extra in _EVIDENCE_PANEL_EXTRA.items():
+    _extra.setdefault("need_evidence", _extra.get("needs_evidence", "needs evidence"))
+    EVIDENCE_PANEL_LABELS[_lang].update(_extra)
+
+
 def normalize_response_language(lang: str) -> str:
     """Map a reply-language setting to an EVIDENCE_PANEL_LABELS key."""
     want = (lang or "").strip()
@@ -18349,6 +20745,7 @@ def evidence_panel_labels(response_language: str = "English") -> Dict[str, str]:
 
 _EVIDENCE_STATUS_KEYS: Tuple[str, ...] = (
     "high", "medium", "low", "untested", "confirmed", "rejected", "plausible",
+    "supported", "possible", "needs_evidence", "need_evidence",
 )
 _EVIDENCE_PREFIX_KEYS: Tuple[str, ...] = (
     "critical_path", "correlated_events", "performance_comparison",
@@ -18453,12 +20850,125 @@ def format_evidence_panel_markdown(
             f"{_localize_evidence_token(str(conf), labels)}"
         )
     score = data.get("evidence_score")
-    if score is not None:
+    quality = data.get("evidence_quality")
+    if isinstance(quality, dict) and quality.get("bar"):
+        lines.append("")
+        lines.append(f"**{labels.get('quality', labels['score'])}:** {quality['bar']}")
+    elif score is not None:
         bar = str(data.get("evidence_score_bar") or "")
         lines.append("")
         lines.append(f"**{labels['score']}:** {bar}")
+    coverage = data.get("coverage")
+    if isinstance(coverage, dict) and coverage.get("bar"):
+        lines.append("")
+        lines.append(
+            f"**{labels.get('coverage', 'Evidence Coverage')}:** {coverage['bar']}"
+        )
+    falsify = data.get("falsify")
+    if isinstance(falsify, dict):
+        supporting = [s for s in (falsify.get("supporting") or []) if s]
+        disprove = [
+            s for s in (
+                falsify.get("disprove") or falsify.get("would_disprove") or []
+            ) if s
+        ]
+        if supporting:
+            lines.append("")
+            lines.append(f"**{labels.get('supporting', 'Supporting evidence')}**")
+            for s in supporting:
+                lines.append(f"- {s}")
+        if disprove:
+            lines.append("")
+            lines.append(f"**{labels.get('disprove', 'What would disprove this')}**")
+            for s in disprove:
+                lines.append(f"- {s}")
+        nxt = str(falsify.get("next_check") or "").strip()
+        if nxt:
+            lines.append("")
+            lines.append(f"**{labels.get('next_check', 'Recommended next check')}:** {nxt}")
+    hk = data.get("historical_knowledge")
+    if isinstance(hk, dict) and (
+        hk.get("previous_issue") or hk.get("message") or hk.get("flags")
+    ):
+        lines.append("")
+        lines.append(f"**{labels.get('historical', 'Historical knowledge')}**")
+        issue = str(hk.get("previous_issue") or "").strip()
+        if issue:
+            lines.append(
+                f"- {labels.get('previous_issue', 'Previous issue')}: {issue}"
+            )
+        fix = str(hk.get("known_fix") or "").strip()
+        if fix:
+            lines.append(f"- {labels.get('known_fix', 'Known fix')}: {fix}")
+        occ = str(hk.get("last_occurrence") or "").strip()
+        if occ:
+            lines.append(
+                f"- {labels.get('last_occurrence', 'Last occurrence')}: {occ}"
+            )
+        for flag in (hk.get("flags") or [])[:4]:
+            lines.append(f"- {flag}")
+        msg = str(hk.get("message") or "").strip()
+        if msg and msg not in ("No historical match", "Within historical range"):
+            lines.append(f"- {msg}")
+    validation = data.get("validation")
+    if isinstance(validation, dict) and not validation.get("ok", True):
+        n = int(validation.get("unverified") or len(validation.get("issues") or []))
+        lines.append("")
+        lines.append(
+            f"**{labels.get('validation', 'Validation')}:** "
+            f"{n} {labels.get('unverified', 'unverified claims')}"
+        )
+        for issue in (validation.get("issues") or [])[:6]:
+            if isinstance(issue, dict):
+                lines.append(
+                    f"- {issue.get('kind')}: {issue.get('detail')}"
+                )
+        for flag in (validation.get("flags") or [])[:6]:
+            lines.append(f"- {flag}")
+    cost = str(data.get("cost") or "").strip()
+    if cost:
+        lines.append("")
+        lines.append(f"**{labels.get('cost', 'Investigation cost')}:** {cost}")
+    evo = str(data.get("confidence_evolution") or "").strip()
+    if evo:
+        lines.append("")
+        lines.append(f"**{labels.get('evolution', 'Confidence evolution')}**")
+        for line in evo.splitlines():
+            if line.strip():
+                lines.append(f"- {line.strip()}")
+    reasons = data.get("tool_reasons") or []
+    if reasons:
+        lines.append("")
+        lines.append(f"**{labels.get('investigation', 'Investigation')}**")
+        for r in reasons:
+            if not isinstance(r, dict):
+                continue
+            tool = str(r.get("tool") or "")
+            why = str(r.get("reason") or "")
+            if tool:
+                lines.append(f"- {tool}: {why}")
+    hyps_m = data.get("hypotheses_managed") or []
+    if hyps_m:
+        lines.append("")
+        lines.append(f"**{labels['alternatives']}**")
+        for h in hyps_m:
+            if not isinstance(h, dict):
+                continue
+            hyp = str(h.get("hypothesis") or "")
+            status = _localize_evidence_token(
+                str(h.get("status") or "needs_evidence"), labels)
+            why = str(h.get("why") or "")
+            conf = h.get("confidence")
+            extra = f" {conf}%" if conf is not None else ""
+            hid = str(h.get("id") or "")
+            actions = format_hypothesis_action_links(hid, labels)
+            lines.append(f"- *{hyp}* ({status}{extra}) — {why} {actions}")
+        lines.append(
+            f"[{labels.get('compare_action', 'Compare hypotheses')}]"
+            f"({btf_hyp_href('compare', 'all')})"
+        )
     alts = data.get("alternatives") or []
-    if alts:
+    if alts and not hyps_m:
         lines.append("")
         lines.append(f"**{labels['alternatives']}**")
         for alt in alts:
@@ -18490,6 +21000,13 @@ def format_evidence_panel_markdown(
             lines.append("```mermaid")
             lines.append(tree_src.rstrip())
             lines.append("```")
+    graph_src = str(data.get("graph_mermaid") or "").strip()
+    if graph_src:
+        lines.append("")
+        lines.append(f"**{labels.get('graph', 'Evidence graph')}**")
+        lines.append("```mermaid")
+        lines.append(graph_src)
+        lines.append("```")
     return "\n".join(lines).strip()
 
 
@@ -20384,6 +22901,10 @@ AI_TOOL_EXPORT_INVESTIGATION = "export_investigation"
 AI_TOOL_DETECT_PRIORITY_INVERSION = "detect_priority_inversion"
 AI_TOOL_FIND_RELATED_FINDINGS = "find_related_findings"
 AI_TOOL_COMPARE_TASKS = "compare_tasks"
+AI_TOOL_EXPLAIN_FINDING = "explain_finding"
+AI_TOOL_INTERPRET_QUERY = "interpret_query"
+AI_TOOL_VALIDATE_EXPERIMENT = "validate_experiment"
+AI_TOOL_MANAGE_HYPOTHESES = "manage_hypotheses"
 
 AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_SET_CURSORS,
@@ -20418,6 +22939,10 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_DETECT_PRIORITY_INVERSION,
     AI_TOOL_FIND_RELATED_FINDINGS,
     AI_TOOL_COMPARE_TASKS,
+    AI_TOOL_EXPLAIN_FINDING,
+    AI_TOOL_INTERPRET_QUERY,
+    AI_TOOL_VALIDATE_EXPERIMENT,
+    AI_TOOL_MANAGE_HYPOTHESES,
 )
 
 AI_BOOKMARK_KINDS: Tuple[str, ...] = (
@@ -20535,7 +23060,8 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "generate_report, check_budget, optimize, regression_explain, "
     "bookmark_finding, investigation_replay, what_if, optimize_experiment, analyze_traces, "
     "baseline_score, recommend_experiments, export_investigation, "
-    "detect_priority_inversion, find_related_findings, compare_tasks. "
+    "detect_priority_inversion, find_related_findings, compare_tasks, "
+    "explain_finding, interpret_query, validate_experiment, manage_hypotheses. "
     "For root-cause or Investigate templates: call detect_anomalies and "
     "investigate(finding_id) first for a root-cause chain, then "
     "correlate_events / query_raw_metric / search_timeline / find_critical_path, then set_cursors "
@@ -21447,6 +23973,106 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_EXPLAIN_FINDING,
+                "description": (
+                    "Explain one Analysis Finding at quick, technical, or deep "
+                    "level. Host-side: uses the finding text plus hypotheses."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "finding_id": {
+                            "type": "string",
+                            "description": "Finding id, 1-based index, or title substring.",
+                        },
+                        "level": {
+                            "type": "string",
+                            "enum": ["quick", "technical", "deep"],
+                            "description": "Explanation depth (default technical).",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_INTERPRET_QUERY,
+                "description": (
+                    "Turn a free-form question into an explicit investigation "
+                    "scope (mode, areas, finding_id) before running tools."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "The user's natural-language question.",
+                        },
+                    },
+                    "required": ["question"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_VALIDATE_EXPERIMENT,
+                "description": (
+                    "Compare expected experiment deltas (percent) with actual "
+                    "A vs B / what-if results. Returns VALIDATED / PARTIALLY "
+                    "VALIDATED / DISPROVED."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "expected": {
+                            "type": "object",
+                            "description": "Metric → expected signed percent change.",
+                        },
+                        "actual": {
+                            "type": "object",
+                            "description": "Metric → measured signed percent change.",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_MANAGE_HYPOTHESES,
+                "description": (
+                    "Mark one investigation hypothesis as supported, possible, "
+                    "rejected, or need_evidence."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "hypothesis_id": {
+                            "type": "string",
+                            "description": "Hypothesis id (h1), 1-based index, or name.",
+                        },
+                        "status": {
+                            "type": "string",
+                            "enum": ["supported", "possible", "rejected", "need_evidence"],
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "Optional why this status was chosen.",
+                        },
+                        "finding_id": {
+                            "type": "string",
+                            "description": "Finding to load hypotheses from if omitted.",
+                        },
+                    },
+                    "required": ["hypothesis_id", "status"],
+                },
+            },
+        },
     ]
 
 
@@ -21931,6 +24557,10 @@ def is_query_tool(name: str) -> bool:
         AI_TOOL_DETECT_PRIORITY_INVERSION,
         AI_TOOL_FIND_RELATED_FINDINGS,
         AI_TOOL_COMPARE_TASKS,
+        AI_TOOL_EXPLAIN_FINDING,
+        AI_TOOL_INTERPRET_QUERY,
+        AI_TOOL_VALIDATE_EXPERIMENT,
+        AI_TOOL_MANAGE_HYPOTHESES,
     )
 
 
@@ -22292,6 +24922,36 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
         if isinstance(metrics, (list, tuple)):
             out["metrics"] = [str(m).strip().lower() for m in metrics if str(m or "").strip()]
         return out, ""
+    if name == AI_TOOL_EXPLAIN_FINDING:
+        level = str(a.get("level") or "technical").strip().lower() or "technical"
+        if level not in ("quick", "technical", "deep"):
+            return None, 'level must be "quick", "technical", or "deep"'
+        return {
+            "finding_id": str(a.get("finding_id") or "").strip(),
+            "level": level,
+        }, ""
+    if name == AI_TOOL_INTERPRET_QUERY:
+        q = str(a.get("question") or "").strip()
+        if not q:
+            return None, "question must be a non-empty string"
+        return {"question": q}, ""
+    if name == AI_TOOL_VALIDATE_EXPERIMENT:
+        expected = a.get("expected") if isinstance(a.get("expected"), dict) else {}
+        actual = a.get("actual") if isinstance(a.get("actual"), dict) else {}
+        return {"expected": expected, "actual": actual}, ""
+    if name == AI_TOOL_MANAGE_HYPOTHESES:
+        hid = str(a.get("hypothesis_id") or "").strip()
+        if not hid:
+            return None, "hypothesis_id must be a non-empty string"
+        status = str(a.get("status") or "").strip().lower()
+        if status not in ("supported", "possible", "rejected", "need_evidence"):
+            return None, "status must be supported|possible|rejected|need_evidence"
+        return {
+            "hypothesis_id": hid,
+            "status": status,
+            "reason": str(a.get("reason") or "").strip(),
+            "finding_id": str(a.get("finding_id") or "").strip(),
+        }, ""
     return None, f"unknown tool {name!r}"
 
 
@@ -22422,6 +25082,20 @@ def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
         a_task = str(a.get("task_a") or "?").strip() or "?"
         b_task = str(a.get("task_b") or "?").strip() or "?"
         return f"Compare tasks {a_task} vs {b_task}"
+    if name == AI_TOOL_EXPLAIN_FINDING:
+        fid = str(a.get("finding_id") or "").strip() or "top finding"
+        level = str(a.get("level") or "technical").strip() or "technical"
+        return f"Explain finding {fid} ({level})"
+    if name == AI_TOOL_INTERPRET_QUERY:
+        q = str(a.get("question") or "").strip()
+        shown = q if len(q) <= 40 else q[:37] + "…"
+        return f"Interpret query {shown!r}" if shown else "Interpret query"
+    if name == AI_TOOL_VALIDATE_EXPERIMENT:
+        return "Validate experiment (expected vs actual)"
+    if name == AI_TOOL_MANAGE_HYPOTHESES:
+        hid = str(a.get("hypothesis_id") or "").strip() or "hypothesis"
+        st = str(a.get("status") or "").strip() or "status"
+        return f"Hypothesis {hid} → {st}"
     return name.replace("_", " ")
 
 
@@ -23216,6 +25890,72 @@ def investigate_finding(
     msg = str(ctx.get("message") or ("ok" if ok else "failed"))
     data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
     return tool_result_payload(ok, msg, data=data)
+
+
+def explain_finding_tool(
+    findings: Sequence[dict],
+    finding_id: str = "",
+    *,
+    level: str = "technical",
+) -> Dict[str, Any]:
+    items = enrich_findings_with_ids(findings) if findings else []
+    focus = resolve_finding(items, finding_id) if items else None
+    from .ai_investigation import _hypotheses_for_finding
+    hyps = []
+    if focus:
+        hyps = _hypotheses_for_finding(
+            str(focus.get("title") or ""), str(focus.get("text") or ""),
+        )
+    payload = explain_finding_payload(focus, level=level, hypotheses=hyps)
+    ok = bool(payload.get("ok"))
+    msg = str(payload.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in payload.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def interpret_query_tool(
+    question: str,
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    cursor_lo: Optional[float] = None,
+    cursor_hi: Optional[float] = None,
+) -> Dict[str, Any]:
+    payload = interpret_investigation_query(
+        question, findings=findings, cursor_lo=cursor_lo, cursor_hi=cursor_hi,
+    )
+    ok = bool(payload.get("ok"))
+    msg = str(payload.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in payload.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def validate_experiment_tool(
+    expected: Optional[dict] = None,
+    actual: Optional[dict] = None,
+) -> Dict[str, Any]:
+    payload = validate_experiment(expected, actual)
+    ok = bool(payload.get("ok"))
+    msg = str(payload.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in payload.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def manage_hypotheses_tool(
+    findings: Sequence[dict],
+    hypothesis_id: str,
+    status: str,
+    *,
+    reason: str = "",
+    finding_id: str = "",
+) -> Dict[str, Any]:
+    ctx = build_investigate_context(findings, finding_id, depth=2)
+    hyps = list(ctx.get("hypotheses") or [])
+    updated = set_hypothesis_status(hyps, hypothesis_id, status, reason=reason)
+    return tool_result_payload(
+        True,
+        f"Updated hypothesis {hypothesis_id} → {status}",
+        data={"hypotheses": updated, "finding": ctx.get("finding")},
+    )
 
 
 def _events_from_metric_payload(payload: Dict[str, Any], metric: str, task: str) -> List[dict]:
@@ -24698,6 +27438,17 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "should the engineer measure next?",
     ),
     (
+        "explain_finding",
+        "Explain finding",
+        "Explain the selected Analysis Finding. Call explain_finding("
+        "finding_id=ID, level=LEVEL) first (use finding_id and level= from "
+        "the user message; levels: quick, technical, deep; default "
+        "technical). Then add jump:TIME "
+        "evidence from investigate or correlate_events if the explanation "
+        "is still thin. Finish with: Summary, What it means, Evidence, "
+        "What would disprove this, and one next check.",
+    ),
+    (
         "auto_investigate",
         "Auto investigate",
         "Automatically investigate and confirm the top finding end-to-end. "
@@ -24713,7 +27464,7 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
     ),
 )
 
-# Always-visible chips (one row). Keep in sync with web/src/utils/ollamaClient.js.
+# Always-visible wrapping chips. Keep in sync with web/src/utils/ollamaClient.js.
 AI_TEMPLATE_PRIMARY_IDS: Tuple[str, ...] = (
     "investigate",
     "findings",
@@ -24724,7 +27475,7 @@ AI_TEMPLATE_PRIMARY_IDS: Tuple[str, ...] = (
 # Overflow menu groups for the remaining templates (ids must cover every
 # AI_TEMPLATE_QUESTIONS entry that is not in AI_TEMPLATE_PRIMARY_IDS).
 AI_TEMPLATE_MENU_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Diagnose", ("root_cause", "verify", "triage", "diagnostic_report")),
+    ("Diagnose", ("root_cause", "verify", "explain_finding", "triage", "diagnostic_report")),
     ("Compare", (AI_COMPARE_TEMPLATE_ID,)),
     (
         "Metrics",
@@ -25584,8 +28335,9 @@ def _md_inline_to_html_escaped(text: str) -> str:
             if (
                 low.startswith("http://")
                 or low.startswith("https://")
-                or                 low.startswith("btfjump:")
+                or low.startswith("btfjump:")
                 or low.startswith("btfhighlight:")
+                or low.startswith("btfhyp:")
                 or low.startswith("mailto:")
             ):
                 buf.append(
@@ -26431,7 +29183,7 @@ def ai_chat_completion(
 ) -> Dict[str, Any]:
     """One OpenAI-compatible ``/chat/completions`` round (non-streaming).
 
-    Returns ``{"content", "tool_calls", "message"}``.
+    Returns ``{"content", "tool_calls", "message", "usage"}``.
     """
     url_base = normalize_ai_base_url(base_url)
     url = url_base + "/chat/completions"
@@ -26604,7 +29356,12 @@ def ai_chat_completion(
         raise RuntimeError(
             empty_chat_completion_error(body, had_tools=bool(use_tools))
         )
-    return {"content": content, "tool_calls": calls, "message": msg}
+    return {
+        "content": content,
+        "tool_calls": calls,
+        "message": msg,
+        "usage": chat_usage_from_response(body),
+    }
 
 
 def ai_chat(
@@ -26830,7 +29587,115 @@ def ai_test_connection(
         if isinstance(msg, dict):
             reply = str(msg.get("content") or "").strip()
     note = f" Probe reply: {reply[:40]!r}." if reply else ""
-    return f"Connected to {url_base}. Model {model_name} ready{listing_note}.{note}"
+    cap = infer_model_capability(model_name, chat_ok=True)
+    cap_txt = format_capability_report(cap)
+    return (
+        f"Connected to {url_base}. Model {model_name} ready{listing_note}.{note}"
+        + (f"\n\n{cap_txt}" if cap_txt else "")
+    )
+
+
+class _FlowLayout(QLayout):
+    """Wrap chips like web ``display:flex; flex-wrap:wrap; gap:4px``."""
+
+    def __init__(self, parent: Optional[QWidget] = None, spacing: int = 4) -> None:
+        super().__init__(parent)
+        self._items: List[Any] = []
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(int(spacing))
+
+    def addItem(self, item) -> None:  # noqa: N802
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int):  # noqa: N802
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index: int):  # noqa: N802
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self):  # noqa: N802
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        return self._do_layout(QRect(0, 0, int(width), 0), True)
+
+    def setGeometry(self, rect) -> None:  # noqa: N802
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:  # noqa: N802
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        size += QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def _do_layout(self, rect, test_only: bool) -> int:
+        left, top, right, bottom = self.getContentsMargins()
+        effective = rect.adjusted(+left, +top, -right, -bottom)
+        x = effective.x()
+        y = effective.y()
+        line_height = 0
+        space = self.spacing()
+        for item in self._items:
+            hint = item.sizeHint()
+            next_x = x + hint.width() + space
+            if line_height > 0 and next_x - space > effective.right() + 1:
+                x = effective.x()
+                y = y + line_height + space
+                next_x = x + hint.width() + space
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x = next_x
+            line_height = max(line_height, hint.height())
+        return y + line_height - rect.y() + bottom
+
+
+def _add_ai_menu_heading(menu: QMenu, label: str) -> None:
+    """Muted group label matching web ``.ai-more-heading`` (not native addSection)."""
+    hdr = menu.addAction(label)
+    hdr.setEnabled(False)
+
+
+# Chip / More-menu colors match web `.ai-tpl-btn` / `.ai-more-item` (enabled vs disabled).
+_AI_TPL_DISABLED_COLOR = "#8a96a8"
+_AI_TPL_BTN_STYLE = (
+    "QPushButton {"
+    "  color: #e8eef7;"
+    "  background: #243044;"
+    "  border: 1px solid #3a4658;"
+    "  border-radius: 6px;"
+    "  padding: 4px 8px;"
+    "}"
+    "QPushButton:disabled {"
+    f"  color: {_AI_TPL_DISABLED_COLOR};"
+    "  background: #1a2230;"
+    "  border-color: #3a4658;"
+    "}"
+    "QPushButton:hover:!disabled {"
+    "  border-color: #2a6fb2;"
+    "}"
+)
+_AI_MORE_MENU_STYLE = (
+    "QMenu::item { color: #e8eef7; padding: 5px 10px; }"
+    f"QMenu::item:disabled {{ color: {_AI_TPL_DISABLED_COLOR}; }}"
+    "QMenu::item:selected:enabled { background: rgba(91, 155, 213, 0.18); }"
+)
 
 
 def _qtextline_cursor_x(line, pos: int) -> float:
@@ -27003,6 +29868,8 @@ def create_ai_assistant_panel(
             self._tool_round = 0
             self._pending_batches: Dict[str, Dict[str, Any]] = {}
             self._batch_seq = 0
+            self._cost_meter: Dict[str, Any] = empty_cost_meter()
+            self._cost_started = 0.0
 
             root = QVBoxLayout(self)
             root.setContentsMargins(6, 6, 6, 6)
@@ -27028,6 +29895,22 @@ def create_ai_assistant_panel(
             )
             self._auth_chip.clicked.connect(self._on_auth_chip)
             title_row.addWidget(self._auth_chip)
+            self._privacy_chip = QPushButton("")
+            self._privacy_chip.setObjectName("ai_privacy_chip")
+            self._privacy_chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._privacy_chip.setToolTip(
+                "Trace privacy for the current AI endpoint")
+            self._privacy_chip.setStyleSheet(
+                "QPushButton#ai_privacy_chip {"
+                "  background: transparent; color: #8b98a8;"
+                "  border: 1px solid #3a4658; border-radius: 10px;"
+                "  padding: 1px 8px; font-size: 11px;"
+                "}"
+                "QPushButton#ai_privacy_chip:hover { color: #dbe2ea; "
+                "border-color: #5b9bd5; }"
+            )
+            self._privacy_chip.clicked.connect(self._on_auth_chip)
+            title_row.addWidget(self._privacy_chip)
             title_row.addStretch(1)
             root.addLayout(title_row)
 
@@ -27131,11 +30014,32 @@ def create_ai_assistant_panel(
             self._plan_host.hide()
             root.addWidget(self._plan_host)
 
+            mode_host = QWidget()
+            mode_host.setObjectName("aiModes")
+            mode_host.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+            mode_host.setStyleSheet(_AI_TPL_BTN_STYLE)
+            mode_row = _FlowLayout(mode_host, spacing=4)
+            self._mode_btns: List[QPushButton] = []
+            for mid in INVESTIGATION_MODES:
+                btn = QPushButton(INVESTIGATION_MODE_LABELS.get(mid, mid.title()))
+                btn.setToolTip(investigation_mode_prompt(mid))
+                btn.setSizePolicy(
+                    QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+                btn.setMinimumHeight(24)
+                btn.clicked.connect(
+                    lambda _=False, m=mid: self._run_investigation_mode(m)
+                )
+                mode_row.addWidget(btn)
+                self._mode_btns.append(btn)
+            root.addWidget(mode_host)
+
             tpl_host = QWidget()
             tpl_host.setObjectName("aiTemplates")
-            tpl_row = QHBoxLayout(tpl_host)
-            tpl_row.setContentsMargins(0, 0, 0, 0)
-            tpl_row.setSpacing(4)
+            tpl_host.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+            tpl_host.setStyleSheet(_AI_TPL_BTN_STYLE)
+            tpl_row = _FlowLayout(tpl_host, spacing=4)
 
             self._template_btns: List[QPushButton] = []
             self._template_actions: Dict[str, Any] = {}
@@ -27173,14 +30077,9 @@ def create_ai_assistant_panel(
             more_btn.setSizePolicy(
                 QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             more_menu = QMenu(more_btn)
+            more_menu.setStyleSheet(_AI_MORE_MENU_STYLE)
             for group_label, ids in AI_TEMPLATE_MENU_GROUPS:
-                add_section = getattr(more_menu, "addSection", None)
-                if callable(add_section):
-                    add_section(group_label)
-                else:
-                    more_menu.addSeparator()
-                    hdr = more_menu.addAction(group_label)
-                    hdr.setEnabled(False)
+                _add_ai_menu_heading(more_menu, group_label)
                 for _tid in ids:
                     item = ai_template_by_id(_tid)
                     if item is None:
@@ -27193,9 +30092,13 @@ def create_ai_assistant_panel(
                     )
                     self._template_actions[_tid] = act
                     _bind_template_ctrl(_tid, act)
+            _add_ai_menu_heading(more_menu, "Investigations")
+            self._investigation_template_actions: Dict[str, Any] = {}
+            self._more_menu = more_menu
+            self._save_investigation_template_action = None
+            self._rebuild_investigation_menu()
             more_btn.setMenu(more_menu)
             tpl_row.addWidget(more_btn)
-            tpl_row.addStretch(1)
             root.addWidget(tpl_host)
 
             self.refresh_template_availability()
@@ -27351,6 +30254,11 @@ def create_ai_assistant_panel(
                 preset_id=active["preset"],
             )
             self._auth_chip.setText(f"{label} · {st['label']}")
+            priv = classify_trace_privacy(
+                endpoint_is_local=is_local_ai_host(active.get("base_url", "")),
+            )
+            self._privacy_chip.setText(format_privacy_chip(priv))
+            self._privacy_chip.setToolTip(str(priv.get("note") or ""))
             needs = bool(st["needs_auth"]) or bool(getattr(self, "_auth_forced", False))
             self._auth_cta.setVisible(needs)
             url = ai_preset_signin_url(active["preset"], active.get("base_url", ""))
@@ -27362,15 +30270,42 @@ def create_ai_assistant_panel(
         def _on_auth_chip(self) -> None:
             self._open_settings()
 
+        def _mark_cost_start(self) -> None:
+            self._cost_started = time.monotonic()
+
+        def _set_status(self, msg: str) -> None:
+            self._status.setText(status_with_cost(msg, self._cost_meter))
+
+        def _record_turn_usage(self, turn: dict, calls: Sequence[Any]) -> None:
+            usage = turn.get("usage") if isinstance(turn, dict) else {}
+            if not isinstance(usage, dict):
+                usage = {}
+            names = [
+                str(c.get("name") or "")
+                for c in (calls or [])
+                if isinstance(c, dict)
+            ]
+            elapsed = 0.0
+            if self._cost_started:
+                elapsed = max(0.0, time.monotonic() - float(self._cost_started))
+            self._cost_meter = accumulate_cost(
+                self._cost_meter,
+                prompt_tokens=usage.get("prompt_tokens") or 0,
+                completion_tokens=usage.get("completion_tokens") or 0,
+                tool_calls=len(names),
+                trace_queries=sum(1 for n in names if is_query_tool(n)),
+                model_time_s=elapsed,
+            )
+
         def _open_signin_page(self) -> None:
             active = self._active_ai_settings()
             url = ai_preset_signin_url(active["preset"], active.get("base_url", ""))
             if url:
                 QDesktopServices.openUrl(QUrl(url))
-                self._status.setText(
+                self._set_status(
                     f"Opened {url}. Paste the key or token in Settings → AI.")
             else:
-                self._status.setText(
+                self._set_status(
                     "This preset has no sign-in page. Paste a token in Settings → AI.")
             self._open_settings()
 
@@ -27387,7 +30322,7 @@ def create_ai_assistant_panel(
             lang = dlg.selected_language()
             if on_save_settings:
                 on_save_settings({"response_language": lang})
-            self._status.setText(f"Reply language: {lang}")
+            self._set_status(f"Reply language: {lang}")
             self._refresh_localized_chrome(lang)
 
         def _refresh_localized_chrome(self, language: Optional[str] = None) -> None:
@@ -27430,6 +30365,11 @@ def create_ai_assistant_panel(
                 )
                 if m:
                     self._on_tool_action(m.group(1).lower(), urllib.parse.unquote(m.group(2)))
+                return
+            if scheme == "btfhyp":
+                action, hyp_id = parse_btf_hyp_href(url.toString())
+                if action:
+                    self._on_hypothesis_action(action, hyp_id)
                 return
             if scheme == "btfhighlight":
                 name = parse_btf_highlight_href(url.toString())
@@ -27526,7 +30466,8 @@ def create_ai_assistant_panel(
             self._pending_batches.clear()
             self._tool_round = 0
             self._log.clear()
-            self._status.setText("")
+            self._cost_meter = empty_cost_meter()
+            self._set_status("")
             self._clear_evidence_log_entry()
             self._refresh_tool_bar()
 
@@ -27555,11 +30496,11 @@ def create_ai_assistant_panel(
                 return
             clip = QApplication.clipboard()
             if clip is None:
-                self._status.setText("Clipboard is not available.")
+                self._set_status("Clipboard is not available.")
                 return
             clip.setText(format_ai_conversation_markdown(
                 self._entries, self._reply_language()))
-            self._status.setText("Copied to clipboard.")
+            self._set_status("Copied to clipboard.")
 
         def save_conversation_as(self, preferred: str = "") -> None:
             """Write the conversation to Markdown, plain text or HTML."""
@@ -27604,7 +30545,7 @@ def create_ai_assistant_panel(
                 QMessageBox.warning(
                     self, "Save failed", f"Could not write file:\n{exc}")
                 return
-            self._status.setText(f"Saved conversation to {os.path.basename(path)}")
+            self._set_status(f"Saved conversation to {os.path.basename(path)}")
 
         def _collect_conversation_tools_run(self) -> List[str]:
             """Tool names successfully applied so far this session, in order."""
@@ -27672,7 +30613,7 @@ def create_ai_assistant_panel(
             except OSError as exc:
                 return tool_result_payload(False, f"Could not write file: {exc}")
             base = os.path.basename(path)
-            self._status.setText(f"Saved investigation to {base}")
+            self._set_status(f"Saved investigation to {base}")
             return tool_result_payload(
                 True, f"Saved investigation package to {base}", path=path)
 
@@ -27746,14 +30687,14 @@ def create_ai_assistant_panel(
             except OSError as exc:
                 return tool_result_payload(False, f"Could not write file: {exc}")
             base = os.path.basename(path)
-            self._status.setText(f"Saved report to {base}")
+            self._set_status(f"Saved report to {base}")
             return tool_result_payload(True, f"Saved {fmt} report to {base}", path=path)
 
         def stop_query(self) -> None:
             """Abort the current AI request if one is running."""
             if not self._busy:
                 return
-            self._status.setText("Stopping…")
+            self._set_status("Stopping…")
             worker = self._worker
             if worker is not None:
                 worker.cancel()
@@ -27778,13 +30719,21 @@ def create_ai_assistant_panel(
             self._refresh_send_btn()
             self._stop_btn.setEnabled(busy)
             self._input.setReadOnly(busy or (not enabled))
+            live = (not busy) and enabled
             for btn in self._template_btns:
-                btn.setEnabled((not busy) and enabled)
+                btn.setEnabled(live)
+            for btn in getattr(self, "_mode_btns", []):
+                btn.setEnabled(live)
             for act in self._template_actions.values():
-                act.setEnabled((not busy) and enabled)
+                act.setEnabled(live)
+            for act in getattr(self, "_investigation_template_actions", {}).values():
+                act.setEnabled(live)
+            save_act = getattr(self, "_save_investigation_template_action", None)
+            if save_act is not None:
+                save_act.setEnabled(not busy)
             self.refresh_template_availability()
             if (not enabled) and (not busy):
-                self._status.setText("AI is disabled in Settings → AI.")
+                self._set_status("AI is disabled in Settings → AI.")
 
         def refresh_enabled_state(self) -> None:
             """Re-apply enable/disable after Settings → AI changes."""
@@ -27861,7 +30810,9 @@ def create_ai_assistant_panel(
             super().showEvent(event)
             self.refresh_enabled_state()
 
-        def query_template(self, template_id: str, *, finding_id: str = "") -> None:
+        def query_template(
+            self, template_id: str, *, finding_id: str = "", extra: str = "",
+        ) -> None:
             """Run a built-in AI template by id (toolbar Analysis / inspector)."""
             prompt = next(
                 (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS if tid == template_id),
@@ -27871,6 +30822,9 @@ def create_ai_assistant_panel(
                 fid = str(finding_id or "").strip()
                 if fid:
                     prompt = f"{prompt}\n\nfinding_id={fid}"
+                extra = str(extra or "").strip()
+                if extra:
+                    prompt = f"{prompt}\n\n{extra}"
                 if template_id == "explain_region" and get_context:
                     try:
                         cursors = (get_context() or {}).get("cursors") or []
@@ -27926,6 +30880,163 @@ def create_ai_assistant_panel(
             self._input.setPlainText(prompt)
             self.send_current()
 
+        def _user_investigation_templates(self) -> List[Dict[str, Any]]:
+            raw = ""
+            if get_settings:
+                try:
+                    raw = str(
+                        (get_settings() or {}).get("user_investigation_templates")
+                        or ""
+                    )
+                except Exception:
+                    raw = ""
+            return parse_user_investigation_templates(raw)
+
+        def _all_investigation_templates(self) -> List[Dict[str, Any]]:
+            return list(builtin_investigation_templates()) + self._user_investigation_templates()
+
+        def _rebuild_investigation_menu(self) -> None:
+            menu = getattr(self, "_more_menu", None)
+            if menu is None:
+                return
+            for act in list(self._investigation_template_actions.values()):
+                try:
+                    menu.removeAction(act)
+                except Exception:
+                    pass
+            self._investigation_template_actions = {}
+            save_act = getattr(self, "_save_investigation_template_action", None)
+            if save_act is not None:
+                try:
+                    menu.removeAction(save_act)
+                except Exception:
+                    pass
+            for tpl in self._all_investigation_templates():
+                act = menu.addAction(str(tpl.get("label") or tpl.get("id")))
+                act.setToolTip(investigation_template_prompt(tpl))
+                act.triggered.connect(
+                    lambda _=False, t=dict(tpl): self._run_investigation_template(t)
+                )
+                self._investigation_template_actions[str(tpl.get("id") or "")] = act
+            if save_act is None:
+                save_act = menu.addAction("Save as template\u2026")
+                save_act.setToolTip(
+                    "Save the current investigation steps as a reusable template")
+                save_act.triggered.connect(self._save_investigation_template)
+                self._save_investigation_template_action = save_act
+            else:
+                menu.addAction(save_act)
+
+        def _save_investigation_template(self) -> None:
+            steps: List[str] = []
+            plan = self._investigation_plan if isinstance(self._investigation_plan, dict) else {}
+            for s in plan.get("steps") or []:
+                if isinstance(s, dict) and s.get("id"):
+                    steps.append(str(s.get("id")))
+                elif s:
+                    steps.append(str(s))
+            if not steps:
+                case = (self._evidence_payload or {}).get("investigation_case") or {}
+                steps = [str(t) for t in (case.get("tools_executed") or []) if t]
+            name, ok = QInputDialog.getText(
+                self, "Save investigation template",
+                "Template name:",
+                text="My Investigation",
+            )
+            if not ok:
+                return
+            tpl = new_user_investigation_template(name, steps)
+            items = self._user_investigation_templates()
+            items = [it for it in items if it.get("id") != tpl["id"]]
+            items.append(tpl)
+            if on_save_settings:
+                on_save_settings({
+                    "user_investigation_templates": dump_user_investigation_templates(items),
+                })
+            self._rebuild_investigation_menu()
+
+        def _run_investigation_mode(self, mode: str) -> None:
+            if self._busy:
+                return
+            plan = investigation_mode_plan(mode)
+            label = INVESTIGATION_MODE_LABELS.get(plan["mode"], str(mode))
+            prompt = investigation_mode_prompt(plan["mode"])
+            steps = [
+                {"id": str(s), "label": str(s), "status": "pending"}
+                for s in (plan.get("tools") or []) if s
+            ]
+            self._active_template_id = str(plan.get("template") or plan["mode"])
+            if steps:
+                self._set_investigation_plan({"goal": label, "steps": steps})
+            else:
+                self._clear_investigation_plan()
+            self._input.setPlainText(prompt)
+            self.send_current()
+
+        def _on_hypothesis_action(self, action: str, hyp_id: str) -> None:
+            act = str(action or "").strip().lower()
+            hid = str(hyp_id or "").strip()
+            payload = dict(self._evidence_payload or {})
+            hyps = list(
+                payload.get("hypotheses_managed")
+                or payload.get("hypotheses")
+                or []
+            )
+            if act in ("supported", "rejected", "need_evidence", "possible"):
+                updated = set_hypothesis_status(hyps, hid, act)
+                payload["hypotheses_managed"] = updated
+                payload["hypotheses"] = updated
+                case = dict(payload.get("investigation_case") or {})
+                if case:
+                    case["hypotheses"] = updated
+                    payload["investigation_case"] = case
+                self._evidence_payload = payload
+                self._sync_evidence_log_entry(payload)
+                return
+            if act == "compare":
+                ranked = compare_hypotheses(hyps)
+                leader = ranked.get("leader") or {}
+                title = str(leader.get("hypothesis") or "Compare hypotheses")
+                payload["hypotheses_managed"] = ranked.get("ranked") or hyps
+                payload["conclusion"] = f"Leader: {title}" if title else "Compare hypotheses"
+                self._evidence_payload = payload
+                self._sync_evidence_log_entry(payload)
+                return
+            if act == "test":
+                name = hid
+                for h in hyps:
+                    if isinstance(h, dict) and str(h.get("id") or "") == hid:
+                        name = str(h.get("hypothesis") or hid)
+                        break
+                prompt = (
+                    f"Test hypothesis {name!r} (id={hid}). "
+                    "Call investigate then correlate_events and find_critical_path. "
+                    f"Then manage_hypotheses(hypothesis_id={hid}, "
+                    "status=supported|rejected|need_evidence). "
+                    "Finish with a verdict, jump:TIME evidence, and one next check."
+                )
+                self._use_template("investigate", prompt)
+
+        def _run_investigation_template(self, template: dict) -> None:
+            if self._busy:
+                return
+            tpl = template if isinstance(template, dict) else {}
+            prompt = investigation_template_prompt(tpl)
+            steps = [
+                {"id": str(s), "label": str(s), "status": "pending"}
+                for s in (tpl.get("steps") or []) if s
+            ]
+            self._active_template_id = str(tpl.get("id") or "")
+            if steps:
+                self._set_investigation_plan({
+                    "goal": str(tpl.get("label") or "Investigation"),
+                    "steps": steps,
+                })
+            else:
+                self._clear_investigation_plan()
+            self._input.setPlainText(prompt)
+            self.send_current()
+
         def _set_investigation_plan(self, plan: Optional[Dict[str, Any]]) -> None:
             self._investigation_plan = plan
             if not plan:
@@ -27961,12 +31072,56 @@ def create_ai_assistant_panel(
             if self._evidence_payload:
                 self._sync_evidence_log_entry(self._evidence_payload)
 
+        def _attach_response_validation(self, text: str) -> None:
+            """Flag invented tasks / out-of-scope jump:TIME after the final reply."""
+            src = str(text or "").strip()
+            if not src:
+                return
+            ctx = {}
+            if get_context:
+                try:
+                    ctx = normalize_ai_context(get_context() or {})
+                except Exception:
+                    ctx = {}
+            bounds = cursor_region_bounds(ctx.get("cursors"))
+            catalog = build_validation_catalog(
+                findings_text=str(ctx.get("findings_text") or ""),
+                evidence=(self._evidence_payload or {}).get("evidence"),
+                cursor_lo=bounds[0] if bounds else None,
+                cursor_hi=bounds[1] if bounds else None,
+            )
+            report = validate_ai_response(
+                src,
+                known_tasks=catalog.get("tasks"),
+                known_times=catalog.get("times"),
+                cursor_lo=catalog.get("cursor_lo"),
+                cursor_hi=catalog.get("cursor_hi"),
+            )
+            payload = dict(self._evidence_payload or {})
+            payload["validation"] = report
+            payload["cost"] = format_cost_meter(self._cost_meter)
+            if not payload.get("conclusion") and not payload.get("evidence"):
+                payload["conclusion"] = payload.get("conclusion") or ""
+            self._evidence_payload = payload
+
         def _update_evidence_from_tool_result(
             self, name: str, res: Dict[str, Any],
         ) -> None:
             payload = extract_evidence_panel_payload(name, res)
             if not payload:
                 return
+            prev = dict(self._evidence_payload or {})
+            prev_case = prev.get("investigation_case")
+            if prev_case:
+                case = update_case_from_tool(prev_case, name, res)
+                payload["investigation_case"] = case
+                payload["tool_reasons"] = case.get("tool_reasons") or []
+                payload["confidence_evolution"] = format_confidence_evolution(
+                    case.get("confidence_history"))
+            if prev.get("validation") and "validation" not in payload:
+                payload["validation"] = prev["validation"]
+            if prev.get("cost") and "cost" not in payload:
+                payload["cost"] = prev["cost"]
             self._evidence_payload = dict(payload)
             self._sync_evidence_log_entry(self._evidence_payload)
 
@@ -27999,13 +31154,13 @@ def create_ai_assistant_panel(
         ) -> None:
             tabs = self._loaded_tabs()
             if len(tabs) < 2:
-                self._status.setText("Open at least two BTF tabs to compare.")
+                self._set_status("Open at least two BTF tabs to compare.")
                 self.refresh_template_availability()
                 return
             if idx_a is not None and idx_b is not None:
                 idx_a, idx_b = int(idx_a), int(idx_b)
                 if idx_a == idx_b:
-                    self._status.setText("Choose two different traces.")
+                    self._set_status("Choose two different traces.")
                     return
             elif len(tabs) == 2:
                 idx_a = int(tabs[0]["index"])
@@ -28016,19 +31171,19 @@ def create_ai_assistant_panel(
                     return
                 idx_a, idx_b = dlg.selected_indices()
                 if idx_a == idx_b:
-                    self._status.setText("Choose two different traces.")
+                    self._set_status("Choose two different traces.")
                     return
             if not build_compare_context:
-                self._status.setText("Trace Compare is not available.")
+                self._set_status("Trace Compare is not available.")
                 return
             try:
                 ctx = dict(build_compare_context(idx_a, idx_b) or {})
             except Exception as exc:
-                self._status.setText(f"Compare context error: {exc}")
+                self._set_status(f"Compare context error: {exc}")
                 return
             ctx = normalize_ai_context(ctx)
             if not (ctx.get("findings_text") or "").strip():
-                self._status.setText("Could not build Trace Compare tables.")
+                self._set_status("Could not build Trace Compare tables.")
                 return
             self._input.clear()
             self._send_query(prompt, ctx)
@@ -28053,6 +31208,7 @@ def create_ai_assistant_panel(
                 turn = {"content": str(payload or ""), "tool_calls": []}
             text = str(turn.get("content") or "").strip()
             calls = turn.get("tool_calls") if isinstance(turn.get("tool_calls"), list) else []
+            self._record_turn_usage(turn, calls)
             if calls:
                 self._chat_messages.append(
                     canonical_assistant_tool_message(text, calls)
@@ -28095,23 +31251,24 @@ def create_ai_assistant_panel(
                     self._cleanup_worker()
                     self._apply_tool_batch(batch_id, skipped=False)
                     return
-                self._status.setText("Review GUI actions, then Apply or Skip.")
+                self._set_status("Review GUI actions, then Apply or Skip.")
                 self._cleanup_worker()
                 return
 
             if text:
                 self._append("assistant", text)
             self._finish_investigation_plan()
+            self._attach_response_validation(text)
             self._pin_evidence_log_entry()
             jumps = extract_jump_times(text)
             if jumps:
                 token = _JUMP_RE.search(text or "")
                 label = token.group(1) if token else f"{jumps[0]:g}"
-                self._status.setText(
+                self._set_status(
                     f"Done. Click jump:{label} to annotate the timeline and jump there."
                 )
             else:
-                self._status.setText("Done.")
+                self._set_status("Done.")
             self._cleanup_worker()
 
         def _on_tool_action(self, action: str, batch_id: str) -> None:
@@ -28131,7 +31288,7 @@ def create_ai_assistant_panel(
                     if 0 <= idx < len(self._entries) and isinstance(self._entries[idx], dict):
                         self._entries[idx]["tools"] = batch["tools"]
                     self._refresh_log()
-                self._status.setText("Reverted last AI GUI actions.")
+                self._set_status("Reverted last AI GUI actions.")
 
         def _apply_tool_batch(self, batch_id: str, *, skipped: bool) -> None:
             batch = self._pending_batches.get(batch_id)
@@ -28187,22 +31344,17 @@ def create_ai_assistant_panel(
                     ),
                 ))
                 tool_name = str(t.get("name") or "")
-                if tool_name in (
-                    "investigate",
-                    "correlate_events",
-                    "find_critical_path",
-                    "compare_performance",
-                ):
+                if tool_name in EVIDENCE_PANEL_TOOLS:
                     self._update_evidence_from_tool_result(
                         tool_name,
                         res if isinstance(res, dict) else {},
                     )
             if skipped:
-                self._status.setText("Skipped GUI actions.")
+                self._set_status("Skipped GUI actions.")
                 self._cleanup_worker()
                 return
             if self._tool_round >= max_tool_rounds(self._active_template_id):
-                self._status.setText("Done (tool round limit).")
+                self._set_status("Done (tool round limit).")
                 self._cleanup_worker()
                 return
             self._tool_round += 1
@@ -28240,17 +31392,18 @@ def create_ai_assistant_panel(
             }
             self._set_busy(True)
             label = ai_preset_info(active["preset"])[1]
-            self._status.setText(f"Waiting for {label} ({active['model']})…")
+            self._set_status(f"Waiting for {label} ({active['model']})…")
             worker = _OllamaWorker(self, kwargs)
             worker.finished.connect(self._on_ok, Qt.ConnectionType.QueuedConnection)
             worker.failed.connect(self._on_err, Qt.ConnectionType.QueuedConnection)
             worker.cancelled.connect(self._on_cancelled, Qt.ConnectionType.QueuedConnection)
             self._worker = worker
+            self._mark_cost_start()
             worker.start()
 
         def _on_err(self, msg: str) -> None:
             self._append("assistant", f"(Error) {msg}")
-            self._status.setText(msg.split("\n", 1)[0][:200])
+            self._set_status(msg.split("\n", 1)[0][:200])
             low = (msg or "").lower()
             if "http 401" in low or "http 403" in low or "api key required" in low:
                 self._auth_forced = True
@@ -28258,7 +31411,7 @@ def create_ai_assistant_panel(
             self._cleanup_worker()
 
         def _on_cancelled(self) -> None:
-            self._status.setText("Stopped.")
+            self._set_status("Stopped.")
             self._cleanup_worker()
 
         def send_current(self) -> None:
@@ -28269,7 +31422,7 @@ def create_ai_assistant_panel(
                 return
             cfg = self._settings_dict()
             if str(cfg.get("enabled", "true")).lower() in ("0", "false", "no", "off"):
-                self._status.setText("AI is disabled in Settings → AI.")
+                self._set_status("AI is disabled in Settings → AI.")
                 return
 
             ctx: Dict[str, Any] = {}
@@ -28277,7 +31430,7 @@ def create_ai_assistant_panel(
                 try:
                     ctx = normalize_ai_context(dict(get_context() or {}))
                 except Exception as exc:
-                    self._status.setText(f"Context error: {exc}")
+                    self._set_status(f"Context error: {exc}")
                     return
 
             self._input.clear()
@@ -28286,7 +31439,7 @@ def create_ai_assistant_panel(
         def _send_query(self, query: str, ctx: Dict[str, Any]) -> None:
             cfg = self._settings_dict()
             if str(cfg.get("enabled", "true")).lower() in ("0", "false", "no", "off"):
-                self._status.setText("AI is disabled in Settings → AI.")
+                self._set_status("AI is disabled in Settings → AI.")
                 return
 
             ctx = normalize_ai_context(ctx)
@@ -28307,7 +31460,7 @@ def create_ai_assistant_panel(
             self._set_busy(True)
             active = resolve_ai_settings(cfg)
             label = ai_preset_info(active["preset"])[1]
-            self._status.setText(f"Waiting for {label} ({active['model']})…")
+            self._set_status(f"Waiting for {label} ({active['model']})…")
 
             kwargs = {
                 "query": query,
@@ -28329,6 +31482,7 @@ def create_ai_assistant_panel(
             worker.failed.connect(self._on_err, Qt.ConnectionType.QueuedConnection)
             worker.cancelled.connect(self._on_cancelled, Qt.ConnectionType.QueuedConnection)
             self._worker = worker
+            self._mark_cost_start()
             worker.start()
 
         def _cleanup_worker(self) -> None:
@@ -35337,7 +38491,7 @@ class _AnalysisFindingsDialog(QDialog):
         note = QLabel(
             "Heuristic summary of load balance, WCET, blocking, thrashing, "
             "deadlines, tick health, and sync.\n"
-            "Select a finding before Verify or Auto investigate."
+            "Select a finding before Verify, Explain, or Auto investigate."
         )
         note.setWordWrap(True)
         note.setObjectName("analysisNote")
@@ -35433,6 +38587,37 @@ class _AnalysisFindingsDialog(QDialog):
                     ai_enabled, t))
             return btn
 
+        def _make_explain_btn() -> QToolButton:
+            btn = QToolButton()
+            btn.setText("Explain…")
+            btn.setFont(ui_font)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setMinimumHeight(max(28, int(round(ui_pt * 3.2))))
+            btn.setSizePolicy(
+                QSizePolicy.Policy.Preferred,
+                QSizePolicy.Policy.Fixed,
+            )
+            fm = btn.fontMetrics()
+            btn.setMinimumWidth(fm.horizontalAdvance("Explain…") + 36)
+            btn.setToolTip(
+                "Quick / Technical / Deep explanation of the selected finding"
+                if ai_enabled else "Enable AI Assistant in Settings → AI"
+            )
+            btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            btn.setStyleSheet(
+                f"QToolButton {{ padding: 7px 16px; border-radius: 6px;"
+                f" font-size: {ui_fs}; }}"
+            )
+            menu = QMenu(btn)
+            for level in EXPLAIN_LEVELS:
+                act = menu.addAction(str(level).title())
+                act.triggered.connect(
+                    lambda _=False, lv=level: self._query_with_ai(
+                        ai_enabled, "explain_finding", level=lv)
+                )
+            btn.setMenu(menu)
+            return btn
+
         ai_label = QLabel("Ask AI")
         ai_label.setStyleSheet(
             f"color: #8a8a8a; font-size: {ui_fs}; font-weight: 600;"
@@ -35462,6 +38647,7 @@ class _AnalysisFindingsDialog(QDialog):
                 "Enable AI Assistant in Settings → AI",
                 "verify",
             ),
+            _make_explain_btn(),
             _make_ai_btn(
                 "Auto investigate…",
                 "Run the automatic investigate → correlate → critical-path → "
@@ -35537,11 +38723,15 @@ class _AnalysisFindingsDialog(QDialog):
         if self.width() < footer_w:
             self.resize(footer_w, self.height())
 
-    def _query_with_ai(self, ai_enabled: bool, template_id: str = "findings") -> None:
+    def _query_with_ai(
+        self, ai_enabled: bool, template_id: str = "findings",
+        *, level: str = "",
+    ) -> None:
         self.wants_ai_query = True
         self.wants_ai_template = template_id or "findings"
         self.wants_ai_finding_id = ""
-        if template_id in ("verify", "auto_investigate"):
+        self.wants_ai_level = str(level or "")
+        if template_id in ("verify", "auto_investigate", "explain_finding"):
             item = self._list_w.currentItem()
             if item is not None:
                 self.wants_ai_finding_id = str(
@@ -48469,7 +51659,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _saved_ver = s.get("window", "dock_layout_version", "0")
         if _saved_ver != _DOCK_LAYOUT_VERSION:
             # New layout version: drop persisted dock sizes so code defaults
-            # apply (e.g. wider right panel for 3-column AI templates).
+            # apply (e.g. wider right panel for wrapping AI chips).
             s.set_many("window", {
                 "dock_state": "",
                 "dock_metrics": "",
@@ -50387,7 +53577,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     @classmethod
     def _ai_setting_keys(cls) -> list:
-        keys = ["enabled", "preset", "response_language", "auto_apply", "mcp_log"]
+        keys = ["enabled", "preset", "response_language", "auto_apply", "mcp_log",
+                "user_investigation_templates"]
         keys += [
             f"{pid}_{field}"
             for pid, _label, _base, _model in AI_PRESETS
@@ -51592,6 +54783,60 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 hi=hi,
                 findings_text=findings_text,
             )
+        if name == AI_TOOL_EXPLAIN_FINDING:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return explain_finding_tool(
+                findings,
+                str(args.get("finding_id") or ""),
+                level=str(args.get("level") or "technical"),
+            )
+        if name == AI_TOOL_INTERPRET_QUERY:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            lo = hi = None
+            view = getattr(self, "_view", None)
+            times = []
+            if view is not None and hasattr(view, "_scene"):
+                times = list(view._scene.cursor_times() or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+            return interpret_query_tool(
+                str(args.get("question") or ""),
+                findings,
+                cursor_lo=lo,
+                cursor_hi=hi,
+            )
+        if name == AI_TOOL_VALIDATE_EXPERIMENT:
+            return validate_experiment_tool(
+                args.get("expected") or {},
+                args.get("actual") or {},
+            )
+        if name == AI_TOOL_MANAGE_HYPOTHESES:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return manage_hypotheses_tool(
+                findings,
+                str(args.get("hypothesis_id") or ""),
+                str(args.get("status") or ""),
+                reason=str(args.get("reason") or ""),
+                finding_id=str(args.get("finding_id") or ""),
+            )
         raise RuntimeError(f"unknown tool {name}")
 
     def _ai_load_baseline_profile(self) -> Dict[str, Any]:
@@ -51902,11 +55147,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         panel = getattr(self, "_ai_panel", None)
         tid = getattr(dlg, "wants_ai_template", "findings") or "findings"
         finding_id = getattr(dlg, "wants_ai_finding_id", "") or ""
+        level = getattr(dlg, "wants_ai_level", "") or ""
+        extra = f"level={level}" if level else ""
         if panel is not None and hasattr(panel, "query_template"):
             QTimer.singleShot(
                 0,
-                lambda t=tid, fid=finding_id: panel.query_template(
-                    t, finding_id=fid),
+                lambda t=tid, fid=finding_id, ex=extra: panel.query_template(
+                    t, finding_id=fid, extra=ex),
             )
 
     def _on_explain_region_with_ai(self) -> None:
@@ -54841,7 +58088,7 @@ _HEADLESS_QPA_PLATFORMS = ("offscreen", "minimal", "vnc")
 # Subcommands that render without a window server. Kept in sync with
 # cli._CLI_COMMANDS by tests.
 _HEADLESS_CLI_COMMANDS = frozenset({
-    "report", "compare", "analyze", "info", "migrations", "snapshot",
+    "report", "compare", "analyze", "ai-test", "info", "migrations", "snapshot",
     "perfetto", "slice",
 })
 
@@ -55060,6 +58307,7 @@ Headless analysis commands (desktop only — no GUI, no Qt window):
   compare      Two-trace diff (Trace Compare dialog → Export).
   analyze      CI regression gate vs a baseline .btf or metrics JSON
                (--fail-on-regression; optional --ai narrative).
+  ai-test      Offline AI evidence/validator benchmark (tests/ai dataset).
   migrations   Core Migrations table only (CSV).
   snapshot     Export a PNG/SVG image (timeline, migration inspector, or a
                statistics metric plot) without opening the GUI.
@@ -55657,6 +58905,28 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         help="range end (trace time units, inclusive; must be greater than --lo)",
     )
 
+    ai_test = sub.add_parser(
+        "ai-test",
+        help="offline AI evidence/validator benchmark (no live model required)",
+        description=(
+            "Score fixture responses in a JSON dataset (file or directory) "
+            "against expected facts: finding types, task names, jump:TIME "
+            "scope, and tool lists. Does not call a live model.\n\n"
+            "  %(prog)s ai-test --dataset tests/ai\n"
+            "  %(prog)s ai-test --dataset tests/ai/dataset.json --fail-under 70\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ai_test.add_argument(
+        "--dataset", metavar="PATH",
+        default=None,
+        help="JSON file or tests/ai directory (default: tests/ai)",
+    )
+    ai_test.add_argument(
+        "--fail-under", type=int, default=70, metavar="N",
+        help="exit 1 when any case overall score is below N (default 70)",
+    )
+
     return parser, {
         "report": report,
         "compare": compare,
@@ -55666,6 +58936,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         "snapshot": snapshot,
         "perfetto": perfetto,
         "slice": slice_p,
+        "ai-test": ai_test,
     }
 
 def _cli_export_output_paths(output: str, fmt: Optional[str]) -> Tuple[str, str, str]:
@@ -55859,10 +59130,6 @@ def _cli_analyze_run(args: argparse.Namespace) -> int:
 
     if args.ai:
         try:
-            from btf_viewer_pkg.ai_investigation import (
-                compare_performance_metrics,
-                explain_regression,
-            )
             cmp = compare_performance_metrics(
                 cand_snap, base_snap,
                 label_a=str(cand_snap.get("name") or "A"),
@@ -56631,6 +59898,30 @@ def _cli_slice_main(argv: List[str]) -> int:
     args = _make_arg_parser()[1]["slice"].parse_args(argv)
     return _cli_slice_run(args)
 
+
+def _cli_ai_test_run(args: argparse.Namespace) -> int:
+    default = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "tests", "ai",
+    )
+    path = os.path.abspath(args.dataset or default)
+    if not os.path.exists(path):
+        print(f"error: dataset not found: {path}", file=sys.stderr)
+        return 1
+    try:
+        result = run_offline_benchmark(path, fail_under=int(args.fail_under or 0))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(result["report"], end="")
+    return 0 if result.get("ok") else 1
+
+
+def _cli_ai_test_main(argv: List[str]) -> int:
+    args = _make_arg_parser()[1]["ai-test"].parse_args(argv)
+    return _cli_ai_test_run(args)
+
+
 _CLI_COMMANDS = {
     "report": _cli_report_main,
     "compare": _cli_compare_main,
@@ -56640,6 +59931,7 @@ _CLI_COMMANDS = {
     "snapshot": _cli_snapshot_main,
     "perfetto": _cli_perfetto_main,
     "slice": _cli_slice_main,
+    "ai-test": _cli_ai_test_main,
 }
 
 def _cli_gui_trace_paths(argv: List[str],

@@ -366,6 +366,66 @@ describe('AI endpoint helpers', () => {
     ])
   })
 
+  it('AI template UX order matches the panel and Findings dialog', async () => {
+    const {
+      EXPLAIN_LEVELS,
+      INVESTIGATION_MODE_LABELS,
+      INVESTIGATION_MODES,
+      builtinInvestigationTemplates,
+    } = await import('../src/utils/aiCase.js')
+    const panel = readFileSync(
+      new URL('../src/components/AiAssistantPanel.vue', import.meta.url), 'utf8')
+    const dlg = readFileSync(
+      new URL('../src/components/AnalysisFindingsDialog.vue', import.meta.url), 'utf8')
+    const plan = panel.indexOf('class="ai-plan-status"')
+    const modes = panel.indexOf('class="ai-modes"')
+    const tpls = panel.indexOf('class="ai-templates"')
+    assert.ok(plan >= 0 && modes > plan && tpls > modes)
+    assert.match(panel, /More templates…/)
+    assert.match(panel, /Investigations/)
+    assert.ok(panel.indexOf('Save as template…') > panel.indexOf('Investigations'))
+    assert.deepEqual(
+      INVESTIGATION_MODES.map(m => INVESTIGATION_MODE_LABELS[m]),
+      ['Quick', 'Diagnose', 'Compare', 'Optimize', 'Report'],
+    )
+    assert.match(panel, /v-for="mid in investigationModes"/)
+    assert.match(panel, /v-for="t in primaryTemplates"/)
+    assert.match(panel, /v-for="group in templateMenuGroups"/)
+    assert.match(panel, /class="ai-more-col"/)
+    assert.match(panel, /<Teleport to="body">/)
+    assert.deepEqual(
+      AI_TEMPLATE_MENU_GROUPS.at(-1),
+      { label: 'What-if / Optimize', ids: ['what_if', 'optimize'] },
+    )
+    assert.equal(
+      AI_TEMPLATE_QUESTIONS.find(t => t.id === 'what_if')?.label,
+      'What-if',
+    )
+    assert.deepEqual(
+      builtinInvestigationTemplates().map(t => t.label),
+      [
+        'CPU Latency Investigation',
+        'Migration Thrash Investigation',
+        'A/B Regression Investigation',
+      ],
+    )
+    const findings = [
+      'Investigate…', 'Root cause…', 'Verify with AI…', 'Explain…',
+      'Auto investigate…', 'Query with AI…',
+    ]
+    let pos = 0
+    for (const label of findings) {
+      const i = dlg.indexOf(label, pos)
+      assert.ok(i >= pos, label)
+      pos = i
+    }
+    assert.deepEqual([...EXPLAIN_LEVELS], ['quick', 'technical', 'deep'])
+    assert.match(dlg, /EXPLAIN_LEVELS/)
+    assert.match(panel, /Open at least two BTF tabs to use Trace Compare/)
+    assert.match(panel, /This trace has a single core — not applicable/)
+    assert.equal(AI_TEMPLATE_QUESTIONS.at(-1).id, 'auto_investigate')
+  })
+
   it('aiChatCompletion sends tools without tool_choice and parses btftool', async () => {
     const { aiChatCompletion } = await import('../src/utils/ollamaClient.js')
     const { aiViewerTools } = await import('../src/utils/aiTools.js')

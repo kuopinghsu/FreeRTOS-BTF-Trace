@@ -874,6 +874,65 @@ class AiInvestigationTests(unittest.TestCase):
         self.assertEqual(pkg["tools_run"], [])
         self.assertEqual(pkg["schema"], "btf-investigation-package")
 
+    def test_extract_evidence_panel_payload_new_investigation_tools(self) -> None:
+        from btf_viewer_pkg.ai_investigation import EVIDENCE_PANEL_TOOLS
+
+        self.assertEqual(
+            EVIDENCE_PANEL_TOOLS,
+            (
+                "investigate",
+                "correlate_events",
+                "find_critical_path",
+                "compare_performance",
+                "explain_finding",
+                "interpret_query",
+                "validate_experiment",
+                "manage_hypotheses",
+            ),
+        )
+        explained = extract_evidence_panel_payload("explain_finding", {
+            "ok": True,
+            "data": {
+                "finding": {"title": "Migration thrash", "text": "CS[22] bounce"},
+                "hypotheses": [{"hypothesis": "Thrash", "status": "possible"}],
+                "explanation": "Task CS[22] is bouncing.",
+            },
+        })
+        self.assertIsNotNone(explained)
+        self.assertIn("Migration thrash", explained["conclusion"])
+        interpreted = extract_evidence_panel_payload("interpret_query", {
+            "ok": True,
+            "data": {
+                "interpreted_question": "Why is TaskA slow?",
+                "mode": "diagnose",
+                "scope": ["execution", "blocking"],
+            },
+        })
+        self.assertIsNotNone(interpreted)
+        self.assertEqual(interpreted["conclusion"], "Why is TaskA slow?")
+        self.assertIn("diagnose", interpreted.get("subtitle") or "")
+        validated = extract_evidence_panel_payload("validate_experiment", {
+            "ok": True,
+            "data": {
+                "result": "VALIDATED",
+                "rows": [
+                    {"metric": "migrations", "expected": -50, "actual": -72, "status": "validated"},
+                ],
+            },
+        })
+        self.assertIsNotNone(validated)
+        self.assertEqual(validated["conclusion"], "VALIDATED")
+        self.assertEqual(validated["checks"][0]["label"], "migrations")
+        managed = extract_evidence_panel_payload("manage_hypotheses", {
+            "ok": True,
+            "data": {
+                "finding": {"title": "Mutex contention"},
+                "hypotheses": [{"hypothesis": "Lock hold", "status": "supported"}],
+            },
+        })
+        self.assertIsNotNone(managed)
+        self.assertEqual(managed["conclusion"], "Mutex contention")
+
 
 if __name__ == "__main__":
     unittest.main()

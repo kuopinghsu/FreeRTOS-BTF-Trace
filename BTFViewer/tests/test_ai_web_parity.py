@@ -61,7 +61,10 @@ class AiWebParityTests(unittest.TestCase):
         self.assertNotIn("Klingon", ollama)
         for key in (
             "role", "evidence", "confidence", "score", "investigation",
-            "high", "medium", "low",
+            "high", "medium", "low", "quality", "coverage", "disprove",
+            "supported", "need_evidence", "evolution", "cost",
+            "historical", "support_action", "reject_action",
+            "need_evidence_action", "test_action", "compare_action",
         ):
             for labels in EVIDENCE_PANEL_LABELS.values():
                 self.assertIn(key, labels)
@@ -436,6 +439,16 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("analyzeTracesSnapshots(", app)
         self.assertIn("format_bookmark_label(", mw)
         self.assertIn("formatBookmarkLabel(", app)
+        self.assertIn("AI_TOOL_EXPLAIN_FINDING", mw)
+        self.assertIn("AI_TOOL_EXPLAIN_FINDING", app)
+        self.assertIn("explain_finding_tool(", mw)
+        self.assertIn("explainFindingTool(", app)
+        self.assertIn("interpret_query_tool(", mw)
+        self.assertIn("interpretQueryTool(", app)
+        self.assertIn("validate_experiment_tool(", mw)
+        self.assertIn("validateExperimentTool(", app)
+        self.assertIn("manage_hypotheses_tool(", mw)
+        self.assertIn("manageHypothesesTool(", app)
         self.assertIn("search_timeline_hits(", mw)
         self.assertIn("searchTimelineHits(", app)
         self.assertIn("def _ai_clear_marks", mw)
@@ -801,6 +814,272 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("Auto investigate…", dlg)
         self.assertIn('"auto_investigate"', stats)
         self.assertIn("'auto_investigate'", dlg)
+
+    def test_investigation_case_helpers_match_web(self) -> None:
+        """ai_case.py and web/src/utils/aiCase.js stay in lockstep."""
+        py = (BTF_ROOT / "btf_viewer_pkg/ai_case.py").read_text(encoding="utf-8")
+        js = (BTF_ROOT / "web/src/utils/aiCase.js").read_text(encoding="utf-8")
+        for py_name, js_name in (
+            ("def build_investigation_case", "export function buildInvestigationCase"),
+            ("def validate_ai_response", "export function validateAiResponse"),
+            ("def compute_evidence_quality", "export function computeEvidenceQuality"),
+            ("def falsification_checks", "export function falsificationChecks"),
+            ("def interpret_investigation_query", "export function interpretInvestigationQuery"),
+            ("def infer_model_capabilities", "export function inferModelCapabilities"),
+            ("def classify_trace_privacy", "export function classifyTracePrivacy"),
+            ("def score_benchmark_case", "export function scoreBenchmarkCase"),
+            ("def format_cost_meter", "export function formatCostMeter"),
+            ("def format_cost_status", "export function formatCostStatus"),
+            ("def cost_meter_active", "export function costMeterActive"),
+            ("def status_with_cost", "export function statusWithCost"),
+            ("def tool_call_reason", "export function toolCallReason"),
+            ("def run_offline_benchmark", "export function runOfflineBenchmark"),
+            ("def format_privacy_chip", "export function formatPrivacyChip"),
+            ("def investigation_template_prompt", "export function investigationTemplatePrompt"),
+            ("def investigation_mode_prompt", "export function investigationModePrompt"),
+            ("def parse_user_investigation_templates", "export function parseUserInvestigationTemplates"),
+            ("def dump_user_investigation_templates", "export function dumpUserInvestigationTemplates"),
+            ("def historical_knowledge_for_finding", "export function historicalKnowledgeForFinding"),
+            ("def update_case_from_tool", "export function updateCaseFromTool"),
+        ):
+            self.assertIn(py_name, py, py_name)
+            self.assertIn(js_name, js, js_name)
+        inv_py = (BTF_ROOT / "btf_viewer_pkg/ai_investigation.py").read_text(
+            encoding="utf-8")
+        inv_js = (BTF_ROOT / "web/src/utils/aiInvestigation.js").read_text(
+            encoding="utf-8")
+        self.assertIn("graph_mermaid", inv_py)
+        self.assertIn("graph_mermaid", inv_js)
+        self.assertIn("tool_reasons", inv_py)
+        self.assertIn("tool_reasons", inv_js)
+        self.assertIn("validation.get(\"flags\")", inv_py)
+        self.assertIn("validation.flags", inv_js)
+        self.assertIn("EVIDENCE_PANEL_TOOLS", inv_py)
+        self.assertIn("EVIDENCE_PANEL_TOOLS", inv_js)
+        for name in (
+            "explain_finding", "interpret_query",
+            "validate_experiment", "manage_hypotheses",
+        ):
+            self.assertIn(f'"{name}"', inv_py, name)
+            self.assertIn(f"'{name}'", inv_js, name)
+        assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
+            encoding="utf-8")
+        panel = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(
+            encoding="utf-8")
+        self.assertIn("EVIDENCE_PANEL_TOOLS", assist)
+        self.assertIn("EVIDENCE_PANEL_TOOLS", panel)
+        self.assertIn("update_case_from_tool", assist)
+        self.assertIn("updateCaseFromTool", panel)
+        self.assertIn("btfhyp:", inv_py)
+        self.assertIn("btfhyp:", inv_js)
+        self.assertIn("def parse_btf_hyp_href", inv_py)
+        self.assertIn("export function parseBtfHypHref", inv_js)
+        self.assertIn("historical_knowledge", inv_py)
+        self.assertIn("historical_knowledge", inv_js)
+
+    def test_ai_test_cli_is_registered(self) -> None:
+        cli = (BTF_ROOT / "btf_viewer_pkg/cli.py").read_text(encoding="utf-8")
+        self.assertIn('"ai-test"', cli)
+        self.assertIn("def _cli_ai_test_run", cli)
+        self.assertIn("run_offline_benchmark", cli)
+        self.assertNotIn("from btf_viewer_pkg", cli)
+        needle = "from pathlib import Path"
+        for rel in ("btf_viewer_pkg/_imports.py", "scripts/bundle_viewer.py"):
+            self.assertIn(needle, (BTF_ROOT / rel).read_text(encoding="utf-8"), rel)
+
+    def test_privacy_chip_and_investigation_templates_match_web(self) -> None:
+        assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
+            encoding="utf-8")
+        panel = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(
+            encoding="utf-8")
+        self.assertIn("ai_privacy_chip", assist)
+        self.assertIn("ai-privacy-chip", panel)
+        self.assertIn("Investigations", assist)
+        self.assertIn("Investigations", panel)
+        self.assertIn("builtin_investigation_templates", assist)
+        self.assertIn("builtinInvestigationTemplates", panel)
+        self.assertIn("_run_investigation_template", assist)
+        self.assertIn("onInvestigationTemplate", panel)
+        self.assertIn("aiModes", assist)
+        self.assertIn("ai-modes", panel)
+        self.assertIn("_run_investigation_mode", assist)
+        self.assertIn("onInvestigationMode", panel)
+        self.assertIn("Save as template", assist)
+        self.assertIn("Save as template", panel)
+        self.assertIn("user_investigation_templates", assist)
+        store = (BTF_ROOT / "web/src/utils/settingsStore.js").read_text(
+            encoding="utf-8")
+        self.assertIn("loadAiUserInvestigationTemplates", store)
+        self.assertIn("saveAiUserInvestigationTemplates", store)
+        self.assertIn("btf-viewer-ai-user-templates-v1", store)
+        mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
+        self.assertIn("user_investigation_templates", mw)
+        app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
+        self.assertIn("level=${level}", app)
+        self.assertIn("wants_ai_level", mw)
+        stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
+        dlg = (BTF_ROOT / "web/src/components/AnalysisFindingsDialog.vue").read_text(
+            encoding="utf-8")
+        self.assertIn("Explain…", stats)
+        self.assertIn("Explain…", dlg)
+        self.assertIn('"explain_finding"', stats)
+        self.assertIn("'explain_finding'", dlg)
+        for level in ("Quick", "Technical", "Deep"):
+            self.assertIn(level, stats, level)
+            self.assertIn(level, dlg, level)
+        self.assertIn("onHypothesisAction", panel)
+        self.assertIn("_on_hypothesis_action", assist)
+
+    def test_ai_template_ux_layout_matches_web(self) -> None:
+        """Chip row, More menu, mode chips, and Findings Ask-AI stay lockstep."""
+        from btf_viewer_pkg.ai_assistant import (
+            AI_TEMPLATE_MENU_GROUPS, AI_TEMPLATE_PRIMARY_IDS,
+            AI_TEMPLATE_QUESTIONS, ai_template_by_id,
+        )
+        from btf_viewer_pkg.ai_case import (
+            EXPLAIN_LEVELS, INVESTIGATION_MODE_LABELS, INVESTIGATION_MODES,
+            builtin_investigation_templates,
+        )
+
+        assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
+            encoding="utf-8")
+        panel = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(
+            encoding="utf-8")
+        stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
+        dlg = (BTF_ROOT / "web/src/components/AnalysisFindingsDialog.vue").read_text(
+            encoding="utf-8")
+        app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
+
+        self.assertLess(assist.find('setObjectName("aiModes")'),
+                        assist.find('setObjectName("aiTemplates")'))
+        self.assertLess(panel.find('class="ai-plan-status"'),
+                        panel.find('class="ai-modes"'))
+        self.assertLess(panel.find('class="ai-modes"'),
+                        panel.find('class="ai-templates"'))
+        self.assertIn("More templates", assist)
+        self.assertIn("More templates…", panel)
+        self.assertIn(
+            "Uses Analysis Findings for the current Statistics scope.", assist)
+        self.assertIn(
+            "Uses Analysis Findings for the current Statistics scope.", panel)
+        self.assertIn(
+            "Open at least two BTF tabs to use Trace Compare.", assist)
+        self.assertIn(
+            "Open at least two BTF tabs to use Trace Compare.", panel)
+        self.assertIn("This trace has a single core — not applicable.", assist)
+        self.assertIn("This trace has a single core — not applicable.", panel)
+
+        primary = [
+            ai_template_by_id(tid)[1] for tid in AI_TEMPLATE_PRIMARY_IDS]
+        self.assertEqual(
+            primary,
+            ["Investigate", "Analysis Findings", "Explain region",
+             "Auto investigate"],
+        )
+        self.assertIn("v-for=\"t in primaryTemplates\"", panel)
+        self.assertIn("AI_TEMPLATE_PRIMARY_IDS", assist)
+
+        self.assertEqual(
+            [INVESTIGATION_MODE_LABELS[m] for m in INVESTIGATION_MODES],
+            ["Quick", "Diagnose", "Compare", "Optimize", "Report"],
+        )
+        self.assertIn("v-for=\"mid in investigationModes\"", panel)
+        self.assertIn("for mid in INVESTIGATION_MODES", assist)
+        self.assertIn(":disabled=\"busy || !aiEnabled\"", panel)
+        self.assertIn("self._mode_btns", assist)
+        self.assertIn("_investigation_template_actions", assist)
+        self.assertIn("save_act.setEnabled(not busy)", assist)
+        self.assertIn("class _FlowLayout", assist)
+        self.assertIn("_FlowLayout(mode_host", assist)
+        self.assertIn("_FlowLayout(tpl_host", assist)
+        self.assertIn("_add_ai_menu_heading(more_menu", assist)
+        self.assertNotIn("getattr(more_menu, \"addSection\"", assist)
+        self.assertIn("flex-wrap: wrap", panel)
+        view = (BTF_ROOT / "btf_viewer_pkg/view.py").read_text(encoding="utf-8")
+        in_bar = view[view.find("def _in_ai_actions_bar"):view.find("def _relax_widget_tree")]
+        self.assertIn('"aiModes"', in_bar)
+        self.assertIn('"aiTemplates"', in_bar)
+        self.assertIn('"aiActions"', in_bar)
+        self.assertIn("def _set_status", assist)
+        self.assertIn("status_with_cost", assist)
+        self.assertIn("statusWithCost(base, costMeter.value)", panel)
+        clear_fn = assist[assist.find("def clear_conversation"):assist.find("def _show_log_menu")]
+        self.assertIn("self._cost_meter = empty_cost_meter()", clear_fn)
+        send_fn = assist[assist.find("def _send_query"):]
+        self.assertNotIn("self._cost_meter = empty_cost_meter()", send_fn)
+        self.assertEqual(panel.count("costMeter.value = emptyCostMeter()"), 1)
+
+        menu_ids = [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids]
+        self.assertEqual(
+            [g[0] for g in AI_TEMPLATE_MENU_GROUPS],
+            ["Diagnose", "Compare", "Metrics", "What-if / Optimize"],
+        )
+        self.assertIn("v-for=\"group in templateMenuGroups\"", panel)
+        self.assertIn("class=\"ai-more-col\"", panel)
+        self.assertIn("<Teleport to=\"body\">", panel)
+        self.assertEqual(
+            AI_TEMPLATE_MENU_GROUPS[-1],
+            ("What-if / Optimize", ("what_if", "optimize")),
+        )
+        self.assertEqual(ai_template_by_id("what_if")[1], "What-if")
+        self.assertIn("_AI_TPL_DISABLED_COLOR", assist)
+        self.assertIn("QPushButton:disabled", assist)
+        self.assertIn("QMenu::item:disabled", assist)
+        self.assertIn(".ai-more-item:disabled", panel)
+        self.assertIn("color: var(--muted, #8a96a8)", panel)
+        self.assertIn("Investigations", assist)
+        self.assertIn("Investigations", panel)
+        inv_labels = [t["label"] for t in builtin_investigation_templates()]
+        self.assertEqual(
+            inv_labels,
+            [
+                "CPU Latency Investigation",
+                "Migration Thrash Investigation",
+                "A/B Regression Investigation",
+            ],
+        )
+        case_py = (BTF_ROOT / "btf_viewer_pkg/ai_case.py").read_text(encoding="utf-8")
+        case_js = (BTF_ROOT / "web/src/utils/aiCase.js").read_text(encoding="utf-8")
+        for label in inv_labels:
+            self.assertIn(label, case_py, label)
+            self.assertIn(label, case_js, label)
+        self.assertIn('v-for="tpl in investigationTemplates"', panel)
+
+        findings = [
+            "Investigate…", "Root cause…", "Verify with AI…", "Explain…",
+            "Auto investigate…", "Query with AI…",
+        ]
+        pos = 0
+        for label in findings:
+            nxt = dlg.find(label, pos)
+            self.assertGreaterEqual(nxt, 0, f"web findings: {label}")
+            pos = nxt
+        desk_row = [
+            r'_make_ai_btn\(\s*"Investigate…"',
+            r'_make_ai_btn\(\s*"Root cause…"',
+            r'_make_ai_btn\(\s*"Verify with AI…"',
+            r'_make_explain_btn\(\)',
+            r'_make_ai_btn\(\s*"Auto investigate…"',
+            r'_make_ai_btn\(\s*"Query with AI…"',
+        ]
+        pos = 0
+        for pat in desk_row:
+            m = re.search(pat, stats[pos:])
+            self.assertIsNotNone(m, pat)
+            pos += m.end()
+        self.assertEqual(list(EXPLAIN_LEVELS), ["quick", "technical", "deep"])
+        self.assertIn("for level in EXPLAIN_LEVELS", stats)
+        self.assertIn("EXPLAIN_LEVELS.map", dlg)
+        self.assertIn("query_template", assist)
+        self.assertIn("extra=ex", (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(
+            encoding="utf-8"))
+        self.assertIn("level=${level}", app)
+        self.assertIn("finding_id=${findingId}", app)
+        # Modes are not extra AI_TEMPLATE_QUESTIONS entries.
+        ids = [t[0] for t in AI_TEMPLATE_QUESTIONS]
+        self.assertEqual(ids[-1], "auto_investigate")
+        self.assertNotIn("diagnose", ids)
+        self.assertEqual(len(menu_ids) + len(AI_TEMPLATE_PRIMARY_IDS), 20)
 
 
 if __name__ == "__main__":

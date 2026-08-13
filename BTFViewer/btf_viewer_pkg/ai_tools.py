@@ -24,6 +24,7 @@ from .ai_investigation import (
     compare_tasks_metrics,
     detect_anomalies,
     detect_priority_inversion,
+    enrich_findings_with_ids,
     estimate_what_if,
     explain_regression,
     find_related_findings,
@@ -37,6 +38,12 @@ from .ai_investigation import (
     snapshot_from_summary,
 )
 from .html_report import btf_html_report_document
+from .ai_case import (
+    explain_finding_payload,
+    interpret_investigation_query,
+    set_hypothesis_status,
+    validate_experiment,
+)
 
 AI_TOOL_SET_CURSORS = "set_cursors"
 AI_TOOL_ZOOM_TO_RANGE = "zoom_to_range"
@@ -70,6 +77,10 @@ AI_TOOL_EXPORT_INVESTIGATION = "export_investigation"
 AI_TOOL_DETECT_PRIORITY_INVERSION = "detect_priority_inversion"
 AI_TOOL_FIND_RELATED_FINDINGS = "find_related_findings"
 AI_TOOL_COMPARE_TASKS = "compare_tasks"
+AI_TOOL_EXPLAIN_FINDING = "explain_finding"
+AI_TOOL_INTERPRET_QUERY = "interpret_query"
+AI_TOOL_VALIDATE_EXPERIMENT = "validate_experiment"
+AI_TOOL_MANAGE_HYPOTHESES = "manage_hypotheses"
 
 AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_SET_CURSORS,
@@ -104,6 +115,10 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_DETECT_PRIORITY_INVERSION,
     AI_TOOL_FIND_RELATED_FINDINGS,
     AI_TOOL_COMPARE_TASKS,
+    AI_TOOL_EXPLAIN_FINDING,
+    AI_TOOL_INTERPRET_QUERY,
+    AI_TOOL_VALIDATE_EXPERIMENT,
+    AI_TOOL_MANAGE_HYPOTHESES,
 )
 
 AI_BOOKMARK_KINDS: Tuple[str, ...] = (
@@ -221,7 +236,8 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "generate_report, check_budget, optimize, regression_explain, "
     "bookmark_finding, investigation_replay, what_if, optimize_experiment, analyze_traces, "
     "baseline_score, recommend_experiments, export_investigation, "
-    "detect_priority_inversion, find_related_findings, compare_tasks. "
+    "detect_priority_inversion, find_related_findings, compare_tasks, "
+    "explain_finding, interpret_query, validate_experiment, manage_hypotheses. "
     "For root-cause or Investigate templates: call detect_anomalies and "
     "investigate(finding_id) first for a root-cause chain, then "
     "correlate_events / query_raw_metric / search_timeline / find_critical_path, then set_cursors "
@@ -1133,6 +1149,106 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_EXPLAIN_FINDING,
+                "description": (
+                    "Explain one Analysis Finding at quick, technical, or deep "
+                    "level. Host-side: uses the finding text plus hypotheses."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "finding_id": {
+                            "type": "string",
+                            "description": "Finding id, 1-based index, or title substring.",
+                        },
+                        "level": {
+                            "type": "string",
+                            "enum": ["quick", "technical", "deep"],
+                            "description": "Explanation depth (default technical).",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_INTERPRET_QUERY,
+                "description": (
+                    "Turn a free-form question into an explicit investigation "
+                    "scope (mode, areas, finding_id) before running tools."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "The user's natural-language question.",
+                        },
+                    },
+                    "required": ["question"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_VALIDATE_EXPERIMENT,
+                "description": (
+                    "Compare expected experiment deltas (percent) with actual "
+                    "A vs B / what-if results. Returns VALIDATED / PARTIALLY "
+                    "VALIDATED / DISPROVED."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "expected": {
+                            "type": "object",
+                            "description": "Metric → expected signed percent change.",
+                        },
+                        "actual": {
+                            "type": "object",
+                            "description": "Metric → measured signed percent change.",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_MANAGE_HYPOTHESES,
+                "description": (
+                    "Mark one investigation hypothesis as supported, possible, "
+                    "rejected, or need_evidence."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "hypothesis_id": {
+                            "type": "string",
+                            "description": "Hypothesis id (h1), 1-based index, or name.",
+                        },
+                        "status": {
+                            "type": "string",
+                            "enum": ["supported", "possible", "rejected", "need_evidence"],
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "Optional why this status was chosen.",
+                        },
+                        "finding_id": {
+                            "type": "string",
+                            "description": "Finding to load hypotheses from if omitted.",
+                        },
+                    },
+                    "required": ["hypothesis_id", "status"],
+                },
+            },
+        },
     ]
 
 
@@ -1617,6 +1733,10 @@ def is_query_tool(name: str) -> bool:
         AI_TOOL_DETECT_PRIORITY_INVERSION,
         AI_TOOL_FIND_RELATED_FINDINGS,
         AI_TOOL_COMPARE_TASKS,
+        AI_TOOL_EXPLAIN_FINDING,
+        AI_TOOL_INTERPRET_QUERY,
+        AI_TOOL_VALIDATE_EXPERIMENT,
+        AI_TOOL_MANAGE_HYPOTHESES,
     )
 
 
@@ -1978,6 +2098,36 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
         if isinstance(metrics, (list, tuple)):
             out["metrics"] = [str(m).strip().lower() for m in metrics if str(m or "").strip()]
         return out, ""
+    if name == AI_TOOL_EXPLAIN_FINDING:
+        level = str(a.get("level") or "technical").strip().lower() or "technical"
+        if level not in ("quick", "technical", "deep"):
+            return None, 'level must be "quick", "technical", or "deep"'
+        return {
+            "finding_id": str(a.get("finding_id") or "").strip(),
+            "level": level,
+        }, ""
+    if name == AI_TOOL_INTERPRET_QUERY:
+        q = str(a.get("question") or "").strip()
+        if not q:
+            return None, "question must be a non-empty string"
+        return {"question": q}, ""
+    if name == AI_TOOL_VALIDATE_EXPERIMENT:
+        expected = a.get("expected") if isinstance(a.get("expected"), dict) else {}
+        actual = a.get("actual") if isinstance(a.get("actual"), dict) else {}
+        return {"expected": expected, "actual": actual}, ""
+    if name == AI_TOOL_MANAGE_HYPOTHESES:
+        hid = str(a.get("hypothesis_id") or "").strip()
+        if not hid:
+            return None, "hypothesis_id must be a non-empty string"
+        status = str(a.get("status") or "").strip().lower()
+        if status not in ("supported", "possible", "rejected", "need_evidence"):
+            return None, "status must be supported|possible|rejected|need_evidence"
+        return {
+            "hypothesis_id": hid,
+            "status": status,
+            "reason": str(a.get("reason") or "").strip(),
+            "finding_id": str(a.get("finding_id") or "").strip(),
+        }, ""
     return None, f"unknown tool {name!r}"
 
 
@@ -2108,6 +2258,20 @@ def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
         a_task = str(a.get("task_a") or "?").strip() or "?"
         b_task = str(a.get("task_b") or "?").strip() or "?"
         return f"Compare tasks {a_task} vs {b_task}"
+    if name == AI_TOOL_EXPLAIN_FINDING:
+        fid = str(a.get("finding_id") or "").strip() or "top finding"
+        level = str(a.get("level") or "technical").strip() or "technical"
+        return f"Explain finding {fid} ({level})"
+    if name == AI_TOOL_INTERPRET_QUERY:
+        q = str(a.get("question") or "").strip()
+        shown = q if len(q) <= 40 else q[:37] + "…"
+        return f"Interpret query {shown!r}" if shown else "Interpret query"
+    if name == AI_TOOL_VALIDATE_EXPERIMENT:
+        return "Validate experiment (expected vs actual)"
+    if name == AI_TOOL_MANAGE_HYPOTHESES:
+        hid = str(a.get("hypothesis_id") or "").strip() or "hypothesis"
+        st = str(a.get("status") or "").strip() or "status"
+        return f"Hypothesis {hid} → {st}"
     return name.replace("_", " ")
 
 
@@ -2902,6 +3066,72 @@ def investigate_finding(
     msg = str(ctx.get("message") or ("ok" if ok else "failed"))
     data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
     return tool_result_payload(ok, msg, data=data)
+
+
+def explain_finding_tool(
+    findings: Sequence[dict],
+    finding_id: str = "",
+    *,
+    level: str = "technical",
+) -> Dict[str, Any]:
+    items = enrich_findings_with_ids(findings) if findings else []
+    focus = resolve_finding(items, finding_id) if items else None
+    from .ai_investigation import _hypotheses_for_finding
+    hyps = []
+    if focus:
+        hyps = _hypotheses_for_finding(
+            str(focus.get("title") or ""), str(focus.get("text") or ""),
+        )
+    payload = explain_finding_payload(focus, level=level, hypotheses=hyps)
+    ok = bool(payload.get("ok"))
+    msg = str(payload.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in payload.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def interpret_query_tool(
+    question: str,
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    cursor_lo: Optional[float] = None,
+    cursor_hi: Optional[float] = None,
+) -> Dict[str, Any]:
+    payload = interpret_investigation_query(
+        question, findings=findings, cursor_lo=cursor_lo, cursor_hi=cursor_hi,
+    )
+    ok = bool(payload.get("ok"))
+    msg = str(payload.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in payload.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def validate_experiment_tool(
+    expected: Optional[dict] = None,
+    actual: Optional[dict] = None,
+) -> Dict[str, Any]:
+    payload = validate_experiment(expected, actual)
+    ok = bool(payload.get("ok"))
+    msg = str(payload.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in payload.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def manage_hypotheses_tool(
+    findings: Sequence[dict],
+    hypothesis_id: str,
+    status: str,
+    *,
+    reason: str = "",
+    finding_id: str = "",
+) -> Dict[str, Any]:
+    ctx = build_investigate_context(findings, finding_id, depth=2)
+    hyps = list(ctx.get("hypotheses") or [])
+    updated = set_hypothesis_status(hyps, hypothesis_id, status, reason=reason)
+    return tool_result_payload(
+        True,
+        f"Updated hypothesis {hypothesis_id} → {status}",
+        data={"hypotheses": updated, "finding": ctx.get("finding")},
+    )
 
 
 def _events_from_metric_payload(payload: Dict[str, Any], metric: str, task: str) -> List[dict]:

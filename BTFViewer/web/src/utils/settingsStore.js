@@ -40,10 +40,15 @@ import {
   normalizeAiPreset,
   parseAiTlsVerify,
 } from './ollamaClient.js'
+import {
+  dumpUserInvestigationTemplates,
+  parseUserInvestigationTemplates,
+} from './aiCase.js'
 
 const SETTINGS_KEY = 'btf-viewer-settings-v1'
 // Separate key: baseline profiles grow with usage and are not GUI prefs.
 const AI_BASELINE_KEY = 'btf-viewer-ai-baseline-v1'
+const AI_USER_TEMPLATES_KEY = 'btf-viewer-ai-user-templates-v1'
 
 export { MAX_CURSORS }
 
@@ -249,6 +254,27 @@ export function loadAiBaselineProfile() {
 export function saveAiBaselineProfile(profile) {
   try {
     localStorage.setItem(AI_BASELINE_KEY, JSON.stringify(profile || {}))
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+/** User-saved investigation sequences (More → Investigations). */
+export function loadAiUserInvestigationTemplates() {
+  try {
+    const raw = localStorage.getItem(AI_USER_TEMPLATES_KEY)
+    return parseUserInvestigationTemplates(raw || '[]')
+  } catch {
+    return []
+  }
+}
+
+export function saveAiUserInvestigationTemplates(items) {
+  try {
+    localStorage.setItem(
+      AI_USER_TEMPLATES_KEY,
+      dumpUserInvestigationTemplates(items),
+    )
   } catch {
     /* quota / private mode */
   }

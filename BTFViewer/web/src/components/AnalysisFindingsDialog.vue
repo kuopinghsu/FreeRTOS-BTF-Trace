@@ -24,7 +24,7 @@
       </div>
       <p class="analysis-note">
         Heuristic summary of load balance, WCET, blocking, thrashing, deadlines, tick health, and sync.
-        Select a finding before Verify or Auto investigate.
+        Select a finding before Verify, Explain, or Auto investigate.
       </p>
       <div class="analysis-body">
         <ul
@@ -84,6 +84,34 @@
           >
             Verify with AI…
           </button>
+          <div class="analysis-explain-wrap">
+            <button
+              type="button"
+              class="analysis-btn"
+              :title="aiEnabled
+                ? 'Quick / Technical / Deep explanation of the selected finding'
+                : 'Enable AI Assistant in Settings → AI'"
+              @click="explainOpen = !explainOpen"
+            >
+              Explain…
+            </button>
+            <div
+              v-if="explainOpen"
+              class="analysis-explain-menu"
+              role="menu"
+            >
+              <button
+                v-for="lv in explainLevels"
+                :key="lv.id"
+                type="button"
+                class="analysis-explain-item"
+                role="menuitem"
+                @click="explainFinding(lv.id)"
+              >
+                {{ lv.label }}
+              </button>
+            </div>
+          </div>
           <button
             type="button"
             class="analysis-btn"
@@ -129,6 +157,7 @@
 
 <script setup>
 import { ref } from 'vue'
+import { EXPLAIN_LEVELS } from '../utils/aiCase.js'
 import { formatAnalysisFindingsText } from '../utils/workflowAnalysis.js'
 
 const props = defineProps({
@@ -140,6 +169,20 @@ const props = defineProps({
 const emit = defineEmits(['close', 'query-ai'])
 
 const selectedId = ref('')
+const explainOpen = ref(false)
+const explainLevels = EXPLAIN_LEVELS.map(id => ({
+  id,
+  label: `${id.charAt(0).toUpperCase()}${id.slice(1)}`,
+}))
+
+function explainFinding(level) {
+  explainOpen.value = false
+  emit('query-ai', {
+    template: 'explain_finding',
+    findingId: selectedId.value,
+    level,
+  })
+}
 
 function _stamp() {
   const d = new Date()
@@ -282,6 +325,41 @@ function saveAsText() {
   flex-wrap: nowrap;
   gap: 10px;
   overflow-x: auto;
+}
+
+.analysis-explain-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.analysis-explain-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 4px);
+  z-index: 40;
+  min-width: 128px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-bg);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+}
+
+.analysis-explain-item {
+  display: block;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.analysis-explain-item:hover {
+  background: var(--tb-btn-hover);
 }
 
 .analysis-footer-right {

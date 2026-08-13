@@ -18,6 +18,10 @@ import {
   stripParsedToolMarkup,
   summariseToolCall,
 } from './aiTools.js'
+import {
+  formatCapabilityReport,
+  inferModelCapability,
+} from './aiCase.js'
 
 export const AI_SYSTEM_PROMPT =
   'You are an expert Real-Time Operating System (RTOS) and SMP trace analysis ' +
@@ -67,7 +71,7 @@ export const AI_COMPARE_TEMPLATE_ID = 'compare'
 // with btf_viewer_pkg/ai_assistant.py AI_SMP_ONLY_TEMPLATE_IDS.
 export const AI_SMP_ONLY_TEMPLATE_IDS = new Set(['migrations', 'balance'])
 
-/** Always-visible chips (one row). Keep in sync with btf_viewer_pkg/ai_assistant.py. */
+/** Always-visible wrapping chips. Keep in sync with btf_viewer_pkg/ai_assistant.py. */
 export const AI_TEMPLATE_PRIMARY_IDS = [
   'investigate',
   'findings',
@@ -77,7 +81,7 @@ export const AI_TEMPLATE_PRIMARY_IDS = [
 
 /** Overflow menu groups for templates not in AI_TEMPLATE_PRIMARY_IDS. */
 export const AI_TEMPLATE_MENU_GROUPS = [
-  { label: 'Diagnose', ids: ['root_cause', 'verify', 'triage', 'diagnostic_report'] },
+  { label: 'Diagnose', ids: ['root_cause', 'verify', 'explain_finding', 'triage', 'diagnostic_report'] },
   { label: 'Compare', ids: ['compare'] },
   {
     label: 'Metrics',
@@ -261,6 +265,18 @@ export const AI_TEMPLATE_QUESTIONS = [
     prompt:
       'Are there deadline or CPU-budget concerns in the findings? What ' +
       'should the engineer measure next?',
+  },
+  {
+    id: 'explain_finding',
+    label: 'Explain finding',
+    prompt:
+      'Explain the selected Analysis Finding. Call explain_finding(' +
+      'finding_id=ID, level=LEVEL) first (use finding_id and level= from ' +
+      'the user message; levels: quick, technical, deep; default ' +
+      'technical). Then add jump:TIME ' +
+      'evidence from investigate or correlate_events if the explanation ' +
+      'is still thin. Finish with: Summary, What it means, Evidence, ' +
+      'What would disprove this, and one next check.',
   },
   {
     id: 'auto_investigate',
@@ -1279,7 +1295,7 @@ export async function aiChatCompletion({
   if (!turn.content && !turn.calls.length) {
     throw new Error(emptyChatCompletionError(data, { hadTools: Boolean(useToolsActive) }))
   }
-  return { content: turn.content, tool_calls: turn.calls, message: turn.msg }
+  return { content: turn.content, tool_calls: turn.calls, message: turn.msg, usage: data?.usage || {} }
 }
 
 /**
@@ -1490,7 +1506,9 @@ export async function aiTestConnection({
   const data = await resp.json()
   const reply = String(data?.choices?.[0]?.message?.content ?? '').trim()
   const note = reply ? ` Probe reply: ${JSON.stringify(reply.slice(0, 40))}.` : ''
+  const capTxt = formatCapabilityReport(inferModelCapability(modelName, { chatOk: true }))
   return `Connected to ${urlBase}. Model ${modelName} ready${listingNote}.${note}`
+    + (capTxt ? `\n\n${capTxt}` : '')
 }
 
 /** Parse jump:NNNN tokens from assistant text. */
