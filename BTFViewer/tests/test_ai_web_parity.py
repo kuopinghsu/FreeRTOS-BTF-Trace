@@ -6,6 +6,7 @@ import re
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 BTF_ROOT = Path(__file__).resolve().parents[1]
 if str(BTF_ROOT) not in sys.path:
@@ -216,6 +217,7 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("id=\"what-can-ai-do\"", readme)
         self.assertIn("id=\"common-workflows\"", readme)
         self.assertIn("id=\"investigation-case\"", readme)
+        self.assertIn("id=\"investigation-planner\"", readme)
         self.assertIn("id=\"evidence--confidence\"", readme)
         self.assertIn("id=\"ai-capabilities\"", readme)
         self.assertIn("id=\"ai-tools-reference\"", readme)
@@ -226,11 +228,12 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("id=\"ai-troubleshooting\"", readme)
         self.assertIn("id=\"ai-developer-cli\"", readme)
         self.assertIn("id=\"implementation-notes\"", ai_md)
-        self.assertFalse((BTF_ROOT / "docs/TODO.md").is_file())
         self.assertFalse((BTF_ROOT / "TODO.md").is_file())
+        self.assertFalse((BTF_ROOT / "docs/TODO.md").is_file())
         self.assertIn("`optimize_experiment`", ai_md)
         self.assertIn("slice-replay", ai_md)
         self.assertIn("Workflows and use cases", ai_md)
+        self.assertIn("id=\"investigation-planner\"", ai_md)
         self.assertIn("id=\"workflows-and-use-cases\"", ai_md)
         self.assertIn("id=\"what-if-and-optimize-workflow\"", ai_md)
         self.assertIn("id=\"use-cases\"", ai_md)
@@ -243,7 +246,14 @@ class AiWebParityTests(unittest.TestCase):
             "`investigation_replay` / `what_if` / `optimize_experiment` / "
             "`analyze_traces` / `baseline_score` / `recommend_experiments` / "
             "`export_investigation` / `bookmark_finding` / `detect_priority_inversion` / "
-            "`find_related_findings` / `compare_tasks`",
+            "`find_related_findings` / `compare_tasks` / `explain_finding` / "
+            "`interpret_query` / `validate_experiment` / `manage_hypotheses` / "
+            "`plan_investigation` / `suggest_scope` / `detect_contradictions` / "
+            "`assess_evidence_sufficiency` / `cluster_findings` / "
+            "`generate_fingerprint` / `find_similar_investigations` / "
+            "`regression_localize` / `build_causal_chain` / "
+            "`generate_experiment_plan` / `record_experiment_outcome` / "
+            "`score_investigation`",
             ai_md,
         )
         self.assertNotIn("Max≪Avg", readme)
@@ -305,7 +315,14 @@ class AiWebParityTests(unittest.TestCase):
             "`investigation_replay` / `what_if` / `optimize_experiment` / "
             "`analyze_traces` / `baseline_score` / `recommend_experiments` / "
             "`export_investigation` / `bookmark_finding` / `detect_priority_inversion` / "
-            "`find_related_findings` / `compare_tasks`",
+            "`find_related_findings` / `compare_tasks` / `explain_finding` / "
+            "`interpret_query` / `validate_experiment` / `manage_hypotheses` / "
+            "`plan_investigation` / `suggest_scope` / `detect_contradictions` / "
+            "`assess_evidence_sufficiency` / `cluster_findings` / "
+            "`generate_fingerprint` / `find_similar_investigations` / "
+            "`regression_localize` / `build_causal_chain` / "
+            "`generate_experiment_plan` / `record_experiment_outcome` / "
+            "`score_investigation`",
             ai_md,
         )
         self.assertIn("Save selection as BTF", readme)
@@ -329,6 +346,105 @@ class AiWebParityTests(unittest.TestCase):
         ollama = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(encoding="utf-8")
         self.assertIn("High, Medium, or Low", AI_SYSTEM_PROMPT)
         self.assertIn("High, Medium, or Low", ollama)
+
+    def test_planner_tools_match_apps(self) -> None:
+        """README / AI.md planner names stay aligned with Desktop and Web."""
+        from btf_viewer_pkg.ai_investigation import EVIDENCE_PANEL_TOOLS
+        from btf_viewer_pkg.ai_planner import score_investigation_metrics
+
+        self.assertFalse((BTF_ROOT / "TODO.md").is_file())
+        self.assertFalse((BTF_ROOT / "docs/TODO.md").is_file())
+        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
+        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
+        mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
+        app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
+        planner_py = (BTF_ROOT / "btf_viewer_pkg/ai_planner.py").read_text(
+            encoding="utf-8")
+        planner_js = (BTF_ROOT / "web/src/utils/aiPlanner.js").read_text(
+            encoding="utf-8")
+        tools_py = (BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(
+            encoding="utf-8")
+        tools_js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(
+            encoding="utf-8")
+
+        shipped = (
+            "plan_investigation",
+            "suggest_scope",
+            "detect_contradictions",
+            "assess_evidence_sufficiency",
+            "score_hypotheses",
+            "cluster_findings",
+            "generate_fingerprint",
+            "find_similar_investigations",
+            "regression_localize",
+            "build_causal_chain",
+            "generate_experiment_plan",
+            "record_experiment_outcome",
+            "score_investigation",
+        )
+        helper_only = frozenset({"score_hypotheses"})
+        gui_shipped = [n for n in shipped if n not in helper_only]
+        section = re.search(
+            r"id=\"investigation-planner\".*?(?:\n<a id=)", ai_md, re.S)
+        self.assertIsNotNone(section)
+        listed = re.findall(r"\| `([a-z][a-z0-9_]*)` \|", section.group(0))
+        self.assertEqual(tuple(listed), shipped)
+
+        def const(name: str) -> str:
+            return f"AI_TOOL_{name.upper()}"
+
+        def camel(name: str) -> str:
+            parts = name.split("_")
+            return parts[0] + "".join(p.capitalize() for p in parts[1:])
+
+        for name in gui_shipped:
+            self.assertIn(name, AI_VIEWER_TOOL_NAMES, name)
+            self.assertTrue(is_query_tool(name), name)
+            self.assertIn(name, EVIDENCE_PANEL_TOOLS, name)
+            self.assertIn(f"| `{name}` |", ai_md, name)
+            self.assertIn(const(name), mw, name)
+            self.assertIn(const(name), app, name)
+            core = (
+                "score_investigation_metrics"
+                if name == "score_investigation" else name
+            )
+            self.assertIn(f"def {core}_tool(", tools_py, name)
+            self.assertIn(f"export function {camel(core)}Tool", tools_js, name)
+            self.assertIn(f"def {core}(", planner_py, name)
+            self.assertIn(f"export function {camel(core)}(", planner_js, name)
+
+        self.assertNotIn("score_hypotheses", AI_VIEWER_TOOL_NAMES)
+        self.assertIn("def score_hypotheses(", planner_py)
+        self.assertIn("export function scoreHypotheses(", planner_js)
+
+        extras = score_investigation_metrics()
+        for key in (
+            "evidence_efficiency", "investigation_cost", "false_confidence",
+            "falsification_quality", "scope_accuracy", "stop_efficiency",
+        ):
+            self.assertIn(key, extras)
+            self.assertIn(key, planner_js)
+
+        for name in (
+            "interpret_query", "investigate", "detect_anomalies",
+            "correlate_events", "find_critical_path", "manage_hypotheses",
+            "validate_experiment", "compare_performance", "regression_explain",
+            "recommend_experiments", "what_if", "optimize_experiment",
+            "query_raw_metric", "search_timeline",
+        ):
+            self.assertIn(name, AI_VIEWER_TOOL_NAMES, name)
+
+        for dropped in ("what_if_sensitivity", "what_if_uncertainty"):
+            self.assertNotIn(dropped, AI_VIEWER_TOOL_NAMES)
+            self.assertNotIn(dropped, ai_md)
+            self.assertNotIn(dropped, readme)
+
+        self.assertIn("id=\"investigation-planner\"", readme)
+        self.assertIn("id=\"investigation-planner\"", ai_md)
+        self.assertIn("Cheapest evidence first", readme)
+        self.assertIn("btf_viewer_pkg/ai_planner.py", ai_md)
+        self.assertNotIn("TODO.md", readme)
+        self.assertNotIn("TODO.md", ai_md)
 
     def test_ai_md_gui_tools_and_templates_match_apps(self) -> None:
         """AI.md / README template names and GUI-tool rows stay aligned with the apps."""
@@ -491,6 +607,30 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("validateExperimentTool(", app)
         self.assertIn("manage_hypotheses_tool(", mw)
         self.assertIn("manageHypothesesTool(", app)
+        self.assertIn("plan_investigation_tool(", mw)
+        self.assertIn("planInvestigationTool(", app)
+        self.assertIn("suggest_scope_tool(", mw)
+        self.assertIn("suggestScopeTool(", app)
+        self.assertIn("detect_contradictions_tool(", mw)
+        self.assertIn("detectContradictionsTool(", app)
+        self.assertIn("assess_evidence_sufficiency_tool(", mw)
+        self.assertIn("assessEvidenceSufficiencyTool(", app)
+        self.assertIn("cluster_findings_tool(", mw)
+        self.assertIn("clusterFindingsTool(", app)
+        self.assertIn("generate_fingerprint_tool(", mw)
+        self.assertIn("generateFingerprintTool(", app)
+        self.assertIn("find_similar_investigations_tool(", mw)
+        self.assertIn("findSimilarInvestigationsTool(", app)
+        self.assertIn("regression_localize_tool(", mw)
+        self.assertIn("regressionLocalizeTool(", app)
+        self.assertIn("build_causal_chain_tool(", mw)
+        self.assertIn("buildCausalChainTool(", app)
+        self.assertIn("generate_experiment_plan_tool(", mw)
+        self.assertIn("generateExperimentPlanTool(", app)
+        self.assertIn("record_experiment_outcome_tool(", mw)
+        self.assertIn("recordExperimentOutcomeTool(", app)
+        self.assertIn("score_investigation_metrics_tool(", mw)
+        self.assertIn("scoreInvestigationMetricsTool(", app)
         self.assertIn("search_timeline_hits(", mw)
         self.assertIn("searchTimelineHits(", app)
         self.assertIn("def _ai_clear_marks", mw)
@@ -698,10 +838,16 @@ class AiWebParityTests(unittest.TestCase):
             ai_preset_signin_label(AI_PRESET_OPENAI), "Sign in with OpenAI…")
         self.assertEqual(
             ai_preset_signin_label(AI_PRESET_CUSTOM), "Open provider sign-in…")
-        need = ai_auth_status(
-            auth_mode=AI_AUTH_API_KEY, api_key="", preset_id=AI_PRESET_GEMINI)
-        self.assertTrue(need["needs_auth"])
-        self.assertEqual(need["label"], "Needs API key")
+        need_empty = {
+            "OPENAI_API_KEY": "",
+            "GEMINI_API_KEY": "",
+            "OLLAMA_API_KEY": "",
+        }
+        with patch.dict(os.environ, need_empty, clear=False):
+            need = ai_auth_status(
+                auth_mode=AI_AUTH_API_KEY, api_key="", preset_id=AI_PRESET_GEMINI)
+            self.assertTrue(need["needs_auth"])
+            self.assertEqual(need["label"], "Needs API key")
 
         self.assertIn("def normalize_ai_auth_mode", assist)
         self.assertIn("export function normalizeAiAuthMode", js)
@@ -1007,9 +1153,36 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("validation.flags", inv_js)
         self.assertIn("EVIDENCE_PANEL_TOOLS", inv_py)
         self.assertIn("EVIDENCE_PANEL_TOOLS", inv_js)
+        planner_py = (BTF_ROOT / "btf_viewer_pkg/ai_planner.py").read_text(
+            encoding="utf-8")
+        planner_js = (BTF_ROOT / "web/src/utils/aiPlanner.js").read_text(
+            encoding="utf-8")
+        for py_name, js_name in (
+            ("def plan_investigation", "export function planInvestigation"),
+            ("def suggest_scope", "export function suggestScope"),
+            ("def detect_contradictions", "export function detectContradictions"),
+            ("def assess_evidence_sufficiency", "export function assessEvidenceSufficiency"),
+            ("def cluster_findings", "export function clusterFindings"),
+            ("def generate_fingerprint", "export function generateFingerprint"),
+            ("def find_similar_investigations", "export function findSimilarInvestigations"),
+            ("def regression_localize", "export function regressionLocalize"),
+            ("def build_causal_chain", "export function buildCausalChain"),
+            ("def generate_experiment_plan", "export function generateExperimentPlan"),
+            ("def record_experiment_outcome", "export function recordExperimentOutcome"),
+            ("def score_investigation_metrics", "export function scoreInvestigationMetrics"),
+            ("def score_hypotheses", "export function scoreHypotheses"),
+        ):
+            self.assertIn(py_name, planner_py, py_name)
+            self.assertIn(js_name, planner_js, js_name)
         for name in (
             "explain_finding", "interpret_query",
             "validate_experiment", "manage_hypotheses",
+            "plan_investigation", "suggest_scope", "detect_contradictions",
+            "assess_evidence_sufficiency", "cluster_findings",
+            "generate_fingerprint", "find_similar_investigations",
+            "regression_localize", "build_causal_chain",
+            "generate_experiment_plan", "record_experiment_outcome",
+            "score_investigation",
         ):
             self.assertIn(f'"{name}"', inv_py, name)
             self.assertIn(f"'{name}'", inv_js, name)

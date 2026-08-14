@@ -58,6 +58,18 @@ _TOOL_REASONS: Dict[str, str] = {
     "interpret_query": "Turn the user's question into an explicit investigation scope",
     "validate_experiment": "Compare expected experiment deltas with a new capture",
     "manage_hypotheses": "Mark a hypothesis supported, rejected, or needing evidence",
+    "plan_investigation": "Plan the cheapest tool sequence and rank hypotheses first",
+    "suggest_scope": "Recommend task and time window before gathering evidence",
+    "detect_contradictions": "Challenge the leading hypothesis against metrics",
+    "assess_evidence_sufficiency": "Stop when coverage is enough",
+    "cluster_findings": "Group related findings into one incident",
+    "generate_fingerprint": "Compact scheduling/sync/timing signature",
+    "find_similar_investigations": "Match this fingerprint to recorded outcomes",
+    "regression_localize": "Pin A vs B inflation to a task and region",
+    "build_causal_chain": "Causal vs correlated vs temporal edges",
+    "generate_experiment_plan": "Rank concrete firmware / what-if experiments",
+    "record_experiment_outcome": "Feed measured results back into recommendations",
+    "score_investigation": "Evidence efficiency, cost, stop, and falsification scores",
 }
 
 
@@ -2265,9 +2277,20 @@ def score_benchmark_case(
     overall = int(round(sum(
         parts[k] * BENCHMARK_METRIC_WEIGHTS[k] for k in parts
     )))
+    from .ai_planner import score_investigation_metrics
+    extras = score_investigation_metrics(
+        expected=exp,
+        actual_conclusion=actual_conclusion,
+        tools=actual_tools,
+        evidence_quality=evidence_quality,
+        catalog=None,
+        passed=root_score >= 50 and finding_score >= 50,
+        finding_score=finding_score,
+    )
     return {
         "overall": max(0, min(100, overall)),
         "parts": parts,
+        **extras,
     }
 
 
@@ -2288,6 +2311,21 @@ def format_benchmark_score(score: dict) -> str:
                 "safety": "Safety / grounding",
             }[key]
             lines.append(f"{label:20} {parts[key]}")
+    extras = {
+        "evidence_efficiency": "Evidence efficiency",
+        "investigation_cost": "Investigation cost",
+        "false_confidence": "False-confidence",
+        "falsification_quality": "Falsification",
+        "scope_accuracy": "Scope accuracy",
+        "stop_efficiency": "Stop efficiency",
+    }
+    shown = False
+    for key, label in extras.items():
+        if key in (score or {}):
+            if not shown:
+                lines.append("")
+                shown = True
+            lines.append(f"{label:20} {(score or {}).get(key)}")
     return "\n".join(lines)
 
 

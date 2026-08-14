@@ -38,11 +38,19 @@ from .ai_investigation import (
     snapshot_from_summary,
 )
 from .html_report import btf_html_report_document
-from .ai_case import (
-    explain_finding_payload,
-    interpret_investigation_query,
-    set_hypothesis_status,
-    validate_experiment,
+from .ai_planner import (
+    assess_evidence_sufficiency,
+    build_causal_chain,
+    cluster_findings,
+    detect_contradictions,
+    find_similar_investigations,
+    generate_experiment_plan,
+    generate_fingerprint,
+    plan_investigation,
+    record_experiment_outcome,
+    regression_localize,
+    score_investigation_tool,
+    suggest_scope,
 )
 
 AI_TOOL_SET_CURSORS = "set_cursors"
@@ -81,6 +89,18 @@ AI_TOOL_EXPLAIN_FINDING = "explain_finding"
 AI_TOOL_INTERPRET_QUERY = "interpret_query"
 AI_TOOL_VALIDATE_EXPERIMENT = "validate_experiment"
 AI_TOOL_MANAGE_HYPOTHESES = "manage_hypotheses"
+AI_TOOL_PLAN_INVESTIGATION = "plan_investigation"
+AI_TOOL_SUGGEST_SCOPE = "suggest_scope"
+AI_TOOL_DETECT_CONTRADICTIONS = "detect_contradictions"
+AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY = "assess_evidence_sufficiency"
+AI_TOOL_CLUSTER_FINDINGS = "cluster_findings"
+AI_TOOL_GENERATE_FINGERPRINT = "generate_fingerprint"
+AI_TOOL_FIND_SIMILAR_INVESTIGATIONS = "find_similar_investigations"
+AI_TOOL_REGRESSION_LOCALIZE = "regression_localize"
+AI_TOOL_BUILD_CAUSAL_CHAIN = "build_causal_chain"
+AI_TOOL_GENERATE_EXPERIMENT_PLAN = "generate_experiment_plan"
+AI_TOOL_RECORD_EXPERIMENT_OUTCOME = "record_experiment_outcome"
+AI_TOOL_SCORE_INVESTIGATION = "score_investigation"
 
 AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_SET_CURSORS,
@@ -119,6 +139,18 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_INTERPRET_QUERY,
     AI_TOOL_VALIDATE_EXPERIMENT,
     AI_TOOL_MANAGE_HYPOTHESES,
+    AI_TOOL_PLAN_INVESTIGATION,
+    AI_TOOL_SUGGEST_SCOPE,
+    AI_TOOL_DETECT_CONTRADICTIONS,
+    AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY,
+    AI_TOOL_CLUSTER_FINDINGS,
+    AI_TOOL_GENERATE_FINGERPRINT,
+    AI_TOOL_FIND_SIMILAR_INVESTIGATIONS,
+    AI_TOOL_REGRESSION_LOCALIZE,
+    AI_TOOL_BUILD_CAUSAL_CHAIN,
+    AI_TOOL_GENERATE_EXPERIMENT_PLAN,
+    AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
+    AI_TOOL_SCORE_INVESTIGATION,
 )
 
 AI_BOOKMARK_KINDS: Tuple[str, ...] = (
@@ -237,8 +269,13 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "bookmark_finding, investigation_replay, what_if, optimize_experiment, analyze_traces, "
     "baseline_score, recommend_experiments, export_investigation, "
     "detect_priority_inversion, find_related_findings, compare_tasks, "
-    "explain_finding, interpret_query, validate_experiment, manage_hypotheses. "
-    "For root-cause or Investigate templates: call detect_anomalies and "
+    "explain_finding, interpret_query, validate_experiment, manage_hypotheses, "
+    "plan_investigation, suggest_scope, detect_contradictions, "
+    "assess_evidence_sufficiency, cluster_findings, generate_fingerprint, "
+    "find_similar_investigations, regression_localize, build_causal_chain, "
+    "generate_experiment_plan, record_experiment_outcome, score_investigation. "
+    "For root-cause or Investigate templates: call plan_investigation and "
+    "suggest_scope, then detect_anomalies and "
     "investigate(finding_id) first for a root-cause chain, then "
     "correlate_events / query_raw_metric / search_timeline / find_critical_path, then set_cursors "
     "+ zoom_to_range + highlight_task on the worst episode before concluding. "
@@ -1249,6 +1286,184 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_PLAN_INVESTIGATION,
+                "description": (
+                    "Plan the cheapest tool sequence and rank hypotheses before "
+                    "running the rest of an investigation."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string"},
+                        "finding_id": {"type": "string"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_SUGGEST_SCOPE,
+                "description": (
+                    "Recommend task / related tasks / time window before "
+                    "Limit to C1–Cn."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_DETECT_CONTRADICTIONS,
+                "description": (
+                    "Test whether current metrics/findings contradict the "
+                    "leading hypothesis."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "hypothesis": {"type": "string"},
+                        "metrics": {"type": "object"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY,
+                "description": (
+                    "Decide whether to STOP INVESTIGATION, continue, or revise "
+                    "the hypothesis."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tools_run": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_CLUSTER_FINDINGS,
+                "description": "Group related Analysis Findings into one incident.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_GENERATE_FINGERPRINT,
+                "description": "Compact scheduling/sync/timing signature of this trace.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_FIND_SIMILAR_INVESTIGATIONS,
+                "description": "Match this trace fingerprint against recorded outcomes.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"limit": {"type": "integer"}},
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_REGRESSION_LOCALIZE,
+                "description": (
+                    "Localize A vs B execution inflation to a task and time region."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "label_a": {"type": "string"},
+                        "label_b": {"type": "string"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_BUILD_CAUSAL_CHAIN,
+                "description": (
+                    "Build a causal/correlated/temporal chain. Correlation is "
+                    "never silently treated as causation."
+                ),
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_GENERATE_EXPERIMENT_PLAN,
+                "description": "Propose ranked firmware / what-if experiments.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": {"type": "string"},
+                        "limit": {"type": "integer"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
+                "description": (
+                    "Store predicted vs actual experiment results to improve "
+                    "future recommendations."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "change": {"type": "string"},
+                        "predicted": {"type": "string"},
+                        "actual": {"type": "string"},
+                        "quality": {"type": "string"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_SCORE_INVESTIGATION,
+                "description": (
+                    "Score evidence efficiency, cost, false-confidence, "
+                    "falsification, scope accuracy, and stop efficiency."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tools_run": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "conclusion": {"type": "string"},
+                        "confidence": {"type": "string"},
+                        "elapsed_s": {"type": "number"},
+                    },
+                },
+            },
+        },
     ]
 
 
@@ -1737,6 +1952,18 @@ def is_query_tool(name: str) -> bool:
         AI_TOOL_INTERPRET_QUERY,
         AI_TOOL_VALIDATE_EXPERIMENT,
         AI_TOOL_MANAGE_HYPOTHESES,
+        AI_TOOL_PLAN_INVESTIGATION,
+        AI_TOOL_SUGGEST_SCOPE,
+        AI_TOOL_DETECT_CONTRADICTIONS,
+        AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY,
+        AI_TOOL_CLUSTER_FINDINGS,
+        AI_TOOL_GENERATE_FINGERPRINT,
+        AI_TOOL_FIND_SIMILAR_INVESTIGATIONS,
+        AI_TOOL_REGRESSION_LOCALIZE,
+        AI_TOOL_BUILD_CAUSAL_CHAIN,
+        AI_TOOL_GENERATE_EXPERIMENT_PLAN,
+        AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
+        AI_TOOL_SCORE_INVESTIGATION,
     )
 
 
@@ -2128,6 +2355,79 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
             "reason": str(a.get("reason") or "").strip(),
             "finding_id": str(a.get("finding_id") or "").strip(),
         }, ""
+    if name == AI_TOOL_PLAN_INVESTIGATION:
+        return {
+            "question": str(a.get("question") or "").strip(),
+            "finding_id": str(a.get("finding_id") or "").strip(),
+        }, ""
+    if name == AI_TOOL_SUGGEST_SCOPE:
+        return {"question": str(a.get("question") or "").strip()}, ""
+    if name == AI_TOOL_DETECT_CONTRADICTIONS:
+        metrics = a.get("metrics") if isinstance(a.get("metrics"), dict) else {}
+        return {
+            "hypothesis": str(a.get("hypothesis") or "").strip(),
+            "metrics": metrics,
+        }, ""
+    if name == AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY:
+        tools = a.get("tools_run")
+        if tools is not None and not isinstance(tools, (list, tuple)):
+            return None, "tools_run must be an array"
+        return {
+            "tools_run": [str(t) for t in (tools or [])],
+        }, ""
+    if name in (
+        AI_TOOL_CLUSTER_FINDINGS,
+        AI_TOOL_GENERATE_FINGERPRINT,
+        AI_TOOL_BUILD_CAUSAL_CHAIN,
+    ):
+        return {}, ""
+    if name == AI_TOOL_FIND_SIMILAR_INVESTIGATIONS:
+        limit = a.get("limit", 5)
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            return None, "limit must be an integer"
+        return {"limit": limit}, ""
+    if name == AI_TOOL_REGRESSION_LOCALIZE:
+        return {
+            "label_a": str(a.get("label_a") or "A").strip() or "A",
+            "label_b": str(a.get("label_b") or "B").strip() or "B",
+        }, ""
+    if name == AI_TOOL_GENERATE_EXPERIMENT_PLAN:
+        limit = a.get("limit", 3)
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 3
+        return {
+            "task": str(a.get("task") or "").strip(),
+            "limit": limit,
+        }, ""
+    if name == AI_TOOL_RECORD_EXPERIMENT_OUTCOME:
+        return {
+            "change": str(a.get("change") or "").strip(),
+            "predicted": str(a.get("predicted") or "").strip(),
+            "actual": str(a.get("actual") or "").strip(),
+            "quality": str(a.get("quality") or "").strip(),
+        }, ""
+    if name == AI_TOOL_SCORE_INVESTIGATION:
+        tools = a.get("tools_run")
+        if tools is not None and not isinstance(tools, (list, tuple)):
+            return None, "tools_run must be an array"
+        elapsed = a.get("elapsed_s")
+        if elapsed not in (None, ""):
+            try:
+                elapsed = float(elapsed)
+            except (TypeError, ValueError):
+                return None, "elapsed_s must be a number"
+        else:
+            elapsed = None
+        return {
+            "tools_run": [str(t) for t in (tools or [])],
+            "conclusion": str(a.get("conclusion") or "").strip(),
+            "confidence": str(a.get("confidence") or "").strip(),
+            "elapsed_s": elapsed,
+        }, ""
     return None, f"unknown tool {name!r}"
 
 
@@ -2272,6 +2572,30 @@ def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
         hid = str(a.get("hypothesis_id") or "").strip() or "hypothesis"
         st = str(a.get("status") or "").strip() or "status"
         return f"Hypothesis {hid} → {st}"
+    if name == AI_TOOL_PLAN_INVESTIGATION:
+        return "Plan investigation"
+    if name == AI_TOOL_SUGGEST_SCOPE:
+        return "Suggest investigation scope"
+    if name == AI_TOOL_DETECT_CONTRADICTIONS:
+        return "Detect contradictions"
+    if name == AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY:
+        return "Assess evidence sufficiency"
+    if name == AI_TOOL_CLUSTER_FINDINGS:
+        return "Cluster findings"
+    if name == AI_TOOL_GENERATE_FINGERPRINT:
+        return "Generate trace fingerprint"
+    if name == AI_TOOL_FIND_SIMILAR_INVESTIGATIONS:
+        return "Find similar investigations"
+    if name == AI_TOOL_REGRESSION_LOCALIZE:
+        return "Localize regression"
+    if name == AI_TOOL_BUILD_CAUSAL_CHAIN:
+        return "Build causal chain"
+    if name == AI_TOOL_GENERATE_EXPERIMENT_PLAN:
+        return "Generate experiment plan"
+    if name == AI_TOOL_RECORD_EXPERIMENT_OUTCOME:
+        return "Record experiment outcome"
+    if name == AI_TOOL_SCORE_INVESTIGATION:
+        return "Score investigation"
     return name.replace("_", " ")
 
 
@@ -3132,6 +3456,123 @@ def manage_hypotheses_tool(
         f"Updated hypothesis {hypothesis_id} → {status}",
         data={"hypotheses": updated, "finding": ctx.get("finding")},
     )
+
+
+def _planner_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    ok = bool(payload.get("ok"))
+    msg = str(payload.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in payload.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def plan_investigation_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    question: str = "",
+    finding_id: str = "",
+) -> Dict[str, Any]:
+    return _planner_payload(plan_investigation(
+        findings, question=question, finding_id=finding_id))
+
+
+def suggest_scope_tool(
+    question: str = "",
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    cursor_lo: Optional[float] = None,
+    cursor_hi: Optional[float] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(suggest_scope(
+        question, findings, cursor_lo=cursor_lo, cursor_hi=cursor_hi))
+
+
+def detect_contradictions_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    hypothesis: str = "",
+    metrics: Optional[dict] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(detect_contradictions(
+        findings, hypothesis=hypothesis, metrics=metrics))
+
+
+def assess_evidence_sufficiency_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    tools_run: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(assess_evidence_sufficiency(
+        findings, tools_run=tools_run))
+
+
+def cluster_findings_tool(findings: Optional[Sequence[dict]] = None) -> Dict[str, Any]:
+    return _planner_payload(cluster_findings(findings))
+
+
+def generate_fingerprint_tool(findings: Optional[Sequence[dict]] = None) -> Dict[str, Any]:
+    return _planner_payload(generate_fingerprint(findings))
+
+
+def find_similar_investigations_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    history: Optional[Sequence[dict]] = None,
+    limit: int = 5,
+) -> Dict[str, Any]:
+    return _planner_payload(find_similar_investigations(
+        findings, history=history, limit=limit))
+
+
+def regression_localize_tool(
+    candidate: Optional[dict] = None,
+    baseline: Optional[dict] = None,
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    label_a: str = "A",
+    label_b: str = "B",
+) -> Dict[str, Any]:
+    return _planner_payload(regression_localize(
+        candidate, baseline, findings=findings, label_a=label_a, label_b=label_b))
+
+
+def build_causal_chain_tool(findings: Optional[Sequence[dict]] = None) -> Dict[str, Any]:
+    return _planner_payload(build_causal_chain(findings))
+
+
+def generate_experiment_plan_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    task: str = "",
+    limit: int = 3,
+) -> Dict[str, Any]:
+    return _planner_payload(generate_experiment_plan(
+        findings, task=task, limit=limit))
+
+
+def record_experiment_outcome_tool(
+    *,
+    change: str = "",
+    predicted: str = "",
+    actual: str = "",
+    quality: str = "",
+    findings: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(record_experiment_outcome(
+        change=change, predicted=predicted, actual=actual,
+        quality=quality, findings=findings))
+
+
+def score_investigation_metrics_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    tools_run: Optional[Sequence[str]] = None,
+    elapsed_s: Optional[float] = None,
+    conclusion: str = "",
+    confidence: str = "",
+) -> Dict[str, Any]:
+    return _planner_payload(score_investigation_tool(
+        findings, tools_run=tools_run, elapsed_s=elapsed_s,
+        conclusion=conclusion, confidence=confidence))
 
 
 def _events_from_metric_payload(payload: Dict[str, Any], metric: str, task: str) -> List[dict]:

@@ -57,6 +57,18 @@ const TOOL_STEP_MAP = {
   interpret_query: ['findings'],
   validate_experiment: ['validate', 'recommend'],
   manage_hypotheses: ['hypotheses', 'validate'],
+  plan_investigation: ['findings', 'hypotheses'],
+  suggest_scope: ['findings', 'narrow'],
+  detect_contradictions: ['validate'],
+  assess_evidence_sufficiency: ['validate'],
+  cluster_findings: ['findings'],
+  generate_fingerprint: ['findings'],
+  find_similar_investigations: ['recommend'],
+  regression_localize: ['metrics', 'validate'],
+  build_causal_chain: ['validate'],
+  generate_experiment_plan: ['recommend'],
+  record_experiment_outcome: ['validate', 'recommend'],
+  score_investigation: ['validate'],
 }
 
 /** Tools whose results refresh the Evidence / Reasoning log. Keep in sync with
@@ -70,6 +82,18 @@ export const EVIDENCE_PANEL_TOOLS = [
   'interpret_query',
   'validate_experiment',
   'manage_hypotheses',
+  'plan_investigation',
+  'suggest_scope',
+  'detect_contradictions',
+  'assess_evidence_sufficiency',
+  'cluster_findings',
+  'generate_fingerprint',
+  'find_similar_investigations',
+  'regression_localize',
+  'build_causal_chain',
+  'generate_experiment_plan',
+  'record_experiment_outcome',
+  'score_investigation',
 ]
 
 const AGENT_TEMPLATE_IDS = new Set([
@@ -643,6 +667,15 @@ export function extractEvidencePanelPayload(toolName, result) {
     payload.confidence = resultLabel === 'VALIDATED'
       ? 'High'
       : resultLabel === 'DISPROVED' ? 'Low' : 'Medium'
+  } else if ([
+    'plan_investigation', 'suggest_scope', 'detect_contradictions',
+    'assess_evidence_sufficiency', 'cluster_findings', 'generate_fingerprint',
+    'find_similar_investigations', 'regression_localize', 'build_causal_chain',
+    'generate_experiment_plan', 'record_experiment_outcome', 'score_investigation',
+  ].includes(name) || data.steps || data.verdict || data.pattern) {
+    payload.conclusion = String(result.message || data.message || name)
+    payload.confidence = String(data.confidence || 'Medium')
+    if (data.mermaid) payload.evidence_chain = String(data.mermaid)
   }
 
   if (!(

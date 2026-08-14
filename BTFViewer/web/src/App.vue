@@ -1121,6 +1121,18 @@ import {
   AI_TOOL_INVESTIGATION_REPLAY,
   AI_TOOL_INTERPRET_QUERY,
   AI_TOOL_MANAGE_HYPOTHESES,
+  AI_TOOL_PLAN_INVESTIGATION,
+  AI_TOOL_SUGGEST_SCOPE,
+  AI_TOOL_DETECT_CONTRADICTIONS,
+  AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY,
+  AI_TOOL_CLUSTER_FINDINGS,
+  AI_TOOL_GENERATE_FINGERPRINT,
+  AI_TOOL_FIND_SIMILAR_INVESTIGATIONS,
+  AI_TOOL_REGRESSION_LOCALIZE,
+  AI_TOOL_BUILD_CAUSAL_CHAIN,
+  AI_TOOL_GENERATE_EXPERIMENT_PLAN,
+  AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
+  AI_TOOL_SCORE_INVESTIGATION,
   AI_TOOL_OPEN_CORRIDOR,
   AI_TOOL_OPTIMIZE,
   AI_TOOL_OPTIMIZE_EXPERIMENT,
@@ -1154,6 +1166,20 @@ import {
   investigationReplayFinding,
   interpretQueryTool,
   manageHypothesesTool,
+  planInvestigationTool,
+  suggestScopeTool,
+  detectContradictionsTool,
+  assessEvidenceSufficiencyTool,
+  clusterFindingsTool,
+  generateFingerprintTool,
+  findSimilarInvestigationsTool,
+  regressionLocalizeTool,
+  buildCausalChainTool,
+  generateExperimentPlanTool,
+  recordExperimentOutcomeTool,
+  scoreInvestigationMetricsTool,
+  setExperimentOutcomes,
+  experimentOutcomes,
   gatherSimulationInputs,
   optimizeExperimentFinding,
   optimizeFinding,
@@ -3250,6 +3276,81 @@ function dispatchAiTool(name, args) {
       args.status || '',
       { reason: args.reason || '', findingId: args.finding_id || '' },
     )
+  }
+  const findings = analysisFindings.value || []
+  if (name === AI_TOOL_PLAN_INVESTIGATION) {
+    return planInvestigationTool(findings, {
+      question: args.question || '',
+      findingId: args.finding_id || '',
+    })
+  }
+  if (name === AI_TOOL_SUGGEST_SCOPE) {
+    const times = cursors.value || []
+    let lo = null
+    let hi = null
+    if (times.length >= 2) {
+      lo = Math.min(...times)
+      hi = Math.max(...times)
+    }
+    return suggestScopeTool(args.question || '', findings, { cursorLo: lo, cursorHi: hi })
+  }
+  if (name === AI_TOOL_DETECT_CONTRADICTIONS) {
+    return detectContradictionsTool(findings, {
+      hypothesis: args.hypothesis || '',
+      metrics: args.metrics && typeof args.metrics === 'object' ? args.metrics : {},
+    })
+  }
+  if (name === AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY) {
+    return assessEvidenceSufficiencyTool(findings, { toolsRun: args.tools_run || [] })
+  }
+  if (name === AI_TOOL_CLUSTER_FINDINGS) return clusterFindingsTool(findings)
+  if (name === AI_TOOL_GENERATE_FINGERPRINT) return generateFingerprintTool(findings)
+  if (name === AI_TOOL_FIND_SIMILAR_INVESTIGATIONS) {
+    let hist = []
+    try {
+      hist = JSON.parse(localStorage.getItem('btf-experiment-outcomes') || '[]')
+    } catch { hist = [] }
+    if (Array.isArray(hist)) setExperimentOutcomes(hist)
+    return findSimilarInvestigationsTool(findings, {
+      history: Array.isArray(hist) ? hist : [],
+      limit: args.limit ?? 5,
+    })
+  }
+  if (name === AI_TOOL_REGRESSION_LOCALIZE) {
+    const cmp = lastAiCompare || {}
+    return regressionLocalizeTool(cmp.candidate || cmp.a || {}, cmp.baseline || cmp.b || {}, {
+      findings,
+      labelA: args.label_a || 'A',
+      labelB: args.label_b || 'B',
+    })
+  }
+  if (name === AI_TOOL_BUILD_CAUSAL_CHAIN) return buildCausalChainTool(findings)
+  if (name === AI_TOOL_GENERATE_EXPERIMENT_PLAN) {
+    return generateExperimentPlanTool(findings, {
+      task: args.task || '',
+      limit: args.limit ?? 3,
+    })
+  }
+  if (name === AI_TOOL_RECORD_EXPERIMENT_OUTCOME) {
+    const payload = recordExperimentOutcomeTool({
+      change: args.change || '',
+      predicted: args.predicted || '',
+      actual: args.actual || '',
+      quality: args.quality || '',
+      findings,
+    })
+    try {
+      localStorage.setItem('btf-experiment-outcomes', JSON.stringify(experimentOutcomes()))
+    } catch { /* ignore quota */ }
+    return payload
+  }
+  if (name === AI_TOOL_SCORE_INVESTIGATION) {
+    return scoreInvestigationMetricsTool(findings, {
+      toolsRun: args.tools_run || [],
+      elapsedS: args.elapsed_s,
+      conclusion: args.conclusion || '',
+      confidence: args.confidence || '',
+    })
   }
   if (name === AI_TOOL_GENERATE_REPORT) {
     return generateReportFinding(analysisFindings.value || [], {

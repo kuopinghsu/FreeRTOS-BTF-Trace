@@ -308,6 +308,7 @@ AI-assisted evidence-driven investigation
 ├── What can AI do?
 ├── Common workflows
 ├── Investigation Case
+├── Investigation planner
 ├── Evidence & confidence
 ├── AI capabilities
 ├── Tools reference          → AI.md GUI tools
@@ -328,6 +329,7 @@ Observe → Hypothesize → Gather evidence → Verify → Experiment → Compar
 | [What can AI do?](#what-can-ai-do) | Templates over Findings; not a chatbot over the BTF |
 | [Common workflows](#common-workflows) | Five repeatable paths from triage to report |
 | [Investigation Case](#investigation-case) | Question, scope, hypotheses, evidence, conclusion |
+| [Investigation planner](#investigation-planner) | Plan → evidence → challenge → stop |
 | [Evidence & confidence](#evidence--confidence) | Quality band, coverage, falsify, validator |
 | [AI capabilities](#ai-capabilities) | Modes, Explain levels, Test-connection card |
 | [Tools reference](#ai-tools-reference) | Apply / Skip vs immediate queries; full list in AI.md |
@@ -395,6 +397,41 @@ A free-form **Ask** is interpreted first (scope card, no LLM yet). Confirm or **
 
 Hypothesis rows offer **Support** / **Reject** / **Need evidence** / **Test** / **Compare**. **More → Investigations** lists built-in and saved sequences; **Save as template…** stores the current plan. **Save current finding…** keeps a local note (typical vs current rates) for later `investigate` matches.
 
+<a id="investigation-planner" name="investigation-planner">&#x200B;</a>
+### Investigation planner ![](../images/readme/h3.svg)
+
+Investigations plan before they drill in. You still start from **Analysis → Investigate…** / **Auto investigate…** or a free-form **Ask** (confirm the scope card first). The assistant should then:
+
+```text
+Question
+   ↓
+Interpret + recommended scope (task, related tasks, time)
+   ↓
+Rank hypotheses
+   ↓
+Cheapest evidence first
+   ↓
+Challenge the leading hypothesis
+   ↓
+Stop when coverage is enough
+   ↓
+Conclusion
+```
+
+What that looks like in the panel:
+
+| You want | What happens |
+|----------|----------------|
+| A focused window | Recommended task / related tasks / C1–Cn-style times before metric queries |
+| One incident, not five findings | Related rows grouped (same task or pattern) |
+| A challenged root cause | Evidence that **contradicts** mutex-vs-migration (or similar) is called out |
+| To stop burning tokens | A stop / continue / revise recommendation when coverage is enough |
+| Recurring scheduling shapes | A compact fingerprint (HIGH / MEDIUM / LOW bands) and similar past outcomes |
+| A vs B “why worse” | Localization to a task and region, not only a percent delta |
+| A concrete next experiment | Ranked pin / contention / priority plans; after you recapture, **Validate experiment…** and record the measured outcome |
+
+Always confirm `jump:TIME` on the timeline. Do not treat a heuristic what-if as a FreeRTOS schedule. Tool names and schemas: [AI.md → GUI tools](AI.md#gui-tools). Host planner: [AI.md → Investigation planner](AI.md#investigation-planner).
+
 <a id="evidence--confidence" name="evidence--confidence">&#x200B;</a>
 ### Evidence & confidence ![](../images/readme/h3.svg)
 
@@ -430,7 +467,7 @@ Mode chips start a tool sequence without adding extra templates:
 <a id="ai-tools-reference" name="ai-tools-reference">&#x200B;</a>
 ### Tools reference ![](../images/readme/h3.svg)
 
-When the model proposes GUI actions (cursors, zoom, highlight, annotations), use **Apply** / **Skip** / **Undo**, or enable **Auto-apply GUI actions**. Read-only queries (including `what_if` / `optimize_experiment`) apply immediately.
+When the model proposes GUI actions (cursors, zoom, highlight, annotations), use **Apply** / **Skip** / **Undo**, or enable **Auto-apply GUI actions**. Read-only queries (including `what_if` / `optimize_experiment` and the planner tools `plan_investigation`, `suggest_scope`, `detect_contradictions`, `assess_evidence_sufficiency`) apply immediately.
 
 Full tool schema, parameters, and Apply/Undo rules: **[AI.md → GUI tools](AI.md#gui-tools)**. Symptom → template / tool tables: [AI.md → Use cases](AI.md#use-cases).
 
@@ -1973,7 +2010,7 @@ Shortcuts marked **(W)** are Web-only. Others work on Desktop and Web. On Web, p
 | Document | Audience |
 |----------|----------|
 | **[WORKFLOWS.md](WORKFLOWS.md)** | Analysis playbooks and AI ask order |
-| **[AI.md](AI.md)** | Tech guide: setup, tools, diagrams, troubleshooting, CLI |
+| **[AI.md](AI.md)** | Tech guide: setup, tools, planner, troubleshooting, CLI |
 | **[btf-viewer-slides.md](btf-viewer-slides.md)** | Presentation overview |
 | **[demos/README.md](demos/README.md)** | Demo XML actions, HTTP API, voice-pack tooling |
 

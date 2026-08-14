@@ -3,6 +3,8 @@
  * Keep in sync with btf_viewer_pkg/ai_case.py.
  */
 
+import { scoreInvestigationMetrics } from './aiPlanner.js'
+
 export const HYPOTHESIS_STATUSES = [
   'supported', 'possible', 'rejected', 'need_evidence',
 ]
@@ -49,6 +51,18 @@ const TOOL_REASONS = {
   interpret_query: "Turn the user's question into an explicit investigation scope",
   validate_experiment: 'Compare expected experiment deltas with a new capture',
   manage_hypotheses: 'Mark a hypothesis supported, rejected, or needing evidence',
+  plan_investigation: 'Plan the cheapest tool sequence and rank hypotheses first',
+  suggest_scope: 'Recommend task and time window before gathering evidence',
+  detect_contradictions: 'Challenge the leading hypothesis against metrics',
+  assess_evidence_sufficiency: 'Stop when coverage is enough',
+  cluster_findings: 'Group related findings into one incident',
+  generate_fingerprint: 'Compact scheduling/sync/timing signature',
+  find_similar_investigations: 'Match this fingerprint to recorded outcomes',
+  regression_localize: 'Pin A vs B inflation to a task and region',
+  build_causal_chain: 'Causal vs correlated vs temporal edges',
+  generate_experiment_plan: 'Rank concrete firmware / what-if experiments',
+  record_experiment_outcome: 'Feed measured results back into recommendations',
+  score_investigation: 'Evidence efficiency, cost, stop, and falsification scores',
 }
 
 function safeInt(value, fallback = 0) {
@@ -1848,10 +1862,18 @@ export function scoreBenchmarkCase(expected, {
     calibration: cal,
     safety,
   }
-  const overall = Math.round(Object.keys(parts).reduce(
+    const overall = Math.round(Object.keys(parts).reduce(
     (s, k) => s + parts[k] * BENCHMARK_METRIC_WEIGHTS[k], 0,
   ))
-  return { overall: Math.max(0, Math.min(100, overall)), parts }
+  const extras = scoreInvestigationMetrics({
+    expected: exp,
+    actualConclusion,
+    tools: actualTools,
+    evidenceQuality,
+    passed: rootScore >= 50 && findingScore >= 50,
+    findingScore,
+  })
+  return { overall: Math.max(0, Math.min(100, overall)), parts, ...extras }
 }
 
 export function formatBenchmarkScore(score) {
@@ -1867,6 +1889,24 @@ export function formatBenchmarkScore(score) {
   for (const key of ['finding', 'evidence', 'tool_use', 'root_cause', 'calibration', 'safety']) {
     if (key in parts) {
       lines.push(`${labels[key].padEnd(20)} ${parts[key]}`)
+    }
+  }
+  const extras = {
+    evidence_efficiency: 'Evidence efficiency',
+    investigation_cost: 'Investigation cost',
+    false_confidence: 'False-confidence',
+    falsification_quality: 'Falsification',
+    scope_accuracy: 'Scope accuracy',
+    stop_efficiency: 'Stop efficiency',
+  }
+  let shown = false
+  for (const [key, label] of Object.entries(extras)) {
+    if (score && key in score) {
+      if (!shown) {
+        lines.push('')
+        shown = true
+      }
+      lines.push(`${label.padEnd(20)} ${score[key]}`)
     }
   }
   return lines.join('\n')

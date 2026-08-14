@@ -901,6 +901,18 @@ class AiInvestigationTests(unittest.TestCase):
                 "interpret_query",
                 "validate_experiment",
                 "manage_hypotheses",
+                "plan_investigation",
+                "suggest_scope",
+                "detect_contradictions",
+                "assess_evidence_sufficiency",
+                "cluster_findings",
+                "generate_fingerprint",
+                "find_similar_investigations",
+                "regression_localize",
+                "build_causal_chain",
+                "generate_experiment_plan",
+                "record_experiment_outcome",
+                "score_investigation",
             ),
         )
         explained = extract_evidence_panel_payload("explain_finding", {
@@ -945,6 +957,13 @@ class AiInvestigationTests(unittest.TestCase):
         })
         self.assertIsNotNone(managed)
         self.assertEqual(managed["conclusion"], "Mutex contention")
+        planned = extract_evidence_panel_payload("plan_investigation", {
+            "ok": True,
+            "message": "Plan with 2 hypotheses, 4 steps",
+            "data": {"steps": ["detect_contradictions"]},
+        })
+        self.assertIsNotNone(planned)
+        self.assertIn("Plan with", planned["conclusion"])
 
 
 if __name__ == "__main__":

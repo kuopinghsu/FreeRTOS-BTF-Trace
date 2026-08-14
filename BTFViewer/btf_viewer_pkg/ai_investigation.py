@@ -65,6 +65,18 @@ _TOOL_STEP_MAP: Dict[str, Tuple[str, ...]] = {
     "interpret_query": ("findings",),
     "validate_experiment": ("validate", "recommend"),
     "manage_hypotheses": ("hypotheses", "validate"),
+    "plan_investigation": ("findings", "hypotheses"),
+    "suggest_scope": ("findings", "narrow"),
+    "detect_contradictions": ("validate",),
+    "assess_evidence_sufficiency": ("validate",),
+    "cluster_findings": ("findings",),
+    "generate_fingerprint": ("findings",),
+    "find_similar_investigations": ("recommend",),
+    "regression_localize": ("metrics", "validate"),
+    "build_causal_chain": ("validate",),
+    "generate_experiment_plan": ("recommend",),
+    "record_experiment_outcome": ("validate", "recommend"),
+    "score_investigation": ("validate",),
 }
 
 # Tools whose results refresh the Evidence / Reasoning log. Keep in sync with
@@ -78,6 +90,18 @@ EVIDENCE_PANEL_TOOLS: Tuple[str, ...] = (
     "interpret_query",
     "validate_experiment",
     "manage_hypotheses",
+    "plan_investigation",
+    "suggest_scope",
+    "detect_contradictions",
+    "assess_evidence_sufficiency",
+    "cluster_findings",
+    "generate_fingerprint",
+    "find_similar_investigations",
+    "regression_localize",
+    "build_causal_chain",
+    "generate_experiment_plan",
+    "record_experiment_outcome",
+    "score_investigation",
 )
 
 _AGENT_TEMPLATE_IDS = frozenset({
@@ -1244,6 +1268,17 @@ def extract_evidence_panel_payload(
             else "Low" if result_label == "DISPROVED"
             else "Medium"
         )
+    elif name in (
+        "plan_investigation", "suggest_scope", "detect_contradictions",
+        "assess_evidence_sufficiency", "cluster_findings", "generate_fingerprint",
+        "find_similar_investigations", "regression_localize", "build_causal_chain",
+        "generate_experiment_plan", "record_experiment_outcome",
+        "score_investigation",
+    ) or data.get("steps") or data.get("verdict") or data.get("pattern"):
+        payload["conclusion"] = str(result.get("message") or data.get("message") or name)
+        payload["confidence"] = str(data.get("confidence") or "Medium")
+        if data.get("mermaid"):
+            payload["evidence_chain"] = str(data.get("mermaid"))
 
     if not (
         payload.get("conclusion")

@@ -210,5 +210,12 @@ describe('computeEvidenceScore', () => {
     })
     assert.ok(managed)
     assert.equal(managed.conclusion, 'Mutex contention')
+    const planned = extractEvidencePanelPayload('plan_investigation', {
+      ok: true,
+      message: 'Plan with 2 hypotheses, 4 steps',
+      data: { steps: ['detect_contradictions'] },
+    })
+    assert.ok(planned)
+    assert.match(planned.conclusion, /Plan with/)
   })
 })

@@ -37,6 +37,22 @@ import {
   setHypothesisStatus,
   validateExperiment,
 } from './aiCase.js'
+import {
+  assessEvidenceSufficiency,
+  buildCausalChain,
+  clusterFindings,
+  detectContradictions,
+  findSimilarInvestigations,
+  generateExperimentPlan,
+  generateFingerprint,
+  planInvestigation,
+  recordExperimentOutcome,
+  regressionLocalize,
+  scoreInvestigationTool,
+  setExperimentOutcomes,
+  experimentOutcomes,
+  suggestScope,
+} from './aiPlanner.js'
 import { coreUtilPctRows } from './traceCompare.js'
 
 export const AI_TOOL_SET_CURSORS = 'set_cursors'
@@ -75,6 +91,18 @@ export const AI_TOOL_EXPLAIN_FINDING = 'explain_finding'
 export const AI_TOOL_INTERPRET_QUERY = 'interpret_query'
 export const AI_TOOL_VALIDATE_EXPERIMENT = 'validate_experiment'
 export const AI_TOOL_MANAGE_HYPOTHESES = 'manage_hypotheses'
+export const AI_TOOL_PLAN_INVESTIGATION = 'plan_investigation'
+export const AI_TOOL_SUGGEST_SCOPE = 'suggest_scope'
+export const AI_TOOL_DETECT_CONTRADICTIONS = 'detect_contradictions'
+export const AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY = 'assess_evidence_sufficiency'
+export const AI_TOOL_CLUSTER_FINDINGS = 'cluster_findings'
+export const AI_TOOL_GENERATE_FINGERPRINT = 'generate_fingerprint'
+export const AI_TOOL_FIND_SIMILAR_INVESTIGATIONS = 'find_similar_investigations'
+export const AI_TOOL_REGRESSION_LOCALIZE = 'regression_localize'
+export const AI_TOOL_BUILD_CAUSAL_CHAIN = 'build_causal_chain'
+export const AI_TOOL_GENERATE_EXPERIMENT_PLAN = 'generate_experiment_plan'
+export const AI_TOOL_RECORD_EXPERIMENT_OUTCOME = 'record_experiment_outcome'
+export const AI_TOOL_SCORE_INVESTIGATION = 'score_investigation'
 
 export const AI_VIEWER_TOOL_NAMES = [
   AI_TOOL_SET_CURSORS,
@@ -113,6 +141,18 @@ export const AI_VIEWER_TOOL_NAMES = [
   AI_TOOL_INTERPRET_QUERY,
   AI_TOOL_VALIDATE_EXPERIMENT,
   AI_TOOL_MANAGE_HYPOTHESES,
+  AI_TOOL_PLAN_INVESTIGATION,
+  AI_TOOL_SUGGEST_SCOPE,
+  AI_TOOL_DETECT_CONTRADICTIONS,
+  AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY,
+  AI_TOOL_CLUSTER_FINDINGS,
+  AI_TOOL_GENERATE_FINGERPRINT,
+  AI_TOOL_FIND_SIMILAR_INVESTIGATIONS,
+  AI_TOOL_REGRESSION_LOCALIZE,
+  AI_TOOL_BUILD_CAUSAL_CHAIN,
+  AI_TOOL_GENERATE_EXPERIMENT_PLAN,
+  AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
+  AI_TOOL_SCORE_INVESTIGATION,
 ]
 
 export const AI_BOOKMARK_KINDS = [
@@ -219,8 +259,13 @@ export const AI_TOOL_SYSTEM_ADDENDUM =
   + 'bookmark_finding, investigation_replay, what_if, optimize_experiment, analyze_traces, '
   + 'baseline_score, recommend_experiments, export_investigation, '
   + 'detect_priority_inversion, find_related_findings, compare_tasks, '
-  + 'explain_finding, interpret_query, validate_experiment, manage_hypotheses. '
-  + 'For root-cause or Investigate templates: call detect_anomalies and '
+  + 'explain_finding, interpret_query, validate_experiment, manage_hypotheses, '
+  + 'plan_investigation, suggest_scope, detect_contradictions, '
+  + 'assess_evidence_sufficiency, cluster_findings, generate_fingerprint, '
+  + 'find_similar_investigations, regression_localize, build_causal_chain, '
+  + 'generate_experiment_plan, record_experiment_outcome, score_investigation. '
+  + 'For root-cause or Investigate templates: call plan_investigation and '
+  + 'suggest_scope, then detect_anomalies and '
   + 'investigate(finding_id) first for a root-cause chain, then '
   + 'correlate_events / query_raw_metric / search_timeline / find_critical_path, then set_cursors '
   + '+ zoom_to_range + highlight_task on the worst episode before concluding. '
@@ -1163,6 +1208,157 @@ export function aiViewerTools() {
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_PLAN_INVESTIGATION,
+        description:
+          'Plan the cheapest tool sequence and rank hypotheses before '
+          + 'running the rest of an investigation.',
+        parameters: {
+          type: 'object',
+          properties: {
+            question: { type: 'string' },
+            finding_id: { type: 'string' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_SUGGEST_SCOPE,
+        description: 'Recommend task / related tasks / time window before Limit to C1–Cn.',
+        parameters: {
+          type: 'object',
+          properties: { question: { type: 'string' } },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_DETECT_CONTRADICTIONS,
+        description: 'Test whether current metrics/findings contradict the leading hypothesis.',
+        parameters: {
+          type: 'object',
+          properties: {
+            hypothesis: { type: 'string' },
+            metrics: { type: 'object' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY,
+        description: 'Decide whether to STOP INVESTIGATION, continue, or revise the hypothesis.',
+        parameters: {
+          type: 'object',
+          properties: {
+            tools_run: { type: 'array', items: { type: 'string' } },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_CLUSTER_FINDINGS,
+        description: 'Group related Analysis Findings into one incident.',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_GENERATE_FINGERPRINT,
+        description: 'Compact scheduling/sync/timing signature of this trace.',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_FIND_SIMILAR_INVESTIGATIONS,
+        description: 'Match this trace fingerprint against recorded outcomes.',
+        parameters: {
+          type: 'object',
+          properties: { limit: { type: 'integer' } },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_REGRESSION_LOCALIZE,
+        description: 'Localize A vs B execution inflation to a task and time region.',
+        parameters: {
+          type: 'object',
+          properties: {
+            label_a: { type: 'string' },
+            label_b: { type: 'string' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_BUILD_CAUSAL_CHAIN,
+        description:
+          'Build a causal/correlated/temporal chain. Correlation is never silently treated as causation.',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_GENERATE_EXPERIMENT_PLAN,
+        description: 'Propose ranked firmware / what-if experiments.',
+        parameters: {
+          type: 'object',
+          properties: {
+            task: { type: 'string' },
+            limit: { type: 'integer' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
+        description: 'Store predicted vs actual experiment results to improve future recommendations.',
+        parameters: {
+          type: 'object',
+          properties: {
+            change: { type: 'string' },
+            predicted: { type: 'string' },
+            actual: { type: 'string' },
+            quality: { type: 'string' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_SCORE_INVESTIGATION,
+        description:
+          'Score evidence efficiency, cost, false-confidence, falsification, scope accuracy, and stop efficiency.',
+        parameters: {
+          type: 'object',
+          properties: {
+            tools_run: { type: 'array', items: { type: 'string' } },
+            conclusion: { type: 'string' },
+            confidence: { type: 'string' },
+            elapsed_s: { type: 'number' },
+          },
+        },
+      },
+    },
   ]
 }
 
@@ -2076,6 +2272,85 @@ export function validateToolCall(name, args) {
       error: '',
     }
   }
+  if (name === AI_TOOL_PLAN_INVESTIGATION) {
+    return {
+      args: {
+        question: String(a.question || '').trim(),
+        finding_id: String(a.finding_id || '').trim(),
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_SUGGEST_SCOPE) {
+    return { args: { question: String(a.question || '').trim() }, error: '' }
+  }
+  if (name === AI_TOOL_DETECT_CONTRADICTIONS) {
+    const metrics = a.metrics && typeof a.metrics === 'object' ? a.metrics : {}
+    return {
+      args: { hypothesis: String(a.hypothesis || '').trim(), metrics },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY) {
+    if (a.tools_run != null && !Array.isArray(a.tools_run)) {
+      return { args: null, error: 'tools_run must be an array' }
+    }
+    return { args: { tools_run: (a.tools_run || []).map((t) => String(t)) }, error: '' }
+  }
+  if ([
+    AI_TOOL_CLUSTER_FINDINGS, AI_TOOL_GENERATE_FINGERPRINT, AI_TOOL_BUILD_CAUSAL_CHAIN,
+  ].includes(name)) {
+    return { args: {}, error: '' }
+  }
+  if (name === AI_TOOL_FIND_SIMILAR_INVESTIGATIONS) {
+    const limit = a.limit == null ? 5 : Number.parseInt(a.limit, 10)
+    if (!Number.isFinite(limit)) return { args: null, error: 'limit must be an integer' }
+    return { args: { limit }, error: '' }
+  }
+  if (name === AI_TOOL_REGRESSION_LOCALIZE) {
+    return {
+      args: {
+        label_a: String(a.label_a || 'A').trim() || 'A',
+        label_b: String(a.label_b || 'B').trim() || 'B',
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_GENERATE_EXPERIMENT_PLAN) {
+    let limit = a.limit == null ? 3 : Number.parseInt(a.limit, 10)
+    if (!Number.isFinite(limit)) limit = 3
+    return { args: { task: String(a.task || '').trim(), limit }, error: '' }
+  }
+  if (name === AI_TOOL_RECORD_EXPERIMENT_OUTCOME) {
+    return {
+      args: {
+        change: String(a.change || '').trim(),
+        predicted: String(a.predicted || '').trim(),
+        actual: String(a.actual || '').trim(),
+        quality: String(a.quality || '').trim(),
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_SCORE_INVESTIGATION) {
+    if (a.tools_run != null && !Array.isArray(a.tools_run)) {
+      return { args: null, error: 'tools_run must be an array' }
+    }
+    let elapsed = a.elapsed_s
+    if (elapsed != null && elapsed !== '') {
+      elapsed = Number(elapsed)
+      if (!Number.isFinite(elapsed)) return { args: null, error: 'elapsed_s must be a number' }
+    } else elapsed = null
+    return {
+      args: {
+        tools_run: (a.tools_run || []).map((t) => String(t)),
+        conclusion: String(a.conclusion || '').trim(),
+        confidence: String(a.confidence || '').trim(),
+        elapsed_s: elapsed,
+      },
+      error: '',
+    }
+  }
   return { args: null, error: `unknown tool ${JSON.stringify(name)}` }
 }
 
@@ -2404,6 +2679,18 @@ export function isQueryTool(name) {
     AI_TOOL_INTERPRET_QUERY,
     AI_TOOL_VALIDATE_EXPERIMENT,
     AI_TOOL_MANAGE_HYPOTHESES,
+    AI_TOOL_PLAN_INVESTIGATION,
+    AI_TOOL_SUGGEST_SCOPE,
+    AI_TOOL_DETECT_CONTRADICTIONS,
+    AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY,
+    AI_TOOL_CLUSTER_FINDINGS,
+    AI_TOOL_GENERATE_FINGERPRINT,
+    AI_TOOL_FIND_SIMILAR_INVESTIGATIONS,
+    AI_TOOL_REGRESSION_LOCALIZE,
+    AI_TOOL_BUILD_CAUSAL_CHAIN,
+    AI_TOOL_GENERATE_EXPERIMENT_PLAN,
+    AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
+    AI_TOOL_SCORE_INVESTIGATION,
   ].includes(String(name || ''))
 }
 
@@ -2833,6 +3120,75 @@ export function manageHypothesesTool(findings, hypothesisId, status, {
     data: { hypotheses: updated, finding: ctx.finding },
   }
 }
+
+function plannerPayload(payload) {
+  const ok = !!payload.ok
+  const message = String(payload.message || (ok ? 'ok' : 'failed'))
+  const data = { ...payload }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+export function planInvestigationTool(findings = [], { question = '', findingId = '' } = {}) {
+  return plannerPayload(planInvestigation(findings, { question, findingId }))
+}
+
+export function suggestScopeTool(question = '', findings = [], { cursorLo = null, cursorHi = null } = {}) {
+  return plannerPayload(suggestScope(question, findings, { cursorLo, cursorHi }))
+}
+
+export function detectContradictionsTool(findings = [], { hypothesis = '', metrics = {} } = {}) {
+  return plannerPayload(detectContradictions(findings, { hypothesis, metrics }))
+}
+
+export function assessEvidenceSufficiencyTool(findings = [], { toolsRun = [] } = {}) {
+  return plannerPayload(assessEvidenceSufficiency(findings, { toolsRun }))
+}
+
+export function clusterFindingsTool(findings = []) {
+  return plannerPayload(clusterFindings(findings))
+}
+
+export function generateFingerprintTool(findings = []) {
+  return plannerPayload(generateFingerprint(findings))
+}
+
+export function findSimilarInvestigationsTool(findings = [], { history = [], limit = 5 } = {}) {
+  return plannerPayload(findSimilarInvestigations(findings, { history, limit }))
+}
+
+export function regressionLocalizeTool(candidate = {}, baseline = {}, {
+  findings = [], labelA = 'A', labelB = 'B',
+} = {}) {
+  return plannerPayload(regressionLocalize(candidate, baseline, { findings, labelA, labelB }))
+}
+
+export function buildCausalChainTool(findings = []) {
+  return plannerPayload(buildCausalChain(findings))
+}
+
+export function generateExperimentPlanTool(findings = [], { task = '', limit = 3 } = {}) {
+  return plannerPayload(generateExperimentPlan(findings, { task, limit }))
+}
+
+export function recordExperimentOutcomeTool({
+  change = '', predicted = '', actual = '', quality = '', findings = [],
+} = {}) {
+  return plannerPayload(recordExperimentOutcome({
+    change, predicted, actual, quality, findings,
+  }))
+}
+
+export function scoreInvestigationMetricsTool(findings = [], {
+  toolsRun = [], elapsedS = null, conclusion = '', confidence = '',
+} = {}) {
+  return plannerPayload(scoreInvestigationTool(findings, {
+    toolsRun, elapsedS, conclusion, confidence,
+  }))
+}
+
+export { setExperimentOutcomes, experimentOutcomes }
 
 function eventsFromMetricPayload(payload, metric, task) {
   const data = payload && typeof payload === 'object' ? payload.data : null

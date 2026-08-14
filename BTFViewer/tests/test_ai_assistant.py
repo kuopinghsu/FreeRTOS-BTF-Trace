@@ -441,11 +441,17 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(normalize_ai_auth_mode("oauth"), AI_AUTH_BROWSER)
         self.assertEqual(
             normalize_ai_auth_mode("", preset_id=AI_PRESET_OLLAMA), AI_AUTH_NONE)
-        st = ai_auth_status(
-            auth_mode=AI_AUTH_API_KEY, api_key="", preset_id=AI_PRESET_GEMINI,
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai")
-        self.assertTrue(st["needs_auth"])
-        self.assertEqual(st["label"], "Needs API key")
+        empty = {
+            "OPENAI_API_KEY": "",
+            "GEMINI_API_KEY": "",
+            "OLLAMA_API_KEY": "",
+        }
+        with patch.dict(os.environ, empty, clear=False):
+            st = ai_auth_status(
+                auth_mode=AI_AUTH_API_KEY, api_key="", preset_id=AI_PRESET_GEMINI,
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai")
+            self.assertTrue(st["needs_auth"])
+            self.assertEqual(st["label"], "Needs API key")
         signed = ai_auth_status(
             auth_mode=AI_AUTH_BROWSER, api_key="tok", preset_id=AI_PRESET_GEMINI)
         self.assertTrue(signed["signed_in"])

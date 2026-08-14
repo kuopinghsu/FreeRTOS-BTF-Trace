@@ -3,7 +3,7 @@
 
 Setup, tools, diagrams, Desktop vs Web, troubleshooting, CLI details, and **workflows / use cases** for the BTF Viewer **AI** tab.
 
-For day-to-day panel usage (templates, Apply/Skip, Analysis dialog buttons), see the [user guide → AI Assistant](README.md#ai-assistant). Ask-order playbooks: [WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow). End-to-end flows and symptom → tool tables: [Workflows and use cases](#workflows-and-use-cases). Live suite XML: [Benchmark / evaluation suite](#benchmark-suite). Shared engines, validator, and parity tests: [Implementation notes](#implementation-notes).
+For day-to-day panel usage (templates, Apply/Skip, Analysis dialog buttons), see the [user guide → AI Assistant](README.md#ai-assistant). Ask-order playbooks: [WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow). End-to-end flows and symptom → tool tables: [Workflows and use cases](#workflows-and-use-cases). Live suite XML: [Benchmark / evaluation suite](#benchmark-suite). Shared engines, validator, and parity tests: [Implementation notes](#implementation-notes). Host planner: [Investigation planner](#investigation-planner).
 
 Heading level: ![](../images/readme/h2.svg) section · ![](../images/readme/h3.svg) subsection · ![](../images/readme/h4.svg) topic · ![](../images/readme/h5.svg) detail
 
@@ -17,6 +17,7 @@ Heading level: ![](../images/readme/h2.svg) section · ![](../images/readme/h3.s
 |---------|--|
 | [How it works](#how-it-works) | Context, evidence, investigation plan |
 | [Investigation Case](#investigation-case) | Case model, hypotheses, evidence graph, validator |
+| [Investigation planner](#investigation-planner) | Host planner, contradiction, fingerprint, Phase 3 scores |
 | [Workflows and use cases](#workflows-and-use-cases) | End-to-end, verify / explain / auto, symptom → tools |
 | [Endpoints and models](#endpoints-and-models) | Ollama / cloud, context size, local models |
 | [AI capability / model matrix](#capability-matrix) | Small local vs 9B+ vs cloud, which model to pick |
@@ -27,7 +28,7 @@ Heading level: ![](../images/readme/h2.svg) section · ![](../images/readme/h3.s
 | [Opening the web app from `file://`](#opening-the-web-app-from-file) | Ollama CORS for disk pages |
 | [CLI regression gate](#cli-regression-gate) | Headless `analyze` / `ai-test` |
 | [Benchmark / evaluation suite](#benchmark-suite) | Dataset, metrics, live `--config` XML, remaining plan |
-| [Implementation notes](#implementation-notes) | Shared engines, validator, remaining gaps |
+| [Implementation notes](#implementation-notes) | Shared engines, validator, parity |
 
 ---
 
@@ -63,6 +64,47 @@ make -C BTFViewer ai-test
 ```
 
 Modes (Quick / Diagnose / Compare / Optimize / Report) map onto existing templates; they do not add new tools. Always confirm on the timeline.
+
+---
+
+<a id="investigation-planner" name="investigation-planner">&#x200B;</a>
+## Investigation planner ![](../images/readme/h2.svg)
+
+Host-side planner (`btf_viewer_pkg/ai_planner.py` ↔ `web/src/utils/aiPlanner.js`). User-facing loop: [README → Investigation planner](README.md#investigation-planner).
+
+```text
+Question
+   ↓
+interpret_query + suggest_scope
+   ↓
+plan_investigation  (score_hypotheses)
+   ↓
+cluster_findings / cheapest query tools
+   ↓
+detect_contradictions
+   ↓
+assess_evidence_sufficiency
+   ↓
+STOP / CONTINUE / REVISE HYPOTHESIS
+```
+
+| Tool / helper | Host behaviour |
+|---------------|----------------|
+| `plan_investigation` | Rank hypotheses and a cheap tool sequence from findings + question |
+| `suggest_scope` | Task, related tasks, evidence times (or current cursors) |
+| `detect_contradictions` | `SUPPORTED` / `CONTRADICTED` / `INSUFFICIENT` (e.g. execution ≫ blocking vs mutex hypothesis) |
+| `assess_evidence_sufficiency` | Coverage heuristic → stop / continue / revise |
+| `score_hypotheses` | Evidence-weighted scores (not a GUI tool) |
+| `cluster_findings` | Group by shared task or pattern |
+| `generate_fingerprint` | HIGH / MEDIUM / LOW scheduling, sync, timing bands |
+| `find_similar_investigations` | Jaccard-style match vs recorded experiment outcomes |
+| `regression_localize` | A vs B deltas → task / region / likely mechanism |
+| `build_causal_chain` | Edges tagged causal / correlated / temporal; disclaimer required |
+| `generate_experiment_plan` | Ranked pin / contention / priority experiments |
+| `record_experiment_outcome` | Persist outcome (Desktop `[ai] experiment_outcomes`, Web `localStorage`) |
+| `score_investigation` | Phase 3 extras: `evidence_efficiency`, `investigation_cost`, `false_confidence`, `falsification_quality`, `scope_accuracy`, `stop_efficiency` (also spread into `score_benchmark_case`) |
+
+Do **not** add chat templates after `auto_investigate`.
 
 ---
 
@@ -301,7 +343,7 @@ Prefer local Ollama for confidential traces. Redact sensitive task names in anno
 <a id="gui-tools" name="gui-tools">&#x200B;</a>
 ## GUI tools ![](../images/readme/h2.svg)
 
-The model may call several tools in one turn; they apply as a single batch. With **Auto-apply GUI actions** off (default in **Settings → AI**), each mutating batch shows **Apply** / **Skip** and **Undo**, plus **Apply GUI actions** under the log. Read-only `query_raw_metric` / `search_timeline` / `trigger_compare` / `investigate` / `detect_anomalies` / `correlate_events` / `find_critical_path` / `compare_performance` / `generate_report` / `check_budget` / `optimize` / `regression_explain` / `investigation_replay` / `what_if` / `optimize_experiment` / `analyze_traces` / `baseline_score` / `recommend_experiments` / `detect_priority_inversion` / `find_related_findings` / `compare_tasks` / `explain_finding` / `interpret_query` / `validate_experiment` / `manage_hypotheses` batches run immediately (no Apply card).
+The model may call several tools in one turn; they apply as a single batch. With **Auto-apply GUI actions** off (default in **Settings → AI**), each mutating batch shows **Apply** / **Skip** and **Undo**, plus **Apply GUI actions** under the log. Read-only `query_raw_metric` / `search_timeline` / `trigger_compare` / `investigate` / `detect_anomalies` / `correlate_events` / `find_critical_path` / `compare_performance` / `generate_report` / `check_budget` / `optimize` / `regression_explain` / `investigation_replay` / `what_if` / `optimize_experiment` / `analyze_traces` / `baseline_score` / `recommend_experiments` / `detect_priority_inversion` / `find_related_findings` / `compare_tasks` / `explain_finding` / `interpret_query` / `validate_experiment` / `manage_hypotheses` / `plan_investigation` / `suggest_scope` / `detect_contradictions` / `assess_evidence_sufficiency` / `cluster_findings` / `generate_fingerprint` / `find_similar_investigations` / `regression_localize` / `build_causal_chain` / `generate_experiment_plan` / `record_experiment_outcome` / `score_investigation` batches run immediately (no Apply card).
 
 | Tool | Parameters / targets | Effect |
 |------|----------------------|--------|
@@ -341,6 +383,18 @@ The model may call several tools in one turn; they apply as a single batch. With
 | `interpret_query` | `question` | Read-only: turn a free-form question into an explicit investigation mode/scope before other tools run |
 | `validate_experiment` | optional `expected`, `actual` (metric → signed percent) | Read-only: compare expected experiment deltas with actual A vs B / what-if results (`VALIDATED` / `PARTIALLY VALIDATED` / `DISPROVED`) |
 | `manage_hypotheses` | `hypothesis_id`, `status` (`supported` / `possible` / `rejected` / `need_evidence`); optional `reason`, `finding_id` | Read-only: mark one investigation hypothesis status |
+| `plan_investigation` | optional `question`, `finding_id` | Read-only: rank hypotheses and the cheapest tool sequence |
+| `suggest_scope` | optional `question` | Read-only: recommend task / related tasks / time window |
+| `detect_contradictions` | optional `hypothesis`, `metrics` | Read-only: verdict SUPPORTED / CONTRADICTED / INSUFFICIENT |
+| `assess_evidence_sufficiency` | optional `tools_run` | Read-only: STOP INVESTIGATION / CONTINUE / REVISE HYPOTHESIS |
+| `cluster_findings` | (none) | Read-only: group related findings into incidents |
+| `generate_fingerprint` | (none) | Read-only: HIGH/MEDIUM/LOW scheduling, sync, and timing bands |
+| `find_similar_investigations` | optional `limit` | Read-only: match fingerprint against recorded experiment outcomes |
+| `regression_localize` | optional `label_a`, `label_b` | Read-only: localize A vs B inflation to a task and region |
+| `build_causal_chain` | (none) | Read-only: causal / correlated / temporal edges (never silent causation) |
+| `generate_experiment_plan` | optional `task`, `limit` | Read-only: ranked firmware / what-if experiments |
+| `record_experiment_outcome` | optional `change`, `predicted`, `actual`, `quality` | Read-only: store outcome for later similar-case matching |
+| `score_investigation` | optional `tools_run`, `conclusion`, `confidence`, `elapsed_s` | Read-only: evidence efficiency, cost, false-confidence, falsification, scope, stop |
 
 Models without native tool calling can emit a fenced ` ```btftool ` JSON block (same cards). Prefer a tool-capable model (see [Endpoints and models](#endpoints-and-models), or `gpt-4o` / Gemini) if native calls stay silent.
 
@@ -369,7 +423,7 @@ Replies may include ` ```mermaid ` **sequence** diagrams (mutex take/give, block
 |------|---------|-----|
 | Native tools + ` ```btftool ` | Same schema and cards | Same |
 | `add_annotation` / `query_raw_metric` / `export_report` | Marks + scoped series + save dialog | Same (browser download) |
-| `clear_marks` / `reset_view` / `search_timeline` / `trigger_compare` / `investigate` / `detect_anomalies` / `correlate_events` / `find_critical_path` / `compare_performance` / `generate_report` / `check_budget` / `optimize` / `regression_explain` / `investigation_replay` / `what_if` / `optimize_experiment` / `analyze_traces` / `baseline_score` / `recommend_experiments` / `export_investigation` / `bookmark_finding` / `detect_priority_inversion` / `find_related_findings` / `compare_tasks` / `explain_finding` / `interpret_query` / `validate_experiment` / `manage_hypotheses` | Same | Same (compare overlay; search uses Find; investigation tools are read-only except `bookmark_finding`) |
+| `clear_marks` / `reset_view` / `search_timeline` / `trigger_compare` / `investigate` / `detect_anomalies` / `correlate_events` / `find_critical_path` / `compare_performance` / `generate_report` / `check_budget` / `optimize` / `regression_explain` / `investigation_replay` / `what_if` / `optimize_experiment` / `analyze_traces` / `baseline_score` / `recommend_experiments` / `export_investigation` / `bookmark_finding` / `detect_priority_inversion` / `find_related_findings` / `compare_tasks` / `explain_finding` / `interpret_query` / `validate_experiment` / `manage_hypotheses` / `plan_investigation` / `suggest_scope` / `detect_contradictions` / `assess_evidence_sufficiency` / `cluster_findings` / `generate_fingerprint` / `find_similar_investigations` / `regression_localize` / `build_causal_chain` / `generate_experiment_plan` / `record_experiment_outcome` / `score_investigation` | Same | Same (compare overlay; search uses Find; investigation tools are read-only except `bookmark_finding`) |
 | `highlight_task` / corridor cores | Same resolve rules | Same |
 | In-chat mermaid figure | Data-URI image + node hit-test | Inline SVG node clicks |
 | In-chat Markdown / HTML tables | Same rendered table | Same |
@@ -382,6 +436,7 @@ Replies may include ` ```mermaid ` **sequence** diagrams (mutex take/give, block
 | Self-signed TLS | **Allow self-signed TLS** per preset skips HTTPS certificate checks | Persist the same flag + tip; browsers still verify — trust the cert, use `http://`, or use Desktop |
 | Model picker | Editable combo; refresh fills and opens the dropdown | Same |
 | Fonts | **pt** | **px** |
+| Confirm / save prompts | Qt dialogs | `window.prompt` / browser download |
 | Endpoint from `file://` | N/A | CORS — prefer Vite proxy, or [Opening the web app from `file://`](#opening-the-web-app-from-file) |
 
 ---
@@ -687,9 +742,10 @@ Tech notes for keeping Desktop and Web in lockstep. User-facing Case / Evidence 
 |---------|-----|
 | `btf_viewer_pkg/ai_case.py` | `web/src/utils/aiCase.js` |
 | `btf_viewer_pkg/ai_investigation.py` | `web/src/utils/aiInvestigation.js` |
+| `btf_viewer_pkg/ai_planner.py` | `web/src/utils/aiPlanner.js` |
 | `btf_viewer_pkg/ai_tools.py` | `web/src/utils/aiTools.js` |
 
-Parity is gated by `tests/test_ai_web_parity.py` and `web/tests/aiCase.test.js`. Bundle order: `ai_case` then `ai_investigation` then `ai_tools`. New `EVIDENCE_PANEL_LABELS` keys must exist in all 8 languages. After AI UI changes: `make -C BTFViewer bundle` and `make -C BTFViewer web`.
+Parity is gated by `tests/test_ai_web_parity.py` (including planner tool names vs Desktop/Web) and `web/tests/aiCase.test.js`. Bundle order: `ai_case` then `ai_investigation` then `ai_planner` then `ai_tools`. New `EVIDENCE_PANEL_LABELS` keys must exist in all 8 languages. After AI UI changes: `make -C BTFViewer bundle` and `make -C BTFViewer web`.
 
 **UI lockstep:** mode/template chips wrap (`_FlowLayout` ↔ `flex-wrap`), chip min-height 28px, disabled chips/menu items `#8a96a8`. Findings **Investigate…** is white-on-accent. **More** templates use the same groups in a 2-column overlay (Desktop `QFrame` ↔ Web body overlay).
 
@@ -729,16 +785,3 @@ Evidence panel flags unverified claims
 | Knowledge | `investigate` matches user-saved entries (More → **Save current finding…**), then baseline, then the builtin catalog. Typical vs current rates show when both exist. |
 | Interpret | Free-form Ask host-interprets first (`interpret_query`). Templates / modes / **Run investigation** skip confirm. |
 | Tool Why? | Evidence **Investigation** lists each tool with a host-side reason (`btftool:why/name`). |
-
-<a id="out-of-scope" name="out-of-scope">&#x200B;</a>
-### Out of scope ![](../images/readme/h3.svg)
-
-Intentionally not implemented (and not bugs):
-
-- No dedicated checkbox widget (scope is Evidence `btfscope:` links)
-- No remote team knowledge server
-- Firmware-change capture is a user step
-- Live multi-model scoring (`ai-test --config examples/ai/benchmark.xml`) writes [AI_BENCHMARK.md](AI_BENCHMARK.md); remaining in-app Benchmark UI is in [Benchmark / evaluation suite](#benchmark-suite)
-- Do **not** add templates after `auto_investigate` in `AI_TEMPLATE_QUESTIONS`
-
-Qt dialogs vs `window.prompt`, mermaid pixmap hit-test vs SVG links, and Desktop `ai-test` CLI vs Web `runOfflineBenchmark` are the remaining intentional Desktop/Web differences.

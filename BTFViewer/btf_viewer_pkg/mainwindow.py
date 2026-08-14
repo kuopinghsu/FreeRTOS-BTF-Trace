@@ -47,6 +47,18 @@ from .ai_tools import (
     AI_TOOL_INVESTIGATION_REPLAY,
     AI_TOOL_INTERPRET_QUERY,
     AI_TOOL_MANAGE_HYPOTHESES,
+    AI_TOOL_PLAN_INVESTIGATION,
+    AI_TOOL_SUGGEST_SCOPE,
+    AI_TOOL_DETECT_CONTRADICTIONS,
+    AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY,
+    AI_TOOL_CLUSTER_FINDINGS,
+    AI_TOOL_GENERATE_FINGERPRINT,
+    AI_TOOL_FIND_SIMILAR_INVESTIGATIONS,
+    AI_TOOL_REGRESSION_LOCALIZE,
+    AI_TOOL_BUILD_CAUSAL_CHAIN,
+    AI_TOOL_GENERATE_EXPERIMENT_PLAN,
+    AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
+    AI_TOOL_SCORE_INVESTIGATION,
     AI_TOOL_OPEN_CORRIDOR,
     AI_TOOL_OPTIMIZE,
     AI_TOOL_OPTIMIZE_EXPERIMENT,
@@ -78,6 +90,18 @@ from .ai_tools import (
     investigation_replay_finding,
     interpret_query_tool,
     manage_hypotheses_tool,
+    plan_investigation_tool,
+    suggest_scope_tool,
+    detect_contradictions_tool,
+    assess_evidence_sufficiency_tool,
+    cluster_findings_tool,
+    generate_fingerprint_tool,
+    find_similar_investigations_tool,
+    regression_localize_tool,
+    build_causal_chain_tool,
+    generate_experiment_plan_tool,
+    record_experiment_outcome_tool,
+    score_investigation_metrics_tool,
     gather_simulation_inputs,
     optimize_experiment_finding,
     optimize_finding,
@@ -6332,6 +6356,110 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 str(args.get("status") or ""),
                 reason=str(args.get("reason") or ""),
                 finding_id=str(args.get("finding_id") or ""),
+            )
+        findings = []
+        try:
+            panel = getattr(self, "_stats_panel", None)
+            if panel is not None and hasattr(panel, "build_analysis_findings"):
+                findings, _scope = panel.build_analysis_findings()
+        except Exception:
+            findings = []
+        if name == AI_TOOL_PLAN_INVESTIGATION:
+            return plan_investigation_tool(
+                findings,
+                question=str(args.get("question") or ""),
+                finding_id=str(args.get("finding_id") or ""),
+            )
+        if name == AI_TOOL_SUGGEST_SCOPE:
+            lo = hi = None
+            view = getattr(self, "_view", None)
+            times = []
+            if view is not None and hasattr(view, "_scene"):
+                times = list(view._scene.cursor_times() or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+            return suggest_scope_tool(
+                str(args.get("question") or ""),
+                findings,
+                cursor_lo=lo,
+                cursor_hi=hi,
+            )
+        if name == AI_TOOL_DETECT_CONTRADICTIONS:
+            return detect_contradictions_tool(
+                findings,
+                hypothesis=str(args.get("hypothesis") or ""),
+                metrics=args.get("metrics") if isinstance(args.get("metrics"), dict) else {},
+            )
+        if name == AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY:
+            return assess_evidence_sufficiency_tool(
+                findings, tools_run=args.get("tools_run") or [])
+        if name == AI_TOOL_CLUSTER_FINDINGS:
+            return cluster_findings_tool(findings)
+        if name == AI_TOOL_GENERATE_FINGERPRINT:
+            return generate_fingerprint_tool(findings)
+        if name == AI_TOOL_FIND_SIMILAR_INVESTIGATIONS:
+            from .ai_planner import set_experiment_outcomes
+            raw = self._settings.get("ai", "experiment_outcomes", "")
+            hist = []
+            if raw:
+                try:
+                    hist = json.loads(raw)
+                except (TypeError, ValueError):
+                    hist = []
+            if isinstance(hist, list):
+                set_experiment_outcomes(hist)
+            payload = find_similar_investigations_tool(
+                findings, history=hist if isinstance(hist, list) else [],
+                limit=int(args.get("limit") or 5),
+            )
+            return payload
+        if name == AI_TOOL_REGRESSION_LOCALIZE:
+            cmp_ = getattr(self, "_last_ai_compare", None) or {}
+            return regression_localize_tool(
+                cmp_.get("candidate") or cmp_.get("a") or {},
+                cmp_.get("baseline") or cmp_.get("b") or {},
+                findings=findings,
+                label_a=str(args.get("label_a") or "A"),
+                label_b=str(args.get("label_b") or "B"),
+            )
+        if name == AI_TOOL_BUILD_CAUSAL_CHAIN:
+            return build_causal_chain_tool(findings)
+        if name == AI_TOOL_GENERATE_EXPERIMENT_PLAN:
+            return generate_experiment_plan_tool(
+                findings,
+                task=str(args.get("task") or ""),
+                limit=int(args.get("limit") or 3),
+            )
+        if name == AI_TOOL_RECORD_EXPERIMENT_OUTCOME:
+            from .ai_planner import experiment_outcomes
+            payload = record_experiment_outcome_tool(
+                change=str(args.get("change") or ""),
+                predicted=str(args.get("predicted") or ""),
+                actual=str(args.get("actual") or ""),
+                quality=str(args.get("quality") or ""),
+                findings=findings,
+            )
+            try:
+                self._settings.set(
+                    "ai", "experiment_outcomes",
+                    json.dumps(experiment_outcomes(), ensure_ascii=True),
+                    flush=False,
+                )
+            except Exception:
+                pass
+            return payload
+        if name == AI_TOOL_SCORE_INVESTIGATION:
+            elapsed = args.get("elapsed_s")
+            try:
+                elapsed = float(elapsed) if elapsed not in (None, "") else None
+            except (TypeError, ValueError):
+                elapsed = None
+            return score_investigation_metrics_tool(
+                findings,
+                tools_run=args.get("tools_run") or [],
+                elapsed_s=elapsed,
+                conclusion=str(args.get("conclusion") or ""),
+                confidence=str(args.get("confidence") or ""),
             )
         raise RuntimeError(f"unknown tool {name}")
 

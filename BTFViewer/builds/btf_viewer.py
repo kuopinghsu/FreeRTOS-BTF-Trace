@@ -17026,6 +17026,18 @@ _TOOL_REASONS: Dict[str, str] = {
     "interpret_query": "Turn the user's question into an explicit investigation scope",
     "validate_experiment": "Compare expected experiment deltas with a new capture",
     "manage_hypotheses": "Mark a hypothesis supported, rejected, or needing evidence",
+    "plan_investigation": "Plan the cheapest tool sequence and rank hypotheses first",
+    "suggest_scope": "Recommend task and time window before gathering evidence",
+    "detect_contradictions": "Challenge the leading hypothesis against metrics",
+    "assess_evidence_sufficiency": "Stop when coverage is enough",
+    "cluster_findings": "Group related findings into one incident",
+    "generate_fingerprint": "Compact scheduling/sync/timing signature",
+    "find_similar_investigations": "Match this fingerprint to recorded outcomes",
+    "regression_localize": "Pin A vs B inflation to a task and region",
+    "build_causal_chain": "Causal vs correlated vs temporal edges",
+    "generate_experiment_plan": "Rank concrete firmware / what-if experiments",
+    "record_experiment_outcome": "Feed measured results back into recommendations",
+    "score_investigation": "Evidence efficiency, cost, stop, and falsification scores",
 }
 
 
@@ -19233,9 +19245,20 @@ def score_benchmark_case(
     overall = int(round(sum(
         parts[k] * BENCHMARK_METRIC_WEIGHTS[k] for k in parts
     )))
+    from .ai_planner import score_investigation_metrics
+    extras = score_investigation_metrics(
+        expected=exp,
+        actual_conclusion=actual_conclusion,
+        tools=actual_tools,
+        evidence_quality=evidence_quality,
+        catalog=None,
+        passed=root_score >= 50 and finding_score >= 50,
+        finding_score=finding_score,
+    )
     return {
         "overall": max(0, min(100, overall)),
         "parts": parts,
+        **extras,
     }
 
 
@@ -19256,6 +19279,21 @@ def format_benchmark_score(score: dict) -> str:
                 "safety": "Safety / grounding",
             }[key]
             lines.append(f"{label:20} {parts[key]}")
+    extras = {
+        "evidence_efficiency": "Evidence efficiency",
+        "investigation_cost": "Investigation cost",
+        "false_confidence": "False-confidence",
+        "falsification_quality": "Falsification",
+        "scope_accuracy": "Scope accuracy",
+        "stop_efficiency": "Stop efficiency",
+    }
+    shown = False
+    for key, label in extras.items():
+        if key in (score or {}):
+            if not shown:
+                lines.append("")
+                shown = True
+            lines.append(f"{label:20} {(score or {}).get(key)}")
     return "\n".join(lines)
 
 
@@ -20012,6 +20050,18 @@ _TOOL_STEP_MAP: Dict[str, Tuple[str, ...]] = {
     "interpret_query": ("findings",),
     "validate_experiment": ("validate", "recommend"),
     "manage_hypotheses": ("hypotheses", "validate"),
+    "plan_investigation": ("findings", "hypotheses"),
+    "suggest_scope": ("findings", "narrow"),
+    "detect_contradictions": ("validate",),
+    "assess_evidence_sufficiency": ("validate",),
+    "cluster_findings": ("findings",),
+    "generate_fingerprint": ("findings",),
+    "find_similar_investigations": ("recommend",),
+    "regression_localize": ("metrics", "validate"),
+    "build_causal_chain": ("validate",),
+    "generate_experiment_plan": ("recommend",),
+    "record_experiment_outcome": ("validate", "recommend"),
+    "score_investigation": ("validate",),
 }
 
 # Tools whose results refresh the Evidence / Reasoning log. Keep in sync with
@@ -20025,6 +20075,18 @@ EVIDENCE_PANEL_TOOLS: Tuple[str, ...] = (
     "interpret_query",
     "validate_experiment",
     "manage_hypotheses",
+    "plan_investigation",
+    "suggest_scope",
+    "detect_contradictions",
+    "assess_evidence_sufficiency",
+    "cluster_findings",
+    "generate_fingerprint",
+    "find_similar_investigations",
+    "regression_localize",
+    "build_causal_chain",
+    "generate_experiment_plan",
+    "record_experiment_outcome",
+    "score_investigation",
 )
 
 _AGENT_TEMPLATE_IDS = frozenset({
@@ -21191,6 +21253,17 @@ def extract_evidence_panel_payload(
             else "Low" if result_label == "DISPROVED"
             else "Medium"
         )
+    elif name in (
+        "plan_investigation", "suggest_scope", "detect_contradictions",
+        "assess_evidence_sufficiency", "cluster_findings", "generate_fingerprint",
+        "find_similar_investigations", "regression_localize", "build_causal_chain",
+        "generate_experiment_plan", "record_experiment_outcome",
+        "score_investigation",
+    ) or data.get("steps") or data.get("verdict") or data.get("pattern"):
+        payload["conclusion"] = str(result.get("message") or data.get("message") or name)
+        payload["confidence"] = str(data.get("confidence") or "Medium")
+        if data.get("mermaid"):
+            payload["evidence_chain"] = str(data.get("mermaid"))
 
     if not (
         payload.get("conclusion")
@@ -24182,6 +24255,727 @@ def recommend_validation_experiments(
         ),
     }
 # ===========================================================================
+# ai_planner
+# ===========================================================================
+
+_TASK_RE = re.compile(r"([A-Za-z_][\w.-]*\s*\[[^\]]+\])")
+_PATTERN_KEYS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("migration", ("migrat", "thrash", "bounce", "ping-pong")),
+    ("mutex", ("mutex", "lock", "contention", "sync")),
+    ("blocking", ("block", "wait", "hold")),
+    ("deadline", ("deadline", "miss", "late")),
+    ("load", ("imbalance", "load", "util")),
+    ("inversion", ("inversion", "inherit", "boost")),
+    ("preemption", ("preempt", "interrupt")),
+    ("wcet", ("wcet", "execution", "runtime")),
+    ("tick", ("tick", "tickless")),
+)
+
+_OUTCOMES: List[Dict[str, Any]] = []
+
+
+def experiment_outcomes() -> List[Dict[str, Any]]:
+    return list(_OUTCOMES)
+
+
+def set_experiment_outcomes(rows: Optional[Sequence[dict]] = None) -> None:
+    _OUTCOMES.clear()
+    for row in rows or []:
+        if isinstance(row, dict):
+            _OUTCOMES.append(dict(row))
+
+
+def _blob(finding: dict) -> str:
+    return f"{finding.get('title') or ''} {finding.get('text') or ''}".lower()
+
+
+def _task_of(finding: dict) -> str:
+    t = str(finding.get("task") or "").strip()
+    if t:
+        return t
+    m = _TASK_RE.search(str(finding.get("text") or finding.get("title") or ""))
+    return m.group(1).replace(" ", "") if m else ""
+
+
+def _patterns(text: str) -> List[str]:
+    blob = str(text or "").lower()
+    return [name for name, keys in _PATTERN_KEYS if any(k in blob for k in keys)]
+
+
+def _band(count: int, high: int = 3, mid: int = 1) -> str:
+    if count >= high:
+        return "HIGH"
+    if count >= mid:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _items(findings: Optional[Sequence[dict]]) -> List[dict]:
+    return [f for f in (findings or []) if isinstance(f, dict)]
+
+
+def score_hypotheses(
+    hypotheses: Optional[Sequence[dict]] = None,
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    contradictions: Optional[Sequence[dict]] = None,
+) -> List[Dict[str, Any]]:
+    """Evidence-weighted hypothesis scores (0–1)."""
+    items = _items(findings)
+    contradicted = {
+        str(c.get("hypothesis_id") or c.get("hypothesis") or "").lower()
+        for c in (contradictions or [])
+        if isinstance(c, dict) and str(c.get("verdict") or "").upper() == "CONTRADICTED"
+    }
+    pool_pat = []
+    for f in items:
+        pool_pat.extend(_patterns(_blob(f)))
+    out: List[Dict[str, Any]] = []
+    raw = [h for h in (hypotheses or []) if isinstance(h, dict)]
+    n = max(len(raw), 1)
+    for i, h in enumerate(raw):
+        hyp = str(h.get("hypothesis") or h.get("description") or "").strip()
+        hid = str(h.get("id") or f"H{i + 1}")
+        prior = 0.55 if i == 0 else max(0.08, 0.35 / i)
+        pats = _patterns(hyp + " " + str(h.get("why") or ""))
+        overlap = sum(1 for p in pats if p in pool_pat)
+        ev_w = min(0.35, 0.12 * overlap)
+        status = str(h.get("status") or "").lower()
+        if status == "supported":
+            ev_w += 0.2
+        elif status == "rejected":
+            ev_w -= 0.35
+        elif status == "need_evidence":
+            ev_w -= 0.05
+        if hid.lower() in contradicted or hyp.lower() in contradicted:
+            ev_w -= 0.4
+        score = max(0.02, min(0.97, prior + ev_w))
+        out.append({
+            **h,
+            "id": hid,
+            "hypothesis": hyp or hid,
+            "prior": round(prior, 3),
+            "score": round(score, 3),
+        })
+    total = sum(float(h["score"]) for h in out) or 1.0
+    for h in out:
+        h["score"] = round(float(h["score"]) / total, 3)
+    out.sort(key=lambda r: -float(r.get("score") or 0))
+    return out
+
+
+def plan_investigation(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    question: str = "",
+    finding_id: str = "",
+) -> Dict[str, Any]:
+    items = _items(findings)
+    focus = items[0] if items else {}
+    if finding_id:
+        want = finding_id.lower()
+        for f in items:
+            if want in str(f.get("id") or "").lower() or want in str(f.get("title") or "").lower():
+                focus = f
+                break
+    task = _task_of(focus)
+    pats = _patterns(_blob(focus) + " " + question)
+    hyps = []
+    labels = {
+        "migration": "Migration thrashing",
+        "mutex": "Mutex contention",
+        "inversion": "Priority inversion",
+        "deadline": "Deadline miss from execution inflation",
+        "load": "Load imbalance",
+        "blocking": "Blocking / wait",
+        "preemption": "Preemption burst",
+        "wcet": "WCET pressure",
+    }
+    seen = set()
+    for p in pats or ["migration"]:
+        if p in seen:
+            continue
+        seen.add(p)
+        hyps.append({"id": f"H{len(hyps) + 1}", "hypothesis": labels.get(p, p), "why": p})
+    if not hyps:
+        hyps = [{"id": "H1", "hypothesis": "Primary finding", "why": "top finding"}]
+    scored = score_hypotheses(hyps, findings=items)
+    steps = ["cluster_findings", "detect_anomalies"]
+    if "migration" in pats:
+        steps += ["query_raw_metric:migrations", "correlate_events"]
+    if "mutex" in pats or "blocking" in pats:
+        steps += ["query_raw_metric:blocking", "detect_priority_inversion"]
+    if "deadline" in pats or "wcet" in pats:
+        steps += ["query_raw_metric:execution", "find_critical_path"]
+    steps += ["detect_contradictions", "assess_evidence_sufficiency"]
+    # unique preserve order
+    uniq = []
+    for s in steps:
+        if s not in uniq:
+            uniq.append(s)
+    times = []
+    for ev in focus.get("evidence") or []:
+        if isinstance(ev, dict) and ev.get("time") is not None:
+            times.append(ev.get("time"))
+    scope = {
+        "tasks": [task] if task else [],
+        "time": [times[0], times[-1]] if len(times) >= 2 else times[:1],
+        "patterns": pats,
+        "finding_id": focus.get("id") or finding_id,
+    }
+    return {
+        "ok": True,
+        "message": f"Plan with {len(scored)} hypotheses, {len(uniq)} steps",
+        "scope": scope,
+        "hypotheses": scored,
+        "steps": uniq,
+        "question": str(question or ""),
+    }
+
+
+def suggest_scope(
+    question: str = "",
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    cursor_lo: Optional[float] = None,
+    cursor_hi: Optional[float] = None,
+) -> Dict[str, Any]:
+    items = _items(findings)
+    q = str(question or "").strip()
+    focus = items[0] if items else {}
+    qlow = q.lower()
+    for f in items:
+        blob = _blob(f)
+        if any(tok in blob for tok in qlow.split() if len(tok) > 3):
+            focus = f
+            break
+        if _task_of(f) and _task_of(f).lower() in qlow:
+            focus = f
+            break
+    task = _task_of(focus)
+    related = []
+    for f in items:
+        t = _task_of(f)
+        if t and t != task and t not in related:
+            related.append(t)
+        if len(related) >= 3:
+            break
+    times = []
+    for ev in focus.get("evidence") or []:
+        if isinstance(ev, dict) and ev.get("time") is not None:
+            try:
+                times.append(float(ev["time"]))
+            except (TypeError, ValueError):
+                pass
+    if cursor_lo is not None and cursor_hi is not None:
+        lo, hi = min(cursor_lo, cursor_hi), max(cursor_lo, cursor_hi)
+    elif len(times) >= 2:
+        lo, hi = min(times), max(times)
+    elif times:
+        lo = hi = times[0]
+    else:
+        lo = hi = None
+    reason = "Top finding plus evidence times."
+    if task and times:
+        reason = f"Focus {task}; evidence clustered at {lo}–{hi}."
+    elif q:
+        reason = f"Interpreted from: {q[:120]}"
+    return {
+        "ok": True,
+        "message": "Recommended investigation scope",
+        "task": task,
+        "related_tasks": related,
+        "time_lo": lo,
+        "time_hi": hi,
+        "finding_id": focus.get("id"),
+        "reason": reason,
+        "apply_scope": True,
+    }
+
+
+def detect_contradictions(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    hypothesis: str = "",
+    metrics: Optional[dict] = None,
+) -> Dict[str, Any]:
+    items = _items(findings)
+    hyp = str(hypothesis or "").strip() or (
+        str((items[0] or {}).get("title") or "") if items else ""
+    )
+    blob = hyp.lower()
+    metrics = metrics if isinstance(metrics, dict) else {}
+    reasons: List[str] = []
+    verdict = "INSUFFICIENT"
+
+    def _num(key: str) -> Optional[float]:
+        try:
+            return float(metrics[key])
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    blocking = _num("blocking") or _num("blocking_pct")
+    execution = _num("execution") or _num("execution_pct")
+    mutex = _num("mutex_hold") or _num("hold")
+    migrations = _num("migrations")
+    if "mutex" in blob or "contention" in blob or "block" in blob:
+        if execution is not None and blocking is not None and execution > blocking * 3:
+            verdict = "CONTRADICTED"
+            reasons.append("Dominant regression is execution, not synchronization.")
+        if mutex is not None and abs(mutex) < 1e-6:
+            verdict = "CONTRADICTED"
+            reasons.append("Mutex hold time unchanged.")
+    if "migrat" in blob or "thrash" in blob:
+        if migrations is not None and migrations < 1:
+            verdict = "CONTRADICTED"
+            reasons.append("Migration count is not elevated.")
+    titles = " ".join(_blob(f) for f in items)
+    if "mutex" in blob and "migrat" in titles and "mutex" not in titles:
+        verdict = "CONTRADICTED"
+        reasons.append("Findings emphasise migration, not mutex.")
+    if not reasons and items:
+        verdict = "SUPPORTED" if any(p in titles for p in _patterns(blob)) else "INSUFFICIENT"
+        if verdict == "SUPPORTED":
+            reasons.append("Finding text overlaps the hypothesis.")
+    return {
+        "ok": True,
+        "message": verdict,
+        "hypothesis": hyp,
+        "verdict": verdict,
+        "reasons": reasons,
+        "metrics": metrics,
+    }
+
+
+def assess_evidence_sufficiency(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    tools_run: Optional[Sequence[str]] = None,
+    contradictions: Optional[Sequence[dict]] = None,
+    coverage: Optional[dict] = None,
+) -> Dict[str, Any]:
+    items = _items(findings)
+    tools = [str(t) for t in (tools_run or [])]
+    cov = coverage if isinstance(coverage, dict) else {}
+    pct = cov.get("percent")
+    if pct is None:
+        pct = min(95, 20 + 15 * min(len(items), 4) + 8 * min(len(tools), 6))
+    try:
+        pct = int(round(float(pct)))
+    except (TypeError, ValueError):
+        pct = 0
+    contradicted = any(
+        str(c.get("verdict") or "").upper() == "CONTRADICTED"
+        for c in (contradictions or []) if isinstance(c, dict)
+    )
+    has_alt = any("mutex" in _blob(f) or "migrat" in _blob(f) for f in items)
+    stop = pct >= 80 and len(tools) >= 2 and not contradicted
+    rec = "STOP INVESTIGATION" if stop else "CONTINUE"
+    if contradicted:
+        rec = "REVISE HYPOTHESIS"
+    return {
+        "ok": True,
+        "message": rec,
+        "coverage_percent": pct,
+        "recommendation": rec,
+        "stop": stop,
+        "supporting": [str(f.get("title") or f.get("id") or "") for f in items[:6]],
+        "tools_run": tools,
+        "contradicted": contradicted,
+        "alternative_seen": has_alt,
+    }
+
+
+def cluster_findings(findings: Optional[Sequence[dict]] = None) -> Dict[str, Any]:
+    items = _items(findings)
+    incidents: List[Dict[str, Any]] = []
+    used = set()
+    for i, f in enumerate(items):
+        if i in used:
+            continue
+        pats = set(_patterns(_blob(f)))
+        task = _task_of(f)
+        members = [f]
+        used.add(i)
+        for j, g in enumerate(items):
+            if j in used:
+                continue
+            gp = set(_patterns(_blob(g)))
+            gt = _task_of(g)
+            if (task and gt == task) or (pats and gp and pats & gp):
+                members.append(g)
+                used.add(j)
+        titles = [str(m.get("title") or m.get("id") or "") for m in members]
+        root = _task_of(members[0])
+        incidents.append({
+            "id": f"I{len(incidents) + 1}",
+            "root_suspect": root,
+            "patterns": sorted(pats),
+            "findings": titles,
+            "count": len(members),
+        })
+    return {
+        "ok": True,
+        "message": f"{len(incidents)} incident cluster(s) from {len(items)} findings",
+        "incidents": incidents,
+    }
+
+
+def generate_fingerprint(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    metrics: Optional[dict] = None,
+) -> Dict[str, Any]:
+    items = _items(findings)
+    counts: Dict[str, int] = {name: 0 for name, _k in _PATTERN_KEYS}
+    for f in items:
+        for p in _patterns(_blob(f)):
+            counts[p] = counts.get(p, 0) + 1
+    metrics = metrics if isinstance(metrics, dict) else {}
+    try:
+        if float(metrics.get("migrations") or 0) > 20:
+            counts["migration"] += 2
+    except (TypeError, ValueError):
+        pass
+    scheduling = {
+        "migration": _band(counts.get("migration", 0)),
+        "load_balance": _band(counts.get("load", 0)),
+        "preemption": _band(counts.get("preemption", 0)),
+    }
+    sync = {
+        "blocking": _band(counts.get("blocking", 0)),
+        "mutex_contention": _band(counts.get("mutex", 0)),
+        "pi": _band(counts.get("inversion", 0)),
+    }
+    timing = {
+        "wcet_pressure": _band(counts.get("wcet", 0)),
+        "deadline_miss": _band(counts.get("deadline", 0)),
+    }
+    hot = [k for k, v in {**scheduling, **sync, **timing}.items() if v == "HIGH"]
+    pattern = " + ".join(hot) if hot else "nominal"
+    return {
+        "ok": True,
+        "message": f"Pattern: {pattern}",
+        "scheduling": scheduling,
+        "synchronization": sync,
+        "timing": timing,
+        "pattern": pattern,
+        "counts": counts,
+    }
+
+
+def _fp_tags(fp: dict) -> set:
+    tags = set()
+    for group in ("scheduling", "synchronization", "timing"):
+        block = fp.get(group) if isinstance(fp.get(group), dict) else {}
+        for k, v in block.items():
+            if str(v).upper() in ("HIGH", "MEDIUM"):
+                tags.add(k)
+    pat = str(fp.get("pattern") or "")
+    if pat:
+        tags.add(pat.lower())
+    return tags
+
+
+def find_similar_investigations(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    history: Optional[Sequence[dict]] = None,
+    limit: int = 5,
+) -> Dict[str, Any]:
+    current = generate_fingerprint(findings)
+    tags = _fp_tags(current)
+    hist = [h for h in (history or []) if isinstance(h, dict)]
+    hist = hist + [h for h in _OUTCOMES if isinstance(h, dict)]
+    scored: List[Dict[str, Any]] = []
+    for i, row in enumerate(hist):
+        fp = row.get("fingerprint") if isinstance(row.get("fingerprint"), dict) else row
+        other = _fp_tags(fp)
+        if not tags and not other:
+            sim = 0
+        else:
+            sim = int(round(100.0 * len(tags & other) / max(len(tags | other), 1)))
+        if sim <= 0:
+            continue
+        scored.append({
+            "id": row.get("id") or f"#{i + 1}",
+            "similarity": sim,
+            "solution": row.get("solution") or row.get("change") or "",
+            "result": row.get("result") or row.get("actual") or "",
+            "pattern": fp.get("pattern") or row.get("pattern") or "",
+        })
+    scored.sort(key=lambda r: -int(r.get("similarity") or 0))
+    scored = scored[: max(1, min(20, int(limit or 5)))]
+    return {
+        "ok": True,
+        "message": f"{len(scored)} similar investigation(s)",
+        "current": current,
+        "matches": scored,
+    }
+
+
+def regression_localize(
+    candidate: Optional[dict] = None,
+    baseline: Optional[dict] = None,
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    label_a: str = "A",
+    label_b: str = "B",
+) -> Dict[str, Any]:
+    cand = candidate if isinstance(candidate, dict) else {}
+    base = baseline if isinstance(baseline, dict) else {}
+    cm = cand.get("metrics") if isinstance(cand.get("metrics"), dict) else cand
+    bm = base.get("metrics") if isinstance(base.get("metrics"), dict) else base
+    deltas = {}
+    for key in ("execution", "migrations", "preemptions", "blocking", "load_balance_score"):
+        try:
+            a = float(cm.get(key))
+            b = float(bm.get(key))
+            deltas[key] = round(a - b, 3)
+        except (TypeError, ValueError):
+            continue
+    items = _items(findings)
+    task = _task_of(items[0]) if items else ""
+    times = []
+    for f in items:
+        for ev in f.get("evidence") or []:
+            if isinstance(ev, dict) and ev.get("time") is not None:
+                times.append(ev.get("time"))
+    region = [min(times), max(times)] if times else []
+    mech = []
+    if deltas.get("migrations", 0) > 0:
+        mech.append("migration")
+    if deltas.get("preemptions", 0) > 0:
+        mech.append("preemption")
+    if deltas.get("execution", 0) > 0:
+        mech.append("execution inflation")
+    return {
+        "ok": True,
+        "message": f"Localized {label_a} vs {label_b}",
+        "overall": deltas,
+        "task": task,
+        "region": region,
+        "likely_mechanism": " → ".join(mech) or "unspecified",
+        "primary_change": deltas,
+    }
+
+
+def build_causal_chain(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    events: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    items = _items(findings)
+    pats = []
+    for f in items:
+        for p in _patterns(_blob(f)):
+            if p not in pats:
+                pats.append(p)
+    order = ["migration", "preemption", "wcet", "blocking", "deadline"]
+    nodes = [p for p in order if p in pats]
+    if not nodes:
+        nodes = pats[:4] or ["finding"]
+    edges = []
+    for a, b in zip(nodes, nodes[1:]):
+        rel = "temporal" if a in ("migration", "preemption") else "correlated"
+        if a == "migration" and b in ("preemption", "wcet"):
+            rel = "causal"
+        edges.append({
+            "from": a,
+            "to": b,
+            "relationship": rel,
+            "confidence": "Medium" if rel != "causal" else "Low",
+            "evidence": [str(f.get("title") or "") for f in items[:3]],
+        })
+    lines = ["graph TD"]
+    for i, n in enumerate(nodes):
+        lines.append(f"N{i}[{n}]")
+    for i in range(1, len(nodes)):
+        lines.append(f"N{i-1} --> N{i}")
+    extra = [e for e in (events or []) if isinstance(e, dict)]
+    return {
+        "ok": True,
+        "message": f"{len(nodes)}-step causal chain",
+        "nodes": nodes,
+        "edges": edges,
+        "mermaid": "\n".join(lines),
+        "event_count": len(extra),
+        "disclaimer": "correlation should never silently become causation",
+    }
+
+
+def generate_experiment_plan(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    task: str = "",
+    limit: int = 3,
+) -> Dict[str, Any]:
+    items = _items(findings)
+    t = str(task or "").strip() or (_task_of(items[0]) if items else "the hot task")
+    blob = " ".join(_blob(f) for f in items)
+    plans: List[Dict[str, Any]] = []
+    if "migrat" in blob or "thrash" in blob or not blob:
+        plans.append({
+            "title": f"Pin {t} to Core_0",
+            "change": f"pin {t} to Core_0",
+            "expected": "migrations -40~60%",
+            "risk": "load imbalance",
+        })
+    if "mutex" in blob or "block" in blob:
+        plans.append({
+            "title": "Reduce mutex hold time 30%",
+            "change": f"reduce mutex contention 30% for {t}",
+            "expected": "blocking -25~35%",
+            "risk": "throughput on holder",
+        })
+    if "invert" in blob or "priorit" in blob:
+        plans.append({
+            "title": f"Raise waiter priority / shorten inherit for {t}",
+            "change": f"raise priority of waiter of {t}",
+            "expected": "PI duration -20%",
+            "risk": "starve lower tasks",
+        })
+    if "deadline" in blob or "wcet" in blob:
+        plans.append({
+            "title": f"Trim WCET of {t}",
+            "change": f"reduce execution of {t} 20%",
+            "expected": "deadline misses down",
+            "risk": "feature cut",
+        })
+    plans = plans[: max(1, min(8, int(limit or 3)))]
+    return {
+        "ok": True,
+        "message": f"{len(plans)} experiment plan(s)",
+        "task": t,
+        "experiments": plans,
+        "actions": ["what_if", "optimize_experiment", "validate_experiment"],
+    }
+
+
+def record_experiment_outcome(
+    *,
+    change: str = "",
+    predicted: str = "",
+    actual: str = "",
+    quality: str = "",
+    fingerprint: Optional[dict] = None,
+    findings: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    pred = str(predicted or "")
+    act = str(actual or "")
+    q = str(quality or "").strip().upper()
+    if not q:
+        q = "GOOD" if pred and act and pred[:8] == act[:8] else (
+            "PARTIAL" if act else "UNKNOWN"
+        )
+    fp = fingerprint if isinstance(fingerprint, dict) else generate_fingerprint(findings)
+    row = {
+        "id": f"E{len(_OUTCOMES) + 1}",
+        "change": str(change or ""),
+        "predicted": pred,
+        "actual": act,
+        "quality": q,
+        "fingerprint": fp,
+        "solution": str(change or ""),
+        "result": act,
+        "confidence_delta": 1 if q == "GOOD" else (-1 if q == "BAD" else 0),
+    }
+    _OUTCOMES.append(row)
+    return {
+        "ok": True,
+        "message": f"Recorded outcome {row['id']} ({q})",
+        "outcome": row,
+        "history_size": len(_OUTCOMES),
+        "future_recommendation_confidence": "up" if row["confidence_delta"] > 0 else (
+            "down" if row["confidence_delta"] < 0 else "unchanged"
+        ),
+    }
+
+
+def score_investigation_metrics(
+    *,
+    expected: Optional[dict] = None,
+    actual_conclusion: str = "",
+    tools: Optional[Sequence[str]] = None,
+    elapsed_s: Optional[float] = None,
+    evidence_quality: Optional[dict] = None,
+    catalog: Optional[dict] = None,
+    passed: bool = True,
+    confidence: str = "",
+    finding_score: int = 0,
+) -> Dict[str, Any]:
+    """Phase 3 measurable scores (0–100) for a finished investigation."""
+    tools_l = [str(t) for t in (tools or [])]
+    n_tools = max(len(tools_l), 1)
+    exp = expected if isinstance(expected, dict) else {}
+    try:
+        fs = int(finding_score)
+    except (TypeError, ValueError):
+        fs = 0
+    evidence_efficiency = int(round(min(100, fs / n_tools * (3 if n_tools <= 3 else 1))))
+    lat = 0.0
+    if elapsed_s is not None:
+        try:
+            lat = float(elapsed_s)
+        except (TypeError, ValueError):
+            lat = 0.0
+    # Lower tools+latency is better; map onto 0–100.
+    investigation_cost = int(max(0, min(100, 100 - 4 * len(tools_l) - min(40, lat))))
+    conf = str(confidence or "").lower()
+    band = str((evidence_quality or {}).get("band") or "").lower()
+    high_conf = "high" in conf or band in ("strong", "medium-high")
+    false_confidence = 0 if (high_conf and not passed) else 100
+    falsify_tools = {
+        "detect_contradictions", "manage_hypotheses", "assess_evidence_sufficiency",
+    }
+    falsification_quality = 100 if any(t in falsify_tools for t in tools_l) else (
+        60 if "investigate" in tools_l else 30
+    )
+    cat = catalog if isinstance(catalog, dict) else {}
+    want_tasks = [str(x).lower() for x in (exp.get("tasks") or cat.get("tasks") or [])]
+    conc = str(actual_conclusion or "").lower()
+    if not want_tasks:
+        scope_accuracy = 100
+    else:
+        hits = sum(1 for t in want_tasks if t in conc)
+        scope_accuracy = int(round(100.0 * hits / len(want_tasks)))
+    stop_efficiency = 100 if "assess_evidence_sufficiency" in tools_l else (
+        80 if len(tools_l) <= 6 else max(20, 80 - 8 * (len(tools_l) - 6))
+    )
+    return {
+        "evidence_efficiency": evidence_efficiency,
+        "investigation_cost": investigation_cost,
+        "false_confidence": false_confidence,
+        "falsification_quality": falsification_quality,
+        "scope_accuracy": scope_accuracy,
+        "stop_efficiency": stop_efficiency,
+    }
+
+
+def score_investigation_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    tools_run: Optional[Sequence[str]] = None,
+    elapsed_s: Optional[float] = None,
+    conclusion: str = "",
+    confidence: str = "",
+) -> Dict[str, Any]:
+    metrics = score_investigation_metrics(
+        actual_conclusion=conclusion,
+        tools=tools_run,
+        elapsed_s=elapsed_s,
+        passed=True,
+        confidence=confidence,
+        finding_score=min(100, 20 * len(_items(findings))),
+        catalog={"tasks": [_task_of(f) for f in _items(findings) if _task_of(f)]},
+    )
+    return {
+        "ok": True,
+        "message": "Investigation scores",
+        **metrics,
+        "tools_run": list(tools_run or []),
+    }
+# ===========================================================================
 # ai_tools
 # ===========================================================================
 
@@ -24221,6 +25015,18 @@ AI_TOOL_EXPLAIN_FINDING = "explain_finding"
 AI_TOOL_INTERPRET_QUERY = "interpret_query"
 AI_TOOL_VALIDATE_EXPERIMENT = "validate_experiment"
 AI_TOOL_MANAGE_HYPOTHESES = "manage_hypotheses"
+AI_TOOL_PLAN_INVESTIGATION = "plan_investigation"
+AI_TOOL_SUGGEST_SCOPE = "suggest_scope"
+AI_TOOL_DETECT_CONTRADICTIONS = "detect_contradictions"
+AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY = "assess_evidence_sufficiency"
+AI_TOOL_CLUSTER_FINDINGS = "cluster_findings"
+AI_TOOL_GENERATE_FINGERPRINT = "generate_fingerprint"
+AI_TOOL_FIND_SIMILAR_INVESTIGATIONS = "find_similar_investigations"
+AI_TOOL_REGRESSION_LOCALIZE = "regression_localize"
+AI_TOOL_BUILD_CAUSAL_CHAIN = "build_causal_chain"
+AI_TOOL_GENERATE_EXPERIMENT_PLAN = "generate_experiment_plan"
+AI_TOOL_RECORD_EXPERIMENT_OUTCOME = "record_experiment_outcome"
+AI_TOOL_SCORE_INVESTIGATION = "score_investigation"
 
 AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_SET_CURSORS,
@@ -24259,6 +25065,18 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_INTERPRET_QUERY,
     AI_TOOL_VALIDATE_EXPERIMENT,
     AI_TOOL_MANAGE_HYPOTHESES,
+    AI_TOOL_PLAN_INVESTIGATION,
+    AI_TOOL_SUGGEST_SCOPE,
+    AI_TOOL_DETECT_CONTRADICTIONS,
+    AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY,
+    AI_TOOL_CLUSTER_FINDINGS,
+    AI_TOOL_GENERATE_FINGERPRINT,
+    AI_TOOL_FIND_SIMILAR_INVESTIGATIONS,
+    AI_TOOL_REGRESSION_LOCALIZE,
+    AI_TOOL_BUILD_CAUSAL_CHAIN,
+    AI_TOOL_GENERATE_EXPERIMENT_PLAN,
+    AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
+    AI_TOOL_SCORE_INVESTIGATION,
 )
 
 AI_BOOKMARK_KINDS: Tuple[str, ...] = (
@@ -24377,8 +25195,13 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "bookmark_finding, investigation_replay, what_if, optimize_experiment, analyze_traces, "
     "baseline_score, recommend_experiments, export_investigation, "
     "detect_priority_inversion, find_related_findings, compare_tasks, "
-    "explain_finding, interpret_query, validate_experiment, manage_hypotheses. "
-    "For root-cause or Investigate templates: call detect_anomalies and "
+    "explain_finding, interpret_query, validate_experiment, manage_hypotheses, "
+    "plan_investigation, suggest_scope, detect_contradictions, "
+    "assess_evidence_sufficiency, cluster_findings, generate_fingerprint, "
+    "find_similar_investigations, regression_localize, build_causal_chain, "
+    "generate_experiment_plan, record_experiment_outcome, score_investigation. "
+    "For root-cause or Investigate templates: call plan_investigation and "
+    "suggest_scope, then detect_anomalies and "
     "investigate(finding_id) first for a root-cause chain, then "
     "correlate_events / query_raw_metric / search_timeline / find_critical_path, then set_cursors "
     "+ zoom_to_range + highlight_task on the worst episode before concluding. "
@@ -25389,6 +26212,184 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_PLAN_INVESTIGATION,
+                "description": (
+                    "Plan the cheapest tool sequence and rank hypotheses before "
+                    "running the rest of an investigation."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string"},
+                        "finding_id": {"type": "string"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_SUGGEST_SCOPE,
+                "description": (
+                    "Recommend task / related tasks / time window before "
+                    "Limit to C1–Cn."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_DETECT_CONTRADICTIONS,
+                "description": (
+                    "Test whether current metrics/findings contradict the "
+                    "leading hypothesis."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "hypothesis": {"type": "string"},
+                        "metrics": {"type": "object"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY,
+                "description": (
+                    "Decide whether to STOP INVESTIGATION, continue, or revise "
+                    "the hypothesis."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tools_run": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_CLUSTER_FINDINGS,
+                "description": "Group related Analysis Findings into one incident.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_GENERATE_FINGERPRINT,
+                "description": "Compact scheduling/sync/timing signature of this trace.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_FIND_SIMILAR_INVESTIGATIONS,
+                "description": "Match this trace fingerprint against recorded outcomes.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"limit": {"type": "integer"}},
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_REGRESSION_LOCALIZE,
+                "description": (
+                    "Localize A vs B execution inflation to a task and time region."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "label_a": {"type": "string"},
+                        "label_b": {"type": "string"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_BUILD_CAUSAL_CHAIN,
+                "description": (
+                    "Build a causal/correlated/temporal chain. Correlation is "
+                    "never silently treated as causation."
+                ),
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_GENERATE_EXPERIMENT_PLAN,
+                "description": "Propose ranked firmware / what-if experiments.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": {"type": "string"},
+                        "limit": {"type": "integer"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
+                "description": (
+                    "Store predicted vs actual experiment results to improve "
+                    "future recommendations."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "change": {"type": "string"},
+                        "predicted": {"type": "string"},
+                        "actual": {"type": "string"},
+                        "quality": {"type": "string"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_SCORE_INVESTIGATION,
+                "description": (
+                    "Score evidence efficiency, cost, false-confidence, "
+                    "falsification, scope accuracy, and stop efficiency."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tools_run": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "conclusion": {"type": "string"},
+                        "confidence": {"type": "string"},
+                        "elapsed_s": {"type": "number"},
+                    },
+                },
+            },
+        },
     ]
 
 
@@ -25877,6 +26878,18 @@ def is_query_tool(name: str) -> bool:
         AI_TOOL_INTERPRET_QUERY,
         AI_TOOL_VALIDATE_EXPERIMENT,
         AI_TOOL_MANAGE_HYPOTHESES,
+        AI_TOOL_PLAN_INVESTIGATION,
+        AI_TOOL_SUGGEST_SCOPE,
+        AI_TOOL_DETECT_CONTRADICTIONS,
+        AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY,
+        AI_TOOL_CLUSTER_FINDINGS,
+        AI_TOOL_GENERATE_FINGERPRINT,
+        AI_TOOL_FIND_SIMILAR_INVESTIGATIONS,
+        AI_TOOL_REGRESSION_LOCALIZE,
+        AI_TOOL_BUILD_CAUSAL_CHAIN,
+        AI_TOOL_GENERATE_EXPERIMENT_PLAN,
+        AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
+        AI_TOOL_SCORE_INVESTIGATION,
     )
 
 
@@ -26268,6 +27281,79 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
             "reason": str(a.get("reason") or "").strip(),
             "finding_id": str(a.get("finding_id") or "").strip(),
         }, ""
+    if name == AI_TOOL_PLAN_INVESTIGATION:
+        return {
+            "question": str(a.get("question") or "").strip(),
+            "finding_id": str(a.get("finding_id") or "").strip(),
+        }, ""
+    if name == AI_TOOL_SUGGEST_SCOPE:
+        return {"question": str(a.get("question") or "").strip()}, ""
+    if name == AI_TOOL_DETECT_CONTRADICTIONS:
+        metrics = a.get("metrics") if isinstance(a.get("metrics"), dict) else {}
+        return {
+            "hypothesis": str(a.get("hypothesis") or "").strip(),
+            "metrics": metrics,
+        }, ""
+    if name == AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY:
+        tools = a.get("tools_run")
+        if tools is not None and not isinstance(tools, (list, tuple)):
+            return None, "tools_run must be an array"
+        return {
+            "tools_run": [str(t) for t in (tools or [])],
+        }, ""
+    if name in (
+        AI_TOOL_CLUSTER_FINDINGS,
+        AI_TOOL_GENERATE_FINGERPRINT,
+        AI_TOOL_BUILD_CAUSAL_CHAIN,
+    ):
+        return {}, ""
+    if name == AI_TOOL_FIND_SIMILAR_INVESTIGATIONS:
+        limit = a.get("limit", 5)
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            return None, "limit must be an integer"
+        return {"limit": limit}, ""
+    if name == AI_TOOL_REGRESSION_LOCALIZE:
+        return {
+            "label_a": str(a.get("label_a") or "A").strip() or "A",
+            "label_b": str(a.get("label_b") or "B").strip() or "B",
+        }, ""
+    if name == AI_TOOL_GENERATE_EXPERIMENT_PLAN:
+        limit = a.get("limit", 3)
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 3
+        return {
+            "task": str(a.get("task") or "").strip(),
+            "limit": limit,
+        }, ""
+    if name == AI_TOOL_RECORD_EXPERIMENT_OUTCOME:
+        return {
+            "change": str(a.get("change") or "").strip(),
+            "predicted": str(a.get("predicted") or "").strip(),
+            "actual": str(a.get("actual") or "").strip(),
+            "quality": str(a.get("quality") or "").strip(),
+        }, ""
+    if name == AI_TOOL_SCORE_INVESTIGATION:
+        tools = a.get("tools_run")
+        if tools is not None and not isinstance(tools, (list, tuple)):
+            return None, "tools_run must be an array"
+        elapsed = a.get("elapsed_s")
+        if elapsed not in (None, ""):
+            try:
+                elapsed = float(elapsed)
+            except (TypeError, ValueError):
+                return None, "elapsed_s must be a number"
+        else:
+            elapsed = None
+        return {
+            "tools_run": [str(t) for t in (tools or [])],
+            "conclusion": str(a.get("conclusion") or "").strip(),
+            "confidence": str(a.get("confidence") or "").strip(),
+            "elapsed_s": elapsed,
+        }, ""
     return None, f"unknown tool {name!r}"
 
 
@@ -26412,6 +27498,30 @@ def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
         hid = str(a.get("hypothesis_id") or "").strip() or "hypothesis"
         st = str(a.get("status") or "").strip() or "status"
         return f"Hypothesis {hid} → {st}"
+    if name == AI_TOOL_PLAN_INVESTIGATION:
+        return "Plan investigation"
+    if name == AI_TOOL_SUGGEST_SCOPE:
+        return "Suggest investigation scope"
+    if name == AI_TOOL_DETECT_CONTRADICTIONS:
+        return "Detect contradictions"
+    if name == AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY:
+        return "Assess evidence sufficiency"
+    if name == AI_TOOL_CLUSTER_FINDINGS:
+        return "Cluster findings"
+    if name == AI_TOOL_GENERATE_FINGERPRINT:
+        return "Generate trace fingerprint"
+    if name == AI_TOOL_FIND_SIMILAR_INVESTIGATIONS:
+        return "Find similar investigations"
+    if name == AI_TOOL_REGRESSION_LOCALIZE:
+        return "Localize regression"
+    if name == AI_TOOL_BUILD_CAUSAL_CHAIN:
+        return "Build causal chain"
+    if name == AI_TOOL_GENERATE_EXPERIMENT_PLAN:
+        return "Generate experiment plan"
+    if name == AI_TOOL_RECORD_EXPERIMENT_OUTCOME:
+        return "Record experiment outcome"
+    if name == AI_TOOL_SCORE_INVESTIGATION:
+        return "Score investigation"
     return name.replace("_", " ")
 
 
@@ -27272,6 +28382,123 @@ def manage_hypotheses_tool(
         f"Updated hypothesis {hypothesis_id} → {status}",
         data={"hypotheses": updated, "finding": ctx.get("finding")},
     )
+
+
+def _planner_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    ok = bool(payload.get("ok"))
+    msg = str(payload.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in payload.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def plan_investigation_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    question: str = "",
+    finding_id: str = "",
+) -> Dict[str, Any]:
+    return _planner_payload(plan_investigation(
+        findings, question=question, finding_id=finding_id))
+
+
+def suggest_scope_tool(
+    question: str = "",
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    cursor_lo: Optional[float] = None,
+    cursor_hi: Optional[float] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(suggest_scope(
+        question, findings, cursor_lo=cursor_lo, cursor_hi=cursor_hi))
+
+
+def detect_contradictions_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    hypothesis: str = "",
+    metrics: Optional[dict] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(detect_contradictions(
+        findings, hypothesis=hypothesis, metrics=metrics))
+
+
+def assess_evidence_sufficiency_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    tools_run: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(assess_evidence_sufficiency(
+        findings, tools_run=tools_run))
+
+
+def cluster_findings_tool(findings: Optional[Sequence[dict]] = None) -> Dict[str, Any]:
+    return _planner_payload(cluster_findings(findings))
+
+
+def generate_fingerprint_tool(findings: Optional[Sequence[dict]] = None) -> Dict[str, Any]:
+    return _planner_payload(generate_fingerprint(findings))
+
+
+def find_similar_investigations_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    history: Optional[Sequence[dict]] = None,
+    limit: int = 5,
+) -> Dict[str, Any]:
+    return _planner_payload(find_similar_investigations(
+        findings, history=history, limit=limit))
+
+
+def regression_localize_tool(
+    candidate: Optional[dict] = None,
+    baseline: Optional[dict] = None,
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    label_a: str = "A",
+    label_b: str = "B",
+) -> Dict[str, Any]:
+    return _planner_payload(regression_localize(
+        candidate, baseline, findings=findings, label_a=label_a, label_b=label_b))
+
+
+def build_causal_chain_tool(findings: Optional[Sequence[dict]] = None) -> Dict[str, Any]:
+    return _planner_payload(build_causal_chain(findings))
+
+
+def generate_experiment_plan_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    task: str = "",
+    limit: int = 3,
+) -> Dict[str, Any]:
+    return _planner_payload(generate_experiment_plan(
+        findings, task=task, limit=limit))
+
+
+def record_experiment_outcome_tool(
+    *,
+    change: str = "",
+    predicted: str = "",
+    actual: str = "",
+    quality: str = "",
+    findings: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(record_experiment_outcome(
+        change=change, predicted=predicted, actual=actual,
+        quality=quality, findings=findings))
+
+
+def score_investigation_metrics_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    tools_run: Optional[Sequence[str]] = None,
+    elapsed_s: Optional[float] = None,
+    conclusion: str = "",
+    confidence: str = "",
+) -> Dict[str, Any]:
+    return _planner_payload(score_investigation_tool(
+        findings, tools_run=tools_run, elapsed_s=elapsed_s,
+        conclusion=conclusion, confidence=confidence))
 
 
 def _events_from_metric_payload(payload: Dict[str, Any], metric: str, task: str) -> List[dict]:
@@ -57265,6 +58492,110 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 str(args.get("status") or ""),
                 reason=str(args.get("reason") or ""),
                 finding_id=str(args.get("finding_id") or ""),
+            )
+        findings = []
+        try:
+            panel = getattr(self, "_stats_panel", None)
+            if panel is not None and hasattr(panel, "build_analysis_findings"):
+                findings, _scope = panel.build_analysis_findings()
+        except Exception:
+            findings = []
+        if name == AI_TOOL_PLAN_INVESTIGATION:
+            return plan_investigation_tool(
+                findings,
+                question=str(args.get("question") or ""),
+                finding_id=str(args.get("finding_id") or ""),
+            )
+        if name == AI_TOOL_SUGGEST_SCOPE:
+            lo = hi = None
+            view = getattr(self, "_view", None)
+            times = []
+            if view is not None and hasattr(view, "_scene"):
+                times = list(view._scene.cursor_times() or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+            return suggest_scope_tool(
+                str(args.get("question") or ""),
+                findings,
+                cursor_lo=lo,
+                cursor_hi=hi,
+            )
+        if name == AI_TOOL_DETECT_CONTRADICTIONS:
+            return detect_contradictions_tool(
+                findings,
+                hypothesis=str(args.get("hypothesis") or ""),
+                metrics=args.get("metrics") if isinstance(args.get("metrics"), dict) else {},
+            )
+        if name == AI_TOOL_ASSESS_EVIDENCE_SUFFICIENCY:
+            return assess_evidence_sufficiency_tool(
+                findings, tools_run=args.get("tools_run") or [])
+        if name == AI_TOOL_CLUSTER_FINDINGS:
+            return cluster_findings_tool(findings)
+        if name == AI_TOOL_GENERATE_FINGERPRINT:
+            return generate_fingerprint_tool(findings)
+        if name == AI_TOOL_FIND_SIMILAR_INVESTIGATIONS:
+            from .ai_planner import set_experiment_outcomes
+            raw = self._settings.get("ai", "experiment_outcomes", "")
+            hist = []
+            if raw:
+                try:
+                    hist = json.loads(raw)
+                except (TypeError, ValueError):
+                    hist = []
+            if isinstance(hist, list):
+                set_experiment_outcomes(hist)
+            payload = find_similar_investigations_tool(
+                findings, history=hist if isinstance(hist, list) else [],
+                limit=int(args.get("limit") or 5),
+            )
+            return payload
+        if name == AI_TOOL_REGRESSION_LOCALIZE:
+            cmp_ = getattr(self, "_last_ai_compare", None) or {}
+            return regression_localize_tool(
+                cmp_.get("candidate") or cmp_.get("a") or {},
+                cmp_.get("baseline") or cmp_.get("b") or {},
+                findings=findings,
+                label_a=str(args.get("label_a") or "A"),
+                label_b=str(args.get("label_b") or "B"),
+            )
+        if name == AI_TOOL_BUILD_CAUSAL_CHAIN:
+            return build_causal_chain_tool(findings)
+        if name == AI_TOOL_GENERATE_EXPERIMENT_PLAN:
+            return generate_experiment_plan_tool(
+                findings,
+                task=str(args.get("task") or ""),
+                limit=int(args.get("limit") or 3),
+            )
+        if name == AI_TOOL_RECORD_EXPERIMENT_OUTCOME:
+            from .ai_planner import experiment_outcomes
+            payload = record_experiment_outcome_tool(
+                change=str(args.get("change") or ""),
+                predicted=str(args.get("predicted") or ""),
+                actual=str(args.get("actual") or ""),
+                quality=str(args.get("quality") or ""),
+                findings=findings,
+            )
+            try:
+                self._settings.set(
+                    "ai", "experiment_outcomes",
+                    json.dumps(experiment_outcomes(), ensure_ascii=True),
+                    flush=False,
+                )
+            except Exception:
+                pass
+            return payload
+        if name == AI_TOOL_SCORE_INVESTIGATION:
+            elapsed = args.get("elapsed_s")
+            try:
+                elapsed = float(elapsed) if elapsed not in (None, "") else None
+            except (TypeError, ValueError):
+                elapsed = None
+            return score_investigation_metrics_tool(
+                findings,
+                tools_run=args.get("tools_run") or [],
+                elapsed_s=elapsed,
+                conclusion=str(args.get("conclusion") or ""),
+                confidence=str(args.get("confidence") or ""),
             )
         raise RuntimeError(f"unknown tool {name}")
 
