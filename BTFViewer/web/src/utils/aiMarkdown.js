@@ -122,8 +122,8 @@ function inlineToHtml(text) {
 const MD_TABLE_ALIGN_RE = /^:?-{1,}:?$/
 const HTML_TABLE_START_RE = /^<table\b/i
 const HTML_TABLE_END_RE = /<\/table\s*>/i
-const AI_MD_TH_STYLE = 'border:1px solid #3a4658;padding:4px 8px;background:#243044;color:#e8eef6;font-weight:600;'
-const AI_MD_TD_STYLE = 'border:1px solid #3a4658;padding:4px 8px;background:#1a2230;color:#dbe2ea;'
+const AI_MD_TH_STYLE = 'border:1px solid var(--border, #3a4658);padding:4px 8px;background:var(--ai-md-th-bg, #243044);color:var(--ai-md-th-fg, #e8eef6);font-weight:600;'
+const AI_MD_TD_STYLE = 'border:1px solid var(--border, #3a4658);padding:4px 8px;background:var(--ai-md-td-bg, #1a2230);color:var(--ai-md-td-fg, #dbe2ea);'
 const AI_MD_TABLE_OPEN = '<table class="ai-md-table" width="100%" cellspacing="0" cellpadding="4">'
 
 function splitMdTableRow(line) {

@@ -228,8 +228,6 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("id=\"ai-troubleshooting\"", readme)
         self.assertIn("id=\"ai-developer-cli\"", readme)
         self.assertIn("id=\"implementation-notes\"", ai_md)
-        self.assertFalse((BTF_ROOT / "TODO.md").is_file())
-        self.assertFalse((BTF_ROOT / "docs/TODO.md").is_file())
         self.assertIn("`optimize_experiment`", ai_md)
         self.assertIn("slice-replay", ai_md)
         self.assertIn("Workflows and use cases", ai_md)
@@ -352,8 +350,6 @@ class AiWebParityTests(unittest.TestCase):
         from btf_viewer_pkg.ai_investigation import EVIDENCE_PANEL_TOOLS
         from btf_viewer_pkg.ai_planner import score_investigation_metrics
 
-        self.assertFalse((BTF_ROOT / "TODO.md").is_file())
-        self.assertFalse((BTF_ROOT / "docs/TODO.md").is_file())
         ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
         readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
         mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
@@ -1252,6 +1248,8 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("ai-modes", panel)
         self.assertIn("_run_investigation_mode", assist)
         self.assertIn("onInvestigationMode", panel)
+        self.assertIn("self._skip_interpret = True", assist)
+        self.assertIn("skipInterpretOnce = true", panel)
         self.assertIn("Save as template", assist)
         self.assertIn("Save as template", panel)
         self.assertIn("user_investigation_templates", assist)

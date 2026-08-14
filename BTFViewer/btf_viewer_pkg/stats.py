@@ -13513,12 +13513,17 @@ class _SettingsDialog(QDialog):
 
         self._ollama_test_status = QLabel(
             "Click Test connection to verify the endpoint and model.")
+        self._ollama_test_status.setObjectName("aiTestStatus")
         self._ollama_test_status.setWordWrap(True)
-        self._ollama_test_status.setMinimumHeight(40)
+        self._ollama_test_status.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
         self._ollama_test_status.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self._ollama_test_status.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self._ollama_test_status.setMinimumHeight(40)
         self._ollama_test_status.setStyleSheet(
-            "color:#888; padding:4px 0; min-height:40px;")
+            "color:#888; padding:4px 0;")
         f4.addRow(self._ollama_test_status)
 
         self._ai_hint = QLabel("")
@@ -13533,7 +13538,14 @@ class _SettingsDialog(QDialog):
         self._ollama_test_worker = None
         self._ai_list_worker = None
 
-        self._content_stack.addWidget(p4)
+        p4_scroll = QScrollArea()
+        p4_scroll.setObjectName("aiSettingsScroll")
+        p4_scroll.setWidgetResizable(True)
+        p4_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        p4_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        p4_scroll.setWidget(p4)
+        self._content_stack.addWidget(p4_scroll)
 
         # -- Sidebar <-> stack sync ---------------------------------------------
         self._sidebar.currentRowChanged.connect(self._content_stack.setCurrentIndex)
@@ -13774,9 +13786,24 @@ class _SettingsDialog(QDialog):
 
     def _set_ai_status(self, message: str, kind: str = "info") -> None:
         color = {"ok": "#1e8449", "error": "#c0392b"}.get(kind, "#888")
-        self._ollama_test_status.setStyleSheet(
-            f"color:{color}; padding:4px 0; min-height:40px;")
+        self._ollama_test_status.setStyleSheet(f"color:{color}; padding:4px 0;")
         self._ollama_test_status.setText(message)
+        self._ollama_test_status.updateGeometry()
+        scroll = None
+        w = self._ollama_test_status.parentWidget()
+        while w is not None:
+            if isinstance(w, QScrollArea):
+                scroll = w
+                break
+            w = w.parentWidget()
+        if scroll is not None:
+            inner = scroll.widget()
+            if inner is not None:
+                inner.adjustSize()
+            QTimer.singleShot(
+                0,
+                lambda: scroll.ensureWidgetVisible(self._ollama_test_status, 0, 8),
+            )
 
     def _ai_combo_preset_ids(self) -> List[str]:
         return [

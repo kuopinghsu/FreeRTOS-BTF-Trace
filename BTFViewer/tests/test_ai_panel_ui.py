@@ -779,6 +779,31 @@ class AiPanelUiTests(unittest.TestCase):
         send.assert_called_once()
         self.assertIn("Test hypothesis", panel._input.toPlainText())
 
+    def test_quick_mode_sends_without_interpret_gate(self) -> None:
+        panel = self._panel()
+        with patch.object(panel, "_send_query") as send, patch(
+            "btf_viewer_pkg.ai_assistant.interpret_investigation_query",
+        ) as interp:
+            panel._run_investigation_mode("quick")
+        send.assert_called_once()
+        interp.assert_not_called()
+        self.assertFalse(panel._skip_interpret)
+        query = send.call_args[0][0]
+        self.assertIn("Call these tools in order", query)
+        self.assertIn("detect_anomalies", query)
+
+    def test_investigation_template_sends_without_interpret_gate(self) -> None:
+        from btf_viewer_pkg.ai_case import builtin_investigation_templates
+
+        panel = self._panel()
+        tpl = builtin_investigation_templates()[0]
+        with patch.object(panel, "_send_query") as send, patch(
+            "btf_viewer_pkg.ai_assistant.interpret_investigation_query",
+        ) as interp:
+            panel._run_investigation_template(tpl)
+        send.assert_called_once()
+        interp.assert_not_called()
+
     def test_template_ux_busy_disables_modes_and_investigations(self) -> None:
         from btf_viewer_pkg.ai_assistant import (
             AI_TEMPLATE_MENU_GROUPS, AI_TEMPLATE_PRIMARY_IDS,
@@ -846,9 +871,12 @@ class AiPanelUiTests(unittest.TestCase):
             if w.objectName() == "aiMoreHeading"
         ]
         self.assertEqual(labels, headings)
+        for btn in panel._more_menu.findChildren(QPushButton):
+            if btn.objectName() == "aiMoreItem":
+                self.assertTrue(btn.text().replace("&", "").strip(), btn.objectName())
         for lab in panel._more_menu.findChildren(QLabel):
             if lab.objectName() == "aiMoreHeading":
-                self.assertFalse(lab.isEnabled(), lab.text())
+                self.assertTrue(lab.isEnabled(), lab.text())
         grid = panel._more_menu.findChild(QGridLayout)
         self.assertIsNotNone(grid)
         self.assertEqual(grid.columnCount(), 2)
@@ -915,6 +943,29 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertIn(_AI_TPL_DISABLED_COLOR, _AI_TPL_BTN_STYLE)
         self.assertIn("QPushButton#aiMoreItem:disabled", _AI_MORE_MENU_STYLE)
         self.assertIn(_AI_TPL_DISABLED_COLOR, _AI_MORE_MENU_STYLE)
+        self.assertIn("background: #1a2230", _AI_MORE_MENU_STYLE)
+        self.assertNotIn("background: transparent", _AI_MORE_MENU_STYLE)
+        from btf_viewer_pkg.ai_assistant import _ai_more_menu_style
+        light = _ai_more_menu_style(False)
+        self.assertIn("background: #F5F5F5", light)
+        self.assertNotIn("background: #1a2230", light)
+        panel.apply_theme(False)
+        self.assertIn("background: #F5F5F5", panel._more_menu.styleSheet())
+        item = panel._more_menu.findChild(QPushButton, "aiMoreItem")
+        self.assertIsNotNone(item)
+        self.assertIn("background: #F5F5F5", item.styleSheet())
+        heading = panel._more_menu.findChild(QLabel, "aiMoreHeading")
+        self.assertIsNotNone(heading)
+        self.assertTrue(heading.isEnabled())
+        self.assertIn("background: #F5F5F5", heading.styleSheet())
+        self.assertIn("color: #666666", heading.styleSheet())
+        panel._append("user", "theme prompt")
+        panel._append("assistant", "theme reply")
+        html = panel._log.toHtml().lower()
+        self.assertIn("#e8f1fa", html)
+        self.assertIn("#e8f6ee", html)
+        self.assertNotIn("#1a2620", html)
+        panel.apply_theme(True)
         modes = panel.findChild(QWidget, "aiModes")
         tpls = panel.findChild(QWidget, "aiTemplates")
         self.assertIn(_AI_TPL_DISABLED_COLOR, modes.styleSheet())

@@ -218,6 +218,35 @@ class SettingsInitialPageTests(unittest.TestCase):
         self.assertIn("aistudio.google.com", opened[0])
         self.assertIn("Opened ", dlg._ollama_test_status.text())
 
+    def test_ai_test_status_shows_full_capability_report(self) -> None:
+        from PySide6.QtWidgets import QScrollArea
+
+        from btf_viewer_pkg.ai_case import format_capability_report
+
+        dlg = self._dlg("AI")
+        self.addCleanup(dlg.deleteLater)
+        self.assertIsNotNone(dlg.findChild(QScrollArea, "aiSettingsScroll"))
+        cap = format_capability_report({
+            "chat": "yes",
+            "structured_output": "yes",
+            "tool_calling": "yes",
+            "multi_tool_chaining": "partial",
+            "long_context": "yes",
+            "complex_reasoning": "yes",
+            "recommended": "Investigation modes",
+        })
+        msg = (
+            "Connected to http://localhost:11434/v1. Model llama3 ready.\n\n"
+            + cap
+        )
+        dlg._set_ai_status(msg, "ok")
+        shown = dlg._ollama_test_status.text()
+        self.assertIn("Model capability", shown)
+        self.assertIn("Tool calling", shown)
+        self.assertIn("Recommended:", shown)
+        self.assertGreater(
+            dlg._ollama_test_status.sizeHint().height(), 40, shown)
+
     def test_bundle_qtgui_includes_desktop_services(self) -> None:
         """The single-file app must import QDesktopServices (Sign in)."""
         imports = (BTF_ROOT / "btf_viewer_pkg/_imports.py").read_text(

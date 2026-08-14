@@ -58,6 +58,7 @@ describe('AI conversation turn layout', () => {
     assert.match(aiPanel, /templateMenuGroups/)
     assert.match(aiPanel, /ai-more-col/)
     assert.match(aiPanel, /<Teleport to="body">/)
+    assert.match(app, /body:has\(\.app:not\(\.dark\)\)/)
     assert.match(aiPanel, /class="ai-plan-status"/)
     assert.match(aiPanel, /Language…/)
     assert.match(aiPanel, /Settings…/)
@@ -86,13 +87,13 @@ describe('AI conversation turn layout', () => {
     assert.match(aiPanel, /Scroll to zoom/)
   })
 
-  it('styles prompt and reply as separate bubbles', () => {
+    it('styles prompt and reply as separate bubbles', () => {
     assert.match(aiPanel, /class="ai-msg"/)
     assert.match(aiPanel, /:class="m\.role"/)
     assert.match(aiPanel, /\.ai-msg\.user \.ai-msg-body/)
     assert.match(aiPanel, /\.ai-msg\.assistant \.ai-msg-body/)
-    assert.match(aiPanel, /#1e3348/)
-    assert.match(aiPanel, /#1a2620/)
+    assert.match(aiPanel, /--ai-user-bg, #1e3348/)
+    assert.match(aiPanel, /--ai-asst-bg, #1a2620/)
     assert.match(aiPanel, /#6ea8e0/)
     assert.match(aiPanel, /#6fbf9a/)
     assert.match(aiPanel, /\.ai-msg \+ \.ai-msg/)

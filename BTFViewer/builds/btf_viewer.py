@@ -31146,14 +31146,32 @@ def _md_inline_to_html_escaped(text: str) -> str:
 _MD_TABLE_ALIGN_RE = re.compile(r"^:?-{1,}:?$")
 _HTML_TABLE_START_RE = re.compile(r"^<table\b", re.IGNORECASE)
 _HTML_TABLE_END_RE = re.compile(r"</table\s*>", re.IGNORECASE)
-_AI_MD_TH_STYLE = (
-    "border:1px solid #3a4658;padding:4px 8px;"
-    "background:#243044;color:#e8eef6;font-weight:600;"
-)
-_AI_MD_TD_STYLE = (
-    "border:1px solid #3a4658;padding:4px 8px;"
-    "background:#1a2230;color:#dbe2ea;"
-)
+def _ai_md_th_style(is_dark: bool = True) -> str:
+    if is_dark:
+        return (
+            "border:1px solid #3a4658;padding:4px 8px;"
+            "background:#243044;color:#e8eef6;font-weight:600;"
+        )
+    return (
+        "border:1px solid #DDDDDD;padding:4px 8px;"
+        "background:#E8EEF4;color:#1E1E1E;font-weight:600;"
+    )
+
+
+def _ai_md_td_style(is_dark: bool = True) -> str:
+    if is_dark:
+        return (
+            "border:1px solid #3a4658;padding:4px 8px;"
+            "background:#1a2230;color:#dbe2ea;"
+        )
+    return (
+        "border:1px solid #DDDDDD;padding:4px 8px;"
+        "background:#FFFFFF;color:#1E1E1E;"
+    )
+
+
+_AI_MD_TH_STYLE = _ai_md_th_style(True)
+_AI_MD_TD_STYLE = _ai_md_td_style(True)
 _AI_MD_TABLE_OPEN = (
     '<table class="ai-md-table" width="100%" cellspacing="0" cellpadding="4">'
 )
@@ -31197,8 +31215,8 @@ def _md_table_aligns(sep_line: str, ncols: int) -> List[str]:
     return out
 
 
-def _md_table_cell_html(tag: str, text: str, align: str) -> str:
-    style = _AI_MD_TH_STYLE if tag == "th" else _AI_MD_TD_STYLE
+def _md_table_cell_html(tag: str, text: str, align: str, *, is_dark: bool = True) -> str:
+    style = _ai_md_th_style(is_dark) if tag == "th" else _ai_md_td_style(is_dark)
     al = align if align in ("left", "right", "center") else "left"
     return (
         f'<{tag} align="{al}" style="{style}">'
@@ -31207,7 +31225,7 @@ def _md_table_cell_html(tag: str, text: str, align: str) -> str:
 
 
 def _md_table_html(header: List[str], aligns: List[str],
-                   rows: List[List[str]]) -> str:
+                   rows: List[List[str]], *, is_dark: bool = True) -> str:
     ncols = max(1, len(header))
 
     def _pad(cells: List[str]) -> List[str]:
@@ -31218,7 +31236,8 @@ def _md_table_html(header: List[str], aligns: List[str],
 
     header = _pad(header)
     thead = "<tr>" + "".join(
-        _md_table_cell_html("th", header[i], aligns[i] if i < len(aligns) else "left")
+        _md_table_cell_html("th", header[i], aligns[i] if i < len(aligns) else "left",
+                            is_dark=is_dark)
         for i in range(ncols)
     ) + "</tr>"
     body: List[str] = []
@@ -31227,7 +31246,8 @@ def _md_table_html(header: List[str], aligns: List[str],
         body.append(
             "<tr>" + "".join(
                 _md_table_cell_html(
-                    "td", cells[i], aligns[i] if i < len(aligns) else "left")
+                    "td", cells[i], aligns[i] if i < len(aligns) else "left",
+                    is_dark=is_dark)
                 for i in range(ncols)
             ) + "</tr>"
         )
@@ -31247,11 +31267,12 @@ class _SafeAiTableHtmlParser(HTMLParser):
         "script", "style", "iframe", "object", "embed", "link", "meta", "svg",
     })
 
-    def __init__(self) -> None:
+    def __init__(self, is_dark: bool = True) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: List[str] = []
         self._skip = 0
         self.saw_table = False
+        self._is_dark = bool(is_dark)
 
     def handle_starttag(self, tag: str, attrs) -> None:
         tag = (tag or "").lower()
@@ -31281,7 +31302,7 @@ class _SafeAiTableHtmlParser(HTMLParser):
         if tag in ("th", "td"):
             if align:
                 extra.append(f'align="{align}"')
-            style = _AI_MD_TH_STYLE if tag == "th" else _AI_MD_TD_STYLE
+            style = _ai_md_th_style(self._is_dark) if tag == "th" else _ai_md_td_style(self._is_dark)
             extra.append(f'style="{style}"')
         attr = (" " + " ".join(extra)) if extra else ""
         self.parts.append(f"<{tag}{attr}>")
@@ -31308,8 +31329,8 @@ class _SafeAiTableHtmlParser(HTMLParser):
         self.parts.append(_md_inline_to_html_escaped(data))
 
 
-def _sanitize_html_table_block(block: str) -> str:
-    parser = _SafeAiTableHtmlParser()
+def _sanitize_html_table_block(block: str, *, is_dark: bool = True) -> str:
+    parser = _SafeAiTableHtmlParser(is_dark=is_dark)
     try:
         parser.feed(block or "")
         parser.close()
@@ -31321,7 +31342,7 @@ def _sanitize_html_table_block(block: str) -> str:
     return html_out
 
 
-def markdown_to_safe_html(text: str, *, as_img: bool = True) -> str:
+def markdown_to_safe_html(text: str, *, as_img: bool = True, is_dark: bool = True) -> str:
     """Convert a subset of Markdown to safe HTML (AI reply preview).
 
     ``as_img=True`` (QTextBrowser chat) embeds mermaid as a PNG-compatible
@@ -31448,7 +31469,7 @@ def markdown_to_safe_html(text: str, *, as_img: bool = True) -> str:
                     found_end = True
                 i += 1
             block = "\n".join(buf)
-            safe = _sanitize_html_table_block(block)
+            safe = _sanitize_html_table_block(block, is_dark=is_dark)
             if safe:
                 out.append(safe)
             else:
@@ -31476,7 +31497,7 @@ def markdown_to_safe_html(text: str, *, as_img: bool = True) -> str:
                     continue
                 body_rows.append(_split_md_table_row(s))
                 i += 1
-            out.append(_md_table_html(header_cells, aligns, body_rows))
+            out.append(_md_table_html(header_cells, aligns, body_rows, is_dark=is_dark))
             continue
 
         para.append(stripped)
@@ -31486,11 +31507,13 @@ def markdown_to_safe_html(text: str, *, as_img: bool = True) -> str:
     return "".join(out)
 
 
-def _ai_message_body_html(role: str, text: str, *, as_img: bool = True) -> str:
+def _ai_message_body_html(role: str, text: str, *, as_img: bool = True,
+                          is_dark: bool = True) -> str:
     """Message body without the role prefix; assistant replies render as Markdown."""
     body_text = (text or "").strip()
     if role in ("assistant", "evidence"):
-        return markdown_to_safe_html(body_text, as_img=as_img) or "<p></p>"
+        return markdown_to_safe_html(
+            body_text, as_img=as_img, is_dark=is_dark) or "<p></p>"
     esc = html.escape(body_text)
     linked = _JUMP_RE.sub(
         lambda m: (
@@ -31503,29 +31526,41 @@ def _ai_message_body_html(role: str, text: str, *, as_img: bool = True) -> str:
 
 
 # QTextBrowser CSS is limited; keep selectors simple (no descendant chains).
-_AI_LOG_STYLE = (
-    "h1,h2,h3,h4{margin:8px 0 4px;font-size:13px;}"
-    "h1{font-size:15px;}h2{font-size:14px;}"
-    "p{margin:4px 0;}"
-    "ul,ol{margin:4px 0 4px 18px;padding:0;}"
-    "li{margin:2px 0;}"
-    "pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;"
-    "padding:8px;margin:6px 0;white-space:pre-wrap;}"
-    "code{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;font-size:11px;}"
-    "p code,li code{background:rgba(127,127,127,0.18);padding:1px 4px;border-radius:3px;}"
-    "blockquote{margin:6px 0;padding:4px 10px;border-left:3px solid #5b9bd5;"
-    "color:#a8b4c4;}"
-    "hr{border:none;border-top:1px solid #3a4658;margin:8px 0;}"
-    "a{color:#5b9bd5;}"
-    "table.ai-md-table{margin:8px 0;}"
-    ".ai-role{font-size:11px;font-weight:600;}"
-    ".ai-role-user{color:#6ea8e0;}"
-    ".ai-role-assistant{color:#6fbf9a;}"
-    ".ai-tool-card{color:#e6d48a;}"
-    "img.ai-mermaid-img{max-width:100%;height:auto;border-radius:4px;}"
-    "a.ai-mermaid-zoom{cursor:zoom-in;text-decoration:none;}"
-    ".ai-evidence-score{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;}"
-)
+def _ai_log_style(is_dark: bool = True) -> str:
+    if is_dark:
+        pre_bg, pre_bd, quote, hr, link = (
+            "#1a2230", "#3a4658", "#a8b4c4", "#3a4658", "#5b9bd5")
+        user, asst, tool = "#6ea8e0", "#6fbf9a", "#e6d48a"
+    else:
+        pre_bg, pre_bd, quote, hr, link = (
+            "#FFFFFF", "#DDDDDD", "#555555", "#DDDDDD", "#0066CC")
+        user, asst, tool = "#0066CC", "#2e7d57", "#6b5508"
+    return (
+        "h1,h2,h3,h4{margin:8px 0 4px;font-size:13px;}"
+        "h1{font-size:15px;}h2{font-size:14px;}"
+        "p{margin:4px 0;}"
+        "ul,ol{margin:4px 0 4px 18px;padding:0;}"
+        "li{margin:2px 0;}"
+        f"pre{{background:{pre_bg};border:1px solid {pre_bd};border-radius:4px;"
+        "padding:8px;margin:6px 0;white-space:pre-wrap;}"
+        "code{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;font-size:11px;}"
+        "p code,li code{background:rgba(127,127,127,0.18);padding:1px 4px;border-radius:3px;}"
+        f"blockquote{{margin:6px 0;padding:4px 10px;border-left:3px solid {link};"
+        f"color:{quote};}}"
+        f"hr{{border:none;border-top:1px solid {hr};margin:8px 0;}}"
+        f"a{{color:{link};}}"
+        "table.ai-md-table{margin:8px 0;}"
+        ".ai-role{font-size:11px;font-weight:600;}"
+        f".ai-role-user{{color:{user};}}"
+        f".ai-role-assistant{{color:{asst};}}"
+        f".ai-tool-card{{color:{tool};}}"
+        "img.ai-mermaid-img{max-width:100%;height:auto;border-radius:4px;}"
+        "a.ai-mermaid-zoom{cursor:zoom-in;text-decoration:none;}"
+        ".ai-evidence-score{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;}"
+    )
+
+
+_AI_LOG_STYLE = _ai_log_style(True)
 
 
 def ai_entry_role(entry: Any) -> str:
@@ -31626,6 +31661,8 @@ def _format_ai_log_html(
     tools: Optional[Sequence[Dict[str, Any]]] = None,
     batch_id: str = "",
     response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
+    *,
+    is_dark: bool = True,
 ) -> str:
     """One conversation turn as a self-contained table (Qt will not merge these)."""
     is_user = role == "user"
@@ -31633,19 +31670,26 @@ def _format_ai_log_html(
     role_cls = "ai-role-user" if is_user else (
         "ai-role-evidence" if role == "evidence" else "ai-role-assistant")
     # bgcolor is more reliable in QTextBrowser than CSS background on divs.
-    bg = "#1e3348" if is_user else (
-        "#1f2430" if role == "evidence" else "#1a2620")
+    if is_dark:
+        bg = "#1e3348" if is_user else (
+            "#1f2430" if role == "evidence" else "#1a2620")
+        fg = "#e8eef7" if is_user else (
+            "#c5d0dc" if role == "evidence" else "#d5e4f7")
+    else:
+        bg = "#e8f1fa" if is_user else (
+            "#eef0f3" if role == "evidence" else "#e8f6ee")
+        fg = "#1E1E1E"
     bar = "#5b9bd5" if is_user else (
         "#8a96a8" if role == "evidence" else "#3d9a72")
-    body = _ai_message_body_html(role, text) if (text or "").strip() else ""
-    cards = _tool_cards_html(tools or [], batch_id)
+    body = _ai_message_body_html(role, text, is_dark=is_dark) if (text or "").strip() else ""
+    cards = _tool_cards_html(tools or [], batch_id, light=not is_dark)
     if not body and not cards:
         body = "<p></p>"
     return (
         f'<table class="ai-turn" width="100%" cellspacing="0" cellpadding="0">'
         f'<tr><td class="ai-role {role_cls}" style="padding:10px 0 3px 0;">{label}</td></tr>'
         f'<tr><td class="ai-bubble" bgcolor="{bg}" '
-        f'style="border-left:3px solid {bar};padding:8px 10px;">{body}{cards}</td></tr>'
+        f'style="border-left:3px solid {bar};padding:8px 10px;color:{fg};">{body}{cards}</td></tr>'
         f"</table>"
     )
 
@@ -31653,6 +31697,8 @@ def _format_ai_log_html(
 def _ai_log_document_html(
     entries: Sequence[Any],
     response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
+    *,
+    is_dark: bool = True,
 ) -> str:
     """Full conversation document for QTextBrowser.setHtml (avoids append merge)."""
     if not entries:
@@ -31667,6 +31713,7 @@ def _ai_log_document_html(
             ai_entry_tools(entry),
             str((entry.get("batch_id") if isinstance(entry, dict) else "") or ""),
             response_language=response_language,
+            is_dark=is_dark,
         ))
     return f"<html><body>{''.join(parts)}</body></html>"
 
@@ -32688,10 +32735,17 @@ class _FlowLayout(QLayout):
 
 
 def _ai_more_heading(label: str) -> QLabel:
-    """Muted group label matching web ``.ai-more-heading``."""
+    """Muted group label matching web ``.ai-more-heading``.
+
+    Keep enabled: a disabled QLabel uses the Disabled palette (often a dark
+    fill on macOS) and ignores ``color:`` QSS unless ``:disabled`` is set.
+    """
     hdr = QLabel(label)
     hdr.setObjectName("aiMoreHeading")
-    hdr.setEnabled(False)
+    hdr.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+    fusion = QStyleFactory.create("Fusion")
+    if fusion is not None:
+        hdr.setStyle(fusion)
     return hdr
 
 
@@ -32700,8 +32754,15 @@ def _ai_more_item(label: str, tooltip: str = "") -> QPushButton:
     btn = QPushButton(label)
     btn.setObjectName("aiMoreItem")
     btn.setFlat(True)
+    btn.setAutoDefault(False)
+    btn.setDefault(False)
+    btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
     btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+    btn.setMinimumHeight(22)
+    fusion = QStyleFactory.create("Fusion")
+    if fusion is not None:
+        btn.setStyle(fusion)
     if tooltip:
         btn.setToolTip(tooltip)
     return btn
@@ -32711,6 +32772,9 @@ def _ai_more_col(title: str) -> QWidget:
     """One More-menu column matching web ``.ai-more-col``."""
     col = QWidget()
     col.setObjectName("aiMoreCol")
+    fusion = QStyleFactory.create("Fusion")
+    if fusion is not None:
+        col.setStyle(fusion)
     lay = QVBoxLayout(col)
     lay.setContentsMargins(0, 0, 0, 0)
     lay.setSpacing(0)
@@ -32730,49 +32794,89 @@ def _clear_layout(layout) -> None:
 # Chip / More-menu colors match web `.ai-tpl-btn` / `.ai-more-item` (enabled vs disabled).
 _AI_TPL_DISABLED_COLOR = "#8a96a8"
 _AI_CHIP_MIN_HEIGHT = 28  # match web `.ai-tpl-btn { min-height: 28px }`
-_AI_TPL_BTN_STYLE = (
-    "QPushButton {"
-    "  color: #e8eef7;"
-    "  background: #243044;"
-    "  border: 1px solid #3a4658;"
-    "  border-radius: 6px;"
-    "  padding: 4px 8px;"
-    "}"
-    "QPushButton:disabled {"
-    f"  color: {_AI_TPL_DISABLED_COLOR};"
-    "  background: #1a2230;"
-    "  border-color: #3a4658;"
-    "}"
-    "QPushButton:hover:!disabled {"
-    "  border-color: #2a6fb2;"
-    "}"
-)
-_AI_MORE_MENU_STYLE = (
-    "QFrame#aiMoreMenu {"
-    "  background: #1a2230;"
-    "  border: 1px solid #3a4658;"
-    "  border-radius: 7px;"
-    "}"
-    "QWidget#aiMoreCol { min-width: 168px; }"
-    "QLabel#aiMoreHeading {"
-    f"  color: {_AI_TPL_DISABLED_COLOR};"
-    "  font-size: 11px;"
-    "  font-weight: 600;"
-    "  padding: 6px 10px 2px;"
-    "}"
-    "QPushButton#aiMoreItem {"
-    "  color: #e8eef7;"
-    "  background: transparent;"
-    "  border: none;"
-    "  border-radius: 4px;"
-    "  padding: 5px 10px;"
-    "  text-align: left;"
-    "}"
-    "QPushButton#aiMoreItem:hover:!disabled {"
-    "  background: rgba(91, 155, 213, 0.18);"
-    "}"
-    f"QPushButton#aiMoreItem:disabled {{ color: {_AI_TPL_DISABLED_COLOR}; }}"
-)
+
+
+def _ai_chrome_colors(is_dark: bool) -> dict:
+    if is_dark:
+        return dict(
+            panel="#1a2230",
+            btn="#243044",
+            text="#e8eef7",
+            muted=_AI_TPL_DISABLED_COLOR,
+            border="#3a4658",
+            hover="#243044",
+            accent="#2a6fb2",
+            chip_hover="#dbe2ea",
+        )
+    return dict(
+        panel="#F5F5F5",
+        btn="#E8E8E8",
+        text="#1E1E1E",
+        muted="#666666",
+        border="#DDDDDD",
+        hover="#E0E8F0",
+        accent="#0066CC",
+        chip_hover="#1E1E1E",
+    )
+
+
+def _ai_tpl_btn_style(is_dark: bool = True) -> str:
+    c = _ai_chrome_colors(is_dark)
+    muted = c["muted"]
+    return (
+        "QPushButton {"
+        f"  color: {c['text']};"
+        f"  background: {c['btn']};"
+        f"  border: 1px solid {c['border']};"
+        "  border-radius: 6px;"
+        "  padding: 4px 8px;"
+        "}"
+        "QPushButton:disabled {"
+        f"  color: {muted};"
+        f"  background: {c['panel']};"
+        f"  border-color: {c['border']};"
+        "}"
+        "QPushButton:hover:!disabled {"
+        f"  border-color: {c['accent']};"
+        "}"
+    )
+
+
+def _ai_more_menu_style(is_dark: bool = True) -> str:
+    c = _ai_chrome_colors(is_dark)
+    muted = c["muted"]
+    return (
+        "QFrame#aiMoreMenu {"
+        f"  background: {c['panel']};"
+        f"  border: 1px solid {c['border']};"
+        "  border-radius: 7px;"
+        "}"
+        "QWidget#aiMoreCol { min-width: 168px; }"
+        "QLabel#aiMoreHeading, QLabel#aiMoreHeading:disabled {"
+        f"  color: {muted};"
+        f"  background: {c['panel']};"
+        "  font-size: 11px;"
+        "  font-weight: 600;"
+        "  padding: 6px 10px 2px;"
+        "}"
+        "QPushButton#aiMoreItem {"
+        f"  color: {c['text']};"
+        f"  background: {c['panel']};"
+        "  border: none;"
+        "  border-radius: 4px;"
+        "  padding: 5px 10px;"
+        "  min-height: 22px;"
+        "  text-align: left;"
+        "}"
+        "QPushButton#aiMoreItem:hover:!disabled {"
+        f"  background: {c['hover']};"
+        "}"
+        f"QPushButton#aiMoreItem:disabled {{ color: {muted}; }}"
+    )
+
+
+_AI_TPL_BTN_STYLE = _ai_tpl_btn_style(True)
+_AI_MORE_MENU_STYLE = _ai_more_menu_style(True)
 
 
 def _qtextline_cursor_x(line, pos: int) -> float:
@@ -33081,6 +33185,7 @@ def create_ai_assistant_panel(
             root.addWidget(self._plan_host)
 
             mode_host = QWidget()
+            self._mode_host = mode_host
             mode_host.setObjectName("aiModes")
             mode_host.setSizePolicy(
                 QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
@@ -33101,6 +33206,7 @@ def create_ai_assistant_panel(
             root.addWidget(mode_host)
 
             tpl_host = QWidget()
+            self._tpl_host = tpl_host
             tpl_host.setObjectName("aiTemplates")
             tpl_host.setSizePolicy(
                 QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
@@ -33145,7 +33251,12 @@ def create_ai_assistant_panel(
             more_btn.setMinimumHeight(_AI_CHIP_MIN_HEIGHT)
             more_menu = QFrame(self, Qt.WindowType.Popup)
             more_menu.setObjectName("aiMoreMenu")
+            fusion = QStyleFactory.create("Fusion")
+            if fusion is not None:
+                more_menu.setStyle(fusion)
             more_menu.setStyleSheet(_AI_MORE_MENU_STYLE)
+            more_menu.setAutoFillBackground(True)
+            more_menu.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             more_menu.setMinimumWidth(360)
             more_grid = QGridLayout(more_menu)
             more_grid.setContentsMargins(4, 4, 4, 4)
@@ -33167,6 +33278,7 @@ def create_ai_assistant_panel(
                     col_lay.addWidget(act)
                     self._template_actions[_tid] = act
                     _bind_template_ctrl(_tid, act)
+                col_lay.addStretch(1)
                 more_grid.addWidget(
                     col, i // 2, i % 2, Qt.AlignmentFlag.AlignTop)
             n_groups = len(AI_TEMPLATE_MENU_GROUPS)
@@ -33284,6 +33396,120 @@ def create_ai_assistant_panel(
             self._refresh_auth_chip()
 
             self._refresh_send_btn()
+            wnd = self.window()
+            is_dark = bool(getattr(wnd, "_is_dark", True))
+            self._is_dark = is_dark
+            self.apply_theme(is_dark)
+
+        def apply_theme(self, is_dark: bool) -> None:
+            """Match AI chrome (More menu, chips, composer, log) to the app theme."""
+            self._is_dark = bool(is_dark)
+            c = _ai_chrome_colors(self._is_dark)
+            if getattr(self, "_mode_host", None) is not None:
+                self._mode_host.setStyleSheet(_ai_tpl_btn_style(self._is_dark))
+            if getattr(self, "_tpl_host", None) is not None:
+                self._tpl_host.setStyleSheet(_ai_tpl_btn_style(self._is_dark))
+            self._paint_more_menu()
+            chip = (
+                "QPushButton#%s {"
+                "  background: transparent; color: %s;"
+                "  border: 1px solid %s; border-radius: 10px;"
+                "  padding: 1px 8px; font-size: 11px;"
+                "}"
+                "QPushButton#%s:hover { color: %s; border-color: %s; }"
+            )
+            if getattr(self, "_auth_chip", None) is not None:
+                self._auth_chip.setStyleSheet(chip % (
+                    "ai_auth_chip", c["muted"], c["border"],
+                    "ai_auth_chip", c["chip_hover"], c["accent"],
+                ))
+            if getattr(self, "_privacy_chip", None) is not None:
+                self._privacy_chip.setStyleSheet(chip % (
+                    "ai_privacy_chip", c["muted"], c["border"],
+                    "ai_privacy_chip", c["chip_hover"], c["accent"],
+                ))
+            if getattr(self, "_plan_view", None) is not None:
+                self._plan_view.setStyleSheet(
+                    f"color:{c['muted']};font-size:11px;padding:1px 0;"
+                )
+            if getattr(self, "_status", None) is not None:
+                self._status.setStyleSheet(f"color:{c['muted']};font-size:11px;")
+            inp = getattr(self, "_input", None)
+            if inp is not None:
+                pal = inp.palette()
+                pal.setColor(QPalette.Base, QColor(c["panel"]))
+                pal.setColor(QPalette.Text, QColor(c["text"]))
+                pal.setColor(QPalette.Window, QColor(c["panel"]))
+                inp.setPalette(pal)
+                inp.setStyleSheet(
+                    f"QPlainTextEdit#aiInput {{"
+                    f"  background: {c['panel']}; color: {c['text']};"
+                    f"  border: 1px solid {c['border']}; border-radius: 6px;"
+                    "}"
+                )
+            log = getattr(self, "_log", None)
+            if log is not None:
+                pal = log.palette()
+                pal.setColor(QPalette.Base, QColor(c["panel"]))
+                pal.setColor(QPalette.Text, QColor(c["text"]))
+                pal.setColor(QPalette.Window, QColor(c["panel"]))
+                log.setPalette(pal)
+                log.document().setDefaultStyleSheet(_ai_log_style(self._is_dark))
+                if getattr(self, "_entries", None):
+                    self._refresh_log()
+
+        def _paint_more_menu(self) -> None:
+            menu = getattr(self, "_more_menu", None)
+            if menu is None:
+                return
+            is_dark = bool(getattr(self, "_is_dark", True))
+            c = _ai_chrome_colors(is_dark)
+            menu.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            menu.setAutoFillBackground(True)
+            menu.setStyleSheet(_ai_more_menu_style(is_dark))
+            pal = menu.palette()
+            bg = QColor(c["panel"])
+            fg = QColor(c["text"])
+            muted = QColor(c["muted"])
+            for group in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive,
+                          QPalette.ColorGroup.Disabled):
+                pal.setColor(group, QPalette.ColorRole.Window, bg)
+                pal.setColor(group, QPalette.ColorRole.Base, bg)
+                pal.setColor(group, QPalette.ColorRole.Button, bg)
+                role_fg = muted if group == QPalette.ColorGroup.Disabled else fg
+                pal.setColor(group, QPalette.ColorRole.WindowText, role_fg)
+                pal.setColor(group, QPalette.ColorRole.ButtonText, role_fg)
+                pal.setColor(group, QPalette.ColorRole.Text, role_fg)
+            menu.setPalette(pal)
+            item_ss = (
+                f"QPushButton#aiMoreItem {{"
+                f"  color: {c['text']}; background: {c['panel']};"
+                "  border: none; border-radius: 4px;"
+                "  padding: 5px 10px; min-height: 22px; text-align: left;"
+                "}"
+                f"QPushButton#aiMoreItem:hover:!disabled {{ background: {c['hover']}; }}"
+                f"QPushButton#aiMoreItem:disabled {{ color: {c['muted']}; "
+                f"background: {c['panel']}; }}"
+            )
+            heading_ss = (
+                f"QLabel#aiMoreHeading, QLabel#aiMoreHeading:disabled {{"
+                f"  color: {c['muted']}; background: {c['panel']};"
+                "  font-size: 11px; font-weight: 600; padding: 6px 10px 2px;"
+                "}"
+            )
+            for w in menu.findChildren(QWidget):
+                w.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+                w.setPalette(pal)
+                if w.objectName() == "aiMoreItem":
+                    w.setAutoFillBackground(True)
+                    w.setStyleSheet(item_ss)
+                elif w.objectName() == "aiMoreHeading":
+                    w.setAutoFillBackground(True)
+                    w.setStyleSheet(heading_ss)
+                elif w.objectName() == "aiMoreCol":
+                    w.setAutoFillBackground(True)
+                else:
+                    w.setAutoFillBackground(False)
 
         def _place_composer_icons(self) -> None:
             icons = getattr(self, "_composer_icons", None)
@@ -33630,9 +33856,13 @@ def create_ai_assistant_panel(
                 self._log.clear()
                 self._refresh_tool_bar()
                 return
-            self._log.document().setDefaultStyleSheet(_AI_LOG_STYLE)
+            self._log.document().setDefaultStyleSheet(_ai_log_style(
+                bool(getattr(self, "_is_dark", True))))
             lang = self._reply_language()
-            self._log.setHtml(_ai_log_document_html(self._entries, lang))
+            self._log.setHtml(_ai_log_document_html(
+                self._entries, lang,
+                is_dark=bool(getattr(self, "_is_dark", True)),
+            ))
             bar = self._log.verticalScrollBar()
             bar.setValue(bar.maximum())
             self._refresh_tool_bar()
@@ -34108,6 +34338,7 @@ def create_ai_assistant_panel(
             if menu.isVisible():
                 menu.hide()
                 return
+            self._paint_more_menu()
             self._place_more_menu()
             menu.show()
 
@@ -34177,8 +34408,11 @@ def create_ai_assistant_panel(
             self._investigation_template_actions = {}
             live = (not self._busy) and self._ai_is_enabled()
             for tpl in self._all_investigation_templates():
+                label = str(tpl.get("label") or tpl.get("id") or "").strip()
+                if not label:
+                    continue
                 act = _ai_more_item(
-                    str(tpl.get("label") or tpl.get("id")),
+                    label,
                     investigation_template_prompt(tpl),
                 )
                 act.setEnabled(live)
@@ -34204,6 +34438,8 @@ def create_ai_assistant_panel(
             know_act.clicked.connect(self._on_more_save_knowledge)
             self._save_knowledge_action = know_act
             lay.addWidget(know_act)
+            lay.addStretch(1)
+            self._paint_more_menu()
 
         def _on_more_investigation(self, tpl: Dict[str, Any]) -> None:
             self._hide_more_menu()
@@ -34260,6 +34496,7 @@ def create_ai_assistant_panel(
                 self._set_investigation_plan({"goal": label, "steps": steps})
             else:
                 self._clear_investigation_plan()
+            self._skip_interpret = True
             self._input.setPlainText(prompt)
             self.send_current()
 
@@ -34438,6 +34675,7 @@ def create_ai_assistant_panel(
                 })
             else:
                 self._clear_investigation_plan()
+            self._skip_interpret = True
             self._input.setPlainText(prompt)
             self.send_current()
 
@@ -48491,12 +48729,17 @@ class _SettingsDialog(QDialog):
 
         self._ollama_test_status = QLabel(
             "Click Test connection to verify the endpoint and model.")
+        self._ollama_test_status.setObjectName("aiTestStatus")
         self._ollama_test_status.setWordWrap(True)
-        self._ollama_test_status.setMinimumHeight(40)
+        self._ollama_test_status.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
         self._ollama_test_status.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self._ollama_test_status.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self._ollama_test_status.setMinimumHeight(40)
         self._ollama_test_status.setStyleSheet(
-            "color:#888; padding:4px 0; min-height:40px;")
+            "color:#888; padding:4px 0;")
         f4.addRow(self._ollama_test_status)
 
         self._ai_hint = QLabel("")
@@ -48511,7 +48754,14 @@ class _SettingsDialog(QDialog):
         self._ollama_test_worker = None
         self._ai_list_worker = None
 
-        self._content_stack.addWidget(p4)
+        p4_scroll = QScrollArea()
+        p4_scroll.setObjectName("aiSettingsScroll")
+        p4_scroll.setWidgetResizable(True)
+        p4_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        p4_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        p4_scroll.setWidget(p4)
+        self._content_stack.addWidget(p4_scroll)
 
         # -- Sidebar <-> stack sync ---------------------------------------------
         self._sidebar.currentRowChanged.connect(self._content_stack.setCurrentIndex)
@@ -48752,9 +49002,24 @@ class _SettingsDialog(QDialog):
 
     def _set_ai_status(self, message: str, kind: str = "info") -> None:
         color = {"ok": "#1e8449", "error": "#c0392b"}.get(kind, "#888")
-        self._ollama_test_status.setStyleSheet(
-            f"color:{color}; padding:4px 0; min-height:40px;")
+        self._ollama_test_status.setStyleSheet(f"color:{color}; padding:4px 0;")
         self._ollama_test_status.setText(message)
+        self._ollama_test_status.updateGeometry()
+        scroll = None
+        w = self._ollama_test_status.parentWidget()
+        while w is not None:
+            if isinstance(w, QScrollArea):
+                scroll = w
+                break
+            w = w.parentWidget()
+        if scroll is not None:
+            inner = scroll.widget()
+            if inner is not None:
+                inner.adjustSize()
+            QTimer.singleShot(
+                0,
+                lambda: scroll.ensureWidgetVisible(self._ollama_test_status, 0, 8),
+            )
 
     def _ai_combo_preset_ids(self) -> List[str]:
         return [
@@ -54191,6 +54456,51 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             w.setPalette(pal)
         graph.update()
 
+    def _sync_status_bar_theme(self, c: dict) -> None:
+        """macOS native QStatusBar often ignores QSS; sync palette + fill."""
+        if not hasattr(self, "statusBar"):
+            return
+        sb = self.statusBar()
+        bg = QColor(c["win_bg"])
+        fg = QColor(c["status_text"])
+        sub = QColor(c["sub_text"])
+        sb.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        sb.setAutoFillBackground(True)
+        pal = sb.palette()
+        pal.setColor(QPalette.Window, bg)
+        pal.setColor(QPalette.Base, bg)
+        pal.setColor(QPalette.WindowText, fg)
+        pal.setColor(QPalette.Button, bg)
+        pal.setColor(QPalette.ButtonText, sub)
+        sb.setPalette(pal)
+        labels = (
+            getattr(self, "_status_file", None),
+            getattr(self, "_status_range", None),
+            getattr(self, "_zoom_scale_label", None),
+            getattr(self, "_zoom_visible_label", None),
+        )
+        for lab in labels:
+            if lab is None:
+                continue
+            lp = lab.palette()
+            lp.setColor(QPalette.Window, bg)
+            lp.setColor(QPalette.WindowText, fg if lab is self._zoom_scale_label else sub)
+            lab.setPalette(lp)
+            lab.setAutoFillBackground(True)
+        for cb in (
+            getattr(self, "_sti_toggle_cb", None),
+            getattr(self, "_grid_toggle_cb", None),
+        ):
+            if cb is None:
+                continue
+            cp = cb.palette()
+            cp.setColor(QPalette.Window, bg)
+            cp.setColor(QPalette.WindowText, sub)
+            cp.setColor(QPalette.Button, bg)
+            cp.setColor(QPalette.ButtonText, sub)
+            cb.setPalette(cp)
+            cb.setAutoFillBackground(True)
+
     def _sync_trace_tab_widget_theme(self, is_dark: bool) -> None:
         """Keep trace-file tab bar and pane backgrounds in sync with the app theme."""
         if not hasattr(self, "_tab_widget"):
@@ -55727,6 +56037,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QToolBar QComboBox {{ font-size:{_ui_fs}; color:{c['text']}; padding:1px 4px; min-height:0; }}
             QStatusBar  {{ background:{c['win_bg']}; color:{c['status_text']}; font-size:{_ui_fs};
                            border-top:1px solid {c['sep']}; }}
+            QStatusBar QSizeGrip {{ background:{c['win_bg']}; }}
             QStatusBar QLabel {{ font-size:{_ui_fs}; color:{c['sub_text']}; }}
             QStatusBar QLabel#zoomScaleLabel {{ font-size:{_ui_fs}; color:{c['status_text']}; }}
             QStatusBar QCheckBox {{ font-size:{_ui_fs}; color:{c['sub_text']}; padding: 0 4px; }}
@@ -55743,6 +56054,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                          border:1px solid {c['input_border']}; font-size:{_ui_fs};
                          padding:2px 6px; min-height:1.6em; }}
             QLineEdit   {{ background:{c['input_bg']}; color:{c['input_fg']};
+                         border:1px solid {c['input_border']}; }}
+            QPlainTextEdit, QTextEdit, QTextBrowser {{
+                         background:{c['input_bg']}; color:{c['input_fg']};
                          border:1px solid {c['input_border']}; }}
             QComboBox   {{ background:{c['combo_bg']}; color:{c['text']};
                          border:1px solid {c['input_border']}; font-size:{_ui_fs};
@@ -55921,6 +56235,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 tab_pal.setColor(QPalette.Window, win_bg)
                 tab.cpu_splitter.setPalette(tab_pal)
                 tab.cpu_splitter.setAutoFillBackground(True)
+                handle = tab.cpu_splitter.handle()
+                handle.setAutoFillBackground(True)
+                handle.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+                hpal = handle.palette()
+                hpal.setColor(QPalette.Window, QColor(c["sep"]))
+                handle.setPalette(hpal)
                 self._sync_cpu_load_scroll_theme(
                     tab.cpu_load_scroll, tab.cpu_load_graph, is_dark,
                 )
@@ -55998,6 +56318,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 self._stats_panel._sync_stats_panel_chrome_font()
             if hasattr(self, '_cursor_bar'):
                 self._cursor_bar.update_theme(is_dark, _ui_font_size)
+            self._sync_status_bar_theme(c)
+            panel = getattr(self, "_ai_panel", None)
+            if panel is not None and hasattr(panel, "apply_theme"):
+                panel.apply_theme(is_dark)
             _ic_color = "#CCCCCC" if is_dark else "#555555"
             if getattr(self, '_tb_icon_actions', None):
                 for _act, _ic_path in self._tb_icon_actions:
@@ -56813,6 +57137,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _build_status_bar(self) -> None:
         sb = self.statusBar()
+        sb.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        sb.setAutoFillBackground(True)
 
         # --- LEFT: file info (stretches to fill available space) ---
         self._status_file  = QLabel("No file loaded")

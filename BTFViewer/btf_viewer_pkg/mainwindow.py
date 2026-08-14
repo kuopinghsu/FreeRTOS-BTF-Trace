@@ -2055,6 +2055,51 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             w.setPalette(pal)
         graph.update()
 
+    def _sync_status_bar_theme(self, c: dict) -> None:
+        """macOS native QStatusBar often ignores QSS; sync palette + fill."""
+        if not hasattr(self, "statusBar"):
+            return
+        sb = self.statusBar()
+        bg = QColor(c["win_bg"])
+        fg = QColor(c["status_text"])
+        sub = QColor(c["sub_text"])
+        sb.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        sb.setAutoFillBackground(True)
+        pal = sb.palette()
+        pal.setColor(QPalette.Window, bg)
+        pal.setColor(QPalette.Base, bg)
+        pal.setColor(QPalette.WindowText, fg)
+        pal.setColor(QPalette.Button, bg)
+        pal.setColor(QPalette.ButtonText, sub)
+        sb.setPalette(pal)
+        labels = (
+            getattr(self, "_status_file", None),
+            getattr(self, "_status_range", None),
+            getattr(self, "_zoom_scale_label", None),
+            getattr(self, "_zoom_visible_label", None),
+        )
+        for lab in labels:
+            if lab is None:
+                continue
+            lp = lab.palette()
+            lp.setColor(QPalette.Window, bg)
+            lp.setColor(QPalette.WindowText, fg if lab is self._zoom_scale_label else sub)
+            lab.setPalette(lp)
+            lab.setAutoFillBackground(True)
+        for cb in (
+            getattr(self, "_sti_toggle_cb", None),
+            getattr(self, "_grid_toggle_cb", None),
+        ):
+            if cb is None:
+                continue
+            cp = cb.palette()
+            cp.setColor(QPalette.Window, bg)
+            cp.setColor(QPalette.WindowText, sub)
+            cp.setColor(QPalette.Button, bg)
+            cp.setColor(QPalette.ButtonText, sub)
+            cb.setPalette(cp)
+            cb.setAutoFillBackground(True)
+
     def _sync_trace_tab_widget_theme(self, is_dark: bool) -> None:
         """Keep trace-file tab bar and pane backgrounds in sync with the app theme."""
         if not hasattr(self, "_tab_widget"):
@@ -3591,6 +3636,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QToolBar QComboBox {{ font-size:{_ui_fs}; color:{c['text']}; padding:1px 4px; min-height:0; }}
             QStatusBar  {{ background:{c['win_bg']}; color:{c['status_text']}; font-size:{_ui_fs};
                            border-top:1px solid {c['sep']}; }}
+            QStatusBar QSizeGrip {{ background:{c['win_bg']}; }}
             QStatusBar QLabel {{ font-size:{_ui_fs}; color:{c['sub_text']}; }}
             QStatusBar QLabel#zoomScaleLabel {{ font-size:{_ui_fs}; color:{c['status_text']}; }}
             QStatusBar QCheckBox {{ font-size:{_ui_fs}; color:{c['sub_text']}; padding: 0 4px; }}
@@ -3607,6 +3653,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                          border:1px solid {c['input_border']}; font-size:{_ui_fs};
                          padding:2px 6px; min-height:1.6em; }}
             QLineEdit   {{ background:{c['input_bg']}; color:{c['input_fg']};
+                         border:1px solid {c['input_border']}; }}
+            QPlainTextEdit, QTextEdit, QTextBrowser {{
+                         background:{c['input_bg']}; color:{c['input_fg']};
                          border:1px solid {c['input_border']}; }}
             QComboBox   {{ background:{c['combo_bg']}; color:{c['text']};
                          border:1px solid {c['input_border']}; font-size:{_ui_fs};
@@ -3785,6 +3834,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 tab_pal.setColor(QPalette.Window, win_bg)
                 tab.cpu_splitter.setPalette(tab_pal)
                 tab.cpu_splitter.setAutoFillBackground(True)
+                handle = tab.cpu_splitter.handle()
+                handle.setAutoFillBackground(True)
+                handle.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+                hpal = handle.palette()
+                hpal.setColor(QPalette.Window, QColor(c["sep"]))
+                handle.setPalette(hpal)
                 self._sync_cpu_load_scroll_theme(
                     tab.cpu_load_scroll, tab.cpu_load_graph, is_dark,
                 )
@@ -3862,6 +3917,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 self._stats_panel._sync_stats_panel_chrome_font()
             if hasattr(self, '_cursor_bar'):
                 self._cursor_bar.update_theme(is_dark, _ui_font_size)
+            self._sync_status_bar_theme(c)
+            panel = getattr(self, "_ai_panel", None)
+            if panel is not None and hasattr(panel, "apply_theme"):
+                panel.apply_theme(is_dark)
             _ic_color = "#CCCCCC" if is_dark else "#555555"
             if getattr(self, '_tb_icon_actions', None):
                 for _act, _ic_path in self._tb_icon_actions:
@@ -4677,6 +4736,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _build_status_bar(self) -> None:
         sb = self.statusBar()
+        sb.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        sb.setAutoFillBackground(True)
 
         # --- LEFT: file info (stretches to fill available space) ---
         self._status_file  = QLabel("No file loaded")
