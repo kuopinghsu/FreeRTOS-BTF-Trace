@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Live AI benchmark against a self-signed or private-CA HTTPS gateway.
+
+  From BTFViewer/:
+    python builds/btf_viewer.py ai-test -c examples/ai/benchmark-selfsigned.xml
+
+  tls-verify false skips certificate checks (Desktop urllib only).
+  Equivalent CLI flag: insecure (see ai-test -h).
+  API key: set GATEWAY_API_KEY, or put a literal in <api-key> (not for git).
+-->
+<ai-benchmark version="1">
+  <dataset>tests/ai</dataset>
+  <fail-under>0</fail-under>
+  <output>AI_BENCHMARK.md</output>
+
+  <endpoint>
+    <base-url>https://llm.internal.example:8443/v1</base-url>
+    <tls-verify>false</tls-verify>
+    <timeout-s>180</timeout-s>
+    <api-key env="GATEWAY_API_KEY"/>
+  </endpoint>
+
+  <models>
+    <model id="lab-model"/>
+  </models>
+</ai-benchmark>
