@@ -9,11 +9,18 @@ from .graphics_items import *  # noqa: F403,F401
 from .scene import *  # noqa: F403,F401
 from .view import *  # noqa: F403,F401
 from .stats import *  # noqa: F403,F401
+from .stats import _RcSettings
 from .mainwindow import *  # noqa: F403,F401
 from .perfetto_export import export_perfetto
 from .btf_slice import filter_btf_file_to_range, reconstruct_btf_slice, write_btf_text
 from .platform import *  # noqa: F403,F401
-from .ai_case import run_offline_benchmark
+from .ai_case import (
+    format_benchmark_markdown,
+    load_benchmark_suite_xml,
+    run_live_benchmark,
+    run_offline_benchmark,
+    select_benchmark_suite_models,
+)
 from .ai_investigation import (
     compare_performance_metrics,
     evaluate_regression,
@@ -24,7 +31,21 @@ from .ai_investigation import (
     snapshot_from_summary,
 )
 from .demo_api import ignore_sigint_for_demo
-from .ai_assistant import ai_chat_completion, parse_ai_mcp_log, resolve_ai_settings
+from .ai_assistant import (
+    ai_chat_completion,
+    parse_ai_mcp_log,
+    resolve_ai_settings,
+)
+
+def _cli_ai_rc_cfg() -> Dict[str, str]:
+    """Load ``[ai]`` from ``btf_viewer.rc``, decrypting ``*_api_key`` values."""
+    rc = _RcSettings()
+    cfg: Dict[str, str] = {}
+    if hasattr(rc, "_cfg") and rc._cfg.has_section("ai"):
+        for key in rc._cfg.options("ai"):
+            cfg[key] = rc.get("ai", key)
+    return cfg
+
 
 def _cli_validate_range_pair(lo: Optional[int], hi: Optional[int], label: str) -> Optional[str]:
     if (lo is None) ^ (hi is None):
@@ -202,7 +223,8 @@ Headless analysis commands (desktop only — no GUI, no Qt window):
   compare      Two-trace diff (Trace Compare dialog → Export).
   analyze      CI regression gate vs a baseline .btf or metrics JSON
                (--fail-on-regression; optional --ai narrative).
-  ai-test      Offline AI evidence/validator benchmark (tests/ai dataset).
+  ai-test      AI evidence/validator benchmark (tests/ai dataset).
+               Offline fixtures by default; --models runs a live endpoint.
   migrations   Core Migrations table only (CSV).
   snapshot     Export a PNG/SVG image (timeline, migration inspector, or a
                statistics metric plot) without opening the GUI.
@@ -802,24 +824,51 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
 
     ai_test = sub.add_parser(
         "ai-test",
-        help="offline AI evidence/validator benchmark (no live model required)",
+        help="AI evidence/validator benchmark (offline fixtures or live --config)",
         description=(
-            "Score fixture responses in a JSON dataset (file or directory) "
-            "against expected facts: finding types, task names, jump:TIME "
-            "scope, and tool lists. Does not call a live model.\n\n"
+            "Score expected-facts cases in a JSON dataset (file or directory).\n"
+            "Without --config, uses canned responses in dataset.json (no live model).\n"
+            "With --config, calls endpoints listed in the suite XML.\n\n"
             "  %(prog)s ai-test --dataset tests/ai\n"
-            "  %(prog)s ai-test --dataset tests/ai/dataset.json --fail-under 70\n"
+            "  %(prog)s ai-test --dataset tests/ai --fail-under 70\n"
+            "  %(prog)s ai-test --config examples/ai/benchmark.xml -o AI_BENCHMARK.md\n"
+            "  %(prog)s ai-test --config examples/ai/benchmark-selfsigned.xml\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ai_test.add_argument(
         "--dataset", metavar="PATH",
         default=None,
-        help="JSON file or tests/ai directory (default: tests/ai)",
+        help="JSON file or tests/ai directory (default: tests/ai, or <dataset> in --config)",
     )
     ai_test.add_argument(
-        "--fail-under", type=int, default=70, metavar="N",
-        help="exit 1 when any case overall score is below N (default 70)",
+        "--fail-under", type=int, default=None, metavar="N",
+        help="exit 1 when any case overall score is below N (default 70 offline, or <fail-under> in --config)",
+    )
+    ai_test.add_argument(
+        "-c", "--config", metavar="XML",
+        default="",
+        help="live suite XML (models, base-url, tls-verify, api-key/env). See examples/ai/benchmark.xml",
+    )
+    ai_test.add_argument(
+        "--models", metavar="IDS",
+        default="",
+        help="comma-separated model ids to run from the suite XML (default: all <model> entries)",
+    )
+    ai_test.add_argument(
+        "--base-url", metavar="URL",
+        default="",
+        help="override every model's OpenAI-compatible base URL",
+    )
+    ai_test.add_argument(
+        "--insecure",
+        action="store_true",
+        help="skip TLS certificate verification (self-signed / private CA)",
+    )
+    ai_test.add_argument(
+        "-o", "--output", metavar="PATH",
+        default="",
+        help="write a markdown report (e.g. AI_BENCHMARK.md; or <output> in --config)",
     )
 
     return parser, {
@@ -1035,10 +1084,7 @@ def _cli_analyze_run(args: argparse.Namespace) -> int:
         except Exception:
             pass
         try:
-            rc = _RcSettings()
-            cfg: Dict[str, str] = {}
-            if hasattr(rc, "_cfg") and rc._cfg.has_section("ai"):
-                cfg.update({k: v for k, v in rc._cfg.items("ai")})
+            cfg = _cli_ai_rc_cfg()
             active = resolve_ai_settings(cfg)
             narrative = ai_chat_completion(
                 "Summarise this CI regression gate for an engineer. "
@@ -1799,17 +1845,158 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "tests", "ai",
     )
-    path = os.path.abspath(args.dataset or default)
+    config_path = str(getattr(args, "config", "") or "").strip()
+    models_raw = str(getattr(args, "models", "") or "").strip()
+    out_path = str(getattr(args, "output", "") or "").strip()
+    suite = None
+    if config_path:
+        try:
+            suite = load_benchmark_suite_xml(config_path)
+        except (OSError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    if models_raw and suite is None:
+        print(
+            "error: live --models requires --config <suite.xml> "
+            "(see examples/ai/benchmark.xml)",
+            file=sys.stderr,
+        )
+        return 1
+    path = os.path.abspath(
+        args.dataset
+        or (suite or {}).get("dataset")
+        or default
+    )
     if not os.path.exists(path):
         print(f"error: dataset not found: {path}", file=sys.stderr)
         return 1
+    fail_under = getattr(args, "fail_under", None)
+    if fail_under is None:
+        fail_under = int((suite or {}).get("fail_under") or 70)
+    else:
+        fail_under = int(fail_under)
+    if not out_path and suite:
+        out_path = str(suite.get("output") or "").strip()
+    offline = None
+    live = None
     try:
-        result = run_offline_benchmark(path, fail_under=int(args.fail_under or 0))
+        offline = run_offline_benchmark(
+            path, fail_under=fail_under if suite is None else 0)
+        if suite is not None:
+            from .ai_assistant import (
+                AI_CHAT_TIMEOUT_S,
+                is_local_ai_host,
+                live_benchmark_chat,
+                normalize_ai_base_url,
+            )
+            from .ai_tools import ai_viewer_tools
+            try:
+                selected = select_benchmark_suite_models(suite, models_raw)
+            except ValueError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
+            override_url = str(getattr(args, "base_url", "") or "").strip()
+            insecure = bool(getattr(args, "insecure", False))
+            tool_catalog = ai_viewer_tools()
+
+            def _tools_for_case(case: dict) -> list:
+                allowed = list(
+                    ((case.get("expected") or {}) if isinstance(case.get("expected"), dict)
+                     else {}).get("allowed_tools") or []
+                )
+                if not allowed:
+                    return tool_catalog
+                want = set(allowed)
+                picked = []
+                for t in tool_catalog:
+                    fn = t.get("function") if isinstance(t.get("function"), dict) else {}
+                    if fn.get("name") in want:
+                        picked.append(t)
+                return picked or tool_catalog
+
+            by_id = {str(m.get("id") or ""): m for m in selected}
+            for spec in selected:
+                mid = str(spec.get("id") or "")
+                url = override_url or str(spec.get("base_url") or "")
+                tls_ok = False if insecure else bool(spec.get("tls_verify", True))
+                key = str(spec.get("api_key") or "")
+                env_name = str(spec.get("api_key_env") or "")
+                if not is_local_ai_host(url) and not key:
+                    hint = env_name or "OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY or <api-key> in the XML"
+                    print(
+                        f"error: API key missing for {mid}. Set {hint}.",
+                        file=sys.stderr,
+                    )
+                    return 1
+                print(
+                    f"[ai-test] {normalize_ai_base_url(url)}  model={mid}"
+                    f"  tls_verify={str(tls_ok).lower()}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+            def complete(query, findings_text, model, case):
+                spec = by_id.get(str(model) or "") or {}
+                cid = str((case or {}).get("id") or "?")
+                url = override_url or str(spec.get("base_url") or "")
+                tls_ok = False if insecure else bool(spec.get("tls_verify", True))
+                timeout = float(spec.get("timeout_s") or 0.0) or max(
+                    float(AI_CHAT_TIMEOUT_S), 180.0)
+                print(f"[ai-test] {model}  {cid} …", file=sys.stderr, flush=True)
+                turn = live_benchmark_chat(
+                    query,
+                    findings_text,
+                    model=model,
+                    case=case,
+                    tools=_tools_for_case(case),
+                    base_url=url,
+                    api_key=str(spec.get("api_key") or ""),
+                    preset=str(spec.get("preset") or ""),
+                    tls_verify=tls_ok,
+                    timeout_s=timeout,
+                )
+                if turn.get("error"):
+                    print(
+                        f"[ai-test] {model}  {cid}  error: {turn['error']}",
+                        file=sys.stderr, flush=True,
+                    )
+                return turn
+
+            live = run_live_benchmark(
+                path,
+                [str(m.get("id") or "") for m in selected],
+                complete=complete,
+                fail_under=fail_under,
+            )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(result["report"], end="")
-    return 0 if result.get("ok") else 1
+    if live:
+        print(live.get("report") or "", end="")
+    elif offline:
+        print(offline.get("report") or "", end="")
+    if out_path:
+        dataset_label = path
+        if path.replace("\\", "/").rstrip("/").endswith("tests/ai"):
+            dataset_label = "tests/ai"
+        md = format_benchmark_markdown(
+            offline=offline, live=live, dataset=dataset_label,
+        )
+        try:
+            with open(out_path, "w", encoding="utf-8") as fh:
+                fh.write(md)
+            print(f"Wrote {out_path}", file=sys.stderr)
+        except OSError as exc:
+            print(f"error: cannot write {out_path}: {exc}", file=sys.stderr)
+            return 1
+    if live is not None:
+        if fail_under:
+            return 0 if live.get("ok") else 1
+        had_error = any(
+            m.get("error") for m in (live.get("models") or [])
+        )
+        return 1 if had_error else 0
+    return 0 if (offline or {}).get("ok") else 1
 
 
 def _cli_ai_test_main(argv: List[str]) -> int:

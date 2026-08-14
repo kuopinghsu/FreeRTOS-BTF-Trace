@@ -35,6 +35,7 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     _ai_log_document_html,
     _format_ai_log_html,
     ai_chat_completion,
+    live_benchmark_chat,
     append_ai_mcp_log,
     append_explain_region_bounds,
     apply_ai_preset,
@@ -165,8 +166,9 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(normalize_ai_preset("gemini"), AI_PRESET_GEMINI)
         self.assertEqual(normalize_ai_preset("openai"), AI_PRESET_OPENAI)
         self.assertEqual(normalize_ai_preset("chatgpt"), AI_PRESET_OPENAI)
-        # Retired presets (xAI, DeepSeek) land on Custom.
-        self.assertEqual(normalize_ai_preset("deepseek"), AI_PRESET_CUSTOM)
+        # Unknown vendor names stay as extra presets (Import adds them).
+        self.assertEqual(normalize_ai_preset("deepseek"), "deepseek")
+        self.assertEqual(normalize_ai_preset("grok"), "grok")
 
     def test_apply_ai_preset(self) -> None:
         ollama = apply_ai_preset(AI_PRESET_OLLAMA)
@@ -266,14 +268,16 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(openai["preset"], AI_PRESET_OPENAI)
         self.assertEqual(openai["openai_base_url"], "https://api.openai.com/v1")
         self.assertEqual(openai["openai_api_key"], "sk-test")
-        # A retired vendor name lands on Custom.
+        # A vendor name that is not a builtin becomes an extra preset.
         xai = parse_ai_settings_json({
             "preset": "xai",
             "base_url": "https://api.x.ai/v1",
             "model": "grok-2",
         })
-        self.assertEqual(xai["preset"], AI_PRESET_CUSTOM)
-        self.assertEqual(xai["custom_model"], "grok-2")
+        self.assertEqual(xai["preset"], "xai")
+        self.assertEqual(xai["xai_model"], "grok-2")
+        extras = json.loads(xai["extra_presets"])
+        self.assertEqual(extras[0]["id"], "xai")
         # No preset given: inferred from the base URL.
         local = parse_ai_settings_json({"base_url": "http://localhost:11434"})
         self.assertEqual(local["preset"], AI_PRESET_OLLAMA)
@@ -286,6 +290,29 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(multi["preset"], AI_PRESET_OLLAMA)
         self.assertEqual(multi["gemini_api_key"], "k")
         self.assertEqual(multi["ollama_model"], "m")
+
+    def test_parse_ai_settings_json_checkboxes(self) -> None:
+        patch = parse_ai_settings_json({
+            "preset": "ollama",
+            "model": "qwen3.5:9b",
+            "enabled": False,
+            "auto_apply": True,
+            "redact_task_names": True,
+            "trace_sensitive": True,
+            "mcp_log": True,
+        })
+        self.assertEqual(patch["enabled"], "false")
+        self.assertEqual(patch["auto_apply"], "true")
+        self.assertEqual(patch["redact_task_names"], "true")
+        self.assertEqual(patch["trace_sensitive"], "true")
+        self.assertEqual(patch["mcp_log"], "true")
+        # Omitted flags are not written, so the dialog leaves them alone.
+        skipped = parse_ai_settings_json({
+            "preset": "ollama",
+            "model": "qwen3.5:9b",
+        })
+        self.assertNotIn("enabled", skipped)
+        self.assertNotIn("auto_apply", skipped)
 
     def test_parse_ai_settings_json_errors(self) -> None:
         for bad in (
@@ -305,8 +332,8 @@ class AiAssistantHelpersTests(unittest.TestCase):
             "gemini.json": (AI_PRESET_GEMINI, "api_key"),
             "openai.json": (AI_PRESET_OPENAI, "api_key"),
             "ollama.json": (AI_PRESET_OLLAMA, "none"),
-            "deepseek.json": (AI_PRESET_CUSTOM, "api_key"),
-            "grok.json": (AI_PRESET_CUSTOM, "api_key"),
+            "deepseek.json": ("deepseek", "api_key"),
+            "grok.json": ("grok", "api_key"),
         }
         for name, (preset, auth) in expected.items():
             path = os.path.join(here, "examples", "ai", name)
@@ -318,6 +345,11 @@ class AiAssistantHelpersTests(unittest.TestCase):
             self.assertTrue(patch[f"{preset}_model"], name)
             self.assertEqual(patch[f"{preset}_auth_mode"], auth, name)
             self.assertIn("// auth_mode:", text, name)
+            self.assertEqual(patch["enabled"], "true", name)
+            self.assertEqual(patch["auto_apply"], "false", name)
+            self.assertEqual(patch["redact_task_names"], "false", name)
+            self.assertEqual(patch["trace_sensitive"], "false", name)
+            self.assertEqual(patch["mcp_log"], "false", name)
         multi_path = os.path.join(here, "examples", "ai", "presets.json")
         with open(multi_path, encoding="utf-8") as fh:
             multi_text = fh.read()
@@ -327,7 +359,11 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(multi["ollama_auth_mode"], "none")
         self.assertEqual(multi["gemini_auth_mode"], "api_key")
         self.assertTrue(multi["openai_model"])
-        self.assertTrue(multi["custom_base_url"])
+        self.assertTrue(multi["deepseek_base_url"])
+        self.assertTrue(multi["grok_base_url"])
+        self.assertEqual(multi["enabled"], "true")
+        extras = {row["id"] for row in json.loads(multi["extra_presets"])}
+        self.assertEqual(extras, {"deepseek", "grok"})
 
     def test_ai_chat_requires_key_for_remote(self) -> None:
         from unittest.mock import patch
@@ -343,6 +379,38 @@ class AiAssistantHelpersTests(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 ai_chat("hi", base_url="https://api.openai.com/v1", api_key="")
         self.assertIn("API key required", str(ctx.exception))
+
+    def test_resolve_ai_api_key_settings_then_env(self) -> None:
+        from unittest.mock import patch
+
+        from btf_viewer_pkg.ai_assistant import resolve_ai_api_key
+
+        empty = {
+            "OPENAI_API_KEY": "",
+            "GEMINI_API_KEY": "",
+            "OLLAMA_API_KEY": "",
+        }
+        with patch.dict(os.environ, empty, clear=False):
+            self.assertEqual(resolve_ai_api_key("sk-settings"), "sk-settings")
+            self.assertEqual(resolve_ai_api_key(""), "")
+        with patch.dict(
+            os.environ,
+            {**empty, "OPENAI_API_KEY": "sk-openai", "GEMINI_API_KEY": "sk-gemini"},
+            clear=False,
+        ):
+            self.assertEqual(resolve_ai_api_key(""), "sk-openai")
+        with patch.dict(
+            os.environ,
+            {**empty, "GEMINI_API_KEY": "sk-gemini", "OLLAMA_API_KEY": "sk-ollama"},
+            clear=False,
+        ):
+            self.assertEqual(resolve_ai_api_key(""), "sk-gemini")
+        with patch.dict(
+            os.environ,
+            {**empty, "CURSOR_API_KEY": "cursor-secret"},
+            clear=False,
+        ):
+            self.assertEqual(resolve_ai_api_key(""), "")
 
     def test_normalize_api_key(self) -> None:
         from btf_viewer_pkg.ai_assistant import ai_request_headers, normalize_api_key
@@ -494,6 +562,30 @@ class AiAssistantHelpersTests(unittest.TestCase):
         )
         self.assertIn("quota", tip.lower())
         self.assertIn("gemini-flash-lite-latest", tip)
+
+    def test_format_ai_http_error_uses_vendor_message(self) -> None:
+        from btf_viewer_pkg.ai_assistant import format_ai_http_error
+
+        gemini_503 = """[{
+          "error": {
+            "code": 503,
+            "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.",
+            "status": "UNAVAILABLE"
+          }
+        }]"""
+        text = format_ai_http_error(503, gemini_503)
+        self.assertEqual(
+            text,
+            "HTTP 503: This model is currently experiencing high demand. "
+            "Spikes in demand are usually temporary. Please try again later.",
+        )
+        self.assertNotIn("generativelanguage", text)
+        self.assertNotIn("UNAVAILABLE", text)
+        ollama = format_ai_http_error(404, '{"error":"model \\"foo\\" not found"}')
+        self.assertEqual(ollama, 'HTTP 404: model "foo" not found')
+        plain = format_ai_http_error(401, "unauthorized", tip=" Check authentication.")
+        self.assertTrue(plain.startswith("HTTP 401: unauthorized"))
+        self.assertIn("Check authentication", plain)
 
     def test_match_model_name(self) -> None:
         served = ["qwen2.5:14b", "deepseek-r1:14b", "llama3.2:latest"]
@@ -745,7 +837,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
             logged = Path(path).read_text(encoding="utf-8")
             self.assertIn("/models", logged)
             self.assertIn("/chat/completions", logged)
-            self.assertIn("Reply with exactly: OK", logged)
+            self.assertIn("Reply with JSON only", logged)
             self.assertGreaterEqual(calls["n"], 2)
 
     def test_chat_completion_keeps_tools_on_generic_400(self) -> None:
@@ -1018,6 +1110,125 @@ class AiAssistantHelpersTests(unittest.TestCase):
             )
         self.assertEqual(calls["n"], 2)
         self.assertEqual(turn["content"], "Retry worked.")
+
+    def test_live_benchmark_chat_follows_tool_only_turn(self) -> None:
+        n = {"n": 0}
+
+        def fake_chat(*_a, **kwargs):
+            n["n"] += 1
+            if n["n"] == 1:
+                self.assertTrue(kwargs.get("tools"))
+                return {
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "name": "investigate",
+                        "arguments": {},
+                    }],
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "investigate",
+                                "arguments": "{}",
+                            },
+                        }],
+                    },
+                }
+            self.assertFalse(kwargs.get("tools"))
+            roles = [m.get("role") for m in (kwargs.get("messages") or [])]
+            self.assertIn("tool", roles)
+            blob = json.dumps(kwargs.get("messages") or [])
+            self.assertNotIn("finding_types", blob)
+            return {
+                "content": (
+                    "CS[22] shows migration thrash around jump:1083000. "
+                    "Confidence: Medium."
+                ),
+                "tool_calls": [],
+            }
+
+        with patch("btf_viewer_pkg.ai_assistant.ai_chat_completion", fake_chat):
+            turn = live_benchmark_chat(
+                "Why is CS[22] bouncing?",
+                findings_text="Known tasks: CS[22]",
+                model="gemini-3.6-flash",
+                case={
+                    "id": "migration_thrash",
+                    "catalog": {"tasks": ["CS[22]"], "times": [1083000]},
+                },
+                tools=[{
+                    "type": "function",
+                    "function": {"name": "investigate", "parameters": {}},
+                }],
+                api_key="test-key",
+                preset="gemini",
+            )
+        self.assertEqual(n["n"], 2)
+        self.assertIn("CS[22]", turn["content"])
+        self.assertEqual(turn["tool_calls"][0]["name"], "investigate")
+        self.assertNotIn("error", turn)
+
+    def test_live_benchmark_chat_skips_followup_when_text_present(self) -> None:
+        n = {"n": 0}
+
+        def fake_chat(*_a, **_kw):
+            n["n"] += 1
+            return {
+                "content": "TASK_A[1] blocked. Confidence: High.",
+                "tool_calls": [{"id": "c1", "name": "investigate", "arguments": {}}],
+            }
+
+        with patch("btf_viewer_pkg.ai_assistant.ai_chat_completion", fake_chat):
+            turn = live_benchmark_chat(
+                "Why did TASK_A[1] stall?",
+                findings_text="Known tasks: TASK_A[1]",
+                model="qwen3.5:9b",
+                case={"id": "mutex_contention"},
+                tools=[{"type": "function", "function": {"name": "investigate"}}],
+            )
+        self.assertEqual(n["n"], 1)
+        self.assertIn("TASK_A[1]", turn["content"])
+
+    def test_live_benchmark_chat_follows_planning_text_plus_tools(self) -> None:
+        n = {"n": 0}
+
+        def fake_chat(*_a, **kwargs):
+            n["n"] += 1
+            if n["n"] == 1:
+                return {
+                    "content": (
+                        "Let me start by calling investigate() without a "
+                        "finding_id to understand TaskA[7] at jump:1500."
+                    ),
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "name": "investigate",
+                        "arguments": {},
+                    }],
+                }
+            return {
+                "content": (
+                    "Inside the cursor window TaskA[7] hits a blocking "
+                    "latency stall at jump:1500. Confidence: Medium."
+                ),
+                "tool_calls": [],
+            }
+
+        with patch("btf_viewer_pkg.ai_assistant.ai_chat_completion", fake_chat):
+            turn = live_benchmark_chat(
+                "What happened inside the C1–Cn cursor window?",
+                findings_text="Known tasks: TaskA[7]",
+                model="qwen3.5:27b",
+                case={"id": "explain_region"},
+                tools=[{"type": "function", "function": {"name": "investigate"}}],
+            )
+        self.assertEqual(n["n"], 2)
+        self.assertIn("blocking", turn["content"].lower())
+        self.assertNotIn("Let me start", turn["content"])
 
     def test_chat_completion_empty_reply_error_is_actionable(self) -> None:
         empty = {

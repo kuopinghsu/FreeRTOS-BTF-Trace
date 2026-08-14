@@ -32,24 +32,6 @@
       <button
         type="button"
         class="ai-link-btn"
-        title="Stop the current Ollama query"
-        :disabled="!busy"
-        @click="stop"
-      >
-        Stop
-      </button>
-      <button
-        type="button"
-        class="ai-btn primary ai-ask-btn"
-        title="Send the question below (Ctrl/Cmd+Enter)"
-        :disabled="busy || !aiEnabled || !draft.trim()"
-        @click="send()"
-      >
-        {{ busy ? 'Waiting…' : 'Ask' }}
-      </button>
-      <button
-        type="button"
-        class="ai-link-btn"
         title="Preferred language for assistant replies"
         @click="langOpen = true"
       >
@@ -385,6 +367,18 @@
               >
                 Save as template…
               </button>
+              <div class="ai-more-heading">
+                Knowledge
+              </div>
+              <button
+                type="button"
+                class="ai-more-item"
+                title="Store this finding as local historical knowledge"
+                :disabled="busy"
+                @click="onSaveUserKnowledge(); moreOpen = false"
+              >
+                Save current finding…
+              </button>
             </div>
           </div>
         </Teleport>
@@ -471,15 +465,51 @@
       </button>
     </div>
 
-    <textarea
-      v-model="draft"
-      class="ai-input"
-      rows="3"
-      placeholder="Ask about this trace… (Ctrl/Cmd+Enter to send)"
-      :disabled="busy || !aiEnabled"
-      @keydown.meta.enter.prevent="send()"
-      @keydown.ctrl.enter.prevent="send()"
-    />
+    <div class="ai-composer">
+      <textarea
+        v-model="draft"
+        class="ai-input"
+        rows="3"
+        placeholder="Ask about this trace… (Ctrl/Cmd+Enter to send)"
+        :disabled="busy || !aiEnabled"
+        @keydown.meta.enter.prevent="send()"
+        @keydown.ctrl.enter.prevent="send()"
+      />
+      <div class="ai-composer-icons">
+        <button
+          type="button"
+          class="ai-icon-btn primary"
+          :title="busy ? 'Stop the current query' : 'Send the question (Ctrl/Cmd+Enter)'"
+          :aria-label="busy ? 'Stop' : 'Send'"
+          :disabled="!busy && (!aiEnabled || !draft.trim())"
+          @click="onComposerAction"
+        >
+          <svg
+            v-if="busy"
+            viewBox="0 0 16 16"
+            width="14"
+            height="14"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M5 5h6v6H5z" />
+          </svg>
+          <svg
+            v-else
+            viewBox="0 0 16 16"
+            width="14"
+            height="14"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              fill-rule="evenodd"
+              d="M8 2.5l4.5 5H9.25v6.5h-2.5V7.5H3.5L8 2.5z"
+            />
+          </svg>
+        </button>
+      </div>
+    </div>
 
     <div
       class="ai-status"
@@ -559,22 +589,33 @@ import {
   buildValidationCatalog,
   builtinInvestigationTemplates,
   chatUsageFromResponse,
+  applyCloudPrivacy,
+  applyExperimentToHypotheses,
   classifyTracePrivacy,
   compareHypotheses,
+  dumpUserHistoricalKnowledge,
   dumpUserInvestigationTemplates,
   emptyCostMeter,
   formatCostMeter,
   formatConfidenceEvolution,
   formatPrivacyChip,
+  historicalKnowledgeForFinding,
   statusWithCost,
   investigationModePlan,
+  interpretInvestigationQuery,
   investigationModePrompt,
+  interpretedRunPrompt,
   investigationTemplatePrompt,
+  shouldConfirmInterpretedQuery,
+  newUserHistoricalEntry,
   newUserInvestigationTemplate,
+  parseUserHistoricalKnowledge,
   parseUserInvestigationTemplates,
+  toggleInterpretedScope,
   setHypothesisStatus,
   updateCaseFromTool,
   validateAiResponse,
+  VALIDATE_EXPERIMENT_PROMPT,
 } from '../utils/aiCase.js'
 import {
   buildInvestigationPackage,
@@ -586,7 +627,10 @@ import {
   formatInvestigationPlanStatus,
   isAgentTemplate,
   markPlanStepsFromTools,
+  parseBtfExpHref,
   parseBtfHypHref,
+  parseBtfScopeHref,
+  parseBtfToolHref,
 } from '../utils/aiInvestigation.js'
 import {
   aiFileStamp,
@@ -597,7 +641,9 @@ import {
   formatAiMessageHtml,
 } from '../utils/aiMarkdown.js'
 import {
+  loadAiUserHistoricalKnowledge,
   loadAiUserInvestigationTemplates,
+  saveAiUserHistoricalKnowledge,
   saveAiUserInvestigationTemplates,
 } from '../utils/settingsStore.js'
 
@@ -608,6 +654,8 @@ const props = defineProps({
   aiPresets: { type: Object, default: () => ({}) },
   responseLanguage: { type: String, default: DEFAULT_AI_RESPONSE_LANGUAGE },
   aiAutoApply: { type: Boolean, default: false },
+  aiRedactTaskNames: { type: Boolean, default: false },
+  aiTraceSensitive: { type: Boolean, default: false },
   /** () => Promise|{ findingsText, span, cores, scope } */
   getContext: { type: Function, required: true },
   /** () => [{ id, name }, ...] loaded BTF tabs */
@@ -621,7 +669,9 @@ const props = defineProps({
   getGuiState: { type: Function, default: null },
 })
 
-const emit = defineEmits(['openSettings', 'jump', 'highlight', 'update:responseLanguage'])
+const emit = defineEmits([
+  'openSettings', 'jump', 'highlight', 'update:responseLanguage', 'statusMessage',
+])
 
 const templates = AI_TEMPLATE_QUESTIONS
 const primaryTemplates = computed(() =>
@@ -674,8 +724,10 @@ let chatMessages = []
 let toolRound = 0
 let batchSeq = 0
 let activeTemplateId = ''
+let skipInterpretOnce = false
 const investigationPlan = ref(null)
 let evidencePayload = null
+let interpretedQuery = null
 
 const planStatusText = computed(() =>
   formatInvestigationPlanStatus(investigationPlan.value, props.responseLanguage))
@@ -707,6 +759,23 @@ function updateEvidenceFromToolResult(name, res) {
   }
   if (prev.validation && !payload.validation) payload.validation = prev.validation
   if (prev.cost && !payload.cost) payload.cost = prev.cost
+  if (payload.interpreted) interpretedQuery = payload.interpreted
+  else if (prev.interpreted && !payload.interpreted) payload.interpreted = prev.interpreted
+  if (payload.experiment) {
+    const hyps = payload.hypotheses_managed || payload.hypotheses
+      || prev.hypotheses_managed || prev.hypotheses || []
+    const updated = applyExperimentToHypotheses(hyps, payload.experiment)
+    if (updated.length) {
+      payload.hypotheses_managed = updated
+      payload.hypotheses = updated
+    }
+  }
+  if (payload.finding && typeof payload.finding === 'object') {
+    payload.historical_knowledge = historicalKnowledgeForFinding(payload.finding, {
+      current: payload.finding,
+      userCatalog: loadAiUserHistoricalKnowledge(),
+    })
+  }
   evidencePayload = payload
   syncEvidenceLogEntry(payload)
 }
@@ -919,6 +988,12 @@ const statusText = computed(() => {
   return statusWithCost(base, costMeter.value)
 })
 
+function setErrorStatus(msg) {
+  const short = String(msg || '').split('\n')[0].slice(0, 200)
+  error.value = short
+  if (short) emit('statusMessage', { text: `AI: ${short}`, error: true })
+}
+
 const activeAi = computed(() => resolveAiSettings({
   aiPreset: props.aiPreset,
   aiPresets: props.aiPresets,
@@ -934,6 +1009,8 @@ const authChipLabel = computed(() => (
 ))
 const privacyState = computed(() => classifyTracePrivacy({
   endpointIsLocal: isLocalAiHost(activeAi.value.baseUrl),
+  redactTaskNames: !!props.aiRedactTaskNames,
+  sensitive: !!props.aiTraceSensitive,
 }))
 const privacyChipLabel = computed(() => formatPrivacyChip(privacyState.value))
 const privacyChipTitle = computed(() => String(privacyState.value.note || ''))
@@ -1002,7 +1079,28 @@ function onMsgClick(ev) {
     if (parsed.action) onHypothesisAction(parsed.action, parsed.hypId)
     return
   }
-  const a = ev.target?.closest?.('a[data-jump], a[href^="btfjump:"], a[href^="btfhyp:"], a[data-highlight], a[href^="btfhighlight:"]')
+  const scopeA = ev.target?.closest?.('a[href^="btfscope:"]')
+  if (scopeA) {
+    ev.preventDefault()
+    const parsed = parseBtfScopeHref(scopeA.getAttribute('href') || '')
+    if (parsed.action) onScopeAction(parsed.action, parsed.key)
+    return
+  }
+  const expA = ev.target?.closest?.('a[href^="btfexp:"]')
+  if (expA) {
+    ev.preventDefault()
+    const parsed = parseBtfExpHref(expA.getAttribute('href') || '')
+    if (parsed.action) onExperimentAction(parsed.action, parsed.key)
+    return
+  }
+  const toolA = ev.target?.closest?.('a[href^="btftool:"]')
+  if (toolA) {
+    ev.preventDefault()
+    const parsed = parseBtfToolHref(toolA.getAttribute('href') || '')
+    if (parsed.action) onToolWhy(parsed.action, parsed.name)
+    return
+  }
+  const a = ev.target?.closest?.('a[data-jump], a[href^="btfjump:"], a[href^="btfhyp:"], a[href^="btfscope:"], a[href^="btfexp:"], a[href^="btftool:"], a[data-highlight], a[href^="btfhighlight:"]')
   if (a && !a.classList.contains('ai-mermaid-zoom')) {
     ev.preventDefault()
     const href = a.getAttribute('href') || ''
@@ -1222,6 +1320,7 @@ function clear() {
   error.value = ''
   mermaidZoom.value = null
   evidencePayload = null
+  interpretedQuery = null
   costMeter.value = emptyCostMeter()
   status.value = ''
 }
@@ -1231,6 +1330,11 @@ function stop() {
   status.value = 'Stopping…'
   error.value = ''
   abortCtrl.abort()
+}
+
+function onComposerAction() {
+  if (busy.value) stop()
+  else send()
 }
 
 function recordTurnUsage(turn, calls) {
@@ -1256,6 +1360,7 @@ async function onInvestigationMode(mode) {
   activeTemplateId = plan.template || plan.mode
   if (steps.length) setInvestigationPlan({ goal: label, steps })
   else setInvestigationPlan(null)
+  skipInterpretOnce = true
   draft.value = prompt
   await send()
 }
@@ -1321,9 +1426,96 @@ function onHypothesisAction(action, hypId) {
       + 'Finish with a verdict, jump:TIME evidence, and one next check.'
     )
     activeTemplateId = 'investigate'
+    skipInterpretOnce = true
     draft.value = prompt
     send()
   }
+}
+
+function onScopeAction(action, key) {
+  const act = String(action || '').trim().toLowerCase()
+  let interpreted = {
+    ...(interpretedQuery || evidencePayload?.interpreted || {}),
+  }
+  if (act === 'toggle') {
+    interpreted = toggleInterpretedScope(interpreted, key)
+    interpretedQuery = interpreted
+    const payload = { ...(evidencePayload || {}), interpreted }
+    const scopes = [...(interpreted.scope || [])].map(s => String(s)).filter(Boolean)
+    const mode = String(interpreted.mode || interpreted.kind || '')
+    payload.subtitle = mode && scopes.length
+      ? `${mode}: ${scopes.join(', ')}`
+      : (scopes.join(', ') || mode)
+    evidencePayload = payload
+    syncEvidenceLogEntry(payload)
+    return
+  }
+  if (act === 'edit') {
+    const q = String(interpreted.interpreted_question || '').trim()
+    const next = window.prompt('Interpreted question:', q)
+    if (next != null && String(next).trim()) {
+      interpreted.interpreted_question = String(next).trim()
+      interpretedQuery = interpreted
+      const payload = { ...(evidencePayload || {}), interpreted }
+      payload.conclusion = interpreted.interpreted_question
+      evidencePayload = payload
+      syncEvidenceLogEntry(payload)
+    }
+    return
+  }
+  if (act === 'run') {
+    activeTemplateId = 'investigate'
+    skipInterpretOnce = true
+    draft.value = interpretedRunPrompt(interpreted)
+    send()
+  }
+}
+
+function onExperimentAction(action) {
+  if (String(action || '').trim().toLowerCase() !== 'save') return
+  onSaveUserKnowledge()
+}
+
+function onToolWhy(action, name) {
+  if (String(action || '').trim().toLowerCase() !== 'why') return
+  const want = String(name || '').trim()
+  const reasons = evidencePayload?.tool_reasons || []
+  const hit = reasons.find(r => r && typeof r === 'object' && String(r.tool || '') === want)
+  const why = hit ? String(hit.reason || '') : ''
+  status.value = why ? `${want}: ${why}` : `${want}: no recorded reason`
+}
+
+function onSaveUserKnowledge() {
+  const payload = { ...(evidencePayload || {}) }
+  let finding = payload.finding && typeof payload.finding === 'object' ? payload.finding : {}
+  if (!finding.title) {
+    const items = payload.investigation_case?.suspected_findings || []
+    if (items[0] && typeof items[0] === 'object') finding = items[0]
+  }
+  const hk = payload.historical_knowledge && typeof payload.historical_knowledge === 'object'
+    ? payload.historical_knowledge
+    : {}
+  const extras = {
+    issue: String(payload.conclusion || finding.title || ''),
+    fix: String(hk.known_fix || ''),
+    build: String(hk.last_occurrence || ''),
+    task: String(finding.task || hk.task || ''),
+    metrics: { ...(hk.current || hk.typical || {}) },
+  }
+  for (const key of ['migrations', 'migration_rate', 'blocking', 'wcet']) {
+    if (finding[key] != null) extras[key] = finding[key]
+  }
+  const entry = newUserHistoricalEntry(finding, extras)
+  const name = window.prompt('Issue label:', entry.issue || 'Saved finding')
+  if (name == null) return
+  entry.issue = String(name || entry.issue).trim() || entry.issue
+  let items = parseUserHistoricalKnowledge(dumpUserHistoricalKnowledge(
+    loadAiUserHistoricalKnowledge(),
+  ))
+  items = items.filter(it => !(it.task === entry.task && it.issue === entry.issue))
+  items.push(entry)
+  saveAiUserHistoricalKnowledge(items)
+  status.value = `Saved knowledge “${entry.issue}”.`
 }
 
 async function onInvestigationTemplate(tpl) {
@@ -1337,6 +1529,7 @@ async function onInvestigationTemplate(tpl) {
   } else {
     setInvestigationPlan(null)
   }
+  skipInterpretOnce = true
   draft.value = prompt
   await send()
 }
@@ -1352,6 +1545,7 @@ async function onTemplate(t) {
     await runCompareTemplate(t.prompt)
     return
   }
+  skipInterpretOnce = true
   draft.value = t.prompt
   await send()
 }
@@ -1370,6 +1564,7 @@ async function runCompareTemplate(prompt) {
         status.value = 'Could not build Trace Compare tables.'
         return
       }
+      skipInterpretOnce = true
       await send(prompt, ctx)
     } catch (err) {
       status.value = err?.message || String(err)
@@ -1396,6 +1591,7 @@ async function confirmComparePick() {
       status.value = 'Could not build Trace Compare tables.'
       return
     }
+    skipInterpretOnce = true
     await send(prompt, ctx)
   } catch (err) {
     status.value = err?.message || String(err)
@@ -1411,6 +1607,7 @@ async function buildCompareCtx(idA, idB) {
 }
 
 async function ask(prompt) {
+  skipInterpretOnce = true
   draft.value = prompt
   await send()
 }
@@ -1425,6 +1622,7 @@ async function askTemplate(templateId, promptOverride = '') {
   } else {
     setInvestigationPlan(null)
   }
+  skipInterpretOnce = true
   draft.value = prompt
   await send()
 }
@@ -1442,7 +1640,27 @@ async function askCompare(idA, idB) {
       status.value = 'Could not build Trace Compare tables.'
       return
     }
+    skipInterpretOnce = true
     await send(prompt, ctx)
+  } catch (err) {
+    status.value = err?.message || String(err)
+    error.value = status.value
+  }
+}
+
+async function askValidateExperiment(idA, idB) {
+  if (idA == null || idB == null || idA === idB) {
+    status.value = 'Choose two different traces.'
+    return
+  }
+  try {
+    const ctx = normalizeAiContext(await buildCompareCtx(idA, idB))
+    if (!(ctx.findingsText || '').trim()) {
+      status.value = 'Could not build Trace Compare tables.'
+      return
+    }
+    skipInterpretOnce = true
+    await send(VALIDATE_EXPERIMENT_PROMPT, ctx)
   } catch (err) {
     status.value = err?.message || String(err)
     error.value = status.value
@@ -1597,7 +1815,7 @@ async function continueAfterTools() {
     } else {
       const errMsg = err?.message || String(err)
       messages.value.push({ role: 'assistant', content: `(Error) ${errMsg}` })
-      error.value = errMsg.split('\n')[0].slice(0, 200)
+      setErrorStatus(errMsg)
       noteAuthError(errMsg)
     }
   } finally {
@@ -1626,6 +1844,36 @@ async function undoBatch(_batchId) {
 async function send(overrideQuery = null, overrideCtx = null) {
   const query = (overrideQuery != null ? String(overrideQuery) : draft.value).trim()
   if (!query || busy.value || !props.aiEnabled) return
+  const skip = skipInterpretOnce
+  skipInterpretOnce = false
+  if (shouldConfirmInterpretedQuery(query, { alreadyInterpreted: skip })) {
+    messages.value.push({ role: 'user', content: query })
+    draft.value = ''
+    try {
+      const raw = overrideCtx != null
+        ? overrideCtx
+        : await Promise.resolve(props.getContext())
+      const ctx = normalizeAiContext(raw)
+      const cursors = ctx.cursors || []
+      let lo = null
+      let hi = null
+      if (cursors.length >= 2) {
+        lo = Math.min(...cursors.map(Number))
+        hi = Math.max(...cursors.map(Number))
+      }
+      const data = interpretInvestigationQuery(query, {
+        findings: ctx.findings || [],
+        cursorLo: lo,
+        cursorHi: hi,
+      })
+      updateEvidenceFromToolResult('interpret_query', { ok: true, ...data })
+      status.value = 'Confirm investigation scope, then Run investigation.'
+    } catch (err) {
+      status.value = err?.message || String(err)
+    }
+    await scrollLog()
+    return
+  }
   messages.value.push({ role: 'user', content: query })
   draft.value = ''
   busy.value = true
@@ -1641,12 +1889,28 @@ async function send(overrideQuery = null, overrideCtx = null) {
       ? overrideCtx
       : await Promise.resolve(props.getContext())
     const ctx = normalizeAiContext(raw)
+    const privacy = applyCloudPrivacy(ctx.findingsText || '', query, {
+      endpointIsLocal: isLocalAiHost(active.baseUrl),
+      redactTaskNames: !!props.aiRedactTaskNames,
+      sensitive: !!props.aiTraceSensitive,
+    })
+    if (privacy.blocked) {
+      status.value = privacy.note || 'Cloud AI disabled.'
+      messages.value.pop()
+      return
+    }
+    ctx.findingsText = privacy.findings_text || ctx.findingsText || ''
+    const sendQuery = privacy.query || query
+    if (sendQuery !== query) {
+      const last = messages.value[messages.value.length - 1]
+      if (last && last.role === 'user') last.content = sendQuery
+    }
     if (overrideCtx == null) refreshLoadedTabs()
     chatMessages = [
       { role: 'system', content: buildAiSystemPrompt(props.responseLanguage) },
       {
         role: 'user',
-        content: buildAiUserMessage(query, {
+        content: buildAiUserMessage(sendQuery, {
           findingsText: ctx.findingsText || '',
           metrics: ctx.metrics || null,
           span: ctx.span || '',
@@ -1672,7 +1936,7 @@ async function send(overrideQuery = null, overrideCtx = null) {
     } else {
       const msg = err?.message || String(err)
       messages.value.push({ role: 'assistant', content: `(Error) ${msg}` })
-      error.value = msg.split('\n')[0].slice(0, 200)
+      setErrorStatus(msg)
       noteAuthError(msg)
     }
   } finally {
@@ -1728,6 +1992,7 @@ defineExpose({
   ask,
   askTemplate,
   askCompare,
+  askValidateExperiment,
   clear,
   saveConversationAs,
   scrollLog,
@@ -1874,7 +2139,7 @@ defineExpose({
 }
 .ai-tpl-btn {
   min-width: 0;
-  min-height: 28px;
+  min-height: 28px; /* Desktop `_AI_CHIP_MIN_HEIGHT` */
   padding: 4px 8px;
   line-height: 1.3;
   white-space: nowrap;
@@ -1982,10 +2247,6 @@ defineExpose({
   background: #555555;
   border-color: #555555;
   color: #bbbbbb;
-}
-.ai-ask-btn {
-  padding: 3px 10px;
-  text-align: center;
 }
 .ai-log {
   flex: 1;
@@ -2233,6 +2494,10 @@ defineExpose({
 .ai-mermaid-zoom-links :deep(a) {
   color: #5b9bd5;
 }
+.ai-composer {
+  position: relative;
+  flex-shrink: 0;
+}
 .ai-input {
   width: 100%;
   box-sizing: border-box;
@@ -2245,7 +2510,48 @@ defineExpose({
   border: 1px solid var(--border, #3a4658);
   background: var(--panel-inset, #1a2230);
   color: var(--text, #e8eef7);
-  padding: 6px 8px;
+  padding: 6px 44px 6px 8px;
+}
+.ai-composer-icons {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.ai-icon-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--muted, #c5cdd8);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.ai-icon-btn:hover:not(:disabled) {
+  background: #2a3544;
+  color: var(--text, #e8eef7);
+}
+.ai-icon-btn.primary {
+  background: #2a6fb2;
+  color: #fff;
+}
+.ai-icon-btn.primary:hover:not(:disabled) {
+  background: #1a5a9a;
+}
+.ai-icon-btn:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.ai-icon-btn.primary:disabled {
+  background: #555555;
+  color: #bbbbbb;
+  opacity: 1;
 }
 .ai-actions {
   display: flex;

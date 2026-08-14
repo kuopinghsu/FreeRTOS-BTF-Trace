@@ -217,12 +217,15 @@ def _in_legend_panel(w: QWidget) -> bool:
 def _in_ai_actions_bar(w: QWidget) -> bool:
     """True when *w* is in an AI chip bar that must keep its natural width.
 
-    Ignored + a stretching row collapses Quick/Diagnose mode chips and
-    wrapping template buttons to zero width (web ``flex-wrap`` parity).
+    Ignored + a stretching row collapses Quick/Diagnose mode chips,
+    wrapping template buttons, and the header engine/privacy chips to
+    zero width (web ``flex-wrap`` / ``.ai-header`` parity).
     """
     p: Optional[QWidget] = w
     while p is not None:
-        if p.objectName() in ("aiActions", "aiTemplates", "aiModes"):
+        if p.objectName() in (
+                "aiActions", "aiTemplates", "aiModes", "aiHeader", "aiMoreMenu",
+                "aiComposer"):
             return True
         p = p.parentWidget()
     return False

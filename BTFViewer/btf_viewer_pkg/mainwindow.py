@@ -17,9 +17,12 @@ from .ai_assistant import (
     DEFAULT_AI_PRESET,
     DEFAULT_AI_RESPONSE_LANGUAGE,
     ai_jump_annotation_note,
+    dump_extra_ai_presets,
+    extra_ai_preset_ids_from_settings,
     migrate_ai_settings,
     normalize_ai_preset,
     parse_ai_mcp_log,
+    parse_extra_ai_presets,
     set_ai_mcp_log_enabled,
 )
 from .demo_api import demo_api_enabled, demo_api_port, start_demo_api
@@ -90,6 +93,7 @@ from .ai_tools import (
     validate_tool_call,
     what_if_estimate,
 )
+from .ai_case import experiment_percents_from_compare
 from .ai_investigation import (
     format_bookmark_label,
     snapshot_from_summary,
@@ -5045,12 +5049,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     _AI_LEGACY_KEYS = ("provider", "openai_preset", "ollama_url")
 
     @classmethod
-    def _ai_setting_keys(cls) -> list:
+    def _ai_setting_keys(cls, extra_ids=()) -> list:
         keys = ["enabled", "preset", "response_language", "auto_apply", "mcp_log",
-                "user_investigation_templates"]
+                "user_investigation_templates", "user_historical_knowledge",
+                "redact_task_names", "trace_sensitive", "extra_presets"]
+        pids = [pid for pid, _label, _base, _model in AI_PRESETS]
+        for pid in extra_ids:
+            if pid and pid not in pids:
+                pids.append(pid)
         keys += [
             f"{pid}_{field}"
-            for pid, _label, _base, _model in AI_PRESETS
+            for pid in pids
             for field in AI_PRESET_FIELDS
         ]
         return keys
@@ -5058,13 +5067,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _ai_read_settings(self) -> dict:
         """AI section of btf_viewer.rc, migrating pre-preset keys on first read."""
         s = self._settings
+        stored = set(s.section_keys("ai"))
         keys = self._ai_setting_keys()
-        cfg = {k: s.get("ai", k, "") for k in keys}
+        cfg = {k: s.get("ai", k, "") for k in set(keys) | stored}
         cfg["enabled"] = cfg["enabled"] or "true"
         cfg["response_language"] = (
             cfg["response_language"] or DEFAULT_AI_RESPONSE_LANGUAGE)
         cfg["auto_apply"] = cfg["auto_apply"] or "false"
         cfg["mcp_log"] = cfg["mcp_log"] or "false"
+        cfg["extra_presets"] = cfg.get("extra_presets") or "[]"
 
         legacy = {k: s.get("ai", k, "") for k in self._AI_LEGACY_KEYS}
         patch = migrate_ai_settings({**cfg, **legacy})
@@ -5073,6 +5084,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if patch:
             cfg.update(patch)
             s.set_many("ai", patch)
+        extra_ids = extra_ai_preset_ids_from_settings(cfg)
+        keys = self._ai_setting_keys(extra_ids)
         if any(v for v in legacy.values()):
             # Migration is one-shot: drop the pre-preset keys from the file.
             s.align_section_keys("ai", set(keys))
@@ -5112,6 +5125,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             cursors = []
         return {
             "findings_text": text,
+            "findings": findings,
             "scope": scope_title or "full trace",
             "span": span,
             "cores": len(tr.core_names or []),
@@ -5146,6 +5160,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if not scope_enabled:
             lo_a = hi_a = lo_b = hi_b = None
         tables = _build_trace_compare_rows(tr_a, tr_b, lo_a, hi_a, lo_b, hi_b)
+        try:
+            self._remember_trace_compare(
+                tr_a, tr_b, lo_a, hi_a, lo_b, hi_b, name_a, name_b,
+            )
+        except Exception:
+            pass
         csv_text = _build_compare_csv(name_a, name_b, scope_enabled, tables)
         if len(csv_text) > 60000:
             csv_text = csv_text[:60000] + "\n… (truncated for AI context)"
@@ -6009,10 +6029,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 annotations=list(self._annotations or []),
             )
         if name == AI_TOOL_COMPARE_PERFORMANCE:
-            return self._ai_compare_performance(
+            payload = self._ai_compare_performance(
                 str(args.get("tab_a") or ""),
                 str(args.get("tab_b") or ""),
             )
+            self._last_ai_compare = payload
+            return payload
         if name == AI_TOOL_GENERATE_REPORT:
             findings = []
             try:
@@ -6287,9 +6309,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 cursor_hi=hi,
             )
         if name == AI_TOOL_VALIDATE_EXPERIMENT:
+            actual = args.get("actual") or {}
+            if not actual:
+                actual = experiment_percents_from_compare(
+                    getattr(self, "_last_ai_compare", None)
+                )
             return validate_experiment_tool(
                 args.get("expected") or {},
-                args.get("actual") or {},
+                actual,
             )
         if name == AI_TOOL_MANAGE_HYPOTHESES:
             findings = []
@@ -6394,6 +6421,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._ai_save_baseline_profile(profile)
         except Exception:
             pass
+
+    def _remember_trace_compare(
+        self,
+        ta: Any,
+        tb: Any,
+        lo_a: Any,
+        hi_a: Any,
+        lo_b: Any,
+        hi_b: Any,
+        name_a: str = "A",
+        name_b: str = "B",
+    ) -> None:
+        """Stash Trace Compare dialog deltas for validate_experiment."""
+        snap_a = _trace_summary_snapshot(ta, lo_a, hi_a)
+        snap_b = _trace_summary_snapshot(tb, lo_b, hi_b)
+        self._last_ai_compare = compare_performance_tabs(
+            snap_a, snap_b, label_a=str(name_a or "A"), label_b=str(name_b or "B"),
+        )
 
     def _ai_compare_performance(self, tab_a: str, tab_b: str) -> dict:
         idx_a = self._ai_resolve_tab_ref(tab_a, 0)
@@ -6508,6 +6553,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self, parent=self, idx_a=idx_a, idx_b=idx_b,
             ai_enabled=self._ai_feature_enabled(),
             on_query_ai=self._query_compare_with_ai,
+            on_validate_experiment=self._validate_compare_with_ai,
+            on_compare=self._remember_trace_compare,
         )
         dlg.setModal(False)
         self._ai_compare_dlg = dlg
@@ -6831,6 +6878,27 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if panel is not None and hasattr(panel, "query_trace_compare"):
             a, b = int(idx_a), int(idx_b)
             QTimer.singleShot(0, lambda: panel.query_trace_compare(a, b))
+
+    def _validate_compare_with_ai(
+        self,
+        ai_enabled: bool = True,
+        idx_a: Optional[int] = None,
+        idx_b: Optional[int] = None,
+    ) -> None:
+        """Trace Compare → Validate experiment… uses last compare actuals."""
+        if not ai_enabled:
+            self._open_settings("AI")
+            return
+        if idx_a is None or idx_b is None or int(idx_a) == int(idx_b):
+            QMessageBox.information(
+                self, "Trace Compare",
+                "Choose two different traces to compare.")
+            return
+        self._focus_ai_panel()
+        panel = getattr(self, "_ai_panel", None)
+        if panel is not None and hasattr(panel, "query_validate_experiment"):
+            a, b = int(idx_a), int(idx_b)
+            QTimer.singleShot(0, lambda: panel.query_validate_experiment(a, b))
 
     def _open_migration_heatmap(self) -> None:
         self._open_corridor_inspector("heatmap")
@@ -8313,12 +8381,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     field: _ai_cfg.get(f"{pid}_{field}", "")
                     for field in AI_PRESET_FIELDS
                 }
-                for pid, _label, _base, _model in AI_PRESETS
+                for pid in (
+                    [p[0] for p in AI_PRESETS]
+                    + extra_ai_preset_ids_from_settings(_ai_cfg)
+                )
             },
+            ai_extra_presets=parse_extra_ai_presets(_ai_cfg.get("extra_presets")),
             response_language=_ai_cfg["response_language"],
             ai_auto_apply=str(_ai_cfg.get("auto_apply", "false")).lower()
             in ("1", "true", "yes", "on"),
             ai_mcp_log=str(_ai_cfg.get("mcp_log", "false")).lower()
+            in ("1", "true", "yes", "on"),
+            ai_redact_task_names=str(_ai_cfg.get("redact_task_names", "false")).lower()
+            in ("1", "true", "yes", "on"),
+            ai_trace_sensitive=str(_ai_cfg.get("trace_sensitive", "false")).lower()
             in ("1", "true", "yes", "on"),
             initial_page=page if isinstance(page, str) else "Appearance",
         )
@@ -8375,6 +8451,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 "response_language": dlg.response_language or DEFAULT_AI_RESPONSE_LANGUAGE,
                 "auto_apply": str(dlg.ai_auto_apply).lower(),
                 "mcp_log": str(dlg.ai_mcp_log).lower(),
+                "redact_task_names": str(dlg.ai_redact_task_names).lower(),
+                "trace_sensitive": str(dlg.ai_trace_sensitive).lower(),
+                "extra_presets": dump_extra_ai_presets(dlg.ai_extra_presets),
             }
             for _pid, _vals in dlg.ai_preset_settings.items():
                 for _field in AI_PRESET_FIELDS:
@@ -8384,6 +8463,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             )
             if _ai_changed:
                 self._settings.set_many("ai", _ai_upd)
+                extra_ids = [row["id"] for row in dlg.ai_extra_presets]
+                self._settings.align_section_keys(
+                    "ai", set(self._ai_setting_keys(extra_ids)))
                 panel = getattr(self, "_ai_panel", None)
                 refresh = getattr(panel, "_refresh_localized_chrome", None)
                 if callable(refresh):
@@ -8751,6 +8833,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self, parent=self,
             ai_enabled=self._ai_feature_enabled(),
             on_query_ai=self._query_compare_with_ai,
+            on_validate_experiment=self._validate_compare_with_ai,
+            on_compare=self._remember_trace_compare,
         ), self)
 
     def _scroll_view_to_task(self, task: str) -> None:

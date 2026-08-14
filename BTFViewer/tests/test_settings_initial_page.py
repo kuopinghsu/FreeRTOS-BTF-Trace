@@ -158,6 +158,37 @@ class SettingsInitialPageTests(unittest.TestCase):
         self.assertEqual(
             dlg.ai_preset_settings["ollama"]["api_key"], "keep-ollama-key")
 
+    def test_import_ai_settings_adds_unknown_preset_and_checkboxes(self) -> None:
+        dlg = self._dlg("AI")
+        self.addCleanup(dlg.deleteLater)
+        dlg._ai_enabled_cb.setChecked(True)
+        dlg._ai_auto_apply_cb.setChecked(False)
+        summary = dlg.apply_ai_settings_patch({
+            "preset": "deepseek",
+            "extra_presets": '[{"id": "deepseek", "label": "DeepSeek"}]',
+            "deepseek_base_url": "https://api.deepseek.com/v1",
+            "deepseek_model": "deepseek-v4-flash",
+            "deepseek_auth_mode": "api_key",
+            "enabled": "true",
+            "auto_apply": "true",
+            "redact_task_names": "true",
+            "trace_sensitive": "false",
+            "mcp_log": "true",
+        })
+        self.assertIn("DeepSeek", summary)
+        self.assertEqual(dlg.ai_preset, "deepseek")
+        self.assertGreaterEqual(dlg._ai_preset_combo.findData("deepseek"), 0)
+        self.assertEqual(dlg._ai_url_edit.text(), "https://api.deepseek.com/v1")
+        self.assertEqual(dlg._ai_model_text(), "deepseek-v4-flash")
+        self.assertTrue(dlg.ai_enabled)
+        self.assertTrue(dlg.ai_auto_apply)
+        self.assertTrue(dlg.ai_redact_task_names)
+        self.assertFalse(dlg.ai_trace_sensitive)
+        self.assertTrue(dlg.ai_mcp_log)
+        extras = dlg.ai_extra_presets
+        self.assertEqual(extras[0]["id"], "deepseek")
+        self.assertIn("deepseek", dlg.ai_preset_settings)
+
     def test_ai_model_refresh_fills_combo(self) -> None:
         dlg = self._dlg("AI")
         self.addCleanup(dlg.deleteLater)

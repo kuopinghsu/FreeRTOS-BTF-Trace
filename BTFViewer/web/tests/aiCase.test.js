@@ -2,6 +2,13 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   accumulateCost,
+  applyCloudPrivacy,
+  applyExperimentToHypotheses,
+  experimentPercentsFromCompare,
+  formatPrivacyChip,
+  sanitizeAnnotationsText,
+  shouldConfirmInterpretedQuery,
+  VALIDATE_EXPERIMENT_PROMPT,
   buildInvestigationCase,
   classifyPrivacy,
   dumpUserInvestigationTemplates,
@@ -37,11 +44,17 @@ describe('aiCase investigation lifecycle', () => {
     const payload = extractEvidencePanelPayload('investigate', { ok: true, ...ctx })
     assert.ok(payload.evidence_quality)
     assert.ok(payload.investigation_case)
+    assert.ok(payload.investigation_case.falsify?.supporting?.length)
+    const caseObj = buildInvestigationCase(ctx)
+    assert.ok(caseObj.falsification.supporting.some(s => String(s).includes('migrations')))
     const md = formatEvidencePanelMarkdown(payload, 'English')
     assert.match(md, /Evidence Quality/)
     assert.match(md, /Historical knowledge/)
     assert.match(md, /btfhyp:supported/)
     assert.match(md, /btfhyp:compare\/all/)
+    assert.match(md, /Direct evidence/)
+    assert.match(md, /Directly observed/)
+    assert.match(md, /Supporting evidence/)
   })
 
   it('flags invented tasks and out-of-window jumps', () => {
@@ -120,6 +133,35 @@ describe('aiCase investigation lifecycle', () => {
     assert.equal(parsed.length, 1)
     assert.equal(parsed[0].label, 'CPU Latency')
     assert.deepEqual(parsed[0].steps, ['detect_anomalies', 'investigate'])
+    const blocked = applyCloudPrivacy('CS[22] stall', 'Why CS[22]?', {
+      sensitive: true, endpointIsLocal: false,
+    })
+    assert.equal(blocked.blocked, true)
+    const redacted = applyCloudPrivacy('CS[22] stall', 'Why CS[22]?', {
+      endpointIsLocal: false, redactTaskNames: true,
+    })
+    assert.match(redacted.findings_text, /Task-1/)
+    assert.doesNotMatch(redacted.findings_text, /CS\[22\]/)
+    const cloudNotes = applyCloudPrivacy('Annotation: secret note\nCS[22] stall', 'Why?', {
+      endpointIsLocal: false, redactTaskNames: false,
+    })
+    assert.match(cloudNotes.findings_text, /\[annotation\]/)
+    assert.doesNotMatch(cloudNotes.findings_text, /secret note/)
+    assert.equal(shouldConfirmInterpretedQuery('Why is CS[22] slow?'), true)
+    assert.equal(shouldConfirmInterpretedQuery(
+      'Why?\n\nInterpreted as diagnose. Investigation scope: blocking.',
+    ), false)
+    assert.equal(experimentPercentsFromCompare({
+      checks: [{ id: 'migrations', delta: -72, detail: '-72.0% (threshold 20%)' }],
+    }).migrations, -72)
+    assert.match(VALIDATE_EXPERIMENT_PROMPT, /Call validate_experiment\. Omit actual/)
+    assert.equal(formatPrivacyChip({ level: 'sensitive' }), '🔴 Sensitive')
+    assert.match(sanitizeAnnotationsText('note: "leak"'), /\[annotation\]/)
+    const hyps = applyExperimentToHypotheses(
+      [{ id: 'h1', hypothesis: 'thrash', status: 'possible' }],
+      { result: 'DISPROVED' },
+    )
+    assert.equal(hyps[0].status, 'rejected')
   })
 
   it('appends accumulated cost to status until the meter is empty', () => {

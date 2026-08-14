@@ -19,6 +19,8 @@ import {
   aiPresetSignInUrl,
   buildAiSystemPrompt,
   defaultAiAuthMode,
+  formatAiHttpError,
+  summarizeAiHttpErrorDetail,
   isLocalAiHost,
   matchModelName,
   migrateAiSettings,
@@ -107,6 +109,31 @@ describe('AI endpoint helpers', () => {
     assert.equal(aiTlsTip('http://localhost:11434/v1', true), '')
   })
 
+  it('formatAiHttpError shows code and vendor message only', () => {
+    const gemini503 = `[{
+      "error": {
+        "code": 503,
+        "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.",
+        "status": "UNAVAILABLE"
+      }
+    }]`
+    const text = formatAiHttpError(503, gemini503)
+    assert.equal(
+      text,
+      'HTTP 503: This model is currently experiencing high demand. '
+      + 'Spikes in demand are usually temporary. Please try again later.',
+    )
+    assert.equal(summarizeAiHttpErrorDetail(gemini503).includes('high demand'), true)
+    assert.doesNotMatch(text, /generativelanguage/)
+    assert.equal(
+      formatAiHttpError(404, '{"error":"model \\"foo\\" not found"}'),
+      'HTTP 404: model "foo" not found',
+    )
+    const auth = formatAiHttpError(401, 'unauthorized', '', 'Check authentication.')
+    assert.match(auth, /^HTTP 401: unauthorized/)
+    assert.match(auth, /Check authentication/)
+  })
+
   it('detects local hosts (no API key required)', () => {
     assert.equal(isLocalAiHost('http://localhost:11434/v1'), true)
     assert.equal(isLocalAiHost('http://127.0.0.1:11434/v1'), true)
@@ -135,8 +162,9 @@ describe('AI endpoint helpers', () => {
     assert.equal(normalizeAiPreset('gemini'), AI_PRESET_GEMINI)
     assert.equal(normalizeAiPreset('openai'), AI_PRESET_OPENAI)
     assert.equal(normalizeAiPreset('chatgpt'), AI_PRESET_OPENAI)
-    // Retired presets (xAI, DeepSeek) land on Custom.
-    assert.equal(normalizeAiPreset('deepseek'), AI_PRESET_CUSTOM)
+    // Unknown vendor names stay as extra presets (Import adds them).
+    assert.equal(normalizeAiPreset('deepseek'), 'deepseek')
+    assert.equal(normalizeAiPreset('grok'), 'grok')
   })
 
   it('applyAiPreset fills URL and model', () => {
@@ -241,8 +269,9 @@ describe('AI endpoint helpers', () => {
     assert.equal(openai.presets.openai.apiKey, 'sk-test')
 
     const xai = parseAiSettingsJson({ preset: 'xai', base_url: 'https://api.x.ai/v1', model: 'grok-2' })
-    assert.equal(xai.preset, AI_PRESET_CUSTOM)
-    assert.equal(xai.presets.custom.model, 'grok-2')
+    assert.equal(xai.preset, 'xai')
+    assert.equal(xai.presets.xai.model, 'grok-2')
+    assert.equal(xai.extraPresets[0].id, 'xai')
 
     const local = parseAiSettingsJson({ base_url: 'http://localhost:11434' })
     assert.equal(local.preset, AI_PRESET_OLLAMA)
@@ -255,6 +284,26 @@ describe('AI endpoint helpers', () => {
     assert.equal(multi.preset, AI_PRESET_OLLAMA)
     assert.equal(multi.presets.gemini.apiKey, 'k')
     assert.equal(multi.presets.ollama.model, 'm')
+  })
+
+  it('parseAiSettingsJson imports checkbox flags when present', () => {
+    const patch = parseAiSettingsJson({
+      preset: 'ollama',
+      model: 'qwen3.5:9b',
+      enabled: false,
+      auto_apply: true,
+      redact_task_names: true,
+      trace_sensitive: true,
+      mcp_log: true,
+    })
+    assert.equal(patch.aiEnabled, false)
+    assert.equal(patch.aiAutoApply, true)
+    assert.equal(patch.aiRedactTaskNames, true)
+    assert.equal(patch.aiTraceSensitive, true)
+    assert.equal(patch.aiMcpLog, true)
+    const skipped = parseAiSettingsJson({ preset: 'ollama', model: 'qwen3.5:9b' })
+    assert.equal(skipped.aiEnabled, undefined)
+    assert.equal(skipped.aiAutoApply, undefined)
   })
 
   it('parseAiSettingsJson reports unusable files', () => {
@@ -275,8 +324,8 @@ describe('AI endpoint helpers', () => {
       ['gemini', AI_PRESET_GEMINI, 'api_key'],
       ['openai', AI_PRESET_OPENAI, 'api_key'],
       ['ollama', AI_PRESET_OLLAMA, 'none'],
-      ['deepseek', AI_PRESET_CUSTOM, 'api_key'],
-      ['grok', AI_PRESET_CUSTOM, 'api_key'],
+      ['deepseek', 'deepseek', 'api_key'],
+      ['grok', 'grok', 'api_key'],
     ]) {
       const text = readFileSync(new URL(`../../examples/ai/${name}.json`, import.meta.url), 'utf8')
       const patch = parseAiSettingsJson(text)
@@ -285,6 +334,11 @@ describe('AI endpoint helpers', () => {
       assert.ok(patch.presets[preset].model)
       assert.equal(patch.presets[preset].authMode, auth)
       assert.match(text, /\/\/ auth_mode:/)
+      assert.equal(patch.aiEnabled, true)
+      assert.equal(patch.aiAutoApply, false)
+      assert.equal(patch.aiRedactTaskNames, false)
+      assert.equal(patch.aiTraceSensitive, false)
+      assert.equal(patch.aiMcpLog, false)
     }
     const multiText = readFileSync(new URL('../../examples/ai/presets.json', import.meta.url), 'utf8')
     assert.match(multiText, /\/\/ auth_mode:/)
@@ -293,7 +347,10 @@ describe('AI endpoint helpers', () => {
     assert.equal(multi.presets.ollama.authMode, 'none')
     assert.equal(multi.presets.gemini.authMode, 'api_key')
     assert.ok(multi.presets.openai.model)
-    assert.ok(multi.presets.custom.baseUrl)
+    assert.ok(multi.presets.deepseek.baseUrl)
+    assert.ok(multi.presets.grok.baseUrl)
+    assert.equal(multi.aiEnabled, true)
+    assert.deepEqual(multi.extraPresets.map((e) => e.id).sort(), ['deepseek', 'grok'])
   })
 
   it('aiJumpAnnotationNote keeps integer jump tokens clean', () => {
@@ -409,6 +466,9 @@ describe('AI endpoint helpers', () => {
         'A/B Regression Investigation',
       ],
     )
+    assert.match(panel, /min-height: 28px/)
+    assert.match(panel, /flex-wrap: wrap/)
+    assert.match(dlg, /color: #fff/)
     const findings = [
       'Investigate…', 'Root cause…', 'Verify with AI…', 'Explain…',
       'Auto investigate…', 'Query with AI…',
@@ -752,6 +812,10 @@ describe('AI endpoint helpers', () => {
       assert.equal(resolveAiApiKey('sk-settings'), 'sk-settings')
       window.__BTF_AI_ENV__ = { OLLAMA_API_KEY: 'ollama-env' }
       assert.equal(resolveAiApiKey(''), 'ollama-env')
+      window.__BTF_AI_ENV__ = { GEMINI_API_KEY: 'sk-gemini' }
+      assert.equal(resolveAiApiKey(''), 'sk-gemini')
+      window.__BTF_AI_ENV__ = { CURSOR_API_KEY: 'cursor-secret' }
+      assert.equal(resolveAiApiKey(''), '')
     } finally {
       delete window.__BTF_AI_ENV__
     }

@@ -18,7 +18,7 @@ import urllib.request
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ._imports import *  # noqa: F403,F401
-from .config import rasterize_svg_pixmap
+from .config import _svg_icon, rasterize_svg_pixmap
 from .ai_mermaid import (
     _link_row_html,
     decode_mermaid_zoom_token,
@@ -70,7 +70,10 @@ from .ai_investigation import (
     investigation_tree_mermaid,
     is_agent_template,
     mark_plan_steps_from_tools,
+    parse_btf_exp_href,
     parse_btf_hyp_href,
+    parse_btf_scope_href,
+    parse_btf_tool_href,
 )
 from .ai_case import (
     INVESTIGATION_MODE_LABELS,
@@ -79,24 +82,39 @@ from .ai_case import (
     build_validation_catalog,
     builtin_investigation_templates,
     chat_usage_from_response,
+    apply_cloud_privacy,
+    apply_experiment_to_hypotheses,
+    CAPABILITY_CHAT_PROBE,
     classify_trace_privacy,
     compare_hypotheses,
+    dump_user_historical_knowledge,
     dump_user_investigation_templates,
     empty_cost_meter,
     format_capability_report,
     format_confidence_evolution,
     format_cost_meter,
     format_privacy_chip,
+    historical_knowledge_for_finding,
     status_with_cost,
+    capability_probe_body,
     infer_model_capability,
+    interpret_investigation_query,
+    merge_live_capability,
+    should_confirm_interpreted_query,
+    tool_calling_from_chat_response,
     investigation_mode_plan,
     investigation_mode_prompt,
+    interpreted_run_prompt,
     investigation_template_prompt,
+    new_user_historical_entry,
     new_user_investigation_template,
+    parse_user_historical_knowledge,
     parse_user_investigation_templates,
+    toggle_interpreted_scope,
     set_hypothesis_status,
     update_case_from_tool,
     validate_ai_response,
+    VALIDATE_EXPERIMENT_PROMPT,
 )
 from .html_report import btf_html_report_document
 
@@ -563,7 +581,7 @@ AI_PRESET_GEMINI = "gemini"
 # (id, label, base_url, model)
 AI_PRESETS: Tuple[Tuple[str, str, str, str], ...] = (
     (AI_PRESET_CUSTOM, "Custom", "", ""),
-    (AI_PRESET_OLLAMA, "Ollama", "http://localhost:11434/v1", "phi4-mini:3.8b"),
+    (AI_PRESET_OLLAMA, "Ollama", "http://localhost:11434/v1", "qwen3.5:9b"),
     (AI_PRESET_OPENAI, "OpenAI", "https://api.openai.com/v1", "gpt-4o-mini"),
     (
         AI_PRESET_GEMINI,
@@ -576,7 +594,10 @@ AI_PRESETS: Tuple[Tuple[str, str, str, str], ...] = (
 
 DEFAULT_AI_PRESET = AI_PRESET_OLLAMA
 DEFAULT_AI_BASE_URL = "http://localhost:11434/v1"
-DEFAULT_AI_MODEL = "phi4-mini:3.8b"
+DEFAULT_AI_MODEL = "qwen3.5:9b"
+# Composer icons (16x16). Keep in sync with AiAssistantPanel.vue.
+AI_SEND_ICON_PATH = "M8 2.5l4.5 5H9.25v6.5h-2.5V7.5H3.5L8 2.5z"
+AI_STOP_ICON_PATH = "M5 5h6v6H5z"
 # Keep in sync with web/src/utils/ollamaClient.js (ms equivalents).
 AI_CHAT_TIMEOUT_S = 120.0
 AI_LIST_MODELS_TIMEOUT_S = 12.0
@@ -621,20 +642,72 @@ AI_PRESET_SIGNIN_LABELS: Dict[str, str] = {
     AI_PRESET_CUSTOM: "Open provider sign-in…",
 }
 
+BUILTIN_AI_PRESET_IDS = frozenset(row[0] for row in AI_PRESETS)
+_AI_PRESET_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+# Display names for extra presets added by Import… (id → combo label).
+AI_EXTRA_PRESET_LABELS: Dict[str, str] = {
+    "deepseek": "DeepSeek",
+    "grok": "Grok",
+    "xai": "xAI",
+    "claude": "Claude",
+    "anthropic": "Anthropic",
+    "mistral": "Mistral",
+    "openrouter": "OpenRouter",
+}
+
+# Synonyms of the built-in presets. Unknown vendor ids (deepseek, grok, …)
+# stay as extra presets instead of collapsing onto Custom.
+AI_IMPORT_PRESET_ALIASES: Dict[str, str] = {
+    "chatgpt": AI_PRESET_OPENAI,
+    "open_ai": AI_PRESET_OPENAI,
+    "openai_compatible": AI_PRESET_CUSTOM,
+    "google": AI_PRESET_GEMINI,
+    "google_gemini": AI_PRESET_GEMINI,
+    "gemini_openai": AI_PRESET_GEMINI,
+    "ollama_cloud": AI_PRESET_OLLAMA,
+    "local": AI_PRESET_OLLAMA,
+}
+
+
+def sanitize_ai_preset_id(raw: Optional[str]) -> str:
+    """Lowercase letter-led id, or empty when the name cannot be a preset."""
+    want = (raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    want = re.sub(r"[^a-z0-9_]", "", want)
+    want = re.sub(r"_+", "_", want).strip("_")
+    if not _AI_PRESET_ID_RE.match(want):
+        return ""
+    return want
+
+
+def ai_preset_display_label(preset_id: str, explicit: str = "") -> str:
+    """Combo label for a builtin or extra preset."""
+    text = (explicit or "").strip()
+    if text:
+        return text
+    pid = sanitize_ai_preset_id(preset_id)
+    for row in AI_PRESETS:
+        if row[0] == pid:
+            return row[1]
+    if pid in AI_EXTRA_PRESET_LABELS:
+        return AI_EXTRA_PRESET_LABELS[pid]
+    return pid.replace("_", " ").title() if pid else "Custom"
+
 
 def normalize_ai_preset(preset_id: Optional[str]) -> str:
-    """Map a stored/legacy preset id onto one of the known presets."""
-    want = (preset_id or DEFAULT_AI_PRESET).strip().lower().replace("-", "_")
-    for row in AI_PRESETS:
-        if row[0] == want:
-            return row[0]
-    if want in ("google", "google_gemini", "gemini_openai"):
-        return AI_PRESET_GEMINI
-    if want in ("ollama_cloud", "local"):
-        return AI_PRESET_OLLAMA
-    if want in ("chatgpt", "open_ai"):
-        return AI_PRESET_OPENAI
-    return AI_PRESET_CUSTOM
+    """Map a stored/legacy preset id onto a builtin or extra preset.
+
+    Well-formed unknown ids (``deepseek``, ``grok``, …) are kept so Import…
+    can add them to the preset list. Synonyms of the builtins still fold
+    (``chatgpt`` → OpenAI). Empty / garbage ids fall back to the default.
+    """
+    want = sanitize_ai_preset_id(preset_id or "")
+    if not want:
+        return DEFAULT_AI_PRESET
+    if want in BUILTIN_AI_PRESET_IDS:
+        return want
+    if want in AI_IMPORT_PRESET_ALIASES:
+        return AI_IMPORT_PRESET_ALIASES[want]
+    return want
 
 
 def ai_preset_info(preset_id: str) -> Tuple[str, str, str, str]:
@@ -643,7 +716,7 @@ def ai_preset_info(preset_id: str) -> Tuple[str, str, str, str]:
     for row in AI_PRESETS:
         if row[0] == want:
             return row
-    return AI_PRESETS[0]
+    return (want, ai_preset_display_label(want), "", "")
 
 
 def apply_ai_preset(preset_id: str) -> Dict[str, str]:
@@ -655,6 +728,101 @@ def apply_ai_preset(preset_id: str) -> Dict[str, str]:
 def ai_preset_setting_key(preset_id: str, field: str) -> str:
     """Settings key holding *field* for *preset_id* (e.g. ``ollama_base_url``)."""
     return f"{normalize_ai_preset(preset_id)}_{field}"
+
+
+def parse_extra_ai_presets(raw: Any) -> List[Dict[str, str]]:
+    """``[{id, label}, …]`` from settings JSON / the ``extra_presets`` rc key."""
+    if not raw:
+        return []
+    data = raw
+    if isinstance(data, str):
+        text = data.strip()
+        if not text:
+            return []
+        try:
+            data = json.loads(text)
+        except ValueError:
+            return []
+    if isinstance(data, dict):
+        data = [
+            {"id": key, **(val if isinstance(val, dict) else {"label": str(val)})}
+            for key, val in data.items()
+        ]
+    if not isinstance(data, list):
+        return []
+    out: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    for item in data:
+        if isinstance(item, str):
+            pid = sanitize_ai_preset_id(item)
+            label = ""
+        elif isinstance(item, dict):
+            pid = sanitize_ai_preset_id(
+                str(item.get("id") or item.get("preset") or ""))
+            label = _ai_json_str(item, "label", "name")
+        else:
+            continue
+        if not pid or pid in BUILTIN_AI_PRESET_IDS or pid in seen:
+            continue
+        seen.add(pid)
+        out.append({"id": pid, "label": ai_preset_display_label(pid, label)})
+    return out
+
+
+def dump_extra_ai_presets(rows: Any) -> str:
+    """Serialize extra presets for ``btf_viewer.rc`` / a settings patch."""
+    parsed = parse_extra_ai_presets(rows)
+    return json.dumps(parsed, ensure_ascii=False)
+
+
+def extra_ai_preset_ids_from_settings(cfg: Optional[Dict[str, Any]] = None) -> List[str]:
+    """Extra preset ids from ``extra_presets`` plus ``{id}_{field}`` keys."""
+    c = dict(cfg or {})
+    ids: List[str] = []
+    seen: set[str] = set()
+    for row in parse_extra_ai_presets(c.get("extra_presets")):
+        pid = row["id"]
+        if pid not in seen:
+            ids.append(pid)
+            seen.add(pid)
+    suffixes = tuple("_" + field for field in AI_PRESET_FIELDS)
+    for key in c:
+        text = str(key or "")
+        for suf in suffixes:
+            if not text.endswith(suf):
+                continue
+            pid = sanitize_ai_preset_id(text[: -len(suf)])
+            if pid and pid not in BUILTIN_AI_PRESET_IDS and pid not in seen:
+                ids.append(pid)
+                seen.add(pid)
+            break
+    return ids
+
+
+def merge_ai_preset_catalog(
+    extra_presets: Any = None,
+    preset_settings: Optional[Dict[str, Any]] = None,
+) -> List[Tuple[str, str, str, str]]:
+    """Built-in presets followed by extra ones from import / saved settings."""
+    rows: List[Tuple[str, str, str, str]] = list(AI_PRESETS)
+    seen = set(BUILTIN_AI_PRESET_IDS)
+    stored = dict(preset_settings or {})
+    extras = list(parse_extra_ai_presets(extra_presets))
+    for pid in stored:
+        sid = sanitize_ai_preset_id(str(pid))
+        if sid and sid not in seen and sid not in BUILTIN_AI_PRESET_IDS:
+            if not any(e["id"] == sid for e in extras):
+                extras.append({"id": sid, "label": ai_preset_display_label(sid)})
+    for extra in extras:
+        pid = extra["id"]
+        if pid in seen:
+            continue
+        vals = stored.get(pid) or {}
+        base = str(vals.get("base_url") or vals.get("baseUrl") or "")
+        model = str(vals.get("model") or "")
+        rows.append((pid, extra["label"], base, model))
+        seen.add(pid)
+    return rows
 
 
 def resolve_ai_settings(
@@ -760,20 +928,6 @@ def _legacy_openai_target(legacy_preset: str, legacy_base_url: str) -> str:
     return AI_PRESET_CUSTOM
 
 
-# Preset ids accepted by an import file beyond the current ones; older exports
-# and vendor names map onto an existing preset.
-AI_IMPORT_PRESET_ALIASES: Dict[str, str] = {
-    "chatgpt": AI_PRESET_OPENAI,
-    "open_ai": AI_PRESET_OPENAI,
-    "openai_compatible": AI_PRESET_CUSTOM,
-    "xai": AI_PRESET_CUSTOM,
-    "grok": AI_PRESET_CUSTOM,
-    "deepseek": AI_PRESET_CUSTOM,
-    "google": AI_PRESET_GEMINI,
-    "google_gemini": AI_PRESET_GEMINI,
-}
-
-
 def _ai_json_tls_verify(fields: Dict[str, Any]) -> Optional[str]:
     """Return ``true``/``false`` when the import file mentions TLS verify."""
     for name in ("tls_verify", "tlsVerify", "verify_tls", "verifyTls"):
@@ -799,16 +953,34 @@ def _ai_json_str(obj: Dict[str, Any], *names: str) -> str:
     return ""
 
 
+def _ai_json_bool(obj: Dict[str, Any], *names: str) -> Optional[bool]:
+    """Return a bool when *obj* names one of the checkbox keys."""
+    for name in names:
+        if name not in obj:
+            continue
+        value = obj.get(name)
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            return value
+        return parse_ai_auto_apply(value)
+    return None
+
+
 def _ai_import_preset_id(raw: str) -> str:
-    """Preset id for an import file, rejecting names we cannot place."""
-    want = raw.strip().lower().replace("-", "_").replace(" ", "_")
+    """Preset id for an import file; unknown names become extra presets."""
+    want = sanitize_ai_preset_id(raw)
+    if not want:
+        raise ValueError(
+            f"Unknown preset {raw!r}. Use a letter-led id such as ollama "
+            "or deepseek."
+        )
     for row in AI_PRESETS:
-        if want in (row[0], row[1].lower().replace(" ", "_")):
+        if want in (row[0], sanitize_ai_preset_id(row[1])):
             return row[0]
     if want in AI_IMPORT_PRESET_ALIASES:
         return AI_IMPORT_PRESET_ALIASES[want]
-    valid = ", ".join(row[0] for row in AI_PRESETS)
-    raise ValueError(f"Unknown preset {raw!r}. Use one of: {valid}.")
+    return want
 
 
 def _ai_import_preset_from_url(base_url: str) -> str:
@@ -844,10 +1016,13 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
         {"preset": "gemini", "base_url": "…", "model": "…", "api_key": "",
          "auth_mode": "api_key"}
 
-    or a ``presets`` object carrying several at once. snake_case and camelCase
-    key names both work, so files exported from either app import into both.
-    Whole-line ``//`` comments are ignored. Raises ``ValueError`` with a
-    user-facing message when the file cannot be applied.
+    or a ``presets`` object carrying several at once. Unknown preset names
+    (``deepseek``, ``grok``, …) become extra presets added to the combo.
+    Checkbox flags (``enabled``, ``auto_apply``, ``redact_task_names``,
+    ``trace_sensitive``, ``mcp_log``) are imported when present. snake_case
+    and camelCase key names both work, so files exported from either app
+    import into both. Whole-line ``//`` comments are ignored. Raises
+    ``ValueError`` with a user-facing message when the file cannot be applied.
     """
     if isinstance(data, (bytes, bytearray)):
         data = data.decode("utf-8", errors="replace")
@@ -863,8 +1038,17 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
     preset = _ai_import_preset_id(raw_preset) if raw_preset else ""
 
     per_preset: Dict[str, Dict[str, str]] = {}
+    extra_labels: Dict[str, str] = {}
+
+    def _note_extra(target: str, fields: Optional[Dict[str, Any]] = None) -> None:
+        if target in BUILTIN_AI_PRESET_IDS:
+            return
+        label = _ai_json_str(fields or {}, "label", "name")
+        extra_labels[target] = ai_preset_display_label(
+            target, label or extra_labels.get(target, ""))
 
     def _collect(target: str, fields: Dict[str, Any]) -> None:
+        _note_extra(target, fields)
         base_url = _ai_json_str(fields, "base_url", "baseUrl", "url")
         if base_url:
             if not base_url.lower().startswith(("http://", "https://")):
@@ -899,6 +1083,8 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
                 raise ValueError(f'Preset {key!r} must be an object.')
             _collect(_ai_import_preset_id(str(key)), fields)
 
+    if preset:
+        _note_extra(preset, data)
     flat_target = preset or _ai_import_preset_from_url(
         _ai_json_str(data, "base_url", "baseUrl", "url"))
     _collect(flat_target, data)
@@ -922,10 +1108,46 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
     for target, fields in per_preset.items():
         for field, value in fields.items():
             patch[f"{target}_{field}"] = value
+    extras = [
+        {"id": pid, "label": extra_labels[pid]}
+        for pid in extra_labels
+        if pid not in BUILTIN_AI_PRESET_IDS
+    ]
+    extras.extend(
+        row for row in parse_extra_ai_presets(
+            data.get("extra_presets", data.get("extraPresets")))
+        if row["id"] not in extra_labels
+    )
+    if extras:
+        patch["extra_presets"] = dump_extra_ai_presets(extras)
     language = _ai_json_str(
         data, "response_language", "responseLanguage", "aiResponseLanguage")
     if language:
         patch["response_language"] = language
+    flags = (
+        ("enabled", ("enabled", "ai_enabled", "aiEnabled")),
+        ("auto_apply", ("auto_apply", "ai_auto_apply", "aiAutoApply")),
+        (
+            "redact_task_names",
+            (
+                "redact_task_names", "anonymize_task_names",
+                "ai_redact_task_names", "aiRedactTaskNames",
+                "anonymize", "redact",
+            ),
+        ),
+        (
+            "trace_sensitive",
+            (
+                "trace_sensitive", "ai_trace_sensitive", "aiTraceSensitive",
+                "sensitive",
+            ),
+        ),
+        ("mcp_log", ("mcp_log", "ai_mcp_log", "aiMcpLog")),
+    )
+    for dest, names in flags:
+        value = _ai_json_bool(data, *names)
+        if value is not None:
+            patch[dest] = "true" if value else "false"
     return patch
 
 
@@ -985,14 +1207,36 @@ def normalize_ai_base_url(url: str) -> str:
     return u
 
 
-def resolve_ai_api_key(api_key: Optional[str] = None) -> str:
-    """*api_key*, else ``OPENAI_API_KEY`` / ``GEMINI_API_KEY`` / ``OLLAMA_API_KEY``."""
-    key = normalize_api_key(api_key)
-    for env_name in ("OPENAI_API_KEY", "GEMINI_API_KEY", "OLLAMA_API_KEY"):
+# Same names as the web viewer.
+AI_API_KEY_ENV_NAMES = ("OPENAI_API_KEY", "GEMINI_API_KEY", "OLLAMA_API_KEY")
+AI_API_KEY_REQUIRED = (
+    "API key required for remote endpoints "
+    "(Settings → AI → API key, or OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY). "
+    "Paste the raw key only — no Bearer prefix."
+)
+
+
+def read_ai_env_key(names: Optional[Any] = None) -> str:
+    """First non-empty env value among *names*."""
+    seq = AI_API_KEY_ENV_NAMES if names is None else names
+    if isinstance(seq, str):
+        seq = (seq,)
+    for name in seq:
+        n = str(name or "").strip()
+        if not n:
+            continue
+        key = normalize_api_key(os.environ.get(n, ""))
         if key:
-            break
-        key = normalize_api_key(os.environ.get(env_name, ""))
-    return key
+            return key
+    return ""
+
+
+def resolve_ai_api_key(api_key: Optional[str] = None) -> str:
+    """Settings *api_key*, else OPENAI / GEMINI / OLLAMA_API_KEY."""
+    key = normalize_api_key(api_key)
+    if key:
+        return key
+    return read_ai_env_key()
 
 
 def ai_request_headers(
@@ -1280,6 +1524,7 @@ def normalize_ai_context(ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         "scope": c.get("scope", "") or "",
         "metrics": c.get("metrics"),
         "cursors": list(cursors),
+        "findings": list(c.get("findings") or []),
     }
 
 
@@ -1356,6 +1601,9 @@ def _md_inline_to_html_escaped(text: str) -> str:
                 or low.startswith("btfjump:")
                 or low.startswith("btfhighlight:")
                 or low.startswith("btfhyp:")
+                or low.startswith("btfscope:")
+                or low.startswith("btfexp:")
+                or low.startswith("btftool:")
                 or low.startswith("mailto:")
             ):
                 buf.append(
@@ -2128,6 +2376,85 @@ def _read_http_body(
     return b"".join(chunks)
 
 
+def summarize_ai_http_error_detail(detail: str) -> str:
+    """Vendor error message from an HTTP body, without JSON/HTML dump."""
+    text = str(detail or "").strip()
+    if not text:
+        return ""
+    head = text[:64].lstrip().lower()
+    if head.startswith("<!doctype") or head.startswith("<html"):
+        return ""
+
+    data: Any = None
+    try:
+        data = json.loads(text)
+    except ValueError:
+        start_obj = text.find("{")
+        start_arr = text.find("[")
+        starts = [i for i in (start_obj, start_arr) if i >= 0]
+        if starts:
+            try:
+                data = json.loads(text[min(starts):])
+            except ValueError:
+                data = None
+
+    def _walk(obj: Any) -> str:
+        if isinstance(obj, list) and obj:
+            return _walk(obj[0])
+        if isinstance(obj, dict):
+            err = obj.get("error")
+            if isinstance(err, str) and err.strip():
+                return err.strip()
+            if isinstance(err, dict):
+                msg = err.get("message") or err.get("msg")
+                if msg:
+                    return str(msg).strip()
+            msg = obj.get("message") or obj.get("msg")
+            if msg:
+                return str(msg).strip()
+        if isinstance(obj, str):
+            return obj.strip()
+        return ""
+
+    msg = _walk(data) if data is not None else ""
+    if not msg:
+        m = re.search(r'"message"\s*:\s*"((?:\\.|[^"\\])*)"', text)
+        if m:
+            try:
+                msg = json.loads(f'"{m.group(1)}"')
+            except ValueError:
+                msg = m.group(1)
+    if not msg:
+        # Plain-text bodies stay, but drop pretty-printed JSON leftovers.
+        if text[:1] in "{[":
+            return ""
+        msg = text
+    msg = re.sub(r"\s+", " ", str(msg)).strip()
+    return msg[:300]
+
+
+def format_ai_http_error(
+    code: int,
+    detail: str = "",
+    reason: str = "",
+    *,
+    tip: str = "",
+) -> str:
+    """One-line HTTP error for the AI panel: ``HTTP 503: <message>``."""
+    msg = (
+        summarize_ai_http_error_detail(detail)
+        or str(reason or "").strip()
+        or "request failed"
+    )
+    text = f"HTTP {int(code)}: {msg}"
+    extra = str(tip or "").strip()
+    if extra:
+        if not text.endswith("."):
+            text += "."
+        text += " " + extra
+    return text
+
+
 def _ai_http_error_tip(code: int, detail: str = "", *, base_url: str = "") -> str:
     """Short remediation hint for OpenAI-compatible HTTP errors."""
     low = (detail or "").lower()
@@ -2135,7 +2462,7 @@ def _ai_http_error_tip(code: int, detail: str = "", *, base_url: str = "") -> st
     if code in (401, 403):
         return (
             " Check authentication (Settings → AI → Sign in or API key, "
-            "or OPENAI_API_KEY / GEMINI_API_KEY)."
+            "or OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY)."
         )
     if code == 400 and (
         "valid api key" in low or "api key" in low and "invalid" in low
@@ -2207,11 +2534,7 @@ def ai_chat_completion(
     url = url_base + "/chat/completions"
     chat_model = (model or DEFAULT_AI_MODEL).strip() or DEFAULT_AI_MODEL
     if not resolve_ai_api_key(api_key) and not is_local_ai_host(url_base):
-        raise RuntimeError(
-            "API key required for remote endpoints "
-            "(Settings → AI → API key, or OPENAI_API_KEY / GEMINI_API_KEY). "
-            "Paste the raw key only — no Bearer prefix."
-        )
+        raise RuntimeError(AI_API_KEY_REQUIRED)
     if cancel_event is not None and cancel_event.is_set():
         raise OllamaCancelled("Stopped")
     if messages is None:
@@ -2265,8 +2588,8 @@ def ai_chat_completion(
             }, enabled=do_log)
             tip = _ai_http_error_tip(exc.code, detail, base_url=url_base)
             err = RuntimeError(
-                f"OpenAI-compatible HTTP {exc.code} at {url}: "
-                f"{detail or exc.reason}.{tip}"
+                format_ai_http_error(
+                    exc.code, detail, str(exc.reason or ""), tip=tip)
             )
             err.http_code = exc.code  # type: ignore[attr-defined]
             err.http_detail = detail  # type: ignore[attr-defined]
@@ -2380,6 +2703,155 @@ def ai_chat_completion(
         "message": msg,
         "usage": chat_usage_from_response(body),
     }
+
+
+def _benchmark_catalog_tool_payload(
+    call: Dict[str, Any],
+    case: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Host-side tool result for live ``ai-test`` (no GUI, no expected labels)."""
+    catalog = (case or {}).get("catalog") if isinstance(case, dict) else {}
+    if not isinstance(catalog, dict):
+        catalog = {}
+    name = str((call or {}).get("name") or "tool").strip() or "tool"
+    return tool_result_payload(
+        True,
+        (
+            f"Host recorded `{name}`. The catalog in Findings is the only evidence. "
+            "Write your investigation conclusion in plain text now. "
+            "Cite jump:TIME and Task[id] from the catalog. "
+            "State confidence (High / Medium / Low)."
+        ),
+        tool=name,
+        tasks=list(catalog.get("tasks") or []),
+        times=list(catalog.get("times") or []),
+        cursor_lo=catalog.get("cursor_lo"),
+        cursor_hi=catalog.get("cursor_hi"),
+    )
+
+
+def _benchmark_needs_tool_followup(content: str, calls: Sequence[Any]) -> bool:
+    """True when the first turn is a tool call, not a scored conclusion.
+
+    Some models (Qwen 27B) put chain-of-thought / "I will call investigate"
+    into ``content`` *and* emit ``tool_calls``. That text is not a conclusion
+    (no Confidence: High/Medium/Low) and must not skip the host follow-up.
+    """
+    if not calls:
+        return False
+    blob = str(content or "").strip()
+    if not blob:
+        return True
+    return not re.search(
+        r"\bconfidence\s*:?\s*(high|medium|low)\b",
+        blob,
+        re.IGNORECASE,
+    )
+
+
+def live_benchmark_chat(
+    query: str,
+    findings_text: str = "",
+    *,
+    model: str = DEFAULT_AI_MODEL,
+    case: Optional[Dict[str, Any]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    base_url: str = DEFAULT_AI_BASE_URL,
+    api_key: str = "",
+    preset: str = "",
+    tls_verify: bool = True,
+    timeout_s: float = AI_CHAT_TIMEOUT_S,
+) -> Dict[str, Any]:
+    """One live benchmark turn, with a tool-result follow-up when needed.
+
+    Gemini (and other tool-first models) often return ``tool_calls`` with empty
+    ``content``. The viewer GUI executes the tool and continues the chat; the
+    live scorer must do the same or finding/evidence/root-cause stay at 0.
+    Models that already write a conclusion on the first turn are not called
+    again.
+    """
+    t0 = time.time()
+    messages = _build_chat_messages(query, findings_text=findings_text)
+    collected: List[Dict[str, Any]] = []
+    content = ""
+    usage: Dict[str, Any] = {}
+    error = ""
+
+    def _one(*, use_tools: bool) -> Dict[str, Any]:
+        return ai_chat_completion(
+            "",
+            findings_text="",
+            model=model,
+            base_url=base_url,
+            api_key=api_key,
+            preset=preset,
+            tls_verify=tls_verify,
+            timeout_s=timeout_s,
+            messages=messages,
+            tools=list(tools or []) if use_tools else [],
+        )
+
+    try:
+        turn = _one(use_tools=bool(tools))
+    except Exception as exc:
+        return {
+            "content": "",
+            "tool_calls": [],
+            "usage": {},
+            "elapsed_s": time.time() - t0,
+            "error": str(exc),
+        }
+    content = str((turn or {}).get("content") or "")
+    calls = list((turn or {}).get("tool_calls") or [])
+    usage = (turn or {}).get("usage") or {}
+    collected.extend(c for c in calls if isinstance(c, dict))
+
+    if _benchmark_needs_tool_followup(content, calls):
+        asst = (turn or {}).get("message")
+        if not isinstance(asst, dict) or str(asst.get("role") or "") != "assistant":
+            asst = canonical_assistant_tool_message(content, calls)
+        messages.append(asst)
+        for i, call in enumerate(calls):
+            if not isinstance(call, dict):
+                continue
+            payload = _benchmark_catalog_tool_payload(call, case)
+            messages.append(tool_result_message(
+                tool_call_id=str(call.get("id") or f"call_{i}"),
+                name=str(call.get("name") or ""),
+                content=format_tool_result_content(payload),
+            ))
+        messages.append({
+            "role": "user",
+            "content": (
+                "Tool results are above. Do not call any more tools. "
+                "Write your investigation conclusion in plain text now. "
+                "Cite jump:TIME and Task[id] from the catalog. "
+                "State confidence (High / Medium / Low)."
+            ),
+        })
+        try:
+            turn2 = _one(use_tools=False)
+        except Exception as exc:
+            error = str(exc)
+            turn2 = {}
+        if turn2:
+            follow = str(turn2.get("content") or "")
+            if follow.strip():
+                content = follow
+            more = list(turn2.get("tool_calls") or [])
+            collected.extend(c for c in more if isinstance(c, dict))
+            if turn2.get("usage"):
+                usage = turn2.get("usage") or usage
+
+    out: Dict[str, Any] = {
+        "content": content,
+        "tool_calls": collected,
+        "usage": usage if isinstance(usage, dict) else {},
+        "elapsed_s": time.time() - t0,
+    }
+    if error:
+        out["error"] = error
+    return out
 
 
 def ai_chat(
@@ -2517,13 +2989,9 @@ def ai_test_connection(
     model_name = (model or DEFAULT_AI_MODEL).strip() or DEFAULT_AI_MODEL
     key = resolve_ai_api_key(api_key)
     if not key and not is_local_ai_host(url_base):
-        raise RuntimeError(
-            "API key required for remote endpoints "
-            "(Settings → AI → API key, or OPENAI_API_KEY / GEMINI_API_KEY). "
-            "Paste the raw key only — no Bearer prefix."
-        )
+        raise RuntimeError(AI_API_KEY_REQUIRED)
 
-    _progress(f"1/2 Listing models at {url_base}…")
+    _progress(f"1/3 Listing models at {url_base}…")
     served: List[str] = []
     listing_note = ""
     try:
@@ -2552,13 +3020,13 @@ def ai_test_connection(
 
     chat_url = url_base + "/chat/completions"
     _progress(
-        f"2/2 Chat probe with {model_name} (first load can take a while)…"
+        f"2/3 Chat probe with {model_name} (first load can take a while)…"
     )
     body_obj = {
         "model": model_name,
         "stream": False,
-        "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
-        "max_tokens": 8,
+        "messages": [{"role": "user", "content": CAPABILITY_CHAT_PROBE}],
+        "max_tokens": 24,
     }
     _log_ai_mcp("request", {"url": chat_url, "body": body_obj}, enabled=do_log)
     payload = json.dumps(body_obj).encode("utf-8")
@@ -2584,7 +3052,8 @@ def ai_test_connection(
         }, enabled=do_log)
         tip = _ai_http_error_tip(exc.code, detail, base_url=url_base)
         raise RuntimeError(
-            f"HTTP {exc.code} at {chat_url}: {detail or exc.reason}.{tip}"
+            format_ai_http_error(
+                exc.code, detail, str(exc.reason or ""), tip=tip)
         ) from exc
     except Exception as exc:
         _log_ai_mcp("response_error", {
@@ -2605,7 +3074,34 @@ def ai_test_connection(
         if isinstance(msg, dict):
             reply = str(msg.get("content") or "").strip()
     note = f" Probe reply: {reply[:40]!r}." if reply else ""
-    cap = infer_model_capability(model_name, chat_ok=True)
+    tool_ok = None
+    try:
+        _progress(f"3/3 Tool-calling probe with {model_name}…")
+        probe_obj = capability_probe_body(model_name)
+        _log_ai_mcp("request", {"url": chat_url, "body": probe_obj}, enabled=do_log)
+        probe_req = urllib.request.Request(
+            chat_url,
+            data=json.dumps(probe_obj).encode("utf-8"),
+            headers=ai_request_headers(key, base_url=url_base),
+            method="POST",
+        )
+        with ai_urlopen(probe_req, min(timeout_s, 20.0), tls_verify=tls_verify) as resp:
+            probe_body = json.loads(resp.read().decode("utf-8"))
+        _log_ai_mcp("response", {"url": chat_url, "body": probe_body}, enabled=do_log)
+        tool_ok = tool_calling_from_chat_response(probe_body)
+    except Exception as exc:
+        _log_ai_mcp("response_error", {
+            "url": chat_url, "error": f"tool probe: {exc}",
+        }, enabled=do_log)
+        tool_ok = None
+        probe_body = None
+    cap = infer_model_capability(
+        model_name, chat_ok=True, tool_call_ok=tool_ok,
+        chat_text=reply, tool_body=probe_body,
+    )
+    cap = merge_live_capability(
+        cap, chat_text=reply, tool_body=probe_body, tool_ok=tool_ok,
+    )
     cap_txt = format_capability_report(cap)
     return (
         f"Connected to {url_base}. Model {model_name} ready{listing_note}.{note}"
@@ -2684,14 +3180,49 @@ class _FlowLayout(QLayout):
         return y + line_height - rect.y() + bottom
 
 
-def _add_ai_menu_heading(menu: QMenu, label: str) -> None:
-    """Muted group label matching web ``.ai-more-heading`` (not native addSection)."""
-    hdr = menu.addAction(label)
+def _ai_more_heading(label: str) -> QLabel:
+    """Muted group label matching web ``.ai-more-heading``."""
+    hdr = QLabel(label)
+    hdr.setObjectName("aiMoreHeading")
     hdr.setEnabled(False)
+    return hdr
+
+
+def _ai_more_item(label: str, tooltip: str = "") -> QPushButton:
+    """Flat menu row matching web ``.ai-more-item``."""
+    btn = QPushButton(label)
+    btn.setObjectName("aiMoreItem")
+    btn.setFlat(True)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+    if tooltip:
+        btn.setToolTip(tooltip)
+    return btn
+
+
+def _ai_more_col(title: str) -> QWidget:
+    """One More-menu column matching web ``.ai-more-col``."""
+    col = QWidget()
+    col.setObjectName("aiMoreCol")
+    lay = QVBoxLayout(col)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(0)
+    lay.addWidget(_ai_more_heading(title))
+    return col
+
+
+def _clear_layout(layout) -> None:
+    while layout.count():
+        item = layout.takeAt(0)
+        w = item.widget()
+        if w is not None:
+            w.setParent(None)
+            w.deleteLater()
 
 
 # Chip / More-menu colors match web `.ai-tpl-btn` / `.ai-more-item` (enabled vs disabled).
 _AI_TPL_DISABLED_COLOR = "#8a96a8"
+_AI_CHIP_MIN_HEIGHT = 28  # match web `.ai-tpl-btn { min-height: 28px }`
 _AI_TPL_BTN_STYLE = (
     "QPushButton {"
     "  color: #e8eef7;"
@@ -2710,9 +3241,30 @@ _AI_TPL_BTN_STYLE = (
     "}"
 )
 _AI_MORE_MENU_STYLE = (
-    "QMenu::item { color: #e8eef7; padding: 5px 10px; }"
-    f"QMenu::item:disabled {{ color: {_AI_TPL_DISABLED_COLOR}; }}"
-    "QMenu::item:selected:enabled { background: rgba(91, 155, 213, 0.18); }"
+    "QFrame#aiMoreMenu {"
+    "  background: #1a2230;"
+    "  border: 1px solid #3a4658;"
+    "  border-radius: 7px;"
+    "}"
+    "QWidget#aiMoreCol { min-width: 168px; }"
+    "QLabel#aiMoreHeading {"
+    f"  color: {_AI_TPL_DISABLED_COLOR};"
+    "  font-size: 11px;"
+    "  font-weight: 600;"
+    "  padding: 6px 10px 2px;"
+    "}"
+    "QPushButton#aiMoreItem {"
+    "  color: #e8eef7;"
+    "  background: transparent;"
+    "  border: none;"
+    "  border-radius: 4px;"
+    "  padding: 5px 10px;"
+    "  text-align: left;"
+    "}"
+    "QPushButton#aiMoreItem:hover:!disabled {"
+    "  background: rgba(91, 155, 213, 0.18);"
+    "}"
+    f"QPushButton#aiMoreItem:disabled {{ color: {_AI_TPL_DISABLED_COLOR}; }}"
 )
 
 
@@ -2893,16 +3445,18 @@ def create_ai_assistant_panel(
             root.setContentsMargins(6, 6, 6, 6)
             root.setSpacing(6)
 
-            title_row = QHBoxLayout()
-            title_row.setContentsMargins(0, 0, 0, 0)
-            title_row.setSpacing(8)
+            header_host = QWidget()
+            header_host.setObjectName("aiHeader")
+            header_row = _FlowLayout(header_host, spacing=8)
             title = QLabel("AI Assistant")
             title.setStyleSheet("font-weight:600;")
-            title_row.addWidget(title)
+            header_row.addWidget(title)
             self._auth_chip = QPushButton("")
             self._auth_chip.setObjectName("ai_auth_chip")
             self._auth_chip.setCursor(Qt.CursorShape.PointingHandCursor)
             self._auth_chip.setToolTip("Open Settings → AI to sign in or change the API key")
+            self._auth_chip.setSizePolicy(
+                QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             self._auth_chip.setStyleSheet(
                 "QPushButton#ai_auth_chip {"
                 "  background: transparent; color: #8b98a8;"
@@ -2912,12 +3466,14 @@ def create_ai_assistant_panel(
                 "QPushButton#ai_auth_chip:hover { color: #dbe2ea; border-color: #5b9bd5; }"
             )
             self._auth_chip.clicked.connect(self._on_auth_chip)
-            title_row.addWidget(self._auth_chip)
+            header_row.addWidget(self._auth_chip)
             self._privacy_chip = QPushButton("")
             self._privacy_chip.setObjectName("ai_privacy_chip")
             self._privacy_chip.setCursor(Qt.CursorShape.PointingHandCursor)
             self._privacy_chip.setToolTip(
                 "Trace privacy for the current AI endpoint")
+            self._privacy_chip.setSizePolicy(
+                QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             self._privacy_chip.setStyleSheet(
                 "QPushButton#ai_privacy_chip {"
                 "  background: transparent; color: #8b98a8;"
@@ -2928,19 +3484,15 @@ def create_ai_assistant_panel(
                 "border-color: #5b9bd5; }"
             )
             self._privacy_chip.clicked.connect(self._on_auth_chip)
-            title_row.addWidget(self._privacy_chip)
-            title_row.addStretch(1)
-            root.addLayout(title_row)
+            header_row.addWidget(self._privacy_chip)
+            root.addWidget(header_host)
 
-            # Match web: title, then compact actions (Clear / Stop / Ask /
-            # Language… / Settings…). objectName "aiActions" is excluded from
-            # dock width-relax (Ignored policy + stretch was collapsing these
-            # buttons to 0 width).
+            # Match web `.ai-header-actions { flex-wrap }`. objectName
+            # "aiActions" is excluded from dock width-relax (Ignored policy
+            # was collapsing these buttons to 0 width).
             actions_host = QWidget()
             actions_host.setObjectName("aiActions")
-            actions_wrap = QVBoxLayout(actions_host)
-            actions_wrap.setContentsMargins(0, 0, 0, 0)
-            actions_wrap.setSpacing(4)
+            actions_row = _FlowLayout(actions_host, spacing=4)
 
             def _ai_action_btn(label: str, tip: str, *, primary: bool = False) -> QPushButton:
                 btn = QPushButton(label)
@@ -2964,36 +3516,25 @@ def create_ai_assistant_panel(
                     )
                 return btn
 
-            row1 = QHBoxLayout()
-            row1.setContentsMargins(0, 0, 0, 0)
-            row1.setSpacing(4)
             self._clear_btn = _ai_action_btn("Clear", "Clear the conversation log")
             self._clear_btn.clicked.connect(self.clear_conversation)
-            row1.addWidget(self._clear_btn)
-            self._stop_btn = _ai_action_btn("Stop", "Stop the current Ollama query")
-            self._stop_btn.setEnabled(False)
-            self._stop_btn.clicked.connect(self.stop_query)
-            row1.addWidget(self._stop_btn)
-            self._send_btn = _ai_action_btn(
-                "Ask", "Send the question below (Ctrl/Cmd+Enter)", primary=True)
-            self._send_btn.clicked.connect(self.send_current)
-            row1.addWidget(self._send_btn)
+            actions_row.addWidget(self._clear_btn)
             self._lang_btn = _ai_action_btn(
                 "Language\u2026", "Preferred language for assistant replies")
             self._lang_btn.clicked.connect(self._choose_language)
-            row1.addWidget(self._lang_btn)
+            actions_row.addWidget(self._lang_btn)
             self._settings_btn = _ai_action_btn(
                 "Settings\u2026",
                 "Configure the AI preset, endpoint, and model")
             self._settings_btn.clicked.connect(self._open_settings)
-            row1.addWidget(self._settings_btn)
-            row1.addStretch(1)
-            actions_wrap.addLayout(row1)
+            actions_row.addWidget(self._settings_btn)
 
             root.addWidget(actions_host)
 
             self._investigation_plan: Optional[Dict[str, Any]] = None
             self._evidence_payload: Optional[Dict[str, Any]] = None
+            self._interpreted_query: Optional[Dict[str, Any]] = None
+            self._skip_interpret = False
             self._active_template_id = ""
 
             self._log = QTextBrowser()
@@ -3044,7 +3585,7 @@ def create_ai_assistant_panel(
                 btn.setToolTip(investigation_mode_prompt(mid))
                 btn.setSizePolicy(
                     QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-                btn.setMinimumHeight(24)
+                btn.setMinimumHeight(_AI_CHIP_MIN_HEIGHT)
                 btn.clicked.connect(
                     lambda _=False, m=mid: self._run_investigation_mode(m)
                 )
@@ -3079,7 +3620,7 @@ def create_ai_assistant_panel(
                 btn.setToolTip(prompt)
                 btn.setSizePolicy(
                     QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-                btn.setMinimumHeight(24)
+                btn.setMinimumHeight(_AI_CHIP_MIN_HEIGHT)
                 btn.clicked.connect(
                     lambda _=False, t=_tid, p=prompt: self._use_template(t, p)
                 )
@@ -3094,28 +3635,49 @@ def create_ai_assistant_panel(
             )
             more_btn.setSizePolicy(
                 QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-            more_menu = QMenu(more_btn)
+            more_btn.setMinimumHeight(_AI_CHIP_MIN_HEIGHT)
+            more_menu = QFrame(self, Qt.WindowType.Popup)
+            more_menu.setObjectName("aiMoreMenu")
             more_menu.setStyleSheet(_AI_MORE_MENU_STYLE)
-            for group_label, ids in AI_TEMPLATE_MENU_GROUPS:
-                _add_ai_menu_heading(more_menu, group_label)
+            more_menu.setMinimumWidth(360)
+            more_grid = QGridLayout(more_menu)
+            more_grid.setContentsMargins(4, 4, 4, 4)
+            more_grid.setHorizontalSpacing(8)
+            more_grid.setVerticalSpacing(0)
+            more_grid.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
+            for i, (group_label, ids) in enumerate(AI_TEMPLATE_MENU_GROUPS):
+                col = _ai_more_col(group_label)
+                col_lay = col.layout()
                 for _tid in ids:
                     item = ai_template_by_id(_tid)
                     if item is None:
                         continue
                     _tid, label, prompt = item
-                    act = more_menu.addAction(label)
-                    act.setToolTip(prompt)
-                    act.triggered.connect(
-                        lambda _=False, t=_tid, p=prompt: self._use_template(t, p)
+                    act = _ai_more_item(label, prompt)
+                    act.clicked.connect(
+                        lambda _=False, t=_tid, p=prompt: self._on_more_template(t, p)
                     )
+                    col_lay.addWidget(act)
                     self._template_actions[_tid] = act
                     _bind_template_ctrl(_tid, act)
-            _add_ai_menu_heading(more_menu, "Investigations")
+                more_grid.addWidget(
+                    col, i // 2, i % 2, Qt.AlignmentFlag.AlignTop)
+            n_groups = len(AI_TEMPLATE_MENU_GROUPS)
+            self._investigation_col = _ai_more_col("Investigations")
+            more_grid.addWidget(
+                self._investigation_col,
+                n_groups // 2, n_groups % 2,
+                Qt.AlignmentFlag.AlignTop,
+            )
             self._investigation_template_actions: Dict[str, Any] = {}
             self._more_menu = more_menu
+            self._more_btn = more_btn
+            self._more_reclick_guard = False
             self._save_investigation_template_action = None
+            self._save_knowledge_action = None
             self._rebuild_investigation_menu()
-            more_btn.setMenu(more_menu)
+            more_btn.clicked.connect(self._toggle_more_menu)
+            more_menu.installEventFilter(self)
             tpl_row.addWidget(more_btn)
             root.addWidget(tpl_host)
 
@@ -3141,11 +3703,56 @@ def create_ai_assistant_panel(
             root.addWidget(self._tool_bar)
 
             self._input = QPlainTextEdit()
+            self._input.setObjectName("aiInput")
             self._input.setPlaceholderText("Ask about this trace\u2026 (Ctrl/Cmd+Enter to send)")
             self._input.setFixedHeight(64)
+            self._input.setViewportMargins(0, 0, 44, 0)
             self._input.installEventFilter(self)
             self._input.textChanged.connect(self._refresh_send_btn)
-            root.addWidget(self._input)
+
+            composer = QWidget()
+            composer.setObjectName("aiComposer")
+            composer_lay = QVBoxLayout(composer)
+            composer_lay.setContentsMargins(0, 0, 0, 0)
+            composer_lay.setSpacing(0)
+            composer_lay.addWidget(self._input)
+
+            def _ai_icon_btn(name: str, tip: str) -> QPushButton:
+                btn = QPushButton()
+                btn.setObjectName(name)
+                btn.setToolTip(tip)
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setFixedSize(28, 28)
+                btn.setIconSize(QSize(16, 16))
+                btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                btn.setStyleSheet(
+                    f"QPushButton#{name} {{"
+                    "  background: #2a6fb2; border: none; border-radius: 14px;"
+                    "}"
+                    f"QPushButton#{name}:hover {{ background: #1a5a9a; }}"
+                    f"QPushButton#{name}:disabled {{"
+                    "  background: #555555;"
+                    "}"
+                )
+                return btn
+
+            icons = QWidget(composer)
+            icons.setObjectName("aiComposerIcons")
+            icon_row = QHBoxLayout(icons)
+            icon_row.setContentsMargins(0, 0, 0, 0)
+            icon_row.setSpacing(0)
+            self._icon_send = _svg_icon(AI_SEND_ICON_PATH, "#ffffff", 16)
+            self._icon_stop = _svg_icon(AI_STOP_ICON_PATH, "#ffffff", 16)
+            self._send_btn = _ai_icon_btn(
+                "aiSendBtn", "Send the question (Ctrl/Cmd+Enter)")
+            self._send_btn.setIcon(self._icon_send)
+            self._send_btn.clicked.connect(self._on_composer_action)
+            icon_row.addWidget(self._send_btn)
+            self._composer = composer
+            self._composer_icons = icons
+            composer.installEventFilter(self)
+            root.addWidget(composer)
+            QTimer.singleShot(0, self._place_composer_icons)
 
             self._status = QLabel("")
             self._status.setStyleSheet("color:#999;font-size:11px;")
@@ -3171,7 +3778,25 @@ def create_ai_assistant_panel(
 
             self._refresh_send_btn()
 
+        def _place_composer_icons(self) -> None:
+            icons = getattr(self, "_composer_icons", None)
+            host = getattr(self, "_composer", None)
+            if icons is None or host is None:
+                return
+            icons.adjustSize()
+            margin = 6
+            x = max(margin, host.width() - icons.width() - margin)
+            y = max(margin, host.height() - icons.height() - margin)
+            icons.move(x, y)
+            icons.raise_()
+
         def eventFilter(self, obj, event):  # noqa: N802
+            menu = getattr(self, "_more_menu", None)
+            if menu is not None and obj is menu and event.type() == QEvent.Type.Hide:
+                self._more_reclick_guard = True
+                QTimer.singleShot(0, self._clear_more_reclick_guard)
+            if obj is getattr(self, "_composer", None) and event.type() == QEvent.Type.Resize:
+                self._place_composer_icons()
             inp = getattr(self, "_input", None)
             if inp is not None and obj is inp and event.type() == QEvent.Type.KeyPress:
                 key = event.key()
@@ -3272,8 +3897,13 @@ def create_ai_assistant_panel(
                 preset_id=active["preset"],
             )
             self._auth_chip.setText(f"{label} · {st['label']}")
+            cfg = self._settings_dict()
             priv = classify_trace_privacy(
                 endpoint_is_local=is_local_ai_host(active.get("base_url", "")),
+                redact_task_names=str(cfg.get("redact_task_names", "")).lower()
+                in ("1", "true", "yes", "on"),
+                sensitive=str(cfg.get("trace_sensitive", "")).lower()
+                in ("1", "true", "yes", "on"),
             )
             self._privacy_chip.setText(format_privacy_chip(priv))
             self._privacy_chip.setToolTip(str(priv.get("note") or ""))
@@ -3291,8 +3921,27 @@ def create_ai_assistant_panel(
         def _mark_cost_start(self) -> None:
             self._cost_started = time.monotonic()
 
-        def _set_status(self, msg: str) -> None:
+        def _flash_main_status(self, msg: str) -> None:
+            short = (msg or "").split("\n", 1)[0][:200]
+            if not short:
+                return
+            wnd = self.window()
+            getter = getattr(wnd, "statusBar", None)
+            if not callable(getter):
+                return
+            try:
+                getter().showMessage(f"AI: {short}", 6000)
+            except RuntimeError:
+                pass
+
+        def _set_status(self, msg: str, *, error: bool = False) -> None:
             self._status.setText(status_with_cost(msg, self._cost_meter))
+            self._status.setStyleSheet(
+                "color:#e07070;font-size:11px;" if error
+                else "color:#999;font-size:11px;"
+            )
+            if error:
+                self._flash_main_status(msg)
 
         def _record_turn_usage(self, turn: dict, calls: Sequence[Any]) -> None:
             usage = turn.get("usage") if isinstance(turn, dict) else {}
@@ -3388,6 +4037,21 @@ def create_ai_assistant_panel(
                 action, hyp_id = parse_btf_hyp_href(url.toString())
                 if action:
                     self._on_hypothesis_action(action, hyp_id)
+                return
+            if scheme == "btfscope":
+                action, key = parse_btf_scope_href(url.toString())
+                if action:
+                    self._on_scope_action(action, key)
+                return
+            if scheme == "btfexp":
+                action, key = parse_btf_exp_href(url.toString())
+                if action:
+                    self._on_experiment_action(action, key)
+                return
+            if scheme == "btftool":
+                action, name = parse_btf_tool_href(url.toString())
+                if action:
+                    self._on_tool_why(action, name)
                 return
             if scheme == "btfhighlight":
                 name = parse_btf_highlight_href(url.toString())
@@ -3487,6 +4151,7 @@ def create_ai_assistant_panel(
             self._cost_meter = empty_cost_meter()
             self._set_status("")
             self._clear_evidence_log_entry()
+            self._interpreted_query = None
             self._refresh_tool_bar()
 
         def _show_log_menu(self, pos) -> None:
@@ -3723,19 +4388,29 @@ def create_ai_assistant_panel(
                 "0", "false", "no", "off",
             )
 
+        def _on_composer_action(self) -> None:
+            if self._busy:
+                self.stop_query()
+            else:
+                self.send_current()
+
         def _refresh_send_btn(self) -> None:
+            if self._busy:
+                self._send_btn.setIcon(self._icon_stop)
+                self._send_btn.setToolTip("Stop the current query")
+                self._send_btn.setEnabled(True)
+                return
+            self._send_btn.setIcon(self._icon_send)
+            self._send_btn.setToolTip("Send the question (Ctrl/Cmd+Enter)")
             self._send_btn.setEnabled(
-                (not self._busy)
-                and self._ai_is_enabled()
+                self._ai_is_enabled()
                 and bool(self._input.toPlainText().strip())
             )
 
         def _set_busy(self, busy: bool) -> None:
             self._busy = busy
             enabled = self._ai_is_enabled()
-            self._send_btn.setText("Waiting…" if busy else "Ask")
             self._refresh_send_btn()
-            self._stop_btn.setEnabled(busy)
             self._input.setReadOnly(busy or (not enabled))
             live = (not busy) and enabled
             for btn in self._template_btns:
@@ -3749,6 +4424,9 @@ def create_ai_assistant_panel(
             save_act = getattr(self, "_save_investigation_template_action", None)
             if save_act is not None:
                 save_act.setEnabled(not busy)
+            know_act = getattr(self, "_save_knowledge_action", None)
+            if know_act is not None:
+                know_act.setEnabled(not busy)
             self.refresh_template_availability()
             if (not enabled) and (not busy):
                 self._set_status("AI is disabled in Settings → AI.")
@@ -3881,9 +4559,17 @@ def create_ai_assistant_panel(
             if prompt:
                 self._run_compare_template(prompt, idx_a=idx_a, idx_b=idx_b)
 
+        def query_validate_experiment(self, idx_a: int, idx_b: int) -> None:
+            """Ask the model to call validate_experiment for two chosen tabs."""
+            self._skip_interpret = True
+            self._active_template_id = ""
+            self._run_compare_template(
+                VALIDATE_EXPERIMENT_PROMPT, idx_a=idx_a, idx_b=idx_b)
+
         def _use_template(self, template_id: str, prompt: str) -> None:
             if self._busy:
                 return
+            self._skip_interpret = True
             self._active_template_id = str(template_id or "")
             if is_agent_template(template_id):
                 self._set_investigation_plan(default_investigation_plan(
@@ -3897,6 +4583,67 @@ def create_ai_assistant_panel(
                 return
             self._input.setPlainText(prompt)
             self.send_current()
+
+        def _hide_more_menu(self) -> None:
+            menu = getattr(self, "_more_menu", None)
+            if menu is not None and menu.isVisible():
+                menu.hide()
+
+        def _clear_more_reclick_guard(self) -> None:
+            self._more_reclick_guard = False
+
+        def _toggle_more_menu(self) -> None:
+            if getattr(self, "_more_reclick_guard", False):
+                return
+            menu = getattr(self, "_more_menu", None)
+            if menu is None:
+                return
+            if menu.isVisible():
+                menu.hide()
+                return
+            self._place_more_menu()
+            menu.show()
+
+        def _place_more_menu(self) -> None:
+            """Size to full 2-column content (web overlay is not a scroller)."""
+            btn = getattr(self, "_more_btn", None)
+            menu = getattr(self, "_more_menu", None)
+            if btn is None or menu is None:
+                return
+            menu.setMinimumHeight(0)
+            menu.setMaximumHeight(16777215)
+            menu.adjustSize()
+            hint = menu.sizeHint()
+            width = max(360, int(hint.width()))
+            height = max(1, int(hint.height()))
+            gap = 4
+            br = btn.rect()
+            top_left = btn.mapToGlobal(br.topLeft())
+            bottom_right = btn.mapToGlobal(br.bottomRight())
+            screen = QApplication.primaryScreen().availableGeometry()
+            win = btn.window()
+            if win is not None and win.screen() is not None:
+                screen = win.screen().availableGeometry()
+            space_below = screen.bottom() - bottom_right.y()
+            space_above = top_left.y() - screen.top()
+            x = bottom_right.x() - width
+            x = max(screen.left() + 8, min(x, screen.right() - width - 8))
+            if space_below >= height + gap:
+                y = bottom_right.y() + gap
+            elif space_above >= height + gap:
+                y = top_left.y() - gap - height
+            elif space_above >= space_below:
+                y = max(screen.top() + 8, top_left.y() - gap - height)
+            else:
+                y = bottom_right.y() + gap
+                if y + height > screen.bottom() - 8:
+                    y = max(screen.top() + 8, screen.bottom() - 8 - height)
+            menu.resize(width, height)
+            menu.move(x, y)
+
+        def _on_more_template(self, template_id: str, prompt: str) -> None:
+            self._hide_more_menu()
+            self._use_template(template_id, prompt)
 
         def _user_investigation_templates(self) -> List[Dict[str, Any]]:
             raw = ""
@@ -3914,36 +4661,54 @@ def create_ai_assistant_panel(
             return list(builtin_investigation_templates()) + self._user_investigation_templates()
 
         def _rebuild_investigation_menu(self) -> None:
-            menu = getattr(self, "_more_menu", None)
-            if menu is None:
+            col = getattr(self, "_investigation_col", None)
+            if col is None:
                 return
-            for act in list(self._investigation_template_actions.values()):
-                try:
-                    menu.removeAction(act)
-                except Exception:
-                    pass
+            lay = col.layout()
+            _clear_layout(lay)
+            lay.addWidget(_ai_more_heading("Investigations"))
             self._investigation_template_actions = {}
-            save_act = getattr(self, "_save_investigation_template_action", None)
-            if save_act is not None:
-                try:
-                    menu.removeAction(save_act)
-                except Exception:
-                    pass
+            live = (not self._busy) and self._ai_is_enabled()
             for tpl in self._all_investigation_templates():
-                act = menu.addAction(str(tpl.get("label") or tpl.get("id")))
-                act.setToolTip(investigation_template_prompt(tpl))
-                act.triggered.connect(
-                    lambda _=False, t=dict(tpl): self._run_investigation_template(t)
+                act = _ai_more_item(
+                    str(tpl.get("label") or tpl.get("id")),
+                    investigation_template_prompt(tpl),
                 )
+                act.setEnabled(live)
+                act.clicked.connect(
+                    lambda _=False, t=dict(tpl): self._on_more_investigation(t)
+                )
+                lay.addWidget(act)
                 self._investigation_template_actions[str(tpl.get("id") or "")] = act
-            if save_act is None:
-                save_act = menu.addAction("Save as template\u2026")
-                save_act.setToolTip(
-                    "Save the current investigation steps as a reusable template")
-                save_act.triggered.connect(self._save_investigation_template)
-                self._save_investigation_template_action = save_act
-            else:
-                menu.addAction(save_act)
+            save_act = _ai_more_item(
+                "Save as template\u2026",
+                "Save the current investigation steps as a reusable template",
+            )
+            save_act.setEnabled(not self._busy)
+            save_act.clicked.connect(self._on_more_save_template)
+            self._save_investigation_template_action = save_act
+            lay.addWidget(save_act)
+            lay.addWidget(_ai_more_heading("Knowledge"))
+            know_act = _ai_more_item(
+                "Save current finding\u2026",
+                "Store this finding as local historical knowledge",
+            )
+            know_act.setEnabled(not self._busy)
+            know_act.clicked.connect(self._on_more_save_knowledge)
+            self._save_knowledge_action = know_act
+            lay.addWidget(know_act)
+
+        def _on_more_investigation(self, tpl: Dict[str, Any]) -> None:
+            self._hide_more_menu()
+            self._run_investigation_template(tpl)
+
+        def _on_more_save_template(self) -> None:
+            self._hide_more_menu()
+            self._save_investigation_template()
+
+        def _on_more_save_knowledge(self) -> None:
+            self._hide_more_menu()
+            self._save_user_knowledge()
 
         def _save_investigation_template(self) -> None:
             steps: List[str] = []
@@ -4034,6 +4799,120 @@ def create_ai_assistant_panel(
                     "Finish with a verdict, jump:TIME evidence, and one next check."
                 )
                 self._use_template("investigate", prompt)
+
+        def _on_scope_action(self, action: str, key: str) -> None:
+            act = str(action or "").strip().lower()
+            interpreted = dict(
+                getattr(self, "_interpreted_query", None)
+                or (self._evidence_payload or {}).get("interpreted")
+                or {}
+            )
+            if act == "toggle":
+                interpreted = toggle_interpreted_scope(interpreted, key)
+                self._interpreted_query = interpreted
+                payload = dict(self._evidence_payload or {})
+                payload["interpreted"] = interpreted
+                scopes = [str(s) for s in (interpreted.get("scope") or []) if s]
+                mode = str(interpreted.get("mode") or interpreted.get("kind") or "")
+                payload["subtitle"] = (
+                    f"{mode}: {', '.join(scopes)}" if mode and scopes
+                    else ", ".join(scopes) or mode
+                )
+                self._evidence_payload = payload
+                self._sync_evidence_log_entry(payload)
+                return
+            if act == "edit":
+                q = str(interpreted.get("interpreted_question") or "").strip()
+                text, ok = QInputDialog.getMultiLineText(
+                    self, "Edit scope", "Interpreted question:", q,
+                )
+                if ok and str(text or "").strip():
+                    interpreted["interpreted_question"] = str(text).strip()
+                    self._interpreted_query = interpreted
+                    payload = dict(self._evidence_payload or {})
+                    payload["interpreted"] = interpreted
+                    payload["conclusion"] = interpreted["interpreted_question"]
+                    self._evidence_payload = payload
+                    self._sync_evidence_log_entry(payload)
+                return
+            if act == "run":
+                self._use_template("investigate", interpreted_run_prompt(interpreted))
+
+        def _on_experiment_action(self, action: str, _key: str) -> None:
+            if str(action or "").strip().lower() != "save":
+                return
+            self._save_user_knowledge()
+
+        def _on_tool_why(self, action: str, name: str) -> None:
+            if str(action or "").strip().lower() != "why":
+                return
+            want = str(name or "").strip()
+            reasons = list((self._evidence_payload or {}).get("tool_reasons") or [])
+            why = ""
+            for r in reasons:
+                if isinstance(r, dict) and str(r.get("tool") or "") == want:
+                    why = str(r.get("reason") or "")
+                    break
+            self._set_status(
+                f"{want}: {why}" if why else f"{want}: no recorded reason"
+            )
+
+        def _user_historical_knowledge(self) -> List[Dict[str, Any]]:
+            raw = ""
+            if get_settings:
+                try:
+                    raw = str(
+                        (get_settings() or {}).get("user_historical_knowledge") or ""
+                    )
+                except Exception:
+                    raw = ""
+            return parse_user_historical_knowledge(raw)
+
+        def _save_user_knowledge(self) -> None:
+            payload = dict(self._evidence_payload or {})
+            finding = payload.get("finding") if isinstance(payload.get("finding"), dict) else {}
+            if not finding:
+                case = payload.get("investigation_case") or {}
+                items = case.get("suspected_findings") or []
+                if items and isinstance(items[0], dict):
+                    finding = items[0]
+            hk = payload.get("historical_knowledge") if isinstance(
+                payload.get("historical_knowledge"), dict) else {}
+            extras = {
+                "issue": str(
+                    payload.get("conclusion") or finding.get("title") or ""
+                ),
+                "fix": str(hk.get("known_fix") or ""),
+                "build": str(hk.get("last_occurrence") or ""),
+                "task": str(finding.get("task") or hk.get("task") or ""),
+                "metrics": dict(hk.get("current") or hk.get("typical") or {}),
+            }
+            for key in ("migrations", "migration_rate", "blocking", "wcet"):
+                if finding.get(key) is not None:
+                    extras[key] = finding.get(key)
+            entry = new_user_historical_entry(finding, extras)
+            name, ok = QInputDialog.getText(
+                self, "Save to knowledge",
+                "Issue label:",
+                text=str(entry.get("issue") or "Saved finding"),
+            )
+            if not ok:
+                return
+            entry["issue"] = str(name or entry["issue"]).strip() or entry["issue"]
+            items = self._user_historical_knowledge()
+            items = [
+                it for it in items
+                if not (
+                    it.get("task") == entry.get("task")
+                    and it.get("issue") == entry.get("issue")
+                )
+            ]
+            items.append(entry)
+            if on_save_settings:
+                on_save_settings({
+                    "user_historical_knowledge": dump_user_historical_knowledge(items),
+                })
+            self._set_status(f"Saved knowledge “{entry['issue']}”.")
 
         def _run_investigation_template(self, template: dict) -> None:
             if self._busy:
@@ -4140,6 +5019,29 @@ def create_ai_assistant_panel(
                 payload["validation"] = prev["validation"]
             if prev.get("cost") and "cost" not in payload:
                 payload["cost"] = prev["cost"]
+            if payload.get("interpreted"):
+                self._interpreted_query = dict(payload["interpreted"])
+            elif prev.get("interpreted") and "interpreted" not in payload:
+                payload["interpreted"] = prev["interpreted"]
+            if payload.get("experiment"):
+                hyps = list(
+                    payload.get("hypotheses_managed")
+                    or payload.get("hypotheses")
+                    or prev.get("hypotheses_managed")
+                    or prev.get("hypotheses")
+                    or []
+                )
+                updated = apply_experiment_to_hypotheses(hyps, payload["experiment"])
+                if updated:
+                    payload["hypotheses_managed"] = updated
+                    payload["hypotheses"] = updated
+            finding = payload.get("finding") if isinstance(payload.get("finding"), dict) else None
+            if finding:
+                payload["historical_knowledge"] = historical_knowledge_for_finding(
+                    finding,
+                    current=finding,
+                    user_catalog=self._user_historical_knowledge(),
+                )
             self._evidence_payload = dict(payload)
             self._sync_evidence_log_entry(self._evidence_payload)
 
@@ -4421,7 +5323,7 @@ def create_ai_assistant_panel(
 
         def _on_err(self, msg: str) -> None:
             self._append("assistant", f"(Error) {msg}")
-            self._set_status(msg.split("\n", 1)[0][:200])
+            self._set_status((msg or "").split("\n", 1)[0][:200], error=True)
             low = (msg or "").lower()
             if "http 401" in low or "http 403" in low or "api key required" in low:
                 self._auth_forced = True
@@ -4451,6 +5353,30 @@ def create_ai_assistant_panel(
                     self._set_status(f"Context error: {exc}")
                     return
 
+            skip = bool(getattr(self, "_skip_interpret", False))
+            self._skip_interpret = False
+            if should_confirm_interpreted_query(
+                query, already_interpreted=skip,
+            ):
+                self._input.clear()
+                self._append("user", query)
+                cursors = list(ctx.get("cursors") or [])
+                lo = hi = None
+                if len(cursors) >= 2:
+                    lo, hi = min(float(t) for t in cursors), max(float(t) for t in cursors)
+                data = interpret_investigation_query(
+                    query,
+                    findings=list(ctx.get("findings") or []),
+                    cursor_lo=lo,
+                    cursor_hi=hi,
+                )
+                self._update_evidence_from_tool_result(
+                    "interpret_query", {"ok": True, **data},
+                )
+                self._set_status(
+                    "Confirm investigation scope, then Run investigation."
+                )
+                return
             self._input.clear()
             self._send_query(query, ctx)
 
@@ -4461,6 +5387,21 @@ def create_ai_assistant_panel(
                 return
 
             ctx = normalize_ai_context(ctx)
+            active = resolve_ai_settings(cfg)
+            privacy = apply_cloud_privacy(
+                ctx.get("findings_text", ""),
+                query,
+                endpoint_is_local=is_local_ai_host(active.get("base_url", "")),
+                redact_task_names=str(cfg.get("redact_task_names", "")).lower()
+                in ("1", "true", "yes", "on"),
+                sensitive=str(cfg.get("trace_sensitive", "")).lower()
+                in ("1", "true", "yes", "on"),
+            )
+            if privacy.get("blocked"):
+                self._set_status(str(privacy.get("note") or "Cloud AI disabled."))
+                return
+            ctx["findings_text"] = privacy.get("findings_text") or ctx.get("findings_text", "")
+            query = str(privacy.get("query") or query)
             self._append("user", query)
             self._tool_round = 0
             self._chat_messages = _build_chat_messages(
@@ -4476,7 +5417,6 @@ def create_ai_assistant_panel(
                 ),
             )
             self._set_busy(True)
-            active = resolve_ai_settings(cfg)
             label = ai_preset_info(active["preset"])[1]
             self._set_status(f"Waiting for {label} ({active['model']})…")
 

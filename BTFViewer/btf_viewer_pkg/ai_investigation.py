@@ -9,6 +9,7 @@ import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .ai_case import (
+    INVESTIGATION_SCOPE_OPTIONS,
     build_evidence_graph,
     build_investigation_case,
     compute_evidence_coverage,
@@ -18,6 +19,9 @@ from .ai_case import (
     evidence_quality_from_score,
     falsification_checks,
     format_confidence_evolution,
+    format_coverage_count_lines,
+    format_quality_flag_lines,
+    format_experiment_verdict,
     historical_knowledge_for_finding,
 )
 
@@ -1206,11 +1210,24 @@ def extract_evidence_panel_payload(
         elif mode:
             payload["subtitle"] = mode
         payload["confidence"] = "Medium"
+        payload["interpreted"] = {
+            "interpreted_question": payload["conclusion"],
+            "kind": data.get("kind") or mode,
+            "mode": mode,
+            "scope": scopes,
+            "finding_id": str(data.get("finding_id") or ""),
+            "task": str(data.get("task") or ""),
+        }
     elif name == "validate_experiment" or data.get("result") in (
         "VALIDATED", "PARTIALLY VALIDATED", "DISPROVED", "INCONCLUSIVE",
     ):
         result_label = str(data.get("result") or "INCONCLUSIVE")
         payload["conclusion"] = result_label
+        payload["experiment"] = {
+            "result": result_label,
+            "verdict": format_experiment_verdict(result_label),
+            "rows": list(data.get("rows") or []),
+        }
         payload["checks"] = [
             {
                 "label": str(row.get("metric") or "metric"),
@@ -1338,6 +1355,96 @@ def format_hypothesis_action_links(hyp_id: str, labels: Dict[str, str]) -> str:
     ):
         parts.append(f"[{labels.get(key, fallback)}]({btf_hyp_href(action, hid)})")
     return " · ".join(parts)
+
+
+_BTF_SCOPE_HREF_RE = re.compile(
+    r"btfscope:(?://)?([a-z_]+)/([^?\s#]*)",
+    re.IGNORECASE,
+)
+_BTF_EXP_HREF_RE = re.compile(
+    r"btfexp:(?://)?([a-z_]+)/([^?\s#]*)",
+    re.IGNORECASE,
+)
+_BTF_TOOL_HREF_RE = re.compile(
+    r"btftool:(?://)?([a-z_]+)/([^?\s#]*)",
+    re.IGNORECASE,
+)
+
+
+def btf_scope_href(action: str, key: str = "") -> str:
+    act = re.sub(r"[^a-z_]", "", str(action or "").lower()) or "run"
+    kid = re.sub(r"[^A-Za-z0-9_. -]", "", str(key or "all")).strip() or "all"
+    kid = kid.replace(" ", "_")
+    return f"btfscope:{act}/{kid}"
+
+
+def parse_btf_scope_href(href: Any) -> Tuple[str, str]:
+    m = _BTF_SCOPE_HREF_RE.search(str(href or ""))
+    if not m:
+        return "", ""
+    key = (m.group(2) or "all").replace("_", " ")
+    return m.group(1).lower(), key
+
+
+def format_scope_action_links(
+    interpreted: Optional[dict],
+    labels: Optional[Dict[str, str]] = None,
+) -> str:
+    """Markdown for interpret_query: scope toggles + Run / Edit."""
+    lab = labels if isinstance(labels, dict) else {}
+    data = interpreted if isinstance(interpreted, dict) else {}
+    scopes = [str(s) for s in (data.get("scope") or []) if s]
+    options = list(INVESTIGATION_SCOPE_OPTIONS)
+    for s in scopes:
+        if s not in options:
+            options.append(s)
+    lines: List[str] = []
+    question = str(data.get("interpreted_question") or "").strip()
+    if question:
+        lines.append(f"**{lab.get('interpreted', 'Interpreted question')}:** {question}")
+    lines.append("")
+    lines.append(f"**{lab.get('scope', 'Investigation scope')}**")
+    on_lab = lab.get("scope_on", "on")
+    off_lab = lab.get("scope_off", "off")
+    for opt in options:
+        active = opt in scopes
+        mark = "✓" if active else "○"
+        lines.append(
+            f"- {mark} {opt} "
+            f"[{on_lab if not active else off_lab}]({btf_scope_href('toggle', opt)})"
+        )
+    lines.append("")
+    lines.append(
+        f"[{lab.get('run_investigation', 'Run investigation')}]({btf_scope_href('run', 'all')}) "
+        f"[{lab.get('edit_scope', 'Edit scope')}]({btf_scope_href('edit', 'all')})"
+    )
+    return "\n".join(lines)
+
+
+def btf_exp_href(action: str, key: str = "all") -> str:
+    act = re.sub(r"[^a-z_]", "", str(action or "").lower()) or "save"
+    kid = re.sub(r"[^A-Za-z0-9_.-]", "", str(key or "all")) or "all"
+    return f"btfexp:{act}/{kid}"
+
+
+def parse_btf_exp_href(href: Any) -> Tuple[str, str]:
+    m = _BTF_EXP_HREF_RE.search(str(href or ""))
+    if not m:
+        return "", ""
+    return m.group(1).lower(), (m.group(2) or "all")
+
+
+def btf_tool_href(action: str, name: str = "") -> str:
+    act = re.sub(r"[^a-z_]", "", str(action or "").lower()) or "why"
+    kid = re.sub(r"[^A-Za-z0-9_.-]", "", str(name or "tool")) or "tool"
+    return f"btftool:{act}/{kid}"
+
+
+def parse_btf_tool_href(href: Any) -> Tuple[str, str]:
+    m = _BTF_TOOL_HREF_RE.search(str(href or ""))
+    if not m:
+        return "", ""
+    return m.group(1).lower(), (m.group(2) or "")
 
 
 # UI strings for Evidence / Reasoning and plan status. Keep in sync with
@@ -1573,6 +1680,28 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "need_evidence_action": "Need evidence",
         "test_action": "Test",
         "compare_action": "Compare hypotheses",
+        "interpreted": "Interpreted question",
+        "scope": "Investigation scope",
+        "run_investigation": "Run investigation",
+        "edit_scope": "Edit scope",
+        "experiment_result": "Experiment result",
+        "hypothesis_validated": "Hypothesis validated",
+        "hypothesis_disproved": "Hypothesis disproved",
+        "hypothesis_partial": "Hypothesis partially validated",
+        "save_knowledge": "Save to knowledge",
+        "scope_on": "on",
+        "scope_off": "off",
+        "quality_direct": "Direct evidence",
+        "quality_timeline": "Timeline correlation",
+        "quality_metric": "Metric correlation",
+        "quality_alternative": "Alternative tested",
+        "coverage_observed": "Directly observed",
+        "coverage_timeline": "Timeline verified",
+        "coverage_metric": "Metric verified",
+        "coverage_unverified": "Unverified assumptions",
+        "why_action": "Why?",
+        "typical_rate": "Typical rate",
+        "current_rate": "Current",
     },
     "Traditional Chinese (繁體中文)": {
         "quality": "證據品質",
@@ -1599,6 +1728,28 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "need_evidence_action": "需要證據",
         "test_action": "驗證",
         "compare_action": "比較假設",
+        "interpreted": "解讀後的問題",
+        "scope": "調查範圍",
+        "run_investigation": "開始調查",
+        "edit_scope": "編輯範圍",
+        "experiment_result": "實驗結果",
+        "hypothesis_validated": "假設已成立",
+        "hypothesis_disproved": "假設已排除",
+        "hypothesis_partial": "假設部分成立",
+        "save_knowledge": "存入知識庫",
+        "scope_on": "開",
+        "scope_off": "關",
+        "quality_direct": "直接證據",
+        "quality_timeline": "時間軸相關",
+        "quality_metric": "指標相關",
+        "quality_alternative": "已測替代假設",
+        "coverage_observed": "直接觀察",
+        "coverage_timeline": "時間軸已驗證",
+        "coverage_metric": "指標已驗證",
+        "coverage_unverified": "未驗證假設",
+        "why_action": "為何？",
+        "typical_rate": "典型速率",
+        "current_rate": "目前",
     },
     "Simplified Chinese (简体中文)": {
         "quality": "证据品质",
@@ -1625,6 +1776,28 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "need_evidence_action": "需要证据",
         "test_action": "验证",
         "compare_action": "比较假设",
+        "interpreted": "解读后的问题",
+        "scope": "调查范围",
+        "run_investigation": "开始调查",
+        "edit_scope": "编辑范围",
+        "experiment_result": "实验结果",
+        "hypothesis_validated": "假设已成立",
+        "hypothesis_disproved": "假设已排除",
+        "hypothesis_partial": "假设部分成立",
+        "save_knowledge": "存入知识库",
+        "scope_on": "开",
+        "scope_off": "关",
+        "quality_direct": "直接证据",
+        "quality_timeline": "时间轴相关",
+        "quality_metric": "指标相关",
+        "quality_alternative": "已测替代假设",
+        "coverage_observed": "直接观察",
+        "coverage_timeline": "时间轴已验证",
+        "coverage_metric": "指标已验证",
+        "coverage_unverified": "未验证假设",
+        "why_action": "为何？",
+        "typical_rate": "典型速率",
+        "current_rate": "当前",
     },
     "Japanese (日本語)": {
         "quality": "根拠の質",
@@ -1651,6 +1824,28 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "need_evidence_action": "根拠不足",
         "test_action": "検証",
         "compare_action": "仮説を比較",
+        "interpreted": "解釈した質問",
+        "scope": "調査範囲",
+        "run_investigation": "調査を実行",
+        "edit_scope": "範囲を編集",
+        "experiment_result": "実験結果",
+        "hypothesis_validated": "仮説は妥当",
+        "hypothesis_disproved": "仮説は否定",
+        "hypothesis_partial": "仮説は部分的に妥当",
+        "save_knowledge": "知見に保存",
+        "scope_on": "オン",
+        "scope_off": "オフ",
+        "quality_direct": "直接根拠",
+        "quality_timeline": "タイムライン相関",
+        "quality_metric": "指標相関",
+        "quality_alternative": "代替仮説を検証",
+        "coverage_observed": "直接観測",
+        "coverage_timeline": "タイムライン検証",
+        "coverage_metric": "指標検証",
+        "coverage_unverified": "未検証の仮定",
+        "why_action": "理由",
+        "typical_rate": "典型値",
+        "current_rate": "現在",
     },
     "Korean (한국어)": {
         "quality": "증거 품질",
@@ -1677,6 +1872,28 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "need_evidence_action": "증거 필요",
         "test_action": "검증",
         "compare_action": "가설 비교",
+        "interpreted": "해석된 질문",
+        "scope": "조사 범위",
+        "run_investigation": "조사 실행",
+        "edit_scope": "범위 편집",
+        "experiment_result": "실험 결과",
+        "hypothesis_validated": "가설 타당",
+        "hypothesis_disproved": "가설 기각",
+        "hypothesis_partial": "가설 부분 타당",
+        "save_knowledge": "지식에 저장",
+        "scope_on": "켜짐",
+        "scope_off": "꺼짐",
+        "quality_direct": "직접 증거",
+        "quality_timeline": "타임라인 상관",
+        "quality_metric": "메트릭 상관",
+        "quality_alternative": "대안 검증",
+        "coverage_observed": "직접 관측",
+        "coverage_timeline": "타임라인 검증",
+        "coverage_metric": "메트릭 검증",
+        "coverage_unverified": "미검증 가정",
+        "why_action": "이유",
+        "typical_rate": "전형 비율",
+        "current_rate": "현재",
     },
     "German": {
         "quality": "Belegqualität",
@@ -1703,6 +1920,28 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "need_evidence_action": "Belege nötig",
         "test_action": "Prüfen",
         "compare_action": "Hypothesen vergleichen",
+        "interpreted": "Interpretierte Frage",
+        "scope": "Untersuchungsbereich",
+        "run_investigation": "Untersuchung starten",
+        "edit_scope": "Bereich bearbeiten",
+        "experiment_result": "Experimentergebnis",
+        "hypothesis_validated": "Hypothese bestätigt",
+        "hypothesis_disproved": "Hypothese widerlegt",
+        "hypothesis_partial": "Hypothese teilweise bestätigt",
+        "save_knowledge": "Im Wissen speichern",
+        "scope_on": "an",
+        "scope_off": "aus",
+        "quality_direct": "Direkte Belege",
+        "quality_timeline": "Zeitlinienkorrelation",
+        "quality_metric": "Metrikkorrelation",
+        "quality_alternative": "Alternative geprüft",
+        "coverage_observed": "Direkt beobachtet",
+        "coverage_timeline": "Zeitlinie geprüft",
+        "coverage_metric": "Metrik geprüft",
+        "coverage_unverified": "Ungeprüfte Annahmen",
+        "why_action": "Warum?",
+        "typical_rate": "Typische Rate",
+        "current_rate": "Aktuell",
     },
     "French": {
         "quality": "Qualité des preuves",
@@ -1729,6 +1968,28 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "need_evidence_action": "Preuves nécessaires",
         "test_action": "Tester",
         "compare_action": "Comparer les hypothèses",
+        "interpreted": "Question interprétée",
+        "scope": "Périmètre d'investigation",
+        "run_investigation": "Lancer l'investigation",
+        "edit_scope": "Modifier le périmètre",
+        "experiment_result": "Résultat d'expérience",
+        "hypothesis_validated": "Hypothèse validée",
+        "hypothesis_disproved": "Hypothèse infirmée",
+        "hypothesis_partial": "Hypothèse partiellement validée",
+        "save_knowledge": "Enregistrer dans les connaissances",
+        "scope_on": "oui",
+        "scope_off": "non",
+        "quality_direct": "Preuve directe",
+        "quality_timeline": "Corrélation temporelle",
+        "quality_metric": "Corrélation métrique",
+        "quality_alternative": "Alternative testée",
+        "coverage_observed": "Directement observé",
+        "coverage_timeline": "Chronologie vérifiée",
+        "coverage_metric": "Métrique vérifiée",
+        "coverage_unverified": "Hypothèses non vérifiées",
+        "why_action": "Pourquoi ?",
+        "typical_rate": "Taux typique",
+        "current_rate": "Actuel",
     },
     "Spanish": {
         "quality": "Calidad de evidencia",
@@ -1755,6 +2016,28 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "need_evidence_action": "Falta evidencia",
         "test_action": "Probar",
         "compare_action": "Comparar hipótesis",
+        "interpreted": "Pregunta interpretada",
+        "scope": "Alcance de investigación",
+        "run_investigation": "Ejecutar investigación",
+        "edit_scope": "Editar alcance",
+        "experiment_result": "Resultado del experimento",
+        "hypothesis_validated": "Hipótesis validada",
+        "hypothesis_disproved": "Hipótesis refutada",
+        "hypothesis_partial": "Hipótesis parcialmente validada",
+        "save_knowledge": "Guardar en conocimiento",
+        "scope_on": "sí",
+        "scope_off": "no",
+        "quality_direct": "Evidencia directa",
+        "quality_timeline": "Correlación temporal",
+        "quality_metric": "Correlación métrica",
+        "quality_alternative": "Alternativa comprobada",
+        "coverage_observed": "Observado directamente",
+        "coverage_timeline": "Línea de tiempo verificada",
+        "coverage_metric": "Métrica verificada",
+        "coverage_unverified": "Supuestos no verificados",
+        "why_action": "¿Por qué?",
+        "typical_rate": "Tasa típica",
+        "current_rate": "Actual",
     },
 }
 for _lang, _extra in _EVIDENCE_PANEL_EXTRA.items():
@@ -1867,6 +2150,28 @@ def format_evidence_panel_markdown(
     subtitle = str(data.get("subtitle") or "").strip()
     if subtitle:
         lines.append(subtitle[:320])
+    interpreted = data.get("interpreted")
+    if isinstance(interpreted, dict) and (
+        interpreted.get("interpreted_question") or interpreted.get("scope")
+    ):
+        lines.append("")
+        lines.append(format_scope_action_links(interpreted, labels))
+    experiment = data.get("experiment")
+    if isinstance(experiment, dict) and experiment.get("result"):
+        lines.append("")
+        lines.append(
+            f"**{labels.get('experiment_result', 'Experiment result')}:** "
+            f"{experiment.get('result')}"
+        )
+        verdict = str(
+            experiment.get("verdict") or format_experiment_verdict(experiment)
+        ).strip()
+        if verdict:
+            lines.append(f"**{verdict}**")
+        lines.append(
+            f"[{labels.get('save_knowledge', 'Save to knowledge')}]"
+            f"({btf_exp_href('save', 'all')})"
+        )
     evidence = data.get("evidence") or []
     if evidence:
         lines.append("")
@@ -1898,6 +2203,7 @@ def format_evidence_panel_markdown(
     if isinstance(quality, dict) and quality.get("bar"):
         lines.append("")
         lines.append(f"**{labels.get('quality', labels['score'])}:** {quality['bar']}")
+        lines.extend(format_quality_flag_lines(quality, labels))
     elif score is not None:
         bar = str(data.get("evidence_score_bar") or "")
         lines.append("")
@@ -1908,6 +2214,7 @@ def format_evidence_panel_markdown(
         lines.append(
             f"**{labels.get('coverage', 'Evidence Coverage')}:** {coverage['bar']}"
         )
+        lines.extend(format_coverage_count_lines(coverage, labels))
     falsify = data.get("falsify")
     if isinstance(falsify, dict):
         supporting = [s for s in (falsify.get("supporting") or []) if s]
@@ -1951,6 +2258,20 @@ def format_evidence_panel_markdown(
             )
         for flag in (hk.get("flags") or [])[:4]:
             lines.append(f"- {flag}")
+        typical = hk.get("typical") if isinstance(hk.get("typical"), dict) else {}
+        current = hk.get("current") if isinstance(hk.get("current"), dict) else {}
+        for key in ("migrations", "migration_rate", "blocking", "wcet"):
+            if key in typical or key in current:
+                t = typical.get(key)
+                c = current.get(key)
+                if t is not None:
+                    lines.append(
+                        f"- {labels.get('typical_rate', 'Typical rate')} ({key}): {t:g}"
+                    )
+                if c is not None:
+                    lines.append(
+                        f"- {labels.get('current_rate', 'Current')} ({key}): {c:g}"
+                    )
         msg = str(hk.get("message") or "").strip()
         if msg and msg not in ("No historical match", "Within historical range"):
             lines.append(f"- {msg}")
@@ -1990,7 +2311,11 @@ def format_evidence_panel_markdown(
             tool = str(r.get("tool") or "")
             why = str(r.get("reason") or "")
             if tool:
-                lines.append(f"- {tool}: {why}")
+                why_link = (
+                    f"[{labels.get('why_action', 'Why?')}]"
+                    f"({btf_tool_href('why', tool)})"
+                )
+                lines.append(f"- {tool}: {why} {why_link}")
     hyps_m = data.get("hypotheses_managed") or []
     if hyps_m:
         lines.append("")

@@ -21,7 +21,8 @@ from unittest.mock import patch  # noqa: E402
 
 from PySide6.QtCore import QPoint, QUrl  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
-    QApplication, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QApplication, QGridLayout, QLabel, QMainWindow, QPushButton, QScrollArea,
+    QVBoxLayout, QWidget,
 )
 
 from btf_viewer_pkg.ai_assistant import (  # noqa: E402
@@ -91,24 +92,42 @@ class AiPanelUiTests(unittest.TestCase):
         )
 
     def test_ask_needs_a_question(self) -> None:
-        """Ask stays disabled until the box has text (web parity)."""
+        """Send stays disabled until the box has text (web parity)."""
         panel = self._panel()
         self.assertTrue(hasattr(panel, "_auth_chip"))
         self.assertIn("·", panel._auth_chip.text())
+        self.assertTrue(panel._privacy_chip.text())
+        self.assertIn("Local", panel._privacy_chip.text())
+        self.assertEqual(panel._send_btn.text(), "")
+        self.assertFalse(panel._send_btn.icon().isNull())
         self.assertFalse(panel._send_btn.isEnabled())
+        self.assertIn("Send", panel._send_btn.toolTip())
         panel._input.setPlainText("why is CS[22] late?")
         self.assertTrue(panel._send_btn.isEnabled())
         panel._input.setPlainText("   ")
         self.assertFalse(panel._send_btn.isEnabled())
+        panel._set_busy(True)
+        self.assertTrue(panel._send_btn.isEnabled())
+        self.assertIn("Stop", panel._send_btn.toolTip())
+        panel._set_busy(False)
+        self.assertIn("Send", panel._send_btn.toolTip())
+        self.assertFalse(panel._send_btn.isEnabled())
+        actions = panel.findChild(QWidget, "aiActions")
+        labels = [b.text() for b in actions.findChildren(QPushButton)]
+        self.assertNotIn("Stop", labels)
+        self.assertNotIn("Ask", labels)
+        self.assertIn("Clear", labels)
+        composer = panel.findChild(QWidget, "aiComposer")
+        self.assertIsNotNone(composer)
+        self.assertTrue(composer.isAncestorOf(panel._send_btn))
+        self.assertFalse(hasattr(panel, "_stop_btn"))
 
     def test_auth_forced_keeps_cta_after_401(self) -> None:
         """401 CTAs stay until a successful turn (web authForced parity)."""
         panel = self._panel()
         self.assertFalse(panel._auth_forced)
         self.assertTrue(panel._auth_cta.isHidden())
-        panel._on_err(
-            "OpenAI-compatible HTTP 401 at https://api.openai.com/v1/"
-            "chat/completions: unauthorized")
+        panel._on_err("HTTP 401: unauthorized")
         self.assertTrue(panel._auth_forced)
         self.assertFalse(panel._auth_cta.isHidden())
         self.assertFalse(panel._auth_cta_signin.isHidden())
@@ -116,6 +135,28 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertFalse(panel._auth_forced)
         self.assertTrue(panel._auth_cta.isHidden())
         self.assertIn("ok", panel._log.toPlainText())
+
+    def test_on_err_shows_panel_and_window_status(self) -> None:
+        """HTTP errors go to the AI status line (red) and the window status bar."""
+        wnd = QMainWindow()
+        panel = create_ai_assistant_panel(
+            wnd,
+            get_context=lambda: {"findings_text": "findings"},
+            get_settings=lambda: {"enabled": "true"},
+        )
+        wnd.setCentralWidget(panel)
+        wnd.show()
+        panel._on_err("HTTP 503: This model is currently experiencing high demand.")
+        self.assertIn("HTTP 503:", panel._status.text())
+        self.assertIn("#e07070", panel._status.styleSheet())
+        self.assertIn(
+            "(Error) HTTP 503: This model is currently experiencing high demand.",
+            panel._log.toPlainText(),
+        )
+        self.assertIn("AI: HTTP 503:", wnd.statusBar().currentMessage())
+        panel._set_status("Done.")
+        self.assertIn("#999", panel._status.styleSheet())
+        self.assertNotIn("#e07070", panel._status.styleSheet())
 
     def test_log_keeps_prompt_and_reply_apart(self) -> None:
         """Template / follow-up prompts must not continue the previous assistant block."""
@@ -761,17 +802,23 @@ class AiPanelUiTests(unittest.TestCase):
 
         headings = [
             "Diagnose", "Compare", "Metrics", "What-if / Optimize",
-            "Investigations",
+            "Investigations", "Knowledge",
         ]
-        texts = [a.text().replace("&", "") for a in panel._more_menu.actions()]
-        pos = [texts.index(h) for h in headings]
-        self.assertEqual(pos, sorted(pos))
-        for h in headings:
-            act = next(
-                a for a in panel._more_menu.actions()
-                if a.text().replace("&", "") == h
-            )
-            self.assertFalse(act.isEnabled(), h)
+        labels = [
+            w.text() for w in panel._more_menu.findChildren(QLabel)
+            if w.objectName() == "aiMoreHeading"
+        ]
+        self.assertEqual(labels, headings)
+        for lab in panel._more_menu.findChildren(QLabel):
+            if lab.objectName() == "aiMoreHeading":
+                self.assertFalse(lab.isEnabled(), lab.text())
+        grid = panel._more_menu.findChild(QGridLayout)
+        self.assertIsNotNone(grid)
+        self.assertEqual(grid.columnCount(), 2)
+        self.assertIsNone(panel._more_menu.findChild(QScrollArea))
+        panel._place_more_menu()
+        self.assertEqual(panel._more_menu.height(), panel._more_menu.sizeHint().height())
+        self.assertGreater(panel._more_menu.height(), 200)
 
         _relax_widget_tree(panel)
         for btn in panel._mode_btns + panel._template_btns:
@@ -782,6 +829,15 @@ class AiPanelUiTests(unittest.TestCase):
                 btn.text(),
             )
             self.assertGreater(btn.sizeHint().width(), 20, btn.text())
+        self.assertTrue(_in_ai_actions_bar(panel._auth_chip))
+        self.assertTrue(_in_ai_actions_bar(panel._privacy_chip))
+        for chip in (panel._auth_chip, panel._privacy_chip):
+            self.assertNotEqual(
+                chip.sizePolicy().horizontalPolicy(),
+                QSizePolicy.Policy.Ignored,
+                chip.objectName(),
+            )
+            self.assertGreater(chip.sizeHint().width(), 20, chip.text())
 
     def test_status_shows_accumulated_cost_until_clear(self) -> None:
         from btf_viewer_pkg.ai_case import accumulate_cost, empty_cost_meter
@@ -820,13 +876,20 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertEqual(_AI_TPL_DISABLED_COLOR, "#8a96a8")
         self.assertIn("QPushButton:disabled", _AI_TPL_BTN_STYLE)
         self.assertIn(_AI_TPL_DISABLED_COLOR, _AI_TPL_BTN_STYLE)
-        self.assertIn("QMenu::item:disabled", _AI_MORE_MENU_STYLE)
+        self.assertIn("QPushButton#aiMoreItem:disabled", _AI_MORE_MENU_STYLE)
         self.assertIn(_AI_TPL_DISABLED_COLOR, _AI_MORE_MENU_STYLE)
         modes = panel.findChild(QWidget, "aiModes")
         tpls = panel.findChild(QWidget, "aiTemplates")
         self.assertIn(_AI_TPL_DISABLED_COLOR, modes.styleSheet())
         self.assertIn(_AI_TPL_DISABLED_COLOR, tpls.styleSheet())
         self.assertIn(_AI_TPL_DISABLED_COLOR, panel._more_menu.styleSheet())
+        for btn in panel._mode_btns + panel._template_btns:
+            self.assertEqual(btn.minimumHeight(), 28, btn.text())
+        more = next(
+            b for b in panel.findChildren(QPushButton)
+            if b.text().replace("&", "") == "More templates…"
+        )
+        self.assertEqual(more.minimumHeight(), 28)
 
 
 if __name__ == "__main__":

@@ -420,7 +420,7 @@ Comparing a before and an after trace is the only way to prove a fix worked rath
 
 1. Open both traces in tabs, then choose **Trace Compare…** in the Statistics footer.
 2. Work through the comparison pages: Summary (load balance and tick), Top Tasks, Core Utilisation, Migrations, Execution, Blocking, Preemption, and Sync.
-3. Each **Δ** column is A − B. Export the whole comparison as CSV or HTML from the dialog, or click **Query with AI…** to run the Trace Compare template on the current A / B pair.
+3. Each **Δ** column is A − B. Export the whole comparison as CSV or HTML from the dialog, click **Validate experiment…** to score expected vs actual deltas (`validate_experiment`; actual percents come from this compare), or **Query with AI…** to run the Trace Compare template on the current A / B pair.
 
 The AI `trigger_compare` tool returns the same CSV and opens this dialog. The same comparison runs headlessly, which is what makes it usable in CI:
 
@@ -557,16 +557,16 @@ Configuration is per preset, and the desktop and web viewers work the same way a
 | Step | Desktop | Web |
 |------|---------|-----|
 | Choose preset | **Settings → AI → Preset**: Ollama, OpenAI, Google Gemini, or Custom | Same |
-| Ollama | `ollama serve`; `ollama pull qwen2.5:7b` (or `llama3.1:8b`) for native tools; `phi4-mini:3.8b` is the light default. Base URL `http://localhost:11434/v1`; ≥8k context | Same; for `file://` use Vite, or allow CORS (`OLLAMA_ORIGINS="*" ollama serve`; macOS app: `launchctl setenv OLLAMA_ORIGINS "*"` + restart) |
+| Ollama | `ollama serve`; `ollama pull qwen3.5:9b` (shipped default). Larger: `qwen3.5:27b` / `gemma4:26b`. Base URL `http://localhost:11434/v1`; ≥8k context | Same; for `file://` use Vite, or allow CORS (`OLLAMA_ORIGINS="*" ollama serve`; macOS app: `launchctl setenv OLLAMA_ORIGINS "*"` + restart) |
 | OpenAI / Gemini / Custom | Base URL + model + Authentication (API key or Sign in) | Same; OpenAI and Gemini are proxied under `npm run dev` / `preview` |
-| Authentication | **None (local)** / **API key** / **Sign in** (opens vendor page; paste the key). Panel chip: Local / Key saved / Needs API key / Needs sign-in / Signed in. 401 keeps Sign in / Settings CTAs until a successful turn | Same (`VITE_*` env keys) |
+| Authentication | **None (local)** / **API key** / **Sign in** (opens vendor page; paste the key). Panel chip: Local / Key saved / Needs API key / Needs sign-in / Signed in. 401 keeps Sign in / Settings CTAs until a successful turn | Same env names (`OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`) |
 | Self-signed TLS | **Allow self-signed TLS** per preset (desktop urllib skips certificate checks) | Same setting is stored; browsers still verify — trust the cert, use `http://`, or use Desktop |
 | Verify | Refresh the **Model** list, open the Model dropdown to pick a served id, then **Test connection** (chat probe, 120s). `GET /models` succeeding does not mean chat is ready — first load can be slow. Gemini tool follow-ups need a thought signature — retry a 400 that mentions `thought_signature` | Same |
 | GUI tools | **Auto-apply GUI actions** off (default) → Apply / Skip / Undo in chat, plus **Apply GUI actions** under the log. Read-only tools (`query_raw_metric`, `search_timeline`, `trigger_compare`, `investigate`, `what_if`, `find_critical_path`, … — full list in [AI.md GUI tools](AI.md#gui-tools)) run immediately. Mutating GUI tools (`set_cursors`, `add_annotation`, `bookmark_finding`, `clear_marks`, `reset_view`, …) wait for Apply. `export_report` / `export_investigation` open a save dialog. **Ctrl/Cmd+Z** also undoes cursors/marks after Apply. Chat timeout 120s. Small models without native tools may emit ` ```btftool ` fences instead. | Same |
-| Share a setup | **Import…** a JSON file (`examples/ai/ollama.json`, `gemini.json`, `openai.json`, `deepseek.json`, `grok.json`, `presets.json`) | Same |
+| Share a setup | **Import…** a JSON file (`examples/ai/ollama.json`, `gemini.json`, `openai.json`, `deepseek.json`, `grok.json`, `presets.json`). Unknown preset names are added to the list; checkbox flags apply when present. | Same |
 | Show panel | **View → Show AI Assistant** / Display settings | Display → AI Assistant panel |
 
-Each preset keeps its own base URL, model, API key, auth method, and TLS-verify flag — in `btf_viewer.rc` on the desktop and in browser storage on the web — so you can switch between a local and a cloud endpoint without retyping either configuration. **Sign in** opens the vendor key/login page in the browser; paste the issued key or token back into Settings (device-code OAuth is not wired yet). Keys may also come from the environment as `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `OLLAMA_API_KEY` (`VITE_*` prefixed on the web). A local Ollama endpoint needs no key at all.
+Each preset keeps its own base URL, model, API key, auth method, and TLS-verify flag — in `btf_viewer.rc` on the desktop and in browser storage on the web — so you can switch between a local and a cloud endpoint without retyping either configuration. **Sign in** opens the vendor key/login page in the browser; paste the issued key or token back into Settings (device-code OAuth is not wired yet). Keys may also come from the environment as `OPENAI_API_KEY`, then `GEMINI_API_KEY`, then `OLLAMA_API_KEY`. A local Ollama endpoint needs no key at all. Custom vendor names (for example `CURSOR_API_KEY`) apply only to live `ai-test` XML `<api-key env="VAR">`, not to chat / Test connection. Full rules: [README → API keys](README.md#ai-api-keys).
 
 ### 7.2 Recommended ask order
 
@@ -622,7 +622,7 @@ Different models fail differently, which makes disagreement between them useful.
 
 | Role | Source | Use when |
 |------|--------|----------|
-| **Default in-app** | Local Ollama (`phi4-mini:3.8b` for light triage; `qwen2.5:7b` / `llama3.1:8b` for native tools) | Fast, private triage; iterate templates + `jump:TIME` |
+| **Default in-app** | Local Ollama (`qwen3.5:9b`) | Fast, private investigation; iterate templates + `jump:TIME` |
 | **Stronger in-app** | OpenAI or Gemini preset, or a Custom endpoint (Grok, DeepSeek, a company gateway) | Better reasoning while keeping Ask + jump links |
 | **Second opinion** | Switch preset and Ask the same template again | Where replies diverge — verify on the timeline |
 | **External paste** | Any other chat (Claude, etc.) | Export HTML / copy findings when the vendor is not OpenAI-compatible |

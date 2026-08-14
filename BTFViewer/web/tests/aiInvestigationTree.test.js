@@ -155,6 +155,16 @@ describe('computeEvidenceScore', () => {
     assert.ok('evidence_score' in payload)
     assert.ok('evidence_score_bar' in payload)
     assert.ok(payload.evidence_score >= 40 + 25)
+    assert.ok((payload.falsify || {}).supporting?.length)
+    const interpreted = extractEvidencePanelPayload('interpret_query', {
+      ok: true,
+      data: {
+        interpreted_question: 'Why is TaskA slow?',
+        mode: 'diagnose',
+        scope: ['execution', 'blocking'],
+      },
+    })
+    assert.equal(interpreted.investigation_case?.conclusion, 'Why is TaskA slow?')
   })
 
   it('extracts explain_finding / interpret_query / validate_experiment / manage_hypotheses', () => {

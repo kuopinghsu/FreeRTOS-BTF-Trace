@@ -236,6 +236,7 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         if QApplication.instance() is None:
             QApplication([])
         called = []
+        validated = []
         win = SimpleNamespace(_tabs=[
             SimpleNamespace(path="/tmp/a.btf", trace=None),
             SimpleNamespace(path="/tmp/b.btf", trace=None),
@@ -243,9 +244,12 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         dlg = _TraceCompareDialog(
             win, ai_enabled=True,
             on_query_ai=lambda enabled, a, b: called.append((enabled, a, b)),
+            on_validate_experiment=lambda enabled, a, b: validated.append(
+                (enabled, a, b)),
         )
         labels = [b.text().replace("&", "") for b in dlg.findChildren(QPushButton)]
         self.assertIn("Query with AI…", labels)
+        self.assertIn("Validate experiment…", labels)
         ai_btn = next(
             b for b in dlg.findChildren(QPushButton)
             if "Query with AI" in b.text().replace("&", "")
@@ -253,6 +257,36 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         self.assertIn("Trace Compare", ai_btn.toolTip())
         ai_btn.click()
         self.assertEqual(called, [(True, 0, 1)])
+        self.assertEqual(validated, [])
+
+    def test_compare_dialog_validate_experiment_button(self):
+        from types import SimpleNamespace
+
+        from PySide6.QtWidgets import QApplication, QPushButton
+        from btf_viewer_pkg.stats import _TraceCompareDialog
+
+        if QApplication.instance() is None:
+            QApplication([])
+        called = []
+        validated = []
+        win = SimpleNamespace(_tabs=[
+            SimpleNamespace(path="/tmp/a.btf", trace=None),
+            SimpleNamespace(path="/tmp/b.btf", trace=None),
+        ])
+        dlg = _TraceCompareDialog(
+            win, ai_enabled=True,
+            on_query_ai=lambda enabled, a, b: called.append((enabled, a, b)),
+            on_validate_experiment=lambda enabled, a, b: validated.append(
+                (enabled, a, b)),
+        )
+        btn = next(
+            b for b in dlg.findChildren(QPushButton)
+            if "Validate experiment" in b.text().replace("&", "")
+        )
+        self.assertIn("expected vs actual", btn.toolTip())
+        btn.click()
+        self.assertEqual(validated, [(True, 0, 1)])
+        self.assertEqual(called, [])
 
 
 if __name__ == "__main__":

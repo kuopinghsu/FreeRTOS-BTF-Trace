@@ -39,9 +39,14 @@ import {
   normalizeAiAuthMode,
   normalizeAiPreset,
   parseAiTlsVerify,
+  parseExtraAiPresets,
+  sanitizeAiPresetId,
+  aiPresetDisplayLabel,
 } from './ollamaClient.js'
 import {
+  dumpUserHistoricalKnowledge,
   dumpUserInvestigationTemplates,
+  parseUserHistoricalKnowledge,
   parseUserInvestigationTemplates,
 } from './aiCase.js'
 
@@ -49,6 +54,7 @@ const SETTINGS_KEY = 'btf-viewer-settings-v1'
 // Separate key: baseline profiles grow with usage and are not GUI prefs.
 const AI_BASELINE_KEY = 'btf-viewer-ai-baseline-v1'
 const AI_USER_TEMPLATES_KEY = 'btf-viewer-ai-user-templates-v1'
+const AI_USER_KNOWLEDGE_KEY = 'btf-viewer-ai-user-knowledge-v1'
 
 export { MAX_CURSORS }
 
@@ -91,6 +97,9 @@ export const DEFAULT_SETTINGS = {
   ),
   aiResponseLanguage: DEFAULT_AI_RESPONSE_LANGUAGE,
   aiAutoApply: false,
+  aiRedactTaskNames: false,
+  aiTraceSensitive: false,
+  aiExtraPresets: [],
 }
 
 /** Per-preset AI fields, migrating any pre-preset settings on the way. */
@@ -100,8 +109,21 @@ function normalizeAiPresetSettings(s) {
   for (const [pid, vals] of Object.entries(migrated.aiPresets || {})) {
     stored[pid] = { ...(stored[pid] || {}), ...vals }
   }
+  const extra = parseExtraAiPresets(s.aiExtraPresets)
+  const seen = new Set(extra.map((e) => e.id))
+  for (const pid of Object.keys(stored)) {
+    const id = sanitizeAiPresetId(pid)
+    if (id && !AI_PRESETS.some((p) => p.id === id) && !seen.has(id)) {
+      extra.push({ id, label: aiPresetDisplayLabel(id) })
+      seen.add(id)
+    }
+  }
   const out = {}
-  for (const preset of AI_PRESETS) {
+  const catalog = [
+    ...AI_PRESETS,
+    ...extra.map((e) => ({ id: e.id, label: e.label, baseUrl: '', model: '' })),
+  ]
+  for (const preset of catalog) {
     const v = stored[preset.id] || {}
     const baseUrl = String(v.baseUrl || '').trim().replace(/\/+$/, '')
     out[preset.id] = {
@@ -115,7 +137,7 @@ function normalizeAiPresetSettings(s) {
       tlsVerify: parseAiTlsVerify(v.tlsVerify, true),
     }
   }
-  return { presets: out, preset: migrated.aiPreset || '' }
+  return { presets: out, preset: migrated.aiPreset || '', extraPresets: extra }
 }
 
 function clampInt(v, lo, hi, fallback) {
@@ -170,9 +192,12 @@ export function normalizeSettings(raw) {
     aiEnabled: s.aiEnabled !== false,
     aiPreset: normalizeAiPreset(ai.preset || s.aiPreset || DEFAULT_AI_PRESET),
     aiPresets: ai.presets,
+    aiExtraPresets: ai.extraPresets || [],
     aiResponseLanguage: String(s.aiResponseLanguage || DEFAULT_SETTINGS.aiResponseLanguage).trim()
       || DEFAULT_SETTINGS.aiResponseLanguage,
     aiAutoApply: !!s.aiAutoApply,
+    aiRedactTaskNames: !!s.aiRedactTaskNames,
+    aiTraceSensitive: !!s.aiTraceSensitive,
   }
 }
 
@@ -274,6 +299,26 @@ export function saveAiUserInvestigationTemplates(items) {
     localStorage.setItem(
       AI_USER_TEMPLATES_KEY,
       dumpUserInvestigationTemplates(items),
+    )
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+export function loadAiUserHistoricalKnowledge() {
+  try {
+    const raw = localStorage.getItem(AI_USER_KNOWLEDGE_KEY)
+    return parseUserHistoricalKnowledge(raw || '[]')
+  } catch {
+    return []
+  }
+}
+
+export function saveAiUserHistoricalKnowledge(items) {
+  try {
+    localStorage.setItem(
+      AI_USER_KNOWLEDGE_KEY,
+      dumpUserHistoricalKnowledge(items),
     )
   } catch {
     /* quota / private mode */

@@ -390,6 +390,17 @@
       </div>
 
       <div class="compare-dialog-footer">
+        <div class="compare-footer-left">
+        <button
+          type="button"
+          class="compare-ai-btn"
+          :title="aiEnabled
+            ? 'Score expected vs actual deltas from this Trace Compare'
+            : 'Enable AI Assistant in Settings → AI'"
+          @click="onValidateExperiment"
+        >
+          Validate experiment…
+        </button>
         <button
           type="button"
           class="compare-ai-btn"
@@ -400,6 +411,7 @@
         >
           Query with AI…
         </button>
+        </div>
         <div class="compare-footer-right">
         <button
           type="button"
@@ -479,7 +491,7 @@ const props = defineProps({
   aiEnabled: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['close', 'query-ai'])
+const emit = defineEmits(['close', 'query-ai', 'validate-experiment', 'compared'])
 
 function pickTabId(preferred, fallbackIndex) {
   const list = props.tabs || []
@@ -519,6 +531,20 @@ const tabA = computed(() => props.tabs.find(t => t.id === tabAId.value) ?? null)
 const tabB = computed(() => props.tabs.find(t => t.id === tabBId.value) ?? null)
 const traceA = computed(() => tabA.value?.trace ?? null)
 const traceB = computed(() => tabB.value?.trace ?? null)
+
+watch(
+  [tabAId, tabBId, scopeToCursors, traceA, traceB],
+  () => {
+    if (tabAId.value == null || tabBId.value == null || tabAId.value === tabBId.value) return
+    if (!traceA.value || !traceB.value) return
+    emit('compared', {
+      idA: tabAId.value,
+      idB: tabBId.value,
+      scopeToCursors: !!scopeToCursors.value,
+    })
+  },
+  { immediate: true },
+)
 
 const summaryRows = computed(() =>
   buildSummaryCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
@@ -573,6 +599,10 @@ function onExportHtml() {
 
 function onQueryAi() {
   emit('query-ai', { idA: tabAId.value, idB: tabBId.value })
+}
+
+function onValidateExperiment() {
+  emit('validate-experiment', { idA: tabAId.value, idB: tabBId.value })
 }
 </script>
 
@@ -756,9 +786,11 @@ function onQueryAi() {
   flex-shrink: 0;
 }
 
+.compare-footer-left,
 .compare-footer-right {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .compare-ai-btn {

@@ -4,6 +4,7 @@
  */
 
 import {
+  INVESTIGATION_SCOPE_OPTIONS,
   buildEvidenceGraph,
   buildInvestigationCase,
   computeEvidenceCoverage,
@@ -12,6 +13,9 @@ import {
   evidenceQualityFromScore,
   falsificationChecks,
   formatConfidenceEvolution,
+  formatCoverageCountLines,
+  formatExperimentVerdict,
+  formatQualityFlagLines,
   historicalKnowledgeForFinding,
 } from './aiCase.js'
 
@@ -610,12 +614,25 @@ export function extractEvidencePanelPayload(toolName, result) {
     if (scopes.length) payload.subtitle = mode ? `${mode}: ${scopes.join(', ')}` : scopes.join(', ')
     else if (mode) payload.subtitle = mode
     payload.confidence = 'Medium'
+    payload.interpreted = {
+      interpreted_question: payload.conclusion,
+      kind: data.kind || mode,
+      mode,
+      scope: scopes,
+      finding_id: String(data.finding_id || ''),
+      task: String(data.task || ''),
+    }
   } else if (
     name === 'validate_experiment'
     || ['VALIDATED', 'PARTIALLY VALIDATED', 'DISPROVED', 'INCONCLUSIVE'].includes(data.result)
   ) {
     const resultLabel = String(data.result || 'INCONCLUSIVE')
     payload.conclusion = resultLabel
+    payload.experiment = {
+      result: resultLabel,
+      verdict: formatExperimentVerdict(resultLabel),
+      rows: [...(data.rows || [])],
+    }
     payload.checks = (data.rows || [])
       .filter(row => row && typeof row === 'object')
       .map(row => ({
@@ -643,21 +660,42 @@ export function extractEvidencePanelPayload(toolName, result) {
   payload.evidence_score = scoreData.score
   payload.evidence_score_breakdown = scoreData.breakdown
   payload.evidence_score_bar = scoreData.bar
-  const quality = scoreData.quality || evidenceQualityFromScore(
-    scoreData.score, scoreData.breakdown || [])
+  const quality = computeEvidenceQuality({
+    score: scoreData.score,
+    breakdown: scoreData.breakdown,
+    evidence: payload.evidence,
+    alternatives: payload.alternatives,
+    checks: payload.checks,
+    evidenceChain: String(payload.evidence_chain || ''),
+  })
   payload.evidence_quality = quality
   payload.evidence_quality_bar = quality.bar
+  let finding = data.finding && typeof data.finding === 'object' ? data.finding : null
+  if (!finding && payload.conclusion) {
+    finding = {
+      title: payload.conclusion,
+      text: payload.subtitle || '',
+      evidence: payload.evidence || [],
+    }
+  }
   const caseObj = buildInvestigationCase({
-    finding: data.finding && typeof data.finding === 'object' ? data.finding : null,
-    hypotheses: payload.hypotheses,
-    alternatives: payload.alternatives,
-    evidence: payload.evidence,
+    finding: finding || {},
+    hypotheses: payload.hypotheses || [],
+    alternatives: payload.alternatives || [],
+    evidence: payload.evidence || [],
+    root_cause_chain: payload.root_cause_chain || [],
+    plan: data.plan,
+    suggested_tools: data.suggested_tools || [],
+    checks: payload.checks || [],
+    evidence_score: scoreData.score,
+    evidence_score_breakdown: scoreData.breakdown,
+    evidence_chain: payload.evidence_chain || '',
+    message: payload.conclusion || '',
+  }, {
+    scoreData,
+    toolsRun: data.suggested_tools || data.tools_executed,
     conclusion: String(payload.conclusion || ''),
     confidence: String(payload.confidence || ''),
-    scoreData,
-    checks: payload.checks,
-    plan: data.plan,
-    toolsExecuted: data.suggested_tools || data.tools_executed,
   })
   payload.investigation_case = caseObj
   payload.coverage = caseObj.evidence_coverage || caseObj.coverage
@@ -700,6 +738,71 @@ export function formatHypothesisActionLinks(hypId, labels = {}) {
     ['test', 'test_action', 'Test'],
   ].map(([action, key, fallback]) => `[${labels[key] || fallback}](${btfHypHref(action, hid)})`)
   return parts.join(' · ')
+}
+
+const BTF_SCOPE_HREF_RE = /btfscope:(?:\/\/)?([a-z_]+)\/([^?\s#]*)/i
+const BTF_EXP_HREF_RE = /btfexp:(?:\/\/)?([a-z_]+)\/([^?\s#]*)/i
+const BTF_TOOL_HREF_RE = /btftool:(?:\/\/)?([a-z_]+)\/([^?\s#]*)/i
+
+export function btfScopeHref(action, key = '') {
+  const act = String(action || '').toLowerCase().replace(/[^a-z_]/g, '') || 'run'
+  const kid = String(key || 'all').replace(/[^A-Za-z0-9_. -]/g, '').trim().replace(/ /g, '_') || 'all'
+  return `btfscope:${act}/${kid}`
+}
+
+export function parseBtfScopeHref(href) {
+  const m = BTF_SCOPE_HREF_RE.exec(String(href || ''))
+  if (!m) return { action: '', key: '' }
+  return { action: String(m[1] || '').toLowerCase(), key: String(m[2] || 'all').replace(/_/g, ' ') }
+}
+
+export function formatScopeActionLinks(interpreted = null, labels = {}) {
+  const data = interpreted && typeof interpreted === 'object' ? interpreted : {}
+  const scopes = [...(data.scope || [])].map(s => String(s)).filter(Boolean)
+  const options = [...INVESTIGATION_SCOPE_OPTIONS]
+  for (const s of scopes) {
+    if (!options.includes(s)) options.push(s)
+  }
+  const lines = []
+  const question = String(data.interpreted_question || '').trim()
+  if (question) lines.push(`**${labels.interpreted || 'Interpreted question'}:** ${question}`)
+  lines.push('', `**${labels.scope || 'Investigation scope'}**`)
+  const onLab = labels.scope_on || 'on'
+  const offLab = labels.scope_off || 'off'
+  for (const opt of options) {
+    const active = scopes.includes(opt)
+    lines.push(`- ${active ? '✓' : '○'} ${opt} [${active ? offLab : onLab}](${btfScopeHref('toggle', opt)})`)
+  }
+  lines.push(
+    '',
+    `[${labels.run_investigation || 'Run investigation'}](${btfScopeHref('run', 'all')}) `
+    + `[${labels.edit_scope || 'Edit scope'}](${btfScopeHref('edit', 'all')})`,
+  )
+  return lines.join('\n')
+}
+
+export function btfExpHref(action, key = 'all') {
+  const act = String(action || '').toLowerCase().replace(/[^a-z_]/g, '') || 'save'
+  const kid = String(key || 'all').replace(/[^A-Za-z0-9_.-]/g, '') || 'all'
+  return `btfexp:${act}/${kid}`
+}
+
+export function parseBtfExpHref(href) {
+  const m = BTF_EXP_HREF_RE.exec(String(href || ''))
+  if (!m) return { action: '', key: '' }
+  return { action: String(m[1] || '').toLowerCase(), key: m[2] || 'all' }
+}
+
+export function btfToolHref(action, name = '') {
+  const act = String(action || '').toLowerCase().replace(/[^a-z_]/g, '') || 'why'
+  const kid = String(name || 'tool').replace(/[^A-Za-z0-9_.-]/g, '') || 'tool'
+  return `btftool:${act}/${kid}`
+}
+
+export function parseBtfToolHref(href) {
+  const m = BTF_TOOL_HREF_RE.exec(String(href || ''))
+  if (!m) return { action: '', name: '' }
+  return { action: String(m[1] || '').toLowerCase(), name: String(m[2] || '') }
 }
 
 /** Keep in sync with btf_viewer_pkg/ai_investigation.py EVIDENCE_PANEL_LABELS. */
@@ -850,26 +953,82 @@ const EVIDENCE_PANEL_ACTIONS = {
     support_action: 'Support', reject_action: 'Reject',
     need_evidence_action: 'Need evidence', test_action: 'Test',
     compare_action: 'Compare hypotheses',
+    interpreted: 'Interpreted question', scope: 'Investigation scope',
+    run_investigation: 'Run investigation', edit_scope: 'Edit scope',
+    experiment_result: 'Experiment result',
+    hypothesis_validated: 'Hypothesis validated',
+    hypothesis_disproved: 'Hypothesis disproved',
+    hypothesis_partial: 'Hypothesis partially validated',
+    save_knowledge: 'Save to knowledge', scope_on: 'on', scope_off: 'off',
+    quality_direct: 'Direct evidence', quality_timeline: 'Timeline correlation',
+    quality_metric: 'Metric correlation', quality_alternative: 'Alternative tested',
+    coverage_observed: 'Directly observed', coverage_timeline: 'Timeline verified',
+    coverage_metric: 'Metric verified', coverage_unverified: 'Unverified assumptions',
+    why_action: 'Why?', typical_rate: 'Typical rate', current_rate: 'Current',
   },
   'Traditional Chinese (繁體中文)': {
     historical: '歷史知識', previous_issue: '先前問題', known_fix: '已知修復',
     last_occurrence: '上次出現', support_action: '支持', reject_action: '排除',
     need_evidence_action: '需要證據', test_action: '驗證', compare_action: '比較假設',
+    interpreted: '解讀後的問題', scope: '調查範圍',
+    run_investigation: '開始調查', edit_scope: '編輯範圍',
+    experiment_result: '實驗結果',
+    hypothesis_validated: '假設已成立', hypothesis_disproved: '假設已排除',
+    hypothesis_partial: '假設部分成立',     save_knowledge: '存入知識庫',
+    scope_on: '開', scope_off: '關',
+    quality_direct: '直接證據', quality_timeline: '時間軸相關',
+    quality_metric: '指標相關', quality_alternative: '已測替代假設',
+    coverage_observed: '直接觀察', coverage_timeline: '時間軸已驗證',
+    coverage_metric: '指標已驗證', coverage_unverified: '未驗證假設',
+    why_action: '為何？', typical_rate: '典型速率', current_rate: '目前',
   },
   'Simplified Chinese (简体中文)': {
     historical: '历史知识', previous_issue: '先前问题', known_fix: '已知修复',
     last_occurrence: '上次出现', support_action: '支持', reject_action: '排除',
     need_evidence_action: '需要证据', test_action: '验证', compare_action: '比较假设',
+    interpreted: '解读后的问题', scope: '调查范围',
+    run_investigation: '开始调查', edit_scope: '编辑范围',
+    experiment_result: '实验结果',
+    hypothesis_validated: '假设已成立', hypothesis_disproved: '假设已排除',
+    hypothesis_partial: '假设部分成立',     save_knowledge: '存入知识库',
+    scope_on: '开', scope_off: '关',
+    quality_direct: '直接证据', quality_timeline: '时间轴相关',
+    quality_metric: '指标相关', quality_alternative: '已测替代假设',
+    coverage_observed: '直接观察', coverage_timeline: '时间轴已验证',
+    coverage_metric: '指标已验证', coverage_unverified: '未验证假设',
+    why_action: '为何？', typical_rate: '典型速率', current_rate: '当前',
   },
   'Japanese (日本語)': {
     historical: '過去の知見', previous_issue: '過去の問題', known_fix: '既知の対策',
     last_occurrence: '前回の発生', support_action: '支持', reject_action: '却下',
     need_evidence_action: '根拠不足', test_action: '検証', compare_action: '仮説を比較',
+    interpreted: '解釈した質問', scope: '調査範囲',
+    run_investigation: '調査を実行', edit_scope: '範囲を編集',
+    experiment_result: '実験結果',
+    hypothesis_validated: '仮説は妥当', hypothesis_disproved: '仮説は否定',
+    hypothesis_partial: '仮説は部分的に妥当',     save_knowledge: '知見に保存',
+    scope_on: 'オン', scope_off: 'オフ',
+    quality_direct: '直接根拠', quality_timeline: 'タイムライン相関',
+    quality_metric: '指標相関', quality_alternative: '代替仮説を検証',
+    coverage_observed: '直接観測', coverage_timeline: 'タイムライン検証',
+    coverage_metric: '指標検証', coverage_unverified: '未検証の仮定',
+    why_action: '理由', typical_rate: '典型値', current_rate: '現在',
   },
   'Korean (한국어)': {
     historical: '과거 지식', previous_issue: '이전 이슈', known_fix: '알려진 수정',
     last_occurrence: '최근 발생', support_action: '지지', reject_action: '기각',
     need_evidence_action: '증거 필요', test_action: '검증', compare_action: '가설 비교',
+    interpreted: '해석된 질문', scope: '조사 범위',
+    run_investigation: '조사 실행', edit_scope: '범위 편집',
+    experiment_result: '실험 결과',
+    hypothesis_validated: '가설 타당', hypothesis_disproved: '가설 기각',
+    hypothesis_partial: '가설 부분 타당',     save_knowledge: '지식에 저장',
+    scope_on: '켜짐', scope_off: '꺼짐',
+    quality_direct: '직접 증거', quality_timeline: '타임라인 상관',
+    quality_metric: '메트릭 상관', quality_alternative: '대안 검증',
+    coverage_observed: '직접 관측', coverage_timeline: '타임라인 검증',
+    coverage_metric: '메트릭 검증', coverage_unverified: '미검증 가정',
+    why_action: '이유', typical_rate: '전형 비율', current_rate: '현재',
   },
   German: {
     historical: 'Historisches Wissen', previous_issue: 'Früheres Problem',
@@ -877,6 +1036,18 @@ const EVIDENCE_PANEL_ACTIONS = {
     support_action: 'Stützen', reject_action: 'Ablehnen',
     need_evidence_action: 'Belege nötig', test_action: 'Prüfen',
     compare_action: 'Hypothesen vergleichen',
+    interpreted: 'Interpretierte Frage', scope: 'Untersuchungsbereich',
+    run_investigation: 'Untersuchung starten', edit_scope: 'Bereich bearbeiten',
+    experiment_result: 'Experimentergebnis',
+    hypothesis_validated: 'Hypothese bestätigt',
+    hypothesis_disproved: 'Hypothese widerlegt',
+    hypothesis_partial: 'Hypothese teilweise bestätigt',
+    save_knowledge: 'Im Wissen speichern', scope_on: 'an', scope_off: 'aus',
+    quality_direct: 'Direkte Belege', quality_timeline: 'Zeitlinienkorrelation',
+    quality_metric: 'Metrikkorrelation', quality_alternative: 'Alternative geprüft',
+    coverage_observed: 'Direkt beobachtet', coverage_timeline: 'Zeitlinie geprüft',
+    coverage_metric: 'Metrik geprüft', coverage_unverified: 'Ungeprüfte Annahmen',
+    why_action: 'Warum?', typical_rate: 'Typische Rate', current_rate: 'Aktuell',
   },
   French: {
     historical: 'Connaissances historiques', previous_issue: 'Problème antérieur',
@@ -884,6 +1055,19 @@ const EVIDENCE_PANEL_ACTIONS = {
     support_action: 'Étayer', reject_action: 'Rejeter',
     need_evidence_action: 'Preuves nécessaires', test_action: 'Tester',
     compare_action: 'Comparer les hypothèses',
+    interpreted: 'Question interprétée', scope: 'Périmètre d\'investigation',
+    run_investigation: 'Lancer l\'investigation', edit_scope: 'Modifier le périmètre',
+    experiment_result: 'Résultat d\'expérience',
+    hypothesis_validated: 'Hypothèse validée',
+    hypothesis_disproved: 'Hypothèse infirmée',
+    hypothesis_partial: 'Hypothèse partiellement validée',
+    save_knowledge: 'Enregistrer dans les connaissances',
+    scope_on: 'oui', scope_off: 'non',
+    quality_direct: 'Preuve directe', quality_timeline: 'Corrélation temporelle',
+    quality_metric: 'Corrélation métrique', quality_alternative: 'Alternative testée',
+    coverage_observed: 'Directement observé', coverage_timeline: 'Chronologie vérifiée',
+    coverage_metric: 'Métrique vérifiée', coverage_unverified: 'Hypothèses non vérifiées',
+    why_action: 'Pourquoi ?', typical_rate: 'Taux typique', current_rate: 'Actuel',
   },
   Spanish: {
     historical: 'Conocimiento histórico', previous_issue: 'Incidencia previa',
@@ -891,6 +1075,18 @@ const EVIDENCE_PANEL_ACTIONS = {
     support_action: 'Respaldar', reject_action: 'Rechazar',
     need_evidence_action: 'Falta evidencia', test_action: 'Probar',
     compare_action: 'Comparar hipótesis',
+    interpreted: 'Pregunta interpretada', scope: 'Alcance de investigación',
+    run_investigation: 'Ejecutar investigación', edit_scope: 'Editar alcance',
+    experiment_result: 'Resultado del experimento',
+    hypothesis_validated: 'Hipótesis validada',
+    hypothesis_disproved: 'Hipótesis refutada',
+    hypothesis_partial: 'Hipótesis parcialmente validada',
+    save_knowledge: 'Guardar en conocimiento', scope_on: 'sí', scope_off: 'no',
+    quality_direct: 'Evidencia directa', quality_timeline: 'Correlación temporal',
+    quality_metric: 'Correlación métrica', quality_alternative: 'Alternativa comprobada',
+    coverage_observed: 'Observado directamente', coverage_timeline: 'Línea de tiempo verificada',
+    coverage_metric: 'Métrica verificada', coverage_unverified: 'Supuestos no verificados',
+    why_action: '¿Por qué?', typical_rate: 'Tasa típica', current_rate: 'Actual',
   },
 }
 for (const [lang, extra] of Object.entries(EVIDENCE_PANEL_EXTRA)) {
@@ -987,6 +1183,18 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
   if (conclusion) lines.push(`**${conclusion}**`)
   const subtitle = String(data.subtitle || '').trim()
   if (subtitle) lines.push(subtitle.slice(0, 320))
+  const interpreted = data.interpreted
+  if (interpreted && typeof interpreted === 'object'
+    && (interpreted.interpreted_question || interpreted.scope)) {
+    lines.push('', formatScopeActionLinks(interpreted, labels))
+  }
+  const experiment = data.experiment
+  if (experiment && typeof experiment === 'object' && experiment.result) {
+    lines.push('', `**${labels.experiment_result || 'Experiment result'}:** ${experiment.result}`)
+    const verdict = String(experiment.verdict || formatExperimentVerdict(experiment)).trim()
+    if (verdict) lines.push(`**${verdict}**`)
+    lines.push(`[${labels.save_knowledge || 'Save to knowledge'}](${btfExpHref('save', 'all')})`)
+  }
   const evidence = data.evidence || []
   if (evidence.length) {
     lines.push('', `**${labels.evidence}**`)
@@ -1008,11 +1216,13 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
   }
   if (data.evidence_quality?.bar) {
     lines.push('', `**${labels.quality || labels.score}:** ${data.evidence_quality.bar}`)
+    lines.push(...formatQualityFlagLines(data.evidence_quality, labels))
   } else if (data.evidence_score != null) {
     lines.push('', `**${labels.score}:** ${String(data.evidence_score_bar || '')}`)
   }
   if (data.coverage?.bar) {
     lines.push('', `**${labels.coverage || 'Evidence Coverage'}:** ${data.coverage.bar}`)
+    lines.push(...formatCoverageCountLines(data.coverage, labels))
   }
   const falsify = data.falsify
   if (falsify && typeof falsify === 'object') {
@@ -1042,6 +1252,18 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
       lines.push(`- ${labels.last_occurrence || 'Last occurrence'}: ${hk.last_occurrence}`)
     }
     for (const flag of (hk.flags || []).slice(0, 4)) lines.push(`- ${flag}`)
+    const typical = hk.typical && typeof hk.typical === 'object' ? hk.typical : {}
+    const current = hk.current && typeof hk.current === 'object' ? hk.current : {}
+    for (const key of ['migrations', 'migration_rate', 'blocking', 'wcet']) {
+      if (key in typical || key in current) {
+        if (typical[key] != null) {
+          lines.push(`- ${labels.typical_rate || 'Typical rate'} (${key}): ${typical[key]}`)
+        }
+        if (current[key] != null) {
+          lines.push(`- ${labels.current_rate || 'Current'} (${key}): ${current[key]}`)
+        }
+      }
+    }
     const msg = String(hk.message || '').trim()
     if (msg && msg !== 'No historical match' && msg !== 'Within historical range') {
       lines.push(`- ${msg}`)
@@ -1077,7 +1299,10 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
     for (const r of reasons) {
       if (!r || typeof r !== 'object') continue
       const tool = String(r.tool || '')
-      if (tool) lines.push(`- ${tool}: ${String(r.reason || '')}`)
+      if (tool) {
+        const whyLink = `[${labels.why_action || 'Why?'}](${btfToolHref('why', tool)})`
+        lines.push(`- ${tool}: ${String(r.reason || '')} ${whyLink}`)
+      }
     }
   }
   const hypsM = data.hypotheses_managed || []

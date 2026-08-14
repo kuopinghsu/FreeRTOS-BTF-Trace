@@ -3,7 +3,7 @@
 
 Setup, tools, diagrams, Desktop vs Web, troubleshooting, CLI details, and **workflows / use cases** for the BTF Viewer **AI** tab.
 
-For day-to-day panel usage (templates, Apply/Skip, Analysis dialog buttons), see the [user guide → AI Assistant](README.md#ai-assistant). Ask-order playbooks: [WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow). End-to-end flows and symptom → tool tables: [Workflows and use cases](#workflows-and-use-cases).
+For day-to-day panel usage (templates, Apply/Skip, Analysis dialog buttons), see the [user guide → AI Assistant](README.md#ai-assistant). Ask-order playbooks: [WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow). End-to-end flows and symptom → tool tables: [Workflows and use cases](#workflows-and-use-cases). Live suite XML: [Benchmark / evaluation suite](#benchmark-suite). Shared engines, validator, and parity tests: [Implementation notes](#implementation-notes).
 
 Heading level: ![](../images/readme/h2.svg) section · ![](../images/readme/h3.svg) subsection · ![](../images/readme/h4.svg) topic · ![](../images/readme/h5.svg) detail
 
@@ -19,13 +19,15 @@ Heading level: ![](../images/readme/h2.svg) section · ![](../images/readme/h3.s
 | [Investigation Case](#investigation-case) | Case model, hypotheses, evidence graph, validator |
 | [Workflows and use cases](#workflows-and-use-cases) | End-to-end, verify / explain / auto, symptom → tools |
 | [Endpoints and models](#endpoints-and-models) | Ollama / cloud, context size, local models |
-| [AI capability / model matrix](#capability-matrix) | Local 3B vs 7B+ vs cloud, which model to pick |
+| [AI capability / model matrix](#capability-matrix) | Small local vs 9B+ vs cloud, which model to pick |
 | [GUI tools](#gui-tools) | Tool schema and Apply / Undo |
 | [Diagrams](#diagrams) | Mermaid and tables in replies |
 | [Desktop vs web](#desktop-vs-web) | Parity matrix |
 | [Troubleshooting](#troubleshooting) | CORS, auth, TLS, timeouts |
 | [Opening the web app from `file://`](#opening-the-web-app-from-file) | Ollama CORS for disk pages |
 | [CLI regression gate](#cli-regression-gate) | Headless `analyze` / `ai-test` |
+| [Benchmark / evaluation suite](#benchmark-suite) | Dataset, metrics, live `--config` XML, remaining plan |
+| [Implementation notes](#implementation-notes) | Shared engines, validator, remaining gaps |
 
 ---
 
@@ -51,9 +53,9 @@ Recommended ask order ([WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow)): tr
 <a id="investigation-case" name="investigation-case">&#x200B;</a>
 ## Investigation Case ![](../images/readme/h2.svg)
 
-Desktop and Web share one **Investigation Case** model (`btf-investigation-case`): question, scope (trace / C1–Cn / tasks / cores), hypotheses with status (**supported** / **possible** / **need evidence** / **rejected**), evidence graph, coverage, falsification checks, conclusion, and validation.
+Desktop and Web share one **Investigation Case** model (`btf-investigation-case`): question, scope (trace / C1–Cn / tasks / cores), hypotheses with status (**supported** / **possible** / **need evidence** / **rejected**), evidence graph, coverage, falsification checks, conclusion, and validation. Engines: `btf_viewer_pkg/ai_case.py` ↔ `web/src/utils/aiCase.js` (see [Implementation notes](#implementation-notes)).
 
-After each final assistant reply a host-side **validator** extracts `jump:TIME` and `Task[id]` claims and flags invented names or timestamps outside the cursor window. **Test connection** appends a heuristic **model capability** card (chat / tools / chaining). Headless eval:
+After each final assistant reply a host-side **validator** extracts `jump:TIME` and `Task[id]` claims and flags invented names or timestamps outside the cursor window. **Test connection** appends a **model capability** card (live chat / structured output / tool calling overlay on a 3B vs 7B+ heuristic). Headless eval:
 
 ```bash
 make -C BTFViewer ai-test
@@ -228,16 +230,16 @@ Phrase changes as **pin / affinity / priority / mutex / migration** so the simul
 
 Any OpenAI-compatible endpoint works, including Ollama (`http://localhost:11434/v1`). Chat requests time out after 120s (**Stop** still cancels sooner). Give the endpoint at least an **8k** context window so a full Findings card plus a tool round still fits.
 
-**Local models:** the shipped Ollama default is `phi4-mini:3.8b` (light triage). For reliable native function calling prefer `qwen2.5:7b` / `qwen2.5:14b` or `llama3.1:8b` (or larger). 3B-class models often skip tools and emit ` ```btftool ` fences instead.
+**Local models:** the shipped Ollama default is `qwen3.5:9b`. Pull with `ollama pull qwen3.5:9b`. Larger local ids (`qwen3.5:27b`, `gemma4:26b`) trade latency for capacity. 3B-class models often skip native tools, dump tool JSON as text, and fail the investigation suite — do not use them.
 
-**Import presets:** [`examples/ai`](examples/ai/README.md) ships [`ollama.json`](examples/ai/ollama.json), [`gemini.json`](examples/ai/gemini.json), [`openai.json`](examples/ai/openai.json), [`deepseek.json`](examples/ai/deepseek.json), [`grok.json`](examples/ai/grok.json), and [`presets.json`](examples/ai/presets.json). Imported values fill **Settings → AI**; review and confirm to save. Each preset keeps its own base URL, model, key, auth mode, and TLS flag.
+**Import presets:** [`examples/ai`](examples/ai/README.md) ships [`ollama.json`](examples/ai/ollama.json), [`gemini.json`](examples/ai/gemini.json), [`openai.json`](examples/ai/openai.json), [`deepseek.json`](examples/ai/deepseek.json), [`grok.json`](examples/ai/grok.json), and [`presets.json`](examples/ai/presets.json). Unknown preset names are added to the combo. Imported values fill **Settings → AI** (including checkbox flags when the file names them); review and confirm to save. Each preset keeps its own base URL, model, key, auth mode, and TLS flag.
 
-Keys may also come from the environment as `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `OLLAMA_API_KEY` (`VITE_*` prefixed on the web). A local Ollama endpoint needs no key.
+Keys follow the same rules on Desktop and Web: Settings → AI → API key first, then `OPENAI_API_KEY`, then `GEMINI_API_KEY`, then `OLLAMA_API_KEY`. A local Ollama endpoint needs no key. Custom agents (Cursor, …) have no extra env name in the GUI — paste the key on that preset. Live `ai-test` XML may use `<api-key env="VAR">`. Full examples: [README → API keys](README.md#ai-api-keys).
 
 <a id="capability-matrix" name="capability-matrix">&#x200B;</a>
 ### AI capability / model matrix ![](../images/readme/h3.svg)
 
-| Capability | Local 3B | Local 7B+ | Cloud |
+| Capability | Small local | Local 9B+ | Cloud |
 |---|:--:|:--:|:--:|
 | Basic Q&A | ✓ | ✓ | ✓ |
 | Tool calling | △ | ✓ | ✓ |
@@ -252,12 +254,12 @@ Keys may also come from the environment as `OPENAI_API_KEY`, `GEMINI_API_KEY`, o
 
 | If you… | Use |
 |---|---|
-| Want quick triage / a sanity check | Local 3B (shipped `phi4-mini:3.8b`) — fast, no key, but confirm every claim on the timeline |
-| Need reliable tool calling (Investigate, Root cause, Verify, Explain region, Auto investigate, Ask AI about this event, What-if, Optimize) | Local 7B+ (`qwen2.5:7b`, `qwen2.5:14b`, `llama3.1:8b`, or larger) |
+| Want a local investigator (no key) | `qwen3.5:9b` — shipped Ollama default; best scored local on the investigation suite |
+| Need more local capacity | `qwen3.5:27b` or `gemma4:26b` (slower; similar quality on the suite) |
 | Have a large scope (many findings, long chat) or want the strongest reasoning | Cloud (`gpt-4o`, Gemini, DeepSeek, Grok) — mind the [privacy](#what-leaves-the-machine) trade-off |
 | Handle confidential traces | Local Ollama regardless of size — nothing leaves the machine |
 
-3B-class local models often skip native tool calls and emit a fenced ` ```btftool ` block instead — the viewer renders the same GUI cards either way (see [GUI tools](#gui-tools)) — but investigation-heavy templates (Investigate / Root cause / Verify / Explain region / Auto investigate / Ask AI about this event / What-if / Optimize) need a tool-capable model to reliably chain multiple calls.
+Small local models often skip native tool calls and emit a fenced ` ```btftool ` block instead — the viewer renders the same GUI cards either way (see [GUI tools](#gui-tools)) — but investigation-heavy templates (Investigate / Root cause / Verify / Explain region / Auto investigate / Ask AI about this event / What-if / Optimize) need a tool-capable model such as `qwen3.5:9b` to reliably chain multiple calls.
 
 ### Credential storage
 
@@ -268,7 +270,8 @@ Keys may also come from the environment as `OPENAI_API_KEY`, `GEMINI_API_KEY`, o
 | Sent to the model | Never as a chat field; only as the HTTP `Authorization` / API header to the configured endpoint | Same |
 | Clear | Settings → AI → clear key, or delete `btf_viewer.rc` AI keys | Settings → Reset / clear site data |
 
-### What leaves the machine
+<a id="what-leaves-the-machine" name="what-leaves-the-machine">&#x200B;</a>
+### What leaves the machine ![](../images/readme/h3.svg)
 
 ```text
 What AI receives
@@ -375,7 +378,7 @@ Replies may include ` ```mermaid ` **sequence** diagrams (mutex take/give, block
 | Explain this region with AI (≥2 cursors) | Same `explain_region` + injected `jump:lo…hi` window | Same |
 | Investigation tree (Evidence panel) | Same `graph TD` generator, rendered inline | Same |
 | Evidence Quality + validator | Heuristic band, coverage, falsify checks, claim guard | Same |
-| Authentication | Settings → AI → None / API key / Sign in; panel chip + 401 CTAs until a successful turn | Same (`VITE_*` env keys) |
+| Authentication | Settings → AI → None / API key / Sign in; panel chip + 401 CTAs until a successful turn | Same env names (`OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`) |
 | Self-signed TLS | **Allow self-signed TLS** per preset skips HTTPS certificate checks | Persist the same flag + tip; browsers still verify — trust the cert, use `http://`, or use Desktop |
 | Model picker | Editable combo; refresh fills and opens the dropdown | Same |
 | Fonts | **pt** | **px** |
@@ -395,7 +398,7 @@ Replies may include ` ```mermaid ` **sequence** diagrams (mutex take/give, block
 | Model not found | Typed id is not served | Refresh the Model list (or Test connection) and pick a served id from the dropdown, or `ollama pull` it |
 | Gemini HTTP 400 `thought_signature` | Gemini 3 requires a thought blob on tool follow-ups | Retry the question — the viewer echoes Gemini thought signatures |
 | Raw ` ```btftool ` JSON instead of native tool calls | Model lacks (or skips) function calling | Same cards either way (one object, JSON array, or several objects per fence) — **Apply** or enable **Auto-apply GUI actions**. Switch to `qwen2.5:7b` / `llama3.1:8b` / `gpt-4o` / Gemini for native calls |
-| Ask times out (over 120s) or stays on Waiting… | Cold start, CPU offload, or VRAM spill | **Stop**, warm with `ollama run MODEL`, retry. Use **Clear** between long threads. Smaller model or shorter Statistics scope if the Findings card is huge |
+| Ask times out (over 120s) or stays on Waiting… | Cold start, CPU offload, or VRAM spill | **Stop** (composer icon), warm with `ollama run MODEL`, retry. Use **Clear** between long threads. Smaller model or shorter Statistics scope if the Findings card is huge |
 | Later turns ignore earlier facts | Chat history exceeded the context window | **Clear** on the AI bar, or **Analysis → Query with AI…** for a fresh scoped prompt |
 | Need raw AI request/response dumps (Desktop) | Debugging tool rounds / provider quirks | Settings → AI → **Log MCP messages to file** (off by default). Appends to `./ai_mcp_messages.log`; delete when finished |
 
@@ -408,7 +411,7 @@ Same body the viewer sends for **Test connection** (replace `BASE`, `MODEL`, and
 curl -vk --max-time 180 \
   -H "Authorization: Bearer KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"MODEL","stream":false,"messages":[{"role":"user","content":"Reply with exactly: OK"}],"max_tokens":8}' \
+  -d '{"model":"MODEL","stream":false,"messages":[{"role":"user","content":"Reply with JSON only: {\"ok\":true}"}],"max_tokens":24}' \
   BASE/chat/completions
 ```
 
@@ -456,8 +459,286 @@ python builds/btf_viewer.py analyze candidate.btf --baseline baseline.btf --fail
 python builds/btf_viewer.py analyze candidate.btf --save-baseline /tmp/base.json
 python builds/btf_viewer.py analyze candidate.btf --baseline /tmp/base.json --fail-on-regression --ai
 python builds/btf_viewer.py ai-test --dataset tests/ai --fail-under 70
+python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml -o AI_BENCHMARK.md
+python builds/btf_viewer.py ai-test --config examples/ai/benchmark-selfsigned.xml --insecure
 ```
 
-Or `make -C BTFViewer ai-test` (`AI_DATASET`, `AI_FAIL_UNDER`).
+Or `make -C BTFViewer ai-test` (`AI_DATASET`, `AI_FAIL_UNDER`) and `make -C BTFViewer ai-test-live` (`AI_CONFIG`, optional `AI_MODELS` filter, writes [AI_BENCHMARK.md](AI_BENCHMARK.md)). Dataset, scoring rules, and remaining in-app work: [Benchmark / evaluation suite](#benchmark-suite).
 
 See also [Export → Headless CLI](README.md#headless-cli-desktop-only) in the user guide.
+
+---
+
+<a id="benchmark-suite" name="benchmark-suite">&#x200B;</a>
+## Benchmark / evaluation suite ![](../images/readme/h2.svg)
+
+Offline `ai-test` / `runOfflineBenchmark` already ships. Live runs read **model id, base URL, TLS, and API key** from a suite XML (`--config examples/ai/benchmark.xml`) and write [AI_BENCHMARK.md](AI_BENCHMARK.md). Commands: [CLI regression gate](#cli-regression-gate).
+
+The capability matrix above is qualitative (small local vs 9B+ vs cloud). The suite turns those expectations into repeatable measurements: **which model is most reliable for BTF Viewer trace investigation**, not which model is largest or “smartest.”
+
+<a id="benchmark-scope" name="benchmark-scope">&#x200B;</a>
+### Scope ![](../images/readme/h3.svg)
+
+Keep the live set focused on:
+
+- **Gemini cloud models**
+- **Local Ollama models that are practical on a typical developer workstation**
+
+Do **not** pick local models only because they are newest or largest. Measure models that can run alongside BTF Viewer, Ollama, and the AI context/tooling workload.
+
+<a id="benchmark-models" name="benchmark-models">&#x200B;</a>
+### Recommended models ![](../images/readme/h3.svg)
+
+**Gemini** (configurable; newer ids can be added without changing the runner):
+
+- **Gemini 3.6 Flash** — high-reasoning cloud reference
+- **Gemini 3.1 Flash-Lite** — fast/efficient cloud reference
+
+**Local — developer workstation:**
+
+- **Qwen3.5 9B** (`qwen3.5:9b`) — shipped in-app default; primary practical local investigator
+- **Qwen3.5 27B** — higher-quality local / memory-and-latency stress test
+- **Gemma 4 26B** — non-Qwen local comparison
+
+Older 7B/14B ids stay optional. Do not include 3B-class models — they skip native tool calls and fail the investigation suite.
+
+```text
+Local AI — developer workstation
+│
+├── Practical / default
+│   └── Qwen3.5 9B
+│
+├── High-quality local
+│   ├── Qwen3.5 27B
+│   └── Gemma 4 26B
+```
+
+A 9B model may beat a 27B model on this app if the larger id only slightly improves accuracy while blowing latency and memory. Measure **diagnostic quality** and **practical system performance**.
+
+Do not hard-code the model list into the runner. Copy [examples/ai/benchmark.xml](examples/ai/benchmark.xml) (self-signed TLS: [benchmark-selfsigned.xml](examples/ai/benchmark-selfsigned.xml)):
+
+```xml
+<ai-benchmark version="1">
+  <dataset>tests/ai</dataset>
+  <fail-under>0</fail-under>
+  <output>AI_BENCHMARK.md</output>
+  <endpoint>
+    <base-url>http://localhost:11434/v1</base-url>
+    <tls-verify>true</tls-verify>
+    <timeout-s>180</timeout-s>
+  </endpoint>
+  <models>
+    <model id="qwen3.5:9b"/>
+    <model id="gemini-3.6-flash" preset="gemini">
+      <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
+      <api-key env="GEMINI_API_KEY"/>
+    </model>
+    <model id="gemini-3.1-flash-lite" preset="gemini">
+      <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
+      <api-key env="GEMINI_API_KEY"/>
+    </model>
+  </models>
+</ai-benchmark>
+```
+
+```xml
+<!-- Self-signed / private CA gateway -->
+<endpoint>
+  <base-url>https://llm.internal.example:8443/v1</base-url>
+  <tls-verify>false</tls-verify>
+  <api-key env="GATEWAY_API_KEY"/>
+</endpoint>
+```
+
+`<api-key env="VAR">` reads the environment first, then any text inside the element. Omit the text (and do not commit secrets). `tls-verify` false, or `ai-test --insecure`, skips certificate checks on Desktop. `--models id1,id2` selects a subset of `<model>` entries. For Ollama, list the ids you actually have pulled. Record the exact model identifier and runtime configuration.
+
+In-app picker (not shipped): **Settings → AI → Benchmark** with checkboxes for Gemini and local Ollama models, then **Run Benchmark**.
+
+<a id="benchmark-dataset" name="benchmark-dataset">&#x200B;</a>
+### Dataset ![](../images/readme/h3.svg)
+
+`tests/ai/` holds known traces for the major diagnostic scenarios. Each case has **expected facts**, not an exact natural-language answer:
+
+```text
+tests/ai/
+├── migration_thrash.btf
+├── mutex_contention.btf
+├── priority_inversion.btf
+├── deadline_miss.btf
+├── load_imbalance.btf
+├── trace_regression.btf
+└── explain_region.btf
+```
+
+```yaml
+id: migration_thrash
+trace: migration_thrash.btf
+expected:
+  finding_types: [migration, load_balance]
+  tasks: [CS[22]]
+  evidence:
+    required_metrics: [migrations]
+  allowed_tools: [detect_anomalies, correlate_events, query_raw_metric]
+  forbidden:
+    invented_task_names: true
+    out_of_scope_timestamps: true
+```
+
+That keeps scoring robust against harmless wording differences.
+
+<a id="benchmark-metrics" name="benchmark-metrics">&#x200B;</a>
+### Evaluation metrics ![](../images/readme/h3.svg)
+
+| Metric | What it measures |
+|---|---|
+| Finding identification | Did the model identify the expected problem? |
+| Evidence accuracy | Are cited metrics/events actually present? |
+| Timestamp validity | Are `jump:TIME` values real and in scope? |
+| Task-name validity | Did the model use only known task names? |
+| Tool selection | Did it call appropriate investigation tools? |
+| Tool-chain quality | Did it gather enough evidence before concluding? |
+| Root-cause accuracy | Does the conclusion match the expected diagnosis? |
+| Alternative handling | Did it consider plausible alternatives? |
+| Confidence calibration | Is confidence consistent with the available evidence? |
+| Response completeness | Did it answer the investigation question completely? |
+| Latency | How long did the investigation take? |
+| Tool-call count | How many tool rounds were required? |
+| Peak memory | How much RAM was consumed during inference? |
+| Time to first token (TTFT) | How quickly did the model begin responding? |
+| Generation throughput | Sustained tokens/sec during the investigation |
+| Investigation success rate | Percentage of cases completed correctly within the configured time/resource limit |
+
+For local runs, memory and latency are first-class. A slightly more accurate model that is unusable under memory pressure should not automatically rank higher.
+
+**Level 1 — tool / evidence correctness:** valid tool, parameters, task, timestamp, and scope. Isolates tool-use bugs from reasoning quality.
+
+**Level 2 — diagnostic correctness:** expected vs actual diagnosis, evidence, and alternatives. A convincing explanation is not enough.
+
+**Headline score:** weighted engineering score (Finding / Evidence / Tool use / Root cause / Calibration / Safety), not a probability of correctness. Keep the component scores visible. PASS is overall ≥ 70.
+
+**Safeguards the suite must test:** no invented task names, metric values, or `jump:TIME`; no timestamps outside the cursor region; no unsupported conclusions presented as confirmed; evidence must match tool results; heuristic what-if stays labeled as estimates; the model must not claim a simulation is a measured result.
+
+<a id="benchmark-matrix" name="benchmark-matrix">&#x200B;</a>
+### Model matrix ![](../images/readme/h3.svg)
+
+Same suite against selected Gemini and local Ollama models. Recorded 2026-08-14; full case tables: [AI_BENCHMARK.md](AI_BENCHMARK.md).
+
+| Model | Category | Finding | Evidence | Root cause | Calibration | Notes |
+|---|---|---:|---:|---:|---:|---|
+| Gemini 3.1 Flash-Lite | Cloud / fast | **79** | 64 | **71** | 80 | overall **81**, 5.5s; tool follow-up |
+| Gemini 3.6 Flash | Cloud | — | — | — | — | overall **75**, 6/7; free-tier 429 split the part dump |
+| Qwen3.5 9B | Local / practical | **79** | **86** | 57 | 80 | overall **82**, 10.7s |
+| Qwen3.5 27B | Local / high-quality | 71 | 71 | 71 | 80 | overall **80**, 64.4s |
+| Gemma 4 26B | Local / high-quality | 71 | 57 | **86** | 80 | overall **80**, 72.6s; 5/7 PASS |
+
+Live `--config` runs a tool-result follow-up when the first turn is tools-only (or planning text without a Confidence line). Single-turn scores are not comparable.
+
+**Context-size** (Findings + tools + history). Do not judge a local model only by tokens/sec — check tool use and grounding as context grows:
+
+| Context | Purpose |
+|---:|---|
+| 8K | Minimum investigation workload |
+| 16K | Typical investigation |
+| 32K | Large Findings / multi-tool investigation |
+| 64K | Stress test, if supported |
+
+Practical comparison on a developer workstation:
+
+```text
+Gemini 3.6 Flash / Gemini 3.1 Flash-Lite
+      vs
+Qwen3.5 9B        (shipped default)
+Qwen3.5 27B
+Gemma 4 26B
+```
+
+Does extra local capacity improve investigation quality enough to justify memory and latency?
+
+<a id="benchmark-reproducibility" name="benchmark-reproducibility">&#x200B;</a>
+### Reproducibility and architecture ![](../images/readme/h3.svg)
+
+Each run should save timestamp, app version, dataset version, model ids, endpoint config, cases, prompts, tool calls/results, final responses, scores, and timing. A run ID (`AI Benchmark #2026-08-13-001`) keeps results comparable when model behavior drifts without a viewer code change.
+
+`--fail-under N` can fail CI when a model drops below a threshold (live often wants `0` so HTTP errors still write the report).
+
+```text
+Benchmark Cases (known BTF + expected facts)
+        ↓
+Model Runner  →  Gemini / Ollama
+        ↓
+Tool / Response Validator
+        ↓
+Scoring Engine
+        ↓
+Comparison Report (AI_BENCHMARK.md)
+```
+
+---
+
+<a id="implementation-notes" name="implementation-notes">&#x200B;</a>
+## Implementation notes ![](../images/readme/h2.svg)
+
+Tech notes for keeping Desktop and Web in lockstep. User-facing Case / Evidence behaviour: [README → Investigation Case](README.md#investigation-case). Live suite XML: [Benchmark / evaluation suite](#benchmark-suite). Recorded scores: [`AI_BENCHMARK.md`](AI_BENCHMARK.md).
+
+<a id="shared-engines" name="shared-engines">&#x200B;</a>
+### Shared Case / Evidence engines ![](../images/readme/h3.svg)
+
+| Desktop | Web |
+|---------|-----|
+| `btf_viewer_pkg/ai_case.py` | `web/src/utils/aiCase.js` |
+| `btf_viewer_pkg/ai_investigation.py` | `web/src/utils/aiInvestigation.js` |
+| `btf_viewer_pkg/ai_tools.py` | `web/src/utils/aiTools.js` |
+
+Parity is gated by `tests/test_ai_web_parity.py` and `web/tests/aiCase.test.js`. Bundle order: `ai_case` then `ai_investigation` then `ai_tools`. New `EVIDENCE_PANEL_LABELS` keys must exist in all 8 languages. After AI UI changes: `make -C BTFViewer bundle` and `make -C BTFViewer web`.
+
+**UI lockstep:** mode/template chips wrap (`_FlowLayout` ↔ `flex-wrap`), chip min-height 28px, disabled chips/menu items `#8a96a8`. Findings **Investigate…** is white-on-accent. **More** templates use the same groups in a 2-column overlay (Desktop `QFrame` ↔ Web body overlay).
+
+The Desktop `ai-test` CLI and Web `runOfflineBenchmark` share `tests/ai` fixtures (tracked `.btf` stubs + `dataset.json`).
+
+<a id="validator-and-claims" name="validator-and-claims">&#x200B;</a>
+### Validator ![](../images/readme/h3.svg)
+
+```text
+AI response
+     ↓
+Claim extraction (jump:TIME, Task[id])
+     ↓
+Evidence validator
+     ├── task exists?
+     ├── timestamp in cursor window?
+     └── conclusion supported?
+     ↓
+Evidence panel flags unverified claims
+```
+
+`validate_ai_response` / `validateAiResponse` runs on the host after the final reply. Prompting still forbids inventing numbers, task names, and `jump:TIME`; the validator is the guard, not the prompt.
+
+<a id="experiment-close-out" name="experiment-close-out">&#x200B;</a>
+### Experiment close-out ![](../images/readme/h3.svg)
+
+`validate_experiment` compares expected vs actual signed percents (`VALIDATED` / `PARTIALLY VALIDATED` / `DISPROVED`), updates open hypotheses, and offers **Save to knowledge** (`btfexp:save`). Empty `actual` is filled from the last Trace Compare refresh (including **Scope to cursors**) or `compare_performance` via `experiment_percents_from_compare`. **Trace Compare → Validate experiment…** closes the dialog and asks the model to call the tool with actuals omitted. Firmware-change capture remains a user step (new trace + Trace Compare).
+
+<a id="capability-privacy-knowledge" name="capability-privacy-knowledge">&#x200B;</a>
+### Capability, cost, privacy, knowledge ![](../images/readme/h3.svg)
+
+| Feature | Host behaviour |
+|---------|----------------|
+| Capability probe | **Test connection** lists models, chats with a JSON structured-output probe, then tool-calling (`btf_ping` then `btf_pong`). Live results overlay chat / structured output / tool calling / multi-tool chaining; long context and reasoning stay heuristic. |
+| Cost | Status appends accumulated `tok · tools · s`. Evidence uses the full `format_cost_meter` line. **Clear** resets the meter. |
+| Privacy | Chip 🟢 Local / 🟡 Cloud / 🔴 Sensitive. Cloud send is blocked when sensitive; otherwise annotations are sanitized and optional task-name aliases apply (`apply_cloud_privacy`). |
+| Knowledge | `investigate` matches user-saved entries (More → **Save current finding…**), then baseline, then the builtin catalog. Typical vs current rates show when both exist. |
+| Interpret | Free-form Ask host-interprets first (`interpret_query`). Templates / modes / **Run investigation** skip confirm. |
+| Tool Why? | Evidence **Investigation** lists each tool with a host-side reason (`btftool:why/name`). |
+
+<a id="out-of-scope" name="out-of-scope">&#x200B;</a>
+### Out of scope ![](../images/readme/h3.svg)
+
+Intentionally not implemented (and not bugs):
+
+- No dedicated checkbox widget (scope is Evidence `btfscope:` links)
+- No remote team knowledge server
+- Firmware-change capture is a user step
+- Live multi-model scoring (`ai-test --config examples/ai/benchmark.xml`) writes [AI_BENCHMARK.md](AI_BENCHMARK.md); remaining in-app Benchmark UI is in [Benchmark / evaluation suite](#benchmark-suite)
+- Do **not** add templates after `auto_investigate` in `AI_TEMPLATE_QUESTIONS`
+
+Qt dialogs vs `window.prompt`, mermaid pixmap hit-test vs SVG links, and Desktop `ai-test` CLI vs Web `runOfflineBenchmark` are the remaining intentional Desktop/Web differences.

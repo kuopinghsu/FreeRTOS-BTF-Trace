@@ -79,6 +79,7 @@ from .ai_assistant import (  # noqa: F401
     AI_PRESET_OLLAMA,
     AI_PRESETS,
     AI_RESPONSE_LANGUAGES,
+    BUILTIN_AI_PRESET_IDS,
     DEFAULT_AI_BASE_URL,
     DEFAULT_AI_MODEL,
     DEFAULT_AI_PRESET,
@@ -86,18 +87,22 @@ from .ai_assistant import (  # noqa: F401
     AI_MCP_LOG_FILENAME,
     ai_auth_status,
     ai_list_models,
+    ai_preset_display_label,
     ai_preset_info,
     ai_preset_signin_label,
     ai_preset_signin_url,
     ai_test_connection,
     default_ai_auth_mode,
     format_ai_tls_verify,
+    merge_ai_preset_catalog,
     normalize_ai_auth_mode,
     normalize_ai_preset,
     parse_ai_settings_json,
     parse_ai_tls_verify,
+    parse_extra_ai_presets,
     resolve_ai_api_key,
     resolve_ai_settings,
+    sanitize_ai_preset_id,
 )
 from .rc_secrets import (
     decrypt_secret,
@@ -2620,6 +2625,8 @@ class _TraceCompareDialog(QDialog):
         idx_b: Optional[int] = None,
         ai_enabled: bool = True,
         on_query_ai: Optional[Callable] = None,
+        on_validate_experiment: Optional[Callable] = None,
+        on_compare: Optional[Callable] = None,
     ) -> None:
         parent_w = parent if parent is not None else (
             win if isinstance(win, QWidget) else None)
@@ -2717,6 +2724,11 @@ class _TraceCompareDialog(QDialog):
         btns = QDialogButtonBox(QDialogButtonBox.Close)
         self._ai_enabled = bool(ai_enabled)
         self._on_query_ai = on_query_ai
+        self._on_validate_experiment = on_validate_experiment
+        self._on_compare = on_compare
+        self._validate_btn = btns.addButton(
+            "Validate experiment…", QDialogButtonBox.ButtonRole.ActionRole)
+        self._validate_btn.clicked.connect(self._validate_with_ai)
         self._ai_btn = btns.addButton(
             "Query with AI…", QDialogButtonBox.ButtonRole.ActionRole)
         self._ai_btn.clicked.connect(self._query_with_ai)
@@ -2742,12 +2754,15 @@ class _TraceCompareDialog(QDialog):
 
     def set_ai_enabled(self, enabled: bool) -> None:
         self._ai_enabled = bool(enabled)
-        if getattr(self, "_ai_btn", None) is None:
-            return
-        self._ai_btn.setToolTip(
-            "Open the AI Assistant and walk through these Trace Compare tables"
-            if self._ai_enabled else
-            "Enable AI Assistant in Settings → AI")
+        tip_off = "Enable AI Assistant in Settings → AI"
+        if getattr(self, "_ai_btn", None) is not None:
+            self._ai_btn.setToolTip(
+                "Open the AI Assistant and walk through these Trace Compare tables"
+                if self._ai_enabled else tip_off)
+        if getattr(self, "_validate_btn", None) is not None:
+            self._validate_btn.setToolTip(
+                "Score expected vs actual deltas from this Trace Compare"
+                if self._ai_enabled else tip_off)
 
     def _selected_tab_indices(self) -> Tuple[Optional[int], Optional[int]]:
         return self._combo_a.currentData(), self._combo_b.currentData()
@@ -2756,6 +2771,14 @@ class _TraceCompareDialog(QDialog):
         idx_a, idx_b = self._selected_tab_indices()
         enabled = self._ai_enabled
         cb = self._on_query_ai
+        self.done(int(QDialog.DialogCode.Accepted))
+        if cb is not None:
+            cb(enabled, idx_a, idx_b)
+
+    def _validate_with_ai(self) -> None:
+        idx_a, idx_b = self._selected_tab_indices()
+        enabled = self._ai_enabled
+        cb = self._on_validate_experiment
         self.done(int(QDialog.DialogCode.Accepted))
         if cb is not None:
             cb(enabled, idx_a, idx_b)
@@ -2802,6 +2825,15 @@ class _TraceCompareDialog(QDialog):
                 tbl.setRowCount(0)
             return
         tables = _build_trace_compare_rows(*args)
+        if self._on_compare is not None:
+            try:
+                self._on_compare(
+                    args[0], args[1], args[2], args[3], args[4], args[5],
+                    self._tab_name(self._combo_a),
+                    self._tab_name(self._combo_b),
+                )
+            except Exception:
+                pass
         self._fill_table(self._summary_table, tables.get("summary", []))
         self._fill_table(self._top_table, tables.get("top", []))
         self._fill_table(self._core_util_table, tables.get("core_util", []))
@@ -12430,6 +12462,7 @@ class _RcSettings:
                 "response_language": DEFAULT_AI_RESPONSE_LANGUAGE,
                 "auto_apply": "false",
                 "mcp_log": "false",
+                "extra_presets": "[]",
             },
             **{
                 f"{_pid}_{_field}": ""
@@ -12509,6 +12542,12 @@ class _RcSettings:
         self._last_error = ""
 
     # ---------------------------------------------------------------- getters
+    def section_keys(self, section: str) -> List[str]:
+        """Option names currently stored in *section*."""
+        if not self._cfg.has_section(section):
+            return []
+        return list(self._cfg.options(section))
+
     def get(self, section: str, key: str, fallback: str = "") -> str:
         raw = self._cfg.get(section, key, fallback=fallback)
         if is_ai_api_key_option(section, key):
@@ -12948,9 +12987,12 @@ class _SettingsDialog(QDialog):
                  ai_enabled: bool = True,
                  ai_preset: str = DEFAULT_AI_PRESET,
                  ai_preset_settings: Optional[Dict[str, Dict[str, str]]] = None,
+                 ai_extra_presets: Optional[List[Dict[str, str]]] = None,
                  response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
                  ai_auto_apply: bool = False,
                  ai_mcp_log: bool = False,
+                 ai_redact_task_names: bool = False,
+                 ai_trace_sensitive: bool = False,
                  initial_page: str = "Appearance"):
         super().__init__(parent, Qt.WindowType.Dialog)
         self.setWindowTitle("Settings")
@@ -13282,6 +13324,17 @@ class _SettingsDialog(QDialog):
             "When on, tool calls from the model update the timeline immediately. "
             "When off, the chat shows Apply / Skip on each action card.")
         f4.addRow("", self._ai_auto_apply_cb)
+        self._ai_redact_cb = QCheckBox("Anonymize task names for cloud")
+        self._ai_redact_cb.setChecked(bool(ai_redact_task_names))
+        self._ai_redact_cb.setToolTip(
+            "When the endpoint is not local, replace task names with Task-N "
+            "aliases before Findings leave the machine.")
+        f4.addRow("", self._ai_redact_cb)
+        self._ai_sensitive_cb = QCheckBox("Treat this trace as sensitive")
+        self._ai_sensitive_cb.setChecked(bool(ai_trace_sensitive))
+        self._ai_sensitive_cb.setToolTip(
+            "Disables cloud AI for this machine. Local endpoints still work.")
+        f4.addRow("", self._ai_sensitive_cb)
         self._ai_mcp_log_cb = QCheckBox("Log MCP messages to file")
         self._ai_mcp_log_cb.setChecked(bool(ai_mcp_log))
         self._ai_mcp_log_cb.setToolTip(
@@ -13295,8 +13348,10 @@ class _SettingsDialog(QDialog):
 
         # Field values per preset; switching presets stashes the current inputs
         # so credentials survive a round trip.
+        self._ai_preset_catalog = merge_ai_preset_catalog(
+            ai_extra_presets, ai_preset_settings)
         self._ai_preset_values: Dict[str, Dict[str, str]] = {}
-        for _pid, _label, _base, _model in AI_PRESETS:
+        for _pid, _label, _base, _model in self._ai_preset_catalog:
             stored = dict((ai_preset_settings or {}).get(_pid) or {})
             base = str(stored.get("base_url", "") or _base)
             self._ai_preset_values[_pid] = {
@@ -13312,17 +13367,18 @@ class _SettingsDialog(QDialog):
             }
 
         self._ai_preset_combo = QComboBox()
-        for _pid, _label, _base, _model in AI_PRESETS:
+        for _pid, _label, _base, _model in self._ai_preset_catalog:
             self._ai_preset_combo.addItem(_label, _pid)
         self._ai_preset_combo.setCurrentIndex(
             max(0, self._ai_preset_combo.findData(normalize_ai_preset(ai_preset))))
         self._ai_preset_combo.setToolTip(
             "Ollama runs locally; OpenAI and Gemini are cloud APIs; Custom is "
-            "any other OpenAI-compatible endpoint. Each preset keeps its own "
+            "any other OpenAI-compatible endpoint. Importing a JSON file whose "
+            "preset name is not in this list adds it. Each preset keeps its own "
             "base URL, model, and API key.")
         _wide_combo(
             self._ai_preset_combo,
-            [lab for _pid, lab, _u, _m in AI_PRESETS],
+            [lab for _pid, lab, _u, _m in self._ai_preset_catalog],
             min_w=240,
         )
         f4.addRow("Preset:", self._ai_preset_combo)
@@ -13335,7 +13391,7 @@ class _SettingsDialog(QDialog):
         f4.addRow("Base URL:", self._ai_url_edit)
 
         self._ai_model_lists: Dict[str, List[str]] = {
-            _pid: [] for _pid, _lab, _u, _m in AI_PRESETS
+            _pid: [] for _pid, _lab, _u, _m in self._ai_preset_catalog
         }
         self._ai_model_combo = QComboBox()
         self._ai_model_combo.setEditable(True)
@@ -13386,9 +13442,8 @@ class _SettingsDialog(QDialog):
         self._ai_api_key_edit = QLineEdit()
         self._ai_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self._ai_api_key_edit.setToolTip(
-            "API key or access token for this preset (or OPENAI_API_KEY / "
-            "GEMINI_API_KEY / OLLAMA_API_KEY in the environment). Local Ollama "
-            "needs none. Stored per preset in btf_viewer.rc.")
+            "API key or access token for this preset (or OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY). "
+            "Local Ollama needs none. Stored per preset in btf_viewer.rc.")
         _cred.addWidget(self._ai_api_key_edit)
         _auth_btns = QWidget()
         _auth_h = QHBoxLayout(_auth_btns)
@@ -13447,7 +13502,8 @@ class _SettingsDialog(QDialog):
         _test_h.addWidget(self._ollama_test_btn)
         self._ai_import_btn = QPushButton("Import…")
         self._ai_import_btn.setToolTip(
-            "Load preset, base URL, model, and API key from a JSON file "
+            "Load preset, checkbox flags, base URL, model, and API key from a "
+            "JSON file. Unknown preset names are added to the list "
             "(see examples/ai/ollama.json, gemini.json, openai.json, "
             "deepseek.json, grok.json, presets.json).")
         self._ai_import_btn.clicked.connect(self._import_ai_settings)
@@ -13666,8 +13722,7 @@ class _SettingsDialog(QDialog):
         else:
             self._ai_auth_status.setText(
                 "Key saved for this preset." if key
-                else "Paste a provider API key, or set OPENAI_API_KEY / "
-                "GEMINI_API_KEY in the environment.")
+                else "Paste a provider API key, or set OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY.")
             self._ai_api_key_edit.setPlaceholderText(
                 "Required — provider API key")
         if _pid == AI_PRESET_OLLAMA and mode == AI_AUTH_NONE:
@@ -13723,13 +13778,75 @@ class _SettingsDialog(QDialog):
             f"color:{color}; padding:4px 0; min-height:40px;")
         self._ollama_test_status.setText(message)
 
+    def _ai_combo_preset_ids(self) -> List[str]:
+        return [
+            str(self._ai_preset_combo.itemData(i) or "")
+            for i in range(self._ai_preset_combo.count())
+        ]
+
+    def _refresh_ai_preset_combo_width(self) -> None:
+        labels = [
+            self._ai_preset_combo.itemText(i)
+            for i in range(self._ai_preset_combo.count())
+        ]
+        fm = self._ai_preset_combo.fontMetrics()
+        w = max((fm.horizontalAdvance(s) for s in labels if s), default=120) + 56
+        w = max(w, 240)
+        self._ai_preset_combo.setMinimumWidth(w)
+        try:
+            self._ai_preset_combo.view().setMinimumWidth(w)
+        except Exception:
+            pass
+
+    def _ensure_ai_preset(self, preset_id: str, label: str = "") -> str:
+        """Add *preset_id* to the combo when Import names a new vendor."""
+        pid = sanitize_ai_preset_id(preset_id)
+        if not pid:
+            return ""
+        if self._ai_preset_combo.findData(pid) >= 0:
+            if label and pid not in BUILTIN_AI_PRESET_IDS:
+                idx = self._ai_preset_combo.findData(pid)
+                if idx >= 0:
+                    self._ai_preset_combo.setItemText(
+                        idx, ai_preset_display_label(pid, label))
+            return pid
+        text = ai_preset_display_label(pid, label)
+        self._ai_preset_combo.addItem(text, pid)
+        if pid not in self._ai_preset_values:
+            self._ai_preset_values[pid] = {
+                "base_url": "",
+                "model": "",
+                "api_key": "",
+                "auth_mode": default_ai_auth_mode(pid, ""),
+                "tls_verify": "true",
+            }
+        self._ai_model_lists.setdefault(pid, [])
+        self._refresh_ai_preset_combo_width()
+        return pid
+
     def apply_ai_settings_patch(self, patch: Dict[str, str]) -> str:
         """Apply an imported settings patch to the AI page; return a summary."""
         # Keep whatever is typed for the visible preset — the file may name
         # a different one.
         self._stash_ai_preset_fields()
+        extras = parse_extra_ai_presets(patch.get("extra_presets", ""))
+        extra_labels = {row["id"]: row["label"] for row in extras}
+        for row in extras:
+            self._ensure_ai_preset(row["id"], row["label"])
+        suffixes = tuple("_" + field for field in AI_PRESET_FIELDS)
+        for key in patch:
+            for suf in suffixes:
+                if not str(key).endswith(suf):
+                    continue
+                pid = sanitize_ai_preset_id(str(key)[: -len(suf)])
+                if pid:
+                    self._ensure_ai_preset(pid, extra_labels.get(pid, ""))
+                break
+        if patch.get("preset"):
+            self._ensure_ai_preset(
+                patch["preset"], extra_labels.get(normalize_ai_preset(patch["preset"]), ""))
         touched: List[str] = []
-        for pid, label, _base, _model in AI_PRESETS:
+        for pid in self._ai_combo_preset_ids():
             vals = dict(self._ai_preset_values.get(pid, {}))
             changed = False
             for field in AI_PRESET_FIELDS:
@@ -13739,6 +13856,10 @@ class _SettingsDialog(QDialog):
                     changed = True
             if changed:
                 self._ai_preset_values[pid] = vals
+                idx = self._ai_preset_combo.findData(pid)
+                label = (
+                    self._ai_preset_combo.itemText(idx)
+                    if idx >= 0 else ai_preset_display_label(pid))
                 touched.append(label)
         language = patch.get("response_language", "")
         if language:
@@ -13747,16 +13868,38 @@ class _SettingsDialog(QDialog):
                 self._response_lang_combo.addItem(language)
                 idx = self._response_lang_combo.findText(language)
             self._response_lang_combo.setCurrentIndex(max(0, idx))
+        flag_map = (
+            ("enabled", self._ai_enabled_cb),
+            ("auto_apply", self._ai_auto_apply_cb),
+            ("redact_task_names", self._ai_redact_cb),
+            ("trace_sensitive", self._ai_sensitive_cb),
+            ("mcp_log", self._ai_mcp_log_cb),
+        )
+        for key, checkbox in flag_map:
+            if key not in patch:
+                continue
+            checkbox.setChecked(
+                str(patch.get(key, "")).strip().lower()
+                in ("1", "true", "yes", "on"))
         preset = normalize_ai_preset(patch.get("preset") or self._ai_active_preset)
+        if self._ai_preset_combo.findData(preset) < 0:
+            preset = self._ensure_ai_preset(preset) or DEFAULT_AI_PRESET
         self._ai_active_preset = preset
         self._ai_preset_combo.blockSignals(True)
         self._ai_preset_combo.setCurrentIndex(
             max(0, self._ai_preset_combo.findData(preset)))
         self._ai_preset_combo.blockSignals(False)
         self._load_ai_preset_fields(preset)
+        added = [
+            row["label"] for row in extras
+            if row["id"] not in BUILTIN_AI_PRESET_IDS
+        ]
+        extra_note = (
+            f" Added {', '.join(added)} to the preset list." if added else "")
         return (
             f"Imported {', '.join(touched) or 'settings'}. "
             f"Selected {ai_preset_info(preset)[1]} — review, then OK to save."
+            f"{extra_note}"
         )
 
     def _import_ai_settings(self) -> None:
@@ -13921,7 +14064,20 @@ class _SettingsDialog(QDialog):
         self._time_decimals_spin.setValue(_DEFAULT_TIME_DECIMALS)
         self._ai_enabled_cb.setChecked(True)
         self._ai_auto_apply_cb.setChecked(False)
+        self._ai_redact_cb.setChecked(False)
+        self._ai_sensitive_cb.setChecked(False)
         self._ai_mcp_log_cb.setChecked(False)
+        extras = [
+            i for i in range(self._ai_preset_combo.count())
+            if str(self._ai_preset_combo.itemData(i) or "") not in BUILTIN_AI_PRESET_IDS
+        ]
+        self._ai_preset_combo.blockSignals(True)
+        for i in reversed(extras):
+            pid = str(self._ai_preset_combo.itemData(i) or "")
+            self._ai_preset_combo.removeItem(i)
+            self._ai_preset_values.pop(pid, None)
+            self._ai_model_lists.pop(pid, None)
+        self._ai_preset_combo.blockSignals(False)
         for _pid, _label, _base, _model in AI_PRESETS:
             self._ai_preset_values[_pid] = {
                 "base_url": _base, "model": _model, "api_key": "",
@@ -13929,6 +14085,7 @@ class _SettingsDialog(QDialog):
                 "tls_verify": "true",
             }
             self._ai_model_lists[_pid] = []
+        self._refresh_ai_preset_combo_width()
         self._ai_active_preset = DEFAULT_AI_PRESET
         self._ai_preset_combo.setCurrentIndex(
             max(0, self._ai_preset_combo.findData(DEFAULT_AI_PRESET)))
@@ -13992,17 +14149,33 @@ class _SettingsDialog(QDialog):
     @property
     def ai_auto_apply(self) -> bool:      return self._ai_auto_apply_cb.isChecked()
     @property
+    def ai_redact_task_names(self) -> bool: return self._ai_redact_cb.isChecked()
+    @property
+    def ai_trace_sensitive(self) -> bool: return self._ai_sensitive_cb.isChecked()
+    @property
     def ai_mcp_log(self) -> bool:         return self._ai_mcp_log_cb.isChecked()
     @property
     def ai_preset(self) -> str:
         return normalize_ai_preset(self._ai_preset_combo.currentData())
     @property
+    def ai_extra_presets(self) -> List[Dict[str, str]]:
+        extras: List[Dict[str, str]] = []
+        for i in range(self._ai_preset_combo.count()):
+            pid = str(self._ai_preset_combo.itemData(i) or "")
+            if not pid or pid in BUILTIN_AI_PRESET_IDS:
+                continue
+            extras.append({
+                "id": pid,
+                "label": self._ai_preset_combo.itemText(i) or ai_preset_display_label(pid),
+            })
+        return extras
+    @property
     def ai_preset_settings(self) -> Dict[str, Dict[str, str]]:
         """Base URL / model / API key for every preset, not just the active one."""
         self._stash_ai_preset_fields()
         return {
-            _pid: dict(self._ai_preset_values.get(_pid, {}))
-            for _pid, _label, _base, _model in AI_PRESETS
+            pid: dict(self._ai_preset_values.get(pid, {}))
+            for pid in self._ai_combo_preset_ids() if pid
         }
     @property
     def response_language(self) -> str:

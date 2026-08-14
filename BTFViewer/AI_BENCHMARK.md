@@ -2,22 +2,22 @@
 
 Generated: 2026-08-14 (Gemini 3.6 Flash 08:33–08:35 UTC; Gemma 4 26B 07:43 UTC; Gemini 3.1 Flash-Lite 07:13 UTC)
 Dataset: `tests/ai` (7 expected-facts cases)
-Host: Apple Silicon, 32 GB unified memory
+Host: developer workstation
 
 ```bash
-python builds/btf_viewer.py ai-test --dataset tests/ai --models compared --fail-under 0 -o AI_BENCHMARK.md
-python builds/btf_viewer.py ai-test --dataset tests/ai --models gemini --fail-under 0 -o AI_BENCHMARK.md
+python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml -o AI_BENCHMARK.md
+python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml --models gemini-3.6-flash,gemini-3.1-flash-lite
 # or: make -C BTFViewer ai-test-live
-#     make -C BTFViewer ai-test-live AI_MODELS=gemini
+#     make -C BTFViewer ai-test-live AI_MODELS=gemini-3.6-flash,gemini-3.1-flash-lite
 ```
 
 Plan and scoring rules: [AI.md → Benchmark / evaluation suite](AI.md#benchmark-suite).
 
-`--models compared` is `qwen3.5:9b,qwen3.5:27b,gemma4:26b` (local Ollama). `--models gemini` is `gemini-3.6-flash,gemini-3.1-flash-lite` (Google OpenAI-compat. Live Gemini runs now execute a tool-result follow-up when the first turn is tools-only.
+Live endpoints come from the suite XML (model id, URL, `tls-verify`, `api-key` / `env`). [examples/ai/benchmark.xml](examples/ai/benchmark.xml) lists local Ollama ids plus Gemini `gemini-3.6-flash` and `gemini-3.1-flash-lite` keyed by `GEMINI_API_KEY`. Self-signed gateways: [examples/ai/benchmark-selfsigned.xml](examples/ai/benchmark-selfsigned.xml) (`tls-verify` false or `--insecure`). Live Gemini runs execute a tool-result follow-up when the first turn is tools-only.
 
 **Takeaway:** **`qwen3.5:9b` (82**, 6/7, 10.7s) is the recommended local investigator. **`gemini-3.1-flash-lite` (81**, 6/7, 5.5s) leads among cloud models scored with the tool follow-up. **`gemini-3.6-flash` (75**, 6/7, ~9s) is a real follow-up score (free-tier 429 split the run). `qwen3.5:27b` **80** / 6/7 and `gemma4:26b` **80** / 5/7 are slower local alternatives. Do not use 3B-class models for investigation.
 
-Live `--models` scores a real endpoint. Offline rows score the canned `response` fields in `dataset.json` and gate the scorer, not a model. PASS is overall ≥ 70.
+Live `--config` suite XML scores a real endpoint. Offline rows score the canned `response` fields in `dataset.json` and gate the scorer, not a model. PASS is overall ≥ 70.
 
 ## Offline fixture scorer
 

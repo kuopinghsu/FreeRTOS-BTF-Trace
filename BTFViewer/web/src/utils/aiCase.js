@@ -12,6 +12,10 @@ export const EVIDENCE_QUALITY_BANDS = [
 export const INVESTIGATION_MODES = [
   'quick', 'diagnose', 'compare', 'optimize', 'report',
 ]
+export const INVESTIGATION_SCOPE_OPTIONS = [
+  'execution', 'blocking', 'migrations', 'priority inheritance',
+  'nearby events', 'findings', 'tick',
+]
 export const EXPLAIN_LEVELS = ['quick', 'technical', 'deep']
 export const PRIVACY_LEVELS = ['local', 'cloud_safe', 'sensitive']
 export const CASE_SCHEMA = 'btf-investigation-case'
@@ -403,6 +407,106 @@ export function computeEvidenceCoverage({
   }
 }
 
+function qualityFlagMark(value) {
+  if (value === true || ['yes', 'true', '1'].includes(String(value).toLowerCase())) return '✓'
+  if (['partial', 'triangle', 'maybe'].includes(String(value).toLowerCase())) return '△'
+  return '○'
+}
+
+export function formatQualityFlagLines(quality = null, labels = {}) {
+  const flags = quality && typeof quality === 'object' && quality.flags && typeof quality.flags === 'object'
+    ? quality.flags
+    : {}
+  const rows = [
+    ['direct_evidence', 'quality_direct', 'Direct evidence'],
+    ['timeline_correlation', 'quality_timeline', 'Timeline correlation'],
+    ['metric_correlation', 'quality_metric', 'Metric correlation'],
+    ['alternative_tested', 'quality_alternative', 'Alternative tested'],
+  ]
+  return rows.map(([fk, lk, fallback]) => `- ${labels[lk] || fallback} ${qualityFlagMark(flags[fk])}`)
+}
+
+export function formatCoverageCountLines(coverage = null, labels = {}) {
+  const cov = coverage && typeof coverage === 'object' ? coverage : {}
+  if (cov.directly_observed == null && cov.claims == null) return []
+  const denom = cov.claims != null && cov.claims !== '' ? `/${cov.claims}` : ''
+  const timeline = cov.timeline_verified
+  const metric = cov.metric_verified
+  return [
+    `- ${labels.coverage_observed || 'Directly observed'} ${cov.directly_observed}`,
+    `- ${labels.coverage_timeline || 'Timeline verified'} ${timeline}${String(timeline).includes('/') ? '' : denom}`,
+    `- ${labels.coverage_metric || 'Metric verified'} ${metric}${String(metric).includes('/') ? '' : denom}`,
+    `- ${labels.coverage_unverified || 'Unverified assumptions'} ${cov.unverified_assumptions}`,
+  ]
+}
+
+export function shouldConfirmInterpretedQuery(query = '', {
+  templateId = '', alreadyInterpreted = false,
+} = {}) {
+  if (alreadyInterpreted || String(templateId || '').trim()) return false
+  const q = String(query || '').trim()
+  if (!q) return false
+  if (q.includes('Investigation scope:') && q.includes('Interpreted as ')) return false
+  return true
+}
+
+const COMPARE_PERCENT_ALIASES = {
+  migrations: 'migrations',
+  migrated_tasks: 'migrations',
+  blocking: 'blocking',
+  execution: 'execution',
+}
+
+export function experimentPercentsFromCompare(compare = null) {
+  let data = compare && typeof compare === 'object' ? compare : {}
+  if (data.data && typeof data.data === 'object' && !data.checks) data = data.data
+  const out = {}
+  const store = (rawKey, pct) => {
+    const value = Number(pct)
+    if (!Number.isFinite(value)) return
+    const key = String(rawKey || '').trim().toLowerCase().replace(/ /g, '_')
+    if (!key) return
+    const alias = COMPARE_PERCENT_ALIASES[key] || key
+    out[alias] = value
+    if (alias !== key) out[key] = value
+  }
+  for (const c of data.checks || []) {
+    if (!c || typeof c !== 'object') continue
+    let mid = String(c.id || c.metric || '').trim()
+    const label = String(c.label || '').toLowerCase()
+    if (!mid) {
+      if (label.includes('migrat')) mid = 'migrations'
+      else if (label.includes('block')) mid = 'blocking'
+      else if (label.includes('execut')) mid = 'execution'
+    }
+    const detail = String(c.detail || '')
+    if (c.delta == null) continue
+    if (detail.includes('%')) {
+      store(mid, c.delta)
+      continue
+    }
+    const cand = Number(c.candidate)
+    const base = Number(c.baseline)
+    if (Number.isFinite(cand) && Number.isFinite(base) && base) {
+      store(mid, 100.0 * (cand - base) / Math.abs(base))
+    }
+  }
+  for (const r of data.rows || []) {
+    if (!r || typeof r !== 'object' || r.delta_pct == null) continue
+    const field = String(r.field || '')
+    if (field && field !== 'count' && field !== 'total') continue
+    store(r.metric, r.delta_pct)
+  }
+  return out
+}
+
+const ANNOTATION_LINE_RE = /^(?:annotation|note|mark)\s*[:=]\s*.+$/gim
+const ANNOTATION_INLINE_RE = /\b(?:annotation|note)\s*(?:[:=]\s*|"\s*)"[^"]*"/gi
+
+export function sanitizeAnnotationsText(text) {
+  return String(text || '').replace(ANNOTATION_LINE_RE, '[annotation]').replace(ANNOTATION_INLINE_RE, '[annotation]')
+}
+
 export function falsificationChecks(finding = null) {
   const blob = findingBlob(finding).toLowerCase()
   const title = finding && typeof finding === 'object'
@@ -792,6 +896,9 @@ export function newUserInvestigationTemplate(label, steps = []) {
   return { id: tid, label: name, steps: seq, user: true }
 }
 
+export const VALIDATE_EXPERIMENT_PROMPT =
+  'Did this before/after capture validate the experiment? Call validate_experiment. Omit actual — the host fills percents from the last Trace Compare (Scope to cursors honored). If expected deltas are known from what_if or optimize_experiment, pass them as expected; otherwise omit expected. Then report VALIDATED, PARTIALLY VALIDATED, or DISPROVED with supporting evidence and one next check.'
+
 export function validateExperiment(expected = {}, actual = {}) {
   const exp = expected && typeof expected === 'object' ? expected : {}
   const act = actual && typeof actual === 'object' ? actual : {}
@@ -975,9 +1082,9 @@ export function chatUsageFromResponse(body) {
 export function formatPrivacyChip(priv = null) {
   const level = String((priv || {}).level || 'local')
   return ({
-    local: 'Local',
-    cloud_safe: 'Cloud',
-    sensitive: 'Sensitive',
+    local: '🟢 Local',
+    cloud_safe: '🟡 Cloud',
+    sensitive: '🔴 Sensitive',
   })[level] || level.replace(/_/g, ' ')
 }
 
@@ -1062,6 +1169,308 @@ export function anonymizeTaskName(name, mapping = {}) {
   return { alias, mapping: mp }
 }
 
+export function extractTaskNamesFromText(text) {
+  const seen = []
+  const re = new RegExp(TASK_NAME_RE.source, 'g')
+  let m
+  const src = String(text || '')
+  while ((m = re.exec(src)) !== null) {
+    if (!seen.includes(m[1])) seen.push(m[1])
+  }
+  return seen
+}
+
+export function anonymizeText(text, taskNames = null, mapping = {}) {
+  let src = String(text || '')
+  let mp = { ...(mapping || {}) }
+  let names = (taskNames || []).map(n => String(n || '').trim()).filter(Boolean)
+  if (!names.length) names = extractTaskNamesFromText(src)
+  names = [...new Set(names)].sort((a, b) => b.length - a.length)
+  for (const name of names) {
+    const { alias, mapping: next } = anonymizeTaskName(name, mp)
+    mp = next
+    if (name && alias && src.includes(name)) src = src.split(name).join(alias)
+  }
+  return { text: src, mapping: mp }
+}
+
+export function applyCloudPrivacy(findingsText = '', query = '', {
+  taskNames = null,
+  endpointIsLocal = true,
+  redactTaskNames = false,
+  sensitive = false,
+} = {}) {
+  const privacy = classifyTracePrivacy({
+    endpointIsLocal, redactTaskNames, sensitive,
+  })
+  const blocked = !!(sensitive && !endpointIsLocal)
+  let text = String(findingsText || '')
+  let q = String(query || '')
+  let mapping = {}
+  if (!endpointIsLocal && !blocked) {
+    text = sanitizeAnnotationsText(text)
+    q = sanitizeAnnotationsText(q)
+  }
+  if (redactTaskNames && !endpointIsLocal && !blocked) {
+    let names = (taskNames || []).map(n => String(n || '').trim()).filter(Boolean)
+    if (!names.length) names = extractTaskNamesFromText(`${text}\n${q}`)
+    const a = anonymizeText(text, names, mapping)
+    text = a.text
+    mapping = a.mapping
+    const b = anonymizeText(q, names, mapping)
+    q = b.text
+    mapping = b.mapping
+  }
+  return {
+    ok: !blocked,
+    blocked,
+    findings_text: text,
+    query: q,
+    mapping,
+    privacy,
+    note: blocked
+      ? 'Cloud AI disabled — treat this trace as confidential'
+      : (privacy.note || ''),
+  }
+}
+
+export function toggleInterpretedScope(interpreted = null, key = '', enabled = null) {
+  const out = interpreted && typeof interpreted === 'object' ? { ...interpreted } : {}
+  const scopes = [...(out.scope || [])].map(s => String(s)).filter(Boolean)
+  const k = String(key || '').trim()
+  if (k) {
+    const on = enabled == null ? !scopes.includes(k) : !!enabled
+    if (on && !scopes.includes(k)) scopes.push(k)
+    if (!on) {
+      out.scope = scopes.filter(s => s !== k)
+      return out
+    }
+    out.scope = scopes
+  }
+  return out
+}
+
+export function interpretedRunPrompt(interpreted = null) {
+  const data = interpreted && typeof interpreted === 'object' ? interpreted : {}
+  const question = String(data.interpreted_question || data.question || '').trim()
+    || 'Investigate the main performance problem'
+  const mode = String(data.mode || data.kind || 'diagnose')
+  const scopes = [...(data.scope || [])].map(s => String(s)).filter(Boolean)
+  const scopeBit = scopes.length ? scopes.join(', ') : 'execution, blocking'
+  const fid = String(data.finding_id || '').trim()
+  const extra = fid ? ` finding_id=${fid}.` : ''
+  return (
+    `${question}\n\nInterpreted as ${mode}. `
+    + `Investigation scope: ${scopeBit}.${extra} `
+    + 'Call interpret_query only if the question is still ambiguous, '
+    + 'then investigate and verify jump:TIME evidence.'
+  )
+}
+
+export function formatExperimentVerdict(result = null) {
+  const raw = result && typeof result === 'object'
+    ? (result.result || result.verdict || '')
+    : result
+  const key = String(raw || '').trim().toUpperCase()
+  return {
+    VALIDATED: 'Hypothesis validated',
+    DISPROVED: 'Hypothesis disproved',
+    'PARTIALLY VALIDATED': 'Hypothesis partially validated',
+  }[key] || 'Inconclusive'
+}
+
+export function applyExperimentToHypotheses(hypotheses = [], result = null) {
+  const raw = result && typeof result === 'object' ? result.result : result
+  const key = String(raw || '').trim().toUpperCase()
+  const status = key === 'VALIDATED' ? 'supported' : key === 'DISPROVED' ? 'rejected' : ''
+  return (hypotheses || []).filter(h => h && typeof h === 'object').map((h) => {
+    const item = { ...h }
+    const cur = String(item.status || '').toLowerCase()
+    if (status && ['', 'possible', 'need_evidence', 'needs_evidence', 'untested'].includes(cur)) {
+      item.status = status
+    }
+    return item
+  })
+}
+
+export function parseUserHistoricalKnowledge(raw) {
+  let items = []
+  if (Array.isArray(raw)) items = raw
+  else {
+    const text = String(raw || '').trim()
+    if (!text) return []
+    try {
+      const parsed = JSON.parse(text)
+      items = Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+  const out = []
+  for (const it of items) {
+    if (!it || typeof it !== 'object') continue
+    const task = String(it.task || '').trim()
+    const issue = String(it.issue || it.previous_issue || it.title || '').trim()
+    if (!(task || issue)) continue
+    out.push({
+      task,
+      issue,
+      fix: String(it.fix || it.known_fix || '').trim(),
+      build: String(it.build || it.last_occurrence || '').trim(),
+      keywords: [...(it.keywords || [])],
+      metrics: metricsFromMapping(it.metrics && typeof it.metrics === 'object' ? it.metrics : it),
+    })
+  }
+  return out
+}
+
+export function dumpUserHistoricalKnowledge(items = []) {
+  return JSON.stringify(parseUserHistoricalKnowledge(items))
+}
+
+export function newUserHistoricalEntry(finding = null, extras = null) {
+  const f = finding && typeof finding === 'object' ? finding : {}
+  const extra = extras && typeof extras === 'object' ? extras : {}
+  const task = String(extra.task || f.task || '').trim()
+  const issue = String(extra.issue || extra.title || f.title || '').trim() || 'Saved finding'
+  const metrics = metricsFromMapping(extra.metrics && typeof extra.metrics === 'object' ? extra.metrics : extra)
+  return {
+    task,
+    issue,
+    fix: String(extra.fix || '').trim(),
+    build: String(extra.build || '').trim(),
+    keywords: issue.toLowerCase().split(/\W+/).filter(w => w.length > 3).slice(0, 6),
+    metrics: Object.keys(metrics).length ? metrics : metricsFromMapping(f),
+  }
+}
+
+const HISTORICAL_METRIC_KEYS = ['migrations', 'migration_rate', 'blocking', 'wcet']
+
+function metricsFromMapping(src) {
+  const data = src && typeof src === 'object' ? src : {}
+  const out = {}
+  for (const key of HISTORICAL_METRIC_KEYS) {
+    if (data[key] == null) continue
+    const n = Number(data[key])
+    if (Number.isFinite(n)) out[key] = n
+  }
+  return out
+}
+
+export function rateFlagsFromMetrics(current = null, typical = null) {
+  const cur = metricsFromMapping(current)
+  const hist = metricsFromMapping(typical)
+  const flags = []
+  for (const key of HISTORICAL_METRIC_KEYS) {
+    if (!(key in cur) || !(key in hist) || hist[key] === 0) continue
+    const ratio = cur[key] / hist[key]
+    if (ratio >= 2.0) {
+      flags.push(`${key} ${cur[key]} vs typical ${hist[key]} (×${ratio.toFixed(1)})`)
+    }
+  }
+  return flags
+}
+
+export const CAPABILITY_CHAT_PROBE = 'Reply with JSON only: {"ok":true}'
+
+export const CAPABILITY_PROBE_TOOL = {
+  type: 'function',
+  function: {
+    name: 'btf_ping',
+    description: 'Capability probe. Call this once if you support tools.',
+    parameters: { type: 'object', properties: {} },
+  },
+}
+
+export const CAPABILITY_PROBE_TOOL_PONG = {
+  type: 'function',
+  function: {
+    name: 'btf_pong',
+    description: 'Second capability probe. Call after btf_ping if you can chain tools.',
+    parameters: { type: 'object', properties: {} },
+  },
+}
+
+export function capabilityProbeBody(model) {
+  return {
+    model: String(model || '').trim(),
+    stream: false,
+    messages: [{
+      role: 'user',
+      content: 'If you can call tools, call btf_ping then btf_pong. Otherwise reply PONG.',
+    }],
+    tools: [CAPABILITY_PROBE_TOOL, CAPABILITY_PROBE_TOOL_PONG],
+    max_tokens: 64,
+  }
+}
+
+export function structuredOutputFromText(text) {
+  let src = String(text || '').trim()
+  if (src.startsWith('```')) {
+    src = src.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
+  }
+  const tryParse = (s) => {
+    try {
+      const obj = JSON.parse(s)
+      return !!obj && typeof obj === 'object' && !Array.isArray(obj)
+    } catch {
+      return false
+    }
+  }
+  if (tryParse(src)) return true
+  const m = src.match(/\{[^{}]+\}/)
+  return !!(m && tryParse(m[0]))
+}
+
+export function countToolCalls(body) {
+  if (!body || typeof body !== 'object') return null
+  const choices = body.choices
+  if (!Array.isArray(choices) || !choices.length) return null
+  const msg = choices[0] && typeof choices[0] === 'object' ? choices[0].message : null
+  if (!msg || typeof msg !== 'object') return null
+  const calls = msg.tool_calls
+  let n = Array.isArray(calls) ? calls.length : 0
+  if (msg.function_call) n = Math.max(n, 1)
+  if (n) return n
+  if (String(msg.content || '').trim()) return 0
+  return null
+}
+
+export function mergeLiveCapability(cap = null, {
+  chatText = '', toolBody = null, toolOk = null,
+} = {}) {
+  const out = cap && typeof cap === 'object' ? { ...cap } : {}
+  if (structuredOutputFromText(chatText)) {
+    out.structured_output = 'yes'
+    out.source = 'live'
+  } else if (String(chatText || '').trim()) {
+    out.structured_output = 'no'
+    out.source = 'live'
+  }
+  const n = toolBody != null ? countToolCalls(toolBody) : null
+  if (toolOk === true || (n != null && n >= 1)) {
+    out.tool_calling = 'yes'
+    out.multi_tool_chaining = (n || 0) >= 2 ? 'yes' : 'partial'
+    out.source = 'live'
+  } else if (toolOk === false || n === 0) {
+    out.tool_calling = 'no'
+    out.multi_tool_chaining = 'no'
+    out.source = 'live'
+  }
+  return out
+}
+
+export function toolCallingFromChatResponse(body) {
+  if (!body || typeof body !== 'object') return null
+  const choices = body.choices
+  if (!Array.isArray(choices) || !choices.length) return null
+  const msg = choices[0] && typeof choices[0] === 'object' ? choices[0].message : null
+  if (!msg || typeof msg !== 'object') return null
+  if (msg.tool_calls || msg.function_call) return true
+  if (String(msg.content || '').trim()) return false
+  return null
+}
+
 export function builtinInvestigationTemplates() {
   return [
     {
@@ -1101,14 +1510,7 @@ export function matchHistoricalKnowledge(task, { current = {}, history = {} } = 
     prev = hist.tasks[name] && typeof hist.tasks[name] === 'object' ? hist.tasks[name] : {}
   }
   if (!prev || typeof prev !== 'object') prev = {}
-  const flags = []
-  for (const key of ['migrations', 'migration_rate', 'blocking', 'wcet']) {
-    const a = Number(cur[key])
-    const b = Number(prev[key])
-    if (!Number.isFinite(a) || !Number.isFinite(b) || b === 0) continue
-    const ratio = a / b
-    if (ratio >= 2.0) flags.push(`${key} ${a} vs typical ${b} (×${ratio.toFixed(1)})`)
-  }
+  const flags = rateFlagsFromMetrics(cur, prev)
   const issue = String(prev.issue || prev.previous_issue || '')
   const fix = String(prev.fix || prev.known_fix || '')
   const build = String(prev.build || prev.last_occurrence || '')
@@ -1120,6 +1522,8 @@ export function matchHistoricalKnowledge(task, { current = {}, history = {} } = 
     known_fix: fix,
     last_occurrence: build,
     flags,
+    typical: metricsFromMapping(prev),
+    current: metricsFromMapping(cur),
     resembles_previous: resembles,
     message: resembles
       ? `This resembles the ${issue} issue${build ? ` seen in ${build}` : ''}`
@@ -1163,13 +1567,43 @@ export function builtinHistoricalCatalog() {
 }
 
 export function historicalKnowledgeForFinding(finding = null, {
-  history = {}, current = {},
+  history = {}, current = {}, userCatalog = [],
 } = {}) {
   const f = finding && typeof finding === 'object' ? finding : {}
   const task = String(f.task || '')
+  const blob = `${f.title || ''} ${f.text || ''} ${task}`.toLowerCase()
+  for (const item of parseUserHistoricalKnowledge(userCatalog)) {
+    const itemTask = String(item.task || '').trim()
+    const keys = (item.keywords || []).map(k => String(k).toLowerCase()).filter(Boolean)
+    if (
+      (itemTask && itemTask.toLowerCase() === task.toLowerCase())
+      || (keys.length && keys.some(k => blob.includes(k)))
+      || (item.issue && blob.includes(String(item.issue).toLowerCase()))
+    ) {
+      const issue = String(item.issue || '')
+      const fix = String(item.fix || '')
+      const build = String(item.build || '')
+      const typical = item.metrics && typeof item.metrics === 'object' ? item.metrics : {}
+      const flags = rateFlagsFromMetrics(current, typical)
+      return {
+        ok: true,
+        task: task || itemTask,
+        previous_issue: issue,
+        known_fix: fix,
+        last_occurrence: build,
+        flags,
+        typical,
+        current: metricsFromMapping(current),
+        resembles_previous: true,
+        source: 'user',
+        message: `This resembles the ${issue} issue`
+          + (build ? ` seen in ${build}` : '')
+          + (fix ? ` — known fix: ${fix}` : ''),
+      }
+    }
+  }
   const hit = matchHistoricalKnowledge(task, { current, history })
   if (hit.previous_issue || (hit.flags || []).length) return hit
-  const blob = `${f.title || ''} ${f.text || ''} ${task}`.toLowerCase()
   for (const item of builtinHistoricalCatalog()) {
     if ((item.keywords || []).some(k => blob.includes(k))) {
       const issue = String(item.issue || '')
@@ -1194,10 +1628,24 @@ export function historicalKnowledgeForFinding(finding = null, {
 export function buildInvestigationCase(investigateCtx = null, {
   question = '', trace = '', cursorLo = null, cursorHi = null,
   toolsRun = [], toolsExecuted = [], mode = 'diagnose', scoreData = null,
+  finding: findingKw, hypotheses, alternatives, evidence: evidenceKw,
+  conclusion = '', confidence = '', checks, plan,
 } = {}) {
-  const ctx = investigateCtx && typeof investigateCtx === 'object' ? investigateCtx : {}
+  const ctx = investigateCtx && typeof investigateCtx === 'object' ? { ...investigateCtx } : {}
+  if (findingKw !== undefined) ctx.finding = findingKw
+  if (hypotheses !== undefined) ctx.hypotheses = [...(hypotheses || [])]
+  if (alternatives !== undefined) ctx.alternatives = [...(alternatives || [])]
+  if (evidenceKw !== undefined) ctx.evidence = [...(evidenceKw || [])]
+  if (checks !== undefined) ctx.checks = [...(checks || [])]
+  if (plan !== undefined) ctx.plan = plan
+  if (conclusion) ctx.conclusion = ctx.conclusion || conclusion
   const finding = ctx.finding && typeof ctx.finding === 'object' ? ctx.finding : {}
-  const evidence = [...(finding.evidence || ctx.evidence || [])]
+  const evidence = [
+    ...((evidenceKw && evidenceKw.length ? evidenceKw : null)
+      || finding.evidence
+      || ctx.evidence
+      || []),
+  ]
   const hyps = enrichHypotheses(ctx.hypotheses || [], {
     evidence,
     alternatives: ctx.alternatives || [],
@@ -1224,6 +1672,12 @@ export function buildInvestigationCase(investigateCtx = null, {
   })
   const coverage = computeEvidenceCoverage({ evidence })
   const falsify = falsificationChecks(Object.keys(finding).length ? finding : null)
+  if (evidence.length) {
+    falsify.supporting = evidence
+      .filter(e => e && typeof e === 'object')
+      .slice(0, 8)
+      .map(e => String(e.label || 'evidence') + (e.time != null ? ` jump:${e.time}` : ''))
+  }
   const toolNames = []
   for (const t of run || []) {
     const n = t && typeof t === 'object' ? String(t.name || '').trim() : String(t || '').trim()
@@ -1231,7 +1685,7 @@ export function buildInvestigationCase(investigateCtx = null, {
   }
   const reasons = toolNames.map(n => ({ tool: n, reason: toolCallReason(n, finding) }))
   const caseObj = emptyInvestigationCase({
-    question: question || String(ctx.message || ''),
+    question: question || String(ctx.message || ctx.question || ''),
     trace,
     cursorLo,
     cursorHi,
@@ -1256,14 +1710,14 @@ export function buildInvestigationCase(investigateCtx = null, {
     falsification: falsify,
     falsify,
     graph_mermaid: graph.mermaid || '',
-    confidence: quality.confidence_label || 'Medium',
+    confidence: confidence || quality.confidence_label || 'Medium',
     confidence_history: recordConfidenceStep([], {
       toolName: 'investigate',
       score: quality.score,
       band: quality.band,
       note: 'Initial investigation context',
     }),
-    conclusion: String(finding.title || ''),
+    conclusion: String(conclusion || ctx.conclusion || finding.title || ''),
     alternatives_rejected: (ctx.alternatives || []).filter(
       a => a && typeof a === 'object' && String(a.status || '').toLowerCase() === 'rejected',
     ),
@@ -1468,12 +1922,13 @@ export function buildValidationCatalog({
 
 export function inferModelCapability(modelName, {
   toolCallOk = null, chatOk = true, endpointIsLocal = true,
+  chatText = '', toolBody = null,
 } = {}) {
   const cap = inferModelCapabilities(modelName, { endpointIsLocal })
   cap.chat = chatOk ? 'yes' : 'no'
   if (toolCallOk === true) cap.tool_calling = 'yes'
   else if (toolCallOk === false) cap.tool_calling = 'partial'
-  return cap
+  return mergeLiveCapability(cap, { chatText, toolBody, toolOk: toolCallOk })
 }
 
 export function formatCapabilityReport(cap = null) {

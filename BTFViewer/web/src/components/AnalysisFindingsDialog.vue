@@ -390,7 +390,7 @@ function saveAsText() {
 .analysis-btn.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #000;
+  color: #fff; /* Desktop Findings Investigate: white on accent */
   font-weight: 600;
 }
 

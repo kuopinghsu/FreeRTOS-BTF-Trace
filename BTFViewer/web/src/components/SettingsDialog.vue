@@ -374,13 +374,45 @@
                   Auto-apply GUI actions
                 </label>
               </div>
+              <div class="settings-form-row settings-form-row--check">
+                <span
+                  class="settings-form-label"
+                  aria-hidden="true"
+                ></span>
+                <label
+                  class="settings-check"
+                  title="When the endpoint is not local, replace task names with Task-N aliases before Findings leave the machine."
+                >
+                  <input
+                    v-model="draft.aiRedactTaskNames"
+                    type="checkbox"
+                  >
+                  Anonymize task names for cloud
+                </label>
+              </div>
+              <div class="settings-form-row settings-form-row--check">
+                <span
+                  class="settings-form-label"
+                  aria-hidden="true"
+                ></span>
+                <label
+                  class="settings-check"
+                  title="Disables cloud AI for this machine. Local endpoints still work."
+                >
+                  <input
+                    v-model="draft.aiTraceSensitive"
+                    type="checkbox"
+                  >
+                  Treat this trace as sensitive
+                </label>
+              </div>
 
               <div class="settings-form-row">
                 <span class="settings-form-label">Preset:</span>
                 <select
                   v-model="aiPreset"
                   class="settings-input settings-input--grow"
-                  title="Ollama runs locally; OpenAI and Gemini are cloud APIs; Custom is any other OpenAI-compatible endpoint. Each preset keeps its own base URL, model, and API key."
+                  title="Ollama runs locally; OpenAI and Gemini are cloud APIs; Custom is any other OpenAI-compatible endpoint. Importing a JSON file whose preset name is not in this list adds it. Each preset keeps its own base URL, model, and API key."
                 >
                   <option
                     v-for="p in aiPresets"
@@ -421,7 +453,7 @@
                       aria-controls="ai-model-listbox"
                       aria-autocomplete="list"
                       title="Model id served by that endpoint (e.g. `ollama list` name, gpt-4o-mini, or gemini-flash-lite-latest). Refresh to list models from GET /models, then open the dropdown to pick one."
-                      :placeholder="activePresetInfo.model || 'phi4-mini:3.8b'"
+                      :placeholder="activePresetInfo.model || DEFAULT_AI_MODEL"
                       @keydown="onAiModelKeydown"
                     >
                     <button
@@ -532,7 +564,7 @@
                     class="settings-input settings-input--grow"
                     type="password"
                     autocomplete="off"
-                    title="API key or access token for this preset (or VITE_OPENAI_API_KEY / VITE_GEMINI_API_KEY / VITE_OLLAMA_API_KEY at build time). Local Ollama needs none. Stored per preset in browser storage."
+                    title="API key or access token for this preset (or OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY). Local Ollama needs none. Stored per preset in browser storage."
                     :placeholder="aiAuthMode === 'browser'
                       ? 'Paste key or token after signing in'
                       : (isLocalPreset
@@ -626,7 +658,7 @@
                   <button
                     type="button"
                     class="settings-btn secondary"
-                    title="Load preset, base URL, model, API key, and auth mode from a JSON file (see examples/ai/ollama.json, gemini.json, openai.json, deepseek.json, grok.json, presets.json)."
+                    title="Load preset, checkbox flags, base URL, model, API key, and auth mode from a JSON file. Unknown preset names are added to the list (see examples/ai/ollama.json, gemini.json, openai.json, deepseek.json, grok.json, presets.json)."
                     @click="aiImportInput?.click()"
                   >
                     Import…
@@ -659,7 +691,7 @@
                 >
                   Ollama serves an OpenAI-compatible API at
                   <code>http://localhost:11434/v1</code>. Pull a model first:
-                  <code>ollama pull phi4-mini:3.8b</code>. Prefer
+                  <code>ollama pull {{ DEFAULT_AI_MODEL }}</code>. Prefer
                   <code>npm run dev</code> / <code>preview</code> (proxies local Ollama);
                   for <code>file://</code> use <code>OLLAMA_ORIGINS="*" ollama serve</code>
                   (macOS app: <code>launchctl setenv OLLAMA_ORIGINS "*"</code>, then restart it).
@@ -729,8 +761,11 @@ import {
   AI_PRESET_KEY_URLS,
   AI_PRESET_OLLAMA,
   AI_RESPONSE_LANGUAGES,
+  BUILTIN_AI_PRESET_IDS,
+  DEFAULT_AI_MODEL,
   aiAuthStatus,
   aiListModels,
+  aiPresetDisplayLabel,
   aiPresetInfo,
   aiPresetSignInLabel,
   aiPresetSignInUrl,
@@ -739,7 +774,9 @@ import {
   normalizeAiPreset,
   parseAiSettingsJson,
   parseAiTlsVerify,
+  parseExtraAiPresets,
   resolveAiSettings,
+  sanitizeAiPresetId,
 } from '../utils/ollamaClient.js'
 
 const props = defineProps({
@@ -761,14 +798,33 @@ const _tabIds = new Set(tabs.map(t => t.id))
 const activeTab = ref(_tabIds.has(props.initialTab) ? props.initialTab : 'appearance')
 const draft = reactive(normalizeSettings(props.modelValue))
 const deadlinesText = ref(formatDeadlinesText(draft.taskDeadlines))
-const aiPresets = AI_PRESETS
+const aiPresets = computed(() => {
+  const extra = parseExtraAiPresets(draft.aiExtraPresets)
+  const seen = new Set(AI_PRESETS.map((p) => p.id))
+  const rows = [...AI_PRESETS]
+  for (const e of extra) {
+    const id = sanitizeAiPresetId(e.id)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    rows.push({
+      id,
+      label: e.label || aiPresetDisplayLabel(id),
+      baseUrl: '',
+      model: '',
+    })
+  }
+  return rows
+})
 // Each preset keeps its own base URL / model / API key in draft.aiPresets;
 // the inputs edit whichever preset is selected.
 const aiPreset = computed({
   get: () => normalizeAiPreset(draft.aiPreset),
   set: (v) => { draft.aiPreset = normalizeAiPreset(v) },
 })
-const activePresetInfo = computed(() => aiPresetInfo(aiPreset.value))
+const activePresetInfo = computed(() => (
+  aiPresets.value.find((p) => p.id === aiPreset.value)
+  || aiPresetInfo(aiPreset.value, draft.aiExtraPresets)
+))
 const isLocalPreset = computed(() => aiPreset.value === AI_PRESET_OLLAMA)
 const activeKeyUrl = computed(() => AI_PRESET_KEY_URLS[aiPreset.value] || '')
 function presetField(field) {
@@ -826,7 +882,7 @@ const authStatusText = computed(() => {
   }
   return aiApiKey.value
     ? 'Key saved for this preset.'
-    : 'Paste a provider API key, or set VITE_OPENAI_API_KEY / VITE_GEMINI_API_KEY at build time.'
+    : 'Paste a provider API key, or set OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY.'
 })
 
 function onAiSignIn() {
@@ -955,19 +1011,50 @@ function onAiModelKeydown(ev) {
 /** Apply an imported settings patch to the draft; returns a summary. */
 function applyAiSettingsPatch(patch) {
   const presets = { ...draft.aiPresets }
-  for (const [pid, fields] of Object.entries(patch.presets || {})) {
-    presets[pid] = { ...(presets[pid] || {}), ...fields }
+  const extra = [...parseExtraAiPresets(draft.aiExtraPresets)]
+  const seen = new Set(extra.map((e) => e.id))
+  for (const row of (patch.extraPresets || [])) {
+    const id = sanitizeAiPresetId(row.id)
+    if (!id || BUILTIN_AI_PRESET_IDS.has(id) || seen.has(id)) continue
+    extra.push({ id, label: row.label || aiPresetDisplayLabel(id) })
+    seen.add(id)
   }
-  // Fixed preset order, so a multi-preset file always reads the same way.
-  const touched = AI_PRESETS
-    .filter((p) => patch.presets?.[p.id])
-    .map((p) => p.label)
+  for (const [pid, fields] of Object.entries(patch.presets || {})) {
+    const id = sanitizeAiPresetId(pid) || pid
+    if (id && !BUILTIN_AI_PRESET_IDS.has(id) && !seen.has(id)) {
+      extra.push({ id, label: aiPresetDisplayLabel(id) })
+      seen.add(id)
+    }
+    presets[id] = { ...(presets[id] || {}), ...fields }
+  }
+  draft.aiExtraPresets = extra
+  // Builtins first, then extras in list order, so a multi-preset file reads the same way.
+  const catalog = [
+    ...AI_PRESETS.map((p) => p.id),
+    ...extra.map((e) => e.id),
+  ]
+  const touched = catalog
+    .filter((id) => patch.presets?.[id])
+    .map((id) => (
+      AI_PRESETS.find((p) => p.id === id)?.label
+      || extra.find((e) => e.id === id)?.label
+      || aiPresetDisplayLabel(id)
+    ))
   draft.aiPresets = presets
   if (patch.responseLanguage) draft.aiResponseLanguage = patch.responseLanguage
+  if (patch.aiEnabled != null) draft.aiEnabled = !!patch.aiEnabled
+  if (patch.aiAutoApply != null) draft.aiAutoApply = !!patch.aiAutoApply
+  if (patch.aiRedactTaskNames != null) draft.aiRedactTaskNames = !!patch.aiRedactTaskNames
+  if (patch.aiTraceSensitive != null) draft.aiTraceSensitive = !!patch.aiTraceSensitive
   const preset = normalizeAiPreset(patch.preset || draft.aiPreset)
   draft.aiPreset = preset
+  const added = extra
+    .filter((e) => (patch.extraPresets || []).some((row) => row.id === e.id))
+    .map((e) => e.label)
+  const extraNote = added.length ? ` Added ${added.join(', ')} to the preset list.` : ''
   return `Imported ${touched.join(', ') || 'settings'}. `
-    + `Selected ${aiPresetInfo(preset).label} — review, then OK to save.`
+    + `Selected ${aiPresetInfo(preset, extra).label} — review, then OK to save.`
+    + extraNote
 }
 
 async function onImportAiSettings(event) {

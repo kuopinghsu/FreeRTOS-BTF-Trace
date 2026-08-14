@@ -12957,12 +12957,15 @@ def _in_legend_panel(w: QWidget) -> bool:
 def _in_ai_actions_bar(w: QWidget) -> bool:
     """True when *w* is in an AI chip bar that must keep its natural width.
 
-    Ignored + a stretching row collapses Quick/Diagnose mode chips and
-    wrapping template buttons to zero width (web ``flex-wrap`` parity).
+    Ignored + a stretching row collapses Quick/Diagnose mode chips,
+    wrapping template buttons, and the header engine/privacy chips to
+    zero width (web ``flex-wrap`` / ``.ai-header`` parity).
     """
     p: Optional[QWidget] = w
     while p is not None:
-        if p.objectName() in ("aiActions", "aiTemplates", "aiModes"):
+        if p.objectName() in (
+                "aiActions", "aiTemplates", "aiModes", "aiHeader", "aiMoreMenu",
+                "aiComposer"):
             return True
         p = p.parentWidget()
     return False
@@ -16985,6 +16988,10 @@ EVIDENCE_QUALITY_BANDS: Tuple[str, ...] = (
 INVESTIGATION_MODES: Tuple[str, ...] = (
     "quick", "diagnose", "compare", "optimize", "report",
 )
+INVESTIGATION_SCOPE_OPTIONS: Tuple[str, ...] = (
+    "execution", "blocking", "migrations", "priority inheritance",
+    "nearby events", "findings", "tick",
+)
 EXPLAIN_LEVELS: Tuple[str, ...] = ("quick", "technical", "deep")
 PRIVACY_LEVELS: Tuple[str, ...] = ("local", "cloud_safe", "sensitive")
 CASE_SCHEMA = "btf-investigation-case"
@@ -17447,6 +17454,155 @@ def compute_evidence_coverage(
     }
 
 
+def _quality_flag_mark(value: Any) -> str:
+    if value is True or str(value).lower() in ("yes", "true", "1"):
+        return "✓"
+    if str(value).lower() in ("partial", "triangle", "maybe"):
+        return "△"
+    return "○"
+
+
+def format_quality_flag_lines(
+    quality: Optional[dict] = None,
+    labels: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    """Checklist under Evidence Quality (direct / timeline / metric / alternative)."""
+    lab = labels if isinstance(labels, dict) else {}
+    flags = (quality or {}).get("flags") if isinstance(quality, dict) else {}
+    flags = flags if isinstance(flags, dict) else {}
+    rows = (
+        ("direct_evidence", "quality_direct", "Direct evidence"),
+        ("timeline_correlation", "quality_timeline", "Timeline correlation"),
+        ("metric_correlation", "quality_metric", "Metric correlation"),
+        ("alternative_tested", "quality_alternative", "Alternative tested"),
+    )
+    return [
+        f"- {lab.get(lk, fallback)} {_quality_flag_mark(flags.get(fk))}"
+        for fk, lk, fallback in rows
+    ]
+
+
+def format_coverage_count_lines(
+    coverage: Optional[dict] = None,
+    labels: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    """5/7-style breakdown under Evidence Coverage."""
+    lab = labels if isinstance(labels, dict) else {}
+    cov = coverage if isinstance(coverage, dict) else {}
+    claims = cov.get("claims")
+    observed = cov.get("directly_observed")
+    timeline = cov.get("timeline_verified")
+    metric = cov.get("metric_verified")
+    unverified = cov.get("unverified_assumptions")
+    if observed is None and claims is None:
+        return []
+    denom = f"/{claims}" if claims not in (None, "") else ""
+    return [
+        f"- {lab.get('coverage_observed', 'Directly observed')} {observed}",
+        f"- {lab.get('coverage_timeline', 'Timeline verified')} "
+        f"{timeline}{denom if not str(timeline).count('/') else ''}",
+        f"- {lab.get('coverage_metric', 'Metric verified')} "
+        f"{metric}{denom if not str(metric).count('/') else ''}",
+        f"- {lab.get('coverage_unverified', 'Unverified assumptions')} {unverified}",
+    ]
+
+
+def should_confirm_interpreted_query(
+    query: str = "",
+    *,
+    template_id: str = "",
+    already_interpreted: bool = False,
+) -> bool:
+    """True when a free-form Ask should show the interpret/scope card first."""
+    if already_interpreted or str(template_id or "").strip():
+        return False
+    q = str(query or "").strip()
+    if not q:
+        return False
+    if "Investigation scope:" in q and "Interpreted as " in q:
+        return False
+    return True
+
+
+_COMPARE_PERCENT_ALIASES: Dict[str, str] = {
+    "migrations": "migrations",
+    "migrated_tasks": "migrations",
+    "blocking": "blocking",
+    "execution": "execution",
+}
+
+
+def experiment_percents_from_compare(compare: Optional[dict] = None) -> Dict[str, float]:
+    """Extract metric → signed percent from compare_performance / Trace Compare."""
+    data = compare if isinstance(compare, dict) else {}
+    if isinstance(data.get("data"), dict) and not data.get("checks"):
+        data = data["data"]
+    out: Dict[str, float] = {}
+
+    def _store(raw_key: Any, pct: Any) -> None:
+        try:
+            value = float(pct)
+        except (TypeError, ValueError):
+            return
+        key = str(raw_key or "").strip().lower().replace(" ", "_")
+        if not key:
+            return
+        alias = _COMPARE_PERCENT_ALIASES.get(key, key)
+        out[alias] = value
+        if alias != key:
+            out[key] = value
+
+    for c in data.get("checks") or []:
+        if not isinstance(c, dict):
+            continue
+        mid = str(c.get("id") or c.get("metric") or "").strip()
+        label = str(c.get("label") or "").lower()
+        if not mid:
+            if "migrat" in label:
+                mid = "migrations"
+            elif "block" in label:
+                mid = "blocking"
+            elif "execut" in label:
+                mid = "execution"
+        detail = str(c.get("detail") or "")
+        delta = c.get("delta")
+        if delta is None:
+            continue
+        if "%" in detail:
+            _store(mid, delta)
+            continue
+        try:
+            cand = float(c.get("candidate"))
+            base = float(c.get("baseline"))
+        except (TypeError, ValueError):
+            continue
+        if base:
+            _store(mid, 100.0 * (cand - base) / abs(base))
+    for r in data.get("rows") or []:
+        if not isinstance(r, dict) or r.get("delta_pct") is None:
+            continue
+        metric = str(r.get("metric") or "")
+        field = str(r.get("field") or "")
+        if field and field not in ("count", "total", ""):
+            continue
+        _store(metric, r.get("delta_pct"))
+    return out
+
+
+_ANNOTATION_LINE_RE = re.compile(
+    r"(?im)^(?:annotation|note|mark)\s*[:=]\s*.+$"
+)
+_ANNOTATION_INLINE_RE = re.compile(
+    r'(?i)\b(?:annotation|note)\s*(?:[:=]\s*|"\s*)"[^"]*"'
+)
+
+
+def sanitize_annotations_text(text: str) -> str:
+    """Strip annotation note payloads before a cloud send."""
+    out = _ANNOTATION_LINE_RE.sub("[annotation]", str(text or ""))
+    return _ANNOTATION_INLINE_RE.sub("[annotation]", out)
+
+
 def falsification_checks(finding: Optional[dict] = None) -> Dict[str, Any]:
     """What evidence would disprove the leading explanation for this finding."""
     blob = _finding_blob(finding).lower()
@@ -17881,6 +18037,16 @@ def new_user_investigation_template(
     return {"id": tid, "label": name, "steps": seq, "user": True}
 
 
+VALIDATE_EXPERIMENT_PROMPT = (
+    "Did this before/after capture validate the experiment? "
+    "Call validate_experiment. Omit actual — the host fills percents from "
+    "the last Trace Compare (Scope to cursors honored). If expected deltas "
+    "are known from what_if or optimize_experiment, pass them as expected; "
+    "otherwise omit expected. Then report VALIDATED, PARTIALLY VALIDATED, "
+    "or DISPROVED with supporting evidence and one next check."
+)
+
+
 def validate_experiment(
     expected: Optional[dict] = None,
     actual: Optional[dict] = None,
@@ -18159,9 +18325,9 @@ def chat_usage_from_response(body: Any) -> Dict[str, int]:
 def format_privacy_chip(priv: Optional[dict] = None) -> str:
     level = str((priv or {}).get("level") or "local")
     return {
-        "local": "Local",
-        "cloud_safe": "Cloud",
-        "sensitive": "Sensitive",
+        "local": "🟢 Local",
+        "cloud_safe": "🟡 Cloud",
+        "sensitive": "🔴 Sensitive",
     }.get(level, level.replace("_", " ").title())
 
 
@@ -18259,6 +18425,364 @@ def anonymize_task_name(name: str, mapping: Optional[dict] = None) -> Tuple[str,
     return alias, mp
 
 
+def extract_task_names_from_text(text: str) -> List[str]:
+    seen: List[str] = []
+    for m in _TASK_NAME_RE.findall(str(text or "")):
+        if m not in seen:
+            seen.append(m)
+    return seen
+
+
+def anonymize_text(
+    text: str,
+    task_names: Optional[Sequence[str]] = None,
+    mapping: Optional[dict] = None,
+) -> Tuple[str, Dict[str, str]]:
+    """Replace known task names with stable Task-N aliases."""
+    src = str(text or "")
+    mp = dict(mapping or {})
+    names = [str(n).strip() for n in (task_names or []) if str(n).strip()]
+    if not names:
+        names = extract_task_names_from_text(src)
+    names = sorted(set(names), key=len, reverse=True)
+    out = src
+    for name in names:
+        alias, mp = anonymize_task_name(name, mp)
+        if name and alias and name in out:
+            out = out.replace(name, alias)
+    return out, mp
+
+
+def apply_cloud_privacy(
+    findings_text: str = "",
+    query: str = "",
+    task_names: Optional[Sequence[str]] = None,
+    *,
+    endpoint_is_local: bool = True,
+    redact_task_names: bool = False,
+    sensitive: bool = False,
+) -> Dict[str, Any]:
+    """Block cloud send when sensitive; optionally anonymize task names."""
+    priv = classify_trace_privacy(
+        endpoint_is_local=endpoint_is_local,
+        redact_task_names=redact_task_names,
+        sensitive=sensitive,
+    )
+    blocked = bool(sensitive and not endpoint_is_local)
+    text = str(findings_text or "")
+    q = str(query or "")
+    mapping: Dict[str, str] = {}
+    if not endpoint_is_local and not blocked:
+        text = sanitize_annotations_text(text)
+        q = sanitize_annotations_text(q)
+    if redact_task_names and not endpoint_is_local and not blocked:
+        names = [str(n).strip() for n in (task_names or []) if str(n).strip()]
+        if not names:
+            names = extract_task_names_from_text(f"{text}\n{q}")
+        text, mapping = anonymize_text(text, names, mapping)
+        q, mapping = anonymize_text(q, names, mapping)
+    return {
+        "ok": not blocked,
+        "blocked": blocked,
+        "findings_text": text,
+        "query": q,
+        "mapping": mapping,
+        "privacy": priv,
+        "note": (
+            "Cloud AI disabled — treat this trace as confidential"
+            if blocked else priv.get("note") or ""
+        ),
+    }
+
+
+def toggle_interpreted_scope(
+    interpreted: Optional[dict] = None,
+    key: str = "",
+    enabled: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Flip one investigation-scope flag on an interpret_query payload."""
+    out = dict(interpreted) if isinstance(interpreted, dict) else {}
+    scopes = [str(s) for s in (out.get("scope") or []) if s]
+    k = str(key or "").strip()
+    if k:
+        on = (k not in scopes) if enabled is None else bool(enabled)
+        if on and k not in scopes:
+            scopes.append(k)
+        if not on:
+            scopes = [s for s in scopes if s != k]
+        out["scope"] = scopes
+    return out
+
+
+def interpreted_run_prompt(interpreted: Optional[dict] = None) -> str:
+    """Prompt for [Run investigation] after the user confirms / edits scope."""
+    data = interpreted if isinstance(interpreted, dict) else {}
+    question = str(
+        data.get("interpreted_question") or data.get("question") or ""
+    ).strip() or "Investigate the main performance problem"
+    mode = str(data.get("mode") or data.get("kind") or "diagnose")
+    scopes = [str(s) for s in (data.get("scope") or []) if s]
+    scope_bit = ", ".join(scopes) if scopes else "execution, blocking"
+    fid = str(data.get("finding_id") or "").strip()
+    extra = f" finding_id={fid}." if fid else ""
+    return (
+        f"{question}\n\nInterpreted as {mode}. "
+        f"Investigation scope: {scope_bit}.{extra} "
+        "Call interpret_query only if the question is still ambiguous, "
+        "then investigate and verify jump:TIME evidence."
+    )
+
+
+def format_experiment_verdict(result: Any = None) -> str:
+    raw = result
+    if isinstance(result, dict):
+        raw = result.get("result") or result.get("verdict") or ""
+    key = str(raw or "").strip().upper()
+    return {
+        "VALIDATED": "Hypothesis validated",
+        "DISPROVED": "Hypothesis disproved",
+        "PARTIALLY VALIDATED": "Hypothesis partially validated",
+    }.get(key, "Inconclusive")
+
+
+def apply_experiment_to_hypotheses(
+    hypotheses: Optional[Sequence[dict]] = None,
+    result: Any = None,
+) -> List[Dict[str, Any]]:
+    """Mark open hypotheses supported / rejected from a validate_experiment result."""
+    raw = result.get("result") if isinstance(result, dict) else result
+    key = str(raw or "").strip().upper()
+    status = (
+        "supported" if key == "VALIDATED"
+        else "rejected" if key == "DISPROVED"
+        else ""
+    )
+    out: List[Dict[str, Any]] = []
+    for h in hypotheses or []:
+        if not isinstance(h, dict):
+            continue
+        item = dict(h)
+        if status and str(item.get("status") or "").lower() in (
+            "", "possible", "need_evidence", "needs_evidence", "untested",
+        ):
+            item["status"] = status
+        out.append(item)
+    return out
+
+
+def parse_user_historical_knowledge(raw: Any) -> List[Dict[str, Any]]:
+    if isinstance(raw, list):
+        items = raw
+    else:
+        text = str(raw or "").strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        items = parsed if isinstance(parsed, list) else []
+    out: List[Dict[str, Any]] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        task = str(it.get("task") or "").strip()
+        issue = str(it.get("issue") or it.get("previous_issue") or it.get("title") or "").strip()
+        if not (task or issue):
+            continue
+        metrics = _metrics_from_mapping(it.get("metrics") if isinstance(it.get("metrics"), dict) else it)
+        out.append({
+            "task": task,
+            "issue": issue,
+            "fix": str(it.get("fix") or it.get("known_fix") or "").strip(),
+            "build": str(it.get("build") or it.get("last_occurrence") or "").strip(),
+            "keywords": list(it.get("keywords") or []),
+            "metrics": metrics,
+        })
+    return out
+
+
+def dump_user_historical_knowledge(items: Optional[Sequence[dict]] = None) -> str:
+    return json.dumps(parse_user_historical_knowledge(list(items or [])), ensure_ascii=False)
+
+
+def new_user_historical_entry(
+    finding: Optional[dict] = None,
+    extras: Optional[dict] = None,
+) -> Dict[str, Any]:
+    f = finding if isinstance(finding, dict) else {}
+    extra = extras if isinstance(extras, dict) else {}
+    task = str(extra.get("task") or f.get("task") or "").strip()
+    issue = str(
+        extra.get("issue") or extra.get("title") or f.get("title") or ""
+    ).strip() or "Saved finding"
+    metrics = _metrics_from_mapping(extra.get("metrics") if isinstance(extra.get("metrics"), dict) else extra)
+    if not metrics:
+        metrics = _metrics_from_mapping(f)
+    return {
+        "task": task,
+        "issue": issue,
+        "fix": str(extra.get("fix") or "").strip(),
+        "build": str(extra.get("build") or "").strip(),
+        "keywords": [w for w in re.split(r"\W+", issue.lower()) if len(w) > 3][:6],
+        "metrics": metrics,
+    }
+
+
+_HISTORICAL_METRIC_KEYS: Tuple[str, ...] = (
+    "migrations", "migration_rate", "blocking", "wcet",
+)
+
+
+def _metrics_from_mapping(src: Any) -> Dict[str, float]:
+    data = src if isinstance(src, dict) else {}
+    out: Dict[str, float] = {}
+    for key in _HISTORICAL_METRIC_KEYS:
+        try:
+            if data.get(key) is None:
+                continue
+            out[key] = float(data.get(key))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def rate_flags_from_metrics(
+    current: Optional[dict] = None,
+    typical: Optional[dict] = None,
+) -> List[str]:
+    """Typical vs current rate lines (e.g. migrations 47 vs typical 12)."""
+    cur = _metrics_from_mapping(current)
+    hist = _metrics_from_mapping(typical)
+    flags: List[str] = []
+    for key in _HISTORICAL_METRIC_KEYS:
+        if key not in cur or key not in hist or hist[key] == 0:
+            continue
+        ratio = cur[key] / hist[key]
+        if ratio >= 2.0:
+            flags.append(f"{key} {cur[key]:g} vs typical {hist[key]:g} (×{ratio:.1f})")
+    return flags
+
+
+CAPABILITY_CHAT_PROBE = 'Reply with JSON only: {"ok":true}'
+
+CAPABILITY_PROBE_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "btf_ping",
+        "description": "Capability probe. Call this once if you support tools.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+CAPABILITY_PROBE_TOOL_PONG: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "btf_pong",
+        "description": "Second capability probe. Call after btf_ping if you can chain tools.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+
+def capability_probe_body(model: str) -> Dict[str, Any]:
+    return {
+        "model": str(model or "").strip(),
+        "stream": False,
+        "messages": [{
+            "role": "user",
+            "content": (
+                "If you can call tools, call btf_ping then btf_pong. "
+                "Otherwise reply PONG."
+            ),
+        }],
+        "tools": [CAPABILITY_PROBE_TOOL, CAPABILITY_PROBE_TOOL_PONG],
+        "max_tokens": 64,
+    }
+
+
+def structured_output_from_text(text: str) -> bool:
+    src = str(text or "").strip()
+    if src.startswith("```"):
+        src = re.sub(r"^```(?:json)?\s*", "", src, flags=re.IGNORECASE)
+        src = re.sub(r"\s*```$", "", src)
+    try:
+        return isinstance(json.loads(src), dict)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        m = re.search(r"\{[^{}]+\}", src)
+        if not m:
+            return False
+        try:
+            return isinstance(json.loads(m.group(0)), dict)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return False
+
+
+def count_tool_calls(body: Any) -> Optional[int]:
+    if not isinstance(body, dict):
+        return None
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(msg, dict):
+        return None
+    calls = msg.get("tool_calls")
+    n = len(calls) if isinstance(calls, list) else 0
+    if msg.get("function_call"):
+        n = max(n, 1)
+    if n:
+        return n
+    if str(msg.get("content") or "").strip():
+        return 0
+    return None
+
+
+def merge_live_capability(
+    cap: Optional[dict] = None,
+    *,
+    chat_text: str = "",
+    tool_body: Any = None,
+    tool_ok: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Overlay live Test-connection results on the heuristic capability card."""
+    out = dict(cap) if isinstance(cap, dict) else {}
+    if structured_output_from_text(chat_text):
+        out["structured_output"] = "yes"
+        out["source"] = "live"
+    elif str(chat_text or "").strip():
+        out["structured_output"] = "no"
+        out["source"] = "live"
+    n = count_tool_calls(tool_body) if tool_body is not None else None
+    if tool_ok is True or (n is not None and n >= 1):
+        out["tool_calling"] = "yes"
+        out["multi_tool_chaining"] = "yes" if (n or 0) >= 2 else "partial"
+        out["source"] = "live"
+    elif tool_ok is False or n == 0:
+        out["tool_calling"] = "no"
+        out["multi_tool_chaining"] = "no"
+        out["source"] = "live"
+    return out
+
+
+def tool_calling_from_chat_response(body: Any) -> Optional[bool]:
+    """True if the chat response issued a tool call; False if text-only; None if empty."""
+    if not isinstance(body, dict):
+        return None
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(msg, dict):
+        return None
+    calls = msg.get("tool_calls") or msg.get("function_call")
+    if calls:
+        return True
+    if str(msg.get("content") or "").strip():
+        return False
+    return None
+
+
 def builtin_investigation_templates() -> List[Dict[str, Any]]:
     """Reusable tool sequences teams can run as 'My Investigation'."""
     return [
@@ -18314,18 +18838,7 @@ def match_historical_knowledge(
     )
     if not isinstance(prev, dict):
         prev = {}
-    flags: List[str] = []
-    for key in ("migrations", "migration_rate", "blocking", "wcet"):
-        try:
-            a = float(cur.get(key))
-            b = float(prev.get(key))
-        except (TypeError, ValueError):
-            continue
-        if b == 0:
-            continue
-        ratio = a / b
-        if ratio >= 2.0:
-            flags.append(f"{key} {a:g} vs typical {b:g} (×{ratio:.1f})")
+    flags = rate_flags_from_metrics(cur, prev)
     issue = str(prev.get("issue") or prev.get("previous_issue") or "")
     fix = str(prev.get("fix") or prev.get("known_fix") or "")
     build = str(prev.get("build") or prev.get("last_occurrence") or "")
@@ -18337,6 +18850,8 @@ def match_historical_knowledge(
         "known_fix": fix,
         "last_occurrence": build,
         "flags": flags,
+        "typical": _metrics_from_mapping(prev),
+        "current": _metrics_from_mapping(cur),
         "resembles_previous": resembles,
         "message": (
             f"This resembles the {issue} issue"
@@ -18388,15 +18903,42 @@ def historical_knowledge_for_finding(
     *,
     history: Optional[dict] = None,
     current: Optional[dict] = None,
+    user_catalog: Optional[Sequence[dict]] = None,
 ) -> Dict[str, Any]:
-    """Match stored history, then the builtin catalog, for one finding."""
+    """Match user store, then baseline history, then the builtin catalog."""
     finding = finding if isinstance(finding, dict) else {}
     task = str(finding.get("task") or "")
     cur = current if isinstance(current, dict) else {}
+    blob = f"{finding.get('title') or ''} {finding.get('text') or ''} {task}".lower()
+    for item in parse_user_historical_knowledge(list(user_catalog or [])):
+        item_task = str(item.get("task") or "").strip()
+        keys = [str(k).lower() for k in (item.get("keywords") or []) if k]
+        if (item_task and item_task.lower() == task.lower()) or (
+            keys and any(k in blob for k in keys)
+        ) or (item.get("issue") and str(item.get("issue")).lower() in blob):
+            issue = str(item.get("issue") or "")
+            fix = str(item.get("fix") or "")
+            build = str(item.get("build") or "")
+            typical = item.get("metrics") if isinstance(item.get("metrics"), dict) else {}
+            flags = rate_flags_from_metrics(cur, typical)
+            return {
+                "ok": True,
+                "task": task or item_task,
+                "previous_issue": issue,
+                "known_fix": fix,
+                "last_occurrence": build,
+                "flags": flags,
+                "typical": typical,
+                "current": _metrics_from_mapping(cur),
+                "resembles_previous": True,
+                "source": "user",
+                "message": f"This resembles the {issue} issue"
+                + (f" seen in {build}" if build else "")
+                + (f" — known fix: {fix}" if fix else ""),
+            }
     hit = match_historical_knowledge(task, current=cur, history=history)
     if hit.get("previous_issue") or hit.get("flags"):
         return hit
-    blob = f"{finding.get('title') or ''} {finding.get('text') or ''} {task}".lower()
     for item in builtin_historical_catalog():
         if any(k in blob for k in (item.get("keywords") or ())):
             issue = str(item.get("issue") or "")
@@ -18837,6 +19379,8 @@ def infer_model_capability(
     tool_call_ok: Optional[bool] = None,
     chat_ok: bool = True,
     endpoint_is_local: bool = True,
+    chat_text: str = "",
+    tool_body: Any = None,
 ) -> Dict[str, Any]:
     cap = infer_model_capabilities(
         model_name, endpoint_is_local=endpoint_is_local,
@@ -18846,7 +19390,9 @@ def infer_model_capability(
         cap["tool_calling"] = "yes"
     elif tool_call_ok is False:
         cap["tool_calling"] = "partial"
-    return cap
+    return merge_live_capability(
+        cap, chat_text=chat_text, tool_body=tool_body, tool_ok=tool_call_ok,
+    )
 
 
 def format_capability_report(cap: Optional[Dict[str, Any]] = None) -> str:
@@ -18884,6 +19430,312 @@ def format_benchmark_report(run_id: str, rows: Sequence[Dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _xml_text(el: Any) -> str:
+    return (el.text or "").strip() if el is not None else ""
+
+
+def _xml_child(parent: Any, *names: str) -> Any:
+    if parent is None:
+        return None
+    for name in names:
+        found = parent.find(name)
+        if found is not None:
+            return found
+    return None
+
+
+def resolve_benchmark_api_key(*, text: str = "", env: str = "") -> str:
+    """Named env, else XML text, else shared env fallbacks."""
+    from .ai_assistant import normalize_api_key, read_ai_env_key, resolve_ai_api_key
+
+    env_name = str(env or "").strip()
+    if env_name:
+        got = read_ai_env_key((env_name,))
+        if got:
+            return got
+    got = normalize_api_key(text)
+    if got:
+        return got
+    return resolve_ai_api_key("")
+
+
+def _parse_benchmark_endpoint_xml(el: Any, defaults: Optional[dict] = None) -> Dict[str, Any]:
+    from .ai_assistant import (
+        normalize_ai_base_url,
+        parse_ai_tls_verify,
+    )
+
+    out = dict(defaults or {})
+    if not out.get("base_url"):
+        out["base_url"] = ""
+    if "tls_verify" not in out:
+        out["tls_verify"] = True
+    if "api_key" not in out:
+        out["api_key"] = ""
+    if "api_key_env" not in out:
+        out["api_key_env"] = ""
+    if "preset" not in out:
+        out["preset"] = ""
+    if "timeout_s" not in out:
+        out["timeout_s"] = 0.0
+    if el is None:
+        return out
+    url_el = _xml_child(el, "base-url", "base_url", "url")
+    url = _xml_text(url_el) or str(el.get("base-url") or el.get("base_url") or "").strip()
+    if url:
+        out["base_url"] = normalize_ai_base_url(url)
+    tls_raw = None
+    tls_el = _xml_child(el, "tls-verify", "tls_verify")
+    if tls_el is not None:
+        tls_raw = _xml_text(tls_el) or tls_el.get("value")
+    if el.get("tls-verify") is not None:
+        tls_raw = el.get("tls-verify")
+    elif el.get("tls_verify") is not None:
+        tls_raw = el.get("tls_verify")
+    if tls_raw is not None:
+        out["tls_verify"] = parse_ai_tls_verify(tls_raw, default=True)
+    if str(el.get("insecure") or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    ):
+        out["tls_verify"] = False
+    key_el = _xml_child(el, "api-key", "api_key")
+    env_name = ""
+    key_text = ""
+    if key_el is not None:
+        env_name = str(key_el.get("env") or "").strip()
+        key_text = _xml_text(key_el)
+    env_name = env_name or str(el.get("api-key-env") or el.get("api_key_env") or "").strip()
+    if env_name or key_text:
+        out["api_key_env"] = env_name
+        out["api_key"] = resolve_benchmark_api_key(text=key_text, env=env_name)
+    preset_el = _xml_child(el, "preset")
+    preset = _xml_text(preset_el) or str(el.get("preset") or "").strip()
+    if preset:
+        out["preset"] = preset
+    to_el = _xml_child(el, "timeout-s", "timeout_s", "timeout")
+    to_raw = _xml_text(to_el) or str(el.get("timeout-s") or el.get("timeout_s") or "").strip()
+    if to_raw:
+        try:
+            out["timeout_s"] = float(to_raw)
+        except ValueError:
+            pass
+    return out
+
+
+def load_benchmark_suite_xml(path: Any) -> Dict[str, Any]:
+    """Load a live ``ai-test`` suite from XML (models, URL, TLS, API key)."""
+    import xml.etree.ElementTree as ET
+
+    src = Path(path)
+    if not src.is_file():
+        raise FileNotFoundError(f"benchmark suite not found: {src}")
+    try:
+        root = ET.parse(str(src)).getroot()
+    except ET.ParseError as exc:
+        raise ValueError(f"invalid benchmark XML {src}: {exc}") from exc
+    tag = str(root.tag or "").rsplit("}", 1)[-1].lower()
+    if tag not in ("ai-benchmark", "benchmark", "suite"):
+        raise ValueError(
+            f"benchmark XML root must be <ai-benchmark> (got <{root.tag}>)"
+        )
+    xml_dir = src.parent
+    cwd = Path.cwd()
+
+    def _resolve(value: str) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        p = Path(raw)
+        if p.is_absolute():
+            return str(p)
+        for base in (cwd, xml_dir):
+            cand = (base / raw).resolve()
+            if cand.exists():
+                return str(cand)
+        return str((cwd / raw).resolve())
+
+    dataset_el = _xml_child(root, "dataset")
+    output_el = _xml_child(root, "output")
+    fail_el = _xml_child(root, "fail-under", "fail_under")
+    fail_under = 0
+    fail_raw = _xml_text(fail_el)
+    if fail_raw:
+        try:
+            fail_under = int(fail_raw)
+        except ValueError:
+            fail_under = 0
+    defaults = _parse_benchmark_endpoint_xml(_xml_child(root, "endpoint", "defaults"))
+    models_el = _xml_child(root, "models")
+    model_nodes = list((models_el if models_el is not None else root).findall("model"))
+    models: List[Dict[str, Any]] = []
+    for node in model_nodes:
+        mid = str(node.get("id") or node.get("name") or _xml_text(node) or "").strip()
+        if not mid:
+            continue
+        ep = _parse_benchmark_endpoint_xml(node, defaults)
+        if not ep.get("base_url"):
+            raise ValueError(f"model {mid!r} has no base-url (set <endpoint> or per-model)")
+        models.append({
+            "id": mid,
+            "base_url": ep["base_url"],
+            "tls_verify": bool(ep.get("tls_verify", True)),
+            "api_key": str(ep.get("api_key") or ""),
+            "api_key_env": str(ep.get("api_key_env") or ""),
+            "preset": str(ep.get("preset") or ""),
+            "timeout_s": float(ep.get("timeout_s") or 0.0),
+        })
+    if not models:
+        raise ValueError("benchmark XML has no <model id=...> entries")
+    dataset = _xml_text(dataset_el) or "tests/ai"
+    return {
+        "path": str(src.resolve()),
+        "dataset": _resolve(dataset),
+        "dataset_raw": dataset,
+        "fail_under": fail_under,
+        "output": _xml_text(output_el),
+        "defaults": defaults,
+        "models": models,
+    }
+
+
+def parse_live_benchmark_models(models_raw: str) -> List[str]:
+    """Comma-separated model ids from ``--models`` (filters the suite XML)."""
+    return [m.strip() for m in str(models_raw or "").split(",") if m.strip()]
+
+
+def select_benchmark_suite_models(
+    suite: dict,
+    models_raw: str = "",
+) -> List[Dict[str, Any]]:
+    """Return suite model dicts, optionally filtered by ``--models`` ids."""
+    models = list((suite or {}).get("models") or [])
+    want = parse_live_benchmark_models(models_raw)
+    if not want:
+        return models
+    by_id = {str(m.get("id") or ""): m for m in models}
+    out: List[Dict[str, Any]] = []
+    missing: List[str] = []
+    for mid in want:
+        if mid in by_id:
+            out.append(by_id[mid])
+        else:
+            missing.append(mid)
+    if missing:
+        known = ", ".join(by_id) or "(none)"
+        raise ValueError(
+            f"model id(s) not in suite XML: {', '.join(missing)} (have {known})"
+        )
+    return out
+
+
+def benchmark_model_category(model: str) -> str:
+    low = str(model or "").lower()
+    if "gemini" in low:
+        if "flash-lite" in low or "flash_lite" in low:
+            return "Cloud / fast"
+        if "pro" in low:
+            return "Cloud / frontier"
+        return "Cloud"
+    if "gpt-" in low or "gpt4" in low:
+        return "Cloud"
+    if "phi4" in low or "phi-4" in low:
+        return "Local / historical baseline"
+    if "35b" in low or "a3b" in low:
+        return "Local / experimental"
+    if any(tok in low for tok in ("27b", "26b", "14b", "32b")):
+        return "Local / high-quality"
+    return "Local / practical"
+
+
+def benchmark_prompt_context(case: dict) -> str:
+    """Catalog-only Findings text for a live case (does not leak expected labels)."""
+    catalog = case.get("catalog") if isinstance(case.get("catalog"), dict) else {}
+    tasks = ", ".join(str(t) for t in (catalog.get("tasks") or []) if str(t).strip())
+    times = catalog.get("times") or []
+    jumps = ", ".join(f"jump:{t}" for t in times)
+    lo, hi = catalog.get("cursor_lo"), catalog.get("cursor_hi")
+    lines = [
+        "Benchmark investigation. Use only this catalog.",
+        f"Trace: {case.get('trace') or ''}",
+        f"Known tasks: {tasks or '(none)'}",
+    ]
+    if lo is not None and hi is not None:
+        lines.append(f"Cursor region window: jump:{lo} … jump:{hi}")
+    if jumps:
+        lines.append(f"Evidence times: {jumps}")
+    lines.append(
+        "Call an allowed investigation tool if needed. "
+        "Cite jump:TIME and Task[id] from the catalog. "
+        "State confidence (High / Medium / Low). "
+        "Do not invent tasks, metrics, or timestamps."
+    )
+    return "\n".join(lines)
+
+
+def score_benchmark_response(
+    case: dict,
+    *,
+    response: str,
+    tools: Optional[Sequence[str]] = None,
+    fail_under: int = 0,
+    elapsed_s: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Score one case from a model (or fixture) reply."""
+    expected = case.get("expected") if isinstance(case.get("expected"), dict) else case
+    catalog = case.get("catalog") if isinstance(case.get("catalog"), dict) else {}
+    report = validate_ai_response(
+        response,
+        known_tasks=catalog.get("tasks"),
+        known_times=catalog.get("times"),
+        cursor_lo=catalog.get("cursor_lo"),
+        cursor_hi=catalog.get("cursor_hi"),
+    )
+    blob = str(response or "").lower()
+    got_findings = [
+        ft for ft in (expected.get("finding_types") or [])
+        if str(ft).lower() in blob
+    ]
+    scored = score_benchmark_case(
+        expected,
+        actual_finding_ids=got_findings,
+        actual_tasks=[
+            str(c.get("value")) for c in (report.get("claims") or [])
+            if isinstance(c, dict) and c.get("kind") == "task"
+        ],
+        actual_tools=list(tools or []),
+        actual_conclusion=response,
+        validation=report,
+    )
+    scored["id"] = case.get("id") or expected.get("id")
+    floor = int(expected.get("pass_under") or fail_under or 70)
+    scored["pass"] = int(scored.get("overall") or 0) >= floor and bool(
+        report.get("ok", True) or not (expected.get("forbidden") or {})
+    )
+    if expected.get("forbidden", {}).get("invented_task_names") and not report.get("ok"):
+        invented = any(
+            c.get("kind") == "task" and not c.get("ok")
+            for c in (report.get("claims") or [])
+            if isinstance(c, dict)
+        )
+        if invented:
+            scored["pass"] = False
+    if expected.get("forbidden", {}).get("out_of_scope_timestamps"):
+        oos = any(
+            c.get("kind") == "jump" and not c.get("ok")
+            for c in (report.get("claims") or [])
+            if isinstance(c, dict)
+        )
+        if oos:
+            scored["pass"] = False
+    if fail_under and int(scored.get("overall") or 0) < int(fail_under):
+        scored["pass"] = False
+    scored["validation"] = report
+    if elapsed_s is not None:
+        scored["elapsed_s"] = round(float(elapsed_s), 2)
+    scored["tools"] = list(tools or [])
+    return scored
+
+
 def run_offline_benchmark(
     dataset_path: Any,
     *,
@@ -18894,85 +19746,228 @@ def run_offline_benchmark(
     cases = load_benchmark_dataset(str(dataset_path))
     rows: List[Dict[str, Any]] = []
     for case in cases:
-        expected = case.get("expected") if isinstance(case.get("expected"), dict) else case
         actual = case.get("actual") if isinstance(case.get("actual"), dict) else {}
         response = str(actual.get("response") or case.get("response") or "")
-        catalog = actual.get("catalog") or case.get("catalog") or {}
-        report = validate_ai_response(
-            response,
-            known_tasks=catalog.get("tasks"),
-            known_times=catalog.get("times"),
-            cursor_lo=catalog.get("cursor_lo"),
-            cursor_hi=catalog.get("cursor_hi"),
-        )
-        scored = score_benchmark_case(
-            expected,
-            actual_finding_ids=list(expected.get("finding_types") or []) if (
-                any(
-                    str(ft).lower() in response.lower()
-                    for ft in (expected.get("finding_types") or [])
-                )
-            ) else [],
-            actual_tasks=report.get("claims") and [
-                str(c.get("value")) for c in report["claims"]
-                if isinstance(c, dict) and c.get("kind") == "task"
-            ] or [],
-            actual_tools=list(actual.get("tools") or case.get("tools") or []),
-            actual_conclusion=response,
-            validation=report,
-        )
-        # If finding types appear in the response, treat them as identified.
-        if expected.get("finding_types"):
-            blob = response.lower()
-            got = [
-                ft for ft in expected["finding_types"]
-                if str(ft).lower() in blob
-            ]
-            scored = score_benchmark_case(
-                expected,
-                actual_finding_ids=got,
-                actual_tasks=[
-                    str(c.get("value")) for c in (report.get("claims") or [])
-                    if isinstance(c, dict) and c.get("kind") == "task"
-                ],
-                actual_tools=list(actual.get("tools") or case.get("tools") or []),
-                actual_conclusion=response,
-                validation=report,
-            )
-        scored["id"] = case.get("id") or expected.get("id")
-        scored["pass"] = (
-            int(scored.get("overall") or 0) >= int(expected.get("pass_under") or fail_under or 70)
-            and bool(report.get("ok", True) or not (expected.get("forbidden") or {}))
-        )
-        if expected.get("forbidden", {}).get("invented_task_names") and not report.get("ok"):
-            invented = any(
-                c.get("kind") == "task" and not c.get("ok")
-                for c in (report.get("claims") or [])
-                if isinstance(c, dict)
-            )
-            if invented:
-                scored["pass"] = False
-        if expected.get("forbidden", {}).get("out_of_scope_timestamps"):
-            oos = any(
-                c.get("kind") == "jump" and not c.get("ok")
-                for c in (report.get("claims") or [])
-                if isinstance(c, dict)
-            )
-            if oos:
-                scored["pass"] = False
-        if fail_under and int(scored.get("overall") or 0) < int(fail_under):
-            scored["pass"] = False
-        scored["validation"] = report
-        rows.append(scored)
+        tools = list(actual.get("tools") or case.get("tools") or [])
+        rows.append(score_benchmark_response(
+            case, response=response, tools=tools, fail_under=fail_under,
+        ))
     run_id = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
     failed = [r for r in rows if not r.get("pass")]
     return {
         "run_id": run_id,
+        "mode": "offline",
         "rows": rows,
         "failed": failed,
         "report": format_benchmark_report(run_id, rows),
         "ok": not failed,
     }
+
+
+def run_live_benchmark(
+    dataset_path: Any,
+    models: Sequence[str],
+    *,
+    complete: Callable[..., Dict[str, Any]],
+    fail_under: int = 0,
+) -> Dict[str, Any]:
+    """Score live model replies. *complete(query, findings_text, model, case)*."""
+    from datetime import datetime, timezone
+    ids = [str(m).strip() for m in (models or []) if str(m).strip()]
+    if not ids:
+        raise ValueError("live benchmark needs at least one model id")
+    cases = load_benchmark_dataset(str(dataset_path))
+    run_id = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
+    per_model: List[Dict[str, Any]] = []
+    for model in ids:
+        rows: List[Dict[str, Any]] = []
+        error = ""
+        for case in cases:
+            query = str(case.get("question") or "").strip() or "Investigate the main problem."
+            findings = benchmark_prompt_context(case)
+            try:
+                turn = complete(query, findings, model, case) or {}
+            except Exception as exc:
+                error = str(exc)
+                turn = {"content": "", "tool_calls": [], "elapsed_s": 0, "error": error}
+            if not isinstance(turn, dict):
+                turn = {"content": str(turn or "")}
+            content = str(turn.get("content") or "")
+            raw_calls = turn.get("tool_calls") or []
+            names: List[str] = []
+            for c in raw_calls:
+                if isinstance(c, dict):
+                    name = str(c.get("name") or "")
+                    if name:
+                        names.append(name)
+                elif c:
+                    names.append(str(c))
+            row = score_benchmark_response(
+                case,
+                response=content,
+                tools=names,
+                fail_under=fail_under,
+                elapsed_s=turn.get("elapsed_s"),
+            )
+            if turn.get("error"):
+                row["error"] = str(turn.get("error"))
+                row["pass"] = False
+            rows.append(row)
+        failed = [r for r in rows if not r.get("pass")]
+        per_model.append({
+            "model": model,
+            "category": benchmark_model_category(model),
+            "run_id": run_id,
+            "rows": rows,
+            "failed": failed,
+            "report": format_benchmark_report(f"{run_id}-{model}", rows),
+            "ok": not failed and not error,
+            "error": error,
+        })
+    return {
+        "run_id": run_id,
+        "mode": "live",
+        "models": per_model,
+        "ok": all(m.get("ok") for m in per_model),
+        "report": "".join(m["report"] for m in per_model),
+    }
+
+
+def format_benchmark_markdown(
+    *,
+    offline: Optional[dict] = None,
+    live: Optional[dict] = None,
+    dataset: str = "tests/ai",
+) -> str:
+    """Markdown report for AI_BENCHMARK.md (offline scorer + optional live models)."""
+    from datetime import datetime, timezone
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines = [
+        "# AI Benchmark results",
+        "",
+        f"Generated: {stamp}",
+        f"Dataset: `{dataset}`",
+        "",
+        "Live `--config` suite XML scores a real endpoint. Offline rows score the canned "
+        "`response` fields in `dataset.json` and gate the scorer, not a model.",
+        "",
+    ]
+    part_keys = (
+        "finding", "evidence", "tool_use", "root_cause", "calibration", "safety",
+    )
+
+    def _table(rows: Sequence[dict]) -> List[str]:
+        out = [
+            "| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---|",
+        ]
+        for row in rows:
+            parts = row.get("parts") or {}
+            flag = "ERROR" if row.get("error") else (
+                "PASS" if row.get("pass") else "FAIL"
+            )
+            cells = [
+                str(row.get("id") or "?"),
+                str(row.get("overall") or 0),
+            ]
+            cells.extend(str(parts.get(k, "")) for k in part_keys)
+            cells.append(flag)
+            out.append("| " + " | ".join(cells) + " |")
+        if rows:
+            avg = int(round(sum(int(r.get("overall") or 0) for r in rows) / len(rows)))
+            out.extend(["", f"**Overall {avg}**"])
+        return out
+
+    if offline:
+        lines.extend([
+            "## Offline fixture scorer",
+            "",
+            f"Run `{offline.get('run_id') or ''}` — no live model.",
+            "",
+        ])
+        lines.extend(_table(offline.get("rows") or []))
+        lines.append("")
+    if live:
+        blocks = list(live.get("models") or [])
+        if blocks:
+            lines.extend([
+                "## Comparison",
+                "",
+                "| Model | Category | Overall | Pass | Mean latency |",
+                "|---|---|---:|---:|---:|",
+            ])
+            for block in blocks:
+                rows = list(block.get("rows") or [])
+                n = len(rows)
+                avg = int(round(sum(int(r.get("overall") or 0) for r in rows) / n)) if n else 0
+                passed = sum(1 for r in rows if r.get("pass"))
+                lat = [
+                    float(r.get("elapsed_s") or 0)
+                    for r in rows if r.get("elapsed_s") is not None
+                ]
+                mean_lat = f"{sum(lat) / len(lat):.1f}s" if lat else "—"
+                lines.append(
+                    f"| `{block.get('model') or '?'}` | "
+                    f"{block.get('category') or ''} | {avg} | "
+                    f"{passed}/{n} | {mean_lat} |"
+                )
+            lines.extend([
+                "",
+                "| Model | Finding | Evidence | Tool use | Root cause | Calibration | Safety |",
+                "|---|---:|---:|---:|---:|---:|---:|",
+            ])
+            for block in blocks:
+                rows = list(block.get("rows") or [])
+                n = max(len(rows), 1)
+                parts_avg = {}
+                for key in part_keys:
+                    parts_avg[key] = int(round(sum(
+                        int((r.get("parts") or {}).get(key) or 0) for r in rows
+                    ) / n)) if rows else 0
+                cells = [f"`{block.get('model') or '?'}`"]
+                cells.extend(str(parts_avg[k]) for k in part_keys)
+                lines.append("| " + " | ".join(cells) + " |")
+            lines.append("")
+        lines.extend(["## Live models", ""])
+        for block in live.get("models") or []:
+            model = str(block.get("model") or "")
+            cat = str(block.get("category") or benchmark_model_category(model))
+            lines.extend([
+                f"### `{model}`",
+                "",
+                f"{cat}. Run `{block.get('run_id') or live.get('run_id') or ''}`.",
+                "",
+            ])
+            if block.get("error"):
+                lines.extend([f"Error: {block['error']}", ""])
+            lines.extend(_table(block.get("rows") or []))
+            row_errors = [
+                (str(r.get("id") or "?"), str(r.get("error") or "").strip())
+                for r in (block.get("rows") or [])
+                if r.get("error")
+            ]
+            if row_errors:
+                first = row_errors[0][1]
+                n_err = len(row_errors)
+                snippet = first.split("\n", 1)[0][:240]
+                lines.extend([
+                    "",
+                    f"{n_err}/{len(block.get('rows') or [])} cases returned an API error "
+                    f"(first: {snippet}).",
+                ])
+            lat = [
+                float(r.get("elapsed_s") or 0)
+                for r in (block.get("rows") or [])
+                if r.get("elapsed_s") is not None
+            ]
+            if lat:
+                avg_s = sum(lat) / len(lat)
+                lines.extend(["", f"Mean latency: **{avg_s:.1f}s** / case."])
+            lines.append("")
+    if not offline and not live:
+        lines.append("_No runs recorded._")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
 # ===========================================================================
 # ai_investigation
 # ===========================================================================
@@ -20162,11 +21157,24 @@ def extract_evidence_panel_payload(
         elif mode:
             payload["subtitle"] = mode
         payload["confidence"] = "Medium"
+        payload["interpreted"] = {
+            "interpreted_question": payload["conclusion"],
+            "kind": data.get("kind") or mode,
+            "mode": mode,
+            "scope": scopes,
+            "finding_id": str(data.get("finding_id") or ""),
+            "task": str(data.get("task") or ""),
+        }
     elif name == "validate_experiment" or data.get("result") in (
         "VALIDATED", "PARTIALLY VALIDATED", "DISPROVED", "INCONCLUSIVE",
     ):
         result_label = str(data.get("result") or "INCONCLUSIVE")
         payload["conclusion"] = result_label
+        payload["experiment"] = {
+            "result": result_label,
+            "verdict": format_experiment_verdict(result_label),
+            "rows": list(data.get("rows") or []),
+        }
         payload["checks"] = [
             {
                 "label": str(row.get("metric") or "metric"),
@@ -20294,6 +21302,96 @@ def format_hypothesis_action_links(hyp_id: str, labels: Dict[str, str]) -> str:
     ):
         parts.append(f"[{labels.get(key, fallback)}]({btf_hyp_href(action, hid)})")
     return " · ".join(parts)
+
+
+_BTF_SCOPE_HREF_RE = re.compile(
+    r"btfscope:(?://)?([a-z_]+)/([^?\s#]*)",
+    re.IGNORECASE,
+)
+_BTF_EXP_HREF_RE = re.compile(
+    r"btfexp:(?://)?([a-z_]+)/([^?\s#]*)",
+    re.IGNORECASE,
+)
+_BTF_TOOL_HREF_RE = re.compile(
+    r"btftool:(?://)?([a-z_]+)/([^?\s#]*)",
+    re.IGNORECASE,
+)
+
+
+def btf_scope_href(action: str, key: str = "") -> str:
+    act = re.sub(r"[^a-z_]", "", str(action or "").lower()) or "run"
+    kid = re.sub(r"[^A-Za-z0-9_. -]", "", str(key or "all")).strip() or "all"
+    kid = kid.replace(" ", "_")
+    return f"btfscope:{act}/{kid}"
+
+
+def parse_btf_scope_href(href: Any) -> Tuple[str, str]:
+    m = _BTF_SCOPE_HREF_RE.search(str(href or ""))
+    if not m:
+        return "", ""
+    key = (m.group(2) or "all").replace("_", " ")
+    return m.group(1).lower(), key
+
+
+def format_scope_action_links(
+    interpreted: Optional[dict],
+    labels: Optional[Dict[str, str]] = None,
+) -> str:
+    """Markdown for interpret_query: scope toggles + Run / Edit."""
+    lab = labels if isinstance(labels, dict) else {}
+    data = interpreted if isinstance(interpreted, dict) else {}
+    scopes = [str(s) for s in (data.get("scope") or []) if s]
+    options = list(INVESTIGATION_SCOPE_OPTIONS)
+    for s in scopes:
+        if s not in options:
+            options.append(s)
+    lines: List[str] = []
+    question = str(data.get("interpreted_question") or "").strip()
+    if question:
+        lines.append(f"**{lab.get('interpreted', 'Interpreted question')}:** {question}")
+    lines.append("")
+    lines.append(f"**{lab.get('scope', 'Investigation scope')}**")
+    on_lab = lab.get("scope_on", "on")
+    off_lab = lab.get("scope_off", "off")
+    for opt in options:
+        active = opt in scopes
+        mark = "✓" if active else "○"
+        lines.append(
+            f"- {mark} {opt} "
+            f"[{on_lab if not active else off_lab}]({btf_scope_href('toggle', opt)})"
+        )
+    lines.append("")
+    lines.append(
+        f"[{lab.get('run_investigation', 'Run investigation')}]({btf_scope_href('run', 'all')}) "
+        f"[{lab.get('edit_scope', 'Edit scope')}]({btf_scope_href('edit', 'all')})"
+    )
+    return "\n".join(lines)
+
+
+def btf_exp_href(action: str, key: str = "all") -> str:
+    act = re.sub(r"[^a-z_]", "", str(action or "").lower()) or "save"
+    kid = re.sub(r"[^A-Za-z0-9_.-]", "", str(key or "all")) or "all"
+    return f"btfexp:{act}/{kid}"
+
+
+def parse_btf_exp_href(href: Any) -> Tuple[str, str]:
+    m = _BTF_EXP_HREF_RE.search(str(href or ""))
+    if not m:
+        return "", ""
+    return m.group(1).lower(), (m.group(2) or "all")
+
+
+def btf_tool_href(action: str, name: str = "") -> str:
+    act = re.sub(r"[^a-z_]", "", str(action or "").lower()) or "why"
+    kid = re.sub(r"[^A-Za-z0-9_.-]", "", str(name or "tool")) or "tool"
+    return f"btftool:{act}/{kid}"
+
+
+def parse_btf_tool_href(href: Any) -> Tuple[str, str]:
+    m = _BTF_TOOL_HREF_RE.search(str(href or ""))
+    if not m:
+        return "", ""
+    return m.group(1).lower(), (m.group(2) or "")
 
 
 # UI strings for Evidence / Reasoning and plan status. Keep in sync with
@@ -20529,6 +21627,28 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "need_evidence_action": "Need evidence",
         "test_action": "Test",
         "compare_action": "Compare hypotheses",
+        "interpreted": "Interpreted question",
+        "scope": "Investigation scope",
+        "run_investigation": "Run investigation",
+        "edit_scope": "Edit scope",
+        "experiment_result": "Experiment result",
+        "hypothesis_validated": "Hypothesis validated",
+        "hypothesis_disproved": "Hypothesis disproved",
+        "hypothesis_partial": "Hypothesis partially validated",
+        "save_knowledge": "Save to knowledge",
+        "scope_on": "on",
+        "scope_off": "off",
+        "quality_direct": "Direct evidence",
+        "quality_timeline": "Timeline correlation",
+        "quality_metric": "Metric correlation",
+        "quality_alternative": "Alternative tested",
+        "coverage_observed": "Directly observed",
+        "coverage_timeline": "Timeline verified",
+        "coverage_metric": "Metric verified",
+        "coverage_unverified": "Unverified assumptions",
+        "why_action": "Why?",
+        "typical_rate": "Typical rate",
+        "current_rate": "Current",
     },
     "Traditional Chinese (繁體中文)": {
         "quality": "證據品質",
@@ -20555,6 +21675,28 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "need_evidence_action": "需要證據",
         "test_action": "驗證",
         "compare_action": "比較假設",
+        "interpreted": "解讀後的問題",
+        "scope": "調查範圍",
+        "run_investigation": "開始調查",
+        "edit_scope": "編輯範圍",
+        "experiment_result": "實驗結果",
+        "hypothesis_validated": "假設已成立",
+        "hypothesis_disproved": "假設已排除",
+        "hypothesis_partial": "假設部分成立",
+        "save_knowledge": "存入知識庫",
+        "scope_on": "開",
+        "scope_off": "關",
+        "quality_direct": "直接證據",
+        "quality_timeline": "時間軸相關",
+        "quality_metric": "指標相關",
+        "quality_alternative": "已測替代假設",
+        "coverage_observed": "直接觀察",
+        "coverage_timeline": "時間軸已驗證",
+        "coverage_metric": "指標已驗證",
+        "coverage_unverified": "未驗證假設",
+        "why_action": "為何？",
+        "typical_rate": "典型速率",
+        "current_rate": "目前",
     },
     "Simplified Chinese (简体中文)": {
         "quality": "证据品质",
@@ -20581,6 +21723,28 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "need_evidence_action": "需要证据",
         "test_action": "验证",
         "compare_action": "比较假设",
+        "interpreted": "解读后的问题",
+        "scope": "调查范围",
+        "run_investigation": "开始调查",
+        "edit_scope": "编辑范围",
+        "experiment_result": "实验结果",
+        "hypothesis_validated": "假设已成立",
+        "hypothesis_disproved": "假设已排除",
+        "hypothesis_partial": "假设部分成立",
+        "save_knowledge": "存入知识库",
+        "scope_on": "开",
+        "scope_off": "关",
+        "quality_direct": "直接证据",
+        "quality_timeline": "时间轴相关",
+        "quality_metric": "指标相关",
+        "quality_alternative": "已测替代假设",
+        "coverage_observed": "直接观察",
+        "coverage_timeline": "时间轴已验证",
+        "coverage_metric": "指标已验证",
+        "coverage_unverified": "未验证假设",
+        "why_action": "为何？",
+        "typical_rate": "典型速率",
+        "current_rate": "当前",
     },
     "Japanese (日本語)": {
         "quality": "根拠の質",
@@ -20607,6 +21771,28 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "need_evidence_action": "根拠不足",
         "test_action": "検証",
         "compare_action": "仮説を比較",
+        "interpreted": "解釈した質問",
+        "scope": "調査範囲",
+        "run_investigation": "調査を実行",
+        "edit_scope": "範囲を編集",
+        "experiment_result": "実験結果",
+        "hypothesis_validated": "仮説は妥当",
+        "hypothesis_disproved": "仮説は否定",
+        "hypothesis_partial": "仮説は部分的に妥当",
+        "save_knowledge": "知見に保存",
+        "scope_on": "オン",
+        "scope_off": "オフ",
+        "quality_direct": "直接根拠",
+        "quality_timeline": "タイムライン相関",
+        "quality_metric": "指標相関",
+        "quality_alternative": "代替仮説を検証",
+        "coverage_observed": "直接観測",
+        "coverage_timeline": "タイムライン検証",
+        "coverage_metric": "指標検証",
+        "coverage_unverified": "未検証の仮定",
+        "why_action": "理由",
+        "typical_rate": "典型値",
+        "current_rate": "現在",
     },
     "Korean (한국어)": {
         "quality": "증거 품질",
@@ -20633,6 +21819,28 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "need_evidence_action": "증거 필요",
         "test_action": "검증",
         "compare_action": "가설 비교",
+        "interpreted": "해석된 질문",
+        "scope": "조사 범위",
+        "run_investigation": "조사 실행",
+        "edit_scope": "범위 편집",
+        "experiment_result": "실험 결과",
+        "hypothesis_validated": "가설 타당",
+        "hypothesis_disproved": "가설 기각",
+        "hypothesis_partial": "가설 부분 타당",
+        "save_knowledge": "지식에 저장",
+        "scope_on": "켜짐",
+        "scope_off": "꺼짐",
+        "quality_direct": "직접 증거",
+        "quality_timeline": "타임라인 상관",
+        "quality_metric": "메트릭 상관",
+        "quality_alternative": "대안 검증",
+        "coverage_observed": "직접 관측",
+        "coverage_timeline": "타임라인 검증",
+        "coverage_metric": "메트릭 검증",
+        "coverage_unverified": "미검증 가정",
+        "why_action": "이유",
+        "typical_rate": "전형 비율",
+        "current_rate": "현재",
     },
     "German": {
         "quality": "Belegqualität",
@@ -20659,6 +21867,28 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "need_evidence_action": "Belege nötig",
         "test_action": "Prüfen",
         "compare_action": "Hypothesen vergleichen",
+        "interpreted": "Interpretierte Frage",
+        "scope": "Untersuchungsbereich",
+        "run_investigation": "Untersuchung starten",
+        "edit_scope": "Bereich bearbeiten",
+        "experiment_result": "Experimentergebnis",
+        "hypothesis_validated": "Hypothese bestätigt",
+        "hypothesis_disproved": "Hypothese widerlegt",
+        "hypothesis_partial": "Hypothese teilweise bestätigt",
+        "save_knowledge": "Im Wissen speichern",
+        "scope_on": "an",
+        "scope_off": "aus",
+        "quality_direct": "Direkte Belege",
+        "quality_timeline": "Zeitlinienkorrelation",
+        "quality_metric": "Metrikkorrelation",
+        "quality_alternative": "Alternative geprüft",
+        "coverage_observed": "Direkt beobachtet",
+        "coverage_timeline": "Zeitlinie geprüft",
+        "coverage_metric": "Metrik geprüft",
+        "coverage_unverified": "Ungeprüfte Annahmen",
+        "why_action": "Warum?",
+        "typical_rate": "Typische Rate",
+        "current_rate": "Aktuell",
     },
     "French": {
         "quality": "Qualité des preuves",
@@ -20685,6 +21915,28 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "need_evidence_action": "Preuves nécessaires",
         "test_action": "Tester",
         "compare_action": "Comparer les hypothèses",
+        "interpreted": "Question interprétée",
+        "scope": "Périmètre d'investigation",
+        "run_investigation": "Lancer l'investigation",
+        "edit_scope": "Modifier le périmètre",
+        "experiment_result": "Résultat d'expérience",
+        "hypothesis_validated": "Hypothèse validée",
+        "hypothesis_disproved": "Hypothèse infirmée",
+        "hypothesis_partial": "Hypothèse partiellement validée",
+        "save_knowledge": "Enregistrer dans les connaissances",
+        "scope_on": "oui",
+        "scope_off": "non",
+        "quality_direct": "Preuve directe",
+        "quality_timeline": "Corrélation temporelle",
+        "quality_metric": "Corrélation métrique",
+        "quality_alternative": "Alternative testée",
+        "coverage_observed": "Directement observé",
+        "coverage_timeline": "Chronologie vérifiée",
+        "coverage_metric": "Métrique vérifiée",
+        "coverage_unverified": "Hypothèses non vérifiées",
+        "why_action": "Pourquoi ?",
+        "typical_rate": "Taux typique",
+        "current_rate": "Actuel",
     },
     "Spanish": {
         "quality": "Calidad de evidencia",
@@ -20711,6 +21963,28 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "need_evidence_action": "Falta evidencia",
         "test_action": "Probar",
         "compare_action": "Comparar hipótesis",
+        "interpreted": "Pregunta interpretada",
+        "scope": "Alcance de investigación",
+        "run_investigation": "Ejecutar investigación",
+        "edit_scope": "Editar alcance",
+        "experiment_result": "Resultado del experimento",
+        "hypothesis_validated": "Hipótesis validada",
+        "hypothesis_disproved": "Hipótesis refutada",
+        "hypothesis_partial": "Hipótesis parcialmente validada",
+        "save_knowledge": "Guardar en conocimiento",
+        "scope_on": "sí",
+        "scope_off": "no",
+        "quality_direct": "Evidencia directa",
+        "quality_timeline": "Correlación temporal",
+        "quality_metric": "Correlación métrica",
+        "quality_alternative": "Alternativa comprobada",
+        "coverage_observed": "Observado directamente",
+        "coverage_timeline": "Línea de tiempo verificada",
+        "coverage_metric": "Métrica verificada",
+        "coverage_unverified": "Supuestos no verificados",
+        "why_action": "¿Por qué?",
+        "typical_rate": "Tasa típica",
+        "current_rate": "Actual",
     },
 }
 for _lang, _extra in _EVIDENCE_PANEL_EXTRA.items():
@@ -20823,6 +22097,28 @@ def format_evidence_panel_markdown(
     subtitle = str(data.get("subtitle") or "").strip()
     if subtitle:
         lines.append(subtitle[:320])
+    interpreted = data.get("interpreted")
+    if isinstance(interpreted, dict) and (
+        interpreted.get("interpreted_question") or interpreted.get("scope")
+    ):
+        lines.append("")
+        lines.append(format_scope_action_links(interpreted, labels))
+    experiment = data.get("experiment")
+    if isinstance(experiment, dict) and experiment.get("result"):
+        lines.append("")
+        lines.append(
+            f"**{labels.get('experiment_result', 'Experiment result')}:** "
+            f"{experiment.get('result')}"
+        )
+        verdict = str(
+            experiment.get("verdict") or format_experiment_verdict(experiment)
+        ).strip()
+        if verdict:
+            lines.append(f"**{verdict}**")
+        lines.append(
+            f"[{labels.get('save_knowledge', 'Save to knowledge')}]"
+            f"({btf_exp_href('save', 'all')})"
+        )
     evidence = data.get("evidence") or []
     if evidence:
         lines.append("")
@@ -20854,6 +22150,7 @@ def format_evidence_panel_markdown(
     if isinstance(quality, dict) and quality.get("bar"):
         lines.append("")
         lines.append(f"**{labels.get('quality', labels['score'])}:** {quality['bar']}")
+        lines.extend(format_quality_flag_lines(quality, labels))
     elif score is not None:
         bar = str(data.get("evidence_score_bar") or "")
         lines.append("")
@@ -20864,6 +22161,7 @@ def format_evidence_panel_markdown(
         lines.append(
             f"**{labels.get('coverage', 'Evidence Coverage')}:** {coverage['bar']}"
         )
+        lines.extend(format_coverage_count_lines(coverage, labels))
     falsify = data.get("falsify")
     if isinstance(falsify, dict):
         supporting = [s for s in (falsify.get("supporting") or []) if s]
@@ -20907,6 +22205,20 @@ def format_evidence_panel_markdown(
             )
         for flag in (hk.get("flags") or [])[:4]:
             lines.append(f"- {flag}")
+        typical = hk.get("typical") if isinstance(hk.get("typical"), dict) else {}
+        current = hk.get("current") if isinstance(hk.get("current"), dict) else {}
+        for key in ("migrations", "migration_rate", "blocking", "wcet"):
+            if key in typical or key in current:
+                t = typical.get(key)
+                c = current.get(key)
+                if t is not None:
+                    lines.append(
+                        f"- {labels.get('typical_rate', 'Typical rate')} ({key}): {t:g}"
+                    )
+                if c is not None:
+                    lines.append(
+                        f"- {labels.get('current_rate', 'Current')} ({key}): {c:g}"
+                    )
         msg = str(hk.get("message") or "").strip()
         if msg and msg not in ("No historical match", "Within historical range"):
             lines.append(f"- {msg}")
@@ -20946,7 +22258,11 @@ def format_evidence_panel_markdown(
             tool = str(r.get("tool") or "")
             why = str(r.get("reason") or "")
             if tool:
-                lines.append(f"- {tool}: {why}")
+                why_link = (
+                    f"[{labels.get('why_action', 'Why?')}]"
+                    f"({btf_tool_href('why', tool)})"
+                )
+                lines.append(f"- {tool}: {why} {why_link}")
     hyps_m = data.get("hypotheses_managed") or []
     if hyps_m:
         lines.append("")
@@ -27545,7 +28861,7 @@ AI_PRESET_GEMINI = "gemini"
 # (id, label, base_url, model)
 AI_PRESETS: Tuple[Tuple[str, str, str, str], ...] = (
     (AI_PRESET_CUSTOM, "Custom", "", ""),
-    (AI_PRESET_OLLAMA, "Ollama", "http://localhost:11434/v1", "phi4-mini:3.8b"),
+    (AI_PRESET_OLLAMA, "Ollama", "http://localhost:11434/v1", "qwen3.5:9b"),
     (AI_PRESET_OPENAI, "OpenAI", "https://api.openai.com/v1", "gpt-4o-mini"),
     (
         AI_PRESET_GEMINI,
@@ -27558,7 +28874,10 @@ AI_PRESETS: Tuple[Tuple[str, str, str, str], ...] = (
 
 DEFAULT_AI_PRESET = AI_PRESET_OLLAMA
 DEFAULT_AI_BASE_URL = "http://localhost:11434/v1"
-DEFAULT_AI_MODEL = "phi4-mini:3.8b"
+DEFAULT_AI_MODEL = "qwen3.5:9b"
+# Composer icons (16x16). Keep in sync with AiAssistantPanel.vue.
+AI_SEND_ICON_PATH = "M8 2.5l4.5 5H9.25v6.5h-2.5V7.5H3.5L8 2.5z"
+AI_STOP_ICON_PATH = "M5 5h6v6H5z"
 # Keep in sync with web/src/utils/ollamaClient.js (ms equivalents).
 AI_CHAT_TIMEOUT_S = 120.0
 AI_LIST_MODELS_TIMEOUT_S = 12.0
@@ -27603,20 +28922,72 @@ AI_PRESET_SIGNIN_LABELS: Dict[str, str] = {
     AI_PRESET_CUSTOM: "Open provider sign-in…",
 }
 
+BUILTIN_AI_PRESET_IDS = frozenset(row[0] for row in AI_PRESETS)
+_AI_PRESET_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+# Display names for extra presets added by Import… (id → combo label).
+AI_EXTRA_PRESET_LABELS: Dict[str, str] = {
+    "deepseek": "DeepSeek",
+    "grok": "Grok",
+    "xai": "xAI",
+    "claude": "Claude",
+    "anthropic": "Anthropic",
+    "mistral": "Mistral",
+    "openrouter": "OpenRouter",
+}
+
+# Synonyms of the built-in presets. Unknown vendor ids (deepseek, grok, …)
+# stay as extra presets instead of collapsing onto Custom.
+AI_IMPORT_PRESET_ALIASES: Dict[str, str] = {
+    "chatgpt": AI_PRESET_OPENAI,
+    "open_ai": AI_PRESET_OPENAI,
+    "openai_compatible": AI_PRESET_CUSTOM,
+    "google": AI_PRESET_GEMINI,
+    "google_gemini": AI_PRESET_GEMINI,
+    "gemini_openai": AI_PRESET_GEMINI,
+    "ollama_cloud": AI_PRESET_OLLAMA,
+    "local": AI_PRESET_OLLAMA,
+}
+
+
+def sanitize_ai_preset_id(raw: Optional[str]) -> str:
+    """Lowercase letter-led id, or empty when the name cannot be a preset."""
+    want = (raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    want = re.sub(r"[^a-z0-9_]", "", want)
+    want = re.sub(r"_+", "_", want).strip("_")
+    if not _AI_PRESET_ID_RE.match(want):
+        return ""
+    return want
+
+
+def ai_preset_display_label(preset_id: str, explicit: str = "") -> str:
+    """Combo label for a builtin or extra preset."""
+    text = (explicit or "").strip()
+    if text:
+        return text
+    pid = sanitize_ai_preset_id(preset_id)
+    for row in AI_PRESETS:
+        if row[0] == pid:
+            return row[1]
+    if pid in AI_EXTRA_PRESET_LABELS:
+        return AI_EXTRA_PRESET_LABELS[pid]
+    return pid.replace("_", " ").title() if pid else "Custom"
+
 
 def normalize_ai_preset(preset_id: Optional[str]) -> str:
-    """Map a stored/legacy preset id onto one of the known presets."""
-    want = (preset_id or DEFAULT_AI_PRESET).strip().lower().replace("-", "_")
-    for row in AI_PRESETS:
-        if row[0] == want:
-            return row[0]
-    if want in ("google", "google_gemini", "gemini_openai"):
-        return AI_PRESET_GEMINI
-    if want in ("ollama_cloud", "local"):
-        return AI_PRESET_OLLAMA
-    if want in ("chatgpt", "open_ai"):
-        return AI_PRESET_OPENAI
-    return AI_PRESET_CUSTOM
+    """Map a stored/legacy preset id onto a builtin or extra preset.
+
+    Well-formed unknown ids (``deepseek``, ``grok``, …) are kept so Import…
+    can add them to the preset list. Synonyms of the builtins still fold
+    (``chatgpt`` → OpenAI). Empty / garbage ids fall back to the default.
+    """
+    want = sanitize_ai_preset_id(preset_id or "")
+    if not want:
+        return DEFAULT_AI_PRESET
+    if want in BUILTIN_AI_PRESET_IDS:
+        return want
+    if want in AI_IMPORT_PRESET_ALIASES:
+        return AI_IMPORT_PRESET_ALIASES[want]
+    return want
 
 
 def ai_preset_info(preset_id: str) -> Tuple[str, str, str, str]:
@@ -27625,7 +28996,7 @@ def ai_preset_info(preset_id: str) -> Tuple[str, str, str, str]:
     for row in AI_PRESETS:
         if row[0] == want:
             return row
-    return AI_PRESETS[0]
+    return (want, ai_preset_display_label(want), "", "")
 
 
 def apply_ai_preset(preset_id: str) -> Dict[str, str]:
@@ -27637,6 +29008,101 @@ def apply_ai_preset(preset_id: str) -> Dict[str, str]:
 def ai_preset_setting_key(preset_id: str, field: str) -> str:
     """Settings key holding *field* for *preset_id* (e.g. ``ollama_base_url``)."""
     return f"{normalize_ai_preset(preset_id)}_{field}"
+
+
+def parse_extra_ai_presets(raw: Any) -> List[Dict[str, str]]:
+    """``[{id, label}, …]`` from settings JSON / the ``extra_presets`` rc key."""
+    if not raw:
+        return []
+    data = raw
+    if isinstance(data, str):
+        text = data.strip()
+        if not text:
+            return []
+        try:
+            data = json.loads(text)
+        except ValueError:
+            return []
+    if isinstance(data, dict):
+        data = [
+            {"id": key, **(val if isinstance(val, dict) else {"label": str(val)})}
+            for key, val in data.items()
+        ]
+    if not isinstance(data, list):
+        return []
+    out: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    for item in data:
+        if isinstance(item, str):
+            pid = sanitize_ai_preset_id(item)
+            label = ""
+        elif isinstance(item, dict):
+            pid = sanitize_ai_preset_id(
+                str(item.get("id") or item.get("preset") or ""))
+            label = _ai_json_str(item, "label", "name")
+        else:
+            continue
+        if not pid or pid in BUILTIN_AI_PRESET_IDS or pid in seen:
+            continue
+        seen.add(pid)
+        out.append({"id": pid, "label": ai_preset_display_label(pid, label)})
+    return out
+
+
+def dump_extra_ai_presets(rows: Any) -> str:
+    """Serialize extra presets for ``btf_viewer.rc`` / a settings patch."""
+    parsed = parse_extra_ai_presets(rows)
+    return json.dumps(parsed, ensure_ascii=False)
+
+
+def extra_ai_preset_ids_from_settings(cfg: Optional[Dict[str, Any]] = None) -> List[str]:
+    """Extra preset ids from ``extra_presets`` plus ``{id}_{field}`` keys."""
+    c = dict(cfg or {})
+    ids: List[str] = []
+    seen: set[str] = set()
+    for row in parse_extra_ai_presets(c.get("extra_presets")):
+        pid = row["id"]
+        if pid not in seen:
+            ids.append(pid)
+            seen.add(pid)
+    suffixes = tuple("_" + field for field in AI_PRESET_FIELDS)
+    for key in c:
+        text = str(key or "")
+        for suf in suffixes:
+            if not text.endswith(suf):
+                continue
+            pid = sanitize_ai_preset_id(text[: -len(suf)])
+            if pid and pid not in BUILTIN_AI_PRESET_IDS and pid not in seen:
+                ids.append(pid)
+                seen.add(pid)
+            break
+    return ids
+
+
+def merge_ai_preset_catalog(
+    extra_presets: Any = None,
+    preset_settings: Optional[Dict[str, Any]] = None,
+) -> List[Tuple[str, str, str, str]]:
+    """Built-in presets followed by extra ones from import / saved settings."""
+    rows: List[Tuple[str, str, str, str]] = list(AI_PRESETS)
+    seen = set(BUILTIN_AI_PRESET_IDS)
+    stored = dict(preset_settings or {})
+    extras = list(parse_extra_ai_presets(extra_presets))
+    for pid in stored:
+        sid = sanitize_ai_preset_id(str(pid))
+        if sid and sid not in seen and sid not in BUILTIN_AI_PRESET_IDS:
+            if not any(e["id"] == sid for e in extras):
+                extras.append({"id": sid, "label": ai_preset_display_label(sid)})
+    for extra in extras:
+        pid = extra["id"]
+        if pid in seen:
+            continue
+        vals = stored.get(pid) or {}
+        base = str(vals.get("base_url") or vals.get("baseUrl") or "")
+        model = str(vals.get("model") or "")
+        rows.append((pid, extra["label"], base, model))
+        seen.add(pid)
+    return rows
 
 
 def resolve_ai_settings(
@@ -27742,20 +29208,6 @@ def _legacy_openai_target(legacy_preset: str, legacy_base_url: str) -> str:
     return AI_PRESET_CUSTOM
 
 
-# Preset ids accepted by an import file beyond the current ones; older exports
-# and vendor names map onto an existing preset.
-AI_IMPORT_PRESET_ALIASES: Dict[str, str] = {
-    "chatgpt": AI_PRESET_OPENAI,
-    "open_ai": AI_PRESET_OPENAI,
-    "openai_compatible": AI_PRESET_CUSTOM,
-    "xai": AI_PRESET_CUSTOM,
-    "grok": AI_PRESET_CUSTOM,
-    "deepseek": AI_PRESET_CUSTOM,
-    "google": AI_PRESET_GEMINI,
-    "google_gemini": AI_PRESET_GEMINI,
-}
-
-
 def _ai_json_tls_verify(fields: Dict[str, Any]) -> Optional[str]:
     """Return ``true``/``false`` when the import file mentions TLS verify."""
     for name in ("tls_verify", "tlsVerify", "verify_tls", "verifyTls"):
@@ -27781,16 +29233,34 @@ def _ai_json_str(obj: Dict[str, Any], *names: str) -> str:
     return ""
 
 
+def _ai_json_bool(obj: Dict[str, Any], *names: str) -> Optional[bool]:
+    """Return a bool when *obj* names one of the checkbox keys."""
+    for name in names:
+        if name not in obj:
+            continue
+        value = obj.get(name)
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            return value
+        return parse_ai_auto_apply(value)
+    return None
+
+
 def _ai_import_preset_id(raw: str) -> str:
-    """Preset id for an import file, rejecting names we cannot place."""
-    want = raw.strip().lower().replace("-", "_").replace(" ", "_")
+    """Preset id for an import file; unknown names become extra presets."""
+    want = sanitize_ai_preset_id(raw)
+    if not want:
+        raise ValueError(
+            f"Unknown preset {raw!r}. Use a letter-led id such as ollama "
+            "or deepseek."
+        )
     for row in AI_PRESETS:
-        if want in (row[0], row[1].lower().replace(" ", "_")):
+        if want in (row[0], sanitize_ai_preset_id(row[1])):
             return row[0]
     if want in AI_IMPORT_PRESET_ALIASES:
         return AI_IMPORT_PRESET_ALIASES[want]
-    valid = ", ".join(row[0] for row in AI_PRESETS)
-    raise ValueError(f"Unknown preset {raw!r}. Use one of: {valid}.")
+    return want
 
 
 def _ai_import_preset_from_url(base_url: str) -> str:
@@ -27826,10 +29296,13 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
         {"preset": "gemini", "base_url": "…", "model": "…", "api_key": "",
          "auth_mode": "api_key"}
 
-    or a ``presets`` object carrying several at once. snake_case and camelCase
-    key names both work, so files exported from either app import into both.
-    Whole-line ``//`` comments are ignored. Raises ``ValueError`` with a
-    user-facing message when the file cannot be applied.
+    or a ``presets`` object carrying several at once. Unknown preset names
+    (``deepseek``, ``grok``, …) become extra presets added to the combo.
+    Checkbox flags (``enabled``, ``auto_apply``, ``redact_task_names``,
+    ``trace_sensitive``, ``mcp_log``) are imported when present. snake_case
+    and camelCase key names both work, so files exported from either app
+    import into both. Whole-line ``//`` comments are ignored. Raises
+    ``ValueError`` with a user-facing message when the file cannot be applied.
     """
     if isinstance(data, (bytes, bytearray)):
         data = data.decode("utf-8", errors="replace")
@@ -27845,8 +29318,17 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
     preset = _ai_import_preset_id(raw_preset) if raw_preset else ""
 
     per_preset: Dict[str, Dict[str, str]] = {}
+    extra_labels: Dict[str, str] = {}
+
+    def _note_extra(target: str, fields: Optional[Dict[str, Any]] = None) -> None:
+        if target in BUILTIN_AI_PRESET_IDS:
+            return
+        label = _ai_json_str(fields or {}, "label", "name")
+        extra_labels[target] = ai_preset_display_label(
+            target, label or extra_labels.get(target, ""))
 
     def _collect(target: str, fields: Dict[str, Any]) -> None:
+        _note_extra(target, fields)
         base_url = _ai_json_str(fields, "base_url", "baseUrl", "url")
         if base_url:
             if not base_url.lower().startswith(("http://", "https://")):
@@ -27881,6 +29363,8 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
                 raise ValueError(f'Preset {key!r} must be an object.')
             _collect(_ai_import_preset_id(str(key)), fields)
 
+    if preset:
+        _note_extra(preset, data)
     flat_target = preset or _ai_import_preset_from_url(
         _ai_json_str(data, "base_url", "baseUrl", "url"))
     _collect(flat_target, data)
@@ -27904,10 +29388,46 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
     for target, fields in per_preset.items():
         for field, value in fields.items():
             patch[f"{target}_{field}"] = value
+    extras = [
+        {"id": pid, "label": extra_labels[pid]}
+        for pid in extra_labels
+        if pid not in BUILTIN_AI_PRESET_IDS
+    ]
+    extras.extend(
+        row for row in parse_extra_ai_presets(
+            data.get("extra_presets", data.get("extraPresets")))
+        if row["id"] not in extra_labels
+    )
+    if extras:
+        patch["extra_presets"] = dump_extra_ai_presets(extras)
     language = _ai_json_str(
         data, "response_language", "responseLanguage", "aiResponseLanguage")
     if language:
         patch["response_language"] = language
+    flags = (
+        ("enabled", ("enabled", "ai_enabled", "aiEnabled")),
+        ("auto_apply", ("auto_apply", "ai_auto_apply", "aiAutoApply")),
+        (
+            "redact_task_names",
+            (
+                "redact_task_names", "anonymize_task_names",
+                "ai_redact_task_names", "aiRedactTaskNames",
+                "anonymize", "redact",
+            ),
+        ),
+        (
+            "trace_sensitive",
+            (
+                "trace_sensitive", "ai_trace_sensitive", "aiTraceSensitive",
+                "sensitive",
+            ),
+        ),
+        ("mcp_log", ("mcp_log", "ai_mcp_log", "aiMcpLog")),
+    )
+    for dest, names in flags:
+        value = _ai_json_bool(data, *names)
+        if value is not None:
+            patch[dest] = "true" if value else "false"
     return patch
 
 
@@ -27967,14 +29487,36 @@ def normalize_ai_base_url(url: str) -> str:
     return u
 
 
-def resolve_ai_api_key(api_key: Optional[str] = None) -> str:
-    """*api_key*, else ``OPENAI_API_KEY`` / ``GEMINI_API_KEY`` / ``OLLAMA_API_KEY``."""
-    key = normalize_api_key(api_key)
-    for env_name in ("OPENAI_API_KEY", "GEMINI_API_KEY", "OLLAMA_API_KEY"):
+# Same names as the web viewer.
+AI_API_KEY_ENV_NAMES = ("OPENAI_API_KEY", "GEMINI_API_KEY", "OLLAMA_API_KEY")
+AI_API_KEY_REQUIRED = (
+    "API key required for remote endpoints "
+    "(Settings → AI → API key, or OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY). "
+    "Paste the raw key only — no Bearer prefix."
+)
+
+
+def read_ai_env_key(names: Optional[Any] = None) -> str:
+    """First non-empty env value among *names*."""
+    seq = AI_API_KEY_ENV_NAMES if names is None else names
+    if isinstance(seq, str):
+        seq = (seq,)
+    for name in seq:
+        n = str(name or "").strip()
+        if not n:
+            continue
+        key = normalize_api_key(os.environ.get(n, ""))
         if key:
-            break
-        key = normalize_api_key(os.environ.get(env_name, ""))
-    return key
+            return key
+    return ""
+
+
+def resolve_ai_api_key(api_key: Optional[str] = None) -> str:
+    """Settings *api_key*, else OPENAI / GEMINI / OLLAMA_API_KEY."""
+    key = normalize_api_key(api_key)
+    if key:
+        return key
+    return read_ai_env_key()
 
 
 def ai_request_headers(
@@ -28262,6 +29804,7 @@ def normalize_ai_context(ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         "scope": c.get("scope", "") or "",
         "metrics": c.get("metrics"),
         "cursors": list(cursors),
+        "findings": list(c.get("findings") or []),
     }
 
 
@@ -28338,6 +29881,9 @@ def _md_inline_to_html_escaped(text: str) -> str:
                 or low.startswith("btfjump:")
                 or low.startswith("btfhighlight:")
                 or low.startswith("btfhyp:")
+                or low.startswith("btfscope:")
+                or low.startswith("btfexp:")
+                or low.startswith("btftool:")
                 or low.startswith("mailto:")
             ):
                 buf.append(
@@ -29110,6 +30656,85 @@ def _read_http_body(
     return b"".join(chunks)
 
 
+def summarize_ai_http_error_detail(detail: str) -> str:
+    """Vendor error message from an HTTP body, without JSON/HTML dump."""
+    text = str(detail or "").strip()
+    if not text:
+        return ""
+    head = text[:64].lstrip().lower()
+    if head.startswith("<!doctype") or head.startswith("<html"):
+        return ""
+
+    data: Any = None
+    try:
+        data = json.loads(text)
+    except ValueError:
+        start_obj = text.find("{")
+        start_arr = text.find("[")
+        starts = [i for i in (start_obj, start_arr) if i >= 0]
+        if starts:
+            try:
+                data = json.loads(text[min(starts):])
+            except ValueError:
+                data = None
+
+    def _walk(obj: Any) -> str:
+        if isinstance(obj, list) and obj:
+            return _walk(obj[0])
+        if isinstance(obj, dict):
+            err = obj.get("error")
+            if isinstance(err, str) and err.strip():
+                return err.strip()
+            if isinstance(err, dict):
+                msg = err.get("message") or err.get("msg")
+                if msg:
+                    return str(msg).strip()
+            msg = obj.get("message") or obj.get("msg")
+            if msg:
+                return str(msg).strip()
+        if isinstance(obj, str):
+            return obj.strip()
+        return ""
+
+    msg = _walk(data) if data is not None else ""
+    if not msg:
+        m = re.search(r'"message"\s*:\s*"((?:\\.|[^"\\])*)"', text)
+        if m:
+            try:
+                msg = json.loads(f'"{m.group(1)}"')
+            except ValueError:
+                msg = m.group(1)
+    if not msg:
+        # Plain-text bodies stay, but drop pretty-printed JSON leftovers.
+        if text[:1] in "{[":
+            return ""
+        msg = text
+    msg = re.sub(r"\s+", " ", str(msg)).strip()
+    return msg[:300]
+
+
+def format_ai_http_error(
+    code: int,
+    detail: str = "",
+    reason: str = "",
+    *,
+    tip: str = "",
+) -> str:
+    """One-line HTTP error for the AI panel: ``HTTP 503: <message>``."""
+    msg = (
+        summarize_ai_http_error_detail(detail)
+        or str(reason or "").strip()
+        or "request failed"
+    )
+    text = f"HTTP {int(code)}: {msg}"
+    extra = str(tip or "").strip()
+    if extra:
+        if not text.endswith("."):
+            text += "."
+        text += " " + extra
+    return text
+
+
 def _ai_http_error_tip(code: int, detail: str = "", *, base_url: str = "") -> str:
     """Short remediation hint for OpenAI-compatible HTTP errors."""
     low = (detail or "").lower()
@@ -29117,7 +30742,7 @@ def _ai_http_error_tip(code: int, detail: str = "", *, base_url: str = "") -> st
     if code in (401, 403):
         return (
             " Check authentication (Settings → AI → Sign in or API key, "
-            "or OPENAI_API_KEY / GEMINI_API_KEY)."
+            "or OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY)."
         )
     if code == 400 and (
         "valid api key" in low or "api key" in low and "invalid" in low
@@ -29189,11 +30814,7 @@ def ai_chat_completion(
     url = url_base + "/chat/completions"
     chat_model = (model or DEFAULT_AI_MODEL).strip() or DEFAULT_AI_MODEL
     if not resolve_ai_api_key(api_key) and not is_local_ai_host(url_base):
-        raise RuntimeError(
-            "API key required for remote endpoints "
-            "(Settings → AI → API key, or OPENAI_API_KEY / GEMINI_API_KEY). "
-            "Paste the raw key only — no Bearer prefix."
-        )
+        raise RuntimeError(AI_API_KEY_REQUIRED)
     if cancel_event is not None and cancel_event.is_set():
         raise OllamaCancelled("Stopped")
     if messages is None:
@@ -29247,8 +30868,8 @@ def ai_chat_completion(
             }, enabled=do_log)
             tip = _ai_http_error_tip(exc.code, detail, base_url=url_base)
             err = RuntimeError(
-                f"OpenAI-compatible HTTP {exc.code} at {url}: "
-                f"{detail or exc.reason}.{tip}"
+                format_ai_http_error(
+                    exc.code, detail, str(exc.reason or ""), tip=tip)
             )
             err.http_code = exc.code  # type: ignore[attr-defined]
             err.http_detail = detail  # type: ignore[attr-defined]
@@ -29362,6 +30983,155 @@ def ai_chat_completion(
         "message": msg,
         "usage": chat_usage_from_response(body),
     }
+
+
+def _benchmark_catalog_tool_payload(
+    call: Dict[str, Any],
+    case: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Host-side tool result for live ``ai-test`` (no GUI, no expected labels)."""
+    catalog = (case or {}).get("catalog") if isinstance(case, dict) else {}
+    if not isinstance(catalog, dict):
+        catalog = {}
+    name = str((call or {}).get("name") or "tool").strip() or "tool"
+    return tool_result_payload(
+        True,
+        (
+            f"Host recorded `{name}`. The catalog in Findings is the only evidence. "
+            "Write your investigation conclusion in plain text now. "
+            "Cite jump:TIME and Task[id] from the catalog. "
+            "State confidence (High / Medium / Low)."
+        ),
+        tool=name,
+        tasks=list(catalog.get("tasks") or []),
+        times=list(catalog.get("times") or []),
+        cursor_lo=catalog.get("cursor_lo"),
+        cursor_hi=catalog.get("cursor_hi"),
+    )
+
+
+def _benchmark_needs_tool_followup(content: str, calls: Sequence[Any]) -> bool:
+    """True when the first turn is a tool call, not a scored conclusion.
+
+    Some models (Qwen 27B) put chain-of-thought / "I will call investigate"
+    into ``content`` *and* emit ``tool_calls``. That text is not a conclusion
+    (no Confidence: High/Medium/Low) and must not skip the host follow-up.
+    """
+    if not calls:
+        return False
+    blob = str(content or "").strip()
+    if not blob:
+        return True
+    return not re.search(
+        r"\bconfidence\s*:?\s*(high|medium|low)\b",
+        blob,
+        re.IGNORECASE,
+    )
+
+
+def live_benchmark_chat(
+    query: str,
+    findings_text: str = "",
+    *,
+    model: str = DEFAULT_AI_MODEL,
+    case: Optional[Dict[str, Any]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    base_url: str = DEFAULT_AI_BASE_URL,
+    api_key: str = "",
+    preset: str = "",
+    tls_verify: bool = True,
+    timeout_s: float = AI_CHAT_TIMEOUT_S,
+) -> Dict[str, Any]:
+    """One live benchmark turn, with a tool-result follow-up when needed.
+
+    Gemini (and other tool-first models) often return ``tool_calls`` with empty
+    ``content``. The viewer GUI executes the tool and continues the chat; the
+    live scorer must do the same or finding/evidence/root-cause stay at 0.
+    Models that already write a conclusion on the first turn are not called
+    again.
+    """
+    t0 = time.time()
+    messages = _build_chat_messages(query, findings_text=findings_text)
+    collected: List[Dict[str, Any]] = []
+    content = ""
+    usage: Dict[str, Any] = {}
+    error = ""
+
+    def _one(*, use_tools: bool) -> Dict[str, Any]:
+        return ai_chat_completion(
+            "",
+            findings_text="",
+            model=model,
+            base_url=base_url,
+            api_key=api_key,
+            preset=preset,
+            tls_verify=tls_verify,
+            timeout_s=timeout_s,
+            messages=messages,
+            tools=list(tools or []) if use_tools else [],
+        )
+
+    try:
+        turn = _one(use_tools=bool(tools))
+    except Exception as exc:
+        return {
+            "content": "",
+            "tool_calls": [],
+            "usage": {},
+            "elapsed_s": time.time() - t0,
+            "error": str(exc),
+        }
+    content = str((turn or {}).get("content") or "")
+    calls = list((turn or {}).get("tool_calls") or [])
+    usage = (turn or {}).get("usage") or {}
+    collected.extend(c for c in calls if isinstance(c, dict))
+
+    if _benchmark_needs_tool_followup(content, calls):
+        asst = (turn or {}).get("message")
+        if not isinstance(asst, dict) or str(asst.get("role") or "") != "assistant":
+            asst = canonical_assistant_tool_message(content, calls)
+        messages.append(asst)
+        for i, call in enumerate(calls):
+            if not isinstance(call, dict):
+                continue
+            payload = _benchmark_catalog_tool_payload(call, case)
+            messages.append(tool_result_message(
+                tool_call_id=str(call.get("id") or f"call_{i}"),
+                name=str(call.get("name") or ""),
+                content=format_tool_result_content(payload),
+            ))
+        messages.append({
+            "role": "user",
+            "content": (
+                "Tool results are above. Do not call any more tools. "
+                "Write your investigation conclusion in plain text now. "
+                "Cite jump:TIME and Task[id] from the catalog. "
+                "State confidence (High / Medium / Low)."
+            ),
+        })
+        try:
+            turn2 = _one(use_tools=False)
+        except Exception as exc:
+            error = str(exc)
+            turn2 = {}
+        if turn2:
+            follow = str(turn2.get("content") or "")
+            if follow.strip():
+                content = follow
+            more = list(turn2.get("tool_calls") or [])
+            collected.extend(c for c in more if isinstance(c, dict))
+            if turn2.get("usage"):
+                usage = turn2.get("usage") or usage
+
+    out: Dict[str, Any] = {
+        "content": content,
+        "tool_calls": collected,
+        "usage": usage if isinstance(usage, dict) else {},
+        "elapsed_s": time.time() - t0,
+    }
+    if error:
+        out["error"] = error
+    return out
 
 
 def ai_chat(
@@ -29499,13 +31269,9 @@ def ai_test_connection(
     model_name = (model or DEFAULT_AI_MODEL).strip() or DEFAULT_AI_MODEL
     key = resolve_ai_api_key(api_key)
     if not key and not is_local_ai_host(url_base):
-        raise RuntimeError(
-            "API key required for remote endpoints "
-            "(Settings → AI → API key, or OPENAI_API_KEY / GEMINI_API_KEY). "
-            "Paste the raw key only — no Bearer prefix."
-        )
+        raise RuntimeError(AI_API_KEY_REQUIRED)
 
-    _progress(f"1/2 Listing models at {url_base}…")
+    _progress(f"1/3 Listing models at {url_base}…")
     served: List[str] = []
     listing_note = ""
     try:
@@ -29534,13 +31300,13 @@ def ai_test_connection(
 
     chat_url = url_base + "/chat/completions"
     _progress(
-        f"2/2 Chat probe with {model_name} (first load can take a while)…"
+        f"2/3 Chat probe with {model_name} (first load can take a while)…"
     )
     body_obj = {
         "model": model_name,
         "stream": False,
-        "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
-        "max_tokens": 8,
+        "messages": [{"role": "user", "content": CAPABILITY_CHAT_PROBE}],
+        "max_tokens": 24,
     }
     _log_ai_mcp("request", {"url": chat_url, "body": body_obj}, enabled=do_log)
     payload = json.dumps(body_obj).encode("utf-8")
@@ -29566,7 +31332,8 @@ def ai_test_connection(
         }, enabled=do_log)
         tip = _ai_http_error_tip(exc.code, detail, base_url=url_base)
         raise RuntimeError(
-            f"HTTP {exc.code} at {chat_url}: {detail or exc.reason}.{tip}"
+            format_ai_http_error(
+                exc.code, detail, str(exc.reason or ""), tip=tip)
         ) from exc
     except Exception as exc:
         _log_ai_mcp("response_error", {
@@ -29587,7 +31354,34 @@ def ai_test_connection(
         if isinstance(msg, dict):
             reply = str(msg.get("content") or "").strip()
     note = f" Probe reply: {reply[:40]!r}." if reply else ""
-    cap = infer_model_capability(model_name, chat_ok=True)
+    tool_ok = None
+    try:
+        _progress(f"3/3 Tool-calling probe with {model_name}…")
+        probe_obj = capability_probe_body(model_name)
+        _log_ai_mcp("request", {"url": chat_url, "body": probe_obj}, enabled=do_log)
+        probe_req = urllib.request.Request(
+            chat_url,
+            data=json.dumps(probe_obj).encode("utf-8"),
+            headers=ai_request_headers(key, base_url=url_base),
+            method="POST",
+        )
+        with ai_urlopen(probe_req, min(timeout_s, 20.0), tls_verify=tls_verify) as resp:
+            probe_body = json.loads(resp.read().decode("utf-8"))
+        _log_ai_mcp("response", {"url": chat_url, "body": probe_body}, enabled=do_log)
+        tool_ok = tool_calling_from_chat_response(probe_body)
+    except Exception as exc:
+        _log_ai_mcp("response_error", {
+            "url": chat_url, "error": f"tool probe: {exc}",
+        }, enabled=do_log)
+        tool_ok = None
+        probe_body = None
+    cap = infer_model_capability(
+        model_name, chat_ok=True, tool_call_ok=tool_ok,
+        chat_text=reply, tool_body=probe_body,
+    )
+    cap = merge_live_capability(
+        cap, chat_text=reply, tool_body=probe_body, tool_ok=tool_ok,
+    )
     cap_txt = format_capability_report(cap)
     return (
         f"Connected to {url_base}. Model {model_name} ready{listing_note}.{note}"
@@ -29666,14 +31460,49 @@ class _FlowLayout(QLayout):
         return y + line_height - rect.y() + bottom
 
 
-def _add_ai_menu_heading(menu: QMenu, label: str) -> None:
-    """Muted group label matching web ``.ai-more-heading`` (not native addSection)."""
-    hdr = menu.addAction(label)
+def _ai_more_heading(label: str) -> QLabel:
+    """Muted group label matching web ``.ai-more-heading``."""
+    hdr = QLabel(label)
+    hdr.setObjectName("aiMoreHeading")
     hdr.setEnabled(False)
+    return hdr
+
+
+def _ai_more_item(label: str, tooltip: str = "") -> QPushButton:
+    """Flat menu row matching web ``.ai-more-item``."""
+    btn = QPushButton(label)
+    btn.setObjectName("aiMoreItem")
+    btn.setFlat(True)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+    if tooltip:
+        btn.setToolTip(tooltip)
+    return btn
+
+
+def _ai_more_col(title: str) -> QWidget:
+    """One More-menu column matching web ``.ai-more-col``."""
+    col = QWidget()
+    col.setObjectName("aiMoreCol")
+    lay = QVBoxLayout(col)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(0)
+    lay.addWidget(_ai_more_heading(title))
+    return col
+
+
+def _clear_layout(layout) -> None:
+    while layout.count():
+        item = layout.takeAt(0)
+        w = item.widget()
+        if w is not None:
+            w.setParent(None)
+            w.deleteLater()
 
 
 # Chip / More-menu colors match web `.ai-tpl-btn` / `.ai-more-item` (enabled vs disabled).
 _AI_TPL_DISABLED_COLOR = "#8a96a8"
+_AI_CHIP_MIN_HEIGHT = 28  # match web `.ai-tpl-btn { min-height: 28px }`
 _AI_TPL_BTN_STYLE = (
     "QPushButton {"
     "  color: #e8eef7;"
@@ -29692,9 +31521,30 @@ _AI_TPL_BTN_STYLE = (
     "}"
 )
 _AI_MORE_MENU_STYLE = (
-    "QMenu::item { color: #e8eef7; padding: 5px 10px; }"
-    f"QMenu::item:disabled {{ color: {_AI_TPL_DISABLED_COLOR}; }}"
-    "QMenu::item:selected:enabled { background: rgba(91, 155, 213, 0.18); }"
+    "QFrame#aiMoreMenu {"
+    "  background: #1a2230;"
+    "  border: 1px solid #3a4658;"
+    "  border-radius: 7px;"
+    "}"
+    "QWidget#aiMoreCol { min-width: 168px; }"
+    "QLabel#aiMoreHeading {"
+    f"  color: {_AI_TPL_DISABLED_COLOR};"
+    "  font-size: 11px;"
+    "  font-weight: 600;"
+    "  padding: 6px 10px 2px;"
+    "}"
+    "QPushButton#aiMoreItem {"
+    "  color: #e8eef7;"
+    "  background: transparent;"
+    "  border: none;"
+    "  border-radius: 4px;"
+    "  padding: 5px 10px;"
+    "  text-align: left;"
+    "}"
+    "QPushButton#aiMoreItem:hover:!disabled {"
+    "  background: rgba(91, 155, 213, 0.18);"
+    "}"
+    f"QPushButton#aiMoreItem:disabled {{ color: {_AI_TPL_DISABLED_COLOR}; }}"
 )
 
 
@@ -29875,16 +31725,18 @@ def create_ai_assistant_panel(
             root.setContentsMargins(6, 6, 6, 6)
             root.setSpacing(6)
 
-            title_row = QHBoxLayout()
-            title_row.setContentsMargins(0, 0, 0, 0)
-            title_row.setSpacing(8)
+            header_host = QWidget()
+            header_host.setObjectName("aiHeader")
+            header_row = _FlowLayout(header_host, spacing=8)
             title = QLabel("AI Assistant")
             title.setStyleSheet("font-weight:600;")
-            title_row.addWidget(title)
+            header_row.addWidget(title)
             self._auth_chip = QPushButton("")
             self._auth_chip.setObjectName("ai_auth_chip")
             self._auth_chip.setCursor(Qt.CursorShape.PointingHandCursor)
             self._auth_chip.setToolTip("Open Settings → AI to sign in or change the API key")
+            self._auth_chip.setSizePolicy(
+                QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             self._auth_chip.setStyleSheet(
                 "QPushButton#ai_auth_chip {"
                 "  background: transparent; color: #8b98a8;"
@@ -29894,12 +31746,14 @@ def create_ai_assistant_panel(
                 "QPushButton#ai_auth_chip:hover { color: #dbe2ea; border-color: #5b9bd5; }"
             )
             self._auth_chip.clicked.connect(self._on_auth_chip)
-            title_row.addWidget(self._auth_chip)
+            header_row.addWidget(self._auth_chip)
             self._privacy_chip = QPushButton("")
             self._privacy_chip.setObjectName("ai_privacy_chip")
             self._privacy_chip.setCursor(Qt.CursorShape.PointingHandCursor)
             self._privacy_chip.setToolTip(
                 "Trace privacy for the current AI endpoint")
+            self._privacy_chip.setSizePolicy(
+                QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             self._privacy_chip.setStyleSheet(
                 "QPushButton#ai_privacy_chip {"
                 "  background: transparent; color: #8b98a8;"
@@ -29910,19 +31764,15 @@ def create_ai_assistant_panel(
                 "border-color: #5b9bd5; }"
             )
             self._privacy_chip.clicked.connect(self._on_auth_chip)
-            title_row.addWidget(self._privacy_chip)
-            title_row.addStretch(1)
-            root.addLayout(title_row)
+            header_row.addWidget(self._privacy_chip)
+            root.addWidget(header_host)
 
-            # Match web: title, then compact actions (Clear / Stop / Ask /
-            # Language… / Settings…). objectName "aiActions" is excluded from
-            # dock width-relax (Ignored policy + stretch was collapsing these
-            # buttons to 0 width).
+            # Match web `.ai-header-actions { flex-wrap }`. objectName
+            # "aiActions" is excluded from dock width-relax (Ignored policy
+            # was collapsing these buttons to 0 width).
             actions_host = QWidget()
             actions_host.setObjectName("aiActions")
-            actions_wrap = QVBoxLayout(actions_host)
-            actions_wrap.setContentsMargins(0, 0, 0, 0)
-            actions_wrap.setSpacing(4)
+            actions_row = _FlowLayout(actions_host, spacing=4)
 
             def _ai_action_btn(label: str, tip: str, *, primary: bool = False) -> QPushButton:
                 btn = QPushButton(label)
@@ -29946,36 +31796,25 @@ def create_ai_assistant_panel(
                     )
                 return btn
 
-            row1 = QHBoxLayout()
-            row1.setContentsMargins(0, 0, 0, 0)
-            row1.setSpacing(4)
             self._clear_btn = _ai_action_btn("Clear", "Clear the conversation log")
             self._clear_btn.clicked.connect(self.clear_conversation)
-            row1.addWidget(self._clear_btn)
-            self._stop_btn = _ai_action_btn("Stop", "Stop the current Ollama query")
-            self._stop_btn.setEnabled(False)
-            self._stop_btn.clicked.connect(self.stop_query)
-            row1.addWidget(self._stop_btn)
-            self._send_btn = _ai_action_btn(
-                "Ask", "Send the question below (Ctrl/Cmd+Enter)", primary=True)
-            self._send_btn.clicked.connect(self.send_current)
-            row1.addWidget(self._send_btn)
+            actions_row.addWidget(self._clear_btn)
             self._lang_btn = _ai_action_btn(
                 "Language\u2026", "Preferred language for assistant replies")
             self._lang_btn.clicked.connect(self._choose_language)
-            row1.addWidget(self._lang_btn)
+            actions_row.addWidget(self._lang_btn)
             self._settings_btn = _ai_action_btn(
                 "Settings\u2026",
                 "Configure the AI preset, endpoint, and model")
             self._settings_btn.clicked.connect(self._open_settings)
-            row1.addWidget(self._settings_btn)
-            row1.addStretch(1)
-            actions_wrap.addLayout(row1)
+            actions_row.addWidget(self._settings_btn)
 
             root.addWidget(actions_host)
 
             self._investigation_plan: Optional[Dict[str, Any]] = None
             self._evidence_payload: Optional[Dict[str, Any]] = None
+            self._interpreted_query: Optional[Dict[str, Any]] = None
+            self._skip_interpret = False
             self._active_template_id = ""
 
             self._log = QTextBrowser()
@@ -30026,7 +31865,7 @@ def create_ai_assistant_panel(
                 btn.setToolTip(investigation_mode_prompt(mid))
                 btn.setSizePolicy(
                     QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-                btn.setMinimumHeight(24)
+                btn.setMinimumHeight(_AI_CHIP_MIN_HEIGHT)
                 btn.clicked.connect(
                     lambda _=False, m=mid: self._run_investigation_mode(m)
                 )
@@ -30061,7 +31900,7 @@ def create_ai_assistant_panel(
                 btn.setToolTip(prompt)
                 btn.setSizePolicy(
                     QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-                btn.setMinimumHeight(24)
+                btn.setMinimumHeight(_AI_CHIP_MIN_HEIGHT)
                 btn.clicked.connect(
                     lambda _=False, t=_tid, p=prompt: self._use_template(t, p)
                 )
@@ -30076,28 +31915,49 @@ def create_ai_assistant_panel(
             )
             more_btn.setSizePolicy(
                 QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-            more_menu = QMenu(more_btn)
+            more_btn.setMinimumHeight(_AI_CHIP_MIN_HEIGHT)
+            more_menu = QFrame(self, Qt.WindowType.Popup)
+            more_menu.setObjectName("aiMoreMenu")
             more_menu.setStyleSheet(_AI_MORE_MENU_STYLE)
-            for group_label, ids in AI_TEMPLATE_MENU_GROUPS:
-                _add_ai_menu_heading(more_menu, group_label)
+            more_menu.setMinimumWidth(360)
+            more_grid = QGridLayout(more_menu)
+            more_grid.setContentsMargins(4, 4, 4, 4)
+            more_grid.setHorizontalSpacing(8)
+            more_grid.setVerticalSpacing(0)
+            more_grid.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
+            for i, (group_label, ids) in enumerate(AI_TEMPLATE_MENU_GROUPS):
+                col = _ai_more_col(group_label)
+                col_lay = col.layout()
                 for _tid in ids:
                     item = ai_template_by_id(_tid)
                     if item is None:
                         continue
                     _tid, label, prompt = item
-                    act = more_menu.addAction(label)
-                    act.setToolTip(prompt)
-                    act.triggered.connect(
-                        lambda _=False, t=_tid, p=prompt: self._use_template(t, p)
+                    act = _ai_more_item(label, prompt)
+                    act.clicked.connect(
+                        lambda _=False, t=_tid, p=prompt: self._on_more_template(t, p)
                     )
+                    col_lay.addWidget(act)
                     self._template_actions[_tid] = act
                     _bind_template_ctrl(_tid, act)
-            _add_ai_menu_heading(more_menu, "Investigations")
+                more_grid.addWidget(
+                    col, i // 2, i % 2, Qt.AlignmentFlag.AlignTop)
+            n_groups = len(AI_TEMPLATE_MENU_GROUPS)
+            self._investigation_col = _ai_more_col("Investigations")
+            more_grid.addWidget(
+                self._investigation_col,
+                n_groups // 2, n_groups % 2,
+                Qt.AlignmentFlag.AlignTop,
+            )
             self._investigation_template_actions: Dict[str, Any] = {}
             self._more_menu = more_menu
+            self._more_btn = more_btn
+            self._more_reclick_guard = False
             self._save_investigation_template_action = None
+            self._save_knowledge_action = None
             self._rebuild_investigation_menu()
-            more_btn.setMenu(more_menu)
+            more_btn.clicked.connect(self._toggle_more_menu)
+            more_menu.installEventFilter(self)
             tpl_row.addWidget(more_btn)
             root.addWidget(tpl_host)
 
@@ -30123,11 +31983,56 @@ def create_ai_assistant_panel(
             root.addWidget(self._tool_bar)
 
             self._input = QPlainTextEdit()
+            self._input.setObjectName("aiInput")
             self._input.setPlaceholderText("Ask about this trace\u2026 (Ctrl/Cmd+Enter to send)")
             self._input.setFixedHeight(64)
+            self._input.setViewportMargins(0, 0, 44, 0)
             self._input.installEventFilter(self)
             self._input.textChanged.connect(self._refresh_send_btn)
-            root.addWidget(self._input)
+
+            composer = QWidget()
+            composer.setObjectName("aiComposer")
+            composer_lay = QVBoxLayout(composer)
+            composer_lay.setContentsMargins(0, 0, 0, 0)
+            composer_lay.setSpacing(0)
+            composer_lay.addWidget(self._input)
+
+            def _ai_icon_btn(name: str, tip: str) -> QPushButton:
+                btn = QPushButton()
+                btn.setObjectName(name)
+                btn.setToolTip(tip)
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setFixedSize(28, 28)
+                btn.setIconSize(QSize(16, 16))
+                btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                btn.setStyleSheet(
+                    f"QPushButton#{name} {{"
+                    "  background: #2a6fb2; border: none; border-radius: 14px;"
+                    "}"
+                    f"QPushButton#{name}:hover {{ background: #1a5a9a; }}"
+                    f"QPushButton#{name}:disabled {{"
+                    "  background: #555555;"
+                    "}"
+                )
+                return btn
+
+            icons = QWidget(composer)
+            icons.setObjectName("aiComposerIcons")
+            icon_row = QHBoxLayout(icons)
+            icon_row.setContentsMargins(0, 0, 0, 0)
+            icon_row.setSpacing(0)
+            self._icon_send = _svg_icon(AI_SEND_ICON_PATH, "#ffffff", 16)
+            self._icon_stop = _svg_icon(AI_STOP_ICON_PATH, "#ffffff", 16)
+            self._send_btn = _ai_icon_btn(
+                "aiSendBtn", "Send the question (Ctrl/Cmd+Enter)")
+            self._send_btn.setIcon(self._icon_send)
+            self._send_btn.clicked.connect(self._on_composer_action)
+            icon_row.addWidget(self._send_btn)
+            self._composer = composer
+            self._composer_icons = icons
+            composer.installEventFilter(self)
+            root.addWidget(composer)
+            QTimer.singleShot(0, self._place_composer_icons)
 
             self._status = QLabel("")
             self._status.setStyleSheet("color:#999;font-size:11px;")
@@ -30153,7 +32058,25 @@ def create_ai_assistant_panel(
 
             self._refresh_send_btn()
 
+        def _place_composer_icons(self) -> None:
+            icons = getattr(self, "_composer_icons", None)
+            host = getattr(self, "_composer", None)
+            if icons is None or host is None:
+                return
+            icons.adjustSize()
+            margin = 6
+            x = max(margin, host.width() - icons.width() - margin)
+            y = max(margin, host.height() - icons.height() - margin)
+            icons.move(x, y)
+            icons.raise_()
+
         def eventFilter(self, obj, event):  # noqa: N802
+            menu = getattr(self, "_more_menu", None)
+            if menu is not None and obj is menu and event.type() == QEvent.Type.Hide:
+                self._more_reclick_guard = True
+                QTimer.singleShot(0, self._clear_more_reclick_guard)
+            if obj is getattr(self, "_composer", None) and event.type() == QEvent.Type.Resize:
+                self._place_composer_icons()
             inp = getattr(self, "_input", None)
             if inp is not None and obj is inp and event.type() == QEvent.Type.KeyPress:
                 key = event.key()
@@ -30254,8 +32177,13 @@ def create_ai_assistant_panel(
                 preset_id=active["preset"],
             )
             self._auth_chip.setText(f"{label} · {st['label']}")
+            cfg = self._settings_dict()
             priv = classify_trace_privacy(
                 endpoint_is_local=is_local_ai_host(active.get("base_url", "")),
+                redact_task_names=str(cfg.get("redact_task_names", "")).lower()
+                in ("1", "true", "yes", "on"),
+                sensitive=str(cfg.get("trace_sensitive", "")).lower()
+                in ("1", "true", "yes", "on"),
             )
             self._privacy_chip.setText(format_privacy_chip(priv))
             self._privacy_chip.setToolTip(str(priv.get("note") or ""))
@@ -30273,8 +32201,27 @@ def create_ai_assistant_panel(
         def _mark_cost_start(self) -> None:
             self._cost_started = time.monotonic()
 
-        def _set_status(self, msg: str) -> None:
+        def _flash_main_status(self, msg: str) -> None:
+            short = (msg or "").split("\n", 1)[0][:200]
+            if not short:
+                return
+            wnd = self.window()
+            getter = getattr(wnd, "statusBar", None)
+            if not callable(getter):
+                return
+            try:
+                getter().showMessage(f"AI: {short}", 6000)
+            except RuntimeError:
+                pass
+
+        def _set_status(self, msg: str, *, error: bool = False) -> None:
             self._status.setText(status_with_cost(msg, self._cost_meter))
+            self._status.setStyleSheet(
+                "color:#e07070;font-size:11px;" if error
+                else "color:#999;font-size:11px;"
+            )
+            if error:
+                self._flash_main_status(msg)
 
         def _record_turn_usage(self, turn: dict, calls: Sequence[Any]) -> None:
             usage = turn.get("usage") if isinstance(turn, dict) else {}
@@ -30370,6 +32317,21 @@ def create_ai_assistant_panel(
                 action, hyp_id = parse_btf_hyp_href(url.toString())
                 if action:
                     self._on_hypothesis_action(action, hyp_id)
+                return
+            if scheme == "btfscope":
+                action, key = parse_btf_scope_href(url.toString())
+                if action:
+                    self._on_scope_action(action, key)
+                return
+            if scheme == "btfexp":
+                action, key = parse_btf_exp_href(url.toString())
+                if action:
+                    self._on_experiment_action(action, key)
+                return
+            if scheme == "btftool":
+                action, name = parse_btf_tool_href(url.toString())
+                if action:
+                    self._on_tool_why(action, name)
                 return
             if scheme == "btfhighlight":
                 name = parse_btf_highlight_href(url.toString())
@@ -30469,6 +32431,7 @@ def create_ai_assistant_panel(
             self._cost_meter = empty_cost_meter()
             self._set_status("")
             self._clear_evidence_log_entry()
+            self._interpreted_query = None
             self._refresh_tool_bar()
 
         def _show_log_menu(self, pos) -> None:
@@ -30705,19 +32668,29 @@ def create_ai_assistant_panel(
                 "0", "false", "no", "off",
             )
 
+        def _on_composer_action(self) -> None:
+            if self._busy:
+                self.stop_query()
+            else:
+                self.send_current()
+
         def _refresh_send_btn(self) -> None:
+            if self._busy:
+                self._send_btn.setIcon(self._icon_stop)
+                self._send_btn.setToolTip("Stop the current query")
+                self._send_btn.setEnabled(True)
+                return
+            self._send_btn.setIcon(self._icon_send)
+            self._send_btn.setToolTip("Send the question (Ctrl/Cmd+Enter)")
             self._send_btn.setEnabled(
-                (not self._busy)
-                and self._ai_is_enabled()
+                self._ai_is_enabled()
                 and bool(self._input.toPlainText().strip())
             )
 
         def _set_busy(self, busy: bool) -> None:
             self._busy = busy
             enabled = self._ai_is_enabled()
-            self._send_btn.setText("Waiting…" if busy else "Ask")
             self._refresh_send_btn()
-            self._stop_btn.setEnabled(busy)
             self._input.setReadOnly(busy or (not enabled))
             live = (not busy) and enabled
             for btn in self._template_btns:
@@ -30731,6 +32704,9 @@ def create_ai_assistant_panel(
             save_act = getattr(self, "_save_investigation_template_action", None)
             if save_act is not None:
                 save_act.setEnabled(not busy)
+            know_act = getattr(self, "_save_knowledge_action", None)
+            if know_act is not None:
+                know_act.setEnabled(not busy)
             self.refresh_template_availability()
             if (not enabled) and (not busy):
                 self._set_status("AI is disabled in Settings → AI.")
@@ -30863,9 +32839,17 @@ def create_ai_assistant_panel(
             if prompt:
                 self._run_compare_template(prompt, idx_a=idx_a, idx_b=idx_b)
 
+        def query_validate_experiment(self, idx_a: int, idx_b: int) -> None:
+            """Ask the model to call validate_experiment for two chosen tabs."""
+            self._skip_interpret = True
+            self._active_template_id = ""
+            self._run_compare_template(
+                VALIDATE_EXPERIMENT_PROMPT, idx_a=idx_a, idx_b=idx_b)
+
         def _use_template(self, template_id: str, prompt: str) -> None:
             if self._busy:
                 return
+            self._skip_interpret = True
             self._active_template_id = str(template_id or "")
             if is_agent_template(template_id):
                 self._set_investigation_plan(default_investigation_plan(
@@ -30879,6 +32863,67 @@ def create_ai_assistant_panel(
                 return
             self._input.setPlainText(prompt)
             self.send_current()
+
+        def _hide_more_menu(self) -> None:
+            menu = getattr(self, "_more_menu", None)
+            if menu is not None and menu.isVisible():
+                menu.hide()
+
+        def _clear_more_reclick_guard(self) -> None:
+            self._more_reclick_guard = False
+
+        def _toggle_more_menu(self) -> None:
+            if getattr(self, "_more_reclick_guard", False):
+                return
+            menu = getattr(self, "_more_menu", None)
+            if menu is None:
+                return
+            if menu.isVisible():
+                menu.hide()
+                return
+            self._place_more_menu()
+            menu.show()
+
+        def _place_more_menu(self) -> None:
+            """Size to full 2-column content (web overlay is not a scroller)."""
+            btn = getattr(self, "_more_btn", None)
+            menu = getattr(self, "_more_menu", None)
+            if btn is None or menu is None:
+                return
+            menu.setMinimumHeight(0)
+            menu.setMaximumHeight(16777215)
+            menu.adjustSize()
+            hint = menu.sizeHint()
+            width = max(360, int(hint.width()))
+            height = max(1, int(hint.height()))
+            gap = 4
+            br = btn.rect()
+            top_left = btn.mapToGlobal(br.topLeft())
+            bottom_right = btn.mapToGlobal(br.bottomRight())
+            screen = QApplication.primaryScreen().availableGeometry()
+            win = btn.window()
+            if win is not None and win.screen() is not None:
+                screen = win.screen().availableGeometry()
+            space_below = screen.bottom() - bottom_right.y()
+            space_above = top_left.y() - screen.top()
+            x = bottom_right.x() - width
+            x = max(screen.left() + 8, min(x, screen.right() - width - 8))
+            if space_below >= height + gap:
+                y = bottom_right.y() + gap
+            elif space_above >= height + gap:
+                y = top_left.y() - gap - height
+            elif space_above >= space_below:
+                y = max(screen.top() + 8, top_left.y() - gap - height)
+            else:
+                y = bottom_right.y() + gap
+                if y + height > screen.bottom() - 8:
+                    y = max(screen.top() + 8, screen.bottom() - 8 - height)
+            menu.resize(width, height)
+            menu.move(x, y)
+
+        def _on_more_template(self, template_id: str, prompt: str) -> None:
+            self._hide_more_menu()
+            self._use_template(template_id, prompt)
 
         def _user_investigation_templates(self) -> List[Dict[str, Any]]:
             raw = ""
@@ -30896,36 +32941,54 @@ def create_ai_assistant_panel(
             return list(builtin_investigation_templates()) + self._user_investigation_templates()
 
         def _rebuild_investigation_menu(self) -> None:
-            menu = getattr(self, "_more_menu", None)
-            if menu is None:
+            col = getattr(self, "_investigation_col", None)
+            if col is None:
                 return
-            for act in list(self._investigation_template_actions.values()):
-                try:
-                    menu.removeAction(act)
-                except Exception:
-                    pass
+            lay = col.layout()
+            _clear_layout(lay)
+            lay.addWidget(_ai_more_heading("Investigations"))
             self._investigation_template_actions = {}
-            save_act = getattr(self, "_save_investigation_template_action", None)
-            if save_act is not None:
-                try:
-                    menu.removeAction(save_act)
-                except Exception:
-                    pass
+            live = (not self._busy) and self._ai_is_enabled()
             for tpl in self._all_investigation_templates():
-                act = menu.addAction(str(tpl.get("label") or tpl.get("id")))
-                act.setToolTip(investigation_template_prompt(tpl))
-                act.triggered.connect(
-                    lambda _=False, t=dict(tpl): self._run_investigation_template(t)
+                act = _ai_more_item(
+                    str(tpl.get("label") or tpl.get("id")),
+                    investigation_template_prompt(tpl),
                 )
+                act.setEnabled(live)
+                act.clicked.connect(
+                    lambda _=False, t=dict(tpl): self._on_more_investigation(t)
+                )
+                lay.addWidget(act)
                 self._investigation_template_actions[str(tpl.get("id") or "")] = act
-            if save_act is None:
-                save_act = menu.addAction("Save as template\u2026")
-                save_act.setToolTip(
-                    "Save the current investigation steps as a reusable template")
-                save_act.triggered.connect(self._save_investigation_template)
-                self._save_investigation_template_action = save_act
-            else:
-                menu.addAction(save_act)
+            save_act = _ai_more_item(
+                "Save as template\u2026",
+                "Save the current investigation steps as a reusable template",
+            )
+            save_act.setEnabled(not self._busy)
+            save_act.clicked.connect(self._on_more_save_template)
+            self._save_investigation_template_action = save_act
+            lay.addWidget(save_act)
+            lay.addWidget(_ai_more_heading("Knowledge"))
+            know_act = _ai_more_item(
+                "Save current finding\u2026",
+                "Store this finding as local historical knowledge",
+            )
+            know_act.setEnabled(not self._busy)
+            know_act.clicked.connect(self._on_more_save_knowledge)
+            self._save_knowledge_action = know_act
+            lay.addWidget(know_act)
+
+        def _on_more_investigation(self, tpl: Dict[str, Any]) -> None:
+            self._hide_more_menu()
+            self._run_investigation_template(tpl)
+
+        def _on_more_save_template(self) -> None:
+            self._hide_more_menu()
+            self._save_investigation_template()
+
+        def _on_more_save_knowledge(self) -> None:
+            self._hide_more_menu()
+            self._save_user_knowledge()
 
         def _save_investigation_template(self) -> None:
             steps: List[str] = []
@@ -31016,6 +33079,120 @@ def create_ai_assistant_panel(
                     "Finish with a verdict, jump:TIME evidence, and one next check."
                 )
                 self._use_template("investigate", prompt)
+
+        def _on_scope_action(self, action: str, key: str) -> None:
+            act = str(action or "").strip().lower()
+            interpreted = dict(
+                getattr(self, "_interpreted_query", None)
+                or (self._evidence_payload or {}).get("interpreted")
+                or {}
+            )
+            if act == "toggle":
+                interpreted = toggle_interpreted_scope(interpreted, key)
+                self._interpreted_query = interpreted
+                payload = dict(self._evidence_payload or {})
+                payload["interpreted"] = interpreted
+                scopes = [str(s) for s in (interpreted.get("scope") or []) if s]
+                mode = str(interpreted.get("mode") or interpreted.get("kind") or "")
+                payload["subtitle"] = (
+                    f"{mode}: {', '.join(scopes)}" if mode and scopes
+                    else ", ".join(scopes) or mode
+                )
+                self._evidence_payload = payload
+                self._sync_evidence_log_entry(payload)
+                return
+            if act == "edit":
+                q = str(interpreted.get("interpreted_question") or "").strip()
+                text, ok = QInputDialog.getMultiLineText(
+                    self, "Edit scope", "Interpreted question:", q,
+                )
+                if ok and str(text or "").strip():
+                    interpreted["interpreted_question"] = str(text).strip()
+                    self._interpreted_query = interpreted
+                    payload = dict(self._evidence_payload or {})
+                    payload["interpreted"] = interpreted
+                    payload["conclusion"] = interpreted["interpreted_question"]
+                    self._evidence_payload = payload
+                    self._sync_evidence_log_entry(payload)
+                return
+            if act == "run":
+                self._use_template("investigate", interpreted_run_prompt(interpreted))
+
+        def _on_experiment_action(self, action: str, _key: str) -> None:
+            if str(action or "").strip().lower() != "save":
+                return
+            self._save_user_knowledge()
+
+        def _on_tool_why(self, action: str, name: str) -> None:
+            if str(action or "").strip().lower() != "why":
+                return
+            want = str(name or "").strip()
+            reasons = list((self._evidence_payload or {}).get("tool_reasons") or [])
+            why = ""
+            for r in reasons:
+                if isinstance(r, dict) and str(r.get("tool") or "") == want:
+                    why = str(r.get("reason") or "")
+                    break
+            self._set_status(
+                f"{want}: {why}" if why else f"{want}: no recorded reason"
+            )
+
+        def _user_historical_knowledge(self) -> List[Dict[str, Any]]:
+            raw = ""
+            if get_settings:
+                try:
+                    raw = str(
+                        (get_settings() or {}).get("user_historical_knowledge") or ""
+                    )
+                except Exception:
+                    raw = ""
+            return parse_user_historical_knowledge(raw)
+
+        def _save_user_knowledge(self) -> None:
+            payload = dict(self._evidence_payload or {})
+            finding = payload.get("finding") if isinstance(payload.get("finding"), dict) else {}
+            if not finding:
+                case = payload.get("investigation_case") or {}
+                items = case.get("suspected_findings") or []
+                if items and isinstance(items[0], dict):
+                    finding = items[0]
+            hk = payload.get("historical_knowledge") if isinstance(
+                payload.get("historical_knowledge"), dict) else {}
+            extras = {
+                "issue": str(
+                    payload.get("conclusion") or finding.get("title") or ""
+                ),
+                "fix": str(hk.get("known_fix") or ""),
+                "build": str(hk.get("last_occurrence") or ""),
+                "task": str(finding.get("task") or hk.get("task") or ""),
+                "metrics": dict(hk.get("current") or hk.get("typical") or {}),
+            }
+            for key in ("migrations", "migration_rate", "blocking", "wcet"):
+                if finding.get(key) is not None:
+                    extras[key] = finding.get(key)
+            entry = new_user_historical_entry(finding, extras)
+            name, ok = QInputDialog.getText(
+                self, "Save to knowledge",
+                "Issue label:",
+                text=str(entry.get("issue") or "Saved finding"),
+            )
+            if not ok:
+                return
+            entry["issue"] = str(name or entry["issue"]).strip() or entry["issue"]
+            items = self._user_historical_knowledge()
+            items = [
+                it for it in items
+                if not (
+                    it.get("task") == entry.get("task")
+                    and it.get("issue") == entry.get("issue")
+                )
+            ]
+            items.append(entry)
+            if on_save_settings:
+                on_save_settings({
+                    "user_historical_knowledge": dump_user_historical_knowledge(items),
+                })
+            self._set_status(f"Saved knowledge “{entry['issue']}”.")
 
         def _run_investigation_template(self, template: dict) -> None:
             if self._busy:
@@ -31122,6 +33299,29 @@ def create_ai_assistant_panel(
                 payload["validation"] = prev["validation"]
             if prev.get("cost") and "cost" not in payload:
                 payload["cost"] = prev["cost"]
+            if payload.get("interpreted"):
+                self._interpreted_query = dict(payload["interpreted"])
+            elif prev.get("interpreted") and "interpreted" not in payload:
+                payload["interpreted"] = prev["interpreted"]
+            if payload.get("experiment"):
+                hyps = list(
+                    payload.get("hypotheses_managed")
+                    or payload.get("hypotheses")
+                    or prev.get("hypotheses_managed")
+                    or prev.get("hypotheses")
+                    or []
+                )
+                updated = apply_experiment_to_hypotheses(hyps, payload["experiment"])
+                if updated:
+                    payload["hypotheses_managed"] = updated
+                    payload["hypotheses"] = updated
+            finding = payload.get("finding") if isinstance(payload.get("finding"), dict) else None
+            if finding:
+                payload["historical_knowledge"] = historical_knowledge_for_finding(
+                    finding,
+                    current=finding,
+                    user_catalog=self._user_historical_knowledge(),
+                )
             self._evidence_payload = dict(payload)
             self._sync_evidence_log_entry(self._evidence_payload)
 
@@ -31403,7 +33603,7 @@ def create_ai_assistant_panel(
 
         def _on_err(self, msg: str) -> None:
             self._append("assistant", f"(Error) {msg}")
-            self._set_status(msg.split("\n", 1)[0][:200])
+            self._set_status((msg or "").split("\n", 1)[0][:200], error=True)
             low = (msg or "").lower()
             if "http 401" in low or "http 403" in low or "api key required" in low:
                 self._auth_forced = True
@@ -31433,6 +33633,30 @@ def create_ai_assistant_panel(
                     self._set_status(f"Context error: {exc}")
                     return
 
+            skip = bool(getattr(self, "_skip_interpret", False))
+            self._skip_interpret = False
+            if should_confirm_interpreted_query(
+                query, already_interpreted=skip,
+            ):
+                self._input.clear()
+                self._append("user", query)
+                cursors = list(ctx.get("cursors") or [])
+                lo = hi = None
+                if len(cursors) >= 2:
+                    lo, hi = min(float(t) for t in cursors), max(float(t) for t in cursors)
+                data = interpret_investigation_query(
+                    query,
+                    findings=list(ctx.get("findings") or []),
+                    cursor_lo=lo,
+                    cursor_hi=hi,
+                )
+                self._update_evidence_from_tool_result(
+                    "interpret_query", {"ok": True, **data},
+                )
+                self._set_status(
+                    "Confirm investigation scope, then Run investigation."
+                )
+                return
             self._input.clear()
             self._send_query(query, ctx)
 
@@ -31443,6 +33667,21 @@ def create_ai_assistant_panel(
                 return
 
             ctx = normalize_ai_context(ctx)
+            active = resolve_ai_settings(cfg)
+            privacy = apply_cloud_privacy(
+                ctx.get("findings_text", ""),
+                query,
+                endpoint_is_local=is_local_ai_host(active.get("base_url", "")),
+                redact_task_names=str(cfg.get("redact_task_names", "")).lower()
+                in ("1", "true", "yes", "on"),
+                sensitive=str(cfg.get("trace_sensitive", "")).lower()
+                in ("1", "true", "yes", "on"),
+            )
+            if privacy.get("blocked"):
+                self._set_status(str(privacy.get("note") or "Cloud AI disabled."))
+                return
+            ctx["findings_text"] = privacy.get("findings_text") or ctx.get("findings_text", "")
+            query = str(privacy.get("query") or query)
             self._append("user", query)
             self._tool_round = 0
             self._chat_messages = _build_chat_messages(
@@ -31458,7 +33697,6 @@ def create_ai_assistant_panel(
                 ),
             )
             self._set_busy(True)
-            active = resolve_ai_settings(cfg)
             label = ai_preset_info(active["preset"])[1]
             self._set_status(f"Waiting for {label} ({active['model']})…")
 
@@ -34138,6 +36376,8 @@ class _TraceCompareDialog(QDialog):
         idx_b: Optional[int] = None,
         ai_enabled: bool = True,
         on_query_ai: Optional[Callable] = None,
+        on_validate_experiment: Optional[Callable] = None,
+        on_compare: Optional[Callable] = None,
     ) -> None:
         parent_w = parent if parent is not None else (
             win if isinstance(win, QWidget) else None)
@@ -34235,6 +36475,11 @@ class _TraceCompareDialog(QDialog):
         btns = QDialogButtonBox(QDialogButtonBox.Close)
         self._ai_enabled = bool(ai_enabled)
         self._on_query_ai = on_query_ai
+        self._on_validate_experiment = on_validate_experiment
+        self._on_compare = on_compare
+        self._validate_btn = btns.addButton(
+            "Validate experiment…", QDialogButtonBox.ButtonRole.ActionRole)
+        self._validate_btn.clicked.connect(self._validate_with_ai)
         self._ai_btn = btns.addButton(
             "Query with AI…", QDialogButtonBox.ButtonRole.ActionRole)
         self._ai_btn.clicked.connect(self._query_with_ai)
@@ -34260,12 +36505,15 @@ class _TraceCompareDialog(QDialog):
 
     def set_ai_enabled(self, enabled: bool) -> None:
         self._ai_enabled = bool(enabled)
-        if getattr(self, "_ai_btn", None) is None:
-            return
-        self._ai_btn.setToolTip(
-            "Open the AI Assistant and walk through these Trace Compare tables"
-            if self._ai_enabled else
-            "Enable AI Assistant in Settings → AI")
+        tip_off = "Enable AI Assistant in Settings → AI"
+        if getattr(self, "_ai_btn", None) is not None:
+            self._ai_btn.setToolTip(
+                "Open the AI Assistant and walk through these Trace Compare tables"
+                if self._ai_enabled else tip_off)
+        if getattr(self, "_validate_btn", None) is not None:
+            self._validate_btn.setToolTip(
+                "Score expected vs actual deltas from this Trace Compare"
+                if self._ai_enabled else tip_off)
 
     def _selected_tab_indices(self) -> Tuple[Optional[int], Optional[int]]:
         return self._combo_a.currentData(), self._combo_b.currentData()
@@ -34274,6 +36522,14 @@ class _TraceCompareDialog(QDialog):
         idx_a, idx_b = self._selected_tab_indices()
         enabled = self._ai_enabled
         cb = self._on_query_ai
+        self.done(int(QDialog.DialogCode.Accepted))
+        if cb is not None:
+            cb(enabled, idx_a, idx_b)
+
+    def _validate_with_ai(self) -> None:
+        idx_a, idx_b = self._selected_tab_indices()
+        enabled = self._ai_enabled
+        cb = self._on_validate_experiment
         self.done(int(QDialog.DialogCode.Accepted))
         if cb is not None:
             cb(enabled, idx_a, idx_b)
@@ -34320,6 +36576,15 @@ class _TraceCompareDialog(QDialog):
                 tbl.setRowCount(0)
             return
         tables = _build_trace_compare_rows(*args)
+        if self._on_compare is not None:
+            try:
+                self._on_compare(
+                    args[0], args[1], args[2], args[3], args[4], args[5],
+                    self._tab_name(self._combo_a),
+                    self._tab_name(self._combo_b),
+                )
+            except Exception:
+                pass
         self._fill_table(self._summary_table, tables.get("summary", []))
         self._fill_table(self._top_table, tables.get("top", []))
         self._fill_table(self._core_util_table, tables.get("core_util", []))
@@ -43948,6 +46213,7 @@ class _RcSettings:
                 "response_language": DEFAULT_AI_RESPONSE_LANGUAGE,
                 "auto_apply": "false",
                 "mcp_log": "false",
+                "extra_presets": "[]",
             },
             **{
                 f"{_pid}_{_field}": ""
@@ -44027,6 +46293,12 @@ class _RcSettings:
         self._last_error = ""
 
     # ---------------------------------------------------------------- getters
+    def section_keys(self, section: str) -> List[str]:
+        """Option names currently stored in *section*."""
+        if not self._cfg.has_section(section):
+            return []
+        return list(self._cfg.options(section))
+
     def get(self, section: str, key: str, fallback: str = "") -> str:
         raw = self._cfg.get(section, key, fallback=fallback)
         if is_ai_api_key_option(section, key):
@@ -44466,9 +46738,12 @@ class _SettingsDialog(QDialog):
                  ai_enabled: bool = True,
                  ai_preset: str = DEFAULT_AI_PRESET,
                  ai_preset_settings: Optional[Dict[str, Dict[str, str]]] = None,
+                 ai_extra_presets: Optional[List[Dict[str, str]]] = None,
                  response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
                  ai_auto_apply: bool = False,
                  ai_mcp_log: bool = False,
+                 ai_redact_task_names: bool = False,
+                 ai_trace_sensitive: bool = False,
                  initial_page: str = "Appearance"):
         super().__init__(parent, Qt.WindowType.Dialog)
         self.setWindowTitle("Settings")
@@ -44800,6 +47075,17 @@ class _SettingsDialog(QDialog):
             "When on, tool calls from the model update the timeline immediately. "
             "When off, the chat shows Apply / Skip on each action card.")
         f4.addRow("", self._ai_auto_apply_cb)
+        self._ai_redact_cb = QCheckBox("Anonymize task names for cloud")
+        self._ai_redact_cb.setChecked(bool(ai_redact_task_names))
+        self._ai_redact_cb.setToolTip(
+            "When the endpoint is not local, replace task names with Task-N "
+            "aliases before Findings leave the machine.")
+        f4.addRow("", self._ai_redact_cb)
+        self._ai_sensitive_cb = QCheckBox("Treat this trace as sensitive")
+        self._ai_sensitive_cb.setChecked(bool(ai_trace_sensitive))
+        self._ai_sensitive_cb.setToolTip(
+            "Disables cloud AI for this machine. Local endpoints still work.")
+        f4.addRow("", self._ai_sensitive_cb)
         self._ai_mcp_log_cb = QCheckBox("Log MCP messages to file")
         self._ai_mcp_log_cb.setChecked(bool(ai_mcp_log))
         self._ai_mcp_log_cb.setToolTip(
@@ -44813,8 +47099,10 @@ class _SettingsDialog(QDialog):
 
         # Field values per preset; switching presets stashes the current inputs
         # so credentials survive a round trip.
+        self._ai_preset_catalog = merge_ai_preset_catalog(
+            ai_extra_presets, ai_preset_settings)
         self._ai_preset_values: Dict[str, Dict[str, str]] = {}
-        for _pid, _label, _base, _model in AI_PRESETS:
+        for _pid, _label, _base, _model in self._ai_preset_catalog:
             stored = dict((ai_preset_settings or {}).get(_pid) or {})
             base = str(stored.get("base_url", "") or _base)
             self._ai_preset_values[_pid] = {
@@ -44830,17 +47118,18 @@ class _SettingsDialog(QDialog):
             }
 
         self._ai_preset_combo = QComboBox()
-        for _pid, _label, _base, _model in AI_PRESETS:
+        for _pid, _label, _base, _model in self._ai_preset_catalog:
             self._ai_preset_combo.addItem(_label, _pid)
         self._ai_preset_combo.setCurrentIndex(
             max(0, self._ai_preset_combo.findData(normalize_ai_preset(ai_preset))))
         self._ai_preset_combo.setToolTip(
             "Ollama runs locally; OpenAI and Gemini are cloud APIs; Custom is "
-            "any other OpenAI-compatible endpoint. Each preset keeps its own "
+            "any other OpenAI-compatible endpoint. Importing a JSON file whose "
+            "preset name is not in this list adds it. Each preset keeps its own "
             "base URL, model, and API key.")
         _wide_combo(
             self._ai_preset_combo,
-            [lab for _pid, lab, _u, _m in AI_PRESETS],
+            [lab for _pid, lab, _u, _m in self._ai_preset_catalog],
             min_w=240,
         )
         f4.addRow("Preset:", self._ai_preset_combo)
@@ -44853,7 +47142,7 @@ class _SettingsDialog(QDialog):
         f4.addRow("Base URL:", self._ai_url_edit)
 
         self._ai_model_lists: Dict[str, List[str]] = {
-            _pid: [] for _pid, _lab, _u, _m in AI_PRESETS
+            _pid: [] for _pid, _lab, _u, _m in self._ai_preset_catalog
         }
         self._ai_model_combo = QComboBox()
         self._ai_model_combo.setEditable(True)
@@ -44904,9 +47193,8 @@ class _SettingsDialog(QDialog):
         self._ai_api_key_edit = QLineEdit()
         self._ai_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self._ai_api_key_edit.setToolTip(
-            "API key or access token for this preset (or OPENAI_API_KEY / "
-            "GEMINI_API_KEY / OLLAMA_API_KEY in the environment). Local Ollama "
-            "needs none. Stored per preset in btf_viewer.rc.")
+            "API key or access token for this preset (or OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY). "
+            "Local Ollama needs none. Stored per preset in btf_viewer.rc.")
         _cred.addWidget(self._ai_api_key_edit)
         _auth_btns = QWidget()
         _auth_h = QHBoxLayout(_auth_btns)
@@ -44965,7 +47253,8 @@ class _SettingsDialog(QDialog):
         _test_h.addWidget(self._ollama_test_btn)
         self._ai_import_btn = QPushButton("Import…")
         self._ai_import_btn.setToolTip(
-            "Load preset, base URL, model, and API key from a JSON file "
+            "Load preset, checkbox flags, base URL, model, and API key from a "
+            "JSON file. Unknown preset names are added to the list "
             "(see examples/ai/ollama.json, gemini.json, openai.json, "
             "deepseek.json, grok.json, presets.json).")
         self._ai_import_btn.clicked.connect(self._import_ai_settings)
@@ -45184,8 +47473,7 @@ class _SettingsDialog(QDialog):
         else:
             self._ai_auth_status.setText(
                 "Key saved for this preset." if key
-                else "Paste a provider API key, or set OPENAI_API_KEY / "
-                "GEMINI_API_KEY in the environment.")
+                else "Paste a provider API key, or set OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY.")
             self._ai_api_key_edit.setPlaceholderText(
                 "Required — provider API key")
         if _pid == AI_PRESET_OLLAMA and mode == AI_AUTH_NONE:
@@ -45241,13 +47529,75 @@ class _SettingsDialog(QDialog):
             f"color:{color}; padding:4px 0; min-height:40px;")
         self._ollama_test_status.setText(message)
 
+    def _ai_combo_preset_ids(self) -> List[str]:
+        return [
+            str(self._ai_preset_combo.itemData(i) or "")
+            for i in range(self._ai_preset_combo.count())
+        ]
+
+    def _refresh_ai_preset_combo_width(self) -> None:
+        labels = [
+            self._ai_preset_combo.itemText(i)
+            for i in range(self._ai_preset_combo.count())
+        ]
+        fm = self._ai_preset_combo.fontMetrics()
+        w = max((fm.horizontalAdvance(s) for s in labels if s), default=120) + 56
+        w = max(w, 240)
+        self._ai_preset_combo.setMinimumWidth(w)
+        try:
+            self._ai_preset_combo.view().setMinimumWidth(w)
+        except Exception:
+            pass
+
+    def _ensure_ai_preset(self, preset_id: str, label: str = "") -> str:
+        """Add *preset_id* to the combo when Import names a new vendor."""
+        pid = sanitize_ai_preset_id(preset_id)
+        if not pid:
+            return ""
+        if self._ai_preset_combo.findData(pid) >= 0:
+            if label and pid not in BUILTIN_AI_PRESET_IDS:
+                idx = self._ai_preset_combo.findData(pid)
+                if idx >= 0:
+                    self._ai_preset_combo.setItemText(
+                        idx, ai_preset_display_label(pid, label))
+            return pid
+        text = ai_preset_display_label(pid, label)
+        self._ai_preset_combo.addItem(text, pid)
+        if pid not in self._ai_preset_values:
+            self._ai_preset_values[pid] = {
+                "base_url": "",
+                "model": "",
+                "api_key": "",
+                "auth_mode": default_ai_auth_mode(pid, ""),
+                "tls_verify": "true",
+            }
+        self._ai_model_lists.setdefault(pid, [])
+        self._refresh_ai_preset_combo_width()
+        return pid
+
     def apply_ai_settings_patch(self, patch: Dict[str, str]) -> str:
         """Apply an imported settings patch to the AI page; return a summary."""
         # Keep whatever is typed for the visible preset — the file may name
         # a different one.
         self._stash_ai_preset_fields()
+        extras = parse_extra_ai_presets(patch.get("extra_presets", ""))
+        extra_labels = {row["id"]: row["label"] for row in extras}
+        for row in extras:
+            self._ensure_ai_preset(row["id"], row["label"])
+        suffixes = tuple("_" + field for field in AI_PRESET_FIELDS)
+        for key in patch:
+            for suf in suffixes:
+                if not str(key).endswith(suf):
+                    continue
+                pid = sanitize_ai_preset_id(str(key)[: -len(suf)])
+                if pid:
+                    self._ensure_ai_preset(pid, extra_labels.get(pid, ""))
+                break
+        if patch.get("preset"):
+            self._ensure_ai_preset(
+                patch["preset"], extra_labels.get(normalize_ai_preset(patch["preset"]), ""))
         touched: List[str] = []
-        for pid, label, _base, _model in AI_PRESETS:
+        for pid in self._ai_combo_preset_ids():
             vals = dict(self._ai_preset_values.get(pid, {}))
             changed = False
             for field in AI_PRESET_FIELDS:
@@ -45257,6 +47607,10 @@ class _SettingsDialog(QDialog):
                     changed = True
             if changed:
                 self._ai_preset_values[pid] = vals
+                idx = self._ai_preset_combo.findData(pid)
+                label = (
+                    self._ai_preset_combo.itemText(idx)
+                    if idx >= 0 else ai_preset_display_label(pid))
                 touched.append(label)
         language = patch.get("response_language", "")
         if language:
@@ -45265,16 +47619,38 @@ class _SettingsDialog(QDialog):
                 self._response_lang_combo.addItem(language)
                 idx = self._response_lang_combo.findText(language)
             self._response_lang_combo.setCurrentIndex(max(0, idx))
+        flag_map = (
+            ("enabled", self._ai_enabled_cb),
+            ("auto_apply", self._ai_auto_apply_cb),
+            ("redact_task_names", self._ai_redact_cb),
+            ("trace_sensitive", self._ai_sensitive_cb),
+            ("mcp_log", self._ai_mcp_log_cb),
+        )
+        for key, checkbox in flag_map:
+            if key not in patch:
+                continue
+            checkbox.setChecked(
+                str(patch.get(key, "")).strip().lower()
+                in ("1", "true", "yes", "on"))
         preset = normalize_ai_preset(patch.get("preset") or self._ai_active_preset)
+        if self._ai_preset_combo.findData(preset) < 0:
+            preset = self._ensure_ai_preset(preset) or DEFAULT_AI_PRESET
         self._ai_active_preset = preset
         self._ai_preset_combo.blockSignals(True)
         self._ai_preset_combo.setCurrentIndex(
             max(0, self._ai_preset_combo.findData(preset)))
         self._ai_preset_combo.blockSignals(False)
         self._load_ai_preset_fields(preset)
+        added = [
+            row["label"] for row in extras
+            if row["id"] not in BUILTIN_AI_PRESET_IDS
+        ]
+        extra_note = (
+            f" Added {', '.join(added)} to the preset list." if added else "")
         return (
             f"Imported {', '.join(touched) or 'settings'}. "
             f"Selected {ai_preset_info(preset)[1]} — review, then OK to save."
+            f"{extra_note}"
         )
 
     def _import_ai_settings(self) -> None:
@@ -45439,7 +47815,20 @@ class _SettingsDialog(QDialog):
         self._time_decimals_spin.setValue(_DEFAULT_TIME_DECIMALS)
         self._ai_enabled_cb.setChecked(True)
         self._ai_auto_apply_cb.setChecked(False)
+        self._ai_redact_cb.setChecked(False)
+        self._ai_sensitive_cb.setChecked(False)
         self._ai_mcp_log_cb.setChecked(False)
+        extras = [
+            i for i in range(self._ai_preset_combo.count())
+            if str(self._ai_preset_combo.itemData(i) or "") not in BUILTIN_AI_PRESET_IDS
+        ]
+        self._ai_preset_combo.blockSignals(True)
+        for i in reversed(extras):
+            pid = str(self._ai_preset_combo.itemData(i) or "")
+            self._ai_preset_combo.removeItem(i)
+            self._ai_preset_values.pop(pid, None)
+            self._ai_model_lists.pop(pid, None)
+        self._ai_preset_combo.blockSignals(False)
         for _pid, _label, _base, _model in AI_PRESETS:
             self._ai_preset_values[_pid] = {
                 "base_url": _base, "model": _model, "api_key": "",
@@ -45447,6 +47836,7 @@ class _SettingsDialog(QDialog):
                 "tls_verify": "true",
             }
             self._ai_model_lists[_pid] = []
+        self._refresh_ai_preset_combo_width()
         self._ai_active_preset = DEFAULT_AI_PRESET
         self._ai_preset_combo.setCurrentIndex(
             max(0, self._ai_preset_combo.findData(DEFAULT_AI_PRESET)))
@@ -45510,17 +47900,33 @@ class _SettingsDialog(QDialog):
     @property
     def ai_auto_apply(self) -> bool:      return self._ai_auto_apply_cb.isChecked()
     @property
+    def ai_redact_task_names(self) -> bool: return self._ai_redact_cb.isChecked()
+    @property
+    def ai_trace_sensitive(self) -> bool: return self._ai_sensitive_cb.isChecked()
+    @property
     def ai_mcp_log(self) -> bool:         return self._ai_mcp_log_cb.isChecked()
     @property
     def ai_preset(self) -> str:
         return normalize_ai_preset(self._ai_preset_combo.currentData())
     @property
+    def ai_extra_presets(self) -> List[Dict[str, str]]:
+        extras: List[Dict[str, str]] = []
+        for i in range(self._ai_preset_combo.count()):
+            pid = str(self._ai_preset_combo.itemData(i) or "")
+            if not pid or pid in BUILTIN_AI_PRESET_IDS:
+                continue
+            extras.append({
+                "id": pid,
+                "label": self._ai_preset_combo.itemText(i) or ai_preset_display_label(pid),
+            })
+        return extras
+    @property
     def ai_preset_settings(self) -> Dict[str, Dict[str, str]]:
         """Base URL / model / API key for every preset, not just the active one."""
         self._stash_ai_preset_fields()
         return {
-            _pid: dict(self._ai_preset_values.get(_pid, {}))
-            for _pid, _label, _base, _model in AI_PRESETS
+            pid: dict(self._ai_preset_values.get(pid, {}))
+            for pid in self._ai_combo_preset_ids() if pid
         }
     @property
     def response_language(self) -> str:
@@ -53576,12 +55982,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     _AI_LEGACY_KEYS = ("provider", "openai_preset", "ollama_url")
 
     @classmethod
-    def _ai_setting_keys(cls) -> list:
+    def _ai_setting_keys(cls, extra_ids=()) -> list:
         keys = ["enabled", "preset", "response_language", "auto_apply", "mcp_log",
-                "user_investigation_templates"]
+                "user_investigation_templates", "user_historical_knowledge",
+                "redact_task_names", "trace_sensitive", "extra_presets"]
+        pids = [pid for pid, _label, _base, _model in AI_PRESETS]
+        for pid in extra_ids:
+            if pid and pid not in pids:
+                pids.append(pid)
         keys += [
             f"{pid}_{field}"
-            for pid, _label, _base, _model in AI_PRESETS
+            for pid in pids
             for field in AI_PRESET_FIELDS
         ]
         return keys
@@ -53589,13 +56000,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _ai_read_settings(self) -> dict:
         """AI section of btf_viewer.rc, migrating pre-preset keys on first read."""
         s = self._settings
+        stored = set(s.section_keys("ai"))
         keys = self._ai_setting_keys()
-        cfg = {k: s.get("ai", k, "") for k in keys}
+        cfg = {k: s.get("ai", k, "") for k in set(keys) | stored}
         cfg["enabled"] = cfg["enabled"] or "true"
         cfg["response_language"] = (
             cfg["response_language"] or DEFAULT_AI_RESPONSE_LANGUAGE)
         cfg["auto_apply"] = cfg["auto_apply"] or "false"
         cfg["mcp_log"] = cfg["mcp_log"] or "false"
+        cfg["extra_presets"] = cfg.get("extra_presets") or "[]"
 
         legacy = {k: s.get("ai", k, "") for k in self._AI_LEGACY_KEYS}
         patch = migrate_ai_settings({**cfg, **legacy})
@@ -53604,6 +56017,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if patch:
             cfg.update(patch)
             s.set_many("ai", patch)
+        extra_ids = extra_ai_preset_ids_from_settings(cfg)
+        keys = self._ai_setting_keys(extra_ids)
         if any(v for v in legacy.values()):
             # Migration is one-shot: drop the pre-preset keys from the file.
             s.align_section_keys("ai", set(keys))
@@ -53643,6 +56058,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             cursors = []
         return {
             "findings_text": text,
+            "findings": findings,
             "scope": scope_title or "full trace",
             "span": span,
             "cores": len(tr.core_names or []),
@@ -53677,6 +56093,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if not scope_enabled:
             lo_a = hi_a = lo_b = hi_b = None
         tables = _build_trace_compare_rows(tr_a, tr_b, lo_a, hi_a, lo_b, hi_b)
+        try:
+            self._remember_trace_compare(
+                tr_a, tr_b, lo_a, hi_a, lo_b, hi_b, name_a, name_b,
+            )
+        except Exception:
+            pass
         csv_text = _build_compare_csv(name_a, name_b, scope_enabled, tables)
         if len(csv_text) > 60000:
             csv_text = csv_text[:60000] + "\n… (truncated for AI context)"
@@ -54540,10 +56962,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 annotations=list(self._annotations or []),
             )
         if name == AI_TOOL_COMPARE_PERFORMANCE:
-            return self._ai_compare_performance(
+            payload = self._ai_compare_performance(
                 str(args.get("tab_a") or ""),
                 str(args.get("tab_b") or ""),
             )
+            self._last_ai_compare = payload
+            return payload
         if name == AI_TOOL_GENERATE_REPORT:
             findings = []
             try:
@@ -54818,9 +57242,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 cursor_hi=hi,
             )
         if name == AI_TOOL_VALIDATE_EXPERIMENT:
+            actual = args.get("actual") or {}
+            if not actual:
+                actual = experiment_percents_from_compare(
+                    getattr(self, "_last_ai_compare", None)
+                )
             return validate_experiment_tool(
                 args.get("expected") or {},
-                args.get("actual") or {},
+                actual,
             )
         if name == AI_TOOL_MANAGE_HYPOTHESES:
             findings = []
@@ -54925,6 +57354,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._ai_save_baseline_profile(profile)
         except Exception:
             pass
+
+    def _remember_trace_compare(
+        self,
+        ta: Any,
+        tb: Any,
+        lo_a: Any,
+        hi_a: Any,
+        lo_b: Any,
+        hi_b: Any,
+        name_a: str = "A",
+        name_b: str = "B",
+    ) -> None:
+        """Stash Trace Compare dialog deltas for validate_experiment."""
+        snap_a = _trace_summary_snapshot(ta, lo_a, hi_a)
+        snap_b = _trace_summary_snapshot(tb, lo_b, hi_b)
+        self._last_ai_compare = compare_performance_tabs(
+            snap_a, snap_b, label_a=str(name_a or "A"), label_b=str(name_b or "B"),
+        )
 
     def _ai_compare_performance(self, tab_a: str, tab_b: str) -> dict:
         idx_a = self._ai_resolve_tab_ref(tab_a, 0)
@@ -55039,6 +57486,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self, parent=self, idx_a=idx_a, idx_b=idx_b,
             ai_enabled=self._ai_feature_enabled(),
             on_query_ai=self._query_compare_with_ai,
+            on_validate_experiment=self._validate_compare_with_ai,
+            on_compare=self._remember_trace_compare,
         )
         dlg.setModal(False)
         self._ai_compare_dlg = dlg
@@ -55362,6 +57811,27 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if panel is not None and hasattr(panel, "query_trace_compare"):
             a, b = int(idx_a), int(idx_b)
             QTimer.singleShot(0, lambda: panel.query_trace_compare(a, b))
+
+    def _validate_compare_with_ai(
+        self,
+        ai_enabled: bool = True,
+        idx_a: Optional[int] = None,
+        idx_b: Optional[int] = None,
+    ) -> None:
+        """Trace Compare → Validate experiment… uses last compare actuals."""
+        if not ai_enabled:
+            self._open_settings("AI")
+            return
+        if idx_a is None or idx_b is None or int(idx_a) == int(idx_b):
+            QMessageBox.information(
+                self, "Trace Compare",
+                "Choose two different traces to compare.")
+            return
+        self._focus_ai_panel()
+        panel = getattr(self, "_ai_panel", None)
+        if panel is not None and hasattr(panel, "query_validate_experiment"):
+            a, b = int(idx_a), int(idx_b)
+            QTimer.singleShot(0, lambda: panel.query_validate_experiment(a, b))
 
     def _open_migration_heatmap(self) -> None:
         self._open_corridor_inspector("heatmap")
@@ -56844,12 +59314,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     field: _ai_cfg.get(f"{pid}_{field}", "")
                     for field in AI_PRESET_FIELDS
                 }
-                for pid, _label, _base, _model in AI_PRESETS
+                for pid in (
+                    [p[0] for p in AI_PRESETS]
+                    + extra_ai_preset_ids_from_settings(_ai_cfg)
+                )
             },
+            ai_extra_presets=parse_extra_ai_presets(_ai_cfg.get("extra_presets")),
             response_language=_ai_cfg["response_language"],
             ai_auto_apply=str(_ai_cfg.get("auto_apply", "false")).lower()
             in ("1", "true", "yes", "on"),
             ai_mcp_log=str(_ai_cfg.get("mcp_log", "false")).lower()
+            in ("1", "true", "yes", "on"),
+            ai_redact_task_names=str(_ai_cfg.get("redact_task_names", "false")).lower()
+            in ("1", "true", "yes", "on"),
+            ai_trace_sensitive=str(_ai_cfg.get("trace_sensitive", "false")).lower()
             in ("1", "true", "yes", "on"),
             initial_page=page if isinstance(page, str) else "Appearance",
         )
@@ -56906,6 +59384,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 "response_language": dlg.response_language or DEFAULT_AI_RESPONSE_LANGUAGE,
                 "auto_apply": str(dlg.ai_auto_apply).lower(),
                 "mcp_log": str(dlg.ai_mcp_log).lower(),
+                "redact_task_names": str(dlg.ai_redact_task_names).lower(),
+                "trace_sensitive": str(dlg.ai_trace_sensitive).lower(),
+                "extra_presets": dump_extra_ai_presets(dlg.ai_extra_presets),
             }
             for _pid, _vals in dlg.ai_preset_settings.items():
                 for _field in AI_PRESET_FIELDS:
@@ -56915,6 +59396,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             )
             if _ai_changed:
                 self._settings.set_many("ai", _ai_upd)
+                extra_ids = [row["id"] for row in dlg.ai_extra_presets]
+                self._settings.align_section_keys(
+                    "ai", set(self._ai_setting_keys(extra_ids)))
                 panel = getattr(self, "_ai_panel", None)
                 refresh = getattr(panel, "_refresh_localized_chrome", None)
                 if callable(refresh):
@@ -57282,6 +59766,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self, parent=self,
             ai_enabled=self._ai_feature_enabled(),
             on_query_ai=self._query_compare_with_ai,
+            on_validate_experiment=self._validate_compare_with_ai,
+            on_compare=self._remember_trace_compare,
         ), self)
 
     def _scroll_view_to_task(self, task: str) -> None:
@@ -58131,6 +60617,16 @@ def _bootstrap_qt_app(argv: list[str] | None = None) -> QApplication:
 # Entry point
 # ===========================================================================
 
+def _cli_ai_rc_cfg() -> Dict[str, str]:
+    """Load ``[ai]`` from ``btf_viewer.rc``, decrypting ``*_api_key`` values."""
+    rc = _RcSettings()
+    cfg: Dict[str, str] = {}
+    if hasattr(rc, "_cfg") and rc._cfg.has_section("ai"):
+        for key in rc._cfg.options("ai"):
+            cfg[key] = rc.get("ai", key)
+    return cfg
+
+
 def _cli_validate_range_pair(lo: Optional[int], hi: Optional[int], label: str) -> Optional[str]:
     if (lo is None) ^ (hi is None):
         return f"error: {label} requires both endpoints (e.g. --{label}-lo and --{label}-hi)"
@@ -58307,7 +60803,8 @@ Headless analysis commands (desktop only — no GUI, no Qt window):
   compare      Two-trace diff (Trace Compare dialog → Export).
   analyze      CI regression gate vs a baseline .btf or metrics JSON
                (--fail-on-regression; optional --ai narrative).
-  ai-test      Offline AI evidence/validator benchmark (tests/ai dataset).
+  ai-test      AI evidence/validator benchmark (tests/ai dataset).
+               Offline fixtures by default; --models runs a live endpoint.
   migrations   Core Migrations table only (CSV).
   snapshot     Export a PNG/SVG image (timeline, migration inspector, or a
                statistics metric plot) without opening the GUI.
@@ -58907,24 +61404,51 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
 
     ai_test = sub.add_parser(
         "ai-test",
-        help="offline AI evidence/validator benchmark (no live model required)",
+        help="AI evidence/validator benchmark (offline fixtures or live --config)",
         description=(
-            "Score fixture responses in a JSON dataset (file or directory) "
-            "against expected facts: finding types, task names, jump:TIME "
-            "scope, and tool lists. Does not call a live model.\n\n"
+            "Score expected-facts cases in a JSON dataset (file or directory).\n"
+            "Without --config, uses canned responses in dataset.json (no live model).\n"
+            "With --config, calls endpoints listed in the suite XML.\n\n"
             "  %(prog)s ai-test --dataset tests/ai\n"
-            "  %(prog)s ai-test --dataset tests/ai/dataset.json --fail-under 70\n"
+            "  %(prog)s ai-test --dataset tests/ai --fail-under 70\n"
+            "  %(prog)s ai-test --config examples/ai/benchmark.xml -o AI_BENCHMARK.md\n"
+            "  %(prog)s ai-test --config examples/ai/benchmark-selfsigned.xml\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ai_test.add_argument(
         "--dataset", metavar="PATH",
         default=None,
-        help="JSON file or tests/ai directory (default: tests/ai)",
+        help="JSON file or tests/ai directory (default: tests/ai, or <dataset> in --config)",
     )
     ai_test.add_argument(
-        "--fail-under", type=int, default=70, metavar="N",
-        help="exit 1 when any case overall score is below N (default 70)",
+        "--fail-under", type=int, default=None, metavar="N",
+        help="exit 1 when any case overall score is below N (default 70 offline, or <fail-under> in --config)",
+    )
+    ai_test.add_argument(
+        "-c", "--config", metavar="XML",
+        default="",
+        help="live suite XML (models, base-url, tls-verify, api-key/env). See examples/ai/benchmark.xml",
+    )
+    ai_test.add_argument(
+        "--models", metavar="IDS",
+        default="",
+        help="comma-separated model ids to run from the suite XML (default: all <model> entries)",
+    )
+    ai_test.add_argument(
+        "--base-url", metavar="URL",
+        default="",
+        help="override every model's OpenAI-compatible base URL",
+    )
+    ai_test.add_argument(
+        "--insecure",
+        action="store_true",
+        help="skip TLS certificate verification (self-signed / private CA)",
+    )
+    ai_test.add_argument(
+        "-o", "--output", metavar="PATH",
+        default="",
+        help="write a markdown report (e.g. AI_BENCHMARK.md; or <output> in --config)",
     )
 
     return parser, {
@@ -59140,10 +61664,7 @@ def _cli_analyze_run(args: argparse.Namespace) -> int:
         except Exception:
             pass
         try:
-            rc = _RcSettings()
-            cfg: Dict[str, str] = {}
-            if hasattr(rc, "_cfg") and rc._cfg.has_section("ai"):
-                cfg.update({k: v for k, v in rc._cfg.items("ai")})
+            cfg = _cli_ai_rc_cfg()
             active = resolve_ai_settings(cfg)
             narrative = ai_chat_completion(
                 "Summarise this CI regression gate for an engineer. "
@@ -59904,17 +62425,158 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "tests", "ai",
     )
-    path = os.path.abspath(args.dataset or default)
+    config_path = str(getattr(args, "config", "") or "").strip()
+    models_raw = str(getattr(args, "models", "") or "").strip()
+    out_path = str(getattr(args, "output", "") or "").strip()
+    suite = None
+    if config_path:
+        try:
+            suite = load_benchmark_suite_xml(config_path)
+        except (OSError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    if models_raw and suite is None:
+        print(
+            "error: live --models requires --config <suite.xml> "
+            "(see examples/ai/benchmark.xml)",
+            file=sys.stderr,
+        )
+        return 1
+    path = os.path.abspath(
+        args.dataset
+        or (suite or {}).get("dataset")
+        or default
+    )
     if not os.path.exists(path):
         print(f"error: dataset not found: {path}", file=sys.stderr)
         return 1
+    fail_under = getattr(args, "fail_under", None)
+    if fail_under is None:
+        fail_under = int((suite or {}).get("fail_under") or 70)
+    else:
+        fail_under = int(fail_under)
+    if not out_path and suite:
+        out_path = str(suite.get("output") or "").strip()
+    offline = None
+    live = None
     try:
-        result = run_offline_benchmark(path, fail_under=int(args.fail_under or 0))
+        offline = run_offline_benchmark(
+            path, fail_under=fail_under if suite is None else 0)
+        if suite is not None:
+            from .ai_assistant import (
+                AI_CHAT_TIMEOUT_S,
+                is_local_ai_host,
+                live_benchmark_chat,
+                normalize_ai_base_url,
+            )
+            from .ai_tools import ai_viewer_tools
+            try:
+                selected = select_benchmark_suite_models(suite, models_raw)
+            except ValueError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
+            override_url = str(getattr(args, "base_url", "") or "").strip()
+            insecure = bool(getattr(args, "insecure", False))
+            tool_catalog = ai_viewer_tools()
+
+            def _tools_for_case(case: dict) -> list:
+                allowed = list(
+                    ((case.get("expected") or {}) if isinstance(case.get("expected"), dict)
+                     else {}).get("allowed_tools") or []
+                )
+                if not allowed:
+                    return tool_catalog
+                want = set(allowed)
+                picked = []
+                for t in tool_catalog:
+                    fn = t.get("function") if isinstance(t.get("function"), dict) else {}
+                    if fn.get("name") in want:
+                        picked.append(t)
+                return picked or tool_catalog
+
+            by_id = {str(m.get("id") or ""): m for m in selected}
+            for spec in selected:
+                mid = str(spec.get("id") or "")
+                url = override_url or str(spec.get("base_url") or "")
+                tls_ok = False if insecure else bool(spec.get("tls_verify", True))
+                key = str(spec.get("api_key") or "")
+                env_name = str(spec.get("api_key_env") or "")
+                if not is_local_ai_host(url) and not key:
+                    hint = env_name or "OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY or <api-key> in the XML"
+                    print(
+                        f"error: API key missing for {mid}. Set {hint}.",
+                        file=sys.stderr,
+                    )
+                    return 1
+                print(
+                    f"[ai-test] {normalize_ai_base_url(url)}  model={mid}"
+                    f"  tls_verify={str(tls_ok).lower()}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+            def complete(query, findings_text, model, case):
+                spec = by_id.get(str(model) or "") or {}
+                cid = str((case or {}).get("id") or "?")
+                url = override_url or str(spec.get("base_url") or "")
+                tls_ok = False if insecure else bool(spec.get("tls_verify", True))
+                timeout = float(spec.get("timeout_s") or 0.0) or max(
+                    float(AI_CHAT_TIMEOUT_S), 180.0)
+                print(f"[ai-test] {model}  {cid} …", file=sys.stderr, flush=True)
+                turn = live_benchmark_chat(
+                    query,
+                    findings_text,
+                    model=model,
+                    case=case,
+                    tools=_tools_for_case(case),
+                    base_url=url,
+                    api_key=str(spec.get("api_key") or ""),
+                    preset=str(spec.get("preset") or ""),
+                    tls_verify=tls_ok,
+                    timeout_s=timeout,
+                )
+                if turn.get("error"):
+                    print(
+                        f"[ai-test] {model}  {cid}  error: {turn['error']}",
+                        file=sys.stderr, flush=True,
+                    )
+                return turn
+
+            live = run_live_benchmark(
+                path,
+                [str(m.get("id") or "") for m in selected],
+                complete=complete,
+                fail_under=fail_under,
+            )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(result["report"], end="")
-    return 0 if result.get("ok") else 1
+    if live:
+        print(live.get("report") or "", end="")
+    elif offline:
+        print(offline.get("report") or "", end="")
+    if out_path:
+        dataset_label = path
+        if path.replace("\\", "/").rstrip("/").endswith("tests/ai"):
+            dataset_label = "tests/ai"
+        md = format_benchmark_markdown(
+            offline=offline, live=live, dataset=dataset_label,
+        )
+        try:
+            with open(out_path, "w", encoding="utf-8") as fh:
+                fh.write(md)
+            print(f"Wrote {out_path}", file=sys.stderr)
+        except OSError as exc:
+            print(f"error: cannot write {out_path}: {exc}", file=sys.stderr)
+            return 1
+    if live is not None:
+        if fail_under:
+            return 0 if live.get("ok") else 1
+        had_error = any(
+            m.get("error") for m in (live.get("models") or [])
+        )
+        return 1 if had_error else 0
+    return 0 if (offline or {}).get("ok") else 1
 
 
 def _cli_ai_test_main(argv: List[str]) -> int:

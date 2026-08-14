@@ -19,8 +19,12 @@ import {
   summariseToolCall,
 } from './aiTools.js'
 import {
+  CAPABILITY_CHAT_PROBE,
+  capabilityProbeBody,
   formatCapabilityReport,
   inferModelCapability,
+  mergeLiveCapability,
+  toolCallingFromChatResponse,
 } from './aiCase.js'
 
 export const AI_SYSTEM_PROMPT =
@@ -338,7 +342,7 @@ export const AI_PRESETS = [
     id: AI_PRESET_OLLAMA,
     label: 'Ollama',
     baseUrl: 'http://localhost:11434/v1',
-    model: 'phi4-mini:3.8b',
+    model: 'qwen3.5:9b',
   },
   {
     id: AI_PRESET_OPENAI,
@@ -357,7 +361,7 @@ export const AI_PRESETS = [
 
 export const DEFAULT_AI_PRESET = AI_PRESET_OLLAMA
 export const DEFAULT_AI_BASE_URL = 'http://localhost:11434/v1'
-export const DEFAULT_AI_MODEL = 'phi4-mini:3.8b'
+export const DEFAULT_AI_MODEL = 'qwen3.5:9b'
 
 /** Per-preset settings stored in browser storage (parity with btf_viewer.rc). */
 export const AI_PRESET_FIELDS = ['baseUrl', 'model', 'apiKey', 'authMode', 'tlsVerify']
@@ -405,21 +409,105 @@ export const AI_PRESET_SIGNIN_LABELS = {
   [AI_PRESET_CUSTOM]: 'Open provider sign-in…',
 }
 
-/** Map a stored/legacy preset id onto one of the known presets. */
-export function normalizeAiPreset(presetId) {
-  const want = String(presetId || DEFAULT_AI_PRESET).trim().toLowerCase().replace(/-/g, '_')
-  if (AI_PRESETS.some((p) => p.id === want)) return want
-  if (want === 'google' || want === 'google_gemini' || want === 'gemini_openai') {
-    return AI_PRESET_GEMINI
-  }
-  if (want === 'ollama_cloud' || want === 'local') return AI_PRESET_OLLAMA
-  if (want === 'chatgpt' || want === 'open_ai') return AI_PRESET_OPENAI
-  return AI_PRESET_CUSTOM
+export const BUILTIN_AI_PRESET_IDS = new Set(AI_PRESETS.map((p) => p.id))
+const AI_PRESET_ID_RE = /^[a-z][a-z0-9_]{0,31}$/
+export const AI_EXTRA_PRESET_LABELS = {
+  deepseek: 'DeepSeek',
+  grok: 'Grok',
+  xai: 'xAI',
+  claude: 'Claude',
+  anthropic: 'Anthropic',
+  mistral: 'Mistral',
+  openrouter: 'OpenRouter',
 }
 
-export function aiPresetInfo(presetId) {
+/** Synonyms of the built-in presets. Unknown vendor ids stay as extra presets. */
+export const AI_IMPORT_PRESET_ALIASES = {
+  chatgpt: AI_PRESET_OPENAI,
+  open_ai: AI_PRESET_OPENAI,
+  openai_compatible: AI_PRESET_CUSTOM,
+  google: AI_PRESET_GEMINI,
+  google_gemini: AI_PRESET_GEMINI,
+  gemini_openai: AI_PRESET_GEMINI,
+  ollama_cloud: AI_PRESET_OLLAMA,
+  local: AI_PRESET_OLLAMA,
+}
+
+/** Lowercase letter-led id, or empty when the name cannot be a preset. */
+export function sanitizeAiPresetId(raw) {
+  let want = String(raw || '').trim().toLowerCase().replace(/[-\s]/g, '_')
+  want = want.replace(/[^a-z0-9_]/g, '').replace(/_+/g, '_').replace(/^_|_$/g, '')
+  return AI_PRESET_ID_RE.test(want) ? want : ''
+}
+
+/** Combo label for a builtin or extra preset. */
+export function aiPresetDisplayLabel(presetId, explicit = '') {
+  const text = String(explicit || '').trim()
+  if (text) return text
+  const pid = sanitizeAiPresetId(presetId)
+  const builtin = AI_PRESETS.find((p) => p.id === pid)
+  if (builtin) return builtin.label
+  if (AI_EXTRA_PRESET_LABELS[pid]) return AI_EXTRA_PRESET_LABELS[pid]
+  return pid ? pid.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'Custom'
+}
+
+/** Map a stored/legacy preset id onto a builtin or extra preset. */
+export function normalizeAiPreset(presetId) {
+  const want = sanitizeAiPresetId(presetId)
+  if (!want) return DEFAULT_AI_PRESET
+  if (AI_PRESETS.some((p) => p.id === want)) return want
+  if (AI_IMPORT_PRESET_ALIASES[want]) return AI_IMPORT_PRESET_ALIASES[want]
+  return want
+}
+
+export function aiPresetInfo(presetId, extraPresets = []) {
   const want = normalizeAiPreset(presetId)
-  return AI_PRESETS.find((p) => p.id === want) || AI_PRESETS[0]
+  const builtin = AI_PRESETS.find((p) => p.id === want)
+  if (builtin) return builtin
+  const extra = (extraPresets || []).find((p) => p.id === want)
+  if (extra) {
+    return {
+      id: extra.id,
+      label: extra.label || aiPresetDisplayLabel(extra.id),
+      baseUrl: extra.baseUrl || '',
+      model: extra.model || '',
+    }
+  }
+  return { id: want, label: aiPresetDisplayLabel(want), baseUrl: '', model: '' }
+}
+
+export function parseExtraAiPresets(raw) {
+  if (!raw) return []
+  let data = raw
+  if (typeof data === 'string') {
+    const text = data.trim()
+    if (!text) return []
+    try { data = JSON.parse(text) } catch { return [] }
+  }
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    data = Object.entries(data).map(([id, val]) => (
+      val && typeof val === 'object' && !Array.isArray(val)
+        ? { id, ...val }
+        : { id, label: String(val) }
+    ))
+  }
+  if (!Array.isArray(data)) return []
+  const out = []
+  const seen = new Set()
+  for (const item of data) {
+    let pid = ''
+    let label = ''
+    if (typeof item === 'string') {
+      pid = sanitizeAiPresetId(item)
+    } else if (item && typeof item === 'object') {
+      pid = sanitizeAiPresetId(item.id || item.preset)
+      label = String(item.label || item.name || '').trim()
+    }
+    if (!pid || BUILTIN_AI_PRESET_IDS.has(pid) || seen.has(pid)) continue
+    seen.add(pid)
+    out.push({ id: pid, label: aiPresetDisplayLabel(pid, label) })
+  }
+  return out
 }
 
 /** Base URL / model to fill in when the user picks a preset. */
@@ -496,19 +584,6 @@ export function migrateAiSettings(saved = {}) {
   return Object.keys(out).length ? out : null
 }
 
-// Preset ids accepted by an import file beyond the current ones; older exports
-// and vendor names map onto an existing preset.
-export const AI_IMPORT_PRESET_ALIASES = {
-  chatgpt: AI_PRESET_OPENAI,
-  open_ai: AI_PRESET_OPENAI,
-  openai_compatible: AI_PRESET_CUSTOM,
-  xai: AI_PRESET_CUSTOM,
-  grok: AI_PRESET_CUSTOM,
-  deepseek: AI_PRESET_CUSTOM,
-  google: AI_PRESET_GEMINI,
-  google_gemini: AI_PRESET_GEMINI,
-}
-
 function jsonStr(obj, ...names) {
   for (const name of names) {
     const value = obj?.[name]
@@ -520,16 +595,34 @@ function jsonStr(obj, ...names) {
   return ''
 }
 
-/** Preset id for an import file, rejecting names we cannot place. */
+function jsonBool(obj, ...names) {
+  for (const name of names) {
+    if (!obj || !Object.prototype.hasOwnProperty.call(obj, name)) continue
+    const value = obj[name]
+    if (value == null) continue
+    if (typeof value === 'boolean') return value
+    const s = String(value).trim().toLowerCase()
+    if (['1', 'true', 'yes', 'on'].includes(s)) return true
+    if (['0', 'false', 'no', 'off'].includes(s)) return false
+    return Boolean(value)
+  }
+  return undefined
+}
+
+/** Preset id for an import file; unknown names become extra presets. */
 function importPresetId(raw) {
-  const want = String(raw).trim().toLowerCase().replace(/[-\s]/g, '_')
+  const want = sanitizeAiPresetId(raw)
+  if (!want) {
+    throw new Error(
+      `Unknown preset "${raw}". Use a letter-led id such as ollama or deepseek.`,
+    )
+  }
   const hit = AI_PRESETS.find(
-    (p) => want === p.id || want === p.label.toLowerCase().replace(/\s/g, '_'),
+    (p) => want === p.id || want === sanitizeAiPresetId(p.label),
   )
   if (hit) return hit.id
   if (AI_IMPORT_PRESET_ALIASES[want]) return AI_IMPORT_PRESET_ALIASES[want]
-  const valid = AI_PRESETS.map((p) => p.id).join(', ')
-  throw new Error(`Unknown preset "${raw}". Use one of: ${valid}.`)
+  return want
 }
 
 /** Guess the preset when the file only carries a base URL. */
@@ -554,12 +647,15 @@ export function stripAiSettingsJsonc(text) {
  *
  * Accepts a flat file describing one endpoint
  * (`{ preset, base_url, model, api_key, auth_mode }`) or a `presets` object carrying
- * several. snake_case and camelCase key names both work, so files exported
- * from either app import into both. Whole-line `//` comments are ignored.
- * Throws `Error` with a user-facing message when the file cannot be applied.
+ * several. Unknown preset names become extra presets added to the combo.
+ * Checkbox flags (`enabled`, `auto_apply`, `redact_task_names`,
+ * `trace_sensitive`, `mcp_log`) are imported when present. snake_case and
+ * camelCase key names both work, so files exported from either app import into
+ * both. Whole-line `//` comments are ignored. Throws `Error` with a
+ * user-facing message when the file cannot be applied.
  *
  * @param {string|object} data
- * @returns {{ preset?: string, presets: object, responseLanguage?: string }}
+ * @returns {{ preset?: string, presets: object, extraPresets?: object[], responseLanguage?: string }}
  */
 export function parseAiSettingsJson(data) {
   let parsed = data
@@ -577,8 +673,17 @@ export function parseAiSettingsJson(data) {
   const rawPreset = jsonStr(parsed, 'preset', 'aiPreset', 'ai_preset', 'provider')
   let preset = rawPreset ? importPresetId(rawPreset) : ''
   const presets = {}
+  const extraLabels = {}
+
+  const noteExtra = (target, fields) => {
+    if (BUILTIN_AI_PRESET_IDS.has(target)) return
+    const label = jsonStr(fields || {}, 'label', 'name')
+    extraLabels[target] = aiPresetDisplayLabel(
+      target, label || extraLabels[target] || '')
+  }
 
   const collect = (target, fields) => {
+    noteExtra(target, fields)
     let baseUrl = jsonStr(fields, 'base_url', 'baseUrl', 'url')
     if (baseUrl) {
       if (!/^https?:\/\//i.test(baseUrl)) {
@@ -616,6 +721,7 @@ export function parseAiSettingsJson(data) {
     }
   }
 
+  if (preset) noteExtra(preset, parsed)
   const flatUrl = jsonStr(parsed, 'base_url', 'baseUrl', 'url')
   const flatTarget = preset || importPresetFromUrl(flatUrl)
   collect(flatTarget, parsed)
@@ -632,11 +738,33 @@ export function parseAiSettingsJson(data) {
     throw new Error(`Preset "${preset}" needs a base_url.`)
   }
 
+  const extraPresets = Object.entries(extraLabels).map(([id, label]) => ({ id, label }))
+  for (const row of parseExtraAiPresets(parsed.extra_presets ?? parsed.extraPresets)) {
+    if (!extraPresets.some((e) => e.id === row.id)) extraPresets.push(row)
+  }
+
   const out = { presets }
   if (preset) out.preset = preset
+  if (extraPresets.length) out.extraPresets = extraPresets
   const language = jsonStr(
     parsed, 'response_language', 'responseLanguage', 'aiResponseLanguage')
   if (language) out.responseLanguage = language
+  const flags = [
+    ['aiEnabled', ['enabled', 'ai_enabled', 'aiEnabled']],
+    ['aiAutoApply', ['auto_apply', 'ai_auto_apply', 'aiAutoApply']],
+    ['aiRedactTaskNames', [
+      'redact_task_names', 'anonymize_task_names', 'ai_redact_task_names',
+      'aiRedactTaskNames', 'anonymize', 'redact',
+    ]],
+    ['aiTraceSensitive', [
+      'trace_sensitive', 'ai_trace_sensitive', 'aiTraceSensitive', 'sensitive',
+    ]],
+    ['aiMcpLog', ['mcp_log', 'ai_mcp_log', 'aiMcpLog']],
+  ]
+  for (const [dest, keys] of flags) {
+    const value = jsonBool(parsed, ...keys)
+    if (value !== undefined) out[dest] = value
+  }
   return out
 }
 
@@ -687,8 +815,16 @@ export function normalizeApiKey(apiKey = '') {
   return key
 }
 
-/** Read optional Vite / runtime env keys (parity with Desktop os.environ). */
-export function readAiEnvKey(names = []) {
+/** Same names as Desktop. */
+export const AI_API_KEY_ENV_NAMES = ['OPENAI_API_KEY', 'GEMINI_API_KEY', 'OLLAMA_API_KEY']
+export const AI_API_KEY_REQUIRED = (
+  'API key required for remote endpoints '
+  + '(Settings → AI → API key, or OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY). '
+  + 'Paste the raw key only — no Bearer prefix.'
+)
+
+/** Read optional runtime env keys (parity with Desktop os.environ). */
+export function readAiEnvKey(names = AI_API_KEY_ENV_NAMES) {
   let env = {}
   try {
     if (typeof import.meta !== 'undefined' && import.meta.env) {
@@ -704,19 +840,21 @@ export function readAiEnvKey(names = []) {
   } catch {
     /* ignore */
   }
-  for (const name of names) {
-    const raw = env[name] ?? env[`VITE_${name}`] ?? ''
-    const key = normalizeApiKey(raw)
+  const list = Array.isArray(names) ? names : [names]
+  for (const name of list) {
+    const n = String(name || '').trim()
+    if (!n) continue
+    const key = normalizeApiKey(env[n] ?? '')
     if (key) return key
   }
   return ''
 }
 
-/** Settings key, else OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY (VITE_*). */
+/** Settings key, else OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY. */
 export function resolveAiApiKey(apiKey = '') {
   const key = normalizeApiKey(apiKey)
   if (key) return key
-  return readAiEnvKey(['OPENAI_API_KEY', 'GEMINI_API_KEY', 'OLLAMA_API_KEY'])
+  return readAiEnvKey()
 }
 
 /**
@@ -735,6 +873,7 @@ export function normalizeAiContext(ctx = {}) {
     scope: String(c.scope ?? ''),
     metrics: c.metrics ?? null,
     cursors,
+    findings: Array.isArray(c.findings) ? c.findings : [],
   }
 }
 
@@ -960,16 +1099,82 @@ export function aiSameOriginProxyBase(presetId, configuredUrl) {
 }
 
 /**
- * @param {string} query
- * @param {{ findingsText?: string, metrics?: object, span?: string, cores?: any, scope?: string, cursors?: any[] }} ctx
+ * Vendor error message from an HTTP body, without JSON/HTML dump.
+ * @param {string} detail
+ * @returns {string}
  */
+export function summarizeAiHttpErrorDetail(detail) {
+  const text = String(detail || '').trim()
+  if (!text) return ''
+  const head = text.slice(0, 64).trimStart().toLowerCase()
+  if (head.startsWith('<!doctype') || head.startsWith('<html')) return ''
+
+  const walk = (obj) => {
+    if (Array.isArray(obj) && obj.length) return walk(obj[0])
+    if (obj && typeof obj === 'object') {
+      const err = obj.error
+      if (typeof err === 'string' && err.trim()) return err.trim()
+      if (err && typeof err === 'object') {
+        const nested = err.message || err.msg
+        if (nested) return String(nested).trim()
+      }
+      const msg = obj.message || obj.msg
+      if (msg) return String(msg).trim()
+    }
+    if (typeof obj === 'string') return obj.trim()
+    return ''
+  }
+
+  let data
+  try {
+    data = JSON.parse(text)
+  } catch {
+    const startObj = text.indexOf('{')
+    const startArr = text.indexOf('[')
+    const starts = [startObj, startArr].filter((i) => i >= 0)
+    if (starts.length) {
+      try { data = JSON.parse(text.slice(Math.min(...starts))) } catch { data = undefined }
+    }
+  }
+  let msg = data !== undefined ? walk(data) : ''
+  if (!msg) {
+    const m = text.match(/"message"\s*:\s*"((?:\\.|[^"\\])*)"/)
+    if (m) {
+      try { msg = JSON.parse(`"${m[1]}"`) } catch { msg = m[1] }
+    }
+  }
+  if (!msg) {
+    if (text.startsWith('{') || text.startsWith('[')) return ''
+    msg = text
+  }
+  return String(msg).replace(/\s+/g, ' ').trim().slice(0, 300)
+}
+
+/**
+ * One-line HTTP error for the AI panel: `HTTP 503: <message>`.
+ * @param {number} code
+ * @param {string} [detail]
+ * @param {string} [reason]
+ * @param {string} [tip]
+ */
+export function formatAiHttpError(code, detail = '', reason = '', tip = '') {
+  const msg = summarizeAiHttpErrorDetail(detail) || String(reason || '').trim() || 'request failed'
+  let text = `HTTP ${Number(code)}: ${msg}`
+  const extra = String(tip || '').trim()
+  if (extra) {
+    if (!text.endsWith('.')) text += '.'
+    text += ` ${extra}`
+  }
+  return text
+}
+
 function aiHttpErrorTip(status, detail = '', baseUrl = '') {
   const low = String(detail || '').toLowerCase()
   const host = String(baseUrl || '').toLowerCase()
   if (status === 401 || status === 403) {
     return (
       ' Check authentication (Settings → AI → Sign in or API key, '
-      + 'or OPENAI_API_KEY / GEMINI_API_KEY / VITE_*).'
+      + 'or OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY).'
     )
   }
   if (
@@ -1140,11 +1345,7 @@ export async function aiChatCompletion({
   const chatModel = String(model || DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL
   const key = resolveAiApiKey(apiKey)
   if (!key && !isLocalAiHost(urlBase)) {
-    throw new Error(
-      'API key required for remote endpoints '
-      + '(Settings → AI, or VITE_OPENAI_API_KEY / VITE_GEMINI_API_KEY). '
-      + 'Paste the raw key only — no Bearer prefix.',
-    )
+    throw new Error(AI_API_KEY_REQUIRED)
   }
   let chatMessages = normalizeToolChatMessages(messages || [
     { role: 'system', content: buildAiSystemPrompt(responseLanguage) },
@@ -1197,8 +1398,7 @@ export async function aiChatCompletion({
       const detail = (await resp.text().catch(() => '')).slice(0, 400)
       const tip = aiHttpErrorTip(resp.status, detail, urlBase)
       const err = new Error(
-        `HTTP ${resp.status} at ${fetchBase}/chat/completions: `
-        + `${detail || resp.statusText}.${tip}`,
+        formatAiHttpError(resp.status, detail, resp.statusText, tip),
       )
       err.httpStatus = resp.status
       err.httpDetail = detail
@@ -1342,7 +1542,7 @@ export async function aiListModels(baseUrl = DEFAULT_AI_BASE_URL, {
       }
       if (!resp.ok) {
         const detail = (await resp.text().catch(() => '')).slice(0, 300)
-        throw new Error(`HTTP ${resp.status}: ${detail || resp.statusText}`)
+        throw new Error(formatAiHttpError(resp.status, detail, resp.statusText))
       }
       const data = await resp.json()
       return (data?.data || []).map((m) => String(m?.id || '')).filter(Boolean)
@@ -1419,14 +1619,10 @@ export async function aiTestConnection({
   const key = resolveAiApiKey(apiKey)
   const local = isLocalAiHost(urlBase)
   if (!key && !local) {
-    throw new Error(
-      'API key required for remote endpoints '
-      + '(Settings → AI, or VITE_OPENAI_API_KEY / VITE_GEMINI_API_KEY). '
-      + 'Paste the raw key only — no Bearer prefix.',
-    )
+    throw new Error(AI_API_KEY_REQUIRED)
   }
 
-  progress(`1/2 Listing models at ${urlBase}…`)
+  progress(`1/3 Listing models at ${urlBase}…`)
   let served = []
   let listingNote = ''
   try {
@@ -1456,7 +1652,7 @@ export async function aiTestConnection({
     )
   }
 
-  progress(`2/2 Chat probe with ${modelName} (first load can take a while)…`)
+  progress(`2/3 Chat probe with ${modelName} (first load can take a while)…`)
   const chatCtrl = new AbortController()
   const onAbort = () => chatCtrl.abort()
   if (signal) {
@@ -1474,8 +1670,8 @@ export async function aiTestConnection({
       body: JSON.stringify({
         model: modelName,
         stream: false,
-        messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
-        max_tokens: 8,
+        messages: [{ role: 'user', content: CAPABILITY_CHAT_PROBE }],
+        max_tokens: 24,
       }),
     }))
   } catch (err) {
@@ -1499,14 +1695,42 @@ export async function aiTestConnection({
     const detail = (await resp.text().catch(() => '')).slice(0, 300)
     const tip = aiHttpErrorTip(resp.status, detail, urlBase)
     throw new Error(
-      `HTTP ${resp.status} at ${fetchBase}/chat/completions: `
-      + `${detail || resp.statusText}.${tip}`,
+      formatAiHttpError(resp.status, detail, resp.statusText, tip),
     )
   }
   const data = await resp.json()
   const reply = String(data?.choices?.[0]?.message?.content ?? '').trim()
   const note = reply ? ` Probe reply: ${JSON.stringify(reply.slice(0, 40))}.` : ''
-  const capTxt = formatCapabilityReport(inferModelCapability(modelName, { chatOk: true }))
+  let toolOk = null
+  let probeBody = null
+  try {
+    progress(`3/3 Tool-calling probe with ${modelName}…`)
+    const probeCtrl = new AbortController()
+    const probeTimer = setTimeout(() => probeCtrl.abort(), Math.min(timeoutMs, 20000))
+    try {
+      const probed = await aiFetchChat(preset, urlBase, {
+        headers: aiRequestHeaders(key, urlBase),
+        signal: probeCtrl.signal,
+        tlsVerify,
+        body: JSON.stringify(capabilityProbeBody(modelName)),
+      })
+      if (probed.resp.ok) {
+        probeBody = await probed.resp.json()
+        toolOk = toolCallingFromChatResponse(probeBody)
+      }
+    } finally {
+      clearTimeout(probeTimer)
+    }
+  } catch {
+    toolOk = null
+  }
+  const cap = mergeLiveCapability(
+    inferModelCapability(modelName, {
+      chatOk: true, toolCallOk: toolOk, chatText: reply, toolBody: probeBody,
+    }),
+    { chatText: reply, toolBody: probeBody, toolOk },
+  )
+  const capTxt = formatCapabilityReport(cap)
   return `Connected to ${urlBase}. Model ${modelName} ready${listingNote}.${note}`
     + (capTxt ? `\n\n${capTxt}` : '')
 }

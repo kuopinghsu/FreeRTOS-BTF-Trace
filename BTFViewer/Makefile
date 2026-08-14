@@ -6,6 +6,7 @@
 #   make -C BTFViewer demo         # guided demo (demo_8cores)
 #   make -C BTFViewer check-bundle # desktop parity check (CI)
 #   make -C BTFViewer ai-test      # offline AI benchmark (tests/ai)
+#   make -C BTFViewer ai-test-live # live suite XML → AI_BENCHMARK.md (AI_CONFIG)
 
 PYTHON ?= python3
 TRACE ?= ../tracedata/example-2cores.btf.gz
@@ -29,8 +30,10 @@ DEMO_XML ?= demos/demo_8cores/demo_8cores.xml
 DEMO_LANG ?=
 AI_DATASET ?= tests/ai
 AI_FAIL_UNDER ?= 70
+AI_CONFIG ?= examples/ai/benchmark.xml
+AI_MODELS ?=
 
-.PHONY: all help web bundle check-bundle test test-web test-all ai-test ci doc update-images demo demo-voice
+.PHONY: all help web bundle check-bundle test test-web test-all ai-test ai-test-live ci doc update-images demo demo-voice
 
 help:
 	@echo "BTF Viewer — make targets"
@@ -47,10 +50,11 @@ help:
 	@echo "  make test-web     Web unit tests (node --test)"
 	@echo "  make test-all     Desktop + web unit tests"
 	@echo "  make ai-test      Offline AI benchmark ($(AI_DATASET); AI_FAIL_UNDER=$(AI_FAIL_UNDER))"
+	@echo "  make ai-test-live Live suite XML → AI_BENCHMARK.md (AI_CONFIG=$(AI_CONFIG))"
 	@echo "  make ci           test-all + check-bundle (local CI parity)"
 	@echo "  make help         Show this help"
 	@echo ""
-	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)  DEMO_XML=$(DEMO_XML)  DEMO_LANG=$(DEMO_LANG)  AI_DATASET=$(AI_DATASET)  AI_FAIL_UNDER=$(AI_FAIL_UNDER)"
+	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)  DEMO_XML=$(DEMO_XML)  DEMO_LANG=$(DEMO_LANG)  AI_DATASET=$(AI_DATASET)  AI_FAIL_UNDER=$(AI_FAIL_UNDER)  AI_CONFIG=$(AI_CONFIG)  AI_MODELS=$(AI_MODELS)"
 
 
 all: web bundle
@@ -90,6 +94,11 @@ test-all: test test-web
 ai-test: $(OUT)
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) ai-test \
 		--dataset $(AI_DATASET) --fail-under $(AI_FAIL_UNDER)
+
+ai-test-live: $(OUT)
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) ai-test \
+		--config $(AI_CONFIG) $(if $(AI_MODELS),--models $(AI_MODELS),) \
+		--fail-under 0 -o AI_BENCHMARK.md
 
 ci: test-all check-bundle
 

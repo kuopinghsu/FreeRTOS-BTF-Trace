@@ -41,7 +41,8 @@ Metric definitions and formulas are in [Statistics & metrics](#statistics--metri
 | [Quick start](#quick-start) | Install and open a trace |
 | [Demo](#demo) | Scripted tour, voice packs, recording |
 | [Using the viewer](#using-the-viewer) | Navigate, measure, and mark |
-| [Analysis](#analysis) | Findings, problem map, compare, AI |
+| [Analysis](#analysis) | Findings, problem map, Trace Compare |
+| [AI Assistant](#ai-assistant) | Investigation, evidence, workflows, privacy |
 | [Statistics & metrics](#statistics--metrics) | Metric meaning, formulas, charts, how to diagnose |
 | [Export](#export) | Snapshots, reports, Perfetto, CLI |
 | [Settings](#settings) | Preferences and defaults |
@@ -81,7 +82,7 @@ Or use the [hosted demo](https://apps.kuoping.com/btf_viewer.html). Toolbar **De
 cd BTFViewer && make web    # → builds/btf_viewer.html
 ```
 
-**AI:** After a trace is open, import [`examples/ai/presets.json`](examples/ai/presets.json) in **Settings → AI** for ready-made Ollama / OpenAI / Gemini / Custom endpoints. See [AI Assistant](#ai-assistant) (UI) and **[AI.md](AI.md)** (setup, tools, troubleshooting).
+**AI:** After a trace is open, import [`examples/ai/presets.json`](examples/ai/presets.json) in **Settings → AI** for ready-made Ollama / OpenAI / Gemini / DeepSeek / Grok endpoints. See [AI Assistant](#ai-assistant) (user guide) and **[AI.md](AI.md)** (setup, tools, troubleshooting).
 
 <a id="supported-files" name="supported-files">&#x200B;</a>
 ### Supported files ![](../images/readme/h3.svg)
@@ -255,7 +256,7 @@ Software-trace items appear as markers (and optional tag channels). Toggle STI r
 <a id="analysis" name="analysis">&#x200B;</a>
 ## Analysis ![](../images/readme/h2.svg)
 
-Start with toolbar **Analysis** for a severity-tagged triage of the current Statistics scope, then open the named Statistics sections. For a top-down inspection order and worked examples, see **[WORKFLOWS.md](WORKFLOWS.md)**.
+Start with toolbar **Analysis** for a severity-tagged triage of the current Statistics scope, then open the named Statistics sections. For AI-assisted investigation, see [AI Assistant](#ai-assistant). Playbooks: **[WORKFLOWS.md](WORKFLOWS.md)**.
 
 <a id="analysis-findings" name="analysis-findings">&#x200B;</a>
 ### Analysis Findings ![](../images/readme/h3.svg)
@@ -290,34 +291,55 @@ Toolbar **Analysis** summarises likely issues for the current scope (load imbala
 <a id="trace-compare" name="trace-compare">&#x200B;</a>
 ### Trace Compare ![](../images/readme/h3.svg)
 
-With **two or more** tabs open, **Trace Compare…** diffs summary, top tasks, utilisation, migrations, execution, blocking, inter-arrival, preemption, and sync. Optionally limit each side to its own cursor range. Export CSV/HTML from the dialog, or **Query with AI…** to walk the same tables in the **AI** tab (Trace Compare template). See also [Core migration analysis](#core-migration-analysis) below.
+With **two or more** tabs open, **Trace Compare…** diffs summary, top tasks, utilisation, migrations, execution, blocking, inter-arrival, preemption, and sync. Optionally limit each side to its own cursor range. Export CSV/HTML from the dialog, **Validate experiment…** to score expected vs actual deltas in the **AI** tab (`validate_experiment`; actual percents come from this compare, including **Scope to cursors**), or **Query with AI…** to walk the same tables (Trace Compare template). See also [Core migration analysis](#core-migration-analysis) below.
+
+---
 
 <a id="ai-assistant" name="ai-assistant">&#x200B;</a>
-### AI Assistant ![](../images/readme/h3.svg)
+## AI Assistant ![](../images/readme/h2.svg)
 
-The right-panel **AI** tab asks diagnostic questions over **Analysis Findings** (or Trace Compare tables). Same panel on **Desktop** and **Web** (schema, tools, and templates stay in sync). Show it with **View → Show AI Assistant** (or Display settings). Endpoints, tools, workflows / use cases, Desktop vs Web differences, CORS, and CLI details live in **[AI.md](AI.md)** ([Workflows](AI.md#workflows-and-use-cases)). Ask order: [WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow).
+The right-panel **AI** tab asks diagnostic questions over **Analysis Findings** (or Trace Compare tables) — never the raw `.btf`. Same panel on **Desktop** and **Web**. Show it with **View → Show AI Assistant** (or Display settings).
+
+This section is the **user guide** (mental model first, tool list later). Setup, GUI-tool schema, diagrams, Desktop vs Web, CORS, and CLI live in **[AI.md](AI.md)** ([Workflows](AI.md#workflows-and-use-cases)). Ask-order playbooks: [WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow).
 
 ```text
 AI-assisted evidence-driven investigation
 │
-├── What can AI do?          Templates + tools over Findings (not the raw BTF)
-├── Common workflows         Triage → Investigate / Verify / Explain → timeline
-├── Investigation Case       Hypotheses, evidence graph, coverage, validator
-├── Evidence & confidence    Quality band (heuristic, not a probability)
-├── Tools reference          [AI.md → GUI tools](AI.md#gui-tools)
-├── Model configuration      Settings → AI; Test connection capability card
-├── Privacy                  Local / Cloud chip; findings leave the machine, not the BTF
-└── Developer / CLI          `analyze` regression gate; `ai-test` offline benchmark
+├── What can AI do?
+├── Common workflows
+├── Investigation Case
+├── Evidence & confidence
+├── AI capabilities
+├── Tools reference          → AI.md GUI tools
+├── Model configuration
+│   └── API keys
+├── Privacy
+├── Troubleshooting          → AI.md
+└── Developer / CLI          → AI.md
 ```
 
 Observe → Hypothesize → Gather evidence → Verify → Experiment → Compare → Learn → Report. Always confirm `jump:TIME` on the timeline.
 
-1. **Settings → AI** — enable the assistant, pick a preset (**Ollama**, **OpenAI**, **Google Gemini**, or **Custom**), set base URL / model, choose **Authentication** (**None (local)** / **API key** / **Sign in**), optionally **Allow self-signed TLS** (Desktop), then **Test connection**. Refresh next to **Model** lists served ids. The panel chip shows `Local` / `Key saved` / `Needs API key` / `Needs sign-in` / `Signed in`.
-2. **Import…** loads JSON from [`examples/ai`](examples/ai/README.md) (review the form, then save).
-3. Run a **template**, use **Analysis → Investigate… / Root cause… / Verify with AI… / Auto investigate… / Query with AI…**, or type a free-form question. Click `jump:TIME` in the reply to seek the timeline.
-4. Agent templates (**Investigate**, **Root cause**, **Verify finding**, **Auto investigate**, **What-if**, **Optimize**, **Diagnostic report**) show an **Investigation plan** checklist (steps advance as tools run; the final reply completes the list). Mode chips (**Quick** / **Diagnose** / **Compare** / **Optimize** / **Report**) start a tool sequence. **More → Investigations** lists built-in and saved sequences; **Save as template…** stores the current plan. Evidence hypothesis rows offer Support / Reject / Need evidence / Test / Compare. Analysis **Explain…** picks Quick / Technical / Deep.
-5. When the model proposes GUI actions, **Apply** / **Skip** / **Undo** (or enable **Auto-apply GUI actions**). Read-only queries (including `what_if` / `optimize_experiment`) apply immediately.
-6. Set reply language in Settings or **Language…** on the AI bar. Right-click the log to copy or **Save As…** (Markdown / text / HTML). **Clear** between unrelated questions.
+<a id="ai-in-this-section" name="ai-in-this-section">&#x200B;</a>
+### In this section ![](../images/readme/h3.svg)
+
+| Topic | |
+|-------|--|
+| [What can AI do?](#what-can-ai-do) | Templates over Findings; not a chatbot over the BTF |
+| [Common workflows](#common-workflows) | Five repeatable paths from triage to report |
+| [Investigation Case](#investigation-case) | Question, scope, hypotheses, evidence, conclusion |
+| [Evidence & confidence](#evidence--confidence) | Quality band, coverage, falsify, validator |
+| [AI capabilities](#ai-capabilities) | Modes, Explain levels, Test-connection card |
+| [Tools reference](#ai-tools-reference) | Apply / Skip vs immediate queries; full list in AI.md |
+| [Model configuration](#ai-model-configuration) | Settings → AI, Import, [API keys](#ai-api-keys), Test connection |
+| [Privacy](#ai-privacy) | 🟢 Local / 🟡 Cloud / 🔴 Sensitive |
+| [Troubleshooting](#ai-troubleshooting) | Quick checks; full table in AI.md |
+| [Developer / CLI](#ai-developer-cli) | `analyze` / `ai-test` |
+
+<a id="what-can-ai-do" name="what-can-ai-do">&#x200B;</a>
+### What can AI do? ![](../images/readme/h3.svg)
+
+The assistant ranks issues, gathers evidence, places cursors, and proposes experiments. It does **not** read the raw event stream. Prefer a built-in template (they already name metrics and units); type a free-form question only when no template fits.
 
 **Templates** (AI bar, and Analysis / Compare / Corridor shortcuts):
 
@@ -337,7 +359,165 @@ Observe → Hypothesize → Gather evidence → Verify → Experiment → Compar
 | **Triage findings** | Top three issues to open next in Statistics |
 | **Analysis Findings** / ladder | Walk findings, or ask latency / WCET / migrations / balance / tick / priority / deadlines |
 
-Findings may include anomaly rows (WCET Max≫Avg spikes, extreme migration bursts). For headless CI regression checks, see [AI.md → CLI](AI.md#cli-regression-gate).
+Findings may include anomaly rows (WCET Max≫Avg spikes, extreme migration bursts). Agent templates (**Investigate**, **Root cause**, **Verify finding**, **Auto investigate**, **What-if**, **Optimize**, **Diagnostic report**) show an **Investigation plan** checklist (steps advance as tools run; the final reply completes the list).
+
+<a id="common-workflows" name="common-workflows">&#x200B;</a>
+### Common workflows ![](../images/readme/h3.svg)
+
+| # | Goal | What to click |
+|---|------|----------------|
+| 1 | **Triage** | Toolbar **Analysis** → **Triage findings** or **Investigate…** |
+| 2 | **Verify or explain a finding** | Select a row → **Verify with AI…** / **Explain…** (Quick / Technical / Deep) / **Auto investigate…** |
+| 3 | **Explain a time window** | Place ≥2 cursors, **Limit to C1–Cn**, then **Explain this region with AI** or right-click a segment → **Ask AI about this event** |
+| 4 | **Experiment and close the loop** | **What-if** or **Optimize**, change firmware, recapture, **Trace Compare → Validate experiment…** |
+| 5 | **Compare or report** | **Trace Compare → Query with AI…**, or **Diagnostic report** after the cause matches the timeline |
+
+Do not ask for mitigations before the timeline agrees with the finding. Empty or mis-scoped Statistics produce confident nonsense.
+
+<a id="investigation-case" name="investigation-case">&#x200B;</a>
+### Investigation Case ![](../images/readme/h3.svg)
+
+Each investigation is one **Case** in the Evidence panel — not a loose chat transcript:
+
+```text
+Investigation Case
+├── Question
+├── Scope (trace, C1–Cn, tasks, cores)
+├── Findings and hypotheses
+├── Evidence (times, metrics, graph)
+├── Tools executed
+├── Conclusion and confidence
+├── Alternatives rejected
+└── Validation result
+```
+
+A free-form **Ask** is interpreted first (scope card, no LLM yet). Confirm or **Edit scope**, then **Run investigation**. Templates and mode chips skip that confirm step.
+
+Hypothesis rows offer **Support** / **Reject** / **Need evidence** / **Test** / **Compare**. **More → Investigations** lists built-in and saved sequences; **Save as template…** stores the current plan. **Save current finding…** keeps a local note (typical vs current rates) for later `investigate` matches.
+
+<a id="evidence--confidence" name="evidence--confidence">&#x200B;</a>
+### Evidence & confidence ![](../images/readme/h3.svg)
+
+Evidence Quality is a **diagnostic heuristic**, not a probability:
+
+```text
+Evidence Quality
+████████░░ Strong     Confidence: Medium-High
+
+Direct evidence      ✓
+Timeline correlation ✓
+Metric correlation   ✓
+Alternative tested   △
+```
+
+The panel also shows **coverage** (directly observed / timeline / metric / unverified counts), **What would disprove this?**, an **evidence graph**, and **confidence evolution** after each tool. Click **Why?** on a tool step for the host-side reason. After the final reply, a validator flags invented task names and `jump:TIME` values outside the cursor window.
+
+<a id="ai-capabilities" name="ai-capabilities">&#x200B;</a>
+### AI capabilities ![](../images/readme/h3.svg)
+
+Mode chips start a tool sequence without adding extra templates:
+
+| Mode | Intent |
+|------|--------|
+| **Quick** | Find the most likely problem |
+| **Diagnose** | Cause → evidence → verify |
+| **Compare** | Why A differs from B |
+| **Optimize** | Cause → experiments → rank |
+| **Report** | Turn confirmed findings into a write-up |
+
+**Test connection** lists served models, then probes chat / structured output / tool calling. The card is a live overlay on a heuristic (3B vs 7B+ vs cloud) — see [AI.md → capability matrix](AI.md#capability-matrix). Status also accumulates a short cost line (`1.3k tok · 2 tools · 1.5s`).
+
+<a id="ai-tools-reference" name="ai-tools-reference">&#x200B;</a>
+### Tools reference ![](../images/readme/h3.svg)
+
+When the model proposes GUI actions (cursors, zoom, highlight, annotations), use **Apply** / **Skip** / **Undo**, or enable **Auto-apply GUI actions**. Read-only queries (including `what_if` / `optimize_experiment`) apply immediately.
+
+Full tool schema, parameters, and Apply/Undo rules: **[AI.md → GUI tools](AI.md#gui-tools)**. Symptom → template / tool tables: [AI.md → Use cases](AI.md#use-cases).
+
+<a id="ai-model-configuration" name="ai-model-configuration">&#x200B;</a>
+### Model configuration ![](../images/readme/h3.svg)
+
+1. **Settings → AI** — enable the assistant, pick a preset (**Ollama**, **OpenAI**, **Google Gemini**, **Custom**, or a name imported from JSON), set base URL / model, choose **Authentication** (**None (local)** / **API key** / **Sign in**), optionally **Allow self-signed TLS** (Desktop), then **Test connection**. Refresh next to **Model** lists served ids. The panel chip shows `Local` / `Key saved` / `Needs API key` / `Needs sign-in` / `Signed in`.
+2. **Import…** loads JSON from [`examples/ai`](examples/ai/README.md). Unknown preset names are added to the list; checkbox flags (`enabled`, `auto_apply`, `redact_task_names`, `trace_sensitive`, `mcp_log`) apply when present. Review the form, then save.
+3. Run a **template**, use **Analysis → Investigate… / Root cause… / Verify with AI… / Auto investigate… / Query with AI…**, or type a free-form question. Click `jump:TIME` in the reply to seek the timeline.
+4. Set reply language in Settings or **Language…** on the AI bar. Right-click the log to copy or **Save As…** (Markdown / text / HTML). **Clear** between unrelated questions.
+
+Which model to pick: [AI.md → capability matrix](AI.md#capability-matrix).
+
+<a id="ai-api-keys" name="ai-api-keys">&#x200B;</a>
+#### API keys
+
+Desktop and Web use the same rules. Local Ollama needs none.
+
+**Chat, Test connection, and model list**
+
+1. The **API key** field for the active preset (Settings → AI).
+2. If that field is empty: `OPENAI_API_KEY`, then `GEMINI_API_KEY`, then `OLLAMA_API_KEY`.
+
+There is no built-in `CURSOR_API_KEY` (or any other vendor-specific name) in the GUI. A Cursor-style — or any other — OpenAI-compatible agent is another preset: import JSON or pick **Custom**, set **Base URL** / **Model**, set **Authentication** to **API key**, and paste the key into that preset. Leave `"api_key": ""` in shared JSON so secrets stay out of the file.
+
+```json
+{
+  "preset": "cursor",
+  "label": "Cursor",
+  "base_url": "https://your-openai-compatible-host/v1",
+  "model": "the-id-the-endpoint-serves",
+  "api_key": "",
+  "auth_mode": "api_key"
+}
+```
+
+A shell variable named `CURSOR_API_KEY` is ignored for chat / Test connection. On the Web, a static page cannot read `export …` from the shell; paste the key in Settings, or inject `window.__BTF_AI_ENV__` with `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`.
+
+**Live `ai-test` (Desktop CLI)** can name any environment variable:
+
+```xml
+<endpoint>
+  <base-url>https://your-openai-compatible-host/v1</base-url>
+  <api-key env="CURSOR_API_KEY"/>
+</endpoint>
+```
+
+```bash
+export CURSOR_API_KEY='…'
+python3 builds/btf_viewer.py ai-test -c your-suite.xml
+```
+
+If that variable is unset, the XML element text is used, then the three shared names above. Do not commit real keys in XML or JSON.
+
+<a id="ai-privacy" name="ai-privacy">&#x200B;</a>
+### Privacy ![](../images/readme/h3.svg)
+
+The header chip is **🟢 Local** / **🟡 Cloud** / **🔴 Sensitive**. Settings **Anonymize task names for cloud** and **Treat this trace as sensitive** apply before a cloud send (sensitive blocks the send). Findings, metrics, and your question can leave the machine; the raw `.btf` does not.
+
+What is sent vs kept local: [AI.md → What leaves the machine](AI.md#what-leaves-the-machine).
+
+<a id="ai-troubleshooting" name="ai-troubleshooting">&#x200B;</a>
+### Troubleshooting ![](../images/readme/h3.svg)
+
+| If… | Try |
+|-----|-----|
+| `jump:TIME` misses the event | Re-ask with cursors + **Limit to C1–Cn**; discard out-of-window times |
+| No GUI cards / raw `btftool` JSON | Small models often skip native tools — **Apply** still works; use `qwen3.5:9b` or larger for chaining |
+| Later turns forget earlier facts | **Clear**, or **Analysis → Query with AI…** for a fresh scoped prompt |
+| Web Failed to fetch / CORS | Serve over http, or [AI.md → `file://`](AI.md#opening-the-web-app-from-file) |
+
+Full symptom table: [AI.md → Troubleshooting](AI.md#troubleshooting).
+
+<a id="ai-developer-cli" name="ai-developer-cli">&#x200B;</a>
+### Developer / CLI ![](../images/readme/h3.svg)
+
+```bash
+python builds/btf_viewer.py analyze candidate.btf --baseline baseline.btf --fail-on-regression
+python builds/btf_viewer.py ai-test --dataset tests/ai --fail-under 70
+python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml -o AI_BENCHMARK.md
+# or: make -C BTFViewer ai-test
+#      make -C BTFViewer ai-test-live
+```
+
+Headless options: [AI.md → CLI](AI.md#cli-regression-gate). Shared Case/Evidence engines and parity tests: [AI.md → Implementation notes](AI.md#implementation-notes). Rebuild commands: [Developer notes](#developer-notes).
+
+---
 
 <a id="statistics--metrics" name="statistics--metrics">&#x200B;</a>
 ## Statistics & metrics ![](../images/readme/h2.svg)
@@ -1424,7 +1604,7 @@ Compare two traces you already have open side-by-side:
 3. Choose **Trace A** and **Trace B** from the dropdowns.
 4. Optionally check **Limit to each tab's cursor range** to compare metrics within C1–Cn on each trace (requires 2+ cursors per tab).
 5. Switch between **Summary**, **Top Tasks**, **Core Util**, **Core Migrations**, **Execution**, **Blocking**, **Inter-Arrival**, **Preemption**, and **Sync** tabs.
-6. Optionally click **Query with AI…** to send the current Trace A / B tables to the **AI** tab (opens **Settings → AI** if the assistant is disabled).
+6. Optionally click **Validate experiment…** to score expected vs actual deltas in the **AI** tab (host fills actual percents from this compare, including **Scope to cursors**), or **Query with AI…** to send the current Trace A / B tables (opens **Settings → AI** if the assistant is disabled).
 
 By default, compare views use the **full trace**. With the cursor-range checkbox enabled, each side uses that tab's own cursor window independently.
 
@@ -1673,7 +1853,7 @@ Same engine as the GUI, suitable for CI. Use `QT_QPA_PLATFORM=offscreen` when no
 | `report` | Full statistics CSV/HTML |
 | `compare` | Two-trace diff (two paths or one multi-BTF zip) |
 | `analyze` | CI regression gate vs baseline `.btf` or metrics JSON (`--fail-on-regression`; optional `--ai`; `--save-baseline`) — details in [AI.md](AI.md#cli-regression-gate) |
-| `ai-test` | Offline AI evidence/validator benchmark (`tests/ai` dataset) — [AI.md](AI.md#cli-regression-gate) |
+| `ai-test` | AI evidence/validator benchmark (`tests/ai`; `--config examples/ai/benchmark.xml` for live, `-o AI_BENCHMARK.md`) — [AI.md](AI.md#cli-regression-gate) |
 | `migrations` | Migrations table as CSV |
 | `snapshot` | PNG/SVG of timeline, migration inspector, or a metric plot |
 | `perfetto` | Chrome Trace JSON |
@@ -1704,7 +1884,7 @@ Open **Settings** from the toolbar or `Ctrl+,`. Toolbar **Help** opens the keybo
 | **Appearance** | Dark/light theme, fonts, colorblind-safe palette. Desktop font sizes are **pt** (HiDPI-scaled); web sizes are **CSS px**. Defaults look similar; the numbers are not interchangeable. |
 | **Display** | Show/hide Legend, Statistics, Marks, Find, AI, CPU Load; **Timeline overlays** (STI, grid, hover highlight); **Analysis thresholds** (CPU budget % and per-task deadline ns) |
 | **Layout** | Label width, row height, zoom 1:1 density, max cursors, time decimals, CPU/STI sizes |
-| **AI** | Enable, **Auto-apply GUI actions**, **Log MCP messages to file** (Desktop debug; off by default), preset (Ollama / OpenAI / Gemini / Custom), base URL, model, authentication (none / API key / Sign in), reply language |
+| **AI** | Enable, **Auto-apply GUI actions**, **Anonymize task names for cloud**, **Treat this trace as sensitive**, **Log MCP messages to file** (Desktop debug; off by default), preset (Ollama / OpenAI / Gemini / Custom), base URL, model, authentication (none / API key / Sign in), reply language |
 
 | | Desktop | Web |
 |--|---------|-----|
@@ -1793,7 +1973,7 @@ Shortcuts marked **(W)** are Web-only. Others work on Desktop and Web. On Web, p
 | Document | Audience |
 |----------|----------|
 | **[WORKFLOWS.md](WORKFLOWS.md)** | Analysis playbooks and AI ask order |
-| **[AI.md](AI.md)** | AI setup, tools, diagrams, troubleshooting, CLI |
+| **[AI.md](AI.md)** | Tech guide: setup, tools, diagrams, troubleshooting, CLI |
 | **[btf-viewer-slides.md](btf-viewer-slides.md)** | Presentation overview |
 | **[demos/README.md](demos/README.md)** | Demo XML actions, HTTP API, voice-pack tooling |
 
@@ -1811,7 +1991,7 @@ Day-to-day users can ignore this section.
 | Tests | `make -C BTFViewer test` (desktop) / `test-web` / `test-all` / `ai-test` |
 | Dev run (Desktop) | `python -m btf_viewer_pkg [trace.btf]` from `BTFViewer/` |
 
-Edit sources under `btf_viewer_pkg/` and `web/`; commit regenerated files under `builds/` with your changes. Keep AI tool schemas and mermaid layout in sync (`ai_tools.py` / `ai_mermaid.py` ↔ `web/src/utils/aiTools.js` / `aiMermaid.js`). Parser and Statistics numbers are pinned by shared goldens (`tests/fixtures/*-golden.json`) asserted from both `tests/test_parser_golden.py` / `tests/test_stats_web_parity.py` and `web/tests/`. Synthetic traces: `scripts/gen_trace.py --help`. BTF field reference: [`TRACE_FORMAT.md`](../TRACE_FORMAT.md).
+Edit sources under `btf_viewer_pkg/` and `web/`; commit regenerated files under `builds/` with your changes. Keep AI tool schemas and mermaid layout in sync (`ai_tools.py` / `ai_mermaid.py` ↔ `web/src/utils/aiTools.js` / `aiMermaid.js`). Parser and Statistics numbers are pinned by shared goldens (`tests/fixtures/*-golden.json`) asserted from both `tests/test_parser_golden.py` / `tests/test_stats_web_parity.py` and `web/tests/`. Synthetic traces: `scripts/gen_trace.py --help`. BTF field reference: [`TRACE_FORMAT.md`](../TRACE_FORMAT.md). Live suite XML: [AI.md → Benchmark / evaluation suite](AI.md#benchmark-suite). Recorded scores: [`AI_BENCHMARK.md`](AI_BENCHMARK.md).
 
 ---
 

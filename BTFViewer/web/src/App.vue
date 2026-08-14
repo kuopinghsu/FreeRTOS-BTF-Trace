@@ -585,6 +585,8 @@
                 :ai-presets="appSettings.aiPresets"
                 :response-language="appSettings.aiResponseLanguage"
                 :ai-auto-apply="!!appSettings.aiAutoApply"
+                :ai-redact-task-names="!!appSettings.aiRedactTaskNames"
+                :ai-trace-sensitive="!!appSettings.aiTraceSensitive"
                 :get-context="buildAiContext"
                 :get-loaded-tabs="listAiLoadedTabs"
                 :build-compare-context="buildAiCompareContext"
@@ -595,6 +597,7 @@
                 @update:response-language="onAiResponseLanguage"
                 @jump="onAiJump"
                 @highlight="onAiHighlight"
+                @status-message="onAiStatusMessage"
               />
             </div>
           </div>
@@ -972,6 +975,8 @@
       :ai-enabled="appSettings.aiEnabled !== false"
       @close="compareOpen = false"
       @query-ai="queryCompareWithAi"
+      @validate-experiment="queryValidateExperimentWithAi"
+      @compared="onTraceCompared"
     />
 
     <!-- Snapshot editor -->
@@ -997,10 +1002,17 @@
     <!-- Status bar -->
     <div class="status-bar">
       <template v-if="trace">
-        <span class="status-summary">
-          <template v-if="trace.meta?.creator">{{ trace.meta.creator }} · </template>{{ trace.tasks.length }} tasks · {{ trace.segments.length.toLocaleString() }} segments ·
-          {{ trace.stiEvents.length.toLocaleString() }} STI events ·
-          {{ formatTime(trace.timeMax - trace.timeMin, trace.timeScale, appSettings.timeDecimals) }} total
+        <span
+          class="status-summary"
+          :class="{ error: !!(statusBarFlash && statusBarFlashError) }"
+          :title="statusBarFlash || undefined"
+        >
+          <template v-if="statusBarFlash">{{ statusBarFlash }}</template>
+          <template v-else>
+            <template v-if="trace.meta?.creator">{{ trace.meta.creator }} · </template>{{ trace.tasks.length }} tasks · {{ trace.segments.length.toLocaleString() }} segments ·
+            {{ trace.stiEvents.length.toLocaleString() }} STI events ·
+            {{ formatTime(trace.timeMax - trace.timeMin, trace.timeScale, appSettings.timeDecimals) }} total
+          </template>
         </span>
 
         <CursorBar
@@ -1050,6 +1062,12 @@
           </span>
         </div>
       </template>
+      <span
+        v-else-if="statusBarFlash"
+        class="status-summary"
+        :class="{ error: statusBarFlashError }"
+        :title="statusBarFlash"
+      >{{ statusBarFlash }}</span>
       <span
         v-else
         class="status-hint"
@@ -1150,6 +1168,7 @@ import {
   whatIfEstimate,
 } from './utils/aiTools.js'
 import { detectAnomalies, parseWhatIfChange, snapshotFromSummary, updateBaselineProfile } from './utils/aiInvestigation.js'
+import { experimentPercentsFromCompare } from './utils/aiCase.js'
 import { filterBtfTextToRange, reconstructBtfSlice } from './utils/btfSlice.js'
 import {
   DARK_MODE,
@@ -1343,6 +1362,9 @@ const toastMsg     = ref('')
 const toastType    = ref('info')
 const toastVisible = ref(false)
 let   _toastTimer  = null
+const statusBarFlash = ref('')
+const statusBarFlashError = ref(false)
+let   _statusBarFlashTimer = 0
 
 function showToast(msg, type = 'info') {
   toastMsg.value     = msg
@@ -1350,6 +1372,19 @@ function showToast(msg, type = 'info') {
   toastVisible.value = true
   clearTimeout(_toastTimer)
   _toastTimer = setTimeout(() => { toastVisible.value = false }, type === 'error' ? 5000 : 3000)
+}
+
+function onAiStatusMessage(payload) {
+  const text = String(payload?.text || '').trim()
+  if (!text) return
+  statusBarFlash.value = text
+  statusBarFlashError.value = !!payload?.error
+  if (_statusBarFlashTimer) clearTimeout(_statusBarFlashTimer)
+  _statusBarFlashTimer = setTimeout(() => {
+    statusBarFlash.value = ''
+    statusBarFlashError.value = false
+    _statusBarFlashTimer = 0
+  }, 6000)
 }
 
 const demoRunning = ref(false)
@@ -2793,6 +2828,28 @@ async function queryCompareWithAi(payload) {
   await aiPanelRef.value?.askCompare?.(idA, idB)
 }
 
+async function queryValidateExperimentWithAi(payload) {
+  const idA = payload?.idA
+  const idB = payload?.idB
+  compareOpen.value = false
+  if (appSettings.aiEnabled === false) {
+    openSettingsDialog('ai')
+    return
+  }
+  if (idA == null || idB == null || idA === idB) {
+    showToast('Choose two different traces to compare.', 'info')
+    return
+  }
+  if (appSettings.showAi === false) {
+    appSettings.showAi = true
+    saveSettings(appSettings)
+  }
+  rightPanelTab.value = 'ai'
+  await nextTick()
+  if (!aiPanelRef.value) await nextTick()
+  await aiPanelRef.value?.askValidateExperiment?.(idA, idB)
+}
+
 function buildAiContext() {
   const tr = trace.value
   if (!tr) {
@@ -2810,6 +2867,7 @@ function buildAiContext() {
   const span = formatTime(tr.timeMax - tr.timeMin, tr.timeScale, appSettings.timeDecimals)
   return {
     findingsText: formatAnalysisFindingsText(findings, scopeLabel),
+    findings,
     scope: scopeLabel || 'full trace',
     span,
     cores: tr.coreNames?.length ?? tr.cores?.length ?? 0,
@@ -2833,6 +2891,11 @@ function buildAiCompareContext(idA, idB) {
   const nameB = tabB.name || 'Trace B'
   const scopeEnabled = true
   const tables = buildAllCompareTables(tabA.trace, tabB.trace, tabA, tabB, scopeEnabled)
+  try {
+    lastAiCompare = compareAiPerformance(idA, idB)
+  } catch {
+    /* keep prior lastAiCompare */
+  }
   let csvText = buildCompareCsv(nameA, nameB, scopeEnabled, tables)
   if (csvText.length > 60000) {
     csvText = `${csvText.slice(0, 60000)}\n… (truncated for AI context)`
@@ -2879,6 +2942,7 @@ function onAiJump(t) {
 }
 
 let _aiGuiUndo = null
+let lastAiCompare = null
 
 function captureAiGuiSnapshot() {
   return {
@@ -3121,7 +3185,9 @@ function dispatchAiTool(name, args) {
     })
   }
   if (name === AI_TOOL_COMPARE_PERFORMANCE) {
-    return compareAiPerformance(args.tab_a || '', args.tab_b || '')
+    const payload = compareAiPerformance(args.tab_a || '', args.tab_b || '')
+    lastAiCompare = payload
+    return payload
   }
   if (name === AI_TOOL_DETECT_PRIORITY_INVERSION) {
     const scopeOn = activeTab.value?.scopeToCursors !== false
@@ -3171,7 +3237,11 @@ function dispatchAiTool(name, args) {
     })
   }
   if (name === AI_TOOL_VALIDATE_EXPERIMENT) {
-    return validateExperimentTool(args.expected || {}, args.actual || {})
+    let actual = args.actual && typeof args.actual === 'object' ? args.actual : {}
+    if (!Object.keys(actual).length) {
+      actual = experimentPercentsFromCompare(lastAiCompare)
+    }
+    return validateExperimentTool(args.expected || {}, actual)
   }
   if (name === AI_TOOL_MANAGE_HYPOTHESES) {
     return manageHypothesesTool(
@@ -3389,13 +3459,17 @@ function triggerAiCompare(tabARef, tabBRef) {
   }
 }
 
-function compareAiPerformance(tabARef, tabBRef) {
+function compareAiPerformance(tabARef, tabBRef, { scopeToCursors = true } = {}) {
   const tabA = resolveAiTabRef(tabARef, 0)
   const tabB = resolveAiTabRef(tabBRef, 1)
   if (tabA.id === tabB.id) throw new Error('tab_a and tab_b must name different traces')
   if (!tabA.trace || !tabB.trace) throw new Error('Both tabs must have a loaded trace')
-  const ra = cursorRangeForCursors(tabA.cursors)
-  const rb = cursorRangeForCursors(tabB.cursors)
+  const ra = scopeToCursors !== false
+    ? cursorRangeForCursors(tabA.cursors)
+    : { lo: null, hi: null }
+  const rb = scopeToCursors !== false
+    ? cursorRangeForCursors(tabB.cursors)
+    : { lo: null, hi: null }
   const nameA = tabA.name || `Tab ${tabA.id}`
   const nameB = tabB.name || `Tab ${tabB.id}`
   const snapA = traceSummarySnapshot(tabA.trace, ra.lo, ra.hi) || {}
@@ -3426,6 +3500,16 @@ function analyzeAiTraces() {
     )
   })
   return analyzeTracesSnapshots(snaps)
+}
+
+function onTraceCompared({ idA, idB, scopeToCursors = true }) {
+  try {
+    lastAiCompare = compareAiPerformance(idA, idB, {
+      scopeToCursors: scopeToCursors !== false,
+    })
+  } catch {
+    /* tabs not ready */
+  }
 }
 
 function openTraceCompare(idA, idB) {
@@ -4508,6 +4592,10 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  if (_statusBarFlashTimer) {
+    clearTimeout(_statusBarFlashTimer)
+    _statusBarFlashTimer = 0
+  }
   if (_parseWorker) {
     _parseWorker.terminate()
     _parseWorker = null
@@ -5525,6 +5613,10 @@ body.col-resizing * {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex-shrink: 1;
+}
+
+.status-summary.error {
+  color: #e07070;
 }
 
 .status-range {

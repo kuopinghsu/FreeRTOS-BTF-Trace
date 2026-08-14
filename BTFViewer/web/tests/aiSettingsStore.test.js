@@ -31,6 +31,7 @@ describe('AI settings storage', () => {
     assert.equal(s.aiPreset, 'ollama')
     assert.equal(s.aiAutoApply, false)
     assert.deepEqual(Object.keys(s.aiPresets).sort(), ['custom', 'gemini', 'ollama', 'openai'])
+    assert.deepEqual(s.aiExtraPresets, [])
     assert.deepEqual(s.aiPresets.gemini, {
       baseUrl: '', model: '', apiKey: '', authMode: 'api_key', tlsVerify: true,
     })
@@ -81,6 +82,20 @@ describe('AI settings storage', () => {
     assert.equal(s.aiPresets.openai.model, 'gpt-4o-mini')
     assert.equal(s.aiPresets.openai.apiKey, 'sk-keep')
     assert.equal(s.aiPresets.custom.baseUrl, '')
+  })
+
+  it('keeps extra presets imported from JSON', () => {
+    const s = normalizeSettings({
+      aiPreset: 'deepseek',
+      aiExtraPresets: [{ id: 'deepseek', label: 'DeepSeek' }],
+      aiPresets: {
+        deepseek: { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash', apiKey: '', authMode: 'api_key', tlsVerify: true },
+      },
+    })
+    assert.equal(s.aiPreset, 'deepseek')
+    assert.equal(s.aiPresets.deepseek.baseUrl, 'https://api.deepseek.com/v1')
+    assert.equal(s.aiExtraPresets[0].id, 'deepseek')
+    assert.equal(s.aiExtraPresets[0].label, 'DeepSeek')
   })
 
   it('migrates a retired vendor preset onto Custom', () => {

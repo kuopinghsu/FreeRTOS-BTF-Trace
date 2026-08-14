@@ -683,6 +683,19 @@ class AiInvestigationTests(unittest.TestCase):
         self.assertIn("evidence_score", payload)
         self.assertIn("evidence_score_bar", payload)
         self.assertGreaterEqual(payload["evidence_score"], 40 + 25)
+        self.assertTrue((payload.get("falsify") or {}).get("supporting"))
+        interpreted = extract_evidence_panel_payload("interpret_query", {
+            "ok": True,
+            "data": {
+                "interpreted_question": "Why is TaskA slow?",
+                "mode": "diagnose",
+                "scope": ["execution", "blocking"],
+            },
+        })
+        self.assertEqual(
+            (interpreted.get("investigation_case") or {}).get("conclusion"),
+            "Why is TaskA slow?",
+        )
 
     def test_format_evidence_panel_markdown_includes_jumps(self) -> None:
         from btf_viewer_pkg.ai_assistant import format_ai_conversation_markdown

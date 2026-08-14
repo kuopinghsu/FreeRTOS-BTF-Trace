@@ -2,6 +2,8 @@
 
 Record FreeRTOS scheduling in RAM, export it to standard trace formats, and analyse it offline — without a commercial tracer.
 
+![BTF Trace](images/btftrace.png)
+
 | Format | Use |
 |--------|-----|
 | **[BTF](https://assets.vector.com/cms/content/products/TA_Tool_Suite/Docs/BTF_Specification.pdf)** (Best Trace Format) | Timing and scheduling analysis in BTF Viewer or Eclipse Trace Compass |

@@ -14,8 +14,12 @@ if str(BTF_ROOT) not in sys.path:
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from btf_viewer_pkg.ai_assistant import (  # noqa: E402
+    AI_API_KEY_ENV_NAMES,
+    AI_API_KEY_REQUIRED,
     AI_CHAT_TIMEOUT_S,
     AI_LIST_MODELS_TIMEOUT_S,
+    AI_SEND_ICON_PATH,
+    AI_STOP_ICON_PATH,
     AI_SYSTEM_PROMPT,
     AI_TEST_TIMEOUT_S,
     ASK_EVENT_PROMPT,
@@ -65,6 +69,9 @@ class AiWebParityTests(unittest.TestCase):
             "supported", "need_evidence", "evolution", "cost",
             "historical", "support_action", "reject_action",
             "need_evidence_action", "test_action", "compare_action",
+            "interpreted", "scope", "run_investigation", "edit_scope",
+            "experiment_result", "save_knowledge",
+            "quality_direct", "coverage_observed", "why_action",
         ):
             for labels in EVIDENCE_PANEL_LABELS.values():
                 self.assertIn(key, labels)
@@ -205,6 +212,22 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("Heuristic slice-replay", readme)
         self.assertIn("Ranked `optimize_experiment`", readme)
         self.assertIn("not FreeRTOS kernel", readme)
+        self.assertIn("id=\"ai-in-this-section\"", readme)
+        self.assertIn("id=\"what-can-ai-do\"", readme)
+        self.assertIn("id=\"common-workflows\"", readme)
+        self.assertIn("id=\"investigation-case\"", readme)
+        self.assertIn("id=\"evidence--confidence\"", readme)
+        self.assertIn("id=\"ai-capabilities\"", readme)
+        self.assertIn("id=\"ai-tools-reference\"", readme)
+        self.assertIn("id=\"ai-model-configuration\"", readme)
+        self.assertIn("id=\"ai-api-keys\"", readme)
+        self.assertIn("CURSOR_API_KEY", readme)
+        self.assertIn("id=\"ai-privacy\"", readme)
+        self.assertIn("id=\"ai-troubleshooting\"", readme)
+        self.assertIn("id=\"ai-developer-cli\"", readme)
+        self.assertIn("id=\"implementation-notes\"", ai_md)
+        self.assertFalse((BTF_ROOT / "docs/TODO.md").is_file())
+        self.assertFalse((BTF_ROOT / "TODO.md").is_file())
         self.assertIn("`optimize_experiment`", ai_md)
         self.assertIn("slice-replay", ai_md)
         self.assertIn("Workflows and use cases", ai_md)
@@ -367,6 +390,7 @@ class AiWebParityTests(unittest.TestCase):
     def test_new_tool_dispatch_sites_match(self) -> None:
         mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
         app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
+        stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
         assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
             encoding="utf-8")
         panel = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(
@@ -419,6 +443,24 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("correlateTaskEvents(", app)
         self.assertIn("compare_performance_tabs(", mw)
         self.assertIn("comparePerformanceTabs(", app)
+        self.assertIn("_remember_trace_compare", mw)
+        self.assertIn("onTraceCompared", app)
+        self.assertIn("on_compare:", stats)
+        self.assertIn("self._on_compare", stats)
+        self.assertIn("@compared=", app)
+        self.assertIn("on_validate_experiment", stats)
+        self.assertIn("_validate_compare_with_ai", mw)
+        self.assertIn("query_validate_experiment", assist)
+        self.assertIn("askValidateExperiment", panel)
+        self.assertIn("queryValidateExperimentWithAi", app)
+        self.assertIn("Validate experiment…", stats)
+        self.assertIn(
+            "function compareAiPerformance(tabARef, tabBRef, { scopeToCursors = true } = {})",
+            app,
+        )
+        dlg_src = (BTF_ROOT / "web/src/components/TraceCompareDialog.vue").read_text(
+            encoding="utf-8")
+        self.assertIn("scopeToCursors: !!scopeToCursors.value", dlg_src)
         self.assertIn("generate_report_finding(", mw)
         self.assertIn("generateReportFinding(", app)
         self.assertIn("check_budget_finding(", mw)
@@ -711,6 +753,8 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("ai_urlopen", assist)
         self.assertIn("aiTlsTip", js)
         self.assertIn("def _ai_timeout_error_tip", assist)
+        self.assertIn("def format_ai_http_error", assist)
+        self.assertIn("export function formatAiHttpError", js)
         self.assertIn("GET /models only lists ids", assist)
         self.assertIn("GET /models only lists ids", js)
         self.assertIn("BASE/chat/completions", ai_md)
@@ -727,7 +771,7 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("token-efficient", ai_md)
         self.assertIn("Parameters / targets", ai_md)
         self.assertIn("qwen2.5:7b", ai_md)
-        self.assertIn("qwen2.5:7b", workflows)
+        self.assertIn("qwen3.5:9b", workflows)
         self.assertIn("8k", ai_md)
         self.assertIn("examples/ai/presets.json", readme)
         self.assertIn("## GUI tools", ai_md)
@@ -737,6 +781,107 @@ class AiWebParityTests(unittest.TestCase):
             "Open the Model dropdown to pick one.", stats)
         self.assertIn(
             "Open the Model dropdown to pick one.", vue)
+
+    def test_ai_api_key_docs_and_apps_match(self) -> None:
+        env_slash = "OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY"
+        env_md = "`OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`"
+        order = (
+            "`OPENAI_API_KEY`, then `GEMINI_API_KEY`, then `OLLAMA_API_KEY`"
+        )
+        assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
+            encoding="utf-8")
+        js = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(
+            encoding="utf-8")
+        stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
+        vue = (BTF_ROOT / "web/src/components/SettingsDialog.vue").read_text(
+            encoding="utf-8")
+        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
+        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
+        workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
+        examples = (BTF_ROOT / "examples/ai/README.md").read_text(encoding="utf-8")
+        cli = (BTF_ROOT / "btf_viewer_pkg/cli.py").read_text(encoding="utf-8")
+
+        self.assertEqual(
+            AI_API_KEY_ENV_NAMES,
+            ("OPENAI_API_KEY", "GEMINI_API_KEY", "OLLAMA_API_KEY"),
+        )
+        self.assertNotIn("CURSOR_API_KEY", AI_API_KEY_ENV_NAMES)
+        self.assertIn(
+            "export const AI_API_KEY_ENV_NAMES = "
+            "['OPENAI_API_KEY', 'GEMINI_API_KEY', 'OLLAMA_API_KEY']",
+            js,
+        )
+        self.assertEqual(
+            AI_API_KEY_REQUIRED,
+            "API key required for remote endpoints "
+            "(Settings → AI → API key, or OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY). "
+            "Paste the raw key only — no Bearer prefix.",
+        )
+        self.assertIn("AI_API_KEY_REQUIRED = (", assist)
+        self.assertIn("export const AI_API_KEY_REQUIRED = (", js)
+        self.assertIn("throw new Error(AI_API_KEY_REQUIRED)", js)
+        self.assertIn("raise RuntimeError(AI_API_KEY_REQUIRED)", assist)
+        self.assertIn("def read_ai_env_key", assist)
+        self.assertIn("export function readAiEnvKey", js)
+        self.assertIn("def resolve_ai_api_key", assist)
+        self.assertIn("export function resolveAiApiKey", js)
+        self.assertNotIn("VITE_", assist)
+        self.assertNotIn("VITE_", js)
+        self.assertNotIn("VITE_", stats)
+        self.assertNotIn("VITE_", vue)
+        self.assertIn("__BTF_AI_ENV__", js)
+        self.assertIn("__BTF_AI_ENV__", readme)
+        self.assertIn("window.__BTF_AI_ENV__", js)
+
+        for blob, label in (
+            (assist, "ai_assistant.py"),
+            (js, "ollamaClient.js"),
+            (stats, "stats.py"),
+            (vue, "SettingsDialog.vue"),
+            (cli, "cli.py"),
+            (readme, "README.md"),
+            (ai_md, "AI.md"),
+            (workflows, "WORKFLOWS.md"),
+            (examples, "examples/ai/README.md"),
+        ):
+            self.assertTrue(
+                env_slash in blob or env_md in blob, label)
+
+        for blob, label in (
+            (readme, "README.md"),
+            (ai_md, "AI.md"),
+            (workflows, "WORKFLOWS.md"),
+        ):
+            self.assertIn(order, blob, label)
+
+        self.assertIn("id=\"ai-api-keys\"", readme)
+        self.assertIn("README.md#ai-api-keys", ai_md)
+        self.assertIn("README.md#ai-api-keys", workflows)
+        self.assertIn("README.md#ai-api-keys", examples)
+        self.assertIn("ignored for chat / Test connection", readme)
+        self.assertIn("<api-key env=\"VAR\">", ai_md)
+        self.assertIn("<api-key env=\"VAR\">", examples)
+        self.assertIn("GUI chat does not use `env`", examples)
+        self.assertIn(
+            "API key or access token for this preset (or "
+            "OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY). ",
+            stats,
+        )
+        self.assertIn(
+            "API key or access token for this preset (or "
+            "OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY). ",
+            vue,
+        )
+        self.assertIn(
+            "Paste a provider API key, or set OPENAI_API_KEY / "
+            "GEMINI_API_KEY / OLLAMA_API_KEY.",
+            stats,
+        )
+        self.assertIn(
+            "Paste a provider API key, or set OPENAI_API_KEY / "
+            "GEMINI_API_KEY / OLLAMA_API_KEY.",
+            vue,
+        )
 
     def test_gemini_tool_result_name_helpers_match(self) -> None:
         py = (BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8")
@@ -835,8 +980,14 @@ class AiWebParityTests(unittest.TestCase):
             ("def tool_call_reason", "export function toolCallReason"),
             ("def run_offline_benchmark", "export function runOfflineBenchmark"),
             ("def format_privacy_chip", "export function formatPrivacyChip"),
+            ("def should_confirm_interpreted_query", "export function shouldConfirmInterpretedQuery"),
+            ("def experiment_percents_from_compare", "export function experimentPercentsFromCompare"),
+            ("def sanitize_annotations_text", "export function sanitizeAnnotationsText"),
+            ("def format_quality_flag_lines", "export function formatQualityFlagLines"),
+            ("def merge_live_capability", "export function mergeLiveCapability"),
             ("def investigation_template_prompt", "export function investigationTemplatePrompt"),
             ("def investigation_mode_prompt", "export function investigationModePrompt"),
+            ("VALIDATE_EXPERIMENT_PROMPT", "export const VALIDATE_EXPERIMENT_PROMPT"),
             ("def parse_user_investigation_templates", "export function parseUserInvestigationTemplates"),
             ("def dump_user_investigation_templates", "export function dumpUserInvestigationTemplates"),
             ("def historical_knowledge_for_finding", "export function historicalKnowledgeForFinding"),
@@ -872,17 +1023,35 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("updateCaseFromTool", panel)
         self.assertIn("btfhyp:", inv_py)
         self.assertIn("btfhyp:", inv_js)
+        self.assertIn("btfscope:", inv_py)
+        self.assertIn("btfscope:", inv_js)
+        self.assertIn("btfexp:", inv_py)
+        self.assertIn("btfexp:", inv_js)
+        self.assertIn("btftool:", inv_py)
+        self.assertIn("btftool:", inv_js)
         self.assertIn("def parse_btf_hyp_href", inv_py)
         self.assertIn("export function parseBtfHypHref", inv_js)
         self.assertIn("historical_knowledge", inv_py)
         self.assertIn("historical_knowledge", inv_js)
+        self.assertIn('falsify["supporting"]', py)
+        self.assertIn("falsify.supporting", js)
 
     def test_ai_test_cli_is_registered(self) -> None:
         cli = (BTF_ROOT / "btf_viewer_pkg/cli.py").read_text(encoding="utf-8")
         self.assertIn('"ai-test"', cli)
         self.assertIn("def _cli_ai_test_run", cli)
         self.assertIn("run_offline_benchmark", cli)
+        self.assertIn("run_live_benchmark", cli)
+        self.assertIn("--config", cli)
+        self.assertIn("examples/ai/benchmark.xml", cli)
+        self.assertIn("load_benchmark_suite_xml", cli)
+        self.assertIn("live_benchmark_chat", cli)
+        self.assertNotIn("GEMINI_LIVE_BENCHMARK_MODELS", cli)
         self.assertNotIn("from btf_viewer_pkg", cli)
+        bench = (BTF_ROOT / "AI_BENCHMARK.md").read_text(encoding="utf-8")
+        self.assertIn("qwen3.5:9b", bench)
+        self.assertIn("Offline fixture scorer", bench)
+        self.assertIn("Live models", bench)
         needle = "from pathlib import Path"
         for rel in ("btf_viewer_pkg/_imports.py", "scripts/bundle_viewer.py"):
             self.assertIn(needle, (BTF_ROOT / rel).read_text(encoding="utf-8"), rel)
@@ -894,6 +1063,12 @@ class AiWebParityTests(unittest.TestCase):
             encoding="utf-8")
         self.assertIn("ai_privacy_chip", assist)
         self.assertIn("ai-privacy-chip", panel)
+        self.assertIn('setObjectName("aiHeader")', assist)
+        self.assertIn('class="ai-header"', panel)
+        self.assertLess(assist.find('setObjectName("aiHeader")'),
+                        assist.find('setObjectName("aiActions")'))
+        self.assertLess(panel.find('class="ai-header"'),
+                        panel.find('class="ai-header-actions"'))
         self.assertIn("Investigations", assist)
         self.assertIn("Investigations", panel)
         self.assertIn("builtin_investigation_templates", assist)
@@ -990,9 +1165,13 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("_investigation_template_actions", assist)
         self.assertIn("save_act.setEnabled(not busy)", assist)
         self.assertIn("class _FlowLayout", assist)
+        self.assertIn("_FlowLayout(actions_host", assist)
         self.assertIn("_FlowLayout(mode_host", assist)
         self.assertIn("_FlowLayout(tpl_host", assist)
-        self.assertIn("_add_ai_menu_heading(more_menu", assist)
+        self.assertIn("_AI_CHIP_MIN_HEIGHT = 28", assist)
+        self.assertIn("min-height: 28px", panel)
+        self.assertIn("_ai_more_heading", assist)
+        self.assertIn("aiMoreCol", assist)
         self.assertNotIn("getattr(more_menu, \"addSection\"", assist)
         self.assertIn("flex-wrap: wrap", panel)
         view = (BTF_ROOT / "btf_viewer_pkg/view.py").read_text(encoding="utf-8")
@@ -1000,9 +1179,33 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn('"aiModes"', in_bar)
         self.assertIn('"aiTemplates"', in_bar)
         self.assertIn('"aiActions"', in_bar)
+        self.assertIn('"aiHeader"', in_bar)
+        self.assertIn('"aiMoreMenu"', in_bar)
+        self.assertIn('"aiComposer"', in_bar)
         self.assertIn("def _set_status", assist)
         self.assertIn("status_with_cost", assist)
         self.assertIn("statusWithCost(base, costMeter.value)", panel)
+        self.assertIn("def _flash_main_status", assist)
+        self.assertIn('getattr(wnd, "statusBar", None)', assist)
+        self.assertIn('showMessage(f"AI: {short}", 6000)', assist)
+        on_err = assist[assist.find("def _on_err"):assist.find("def _on_cancelled")]
+        self.assertIn("error=True", on_err)
+        self.assertIn("function setErrorStatus", panel)
+        self.assertIn("emit('statusMessage'", panel)
+        self.assertIn('@status-message="onAiStatusMessage"', app)
+        self.assertIn("statusBarFlash", app)
+        self.assertIn('setObjectName("aiComposer")', assist)
+        self.assertIn('class="ai-composer"', panel)
+        self.assertIn('setObjectName("aiComposerIcons")', assist)
+        self.assertIn("ai-composer-icons", panel)
+        self.assertIn(AI_SEND_ICON_PATH, assist)
+        self.assertIn(AI_SEND_ICON_PATH, panel)
+        self.assertIn(AI_STOP_ICON_PATH, assist)
+        self.assertIn(AI_STOP_ICON_PATH, panel)
+        self.assertIn("def _on_composer_action", assist)
+        self.assertIn("function onComposerAction", panel)
+        self.assertNotIn("{{ busy ? 'Waiting…' : 'Ask' }}", panel)
+        self.assertNotIn('_send_btn.setText("Waiting…"', assist)
         clear_fn = assist[assist.find("def clear_conversation"):assist.find("def _show_log_menu")]
         self.assertIn("self._cost_meter = empty_cost_meter()", clear_fn)
         send_fn = assist[assist.find("def _send_query"):]
@@ -1017,6 +1220,10 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("v-for=\"group in templateMenuGroups\"", panel)
         self.assertIn("class=\"ai-more-col\"", panel)
         self.assertIn("<Teleport to=\"body\">", panel)
+        self.assertIn("ai-more-menu-wide", panel)
+        self.assertIn("QGridLayout(more_menu)", assist)
+        self.assertNotIn("more_scroll", assist)
+        self.assertIn("i // 2, i % 2", assist)
         self.assertEqual(
             AI_TEMPLATE_MENU_GROUPS[-1],
             ("What-if / Optimize", ("what_if", "optimize")),
@@ -1024,9 +1231,11 @@ class AiWebParityTests(unittest.TestCase):
         self.assertEqual(ai_template_by_id("what_if")[1], "What-if")
         self.assertIn("_AI_TPL_DISABLED_COLOR", assist)
         self.assertIn("QPushButton:disabled", assist)
-        self.assertIn("QMenu::item:disabled", assist)
+        self.assertIn("QPushButton#aiMoreItem:disabled", assist)
         self.assertIn(".ai-more-item:disabled", panel)
         self.assertIn("color: var(--muted, #8a96a8)", panel)
+        self.assertIn("color: #fff", dlg)
+        self.assertIn("color: white", stats)
         self.assertIn("Investigations", assist)
         self.assertIn("Investigations", panel)
         inv_labels = [t["label"] for t in builtin_investigation_templates()]
@@ -1075,10 +1284,18 @@ class AiWebParityTests(unittest.TestCase):
             encoding="utf-8"))
         self.assertIn("level=${level}", app)
         self.assertIn("finding_id=${findingId}", app)
+        from btf_viewer_pkg.ai_case import VALIDATE_EXPERIMENT_PROMPT
+        self.assertIn("Call validate_experiment. Omit actual", VALIDATE_EXPERIMENT_PROMPT)
+        self.assertIn(VALIDATE_EXPERIMENT_PROMPT, case_js)
+        self.assertIn("Validate experiment…", stats)
+        compare_dlg = (BTF_ROOT / "web/src/components/TraceCompareDialog.vue").read_text(
+            encoding="utf-8")
+        self.assertIn("Validate experiment…", compare_dlg)
         # Modes are not extra AI_TEMPLATE_QUESTIONS entries.
         ids = [t[0] for t in AI_TEMPLATE_QUESTIONS]
         self.assertEqual(ids[-1], "auto_investigate")
         self.assertNotIn("diagnose", ids)
+        self.assertNotIn("validate_experiment", ids)
         self.assertEqual(len(menu_ids) + len(AI_TEMPLATE_PRIMARY_IDS), 20)
 
 

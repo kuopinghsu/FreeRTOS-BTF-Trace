@@ -6,9 +6,10 @@ Keep behaviour in sync with ``web/src/utils/aiCase.js``.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 HYPOTHESIS_STATUSES: Tuple[str, ...] = (
     "supported", "possible", "rejected", "need_evidence",
@@ -18,6 +19,10 @@ EVIDENCE_QUALITY_BANDS: Tuple[str, ...] = (
 )
 INVESTIGATION_MODES: Tuple[str, ...] = (
     "quick", "diagnose", "compare", "optimize", "report",
+)
+INVESTIGATION_SCOPE_OPTIONS: Tuple[str, ...] = (
+    "execution", "blocking", "migrations", "priority inheritance",
+    "nearby events", "findings", "tick",
 )
 EXPLAIN_LEVELS: Tuple[str, ...] = ("quick", "technical", "deep")
 PRIVACY_LEVELS: Tuple[str, ...] = ("local", "cloud_safe", "sensitive")
@@ -481,6 +486,155 @@ def compute_evidence_coverage(
     }
 
 
+def _quality_flag_mark(value: Any) -> str:
+    if value is True or str(value).lower() in ("yes", "true", "1"):
+        return "✓"
+    if str(value).lower() in ("partial", "triangle", "maybe"):
+        return "△"
+    return "○"
+
+
+def format_quality_flag_lines(
+    quality: Optional[dict] = None,
+    labels: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    """Checklist under Evidence Quality (direct / timeline / metric / alternative)."""
+    lab = labels if isinstance(labels, dict) else {}
+    flags = (quality or {}).get("flags") if isinstance(quality, dict) else {}
+    flags = flags if isinstance(flags, dict) else {}
+    rows = (
+        ("direct_evidence", "quality_direct", "Direct evidence"),
+        ("timeline_correlation", "quality_timeline", "Timeline correlation"),
+        ("metric_correlation", "quality_metric", "Metric correlation"),
+        ("alternative_tested", "quality_alternative", "Alternative tested"),
+    )
+    return [
+        f"- {lab.get(lk, fallback)} {_quality_flag_mark(flags.get(fk))}"
+        for fk, lk, fallback in rows
+    ]
+
+
+def format_coverage_count_lines(
+    coverage: Optional[dict] = None,
+    labels: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    """5/7-style breakdown under Evidence Coverage."""
+    lab = labels if isinstance(labels, dict) else {}
+    cov = coverage if isinstance(coverage, dict) else {}
+    claims = cov.get("claims")
+    observed = cov.get("directly_observed")
+    timeline = cov.get("timeline_verified")
+    metric = cov.get("metric_verified")
+    unverified = cov.get("unverified_assumptions")
+    if observed is None and claims is None:
+        return []
+    denom = f"/{claims}" if claims not in (None, "") else ""
+    return [
+        f"- {lab.get('coverage_observed', 'Directly observed')} {observed}",
+        f"- {lab.get('coverage_timeline', 'Timeline verified')} "
+        f"{timeline}{denom if not str(timeline).count('/') else ''}",
+        f"- {lab.get('coverage_metric', 'Metric verified')} "
+        f"{metric}{denom if not str(metric).count('/') else ''}",
+        f"- {lab.get('coverage_unverified', 'Unverified assumptions')} {unverified}",
+    ]
+
+
+def should_confirm_interpreted_query(
+    query: str = "",
+    *,
+    template_id: str = "",
+    already_interpreted: bool = False,
+) -> bool:
+    """True when a free-form Ask should show the interpret/scope card first."""
+    if already_interpreted or str(template_id or "").strip():
+        return False
+    q = str(query or "").strip()
+    if not q:
+        return False
+    if "Investigation scope:" in q and "Interpreted as " in q:
+        return False
+    return True
+
+
+_COMPARE_PERCENT_ALIASES: Dict[str, str] = {
+    "migrations": "migrations",
+    "migrated_tasks": "migrations",
+    "blocking": "blocking",
+    "execution": "execution",
+}
+
+
+def experiment_percents_from_compare(compare: Optional[dict] = None) -> Dict[str, float]:
+    """Extract metric → signed percent from compare_performance / Trace Compare."""
+    data = compare if isinstance(compare, dict) else {}
+    if isinstance(data.get("data"), dict) and not data.get("checks"):
+        data = data["data"]
+    out: Dict[str, float] = {}
+
+    def _store(raw_key: Any, pct: Any) -> None:
+        try:
+            value = float(pct)
+        except (TypeError, ValueError):
+            return
+        key = str(raw_key or "").strip().lower().replace(" ", "_")
+        if not key:
+            return
+        alias = _COMPARE_PERCENT_ALIASES.get(key, key)
+        out[alias] = value
+        if alias != key:
+            out[key] = value
+
+    for c in data.get("checks") or []:
+        if not isinstance(c, dict):
+            continue
+        mid = str(c.get("id") or c.get("metric") or "").strip()
+        label = str(c.get("label") or "").lower()
+        if not mid:
+            if "migrat" in label:
+                mid = "migrations"
+            elif "block" in label:
+                mid = "blocking"
+            elif "execut" in label:
+                mid = "execution"
+        detail = str(c.get("detail") or "")
+        delta = c.get("delta")
+        if delta is None:
+            continue
+        if "%" in detail:
+            _store(mid, delta)
+            continue
+        try:
+            cand = float(c.get("candidate"))
+            base = float(c.get("baseline"))
+        except (TypeError, ValueError):
+            continue
+        if base:
+            _store(mid, 100.0 * (cand - base) / abs(base))
+    for r in data.get("rows") or []:
+        if not isinstance(r, dict) or r.get("delta_pct") is None:
+            continue
+        metric = str(r.get("metric") or "")
+        field = str(r.get("field") or "")
+        if field and field not in ("count", "total", ""):
+            continue
+        _store(metric, r.get("delta_pct"))
+    return out
+
+
+_ANNOTATION_LINE_RE = re.compile(
+    r"(?im)^(?:annotation|note|mark)\s*[:=]\s*.+$"
+)
+_ANNOTATION_INLINE_RE = re.compile(
+    r'(?i)\b(?:annotation|note)\s*(?:[:=]\s*|"\s*)"[^"]*"'
+)
+
+
+def sanitize_annotations_text(text: str) -> str:
+    """Strip annotation note payloads before a cloud send."""
+    out = _ANNOTATION_LINE_RE.sub("[annotation]", str(text or ""))
+    return _ANNOTATION_INLINE_RE.sub("[annotation]", out)
+
+
 def falsification_checks(finding: Optional[dict] = None) -> Dict[str, Any]:
     """What evidence would disprove the leading explanation for this finding."""
     blob = _finding_blob(finding).lower()
@@ -915,6 +1069,16 @@ def new_user_investigation_template(
     return {"id": tid, "label": name, "steps": seq, "user": True}
 
 
+VALIDATE_EXPERIMENT_PROMPT = (
+    "Did this before/after capture validate the experiment? "
+    "Call validate_experiment. Omit actual — the host fills percents from "
+    "the last Trace Compare (Scope to cursors honored). If expected deltas "
+    "are known from what_if or optimize_experiment, pass them as expected; "
+    "otherwise omit expected. Then report VALIDATED, PARTIALLY VALIDATED, "
+    "or DISPROVED with supporting evidence and one next check."
+)
+
+
 def validate_experiment(
     expected: Optional[dict] = None,
     actual: Optional[dict] = None,
@@ -1193,9 +1357,9 @@ def chat_usage_from_response(body: Any) -> Dict[str, int]:
 def format_privacy_chip(priv: Optional[dict] = None) -> str:
     level = str((priv or {}).get("level") or "local")
     return {
-        "local": "Local",
-        "cloud_safe": "Cloud",
-        "sensitive": "Sensitive",
+        "local": "🟢 Local",
+        "cloud_safe": "🟡 Cloud",
+        "sensitive": "🔴 Sensitive",
     }.get(level, level.replace("_", " ").title())
 
 
@@ -1293,6 +1457,364 @@ def anonymize_task_name(name: str, mapping: Optional[dict] = None) -> Tuple[str,
     return alias, mp
 
 
+def extract_task_names_from_text(text: str) -> List[str]:
+    seen: List[str] = []
+    for m in _TASK_NAME_RE.findall(str(text or "")):
+        if m not in seen:
+            seen.append(m)
+    return seen
+
+
+def anonymize_text(
+    text: str,
+    task_names: Optional[Sequence[str]] = None,
+    mapping: Optional[dict] = None,
+) -> Tuple[str, Dict[str, str]]:
+    """Replace known task names with stable Task-N aliases."""
+    src = str(text or "")
+    mp = dict(mapping or {})
+    names = [str(n).strip() for n in (task_names or []) if str(n).strip()]
+    if not names:
+        names = extract_task_names_from_text(src)
+    names = sorted(set(names), key=len, reverse=True)
+    out = src
+    for name in names:
+        alias, mp = anonymize_task_name(name, mp)
+        if name and alias and name in out:
+            out = out.replace(name, alias)
+    return out, mp
+
+
+def apply_cloud_privacy(
+    findings_text: str = "",
+    query: str = "",
+    task_names: Optional[Sequence[str]] = None,
+    *,
+    endpoint_is_local: bool = True,
+    redact_task_names: bool = False,
+    sensitive: bool = False,
+) -> Dict[str, Any]:
+    """Block cloud send when sensitive; optionally anonymize task names."""
+    priv = classify_trace_privacy(
+        endpoint_is_local=endpoint_is_local,
+        redact_task_names=redact_task_names,
+        sensitive=sensitive,
+    )
+    blocked = bool(sensitive and not endpoint_is_local)
+    text = str(findings_text or "")
+    q = str(query or "")
+    mapping: Dict[str, str] = {}
+    if not endpoint_is_local and not blocked:
+        text = sanitize_annotations_text(text)
+        q = sanitize_annotations_text(q)
+    if redact_task_names and not endpoint_is_local and not blocked:
+        names = [str(n).strip() for n in (task_names or []) if str(n).strip()]
+        if not names:
+            names = extract_task_names_from_text(f"{text}\n{q}")
+        text, mapping = anonymize_text(text, names, mapping)
+        q, mapping = anonymize_text(q, names, mapping)
+    return {
+        "ok": not blocked,
+        "blocked": blocked,
+        "findings_text": text,
+        "query": q,
+        "mapping": mapping,
+        "privacy": priv,
+        "note": (
+            "Cloud AI disabled — treat this trace as confidential"
+            if blocked else priv.get("note") or ""
+        ),
+    }
+
+
+def toggle_interpreted_scope(
+    interpreted: Optional[dict] = None,
+    key: str = "",
+    enabled: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Flip one investigation-scope flag on an interpret_query payload."""
+    out = dict(interpreted) if isinstance(interpreted, dict) else {}
+    scopes = [str(s) for s in (out.get("scope") or []) if s]
+    k = str(key or "").strip()
+    if k:
+        on = (k not in scopes) if enabled is None else bool(enabled)
+        if on and k not in scopes:
+            scopes.append(k)
+        if not on:
+            scopes = [s for s in scopes if s != k]
+        out["scope"] = scopes
+    return out
+
+
+def interpreted_run_prompt(interpreted: Optional[dict] = None) -> str:
+    """Prompt for [Run investigation] after the user confirms / edits scope."""
+    data = interpreted if isinstance(interpreted, dict) else {}
+    question = str(
+        data.get("interpreted_question") or data.get("question") or ""
+    ).strip() or "Investigate the main performance problem"
+    mode = str(data.get("mode") or data.get("kind") or "diagnose")
+    scopes = [str(s) for s in (data.get("scope") or []) if s]
+    scope_bit = ", ".join(scopes) if scopes else "execution, blocking"
+    fid = str(data.get("finding_id") or "").strip()
+    extra = f" finding_id={fid}." if fid else ""
+    return (
+        f"{question}\n\nInterpreted as {mode}. "
+        f"Investigation scope: {scope_bit}.{extra} "
+        "Call interpret_query only if the question is still ambiguous, "
+        "then investigate and verify jump:TIME evidence."
+    )
+
+
+def format_experiment_verdict(result: Any = None) -> str:
+    raw = result
+    if isinstance(result, dict):
+        raw = result.get("result") or result.get("verdict") or ""
+    key = str(raw or "").strip().upper()
+    return {
+        "VALIDATED": "Hypothesis validated",
+        "DISPROVED": "Hypothesis disproved",
+        "PARTIALLY VALIDATED": "Hypothesis partially validated",
+    }.get(key, "Inconclusive")
+
+
+def apply_experiment_to_hypotheses(
+    hypotheses: Optional[Sequence[dict]] = None,
+    result: Any = None,
+) -> List[Dict[str, Any]]:
+    """Mark open hypotheses supported / rejected from a validate_experiment result."""
+    raw = result.get("result") if isinstance(result, dict) else result
+    key = str(raw or "").strip().upper()
+    status = (
+        "supported" if key == "VALIDATED"
+        else "rejected" if key == "DISPROVED"
+        else ""
+    )
+    out: List[Dict[str, Any]] = []
+    for h in hypotheses or []:
+        if not isinstance(h, dict):
+            continue
+        item = dict(h)
+        if status and str(item.get("status") or "").lower() in (
+            "", "possible", "need_evidence", "needs_evidence", "untested",
+        ):
+            item["status"] = status
+        out.append(item)
+    return out
+
+
+def parse_user_historical_knowledge(raw: Any) -> List[Dict[str, Any]]:
+    if isinstance(raw, list):
+        items = raw
+    else:
+        text = str(raw or "").strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        items = parsed if isinstance(parsed, list) else []
+    out: List[Dict[str, Any]] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        task = str(it.get("task") or "").strip()
+        issue = str(it.get("issue") or it.get("previous_issue") or it.get("title") or "").strip()
+        if not (task or issue):
+            continue
+        metrics = _metrics_from_mapping(it.get("metrics") if isinstance(it.get("metrics"), dict) else it)
+        out.append({
+            "task": task,
+            "issue": issue,
+            "fix": str(it.get("fix") or it.get("known_fix") or "").strip(),
+            "build": str(it.get("build") or it.get("last_occurrence") or "").strip(),
+            "keywords": list(it.get("keywords") or []),
+            "metrics": metrics,
+        })
+    return out
+
+
+def dump_user_historical_knowledge(items: Optional[Sequence[dict]] = None) -> str:
+    return json.dumps(parse_user_historical_knowledge(list(items or [])), ensure_ascii=False)
+
+
+def new_user_historical_entry(
+    finding: Optional[dict] = None,
+    extras: Optional[dict] = None,
+) -> Dict[str, Any]:
+    f = finding if isinstance(finding, dict) else {}
+    extra = extras if isinstance(extras, dict) else {}
+    task = str(extra.get("task") or f.get("task") or "").strip()
+    issue = str(
+        extra.get("issue") or extra.get("title") or f.get("title") or ""
+    ).strip() or "Saved finding"
+    metrics = _metrics_from_mapping(extra.get("metrics") if isinstance(extra.get("metrics"), dict) else extra)
+    if not metrics:
+        metrics = _metrics_from_mapping(f)
+    return {
+        "task": task,
+        "issue": issue,
+        "fix": str(extra.get("fix") or "").strip(),
+        "build": str(extra.get("build") or "").strip(),
+        "keywords": [w for w in re.split(r"\W+", issue.lower()) if len(w) > 3][:6],
+        "metrics": metrics,
+    }
+
+
+_HISTORICAL_METRIC_KEYS: Tuple[str, ...] = (
+    "migrations", "migration_rate", "blocking", "wcet",
+)
+
+
+def _metrics_from_mapping(src: Any) -> Dict[str, float]:
+    data = src if isinstance(src, dict) else {}
+    out: Dict[str, float] = {}
+    for key in _HISTORICAL_METRIC_KEYS:
+        try:
+            if data.get(key) is None:
+                continue
+            out[key] = float(data.get(key))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def rate_flags_from_metrics(
+    current: Optional[dict] = None,
+    typical: Optional[dict] = None,
+) -> List[str]:
+    """Typical vs current rate lines (e.g. migrations 47 vs typical 12)."""
+    cur = _metrics_from_mapping(current)
+    hist = _metrics_from_mapping(typical)
+    flags: List[str] = []
+    for key in _HISTORICAL_METRIC_KEYS:
+        if key not in cur or key not in hist or hist[key] == 0:
+            continue
+        ratio = cur[key] / hist[key]
+        if ratio >= 2.0:
+            flags.append(f"{key} {cur[key]:g} vs typical {hist[key]:g} (×{ratio:.1f})")
+    return flags
+
+
+CAPABILITY_CHAT_PROBE = 'Reply with JSON only: {"ok":true}'
+
+CAPABILITY_PROBE_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "btf_ping",
+        "description": "Capability probe. Call this once if you support tools.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+CAPABILITY_PROBE_TOOL_PONG: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "btf_pong",
+        "description": "Second capability probe. Call after btf_ping if you can chain tools.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+
+def capability_probe_body(model: str) -> Dict[str, Any]:
+    return {
+        "model": str(model or "").strip(),
+        "stream": False,
+        "messages": [{
+            "role": "user",
+            "content": (
+                "If you can call tools, call btf_ping then btf_pong. "
+                "Otherwise reply PONG."
+            ),
+        }],
+        "tools": [CAPABILITY_PROBE_TOOL, CAPABILITY_PROBE_TOOL_PONG],
+        "max_tokens": 64,
+    }
+
+
+def structured_output_from_text(text: str) -> bool:
+    src = str(text or "").strip()
+    if src.startswith("```"):
+        src = re.sub(r"^```(?:json)?\s*", "", src, flags=re.IGNORECASE)
+        src = re.sub(r"\s*```$", "", src)
+    try:
+        return isinstance(json.loads(src), dict)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        m = re.search(r"\{[^{}]+\}", src)
+        if not m:
+            return False
+        try:
+            return isinstance(json.loads(m.group(0)), dict)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return False
+
+
+def count_tool_calls(body: Any) -> Optional[int]:
+    if not isinstance(body, dict):
+        return None
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(msg, dict):
+        return None
+    calls = msg.get("tool_calls")
+    n = len(calls) if isinstance(calls, list) else 0
+    if msg.get("function_call"):
+        n = max(n, 1)
+    if n:
+        return n
+    if str(msg.get("content") or "").strip():
+        return 0
+    return None
+
+
+def merge_live_capability(
+    cap: Optional[dict] = None,
+    *,
+    chat_text: str = "",
+    tool_body: Any = None,
+    tool_ok: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Overlay live Test-connection results on the heuristic capability card."""
+    out = dict(cap) if isinstance(cap, dict) else {}
+    if structured_output_from_text(chat_text):
+        out["structured_output"] = "yes"
+        out["source"] = "live"
+    elif str(chat_text or "").strip():
+        out["structured_output"] = "no"
+        out["source"] = "live"
+    n = count_tool_calls(tool_body) if tool_body is not None else None
+    if tool_ok is True or (n is not None and n >= 1):
+        out["tool_calling"] = "yes"
+        out["multi_tool_chaining"] = "yes" if (n or 0) >= 2 else "partial"
+        out["source"] = "live"
+    elif tool_ok is False or n == 0:
+        out["tool_calling"] = "no"
+        out["multi_tool_chaining"] = "no"
+        out["source"] = "live"
+    return out
+
+
+def tool_calling_from_chat_response(body: Any) -> Optional[bool]:
+    """True if the chat response issued a tool call; False if text-only; None if empty."""
+    if not isinstance(body, dict):
+        return None
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(msg, dict):
+        return None
+    calls = msg.get("tool_calls") or msg.get("function_call")
+    if calls:
+        return True
+    if str(msg.get("content") or "").strip():
+        return False
+    return None
+
+
 def builtin_investigation_templates() -> List[Dict[str, Any]]:
     """Reusable tool sequences teams can run as 'My Investigation'."""
     return [
@@ -1348,18 +1870,7 @@ def match_historical_knowledge(
     )
     if not isinstance(prev, dict):
         prev = {}
-    flags: List[str] = []
-    for key in ("migrations", "migration_rate", "blocking", "wcet"):
-        try:
-            a = float(cur.get(key))
-            b = float(prev.get(key))
-        except (TypeError, ValueError):
-            continue
-        if b == 0:
-            continue
-        ratio = a / b
-        if ratio >= 2.0:
-            flags.append(f"{key} {a:g} vs typical {b:g} (×{ratio:.1f})")
+    flags = rate_flags_from_metrics(cur, prev)
     issue = str(prev.get("issue") or prev.get("previous_issue") or "")
     fix = str(prev.get("fix") or prev.get("known_fix") or "")
     build = str(prev.get("build") or prev.get("last_occurrence") or "")
@@ -1371,6 +1882,8 @@ def match_historical_knowledge(
         "known_fix": fix,
         "last_occurrence": build,
         "flags": flags,
+        "typical": _metrics_from_mapping(prev),
+        "current": _metrics_from_mapping(cur),
         "resembles_previous": resembles,
         "message": (
             f"This resembles the {issue} issue"
@@ -1422,15 +1935,42 @@ def historical_knowledge_for_finding(
     *,
     history: Optional[dict] = None,
     current: Optional[dict] = None,
+    user_catalog: Optional[Sequence[dict]] = None,
 ) -> Dict[str, Any]:
-    """Match stored history, then the builtin catalog, for one finding."""
+    """Match user store, then baseline history, then the builtin catalog."""
     finding = finding if isinstance(finding, dict) else {}
     task = str(finding.get("task") or "")
     cur = current if isinstance(current, dict) else {}
+    blob = f"{finding.get('title') or ''} {finding.get('text') or ''} {task}".lower()
+    for item in parse_user_historical_knowledge(list(user_catalog or [])):
+        item_task = str(item.get("task") or "").strip()
+        keys = [str(k).lower() for k in (item.get("keywords") or []) if k]
+        if (item_task and item_task.lower() == task.lower()) or (
+            keys and any(k in blob for k in keys)
+        ) or (item.get("issue") and str(item.get("issue")).lower() in blob):
+            issue = str(item.get("issue") or "")
+            fix = str(item.get("fix") or "")
+            build = str(item.get("build") or "")
+            typical = item.get("metrics") if isinstance(item.get("metrics"), dict) else {}
+            flags = rate_flags_from_metrics(cur, typical)
+            return {
+                "ok": True,
+                "task": task or item_task,
+                "previous_issue": issue,
+                "known_fix": fix,
+                "last_occurrence": build,
+                "flags": flags,
+                "typical": typical,
+                "current": _metrics_from_mapping(cur),
+                "resembles_previous": True,
+                "source": "user",
+                "message": f"This resembles the {issue} issue"
+                + (f" seen in {build}" if build else "")
+                + (f" — known fix: {fix}" if fix else ""),
+            }
     hit = match_historical_knowledge(task, current=cur, history=history)
     if hit.get("previous_issue") or hit.get("flags"):
         return hit
-    blob = f"{finding.get('title') or ''} {finding.get('text') or ''} {task}".lower()
     for item in builtin_historical_catalog():
         if any(k in blob for k in (item.get("keywords") or ())):
             issue = str(item.get("issue") or "")
@@ -1871,6 +2411,8 @@ def infer_model_capability(
     tool_call_ok: Optional[bool] = None,
     chat_ok: bool = True,
     endpoint_is_local: bool = True,
+    chat_text: str = "",
+    tool_body: Any = None,
 ) -> Dict[str, Any]:
     cap = infer_model_capabilities(
         model_name, endpoint_is_local=endpoint_is_local,
@@ -1880,7 +2422,9 @@ def infer_model_capability(
         cap["tool_calling"] = "yes"
     elif tool_call_ok is False:
         cap["tool_calling"] = "partial"
-    return cap
+    return merge_live_capability(
+        cap, chat_text=chat_text, tool_body=tool_body, tool_ok=tool_call_ok,
+    )
 
 
 def format_capability_report(cap: Optional[Dict[str, Any]] = None) -> str:
@@ -1918,6 +2462,312 @@ def format_benchmark_report(run_id: str, rows: Sequence[Dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _xml_text(el: Any) -> str:
+    return (el.text or "").strip() if el is not None else ""
+
+
+def _xml_child(parent: Any, *names: str) -> Any:
+    if parent is None:
+        return None
+    for name in names:
+        found = parent.find(name)
+        if found is not None:
+            return found
+    return None
+
+
+def resolve_benchmark_api_key(*, text: str = "", env: str = "") -> str:
+    """Named env, else XML text, else shared env fallbacks."""
+    from .ai_assistant import normalize_api_key, read_ai_env_key, resolve_ai_api_key
+
+    env_name = str(env or "").strip()
+    if env_name:
+        got = read_ai_env_key((env_name,))
+        if got:
+            return got
+    got = normalize_api_key(text)
+    if got:
+        return got
+    return resolve_ai_api_key("")
+
+
+def _parse_benchmark_endpoint_xml(el: Any, defaults: Optional[dict] = None) -> Dict[str, Any]:
+    from .ai_assistant import (
+        normalize_ai_base_url,
+        parse_ai_tls_verify,
+    )
+
+    out = dict(defaults or {})
+    if not out.get("base_url"):
+        out["base_url"] = ""
+    if "tls_verify" not in out:
+        out["tls_verify"] = True
+    if "api_key" not in out:
+        out["api_key"] = ""
+    if "api_key_env" not in out:
+        out["api_key_env"] = ""
+    if "preset" not in out:
+        out["preset"] = ""
+    if "timeout_s" not in out:
+        out["timeout_s"] = 0.0
+    if el is None:
+        return out
+    url_el = _xml_child(el, "base-url", "base_url", "url")
+    url = _xml_text(url_el) or str(el.get("base-url") or el.get("base_url") or "").strip()
+    if url:
+        out["base_url"] = normalize_ai_base_url(url)
+    tls_raw = None
+    tls_el = _xml_child(el, "tls-verify", "tls_verify")
+    if tls_el is not None:
+        tls_raw = _xml_text(tls_el) or tls_el.get("value")
+    if el.get("tls-verify") is not None:
+        tls_raw = el.get("tls-verify")
+    elif el.get("tls_verify") is not None:
+        tls_raw = el.get("tls_verify")
+    if tls_raw is not None:
+        out["tls_verify"] = parse_ai_tls_verify(tls_raw, default=True)
+    if str(el.get("insecure") or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    ):
+        out["tls_verify"] = False
+    key_el = _xml_child(el, "api-key", "api_key")
+    env_name = ""
+    key_text = ""
+    if key_el is not None:
+        env_name = str(key_el.get("env") or "").strip()
+        key_text = _xml_text(key_el)
+    env_name = env_name or str(el.get("api-key-env") or el.get("api_key_env") or "").strip()
+    if env_name or key_text:
+        out["api_key_env"] = env_name
+        out["api_key"] = resolve_benchmark_api_key(text=key_text, env=env_name)
+    preset_el = _xml_child(el, "preset")
+    preset = _xml_text(preset_el) or str(el.get("preset") or "").strip()
+    if preset:
+        out["preset"] = preset
+    to_el = _xml_child(el, "timeout-s", "timeout_s", "timeout")
+    to_raw = _xml_text(to_el) or str(el.get("timeout-s") or el.get("timeout_s") or "").strip()
+    if to_raw:
+        try:
+            out["timeout_s"] = float(to_raw)
+        except ValueError:
+            pass
+    return out
+
+
+def load_benchmark_suite_xml(path: Any) -> Dict[str, Any]:
+    """Load a live ``ai-test`` suite from XML (models, URL, TLS, API key)."""
+    import xml.etree.ElementTree as ET
+
+    src = Path(path)
+    if not src.is_file():
+        raise FileNotFoundError(f"benchmark suite not found: {src}")
+    try:
+        root = ET.parse(str(src)).getroot()
+    except ET.ParseError as exc:
+        raise ValueError(f"invalid benchmark XML {src}: {exc}") from exc
+    tag = str(root.tag or "").rsplit("}", 1)[-1].lower()
+    if tag not in ("ai-benchmark", "benchmark", "suite"):
+        raise ValueError(
+            f"benchmark XML root must be <ai-benchmark> (got <{root.tag}>)"
+        )
+    xml_dir = src.parent
+    cwd = Path.cwd()
+
+    def _resolve(value: str) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        p = Path(raw)
+        if p.is_absolute():
+            return str(p)
+        for base in (cwd, xml_dir):
+            cand = (base / raw).resolve()
+            if cand.exists():
+                return str(cand)
+        return str((cwd / raw).resolve())
+
+    dataset_el = _xml_child(root, "dataset")
+    output_el = _xml_child(root, "output")
+    fail_el = _xml_child(root, "fail-under", "fail_under")
+    fail_under = 0
+    fail_raw = _xml_text(fail_el)
+    if fail_raw:
+        try:
+            fail_under = int(fail_raw)
+        except ValueError:
+            fail_under = 0
+    defaults = _parse_benchmark_endpoint_xml(_xml_child(root, "endpoint", "defaults"))
+    models_el = _xml_child(root, "models")
+    model_nodes = list((models_el if models_el is not None else root).findall("model"))
+    models: List[Dict[str, Any]] = []
+    for node in model_nodes:
+        mid = str(node.get("id") or node.get("name") or _xml_text(node) or "").strip()
+        if not mid:
+            continue
+        ep = _parse_benchmark_endpoint_xml(node, defaults)
+        if not ep.get("base_url"):
+            raise ValueError(f"model {mid!r} has no base-url (set <endpoint> or per-model)")
+        models.append({
+            "id": mid,
+            "base_url": ep["base_url"],
+            "tls_verify": bool(ep.get("tls_verify", True)),
+            "api_key": str(ep.get("api_key") or ""),
+            "api_key_env": str(ep.get("api_key_env") or ""),
+            "preset": str(ep.get("preset") or ""),
+            "timeout_s": float(ep.get("timeout_s") or 0.0),
+        })
+    if not models:
+        raise ValueError("benchmark XML has no <model id=...> entries")
+    dataset = _xml_text(dataset_el) or "tests/ai"
+    return {
+        "path": str(src.resolve()),
+        "dataset": _resolve(dataset),
+        "dataset_raw": dataset,
+        "fail_under": fail_under,
+        "output": _xml_text(output_el),
+        "defaults": defaults,
+        "models": models,
+    }
+
+
+def parse_live_benchmark_models(models_raw: str) -> List[str]:
+    """Comma-separated model ids from ``--models`` (filters the suite XML)."""
+    return [m.strip() for m in str(models_raw or "").split(",") if m.strip()]
+
+
+def select_benchmark_suite_models(
+    suite: dict,
+    models_raw: str = "",
+) -> List[Dict[str, Any]]:
+    """Return suite model dicts, optionally filtered by ``--models`` ids."""
+    models = list((suite or {}).get("models") or [])
+    want = parse_live_benchmark_models(models_raw)
+    if not want:
+        return models
+    by_id = {str(m.get("id") or ""): m for m in models}
+    out: List[Dict[str, Any]] = []
+    missing: List[str] = []
+    for mid in want:
+        if mid in by_id:
+            out.append(by_id[mid])
+        else:
+            missing.append(mid)
+    if missing:
+        known = ", ".join(by_id) or "(none)"
+        raise ValueError(
+            f"model id(s) not in suite XML: {', '.join(missing)} (have {known})"
+        )
+    return out
+
+
+def benchmark_model_category(model: str) -> str:
+    low = str(model or "").lower()
+    if "gemini" in low:
+        if "flash-lite" in low or "flash_lite" in low:
+            return "Cloud / fast"
+        if "pro" in low:
+            return "Cloud / frontier"
+        return "Cloud"
+    if "gpt-" in low or "gpt4" in low:
+        return "Cloud"
+    if "phi4" in low or "phi-4" in low:
+        return "Local / historical baseline"
+    if "35b" in low or "a3b" in low:
+        return "Local / experimental"
+    if any(tok in low for tok in ("27b", "26b", "14b", "32b")):
+        return "Local / high-quality"
+    return "Local / practical"
+
+
+def benchmark_prompt_context(case: dict) -> str:
+    """Catalog-only Findings text for a live case (does not leak expected labels)."""
+    catalog = case.get("catalog") if isinstance(case.get("catalog"), dict) else {}
+    tasks = ", ".join(str(t) for t in (catalog.get("tasks") or []) if str(t).strip())
+    times = catalog.get("times") or []
+    jumps = ", ".join(f"jump:{t}" for t in times)
+    lo, hi = catalog.get("cursor_lo"), catalog.get("cursor_hi")
+    lines = [
+        "Benchmark investigation. Use only this catalog.",
+        f"Trace: {case.get('trace') or ''}",
+        f"Known tasks: {tasks or '(none)'}",
+    ]
+    if lo is not None and hi is not None:
+        lines.append(f"Cursor region window: jump:{lo} … jump:{hi}")
+    if jumps:
+        lines.append(f"Evidence times: {jumps}")
+    lines.append(
+        "Call an allowed investigation tool if needed. "
+        "Cite jump:TIME and Task[id] from the catalog. "
+        "State confidence (High / Medium / Low). "
+        "Do not invent tasks, metrics, or timestamps."
+    )
+    return "\n".join(lines)
+
+
+def score_benchmark_response(
+    case: dict,
+    *,
+    response: str,
+    tools: Optional[Sequence[str]] = None,
+    fail_under: int = 0,
+    elapsed_s: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Score one case from a model (or fixture) reply."""
+    expected = case.get("expected") if isinstance(case.get("expected"), dict) else case
+    catalog = case.get("catalog") if isinstance(case.get("catalog"), dict) else {}
+    report = validate_ai_response(
+        response,
+        known_tasks=catalog.get("tasks"),
+        known_times=catalog.get("times"),
+        cursor_lo=catalog.get("cursor_lo"),
+        cursor_hi=catalog.get("cursor_hi"),
+    )
+    blob = str(response or "").lower()
+    got_findings = [
+        ft for ft in (expected.get("finding_types") or [])
+        if str(ft).lower() in blob
+    ]
+    scored = score_benchmark_case(
+        expected,
+        actual_finding_ids=got_findings,
+        actual_tasks=[
+            str(c.get("value")) for c in (report.get("claims") or [])
+            if isinstance(c, dict) and c.get("kind") == "task"
+        ],
+        actual_tools=list(tools or []),
+        actual_conclusion=response,
+        validation=report,
+    )
+    scored["id"] = case.get("id") or expected.get("id")
+    floor = int(expected.get("pass_under") or fail_under or 70)
+    scored["pass"] = int(scored.get("overall") or 0) >= floor and bool(
+        report.get("ok", True) or not (expected.get("forbidden") or {})
+    )
+    if expected.get("forbidden", {}).get("invented_task_names") and not report.get("ok"):
+        invented = any(
+            c.get("kind") == "task" and not c.get("ok")
+            for c in (report.get("claims") or [])
+            if isinstance(c, dict)
+        )
+        if invented:
+            scored["pass"] = False
+    if expected.get("forbidden", {}).get("out_of_scope_timestamps"):
+        oos = any(
+            c.get("kind") == "jump" and not c.get("ok")
+            for c in (report.get("claims") or [])
+            if isinstance(c, dict)
+        )
+        if oos:
+            scored["pass"] = False
+    if fail_under and int(scored.get("overall") or 0) < int(fail_under):
+        scored["pass"] = False
+    scored["validation"] = report
+    if elapsed_s is not None:
+        scored["elapsed_s"] = round(float(elapsed_s), 2)
+    scored["tools"] = list(tools or [])
+    return scored
+
+
 def run_offline_benchmark(
     dataset_path: Any,
     *,
@@ -1928,82 +2778,225 @@ def run_offline_benchmark(
     cases = load_benchmark_dataset(str(dataset_path))
     rows: List[Dict[str, Any]] = []
     for case in cases:
-        expected = case.get("expected") if isinstance(case.get("expected"), dict) else case
         actual = case.get("actual") if isinstance(case.get("actual"), dict) else {}
         response = str(actual.get("response") or case.get("response") or "")
-        catalog = actual.get("catalog") or case.get("catalog") or {}
-        report = validate_ai_response(
-            response,
-            known_tasks=catalog.get("tasks"),
-            known_times=catalog.get("times"),
-            cursor_lo=catalog.get("cursor_lo"),
-            cursor_hi=catalog.get("cursor_hi"),
-        )
-        scored = score_benchmark_case(
-            expected,
-            actual_finding_ids=list(expected.get("finding_types") or []) if (
-                any(
-                    str(ft).lower() in response.lower()
-                    for ft in (expected.get("finding_types") or [])
-                )
-            ) else [],
-            actual_tasks=report.get("claims") and [
-                str(c.get("value")) for c in report["claims"]
-                if isinstance(c, dict) and c.get("kind") == "task"
-            ] or [],
-            actual_tools=list(actual.get("tools") or case.get("tools") or []),
-            actual_conclusion=response,
-            validation=report,
-        )
-        # If finding types appear in the response, treat them as identified.
-        if expected.get("finding_types"):
-            blob = response.lower()
-            got = [
-                ft for ft in expected["finding_types"]
-                if str(ft).lower() in blob
-            ]
-            scored = score_benchmark_case(
-                expected,
-                actual_finding_ids=got,
-                actual_tasks=[
-                    str(c.get("value")) for c in (report.get("claims") or [])
-                    if isinstance(c, dict) and c.get("kind") == "task"
-                ],
-                actual_tools=list(actual.get("tools") or case.get("tools") or []),
-                actual_conclusion=response,
-                validation=report,
-            )
-        scored["id"] = case.get("id") or expected.get("id")
-        scored["pass"] = (
-            int(scored.get("overall") or 0) >= int(expected.get("pass_under") or fail_under or 70)
-            and bool(report.get("ok", True) or not (expected.get("forbidden") or {}))
-        )
-        if expected.get("forbidden", {}).get("invented_task_names") and not report.get("ok"):
-            invented = any(
-                c.get("kind") == "task" and not c.get("ok")
-                for c in (report.get("claims") or [])
-                if isinstance(c, dict)
-            )
-            if invented:
-                scored["pass"] = False
-        if expected.get("forbidden", {}).get("out_of_scope_timestamps"):
-            oos = any(
-                c.get("kind") == "jump" and not c.get("ok")
-                for c in (report.get("claims") or [])
-                if isinstance(c, dict)
-            )
-            if oos:
-                scored["pass"] = False
-        if fail_under and int(scored.get("overall") or 0) < int(fail_under):
-            scored["pass"] = False
-        scored["validation"] = report
-        rows.append(scored)
+        tools = list(actual.get("tools") or case.get("tools") or [])
+        rows.append(score_benchmark_response(
+            case, response=response, tools=tools, fail_under=fail_under,
+        ))
     run_id = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
     failed = [r for r in rows if not r.get("pass")]
     return {
         "run_id": run_id,
+        "mode": "offline",
         "rows": rows,
         "failed": failed,
         "report": format_benchmark_report(run_id, rows),
         "ok": not failed,
     }
+
+
+def run_live_benchmark(
+    dataset_path: Any,
+    models: Sequence[str],
+    *,
+    complete: Callable[..., Dict[str, Any]],
+    fail_under: int = 0,
+) -> Dict[str, Any]:
+    """Score live model replies. *complete(query, findings_text, model, case)*."""
+    from datetime import datetime, timezone
+    ids = [str(m).strip() for m in (models or []) if str(m).strip()]
+    if not ids:
+        raise ValueError("live benchmark needs at least one model id")
+    cases = load_benchmark_dataset(str(dataset_path))
+    run_id = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
+    per_model: List[Dict[str, Any]] = []
+    for model in ids:
+        rows: List[Dict[str, Any]] = []
+        error = ""
+        for case in cases:
+            query = str(case.get("question") or "").strip() or "Investigate the main problem."
+            findings = benchmark_prompt_context(case)
+            try:
+                turn = complete(query, findings, model, case) or {}
+            except Exception as exc:
+                error = str(exc)
+                turn = {"content": "", "tool_calls": [], "elapsed_s": 0, "error": error}
+            if not isinstance(turn, dict):
+                turn = {"content": str(turn or "")}
+            content = str(turn.get("content") or "")
+            raw_calls = turn.get("tool_calls") or []
+            names: List[str] = []
+            for c in raw_calls:
+                if isinstance(c, dict):
+                    name = str(c.get("name") or "")
+                    if name:
+                        names.append(name)
+                elif c:
+                    names.append(str(c))
+            row = score_benchmark_response(
+                case,
+                response=content,
+                tools=names,
+                fail_under=fail_under,
+                elapsed_s=turn.get("elapsed_s"),
+            )
+            if turn.get("error"):
+                row["error"] = str(turn.get("error"))
+                row["pass"] = False
+            rows.append(row)
+        failed = [r for r in rows if not r.get("pass")]
+        per_model.append({
+            "model": model,
+            "category": benchmark_model_category(model),
+            "run_id": run_id,
+            "rows": rows,
+            "failed": failed,
+            "report": format_benchmark_report(f"{run_id}-{model}", rows),
+            "ok": not failed and not error,
+            "error": error,
+        })
+    return {
+        "run_id": run_id,
+        "mode": "live",
+        "models": per_model,
+        "ok": all(m.get("ok") for m in per_model),
+        "report": "".join(m["report"] for m in per_model),
+    }
+
+
+def format_benchmark_markdown(
+    *,
+    offline: Optional[dict] = None,
+    live: Optional[dict] = None,
+    dataset: str = "tests/ai",
+) -> str:
+    """Markdown report for AI_BENCHMARK.md (offline scorer + optional live models)."""
+    from datetime import datetime, timezone
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines = [
+        "# AI Benchmark results",
+        "",
+        f"Generated: {stamp}",
+        f"Dataset: `{dataset}`",
+        "",
+        "Live `--config` suite XML scores a real endpoint. Offline rows score the canned "
+        "`response` fields in `dataset.json` and gate the scorer, not a model.",
+        "",
+    ]
+    part_keys = (
+        "finding", "evidence", "tool_use", "root_cause", "calibration", "safety",
+    )
+
+    def _table(rows: Sequence[dict]) -> List[str]:
+        out = [
+            "| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---|",
+        ]
+        for row in rows:
+            parts = row.get("parts") or {}
+            flag = "ERROR" if row.get("error") else (
+                "PASS" if row.get("pass") else "FAIL"
+            )
+            cells = [
+                str(row.get("id") or "?"),
+                str(row.get("overall") or 0),
+            ]
+            cells.extend(str(parts.get(k, "")) for k in part_keys)
+            cells.append(flag)
+            out.append("| " + " | ".join(cells) + " |")
+        if rows:
+            avg = int(round(sum(int(r.get("overall") or 0) for r in rows) / len(rows)))
+            out.extend(["", f"**Overall {avg}**"])
+        return out
+
+    if offline:
+        lines.extend([
+            "## Offline fixture scorer",
+            "",
+            f"Run `{offline.get('run_id') or ''}` — no live model.",
+            "",
+        ])
+        lines.extend(_table(offline.get("rows") or []))
+        lines.append("")
+    if live:
+        blocks = list(live.get("models") or [])
+        if blocks:
+            lines.extend([
+                "## Comparison",
+                "",
+                "| Model | Category | Overall | Pass | Mean latency |",
+                "|---|---|---:|---:|---:|",
+            ])
+            for block in blocks:
+                rows = list(block.get("rows") or [])
+                n = len(rows)
+                avg = int(round(sum(int(r.get("overall") or 0) for r in rows) / n)) if n else 0
+                passed = sum(1 for r in rows if r.get("pass"))
+                lat = [
+                    float(r.get("elapsed_s") or 0)
+                    for r in rows if r.get("elapsed_s") is not None
+                ]
+                mean_lat = f"{sum(lat) / len(lat):.1f}s" if lat else "—"
+                lines.append(
+                    f"| `{block.get('model') or '?'}` | "
+                    f"{block.get('category') or ''} | {avg} | "
+                    f"{passed}/{n} | {mean_lat} |"
+                )
+            lines.extend([
+                "",
+                "| Model | Finding | Evidence | Tool use | Root cause | Calibration | Safety |",
+                "|---|---:|---:|---:|---:|---:|---:|",
+            ])
+            for block in blocks:
+                rows = list(block.get("rows") or [])
+                n = max(len(rows), 1)
+                parts_avg = {}
+                for key in part_keys:
+                    parts_avg[key] = int(round(sum(
+                        int((r.get("parts") or {}).get(key) or 0) for r in rows
+                    ) / n)) if rows else 0
+                cells = [f"`{block.get('model') or '?'}`"]
+                cells.extend(str(parts_avg[k]) for k in part_keys)
+                lines.append("| " + " | ".join(cells) + " |")
+            lines.append("")
+        lines.extend(["## Live models", ""])
+        for block in live.get("models") or []:
+            model = str(block.get("model") or "")
+            cat = str(block.get("category") or benchmark_model_category(model))
+            lines.extend([
+                f"### `{model}`",
+                "",
+                f"{cat}. Run `{block.get('run_id') or live.get('run_id') or ''}`.",
+                "",
+            ])
+            if block.get("error"):
+                lines.extend([f"Error: {block['error']}", ""])
+            lines.extend(_table(block.get("rows") or []))
+            row_errors = [
+                (str(r.get("id") or "?"), str(r.get("error") or "").strip())
+                for r in (block.get("rows") or [])
+                if r.get("error")
+            ]
+            if row_errors:
+                first = row_errors[0][1]
+                n_err = len(row_errors)
+                snippet = first.split("\n", 1)[0][:240]
+                lines.extend([
+                    "",
+                    f"{n_err}/{len(block.get('rows') or [])} cases returned an API error "
+                    f"(first: {snippet}).",
+                ])
+            lat = [
+                float(r.get("elapsed_s") or 0)
+                for r in (block.get("rows") or [])
+                if r.get("elapsed_s") is not None
+            ]
+            if lat:
+                avg_s = sum(lat) / len(lat)
+                lines.extend(["", f"Mean latency: **{avg_s:.1f}s** / case."])
+            lines.append("")
+    if not offline and not live:
+        lines.append("_No runs recorded._")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"

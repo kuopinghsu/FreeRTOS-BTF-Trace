@@ -28,10 +28,17 @@ from btf_viewer_pkg.ai_case import (  # noqa: E402
     interpret_investigation_query,
     investigation_mode_prompt,
     load_benchmark_dataset,
+    load_benchmark_suite_xml,
     match_historical_knowledge,
     new_user_investigation_template,
     parse_user_investigation_templates,
     quality_bar,
+    benchmark_model_category,
+    parse_live_benchmark_models,
+    select_benchmark_suite_models,
+    benchmark_prompt_context,
+    format_benchmark_markdown,
+    run_live_benchmark,
     run_offline_benchmark,
     set_hypothesis_status,
     status_with_cost,
@@ -76,6 +83,8 @@ class InvestigationCaseTests(unittest.TestCase):
             "strong", "medium-high", "medium", "weak", "insufficient",
         ))
         self.assertTrue(case["falsification"]["would_disprove"])
+        self.assertTrue(case["falsification"]["supporting"])
+        self.assertTrue(any("migrations" in s for s in case["falsification"]["supporting"]))
         self.assertTrue(case["evidence_graph"]["nodes"])
 
     def test_quality_bar_is_not_a_percent(self) -> None:
@@ -201,6 +210,119 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertIn("Historical knowledge", md)
         self.assertIn("btfhyp:supported", md)
         self.assertIn("btfhyp:compare/all", md)
+        self.assertIn("Supporting evidence", md)
+
+    def test_scope_privacy_experiment_and_knowledge(self) -> None:
+        from btf_viewer_pkg.ai_case import (
+            apply_cloud_privacy,
+            apply_experiment_to_hypotheses,
+            experiment_percents_from_compare,
+            format_coverage_count_lines,
+            format_experiment_verdict,
+            format_privacy_chip,
+            format_quality_flag_lines,
+            interpreted_run_prompt,
+            new_user_historical_entry,
+            parse_user_historical_knowledge,
+            sanitize_annotations_text,
+            should_confirm_interpreted_query,
+            structured_output_from_text,
+            toggle_interpreted_scope,
+            tool_calling_from_chat_response,
+            VALIDATE_EXPERIMENT_PROMPT,
+        )
+        from btf_viewer_pkg.ai_investigation import (
+            format_scope_action_links,
+            parse_btf_scope_href,
+        )
+
+        interpreted = {
+            "interpreted_question": "Why is CS[22] slow?",
+            "mode": "diagnose",
+            "scope": ["execution", "blocking"],
+        }
+        flipped = toggle_interpreted_scope(interpreted, "migrations")
+        self.assertIn("migrations", flipped["scope"])
+        flipped = toggle_interpreted_scope(flipped, "execution")
+        self.assertNotIn("execution", flipped["scope"])
+        prompt = interpreted_run_prompt(flipped)
+        self.assertIn("Why is CS[22] slow?", prompt)
+        md = format_scope_action_links(flipped, {})
+        self.assertIn("btfscope:run/all", md)
+        self.assertEqual(parse_btf_scope_href("btfscope:toggle/priority_inheritance")[0], "toggle")
+
+        blocked = apply_cloud_privacy("CS[22] stall", "Why CS[22]?", sensitive=True, endpoint_is_local=False)
+        self.assertTrue(blocked["blocked"])
+        redacted = apply_cloud_privacy(
+            "CS[22] stall", "Why CS[22]?",
+            endpoint_is_local=False, redact_task_names=True,
+        )
+        self.assertIn("Task-1", redacted["findings_text"])
+        self.assertNotIn("CS[22]", redacted["findings_text"])
+        cloud_notes = apply_cloud_privacy(
+            'Annotation: secret note\nCS[22] stall', 'Why?',
+            endpoint_is_local=False, redact_task_names=False,
+        )
+        self.assertIn("[annotation]", cloud_notes["findings_text"])
+        self.assertNotIn("secret note", cloud_notes["findings_text"])
+        self.assertTrue(should_confirm_interpreted_query("Why is CS[22] slow?"))
+        self.assertFalse(should_confirm_interpreted_query(
+            "Why?\n\nInterpreted as diagnose. Investigation scope: blocking.",
+        ))
+        self.assertFalse(should_confirm_interpreted_query(
+            "Why?", already_interpreted=True,
+        ))
+        percents = experiment_percents_from_compare({
+            "checks": [{
+                "id": "migrations", "delta": -72.0, "detail": "-72.0% (threshold 20%)",
+            }],
+        })
+        self.assertEqual(percents["migrations"], -72.0)
+        self.assertIn("Call validate_experiment. Omit actual", VALIDATE_EXPERIMENT_PROMPT)
+        from btf_viewer_pkg.ai_investigation import compare_performance_metrics
+        from btf_viewer_pkg.ai_tools import compare_performance_tabs
+        tabs = compare_performance_tabs(
+            {"migrations": 10, "missed_ticks": 0},
+            {"migrations": 40, "missed_ticks": 0},
+            label_a="after", label_b="before",
+        )
+        filled = experiment_percents_from_compare(tabs)
+        self.assertIn("migrations", filled)
+        self.assertLess(filled["migrations"], 0)
+        self.assertTrue(structured_output_from_text('{"ok": true}'))
+        self.assertEqual(format_privacy_chip({"level": "local"}), "🟢 Local")
+        self.assertIn("[annotation]", sanitize_annotations_text("note: \"leak\""))
+        qlines = format_quality_flag_lines(
+            {"flags": {"direct_evidence": True, "alternative_tested": "partial"}},
+            {},
+        )
+        self.assertTrue(any("✓" in ln for ln in qlines))
+        clines = format_coverage_count_lines(
+            {"directly_observed": "5/7", "timeline_verified": 4,
+             "metric_verified": 6, "unverified_assumptions": 2, "claims": 7},
+            {},
+        )
+        self.assertTrue(any("5/7" in ln for ln in clines))
+
+        self.assertEqual(format_experiment_verdict("VALIDATED"), "Hypothesis validated")
+        hyps = apply_experiment_to_hypotheses(
+            [{"id": "h1", "hypothesis": "thrash", "status": "possible"}],
+            {"result": "VALIDATED"},
+        )
+        self.assertEqual(hyps[0]["status"], "supported")
+        entry = new_user_historical_entry(
+            {"task": "CS[22]", "title": "Thrash", "migrations": 47},
+            {"migrations": 47},
+        )
+        store = parse_user_historical_knowledge([entry])
+        self.assertEqual(store[0]["task"], "CS[22]")
+        self.assertEqual(store[0]["metrics"].get("migrations"), 47)
+        self.assertTrue(tool_calling_from_chat_response({
+            "choices": [{"message": {"tool_calls": [{"id": "1"}]}}],
+        }))
+        self.assertFalse(tool_calling_from_chat_response({
+            "choices": [{"message": {"content": "PONG"}}],
+        }))
 
     def test_investigation_template_prompt_lists_tools(self) -> None:
         from btf_viewer_pkg.ai_case import investigation_template_prompt
@@ -239,6 +361,114 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertTrue(result["ok"], result["report"])
         self.assertEqual(len(result["rows"]), 7)
 
+    def test_benchmark_suite_xml_loads_endpoint_tls_and_env_key(self) -> None:
+        import tempfile
+        from unittest.mock import patch
+
+        example = BTF_ROOT / "examples" / "ai" / "benchmark.xml"
+        suite = load_benchmark_suite_xml(str(example))
+        ids = [m["id"] for m in suite["models"]]
+        self.assertGreaterEqual(len(ids), 1)
+        local = next(m for m in suite["models"] if m["base_url"].startswith("http://"))
+        self.assertTrue(local["tls_verify"])
+        self.assertTrue(local["base_url"])
+        gemini_ids = [
+            m["id"] for m in suite["models"] if m.get("api_key_env") == "GEMINI_API_KEY"
+        ]
+        self.assertEqual(
+            gemini_ids, ["gemini-3.6-flash", "gemini-3.1-flash-lite"])
+        cloud = next(m for m in suite["models"] if m.get("api_key_env"))
+        self.assertEqual(cloud["api_key_env"], "GEMINI_API_KEY")
+        self.assertTrue(cloud["tls_verify"])
+        picked = select_benchmark_suite_models(suite, local["id"])
+        self.assertEqual([m["id"] for m in picked], [local["id"]])
+        self.assertEqual(parse_live_benchmark_models(local["id"]), [local["id"]])
+
+        insecure = BTF_ROOT / "examples" / "ai" / "benchmark-selfsigned.xml"
+        tls_suite = load_benchmark_suite_xml(str(insecure))
+        self.assertFalse(tls_suite["models"][0]["tls_verify"])
+        self.assertEqual(tls_suite["models"][0]["api_key_env"], "GATEWAY_API_KEY")
+
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<ai-benchmark>
+  <dataset>tests/ai</dataset>
+  <endpoint>
+    <base-url>https://gateway.example:8443/v1</base-url>
+    <tls-verify>false</tls-verify>
+    <api-key env="BENCH_TEST_KEY">xml-fallback-key</api-key>
+  </endpoint>
+  <models>
+    <model id="lab-model"/>
+  </models>
+</ai-benchmark>
+"""
+        with tempfile.NamedTemporaryFile("w", suffix=".xml", delete=False) as fh:
+            fh.write(xml)
+            tmp = fh.name
+        try:
+            with patch.dict(os.environ, {"BENCH_TEST_KEY": "from-env"}, clear=False):
+                env_suite = load_benchmark_suite_xml(tmp)
+            self.assertEqual(env_suite["models"][0]["api_key"], "from-env")
+            with patch.dict(os.environ, {"BENCH_TEST_KEY": ""}, clear=False):
+                xml_suite = load_benchmark_suite_xml(tmp)
+            self.assertEqual(xml_suite["models"][0]["api_key"], "xml-fallback-key")
+            self.assertFalse(xml_suite["models"][0]["tls_verify"])
+        finally:
+            os.unlink(tmp)
+
+    def test_live_benchmark_injected_complete(self) -> None:
+        root = BTF_ROOT / "tests" / "ai"
+        cases = {c["id"]: c for c in load_benchmark_dataset(str(root))}
+        suite = load_benchmark_suite_xml(
+            str(BTF_ROOT / "examples" / "ai" / "benchmark.xml"))
+        model = suite["models"][0]["id"]
+        self.assertEqual(
+            benchmark_model_category("gemini-3.6-flash"),
+            "Cloud",
+        )
+        self.assertEqual(
+            benchmark_model_category("models/gemini-3.1-flash-lite"),
+            "Cloud / fast",
+        )
+        ctx = benchmark_prompt_context(cases["migration_thrash"])
+        self.assertIn("CS[22]", ctx)
+        self.assertNotIn("finding_types", ctx)
+
+        def complete(_query, findings, used_model, case):
+            self.assertEqual(used_model, model)
+            self.assertIn("Known tasks", findings)
+            canned = cases[case["id"]]
+            return {
+                "content": canned["response"],
+                "tool_calls": [{"name": n} for n in canned.get("tools") or []],
+                "elapsed_s": 0.1,
+            }
+
+        live = run_live_benchmark(
+            root, [model], complete=complete, fail_under=50,
+        )
+        self.assertTrue(live["ok"], live["report"])
+        self.assertEqual(live["models"][0]["model"], model)
+        offline = run_offline_benchmark(root, fail_under=50)
+        self.assertEqual(
+            [r["overall"] for r in live["models"][0]["rows"]],
+            [r["overall"] for r in offline["rows"]],
+        )
+        md = format_benchmark_markdown(
+            offline=offline, live=live, dataset="tests/ai",
+        )
+        self.assertIn(model, md)
+        self.assertIn("Offline fixture scorer", md)
+        self.assertIn("Live models", md)
+
+        def empty_complete(_q, _f, _m, _c):
+            return {"content": "no catalog names", "tool_calls": [], "elapsed_s": 0.01}
+
+        weak = run_live_benchmark(
+            root, [model], complete=empty_complete, fail_under=70,
+        )
+        self.assertFalse(weak["ok"])
+
     def test_cli_ai_test_runs_dataset(self) -> None:
         from btf_viewer_pkg.cli import _cli_ai_test_run
         from argparse import Namespace
@@ -270,6 +500,20 @@ class InvestigationCaseParitySurfaceTests(unittest.TestCase):
             "statusWithCost",
             "formatCostStatus",
             "costMeterActive",
+            "applyCloudPrivacy",
+            "toggleInterpretedScope",
+            "interpretedRunPrompt",
+            "formatExperimentVerdict",
+            "applyExperimentToHypotheses",
+            "parseUserHistoricalKnowledge",
+            "toolCallingFromChatResponse",
+            "shouldConfirmInterpretedQuery",
+            "experimentPercentsFromCompare",
+            "VALIDATE_EXPERIMENT_PROMPT",
+            "sanitizeAnnotationsText",
+            "formatQualityFlagLines",
+            "mergeLiveCapability",
+            "INVESTIGATION_SCOPE_OPTIONS",
         ):
             self.assertIn(name, js, name)
 
