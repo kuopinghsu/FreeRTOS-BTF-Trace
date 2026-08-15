@@ -2248,6 +2248,8 @@ class BtfTrace:
     sched_ctx_switches: Optional[int]                                       = None
     sched_core_gaps: Optional[List[int]]                                    = None
     migration_rows_full: Optional[List[dict]]                               = None
+    # Full-trace Statistics harvest filled at parse (exec / block / inter / mig).
+    ux_events_full: Optional[List[dict]]                                    = None
     interval_instances: List["IntervalInstance"]                            = field(default_factory=list)
     interval_ids: List[str]                                                 = field(default_factory=list)
     interval_instances_by_id: Dict[str, List["IntervalInstance"]]            = field(default_factory=dict)
@@ -4631,8 +4633,9 @@ def _build_trace_compare_rows(
     hi_a: Optional[int] = None,
     lo_b: Optional[int] = None,
     hi_b: Optional[int] = None,
+    deadlines: Optional[dict] = None,
 ) -> Dict[str, List[List]]:
-    """Build all Trace Compare tables as a dict of row lists."""
+    """Build all Trace Compare tables as a dict of row lists."""""
     a = _trace_summary_snapshot(trace_a, lo_a, hi_a)
     b = _trace_summary_snapshot(trace_b, lo_b, hi_b)
     scale = a["time_scale"]
@@ -4879,6 +4882,46 @@ def _build_trace_compare_rows(
          _fmt_signed_int_delta(sa["queue"] - sb["queue"])],
     ]
 
+    extras_fn = globals().get("compare_analysis_tables")
+    if extras_fn is None:
+        from .ux_explore import compare_analysis_tables as extras_fn
+    extras = extras_fn(trace_a, trace_b, lo_a, hi_a, lo_b, hi_b, deadlines)
+    metrics = extras.get("metrics") or {}
+    summary_rows.extend([
+        ["Response P99 (worst task)",
+         _format_time(int(metrics.get("response_p99_a") or 0), scale),
+         _format_time(int(metrics.get("response_p99_b") or 0), scale),
+         _fmt_signed_time_delta(
+             int(metrics.get("response_p99_a") or 0)
+             - int(metrics.get("response_p99_b") or 0), scale)],
+        ["Mutex blocking (total)",
+         _format_time(int(metrics.get("mutex_ns_a") or 0), scale),
+         _format_time(int(metrics.get("mutex_ns_b") or 0), scale),
+         _fmt_signed_time_delta(
+             int(metrics.get("mutex_ns_a") or 0)
+             - int(metrics.get("mutex_ns_b") or 0), scale)],
+        ["Deadline misses",
+         int(metrics.get("deadline_misses_a") or 0),
+         int(metrics.get("deadline_misses_b") or 0),
+         _fmt_signed_int_delta(
+             int(metrics.get("deadline_misses_a") or 0)
+             - int(metrics.get("deadline_misses_b") or 0))],
+    ])
+    response_rows = [
+        [r.get("name"),
+         _format_time(int(r.get("p99_a") or 0), scale),
+         _format_time(int(r.get("p99_b") or 0), scale),
+         _fmt_signed_time_delta(int(r.get("delta_ns") or 0), scale)]
+        for r in extras.get("response") or []
+    ]
+    mutex_rows = [
+        [r.get("name"),
+         _format_time(int(r.get("total_a") or 0), scale),
+         _format_time(int(r.get("total_b") or 0), scale),
+         _fmt_signed_time_delta(int(r.get("delta_ns") or 0), scale)]
+        for r in extras.get("mutex_block") or []
+    ]
+
     return {
         "summary": summary_rows,
         "top": top_rows,
@@ -4889,6 +4932,9 @@ def _build_trace_compare_rows(
         "inter_arrival": inter_rows,
         "preemption": pre_rows,
         "sync": sync_rows,
+        "response": response_rows,
+        "mutex_block": mutex_rows,
+        "shared_patterns": extras.get("shared_patterns") or [],
     }
 
 _CSV_FORMULA_LEAD_CHARS = ("=", "+", "-", "@", "\t", "\r")
@@ -4976,6 +5022,14 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
         "Victim,Count A,Count B,Δ,Total A,Total B",
         tables.get("preemption", []), 6)
     _section("Sync Objects", "Metric,Trace A,Trace B,Δ", tables.get("sync", []), 4)
+    _section(
+        "Response P99",
+        "Task,P99 A,P99 B,Δ",
+        tables.get("response", []), 4)
+    _section(
+        "Mutex Blocking",
+        "Task,Total A,Total B,Δ",
+        tables.get("mutex_block", []), 4)
 
     while lines and lines[-1] == "":
         lines.pop()
@@ -5063,6 +5117,12 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
         _card("Sync Objects",
               ["Metric", "Trace A", "Trace B", "Δ"],
               tables.get("sync", []), "No sync instrumentation in either trace"),
+        _card("Response P99",
+              ["Task", "P99 A", "P99 B", "Δ"],
+              tables.get("response", []), "No response samples in either trace"),
+        _card("Mutex Blocking",
+              ["Task", "Total A", "Total B", "Δ"],
+              tables.get("mutex_block", []), "No mutex blocking in either trace"),
     ]
 
     return btf_html_report_document(
@@ -5167,6 +5227,74 @@ def _find_extreme_inter_arrival_segment(segs: list,
             best_gap = gap
             best_seg = nxt
     return best_seg
+
+def _percentile_sample_index(n: int, p: float) -> int:
+    """Index of the p-quantile in a sorted n-sample list (stats-table formula)."""
+    if n <= 0:
+        return 0
+    return min(n - 1, max(0, math.ceil(n * float(p)) - 1))
+
+def _find_percentile_exec_segment(segs: list, p: float,
+                                  lo: Optional[int] = None,
+                                  hi: Optional[int] = None
+                                  ) -> Optional[TaskSegment]:
+    """Return the slice at percentile *p* of duration."""
+    samples: List[Tuple[int, TaskSegment]] = []
+    for s in segs or []:
+        d = s.end - s.start
+        if d <= 0:
+            continue
+        if lo is not None and hi is not None and not _seg_fully_in_range(s, lo, hi):
+            continue
+        samples.append((d, s))
+    if not samples:
+        return None
+    samples.sort(key=lambda kv: kv[0])
+    return samples[_percentile_sample_index(len(samples), p)][1]
+
+def _find_percentile_blocking_segment(segs: list, p: float,
+                                      lo: Optional[int] = None,
+                                      hi: Optional[int] = None
+                                      ) -> Optional[TaskSegment]:
+    """Return the resume slice at percentile *p* of off-CPU gap."""
+    if not segs or len(segs) < 2:
+        return None
+    ordered = sorted(segs, key=lambda s: s.start)
+    samples: List[Tuple[int, TaskSegment]] = []
+    for i in range(1, len(ordered)):
+        prev, nxt = ordered[i - 1], ordered[i]
+        if lo is not None and hi is not None:
+            if not (_seg_fully_in_range(prev, lo, hi) and _seg_fully_in_range(nxt, lo, hi)):
+                continue
+        gap = nxt.start - prev.end
+        if gap > 0:
+            samples.append((gap, nxt))
+    if not samples:
+        return None
+    samples.sort(key=lambda kv: kv[0])
+    return samples[_percentile_sample_index(len(samples), p)][1]
+
+def _find_percentile_inter_arrival_segment(segs: list, p: float,
+                                           lo: Optional[int] = None,
+                                           hi: Optional[int] = None
+                                           ) -> Optional[TaskSegment]:
+    """Return the activation slice at percentile *p* of inter-arrival gap."""
+    if not segs or len(segs) < 2:
+        return None
+    ordered = sorted(segs, key=lambda s: s.start)
+    samples: List[Tuple[int, TaskSegment]] = []
+    for i in range(1, len(ordered)):
+        prev, nxt = ordered[i - 1], ordered[i]
+        gap = nxt.start - prev.start
+        if gap <= 0:
+            continue
+        if lo is not None and hi is not None and (nxt.start < lo or nxt.start > hi):
+            continue
+        samples.append((gap, nxt))
+    if not samples:
+        return None
+    samples.sort(key=lambda kv: kv[0])
+    return samples[_percentile_sample_index(len(samples), p)][1]
 
 class _ParseCancelledError(Exception):
     """Internal control-flow exception used to abort _parse_btf cleanly."""
@@ -5747,5 +5875,10 @@ def _parse_btf(filepath: str,
     trace.sched_ctx_switches = _ctx
     trace.sched_core_gaps = _gaps
     trace.migration_rows_full = _migration_rows(trace)
+    # Bundle concatenates modules into one file, so a relative import fails there.
+    prepare = globals().get("prepare_ux_events")
+    if prepare is None:
+        from .ux_explore import prepare_ux_events as prepare
+    prepare(trace)
     return trace
 

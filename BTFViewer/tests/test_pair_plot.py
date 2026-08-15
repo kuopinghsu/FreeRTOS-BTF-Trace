@@ -155,6 +155,31 @@ class PairPlotDialogButtonTests(unittest.TestCase):
         self.assertIsNone(dlg._btn_open_heatmap)
         self.assertIsNone(dlg._btn_open_chord)
 
+    def test_query_ai_button_disabled_when_ai_off(self) -> None:
+        calls: list[int] = []
+        dlg = _MetricsPlotDialog(
+            "Exec",
+            [(100, 10, None)],
+            "us",
+            QColor("#4CAF50"),
+            on_point_click=lambda *_a: None,
+            is_dark=False,
+            scope_scoped=False,
+            scope_badge="",
+            scope_detail="",
+            ai_enabled=False,
+            on_query_ai=lambda: calls.append(1),
+        )
+        self.addCleanup(dlg.deleteLater)
+        self.assertIsNotNone(dlg._btn_query_ai)
+        self.assertFalse(dlg._btn_query_ai.isEnabled())
+        dlg._btn_query_ai.click()
+        self.assertEqual(calls, [])
+        dlg.set_ai_enabled(True)
+        self.assertTrue(dlg._btn_query_ai.isEnabled())
+        dlg._btn_query_ai.click()
+        self.assertEqual(calls, [1])
+
 
 if __name__ == "__main__":
     unittest.main()

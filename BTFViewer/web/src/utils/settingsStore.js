@@ -30,7 +30,7 @@ import {
   VIEW_MODE,
 } from '../config.js'
 import { syncTimelineLayoutFromSettings } from './timelineLayout.js'
-import { normalizeStatsPins, normalizeStatsSectionOrder } from './statsPins.js'
+import { normalizeStatsPins, normalizeStatsSectionOrder, mergeSectionCollapsed, defaultSectionCollapsed } from './statsPins.js'
 import {
   AI_PRESETS,
   DEFAULT_AI_PRESET,
@@ -48,6 +48,7 @@ import {
   dumpUserInvestigationTemplates,
   parseUserHistoricalKnowledge,
   parseUserInvestigationTemplates,
+  clampAiSplitBottom,
 } from './aiCase.js'
 
 const SETTINGS_KEY = 'btf-viewer-settings-v1'
@@ -55,6 +56,7 @@ const SETTINGS_KEY = 'btf-viewer-settings-v1'
 const AI_BASELINE_KEY = 'btf-viewer-ai-baseline-v1'
 const AI_USER_TEMPLATES_KEY = 'btf-viewer-ai-user-templates-v1'
 const AI_USER_KNOWLEDGE_KEY = 'btf-viewer-ai-user-knowledge-v1'
+const AI_SPLIT_BOTTOM_KEY = 'btf-viewer-ai-split-bottom-v1'
 
 export { MAX_CURSORS }
 
@@ -88,6 +90,7 @@ export const DEFAULT_SETTINGS = {
   timeDecimals: TIME_DECIMALS,
   statsPinnedSections: [],
   statsSectionOrder: [],
+  statsSectionCollapsed: defaultSectionCollapsed(),
   showAi: SHOW_AI,
   aiEnabled: true,
   aiPreset: DEFAULT_AI_PRESET,
@@ -188,6 +191,7 @@ export function normalizeSettings(raw) {
     timeDecimals: clampInt(s.timeDecimals, 0, 9, DEFAULT_SETTINGS.timeDecimals),
     statsPinnedSections: normalizeStatsPins(s.statsPinnedSections),
     statsSectionOrder: normalizeStatsSectionOrder(s.statsSectionOrder),
+    statsSectionCollapsed: mergeSectionCollapsed(s.statsSectionCollapsed),
     showAi: s.showAi !== false,
     aiEnabled: s.aiEnabled !== false,
     aiPreset: normalizeAiPreset(ai.preset || s.aiPreset || DEFAULT_AI_PRESET),
@@ -320,6 +324,22 @@ export function saveAiUserHistoricalKnowledge(items) {
       AI_USER_KNOWLEDGE_KEY,
       dumpUserHistoricalKnowledge(items),
     )
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+export function loadAiSplitBottom() {
+  try {
+    return clampAiSplitBottom(localStorage.getItem(AI_SPLIT_BOTTOM_KEY))
+  } catch {
+    return clampAiSplitBottom(0)
+  }
+}
+
+export function saveAiSplitBottom(px) {
+  try {
+    localStorage.setItem(AI_SPLIT_BOTTOM_KEY, String(clampAiSplitBottom(px)))
   } catch {
     /* quota / private mode */
   }

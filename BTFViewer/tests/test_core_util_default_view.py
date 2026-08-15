@@ -97,7 +97,12 @@ class CoreUtilDefaultViewTests(unittest.TestCase):
 
         body = panel._section_bodies["cores"]
         lay = body.layout()
-        scroll = lay.itemAt(0).widget()
+        scroll = None
+        for i in range(lay.count()):
+            w = lay.itemAt(i).widget()
+            if isinstance(w, QScrollArea):
+                scroll = w
+                break
         self.assertIsInstance(scroll, QScrollArea)
         self.assertEqual(scroll.height(), STATS_CORES_UTIL_DEFAULT_H)
         # Gauges are inside the util scroll (default viewport shows them + 2 rows).

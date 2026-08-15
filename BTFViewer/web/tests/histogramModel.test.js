@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 
 import {
   buildHistogramModel,
+  histogramBarTooltip,
   summarizeNumericSamples,
 } from '../src/utils/histogramModel.js'
 
@@ -25,7 +26,7 @@ describe('histogram variability overlays', () => {
     // Min/Max are already evident from the axis extents — no marker lines.
     assert.deepEqual(
       model.referenceLines.map(line => line.label),
-      ['avg', 'p50', 'p95'],
+      ['avg', 'p5', 'p50', 'p95'],
     )
 
     const plain = buildHistogramModel(
@@ -35,7 +36,36 @@ describe('histogram variability overlays', () => {
     assert.equal(plain.sigmaBand, null)
     assert.deepEqual(
       plain.referenceLines.map(line => line.label),
-      ['avg', 'p50', 'p95'],
+      ['avg', 'p5', 'p50', 'p95'],
+    )
+  })
+})
+
+describe('histogram bar hover tips', () => {
+  it('puts count and bin edges on each bar', () => {
+    const model = buildHistogramModel([10, 20, 30], {
+      scaleMode: 'linear',
+      formatValue: String,
+    })
+    assert.equal(model.sampleCount, 3)
+    assert.ok(model.bars.length > 0)
+    const populated = model.bars.find(bar => bar.count > 0)
+    assert.ok(populated)
+    assert.equal(typeof populated.edgeLo, 'number')
+    assert.equal(typeof populated.edgeHi, 'number')
+    const tip = histogramBarTooltip(populated, model.sampleCount, String)
+    assert.ok(tip.line1.includes('–'))
+    assert.match(tip.line2, / of 3 \(/)
+  })
+
+  it('labels overflow and underflow buckets', () => {
+    assert.deepEqual(
+      histogramBarTooltip({ kind: 'underflow', count: 1 }, 10, String),
+      { line1: '< p5', line2: '1 of 10 (10%)' },
+    )
+    assert.deepEqual(
+      histogramBarTooltip({ kind: 'overflow', count: 2 }, 10, String),
+      { line1: '> p95', line2: '2 of 10 (20%)' },
     )
   })
 })

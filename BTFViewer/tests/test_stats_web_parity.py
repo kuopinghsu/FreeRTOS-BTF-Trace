@@ -164,8 +164,8 @@ class TestStatsWebParity(unittest.TestCase):
         self.assertIn("return seg.start >= lo && seg.end <= hi", range_js)
         self.assertIn("ep.stopNs > lo && ep.startNs < hi", pri_js)
 
-        # Evaluated in v-if, so a throw blanks the whole Statistics panel.
-        self.assertIn("v-if=\"lifecycleStats.length\"", panel)
+        # Always-visible section + empty hint (same as Desktop).
+        self.assertIn('v-if="lifecycleStats.length === 0"', panel)
         self.assertIn("tr.segByMergeKey", panel)
         self.assertIn("buildTaskLifecycleRows", panel)
 

@@ -402,6 +402,9 @@ describe('AI endpoint helpers', () => {
     const findings = AI_TEMPLATE_QUESTIONS.find(t => t.id === 'findings')
     assert.ok(findings)
     assert.match(findings.prompt, /Analysis Findings/)
+    assert.match(findings.prompt, /Timeline Anomalies/)
+    assert.match(findings.prompt, /Worst Events/)
+    assert.match(findings.prompt, /Task Health/)
   })
 
   it('Migration thrash template is available for inspector Query with AI', () => {
@@ -468,7 +471,7 @@ describe('AI endpoint helpers', () => {
     )
     assert.match(panel, /min-height: 28px/)
     assert.match(panel, /flex-wrap: wrap/)
-    assert.match(dlg, /color: #fff/)
+    assert.doesNotMatch(dlg, /analysis-btn primary/)
     const findings = [
       'Investigate…', 'Root cause…', 'Verify with AI…', 'Explain…',
       'Auto investigate…', 'Query with AI…',

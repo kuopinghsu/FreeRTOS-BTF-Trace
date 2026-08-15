@@ -1,4 +1,5 @@
 <template>
+  <div class="stats-section-header-wrap">
   <div
     class="stats-section-title collapsible"
     :class="{ pinned }"
@@ -69,9 +70,17 @@
       </svg>
     </button>
   </div>
+  <div
+    v-if="!collapsed && helpText"
+    class="range-hint"
+  >{{ helpText }}</div>
+  </div>
 </template>
 
 <script setup>
+import { computed } from 'vue'
+import { STATS_SECTION_HELP } from '../config.js'
+
 const MIME = 'application/x-btf-stats-section'
 
 const props = defineProps({
@@ -79,6 +88,8 @@ const props = defineProps({
   pinned: { type: Boolean, default: false },
   sectionId: { type: String, default: '' },
 })
+
+const helpText = computed(() => STATS_SECTION_HELP[props.sectionId] || '')
 
 const emit = defineEmits(['toggle', 'togglePin', 'dragStart', 'dragEnd'])
 
@@ -97,6 +108,28 @@ function onDragEnd() {
 </script>
 
 <style scoped>
+.stats-section-header-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.range-hint {
+  color: var(--fg-dim, #9e9e9e);
+  opacity: 0.6;
+  font-size: 10px;
+  font-style: italic;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+  margin: 0 0 6px;
+  line-height: 1.35;
+}
+
 .stats-section-title {
   display: flex;
   align-items: center;

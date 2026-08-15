@@ -74,6 +74,7 @@ export const EXEC_SORT_ACCESSORS = {
   jitter: r => r.jitterNs,
   stddev: r => r.stddevNs,
   p95: r => r.p95Ns,
+  p99: r => r.p99Ns,
 }
 
 export const BLOCK_SORT_ACCESSORS = {
@@ -85,6 +86,7 @@ export const BLOCK_SORT_ACCESSORS = {
   jitter: r => r.jitterNs,
   stddev: r => r.stddevNs,
   p95: r => r.p95Ns,
+  p99: r => r.p99Ns,
 }
 
 export const INTER_SORT_ACCESSORS = {
@@ -96,6 +98,7 @@ export const INTER_SORT_ACCESSORS = {
   jitter: r => r.jitterNs,
   stddev: r => r.stddevNs,
   p95: r => r.p95Ns,
+  p99: r => r.p99Ns,
 }
 
 export const HEALTH_GAP_SORT_ACCESSORS = {
@@ -201,6 +204,7 @@ export const DISPATCH_SORT_ACCESSORS = {
   jitter: r => r.jitterNs,
   stddev: r => r.stddevNs,
   p95: r => r.p95Ns,
+  p99: r => r.p99Ns,
 }
 
 export const CORE_PAIR_SORT_ACCESSORS = {
@@ -242,4 +246,119 @@ export const DEADLINE_CPU_SORT_ACCESSORS = {
   task: r => r.label.toLowerCase(),
   cpu: r => r.pctRaw,
   budget: r => r.budgetRaw ?? 0,
+}
+
+export const ANOMALY_SORT_ACCESSORS = {
+  time: r => Number(r.start || 0),
+  kind: r => String(r.kind || ''),
+  task: r => String(r.task || '').toLowerCase(),
+  duration: r => Number(r.duration || 0),
+  why: r => String(r.reason || '').toLowerCase(),
+}
+
+export const CRIT_PATH_SORT_ACCESSORS = {
+  task: r => String(r.task || '').toLowerCase(),
+  duration: r => Number(r.duration || 0),
+  exec: r => Number(r.exec_ns || 0),
+  preempt: r => Number(r.preempt_ns || 0),
+  wait: r => Number(r.wait_ns || 0),
+  mig: r => Number(r.migration_ns || 0),
+  other: r => Number(r.other_ns || 0),
+}
+
+export const PATTERN_SORT_ACCESSORS = {
+  task: r => String(r.task || '').toLowerCase(),
+  kind: r => String(r.kind || ''),
+  count: r => Number(r.count || 0),
+  duration: r => Number(r.duration || 0),
+  why: r => String(r.reason || '').toLowerCase(),
+}
+
+export const PERIOD_SORT_ACCESSORS = {
+  task: r => String(r.task || '').toLowerCase(),
+  n: r => Number(r.n || 0),
+  expected: r => Number(r.expected_ns || 0),
+  min: r => Number(r.min_ns || 0),
+  avg: r => Number(r.avg_ns || 0),
+  max: r => Number(r.max_ns || 0),
+  p95: r => Number(r.p95_ns || 0),
+  p99: r => Number(r.p99_ns || 0),
+  rms: r => Number(r.rms_ns || 0),
+  cv: r => Number(r.cv || 0),
+  missed: r => Number(r.missed || 0),
+  extra: r => Number(r.extra || 0),
+  burst: r => Number(r.burst || 0),
+  spark: r => String(r.spark || ''),
+}
+
+export const RESPONSE_SORT_ACCESSORS = {
+  task: r => String(r.task || '').toLowerCase(),
+  n: r => Number(r.n || 0),
+  min: r => Number(r.min_ns || 0),
+  avg: r => Number(r.avg_ns || 0),
+  max: r => Number(r.max_ns || 0),
+  p50: r => Number(r.p50_ns || 0),
+  p90: r => Number(r.p90_ns || 0),
+  p95: r => Number(r.p95_ns || 0),
+  p99: r => Number(r.p99_ns || 0),
+  p999: r => Number(r.p999_ns || 0),
+  jitter: r => Number(r.jitter_ns || 0),
+  cv: r => Number(r.cv || 0),
+}
+
+export const JITTER_SORT_ACCESSORS = {
+  task: r => String(r.task || '').toLowerCase(),
+  exec: r => Number(r.exec_jitter_ns || 0),
+  execCv: r => Number(r.exec_cv || 0),
+  block: r => Number(r.block_jitter_ns || 0),
+  blockCv: r => Number(r.block_cv || 0),
+  inter: r => Number(r.inter_jitter_ns || 0),
+  interCv: r => Number(r.inter_cv || 0),
+  response: r => Number(r.response_jitter_ns || 0),
+  responseCv: r => Number(r.response_cv || 0),
+  dispatch: r => Number(r.dispatch_jitter_ns || 0),
+  dispatchCv: r => Number(r.dispatch_cv || 0),
+  wakeup: r => Number(r.wakeup_jitter_ns || 0),
+  wakeupCv: r => Number(r.wakeup_cv || 0),
+}
+
+export const PREEMPT_RANK_SORT_ACCESSORS = {
+  task: r => String(r.task || '').toLowerCase(),
+  count: r => Number(r.count || 0),
+  total: r => Number(r.total_ns || 0),
+  max: r => Number(r.max_ns || 0),
+  top: r => String(r.top_label || '').toLowerCase(),
+  story: r => String(r.story || '').toLowerCase(),
+}
+
+export const MUTEX_BLOCK_SORT_ACCESSORS = {
+  task: r => String(r.task || '').toLowerCase(),
+  object: r => String(r.object || '').toLowerCase(),
+  owner: r => String(r.owner || '').toLowerCase(),
+  count: r => Number(r.count || 0),
+  total: r => Number(r.total_ns || 0),
+  max: r => Number(r.max_ns || 0),
+}
+
+export const BLOCKER_SORT_ACCESSORS = {
+  task: r => String(r.task || '').toLowerCase(),
+  mutex: r => Number(r.mutex_ns || 0),
+  preempt: r => Number(r.preempt_ns || 0),
+  idle: r => Number(r.idle_ns || 0),
+  total: r => Number(r.total_ns || 0),
+}
+
+export const TASK_HEALTH_SORT_ACCESSORS = {
+  task: r => String(r.task || '').toLowerCase(),
+  score: r => Number(r.score || 0),
+  execution: r => String((r.bands || {}).execution || ''),
+  blocking: r => String((r.bands || {}).blocking || ''),
+  period: r => String((r.bands || {}).period || ''),
+  migration: r => String((r.bands || {}).migration || ''),
+  deadline: r => String((r.bands || {}).deadline || ''),
+  cpu: r => String((r.bands || {}).cpu || ''),
+}
+
+export const CORE_TIME_BIN_SORT_ACCESSORS = {
+  time: r => Number(r.start || 0),
 }

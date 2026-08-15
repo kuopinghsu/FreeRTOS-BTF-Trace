@@ -12,6 +12,7 @@ import { getPlacedCursors, segFullyInRange, segOverlapNs } from './statsRange.js
 import { tickHealthReport } from './tickHealth.js'
 import loadBalanceMetrics from './loadBalanceGauge.js'
 import { btfHtmlReportDocument } from './htmlReport.js'
+import { compareAnalysisTables } from './uxExplore.js'
 
 export function cursorRangeForCursors(cursors) {
   const placed = getPlacedCursors(cursors || [])
@@ -248,7 +249,7 @@ function fmtLbSigma(v) {
   return v == null ? '—' : `${v.toFixed(1)}%`
 }
 
-export function buildSummaryCompareRows(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false) {
+export function buildSummaryCompareRows(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false, deadlines = null) {
   const ra = rangeForTab(tabA, scopeEnabled)
   const rb = rangeForTab(tabB, scopeEnabled)
   const a = traceSummarySnapshot(traceA, ra.lo, ra.hi)
@@ -337,7 +338,66 @@ export function buildSummaryCompareRows(traceA, traceB, tabA = null, tabB = null
       b: b.missedTicks,
       delta: fmtSignedInt(a.missedTicks - b.missedTicks),
     },
+    ...analysisCompareSummaryRows(traceA, traceB, tabA, tabB, scopeEnabled, scale, deadlines),
   ]
+}
+
+function analysisCompareExtras(traceA, traceB, tabA, tabB, scopeEnabled, deadlines = null) {
+  const ra = rangeForTab(tabA, scopeEnabled)
+  const rb = rangeForTab(tabB, scopeEnabled)
+  return compareAnalysisTables(traceA, traceB, ra.lo, ra.hi, rb.lo, rb.hi, deadlines)
+}
+
+function analysisCompareSummaryRows(traceA, traceB, tabA, tabB, scopeEnabled, scale, deadlines = null) {
+  if (!traceA || !traceB) return []
+  const extras = analysisCompareExtras(traceA, traceB, tabA, tabB, scopeEnabled, deadlines)
+  const m = extras.metrics || {}
+  return [
+    {
+      label: 'Response P99 (worst task)',
+      a: formatTime(m.response_p99_a || 0, scale),
+      b: formatTime(m.response_p99_b || 0, scale),
+      delta: fmtSignedTime((m.response_p99_a || 0) - (m.response_p99_b || 0), scale),
+    },
+    {
+      label: 'Mutex blocking (total)',
+      a: formatTime(m.mutex_ns_a || 0, scale),
+      b: formatTime(m.mutex_ns_b || 0, scale),
+      delta: fmtSignedTime((m.mutex_ns_a || 0) - (m.mutex_ns_b || 0), scale),
+    },
+    {
+      label: 'Deadline misses',
+      a: m.deadline_misses_a || 0,
+      b: m.deadline_misses_b || 0,
+      delta: fmtSignedInt((m.deadline_misses_a || 0) - (m.deadline_misses_b || 0)),
+    },
+  ]
+}
+
+export function buildResponseCompareRows(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false, deadlines = null) {
+  const extras = analysisCompareExtras(traceA, traceB, tabA, tabB, scopeEnabled, deadlines)
+  const scale = traceA?.timeScale || traceB?.timeScale || 'ns'
+  return (extras.response || []).map(r => ({
+    name: r.name,
+    a: formatTime(r.p99_a || 0, scale),
+    b: formatTime(r.p99_b || 0, scale),
+    delta: fmtSignedTime(r.delta_ns || 0, scale),
+  }))
+}
+
+export function buildMutexBlockCompareRows(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false, deadlines = null) {
+  const extras = analysisCompareExtras(traceA, traceB, tabA, tabB, scopeEnabled, deadlines)
+  const scale = traceA?.timeScale || traceB?.timeScale || 'ns'
+  return (extras.mutex_block || []).map(r => ({
+    name: r.name,
+    a: formatTime(r.total_a || 0, scale),
+    b: formatTime(r.total_b || 0, scale),
+    delta: fmtSignedTime(r.delta_ns || 0, scale),
+  }))
+}
+
+export function buildSharedPatternCompareRows(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false, deadlines = null) {
+  return analysisCompareExtras(traceA, traceB, tabA, tabB, scopeEnabled, deadlines).shared_patterns || []
 }
 
 export function buildTopTasksCompareRows(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false, limit = 10) {
@@ -680,13 +740,16 @@ function normalizeCompareTables(tables = {}) {
     interArrival: tables.interArrival || [],
     preemption: tables.preemption || [],
     sync: tables.sync || [],
+    response: tables.response || [],
+    mutex_block: tables.mutex_block || tables.mutexBlock || [],
+    shared_patterns: tables.shared_patterns || tables.sharedPatterns || [],
   }
 }
 
 /** Build all Trace Compare table sets (same as TraceCompareDialog export). */
-export function buildAllCompareTables(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false) {
+export function buildAllCompareTables(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false, deadlines = null) {
   return {
-    summary: buildSummaryCompareRows(traceA, traceB, tabA, tabB, scopeEnabled),
+    summary: buildSummaryCompareRows(traceA, traceB, tabA, tabB, scopeEnabled, deadlines),
     top: buildTopTasksCompareRows(traceA, traceB, tabA, tabB, scopeEnabled),
     coreUtil: buildCoreUtilCompareRows(traceA, traceB, tabA, tabB, scopeEnabled),
     migrations: buildMigrationCompareRows(traceA, traceB, tabA, tabB, scopeEnabled),
@@ -695,6 +758,9 @@ export function buildAllCompareTables(traceA, traceB, tabA = null, tabB = null, 
     interArrival: buildInterArrivalCompareRows(traceA, traceB, tabA, tabB, scopeEnabled),
     preemption: buildPreemptionCompareRows(traceA, traceB, tabA, tabB, scopeEnabled),
     sync: buildSyncCompareRows(traceA, traceB, tabA, tabB, scopeEnabled),
+    response: buildResponseCompareRows(traceA, traceB, tabA, tabB, scopeEnabled, deadlines),
+    mutex_block: buildMutexBlockCompareRows(traceA, traceB, tabA, tabB, scopeEnabled, deadlines),
+    shared_patterns: buildSharedPatternCompareRows(traceA, traceB, tabA, tabB, scopeEnabled, deadlines),
   }
 }
 
@@ -801,6 +867,20 @@ export function buildCompareCsv(nameA, nameB, scopeEnabled, tables = {}) {
     lines.push([csvCell(row.label), csvCell(row.a), csvCell(row.b), csvCell(row.delta)].join(','))
   }
 
+  lines.push('')
+  lines.push('Response P99')
+  lines.push('Task,P99 A,P99 B,Δ')
+  for (const row of t.response) {
+    lines.push([csvCell(row.name), csvCell(row.a), csvCell(row.b), csvCell(row.delta)].join(','))
+  }
+
+  lines.push('')
+  lines.push('Mutex Blocking')
+  lines.push('Task,Total A,Total B,Δ')
+  for (const row of t.mutex_block) {
+    lines.push([csvCell(row.name), csvCell(row.a), csvCell(row.b), csvCell(row.delta)].join(','))
+  }
+
   return lines.join('\n')
 }
 
@@ -880,6 +960,14 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
     r => `<tr><td>${htmlCell(r.label)}</td><td>${htmlCell(r.a)}</td><td>${htmlCell(r.b)}</td><td>${htmlCell(r.delta)}</td></tr>`,
     'No sync instrumentation in either trace')
 
+  const responseHtml = _rowsOrEmpty(t.response, 4,
+    r => `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.a)}</td><td>${htmlCell(r.b)}</td><td>${htmlCell(r.delta)}</td></tr>`,
+    'No response samples in either trace')
+
+  const mutexHtml = _rowsOrEmpty(t.mutex_block, 4,
+    r => `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.a)}</td><td>${htmlCell(r.b)}</td><td>${htmlCell(r.delta)}</td></tr>`,
+    'No mutex blocking in either trace')
+
   return btfHtmlReportDocument('Trace Compare', [
     _cardHtml('Summary', '<th>Metric</th><th>Trace A</th><th>Trace B</th><th>Δ</th>', summaryHtml),
     _cardHtml('Top Tasks', '<th>Task</th><th>CPU% A</th><th>CPU% B</th><th>Δ</th>', topHtml),
@@ -900,6 +988,8 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
       '<th>Victim</th><th>Count A</th><th>Count B</th><th>Δ</th><th>Total A</th><th>Total B</th>',
       preHtml),
     _cardHtml('Sync Objects', '<th>Metric</th><th>Trace A</th><th>Trace B</th><th>Δ</th>', syncHtml),
+    _cardHtml('Response P99', '<th>Task</th><th>P99 A</th><th>P99 B</th><th>Δ</th>', responseHtml),
+    _cardHtml('Mutex Blocking', '<th>Task</th><th>Total A</th><th>Total B</th><th>Δ</th>', mutexHtml),
   ].join('\n'), {
     subtitle: `${nameA} vs ${nameB} · ${scopeNote}`,
     extraCss: _COMPARE_HTML_EXTRA_CSS,

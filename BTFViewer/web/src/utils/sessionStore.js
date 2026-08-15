@@ -136,7 +136,6 @@ export function snapshotTabState(tab) {
     cpuLoadExpanded: tab.cpuLoadExpanded !== false,
     scopeToCursors: tab.scopeToCursors !== false,
     openPlot: sanitizeOpenPlot(tab.openPlot),
-    statsSectionCollapsed: sanitizeSectionCollapsed(tab.statsSectionCollapsed),
     ...filters,
   }
 }
@@ -169,9 +168,6 @@ export function applyTabState(tab, state) {
   if (state.cpuLoadExpanded != null) tab.cpuLoadExpanded = !!state.cpuLoadExpanded
   if (state.scopeToCursors != null) tab.scopeToCursors = !!state.scopeToCursors
   if (state.openPlot !== undefined) tab.openPlot = sanitizeOpenPlot(state.openPlot)
-  if (state.statsSectionCollapsed) {
-    tab.statsSectionCollapsed = sanitizeSectionCollapsed(state.statsSectionCollapsed)
-  }
   applyTabFilters(tab, sanitizeTabFilters(state))
 }
 

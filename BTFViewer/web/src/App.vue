@@ -14,6 +14,7 @@
       :trace-info="traceInfo"
       :heatmap-enabled="heatmapEnabled"
       :analysis-enabled="!!trace"
+      :compare-enabled="compareTabs.length >= 2"
       :task-filter-active="!!timelineOptions.taskFilterKeys?.length"
       :range-enabled="rangeEnabled"
       :loading="loading"
@@ -47,6 +48,7 @@
       @export-slice="onExportBtfSlice"
       @show-heatmap="onOpenHeatmap"
       @show-analysis="analysisOpen = true"
+      @show-compare="onOpenTraceCompare"
       @clear-task-filter="clearHeatmapTaskFilter"
       @show-help="openHelpDialog"
       @show-about="openAboutDialog"
@@ -284,6 +286,7 @@
             @add-annotation="onAddAnnotation"
             @clear-bookmarks="onClearBookmarks"
             @clear-annotations="onClearAnnotations"
+            @clear-all-marks="onClearAllMarks"
             @mark-move="onMoveMark"
             @copy-screenshot="onCopyScreenshot"
             @export-svg="onExportSvg"
@@ -292,6 +295,7 @@
             @label-width-change="onLabelWidthChange"
             @explain-region="queryExplainRegionWithAi"
             @ask-ai-event="queryAskAiEvent"
+            :ai-enabled="appSettings.aiEnabled !== false"
           />
         </div>
 
@@ -549,7 +553,7 @@
                 :section-heights="statsSectionHeights"
                 :scope-to-cursors="activeTab?.scopeToCursors !== false"
                 :analysis-settings="appSettings"
-                :section-collapsed-state="activeTab?.statsSectionCollapsed ?? null"
+                :section-collapsed-state="appSettings.statsSectionCollapsed"
                 :section-pins="appSettings.statsPinnedSections || []"
                 :section-order="appSettings.statsSectionOrder || []"
                 @update:open-plot="onOpenPlotChange"
@@ -560,11 +564,12 @@
                 @update:section-order="onStatsSectionOrderChange"
                 @highlight-task="onHighlightClick"
                 @plot-point-activate="onStatsPlotPointActivate"
+                @explore-range="applyExploreRange"
                 @segment-jump="onStatsSegmentJump"
                 @open-pair-heatmap="onOpenPairHeatmap"
                 @open-pair-chord="onOpenPairChord"
                 @open-settings="openSettingsDialog"
-                @open-compare="onOpenTraceCompare"
+                @query-ai="queryAnalysisWithAi"
               />
             </div>
           </div>
@@ -596,6 +601,7 @@
                 @open-settings="openSettingsDialog('ai')"
                 @update:response-language="onAiResponseLanguage"
                 @jump="onAiJump"
+                @range="onAiRange"
                 @highlight="onAiHighlight"
                 @status-message="onAiStatusMessage"
               />
@@ -963,8 +969,12 @@
       :findings="analysisFindings"
       :scope-label="analysisScopeLabel"
       :ai-enabled="appSettings.aiEnabled !== false"
+      :ux-events="analysisUxEvents"
+      :time-min="trace.timeMin"
+      :time-max="trace.timeMax"
       @close="analysisOpen = false"
       @query-ai="queryAnalysisWithAi"
+      @apply-scope="onApplyFindingScope"
     />
 
     <TraceCompareDialog
@@ -973,6 +983,7 @@
       :initial-a="compareInitialA"
       :initial-b="compareInitialB"
       :ai-enabled="appSettings.aiEnabled !== false"
+      :analysis-settings="appSettings"
       @close="compareOpen = false"
       @query-ai="queryCompareWithAi"
       @validate-experiment="queryValidateExperimentWithAi"
@@ -1133,6 +1144,18 @@ import {
   AI_TOOL_GENERATE_EXPERIMENT_PLAN,
   AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
   AI_TOOL_SCORE_INVESTIGATION,
+  AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY,
+  AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH,
+  AI_TOOL_DECOMPOSE_RESPONSE_TIME,
+  AI_TOOL_RANK_ROOT_CAUSES,
+  AI_TOOL_VERIFY_CLAIM,
+  AI_TOOL_CHALLENGE_CONCLUSION,
+  AI_TOOL_INVESTIGATION_MEMORY,
+  AI_TOOL_CLUSTER_INCIDENTS,
+  AI_TOOL_CLOSE_INVESTIGATION,
+  AI_TOOL_ANALYZE_DISTRIBUTION,
+  AI_TOOL_ANALYZE_PERIODICITY,
+  AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
   AI_TOOL_OPEN_CORRIDOR,
   AI_TOOL_OPTIMIZE,
   AI_TOOL_OPTIMIZE_EXPERIMENT,
@@ -1178,8 +1201,25 @@ import {
   generateExperimentPlanTool,
   recordExperimentOutcomeTool,
   scoreInvestigationMetricsTool,
+  analyzeTemporalCausalityTool,
+  buildTaskDependencyGraphTool,
+  decomposeResponseTimeTool,
+  rankRootCausesTool,
+  verifyClaimTool,
+  challengeConclusionTool,
+  investigationMemoryTool,
+  clusterIncidentsTool,
+  closeInvestigationTool,
+  analyzeDistributionTool,
+  analyzePeriodicityTool,
+  distributionTraceContext,
+  periodicityTraceContext,
+  dependencyTraceContext,
+  summarizeInvestigationContextTool,
   setExperimentOutcomes,
   experimentOutcomes,
+  setInvestigationMemory,
+  investigationMemoryStore,
   gatherSimulationInputs,
   optimizeExperimentFinding,
   optimizeFinding,
@@ -1194,6 +1234,7 @@ import {
   whatIfEstimate,
 } from './utils/aiTools.js'
 import { detectAnomalies, parseWhatIfChange, snapshotFromSummary, updateBaselineProfile } from './utils/aiInvestigation.js'
+import { bestFindingScope, harvestUxEvents } from './utils/uxExplore.js'
 import { experimentPercentsFromCompare } from './utils/aiCase.js'
 import { filterBtfTextToRange, reconstructBtfSlice } from './utils/btfSlice.js'
 import {
@@ -1233,7 +1274,13 @@ import {
 } from './utils/sessionPortable.js'
 import { downloadPerfetto } from './utils/perfettoExport.js'
 import { appIconSvgMarkup } from './utils/htmlReport.js'
-import { normalizeStatsPins, normalizeStatsSectionOrder } from './utils/statsPins.js'
+import {
+  defaultSectionCollapsed,
+  defaultStatsSectionOrder,
+  mergeSectionCollapsed,
+  normalizeStatsPins,
+  normalizeStatsSectionOrder,
+} from './utils/statsPins.js'
 import { computeFindHits, stepFindHitIndex } from './utils/findAnalysis.js'
 import {
   AI_TEMPLATE_QUESTIONS,
@@ -1959,7 +2006,12 @@ function focusStatisticsPanel(force = false) {
 }
 
 function applyAppSettings(next, { silent = false, persist = true } = {}) {
-  Object.assign(appSettings, applySettingsToRuntime(next))
+  const runtime = applySettingsToRuntime(next)
+  Object.assign(appSettings, runtime)
+  // New object/array refs so StatisticsPanel watches apply expand/collapse + pins.
+  appSettings.statsSectionCollapsed = mergeSectionCollapsed(runtime.statsSectionCollapsed)
+  appSettings.statsPinnedSections = [...(runtime.statsPinnedSections || [])]
+  appSettings.statsSectionOrder = [...(runtime.statsSectionOrder || [])]
   setColorblindMode(appSettings.colorblindSafe)
   syncTimelineOptionsFromSettings()
   resizeTabCursors(tabs.value, appSettings.maxCursors)
@@ -1998,8 +2050,17 @@ function onSettingsCancel() {
   closeSettingsDialog()
 }
 
-function onSettingsSave(next) {
+function onSettingsSave(next, meta = {}) {
+  const resetLayout = !!(meta.resetLayout || next?.resetLayout)
   applyAppSettings(next, { silent: false, persist: true })
+  if (resetLayout) {
+    appSettings.statsPinnedSections = []
+    appSettings.statsSectionOrder = defaultStatsSectionOrder()
+    appSettings.statsSectionCollapsed = defaultSectionCollapsed()
+    statsSectionHeights.value = {}
+    saveSettings(appSettings)
+    scheduleSessionSave()
+  }
   settingsRevertSnapshot = null
   settingsOpen.value = false
 }
@@ -2699,7 +2760,8 @@ function onStatsScopeChange(v) {
 }
 
 function onStatsSectionCollapsedChange(v) {
-  if (activeTab.value) activeTab.value.statsSectionCollapsed = v ? { ...v } : null
+  appSettings.statsSectionCollapsed = mergeSectionCollapsed(v)
+  saveSettings(appSettings)
   scheduleSessionSave()
 }
 
@@ -2785,11 +2847,13 @@ async function focusAiAndAsk(templateIdOrPayload) {
   let findingId = ''
   let prompt = null
   let level = ''
+  let extra = ''
   if (templateIdOrPayload && typeof templateIdOrPayload === 'object') {
     templateId = templateIdOrPayload.template || 'findings'
     findingId = templateIdOrPayload.findingId || ''
     prompt = templateIdOrPayload.prompt || null
     level = String(templateIdOrPayload.level || '').trim()
+    extra = String(templateIdOrPayload.extra || '').trim()
   }
   templateId = templateId || 'findings'
   if (!prompt) {
@@ -2799,6 +2863,9 @@ async function focusAiAndAsk(templateIdOrPayload) {
     }
     if (level && prompt) {
       prompt = `${prompt}\n\nlevel=${level}`
+    }
+    if (extra && prompt) {
+      prompt = `${prompt}\n\n${extra}`
     }
   }
   if (templateId === 'explain_region' && prompt) {
@@ -2813,6 +2880,20 @@ async function focusAiAndAsk(templateIdOrPayload) {
       await aiPanelRef.value?.ask?.(prompt)
     }
   }
+}
+
+const analysisUxEvents = computed(() => {
+  const tr = trace.value
+  if (!tr) return []
+  const range = getStatsRange(cursors.value, activeTab.value?.scopeToCursors !== false)
+  return harvestUxEvents(tr, range?.lo ?? null, range?.hi ?? null)
+})
+
+function onApplyFindingScope(finding) {
+  const tr = trace.value
+  if (!tr || !finding) return
+  const scope = bestFindingScope(finding, analysisUxEvents.value, tr.timeMin, tr.timeMax)
+  if (scope) applyExploreRange(scope)
 }
 
 async function queryAnalysisWithAi(payload = 'findings') {
@@ -2916,7 +2997,8 @@ function buildAiCompareContext(idA, idB) {
   const nameA = tabA.name || 'Trace A'
   const nameB = tabB.name || 'Trace B'
   const scopeEnabled = true
-  const tables = buildAllCompareTables(tabA.trace, tabB.trace, tabA, tabB, scopeEnabled)
+  const tables = buildAllCompareTables(
+    tabA.trace, tabB.trace, tabA, tabB, scopeEnabled, appSettings.taskDeadlines)
   try {
     lastAiCompare = compareAiPerformance(idA, idB)
   } catch {
@@ -2964,6 +3046,43 @@ function onAiJump(t) {
   syncTimelineViewport()
   if (!trace.value) return
   addAnnotationAtNs(ns, aiJumpAnnotationNote(ns))
+  scheduleSessionSave()
+}
+
+function onAiRange({ lo, hi } = {}) {
+  applyExploreRange({ lo, hi, note: `AI range:${lo}/${hi}`, ns: lo })
+}
+
+function applyExploreRange(spec = {}) {
+  const lo = Number(spec.lo)
+  const hi = Number(spec.hi)
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return
+  const a = Math.min(lo, hi)
+  const b = Math.max(lo, hi)
+  const max = appSettings.maxCursors || 4
+  const next = Array(max).fill(null)
+  next[0] = a
+  next[1] = Math.max(b, a + 1)
+  cursors.value = next
+  onStatsScopeChange(true)
+  timelinePanelRef.value?.zoomToTimeRange(
+    a, next[1], 0.05, { programmatic: true, animate: true },
+  )
+  if (spec.mk) onHighlightClick(spec.mk)
+  if (spec.ns != null && Number.isFinite(Number(spec.ns))) {
+    timelinePanelRef.value?.jumpToNs(Number(spec.ns))
+  }
+  syncTimelineViewport()
+  if (spec.section) {
+    nextTick(() => {
+      statsPanelRef.value?.applyDemoSections?.({
+        id: spec.section, expand: true, scroll: spec.section,
+      })
+    })
+  }
+  if (spec.note && spec.ns != null) {
+    addAnnotationAtNs(Number(spec.ns), spec.note)
+  }
   scheduleSessionSave()
 }
 
@@ -3350,6 +3469,138 @@ function dispatchAiTool(name, args) {
       elapsedS: args.elapsed_s,
       conclusion: args.conclusion || '',
       confidence: args.confidence || '',
+    })
+  }
+  if (name === AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY) {
+    return analyzeTemporalCausalityTool(findings, { task: args.task || '' })
+  }
+  if (name === AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH) {
+    const times = cursors.value || []
+    let lo = null
+    let hi = null
+    if (times.length >= 2) {
+      lo = Math.min(...times)
+      hi = Math.max(...times)
+    }
+    const ctx = dependencyTraceContext(trace.value, lo, hi)
+    return buildTaskDependencyGraphTool(findings, {
+      task: args.task || '',
+      syncHolds: ctx.syncHolds || [],
+      preemptions: ctx.preemptions || [],
+      migrations: ctx.migrations || [],
+      priorityEpisodes: ctx.priorityEpisodes || [],
+    })
+  }
+  if (name === AI_TOOL_DECOMPOSE_RESPONSE_TIME) {
+    return decomposeResponseTimeTool(findings, { task: args.task || '' })
+  }
+  if (name === AI_TOOL_RANK_ROOT_CAUSES) {
+    const hyps = Array.isArray(args.hypotheses) ? args.hypotheses : []
+    return rankRootCausesTool(findings, { hypotheses: hyps })
+  }
+  if (name === AI_TOOL_VERIFY_CLAIM) {
+    const times = cursors.value || []
+    let lo = null
+    let hi = null
+    if (times.length >= 2) {
+      lo = Math.min(...times)
+      hi = Math.max(...times)
+    }
+    return verifyClaimTool(args.claim || '', {
+      claimType: args.claim_type || 'causal',
+      subject: args.subject || '',
+      object: args.object || '',
+      evidence: args.evidence || [],
+      findings,
+      cursorLo: lo,
+      cursorHi: hi,
+    })
+  }
+  if (name === AI_TOOL_CHALLENGE_CONCLUSION) {
+    return challengeConclusionTool(args.conclusion || '', { findings })
+  }
+  if (name === AI_TOOL_INVESTIGATION_MEMORY) {
+    let hist = []
+    try {
+      hist = JSON.parse(localStorage.getItem('btf-investigation-memory') || '[]')
+    } catch { hist = [] }
+    if (Array.isArray(hist)) setInvestigationMemory(hist)
+    const payload = investigationMemoryTool(args.action || 'recall', {
+      record: args.record && typeof args.record === 'object' ? args.record : null,
+      findings,
+      limit: args.limit ?? 5,
+    })
+    try {
+      localStorage.setItem('btf-investigation-memory', JSON.stringify(investigationMemoryStore()))
+    } catch { /* ignore quota */ }
+    return payload
+  }
+  if (name === AI_TOOL_CLUSTER_INCIDENTS) {
+    return clusterIncidentsTool(findings, { windowNs: args.window_ns ?? 1e6 })
+  }
+  if (name === AI_TOOL_CLOSE_INVESTIGATION) {
+    return closeInvestigationTool(args.conclusion || '', {
+      findings,
+      confidence: args.confidence || '',
+    })
+  }
+  if (name === AI_TOOL_ANALYZE_DISTRIBUTION) {
+    const times = cursors.value || []
+    let lo = null
+    let hi = null
+    if (times.length >= 2) {
+      lo = Math.min(...times)
+      hi = Math.max(...times)
+    }
+    let values = [...(args.values || [])]
+    let metric = args.metric || ''
+    let task = args.task || ''
+    let source = ''
+    let truncated = false
+    if (!values.length) {
+      const ctx = distributionTraceContext(trace.value, task, metric, lo, hi)
+      const harvested = [...(ctx.values || [])]
+      if (harvested.length) {
+        values = harvested
+        metric = ctx.metric || metric
+        source = 'btf'
+        truncated = Boolean(ctx.truncated)
+        if (!task) task = ctx.task || ''
+      }
+    }
+    return analyzeDistributionTool(values, {
+      findings,
+      metric,
+      source,
+      task,
+      truncated,
+    })
+  }
+  if (name === AI_TOOL_ANALYZE_PERIODICITY) {
+    const times = cursors.value || []
+    let lo = null
+    let hi = null
+    if (times.length >= 2) {
+      lo = Math.min(...times)
+      hi = Math.max(...times)
+    }
+    const ctx = periodicityTraceContext(trace.value, args.task || '')
+    return analyzePeriodicityTool(args.times || [], {
+      findings,
+      expected: args.expected,
+      source: args.source || 'auto',
+      durations: args.durations || [],
+      tickTimes: ctx.tickTimes || [],
+      stiEvents: ctx.stiEvents || [],
+      releaseTimes: ctx.releaseTimes || [],
+      lo,
+      hi,
+    })
+  }
+  if (name === AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT) {
+    return summarizeInvestigationContextTool(findings, {
+      toolsRun: args.tools_run || [],
+      conclusion: args.conclusion || '',
     })
   }
   if (name === AI_TOOL_GENERATE_REPORT) {
@@ -4843,6 +5094,17 @@ function onClearAnnotations() {
   marks.value = marks.value.filter(m => m.type !== 'annotation')
 }
 
+function onClearAllMarks() {
+  const hasCursors = cursors.value.some(c => c != null)
+  const hasMarks = marks.value.length > 0
+  if (!hasCursors && !hasMarks) return
+  pushUndoSnapshot()
+  if (hasCursors) {
+    cursors.value = Array(appSettings.maxCursors).fill(null)
+  }
+  if (hasMarks) marks.value = []
+}
+
 function onExportSession() {
   if (!activeTab.value) return
   saveFiltersToActiveTab()
@@ -4859,7 +5121,7 @@ function onExportSession() {
     pinnedHighlightKey: pinnedHighlightKey.value,
     scopeToCursors: activeTab.value.scopeToCursors !== false,
     openPlot: activeTab.value.openPlot ?? null,
-    statsSectionCollapsed: activeTab.value.statsSectionCollapsed ?? null,
+    statsSectionCollapsed: appSettings.statsSectionCollapsed ?? null,
   })
   const base = (activeTab.value.name || 'trace').replace(/\.btf$/i, '')
   downloadPortableSession(payload, `${base}-session.json`)
@@ -4881,6 +5143,11 @@ async function onImportSession(file) {
       saveSettings(appSettings)
     }
     applyPortableSession(activeTab.value, data, timelineOptions, trace.value)
+    if (data.statsSectionCollapsed !== undefined) {
+      appSettings.statsSectionCollapsed = mergeSectionCollapsed(
+        activeTab.value.statsSectionCollapsed || data.statsSectionCollapsed)
+      saveSettings(appSettings)
+    }
     syncFiltersFromTab(activeTab.value)
     resizeTabCursors(tabs.value, appSettings.maxCursors)
     nextTick(() => {

@@ -2,7 +2,9 @@
  * Viewer tool-calling schema for the AI Assistant.
  * Keep in sync with btf_viewer_pkg/ai_tools.py.
  */
-import { taskMergeKey } from './colors.js'
+import { taskDisplayName, taskMergeKey, taskReprGet } from './colors.js'
+import { migrationsInRange } from './migrationAnalysis.js'
+import { preemptionChainRows } from './statsAnalysis.js'
 import { computeFindHits } from './findAnalysis.js'
 import { btfHtmlReportDocument } from './htmlReport.js'
 import {
@@ -53,6 +55,22 @@ import {
   experimentOutcomes,
   suggestScope,
 } from './aiPlanner.js'
+import {
+  analyzeDistribution,
+  analyzePeriodicity,
+  analyzeTemporalCausality,
+  buildTaskDependencyGraph,
+  challengeConclusion,
+  closeInvestigation,
+  clusterIncidents,
+  decomposeResponseTime,
+  investigationMemory,
+  rankRootCauses,
+  setInvestigationMemory,
+  investigationMemoryStore,
+  summarizeInvestigationContext,
+  verifyClaim,
+} from './aiCausal.js'
 import { coreUtilPctRows } from './traceCompare.js'
 
 export const AI_TOOL_SET_CURSORS = 'set_cursors'
@@ -103,6 +121,18 @@ export const AI_TOOL_BUILD_CAUSAL_CHAIN = 'build_causal_chain'
 export const AI_TOOL_GENERATE_EXPERIMENT_PLAN = 'generate_experiment_plan'
 export const AI_TOOL_RECORD_EXPERIMENT_OUTCOME = 'record_experiment_outcome'
 export const AI_TOOL_SCORE_INVESTIGATION = 'score_investigation'
+export const AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY = 'analyze_temporal_causality'
+export const AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH = 'build_task_dependency_graph'
+export const AI_TOOL_DECOMPOSE_RESPONSE_TIME = 'decompose_response_time'
+export const AI_TOOL_RANK_ROOT_CAUSES = 'rank_root_causes'
+export const AI_TOOL_VERIFY_CLAIM = 'verify_claim'
+export const AI_TOOL_CHALLENGE_CONCLUSION = 'challenge_conclusion'
+export const AI_TOOL_INVESTIGATION_MEMORY = 'investigation_memory'
+export const AI_TOOL_CLUSTER_INCIDENTS = 'cluster_incidents'
+export const AI_TOOL_CLOSE_INVESTIGATION = 'close_investigation'
+export const AI_TOOL_ANALYZE_DISTRIBUTION = 'analyze_distribution'
+export const AI_TOOL_ANALYZE_PERIODICITY = 'analyze_periodicity'
+export const AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT = 'summarize_investigation_context'
 
 export const AI_VIEWER_TOOL_NAMES = [
   AI_TOOL_SET_CURSORS,
@@ -153,6 +183,18 @@ export const AI_VIEWER_TOOL_NAMES = [
   AI_TOOL_GENERATE_EXPERIMENT_PLAN,
   AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
   AI_TOOL_SCORE_INVESTIGATION,
+  AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY,
+  AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH,
+  AI_TOOL_DECOMPOSE_RESPONSE_TIME,
+  AI_TOOL_RANK_ROOT_CAUSES,
+  AI_TOOL_VERIFY_CLAIM,
+  AI_TOOL_CHALLENGE_CONCLUSION,
+  AI_TOOL_INVESTIGATION_MEMORY,
+  AI_TOOL_CLUSTER_INCIDENTS,
+  AI_TOOL_CLOSE_INVESTIGATION,
+  AI_TOOL_ANALYZE_DISTRIBUTION,
+  AI_TOOL_ANALYZE_PERIODICITY,
+  AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
 ]
 
 export const AI_BOOKMARK_KINDS = [
@@ -214,6 +256,7 @@ const MAX_ANNOTATION_NOTE = 240
 
 /** QTextBrowser truncates scheme:digits; use a path. */
 const BTF_JUMP_HREF_RE = /btfjump:(?:\/\/)?(?:time\/)?([0-9]+(?:\.[0-9]+)?)/i
+const BTF_RANGE_HREF_RE = /btfrange:(?:\/\/)?(?:lo\/)?([0-9]+(?:\.[0-9]+)?)\/([0-9]+(?:\.[0-9]+)?)/i
 const BTF_HIGHLIGHT_HREF_RE = /btfhighlight:(?:\/\/)?(?:task\/)?(.+)$/i
 
 export function btfJumpHref(value) {
@@ -229,6 +272,24 @@ export function parseBtfJumpHref(href, dataJump) {
   }
   const m = BTF_JUMP_HREF_RE.exec(String(href || ''))
   return m ? Number(m[1]) : NaN
+}
+
+export function btfRangeHref(lo, hi) {
+  const tok = (value) => {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return '0'
+    return Number.isInteger(n) || n === Math.trunc(n) ? String(Math.trunc(n)) : String(n)
+  }
+  return `btfrange:${tok(lo)}/${tok(hi)}`
+}
+
+export function parseBtfRangeHref(href) {
+  const m = BTF_RANGE_HREF_RE.exec(String(href || ''))
+  if (!m) return null
+  const lo = Number(m[1])
+  const hi = Number(m[2])
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null
+  return { lo, hi }
 }
 
 export function btfHighlightHref(name) {
@@ -263,7 +324,12 @@ export const AI_TOOL_SYSTEM_ADDENDUM =
   + 'plan_investigation, suggest_scope, detect_contradictions, '
   + 'assess_evidence_sufficiency, cluster_findings, generate_fingerprint, '
   + 'find_similar_investigations, regression_localize, build_causal_chain, '
-  + 'generate_experiment_plan, record_experiment_outcome, score_investigation. '
+  + 'generate_experiment_plan, record_experiment_outcome, score_investigation, '
+  + 'analyze_temporal_causality, build_task_dependency_graph, '
+  + 'decompose_response_time, rank_root_causes, verify_claim, '
+  + 'challenge_conclusion, investigation_memory, cluster_incidents, '
+  + 'close_investigation, analyze_distribution, analyze_periodicity, '
+  + 'summarize_investigation_context. '
   + 'For root-cause or Investigate templates: call plan_investigation and '
   + 'suggest_scope, then detect_anomalies and '
   + 'investigate(finding_id) first for a root-cause chain, then '
@@ -298,6 +364,12 @@ export const AI_TOOL_SYSTEM_ADDENDUM =
   + 'state as HTML or CSV. '
   + 'For what-if / optimize_experiment, label results as heuristic (not FreeRTOS kernel). For optimize advice questions, label estimates as '
   + '\'Simulation / estimate — not measured behavior\' and cite evidence. '
+  + 'Name the Statistics page the engineer should open next '
+  + '(Timeline Anomalies, Worst Events, Response Time, Critical Path, '
+  + 'Period / Jitter, Unified Jitter, Recurring Patterns, Task Health, '
+  + 'Task × Core, Core Utilization Over Time, Preemption Matrix, '
+  + 'Waiter × Owner, Mutex Blocking). Those pages already exist in Statistics '
+  + '— do not invent a detect_timeline_anomalies tool. '
   + 'Tool timestamps use the same numeric trace time '
   + 'unit as jump:TIME. After tools run, summarise what you changed. '
   + 'If you cannot emit a native function call, emit a fenced btftool JSON '
@@ -1359,6 +1431,166 @@ export function aiViewerTools() {
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY,
+        description:
+          'Order Analysis Findings in time into a happens-before chain (heuristic; not a kernel replay).',
+        parameters: { type: 'object', properties: { task: { type: 'string' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH,
+        description:
+          'Build a task/resource dependency graph from BTF sync holds, preemption chains, migrations, and priority inheritance (falls back to finding wording). Optional task keeps a 2-hop neighborhood and lists upstream tasks.',
+        parameters: { type: 'object', properties: { task: { type: 'string' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_DECOMPOSE_RESPONSE_TIME,
+        description:
+          'Split delay into mutex, preemption, migration, execution, and scheduler shares (relative magnitudes).',
+        parameters: { type: 'object', properties: { task: { type: 'string' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_RANK_ROOT_CAUSES,
+        description: 'Rank likely root causes from findings or hypotheses.',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_VERIFY_CLAIM,
+        description:
+          'Check a causal claim against findings and optional cursor scope (SUPPORTED / PARTIAL / UNSUPPORTED).',
+        parameters: {
+          type: 'object',
+          properties: {
+            claim: { type: 'string' },
+            claim_type: { type: 'string' },
+            subject: { type: 'string' },
+            object: { type: 'string' },
+            evidence: { type: 'array', items: { type: ['string', 'number'] } },
+          },
+          required: ['claim'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_CHALLENGE_CONCLUSION,
+        description: 'List alternative mechanisms and missing evidence for a conclusion.',
+        parameters: {
+          type: 'object',
+          properties: { conclusion: { type: 'string' } },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_INVESTIGATION_MEMORY,
+        description:
+          'Store or recall similar past investigations (Desktop [ai] investigation_memory / Web localStorage).',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['recall', 'store', 'save', 'add'] },
+            record: { type: 'object' },
+            limit: { type: 'integer' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_CLUSTER_INCIDENTS,
+        description: 'Cluster findings into incidents by time proximity.',
+        parameters: {
+          type: 'object',
+          properties: { window_ns: { type: 'number' } },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_CLOSE_INVESTIGATION,
+        description: 'Close the investigation with a conclusion and confidence.',
+        parameters: {
+          type: 'object',
+          properties: {
+            conclusion: { type: 'string' },
+            confidence: { type: 'string' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_ANALYZE_DISTRIBUTION,
+        description:
+          'Percentiles (p50/p90/p95/p99/p99.9), stddev, CV, and 3-sigma outlier rate for BTF execution, blocking, priority-inheritance, or tick samples; caller values; or finding magnitudes.',
+        parameters: {
+          type: 'object',
+          properties: {
+            values: { type: 'array', items: { type: 'number' } },
+            metric: {
+              type: 'string',
+              enum: ['auto', 'execution', 'blocking', 'priority_inheritance', 'tick'],
+            },
+            task: { type: 'string' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_ANALYZE_PERIODICITY,
+        description:
+          'Period and jitter for tick/STI/ISR/timer/task-release timestamps: expected vs p50/p99/max, RMS and peak-to-peak, and a kind (period drift / release jitter / execution-time variation / scheduler interference).',
+        parameters: {
+          type: 'object',
+          properties: {
+            times: { type: 'array', items: { type: 'number' } },
+            expected: { type: 'number' },
+            source: {
+              type: 'string',
+              enum: ['auto', 'tick', 'sti', 'isr', 'timer', 'release'],
+            },
+            task: { type: 'string' },
+            durations: { type: 'array', items: { type: 'number' } },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
+        description: 'Compact findings, hypotheses, tools, and conclusion.',
+        parameters: {
+          type: 'object',
+          properties: {
+            conclusion: { type: 'string' },
+            tools_run: { type: 'array', items: { type: 'string' } },
+          },
+        },
+      },
+    },
   ]
 }
 
@@ -2351,6 +2583,115 @@ export function validateToolCall(name, args) {
       error: '',
     }
   }
+  if (name === AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY) {
+    return { args: { task: String(a.task || '').trim() }, error: '' }
+  }
+  if (name === AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH) {
+    return { args: { task: String(a.task || '').trim() }, error: '' }
+  }
+  if (name === AI_TOOL_DECOMPOSE_RESPONSE_TIME) {
+    return { args: { task: String(a.task || '').trim() }, error: '' }
+  }
+  if (name === AI_TOOL_RANK_ROOT_CAUSES) return { args: {}, error: '' }
+  if (name === AI_TOOL_VERIFY_CLAIM) {
+    const claim = String(a.claim || '').trim()
+    if (!claim) return { args: null, error: 'claim must be a non-empty string' }
+    if (a.evidence != null && !Array.isArray(a.evidence)) {
+      return { args: null, error: 'evidence must be an array' }
+    }
+    return {
+      args: {
+        claim,
+        claim_type: String(a.claim_type || 'causal').trim() || 'causal',
+        subject: String(a.subject || '').trim(),
+        object: String(a.object || '').trim(),
+        evidence: [...(a.evidence || [])],
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_CHALLENGE_CONCLUSION) {
+    return { args: { conclusion: String(a.conclusion || '').trim() }, error: '' }
+  }
+  if (name === AI_TOOL_INVESTIGATION_MEMORY) {
+    const rec = a.record && typeof a.record === 'object' ? a.record : null
+    const limit = a.limit == null ? 5 : Number.parseInt(a.limit, 10)
+    if (!Number.isFinite(limit)) return { args: null, error: 'limit must be an integer' }
+    return {
+      args: {
+        action: String(a.action || 'recall').trim() || 'recall',
+        record: rec,
+        limit,
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_CLUSTER_INCIDENTS) {
+    const win = a.window_ns == null ? 1e6 : Number(a.window_ns)
+    if (!Number.isFinite(win)) return { args: null, error: 'window_ns must be a number' }
+    return { args: { window_ns: win }, error: '' }
+  }
+  if (name === AI_TOOL_CLOSE_INVESTIGATION) {
+    return {
+      args: {
+        conclusion: String(a.conclusion || '').trim(),
+        confidence: String(a.confidence || '').trim(),
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_ANALYZE_DISTRIBUTION) {
+    if (a.values != null && !Array.isArray(a.values)) {
+      return { args: null, error: 'values must be an array' }
+    }
+    return {
+      args: {
+        values: [...(a.values || [])],
+        metric: String(a.metric || '').trim(),
+        task: String(a.task || '').trim(),
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_ANALYZE_PERIODICITY) {
+    if (a.times != null && !Array.isArray(a.times)) {
+      return { args: null, error: 'times must be an array' }
+    }
+    if (a.durations != null && !Array.isArray(a.durations)) {
+      return { args: null, error: 'durations must be an array' }
+    }
+    let expected = a.expected
+    if (expected != null && expected !== '') {
+      expected = Number(expected)
+      if (!Number.isFinite(expected)) return { args: null, error: 'expected must be a number' }
+    } else expected = null
+    const src = String(a.source || 'auto').trim().toLowerCase() || 'auto'
+    if (!['auto', 'tick', 'sti', 'isr', 'timer', 'release'].includes(src)) {
+      return { args: null, error: 'source must be auto|tick|sti|isr|timer|release' }
+    }
+    return {
+      args: {
+        times: [...(a.times || [])],
+        expected,
+        source: src,
+        task: String(a.task || '').trim(),
+        durations: [...(a.durations || [])],
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT) {
+    if (a.tools_run != null && !Array.isArray(a.tools_run)) {
+      return { args: null, error: 'tools_run must be an array' }
+    }
+    return {
+      args: {
+        conclusion: String(a.conclusion || '').trim(),
+        tools_run: (a.tools_run || []).map((t) => String(t)),
+      },
+      error: '',
+    }
+  }
   return { args: null, error: `unknown tool ${JSON.stringify(name)}` }
 }
 
@@ -2691,6 +3032,18 @@ export function isQueryTool(name) {
     AI_TOOL_GENERATE_EXPERIMENT_PLAN,
     AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
     AI_TOOL_SCORE_INVESTIGATION,
+    AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY,
+    AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH,
+    AI_TOOL_DECOMPOSE_RESPONSE_TIME,
+    AI_TOOL_RANK_ROOT_CAUSES,
+    AI_TOOL_VERIFY_CLAIM,
+    AI_TOOL_CHALLENGE_CONCLUSION,
+    AI_TOOL_INVESTIGATION_MEMORY,
+    AI_TOOL_CLUSTER_INCIDENTS,
+    AI_TOOL_CLOSE_INVESTIGATION,
+    AI_TOOL_ANALYZE_DISTRIBUTION,
+    AI_TOOL_ANALYZE_PERIODICITY,
+    AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
   ].includes(String(name || ''))
 }
 
@@ -2861,6 +3214,143 @@ function taskCandidatesFromTrace(trace) {
 
 function segsForMk(trace, mk) {
   return [...(mapGet(trace?.segByMergeKey, mk) || [])]
+}
+
+const DIST_MAX_SAMPLES = 8000
+const DIST_METRIC_ALIASES = {
+  execution: 'execution',
+  wcet: 'execution',
+  cpu: 'execution',
+  slices: 'execution',
+  blocking: 'blocking',
+  block: 'blocking',
+  wait: 'blocking',
+  latency: 'blocking',
+  response: 'blocking',
+  priority_inheritance: 'priority_inheritance',
+  priority: 'priority_inheritance',
+  pi: 'priority_inheritance',
+  inherit: 'priority_inheritance',
+  tick: 'tick',
+  jitter: 'tick',
+  period: 'tick',
+}
+
+export function normalizeDistributionMetric(metric, task = '') {
+  const raw = String(metric || '').trim().toLowerCase()
+  if (!raw || raw === 'auto') return String(task || '').trim() ? 'execution' : 'tick'
+  return DIST_METRIC_ALIASES[raw] || (String(task || '').trim() ? 'execution' : 'tick')
+}
+
+export function distributionTraceContext(trace, task = '', metric = '', lo = null, hi = null) {
+  const kind = normalizeDistributionMetric(metric, task)
+  const values = []
+  if (kind === 'tick') {
+    const times = [...(trace?.tickStiTimes || trace?.tick_sti_times || [])]
+    let prev = null
+    for (const raw of times) {
+      const t = Number(raw)
+      if (!Number.isFinite(t)) continue
+      if (lo != null && t < lo) continue
+      if (hi != null && t > hi) continue
+      if (prev != null && t > prev) {
+        values.push(t - prev)
+        if (values.length >= DIST_MAX_SAMPLES) break
+      }
+      prev = t
+    }
+    return {
+      values,
+      metric: kind,
+      source: 'btf',
+      truncated: values.length >= DIST_MAX_SAMPLES,
+      task: '',
+    }
+  }
+  const want = String(task || '').trim()
+  let resolved = ''
+  if (want && trace) resolved = resolveTaskKey(want, taskCandidatesFromTrace(trace)) || ''
+  if (!resolved) {
+    return { values: [], metric: kind, source: 'btf', truncated: false, task: want }
+  }
+  const mk = taskMergeKey(resolved)
+  let segs = segsForMk(trace, mk)
+  if (!segs.length) segs = segsForMk(trace, resolved)
+  if (kind === 'execution') {
+    for (const seg of segs) {
+      const start = seg?.start
+      const end = seg?.end
+      if (start == null || end == null || !overlapsRange(start, end, lo, hi)) continue
+      let dur = Number(end) - Number(start)
+      if (lo != null && hi != null) {
+        dur = Math.max(0, Math.min(Number(end), Number(hi)) - Math.max(Number(start), Number(lo)))
+      }
+      if (dur > 0) values.push(dur)
+      if (values.length >= DIST_MAX_SAMPLES) break
+    }
+  } else if (kind === 'blocking') {
+    const ordered = [...segs].sort((a, b) => Number(a?.start) - Number(b?.start))
+    for (let i = 1; i < ordered.length; i++) {
+      const prev = ordered[i - 1]
+      const nxt = ordered[i]
+      const gap = Number(nxt.start) - Number(prev.end)
+      if (gap <= 0 || !inTimeRange(nxt.start, lo, hi)) continue
+      values.push(gap)
+      if (values.length >= DIST_MAX_SAMPLES) break
+    }
+  } else if (kind === 'priority_inheritance') {
+    let eps = [...(mapGet(trace?.priorityEpisodesByMk, mk) || [])]
+    if (!eps.length) {
+      for (const ep of trace?.priorityEpisodes || []) {
+        if ((ep.mk || '') === mk) eps.push(ep)
+      }
+    }
+    for (const ep of eps) {
+      const start = ep.startNs ?? ep.start_ns
+      const stop = ep.stopNs ?? ep.stop_ns
+      if (start == null || stop == null || !overlapsRange(start, stop, lo, hi)) continue
+      const dur = Number(stop) - Number(start)
+      if (dur > 0) values.push(dur)
+      if (values.length >= DIST_MAX_SAMPLES) break
+    }
+  }
+  return {
+    values,
+    metric: kind,
+    source: 'btf',
+    truncated: values.length >= DIST_MAX_SAMPLES,
+    task: String(resolved),
+  }
+}
+
+export function periodicityTraceContext(trace, task = '') {
+  const tick = [...(trace?.tickStiTimes || trace?.tick_sti_times || [])]
+  const rawSti = trace?.stiEvents || trace?.sti_events || []
+  const sti = [...rawSti].map((ev) => {
+    if (!ev || typeof ev !== 'object') return null
+    if (ev.target != null || ev.time != null || ev.ns != null) {
+      return {
+        time: ev.time ?? ev.ns,
+        target: ev.target,
+        event: ev.event,
+        note: ev.note,
+      }
+    }
+    return ev
+  }).filter(Boolean)
+  const releases = []
+  const want = String(task || '').trim()
+  if (want && trace) {
+    const resolved = resolveTaskKey(want, taskCandidatesFromTrace(trace))
+    if (resolved) {
+      const mk = taskMergeKey(resolved)
+      for (const s of [...segsForMk(trace, mk), ...segsForMk(trace, resolved)]) {
+        const t = Number(s?.start)
+        if (Number.isFinite(t)) releases.push(t)
+      }
+    }
+  }
+  return { tickTimes: tick, stiEvents: sti, releaseTimes: releases }
 }
 
 function mediumLabels(ep) {
@@ -3188,7 +3678,158 @@ export function scoreInvestigationMetricsTool(findings = [], {
   }))
 }
 
-export { setExperimentOutcomes, experimentOutcomes }
+export function analyzeTemporalCausalityTool(findings = [], { task = '' } = {}) {
+  return plannerPayload(analyzeTemporalCausality(findings, { task }))
+}
+
+export function dependencyTraceContext(trace, lo = null, hi = null) {
+  if (!trace) {
+    return { syncHolds: [], preemptions: [], migrations: [], priorityEpisodes: [] }
+  }
+  const objs = trace.syncObjects || trace.sync_objects
+  const values = objs instanceof Map
+    ? [...objs.values()]
+    : Object.values(objs || {})
+  const syncHolds = []
+  for (const obj of values) {
+    if (!obj || typeof obj !== 'object') continue
+    const kind = String(obj.kind || '')
+    const key = String(obj.key || `${kind}:${obj.ptr || ''}`)
+    for (const h of obj.holds || []) {
+      if (!h || typeof h !== 'object') continue
+      const start = h.start_ns ?? h.startNs
+      const stop = h.stop_ns ?? h.stopNs
+      if (!overlapsRange(start, stop, lo, hi)) continue
+      syncHolds.push({
+        kind,
+        key,
+        holder: String(h.holder_label || h.holderLabel || ''),
+        start_ns: start,
+        stop_ns: stop,
+        duration_ns: h.duration_ns ?? h.durationNs ?? 0,
+        signal: Boolean(h.signal),
+      })
+    }
+  }
+  const { rows } = preemptionChainRows(trace, lo, hi)
+  const preemptions = (rows || []).map((r) => ({
+    preemptor: r.preemptor,
+    victim: r.victim,
+    count: r.count,
+    weight: r.totalNs || 0,
+  }))
+  const migrations = []
+  for (const m of migrationsInRange(trace, lo, hi)) {
+    const mk = m.mergeKey || m.merge_key
+    const raw = taskReprGet(trace, mk) || mk
+    migrations.push({
+      task: taskDisplayName(raw),
+      from_core: m.fromCore || m.from_core || '',
+      to_core: m.toCore || m.to_core || '',
+    })
+  }
+  const episodes = []
+  const allEps = trace.priorityEpisodes || trace.priority_episodes || []
+  for (const ep of allEps) {
+    const start = ep.start_ns ?? ep.startNs ?? ep.start
+    const stop = ep.stop_ns ?? ep.stopNs ?? ep.stop
+    if (!overlapsRange(start, stop, lo, hi)) continue
+    const mk = ep.mk
+    const label = taskDisplayName(
+      taskReprGet(trace, mk) || ep.task_label || ep.taskLabel || ep.task || mk)
+    episodes.push({
+      task: label,
+      inherited: Boolean(ep.inherited),
+      inversion_suspect: Boolean(ep.inversion_suspect ?? ep.inversionSuspect),
+      medium_tasks: mediumLabels(ep),
+    })
+  }
+  return {
+    syncHolds,
+    preemptions,
+    migrations,
+    priorityEpisodes: episodes,
+  }
+}
+
+export function buildTaskDependencyGraphTool(findings = [], {
+  task = '',
+  edges = null,
+  syncHolds = [],
+  preemptions = [],
+  migrations = [],
+  priorityEpisodes = [],
+} = {}) {
+  return plannerPayload(buildTaskDependencyGraph(findings, {
+    task, edges, syncHolds, preemptions, migrations, priorityEpisodes,
+  }))
+}
+
+export function decomposeResponseTimeTool(findings = [], { task = '' } = {}) {
+  return plannerPayload(decomposeResponseTime(findings, { task }))
+}
+
+export function rankRootCausesTool(findings = [], { hypotheses = [] } = {}) {
+  return plannerPayload(rankRootCauses(findings, { hypotheses }))
+}
+
+export function verifyClaimTool(claim = '', {
+  claimType = 'causal', subject = '', object = '', evidence = [], findings = [],
+  cursorLo = null, cursorHi = null,
+} = {}) {
+  return plannerPayload(verifyClaim(claim, {
+    claimType, subject, object, evidence, findings, cursorLo, cursorHi,
+  }))
+}
+
+export function challengeConclusionTool(conclusion = '', {
+  findings = [], hypotheses = [],
+} = {}) {
+  return plannerPayload(challengeConclusion(conclusion, { findings, hypotheses }))
+}
+
+export function investigationMemoryTool(action = 'recall', {
+  record = null, findings = [], limit = 5,
+} = {}) {
+  return plannerPayload(investigationMemory(action, { record, findings, limit }))
+}
+
+export function clusterIncidentsTool(findings = [], { windowNs = 1e6 } = {}) {
+  return plannerPayload(clusterIncidents(findings, { windowNs }))
+}
+
+export function closeInvestigationTool(conclusion = '', {
+  findings = [], experiments = [], confidence = '',
+} = {}) {
+  return plannerPayload(closeInvestigation(conclusion, { findings, experiments, confidence }))
+}
+
+export function analyzeDistributionTool(values = [], {
+  findings = [], metric = '', source = '', task = '', truncated = false,
+} = {}) {
+  return plannerPayload(analyzeDistribution(values, {
+    findings, metric, source, task, truncated,
+  }))
+}
+
+export function analyzePeriodicityTool(times = [], {
+  findings = [], expected = null, source = '', durations = [],
+  tickTimes = [], stiEvents = [], releaseTimes = [], lo = null, hi = null,
+} = {}) {
+  return plannerPayload(analyzePeriodicity(times, {
+    findings, expected, source, durations, tickTimes, stiEvents, releaseTimes, lo, hi,
+  }))
+}
+
+export function summarizeInvestigationContextTool(findings = [], {
+  hypotheses = [], toolsRun = [], conclusion = '',
+} = {}) {
+  return plannerPayload(summarizeInvestigationContext(findings, {
+    hypotheses, toolsRun, conclusion,
+  }))
+}
+
+export { setExperimentOutcomes, experimentOutcomes, setInvestigationMemory, investigationMemoryStore }
 
 function eventsFromMetricPayload(payload, metric, task) {
   const data = payload && typeof payload === 'object' ? payload.data : null

@@ -63,6 +63,18 @@ const TOOL_REASONS = {
   generate_experiment_plan: 'Rank concrete firmware / what-if experiments',
   record_experiment_outcome: 'Feed measured results back into recommendations',
   score_investigation: 'Evidence efficiency, cost, stop, and falsification scores',
+  analyze_temporal_causality: 'Order findings into a happens-before chain',
+  build_task_dependency_graph: 'Task/resource graph from BTF sync, preemption, and migration',
+  decompose_response_time: 'Split delay into blocking, preemption, and execution',
+  rank_root_causes: 'Rank likely causes across findings and hypotheses',
+  verify_claim: 'Check a causal claim against findings and scope',
+  challenge_conclusion: 'List alternatives and missing evidence',
+  investigation_memory: 'Store or recall similar past investigations',
+  cluster_incidents: 'Group findings by time proximity',
+  close_investigation: 'Record a conclusion and close the case',
+  analyze_distribution: 'p50/p90/p99/p99.9, stddev, CV, and 3-sigma outlier rate',
+  analyze_periodicity: 'Period/jitter (RMS, peak-to-peak) and kind: drift vs release vs WCET vs scheduler',
+  summarize_investigation_context: 'Compact findings, hypotheses, and tools run',
 }
 
 function safeInt(value, fallback = 0) {
@@ -792,7 +804,9 @@ export function explainFindingPayload(finding, {
   if (hyps.length) {
     const names = hyps.slice(0, 4).map(h => `${h.hypothesis} [${h.status}]`).join('; ')
     deep = `${technical} Leading hypotheses: ${names}. `
-      + 'Call investigate → correlate_events → find_critical_path, '
+      + 'Call investigate → correlate_events → find_critical_path → '
+      + 'build_task_dependency_graph → analyze_temporal_causality → '
+      + 'rank_root_causes → challenge_conclusion, '
       + 'then verify jump:TIME inside the cursor window.'
   }
   const body = { quick, technical, deep }[lv]
@@ -821,7 +835,11 @@ export function investigationModePlan(mode = 'diagnose') {
     },
     diagnose: {
       goal: 'Find cause → gather evidence → verify',
-      tools: ['investigate', 'correlate_events', 'find_critical_path'],
+      tools: [
+        'investigate', 'correlate_events', 'find_critical_path',
+        'build_task_dependency_graph', 'analyze_temporal_causality',
+        'rank_root_causes', 'challenge_conclusion',
+      ],
       template: 'investigate',
     },
     compare: {
@@ -999,6 +1017,16 @@ export function toolCallReason(toolName, finding = null) {
   return base
 }
 
+export const AI_SPLIT_BOTTOM_DEFAULT = 80
+export const AI_SPLIT_BOTTOM_MIN = 64
+export const AI_SPLIT_BOTTOM_MAX = 400
+
+export function clampAiSplitBottom(raw) {
+  const n = Number.parseInt(raw, 10)
+  if (!Number.isFinite(n) || n <= 0) return AI_SPLIT_BOTTOM_DEFAULT
+  return Math.max(AI_SPLIT_BOTTOM_MIN, Math.min(AI_SPLIT_BOTTOM_MAX, n))
+}
+
 export function emptyCostMeter() {
   return {
     prompt_tokens: 0,
@@ -1054,9 +1082,11 @@ export function formatCostStatus(meter = null) {
   const tools = Number(m.tool_calls || 0)
   const timeS = Number(m.model_time_s || 0)
   const usd = Number(m.estimated_usd || 0)
-  const parts = [`${formatTokenCount(tokens)} tok`]
-  if (tools) parts.push(`${tools} tools`)
-  if (timeS) parts.push(`${timeS}s`)
+  const parts = [
+    `${formatTokenCount(tokens)} tok`,
+    `${Number.isFinite(tools) ? Math.max(0, Math.trunc(tools) || 0) : 0} tools`,
+    `${Number.isFinite(timeS) && timeS ? timeS : 0}s`,
+  ]
   if (usd) parts.push(`$${usd.toFixed(3)}`)
   return parts.join(' · ')
 }
@@ -1492,7 +1522,10 @@ export function builtinInvestigationTemplates() {
       label: 'CPU Latency Investigation',
       steps: [
         'detect_anomalies', 'investigate', 'query_raw_metric',
-        'correlate_events', 'find_critical_path', 'detect_priority_inversion',
+        'correlate_events', 'find_critical_path',
+        'build_task_dependency_graph', 'analyze_temporal_causality',
+        'decompose_response_time', 'rank_root_causes', 'challenge_conclusion',
+        'detect_priority_inversion',
         'generate_report',
       ],
     },
@@ -1788,6 +1821,93 @@ export const BENCHMARK_METRIC_WEIGHTS = {
   safety: 0.15,
 }
 
+const NEGATION_RE = /\b(not|no|never|isn't|is not|without|reject)\b/
+const METRIC_SEP_RE = /[\s/_-]+/g
+
+/** Official Statistics page titles plus wording a model may use instead of × / slashes. */
+export const STATS_UX_PAGE_ALIASES = {
+  'timeline anomalies': ['timeline anomalies', 'timeline anomaly'],
+  'worst events': ['worst events', 'worst event'],
+  'period jitter': ['period jitter', 'period / jitter', 'period/jitter'],
+  'task health': ['task health'],
+  'task x core': ['task x core', 'task-core'],
+  'waiter x owner': ['waiter x owner', 'waiter-owner'],
+  'response time': ['response time', 'response-time'],
+  'critical path': ['critical path', 'crit path'],
+  'unified jitter': ['unified jitter'],
+  'recurring patterns': ['recurring patterns', 'recurring pattern'],
+  'preemption matrix': ['preemption matrix'],
+  'mutex blocking': ['mutex blocking', 'mutex-blocking'],
+  'core utilization over time': [
+    'core utilization over time', 'core utilisation over time',
+  ],
+}
+
+function normalizeMetricText(text) {
+  return String(text || '').toLowerCase().replace(/×/g, 'x').replace(METRIC_SEP_RE, ' ').trim()
+}
+
+export function metricMentioned(blob, metric) {
+  const raw = String(blob || '').toLowerCase()
+  const want = String(metric || '').trim().toLowerCase()
+  if (want && raw.includes(want)) return true
+  const normBlob = normalizeMetricText(blob)
+  const normWant = normalizeMetricText(metric)
+  if (normWant && normBlob.includes(normWant)) return true
+  for (const [key, needles] of Object.entries(STATS_UX_PAGE_ALIASES)) {
+    const aliases = [key, ...needles]
+    if (!aliases.some(a => normalizeMetricText(a) === normWant)) continue
+    return needles.some(n => normBlob.includes(normalizeMetricText(n)) || raw.includes(n))
+  }
+  return false
+}
+
+export function blobHasPhrase(blob, phrase, allowNegation = true) {
+  const text = String(blob || '').toLowerCase()
+  const needle = String(phrase || '').trim().toLowerCase()
+  if (!needle) return false
+  const idx = text.indexOf(needle)
+  if (idx < 0) return false
+  if (allowNegation) {
+    const window = text.slice(Math.max(0, idx - 20), idx)
+    if (NEGATION_RE.test(window)) return false
+  }
+  return true
+}
+
+export function scoreAdversarialMetrics(expected = {}, {
+  actualConclusion = '', tools = [], validation = null,
+} = {}) {
+  const exp = expected && typeof expected === 'object' ? expected : {}
+  const conc = String(actualConclusion || '')
+  const traps = (exp.trap_phrases || []).map(x => String(x)).filter(x => x.trim())
+  const falseConfirmation = traps.some(p => blobHasPhrase(conc, p)) ? 100 : 0
+  const causalHits = ['caused', 'because of', 'due to', 'causal']
+    .some(p => blobHasPhrase(conc, p))
+  const rootClass = String(exp.root_cause_class || '').toLowerCase()
+  const noCausal = !!exp.no_causal || rootClass === 'no_causal' || rootClass === 'coincidence'
+  const falseCausal = (noCausal && causalHits) ? 100 : (traps.length ? falseConfirmation : 0)
+  const claims = ((validation && validation.claims) || []).filter(c => c && typeof c === 'object')
+  const unsupported = claims.length
+    ? Math.round(100 * claims.filter(c => !c.ok).length / claims.length)
+    : 0
+  const toolsL = (tools || []).map(t => String(t))
+  const required = (exp.required_tools || []).map(t => String(t)).filter(Boolean)
+  const low = conc.toLowerCase()
+  const highConf = low.includes('confidence: high') || low.endsWith('high.')
+  const missingRequired = required.length > 0 && !required.some(t => toolsL.includes(t))
+  const premature = (
+    (highConf && (falseConfirmation || missingRequired || !toolsL.length))
+    || missingRequired
+  ) ? 100 : 0
+  return {
+    false_causal_rate: falseCausal,
+    false_confirmation_rate: falseConfirmation,
+    unsupported_claim_rate: unsupported,
+    premature_conclusion_rate: premature,
+  }
+}
+
 export function scoreBenchmarkCase(expected, {
   actualFindingIds = [], actualTasks = [], actualTools = [],
   actualConclusion = '', validation = null, evidenceQuality = null,
@@ -1809,8 +1929,8 @@ export function scoreBenchmarkCase(expected, {
   const ev = exp.evidence && typeof exp.evidence === 'object' ? exp.evidence : {}
   const wantMetrics = (ev.required_metrics || []).map(x => String(x).toLowerCase())
   if (wantMetrics.length) {
-    const blob = String(actualConclusion || '').toLowerCase()
-    const metricHits = wantMetrics.filter(m => blob.includes(m)).length
+    const blob = String(actualConclusion || '')
+    const metricHits = wantMetrics.filter(m => metricMentioned(blob, m)).length
     const metricScore = Math.round(100.0 * metricHits / wantMetrics.length)
     evidenceScore = wantTasks.length
       ? Math.round((evidenceScore + metricScore) / 2)
@@ -1833,11 +1953,18 @@ export function scoreBenchmarkCase(expected, {
 
   const wantClass = String(exp.root_cause_class || '').toLowerCase()
   const conc = String(actualConclusion || '').toLowerCase()
+  const aliases = (exp.root_cause_aliases || []).map(x => String(x).toLowerCase()).filter(x => x.trim())
   let rootScore = 100
-  if (wantClass) {
-    rootScore = (conc.includes(wantClass) || wantClass.split(/\s+/).some(w => conc.includes(w)))
-      ? 100 : 0
+  if (wantClass || aliases.length) {
+    const classHit = wantClass && (
+      conc.includes(wantClass) || wantClass.split(/\s+/).some(w => conc.includes(w))
+    )
+    rootScore = (classHit || aliases.some(a => conc.includes(a))) ? 100 : 0
   }
+  const adv = scoreAdversarialMetrics(exp, {
+    actualConclusion, tools: actualTools, validation,
+  })
+  if (adv.false_confirmation_rate) rootScore = 0
 
   const band = String((evidenceQuality || {}).band || '')
   let cal = 80
@@ -1873,7 +2000,7 @@ export function scoreBenchmarkCase(expected, {
     passed: rootScore >= 50 && findingScore >= 50,
     findingScore,
   })
-  return { overall: Math.max(0, Math.min(100, overall)), parts, ...extras }
+  return { overall: Math.max(0, Math.min(100, overall)), parts, ...extras, ...adv }
 }
 
 export function formatBenchmarkScore(score) {
@@ -1898,6 +2025,10 @@ export function formatBenchmarkScore(score) {
     falsification_quality: 'Falsification',
     scope_accuracy: 'Scope accuracy',
     stop_efficiency: 'Stop efficiency',
+    false_causal_rate: 'False-causal rate',
+    false_confirmation_rate: 'False-confirmation rate',
+    unsupported_claim_rate: 'Unsupported-claim rate',
+    premature_conclusion_rate: 'Premature-conclusion rate',
   }
   let shown = false
   for (const [key, label] of Object.entries(extras)) {

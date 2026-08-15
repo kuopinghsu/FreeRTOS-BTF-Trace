@@ -204,6 +204,63 @@ export function findExtremeInterArrivalSegment(segs, lo, hi, findMax = true) {
   return bestSeg
 }
 
+/** Index of the p-quantile in a sorted n-sample list (stats-table formula). */
+export function percentileSampleIndex(n, p) {
+  if (n <= 0) return 0
+  return Math.min(n - 1, Math.max(0, Math.ceil(n * Number(p)) - 1))
+}
+
+/** Slice at percentile p of duration. */
+export function findPercentileExecSegment(segs, p, lo, hi) {
+  const samples = []
+  for (const s of segs || []) {
+    const d = s.end - s.start
+    if (d <= 0) continue
+    if (lo != null && hi != null && !segFullyInRange(s, lo, hi)) continue
+    samples.push([d, s])
+  }
+  if (!samples.length) return null
+  samples.sort((a, b) => a[0] - b[0])
+  return samples[percentileSampleIndex(samples.length, p)][1]
+}
+
+/** Resume slice at percentile p of off-CPU gap. */
+export function findPercentileBlockingSegment(segs, p, lo, hi) {
+  if (!segs || segs.length < 2) return null
+  const ordered = [...segs].sort((a, b) => a.start - b.start)
+  const samples = []
+  for (let i = 1; i < ordered.length; i++) {
+    const prev = ordered[i - 1]
+    const nxt = ordered[i]
+    if (lo != null && hi != null) {
+      if (!segFullyInRange(prev, lo, hi) || !segFullyInRange(nxt, lo, hi)) continue
+    }
+    const gap = nxt.start - prev.end
+    if (gap > 0) samples.push([gap, nxt])
+  }
+  if (!samples.length) return null
+  samples.sort((a, b) => a[0] - b[0])
+  return samples[percentileSampleIndex(samples.length, p)][1]
+}
+
+/** Activation slice at percentile p of inter-arrival gap. */
+export function findPercentileInterArrivalSegment(segs, p, lo, hi) {
+  if (!segs || segs.length < 2) return null
+  const ordered = [...segs].sort((a, b) => a.start - b.start)
+  const samples = []
+  for (let i = 1; i < ordered.length; i++) {
+    const prev = ordered[i - 1]
+    const nxt = ordered[i]
+    const gap = nxt.start - prev.start
+    if (gap <= 0) continue
+    if (lo != null && hi != null && (nxt.start < lo || nxt.start > hi)) continue
+    samples.push([gap, nxt])
+  }
+  if (!samples.length) return null
+  samples.sort((a, b) => a[0] - b[0])
+  return samples[percentileSampleIndex(samples.length, p)][1]
+}
+
 function _gapBeforeSegment(segs, seg, kind) {
   if (!segs?.length || !seg) return null
   const ordered = [...segs].sort((a, b) => a.start - b.start)

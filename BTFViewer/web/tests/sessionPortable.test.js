@@ -36,6 +36,15 @@ describe('portable session', () => {
     assert.equal(payload.timelineOptions.viewMode, 'core')
     assert.equal(payload.timelineOptions.extraField, undefined)
     assert.equal(payload.findQuery, 'spi')
+    assert.equal(payload.statsSectionCollapsed, null)
+  })
+
+  it('buildPortableSession copies statsSectionCollapsed', () => {
+    const payload = buildPortableSession({
+      traceName: 'demo.btf',
+      statsSectionCollapsed: { exec: true, cores: false },
+    })
+    assert.deepEqual(payload.statsSectionCollapsed, { exec: true, cores: false })
   })
 
   it('parsePortableSession rejects unsupported version', () => {
@@ -84,6 +93,7 @@ describe('portable session', () => {
       timelineOptions: { viewMode: 'task', darkMode: true },
       tabFilters: { taskFilterText: 'idle', taskFilterKeys: ['T1', ''] },
       pinnedHighlightKey: 'T1',
+      statsSectionCollapsed: { exec: true, cores: false, bad: 'x' },
     }, timelineOptions)
 
     assert.equal(tab.marks.length, 1)
@@ -94,6 +104,7 @@ describe('portable session', () => {
     assert.equal(tab.pinnedHighlightKey, 'T1')
     assert.equal(timelineOptions.highlightKey, 'T1')
     assert.equal(timelineOptions.lockedTaskKey, 'T1')
+    assert.deepEqual(tab.statsSectionCollapsed, { exec: true, cores: false })
   })
 
   it('restores lockedTaskKey from a segment-click highlight', () => {

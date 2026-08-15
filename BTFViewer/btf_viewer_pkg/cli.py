@@ -700,7 +700,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     )
     snapshot.add_argument(
         "--metric",
-        choices=("tick", "exec", "block", "inter", "priority", "preempt", "interval", "tag",
+        choices=("tick", "exec", "block", "inter", "response", "priority", "preempt", "interval", "tag",
                 "tag_interval", "mig_dwell", "mig_rate", "mig_gap", "pair_gap", "pair_rate",
                 "dispatch", "switch_overhead", "concurrency"),
         default=None,
@@ -1691,7 +1691,7 @@ def _cli_snapshot_plot(trace: "BtfTrace",
         scope_detail=detail,
         y_as_time=y_as_time,
         show_variability=metric in (
-            "exec", "block", "inter", "dispatch", "switch_overhead"),
+            "exec", "block", "inter", "response", "dispatch", "switch_overhead"),
         parent=None,
     )
     if args.width or args.height:

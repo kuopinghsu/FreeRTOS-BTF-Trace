@@ -188,6 +188,8 @@
       </div>
     </div>
 
+    <div class="ai-split">
+    <div class="ai-split-top">
     <div
       ref="logRef"
       class="ai-log"
@@ -415,6 +417,65 @@
         Undo last actions
       </button>
     </div>
+    </div>
+
+    <div
+      class="ai-split-handle"
+      title="Drag to resize the input box"
+      @mousedown.prevent="onSplitPointerDown"
+    />
+
+    <div
+      class="ai-split-bottom"
+      :style="{ height: `${splitBottom}px` }"
+    >
+    <div class="ai-composer">
+      <textarea
+        v-model="draft"
+        class="ai-input"
+        rows="3"
+        placeholder="Ask about this trace… (Ctrl/Cmd+Enter to send)"
+        :disabled="busy || !aiEnabled"
+        @keydown.meta.enter.prevent="send()"
+        @keydown.ctrl.enter.prevent="send()"
+      />
+      <div class="ai-composer-icons">
+        <button
+          type="button"
+          class="ai-icon-btn primary"
+          :title="busy ? 'Stop the current query' : 'Send the question (Ctrl/Cmd+Enter)'"
+          :aria-label="busy ? 'Stop' : 'Send'"
+          :disabled="!busy && (!aiEnabled || !draft.trim())"
+          @click="onComposerAction"
+        >
+          <svg
+            v-if="busy"
+            viewBox="0 0 16 16"
+            width="14"
+            height="14"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M5 5h6v6H5z" />
+          </svg>
+          <svg
+            v-else
+            viewBox="0 0 16 16"
+            width="14"
+            height="14"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              fill-rule="evenodd"
+              d="M8 2.5l4.5 5H9.25v6.5h-2.5V7.5H3.5L8 2.5z"
+            />
+          </svg>
+        </button>
+      </div>
+    </div>
+    </div>
+    </div>
 
     <div
       v-if="logMenu.visible"
@@ -465,57 +526,17 @@
       </button>
     </div>
 
-    <div class="ai-composer">
-      <textarea
-        v-model="draft"
-        class="ai-input"
-        rows="3"
-        placeholder="Ask about this trace… (Ctrl/Cmd+Enter to send)"
-        :disabled="busy || !aiEnabled"
-        @keydown.meta.enter.prevent="send()"
-        @keydown.ctrl.enter.prevent="send()"
-      />
-      <div class="ai-composer-icons">
-        <button
-          type="button"
-          class="ai-icon-btn primary"
-          :title="busy ? 'Stop the current query' : 'Send the question (Ctrl/Cmd+Enter)'"
-          :aria-label="busy ? 'Stop' : 'Send'"
-          :disabled="!busy && (!aiEnabled || !draft.trim())"
-          @click="onComposerAction"
-        >
-          <svg
-            v-if="busy"
-            viewBox="0 0 16 16"
-            width="14"
-            height="14"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path d="M5 5h6v6H5z" />
-          </svg>
-          <svg
-            v-else
-            viewBox="0 0 16 16"
-            width="14"
-            height="14"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path
-              fill-rule="evenodd"
-              d="M8 2.5l4.5 5H9.25v6.5h-2.5V7.5H3.5L8 2.5z"
-            />
-          </svg>
-        </button>
-      </div>
-    </div>
-
     <div
       class="ai-status"
       :class="{ error: !!error }"
     >
       {{ statusText }}
+    </div>
+    <div
+      class="ai-usage-bar"
+      :title="usageTip"
+    >
+      {{ usageText }}
     </div>
     <div
       v-if="showAuthCta"
@@ -576,6 +597,7 @@ import {
   parseAiAutoApply,
   parseBtfHighlightHref,
   parseBtfJumpHref,
+  parseBtfRangeHref,
   summariseToolCall,
   toolBatchAutoRuns,
   toolResultMessage,
@@ -597,10 +619,11 @@ import {
   dumpUserInvestigationTemplates,
   emptyCostMeter,
   formatCostMeter,
+  formatCostStatus,
+  clampAiSplitBottom,
   formatConfidenceEvolution,
   formatPrivacyChip,
   historicalKnowledgeForFinding,
-  statusWithCost,
   investigationModePlan,
   interpretInvestigationQuery,
   investigationModePrompt,
@@ -641,8 +664,10 @@ import {
   formatAiMessageHtml,
 } from '../utils/aiMarkdown.js'
 import {
+  loadAiSplitBottom,
   loadAiUserHistoricalKnowledge,
   loadAiUserInvestigationTemplates,
+  saveAiSplitBottom,
   saveAiUserHistoricalKnowledge,
   saveAiUserInvestigationTemplates,
 } from '../utils/settingsStore.js'
@@ -670,7 +695,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits([
-  'openSettings', 'jump', 'highlight', 'update:responseLanguage', 'statusMessage',
+  'openSettings', 'jump', 'range', 'highlight', 'update:responseLanguage', 'statusMessage',
 ])
 
 const templates = AI_TEMPLATE_QUESTIONS
@@ -980,13 +1005,35 @@ function applyLanguage() {
 
 const costMeter = ref(emptyCostMeter())
 let costStarted = 0
+const splitBottom = ref(loadAiSplitBottom())
+let splitDrag = null
 
 const statusText = computed(() => {
-  const base = !props.aiEnabled
+  return !props.aiEnabled
     ? 'AI is disabled in Settings → AI.'
     : (error.value || status.value)
-  return statusWithCost(base, costMeter.value)
 })
+const usageText = computed(() => formatCostStatus(costMeter.value))
+const usageTip = computed(() => formatCostMeter(costMeter.value))
+
+function onSplitPointerMove(ev) {
+  if (!splitDrag) return
+  splitBottom.value = clampAiSplitBottom(splitDrag.startH - (ev.clientY - splitDrag.startY))
+}
+
+function endSplitDrag() {
+  if (!splitDrag) return
+  window.removeEventListener('mousemove', onSplitPointerMove)
+  window.removeEventListener('mouseup', endSplitDrag)
+  splitDrag = null
+  saveAiSplitBottom(splitBottom.value)
+}
+
+function onSplitPointerDown(ev) {
+  splitDrag = { startY: ev.clientY, startH: splitBottom.value }
+  window.addEventListener('mousemove', onSplitPointerMove)
+  window.addEventListener('mouseup', endSplitDrag)
+}
 
 function setErrorStatus(msg) {
   const short = String(msg || '').split('\n')[0].slice(0, 200)
@@ -1100,13 +1147,18 @@ function onMsgClick(ev) {
     if (parsed.action) onToolWhy(parsed.action, parsed.name)
     return
   }
-  const a = ev.target?.closest?.('a[data-jump], a[href^="btfjump:"], a[href^="btfhyp:"], a[href^="btfscope:"], a[href^="btfexp:"], a[href^="btftool:"], a[data-highlight], a[href^="btfhighlight:"]')
+  const a = ev.target?.closest?.('a[data-jump], a[href^="btfjump:"], a[href^="btfrange:"], a[href^="btfhyp:"], a[href^="btfscope:"], a[href^="btfexp:"], a[href^="btftool:"], a[data-highlight], a[href^="btfhighlight:"]')
   if (a && !a.classList.contains('ai-mermaid-zoom')) {
     ev.preventDefault()
     const href = a.getAttribute('href') || ''
     const hl = parseBtfHighlightHref(href, a.getAttribute('data-highlight'))
     if (hl) {
       emit('highlight', hl)
+      return
+    }
+    const range = parseBtfRangeHref(href)
+    if (range) {
+      emit('range', range)
       return
     }
     const v = parseBtfJumpHref(href, a.getAttribute('data-jump'))
@@ -1420,7 +1472,9 @@ function onHypothesisAction(action, hypId) {
     }
     const prompt = (
       `Test hypothesis ${JSON.stringify(name)} (id=${hid}). `
-      + 'Call investigate then correlate_events and find_critical_path. '
+      + 'Call investigate then correlate_events, find_critical_path, '
+      + 'build_task_dependency_graph, analyze_temporal_causality, '
+      + 'rank_root_causes, and challenge_conclusion. '
       + `Then manage_hypotheses(hypothesis_id=${hid}, `
       + 'status=supported|rejected|need_evidence). '
       + 'Finish with a verdict, jump:TIME evidence, and one next check.'
@@ -1981,6 +2035,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  endSplitDrag()
   document.removeEventListener('mousedown', onDocMouseDown)
   document.removeEventListener('keydown', onDocKeyDown)
   window.removeEventListener('resize', placeMoreMenu)
@@ -2259,6 +2314,36 @@ defineExpose({
   font-size: inherit;
   line-height: 1.4;
 }
+.ai-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ai-split-top {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ai-split-handle {
+  flex: 0 0 6px;
+  margin: 2px 0;
+  cursor: ns-resize;
+  background: var(--border, #3a4658);
+  border-radius: 3px;
+}
+.ai-split-handle:hover {
+  background: var(--accent, #5b9bd5);
+}
+.ai-split-bottom {
+  flex: 0 0 auto;
+  min-height: 64px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
 .ai-ctx-menu {
   position: fixed;
   z-index: 10100;
@@ -2496,12 +2581,15 @@ defineExpose({
 }
 .ai-composer {
   position: relative;
-  flex-shrink: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
 }
 .ai-input {
   width: 100%;
+  height: 100%;
   box-sizing: border-box;
-  resize: vertical;
+  resize: none;
   min-height: 64px;
   flex-shrink: 0;
   font-size: inherit;
@@ -2566,4 +2654,12 @@ defineExpose({
   flex-shrink: 0;
 }
 .ai-status.error { color: #e07070; }
+.ai-usage-bar {
+  flex-shrink: 0;
+  font-size: 0.85em;
+  color: var(--muted, #8a96a8);
+  padding: 2px 0 0;
+  border-top: 1px solid var(--border, #3a4658);
+  min-height: 1.2em;
+}
 </style>

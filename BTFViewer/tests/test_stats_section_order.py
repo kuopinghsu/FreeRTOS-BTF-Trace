@@ -45,6 +45,8 @@ class StatsSectionOrderLayoutTest(unittest.TestCase):
     def test_apply_order_keeps_scroll_tail_last(self) -> None:
         """The viewport-tall pad must stay after every section, not between them."""
         panel = _StatsPanel()
+        self.assertIsNone(panel._trace)
+        panel.set_cursor_times([], refresh_stats=False)
         while panel._ilay.count():
             item = panel._ilay.takeAt(0)
             w = item.widget() if item is not None else None

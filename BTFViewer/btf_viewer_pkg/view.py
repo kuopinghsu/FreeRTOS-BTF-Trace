@@ -849,6 +849,7 @@ class TimelineView(QGraphicsView):
     ask_ai_event_requested       = Signal(object)  # {task, core, start, stop, ns}
     clear_bookmarks_requested   = Signal()      # clear all bookmarks
     clear_annotations_requested = Signal()      # clear all annotations
+    clear_all_marks_requested   = Signal()      # cursors + bookmarks + annotations
     pre_change                  = Signal()      # emitted before any cursor/mark mutation
 
     def __init__(self, parent=None):
@@ -909,6 +910,7 @@ class TimelineView(QGraphicsView):
         # pushes (timescale_per_px, center_ns, orth_coord, fit_mode, seg_key)
         # so that double-clicking the same segment again restores the prior view.
         self._zoom_history: list = []
+        self._ai_enabled: bool = True
 
         # Segment-boundary jump cache (populated lazily, keyed to trace obj).
         self._seg_starts_cache: List[int] = []
@@ -3121,6 +3123,16 @@ class TimelineView(QGraphicsView):
                 self.cursors_changed.emit(self._scene.cursor_times())
         self._press_pos = None
 
+    def set_ai_enabled(self, enabled: bool) -> None:
+        """Gray out timeline AI context-menu items when Settings → AI is off."""
+        self._ai_enabled = bool(enabled)
+
+    def _style_ai_menu_action(self, action) -> None:
+        on = bool(getattr(self, "_ai_enabled", True))
+        action.setEnabled(on)
+        action.setToolTip(
+            "" if on else "Enable AI Assistant in Settings → AI")
+
     def contextMenuEvent(self, event) -> None:
         # Suppress the context menu when the click lands inside the label column.
         # QContextMenuEvent uses .pos()/.globalPos() - NOT .position() (QMouseEvent only)
@@ -3159,7 +3171,7 @@ class TimelineView(QGraphicsView):
                 lambda _t=_seg_task, _c=hit_seg.core: self._scene.set_highlighted_task(
                     _task_merge_key(_t), locked=True, core_name=_c, ref_ns=hit_seg.start)
             )
-            menu.addAction(
+            act_ask = menu.addAction(
                 _svg_icon("M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4.414l-2.707 2.707A1 1 0 0 1 0 14.586V2zm2-1a1 1 0 0 0-1 1v10.586L3.293 10.5H14a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H2z", _icon_color),
                 "Ask AI about this event",
                 lambda _t=_seg_task, _c=hit_seg.core, _s=hit_seg, _ns=ns: self.ask_ai_event_requested.emit({
@@ -3170,6 +3182,7 @@ class TimelineView(QGraphicsView):
                     "ns": _ns,
                 })
             )
+            self._style_ai_menu_action(act_ask)
             menu.addSeparator()
 
         # Place cursor
@@ -3194,11 +3207,12 @@ class TimelineView(QGraphicsView):
                          self.cursors_changed.emit([]))
             )
         if len(self._scene.cursor_times()) >= 2:
-            menu.addAction(
+            act_region = menu.addAction(
                 _svg_icon("M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4.414l-2.707 2.707A1 1 0 0 1 0 14.586V2zm2-1a1 1 0 0 0-1 1v10.586L3.293 10.5H14a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H2z", _icon_color),
                 "Explain this region with AI",
                 lambda: self.explain_region_requested.emit()
             )
+            self._style_ai_menu_action(act_region)
         if self._scene._trace is not None:
             menu.addSeparator()
             # Bookmark icon - flag/ribbon shape
@@ -3229,6 +3243,21 @@ class TimelineView(QGraphicsView):
                         "Clear all annotations",
                         lambda: self.clear_annotations_requested.emit()
                     )
+        menu.addSeparator()
+        _has_cursors = bool(self._scene.cursor_times())
+        _has_bm = getattr(self, '_has_bookmarks', False)
+        _has_an = getattr(self, '_has_annotations', False)
+        act_marks = menu.addAction(
+            _svg_icon(_IC_CLEAR, _icon_color),
+            "Clear all marks",
+            lambda: self.clear_all_marks_requested.emit(),
+        )
+        _has_marks = _has_cursors or _has_bm or _has_an
+        act_marks.setEnabled(_has_marks)
+        act_marks.setToolTip(
+            "Clear all cursors, bookmarks, and annotations"
+            if _has_marks else
+            "No cursors, bookmarks, or annotations to clear")
         menu.exec(event.globalPos())
 
     # ------------------------------------------------------------------

@@ -272,7 +272,7 @@
     <step id="17" title="Export" tags="ui">
       <focus/>
       <panel name="stats"/>
-      <confirm prompt="Point at Export CSV / HTML / Trace Compare — then continue"/>
+      <confirm prompt="Point at Export CSV / HTML — then continue"/>
       <audio file="${XML_DIR}/voice/17_export.mp3"/>
     </step>
 

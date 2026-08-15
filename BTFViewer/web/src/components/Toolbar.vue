@@ -360,7 +360,7 @@
       </div>
     </Teleport>
 
-    <!-- g4: View — Task · Core · Expand All · Load · Heatmap · All · Analysis -->
+    <!-- g4: View — Task · Core · Expand All · Load · Heatmap · All · Analysis · Compare -->
     <Teleport
       :to="overflowPanelEl ?? 'body'"
       :disabled="!overflow.g4"
@@ -538,6 +538,28 @@
             />
           </svg>
           <span class="tb-label">Analysis</span>
+        </button>
+
+        <button
+          class="tb-btn tb-btn-labeled"
+          :class="{ disabled: !compareEnabled }"
+          :disabled="!compareEnabled"
+          title="Trace Compare — summary, top tasks, and core migrations between two open trace tabs"
+          @click="compareEnabled && emit('showCompare')"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            width="16"
+            height="16"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              fill-rule="evenodd"
+              :d="IC.compare"
+            />
+          </svg>
+          <span class="tb-label">Compare</span>
         </button>
         <div class="tb-sep" />
       </div>
@@ -748,6 +770,7 @@ const props = defineProps({
   traceInfo:   { type: String,  default: '' },
   heatmapEnabled: { type: Boolean, default: false },
   analysisEnabled: { type: Boolean, default: false },
+  compareEnabled: { type: Boolean, default: false },
   taskFilterActive: { type: Boolean, default: false },
   rangeEnabled: { type: Boolean, default: false },
   loading:     { type: Boolean, default: false },
@@ -767,6 +790,7 @@ const emit = defineEmits([
   'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'exportPerfetto',
   'exportSlice',
   'showHelp', 'showAbout', 'showSettings', 'showHeatmap', 'showAnalysis',
+  'showCompare',
   'clearTaskFilter', 'file-error',
 ])
 
@@ -991,7 +1015,7 @@ watch(
   stroke: #E24B4A;
 }
 
-/* Hybrid: drop short labels when the bar is tight (desktop keeps icon+text for Task/Core/Load/Analysis) */
+/* Hybrid: drop short labels when the bar is tight (desktop keeps icon+text for Task/Core/Load/Analysis/Compare) */
 @container toolbar (max-width: 1100px) {
   .tb-label {
     display: none;

@@ -366,6 +366,9 @@ class InvestigationCaseTests(unittest.TestCase):
                 "period_jitter",
                 "waiter_owner_handoff",
                 "stats_page_next_check",
+                "response_vs_blocking",
+                "preempt_matrix_vs_chain",
+                "mutex_block_vs_wait_queue",
             ],
         )
         for case in cases:
@@ -376,7 +379,7 @@ class InvestigationCaseTests(unittest.TestCase):
             self.assertIn("#scenario", text)
         result = run_offline_benchmark(root, fail_under=50)
         self.assertTrue(result["ok"], result["report"])
-        self.assertEqual(len(result["rows"]), 14)
+        self.assertEqual(len(result["rows"]), 17)
         adv_ids = {
             "adversarial_mutex_vs_starvation",
             "adversarial_exec_vs_preemption",
@@ -385,6 +388,9 @@ class InvestigationCaseTests(unittest.TestCase):
             "period_jitter",
             "waiter_owner_handoff",
             "stats_page_next_check",
+            "response_vs_blocking",
+            "preempt_matrix_vs_chain",
+            "mutex_block_vs_wait_queue",
         }
         self.assertEqual({r["id"] for r in result["rows"] if r["id"] in adv_ids}, adv_ids)
         for row in result["rows"]:

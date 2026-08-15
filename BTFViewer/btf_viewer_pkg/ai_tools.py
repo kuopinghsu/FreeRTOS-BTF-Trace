@@ -52,6 +52,20 @@ from .ai_planner import (
     score_investigation_tool,
     suggest_scope,
 )
+from .ai_causal import (
+    analyze_distribution,
+    analyze_periodicity,
+    analyze_temporal_causality,
+    build_task_dependency_graph,
+    challenge_conclusion,
+    close_investigation,
+    cluster_incidents,
+    decompose_response_time,
+    investigation_memory,
+    rank_root_causes,
+    summarize_investigation_context,
+    verify_claim,
+)
 
 AI_TOOL_SET_CURSORS = "set_cursors"
 AI_TOOL_ZOOM_TO_RANGE = "zoom_to_range"
@@ -101,6 +115,18 @@ AI_TOOL_BUILD_CAUSAL_CHAIN = "build_causal_chain"
 AI_TOOL_GENERATE_EXPERIMENT_PLAN = "generate_experiment_plan"
 AI_TOOL_RECORD_EXPERIMENT_OUTCOME = "record_experiment_outcome"
 AI_TOOL_SCORE_INVESTIGATION = "score_investigation"
+AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY = "analyze_temporal_causality"
+AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH = "build_task_dependency_graph"
+AI_TOOL_DECOMPOSE_RESPONSE_TIME = "decompose_response_time"
+AI_TOOL_RANK_ROOT_CAUSES = "rank_root_causes"
+AI_TOOL_VERIFY_CLAIM = "verify_claim"
+AI_TOOL_CHALLENGE_CONCLUSION = "challenge_conclusion"
+AI_TOOL_INVESTIGATION_MEMORY = "investigation_memory"
+AI_TOOL_CLUSTER_INCIDENTS = "cluster_incidents"
+AI_TOOL_CLOSE_INVESTIGATION = "close_investigation"
+AI_TOOL_ANALYZE_DISTRIBUTION = "analyze_distribution"
+AI_TOOL_ANALYZE_PERIODICITY = "analyze_periodicity"
+AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT = "summarize_investigation_context"
 
 AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_SET_CURSORS,
@@ -151,6 +177,18 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_GENERATE_EXPERIMENT_PLAN,
     AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
     AI_TOOL_SCORE_INVESTIGATION,
+    AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY,
+    AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH,
+    AI_TOOL_DECOMPOSE_RESPONSE_TIME,
+    AI_TOOL_RANK_ROOT_CAUSES,
+    AI_TOOL_VERIFY_CLAIM,
+    AI_TOOL_CHALLENGE_CONCLUSION,
+    AI_TOOL_INVESTIGATION_MEMORY,
+    AI_TOOL_CLUSTER_INCIDENTS,
+    AI_TOOL_CLOSE_INVESTIGATION,
+    AI_TOOL_ANALYZE_DISTRIBUTION,
+    AI_TOOL_ANALYZE_PERIODICITY,
+    AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
 )
 
 AI_BOOKMARK_KINDS: Tuple[str, ...] = (
@@ -215,6 +253,10 @@ _BTF_JUMP_HREF_RE = re.compile(
     r"btfjump:(?://)?(?:time/)?([0-9]+(?:\.[0-9]+)?)",
     re.IGNORECASE,
 )
+_BTF_RANGE_HREF_RE = re.compile(
+    r"btfrange:(?://)?(?:lo/)?([0-9]+(?:\.[0-9]+)?)/([0-9]+(?:\.[0-9]+)?)",
+    re.IGNORECASE,
+)
 _BTF_HIGHLIGHT_HREF_RE = re.compile(
     r"btfhighlight:(?://)?(?:task/)?(.+)$",
     re.IGNORECASE,
@@ -238,6 +280,28 @@ def parse_btf_jump_href(href: Any) -> Optional[float]:
         return None
     try:
         return float(m.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def btf_range_href(lo: Any, hi: Any) -> str:
+    """Chat href for ``range:LO/HI`` that survives QTextBrowser ``setHtml``."""
+    def _tok(value: Any) -> str:
+        try:
+            n = float(value)
+        except (TypeError, ValueError):
+            return "0"
+        return str(int(n)) if n.is_integer() else str(n)
+    return f"btfrange:{_tok(lo)}/{_tok(hi)}"
+
+
+def parse_btf_range_href(href: Any) -> Optional[Tuple[float, float]]:
+    """Parse ``btfrange:LO/HI``."""
+    m = _BTF_RANGE_HREF_RE.search(str(href or ""))
+    if not m:
+        return None
+    try:
+        return float(m.group(1)), float(m.group(2))
     except (TypeError, ValueError):
         return None
 
@@ -273,7 +337,12 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "plan_investigation, suggest_scope, detect_contradictions, "
     "assess_evidence_sufficiency, cluster_findings, generate_fingerprint, "
     "find_similar_investigations, regression_localize, build_causal_chain, "
-    "generate_experiment_plan, record_experiment_outcome, score_investigation. "
+    "generate_experiment_plan, record_experiment_outcome, score_investigation, "
+    "analyze_temporal_causality, build_task_dependency_graph, "
+    "decompose_response_time, rank_root_causes, verify_claim, "
+    "challenge_conclusion, investigation_memory, cluster_incidents, "
+    "close_investigation, analyze_distribution, analyze_periodicity, "
+    "summarize_investigation_context. "
     "For root-cause or Investigate templates: call plan_investigation and "
     "suggest_scope, then detect_anomalies and "
     "investigate(finding_id) first for a root-cause chain, then "
@@ -308,6 +377,12 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "state as HTML or CSV. "
     "For what-if / optimize_experiment, label results as heuristic (not FreeRTOS kernel). For optimize advice questions, label estimates as "
     "'Simulation / estimate — not measured behavior' and cite evidence. "
+    "Name the Statistics page the engineer should open next "
+    "(Timeline Anomalies, Worst Events, Response Time, Critical Path, "
+    "Period / Jitter, Unified Jitter, Recurring Patterns, Task Health, "
+    "Task × Core, Core Utilization Over Time, Preemption Matrix, "
+    "Waiter × Owner, Mutex Blocking). Those pages already exist in Statistics "
+    "— do not invent a detect_timeline_anomalies tool. "
     "Tool timestamps use the same numeric trace time "
     "unit as jump:TIME. After tools run, summarise what you changed. "
     "If you cannot emit a native function call, emit a fenced btftool JSON "
@@ -1464,6 +1539,222 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY,
+                "description": (
+                    "Order Analysis Findings in time into a happens-before chain "
+                    "(heuristic; not a kernel replay)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"task": {"type": "string"}},
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH,
+                "description": (
+                    "Build a task/resource dependency graph from BTF sync holds, "
+                    "preemption chains, migrations, and priority inheritance "
+                    "(falls back to finding wording). Optional task keeps a "
+                    "2-hop neighborhood and lists upstream tasks."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"task": {"type": "string"}},
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_DECOMPOSE_RESPONSE_TIME,
+                "description": (
+                    "Split delay into mutex, preemption, migration, execution, "
+                    "and scheduler shares (relative magnitudes)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"task": {"type": "string"}},
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_RANK_ROOT_CAUSES,
+                "description": "Rank likely root causes from findings or hypotheses.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_VERIFY_CLAIM,
+                "description": (
+                    "Check a causal claim against findings and optional cursor "
+                    "scope (SUPPORTED / PARTIAL / UNSUPPORTED)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "claim": {"type": "string"},
+                        "claim_type": {"type": "string"},
+                        "subject": {"type": "string"},
+                        "object": {"type": "string"},
+                        "evidence": {
+                            "type": "array",
+                            "items": {"type": ["string", "number"]},
+                        },
+                    },
+                    "required": ["claim"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_CHALLENGE_CONCLUSION,
+                "description": (
+                    "List alternative mechanisms and missing evidence for a "
+                    "conclusion."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"conclusion": {"type": "string"}},
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_INVESTIGATION_MEMORY,
+                "description": (
+                    "Store or recall similar past investigations "
+                    "(Desktop [ai] investigation_memory / Web localStorage)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["recall", "store", "save", "add"],
+                        },
+                        "record": {"type": "object"},
+                        "limit": {"type": "integer"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_CLUSTER_INCIDENTS,
+                "description": "Cluster findings into incidents by time proximity.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"window_ns": {"type": "number"}},
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_CLOSE_INVESTIGATION,
+                "description": "Close the investigation with a conclusion and confidence.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "conclusion": {"type": "string"},
+                        "confidence": {"type": "string"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_ANALYZE_DISTRIBUTION,
+                "description": (
+                    "Percentiles (p50/p90/p95/p99/p99.9), stddev, CV, and "
+                    "3-sigma outlier rate for BTF execution, blocking, "
+                    "priority-inheritance, or tick samples; caller values; "
+                    "or finding magnitudes."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "values": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                        },
+                        "metric": {
+                            "type": "string",
+                            "enum": [
+                                "auto",
+                                "execution",
+                                "blocking",
+                                "priority_inheritance",
+                                "tick",
+                            ],
+                        },
+                        "task": {"type": "string"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_ANALYZE_PERIODICITY,
+                "description": (
+                    "Period and jitter for tick/STI/ISR/timer/task-release "
+                    "timestamps: expected vs p50/p99/max, RMS and peak-to-peak, "
+                    "and a kind (period drift / release jitter / "
+                    "execution-time variation / scheduler interference)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "times": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                        },
+                        "expected": {"type": "number"},
+                        "source": {
+                            "type": "string",
+                            "enum": ["auto", "tick", "sti", "isr", "timer", "release"],
+                        },
+                        "task": {"type": "string"},
+                        "durations": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
+                "description": "Compact findings, hypotheses, tools, and conclusion.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "conclusion": {"type": "string"},
+                        "tools_run": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        },
     ]
 
 
@@ -1964,6 +2255,18 @@ def is_query_tool(name: str) -> bool:
         AI_TOOL_GENERATE_EXPERIMENT_PLAN,
         AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
         AI_TOOL_SCORE_INVESTIGATION,
+        AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY,
+        AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH,
+        AI_TOOL_DECOMPOSE_RESPONSE_TIME,
+        AI_TOOL_RANK_ROOT_CAUSES,
+        AI_TOOL_VERIFY_CLAIM,
+        AI_TOOL_CHALLENGE_CONCLUSION,
+        AI_TOOL_INVESTIGATION_MEMORY,
+        AI_TOOL_CLUSTER_INCIDENTS,
+        AI_TOOL_CLOSE_INVESTIGATION,
+        AI_TOOL_ANALYZE_DISTRIBUTION,
+        AI_TOOL_ANALYZE_PERIODICITY,
+        AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
     )
 
 
@@ -2428,6 +2731,96 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
             "confidence": str(a.get("confidence") or "").strip(),
             "elapsed_s": elapsed,
         }, ""
+    if name == AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY:
+        return {"task": str(a.get("task") or "").strip()}, ""
+    if name == AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH:
+        return {"task": str(a.get("task") or "").strip()}, ""
+    if name == AI_TOOL_DECOMPOSE_RESPONSE_TIME:
+        return {"task": str(a.get("task") or "").strip()}, ""
+    if name == AI_TOOL_RANK_ROOT_CAUSES:
+        return {}, ""
+    if name == AI_TOOL_VERIFY_CLAIM:
+        claim = str(a.get("claim") or "").strip()
+        if not claim:
+            return None, "claim must be a non-empty string"
+        ev = a.get("evidence")
+        if ev is not None and not isinstance(ev, (list, tuple)):
+            return None, "evidence must be an array"
+        return {
+            "claim": claim,
+            "claim_type": str(a.get("claim_type") or "causal").strip() or "causal",
+            "subject": str(a.get("subject") or "").strip(),
+            "object": str(a.get("object") or "").strip(),
+            "evidence": list(ev or []),
+        }, ""
+    if name == AI_TOOL_CHALLENGE_CONCLUSION:
+        return {"conclusion": str(a.get("conclusion") or "").strip()}, ""
+    if name == AI_TOOL_INVESTIGATION_MEMORY:
+        rec = a.get("record") if isinstance(a.get("record"), dict) else None
+        limit = a.get("limit", 5)
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            return None, "limit must be an integer"
+        return {
+            "action": str(a.get("action") or "recall").strip() or "recall",
+            "record": rec,
+            "limit": limit,
+        }, ""
+    if name == AI_TOOL_CLUSTER_INCIDENTS:
+        win = a.get("window_ns", 1e6)
+        try:
+            win = float(win)
+        except (TypeError, ValueError):
+            return None, "window_ns must be a number"
+        return {"window_ns": win}, ""
+    if name == AI_TOOL_CLOSE_INVESTIGATION:
+        return {
+            "conclusion": str(a.get("conclusion") or "").strip(),
+            "confidence": str(a.get("confidence") or "").strip(),
+        }, ""
+    if name == AI_TOOL_ANALYZE_DISTRIBUTION:
+        vals = a.get("values")
+        if vals is not None and not isinstance(vals, (list, tuple)):
+            return None, "values must be an array"
+        return {
+            "values": list(vals or []),
+            "metric": str(a.get("metric") or "").strip(),
+            "task": str(a.get("task") or "").strip(),
+        }, ""
+    if name == AI_TOOL_ANALYZE_PERIODICITY:
+        times = a.get("times")
+        if times is not None and not isinstance(times, (list, tuple)):
+            return None, "times must be an array"
+        durs = a.get("durations")
+        if durs is not None and not isinstance(durs, (list, tuple)):
+            return None, "durations must be an array"
+        expected = a.get("expected")
+        if expected not in (None, ""):
+            try:
+                expected = float(expected)
+            except (TypeError, ValueError):
+                return None, "expected must be a number"
+        else:
+            expected = None
+        src = str(a.get("source") or "auto").strip().lower() or "auto"
+        if src not in ("auto", "tick", "sti", "isr", "timer", "release"):
+            return None, "source must be auto|tick|sti|isr|timer|release"
+        return {
+            "times": list(times or []),
+            "expected": expected,
+            "source": src,
+            "task": str(a.get("task") or "").strip(),
+            "durations": list(durs or []),
+        }, ""
+    if name == AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT:
+        tools = a.get("tools_run")
+        if tools is not None and not isinstance(tools, (list, tuple)):
+            return None, "tools_run must be an array"
+        return {
+            "conclusion": str(a.get("conclusion") or "").strip(),
+            "tools_run": [str(t) for t in (tools or [])],
+        }, ""
     return None, f"unknown tool {name!r}"
 
 
@@ -2596,6 +2989,30 @@ def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
         return "Record experiment outcome"
     if name == AI_TOOL_SCORE_INVESTIGATION:
         return "Score investigation"
+    if name == AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY:
+        return "Analyze temporal causality"
+    if name == AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH:
+        return "Build task dependency graph"
+    if name == AI_TOOL_DECOMPOSE_RESPONSE_TIME:
+        return "Decompose response time"
+    if name == AI_TOOL_RANK_ROOT_CAUSES:
+        return "Rank root causes"
+    if name == AI_TOOL_VERIFY_CLAIM:
+        return "Verify claim"
+    if name == AI_TOOL_CHALLENGE_CONCLUSION:
+        return "Challenge conclusion"
+    if name == AI_TOOL_INVESTIGATION_MEMORY:
+        return "Investigation memory"
+    if name == AI_TOOL_CLUSTER_INCIDENTS:
+        return "Cluster incidents"
+    if name == AI_TOOL_CLOSE_INVESTIGATION:
+        return "Close investigation"
+    if name == AI_TOOL_ANALYZE_DISTRIBUTION:
+        return "Analyze distribution"
+    if name == AI_TOOL_ANALYZE_PERIODICITY:
+        return "Analyze periodicity"
+    if name == AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT:
+        return "Summarize investigation context"
     return name.replace("_", " ")
 
 
@@ -3573,6 +3990,433 @@ def score_investigation_metrics_tool(
     return _planner_payload(score_investigation_tool(
         findings, tools_run=tools_run, elapsed_s=elapsed_s,
         conclusion=conclusion, confidence=confidence))
+
+
+def analyze_temporal_causality_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    task: str = "",
+) -> Dict[str, Any]:
+    return _planner_payload(analyze_temporal_causality(findings, task=task))
+
+
+def dependency_trace_context(
+    trace: Any,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Compact sync / preemption / migration / PI records from a loaded trace."""
+    empty: Dict[str, Any] = {
+        "sync_holds": [],
+        "preemptions": [],
+        "migrations": [],
+        "priority_episodes": [],
+    }
+    if trace is None:
+        return empty
+    lo_i = hi_i = None
+    try:
+        if lo is not None:
+            lo_i = int(lo)
+        if hi is not None:
+            hi_i = int(hi)
+    except (TypeError, ValueError):
+        lo_i = hi_i = None
+
+    objs = getattr(trace, "sync_objects", None) or getattr(trace, "syncObjects", None) or {}
+    values = objs.values() if hasattr(objs, "values") else []
+    sync_holds: List[dict] = []
+    for obj in values:
+        if not isinstance(obj, dict):
+            continue
+        kind = str(obj.get("kind") or "")
+        key = str(obj.get("key") or f"{kind}:{obj.get('ptr') or ''}")
+        for h in obj.get("holds") or []:
+            if not isinstance(h, dict):
+                continue
+            start = h.get("start_ns") if h.get("start_ns") is not None else h.get("startNs")
+            stop = h.get("stop_ns") if h.get("stop_ns") is not None else h.get("stopNs")
+            if not _overlaps_range(start, stop, lo, hi):
+                continue
+            dur = h.get("duration_ns")
+            if dur is None:
+                dur = h.get("durationNs") or 0
+            sync_holds.append({
+                "kind": kind,
+                "key": key,
+                "holder": str(h.get("holder_label") or h.get("holderLabel") or ""),
+                "start_ns": start,
+                "stop_ns": stop,
+                "duration_ns": dur or 0,
+                "signal": bool(h.get("signal")),
+            })
+
+    preemptions: List[dict] = []
+    try:
+        from .parser import _collect_preemption_events, _task_display_name
+        agg: Dict[Tuple[str, str], dict] = {}
+        repr_map = getattr(trace, "task_repr", None) or {}
+        for mk, pre_disp, _t, duration, _seg in _collect_preemption_events(
+                trace, lo_i, hi_i):
+            raw = repr_map.get(mk, mk) if isinstance(repr_map, dict) else mk
+            victim = _task_display_name(raw)
+            rec = agg.setdefault(
+                (pre_disp, victim),
+                {"preemptor": pre_disp, "victim": victim, "count": 0, "weight": 0},
+            )
+            rec["count"] += 1
+            rec["weight"] += int(duration or 0)
+        preemptions = sorted(agg.values(), key=lambda r: -r["weight"])[:40]
+    except Exception:
+        preemptions = []
+
+    migrations: List[dict] = []
+    try:
+        from .parser import _migrations_in_range, _task_display_name
+        repr_map = getattr(trace, "task_repr", None) or {}
+        for m in _migrations_in_range(trace, lo_i, hi_i):
+            raw = repr_map.get(m.merge_key, m.merge_key) if isinstance(
+                repr_map, dict) else m.merge_key
+            migrations.append({
+                "task": _task_display_name(raw),
+                "from_core": getattr(m, "from_core", "") or "",
+                "to_core": getattr(m, "to_core", "") or "",
+            })
+    except Exception:
+        migrations = []
+
+    return {
+        "sync_holds": sync_holds,
+        "preemptions": preemptions,
+        "migrations": migrations,
+        "priority_episodes": _gather_priority_episodes(trace, lo=lo, hi=hi),
+    }
+
+
+def build_task_dependency_graph_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    task: str = "",
+    edges: Optional[Sequence[dict]] = None,
+    sync_holds: Optional[Sequence[dict]] = None,
+    preemptions: Optional[Sequence[dict]] = None,
+    migrations: Optional[Sequence[dict]] = None,
+    priority_episodes: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(build_task_dependency_graph(
+        findings,
+        edges=edges,
+        sync_holds=sync_holds,
+        preemptions=preemptions,
+        migrations=migrations,
+        priority_episodes=priority_episodes,
+        task=task,
+    ))
+
+
+def decompose_response_time_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    task: str = "",
+) -> Dict[str, Any]:
+    return _planner_payload(decompose_response_time(findings, task=task))
+
+
+def rank_root_causes_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    hypotheses: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(rank_root_causes(findings, hypotheses=hypotheses))
+
+
+def verify_claim_tool(
+    claim: str = "",
+    *,
+    claim_type: str = "causal",
+    subject: str = "",
+    object: str = "",
+    evidence: Optional[Sequence[Any]] = None,
+    findings: Optional[Sequence[dict]] = None,
+    cursor_lo: Optional[float] = None,
+    cursor_hi: Optional[float] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(verify_claim(
+        claim, claim_type=claim_type, subject=subject, object=object,
+        evidence=evidence, findings=findings,
+        cursor_lo=cursor_lo, cursor_hi=cursor_hi))
+
+
+def challenge_conclusion_tool(
+    conclusion: str = "",
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    hypotheses: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(challenge_conclusion(
+        conclusion, findings=findings, hypotheses=hypotheses))
+
+
+def investigation_memory_tool(
+    action: str = "recall",
+    *,
+    record: Optional[dict] = None,
+    findings: Optional[Sequence[dict]] = None,
+    limit: int = 5,
+) -> Dict[str, Any]:
+    return _planner_payload(investigation_memory(
+        action, record=record, findings=findings, limit=limit))
+
+
+def cluster_incidents_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    window_ns: float = 1e6,
+) -> Dict[str, Any]:
+    return _planner_payload(cluster_incidents(findings, window_ns=window_ns))
+
+
+def close_investigation_tool(
+    conclusion: str = "",
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    experiments: Optional[Sequence[dict]] = None,
+    confidence: str = "",
+) -> Dict[str, Any]:
+    return _planner_payload(close_investigation(
+        conclusion, findings=findings, experiments=experiments,
+        confidence=confidence))
+
+
+def analyze_distribution_tool(
+    values: Optional[Sequence[Any]] = None,
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    metric: str = "",
+    source: str = "",
+    task: str = "",
+    truncated: bool = False,
+) -> Dict[str, Any]:
+    return _planner_payload(analyze_distribution(
+        values, findings=findings, metric=metric, source=source,
+        task=task, truncated=truncated))
+
+
+_DIST_MAX_SAMPLES = 8000
+_DIST_METRIC_ALIASES = {
+    "execution": "execution",
+    "wcet": "execution",
+    "cpu": "execution",
+    "slices": "execution",
+    "blocking": "blocking",
+    "block": "blocking",
+    "wait": "blocking",
+    "latency": "blocking",
+    "response": "blocking",
+    "priority_inheritance": "priority_inheritance",
+    "priority": "priority_inheritance",
+    "pi": "priority_inheritance",
+    "inherit": "priority_inheritance",
+    "tick": "tick",
+    "jitter": "tick",
+    "period": "tick",
+}
+
+
+def normalize_distribution_metric(metric: str, task: str = "") -> str:
+    raw = str(metric or "").strip().lower()
+    if raw in ("", "auto"):
+        return "execution" if str(task or "").strip() else "tick"
+    return _DIST_METRIC_ALIASES.get(
+        raw, "execution" if str(task or "").strip() else "tick")
+
+
+def distribution_trace_context(
+    trace: Any,
+    task: str = "",
+    metric: str = "",
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Harvest BTF sample values for analyze_distribution (cap 8000)."""
+    kind = normalize_distribution_metric(metric, task)
+    values: List[float] = []
+    resolved = ""
+    if kind == "tick":
+        times = list(getattr(trace, "tick_sti_times", None) or getattr(
+            trace, "tickStiTimes", None) or [])
+        prev = None
+        for raw in times:
+            try:
+                t = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if lo is not None and t < lo:
+                continue
+            if hi is not None and t > hi:
+                continue
+            if prev is not None and t > prev:
+                values.append(t - prev)
+                if len(values) >= _DIST_MAX_SAMPLES:
+                    break
+            prev = t
+        return {
+            "values": values,
+            "metric": kind,
+            "source": "btf",
+            "truncated": len(values) >= _DIST_MAX_SAMPLES,
+            "task": "",
+        }
+
+    want = str(task or "").strip()
+    if want and trace is not None:
+        resolved = resolve_task_key(want, _task_candidates_from_trace(trace)) or ""
+    if not resolved:
+        return {
+            "values": [],
+            "metric": kind,
+            "source": "btf",
+            "truncated": False,
+            "task": want,
+        }
+    try:
+        from .parser import _task_merge_key
+        mk = _task_merge_key(resolved)
+    except Exception:
+        mk = resolved
+    segs = _segs_for_mk(trace, mk) or _segs_for_mk(trace, resolved)
+    if kind == "execution":
+        for seg in segs:
+            start = getattr(seg, "start", None) if not isinstance(seg, dict) else seg.get("start")
+            end = getattr(seg, "end", None) if not isinstance(seg, dict) else seg.get("end")
+            if start is None or end is None or not _overlaps_range(start, end, lo, hi):
+                continue
+            dur = int(end) - int(start)
+            if lo is not None and hi is not None:
+                dur = max(0, min(int(end), int(hi)) - max(int(start), int(lo)))
+            if dur > 0:
+                values.append(float(dur))
+            if len(values) >= _DIST_MAX_SAMPLES:
+                break
+    elif kind == "blocking":
+        ordered = sorted(
+            segs,
+            key=lambda s: getattr(s, "start", None) if not isinstance(s, dict) else s.get("start"),
+        )
+        for prev, nxt in zip(ordered, ordered[1:]):
+            prev_end = getattr(prev, "end", None) if not isinstance(prev, dict) else prev.get("end")
+            nxt_start = getattr(nxt, "start", None) if not isinstance(nxt, dict) else nxt.get("start")
+            if prev_end is None or nxt_start is None:
+                continue
+            gap = int(nxt_start) - int(prev_end)
+            if gap <= 0 or not _in_time_range(nxt_start, lo, hi):
+                continue
+            values.append(float(gap))
+            if len(values) >= _DIST_MAX_SAMPLES:
+                break
+    elif kind == "priority_inheritance":
+        by_mk = getattr(trace, "priority_episodes_by_mk", None) or getattr(
+            trace, "priorityEpisodesByMk", None)
+        eps: List[Any] = []
+        if isinstance(by_mk, dict):
+            eps = list(by_mk.get(mk) or [])
+        elif by_mk is not None and hasattr(by_mk, "get"):
+            eps = list(by_mk.get(mk) or [])
+        if not eps:
+            all_eps = getattr(trace, "priority_episodes", None) or getattr(
+                trace, "priorityEpisodes", None) or []
+            for ep in all_eps:
+                ep_mk = getattr(ep, "mk", None) or (
+                    ep.get("mk") if isinstance(ep, dict) else "")
+                if ep_mk == mk:
+                    eps.append(ep)
+        for ep in eps:
+            start = getattr(ep, "start_ns", None)
+            stop = getattr(ep, "stop_ns", None)
+            if start is None and isinstance(ep, dict):
+                start = ep.get("startNs") or ep.get("start_ns")
+                stop = ep.get("stopNs") or ep.get("stop_ns")
+            if start is None or stop is None or not _overlaps_range(start, stop, lo, hi):
+                continue
+            dur = int(stop) - int(start)
+            if dur > 0:
+                values.append(float(dur))
+            if len(values) >= _DIST_MAX_SAMPLES:
+                break
+    return {
+        "values": values,
+        "metric": kind,
+        "source": "btf",
+        "truncated": len(values) >= _DIST_MAX_SAMPLES,
+        "task": str(resolved),
+    }
+
+
+def periodicity_trace_context(trace: Any, task: str = "") -> Dict[str, Any]:
+    """Tick / STI / task-release timestamps from a loaded trace."""
+    tick = list(getattr(trace, "tick_sti_times", None) or getattr(
+        trace, "tickStiTimes", None) or [])
+    sti: List[dict] = []
+    for ev in getattr(trace, "sti_events", None) or getattr(trace, "stiEvents", None) or []:
+        if isinstance(ev, dict):
+            sti.append(ev)
+            continue
+        sti.append({
+            "time": getattr(ev, "time", None),
+            "target": getattr(ev, "target", None),
+            "event": getattr(ev, "event", None),
+            "note": getattr(ev, "note", None),
+        })
+    releases: List[float] = []
+    want = str(task or "").strip()
+    if want and trace is not None:
+        resolved = resolve_task_key(want, _task_candidates_from_trace(trace))
+        if resolved:
+            try:
+                from .parser import _task_merge_key
+                mk = _task_merge_key(resolved)
+            except Exception:
+                mk = resolved
+            for s in _segs_for_mk(trace, mk) or _segs_for_mk(trace, resolved):
+                t = getattr(s, "start", None)
+                if t is None and isinstance(s, dict):
+                    t = s.get("start")
+                try:
+                    releases.append(float(t))
+                except (TypeError, ValueError):
+                    continue
+    return {"tick_times": tick, "sti_events": sti, "release_times": releases}
+
+
+def analyze_periodicity_tool(
+    times: Optional[Sequence[Any]] = None,
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    expected: Optional[float] = None,
+    source: str = "",
+    durations: Optional[Sequence[Any]] = None,
+    tick_times: Optional[Sequence[Any]] = None,
+    sti_events: Optional[Sequence[dict]] = None,
+    release_times: Optional[Sequence[Any]] = None,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(analyze_periodicity(
+        times, findings=findings, expected=expected, source=source,
+        durations=durations, tick_times=tick_times, sti_events=sti_events,
+        release_times=release_times, lo=lo, hi=hi))
+
+
+def summarize_investigation_context_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    hypotheses: Optional[Sequence[dict]] = None,
+    tools_run: Optional[Sequence[str]] = None,
+    conclusion: str = "",
+) -> Dict[str, Any]:
+    return _planner_payload(summarize_investigation_context(
+        findings, hypotheses=hypotheses, tools_run=tools_run,
+        conclusion=conclusion))
 
 
 def _events_from_metric_payload(payload: Dict[str, Any], metric: str, task: str) -> List[dict]:

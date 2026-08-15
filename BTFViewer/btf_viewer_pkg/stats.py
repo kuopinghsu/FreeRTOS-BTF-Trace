@@ -25,6 +25,36 @@ from .config import (  # private symbols are not pulled in by import *
     normalize_stats_section_order,
 )
 from .html_report import btf_html_report_document
+from .ux_explore import (
+    HEALTH_BAND_SECTION,
+    HEALTH_MARK,
+    KIND_LABEL,
+    KIND_SECTION,
+    analyze_response_times,
+    analyze_task_periods,
+    best_finding_scope,
+    collect_worst_events,
+    core_util_over_time,
+    critical_path_rows,
+    detect_timeline_anomalies,
+    distribution_explorer,
+    distribution_metric_samples,
+    DISTRIBUTION_KINDS,
+    harvest_mutex_holds,
+    harvest_ux_events,
+    health_inputs_from_events,
+    mutex_blocking_table,
+    pair_mutex_waits,
+    preemption_matrix,
+    preemption_pairs,
+    preemptor_ranking,
+    recurring_patterns,
+    top_blocking_contributors,
+    task_core_matrix,
+    task_health_scores,
+    unified_jitter,
+    waiter_owner_matrix,
+)
 from .parser import *  # noqa: F403,F401
 from .parser import (  # private symbols are not pulled in by import *
     _gini_coefficient,
@@ -975,7 +1005,7 @@ class _ScatterWidget(QWidget):
 
     @staticmethod
     def _marker_right_margin(fm) -> int:
-        labels = ("min", "avg", "p50", "p95", "max")
+        labels = ("min", "avg", "p5", "p50", "p95", "max")
         return max(14, max(fm.horizontalAdvance(lbl) for lbl in labels) + 12)
 
     def paintEvent(self, event) -> None:  # noqa: N802
@@ -1026,6 +1056,7 @@ class _ScatterWidget(QWidget):
         p.setPen(txt)
         vals_sorted = sorted(ys)
         n = len(vals_sorted)
+        p5_val = vals_sorted[min(n - 1, math.ceil(n * 0.05) - 1)]
         p50_val = vals_sorted[min(n - 1, math.ceil(n * 0.50) - 1)]
         avg_val = sum(ys) / len(ys) if ys else 0
         stddev_val = math.sqrt(
@@ -1065,6 +1096,7 @@ class _ScatterWidget(QWidget):
 
         ref_lines = [
             (avg_val, "avg", QColor("#CE93D8")),
+            (p5_val, "p5", QColor("#29B6F6")),
             (p50_val, "p50", QColor("#4CAF50")),
             (p95_val, "p95", QColor("#FF9800")),
         ]
@@ -1416,7 +1448,8 @@ def _hist_value_to_x(value: float, bin_spec: dict, plot_w: int, margin_left: int
     return region_left + int(t * regular_w)
 
 def _hist_build_bar_layout(bin_spec: dict, plot_w: int, plot_h: int,
-                           margin_left: int, margin_top: int, log_y: bool) -> tuple:
+                           margin_left: int, margin_top: int, log_y: bool,
+                           summary: dict) -> tuple:
     counts = bin_spec["counts"]
     edges = bin_spec["edges"]
     overflow = bin_spec["overflow"]
@@ -1439,18 +1472,35 @@ def _hist_build_bar_layout(bin_spec: dict, plot_w: int, plot_h: int,
     if has_underflow:
         h = count_height(underflow)
         bars.append((margin_left + int(slot * slot_w), margin_top + plot_h - h,
-                     max(1, int(slot_w) - 1), h, "underflow"))
+                     max(1, int(slot_w) - 1), h, "underflow", underflow,
+                     summary["min"], bin_spec["display_min"]))
         slot += 1
     for i, cnt in enumerate(counts):
         h = count_height(cnt)
         bars.append((margin_left + int(slot * slot_w), margin_top + plot_h - h,
-                     max(1, int(slot_w) - 1), h, "regular"))
+                     max(1, int(slot_w) - 1), h, "regular", cnt,
+                     edges[i], edges[i + 1]))
         slot += 1
     if has_overflow:
         h = count_height(overflow)
         bars.append((margin_left + int(slot * slot_w), margin_top + plot_h - h,
-                     max(1, int(slot_w) - 1), h, "overflow"))
+                     max(1, int(slot_w) - 1), h, "overflow", overflow,
+                     bin_spec["display_max"], summary["max"]))
     return bars, max_count, slot_count, slot_w
+
+
+def _hist_bar_tip_lines(kind: str, count: int, edge_lo: float, edge_hi: float,
+                        n: int, time_scale: str, *, value_as_time: bool) -> tuple:
+    if kind == "underflow":
+        line1 = "< p5"
+    elif kind == "overflow":
+        line1 = "> p95"
+    else:
+        lo = _hist_format_axis_value(edge_lo, time_scale, value_as_time=value_as_time)
+        hi = _hist_format_axis_value(edge_hi, time_scale, value_as_time=value_as_time)
+        line1 = f"{lo}–{hi}"
+    pct = int(round(100.0 * count / n)) if n else 0
+    return line1, f"{count} of {n} ({pct}%)"
 
 def _hist_build_caption(scale_mode: str, summary: dict, bin_spec: dict,
                         log_y: bool, time_scale: str,
@@ -1494,7 +1544,7 @@ def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto",
     log_y = _hist_should_use_log_y(
         bin_spec["counts"] + [bin_spec["overflow"], bin_spec["underflow"]])
     bars, max_count, slot_count, slot_w = _hist_build_bar_layout(
-        bin_spec, plot_w, plot_h, margin_left, margin_top, log_y)
+        bin_spec, plot_w, plot_h, margin_left, margin_top, log_y, summary)
     _sc, _sw, leading, regular_slots, regular_w = _hist_slot_layout(bin_spec, plot_w)
     region_left = margin_left + int(leading * _sw)
 
@@ -1572,6 +1622,7 @@ def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto",
 
     refs = [
         (summary["avg"], "avg", QColor("#CE93D8")),
+        (summary["p5"], "p5", QColor("#29B6F6")),
         (summary["p50"], "p50", QColor("#4CAF50")),
         (summary["p95"], "p95", QColor("#FF9800")),
     ]
@@ -1605,6 +1656,7 @@ def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto",
         "margin_bottom": margin_bottom,
         "plot_w": plot_w,
         "plot_h": plot_h,
+        "n": n,
         "bars": bars,
         "x_ticks": x_ticks,
         "y_ticks": y_ticks,
@@ -1630,8 +1682,13 @@ class _HistogramWidget(QWidget):
         self._scale_mode  = "auto"
         self._value_as_time = value_as_time
         self._show_variability = bool(show_variability)
+        self._hover_idx = -1
+        self._hit_slots = []
+        self._plot_top = 0
+        self._plot_bot = 0
         self.setMinimumHeight(140)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMouseTracking(True)
 
     def set_values(self, values: list) -> None:
         """Replace histogram samples and repaint."""
@@ -1682,7 +1739,7 @@ class _HistogramWidget(QWidget):
         sf = QFont(); sf.setPointSize(7)
         p.setFont(sf)
         fm = p.fontMetrics()
-        marker_labels = ("min", "avg", "p50", "p95", "max")
+        marker_labels = ("min", "avg", "p5", "p50", "p95", "max")
         MR_labels = max(14, max(fm.horizontalAdvance(lbl) for lbl in marker_labels) + 10)
         pw = w - ML - MR_labels
         ph = h - MT - MB
@@ -1735,14 +1792,24 @@ class _HistogramWidget(QWidget):
 
         # Bars
         bar_color = QColor(self._color); bar_color.setAlpha(180)
+        hover_color = QColor(self._color); hover_color.setAlpha(255)
         overflow_color = QColor(self._color); overflow_color.setAlpha(100)
+        overflow_hover = QColor(self._color); overflow_hover.setAlpha(170)
         p.setPen(Qt.PenStyle.NoPen)
-        for bx, by, bw, bh, kind in model["bars"]:
+        self._hit_slots = []
+        self._plot_top = MT
+        self._plot_bot = MT + ph
+        for i, (bx, by, bw, bh, kind, count, edge_lo, edge_hi) in enumerate(model["bars"]):
             x = int(ML + (bx - model["margin_left"]) * scale)
             y = int(MT + (by - model["margin_top"]) * ph / max(1, model["plot_h"]))
             bar_h = int(bh * ph / max(1, model["plot_h"]))
             bar_w = max(1, int(bw * scale))
-            p.setBrush(QBrush(overflow_color if kind in ("overflow", "underflow") else bar_color))
+            self._hit_slots.append((x, bar_w, y, kind, count, edge_lo, edge_hi))
+            hovered = i == self._hover_idx
+            if kind in ("overflow", "underflow"):
+                p.setBrush(QBrush(overflow_hover if hovered else overflow_color))
+            else:
+                p.setBrush(QBrush(hover_color if hovered else bar_color))
             p.drawRect(x, y, bar_w, bar_h)
 
         # CDF line
@@ -1765,7 +1832,58 @@ class _HistogramWidget(QWidget):
             p.setFont(sf)
             p.drawText(x + 3, MT + 12, lbl_text)
 
+        if 0 <= self._hover_idx < len(self._hit_slots):
+            hx, hw, hy, kind, count, edge_lo, edge_hi = self._hit_slots[self._hover_idx]
+            line1, line2 = _hist_bar_tip_lines(
+                kind, count, edge_lo, edge_hi, model["n"], self._time_scale,
+                value_as_time=self._value_as_time)
+            tf = QFont(); tf.setPointSize(8)
+            p.setFont(tf)
+            fm = p.fontMetrics()
+            tw = max(fm.horizontalAdvance(line1), fm.horizontalAdvance(line2))
+            th = fm.height() * 2 + 6
+            pad = 6
+            bw_ = tw + pad * 2
+            bh_ = th + pad * 2
+            cx = hx + hw // 2
+            bx = cx + 10
+            by = hy - bh_ // 2
+            if bx + bw_ > w - 2:
+                bx = cx - bw_ - 10
+            if by < 2:
+                by = 2
+            if by + bh_ > h - 2:
+                by = h - bh_ - 2
+            bg2 = QColor("#2A2A2A") if dark else QColor("#F0F0F0")
+            bg2.setAlpha(230)
+            border_c = QColor("#555555") if dark else QColor("#BBBBBB")
+            p.setBrush(QBrush(bg2))
+            p.setPen(QPen(border_c, 1))
+            p.drawRoundedRect(bx, by, bw_, bh_, 4, 4)
+            p.setPen(QColor("#EEEEEE") if dark else QColor("#222222"))
+            p.drawText(bx + pad, by + pad + fm.ascent(), line1)
+            p.setPen(QColor("#AAAAAA") if dark else QColor("#666666"))
+            p.drawText(bx + pad, by + pad + fm.height() + fm.ascent(), line2)
+
         p.end()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        ex = event.position().x()
+        ey = event.position().y()
+        idx = -1
+        if self._plot_top <= ey <= self._plot_bot:
+            for i, (sx, sw, *_rest) in enumerate(self._hit_slots):
+                if sx <= ex <= sx + sw:
+                    idx = i
+                    break
+        if idx != self._hover_idx:
+            self._hover_idx = idx
+            self.update()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        if self._hover_idx != -1:
+            self._hover_idx = -1
+            self.update()
 
 _MIG_PLOT_TABS = (("mig_dwell", "Dwell"), ("mig_rate", "Rate"), ("mig_gap", "Gap"))
 _PAIR_PLOT_TABS = (("pair_gap", "Gap"), ("pair_rate", "Rate"))
@@ -1797,6 +1915,8 @@ class _MetricsPlotDialog(QDialog):
                  on_tab_change=None,
                  on_open_heatmap=None,
                  on_open_chord=None,
+                 ai_enabled: bool = True,
+                 on_query_ai=None,
                  parent=None) -> None:
         super().__init__(parent, Qt.WindowType.Window)
         self._title        = title
@@ -1805,8 +1925,10 @@ class _MetricsPlotDialog(QDialog):
         self._on_tab_change = on_tab_change
         self._on_open_heatmap = on_open_heatmap
         self._on_open_chord = on_open_chord
+        self._on_query_ai = on_query_ai
         self._btn_open_heatmap: Optional[QPushButton] = None
         self._btn_open_chord: Optional[QPushButton] = None
+        self._btn_query_ai: Optional[QPushButton] = None
         self.setWindowTitle(title)
         self.resize(820, 620)
         self.setMinimumSize(500, 400)
@@ -1841,6 +1963,7 @@ class _MetricsPlotDialog(QDialog):
 
         self._scope_banner = QLabel()
         self._scope_banner.setWordWrap(True)
+        self._scope_banner.setMinimumWidth(0)
         self._scope_scoped = scope_scoped
         self._scope_badge = scope_badge
         self._scope_detail = scope_detail
@@ -1878,8 +2001,10 @@ class _MetricsPlotDialog(QDialog):
         self._scatter.point_clicked.connect(self._on_scatter_click)
 
         splitter = _ResizeSplitter(Qt.Orientation.Vertical)
+        splitter.setChildrenCollapsible(False)
         splitter.addWidget(self._scatter)
         hist_panel = QWidget()
+        hist_panel.setMinimumHeight(180)
         hist_layout = QVBoxLayout(hist_panel)
         hist_layout.setContentsMargins(0, 0, 0, 0)
         hist_layout.setSpacing(2)
@@ -1888,6 +2013,8 @@ class _MetricsPlotDialog(QDialog):
         splitter.addWidget(hist_panel)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
+        splitter.setSizes([380, 240])
+        self._splitter = splitter
         cl.addWidget(splitter)
 
         root.addWidget(self._content, 1)
@@ -1920,8 +2047,31 @@ class _MetricsPlotDialog(QDialog):
             btn_row.addWidget(btn_ch)
             self._btn_open_chord = btn_ch
         btn_row.addStretch()
+        btn_ai = QPushButton("Query with AI…")
+        btn_ai.clicked.connect(self._query_with_ai)
+        btn_row.addWidget(btn_ai)
+        self._btn_query_ai = btn_ai
+        self.set_ai_enabled(ai_enabled)
         btn_row.addWidget(btn_cls)
         root.addLayout(btn_row)
+
+    def set_ai_enabled(self, enabled: bool) -> None:
+        """Gray out Query with AI… when Settings → AI is off."""
+        btn = getattr(self, "_btn_query_ai", None)
+        if btn is None:
+            return
+        on = bool(enabled)
+        btn.setEnabled(on)
+        btn.setToolTip(
+            "Open the AI Assistant and explain this distribution"
+            if on else
+            "Enable AI Assistant in Settings → AI")
+
+    def _query_with_ai(self) -> None:
+        if self._btn_query_ai is None or not self._btn_query_ai.isEnabled():
+            return
+        if self._on_query_ai is not None:
+            self._on_query_ai()
 
     @staticmethod
     def _tab_button_stylesheet(is_dark: bool) -> str:
@@ -2008,6 +2158,29 @@ class _MetricsPlotDialog(QDialog):
         modes = ("auto", "linear", "percentile", "log")
         if 0 <= index < len(modes):
             self._histogram.set_scale_mode(modes[index])
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._fit_plot_panes()
+
+    def _fit_plot_panes(self) -> None:
+        """Keep scatter + histogram both on screen (splitter otherwise collapses)."""
+        screen = self.screen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            max_h = max(420, int(avail.height()) - 64)
+            max_w = max(500, int(avail.width()) - 64)
+            w = min(max(self.width(), 500), max_w)
+            h = min(max(self.height(), 480), max_h)
+            if w != self.width() or h != self.height():
+                self.resize(w, h)
+        spl = getattr(self, "_splitter", None)
+        if spl is None:
+            return
+        total = max(280, int(spl.height()) or (int(self.height()) - 140))
+        hist = max(180, int(total * 0.42))
+        scatter = max(160, total - hist)
+        spl.setSizes([scatter, hist])
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self.closed.emit()
@@ -2649,6 +2822,16 @@ class _TraceCompareDialog(QDialog):
         self._scope_cb.setChecked(True)
         lay.addWidget(self._scope_cb)
 
+        self._strip = QLabel("")
+        self._strip.setWordWrap(True)
+        self._strip.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._strip.setStyleSheet(
+            "QLabel { color: #9a9a9a; padding: 6px 8px; border-radius: 6px;"
+            " background: rgba(52, 152, 219, 0.10); }")
+        self._strip.hide()
+        lay.addWidget(self._strip)
+
         self._pages = QTabWidget()
         self._summary_table = QTableWidget(0, 4)
         self._summary_table.setHorizontalHeaderLabels(
@@ -2679,10 +2862,17 @@ class _TraceCompareDialog(QDialog):
         self._sync_table = QTableWidget(0, 4)
         self._sync_table.setHorizontalHeaderLabels(
             ["Metric", "Trace A", "Trace B", "Δ"])
+        self._response_table = QTableWidget(0, 4)
+        self._response_table.setHorizontalHeaderLabels(
+            ["Task", "P99 A", "P99 B", "Δ"])
+        self._mutex_table = QTableWidget(0, 4)
+        self._mutex_table.setHorizontalHeaderLabels(
+            ["Task", "Total A", "Total B", "Δ"])
         self._all_tables = (
             self._summary_table, self._top_table, self._core_util_table,
             self._mig_table, self._exec_table, self._block_table,
             self._inter_table, self._preempt_table, self._sync_table,
+            self._response_table, self._mutex_table,
         )
         for tbl in self._all_tables:
             tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -2697,6 +2887,8 @@ class _TraceCompareDialog(QDialog):
         self._pages.addTab(self._inter_table, "Inter-Arrival")
         self._pages.addTab(self._preempt_table, "Preemption")
         self._pages.addTab(self._sync_table, "Sync")
+        self._pages.addTab(self._response_table, "Response")
+        self._pages.addTab(self._mutex_table, "Mutex")
         lay.addWidget(self._pages, 1)
 
         exp_row = QHBoxLayout()
@@ -2797,6 +2989,11 @@ class _TraceCompareDialog(QDialog):
             return None
         return self._win._tabs[idx].trace
 
+    def _compare_deadlines(self) -> dict:
+        panel = getattr(self._win, "_stats_panel", None)
+        raw = getattr(panel, "_task_deadlines_ns", None) if panel is not None else None
+        return dict(raw) if raw else {}
+
     def _compare_args(self):
         ta = self._trace_for_combo(self._combo_a)
         tb = self._trace_for_combo(self._combo_b)
@@ -2823,8 +3020,12 @@ class _TraceCompareDialog(QDialog):
         if args is None:
             for tbl in self._all_tables:
                 tbl.setRowCount(0)
+            if getattr(self, "_strip", None) is not None:
+                self._strip.hide()
             return
-        tables = _build_trace_compare_rows(*args)
+        tables = _build_trace_compare_rows(
+            *args, deadlines=self._compare_deadlines())
+        self._update_compare_strip(tables)
         if self._on_compare is not None:
             try:
                 self._on_compare(
@@ -2843,6 +3044,29 @@ class _TraceCompareDialog(QDialog):
         self._fill_table(self._inter_table, tables.get("inter_arrival", []))
         self._fill_table(self._preempt_table, tables.get("preemption", []))
         self._fill_table(self._sync_table, tables.get("sync", []))
+        self._fill_table(self._response_table, tables.get("response", []))
+        self._fill_table(self._mutex_table, tables.get("mutex_block", []))
+
+    def _update_compare_strip(self, tables: dict) -> None:
+        strip = getattr(self, "_strip", None)
+        if strip is None:
+            return
+        data = compare_summary_strip(tables or {}, 4)
+        parts = [f"{h['label']} {h['delta']}" for h in data.get("headline") or []]
+        regs = data.get("regressions") or []
+        if regs:
+            parts.append(
+                "Largest regressions: "
+                + " · ".join(f"{r['label']} {r['delta']}" for r in regs)
+            )
+        if data.get("why"):
+            parts.append(str(data["why"]))
+        text = "  ·  ".join(parts)
+        if text:
+            strip.setText(text)
+            strip.show()
+        else:
+            strip.hide()
 
     def _tab_name(self, combo: QComboBox) -> str:
         return combo.currentText() or "Trace"
@@ -2863,7 +3087,8 @@ class _TraceCompareDialog(QDialog):
         if not path:
             return
 
-        tables = _build_trace_compare_rows(*args)
+        tables = _build_trace_compare_rows(
+            *args, deadlines=self._compare_deadlines())
         text = _build_compare_csv(
             self._tab_name(self._combo_a),
             self._tab_name(self._combo_b),
@@ -2897,7 +3122,8 @@ class _TraceCompareDialog(QDialog):
         if not path:
             return
 
-        tables = _build_trace_compare_rows(*args)
+        tables = _build_trace_compare_rows(
+            *args, deadlines=self._compare_deadlines())
         report = _build_compare_html(
             self._tab_name(self._combo_a),
             self._tab_name(self._combo_b),
@@ -6983,10 +7209,18 @@ class _AnalysisFindingsDialog(QDialog):
     """Toolbar Analysis dialog — lists heuristic findings for the current scope."""
 
     def __init__(self, findings: List[dict], scope_title: str = "", parent=None,
-                 ai_enabled: bool = True, ui_font_size: int = UI_FONT_SIZE):
+                 ai_enabled: bool = True, ui_font_size: int = UI_FONT_SIZE,
+                 on_apply_scope=None, scope_hint: str = "",
+                 ux_events: Optional[List[dict]] = None,
+                 time_min: int = 0, time_max: int = 0):
         super().__init__(parent)
         self._findings = findings or []
         self._scope_title = scope_title or ""
+        self._on_apply_scope = on_apply_scope
+        self._scope_hint = scope_hint or ""
+        self._ux_events = ux_events or []
+        self._time_min = int(time_min or 0)
+        self._time_max = int(time_max or 0)
         self.wants_ai_query = False
         self._ai_needs_settings = False
         self.wants_ai_finding_id = ""
@@ -7061,14 +7295,14 @@ class _AnalysisFindingsDialog(QDialog):
                 item.setSizeHint(QSize(wrap_w, max(min_h, body_h + pad)))
                 list_w.addItem(item)
             list_w.setCurrentRow(0)
+            list_w.currentItemChanged.connect(lambda *_: self._refresh_scope_hint())
         else:
             empty = QListWidgetItem("No findings for the current scope")
             empty.setFlags(Qt.ItemFlag.NoItemFlags)
             empty.setFont(ui_font)
             list_w.addItem(empty)
 
-        def _make_ai_btn(label: str, tip_on: str, tip_off: str, template: str,
-                         *, primary: bool = False) -> QPushButton:
+        def _make_ai_btn(label: str, tip_on: str, tip_off: str, template: str) -> QPushButton:
             btn = QPushButton(label)
             btn.setFont(ui_font)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -7081,21 +7315,10 @@ class _AnalysisFindingsDialog(QDialog):
             fm = btn.fontMetrics()
             btn.setMinimumWidth(fm.horizontalAdvance(label) + 36)
             btn.setToolTip(tip_on if ai_enabled else tip_off)
-            if primary:
-                btn.setStyleSheet(
-                    "QPushButton {"
-                    f"  padding: 7px 16px; border-radius: 6px; font-size: {ui_fs};"
-                    "  background: #3498db; color: white; border: none;"
-                    "  font-weight: 600;"
-                    "}"
-                    "QPushButton:hover { background: #5dade2; }"
-                    "QPushButton:pressed { background: #2e86c1; }"
-                )
-            else:
-                btn.setStyleSheet(
-                    f"QPushButton {{ padding: 7px 16px; border-radius: 6px;"
-                    f" font-size: {ui_fs}; }}"
-                )
+            btn.setStyleSheet(
+                f"QPushButton {{ padding: 7px 16px; border-radius: 6px;"
+                f" font-size: {ui_fs}; }}"
+            )
             btn.clicked.connect(
                 lambda _checked=False, t=template: self._query_with_ai(
                     ai_enabled, t))
@@ -7147,7 +7370,6 @@ class _AnalysisFindingsDialog(QDialog):
                 "Open the AI Assistant and investigate the top findings with tools",
                 "Enable AI Assistant in Settings → AI",
                 "investigate",
-                primary=True,
             ),
             _make_ai_btn(
                 "Root cause…",
@@ -7226,9 +7448,32 @@ class _AnalysisFindingsDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 14, 16, 14)
         lay.setSpacing(12)
+        scope_row = QHBoxLayout()
+        scope_row.setContentsMargins(0, 0, 0, 0)
+        scope_row.setSpacing(8)
+        self._scope_lbl = QLabel(self._scope_hint or "Select a finding to recommend a cursor window.")
+        self._scope_lbl.setWordWrap(True)
+        self._scope_lbl.setStyleSheet(
+            f"color: #9a9a9a; font-size: {ui_fs};")
+        apply_scope = QPushButton("Apply cursors")
+        apply_scope.setFont(ui_font)
+        apply_scope.setCursor(Qt.CursorShape.PointingHandCursor)
+        apply_scope.setToolTip(
+            "Place C1–C2 on the recommended window and zoom the timeline")
+        apply_scope.setStyleSheet(
+            f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
+            f" font-size: {ui_fs}; }}"
+        )
+        apply_scope.clicked.connect(self._apply_recommended_scope)
+        apply_scope.setEnabled(self._on_apply_scope is not None)
+        scope_row.addWidget(self._scope_lbl, 1)
+        scope_row.addWidget(apply_scope, 0)
+
         lay.addWidget(note)
         lay.addWidget(list_w, 1)
+        lay.addLayout(scope_row)
         lay.addLayout(footer)
+        self._refresh_scope_hint()
 
         # Ensure the dialog is at least as wide as the Ask-AI button row.
         footer_w = sum(b.minimumWidth() for b in ai_btns) + 10 * (len(ai_btns) - 1) + 48
@@ -7236,6 +7481,43 @@ class _AnalysisFindingsDialog(QDialog):
             self.setMinimumWidth(footer_w)
         if self.width() < footer_w:
             self.resize(footer_w, self.height())
+
+    def _selected_finding(self) -> Optional[dict]:
+        item = self._list_w.currentItem()
+        if item is None:
+            return None
+        fid = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        for f in self._findings:
+            if str(f.get("id") or "") == fid:
+                return f
+        return self._findings[0] if self._findings else None
+
+    def _refresh_scope_hint(self) -> None:
+        lbl = getattr(self, "_scope_lbl", None)
+        if lbl is None:
+            return
+        finding = self._selected_finding()
+        if finding is None:
+            lbl.setText("Select a finding to recommend a cursor window.")
+            return
+        title = str(finding.get("title") or "Finding").strip()
+        events = getattr(self, "_ux_events", None) or []
+        tmin = int(getattr(self, "_time_min", 0) or 0)
+        tmax = int(getattr(self, "_time_max", 0) or 0)
+        if events:
+            scope = best_finding_scope(finding, events, tmin, tmax)
+            if scope and scope.get("reason"):
+                lbl.setText(f"Recommended scope: {scope['reason']}")
+                return
+        lbl.setText(f"Recommended scope: cover {title} (activation + waits).")
+
+    def _apply_recommended_scope(self) -> None:
+        if self._on_apply_scope is None:
+            return
+        finding = self._selected_finding()
+        if finding is None:
+            return
+        self._on_apply_scope(finding)
 
     def _query_with_ai(
         self, ai_enabled: bool, template_id: str = "findings",
@@ -7299,6 +7581,7 @@ class _StatsPanel(QWidget):
     task_clicked = Signal(str)   # merge key of the clicked task row
     segment_jump   = Signal(int)    # ns - scroll timeline to this timestamp
     plot_point_clicked = Signal(object, int, str)  # payload, mark_ns, note
+    explore_range_requested = Signal(object)  # {lo, hi, mk, section, note, ns}
     core_clicked = Signal(str)   # core name of the clicked core row
     # Core-Pair chart footer → open heatmap/chord focused on (from, to, bounce_only)
     open_pair_heatmap = Signal(str, str, bool)
@@ -7309,6 +7592,9 @@ class _StatsPanel(QWidget):
     section_pins_changed = Signal(list)
     # Section display order; persist to btf_viewer.rc
     section_order_changed = Signal(list)
+    # Collapse map; persist to btf_viewer.rc
+    section_collapsed_changed = Signal(dict)
+    query_ai_requested = Signal(str, str)  # template_id, extra prompt text
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -7320,6 +7606,10 @@ class _StatsPanel(QWidget):
         self._plot_kind: Optional[str] = None   # "exec", "block", "inter", "preempt", "interval", "tag", "tick"
         self._plot_preemptor: Optional[str] = None
         self._plot_interval_id: Optional[str] = None
+        self._ai_enabled: bool = True
+        self._distrib_ai_btn: Optional[QPushButton] = None
+        self._distrib_has_task: bool = False
+        self._last_anomaly: Optional[dict] = None
         self._trace: Optional["BtfTrace"] = None
         self._export_scope_override: Optional[Tuple[int, int]] = None
         self._cursor_times: List[int] = []
@@ -7350,6 +7640,8 @@ class _StatsPanel(QWidget):
         self._defer_populate_timer = QTimer(self)
         self._defer_populate_timer.setSingleShot(True)
         self._defer_populate_timer.timeout.connect(self._populate_next_deferred_section)
+        self._ux_events_key: Optional[Tuple[int, Optional[int], Optional[int]]] = None
+        self._ux_events_cached: Optional[List[dict]] = None
         self._cpu_budget_pct: float = 0.0
         self._task_deadlines_ns: Dict[str, int] = {}
         self.setMinimumWidth(0)
@@ -7428,12 +7720,7 @@ class _StatsPanel(QWidget):
         self._btn_export_html.clicked.connect(self._export_html)
         self._btn_export_html.setEnabled(False)
         exp_row.addWidget(self._btn_export_html)
-        self._btn_compare_mig = QPushButton("Trace Compare…")
-        self._btn_compare_mig.setToolTip(
-            "Compare summary, top tasks, and core migrations between two open trace tabs")
-        self._btn_compare_mig.setEnabled(False)
-        exp_row.addWidget(self._btn_compare_mig)
-        for btn in (self._btn_export_csv, self._btn_export_html, self._btn_compare_mig):
+        for btn in (self._btn_export_csv, self._btn_export_html):
             btn.setMinimumWidth(0)
             btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         outer.addLayout(exp_row)
@@ -7452,7 +7739,7 @@ class _StatsPanel(QWidget):
         for btn in (
             self._btn_stats_expand, self._btn_stats_collapse,
             self._btn_stats_reset_order,
-            self._btn_export_csv, self._btn_export_html, self._btn_compare_mig,
+            self._btn_export_csv, self._btn_export_html,
         ):
             btn.setFont(font)
 
@@ -7513,11 +7800,30 @@ class _StatsPanel(QWidget):
             if custom else
             "Section order is already the default")
 
+    def _ux_events(self, trace, lo=None, hi=None):
+        """Reuse the load-time harvest (and one scoped filter) across sections."""
+        key = (id(trace), lo, hi)
+        if self._ux_events_key == key and self._ux_events_cached is not None:
+            return self._ux_events_cached
+        evs = harvest_ux_events(trace, lo, hi)
+        self._ux_events_key = key
+        self._ux_events_cached = evs
+        return evs
+
+    def _dispatch_sample_map(self, trace, lo=None, hi=None) -> dict:
+        out = {}
+        for mk, rec in _dispatch_latency_by_mk(trace, lo, hi).items():
+            samples = [int(s) for s in (rec.get("samples") or []) if int(s or 0) > 0]
+            if samples:
+                out[str(mk)] = samples
+        return out
+
     def _clear(self) -> None:
         self._defer_populate_timer.stop()
         self._deferred_sections.clear()
         self._defer_heavy_sections = False
-        self._defer_heavy_collapse_done = False
+        self._ux_events_key = None
+        self._ux_events_cached = None
         self._table_grips.clear()
         self._util_scroll_areas.clear()
         self._util_scroll_filters.clear()
@@ -7530,6 +7836,8 @@ class _StatsPanel(QWidget):
         self._section_drag_filters.clear()
         self._section_drag_filter_by_id.clear()
         self._pending_sections.clear()
+        self._distrib_ai_btn = None
+        self._distrib_has_task = False
         self._drop_target_sid = None
         self._dragging_sid = None
         self._scroll_tail = None
@@ -7581,6 +7889,23 @@ class _StatsPanel(QWidget):
         if emit:
             self.section_order_changed.emit(list(self._section_order))
 
+    def set_section_collapsed_map(self, flags, *, emit: bool = False) -> None:
+        """Apply persisted collapse map; pinned sections stay expanded."""
+        merged = section_collapsed_from_rc(flags)
+        pinned = set(self._section_pins)
+        for sid, collapsed in merged.items():
+            if sid in pinned:
+                collapsed = False
+            self._section_collapsed[sid] = collapsed
+            if sid in self._section_headers:
+                self._set_section_collapsed(sid, collapsed)
+        self._defer_heavy_collapse_done = True
+        if emit:
+            self.section_collapsed_changed.emit(dict(self._section_collapsed))
+
+    def _notify_section_collapsed(self) -> None:
+        self.section_collapsed_changed.emit(dict(self._section_collapsed))
+
     def _sync_pin_buttons(self) -> None:
         pinned = set(self._section_pins)
         for sid, btn in self._section_pin_btns.items():
@@ -7594,6 +7919,7 @@ class _StatsPanel(QWidget):
             "scope_to_cursors": bool(self._scope_to_cursors),
             "export_scope_override": self._export_scope_override,
             "section_collapsed": dict(self._section_collapsed),
+            "defer_heavy_collapse_done": bool(self._defer_heavy_collapse_done),
             "section_table_heights": dict(self._section_table_heights),
             "util_label_col_w": int(self._util_label_col_w),
         }
@@ -7606,13 +7932,12 @@ class _StatsPanel(QWidget):
         self._util_label_col_w = model.util_label_col_w
         self._export_scope_override = model.export_scope_override
         self._scope_to_cursors = model.scope_to_cursors
+        self._defer_heavy_collapse_done = bool(
+            getattr(model, "defer_heavy_collapse_done", False))
         if hasattr(self, "_scope_cb"):
             self._scope_cb.blockSignals(True)
             self._scope_cb.setChecked(model.scope_to_cursors)
             self._scope_cb.blockSignals(False)
-        for section_id, collapsed in model.section_collapsed.items():
-            if section_id in self._section_headers:
-                self._set_section_collapsed(section_id, collapsed)
         self.set_cursor_times(model.cursor_times, refresh_stats=refresh_stats)
         self.apply_section_table_heights(model.section_table_heights)
 
@@ -7953,6 +8278,8 @@ class _StatsPanel(QWidget):
     def _lbl(self, text: str, color: str = "", bold: bool = False,
               ui_fs: str = "") -> QLabel:
         w = QLabel(text)
+        w.setWordWrap(True)
+        w.setMinimumWidth(0)
         parts = ["background:transparent;"]
         if color:
             parts.insert(0, f"color:{color};")
@@ -8517,8 +8844,30 @@ class _StatsPanel(QWidget):
                 pts.append((starts[i], starts[i] - starts[i - 1],
                             start_to_seg.get(starts[i])))
             title = f"{name} — Inter-Arrival Time{scope}"
+        elif kind == "response":
+            evs = [
+                e for e in self._ux_events(trace, lo, hi)
+                if str(e.get("mk") or "") == mk and e.get("kind") == "exec"
+            ]
+            model = analyze_response_times(evs)
+            pts = [
+                (int(e.get("start") or 0), int(e.get("duration") or 0), e)
+                for e in (model.get("events") or [])
+                if int(e.get("duration") or 0) > 0
+            ]
+            title = f"{name} — Response Time (heuristic){scope}"
         elif kind == "preempt":
             preemptor = self._plot_preemptor
+            if not preemptor:
+                ranks = preemptor_ranking(
+                    preemption_pairs(self._ux_events(trace, lo, hi)), 16)
+                rec = next(
+                    (r for r in ranks if str(r.get("mk") or "") == mk), None)
+                tops = (rec or {}).get("top") or []
+                if tops:
+                    preemptor = str(
+                        tops[0].get("task") or tops[0].get("mk") or "")
+                    self._plot_preemptor = preemptor
             if not preemptor:
                 return None
             pts = _preemption_chain_plot_points(trace, mk, preemptor, lo, hi)
@@ -8533,6 +8882,54 @@ class _StatsPanel(QWidget):
         self._plot_kind = None
         self._plot_preemptor = None
         self._plot_interval_id = None
+
+    def set_ai_enabled(self, enabled: bool) -> None:
+        """Gray out distribution Query with AI… when Settings → AI is off."""
+        self._ai_enabled = bool(enabled)
+        dlg = getattr(self, "_plot_dlg", None)
+        if dlg is not None and hasattr(dlg, "set_ai_enabled"):
+            dlg.set_ai_enabled(self._ai_enabled)
+        self._sync_distrib_query_ai_btn()
+
+    def _sync_distrib_query_ai_btn(self) -> None:
+        btn = getattr(self, "_distrib_ai_btn", None)
+        if btn is None:
+            return
+        on = bool(self._ai_enabled)
+        has_task = bool(getattr(self, "_distrib_has_task", False))
+        btn.setEnabled(on and has_task)
+        if not on:
+            btn.setToolTip("Enable AI Assistant in Settings → AI")
+        elif not has_task:
+            btn.setToolTip("Select a task to query this distribution")
+        else:
+            btn.setToolTip("Open the AI Assistant and explain this distribution")
+
+    def _query_plot_distribution_ai(self) -> None:
+        if not self._ai_enabled:
+            return
+        mk = self._plot_mk or ""
+        kind = self._plot_kind or ""
+        title = ""
+        dlg = getattr(self, "_plot_dlg", None)
+        if dlg is not None:
+            title = dlg.windowTitle() or getattr(dlg, "_title", "") or ""
+        extra = (
+            f"Explain this statistics distribution: metric={kind} task={mk} "
+            f"title={title}. Use query_raw_metric and search_timeline. "
+            "Identify the tail, jitter, and the next Statistics page or timeline jump."
+        )
+        self.query_ai_requested.emit("investigate", extra)
+
+    def _query_distrib_explorer_ai(self, mk: str, kind: str) -> None:
+        if not self._ai_enabled or not mk:
+            return
+        extra = (
+            f"Explain this statistics distribution: metric={kind} task={mk} "
+            "title=Distribution Explorer. Use query_raw_metric and search_timeline. "
+            "Identify the tail, jitter, and the next Statistics page or timeline jump."
+        )
+        self.query_ai_requested.emit("investigate", extra)
 
     def _open_interval_plot(self, trace: "BtfTrace", interval_id: str) -> None:
         self._open_plot(trace, interval_id, "interval", interval_id=interval_id)
@@ -8623,7 +9020,8 @@ class _StatsPanel(QWidget):
         self._plot_mk = mk
         self._plot_kind = kind
         y_as_time = kind not in ("tag",)
-        show_variability = kind in ("exec", "block", "inter", "dispatch", "switch_overhead")
+        show_variability = kind in (
+            "exec", "block", "inter", "response", "dispatch", "switch_overhead")
         _on_click = self._on_plot_scatter_click
         if self._plot_dlg is not None:
             try:
@@ -8659,6 +9057,8 @@ class _StatsPanel(QWidget):
             on_tab_change=self._on_plot_tab_changed if tabs else None,
             on_open_heatmap=on_hm,
             on_open_chord=on_ch,
+            ai_enabled=self._ai_enabled,
+            on_query_ai=self._query_plot_distribution_ai,
             parent=self.window(),
         )
         self._plot_dlg.closed.connect(self._on_plot_dialog_closed)
@@ -8754,6 +9154,9 @@ class _StatsPanel(QWidget):
         blay = QVBoxLayout(body)
         blay.setContentsMargins(0, 0, 0, 0)
         blay.setSpacing(2)
+        help_text = STATS_SECTION_HELP.get(section_id)
+        if help_text:
+            blay.addWidget(self._lbl(help_text, color="#888888", ui_fs=self._ui_fs()))
         populate(blay)
         idx = self._ilay.indexOf(hdr_row)
         self._ilay.insertWidget(idx + 1, body)
@@ -8803,8 +9206,9 @@ class _StatsPanel(QWidget):
             tail = QWidget()
             tail.setObjectName("stats_scroll_tail")
             tail.setMinimumHeight(0)
-            self._ilay.addWidget(tail)
             self._scroll_tail = tail
+        self._ilay.removeWidget(tail)
+        self._ilay.addWidget(tail)
         return tail
 
     def _update_scroll_tail_height(self) -> None:
@@ -8876,6 +9280,7 @@ class _StatsPanel(QWidget):
             return
         self._set_section_collapsed(
             section_id, not self._section_collapsed.get(section_id, False))
+        self._notify_section_collapsed()
 
     def _toggle_section_pin(self, section_id: str) -> None:
         pins = list(self._section_pins)
@@ -8887,25 +9292,28 @@ class _StatsPanel(QWidget):
         self._section_pins = normalize_stats_pins(pins)
         self._sync_pin_buttons()
         self.section_pins_changed.emit(list(self._section_pins))
+        self._notify_section_collapsed()
 
     def _expand_all_sections(self) -> None:
         self._inner.setUpdatesEnabled(False)
         try:
-            for key in self._section_headers:
+            for key in default_section_collapsed():
                 self._set_section_collapsed(key, False)
         finally:
             self._inner.setUpdatesEnabled(True)
+        self._notify_section_collapsed()
 
     def _collapse_all_sections(self) -> None:
         self._inner.setUpdatesEnabled(False)
         try:
             pinned = set(self._section_pins)
-            for key in self._section_headers:
+            for key in default_section_collapsed():
                 if key in pinned:
                     continue
                 self._set_section_collapsed(key, True)
         finally:
             self._inner.setUpdatesEnabled(True)
+        self._notify_section_collapsed()
 
     def _add_collapsible_section(self, section_id: str, title: str, ui_fs: str,
                                populate) -> None:
@@ -9104,14 +9512,18 @@ class _StatsPanel(QWidget):
                     continue
                 self._ilay.removeWidget(w)
                 widgets.append(w)
-        stretch_idx = self._ilay.count()
-        for i in range(self._ilay.count()):
-            item = self._ilay.itemAt(i)
-            if item is not None and item.spacerItem() is not None:
-                stretch_idx = i
-                break
-        for i, w in enumerate(widgets):
-            self._ilay.insertWidget(stretch_idx + i, w)
+        # The trailing pad is a QWidget (viewport-tall), not a QSpacerItem.
+        # Inserting after "the first spacer" used to leave that pad in the
+        # middle of the list — a large empty gap between tables.
+        tail = getattr(self, "_scroll_tail", None)
+        if tail is not None:
+            self._ilay.removeWidget(tail)
+        for w in widgets:
+            self._ilay.addWidget(w)
+        if tail is not None:
+            self._ilay.addWidget(tail)
+            self._scroll_tail = tail
+            self._update_scroll_tail_height()
 
     def _core_util_rows(self, trace: "BtfTrace",
                         lo: Optional[int] = None, hi: Optional[int] = None) -> List[Tuple[str, float]]:
@@ -9158,6 +9570,7 @@ class _StatsPanel(QWidget):
         vals = sorted(samples)
         n = len(vals)
         p95_idx = min(n - 1, math.ceil(n * 0.95) - 1)
+        p99_idx = min(n - 1, math.ceil(n * 0.99) - 1)
         mean = sum(vals) / n
         avg = int(round(mean))
         jitter = vals[-1] - vals[0]
@@ -9169,6 +9582,7 @@ class _StatsPanel(QWidget):
             _format_time(jitter, scale),
             _format_time(stddev, scale),
             _format_time(vals[p95_idx], scale),
+            _format_time(vals[p99_idx], scale),
         )
 
     def _summarize_samples_export(
@@ -9239,11 +9653,11 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, jitter, stddev, p95 = summary
+            mn, avg, mx, jitter, stddev, p95, p99 = summary
             cpu_pct = 100.0 * sum(samples) / total_ns
             rows.append((
                 mk, _task_display_name(raw), len(samples), cpu_pct,
-                mn, avg, mx, jitter, stddev, p95,
+                mn, avg, mx, jitter, stddev, p95, p99,
             ))
         rows.sort(key=lambda r: (-r[3], -r[2], r[1].lower()))
         return rows
@@ -9263,14 +9677,14 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, jitter, stddev, p95 = summary
+            mn, avg, mx, jitter, stddev, p95, p99 = summary
             if lo is not None and hi is not None:
                 n_runs = sum(1 for s in segs if lo <= s.start <= hi)
             else:
                 n_runs = len(segs)
             rows.append((
                 mk, _task_display_name(raw), n_runs,
-                mn, avg, mx, jitter, stddev, p95,
+                mn, avg, mx, jitter, stddev, p95, p99,
             ))
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
         return rows
@@ -9290,10 +9704,10 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, jitter, stddev, p95 = summary
+            mn, avg, mx, jitter, stddev, p95, p99 = summary
             rows.append((
                 mk, _task_display_name(raw), len(samples),
-                mn, avg, mx, jitter, stddev, p95,
+                mn, avg, mx, jitter, stddev, p95, p99,
             ))
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
         return rows
@@ -9312,10 +9726,10 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(data["samples"], trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, jitter, stddev, p95 = summary
+            mn, avg, mx, jitter, stddev, p95, p99 = summary
             rows.append((
                 mk, _task_display_name(raw), len(data["samples"]),
-                mn, avg, mx, jitter, stddev, p95,
+                mn, avg, mx, jitter, stddev, p95, p99,
                 data.get("min_seg"), data.get("max_seg"),
             ))
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
@@ -9398,6 +9812,47 @@ class _StatsPanel(QWidget):
             _find_extreme_inter_arrival_segment(segs, lo, hi, find_max=find_max),
             find_max)
 
+    def _on_percentile_click(self, trace: "BtfTrace", mk: str, kind: str,
+                             lo: Optional[int], hi: Optional[int],
+                             p: float) -> None:
+        segs = trace.seg_map_by_merge_key.get(mk, [])
+        if kind == "exec":
+            seg = _find_percentile_exec_segment(segs, p, lo, hi)
+        elif kind == "block":
+            seg = _find_percentile_blocking_segment(segs, p, lo, hi)
+        elif kind == "inter":
+            seg = _find_percentile_inter_arrival_segment(segs, p, lo, hi)
+        else:
+            return
+        if seg is None:
+            return
+        name = _task_display_name(trace.task_repr.get(mk, mk))
+        pct = int(round(p * 100))
+        if kind == "exec":
+            dur = seg.end - seg.start
+            note = (
+                f"{name} p{pct} execution: "
+                f"{_format_time(dur, trace.time_scale)} at "
+                f"{_format_time(seg.start, trace.time_scale)}"
+            )
+        else:
+            gap = None
+            ordered = sorted(segs, key=lambda s: s.start)
+            for i, s in enumerate(ordered):
+                if s is seg or (s.start == seg.start and s.end == seg.end):
+                    if i > 0:
+                        prev = ordered[i - 1]
+                        gap = (s.start - prev.start if kind == "inter"
+                               else s.start - prev.end)
+                    break
+            gap_s = _format_time(gap, trace.time_scale) if gap is not None else "?"
+            label = "blocking" if kind == "block" else "inter-arrival"
+            note = (
+                f"{name} p{pct} {label}: {gap_s} at "
+                f"{_format_time(seg.start, trace.time_scale)}"
+            )
+        self.plot_point_clicked.emit(seg, seg.start, note)
+
     def _exec_slice_rows_export(self, trace: "BtfTrace",
                                 lo: Optional[int] = None,
                                 hi: Optional[int] = None) -> List[tuple]:
@@ -9462,7 +9917,8 @@ class _StatsPanel(QWidget):
                            include_variability: bool = False,
                            migrations: bool = False,
                            on_row_click=None, on_min_click=None,
-                           on_max_click=None) -> QWidget:
+                           on_max_click=None, on_p95_click=None,
+                           on_p99_click=None) -> QWidget:
         host = QWidget()
         lay = QVBoxLayout(host)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -9479,10 +9935,10 @@ class _StatsPanel(QWidget):
         elif include_variability:
             headers = (
                 ["Task", count_header, "CPU%", "Min", "Avg", "Max",
-                 "Jitter", "σ", "p95"]
+                 "Jitter", "σ", "p95", "p99"]
                 if include_cpu
                 else ["Task", count_header, "Min", "Avg", "Max",
-                      "Jitter", "σ", "p95"]
+                      "Jitter", "σ", "p95", "p99"]
             )
             cols = len(headers)
         else:
@@ -9542,9 +9998,13 @@ class _StatsPanel(QWidget):
 
         _min_col = 3 if include_cpu else 2
         _max_col = 5 if include_cpu else 4
+        _p95_col = (cols - 2) if include_variability else (cols - 1)
+        _p99_col = (cols - 1) if include_variability else None
         _link_color = QBrush(QColor("#88AAFF"))
         _hovered_row = [-1]
-        _interactive = bool(on_row_click or on_min_click or on_max_click)
+        _interactive = bool(
+            on_row_click or on_min_click or on_max_click
+            or on_p95_click or on_p99_click)
         _row_tip = "Click to view distribution chart"
         _metric_key = (_tag_value_sort_key if section_id == "tags"
                        else _time_label_sort_key)
@@ -9587,16 +10047,17 @@ class _StatsPanel(QWidget):
                     _time_label_sort_key(g_after), _time_label_sort_key(g_other),
                 ]
             elif include_cpu and include_variability:
-                mk_r, name, runs, cpu, mn, avg, mx, jitter, stddev, p95 = row
+                mk_r, name, runs, cpu, mn, avg, mx, jitter, stddev, p95, p99 = row
                 vals = [
                     name, runs, f"{cpu:.1f}%", mn, avg, mx,
-                    jitter, stddev, p95,
+                    jitter, stddev, p95, p99,
                 ]
                 sort_keys = [
                     name.lower(), runs, cpu,
                     _time_label_sort_key(mn), _time_label_sort_key(avg),
                     _time_label_sort_key(mx), _time_label_sort_key(jitter),
                     _time_label_sort_key(stddev), _time_label_sort_key(p95),
+                    _time_label_sort_key(p99),
                 ]
             elif include_cpu:
                 mk_r, name, runs, cpu, mn, avg, mx, p95 = row
@@ -9612,12 +10073,13 @@ class _StatsPanel(QWidget):
                 vals = [name, runs, mn, avg, mx, p95]
                 sort_keys = [name.lower(), runs, mn_raw, avg_raw, mx_raw, p95_raw]
             elif include_variability:
-                mk_r, name, runs, mn, avg, mx, jitter, stddev, p95 = row
-                vals = [name, runs, mn, avg, mx, jitter, stddev, p95]
+                mk_r, name, runs, mn, avg, mx, jitter, stddev, p95, p99 = row
+                vals = [name, runs, mn, avg, mx, jitter, stddev, p95, p99]
                 sort_keys = [
                     name.lower(), runs,
                     _metric_key(mn), _metric_key(avg), _metric_key(mx),
                     _metric_key(jitter), _metric_key(stddev), _metric_key(p95),
+                    _metric_key(p99),
                 ]
             else:
                 mk_r, name, runs, mn, avg, mx, p95 = row
@@ -9669,6 +10131,15 @@ class _StatsPanel(QWidget):
                             item.setToolTip(
                                 f"Click to jump to longest sample for {name}")
                         item.setForeground(_link_color)
+                    elif c == _p95_col and on_p95_click is not None:
+                        item.setToolTip(
+                            f"Click to jump to the p95 sample for {name}")
+                        item.setForeground(_link_color)
+                    elif (_p99_col is not None and c == _p99_col
+                          and on_p99_click is not None):
+                        item.setToolTip(
+                            f"Click to jump to the p99 sample for {name}")
+                        item.setForeground(_link_color)
                     elif on_row_click is not None:
                         item.setToolTip(f"{_row_tip} for {name}")
                 table.setItem(r, c, item)
@@ -9676,8 +10147,11 @@ class _StatsPanel(QWidget):
         if not migrations:
             table.resizeColumnsToContents()
             table.horizontalHeader().setStretchLastSection(False)
-            p95_col = cols - 1
+            p95_col = _p95_col
             table.setColumnWidth(p95_col, min(table.columnWidth(p95_col), 76))
+            if _p99_col is not None:
+                table.setColumnWidth(
+                    _p99_col, min(table.columnWidth(_p99_col), 76))
             table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         table.setAlternatingRowColors(False)
@@ -9714,6 +10188,11 @@ class _StatsPanel(QWidget):
                         on_min_click(mk)
                     elif on_max_click is not None and c == _max_col:
                         on_max_click(mk)
+                    elif on_p95_click is not None and c == _p95_col:
+                        on_p95_click(mk)
+                    elif (on_p99_click is not None and _p99_col is not None
+                          and c == _p99_col):
+                        on_p99_click(mk)
                     elif on_row_click is not None:
                         on_row_click(mk)
                 table.cellClicked.connect(_cell_clicked)
@@ -9727,6 +10206,470 @@ class _StatsPanel(QWidget):
 
         self._wrap_table_with_resizer(lay, table, section_id)
         return host
+
+    def _build_ux_event_table(self, rows: List[dict], ui_fs: str,
+                              empty_hint: str, section_id: str,
+                              trace: "BtfTrace") -> QWidget:
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        if not rows:
+            lay.addWidget(self._lbl(empty_hint, color="#888888", ui_fs=ui_fs))
+            return host
+        headers = ["Time", "Kind", "Task", "Duration", "Why"]
+        table = self._make_plain_stats_table(headers, ui_fs)
+        table.setRowCount(len(rows))
+        _default_bg = QBrush(self._stats_table_colors()[0])
+        _link_color = QBrush(QColor("#88AAFF"))
+        scale = trace.time_scale
+        kind_label = KIND_LABEL
+        for r, ev in enumerate(rows):
+            vals = [
+                _format_time(int(ev.get("start") or 0), scale),
+                kind_label.get(str(ev.get("kind") or ""), str(ev.get("kind") or "")),
+                str(ev.get("task") or ""),
+                _format_time(int(ev.get("duration") or 0), scale),
+                str(ev.get("reason") or kind_label.get(
+                    str(ev.get("kind") or ""), str(ev.get("kind") or ""))),
+            ]
+            for c, v in enumerate(vals):
+                key = (
+                    int(ev.get("start") or 0), str(ev.get("kind") or ""),
+                    str(ev.get("task") or "").lower(),
+                    int(ev.get("duration") or 0),
+                    str(ev.get("reason") or "").lower(),
+                )[c]
+                item = self._stats_sort_item(v, key, _default_bg)
+                if c == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, ev)
+                    item.setForeground(_link_color)
+                    item.setToolTip("Click to zoom, place C1–C2, and open the matching table")
+                table.setItem(r, c, item)
+
+        def _cell_clicked(row: int, _col: int) -> None:
+            item = table.item(row, 0)
+            if item is None:
+                return
+            ev = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(ev, dict):
+                if section_id == "anomalies":
+                    self._last_anomaly = dict(ev)
+                self._activate_ux_event(trace, ev)
+
+        table.cellClicked.connect(_cell_clicked)
+        self._wire_stats_table_click_cursor(table)
+        self._wire_stats_table_row_hover(table)
+        table.resizeColumnsToContents()
+        table.setSortingEnabled(True)
+        self._wrap_table_with_resizer(lay, table, section_id)
+        return host
+
+    def _activate_ux_event(self, trace: "BtfTrace", ev: dict) -> None:
+        start = int(ev.get("start") or 0)
+        stop = int(ev.get("stop") or start)
+        mk = str(ev.get("mk") or "")
+        note = (
+            f"{ev.get('task') or mk} — "
+            f"{ev.get('reason') or ev.get('kind') or 'episode'}"
+        )
+        segs = trace.seg_map_by_merge_key.get(mk, []) if mk else []
+        jump = int(ev.get("jump_ns") or start)
+        payload = None
+        for s in segs:
+            if int(s.start) == jump or (int(s.start) <= start < int(s.end)):
+                payload = s
+                break
+        if payload is None and segs:
+            payload = min(segs, key=lambda s: abs(int(s.start) - jump))
+        if payload is not None:
+            self.plot_point_clicked.emit(payload, jump, note)
+        else:
+            self.plot_point_clicked.emit(None, jump, note)
+        self.explore_range_requested.emit({
+            "lo": start,
+            "hi": max(stop, start + 1),
+            "mk": mk,
+            "section": ev.get("section") or KIND_SECTION.get(str(ev.get("kind") or ""), "exec"),
+            "note": note,
+            "ns": jump,
+        })
+
+    def _investigate_anomaly(self, rows: Optional[List[dict]] = None) -> None:
+        ev = self._last_anomaly
+        if not isinstance(ev, dict):
+            ev = (rows or [None])[0] if rows else None
+        if not isinstance(ev, dict):
+            return
+        extra = (
+            f"Investigate this timeline anomaly: kind={ev.get('kind') or ''} "
+            f"task={ev.get('task') or ev.get('mk') or ''} "
+            f"jump:{int(ev.get('jump_ns') or ev.get('start') or 0)} "
+            f"duration={int(ev.get('duration') or 0)} "
+            f"why={ev.get('reason') or ''}."
+        )
+        self.query_ai_requested.emit("investigate", extra)
+
+    def _emit_explore_event(self, trace: "BtfTrace", ev: Optional[dict],
+                            section: str = "") -> None:
+        if not isinstance(ev, dict):
+            return
+        payload = dict(ev)
+        if section:
+            payload["section"] = section
+        if not payload.get("mk") and payload.get("waiter_mk"):
+            payload["mk"] = payload.get("waiter_mk")
+        self._activate_ux_event(trace, payload)
+
+    def _make_plain_stats_table(self, headers: List[str], ui_fs: str) -> QTableWidget:
+        table = QTableWidget(0, len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        table.verticalHeader().setVisible(False)
+        table.setShowGrid(False)
+        table.setFrameShape(QFrame.NoFrame)
+        table.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+        table.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
+        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        hdr = table.horizontalHeader()
+        hdr.setSectionsClickable(True)
+        hdr.setSortIndicatorShown(True)
+        hdr.setStretchLastSection(False)
+        self._apply_stats_table_theme(table, ui_fs)
+        return table
+
+    def _stats_sort_item(self, text, sort_key, bg: "QBrush") -> "_StatsSortItem":
+        item = _StatsSortItem(text, sort_key)
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        item.setBackground(bg)
+        return item
+
+    def _build_click_rows_table(
+        self, rows: List[dict], headers: List[str], values_fn,
+        ev_fn, ui_fs: str, empty_hint: str, section_id: str,
+        trace: "BtfTrace", on_cell=None, keys_fn=None,
+    ) -> QWidget:
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        if not rows:
+            lay.addWidget(self._lbl(empty_hint, color="#888888", ui_fs=ui_fs))
+            return host
+        table = self._make_plain_stats_table(headers, ui_fs)
+        table.setRowCount(len(rows))
+        bg = QBrush(self._stats_table_colors()[0])
+        link = QBrush(QColor("#88AAFF"))
+        for r, row in enumerate(rows):
+            vals = list(values_fn(row))
+            keys = list(keys_fn(row)) if keys_fn is not None else [
+                v if isinstance(v, (int, float)) else str(v).lower()
+                for v in vals
+            ]
+            for c, v in enumerate(vals):
+                key = keys[c] if c < len(keys) else str(v).lower()
+                item = self._stats_sort_item(v, key, bg)
+                item.setData(Qt.ItemDataRole.UserRole, row)
+                if c == 0 or on_cell is not None:
+                    item.setForeground(link)
+                    item.setToolTip("Click to jump or open the matching plot")
+                table.setItem(r, c, item)
+
+        def _cell_clicked(row: int, col: int) -> None:
+            item = table.item(row, 0)
+            if item is None:
+                return
+            data = item.data(Qt.ItemDataRole.UserRole)
+            if on_cell is not None and isinstance(data, dict):
+                on_cell(data, col)
+                return
+            payload = ev_fn(data)
+            if isinstance(payload, dict):
+                self._activate_ux_event(trace, payload)
+
+        table.cellClicked.connect(_cell_clicked)
+        self._wire_stats_table_click_cursor(table)
+        self._wire_stats_table_row_hover(table)
+        table.resizeColumnsToContents()
+        table.setSortingEnabled(True)
+        self._wrap_table_with_resizer(lay, table, section_id)
+        return host
+
+    def _build_period_table(self, rows: List[dict], ui_fs: str,
+                            empty_hint: str, trace: "BtfTrace") -> QWidget:
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        if not rows:
+            lay.addWidget(self._lbl(empty_hint, color="#888888", ui_fs=ui_fs))
+            return host
+        headers = [
+            "Task", "N", "Expected", "Min", "Avg", "Max", "p95", "p99",
+            "RMS", "CV", "Missed", "Extra", "Burst", "Spark",
+        ]
+        table = self._make_plain_stats_table(headers, ui_fs)
+        table.setRowCount(len(rows))
+        scale = trace.time_scale
+        bg = QBrush(self._stats_table_colors()[0])
+        link = QBrush(QColor("#88AAFF"))
+        click_cols = {
+            0: "p50_ev", 2: "p50_ev", 3: "min_ev", 4: "p50_ev",
+            5: "max_ev", 6: "p95_ev", 7: "p99_ev", 10: "miss_ev",
+        }
+        for r, row in enumerate(rows):
+            vals = [
+                str(row.get("task") or ""),
+                str(row.get("n") or 0),
+                _format_time(int(row.get("expected_ns") or 0), scale),
+                _format_time(int(row.get("min_ns") or 0), scale),
+                _format_time(int(row.get("avg_ns") or 0), scale),
+                _format_time(int(row.get("max_ns") or 0), scale),
+                _format_time(int(row.get("p95_ns") or 0), scale),
+                _format_time(int(row.get("p99_ns") or 0), scale),
+                _format_time(int(row.get("rms_ns") or 0), scale),
+                f"{float(row.get('cv') or 0) * 100:.1f}%",
+                str(row.get("missed") or 0),
+                str(row.get("extra") or 0),
+                str(row.get("burst") or 0),
+                str(row.get("spark") or ""),
+            ]
+            for c, v in enumerate(vals):
+                key = (
+                    str(row.get("task") or "").lower(),
+                    int(row.get("n") or 0),
+                    int(row.get("expected_ns") or 0),
+                    int(row.get("min_ns") or 0),
+                    int(row.get("avg_ns") or 0),
+                    int(row.get("max_ns") or 0),
+                    int(row.get("p95_ns") or 0),
+                    int(row.get("p99_ns") or 0),
+                    int(row.get("rms_ns") or 0),
+                    float(row.get("cv") or 0),
+                    int(row.get("missed") or 0),
+                    int(row.get("extra") or 0),
+                    int(row.get("burst") or 0),
+                    str(row.get("spark") or ""),
+                )[c]
+                item = self._stats_sort_item(v, key, bg)
+                item.setData(Qt.ItemDataRole.UserRole, row)
+                if c in click_cols:
+                    item.setForeground(link)
+                    item.setToolTip("Click to jump to that activation gap")
+                table.setItem(r, c, item)
+
+        def _cell_clicked(row: int, col: int) -> None:
+            item = table.item(row, col)
+            data = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if not isinstance(data, dict):
+                return
+            if col == 0:
+                self._open_plot(trace, str(data.get("mk") or ""), "inter")
+                return
+            key = click_cols.get(col, "worst_ev")
+            self._emit_explore_event(trace, data.get(key), "period")
+
+        table.cellClicked.connect(_cell_clicked)
+        self._wire_stats_table_click_cursor(table)
+        self._wire_stats_table_row_hover(table)
+        table.resizeColumnsToContents()
+        table.setSortingEnabled(True)
+        self._wrap_table_with_resizer(lay, table, "period")
+        return host
+
+    def _build_task_core_table(self, matrix: dict, ui_fs: str,
+                               empty_hint: str, trace: "BtfTrace") -> QWidget:
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        cores = list(matrix.get("cores") or [])
+        rows = list(matrix.get("rows") or [])
+        if not rows or not cores:
+            lay.addWidget(self._lbl(empty_hint, color="#888888", ui_fs=ui_fs))
+            return host
+        headers = ["Task"] + cores
+        table = self._make_plain_stats_table(headers, ui_fs)
+        table.setRowCount(len(rows))
+        bg = QBrush(self._stats_table_colors()[0])
+        link = QBrush(QColor("#88AAFF"))
+        for r, row in enumerate(rows):
+            task_item = self._stats_sort_item(
+                str(row.get("task") or ""), str(row.get("task") or "").lower(), bg)
+            task_item.setData(Qt.ItemDataRole.UserRole, {"mk": row.get("mk")})
+            task_item.setForeground(link)
+            task_item.setToolTip("Click to highlight this task")
+            table.setItem(r, 0, task_item)
+            cells = row.get("cells") or {}
+            for c, core in enumerate(cores, start=1):
+                cell = cells.get(core) or {}
+                ns = int(cell.get("ns") or 0)
+                text = f"{float(cell.get('pct_span') or 0):.1f}%" if ns else "—"
+                item = self._stats_sort_item(text, float(cell.get("pct_span") or 0), bg)
+                item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if ns:
+                    item.setForeground(link)
+                    item.setData(Qt.ItemDataRole.UserRole, {
+                        "mk": row.get("mk"),
+                        "task": row.get("task"),
+                        "start": cell.get("start"),
+                        "stop": cell.get("stop"),
+                        "jump_ns": cell.get("jump_ns"),
+                        "section": "task_core",
+                        "kind": "exec",
+                    })
+                    item.setToolTip(
+                        f"{_format_time(ns, trace.time_scale)} on {core} "
+                        f"({float(cell.get('pct_task') or 0):.1f}% of this task)")
+                table.setItem(r, c, item)
+
+        def _cell_clicked(row: int, col: int) -> None:
+            item = table.item(row, col)
+            data = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if not isinstance(data, dict):
+                return
+            if col == 0:
+                mk = str(data.get("mk") or "")
+                if mk:
+                    self.task_clicked.emit(mk)
+                return
+            self._emit_explore_event(trace, data, "task_core")
+
+        table.cellClicked.connect(_cell_clicked)
+        self._wire_stats_table_click_cursor(table)
+        self._wire_stats_table_row_hover(table)
+        table.resizeColumnsToContents()
+        table.setSortingEnabled(True)
+        self._wrap_table_with_resizer(lay, table, "task_core")
+        return host
+
+    def _build_wait_owner_table(self, matrix: dict, ui_fs: str,
+                                empty_hint: str, trace: "BtfTrace") -> QWidget:
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        tasks = list(matrix.get("tasks") or [])
+        cells = matrix.get("cells") or {}
+        if not tasks:
+            lay.addWidget(self._lbl(empty_hint, color="#888888", ui_fs=ui_fs))
+            return host
+        headers = ["Waiter \\ Owner"] + [t.get("task") or t.get("mk") for t in tasks]
+        table = self._make_plain_stats_table(headers, ui_fs)
+        table.setRowCount(len(tasks))
+        bg = QBrush(self._stats_table_colors()[0])
+        link = QBrush(QColor("#88AAFF"))
+        for r, waiter in enumerate(tasks):
+            w_item = self._stats_sort_item(
+                str(waiter.get("task") or waiter.get("mk") or ""),
+                str(waiter.get("task") or waiter.get("mk") or "").lower(), bg)
+            table.setItem(r, 0, w_item)
+            for c, owner in enumerate(tasks, start=1):
+                if waiter.get("mk") == owner.get("mk"):
+                    item = self._stats_sort_item("—", -1, bg)
+                    table.setItem(r, c, item)
+                    continue
+                cell = cells.get(f"{waiter.get('mk')}|{owner.get('mk')}") or {}
+                ns = int(cell.get("ns") or 0)
+                text = _format_time(ns, trace.time_scale) if ns else "—"
+                item = self._stats_sort_item(text, ns, bg)
+                item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if ns:
+                    item.setForeground(link)
+                    item.setData(Qt.ItemDataRole.UserRole, cell)
+                    item.setToolTip(
+                        f"{cell.get('count') or 0} handoff(s); click to zoom the longest")
+                table.setItem(r, c, item)
+
+        def _cell_clicked(row: int, col: int) -> None:
+            item = table.item(row, col)
+            data = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if isinstance(data, dict):
+                self._emit_explore_event(trace, data, "wait_owner")
+
+        table.cellClicked.connect(_cell_clicked)
+        self._wire_stats_table_click_cursor(table)
+        self._wire_stats_table_row_hover(table)
+        table.resizeColumnsToContents()
+        table.setSortingEnabled(True)
+        self._wrap_table_with_resizer(lay, table, "wait_owner")
+        return host
+
+    def _build_task_health_table(self, rows: List[dict], ui_fs: str,
+                                 empty_hint: str, trace: "BtfTrace") -> QWidget:
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        if not rows:
+            lay.addWidget(self._lbl(empty_hint, color="#888888", ui_fs=ui_fs))
+            return host
+        headers = ["Task", "Score", "Exec", "Block", "Period", "Mig", "Deadline", "CPU"]
+        band_keys = ["execution", "blocking", "period", "migration", "deadline", "cpu"]
+        table = self._make_plain_stats_table(headers, ui_fs)
+        table.setRowCount(len(rows))
+        bg = QBrush(self._stats_table_colors()[0])
+        colors = {"ok": "#3cb371", "warn": "#e0a020", "fail": "#e07070"}
+        for r, row in enumerate(rows):
+            score = int(row.get("score") or 0)
+            vals = [str(row.get("task") or ""), str(score)]
+            marks = row.get("marks") or {}
+            bands = row.get("bands") or {}
+            vals.extend(str(marks.get(k) or HEALTH_MARK.get(bands.get(k, "ok"), ""))
+                        for k in band_keys)
+            for c, v in enumerate(vals):
+                key = (
+                    str(row.get("task") or "").lower(),
+                    score,
+                    *[str(bands.get(k, "ok")) for k in band_keys],
+                )[c]
+                item = self._stats_sort_item(v, key, bg)
+                item.setData(Qt.ItemDataRole.UserRole, row)
+                if c == 1:
+                    tone = "ok" if score >= 80 else "warn" if score >= 60 else "fail"
+                    item.setForeground(QBrush(QColor(colors[tone])))
+                elif c >= 2:
+                    item.setForeground(QBrush(QColor(colors.get(bands.get(band_keys[c - 2], "ok"), "#888"))))
+                    item.setTextAlignment(
+                        Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+                    item.setToolTip(
+                        f"Open the {band_keys[c - 2]} statistics for this task")
+                table.setItem(r, c, item)
+
+        def _cell_clicked(row: int, col: int) -> None:
+            item = table.item(row, col)
+            data = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if not isinstance(data, dict):
+                return
+            mk = str(data.get("mk") or "")
+            if mk:
+                self.task_clicked.emit(mk)
+            if col >= 2:
+                sid = HEALTH_BAND_SECTION.get(band_keys[col - 2], "task_health")
+                self.scroll_to_section(sid)
+
+        table.cellClicked.connect(_cell_clicked)
+        self._wire_stats_table_click_cursor(table)
+        self._wire_stats_table_row_hover(table)
+        table.resizeColumnsToContents()
+        table.setSortingEnabled(True)
+        self._wrap_table_with_resizer(lay, table, "task_health")
+        return host
+
+    def scroll_to_section(self, section_id: str) -> None:
+        sid = str(section_id or "").strip()
+        if not sid:
+            return
+        self._section_collapsed[sid] = False
+        self._ensure_section_body(sid)
+        self._update_section_header_icon(sid)
+        hdr = self._section_header_rows.get(sid)
+        if hdr is not None and hasattr(self, "_scroll"):
+            self._scroll.ensureWidgetVisible(hdr)
 
     def _build_preemption_table(self, rows: List[tuple], ui_fs: str,
                                 empty_hint: str, on_row_click=None) -> QWidget:
@@ -10278,18 +11221,19 @@ class _StatsPanel(QWidget):
         disp_body = "".join(
             f"<tr><td>{_esc(label)}</td><td>{n}</td>"
             f"<td>{_esc(mn)}</td><td>{_esc(avg)}</td><td>{_esc(mx)}</td>"
-            f"<td>{_esc(jitter)}</td><td>{_esc(stddev)}</td><td>{_esc(p95)}</td></tr>"
-            for (_mk, label, n, mn, avg, mx, jitter, stddev, p95,
+            f"<td>{_esc(jitter)}</td><td>{_esc(stddev)}</td>"
+            f"<td>{_esc(p95)}</td><td>{_esc(p99)}</td></tr>"
+            for (_mk, label, n, mn, avg, mx, jitter, stddev, p95, p99,
                  _a, _b) in disp_rows_html
         ) or (
-            '<tr><td colspan="8" class="empty">No dispatch samples '
+            '<tr><td colspan="9" class="empty">No dispatch samples '
             '(needs STI resume Name[id] or create→first-run)</td></tr>'
         )
         dispatch_html = (
             f'<section class="report-card"><h2>Dispatch / Scheduling Latency{_esc(scope_title)}</h2>'
             '<p class="detail-note">Ready from STI resume / create; sync wakes not attributed.</p>'
             '<table><thead><tr><th>Task</th><th>Activations</th><th>Min</th><th>Avg</th>'
-            '<th>Max</th><th>Jitter</th><th>σ</th><th>p95</th></tr></thead>'
+            '<th>Max</th><th>Jitter</th><th>σ</th><th>p95</th><th>p99</th></tr></thead>'
             f'<tbody>{disp_body}</tbody></table></section>'
         )
 
@@ -10304,6 +11248,27 @@ class _StatsPanel(QWidget):
             '<table><thead><tr><th>Task</th><th>Mask</th><th>Observed Cores</th>'
             '<th>Violations</th></tr></thead>'
             f'<tbody>{aff_body}</tbody></table></section>'
+        )
+
+        _ux_evs = self._ux_events(trace, lo, hi)
+        _span_ns = max(1, (hi - lo) if lo is not None and hi is not None
+                       else (trace.time_max - trace.time_min))
+        _tc = task_core_matrix(_ux_evs, list(trace.core_names or []), _span_ns)
+        _tc_cores = _tc.get("cores") or []
+        _tc_head = "<th>Task</th>" + "".join(f"<th>{_esc(c)}</th>" for c in _tc_cores)
+        _tc_body = "".join(
+            "<tr><td>" + _esc(r.get("task") or "") + "</td>" + "".join(
+                f"<td>{(r.get('cells') or {}).get(c, {}).get('pct_span', 0):.1f}%</td>"
+                if (r.get("cells") or {}).get(c, {}).get("ns")
+                else "<td>—</td>"
+                for c in _tc_cores
+            ) + "</tr>"
+            for r in _tc.get("rows") or []
+        ) or f'<tr><td colspan="{len(_tc_cores) + 1}" class="empty">No on-CPU slices</td></tr>'
+        task_core_html = (
+            f'<section class="report-card"><h2>Task × Core{_esc(scope_title)}</h2>'
+            f'<table><thead><tr>{_tc_head}</tr></thead>'
+            f'<tbody>{_tc_body}</tbody></table></section>'
         )
 
         # Deadlines / CPU budget
@@ -10331,6 +11296,247 @@ class _StatsPanel(QWidget):
                 "<table><thead><tr><th>Task</th><th>CPU %</th><th>Budget</th></tr></thead>"
                 f"<tbody>{cv_body}</tbody></table></section>"
             )
+
+        _dead_mks = []
+        for item in _sv:
+            if len(item) > 4:
+                _dead_mks.append(item[4])
+        for item in _cv:
+            if len(item) > 3:
+                _dead_mks.append(item[3])
+        _th_rows = task_health_scores(health_inputs_from_events(_ux_evs, _span_ns, _dead_mks))
+        _th_body = "".join(
+            f"<tr><td>{_esc(r.get('task') or '')}</td><td>{int(r.get('score') or 0)}</td>"
+            + "".join(
+                f"<td>{_esc((r.get('marks') or {}).get(k, ''))}</td>"
+                for k in ("execution", "blocking", "period", "migration", "deadline", "cpu")
+            )
+            + "</tr>"
+            for r in _th_rows
+        ) or '<tr><td colspan="8" class="empty">No task slices</td></tr>'
+        task_health_html = (
+            f'<section class="report-card"><h2>Task Health{_esc(scope_title)}</h2>'
+            '<p class="detail-note">Heuristic score from measured statistics, not an AI probability.</p>'
+            '<table><thead><tr><th>Task</th><th>Score</th><th>Exec</th><th>Block</th>'
+            '<th>Period</th><th>Mig</th><th>Deadline</th><th>CPU</th></tr></thead>'
+            f'<tbody>{_th_body}</tbody></table></section>'
+        )
+        _per_rows = analyze_task_periods(_ux_evs, 3)
+        _per_body = "".join(
+            f"<tr><td>{_esc(r.get('task') or '')}</td><td>{r.get('n') or 0}</td>"
+            f"<td>{_esc(_format_time(int(r.get('expected_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('min_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('avg_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('max_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('p95_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('p99_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('rms_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{float(r.get('cv') or 0) * 100:.1f}%</td>"
+            f"<td>{r.get('missed') or 0}</td><td>{r.get('extra') or 0}</td>"
+            f"<td>{r.get('burst') or 0}</td>"
+            f"<td>{_esc(r.get('spark') or '')}</td></tr>"
+            for r in _per_rows
+        ) or '<tr><td colspan="14" class="empty">Need at least 3 inter-arrival gaps per task</td></tr>'
+        period_html = (
+            f'<section class="report-card"><h2>Period / Jitter{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Task</th><th>N</th><th>Expected</th><th>Min</th><th>Avg</th>'
+            '<th>Max</th><th>p95</th><th>p99</th><th>RMS</th><th>CV</th><th>Missed</th>'
+            '<th>Extra</th><th>Burst</th><th>Spark</th></tr></thead>'
+            f'<tbody>{_per_body}</tbody></table></section>'
+        )
+        _an_rows = detect_timeline_anomalies(
+            _ux_evs, 12,
+            pair_mutex_waits(harvest_mutex_holds(trace, lo, hi)),
+            self._task_deadlines_ns,
+        )
+        _an_body = "".join(
+            f"<tr><td>{_esc(_format_time(int(r.get('start') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(KIND_LABEL.get(str(r.get('kind') or ''), str(r.get('kind') or '')))}</td>"
+            f"<td>{_esc(r.get('task') or '')}</td>"
+            f"<td>{_esc(_format_time(int(r.get('duration') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(r.get('reason') or '')}</td></tr>"
+            for r in _an_rows
+        ) or '<tr><td colspan="5" class="empty">No timeline anomalies in this scope</td></tr>'
+        anomalies_html = (
+            f'<section class="report-card"><h2>Timeline Anomalies{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Time</th><th>Kind</th><th>Task</th>'
+            '<th>Duration</th><th>Why</th></tr></thead>'
+            f'<tbody>{_an_body}</tbody></table></section>'
+        )
+        _woe_rows = collect_worst_events(_ux_evs, 12)
+        _woe_body = "".join(
+            f"<tr><td>{_esc(_format_time(int(r.get('start') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(KIND_LABEL.get(str(r.get('kind') or ''), str(r.get('kind') or '')))}</td>"
+            f"<td>{_esc(r.get('task') or '')}</td>"
+            f"<td>{_esc(_format_time(int(r.get('duration') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(r.get('reason') or KIND_LABEL.get(str(r.get('kind') or ''), ''))}</td></tr>"
+            for r in _woe_rows
+        ) or '<tr><td colspan="5" class="empty">No episodes in this scope</td></tr>'
+        worst_html = (
+            f'<section class="report-card"><h2>Worst Events{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Time</th><th>Kind</th><th>Task</th>'
+            '<th>Duration</th><th>Why</th></tr></thead>'
+            f'<tbody>{_woe_body}</tbody></table></section>'
+        )
+        _wo = waiter_owner_matrix(pair_mutex_waits(harvest_mutex_holds(trace, lo, hi)))
+        _wo_tasks = _wo.get("tasks") or []
+        _wo_cells = _wo.get("cells") or {}
+        if _wo_tasks:
+            _wo_head = "<th>Waiter \\ Owner</th>" + "".join(
+                f"<th>{_esc(t.get('task') or t.get('mk'))}</th>" for t in _wo_tasks)
+            _wo_lines = []
+            for w in _wo_tasks:
+                cells_html = []
+                for o in _wo_tasks:
+                    if w.get("mk") == o.get("mk"):
+                        cells_html.append("<td>—</td>")
+                        continue
+                    cell = _wo_cells.get(f"{w.get('mk')}|{o.get('mk')}") or {}
+                    ns = int(cell.get("ns") or 0)
+                    cells_html.append(
+                        f"<td>{_esc(_format_time(ns, trace.time_scale))}</td>" if ns
+                        else "<td>—</td>"
+                    )
+                _wo_lines.append(
+                    "<tr><td>" + _esc(w.get("task") or w.get("mk") or "") +
+                    "</td>" + "".join(cells_html) + "</tr>"
+                )
+            wait_owner_html = (
+                f'<section class="report-card"><h2>Waiter × Owner{_esc(scope_title)}</h2>'
+                '<p class="detail-note">Heuristic mutex handoff matrix, not a kernel wait queue.</p>'
+                f'<table><thead><tr>{_wo_head}</tr></thead>'
+                f'<tbody>{"".join(_wo_lines)}</tbody></table></section>'
+            )
+        else:
+            wait_owner_html = (
+                f'<section class="report-card"><h2>Waiter × Owner{_esc(scope_title)}</h2>'
+                '<p class="empty">No mutex handoffs in this scope</p></section>'
+            )
+        _rt_rows = analyze_response_times(_ux_evs).get("rows") or []
+        _rt_body = "".join(
+            f"<tr><td>{_esc(r.get('task') or '')}</td><td>{r.get('n') or 0}</td>"
+            f"<td>{_esc(_format_time(int(r.get('min_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('avg_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('max_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('p50_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('p90_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('p95_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('p99_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('p999_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{float(r.get('cv') or 0) * 100:.1f}%</td></tr>"
+            for r in _rt_rows
+        ) or '<tr><td colspan="12" class="empty">Need at least one on-CPU slice</td></tr>'
+        response_html = (
+            f'<section class="report-card"><h2>Response Time{_esc(scope_title)}</h2>'
+            '<p class="detail-note">Heuristic ready→completion from adjacent slices, '
+            'not an explicit BTF release/completion pair.</p>'
+            '<table><thead><tr><th>Task</th><th>N</th><th>Min</th><th>Avg</th><th>Max</th>'
+            '<th>p50</th><th>p90</th><th>p95</th><th>p99</th><th>p99.9</th>'
+            '<th>Jitter</th><th>CV</th></tr></thead>'
+            f'<tbody>{_rt_body}</tbody></table></section>'
+        )
+        _cp_rows = critical_path_rows(_ux_evs, 8)
+        _cp_body = "".join(
+            f"<tr><td>{_esc(r.get('task') or '')}</td>"
+            f"<td>{_esc(_format_time(int(r.get('duration') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('exec_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('preempt_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('wait_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('migration_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('other_ns') or 0), trace.time_scale))}</td></tr>"
+            for r in _cp_rows
+        ) or '<tr><td colspan="7" class="empty">Need at least one on-CPU slice</td></tr>'
+        crit_path_html = (
+            f'<section class="report-card"><h2>Critical Path{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Task</th><th>Duration</th><th>Exec</th>'
+            '<th>Preempt</th><th>Wait</th><th>Mig</th><th>Other</th></tr></thead>'
+            f'<tbody>{_cp_body}</tbody></table></section>'
+        )
+        _pat_rows = recurring_patterns(_an_rows, 2)
+        _pat_body = "".join(
+            f"<tr><td>{_esc(r.get('task') or '')}</td>"
+            f"<td>{_esc(KIND_LABEL.get(str(r.get('kind') or ''), str(r.get('kind') or '')))}</td>"
+            f"<td>{r.get('count') or 0}</td>"
+            f"<td>{_esc(_format_time(int(r.get('duration') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(r.get('reason') or '')}</td></tr>"
+            for r in _pat_rows
+        ) or '<tr><td colspan="5" class="empty">No repeating anomaly kinds in this scope</td></tr>'
+        patterns_html = (
+            f'<section class="report-card"><h2>Recurring Patterns{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Task</th><th>Kind</th><th>Count</th>'
+            '<th>Worst</th><th>Why</th></tr></thead>'
+            f'<tbody>{_pat_body}</tbody></table></section>'
+        )
+        _jit_rows = unified_jitter(_ux_evs, self._dispatch_sample_map(trace, lo, hi))
+        _jit_body = "".join(
+            f"<tr><td>{_esc(r.get('task') or '')}</td>"
+            f"<td>{_esc(_format_time(int(r.get('exec_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{float(r.get('exec_cv') or 0) * 100:.1f}%</td>"
+            f"<td>{_esc(_format_time(int(r.get('block_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{float(r.get('block_cv') or 0) * 100:.1f}%</td>"
+            f"<td>{_esc(_format_time(int(r.get('inter_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{float(r.get('inter_cv') or 0) * 100:.1f}%</td>"
+            f"<td>{_esc(_format_time(int(r.get('response_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{float(r.get('response_cv') or 0) * 100:.1f}%</td>"
+            f"<td>{_esc(_format_time(int(r.get('dispatch_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{float(r.get('dispatch_cv') or 0) * 100:.1f}%</td>"
+            f"<td>{_esc(_format_time(int(r.get('wakeup_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{float(r.get('wakeup_cv') or 0) * 100:.1f}%</td></tr>"
+            for r in _jit_rows
+        ) or '<tr><td colspan="13" class="empty">No timing samples in this scope</td></tr>'
+        jitter_html = (
+            f'<section class="report-card"><h2>Unified Jitter{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Task</th><th>Exec</th><th>Exec CV</th><th>Block</th>'
+            '<th>Block CV</th><th>Inter</th><th>Inter CV</th><th>Response</th>'
+            '<th>Resp CV</th><th>Dispatch</th><th>Disp CV</th><th>Wake</th>'
+            '<th>Wake CV</th></tr></thead>'
+            f'<tbody>{_jit_body}</tbody></table></section>'
+        )
+        _pm_rows = preemptor_ranking(preemption_pairs(_ux_evs), 16)
+        _pm_body = "".join(
+            f"<tr><td>{_esc(r.get('task') or '')}</td><td>{r.get('count') or 0}</td>"
+            f"<td>{_esc(_format_time(int(r.get('total_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('max_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(r.get('top_label') or '')}</td></tr>"
+            for r in _pm_rows
+        ) or '<tr><td colspan="5" class="empty">No preemption overlaps in this scope</td></tr>'
+        preempt_matrix_html = (
+            f'<section class="report-card"><h2>Preemption Matrix{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Victim</th><th>Count</th><th>Total</th>'
+            '<th>Max</th><th>Top preemptors</th></tr></thead>'
+            f'<tbody>{_pm_body}</tbody></table></section>'
+        )
+        _mb_rows = mutex_blocking_table(pair_mutex_waits(harvest_mutex_holds(trace, lo, hi)))
+        _mb_body = "".join(
+            f"<tr><td>{_esc(r.get('task') or '')}</td><td>{_esc(r.get('object') or '')}</td>"
+            f"<td>{_esc(r.get('owner') or '')}</td><td>{r.get('count') or 0}</td>"
+            f"<td>{_esc(_format_time(int(r.get('total_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('max_ns') or 0), trace.time_scale))}</td></tr>"
+            for r in _mb_rows
+        ) or '<tr><td colspan="6" class="empty">No mutex waits in this scope</td></tr>'
+        mutex_block_html = (
+            f'<section class="report-card"><h2>Mutex Blocking{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Task</th><th>Object</th><th>Owner</th>'
+            '<th>Count</th><th>Total</th><th>Max</th></tr></thead>'
+            f'<tbody>{_mb_body}</tbody></table></section>'
+        )
+        _ct = core_util_over_time(_ux_evs, list(trace.core_names or []), lo, hi)
+        _ct_cores = _ct.get("cores") or []
+        _ct_head = "<th>Time</th>" + "".join(f"<th>{_esc(c)}</th>" for c in _ct_cores)
+        _ct_body = "".join(
+            "<tr><td>" + _esc(_format_time(int(r.get("start") or 0), trace.time_scale)) + "</td>"
+            + "".join(
+                f"<td>{float(((r.get('cells') or {}).get(c) or {}).get('pct') or 0):.1f}%</td>"
+                for c in _ct_cores
+            ) + "</tr>"
+            for r in (_ct.get("bins") or [])
+        ) or f'<tr><td colspan="{len(_ct_cores) + 1}" class="empty">No on-CPU slices</td></tr>'
+        core_time_html = (
+            f'<section class="report-card"><h2>Core Utilization Over Time{_esc(scope_title)}</h2>'
+            f'<table><thead><tr>{_ct_head}</tr></thead>'
+            f'<tbody>{_ct_body}</tbody></table></section>'
+        )
 
         analysis_findings = _build_workflow_analysis_findings(
             core_rows=core_rows,
@@ -10443,12 +11649,25 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             {range_note}
             <li><strong>Execution Time Per Slice:</strong> Duration of each continuous task run between two context switches. Lower and tighter values indicate more predictable execution.</li>
             <li><strong>Inter-Arrival Time:</strong> Time between consecutive activations of the same task (slice start to next slice start). It reflects activation cadence and jitter.</li>
-            <li><strong>Blocking Time:</strong> Off-CPU gap between the end of one slice and the start of the next for the same task. It is not end-to-end response time, which requires explicit release and completion events.</li>
+            <li><strong>Blocking Time:</strong> Off-CPU gap between the end of one slice and the start of the next for the same task (scheduling latency until resume). It is not end-to-end response time, which requires explicit release and completion events.</li>
       <li><strong>Preemption Chain Analysis:</strong> For each blocking gap of a victim task, identifies which task ran on the same core during that gap. High counts or long totals point to recurring preemption bottlenecks.</li>
-      <li><strong>Priority Inheritance:</strong> When traces include <code>create pri:N</code> and priority STI events, lists tasks boosted above base priority. Detail table lists each boost episode.</li>
-      <li><strong>Mutex / Semaphore:</strong> Pairs take/give STI by object pointer; detail tables list pairing issues and hold episodes.</li>
-      <li><strong>Interval Analysis:</strong> Paired interval_start / interval_stop spans per user-defined id. Detail table lists individual instances.</li>
+      <li><strong>Priority Inheritance:</strong> When traces include <code>create pri:N</code> on task create and <code>set_priority</code> STI events, lists tasks boosted above their base priority. <em>L/M/H pattern</em> flags classic priority-inversion geometry (medium-priority task between base and peak).</li>
+      <li><strong>Mutex / Semaphore:</strong> Pairs <code>take</code>/<code>give</code> STI events by object pointer (<code>0x........</code> in the note). Reports orphan gives, cross-task gives, unmatched takes, delete-while-held, and multi-mutex hold at trace end (deadlock risk).</li>
+      <li><strong>Interval Analysis:</strong> Pairs <code>interval_start</code> / <code>interval_stop</code> STI events by id; shows count, min/avg/max/p95 duration per interval id (Tracealyzer-style interval plot).</li>
       <li><strong>Tag Analysis:</strong> Numeric samples from tag0_event … tag7_event STI channels (note field); scatter plot shows value over time.</li>
+      <li><strong>Task × Core:</strong> Per-task execution share of the scoped span on each core.</li>
+      <li><strong>Task Health:</strong> Heuristic 0–100 score from measured statistics, not an AI probability.</li>
+      <li><strong>Timeline Anomalies / Worst Events:</strong> Unusual long tails, migration / preemption / ISR / wakeup bursts, CPU spikes, idle gaps, and the longest execution, blocking, and inter-arrival episodes in scope.</li>
+      <li><strong>Response Time:</strong> Heuristic ready→completion from adjacent slices (previous slice end → this slice end). Not an explicit BTF release/completion pair.</li>
+      <li><strong>Critical Path:</strong> Longest heuristic response windows split into exec / preempt / wait / migration.</li>
+      <li><strong>Period / Jitter:</strong> Median inter-arrival as expected period, with RMS jitter, CV, missed (&gt; 1.5×) and extra (&lt; 0.5×) activations.</li>
+      <li><strong>Unified Jitter:</strong> Max−Min spread and CV for execution, blocking, inter-arrival, heuristic response, STI dispatch latency, and wake-to-run (response wait stand-in).</li>
+      <li><strong>Distribution Explorer:</strong> Choose a metric and task, then open the existing histogram/CDF plot.</li>
+      <li><strong>Recurring Patterns:</strong> Anomaly kinds that repeat for the same task in this scope.</li>
+      <li><strong>Preemption Matrix:</strong> Victim × preemptor overlap during off-CPU gaps on the same core, plus preemptor ranking.</li>
+      <li><strong>Waiter × Owner:</strong> Heuristic mutex handoff matrix (next distinct acquirer × previous holder), not a kernel wait queue.</li>
+      <li><strong>Mutex Blocking:</strong> Per-task mutex wait totals from those heuristic handoffs.</li>
+      <li><strong>Core Utilization Over Time:</strong> Per-core busy percent in equal time bins of the current scope.</li>
             <li><strong>Context switches:</strong> Count of segment boundaries on all cores whose start time falls inside the statistics scope.</li>
             <li><strong>Min (Minimum):</strong> The fastest execution time recorded. It represents the best-case scenario under zero system load.</li>
             <li><strong>Max (Maximum):</strong> The slowest execution time recorded. It identifies worst-case bottlenecks, spikes, or resource contention.</li>
@@ -10471,24 +11690,37 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
     <h2>Core Migrations{_esc(scope_title)}</h2>
     <table>
       <thead><tr><th>Task</th><th>Migr</th><th>Rate</th><th>Dwell</th><th>Cores</th><th>Primary</th><th>Ping</th><th>STI±</th><th>Gap after</th><th>Gap other</th></tr></thead>
-      <tbody>{"".join(_migration_row_html(r) for r in mig_rows) or '<tr><td colspan="10" class="empty">No data</td></tr>'}</tbody>
+      <tbody>{"".join(_migration_row_html(r) for r in mig_rows) or '<tr><td colspan="10" class="empty">No migrated tasks</td></tr>'}</tbody>
     </table>
   </section>
     {core_pair_html}
     {affinity_html}
+    {task_core_html}
+    {core_time_html}
     {lifecycle_html}
     {deadline_html}
+    {task_health_html}
+    {anomalies_html}
+    {worst_html}
+    {crit_path_html}
+    {patterns_html}
     {_render_exec_table(exec_rows)}
     {_render_stats_table(f'Blocking Time (off-CPU gap){scope_title}', block_rows)}
     {dispatch_html}
     {_render_stats_table(f'Inter-Arrival Time{scope_title}', inter_rows)}
+    {period_html}
+    {response_html}
+    {jitter_html}
     <section class=\"report-card\"><h2>Preemption Chain Analysis{_esc(scope_title)}</h2>
     <table><thead><tr><th>Victim</th><th>Preemptor</th><th>Count</th><th>Total</th><th>Avg</th><th>Max</th></tr></thead>
     <tbody>{"".join(
         f"<tr><td>{_esc(r[1])}</td><td>{_esc(r[2])}</td><td>{r[3]}</td><td>{_esc(r[4])}</td><td>{_esc(r[5])}</td><td>{_esc(r[6])}</td></tr>"
         for r in preempt_rows) or "<tr><td colspan=\"6\" class=\"empty\">No preemption events found</td></tr>"}</tbody></table></section>
+    {preempt_matrix_html}
     {priority_html}
     {sync_html}
+    {wait_owner_html}
+    {mutex_block_html}
     {queue_html}
     {interval_html}
     {tag_html}
@@ -10592,6 +11824,9 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
         ] if trace.has_sync_object_instrumentation else []
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
         tick = _tick_health_report(trace, lo, hi)
+        _ux_evs_csv = self._ux_events(trace, lo, hi)
+        _span_ns_csv = max(1, (hi - lo) if lo is not None and hi is not None
+                           else (trace.time_max - trace.time_min))
 
         def _us(v: object) -> str:
             return str(v).replace("µs", "us").replace("μs", "us")
@@ -10745,6 +11980,42 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             else:
                 writer.writerow(["No affinity_set events", "", "", ""])
 
+            _tc_csv = task_core_matrix(
+                _ux_evs_csv, list(trace.core_names or []), _span_ns_csv)
+            _tc_cores_csv = _tc_csv.get("cores") or []
+            writer.writerow([])
+            writer.writerow([f"Task × Core{scope_suffix}"])
+            writer.writerow(["Task"] + list(_tc_cores_csv))
+            if _tc_csv.get("rows"):
+                for r in _tc_csv["rows"]:
+                    cells = r.get("cells") or {}
+                    writer.writerow(
+                        [r.get("task") or ""] + [
+                            f"{(cells.get(c) or {}).get('pct_span', 0):.1f}%"
+                            if (cells.get(c) or {}).get("ns") else ""
+                            for c in _tc_cores_csv
+                        ])
+            else:
+                writer.writerow(["No on-CPU slices"] + [""] * len(_tc_cores_csv))
+
+            _ct_csv = core_util_over_time(
+                _ux_evs_csv, list(trace.core_names or []), lo, hi)
+            _ct_cores_csv = _ct_csv.get("cores") or []
+            writer.writerow([])
+            writer.writerow([f"Core Utilization Over Time{scope_suffix}"])
+            writer.writerow(["Time"] + list(_ct_cores_csv))
+            if _ct_csv.get("bins"):
+                for r in _ct_csv["bins"]:
+                    cells = r.get("cells") or {}
+                    writer.writerow(
+                        [_us(_format_time(int(r.get("start") or 0), trace.time_scale))]
+                        + [
+                            f"{float((cells.get(c) or {}).get('pct') or 0):.1f}%"
+                            for c in _ct_cores_csv
+                        ])
+            else:
+                writer.writerow(["No on-CPU slices"] + [""] * len(_ct_cores_csv))
+
             lc_rows_csv = _task_lifecycle_rows(trace, lo, hi)
             writer.writerow([])
             writer.writerow([f"Task Lifecycle{scope_suffix}"])
@@ -10779,6 +12050,106 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                         writer.writerow([lbl, pct, bgt])
                 else:
                     writer.writerow(["No CPU budget violations", "", ""])
+
+            _dead_mks_csv = []
+            if self._cpu_budget_pct > 0 or self._task_deadlines_ns:
+                _dl_for_health = _deadline_violations(
+                    trace, self._cpu_budget_pct, self._task_deadlines_ns, lo, hi)
+                for item in _dl_for_health.get("slice_violations") or []:
+                    if len(item) > 4:
+                        _dead_mks_csv.append(item[4])
+                for item in _dl_for_health.get("cpu_violations") or []:
+                    if len(item) > 3:
+                        _dead_mks_csv.append(item[3])
+            _th_csv = task_health_scores(
+                health_inputs_from_events(_ux_evs_csv, _span_ns_csv, _dead_mks_csv))
+            writer.writerow([])
+            writer.writerow([f"Task Health{scope_suffix}"])
+            writer.writerow([
+                "Task", "Score", "Exec", "Block", "Period", "Mig", "Deadline", "CPU",
+            ])
+            if _th_csv:
+                for r in _th_csv:
+                    marks = r.get("marks") or {}
+                    writer.writerow([
+                        r.get("task") or "", int(r.get("score") or 0),
+                        marks.get("execution", ""), marks.get("blocking", ""),
+                        marks.get("period", ""), marks.get("migration", ""),
+                        marks.get("deadline", ""), marks.get("cpu", ""),
+                    ])
+            else:
+                writer.writerow(["No task slices"] + [""] * 7)
+
+            writer.writerow([])
+            writer.writerow([f"Timeline Anomalies{scope_suffix}"])
+            writer.writerow(["Time", "Kind", "Task", "Duration", "Why"])
+            _an_csv = detect_timeline_anomalies(
+                _ux_evs_csv, 12,
+                pair_mutex_waits(harvest_mutex_holds(trace, lo, hi)),
+                self._task_deadlines_ns,
+            )
+            if _an_csv:
+                for r in _an_csv:
+                    writer.writerow([
+                        _us(_format_time(int(r.get("start") or 0), trace.time_scale)),
+                        KIND_LABEL.get(str(r.get("kind") or ""), str(r.get("kind") or "")),
+                        r.get("task") or "",
+                        _us(_format_time(int(r.get("duration") or 0), trace.time_scale)),
+                        r.get("reason") or "",
+                    ])
+            else:
+                writer.writerow(["No timeline anomalies in this scope", "", "", "", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Worst Events{scope_suffix}"])
+            writer.writerow(["Time", "Kind", "Task", "Duration", "Why"])
+            _woe_csv = collect_worst_events(_ux_evs_csv, 12)
+            if _woe_csv:
+                for r in _woe_csv:
+                    writer.writerow([
+                        _us(_format_time(int(r.get("start") or 0), trace.time_scale)),
+                        KIND_LABEL.get(str(r.get("kind") or ""), str(r.get("kind") or "")),
+                        r.get("task") or "",
+                        _us(_format_time(int(r.get("duration") or 0), trace.time_scale)),
+                        r.get("reason") or KIND_LABEL.get(
+                            str(r.get("kind") or ""), ""),
+                    ])
+            else:
+                writer.writerow(["No episodes in this scope", "", "", "", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Critical Path{scope_suffix}"])
+            writer.writerow(["Task", "Duration", "Exec", "Preempt", "Wait", "Mig", "Other"])
+            _cp_csv = critical_path_rows(_ux_evs_csv, 8)
+            if _cp_csv:
+                for r in _cp_csv:
+                    writer.writerow([
+                        r.get("task") or "",
+                        _us(_format_time(int(r.get("duration") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("exec_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("preempt_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("wait_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("migration_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("other_ns") or 0), trace.time_scale)),
+                    ])
+            else:
+                writer.writerow(["Need at least one on-CPU slice"] + [""] * 5)
+
+            writer.writerow([])
+            writer.writerow([f"Recurring Patterns{scope_suffix}"])
+            writer.writerow(["Task", "Kind", "Count", "Worst", "Why"])
+            _pat_csv = recurring_patterns(_an_csv, 2)
+            if _pat_csv:
+                for r in _pat_csv:
+                    writer.writerow([
+                        r.get("task") or "",
+                        KIND_LABEL.get(str(r.get("kind") or ""), str(r.get("kind") or "")),
+                        r.get("count") or 0,
+                        _us(_format_time(int(r.get("duration") or 0), trace.time_scale)),
+                        r.get("reason") or "",
+                    ])
+            else:
+                writer.writerow(["No repeating anomaly kinds in this scope", "", "", "", ""])
 
             writer.writerow([])
             writer.writerow([f"Execution Time Per Slice{scope_suffix}"])
@@ -10817,7 +12188,7 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             writer.writerow([f"Dispatch / Scheduling Latency{scope_suffix}"])
             writer.writerow([
                 "Task", "Activations", "Min", "Avg", "Max", "Jitter",
-                "StdDev (population)", "p95",
+                "StdDev (population)", "p95", "p99",
             ])
             _disp_by = _dispatch_latency_by_mk(trace, lo, hi)
             _disp_any = False
@@ -10834,10 +12205,11 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                 if summary is None:
                     continue
                 _disp_any = True
-                mn, avg, mx, jitter, stddev, p95 = summary
+                mn, avg, mx, jitter, stddev, p95, p99 = summary
                 writer.writerow([
                     _task_display_name(raw), len(data["samples"]),
-                    _us(mn), _us(avg), _us(mx), _us(jitter), _us(stddev), _us(p95),
+                    _us(mn), _us(avg), _us(mx), _us(jitter), _us(stddev),
+                    _us(p95), _us(p99),
                 ])
             if not _disp_any:
                 writer.writerow(["No data"] + [""] * 7)
@@ -10859,6 +12231,85 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                 writer.writerow(["No data"] + [""] * 9)
 
             writer.writerow([])
+            writer.writerow([f"Period / Jitter{scope_suffix}"])
+            writer.writerow([
+                "Task", "N", "Expected", "Min", "Avg", "Max", "p95", "p99",
+                "RMS", "CV", "Missed", "Extra", "Burst", "Spark",
+            ])
+            _per_csv = analyze_task_periods(_ux_evs_csv, 3)
+            if _per_csv:
+                for r in _per_csv:
+                    writer.writerow([
+                        r.get("task") or "", r.get("n") or 0,
+                        _us(_format_time(int(r.get("expected_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("min_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("avg_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("max_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("p95_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("p99_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("rms_ns") or 0), trace.time_scale)),
+                        f"{float(r.get('cv') or 0) * 100:.1f}%",
+                        r.get("missed") or 0, r.get("extra") or 0,
+                        r.get("burst") or 0, r.get("spark") or "",
+                    ])
+            else:
+                writer.writerow(["Need at least 3 inter-arrival gaps per task"] + [""] * 13)
+
+            writer.writerow([])
+            writer.writerow([f"Response Time{scope_suffix}"])
+            writer.writerow([
+                "Task", "N", "Min", "Avg", "Max", "p50", "p90", "p95",
+                "p99", "p99.9", "Jitter", "CV",
+            ])
+            _rt_csv = analyze_response_times(_ux_evs_csv).get("rows") or []
+            if _rt_csv:
+                for r in _rt_csv:
+                    writer.writerow([
+                        r.get("task") or "", r.get("n") or 0,
+                        _us(_format_time(int(r.get("min_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("avg_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("max_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("p50_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("p90_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("p95_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("p99_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("p999_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("jitter_ns") or 0), trace.time_scale)),
+                        f"{float(r.get('cv') or 0) * 100:.1f}%",
+                    ])
+            else:
+                writer.writerow(["Need at least one on-CPU slice"] + [""] * 11)
+
+            writer.writerow([])
+            writer.writerow([f"Unified Jitter{scope_suffix}"])
+            writer.writerow([
+                "Task", "Exec", "Exec CV", "Block", "Block CV",
+                "Inter", "Inter CV", "Response", "Resp CV",
+                "Dispatch", "Disp CV", "Wake", "Wake CV",
+            ])
+            _jit_csv = unified_jitter(
+                _ux_evs_csv, self._dispatch_sample_map(trace, lo, hi))
+            if _jit_csv:
+                for r in _jit_csv:
+                    writer.writerow([
+                        r.get("task") or "",
+                        _us(_format_time(int(r.get("exec_jitter_ns") or 0), trace.time_scale)),
+                        f"{float(r.get('exec_cv') or 0) * 100:.1f}%",
+                        _us(_format_time(int(r.get("block_jitter_ns") or 0), trace.time_scale)),
+                        f"{float(r.get('block_cv') or 0) * 100:.1f}%",
+                        _us(_format_time(int(r.get("inter_jitter_ns") or 0), trace.time_scale)),
+                        f"{float(r.get('inter_cv') or 0) * 100:.1f}%",
+                        _us(_format_time(int(r.get("response_jitter_ns") or 0), trace.time_scale)),
+                        f"{float(r.get('response_cv') or 0) * 100:.1f}%",
+                        _us(_format_time(int(r.get("dispatch_jitter_ns") or 0), trace.time_scale)),
+                        f"{float(r.get('dispatch_cv') or 0) * 100:.1f}%",
+                        _us(_format_time(int(r.get("wakeup_jitter_ns") or 0), trace.time_scale)),
+                        f"{float(r.get('wakeup_cv') or 0) * 100:.1f}%",
+                    ])
+            else:
+                writer.writerow(["No timing samples in this scope"] + [""] * 12)
+
+            writer.writerow([])
             writer.writerow([f"Preemption Chain Analysis{scope_suffix}"])
             writer.writerow(["Victim", "Preemptor", "Count", "Total", "Avg", "Max"])
             if preempt_rows_csv:
@@ -10866,6 +12317,22 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                     writer.writerow([victim, preemptor, count, _us(total), _us(avg), _us(mx)])
             else:
                 writer.writerow(["No preemption events found", "", "", "", "", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Preemption Matrix{scope_suffix}"])
+            writer.writerow(["Victim", "Count", "Total", "Max", "Top preemptors"])
+            _pm_csv = preemptor_ranking(preemption_pairs(_ux_evs_csv), 16)
+            if _pm_csv:
+                for r in _pm_csv:
+                    writer.writerow([
+                        r.get("task") or "",
+                        r.get("count") or 0,
+                        _us(_format_time(int(r.get("total_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("max_ns") or 0), trace.time_scale)),
+                        r.get("top_label") or "",
+                    ])
+            else:
+                writer.writerow(["No preemption overlaps in this scope", "", "", "", ""])
 
             writer.writerow([])
             writer.writerow([f"Priority Inheritance{scope_suffix}"])
@@ -10914,6 +12381,48 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                         ])
                 else:
                     writer.writerow(["No pairing issues in scope", "", "", "", "", ""])
+
+            _wo_csv = waiter_owner_matrix(
+                pair_mutex_waits(harvest_mutex_holds(trace, lo, hi)))
+            _wo_tasks_csv = _wo_csv.get("tasks") or []
+            _wo_cells_csv = _wo_csv.get("cells") or {}
+            writer.writerow([])
+            writer.writerow([f"Waiter × Owner{scope_suffix}"])
+            writer.writerow(
+                ["Waiter \\ Owner"] + [
+                    t.get("task") or t.get("mk") for t in _wo_tasks_csv])
+            if _wo_tasks_csv:
+                for w in _wo_tasks_csv:
+                    row_vals = [w.get("task") or w.get("mk") or ""]
+                    for o in _wo_tasks_csv:
+                        if w.get("mk") == o.get("mk"):
+                            row_vals.append("")
+                            continue
+                        cell = _wo_cells_csv.get(f"{w.get('mk')}|{o.get('mk')}") or {}
+                        ns = int(cell.get("ns") or 0)
+                        row_vals.append(
+                            _us(_format_time(ns, trace.time_scale)) if ns else "")
+                    writer.writerow(row_vals)
+            else:
+                writer.writerow(["No mutex handoffs in this scope"])
+
+            writer.writerow([])
+            writer.writerow([f"Mutex Blocking{scope_suffix}"])
+            writer.writerow(["Task", "Object", "Owner", "Count", "Total", "Max"])
+            _mb_csv = mutex_blocking_table(
+                pair_mutex_waits(harvest_mutex_holds(trace, lo, hi)))
+            if _mb_csv:
+                for r in _mb_csv:
+                    writer.writerow([
+                        r.get("task") or "",
+                        r.get("object") or "",
+                        r.get("owner") or "",
+                        r.get("count") or 0,
+                        _us(_format_time(int(r.get("total_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("max_ns") or 0), trace.time_scale)),
+                    ])
+            else:
+                writer.writerow(["No mutex waits in this scope", "", "", "", "", ""])
 
             queue_rows_csv = _sync_object_stats_rows(trace, lo, hi, kind_filter="queue")
             writer.writerow([])
@@ -10974,11 +12483,11 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
     def clear_trace(self) -> None:
         """Empty Statistics when no trace tab is open (welcome / close-all)."""
         self.clear_plot_session()
+        self._defer_heavy_collapse_done = False
         self._trace = None
         self._cursor_times = []
         self._btn_export_csv.setEnabled(False)
         self._btn_export_html.setEnabled(False)
-        self._btn_compare_mig.setEnabled(False)
         self._scope_cb.setEnabled(False)
         self._clear()
         self._update_scope_header()
@@ -10996,17 +12505,12 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
         defer_heavy = trace_needs_deferred_stats_load(trace)
         self._btn_export_csv.setEnabled(True)
         self._btn_export_html.setEnabled(True)
-        wnd = self.window()
-        self._btn_compare_mig.setEnabled(
-            isinstance(wnd, QMainWindow) and len(getattr(wnd, "_tabs", ())) >= 2)
         self._clear()
         self._defer_heavy_sections = defer_heavy
-        if defer_heavy and not self._defer_heavy_collapse_done:
-            pinned = set(self._section_pins)
-            for sid in STATS_HEAVY_SECTIONS:
-                if sid in pinned:
-                    continue
-                self._section_collapsed[sid] = True
+        # Do not rewrite collapse flags here. Defaults already start most
+        # sections closed; Expand all / persisted btf_viewer.rc must survive
+        # rebuild when a large trace is reopened.
+        if defer_heavy:
             self._defer_heavy_collapse_done = True
         self._update_scope_header()
 
@@ -11515,6 +13019,121 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             _populate_core_pairs,
         )
 
+        # -- Timeline anomalies / worst events ----------------------------
+        def _populate_anomalies(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            waits = pair_mutex_waits(harvest_mutex_holds(trace, lo, hi))
+            rows = detect_timeline_anomalies(
+                evs, 12, waits, self._task_deadlines_ns)
+            inv_row = QHBoxLayout()
+            inv_btn = QPushButton("Investigate…")
+            inv_btn.setToolTip(
+                "Open the AI Assistant and investigate the selected or top anomaly")
+            inv_btn.clicked.connect(lambda _=False, rs=rows: self._investigate_anomaly(rs))
+            inv_row.addWidget(inv_btn)
+            inv_row.addStretch(1)
+            blay.addLayout(inv_row)
+            blay.addWidget(self._build_ux_event_table(
+                rows, _fs, "No timeline anomalies in this scope",
+                "anomalies", trace))
+
+        self._add_collapsible_section(
+            "anomalies",
+            f"Timeline Anomalies{scope}",
+            _fs,
+            _populate_anomalies,
+        )
+
+        def _populate_worst(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            rows = collect_worst_events(evs, 12)
+            blay.addWidget(self._build_ux_event_table(
+                rows, _fs, "No episodes in this scope",
+                "worst", trace))
+
+        self._add_collapsible_section(
+            "worst",
+            f"Worst Events{scope}",
+            _fs,
+            _populate_worst,
+        )
+
+        def _populate_crit_path(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            rows = critical_path_rows(evs, 8)
+            scale = trace.time_scale
+
+            def _on_crit_cell(row: dict, col: int) -> None:
+                key = {
+                    2: "exec_ev", 3: "preempt_ev", 4: "wait_ev",
+                    5: "mig_ev", 6: "other_ev",
+                }.get(col)
+                payload = (row.get(key) if key else None) or row
+                self._activate_ux_event(trace, payload)
+
+            blay.addWidget(self._build_click_rows_table(
+                rows,
+                ["Task", "Duration", "Exec", "Preempt", "Wait", "Mig", "Other"],
+                lambda r: [
+                    r.get("task") or "",
+                    _format_time(int(r.get("duration") or 0), scale),
+                    _format_time(int(r.get("exec_ns") or 0), scale),
+                    _format_time(int(r.get("preempt_ns") or 0), scale),
+                    _format_time(int(r.get("wait_ns") or 0), scale),
+                    _format_time(int(r.get("migration_ns") or 0), scale),
+                    _format_time(int(r.get("other_ns") or 0), scale),
+                ],
+                lambda r: r,
+                _fs, "Need at least one on-CPU slice", "crit_path", trace,
+                on_cell=_on_crit_cell,
+                keys_fn=lambda r: [
+                    str(r.get("task") or "").lower(),
+                    int(r.get("duration") or 0),
+                    int(r.get("exec_ns") or 0),
+                    int(r.get("preempt_ns") or 0),
+                    int(r.get("wait_ns") or 0),
+                    int(r.get("migration_ns") or 0),
+                    int(r.get("other_ns") or 0),
+                ],
+            ))
+
+        self._add_collapsible_section(
+            "crit_path", f"Critical Path{scope}", _fs, _populate_crit_path,
+        )
+
+        def _populate_patterns(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            rows = recurring_patterns(detect_timeline_anomalies(
+                evs, 12,
+                pair_mutex_waits(harvest_mutex_holds(trace, lo, hi)),
+                self._task_deadlines_ns,
+            ), 2)
+            scale = trace.time_scale
+            blay.addWidget(self._build_click_rows_table(
+                rows,
+                ["Task", "Kind", "Count", "Worst", "Why"],
+                lambda r: [
+                    r.get("task") or "",
+                    KIND_LABEL.get(str(r.get("kind") or ""), str(r.get("kind") or "")),
+                    r.get("count") or 0,
+                    _format_time(int(r.get("duration") or 0), scale),
+                    r.get("reason") or "",
+                ],
+                lambda r: r,
+                _fs, "No repeating anomaly kinds in this scope", "patterns", trace,
+                keys_fn=lambda r: [
+                    str(r.get("task") or "").lower(),
+                    str(r.get("kind") or ""),
+                    int(r.get("count") or 0),
+                    int(r.get("duration") or 0),
+                    str(r.get("reason") or "").lower(),
+                ],
+            ))
+
+        self._add_collapsible_section(
+            "patterns", f"Recurring Patterns{scope}", _fs, _populate_patterns,
+        )
+
         # -- Execution time per slice -------------------------------------
         empty_exec = ("No slices fully inside cursor range" if scope
                       else "No user-task slices found")
@@ -11531,6 +13150,10 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                 on_row_click=lambda mk: self._open_plot(trace, mk, "exec"),
                 on_min_click=lambda mk: self._on_bcet_click(trace, mk, lo, hi),
                 on_max_click=lambda mk: self._on_wcet_click(trace, mk, lo, hi),
+                on_p95_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "exec", lo, hi, 0.95),
+                on_p99_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "exec", lo, hi, 0.99),
             ))
 
         self._add_collapsible_section(
@@ -11558,6 +13181,10 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                     trace, mk, lo, hi, False),
                 on_max_click=lambda mk: self._on_blocking_extreme_click(
                     trace, mk, lo, hi, True),
+                on_p95_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "block", lo, hi, 0.95),
+                on_p99_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "block", lo, hi, 0.99),
             ))
 
         self._add_collapsible_section(
@@ -11579,14 +13206,10 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
         def _populate_dispatch(blay: QVBoxLayout) -> None:
             _disp_rows_raw = self._dispatch_latency_rows(trace, lo, hi)
             _disp_rows = [
-                (mk, label, n, mn, avg, mx, jitter, stddev, p95)
-                for (mk, label, n, mn, avg, mx, jitter, stddev, p95,
+                (mk, label, n, mn, avg, mx, jitter, stddev, p95, p99)
+                for (mk, label, n, mn, avg, mx, jitter, stddev, p95, p99,
                      _min_seg, _max_seg) in _disp_rows_raw
             ]
-            blay.addWidget(self._lbl(
-                "Ready time from STI resume / create; dispatch = next switch-in. "
-                "Sync-object wakes are not attributed (no woken-task id in BTF).",
-                color="#888888", ui_fs=_fs))
             blay.addWidget(self._build_stats_table(
                 _disp_rows,
                 _fs,
@@ -11622,6 +13245,10 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                     trace, mk, lo, hi, False),
                 on_max_click=lambda mk: self._on_inter_extreme_click(
                     trace, mk, lo, hi, True),
+                on_p95_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "inter", lo, hi, 0.95),
+                on_p99_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "inter", lo, hi, 0.99),
             ))
 
         self._add_collapsible_section(
@@ -11629,6 +13256,277 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             f"Inter-Arrival Time{scope}",
             _fs,
             _populate_inter,
+        )
+
+        def _populate_period(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            rows = analyze_task_periods(evs, 3)
+            blay.addWidget(self._build_period_table(
+                rows, _fs, "Need at least 3 inter-arrival gaps per task", trace))
+
+        self._add_collapsible_section(
+            "period",
+            f"Period / Jitter{scope}",
+            _fs,
+            _populate_period,
+        )
+
+        def _populate_response(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            rows = analyze_response_times(evs).get("rows") or []
+            scale = trace.time_scale
+
+            def _on_response_cell(row: dict, col: int) -> None:
+                if col == 0:
+                    self._open_plot(trace, str(row.get("mk") or ""), "response")
+                    return
+                key = {
+                    2: "min_ev", 4: "max_ev", 5: "p50_ev", 6: "p90_ev",
+                    7: "p95_ev", 8: "p99_ev", 9: "p999_ev",
+                }.get(col, "worst_ev")
+                self._activate_ux_event(trace, row.get(key) or row.get("worst_ev") or row)
+
+            blay.addWidget(self._build_click_rows_table(
+                rows,
+                ["Task", "N", "Min", "Avg", "Max", "p50", "p90", "p95",
+                 "p99", "p99.9", "Jitter", "CV"],
+                lambda r: [
+                    r.get("task") or "",
+                    r.get("n") or 0,
+                    _format_time(int(r.get("min_ns") or 0), scale),
+                    _format_time(int(r.get("avg_ns") or 0), scale),
+                    _format_time(int(r.get("max_ns") or 0), scale),
+                    _format_time(int(r.get("p50_ns") or 0), scale),
+                    _format_time(int(r.get("p90_ns") or 0), scale),
+                    _format_time(int(r.get("p95_ns") or 0), scale),
+                    _format_time(int(r.get("p99_ns") or 0), scale),
+                    _format_time(int(r.get("p999_ns") or 0), scale),
+                    _format_time(int(r.get("jitter_ns") or 0), scale),
+                    f"{float(r.get('cv') or 0) * 100:.1f}%",
+                ],
+                lambda r: r.get("worst_ev") or r,
+                _fs, "Need at least one on-CPU slice", "response", trace,
+                on_cell=_on_response_cell,
+                keys_fn=lambda r: [
+                    str(r.get("task") or "").lower(),
+                    int(r.get("n") or 0),
+                    int(r.get("min_ns") or 0),
+                    int(r.get("avg_ns") or 0),
+                    int(r.get("max_ns") or 0),
+                    int(r.get("p50_ns") or 0),
+                    int(r.get("p90_ns") or 0),
+                    int(r.get("p95_ns") or 0),
+                    int(r.get("p99_ns") or 0),
+                    int(r.get("p999_ns") or 0),
+                    int(r.get("jitter_ns") or 0),
+                    float(r.get("cv") or 0),
+                ],
+            ))
+
+        self._add_collapsible_section(
+            "response", f"Response Time{scope}", _fs, _populate_response,
+        )
+
+        def _populate_jitter(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            disp = self._dispatch_sample_map(trace, lo, hi)
+            rows = unified_jitter(evs, disp)
+            scale = trace.time_scale
+
+            def _on_jitter_cell(row: dict, col: int) -> None:
+                kind = {
+                    0: "exec", 1: "exec", 2: "exec",
+                    3: "block", 4: "block",
+                    5: "inter", 6: "inter",
+                    7: "response", 8: "response",
+                    9: "dispatch", 10: "dispatch",
+                    11: "block", 12: "block",
+                }.get(col, "exec")
+                mk = str(row.get("mk") or "")
+                if mk:
+                    self._open_plot(trace, mk, kind)
+
+            blay.addWidget(self._build_click_rows_table(
+                rows,
+                ["Task", "Exec", "Exec CV", "Block", "Block CV",
+                 "Inter", "Inter CV", "Response", "Resp CV",
+                 "Dispatch", "Disp CV", "Wake", "Wake CV"],
+                lambda r: [
+                    r.get("task") or "",
+                    _format_time(int(r.get("exec_jitter_ns") or 0), scale),
+                    f"{float(r.get('exec_cv') or 0) * 100:.1f}%",
+                    _format_time(int(r.get("block_jitter_ns") or 0), scale),
+                    f"{float(r.get('block_cv') or 0) * 100:.1f}%",
+                    _format_time(int(r.get("inter_jitter_ns") or 0), scale),
+                    f"{float(r.get('inter_cv') or 0) * 100:.1f}%",
+                    _format_time(int(r.get("response_jitter_ns") or 0), scale),
+                    f"{float(r.get('response_cv') or 0) * 100:.1f}%",
+                    _format_time(int(r.get("dispatch_jitter_ns") or 0), scale),
+                    f"{float(r.get('dispatch_cv') or 0) * 100:.1f}%",
+                    _format_time(int(r.get("wakeup_jitter_ns") or 0), scale),
+                    f"{float(r.get('wakeup_cv') or 0) * 100:.1f}%",
+                ],
+                lambda r: r,
+                _fs, "No timing samples in this scope", "jitter", trace,
+                on_cell=_on_jitter_cell,
+                keys_fn=lambda r: [
+                    str(r.get("task") or "").lower(),
+                    int(r.get("exec_jitter_ns") or 0),
+                    float(r.get("exec_cv") or 0),
+                    int(r.get("block_jitter_ns") or 0),
+                    float(r.get("block_cv") or 0),
+                    int(r.get("inter_jitter_ns") or 0),
+                    float(r.get("inter_cv") or 0),
+                    int(r.get("response_jitter_ns") or 0),
+                    float(r.get("response_cv") or 0),
+                    int(r.get("dispatch_jitter_ns") or 0),
+                    float(r.get("dispatch_cv") or 0),
+                    int(r.get("wakeup_jitter_ns") or 0),
+                    float(r.get("wakeup_cv") or 0),
+                ],
+            ))
+
+        self._add_collapsible_section(
+            "jitter", f"Unified Jitter{scope}", _fs, _populate_jitter,
+        )
+
+        def _populate_distrib(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            disp = self._dispatch_sample_map(trace, lo, hi)
+            metric = QComboBox()
+            labels = {
+                "exec": "Execution", "block": "Blocking", "inter": "Inter-arrival",
+                "response": "Response", "dispatch": "Dispatch",
+                "wakeup": "Wake (stand-in)", "preempt": "Preemption",
+            }
+            for kind in DISTRIBUTION_KINDS:
+                metric.addItem(labels.get(kind, kind), kind)
+            task_box = QComboBox()
+            names = []
+            seen = set()
+            for r in unified_jitter(evs, disp):
+                mk = str(r.get("mk") or "")
+                if mk and mk not in seen:
+                    seen.add(mk)
+                    names.append((str(r.get("task") or mk), mk))
+            if not names:
+                task_box.addItem("(no tasks)", "")
+            else:
+                for lab, mk in names:
+                    task_box.addItem(lab, mk)
+            summary = self._lbl("Select a task to see n / p50 / p99 / sparkline.",
+                                color="#888888", ui_fs=_fs)
+            summary.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse)
+            hist = _HistogramWidget(
+                [], trace.time_scale, QColor("#5B9BD5"), self._is_dark,
+                value_as_time=True, show_variability=True)
+            hist.setMinimumHeight(200)
+            scale_box = QComboBox()
+            scale_box.addItems(["Auto", "Linear", "p5–p95", "Log duration"])
+
+            def _on_scale(index: int) -> None:
+                modes = ("auto", "linear", "percentile", "log")
+                hist.set_scale_mode(modes[index] if 0 <= index < 4 else "auto")
+
+            scale_box.currentIndexChanged.connect(_on_scale)
+
+            def _refresh_summary() -> None:
+                mk = str(task_box.currentData() or "")
+                kind = str(metric.currentData() or "exec")
+                samples = distribution_metric_samples(evs, kind, mk, disp) if mk else []
+                hist.set_values(samples)
+                open_btn.setEnabled(bool(mk))
+                self._distrib_has_task = bool(mk)
+                self._sync_distrib_query_ai_btn()
+                if not mk:
+                    summary.setText("Select a task to see n / p50 / p99 / sparkline.")
+                    return
+                model = distribution_explorer(evs, kind, mk, disp)
+                if not model:
+                    summary.setText("No samples for this metric × task in scope.")
+                    return
+                scale = trace.time_scale
+                summary.setText(
+                    f"n={model.get('n') or 0}  min={_format_time(int(model.get('min_ns') or 0), scale)}  "
+                    f"p50={_format_time(int(model.get('p50_ns') or 0), scale)}  "
+                    f"p99={_format_time(int(model.get('p99_ns') or 0), scale)}  "
+                    f"max={_format_time(int(model.get('max_ns') or 0), scale)}  "
+                    f"CV={float(model.get('cv') or 0) * 100:.1f}%  "
+                    f"{model.get('spark') or ''}"
+                )
+
+            def _open(_checked: bool = False) -> None:
+                mk = str(task_box.currentData() or "")
+                kind = str(metric.currentData() or "exec")
+                if not mk:
+                    return
+                model = distribution_explorer(evs, kind, mk, disp) or {}
+                plot_kind = str(model.get("plot_kind") or kind)
+                preemptor = None
+                if plot_kind == "preempt":
+                    ranks = preemptor_ranking(preemption_pairs(evs), 16)
+                    rec = next(
+                        (r for r in ranks if str(r.get("mk") or "") == mk),
+                        None,
+                    )
+                    tops = (rec or {}).get("top") or []
+                    if tops:
+                        preemptor = str(
+                            tops[0].get("task") or tops[0].get("mk") or "")
+                    if not preemptor:
+                        return
+                self._open_plot(trace, mk, plot_kind, preemptor=preemptor)
+
+            def _query_ai(_checked: bool = False) -> None:
+                mk = str(task_box.currentData() or "")
+                kind = str(metric.currentData() or "exec")
+                self._query_distrib_explorer_ai(mk, kind)
+
+            metric.currentIndexChanged.connect(lambda _i: _refresh_summary())
+            task_box.currentIndexChanged.connect(lambda _i: _refresh_summary())
+            open_btn = QPushButton("Open histogram")
+            open_btn.setSizePolicy(
+                QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            open_btn.clicked.connect(_open)
+            ai_btn = QPushButton("Query with AI…")
+            ai_btn.setSizePolicy(
+                QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            ai_btn.clicked.connect(_query_ai)
+            self._distrib_ai_btn = ai_btn
+            combo_pol = QSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+            metric.setSizePolicy(combo_pol)
+            task_box.setSizePolicy(combo_pol)
+            metric.setMinimumWidth(72)
+            task_box.setMinimumWidth(72)
+            sel = QHBoxLayout()
+            sel.setSpacing(6)
+            sel.addWidget(QLabel("Metric"))
+            sel.addWidget(metric, 1)
+            sel.addWidget(QLabel("Task"))
+            sel.addWidget(task_box, 1)
+            tools = QVBoxLayout()
+            tools.setSpacing(4)
+            tools.addLayout(sel)
+            hist_btns = QHBoxLayout()
+            hist_btns.setSpacing(6)
+            hist_btns.addWidget(open_btn, 0, Qt.AlignmentFlag.AlignLeft)
+            hist_btns.addWidget(ai_btn, 0, Qt.AlignmentFlag.AlignLeft)
+            hist_btns.addStretch(1)
+            tools.addLayout(hist_btns)
+            blay.addLayout(tools)
+            blay.addWidget(summary)
+            scale_row = QHBoxLayout()
+            scale_row.addWidget(QLabel("Histogram scale"))
+            scale_row.addWidget(scale_box)
+            scale_row.addStretch(1)
+            blay.addLayout(scale_row)
+            blay.addWidget(hist)
+            _refresh_summary()
+
+        self._add_collapsible_section(
+            "distrib", f"Distribution Explorer{scope}", _fs, _populate_distrib,
         )
 
         # -- Preemption Chain Analysis ----------------------------------------
@@ -11654,6 +13552,88 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             _populate_preempt,
         )
 
+        def _populate_preempt_matrix(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            pairs = preemption_pairs(evs)
+            ranks = preemptor_ranking(pairs, 16)
+            matrix = preemption_matrix(pairs, 12)
+            scale = trace.time_scale
+            blay.addWidget(self._build_click_rows_table(
+                ranks,
+                ["Victim", "Count", "Total", "Max", "Top preemptors", "Story"],
+                lambda r: [
+                    r.get("task") or "",
+                    r.get("count") or 0,
+                    _format_time(int(r.get("total_ns") or 0), scale),
+                    _format_time(int(r.get("max_ns") or 0), scale),
+                    r.get("top_label") or "",
+                    r.get("story") or "",
+                ],
+                lambda r: r.get("worst") or r,
+                _fs, "No preemption overlaps in this scope",
+                "preempt_matrix", trace,
+                keys_fn=lambda r: [
+                    str(r.get("task") or "").lower(),
+                    int(r.get("count") or 0),
+                    int(r.get("total_ns") or 0),
+                    int(r.get("max_ns") or 0),
+                    str(r.get("top_label") or "").lower(),
+                    str(r.get("story") or "").lower(),
+                ],
+            ))
+            tasks = matrix.get("tasks") or []
+            cells = matrix.get("cells") or {}
+            if tasks:
+                headers = ["Victim \\ Preemptor"] + [
+                    t.get("task") or t.get("mk") for t in tasks]
+                table = self._make_plain_stats_table(headers, _fs)
+                table.setRowCount(len(tasks))
+                bg = QBrush(self._stats_table_colors()[0])
+                link = QBrush(QColor("#88AAFF"))
+                for r, victim in enumerate(tasks):
+                    item = self._stats_sort_item(
+                        str(victim.get("task") or ""),
+                        str(victim.get("task") or "").lower(), bg)
+                    table.setItem(r, 0, item)
+                    for c, col in enumerate(tasks, start=1):
+                        rec = cells.get(f"{victim.get('mk')}|{col.get('mk')}") or {}
+                        ns = int(rec.get("ns") or 0)
+                        cell = self._stats_sort_item(
+                            _format_time(ns, scale) if ns and victim.get("mk") != col.get("mk") else "—",
+                            ns, bg)
+                        if ns and victim.get("mk") != col.get("mk"):
+                            cell.setForeground(link)
+                            cell.setData(Qt.ItemDataRole.UserRole, rec)
+                        table.setItem(r, c, cell)
+
+                def _pm_clicked(_row: int, col: int) -> None:
+                    if col <= 0:
+                        return
+                    item = table.item(_row, col)
+                    if item is None:
+                        return
+                    rec = item.data(Qt.ItemDataRole.UserRole)
+                    if isinstance(rec, dict) and rec.get("ns"):
+                        self._activate_ux_event(trace, {
+                            **rec,
+                            "mk": rec.get("victim") or "",
+                            "task": rec.get("victim") or "",
+                            "duration": rec.get("ns"),
+                            "section": "preempt_matrix",
+                        })
+
+                table.cellClicked.connect(_pm_clicked)
+                self._wire_stats_table_click_cursor(table)
+                self._wire_stats_table_row_hover(table)
+                table.resizeColumnsToContents()
+                table.setSortingEnabled(True)
+                self._wrap_table_with_resizer(blay, table, "preempt_matrix")
+
+        self._add_collapsible_section(
+            "preempt_matrix", f"Preemption Matrix{scope}", _fs,
+            _populate_preempt_matrix,
+        )
+
         # -- Priority inheritance ---------------------------------------------
         if trace.has_priority_instrumentation:
             empty_priority = ("No priority boosts in cursor range" if scope
@@ -11661,10 +13641,6 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
 
             def _populate_priority(blay: QVBoxLayout) -> None:
                 _priority_rows = _priority_stats_rows(trace, lo, hi)
-                blay.addWidget(self._lbl(
-                    "Orange/red bands on task rows mark boosted periods. "
-                    "L/M/H pattern = medium-priority task between base and peak.",
-                    color="#888888", ui_fs=_fs))
                 host = QWidget()
                 play = QVBoxLayout(host)
                 play.setContentsMargins(0, 0, 0, 0)
@@ -11743,11 +13719,6 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                     i for i in trace.sync_issues
                     if _sync_in_scope(i["time_ns"], lo, hi)
                 ]
-                blay.addWidget(self._lbl(
-                    "Pairs take/give STI events by object pointer (0x........). "
-                    "Flags orphan gives, unmatched takes, delete-while-held, "
-                    "and multi-mutex hold at trace end.",
-                    color="#888888", ui_fs=_fs))
                 host = QWidget()
                 play = QVBoxLayout(host)
                 play.setContentsMargins(0, 0, 0, 0)
@@ -11901,9 +13872,6 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
 
             def _populate_queue(blay: QVBoxLayout) -> None:
                 _queue_rows = _sync_object_stats_rows(trace, lo, hi, kind_filter="queue")
-                blay.addWidget(self._lbl(
-                    "Pairs send/recv STI events by queue pointer (0x........).",
-                    color="#888888", ui_fs=_fs))
                 if not _queue_rows:
                     blay.addWidget(self._lbl(empty_queue, color="#888888", ui_fs=_fs))
                     return
@@ -11960,6 +13928,90 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                 _fs,
                 _populate_queue,
             )
+
+        def _populate_wait_owner(blay: QVBoxLayout) -> None:
+            holds = harvest_mutex_holds(trace, lo, hi)
+            waits = pair_mutex_waits(holds)
+            matrix = waiter_owner_matrix(waits)
+            blay.addWidget(self._build_wait_owner_table(
+                matrix, _fs, "No mutex handoffs in this scope", trace))
+
+        self._add_collapsible_section(
+            "wait_owner",
+            f"Waiter × Owner{scope}",
+            _fs,
+            _populate_wait_owner,
+        )
+
+        def _populate_mutex_block(blay: QVBoxLayout) -> None:
+            waits = pair_mutex_waits(harvest_mutex_holds(trace, lo, hi))
+            rows = mutex_blocking_table(waits)
+            scale = trace.time_scale
+            blay.addWidget(self._build_click_rows_table(
+                rows,
+                ["Task", "Object", "Owner", "Count", "Total", "Max"],
+                lambda r: [
+                    r.get("task") or "",
+                    r.get("object") or "",
+                    r.get("owner") or "",
+                    r.get("count") or 0,
+                    _format_time(int(r.get("total_ns") or 0), scale),
+                    _format_time(int(r.get("max_ns") or 0), scale),
+                ],
+                lambda r: {
+                    **(r.get("worst") or r),
+                    "mk": (r.get("worst") or {}).get("waiter_mk") or r.get("mk"),
+                    "task": (r.get("worst") or {}).get("waiter") or r.get("task"),
+                    "duration": (r.get("worst") or {}).get("duration") or r.get("max_ns"),
+                    "section": "mutex_block",
+                },
+                _fs, "No mutex waits in this scope", "mutex_block", trace,
+                keys_fn=lambda r: [
+                    str(r.get("task") or "").lower(),
+                    str(r.get("object") or "").lower(),
+                    str(r.get("owner") or "").lower(),
+                    int(r.get("count") or 0),
+                    int(r.get("total_ns") or 0),
+                    int(r.get("max_ns") or 0),
+                ],
+            ))
+            blockers = top_blocking_contributors(
+                self._ux_events(trace, lo, hi), waits, 12)
+            if blockers:
+                blay.addWidget(self._lbl(
+                    "Top blocking contributors across mutex waits, preemption "
+                    "overlap, and leftover idle gaps.",
+                    color="#888888", ui_fs=_fs))
+                blay.addWidget(self._build_click_rows_table(
+                    blockers,
+                    ["Task", "Mutex", "Preempt", "Idle", "Total"],
+                    lambda r: [
+                        r.get("task") or "",
+                        _format_time(int(r.get("mutex_ns") or 0), scale),
+                        _format_time(int(r.get("preempt_ns") or 0), scale),
+                        _format_time(int(r.get("idle_ns") or 0), scale),
+                        _format_time(int(r.get("total_ns") or 0), scale),
+                    ],
+                    lambda r: {
+                        **(r.get("worst") or r),
+                        "mk": r.get("mk"),
+                        "task": r.get("task"),
+                        "section": "mutex_block",
+                    },
+                    _fs, "No blocking contributors in this scope",
+                    "mutex_block", trace,
+                    keys_fn=lambda r: [
+                        str(r.get("task") or "").lower(),
+                        int(r.get("mutex_ns") or 0),
+                        int(r.get("preempt_ns") or 0),
+                        int(r.get("idle_ns") or 0),
+                        int(r.get("total_ns") or 0),
+                    ],
+                ))
+
+        self._add_collapsible_section(
+            "mutex_block", f"Mutex Blocking{scope}", _fs, _populate_mutex_block,
+        )
 
         # -- Task Lifecycle -------------------------------------------------
         empty_lifecycle = ("No task lifecycle events in cursor range" if scope
@@ -12102,6 +14154,81 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             _populate_affinity,
         )
 
+        def _populate_task_core(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            if lo is not None and hi is not None:
+                span = max(1, hi - lo)
+            else:
+                span = max(1, trace.time_max - trace.time_min)
+            matrix = task_core_matrix(evs, list(trace.core_names or []), span)
+            blay.addWidget(self._build_task_core_table(
+                matrix, _fs, "No on-CPU slices in this scope", trace))
+
+        self._add_collapsible_section(
+            "task_core",
+            f"Task × Core{scope}",
+            _fs,
+            _populate_task_core,
+        )
+
+        def _populate_core_time(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            grid = core_util_over_time(
+                evs, list(trace.core_names or []), lo, hi)
+            cores = grid.get("cores") or []
+            bins = grid.get("bins") or []
+            scale = trace.time_scale
+            if not bins:
+                blay.addWidget(self._lbl(
+                    "No on-CPU slices in this scope", color="#888888", ui_fs=_fs))
+                return
+            headers = ["Time"] + cores
+            table = self._make_plain_stats_table(headers, _fs)
+            table.setRowCount(len(bins))
+            bg = QBrush(self._stats_table_colors()[0])
+            link = QBrush(QColor("#88AAFF"))
+            for r, row in enumerate(bins):
+                item = self._stats_sort_item(
+                    _format_time(int(row.get("start") or 0), scale),
+                    int(row.get("start") or 0), bg)
+                item.setForeground(link)
+                item.setData(Qt.ItemDataRole.UserRole, row)
+                table.setItem(r, 0, item)
+                cells = row.get("cells") or {}
+                for c, core in enumerate(cores, start=1):
+                    rec = cells.get(core) or {}
+                    pct = float(rec.get("pct") or 0)
+                    cell = self._stats_sort_item(f"{pct:.1f}%", pct, bg)
+                    table.setItem(r, c, cell)
+
+            def _ct_clicked(row: int, _col: int) -> None:
+                item = table.item(row, 0)
+                if item is None:
+                    return
+                rec = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(rec, dict):
+                    start = int(rec.get("start") or 0)
+                    stop = int(rec.get("stop") or start + 1)
+                    self._activate_ux_event(trace, {
+                        **rec,
+                        "task": rec.get("peak_core") or "CPU",
+                        "mk": rec.get("peak_core") or "",
+                        "duration": max(1, stop - start),
+                        "section": "core_time",
+                    })
+
+            table.cellClicked.connect(_ct_clicked)
+            self._wire_stats_table_click_cursor(table)
+            self._wire_stats_table_row_hover(table)
+            table.resizeColumnsToContents()
+            table.setSortingEnabled(True)
+            self._wrap_table_with_resizer(blay, table, "core_time")
+
+        self._add_collapsible_section(
+            "core_time", f"Core Utilization Over Time{scope}", _fs,
+            _populate_core_time,
+        )
+
         # -- Deadlines / CPU budget ------------------------------------------
         def _populate_deadline(blay: QVBoxLayout) -> None:
             has_config = self._cpu_budget_pct > 0 or bool(self._task_deadlines_ns)
@@ -12220,6 +14347,34 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             f"Deadlines / CPU budget{scope}",
             _fs,
             _populate_deadline,
+        )
+
+        def _populate_task_health(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            if lo is not None and hi is not None:
+                span = max(1, hi - lo)
+            else:
+                span = max(1, trace.time_max - trace.time_min)
+            dead = []
+            if self._cpu_budget_pct > 0 or self._task_deadlines_ns:
+                viols = _deadline_violations(
+                    trace, self._cpu_budget_pct, self._task_deadlines_ns, lo, hi)
+                for item in (viols.get("slice_violations") or []):
+                    if len(item) > 4:
+                        dead.append(item[4])
+                for item in (viols.get("cpu_violations") or []):
+                    if len(item) > 3:
+                        dead.append(item[3])
+            inputs = health_inputs_from_events(evs, span, dead)
+            rows = task_health_scores(inputs)
+            blay.addWidget(self._build_task_health_table(
+                rows, _fs, "No task slices in this scope", trace))
+
+        self._add_collapsible_section(
+            "task_health",
+            f"Task Health{scope}",
+            _fs,
+            _populate_task_health,
         )
 
         # -- Interval Analysis ------------------------------------------------
@@ -12463,6 +14618,7 @@ class _RcSettings:
                 "auto_apply": "false",
                 "mcp_log": "false",
                 "extra_presets": "[]",
+                "split_bottom": "80",
             },
             **{
                 f"{_pid}_{_field}": ""
@@ -12618,6 +14774,15 @@ class _RcSettings:
                 removed = True
         if removed:
             self._dirty = True
+
+    def clear_section(self, section: str, *, flush: bool = True) -> None:
+        """Drop every key in *section* (Reset to Defaults)."""
+        if not self._cfg.has_section(section):
+            return
+        self._cfg.remove_section(section)
+        self._dirty = True
+        if flush:
+            self._flush()
 
 # ---------------------------------------------------------------------------
 # About Dialog
@@ -12829,6 +14994,7 @@ class _SettingsDialog(QDialog):
     # Emitted whenever any control value changes so _open_settings can
     # apply a live preview while the dialog is still open.
     live_preview = Signal()
+    stats_layout_reset = Signal()
 
     def _schedule_live_preview(self, *_args) -> None:
         """Coalesce rapid control changes and defer preview to next UI turn."""
@@ -12995,6 +15161,7 @@ class _SettingsDialog(QDialog):
                  ai_trace_sensitive: bool = False,
                  initial_page: str = "Appearance"):
         super().__init__(parent, Qt.WindowType.Dialog)
+        self.reset_requested = False
         self.setWindowTitle("Settings")
         self.setModal(True)
         self.setMinimumSize(640, 400)
@@ -13573,7 +15740,10 @@ class _SettingsDialog(QDialog):
         btn_reset.setObjectName("btn_cancel")
         btn_reset.setMinimumWidth(_btn_w)
         btn_reset.setFixedHeight(_btn_h)
-        btn_reset.setToolTip("Restore all settings on this page to their built-in defaults")
+        btn_reset.setToolTip(
+            "Restore built-in defaults, including Statistics pins, order, "
+            "and expand/collapse. The Statistics panel updates immediately; "
+            "OK writes them to btf_viewer.rc.")
         btn_reset.clicked.connect(self._reset_to_defaults)
         footer.addWidget(btn_reset)
 
@@ -14064,6 +16234,7 @@ class _SettingsDialog(QDialog):
 
     def _reset_to_defaults(self) -> None:
         """Restore every control to its module-level default value."""
+        self.reset_requested = True
         self._theme_combo.setCurrentIndex(0)           # Dark
         self._colorblind_cb.setChecked(False)
         self._font_spin.setValue(FONT_SIZE)
@@ -14119,6 +16290,8 @@ class _SettingsDialog(QDialog):
         self._load_ai_preset_fields(DEFAULT_AI_PRESET)
         self._response_lang_combo.setCurrentIndex(
             max(0, self._response_lang_combo.findText(DEFAULT_AI_RESPONSE_LANGUAGE)))
+        self.stats_layout_reset.emit()
+        self._schedule_live_preview()
 
     # -- result accessors (read after exec_() == Accepted) ------------------
     @property

@@ -22,6 +22,11 @@ import {
   newUserInvestigationTemplate,
   parseUserInvestigationTemplates,
   statusWithCost,
+  formatCostStatus,
+  clampAiSplitBottom,
+  metricMentioned,
+  scoreAdversarialMetrics,
+  scoreBenchmarkCase,
   validateAiResponse,
 } from '../src/utils/aiCase.js'
 import {
@@ -98,6 +103,24 @@ describe('aiCase investigation lifecycle', () => {
     assert.match(String(cap.recommended), /7b/i)
   })
 
+  it('treats Statistics page aliases as required_metrics hits', () => {
+    assert.equal(metricMentioned('Open Period/Jitter next.', 'period / jitter'), true)
+    assert.equal(metricMentioned('See Waiter x Owner.', 'waiter × owner'), true)
+    assert.equal(metricMentioned('Task-Core share is uneven.', 'task × core'), true)
+    assert.equal(metricMentioned('No page named.', 'timeline anomalies'), false)
+    const hit = scoreBenchmarkCase({
+      finding_types: ['jitter'],
+      tasks: ['Periodic[4]'],
+      root_cause_class: 'jitter',
+      evidence: { required_metrics: ['period / jitter'] },
+    }, {
+      actualFindingIds: ['jitter'],
+      actualTasks: ['Periodic[4]'],
+      actualConclusion: 'Periodic[4] Open Period/Jitter. Confidence: Medium.',
+    })
+    assert.equal(hit.parts.evidence, 100)
+  })
+
   it('extracts jump times and task names', () => {
     const claims = extractClaims('CS[22] at jump:1083 blocking')
     assert.ok(claims.tasks.includes('CS[22]'))
@@ -115,8 +138,26 @@ describe('aiCase investigation lifecycle', () => {
     const datasetPath = join(dirname(fileURLToPath(import.meta.url)), '../../tests/ai/dataset.json')
     const dataset = JSON.parse(readFileSync(datasetPath, 'utf8'))
     const result = runOfflineBenchmark(dataset, { failUnder: 50 })
-    assert.equal(result.rows.length, 7)
+    assert.equal(result.rows.length, 17)
     assert.equal(result.ok, true, result.report)
+    const advIds = new Set([
+      'adversarial_mutex_vs_starvation',
+      'adversarial_exec_vs_preemption',
+      'adversarial_correlation_not_cause',
+      'adversarial_out_of_scope_time',
+      'period_jitter',
+      'waiter_owner_handoff',
+      'stats_page_next_check',
+      'response_vs_blocking',
+      'preempt_matrix_vs_chain',
+      'mutex_block_vs_wait_queue',
+    ])
+    const adv = result.rows.filter(r => advIds.has(String(r.id)))
+    assert.equal(adv.length, 10)
+    for (const row of adv) {
+      assert.equal(row.false_confirmation_rate, 0, row.id)
+      assert.equal(row.false_causal_rate, 0, row.id)
+    }
   })
 
   it('matches catalog knowledge and round-trips user templates', () => {
@@ -128,6 +169,8 @@ describe('aiCase investigation lifecycle', () => {
     const prompt = investigationModePrompt('diagnose')
     assert.match(prompt, /investigate/)
     assert.match(prompt, /correlate_events/)
+    assert.match(prompt, /rank_root_causes/)
+    assert.match(prompt, /challenge_conclusion/)
     const tpl = newUserInvestigationTemplate('CPU Latency', ['detect_anomalies', 'investigate'])
     const parsed = parseUserInvestigationTemplates(dumpUserInvestigationTemplates([tpl]))
     assert.equal(parsed.length, 1)
@@ -172,5 +215,33 @@ describe('aiCase investigation lifecycle', () => {
     meter = accumulateCost(meter, { promptTokens: 50, completionTokens: 10 })
     const text = statusWithCost('Done.', meter)
     assert.equal(text, 'Done. · 1.3k tok · 2 tools · 1.5s')
+    assert.equal(formatCostStatus(emptyCostMeter()), '0 tok · 0 tools · 0s')
+    assert.equal(clampAiSplitBottom(''), 80)
+    assert.equal(clampAiSplitBottom(40), 64)
+  })
+
+  it('penalizes adversarial trap confirmations', () => {
+    const expected = {
+      finding_types: ['starvation'],
+      tasks: ['Waiter[2]'],
+      root_cause_class: 'starvation',
+      trap_phrases: ['mutex contention'],
+      required_tools: ['investigate'],
+    }
+    const trap = scoreBenchmarkCase(expected, {
+      actualFindingIds: ['mutex'],
+      actualTasks: ['Waiter[2]'],
+      actualTools: [],
+      actualConclusion: 'Waiter[2] stalled from mutex contention. Confidence: High.',
+    })
+    assert.equal(trap.false_confirmation_rate, 100)
+    assert.equal(trap.parts.root_cause, 0)
+    assert.equal(trap.premature_conclusion_rate, 100)
+    const good = scoreAdversarialMetrics(expected, {
+      actualConclusion: 'Waiter[2] CPU starvation from preemption, not mutex contention.',
+      tools: ['investigate'],
+    })
+    assert.equal(good.false_confirmation_rate, 0)
+    assert.equal(good.premature_conclusion_rate, 0)
   })
 })

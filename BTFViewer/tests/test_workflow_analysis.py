@@ -258,6 +258,9 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         ai_btn.click()
         self.assertEqual(called, [(True, 0, 1)])
         self.assertEqual(validated, [])
+        labels = [dlg._pages.tabText(i) for i in range(dlg._pages.count())]
+        self.assertIn("Response", labels)
+        self.assertIn("Mutex", labels)
 
     def test_compare_dialog_validate_experiment_button(self):
         from types import SimpleNamespace

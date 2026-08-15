@@ -171,6 +171,35 @@ class TestStatsVariability(unittest.TestCase):
         scatter.close()
         histogram.close()
 
+    def test_metrics_plot_dialog_keeps_histogram_pane(self) -> None:
+        from btf_viewer_pkg.stats import _MetricsPlotDialog
+
+        dlg = _MetricsPlotDialog(
+            "t",
+            [(100, 10, None), (200, 20, None), (300, 30, None)],
+            "ns",
+            QColor("#5B9BD5"),
+            lambda *_a: None,
+            True,
+            False,
+            "FULL",
+            "full trace",
+        )
+        dlg.show()
+        self._app.processEvents()
+        dlg._fit_plot_panes()
+        self._app.processEvents()
+        self.assertFalse(dlg._splitter.childrenCollapsible())
+        self.assertGreaterEqual(dlg._histogram.height(), 140)
+        self.assertGreaterEqual(dlg._splitter.sizes()[1], 140)
+        dlg.close()
+
+    def test_stats_help_labels_wrap(self) -> None:
+        panel = _StatsPanel()
+        lbl = panel._lbl("Pick a metric and task, then open the existing histogram/CDF plot. " * 2)
+        self.assertTrue(lbl.wordWrap())
+        panel.close()
+
 
 if __name__ == "__main__":
     unittest.main()

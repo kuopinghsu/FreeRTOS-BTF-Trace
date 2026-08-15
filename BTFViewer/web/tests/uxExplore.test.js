@@ -2,20 +2,33 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import {
+  analyzeResponseTimes,
   analyzeTaskPeriods,
   bestFindingScope,
   collectWorstEvents,
   compareSummaryStrip,
+  coreUtilOverTime,
+  criticalPathRows,
   detectTimelineAnomalies,
   findEventAtPercentile,
   healthInputsFromEvents,
+  mutexBlockingTable,
   pairMutexWaits,
   parseSignedDelta,
   percentileIndex,
+  preemptionPairs,
+  preemptionStory,
+  preemptorRanking,
+  recurringPatterns,
+  recurringPatternsAcross,
+  topBlockingContributors,
   taskCoreMatrix,
   taskHealthScores,
   topCompareRegressions,
+  unifiedJitter,
   waiterOwnerMatrix,
+  sparkline,
+  distributionExplorer,
 } from '../src/utils/uxExplore.js'
 
 function ev(kind, task, start, duration) {
@@ -143,5 +156,133 @@ describe('uxExplore', () => {
     const worst = rows.find(r => r.mk === 'Bad[2]')
     assert.equal(worst.bands.deadline, 'fail')
     assert.match(worst.disclaimer, /not an AI probability/)
+  })
+
+  it('computes heuristic response time from adjacent slices', () => {
+    const model = analyzeResponseTimes([
+      ev('exec', 'T[1]', 0, 10),
+      ev('exec', 'T[1]', 40, 10),
+    ])
+    assert.equal(model.rows.length, 1)
+    assert.equal(model.rows[0].n, 2)
+    assert.equal(model.events[1].duration, 40)
+    assert.match(model.rows[0].disclaimer, /not an explicit BTF/)
+  })
+
+  it('splits critical path into exec and preempt', () => {
+    const rows = criticalPathRows([
+      { ...ev('exec', 'V[1]', 0, 10), core: 'Core_0' },
+      { ...ev('exec', 'P[2]', 10, 20), core: 'Core_0' },
+      { ...ev('exec', 'V[1]', 30, 10), core: 'Core_0' },
+    ], 4)
+    assert.ok(rows.length)
+    assert.equal(rows[0].section, 'crit_path')
+    assert.ok(rows[0].preempt_ns > 0)
+  })
+
+  it('ranks preemptors and mutex waits', () => {
+    const ranks = preemptorRanking(preemptionPairs([
+      { ...ev('block', 'V[1]', 10, 20), core: 'Core_0' },
+      { ...ev('exec', 'P[2]', 10, 20), core: 'Core_0' },
+    ]), 8)
+    assert.equal(ranks[0].mk, 'V[1]')
+    assert.match(ranks[0].top_label, /P\[2\]/)
+    const table = mutexBlockingTable(pairMutexWaits([
+      { object: 'mutex:0x1', holder: 'L[1]', holder_mk: 'L[1]', start: 100, stop: 500, duration: 400 },
+      { object: 'mutex:0x1', holder: 'H[2]', holder_mk: 'H[2]', start: 500, stop: 600, duration: 100 },
+    ], 1000))
+    assert.equal(table[0].mk, 'H[2]')
+    assert.equal(table[0].total_ns, 400)
+  })
+
+  it('builds core-time bins, unified jitter, patterns, and compare why', () => {
+    const evs = [
+      { ...ev('exec', 'A[1]', 0, 90), core: 'Core_0' },
+      { ...ev('exec', 'A[1]', 100, 10), core: 'Core_0' },
+    ]
+    const grid = coreUtilOverTime(evs, ['Core_0'], 0, 160, 4)
+    assert.equal(grid.bins.length, 4)
+    assert.ok(grid.bins[0].peak_pct > 0)
+    const jitter = unifiedJitter(evs)
+    assert.ok(jitter.length)
+    assert.equal(jitter[0].section, 'jitter')
+    const anoms = detectTimelineAnomalies(evs.concat([ev('exec', 'A[1]', 200, 500)]), 8)
+    const pats = recurringPatterns(anoms.concat(anoms), 2)
+    assert.ok(pats.some(p => p.count >= 2))
+    const strip = compareSummaryStrip({
+      summary: [{ label: 'Span', a: '1 ms', b: '900 µs', delta: '+100 µs' }],
+      execution: [{ name: 'CS[22]', deltaMax: '+60 µs' }],
+    }, 4)
+    assert.ok(strip.why)
+  })
+
+  it('attaches response percentile events and includes response in worst', () => {
+    const model = analyzeResponseTimes([
+      ev('exec', 'T[1]', 0, 10),
+      ev('exec', 'T[1]', 40, 10),
+    ])
+    assert.equal(model.rows[0].p99_ev.duration, 40)
+    const worst = collectWorstEvents([
+      ev('exec', 'A[1]', 0, 10),
+      ev('exec', 'A[1]', 100, 10),
+      ev('block', 'B[2]', 0, 20),
+    ], 4)
+    assert.ok(worst.some(e => e.kind === 'response'))
+  })
+
+  it('counts period bursts and builds a preemption story', () => {
+    const evs = Array.from({ length: 6 }, (_, i) => ev('inter', 'P[1]', i * 100, 100))
+    evs.push(ev('inter', 'P[1]', 600, 20))
+    assert.equal(analyzeTaskPeriods(evs, 3)[0].burst, 1)
+    const pairs = preemptionPairs([
+      { ...ev('block', 'V[1]', 10, 20), core: 'Core_0' },
+      { ...ev('exec', 'P[2]', 10, 20), core: 'Core_0' },
+    ])
+    assert.match(preemptionStory(pairs, 'V[1]'), /P\[2\]/)
+    assert.match(preemptorRanking(pairs, 8)[0].story, /resumed/)
+  })
+
+  it('ranks top blockers and shared patterns', () => {
+    const rows = topBlockingContributors([
+      { ...ev('block', 'V[1]', 10, 40), core: 'Core_0' },
+      { ...ev('exec', 'P[2]', 10, 40), core: 'Core_0' },
+    ], [{
+      waiter: 'V[1]', waiter_mk: 'V[1]', owner: 'O[3]', owner_mk: 'O[3]',
+      object: 'mutex:1', start: 10, stop: 50, duration: 40,
+    }], 8)
+    assert.equal(rows[0].mk, 'V[1]')
+    const shared = recurringPatternsAcross(
+      [{ kind: 'exec', task: 'A[1]', mk: 'A[1]', duration: 10, start: 0 }],
+      [{ kind: 'exec', task: 'A[1]', mk: 'A[1]', duration: 20, start: 5 }],
+    )
+    assert.equal(shared[0].count_a, 1)
+  })
+
+  it('compare why names response p99', () => {
+    const strip = compareSummaryStrip({
+      summary: [{ label: 'Response P99 (worst task)', delta: '+100 µs' }],
+      response: [{ name: 'A[1]', delta: '+80 µs' }],
+    }, 4)
+    assert.match(strip.why.toLowerCase(), /response/)
+  })
+
+  it('unified jitter has dispatch/wakeup and period spark', () => {
+    const evs = [
+      ev('exec', 'A[1]', 0, 10),
+      ev('exec', 'A[1]', 20, 10),
+      ev('exec', 'A[1]', 100, 10),
+    ]
+    const jitter = unifiedJitter(evs, { 'A[1]': [5, 50] })
+    assert.ok(jitter[0].dispatch_jitter_ns > 0)
+    assert.ok(jitter[0].wakeup_jitter_ns > 0)
+    const model = distributionExplorer(evs, 'exec', 'A[1]')
+    assert.equal(model.n, 3)
+    assert.ok(sparkline([10, 20, 30, 5]))
+    const periods = analyzeTaskPeriods(
+      [...Array(6)].map((_, i) => ev('inter', 'P[1]', i * 100, 100)).concat([ev('inter', 'P[1]', 600, 20)]),
+      3,
+    )
+    assert.equal(periods[0].burst, 1)
+    assert.ok(periods[0].spark)
   })
 })

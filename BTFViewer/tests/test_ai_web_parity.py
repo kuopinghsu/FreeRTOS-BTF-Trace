@@ -186,6 +186,7 @@ class AiWebParityTests(unittest.TestCase):
             ("def best_finding_scope", "export function bestFindingScope"),
             ("def compare_summary_strip", "export function compareSummaryStrip"),
             ("def harvest_ux_events", "export function harvestUxEvents"),
+            ("def prepare_ux_events", "export function prepareUxEvents"),
             ("def find_event_at_percentile", "export function findEventAtPercentile"),
             ("def analyze_task_periods", "export function analyzeTaskPeriods"),
             ("def task_core_matrix", "export function taskCoreMatrix"),
@@ -194,6 +195,23 @@ class AiWebParityTests(unittest.TestCase):
             ("def task_health_scores", "export function taskHealthScores"),
             ("def harvest_mutex_holds", "export function harvestMutexHolds"),
             ("def health_inputs_from_events", "export function healthInputsFromEvents"),
+            ("def analyze_response_times", "export function analyzeResponseTimes"),
+            ("def critical_path_rows", "export function criticalPathRows"),
+            ("def preemption_pairs", "export function preemptionPairs"),
+            ("def preemptor_ranking", "export function preemptorRanking"),
+            ("def preemption_matrix", "export function preemptionMatrix"),
+            ("def mutex_blocking_table", "export function mutexBlockingTable"),
+            ("def core_util_over_time", "export function coreUtilOverTime"),
+            ("def unified_jitter", "export function unifiedJitter"),
+            ("def sparkline", "export function sparkline"),
+            ("def distribution_explorer", "export function distributionExplorer"),
+            ("def distribution_metric_samples", "export function distributionMetricSamples"),
+            ("def recurring_patterns", "export function recurringPatterns"),
+            ("def recurring_patterns_across", "export function recurringPatternsAcross"),
+            ("def compare_why", "export function compareWhy"),
+            ("def preemption_story", "export function preemptionStory"),
+            ("def top_blocking_contributors", "export function topBlockingContributors"),
+            ("def compare_analysis_tables", "export function compareAnalysisTables"),
         ):
             self.assertIn(py_name, ux_py, py_name)
             self.assertIn(js_name, ux_js, js_name)
@@ -212,6 +230,8 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("Investigate…", stats)
         self.assertIn("Root cause…", stats)
         self.assertIn("Apply cursors", stats)
+        self.assertIn("best_finding_scope,", stats)
+        self.assertNotRegex(stats, r"(?m)^\s+from \.ux_explore import")
         self.assertIn("emit('query-ai', 'investigate')", dlg)
         # Desktop wires templates via _make_ai_btn(..., template) → _query_with_ai.
         self.assertRegex(
@@ -225,6 +245,7 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("wants_ai_template", stats)
         self._assert_stats_export_titles_match()
         self._assert_stats_section_ids_match()
+        self._assert_stats_load_defer_match()
         self._assert_investigation_docs_match()
 
     def _assert_stats_export_titles_match(self) -> None:
@@ -236,6 +257,13 @@ class AiWebParityTests(unittest.TestCase):
             "Worst Events",
             "Period / Jitter",
             "Waiter × Owner",
+            "Response Time",
+            "Critical Path",
+            "Unified Jitter",
+            "Recurring Patterns",
+            "Preemption Matrix",
+            "Mutex Blocking",
+            "Core Utilization Over Time",
         )
         stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
         web = (BTF_ROOT / "web/src/components/StatisticsPanel.vue").read_text(
@@ -252,9 +280,15 @@ class AiWebParityTests(unittest.TestCase):
             self.assertIn(title, ai_md, title)
         self.assertIn("Dispatch / Scheduling Latency", stats)
         self.assertIn("<th>p99</th>", stats)
-        self.assertIn("<th>p99</th>", web)
+        self.assertIn("toggleTableSort('period', 'p99')", web)
+        self.assertIn("toggleTableSort('response', 'p99')", web)
         self.assertIn("p95,p99", web)
         self.assertIn('"p95", "p99"', stats)
+        self.assertIn("hdr.setSectionsClickable(True)", stats)
+        self.assertIn("thSortClass('anomalies'", web)
+        self.assertIn("thSortClass('mutex_blockers'", web)
+        self.assertIn("sortedPeriodRows", web)
+        self.assertIn("class=\"stats-table-row clickable\"", web)
 
     def _assert_stats_section_ids_match(self) -> None:
         """Pinnable section IDs and always-visible lifecycle/affinity stay aligned."""
@@ -287,6 +321,105 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("No migrations in scope", web)
         self.assertIn("Core Util Std Dev (σ)", web)
         self.assertIn("Core Util Std Dev (σ)", stats)
+        self.assertIn("def _open(_checked: bool = False)", stats)
+        self.assertIn("openPreemptPlot(mk, label)", web)
+        self.assertIn("Open histogram", stats)
+        self.assertIn("Open histogram", web)
+        self.assertIn('QLabel("Metric")', stats)
+        self.assertIn('QLabel("Task")', stats)
+        self.assertIn("hist_btns.addWidget(open_btn", stats)
+        self.assertIn("class=\"distrib-toolbar\"", web)
+        self.assertIn("distribution_metric_samples", stats)
+        self.assertIn("_HistogramWidget(", stats)
+        self.assertIn("distribHistogramModel", web)
+        self.assertIn("distrib-hist", web)
+        self.assertIn("Query with AI…", stats)
+        self.assertIn("queryDistributionWithAi", web)
+        self.assertIn("aiFeatureEnabled", web)
+        self.assertIn("on_query_ai=self._query_plot_distribution_ai", stats)
+        self.assertIn(":disabled=\"!aiFeatureEnabled\"", web)
+
+    def _assert_stats_load_defer_match(self) -> None:
+        """Large-trace defer thresholds and heavy-section IDs stay lockstep."""
+        from btf_viewer_pkg.config import (
+            STATS_DEFAULT_EXPANDED_SECTIONS,
+            STATS_HEAVY_SECTIONS,
+            STATS_LOAD_DEFER_CORES,
+            STATS_LOAD_DEFER_SEGMENTS,
+            STATS_LOAD_DEFER_SYNC_ISSUES,
+            STATS_LOAD_DEFER_TASKS,
+            default_section_collapsed,
+        )
+
+        js = (BTF_ROOT / "web/src/config.js").read_text(encoding="utf-8")
+        self.assertIn(f"export const STATS_LOAD_DEFER_TASKS = {STATS_LOAD_DEFER_TASKS}", js)
+        self.assertIn(f"export const STATS_LOAD_DEFER_CORES = {STATS_LOAD_DEFER_CORES}", js)
+        self.assertIn(
+            f"export const STATS_LOAD_DEFER_SYNC_ISSUES = {STATS_LOAD_DEFER_SYNC_ISSUES}", js)
+        self.assertIn(
+            f"export const STATS_LOAD_DEFER_SEGMENTS = {STATS_LOAD_DEFER_SEGMENTS}", js)
+        block = re.search(
+            r"export const STATS_HEAVY_SECTIONS = \[([\s\S]*?)\]", js)
+        self.assertIsNotNone(block)
+        js_ids = set(re.findall(r"'([^']+)'", block.group(1)))
+        self.assertEqual(js_ids, set(STATS_HEAVY_SECTIONS))
+        collapsed_keys = set(default_section_collapsed())
+        self.assertTrue(set(STATS_HEAVY_SECTIONS) <= collapsed_keys)
+        js_exp = re.search(
+            r"export const STATS_DEFAULT_EXPANDED_SECTIONS = \[([\s\S]*?)\]", js)
+        self.assertIsNotNone(js_exp)
+        self.assertEqual(
+            set(re.findall(r"'([^']+)'", js_exp.group(1))),
+            set(STATS_DEFAULT_EXPANDED_SECTIONS),
+        )
+        expanded = {
+            sid for sid, flag in default_section_collapsed().items() if not flag
+        }
+        self.assertEqual(expanded, set(STATS_DEFAULT_EXPANDED_SECTIONS))
+        main = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
+        store = (BTF_ROOT / "web/src/utils/sessionStore.js").read_text(encoding="utf-8")
+        portable_js = (BTF_ROOT / "web/src/utils/sessionPortable.js").read_text(
+            encoding="utf-8")
+        self.assertIn("statsSectionCollapsed", main)
+        self.assertIn("statsSectionCollapsed", portable_js)
+        self.assertNotIn("statsSectionCollapsed:", store)
+        settings = (BTF_ROOT / "web/src/utils/settingsStore.js").read_text(
+            encoding="utf-8")
+        self.assertIn("statsSectionCollapsed:", settings)
+        self.assertIn("section_collapsed_to_rc", main)
+        self.assertIn("set_section_collapsed_map", main)
+        vue = (BTF_ROOT / "web/src/components/StatisticsPanel.vue").read_text(
+            encoding="utf-8")
+        stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
+        self.assertIn("emitCollapsedState()", vue)
+        self.assertIn("applyCollapsedState(state)", vue)
+        self.assertNotIn("self._section_collapsed[sid] = True", stats)
+        self.assertIn("for key in default_section_collapsed():", stats)
+        self.assertIn("_reset_stats_layout_to_defaults", main)
+        self.assertIn("stats_layout_reset", main)
+        self.assertIn("_apply_stats_layout_defaults", main)
+        self.assertIn("clear_section", stats)
+        dlg = (BTF_ROOT / "web/src/components/SettingsDialog.vue").read_text(
+            encoding="utf-8")
+        app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
+        self.assertIn("resetLayout", dlg)
+        self.assertIn("normalizeSettings(null)", dlg)
+        self.assertIn("meta.resetLayout", app)
+        self.assertIn("statsSectionHeights.value = {}", app)
+
+    def test_stats_section_help_matches_web(self) -> None:
+        from btf_viewer_pkg.config import STATS_PINNABLE_SECTIONS, STATS_SECTION_HELP
+
+        js = (BTF_ROOT / "web/src/config.js").read_text(encoding="utf-8")
+        hdr = (BTF_ROOT / "web/src/components/StatsSectionHeader.vue").read_text(
+            encoding="utf-8")
+        stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
+        self.assertEqual(set(STATS_SECTION_HELP), set(STATS_PINNABLE_SECTIONS))
+        self.assertIn("STATS_SECTION_HELP.get(section_id)", stats)
+        self.assertIn("STATS_SECTION_HELP[props.sectionId]", hdr)
+        for sid, text in STATS_SECTION_HELP.items():
+            self.assertIn(f"  {sid}:", js, sid)
+            self.assertIn(text, js, sid)
 
     def _assert_investigation_docs_match(self) -> None:
         readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
@@ -444,6 +577,9 @@ class AiWebParityTests(unittest.TestCase):
         for title in (
             "Timeline Anomalies", "Worst Events", "Period / Jitter",
             "Task Health", "Task × Core", "Waiter × Owner",
+            "Response Time", "Critical Path", "Unified Jitter",
+            "Recurring Patterns", "Preemption Matrix", "Mutex Blocking",
+            "Core Utilization Over Time",
         ):
             self.assertIn(title, AI_SYSTEM_PROMPT, title)
             self.assertIn(title, ollama, title)
@@ -549,6 +685,9 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("btf_viewer_pkg/ai_planner.py", ai_md)
         self.assertNotIn("TODO.md", readme)
         self.assertNotIn("TODO.md", ai_md)
+        self.assertFalse((BTF_ROOT / "TODO.md").exists())
+        self.assertIn("id=\"btf-analysis-pages\"", readme)
+        self.assertIn("id=\"analysis-vs-ai-tools\"", ai_md)
 
     def test_causal_tools_match_apps(self) -> None:
         """AI.md causal engine names stay aligned with Desktop and Web."""
@@ -684,6 +823,9 @@ class AiWebParityTests(unittest.TestCase):
         pages = (
             "Timeline Anomalies", "Worst Events", "Period / Jitter",
             "Task Health", "Task × Core", "Waiter × Owner",
+            "Response Time", "Critical Path", "Unified Jitter",
+            "Recurring Patterns", "Preemption Matrix", "Mutex Blocking",
+            "Core Utilization Over Time",
         )
         for tid in ("findings", "investigate", "triage", "diagnostic_report"):
             for title in pages:
@@ -1656,8 +1798,8 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("QPushButton#aiMoreItem:disabled", assist)
         self.assertIn(".ai-more-item:disabled", panel)
         self.assertIn("color: var(--muted, #8a96a8)", panel)
-        self.assertIn("color: #fff", dlg)
-        self.assertIn("color: white", stats)
+        self.assertNotIn("analysis-btn primary", dlg)
+        self.assertNotIn("background: #3498db; color: white", stats)
         self.assertIn("Investigations", assist)
         self.assertIn("Investigations", panel)
         inv_labels = [t["label"] for t in builtin_investigation_templates()]
@@ -1719,6 +1861,28 @@ class AiWebParityTests(unittest.TestCase):
         self.assertNotIn("diagnose", ids)
         self.assertNotIn("validate_experiment", ids)
         self.assertEqual(len(menu_ids) + len(AI_TEMPLATE_PRIMARY_IDS), 20)
+
+    def test_timeline_ai_context_menu_disabled_when_ai_off(self) -> None:
+        view = (BTF_ROOT / "btf_viewer_pkg/view.py").read_text(encoding="utf-8")
+        tl = (BTF_ROOT / "web/src/components/TimelinePanel.vue").read_text(
+            encoding="utf-8")
+        app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
+        mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
+        self.assertIn("Ask AI about this event", view)
+        self.assertIn("Ask AI about this event", tl)
+        self.assertIn("Explain this region with AI", view)
+        self.assertIn("Explain this region with AI", tl)
+        self.assertIn("Clear all marks", view)
+        self.assertIn("Clear all marks", tl)
+        self.assertIn("clear_all_marks_requested", view)
+        self.assertIn("onCtxClearAllMarks", tl)
+        self.assertIn("self._style_ai_menu_action(act_ask)", view)
+        self.assertIn("self._style_ai_menu_action(act_region)", view)
+        self.assertIn('action.setEnabled(on)', view)
+        self.assertIn(':class="{ disabled: !aiFeatureEnabled }"', tl)
+        self.assertIn("if (!aiFeatureEnabled.value) return", tl)
+        self.assertIn(':ai-enabled="appSettings.aiEnabled !== false"', app)
+        self.assertIn("view.set_ai_enabled(self._ai_feature_enabled())", mw)
 
 
 if __name__ == "__main__":

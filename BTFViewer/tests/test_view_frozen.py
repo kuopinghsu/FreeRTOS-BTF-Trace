@@ -92,5 +92,19 @@ class TestViewFrozen(_QtTestBase):
         ]
         self.assertEqual(msgs, [])
 
+    def test_ai_context_actions_disabled_when_ai_off(self) -> None:
+        from PySide6.QtGui import QAction
+        from PySide6.QtWidgets import QMenu
+
+        view = TimelineView()
+        menu = QMenu(view)
+        act = QAction("Ask AI about this event", menu)
+        view.set_ai_enabled(False)
+        view._style_ai_menu_action(act)
+        self.assertFalse(act.isEnabled())
+        view.set_ai_enabled(True)
+        view._style_ai_menu_action(act)
+        self.assertTrue(act.isEnabled())
+
 if __name__ == "__main__":
     unittest.main()

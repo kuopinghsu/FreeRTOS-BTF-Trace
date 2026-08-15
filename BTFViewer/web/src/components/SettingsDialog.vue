@@ -749,12 +749,15 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import {
-  DEFAULT_SETTINGS,
   formatDeadlinesText,
   normalizeSettings,
   parseDeadlinesText,
   shouldReplaceDeadlinesText,
 } from '../utils/settingsStore.js'
+import {
+  defaultSectionCollapsed,
+  defaultStatsSectionOrder,
+} from '../utils/statsPins.js'
 import {
   AI_AUTH_MODE_LABELS,
   AI_PRESETS,
@@ -786,6 +789,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['close', 'save', 'preview'])
+let resetLayout = false
 
 const tabs = [
   { id: 'appearance', label: 'Appearance' },
@@ -1128,12 +1132,39 @@ const zoomUnit = computed(() => {
 })
 
 function onReset() {
-  Object.assign(draft, { ...DEFAULT_SETTINGS })
+  resetLayout = true
+  const next = normalizeSettings(null)
+  next.statsPinnedSections = []
+  next.statsSectionOrder = defaultStatsSectionOrder()
+  next.statsSectionCollapsed = defaultSectionCollapsed()
+  Object.assign(draft, next)
   deadlinesText.value = ''
   aiTestStatus.value = ''
   aiTestOk.value = null
   for (const pid of Object.keys(aiModelLists)) aiModelLists[pid] = []
   aiModelMenuOpen.value = false
+  clearTimeout(previewTimer)
+  emit('preview', normalizeSettings({
+    ...draft,
+    statsPinnedSections: [],
+    statsSectionOrder: defaultStatsSectionOrder(),
+    statsSectionCollapsed: defaultSectionCollapsed(),
+    taskDeadlines: {},
+  }))
+}
+
+function onSave() {
+  const payload = normalizeSettings({
+    ...draft,
+    taskDeadlines: parseDeadlinesText(deadlinesText.value),
+  })
+  if (resetLayout) {
+    payload.statsPinnedSections = []
+    payload.statsSectionOrder = defaultStatsSectionOrder()
+    payload.statsSectionCollapsed = defaultSectionCollapsed()
+    payload.resetLayout = true
+  }
+  emit('save', payload, { resetLayout })
 }
 
 async function onRefreshModels() {
@@ -1211,12 +1242,6 @@ async function onTestAi() {
   }
 }
 
-function onSave() {
-  emit('save', normalizeSettings({
-    ...draft,
-    taskDeadlines: parseDeadlinesText(deadlinesText.value),
-  }))
-}
 </script>
 
 <style scoped>

@@ -148,7 +148,6 @@
 
     </StatsSectionBlock>
     <StatsSectionBlock
-      v-if="coreTimeBreakdown.length"
       :section-id="'core_breakdown'"
       :order="sectionOrderIndex('core_breakdown')"
       @reorder="onSectionReorder"
@@ -164,7 +163,16 @@
         Core Time Breakdown{{ scopeSuffixStr }}
       </StatsSectionHeader>
       <template v-if="!coreBreakdownCollapsed">
-        <div class="stats-table-block">
+        <div
+          v-if="coreTimeBreakdown.length === 0"
+          class="range-hint"
+        >
+          No core segments
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
           <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('core_breakdown') + 'px' }">
             <table class="stats-table">
               <thead>
@@ -177,7 +185,16 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="row in sortedCoreTimeBreakdown" :key="row.core">
+                <tr
+                  v-for="row in sortedCoreTimeBreakdown"
+                  :key="row.core"
+                  class="stats-table-row clickable"
+                  :title="`Switch to Core View and expand ${row.core}`"
+                  tabindex="0"
+                  @click="emit('highlightTask', row.core)"
+                  @keydown.enter.prevent="emit('highlightTask', row.core)"
+                  @keydown.space.prevent="emit('highlightTask', row.core)"
+                >
                   <td class="task-col">{{ row.core }}</td>
                   <td>{{ (100 * row.activeNs / row.spanNs).toFixed(1) }}%</td>
                   <td>{{ (100 * row.idleNs / row.spanNs).toFixed(1) }}%</td>
@@ -675,7 +692,6 @@
 
     </StatsSectionBlock>
     <StatsSectionBlock
-      v-if="corePairRows.length"
       :section-id="'core_pairs'"
       :order="sectionOrderIndex('core_pairs')"
       @reorder="onSectionReorder"
@@ -691,7 +707,16 @@
         Core-Pair Migration Summary{{ scopeSuffixStr }}
       </StatsSectionHeader>
       <template v-if="!corePairsCollapsed">
-        <div class="stats-table-block">
+        <div
+          v-if="corePairRows.length === 0"
+          class="range-hint"
+        >
+          No migrations in scope
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
           <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('core_pairs') + 'px' }">
             <table class="stats-table">
               <thead>
@@ -735,6 +760,289 @@
         </div>
       </template>
 
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'anomalies'"
+      :order="sectionOrderIndex('anomalies')"
+      @reorder="onSectionReorder"
+    >
+      <StatsSectionHeader
+        :section-id="'anomalies'"
+        :collapsed="anomaliesCollapsed"
+        :pinned="isSectionPinned('anomalies')"
+        @toggle="toggleSectionCollapse('anomalies')"
+        @toggle-pin="toggleSectionPin('anomalies')"
+      >
+        Timeline Anomalies{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!anomaliesCollapsed">
+        <div
+          v-if="anomalyRows.length"
+          class="distrib-toolbar"
+        >
+          <button
+            type="button"
+            class="compare-mig-btn"
+            title="Open the AI Assistant and investigate the selected or top anomaly"
+            @click="onInvestigateAnomaly"
+          >
+            Investigate…
+          </button>
+        </div>
+        <div
+          v-if="anomalyRows.length === 0"
+          class="range-hint"
+        >
+          No timeline anomalies in this scope
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('anomalies') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('anomalies', 'time')" @click="toggleTableSort('anomalies', 'time')">Time</th>
+                  <th :class="thSortClass('anomalies', 'kind')" @click="toggleTableSort('anomalies', 'kind')">Kind</th>
+                  <th :class="thSortClass('anomalies', 'task')" @click="toggleTableSort('anomalies', 'task')">Task</th>
+                  <th :class="thSortClass('anomalies', 'duration')" @click="toggleTableSort('anomalies', 'duration')">Duration</th>
+                  <th :class="thSortClass('anomalies', 'why')" @click="toggleTableSort('anomalies', 'why')">Why</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(row, i) in sortedAnomalyRows"
+                  :key="'an-' + i + row.start"
+                  class="stats-table-row clickable"
+                  :title="'Zoom and place C1–C2 on this episode'"
+                  @click="onAnomalyRowClick(row)"
+                >
+                  <td class="extreme-col">{{ formatTime(row.start, timeScale) }}</td>
+                  <td>{{ uxKindLabel(row.kind) }}</td>
+                  <td class="task-col">{{ row.task }}</td>
+                  <td>{{ formatTime(row.duration, timeScale) }}</td>
+                  <td>{{ row.reason }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize anomalies table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('anomalies', $event)"
+          />
+        </div>
+      </template>
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'worst'"
+      :order="sectionOrderIndex('worst')"
+      @reorder="onSectionReorder"
+    >
+      <StatsSectionHeader
+        :section-id="'worst'"
+        :collapsed="worstCollapsed"
+        :pinned="isSectionPinned('worst')"
+        @toggle="toggleSectionCollapse('worst')"
+        @toggle-pin="toggleSectionPin('worst')"
+      >
+        Worst Events{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!worstCollapsed">
+        <div
+          v-if="worstRows.length === 0"
+          class="range-hint"
+        >
+          No episodes in this scope
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('worst') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('worst', 'time')" @click="toggleTableSort('worst', 'time')">Time</th>
+                  <th :class="thSortClass('worst', 'kind')" @click="toggleTableSort('worst', 'kind')">Kind</th>
+                  <th :class="thSortClass('worst', 'task')" @click="toggleTableSort('worst', 'task')">Task</th>
+                  <th :class="thSortClass('worst', 'duration')" @click="toggleTableSort('worst', 'duration')">Duration</th>
+                  <th :class="thSortClass('worst', 'why')" @click="toggleTableSort('worst', 'why')">Why</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(row, i) in sortedWorstRows"
+                  :key="'w-' + i + row.start"
+                  class="stats-table-row clickable"
+                  :title="'Zoom and place C1–C2 on this episode'"
+                  @click="onUxEventClick(row)"
+                >
+                  <td class="extreme-col">{{ formatTime(row.start, timeScale) }}</td>
+                  <td>{{ uxKindLabel(row.kind) }}</td>
+                  <td class="task-col">{{ row.task }}</td>
+                  <td>{{ formatTime(row.duration, timeScale) }}</td>
+                  <td>{{ row.reason || uxKindLabel(row.kind) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize worst-events table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('worst', $event)"
+          />
+        </div>
+      </template>
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'crit_path'"
+      :order="sectionOrderIndex('crit_path')"
+      @reorder="onSectionReorder"
+    >
+      <StatsSectionHeader
+        :section-id="'crit_path'"
+        :collapsed="critPathCollapsed"
+        :pinned="isSectionPinned('crit_path')"
+        @toggle="toggleSectionCollapse('crit_path')"
+        @toggle-pin="toggleSectionPin('crit_path')"
+      >
+        Critical Path{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!critPathCollapsed">
+        <div
+          v-if="critPathRows.length === 0"
+          class="range-hint"
+        >
+          Need at least one on-CPU slice
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('crit_path') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('crit_path', 'task')" @click="toggleTableSort('crit_path', 'task')">Task</th>
+                  <th :class="thSortClass('crit_path', 'duration')" @click="toggleTableSort('crit_path', 'duration')">Duration</th>
+                  <th :class="thSortClass('crit_path', 'exec')" @click="toggleTableSort('crit_path', 'exec')">Exec</th>
+                  <th :class="thSortClass('crit_path', 'preempt')" @click="toggleTableSort('crit_path', 'preempt')">Preempt</th>
+                  <th :class="thSortClass('crit_path', 'wait')" @click="toggleTableSort('crit_path', 'wait')">Wait</th>
+                  <th :class="thSortClass('crit_path', 'mig')" @click="toggleTableSort('crit_path', 'mig')">Mig</th>
+                  <th :class="thSortClass('crit_path', 'other')" @click="toggleTableSort('crit_path', 'other')">Other</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(row, i) in sortedCritPathRows"
+                  :key="'cp-' + i + row.start"
+                  class="stats-table-row clickable"
+                >
+                  <td
+                    class="task-col extreme-col"
+                    :title="'Zoom this ready→completion window'"
+                    @click="onCritPathCellClick(row)"
+                  >{{ row.task }}</td>
+                  <td class="extreme-col" @click="onCritPathCellClick(row)">{{ formatTime(row.duration, timeScale) }}</td>
+                  <td class="extreme-col" @click="onCritPathCellClick(row, 'exec_ev')">{{ formatTime(row.exec_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onCritPathCellClick(row, 'preempt_ev')">{{ formatTime(row.preempt_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onCritPathCellClick(row, 'wait_ev')">{{ formatTime(row.wait_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onCritPathCellClick(row, 'mig_ev')">{{ formatTime(row.migration_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onCritPathCellClick(row, 'other_ev')">{{ formatTime(row.other_ns, timeScale) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize critical-path table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('crit_path', $event)"
+          />
+        </div>
+      </template>
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'patterns'"
+      :order="sectionOrderIndex('patterns')"
+      @reorder="onSectionReorder"
+    >
+      <StatsSectionHeader
+        :section-id="'patterns'"
+        :collapsed="patternsCollapsed"
+        :pinned="isSectionPinned('patterns')"
+        @toggle="toggleSectionCollapse('patterns')"
+        @toggle-pin="toggleSectionPin('patterns')"
+      >
+        Recurring Patterns{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!patternsCollapsed">
+        <div
+          v-if="patternRows.length === 0"
+          class="range-hint"
+        >
+          No repeating anomaly kinds in this scope
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('patterns') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('patterns', 'task')" @click="toggleTableSort('patterns', 'task')">Task</th>
+                  <th :class="thSortClass('patterns', 'kind')" @click="toggleTableSort('patterns', 'kind')">Kind</th>
+                  <th :class="thSortClass('patterns', 'count')" @click="toggleTableSort('patterns', 'count')">Count</th>
+                  <th :class="thSortClass('patterns', 'duration')" @click="toggleTableSort('patterns', 'duration')">Worst</th>
+                  <th :class="thSortClass('patterns', 'why')" @click="toggleTableSort('patterns', 'why')">Why</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(row, i) in sortedPatternRows"
+                  :key="'pat-' + i + row.kind"
+                  class="stats-table-row clickable"
+                  :title="'Jump to the worst instance'"
+                  @click="onUxEventClick(row)"
+                >
+                  <td class="task-col">{{ row.task }}</td>
+                  <td>{{ uxKindLabel(row.kind) }}</td>
+                  <td>{{ row.count }}</td>
+                  <td>{{ formatTime(row.duration, timeScale) }}</td>
+                  <td>{{ row.reason }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize recurring-patterns table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('patterns', $event)"
+          />
+        </div>
+      </template>
     </StatsSectionBlock>
     <StatsSectionBlock
       :section-id="'exec'"
@@ -825,6 +1133,12 @@
                 >
                   p95
                 </th>
+                <th
+                  :class="thSortClass('exec', 'p99')"
+                  @click="toggleTableSort('exec', 'p99')"
+                >
+                  p99
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -858,7 +1172,20 @@
                 </td>
                 <td>{{ row.jitter }}</td>
                 <td>{{ row.stddev }}</td>
-                <td>{{ row.p95 }}</td>
+                <td
+                  class="extreme-col"
+                  :title="`Jump to the p95 slice for ${row.name}`"
+                  @click.stop="jumpToPercentile(row.mk, 'exec', 0.95)"
+                >
+                  {{ row.p95 }}
+                </td>
+                <td
+                  class="extreme-col"
+                  :title="`Jump to the p99 slice for ${row.name}`"
+                  @click.stop="jumpToPercentile(row.mk, 'exec', 0.99)"
+                >
+                  {{ row.p99 }}
+                </td>
               </tr>
             </tbody>
           </table>
@@ -957,6 +1284,12 @@
                 >
                   p95
                 </th>
+                <th
+                  :class="thSortClass('block', 'p99')"
+                  @click="toggleTableSort('block', 'p99')"
+                >
+                  p99
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -989,7 +1322,20 @@
                 </td>
                 <td>{{ row.jitter }}</td>
                 <td>{{ row.stddev }}</td>
-                <td>{{ row.p95 }}</td>
+                <td
+                  class="extreme-col"
+                  :title="`Jump to the p95 blocking gap for ${row.name}`"
+                  @click.stop="jumpToPercentile(row.mk, 'block', 0.95)"
+                >
+                  {{ row.p95 }}
+                </td>
+                <td
+                  class="extreme-col"
+                  :title="`Jump to the p99 blocking gap for ${row.name}`"
+                  @click.stop="jumpToPercentile(row.mk, 'block', 0.99)"
+                >
+                  {{ row.p99 }}
+                </td>
               </tr>
             </tbody>
           </table>
@@ -1021,9 +1367,6 @@
         Dispatch / Scheduling Latency{{ scopeSuffixStr }}
       </StatsSectionHeader>
       <template v-if="!dispatchCollapsed">
-        <div class="range-hint">
-          Ready from STI resume / create; sync wakes not attributed.
-        </div>
         <div
           v-if="dispatchLatencyStats.length === 0"
           class="range-hint"
@@ -1093,6 +1436,12 @@
                   >
                     p95
                   </th>
+                  <th
+                    :class="thSortClass('dispatch', 'p99')"
+                    @click="toggleTableSort('dispatch', 'p99')"
+                  >
+                    p99
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -1126,6 +1475,7 @@
                   <td>{{ row.jitter }}</td>
                   <td>{{ row.stddev }}</td>
                   <td>{{ row.p95 }}</td>
+                  <td>{{ row.p99 }}</td>
                 </tr>
               </tbody>
             </table>
@@ -1224,6 +1574,12 @@
                 >
                   p95
                 </th>
+                <th
+                  :class="thSortClass('inter', 'p99')"
+                  @click="toggleTableSort('inter', 'p99')"
+                >
+                  p99
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -1256,7 +1612,20 @@
                 </td>
                 <td>{{ row.jitter }}</td>
                 <td>{{ row.stddev }}</td>
-                <td>{{ row.p95 }}</td>
+                <td
+                  class="extreme-col"
+                  :title="`Jump to the p95 inter-arrival for ${row.name}`"
+                  @click.stop="jumpToPercentile(row.mk, 'inter', 0.95)"
+                >
+                  {{ row.p95 }}
+                </td>
+                <td
+                  class="extreme-col"
+                  :title="`Jump to the p99 inter-arrival for ${row.name}`"
+                  @click.stop="jumpToPercentile(row.mk, 'inter', 0.99)"
+                >
+                  {{ row.p99 }}
+                </td>
               </tr>
             </tbody>
           </table>
@@ -1271,6 +1640,424 @@
         </div>
       </template>
 
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'period'"
+      :order="sectionOrderIndex('period')"
+      @reorder="onSectionReorder"
+    >
+      <StatsSectionHeader
+        :section-id="'period'"
+        :collapsed="periodCollapsed"
+        :pinned="isSectionPinned('period')"
+        @toggle="toggleSectionCollapse('period')"
+        @toggle-pin="toggleSectionPin('period')"
+      >
+        Period / Jitter{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!periodCollapsed">
+        <div
+          v-if="periodRows.length === 0"
+          class="range-hint"
+        >
+          Need at least 3 inter-arrival gaps per task
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('period') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('period', 'task')" @click="toggleTableSort('period', 'task')">Task</th>
+                  <th :class="thSortClass('period', 'n')" @click="toggleTableSort('period', 'n')">N</th>
+                  <th :class="thSortClass('period', 'expected')" @click="toggleTableSort('period', 'expected')">Expected</th>
+                  <th :class="thSortClass('period', 'min')" @click="toggleTableSort('period', 'min')">Min</th>
+                  <th :class="thSortClass('period', 'avg')" @click="toggleTableSort('period', 'avg')">Avg</th>
+                  <th :class="thSortClass('period', 'max')" @click="toggleTableSort('period', 'max')">Max</th>
+                  <th :class="thSortClass('period', 'p95')" @click="toggleTableSort('period', 'p95')">p95</th>
+                  <th :class="thSortClass('period', 'p99')" @click="toggleTableSort('period', 'p99')">p99</th>
+                  <th :class="thSortClass('period', 'rms')" @click="toggleTableSort('period', 'rms')">RMS</th>
+                  <th :class="thSortClass('period', 'cv')" @click="toggleTableSort('period', 'cv')">CV</th>
+                  <th :class="thSortClass('period', 'missed')" @click="toggleTableSort('period', 'missed')">Missed</th>
+                  <th :class="thSortClass('period', 'extra')" @click="toggleTableSort('period', 'extra')">Extra</th>
+                  <th :class="thSortClass('period', 'burst')" @click="toggleTableSort('period', 'burst')">Burst</th>
+                  <th :class="thSortClass('period', 'spark')" title="Inter-arrival over time" @click="toggleTableSort('period', 'spark')">Spark</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedPeriodRows"
+                  :key="'per-' + row.mk"
+                  class="stats-table-row clickable"
+                >
+                  <td
+                    class="task-col extreme-col"
+                    :title="'Open inter-arrival plot for ' + row.task"
+                    @click="onPeriodCellClick(row, 'plot')"
+                  >{{ row.task }}</td>
+                  <td>{{ row.n }}</td>
+                  <td class="extreme-col" @click="onPeriodCellClick(row, 'p50_ev')">{{ formatTime(row.expected_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onPeriodCellClick(row, 'min_ev')">{{ formatTime(row.min_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onPeriodCellClick(row, 'p50_ev')">{{ formatTime(row.avg_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onPeriodCellClick(row, 'max_ev')">{{ formatTime(row.max_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onPeriodCellClick(row, 'p95_ev')">{{ formatTime(row.p95_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onPeriodCellClick(row, 'p99_ev')">{{ formatTime(row.p99_ns, timeScale) }}</td>
+                  <td>{{ formatTime(row.rms_ns, timeScale) }}</td>
+                  <td>{{ (row.cv * 100).toFixed(1) }}%</td>
+                  <td class="extreme-col" @click="onPeriodCellClick(row, 'miss_ev')">{{ row.missed }}</td>
+                  <td>{{ row.extra }}</td>
+                  <td>{{ row.burst || 0 }}</td>
+                  <td class="spark-col">{{ row.spark || '' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize period table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('period', $event)"
+          />
+        </div>
+      </template>
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'response'"
+      :order="sectionOrderIndex('response')"
+      @reorder="onSectionReorder"
+    >
+      <StatsSectionHeader
+        :section-id="'response'"
+        :collapsed="responseCollapsed"
+        :pinned="isSectionPinned('response')"
+        @toggle="toggleSectionCollapse('response')"
+        @toggle-pin="toggleSectionPin('response')"
+      >
+        Response Time{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!responseCollapsed">
+        <div
+          v-if="responseRows.length === 0"
+          class="range-hint"
+        >
+          Need at least one on-CPU slice
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('response') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('response', 'task')" @click="toggleTableSort('response', 'task')">Task</th>
+                  <th :class="thSortClass('response', 'n')" @click="toggleTableSort('response', 'n')">N</th>
+                  <th :class="thSortClass('response', 'min')" @click="toggleTableSort('response', 'min')">Min</th>
+                  <th :class="thSortClass('response', 'avg')" @click="toggleTableSort('response', 'avg')">Avg</th>
+                  <th :class="thSortClass('response', 'max')" @click="toggleTableSort('response', 'max')">Max</th>
+                  <th :class="thSortClass('response', 'p50')" @click="toggleTableSort('response', 'p50')">p50</th>
+                  <th :class="thSortClass('response', 'p90')" @click="toggleTableSort('response', 'p90')">p90</th>
+                  <th :class="thSortClass('response', 'p95')" @click="toggleTableSort('response', 'p95')">p95</th>
+                  <th :class="thSortClass('response', 'p99')" @click="toggleTableSort('response', 'p99')">p99</th>
+                  <th :class="thSortClass('response', 'p999')" @click="toggleTableSort('response', 'p999')">p99.9</th>
+                  <th :class="thSortClass('response', 'jitter')" @click="toggleTableSort('response', 'jitter')">Jitter</th>
+                  <th :class="thSortClass('response', 'cv')" @click="toggleTableSort('response', 'cv')">CV</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedResponseRows"
+                  :key="'rt-' + row.mk"
+                  class="stats-table-row clickable"
+                >
+                  <td
+                    class="task-col extreme-col"
+                    :title="'Open response plot for ' + row.task"
+                    @click="onResponseCellClick(row, 'plot')"
+                  >{{ row.task }}</td>
+                  <td>{{ row.n }}</td>
+                  <td class="extreme-col" @click="onResponseCellClick(row, 'min_ev')">{{ formatTime(row.min_ns, timeScale) }}</td>
+                  <td>{{ formatTime(row.avg_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onResponseCellClick(row, 'max_ev')">{{ formatTime(row.max_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onResponseCellClick(row, 'p50_ev')">{{ formatTime(row.p50_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onResponseCellClick(row, 'p90_ev')">{{ formatTime(row.p90_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onResponseCellClick(row, 'p95_ev')">{{ formatTime(row.p95_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onResponseCellClick(row, 'p99_ev')">{{ formatTime(row.p99_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onResponseCellClick(row, 'p999_ev')">{{ formatTime(row.p999_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onResponseCellClick(row, 'worst_ev')">{{ formatTime(row.jitter_ns, timeScale) }}</td>
+                  <td>{{ ((row.cv || 0) * 100).toFixed(1) }}%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize response-time table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('response', $event)"
+          />
+        </div>
+      </template>
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'jitter'"
+      :order="sectionOrderIndex('jitter')"
+      @reorder="onSectionReorder"
+    >
+      <StatsSectionHeader
+        :section-id="'jitter'"
+        :collapsed="jitterCollapsed"
+        :pinned="isSectionPinned('jitter')"
+        @toggle="toggleSectionCollapse('jitter')"
+        @toggle-pin="toggleSectionPin('jitter')"
+      >
+        Unified Jitter{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!jitterCollapsed">
+        <div
+          v-if="jitterRows.length === 0"
+          class="range-hint"
+        >
+          No timing samples in this scope
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('jitter') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('jitter', 'task')" @click="toggleTableSort('jitter', 'task')">Task</th>
+                  <th :class="thSortClass('jitter', 'exec')" @click="toggleTableSort('jitter', 'exec')">Exec</th>
+                  <th :class="thSortClass('jitter', 'execCv')" @click="toggleTableSort('jitter', 'execCv')">Exec CV</th>
+                  <th :class="thSortClass('jitter', 'block')" @click="toggleTableSort('jitter', 'block')">Block</th>
+                  <th :class="thSortClass('jitter', 'blockCv')" @click="toggleTableSort('jitter', 'blockCv')">Block CV</th>
+                  <th :class="thSortClass('jitter', 'inter')" @click="toggleTableSort('jitter', 'inter')">Inter</th>
+                  <th :class="thSortClass('jitter', 'interCv')" @click="toggleTableSort('jitter', 'interCv')">Inter CV</th>
+                  <th :class="thSortClass('jitter', 'response')" @click="toggleTableSort('jitter', 'response')">Response</th>
+                  <th :class="thSortClass('jitter', 'responseCv')" @click="toggleTableSort('jitter', 'responseCv')">Resp CV</th>
+                  <th :class="thSortClass('jitter', 'dispatch')" @click="toggleTableSort('jitter', 'dispatch')">Dispatch</th>
+                  <th :class="thSortClass('jitter', 'dispatchCv')" @click="toggleTableSort('jitter', 'dispatchCv')">Disp CV</th>
+                  <th :class="thSortClass('jitter', 'wakeup')" @click="toggleTableSort('jitter', 'wakeup')">Wake</th>
+                  <th :class="thSortClass('jitter', 'wakeupCv')" @click="toggleTableSort('jitter', 'wakeupCv')">Wake CV</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedJitterRows"
+                  :key="'jit-' + row.mk"
+                  class="stats-table-row clickable"
+                >
+                  <td
+                    class="task-col extreme-col"
+                    :title="'Open execution plot for ' + row.task"
+                    @click="onJitterCellClick(row, 'exec')"
+                  >{{ row.task }}</td>
+                  <td class="extreme-col" @click="onJitterCellClick(row, 'exec')">{{ formatTime(row.exec_jitter_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onJitterCellClick(row, 'exec')">{{ ((row.exec_cv || 0) * 100).toFixed(1) }}%</td>
+                  <td class="extreme-col" @click="onJitterCellClick(row, 'block')">{{ formatTime(row.block_jitter_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onJitterCellClick(row, 'block')">{{ ((row.block_cv || 0) * 100).toFixed(1) }}%</td>
+                  <td class="extreme-col" @click="onJitterCellClick(row, 'inter')">{{ formatTime(row.inter_jitter_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onJitterCellClick(row, 'inter')">{{ ((row.inter_cv || 0) * 100).toFixed(1) }}%</td>
+                  <td class="extreme-col" @click="onJitterCellClick(row, 'response')">{{ formatTime(row.response_jitter_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onJitterCellClick(row, 'response')">{{ ((row.response_cv || 0) * 100).toFixed(1) }}%</td>
+                  <td class="extreme-col" @click="onJitterCellClick(row, 'dispatch')">{{ formatTime(row.dispatch_jitter_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onJitterCellClick(row, 'dispatch')">{{ ((row.dispatch_cv || 0) * 100).toFixed(1) }}%</td>
+                  <td class="extreme-col" @click="onJitterCellClick(row, 'block')">{{ formatTime(row.wakeup_jitter_ns, timeScale) }}</td>
+                  <td class="extreme-col" @click="onJitterCellClick(row, 'block')">{{ ((row.wakeup_cv || 0) * 100).toFixed(1) }}%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize unified-jitter table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('jitter', $event)"
+          />
+        </div>
+      </template>
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'distrib'"
+      :order="sectionOrderIndex('distrib')"
+      @reorder="onSectionReorder"
+    >
+      <StatsSectionHeader
+        :section-id="'distrib'"
+        :collapsed="distribCollapsed"
+        :pinned="isSectionPinned('distrib')"
+        @toggle="toggleSectionCollapse('distrib')"
+        @toggle-pin="toggleSectionPin('distrib')"
+      >
+        Distribution Explorer{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!distribCollapsed">
+        <div class="distrib-toolbar">
+          <label>
+            Metric
+            <select v-model="distribKind">
+              <option
+                v-for="kind in distribKindOptions"
+                :key="kind.id"
+                :value="kind.id"
+              >
+                {{ kind.label }}
+              </option>
+            </select>
+          </label>
+          <label>
+            Task
+            <select v-model="distribMk">
+              <option value="">(select)</option>
+              <option
+                v-for="row in jitterRows"
+                :key="'dx-' + row.mk"
+                :value="row.mk"
+              >
+                {{ row.task }}
+              </option>
+            </select>
+          </label>
+          <button
+            type="button"
+            class="compare-mig-btn"
+            :disabled="!distribMk"
+            @click="onOpenDistributionPlot"
+          >
+            Open histogram
+          </button>
+          <button
+            type="button"
+            class="action-btn"
+            :disabled="!aiFeatureEnabled || !distribMk"
+            :title="aiFeatureEnabled
+              ? 'Open the AI Assistant and explain this distribution'
+              : 'Enable AI Assistant in Settings → AI'"
+            @click="queryDistributionWithAi('explorer')"
+          >
+            Query with AI…
+          </button>
+        </div>
+        <div class="range-hint">
+          {{ distribSummary }}
+        </div>
+        <div
+          v-if="distribHistogramModel"
+          class="distrib-hist plot-card plot-card-histogram"
+        >
+          <div class="plot-histogram-toolbar">
+            <label class="plot-scale-label">
+              Histogram scale
+              <select
+                v-model="distribScaleMode"
+                class="plot-scale-select"
+              >
+                <option value="auto">Auto</option>
+                <option value="linear">Linear</option>
+                <option value="percentile">p5–p95</option>
+                <option value="log">Log duration</option>
+              </select>
+            </label>
+            <span class="plot-histogram-caption">{{ distribHistogramModel.caption }}</span>
+          </div>
+          <svg
+            class="plot-svg distrib-hist-svg"
+            :viewBox="`0 0 ${distribHistogramModel.width} ${distribHistogramModel.height}`"
+          >
+            <rect
+              x="0"
+              y="0"
+              :width="distribHistogramModel.width"
+              :height="distribHistogramModel.height"
+              fill="var(--bg)"
+            />
+            <rect
+              v-if="distribHistogramModel.sigmaBand"
+              :x="distribHistogramModel.sigmaBand.x"
+              :y="distribHistogramModel.margin.top"
+              :width="distribHistogramModel.sigmaBand.width"
+              :height="distribHistogramModel.height - distribHistogramModel.margin.top - distribHistogramModel.margin.bottom"
+              fill="#CE93D8"
+              fill-opacity="0.14"
+            />
+            <rect
+              v-for="bar in distribHistogramModel.bars"
+              :key="`dx-bar-${bar.index}-${bar.kind || 'regular'}`"
+              :x="bar.x"
+              :y="bar.y"
+              :width="bar.width"
+              :height="bar.height"
+              :fill="distribHistogramModel.color"
+              :fill-opacity="bar.kind === 'overflow' || bar.kind === 'underflow' ? 0.55 : 0.82"
+            />
+            <polyline
+              v-if="distribHistogramModel.cdfPoints.length > 1"
+              :points="distribHistogramModel.cdfPoints.map(p => `${p.x},${p.y}`).join(' ')"
+              fill="none"
+              stroke="#90CAF9"
+              stroke-width="1.5"
+              stroke-linejoin="round"
+            />
+            <g
+              v-for="refLine in distribHistogramModel.referenceLines"
+              :key="`dx-ref-${refLine.label}`"
+            >
+              <line
+                :x1="refLine.x"
+                :x2="refLine.x"
+                :y1="distribHistogramModel.margin.top"
+                :y2="distribHistogramModel.height - distribHistogramModel.margin.bottom"
+                :stroke="refLine.color"
+                stroke-dasharray="5 5"
+              />
+              <text
+                :x="Math.min(refLine.x + 6, distribHistogramModel.width - distribHistogramModel.margin.right - 2)"
+                :y="distribHistogramModel.margin.top + 12"
+                fill="var(--fg)"
+                class="plot-ref-text"
+              >
+                {{ refLine.label }}
+              </text>
+            </g>
+            <g
+              v-for="tick in distribHistogramModel.xTicks"
+              :key="`dx-x-${tick.index}`"
+            >
+              <text
+                :x="tick.x"
+                :y="distribHistogramModel.height - 10"
+                text-anchor="middle"
+                fill="var(--fg-dim)"
+                class="plot-axis-text"
+              >
+                {{ tick.label }}
+              </text>
+            </g>
+          </svg>
+        </div>
+        <div
+          v-else
+          class="range-hint"
+        >
+          No histogram samples for this metric × task.
+        </div>
+      </template>
     </StatsSectionBlock>
     <StatsSectionBlock
       :section-id="'preemption'"
@@ -1388,6 +2175,119 @@
 
     </StatsSectionBlock>
     <StatsSectionBlock
+      :section-id="'preempt_matrix'"
+      :order="sectionOrderIndex('preempt_matrix')"
+      @reorder="onSectionReorder"
+    >
+      <StatsSectionHeader
+        :section-id="'preempt_matrix'"
+        :collapsed="preemptMatrixCollapsed"
+        :pinned="isSectionPinned('preempt_matrix')"
+        @toggle="toggleSectionCollapse('preempt_matrix')"
+        @toggle-pin="toggleSectionPin('preempt_matrix')"
+      >
+        Preemption Matrix{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!preemptMatrixCollapsed">
+        <div
+          v-if="!preemptRankRows.length"
+          class="range-hint"
+        >
+          No preemption overlaps in this scope
+        </div>
+        <template v-else>
+          <div class="stats-table-block">
+            <div class="stats-section-subtitle">Preemptor ranking</div>
+            <div
+              class="stats-table-wrap"
+              :style="{ maxHeight: tableHeight('preempt_matrix') + 'px' }"
+            >
+              <table class="stats-table">
+                <thead>
+                  <tr>
+                    <th :class="thSortClass('preempt_rank', 'task')" @click="toggleTableSort('preempt_rank', 'task')">Victim</th>
+                    <th :class="thSortClass('preempt_rank', 'count')" @click="toggleTableSort('preempt_rank', 'count')">Count</th>
+                    <th :class="thSortClass('preempt_rank', 'total')" @click="toggleTableSort('preempt_rank', 'total')">Total</th>
+                    <th :class="thSortClass('preempt_rank', 'max')" @click="toggleTableSort('preempt_rank', 'max')">Max</th>
+                    <th :class="thSortClass('preempt_rank', 'top')" @click="toggleTableSort('preempt_rank', 'top')">Top preemptors</th>
+                    <th :class="thSortClass('preempt_rank', 'story')" @click="toggleTableSort('preempt_rank', 'story')">Story</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="row in sortedPreemptRankRows"
+                    :key="'pr-' + row.mk"
+                    class="stats-table-row clickable"
+                    :title="'Jump to the longest preemption of ' + row.task"
+                    @click="onUxEventClick(row.worst)"
+                  >
+                    <td class="task-col">{{ row.task }}</td>
+                    <td>{{ row.count }}</td>
+                    <td>{{ formatTime(row.total_ns, timeScale) }}</td>
+                    <td>{{ formatTime(row.max_ns, timeScale) }}</td>
+                    <td>{{ row.top_label }}</td>
+                    <td>{{ row.story }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div
+            v-if="preemptMatrixModel.tasks.length"
+            class="stats-table-block"
+          >
+            <div class="stats-section-subtitle">Victim \ Preemptor</div>
+            <div
+              class="stats-table-wrap"
+              :style="{ maxHeight: tableHeight('preempt_matrix') + 'px' }"
+            >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('preempt_matrix', 'victim')" @click="toggleTableSort('preempt_matrix', 'victim')">Victim \ Preemptor</th>
+                  <th
+                    v-for="col in preemptMatrixModel.tasks"
+                    :key="'pm-h-' + col.mk"
+                    :class="thSortClass('preempt_matrix', col.mk)"
+                    @click="toggleTableSort('preempt_matrix', col.mk)"
+                  >{{ col.task }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="victim in sortedPreemptMatrixTasks"
+                  :key="'pm-' + victim.mk"
+                  class="stats-table-row clickable"
+                >
+                    <td class="task-col">{{ victim.task }}</td>
+                    <td
+                      v-for="col in preemptMatrixModel.tasks"
+                      :key="'pm-' + victim.mk + col.mk"
+                      :class="preemptMatrixModel.cells[victim.mk + '|' + col.mk]?.ns ? 'extreme-col' : ''"
+                      @click="onPreemptMatrixCellClick(preemptMatrixModel.cells[victim.mk + '|' + col.mk])"
+                    >{{
+                      victim.mk === col.mk
+                        ? '—'
+                        : (preemptMatrixModel.cells[victim.mk + '|' + col.mk]?.ns
+                          ? formatTime(preemptMatrixModel.cells[victim.mk + '|' + col.mk].ns, timeScale)
+                          : '—')
+                    }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div
+              class="stats-section-resizer"
+              role="separator"
+              aria-label="Resize preemption-matrix table"
+              aria-orientation="horizontal"
+              @mousedown.prevent="onTableResizeStart('preempt_matrix', $event)"
+            />
+          </div>
+        </template>
+      </template>
+    </StatsSectionBlock>
+    <StatsSectionBlock
       v-if="trace?.hasPriorityInstrumentation"
       :section-id="'priority'"
       :order="sectionOrderIndex('priority')"
@@ -1404,11 +2304,6 @@
         Priority Inheritance{{ scopeSuffixStr }}
       </StatsSectionHeader>
       <template v-if="!priorityCollapsed">
-        <p class="range-hint priority-hint">
-          Detects tasks boosted above their <code>create pri</code> by
-          <code>set_priority</code> STI events. Orange bands = boost; red = classic
-          L/M/H pattern (medium-priority task between base and peak).
-        </p>
         <div
           v-if="priorityStats.length === 0"
           class="range-hint"
@@ -1519,11 +2414,6 @@
         Mutex / Semaphore{{ scopeSuffixStr }}
       </StatsSectionHeader>
       <template v-if="!syncCollapsed">
-        <p class="range-hint priority-hint">
-          Pairs <code>take</code>/<code>give</code> STI events by object pointer
-          (<code>0x........</code>). Flags orphan gives, unmatched takes, delete-while-held,
-          and multi-mutex hold at trace end (deadlock risk).
-        </p>
         <div
           v-if="syncStats.length === 0"
           class="range-hint"
@@ -1703,6 +2593,187 @@
 
     </StatsSectionBlock>
     <StatsSectionBlock
+      :section-id="'wait_owner'"
+      :order="sectionOrderIndex('wait_owner')"
+      @reorder="onSectionReorder"
+    >
+      <StatsSectionHeader
+        :section-id="'wait_owner'"
+        :collapsed="waitOwnerCollapsed"
+        :pinned="isSectionPinned('wait_owner')"
+        @toggle="toggleSectionCollapse('wait_owner')"
+        @toggle-pin="toggleSectionPin('wait_owner')"
+      >
+        Waiter × Owner{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!waitOwnerCollapsed">
+        <div
+          v-if="!waitOwnerModel.tasks.length"
+          class="range-hint"
+        >
+          No mutex handoffs in this scope
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('wait_owner') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('wait_owner', 'waiter')" @click="toggleTableSort('wait_owner', 'waiter')">Waiter \ Owner</th>
+                  <th
+                    v-for="owner in waitOwnerModel.tasks"
+                    :key="'wo-h-' + owner.mk"
+                    :class="thSortClass('wait_owner', owner.mk)"
+                    @click="toggleTableSort('wait_owner', owner.mk)"
+                  >{{ owner.task }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="waiter in sortedWaitOwnerTasks"
+                  :key="'wo-' + waiter.mk"
+                  class="stats-table-row clickable"
+                >
+                  <td class="task-col">{{ waiter.task }}</td>
+                  <td
+                    v-for="owner in waitOwnerModel.tasks"
+                    :key="'wo-' + waiter.mk + owner.mk"
+                    :class="waitOwnerModel.cells[waiter.mk + '|' + owner.mk]?.ns ? 'extreme-col' : ''"
+                    @click="onWaitOwnerCellClick(waitOwnerModel.cells[waiter.mk + '|' + owner.mk])"
+                  >{{
+                    waiter.mk === owner.mk
+                      ? '—'
+                      : (waitOwnerModel.cells[waiter.mk + '|' + owner.mk]?.ns
+                        ? formatTime(waitOwnerModel.cells[waiter.mk + '|' + owner.mk].ns, timeScale)
+                        : '—')
+                  }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize waiter-owner table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('wait_owner', $event)"
+          />
+        </div>
+      </template>
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'mutex_block'"
+      :order="sectionOrderIndex('mutex_block')"
+      @reorder="onSectionReorder"
+    >
+      <StatsSectionHeader
+        :section-id="'mutex_block'"
+        :collapsed="mutexBlockCollapsed"
+        :pinned="isSectionPinned('mutex_block')"
+        @toggle="toggleSectionCollapse('mutex_block')"
+        @toggle-pin="toggleSectionPin('mutex_block')"
+      >
+        Mutex Blocking{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!mutexBlockCollapsed">
+        <div
+          v-if="mutexBlockRows.length === 0"
+          class="range-hint"
+        >
+          No mutex waits in this scope
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('mutex_block') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('mutex_block', 'task')" @click="toggleTableSort('mutex_block', 'task')">Task</th>
+                  <th :class="thSortClass('mutex_block', 'object')" @click="toggleTableSort('mutex_block', 'object')">Object</th>
+                  <th :class="thSortClass('mutex_block', 'owner')" @click="toggleTableSort('mutex_block', 'owner')">Owner</th>
+                  <th :class="thSortClass('mutex_block', 'count')" @click="toggleTableSort('mutex_block', 'count')">Count</th>
+                  <th :class="thSortClass('mutex_block', 'total')" @click="toggleTableSort('mutex_block', 'total')">Total</th>
+                  <th :class="thSortClass('mutex_block', 'max')" @click="toggleTableSort('mutex_block', 'max')">Max</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(row, i) in sortedMutexBlockRows"
+                  :key="'mb-' + i + row.mk"
+                  class="stats-table-row clickable"
+                  :title="'Jump to the longest wait'"
+                  @click="onMutexBlockClick(row)"
+                >
+                  <td class="task-col">{{ row.task }}</td>
+                  <td>{{ row.object }}</td>
+                  <td>{{ row.owner }}</td>
+                  <td>{{ row.count }}</td>
+                  <td>{{ formatTime(row.total_ns, timeScale) }}</td>
+                  <td>{{ formatTime(row.max_ns, timeScale) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize mutex-blocking table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('mutex_block', $event)"
+          />
+        </div>
+        <div
+          v-if="blockerRows.length"
+          class="stats-table-block"
+        >
+          <div class="stats-section-subtitle">Top blocking contributors</div>
+          <div class="range-hint">
+            Mutex waits, preemption overlap, and leftover idle gaps.
+          </div>
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('mutex_block') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('mutex_blockers', 'task')" @click="toggleTableSort('mutex_blockers', 'task')">Task</th>
+                  <th :class="thSortClass('mutex_blockers', 'mutex')" @click="toggleTableSort('mutex_blockers', 'mutex')">Mutex</th>
+                  <th :class="thSortClass('mutex_blockers', 'preempt')" @click="toggleTableSort('mutex_blockers', 'preempt')">Preempt</th>
+                  <th :class="thSortClass('mutex_blockers', 'idle')" @click="toggleTableSort('mutex_blockers', 'idle')">Idle</th>
+                  <th :class="thSortClass('mutex_blockers', 'total')" @click="toggleTableSort('mutex_blockers', 'total')">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedBlockerRows"
+                  :key="'tb-' + row.mk"
+                  class="stats-table-row clickable"
+                  @click="onUxEventClick({ ...(row.worst || row), mk: row.mk, task: row.task, section: 'mutex_block' })"
+                >
+                  <td class="task-col">{{ row.task }}</td>
+                  <td>{{ formatTime(row.mutex_ns, timeScale) }}</td>
+                  <td>{{ formatTime(row.preempt_ns, timeScale) }}</td>
+                  <td>{{ formatTime(row.idle_ns, timeScale) }}</td>
+                  <td>{{ formatTime(row.total_ns, timeScale) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </template>
+    </StatsSectionBlock>
+    <StatsSectionBlock
       v-if="trace?.hasSyncObjectInstrumentation"
       :section-id="'queue'"
       :order="sectionOrderIndex('queue')"
@@ -1719,9 +2790,6 @@
         Queue{{ scopeSuffixStr }}
       </StatsSectionHeader>
       <template v-if="!queueCollapsed">
-        <p class="range-hint priority-hint">
-          Pairs <code>send</code>/<code>recv</code> STI events by queue pointer.
-        </p>
         <div v-if="queueStats.length === 0" class="range-hint">
           {{ statsRange ? 'No queue activity in cursor range' : 'No queue STI events in trace' }}
         </div>
@@ -1731,8 +2799,10 @@
               <thead>
                 <tr>
                   <th :class="thSortClass('queue', 'object')" @click="toggleTableSort('queue', 'object')">Object</th>
+                  <th :class="thSortClass('queue', 'kind')" @click="toggleTableSort('queue', 'kind')">Kind</th>
                   <th :class="thSortClass('queue', 'holds')" @click="toggleTableSort('queue', 'holds')">Holds</th>
                   <th :class="thSortClass('queue', 'issues')" @click="toggleTableSort('queue', 'issues')">Issues</th>
+                  <th :class="thSortClass('queue', 'bounces')" @click="toggleTableSort('queue', 'bounces')">Bounces</th>
                   <th :class="thSortClass('queue', 'avg')" @click="toggleTableSort('queue', 'avg')">Avg hold</th>
                   <th :class="thSortClass('queue', 'status')" @click="toggleTableSort('queue', 'status')">Status</th>
                 </tr>
@@ -1740,8 +2810,10 @@
               <tbody>
                 <tr v-for="row in sortedQueueStats" :key="row.key">
                   <td class="task-col">{{ row.label }}</td>
+                  <td>{{ row.kind }}</td>
                   <td>{{ row.holdCount }}</td>
                   <td>{{ row.issueCount }}</td>
+                  <td :class="row.bounceCount > 0 ? 'sev-warning' : ''">{{ row.bounceCount ?? 0 }}</td>
                   <td>{{ row.avgHold }}</td>
                   <td :class="syncStatusClass(row.status)">{{ row.statusLabel }}</td>
                 </tr>
@@ -1760,7 +2832,6 @@
 
     </StatsSectionBlock>
     <StatsSectionBlock
-      v-if="lifecycleStats.length"
       :section-id="'lifecycle'"
       :order="sectionOrderIndex('lifecycle')"
       @reorder="onSectionReorder"
@@ -1773,10 +2844,21 @@
         @toggle="toggleSectionCollapse('lifecycle')"
         @toggle-pin="toggleSectionPin('lifecycle')"
       >
-        Task lifecycle{{ scopeSuffixStr }}
+        Task Lifecycle{{ scopeSuffixStr }}
       </StatsSectionHeader>
       <template v-if="!lifecycleCollapsed">
-        <div class="stats-table-block">
+        <div
+          v-if="lifecycleStats.length === 0"
+          class="range-hint"
+        >
+          {{ statsRange
+            ? 'No task lifecycle events in cursor range'
+            : 'No task create/delete/suspend/resume STI events in trace' }}
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
           <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('lifecycle') + 'px' }">
             <table class="stats-table">
               <thead>
@@ -1824,7 +2906,6 @@
 
     </StatsSectionBlock>
     <StatsSectionBlock
-      v-if="coreAffinityRows.length"
       :section-id="'affinity'"
       :order="sectionOrderIndex('affinity')"
       @reorder="onSectionReorder"
@@ -1840,7 +2921,16 @@
         Core Affinity{{ scopeSuffixStr }}
       </StatsSectionHeader>
       <template v-if="!affinityCollapsed">
-        <div class="stats-table-block">
+        <div
+          v-if="coreAffinityRows.length === 0"
+          class="range-hint"
+        >
+          No affinity_set events found
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
           <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('affinity') + 'px' }">
             <table class="stats-table">
               <thead>
@@ -1880,6 +2970,148 @@
         </div>
       </template>
 
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'task_core'"
+      :order="sectionOrderIndex('task_core')"
+      @reorder="onSectionReorder"
+    >
+      <StatsSectionHeader
+        :section-id="'task_core'"
+        :collapsed="taskCoreCollapsed"
+        :pinned="isSectionPinned('task_core')"
+        @toggle="toggleSectionCollapse('task_core')"
+        @toggle-pin="toggleSectionPin('task_core')"
+      >
+        Task × Core{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!taskCoreCollapsed">
+        <div
+          v-if="!taskCoreModel.rows.length"
+          class="range-hint"
+        >
+          No on-CPU slices in this scope
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('task_core') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('task_core', 'task')" @click="toggleTableSort('task_core', 'task')">Task</th>
+                  <th
+                    v-for="core in taskCoreModel.cores"
+                    :key="'tc-h-' + core"
+                    :class="thSortClass('task_core', core)"
+                    @click="toggleTableSort('task_core', core)"
+                  >{{ core }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedTaskCoreRows"
+                  :key="'tc-' + row.mk"
+                  class="stats-table-row clickable"
+                >
+                  <td
+                    class="task-col extreme-col"
+                    @click="onTaskCoreCellClick(row, null)"
+                  >{{ row.task }}</td>
+                  <td
+                    v-for="core in taskCoreModel.cores"
+                    :key="'tc-' + row.mk + core"
+                    :class="row.cells[core]?.ns ? 'extreme-col' : ''"
+                    :title="row.cells[core]?.ns
+                      ? (formatTime(row.cells[core].ns, timeScale) + ' on ' + core)
+                      : ''"
+                    @click="onTaskCoreCellClick(row, core)"
+                  >{{ row.cells[core]?.ns ? row.cells[core].pct_span.toFixed(1) + '%' : '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize task-core table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('task_core', $event)"
+          />
+        </div>
+      </template>
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'core_time'"
+      :order="sectionOrderIndex('core_time')"
+      @reorder="onSectionReorder"
+    >
+      <StatsSectionHeader
+        :section-id="'core_time'"
+        :collapsed="coreTimeCollapsed"
+        :pinned="isSectionPinned('core_time')"
+        @toggle="toggleSectionCollapse('core_time')"
+        @toggle-pin="toggleSectionPin('core_time')"
+      >
+        Core Utilization Over Time{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!coreTimeCollapsed">
+        <div
+          v-if="!coreTimeModel.bins.length"
+          class="range-hint"
+        >
+          No on-CPU slices in this scope
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('core_time') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('core_time', 'time')" @click="toggleTableSort('core_time', 'time')">Time</th>
+                  <th
+                    v-for="core in coreTimeModel.cores"
+                    :key="'ct-h-' + core"
+                    :class="thSortClass('core_time', core)"
+                    @click="toggleTableSort('core_time', core)"
+                  >{{ core }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedCoreTimeBins"
+                  :key="'ct-' + row.index"
+                  class="stats-table-row clickable"
+                  :title="'Zoom this time bin'"
+                  @click="onCoreTimeClick(row)"
+                >
+                  <td class="extreme-col">{{ formatTime(row.start, timeScale) }}</td>
+                  <td
+                    v-for="core in coreTimeModel.cores"
+                    :key="'ct-' + row.index + core"
+                  >{{ row.cells[core] ? row.cells[core].pct.toFixed(1) + '%' : '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize core-utilization table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('core_time', $event)"
+          />
+        </div>
+      </template>
     </StatsSectionBlock>
     <StatsSectionBlock
       :section-id="'deadline'"
@@ -1973,6 +3205,83 @@
         </template>
       </template>
 
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'task_health'"
+      :order="sectionOrderIndex('task_health')"
+      @reorder="onSectionReorder"
+    >
+      <StatsSectionHeader
+        :section-id="'task_health'"
+        :collapsed="taskHealthCollapsed"
+        :pinned="isSectionPinned('task_health')"
+        @toggle="toggleSectionCollapse('task_health')"
+        @toggle-pin="toggleSectionPin('task_health')"
+      >
+        Task Health{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!taskHealthCollapsed">
+        <div
+          v-if="taskHealthRows.length === 0"
+          class="range-hint"
+        >
+          No task slices in this scope
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('task_health') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('task_health', 'task')" @click="toggleTableSort('task_health', 'task')">Task</th>
+                  <th :class="thSortClass('task_health', 'score')" @click="toggleTableSort('task_health', 'score')">Score</th>
+                  <th :class="thSortClass('task_health', 'execution')" @click="toggleTableSort('task_health', 'execution')">Exec</th>
+                  <th :class="thSortClass('task_health', 'blocking')" @click="toggleTableSort('task_health', 'blocking')">Block</th>
+                  <th :class="thSortClass('task_health', 'period')" @click="toggleTableSort('task_health', 'period')">Period</th>
+                  <th :class="thSortClass('task_health', 'migration')" @click="toggleTableSort('task_health', 'migration')">Mig</th>
+                  <th :class="thSortClass('task_health', 'deadline')" @click="toggleTableSort('task_health', 'deadline')">Deadline</th>
+                  <th :class="thSortClass('task_health', 'cpu')" @click="toggleTableSort('task_health', 'cpu')">CPU</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedTaskHealthRows"
+                  :key="'th-' + row.mk"
+                  class="stats-table-row clickable"
+                >
+                  <td
+                    class="task-col extreme-col"
+                    @click="onTaskHealthClick(row, null)"
+                  >{{ row.task }}</td>
+                  <td
+                    :class="'health-' + healthTone(row.score)"
+                    @click="onTaskHealthClick(row, null)"
+                  >{{ row.score }}</td>
+                  <td
+                    v-for="band in ['execution', 'blocking', 'period', 'migration', 'deadline', 'cpu']"
+                    :key="'th-' + row.mk + band"
+                    :class="'health-' + (row.bands[band] || 'ok')"
+                    class="health-mark"
+                    @click="onTaskHealthClick(row, band)"
+                  >{{ row.marks[band] }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize task-health table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('task_health', $event)"
+          />
+        </div>
+      </template>
     </StatsSectionBlock>
     <StatsSectionBlock
       :section-id="'intervals'"
@@ -2245,14 +3554,6 @@
           />
         </svg>
         Export HTML
-      </button>
-      <button
-        class="action-btn"
-        :disabled="!canCompareTabs"
-        title="Compare summary, top tasks, and core migrations between two open trace tabs"
-        @click="emit('openCompare')"
-      >
-        Trace Compare…
       </button>
     </div>
   </div>
@@ -2544,8 +3845,11 @@
               <span class="plot-histogram-caption">{{ histogramModel.caption }}</span>
             </div>
             <svg
+              ref="histogramSvgEl"
               class="plot-svg"
               :viewBox="`0 0 ${histogramModel.width} ${histogramModel.height}`"
+              @mousemove="onHistogramMouseMove"
+              @mouseleave="onHistogramMouseLeave"
             >
               <rect
                 x="0"
@@ -2631,14 +3935,16 @@
               </g>
 
               <rect
-                v-for="bar in histogramModel.bars"
+                v-for="(bar, barIndex) in histogramModel.bars"
                 :key="`hist-bar-${bar.index}-${bar.kind || 'regular'}`"
                 :x="bar.x"
                 :y="bar.y"
                 :width="bar.width"
                 :height="bar.height"
                 :fill="histogramModel.color"
-                :fill-opacity="bar.kind === 'overflow' || bar.kind === 'underflow' ? 0.55 : 0.82"
+                :fill-opacity="barIndex === histogramHoverIndex
+                  ? 1
+                  : (bar.kind === 'overflow' || bar.kind === 'underflow' ? 0.55 : 0.82)"
                 :stroke="bar.kind === 'overflow' || bar.kind === 'underflow' ? 'var(--fg-dim)' : 'none'"
                 stroke-width="1"
               />
@@ -2688,6 +3994,31 @@
                   {{ tick.label }}
                 </text>
               </g>
+
+              <g v-if="histogramHoverTip">
+                <rect
+                  :x="histogramHoverTip.x"
+                  :y="histogramHoverTip.y"
+                  :width="histogramHoverTip.width"
+                  :height="histogramHoverTip.height"
+                  rx="4"
+                  class="plot-crosshair-tip-bg"
+                />
+                <text
+                  :x="histogramHoverTip.x + 6"
+                  :y="histogramHoverTip.y + 12"
+                  class="plot-crosshair-tip-text"
+                >
+                  {{ histogramHoverTip.line1 }}
+                </text>
+                <text
+                  :x="histogramHoverTip.x + 6"
+                  :y="histogramHoverTip.y + 24"
+                  class="plot-crosshair-tip-sub"
+                >
+                  {{ histogramHoverTip.line2 }}
+                </text>
+              </g>
             </svg>
           </template>
         </div>
@@ -2726,6 +4057,18 @@
             Open Chord
           </button>
         </template>
+        <span class="plot-footer-spacer" />
+        <button
+          type="button"
+          class="action-btn"
+          :disabled="!aiFeatureEnabled"
+          :title="aiFeatureEnabled
+            ? 'Open the AI Assistant and explain this distribution'
+            : 'Enable AI Assistant in Settings → AI'"
+          @click="queryDistributionWithAi('plot')"
+        >
+          Query with AI…
+        </button>
       </div>
     </div>
   </div>
@@ -2758,6 +4101,9 @@ import {
   findBcetSegment,
   findExtremeBlockingSegment,
   findExtremeInterArrivalSegment,
+  findPercentileExecSegment,
+  findPercentileBlockingSegment,
+  findPercentileInterArrivalSegment,
   extremeSegmentNote,
   preemptionChainRows,
   preemptionChainPlotPoints,
@@ -2791,12 +4137,13 @@ import { formatMigrationGapTime } from '../utils/timeFormat.js'
 import { computeDeadlineViolations, deadlineSliceAnnotationNote } from '../utils/deadlineAnalysis.js'
 import { intervalInstanceDetailRows } from '../utils/intervalAnalysis.js'
 import { migrationRows, buildCorePairRows, buildCoreTimeBreakdown, migrationDwellPlotPoints, migrationRatePlotPoints, migrationGapPlotPoints, pairGapPlotPoints, pairRatePlotPoints, pairPlotKey, pairMigrations, pairBouncePrefer, buildLockBounceNsSet } from '../utils/migrationAnalysis.js'
-import { dispatchLatencyRows, switchOverheadRows, concurrentCoreActiveRows, dispatchLatencyPlotPoints, switchOverheadPlotPoints, concurrencyLevelPlotPoints } from '../utils/schedulerSmpMetrics.js'
+import { dispatchLatencyRows, switchOverheadRows, concurrentCoreActiveRows, dispatchLatencyPlotPoints, switchOverheadPlotPoints, concurrencyLevelPlotPoints, collectDispatchLatencyByMk } from '../utils/schedulerSmpMetrics.js'
 import { coreUtilPctRows } from '../utils/traceCompare.js'
 import { renderWorkflowAnalysisHtml, collectTraceAnalysisFindings } from '../utils/workflowAnalysis.js'
-import { capStatsTableRows, traceNeedsDeferredStatsLoad } from '../utils/statsLoad.js'
+import { capStatsTableRows } from '../utils/statsLoad.js'
 import {
   STATS_CORES_DEFAULT_VISIBLE_ROWS,
+  STATS_DEFAULT_EXPANDED_SECTIONS,
   STATS_LB_GAUGE_H,
   STATS_MAX_VISIBLE_ROWS,
   STATS_TABLE_HEADER_H,
@@ -2836,15 +4183,52 @@ import {
   AFFINITY_SORT_ACCESSORS,
   DEADLINE_SLICE_SORT_ACCESSORS,
   DEADLINE_CPU_SORT_ACCESSORS,
+  ANOMALY_SORT_ACCESSORS,
+  CRIT_PATH_SORT_ACCESSORS,
+  PATTERN_SORT_ACCESSORS,
+  PERIOD_SORT_ACCESSORS,
+  RESPONSE_SORT_ACCESSORS,
+  JITTER_SORT_ACCESSORS,
+  PREEMPT_RANK_SORT_ACCESSORS,
+  MUTEX_BLOCK_SORT_ACCESSORS,
+  BLOCKER_SORT_ACCESSORS,
+  TASK_HEALTH_SORT_ACCESSORS,
+  CORE_TIME_BIN_SORT_ACCESSORS,
 } from '../utils/statsTableSort.js'
 import LoadBalanceGauge from './LoadBalanceGauge.vue'
 import StatsSectionHeader from './StatsSectionHeader.vue'
 import StatsSectionBlock from './StatsSectionBlock.vue'
-import { normalizeStatsPins, normalizeStatsSectionOrder, moveStatsSection, toggleStatsPin, isDefaultStatsSectionOrder, defaultStatsSectionOrder } from '../utils/statsPins.js'
-import { buildHistogramModel } from '../utils/histogramModel.js'
+import { normalizeStatsPins, normalizeStatsSectionOrder, moveStatsSection, toggleStatsPin, isDefaultStatsSectionOrder, defaultStatsSectionOrder, mergeSectionCollapsed } from '../utils/statsPins.js'
+import { buildHistogramModel, histogramBarTooltip } from '../utils/histogramModel.js'
 import { plotTabsForKind, resolvePlotTabSwitch } from '../utils/plotTabs.js'
 import { classifyLoadBalance, loadBalanceGaugeImgHtml, loadBalanceMetrics } from '../utils/loadBalanceGauge.js'
 import { btfHtmlReportDocument } from '../utils/htmlReport.js'
+import {
+  HEALTH_BAND_SECTION,
+  analyzeResponseTimes,
+  analyzeTaskPeriods,
+  collectWorstEvents,
+  coreUtilOverTime,
+  criticalPathRows,
+  detectTimelineAnomalies,
+  distributionExplorer,
+  distributionMetricSamples,
+  harvestMutexHolds,
+  harvestUxEvents,
+  healthInputsFromEvents,
+  KIND_LABEL,
+  mutexBlockingTable,
+  pairMutexWaits,
+  preemptionMatrix,
+  preemptionPairs,
+  preemptorRanking,
+  recurringPatterns,
+  topBlockingContributors,
+  taskCoreMatrix,
+  taskHealthScores,
+  unifiedJitter,
+  waiterOwnerMatrix,
+} from '../utils/uxExplore.js'
 
 const props = defineProps({
   trace:   { type: Object, default: null },
@@ -2864,30 +4248,64 @@ const emit = defineEmits([
   'highlightTask', 'plotPointActivate', 'segmentJump', 'update:openPlot', 'update:sectionHeights',
   'update:scopeToCursors', 'update:sectionCollapsedState', 'update:sectionPins',
   'update:sectionOrder',
-  'openPairHeatmap', 'openPairChord', 'openSettings', 'openCompare',
+  'openPairHeatmap', 'openPairChord', 'openSettings',
+  'exploreRange', 'query-ai',
 ])
 
-const coresCollapsed = ref(false)
-const tasksCollapsed = ref(false)
-const healthCollapsed = ref(false)
-const execSliceCollapsed = ref(false)
-const blockingCollapsed = ref(false)
-const migrationCollapsed = ref(false)
-const interArrivalCollapsed = ref(false)
-const preemptionCollapsed = ref(false)
-const priorityCollapsed = ref(false)
-const syncCollapsed = ref(false)
-const queueCollapsed = ref(false)
-const lifecycleCollapsed = ref(false)
-const deadlineCollapsed = ref(false)
-const intervalsCollapsed = ref(false)
-const tagsCollapsed = ref(false)
-const corePairsCollapsed = ref(false)
-const coreBreakdownCollapsed = ref(false)
-const concurrencyCollapsed = ref(false)
-const switchOverheadCollapsed = ref(false)
-const dispatchCollapsed = ref(false)
-const affinityCollapsed = ref(false)
+const aiFeatureEnabled = computed(() => props.analysisSettings?.aiEnabled !== false)
+
+function defaultSectionCollapsed(id) {
+  return !STATS_DEFAULT_EXPANDED_SECTIONS.includes(id)
+}
+
+const coresCollapsed = ref(defaultSectionCollapsed('cores'))
+const tasksCollapsed = ref(defaultSectionCollapsed('tasks'))
+const healthCollapsed = ref(defaultSectionCollapsed('health'))
+const anomaliesCollapsed = ref(defaultSectionCollapsed('anomalies'))
+const worstCollapsed = ref(defaultSectionCollapsed('worst'))
+const execSliceCollapsed = ref(defaultSectionCollapsed('exec'))
+const blockingCollapsed = ref(defaultSectionCollapsed('block'))
+const migrationCollapsed = ref(defaultSectionCollapsed('migrations'))
+const interArrivalCollapsed = ref(defaultSectionCollapsed('inter'))
+const preemptionCollapsed = ref(defaultSectionCollapsed('preemption'))
+const priorityCollapsed = ref(defaultSectionCollapsed('priority'))
+const syncCollapsed = ref(defaultSectionCollapsed('sync'))
+const queueCollapsed = ref(defaultSectionCollapsed('queue'))
+const lifecycleCollapsed = ref(defaultSectionCollapsed('lifecycle'))
+const deadlineCollapsed = ref(defaultSectionCollapsed('deadline'))
+const intervalsCollapsed = ref(defaultSectionCollapsed('intervals'))
+const tagsCollapsed = ref(defaultSectionCollapsed('tags'))
+const corePairsCollapsed = ref(defaultSectionCollapsed('core_pairs'))
+const coreBreakdownCollapsed = ref(defaultSectionCollapsed('core_breakdown'))
+const concurrencyCollapsed = ref(defaultSectionCollapsed('concurrency'))
+const switchOverheadCollapsed = ref(defaultSectionCollapsed('switch_overhead'))
+const dispatchCollapsed = ref(defaultSectionCollapsed('dispatch'))
+const affinityCollapsed = ref(defaultSectionCollapsed('affinity'))
+const periodCollapsed = ref(defaultSectionCollapsed('period'))
+const taskCoreCollapsed = ref(defaultSectionCollapsed('task_core'))
+const waitOwnerCollapsed = ref(defaultSectionCollapsed('wait_owner'))
+const taskHealthCollapsed = ref(defaultSectionCollapsed('task_health'))
+const responseCollapsed = ref(defaultSectionCollapsed('response'))
+const critPathCollapsed = ref(defaultSectionCollapsed('crit_path'))
+const preemptMatrixCollapsed = ref(defaultSectionCollapsed('preempt_matrix'))
+const mutexBlockCollapsed = ref(defaultSectionCollapsed('mutex_block'))
+const coreTimeCollapsed = ref(defaultSectionCollapsed('core_time'))
+const jitterCollapsed = ref(defaultSectionCollapsed('jitter'))
+const distribCollapsed = ref(defaultSectionCollapsed('distrib'))
+const patternsCollapsed = ref(defaultSectionCollapsed('patterns'))
+const lastAnomaly = ref(null)
+const distribKind = ref('exec')
+const distribMk = ref('')
+const distribScaleMode = ref('auto')
+const distribKindOptions = [
+  { id: 'exec', label: 'Execution' },
+  { id: 'block', label: 'Blocking' },
+  { id: 'inter', label: 'Inter-arrival' },
+  { id: 'response', label: 'Response' },
+  { id: 'dispatch', label: 'Dispatch' },
+  { id: 'wakeup', label: 'Wake (stand-in)' },
+  { id: 'preempt', label: 'Preemption' },
+]
 
 function formatMigGapNs(ns) {
   return formatMigrationGapTime(ns, props.trace?.timeScale ?? 'us')
@@ -2917,7 +4335,21 @@ const SECTION_COLLAPSE_REFS = {
   queue: queueCollapsed,
   lifecycle: lifecycleCollapsed,
   affinity: affinityCollapsed,
+  task_core: taskCoreCollapsed,
+  core_time: coreTimeCollapsed,
   deadline: deadlineCollapsed,
+  task_health: taskHealthCollapsed,
+  anomalies: anomaliesCollapsed,
+  worst: worstCollapsed,
+  crit_path: critPathCollapsed,
+  patterns: patternsCollapsed,
+  response: responseCollapsed,
+  period: periodCollapsed,
+  jitter: jitterCollapsed,
+  distrib: distribCollapsed,
+  preempt_matrix: preemptMatrixCollapsed,
+  wait_owner: waitOwnerCollapsed,
+  mutex_block: mutexBlockCollapsed,
   intervals: intervalsCollapsed,
   tags: tagsCollapsed,
 }
@@ -2934,6 +4366,7 @@ function toggleSectionPin(id) {
   emit('update:sectionPins', toggleStatsPin(props.sectionPins, id))
   const flag = SECTION_COLLAPSE_REFS[id]
   if (flag) flag.value = false
+  emitCollapsedState()
 }
 
 const orderedSectionIds = computed(() => normalizeStatsSectionOrder(props.sectionOrder))
@@ -2959,10 +4392,12 @@ function toggleSectionCollapse(id) {
   if (isSectionPinned(id)) return
   const flag = SECTION_COLLAPSE_REFS[id]
   if (flag) flag.value = !flag.value
+  emitCollapsedState()
 }
 
 function expandAllSections() {
   for (const flag of STATS_SECTION_FLAGS) flag.value = false
+  emitCollapsedState()
 }
 
 function collapseAllSections() {
@@ -2970,6 +4405,7 @@ function collapseAllSections() {
     if (pinnedSet.value.has(id)) continue
     flag.value = true
   }
+  emitCollapsedState()
 }
 
 const statsBodyRef = ref(null)
@@ -3043,21 +4479,28 @@ async function applyDemoSections(payload = {}) {
   return { ids, expand, collapse_others: collapseOthers, scroll }
 }
 
-function applyDeferHeavySectionCollapse(tr) {
-  if (!tr || props.sectionCollapsedState) return
-  if (!traceNeedsDeferredStatsLoad(tr)) return
-  const skip = pinnedSet.value
-  if (!skip.has('health')) healthCollapsed.value = true
-  if (!skip.has('migrations')) migrationCollapsed.value = true
-  if (!skip.has('exec')) execSliceCollapsed.value = true
-  if (!skip.has('block')) blockingCollapsed.value = true
-  if (!skip.has('inter')) interArrivalCollapsed.value = true
-  if (!skip.has('preemption')) preemptionCollapsed.value = true
-  if (!skip.has('priority')) priorityCollapsed.value = true
-  if (!skip.has('sync')) syncCollapsed.value = true
-  if (!skip.has('intervals')) intervalsCollapsed.value = true
-  if (!skip.has('tags')) tagsCollapsed.value = true
+function applyCollapsedState(state) {
+  const merged = mergeSectionCollapsed(state)
+  for (const [id, flag] of Object.entries(SECTION_COLLAPSE_REFS)) {
+    flag.value = !!merged[id]
+  }
 }
+
+function snapshotCollapsedState() {
+  const out = {}
+  for (const [id, flag] of Object.entries(SECTION_COLLAPSE_REFS)) {
+    out[id] = !!flag.value
+  }
+  return out
+}
+
+function emitCollapsedState() {
+  emit('update:sectionCollapsedState', snapshotCollapsedState())
+}
+
+watch(() => props.sectionCollapsedState, (state) => {
+  applyCollapsedState(state)
+}, { deep: true, immediate: true })
 
 watch(pinnedSet, (pins) => {
   for (const id of pins) {
@@ -3085,12 +4528,14 @@ function formatStatsRow(row, scale) {
     jitterNs: row.jitter,
     stddevNs: row.stddev,
     p95Ns: row.p95,
+    p99Ns: row.p99,
     min: formatTime(row.min, scale),
     avg: formatTime(row.avg, scale),
     max: formatTime(row.max, scale),
     jitter: formatTime(row.jitter, scale),
     stddev: formatTime(row.stddev, scale),
     p95: formatTime(row.p95, scale),
+    p99: formatTime(row.p99, scale),
   }
 }
 
@@ -3215,9 +4660,15 @@ const STATS_CORES_UTIL_DEFAULT_H = coresUtilViewportHeight(
   STATS_CORES_DEFAULT_VISIBLE_ROWS, true)
 const STATS_UTIL_MIN_H = utilRowsHeight(1)
 
-const localSectionHeights = ref({
+const DEFAULT_LOCAL_SECTION_HEIGHTS = {
   tasks: STATS_UTIL_DEFAULT_H,
   migrations: STATS_TABLE_MIG_DEFAULT_H,
+  anomalies: STATS_TABLE_DEFAULT_H,
+  worst: STATS_TABLE_DEFAULT_H,
+  period: STATS_TABLE_DEFAULT_H,
+  task_core: STATS_TABLE_DEFAULT_H,
+  wait_owner: STATS_TABLE_DEFAULT_H,
+  task_health: STATS_TABLE_DEFAULT_H,
   exec: STATS_TABLE_DEFAULT_H,
   block: STATS_TABLE_DEFAULT_H,
   dispatch: STATS_TABLE_DEFAULT_H,
@@ -3233,16 +4684,16 @@ const localSectionHeights = ref({
   tags: STATS_TABLE_DEFAULT_H,
   concurrency: STATS_TABLE_DEFAULT_H,
   switch_overhead: STATS_TABLE_DEFAULT_H,
-})
+}
+const localSectionHeights = ref({ ...DEFAULT_LOCAL_SECTION_HEIGHTS })
 watch(() => props.sectionHeights, (v) => {
-  if (!v) return
-  const next = { ...v }
+  const next = { ...DEFAULT_LOCAL_SECTION_HEIGHTS, ...(v || {}) }
   // Older sessions stored cores height as util-rows only (gauges were outside
   // the scroll). Bump those so the default viewport still shows gauges + 2 cores.
   if (next.cores != null && next.cores < STATS_LB_GAUGE_H) {
     next.cores = STATS_CORES_UTIL_DEFAULT_H
   }
-  Object.assign(localSectionHeights.value, next)
+  localSectionHeights.value = next
 }, { immediate: true, deep: true })
 let _tableResize = null
 const openPlotRef = computed({
@@ -3251,8 +4702,10 @@ const openPlotRef = computed({
 })
 const plotContentRef = ref(null)
 const scatterSvgEl = ref(null)
+const histogramSvgEl = ref(null)
 const selectedPlotPoint = ref(-1)
 const plotHoverPointIndex = ref(-1)
+const histogramHoverIndex = ref(-1)
 const histogramScaleMode = ref('auto')
 
 const tableSort = ref({
@@ -3277,6 +4730,21 @@ const tableSort = ref({
   affinity: defaultStatsTableSort(),
   deadline_slice: defaultStatsTableSort(),
   deadline_cpu: defaultStatsTableSort(),
+  anomalies: defaultStatsTableSort(),
+  worst: defaultStatsTableSort(),
+  crit_path: defaultStatsTableSort(),
+  patterns: defaultStatsTableSort(),
+  period: defaultStatsTableSort(),
+  response: defaultStatsTableSort(),
+  jitter: defaultStatsTableSort(),
+  preempt_rank: defaultStatsTableSort(),
+  preempt_matrix: defaultStatsTableSort(),
+  wait_owner: defaultStatsTableSort(),
+  mutex_block: defaultStatsTableSort(),
+  mutex_blockers: defaultStatsTableSort(),
+  task_core: defaultStatsTableSort(),
+  core_time: defaultStatsTableSort(),
+  task_health: defaultStatsTableSort(),
 })
 
 function toggleTableSort(tableId, col) {
@@ -3286,9 +4754,6 @@ function toggleTableSort(tableId, col) {
 function thSortClass(tableId, col) {
   return sortHeaderClass(tableSort.value[tableId], col)
 }
-
-const loadedTabs = computed(() => props.tabs.filter(t => t.trace))
-const canCompareTabs = computed(() => loadedTabs.value.length >= 2)
 
 function clampPct(v) { return Math.max(0, Math.min(100, v)).toFixed(1) }
 
@@ -3388,6 +4853,338 @@ const placedCursorCount = computed(() => getPlacedCursors(props.cursors).length)
 const statsRange = computed(() => getStatsRange(props.cursors, scopeToCursorsModel.value))
 
 const scopeSuffixStr = computed(() => scopeSuffix(statsRange.value))
+const timeScale = computed(() => props.trace?.timeScale || 'ns')
+const uxEvents = computed(() => {
+  const tr = props.trace
+  if (!tr) return []
+  const r = statsRange.value
+  return harvestUxEvents(tr, r?.lo ?? null, r?.hi ?? null)
+})
+const dispatchSampleMap = computed(() => {
+  const tr = props.trace
+  if (!tr) return {}
+  const r = statsRange.value
+  const map = {}
+  for (const [mk, data] of collectDispatchLatencyByMk(tr, r?.lo ?? null, r?.hi ?? null)) {
+    const samples = (data.samples || []).map(v => Math.trunc(v || 0)).filter(v => v > 0)
+    if (samples.length) map[mk] = samples
+  }
+  return map
+})
+const mutexWaitRows = computed(() => {
+  const tr = props.trace
+  if (!tr) return []
+  const r = statsRange.value
+  return pairMutexWaits(harvestMutexHolds(tr, r?.lo ?? null, r?.hi ?? null))
+})
+const anomalyRows = computed(() => detectTimelineAnomalies(
+  uxEvents.value, 12, mutexWaitRows.value, props.analysisSettings?.taskDeadlines || {},
+))
+const sortedAnomalyRows = computed(() =>
+  sortStatsRows(anomalyRows.value, tableSort.value.anomalies, ANOMALY_SORT_ACCESSORS))
+const worstRows = computed(() => collectWorstEvents(uxEvents.value, 12))
+const sortedWorstRows = computed(() =>
+  sortStatsRows(worstRows.value, tableSort.value.worst, ANOMALY_SORT_ACCESSORS))
+const responseModel = computed(() => analyzeResponseTimes(uxEvents.value))
+const responseRows = computed(() => responseModel.value.rows || [])
+const sortedResponseRows = computed(() =>
+  sortStatsRows(responseRows.value, tableSort.value.response, RESPONSE_SORT_ACCESSORS))
+const critPathRows = computed(() => criticalPathRows(uxEvents.value, 8))
+const sortedCritPathRows = computed(() =>
+  sortStatsRows(critPathRows.value, tableSort.value.crit_path, CRIT_PATH_SORT_ACCESSORS))
+const preemptPairRows = computed(() => preemptionPairs(uxEvents.value))
+const preemptRankRows = computed(() => preemptorRanking(preemptPairRows.value, 16))
+const sortedPreemptRankRows = computed(() =>
+  sortStatsRows(preemptRankRows.value, tableSort.value.preempt_rank, PREEMPT_RANK_SORT_ACCESSORS))
+const preemptMatrixModel = computed(() => preemptionMatrix(preemptPairRows.value, 12))
+const sortedPreemptMatrixTasks = computed(() => {
+  const tasks = preemptMatrixModel.value.tasks || []
+  const cells = preemptMatrixModel.value.cells || {}
+  const acc = { victim: t => String(t.task || '').toLowerCase() }
+  for (const col of tasks) {
+    acc[col.mk] = victim => Number(cells[`${victim.mk}|${col.mk}`]?.ns || 0)
+  }
+  return sortStatsRows(tasks, tableSort.value.preempt_matrix, acc)
+})
+const mutexBlockRows = computed(() => mutexBlockingTable(mutexWaitRows.value))
+const sortedMutexBlockRows = computed(() =>
+  sortStatsRows(mutexBlockRows.value, tableSort.value.mutex_block, MUTEX_BLOCK_SORT_ACCESSORS))
+const blockerRows = computed(() => topBlockingContributors(uxEvents.value, mutexWaitRows.value, 12))
+const sortedBlockerRows = computed(() =>
+  sortStatsRows(blockerRows.value, tableSort.value.mutex_blockers, BLOCKER_SORT_ACCESSORS))
+const coreTimeModel = computed(() => {
+  const tr = props.trace
+  const r = statsRange.value
+  return coreUtilOverTime(
+    uxEvents.value,
+    tr?.coreNames || tr?.core_names || [],
+    r?.lo ?? null,
+    r?.hi ?? null,
+  )
+})
+const sortedCoreTimeBins = computed(() => {
+  const cores = coreTimeModel.value.cores || []
+  const acc = { ...CORE_TIME_BIN_SORT_ACCESSORS }
+  for (const core of cores) {
+    acc[core] = row => Number(row.cells?.[core]?.pct || 0)
+  }
+  return sortStatsRows(coreTimeModel.value.bins || [], tableSort.value.core_time, acc)
+})
+const jitterRows = computed(() => unifiedJitter(uxEvents.value, dispatchSampleMap.value))
+const sortedJitterRows = computed(() =>
+  sortStatsRows(jitterRows.value, tableSort.value.jitter, JITTER_SORT_ACCESSORS))
+watch(jitterRows, (rows) => {
+  if (distribMk.value || !rows.length) return
+  distribMk.value = String(rows[0].mk || '')
+}, { immediate: true })
+const patternRows = computed(() => recurringPatterns(anomalyRows.value, 2))
+const sortedPatternRows = computed(() =>
+  sortStatsRows(patternRows.value, tableSort.value.patterns, PATTERN_SORT_ACCESSORS))
+
+const statsSpanNs = computed(() => {
+  const r = statsRange.value
+  const tr = props.trace
+  if (r) return Math.max(1, r.hi - r.lo)
+  if (!tr) return 1
+  return Math.max(1, (tr.timeMax ?? tr.time_max ?? 0) - (tr.timeMin ?? tr.time_min ?? 0))
+})
+
+const periodRows = computed(() => analyzeTaskPeriods(uxEvents.value, 3))
+const sortedPeriodRows = computed(() =>
+  sortStatsRows(periodRows.value, tableSort.value.period, PERIOD_SORT_ACCESSORS))
+
+const taskCoreModel = computed(() => {
+  const tr = props.trace
+  const cores = tr?.coreNames || tr?.core_names || []
+  return taskCoreMatrix(uxEvents.value, cores, statsSpanNs.value)
+})
+const sortedTaskCoreRows = computed(() => {
+  const cores = taskCoreModel.value.cores || []
+  const acc = { task: r => String(r.task || '').toLowerCase() }
+  for (const core of cores) {
+    acc[core] = r => Number(r.cells?.[core]?.pct_span || 0)
+  }
+  return sortStatsRows(taskCoreModel.value.rows || [], tableSort.value.task_core, acc)
+})
+
+const waitOwnerModel = computed(() => {
+  const tr = props.trace
+  if (!tr) return { tasks: [], cells: {} }
+  const r = statsRange.value
+  return waiterOwnerMatrix(pairMutexWaits(harvestMutexHolds(tr, r?.lo ?? null, r?.hi ?? null)))
+})
+const sortedWaitOwnerTasks = computed(() => {
+  const tasks = waitOwnerModel.value.tasks || []
+  const cells = waitOwnerModel.value.cells || {}
+  const acc = { waiter: t => String(t.task || '').toLowerCase() }
+  for (const owner of tasks) {
+    acc[owner.mk] = waiter => Number(cells[`${waiter.mk}|${owner.mk}`]?.ns || 0)
+  }
+  return sortStatsRows(tasks, tableSort.value.wait_owner, acc)
+})
+
+function healthTone(score) {
+  if (score >= 80) return 'ok'
+  if (score >= 60) return 'warn'
+  return 'fail'
+}
+
+function onPeriodCellClick(row, key) {
+  if (!row) return
+  if (key === 'plot') {
+    openTaskPlot(row.mk, 'inter')
+    return
+  }
+  onUxEventClick({ ...(row[key] || row.worst_ev), section: 'period', mk: row.mk, task: row.task })
+}
+
+function onResponseCellClick(row, key) {
+  if (!row) return
+  if (key === 'plot') {
+    openTaskPlot(row.mk, 'response')
+    return
+  }
+  const ev = row[key] || row.worst_ev || row
+  onUxEventClick({ ...ev, section: 'response', mk: row.mk, task: row.task })
+}
+
+function onCritPathCellClick(row, key) {
+  if (!row) return
+  const ev = (key && row[key]) || row
+  onUxEventClick({ ...ev, section: 'crit_path', mk: row.mk, task: row.task })
+}
+
+function onJitterCellClick(row, kind) {
+  if (!row?.mk) return
+  openTaskPlot(row.mk, kind || 'exec')
+}
+
+function onTaskCoreCellClick(row, core) {
+  if (!row) return
+  if (!core) {
+    emit('highlightTask', row.mk)
+    return
+  }
+  const cell = row.cells?.[core]
+  if (!cell?.ns) return
+  onUxEventClick({
+    kind: 'exec',
+    task: row.task,
+    mk: row.mk,
+    start: cell.start,
+    stop: cell.stop,
+    duration: cell.ns,
+    jump_ns: cell.jump_ns,
+    section: 'task_core',
+  })
+}
+
+function onWaitOwnerCellClick(cell) {
+  if (!cell?.ns) return
+  onUxEventClick({
+    ...cell,
+    mk: cell.waiter_mk,
+    task: cell.waiter,
+    duration: cell.ns,
+    section: 'wait_owner',
+  })
+}
+
+function onPreemptMatrixCellClick(cell) {
+  if (!cell?.ns) return
+  onUxEventClick({
+    ...cell,
+    mk: cell.victim_mk || cell.victim,
+    task: cell.victim,
+    duration: cell.ns,
+    section: 'preempt_matrix',
+  })
+}
+
+function onMutexBlockClick(row) {
+  if (!row) return
+  const ev = row.worst || row
+  onUxEventClick({
+    ...ev,
+    mk: ev.waiter_mk || row.mk,
+    task: ev.waiter || row.task,
+    duration: ev.duration || row.max_ns,
+    section: 'mutex_block',
+  })
+}
+
+function onCoreTimeClick(row) {
+  if (!row) return
+  onUxEventClick({
+    ...row,
+    task: row.peak_core || 'CPU',
+    mk: row.peak_core || '',
+    duration: Math.max(1, (row.stop || 0) - (row.start || 0)),
+    section: 'core_time',
+  })
+}
+
+function onTaskHealthClick(row, band) {
+  if (!row) return
+  if (row.mk) emit('highlightTask', row.mk)
+  const sid = band ? (HEALTH_BAND_SECTION[band] || 'task_health') : 'task_health'
+  applyDemoSections({ id: sid, expand: true, scroll: sid, collapse_others: false })
+}
+
+function uxKindLabel(kind) {
+  return KIND_LABEL[kind] || kind
+}
+
+function onUxEventClick(ev) {
+  if (!ev) return
+  const note = `${ev.task || ev.mk} — ${ev.reason || ev.kind || 'episode'}`
+  const segs = props.trace?.segByMergeKey?.get(ev.mk) || []
+  const jump = ev.jump_ns ?? ev.start
+  const seg = segs.find(s => s.start === jump || (s.start <= ev.start && s.end > ev.start))
+    || segs[0]
+    || null
+  emit('plotPointActivate', { ns: jump, note, segment: seg })
+  emit('highlightTask', ev.mk)
+  emit('exploreRange', {
+    lo: ev.start,
+    hi: Math.max(ev.stop || ev.start + 1, ev.start + 1),
+    mk: ev.mk,
+    section: ev.section || ({ exec: 'exec', block: 'block', inter: 'inter', migration: 'migrations' })[ev.kind],
+    note,
+    ns: jump,
+  })
+}
+
+function onAnomalyRowClick(row) {
+  lastAnomaly.value = row
+  onUxEventClick(row)
+}
+
+function onInvestigateAnomaly() {
+  const ev = lastAnomaly.value || anomalyRows.value[0]
+  if (!ev) return
+  const extra = `Investigate this timeline anomaly: kind=${ev.kind || ''} task=${ev.task || ev.mk || ''} jump:${Math.trunc(ev.jump_ns || ev.start || 0)} duration=${Math.trunc(ev.duration || 0)} why=${ev.reason || ''}.`
+  emit('query-ai', { template: 'investigate', extra })
+}
+
+const distribSummary = computed(() => {
+  const mk = distribMk.value
+  if (!mk) return 'Select a task to see n / p50 / p99 / sparkline.'
+  const model = distributionExplorer(uxEvents.value, distribKind.value, mk, dispatchSampleMap.value)
+  if (!model) return 'No samples for this metric × task in scope.'
+  const scale = timeScale.value
+  return `n=${model.n || 0}  min=${formatTime(model.min_ns, scale)}  p50=${formatTime(model.p50_ns, scale)}  p99=${formatTime(model.p99_ns, scale)}  max=${formatTime(model.max_ns, scale)}  CV=${((model.cv || 0) * 100).toFixed(1)}%  ${model.spark || ''}`
+})
+
+const distribHistogramModel = computed(() => {
+  const mk = distribMk.value
+  if (!mk) return null
+  const samples = distributionMetricSamples(
+    uxEvents.value, distribKind.value, mk, dispatchSampleMap.value)
+  if (!samples.length) return null
+  return buildHistogramModel(samples, {
+    scaleMode: distribScaleMode.value,
+    formatValue: (value) => formatTime(value, timeScale.value),
+    valueAsTime: true,
+    color: '#5B9BD5',
+    showVariability: true,
+    height: 200,
+  })
+})
+
+function onOpenDistributionPlot() {
+  const mk = distribMk.value
+  if (!mk) return
+  const model = distributionExplorer(uxEvents.value, distribKind.value, mk, dispatchSampleMap.value) || {}
+  const kind = model.plot_kind || distribKind.value
+  if (kind === 'preempt') {
+    const rec = preemptorRanking(preemptionPairs(uxEvents.value), 16)
+      .find(r => String(r.mk || '') === String(mk))
+    const top = (rec?.top || [])[0]
+    const label = String(top?.task || top?.mk || '')
+    if (!label) return
+    openPreemptPlot(mk, label)
+    return
+  }
+  openTaskPlot(mk, kind)
+}
+
+function queryDistributionWithAi(source) {
+  if (!aiFeatureEnabled.value) return
+  const fromPlot = source === 'plot'
+  const kind = fromPlot
+    ? (openPlotRef.value?.kind || '')
+    : distribKind.value
+  const mk = fromPlot
+    ? (openPlotRef.value?.mk || openPlotRef.value?.pairKey || openPlotRef.value?.core || '')
+    : distribMk.value
+  if (!fromPlot && !mk) return
+  const title = fromPlot
+    ? (plotData.value?.title || 'Metrics plot')
+    : 'Distribution Explorer'
+  const extra = `Explain this statistics distribution: metric=${kind} task=${mk} title=${title}. Use query_raw_metric and search_timeline. Identify the tail, jitter, and the next Statistics page or timeline jump.`
+  emit('query-ai', { template: 'investigate', extra })
+}
 
 const tickHealth = computed(() => {
   const r = statsRange.value
@@ -3731,6 +5528,16 @@ const deadlineViolations = computed(() => {
   )
 })
 
+const taskHealthRows = computed(() => {
+  const dead = [
+    ...deadlineViolations.value.sliceViolations.map(v => v.mk),
+    ...deadlineViolations.value.cpuViolations.map(v => v.mk),
+  ]
+  return taskHealthScores(healthInputsFromEvents(uxEvents.value, statsSpanNs.value, dead))
+})
+const sortedTaskHealthRows = computed(() =>
+  sortStatsRows(taskHealthRows.value, tableSort.value.task_health, TASK_HEALTH_SORT_ACCESSORS))
+
 const sortedDeadlineSliceRows = computed(() =>
   // Cap to the top 20 by duration first (desktop populates sv[:20]), then
   // let header clicks reorder that fixed set — not re-pick from the full list.
@@ -3814,6 +5621,24 @@ function activateExtremeSegment(mk, kind, seg, findMax) {
   emit('plotPointActivate', { ns: seg.start, note, segment: seg })
 }
 
+function jumpToPercentile(mk, kind, p) {
+  const tr = props.trace
+  if (!tr) return
+  const r = statsRange.value
+  const lo = r?.lo ?? null
+  const hi = r?.hi ?? null
+  const segs = tr.segByMergeKey?.get(mk) || []
+  let seg = null
+  if (kind === 'exec') seg = findPercentileExecSegment(segs, p, lo, hi)
+  else if (kind === 'block') seg = findPercentileBlockingSegment(segs, p, lo, hi)
+  else if (kind === 'inter') seg = findPercentileInterArrivalSegment(segs, p, lo, hi)
+  if (!seg) return
+  const pct = Math.round(p * 100)
+  const name = taskDisplayName(taskReprGet(tr, mk) || mk)
+  const note = `${name} p${pct} ${kind}: ${formatTime(seg.end - seg.start, tr.timeScale)} at ${formatTime(seg.start, tr.timeScale)}`
+  emit('plotPointActivate', { ns: seg.start, note, segment: seg })
+}
+
 function jumpToSegment(mk, kind, findMax) {
   const tr = props.trace
   if (!tr) return
@@ -3852,6 +5677,7 @@ function _summarizeNumericSamples(samples) {
       values.reduce((sum, value) => sum + ((value - avg) ** 2), 0) / n,
     ),
     p50: values[Math.min(n - 1, Math.floor(n * 0.5))],
+    p5: values[Math.min(n - 1, Math.floor(n * 0.05))],
     p95: values[Math.min(n - 1, Math.floor(n * 0.95))],
   }
 }
@@ -3951,6 +5777,30 @@ function _buildBlockPlot(trace, mk, range) {
     kind: 'block',
     mk,
     title: `${taskDisplayName(repr)} - Blocking Time${suffix}`,
+    color: taskColor(mk, repr),
+    points,
+  }
+}
+
+function _buildResponsePlot(trace, mk, range) {
+  const evs = harvestUxEvents(trace, range?.lo ?? null, range?.hi ?? null)
+    .filter(e => e && e.kind === 'exec' && String(e.mk || '') === String(mk))
+  const model = analyzeResponseTimes(evs)
+  const events = model.events || []
+  if (!events.length) return null
+  const repr = trace.taskRepr.get(mk) || mk
+  const suffix = scopeSuffix(range)
+  const points = events.map((ev, index) => ({
+    index,
+    xNs: ev.start,
+    yValue: ev.duration,
+    payload: ev,
+    label: `${taskDisplayName(repr)}: ${formatTime(ev.duration, trace.timeScale)} ready→complete at ${formatTime(ev.start, trace.timeScale)}`,
+  }))
+  return {
+    kind: 'response',
+    mk,
+    title: `${taskDisplayName(repr)} - Response Time (heuristic)${suffix}`,
     color: taskColor(mk, repr),
     points,
   }
@@ -4316,6 +6166,7 @@ const plotData = computed(() => {
   const range = statsRange.value
   if (open.kind === 'exec') return _buildExecPlot(props.trace, open.mk, range)
   if (open.kind === 'block') return _buildBlockPlot(props.trace, open.mk, range)
+  if (open.kind === 'response') return _buildResponsePlot(props.trace, open.mk, range)
   if (open.kind === 'mig_dwell') return _buildMigDwellPlot(props.trace, open.mk, range)
   if (open.kind === 'mig_rate') return _buildMigRatePlot(props.trace, open.mk, range)
   if (open.kind === 'mig_gap') return _buildMigGapPlot(props.trace, open.mk, range)
@@ -4386,11 +6237,23 @@ function openTaskPlot(mk, kind) {
   let plot
   if (kind === 'exec') plot = _buildExecPlot(props.trace, mk, range)
   else if (kind === 'block') plot = _buildBlockPlot(props.trace, mk, range)
+  else if (kind === 'response') plot = _buildResponsePlot(props.trace, mk, range)
   else if (kind === 'mig_dwell') plot = _buildMigDwellPlot(props.trace, mk, range)
   else if (kind === 'mig_rate') plot = _buildMigRatePlot(props.trace, mk, range)
   else if (kind === 'mig_gap') plot = _buildMigGapPlot(props.trace, mk, range)
   else if (kind === 'dispatch') plot = _buildDispatchPlot(props.trace, mk, range)
-  else plot = _buildInterPlot(props.trace, mk, range)
+  else if (kind === 'preempt') {
+    const rec = preemptorRanking(preemptionPairs(uxEvents.value), 16)
+      .find(r => String(r.mk || '') === String(mk))
+    const top = (rec?.top || [])[0]
+    const label = String(top?.task || top?.mk || '')
+    if (!label) return
+    plot = _buildPreemptPlot(props.trace, mk, label, range)
+    if (!plot || plot.points.length === 0) return
+    openPlotRef.value = { mk, kind: 'preempt', preemptor: label }
+    selectedPlotPoint.value = -1
+    return
+  } else plot = _buildInterPlot(props.trace, mk, range)
   if (!plot || plot.points.length === 0) return
   openPlotRef.value = { mk, kind }
   selectedPlotPoint.value = -1
@@ -4541,6 +6404,7 @@ const scatterModel = computed(() => {
     : 0
   const refs = summary ? [
     { label: 'avg', y: scaleY(summary.avg), color: '#CE93D8' },
+    { label: 'p5', y: scaleY(summary.p5), color: '#29B6F6' },
     { label: 'p50', y: scaleY(summary.p50), color: '#4CAF50' },
     { label: 'p95', y: scaleY(summary.p95), color: '#FF9800' },
   ] : []
@@ -4667,6 +6531,67 @@ const histogramModel = computed(() => {
     color: plot.color,
     showVariability: ['exec', 'block', 'inter', 'dispatch', 'switch_overhead'].includes(plot.kind),
   })
+})
+
+function _histogramSvgPoint(event) {
+  const svg = histogramSvgEl.value
+  if (!svg) return null
+  const pt = svg.createSVGPoint()
+  pt.x = event.clientX
+  pt.y = event.clientY
+  const ctm = svg.getScreenCTM()
+  if (!ctm) return null
+  return pt.matrixTransform(ctm.inverse())
+}
+
+function _histogramBarAt(svgX, svgY, model) {
+  if (!model?.bars?.length) return -1
+  const { margin, width, height, bars } = model
+  if (svgX < margin.left || svgX > width - margin.right
+      || svgY < margin.top || svgY > height - margin.bottom) return -1
+  for (let i = 0; i < bars.length; i++) {
+    const bar = bars[i]
+    if (svgX >= bar.x && svgX <= bar.x + bar.width) return i
+  }
+  return -1
+}
+
+function onHistogramMouseMove(event) {
+  const model = histogramModel.value
+  if (!model) return
+  const pt = _histogramSvgPoint(event)
+  if (!pt) return
+  histogramHoverIndex.value = _histogramBarAt(pt.x, pt.y, model)
+}
+
+function onHistogramMouseLeave() {
+  histogramHoverIndex.value = -1
+}
+
+const histogramHoverTip = computed(() => {
+  const model = histogramModel.value
+  const plot = plotData.value
+  const idx = histogramHoverIndex.value
+  if (!model || idx < 0) return null
+  const bar = model.bars[idx]
+  if (!bar) return null
+  const formatValue = plot?.kind === 'tag'
+    ? (v) => formatTagValue(v)
+    : (v) => formatTime(v, props.trace.timeScale)
+  const { line1, line2 } = histogramBarTooltip(bar, model.sampleCount, formatValue)
+  const tipW = Math.max(line1.length, line2.length) * 6.2 + 12
+  const tipH = 30
+  const cx = bar.x + bar.width / 2
+  let tipX = cx + 10
+  let tipY = bar.y - tipH / 2
+  if (tipX + tipW > model.width - 4) tipX = cx - tipW - 10
+  if (tipY < 4) tipY = 4
+  if (tipY + tipH > model.height - 4) tipY = model.height - tipH - 4
+  return { x: tipX, y: tipY, width: tipW, height: tipH, line1, line2 }
+})
+
+watch(histogramModel, () => {
+  histogramHoverIndex.value = -1
 })
 
 async function exportPlotPng() {
@@ -4842,7 +6767,7 @@ function exportCsv() {
   const lbCsv = loadBalanceScore.value
   if (lbCsv) {
     lines.push(`Load Balance Score,${_csvCell(`${lbCsv.score.toFixed(0)}%`)}`)
-    lines.push(`Core util σ,${_csvCell(`${lbCsv.stddev.toFixed(1)}%`)}`)
+    lines.push(`Core Util Std Dev (σ),${_csvCell(`${lbCsv.stddev.toFixed(1)}%`)}`)
     lines.push(`Gini Coefficient (G),${_csvCell(lbCsv.gini.toFixed(4))}`)
   }
   lines.push('Core,CPU %')
@@ -4951,7 +6876,7 @@ function exportCsv() {
 
   lines.push('')
   lines.push(`Core Migrations${suffix}`)
-  lines.push('Task,Migrations,Migr rate,Avg dwell,Core count,Primary core,Primary %,Ping-pong,STI near,Gap after avg,Gap other avg')
+  lines.push('Task,Migrations,Migr rate,Avg dwell,Core count,Primary core,Primary %,Ping-pong,STI near,Avg gap after,Avg gap other')
   const migReportRows = migrationRows(tr, lo, hi)
   for (const r of migReportRows) {
     lines.push([
@@ -4999,6 +6924,44 @@ function exportCsv() {
     }
   } else {
     lines.push('No affinity_set events,,,')
+  }
+
+  const tcCsv = taskCoreModel.value
+  const tcCores = tcCsv.cores || []
+  lines.push('')
+  lines.push(`Task × Core${suffix}`)
+  lines.push(['Task', ...tcCores].join(','))
+  if ((tcCsv.rows || []).length) {
+    for (const row of tcCsv.rows) {
+      lines.push([
+        _csvCell(row.task),
+        ...tcCores.map(c => {
+          const cell = row.cells?.[c]
+          return cell?.ns ? _csvCell(`${cell.pct_span.toFixed(1)}%`) : ''
+        }),
+      ].join(','))
+    }
+  } else {
+    lines.push(['No on-CPU slices', ...tcCores.map(() => '')].join(','))
+  }
+
+  const ctCsv = coreTimeModel.value
+  const ctCores = ctCsv.cores || []
+  lines.push('')
+  lines.push(`Core Utilization Over Time${suffix}`)
+  lines.push(['Time', ...ctCores].join(','))
+  if ((ctCsv.bins || []).length) {
+    for (const row of ctCsv.bins) {
+      lines.push([
+        _csvCell(formatTime(row.start, scale)),
+        ...ctCores.map(c => {
+          const cell = row.cells?.[c]
+          return cell ? _csvCell(`${cell.pct.toFixed(1)}%`) : ''
+        }),
+      ].join(','))
+    }
+  } else {
+    lines.push(['No on-CPU slices', ...ctCores.map(() => '')].join(','))
   }
 
   const lcRows = buildTaskLifecycleRows(tr.stiEvents ?? [], tr.taskRepr, lo, hi, tr.taskCreateTimes, tr.segByMergeKey)
@@ -5055,6 +7018,97 @@ function exportCsv() {
     }
   }
 
+  const thCsv = taskHealthRows.value
+  lines.push('')
+  lines.push(`Task Health${suffix}`)
+  lines.push('Task,Score,Exec,Block,Period,Mig,Deadline,CPU')
+  if (thCsv.length) {
+    for (const r of thCsv) {
+      lines.push([
+        _csvCell(r.task),
+        _csvCell(r.score),
+        _csvCell(r.marks.execution || ''),
+        _csvCell(r.marks.blocking || ''),
+        _csvCell(r.marks.period || ''),
+        _csvCell(r.marks.migration || ''),
+        _csvCell(r.marks.deadline || ''),
+        _csvCell(r.marks.cpu || ''),
+      ].join(','))
+    }
+  } else {
+    lines.push('No task slices,,,,,,,')
+  }
+
+  lines.push('')
+  lines.push(`Timeline Anomalies${suffix}`)
+  lines.push('Time,Kind,Task,Duration,Why')
+  if (anomalyRows.value.length) {
+    for (const r of anomalyRows.value) {
+      lines.push([
+        _csvCell(formatTime(r.start, scale)),
+        _csvCell(uxKindLabel(r.kind)),
+        _csvCell(r.task),
+        _csvCell(formatTime(r.duration, scale)),
+        _csvCell(r.reason || ''),
+      ].join(','))
+    }
+  } else {
+    lines.push('No timeline anomalies in this scope,,,,')
+  }
+
+  lines.push('')
+  lines.push(`Worst Events${suffix}`)
+  lines.push('Time,Kind,Task,Duration,Why')
+  if (worstRows.value.length) {
+    for (const r of worstRows.value) {
+      lines.push([
+        _csvCell(formatTime(r.start, scale)),
+        _csvCell(uxKindLabel(r.kind)),
+        _csvCell(r.task),
+        _csvCell(formatTime(r.duration, scale)),
+        _csvCell(r.reason || uxKindLabel(r.kind)),
+      ].join(','))
+    }
+  } else {
+    lines.push('No episodes in this scope,,,,')
+  }
+
+  lines.push('')
+  lines.push(`Critical Path${suffix}`)
+  lines.push('Task,Duration,Exec,Preempt,Wait,Mig,Other')
+  if (critPathRows.value.length) {
+    for (const r of critPathRows.value) {
+      lines.push([
+        _csvCell(r.task),
+        _csvCell(formatTime(r.duration, scale)),
+        _csvCell(formatTime(r.exec_ns, scale)),
+        _csvCell(formatTime(r.preempt_ns, scale)),
+        _csvCell(formatTime(r.wait_ns, scale)),
+        _csvCell(formatTime(r.migration_ns, scale)),
+        _csvCell(formatTime(r.other_ns, scale)),
+      ].join(','))
+    }
+  } else {
+    lines.push('Need at least one on-CPU slice,,,,,')
+  }
+
+  lines.push('')
+  lines.push(`Recurring Patterns${suffix}`)
+  lines.push('Task,Kind,Count,Worst,Why')
+  if (patternRows.value.length) {
+    for (const r of patternRows.value) {
+      lines.push([
+        _csvCell(r.task),
+        _csvCell(uxKindLabel(r.kind)),
+        _csvCell(r.count),
+        _csvCell(formatTime(r.duration, scale)),
+        _csvCell(r.reason || ''),
+      ].join(','))
+    }
+  } else {
+    lines.push('No repeating anomaly kinds in this scope,,,,')
+  }
+
   lines.push('')
   lines.push(`Execution Time Per Slice${suffix}`)
   lines.push('Task,Runs,CPU%,Min,Avg,TrimMean(5%),Max,Jitter,StdDev (population),p50,p95')
@@ -5094,7 +7148,7 @@ function exportCsv() {
 
   lines.push('')
   lines.push(`Dispatch / Scheduling Latency${suffix}`)
-  lines.push('Task,Activations,Min,Avg,Max,Jitter,StdDev (population),p95')
+  lines.push('Task,Activations,Min,Avg,Max,Jitter,StdDev (population),p95,p99')
   const dispCsvRows = dispatchLatencyRows(tr, lo, hi)
   if (dispCsvRows.length) {
     for (const r of dispCsvRows) {
@@ -5107,10 +7161,11 @@ function exportCsv() {
         _csvCell(r.jitter),
         _csvCell(r.stddev),
         _csvCell(r.p95),
+        _csvCell(r.p99),
       ].join(','))
     }
   } else {
-    lines.push('No data,,,,,,,')
+    lines.push('No data,,,,,,,,')
   }
 
   lines.push('')
@@ -5131,6 +7186,82 @@ function exportCsv() {
     ].join(','))
   }
 
+  const perCsv = periodRows.value
+  lines.push('')
+  lines.push(`Period / Jitter${suffix}`)
+  lines.push('Task,N,Expected,Min,Avg,Max,p95,p99,RMS,CV,Missed,Extra,Burst,Spark')
+  if (perCsv.length) {
+    for (const r of perCsv) {
+      lines.push([
+        _csvCell(r.task),
+        _csvCell(r.n),
+        _csvCell(formatTime(r.expected_ns, tr.timeScale)),
+        _csvCell(formatTime(r.min_ns, tr.timeScale)),
+        _csvCell(formatTime(r.avg_ns, tr.timeScale)),
+        _csvCell(formatTime(r.max_ns, tr.timeScale)),
+        _csvCell(formatTime(r.p95_ns, tr.timeScale)),
+        _csvCell(formatTime(r.p99_ns, tr.timeScale)),
+        _csvCell(formatTime(r.rms_ns, tr.timeScale)),
+        _csvCell(`${(r.cv * 100).toFixed(1)}%`),
+        _csvCell(r.missed),
+        _csvCell(r.extra),
+        _csvCell(r.burst || 0),
+        _csvCell(r.spark || ''),
+      ].join(','))
+    }
+  } else {
+    lines.push('Need at least 3 inter-arrival gaps per task,,,,,,,,,,,,')
+  }
+
+  lines.push('')
+  lines.push(`Response Time${suffix}`)
+  lines.push('Task,N,Min,Avg,Max,p50,p90,p95,p99,p99.9,Jitter,CV')
+  if (responseRows.value.length) {
+    for (const r of responseRows.value) {
+      lines.push([
+        _csvCell(r.task),
+        _csvCell(r.n),
+        _csvCell(formatTime(r.min_ns, scale)),
+        _csvCell(formatTime(r.avg_ns, scale)),
+        _csvCell(formatTime(r.max_ns, scale)),
+        _csvCell(formatTime(r.p50_ns, scale)),
+        _csvCell(formatTime(r.p90_ns, scale)),
+        _csvCell(formatTime(r.p95_ns, scale)),
+        _csvCell(formatTime(r.p99_ns, scale)),
+        _csvCell(formatTime(r.p999_ns, scale)),
+        _csvCell(formatTime(r.jitter_ns, scale)),
+        _csvCell(`${((r.cv || 0) * 100).toFixed(1)}%`),
+      ].join(','))
+    }
+  } else {
+    lines.push('Need at least one on-CPU slice,,,,,,,,,,,')
+  }
+
+  lines.push('')
+  lines.push(`Unified Jitter${suffix}`)
+  lines.push('Task,Exec,Exec CV,Block,Block CV,Inter,Inter CV,Response,Resp CV,Dispatch,Disp CV,Wake,Wake CV')
+  if (jitterRows.value.length) {
+    for (const r of jitterRows.value) {
+      lines.push([
+        _csvCell(r.task),
+        _csvCell(formatTime(r.exec_jitter_ns, scale)),
+        _csvCell(`${((r.exec_cv || 0) * 100).toFixed(1)}%`),
+        _csvCell(formatTime(r.block_jitter_ns, scale)),
+        _csvCell(`${((r.block_cv || 0) * 100).toFixed(1)}%`),
+        _csvCell(formatTime(r.inter_jitter_ns, scale)),
+        _csvCell(`${((r.inter_cv || 0) * 100).toFixed(1)}%`),
+        _csvCell(formatTime(r.response_jitter_ns, scale)),
+        _csvCell(`${((r.response_cv || 0) * 100).toFixed(1)}%`),
+        _csvCell(formatTime(r.dispatch_jitter_ns, scale)),
+        _csvCell(`${((r.dispatch_cv || 0) * 100).toFixed(1)}%`),
+        _csvCell(formatTime(r.wakeup_jitter_ns, scale)),
+        _csvCell(`${((r.wakeup_cv || 0) * 100).toFixed(1)}%`),
+      ].join(','))
+    }
+  } else {
+    lines.push('No timing samples in this scope,,,,,,,,,,,,')
+  }
+
   lines.push('')
   lines.push(`Preemption Chain Analysis${suffix}`)
   lines.push('Victim,Preemptor,Count,Total,Avg,Max')
@@ -5147,6 +7278,24 @@ function exportCsv() {
     }
   } else {
     lines.push('No preemption events found,,,,,')
+  }
+
+  lines.push('')
+  lines.push(`Preemption Matrix${suffix}`)
+  lines.push('Victim,Count,Total,Max,Top preemptors,Story')
+  if (preemptRankRows.value.length) {
+    for (const r of preemptRankRows.value) {
+      lines.push([
+        _csvCell(r.task),
+        _csvCell(r.count),
+        _csvCell(formatTime(r.total_ns, scale)),
+        _csvCell(formatTime(r.max_ns, scale)),
+        _csvCell(r.top_label || ''),
+        _csvCell(r.story || ''),
+      ].join(','))
+    }
+  } else {
+    lines.push('No preemption overlaps in this scope,,,,')
   }
 
   lines.push('')
@@ -5221,6 +7370,44 @@ function exportCsv() {
     } else {
       lines.push('No pairing issues in scope,,,,,')
     }
+  }
+
+  const woCsv = waitOwnerModel.value
+  const woTasks = woCsv.tasks || []
+  lines.push('')
+  lines.push(`Waiter × Owner${suffix}`)
+  lines.push(['Waiter \\ Owner', ...woTasks.map(t => t.task)].join(','))
+  if (woTasks.length) {
+    for (const w of woTasks) {
+      lines.push([
+        _csvCell(w.task),
+        ...woTasks.map(o => {
+          if (w.mk === o.mk) return ''
+          const cell = woCsv.cells[`${w.mk}|${o.mk}`]
+          return cell?.ns ? _csvCell(formatTime(cell.ns, tr.timeScale)) : ''
+        }),
+      ].join(','))
+    }
+  } else {
+    lines.push('No mutex handoffs in this scope')
+  }
+
+  lines.push('')
+  lines.push(`Mutex Blocking${suffix}`)
+  lines.push('Task,Object,Owner,Count,Total,Max')
+  if (mutexBlockRows.value.length) {
+    for (const r of mutexBlockRows.value) {
+      lines.push([
+        _csvCell(r.task),
+        _csvCell(r.object),
+        _csvCell(r.owner),
+        _csvCell(r.count),
+        _csvCell(formatTime(r.total_ns, scale)),
+        _csvCell(formatTime(r.max_ns, scale)),
+      ].join(','))
+    }
+  } else {
+    lines.push('No mutex waits in this scope,,,,,')
   }
 
   const queueReportRows = syncObjectStatsRows(tr, lo, hi, { kindFilter: 'queue' })
@@ -5353,7 +7540,8 @@ function _execSliceRowsForReport(tr, range) {
     })
   }
 
-  return rows.sort((a, b) => b.runs - a.runs || a.name.localeCompare(b.name))
+  return rows.sort((a, b) => b.cpuPct - a.cpuPct || b.runs - a.runs
+    || a.name.localeCompare(b.name))
 }
 
 function _interArrivalRowsForReport(tr, range) {
@@ -5789,6 +7977,19 @@ ${_HTML_EXPORT_UTIL_CSS}
       <li><strong>Mutex / Semaphore:</strong> Pairs <code>take</code>/<code>give</code> STI events by object pointer (<code>0x........</code> in the note). Reports orphan gives, cross-task gives, unmatched takes, delete-while-held, and multi-mutex hold at trace end (deadlock risk).</li>
       <li><strong>Interval Analysis:</strong> Pairs <code>interval_start</code> / <code>interval_stop</code> STI events by id; shows count, min/avg/max/p95 duration per interval id (Tracealyzer-style interval plot).</li>
       <li><strong>Tag Analysis:</strong> Numeric samples from <code>tag0_event</code> … <code>tag7_event</code> STI channels (note field); scatter plot shows value over time.</li>
+      <li><strong>Task × Core:</strong> Per-task execution share of the scoped span on each core.</li>
+      <li><strong>Task Health:</strong> Heuristic 0–100 score from measured statistics, not an AI probability.</li>
+      <li><strong>Timeline Anomalies / Worst Events:</strong> Unusual long tails, migration / preemption / ISR / wakeup bursts, CPU spikes, idle gaps, and the longest execution, blocking, and inter-arrival episodes in scope.</li>
+      <li><strong>Response Time:</strong> Heuristic ready→completion from adjacent slices (previous slice end → this slice end). Not an explicit BTF release/completion pair.</li>
+      <li><strong>Critical Path:</strong> Longest heuristic response windows split into exec / preempt / wait / migration.</li>
+      <li><strong>Period / Jitter:</strong> Median inter-arrival as expected period, with RMS jitter, CV, missed (&gt; 1.5×) and extra (&lt; 0.5×) activations.</li>
+      <li><strong>Unified Jitter:</strong> Max−Min spread and CV for execution, blocking, inter-arrival, heuristic response, STI dispatch latency, and wake-to-run (response wait stand-in).</li>
+      <li><strong>Distribution Explorer:</strong> Choose a metric and task, then open the existing histogram/CDF plot.</li>
+      <li><strong>Recurring Patterns:</strong> Anomaly kinds that repeat for the same task in this scope.</li>
+      <li><strong>Preemption Matrix:</strong> Victim × preemptor overlap during off-CPU gaps on the same core, plus preemptor ranking.</li>
+      <li><strong>Waiter × Owner:</strong> Heuristic mutex handoff matrix (next distinct acquirer × previous holder), not a kernel wait queue.</li>
+      <li><strong>Mutex Blocking:</strong> Per-task mutex wait totals from those heuristic handoffs.</li>
+      <li><strong>Core Utilization Over Time:</strong> Per-core busy percent in equal time bins of the current scope.</li>
       <li><strong>Context switches:</strong> Count of segment boundaries on all cores whose start time falls inside the statistics scope.</li>
       <li><strong>Min (Minimum):</strong> The fastest execution time recorded. It represents the best-case scenario under zero system load.</li>
       <li><strong>Max (Maximum):</strong> The slowest execution time recorded. It identifies worst-case bottlenecks, spikes, or resource contention.</li>
@@ -5877,6 +8078,38 @@ ${_HTML_EXPORT_UTIL_CSS}
         `<tbody>${affBody}</tbody></table></section>`
     })()}
     ${(() => {
+      const matrix = taskCoreModel.value
+      const cores = matrix.cores || []
+      const head = '<tr><th>Task</th>' + cores.map(c => `<th>${_htmlCell(c)}</th>`).join('') + '</tr>'
+      const body = (matrix.rows || []).length
+        ? matrix.rows.map(row =>
+            `<tr><td>${_htmlCell(row.task)}</td>` +
+            cores.map(c => {
+              const cell = row.cells?.[c]
+              return `<td>${cell?.ns ? cell.pct_span.toFixed(1) + '%' : '—'}</td>`
+            }).join('') + '</tr>'
+          ).join('')
+        : `<tr><td colspan="${cores.length + 1}" class="empty">No on-CPU slices</td></tr>`
+      return `<section class="report-card"><h2>Task × Core${_htmlCell(suffix)}</h2>` +
+        `<table><thead>${head}</thead><tbody>${body}</tbody></table></section>`
+    })()}
+    ${(() => {
+      const grid = coreTimeModel.value
+      const cores = grid.cores || []
+      const head = '<tr><th>Time</th>' + cores.map(c => `<th>${_htmlCell(c)}</th>`).join('') + '</tr>'
+      const body = (grid.bins || []).length
+        ? grid.bins.map(row =>
+            `<tr><td>${_htmlCell(formatTime(row.start, tr.timeScale))}</td>` +
+            cores.map(c => {
+              const cell = row.cells?.[c]
+              return `<td>${cell ? cell.pct.toFixed(1) + '%' : '—'}</td>`
+            }).join('') + '</tr>'
+          ).join('')
+        : `<tr><td colspan="${cores.length + 1}" class="empty">No on-CPU slices</td></tr>`
+      return `<section class="report-card"><h2>Core Utilization Over Time${_htmlCell(suffix)}</h2>` +
+        `<table><thead>${head}</thead><tbody>${body}</tbody></table></section>`
+    })()}
+    ${(() => {
       const lcRows = buildTaskLifecycleRows(tr.stiEvents ?? [], tr.taskRepr, lo, hi, tr.taskCreateTimes, tr.segByMergeKey)
       const lcBody = lcRows.length
         ? lcRows.map(r =>
@@ -5894,6 +8127,86 @@ ${_HTML_EXPORT_UTIL_CSS}
         `<tbody>${lcBody}</tbody></table></section>`
     })()}
     ${_renderDeadlineReportHtml(suffix)}
+    ${(() => {
+      const rows = taskHealthRows.value
+      const body = rows.length
+        ? rows.map(r =>
+            `<tr><td>${_htmlCell(r.task)}</td><td>${r.score}</td>` +
+            ['execution', 'blocking', 'period', 'migration', 'deadline', 'cpu']
+              .map(k => `<td>${_htmlCell(r.marks[k] || '')}</td>`).join('') +
+            '</tr>'
+          ).join('')
+        : '<tr><td colspan="8" class="empty">No task slices</td></tr>'
+      return `<section class="report-card"><h2>Task Health${_htmlCell(suffix)}</h2>` +
+        '<p class="detail-note">Heuristic score from measured statistics, not an AI probability.</p>' +
+        '<table><thead><tr><th>Task</th><th>Score</th><th>Exec</th><th>Block</th>' +
+        '<th>Period</th><th>Mig</th><th>Deadline</th><th>CPU</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
+    ${(() => {
+      const rows = anomalyRows.value
+      const body = rows.length
+        ? rows.map(r =>
+            `<tr><td>${_htmlCell(formatTime(r.start, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(uxKindLabel(r.kind))}</td>` +
+            `<td>${_htmlCell(r.task)}</td>` +
+            `<td>${_htmlCell(formatTime(r.duration, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(r.reason || '')}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="5" class="empty">No timeline anomalies in this scope</td></tr>'
+      return `<section class="report-card"><h2>Timeline Anomalies${_htmlCell(suffix)}</h2>` +
+        '<table><thead><tr><th>Time</th><th>Kind</th><th>Task</th>' +
+        '<th>Duration</th><th>Why</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
+    ${(() => {
+      const rows = worstRows.value
+      const body = rows.length
+        ? rows.map(r =>
+            `<tr><td>${_htmlCell(formatTime(r.start, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(uxKindLabel(r.kind))}</td>` +
+            `<td>${_htmlCell(r.task)}</td>` +
+            `<td>${_htmlCell(formatTime(r.duration, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(r.reason || uxKindLabel(r.kind))}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="5" class="empty">No episodes in this scope</td></tr>'
+      return `<section class="report-card"><h2>Worst Events${_htmlCell(suffix)}</h2>` +
+        '<table><thead><tr><th>Time</th><th>Kind</th><th>Task</th>' +
+        '<th>Duration</th><th>Why</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
+    ${(() => {
+      const rows = critPathRows.value
+      const body = rows.length
+        ? rows.map(r =>
+            `<tr><td>${_htmlCell(r.task)}</td>` +
+            `<td>${_htmlCell(formatTime(r.duration, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.exec_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.preempt_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.wait_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.migration_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.other_ns, tr.timeScale))}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="7" class="empty">Need at least one on-CPU slice</td></tr>'
+      return `<section class="report-card"><h2>Critical Path${_htmlCell(suffix)}</h2>` +
+        '<table><thead><tr><th>Task</th><th>Duration</th><th>Exec</th>' +
+        '<th>Preempt</th><th>Wait</th><th>Mig</th><th>Other</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
+    ${(() => {
+      const rows = patternRows.value
+      const body = rows.length
+        ? rows.map(r =>
+            `<tr><td>${_htmlCell(r.task)}</td><td>${_htmlCell(uxKindLabel(r.kind))}</td>` +
+            `<td>${r.count}</td><td>${_htmlCell(formatTime(r.duration, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(r.reason || '')}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="5" class="empty">No repeating anomaly kinds in this scope</td></tr>'
+      return `<section class="report-card"><h2>Recurring Patterns${_htmlCell(suffix)}</h2>` +
+        '<table><thead><tr><th>Task</th><th>Kind</th><th>Count</th>' +
+        '<th>Worst</th><th>Why</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
     ${_renderHtmlTableReport(`Execution Time Per Slice${suffix}`, execReportRows, true)}
     ${_renderHtmlTableReport(`Blocking Time (off-CPU gap)${suffix}`, blockReportRows)}
     ${(() => {
@@ -5902,15 +8215,88 @@ ${_HTML_EXPORT_UTIL_CSS}
         ? dispRows.map(r =>
             `<tr><td>${_htmlCell(r.label)}</td><td>${r.activations}</td>` +
             `<td>${_htmlCell(r.min)}</td><td>${_htmlCell(r.avg)}</td><td>${_htmlCell(r.max)}</td>` +
-            `<td>${_htmlCell(r.jitter)}</td><td>${_htmlCell(r.stddev)}</td><td>${_htmlCell(r.p95)}</td></tr>`
+            `<td>${_htmlCell(r.jitter)}</td><td>${_htmlCell(r.stddev)}</td>` +
+            `<td>${_htmlCell(r.p95)}</td><td>${_htmlCell(r.p99)}</td></tr>`
           ).join('')
-        : '<tr><td colspan="8" class="empty">No data</td></tr>'
+        : '<tr><td colspan="9" class="empty">No dispatch samples (needs STI resume Name[id] or create→first-run)</td></tr>'
       return `<section class="report-card"><h2>Dispatch / Scheduling Latency${_htmlCell(suffix)}</h2>` +
+        '<p class="detail-note">Ready from STI resume / create; sync wakes not attributed.</p>' +
         '<table><thead><tr><th>Task</th><th>Activations</th><th>Min</th><th>Avg</th>' +
-        '<th>Max</th><th>Jitter</th><th>σ</th><th>p95</th></tr></thead>' +
+        '<th>Max</th><th>Jitter</th><th>σ</th><th>p95</th><th>p99</th></tr></thead>' +
         `<tbody>${body}</tbody></table></section>`
     })()}
     ${_renderHtmlTableReport(`Inter-Arrival Time${suffix}`, interReportRows)}
+    ${(() => {
+      const rows = periodRows.value
+      const body = rows.length
+        ? rows.map(r =>
+            `<tr><td>${_htmlCell(r.task)}</td><td>${r.n}</td>` +
+            `<td>${_htmlCell(formatTime(r.expected_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.min_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.avg_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.max_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.p95_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.p99_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.rms_ns, tr.timeScale))}</td>` +
+            `<td>${(r.cv * 100).toFixed(1)}%</td><td>${r.missed}</td><td>${r.extra}</td>` +
+            `<td>${r.burst || 0}</td><td>${_htmlCell(r.spark || '')}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="14" class="empty">Need at least 3 inter-arrival gaps per task</td></tr>'
+      return `<section class="report-card"><h2>Period / Jitter${_htmlCell(suffix)}</h2>` +
+        '<table><thead><tr><th>Task</th><th>N</th><th>Expected</th><th>Min</th><th>Avg</th>' +
+        '<th>Max</th><th>p95</th><th>p99</th><th>RMS</th><th>CV</th><th>Missed</th>' +
+        '<th>Extra</th><th>Burst</th><th>Spark</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
+    ${(() => {
+      const rows = responseRows.value
+      const body = rows.length
+        ? rows.map(r =>
+            `<tr><td>${_htmlCell(r.task)}</td><td>${r.n}</td>` +
+            `<td>${_htmlCell(formatTime(r.min_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.avg_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.max_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.p50_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.p90_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.p95_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.p99_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.p999_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.jitter_ns, tr.timeScale))}</td>` +
+            `<td>${((r.cv || 0) * 100).toFixed(1)}%</td></tr>`
+          ).join('')
+        : '<tr><td colspan="12" class="empty">Need at least one on-CPU slice</td></tr>'
+      return `<section class="report-card"><h2>Response Time${_htmlCell(suffix)}</h2>` +
+        '<p class="detail-note">Heuristic ready→completion from adjacent slices, not an explicit BTF release/completion pair.</p>' +
+        '<table><thead><tr><th>Task</th><th>N</th><th>Min</th><th>Avg</th><th>Max</th>' +
+        '<th>p50</th><th>p90</th><th>p95</th><th>p99</th><th>p99.9</th><th>Jitter</th><th>CV</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
+    ${(() => {
+      const rows = jitterRows.value
+      const body = rows.length
+        ? rows.map(r =>
+            `<tr><td>${_htmlCell(r.task)}</td>` +
+            `<td>${_htmlCell(formatTime(r.exec_jitter_ns, tr.timeScale))}</td>` +
+            `<td>${((r.exec_cv || 0) * 100).toFixed(1)}%</td>` +
+            `<td>${_htmlCell(formatTime(r.block_jitter_ns, tr.timeScale))}</td>` +
+            `<td>${((r.block_cv || 0) * 100).toFixed(1)}%</td>` +
+            `<td>${_htmlCell(formatTime(r.inter_jitter_ns, tr.timeScale))}</td>` +
+            `<td>${((r.inter_cv || 0) * 100).toFixed(1)}%</td>` +
+            `<td>${_htmlCell(formatTime(r.response_jitter_ns, tr.timeScale))}</td>` +
+            `<td>${((r.response_cv || 0) * 100).toFixed(1)}%</td>` +
+            `<td>${_htmlCell(formatTime(r.dispatch_jitter_ns, tr.timeScale))}</td>` +
+            `<td>${((r.dispatch_cv || 0) * 100).toFixed(1)}%</td>` +
+            `<td>${_htmlCell(formatTime(r.wakeup_jitter_ns, tr.timeScale))}</td>` +
+            `<td>${((r.wakeup_cv || 0) * 100).toFixed(1)}%</td></tr>`
+          ).join('')
+        : '<tr><td colspan="13" class="empty">No timing samples in this scope</td></tr>'
+      return `<section class="report-card"><h2>Unified Jitter${_htmlCell(suffix)}</h2>` +
+        '<table><thead><tr><th>Task</th><th>Exec</th><th>Exec CV</th><th>Block</th>' +
+        '<th>Block CV</th><th>Inter</th><th>Inter CV</th><th>Response</th>' +
+        '<th>Resp CV</th><th>Dispatch</th><th>Disp CV</th><th>Wake</th>' +
+        '<th>Wake CV</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
     <section class="report-card"><h2>Preemption Chain Analysis${_htmlCell(suffix)}</h2>
     <table><thead><tr><th>Victim</th><th>Preemptor</th><th>Count</th><th>Total</th><th>Avg</th><th>Max</th></tr></thead>
     <tbody>${preemptHtmlRows.length
@@ -5919,8 +8305,58 @@ ${_HTML_EXPORT_UTIL_CSS}
         ).join('')
       : '<tr><td colspan="6" class="empty">No preemption events found</td></tr>'
     }</tbody></table></section>
+    ${(() => {
+      const rows = preemptRankRows.value
+      const body = rows.length
+        ? rows.map(r =>
+            `<tr><td>${_htmlCell(r.task)}</td><td>${r.count}</td>` +
+            `<td>${_htmlCell(formatTime(r.total_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.max_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(r.top_label || '')}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="5" class="empty">No preemption overlaps in this scope</td></tr>'
+      return `<section class="report-card"><h2>Preemption Matrix${_htmlCell(suffix)}</h2>` +
+        '<table><thead><tr><th>Victim</th><th>Count</th><th>Total</th>' +
+        '<th>Max</th><th>Top preemptors</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
     ${tr?.hasPriorityInstrumentation ? _renderPriorityReportHtml(tr, lo, hi, suffix) : ''}
     ${tr?.hasSyncObjectInstrumentation ? _renderSyncObjectReportHtml(tr, lo, hi, suffix) : ''}
+    ${(() => {
+      const matrix = waitOwnerModel.value
+      const tasks = matrix.tasks || []
+      if (!tasks.length) {
+        return `<section class="report-card"><h2>Waiter × Owner${_htmlCell(suffix)}</h2>` +
+          '<p class="empty">No mutex handoffs in this scope</p></section>'
+      }
+      const head = '<tr><th>Waiter \\ Owner</th>' + tasks.map(t => `<th>${_htmlCell(t.task)}</th>`).join('') + '</tr>'
+      const body = tasks.map(w =>
+        `<tr><td>${_htmlCell(w.task)}</td>` +
+        tasks.map(o => {
+          if (w.mk === o.mk) return '<td>—</td>'
+          const cell = matrix.cells[`${w.mk}|${o.mk}`]
+          return `<td>${cell?.ns ? _htmlCell(formatTime(cell.ns, tr.timeScale)) : '—'}</td>`
+        }).join('') + '</tr>'
+      ).join('')
+      return `<section class="report-card"><h2>Waiter × Owner${_htmlCell(suffix)}</h2>` +
+        '<p class="detail-note">Heuristic mutex handoff matrix, not a kernel wait queue.</p>' +
+        `<table><thead>${head}</thead><tbody>${body}</tbody></table></section>`
+    })()}
+    ${(() => {
+      const rows = mutexBlockRows.value
+      const body = rows.length
+        ? rows.map(r =>
+            `<tr><td>${_htmlCell(r.task)}</td><td>${_htmlCell(r.object)}</td>` +
+            `<td>${_htmlCell(r.owner)}</td><td>${r.count}</td>` +
+            `<td>${_htmlCell(formatTime(r.total_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.max_ns, tr.timeScale))}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="6" class="empty">No mutex waits in this scope</td></tr>'
+      return `<section class="report-card"><h2>Mutex Blocking${_htmlCell(suffix)}</h2>` +
+        '<table><thead><tr><th>Task</th><th>Object</th><th>Owner</th>' +
+        '<th>Count</th><th>Total</th><th>Max</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
     ${tr?.hasSyncObjectInstrumentation ? (() => {
       const qRows = syncObjectStatsRows(tr, lo, hi, { kindFilter: 'queue' })
       if (!qRows.length) return ''
@@ -6036,8 +8472,7 @@ watch(() => props.cursors, (cursors) => {
   }, 200)
 }, { deep: true })
 
-watch(() => props.trace, (tr) => {
-  applyDeferHeavySectionCollapse(tr)
+watch(() => props.trace, () => {
   scheduleStatsRefresh()
 }, { immediate: true })
 
@@ -6246,6 +8681,10 @@ defineExpose({
   opacity: 0.6;
   font-size: 10px;
   font-style: italic;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
 }
 
 .deadline-settings-hint {
@@ -6301,6 +8740,10 @@ defineExpose({
 .sync-status-warning { color: #F39C12; font-weight: 600; }
 .sync-status-error { color: #E74C3C; font-weight: 600; }
 
+.health-ok { color: #3cb371; font-weight: 600; }
+.health-warn { color: #e0a020; font-weight: 600; }
+.health-fail { color: #e07070; font-weight: 600; }
+.health-mark { text-align: center; cursor: pointer; }
 .stats-table td.sev-error {
   color: #E85D5D;
 }
@@ -6647,6 +9090,11 @@ defineExpose({
   cursor: not-allowed;
 }
 
+.compare-mig-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .action-btn .export-icon {
   flex-shrink: 0;
   opacity: 0.9;
@@ -6793,6 +9241,8 @@ defineExpose({
 }
 
 .plot-dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -6805,6 +9255,16 @@ defineExpose({
   border-radius: 10px;
   background: color-mix(in srgb, var(--panel-bg) 70%, var(--bg));
   overflow: hidden;
+}
+
+.plot-card-scatter {
+  flex: 1 1 42%;
+  min-height: 160px;
+}
+
+.plot-card-histogram {
+  flex: 1 1 38%;
+  min-height: 180px;
 }
 
 .plot-empty {
@@ -6912,6 +9372,42 @@ defineExpose({
 .plot-dialog-footer {
   justify-content: flex-end;
   border-top: 1px solid var(--border);
+}
+
+.plot-footer-spacer {
+  flex: 1;
+}
+
+.distrib-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 4px 0 8px;
+}
+
+.distrib-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.distrib-hist {
+  min-height: 200px;
+  margin-top: 4px;
+}
+
+.distrib-hist-svg {
+  display: block;
+  width: 100%;
+  min-height: 200px;
+}
+
+.spark-col {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: -0.05em;
+  white-space: nowrap;
 }
 
 @media (max-width: 720px) {

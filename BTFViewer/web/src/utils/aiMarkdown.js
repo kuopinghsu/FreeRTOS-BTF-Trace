@@ -4,7 +4,7 @@
  */
 
 import { mermaidBlockHtml } from './aiMermaid.js'
-import { btfJumpHref, summariseToolCall } from './aiTools.js'
+import { btfJumpHref, btfRangeHref, summariseToolCall } from './aiTools.js'
 import { btfHtmlReportDocument } from './htmlReport.js'
 
 import { evidencePanelLabels } from './aiInvestigation.js'
@@ -22,6 +22,7 @@ export function aiRoleLabel(role, responseLanguage = DEFAULT_AI_RESPONSE_LANGUAG
 }
 
 const JUMP_RE = /jump:([0-9]+(?:\.[0-9]+)?)/g
+const RANGE_RE = /range:([0-9]+(?:\.[0-9]+)?)\/([0-9]+(?:\.[0-9]+)?)/g
 const INLINE_CODE_RE = /`([^`\n]+)`/g
 const BOLD_RE = /(\*\*|__)(.+?)\1/g
 const ITALIC_RE = /(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g
@@ -62,6 +63,13 @@ function inlineToHtml(text) {
   for (const [kind, val] of parts) {
     if (kind === 'c') {
       // Models often wrap jump:TIME in backticks; keep those clickable.
+      const rm = String(val || '').trim().match(/^range:([0-9]+(?:\.[0-9]+)?)\/([0-9]+(?:\.[0-9]+)?)$/)
+      if (rm) {
+        out.push(stash(
+          `<a href="${btfRangeHref(rm[1], rm[2])}" class="ai-jump">range:${rm[1]}/${rm[2]}</a>`,
+        ))
+        continue
+      }
       const jm = String(val || '').trim().match(/^jump:([0-9]+(?:\.[0-9]+)?)$/)
       if (jm) {
         out.push(stash(
@@ -89,6 +97,7 @@ function inlineToHtml(text) {
         ))
       } else if (
         low.startsWith('btfjump:')
+        || low.startsWith('btfrange:')
         || low.startsWith('btfhighlight:')
         || low.startsWith('btfhyp:')
         || low.startsWith('btfscope:')
@@ -106,6 +115,9 @@ function inlineToHtml(text) {
     let chunk = buf.join('')
     chunk = chunk.replace(BOLD_RE, '<strong>$2</strong>')
     chunk = chunk.replace(ITALIC_RE, (_, a, b) => `<em>${a != null ? a : b}</em>`)
+    chunk = chunk.replace(RANGE_RE, (_, lo, hi) => stash(
+      `<a href="${btfRangeHref(lo, hi)}" class="ai-jump">range:${lo}/${hi}</a>`,
+    ))
     chunk = chunk.replace(JUMP_RE, (_, n) => stash(
       `<a href="${btfJumpHref(n)}" class="ai-jump" data-jump="${n}">jump:${n}</a>`,
     ))

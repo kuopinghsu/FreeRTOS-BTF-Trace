@@ -51,12 +51,23 @@
           No findings for the current scope
         </div>
       </div>
+      <div class="analysis-scope">
+        <div class="analysis-scope-text">{{ scopeHint }}</div>
+        <button
+          type="button"
+          class="analysis-btn"
+          title="Place C1–C2 on the recommended window and zoom the timeline"
+          @click="applyScope"
+        >
+          Apply cursors
+        </button>
+      </div>
       <div class="analysis-footer">
         <div class="analysis-footer-ai-label">Ask AI</div>
         <div class="analysis-footer-left">
           <button
             type="button"
-            class="analysis-btn primary"
+            class="analysis-btn"
             :title="aiEnabled
               ? 'Open the AI Assistant and investigate the top findings with tools'
               : 'Enable AI Assistant in Settings → AI'"
@@ -156,17 +167,21 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { EXPLAIN_LEVELS } from '../utils/aiCase.js'
+import { bestFindingScope } from '../utils/uxExplore.js'
 import { formatAnalysisFindingsText } from '../utils/workflowAnalysis.js'
 
 const props = defineProps({
   findings: { type: Array, default: () => [] },
   scopeLabel: { type: String, default: '' },
   aiEnabled: { type: Boolean, default: true },
+  uxEvents: { type: Array, default: () => [] },
+  timeMin: { type: Number, default: 0 },
+  timeMax: { type: Number, default: 0 },
 })
 
-const emit = defineEmits(['close', 'query-ai'])
+const emit = defineEmits(['close', 'query-ai', 'apply-scope'])
 
 const selectedId = ref('')
 const explainOpen = ref(false)
@@ -174,6 +189,26 @@ const explainLevels = EXPLAIN_LEVELS.map(id => ({
   id,
   label: `${id.charAt(0).toUpperCase()}${id.slice(1)}`,
 }))
+
+const selectedFinding = computed(() => {
+  const id = selectedId.value
+  if (!id) return props.findings[0] || null
+  return props.findings.find(f => (f.id || '') === id) || props.findings[0] || null
+})
+
+const scopeHint = computed(() => {
+  const f = selectedFinding.value
+  if (!f) return 'Select a finding to recommend a cursor window.'
+  const title = String(f.title || 'Finding').trim()
+  const scope = bestFindingScope(f, props.uxEvents, props.timeMin, props.timeMax)
+  if (scope?.reason) return `Recommended scope: ${scope.reason}`
+  return `Recommended scope: cover ${title} (activation + waits).`
+})
+
+function applyScope() {
+  const f = selectedFinding.value
+  if (f) emit('apply-scope', f)
+}
 
 function explainFinding(level) {
   explainOpen.value = false
@@ -305,6 +340,21 @@ function saveAsText() {
   padding: 12px 0;
 }
 
+.analysis-scope {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.analysis-scope-text {
+  flex: 1;
+  font-size: 12px;
+  color: var(--fg-dim);
+  line-height: 1.4;
+}
+
 .analysis-footer {
   display: flex;
   flex-direction: column;
@@ -385,16 +435,5 @@ function saveAsText() {
 
 .analysis-btn:hover {
   background: var(--tb-btn-hover);
-}
-
-.analysis-btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff; /* Desktop Findings Investigate: white on accent */
-  font-weight: 600;
-}
-
-.analysis-btn.primary:hover {
-  filter: brightness(1.08);
 }
 </style>

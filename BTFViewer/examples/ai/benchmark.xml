@@ -20,7 +20,7 @@
   <endpoint>
     <base-url>http://localhost:11434/v1</base-url>
     <tls-verify>true</tls-verify>
-    <timeout-s>180</timeout-s>
+    <timeout-s>360</timeout-s>
     <!-- Local Ollama needs no key. Uncomment if the proxy requires one:
     <api-key env="OLLAMA_API_KEY"/>
     -->
@@ -29,6 +29,7 @@
   <models>
     <model id="qwen3.5:9b"/>
     <model id="qwen3.5:27b"/>
+    <model id="qwen3.8:27b"/>
     <model id="gemma4:26b"/>
 
     <!-- Gemini: same provider, two ids. They share URL and GEMINI_API_KEY.

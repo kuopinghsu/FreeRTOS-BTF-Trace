@@ -418,9 +418,9 @@ Scoping is not a simple crop, because each metric has to decide what to do with 
 
 Comparing a before and an after trace is the only way to prove a fix worked rather than moved the problem.
 
-1. Open both traces in tabs, then choose **Trace Compare…** in the Statistics footer.
-2. Work through the comparison pages: Summary (load balance and tick), Top Tasks, Core Utilisation, Migrations, Execution, Blocking, Preemption, and Sync.
-3. Each **Δ** column is A − B. Export the whole comparison as CSV or HTML from the dialog, click **Validate experiment…** to score expected vs actual deltas (`validate_experiment`; actual percents come from this compare), or **Query with AI…** to run the Trace Compare template on the current A / B pair.
+1. Open both traces in tabs, then choose toolbar **Compare** (right after **Analysis**).
+2. Work through the comparison pages: Summary (load balance, tick, Response P99, mutex blocking, and deadline misses from Settings → Display), Top Tasks, Core Utilisation, Migrations, Execution, Blocking, Preemption, Sync, Response, and Mutex.
+3. Each **Δ** column is A − B. The strip above the tabs lists overall deltas and the largest regressions. Export the whole comparison as CSV or HTML from the dialog, click **Validate experiment…** to score expected vs actual deltas (`validate_experiment`; actual percents come from this compare), or **Query with AI…** to run the Trace Compare template on the current A / B pair.
 
 The AI `trigger_compare` tool returns the same CSV and opens this dialog. The same comparison runs headlessly, which is what makes it usable in CI:
 
@@ -484,7 +484,7 @@ Findings and Statistics exports describe the current cursor scope, so scope firs
 | Output | How |
 |--------|-----|
 | Findings text | **Analysis → Save as Text…** |
-| Statistics CSV/HTML | Statistics → Export (uses the default section order) |
+| Statistics CSV/HTML | Statistics → Export (default section order, including Task × Core, Core Utilization Over Time, Task Health, Timeline Anomalies, Worst Events, Critical Path, Recurring Patterns, Response Time, Period / Jitter, Unified Jitter, Preemption Matrix, Waiter × Owner, and Mutex Blocking) |
 | Perfetto JSON | Toolbar / **File → Export Perfetto…**, or the `perfetto` subcommand |
 | Timeline PNG/SVG | Toolbar **Snapshot** (opens the snapshot editor) or **Save SVG** |
 | Headless report | `report trace.btf --output out.html --format html` |
@@ -557,7 +557,7 @@ Configuration is per preset, and the desktop and web viewers work the same way a
 | Step | Desktop | Web |
 |------|---------|-----|
 | Choose preset | **Settings → AI → Preset**: Ollama, OpenAI, Google Gemini, or Custom | Same |
-| Ollama | `ollama serve`; `ollama pull qwen3.5:9b` (shipped default). Larger: `qwen3.5:27b` / `gemma4:26b`. Base URL `http://localhost:11434/v1`; ≥8k context | Same; for `file://` use Vite, or allow CORS (`OLLAMA_ORIGINS="*" ollama serve`; macOS app: `launchctl setenv OLLAMA_ORIGINS "*"` + restart) |
+| Ollama | `ollama serve`; `ollama pull qwen3.5:9b` (shipped default). Larger: `qwen3.5:27b` / `qwen3.8:27b` / `gemma4:26b`. Base URL `http://localhost:11434/v1`; ≥8k context | Same; for `file://` use Vite, or allow CORS (`OLLAMA_ORIGINS="*" ollama serve`; macOS app: `launchctl setenv OLLAMA_ORIGINS "*"` + restart) |
 | OpenAI / Gemini / Custom | Base URL + model + Authentication (API key or Sign in) | Same; OpenAI and Gemini are proxied under `npm run dev` / `preview` |
 | Authentication | **None (local)** / **API key** / **Sign in** (opens vendor page; paste the key). Panel chip: Local / Key saved / Needs API key / Needs sign-in / Signed in. 401 keeps Sign in / Settings CTAs until a successful turn | Same env names (`OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`) |
 | Self-signed TLS | **Allow self-signed TLS** per preset (desktop urllib skips certificate checks) | Same setting is stored; browsers still verify — trust the cert, use `http://`, or use Desktop |
@@ -574,20 +574,20 @@ Ask in the same order as the [top-down ladder](#2-top-down-analysis-ladder), and
 
 | Order | Template / ask | Then verify in UI |
 |------:|----------------|-------------------|
-| 1 | **Analysis Findings** or **Triage findings** | Open each named Statistics section |
+| 1 | **Analysis Findings** or **Triage findings** | Timeline Anomalies / Worst Events / Response Time / Critical Path / Task Health, or each named Statistics section |
 | — | **Investigate** / **Root cause** (tools + cursors) | Apply GUI cards; click `jump:TIME`; confirm confidence vs timeline |
 | — | **Verify finding** / **Auto investigate** (Findings buttons) | Evidence panel; Investigation plan |
 | — | **Explain region** (≥2 cursors; **Limit to C1–Cn**) | Only `jump:TIME` inside C1–Cn |
 | — | **What-if** / **Optimize** | Heuristic slice-replay / ranked experiments ([AI.md](AI.md#what-if-and-optimize-workflow)); verify on timeline before firmware changes |
-| — | **Task profile** / **Diagnostic report** | Hottest task metrics; optional `export_report` |
-| — | **Trace Compare** (2+ tabs; pick if 3+) | Trace Compare pages / Statistics on both builds |
-| 2 | **Tick health** | Trace Health (TICK); scope a busy window if TICKLESS |
-| 3 | **Core balance** | Core Utilisation → Concurrent Active / Switch Overhead |
-| 4 | **WCET / hot CPU** | Top Tasks → Execution Max; click Max to jump |
-| 5 | **Highest latency** | Blocking → Dispatch → Preemption Chain |
-| 6 | **Migration thrash** | Migrations Rate/Ping; Core-Pair Bounce %; Heatmap / Chord |
-| 7 | **Priority inversion** | Priority Inheritance L/M/H |
-| 8 | **Deadline / budget** | After thresholds are set in Settings → Display → Analysis thresholds |
+| — | **Task profile** / **Diagnostic report** | Period / Jitter, Response Time, Unified Jitter, Task Health, Task × Core; click a task/column to open the existing Execution / Blocking / Inter-arrival / Response plot; optional `export_report` |
+| — | **Trace Compare** (2+ tabs; pick if 3+) | Compare summary strip; Trace Compare pages / Statistics on both builds |
+| 2 | **Tick health** | Trace Health (TICK); scope a busy window if TICKLESS. Period / Jitter is task inter-arrival, not the tick source |
+| 3 | **Core balance** | Task × Core; Core Utilisation → Concurrent Active / Switch Overhead |
+| 4 | **WCET / hot CPU** | Timeline Anomalies / Worst Events, Period / Jitter, Task Health, or Execution Max / p95 / p99; click to jump |
+| 5 | **Highest latency** | Worst Events; Waiter × Owner; Blocking p95/p99 → Dispatch → Preemption Chain |
+| 6 | **Migration thrash** | Task × Core; Timeline Anomalies migration bursts; Migrations Rate/Ping; Core-Pair Bounce %; Heatmap / Chord |
+| 7 | **Priority inversion** | Priority Inheritance L/M/H; Waiter × Owner (heuristic handoff) |
+| 8 | **Deadline / budget** | Task Health deadline band; after thresholds are set in Settings → Display → Analysis thresholds |
 
 **Reply language.** Use **Language…** on the AI bar, or **Settings → AI → Reply language**.
 
@@ -639,7 +639,7 @@ Different models fail differently, which makes disagreement between them useful.
 
 **Credential storage.** Desktop stores provider API keys encrypted (`enc1:…`) in `btf_viewer.rc` for this machine only. The web build keeps keys in browser `localStorage` in plaintext — fine for personal demos, not for shared kiosks. Keys are used only as HTTP auth to the endpoint; they are not pasted into the model prompt. See [AI.md — Credential storage](AI.md#endpoints-and-models).
 
-**Verify / Explain / Auto.** Analysis Findings → **Verify with AI…** runs `verify` for the selected finding; **Explain…** (Quick / Technical / Deep) runs `explain_finding` with `level=` in the prompt; **Auto investigate…** runs `auto_investigate`. With **≥2 cursors**, the timeline context menu → **Explain this region with AI** runs `explain_region` (item hidden with fewer cursors). The AI panel **Explain region** template is always clickable: with two or more cursors the prompt includes `Cursor region window: jump:lo … jump:hi`; with none it analyses full-trace Findings. Segment context menu → **Ask AI about this event** scopes to one task/segment. Evidence / Reasoning fills when investigate / correlate / `find_critical_path` (and related tools) return — including Evidence Quality, coverage, what would disprove this, historical knowledge when a catalog/baseline match exists, and a host-side validator after the final reply. Hypothesis rows expose Support / Reject / Need evidence / Test / Compare (`btfhyp:` links). Mode chips (**Quick** / **Diagnose** / **Compare** / **Optimize** / **Report**) start a tool sequence. **More templates → Investigations** runs reusable sequences (CPU latency, migration thrash, A/B regression) plus **Save as template…**. The panel chip shows Local vs Cloud for the current endpoint.
+**Verify / Explain / Auto.** Analysis Findings → **Verify with AI…** runs `verify` for the selected finding; **Explain…** (Quick / Technical / Deep) runs `explain_finding` with `level=` in the prompt; **Auto investigate…** runs `auto_investigate` (graph → temporal → rank → challenge before what-if). With **≥2 cursors**, the timeline context menu → **Explain this region with AI** runs `explain_region` (item hidden with fewer cursors). The AI panel **Explain region** template is always clickable: with two or more cursors the prompt includes `Cursor region window: jump:lo … jump:hi`; with none it analyses full-trace Findings. Segment context menu → **Ask AI about this event** scopes to one task/segment. Evidence / Reasoning fills when investigate / correlate / `find_critical_path` (and related tools) return — including Evidence Quality, coverage, what would disprove this, historical knowledge when a catalog/baseline match exists, and a host-side validator after the final reply. Hypothesis rows expose Support / Reject / Need evidence / Test / Compare (`btfhyp:` links). Mode chips (**Quick** / **Diagnose** / **Compare** / **Optimize** / **Report**) start a tool sequence. **More templates → Investigations** runs reusable sequences (CPU latency, migration thrash, A/B regression) plus **Save as template…**. The panel chip shows Local vs Cloud for the current endpoint.
 
 ---
 

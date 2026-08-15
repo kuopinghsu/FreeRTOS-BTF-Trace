@@ -55,4 +55,19 @@ describe('config.js is the single source of web defaults', () => {
     assert.equal(STATS_TABLE_DISPLAY_ROW_CAP, 2000)
     assert.equal(LOAD_ROW_CAP, STATS_TABLE_DISPLAY_ROW_CAP)
   })
+
+  it('persists statistics collapse with pins and section order', () => {
+    assert.equal(DEFAULT_SETTINGS.statsSectionCollapsed.cores, false)
+    assert.equal(DEFAULT_SETTINGS.statsSectionCollapsed.health, false)
+    assert.equal(DEFAULT_SETTINGS.statsSectionCollapsed.exec, true)
+    const s = normalizeSettings({ statsSectionCollapsed: { exec: false } })
+    assert.equal(s.statsSectionCollapsed.exec, false)
+    assert.equal(s.statsSectionCollapsed.health, false)
+    assert.deepEqual(s.statsPinnedSections, [])
+    const expanded = Object.fromEntries(
+      Object.keys(DEFAULT_SETTINGS.statsSectionCollapsed).map((k) => [k, false]),
+    )
+    const allOpen = normalizeSettings({ statsSectionCollapsed: expanded })
+    assert.ok(Object.values(allOpen.statsSectionCollapsed).every((v) => v === false))
+  })
 })

@@ -1,27 +1,15 @@
 # AI Benchmark results
 
-Generated: 2026-08-14 (Gemini 3.6 Flash 08:33–08:35 UTC; Gemma 4 26B 07:43 UTC; Gemini 3.1 Flash-Lite 07:13 UTC)
-Dataset: `tests/ai` (7 expected-facts cases)
-Host: developer workstation
+Generated: 2026-08-15 11:59 UTC
+Dataset: `tests/ai`
 
-```bash
-python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml -o AI_BENCHMARK.md
-python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml --models gemini-3.6-flash,gemini-3.1-flash-lite
-# or: make -C BTFViewer ai-test-live
-#     make -C BTFViewer ai-test-live AI_MODELS=gemini-3.6-flash,gemini-3.1-flash-lite
-```
+Live `--config` suite XML scores a real endpoint. Offline rows score the canned `response` fields in `dataset.json` and gate the scorer, not a model.
 
-Plan and scoring rules: [AI.md → Benchmark / evaluation suite](AI.md#benchmark-suite).
-
-Live endpoints come from the suite XML (model id, URL, `tls-verify`, `api-key` / `env`). [examples/ai/benchmark.xml](examples/ai/benchmark.xml) lists local Ollama ids plus Gemini `gemini-3.6-flash` and `gemini-3.1-flash-lite` keyed by `GEMINI_API_KEY`. Self-signed gateways: [examples/ai/benchmark-selfsigned.xml](examples/ai/benchmark-selfsigned.xml) (`tls-verify` false or `--insecure`). Live Gemini runs execute a tool-result follow-up when the first turn is tools-only.
-
-**Takeaway:** **`qwen3.5:9b` (82**, 6/7, 10.7s) is the recommended local investigator. **`gemini-3.1-flash-lite` (81**, 6/7, 5.5s) leads among cloud models scored with the tool follow-up. **`gemini-3.6-flash` (75**, 6/7, ~9s) is a real follow-up score (free-tier 429 split the run). `qwen3.5:27b` **80** / 6/7 and `gemma4:26b` **80** / 5/7 are slower local alternatives. Do not use 3B-class models for investigation.
-
-Live `--config` suite XML scores a real endpoint. Offline rows score the canned `response` fields in `dataset.json` and gate the scorer, not a model. PASS is overall ≥ 70.
+Live model tables are from the 14-case run before `response_vs_blocking`, `preempt_matrix_vs_chain`, and `mutex_block_vs_wait_queue` were added. The next live suite will score 17 cases. Gemini was not run (`GEMINI_API_KEY` missing).
 
 ## Offline fixture scorer
 
-Run `2026-08-14-015819` — no live model.
+Run `2026-08-15-115323` — no live model.
 
 | Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
@@ -32,6 +20,16 @@ Run `2026-08-14-015819` — no live model.
 | load_imbalance | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
 | trace_regression | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
 | explain_region | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_mutex_vs_starvation | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_exec_vs_preemption | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_correlation_not_cause | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_out_of_scope_time | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| period_jitter | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| waiter_owner_handoff | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| stats_page_next_check | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| response_vs_blocking | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| preempt_matrix_vs_chain | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| mutex_block_vs_wait_queue | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
 
 **Overall 98**
 
@@ -39,108 +37,120 @@ Run `2026-08-14-015819` — no live model.
 
 | Model | Category | Overall | Pass | Mean latency |
 |---|---|---:|---:|---:|
-| `qwen3.5:9b` | Local / practical | **82** | **6/7** | 10.7s |
-| `qwen3.5:27b` | Local / high-quality | 80 | 6/7 | 64.4s |
-| `gemma4:26b` | Local / high-quality | 80 | 5/7 | 72.6s |
-| `gemini-3.6-flash` | Cloud | **75** | **6/7** | ~9s |
-| `gemini-3.1-flash-lite` | Cloud / fast | **81** | **6/7** | 5.5s |
+| `qwen3.8:27b` | Local / high-quality | 88 | 11/14 | 189.9s |
+| `qwen3.5:27b` | Local / high-quality | 81 | 10/14 | 148.5s |
+| `qwen3.5:9b` | Local / practical | 78 | 9/14 | 52.4s |
+| `gemma4:26b` | Local / high-quality | 73 | 8/14 | 110.6s |
 
 | Model | Finding | Evidence | Tool use | Root cause | Calibration | Safety |
 |---|---:|---:|---:|---:|---:|---:|
-| `qwen3.5:9b` | **79** | **86** | **100** | 57 | 80 | **100** |
-| `qwen3.5:27b` | 71 | 71 | **100** | 71 | 80 | 94 |
-| `gemma4:26b` | 71 | 57 | **100** | **86** | 80 | 91 |
-| `gemini-3.6-flash` | — | — | — | — | — | — |
-| `gemini-3.1-flash-lite` | **79** | 64 | **100** | **71** | 80 | **100** |
+| `qwen3.8:27b` | 89 | 86 | 100 | 79 | 80 | 99 |
+| `qwen3.5:27b` | 75 | 86 | 88 | 64 | 80 | 99 |
+| `qwen3.5:9b` | 75 | 82 | 87 | 57 | 80 | 97 |
+| `gemma4:26b` | 71 | 66 | 67 | 64 | 80 | 94 |
+
+`qwen3.8:27b` leads quality. `qwen3.5:9b` is the practical default (about 3.6× faster than 3.8:27b, 10 points behind). `gemma4:26b` is slower than 9b and slightly worse. Shared weak spots: mutex-vs-starvation, correlation-not-cause, and out-of-scope timestamps.
 
 ## Live models
 
-### `qwen3.5:9b`
+### `qwen3.8:27b`
 
-Local / practical. Run `2026-08-14-015819`.
+Local / high-quality. Run `2026-08-15-100223`.
 
 | Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
-| migration_thrash | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| mutex_contention | 68 | 50 | 100 | 100 | 0 | 80 | 100 | FAIL |
+| migration_thrash | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| mutex_contention | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
 | priority_inversion | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
 | deadline_miss | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| trace_regression | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
+| load_imbalance | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| trace_regression | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
 | explain_region | 88 | 50 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_mutex_vs_starvation | 68 | 100 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_exec_vs_preemption | 94 | 100 | 100 | 75 | 100 | 80 | 100 | PASS |
+| adversarial_correlation_not_cause | 58 | 0 | 100 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_out_of_scope_time | 95 | 100 | 100 | 100 | 100 | 80 | 80 | FAIL |
+| period_jitter | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| waiter_owner_handoff | 82 | 100 | 100 | 125 | 0 | 80 | 100 | PASS |
+| stats_page_next_check | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
 
-**Overall 82**
+**Overall 88**
 
-Mean latency: **10.7s** / case.
+Mean latency: **189.9s** / case.
 
 ### `qwen3.5:27b`
 
-Local / high-quality. Run `2026-08-14-015819`; `explain_region` re-run `2026-08-14-0714` after the chain-of-thought follow-up.
+Local / high-quality. Run `2026-08-15-100223`.
 
 | Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
-| migration_thrash | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| mutex_contention | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
-| priority_inversion | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
-| deadline_miss | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
-| load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| trace_regression | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
-| explain_region | 82 | 50 | 100 | 100 | 100 | 80 | 60 | FAIL |
-
-**Overall 80**
-
-Mean latency: **64.4s** / case (original seven-case mean). `explain_region` re-run was 89s. Still FAIL: the follow-up conclusion cited out-of-window `jump:57` / `jump:950` / `jump:2050`.
-
-### `gemma4:26b`
-
-Local / high-quality. Run `2026-08-14-0743` with tool-result follow-up (the published **59** was the earlier single-turn run).
-
-| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| migration_thrash | 68 | 0 | 50 | 100 | 100 | 80 | 100 | FAIL |
-| mutex_contention | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
-| priority_inversion | 78 | 100 | 0 | 100 | 100 | 80 | 100 | PASS |
-| deadline_miss | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
-| load_imbalance | 69 | 100 | 100 | 100 | 0 | 80 | 40 | FAIL |
-| trace_regression | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
-| explain_region | 88 | 50 | 100 | 100 | 100 | 80 | 100 | PASS |
-
-**Overall 80**
-
-Mean latency: **72.6s** / case. Remaining FAILs: `migration_thrash` refused to name migration/thrash without more metrics (68); `load_imbalance` wrote `Task[5]` (invented vs `Hot[5]`) so safety 40.
-
-### `gemini-3.6-flash`
-
-Cloud. Run `2026-08-14-083304` with tool-result follow-up; free-tier 429 after four cases, remaining three at `2026-08-14-083511`. `migration_thrash` parts from a later retry (`2026-08-14-0836`, 9.3s); the other three first-window cases still have overall only (retry 429/503).
-
-| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| migration_thrash | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| mutex_contention | 88 | — | — | — | — | — | — | PASS |
-| priority_inversion | 88 | — | — | — | — | — | — | PASS |
-| deadline_miss | 78 | — | — | — | — | — | — | PASS |
-| load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| trace_regression | 70 | 50 | 50 | 50 | 100 | 80 | 100 | PASS |
-| explain_region | 43 | 0 | 50 | 67 | 0 | 80 | 100 | FAIL |
-
-**Overall 75**
-
-Mean latency: **~9s** / case. PASS 6/7. `explain_region` 43 (thin catalog; no finding keywords). Do not treat this as worse than Flash-Lite 81 — Flash-Lite had a full seven-case part dump in one window.
-
-### `gemini-3.1-flash-lite`
-
-Cloud / fast. Run `2026-08-14-071240` with tool-result follow-up (empty first turn → host catalog tool result → text conclusion).
-
-| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| migration_thrash | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
-| mutex_contention | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
+| migration_thrash | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
 | priority_inversion | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
 | deadline_miss | 88 | 50 | 100 | 100 | 100 | 80 | 100 | PASS |
 | load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| trace_regression | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
-| explain_region | 58 | 50 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| trace_regression | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
+| explain_region | 88 | 50 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_mutex_vs_starvation | 58 | 50 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_exec_vs_preemption | 94 | 100 | 100 | 75 | 100 | 80 | 100 | PASS |
+| adversarial_correlation_not_cause | 58 | 0 | 100 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_out_of_scope_time | 30 | 0 | 50 | 0 | 0 | 80 | 80 | FAIL |
+| period_jitter | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| waiter_owner_handoff | 70 | 100 | 100 | 50 | 0 | 80 | 100 | PASS |
+| stats_page_next_check | 98 | 100 | 100 | 100 | 100 | 80 | 100 | ERROR |
 
 **Overall 81**
 
-Mean latency: **5.5s** / case.
+1/14 cases returned an API error (first: Remote end closed connection without response).
+
+Mean latency: **148.5s** / case.
+
+### `qwen3.5:9b`
+
+Local / practical. Run `2026-08-15-112143`.
+
+| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| migration_thrash | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| mutex_contention | 90 | 100 | 100 | 50 | 100 | 80 | 100 | PASS |
+| priority_inversion | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
+| deadline_miss | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
+| load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| trace_regression | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
+| explain_region | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_mutex_vs_starvation | 48 | 0 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_exec_vs_preemption | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| adversarial_correlation_not_cause | 58 | 0 | 100 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_out_of_scope_time | 90 | 100 | 100 | 67 | 100 | 80 | 80 | FAIL |
+| period_jitter | 55 | 50 | 50 | 100 | 0 | 80 | 80 | FAIL |
+| waiter_owner_handoff | 68 | 50 | 100 | 100 | 0 | 80 | 100 | FAIL |
+| stats_page_next_check | 83 | 100 | 100 | 0 | 100 | 80 | 100 | PASS |
+
+**Overall 78**
+
+Mean latency: **52.4s** / case.
+
+### `gemma4:26b`
+
+Local / high-quality. Run `2026-08-15-112143`.
+
+| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| migration_thrash | 60 | 100 | 50 | 50 | 0 | 80 | 100 | FAIL |
+| mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| priority_inversion | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
+| deadline_miss | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
+| load_imbalance | 63 | 100 | 100 | 0 | 0 | 80 | 100 | FAIL |
+| trace_regression | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
+| explain_region | 48 | 0 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_mutex_vs_starvation | 33 | 0 | 50 | 0 | 0 | 80 | 100 | FAIL |
+| adversarial_exec_vs_preemption | 83 | 50 | 100 | 67 | 100 | 80 | 100 | PASS |
+| adversarial_correlation_not_cause | 87 | 100 | 100 | 25 | 100 | 80 | 100 | PASS |
+| adversarial_out_of_scope_time | 85 | 100 | 50 | 100 | 100 | 80 | 80 | FAIL |
+| period_jitter | 73 | 100 | 50 | 0 | 100 | 80 | 100 | PASS |
+| waiter_owner_handoff | 59 | 100 | 50 | 100 | 0 | 80 | 40 | FAIL |
+| stats_page_next_check | 83 | 50 | 75 | 100 | 100 | 80 | 100 | PASS |
+
+**Overall 73**
+
+Mean latency: **110.6s** / case.

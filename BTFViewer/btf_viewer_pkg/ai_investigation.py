@@ -77,6 +77,18 @@ _TOOL_STEP_MAP: Dict[str, Tuple[str, ...]] = {
     "generate_experiment_plan": ("recommend",),
     "record_experiment_outcome": ("validate", "recommend"),
     "score_investigation": ("validate",),
+    "analyze_temporal_causality": ("validate",),
+    "build_task_dependency_graph": ("validate",),
+    "decompose_response_time": ("metrics", "validate"),
+    "rank_root_causes": ("hypotheses", "validate"),
+    "verify_claim": ("validate",),
+    "challenge_conclusion": ("validate",),
+    "investigation_memory": ("recommend",),
+    "cluster_incidents": ("findings",),
+    "close_investigation": ("validate", "recommend"),
+    "analyze_distribution": ("metrics",),
+    "analyze_periodicity": ("metrics",),
+    "summarize_investigation_context": ("validate",),
 }
 
 # Tools whose results refresh the Evidence / Reasoning log. Keep in sync with
@@ -102,6 +114,18 @@ EVIDENCE_PANEL_TOOLS: Tuple[str, ...] = (
     "generate_experiment_plan",
     "record_experiment_outcome",
     "score_investigation",
+    "analyze_temporal_causality",
+    "build_task_dependency_graph",
+    "decompose_response_time",
+    "rank_root_causes",
+    "verify_claim",
+    "challenge_conclusion",
+    "investigation_memory",
+    "cluster_incidents",
+    "close_investigation",
+    "analyze_distribution",
+    "analyze_periodicity",
+    "summarize_investigation_context",
 )
 
 _AGENT_TEMPLATE_IDS = frozenset({
@@ -1099,9 +1123,16 @@ def build_critical_path(
     for i, ev in enumerate(rows, start=1):
         label = kind_labels.get(ev["kind"], ev["kind"])
         detail = ev["detail"]
+        start = ev["time"]
+        if i < len(rows) and rows[i]["time"] > start:
+            stop = rows[i]["time"]
+        else:
+            stop = start
         path.append({
             "step": i,
             "time": ev["time"],
+            "start": start,
+            "stop": stop,
             "detail": f"{label}: {detail}" if detail else label,
             "kind": ev["kind"],
         })
@@ -1195,7 +1226,12 @@ def extract_evidence_panel_payload(
         task = str(data.get("task") or "")
         payload["conclusion"] = f"Critical path: {task}" if task else "Critical path"
         payload["evidence"] = [
-            {"label": str(p.get("detail") or ""), "time": p.get("time")}
+            {
+                "label": str(p.get("detail") or ""),
+                "time": p.get("time"),
+                "start": p.get("start"),
+                "stop": p.get("stop"),
+            }
             for p in (data.get("path") or [])
             if isinstance(p, dict)
         ]
@@ -1274,6 +1310,11 @@ def extract_evidence_panel_payload(
         "find_similar_investigations", "regression_localize", "build_causal_chain",
         "generate_experiment_plan", "record_experiment_outcome",
         "score_investigation",
+        "analyze_temporal_causality", "build_task_dependency_graph",
+        "decompose_response_time", "rank_root_causes", "verify_claim",
+        "challenge_conclusion", "investigation_memory", "cluster_incidents",
+        "close_investigation", "analyze_distribution", "analyze_periodicity",
+        "summarize_investigation_context",
     ) or data.get("steps") or data.get("verdict") or data.get("pattern"):
         payload["conclusion"] = str(result.get("message") or data.get("message") or name)
         payload["confidence"] = str(data.get("confidence") or "Medium")
@@ -2215,8 +2256,19 @@ def format_evidence_panel_markdown(
             if not isinstance(ev, dict):
                 continue
             label = str(ev.get("label") or labels["item"])
+            start, stop = ev.get("start"), ev.get("stop")
             t = ev.get("time")
-            if t is not None:
+            try:
+                s_lo = float(start) if start is not None else None
+                s_hi = float(stop) if stop is not None else None
+            except (TypeError, ValueError):
+                s_lo = s_hi = None
+            if s_lo is not None and s_hi is not None and s_hi > s_lo:
+                lines.append(
+                    f"- {label} range:{_evidence_jump_token(s_lo)}/"
+                    f"{_evidence_jump_token(s_hi)}"
+                )
+            elif t is not None:
                 token = _evidence_jump_token(t)
                 lines.append(f"- {label} jump:{token}")
             else:

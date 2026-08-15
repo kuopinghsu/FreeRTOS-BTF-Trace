@@ -121,12 +121,28 @@ STATS_CORES_UTIL_MIN_H   = STATS_UTIL_MIN_H
 STATS_LOAD_DEFER_TASKS       = 256   # defer heavy stats sections above this task count
 STATS_LOAD_DEFER_CORES       = 32    # defer when core count exceeds this
 STATS_LOAD_DEFER_SYNC_ISSUES = 400   # defer when sync-issue rows exceed this
+STATS_LOAD_DEFER_SEGMENTS    = 8000  # defer when on-CPU slice count exceeds this
 STATS_TABLE_DISPLAY_ROW_CAP  = 2000  # max rows materialised per stats table on load
 STATS_HEAVY_SECTIONS         = frozenset({
     "migrations", "exec", "block", "inter", "health",
     "preemption", "priority", "sync", "intervals", "tags",
     "dispatch", "switch_overhead", "concurrency",
+    "anomalies", "worst", "crit_path", "patterns",
+    "response", "period", "jitter", "preempt_matrix",
+    "task_core", "core_time", "wait_owner", "mutex_block",
+    "task_health",
 })
+STATS_DEFAULT_EXPANDED_SECTIONS = frozenset({"cores", "health"})
+
+def _trace_segment_count(trace: "BtfTrace") -> int:
+    segs = getattr(trace, "segments", None)
+    if segs is not None:
+        return len(segs)
+    store = getattr(trace, "segStore", None) or getattr(trace, "seg_store", None)
+    count = getattr(store, "count", None)
+    if count is not None:
+        return int(count)
+    return 0
 
 def trace_needs_deferred_stats_load(trace: "BtfTrace") -> bool:
     """True when statistics sections should populate after the first paint."""
@@ -134,6 +150,7 @@ def trace_needs_deferred_stats_load(trace: "BtfTrace") -> bool:
         len(trace.tasks) > STATS_LOAD_DEFER_TASKS
         or len(getattr(trace, "core_names", None) or []) > STATS_LOAD_DEFER_CORES
         or len(getattr(trace, "sync_issues", None) or []) > STATS_LOAD_DEFER_SYNC_ISSUES
+        or _trace_segment_count(trace) > STATS_LOAD_DEFER_SEGMENTS
     )
 
 def cap_stats_table_rows(rows: list, cap: int = STATS_TABLE_DISPLAY_ROW_CAP) -> tuple:
@@ -146,30 +163,105 @@ def cap_stats_table_rows(rows: list, cap: int = STATS_TABLE_DISPLAY_ROW_CAP) -> 
     )
 
 def default_section_collapsed() -> Dict[str, bool]:
-    """Default collapsed flags for statistics panel sections (shared with MVVM)."""
+    """Default collapsed flags for statistics panel sections (shared with MVVM).
+
+    Core utilisation and Trace Health start open; every other section starts
+    collapsed. Keep keys in lockstep with web ``SECTION_COLLAPSE_REFS``.
+    """
     return {
         "cores": False,
-        "tasks": False,
-        "migrations": False,
-        "exec": False,
-        "block": False,
-        "inter": False,
+        "tasks": True,
+        "migrations": True,
+        "exec": True,
+        "block": True,
+        "inter": True,
         "health": False,
-        "preemption": False,
-        "priority": False,
-        "sync": False,
-        "queue": False,
-        "intervals": False,
-        "lifecycle": False,
-        "core_pairs": False,
-        "core_breakdown": False,
-        "affinity": False,
-        "deadline": False,
-        "tags": False,
-        "dispatch": False,
-        "switch_overhead": False,
-        "concurrency": False,
+        "preemption": True,
+        "priority": True,
+        "sync": True,
+        "queue": True,
+        "intervals": True,
+        "lifecycle": True,
+        "core_pairs": True,
+        "core_breakdown": True,
+        "affinity": True,
+        "deadline": True,
+        "tags": True,
+        "dispatch": True,
+        "anomalies": True,
+        "worst": True,
+        "switch_overhead": True,
+        "concurrency": True,
+        "period": True,
+        "task_core": True,
+        "wait_owner": True,
+        "task_health": True,
+        "response": True,
+        "crit_path": True,
+        "preempt_matrix": True,
+        "mutex_block": True,
+        "core_time": True,
+        "jitter": True,
+        "distrib": True,
+        "patterns": True,
     }
+
+
+def sanitize_section_collapsed(src) -> Optional[Dict[str, bool]]:
+    """Portable-session collapse map (web ``sanitizeSectionCollapsed``)."""
+    if not isinstance(src, dict):
+        return None
+    allowed = set(default_section_collapsed())
+    out: Dict[str, bool] = {}
+    for key, val in src.items():
+        sid = str(key or "").strip()
+        if sid not in allowed or not isinstance(val, bool):
+            continue
+        out[sid] = val
+    return out or None
+
+
+def merge_section_collapsed(src) -> Dict[str, bool]:
+    """Fill missing section IDs from ``default_section_collapsed()``."""
+    out = default_section_collapsed()
+    extra = sanitize_section_collapsed(src)
+    if extra:
+        out.update(extra)
+    return out
+
+
+def section_collapsed_to_rc(flags) -> str:
+    """Serialize collapse map for btf_viewer.rc ``[stats] section_collapsed``."""
+    merged = merge_section_collapsed(flags if isinstance(flags, dict) else None)
+    return ",".join(
+        f"{sid}:{'1' if merged[sid] else '0'}"
+        for sid in default_section_collapsed()
+    )
+
+
+def section_collapsed_from_rc(raw) -> Dict[str, bool]:
+    """Restore collapse map from rc / portable JSON."""
+    if raw is None:
+        return default_section_collapsed()
+    if isinstance(raw, dict):
+        return merge_section_collapsed(raw)
+    text = str(raw).strip()
+    if not text:
+        return default_section_collapsed()
+    parsed: Dict[str, bool] = {}
+    allowed = set(default_section_collapsed())
+    for part in text.replace(";", ",").split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if ":" in token:
+            sid, val = token.split(":", 1)
+            sid = sid.strip()
+            if sid in allowed:
+                parsed[sid] = val.strip().lower() in ("1", "true", "yes")
+        elif token in allowed:
+            parsed[token] = True
+    return merge_section_collapsed(parsed)
 
 # Statistics sections that can be pinned open (stay expanded) and the default
 # display order. Keep in sync with web/src/utils/statsPins.js.
@@ -183,19 +275,192 @@ STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
     "migrations",
     "core_pairs",
     "affinity",
+    "task_core",
+    "core_time",
     "lifecycle",
     "deadline",
+    "task_health",
+    "anomalies",
+    "worst",
+    "crit_path",
+    "patterns",
     "exec",
     "block",
+    "response",
     "dispatch",
     "inter",
+    "period",
+    "jitter",
+    "distrib",
     "preemption",
+    "preempt_matrix",
     "priority",
     "sync",
+    "wait_owner",
+    "mutex_block",
     "queue",
     "intervals",
     "tags",
 )
+
+# One-line (or short paragraph) help shown under every Statistics section
+# title. Keep lockstep with web ``config.js`` ``STATS_SECTION_HELP``.
+STATS_SECTION_HELP: dict[str, str] = {
+    "cores": (
+        "Per-core busy percent excluding IDLE and TICK. The gauge scores "
+        "load balance across cores. Drag the grip to show more cores."
+    ),
+    "health": (
+        "TICK interval regularity, missed-tick estimate, and large gaps. "
+        "Click a gap to jump. Tickless traces are expected to have uneven intervals."
+    ),
+    "core_breakdown": (
+        "How each core's scoped span splits into active task time, IDLE, TICK, "
+        "and leftover gap. Click a core to show it in Core View."
+    ),
+    "concurrency": (
+        "How much of the scoped span had 0, 1, 2, … cores running a user task "
+        "at once. Click a row to open the concurrency plot."
+    ),
+    "switch_overhead": (
+        "Time from one task leaving a core to the next task running (kernel "
+        "switch gap). Click a core to open the switch-overhead plot."
+    ),
+    "tasks": (
+        "Top user tasks by CPU share of the scoped span, excluding IDLE and TICK. "
+        "Click a name to highlight that task on the timeline."
+    ),
+    "migrations": (
+        "Tasks that ran on more than one core: count, rate, dwell, ping-pong, "
+        "and STI proximity. Click a row to open the migration plot."
+    ),
+    "core_pairs": (
+        "Directed core-to-core migration counts, bounce-backs, and average gap. "
+        "Click a pair to open the pair plot."
+    ),
+    "affinity": (
+        "Last affinity mask vs cores actually used. Violations are runs outside "
+        "the mask. Click a task to highlight it."
+    ),
+    "task_core": (
+        "Share of the scoped span each task spent on each core. Click a cell "
+        "to jump to the first slice on that core."
+    ),
+    "core_time": (
+        "Per-core busy percent in equal time bins of the current scope. "
+        "Click a bin to zoom that window."
+    ),
+    "lifecycle": (
+        "Create, delete, suspend, and resume STI events, plus alive span and "
+        "run count. Click a task to jump to create (when present) and highlight it."
+    ),
+    "deadline": (
+        "Slice duration vs per-task deadline, and CPU% vs budget. Configure "
+        "thresholds in Settings → Display. Click a row to jump to that slice."
+    ),
+    "task_health": (
+        "Heuristic score from measured statistics, not an AI probability. "
+        "Click a band to open that Statistics section."
+    ),
+    "anomalies": (
+        "Unusual long tails, migration / preemption / ISR / wakeup bursts, "
+        "CPU spikes, idle gaps, response-time tails, mutex-wait spikes, "
+        "and deadline misses in the current scope. Click a row to zoom, "
+        "place C1–C2, and open the matching table. Investigate… sends the "
+        "selected (or top) anomaly to the AI tab."
+    ),
+    "worst": (
+        "Longest execution, blocking, inter-arrival, and heuristic response "
+        "episodes. Click a row to jump and set cursors on that episode."
+    ),
+    "crit_path": (
+        "Longest heuristic ready→completion windows, split into exec / "
+        "preempt / wait / migration / other. Click a component to jump to "
+        "that episode. Not a kernel release/completion pair."
+    ),
+    "patterns": (
+        "Anomaly kinds that repeat for the same task in this scope. Click a "
+        "row to jump to the worst instance."
+    ),
+    "exec": (
+        "On-CPU slice duration per task: runs, CPU%, min/avg/max, jitter "
+        "(max−min), σ, p95, and p99. Click the task for the plot; click min, "
+        "max, p95, or p99 to jump to that slice."
+    ),
+    "block": (
+        "Off-CPU gap from one slice end to the next activation. Click the "
+        "task for the plot; click min, max, p95, or p99 to jump to that gap."
+    ),
+    "response": (
+        "Heuristic ready→completion from the previous slice end to this slice "
+        "end (first slice = exec duration). Not an explicit BTF "
+        "release/completion pair. Click the task to open the Response plot; "
+        "click Min / Max / p50 / p90 / p95 / p99 / p99.9 to jump to that event."
+    ),
+    "dispatch": (
+        "Ready time from STI resume / create; dispatch = next switch-in. "
+        "Sync-object wakes are not attributed (no woken-task id in BTF)."
+    ),
+    "inter": (
+        "Time between successive activations of the same task. Click the "
+        "task for the plot; click min, max, p95, or p99 to jump to that gap."
+    ),
+    "period": (
+        "Expected period is the median inter-arrival. Missed = gap > 1.5× "
+        "expected; extra = gap < 0.5× expected; burst = gap < 0.25× expected. "
+        "Spark is inter-arrival over time. Click a time to jump; click the "
+        "task to open the Inter-arrival plot."
+    ),
+    "jitter": (
+        "Max−min spread and CV for execution, blocking, inter-arrival, "
+        "heuristic response, STI dispatch latency, and wake-to-run "
+        "(response wait stand-in). Click a column to open the matching plot."
+    ),
+    "distrib": (
+        "Pick a metric and task, then open the existing histogram/CDF plot. "
+        "Wake is heuristic response wait; dispatch uses STI resume/create → switch-in."
+    ),
+    "preemption": (
+        "Victim × preemptor pairs while the victim is off-CPU on the same core. "
+        "Click a row to open the preemption plot for that pair."
+    ),
+    "preempt_matrix": (
+        "Victim × preemptor overlap during off-CPU gaps on the same core. "
+        "Click a ranking row or matrix cell to jump to the longest overlap."
+    ),
+    "priority": (
+        "Tasks boosted above their create priority by set_priority STI events. "
+        "Orange bands = boost; red = classic L/M/H pattern (medium-priority "
+        "task between base and peak)."
+    ),
+    "sync": (
+        "Pairs take/give STI events by object pointer (0x........). Flags "
+        "orphan gives, unmatched takes, delete-while-held, and multi-mutex "
+        "hold at trace end (deadlock risk)."
+    ),
+    "wait_owner": (
+        "Heuristic mutex handoff matrix: the next distinct acquirer is treated "
+        "as the waiter for the previous hold. Not a kernel wait queue. Click a "
+        "cell to zoom the longest handoff."
+    ),
+    "mutex_block": (
+        "Per-task mutex wait totals from heuristic handoffs (next distinct "
+        "acquirer × previous holder). Not a kernel wait queue. Click a row to "
+        "jump to the longest wait."
+    ),
+    "queue": (
+        "Pairs send/recv STI events by queue pointer (0x........)."
+    ),
+    "intervals": (
+        "Paired interval_start / interval_stop STI events. Click a row to "
+        "open the interval plot."
+    ),
+    "tags": (
+        "tag0_event … tag7_event STI sample values. Click a row to open "
+        "the tag plot."
+    ),
+}
+
 
 def normalize_stats_pins(raw) -> List[str]:
     """Return a de-duplicated, ordered list of valid pinned section IDs."""
@@ -262,6 +527,20 @@ def default_section_table_heights() -> Dict[str, int]:
         "cores": STATS_CORES_UTIL_DEFAULT_H,
         "tasks": STATS_UTIL_DEFAULT_H,
         "migrations": STATS_TABLE_MIG_DEFAULT_H,
+        "anomalies": STATS_TABLE_DEFAULT_H,
+        "worst": STATS_TABLE_DEFAULT_H,
+        "period": STATS_TABLE_DEFAULT_H,
+        "task_core": STATS_TABLE_DEFAULT_H,
+        "wait_owner": STATS_TABLE_DEFAULT_H,
+        "task_health": STATS_TABLE_DEFAULT_H,
+        "response": STATS_TABLE_DEFAULT_H,
+        "crit_path": STATS_TABLE_DEFAULT_H,
+        "preempt_matrix": STATS_TABLE_DEFAULT_H,
+        "mutex_block": STATS_TABLE_DEFAULT_H,
+        "core_time": STATS_TABLE_DEFAULT_H,
+        "jitter": STATS_TABLE_DEFAULT_H,
+        "distrib": STATS_TABLE_DEFAULT_H,
+        "patterns": STATS_TABLE_DEFAULT_H,
         "exec": STATS_TABLE_DEFAULT_H,
         "block": STATS_TABLE_DEFAULT_H,
         "inter": STATS_TABLE_DEFAULT_H,
@@ -715,6 +994,12 @@ _IC_ANALYSIS = (
     "M2 1.5A.5.5 0 0 1 2.5 1h9A1.5 1.5 0 0 1 13 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-9"
     "A.5.5 0 0 1 2 14.5v-13zM3 2v12h8.5a.5.5 0 0 0 .5-.5v-11a.5.5 0 0 0-.5-.5H3z"
     "M4.5 4h6v1h-6V4zm0 2.5h6v1h-6v-1zm0 2.5h4v1h-4V9z"
+)
+_IC_COMPARE = (
+    "M1.5 1h5a.5.5 0 0 1 .5.5v13a.5.5 0 0 1-.5.5h-5a.5.5 0 0 1-.5-.5v-13A.5.5 0 0 1 1.5 1z"
+    "M2 2v12h4V2H2z"
+    "M9.5 1h5a.5.5 0 0 1 .5.5v13a.5.5 0 0 1-.5.5h-5a.5.5 0 0 1-.5-.5v-13A.5.5 0 0 1 9.5 1z"
+    "M10 2v12h4V2h-4z"
 )
 _IC_EXPORT_CSV = ("M2 1h12a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zm0 1v12h12V2H2zm2 2h8v1H4V4zm0 2h8v1H4V6zm0 2h5v1H4V8z")
 _IC_TICK_DIST = ("M1.5 12.5h2.5V8H1.5v4.5zm3.5 0H7.5V5H5v7.5zm3.5 0h2.5V2H8.5v10.5zm3.5 0H14v-5h-2.5v5.5z")

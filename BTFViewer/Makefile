@@ -153,6 +153,10 @@ update-images: bundle
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
 		-o $(STATS_IMG_DIR)/stats-inter-cs11.svg --view plot --metric inter --task "CS[11]"
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
+		-o $(STATS_IMG_DIR)/stats-response-cs11.svg --view plot --metric response --task "CS[11]"
+	PYTHONPATH=. QT_QPA_PLATFORM=offscreen $(PYTHON) scripts/export_stats_tables.py \
+		$(STATS_TRACE) $(STATS_IMG_DIR)
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
 		-o $(STATS_IMG_DIR)/stats-dispatch-sr0.svg --view plot --metric dispatch --task "SR0[271]"
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
 		-o $(STATS_IMG_DIR)/stats-switch-core0.svg --view plot --metric switch_overhead --core Core_0

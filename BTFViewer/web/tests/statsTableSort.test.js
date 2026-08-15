@@ -13,6 +13,8 @@ import {
   DEADLINE_SLICE_SORT_ACCESSORS,
   DEADLINE_CPU_SORT_ACCESSORS,
   SYNC_OBJECT_SORT_ACCESSORS,
+  RESPONSE_SORT_ACCESSORS,
+  PERIOD_SORT_ACCESSORS,
 } from '../src/utils/statsTableSort.js'
 
 describe('defaultStatsTableSort / nextSortState', () => {
@@ -172,5 +174,25 @@ describe('SYNC_OBJECT_SORT_ACCESSORS (also used by the Queue table)', () => {
   it('sorts by hold count', () => {
     const sorted = sortStatsRows(rows, { col: 'holds', dir: 1 }, SYNC_OBJECT_SORT_ACCESSORS)
     assert.deepEqual(sorted.map(r => r.holdCount), [0, 72])
+  })
+})
+
+describe('RESPONSE_SORT_ACCESSORS / PERIOD_SORT_ACCESSORS', () => {
+  it('sorts response max by nanoseconds', () => {
+    const rows = [
+      { task: 'B', max_ns: 2_000_000 },
+      { task: 'A', max_ns: 9_000_000 },
+    ]
+    const sorted = sortStatsRows(rows, { col: 'max', dir: 1 }, RESPONSE_SORT_ACCESSORS)
+    assert.deepEqual(sorted.map(r => r.task), ['B', 'A'])
+  })
+
+  it('sorts period missed counts numerically', () => {
+    const rows = [
+      { task: 'A', missed: 12 },
+      { task: 'B', missed: 2 },
+    ]
+    const sorted = sortStatsRows(rows, { col: 'missed', dir: 1 }, PERIOD_SORT_ACCESSORS)
+    assert.deepEqual(sorted.map(r => r.task), ['B', 'A'])
   })
 })

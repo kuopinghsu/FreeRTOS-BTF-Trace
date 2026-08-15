@@ -52,11 +52,16 @@ class ToolbarIconParityTests(unittest.TestCase):
     def test_web_toolbar_uses_shared_file_icons(self) -> None:
         tb = (BTF_ROOT / "web" / "src" / "components" / "Toolbar.vue").read_text(
             encoding="utf-8")
+        mw = (BTF_ROOT / "btf_viewer_pkg" / "mainwindow.py").read_text(
+            encoding="utf-8")
         for token in (
             "IC.open", "IC.shot", "IC.saveSvg", "IC.perfetto", "IC.exportSlice",
-            "IC.oneToOne", "IC.help", "IC.settings",
+            "IC.oneToOne", "IC.help", "IC.settings", "IC.analysis", "IC.compare",
         ):
             self.assertIn(token, tb)
+        self.assertLess(tb.find("IC.analysis"), tb.find("IC.compare"))
+        self.assertLess(mw.find('_tb_analysis_btn'), mw.find('_tb_compare_btn'))
+        self.assertIn("_IC_COMPARE", mw)
 
 
 if __name__ == "__main__":

@@ -33,6 +33,16 @@ export const AI_SYSTEM_PROMPT =
   'and answer the user\'s diagnostic question clearly. Focus on root causes ' +
   '(preemption, priority inversion, lock contention, core thrashing, switch ' +
   'overhead, tick health). Prefer concrete task names, cores, and durations. ' +
+  'When recommending a next UI check, name the Statistics page ' +
+  '(Timeline Anomalies, Worst Events, Response Time, Critical Path, ' +
+  'Period / Jitter, Unified Jitter, Recurring Patterns, Task Health, ' +
+  'Task × Core, Core Utilization Over Time, Preemption Matrix, ' +
+  'Waiter × Owner, Mutex Blocking, or the matching metric table) and that ' +
+  'p95/p99 cells are clickable. Explain distributions with p50 / p99 / CV, ' +
+  'not only Max. When comparing scopes, say which window the numbers come ' +
+  'from. Summarise only from cited evidence. Set confidence from coverage ' +
+  '(High when the scoped tables contain the cited metric; Low when the ' +
+  'window is empty or the metric is missing). ' +
   'When mentioning a time, write it as jump:TIME where TIME is the numeric ' +
   'value in the trace time unit (e.g. jump:1805120). ' +
   'For every important conclusion, cite evidence (metric names, counts, ' +
@@ -105,8 +115,15 @@ export const AI_TEMPLATE_QUESTIONS = [
     prompt:
       'Walk through the Analysis Findings in the context. For each finding, ' +
       'state its severity, what it means for this RTOS/SMP system, and which ' +
-      'Statistics section or timeline check to open next. If there are no ' +
-      'findings, say so and suggest a default top-down inspection order.',
+      'Statistics section or timeline check to open next ' +
+      '(Timeline Anomalies, Worst Events, Response Time, Critical Path, ' +
+      'Task Health, Period / Jitter, Unified Jitter, Recurring Patterns, ' +
+      'Task × Core, Core Utilization Over Time, Preemption Matrix, ' +
+      'Waiter × Owner, Mutex Blocking, or the matching metric table). If there ' +
+      'are no findings, say so and suggest a default top-down order: ' +
+      'Timeline Anomalies → Worst Events → Response Time → Critical Path → ' +
+      'Task Health → Period / Jitter → Unified Jitter → ' +
+      'Execution / Blocking tails.',
   },
   {
     id: 'investigate',
@@ -114,8 +131,16 @@ export const AI_TEMPLATE_QUESTIONS = [
     prompt:
       'Investigate the main performance problem in this scope. First call ' +
       'investigate() to get hypotheses and an evidence chain, then use ' +
-      'query_raw_metric and search_timeline as needed. Place cursors and ' +
+      'query_raw_metric and search_timeline as needed. Call ' +
+      'build_task_dependency_graph (optional task) and ' +
+      'analyze_temporal_causality for the wait/preempt/migrate chain. ' +
+      'Call rank_root_causes then challenge_conclusion. ' +
+      'Place cursors and ' +
       'zoom_to_range on the strongest evidence, highlight the key task, ' +
+      'name the Statistics page to open next (Timeline Anomalies, Worst ' +
+      'Events, Response Time, Critical Path, Task Health, Period / Jitter, ' +
+      'Unified Jitter, Recurring Patterns, Task × Core, Core Utilization ' +
+      'Over Time, Preemption Matrix, Waiter × Owner, or Mutex Blocking), ' +
       'and finish with: (1) goal, (2) numbered investigation steps you ' +
       'took, (3) root cause with confidence, (4) clickable jump:TIME ' +
       'evidence, (5) next mitigation to try.',
@@ -128,9 +153,13 @@ export const AI_TEMPLATE_QUESTIONS = [
       'investigate(finding_id) first, then follow the chain ' +
       'deadline/WCET → execution → preemption → blocking → mutex → ' +
       'priority inheritance → migration only as far as the evidence ' +
-      'supports. Call query_raw_metric / search_timeline when numbers are ' +
+      'supports. Call build_task_dependency_graph and ' +
+      'analyze_temporal_causality on the victim task. Call ' +
+      'rank_root_causes then challenge_conclusion. Call ' +
+      'query_raw_metric / search_timeline when numbers are ' +
       'missing. Set cursors around the worst episode, highlight the ' +
-      'victim task, and answer with Root cause, Evidence (bullet list with ' +
+      'victim task, name Timeline Anomalies or Worst Events when a tail ' +
+      'spike is the evidence, and answer with Root cause, Evidence (bullet list with ' +
       'jump:TIME), Confidence, and Suggested fix.',
   },
   {
@@ -140,7 +169,10 @@ export const AI_TEMPLATE_QUESTIONS = [
       'Verify the selected Analysis Finding. Call investigate(finding_id=ID) ' +
       'first (use the finding_id given in the user message). Then collect ' +
       'evidence with query_raw_metric / correlate_events / search_timeline as ' +
-      'needed. Place cursors and zoom_to_range on the strongest evidence. ' +
+      'needed. Call verify_claim on the finding statement and ' +
+      'challenge_conclusion to list alternatives. Place cursors and ' +
+      'zoom_to_range on the strongest evidence. Name the Statistics page ' +
+      'to open next. ' +
       'Finish with a verdict: Confirmed, Rejected, or Inconclusive; list ' +
       'Evidence as jump:TIME bullets; Confidence (High/Medium/Low); ' +
       'Alternatives considered; and one next check.',
@@ -154,7 +186,8 @@ export const AI_TEMPLATE_QUESTIONS = [
       + 'every jump:TIME you cite must fall between C1 and Cn. Identify '
       + 'longest blocking, migrations, priority changes, wakeups, mutex '
       + 'contention, deadline issues, idle gaps, and CPU imbalance in this '
-      + 'window. Call correlate_events and query_raw_metric as needed. Use '
+      + 'window. Check in-window Timeline Anomalies and Worst Events. Call '
+      + 'correlate_events and query_raw_metric as needed. Use '
       + 'only in-window jump:TIME evidence (or state that tools found none). '
       + 'End with: Summary, Top issues, Evidence, Suggested next action.',
   },
@@ -167,6 +200,9 @@ export const AI_TEMPLATE_QUESTIONS = [
       'Neutral (CPU, migrations, latency, tick health, sync). State which ' +
       'side is worse for each concern, the likely cause with confidence, ' +
       'and which Statistics section or Trace Compare page to open next. ' +
+      'Mention the Compare summary strip under the scope checkbox when ' +
+      'A vs B deltas are already summarised there, including the Why? ' +
+      'line computed from those deltas. ' +
       'Use jump:TIME when a concrete timestamp is available.',
   },
   {
@@ -174,7 +210,11 @@ export const AI_TEMPLATE_QUESTIONS = [
     label: 'Triage findings',
     prompt:
       'Summarise the Analysis Findings and list the top three issues to ' +
-      'investigate first, with the Statistics section to open for each.',
+      'investigate first, with the Statistics section to open for each ' +
+      '(Timeline Anomalies, Worst Events, Response Time, Critical Path, ' +
+      'Task Health, Period / Jitter, Unified Jitter, Recurring Patterns, ' +
+      'Task × Core, Core Utilization Over Time, Preemption Matrix, ' +
+      'Waiter × Owner, Mutex Blocking, or the matching metric table).',
   },
   {
     id: 'task_profile',
@@ -183,7 +223,15 @@ export const AI_TEMPLATE_QUESTIONS = [
       'Build an AI task behaviour profile for the hottest or most ' +
       'problematic task in the findings (CPU %, typical / p95 / WCET ' +
       'execution, dispatch, blocking, migrations, sync / priority ' +
-      'inheritance). Use query_raw_metric if needed. End with a short ' +
+      'inheritance). Use query_raw_metric if needed. Call ' +
+      'analyze_distribution (metric auto or execution) for p50 / p90 / ' +
+      'p99 / CV / outlier rate. Call ' +
+      'decompose_response_time for that task; treat the shares as relative ' +
+      'magnitudes, not cycle-accurate milliseconds. Name Period / Jitter, ' +
+      'Unified Jitter, Response Time, Task Health, and Task × Core when they ' +
+      'apply. Tell the engineer they ' +
+      'can click Execution / Blocking / Inter-arrival p95 or p99 to jump. ' +
+      'End with a short ' +
       'assessment checklist (normal / warning) and one Ask-next question.',
   },
   {
@@ -192,7 +240,11 @@ export const AI_TEMPLATE_QUESTIONS = [
     prompt:
       'Write a structured engineering diagnostic report for this scope: ' +
       'Executive summary, Key findings, CPU / scheduling, WCET / ' +
-      'deadlines, Blocking / sync, Migrations, Root cause, ' +
+      'deadlines, Blocking / sync, Migrations, Task × Core, Timeline ' +
+      'Anomalies / Worst Events, Response Time, Critical Path, Period / ' +
+      'Jitter, Unified Jitter, Recurring Patterns, Task Health, Waiter × ' +
+      'Owner, Mutex Blocking, Preemption Matrix, Core Utilization Over Time, ' +
+      'Root cause, ' +
       'Recommendations (only when evidence supports them), and Evidence ' +
       'timeline with jump:TIME links. Use export_report when the user ' +
       'asks to save the report.',
@@ -224,15 +276,24 @@ export const AI_TEMPLATE_QUESTIONS = [
     prompt:
       'Which tasks show the highest latency or blocking? Explain likely ' +
       'causes using preemption, dispatch latency, and mutex evidence in ' +
-      'the context.',
+      'the context. Open Worst Events, Response Time, Critical Path, ' +
+      'Mutex Blocking, and Waiter × Owner ' +
+      '(heuristic mutex handoff — not a kernel wait queue). Click Blocking ' +
+      'p95/p99 to jump. Call analyze_distribution (metric blocking or auto) ' +
+      'for the worst-task tail. Call decompose_response_time for the ' +
+      'worst task; treat shares as relative, not measured milliseconds.',
   },
   {
     id: 'wcet',
     label: 'WCET / hot CPU',
     prompt:
       'Which tasks dominate CPU and which have the worst execution-slice ' +
-      'Max? Recommend whether to affinity-pin, reduce fan-out, or inspect ' +
-      'preemption.',
+      'Max? Call analyze_distribution (metric execution) on the hottest ' +
+      'task and cite p50 / p99 / CV, not only Max. Open Timeline Anomalies, ' +
+      'Worst Events, Response Time, Period / Jitter, Unified Jitter, and ' +
+      'Task Health. Click Execution Max / ' +
+      'p95 / p99 to jump. Recommend whether to ' +
+      'affinity-pin, reduce fan-out, or inspect preemption.',
   },
   {
     id: 'migrations',
@@ -240,35 +301,44 @@ export const AI_TEMPLATE_QUESTIONS = [
     prompt:
       'Is there core thrashing or lock-bounce? Cite migration rate, ping, ' +
       'dwell, and any hot mutex/queue bounces. Suggest affinity or ' +
-      'ownership fixes.',
+      'ownership fixes. Open Task × Core, Core Utilization Over Time, and ' +
+      'Timeline Anomalies migration bursts.',
   },
   {
     id: 'balance',
     label: 'Core balance',
     prompt:
       'Is SMP load balance healthy? Interpret Load Balance Score / σ and ' +
-      'whether Concurrent Core Active or Switch Overhead needs attention.',
+      'whether Concurrent Core Active or Switch Overhead needs attention. ' +
+      'Open Task × Core for per-task per-core share of the scoped span.',
   },
   {
     id: 'tick',
     label: 'Tick health',
     prompt:
       'Interpret Trace Health (TICK). Are large gaps expected under ' +
-      'tickless idle, or should we re-check inside a busy cursor window?',
+      'tickless idle, or should we re-check inside a busy cursor window? ' +
+      'Call analyze_periodicity (source auto or tick) and report expected ' +
+      'vs p50/p99/max, RMS jitter, and kind. Do not conflate this with ' +
+      'Period / Jitter — that page is task inter-arrival, not the tick ' +
+      'source.',
   },
   {
     id: 'priority',
     label: 'Priority inversion',
     prompt:
       'Is there priority inversion or L/M/H geometry? Explain any inherit ' +
-      'episodes and what to verify next.',
+      'episodes and what to verify next. If mutex handoff is in play, open ' +
+      'Waiter × Owner (heuristic next-acquirer × previous-holder, not a ' +
+      'kernel wait queue).',
   },
   {
     id: 'deadlines',
     label: 'Deadline / budget',
     prompt:
       'Are there deadline or CPU-budget concerns in the findings? What ' +
-      'should the engineer measure next?',
+      'should the engineer measure next? Open the Task Health deadline ' +
+      'band (click the band to jump to Deadlines).',
   },
   {
     id: 'explain_finding',
@@ -280,7 +350,8 @@ export const AI_TEMPLATE_QUESTIONS = [
       'technical). Then add jump:TIME ' +
       'evidence from investigate or correlate_events if the explanation ' +
       'is still thin. Finish with: Summary, What it means, Evidence, ' +
-      'What would disprove this, and one next check.',
+      'What would disprove this, and one next check that names the ' +
+      'Statistics page to open.',
   },
   {
     id: 'auto_investigate',
@@ -290,8 +361,14 @@ export const AI_TEMPLATE_QUESTIONS = [
       'Call investigate(finding_id) first, then correlate_events on the ' +
       'same window. Call find_critical_path to build the causal chain, or ' +
       'detect_priority_inversion instead when investigate flags a ' +
-      'priority-inversion finding. Place cursors and zoom_to_range on the ' +
-      'strongest evidence. Then call what_if or optimize_experiment to ' +
+      'priority-inversion finding. Call build_task_dependency_graph and ' +
+      'analyze_temporal_causality on the same task. Call ' +
+      'rank_root_causes then challenge_conclusion. Place cursors and ' +
+      'zoom_to_range on the strongest evidence (Apply cursors; cite ' +
+      'range:LO/HI or btfrange:LO/HI when the critical path has a window). ' +
+      'Name Timeline Anomalies or Worst Events as the next UI check. ' +
+      'Then call what_if or ' +
+      'optimize_experiment to ' +
       'test a concrete mitigation. Finish with a verdict — Confirmed, ' +
       'Rejected, or Inconclusive — Evidence as jump:TIME bullets, ' +
       'Confidence (High/Medium/Low), and one recommended experiment to ' +

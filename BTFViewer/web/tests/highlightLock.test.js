@@ -70,10 +70,14 @@ describe('Timeline context menu mark clears', () => {
     const app = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
     assert.match(vue, /Clear all bookmarks/)
     assert.match(vue, /Clear all annotations/)
+    assert.match(vue, /Clear all marks/)
     assert.match(vue, /clearBookmarks/)
     assert.match(vue, /clearAnnotations/)
+    assert.match(vue, /clearAllMarks/)
+    assert.match(vue, /disabled: !hasMarks/)
     assert.match(app, /@clear-bookmarks="onClearBookmarks"/)
     assert.match(app, /@clear-annotations="onClearAnnotations"/)
+    assert.match(app, /@clear-all-marks="onClearAllMarks"/)
   })
 
   it('stops menu presses from reaching the timeline interaction root', () => {
@@ -86,8 +90,24 @@ describe('Timeline context menu mark clears', () => {
       'utf8',
     )
     assert.match(vue, /@mousedown\.stop/)
+    assert.match(vue, /<Teleport to="body">/)
+    assert.match(vue, /position: fixed/)
     assert.match(handler, /\.context-menu/)
     assert.match(handler, /closest\?\.?\(/)
+  })
+
+  it('grays Ask AI items when AI is disabled', () => {
+    const vue = readFileSync(
+      new URL('../src/components/TimelinePanel.vue', import.meta.url),
+      'utf8',
+    )
+    const app = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
+    assert.match(vue, /Ask AI about this event/)
+    assert.match(vue, /Explain this region with AI/)
+    assert.match(vue, /disabled: !aiFeatureEnabled/)
+    assert.match(vue, /if \(!aiFeatureEnabled\.value\) return/)
+    assert.match(vue, /\.ctx-item\.disabled/)
+    assert.match(app, /:ai-enabled="appSettings.aiEnabled !== false"/)
   })
 })
 

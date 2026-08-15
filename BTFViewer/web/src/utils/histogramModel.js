@@ -210,7 +210,7 @@ function valueToX(value, binSpec, plotW, marginLeft) {
   return regionLeft + t * regularW
 }
 
-function buildBarLayout(binSpec, plotW, plotH, margin, logY) {
+function buildBarLayout(binSpec, plotW, plotH, margin, logY, summary) {
   const { counts, edges, hasOverflowBin, hasUnderflowBin, overflow, underflow } = binSpec
   const { slotCount, slotW, leading } = histSlotLayout(binSpec, plotW)
   const maxCount = Math.max(1, ...counts, overflow, underflow)
@@ -232,6 +232,9 @@ function buildBarLayout(binSpec, plotW, plotH, margin, logY) {
       width: Math.max(1, slotW - 1),
       height: h,
       kind: 'underflow',
+      count: underflow,
+      edgeLo: summary.min,
+      edgeHi: binSpec.displayMin,
       label: `<p5 (${underflow})`,
     })
     slot++
@@ -246,6 +249,7 @@ function buildBarLayout(binSpec, plotW, plotH, margin, logY) {
       width: Math.max(1, slotW - 1),
       height: h,
       kind: 'regular',
+      count: counts[i],
       edgeLo: edges[i],
       edgeHi: edges[i + 1],
     })
@@ -261,11 +265,23 @@ function buildBarLayout(binSpec, plotW, plotH, margin, logY) {
       width: Math.max(1, slotW - 1),
       height: h,
       kind: 'overflow',
+      count: overflow,
+      edgeLo: binSpec.displayMax,
+      edgeHi: summary.max,
       label: `>p95 (${overflow})`,
     })
   }
 
   return { bars, maxCount, slotCount, slotW }
+}
+
+export function histogramBarTooltip(bar, n, formatValue) {
+  let line1
+  if (bar.kind === 'underflow') line1 = '< p5'
+  else if (bar.kind === 'overflow') line1 = '> p95'
+  else line1 = `${formatValue(bar.edgeLo)}–${formatValue(bar.edgeHi)}`
+  const pct = n ? Math.round((100 * bar.count) / n) : 0
+  return { line1, line2: `${bar.count} of ${n} (${pct}%)` }
 }
 
 function buildXTicks(binSpec, plotW, margin, formatValue) {
@@ -425,7 +441,7 @@ export function buildHistogramModel(values, options = {}) {
   const plotW = width - margin.left - margin.right
   const plotH = height - margin.top - margin.bottom
   const logY = shouldUseLogY([...binSpec.counts, binSpec.overflow, binSpec.underflow])
-  const { bars, maxCount } = buildBarLayout(binSpec, plotW, plotH, margin, logY)
+  const { bars, maxCount } = buildBarLayout(binSpec, plotW, plotH, margin, logY, summary)
 
   const scaleX = value => valueToX(value, binSpec, plotW, margin.left)
   const xTicks = buildXTicks(binSpec, plotW, margin, formatValue)
@@ -447,6 +463,7 @@ export function buildHistogramModel(values, options = {}) {
   const cdf = buildCdfPoints(sorted, binSpec, plotW, plotH, margin)
   const refs = [
     { label: 'avg', value: summary.avg, color: '#CE93D8' },
+    { label: 'p5', value: summary.p5, color: '#29B6F6' },
     { label: 'p50', value: summary.p50, color: '#4CAF50' },
     { label: 'p95', value: summary.p95, color: '#FF9800' },
   ]
@@ -486,6 +503,7 @@ export function buildHistogramModel(values, options = {}) {
     requestedScaleMode: scaleMode,
     logY,
     summary,
+    sampleCount: sorted.length,
     overflowCount: binSpec.overflow,
   }
 }

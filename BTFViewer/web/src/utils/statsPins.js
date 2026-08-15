@@ -3,6 +3,8 @@
  * Keep section IDs in sync with btf_viewer_pkg/config.py STATS_PINNABLE_SECTIONS.
  */
 
+import { STATS_DEFAULT_EXPANDED_SECTIONS } from '../config.js'
+
 export const STATS_PINNABLE_SECTIONS = Object.freeze([
   'cores',
   'health',
@@ -13,15 +15,29 @@ export const STATS_PINNABLE_SECTIONS = Object.freeze([
   'migrations',
   'core_pairs',
   'affinity',
+  'task_core',
+  'core_time',
   'lifecycle',
   'deadline',
+  'task_health',
+  'anomalies',
+  'worst',
+  'crit_path',
+  'patterns',
   'exec',
   'block',
+  'response',
   'dispatch',
   'inter',
+  'period',
+  'jitter',
+  'distrib',
   'preemption',
+  'preempt_matrix',
   'priority',
   'sync',
+  'wait_owner',
+  'mutex_block',
   'queue',
   'intervals',
   'tags',
@@ -108,4 +124,25 @@ export function isDefaultStatsSectionOrder(order) {
   const def = defaultStatsSectionOrder()
   if (cur.length !== def.length) return false
   return cur.every((sid, i) => sid === def[i])
+}
+
+/** @returns {Record<string, boolean>} */
+export function defaultSectionCollapsed() {
+  const out = {}
+  for (const id of STATS_PINNABLE_SECTIONS) {
+    out[id] = !STATS_DEFAULT_EXPANDED_SECTIONS.includes(id)
+  }
+  return out
+}
+
+/** @param {unknown} src @returns {Record<string, boolean>} */
+export function mergeSectionCollapsed(src) {
+  const out = defaultSectionCollapsed()
+  if (!src || typeof src !== 'object' || Array.isArray(src)) return out
+  for (const [key, val] of Object.entries(src)) {
+    if (Object.prototype.hasOwnProperty.call(out, key) && typeof val === 'boolean') {
+      out[key] = val
+    }
+  }
+  return out
 }

@@ -59,6 +59,18 @@ from .ai_tools import (
     AI_TOOL_GENERATE_EXPERIMENT_PLAN,
     AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
     AI_TOOL_SCORE_INVESTIGATION,
+    AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY,
+    AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH,
+    AI_TOOL_DECOMPOSE_RESPONSE_TIME,
+    AI_TOOL_RANK_ROOT_CAUSES,
+    AI_TOOL_VERIFY_CLAIM,
+    AI_TOOL_CHALLENGE_CONCLUSION,
+    AI_TOOL_INVESTIGATION_MEMORY,
+    AI_TOOL_CLUSTER_INCIDENTS,
+    AI_TOOL_CLOSE_INVESTIGATION,
+    AI_TOOL_ANALYZE_DISTRIBUTION,
+    AI_TOOL_ANALYZE_PERIODICITY,
+    AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
     AI_TOOL_OPEN_CORRIDOR,
     AI_TOOL_OPTIMIZE,
     AI_TOOL_OPTIMIZE_EXPERIMENT,
@@ -102,6 +114,21 @@ from .ai_tools import (
     generate_experiment_plan_tool,
     record_experiment_outcome_tool,
     score_investigation_metrics_tool,
+    analyze_temporal_causality_tool,
+    build_task_dependency_graph_tool,
+    decompose_response_time_tool,
+    rank_root_causes_tool,
+    verify_claim_tool,
+    challenge_conclusion_tool,
+    investigation_memory_tool,
+    cluster_incidents_tool,
+    close_investigation_tool,
+    analyze_distribution_tool,
+    analyze_periodicity_tool,
+    distribution_trace_context,
+    periodicity_trace_context,
+    dependency_trace_context,
+    summarize_investigation_context_tool,
     gather_simulation_inputs,
     optimize_experiment_finding,
     optimize_finding,
@@ -139,6 +166,7 @@ from .mvvm import (
 from .mvvm.tab_viewport import apply_viewport, viewport_from_json, viewport_to_json
 from .trace_quality import trace_quality_summary
 from .perfetto_export import export_perfetto
+from .ux_explore import best_finding_scope, harvest_ux_events
 
 class _CpuLoadScrollArea(QScrollArea):
     """Scroll host for the CPU load graph — pane height comes from the splitter, not row count."""
@@ -1930,6 +1958,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         view.ask_ai_event_requested.connect(self._on_ask_ai_event)
         view.clear_bookmarks_requested.connect(self._clear_all_bookmarks)
         view.clear_annotations_requested.connect(self._clear_all_annotations)
+        view.clear_all_marks_requested.connect(self._clear_all_marks)
         view.pre_change.connect(self._push_undo_snapshot)
         view.horizontalScrollBar().valueChanged.connect(
             lambda _val, v=view: self._on_view_scrolled(v))
@@ -2262,6 +2291,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         view.set_show_sti(self._show_sti)
         view.set_show_grid(self._show_grid)
         view.set_view_mode(self._view_mode if hasattr(self, "_view_mode") else "task")
+        if hasattr(view, "set_ai_enabled"):
+            view.set_ai_enabled(self._ai_feature_enabled())
 
     def _sync_cpu_load_graph(self, tab: _TraceTab) -> None:
         """Align one tab's CPU load graph with global view mode and timeline state."""
@@ -3180,6 +3211,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 s.get("stats", "pinned_sections", ""), emit=False)
             self._stats_panel.set_section_order(
                 s.get("stats", "section_order", ""), emit=False)
+            self._stats_panel.set_section_collapsed_map(
+                s.get("stats", "section_collapsed", ""), emit=False)
 
         # Dock layout: sizes from dock_metrics; visibility from [view] show_* keys.
         # Qt saveState/restoreState embeds dock visibility and fights show_legend,
@@ -3354,6 +3387,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 s.set(
                     "stats", "section_order",
                     stats_section_order_to_rc(self._stats_panel.section_order()),
+                    flush=False,
+                )
+                s.set(
+                    "stats", "section_collapsed",
+                    section_collapsed_to_rc(self._stats_panel._section_collapsed),
                     flush=False,
                 )
 
@@ -4281,6 +4319,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             on_open_settings=lambda: self._open_settings("AI"),
             on_save_settings=self._ai_save_settings_patch,
             on_jump=self._ai_jump_time_unit,
+            on_range=self._ai_zoom_range_unit,
             on_highlight=self._ai_highlight_task,
             on_execute_tools=self._ai_execute_tools,
             on_undo_tools=self._ai_undo_tools,
@@ -4354,6 +4393,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._close_chord_dialog()
         if hasattr(self, "_tb_analysis_btn"):
             self._tb_analysis_btn.setEnabled(False)
+        self._sync_trace_compare_btn()
 
     def _on_close_all_tabs_action(self) -> None:
         for _ in range(len(self._tabs)):
@@ -4405,14 +4445,30 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel.task_clicked.connect(self._on_legend_task_clicked)
         self._stats_panel.segment_jump.connect(self._on_segment_jump)
         self._stats_panel.plot_point_clicked.connect(self._on_stats_plot_point_clicked)
+        self._stats_panel.explore_range_requested.connect(self._on_explore_range)
         self._stats_panel.core_clicked.connect(self._on_stats_core_clicked)
         self._stats_panel.open_pair_heatmap.connect(self._on_open_pair_heatmap)
         self._stats_panel.open_pair_chord.connect(self._on_open_pair_chord)
         self._stats_panel.open_settings_requested.connect(self._open_settings)
         self._stats_panel.section_pins_changed.connect(self._on_section_pins_changed)
         self._stats_panel.section_order_changed.connect(self._on_section_order_changed)
-        self._stats_panel._btn_compare_mig.clicked.connect(self._open_trace_compare)
+        self._stats_panel.section_collapsed_changed.connect(
+            self._on_section_collapsed_changed)
+        self._stats_panel.query_ai_requested.connect(self._on_stats_query_ai)
+        self._stats_panel.set_ai_enabled(self._ai_feature_enabled())
         self.setAcceptDrops(True)
+
+    def _on_stats_query_ai(self, template_id: str, extra: str = "") -> None:
+        if not self._ai_feature_enabled():
+            self._open_settings("AI")
+            return
+        self._focus_ai_panel()
+        panel = getattr(self, "_ai_panel", None)
+        if panel is not None and hasattr(panel, "query_template"):
+            QTimer.singleShot(
+                0,
+                lambda t=template_id, ex=extra: panel.query_template(t, extra=ex),
+            )
 
     def _on_section_pins_changed(self, _pins: list) -> None:
         """Persist pinned statistics sections to btf_viewer.rc immediately."""
@@ -4435,6 +4491,19 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._settings.set(
                 "stats", "section_order",
                 stats_section_order_to_rc(self._stats_panel.section_order()),
+                flush=True,
+            )
+        except Exception:
+            pass
+
+    def _on_section_collapsed_changed(self, _flags: dict) -> None:
+        """Persist statistics section collapse map to btf_viewer.rc immediately."""
+        if self._restoring_settings or self._shutting_down:
+            return
+        try:
+            self._settings.set(
+                "stats", "section_collapsed",
+                section_collapsed_to_rc(self._stats_panel._section_collapsed),
                 flush=True,
             )
         except Exception:
@@ -4689,6 +4758,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _aw = tb.widgetForAction(self._tb_analysis_btn)
         if _aw:
             _aw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._tb_compare_btn = _ia(
+            "Compare", self._open_trace_compare, _IC_COMPARE,
+            "Trace Compare — summary, top tasks, and core migrations "
+            "between two open trace tabs")
+        self._tb_compare_btn.setEnabled(False)
+        _cw = tb.widgetForAction(self._tb_compare_btn)
+        if _cw:
+            _cw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         tb.addSeparator()
 
         # --- STI waveform scale toggle ---
@@ -5127,6 +5204,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             enabled_feat = self._ai_feature_enabled()
             self._act_show_ai.setVisible(enabled_feat)
             self._act_show_ai.setEnabled(enabled_feat)
+        panel = getattr(self, "_stats_panel", None)
+        if panel is not None and hasattr(panel, "set_ai_enabled"):
+            panel.set_ai_enabled(self._ai_feature_enabled())
+        on = self._ai_feature_enabled()
+        for view in self._iter_tab_views():
+            if hasattr(view, "set_ai_enabled"):
+                view.set_ai_enabled(on)
 
     # Keys the pre-preset schema used that no longer exist. ``openai_*`` is not
     # listed: those names now belong to the OpenAI preset, and
@@ -5137,7 +5221,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _ai_setting_keys(cls, extra_ids=()) -> list:
         keys = ["enabled", "preset", "response_language", "auto_apply", "mcp_log",
                 "user_investigation_templates", "user_historical_knowledge",
-                "redact_task_names", "trace_sensitive", "extra_presets"]
+                "redact_task_names", "trace_sensitive", "extra_presets",
+                "split_bottom"]
         pids = [pid for pid, _label, _base, _model in AI_PRESETS]
         for pid in extra_ids:
             if pid and pid not in pids:
@@ -5244,7 +5329,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         lo_b, hi_b = _cursor_range_for_tab(self, idx_b)
         if not scope_enabled:
             lo_a = hi_a = lo_b = hi_b = None
-        tables = _build_trace_compare_rows(tr_a, tr_b, lo_a, hi_a, lo_b, hi_b)
+        panel = getattr(self, "_stats_panel", None)
+        deadlines = dict(getattr(panel, "_task_deadlines_ns", None) or {})
+        tables = _build_trace_compare_rows(
+            tr_a, tr_b, lo_a, hi_a, lo_b, hi_b, deadlines=deadlines)
         try:
             self._remember_trace_compare(
                 tr_a, tr_b, lo_a, hi_a, lo_b, hi_b, name_a, name_b,
@@ -5297,6 +5385,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if int(ann.ns) == ns and ann.note == note:
                 return
         self._add_annotation_with_note(ns, note, show_marks_panel=False)
+
+    def _ai_zoom_range_unit(self, lo: float, hi: float) -> None:
+        """Zoom and place C1–C2 on a ``range:LO/HI`` evidence link."""
+        self._on_explore_range({
+            "lo": int(min(lo, hi)),
+            "hi": int(max(lo, hi)),
+            "note": f"AI range:{int(lo)}/{int(hi)}",
+            "ns": int(min(lo, hi)),
+        })
 
     def _ai_task_candidates(self) -> list:
         tr = self._trace
@@ -6522,6 +6619,150 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 conclusion=str(args.get("conclusion") or ""),
                 confidence=str(args.get("confidence") or ""),
             )
+        if name == AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY:
+            return analyze_temporal_causality_tool(
+                findings, task=str(args.get("task") or ""))
+        if name == AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH:
+            lo = hi = None
+            view = getattr(self, "_view", None)
+            times = []
+            if view is not None and hasattr(view, "_scene"):
+                times = list(view._scene.cursor_times() or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+            ctx = dependency_trace_context(self._trace, lo, hi)
+            return build_task_dependency_graph_tool(
+                findings,
+                task=str(args.get("task") or ""),
+                sync_holds=ctx.get("sync_holds") or [],
+                preemptions=ctx.get("preemptions") or [],
+                migrations=ctx.get("migrations") or [],
+                priority_episodes=ctx.get("priority_episodes") or [],
+            )
+        if name == AI_TOOL_DECOMPOSE_RESPONSE_TIME:
+            return decompose_response_time_tool(
+                findings, task=str(args.get("task") or ""))
+        if name == AI_TOOL_RANK_ROOT_CAUSES:
+            hyps = args.get("hypotheses") if isinstance(
+                args.get("hypotheses"), list) else []
+            return rank_root_causes_tool(findings, hypotheses=hyps)
+        if name == AI_TOOL_VERIFY_CLAIM:
+            lo = hi = None
+            view = getattr(self, "_view", None)
+            times = []
+            if view is not None and hasattr(view, "_scene"):
+                times = list(view._scene.cursor_times() or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+            return verify_claim_tool(
+                str(args.get("claim") or ""),
+                claim_type=str(args.get("claim_type") or "causal"),
+                subject=str(args.get("subject") or ""),
+                object=str(args.get("object") or ""),
+                evidence=args.get("evidence") or [],
+                findings=findings,
+                cursor_lo=lo,
+                cursor_hi=hi,
+            )
+        if name == AI_TOOL_CHALLENGE_CONCLUSION:
+            return challenge_conclusion_tool(
+                str(args.get("conclusion") or ""), findings=findings)
+        if name == AI_TOOL_INVESTIGATION_MEMORY:
+            from .ai_causal import set_investigation_memory, investigation_memory_store
+            raw = self._settings.get("ai", "investigation_memory", "")
+            hist = []
+            if raw:
+                try:
+                    hist = json.loads(raw)
+                except (TypeError, ValueError):
+                    hist = []
+            if isinstance(hist, list):
+                set_investigation_memory(hist)
+            payload = investigation_memory_tool(
+                str(args.get("action") or "recall"),
+                record=args.get("record") if isinstance(
+                    args.get("record"), dict) else None,
+                findings=findings,
+                limit=int(args.get("limit") or 5),
+            )
+            try:
+                self._settings.set(
+                    "ai", "investigation_memory",
+                    json.dumps(investigation_memory_store(), ensure_ascii=True),
+                    flush=False,
+                )
+            except Exception:
+                pass
+            return payload
+        if name == AI_TOOL_CLUSTER_INCIDENTS:
+            return cluster_incidents_tool(
+                findings, window_ns=float(args.get("window_ns") or 1e6))
+        if name == AI_TOOL_CLOSE_INVESTIGATION:
+            return close_investigation_tool(
+                str(args.get("conclusion") or ""),
+                findings=findings,
+                confidence=str(args.get("confidence") or ""),
+            )
+        if name == AI_TOOL_ANALYZE_DISTRIBUTION:
+            lo = hi = None
+            view = getattr(self, "_view", None)
+            times = []
+            if view is not None and hasattr(view, "_scene"):
+                times = list(view._scene.cursor_times() or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+            values = list(args.get("values") or [])
+            metric = str(args.get("metric") or "")
+            task = str(args.get("task") or "")
+            source = ""
+            truncated = False
+            if not values:
+                ctx = distribution_trace_context(
+                    self._trace, task, metric, lo, hi)
+                harvested = list(ctx.get("values") or [])
+                if harvested:
+                    values = harvested
+                    metric = str(ctx.get("metric") or metric)
+                    source = "btf"
+                    truncated = bool(ctx.get("truncated"))
+                    if not task:
+                        task = str(ctx.get("task") or "")
+            return analyze_distribution_tool(
+                values,
+                findings=findings,
+                metric=metric,
+                source=source,
+                task=task,
+                truncated=truncated,
+            )
+        if name == AI_TOOL_ANALYZE_PERIODICITY:
+            lo = hi = None
+            view = getattr(self, "_view", None)
+            times = []
+            if view is not None and hasattr(view, "_scene"):
+                times = list(view._scene.cursor_times() or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+            ctx = periodicity_trace_context(
+                self._trace, str(args.get("task") or ""))
+            return analyze_periodicity_tool(
+                args.get("times") or [],
+                findings=findings,
+                expected=args.get("expected"),
+                source=str(args.get("source") or "auto"),
+                durations=args.get("durations") or [],
+                tick_times=ctx.get("tick_times") or [],
+                sti_events=ctx.get("sti_events") or [],
+                release_times=ctx.get("release_times") or [],
+                lo=lo,
+                hi=hi,
+            )
+        if name == AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT:
+            return summarize_investigation_context_tool(
+                findings,
+                tools_run=args.get("tools_run") or [],
+                conclusion=str(args.get("conclusion") or ""),
+            )
         raise RuntimeError(f"unknown tool {name}")
 
     def _ai_load_baseline_profile(self) -> Dict[str, Any]:
@@ -6820,6 +7061,22 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         else:
             self._cmd_undo()
 
+    def _apply_finding_scope(self, finding: dict) -> None:
+        """Place C1–C2 on the recommended window for a selected Analysis finding."""
+        if self._trace is None or not isinstance(finding, dict):
+            return
+        lo = hi = None
+        panel = getattr(self, "_stats_panel", None)
+        if panel is not None and getattr(panel, "_scope_to_cursors", False):
+            times = list(getattr(panel, "_cursor_times", None) or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+        evs = harvest_ux_events(self._trace, lo, hi)
+        scope = best_finding_scope(
+            finding, evs, self._trace.time_min, self._trace.time_max)
+        if scope:
+            self._on_explore_range(scope)
+
     def _open_analysis_findings(self) -> None:
         """Show Analysis Findings dialog for the active tab / cursor scope."""
         if self._trace is None or self._stats_panel is None:
@@ -6834,10 +7091,21 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             except RuntimeError:
                 self._analysis_findings_dlg = None
         findings, scope_title = self._stats_panel.build_analysis_findings()
+        lo = hi = None
+        panel = self._stats_panel
+        if getattr(panel, "_scope_to_cursors", False):
+            times = list(getattr(panel, "_cursor_times", None) or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+        evs = harvest_ux_events(self._trace, lo, hi)
         dlg = _AnalysisFindingsDialog(
             findings, scope_title, parent=self,
             ai_enabled=self._ai_feature_enabled(),
             ui_font_size=getattr(self, "_ui_font_size_val", UI_FONT_SIZE),
+            on_apply_scope=self._apply_finding_scope,
+            ux_events=evs,
+            time_min=self._trace.time_min,
+            time_max=self._trace.time_max,
         )
         self._analysis_findings_dlg = dlg
         dlg.exec()
@@ -7272,11 +7540,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             else:
                 self._autofit_cpu_load_height()
 
+    def _sync_trace_compare_btn(self) -> None:
+        """Enable toolbar Compare when two or more traces are loaded."""
+        if hasattr(self, "_tb_compare_btn"):
+            self._tb_compare_btn.setEnabled(len(getattr(self, "_tabs", ())) >= 2)
+
     def _sync_toolbar_to_active_tab(self) -> None:
         """Refresh toolbar toggles that reflect per-tab view state."""
         self._sync_heatmap_toolbar()
         if hasattr(self, "_tb_analysis_btn"):
             self._tb_analysis_btn.setEnabled(self._trace is not None)
+        self._sync_trace_compare_btn()
         if hasattr(self, "_tb_cpu_load_btn"):
             self._tb_cpu_load_btn.blockSignals(True)
             self._tb_cpu_load_btn.setChecked(self._show_cpu_load)
@@ -7604,6 +7878,49 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         sc.set_core_expanded(core, True)
         self._cpu_load_graph.set_core_expanded(core, True)
 
+    def _on_explore_range(self, spec) -> None:
+        """Zoom, place C1–C2, highlight, and scroll the matching Statistics section."""
+        if self._trace is None or not isinstance(spec, dict):
+            return
+        try:
+            lo = int(spec.get("lo"))
+            hi = int(spec.get("hi"))
+        except (TypeError, ValueError):
+            return
+        if hi <= lo:
+            hi = lo + 1
+        view = getattr(self, "_view", None)
+        if view is None:
+            return
+        max_c = max(2, int(getattr(self, "_max_cursors_val", 4) or 4))
+        view.begin_programmatic_viewport()
+        try:
+            view._scene.clear_cursors()
+            view._scene.add_cursor(lo)
+            view._scene.add_cursor(hi)
+            view.cursors_changed.emit(view._scene.cursor_times())
+        finally:
+            view.end_programmatic_viewport()
+        if hasattr(self, "_stats_panel"):
+            self._stats_panel._scope_to_cursors = True
+            if getattr(self._stats_panel, "_scope_cb", None) is not None:
+                self._stats_panel._scope_cb.setChecked(True)
+            self._stats_panel.set_cursor_times(
+                view._scene.cursor_times(), refresh_stats=True)
+        self._ai_zoom_to_range(lo, hi)
+        mk = str(spec.get("mk") or "")
+        if mk:
+            self._ai_highlight_task(mk)
+        ns = spec.get("ns")
+        if ns is not None:
+            try:
+                self._view.scroll_to_ns(int(ns))
+            except (TypeError, ValueError):
+                pass
+        section = str(spec.get("section") or "")
+        if section and hasattr(self, "_stats_panel"):
+            self._stats_panel.scroll_to_section(section)
+
     def _on_stats_plot_point_clicked(self, payload, mark_ns: int, note: str) -> None:
         """Metrics plot / table click: jump/highlight and add an annotation with *note*."""
         if self._trace is None:
@@ -7778,6 +8095,26 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._annotations.clear()
         self._rebuild_annotation_list()
         self._save_current_trace_state()
+
+    def _clear_all_marks(self) -> None:
+        """Clear cursors, bookmarks, and annotations in one undo step."""
+        has_cursors = bool(self._view._scene.cursor_times())
+        has_bm = bool(self._bookmarks)
+        has_an = bool(self._annotations)
+        if not (has_cursors or has_bm or has_an):
+            return
+        self._push_undo_snapshot()
+        if has_cursors:
+            self._view._scene.clear_cursors()
+            self._view.cursors_changed.emit([])
+        if has_bm:
+            self._bookmarks.clear()
+            self._rebuild_bookmark_list()
+        if has_an:
+            self._annotations.clear()
+            self._rebuild_annotation_list()
+        if has_bm or has_an:
+            self._save_current_trace_state()
 
     def _jump_selected_annotation(self) -> None:
         item = self._annotation_list.currentItem()
@@ -8500,6 +8837,50 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._settings.set_many("view", updates)
             self._report_settings_io_failure(prefix="Settings save warning")
 
+    def _snapshot_stats_layout(self) -> dict:
+        """Capture Statistics pins, order, collapse, and table heights."""
+        panel = getattr(self, "_stats_panel", None)
+        if panel is None:
+            return {}
+        return {
+            "pins": list(panel.section_pins()),
+            "order": list(panel.section_order()),
+            "collapsed": dict(panel._section_collapsed),
+            "heights": dict(panel.section_table_heights()),
+        }
+
+    def _apply_stats_layout_defaults(self, *, persist: bool) -> None:
+        """Restore Statistics layout defaults; persist to .rc only when requested."""
+        panel = getattr(self, "_stats_panel", None)
+        if panel is not None:
+            panel.set_section_pins([], emit=False)
+            panel.set_section_order("", emit=False)
+            panel.set_section_collapsed_map(default_section_collapsed(), emit=False)
+            panel.apply_section_table_heights(default_section_table_heights())
+        if not persist:
+            return
+        try:
+            self._settings.clear_section("stats", flush=True)
+        except Exception:
+            pass
+        self._report_settings_io_failure(prefix="Settings save warning")
+
+    def _restore_stats_layout_snapshot(self, snap: dict) -> None:
+        """Revert a live Reset-to-Defaults preview of Statistics layout."""
+        panel = getattr(self, "_stats_panel", None)
+        if panel is None or not snap:
+            return
+        panel.set_section_pins(snap.get("pins") or [], emit=False)
+        panel.set_section_order(snap.get("order") or [], emit=False)
+        panel.set_section_collapsed_map(
+            snap.get("collapsed") or default_section_collapsed(), emit=False)
+        panel.apply_section_table_heights(
+            snap.get("heights") or default_section_table_heights())
+
+    def _reset_stats_layout_to_defaults(self) -> None:
+        """Clear Statistics pins, order, collapse, and table heights in .rc."""
+        self._apply_stats_layout_defaults(persist=True)
+
     @_dialog_guard
     def _open_settings(self, page: str = "Appearance") -> None:
         """Open the Settings dialog with live preview; reverts on Cancel.
@@ -8621,8 +9002,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     dlg.is_dark, _ui_font_stylesheet_size(dlg.ui_font_size))
             )
         )
+        _stats_layout_snap = self._snapshot_stats_layout()
+        dlg.stats_layout_reset.connect(
+            lambda: self._apply_stats_layout_defaults(persist=False))
         if _exec_centred(dlg, self) == QDialog.Accepted:
             self._persist_settings_after_dlg(_snap)
+            if dlg.reset_requested:
+                self._reset_stats_layout_to_defaults()
             _new_budget = dlg.cpu_budget_pct
             _new_dl_text = dlg.task_deadlines_text
             if (_snap["cpu_budget_pct"] != _new_budget
@@ -8667,6 +9053,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._sync_ai_compare_template()
         else:
             self._apply_settings_preview(_snap)
+            self._restore_stats_layout_snapshot(_stats_layout_snap)
 
     # -- Status / legend callbacks -------------------------------------
 
@@ -9209,6 +9596,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "pinnedHighlightKey": sc._locked_task,
             "scopeToCursors": bool(getattr(self._stats_panel, "_scope_to_cursors", True)),
             "openPlot": plot_payload,
+            "statsSectionCollapsed": dict(self._stats_panel._section_collapsed),
             "compareScopeToCursors": True,
         }
 
@@ -9357,6 +9745,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 plot.get("preemptor"),
                 plot.get("intervalId"),
             )
+
+        collapsed = data.get("statsSectionCollapsed")
+        if collapsed is not None:
+            self._stats_panel.set_section_collapsed_map(collapsed, emit=True)
 
         if tab := self._active_tab:
             self._stash_tab_state(tab)

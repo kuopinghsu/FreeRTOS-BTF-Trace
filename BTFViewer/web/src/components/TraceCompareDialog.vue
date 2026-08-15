@@ -61,6 +61,13 @@
         Limit to each tab's cursor range (C1–Cn, when 2+ cursors placed)
       </label>
 
+      <div
+        v-if="compareStripText"
+        class="compare-strip"
+      >
+        {{ compareStripText }}
+      </div>
+
       <div class="compare-tabs" role="tablist">
         <button
           v-for="tab in pageTabs"
@@ -387,13 +394,69 @@
             </tr>
           </tbody>
         </table>
+
+        <table
+          v-else-if="activePage === 'response'"
+          class="compare-table"
+        >
+          <thead>
+            <tr>
+              <th>Task</th>
+              <th>P99 A</th>
+              <th>P99 B</th>
+              <th>Δ</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in responseCompareRows"
+              :key="row.name"
+            >
+              <td class="task-col">{{ row.name }}</td>
+              <td>{{ row.a }}</td>
+              <td>{{ row.b }}</td>
+              <td>{{ row.delta }}</td>
+            </tr>
+            <tr v-if="responseCompareRows.length === 0">
+              <td colspan="4" class="compare-empty">No response samples in either trace</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <table
+          v-else-if="activePage === 'mutex'"
+          class="compare-table"
+        >
+          <thead>
+            <tr>
+              <th>Task</th>
+              <th>Total A</th>
+              <th>Total B</th>
+              <th>Δ</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in mutexBlockCompareRows"
+              :key="row.name"
+            >
+              <td class="task-col">{{ row.name }}</td>
+              <td>{{ row.a }}</td>
+              <td>{{ row.b }}</td>
+              <td>{{ row.delta }}</td>
+            </tr>
+            <tr v-if="mutexBlockCompareRows.length === 0">
+              <td colspan="4" class="compare-empty">No mutex blocking in either trace</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
       <div class="compare-dialog-footer">
         <div class="compare-footer-left">
         <button
           type="button"
-          class="compare-ai-btn"
+          class="compare-export-btn"
           :title="aiEnabled
             ? 'Score expected vs actual deltas from this Trace Compare'
             : 'Enable AI Assistant in Settings → AI'"
@@ -403,7 +466,7 @@
         </button>
         <button
           type="button"
-          class="compare-ai-btn"
+          class="compare-export-btn"
           :title="aiEnabled
             ? 'Open the AI Assistant and walk through these Trace Compare tables'
             : 'Enable AI Assistant in Settings → AI'"
@@ -480,15 +543,20 @@ import {
   buildInterArrivalCompareRows,
   buildPreemptionCompareRows,
   buildSyncCompareRows,
+  buildResponseCompareRows,
+  buildMutexBlockCompareRows,
+  buildSharedPatternCompareRows,
   downloadCompareCsv,
   downloadCompareHtml,
 } from '../utils/traceCompare.js'
+import { compareSummaryStrip } from '../utils/uxExplore.js'
 
 const props = defineProps({
   tabs: { type: Array, required: true },
   initialA: { type: [Number, String], default: null },
   initialB: { type: [Number, String], default: null },
   aiEnabled: { type: Boolean, default: true },
+  analysisSettings: { type: Object, default: () => ({}) },
 })
 
 const emit = defineEmits(['close', 'query-ai', 'validate-experiment', 'compared'])
@@ -509,6 +577,8 @@ const pageTabs = [
   { id: 'interArrival', label: 'Inter-Arrival' },
   { id: 'preemption', label: 'Preemption' },
   { id: 'sync', label: 'Sync' },
+  { id: 'response', label: 'Response' },
+  { id: 'mutex', label: 'Mutex' },
 ]
 
 const activePage = ref('summary')
@@ -531,6 +601,7 @@ const tabA = computed(() => props.tabs.find(t => t.id === tabAId.value) ?? null)
 const tabB = computed(() => props.tabs.find(t => t.id === tabBId.value) ?? null)
 const traceA = computed(() => tabA.value?.trace ?? null)
 const traceB = computed(() => tabB.value?.trace ?? null)
+const deadlines = computed(() => props.analysisSettings?.taskDeadlines || {})
 
 watch(
   [tabAId, tabBId, scopeToCursors, traceA, traceB],
@@ -547,7 +618,7 @@ watch(
 )
 
 const summaryRows = computed(() =>
-  buildSummaryCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
+  buildSummaryCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value, deadlines.value))
 const topTaskRows = computed(() =>
   buildTopTasksCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
 const coreUtilRows = computed(() =>
@@ -564,6 +635,33 @@ const preemptionCompareRows = computed(() =>
   buildPreemptionCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
 const syncCompareRows = computed(() =>
   buildSyncCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
+const responseCompareRows = computed(() =>
+  buildResponseCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value, deadlines.value))
+const mutexBlockCompareRows = computed(() =>
+  buildMutexBlockCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value, deadlines.value))
+const sharedPatternRows = computed(() =>
+  buildSharedPatternCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value, deadlines.value))
+
+const compareStripText = computed(() => {
+  const data = compareSummaryStrip({
+    summary: summaryRows.value,
+    execution: executionRows.value,
+    blocking: blockingRows.value,
+    interArrival: interArrivalRows.value,
+    response: responseCompareRows.value,
+    mutex_block: mutexBlockCompareRows.value,
+    shared_patterns: sharedPatternRows.value,
+  }, 4)
+  const parts = (data.headline || []).map(h => `${h.label} ${h.delta}`)
+  if (data.regressions?.length) {
+    parts.push(
+      'Largest regressions: '
+      + data.regressions.map(r => `${r.label} ${r.delta}`).join(' · '),
+    )
+  }
+  if (data.why) parts.push(data.why)
+  return parts.join('  ·  ')
+})
 
 function exportTables() {
   return {
@@ -576,6 +674,9 @@ function exportTables() {
     interArrival: interArrivalRows.value,
     preemption: preemptionCompareRows.value,
     sync: syncCompareRows.value,
+    response: responseCompareRows.value,
+    mutex_block: mutexBlockCompareRows.value,
+    shared_patterns: sharedPatternRows.value,
   }
 }
 
@@ -669,6 +770,17 @@ function onValidateExperiment() {
   font-size: 12px;
   color: var(--fg-dim);
   cursor: pointer;
+  flex-shrink: 0;
+}
+
+.compare-strip {
+  margin: 8px 14px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent, #3498db) 12%, transparent);
+  color: var(--fg-dim);
+  font-size: 12px;
+  line-height: 1.45;
   flex-shrink: 0;
 }
 
@@ -791,22 +903,6 @@ function onValidateExperiment() {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-}
-
-.compare-ai-btn {
-  appearance: none;
-  border: 1px solid var(--accent, #4a90d9);
-  border-radius: 4px;
-  background: var(--accent, #4a90d9);
-  color: #000;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 5px 10px;
-  cursor: pointer;
-}
-
-.compare-ai-btn:hover {
-  filter: brightness(1.08);
 }
 
 .compare-export-btn {

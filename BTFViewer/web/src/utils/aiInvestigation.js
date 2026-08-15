@@ -69,6 +69,18 @@ const TOOL_STEP_MAP = {
   generate_experiment_plan: ['recommend'],
   record_experiment_outcome: ['validate', 'recommend'],
   score_investigation: ['validate'],
+  analyze_temporal_causality: ['validate'],
+  build_task_dependency_graph: ['validate'],
+  decompose_response_time: ['metrics', 'validate'],
+  rank_root_causes: ['hypotheses', 'validate'],
+  verify_claim: ['validate'],
+  challenge_conclusion: ['validate'],
+  investigation_memory: ['recommend'],
+  cluster_incidents: ['findings'],
+  close_investigation: ['validate', 'recommend'],
+  analyze_distribution: ['metrics'],
+  analyze_periodicity: ['metrics'],
+  summarize_investigation_context: ['validate'],
 }
 
 /** Tools whose results refresh the Evidence / Reasoning log. Keep in sync with
@@ -94,6 +106,18 @@ export const EVIDENCE_PANEL_TOOLS = [
   'generate_experiment_plan',
   'record_experiment_outcome',
   'score_investigation',
+  'analyze_temporal_causality',
+  'build_task_dependency_graph',
+  'decompose_response_time',
+  'rank_root_causes',
+  'verify_claim',
+  'challenge_conclusion',
+  'investigation_memory',
+  'cluster_incidents',
+  'close_investigation',
+  'analyze_distribution',
+  'analyze_periodicity',
+  'summarize_investigation_context',
 ]
 
 const AGENT_TEMPLATE_IDS = new Set([
@@ -521,9 +545,14 @@ export function buildCriticalPath(events, {
   const path = rows.map((ev, i) => {
     const label = kindLabels[ev.kind] || ev.kind
     const detail = ev.detail
+    const start = ev.time
+    const nxt = rows[i + 1]
+    const stop = nxt && nxt.time > start ? nxt.time : start
     return {
       step: i + 1,
       time: ev.time,
+      start,
+      stop,
       detail: detail ? `${label}: ${detail}` : label,
       kind: ev.kind,
     }
@@ -609,7 +638,12 @@ export function extractEvidencePanelPayload(toolName, result) {
     payload.conclusion = task ? `Critical path: ${task}` : 'Critical path'
     payload.evidence = (data.path || [])
       .filter(p => p && typeof p === 'object')
-      .map(p => ({ label: String(p.detail || ''), time: p.time }))
+      .map(p => ({
+        label: String(p.detail || ''),
+        time: p.time,
+        start: p.start,
+        stop: p.stop,
+      }))
     payload.confidence = String(data.confidence || 'Medium')
   } else if (name === 'correlate_events' || data.events) {
     const task = String(data.task || '')
@@ -672,6 +706,11 @@ export function extractEvidencePanelPayload(toolName, result) {
     'assess_evidence_sufficiency', 'cluster_findings', 'generate_fingerprint',
     'find_similar_investigations', 'regression_localize', 'build_causal_chain',
     'generate_experiment_plan', 'record_experiment_outcome', 'score_investigation',
+    'analyze_temporal_causality', 'build_task_dependency_graph',
+    'decompose_response_time', 'rank_root_causes', 'verify_claim',
+    'challenge_conclusion', 'investigation_memory', 'cluster_incidents',
+    'close_investigation', 'analyze_distribution', 'analyze_periodicity',
+    'summarize_investigation_context',
   ].includes(name) || data.steps || data.verdict || data.pattern) {
     payload.conclusion = String(result.message || data.message || name)
     payload.confidence = String(data.confidence || 'Medium')
@@ -1234,7 +1273,11 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
     for (const ev of evidence) {
       if (!ev || typeof ev !== 'object') continue
       const label = String(ev.label || labels.item)
-      if (ev.time != null && Number.isFinite(Number(ev.time))) {
+      const slo = Number(ev.start)
+      const shi = Number(ev.stop)
+      if (Number.isFinite(slo) && Number.isFinite(shi) && shi > slo) {
+        lines.push(`- ${label} range:${evidenceJumpToken(slo)}/${evidenceJumpToken(shi)}`)
+      } else if (ev.time != null && Number.isFinite(Number(ev.time))) {
         lines.push(`- ${label} jump:${evidenceJumpToken(ev.time)}`)
       } else {
         lines.push(`- ${label}`)

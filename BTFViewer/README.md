@@ -41,7 +41,7 @@ Metric definitions and formulas are in [Statistics & metrics](#statistics--metri
 | [Quick start](#quick-start) | Install and open a trace |
 | [Demo](#demo) | Scripted tour, voice packs, recording |
 | [Using the viewer](#using-the-viewer) | Navigate, measure, and mark |
-| [Analysis](#analysis) | Findings, problem map, Trace Compare |
+| [Analysis](#analysis) | Findings, BTF analysis pages, Trace Compare |
 | [AI Assistant](#ai-assistant) | Investigation, evidence, workflows, privacy |
 | [Statistics & metrics](#statistics--metrics) | Metric meaning, formulas, charts, how to diagnose |
 | [Export](#export) | Snapshots, reports, Perfetto, CLI |
@@ -256,18 +256,39 @@ Software-trace items appear as markers (and optional tag channels). Toggle STI r
 <a id="analysis" name="analysis">&#x200B;</a>
 ## Analysis ![](../images/readme/h2.svg)
 
-Start with toolbar **Analysis** for a severity-tagged triage of the current Statistics scope, then open the named Statistics sections. For AI-assisted investigation, see [AI Assistant](#ai-assistant). Playbooks: **[WORKFLOWS.md](WORKFLOWS.md)**.
+Start with toolbar **Analysis** for a severity-tagged triage of the current Statistics scope, then open the named Statistics sections. Those pages are **deterministic BTF analysis** (facts first). The **AI** tab explains and navigates them — it does not replace them. For AI-assisted investigation, see [AI Assistant](#ai-assistant). Playbooks: **[WORKFLOWS.md](WORKFLOWS.md)**.
+
+<a id="btf-analysis-pages" name="btf-analysis-pages">&#x200B;</a>
+### BTF analysis pages ![](../images/readme/h3.svg)
+
+Viewer analysis stays on **BTF → statistics → visualization → comparison**. There is no source/ELF inspection, scheduler simulation, or invented kernel response time (BTF has no release/completion pair). **Apply cursors** on a finding recommends a window; it does not apply until you click.
+
+| Page | What to use it for |
+|------|--------------------|
+| [Timeline Anomalies](#timeline-anomalies) | Unusual regions (spikes, bursts, idle, deadline misses) without relying only on Findings. **Investigate…** opens the AI template. |
+| [Worst Events](#worst-events) | Top-N outliers; click a row to jump. Response p99 sits next to execution Max. |
+| [Response Time](#response-time) | Min / mean / median / P90–P99.9 / max / σ / jitter. Click P99 like Execution. |
+| [Period / Jitter](#period--jitter) | Activation gaps, sparkline, missed / extra / burst / long-gap counts. |
+| [Unified Jitter](#unified-jitter) | Execution, period, dispatch (STI), and wake (block-wait) CVs. |
+| [Distribution Explorer](#distribution-explorer) | Histogram for one metric × task. |
+| [Task × Core](#task--core) / [Core Utilization Over Time](#core-utilization-over-time) | Hot vs idle cores, load imbalance, saturation windows. |
+| [Preemption Matrix](#preemption-matrix) / Chain / Story | Who preempted whom, duration, recurring chains. |
+| [Mutex Blocking](#mutex-blocking) / [Waiter × Owner](#waiter--owner) | Wait totals, top blockers, owner handoff. |
+| [Critical Path](#critical-path) | Execution / preemption / mutex / migration / Other; click a component. |
+| [Task Health](#task-health) | Heuristic 0–100 score (not an AI probability). |
+| [Recurring Patterns](#recurring-patterns) | Repeat incidents in one trace; Compare lists patterns shared across traces. |
+| [Trace Compare](#trace-compare) | A vs B including Response P99, mutex, deadline misses, and a deterministic **Why?**. |
 
 <a id="analysis-findings" name="analysis-findings">&#x200B;</a>
 ### Analysis Findings ![](../images/readme/h3.svg)
 
-Toolbar **Analysis** summarises likely issues for the current scope (load imbalance, WCET/CPU hotspots, blocking, priority inversion, core thrashing, deadline breaches, tick health, sync/mutex bounces, and similar). From the dialog: **Investigate…** runs an evidence-driven drill-down (tools + cursors), **Root cause…** follows the deadline→blocking→mutex chain for the top finding, **Verify with AI…** / **Auto investigate…** act on the selected finding, **Query with AI…** walks the findings card, or **Save as Text…** for a copy. The same card appears in **Export HTML**.
+Toolbar **Analysis** summarises likely issues for the current scope (load imbalance, WCET/CPU hotspots, blocking, priority inversion, core thrashing, deadline breaches, tick health, sync/mutex bounces, and similar). From the dialog: **Investigate…** runs an evidence-driven drill-down (tools + cursors), **Root cause…** follows the deadline→blocking→mutex chain for the top finding, **Verify with AI…** / **Auto investigate…** act on the selected finding, **Query with AI…** walks the findings card, **Apply cursors** places C1–C2 on a recommended window for the selected finding, or **Save as Text…** for a copy. The same card appears in **Export HTML**.
 
 **How to act on a finding**
 
 1. Note the severity and the Statistics section it names.
 2. Open that section, sort by Max / Rate / Bounce as relevant.
-3. Click **Min** / **Max**, a chart point, or an inspector cell to jump the timeline.
+3. Click **Min** / **Max** / **p95** / **p99**, a chart point, or an inspector cell to jump the timeline. Or click **Apply cursors** on the selected finding.
 4. Place cursors around the phase of interest and enable **Limit to C1–Cn**.
 5. Optionally click **Investigate…** / **Root cause…** / **Verify with AI…** / **Auto investigate…** / **Query with AI…** (or open the **AI** tab) ([WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow)).
 
@@ -291,14 +312,14 @@ Toolbar **Analysis** summarises likely issues for the current scope (load imbala
 <a id="trace-compare" name="trace-compare">&#x200B;</a>
 ### Trace Compare ![](../images/readme/h3.svg)
 
-With **two or more** tabs open, **Trace Compare…** diffs summary, top tasks, utilisation, migrations, execution, blocking, inter-arrival, preemption, and sync. Optionally limit each side to its own cursor range. Export CSV/HTML from the dialog, **Validate experiment…** to score expected vs actual deltas in the **AI** tab (`validate_experiment`; actual percents come from this compare, including **Scope to cursors**), or **Query with AI…** to walk the same tables (Trace Compare template). See also [Core migration analysis](#core-migration-analysis) below.
+With **two or more** tabs open, toolbar **Compare** (right after **Analysis**) diffs summary, top tasks, utilisation, migrations, execution, blocking, inter-arrival, preemption, sync, **Response P99**, and **mutex blocking**. The summary strip includes those latency/blocking deltas plus **deadline-miss** counts from **Settings → Display** task deadlines, a deterministic **Why?**, and shared recurring patterns. Optionally limit each side to its own cursor range. Export CSV/HTML from the dialog, **Validate experiment…** to score expected vs actual deltas in the **AI** tab (`validate_experiment`; actual percents come from this compare, including **Scope to cursors**), or **Query with AI…** to walk the same tables (Trace Compare template). See also [Core migration analysis](#core-migration-analysis) below.
 
 ---
 
 <a id="ai-assistant" name="ai-assistant">&#x200B;</a>
 ## AI Assistant ![](../images/readme/h2.svg)
 
-The right-panel **AI** tab asks diagnostic questions over **Analysis Findings** (or Trace Compare tables) — never the raw `.btf`. Same panel on **Desktop** and **Web**. Show it with **View → Show AI Assistant** (or Display settings).
+The right-panel **AI** tab asks diagnostic questions over **Analysis Findings** (or Trace Compare tables) — never the raw `.btf`. Same panel on **Desktop** and **Web**. Show it with **View → Show AI Assistant** (or Display settings). Drag the divider between the conversation/templates and the input box to resize the prompt; the height is saved in `btf_viewer.rc` (Desktop) or localStorage (Web). Token, tool, and time usage appear on a status bar under the operational message.
 
 This section is the **user guide** (mental model first, tool list later). Setup, GUI-tool schema, diagrams, Desktop vs Web, CORS, and CLI live in **[AI.md](AI.md)** ([Workflows](AI.md#workflows-and-use-cases)). Ask-order playbooks: [WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow).
 
@@ -319,7 +340,7 @@ AI-assisted evidence-driven investigation
 └── Developer / CLI          → AI.md
 ```
 
-Observe → Hypothesize → Gather evidence → Verify → Experiment → Compare → Learn → Report. Always confirm `jump:TIME` on the timeline.
+Observe → Hypothesize → Gather evidence → Verify → Experiment → Compare → Learn → Report. Diagnose / Investigate / Auto investigate rank causes and list alternatives **before** What-if. Always confirm `jump:TIME` on the timeline.
 
 <a id="ai-in-this-section" name="ai-in-this-section">&#x200B;</a>
 ### In this section ![](../images/readme/h3.svg)
@@ -352,16 +373,20 @@ The assistant ranks issues, gathers evidence, places cursors, and proposes exper
 | **Verify finding** | Confirm or reject a selected Analysis Finding (`finding_id`); also **Verify with AI…** in Findings |
 | **Explain finding** | Quick / technical / deep explanation of the selected finding (`explain_finding`) |
 | **Explain region** | Diagnose the C1–Cn cursor window (timeline menu needs ≥2 cursors; template alone uses full trace if none) |
-| **Auto investigate** | Walk verify → correlate → critical path / PI for a finding; also **Auto investigate…** in Findings |
-| **Task profile** | Behaviour summary for the hottest / most problematic task |
-| **Diagnostic report** | Structured engineering write-up; pair with `export_report` to save |
+| **Auto investigate** | Walk verify → correlate → critical path / graph / temporal → rank → challenge → what-if; also **Auto investigate…** in Findings |
+| **Task profile** | Behaviour summary plus tail stats (p50 / p99 / CV); name Period / Jitter, Task Health, Task × Core; click p95/p99 |
+| **Diagnostic report** | Structured write-up including Timeline Anomalies / Worst Events, Period / Jitter, Task Health, Waiter × Owner; pair with `export_report` |
 | **What-if** | Heuristic slice-replay for a concrete change (pin / priority / contention); labelled — not FreeRTOS kernel |
 | **Optimize** | Ranked `optimize_experiment` candidates plus qualitative mitigations (estimate disclaimer) |
 | **Trace Compare** | Classify A vs B deltas as Regression / Improvement / Neutral with confidence |
-| **Triage findings** | Top three issues to open next in Statistics |
+| **Triage findings** | Top three issues; name Timeline Anomalies, Worst Events, Task Health, Period / Jitter, Task × Core, Waiter × Owner, or the matching table |
 | **Analysis Findings** / ladder | Walk findings, or ask latency / WCET / migrations / balance / tick / priority / deadlines |
 
-Findings may include anomaly rows (WCET Max≫Avg spikes, extreme migration bursts). Agent templates (**Investigate**, **Root cause**, **Verify finding**, **Auto investigate**, **What-if**, **Optimize**, **Diagnostic report**) show an **Investigation plan** checklist (steps advance as tools run; the final reply completes the list).
+**Highest latency** and **Tick health** ask for tail and period/jitter (p50 / p99 / CV), not only the average or a single Max. **Period / Jitter** is task inter-arrival; **Tick health** is the TICK source — do not conflate them. Ranked causes use the same Evidence Quality bands as the panel — not a probability.
+
+The assistant does **not** read firmware source or ELF symbols, and **What-if** is a labelled slice-replay estimate, not a FreeRTOS kernel.
+
+Findings may include anomaly rows (WCET Max≫Avg spikes, extreme migration bursts). Open **Timeline Anomalies** / **Worst Events** in Statistics for the same tails (click a row or p95/p99 to jump). Agent templates (**Investigate**, **Root cause**, **Verify finding**, **Auto investigate**, **What-if**, **Optimize**, **Diagnostic report**) show an **Investigation plan** checklist (steps advance as tools run; the final reply completes the list).
 
 <a id="common-workflows" name="common-workflows">&#x200B;</a>
 ### Common workflows ![](../images/readme/h3.svg)
@@ -371,7 +396,7 @@ Findings may include anomaly rows (WCET Max≫Avg spikes, extreme migration burs
 | 1 | **Triage** | Toolbar **Analysis** → **Triage findings** or **Investigate…** |
 | 2 | **Verify or explain a finding** | Select a row → **Verify with AI…** / **Explain…** (Quick / Technical / Deep) / **Auto investigate…** |
 | 3 | **Explain a time window** | Place ≥2 cursors, **Limit to C1–Cn**, then **Explain this region with AI** or right-click a segment → **Ask AI about this event** |
-| 4 | **Experiment and close the loop** | **What-if** or **Optimize**, change firmware, recapture, **Trace Compare → Validate experiment…** |
+| 4 | **Experiment and close the loop** | After rank + challenge, **What-if** or **Optimize**, change firmware, recapture, **Trace Compare → Validate experiment…** |
 | 5 | **Compare or report** | **Trace Compare → Query with AI…**, or **Diagnostic report** after the cause matches the timeline |
 
 Do not ask for mitigations before the timeline agrees with the finding. Empty or mis-scoped Statistics produce confident nonsense.
@@ -457,7 +482,7 @@ Mode chips start a tool sequence without adding extra templates:
 | Mode | Intent |
 |------|--------|
 | **Quick** | Find the most likely problem |
-| **Diagnose** | Cause → evidence → verify |
+| **Diagnose** | Cause → evidence → rank → challenge |
 | **Compare** | Why A differs from B |
 | **Optimize** | Cause → experiments → rank |
 | **Report** | Turn confirmed findings into a write-up |
@@ -467,7 +492,7 @@ Mode chips start a tool sequence without adding extra templates:
 <a id="ai-tools-reference" name="ai-tools-reference">&#x200B;</a>
 ### Tools reference ![](../images/readme/h3.svg)
 
-When the model proposes GUI actions (cursors, zoom, highlight, annotations), use **Apply** / **Skip** / **Undo**, or enable **Auto-apply GUI actions**. Read-only queries (including `what_if` / `optimize_experiment` and the planner tools `plan_investigation`, `suggest_scope`, `detect_contradictions`, `assess_evidence_sufficiency`) apply immediately.
+When the model proposes GUI actions (cursors, zoom, highlight, annotations), use **Apply** / **Skip** / **Undo**, or enable **Auto-apply GUI actions**. Read-only queries (including `what_if` / `optimize_experiment` and the planner tools `plan_investigation`, `suggest_scope`, `detect_contradictions`, `assess_evidence_sufficiency`, plus causal tools `analyze_temporal_causality`, `verify_claim`, `rank_root_causes`, `challenge_conclusion`) apply immediately.
 
 Full tool schema, parameters, and Apply/Undo rules: **[AI.md → GUI tools](AI.md#gui-tools)**. Symptom → template / tool tables: [AI.md → Use cases](AI.md#use-cases).
 
@@ -594,32 +619,46 @@ Click a name to jump to the write-up. Sequence follows the Statistics panel defa
 | [Highlight a migrating task](#highlight-a-migrating-task-on-the-timeline) | Lock-highlight the task in Task View and read per-core CPU Load |
 | [Inspect a core's corridors](#inspect-migrations-involving-a-specific-core) | From Core Migrations / pair rows into heatmap, chord, and Core Time Breakdown |
 | [Migration & Corridor Inspector](#migration--corridor-inspector) | Heatmap, chord, corridor filter |
-| [Core Affinity](#core-affinity) | Per-task affinity mask history from `affinity_set` STI (`vTaskCoreAffinitySet`) vs. observed execution cores; **Violations** lists cores used while outside the mask then in effect (slices before the first set are unrestricted; mask changes are shown as `0x1 → 0x8`) (collapsible; shown only when those STI events are present) |
+| [Core Affinity](#core-affinity) | Per-task affinity mask history from `affinity_set` STI (`vTaskCoreAffinitySet`) vs. observed execution cores; **Violations** lists cores used while outside the mask then in effect (slices before the first set are unrestricted; mask changes are shown as `0x1 → 0x8`) (collapsible; empty hint when no `affinity_set` events) |
+| [Task × Core](#task--core) | Per-task execution share of the scoped span on each core; click a cell to jump to the first slice on that core (collapsible) |
+| [Core Utilization Over Time](#core-utilization-over-time) | Per-core busy percent in equal time bins of the current scope; click a bin to zoom that window (collapsible) |
 
 **Task lifecycle and deadlines**
 
 | Section | Description |
 |---------|-------------|
-| [Task Lifecycle](#task-lifecycle) | Per-task summary of `create`, `delete`, `suspend`, and `resume` events recorded on the `task` STI channel: created/deleted timestamps, suspend/resume counts, alive span (create→delete), total lifecycle event count, and **Runs** — the number of times the task was actually dispatched onto a core (context-switch-in / segment count). Runs is a scheduler-level metric and is normally much larger than Susp/Res, which only counts explicit `vTaskSuspend()`/`vTaskResume()` API calls — a task can run (and be preempted/resumed by the scheduler) many times without ever being suspended. In `example-8cores.btf.gz`, test 9 creates **SR0–SR3** (pinned across cores) with overlapping suspend-while-blocked and suspend-while-running rounds — use this section to confirm Susp/Res counts match the STI pairs (collapsible; shown only when the trace contains task lifecycle STI events) |
+| [Task Lifecycle](#task-lifecycle) | Per-task summary of `create`, `delete`, `suspend`, and `resume` events recorded on the `task` STI channel: created/deleted timestamps, suspend/resume counts, alive span (create→delete), total lifecycle event count, and **Runs** — the number of times the task was actually dispatched onto a core (context-switch-in / segment count). Runs is a scheduler-level metric and is normally much larger than Susp/Res, which only counts explicit `vTaskSuspend()`/`vTaskResume()` API calls — a task can run (and be preempted/resumed by the scheduler) many times without ever being suspended. In `example-8cores.btf.gz`, test 9 creates **SR0–SR3** (pinned across cores) with overlapping suspend-while-blocked and suspend-while-running rounds — use this section to confirm Susp/Res counts match the STI pairs (collapsible; empty hint when no lifecycle STI events) |
 | [Deadlines / CPU budget](#deadlines--cpu-budget) | Configurable per-task execution deadline (**nanoseconds**, converted to the trace `#timeScale` before compare) and global CPU budget threshold (%); shows **Slice over deadline** (top 20 by duration; click a row to jump + annotate) and **CPU budget exceeded** (click a row to highlight the task); click column headers to sort; click **Settings → Display** in the section to open Analysis thresholds (`Ctrl+,`) — always visible, with a configure prompt when no thresholds are set (collapsible) |
+| [Task Health](#task-health) | Heuristic 0–100 score from execution/blocking/period/migration/deadline/CPU statistics (labelled as a heuristic, not an AI probability); click a band to open that Statistics section (collapsible) |
 
 **Slice timing**
 
 | Section | Description |
 |---------|-------------|
 | [Execution, blocking, and inter-arrival](#execution-blocking-and-inter-arrival) | How the three slice-timing metrics relate on the timeline |
-| [Execution Time Per Slice](#execution-time-per-slice) | Per-task min/avg/max/jitter/σ/p95, run count, and CPU%; click a row for a scatter + histogram popup; click **Min** / **Max** to jump and annotate the BCET / WCET slice |
-| [Blocking Time](#blocking-time) | Off-CPU gap between consecutive activations of the same task (not end-to-end response time); min/avg/max/jitter/σ/p95; click a row for a distribution chart; click **Min** / **Max** to jump and annotate the shortest / longest off-CPU gap (collapsible) |
-| [Dispatch / Scheduling Latency](#dispatch--scheduling-latency) | Ready→run delay using STI `resume Name[id]` (`vTaskResume`) or create→first-run as t<sub>ready</sub>, and the next switch-in as t<sub>resume</sub>; sync-object wakes are not attributed (BTF notes lack the woken task id). Click a row for the distribution plot; click **Min** / **Max** to jump to the extreme dispatch (collapsible) |
-| [Inter-Arrival Time](#inter-arrival-time) | The same variability statistics for gaps between task activation starts; click a row for a distribution chart; click **Min** / **Max** to jump and annotate the shortest / longest inter-arrival gap (collapsible) |
+| [Timeline Anomalies](#timeline-anomalies) | Unusual long execution/blocking/response tails, migration / preemption / ISR / wakeup bursts, CPU spikes, and idle gaps; click a row to zoom, place C1–C2, and open the matching Statistics table |
+| [Worst Events](#worst-events) | Longest execution, blocking, and inter-arrival episodes across tasks; click a row to jump and set cursors on that episode |
+| [Critical Path](#critical-path) | Longest heuristic ready→completion windows split into exec / preempt / wait / migration; click a row to zoom that window (collapsible) |
+| [Recurring Patterns](#recurring-patterns) | Anomaly kinds that repeat for the same task; click a row to jump to the worst instance (collapsible) |
+| [Execution Time Per Slice](#execution-time-per-slice) | Per-task min/avg/max/jitter/σ/p95/p99, run count, and CPU%; click a row for a scatter + histogram popup; click **Min** / **Max** / **p95** / **p99** to jump and annotate that slice |
+| [Blocking Time](#blocking-time) | Off-CPU gap between consecutive activations of the same task (not end-to-end response time); min/avg/max/jitter/σ/p95/p99; click a row for a distribution chart; click **Min** / **Max** / **p95** / **p99** to jump and annotate that gap (collapsible) |
+| [Dispatch / Scheduling Latency](#dispatch--scheduling-latency) | Ready→run delay using STI `resume Name[id]` (`vTaskResume`) or create→first-run as t<sub>ready</sub>, and the next switch-in as t<sub>resume</sub>; sync-object wakes are not attributed (BTF notes lack the woken task id). Click a row for the distribution plot; click **Min** / **Max** to jump to the extreme dispatch; table also shows jitter / σ / p95 / p99 (collapsible) |
+| [Inter-Arrival Time](#inter-arrival-time) | The same variability statistics for gaps between task activation starts; click a row for a distribution chart; click **Min** / **Max** / **p95** / **p99** to jump and annotate that gap (collapsible) |
+| [Period / Jitter](#period--jitter) | Median inter-arrival as expected period, RMS jitter, CV, missed (&gt; 1.5×), extra (&lt; 0.5×), burst (&lt; 0.25×), and a sparkline of gaps over time; click a time to jump, click the task to open the existing Inter-arrival plot (collapsible) |
+| [Response Time](#response-time) | Heuristic ready→completion from the previous slice end to this slice end (first slice = exec duration); not an explicit BTF release/completion pair; click the task to open the existing Response plot; click a time to jump to the worst window (collapsible) |
+| [Unified Jitter](#unified-jitter) | Max−Min spread and CV for execution, blocking, inter-arrival, heuristic response, STI dispatch latency, and wake-to-run (response wait stand-in); click a column to open the matching plot (collapsible) |
+| [Distribution Explorer](#distribution-explorer) | Pick a metric and task, then open the existing histogram/CDF plot (collapsible) |
 
 **Preemption, sync, and instrumentation**
 
 | Section | Description |
 |---------|-------------|
 | [Preemption Chain Analysis](#preemption-chain-analysis) | For each victim/preemptor pair: count, total/average/max preemption overlap; click a row for a distribution chart; click a scatter point to jump and add an annotation at the preemptor segment (collapsible) |
+| [Preemption Matrix](#preemption-matrix) | Victim × preemptor overlap during off-CPU gaps on the same core, plus preemptor ranking and an A → B → resumed story; click a cell or ranking row to jump to the longest overlap (collapsible) |
 | [Priority Inheritance](#priority-inheritance) | Per-task base/peak priority, boost episodes, boosted time, and pattern (mutex inherit / L/M/H / boost only); click a row for a duration plot; click a scatter point to zoom, highlight, and annotate the episode (collapsible; shown only when the trace contains priority-inheritance STI events) |
 | [Mutex / Semaphore pairing](#mutex--semaphore-pairing) | Per-object hold count, issue count, **core bounce count**, average hold, and status; **Pairing issues** sub-table lists orphan gives, cross-task gives, unmatched takes, teardown warnings, and **`CORE_MIGRATION_WHILE_HELD`** warnings (lock that crossed core boundaries while held); click an issue row to zoom, jump, and annotate (collapsible; shown only when the trace contains sync-object STI events) |
+| [Waiter × Owner](#waiter--owner) | Heuristic mutex handoff matrix (next distinct acquirer × previous holder); click a cell to zoom the longest handoff. Not a kernel wait queue (collapsible) |
+| [Mutex Blocking](#mutex-blocking) | Per-task mutex wait totals from those heuristic handoffs, plus a cross-type top-blockers ranking (mutex / preempt / idle); click a row to jump to the longest wait (collapsible) |
 | [Queue](#queue) | Per-queue `send`/`recv` pairing by object pointer: hold count, issue count, average hold, and status (collapsible; shown only when the trace contains `queue` STI events) |
 | [Interval Analysis](#interval-analysis) | Per interval id: count, min/avg/max/p95 duration of paired start→stop spans; pairing uses `tid` in the note when present; click a row for a duration plot; click a scatter point to jump and add an annotation at the interval start (collapsible) |
 | [Tag Analysis](#tag-analysis) | Per `tag0_event`…`tag7_event` STI channel: sample count, min/avg/max/p95 of the tag value; click a row to open a scatter + histogram plot (collapsible; shown only when the trace contains tag STI samples) |
@@ -652,9 +691,9 @@ At the top, **Limit to C1–Cn** restricts all statistics (and Analysis Findings
 | **⠿** grip | Drag onto another section to reorder (destination shows a dashed highlight) |
 | Pin (thumbtack) | Keep the section expanded; survives **Collapse all** and heavy-trace deferral |
 
-Pins, section order, and table heights persist across launches. Drag the splitter between the timeline and CPU load to resize that pane.
+Pins, section order, expand/collapse, and table heights persist across launches (desktop ``btf_viewer.rc``, web Settings localStorage). **Settings → Reset to Defaults** then **OK** restores those to built-in values and clears them from ``.rc`` / localStorage. Drag the splitter between the timeline and CPU load to resize that pane.
 
-**Export CSV** / **Export HTML** respect the current cursor scope. **Export CSV** includes summary tables for every statistics section (including **Deadlines / CPU budget** when thresholds are configured), a **Core Affinity Violations** sub-table listing every mutex that crossed core boundaries, plus **Load Balance Score**, σ, and Gini coefficient under Core Utilisation. **Export HTML** adds the same summaries plus an **Analysis Findings** card near the top (same heuristics as toolbar **Analysis** — load imbalance, WCET/CPU hotspots, blocking, L/M/H priority inversion, core thrashing / hot pairs, deadline breaches, tick health, sync/mutex bounces), embeds the **Load Balance Score** gauge as a self-contained SVG `<img>` (data URI) under Core Utilisation, and detail sub-tables for **Priority Inheritance** (boost episodes), **Mutex / Semaphore** (pairing issues with bounce warnings, and hold episodes with take/give core columns), and **Interval Analysis** (individual instances). **Trace Compare…** diffs Summary (incl. load balance + tick health), Top Tasks, Core Util, Migrations, Execution, Blocking, Inter-Arrival, Preemption, and Sync between two open tabs; enable **Limit to each tab's cursor range** to scope each side to its own C1–Cn window. Open metrics charts update live when cursors move or scope is toggled; each trace tab remembers its own open chart when you switch tabs.
+**Export CSV** / **Export HTML** respect the current cursor scope. **Export CSV** includes summary tables for every statistics section (including **Task × Core**, **Core Utilization Over Time**, **Task Health**, **Timeline Anomalies**, **Worst Events**, **Critical Path**, **Recurring Patterns**, **Response Time**, **Period / Jitter**, **Unified Jitter**, **Preemption Matrix**, **Waiter × Owner**, **Mutex Blocking**, and **Deadlines / CPU budget** when thresholds are configured), a **Core Affinity Violations** sub-table listing every mutex that crossed core boundaries, plus **Load Balance Score**, σ, and Gini coefficient under Core Utilisation. **Export HTML** adds the same summaries plus an **Analysis Findings** card near the top (same heuristics as toolbar **Analysis** — load imbalance, WCET/CPU hotspots, blocking, L/M/H priority inversion, core thrashing / hot pairs, deadline breaches, tick health, sync/mutex bounces), embeds the **Load Balance Score** gauge as a self-contained SVG `<img>` (data URI) under Core Utilisation, and detail sub-tables for **Priority Inheritance** (boost episodes), **Mutex / Semaphore** (pairing issues with bounce warnings, and hold episodes with take/give core columns), and **Interval Analysis** (individual instances). **Trace Compare…** diffs Summary (incl. load balance + tick health), Top Tasks, Core Util, Migrations, Execution, Blocking, Inter-Arrival, Preemption, and Sync between two open tabs; a summary strip under the scope checkbox shows overall deltas and the largest regressions. Enable **Limit to each tab's cursor range** to scope each side to its own C1–Cn window. Open metrics charts update live when cursors move or scope is toggled; each trace tab remembers its own open chart when you switch tabs.
 
 Full column definitions, chart axis meanings, and example plots: [Statistics metric tables](#statistics-metric-tables).
 
@@ -667,11 +706,11 @@ The Statistics panel (Desktop **Statistics** tab + Web **Statistics** tab) organ
 
 1. Open a trace (e.g. `tracedata/example-4cores.btf.gz` for a 4-core SMP workload, or `tracedata/example-2cores.btf.gz` for a smaller 2-core demo).
 2. Optionally click toolbar **Analysis** for a severity-tagged triage of the current scope.
-3. Expand the sections you care about (or use the **+** / **−** icons at the top to expand/collapse all). Pin frequently used sections so they stay open.
+3. **Core utilisation** and **Trace Health** start expanded; other sections start collapsed. Expand what you need (or use **+** / **−** at the top). Pin frequently used sections so they stay open.
 4. Optionally drag **⠿** grips to reorder sections for your workflow; use the reset-order icon when you want the built-in sequence back.
 5. Optionally place **2+ cursors** and enable **Limit to C1–Cn** to restrict every metric (and Analysis Findings) to a time window.
-6. Click a **table row** to open a distribution chart (where supported), click **Min** / **Max** to jump and add an annotation at an extreme slice on the timeline, click a **Mutex / Semaphore** issue row to zoom, jump, and annotate at that STI event, or in **Deadlines / CPU budget** click a slice row to annotate / a CPU-budget row to highlight the task (or use the **Settings → Display** link to edit thresholds).
-7. Use **Trace Compare…** when two traces are open to diff summary and migration stats.
+6. Click a **table row** to open a distribution chart (where supported), click **Min** / **Max** / **p95** / **p99** to jump and add an annotation at that slice or gap, click a **Timeline Anomalies** / **Worst Events** row to zoom and place C1–C2, click a **Mutex / Semaphore** issue row to zoom, jump, and annotate at that STI event, or in **Deadlines / CPU budget** click a slice row to annotate / a CPU-budget row to highlight the task (or use the **Settings → Display** link to edit thresholds).
+7. Use toolbar **Compare** when two traces are open to diff summary and migration stats.
 
 Example plots below use **`tracedata/example-8cores.btf.gz`**. Worked diagnosis steps for that sample: [WORKFLOWS.md §3](WORKFLOWS.md#3-worked-example--example-8cores).
 
@@ -842,7 +881,19 @@ Migration tables, highlight / inspect steps, the corridor inspector, and **Trace
 
 Per-task affinity mask history from `affinity_set` STI (`vTaskCoreAffinitySet`) vs. observed execution cores. **Violations** lists cores used while outside the mask then in effect (slices before the first set are unrestricted; mask changes are shown as `0x1 → 0x8`).
 
-Shown only when those STI events are present.
+Always visible. Empty hint when the trace has no `affinity_set` events.
+
+<a id="task--core" name="task--core">&#x200B;</a>
+#### Task × Core ![](../images/readme/h4.svg)
+
+Per-task execution time on each core as a percent of the scoped span. Complements Core Time Breakdown (which is per-core totals) and Core Affinity (which is mask vs observed cores). Click a cell to jump to the first on-CPU slice of that task on that core.
+
+<a id="core-utilization-over-time" name="core-utilization-over-time">&#x200B;</a>
+#### Core Utilization Over Time ![](../images/readme/h4.svg)
+
+Equal time bins of the current Statistics scope, with each core's busy percent in that bin. Complements Core Time Breakdown (span totals) and Task × Core (per-task share). Click a bin to zoom that window.
+
+![Core utilization over time bins in example-8cores.btf.gz](../images/stats/stats-core-time.svg)
 
 <a id="task-lifecycle" name="task-lifecycle">&#x200B;</a>
 #### Task Lifecycle ![](../images/readme/h4.svg)
@@ -851,12 +902,17 @@ Per-task summary of `create`, `delete`, `suspend`, and `resume` events recorded 
 
 In `example-8cores.btf.gz`, test 9 creates **SR0–SR3** (pinned across cores) with overlapping suspend-while-blocked and suspend-while-running rounds — use this section to confirm Susp/Res counts match the STI pairs.
 
-Shown only when the trace contains task lifecycle STI events.
+Always visible. Empty hint when the trace has no task create/delete/suspend/resume STI events.
 
 <a id="deadlines--cpu-budget" name="deadlines--cpu-budget">&#x200B;</a>
 #### Deadlines / CPU budget ![](../images/readme/h4.svg)
 
 Configurable per-task execution deadline (**nanoseconds**, converted to the trace `#timeScale` before compare) and global CPU budget threshold (%). Shows **Slice over deadline** (top 20 by duration; click a row to jump + annotate) and **CPU budget exceeded** (click a row to highlight the task). Click column headers to sort. Click **Settings → Display** in the section to open Analysis thresholds (`Ctrl+,`). Always visible, with a configure prompt when no thresholds are set.
+
+<a id="task-health" name="task-health">&#x200B;</a>
+#### Task Health ![](../images/readme/h4.svg)
+
+A **heuristic** 0–100 score from measured statistics (execution spread, blocking tail, period CV / missed activations, migration ratio, deadline misses, CPU share). Status marks are ✓ / ⚠ / ❌. This is not an AI probability. Click a band to open the matching Statistics section.
 
 <a id="execution-blocking-and-inter-arrival" name="execution-blocking-and-inter-arrival">&#x200B;</a>
 ### Execution, blocking, and inter-arrival ![](../images/readme/h3.svg)
@@ -872,6 +928,30 @@ These three task metrics are measured from consecutive on-CPU slices of the same
 | **Inter-Arrival Time** | Start of one slice → start of the next (period between activations) |
 
 Inter-arrival ≈ execution + blocking for the same pair of activations (when the gap is positive).
+
+<a id="timeline-anomalies" name="timeline-anomalies">&#x200B;</a>
+#### Timeline Anomalies ![](../images/readme/h4.svg)
+
+Scans the current Statistics scope for unusually long execution, blocking, or heuristic response tails (mean+3σ or ≥ p99), tight migration / preemption / ISR / wakeup bursts, CPU utilization spikes, idle gaps, mutex-wait spikes, and configured deadline misses. Click a row to zoom, place C1–C2, highlight the task, and scroll to the matching table. **Investigate…** opens the AI tab on the selected (or top) anomaly.
+
+<a id="worst-events" name="worst-events">&#x200B;</a>
+#### Worst Events ![](../images/readme/h4.svg)
+
+One list of the longest execution, blocking, inter-arrival, and heuristic response episodes across tasks. Click a row to jump and set cursors on that episode.
+
+<a id="critical-path" name="critical-path">&#x200B;</a>
+#### Critical Path ![](../images/readme/h4.svg)
+
+Takes the longest heuristic ready→completion windows and splits each into overlapping exec / preempt / wait / migration / other. This is **not** a kernel release/completion pair. Click a component to jump to that episode.
+
+![Critical Path table for example-8cores.btf.gz](../images/stats/stats-crit-path.svg)
+
+<a id="recurring-patterns" name="recurring-patterns">&#x200B;</a>
+#### Recurring Patterns ![](../images/readme/h4.svg)
+
+Groups Timeline Anomalies by task and kind and keeps kinds that repeat. Click a row to jump to the worst instance.
+
+![Recurring Patterns table for example-8cores.btf.gz](../images/stats/stats-patterns.svg)
 
 <a id="execution-time-per-slice" name="execution-time-per-slice">&#x200B;</a>
 #### Execution Time Per Slice ![](../images/readme/h4.svg)
@@ -912,7 +992,7 @@ In `example-8cores.btf.gz`, task **CS[11]** has 730 slices with a long tail of l
 
 ![Execution time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-exec-cs11.svg)
 
-The scatter shows periodic bursts of short slices; the histogram uses a **log-scaled duration axis** so short and long slices are both visible. The **CDF** rises steeply on the left (most slices are short) then levels toward 100% as longer runs are included; **p50** and **p95** vertical markers align with the 50% and 95% ticks on the right axis.
+The scatter shows periodic bursts of short slices; the histogram uses a **log-scaled duration axis** so short and long slices are both visible. The **CDF** rises steeply on the left (most slices are short) then levels toward 100% as longer runs are included; **p5**, **p50**, and **p95** vertical markers align with the 5%, 50%, and 95% ticks on the right axis.
 
 <a id="blocking-time" name="blocking-time">&#x200B;</a>
 #### Blocking Time ![](../images/readme/h4.svg)
@@ -966,7 +1046,7 @@ Sync-object wakes (`give`/`send`) are **not** attributed yet — BTF notes carry
 |--------|---------|
 | **Task** | Display name (`Name[id]`) |
 | **Activations** | Number of dispatch samples in scope |
-| **Min / Avg / Max / p95** | Dispatch latency duration statistics |
+| **Min / Avg / Max / p95 / p99** | Dispatch latency duration statistics |
 | **Jitter / σ** | Observed range (`Max − Min`) and population standard deviation |
 | **Min / Max** links | Jump and annotate the fastest / slowest dispatch |
 
@@ -1016,6 +1096,34 @@ Min / Avg / Max / p95 are taken over all inter-arrival samples Δ*t*<sub>k</sub>
 
 Compare with Blocking Time: inter-arrival includes time the task was **running**, so values are typically larger than off-CPU gaps alone. The histogram auto-selects **log duration** for CS[11] because activation gaps span microseconds to milliseconds.
 
+<a id="period--jitter" name="period--jitter">&#x200B;</a>
+#### Period / Jitter ![](../images/readme/h4.svg)
+
+Uses the same inter-arrival gaps as the Inter-Arrival table. **Expected** is the median gap. **Missed** counts gaps &gt; 1.5× expected; **extra** counts gaps &lt; 0.5× expected; **burst** counts gaps &lt; 0.25× expected. **RMS** is jitter versus that expected period. **Spark** is the chronological gap series. Click a time column to jump to that gap; click the task name to open the existing Inter-arrival distribution plot (this page does not add a second histogram).
+
+<a id="response-time" name="response-time">&#x200B;</a>
+#### Response Time ![](../images/readme/h4.svg)
+
+Heuristic ready→completion: previous slice end → this slice end (the first slice uses its own exec duration). BTF does not record an explicit release/completion pair, so this is **not** kernel response time. Percentiles include p50 / p90 / p95 / p99 / p99.9. Click the task to open the existing Response plot; click **Min** / **Max** / **p50** / **p90** / **p95** / **p99** / **p99.9** to jump to that event.
+
+**CS[11]** in `example-8cores.btf.gz`:
+
+![Response time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-response-cs11.svg)
+
+![Response Time table for example-8cores.btf.gz](../images/stats/stats-response.svg)
+
+<a id="unified-jitter" name="unified-jitter">&#x200B;</a>
+#### Unified Jitter ![](../images/readme/h4.svg)
+
+Max−Min spread and CV for execution, blocking, inter-arrival, heuristic response, STI **dispatch** latency (resume/create → switch-in), and **wake** (heuristic response wait — the stand-in when BTF does not name the woken task). Click a column to open the matching plot. This page does not add a second histogram.
+
+![Unified Jitter table for example-8cores.btf.gz](../images/stats/stats-jitter.svg)
+
+<a id="distribution-explorer" name="distribution-explorer">&#x200B;</a>
+#### Distribution Explorer ![](../images/readme/h4.svg)
+
+Choose a metric (execution, blocking, inter-arrival, response, dispatch, wake, preemption) and a task. The section shows n / p50 / p99 / CV, a sparkline, and the **histogram/CDF at the bottom** of the section (same adaptive scale as other metric plots). **Open histogram** still opens the full scatter + histogram window. Wake is heuristic response wait, not a kernel wakeup event.
+
 <a id="preemption-chain-analysis" name="preemption-chain-analysis">&#x200B;</a>
 #### Preemption Chain Analysis ![](../images/readme/h4.svg)
 
@@ -1050,6 +1158,13 @@ For each **victim** task's off-CPU gap, the analyser finds which **preemptor** t
 ![Preemption chain distribution CS[24] preempted by CS[25] in example-8cores.btf.gz](../images/stats/stats-preempt-cs24-cs25.svg)
 
 High **Count** with moderate **Avg** overlap suggests frequent short preemptions; a few points with large **y** values are long stretches where CS[25] ran while CS[24] waited. Use this table to answer *who preempted whom* and whether a victim's blocking is dominated by one preemptor or many.
+
+<a id="preemption-matrix" name="preemption-matrix">&#x200B;</a>
+#### Preemption Matrix ![](../images/readme/h4.svg)
+
+Same-core victim × preemptor overlap plus a ranking of who preempts each victim most, including an A → B → resumed story. Complements Preemption Chain Analysis (pair totals with a plot). Click a ranking row or matrix cell to jump to the longest overlap.
+
+![Preemption Matrix ranking for example-8cores.btf.gz](../images/stats/stats-preempt-matrix.svg)
 
 <a id="priority-inheritance" name="priority-inheritance">&#x200B;</a>
 #### Priority Inheritance ![](../images/readme/h4.svg)
@@ -1216,6 +1331,18 @@ Below the summary table, a **Pairing issues** sub-table lists every problem in s
 **Export CSV** includes a **Core Affinity Violations** sub-section listing each mutex that had at least one bounced hold, with the bounce count and a description.
 
 `example-4cores.btf.gz` (tests 1–3) exercises `0x80018700` (mutex) and `0x80018650` (counting sem) with clean hold pairing. The full trace shows `CORE_MIGRATION_WHILE_HELD` warnings on `0x80018700` (3 bounces) and `0x80018650` (1 bounce) — the Statistics **Mutex / Semaphore** summary table will show **Warning** for these mutexes and non-zero values in the **Bounces** column. Coordination sems pair in **signal** direction.
+
+<a id="waiter--owner" name="waiter--owner">&#x200B;</a>
+#### Waiter × Owner ![](../images/readme/h4.svg)
+
+Heuristic matrix from consecutive mutex holds on the same object: the next distinct acquirer is treated as the waiter, and the previous holder as the owner. Cell values are the summed hold time of those handoffs. This is **not** a kernel wait-queue reconstruction — BTF records successful take/give, not blocked attempts. Click a cell to zoom the longest handoff.
+
+<a id="mutex-blocking" name="mutex-blocking">&#x200B;</a>
+#### Mutex Blocking ![](../images/readme/h4.svg)
+
+Per-task totals of those heuristic mutex waits (object, last owner, count, total, max), plus a **Top blocking contributors** ranking across mutex waits, preemption overlap, and leftover idle gaps. Click a row to jump to the longest wait.
+
+![Mutex Blocking table for example-8cores.btf.gz](../images/stats/stats-mutex-block.svg)
 
 <a id="queue" name="queue">&#x200B;</a>
 #### Queue ![](../images/readme/h4.svg)
@@ -1637,10 +1764,10 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 Compare two traces you already have open side-by-side:
 
 1. Open at least **two** `.btf` files (Desktop: **File → Open** adds a tab; Web: **Open** adds a tab in the bar under the toolbar).
-2. In the **Statistics** panel footer, click **Trace Compare…** (enabled when two or more tabs are loaded).
+2. Click toolbar **Compare** (right after **Analysis**; enabled when two or more tabs are loaded).
 3. Choose **Trace A** and **Trace B** from the dropdowns.
 4. Optionally check **Limit to each tab's cursor range** to compare metrics within C1–Cn on each trace (requires 2+ cursors per tab).
-5. Switch between **Summary**, **Top Tasks**, **Core Util**, **Core Migrations**, **Execution**, **Blocking**, **Inter-Arrival**, **Preemption**, and **Sync** tabs.
+5. Switch between **Summary**, **Top Tasks**, **Core Util**, **Core Migrations**, **Execution**, **Blocking**, **Inter-Arrival**, **Preemption**, **Sync**, **Response**, and **Mutex** tabs.
 6. Optionally click **Validate experiment…** to score expected vs actual deltas in the **AI** tab (host fills actual percents from this compare, including **Scope to cursors**), or **Query with AI…** to send the current Trace A / B tables (opens **Settings → AI** if the assistant is disabled).
 
 By default, compare views use the **full trace**. With the cursor-range checkbox enabled, each side uses that tab's own cursor window independently.
@@ -1682,6 +1809,8 @@ Each row shows Trace A, Trace B, and **Δ** (signed difference).
 
 **Preemption** / **Sync** — victim totals and sync-object aggregates (holds, issues, lock-bounce / affinity violations, mutex/sem/queue counts).
 
+**Response** — per-task heuristic response P99 (ready→completion from adjacent slices) with A / B / Δ. **Mutex** — per-task mutex-wait totals. **Deadline misses** on Summary use the same **Settings → Display** task-deadline map as Statistics (0 when none are configured).
+
 Use this to compare builds, configurations, or runs of the same workload without merging traces manually.
 
 <a id="use-case-tickful-vs-tickless-performance-and-context-switches" name="use-case-tickful-vs-tickless-performance-and-context-switches">&#x200B;</a>
@@ -1713,7 +1842,7 @@ Keep STI **TICK** enabled on both builds and use the same suite / duration so Δ
 
 1. Open the pair: `python builds/btf_viewer.py ../tracedata/tickless-8cores.zip` (two tabs), or open the two `.btf` files separately.
 2. Optionally place matching cursor windows on the same busy (or idle) phase in each tab and enable **Limit to each tab's cursor range**.
-3. Statistics footer → **Trace Compare…** → set Trace A / B labels (e.g. Tickful / Tickless).
+3. Toolbar **Compare** → set Trace A / B labels (e.g. Tickful / Tickless).
 
 **What to read for performance and context switches**
 
@@ -1786,8 +1915,9 @@ In the **Statistics** panel, click any row in **Concurrent Core Active**, **Kern
   - **Adaptive bin count** (Freedman–Diaconis, 12–80 bins) instead of a fixed 50-bin linear split.
   - **Overflow buckets** in p5–p95 mode — separate dimmed bars for values below p5 and above p95, with counts in the caption.
   - **Log-scaled counts** when one bin dominates (tall spike vs many small bars).
+  - **Hover a bar** to see the bin range (or `< p5` / `> p95`) and how many samples fall in that bucket.
   - **CDF overlay** — cumulative distribution curve on the histogram (see [CDF overlay](#cdf-overlay) below).
-  - Dashed reference lines for **avg**, **p50**, and **p95**; caption shows the active scale and full min–max range.
+  - Dashed reference lines for **avg**, **p5**, **p50**, and **p95**; caption shows the active scale and full min–max range.
 - **Export PNG / SVG** — buttons in the chart footer save the current scatter + histogram.
 
 The popup can be dragged, resized, and closed independently of the main window.
@@ -1829,6 +1959,7 @@ The dashed vertical markers on the histogram are single-number summaries; the CD
 
 | Marker / table column | On the CDF |
 |-----------------------|------------|
+| **p5** (cyan) | Curve crosses **5%** on the right axis — 5% of samples are shorter than this duration. |
 | **p50** (green) | Curve crosses **50%** on the right axis at the median duration. |
 | **p95** (orange) | Curve crosses **95%** — 95% of samples are shorter than this duration. |
 | **avg** (purple) | Shown as a vertical line; the CDF does **not** pass through a fixed “avg %” because the mean is not a percentile. |
@@ -1855,12 +1986,12 @@ The caption above the histogram (e.g. `log-scaled duration axis · full range 17
 
 - **Deadline / budget checks** — estimate what % of activations meet a time limit without reading individual scatter points.
 - **Compare spread** — two tasks with similar **p50** can have very different CDF shapes (tight cluster vs long tail).
-- **Skewed data** — after switching away from a crowded linear histogram, use the CDF with **p50** / **p95** lines to see how much of the population sits below each marker.
+- **Skewed data** — after switching away from a crowded linear histogram, use the CDF with **p5** / **p50** / **p95** lines to see how much of the population sits below each marker.
 - **Cursor-scoped analysis** — with **Limit to C1–Cn** enabled, the CDF recalculates for only the slices inside that window, same as the table and scatter plot.
 
 The CDF is included in **Export PNG / SVG** from the plot dialog. It is not interactive (no click-to-jump); use the **scatter plot** above the histogram to jump to individual events.
 
-**Jump links:** in Execution Time, Blocking Time, **Dispatch / Scheduling Latency**, and Inter-Arrival tables, click **Min** or **Max** (dotted underline) to jump to the slice at the shortest or longest value and add an **annotation** with a descriptive note. Click any **distribution-chart** point to jump to that event and add an annotation without switching right-panel tabs (segment start for task metrics; tick timestamp for **Tick Distribution**; switch/concurrency timestamp for those plots; zoom + highlight for **Priority Inheritance** episodes; interval start for **Interval Analysis**). In Preemption Chain, the annotation is placed at the **preemptor segment** start. In **Mutex / Semaphore**, click any **Pairing issues** row to zoom to the running task segment on that core, jump to the issue time, and add an annotation.
+**Jump links:** in Execution Time, Blocking Time, and Inter-Arrival tables, click **Min** / **Max** / **p95** / **p99** (dotted underline) to jump to that slice or gap and add an **annotation**. In **Dispatch / Scheduling Latency**, click **Min** or **Max**. Click any **distribution-chart** point to jump to that event and add an annotation without switching right-panel tabs (segment start for task metrics; tick timestamp for **Tick Distribution**; switch/concurrency timestamp for those plots; zoom + highlight for **Priority Inheritance** episodes; interval start for **Interval Analysis**). In Preemption Chain, the annotation is placed at the **preemptor segment** start. In **Mutex / Semaphore**, click any **Pairing issues** row to zoom to the running task segment on that core, jump to the issue time, and add an annotation. **Timeline Anomalies** / **Worst Events** rows zoom and place C1–C2 on that episode.
 
 Example plots from `tracedata/example-4cores.btf.gz` (4-core SMP trace, 67 tasks) are in [Statistics metric tables](#statistics-metric-tables).
 

@@ -82,17 +82,18 @@
         :x="segmentHoverPos.x"
         :y="segmentHoverPos.y"
       />
-      <!-- Right-click context menu -->
-      <div
-        v-if="contextMenu.visible"
-        class="context-menu"
-        :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
-        @mousedown.stop
-        @mouseup.stop
-        @click.stop
-        @contextmenu.prevent.stop
-        @mouseleave="contextMenu.visible = false"
-      >
+      <!-- Right-click context menu (body: above CPU-load pane) -->
+      <Teleport to="body">
+        <div
+          v-if="contextMenu.visible"
+          class="context-menu"
+          :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+          @mousedown.stop
+          @mouseup.stop
+          @click.stop
+          @contextmenu.prevent.stop
+          @mouseleave="contextMenu.visible = false"
+        >
         <template v-if="contextMenu.segment">
           <div
             class="ctx-item"
@@ -114,6 +115,10 @@
           </div>
           <div
             class="ctx-item"
+            :class="{ disabled: !aiFeatureEnabled }"
+            :title="aiFeatureEnabled
+              ? ''
+              : 'Enable AI Assistant in Settings → AI'"
             @click="onCtxAskAiEvent"
           >
             Ask AI about this event
@@ -143,6 +148,10 @@
         <div
           v-if="hasTwoCursors"
           class="ctx-item"
+          :class="{ disabled: !aiFeatureEnabled }"
+          :title="aiFeatureEnabled
+            ? ''
+            : 'Enable AI Assistant in Settings → AI'"
           @click="onCtxExplainRegion"
         >
           Explain this region with AI
@@ -195,6 +204,17 @@
             Clear all annotations
           </div>
         </template>
+        <div class="ctx-sep" />
+        <div
+          class="ctx-item"
+          :class="{ disabled: !hasMarks }"
+          :title="hasMarks
+            ? 'Clear all cursors, bookmarks, and annotations'
+            : 'No cursors, bookmarks, or annotations to clear'"
+          @click="onCtxClearAllMarks"
+        >
+          Clear all marks
+        </div>
         <div
           class="ctx-item"
           @click="onCopyCursorTime"
@@ -225,7 +245,8 @@
           </svg>
           Copy Screenshot
         </div>
-      </div>
+        </div>
+      </Teleport>
 
       <!-- Horizontal scrollbar (time axis in H-mode / column scroll in V-mode) -->
       <div
@@ -322,13 +343,16 @@ const props = defineProps({
   useWebGL: { type: Boolean, default: null },
   /** Decimal-digit precision for times shown in the segment-hover tooltip. */
   timeDecimals: { type: Number, default: 3 },
+  aiEnabled: { type: Boolean, default: true },
 })
 const emit = defineEmits([
   'viewportChange', 'cursorsChange', 'hoverTimeChange', 'highlightChange', 'highlightClick',
   'segmentClick', 'clearSelection', 'addBookmark', 'addAnnotation', 'markMove', 'copyScreenshot',
   'beforeCursorChange', 'beforeMarkChange', 'labelWidthChange', 'explainRegion', 'askAiEvent',
-  'clearBookmarks', 'clearAnnotations',
+  'clearBookmarks', 'clearAnnotations', 'clearAllMarks',
 ])
+
+const aiFeatureEnabled = computed(() => props.aiEnabled !== false)
 
 // ---- Template refs -------------------------------------------------------
 const panelEl     = ref(null)
@@ -504,6 +528,8 @@ const hasBookmarks = computed(() =>
   (props.options.marks || []).some(m => m && m.type !== 'annotation'))
 const hasAnnotations = computed(() =>
   (props.options.marks || []).some(m => m && m.type === 'annotation'))
+const hasMarks = computed(() =>
+  hasPlacedCursors.value || hasBookmarks.value || hasAnnotations.value)
 const ctxTimeLabel = computed(() => {
   if (!props.trace || contextMenu.ns == null) return ''
   return formatTime(contextMenu.ns, props.trace.timeScale, props.timeDecimals)
@@ -966,14 +992,28 @@ function setupHandler() {
         _handler?.clearAllCursors()
         return
       }
-      const rect = canvasWrapEl.value?.getBoundingClientRect()
-      if (!rect) return
       contextMenu.ns      = ns
-      contextMenu.x       = x - rect.left
-      contextMenu.y       = y - rect.top
+      contextMenu.x       = x
+      contextMenu.y       = y
       contextMenu.shiftKey = !!shiftKey
       contextMenu.segment = segment ?? null
       contextMenu.visible = true
+      nextTick(() => {
+        const el = document.querySelector('.context-menu')
+        if (!el) return
+        const r = el.getBoundingClientRect()
+        const pad = 8
+        let nx = x
+        let ny = y
+        if (nx + r.width > window.innerWidth - pad) {
+          nx = Math.max(pad, window.innerWidth - pad - r.width)
+        }
+        if (ny + r.height > window.innerHeight - pad) {
+          ny = Math.max(pad, window.innerHeight - pad - r.height)
+        }
+        contextMenu.x = nx
+        contextMenu.y = ny
+      })
     },
     onRangeSelectChange({ t0, t1 }) {
       rangeSelect.value = { t0, t1 }
@@ -1015,6 +1055,7 @@ function onCtxClearCursors() {
 }
 
 function onCtxExplainRegion() {
+  if (!aiFeatureEnabled.value) return
   contextMenu.visible = false
   emit('explainRegion')
 }
@@ -1037,6 +1078,12 @@ function onCtxClearBookmarks() {
 function onCtxClearAnnotations() {
   contextMenu.visible = false
   emit('clearAnnotations')
+}
+
+function onCtxClearAllMarks() {
+  if (!hasMarks.value) return
+  contextMenu.visible = false
+  emit('clearAllMarks')
 }
 
 function onCopyCursorTime() {
@@ -1066,6 +1113,7 @@ function onCtxSelectInLegend() {
 }
 
 function onCtxAskAiEvent() {
+  if (!aiFeatureEnabled.value) return
   contextMenu.visible = false
   const seg = contextMenu.segment
   if (!seg) return
@@ -3037,8 +3085,8 @@ canvas {
 }
 
 .context-menu {
-  position: absolute;
-  z-index: 100;
+  position: fixed;
+  z-index: 10100;
   background: var(--panel-bg);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -3161,5 +3209,15 @@ canvas {
 }
 .ctx-item:hover {
   background: var(--tb-btn-hover);
+}
+
+.ctx-item.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  color: var(--fg-dim);
+}
+
+.ctx-item.disabled:hover {
+  background: transparent;
 }
 </style>

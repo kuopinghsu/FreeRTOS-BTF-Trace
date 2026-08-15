@@ -32,6 +32,7 @@ from .ai_tools import (
     AI_TOOL_SYSTEM_ADDENDUM,
     ai_viewer_tools,
     btf_jump_href,
+    btf_range_href,
     build_ai_report_csv,
     build_ai_report_html,
     canonical_assistant_tool_message,
@@ -50,6 +51,7 @@ from .ai_tools import (
     parse_ai_mcp_log,
     parse_btf_highlight_href,
     parse_btf_jump_href,
+    parse_btf_range_href,
     parse_tool_calls_from_text,
     strip_parsed_tool_markup,
     summarise_tool_call,
@@ -86,6 +88,7 @@ from .ai_case import (
     apply_experiment_to_hypotheses,
     CAPABILITY_CHAT_PROBE,
     classify_trace_privacy,
+    clamp_ai_split_bottom,
     compare_hypotheses,
     dump_user_historical_knowledge,
     dump_user_investigation_templates,
@@ -93,9 +96,9 @@ from .ai_case import (
     format_capability_report,
     format_confidence_evolution,
     format_cost_meter,
+    format_cost_status,
     format_privacy_chip,
     historical_knowledge_for_finding,
-    status_with_cost,
     capability_probe_body,
     infer_model_capability,
     interpret_investigation_query,
@@ -276,6 +279,16 @@ AI_SYSTEM_PROMPT = (
     "and answer the user's diagnostic question clearly. Focus on root causes "
     "(preemption, priority inversion, lock contention, core thrashing, switch "
     "overhead, tick health). Prefer concrete task names, cores, and durations. "
+    "When recommending a next UI check, name the Statistics page "
+    "(Timeline Anomalies, Worst Events, Response Time, Critical Path, "
+    "Period / Jitter, Unified Jitter, Recurring Patterns, Task Health, "
+    "Task × Core, Core Utilization Over Time, Preemption Matrix, "
+    "Waiter × Owner, Mutex Blocking, or the matching metric table) and that "
+    "p95/p99 cells are clickable. Explain distributions with p50 / p99 / CV, "
+    "not only Max. When comparing scopes, say which window the numbers come "
+    "from. Summarise only from cited evidence. Set confidence from coverage "
+    "(High when the scoped tables contain the cited metric; Low when the "
+    "window is empty or the metric is missing). "
     "When mentioning a time, write it as jump:TIME where TIME is the numeric "
     "value in the trace time unit (e.g. jump:1805120). "
     "For every important conclusion, cite evidence (metric names, counts, "
@@ -325,16 +338,31 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Analysis Findings",
         "Walk through the Analysis Findings in the context. For each finding, "
         "state its severity, what it means for this RTOS/SMP system, and which "
-        "Statistics section or timeline check to open next. If there are no "
-        "findings, say so and suggest a default top-down inspection order.",
+        "Statistics section or timeline check to open next "
+        "(Timeline Anomalies, Worst Events, Response Time, Critical Path, "
+        "Task Health, Period / Jitter, Unified Jitter, Recurring Patterns, "
+        "Task × Core, Core Utilization Over Time, Preemption Matrix, "
+        "Waiter × Owner, Mutex Blocking, or the matching metric table). If there "
+        "are no findings, say so and suggest a default top-down order: "
+        "Timeline Anomalies → Worst Events → Response Time → Critical Path → "
+        "Task Health → Period / Jitter → Unified Jitter → "
+        "Execution / Blocking tails.",
     ),
     (
         "investigate",
         "Investigate",
         "Investigate the main performance problem in this scope. First call "
         "investigate() to get hypotheses and an evidence chain, then use "
-        "query_raw_metric and search_timeline as needed. Place cursors and "
+        "query_raw_metric and search_timeline as needed. Call "
+        "build_task_dependency_graph (optional task) and "
+        "analyze_temporal_causality for the wait/preempt/migrate chain. "
+        "Call rank_root_causes then challenge_conclusion. "
+        "Place cursors and "
         "zoom_to_range on the strongest evidence, highlight the key task, "
+        "name the Statistics page to open next (Timeline Anomalies, Worst "
+        "Events, Response Time, Critical Path, Task Health, Period / Jitter, "
+        "Unified Jitter, Recurring Patterns, Task × Core, Core Utilization "
+        "Over Time, Preemption Matrix, Waiter × Owner, or Mutex Blocking), "
         "and finish with: (1) goal, (2) numbered investigation steps you "
         "took, (3) root cause with confidence, (4) clickable jump:TIME "
         "evidence, (5) next mitigation to try.",
@@ -346,9 +374,13 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "investigate(finding_id) first, then follow the chain "
         "deadline/WCET → execution → preemption → blocking → mutex → "
         "priority inheritance → migration only as far as the evidence "
-        "supports. Call query_raw_metric / search_timeline when numbers are "
+        "supports. Call build_task_dependency_graph and "
+        "analyze_temporal_causality on the victim task. Call "
+        "rank_root_causes then challenge_conclusion. Call "
+        "query_raw_metric / search_timeline when numbers are "
         "missing. Set cursors around the worst episode, highlight the "
-        "victim task, and answer with Root cause, Evidence (bullet list with "
+        "victim task, name Timeline Anomalies or Worst Events when a tail "
+        "spike is the evidence, and answer with Root cause, Evidence (bullet list with "
         "jump:TIME), Confidence, and Suggested fix.",
     ),
     (
@@ -357,7 +389,10 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Verify the selected Analysis Finding. Call investigate(finding_id=ID) "
         "first (use the finding_id given in the user message). Then collect "
         "evidence with query_raw_metric / correlate_events / search_timeline as "
-        "needed. Place cursors and zoom_to_range on the strongest evidence. "
+        "needed. Call verify_claim on the finding statement and "
+        "challenge_conclusion to list alternatives. Place cursors and "
+        "zoom_to_range on the strongest evidence. Name the Statistics page "
+        "to open next. "
         "Finish with a verdict: Confirmed, Rejected, or Inconclusive; list "
         "Evidence as jump:TIME bullets; Confidence (High/Medium/Low); "
         "Alternatives considered; and one next check.",
@@ -370,7 +405,8 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "every jump:TIME you cite must fall between C1 and Cn. Identify "
         "longest blocking, migrations, priority changes, wakeups, mutex "
         "contention, deadline issues, idle gaps, and CPU imbalance in this "
-        "window. Call correlate_events and query_raw_metric as needed. Use "
+        "window. Check in-window Timeline Anomalies and Worst Events. Call "
+        "correlate_events and query_raw_metric as needed. Use "
         "only in-window jump:TIME evidence (or state that tools found none). "
         "End with: Summary, Top issues, Evidence, Suggested next action.",
     ),
@@ -382,13 +418,20 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Neutral (CPU, migrations, latency, tick health, sync). State which "
         "side is worse for each concern, the likely cause with confidence, "
         "and which Statistics section or Trace Compare page to open next. "
+        "Mention the Compare summary strip under the scope checkbox when "
+        "A vs B deltas are already summarised there, including the Why? "
+        "line computed from those deltas. "
         "Use jump:TIME when a concrete timestamp is available.",
     ),
     (
         "triage",
         "Triage findings",
         "Summarise the Analysis Findings and list the top three issues to "
-        "investigate first, with the Statistics section to open for each.",
+        "investigate first, with the Statistics section to open for each "
+        "(Timeline Anomalies, Worst Events, Response Time, Critical Path, "
+        "Task Health, Period / Jitter, Unified Jitter, Recurring Patterns, "
+        "Task × Core, Core Utilization Over Time, Preemption Matrix, "
+        "Waiter × Owner, Mutex Blocking, or the matching metric table).",
     ),
     (
         "task_profile",
@@ -396,7 +439,15 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Build an AI task behaviour profile for the hottest or most "
         "problematic task in the findings (CPU %, typical / p95 / WCET "
         "execution, dispatch, blocking, migrations, sync / priority "
-        "inheritance). Use query_raw_metric if needed. End with a short "
+        "inheritance). Use query_raw_metric if needed. Call "
+        "analyze_distribution (metric auto or execution) for p50 / p90 / "
+        "p99 / CV / outlier rate. Call "
+        "decompose_response_time for that task; treat the shares as relative "
+        "magnitudes, not cycle-accurate milliseconds. Name Period / Jitter, "
+        "Unified Jitter, Response Time, Task Health, and Task × Core when they "
+        "apply. Tell the engineer they "
+        "can click Execution / Blocking / Inter-arrival p95 or p99 to jump. "
+        "End with a short "
         "assessment checklist (normal / warning) and one Ask-next question.",
     ),
     (
@@ -404,7 +455,11 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Diagnostic report",
         "Write a structured engineering diagnostic report for this scope: "
         "Executive summary, Key findings, CPU / scheduling, WCET / "
-        "deadlines, Blocking / sync, Migrations, Root cause, "
+        "deadlines, Blocking / sync, Migrations, Task × Core, Timeline "
+        "Anomalies / Worst Events, Response Time, Critical Path, Period / "
+        "Jitter, Unified Jitter, Recurring Patterns, Task Health, Waiter × "
+        "Owner, Mutex Blocking, Preemption Matrix, Core Utilization Over Time, "
+        "Root cause, "
         "Recommendations (only when evidence supports them), and Evidence "
         "timeline with jump:TIME links. Use export_report when the user "
         "asks to save the report.",
@@ -433,45 +488,63 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Highest latency",
         "Which tasks show the highest latency or blocking? Explain likely "
         "causes using preemption, dispatch latency, and mutex evidence in "
-        "the context.",
+        "the context. Open Worst Events, Response Time, Critical Path, "
+        "Mutex Blocking, and Waiter × Owner "
+        "(heuristic mutex handoff — not a kernel wait queue). Click Blocking "
+        "p95/p99 to jump. Call analyze_distribution (metric blocking or auto) "
+        "for the worst-task tail. Call decompose_response_time for the "
+        "worst task; treat shares as relative, not measured milliseconds.",
     ),
     (
         "wcet",
         "WCET / hot CPU",
         "Which tasks dominate CPU and which have the worst execution-slice "
-        "Max? Recommend whether to affinity-pin, reduce fan-out, or inspect "
-        "preemption.",
+        "Max? Call analyze_distribution (metric execution) on the hottest "
+        "task and cite p50 / p99 / CV, not only Max. Open Timeline Anomalies, "
+        "Worst Events, Response Time, Period / Jitter, Unified Jitter, and "
+        "Task Health. Click Execution Max / "
+        "p95 / p99 to jump. Recommend whether to "
+        "affinity-pin, reduce fan-out, or inspect preemption.",
     ),
     (
         "migrations",
         "Migration thrash",
         "Is there core thrashing or lock-bounce? Cite migration rate, ping, "
         "dwell, and any hot mutex/queue bounces. Suggest affinity or "
-        "ownership fixes.",
+        "ownership fixes. Open Task × Core, Core Utilization Over Time, and "
+        "Timeline Anomalies migration bursts.",
     ),
     (
         "balance",
         "Core balance",
         "Is SMP load balance healthy? Interpret Load Balance Score / σ and "
-        "whether Concurrent Core Active or Switch Overhead needs attention.",
+        "whether Concurrent Core Active or Switch Overhead needs attention. "
+        "Open Task × Core for per-task per-core share of the scoped span.",
     ),
     (
         "tick",
         "Tick health",
         "Interpret Trace Health (TICK). Are large gaps expected under "
-        "tickless idle, or should we re-check inside a busy cursor window?",
+        "tickless idle, or should we re-check inside a busy cursor window? "
+        "Call analyze_periodicity (source auto or tick) and report expected "
+        "vs p50/p99/max, RMS jitter, and kind. Do not conflate this with "
+        "Period / Jitter — that page is task inter-arrival, not the tick "
+        "source.",
     ),
     (
         "priority",
         "Priority inversion",
         "Is there priority inversion or L/M/H geometry? Explain any inherit "
-        "episodes and what to verify next.",
+        "episodes and what to verify next. If mutex handoff is in play, open "
+        "Waiter × Owner (heuristic next-acquirer × previous-holder, not a "
+        "kernel wait queue).",
     ),
     (
         "deadlines",
         "Deadline / budget",
         "Are there deadline or CPU-budget concerns in the findings? What "
-        "should the engineer measure next?",
+        "should the engineer measure next? Open the Task Health deadline "
+        "band (click the band to jump to Deadlines).",
     ),
     (
         "explain_finding",
@@ -482,7 +555,8 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "technical). Then add jump:TIME "
         "evidence from investigate or correlate_events if the explanation "
         "is still thin. Finish with: Summary, What it means, Evidence, "
-        "What would disprove this, and one next check.",
+        "What would disprove this, and one next check that names the "
+        "Statistics page to open.",
     ),
     (
         "auto_investigate",
@@ -491,8 +565,14 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Call investigate(finding_id) first, then correlate_events on the "
         "same window. Call find_critical_path to build the causal chain, or "
         "detect_priority_inversion instead when investigate flags a "
-        "priority-inversion finding. Place cursors and zoom_to_range on the "
-        "strongest evidence. Then call what_if or optimize_experiment to "
+        "priority-inversion finding. Call build_task_dependency_graph and "
+        "analyze_temporal_causality on the same task. Call "
+        "rank_root_causes then challenge_conclusion. Place cursors and "
+        "zoom_to_range on the strongest evidence (Apply cursors; cite "
+        "range:LO/HI or btfrange:LO/HI when the critical path has a window). "
+        "Name Timeline Anomalies or Worst Events as the next UI check. "
+        "Then call what_if or "
+        "optimize_experiment to "
         "test a concrete mitigation. Finish with a verdict — Confirmed, "
         "Rejected, or Inconclusive — Evidence as jump:TIME bullets, "
         "Confidence (High/Medium/Low), and one recommended experiment to "
@@ -1529,6 +1609,7 @@ def normalize_ai_context(ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
 
 
 _JUMP_RE = re.compile(r"jump:([0-9]+(?:\.[0-9]+)?)")
+_RANGE_RE = re.compile(r"range:([0-9]+(?:\.[0-9]+)?)/([0-9]+(?:\.[0-9]+)?)")
 _MD_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 _MD_BOLD_RE = re.compile(r"(\*\*|__)(.+?)\1")
 _MD_ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)")
@@ -1578,6 +1659,13 @@ def _md_inline_to_html_escaped(text: str) -> str:
     for kind, val in parts:
         if kind == "c":
             # Models often wrap jump:TIME in backticks; keep those clickable.
+            rm = _RANGE_RE.fullmatch(val.strip())
+            if rm:
+                out_chunks.append(_stash(
+                    f'<a href="{btf_range_href(rm.group(1), rm.group(2))}" '
+                    f'class="ai-jump">range:{rm.group(1)}/{rm.group(2)}</a>'
+                ))
+                continue
             jm = _JUMP_RE.fullmatch(val.strip())
             if jm:
                 out_chunks.append(_stash(
@@ -1599,6 +1687,7 @@ def _md_inline_to_html_escaped(text: str) -> str:
                 low.startswith("http://")
                 or low.startswith("https://")
                 or low.startswith("btfjump:")
+                or low.startswith("btfrange:")
                 or low.startswith("btfhighlight:")
                 or low.startswith("btfhyp:")
                 or low.startswith("btfscope:")
@@ -1621,6 +1710,13 @@ def _md_inline_to_html_escaped(text: str) -> str:
             return f"<em>{body}</em>"
 
         chunk = _MD_ITALIC_RE.sub(_ital, chunk)
+        chunk = _RANGE_RE.sub(
+            lambda m: _stash(
+                f'<a href="{btf_range_href(m.group(1), m.group(2))}" '
+                f'class="ai-jump">range:{m.group(1)}/{m.group(2)}</a>'
+            ),
+            chunk,
+        )
         chunk = _JUMP_RE.sub(
             lambda m: _stash(
                 f'<a href="{btf_jump_href(m.group(1))}" class="ai-jump">'
@@ -3388,6 +3484,7 @@ def create_ai_assistant_panel(
     on_open_settings: Optional[Callable[[], None]] = None,
     on_save_settings: Optional[Callable[[Dict[str, str]], None]] = None,
     on_jump: Optional[Callable[[float], None]] = None,
+    on_range: Optional[Callable[[float, float], None]] = None,
     on_highlight: Optional[Callable[[str], None]] = None,
     on_execute_tools: Optional[Callable[[List[Dict[str, Any]]], List[Dict[str, Any]]]] = None,
     on_undo_tools: Optional[Callable[[], None]] = None,
@@ -3635,6 +3732,21 @@ def create_ai_assistant_panel(
 
             root.addWidget(actions_host)
 
+            split_top = QWidget()
+            split_top.setObjectName("aiSplitTop")
+            top_lay = QVBoxLayout(split_top)
+            top_lay.setContentsMargins(0, 0, 0, 0)
+            top_lay.setSpacing(6)
+            self._split_top = split_top
+
+            split_bottom = QWidget()
+            split_bottom.setObjectName("aiSplitBottom")
+            split_bottom.setMinimumHeight(64)
+            bottom_lay = QVBoxLayout(split_bottom)
+            bottom_lay.setContentsMargins(0, 0, 0, 0)
+            bottom_lay.setSpacing(0)
+            self._split_bottom = split_bottom
+
             self._investigation_plan: Optional[Dict[str, Any]] = None
             self._evidence_payload: Optional[Dict[str, Any]] = None
             self._interpreted_query: Optional[Dict[str, Any]] = None
@@ -3658,7 +3770,7 @@ def create_ai_assistant_panel(
             self._log.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             self._log.customContextMenuRequested.connect(self._show_log_menu)
             self._log.viewport().installEventFilter(self)
-            root.addWidget(self._log, 1)
+            top_lay.addWidget(self._log, 1)
 
             self._plan_host = QWidget()
             plan_row = QHBoxLayout(self._plan_host)
@@ -3675,7 +3787,7 @@ def create_ai_assistant_panel(
             )
             plan_row.addWidget(self._plan_view)
             self._plan_host.hide()
-            root.addWidget(self._plan_host)
+            top_lay.addWidget(self._plan_host)
 
             mode_host = QWidget()
             self._mode_host = mode_host
@@ -3696,7 +3808,7 @@ def create_ai_assistant_panel(
                 )
                 mode_row.addWidget(btn)
                 self._mode_btns.append(btn)
-            root.addWidget(mode_host)
+            top_lay.addWidget(mode_host)
 
             tpl_host = QWidget()
             self._tpl_host = tpl_host
@@ -3791,7 +3903,7 @@ def create_ai_assistant_panel(
             more_btn.clicked.connect(self._toggle_more_menu)
             more_menu.installEventFilter(self)
             tpl_row.addWidget(more_btn)
-            root.addWidget(tpl_host)
+            top_lay.addWidget(tpl_host)
 
             self.refresh_template_availability()
 
@@ -3812,12 +3924,14 @@ def create_ai_assistant_panel(
             tool_row.addWidget(self._undo_tools_btn)
             tool_row.addStretch(1)
             self._tool_bar.hide()
-            root.addWidget(self._tool_bar)
+            top_lay.addWidget(self._tool_bar)
 
             self._input = QPlainTextEdit()
             self._input.setObjectName("aiInput")
             self._input.setPlaceholderText("Ask about this trace\u2026 (Ctrl/Cmd+Enter to send)")
-            self._input.setFixedHeight(64)
+            self._input.setMinimumHeight(64)
+            self._input.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             self._input.setViewportMargins(0, 0, 44, 0)
             self._input.installEventFilter(self)
             self._input.textChanged.connect(self._refresh_send_btn)
@@ -3863,13 +3977,41 @@ def create_ai_assistant_panel(
             self._composer = composer
             self._composer_icons = icons
             composer.installEventFilter(self)
-            root.addWidget(composer)
+            composer.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            bottom_lay.addWidget(composer, 1)
             QTimer.singleShot(0, self._place_composer_icons)
 
+            split = QSplitter(Qt.Orientation.Vertical)
+            split.setObjectName("aiSplit")
+            split.setChildrenCollapsible(False)
+            split.setHandleWidth(6)
+            split.addWidget(split_top)
+            split.addWidget(split_bottom)
+            split.setStretchFactor(0, 1)
+            split.setStretchFactor(1, 0)
+            split.splitterMoved.connect(self._on_ai_split_moved)
+            self._split = split
+            self._split_ready = False
+            root.addWidget(split, 1)
+            QTimer.singleShot(0, self._restore_ai_split)
+
             self._status = QLabel("")
+            self._status.setObjectName("aiStatus")
             self._status.setStyleSheet("color:#999;font-size:11px;")
             self._status.setWordWrap(True)
             root.addWidget(self._status)
+
+            self._usage = QLabel("")
+            self._usage.setObjectName("aiUsageBar")
+            self._usage.setStyleSheet(
+                "color:#8a96a8;font-size:11px;padding:2px 0;"
+                "border-top:1px solid #3a4658;"
+            )
+            self._usage.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse)
+            root.addWidget(self._usage)
+            self._refresh_usage()
 
             self._auth_cta = QWidget()
             cta_row = QHBoxLayout(self._auth_cta)
@@ -3927,6 +4069,18 @@ def create_ai_assistant_panel(
                 )
             if getattr(self, "_status", None) is not None:
                 self._status.setStyleSheet(f"color:{c['muted']};font-size:11px;")
+            if getattr(self, "_usage", None) is not None:
+                self._usage.setStyleSheet(
+                    f"color:{c['muted']};font-size:11px;padding:2px 0;"
+                    f"border-top:1px solid {c['border']};"
+                )
+            if getattr(self, "_split", None) is not None:
+                self._split.setStyleSheet(
+                    "QSplitter::handle { background: %s; }"
+                    "QSplitter::handle:hover { background: %s; }"
+                    "QSplitter::handle:vertical { height: 6px; }"
+                    % (c["border"], c["accent"])
+                )
             inp = getattr(self, "_input", None)
             if inp is not None:
                 pal = inp.palette()
@@ -4161,13 +4315,46 @@ def create_ai_assistant_panel(
                 pass
 
         def _set_status(self, msg: str, *, error: bool = False) -> None:
-            self._status.setText(status_with_cost(msg, self._cost_meter))
+            self._status.setText(str(msg or ""))
             self._status.setStyleSheet(
                 "color:#e07070;font-size:11px;" if error
                 else "color:#999;font-size:11px;"
             )
+            self._refresh_usage()
             if error:
                 self._flash_main_status(msg)
+
+        def _refresh_usage(self) -> None:
+            bar = getattr(self, "_usage", None)
+            if bar is None:
+                return
+            bar.setText(format_cost_status(self._cost_meter))
+            bar.setToolTip(format_cost_meter(self._cost_meter))
+
+        def _restore_ai_split(self) -> None:
+            split = getattr(self, "_split", None)
+            if split is None:
+                return
+            raw = ""
+            if get_settings:
+                try:
+                    raw = str((get_settings() or {}).get("split_bottom") or "")
+                except Exception:
+                    raw = ""
+            bottom = clamp_ai_split_bottom(raw)
+            total = max(split.height(), 1)
+            top = max(80, total - bottom)
+            self._split_ready = False
+            split.setSizes([top, bottom])
+            self._split_ready = True
+
+        def _on_ai_split_moved(self, _pos: int, _index: int) -> None:
+            if not getattr(self, "_split_ready", False):
+                return
+            sizes = self._split.sizes() if getattr(self, "_split", None) else []
+            if len(sizes) < 2 or not on_save_settings:
+                return
+            on_save_settings({"split_bottom": str(clamp_ai_split_bottom(sizes[1]))})
 
         def _record_turn_usage(self, turn: dict, calls: Sequence[Any]) -> None:
             usage = turn.get("usage") if isinstance(turn, dict) else {}
@@ -4189,6 +4376,7 @@ def create_ai_assistant_panel(
                 trace_queries=sum(1 for n in names if is_query_tool(n)),
                 model_time_s=elapsed,
             )
+            self._refresh_usage()
 
         def _open_signin_page(self) -> None:
             active = self._active_ai_settings()
@@ -4283,6 +4471,11 @@ def create_ai_assistant_panel(
                 name = parse_btf_highlight_href(url.toString())
                 if on_highlight and name:
                     on_highlight(name)
+                return
+            if scheme == "btfrange":
+                pair = parse_btf_range_href(url.toString())
+                if pair and on_range:
+                    on_range(pair[0], pair[1])
                 return
             if not on_jump or scheme != "btfjump":
                 return
@@ -4380,6 +4573,7 @@ def create_ai_assistant_panel(
             self._log.clear()
             self._cost_meter = empty_cost_meter()
             self._set_status("")
+            self._refresh_usage()
             self._clear_evidence_log_entry()
             self._interpreted_query = None
             self._refresh_tool_bar()
@@ -5030,7 +5224,9 @@ def create_ai_assistant_panel(
                         break
                 prompt = (
                     f"Test hypothesis {name!r} (id={hid}). "
-                    "Call investigate then correlate_events and find_critical_path. "
+                    "Call investigate then correlate_events, find_critical_path, "
+                    "build_task_dependency_graph, analyze_temporal_causality, "
+                    "rank_root_causes, and challenge_conclusion. "
                     f"Then manage_hypotheses(hypothesis_id={hid}, "
                     "status=supported|rejected|need_evidence). "
                     "Finish with a verdict, jump:TIME evidence, and one next check."

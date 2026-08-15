@@ -226,6 +226,8 @@ describe('new compare builders', () => {
     assert.match(csv, /Inter-Arrival Time/)
     assert.match(csv, /Load Balance Score/)
     assert.match(csv, /Sync Objects/)
+    assert.match(csv, /Response P99/)
+    assert.match(csv, /Mutex Blocking/)
 
     const html = buildCompareHtml('A.btf', 'B.btf', false, tables)
     assert.match(html, /BTFViewer/)
@@ -235,5 +237,36 @@ describe('new compare builders', () => {
     assert.match(html, /<h2>Core Util<\/h2>/)
     assert.match(html, /<h2>Execution Time<\/h2>/)
     assert.match(html, /<h2>Inter-Arrival Time<\/h2>/)
+    assert.match(html, /<h2>Response P99<\/h2>/)
+    assert.match(html, /<h2>Mutex Blocking<\/h2>/)
+  })
+
+  it('deadline misses use Settings taskDeadlines', () => {
+    const longA = makeTrace({
+      timeMax: 400,
+      timeScale: 'ns',
+      segments: [
+        makeSeg('Worker[1]', 'Core_0', 0, 100),
+        makeSeg('Worker[1]', 'Core_0', 200, 400),
+      ],
+    })
+    const shortB = makeTrace({
+      timeMax: 120,
+      timeScale: 'ns',
+      segments: [
+        makeSeg('Worker[1]', 'Core_0', 0, 50),
+        makeSeg('Worker[1]', 'Core_0', 80, 120),
+      ],
+    })
+    const none = buildSummaryCompareRows(longA, shortB)
+    const dlNone = none.find(r => r.label === 'Deadline misses')
+    assert.equal(dlNone.a, 0)
+    assert.equal(dlNone.b, 0)
+
+    const rows = buildSummaryCompareRows(
+      longA, shortB, null, null, false, { 'Worker[1]': 150 })
+    const dl = rows.find(r => r.label === 'Deadline misses')
+    assert.ok(dl.a > 0)
+    assert.equal(dl.b, 0)
   })
 })

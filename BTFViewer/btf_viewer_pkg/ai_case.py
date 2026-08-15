@@ -70,6 +70,18 @@ _TOOL_REASONS: Dict[str, str] = {
     "generate_experiment_plan": "Rank concrete firmware / what-if experiments",
     "record_experiment_outcome": "Feed measured results back into recommendations",
     "score_investigation": "Evidence efficiency, cost, stop, and falsification scores",
+    "analyze_temporal_causality": "Order findings into a happens-before chain",
+    "build_task_dependency_graph": "Task/resource graph from BTF sync, preemption, and migration",
+    "decompose_response_time": "Split delay into blocking, preemption, and execution",
+    "rank_root_causes": "Rank likely causes across findings and hypotheses",
+    "verify_claim": "Check a causal claim against findings and scope",
+    "challenge_conclusion": "List alternatives and missing evidence",
+    "investigation_memory": "Store or recall similar past investigations",
+    "cluster_incidents": "Group findings by time proximity",
+    "close_investigation": "Record a conclusion and close the case",
+    "analyze_distribution": "p50/p90/p99/p99.9, stddev, CV, and 3-sigma outlier rate",
+    "analyze_periodicity": "Period/jitter (RMS, peak-to-peak) and kind: drift vs release vs WCET vs scheduler",
+    "summarize_investigation_context": "Compact findings, hypotheses, and tools run",
 }
 
 
@@ -935,7 +947,9 @@ def explain_finding_payload(
         )
         deep = (
             f"{technical} Leading hypotheses: {names}. "
-            "Call investigate → correlate_events → find_critical_path, "
+            "Call investigate → correlate_events → find_critical_path → "
+            "build_task_dependency_graph → analyze_temporal_causality → "
+            "rank_root_causes → challenge_conclusion, "
             "then verify jump:TIME inside the cursor window."
         )
     body = {"quick": quick, "technical": technical, "deep": deep}[lv]
@@ -976,6 +990,8 @@ def investigation_mode_plan(mode: str = "diagnose") -> Dict[str, Any]:
             "goal": "Find cause → gather evidence → verify",
             "tools": [
                 "investigate", "correlate_events", "find_critical_path",
+                "build_task_dependency_graph", "analyze_temporal_causality",
+                "rank_root_causes", "challenge_conclusion",
             ],
             "template": "investigate",
         },
@@ -1219,6 +1235,22 @@ def tool_call_reason(tool_name: str, finding: Optional[dict] = None) -> str:
     return base
 
 
+AI_SPLIT_BOTTOM_DEFAULT = 80
+AI_SPLIT_BOTTOM_MIN = 64
+AI_SPLIT_BOTTOM_MAX = 400
+
+
+def clamp_ai_split_bottom(raw: Any) -> int:
+    """Composer-pane height for the AI log splitter (px)."""
+    try:
+        n = int(float(str(raw).strip()))
+    except (TypeError, ValueError):
+        n = AI_SPLIT_BOTTOM_DEFAULT
+    if n <= 0:
+        n = AI_SPLIT_BOTTOM_DEFAULT
+    return max(AI_SPLIT_BOTTOM_MIN, min(AI_SPLIT_BOTTOM_MAX, n))
+
+
 def empty_cost_meter() -> Dict[str, Any]:
     return {
         "prompt_tokens": 0,
@@ -1308,11 +1340,11 @@ def format_cost_status(meter: Optional[dict]) -> str:
         usd = float(m.get("estimated_usd") or 0)
     except (TypeError, ValueError):
         usd = 0.0
-    parts = [f"{_format_token_count(tokens)} tok"]
-    if tools:
-        parts.append(f"{tools} tools")
-    if time_s:
-        parts.append(f"{time_s:g}s")
+    parts = [
+        f"{_format_token_count(tokens)} tok",
+        f"{tools} tools",
+        f"{time_s:g}s" if time_s else "0s",
+    ]
     if usd:
         parts.append(f"${usd:.3f}")
     return " · ".join(parts)
@@ -1839,6 +1871,11 @@ def builtin_investigation_templates() -> List[Dict[str, Any]]:
                 "query_raw_metric",
                 "correlate_events",
                 "find_critical_path",
+                "build_task_dependency_graph",
+                "analyze_temporal_causality",
+                "decompose_response_time",
+                "rank_root_causes",
+                "challenge_conclusion",
                 "detect_priority_inversion",
                 "generate_report",
             ],
@@ -2191,6 +2228,116 @@ BENCHMARK_METRIC_WEIGHTS: Dict[str, float] = {
     "safety": 0.15,
 }
 
+_NEGATION_RE = re.compile(r"\b(not|no|never|isn't|is not|without|reject)\b")
+_METRIC_SEP_RE = re.compile(r"[\s/_-]+")
+
+# Official Statistics page titles plus wording a model may use instead of × / slashes.
+STATS_UX_PAGE_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "timeline anomalies": ("timeline anomalies", "timeline anomaly"),
+    "worst events": ("worst events", "worst event"),
+    "period jitter": ("period jitter", "period / jitter", "period/jitter"),
+    "task health": ("task health",),
+    "task x core": ("task x core", "task-core"),
+    "waiter x owner": ("waiter x owner", "waiter-owner"),
+    "response time": ("response time", "response-time"),
+    "critical path": ("critical path", "crit path"),
+    "unified jitter": ("unified jitter",),
+    "recurring patterns": ("recurring patterns", "recurring pattern"),
+    "preemption matrix": ("preemption matrix",),
+    "mutex blocking": ("mutex blocking", "mutex-blocking"),
+    "core utilization over time": (
+        "core utilization over time", "core utilisation over time",
+    ),
+}
+
+
+def _normalize_metric_text(text: str) -> str:
+    return _METRIC_SEP_RE.sub(" ", str(text or "").lower().replace("×", "x")).strip()
+
+
+def _metric_mentioned(blob: str, metric: str) -> bool:
+    """True when *metric* (or a Statistics-page alias) appears in *blob*."""
+    raw = str(blob or "").lower()
+    want = str(metric or "").strip().lower()
+    if want and want in raw:
+        return True
+    norm_blob = _normalize_metric_text(blob)
+    norm_want = _normalize_metric_text(metric)
+    if norm_want and norm_want in norm_blob:
+        return True
+    for key, needles in STATS_UX_PAGE_ALIASES.items():
+        aliases = (key,) + tuple(needles)
+        if norm_want not in {_normalize_metric_text(a) for a in aliases}:
+            continue
+        return any(
+            _normalize_metric_text(n) in norm_blob or n in raw
+            for n in needles
+        )
+    return False
+
+
+def _blob_has_phrase(blob: str, phrase: str, *, allow_negation: bool = True) -> bool:
+    text = str(blob or "").lower()
+    needle = str(phrase or "").strip().lower()
+    if not needle:
+        return False
+    idx = text.find(needle)
+    if idx < 0:
+        return False
+    if allow_negation:
+        window = text[max(0, idx - 20):idx]
+        if _NEGATION_RE.search(window):
+            return False
+    return True
+
+
+def score_adversarial_metrics(
+    expected: Optional[dict] = None,
+    *,
+    actual_conclusion: str = "",
+    tools: Optional[Sequence[str]] = None,
+    validation: Optional[dict] = None,
+) -> Dict[str, int]:
+    """Rates (0–100, higher is worse) for trap / adversarial benchmark cases."""
+    exp = expected if isinstance(expected, dict) else {}
+    conc = str(actual_conclusion or "")
+    traps = [str(x) for x in (exp.get("trap_phrases") or []) if str(x).strip()]
+    false_confirmation = 100 if any(
+        _blob_has_phrase(conc, p) for p in traps) else 0
+
+    causal_hits = any(
+        _blob_has_phrase(conc, p)
+        for p in ("caused", "because of", "due to", "causal")
+    )
+    no_causal = bool(exp.get("no_causal")) or str(
+        exp.get("root_cause_class") or "").lower() in ("no_causal", "coincidence")
+    false_causal = 100 if no_causal and causal_hits else (
+        false_confirmation if traps else 0)
+
+    val = validation if isinstance(validation, dict) else {}
+    claims = [c for c in (val.get("claims") or []) if isinstance(c, dict)]
+    if claims:
+        bad = sum(1 for c in claims if not c.get("ok"))
+        unsupported = int(round(100.0 * bad / len(claims)))
+    else:
+        unsupported = 0
+
+    tools_l = [str(t) for t in (tools or [])]
+    required = [str(t) for t in (exp.get("required_tools") or []) if str(t)]
+    high_conf = "confidence: high" in conc.lower() or conc.lower().endswith("high.")
+    missing_required = bool(required) and not any(t in tools_l for t in required)
+    premature = 100 if (
+        (high_conf and (false_confirmation or missing_required or not tools_l))
+        or missing_required
+    ) else 0
+
+    return {
+        "false_causal_rate": int(false_causal),
+        "false_confirmation_rate": int(false_confirmation),
+        "unsupported_claim_rate": int(unsupported),
+        "premature_conclusion_rate": int(premature),
+    }
+
 
 def score_benchmark_case(
     expected: dict,
@@ -2218,8 +2365,8 @@ def score_benchmark_case(
     ev = exp.get("evidence") if isinstance(exp.get("evidence"), dict) else {}
     want_metrics = [str(x).lower() for x in (ev.get("required_metrics") or [])]
     if want_metrics:
-        blob = str(actual_conclusion or "").lower()
-        metric_hits = sum(1 for m in want_metrics if m in blob)
+        blob = str(actual_conclusion or "")
+        metric_hits = sum(1 for m in want_metrics if _metric_mentioned(blob, m))
         metric_score = int(round(100.0 * metric_hits / len(want_metrics)))
         evidence_score = (
             metric_score if not want_tasks
@@ -2240,11 +2387,23 @@ def score_benchmark_case(
 
     want_class = str(exp.get("root_cause_class") or "").lower()
     conc = str(actual_conclusion or "").lower()
-    if not want_class:
+    aliases = [str(x).lower() for x in (exp.get("root_cause_aliases") or []) if str(x).strip()]
+    if not want_class and not aliases:
         root_score = 100
-    elif want_class in conc or any(w in conc for w in want_class.split()):
+    elif (
+        (want_class and (want_class in conc or any(w in conc for w in want_class.split())))
+        or any(a in conc for a in aliases)
+    ):
         root_score = 100
     else:
+        root_score = 0
+    adv = score_adversarial_metrics(
+        exp,
+        actual_conclusion=actual_conclusion,
+        tools=actual_tools,
+        validation=validation,
+    )
+    if adv.get("false_confirmation_rate"):
         root_score = 0
 
     band = str((evidence_quality or {}).get("band") or "")
@@ -2287,6 +2446,7 @@ def score_benchmark_case(
         passed=root_score >= 50 and finding_score >= 50,
         finding_score=finding_score,
     )
+    extras.update(adv)
     return {
         "overall": max(0, min(100, overall)),
         "parts": parts,
@@ -2318,6 +2478,10 @@ def format_benchmark_score(score: dict) -> str:
         "falsification_quality": "Falsification",
         "scope_accuracy": "Scope accuracy",
         "stop_efficiency": "Stop efficiency",
+        "false_causal_rate": "False-causal rate",
+        "false_confirmation_rate": "False-confirmation rate",
+        "unsupported_claim_rate": "Unsupported-claim rate",
+        "premature_conclusion_rate": "Premature-conclusion rate",
     }
     shown = False
     for key, label in extras.items():

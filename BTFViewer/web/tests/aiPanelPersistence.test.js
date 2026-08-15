@@ -13,6 +13,8 @@ const corridorDlg = readFileSync(new URL('../src/components/CorridorInspectorDia
   .replace(/\s+/g, ' ')
 const compareDlg = readFileSync(new URL('../src/components/TraceCompareDialog.vue', import.meta.url), 'utf8')
   .replace(/\s+/g, ' ')
+const statsPanel = readFileSync(new URL('../src/components/StatisticsPanel.vue', import.meta.url), 'utf8')
+  .replace(/\s+/g, ' ')
 
 describe('AI panel survives right-panel tab switches', () => {
   it('hides the AI page instead of destroying it', () => {
@@ -65,7 +67,12 @@ describe('AI conversation turn layout', () => {
     assert.doesNotMatch(aiPanel, /overflowOpen/)
     assert.match(aiPanel, /formatEvidencePanelMarkdown/)
     assert.doesNotMatch(aiPanel, /evidencePanel/)
-    assert.match(aiPanel, /statusWithCost\(base, costMeter.value\)/)
+    assert.match(aiPanel, /formatCostStatus\(costMeter.value\)/)
+    assert.match(aiPanel, /class="ai-usage-bar"/)
+    assert.match(aiPanel, /class="ai-split"/)
+    assert.match(aiPanel, /class="ai-split-top"/)
+    assert.match(aiPanel, /class="ai-split-handle"/)
+    assert.match(aiPanel, /class="ai-split-bottom"/)
     assert.match(aiPanel, /function setErrorStatus/)
     assert.match(aiPanel, /emit\('statusMessage'/)
     assert.match(app, /@status-message="onAiStatusMessage"/)
@@ -129,6 +136,18 @@ describe('Trace Compare Query with AI', () => {
     assert.match(app, /askValidateExperiment\?\.\(idA, idB\)/)
     assert.match(aiPanel, /async function askValidateExperiment/)
     assert.match(aiPanel, /VALIDATE_EXPERIMENT_PROMPT/)
+  })
+})
+
+describe('Statistics distribution Query with AI', () => {
+  it('plot and explorer buttons are grayed when AI is off', () => {
+    assert.match(statsPanel, /Query with AI…/)
+    assert.match(statsPanel, /queryDistributionWithAi\('plot'\)/)
+    assert.match(statsPanel, /queryDistributionWithAi\('explorer'\)/)
+    assert.match(statsPanel, /:disabled="!aiFeatureEnabled"/)
+    assert.match(statsPanel, /:disabled="!aiFeatureEnabled \|\| !distribMk"/)
+    assert.match(statsPanel, /Enable AI Assistant in Settings → AI/)
+    assert.match(app, /@query-ai="queryAnalysisWithAi"/)
   })
 })
 

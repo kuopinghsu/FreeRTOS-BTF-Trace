@@ -27,6 +27,7 @@ class StatsTabModel:
     scope_to_cursors: bool = True
     export_scope_override: Optional[Tuple[int, int]] = None
     section_collapsed: Dict[str, bool] = field(default_factory=dict)
+    defer_heavy_collapse_done: bool = False
     section_table_heights: Dict[str, int] = field(default_factory=dict)
     util_label_col_w: int = 0
 

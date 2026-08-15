@@ -324,12 +324,28 @@ STATS_CORES_UTIL_MIN_H   = STATS_UTIL_MIN_H
 STATS_LOAD_DEFER_TASKS       = 256   # defer heavy stats sections above this task count
 STATS_LOAD_DEFER_CORES       = 32    # defer when core count exceeds this
 STATS_LOAD_DEFER_SYNC_ISSUES = 400   # defer when sync-issue rows exceed this
+STATS_LOAD_DEFER_SEGMENTS    = 8000  # defer when on-CPU slice count exceeds this
 STATS_TABLE_DISPLAY_ROW_CAP  = 2000  # max rows materialised per stats table on load
 STATS_HEAVY_SECTIONS         = frozenset({
     "migrations", "exec", "block", "inter", "health",
     "preemption", "priority", "sync", "intervals", "tags",
     "dispatch", "switch_overhead", "concurrency",
+    "anomalies", "worst", "crit_path", "patterns",
+    "response", "period", "jitter", "preempt_matrix",
+    "task_core", "core_time", "wait_owner", "mutex_block",
+    "task_health",
 })
+STATS_DEFAULT_EXPANDED_SECTIONS = frozenset({"cores", "health"})
+
+def _trace_segment_count(trace: "BtfTrace") -> int:
+    segs = getattr(trace, "segments", None)
+    if segs is not None:
+        return len(segs)
+    store = getattr(trace, "segStore", None) or getattr(trace, "seg_store", None)
+    count = getattr(store, "count", None)
+    if count is not None:
+        return int(count)
+    return 0
 
 def trace_needs_deferred_stats_load(trace: "BtfTrace") -> bool:
     """True when statistics sections should populate after the first paint."""
@@ -337,6 +353,7 @@ def trace_needs_deferred_stats_load(trace: "BtfTrace") -> bool:
         len(trace.tasks) > STATS_LOAD_DEFER_TASKS
         or len(getattr(trace, "core_names", None) or []) > STATS_LOAD_DEFER_CORES
         or len(getattr(trace, "sync_issues", None) or []) > STATS_LOAD_DEFER_SYNC_ISSUES
+        or _trace_segment_count(trace) > STATS_LOAD_DEFER_SEGMENTS
     )
 
 def cap_stats_table_rows(rows: list, cap: int = STATS_TABLE_DISPLAY_ROW_CAP) -> tuple:
@@ -349,30 +366,105 @@ def cap_stats_table_rows(rows: list, cap: int = STATS_TABLE_DISPLAY_ROW_CAP) -> 
     )
 
 def default_section_collapsed() -> Dict[str, bool]:
-    """Default collapsed flags for statistics panel sections (shared with MVVM)."""
+    """Default collapsed flags for statistics panel sections (shared with MVVM).
+
+    Core utilisation and Trace Health start open; every other section starts
+    collapsed. Keep keys in lockstep with web ``SECTION_COLLAPSE_REFS``.
+    """
     return {
         "cores": False,
-        "tasks": False,
-        "migrations": False,
-        "exec": False,
-        "block": False,
-        "inter": False,
+        "tasks": True,
+        "migrations": True,
+        "exec": True,
+        "block": True,
+        "inter": True,
         "health": False,
-        "preemption": False,
-        "priority": False,
-        "sync": False,
-        "queue": False,
-        "intervals": False,
-        "lifecycle": False,
-        "core_pairs": False,
-        "core_breakdown": False,
-        "affinity": False,
-        "deadline": False,
-        "tags": False,
-        "dispatch": False,
-        "switch_overhead": False,
-        "concurrency": False,
+        "preemption": True,
+        "priority": True,
+        "sync": True,
+        "queue": True,
+        "intervals": True,
+        "lifecycle": True,
+        "core_pairs": True,
+        "core_breakdown": True,
+        "affinity": True,
+        "deadline": True,
+        "tags": True,
+        "dispatch": True,
+        "anomalies": True,
+        "worst": True,
+        "switch_overhead": True,
+        "concurrency": True,
+        "period": True,
+        "task_core": True,
+        "wait_owner": True,
+        "task_health": True,
+        "response": True,
+        "crit_path": True,
+        "preempt_matrix": True,
+        "mutex_block": True,
+        "core_time": True,
+        "jitter": True,
+        "distrib": True,
+        "patterns": True,
     }
+
+
+def sanitize_section_collapsed(src) -> Optional[Dict[str, bool]]:
+    """Portable-session collapse map (web ``sanitizeSectionCollapsed``)."""
+    if not isinstance(src, dict):
+        return None
+    allowed = set(default_section_collapsed())
+    out: Dict[str, bool] = {}
+    for key, val in src.items():
+        sid = str(key or "").strip()
+        if sid not in allowed or not isinstance(val, bool):
+            continue
+        out[sid] = val
+    return out or None
+
+
+def merge_section_collapsed(src) -> Dict[str, bool]:
+    """Fill missing section IDs from ``default_section_collapsed()``."""
+    out = default_section_collapsed()
+    extra = sanitize_section_collapsed(src)
+    if extra:
+        out.update(extra)
+    return out
+
+
+def section_collapsed_to_rc(flags) -> str:
+    """Serialize collapse map for btf_viewer.rc ``[stats] section_collapsed``."""
+    merged = merge_section_collapsed(flags if isinstance(flags, dict) else None)
+    return ",".join(
+        f"{sid}:{'1' if merged[sid] else '0'}"
+        for sid in default_section_collapsed()
+    )
+
+
+def section_collapsed_from_rc(raw) -> Dict[str, bool]:
+    """Restore collapse map from rc / portable JSON."""
+    if raw is None:
+        return default_section_collapsed()
+    if isinstance(raw, dict):
+        return merge_section_collapsed(raw)
+    text = str(raw).strip()
+    if not text:
+        return default_section_collapsed()
+    parsed: Dict[str, bool] = {}
+    allowed = set(default_section_collapsed())
+    for part in text.replace(";", ",").split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if ":" in token:
+            sid, val = token.split(":", 1)
+            sid = sid.strip()
+            if sid in allowed:
+                parsed[sid] = val.strip().lower() in ("1", "true", "yes")
+        elif token in allowed:
+            parsed[token] = True
+    return merge_section_collapsed(parsed)
 
 # Statistics sections that can be pinned open (stay expanded) and the default
 # display order. Keep in sync with web/src/utils/statsPins.js.
@@ -386,19 +478,192 @@ STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
     "migrations",
     "core_pairs",
     "affinity",
+    "task_core",
+    "core_time",
     "lifecycle",
     "deadline",
+    "task_health",
+    "anomalies",
+    "worst",
+    "crit_path",
+    "patterns",
     "exec",
     "block",
+    "response",
     "dispatch",
     "inter",
+    "period",
+    "jitter",
+    "distrib",
     "preemption",
+    "preempt_matrix",
     "priority",
     "sync",
+    "wait_owner",
+    "mutex_block",
     "queue",
     "intervals",
     "tags",
 )
+
+# One-line (or short paragraph) help shown under every Statistics section
+# title. Keep lockstep with web ``config.js`` ``STATS_SECTION_HELP``.
+STATS_SECTION_HELP: dict[str, str] = {
+    "cores": (
+        "Per-core busy percent excluding IDLE and TICK. The gauge scores "
+        "load balance across cores. Drag the grip to show more cores."
+    ),
+    "health": (
+        "TICK interval regularity, missed-tick estimate, and large gaps. "
+        "Click a gap to jump. Tickless traces are expected to have uneven intervals."
+    ),
+    "core_breakdown": (
+        "How each core's scoped span splits into active task time, IDLE, TICK, "
+        "and leftover gap. Click a core to show it in Core View."
+    ),
+    "concurrency": (
+        "How much of the scoped span had 0, 1, 2, … cores running a user task "
+        "at once. Click a row to open the concurrency plot."
+    ),
+    "switch_overhead": (
+        "Time from one task leaving a core to the next task running (kernel "
+        "switch gap). Click a core to open the switch-overhead plot."
+    ),
+    "tasks": (
+        "Top user tasks by CPU share of the scoped span, excluding IDLE and TICK. "
+        "Click a name to highlight that task on the timeline."
+    ),
+    "migrations": (
+        "Tasks that ran on more than one core: count, rate, dwell, ping-pong, "
+        "and STI proximity. Click a row to open the migration plot."
+    ),
+    "core_pairs": (
+        "Directed core-to-core migration counts, bounce-backs, and average gap. "
+        "Click a pair to open the pair plot."
+    ),
+    "affinity": (
+        "Last affinity mask vs cores actually used. Violations are runs outside "
+        "the mask. Click a task to highlight it."
+    ),
+    "task_core": (
+        "Share of the scoped span each task spent on each core. Click a cell "
+        "to jump to the first slice on that core."
+    ),
+    "core_time": (
+        "Per-core busy percent in equal time bins of the current scope. "
+        "Click a bin to zoom that window."
+    ),
+    "lifecycle": (
+        "Create, delete, suspend, and resume STI events, plus alive span and "
+        "run count. Click a task to jump to create (when present) and highlight it."
+    ),
+    "deadline": (
+        "Slice duration vs per-task deadline, and CPU% vs budget. Configure "
+        "thresholds in Settings → Display. Click a row to jump to that slice."
+    ),
+    "task_health": (
+        "Heuristic score from measured statistics, not an AI probability. "
+        "Click a band to open that Statistics section."
+    ),
+    "anomalies": (
+        "Unusual long tails, migration / preemption / ISR / wakeup bursts, "
+        "CPU spikes, idle gaps, response-time tails, mutex-wait spikes, "
+        "and deadline misses in the current scope. Click a row to zoom, "
+        "place C1–C2, and open the matching table. Investigate… sends the "
+        "selected (or top) anomaly to the AI tab."
+    ),
+    "worst": (
+        "Longest execution, blocking, inter-arrival, and heuristic response "
+        "episodes. Click a row to jump and set cursors on that episode."
+    ),
+    "crit_path": (
+        "Longest heuristic ready→completion windows, split into exec / "
+        "preempt / wait / migration / other. Click a component to jump to "
+        "that episode. Not a kernel release/completion pair."
+    ),
+    "patterns": (
+        "Anomaly kinds that repeat for the same task in this scope. Click a "
+        "row to jump to the worst instance."
+    ),
+    "exec": (
+        "On-CPU slice duration per task: runs, CPU%, min/avg/max, jitter "
+        "(max−min), σ, p95, and p99. Click the task for the plot; click min, "
+        "max, p95, or p99 to jump to that slice."
+    ),
+    "block": (
+        "Off-CPU gap from one slice end to the next activation. Click the "
+        "task for the plot; click min, max, p95, or p99 to jump to that gap."
+    ),
+    "response": (
+        "Heuristic ready→completion from the previous slice end to this slice "
+        "end (first slice = exec duration). Not an explicit BTF "
+        "release/completion pair. Click the task to open the Response plot; "
+        "click Min / Max / p50 / p90 / p95 / p99 / p99.9 to jump to that event."
+    ),
+    "dispatch": (
+        "Ready time from STI resume / create; dispatch = next switch-in. "
+        "Sync-object wakes are not attributed (no woken-task id in BTF)."
+    ),
+    "inter": (
+        "Time between successive activations of the same task. Click the "
+        "task for the plot; click min, max, p95, or p99 to jump to that gap."
+    ),
+    "period": (
+        "Expected period is the median inter-arrival. Missed = gap > 1.5× "
+        "expected; extra = gap < 0.5× expected; burst = gap < 0.25× expected. "
+        "Spark is inter-arrival over time. Click a time to jump; click the "
+        "task to open the Inter-arrival plot."
+    ),
+    "jitter": (
+        "Max−min spread and CV for execution, blocking, inter-arrival, "
+        "heuristic response, STI dispatch latency, and wake-to-run "
+        "(response wait stand-in). Click a column to open the matching plot."
+    ),
+    "distrib": (
+        "Pick a metric and task, then open the existing histogram/CDF plot. "
+        "Wake is heuristic response wait; dispatch uses STI resume/create → switch-in."
+    ),
+    "preemption": (
+        "Victim × preemptor pairs while the victim is off-CPU on the same core. "
+        "Click a row to open the preemption plot for that pair."
+    ),
+    "preempt_matrix": (
+        "Victim × preemptor overlap during off-CPU gaps on the same core. "
+        "Click a ranking row or matrix cell to jump to the longest overlap."
+    ),
+    "priority": (
+        "Tasks boosted above their create priority by set_priority STI events. "
+        "Orange bands = boost; red = classic L/M/H pattern (medium-priority "
+        "task between base and peak)."
+    ),
+    "sync": (
+        "Pairs take/give STI events by object pointer (0x........). Flags "
+        "orphan gives, unmatched takes, delete-while-held, and multi-mutex "
+        "hold at trace end (deadlock risk)."
+    ),
+    "wait_owner": (
+        "Heuristic mutex handoff matrix: the next distinct acquirer is treated "
+        "as the waiter for the previous hold. Not a kernel wait queue. Click a "
+        "cell to zoom the longest handoff."
+    ),
+    "mutex_block": (
+        "Per-task mutex wait totals from heuristic handoffs (next distinct "
+        "acquirer × previous holder). Not a kernel wait queue. Click a row to "
+        "jump to the longest wait."
+    ),
+    "queue": (
+        "Pairs send/recv STI events by queue pointer (0x........)."
+    ),
+    "intervals": (
+        "Paired interval_start / interval_stop STI events. Click a row to "
+        "open the interval plot."
+    ),
+    "tags": (
+        "tag0_event … tag7_event STI sample values. Click a row to open "
+        "the tag plot."
+    ),
+}
+
 
 def normalize_stats_pins(raw) -> List[str]:
     """Return a de-duplicated, ordered list of valid pinned section IDs."""
@@ -465,6 +730,20 @@ def default_section_table_heights() -> Dict[str, int]:
         "cores": STATS_CORES_UTIL_DEFAULT_H,
         "tasks": STATS_UTIL_DEFAULT_H,
         "migrations": STATS_TABLE_MIG_DEFAULT_H,
+        "anomalies": STATS_TABLE_DEFAULT_H,
+        "worst": STATS_TABLE_DEFAULT_H,
+        "period": STATS_TABLE_DEFAULT_H,
+        "task_core": STATS_TABLE_DEFAULT_H,
+        "wait_owner": STATS_TABLE_DEFAULT_H,
+        "task_health": STATS_TABLE_DEFAULT_H,
+        "response": STATS_TABLE_DEFAULT_H,
+        "crit_path": STATS_TABLE_DEFAULT_H,
+        "preempt_matrix": STATS_TABLE_DEFAULT_H,
+        "mutex_block": STATS_TABLE_DEFAULT_H,
+        "core_time": STATS_TABLE_DEFAULT_H,
+        "jitter": STATS_TABLE_DEFAULT_H,
+        "distrib": STATS_TABLE_DEFAULT_H,
+        "patterns": STATS_TABLE_DEFAULT_H,
         "exec": STATS_TABLE_DEFAULT_H,
         "block": STATS_TABLE_DEFAULT_H,
         "inter": STATS_TABLE_DEFAULT_H,
@@ -918,6 +1197,12 @@ _IC_ANALYSIS = (
     "M2 1.5A.5.5 0 0 1 2.5 1h9A1.5 1.5 0 0 1 13 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-9"
     "A.5.5 0 0 1 2 14.5v-13zM3 2v12h8.5a.5.5 0 0 0 .5-.5v-11a.5.5 0 0 0-.5-.5H3z"
     "M4.5 4h6v1h-6V4zm0 2.5h6v1h-6v-1zm0 2.5h4v1h-4V9z"
+)
+_IC_COMPARE = (
+    "M1.5 1h5a.5.5 0 0 1 .5.5v13a.5.5 0 0 1-.5.5h-5a.5.5 0 0 1-.5-.5v-13A.5.5 0 0 1 1.5 1z"
+    "M2 2v12h4V2H2z"
+    "M9.5 1h5a.5.5 0 0 1 .5.5v13a.5.5 0 0 1-.5.5h-5a.5.5 0 0 1-.5-.5v-13A.5.5 0 0 1 9.5 1z"
+    "M10 2v12h4V2h-4z"
 )
 _IC_EXPORT_CSV = ("M2 1h12a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zm0 1v12h12V2H2zm2 2h8v1H4V4zm0 2h8v1H4V6zm0 2h5v1H4V8z")
 _IC_TICK_DIST = ("M1.5 12.5h2.5V8H1.5v4.5zm3.5 0H7.5V5H5v7.5zm3.5 0h2.5V2H8.5v10.5zm3.5 0H14v-5h-2.5v5.5z")
@@ -3654,6 +3939,8 @@ class BtfTrace:
     sched_ctx_switches: Optional[int]                                       = None
     sched_core_gaps: Optional[List[int]]                                    = None
     migration_rows_full: Optional[List[dict]]                               = None
+    # Full-trace Statistics harvest filled at parse (exec / block / inter / mig).
+    ux_events_full: Optional[List[dict]]                                    = None
     interval_instances: List["IntervalInstance"]                            = field(default_factory=list)
     interval_ids: List[str]                                                 = field(default_factory=list)
     interval_instances_by_id: Dict[str, List["IntervalInstance"]]            = field(default_factory=dict)
@@ -6037,8 +6324,9 @@ def _build_trace_compare_rows(
     hi_a: Optional[int] = None,
     lo_b: Optional[int] = None,
     hi_b: Optional[int] = None,
+    deadlines: Optional[dict] = None,
 ) -> Dict[str, List[List]]:
-    """Build all Trace Compare tables as a dict of row lists."""
+    """Build all Trace Compare tables as a dict of row lists."""""
     a = _trace_summary_snapshot(trace_a, lo_a, hi_a)
     b = _trace_summary_snapshot(trace_b, lo_b, hi_b)
     scale = a["time_scale"]
@@ -6285,6 +6573,46 @@ def _build_trace_compare_rows(
          _fmt_signed_int_delta(sa["queue"] - sb["queue"])],
     ]
 
+    extras_fn = globals().get("compare_analysis_tables")
+    if extras_fn is None:
+        from .ux_explore import compare_analysis_tables as extras_fn
+    extras = extras_fn(trace_a, trace_b, lo_a, hi_a, lo_b, hi_b, deadlines)
+    metrics = extras.get("metrics") or {}
+    summary_rows.extend([
+        ["Response P99 (worst task)",
+         _format_time(int(metrics.get("response_p99_a") or 0), scale),
+         _format_time(int(metrics.get("response_p99_b") or 0), scale),
+         _fmt_signed_time_delta(
+             int(metrics.get("response_p99_a") or 0)
+             - int(metrics.get("response_p99_b") or 0), scale)],
+        ["Mutex blocking (total)",
+         _format_time(int(metrics.get("mutex_ns_a") or 0), scale),
+         _format_time(int(metrics.get("mutex_ns_b") or 0), scale),
+         _fmt_signed_time_delta(
+             int(metrics.get("mutex_ns_a") or 0)
+             - int(metrics.get("mutex_ns_b") or 0), scale)],
+        ["Deadline misses",
+         int(metrics.get("deadline_misses_a") or 0),
+         int(metrics.get("deadline_misses_b") or 0),
+         _fmt_signed_int_delta(
+             int(metrics.get("deadline_misses_a") or 0)
+             - int(metrics.get("deadline_misses_b") or 0))],
+    ])
+    response_rows = [
+        [r.get("name"),
+         _format_time(int(r.get("p99_a") or 0), scale),
+         _format_time(int(r.get("p99_b") or 0), scale),
+         _fmt_signed_time_delta(int(r.get("delta_ns") or 0), scale)]
+        for r in extras.get("response") or []
+    ]
+    mutex_rows = [
+        [r.get("name"),
+         _format_time(int(r.get("total_a") or 0), scale),
+         _format_time(int(r.get("total_b") or 0), scale),
+         _fmt_signed_time_delta(int(r.get("delta_ns") or 0), scale)]
+        for r in extras.get("mutex_block") or []
+    ]
+
     return {
         "summary": summary_rows,
         "top": top_rows,
@@ -6295,6 +6623,9 @@ def _build_trace_compare_rows(
         "inter_arrival": inter_rows,
         "preemption": pre_rows,
         "sync": sync_rows,
+        "response": response_rows,
+        "mutex_block": mutex_rows,
+        "shared_patterns": extras.get("shared_patterns") or [],
     }
 
 _CSV_FORMULA_LEAD_CHARS = ("=", "+", "-", "@", "\t", "\r")
@@ -6382,6 +6713,14 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
         "Victim,Count A,Count B,Δ,Total A,Total B",
         tables.get("preemption", []), 6)
     _section("Sync Objects", "Metric,Trace A,Trace B,Δ", tables.get("sync", []), 4)
+    _section(
+        "Response P99",
+        "Task,P99 A,P99 B,Δ",
+        tables.get("response", []), 4)
+    _section(
+        "Mutex Blocking",
+        "Task,Total A,Total B,Δ",
+        tables.get("mutex_block", []), 4)
 
     while lines and lines[-1] == "":
         lines.pop()
@@ -6469,6 +6808,12 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
         _card("Sync Objects",
               ["Metric", "Trace A", "Trace B", "Δ"],
               tables.get("sync", []), "No sync instrumentation in either trace"),
+        _card("Response P99",
+              ["Task", "P99 A", "P99 B", "Δ"],
+              tables.get("response", []), "No response samples in either trace"),
+        _card("Mutex Blocking",
+              ["Task", "Total A", "Total B", "Δ"],
+              tables.get("mutex_block", []), "No mutex blocking in either trace"),
     ]
 
     return btf_html_report_document(
@@ -6573,6 +6918,74 @@ def _find_extreme_inter_arrival_segment(segs: list,
             best_gap = gap
             best_seg = nxt
     return best_seg
+
+def _percentile_sample_index(n: int, p: float) -> int:
+    """Index of the p-quantile in a sorted n-sample list (stats-table formula)."""
+    if n <= 0:
+        return 0
+    return min(n - 1, max(0, math.ceil(n * float(p)) - 1))
+
+def _find_percentile_exec_segment(segs: list, p: float,
+                                  lo: Optional[int] = None,
+                                  hi: Optional[int] = None
+                                  ) -> Optional[TaskSegment]:
+    """Return the slice at percentile *p* of duration."""
+    samples: List[Tuple[int, TaskSegment]] = []
+    for s in segs or []:
+        d = s.end - s.start
+        if d <= 0:
+            continue
+        if lo is not None and hi is not None and not _seg_fully_in_range(s, lo, hi):
+            continue
+        samples.append((d, s))
+    if not samples:
+        return None
+    samples.sort(key=lambda kv: kv[0])
+    return samples[_percentile_sample_index(len(samples), p)][1]
+
+def _find_percentile_blocking_segment(segs: list, p: float,
+                                      lo: Optional[int] = None,
+                                      hi: Optional[int] = None
+                                      ) -> Optional[TaskSegment]:
+    """Return the resume slice at percentile *p* of off-CPU gap."""
+    if not segs or len(segs) < 2:
+        return None
+    ordered = sorted(segs, key=lambda s: s.start)
+    samples: List[Tuple[int, TaskSegment]] = []
+    for i in range(1, len(ordered)):
+        prev, nxt = ordered[i - 1], ordered[i]
+        if lo is not None and hi is not None:
+            if not (_seg_fully_in_range(prev, lo, hi) and _seg_fully_in_range(nxt, lo, hi)):
+                continue
+        gap = nxt.start - prev.end
+        if gap > 0:
+            samples.append((gap, nxt))
+    if not samples:
+        return None
+    samples.sort(key=lambda kv: kv[0])
+    return samples[_percentile_sample_index(len(samples), p)][1]
+
+def _find_percentile_inter_arrival_segment(segs: list, p: float,
+                                           lo: Optional[int] = None,
+                                           hi: Optional[int] = None
+                                           ) -> Optional[TaskSegment]:
+    """Return the activation slice at percentile *p* of inter-arrival gap."""
+    if not segs or len(segs) < 2:
+        return None
+    ordered = sorted(segs, key=lambda s: s.start)
+    samples: List[Tuple[int, TaskSegment]] = []
+    for i in range(1, len(ordered)):
+        prev, nxt = ordered[i - 1], ordered[i]
+        gap = nxt.start - prev.start
+        if gap <= 0:
+            continue
+        if lo is not None and hi is not None and (nxt.start < lo or nxt.start > hi):
+            continue
+        samples.append((gap, nxt))
+    if not samples:
+        return None
+    samples.sort(key=lambda kv: kv[0])
+    return samples[_percentile_sample_index(len(samples), p)][1]
 
 class _ParseCancelledError(Exception):
     """Internal control-flow exception used to abort _parse_btf cleanly."""
@@ -7153,6 +7566,11 @@ def _parse_btf(filepath: str,
     trace.sched_ctx_switches = _ctx
     trace.sched_core_gaps = _gaps
     trace.migration_rows_full = _migration_rows(trace)
+    # Bundle concatenates modules into one file, so a relative import fails there.
+    prepare = globals().get("prepare_ux_events")
+    if prepare is None:
+        from .ux_explore import prepare_ux_events as prepare
+    prepare(trace)
     return trace
 
 # ===========================================================================
@@ -13589,6 +14007,7 @@ class TimelineView(QGraphicsView):
     ask_ai_event_requested       = Signal(object)  # {task, core, start, stop, ns}
     clear_bookmarks_requested   = Signal()      # clear all bookmarks
     clear_annotations_requested = Signal()      # clear all annotations
+    clear_all_marks_requested   = Signal()      # cursors + bookmarks + annotations
     pre_change                  = Signal()      # emitted before any cursor/mark mutation
 
     def __init__(self, parent=None):
@@ -13649,6 +14068,7 @@ class TimelineView(QGraphicsView):
         # pushes (timescale_per_px, center_ns, orth_coord, fit_mode, seg_key)
         # so that double-clicking the same segment again restores the prior view.
         self._zoom_history: list = []
+        self._ai_enabled: bool = True
 
         # Segment-boundary jump cache (populated lazily, keyed to trace obj).
         self._seg_starts_cache: List[int] = []
@@ -15861,6 +16281,16 @@ class TimelineView(QGraphicsView):
                 self.cursors_changed.emit(self._scene.cursor_times())
         self._press_pos = None
 
+    def set_ai_enabled(self, enabled: bool) -> None:
+        """Gray out timeline AI context-menu items when Settings → AI is off."""
+        self._ai_enabled = bool(enabled)
+
+    def _style_ai_menu_action(self, action) -> None:
+        on = bool(getattr(self, "_ai_enabled", True))
+        action.setEnabled(on)
+        action.setToolTip(
+            "" if on else "Enable AI Assistant in Settings → AI")
+
     def contextMenuEvent(self, event) -> None:
         # Suppress the context menu when the click lands inside the label column.
         # QContextMenuEvent uses .pos()/.globalPos() - NOT .position() (QMouseEvent only)
@@ -15899,7 +16329,7 @@ class TimelineView(QGraphicsView):
                 lambda _t=_seg_task, _c=hit_seg.core: self._scene.set_highlighted_task(
                     _task_merge_key(_t), locked=True, core_name=_c, ref_ns=hit_seg.start)
             )
-            menu.addAction(
+            act_ask = menu.addAction(
                 _svg_icon("M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4.414l-2.707 2.707A1 1 0 0 1 0 14.586V2zm2-1a1 1 0 0 0-1 1v10.586L3.293 10.5H14a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H2z", _icon_color),
                 "Ask AI about this event",
                 lambda _t=_seg_task, _c=hit_seg.core, _s=hit_seg, _ns=ns: self.ask_ai_event_requested.emit({
@@ -15910,6 +16340,7 @@ class TimelineView(QGraphicsView):
                     "ns": _ns,
                 })
             )
+            self._style_ai_menu_action(act_ask)
             menu.addSeparator()
 
         # Place cursor
@@ -15934,11 +16365,12 @@ class TimelineView(QGraphicsView):
                          self.cursors_changed.emit([]))
             )
         if len(self._scene.cursor_times()) >= 2:
-            menu.addAction(
+            act_region = menu.addAction(
                 _svg_icon("M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4.414l-2.707 2.707A1 1 0 0 1 0 14.586V2zm2-1a1 1 0 0 0-1 1v10.586L3.293 10.5H14a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H2z", _icon_color),
                 "Explain this region with AI",
                 lambda: self.explain_region_requested.emit()
             )
+            self._style_ai_menu_action(act_region)
         if self._scene._trace is not None:
             menu.addSeparator()
             # Bookmark icon - flag/ribbon shape
@@ -15969,6 +16401,21 @@ class TimelineView(QGraphicsView):
                         "Clear all annotations",
                         lambda: self.clear_annotations_requested.emit()
                     )
+        menu.addSeparator()
+        _has_cursors = bool(self._scene.cursor_times())
+        _has_bm = getattr(self, '_has_bookmarks', False)
+        _has_an = getattr(self, '_has_annotations', False)
+        act_marks = menu.addAction(
+            _svg_icon(_IC_CLEAR, _icon_color),
+            "Clear all marks",
+            lambda: self.clear_all_marks_requested.emit(),
+        )
+        _has_marks = _has_cursors or _has_bm or _has_an
+        act_marks.setEnabled(_has_marks)
+        act_marks.setToolTip(
+            "Clear all cursors, bookmarks, and annotations"
+            if _has_marks else
+            "No cursors, bookmarks, or annotations to clear")
         menu.exec(event.globalPos())
 
     # ------------------------------------------------------------------
@@ -17038,6 +17485,18 @@ _TOOL_REASONS: Dict[str, str] = {
     "generate_experiment_plan": "Rank concrete firmware / what-if experiments",
     "record_experiment_outcome": "Feed measured results back into recommendations",
     "score_investigation": "Evidence efficiency, cost, stop, and falsification scores",
+    "analyze_temporal_causality": "Order findings into a happens-before chain",
+    "build_task_dependency_graph": "Task/resource graph from BTF sync, preemption, and migration",
+    "decompose_response_time": "Split delay into blocking, preemption, and execution",
+    "rank_root_causes": "Rank likely causes across findings and hypotheses",
+    "verify_claim": "Check a causal claim against findings and scope",
+    "challenge_conclusion": "List alternatives and missing evidence",
+    "investigation_memory": "Store or recall similar past investigations",
+    "cluster_incidents": "Group findings by time proximity",
+    "close_investigation": "Record a conclusion and close the case",
+    "analyze_distribution": "p50/p90/p99/p99.9, stddev, CV, and 3-sigma outlier rate",
+    "analyze_periodicity": "Period/jitter (RMS, peak-to-peak) and kind: drift vs release vs WCET vs scheduler",
+    "summarize_investigation_context": "Compact findings, hypotheses, and tools run",
 }
 
 
@@ -17903,7 +18362,9 @@ def explain_finding_payload(
         )
         deep = (
             f"{technical} Leading hypotheses: {names}. "
-            "Call investigate → correlate_events → find_critical_path, "
+            "Call investigate → correlate_events → find_critical_path → "
+            "build_task_dependency_graph → analyze_temporal_causality → "
+            "rank_root_causes → challenge_conclusion, "
             "then verify jump:TIME inside the cursor window."
         )
     body = {"quick": quick, "technical": technical, "deep": deep}[lv]
@@ -17944,6 +18405,8 @@ def investigation_mode_plan(mode: str = "diagnose") -> Dict[str, Any]:
             "goal": "Find cause → gather evidence → verify",
             "tools": [
                 "investigate", "correlate_events", "find_critical_path",
+                "build_task_dependency_graph", "analyze_temporal_causality",
+                "rank_root_causes", "challenge_conclusion",
             ],
             "template": "investigate",
         },
@@ -18187,6 +18650,22 @@ def tool_call_reason(tool_name: str, finding: Optional[dict] = None) -> str:
     return base
 
 
+AI_SPLIT_BOTTOM_DEFAULT = 80
+AI_SPLIT_BOTTOM_MIN = 64
+AI_SPLIT_BOTTOM_MAX = 400
+
+
+def clamp_ai_split_bottom(raw: Any) -> int:
+    """Composer-pane height for the AI log splitter (px)."""
+    try:
+        n = int(float(str(raw).strip()))
+    except (TypeError, ValueError):
+        n = AI_SPLIT_BOTTOM_DEFAULT
+    if n <= 0:
+        n = AI_SPLIT_BOTTOM_DEFAULT
+    return max(AI_SPLIT_BOTTOM_MIN, min(AI_SPLIT_BOTTOM_MAX, n))
+
+
 def empty_cost_meter() -> Dict[str, Any]:
     return {
         "prompt_tokens": 0,
@@ -18276,11 +18755,11 @@ def format_cost_status(meter: Optional[dict]) -> str:
         usd = float(m.get("estimated_usd") or 0)
     except (TypeError, ValueError):
         usd = 0.0
-    parts = [f"{_format_token_count(tokens)} tok"]
-    if tools:
-        parts.append(f"{tools} tools")
-    if time_s:
-        parts.append(f"{time_s:g}s")
+    parts = [
+        f"{_format_token_count(tokens)} tok",
+        f"{tools} tools",
+        f"{time_s:g}s" if time_s else "0s",
+    ]
     if usd:
         parts.append(f"${usd:.3f}")
     return " · ".join(parts)
@@ -18807,6 +19286,11 @@ def builtin_investigation_templates() -> List[Dict[str, Any]]:
                 "query_raw_metric",
                 "correlate_events",
                 "find_critical_path",
+                "build_task_dependency_graph",
+                "analyze_temporal_causality",
+                "decompose_response_time",
+                "rank_root_causes",
+                "challenge_conclusion",
                 "detect_priority_inversion",
                 "generate_report",
             ],
@@ -19159,6 +19643,116 @@ BENCHMARK_METRIC_WEIGHTS: Dict[str, float] = {
     "safety": 0.15,
 }
 
+_NEGATION_RE = re.compile(r"\b(not|no|never|isn't|is not|without|reject)\b")
+_METRIC_SEP_RE = re.compile(r"[\s/_-]+")
+
+# Official Statistics page titles plus wording a model may use instead of × / slashes.
+STATS_UX_PAGE_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "timeline anomalies": ("timeline anomalies", "timeline anomaly"),
+    "worst events": ("worst events", "worst event"),
+    "period jitter": ("period jitter", "period / jitter", "period/jitter"),
+    "task health": ("task health",),
+    "task x core": ("task x core", "task-core"),
+    "waiter x owner": ("waiter x owner", "waiter-owner"),
+    "response time": ("response time", "response-time"),
+    "critical path": ("critical path", "crit path"),
+    "unified jitter": ("unified jitter",),
+    "recurring patterns": ("recurring patterns", "recurring pattern"),
+    "preemption matrix": ("preemption matrix",),
+    "mutex blocking": ("mutex blocking", "mutex-blocking"),
+    "core utilization over time": (
+        "core utilization over time", "core utilisation over time",
+    ),
+}
+
+
+def _normalize_metric_text(text: str) -> str:
+    return _METRIC_SEP_RE.sub(" ", str(text or "").lower().replace("×", "x")).strip()
+
+
+def _metric_mentioned(blob: str, metric: str) -> bool:
+    """True when *metric* (or a Statistics-page alias) appears in *blob*."""
+    raw = str(blob or "").lower()
+    want = str(metric or "").strip().lower()
+    if want and want in raw:
+        return True
+    norm_blob = _normalize_metric_text(blob)
+    norm_want = _normalize_metric_text(metric)
+    if norm_want and norm_want in norm_blob:
+        return True
+    for key, needles in STATS_UX_PAGE_ALIASES.items():
+        aliases = (key,) + tuple(needles)
+        if norm_want not in {_normalize_metric_text(a) for a in aliases}:
+            continue
+        return any(
+            _normalize_metric_text(n) in norm_blob or n in raw
+            for n in needles
+        )
+    return False
+
+
+def _blob_has_phrase(blob: str, phrase: str, *, allow_negation: bool = True) -> bool:
+    text = str(blob or "").lower()
+    needle = str(phrase or "").strip().lower()
+    if not needle:
+        return False
+    idx = text.find(needle)
+    if idx < 0:
+        return False
+    if allow_negation:
+        window = text[max(0, idx - 20):idx]
+        if _NEGATION_RE.search(window):
+            return False
+    return True
+
+
+def score_adversarial_metrics(
+    expected: Optional[dict] = None,
+    *,
+    actual_conclusion: str = "",
+    tools: Optional[Sequence[str]] = None,
+    validation: Optional[dict] = None,
+) -> Dict[str, int]:
+    """Rates (0–100, higher is worse) for trap / adversarial benchmark cases."""
+    exp = expected if isinstance(expected, dict) else {}
+    conc = str(actual_conclusion or "")
+    traps = [str(x) for x in (exp.get("trap_phrases") or []) if str(x).strip()]
+    false_confirmation = 100 if any(
+        _blob_has_phrase(conc, p) for p in traps) else 0
+
+    causal_hits = any(
+        _blob_has_phrase(conc, p)
+        for p in ("caused", "because of", "due to", "causal")
+    )
+    no_causal = bool(exp.get("no_causal")) or str(
+        exp.get("root_cause_class") or "").lower() in ("no_causal", "coincidence")
+    false_causal = 100 if no_causal and causal_hits else (
+        false_confirmation if traps else 0)
+
+    val = validation if isinstance(validation, dict) else {}
+    claims = [c for c in (val.get("claims") or []) if isinstance(c, dict)]
+    if claims:
+        bad = sum(1 for c in claims if not c.get("ok"))
+        unsupported = int(round(100.0 * bad / len(claims)))
+    else:
+        unsupported = 0
+
+    tools_l = [str(t) for t in (tools or [])]
+    required = [str(t) for t in (exp.get("required_tools") or []) if str(t)]
+    high_conf = "confidence: high" in conc.lower() or conc.lower().endswith("high.")
+    missing_required = bool(required) and not any(t in tools_l for t in required)
+    premature = 100 if (
+        (high_conf and (false_confirmation or missing_required or not tools_l))
+        or missing_required
+    ) else 0
+
+    return {
+        "false_causal_rate": int(false_causal),
+        "false_confirmation_rate": int(false_confirmation),
+        "unsupported_claim_rate": int(unsupported),
+        "premature_conclusion_rate": int(premature),
+    }
+
 
 def score_benchmark_case(
     expected: dict,
@@ -19186,8 +19780,8 @@ def score_benchmark_case(
     ev = exp.get("evidence") if isinstance(exp.get("evidence"), dict) else {}
     want_metrics = [str(x).lower() for x in (ev.get("required_metrics") or [])]
     if want_metrics:
-        blob = str(actual_conclusion or "").lower()
-        metric_hits = sum(1 for m in want_metrics if m in blob)
+        blob = str(actual_conclusion or "")
+        metric_hits = sum(1 for m in want_metrics if _metric_mentioned(blob, m))
         metric_score = int(round(100.0 * metric_hits / len(want_metrics)))
         evidence_score = (
             metric_score if not want_tasks
@@ -19208,11 +19802,23 @@ def score_benchmark_case(
 
     want_class = str(exp.get("root_cause_class") or "").lower()
     conc = str(actual_conclusion or "").lower()
-    if not want_class:
+    aliases = [str(x).lower() for x in (exp.get("root_cause_aliases") or []) if str(x).strip()]
+    if not want_class and not aliases:
         root_score = 100
-    elif want_class in conc or any(w in conc for w in want_class.split()):
+    elif (
+        (want_class and (want_class in conc or any(w in conc for w in want_class.split())))
+        or any(a in conc for a in aliases)
+    ):
         root_score = 100
     else:
+        root_score = 0
+    adv = score_adversarial_metrics(
+        exp,
+        actual_conclusion=actual_conclusion,
+        tools=actual_tools,
+        validation=validation,
+    )
+    if adv.get("false_confirmation_rate"):
         root_score = 0
 
     band = str((evidence_quality or {}).get("band") or "")
@@ -19255,6 +19861,7 @@ def score_benchmark_case(
         passed=root_score >= 50 and finding_score >= 50,
         finding_score=finding_score,
     )
+    extras.update(adv)
     return {
         "overall": max(0, min(100, overall)),
         "parts": parts,
@@ -19286,6 +19893,10 @@ def format_benchmark_score(score: dict) -> str:
         "falsification_quality": "Falsification",
         "scope_accuracy": "Scope accuracy",
         "stop_efficiency": "Stop efficiency",
+        "false_causal_rate": "False-causal rate",
+        "false_confirmation_rate": "False-confirmation rate",
+        "unsupported_claim_rate": "Unsupported-claim rate",
+        "premature_conclusion_rate": "Premature-conclusion rate",
     }
     shown = False
     for key, label in extras.items():
@@ -20062,6 +20673,18 @@ _TOOL_STEP_MAP: Dict[str, Tuple[str, ...]] = {
     "generate_experiment_plan": ("recommend",),
     "record_experiment_outcome": ("validate", "recommend"),
     "score_investigation": ("validate",),
+    "analyze_temporal_causality": ("validate",),
+    "build_task_dependency_graph": ("validate",),
+    "decompose_response_time": ("metrics", "validate"),
+    "rank_root_causes": ("hypotheses", "validate"),
+    "verify_claim": ("validate",),
+    "challenge_conclusion": ("validate",),
+    "investigation_memory": ("recommend",),
+    "cluster_incidents": ("findings",),
+    "close_investigation": ("validate", "recommend"),
+    "analyze_distribution": ("metrics",),
+    "analyze_periodicity": ("metrics",),
+    "summarize_investigation_context": ("validate",),
 }
 
 # Tools whose results refresh the Evidence / Reasoning log. Keep in sync with
@@ -20087,6 +20710,18 @@ EVIDENCE_PANEL_TOOLS: Tuple[str, ...] = (
     "generate_experiment_plan",
     "record_experiment_outcome",
     "score_investigation",
+    "analyze_temporal_causality",
+    "build_task_dependency_graph",
+    "decompose_response_time",
+    "rank_root_causes",
+    "verify_claim",
+    "challenge_conclusion",
+    "investigation_memory",
+    "cluster_incidents",
+    "close_investigation",
+    "analyze_distribution",
+    "analyze_periodicity",
+    "summarize_investigation_context",
 )
 
 _AGENT_TEMPLATE_IDS = frozenset({
@@ -21084,9 +21719,16 @@ def build_critical_path(
     for i, ev in enumerate(rows, start=1):
         label = kind_labels.get(ev["kind"], ev["kind"])
         detail = ev["detail"]
+        start = ev["time"]
+        if i < len(rows) and rows[i]["time"] > start:
+            stop = rows[i]["time"]
+        else:
+            stop = start
         path.append({
             "step": i,
             "time": ev["time"],
+            "start": start,
+            "stop": stop,
             "detail": f"{label}: {detail}" if detail else label,
             "kind": ev["kind"],
         })
@@ -21180,7 +21822,12 @@ def extract_evidence_panel_payload(
         task = str(data.get("task") or "")
         payload["conclusion"] = f"Critical path: {task}" if task else "Critical path"
         payload["evidence"] = [
-            {"label": str(p.get("detail") or ""), "time": p.get("time")}
+            {
+                "label": str(p.get("detail") or ""),
+                "time": p.get("time"),
+                "start": p.get("start"),
+                "stop": p.get("stop"),
+            }
             for p in (data.get("path") or [])
             if isinstance(p, dict)
         ]
@@ -21259,6 +21906,11 @@ def extract_evidence_panel_payload(
         "find_similar_investigations", "regression_localize", "build_causal_chain",
         "generate_experiment_plan", "record_experiment_outcome",
         "score_investigation",
+        "analyze_temporal_causality", "build_task_dependency_graph",
+        "decompose_response_time", "rank_root_causes", "verify_claim",
+        "challenge_conclusion", "investigation_memory", "cluster_incidents",
+        "close_investigation", "analyze_distribution", "analyze_periodicity",
+        "summarize_investigation_context",
     ) or data.get("steps") or data.get("verdict") or data.get("pattern"):
         payload["conclusion"] = str(result.get("message") or data.get("message") or name)
         payload["confidence"] = str(data.get("confidence") or "Medium")
@@ -22200,8 +22852,19 @@ def format_evidence_panel_markdown(
             if not isinstance(ev, dict):
                 continue
             label = str(ev.get("label") or labels["item"])
+            start, stop = ev.get("start"), ev.get("stop")
             t = ev.get("time")
-            if t is not None:
+            try:
+                s_lo = float(start) if start is not None else None
+                s_hi = float(stop) if stop is not None else None
+            except (TypeError, ValueError):
+                s_lo = s_hi = None
+            if s_lo is not None and s_hi is not None and s_hi > s_lo:
+                lines.append(
+                    f"- {label} range:{_evidence_jump_token(s_lo)}/"
+                    f"{_evidence_jump_token(s_hi)}"
+                )
+            elif t is not None:
                 token = _evidence_jump_token(t)
                 lines.append(f"- {label} jump:{token}")
             else:
@@ -24976,6 +25639,1173 @@ def score_investigation_tool(
         "tools_run": list(tools_run or []),
     }
 # ===========================================================================
+# ai_causal
+# ===========================================================================
+
+_TASK_RE = re.compile(r"([A-Za-z_][\w.-]*\s*\[[^\]]+\])")
+_JUMP_RE = re.compile(r"jump:([0-9]+(?:\.[0-9]+)?)")
+_NUM_RE = re.compile(r"([-+]?[0-9]*\.?[0-9]+)\s*(ms|us|µs|ns|%)?", re.I)
+
+_EDGE_KINDS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("blocks", ("block", "wait", "held by")),
+    ("preempts", ("preempt",)),
+    ("migrates-to", ("migrat", "affinity")),
+    ("owns", ("mutex", "lock", "owns")),
+    ("wakes", ("wake", "notify", "give")),
+    ("inherits-priority-from", ("inherit", "inversion")),
+    ("depends-on", ("depend", "after", "caused")),
+)
+
+_BUCKETS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("mutex_blocking", ("mutex", "lock", "contention", "block", "wait")),
+    ("preemption", ("preempt", "isr", "interrupt")),
+    ("migration", ("migrat", "affinity", "bounce")),
+    ("execution", ("wcet", "execution", "runtime", "cpu")),
+    ("scheduler", ("tick", "ready", "queue")),
+)
+
+_MEMORY: List[Dict[str, Any]] = []
+
+
+def investigation_memory_store() -> List[Dict[str, Any]]:
+    return list(_MEMORY)
+
+
+def set_investigation_memory(rows: Optional[Sequence[dict]] = None) -> None:
+    _MEMORY.clear()
+    for row in rows or []:
+        if isinstance(row, dict):
+            _MEMORY.append(dict(row))
+
+
+def _items(findings: Optional[Sequence[dict]]) -> List[dict]:
+    return [f for f in (findings or []) if isinstance(f, dict)]
+
+
+def _blob(finding: dict) -> str:
+    return f"{finding.get('title') or ''} {finding.get('text') or ''}"
+
+
+def _task_of(finding: dict) -> str:
+    t = str(finding.get("task") or "").strip()
+    if t:
+        return t
+    m = _TASK_RE.search(_blob(finding))
+    return m.group(1).replace(" ", "") if m else ""
+
+
+def _time_of(finding: dict) -> Optional[float]:
+    for key in ("time", "ns", "t", "start", "when"):
+        try:
+            return float(finding[key])
+        except (KeyError, TypeError, ValueError):
+            continue
+    m = _JUMP_RE.search(_blob(finding))
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def _jumps(text: str) -> List[float]:
+    out: List[float] = []
+    for m in _JUMP_RE.finditer(str(text or "")):
+        try:
+            out.append(float(m.group(1)))
+        except ValueError:
+            continue
+    return out
+
+
+def _kind_of(text: str) -> str:
+    blob = str(text or "").lower()
+    for name, keys in _EDGE_KINDS:
+        if any(k in blob for k in keys):
+            return name
+    return "correlates-with"
+
+
+def _bucket_of(text: str) -> str:
+    blob = str(text or "").lower()
+    for name, keys in _BUCKETS:
+        if any(k in blob for k in keys):
+            return name
+    return "other"
+
+
+def _magnitude(finding: dict) -> float:
+    for key in ("delta_ms", "ms", "duration", "value", "pct"):
+        try:
+            return abs(float(finding[key]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    m = _NUM_RE.search(_blob(finding))
+    if not m:
+        return 1.0
+    try:
+        n = abs(float(m.group(1)))
+    except ValueError:
+        return 1.0
+    unit = (m.group(2) or "").lower()
+    if unit == "ms":
+        return n
+    if unit in ("us", "µs"):
+        return n / 1000.0
+    if unit == "ns":
+        return n / 1e6
+    return n
+
+
+def analyze_temporal_causality(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    task: str = "",
+) -> Dict[str, Any]:
+    """Order findings in time and emit a happens-before chain (heuristic)."""
+    items = _items(findings)
+    want = str(task or "").strip()
+    rows: List[dict] = []
+    for f in items:
+        t = _time_of(f)
+        name = _task_of(f)
+        if want and name and want not in name and name not in want:
+            if want.lower() not in _blob(f).lower():
+                continue
+        rows.append({
+            "time": t,
+            "task": name,
+            "title": str(f.get("title") or f.get("id") or ""),
+            "kind": _kind_of(_blob(f)),
+            "jump": f"jump:{int(t)}" if t is not None else "",
+        })
+    rows.sort(key=lambda r: (r["time"] is None, r["time"] if r["time"] is not None else 0))
+    chain: List[str] = []
+    for i, row in enumerate(rows):
+        label = row["title"] or row["task"] or f"event {i + 1}"
+        when = row["jump"] or "untimed"
+        chain.append(f"{when}  {row['kind']}  {label}")
+    mermaid = "flowchart TB\n"
+    for i, row in enumerate(rows[:12]):
+        nid = f"E{i}"
+        mermaid += f'  {nid}["{(row["title"] or row["task"] or nid)[:48]}"]\n'
+        if i:
+            mermaid += f"  E{i - 1} --> {nid}\n"
+    if not rows:
+        mermaid += '  empty["No timed findings"]\n'
+    focus = want or (rows[0]["task"] if rows else "")
+    return {
+        "ok": True,
+        "message": (
+            f"Temporal chain for {focus or 'scope'}: {len(rows)} events"
+            if rows else "No timed findings to order"
+        ),
+        "task": focus,
+        "events": rows,
+        "chain": chain,
+        "mermaid": mermaid,
+        "disclaimer": "Heuristic happens-before from Findings times, not a kernel trace replay.",
+    }
+
+
+_GRAPH_MAX_NODES = 24
+_GRAPH_MAX_EDGES = 40
+_CAUSAL_EDGE_KINDS = frozenset((
+    "blocks", "preempts", "depends-on", "owns", "waits-for",
+    "wakes", "signals", "inherits-priority-from",
+))
+
+
+def _node_type(name: str, hint: str = "") -> str:
+    if hint:
+        return hint
+    low = str(name or "").lower()
+    if low.startswith("core") or str(name or "").startswith("Core_"):
+        return "core"
+    if low.startswith("mutex"):
+        return "mutex"
+    if low.startswith("sem"):
+        return "sem"
+    if low.startswith("queue"):
+        return "queue"
+    if "isr" in low:
+        return "isr"
+    if "[" in str(name or ""):
+        return "task"
+    return "resource"
+
+
+def _matches_focus(name: str, want: str) -> bool:
+    if not want:
+        return True
+    a, b = str(name or ""), str(want or "")
+    return bool(a) and (b in a or a in b or b.lower() in a.lower())
+
+
+def _add_dep_edge(
+    bag: Dict[Tuple[str, str, str], dict],
+    src: str,
+    dst: str,
+    kind: str,
+    *,
+    weight: float = 1.0,
+    src_type: str = "",
+    dst_type: str = "",
+) -> None:
+    src, dst = str(src or "").strip(), str(dst or "").strip()
+    if not src or not dst or src == dst:
+        return
+    try:
+        w = abs(float(weight))
+    except (TypeError, ValueError):
+        w = 1.0
+    if w <= 0:
+        w = 1.0
+    key = (src, dst, kind)
+    rec = bag.get(key)
+    if rec:
+        rec["count"] += 1
+        rec["weight"] += w
+        return
+    bag[key] = {
+        "from": src,
+        "to": dst,
+        "kind": kind,
+        "count": 1,
+        "weight": w,
+        "from_type": _node_type(src, src_type),
+        "to_type": _node_type(dst, dst_type),
+    }
+
+
+def collect_dependency_edges(
+    *,
+    sync_holds: Optional[Sequence[dict]] = None,
+    preemptions: Optional[Sequence[dict]] = None,
+    migrations: Optional[Sequence[dict]] = None,
+    priority_episodes: Optional[Sequence[dict]] = None,
+) -> List[dict]:
+    """Typed edges from compact BTF records (not finding text)."""
+    bag: Dict[Tuple[str, str, str], dict] = {}
+    by_key: Dict[str, List[dict]] = {}
+    for raw in sync_holds or []:
+        if not isinstance(raw, dict):
+            continue
+        kind = str(raw.get("kind") or "").lower()
+        key = str(raw.get("key") or f"{kind}:{raw.get('ptr') or kind or 'sync'}")
+        holder = str(raw.get("holder") or raw.get("holder_label") or "").strip()
+        try:
+            start = float(raw.get("start_ns") if raw.get("start_ns") is not None
+                          else raw.get("startNs") or 0)
+        except (TypeError, ValueError):
+            start = 0.0
+        try:
+            dur = float(raw.get("duration_ns") if raw.get("duration_ns") is not None
+                        else raw.get("durationNs") or 0)
+        except (TypeError, ValueError):
+            dur = 0.0
+        rec = {
+            "kind": kind,
+            "key": key,
+            "holder": holder,
+            "start": start,
+            "duration": dur if dur > 0 else 1.0,
+            "signal": bool(raw.get("signal")),
+        }
+        by_key.setdefault(key, []).append(rec)
+    for key, holds in by_key.items():
+        holds.sort(key=lambda h: h["start"])
+        kind = holds[0]["kind"] or "resource"
+        for h in holds:
+            if h["holder"]:
+                _add_dep_edge(
+                    bag, h["holder"], key, "owns",
+                    weight=h["duration"], src_type="task", dst_type=kind)
+                if h["signal"] or kind in ("sem", "queue"):
+                    _add_dep_edge(
+                        bag, h["holder"], key, "signals",
+                        weight=h["duration"], src_type="task", dst_type=kind)
+        for prev, cur in zip(holds, holds[1:]):
+            a, b = prev["holder"], cur["holder"]
+            if not a or not b or a == b:
+                continue
+            _add_dep_edge(
+                bag, b, key, "waits-for",
+                weight=cur["duration"], src_type="task", dst_type=kind)
+            _add_dep_edge(
+                bag, a, b, "blocks",
+                weight=prev["duration"], src_type="task", dst_type="task")
+            _add_dep_edge(
+                bag, b, a, "depends-on",
+                weight=prev["duration"], src_type="task", dst_type="task")
+            if prev["signal"] or kind in ("sem", "queue"):
+                _add_dep_edge(
+                    bag, a, b, "wakes",
+                    weight=prev["duration"], src_type="task", dst_type="task")
+    for raw in preemptions or []:
+        if not isinstance(raw, dict):
+            continue
+        pre = str(raw.get("preemptor") or "").strip()
+        vic = str(raw.get("victim") or "").strip()
+        try:
+            w = float(raw.get("weight") if raw.get("weight") is not None
+                      else raw.get("count") or 1)
+        except (TypeError, ValueError):
+            w = 1.0
+        _add_dep_edge(bag, pre, vic, "preempts", weight=w,
+                      src_type="task", dst_type="task")
+    for raw in migrations or []:
+        if not isinstance(raw, dict):
+            continue
+        task = str(raw.get("task") or "").strip()
+        core = str(raw.get("to_core") or raw.get("toCore") or "").strip()
+        _add_dep_edge(bag, task, core, "migrates-to", weight=1.0,
+                      src_type="task", dst_type="core")
+    for raw in priority_episodes or []:
+        if not isinstance(raw, dict):
+            continue
+        inherited = bool(raw.get("inherited") or raw.get("inversion_suspect")
+                         or raw.get("inversionSuspect"))
+        if not inherited:
+            continue
+        task = str(raw.get("task") or raw.get("task_label") or "").strip()
+        mediums = raw.get("medium_tasks") or raw.get("mediumTasks") or []
+        donors = [str(m).strip() for m in mediums if str(m).strip()]
+        if not donors:
+            donors = ["priority"]
+        for donor in donors[:4]:
+            _add_dep_edge(
+                bag, task, donor, "inherits-priority-from",
+                weight=1.0, src_type="task",
+                dst_type="task" if "[" in donor else "resource")
+    return sorted(
+        bag.values(),
+        key=lambda e: (-float(e.get("weight") or 0), e["from"], e["to"], e["kind"]),
+    )
+
+
+def _filter_graph_neighborhood(
+    edges: Sequence[dict],
+    want: str,
+    hops: int = 2,
+) -> List[dict]:
+    if not want:
+        return list(edges)
+    keep = {e["from"] for e in edges if _matches_focus(e["from"], want)}
+    keep |= {e["to"] for e in edges if _matches_focus(e["to"], want)}
+    if not keep:
+        return list(edges)
+    for _ in range(max(0, hops)):
+        extra = set()
+        for e in edges:
+            if e["from"] in keep or e["to"] in keep:
+                extra.add(e["from"])
+                extra.add(e["to"])
+        keep |= extra
+    return [e for e in edges if e["from"] in keep and e["to"] in keep]
+
+
+def _responsible_tasks(edges: Sequence[dict], want: str) -> List[str]:
+    if not want:
+        return []
+    seeds = {e["to"] for e in edges if _matches_focus(e["to"], want)}
+    seeds |= {e["from"] for e in edges if _matches_focus(e["from"], want)}
+    if not seeds:
+        return []
+    rev: Dict[str, List[str]] = {}
+    types: Dict[str, str] = {}
+    for e in edges:
+        types[e["from"]] = e.get("from_type") or _node_type(e["from"])
+        types[e["to"]] = e.get("to_type") or _node_type(e["to"])
+        if e.get("kind") not in _CAUSAL_EDGE_KINDS:
+            continue
+        rev.setdefault(e["to"], []).append(e["from"])
+    seen = set(seeds)
+    stack = list(seeds)
+    while stack:
+        cur = stack.pop()
+        for src in rev.get(cur, ()):
+            if src in seen:
+                continue
+            seen.add(src)
+            stack.append(src)
+    out = []
+    for name in seen:
+        if name in seeds:
+            continue
+        if types.get(name) != "task" and "[" not in name:
+            continue
+        out.append(name)
+    out.sort()
+    return out[:12]
+
+
+def _cap_graph_edges(
+    edges: Sequence[dict],
+    *,
+    max_nodes: int = _GRAPH_MAX_NODES,
+    max_edges: int = _GRAPH_MAX_EDGES,
+) -> List[dict]:
+    ranked = list(edges)
+    picked: List[dict] = []
+    nodes: set = set()
+    for e in ranked:
+        nxt = nodes | {e["from"], e["to"]}
+        if len(picked) >= max_edges:
+            break
+        if len(nxt) > max_nodes and e["from"] not in nodes and e["to"] not in nodes:
+            continue
+        if len(nxt) > max_nodes and not (e["from"] in nodes or e["to"] in nodes):
+            continue
+        if len(nxt) > max_nodes:
+            continue
+        picked.append(e)
+        nodes = nxt
+    return picked
+
+
+def _edges_from_findings(findings: Optional[Sequence[dict]]) -> List[dict]:
+    bag: Dict[Tuple[str, str, str], dict] = {}
+    for f in _items(findings):
+        src = _task_of(f) or str(f.get("title") or f.get("id") or "finding")
+        kind = _kind_of(_blob(f))
+        others = [
+            m.group(1).replace(" ", "")
+            for m in _TASK_RE.finditer(_blob(f))
+        ]
+        dsts = [o for o in others if o != src][:3]
+        if not dsts:
+            blob = _blob(f)
+            for token in ("Mutex", "Sem", "Queue", "ISR"):
+                if token.lower() in blob.lower():
+                    dsts = [token]
+                    break
+        for dst in dsts:
+            _add_dep_edge(bag, src, dst, kind)
+    return list(bag.values())
+
+
+def build_task_dependency_graph(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    edges: Optional[Sequence[dict]] = None,
+    sync_holds: Optional[Sequence[dict]] = None,
+    preemptions: Optional[Sequence[dict]] = None,
+    migrations: Optional[Sequence[dict]] = None,
+    priority_episodes: Optional[Sequence[dict]] = None,
+    task: str = "",
+    max_nodes: int = _GRAPH_MAX_NODES,
+    max_edges: int = _GRAPH_MAX_EDGES,
+) -> Dict[str, Any]:
+    """Task/resource graph from BTF records, with finding-wording fallback."""
+    want = str(task or "").strip()
+    source = "btf"
+    raw = [e for e in (edges or []) if isinstance(e, dict) and e.get("from") and e.get("to")]
+    if not raw:
+        raw = collect_dependency_edges(
+            sync_holds=sync_holds,
+            preemptions=preemptions,
+            migrations=migrations,
+            priority_episodes=priority_episodes,
+        )
+    if not raw:
+        raw = _edges_from_findings(findings)
+        source = "findings"
+    scoped = _filter_graph_neighborhood(raw, want)
+    responsible = _responsible_tasks(scoped, want)
+    capped = _cap_graph_edges(scoped, max_nodes=max_nodes, max_edges=max_edges)
+    nodes: Dict[str, str] = {}
+    for e in capped:
+        nodes.setdefault(e["from"], e.get("from_type") or _node_type(e["from"]))
+        nodes.setdefault(e["to"], e.get("to_type") or _node_type(e["to"]))
+    mermaid = "flowchart LR\n"
+    names = list(nodes.keys())
+    for i, name in enumerate(names):
+        mermaid += f'  N{i}["{name[:40]}"]\n'
+    ids = {name: f"N{i}" for i, name in enumerate(names)}
+    for e in capped:
+        a, b = ids.get(e["from"]), ids.get(e["to"])
+        if a and b and a != b:
+            mermaid += f"  {a} -->|{e['kind']}| {b}\n"
+    if not nodes:
+        mermaid += '  empty["No dependency nodes"]\n'
+    focus = want or (next(iter(nodes), ""))
+    extra = ""
+    if responsible:
+        extra = f"; {len(responsible)} task(s) upstream of {focus}"
+    origin = "BTF sync/preempt/migrate" if source == "btf" else "finding wording"
+    return {
+        "ok": True,
+        "message": f"{len(nodes)} nodes, {len(capped)} edges ({origin}){extra}",
+        "task": focus,
+        "source": source,
+        "nodes": [{"id": n, "type": t} for n, t in nodes.items()],
+        "edges": capped,
+        "responsible": responsible,
+        "mermaid": mermaid,
+        "disclaimer": (
+            "BTF edges from sync holds, preemption chains, migrations, and "
+            "priority inheritance in the current cursor (or full trace)."
+            if source == "btf"
+            else "Edges inferred from finding wording, not from the BTF wait graph."
+        ),
+    }
+
+
+def decompose_response_time(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    task: str = "",
+) -> Dict[str, Any]:
+    items = _items(findings)
+    want = str(task or "").strip()
+    buckets: Dict[str, float] = {k: 0.0 for k, _ in _BUCKETS}
+    buckets["other"] = 0.0
+    used = 0
+    for f in items:
+        name = _task_of(f)
+        if want and name and want not in name and name not in want:
+            if want.lower() not in _blob(f).lower():
+                continue
+        mag = _magnitude(f)
+        buckets[_bucket_of(_blob(f))] += mag
+        used += 1
+    total = sum(buckets.values()) or 1.0
+    parts = [
+        {"bucket": k, "ms": round(v, 4), "pct": round(100.0 * v / total, 1)}
+        for k, v in buckets.items() if v > 0
+    ]
+    parts.sort(key=lambda r: -r["pct"])
+    leader = parts[0]["bucket"] if parts else "unknown"
+    tree = [f"Response time ~ {total:.3f} (relative units)"]
+    for p in parts:
+        tree.append(f"  └─ +{p['pct']}% {p['bucket']}")
+    return {
+        "ok": True,
+        "message": f"Dominant delay: {leader}" if parts else "No delay components",
+        "task": want,
+        "parts": parts,
+        "tree": tree,
+        "dominant": leader,
+        "findings_used": used,
+        "disclaimer": "Shares are relative magnitudes from finding text/metrics, not cycle-accurate.",
+    }
+
+
+def rank_root_causes(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    hypotheses: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    items = _items(findings)
+    hyps = [h for h in (hypotheses or []) if isinstance(h, dict)]
+    ranked: List[dict] = []
+    if hyps:
+        for i, h in enumerate(hyps):
+            text = str(h.get("hypothesis") or h.get("description") or "")
+            score = 0.4 + 0.15 * min(_magnitude({"title": text}), 4)
+            status = str(h.get("status") or "").lower()
+            if status == "supported":
+                score += 0.25
+            elif status == "rejected":
+                score -= 0.4
+            overlap = sum(1 for f in items if _bucket_of(_blob(f)) == _bucket_of(text))
+            score += 0.08 * overlap
+            ranked.append({
+                "id": str(h.get("id") or f"H{i + 1}"),
+                "cause": text or str(h.get("id") or f"H{i + 1}"),
+                "score": round(max(0.01, min(0.99, score)), 3),
+                "source": "hypothesis",
+            })
+    else:
+        by_bucket: Dict[str, float] = {}
+        for f in items:
+            b = _bucket_of(_blob(f))
+            by_bucket[b] = by_bucket.get(b, 0) + _magnitude(f)
+        total = sum(by_bucket.values()) or 1.0
+        for b, v in sorted(by_bucket.items(), key=lambda kv: -kv[1]):
+            ranked.append({
+                "id": b,
+                "cause": b.replace("_", " "),
+                "score": round(v / total, 3),
+                "source": "finding",
+            })
+    ranked.sort(key=lambda r: -float(r["score"]))
+    leader = ranked[0]["cause"] if ranked else ""
+    return {
+        "ok": True,
+        "message": f"Leading cause: {leader}" if leader else "No causes to rank",
+        "ranked": ranked,
+        "leader": ranked[0] if ranked else None,
+    }
+
+
+def verify_claim(
+    claim: str = "",
+    *,
+    claim_type: str = "causal",
+    subject: str = "",
+    object: str = "",
+    evidence: Optional[Sequence[Any]] = None,
+    findings: Optional[Sequence[dict]] = None,
+    cursor_lo: Optional[float] = None,
+    cursor_hi: Optional[float] = None,
+) -> Dict[str, Any]:
+    text = str(claim or "").strip()
+    subj = str(subject or "").strip()
+    obj = str(object or "").strip()
+    items = _items(findings)
+    ev = []
+    for e in evidence or []:
+        if isinstance(e, (int, float)):
+            ev.append(float(e))
+        else:
+            ev.extend(_jumps(str(e)))
+            try:
+                ev.append(float(str(e).replace("jump:", "")))
+            except ValueError:
+                pass
+    blob = " ".join(_blob(f) for f in items).lower()
+    checks: List[dict] = []
+
+    def _add(name: str, ok: bool, detail: str) -> None:
+        checks.append({"check": name, "ok": ok, "detail": detail})
+
+    if subj:
+        _add("subject", subj.lower() in blob or any(
+            subj in _task_of(f) for f in items), f"subject {subj!r}")
+    if obj:
+        _add("object", obj.lower() in blob, f"object {obj!r}")
+    if text:
+        keys = [w for w in re.findall(r"[a-z]{4,}", text.lower()) if w not in (
+            "this", "that", "with", "from", "task")]
+        hit = sum(1 for k in keys if k in blob)
+        _add("evidence_lookup", hit >= max(1, len(keys) // 3),
+             f"{hit}/{len(keys) or 1} claim tokens in findings")
+    in_window = True
+    if cursor_lo is not None and cursor_hi is not None and ev:
+        lo, hi = min(cursor_lo, cursor_hi), max(cursor_lo, cursor_hi)
+        in_window = all(lo <= t <= hi for t in ev)
+        _add("scope", in_window, "evidence times inside cursors")
+    elif ev:
+        _add("temporal", True, f"{len(ev)} jump times")
+    contradicted = False
+    if "mutex" in text.lower() and "migrat" in blob and "mutex" not in blob:
+        contradicted = True
+        _add("contradiction", False, "Findings emphasise migration, not mutex")
+    oks = [c["ok"] for c in checks] or [False]
+    if contradicted or not any(oks):
+        verdict = "UNSUPPORTED"
+    elif all(oks):
+        verdict = "SUPPORTED"
+    else:
+        verdict = "PARTIAL"
+    return {
+        "ok": True,
+        "message": verdict,
+        "claim": text,
+        "type": str(claim_type or "causal"),
+        "subject": subj,
+        "object": obj,
+        "verdict": verdict,
+        "checks": checks,
+        "evidence_times": ev,
+    }
+
+
+def challenge_conclusion(
+    conclusion: str = "",
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    hypotheses: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    items = _items(findings)
+    conc = str(conclusion or "").strip()
+    leader = _bucket_of(conc) if conc else (
+        _bucket_of(_blob(items[0])) if items else "other")
+    alts: List[str] = []
+    seen = {leader}
+    for f in items:
+        b = _bucket_of(_blob(f))
+        if b not in seen:
+            seen.add(b)
+            alts.append(b.replace("_", " "))
+    for h in hypotheses or []:
+        if not isinstance(h, dict):
+            continue
+        text = str(h.get("hypothesis") or "")
+        if text and _bucket_of(text) not in seen:
+            alts.append(text)
+    missing = []
+    if "mutex" in leader and not any("preempt" in _blob(f).lower() for f in items):
+        missing.append("No preemption alternative was measured.")
+    if items and not any(_time_of(f) is not None for f in items):
+        missing.append("No jump:TIME on supporting findings.")
+    why_not = alts[:4]
+    return {
+        "ok": True,
+        "message": (
+            f"Alternatives to {leader}: {', '.join(why_not)}"
+            if why_not else f"No strong alternative to {leader}"
+        ),
+        "conclusion": conc,
+        "leading": leader,
+        "alternatives": why_not,
+        "missing_evidence": missing,
+        "why_not": why_not,
+    }
+
+
+def investigation_memory(
+    action: str = "recall",
+    *,
+    record: Optional[dict] = None,
+    findings: Optional[Sequence[dict]] = None,
+    limit: int = 5,
+) -> Dict[str, Any]:
+    act = str(action or "recall").strip().lower()
+    if act in ("store", "save", "add") and isinstance(record, dict):
+        entry = dict(record)
+        if findings and not entry.get("finding"):
+            items = _items(findings)
+            entry["finding"] = str((items[0] or {}).get("title") or "") if items else ""
+        _MEMORY.append(entry)
+        return {
+            "ok": True,
+            "message": f"Stored memory ({len(_MEMORY)} entries)",
+            "entry": entry,
+            "count": len(_MEMORY),
+        }
+    items = _items(findings)
+    blob = " ".join(_blob(f) for f in items).lower()
+    ranked: List[dict] = []
+    for row in _MEMORY:
+        text = " ".join(str(row.get(k) or "") for k in (
+            "finding", "root_cause", "pattern", "fix")).lower()
+        score = 0.0
+        for tok in set(re.findall(r"[a-z]{4,}", blob)):
+            if tok in text:
+                score += 1.0
+        ranked.append({**row, "score": round(score, 2)})
+    ranked.sort(key=lambda r: -float(r.get("score") or 0))
+    hits = [r for r in ranked if float(r.get("score") or 0) > 0][: max(1, int(limit))]
+    return {
+        "ok": True,
+        "message": (
+            f"Seen this pattern before ({len(hits)} hits)"
+            if hits else "No similar memories"
+        ),
+        "matches": hits,
+        "count": len(_MEMORY),
+    }
+
+
+def cluster_incidents(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    window_ns: float = 1e6,
+) -> Dict[str, Any]:
+    items = _items(findings)
+    try:
+        win = float(window_ns)
+    except (TypeError, ValueError):
+        win = 1e6
+    clusters: List[List[dict]] = []
+    timed = sorted(
+        [( _time_of(f), f) for f in items],
+        key=lambda p: (p[0] is None, p[0] or 0),
+    )
+    current: List[dict] = []
+    last_t: Optional[float] = None
+    for t, f in timed:
+        if t is None:
+            clusters.append([f])
+            continue
+        if last_t is None or abs(t - last_t) > win:
+            if current:
+                clusters.append(current)
+            current = [f]
+        else:
+            current.append(f)
+        last_t = t
+    if current:
+        clusters.append(current)
+    out = []
+    for i, group in enumerate(clusters):
+        tasks = sorted({_task_of(f) for f in group if _task_of(f)})
+        out.append({
+            "id": f"I{i + 1}",
+            "size": len(group),
+            "tasks": tasks,
+            "titles": [str(f.get("title") or f.get("id") or "") for f in group[:6]],
+        })
+    out.sort(key=lambda r: -int(r["size"]))
+    return {
+        "ok": True,
+        "message": f"{len(out)} incident cluster(s)",
+        "incidents": out,
+        "window_ns": win,
+    }
+
+
+def close_investigation(
+    conclusion: str = "",
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    experiments: Optional[Sequence[dict]] = None,
+    confidence: str = "",
+) -> Dict[str, Any]:
+    items = _items(findings)
+    conc = str(conclusion or "").strip() or (
+        str(items[0].get("title") or "") if items else "unspecified"
+    )
+    exps = [e for e in (experiments or []) if isinstance(e, dict)]
+    closed = {
+        "conclusion": conc,
+        "confidence": str(confidence or "Medium"),
+        "finding_count": len(items),
+        "experiments": exps,
+        "status": "closed",
+        "next": "Record outcome / recapture trace if an experiment is still open.",
+    }
+    return {
+        "ok": True,
+        "message": f"Closed: {conc}",
+        "case": closed,
+    }
+
+
+def analyze_distribution(
+    values: Optional[Sequence[Any]] = None,
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    metric: str = "",
+    source: str = "",
+    task: str = "",
+    truncated: bool = False,
+) -> Dict[str, Any]:
+    nums: List[float] = []
+    src = str(source or "").strip().lower()
+    for v in values or []:
+        try:
+            nums.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    if nums:
+        src = src or "values"
+    else:
+        for f in _items(findings):
+            nums.append(_magnitude(f))
+        if nums:
+            src = "findings"
+    nums.sort()
+    n = len(nums)
+    if not n:
+        return {"ok": False, "message": "No numeric samples"}
+
+    def _pct(p: float) -> float:
+        if n == 1:
+            return nums[0]
+        idx = min(n - 1, max(0, int(round((p / 100.0) * (n - 1)))))
+        return nums[idx]
+
+    mean = sum(nums) / n
+    p50, p90, p95 = _pct(50), _pct(90), _pct(95)
+    p99, p999 = _pct(99), _pct(99.9)
+    tail = (p99 / p50) if p50 else 0.0
+    stddev = 0.0
+    if n >= 2:
+        stddev = math.sqrt(sum((x - mean) ** 2 for x in nums) / (n - 1))
+    cv = (stddev / mean) if mean else 0.0
+    outliers = 0
+    if stddev > 0:
+        limit = mean + 3.0 * stddev
+        outliers = sum(1 for x in nums if x > limit)
+    outlier_rate = 100.0 * outliers / n
+    if src == "findings":
+        disclaimer = "Magnitudes from finding text, not BTF samples."
+    elif src == "btf":
+        kind = str(metric or "sample")
+        disclaimer = (
+            f"Percentiles from BTF {kind} samples in the current cursor "
+            "(or full trace)."
+        )
+    else:
+        disclaimer = "Caller-supplied samples."
+    return {
+        "ok": True,
+        "message": (
+            f"n={n} p50={p50:.4g} p90={p90:.4g} p95={p95:.4g} "
+            f"p99={p99:.4g} p99.9={p999:.4g} cv={cv:.3g} "
+            f"outliers={outlier_rate:.3g}%"
+        ),
+        "metric": str(metric or ""),
+        "task": str(task or ""),
+        "source": src or "values",
+        "n": n,
+        "mean": round(mean, 6),
+        "stddev": round(stddev, 6),
+        "cv": round(cv, 4),
+        "p50": round(p50, 6),
+        "p90": round(p90, 6),
+        "p95": round(p95, 6),
+        "p99": round(p99, 6),
+        "p99.9": round(p999, 6),
+        "tail_ratio": round(tail, 3),
+        "outlier_rate": round(outlier_rate, 3),
+        "min": round(nums[0], 6),
+        "max": round(nums[-1], 6),
+        "truncated": bool(truncated),
+        "disclaimer": disclaimer,
+    }
+
+
+def _percentile(nums: Sequence[float], p: float) -> float:
+    n = len(nums)
+    if n == 1:
+        return float(nums[0])
+    idx = min(n - 1, max(0, int(round((p / 100.0) * (n - 1)))))
+    return float(nums[idx])
+
+
+def _in_window(t: float, lo: Optional[float], hi: Optional[float]) -> bool:
+    if lo is not None and t < lo:
+        return False
+    if hi is not None and t > hi:
+        return False
+    return True
+
+
+def collect_periodicity_times(
+    times: Optional[Sequence[Any]] = None,
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    source: str = "",
+    tick_times: Optional[Sequence[Any]] = None,
+    sti_events: Optional[Sequence[dict]] = None,
+    release_times: Optional[Sequence[Any]] = None,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> List[float]:
+    """Pick timestamps for periodicity: explicit times, tick/STI, ISR/timer, releases, findings."""
+
+    def _floats(rows: Optional[Sequence[Any]]) -> List[float]:
+        out: List[float] = []
+        for v in rows or []:
+            try:
+                n = float(v)
+            except (TypeError, ValueError):
+                continue
+            if _in_window(n, lo, hi):
+                out.append(n)
+        return out
+
+    src = str(source or "auto").strip().lower() or "auto"
+    explicit = _floats(times)
+    if explicit:
+        return sorted(set(explicit))
+    ticks = _floats(tick_times)
+    if src in ("tick", "sti") or (src == "auto" and ticks):
+        if ticks or src in ("tick", "sti"):
+            return sorted(set(ticks))
+
+    def _sti_match(*needles: str) -> List[float]:
+        out: List[float] = []
+        for ev in sti_events or []:
+            if not isinstance(ev, dict):
+                continue
+            blob = " ".join(str(ev.get(k) or "") for k in (
+                "target", "event", "note", "channel")).lower()
+            if not any(n in blob for n in needles):
+                continue
+            try:
+                n = float(ev.get("time") if ev.get("time") is not None else ev.get("ns"))
+            except (TypeError, ValueError):
+                continue
+            if _in_window(n, lo, hi):
+                out.append(n)
+        return out
+
+    if src == "isr":
+        return sorted(set(_sti_match("isr", "interrupt")))
+    if src == "timer":
+        return sorted(set(_sti_match("timer")))
+    if src == "release":
+        return sorted(set(_floats(release_times)))
+    if src == "auto":
+        isr = _sti_match("isr", "interrupt")
+        if isr:
+            return sorted(set(isr))
+        timer = _sti_match("timer")
+        if timer:
+            return sorted(set(timer))
+        releases = _floats(release_times)
+        if releases:
+            return sorted(set(releases))
+    found = []
+    for f in _items(findings):
+        t = _time_of(f)
+        if t is not None and _in_window(t, lo, hi):
+            found.append(t)
+    return sorted(set(found))
+
+
+def _classify_periodicity(
+    expected: float,
+    p50: float,
+    p99: float,
+    max_gap: float,
+    cv: float,
+    findings: Optional[Sequence[dict]] = None,
+    durations: Optional[Sequence[float]] = None,
+) -> str:
+    blob = " ".join(_blob(f) for f in _items(findings)).lower()
+    durs = [d for d in (durations or []) if isinstance(d, (int, float))]
+    if len(durs) >= 3:
+        dmean = sum(durs) / len(durs)
+        dvar = sum((d - dmean) ** 2 for d in durs) / len(durs)
+        dcv = (math.sqrt(dvar) / dmean) if dmean else 0.0
+        if dcv > max(cv, 0.05) * 1.25:
+            return "execution-time variation"
+    if expected:
+        drift = abs(p50 - expected) / expected
+        if drift > 0.12 and cv < 0.08:
+            return "period drift"
+        if max_gap > max(expected * 2.0, p99 * 1.4 if p99 else 0):
+            if any(k in blob for k in ("preempt", "migrat", "isr", "interrupt")):
+                return "scheduler interference"
+            return "release jitter"
+    if cv >= 0.08:
+        if any(k in blob for k in ("preempt", "migrat", "isr", "interrupt")):
+            return "scheduler interference"
+        return "release jitter"
+    return "stable period"
+
+
+def analyze_periodicity(
+    times: Optional[Sequence[Any]] = None,
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    expected: Optional[float] = None,
+    source: str = "",
+    durations: Optional[Sequence[Any]] = None,
+    tick_times: Optional[Sequence[Any]] = None,
+    sti_events: Optional[Sequence[dict]] = None,
+    release_times: Optional[Sequence[Any]] = None,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> Dict[str, Any]:
+    ts = collect_periodicity_times(
+        times, findings=findings, source=source, tick_times=tick_times,
+        sti_events=sti_events, release_times=release_times, lo=lo, hi=hi,
+    )
+    if len(ts) < 3:
+        return {
+            "ok": False,
+            "message": "Need ≥3 timestamps for periodicity",
+            "n": len(ts),
+            "source": str(source or "auto"),
+        }
+    gaps = [ts[i] - ts[i - 1] for i in range(1, len(ts))]
+    gaps_sorted = sorted(gaps)
+    mean = sum(gaps) / len(gaps)
+    p50 = _percentile(gaps_sorted, 50)
+    p99 = _percentile(gaps_sorted, 99)
+    max_gap = gaps_sorted[-1]
+    min_gap = gaps_sorted[0]
+    try:
+        exp = float(expected) if expected not in (None, "") else p50
+    except (TypeError, ValueError):
+        exp = p50
+    if not exp:
+        exp = mean
+    rms = math.sqrt(sum((g - exp) ** 2 for g in gaps) / len(gaps))
+    gap_std = math.sqrt(sum((g - mean) ** 2 for g in gaps) / len(gaps))
+    p2p = max_gap - min_gap
+    cv = (gap_std / mean) if mean else 0.0
+    durs: List[float] = []
+    for v in durations or []:
+        try:
+            durs.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    kind = _classify_periodicity(
+        exp, p50, p99, max_gap, cv, findings=findings, durations=durs)
+    return {
+        "ok": True,
+        "message": (
+            f"Expected period: {exp:.4g}  Measured p50={p50:.4g} "
+            f"p99={p99:.4g} max={max_gap:.4g}  Jitter RMS={rms:.4g} "
+            f"peak-to-peak={p2p:.4g}  ({kind})"
+        ),
+        "n": len(ts),
+        "source": str(source or "auto"),
+        "expected": round(exp, 6),
+        "period": round(mean, 6),
+        "p50": round(p50, 6),
+        "p99": round(p99, 6),
+        "max": round(max_gap, 6),
+        "jitter": round(rms, 6),
+        "rms": round(rms, 6),
+        "peak_to_peak": round(p2p, 6),
+        "cv": round(cv, 4),
+        "min_gap": round(min_gap, 6),
+        "max_gap": round(max_gap, 6),
+        "kind": kind,
+        "disclaimer": (
+            "Heuristic on inter-arrival gaps (tick/STI/ISR/timer/releases/"
+            "findings), not a kernel period timer."
+        ),
+    }
+
+
+def summarize_investigation_context(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    hypotheses: Optional[Sequence[dict]] = None,
+    tools_run: Optional[Sequence[str]] = None,
+    conclusion: str = "",
+) -> Dict[str, Any]:
+    items = _items(findings)
+    hyps = [h for h in (hypotheses or []) if isinstance(h, dict)]
+    tools = [str(t) for t in (tools_run or [])]
+    titles = [str(f.get("title") or f.get("id") or "") for f in items[:8]]
+    hyp_txt = [str(h.get("hypothesis") or h.get("id") or "") for h in hyps[:6]]
+    summary = {
+        "findings": titles,
+        "hypotheses": hyp_txt,
+        "tools_run": tools,
+        "conclusion": str(conclusion or ""),
+        "finding_count": len(items),
+    }
+    return {
+        "ok": True,
+        "message": (
+            f"{len(items)} findings, {len(hyps)} hypotheses, {len(tools)} tools"
+        ),
+        "summary": summary,
+    }
+
+
+def simulate_schedule(
+    changes: Optional[dict] = None,
+    *,
+    findings: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    """LEVEL 1 heuristic replay only — not a FreeRTOS scheduler."""
+    decomp = decompose_response_time(findings)
+    ch = changes if isinstance(changes, dict) else {}
+    predicted = dict(decomp)
+    predicted["level"] = 1
+    predicted["changes"] = ch
+    predicted["ok"] = True
+    predicted["message"] = (
+        "LEVEL 1 heuristic replay only — not a FreeRTOS-compatible scheduler."
+    )
+    predicted["disclaimer"] = predicted["message"]
+    return predicted
+# ===========================================================================
 # ai_tools
 # ===========================================================================
 
@@ -25027,6 +26857,18 @@ AI_TOOL_BUILD_CAUSAL_CHAIN = "build_causal_chain"
 AI_TOOL_GENERATE_EXPERIMENT_PLAN = "generate_experiment_plan"
 AI_TOOL_RECORD_EXPERIMENT_OUTCOME = "record_experiment_outcome"
 AI_TOOL_SCORE_INVESTIGATION = "score_investigation"
+AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY = "analyze_temporal_causality"
+AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH = "build_task_dependency_graph"
+AI_TOOL_DECOMPOSE_RESPONSE_TIME = "decompose_response_time"
+AI_TOOL_RANK_ROOT_CAUSES = "rank_root_causes"
+AI_TOOL_VERIFY_CLAIM = "verify_claim"
+AI_TOOL_CHALLENGE_CONCLUSION = "challenge_conclusion"
+AI_TOOL_INVESTIGATION_MEMORY = "investigation_memory"
+AI_TOOL_CLUSTER_INCIDENTS = "cluster_incidents"
+AI_TOOL_CLOSE_INVESTIGATION = "close_investigation"
+AI_TOOL_ANALYZE_DISTRIBUTION = "analyze_distribution"
+AI_TOOL_ANALYZE_PERIODICITY = "analyze_periodicity"
+AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT = "summarize_investigation_context"
 
 AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_SET_CURSORS,
@@ -25077,6 +26919,18 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_GENERATE_EXPERIMENT_PLAN,
     AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
     AI_TOOL_SCORE_INVESTIGATION,
+    AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY,
+    AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH,
+    AI_TOOL_DECOMPOSE_RESPONSE_TIME,
+    AI_TOOL_RANK_ROOT_CAUSES,
+    AI_TOOL_VERIFY_CLAIM,
+    AI_TOOL_CHALLENGE_CONCLUSION,
+    AI_TOOL_INVESTIGATION_MEMORY,
+    AI_TOOL_CLUSTER_INCIDENTS,
+    AI_TOOL_CLOSE_INVESTIGATION,
+    AI_TOOL_ANALYZE_DISTRIBUTION,
+    AI_TOOL_ANALYZE_PERIODICITY,
+    AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
 )
 
 AI_BOOKMARK_KINDS: Tuple[str, ...] = (
@@ -25141,6 +26995,10 @@ _BTF_JUMP_HREF_RE = re.compile(
     r"btfjump:(?://)?(?:time/)?([0-9]+(?:\.[0-9]+)?)",
     re.IGNORECASE,
 )
+_BTF_RANGE_HREF_RE = re.compile(
+    r"btfrange:(?://)?(?:lo/)?([0-9]+(?:\.[0-9]+)?)/([0-9]+(?:\.[0-9]+)?)",
+    re.IGNORECASE,
+)
 _BTF_HIGHLIGHT_HREF_RE = re.compile(
     r"btfhighlight:(?://)?(?:task/)?(.+)$",
     re.IGNORECASE,
@@ -25164,6 +27022,28 @@ def parse_btf_jump_href(href: Any) -> Optional[float]:
         return None
     try:
         return float(m.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def btf_range_href(lo: Any, hi: Any) -> str:
+    """Chat href for ``range:LO/HI`` that survives QTextBrowser ``setHtml``."""
+    def _tok(value: Any) -> str:
+        try:
+            n = float(value)
+        except (TypeError, ValueError):
+            return "0"
+        return str(int(n)) if n.is_integer() else str(n)
+    return f"btfrange:{_tok(lo)}/{_tok(hi)}"
+
+
+def parse_btf_range_href(href: Any) -> Optional[Tuple[float, float]]:
+    """Parse ``btfrange:LO/HI``."""
+    m = _BTF_RANGE_HREF_RE.search(str(href or ""))
+    if not m:
+        return None
+    try:
+        return float(m.group(1)), float(m.group(2))
     except (TypeError, ValueError):
         return None
 
@@ -25199,7 +27079,12 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "plan_investigation, suggest_scope, detect_contradictions, "
     "assess_evidence_sufficiency, cluster_findings, generate_fingerprint, "
     "find_similar_investigations, regression_localize, build_causal_chain, "
-    "generate_experiment_plan, record_experiment_outcome, score_investigation. "
+    "generate_experiment_plan, record_experiment_outcome, score_investigation, "
+    "analyze_temporal_causality, build_task_dependency_graph, "
+    "decompose_response_time, rank_root_causes, verify_claim, "
+    "challenge_conclusion, investigation_memory, cluster_incidents, "
+    "close_investigation, analyze_distribution, analyze_periodicity, "
+    "summarize_investigation_context. "
     "For root-cause or Investigate templates: call plan_investigation and "
     "suggest_scope, then detect_anomalies and "
     "investigate(finding_id) first for a root-cause chain, then "
@@ -25234,6 +27119,12 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "state as HTML or CSV. "
     "For what-if / optimize_experiment, label results as heuristic (not FreeRTOS kernel). For optimize advice questions, label estimates as "
     "'Simulation / estimate — not measured behavior' and cite evidence. "
+    "Name the Statistics page the engineer should open next "
+    "(Timeline Anomalies, Worst Events, Response Time, Critical Path, "
+    "Period / Jitter, Unified Jitter, Recurring Patterns, Task Health, "
+    "Task × Core, Core Utilization Over Time, Preemption Matrix, "
+    "Waiter × Owner, Mutex Blocking). Those pages already exist in Statistics "
+    "— do not invent a detect_timeline_anomalies tool. "
     "Tool timestamps use the same numeric trace time "
     "unit as jump:TIME. After tools run, summarise what you changed. "
     "If you cannot emit a native function call, emit a fenced btftool JSON "
@@ -26390,6 +28281,222 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY,
+                "description": (
+                    "Order Analysis Findings in time into a happens-before chain "
+                    "(heuristic; not a kernel replay)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"task": {"type": "string"}},
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH,
+                "description": (
+                    "Build a task/resource dependency graph from BTF sync holds, "
+                    "preemption chains, migrations, and priority inheritance "
+                    "(falls back to finding wording). Optional task keeps a "
+                    "2-hop neighborhood and lists upstream tasks."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"task": {"type": "string"}},
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_DECOMPOSE_RESPONSE_TIME,
+                "description": (
+                    "Split delay into mutex, preemption, migration, execution, "
+                    "and scheduler shares (relative magnitudes)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"task": {"type": "string"}},
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_RANK_ROOT_CAUSES,
+                "description": "Rank likely root causes from findings or hypotheses.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_VERIFY_CLAIM,
+                "description": (
+                    "Check a causal claim against findings and optional cursor "
+                    "scope (SUPPORTED / PARTIAL / UNSUPPORTED)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "claim": {"type": "string"},
+                        "claim_type": {"type": "string"},
+                        "subject": {"type": "string"},
+                        "object": {"type": "string"},
+                        "evidence": {
+                            "type": "array",
+                            "items": {"type": ["string", "number"]},
+                        },
+                    },
+                    "required": ["claim"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_CHALLENGE_CONCLUSION,
+                "description": (
+                    "List alternative mechanisms and missing evidence for a "
+                    "conclusion."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"conclusion": {"type": "string"}},
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_INVESTIGATION_MEMORY,
+                "description": (
+                    "Store or recall similar past investigations "
+                    "(Desktop [ai] investigation_memory / Web localStorage)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["recall", "store", "save", "add"],
+                        },
+                        "record": {"type": "object"},
+                        "limit": {"type": "integer"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_CLUSTER_INCIDENTS,
+                "description": "Cluster findings into incidents by time proximity.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"window_ns": {"type": "number"}},
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_CLOSE_INVESTIGATION,
+                "description": "Close the investigation with a conclusion and confidence.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "conclusion": {"type": "string"},
+                        "confidence": {"type": "string"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_ANALYZE_DISTRIBUTION,
+                "description": (
+                    "Percentiles (p50/p90/p95/p99/p99.9), stddev, CV, and "
+                    "3-sigma outlier rate for BTF execution, blocking, "
+                    "priority-inheritance, or tick samples; caller values; "
+                    "or finding magnitudes."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "values": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                        },
+                        "metric": {
+                            "type": "string",
+                            "enum": [
+                                "auto",
+                                "execution",
+                                "blocking",
+                                "priority_inheritance",
+                                "tick",
+                            ],
+                        },
+                        "task": {"type": "string"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_ANALYZE_PERIODICITY,
+                "description": (
+                    "Period and jitter for tick/STI/ISR/timer/task-release "
+                    "timestamps: expected vs p50/p99/max, RMS and peak-to-peak, "
+                    "and a kind (period drift / release jitter / "
+                    "execution-time variation / scheduler interference)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "times": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                        },
+                        "expected": {"type": "number"},
+                        "source": {
+                            "type": "string",
+                            "enum": ["auto", "tick", "sti", "isr", "timer", "release"],
+                        },
+                        "task": {"type": "string"},
+                        "durations": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
+                "description": "Compact findings, hypotheses, tools, and conclusion.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "conclusion": {"type": "string"},
+                        "tools_run": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        },
     ]
 
 
@@ -26890,6 +28997,18 @@ def is_query_tool(name: str) -> bool:
         AI_TOOL_GENERATE_EXPERIMENT_PLAN,
         AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
         AI_TOOL_SCORE_INVESTIGATION,
+        AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY,
+        AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH,
+        AI_TOOL_DECOMPOSE_RESPONSE_TIME,
+        AI_TOOL_RANK_ROOT_CAUSES,
+        AI_TOOL_VERIFY_CLAIM,
+        AI_TOOL_CHALLENGE_CONCLUSION,
+        AI_TOOL_INVESTIGATION_MEMORY,
+        AI_TOOL_CLUSTER_INCIDENTS,
+        AI_TOOL_CLOSE_INVESTIGATION,
+        AI_TOOL_ANALYZE_DISTRIBUTION,
+        AI_TOOL_ANALYZE_PERIODICITY,
+        AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
     )
 
 
@@ -27354,6 +29473,96 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
             "confidence": str(a.get("confidence") or "").strip(),
             "elapsed_s": elapsed,
         }, ""
+    if name == AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY:
+        return {"task": str(a.get("task") or "").strip()}, ""
+    if name == AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH:
+        return {"task": str(a.get("task") or "").strip()}, ""
+    if name == AI_TOOL_DECOMPOSE_RESPONSE_TIME:
+        return {"task": str(a.get("task") or "").strip()}, ""
+    if name == AI_TOOL_RANK_ROOT_CAUSES:
+        return {}, ""
+    if name == AI_TOOL_VERIFY_CLAIM:
+        claim = str(a.get("claim") or "").strip()
+        if not claim:
+            return None, "claim must be a non-empty string"
+        ev = a.get("evidence")
+        if ev is not None and not isinstance(ev, (list, tuple)):
+            return None, "evidence must be an array"
+        return {
+            "claim": claim,
+            "claim_type": str(a.get("claim_type") or "causal").strip() or "causal",
+            "subject": str(a.get("subject") or "").strip(),
+            "object": str(a.get("object") or "").strip(),
+            "evidence": list(ev or []),
+        }, ""
+    if name == AI_TOOL_CHALLENGE_CONCLUSION:
+        return {"conclusion": str(a.get("conclusion") or "").strip()}, ""
+    if name == AI_TOOL_INVESTIGATION_MEMORY:
+        rec = a.get("record") if isinstance(a.get("record"), dict) else None
+        limit = a.get("limit", 5)
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            return None, "limit must be an integer"
+        return {
+            "action": str(a.get("action") or "recall").strip() or "recall",
+            "record": rec,
+            "limit": limit,
+        }, ""
+    if name == AI_TOOL_CLUSTER_INCIDENTS:
+        win = a.get("window_ns", 1e6)
+        try:
+            win = float(win)
+        except (TypeError, ValueError):
+            return None, "window_ns must be a number"
+        return {"window_ns": win}, ""
+    if name == AI_TOOL_CLOSE_INVESTIGATION:
+        return {
+            "conclusion": str(a.get("conclusion") or "").strip(),
+            "confidence": str(a.get("confidence") or "").strip(),
+        }, ""
+    if name == AI_TOOL_ANALYZE_DISTRIBUTION:
+        vals = a.get("values")
+        if vals is not None and not isinstance(vals, (list, tuple)):
+            return None, "values must be an array"
+        return {
+            "values": list(vals or []),
+            "metric": str(a.get("metric") or "").strip(),
+            "task": str(a.get("task") or "").strip(),
+        }, ""
+    if name == AI_TOOL_ANALYZE_PERIODICITY:
+        times = a.get("times")
+        if times is not None and not isinstance(times, (list, tuple)):
+            return None, "times must be an array"
+        durs = a.get("durations")
+        if durs is not None and not isinstance(durs, (list, tuple)):
+            return None, "durations must be an array"
+        expected = a.get("expected")
+        if expected not in (None, ""):
+            try:
+                expected = float(expected)
+            except (TypeError, ValueError):
+                return None, "expected must be a number"
+        else:
+            expected = None
+        src = str(a.get("source") or "auto").strip().lower() or "auto"
+        if src not in ("auto", "tick", "sti", "isr", "timer", "release"):
+            return None, "source must be auto|tick|sti|isr|timer|release"
+        return {
+            "times": list(times or []),
+            "expected": expected,
+            "source": src,
+            "task": str(a.get("task") or "").strip(),
+            "durations": list(durs or []),
+        }, ""
+    if name == AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT:
+        tools = a.get("tools_run")
+        if tools is not None and not isinstance(tools, (list, tuple)):
+            return None, "tools_run must be an array"
+        return {
+            "conclusion": str(a.get("conclusion") or "").strip(),
+            "tools_run": [str(t) for t in (tools or [])],
+        }, ""
     return None, f"unknown tool {name!r}"
 
 
@@ -27522,6 +29731,30 @@ def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
         return "Record experiment outcome"
     if name == AI_TOOL_SCORE_INVESTIGATION:
         return "Score investigation"
+    if name == AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY:
+        return "Analyze temporal causality"
+    if name == AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH:
+        return "Build task dependency graph"
+    if name == AI_TOOL_DECOMPOSE_RESPONSE_TIME:
+        return "Decompose response time"
+    if name == AI_TOOL_RANK_ROOT_CAUSES:
+        return "Rank root causes"
+    if name == AI_TOOL_VERIFY_CLAIM:
+        return "Verify claim"
+    if name == AI_TOOL_CHALLENGE_CONCLUSION:
+        return "Challenge conclusion"
+    if name == AI_TOOL_INVESTIGATION_MEMORY:
+        return "Investigation memory"
+    if name == AI_TOOL_CLUSTER_INCIDENTS:
+        return "Cluster incidents"
+    if name == AI_TOOL_CLOSE_INVESTIGATION:
+        return "Close investigation"
+    if name == AI_TOOL_ANALYZE_DISTRIBUTION:
+        return "Analyze distribution"
+    if name == AI_TOOL_ANALYZE_PERIODICITY:
+        return "Analyze periodicity"
+    if name == AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT:
+        return "Summarize investigation context"
     return name.replace("_", " ")
 
 
@@ -28499,6 +30732,433 @@ def score_investigation_metrics_tool(
     return _planner_payload(score_investigation_tool(
         findings, tools_run=tools_run, elapsed_s=elapsed_s,
         conclusion=conclusion, confidence=confidence))
+
+
+def analyze_temporal_causality_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    task: str = "",
+) -> Dict[str, Any]:
+    return _planner_payload(analyze_temporal_causality(findings, task=task))
+
+
+def dependency_trace_context(
+    trace: Any,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Compact sync / preemption / migration / PI records from a loaded trace."""
+    empty: Dict[str, Any] = {
+        "sync_holds": [],
+        "preemptions": [],
+        "migrations": [],
+        "priority_episodes": [],
+    }
+    if trace is None:
+        return empty
+    lo_i = hi_i = None
+    try:
+        if lo is not None:
+            lo_i = int(lo)
+        if hi is not None:
+            hi_i = int(hi)
+    except (TypeError, ValueError):
+        lo_i = hi_i = None
+
+    objs = getattr(trace, "sync_objects", None) or getattr(trace, "syncObjects", None) or {}
+    values = objs.values() if hasattr(objs, "values") else []
+    sync_holds: List[dict] = []
+    for obj in values:
+        if not isinstance(obj, dict):
+            continue
+        kind = str(obj.get("kind") or "")
+        key = str(obj.get("key") or f"{kind}:{obj.get('ptr') or ''}")
+        for h in obj.get("holds") or []:
+            if not isinstance(h, dict):
+                continue
+            start = h.get("start_ns") if h.get("start_ns") is not None else h.get("startNs")
+            stop = h.get("stop_ns") if h.get("stop_ns") is not None else h.get("stopNs")
+            if not _overlaps_range(start, stop, lo, hi):
+                continue
+            dur = h.get("duration_ns")
+            if dur is None:
+                dur = h.get("durationNs") or 0
+            sync_holds.append({
+                "kind": kind,
+                "key": key,
+                "holder": str(h.get("holder_label") or h.get("holderLabel") or ""),
+                "start_ns": start,
+                "stop_ns": stop,
+                "duration_ns": dur or 0,
+                "signal": bool(h.get("signal")),
+            })
+
+    preemptions: List[dict] = []
+    try:
+        from .parser import _collect_preemption_events, _task_display_name
+        agg: Dict[Tuple[str, str], dict] = {}
+        repr_map = getattr(trace, "task_repr", None) or {}
+        for mk, pre_disp, _t, duration, _seg in _collect_preemption_events(
+                trace, lo_i, hi_i):
+            raw = repr_map.get(mk, mk) if isinstance(repr_map, dict) else mk
+            victim = _task_display_name(raw)
+            rec = agg.setdefault(
+                (pre_disp, victim),
+                {"preemptor": pre_disp, "victim": victim, "count": 0, "weight": 0},
+            )
+            rec["count"] += 1
+            rec["weight"] += int(duration or 0)
+        preemptions = sorted(agg.values(), key=lambda r: -r["weight"])[:40]
+    except Exception:
+        preemptions = []
+
+    migrations: List[dict] = []
+    try:
+        from .parser import _migrations_in_range, _task_display_name
+        repr_map = getattr(trace, "task_repr", None) or {}
+        for m in _migrations_in_range(trace, lo_i, hi_i):
+            raw = repr_map.get(m.merge_key, m.merge_key) if isinstance(
+                repr_map, dict) else m.merge_key
+            migrations.append({
+                "task": _task_display_name(raw),
+                "from_core": getattr(m, "from_core", "") or "",
+                "to_core": getattr(m, "to_core", "") or "",
+            })
+    except Exception:
+        migrations = []
+
+    return {
+        "sync_holds": sync_holds,
+        "preemptions": preemptions,
+        "migrations": migrations,
+        "priority_episodes": _gather_priority_episodes(trace, lo=lo, hi=hi),
+    }
+
+
+def build_task_dependency_graph_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    task: str = "",
+    edges: Optional[Sequence[dict]] = None,
+    sync_holds: Optional[Sequence[dict]] = None,
+    preemptions: Optional[Sequence[dict]] = None,
+    migrations: Optional[Sequence[dict]] = None,
+    priority_episodes: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(build_task_dependency_graph(
+        findings,
+        edges=edges,
+        sync_holds=sync_holds,
+        preemptions=preemptions,
+        migrations=migrations,
+        priority_episodes=priority_episodes,
+        task=task,
+    ))
+
+
+def decompose_response_time_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    task: str = "",
+) -> Dict[str, Any]:
+    return _planner_payload(decompose_response_time(findings, task=task))
+
+
+def rank_root_causes_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    hypotheses: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(rank_root_causes(findings, hypotheses=hypotheses))
+
+
+def verify_claim_tool(
+    claim: str = "",
+    *,
+    claim_type: str = "causal",
+    subject: str = "",
+    object: str = "",
+    evidence: Optional[Sequence[Any]] = None,
+    findings: Optional[Sequence[dict]] = None,
+    cursor_lo: Optional[float] = None,
+    cursor_hi: Optional[float] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(verify_claim(
+        claim, claim_type=claim_type, subject=subject, object=object,
+        evidence=evidence, findings=findings,
+        cursor_lo=cursor_lo, cursor_hi=cursor_hi))
+
+
+def challenge_conclusion_tool(
+    conclusion: str = "",
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    hypotheses: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(challenge_conclusion(
+        conclusion, findings=findings, hypotheses=hypotheses))
+
+
+def investigation_memory_tool(
+    action: str = "recall",
+    *,
+    record: Optional[dict] = None,
+    findings: Optional[Sequence[dict]] = None,
+    limit: int = 5,
+) -> Dict[str, Any]:
+    return _planner_payload(investigation_memory(
+        action, record=record, findings=findings, limit=limit))
+
+
+def cluster_incidents_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    window_ns: float = 1e6,
+) -> Dict[str, Any]:
+    return _planner_payload(cluster_incidents(findings, window_ns=window_ns))
+
+
+def close_investigation_tool(
+    conclusion: str = "",
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    experiments: Optional[Sequence[dict]] = None,
+    confidence: str = "",
+) -> Dict[str, Any]:
+    return _planner_payload(close_investigation(
+        conclusion, findings=findings, experiments=experiments,
+        confidence=confidence))
+
+
+def analyze_distribution_tool(
+    values: Optional[Sequence[Any]] = None,
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    metric: str = "",
+    source: str = "",
+    task: str = "",
+    truncated: bool = False,
+) -> Dict[str, Any]:
+    return _planner_payload(analyze_distribution(
+        values, findings=findings, metric=metric, source=source,
+        task=task, truncated=truncated))
+
+
+_DIST_MAX_SAMPLES = 8000
+_DIST_METRIC_ALIASES = {
+    "execution": "execution",
+    "wcet": "execution",
+    "cpu": "execution",
+    "slices": "execution",
+    "blocking": "blocking",
+    "block": "blocking",
+    "wait": "blocking",
+    "latency": "blocking",
+    "response": "blocking",
+    "priority_inheritance": "priority_inheritance",
+    "priority": "priority_inheritance",
+    "pi": "priority_inheritance",
+    "inherit": "priority_inheritance",
+    "tick": "tick",
+    "jitter": "tick",
+    "period": "tick",
+}
+
+
+def normalize_distribution_metric(metric: str, task: str = "") -> str:
+    raw = str(metric or "").strip().lower()
+    if raw in ("", "auto"):
+        return "execution" if str(task or "").strip() else "tick"
+    return _DIST_METRIC_ALIASES.get(
+        raw, "execution" if str(task or "").strip() else "tick")
+
+
+def distribution_trace_context(
+    trace: Any,
+    task: str = "",
+    metric: str = "",
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Harvest BTF sample values for analyze_distribution (cap 8000)."""
+    kind = normalize_distribution_metric(metric, task)
+    values: List[float] = []
+    resolved = ""
+    if kind == "tick":
+        times = list(getattr(trace, "tick_sti_times", None) or getattr(
+            trace, "tickStiTimes", None) or [])
+        prev = None
+        for raw in times:
+            try:
+                t = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if lo is not None and t < lo:
+                continue
+            if hi is not None and t > hi:
+                continue
+            if prev is not None and t > prev:
+                values.append(t - prev)
+                if len(values) >= _DIST_MAX_SAMPLES:
+                    break
+            prev = t
+        return {
+            "values": values,
+            "metric": kind,
+            "source": "btf",
+            "truncated": len(values) >= _DIST_MAX_SAMPLES,
+            "task": "",
+        }
+
+    want = str(task or "").strip()
+    if want and trace is not None:
+        resolved = resolve_task_key(want, _task_candidates_from_trace(trace)) or ""
+    if not resolved:
+        return {
+            "values": [],
+            "metric": kind,
+            "source": "btf",
+            "truncated": False,
+            "task": want,
+        }
+    try:
+        from .parser import _task_merge_key
+        mk = _task_merge_key(resolved)
+    except Exception:
+        mk = resolved
+    segs = _segs_for_mk(trace, mk) or _segs_for_mk(trace, resolved)
+    if kind == "execution":
+        for seg in segs:
+            start = getattr(seg, "start", None) if not isinstance(seg, dict) else seg.get("start")
+            end = getattr(seg, "end", None) if not isinstance(seg, dict) else seg.get("end")
+            if start is None or end is None or not _overlaps_range(start, end, lo, hi):
+                continue
+            dur = int(end) - int(start)
+            if lo is not None and hi is not None:
+                dur = max(0, min(int(end), int(hi)) - max(int(start), int(lo)))
+            if dur > 0:
+                values.append(float(dur))
+            if len(values) >= _DIST_MAX_SAMPLES:
+                break
+    elif kind == "blocking":
+        ordered = sorted(
+            segs,
+            key=lambda s: getattr(s, "start", None) if not isinstance(s, dict) else s.get("start"),
+        )
+        for prev, nxt in zip(ordered, ordered[1:]):
+            prev_end = getattr(prev, "end", None) if not isinstance(prev, dict) else prev.get("end")
+            nxt_start = getattr(nxt, "start", None) if not isinstance(nxt, dict) else nxt.get("start")
+            if prev_end is None or nxt_start is None:
+                continue
+            gap = int(nxt_start) - int(prev_end)
+            if gap <= 0 or not _in_time_range(nxt_start, lo, hi):
+                continue
+            values.append(float(gap))
+            if len(values) >= _DIST_MAX_SAMPLES:
+                break
+    elif kind == "priority_inheritance":
+        by_mk = getattr(trace, "priority_episodes_by_mk", None) or getattr(
+            trace, "priorityEpisodesByMk", None)
+        eps: List[Any] = []
+        if isinstance(by_mk, dict):
+            eps = list(by_mk.get(mk) or [])
+        elif by_mk is not None and hasattr(by_mk, "get"):
+            eps = list(by_mk.get(mk) or [])
+        if not eps:
+            all_eps = getattr(trace, "priority_episodes", None) or getattr(
+                trace, "priorityEpisodes", None) or []
+            for ep in all_eps:
+                ep_mk = getattr(ep, "mk", None) or (
+                    ep.get("mk") if isinstance(ep, dict) else "")
+                if ep_mk == mk:
+                    eps.append(ep)
+        for ep in eps:
+            start = getattr(ep, "start_ns", None)
+            stop = getattr(ep, "stop_ns", None)
+            if start is None and isinstance(ep, dict):
+                start = ep.get("startNs") or ep.get("start_ns")
+                stop = ep.get("stopNs") or ep.get("stop_ns")
+            if start is None or stop is None or not _overlaps_range(start, stop, lo, hi):
+                continue
+            dur = int(stop) - int(start)
+            if dur > 0:
+                values.append(float(dur))
+            if len(values) >= _DIST_MAX_SAMPLES:
+                break
+    return {
+        "values": values,
+        "metric": kind,
+        "source": "btf",
+        "truncated": len(values) >= _DIST_MAX_SAMPLES,
+        "task": str(resolved),
+    }
+
+
+def periodicity_trace_context(trace: Any, task: str = "") -> Dict[str, Any]:
+    """Tick / STI / task-release timestamps from a loaded trace."""
+    tick = list(getattr(trace, "tick_sti_times", None) or getattr(
+        trace, "tickStiTimes", None) or [])
+    sti: List[dict] = []
+    for ev in getattr(trace, "sti_events", None) or getattr(trace, "stiEvents", None) or []:
+        if isinstance(ev, dict):
+            sti.append(ev)
+            continue
+        sti.append({
+            "time": getattr(ev, "time", None),
+            "target": getattr(ev, "target", None),
+            "event": getattr(ev, "event", None),
+            "note": getattr(ev, "note", None),
+        })
+    releases: List[float] = []
+    want = str(task or "").strip()
+    if want and trace is not None:
+        resolved = resolve_task_key(want, _task_candidates_from_trace(trace))
+        if resolved:
+            try:
+                from .parser import _task_merge_key
+                mk = _task_merge_key(resolved)
+            except Exception:
+                mk = resolved
+            for s in _segs_for_mk(trace, mk) or _segs_for_mk(trace, resolved):
+                t = getattr(s, "start", None)
+                if t is None and isinstance(s, dict):
+                    t = s.get("start")
+                try:
+                    releases.append(float(t))
+                except (TypeError, ValueError):
+                    continue
+    return {"tick_times": tick, "sti_events": sti, "release_times": releases}
+
+
+def analyze_periodicity_tool(
+    times: Optional[Sequence[Any]] = None,
+    *,
+    findings: Optional[Sequence[dict]] = None,
+    expected: Optional[float] = None,
+    source: str = "",
+    durations: Optional[Sequence[Any]] = None,
+    tick_times: Optional[Sequence[Any]] = None,
+    sti_events: Optional[Sequence[dict]] = None,
+    release_times: Optional[Sequence[Any]] = None,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> Dict[str, Any]:
+    return _planner_payload(analyze_periodicity(
+        times, findings=findings, expected=expected, source=source,
+        durations=durations, tick_times=tick_times, sti_events=sti_events,
+        release_times=release_times, lo=lo, hi=hi))
+
+
+def summarize_investigation_context_tool(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    hypotheses: Optional[Sequence[dict]] = None,
+    tools_run: Optional[Sequence[str]] = None,
+    conclusion: str = "",
+) -> Dict[str, Any]:
+    return _planner_payload(summarize_investigation_context(
+        findings, hypotheses=hypotheses, tools_run=tools_run,
+        conclusion=conclusion))
 
 
 def _events_from_metric_payload(payload: Dict[str, Any], metric: str, task: str) -> List[dict]:
@@ -29783,6 +32443,16 @@ AI_SYSTEM_PROMPT = (
     "and answer the user's diagnostic question clearly. Focus on root causes "
     "(preemption, priority inversion, lock contention, core thrashing, switch "
     "overhead, tick health). Prefer concrete task names, cores, and durations. "
+    "When recommending a next UI check, name the Statistics page "
+    "(Timeline Anomalies, Worst Events, Response Time, Critical Path, "
+    "Period / Jitter, Unified Jitter, Recurring Patterns, Task Health, "
+    "Task × Core, Core Utilization Over Time, Preemption Matrix, "
+    "Waiter × Owner, Mutex Blocking, or the matching metric table) and that "
+    "p95/p99 cells are clickable. Explain distributions with p50 / p99 / CV, "
+    "not only Max. When comparing scopes, say which window the numbers come "
+    "from. Summarise only from cited evidence. Set confidence from coverage "
+    "(High when the scoped tables contain the cited metric; Low when the "
+    "window is empty or the metric is missing). "
     "When mentioning a time, write it as jump:TIME where TIME is the numeric "
     "value in the trace time unit (e.g. jump:1805120). "
     "For every important conclusion, cite evidence (metric names, counts, "
@@ -29832,16 +32502,31 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Analysis Findings",
         "Walk through the Analysis Findings in the context. For each finding, "
         "state its severity, what it means for this RTOS/SMP system, and which "
-        "Statistics section or timeline check to open next. If there are no "
-        "findings, say so and suggest a default top-down inspection order.",
+        "Statistics section or timeline check to open next "
+        "(Timeline Anomalies, Worst Events, Response Time, Critical Path, "
+        "Task Health, Period / Jitter, Unified Jitter, Recurring Patterns, "
+        "Task × Core, Core Utilization Over Time, Preemption Matrix, "
+        "Waiter × Owner, Mutex Blocking, or the matching metric table). If there "
+        "are no findings, say so and suggest a default top-down order: "
+        "Timeline Anomalies → Worst Events → Response Time → Critical Path → "
+        "Task Health → Period / Jitter → Unified Jitter → "
+        "Execution / Blocking tails.",
     ),
     (
         "investigate",
         "Investigate",
         "Investigate the main performance problem in this scope. First call "
         "investigate() to get hypotheses and an evidence chain, then use "
-        "query_raw_metric and search_timeline as needed. Place cursors and "
+        "query_raw_metric and search_timeline as needed. Call "
+        "build_task_dependency_graph (optional task) and "
+        "analyze_temporal_causality for the wait/preempt/migrate chain. "
+        "Call rank_root_causes then challenge_conclusion. "
+        "Place cursors and "
         "zoom_to_range on the strongest evidence, highlight the key task, "
+        "name the Statistics page to open next (Timeline Anomalies, Worst "
+        "Events, Response Time, Critical Path, Task Health, Period / Jitter, "
+        "Unified Jitter, Recurring Patterns, Task × Core, Core Utilization "
+        "Over Time, Preemption Matrix, Waiter × Owner, or Mutex Blocking), "
         "and finish with: (1) goal, (2) numbered investigation steps you "
         "took, (3) root cause with confidence, (4) clickable jump:TIME "
         "evidence, (5) next mitigation to try.",
@@ -29853,9 +32538,13 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "investigate(finding_id) first, then follow the chain "
         "deadline/WCET → execution → preemption → blocking → mutex → "
         "priority inheritance → migration only as far as the evidence "
-        "supports. Call query_raw_metric / search_timeline when numbers are "
+        "supports. Call build_task_dependency_graph and "
+        "analyze_temporal_causality on the victim task. Call "
+        "rank_root_causes then challenge_conclusion. Call "
+        "query_raw_metric / search_timeline when numbers are "
         "missing. Set cursors around the worst episode, highlight the "
-        "victim task, and answer with Root cause, Evidence (bullet list with "
+        "victim task, name Timeline Anomalies or Worst Events when a tail "
+        "spike is the evidence, and answer with Root cause, Evidence (bullet list with "
         "jump:TIME), Confidence, and Suggested fix.",
     ),
     (
@@ -29864,7 +32553,10 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Verify the selected Analysis Finding. Call investigate(finding_id=ID) "
         "first (use the finding_id given in the user message). Then collect "
         "evidence with query_raw_metric / correlate_events / search_timeline as "
-        "needed. Place cursors and zoom_to_range on the strongest evidence. "
+        "needed. Call verify_claim on the finding statement and "
+        "challenge_conclusion to list alternatives. Place cursors and "
+        "zoom_to_range on the strongest evidence. Name the Statistics page "
+        "to open next. "
         "Finish with a verdict: Confirmed, Rejected, or Inconclusive; list "
         "Evidence as jump:TIME bullets; Confidence (High/Medium/Low); "
         "Alternatives considered; and one next check.",
@@ -29877,7 +32569,8 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "every jump:TIME you cite must fall between C1 and Cn. Identify "
         "longest blocking, migrations, priority changes, wakeups, mutex "
         "contention, deadline issues, idle gaps, and CPU imbalance in this "
-        "window. Call correlate_events and query_raw_metric as needed. Use "
+        "window. Check in-window Timeline Anomalies and Worst Events. Call "
+        "correlate_events and query_raw_metric as needed. Use "
         "only in-window jump:TIME evidence (or state that tools found none). "
         "End with: Summary, Top issues, Evidence, Suggested next action.",
     ),
@@ -29889,13 +32582,20 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Neutral (CPU, migrations, latency, tick health, sync). State which "
         "side is worse for each concern, the likely cause with confidence, "
         "and which Statistics section or Trace Compare page to open next. "
+        "Mention the Compare summary strip under the scope checkbox when "
+        "A vs B deltas are already summarised there, including the Why? "
+        "line computed from those deltas. "
         "Use jump:TIME when a concrete timestamp is available.",
     ),
     (
         "triage",
         "Triage findings",
         "Summarise the Analysis Findings and list the top three issues to "
-        "investigate first, with the Statistics section to open for each.",
+        "investigate first, with the Statistics section to open for each "
+        "(Timeline Anomalies, Worst Events, Response Time, Critical Path, "
+        "Task Health, Period / Jitter, Unified Jitter, Recurring Patterns, "
+        "Task × Core, Core Utilization Over Time, Preemption Matrix, "
+        "Waiter × Owner, Mutex Blocking, or the matching metric table).",
     ),
     (
         "task_profile",
@@ -29903,7 +32603,15 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Build an AI task behaviour profile for the hottest or most "
         "problematic task in the findings (CPU %, typical / p95 / WCET "
         "execution, dispatch, blocking, migrations, sync / priority "
-        "inheritance). Use query_raw_metric if needed. End with a short "
+        "inheritance). Use query_raw_metric if needed. Call "
+        "analyze_distribution (metric auto or execution) for p50 / p90 / "
+        "p99 / CV / outlier rate. Call "
+        "decompose_response_time for that task; treat the shares as relative "
+        "magnitudes, not cycle-accurate milliseconds. Name Period / Jitter, "
+        "Unified Jitter, Response Time, Task Health, and Task × Core when they "
+        "apply. Tell the engineer they "
+        "can click Execution / Blocking / Inter-arrival p95 or p99 to jump. "
+        "End with a short "
         "assessment checklist (normal / warning) and one Ask-next question.",
     ),
     (
@@ -29911,7 +32619,11 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Diagnostic report",
         "Write a structured engineering diagnostic report for this scope: "
         "Executive summary, Key findings, CPU / scheduling, WCET / "
-        "deadlines, Blocking / sync, Migrations, Root cause, "
+        "deadlines, Blocking / sync, Migrations, Task × Core, Timeline "
+        "Anomalies / Worst Events, Response Time, Critical Path, Period / "
+        "Jitter, Unified Jitter, Recurring Patterns, Task Health, Waiter × "
+        "Owner, Mutex Blocking, Preemption Matrix, Core Utilization Over Time, "
+        "Root cause, "
         "Recommendations (only when evidence supports them), and Evidence "
         "timeline with jump:TIME links. Use export_report when the user "
         "asks to save the report.",
@@ -29940,45 +32652,63 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Highest latency",
         "Which tasks show the highest latency or blocking? Explain likely "
         "causes using preemption, dispatch latency, and mutex evidence in "
-        "the context.",
+        "the context. Open Worst Events, Response Time, Critical Path, "
+        "Mutex Blocking, and Waiter × Owner "
+        "(heuristic mutex handoff — not a kernel wait queue). Click Blocking "
+        "p95/p99 to jump. Call analyze_distribution (metric blocking or auto) "
+        "for the worst-task tail. Call decompose_response_time for the "
+        "worst task; treat shares as relative, not measured milliseconds.",
     ),
     (
         "wcet",
         "WCET / hot CPU",
         "Which tasks dominate CPU and which have the worst execution-slice "
-        "Max? Recommend whether to affinity-pin, reduce fan-out, or inspect "
-        "preemption.",
+        "Max? Call analyze_distribution (metric execution) on the hottest "
+        "task and cite p50 / p99 / CV, not only Max. Open Timeline Anomalies, "
+        "Worst Events, Response Time, Period / Jitter, Unified Jitter, and "
+        "Task Health. Click Execution Max / "
+        "p95 / p99 to jump. Recommend whether to "
+        "affinity-pin, reduce fan-out, or inspect preemption.",
     ),
     (
         "migrations",
         "Migration thrash",
         "Is there core thrashing or lock-bounce? Cite migration rate, ping, "
         "dwell, and any hot mutex/queue bounces. Suggest affinity or "
-        "ownership fixes.",
+        "ownership fixes. Open Task × Core, Core Utilization Over Time, and "
+        "Timeline Anomalies migration bursts.",
     ),
     (
         "balance",
         "Core balance",
         "Is SMP load balance healthy? Interpret Load Balance Score / σ and "
-        "whether Concurrent Core Active or Switch Overhead needs attention.",
+        "whether Concurrent Core Active or Switch Overhead needs attention. "
+        "Open Task × Core for per-task per-core share of the scoped span.",
     ),
     (
         "tick",
         "Tick health",
         "Interpret Trace Health (TICK). Are large gaps expected under "
-        "tickless idle, or should we re-check inside a busy cursor window?",
+        "tickless idle, or should we re-check inside a busy cursor window? "
+        "Call analyze_periodicity (source auto or tick) and report expected "
+        "vs p50/p99/max, RMS jitter, and kind. Do not conflate this with "
+        "Period / Jitter — that page is task inter-arrival, not the tick "
+        "source.",
     ),
     (
         "priority",
         "Priority inversion",
         "Is there priority inversion or L/M/H geometry? Explain any inherit "
-        "episodes and what to verify next.",
+        "episodes and what to verify next. If mutex handoff is in play, open "
+        "Waiter × Owner (heuristic next-acquirer × previous-holder, not a "
+        "kernel wait queue).",
     ),
     (
         "deadlines",
         "Deadline / budget",
         "Are there deadline or CPU-budget concerns in the findings? What "
-        "should the engineer measure next?",
+        "should the engineer measure next? Open the Task Health deadline "
+        "band (click the band to jump to Deadlines).",
     ),
     (
         "explain_finding",
@@ -29989,7 +32719,8 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "technical). Then add jump:TIME "
         "evidence from investigate or correlate_events if the explanation "
         "is still thin. Finish with: Summary, What it means, Evidence, "
-        "What would disprove this, and one next check.",
+        "What would disprove this, and one next check that names the "
+        "Statistics page to open.",
     ),
     (
         "auto_investigate",
@@ -29998,8 +32729,14 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Call investigate(finding_id) first, then correlate_events on the "
         "same window. Call find_critical_path to build the causal chain, or "
         "detect_priority_inversion instead when investigate flags a "
-        "priority-inversion finding. Place cursors and zoom_to_range on the "
-        "strongest evidence. Then call what_if or optimize_experiment to "
+        "priority-inversion finding. Call build_task_dependency_graph and "
+        "analyze_temporal_causality on the same task. Call "
+        "rank_root_causes then challenge_conclusion. Place cursors and "
+        "zoom_to_range on the strongest evidence (Apply cursors; cite "
+        "range:LO/HI or btfrange:LO/HI when the critical path has a window). "
+        "Name Timeline Anomalies or Worst Events as the next UI check. "
+        "Then call what_if or "
+        "optimize_experiment to "
         "test a concrete mitigation. Finish with a verdict — Confirmed, "
         "Rejected, or Inconclusive — Evidence as jump:TIME bullets, "
         "Confidence (High/Medium/Low), and one recommended experiment to "
@@ -31036,6 +33773,7 @@ def normalize_ai_context(ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
 
 
 _JUMP_RE = re.compile(r"jump:([0-9]+(?:\.[0-9]+)?)")
+_RANGE_RE = re.compile(r"range:([0-9]+(?:\.[0-9]+)?)/([0-9]+(?:\.[0-9]+)?)")
 _MD_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 _MD_BOLD_RE = re.compile(r"(\*\*|__)(.+?)\1")
 _MD_ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)")
@@ -31085,6 +33823,13 @@ def _md_inline_to_html_escaped(text: str) -> str:
     for kind, val in parts:
         if kind == "c":
             # Models often wrap jump:TIME in backticks; keep those clickable.
+            rm = _RANGE_RE.fullmatch(val.strip())
+            if rm:
+                out_chunks.append(_stash(
+                    f'<a href="{btf_range_href(rm.group(1), rm.group(2))}" '
+                    f'class="ai-jump">range:{rm.group(1)}/{rm.group(2)}</a>'
+                ))
+                continue
             jm = _JUMP_RE.fullmatch(val.strip())
             if jm:
                 out_chunks.append(_stash(
@@ -31106,6 +33851,7 @@ def _md_inline_to_html_escaped(text: str) -> str:
                 low.startswith("http://")
                 or low.startswith("https://")
                 or low.startswith("btfjump:")
+                or low.startswith("btfrange:")
                 or low.startswith("btfhighlight:")
                 or low.startswith("btfhyp:")
                 or low.startswith("btfscope:")
@@ -31128,6 +33874,13 @@ def _md_inline_to_html_escaped(text: str) -> str:
             return f"<em>{body}</em>"
 
         chunk = _MD_ITALIC_RE.sub(_ital, chunk)
+        chunk = _RANGE_RE.sub(
+            lambda m: _stash(
+                f'<a href="{btf_range_href(m.group(1), m.group(2))}" '
+                f'class="ai-jump">range:{m.group(1)}/{m.group(2)}</a>'
+            ),
+            chunk,
+        )
         chunk = _JUMP_RE.sub(
             lambda m: _stash(
                 f'<a href="{btf_jump_href(m.group(1))}" class="ai-jump">'
@@ -32895,6 +35648,7 @@ def create_ai_assistant_panel(
     on_open_settings: Optional[Callable[[], None]] = None,
     on_save_settings: Optional[Callable[[Dict[str, str]], None]] = None,
     on_jump: Optional[Callable[[float], None]] = None,
+    on_range: Optional[Callable[[float, float], None]] = None,
     on_highlight: Optional[Callable[[str], None]] = None,
     on_execute_tools: Optional[Callable[[List[Dict[str, Any]]], List[Dict[str, Any]]]] = None,
     on_undo_tools: Optional[Callable[[], None]] = None,
@@ -33142,6 +35896,21 @@ def create_ai_assistant_panel(
 
             root.addWidget(actions_host)
 
+            split_top = QWidget()
+            split_top.setObjectName("aiSplitTop")
+            top_lay = QVBoxLayout(split_top)
+            top_lay.setContentsMargins(0, 0, 0, 0)
+            top_lay.setSpacing(6)
+            self._split_top = split_top
+
+            split_bottom = QWidget()
+            split_bottom.setObjectName("aiSplitBottom")
+            split_bottom.setMinimumHeight(64)
+            bottom_lay = QVBoxLayout(split_bottom)
+            bottom_lay.setContentsMargins(0, 0, 0, 0)
+            bottom_lay.setSpacing(0)
+            self._split_bottom = split_bottom
+
             self._investigation_plan: Optional[Dict[str, Any]] = None
             self._evidence_payload: Optional[Dict[str, Any]] = None
             self._interpreted_query: Optional[Dict[str, Any]] = None
@@ -33165,7 +35934,7 @@ def create_ai_assistant_panel(
             self._log.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             self._log.customContextMenuRequested.connect(self._show_log_menu)
             self._log.viewport().installEventFilter(self)
-            root.addWidget(self._log, 1)
+            top_lay.addWidget(self._log, 1)
 
             self._plan_host = QWidget()
             plan_row = QHBoxLayout(self._plan_host)
@@ -33182,7 +35951,7 @@ def create_ai_assistant_panel(
             )
             plan_row.addWidget(self._plan_view)
             self._plan_host.hide()
-            root.addWidget(self._plan_host)
+            top_lay.addWidget(self._plan_host)
 
             mode_host = QWidget()
             self._mode_host = mode_host
@@ -33203,7 +35972,7 @@ def create_ai_assistant_panel(
                 )
                 mode_row.addWidget(btn)
                 self._mode_btns.append(btn)
-            root.addWidget(mode_host)
+            top_lay.addWidget(mode_host)
 
             tpl_host = QWidget()
             self._tpl_host = tpl_host
@@ -33298,7 +36067,7 @@ def create_ai_assistant_panel(
             more_btn.clicked.connect(self._toggle_more_menu)
             more_menu.installEventFilter(self)
             tpl_row.addWidget(more_btn)
-            root.addWidget(tpl_host)
+            top_lay.addWidget(tpl_host)
 
             self.refresh_template_availability()
 
@@ -33319,12 +36088,14 @@ def create_ai_assistant_panel(
             tool_row.addWidget(self._undo_tools_btn)
             tool_row.addStretch(1)
             self._tool_bar.hide()
-            root.addWidget(self._tool_bar)
+            top_lay.addWidget(self._tool_bar)
 
             self._input = QPlainTextEdit()
             self._input.setObjectName("aiInput")
             self._input.setPlaceholderText("Ask about this trace\u2026 (Ctrl/Cmd+Enter to send)")
-            self._input.setFixedHeight(64)
+            self._input.setMinimumHeight(64)
+            self._input.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             self._input.setViewportMargins(0, 0, 44, 0)
             self._input.installEventFilter(self)
             self._input.textChanged.connect(self._refresh_send_btn)
@@ -33370,13 +36141,41 @@ def create_ai_assistant_panel(
             self._composer = composer
             self._composer_icons = icons
             composer.installEventFilter(self)
-            root.addWidget(composer)
+            composer.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            bottom_lay.addWidget(composer, 1)
             QTimer.singleShot(0, self._place_composer_icons)
 
+            split = QSplitter(Qt.Orientation.Vertical)
+            split.setObjectName("aiSplit")
+            split.setChildrenCollapsible(False)
+            split.setHandleWidth(6)
+            split.addWidget(split_top)
+            split.addWidget(split_bottom)
+            split.setStretchFactor(0, 1)
+            split.setStretchFactor(1, 0)
+            split.splitterMoved.connect(self._on_ai_split_moved)
+            self._split = split
+            self._split_ready = False
+            root.addWidget(split, 1)
+            QTimer.singleShot(0, self._restore_ai_split)
+
             self._status = QLabel("")
+            self._status.setObjectName("aiStatus")
             self._status.setStyleSheet("color:#999;font-size:11px;")
             self._status.setWordWrap(True)
             root.addWidget(self._status)
+
+            self._usage = QLabel("")
+            self._usage.setObjectName("aiUsageBar")
+            self._usage.setStyleSheet(
+                "color:#8a96a8;font-size:11px;padding:2px 0;"
+                "border-top:1px solid #3a4658;"
+            )
+            self._usage.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse)
+            root.addWidget(self._usage)
+            self._refresh_usage()
 
             self._auth_cta = QWidget()
             cta_row = QHBoxLayout(self._auth_cta)
@@ -33434,6 +36233,18 @@ def create_ai_assistant_panel(
                 )
             if getattr(self, "_status", None) is not None:
                 self._status.setStyleSheet(f"color:{c['muted']};font-size:11px;")
+            if getattr(self, "_usage", None) is not None:
+                self._usage.setStyleSheet(
+                    f"color:{c['muted']};font-size:11px;padding:2px 0;"
+                    f"border-top:1px solid {c['border']};"
+                )
+            if getattr(self, "_split", None) is not None:
+                self._split.setStyleSheet(
+                    "QSplitter::handle { background: %s; }"
+                    "QSplitter::handle:hover { background: %s; }"
+                    "QSplitter::handle:vertical { height: 6px; }"
+                    % (c["border"], c["accent"])
+                )
             inp = getattr(self, "_input", None)
             if inp is not None:
                 pal = inp.palette()
@@ -33668,13 +36479,46 @@ def create_ai_assistant_panel(
                 pass
 
         def _set_status(self, msg: str, *, error: bool = False) -> None:
-            self._status.setText(status_with_cost(msg, self._cost_meter))
+            self._status.setText(str(msg or ""))
             self._status.setStyleSheet(
                 "color:#e07070;font-size:11px;" if error
                 else "color:#999;font-size:11px;"
             )
+            self._refresh_usage()
             if error:
                 self._flash_main_status(msg)
+
+        def _refresh_usage(self) -> None:
+            bar = getattr(self, "_usage", None)
+            if bar is None:
+                return
+            bar.setText(format_cost_status(self._cost_meter))
+            bar.setToolTip(format_cost_meter(self._cost_meter))
+
+        def _restore_ai_split(self) -> None:
+            split = getattr(self, "_split", None)
+            if split is None:
+                return
+            raw = ""
+            if get_settings:
+                try:
+                    raw = str((get_settings() or {}).get("split_bottom") or "")
+                except Exception:
+                    raw = ""
+            bottom = clamp_ai_split_bottom(raw)
+            total = max(split.height(), 1)
+            top = max(80, total - bottom)
+            self._split_ready = False
+            split.setSizes([top, bottom])
+            self._split_ready = True
+
+        def _on_ai_split_moved(self, _pos: int, _index: int) -> None:
+            if not getattr(self, "_split_ready", False):
+                return
+            sizes = self._split.sizes() if getattr(self, "_split", None) else []
+            if len(sizes) < 2 or not on_save_settings:
+                return
+            on_save_settings({"split_bottom": str(clamp_ai_split_bottom(sizes[1]))})
 
         def _record_turn_usage(self, turn: dict, calls: Sequence[Any]) -> None:
             usage = turn.get("usage") if isinstance(turn, dict) else {}
@@ -33696,6 +36540,7 @@ def create_ai_assistant_panel(
                 trace_queries=sum(1 for n in names if is_query_tool(n)),
                 model_time_s=elapsed,
             )
+            self._refresh_usage()
 
         def _open_signin_page(self) -> None:
             active = self._active_ai_settings()
@@ -33790,6 +36635,11 @@ def create_ai_assistant_panel(
                 name = parse_btf_highlight_href(url.toString())
                 if on_highlight and name:
                     on_highlight(name)
+                return
+            if scheme == "btfrange":
+                pair = parse_btf_range_href(url.toString())
+                if pair and on_range:
+                    on_range(pair[0], pair[1])
                 return
             if not on_jump or scheme != "btfjump":
                 return
@@ -33887,6 +36737,7 @@ def create_ai_assistant_panel(
             self._log.clear()
             self._cost_meter = empty_cost_meter()
             self._set_status("")
+            self._refresh_usage()
             self._clear_evidence_log_entry()
             self._interpreted_query = None
             self._refresh_tool_bar()
@@ -34537,7 +37388,9 @@ def create_ai_assistant_panel(
                         break
                 prompt = (
                     f"Test hypothesis {name!r} (id={hid}). "
-                    "Call investigate then correlate_events and find_critical_path. "
+                    "Call investigate then correlate_events, find_critical_path, "
+                    "build_task_dependency_graph, analyze_temporal_causality, "
+                    "rank_root_causes, and challenge_conclusion. "
                     f"Then manage_hypotheses(hypothesis_id={hid}, "
                     "status=supported|rejected|need_evidence). "
                     "Finish with a verdict, jump:TIME evidence, and one next check."
@@ -35324,6 +38177,2163 @@ def decrypt_secret(stored: Optional[str]) -> str:
         return pt.decode("utf-8")
     except Exception:
         return ""
+# ===========================================================================
+# ux_explore
+# ===========================================================================
+
+KIND_SECTION = {
+    "exec": "exec",
+    "block": "block",
+    "inter": "inter",
+    "migration": "migrations",
+    "period": "period",
+    "task_core": "task_core",
+    "wait_owner": "wait_owner",
+    "task_health": "task_health",
+    "response": "response",
+    "preempt": "preempt_matrix",
+    "isr": "anomalies",
+    "idle": "cores",
+    "cpu": "cores",
+    "deadline": "deadline",
+    "pattern": "patterns",
+    "crit_path": "crit_path",
+    "jitter": "jitter",
+    "mutex_block": "mutex_block",
+    "core_time": "core_time",
+    "distrib": "distrib",
+}
+
+MUTEX_HANDOFF_SLACK_NS = 1_000_000
+PERIOD_MISS_RATIO = 1.5
+PERIOD_EXTRA_RATIO = 0.5
+PERIOD_BURST_RATIO = 0.25
+HEALTH_MARK = {"ok": "✓", "warn": "⚠", "fail": "❌"}
+HEALTH_BAND_SECTION = {
+    "execution": "exec",
+    "blocking": "block",
+    "period": "period",
+    "migration": "migrations",
+    "deadline": "deadline",
+    "cpu": "tasks",
+}
+
+KIND_LABEL = {
+    "exec": "execution",
+    "block": "blocking",
+    "inter": "inter-arrival",
+    "migration": "migration",
+    "response": "response",
+    "preempt": "preemption",
+    "isr": "ISR",
+    "idle": "idle",
+    "cpu": "CPU",
+    "deadline": "deadline",
+    "crit_path": "critical path",
+    "pattern": "pattern",
+    "jitter": "jitter",
+    "mutex_block": "mutex blocking",
+}
+
+_ISR_RE = re.compile(r"(isr|irq|interrupt)", re.IGNORECASE)
+CORE_TIME_BINS = 16
+BURST_WINDOW_NS = 1_000_000
+
+_JUMP_RE = re.compile(r"jump:([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+_TASK_RE = re.compile(r"\b([A-Za-z_][\w.-]*\[\d+\])")
+_DELTA_RE = re.compile(
+    r"^([+\-−])?\s*([\d.]+)\s*(ns|µs|us|μs|ms|s|/s|%)?$",
+    re.IGNORECASE,
+)
+_UNIT_NS = {
+    "ns": 1.0,
+    "us": 1000.0,
+    "µs": 1000.0,
+    "μs": 1000.0,
+    "ms": 1_000_000.0,
+    "s": 1_000_000_000.0,
+}
+_SUMMARY_STRIP_LABELS = (
+    "Span",
+    "Span (cursor range)",
+    "Context switches",
+    "Migrations (total)",
+    "Missed ticks (est.)",
+    "Response P99 (worst task)",
+    "Mutex blocking (total)",
+    "Deadline misses",
+)
+
+
+def percentile_index(n: int, p: float) -> int:
+    """Index of the p-quantile in a sorted n-sample list (stats-table formula)."""
+    if n <= 0:
+        return 0
+    pp = max(0.0, min(1.0, float(p)))
+    return min(n - 1, max(0, math.ceil(n * pp) - 1))
+
+
+def find_event_at_percentile(events: Sequence[dict], p: float) -> Optional[dict]:
+    """Return the event at percentile *p* when sorted by duration."""
+    rows = [e for e in (events or []) if isinstance(e, dict)]
+    if not rows:
+        return None
+    ordered = sorted(rows, key=lambda e: float(e.get("duration") or 0))
+    return ordered[percentile_index(len(ordered), p)]
+
+
+def collect_worst_events(events: Sequence[dict], limit: int = 12) -> List[dict]:
+    """Top-N longest exec / block / inter / heuristic-response episodes (deduped)."""
+    lim = max(1, min(40, int(limit or 12)))
+    seen: set = set()
+    ranked: List[dict] = []
+    rows = [
+        e for e in (events or [])
+        if isinstance(e, dict) and e.get("kind") in ("exec", "block", "inter", "response")
+    ]
+    if not any(e.get("kind") == "response" for e in rows):
+        rows.extend(analyze_response_times(events).get("events") or [])
+    rows.sort(key=lambda e: (-float(e.get("duration") or 0), float(e.get("start") or 0)))
+    for ev in rows:
+        key = (ev.get("kind"), ev.get("start"), ev.get("task") or ev.get("mk"))
+        if key in seen:
+            continue
+        seen.add(key)
+        ranked.append(dict(ev))
+        if len(ranked) >= lim:
+            break
+    return ranked
+
+
+def detect_timeline_anomalies(
+    events: Sequence[dict],
+    limit: int = 12,
+    mutex_waits: Optional[Sequence[dict]] = None,
+    deadlines: Optional[dict] = None,
+) -> List[dict]:
+    """Flag long tails (mean+3σ or ≥ p99) and migration bursts."""
+    lim = max(1, min(40, int(limit or 12)))
+    rows = [e for e in (events or []) if isinstance(e, dict)]
+    flagged: List[dict] = []
+    seen: set = set()
+
+    def _add(ev: dict, reason: str) -> None:
+        key = (ev.get("kind"), ev.get("start"), ev.get("task") or ev.get("mk"))
+        if key in seen:
+            return
+        seen.add(key)
+        item = dict(ev)
+        item["reason"] = reason
+        item["section"] = KIND_SECTION.get(str(ev.get("kind") or ""), "exec")
+        flagged.append(item)
+
+    by_group: Dict[Tuple[str, str], List[dict]] = {}
+    for ev in rows:
+        kind = str(ev.get("kind") or "")
+        if kind not in ("exec", "block", "inter"):
+            continue
+        task = str(ev.get("task") or ev.get("mk") or "")
+        by_group.setdefault((kind, task), []).append(ev)
+
+    for (kind, task), group in by_group.items():
+        if len(group) < 4:
+            continue
+        vals = sorted(float(e.get("duration") or 0) for e in group)
+        n = len(vals)
+        mean = sum(vals) / n
+        var = sum((v - mean) ** 2 for v in vals) / n
+        sigma = math.sqrt(var)
+        p99 = vals[percentile_index(n, 0.99)]
+        thresh = mean + 3.0 * sigma if sigma > 0 else p99
+        label = KIND_LABEL.get(kind, kind)
+        for ev in group:
+            dur = float(ev.get("duration") or 0)
+            if dur <= 0:
+                continue
+            if sigma > 0 and dur > thresh:
+                _add(ev, f"{label} > mean+3σ for {task or 'task'}")
+            elif dur >= p99 and dur >= mean:
+                _add(ev, f"{label} ≥ p99 for {task or 'task'}")
+
+    for kind in ("exec", "block"):
+        pool = [e for e in rows if e.get("kind") == kind]
+        if not pool:
+            continue
+        best = max(pool, key=lambda e: float(e.get("duration") or 0))
+        if float(best.get("duration") or 0) > 0:
+            _add(best, f"longest {KIND_LABEL.get(kind, kind)} in scope")
+
+    bursts = _migration_bursts(rows)
+    for ev in bursts:
+        _add(ev, ev.get("reason") or "migration burst")
+    for ev in _kind_bursts(rows, "block", BURST_WINDOW_NS, 4, "preemption burst"):
+        _add(ev, ev.get("reason") or "preemption burst")
+    for ev in _kind_bursts(rows, "inter", BURST_WINDOW_NS, 4, "wakeup burst"):
+        _add(ev, ev.get("reason") or "wakeup burst")
+    isr_rows = [e for e in rows if e.get("kind") == "exec" and _is_isr_name(e.get("task"))]
+    for ev in _kind_bursts(isr_rows, "exec", BURST_WINDOW_NS, 3, "ISR burst"):
+        item = dict(ev)
+        item["kind"] = "isr"
+        _add(item, ev.get("reason") or "ISR burst")
+    resp_events = (analyze_response_times(rows).get("events") or [])
+    if len(resp_events) >= 4:
+        vals = sorted(float(e.get("duration") or 0) for e in resp_events)
+        n = len(vals)
+        mean = sum(vals) / n
+        var = sum((v - mean) ** 2 for v in vals) / n
+        sigma = math.sqrt(var)
+        p99 = vals[percentile_index(n, 0.99)]
+        thresh = mean + 3.0 * sigma if sigma > 0 else p99
+        for ev in resp_events:
+            dur = float(ev.get("duration") or 0)
+            if dur <= 0:
+                continue
+            if sigma > 0 and dur > thresh:
+                _add(ev, f"response > mean+3σ for {ev.get('task') or 'task'}")
+            elif dur >= p99 and dur >= mean:
+                _add(ev, f"response ≥ p99 for {ev.get('task') or 'task'}")
+    if resp_events:
+        best_r = max(resp_events, key=lambda e: float(e.get("duration") or 0))
+        if float(best_r.get("duration") or 0) > 0:
+            _add(best_r, "longest response in scope")
+    waits = [w for w in (mutex_waits or []) if isinstance(w, dict)]
+    waits.extend(e for e in rows if e.get("kind") == "mutex_block")
+    if len(waits) >= 4:
+        vals = sorted(float(w.get("duration") or 0) for w in waits)
+        n = len(vals)
+        mean = sum(vals) / n
+        p99 = vals[percentile_index(n, 0.99)]
+        for w in waits:
+            dur = float(w.get("duration") or 0)
+            if dur <= 0 or dur < p99 or dur < mean:
+                continue
+            item = dict(w)
+            item["kind"] = "mutex_block"
+            item["task"] = w.get("waiter") or w.get("task")
+            item["mk"] = w.get("waiter_mk") or w.get("mk")
+            _add(item, f"mutex wait spike on {w.get('object') or 'mutex'}")
+    elif waits:
+        best_w = max(waits, key=lambda e: float(e.get("duration") or 0))
+        if float(best_w.get("duration") or 0) > 0:
+            item = dict(best_w)
+            item["kind"] = "mutex_block"
+            item["task"] = best_w.get("waiter") or best_w.get("task")
+            item["mk"] = best_w.get("waiter_mk") or best_w.get("mk")
+            _add(item, f"mutex wait spike on {best_w.get('object') or 'mutex'}")
+    dl_map = {
+        str(k): int(v) for k, v in (deadlines or {}).items()
+        if int(v or 0) > 0
+    }
+    if dl_map:
+        for ev in resp_events:
+            mk = str(ev.get("mk") or "")
+            lim_ns = dl_map.get(mk) or dl_map.get(str(ev.get("task") or ""))
+            dur = int(ev.get("duration") or 0)
+            if not lim_ns or dur <= lim_ns:
+                continue
+            item = dict(ev)
+            item["kind"] = "deadline"
+            _add(item, f"deadline miss ({dur} > {lim_ns})")
+    for ev in core_busy_anomalies(rows):
+        _add(ev, ev.get("reason") or "CPU utilization spike")
+    for ev in idle_gap_anomalies(rows):
+        _add(ev, ev.get("reason") or "unusual idle")
+
+    flagged.sort(
+        key=lambda e: (-float(e.get("duration") or 0), float(e.get("start") or 0)))
+    return flagged[:lim]
+
+
+def best_finding_scope(
+    finding: dict,
+    events: Sequence[dict],
+    time_min: float,
+    time_max: float,
+) -> Optional[dict]:
+    """Propose a cursor window covering a finding's evidence or worst episode."""
+    if not isinstance(finding, dict):
+        return None
+    tmin = float(time_min)
+    tmax = float(time_max)
+    if tmax <= tmin:
+        return None
+    times: List[float] = []
+    for ev in finding.get("evidence") or []:
+        if not isinstance(ev, dict):
+            continue
+        for key in ("time", "start", "stop"):
+            try:
+                if ev.get(key) is not None:
+                    times.append(float(ev[key]))
+            except (TypeError, ValueError):
+                continue
+    blob = f"{finding.get('title') or ''} {finding.get('text') or ''}"
+    for m in _JUMP_RE.finditer(blob):
+        try:
+            times.append(float(m.group(1)))
+        except (TypeError, ValueError):
+            continue
+    task = str(finding.get("task") or "").strip()
+    if not task:
+        m = _TASK_RE.search(blob)
+        if m:
+            task = m.group(1)
+    section = "exec"
+    reason = "Evidence times from the selected finding"
+    matched: Optional[dict] = None
+    if times:
+        lo, hi = min(times), max(times)
+        if task:
+            nearby = [
+                e for e in (events or [])
+                if isinstance(e, dict)
+                and _event_matches_task(e, task)
+                and float(e.get("start") or 0) <= hi
+                and float(e.get("stop") or e.get("start") or 0) >= lo
+            ]
+            if nearby:
+                matched = max(nearby, key=lambda e: float(e.get("duration") or 0))
+        if matched is None and (events or []):
+            mid = (lo + hi) / 2.0
+            matched = min(
+                (e for e in events if isinstance(e, dict)),
+                key=lambda e: abs(float(e.get("start") or 0) - mid),
+                default=None,
+            )
+    elif task:
+        pool = [e for e in (events or []) if isinstance(e, dict) and _event_matches_task(e, task)]
+        if pool:
+            matched = max(pool, key=lambda e: float(e.get("duration") or 0))
+            reason = f"Worst episode for {task}"
+    if matched is None and (events or []):
+        matched = max(
+            (e for e in events if isinstance(e, dict)),
+            key=lambda e: float(e.get("duration") or 0),
+            default=None,
+        )
+        if matched is not None:
+            reason = "Longest episode in scope"
+    if times:
+        lo, hi = min(times), max(times)
+    elif matched is not None:
+        lo = float(matched.get("start") or tmin)
+        hi = float(matched.get("stop") or matched.get("start") or lo)
+    else:
+        return None
+    if matched is not None:
+        section = KIND_SECTION.get(str(matched.get("kind") or ""), "exec")
+        if not task:
+            task = str(matched.get("task") or "")
+        lo = min(lo, float(matched.get("start") or lo))
+        hi = max(hi, float(matched.get("stop") or hi))
+        nearby = [
+            e for e in (events or [])
+            if isinstance(e, dict)
+            and float(e.get("start") or 0) <= hi
+            and float(e.get("stop") or e.get("start") or 0) >= lo
+        ]
+        reason = _scope_reason(nearby, task, reason)
+    span = max(tmax - tmin, 1.0)
+    pad = max(hi - lo, span * 0.01, 1000.0)
+    lo = max(tmin, lo - pad)
+    hi = min(tmax, hi + pad)
+    if lo >= hi:
+        hi = min(tmax, lo + max(pad, 1000.0))
+        if lo >= hi:
+            return None
+    return {
+        "lo": int(lo),
+        "hi": int(hi),
+        "reason": reason,
+        "task": task,
+        "section": section,
+        "mk": str((matched or {}).get("mk") or ""),
+    }
+
+
+def parse_signed_delta(text: Any) -> Optional[Tuple[float, str]]:
+    """Parse a Trace Compare Δ cell into ``(signed, kind)``."""
+    s = str(text or "").strip().replace("−", "-")
+    if not s or s in ("—", "–", "-"):
+        return None
+    m = _DELTA_RE.match(s)
+    if not m:
+        return None
+    sign = -1.0 if m.group(1) == "-" else 1.0
+    try:
+        val = float(m.group(2))
+    except (TypeError, ValueError):
+        return None
+    unit = (m.group(3) or "").lower()
+    if unit in _UNIT_NS:
+        return sign * val * _UNIT_NS[unit], "time"
+    if unit == "%":
+        return sign * val, "pct"
+    if unit == "/s":
+        return sign * val, "rate"
+    return sign * val, "count"
+
+
+def compare_candidates_from_tables(tables: dict) -> List[dict]:
+    """Normalize Desktop list-rows and Web object-rows into regression candidates."""
+    if not isinstance(tables, dict):
+        return []
+    out: List[dict] = []
+    for row in tables.get("summary") or []:
+        label, delta = _row_label_delta(row, "label", "delta", 0, 3)
+        if not label or _skip_summary_label(label):
+            continue
+        parsed = parse_signed_delta(delta)
+        if parsed is None:
+            continue
+        signed, kind = parsed
+        out.append({
+            "label": label,
+            "metric": "summary",
+            "delta": str(delta),
+            "signed": signed,
+            "kind": kind,
+        })
+    for key, metric, name_idx, delta_idx, name_key, delta_key in (
+        ("execution", "exec max", 0, 7, "name", "deltaMax"),
+        ("blocking", "block avg", 0, 7, "name", "delta"),
+        ("inter_arrival", "inter avg", 0, 7, "name", "delta"),
+        ("interArrival", "inter avg", 0, 7, "name", "delta"),
+        ("response", "response p99", 0, 3, "name", "delta"),
+        ("mutex_block", "mutex block", 0, 3, "name", "delta"),
+        ("mutexBlock", "mutex block", 0, 3, "name", "delta"),
+        ("deadlines", "deadline misses", 0, 3, "name", "delta"),
+    ):
+        for row in tables.get(key) or []:
+            name, delta = _row_label_delta(row, name_key, delta_key, name_idx, delta_idx)
+            if not name:
+                continue
+            parsed = parse_signed_delta(delta)
+            if parsed is None:
+                continue
+            signed, kind = parsed
+            out.append({
+                "label": f"{name} {metric}",
+                "metric": metric,
+                "delta": str(delta),
+                "signed": signed,
+                "kind": kind,
+            })
+    return out
+
+
+def top_compare_regressions(candidates: Sequence[dict], limit: int = 4) -> List[dict]:
+    """Largest A−B increases (A worse) among compare candidates."""
+    lim = max(1, min(12, int(limit or 4)))
+    worse = [
+        dict(c) for c in (candidates or [])
+        if isinstance(c, dict) and float(c.get("signed") or 0) > 0
+    ]
+    time_rows = [c for c in worse if c.get("kind") == "time"]
+    other = [c for c in worse if c.get("kind") != "time"]
+    time_rows.sort(key=lambda c: -abs(float(c.get("signed") or 0)))
+    other.sort(key=lambda c: -abs(float(c.get("signed") or 0)))
+    picked = time_rows[: max(0, lim - 1)]
+    if other and len(picked) < lim:
+        picked.append(other[0])
+    if len(picked) < lim:
+        for c in time_rows + other:
+            if c not in picked:
+                picked.append(c)
+            if len(picked) >= lim:
+                break
+    return picked[:lim]
+
+
+def compare_summary_strip(tables: dict, limit: int = 4) -> dict:
+    """Headline deltas plus the largest regressions for the Compare dialog."""
+    cands = compare_candidates_from_tables(tables)
+    headline: List[dict] = []
+    for row in (tables or {}).get("summary") or []:
+        label, delta = _row_label_delta(row, "label", "delta", 0, 3)
+        if label in _SUMMARY_STRIP_LABELS:
+            headline.append({"label": label.replace(" (cursor range)", ""), "delta": str(delta)})
+    regs = top_compare_regressions(cands, limit)
+    shared = list((tables or {}).get("shared_patterns") or [])
+    return {
+        "headline": headline,
+        "regressions": regs,
+        "shared_patterns": shared,
+        "why": compare_why({"regressions": regs, "shared_patterns": shared}),
+    }
+
+
+def prepare_ux_events(trace: Any) -> List[dict]:
+    """Walk slices once and store the full-trace harvest on *trace*."""
+    cached = _ux_events_cache(trace)
+    if cached is not None:
+        return cached
+    events = _harvest_ux_events_from_segments(trace, None, None)
+    try:
+        trace.ux_events_full = events
+    except Exception:
+        pass
+    try:
+        trace.uxEventsFull = events
+    except Exception:
+        pass
+    return events
+
+
+def _ux_events_cache(trace: Any) -> Optional[List[dict]]:
+    if trace is None:
+        return None
+    cached = getattr(trace, "ux_events_full", None)
+    if cached is None:
+        cached = getattr(trace, "uxEventsFull", None)
+    return cached if isinstance(cached, list) else None
+
+
+def _filter_cached_ux_events(events: Sequence[dict], lo: int, hi: int) -> List[dict]:
+    """Apply the same in-range rules as a scoped harvest walk."""
+    out: List[dict] = []
+    for ev in events or []:
+        if not isinstance(ev, dict):
+            continue
+        kind = str(ev.get("kind") or "")
+        start = int(ev.get("start") or 0)
+        stop = int(ev.get("stop") or start)
+        if kind == "migration":
+            if lo <= start <= hi:
+                out.append(ev)
+        elif kind == "inter":
+            jump = int(ev.get("jump_ns") or stop)
+            if start >= lo and lo <= jump <= hi:
+                out.append(ev)
+        elif start >= lo and stop <= hi:
+            out.append(ev)
+    return out
+
+
+def harvest_ux_events(trace: Any, lo: Optional[int] = None, hi: Optional[int] = None) -> List[dict]:
+    """Collect exec / block / inter / migration episodes from a loaded trace."""
+    cached = _ux_events_cache(trace)
+    if cached is not None:
+        if lo is None or hi is None:
+            return cached
+        return _filter_cached_ux_events(cached, int(lo), int(hi))
+    return _harvest_ux_events_from_segments(trace, lo, hi)
+
+
+def _harvest_ux_events_from_segments(
+    trace: Any, lo: Optional[int], hi: Optional[int],
+) -> List[dict]:
+    """Walk segment maps. Used to build the load-time cache."""
+    events: List[dict] = []
+    if trace is None:
+        return events
+    smap = getattr(trace, "seg_map_by_merge_key", None)
+    if smap is None:
+        smap = getattr(trace, "segByMergeKey", None)
+    if smap is None:
+        return events
+    items = smap.items() if hasattr(smap, "items") else []
+    repr_map = getattr(trace, "task_repr", None)
+    if repr_map is None:
+        repr_map = getattr(trace, "taskRepr", None) or {}
+    for mk, segs in items:
+        raw = _map_get(repr_map, mk, mk)
+        _, _, tname = _parse_task_name(str(raw))
+        if _is_idle_task_name(tname) or tname == "TICK":
+            continue
+        name = _task_display_name(str(raw))
+        ordered = _ordered_segs(segs)
+        if not ordered:
+            continue
+        for seg in ordered:
+            start = int(getattr(seg, "start", 0) or 0)
+            end = int(getattr(seg, "end", 0) or 0)
+            dur = end - start
+            if dur <= 0:
+                continue
+            if lo is not None and hi is not None and not _seg_fully_in_range(seg, lo, hi):
+                continue
+            events.append(_event(
+                "exec", name, str(mk), start, end, dur, start, getattr(seg, "core", ""),
+            ))
+        for i in range(1, len(ordered)):
+            prev, nxt = ordered[i - 1], ordered[i]
+            if lo is not None and hi is not None:
+                if not (_seg_fully_in_range(prev, lo, hi) and _seg_fully_in_range(nxt, lo, hi)):
+                    continue
+            gap = int(nxt.start) - int(prev.end)
+            if gap > 0:
+                events.append(_event(
+                    "block", name, str(mk), int(prev.end), int(nxt.start), gap,
+                    int(nxt.start), getattr(nxt, "core", ""),
+                ))
+            arr = int(nxt.start) - int(prev.start)
+            if arr > 0:
+                if lo is not None and hi is not None and (
+                        int(nxt.start) < lo or int(nxt.start) > hi):
+                    continue
+                events.append(_event(
+                    "inter", name, str(mk), int(prev.start), int(nxt.start), arr,
+                    int(nxt.start), getattr(nxt, "core", ""),
+                ))
+    for ev in getattr(trace, "migrations", None) or []:
+        if isinstance(ev, dict):
+            ns = int(ev.get("ns") or 0)
+            mk = str(ev.get("mergeKey") or ev.get("merge_key") or "")
+            gap = int(ev.get("gapNs") or ev.get("gap_ns") or 0)
+        else:
+            ns = int(getattr(ev, "ns", 0) or 0)
+            mk = str(
+                getattr(ev, "merge_key", None)
+                or getattr(ev, "mergeKey", None)
+                or ""
+            )
+            gap = int(
+                getattr(ev, "gap_ns", None)
+                or getattr(ev, "gapNs", None)
+                or 0
+            )
+        if lo is not None and hi is not None and (ns < lo or ns > hi):
+            continue
+        raw = _map_get(repr_map, mk, mk)
+        _, _, tname = _parse_task_name(str(raw))
+        if _is_idle_task_name(tname) or tname == "TICK":
+            continue
+        events.append(_event(
+            "migration", _task_display_name(str(raw)), mk, ns, ns + max(gap, 1),
+            max(gap, 1), ns, "",
+        ))
+    return events
+
+
+def _event(kind, task, mk, start, stop, duration, jump_ns, core) -> dict:
+    return {
+        "kind": kind,
+        "task": task,
+        "mk": mk,
+        "start": int(start),
+        "stop": int(stop),
+        "duration": int(duration),
+        "jump_ns": int(jump_ns),
+        "core": str(core or ""),
+        "section": KIND_SECTION.get(kind, "exec"),
+        "reason": "",
+    }
+
+
+def _ordered_segs(segs) -> list:
+    if segs is None:
+        return []
+    try:
+        rows = list(segs)
+    except TypeError:
+        return []
+    rows = [s for s in rows if hasattr(s, "start")]
+    for i in range(1, len(rows)):
+        if int(rows[i].start) < int(rows[i - 1].start):
+            rows.sort(key=lambda s: int(s.start))
+            break
+    return rows
+
+
+def _map_get(mapping, key, default):
+    if mapping is None:
+        return default
+    getter = getattr(mapping, "get", None)
+    if callable(getter):
+        return getter(key, default)
+    try:
+        return mapping[key]
+    except Exception:
+        return default
+
+
+def _event_matches_task(ev: dict, task: str) -> bool:
+    t = str(task or "").strip().lower()
+    if not t:
+        return False
+    return t in (
+        str(ev.get("task") or "").strip().lower(),
+        str(ev.get("mk") or "").strip().lower(),
+    ) or t in str(ev.get("task") or "").lower()
+
+
+def _migration_bursts(events: Sequence[dict], window_ns: int = 1000) -> List[dict]:
+    by_mk: Dict[str, List[dict]] = {}
+    for ev in events:
+        if ev.get("kind") != "migration":
+            continue
+        by_mk.setdefault(str(ev.get("mk") or ev.get("task") or ""), []).append(ev)
+    out: List[dict] = []
+    for _mk, group in by_mk.items():
+        group = sorted(group, key=lambda e: float(e.get("start") or 0))
+        if len(group) < 3:
+            continue
+        i = 0
+        while i < len(group):
+            j = i
+            while j + 1 < len(group) and (
+                    float(group[j + 1].get("start") or 0)
+                    - float(group[i].get("start") or 0) <= window_ns):
+                j += 1
+            count = j - i + 1
+            if count >= 3:
+                first, last = group[i], group[j]
+                item = dict(last)
+                item["start"] = int(first.get("start") or 0)
+                item["stop"] = int(last.get("stop") or last.get("start") or 0)
+                item["duration"] = max(
+                    int(item["stop"]) - int(item["start"]), count)
+                item["reason"] = f"{count} migrations within {window_ns} ns"
+                out.append(item)
+                i = j + 1
+            else:
+                i += 1
+    return out
+
+
+def _row_label_delta(row, name_key, delta_key, name_idx, delta_idx):
+    if isinstance(row, dict):
+        return str(row.get(name_key) or row.get("label") or ""), row.get(delta_key)
+    if isinstance(row, (list, tuple)) and len(row) > max(name_idx, delta_idx):
+        return str(row[name_idx] or ""), row[delta_idx]
+    return "", None
+
+
+def _skip_summary_label(label: str) -> bool:
+    low = label.lower()
+    return "load balance" in low or "tick health" in low or "tick mode" in low
+
+
+def analyze_task_periods(events: Sequence[dict], min_gaps: int = 3) -> List[dict]:
+    """Per-task period / jitter from inter-arrival episodes (p50 = expected)."""
+    need = max(2, int(min_gaps or 3))
+    by_mk: Dict[str, List[dict]] = {}
+    for ev in events or []:
+        if not isinstance(ev, dict) or ev.get("kind") != "inter":
+            continue
+        mk = str(ev.get("mk") or ev.get("task") or "")
+        if not mk:
+            continue
+        by_mk.setdefault(mk, []).append(ev)
+    rows: List[dict] = []
+    for mk, group in by_mk.items():
+        group = sorted(group, key=lambda e: float(e.get("start") or 0))
+        gaps = [int(e.get("duration") or 0) for e in group if int(e.get("duration") or 0) > 0]
+        if len(gaps) < need:
+            continue
+        ordered = sorted(gaps)
+        n = len(ordered)
+        mean = sum(ordered) / n
+        expected = ordered[percentile_index(n, 0.50)]
+        if expected <= 0:
+            expected = int(round(mean)) or 1
+        p95 = ordered[percentile_index(n, 0.95)]
+        p99 = ordered[percentile_index(n, 0.99)]
+        min_g, max_g = ordered[0], ordered[-1]
+        var = sum((g - mean) ** 2 for g in ordered) / n
+        std = math.sqrt(var)
+        cv = (std / mean) if mean else 0.0
+        rms = math.sqrt(sum((g - expected) ** 2 for g in ordered) / n)
+        missed = sum(1 for g in ordered if g > expected * PERIOD_MISS_RATIO)
+        extra = sum(1 for g in ordered if g < expected * PERIOD_EXTRA_RATIO)
+        burst = sum(1 for g in ordered if g < expected * PERIOD_BURST_RATIO)
+
+        def _ev_for(target: int) -> dict:
+            for e in group:
+                if int(e.get("duration") or 0) == target:
+                    return dict(e)
+            return dict(group[0])
+
+        worst = max(group, key=lambda e: int(e.get("duration") or 0))
+        miss_ev = None
+        for e in group:
+            if int(e.get("duration") or 0) > expected * PERIOD_MISS_RATIO:
+                if miss_ev is None or int(e.get("duration") or 0) > int(miss_ev.get("duration") or 0):
+                    miss_ev = e
+        rows.append({
+            "task": group[0].get("task") or mk,
+            "mk": mk,
+            "n": n,
+            "expected_ns": int(expected),
+            "min_ns": min_g,
+            "avg_ns": int(round(mean)),
+            "max_ns": max_g,
+            "p50_ns": int(expected),
+            "p95_ns": p95,
+            "p99_ns": p99,
+            "jitter_ns": max_g - min_g,
+            "rms_ns": int(round(rms)),
+            "cv": round(cv, 4),
+            "missed": missed,
+            "extra": extra,
+            "burst": burst,
+            "min_ev": _ev_for(min_g),
+            "max_ev": _ev_for(max_g),
+            "p50_ev": _ev_for(int(expected)),
+            "p95_ev": _ev_for(p95),
+            "p99_ev": _ev_for(p99),
+            "worst_ev": dict(worst),
+            "miss_ev": dict(miss_ev) if miss_ev else dict(worst),
+            "samples": gaps,
+            "spark": sparkline(gaps),
+            "section": "period",
+        })
+    rows.sort(key=lambda r: (-int(r.get("missed") or 0), -float(r.get("cv") or 0),
+                             str(r.get("task") or "")))
+    return rows
+
+
+def task_core_matrix(
+    events: Sequence[dict],
+    cores: Optional[Sequence[str]] = None,
+    span_ns: int = 0,
+    limit: int = 40,
+) -> dict:
+    """Per-task execution time on each core (percent of scoped span)."""
+    core_list = [str(c) for c in (cores or []) if c]
+    by_mk: Dict[str, dict] = {}
+    for ev in events or []:
+        if not isinstance(ev, dict) or ev.get("kind") != "exec":
+            continue
+        mk = str(ev.get("mk") or ev.get("task") or "")
+        core = str(ev.get("core") or "")
+        dur = int(ev.get("duration") or 0)
+        if not mk or not core or dur <= 0:
+            continue
+        if core not in core_list:
+            core_list.append(core)
+        rec = by_mk.setdefault(mk, {
+            "task": ev.get("task") or mk, "mk": mk, "ns": {}, "first": {},
+        })
+        rec["ns"][core] = rec["ns"].get(core, 0) + dur
+        if core not in rec["first"]:
+            rec["first"][core] = ev
+    span = max(1, int(span_ns or 0))
+    lim = max(1, min(80, int(limit or 40)))
+    rows: List[dict] = []
+    for mk, rec in by_mk.items():
+        total = sum(rec["ns"].values())
+        if total <= 0:
+            continue
+        cells = {}
+        for c in core_list:
+            ns = int(rec["ns"].get(c, 0))
+            ev = rec["first"].get(c)
+            cells[c] = {
+                "ns": ns,
+                "pct_span": 100.0 * ns / span,
+                "pct_task": 100.0 * ns / total,
+                "start": int(ev.get("start") or 0) if ev else 0,
+                "stop": int(ev.get("stop") or 0) if ev else 0,
+                "jump_ns": int((ev or {}).get("jump_ns") or (ev or {}).get("start") or 0),
+            }
+        rows.append({
+            "task": rec["task"], "mk": mk, "total_ns": total,
+            "cells": cells, "section": "task_core",
+        })
+    rows.sort(key=lambda r: (-int(r["total_ns"]), str(r.get("task") or "")))
+    return {"cores": core_list, "rows": rows[:lim], "span_ns": span}
+
+
+def harvest_mutex_holds(
+    trace: Any, lo: Optional[int] = None, hi: Optional[int] = None,
+) -> List[dict]:
+    """Mutex hold episodes from desktop ``sync_objects`` or web ``syncObjects``."""
+    objs = getattr(trace, "sync_objects", None)
+    if objs is None:
+        objs = getattr(trace, "syncObjects", None)
+    if objs is None:
+        return []
+    values = objs.values() if hasattr(objs, "values") else []
+    out: List[dict] = []
+    for obj in values:
+        if not isinstance(obj, dict):
+            continue
+        if str(obj.get("kind") or "").lower() != "mutex":
+            continue
+        key = str(obj.get("key") or "")
+        for h in obj.get("holds") or []:
+            if not isinstance(h, dict):
+                continue
+            start = int(h.get("start_ns") or h.get("startNs") or 0)
+            stop = int(h.get("stop_ns") or h.get("stopNs") or 0)
+            if stop <= start:
+                continue
+            if lo is not None and hi is not None and (stop < lo or start > hi):
+                continue
+            out.append({
+                "object": key,
+                "holder": str(h.get("holder_label") or h.get("holderLabel") or ""),
+                "holder_mk": str(h.get("holder_mk") or h.get("holderMk") or ""),
+                "start": start,
+                "stop": stop,
+                "duration": stop - start,
+            })
+    return out
+
+
+def pair_mutex_waits(
+    holds: Sequence[dict], slack_ns: int = MUTEX_HANDOFF_SLACK_NS,
+) -> List[dict]:
+    """Heuristic: the next distinct acquirer of a mutex waited out the prior hold."""
+    by_obj: Dict[str, List[dict]] = {}
+    for h in holds or []:
+        if isinstance(h, dict):
+            by_obj.setdefault(str(h.get("object") or ""), []).append(h)
+    slack = max(0, int(slack_ns or 0))
+    waits: List[dict] = []
+    for obj, group in by_obj.items():
+        group = sorted(group, key=lambda x: int(x.get("start") or 0))
+        for i in range(1, len(group)):
+            prev, nxt = group[i - 1], group[i]
+            o_mk = str(prev.get("holder_mk") or "")
+            w_mk = str(nxt.get("holder_mk") or "")
+            if not o_mk or not w_mk or o_mk == w_mk:
+                continue
+            gap = int(nxt.get("start") or 0) - int(prev.get("stop") or 0)
+            if gap < -1 or gap > slack:
+                continue
+            start = int(prev.get("start") or 0)
+            stop = int(prev.get("stop") or 0)
+            waits.append({
+                "waiter": str(nxt.get("holder") or w_mk),
+                "waiter_mk": w_mk,
+                "owner": str(prev.get("holder") or o_mk),
+                "owner_mk": o_mk,
+                "object": obj,
+                "start": start,
+                "stop": stop,
+                "duration": max(1, stop - start),
+                "jump_ns": start,
+                "section": "wait_owner",
+            })
+    return waits
+
+
+def waiter_owner_matrix(waits: Sequence[dict], limit: int = 16) -> dict:
+    """Aggregate waiter×owner wait time; keep the busiest tasks."""
+    totals: Dict[Tuple[str, str], dict] = {}
+    names: Dict[str, str] = {}
+    for w in waits or []:
+        if not isinstance(w, dict):
+            continue
+        wk = str(w.get("waiter_mk") or "")
+        ok = str(w.get("owner_mk") or "")
+        if not wk or not ok:
+            continue
+        rec = totals.setdefault((wk, ok), {"ns": 0, "count": 0, "worst": w})
+        rec["ns"] += int(w.get("duration") or 0)
+        rec["count"] += 1
+        if int(w.get("duration") or 0) > int(rec["worst"].get("duration") or 0):
+            rec["worst"] = w
+        names[wk] = str(w.get("waiter") or wk)
+        names[ok] = str(w.get("owner") or ok)
+    invol: Dict[str, int] = {}
+    for (wk, ok), rec in totals.items():
+        invol[wk] = invol.get(wk, 0) + rec["ns"]
+        invol[ok] = invol.get(ok, 0) + rec["ns"]
+    lim = max(2, min(24, int(limit or 16)))
+    tasks = sorted(invol, key=lambda mk: (-invol[mk], names.get(mk, mk)))[:lim]
+    cells: Dict[str, dict] = {}
+    for (wk, ok), rec in totals.items():
+        if wk not in tasks or ok not in tasks:
+            continue
+        worst = rec["worst"]
+        cells[f"{wk}|{ok}"] = {
+            "ns": rec["ns"],
+            "count": rec["count"],
+            "start": int(worst.get("start") or 0),
+            "stop": int(worst.get("stop") or 0),
+            "jump_ns": int(worst.get("jump_ns") or worst.get("start") or 0),
+            "waiter": names.get(wk, wk),
+            "owner": names.get(ok, ok),
+            "waiter_mk": wk,
+            "owner_mk": ok,
+            "section": "wait_owner",
+        }
+    return {
+        "tasks": [{"mk": mk, "task": names.get(mk, mk)} for mk in tasks],
+        "cells": cells,
+    }
+
+
+def health_inputs_from_events(
+    events: Sequence[dict],
+    span_ns: int = 0,
+    deadline_mks: Optional[Iterable[str]] = None,
+) -> List[dict]:
+    """Fold harvested episodes into the inputs ``task_health_scores`` expects."""
+    by_mk: Dict[str, dict] = {}
+    for ev in events or []:
+        if not isinstance(ev, dict):
+            continue
+        mk = str(ev.get("mk") or ev.get("task") or "")
+        if not mk:
+            continue
+        rec = by_mk.setdefault(mk, {
+            "task": ev.get("task") or mk, "mk": mk,
+            "exec": [], "block": [], "inter": [], "mig": 0, "cpu_ns": 0,
+        })
+        kind = ev.get("kind")
+        dur = int(ev.get("duration") or 0)
+        if kind == "exec" and dur > 0:
+            rec["exec"].append(dur)
+            rec["cpu_ns"] += dur
+        elif kind == "block" and dur > 0:
+            rec["block"].append(dur)
+        elif kind == "inter" and dur > 0:
+            rec["inter"].append(dur)
+        elif kind == "migration":
+            rec["mig"] += 1
+    span = max(1, int(span_ns or 0))
+    dead = {str(x) for x in (deadline_mks or []) if x}
+    out: List[dict] = []
+    for mk, rec in by_mk.items():
+        if not rec["exec"]:
+            continue
+        e_cv, e_ratio, e_n = _sample_cv_ratio(rec["exec"])
+        b_cv, b_ratio, _ = _sample_cv_ratio(rec["block"])
+        p_cv, _, _ = _sample_cv_ratio(rec["inter"])
+        missed = 0
+        if rec["inter"]:
+            ordered = sorted(rec["inter"])
+            expected = ordered[percentile_index(len(ordered), 0.50)]
+            if expected > 0:
+                missed = sum(1 for g in ordered if g > expected * PERIOD_MISS_RATIO)
+        out.append({
+            "task": rec["task"],
+            "mk": mk,
+            "exec_cv": e_cv,
+            "exec_max_avg": e_ratio,
+            "exec_n": e_n,
+            "block_cv": b_cv,
+            "block_max_avg": b_ratio,
+            "period_cv": p_cv,
+            "missed": missed,
+            "mig_count": rec["mig"],
+            "mig_ratio": rec["mig"] / max(e_n, 1),
+            "cpu_pct": 100.0 * rec["cpu_ns"] / span,
+            "deadline_miss": mk in dead or str(rec["task"]) in dead,
+        })
+    return out
+
+
+def task_health_scores(inputs: Sequence[dict]) -> List[dict]:
+    """Heuristic 0–100 score from measured stats (not an AI probability)."""
+    rows: List[dict] = []
+    for inp in inputs or []:
+        if not isinstance(inp, dict):
+            continue
+        bands: Dict[str, str] = {}
+        pen = 0
+        e_band, e_pen = _worse_band(
+            _dim(float(inp.get("exec_cv") or 0), 0.5, 1.0, 10, 20),
+            _dim(float(inp.get("exec_max_avg") or 0), 3.0, 8.0, 10, 20),
+        )
+        bands["execution"] = e_band
+        pen += e_pen
+        b_band, b_pen = _worse_band(
+            _dim(float(inp.get("block_cv") or 0), 0.6, 1.2, 10, 20),
+            _dim(float(inp.get("block_max_avg") or 0), 4.0, 10.0, 10, 20),
+        )
+        bands["blocking"] = b_band
+        pen += b_pen
+        p_band, p_pen = _dim(float(inp.get("period_cv") or 0), 0.15, 0.40, 8, 16)
+        missed = int(inp.get("missed") or 0)
+        if missed >= 3:
+            p_band, p_pen = "fail", max(p_pen, 16)
+        elif missed > 0 and p_band == "ok":
+            p_band, p_pen = "warn", max(p_pen, 8)
+        bands["period"] = p_band
+        pen += p_pen
+        m_band, m_pen = _dim(float(inp.get("mig_ratio") or 0), 0.3, 0.7, 8, 16)
+        bands["migration"] = m_band
+        pen += m_pen
+        if inp.get("deadline_miss"):
+            bands["deadline"] = "fail"
+            pen += 30
+        else:
+            bands["deadline"] = "ok"
+        c_band, c_pen = _dim(float(inp.get("cpu_pct") or 0), 80.0, 95.0, 8, 16)
+        bands["cpu"] = c_band
+        pen += c_pen
+        score = max(0, min(100, 100 - pen))
+        rows.append({
+            "task": inp.get("task"),
+            "mk": inp.get("mk"),
+            "score": score,
+            "bands": bands,
+            "marks": {k: HEALTH_MARK.get(v, v) for k, v in bands.items()},
+            "section": "task_health",
+            "disclaimer": (
+                "Heuristic score from measured statistics, not an AI probability."
+            ),
+        })
+    rows.sort(key=lambda r: (int(r.get("score") or 0), str(r.get("task") or "")))
+    return rows
+
+
+def _sample_cv_ratio(samples: Sequence[int]) -> Tuple[float, float, int]:
+    vals = [int(v) for v in samples if int(v or 0) > 0]
+    if not vals:
+        return 0.0, 0.0, 0
+    n = len(vals)
+    mean = sum(vals) / n
+    var = sum((v - mean) ** 2 for v in vals) / n
+    cv = (math.sqrt(var) / mean) if mean else 0.0
+    ratio = (max(vals) / mean) if mean else 0.0
+    return cv, ratio, n
+
+
+def _dim(value: float, warn_at: float, fail_at: float,
+         warn_pen: int, fail_pen: int) -> Tuple[str, int]:
+    if value >= fail_at:
+        return "fail", fail_pen
+    if value >= warn_at:
+        return "warn", warn_pen
+    return "ok", 0
+
+
+def _worse_band(a: Tuple[str, int], b: Tuple[str, int]) -> Tuple[str, int]:
+    rank = {"ok": 0, "warn": 1, "fail": 2}
+    pick = a if rank.get(a[0], 0) >= rank.get(b[0], 0) else b
+    return pick[0], max(a[1], b[1])
+
+
+def _is_isr_name(name: Any) -> bool:
+    return bool(_ISR_RE.search(str(name or "")))
+
+
+def _scope_reason(events: Sequence[dict], task: str, fallback: str) -> str:
+    kinds = {"exec": 0, "block": 0, "inter": 0, "migration": 0}
+    for e in events or []:
+        k = str(e.get("kind") or "")
+        if k in kinds:
+            kinds[k] += 1
+    bits = []
+    if kinds["exec"]:
+        bits.append("activation" if kinds["inter"] else "execution")
+    if kinds["block"]:
+        bits.append(f"{kinds['block']} preemption/wait gap"
+                    + ("s" if kinds["block"] != 1 else ""))
+    if kinds["migration"]:
+        bits.append(f"{kinds['migration']} migration"
+                    + ("s" if kinds["migration"] != 1 else ""))
+    if not bits:
+        return fallback
+    who = f" for {task}" if task else ""
+    return "Contains" + who + ": " + ", ".join(bits)
+
+
+def _kind_bursts(
+    events: Sequence[dict],
+    kind: str,
+    window_ns: int,
+    min_count: int,
+    label: str,
+) -> List[dict]:
+    group = sorted(
+        [e for e in events or [] if isinstance(e, dict) and e.get("kind") == kind],
+        key=lambda e: float(e.get("start") or 0),
+    )
+    if len(group) < min_count:
+        return []
+    out: List[dict] = []
+    i = 0
+    while i < len(group):
+        j = i
+        while j + 1 < len(group) and (
+                float(group[j + 1].get("start") or 0)
+                - float(group[i].get("start") or 0) <= window_ns):
+            j += 1
+        count = j - i + 1
+        if count >= min_count:
+            first, last = group[i], group[j]
+            item = dict(last)
+            item["start"] = int(first.get("start") or 0)
+            item["stop"] = int(last.get("stop") or last.get("start") or 0)
+            item["duration"] = max(int(item["stop"]) - int(item["start"]), count)
+            item["reason"] = f"{count} {label}s within {window_ns} ns"
+            if label.endswith(" burst"):
+                item["reason"] = f"{count} {label.replace(' burst', '')}s within {window_ns} ns"
+            out.append(item)
+            i = j + 1
+        else:
+            i += 1
+    return out
+
+
+def _duration_stats(samples: Sequence[int]) -> Optional[dict]:
+    ordered = sorted(int(s) for s in samples if int(s or 0) > 0)
+    if not ordered:
+        return None
+    n = len(ordered)
+    mean = sum(ordered) / n
+    var = sum((v - mean) ** 2 for v in ordered) / n
+    std = math.sqrt(var)
+    return {
+        "n": n,
+        "min_ns": ordered[0],
+        "avg_ns": int(round(mean)),
+        "max_ns": ordered[-1],
+        "p50_ns": ordered[percentile_index(n, 0.50)],
+        "p90_ns": ordered[percentile_index(n, 0.90)],
+        "p95_ns": ordered[percentile_index(n, 0.95)],
+        "p99_ns": ordered[percentile_index(n, 0.99)],
+        "p999_ns": ordered[percentile_index(n, 0.999)],
+        "jitter_ns": ordered[-1] - ordered[0],
+        "std_ns": int(round(std)),
+        "cv": round((std / mean) if mean else 0.0, 4),
+    }
+
+
+def analyze_response_times(events: Sequence[dict]) -> dict:
+    """Heuristic ready→completion: previous slice end to this slice end.
+
+    First slice of a task uses execution duration only. This is not a kernel
+    release/completion pair — BTF often lacks those events.
+    """
+    by_mk: Dict[str, List[dict]] = {}
+    for ev in events or []:
+        if not isinstance(ev, dict) or ev.get("kind") != "exec":
+            continue
+        mk = str(ev.get("mk") or ev.get("task") or "")
+        if mk:
+            by_mk.setdefault(mk, []).append(ev)
+    resp_events: List[dict] = []
+    rows: List[dict] = []
+    for mk, group in by_mk.items():
+        group = sorted(group, key=lambda e: float(e.get("start") or 0))
+        samples: List[int] = []
+        task = str(group[0].get("task") or mk)
+        for i, ev in enumerate(group):
+            if i == 0:
+                ready = int(ev.get("start") or 0)
+            else:
+                ready = int(group[i - 1].get("stop") or group[i - 1].get("start") or 0)
+            complete = int(ev.get("stop") or ev.get("start") or 0)
+            dur = max(0, complete - ready)
+            if dur <= 0:
+                continue
+            samples.append(dur)
+            item = _event(
+                "response", task, mk, ready, complete, dur, ready, ev.get("core"),
+            )
+            item["exec_ns"] = int(ev.get("duration") or 0)
+            item["wait_ns"] = max(0, dur - int(ev.get("duration") or 0))
+            resp_events.append(item)
+        stats = _duration_stats(samples)
+        if not stats:
+            continue
+        slice_evs = resp_events[-len(samples):]
+        worst = max(slice_evs, key=lambda e: int(e.get("duration") or 0))
+
+        def _ev_for(target: int) -> dict:
+            for e in slice_evs:
+                if int(e.get("duration") or 0) == int(target):
+                    return dict(e)
+            return dict(worst)
+
+        row = dict(stats)
+        row.update({
+            "task": task, "mk": mk, "section": "response",
+            "worst_ev": dict(worst),
+            "min_ev": _ev_for(stats["min_ns"]),
+            "max_ev": _ev_for(stats["max_ns"]),
+            "p50_ev": _ev_for(stats["p50_ns"]),
+            "p90_ev": _ev_for(stats["p90_ns"]),
+            "p95_ev": _ev_for(stats["p95_ns"]),
+            "p99_ev": _ev_for(stats["p99_ns"]),
+            "p999_ev": _ev_for(stats["p999_ns"]),
+            "disclaimer": (
+                "Heuristic ready→completion from adjacent slices, not an "
+                "explicit BTF release/completion pair."
+            ),
+        })
+        rows.append(row)
+    rows.sort(key=lambda r: (-int(r.get("p99_ns") or 0), str(r.get("task") or "")))
+    return {"rows": rows, "events": resp_events}
+
+
+def _index_execs(events: Sequence[dict]) -> Dict[str, Tuple[List[dict], List[int]]]:
+    """Same-core exec slices, start-sorted, for O(log n + overlaps) window scans."""
+    by_core: Dict[str, List[dict]] = {}
+    for ev in events or []:
+        if not isinstance(ev, dict) or ev.get("kind") != "exec":
+            continue
+        core = str(ev.get("core") or "")
+        if core:
+            by_core.setdefault(core, []).append(ev)
+    indexed: Dict[str, Tuple[List[dict], List[int]]] = {}
+    for core, rows in by_core.items():
+        rows.sort(key=lambda e: int(e.get("start") or 0))
+        indexed[core] = (rows, [int(e.get("start") or 0) for e in rows])
+    return indexed
+
+
+def _iter_overlapping(
+    rows: Sequence[dict], starts: Sequence[int], lo: int, hi: int,
+) -> Iterator[dict]:
+    """Yield non-overlapping slices that intersect [lo, hi)."""
+    if not rows or hi <= lo:
+        return
+    i = bisect_right(starts, lo) - 1
+    if i < 0:
+        i = 0
+    n = len(rows)
+    while i < n:
+        ev = rows[i]
+        a = int(ev.get("start") or 0)
+        if a >= hi:
+            break
+        b = int(ev.get("stop") or a)
+        if b > lo:
+            yield ev
+        i += 1
+
+
+def critical_path_rows(events: Sequence[dict], limit: int = 8) -> List[dict]:
+    """Decompose the worst response windows into exec / preempt / wait / migration."""
+    resp = analyze_response_times(events).get("events") or []
+    if not resp:
+        return []
+    worst = sorted(resp, key=lambda e: -int(e.get("duration") or 0))[: max(1, min(20, limit))]
+    by_core = _index_execs(events)
+    migs_by_mk: Dict[str, List[dict]] = {}
+    blocks_by_mk: Dict[str, List[dict]] = {}
+    for m in events or []:
+        if not isinstance(m, dict):
+            continue
+        kind = m.get("kind")
+        mk = str(m.get("mk") or "")
+        if kind == "migration" and mk:
+            migs_by_mk.setdefault(mk, []).append(m)
+        elif kind == "block" and mk:
+            blocks_by_mk.setdefault(mk, []).append(m)
+    out: List[dict] = []
+    for ev in worst:
+        lo = int(ev.get("start") or 0)
+        hi = int(ev.get("stop") or lo)
+        mk = str(ev.get("mk") or "")
+        core = str(ev.get("core") or "")
+        exec_ns = 0
+        preempt_ns = 0
+        exec_ev = None
+        preempt_ev = None
+        pools = [by_core[core]] if core and core in by_core else list(by_core.values())
+        for rows, starts in pools:
+            for other in _iter_overlapping(rows, starts, lo, hi):
+                a = int(other.get("start") or 0)
+                b = int(other.get("stop") or a)
+                overlap = min(b, hi) - max(a, lo)
+                if overlap <= 0:
+                    continue
+                if str(other.get("mk") or "") == mk:
+                    exec_ns += overlap
+                    if exec_ev is None or overlap > int(exec_ev.get("duration") or 0):
+                        exec_ev = dict(other)
+                        exec_ev["duration"] = overlap
+                else:
+                    preempt_ns += overlap
+                    if preempt_ev is None or overlap > int(preempt_ev.get("duration") or 0):
+                        preempt_ev = dict(other)
+                        preempt_ev["start"] = max(a, lo)
+                        preempt_ev["stop"] = min(b, hi)
+                        preempt_ev["duration"] = overlap
+                        preempt_ev["jump_ns"] = max(a, lo)
+                        preempt_ev["section"] = "preempt_matrix"
+        wait_ns = 0
+        wait_ev = None
+        for blk in blocks_by_mk.get(mk, ()):
+            a = int(blk.get("start") or 0)
+            b = int(blk.get("stop") or a)
+            overlap = min(b, hi) - max(a, lo)
+            if overlap <= 0:
+                continue
+            wait_ns += overlap
+            if wait_ev is None or overlap > int(wait_ev.get("duration") or 0):
+                wait_ev = dict(blk)
+                wait_ev["start"] = max(a, lo)
+                wait_ev["stop"] = min(b, hi)
+                wait_ev["duration"] = overlap
+                wait_ev["jump_ns"] = max(a, lo)
+        mig_ns = 0
+        mig_ev = None
+        for m in migs_by_mk.get(mk, ()):
+            t = int(m.get("start") or 0)
+            if lo <= t <= hi:
+                dur = int(m.get("duration") or 1)
+                mig_ns += dur
+                if mig_ev is None or dur > int(mig_ev.get("duration") or 0):
+                    mig_ev = dict(m)
+        total = max(1, int(ev.get("duration") or 0))
+        other_ns = max(0, total - exec_ns - preempt_ns - wait_ns - mig_ns)
+        out.append({
+            "task": ev.get("task"),
+            "mk": mk,
+            "start": lo,
+            "stop": hi,
+            "jump_ns": lo,
+            "duration": total,
+            "exec_ns": exec_ns,
+            "preempt_ns": preempt_ns,
+            "wait_ns": wait_ns,
+            "migration_ns": mig_ns,
+            "other_ns": other_ns,
+            "exec_ev": exec_ev or dict(ev),
+            "preempt_ev": preempt_ev,
+            "wait_ev": wait_ev,
+            "mig_ev": mig_ev,
+            "other_ev": dict(ev),
+            "section": "crit_path",
+            "kind": "crit_path",
+            "reason": (
+                f"exec {exec_ns} · preempt {preempt_ns} · wait {wait_ns} · "
+                f"mig {mig_ns} · other {other_ns}"
+            ),
+        })
+    return out
+
+
+def preemption_pairs(events: Sequence[dict]) -> List[dict]:
+    """Victim block × overlapping exec on the same core (or any core if unknown)."""
+    by_core = _index_execs(events)
+    pairs: List[dict] = []
+    for block in events or []:
+        if not isinstance(block, dict) or block.get("kind") != "block":
+            continue
+        blo = int(block.get("start") or 0)
+        bhi = int(block.get("stop") or blo)
+        if bhi <= blo:
+            continue
+        vmk = str(block.get("mk") or "")
+        core = str(block.get("core") or "")
+        pools = [by_core[core]] if core and core in by_core else list(by_core.values())
+        for rows, starts in pools:
+            for other in _iter_overlapping(rows, starts, blo, bhi):
+                if str(other.get("mk") or "") == vmk:
+                    continue
+                a = int(other.get("start") or 0)
+                b = int(other.get("stop") or a)
+                overlap = min(b, bhi) - max(a, blo)
+                if overlap <= 0:
+                    continue
+                pairs.append({
+                    "victim": block.get("task"),
+                    "victim_mk": vmk,
+                    "preemptor": other.get("task"),
+                    "preemptor_mk": str(other.get("mk") or ""),
+                    "core": core or other.get("core") or "",
+                    "start": max(a, blo),
+                    "stop": min(b, bhi),
+                    "duration": overlap,
+                    "jump_ns": max(a, blo),
+                    "section": "preempt_matrix",
+                    "kind": "preempt",
+                })
+    return pairs
+
+
+def preemption_story(
+    pairs: Sequence[dict],
+    victim_mk: str,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> str:
+    """Time-ordered 'Victim → B → ISR → resumed' chain for one victim."""
+    vmk = str(victim_mk or "")
+    sel = []
+    for p in pairs or []:
+        if not isinstance(p, dict) or str(p.get("victim_mk") or "") != vmk:
+            continue
+        a = int(p.get("start") or 0)
+        b = int(p.get("stop") or a)
+        if lo is not None and hi is not None and (b <= lo or a >= hi):
+            continue
+        sel.append(p)
+    sel.sort(key=lambda p: (int(p.get("start") or 0), -int(p.get("duration") or 0)))
+    names: List[str] = []
+    for p in sel:
+        name = str(p.get("preemptor") or p.get("preemptor_mk") or "")
+        if name and (not names or names[-1] != name):
+            names.append(name)
+        if len(names) >= 6:
+            break
+    victim = str((sel[0].get("victim") if sel else "") or vmk)
+    if not names:
+        return f"{victim} → resumed" if victim else ""
+    return f"{victim} → " + " → ".join(names) + " → resumed"
+
+
+def preemptor_ranking(pairs: Sequence[dict], limit: int = 16) -> List[dict]:
+    by_v: Dict[str, dict] = {}
+    for p in pairs or []:
+        vmk = str(p.get("victim_mk") or "")
+        pmk = str(p.get("preemptor_mk") or "")
+        if not vmk or not pmk:
+            continue
+        rec = by_v.setdefault(vmk, {
+            "task": p.get("victim"), "mk": vmk, "count": 0, "total_ns": 0,
+            "max_ns": 0, "preemptors": {}, "worst": p, "section": "preempt_matrix",
+        })
+        rec["count"] += 1
+        dur = int(p.get("duration") or 0)
+        rec["total_ns"] += dur
+        if dur > rec["max_ns"]:
+            rec["max_ns"] = dur
+            rec["worst"] = p
+        pr = rec["preemptors"].setdefault(pmk, {
+            "task": p.get("preemptor"), "mk": pmk, "count": 0, "total_ns": 0,
+        })
+        pr["count"] += 1
+        pr["total_ns"] += dur
+    rows = list(by_v.values())
+    for rec in rows:
+        tops = sorted(
+            rec["preemptors"].values(),
+            key=lambda r: (-int(r.get("count") or 0), -int(r.get("total_ns") or 0)),
+        )[:4]
+        rec["top"] = tops
+        rec["top_label"] = ", ".join(
+            f"{t.get('task')} ({t.get('count')})" for t in tops)
+        rec["story"] = preemption_story(pairs, str(rec.get("mk") or ""))
+    rows.sort(key=lambda r: (-int(r.get("total_ns") or 0), str(r.get("task") or "")))
+    return rows[: max(1, min(40, limit))]
+
+
+def preemption_matrix(pairs: Sequence[dict], limit: int = 12) -> dict:
+    totals: Dict[Tuple[str, str], dict] = {}
+    names: Dict[str, str] = {}
+    invol: Dict[str, int] = {}
+    for p in pairs or []:
+        vk = str(p.get("victim_mk") or "")
+        pk = str(p.get("preemptor_mk") or "")
+        if not vk or not pk:
+            continue
+        rec = totals.setdefault((vk, pk), {"count": 0, "ns": 0, "worst": p})
+        rec["count"] += 1
+        rec["ns"] += int(p.get("duration") or 0)
+        if int(p.get("duration") or 0) > int(rec["worst"].get("duration") or 0):
+            rec["worst"] = p
+        names[vk] = str(p.get("victim") or vk)
+        names[pk] = str(p.get("preemptor") or pk)
+        invol[vk] = invol.get(vk, 0) + int(p.get("duration") or 0)
+        invol[pk] = invol.get(pk, 0) + int(p.get("duration") or 0)
+    lim = max(2, min(16, int(limit or 12)))
+    tasks = sorted(invol, key=lambda k: (-invol[k], names.get(k, k)))[:lim]
+    task_set = set(tasks)
+    cells = {}
+    for (vk, pk), rec in totals.items():
+        if vk not in task_set or pk not in task_set:
+            continue
+        worst = rec["worst"]
+        cells[f"{vk}|{pk}"] = {
+            "count": rec["count"],
+            "ns": rec["ns"],
+            "start": int(worst.get("start") or 0),
+            "jump_ns": int(worst.get("jump_ns") or worst.get("start") or 0),
+            "victim": names.get(vk, vk),
+            "preemptor": names.get(pk, pk),
+            "section": "preempt_matrix",
+        }
+    return {
+        "tasks": [{"mk": mk, "task": names.get(mk, mk)} for mk in tasks],
+        "cells": cells,
+    }
+
+
+def mutex_blocking_table(waits: Sequence[dict], limit: int = 24) -> List[dict]:
+    by_key: Dict[Tuple[str, str], dict] = {}
+    for w in waits or []:
+        if not isinstance(w, dict):
+            continue
+        wk = str(w.get("waiter_mk") or "")
+        obj = str(w.get("object") or "")
+        if not wk or not obj:
+            continue
+        rec = by_key.setdefault((wk, obj), {
+            "task": w.get("waiter"), "mk": wk, "object": obj,
+            "owner": w.get("owner"), "count": 0, "total_ns": 0, "max_ns": 0,
+            "worst": w, "section": "mutex_block",
+        })
+        dur = int(w.get("duration") or 0)
+        rec["count"] += 1
+        rec["total_ns"] += dur
+        if dur > rec["max_ns"]:
+            rec["max_ns"] = dur
+            rec["worst"] = w
+            rec["owner"] = w.get("owner")
+    rows = list(by_key.values())
+    rows.sort(key=lambda r: (-int(r.get("total_ns") or 0), str(r.get("task") or "")))
+    return rows[: max(1, min(60, limit))]
+
+
+def core_util_over_time(
+    events: Sequence[dict],
+    cores: Optional[Sequence[str]] = None,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+    bins: int = CORE_TIME_BINS,
+) -> dict:
+    execs = [e for e in events or [] if isinstance(e, dict) and e.get("kind") == "exec"]
+    if not execs:
+        return {"cores": list(cores or []), "bins": [], "bin_ns": 0, "lo": 0, "hi": 0}
+    t0 = int(lo if lo is not None else min(int(e.get("start") or 0) for e in execs))
+    t1 = int(hi if hi is not None else max(int(e.get("stop") or 0) for e in execs))
+    if t1 <= t0:
+        t1 = t0 + 1
+    n = max(4, min(32, int(bins or CORE_TIME_BINS)))
+    width = max(1, (t1 - t0) / n)
+    core_list = [str(c) for c in (cores or []) if c]
+    busy: Dict[str, List[float]] = {}
+    for ev in execs:
+        core = str(ev.get("core") or "")
+        if not core:
+            continue
+        if core not in core_list:
+            core_list.append(core)
+        busy.setdefault(core, [0.0] * n)
+        a = int(ev.get("start") or 0)
+        b = int(ev.get("stop") or a)
+        if b <= t0 or a >= t1:
+            continue
+        a = max(a, t0)
+        b = min(b, t1)
+        i0 = min(n - 1, max(0, int((a - t0) / width)))
+        i1 = min(n - 1, max(0, int((b - 1 - t0) / width)))
+        for i in range(i0, i1 + 1):
+            blo = t0 + i * width
+            bhi = t0 + (i + 1) * width
+            busy[core][i] += max(0.0, min(b, bhi) - max(a, blo))
+    rows = []
+    for i in range(n):
+        start = int(t0 + i * width)
+        stop = int(t0 + (i + 1) * width)
+        cells = {}
+        peak = 0.0
+        peak_core = ""
+        for c in core_list:
+            ns = (busy.get(c) or [0.0] * n)[i]
+            pct = 100.0 * ns / width
+            cells[c] = {"ns": int(ns), "pct": round(pct, 1)}
+            if pct > peak:
+                peak = pct
+                peak_core = c
+        rows.append({
+            "index": i, "start": start, "stop": stop, "jump_ns": start,
+            "cells": cells, "peak_pct": round(peak, 1), "peak_core": peak_core,
+            "section": "core_time",
+        })
+    return {
+        "cores": core_list, "bins": rows, "bin_ns": int(width),
+        "lo": t0, "hi": t1, "section": "core_time",
+    }
+
+
+def core_busy_anomalies(events: Sequence[dict], bins: int = CORE_TIME_BINS) -> List[dict]:
+    grid = core_util_over_time(events, bins=bins)
+    out: List[dict] = []
+    for row in grid.get("bins") or []:
+        if float(row.get("peak_pct") or 0) < 90.0:
+            continue
+        out.append({
+            "kind": "cpu",
+            "task": row.get("peak_core") or "CPU",
+            "mk": row.get("peak_core") or "",
+            "start": row.get("start"),
+            "stop": row.get("stop"),
+            "duration": int(row.get("stop") or 0) - int(row.get("start") or 0),
+            "jump_ns": row.get("jump_ns"),
+            "core": row.get("peak_core") or "",
+            "section": "cores",
+            "reason": f"CPU {row.get('peak_core')} utilization spike {row.get('peak_pct')}%",
+        })
+    return out
+
+
+def idle_gap_anomalies(events: Sequence[dict]) -> List[dict]:
+    by_core: Dict[str, List[dict]] = {}
+    for ev in events or []:
+        if not isinstance(ev, dict) or ev.get("kind") != "exec":
+            continue
+        core = str(ev.get("core") or "")
+        if core:
+            by_core.setdefault(core, []).append(ev)
+    out: List[dict] = []
+    for core, group in by_core.items():
+        group = sorted(group, key=lambda e: float(e.get("start") or 0))
+        gaps = []
+        for i in range(1, len(group)):
+            gap = int(group[i].get("start") or 0) - int(group[i - 1].get("stop") or 0)
+            if gap > 0:
+                gaps.append((gap, int(group[i - 1].get("stop") or 0), int(group[i].get("start") or 0)))
+        if len(gaps) < 4:
+            continue
+        vals = [g[0] for g in gaps]
+        mean = sum(vals) / len(vals)
+        var = sum((v - mean) ** 2 for v in vals) / len(vals)
+        sigma = math.sqrt(var)
+        thresh = mean + 3.0 * sigma if sigma > 0 else max(vals)
+        for gap, start, stop in gaps:
+            if gap > thresh and gap >= mean:
+                out.append({
+                    "kind": "idle",
+                    "task": core,
+                    "mk": core,
+                    "start": start,
+                    "stop": stop,
+                    "duration": gap,
+                    "jump_ns": start,
+                    "core": core,
+                    "section": "cores",
+                    "reason": f"unusual idle on {core}",
+                })
+    return out
+
+
+_SPARK_BARS = "▁▂▃▄▅▆▇█"
+DISTRIBUTION_KINDS = (
+    "exec", "block", "inter", "response", "dispatch", "wakeup", "preempt",
+)
+
+
+def sparkline(values: Sequence[int], width: int = 16) -> str:
+    """Compact unicode bars for a chronological sample series."""
+    vals = [int(v) for v in values or [] if int(v or 0) >= 0]
+    if not vals:
+        return ""
+    width = max(4, min(24, int(width or 16)))
+    if len(vals) > width:
+        step = len(vals) / width
+        buckets: List[int] = []
+        for i in range(width):
+            lo = int(i * step)
+            hi = max(lo + 1, int((i + 1) * step))
+            chunk = vals[lo:hi]
+            buckets.append(int(sum(chunk) / len(chunk)) if chunk else 0)
+        vals = buckets
+    lo_v, hi_v = min(vals), max(vals)
+    span = hi_v - lo_v
+    if span <= 0:
+        return _SPARK_BARS[0] * len(vals)
+    return "".join(
+        _SPARK_BARS[min(7, int((v - lo_v) * 7 / span))] for v in vals
+    )
+
+
+def distribution_metric_samples(
+    events: Sequence[dict],
+    kind: str,
+    mk: str,
+    dispatch_by_mk: Optional[dict] = None,
+) -> List[int]:
+    """Nanosecond samples for Distribution Explorer (one task × metric)."""
+    kind = str(kind or "exec")
+    mk = str(mk or "")
+    if not mk:
+        return []
+    if kind == "dispatch":
+        raw = (dispatch_by_mk or {}).get(mk) or []
+        return [int(v) for v in raw if int(v or 0) > 0]
+    if kind in ("response", "wakeup"):
+        out: List[int] = []
+        for ev in analyze_response_times(events).get("events") or []:
+            if str(ev.get("mk") or ev.get("task") or "") != mk:
+                continue
+            dur = int(ev.get("wait_ns") if kind == "wakeup" else ev.get("duration") or 0)
+            if dur > 0:
+                out.append(dur)
+        return out
+    if kind == "preempt":
+        return [
+            int(p.get("duration") or 0)
+            for p in preemption_pairs(events)
+            if str(p.get("victim_mk") or p.get("mk") or "") == mk
+            and int(p.get("duration") or 0) > 0
+        ]
+    return [
+        int(e.get("duration") or 0)
+        for e in events or []
+        if isinstance(e, dict)
+        and str(e.get("kind") or "") == kind
+        and str(e.get("mk") or e.get("task") or "") == mk
+        and int(e.get("duration") or 0) > 0
+    ]
+
+
+def distribution_explorer(
+    events: Sequence[dict],
+    kind: str,
+    mk: str,
+    dispatch_by_mk: Optional[dict] = None,
+) -> Optional[dict]:
+    """Summary + sparkline for one Distribution Explorer selection."""
+    samples = distribution_metric_samples(events, kind, mk, dispatch_by_mk)
+    stats = _duration_stats(samples)
+    if not stats:
+        return None
+    plot_kind = {
+        "wakeup": "block",
+        "preempt": "preempt",
+    }.get(str(kind or ""), str(kind or "exec"))
+    row = dict(stats)
+    row.update({
+        "kind": str(kind or "exec"),
+        "mk": mk,
+        "spark": sparkline(samples),
+        "plot_kind": plot_kind,
+        "section": "distrib",
+        "n_samples": len(samples),
+    })
+    return row
+
+
+def unified_jitter(
+    events: Sequence[dict],
+    dispatch_by_mk: Optional[dict] = None,
+) -> List[dict]:
+    by_mk: Dict[str, dict] = {}
+    resp = analyze_response_times(events).get("events") or []
+
+    def _ensure(mk: str, task: str) -> dict:
+        return by_mk.setdefault(mk, {
+            "task": task or mk, "mk": mk,
+            "exec": [], "block": [], "inter": [], "response": [],
+            "dispatch": [], "wakeup": [],
+            "section": "jitter",
+        })
+
+    for ev in list(events or []) + resp:
+        if not isinstance(ev, dict):
+            continue
+        mk = str(ev.get("mk") or ev.get("task") or "")
+        kind = str(ev.get("kind") or "")
+        if not mk or kind not in ("exec", "block", "inter", "response"):
+            continue
+        rec = _ensure(mk, str(ev.get("task") or mk))
+        dur = int(ev.get("duration") or 0)
+        if dur > 0:
+            rec[kind].append(dur)
+        if kind == "response":
+            wait = int(ev.get("wait_ns") or 0)
+            if wait > 0:
+                rec["wakeup"].append(wait)
+    for mk, samples in (dispatch_by_mk or {}).items():
+        rec = _ensure(str(mk), str(mk))
+        rec["dispatch"].extend(int(s) for s in samples or [] if int(s or 0) > 0)
+    rows: List[dict] = []
+    keys = ("exec", "block", "inter", "response", "dispatch", "wakeup")
+    for rec in by_mk.values():
+        row = {"task": rec["task"], "mk": rec["mk"], "section": "jitter"}
+        empty = True
+        for key in keys:
+            stats = _duration_stats(rec[key])
+            row[f"{key}_jitter_ns"] = int(stats["jitter_ns"]) if stats else 0
+            row[f"{key}_cv"] = float(stats["cv"]) if stats else 0.0
+            if stats:
+                empty = False
+        if empty:
+            continue
+        rows.append(row)
+    rows.sort(key=lambda r: (
+        -max(int(r.get("response_jitter_ns") or 0), int(r.get("exec_jitter_ns") or 0),
+             int(r.get("dispatch_jitter_ns") or 0)),
+        str(r.get("task") or ""),
+    ))
+    return rows
+
+
+def recurring_patterns(anomalies: Sequence[dict], min_count: int = 2) -> List[dict]:
+    by_key: Dict[Tuple[str, str], dict] = {}
+    for ev in anomalies or []:
+        if not isinstance(ev, dict):
+            continue
+        task = str(ev.get("task") or ev.get("mk") or "")
+        kind = str(ev.get("kind") or "")
+        if not task or not kind:
+            continue
+        rec = by_key.setdefault((task, kind), {
+            "task": task, "mk": ev.get("mk") or task, "kind": kind,
+            "count": 0, "worst": ev, "section": "patterns",
+        })
+        rec["count"] += 1
+        if int(ev.get("duration") or 0) > int(rec["worst"].get("duration") or 0):
+            rec["worst"] = ev
+    rows = [r for r in by_key.values() if int(r.get("count") or 0) >= min_count]
+    for rec in rows:
+        worst = rec["worst"]
+        rec["start"] = worst.get("start")
+        rec["stop"] = worst.get("stop")
+        rec["jump_ns"] = worst.get("jump_ns") or worst.get("start")
+        rec["duration"] = worst.get("duration")
+        rec["reason"] = (
+            f"{rec['count']}× {KIND_LABEL.get(rec['kind'], rec['kind'])} "
+            f"for {rec['task']}"
+        )
+    rows.sort(key=lambda r: (-int(r.get("count") or 0), -int(r.get("duration") or 0)))
+    return rows
+
+
+def top_blocking_contributors(
+    events: Sequence[dict],
+    mutex_waits: Optional[Sequence[dict]] = None,
+    limit: int = 12,
+) -> List[dict]:
+    """Rank tasks by mutex wait, preemption overlap, and leftover idle gap."""
+    pairs = preemption_pairs(events)
+    preempt: Dict[str, dict] = {}
+    for p in pairs:
+        mk = str(p.get("victim_mk") or "")
+        if not mk:
+            continue
+        rec = preempt.setdefault(mk, {
+            "task": p.get("victim") or mk, "ns": 0, "worst": p,
+        })
+        dur = int(p.get("duration") or 0)
+        rec["ns"] += dur
+        if dur > int(rec["worst"].get("duration") or 0):
+            rec["worst"] = p
+    mutex: Dict[str, dict] = {}
+    for w in mutex_waits or []:
+        if not isinstance(w, dict):
+            continue
+        mk = str(w.get("waiter_mk") or w.get("mk") or "")
+        if not mk:
+            continue
+        rec = mutex.setdefault(mk, {
+            "task": w.get("waiter") or w.get("task") or mk, "ns": 0, "worst": w,
+        })
+        dur = int(w.get("duration") or 0)
+        rec["ns"] += dur
+        if dur > int(rec["worst"].get("duration") or 0):
+            rec["worst"] = w
+    block: Dict[str, dict] = {}
+    for ev in events or []:
+        if not isinstance(ev, dict) or ev.get("kind") != "block":
+            continue
+        mk = str(ev.get("mk") or "")
+        if not mk:
+            continue
+        rec = block.setdefault(mk, {
+            "task": ev.get("task") or mk, "ns": 0, "worst": ev,
+        })
+        dur = int(ev.get("duration") or 0)
+        rec["ns"] += dur
+        if dur > int(rec["worst"].get("duration") or 0):
+            rec["worst"] = ev
+    keys = set(preempt) | set(mutex) | set(block)
+    rows: List[dict] = []
+    for mk in keys:
+        mutex_ns = int((mutex.get(mk) or {}).get("ns") or 0)
+        preempt_ns = int((preempt.get(mk) or {}).get("ns") or 0)
+        block_ns = int((block.get(mk) or {}).get("ns") or 0)
+        idle_ns = max(0, block_ns - preempt_ns)
+        total = mutex_ns + preempt_ns + idle_ns
+        if total <= 0:
+            continue
+        worst = None
+        for src in (mutex.get(mk), preempt.get(mk), block.get(mk)):
+            if src is None:
+                continue
+            cand = src.get("worst")
+            if cand is None:
+                continue
+            if worst is None or int(cand.get("duration") or 0) > int(worst.get("duration") or 0):
+                worst = cand
+        task = (
+            (mutex.get(mk) or {}).get("task")
+            or (preempt.get(mk) or {}).get("task")
+            or (block.get(mk) or {}).get("task")
+            or mk
+        )
+        rows.append({
+            "task": task,
+            "mk": mk,
+            "mutex_ns": mutex_ns,
+            "preempt_ns": preempt_ns,
+            "idle_ns": idle_ns,
+            "total_ns": total,
+            "worst": worst or {},
+            "section": "mutex_block",
+            "reason": (
+                f"mutex {mutex_ns} · preempt {preempt_ns} · idle {idle_ns}"
+            ),
+        })
+    rows.sort(key=lambda r: (-int(r.get("total_ns") or 0), str(r.get("task") or "")))
+    return rows[: max(1, min(40, int(limit or 12)))]
+
+
+def recurring_patterns_across(
+    anomalies_a: Sequence[dict],
+    anomalies_b: Sequence[dict],
+    min_count: int = 1,
+) -> List[dict]:
+    """Anomaly kinds that repeat for the same task in both traces."""
+
+    def _index(anoms: Sequence[dict]) -> Dict[Tuple[str, str], dict]:
+        by_key: Dict[Tuple[str, str], dict] = {}
+        for ev in anoms or []:
+            if not isinstance(ev, dict):
+                continue
+            task = str(ev.get("task") or ev.get("mk") or "")
+            kind = str(ev.get("kind") or "")
+            if not task or not kind:
+                continue
+            rec = by_key.setdefault((task, kind), {"count": 0, "worst": ev})
+            rec["count"] += 1
+            if int(ev.get("duration") or 0) > int(rec["worst"].get("duration") or 0):
+                rec["worst"] = ev
+        return by_key
+
+    need = max(1, int(min_count or 1))
+    a = _index(anomalies_a)
+    b = _index(anomalies_b)
+    rows: List[dict] = []
+    for key in set(a) & set(b):
+        if a[key]["count"] < need or b[key]["count"] < need:
+            continue
+        task, kind = key
+        wa, wb = a[key]["worst"], b[key]["worst"]
+        worst = wa if int(wa.get("duration") or 0) >= int(wb.get("duration") or 0) else wb
+        rows.append({
+            "task": task,
+            "mk": worst.get("mk") or task,
+            "kind": kind,
+            "count_a": a[key]["count"],
+            "count_b": b[key]["count"],
+            "worst": worst,
+            "start": worst.get("start"),
+            "stop": worst.get("stop"),
+            "jump_ns": worst.get("jump_ns") or worst.get("start"),
+            "duration": worst.get("duration"),
+            "section": "patterns",
+            "reason": (
+                f"{a[key]['count']}× / {b[key]['count']}× "
+                f"{KIND_LABEL.get(kind, kind)} for {task}"
+            ),
+        })
+    rows.sort(key=lambda r: (
+        -(int(r.get("count_a") or 0) + int(r.get("count_b") or 0)),
+        -int(r.get("duration") or 0),
+    ))
+    return rows
+
+
+def compare_analysis_tables(
+    trace_a: Any,
+    trace_b: Any,
+    lo_a: Optional[int] = None,
+    hi_a: Optional[int] = None,
+    lo_b: Optional[int] = None,
+    hi_b: Optional[int] = None,
+    deadlines: Optional[dict] = None,
+) -> dict:
+    """Response P99 / mutex / deadline / shared-pattern tables for Compare."""
+    evs_a = harvest_ux_events(trace_a, lo_a, hi_a)
+    evs_b = harvest_ux_events(trace_b, lo_b, hi_b)
+    waits_a = pair_mutex_waits(harvest_mutex_holds(trace_a, lo_a, hi_a))
+    waits_b = pair_mutex_waits(harvest_mutex_holds(trace_b, lo_b, hi_b))
+    ra = analyze_response_times(evs_a).get("rows") or []
+    rb = analyze_response_times(evs_b).get("rows") or []
+    by_a = {str(r.get("task") or r.get("mk")): r for r in ra}
+    by_b = {str(r.get("task") or r.get("mk")): r for r in rb}
+    names = sorted(set(by_a) | set(by_b))
+    response_rows = []
+    worst_p99_a = worst_p99_b = 0
+    for name in names:
+        pa = int((by_a.get(name) or {}).get("p99_ns") or 0)
+        pb = int((by_b.get(name) or {}).get("p99_ns") or 0)
+        worst_p99_a = max(worst_p99_a, pa)
+        worst_p99_b = max(worst_p99_b, pb)
+        if pa or pb:
+            response_rows.append({
+                "name": name, "p99_a": pa, "p99_b": pb, "delta_ns": pa - pb,
+            })
+    response_rows.sort(key=lambda r: -abs(int(r.get("delta_ns") or 0)))
+    ma = mutex_blocking_table(waits_a)
+    mb = mutex_blocking_table(waits_b)
+    mutex_a = {str(r.get("task") or r.get("mk")): r for r in ma}
+    mutex_b = {str(r.get("task") or r.get("mk")): r for r in mb}
+    mutex_rows = []
+    mutex_ns_a = mutex_ns_b = 0
+    for name in sorted(set(mutex_a) | set(mutex_b)):
+        ta = int((mutex_a.get(name) or {}).get("total_ns") or 0)
+        tb = int((mutex_b.get(name) or {}).get("total_ns") or 0)
+        mutex_ns_a += ta
+        mutex_ns_b += tb
+        mutex_rows.append({
+            "name": name, "total_a": ta, "total_b": tb, "delta_ns": ta - tb,
+        })
+    mutex_rows.sort(key=lambda r: -abs(int(r.get("delta_ns") or 0)))
+    dl_map = {
+        str(k): int(v) for k, v in (deadlines or {}).items() if int(v or 0) > 0
+    }
+    misses_a = misses_b = 0
+    if dl_map:
+        for ev in analyze_response_times(evs_a).get("events") or []:
+            lim = dl_map.get(str(ev.get("mk") or "")) or dl_map.get(str(ev.get("task") or ""))
+            if lim and int(ev.get("duration") or 0) > lim:
+                misses_a += 1
+        for ev in analyze_response_times(evs_b).get("events") or []:
+            lim = dl_map.get(str(ev.get("mk") or "")) or dl_map.get(str(ev.get("task") or ""))
+            if lim and int(ev.get("duration") or 0) > lim:
+                misses_b += 1
+    shared = recurring_patterns_across(
+        detect_timeline_anomalies(evs_a, 12, waits_a, dl_map),
+        detect_timeline_anomalies(evs_b, 12, waits_b, dl_map),
+    )
+    return {
+        "response": response_rows[:15],
+        "mutex_block": mutex_rows[:15],
+        "metrics": {
+            "response_p99_a": worst_p99_a,
+            "response_p99_b": worst_p99_b,
+            "mutex_ns_a": mutex_ns_a,
+            "mutex_ns_b": mutex_ns_b,
+            "deadline_misses_a": misses_a,
+            "deadline_misses_b": misses_b,
+        },
+        "shared_patterns": shared[:6],
+    }
+
+
+def compare_why(strip: Optional[dict]) -> str:
+    """Deterministic one-line explanation of compare regressions."""
+    regs = list((strip or {}).get("regressions") or [])
+    shared = list((strip or {}).get("shared_patterns") or [])
+    if not regs and not shared:
+        return "No positive regressions in the compared tables."
+    labels = [str(r.get("label") or "") for r in regs]
+    blob = " ".join(labels).lower()
+    if regs:
+        parts = [f"{r.get('label')} {r.get('delta')}" for r in regs[:4]]
+        why = "Largest regressions: " + "; ".join(parts) + "."
+    else:
+        why = "No positive regressions in the compared tables."
+    if "deadline" in blob:
+        why += " Open Deadlines / CPU budget and Timeline Anomalies."
+    elif "response" in blob and ("mutex" in blob or "block" in blob):
+        why += " Response P99 moved with blocking — check Mutex Blocking and Critical Path."
+    elif "response" in blob:
+        why += " Open Response Time and click p99."
+    elif "mutex" in blob:
+        why += " Open Mutex Blocking and Waiter × Owner."
+    elif "block" in blob and ("exec" in blob or "max" in blob):
+        why += " Blocking and execution tails moved together — check Waiter × Owner and Worst Events."
+    elif "migrat" in blob:
+        why += " Open Task × Core and Timeline Anomalies for migration bursts."
+    elif "block" in blob:
+        why += " Open Waiter × Owner and Blocking p95/p99."
+    else:
+        why += " Open the matching Statistics table and click p95/p99."
+    shared = list((strip or {}).get("shared_patterns") or [])
+    if shared:
+        top = shared[0]
+        why += (
+            f" Shared pattern: {top.get('reason') or top.get('kind') or 'anomaly'}."
+        )
+    return why
 # ===========================================================================
 # Main Window
 # ===========================================================================
@@ -36191,7 +41201,7 @@ class _ScatterWidget(QWidget):
 
     @staticmethod
     def _marker_right_margin(fm) -> int:
-        labels = ("min", "avg", "p50", "p95", "max")
+        labels = ("min", "avg", "p5", "p50", "p95", "max")
         return max(14, max(fm.horizontalAdvance(lbl) for lbl in labels) + 12)
 
     def paintEvent(self, event) -> None:  # noqa: N802
@@ -36242,6 +41252,7 @@ class _ScatterWidget(QWidget):
         p.setPen(txt)
         vals_sorted = sorted(ys)
         n = len(vals_sorted)
+        p5_val = vals_sorted[min(n - 1, math.ceil(n * 0.05) - 1)]
         p50_val = vals_sorted[min(n - 1, math.ceil(n * 0.50) - 1)]
         avg_val = sum(ys) / len(ys) if ys else 0
         stddev_val = math.sqrt(
@@ -36281,6 +41292,7 @@ class _ScatterWidget(QWidget):
 
         ref_lines = [
             (avg_val, "avg", QColor("#CE93D8")),
+            (p5_val, "p5", QColor("#29B6F6")),
             (p50_val, "p50", QColor("#4CAF50")),
             (p95_val, "p95", QColor("#FF9800")),
         ]
@@ -36632,7 +41644,8 @@ def _hist_value_to_x(value: float, bin_spec: dict, plot_w: int, margin_left: int
     return region_left + int(t * regular_w)
 
 def _hist_build_bar_layout(bin_spec: dict, plot_w: int, plot_h: int,
-                           margin_left: int, margin_top: int, log_y: bool) -> tuple:
+                           margin_left: int, margin_top: int, log_y: bool,
+                           summary: dict) -> tuple:
     counts = bin_spec["counts"]
     edges = bin_spec["edges"]
     overflow = bin_spec["overflow"]
@@ -36655,18 +41668,35 @@ def _hist_build_bar_layout(bin_spec: dict, plot_w: int, plot_h: int,
     if has_underflow:
         h = count_height(underflow)
         bars.append((margin_left + int(slot * slot_w), margin_top + plot_h - h,
-                     max(1, int(slot_w) - 1), h, "underflow"))
+                     max(1, int(slot_w) - 1), h, "underflow", underflow,
+                     summary["min"], bin_spec["display_min"]))
         slot += 1
     for i, cnt in enumerate(counts):
         h = count_height(cnt)
         bars.append((margin_left + int(slot * slot_w), margin_top + plot_h - h,
-                     max(1, int(slot_w) - 1), h, "regular"))
+                     max(1, int(slot_w) - 1), h, "regular", cnt,
+                     edges[i], edges[i + 1]))
         slot += 1
     if has_overflow:
         h = count_height(overflow)
         bars.append((margin_left + int(slot * slot_w), margin_top + plot_h - h,
-                     max(1, int(slot_w) - 1), h, "overflow"))
+                     max(1, int(slot_w) - 1), h, "overflow", overflow,
+                     bin_spec["display_max"], summary["max"]))
     return bars, max_count, slot_count, slot_w
+
+
+def _hist_bar_tip_lines(kind: str, count: int, edge_lo: float, edge_hi: float,
+                        n: int, time_scale: str, *, value_as_time: bool) -> tuple:
+    if kind == "underflow":
+        line1 = "< p5"
+    elif kind == "overflow":
+        line1 = "> p95"
+    else:
+        lo = _hist_format_axis_value(edge_lo, time_scale, value_as_time=value_as_time)
+        hi = _hist_format_axis_value(edge_hi, time_scale, value_as_time=value_as_time)
+        line1 = f"{lo}–{hi}"
+    pct = int(round(100.0 * count / n)) if n else 0
+    return line1, f"{count} of {n} ({pct}%)"
 
 def _hist_build_caption(scale_mode: str, summary: dict, bin_spec: dict,
                         log_y: bool, time_scale: str,
@@ -36710,7 +41740,7 @@ def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto",
     log_y = _hist_should_use_log_y(
         bin_spec["counts"] + [bin_spec["overflow"], bin_spec["underflow"]])
     bars, max_count, slot_count, slot_w = _hist_build_bar_layout(
-        bin_spec, plot_w, plot_h, margin_left, margin_top, log_y)
+        bin_spec, plot_w, plot_h, margin_left, margin_top, log_y, summary)
     _sc, _sw, leading, regular_slots, regular_w = _hist_slot_layout(bin_spec, plot_w)
     region_left = margin_left + int(leading * _sw)
 
@@ -36788,6 +41818,7 @@ def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto",
 
     refs = [
         (summary["avg"], "avg", QColor("#CE93D8")),
+        (summary["p5"], "p5", QColor("#29B6F6")),
         (summary["p50"], "p50", QColor("#4CAF50")),
         (summary["p95"], "p95", QColor("#FF9800")),
     ]
@@ -36821,6 +41852,7 @@ def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto",
         "margin_bottom": margin_bottom,
         "plot_w": plot_w,
         "plot_h": plot_h,
+        "n": n,
         "bars": bars,
         "x_ticks": x_ticks,
         "y_ticks": y_ticks,
@@ -36846,8 +41878,13 @@ class _HistogramWidget(QWidget):
         self._scale_mode  = "auto"
         self._value_as_time = value_as_time
         self._show_variability = bool(show_variability)
+        self._hover_idx = -1
+        self._hit_slots = []
+        self._plot_top = 0
+        self._plot_bot = 0
         self.setMinimumHeight(140)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMouseTracking(True)
 
     def set_values(self, values: list) -> None:
         """Replace histogram samples and repaint."""
@@ -36898,7 +41935,7 @@ class _HistogramWidget(QWidget):
         sf = QFont(); sf.setPointSize(7)
         p.setFont(sf)
         fm = p.fontMetrics()
-        marker_labels = ("min", "avg", "p50", "p95", "max")
+        marker_labels = ("min", "avg", "p5", "p50", "p95", "max")
         MR_labels = max(14, max(fm.horizontalAdvance(lbl) for lbl in marker_labels) + 10)
         pw = w - ML - MR_labels
         ph = h - MT - MB
@@ -36951,14 +41988,24 @@ class _HistogramWidget(QWidget):
 
         # Bars
         bar_color = QColor(self._color); bar_color.setAlpha(180)
+        hover_color = QColor(self._color); hover_color.setAlpha(255)
         overflow_color = QColor(self._color); overflow_color.setAlpha(100)
+        overflow_hover = QColor(self._color); overflow_hover.setAlpha(170)
         p.setPen(Qt.PenStyle.NoPen)
-        for bx, by, bw, bh, kind in model["bars"]:
+        self._hit_slots = []
+        self._plot_top = MT
+        self._plot_bot = MT + ph
+        for i, (bx, by, bw, bh, kind, count, edge_lo, edge_hi) in enumerate(model["bars"]):
             x = int(ML + (bx - model["margin_left"]) * scale)
             y = int(MT + (by - model["margin_top"]) * ph / max(1, model["plot_h"]))
             bar_h = int(bh * ph / max(1, model["plot_h"]))
             bar_w = max(1, int(bw * scale))
-            p.setBrush(QBrush(overflow_color if kind in ("overflow", "underflow") else bar_color))
+            self._hit_slots.append((x, bar_w, y, kind, count, edge_lo, edge_hi))
+            hovered = i == self._hover_idx
+            if kind in ("overflow", "underflow"):
+                p.setBrush(QBrush(overflow_hover if hovered else overflow_color))
+            else:
+                p.setBrush(QBrush(hover_color if hovered else bar_color))
             p.drawRect(x, y, bar_w, bar_h)
 
         # CDF line
@@ -36981,7 +42028,58 @@ class _HistogramWidget(QWidget):
             p.setFont(sf)
             p.drawText(x + 3, MT + 12, lbl_text)
 
+        if 0 <= self._hover_idx < len(self._hit_slots):
+            hx, hw, hy, kind, count, edge_lo, edge_hi = self._hit_slots[self._hover_idx]
+            line1, line2 = _hist_bar_tip_lines(
+                kind, count, edge_lo, edge_hi, model["n"], self._time_scale,
+                value_as_time=self._value_as_time)
+            tf = QFont(); tf.setPointSize(8)
+            p.setFont(tf)
+            fm = p.fontMetrics()
+            tw = max(fm.horizontalAdvance(line1), fm.horizontalAdvance(line2))
+            th = fm.height() * 2 + 6
+            pad = 6
+            bw_ = tw + pad * 2
+            bh_ = th + pad * 2
+            cx = hx + hw // 2
+            bx = cx + 10
+            by = hy - bh_ // 2
+            if bx + bw_ > w - 2:
+                bx = cx - bw_ - 10
+            if by < 2:
+                by = 2
+            if by + bh_ > h - 2:
+                by = h - bh_ - 2
+            bg2 = QColor("#2A2A2A") if dark else QColor("#F0F0F0")
+            bg2.setAlpha(230)
+            border_c = QColor("#555555") if dark else QColor("#BBBBBB")
+            p.setBrush(QBrush(bg2))
+            p.setPen(QPen(border_c, 1))
+            p.drawRoundedRect(bx, by, bw_, bh_, 4, 4)
+            p.setPen(QColor("#EEEEEE") if dark else QColor("#222222"))
+            p.drawText(bx + pad, by + pad + fm.ascent(), line1)
+            p.setPen(QColor("#AAAAAA") if dark else QColor("#666666"))
+            p.drawText(bx + pad, by + pad + fm.height() + fm.ascent(), line2)
+
         p.end()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        ex = event.position().x()
+        ey = event.position().y()
+        idx = -1
+        if self._plot_top <= ey <= self._plot_bot:
+            for i, (sx, sw, *_rest) in enumerate(self._hit_slots):
+                if sx <= ex <= sx + sw:
+                    idx = i
+                    break
+        if idx != self._hover_idx:
+            self._hover_idx = idx
+            self.update()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        if self._hover_idx != -1:
+            self._hover_idx = -1
+            self.update()
 
 _MIG_PLOT_TABS = (("mig_dwell", "Dwell"), ("mig_rate", "Rate"), ("mig_gap", "Gap"))
 _PAIR_PLOT_TABS = (("pair_gap", "Gap"), ("pair_rate", "Rate"))
@@ -37013,6 +42111,8 @@ class _MetricsPlotDialog(QDialog):
                  on_tab_change=None,
                  on_open_heatmap=None,
                  on_open_chord=None,
+                 ai_enabled: bool = True,
+                 on_query_ai=None,
                  parent=None) -> None:
         super().__init__(parent, Qt.WindowType.Window)
         self._title        = title
@@ -37021,8 +42121,10 @@ class _MetricsPlotDialog(QDialog):
         self._on_tab_change = on_tab_change
         self._on_open_heatmap = on_open_heatmap
         self._on_open_chord = on_open_chord
+        self._on_query_ai = on_query_ai
         self._btn_open_heatmap: Optional[QPushButton] = None
         self._btn_open_chord: Optional[QPushButton] = None
+        self._btn_query_ai: Optional[QPushButton] = None
         self.setWindowTitle(title)
         self.resize(820, 620)
         self.setMinimumSize(500, 400)
@@ -37057,6 +42159,7 @@ class _MetricsPlotDialog(QDialog):
 
         self._scope_banner = QLabel()
         self._scope_banner.setWordWrap(True)
+        self._scope_banner.setMinimumWidth(0)
         self._scope_scoped = scope_scoped
         self._scope_badge = scope_badge
         self._scope_detail = scope_detail
@@ -37094,8 +42197,10 @@ class _MetricsPlotDialog(QDialog):
         self._scatter.point_clicked.connect(self._on_scatter_click)
 
         splitter = _ResizeSplitter(Qt.Orientation.Vertical)
+        splitter.setChildrenCollapsible(False)
         splitter.addWidget(self._scatter)
         hist_panel = QWidget()
+        hist_panel.setMinimumHeight(180)
         hist_layout = QVBoxLayout(hist_panel)
         hist_layout.setContentsMargins(0, 0, 0, 0)
         hist_layout.setSpacing(2)
@@ -37104,6 +42209,8 @@ class _MetricsPlotDialog(QDialog):
         splitter.addWidget(hist_panel)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
+        splitter.setSizes([380, 240])
+        self._splitter = splitter
         cl.addWidget(splitter)
 
         root.addWidget(self._content, 1)
@@ -37136,8 +42243,31 @@ class _MetricsPlotDialog(QDialog):
             btn_row.addWidget(btn_ch)
             self._btn_open_chord = btn_ch
         btn_row.addStretch()
+        btn_ai = QPushButton("Query with AI…")
+        btn_ai.clicked.connect(self._query_with_ai)
+        btn_row.addWidget(btn_ai)
+        self._btn_query_ai = btn_ai
+        self.set_ai_enabled(ai_enabled)
         btn_row.addWidget(btn_cls)
         root.addLayout(btn_row)
+
+    def set_ai_enabled(self, enabled: bool) -> None:
+        """Gray out Query with AI… when Settings → AI is off."""
+        btn = getattr(self, "_btn_query_ai", None)
+        if btn is None:
+            return
+        on = bool(enabled)
+        btn.setEnabled(on)
+        btn.setToolTip(
+            "Open the AI Assistant and explain this distribution"
+            if on else
+            "Enable AI Assistant in Settings → AI")
+
+    def _query_with_ai(self) -> None:
+        if self._btn_query_ai is None or not self._btn_query_ai.isEnabled():
+            return
+        if self._on_query_ai is not None:
+            self._on_query_ai()
 
     @staticmethod
     def _tab_button_stylesheet(is_dark: bool) -> str:
@@ -37224,6 +42354,29 @@ class _MetricsPlotDialog(QDialog):
         modes = ("auto", "linear", "percentile", "log")
         if 0 <= index < len(modes):
             self._histogram.set_scale_mode(modes[index])
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._fit_plot_panes()
+
+    def _fit_plot_panes(self) -> None:
+        """Keep scatter + histogram both on screen (splitter otherwise collapses)."""
+        screen = self.screen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            max_h = max(420, int(avail.height()) - 64)
+            max_w = max(500, int(avail.width()) - 64)
+            w = min(max(self.width(), 500), max_w)
+            h = min(max(self.height(), 480), max_h)
+            if w != self.width() or h != self.height():
+                self.resize(w, h)
+        spl = getattr(self, "_splitter", None)
+        if spl is None:
+            return
+        total = max(280, int(spl.height()) or (int(self.height()) - 140))
+        hist = max(180, int(total * 0.42))
+        scatter = max(160, total - hist)
+        spl.setSizes([scatter, hist])
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self.closed.emit()
@@ -37865,6 +43018,16 @@ class _TraceCompareDialog(QDialog):
         self._scope_cb.setChecked(True)
         lay.addWidget(self._scope_cb)
 
+        self._strip = QLabel("")
+        self._strip.setWordWrap(True)
+        self._strip.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._strip.setStyleSheet(
+            "QLabel { color: #9a9a9a; padding: 6px 8px; border-radius: 6px;"
+            " background: rgba(52, 152, 219, 0.10); }")
+        self._strip.hide()
+        lay.addWidget(self._strip)
+
         self._pages = QTabWidget()
         self._summary_table = QTableWidget(0, 4)
         self._summary_table.setHorizontalHeaderLabels(
@@ -37895,10 +43058,17 @@ class _TraceCompareDialog(QDialog):
         self._sync_table = QTableWidget(0, 4)
         self._sync_table.setHorizontalHeaderLabels(
             ["Metric", "Trace A", "Trace B", "Δ"])
+        self._response_table = QTableWidget(0, 4)
+        self._response_table.setHorizontalHeaderLabels(
+            ["Task", "P99 A", "P99 B", "Δ"])
+        self._mutex_table = QTableWidget(0, 4)
+        self._mutex_table.setHorizontalHeaderLabels(
+            ["Task", "Total A", "Total B", "Δ"])
         self._all_tables = (
             self._summary_table, self._top_table, self._core_util_table,
             self._mig_table, self._exec_table, self._block_table,
             self._inter_table, self._preempt_table, self._sync_table,
+            self._response_table, self._mutex_table,
         )
         for tbl in self._all_tables:
             tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -37913,6 +43083,8 @@ class _TraceCompareDialog(QDialog):
         self._pages.addTab(self._inter_table, "Inter-Arrival")
         self._pages.addTab(self._preempt_table, "Preemption")
         self._pages.addTab(self._sync_table, "Sync")
+        self._pages.addTab(self._response_table, "Response")
+        self._pages.addTab(self._mutex_table, "Mutex")
         lay.addWidget(self._pages, 1)
 
         exp_row = QHBoxLayout()
@@ -38013,6 +43185,11 @@ class _TraceCompareDialog(QDialog):
             return None
         return self._win._tabs[idx].trace
 
+    def _compare_deadlines(self) -> dict:
+        panel = getattr(self._win, "_stats_panel", None)
+        raw = getattr(panel, "_task_deadlines_ns", None) if panel is not None else None
+        return dict(raw) if raw else {}
+
     def _compare_args(self):
         ta = self._trace_for_combo(self._combo_a)
         tb = self._trace_for_combo(self._combo_b)
@@ -38039,8 +43216,12 @@ class _TraceCompareDialog(QDialog):
         if args is None:
             for tbl in self._all_tables:
                 tbl.setRowCount(0)
+            if getattr(self, "_strip", None) is not None:
+                self._strip.hide()
             return
-        tables = _build_trace_compare_rows(*args)
+        tables = _build_trace_compare_rows(
+            *args, deadlines=self._compare_deadlines())
+        self._update_compare_strip(tables)
         if self._on_compare is not None:
             try:
                 self._on_compare(
@@ -38059,6 +43240,29 @@ class _TraceCompareDialog(QDialog):
         self._fill_table(self._inter_table, tables.get("inter_arrival", []))
         self._fill_table(self._preempt_table, tables.get("preemption", []))
         self._fill_table(self._sync_table, tables.get("sync", []))
+        self._fill_table(self._response_table, tables.get("response", []))
+        self._fill_table(self._mutex_table, tables.get("mutex_block", []))
+
+    def _update_compare_strip(self, tables: dict) -> None:
+        strip = getattr(self, "_strip", None)
+        if strip is None:
+            return
+        data = compare_summary_strip(tables or {}, 4)
+        parts = [f"{h['label']} {h['delta']}" for h in data.get("headline") or []]
+        regs = data.get("regressions") or []
+        if regs:
+            parts.append(
+                "Largest regressions: "
+                + " · ".join(f"{r['label']} {r['delta']}" for r in regs)
+            )
+        if data.get("why"):
+            parts.append(str(data["why"]))
+        text = "  ·  ".join(parts)
+        if text:
+            strip.setText(text)
+            strip.show()
+        else:
+            strip.hide()
 
     def _tab_name(self, combo: QComboBox) -> str:
         return combo.currentText() or "Trace"
@@ -38079,7 +43283,8 @@ class _TraceCompareDialog(QDialog):
         if not path:
             return
 
-        tables = _build_trace_compare_rows(*args)
+        tables = _build_trace_compare_rows(
+            *args, deadlines=self._compare_deadlines())
         text = _build_compare_csv(
             self._tab_name(self._combo_a),
             self._tab_name(self._combo_b),
@@ -38113,7 +43318,8 @@ class _TraceCompareDialog(QDialog):
         if not path:
             return
 
-        tables = _build_trace_compare_rows(*args)
+        tables = _build_trace_compare_rows(
+            *args, deadlines=self._compare_deadlines())
         report = _build_compare_html(
             self._tab_name(self._combo_a),
             self._tab_name(self._combo_b),
@@ -42199,10 +47405,18 @@ class _AnalysisFindingsDialog(QDialog):
     """Toolbar Analysis dialog — lists heuristic findings for the current scope."""
 
     def __init__(self, findings: List[dict], scope_title: str = "", parent=None,
-                 ai_enabled: bool = True, ui_font_size: int = UI_FONT_SIZE):
+                 ai_enabled: bool = True, ui_font_size: int = UI_FONT_SIZE,
+                 on_apply_scope=None, scope_hint: str = "",
+                 ux_events: Optional[List[dict]] = None,
+                 time_min: int = 0, time_max: int = 0):
         super().__init__(parent)
         self._findings = findings or []
         self._scope_title = scope_title or ""
+        self._on_apply_scope = on_apply_scope
+        self._scope_hint = scope_hint or ""
+        self._ux_events = ux_events or []
+        self._time_min = int(time_min or 0)
+        self._time_max = int(time_max or 0)
         self.wants_ai_query = False
         self._ai_needs_settings = False
         self.wants_ai_finding_id = ""
@@ -42277,14 +47491,14 @@ class _AnalysisFindingsDialog(QDialog):
                 item.setSizeHint(QSize(wrap_w, max(min_h, body_h + pad)))
                 list_w.addItem(item)
             list_w.setCurrentRow(0)
+            list_w.currentItemChanged.connect(lambda *_: self._refresh_scope_hint())
         else:
             empty = QListWidgetItem("No findings for the current scope")
             empty.setFlags(Qt.ItemFlag.NoItemFlags)
             empty.setFont(ui_font)
             list_w.addItem(empty)
 
-        def _make_ai_btn(label: str, tip_on: str, tip_off: str, template: str,
-                         *, primary: bool = False) -> QPushButton:
+        def _make_ai_btn(label: str, tip_on: str, tip_off: str, template: str) -> QPushButton:
             btn = QPushButton(label)
             btn.setFont(ui_font)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -42297,21 +47511,10 @@ class _AnalysisFindingsDialog(QDialog):
             fm = btn.fontMetrics()
             btn.setMinimumWidth(fm.horizontalAdvance(label) + 36)
             btn.setToolTip(tip_on if ai_enabled else tip_off)
-            if primary:
-                btn.setStyleSheet(
-                    "QPushButton {"
-                    f"  padding: 7px 16px; border-radius: 6px; font-size: {ui_fs};"
-                    "  background: #3498db; color: white; border: none;"
-                    "  font-weight: 600;"
-                    "}"
-                    "QPushButton:hover { background: #5dade2; }"
-                    "QPushButton:pressed { background: #2e86c1; }"
-                )
-            else:
-                btn.setStyleSheet(
-                    f"QPushButton {{ padding: 7px 16px; border-radius: 6px;"
-                    f" font-size: {ui_fs}; }}"
-                )
+            btn.setStyleSheet(
+                f"QPushButton {{ padding: 7px 16px; border-radius: 6px;"
+                f" font-size: {ui_fs}; }}"
+            )
             btn.clicked.connect(
                 lambda _checked=False, t=template: self._query_with_ai(
                     ai_enabled, t))
@@ -42363,7 +47566,6 @@ class _AnalysisFindingsDialog(QDialog):
                 "Open the AI Assistant and investigate the top findings with tools",
                 "Enable AI Assistant in Settings → AI",
                 "investigate",
-                primary=True,
             ),
             _make_ai_btn(
                 "Root cause…",
@@ -42442,9 +47644,32 @@ class _AnalysisFindingsDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 14, 16, 14)
         lay.setSpacing(12)
+        scope_row = QHBoxLayout()
+        scope_row.setContentsMargins(0, 0, 0, 0)
+        scope_row.setSpacing(8)
+        self._scope_lbl = QLabel(self._scope_hint or "Select a finding to recommend a cursor window.")
+        self._scope_lbl.setWordWrap(True)
+        self._scope_lbl.setStyleSheet(
+            f"color: #9a9a9a; font-size: {ui_fs};")
+        apply_scope = QPushButton("Apply cursors")
+        apply_scope.setFont(ui_font)
+        apply_scope.setCursor(Qt.CursorShape.PointingHandCursor)
+        apply_scope.setToolTip(
+            "Place C1–C2 on the recommended window and zoom the timeline")
+        apply_scope.setStyleSheet(
+            f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
+            f" font-size: {ui_fs}; }}"
+        )
+        apply_scope.clicked.connect(self._apply_recommended_scope)
+        apply_scope.setEnabled(self._on_apply_scope is not None)
+        scope_row.addWidget(self._scope_lbl, 1)
+        scope_row.addWidget(apply_scope, 0)
+
         lay.addWidget(note)
         lay.addWidget(list_w, 1)
+        lay.addLayout(scope_row)
         lay.addLayout(footer)
+        self._refresh_scope_hint()
 
         # Ensure the dialog is at least as wide as the Ask-AI button row.
         footer_w = sum(b.minimumWidth() for b in ai_btns) + 10 * (len(ai_btns) - 1) + 48
@@ -42452,6 +47677,43 @@ class _AnalysisFindingsDialog(QDialog):
             self.setMinimumWidth(footer_w)
         if self.width() < footer_w:
             self.resize(footer_w, self.height())
+
+    def _selected_finding(self) -> Optional[dict]:
+        item = self._list_w.currentItem()
+        if item is None:
+            return None
+        fid = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        for f in self._findings:
+            if str(f.get("id") or "") == fid:
+                return f
+        return self._findings[0] if self._findings else None
+
+    def _refresh_scope_hint(self) -> None:
+        lbl = getattr(self, "_scope_lbl", None)
+        if lbl is None:
+            return
+        finding = self._selected_finding()
+        if finding is None:
+            lbl.setText("Select a finding to recommend a cursor window.")
+            return
+        title = str(finding.get("title") or "Finding").strip()
+        events = getattr(self, "_ux_events", None) or []
+        tmin = int(getattr(self, "_time_min", 0) or 0)
+        tmax = int(getattr(self, "_time_max", 0) or 0)
+        if events:
+            scope = best_finding_scope(finding, events, tmin, tmax)
+            if scope and scope.get("reason"):
+                lbl.setText(f"Recommended scope: {scope['reason']}")
+                return
+        lbl.setText(f"Recommended scope: cover {title} (activation + waits).")
+
+    def _apply_recommended_scope(self) -> None:
+        if self._on_apply_scope is None:
+            return
+        finding = self._selected_finding()
+        if finding is None:
+            return
+        self._on_apply_scope(finding)
 
     def _query_with_ai(
         self, ai_enabled: bool, template_id: str = "findings",
@@ -42515,6 +47777,7 @@ class _StatsPanel(QWidget):
     task_clicked = Signal(str)   # merge key of the clicked task row
     segment_jump   = Signal(int)    # ns - scroll timeline to this timestamp
     plot_point_clicked = Signal(object, int, str)  # payload, mark_ns, note
+    explore_range_requested = Signal(object)  # {lo, hi, mk, section, note, ns}
     core_clicked = Signal(str)   # core name of the clicked core row
     # Core-Pair chart footer → open heatmap/chord focused on (from, to, bounce_only)
     open_pair_heatmap = Signal(str, str, bool)
@@ -42525,6 +47788,9 @@ class _StatsPanel(QWidget):
     section_pins_changed = Signal(list)
     # Section display order; persist to btf_viewer.rc
     section_order_changed = Signal(list)
+    # Collapse map; persist to btf_viewer.rc
+    section_collapsed_changed = Signal(dict)
+    query_ai_requested = Signal(str, str)  # template_id, extra prompt text
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -42536,6 +47802,10 @@ class _StatsPanel(QWidget):
         self._plot_kind: Optional[str] = None   # "exec", "block", "inter", "preempt", "interval", "tag", "tick"
         self._plot_preemptor: Optional[str] = None
         self._plot_interval_id: Optional[str] = None
+        self._ai_enabled: bool = True
+        self._distrib_ai_btn: Optional[QPushButton] = None
+        self._distrib_has_task: bool = False
+        self._last_anomaly: Optional[dict] = None
         self._trace: Optional["BtfTrace"] = None
         self._export_scope_override: Optional[Tuple[int, int]] = None
         self._cursor_times: List[int] = []
@@ -42566,6 +47836,8 @@ class _StatsPanel(QWidget):
         self._defer_populate_timer = QTimer(self)
         self._defer_populate_timer.setSingleShot(True)
         self._defer_populate_timer.timeout.connect(self._populate_next_deferred_section)
+        self._ux_events_key: Optional[Tuple[int, Optional[int], Optional[int]]] = None
+        self._ux_events_cached: Optional[List[dict]] = None
         self._cpu_budget_pct: float = 0.0
         self._task_deadlines_ns: Dict[str, int] = {}
         self.setMinimumWidth(0)
@@ -42644,12 +47916,7 @@ class _StatsPanel(QWidget):
         self._btn_export_html.clicked.connect(self._export_html)
         self._btn_export_html.setEnabled(False)
         exp_row.addWidget(self._btn_export_html)
-        self._btn_compare_mig = QPushButton("Trace Compare…")
-        self._btn_compare_mig.setToolTip(
-            "Compare summary, top tasks, and core migrations between two open trace tabs")
-        self._btn_compare_mig.setEnabled(False)
-        exp_row.addWidget(self._btn_compare_mig)
-        for btn in (self._btn_export_csv, self._btn_export_html, self._btn_compare_mig):
+        for btn in (self._btn_export_csv, self._btn_export_html):
             btn.setMinimumWidth(0)
             btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         outer.addLayout(exp_row)
@@ -42668,7 +47935,7 @@ class _StatsPanel(QWidget):
         for btn in (
             self._btn_stats_expand, self._btn_stats_collapse,
             self._btn_stats_reset_order,
-            self._btn_export_csv, self._btn_export_html, self._btn_compare_mig,
+            self._btn_export_csv, self._btn_export_html,
         ):
             btn.setFont(font)
 
@@ -42729,11 +47996,30 @@ class _StatsPanel(QWidget):
             if custom else
             "Section order is already the default")
 
+    def _ux_events(self, trace, lo=None, hi=None):
+        """Reuse the load-time harvest (and one scoped filter) across sections."""
+        key = (id(trace), lo, hi)
+        if self._ux_events_key == key and self._ux_events_cached is not None:
+            return self._ux_events_cached
+        evs = harvest_ux_events(trace, lo, hi)
+        self._ux_events_key = key
+        self._ux_events_cached = evs
+        return evs
+
+    def _dispatch_sample_map(self, trace, lo=None, hi=None) -> dict:
+        out = {}
+        for mk, rec in _dispatch_latency_by_mk(trace, lo, hi).items():
+            samples = [int(s) for s in (rec.get("samples") or []) if int(s or 0) > 0]
+            if samples:
+                out[str(mk)] = samples
+        return out
+
     def _clear(self) -> None:
         self._defer_populate_timer.stop()
         self._deferred_sections.clear()
         self._defer_heavy_sections = False
-        self._defer_heavy_collapse_done = False
+        self._ux_events_key = None
+        self._ux_events_cached = None
         self._table_grips.clear()
         self._util_scroll_areas.clear()
         self._util_scroll_filters.clear()
@@ -42746,6 +48032,8 @@ class _StatsPanel(QWidget):
         self._section_drag_filters.clear()
         self._section_drag_filter_by_id.clear()
         self._pending_sections.clear()
+        self._distrib_ai_btn = None
+        self._distrib_has_task = False
         self._drop_target_sid = None
         self._dragging_sid = None
         self._scroll_tail = None
@@ -42797,6 +48085,23 @@ class _StatsPanel(QWidget):
         if emit:
             self.section_order_changed.emit(list(self._section_order))
 
+    def set_section_collapsed_map(self, flags, *, emit: bool = False) -> None:
+        """Apply persisted collapse map; pinned sections stay expanded."""
+        merged = section_collapsed_from_rc(flags)
+        pinned = set(self._section_pins)
+        for sid, collapsed in merged.items():
+            if sid in pinned:
+                collapsed = False
+            self._section_collapsed[sid] = collapsed
+            if sid in self._section_headers:
+                self._set_section_collapsed(sid, collapsed)
+        self._defer_heavy_collapse_done = True
+        if emit:
+            self.section_collapsed_changed.emit(dict(self._section_collapsed))
+
+    def _notify_section_collapsed(self) -> None:
+        self.section_collapsed_changed.emit(dict(self._section_collapsed))
+
     def _sync_pin_buttons(self) -> None:
         pinned = set(self._section_pins)
         for sid, btn in self._section_pin_btns.items():
@@ -42810,6 +48115,7 @@ class _StatsPanel(QWidget):
             "scope_to_cursors": bool(self._scope_to_cursors),
             "export_scope_override": self._export_scope_override,
             "section_collapsed": dict(self._section_collapsed),
+            "defer_heavy_collapse_done": bool(self._defer_heavy_collapse_done),
             "section_table_heights": dict(self._section_table_heights),
             "util_label_col_w": int(self._util_label_col_w),
         }
@@ -42822,13 +48128,12 @@ class _StatsPanel(QWidget):
         self._util_label_col_w = model.util_label_col_w
         self._export_scope_override = model.export_scope_override
         self._scope_to_cursors = model.scope_to_cursors
+        self._defer_heavy_collapse_done = bool(
+            getattr(model, "defer_heavy_collapse_done", False))
         if hasattr(self, "_scope_cb"):
             self._scope_cb.blockSignals(True)
             self._scope_cb.setChecked(model.scope_to_cursors)
             self._scope_cb.blockSignals(False)
-        for section_id, collapsed in model.section_collapsed.items():
-            if section_id in self._section_headers:
-                self._set_section_collapsed(section_id, collapsed)
         self.set_cursor_times(model.cursor_times, refresh_stats=refresh_stats)
         self.apply_section_table_heights(model.section_table_heights)
 
@@ -43169,6 +48474,8 @@ class _StatsPanel(QWidget):
     def _lbl(self, text: str, color: str = "", bold: bool = False,
               ui_fs: str = "") -> QLabel:
         w = QLabel(text)
+        w.setWordWrap(True)
+        w.setMinimumWidth(0)
         parts = ["background:transparent;"]
         if color:
             parts.insert(0, f"color:{color};")
@@ -43733,8 +49040,30 @@ class _StatsPanel(QWidget):
                 pts.append((starts[i], starts[i] - starts[i - 1],
                             start_to_seg.get(starts[i])))
             title = f"{name} — Inter-Arrival Time{scope}"
+        elif kind == "response":
+            evs = [
+                e for e in self._ux_events(trace, lo, hi)
+                if str(e.get("mk") or "") == mk and e.get("kind") == "exec"
+            ]
+            model = analyze_response_times(evs)
+            pts = [
+                (int(e.get("start") or 0), int(e.get("duration") or 0), e)
+                for e in (model.get("events") or [])
+                if int(e.get("duration") or 0) > 0
+            ]
+            title = f"{name} — Response Time (heuristic){scope}"
         elif kind == "preempt":
             preemptor = self._plot_preemptor
+            if not preemptor:
+                ranks = preemptor_ranking(
+                    preemption_pairs(self._ux_events(trace, lo, hi)), 16)
+                rec = next(
+                    (r for r in ranks if str(r.get("mk") or "") == mk), None)
+                tops = (rec or {}).get("top") or []
+                if tops:
+                    preemptor = str(
+                        tops[0].get("task") or tops[0].get("mk") or "")
+                    self._plot_preemptor = preemptor
             if not preemptor:
                 return None
             pts = _preemption_chain_plot_points(trace, mk, preemptor, lo, hi)
@@ -43749,6 +49078,54 @@ class _StatsPanel(QWidget):
         self._plot_kind = None
         self._plot_preemptor = None
         self._plot_interval_id = None
+
+    def set_ai_enabled(self, enabled: bool) -> None:
+        """Gray out distribution Query with AI… when Settings → AI is off."""
+        self._ai_enabled = bool(enabled)
+        dlg = getattr(self, "_plot_dlg", None)
+        if dlg is not None and hasattr(dlg, "set_ai_enabled"):
+            dlg.set_ai_enabled(self._ai_enabled)
+        self._sync_distrib_query_ai_btn()
+
+    def _sync_distrib_query_ai_btn(self) -> None:
+        btn = getattr(self, "_distrib_ai_btn", None)
+        if btn is None:
+            return
+        on = bool(self._ai_enabled)
+        has_task = bool(getattr(self, "_distrib_has_task", False))
+        btn.setEnabled(on and has_task)
+        if not on:
+            btn.setToolTip("Enable AI Assistant in Settings → AI")
+        elif not has_task:
+            btn.setToolTip("Select a task to query this distribution")
+        else:
+            btn.setToolTip("Open the AI Assistant and explain this distribution")
+
+    def _query_plot_distribution_ai(self) -> None:
+        if not self._ai_enabled:
+            return
+        mk = self._plot_mk or ""
+        kind = self._plot_kind or ""
+        title = ""
+        dlg = getattr(self, "_plot_dlg", None)
+        if dlg is not None:
+            title = dlg.windowTitle() or getattr(dlg, "_title", "") or ""
+        extra = (
+            f"Explain this statistics distribution: metric={kind} task={mk} "
+            f"title={title}. Use query_raw_metric and search_timeline. "
+            "Identify the tail, jitter, and the next Statistics page or timeline jump."
+        )
+        self.query_ai_requested.emit("investigate", extra)
+
+    def _query_distrib_explorer_ai(self, mk: str, kind: str) -> None:
+        if not self._ai_enabled or not mk:
+            return
+        extra = (
+            f"Explain this statistics distribution: metric={kind} task={mk} "
+            "title=Distribution Explorer. Use query_raw_metric and search_timeline. "
+            "Identify the tail, jitter, and the next Statistics page or timeline jump."
+        )
+        self.query_ai_requested.emit("investigate", extra)
 
     def _open_interval_plot(self, trace: "BtfTrace", interval_id: str) -> None:
         self._open_plot(trace, interval_id, "interval", interval_id=interval_id)
@@ -43839,7 +49216,8 @@ class _StatsPanel(QWidget):
         self._plot_mk = mk
         self._plot_kind = kind
         y_as_time = kind not in ("tag",)
-        show_variability = kind in ("exec", "block", "inter", "dispatch", "switch_overhead")
+        show_variability = kind in (
+            "exec", "block", "inter", "response", "dispatch", "switch_overhead")
         _on_click = self._on_plot_scatter_click
         if self._plot_dlg is not None:
             try:
@@ -43875,6 +49253,8 @@ class _StatsPanel(QWidget):
             on_tab_change=self._on_plot_tab_changed if tabs else None,
             on_open_heatmap=on_hm,
             on_open_chord=on_ch,
+            ai_enabled=self._ai_enabled,
+            on_query_ai=self._query_plot_distribution_ai,
             parent=self.window(),
         )
         self._plot_dlg.closed.connect(self._on_plot_dialog_closed)
@@ -43970,6 +49350,9 @@ class _StatsPanel(QWidget):
         blay = QVBoxLayout(body)
         blay.setContentsMargins(0, 0, 0, 0)
         blay.setSpacing(2)
+        help_text = STATS_SECTION_HELP.get(section_id)
+        if help_text:
+            blay.addWidget(self._lbl(help_text, color="#888888", ui_fs=self._ui_fs()))
         populate(blay)
         idx = self._ilay.indexOf(hdr_row)
         self._ilay.insertWidget(idx + 1, body)
@@ -44019,8 +49402,9 @@ class _StatsPanel(QWidget):
             tail = QWidget()
             tail.setObjectName("stats_scroll_tail")
             tail.setMinimumHeight(0)
-            self._ilay.addWidget(tail)
             self._scroll_tail = tail
+        self._ilay.removeWidget(tail)
+        self._ilay.addWidget(tail)
         return tail
 
     def _update_scroll_tail_height(self) -> None:
@@ -44092,6 +49476,7 @@ class _StatsPanel(QWidget):
             return
         self._set_section_collapsed(
             section_id, not self._section_collapsed.get(section_id, False))
+        self._notify_section_collapsed()
 
     def _toggle_section_pin(self, section_id: str) -> None:
         pins = list(self._section_pins)
@@ -44103,25 +49488,28 @@ class _StatsPanel(QWidget):
         self._section_pins = normalize_stats_pins(pins)
         self._sync_pin_buttons()
         self.section_pins_changed.emit(list(self._section_pins))
+        self._notify_section_collapsed()
 
     def _expand_all_sections(self) -> None:
         self._inner.setUpdatesEnabled(False)
         try:
-            for key in self._section_headers:
+            for key in default_section_collapsed():
                 self._set_section_collapsed(key, False)
         finally:
             self._inner.setUpdatesEnabled(True)
+        self._notify_section_collapsed()
 
     def _collapse_all_sections(self) -> None:
         self._inner.setUpdatesEnabled(False)
         try:
             pinned = set(self._section_pins)
-            for key in self._section_headers:
+            for key in default_section_collapsed():
                 if key in pinned:
                     continue
                 self._set_section_collapsed(key, True)
         finally:
             self._inner.setUpdatesEnabled(True)
+        self._notify_section_collapsed()
 
     def _add_collapsible_section(self, section_id: str, title: str, ui_fs: str,
                                populate) -> None:
@@ -44320,14 +49708,18 @@ class _StatsPanel(QWidget):
                     continue
                 self._ilay.removeWidget(w)
                 widgets.append(w)
-        stretch_idx = self._ilay.count()
-        for i in range(self._ilay.count()):
-            item = self._ilay.itemAt(i)
-            if item is not None and item.spacerItem() is not None:
-                stretch_idx = i
-                break
-        for i, w in enumerate(widgets):
-            self._ilay.insertWidget(stretch_idx + i, w)
+        # The trailing pad is a QWidget (viewport-tall), not a QSpacerItem.
+        # Inserting after "the first spacer" used to leave that pad in the
+        # middle of the list — a large empty gap between tables.
+        tail = getattr(self, "_scroll_tail", None)
+        if tail is not None:
+            self._ilay.removeWidget(tail)
+        for w in widgets:
+            self._ilay.addWidget(w)
+        if tail is not None:
+            self._ilay.addWidget(tail)
+            self._scroll_tail = tail
+            self._update_scroll_tail_height()
 
     def _core_util_rows(self, trace: "BtfTrace",
                         lo: Optional[int] = None, hi: Optional[int] = None) -> List[Tuple[str, float]]:
@@ -44374,6 +49766,7 @@ class _StatsPanel(QWidget):
         vals = sorted(samples)
         n = len(vals)
         p95_idx = min(n - 1, math.ceil(n * 0.95) - 1)
+        p99_idx = min(n - 1, math.ceil(n * 0.99) - 1)
         mean = sum(vals) / n
         avg = int(round(mean))
         jitter = vals[-1] - vals[0]
@@ -44385,6 +49778,7 @@ class _StatsPanel(QWidget):
             _format_time(jitter, scale),
             _format_time(stddev, scale),
             _format_time(vals[p95_idx], scale),
+            _format_time(vals[p99_idx], scale),
         )
 
     def _summarize_samples_export(
@@ -44455,11 +49849,11 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, jitter, stddev, p95 = summary
+            mn, avg, mx, jitter, stddev, p95, p99 = summary
             cpu_pct = 100.0 * sum(samples) / total_ns
             rows.append((
                 mk, _task_display_name(raw), len(samples), cpu_pct,
-                mn, avg, mx, jitter, stddev, p95,
+                mn, avg, mx, jitter, stddev, p95, p99,
             ))
         rows.sort(key=lambda r: (-r[3], -r[2], r[1].lower()))
         return rows
@@ -44479,14 +49873,14 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, jitter, stddev, p95 = summary
+            mn, avg, mx, jitter, stddev, p95, p99 = summary
             if lo is not None and hi is not None:
                 n_runs = sum(1 for s in segs if lo <= s.start <= hi)
             else:
                 n_runs = len(segs)
             rows.append((
                 mk, _task_display_name(raw), n_runs,
-                mn, avg, mx, jitter, stddev, p95,
+                mn, avg, mx, jitter, stddev, p95, p99,
             ))
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
         return rows
@@ -44506,10 +49900,10 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, jitter, stddev, p95 = summary
+            mn, avg, mx, jitter, stddev, p95, p99 = summary
             rows.append((
                 mk, _task_display_name(raw), len(samples),
-                mn, avg, mx, jitter, stddev, p95,
+                mn, avg, mx, jitter, stddev, p95, p99,
             ))
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
         return rows
@@ -44528,10 +49922,10 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(data["samples"], trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, jitter, stddev, p95 = summary
+            mn, avg, mx, jitter, stddev, p95, p99 = summary
             rows.append((
                 mk, _task_display_name(raw), len(data["samples"]),
-                mn, avg, mx, jitter, stddev, p95,
+                mn, avg, mx, jitter, stddev, p95, p99,
                 data.get("min_seg"), data.get("max_seg"),
             ))
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
@@ -44614,6 +50008,47 @@ class _StatsPanel(QWidget):
             _find_extreme_inter_arrival_segment(segs, lo, hi, find_max=find_max),
             find_max)
 
+    def _on_percentile_click(self, trace: "BtfTrace", mk: str, kind: str,
+                             lo: Optional[int], hi: Optional[int],
+                             p: float) -> None:
+        segs = trace.seg_map_by_merge_key.get(mk, [])
+        if kind == "exec":
+            seg = _find_percentile_exec_segment(segs, p, lo, hi)
+        elif kind == "block":
+            seg = _find_percentile_blocking_segment(segs, p, lo, hi)
+        elif kind == "inter":
+            seg = _find_percentile_inter_arrival_segment(segs, p, lo, hi)
+        else:
+            return
+        if seg is None:
+            return
+        name = _task_display_name(trace.task_repr.get(mk, mk))
+        pct = int(round(p * 100))
+        if kind == "exec":
+            dur = seg.end - seg.start
+            note = (
+                f"{name} p{pct} execution: "
+                f"{_format_time(dur, trace.time_scale)} at "
+                f"{_format_time(seg.start, trace.time_scale)}"
+            )
+        else:
+            gap = None
+            ordered = sorted(segs, key=lambda s: s.start)
+            for i, s in enumerate(ordered):
+                if s is seg or (s.start == seg.start and s.end == seg.end):
+                    if i > 0:
+                        prev = ordered[i - 1]
+                        gap = (s.start - prev.start if kind == "inter"
+                               else s.start - prev.end)
+                    break
+            gap_s = _format_time(gap, trace.time_scale) if gap is not None else "?"
+            label = "blocking" if kind == "block" else "inter-arrival"
+            note = (
+                f"{name} p{pct} {label}: {gap_s} at "
+                f"{_format_time(seg.start, trace.time_scale)}"
+            )
+        self.plot_point_clicked.emit(seg, seg.start, note)
+
     def _exec_slice_rows_export(self, trace: "BtfTrace",
                                 lo: Optional[int] = None,
                                 hi: Optional[int] = None) -> List[tuple]:
@@ -44678,7 +50113,8 @@ class _StatsPanel(QWidget):
                            include_variability: bool = False,
                            migrations: bool = False,
                            on_row_click=None, on_min_click=None,
-                           on_max_click=None) -> QWidget:
+                           on_max_click=None, on_p95_click=None,
+                           on_p99_click=None) -> QWidget:
         host = QWidget()
         lay = QVBoxLayout(host)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -44695,10 +50131,10 @@ class _StatsPanel(QWidget):
         elif include_variability:
             headers = (
                 ["Task", count_header, "CPU%", "Min", "Avg", "Max",
-                 "Jitter", "σ", "p95"]
+                 "Jitter", "σ", "p95", "p99"]
                 if include_cpu
                 else ["Task", count_header, "Min", "Avg", "Max",
-                      "Jitter", "σ", "p95"]
+                      "Jitter", "σ", "p95", "p99"]
             )
             cols = len(headers)
         else:
@@ -44758,9 +50194,13 @@ class _StatsPanel(QWidget):
 
         _min_col = 3 if include_cpu else 2
         _max_col = 5 if include_cpu else 4
+        _p95_col = (cols - 2) if include_variability else (cols - 1)
+        _p99_col = (cols - 1) if include_variability else None
         _link_color = QBrush(QColor("#88AAFF"))
         _hovered_row = [-1]
-        _interactive = bool(on_row_click or on_min_click or on_max_click)
+        _interactive = bool(
+            on_row_click or on_min_click or on_max_click
+            or on_p95_click or on_p99_click)
         _row_tip = "Click to view distribution chart"
         _metric_key = (_tag_value_sort_key if section_id == "tags"
                        else _time_label_sort_key)
@@ -44803,16 +50243,17 @@ class _StatsPanel(QWidget):
                     _time_label_sort_key(g_after), _time_label_sort_key(g_other),
                 ]
             elif include_cpu and include_variability:
-                mk_r, name, runs, cpu, mn, avg, mx, jitter, stddev, p95 = row
+                mk_r, name, runs, cpu, mn, avg, mx, jitter, stddev, p95, p99 = row
                 vals = [
                     name, runs, f"{cpu:.1f}%", mn, avg, mx,
-                    jitter, stddev, p95,
+                    jitter, stddev, p95, p99,
                 ]
                 sort_keys = [
                     name.lower(), runs, cpu,
                     _time_label_sort_key(mn), _time_label_sort_key(avg),
                     _time_label_sort_key(mx), _time_label_sort_key(jitter),
                     _time_label_sort_key(stddev), _time_label_sort_key(p95),
+                    _time_label_sort_key(p99),
                 ]
             elif include_cpu:
                 mk_r, name, runs, cpu, mn, avg, mx, p95 = row
@@ -44828,12 +50269,13 @@ class _StatsPanel(QWidget):
                 vals = [name, runs, mn, avg, mx, p95]
                 sort_keys = [name.lower(), runs, mn_raw, avg_raw, mx_raw, p95_raw]
             elif include_variability:
-                mk_r, name, runs, mn, avg, mx, jitter, stddev, p95 = row
-                vals = [name, runs, mn, avg, mx, jitter, stddev, p95]
+                mk_r, name, runs, mn, avg, mx, jitter, stddev, p95, p99 = row
+                vals = [name, runs, mn, avg, mx, jitter, stddev, p95, p99]
                 sort_keys = [
                     name.lower(), runs,
                     _metric_key(mn), _metric_key(avg), _metric_key(mx),
                     _metric_key(jitter), _metric_key(stddev), _metric_key(p95),
+                    _metric_key(p99),
                 ]
             else:
                 mk_r, name, runs, mn, avg, mx, p95 = row
@@ -44885,6 +50327,15 @@ class _StatsPanel(QWidget):
                             item.setToolTip(
                                 f"Click to jump to longest sample for {name}")
                         item.setForeground(_link_color)
+                    elif c == _p95_col and on_p95_click is not None:
+                        item.setToolTip(
+                            f"Click to jump to the p95 sample for {name}")
+                        item.setForeground(_link_color)
+                    elif (_p99_col is not None and c == _p99_col
+                          and on_p99_click is not None):
+                        item.setToolTip(
+                            f"Click to jump to the p99 sample for {name}")
+                        item.setForeground(_link_color)
                     elif on_row_click is not None:
                         item.setToolTip(f"{_row_tip} for {name}")
                 table.setItem(r, c, item)
@@ -44892,8 +50343,11 @@ class _StatsPanel(QWidget):
         if not migrations:
             table.resizeColumnsToContents()
             table.horizontalHeader().setStretchLastSection(False)
-            p95_col = cols - 1
+            p95_col = _p95_col
             table.setColumnWidth(p95_col, min(table.columnWidth(p95_col), 76))
+            if _p99_col is not None:
+                table.setColumnWidth(
+                    _p99_col, min(table.columnWidth(_p99_col), 76))
             table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         table.setAlternatingRowColors(False)
@@ -44930,6 +50384,11 @@ class _StatsPanel(QWidget):
                         on_min_click(mk)
                     elif on_max_click is not None and c == _max_col:
                         on_max_click(mk)
+                    elif on_p95_click is not None and c == _p95_col:
+                        on_p95_click(mk)
+                    elif (on_p99_click is not None and _p99_col is not None
+                          and c == _p99_col):
+                        on_p99_click(mk)
                     elif on_row_click is not None:
                         on_row_click(mk)
                 table.cellClicked.connect(_cell_clicked)
@@ -44943,6 +50402,470 @@ class _StatsPanel(QWidget):
 
         self._wrap_table_with_resizer(lay, table, section_id)
         return host
+
+    def _build_ux_event_table(self, rows: List[dict], ui_fs: str,
+                              empty_hint: str, section_id: str,
+                              trace: "BtfTrace") -> QWidget:
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        if not rows:
+            lay.addWidget(self._lbl(empty_hint, color="#888888", ui_fs=ui_fs))
+            return host
+        headers = ["Time", "Kind", "Task", "Duration", "Why"]
+        table = self._make_plain_stats_table(headers, ui_fs)
+        table.setRowCount(len(rows))
+        _default_bg = QBrush(self._stats_table_colors()[0])
+        _link_color = QBrush(QColor("#88AAFF"))
+        scale = trace.time_scale
+        kind_label = KIND_LABEL
+        for r, ev in enumerate(rows):
+            vals = [
+                _format_time(int(ev.get("start") or 0), scale),
+                kind_label.get(str(ev.get("kind") or ""), str(ev.get("kind") or "")),
+                str(ev.get("task") or ""),
+                _format_time(int(ev.get("duration") or 0), scale),
+                str(ev.get("reason") or kind_label.get(
+                    str(ev.get("kind") or ""), str(ev.get("kind") or ""))),
+            ]
+            for c, v in enumerate(vals):
+                key = (
+                    int(ev.get("start") or 0), str(ev.get("kind") or ""),
+                    str(ev.get("task") or "").lower(),
+                    int(ev.get("duration") or 0),
+                    str(ev.get("reason") or "").lower(),
+                )[c]
+                item = self._stats_sort_item(v, key, _default_bg)
+                if c == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, ev)
+                    item.setForeground(_link_color)
+                    item.setToolTip("Click to zoom, place C1–C2, and open the matching table")
+                table.setItem(r, c, item)
+
+        def _cell_clicked(row: int, _col: int) -> None:
+            item = table.item(row, 0)
+            if item is None:
+                return
+            ev = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(ev, dict):
+                if section_id == "anomalies":
+                    self._last_anomaly = dict(ev)
+                self._activate_ux_event(trace, ev)
+
+        table.cellClicked.connect(_cell_clicked)
+        self._wire_stats_table_click_cursor(table)
+        self._wire_stats_table_row_hover(table)
+        table.resizeColumnsToContents()
+        table.setSortingEnabled(True)
+        self._wrap_table_with_resizer(lay, table, section_id)
+        return host
+
+    def _activate_ux_event(self, trace: "BtfTrace", ev: dict) -> None:
+        start = int(ev.get("start") or 0)
+        stop = int(ev.get("stop") or start)
+        mk = str(ev.get("mk") or "")
+        note = (
+            f"{ev.get('task') or mk} — "
+            f"{ev.get('reason') or ev.get('kind') or 'episode'}"
+        )
+        segs = trace.seg_map_by_merge_key.get(mk, []) if mk else []
+        jump = int(ev.get("jump_ns") or start)
+        payload = None
+        for s in segs:
+            if int(s.start) == jump or (int(s.start) <= start < int(s.end)):
+                payload = s
+                break
+        if payload is None and segs:
+            payload = min(segs, key=lambda s: abs(int(s.start) - jump))
+        if payload is not None:
+            self.plot_point_clicked.emit(payload, jump, note)
+        else:
+            self.plot_point_clicked.emit(None, jump, note)
+        self.explore_range_requested.emit({
+            "lo": start,
+            "hi": max(stop, start + 1),
+            "mk": mk,
+            "section": ev.get("section") or KIND_SECTION.get(str(ev.get("kind") or ""), "exec"),
+            "note": note,
+            "ns": jump,
+        })
+
+    def _investigate_anomaly(self, rows: Optional[List[dict]] = None) -> None:
+        ev = self._last_anomaly
+        if not isinstance(ev, dict):
+            ev = (rows or [None])[0] if rows else None
+        if not isinstance(ev, dict):
+            return
+        extra = (
+            f"Investigate this timeline anomaly: kind={ev.get('kind') or ''} "
+            f"task={ev.get('task') or ev.get('mk') or ''} "
+            f"jump:{int(ev.get('jump_ns') or ev.get('start') or 0)} "
+            f"duration={int(ev.get('duration') or 0)} "
+            f"why={ev.get('reason') or ''}."
+        )
+        self.query_ai_requested.emit("investigate", extra)
+
+    def _emit_explore_event(self, trace: "BtfTrace", ev: Optional[dict],
+                            section: str = "") -> None:
+        if not isinstance(ev, dict):
+            return
+        payload = dict(ev)
+        if section:
+            payload["section"] = section
+        if not payload.get("mk") and payload.get("waiter_mk"):
+            payload["mk"] = payload.get("waiter_mk")
+        self._activate_ux_event(trace, payload)
+
+    def _make_plain_stats_table(self, headers: List[str], ui_fs: str) -> QTableWidget:
+        table = QTableWidget(0, len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        table.verticalHeader().setVisible(False)
+        table.setShowGrid(False)
+        table.setFrameShape(QFrame.NoFrame)
+        table.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+        table.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
+        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        hdr = table.horizontalHeader()
+        hdr.setSectionsClickable(True)
+        hdr.setSortIndicatorShown(True)
+        hdr.setStretchLastSection(False)
+        self._apply_stats_table_theme(table, ui_fs)
+        return table
+
+    def _stats_sort_item(self, text, sort_key, bg: "QBrush") -> "_StatsSortItem":
+        item = _StatsSortItem(text, sort_key)
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        item.setBackground(bg)
+        return item
+
+    def _build_click_rows_table(
+        self, rows: List[dict], headers: List[str], values_fn,
+        ev_fn, ui_fs: str, empty_hint: str, section_id: str,
+        trace: "BtfTrace", on_cell=None, keys_fn=None,
+    ) -> QWidget:
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        if not rows:
+            lay.addWidget(self._lbl(empty_hint, color="#888888", ui_fs=ui_fs))
+            return host
+        table = self._make_plain_stats_table(headers, ui_fs)
+        table.setRowCount(len(rows))
+        bg = QBrush(self._stats_table_colors()[0])
+        link = QBrush(QColor("#88AAFF"))
+        for r, row in enumerate(rows):
+            vals = list(values_fn(row))
+            keys = list(keys_fn(row)) if keys_fn is not None else [
+                v if isinstance(v, (int, float)) else str(v).lower()
+                for v in vals
+            ]
+            for c, v in enumerate(vals):
+                key = keys[c] if c < len(keys) else str(v).lower()
+                item = self._stats_sort_item(v, key, bg)
+                item.setData(Qt.ItemDataRole.UserRole, row)
+                if c == 0 or on_cell is not None:
+                    item.setForeground(link)
+                    item.setToolTip("Click to jump or open the matching plot")
+                table.setItem(r, c, item)
+
+        def _cell_clicked(row: int, col: int) -> None:
+            item = table.item(row, 0)
+            if item is None:
+                return
+            data = item.data(Qt.ItemDataRole.UserRole)
+            if on_cell is not None and isinstance(data, dict):
+                on_cell(data, col)
+                return
+            payload = ev_fn(data)
+            if isinstance(payload, dict):
+                self._activate_ux_event(trace, payload)
+
+        table.cellClicked.connect(_cell_clicked)
+        self._wire_stats_table_click_cursor(table)
+        self._wire_stats_table_row_hover(table)
+        table.resizeColumnsToContents()
+        table.setSortingEnabled(True)
+        self._wrap_table_with_resizer(lay, table, section_id)
+        return host
+
+    def _build_period_table(self, rows: List[dict], ui_fs: str,
+                            empty_hint: str, trace: "BtfTrace") -> QWidget:
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        if not rows:
+            lay.addWidget(self._lbl(empty_hint, color="#888888", ui_fs=ui_fs))
+            return host
+        headers = [
+            "Task", "N", "Expected", "Min", "Avg", "Max", "p95", "p99",
+            "RMS", "CV", "Missed", "Extra", "Burst", "Spark",
+        ]
+        table = self._make_plain_stats_table(headers, ui_fs)
+        table.setRowCount(len(rows))
+        scale = trace.time_scale
+        bg = QBrush(self._stats_table_colors()[0])
+        link = QBrush(QColor("#88AAFF"))
+        click_cols = {
+            0: "p50_ev", 2: "p50_ev", 3: "min_ev", 4: "p50_ev",
+            5: "max_ev", 6: "p95_ev", 7: "p99_ev", 10: "miss_ev",
+        }
+        for r, row in enumerate(rows):
+            vals = [
+                str(row.get("task") or ""),
+                str(row.get("n") or 0),
+                _format_time(int(row.get("expected_ns") or 0), scale),
+                _format_time(int(row.get("min_ns") or 0), scale),
+                _format_time(int(row.get("avg_ns") or 0), scale),
+                _format_time(int(row.get("max_ns") or 0), scale),
+                _format_time(int(row.get("p95_ns") or 0), scale),
+                _format_time(int(row.get("p99_ns") or 0), scale),
+                _format_time(int(row.get("rms_ns") or 0), scale),
+                f"{float(row.get('cv') or 0) * 100:.1f}%",
+                str(row.get("missed") or 0),
+                str(row.get("extra") or 0),
+                str(row.get("burst") or 0),
+                str(row.get("spark") or ""),
+            ]
+            for c, v in enumerate(vals):
+                key = (
+                    str(row.get("task") or "").lower(),
+                    int(row.get("n") or 0),
+                    int(row.get("expected_ns") or 0),
+                    int(row.get("min_ns") or 0),
+                    int(row.get("avg_ns") or 0),
+                    int(row.get("max_ns") or 0),
+                    int(row.get("p95_ns") or 0),
+                    int(row.get("p99_ns") or 0),
+                    int(row.get("rms_ns") or 0),
+                    float(row.get("cv") or 0),
+                    int(row.get("missed") or 0),
+                    int(row.get("extra") or 0),
+                    int(row.get("burst") or 0),
+                    str(row.get("spark") or ""),
+                )[c]
+                item = self._stats_sort_item(v, key, bg)
+                item.setData(Qt.ItemDataRole.UserRole, row)
+                if c in click_cols:
+                    item.setForeground(link)
+                    item.setToolTip("Click to jump to that activation gap")
+                table.setItem(r, c, item)
+
+        def _cell_clicked(row: int, col: int) -> None:
+            item = table.item(row, col)
+            data = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if not isinstance(data, dict):
+                return
+            if col == 0:
+                self._open_plot(trace, str(data.get("mk") or ""), "inter")
+                return
+            key = click_cols.get(col, "worst_ev")
+            self._emit_explore_event(trace, data.get(key), "period")
+
+        table.cellClicked.connect(_cell_clicked)
+        self._wire_stats_table_click_cursor(table)
+        self._wire_stats_table_row_hover(table)
+        table.resizeColumnsToContents()
+        table.setSortingEnabled(True)
+        self._wrap_table_with_resizer(lay, table, "period")
+        return host
+
+    def _build_task_core_table(self, matrix: dict, ui_fs: str,
+                               empty_hint: str, trace: "BtfTrace") -> QWidget:
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        cores = list(matrix.get("cores") or [])
+        rows = list(matrix.get("rows") or [])
+        if not rows or not cores:
+            lay.addWidget(self._lbl(empty_hint, color="#888888", ui_fs=ui_fs))
+            return host
+        headers = ["Task"] + cores
+        table = self._make_plain_stats_table(headers, ui_fs)
+        table.setRowCount(len(rows))
+        bg = QBrush(self._stats_table_colors()[0])
+        link = QBrush(QColor("#88AAFF"))
+        for r, row in enumerate(rows):
+            task_item = self._stats_sort_item(
+                str(row.get("task") or ""), str(row.get("task") or "").lower(), bg)
+            task_item.setData(Qt.ItemDataRole.UserRole, {"mk": row.get("mk")})
+            task_item.setForeground(link)
+            task_item.setToolTip("Click to highlight this task")
+            table.setItem(r, 0, task_item)
+            cells = row.get("cells") or {}
+            for c, core in enumerate(cores, start=1):
+                cell = cells.get(core) or {}
+                ns = int(cell.get("ns") or 0)
+                text = f"{float(cell.get('pct_span') or 0):.1f}%" if ns else "—"
+                item = self._stats_sort_item(text, float(cell.get("pct_span") or 0), bg)
+                item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if ns:
+                    item.setForeground(link)
+                    item.setData(Qt.ItemDataRole.UserRole, {
+                        "mk": row.get("mk"),
+                        "task": row.get("task"),
+                        "start": cell.get("start"),
+                        "stop": cell.get("stop"),
+                        "jump_ns": cell.get("jump_ns"),
+                        "section": "task_core",
+                        "kind": "exec",
+                    })
+                    item.setToolTip(
+                        f"{_format_time(ns, trace.time_scale)} on {core} "
+                        f"({float(cell.get('pct_task') or 0):.1f}% of this task)")
+                table.setItem(r, c, item)
+
+        def _cell_clicked(row: int, col: int) -> None:
+            item = table.item(row, col)
+            data = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if not isinstance(data, dict):
+                return
+            if col == 0:
+                mk = str(data.get("mk") or "")
+                if mk:
+                    self.task_clicked.emit(mk)
+                return
+            self._emit_explore_event(trace, data, "task_core")
+
+        table.cellClicked.connect(_cell_clicked)
+        self._wire_stats_table_click_cursor(table)
+        self._wire_stats_table_row_hover(table)
+        table.resizeColumnsToContents()
+        table.setSortingEnabled(True)
+        self._wrap_table_with_resizer(lay, table, "task_core")
+        return host
+
+    def _build_wait_owner_table(self, matrix: dict, ui_fs: str,
+                                empty_hint: str, trace: "BtfTrace") -> QWidget:
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        tasks = list(matrix.get("tasks") or [])
+        cells = matrix.get("cells") or {}
+        if not tasks:
+            lay.addWidget(self._lbl(empty_hint, color="#888888", ui_fs=ui_fs))
+            return host
+        headers = ["Waiter \\ Owner"] + [t.get("task") or t.get("mk") for t in tasks]
+        table = self._make_plain_stats_table(headers, ui_fs)
+        table.setRowCount(len(tasks))
+        bg = QBrush(self._stats_table_colors()[0])
+        link = QBrush(QColor("#88AAFF"))
+        for r, waiter in enumerate(tasks):
+            w_item = self._stats_sort_item(
+                str(waiter.get("task") or waiter.get("mk") or ""),
+                str(waiter.get("task") or waiter.get("mk") or "").lower(), bg)
+            table.setItem(r, 0, w_item)
+            for c, owner in enumerate(tasks, start=1):
+                if waiter.get("mk") == owner.get("mk"):
+                    item = self._stats_sort_item("—", -1, bg)
+                    table.setItem(r, c, item)
+                    continue
+                cell = cells.get(f"{waiter.get('mk')}|{owner.get('mk')}") or {}
+                ns = int(cell.get("ns") or 0)
+                text = _format_time(ns, trace.time_scale) if ns else "—"
+                item = self._stats_sort_item(text, ns, bg)
+                item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if ns:
+                    item.setForeground(link)
+                    item.setData(Qt.ItemDataRole.UserRole, cell)
+                    item.setToolTip(
+                        f"{cell.get('count') or 0} handoff(s); click to zoom the longest")
+                table.setItem(r, c, item)
+
+        def _cell_clicked(row: int, col: int) -> None:
+            item = table.item(row, col)
+            data = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if isinstance(data, dict):
+                self._emit_explore_event(trace, data, "wait_owner")
+
+        table.cellClicked.connect(_cell_clicked)
+        self._wire_stats_table_click_cursor(table)
+        self._wire_stats_table_row_hover(table)
+        table.resizeColumnsToContents()
+        table.setSortingEnabled(True)
+        self._wrap_table_with_resizer(lay, table, "wait_owner")
+        return host
+
+    def _build_task_health_table(self, rows: List[dict], ui_fs: str,
+                                 empty_hint: str, trace: "BtfTrace") -> QWidget:
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        if not rows:
+            lay.addWidget(self._lbl(empty_hint, color="#888888", ui_fs=ui_fs))
+            return host
+        headers = ["Task", "Score", "Exec", "Block", "Period", "Mig", "Deadline", "CPU"]
+        band_keys = ["execution", "blocking", "period", "migration", "deadline", "cpu"]
+        table = self._make_plain_stats_table(headers, ui_fs)
+        table.setRowCount(len(rows))
+        bg = QBrush(self._stats_table_colors()[0])
+        colors = {"ok": "#3cb371", "warn": "#e0a020", "fail": "#e07070"}
+        for r, row in enumerate(rows):
+            score = int(row.get("score") or 0)
+            vals = [str(row.get("task") or ""), str(score)]
+            marks = row.get("marks") or {}
+            bands = row.get("bands") or {}
+            vals.extend(str(marks.get(k) or HEALTH_MARK.get(bands.get(k, "ok"), ""))
+                        for k in band_keys)
+            for c, v in enumerate(vals):
+                key = (
+                    str(row.get("task") or "").lower(),
+                    score,
+                    *[str(bands.get(k, "ok")) for k in band_keys],
+                )[c]
+                item = self._stats_sort_item(v, key, bg)
+                item.setData(Qt.ItemDataRole.UserRole, row)
+                if c == 1:
+                    tone = "ok" if score >= 80 else "warn" if score >= 60 else "fail"
+                    item.setForeground(QBrush(QColor(colors[tone])))
+                elif c >= 2:
+                    item.setForeground(QBrush(QColor(colors.get(bands.get(band_keys[c - 2], "ok"), "#888"))))
+                    item.setTextAlignment(
+                        Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+                    item.setToolTip(
+                        f"Open the {band_keys[c - 2]} statistics for this task")
+                table.setItem(r, c, item)
+
+        def _cell_clicked(row: int, col: int) -> None:
+            item = table.item(row, col)
+            data = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if not isinstance(data, dict):
+                return
+            mk = str(data.get("mk") or "")
+            if mk:
+                self.task_clicked.emit(mk)
+            if col >= 2:
+                sid = HEALTH_BAND_SECTION.get(band_keys[col - 2], "task_health")
+                self.scroll_to_section(sid)
+
+        table.cellClicked.connect(_cell_clicked)
+        self._wire_stats_table_click_cursor(table)
+        self._wire_stats_table_row_hover(table)
+        table.resizeColumnsToContents()
+        table.setSortingEnabled(True)
+        self._wrap_table_with_resizer(lay, table, "task_health")
+        return host
+
+    def scroll_to_section(self, section_id: str) -> None:
+        sid = str(section_id or "").strip()
+        if not sid:
+            return
+        self._section_collapsed[sid] = False
+        self._ensure_section_body(sid)
+        self._update_section_header_icon(sid)
+        hdr = self._section_header_rows.get(sid)
+        if hdr is not None and hasattr(self, "_scroll"):
+            self._scroll.ensureWidgetVisible(hdr)
 
     def _build_preemption_table(self, rows: List[tuple], ui_fs: str,
                                 empty_hint: str, on_row_click=None) -> QWidget:
@@ -45494,18 +51417,19 @@ class _StatsPanel(QWidget):
         disp_body = "".join(
             f"<tr><td>{_esc(label)}</td><td>{n}</td>"
             f"<td>{_esc(mn)}</td><td>{_esc(avg)}</td><td>{_esc(mx)}</td>"
-            f"<td>{_esc(jitter)}</td><td>{_esc(stddev)}</td><td>{_esc(p95)}</td></tr>"
-            for (_mk, label, n, mn, avg, mx, jitter, stddev, p95,
+            f"<td>{_esc(jitter)}</td><td>{_esc(stddev)}</td>"
+            f"<td>{_esc(p95)}</td><td>{_esc(p99)}</td></tr>"
+            for (_mk, label, n, mn, avg, mx, jitter, stddev, p95, p99,
                  _a, _b) in disp_rows_html
         ) or (
-            '<tr><td colspan="8" class="empty">No dispatch samples '
+            '<tr><td colspan="9" class="empty">No dispatch samples '
             '(needs STI resume Name[id] or create→first-run)</td></tr>'
         )
         dispatch_html = (
             f'<section class="report-card"><h2>Dispatch / Scheduling Latency{_esc(scope_title)}</h2>'
             '<p class="detail-note">Ready from STI resume / create; sync wakes not attributed.</p>'
             '<table><thead><tr><th>Task</th><th>Activations</th><th>Min</th><th>Avg</th>'
-            '<th>Max</th><th>Jitter</th><th>σ</th><th>p95</th></tr></thead>'
+            '<th>Max</th><th>Jitter</th><th>σ</th><th>p95</th><th>p99</th></tr></thead>'
             f'<tbody>{disp_body}</tbody></table></section>'
         )
 
@@ -45520,6 +51444,27 @@ class _StatsPanel(QWidget):
             '<table><thead><tr><th>Task</th><th>Mask</th><th>Observed Cores</th>'
             '<th>Violations</th></tr></thead>'
             f'<tbody>{aff_body}</tbody></table></section>'
+        )
+
+        _ux_evs = self._ux_events(trace, lo, hi)
+        _span_ns = max(1, (hi - lo) if lo is not None and hi is not None
+                       else (trace.time_max - trace.time_min))
+        _tc = task_core_matrix(_ux_evs, list(trace.core_names or []), _span_ns)
+        _tc_cores = _tc.get("cores") or []
+        _tc_head = "<th>Task</th>" + "".join(f"<th>{_esc(c)}</th>" for c in _tc_cores)
+        _tc_body = "".join(
+            "<tr><td>" + _esc(r.get("task") or "") + "</td>" + "".join(
+                f"<td>{(r.get('cells') or {}).get(c, {}).get('pct_span', 0):.1f}%</td>"
+                if (r.get("cells") or {}).get(c, {}).get("ns")
+                else "<td>—</td>"
+                for c in _tc_cores
+            ) + "</tr>"
+            for r in _tc.get("rows") or []
+        ) or f'<tr><td colspan="{len(_tc_cores) + 1}" class="empty">No on-CPU slices</td></tr>'
+        task_core_html = (
+            f'<section class="report-card"><h2>Task × Core{_esc(scope_title)}</h2>'
+            f'<table><thead><tr>{_tc_head}</tr></thead>'
+            f'<tbody>{_tc_body}</tbody></table></section>'
         )
 
         # Deadlines / CPU budget
@@ -45547,6 +51492,247 @@ class _StatsPanel(QWidget):
                 "<table><thead><tr><th>Task</th><th>CPU %</th><th>Budget</th></tr></thead>"
                 f"<tbody>{cv_body}</tbody></table></section>"
             )
+
+        _dead_mks = []
+        for item in _sv:
+            if len(item) > 4:
+                _dead_mks.append(item[4])
+        for item in _cv:
+            if len(item) > 3:
+                _dead_mks.append(item[3])
+        _th_rows = task_health_scores(health_inputs_from_events(_ux_evs, _span_ns, _dead_mks))
+        _th_body = "".join(
+            f"<tr><td>{_esc(r.get('task') or '')}</td><td>{int(r.get('score') or 0)}</td>"
+            + "".join(
+                f"<td>{_esc((r.get('marks') or {}).get(k, ''))}</td>"
+                for k in ("execution", "blocking", "period", "migration", "deadline", "cpu")
+            )
+            + "</tr>"
+            for r in _th_rows
+        ) or '<tr><td colspan="8" class="empty">No task slices</td></tr>'
+        task_health_html = (
+            f'<section class="report-card"><h2>Task Health{_esc(scope_title)}</h2>'
+            '<p class="detail-note">Heuristic score from measured statistics, not an AI probability.</p>'
+            '<table><thead><tr><th>Task</th><th>Score</th><th>Exec</th><th>Block</th>'
+            '<th>Period</th><th>Mig</th><th>Deadline</th><th>CPU</th></tr></thead>'
+            f'<tbody>{_th_body}</tbody></table></section>'
+        )
+        _per_rows = analyze_task_periods(_ux_evs, 3)
+        _per_body = "".join(
+            f"<tr><td>{_esc(r.get('task') or '')}</td><td>{r.get('n') or 0}</td>"
+            f"<td>{_esc(_format_time(int(r.get('expected_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('min_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('avg_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('max_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('p95_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('p99_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('rms_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{float(r.get('cv') or 0) * 100:.1f}%</td>"
+            f"<td>{r.get('missed') or 0}</td><td>{r.get('extra') or 0}</td>"
+            f"<td>{r.get('burst') or 0}</td>"
+            f"<td>{_esc(r.get('spark') or '')}</td></tr>"
+            for r in _per_rows
+        ) or '<tr><td colspan="14" class="empty">Need at least 3 inter-arrival gaps per task</td></tr>'
+        period_html = (
+            f'<section class="report-card"><h2>Period / Jitter{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Task</th><th>N</th><th>Expected</th><th>Min</th><th>Avg</th>'
+            '<th>Max</th><th>p95</th><th>p99</th><th>RMS</th><th>CV</th><th>Missed</th>'
+            '<th>Extra</th><th>Burst</th><th>Spark</th></tr></thead>'
+            f'<tbody>{_per_body}</tbody></table></section>'
+        )
+        _an_rows = detect_timeline_anomalies(
+            _ux_evs, 12,
+            pair_mutex_waits(harvest_mutex_holds(trace, lo, hi)),
+            self._task_deadlines_ns,
+        )
+        _an_body = "".join(
+            f"<tr><td>{_esc(_format_time(int(r.get('start') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(KIND_LABEL.get(str(r.get('kind') or ''), str(r.get('kind') or '')))}</td>"
+            f"<td>{_esc(r.get('task') or '')}</td>"
+            f"<td>{_esc(_format_time(int(r.get('duration') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(r.get('reason') or '')}</td></tr>"
+            for r in _an_rows
+        ) or '<tr><td colspan="5" class="empty">No timeline anomalies in this scope</td></tr>'
+        anomalies_html = (
+            f'<section class="report-card"><h2>Timeline Anomalies{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Time</th><th>Kind</th><th>Task</th>'
+            '<th>Duration</th><th>Why</th></tr></thead>'
+            f'<tbody>{_an_body}</tbody></table></section>'
+        )
+        _woe_rows = collect_worst_events(_ux_evs, 12)
+        _woe_body = "".join(
+            f"<tr><td>{_esc(_format_time(int(r.get('start') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(KIND_LABEL.get(str(r.get('kind') or ''), str(r.get('kind') or '')))}</td>"
+            f"<td>{_esc(r.get('task') or '')}</td>"
+            f"<td>{_esc(_format_time(int(r.get('duration') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(r.get('reason') or KIND_LABEL.get(str(r.get('kind') or ''), ''))}</td></tr>"
+            for r in _woe_rows
+        ) or '<tr><td colspan="5" class="empty">No episodes in this scope</td></tr>'
+        worst_html = (
+            f'<section class="report-card"><h2>Worst Events{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Time</th><th>Kind</th><th>Task</th>'
+            '<th>Duration</th><th>Why</th></tr></thead>'
+            f'<tbody>{_woe_body}</tbody></table></section>'
+        )
+        _wo = waiter_owner_matrix(pair_mutex_waits(harvest_mutex_holds(trace, lo, hi)))
+        _wo_tasks = _wo.get("tasks") or []
+        _wo_cells = _wo.get("cells") or {}
+        if _wo_tasks:
+            _wo_head = "<th>Waiter \\ Owner</th>" + "".join(
+                f"<th>{_esc(t.get('task') or t.get('mk'))}</th>" for t in _wo_tasks)
+            _wo_lines = []
+            for w in _wo_tasks:
+                cells_html = []
+                for o in _wo_tasks:
+                    if w.get("mk") == o.get("mk"):
+                        cells_html.append("<td>—</td>")
+                        continue
+                    cell = _wo_cells.get(f"{w.get('mk')}|{o.get('mk')}") or {}
+                    ns = int(cell.get("ns") or 0)
+                    cells_html.append(
+                        f"<td>{_esc(_format_time(ns, trace.time_scale))}</td>" if ns
+                        else "<td>—</td>"
+                    )
+                _wo_lines.append(
+                    "<tr><td>" + _esc(w.get("task") or w.get("mk") or "") +
+                    "</td>" + "".join(cells_html) + "</tr>"
+                )
+            wait_owner_html = (
+                f'<section class="report-card"><h2>Waiter × Owner{_esc(scope_title)}</h2>'
+                '<p class="detail-note">Heuristic mutex handoff matrix, not a kernel wait queue.</p>'
+                f'<table><thead><tr>{_wo_head}</tr></thead>'
+                f'<tbody>{"".join(_wo_lines)}</tbody></table></section>'
+            )
+        else:
+            wait_owner_html = (
+                f'<section class="report-card"><h2>Waiter × Owner{_esc(scope_title)}</h2>'
+                '<p class="empty">No mutex handoffs in this scope</p></section>'
+            )
+        _rt_rows = analyze_response_times(_ux_evs).get("rows") or []
+        _rt_body = "".join(
+            f"<tr><td>{_esc(r.get('task') or '')}</td><td>{r.get('n') or 0}</td>"
+            f"<td>{_esc(_format_time(int(r.get('min_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('avg_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('max_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('p50_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('p90_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('p95_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('p99_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('p999_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{float(r.get('cv') or 0) * 100:.1f}%</td></tr>"
+            for r in _rt_rows
+        ) or '<tr><td colspan="12" class="empty">Need at least one on-CPU slice</td></tr>'
+        response_html = (
+            f'<section class="report-card"><h2>Response Time{_esc(scope_title)}</h2>'
+            '<p class="detail-note">Heuristic ready→completion from adjacent slices, '
+            'not an explicit BTF release/completion pair.</p>'
+            '<table><thead><tr><th>Task</th><th>N</th><th>Min</th><th>Avg</th><th>Max</th>'
+            '<th>p50</th><th>p90</th><th>p95</th><th>p99</th><th>p99.9</th>'
+            '<th>Jitter</th><th>CV</th></tr></thead>'
+            f'<tbody>{_rt_body}</tbody></table></section>'
+        )
+        _cp_rows = critical_path_rows(_ux_evs, 8)
+        _cp_body = "".join(
+            f"<tr><td>{_esc(r.get('task') or '')}</td>"
+            f"<td>{_esc(_format_time(int(r.get('duration') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('exec_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('preempt_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('wait_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('migration_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('other_ns') or 0), trace.time_scale))}</td></tr>"
+            for r in _cp_rows
+        ) or '<tr><td colspan="7" class="empty">Need at least one on-CPU slice</td></tr>'
+        crit_path_html = (
+            f'<section class="report-card"><h2>Critical Path{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Task</th><th>Duration</th><th>Exec</th>'
+            '<th>Preempt</th><th>Wait</th><th>Mig</th><th>Other</th></tr></thead>'
+            f'<tbody>{_cp_body}</tbody></table></section>'
+        )
+        _pat_rows = recurring_patterns(_an_rows, 2)
+        _pat_body = "".join(
+            f"<tr><td>{_esc(r.get('task') or '')}</td>"
+            f"<td>{_esc(KIND_LABEL.get(str(r.get('kind') or ''), str(r.get('kind') or '')))}</td>"
+            f"<td>{r.get('count') or 0}</td>"
+            f"<td>{_esc(_format_time(int(r.get('duration') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(r.get('reason') or '')}</td></tr>"
+            for r in _pat_rows
+        ) or '<tr><td colspan="5" class="empty">No repeating anomaly kinds in this scope</td></tr>'
+        patterns_html = (
+            f'<section class="report-card"><h2>Recurring Patterns{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Task</th><th>Kind</th><th>Count</th>'
+            '<th>Worst</th><th>Why</th></tr></thead>'
+            f'<tbody>{_pat_body}</tbody></table></section>'
+        )
+        _jit_rows = unified_jitter(_ux_evs, self._dispatch_sample_map(trace, lo, hi))
+        _jit_body = "".join(
+            f"<tr><td>{_esc(r.get('task') or '')}</td>"
+            f"<td>{_esc(_format_time(int(r.get('exec_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{float(r.get('exec_cv') or 0) * 100:.1f}%</td>"
+            f"<td>{_esc(_format_time(int(r.get('block_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{float(r.get('block_cv') or 0) * 100:.1f}%</td>"
+            f"<td>{_esc(_format_time(int(r.get('inter_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{float(r.get('inter_cv') or 0) * 100:.1f}%</td>"
+            f"<td>{_esc(_format_time(int(r.get('response_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{float(r.get('response_cv') or 0) * 100:.1f}%</td>"
+            f"<td>{_esc(_format_time(int(r.get('dispatch_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{float(r.get('dispatch_cv') or 0) * 100:.1f}%</td>"
+            f"<td>{_esc(_format_time(int(r.get('wakeup_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{float(r.get('wakeup_cv') or 0) * 100:.1f}%</td></tr>"
+            for r in _jit_rows
+        ) or '<tr><td colspan="13" class="empty">No timing samples in this scope</td></tr>'
+        jitter_html = (
+            f'<section class="report-card"><h2>Unified Jitter{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Task</th><th>Exec</th><th>Exec CV</th><th>Block</th>'
+            '<th>Block CV</th><th>Inter</th><th>Inter CV</th><th>Response</th>'
+            '<th>Resp CV</th><th>Dispatch</th><th>Disp CV</th><th>Wake</th>'
+            '<th>Wake CV</th></tr></thead>'
+            f'<tbody>{_jit_body}</tbody></table></section>'
+        )
+        _pm_rows = preemptor_ranking(preemption_pairs(_ux_evs), 16)
+        _pm_body = "".join(
+            f"<tr><td>{_esc(r.get('task') or '')}</td><td>{r.get('count') or 0}</td>"
+            f"<td>{_esc(_format_time(int(r.get('total_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('max_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(r.get('top_label') or '')}</td></tr>"
+            for r in _pm_rows
+        ) or '<tr><td colspan="5" class="empty">No preemption overlaps in this scope</td></tr>'
+        preempt_matrix_html = (
+            f'<section class="report-card"><h2>Preemption Matrix{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Victim</th><th>Count</th><th>Total</th>'
+            '<th>Max</th><th>Top preemptors</th></tr></thead>'
+            f'<tbody>{_pm_body}</tbody></table></section>'
+        )
+        _mb_rows = mutex_blocking_table(pair_mutex_waits(harvest_mutex_holds(trace, lo, hi)))
+        _mb_body = "".join(
+            f"<tr><td>{_esc(r.get('task') or '')}</td><td>{_esc(r.get('object') or '')}</td>"
+            f"<td>{_esc(r.get('owner') or '')}</td><td>{r.get('count') or 0}</td>"
+            f"<td>{_esc(_format_time(int(r.get('total_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(int(r.get('max_ns') or 0), trace.time_scale))}</td></tr>"
+            for r in _mb_rows
+        ) or '<tr><td colspan="6" class="empty">No mutex waits in this scope</td></tr>'
+        mutex_block_html = (
+            f'<section class="report-card"><h2>Mutex Blocking{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Task</th><th>Object</th><th>Owner</th>'
+            '<th>Count</th><th>Total</th><th>Max</th></tr></thead>'
+            f'<tbody>{_mb_body}</tbody></table></section>'
+        )
+        _ct = core_util_over_time(_ux_evs, list(trace.core_names or []), lo, hi)
+        _ct_cores = _ct.get("cores") or []
+        _ct_head = "<th>Time</th>" + "".join(f"<th>{_esc(c)}</th>" for c in _ct_cores)
+        _ct_body = "".join(
+            "<tr><td>" + _esc(_format_time(int(r.get("start") or 0), trace.time_scale)) + "</td>"
+            + "".join(
+                f"<td>{float(((r.get('cells') or {}).get(c) or {}).get('pct') or 0):.1f}%</td>"
+                for c in _ct_cores
+            ) + "</tr>"
+            for r in (_ct.get("bins") or [])
+        ) or f'<tr><td colspan="{len(_ct_cores) + 1}" class="empty">No on-CPU slices</td></tr>'
+        core_time_html = (
+            f'<section class="report-card"><h2>Core Utilization Over Time{_esc(scope_title)}</h2>'
+            f'<table><thead><tr>{_ct_head}</tr></thead>'
+            f'<tbody>{_ct_body}</tbody></table></section>'
+        )
 
         analysis_findings = _build_workflow_analysis_findings(
             core_rows=core_rows,
@@ -45659,12 +51845,25 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             {range_note}
             <li><strong>Execution Time Per Slice:</strong> Duration of each continuous task run between two context switches. Lower and tighter values indicate more predictable execution.</li>
             <li><strong>Inter-Arrival Time:</strong> Time between consecutive activations of the same task (slice start to next slice start). It reflects activation cadence and jitter.</li>
-            <li><strong>Blocking Time:</strong> Off-CPU gap between the end of one slice and the start of the next for the same task. It is not end-to-end response time, which requires explicit release and completion events.</li>
+            <li><strong>Blocking Time:</strong> Off-CPU gap between the end of one slice and the start of the next for the same task (scheduling latency until resume). It is not end-to-end response time, which requires explicit release and completion events.</li>
       <li><strong>Preemption Chain Analysis:</strong> For each blocking gap of a victim task, identifies which task ran on the same core during that gap. High counts or long totals point to recurring preemption bottlenecks.</li>
-      <li><strong>Priority Inheritance:</strong> When traces include <code>create pri:N</code> and priority STI events, lists tasks boosted above base priority. Detail table lists each boost episode.</li>
-      <li><strong>Mutex / Semaphore:</strong> Pairs take/give STI by object pointer; detail tables list pairing issues and hold episodes.</li>
-      <li><strong>Interval Analysis:</strong> Paired interval_start / interval_stop spans per user-defined id. Detail table lists individual instances.</li>
+      <li><strong>Priority Inheritance:</strong> When traces include <code>create pri:N</code> on task create and <code>set_priority</code> STI events, lists tasks boosted above their base priority. <em>L/M/H pattern</em> flags classic priority-inversion geometry (medium-priority task between base and peak).</li>
+      <li><strong>Mutex / Semaphore:</strong> Pairs <code>take</code>/<code>give</code> STI events by object pointer (<code>0x........</code> in the note). Reports orphan gives, cross-task gives, unmatched takes, delete-while-held, and multi-mutex hold at trace end (deadlock risk).</li>
+      <li><strong>Interval Analysis:</strong> Pairs <code>interval_start</code> / <code>interval_stop</code> STI events by id; shows count, min/avg/max/p95 duration per interval id (Tracealyzer-style interval plot).</li>
       <li><strong>Tag Analysis:</strong> Numeric samples from tag0_event … tag7_event STI channels (note field); scatter plot shows value over time.</li>
+      <li><strong>Task × Core:</strong> Per-task execution share of the scoped span on each core.</li>
+      <li><strong>Task Health:</strong> Heuristic 0–100 score from measured statistics, not an AI probability.</li>
+      <li><strong>Timeline Anomalies / Worst Events:</strong> Unusual long tails, migration / preemption / ISR / wakeup bursts, CPU spikes, idle gaps, and the longest execution, blocking, and inter-arrival episodes in scope.</li>
+      <li><strong>Response Time:</strong> Heuristic ready→completion from adjacent slices (previous slice end → this slice end). Not an explicit BTF release/completion pair.</li>
+      <li><strong>Critical Path:</strong> Longest heuristic response windows split into exec / preempt / wait / migration.</li>
+      <li><strong>Period / Jitter:</strong> Median inter-arrival as expected period, with RMS jitter, CV, missed (&gt; 1.5×) and extra (&lt; 0.5×) activations.</li>
+      <li><strong>Unified Jitter:</strong> Max−Min spread and CV for execution, blocking, inter-arrival, heuristic response, STI dispatch latency, and wake-to-run (response wait stand-in).</li>
+      <li><strong>Distribution Explorer:</strong> Choose a metric and task, then open the existing histogram/CDF plot.</li>
+      <li><strong>Recurring Patterns:</strong> Anomaly kinds that repeat for the same task in this scope.</li>
+      <li><strong>Preemption Matrix:</strong> Victim × preemptor overlap during off-CPU gaps on the same core, plus preemptor ranking.</li>
+      <li><strong>Waiter × Owner:</strong> Heuristic mutex handoff matrix (next distinct acquirer × previous holder), not a kernel wait queue.</li>
+      <li><strong>Mutex Blocking:</strong> Per-task mutex wait totals from those heuristic handoffs.</li>
+      <li><strong>Core Utilization Over Time:</strong> Per-core busy percent in equal time bins of the current scope.</li>
             <li><strong>Context switches:</strong> Count of segment boundaries on all cores whose start time falls inside the statistics scope.</li>
             <li><strong>Min (Minimum):</strong> The fastest execution time recorded. It represents the best-case scenario under zero system load.</li>
             <li><strong>Max (Maximum):</strong> The slowest execution time recorded. It identifies worst-case bottlenecks, spikes, or resource contention.</li>
@@ -45687,24 +51886,37 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
     <h2>Core Migrations{_esc(scope_title)}</h2>
     <table>
       <thead><tr><th>Task</th><th>Migr</th><th>Rate</th><th>Dwell</th><th>Cores</th><th>Primary</th><th>Ping</th><th>STI±</th><th>Gap after</th><th>Gap other</th></tr></thead>
-      <tbody>{"".join(_migration_row_html(r) for r in mig_rows) or '<tr><td colspan="10" class="empty">No data</td></tr>'}</tbody>
+      <tbody>{"".join(_migration_row_html(r) for r in mig_rows) or '<tr><td colspan="10" class="empty">No migrated tasks</td></tr>'}</tbody>
     </table>
   </section>
     {core_pair_html}
     {affinity_html}
+    {task_core_html}
+    {core_time_html}
     {lifecycle_html}
     {deadline_html}
+    {task_health_html}
+    {anomalies_html}
+    {worst_html}
+    {crit_path_html}
+    {patterns_html}
     {_render_exec_table(exec_rows)}
     {_render_stats_table(f'Blocking Time (off-CPU gap){scope_title}', block_rows)}
     {dispatch_html}
     {_render_stats_table(f'Inter-Arrival Time{scope_title}', inter_rows)}
+    {period_html}
+    {response_html}
+    {jitter_html}
     <section class=\"report-card\"><h2>Preemption Chain Analysis{_esc(scope_title)}</h2>
     <table><thead><tr><th>Victim</th><th>Preemptor</th><th>Count</th><th>Total</th><th>Avg</th><th>Max</th></tr></thead>
     <tbody>{"".join(
         f"<tr><td>{_esc(r[1])}</td><td>{_esc(r[2])}</td><td>{r[3]}</td><td>{_esc(r[4])}</td><td>{_esc(r[5])}</td><td>{_esc(r[6])}</td></tr>"
         for r in preempt_rows) or "<tr><td colspan=\"6\" class=\"empty\">No preemption events found</td></tr>"}</tbody></table></section>
+    {preempt_matrix_html}
     {priority_html}
     {sync_html}
+    {wait_owner_html}
+    {mutex_block_html}
     {queue_html}
     {interval_html}
     {tag_html}
@@ -45808,6 +52020,9 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
         ] if trace.has_sync_object_instrumentation else []
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
         tick = _tick_health_report(trace, lo, hi)
+        _ux_evs_csv = self._ux_events(trace, lo, hi)
+        _span_ns_csv = max(1, (hi - lo) if lo is not None and hi is not None
+                           else (trace.time_max - trace.time_min))
 
         def _us(v: object) -> str:
             return str(v).replace("µs", "us").replace("μs", "us")
@@ -45961,6 +52176,42 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             else:
                 writer.writerow(["No affinity_set events", "", "", ""])
 
+            _tc_csv = task_core_matrix(
+                _ux_evs_csv, list(trace.core_names or []), _span_ns_csv)
+            _tc_cores_csv = _tc_csv.get("cores") or []
+            writer.writerow([])
+            writer.writerow([f"Task × Core{scope_suffix}"])
+            writer.writerow(["Task"] + list(_tc_cores_csv))
+            if _tc_csv.get("rows"):
+                for r in _tc_csv["rows"]:
+                    cells = r.get("cells") or {}
+                    writer.writerow(
+                        [r.get("task") or ""] + [
+                            f"{(cells.get(c) or {}).get('pct_span', 0):.1f}%"
+                            if (cells.get(c) or {}).get("ns") else ""
+                            for c in _tc_cores_csv
+                        ])
+            else:
+                writer.writerow(["No on-CPU slices"] + [""] * len(_tc_cores_csv))
+
+            _ct_csv = core_util_over_time(
+                _ux_evs_csv, list(trace.core_names or []), lo, hi)
+            _ct_cores_csv = _ct_csv.get("cores") or []
+            writer.writerow([])
+            writer.writerow([f"Core Utilization Over Time{scope_suffix}"])
+            writer.writerow(["Time"] + list(_ct_cores_csv))
+            if _ct_csv.get("bins"):
+                for r in _ct_csv["bins"]:
+                    cells = r.get("cells") or {}
+                    writer.writerow(
+                        [_us(_format_time(int(r.get("start") or 0), trace.time_scale))]
+                        + [
+                            f"{float((cells.get(c) or {}).get('pct') or 0):.1f}%"
+                            for c in _ct_cores_csv
+                        ])
+            else:
+                writer.writerow(["No on-CPU slices"] + [""] * len(_ct_cores_csv))
+
             lc_rows_csv = _task_lifecycle_rows(trace, lo, hi)
             writer.writerow([])
             writer.writerow([f"Task Lifecycle{scope_suffix}"])
@@ -45995,6 +52246,106 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                         writer.writerow([lbl, pct, bgt])
                 else:
                     writer.writerow(["No CPU budget violations", "", ""])
+
+            _dead_mks_csv = []
+            if self._cpu_budget_pct > 0 or self._task_deadlines_ns:
+                _dl_for_health = _deadline_violations(
+                    trace, self._cpu_budget_pct, self._task_deadlines_ns, lo, hi)
+                for item in _dl_for_health.get("slice_violations") or []:
+                    if len(item) > 4:
+                        _dead_mks_csv.append(item[4])
+                for item in _dl_for_health.get("cpu_violations") or []:
+                    if len(item) > 3:
+                        _dead_mks_csv.append(item[3])
+            _th_csv = task_health_scores(
+                health_inputs_from_events(_ux_evs_csv, _span_ns_csv, _dead_mks_csv))
+            writer.writerow([])
+            writer.writerow([f"Task Health{scope_suffix}"])
+            writer.writerow([
+                "Task", "Score", "Exec", "Block", "Period", "Mig", "Deadline", "CPU",
+            ])
+            if _th_csv:
+                for r in _th_csv:
+                    marks = r.get("marks") or {}
+                    writer.writerow([
+                        r.get("task") or "", int(r.get("score") or 0),
+                        marks.get("execution", ""), marks.get("blocking", ""),
+                        marks.get("period", ""), marks.get("migration", ""),
+                        marks.get("deadline", ""), marks.get("cpu", ""),
+                    ])
+            else:
+                writer.writerow(["No task slices"] + [""] * 7)
+
+            writer.writerow([])
+            writer.writerow([f"Timeline Anomalies{scope_suffix}"])
+            writer.writerow(["Time", "Kind", "Task", "Duration", "Why"])
+            _an_csv = detect_timeline_anomalies(
+                _ux_evs_csv, 12,
+                pair_mutex_waits(harvest_mutex_holds(trace, lo, hi)),
+                self._task_deadlines_ns,
+            )
+            if _an_csv:
+                for r in _an_csv:
+                    writer.writerow([
+                        _us(_format_time(int(r.get("start") or 0), trace.time_scale)),
+                        KIND_LABEL.get(str(r.get("kind") or ""), str(r.get("kind") or "")),
+                        r.get("task") or "",
+                        _us(_format_time(int(r.get("duration") or 0), trace.time_scale)),
+                        r.get("reason") or "",
+                    ])
+            else:
+                writer.writerow(["No timeline anomalies in this scope", "", "", "", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Worst Events{scope_suffix}"])
+            writer.writerow(["Time", "Kind", "Task", "Duration", "Why"])
+            _woe_csv = collect_worst_events(_ux_evs_csv, 12)
+            if _woe_csv:
+                for r in _woe_csv:
+                    writer.writerow([
+                        _us(_format_time(int(r.get("start") or 0), trace.time_scale)),
+                        KIND_LABEL.get(str(r.get("kind") or ""), str(r.get("kind") or "")),
+                        r.get("task") or "",
+                        _us(_format_time(int(r.get("duration") or 0), trace.time_scale)),
+                        r.get("reason") or KIND_LABEL.get(
+                            str(r.get("kind") or ""), ""),
+                    ])
+            else:
+                writer.writerow(["No episodes in this scope", "", "", "", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Critical Path{scope_suffix}"])
+            writer.writerow(["Task", "Duration", "Exec", "Preempt", "Wait", "Mig", "Other"])
+            _cp_csv = critical_path_rows(_ux_evs_csv, 8)
+            if _cp_csv:
+                for r in _cp_csv:
+                    writer.writerow([
+                        r.get("task") or "",
+                        _us(_format_time(int(r.get("duration") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("exec_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("preempt_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("wait_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("migration_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("other_ns") or 0), trace.time_scale)),
+                    ])
+            else:
+                writer.writerow(["Need at least one on-CPU slice"] + [""] * 5)
+
+            writer.writerow([])
+            writer.writerow([f"Recurring Patterns{scope_suffix}"])
+            writer.writerow(["Task", "Kind", "Count", "Worst", "Why"])
+            _pat_csv = recurring_patterns(_an_csv, 2)
+            if _pat_csv:
+                for r in _pat_csv:
+                    writer.writerow([
+                        r.get("task") or "",
+                        KIND_LABEL.get(str(r.get("kind") or ""), str(r.get("kind") or "")),
+                        r.get("count") or 0,
+                        _us(_format_time(int(r.get("duration") or 0), trace.time_scale)),
+                        r.get("reason") or "",
+                    ])
+            else:
+                writer.writerow(["No repeating anomaly kinds in this scope", "", "", "", ""])
 
             writer.writerow([])
             writer.writerow([f"Execution Time Per Slice{scope_suffix}"])
@@ -46033,7 +52384,7 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             writer.writerow([f"Dispatch / Scheduling Latency{scope_suffix}"])
             writer.writerow([
                 "Task", "Activations", "Min", "Avg", "Max", "Jitter",
-                "StdDev (population)", "p95",
+                "StdDev (population)", "p95", "p99",
             ])
             _disp_by = _dispatch_latency_by_mk(trace, lo, hi)
             _disp_any = False
@@ -46050,10 +52401,11 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                 if summary is None:
                     continue
                 _disp_any = True
-                mn, avg, mx, jitter, stddev, p95 = summary
+                mn, avg, mx, jitter, stddev, p95, p99 = summary
                 writer.writerow([
                     _task_display_name(raw), len(data["samples"]),
-                    _us(mn), _us(avg), _us(mx), _us(jitter), _us(stddev), _us(p95),
+                    _us(mn), _us(avg), _us(mx), _us(jitter), _us(stddev),
+                    _us(p95), _us(p99),
                 ])
             if not _disp_any:
                 writer.writerow(["No data"] + [""] * 7)
@@ -46075,6 +52427,85 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                 writer.writerow(["No data"] + [""] * 9)
 
             writer.writerow([])
+            writer.writerow([f"Period / Jitter{scope_suffix}"])
+            writer.writerow([
+                "Task", "N", "Expected", "Min", "Avg", "Max", "p95", "p99",
+                "RMS", "CV", "Missed", "Extra", "Burst", "Spark",
+            ])
+            _per_csv = analyze_task_periods(_ux_evs_csv, 3)
+            if _per_csv:
+                for r in _per_csv:
+                    writer.writerow([
+                        r.get("task") or "", r.get("n") or 0,
+                        _us(_format_time(int(r.get("expected_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("min_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("avg_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("max_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("p95_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("p99_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("rms_ns") or 0), trace.time_scale)),
+                        f"{float(r.get('cv') or 0) * 100:.1f}%",
+                        r.get("missed") or 0, r.get("extra") or 0,
+                        r.get("burst") or 0, r.get("spark") or "",
+                    ])
+            else:
+                writer.writerow(["Need at least 3 inter-arrival gaps per task"] + [""] * 13)
+
+            writer.writerow([])
+            writer.writerow([f"Response Time{scope_suffix}"])
+            writer.writerow([
+                "Task", "N", "Min", "Avg", "Max", "p50", "p90", "p95",
+                "p99", "p99.9", "Jitter", "CV",
+            ])
+            _rt_csv = analyze_response_times(_ux_evs_csv).get("rows") or []
+            if _rt_csv:
+                for r in _rt_csv:
+                    writer.writerow([
+                        r.get("task") or "", r.get("n") or 0,
+                        _us(_format_time(int(r.get("min_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("avg_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("max_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("p50_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("p90_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("p95_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("p99_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("p999_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("jitter_ns") or 0), trace.time_scale)),
+                        f"{float(r.get('cv') or 0) * 100:.1f}%",
+                    ])
+            else:
+                writer.writerow(["Need at least one on-CPU slice"] + [""] * 11)
+
+            writer.writerow([])
+            writer.writerow([f"Unified Jitter{scope_suffix}"])
+            writer.writerow([
+                "Task", "Exec", "Exec CV", "Block", "Block CV",
+                "Inter", "Inter CV", "Response", "Resp CV",
+                "Dispatch", "Disp CV", "Wake", "Wake CV",
+            ])
+            _jit_csv = unified_jitter(
+                _ux_evs_csv, self._dispatch_sample_map(trace, lo, hi))
+            if _jit_csv:
+                for r in _jit_csv:
+                    writer.writerow([
+                        r.get("task") or "",
+                        _us(_format_time(int(r.get("exec_jitter_ns") or 0), trace.time_scale)),
+                        f"{float(r.get('exec_cv') or 0) * 100:.1f}%",
+                        _us(_format_time(int(r.get("block_jitter_ns") or 0), trace.time_scale)),
+                        f"{float(r.get('block_cv') or 0) * 100:.1f}%",
+                        _us(_format_time(int(r.get("inter_jitter_ns") or 0), trace.time_scale)),
+                        f"{float(r.get('inter_cv') or 0) * 100:.1f}%",
+                        _us(_format_time(int(r.get("response_jitter_ns") or 0), trace.time_scale)),
+                        f"{float(r.get('response_cv') or 0) * 100:.1f}%",
+                        _us(_format_time(int(r.get("dispatch_jitter_ns") or 0), trace.time_scale)),
+                        f"{float(r.get('dispatch_cv') or 0) * 100:.1f}%",
+                        _us(_format_time(int(r.get("wakeup_jitter_ns") or 0), trace.time_scale)),
+                        f"{float(r.get('wakeup_cv') or 0) * 100:.1f}%",
+                    ])
+            else:
+                writer.writerow(["No timing samples in this scope"] + [""] * 12)
+
+            writer.writerow([])
             writer.writerow([f"Preemption Chain Analysis{scope_suffix}"])
             writer.writerow(["Victim", "Preemptor", "Count", "Total", "Avg", "Max"])
             if preempt_rows_csv:
@@ -46082,6 +52513,22 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                     writer.writerow([victim, preemptor, count, _us(total), _us(avg), _us(mx)])
             else:
                 writer.writerow(["No preemption events found", "", "", "", "", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Preemption Matrix{scope_suffix}"])
+            writer.writerow(["Victim", "Count", "Total", "Max", "Top preemptors"])
+            _pm_csv = preemptor_ranking(preemption_pairs(_ux_evs_csv), 16)
+            if _pm_csv:
+                for r in _pm_csv:
+                    writer.writerow([
+                        r.get("task") or "",
+                        r.get("count") or 0,
+                        _us(_format_time(int(r.get("total_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("max_ns") or 0), trace.time_scale)),
+                        r.get("top_label") or "",
+                    ])
+            else:
+                writer.writerow(["No preemption overlaps in this scope", "", "", "", ""])
 
             writer.writerow([])
             writer.writerow([f"Priority Inheritance{scope_suffix}"])
@@ -46130,6 +52577,48 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                         ])
                 else:
                     writer.writerow(["No pairing issues in scope", "", "", "", "", ""])
+
+            _wo_csv = waiter_owner_matrix(
+                pair_mutex_waits(harvest_mutex_holds(trace, lo, hi)))
+            _wo_tasks_csv = _wo_csv.get("tasks") or []
+            _wo_cells_csv = _wo_csv.get("cells") or {}
+            writer.writerow([])
+            writer.writerow([f"Waiter × Owner{scope_suffix}"])
+            writer.writerow(
+                ["Waiter \\ Owner"] + [
+                    t.get("task") or t.get("mk") for t in _wo_tasks_csv])
+            if _wo_tasks_csv:
+                for w in _wo_tasks_csv:
+                    row_vals = [w.get("task") or w.get("mk") or ""]
+                    for o in _wo_tasks_csv:
+                        if w.get("mk") == o.get("mk"):
+                            row_vals.append("")
+                            continue
+                        cell = _wo_cells_csv.get(f"{w.get('mk')}|{o.get('mk')}") or {}
+                        ns = int(cell.get("ns") or 0)
+                        row_vals.append(
+                            _us(_format_time(ns, trace.time_scale)) if ns else "")
+                    writer.writerow(row_vals)
+            else:
+                writer.writerow(["No mutex handoffs in this scope"])
+
+            writer.writerow([])
+            writer.writerow([f"Mutex Blocking{scope_suffix}"])
+            writer.writerow(["Task", "Object", "Owner", "Count", "Total", "Max"])
+            _mb_csv = mutex_blocking_table(
+                pair_mutex_waits(harvest_mutex_holds(trace, lo, hi)))
+            if _mb_csv:
+                for r in _mb_csv:
+                    writer.writerow([
+                        r.get("task") or "",
+                        r.get("object") or "",
+                        r.get("owner") or "",
+                        r.get("count") or 0,
+                        _us(_format_time(int(r.get("total_ns") or 0), trace.time_scale)),
+                        _us(_format_time(int(r.get("max_ns") or 0), trace.time_scale)),
+                    ])
+            else:
+                writer.writerow(["No mutex waits in this scope", "", "", "", "", ""])
 
             queue_rows_csv = _sync_object_stats_rows(trace, lo, hi, kind_filter="queue")
             writer.writerow([])
@@ -46190,11 +52679,11 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
     def clear_trace(self) -> None:
         """Empty Statistics when no trace tab is open (welcome / close-all)."""
         self.clear_plot_session()
+        self._defer_heavy_collapse_done = False
         self._trace = None
         self._cursor_times = []
         self._btn_export_csv.setEnabled(False)
         self._btn_export_html.setEnabled(False)
-        self._btn_compare_mig.setEnabled(False)
         self._scope_cb.setEnabled(False)
         self._clear()
         self._update_scope_header()
@@ -46212,17 +52701,12 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
         defer_heavy = trace_needs_deferred_stats_load(trace)
         self._btn_export_csv.setEnabled(True)
         self._btn_export_html.setEnabled(True)
-        wnd = self.window()
-        self._btn_compare_mig.setEnabled(
-            isinstance(wnd, QMainWindow) and len(getattr(wnd, "_tabs", ())) >= 2)
         self._clear()
         self._defer_heavy_sections = defer_heavy
-        if defer_heavy and not self._defer_heavy_collapse_done:
-            pinned = set(self._section_pins)
-            for sid in STATS_HEAVY_SECTIONS:
-                if sid in pinned:
-                    continue
-                self._section_collapsed[sid] = True
+        # Do not rewrite collapse flags here. Defaults already start most
+        # sections closed; Expand all / persisted btf_viewer.rc must survive
+        # rebuild when a large trace is reopened.
+        if defer_heavy:
             self._defer_heavy_collapse_done = True
         self._update_scope_header()
 
@@ -46731,6 +53215,121 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             _populate_core_pairs,
         )
 
+        # -- Timeline anomalies / worst events ----------------------------
+        def _populate_anomalies(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            waits = pair_mutex_waits(harvest_mutex_holds(trace, lo, hi))
+            rows = detect_timeline_anomalies(
+                evs, 12, waits, self._task_deadlines_ns)
+            inv_row = QHBoxLayout()
+            inv_btn = QPushButton("Investigate…")
+            inv_btn.setToolTip(
+                "Open the AI Assistant and investigate the selected or top anomaly")
+            inv_btn.clicked.connect(lambda _=False, rs=rows: self._investigate_anomaly(rs))
+            inv_row.addWidget(inv_btn)
+            inv_row.addStretch(1)
+            blay.addLayout(inv_row)
+            blay.addWidget(self._build_ux_event_table(
+                rows, _fs, "No timeline anomalies in this scope",
+                "anomalies", trace))
+
+        self._add_collapsible_section(
+            "anomalies",
+            f"Timeline Anomalies{scope}",
+            _fs,
+            _populate_anomalies,
+        )
+
+        def _populate_worst(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            rows = collect_worst_events(evs, 12)
+            blay.addWidget(self._build_ux_event_table(
+                rows, _fs, "No episodes in this scope",
+                "worst", trace))
+
+        self._add_collapsible_section(
+            "worst",
+            f"Worst Events{scope}",
+            _fs,
+            _populate_worst,
+        )
+
+        def _populate_crit_path(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            rows = critical_path_rows(evs, 8)
+            scale = trace.time_scale
+
+            def _on_crit_cell(row: dict, col: int) -> None:
+                key = {
+                    2: "exec_ev", 3: "preempt_ev", 4: "wait_ev",
+                    5: "mig_ev", 6: "other_ev",
+                }.get(col)
+                payload = (row.get(key) if key else None) or row
+                self._activate_ux_event(trace, payload)
+
+            blay.addWidget(self._build_click_rows_table(
+                rows,
+                ["Task", "Duration", "Exec", "Preempt", "Wait", "Mig", "Other"],
+                lambda r: [
+                    r.get("task") or "",
+                    _format_time(int(r.get("duration") or 0), scale),
+                    _format_time(int(r.get("exec_ns") or 0), scale),
+                    _format_time(int(r.get("preempt_ns") or 0), scale),
+                    _format_time(int(r.get("wait_ns") or 0), scale),
+                    _format_time(int(r.get("migration_ns") or 0), scale),
+                    _format_time(int(r.get("other_ns") or 0), scale),
+                ],
+                lambda r: r,
+                _fs, "Need at least one on-CPU slice", "crit_path", trace,
+                on_cell=_on_crit_cell,
+                keys_fn=lambda r: [
+                    str(r.get("task") or "").lower(),
+                    int(r.get("duration") or 0),
+                    int(r.get("exec_ns") or 0),
+                    int(r.get("preempt_ns") or 0),
+                    int(r.get("wait_ns") or 0),
+                    int(r.get("migration_ns") or 0),
+                    int(r.get("other_ns") or 0),
+                ],
+            ))
+
+        self._add_collapsible_section(
+            "crit_path", f"Critical Path{scope}", _fs, _populate_crit_path,
+        )
+
+        def _populate_patterns(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            rows = recurring_patterns(detect_timeline_anomalies(
+                evs, 12,
+                pair_mutex_waits(harvest_mutex_holds(trace, lo, hi)),
+                self._task_deadlines_ns,
+            ), 2)
+            scale = trace.time_scale
+            blay.addWidget(self._build_click_rows_table(
+                rows,
+                ["Task", "Kind", "Count", "Worst", "Why"],
+                lambda r: [
+                    r.get("task") or "",
+                    KIND_LABEL.get(str(r.get("kind") or ""), str(r.get("kind") or "")),
+                    r.get("count") or 0,
+                    _format_time(int(r.get("duration") or 0), scale),
+                    r.get("reason") or "",
+                ],
+                lambda r: r,
+                _fs, "No repeating anomaly kinds in this scope", "patterns", trace,
+                keys_fn=lambda r: [
+                    str(r.get("task") or "").lower(),
+                    str(r.get("kind") or ""),
+                    int(r.get("count") or 0),
+                    int(r.get("duration") or 0),
+                    str(r.get("reason") or "").lower(),
+                ],
+            ))
+
+        self._add_collapsible_section(
+            "patterns", f"Recurring Patterns{scope}", _fs, _populate_patterns,
+        )
+
         # -- Execution time per slice -------------------------------------
         empty_exec = ("No slices fully inside cursor range" if scope
                       else "No user-task slices found")
@@ -46747,6 +53346,10 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                 on_row_click=lambda mk: self._open_plot(trace, mk, "exec"),
                 on_min_click=lambda mk: self._on_bcet_click(trace, mk, lo, hi),
                 on_max_click=lambda mk: self._on_wcet_click(trace, mk, lo, hi),
+                on_p95_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "exec", lo, hi, 0.95),
+                on_p99_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "exec", lo, hi, 0.99),
             ))
 
         self._add_collapsible_section(
@@ -46774,6 +53377,10 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                     trace, mk, lo, hi, False),
                 on_max_click=lambda mk: self._on_blocking_extreme_click(
                     trace, mk, lo, hi, True),
+                on_p95_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "block", lo, hi, 0.95),
+                on_p99_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "block", lo, hi, 0.99),
             ))
 
         self._add_collapsible_section(
@@ -46795,14 +53402,10 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
         def _populate_dispatch(blay: QVBoxLayout) -> None:
             _disp_rows_raw = self._dispatch_latency_rows(trace, lo, hi)
             _disp_rows = [
-                (mk, label, n, mn, avg, mx, jitter, stddev, p95)
-                for (mk, label, n, mn, avg, mx, jitter, stddev, p95,
+                (mk, label, n, mn, avg, mx, jitter, stddev, p95, p99)
+                for (mk, label, n, mn, avg, mx, jitter, stddev, p95, p99,
                      _min_seg, _max_seg) in _disp_rows_raw
             ]
-            blay.addWidget(self._lbl(
-                "Ready time from STI resume / create; dispatch = next switch-in. "
-                "Sync-object wakes are not attributed (no woken-task id in BTF).",
-                color="#888888", ui_fs=_fs))
             blay.addWidget(self._build_stats_table(
                 _disp_rows,
                 _fs,
@@ -46838,6 +53441,10 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                     trace, mk, lo, hi, False),
                 on_max_click=lambda mk: self._on_inter_extreme_click(
                     trace, mk, lo, hi, True),
+                on_p95_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "inter", lo, hi, 0.95),
+                on_p99_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "inter", lo, hi, 0.99),
             ))
 
         self._add_collapsible_section(
@@ -46845,6 +53452,277 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             f"Inter-Arrival Time{scope}",
             _fs,
             _populate_inter,
+        )
+
+        def _populate_period(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            rows = analyze_task_periods(evs, 3)
+            blay.addWidget(self._build_period_table(
+                rows, _fs, "Need at least 3 inter-arrival gaps per task", trace))
+
+        self._add_collapsible_section(
+            "period",
+            f"Period / Jitter{scope}",
+            _fs,
+            _populate_period,
+        )
+
+        def _populate_response(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            rows = analyze_response_times(evs).get("rows") or []
+            scale = trace.time_scale
+
+            def _on_response_cell(row: dict, col: int) -> None:
+                if col == 0:
+                    self._open_plot(trace, str(row.get("mk") or ""), "response")
+                    return
+                key = {
+                    2: "min_ev", 4: "max_ev", 5: "p50_ev", 6: "p90_ev",
+                    7: "p95_ev", 8: "p99_ev", 9: "p999_ev",
+                }.get(col, "worst_ev")
+                self._activate_ux_event(trace, row.get(key) or row.get("worst_ev") or row)
+
+            blay.addWidget(self._build_click_rows_table(
+                rows,
+                ["Task", "N", "Min", "Avg", "Max", "p50", "p90", "p95",
+                 "p99", "p99.9", "Jitter", "CV"],
+                lambda r: [
+                    r.get("task") or "",
+                    r.get("n") or 0,
+                    _format_time(int(r.get("min_ns") or 0), scale),
+                    _format_time(int(r.get("avg_ns") or 0), scale),
+                    _format_time(int(r.get("max_ns") or 0), scale),
+                    _format_time(int(r.get("p50_ns") or 0), scale),
+                    _format_time(int(r.get("p90_ns") or 0), scale),
+                    _format_time(int(r.get("p95_ns") or 0), scale),
+                    _format_time(int(r.get("p99_ns") or 0), scale),
+                    _format_time(int(r.get("p999_ns") or 0), scale),
+                    _format_time(int(r.get("jitter_ns") or 0), scale),
+                    f"{float(r.get('cv') or 0) * 100:.1f}%",
+                ],
+                lambda r: r.get("worst_ev") or r,
+                _fs, "Need at least one on-CPU slice", "response", trace,
+                on_cell=_on_response_cell,
+                keys_fn=lambda r: [
+                    str(r.get("task") or "").lower(),
+                    int(r.get("n") or 0),
+                    int(r.get("min_ns") or 0),
+                    int(r.get("avg_ns") or 0),
+                    int(r.get("max_ns") or 0),
+                    int(r.get("p50_ns") or 0),
+                    int(r.get("p90_ns") or 0),
+                    int(r.get("p95_ns") or 0),
+                    int(r.get("p99_ns") or 0),
+                    int(r.get("p999_ns") or 0),
+                    int(r.get("jitter_ns") or 0),
+                    float(r.get("cv") or 0),
+                ],
+            ))
+
+        self._add_collapsible_section(
+            "response", f"Response Time{scope}", _fs, _populate_response,
+        )
+
+        def _populate_jitter(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            disp = self._dispatch_sample_map(trace, lo, hi)
+            rows = unified_jitter(evs, disp)
+            scale = trace.time_scale
+
+            def _on_jitter_cell(row: dict, col: int) -> None:
+                kind = {
+                    0: "exec", 1: "exec", 2: "exec",
+                    3: "block", 4: "block",
+                    5: "inter", 6: "inter",
+                    7: "response", 8: "response",
+                    9: "dispatch", 10: "dispatch",
+                    11: "block", 12: "block",
+                }.get(col, "exec")
+                mk = str(row.get("mk") or "")
+                if mk:
+                    self._open_plot(trace, mk, kind)
+
+            blay.addWidget(self._build_click_rows_table(
+                rows,
+                ["Task", "Exec", "Exec CV", "Block", "Block CV",
+                 "Inter", "Inter CV", "Response", "Resp CV",
+                 "Dispatch", "Disp CV", "Wake", "Wake CV"],
+                lambda r: [
+                    r.get("task") or "",
+                    _format_time(int(r.get("exec_jitter_ns") or 0), scale),
+                    f"{float(r.get('exec_cv') or 0) * 100:.1f}%",
+                    _format_time(int(r.get("block_jitter_ns") or 0), scale),
+                    f"{float(r.get('block_cv') or 0) * 100:.1f}%",
+                    _format_time(int(r.get("inter_jitter_ns") or 0), scale),
+                    f"{float(r.get('inter_cv') or 0) * 100:.1f}%",
+                    _format_time(int(r.get("response_jitter_ns") or 0), scale),
+                    f"{float(r.get('response_cv') or 0) * 100:.1f}%",
+                    _format_time(int(r.get("dispatch_jitter_ns") or 0), scale),
+                    f"{float(r.get('dispatch_cv') or 0) * 100:.1f}%",
+                    _format_time(int(r.get("wakeup_jitter_ns") or 0), scale),
+                    f"{float(r.get('wakeup_cv') or 0) * 100:.1f}%",
+                ],
+                lambda r: r,
+                _fs, "No timing samples in this scope", "jitter", trace,
+                on_cell=_on_jitter_cell,
+                keys_fn=lambda r: [
+                    str(r.get("task") or "").lower(),
+                    int(r.get("exec_jitter_ns") or 0),
+                    float(r.get("exec_cv") or 0),
+                    int(r.get("block_jitter_ns") or 0),
+                    float(r.get("block_cv") or 0),
+                    int(r.get("inter_jitter_ns") or 0),
+                    float(r.get("inter_cv") or 0),
+                    int(r.get("response_jitter_ns") or 0),
+                    float(r.get("response_cv") or 0),
+                    int(r.get("dispatch_jitter_ns") or 0),
+                    float(r.get("dispatch_cv") or 0),
+                    int(r.get("wakeup_jitter_ns") or 0),
+                    float(r.get("wakeup_cv") or 0),
+                ],
+            ))
+
+        self._add_collapsible_section(
+            "jitter", f"Unified Jitter{scope}", _fs, _populate_jitter,
+        )
+
+        def _populate_distrib(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            disp = self._dispatch_sample_map(trace, lo, hi)
+            metric = QComboBox()
+            labels = {
+                "exec": "Execution", "block": "Blocking", "inter": "Inter-arrival",
+                "response": "Response", "dispatch": "Dispatch",
+                "wakeup": "Wake (stand-in)", "preempt": "Preemption",
+            }
+            for kind in DISTRIBUTION_KINDS:
+                metric.addItem(labels.get(kind, kind), kind)
+            task_box = QComboBox()
+            names = []
+            seen = set()
+            for r in unified_jitter(evs, disp):
+                mk = str(r.get("mk") or "")
+                if mk and mk not in seen:
+                    seen.add(mk)
+                    names.append((str(r.get("task") or mk), mk))
+            if not names:
+                task_box.addItem("(no tasks)", "")
+            else:
+                for lab, mk in names:
+                    task_box.addItem(lab, mk)
+            summary = self._lbl("Select a task to see n / p50 / p99 / sparkline.",
+                                color="#888888", ui_fs=_fs)
+            summary.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse)
+            hist = _HistogramWidget(
+                [], trace.time_scale, QColor("#5B9BD5"), self._is_dark,
+                value_as_time=True, show_variability=True)
+            hist.setMinimumHeight(200)
+            scale_box = QComboBox()
+            scale_box.addItems(["Auto", "Linear", "p5–p95", "Log duration"])
+
+            def _on_scale(index: int) -> None:
+                modes = ("auto", "linear", "percentile", "log")
+                hist.set_scale_mode(modes[index] if 0 <= index < 4 else "auto")
+
+            scale_box.currentIndexChanged.connect(_on_scale)
+
+            def _refresh_summary() -> None:
+                mk = str(task_box.currentData() or "")
+                kind = str(metric.currentData() or "exec")
+                samples = distribution_metric_samples(evs, kind, mk, disp) if mk else []
+                hist.set_values(samples)
+                open_btn.setEnabled(bool(mk))
+                self._distrib_has_task = bool(mk)
+                self._sync_distrib_query_ai_btn()
+                if not mk:
+                    summary.setText("Select a task to see n / p50 / p99 / sparkline.")
+                    return
+                model = distribution_explorer(evs, kind, mk, disp)
+                if not model:
+                    summary.setText("No samples for this metric × task in scope.")
+                    return
+                scale = trace.time_scale
+                summary.setText(
+                    f"n={model.get('n') or 0}  min={_format_time(int(model.get('min_ns') or 0), scale)}  "
+                    f"p50={_format_time(int(model.get('p50_ns') or 0), scale)}  "
+                    f"p99={_format_time(int(model.get('p99_ns') or 0), scale)}  "
+                    f"max={_format_time(int(model.get('max_ns') or 0), scale)}  "
+                    f"CV={float(model.get('cv') or 0) * 100:.1f}%  "
+                    f"{model.get('spark') or ''}"
+                )
+
+            def _open(_checked: bool = False) -> None:
+                mk = str(task_box.currentData() or "")
+                kind = str(metric.currentData() or "exec")
+                if not mk:
+                    return
+                model = distribution_explorer(evs, kind, mk, disp) or {}
+                plot_kind = str(model.get("plot_kind") or kind)
+                preemptor = None
+                if plot_kind == "preempt":
+                    ranks = preemptor_ranking(preemption_pairs(evs), 16)
+                    rec = next(
+                        (r for r in ranks if str(r.get("mk") or "") == mk),
+                        None,
+                    )
+                    tops = (rec or {}).get("top") or []
+                    if tops:
+                        preemptor = str(
+                            tops[0].get("task") or tops[0].get("mk") or "")
+                    if not preemptor:
+                        return
+                self._open_plot(trace, mk, plot_kind, preemptor=preemptor)
+
+            def _query_ai(_checked: bool = False) -> None:
+                mk = str(task_box.currentData() or "")
+                kind = str(metric.currentData() or "exec")
+                self._query_distrib_explorer_ai(mk, kind)
+
+            metric.currentIndexChanged.connect(lambda _i: _refresh_summary())
+            task_box.currentIndexChanged.connect(lambda _i: _refresh_summary())
+            open_btn = QPushButton("Open histogram")
+            open_btn.setSizePolicy(
+                QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            open_btn.clicked.connect(_open)
+            ai_btn = QPushButton("Query with AI…")
+            ai_btn.setSizePolicy(
+                QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            ai_btn.clicked.connect(_query_ai)
+            self._distrib_ai_btn = ai_btn
+            combo_pol = QSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+            metric.setSizePolicy(combo_pol)
+            task_box.setSizePolicy(combo_pol)
+            metric.setMinimumWidth(72)
+            task_box.setMinimumWidth(72)
+            sel = QHBoxLayout()
+            sel.setSpacing(6)
+            sel.addWidget(QLabel("Metric"))
+            sel.addWidget(metric, 1)
+            sel.addWidget(QLabel("Task"))
+            sel.addWidget(task_box, 1)
+            tools = QVBoxLayout()
+            tools.setSpacing(4)
+            tools.addLayout(sel)
+            hist_btns = QHBoxLayout()
+            hist_btns.setSpacing(6)
+            hist_btns.addWidget(open_btn, 0, Qt.AlignmentFlag.AlignLeft)
+            hist_btns.addWidget(ai_btn, 0, Qt.AlignmentFlag.AlignLeft)
+            hist_btns.addStretch(1)
+            tools.addLayout(hist_btns)
+            blay.addLayout(tools)
+            blay.addWidget(summary)
+            scale_row = QHBoxLayout()
+            scale_row.addWidget(QLabel("Histogram scale"))
+            scale_row.addWidget(scale_box)
+            scale_row.addStretch(1)
+            blay.addLayout(scale_row)
+            blay.addWidget(hist)
+            _refresh_summary()
+
+        self._add_collapsible_section(
+            "distrib", f"Distribution Explorer{scope}", _fs, _populate_distrib,
         )
 
         # -- Preemption Chain Analysis ----------------------------------------
@@ -46870,6 +53748,88 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             _populate_preempt,
         )
 
+        def _populate_preempt_matrix(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            pairs = preemption_pairs(evs)
+            ranks = preemptor_ranking(pairs, 16)
+            matrix = preemption_matrix(pairs, 12)
+            scale = trace.time_scale
+            blay.addWidget(self._build_click_rows_table(
+                ranks,
+                ["Victim", "Count", "Total", "Max", "Top preemptors", "Story"],
+                lambda r: [
+                    r.get("task") or "",
+                    r.get("count") or 0,
+                    _format_time(int(r.get("total_ns") or 0), scale),
+                    _format_time(int(r.get("max_ns") or 0), scale),
+                    r.get("top_label") or "",
+                    r.get("story") or "",
+                ],
+                lambda r: r.get("worst") or r,
+                _fs, "No preemption overlaps in this scope",
+                "preempt_matrix", trace,
+                keys_fn=lambda r: [
+                    str(r.get("task") or "").lower(),
+                    int(r.get("count") or 0),
+                    int(r.get("total_ns") or 0),
+                    int(r.get("max_ns") or 0),
+                    str(r.get("top_label") or "").lower(),
+                    str(r.get("story") or "").lower(),
+                ],
+            ))
+            tasks = matrix.get("tasks") or []
+            cells = matrix.get("cells") or {}
+            if tasks:
+                headers = ["Victim \\ Preemptor"] + [
+                    t.get("task") or t.get("mk") for t in tasks]
+                table = self._make_plain_stats_table(headers, _fs)
+                table.setRowCount(len(tasks))
+                bg = QBrush(self._stats_table_colors()[0])
+                link = QBrush(QColor("#88AAFF"))
+                for r, victim in enumerate(tasks):
+                    item = self._stats_sort_item(
+                        str(victim.get("task") or ""),
+                        str(victim.get("task") or "").lower(), bg)
+                    table.setItem(r, 0, item)
+                    for c, col in enumerate(tasks, start=1):
+                        rec = cells.get(f"{victim.get('mk')}|{col.get('mk')}") or {}
+                        ns = int(rec.get("ns") or 0)
+                        cell = self._stats_sort_item(
+                            _format_time(ns, scale) if ns and victim.get("mk") != col.get("mk") else "—",
+                            ns, bg)
+                        if ns and victim.get("mk") != col.get("mk"):
+                            cell.setForeground(link)
+                            cell.setData(Qt.ItemDataRole.UserRole, rec)
+                        table.setItem(r, c, cell)
+
+                def _pm_clicked(_row: int, col: int) -> None:
+                    if col <= 0:
+                        return
+                    item = table.item(_row, col)
+                    if item is None:
+                        return
+                    rec = item.data(Qt.ItemDataRole.UserRole)
+                    if isinstance(rec, dict) and rec.get("ns"):
+                        self._activate_ux_event(trace, {
+                            **rec,
+                            "mk": rec.get("victim") or "",
+                            "task": rec.get("victim") or "",
+                            "duration": rec.get("ns"),
+                            "section": "preempt_matrix",
+                        })
+
+                table.cellClicked.connect(_pm_clicked)
+                self._wire_stats_table_click_cursor(table)
+                self._wire_stats_table_row_hover(table)
+                table.resizeColumnsToContents()
+                table.setSortingEnabled(True)
+                self._wrap_table_with_resizer(blay, table, "preempt_matrix")
+
+        self._add_collapsible_section(
+            "preempt_matrix", f"Preemption Matrix{scope}", _fs,
+            _populate_preempt_matrix,
+        )
+
         # -- Priority inheritance ---------------------------------------------
         if trace.has_priority_instrumentation:
             empty_priority = ("No priority boosts in cursor range" if scope
@@ -46877,10 +53837,6 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
 
             def _populate_priority(blay: QVBoxLayout) -> None:
                 _priority_rows = _priority_stats_rows(trace, lo, hi)
-                blay.addWidget(self._lbl(
-                    "Orange/red bands on task rows mark boosted periods. "
-                    "L/M/H pattern = medium-priority task between base and peak.",
-                    color="#888888", ui_fs=_fs))
                 host = QWidget()
                 play = QVBoxLayout(host)
                 play.setContentsMargins(0, 0, 0, 0)
@@ -46959,11 +53915,6 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                     i for i in trace.sync_issues
                     if _sync_in_scope(i["time_ns"], lo, hi)
                 ]
-                blay.addWidget(self._lbl(
-                    "Pairs take/give STI events by object pointer (0x........). "
-                    "Flags orphan gives, unmatched takes, delete-while-held, "
-                    "and multi-mutex hold at trace end.",
-                    color="#888888", ui_fs=_fs))
                 host = QWidget()
                 play = QVBoxLayout(host)
                 play.setContentsMargins(0, 0, 0, 0)
@@ -47117,9 +54068,6 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
 
             def _populate_queue(blay: QVBoxLayout) -> None:
                 _queue_rows = _sync_object_stats_rows(trace, lo, hi, kind_filter="queue")
-                blay.addWidget(self._lbl(
-                    "Pairs send/recv STI events by queue pointer (0x........).",
-                    color="#888888", ui_fs=_fs))
                 if not _queue_rows:
                     blay.addWidget(self._lbl(empty_queue, color="#888888", ui_fs=_fs))
                     return
@@ -47176,6 +54124,90 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                 _fs,
                 _populate_queue,
             )
+
+        def _populate_wait_owner(blay: QVBoxLayout) -> None:
+            holds = harvest_mutex_holds(trace, lo, hi)
+            waits = pair_mutex_waits(holds)
+            matrix = waiter_owner_matrix(waits)
+            blay.addWidget(self._build_wait_owner_table(
+                matrix, _fs, "No mutex handoffs in this scope", trace))
+
+        self._add_collapsible_section(
+            "wait_owner",
+            f"Waiter × Owner{scope}",
+            _fs,
+            _populate_wait_owner,
+        )
+
+        def _populate_mutex_block(blay: QVBoxLayout) -> None:
+            waits = pair_mutex_waits(harvest_mutex_holds(trace, lo, hi))
+            rows = mutex_blocking_table(waits)
+            scale = trace.time_scale
+            blay.addWidget(self._build_click_rows_table(
+                rows,
+                ["Task", "Object", "Owner", "Count", "Total", "Max"],
+                lambda r: [
+                    r.get("task") or "",
+                    r.get("object") or "",
+                    r.get("owner") or "",
+                    r.get("count") or 0,
+                    _format_time(int(r.get("total_ns") or 0), scale),
+                    _format_time(int(r.get("max_ns") or 0), scale),
+                ],
+                lambda r: {
+                    **(r.get("worst") or r),
+                    "mk": (r.get("worst") or {}).get("waiter_mk") or r.get("mk"),
+                    "task": (r.get("worst") or {}).get("waiter") or r.get("task"),
+                    "duration": (r.get("worst") or {}).get("duration") or r.get("max_ns"),
+                    "section": "mutex_block",
+                },
+                _fs, "No mutex waits in this scope", "mutex_block", trace,
+                keys_fn=lambda r: [
+                    str(r.get("task") or "").lower(),
+                    str(r.get("object") or "").lower(),
+                    str(r.get("owner") or "").lower(),
+                    int(r.get("count") or 0),
+                    int(r.get("total_ns") or 0),
+                    int(r.get("max_ns") or 0),
+                ],
+            ))
+            blockers = top_blocking_contributors(
+                self._ux_events(trace, lo, hi), waits, 12)
+            if blockers:
+                blay.addWidget(self._lbl(
+                    "Top blocking contributors across mutex waits, preemption "
+                    "overlap, and leftover idle gaps.",
+                    color="#888888", ui_fs=_fs))
+                blay.addWidget(self._build_click_rows_table(
+                    blockers,
+                    ["Task", "Mutex", "Preempt", "Idle", "Total"],
+                    lambda r: [
+                        r.get("task") or "",
+                        _format_time(int(r.get("mutex_ns") or 0), scale),
+                        _format_time(int(r.get("preempt_ns") or 0), scale),
+                        _format_time(int(r.get("idle_ns") or 0), scale),
+                        _format_time(int(r.get("total_ns") or 0), scale),
+                    ],
+                    lambda r: {
+                        **(r.get("worst") or r),
+                        "mk": r.get("mk"),
+                        "task": r.get("task"),
+                        "section": "mutex_block",
+                    },
+                    _fs, "No blocking contributors in this scope",
+                    "mutex_block", trace,
+                    keys_fn=lambda r: [
+                        str(r.get("task") or "").lower(),
+                        int(r.get("mutex_ns") or 0),
+                        int(r.get("preempt_ns") or 0),
+                        int(r.get("idle_ns") or 0),
+                        int(r.get("total_ns") or 0),
+                    ],
+                ))
+
+        self._add_collapsible_section(
+            "mutex_block", f"Mutex Blocking{scope}", _fs, _populate_mutex_block,
+        )
 
         # -- Task Lifecycle -------------------------------------------------
         empty_lifecycle = ("No task lifecycle events in cursor range" if scope
@@ -47318,6 +54350,81 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             _populate_affinity,
         )
 
+        def _populate_task_core(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            if lo is not None and hi is not None:
+                span = max(1, hi - lo)
+            else:
+                span = max(1, trace.time_max - trace.time_min)
+            matrix = task_core_matrix(evs, list(trace.core_names or []), span)
+            blay.addWidget(self._build_task_core_table(
+                matrix, _fs, "No on-CPU slices in this scope", trace))
+
+        self._add_collapsible_section(
+            "task_core",
+            f"Task × Core{scope}",
+            _fs,
+            _populate_task_core,
+        )
+
+        def _populate_core_time(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            grid = core_util_over_time(
+                evs, list(trace.core_names or []), lo, hi)
+            cores = grid.get("cores") or []
+            bins = grid.get("bins") or []
+            scale = trace.time_scale
+            if not bins:
+                blay.addWidget(self._lbl(
+                    "No on-CPU slices in this scope", color="#888888", ui_fs=_fs))
+                return
+            headers = ["Time"] + cores
+            table = self._make_plain_stats_table(headers, _fs)
+            table.setRowCount(len(bins))
+            bg = QBrush(self._stats_table_colors()[0])
+            link = QBrush(QColor("#88AAFF"))
+            for r, row in enumerate(bins):
+                item = self._stats_sort_item(
+                    _format_time(int(row.get("start") or 0), scale),
+                    int(row.get("start") or 0), bg)
+                item.setForeground(link)
+                item.setData(Qt.ItemDataRole.UserRole, row)
+                table.setItem(r, 0, item)
+                cells = row.get("cells") or {}
+                for c, core in enumerate(cores, start=1):
+                    rec = cells.get(core) or {}
+                    pct = float(rec.get("pct") or 0)
+                    cell = self._stats_sort_item(f"{pct:.1f}%", pct, bg)
+                    table.setItem(r, c, cell)
+
+            def _ct_clicked(row: int, _col: int) -> None:
+                item = table.item(row, 0)
+                if item is None:
+                    return
+                rec = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(rec, dict):
+                    start = int(rec.get("start") or 0)
+                    stop = int(rec.get("stop") or start + 1)
+                    self._activate_ux_event(trace, {
+                        **rec,
+                        "task": rec.get("peak_core") or "CPU",
+                        "mk": rec.get("peak_core") or "",
+                        "duration": max(1, stop - start),
+                        "section": "core_time",
+                    })
+
+            table.cellClicked.connect(_ct_clicked)
+            self._wire_stats_table_click_cursor(table)
+            self._wire_stats_table_row_hover(table)
+            table.resizeColumnsToContents()
+            table.setSortingEnabled(True)
+            self._wrap_table_with_resizer(blay, table, "core_time")
+
+        self._add_collapsible_section(
+            "core_time", f"Core Utilization Over Time{scope}", _fs,
+            _populate_core_time,
+        )
+
         # -- Deadlines / CPU budget ------------------------------------------
         def _populate_deadline(blay: QVBoxLayout) -> None:
             has_config = self._cpu_budget_pct > 0 or bool(self._task_deadlines_ns)
@@ -47436,6 +54543,34 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             f"Deadlines / CPU budget{scope}",
             _fs,
             _populate_deadline,
+        )
+
+        def _populate_task_health(blay: QVBoxLayout) -> None:
+            evs = self._ux_events(trace, lo, hi)
+            if lo is not None and hi is not None:
+                span = max(1, hi - lo)
+            else:
+                span = max(1, trace.time_max - trace.time_min)
+            dead = []
+            if self._cpu_budget_pct > 0 or self._task_deadlines_ns:
+                viols = _deadline_violations(
+                    trace, self._cpu_budget_pct, self._task_deadlines_ns, lo, hi)
+                for item in (viols.get("slice_violations") or []):
+                    if len(item) > 4:
+                        dead.append(item[4])
+                for item in (viols.get("cpu_violations") or []):
+                    if len(item) > 3:
+                        dead.append(item[3])
+            inputs = health_inputs_from_events(evs, span, dead)
+            rows = task_health_scores(inputs)
+            blay.addWidget(self._build_task_health_table(
+                rows, _fs, "No task slices in this scope", trace))
+
+        self._add_collapsible_section(
+            "task_health",
+            f"Task Health{scope}",
+            _fs,
+            _populate_task_health,
         )
 
         # -- Interval Analysis ------------------------------------------------
@@ -47679,6 +54814,7 @@ class _RcSettings:
                 "auto_apply": "false",
                 "mcp_log": "false",
                 "extra_presets": "[]",
+                "split_bottom": "80",
             },
             **{
                 f"{_pid}_{_field}": ""
@@ -47834,6 +54970,15 @@ class _RcSettings:
                 removed = True
         if removed:
             self._dirty = True
+
+    def clear_section(self, section: str, *, flush: bool = True) -> None:
+        """Drop every key in *section* (Reset to Defaults)."""
+        if not self._cfg.has_section(section):
+            return
+        self._cfg.remove_section(section)
+        self._dirty = True
+        if flush:
+            self._flush()
 
 # ---------------------------------------------------------------------------
 # About Dialog
@@ -48211,6 +55356,7 @@ class _SettingsDialog(QDialog):
                  ai_trace_sensitive: bool = False,
                  initial_page: str = "Appearance"):
         super().__init__(parent, Qt.WindowType.Dialog)
+        self.reset_requested = False
         self.setWindowTitle("Settings")
         self.setModal(True)
         self.setMinimumSize(640, 400)
@@ -48789,7 +55935,9 @@ class _SettingsDialog(QDialog):
         btn_reset.setObjectName("btn_cancel")
         btn_reset.setMinimumWidth(_btn_w)
         btn_reset.setFixedHeight(_btn_h)
-        btn_reset.setToolTip("Restore all settings on this page to their built-in defaults")
+        btn_reset.setToolTip(
+            "Restore built-in defaults, including Statistics pins, order, "
+            "and expand/collapse. OK writes them to btf_viewer.rc.")
         btn_reset.clicked.connect(self._reset_to_defaults)
         footer.addWidget(btn_reset)
 
@@ -49280,6 +56428,7 @@ class _SettingsDialog(QDialog):
 
     def _reset_to_defaults(self) -> None:
         """Restore every control to its module-level default value."""
+        self.reset_requested = True
         self._theme_combo.setCurrentIndex(0)           # Dark
         self._colorblind_cb.setChecked(False)
         self._font_spin.setValue(FONT_SIZE)
@@ -50733,6 +57882,7 @@ class StatsTabModel:
     scope_to_cursors: bool = True
     export_scope_override: Optional[Tuple[int, int]] = None
     section_collapsed: Dict[str, bool] = field(default_factory=dict)
+    defer_heavy_collapse_done: bool = False
     section_table_heights: Dict[str, int] = field(default_factory=dict)
     util_label_col_w: int = 0
 
@@ -54331,6 +61481,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         view.ask_ai_event_requested.connect(self._on_ask_ai_event)
         view.clear_bookmarks_requested.connect(self._clear_all_bookmarks)
         view.clear_annotations_requested.connect(self._clear_all_annotations)
+        view.clear_all_marks_requested.connect(self._clear_all_marks)
         view.pre_change.connect(self._push_undo_snapshot)
         view.horizontalScrollBar().valueChanged.connect(
             lambda _val, v=view: self._on_view_scrolled(v))
@@ -54663,6 +61814,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         view.set_show_sti(self._show_sti)
         view.set_show_grid(self._show_grid)
         view.set_view_mode(self._view_mode if hasattr(self, "_view_mode") else "task")
+        if hasattr(view, "set_ai_enabled"):
+            view.set_ai_enabled(self._ai_feature_enabled())
 
     def _sync_cpu_load_graph(self, tab: _TraceTab) -> None:
         """Align one tab's CPU load graph with global view mode and timeline state."""
@@ -55581,6 +62734,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 s.get("stats", "pinned_sections", ""), emit=False)
             self._stats_panel.set_section_order(
                 s.get("stats", "section_order", ""), emit=False)
+            self._stats_panel.set_section_collapsed_map(
+                s.get("stats", "section_collapsed", ""), emit=False)
 
         # Dock layout: sizes from dock_metrics; visibility from [view] show_* keys.
         # Qt saveState/restoreState embeds dock visibility and fights show_legend,
@@ -55755,6 +62910,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 s.set(
                     "stats", "section_order",
                     stats_section_order_to_rc(self._stats_panel.section_order()),
+                    flush=False,
+                )
+                s.set(
+                    "stats", "section_collapsed",
+                    section_collapsed_to_rc(self._stats_panel._section_collapsed),
                     flush=False,
                 )
 
@@ -56682,6 +63842,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             on_open_settings=lambda: self._open_settings("AI"),
             on_save_settings=self._ai_save_settings_patch,
             on_jump=self._ai_jump_time_unit,
+            on_range=self._ai_zoom_range_unit,
             on_highlight=self._ai_highlight_task,
             on_execute_tools=self._ai_execute_tools,
             on_undo_tools=self._ai_undo_tools,
@@ -56755,6 +63916,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._close_chord_dialog()
         if hasattr(self, "_tb_analysis_btn"):
             self._tb_analysis_btn.setEnabled(False)
+        self._sync_trace_compare_btn()
 
     def _on_close_all_tabs_action(self) -> None:
         for _ in range(len(self._tabs)):
@@ -56806,14 +63968,30 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel.task_clicked.connect(self._on_legend_task_clicked)
         self._stats_panel.segment_jump.connect(self._on_segment_jump)
         self._stats_panel.plot_point_clicked.connect(self._on_stats_plot_point_clicked)
+        self._stats_panel.explore_range_requested.connect(self._on_explore_range)
         self._stats_panel.core_clicked.connect(self._on_stats_core_clicked)
         self._stats_panel.open_pair_heatmap.connect(self._on_open_pair_heatmap)
         self._stats_panel.open_pair_chord.connect(self._on_open_pair_chord)
         self._stats_panel.open_settings_requested.connect(self._open_settings)
         self._stats_panel.section_pins_changed.connect(self._on_section_pins_changed)
         self._stats_panel.section_order_changed.connect(self._on_section_order_changed)
-        self._stats_panel._btn_compare_mig.clicked.connect(self._open_trace_compare)
+        self._stats_panel.section_collapsed_changed.connect(
+            self._on_section_collapsed_changed)
+        self._stats_panel.query_ai_requested.connect(self._on_stats_query_ai)
+        self._stats_panel.set_ai_enabled(self._ai_feature_enabled())
         self.setAcceptDrops(True)
+
+    def _on_stats_query_ai(self, template_id: str, extra: str = "") -> None:
+        if not self._ai_feature_enabled():
+            self._open_settings("AI")
+            return
+        self._focus_ai_panel()
+        panel = getattr(self, "_ai_panel", None)
+        if panel is not None and hasattr(panel, "query_template"):
+            QTimer.singleShot(
+                0,
+                lambda t=template_id, ex=extra: panel.query_template(t, extra=ex),
+            )
 
     def _on_section_pins_changed(self, _pins: list) -> None:
         """Persist pinned statistics sections to btf_viewer.rc immediately."""
@@ -56836,6 +64014,19 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._settings.set(
                 "stats", "section_order",
                 stats_section_order_to_rc(self._stats_panel.section_order()),
+                flush=True,
+            )
+        except Exception:
+            pass
+
+    def _on_section_collapsed_changed(self, _flags: dict) -> None:
+        """Persist statistics section collapse map to btf_viewer.rc immediately."""
+        if self._restoring_settings or self._shutting_down:
+            return
+        try:
+            self._settings.set(
+                "stats", "section_collapsed",
+                section_collapsed_to_rc(self._stats_panel._section_collapsed),
                 flush=True,
             )
         except Exception:
@@ -57090,6 +64281,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _aw = tb.widgetForAction(self._tb_analysis_btn)
         if _aw:
             _aw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._tb_compare_btn = _ia(
+            "Compare", self._open_trace_compare, _IC_COMPARE,
+            "Trace Compare — summary, top tasks, and core migrations "
+            "between two open trace tabs")
+        self._tb_compare_btn.setEnabled(False)
+        _cw = tb.widgetForAction(self._tb_compare_btn)
+        if _cw:
+            _cw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         tb.addSeparator()
 
         # --- STI waveform scale toggle ---
@@ -57528,6 +64727,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             enabled_feat = self._ai_feature_enabled()
             self._act_show_ai.setVisible(enabled_feat)
             self._act_show_ai.setEnabled(enabled_feat)
+        panel = getattr(self, "_stats_panel", None)
+        if panel is not None and hasattr(panel, "set_ai_enabled"):
+            panel.set_ai_enabled(self._ai_feature_enabled())
+        on = self._ai_feature_enabled()
+        for view in self._iter_tab_views():
+            if hasattr(view, "set_ai_enabled"):
+                view.set_ai_enabled(on)
 
     # Keys the pre-preset schema used that no longer exist. ``openai_*`` is not
     # listed: those names now belong to the OpenAI preset, and
@@ -57538,7 +64744,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _ai_setting_keys(cls, extra_ids=()) -> list:
         keys = ["enabled", "preset", "response_language", "auto_apply", "mcp_log",
                 "user_investigation_templates", "user_historical_knowledge",
-                "redact_task_names", "trace_sensitive", "extra_presets"]
+                "redact_task_names", "trace_sensitive", "extra_presets",
+                "split_bottom"]
         pids = [pid for pid, _label, _base, _model in AI_PRESETS]
         for pid in extra_ids:
             if pid and pid not in pids:
@@ -57645,7 +64852,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         lo_b, hi_b = _cursor_range_for_tab(self, idx_b)
         if not scope_enabled:
             lo_a = hi_a = lo_b = hi_b = None
-        tables = _build_trace_compare_rows(tr_a, tr_b, lo_a, hi_a, lo_b, hi_b)
+        panel = getattr(self, "_stats_panel", None)
+        deadlines = dict(getattr(panel, "_task_deadlines_ns", None) or {})
+        tables = _build_trace_compare_rows(
+            tr_a, tr_b, lo_a, hi_a, lo_b, hi_b, deadlines=deadlines)
         try:
             self._remember_trace_compare(
                 tr_a, tr_b, lo_a, hi_a, lo_b, hi_b, name_a, name_b,
@@ -57698,6 +64908,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if int(ann.ns) == ns and ann.note == note:
                 return
         self._add_annotation_with_note(ns, note, show_marks_panel=False)
+
+    def _ai_zoom_range_unit(self, lo: float, hi: float) -> None:
+        """Zoom and place C1–C2 on a ``range:LO/HI`` evidence link."""
+        self._on_explore_range({
+            "lo": int(min(lo, hi)),
+            "hi": int(max(lo, hi)),
+            "note": f"AI range:{int(lo)}/{int(hi)}",
+            "ns": int(min(lo, hi)),
+        })
 
     def _ai_task_candidates(self) -> list:
         tr = self._trace
@@ -58923,6 +66142,150 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 conclusion=str(args.get("conclusion") or ""),
                 confidence=str(args.get("confidence") or ""),
             )
+        if name == AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY:
+            return analyze_temporal_causality_tool(
+                findings, task=str(args.get("task") or ""))
+        if name == AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH:
+            lo = hi = None
+            view = getattr(self, "_view", None)
+            times = []
+            if view is not None and hasattr(view, "_scene"):
+                times = list(view._scene.cursor_times() or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+            ctx = dependency_trace_context(self._trace, lo, hi)
+            return build_task_dependency_graph_tool(
+                findings,
+                task=str(args.get("task") or ""),
+                sync_holds=ctx.get("sync_holds") or [],
+                preemptions=ctx.get("preemptions") or [],
+                migrations=ctx.get("migrations") or [],
+                priority_episodes=ctx.get("priority_episodes") or [],
+            )
+        if name == AI_TOOL_DECOMPOSE_RESPONSE_TIME:
+            return decompose_response_time_tool(
+                findings, task=str(args.get("task") or ""))
+        if name == AI_TOOL_RANK_ROOT_CAUSES:
+            hyps = args.get("hypotheses") if isinstance(
+                args.get("hypotheses"), list) else []
+            return rank_root_causes_tool(findings, hypotheses=hyps)
+        if name == AI_TOOL_VERIFY_CLAIM:
+            lo = hi = None
+            view = getattr(self, "_view", None)
+            times = []
+            if view is not None and hasattr(view, "_scene"):
+                times = list(view._scene.cursor_times() or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+            return verify_claim_tool(
+                str(args.get("claim") or ""),
+                claim_type=str(args.get("claim_type") or "causal"),
+                subject=str(args.get("subject") or ""),
+                object=str(args.get("object") or ""),
+                evidence=args.get("evidence") or [],
+                findings=findings,
+                cursor_lo=lo,
+                cursor_hi=hi,
+            )
+        if name == AI_TOOL_CHALLENGE_CONCLUSION:
+            return challenge_conclusion_tool(
+                str(args.get("conclusion") or ""), findings=findings)
+        if name == AI_TOOL_INVESTIGATION_MEMORY:
+            from .ai_causal import set_investigation_memory, investigation_memory_store
+            raw = self._settings.get("ai", "investigation_memory", "")
+            hist = []
+            if raw:
+                try:
+                    hist = json.loads(raw)
+                except (TypeError, ValueError):
+                    hist = []
+            if isinstance(hist, list):
+                set_investigation_memory(hist)
+            payload = investigation_memory_tool(
+                str(args.get("action") or "recall"),
+                record=args.get("record") if isinstance(
+                    args.get("record"), dict) else None,
+                findings=findings,
+                limit=int(args.get("limit") or 5),
+            )
+            try:
+                self._settings.set(
+                    "ai", "investigation_memory",
+                    json.dumps(investigation_memory_store(), ensure_ascii=True),
+                    flush=False,
+                )
+            except Exception:
+                pass
+            return payload
+        if name == AI_TOOL_CLUSTER_INCIDENTS:
+            return cluster_incidents_tool(
+                findings, window_ns=float(args.get("window_ns") or 1e6))
+        if name == AI_TOOL_CLOSE_INVESTIGATION:
+            return close_investigation_tool(
+                str(args.get("conclusion") or ""),
+                findings=findings,
+                confidence=str(args.get("confidence") or ""),
+            )
+        if name == AI_TOOL_ANALYZE_DISTRIBUTION:
+            lo = hi = None
+            view = getattr(self, "_view", None)
+            times = []
+            if view is not None and hasattr(view, "_scene"):
+                times = list(view._scene.cursor_times() or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+            values = list(args.get("values") or [])
+            metric = str(args.get("metric") or "")
+            task = str(args.get("task") or "")
+            source = ""
+            truncated = False
+            if not values:
+                ctx = distribution_trace_context(
+                    self._trace, task, metric, lo, hi)
+                harvested = list(ctx.get("values") or [])
+                if harvested:
+                    values = harvested
+                    metric = str(ctx.get("metric") or metric)
+                    source = "btf"
+                    truncated = bool(ctx.get("truncated"))
+                    if not task:
+                        task = str(ctx.get("task") or "")
+            return analyze_distribution_tool(
+                values,
+                findings=findings,
+                metric=metric,
+                source=source,
+                task=task,
+                truncated=truncated,
+            )
+        if name == AI_TOOL_ANALYZE_PERIODICITY:
+            lo = hi = None
+            view = getattr(self, "_view", None)
+            times = []
+            if view is not None and hasattr(view, "_scene"):
+                times = list(view._scene.cursor_times() or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+            ctx = periodicity_trace_context(
+                self._trace, str(args.get("task") or ""))
+            return analyze_periodicity_tool(
+                args.get("times") or [],
+                findings=findings,
+                expected=args.get("expected"),
+                source=str(args.get("source") or "auto"),
+                durations=args.get("durations") or [],
+                tick_times=ctx.get("tick_times") or [],
+                sti_events=ctx.get("sti_events") or [],
+                release_times=ctx.get("release_times") or [],
+                lo=lo,
+                hi=hi,
+            )
+        if name == AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT:
+            return summarize_investigation_context_tool(
+                findings,
+                tools_run=args.get("tools_run") or [],
+                conclusion=str(args.get("conclusion") or ""),
+            )
         raise RuntimeError(f"unknown tool {name}")
 
     def _ai_load_baseline_profile(self) -> Dict[str, Any]:
@@ -59221,6 +66584,22 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         else:
             self._cmd_undo()
 
+    def _apply_finding_scope(self, finding: dict) -> None:
+        """Place C1–C2 on the recommended window for a selected Analysis finding."""
+        if self._trace is None or not isinstance(finding, dict):
+            return
+        lo = hi = None
+        panel = getattr(self, "_stats_panel", None)
+        if panel is not None and getattr(panel, "_scope_to_cursors", False):
+            times = list(getattr(panel, "_cursor_times", None) or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+        evs = harvest_ux_events(self._trace, lo, hi)
+        scope = best_finding_scope(
+            finding, evs, self._trace.time_min, self._trace.time_max)
+        if scope:
+            self._on_explore_range(scope)
+
     def _open_analysis_findings(self) -> None:
         """Show Analysis Findings dialog for the active tab / cursor scope."""
         if self._trace is None or self._stats_panel is None:
@@ -59235,10 +66614,21 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             except RuntimeError:
                 self._analysis_findings_dlg = None
         findings, scope_title = self._stats_panel.build_analysis_findings()
+        lo = hi = None
+        panel = self._stats_panel
+        if getattr(panel, "_scope_to_cursors", False):
+            times = list(getattr(panel, "_cursor_times", None) or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+        evs = harvest_ux_events(self._trace, lo, hi)
         dlg = _AnalysisFindingsDialog(
             findings, scope_title, parent=self,
             ai_enabled=self._ai_feature_enabled(),
             ui_font_size=getattr(self, "_ui_font_size_val", UI_FONT_SIZE),
+            on_apply_scope=self._apply_finding_scope,
+            ux_events=evs,
+            time_min=self._trace.time_min,
+            time_max=self._trace.time_max,
         )
         self._analysis_findings_dlg = dlg
         dlg.exec()
@@ -59673,11 +67063,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             else:
                 self._autofit_cpu_load_height()
 
+    def _sync_trace_compare_btn(self) -> None:
+        """Enable toolbar Compare when two or more traces are loaded."""
+        if hasattr(self, "_tb_compare_btn"):
+            self._tb_compare_btn.setEnabled(len(getattr(self, "_tabs", ())) >= 2)
+
     def _sync_toolbar_to_active_tab(self) -> None:
         """Refresh toolbar toggles that reflect per-tab view state."""
         self._sync_heatmap_toolbar()
         if hasattr(self, "_tb_analysis_btn"):
             self._tb_analysis_btn.setEnabled(self._trace is not None)
+        self._sync_trace_compare_btn()
         if hasattr(self, "_tb_cpu_load_btn"):
             self._tb_cpu_load_btn.blockSignals(True)
             self._tb_cpu_load_btn.setChecked(self._show_cpu_load)
@@ -60005,6 +67401,49 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         sc.set_core_expanded(core, True)
         self._cpu_load_graph.set_core_expanded(core, True)
 
+    def _on_explore_range(self, spec) -> None:
+        """Zoom, place C1–C2, highlight, and scroll the matching Statistics section."""
+        if self._trace is None or not isinstance(spec, dict):
+            return
+        try:
+            lo = int(spec.get("lo"))
+            hi = int(spec.get("hi"))
+        except (TypeError, ValueError):
+            return
+        if hi <= lo:
+            hi = lo + 1
+        view = getattr(self, "_view", None)
+        if view is None:
+            return
+        max_c = max(2, int(getattr(self, "_max_cursors_val", 4) or 4))
+        view.begin_programmatic_viewport()
+        try:
+            view._scene.clear_cursors()
+            view._scene.add_cursor(lo)
+            view._scene.add_cursor(hi)
+            view.cursors_changed.emit(view._scene.cursor_times())
+        finally:
+            view.end_programmatic_viewport()
+        if hasattr(self, "_stats_panel"):
+            self._stats_panel._scope_to_cursors = True
+            if getattr(self._stats_panel, "_scope_cb", None) is not None:
+                self._stats_panel._scope_cb.setChecked(True)
+            self._stats_panel.set_cursor_times(
+                view._scene.cursor_times(), refresh_stats=True)
+        self._ai_zoom_to_range(lo, hi)
+        mk = str(spec.get("mk") or "")
+        if mk:
+            self._ai_highlight_task(mk)
+        ns = spec.get("ns")
+        if ns is not None:
+            try:
+                self._view.scroll_to_ns(int(ns))
+            except (TypeError, ValueError):
+                pass
+        section = str(spec.get("section") or "")
+        if section and hasattr(self, "_stats_panel"):
+            self._stats_panel.scroll_to_section(section)
+
     def _on_stats_plot_point_clicked(self, payload, mark_ns: int, note: str) -> None:
         """Metrics plot / table click: jump/highlight and add an annotation with *note*."""
         if self._trace is None:
@@ -60179,6 +67618,26 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._annotations.clear()
         self._rebuild_annotation_list()
         self._save_current_trace_state()
+
+    def _clear_all_marks(self) -> None:
+        """Clear cursors, bookmarks, and annotations in one undo step."""
+        has_cursors = bool(self._view._scene.cursor_times())
+        has_bm = bool(self._bookmarks)
+        has_an = bool(self._annotations)
+        if not (has_cursors or has_bm or has_an):
+            return
+        self._push_undo_snapshot()
+        if has_cursors:
+            self._view._scene.clear_cursors()
+            self._view.cursors_changed.emit([])
+        if has_bm:
+            self._bookmarks.clear()
+            self._rebuild_bookmark_list()
+        if has_an:
+            self._annotations.clear()
+            self._rebuild_annotation_list()
+        if has_bm or has_an:
+            self._save_current_trace_state()
 
     def _jump_selected_annotation(self) -> None:
         item = self._annotation_list.currentItem()
@@ -60901,6 +68360,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._settings.set_many("view", updates)
             self._report_settings_io_failure(prefix="Settings save warning")
 
+    def _reset_stats_layout_to_defaults(self) -> None:
+        """Clear Statistics pins, order, collapse, and table heights in .rc."""
+        panel = getattr(self, "_stats_panel", None)
+        if panel is not None:
+            panel.set_section_pins([], emit=False)
+            panel.set_section_order("", emit=False)
+            panel.set_section_collapsed_map(default_section_collapsed(), emit=False)
+            panel.apply_section_table_heights(default_section_table_heights())
+        try:
+            self._settings.clear_section("stats", flush=True)
+        except Exception:
+            pass
+        self._report_settings_io_failure(prefix="Settings save warning")
+
     @_dialog_guard
     def _open_settings(self, page: str = "Appearance") -> None:
         """Open the Settings dialog with live preview; reverts on Cancel.
@@ -61024,6 +68497,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         )
         if _exec_centred(dlg, self) == QDialog.Accepted:
             self._persist_settings_after_dlg(_snap)
+            if dlg.reset_requested:
+                self._reset_stats_layout_to_defaults()
             _new_budget = dlg.cpu_budget_pct
             _new_dl_text = dlg.task_deadlines_text
             if (_snap["cpu_budget_pct"] != _new_budget
@@ -61610,6 +69085,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "pinnedHighlightKey": sc._locked_task,
             "scopeToCursors": bool(getattr(self._stats_panel, "_scope_to_cursors", True)),
             "openPlot": plot_payload,
+            "statsSectionCollapsed": dict(self._stats_panel._section_collapsed),
             "compareScopeToCursors": True,
         }
 
@@ -61758,6 +69234,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 plot.get("preemptor"),
                 plot.get("intervalId"),
             )
+
+        collapsed = data.get("statsSectionCollapsed")
+        if collapsed is not None:
+            self._stats_panel.set_section_collapsed_map(collapsed, emit=True)
 
         if tab := self._active_tab:
             self._stash_tab_state(tab)
@@ -62937,7 +70417,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     )
     snapshot.add_argument(
         "--metric",
-        choices=("tick", "exec", "block", "inter", "priority", "preempt", "interval", "tag",
+        choices=("tick", "exec", "block", "inter", "response", "priority", "preempt", "interval", "tag",
                 "tag_interval", "mig_dwell", "mig_rate", "mig_gap", "pair_gap", "pair_rate",
                 "dispatch", "switch_overhead", "concurrency"),
         default=None,
@@ -63928,7 +71408,7 @@ def _cli_snapshot_plot(trace: "BtfTrace",
         scope_detail=detail,
         y_as_time=y_as_time,
         show_variability=metric in (
-            "exec", "block", "inter", "dispatch", "switch_overhead"),
+            "exec", "block", "inter", "response", "dispatch", "switch_overhead"),
         parent=None,
     )
     if args.width or args.height:

@@ -29,7 +29,9 @@ class StatsPinsTest(unittest.TestCase):
 
     def test_catalogue_includes_common_sections(self) -> None:
         for sid in ("cores", "tasks", "tags", "migrations",
-                    "period", "task_core", "wait_owner", "task_health"):
+                    "period", "task_core", "wait_owner", "task_health",
+                    "response", "crit_path", "jitter", "distrib", "patterns",
+                    "preempt_matrix", "mutex_block", "core_time"):
             self.assertIn(sid, STATS_PINNABLE_SECTIONS)
 
 

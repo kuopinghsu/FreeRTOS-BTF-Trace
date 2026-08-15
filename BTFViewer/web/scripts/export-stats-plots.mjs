@@ -167,6 +167,7 @@ function buildScatterModel(plot, timeScale) {
     referenceLines: summary
       ? [
           { label: 'avg', y: scaleY(summary.avg), color: '#CE93D8' },
+          { label: 'p5', y: scaleY(summary.p5), color: '#29B6F6' },
           { label: 'p50', y: scaleY(summary.p50), color: '#4CAF50' },
           { label: 'p95', y: scaleY(summary.p95), color: '#FF9800' },
         ]

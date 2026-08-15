@@ -3,9 +3,11 @@ import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import {
   loadAiBaselineProfile,
+  loadAiSplitBottom,
   loadAiUserInvestigationTemplates,
   normalizeSettings,
   saveAiBaselineProfile,
+  saveAiSplitBottom,
   saveAiUserInvestigationTemplates,
 } from '../src/utils/settingsStore.js'
 
@@ -151,6 +153,32 @@ describe('AI settings storage', () => {
       assert.equal(globalThis.localStorage.getItem('btf-viewer-settings-v1'), null)
       assert.ok(globalThis.localStorage.getItem('btf-viewer-ai-user-templates-v1'))
     })
+  })
+
+  it('persists the AI composer split height under its own localStorage key', () => {
+    withMemoryLocalStorage(() => {
+      assert.equal(loadAiSplitBottom(), 80)
+      saveAiSplitBottom(40)
+      assert.equal(loadAiSplitBottom(), 64)
+      saveAiSplitBottom(160)
+      assert.equal(loadAiSplitBottom(), 160)
+      assert.equal(globalThis.localStorage.getItem('btf-viewer-settings-v1'), null)
+      assert.equal(globalThis.localStorage.getItem('btf-viewer-ai-split-bottom-v1'), '160')
+    })
+  })
+
+  it('Reset to Defaults restores statistics layout into saved settings', () => {
+    const src = readFileSync(new URL('../src/components/SettingsDialog.vue', import.meta.url), 'utf8')
+    assert.match(src, /resetLayout = true/)
+    assert.match(src, /normalizeSettings\(null\)/)
+    assert.match(src, /statsSectionCollapsed = defaultSectionCollapsed\(\)/)
+    const app = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
+    assert.match(app, /meta\.resetLayout \|\| next\?\.resetLayout/)
+    assert.match(app, /statsSectionHeights\.value = \{\}/)
+    assert.match(app, /appSettings\.statsSectionCollapsed = defaultSectionCollapsed\(\)/)
+    const panel = readFileSync(new URL('../src/components/StatisticsPanel.vue', import.meta.url), 'utf8')
+    assert.match(panel, /mergeSectionCollapsed\(state\)/)
+    assert.match(panel, /deep: true, immediate: true/)
   })
 
   it('AI settings expose authentication method and sign-in', () => {

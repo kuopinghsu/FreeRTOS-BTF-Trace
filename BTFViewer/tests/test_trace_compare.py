@@ -112,6 +112,7 @@ class TraceCompareTests(unittest.TestCase):
         expected = {
             "summary", "top", "core_util", "migrations", "execution",
             "blocking", "inter_arrival", "preemption", "sync",
+            "response", "mutex_block", "shared_patterns",
         }
         self.assertEqual(set(tables.keys()), expected)
         self.assertTrue(tables["core_util"])
@@ -127,7 +128,7 @@ class TraceCompareTests(unittest.TestCase):
         self.assertIn('fill="#1C3A6E"', html)
         for section in (
             "Core Utilisation", "Execution Time", "Blocking Time",
-            "Inter-Arrival", "Sync Objects",
+            "Inter-Arrival", "Sync Objects", "Response P99", "Mutex Blocking",
         ):
             self.assertIn(section, csv)
             self.assertIn(section, html)
@@ -152,6 +153,26 @@ class TraceCompareTests(unittest.TestCase):
         lb = next(r for r in tables["summary"] if r[0] == "Load Balance Score")
         self.assertEqual(lb[1], "—")
         self.assertEqual(lb[2], "—")
+
+    def test_deadline_misses_use_settings_map(self):
+        tr_a = _mini_trace({
+            "Worker[1]": [(0, 100, "Core_0"), (200, 400, "Core_0")],
+        }, cores=("Core_0",))
+        tr_b = _mini_trace({
+            "Worker[1]": [(0, 50, "Core_0"), (80, 120, "Core_0")],
+        }, cores=("Core_0",))
+        none = _build_trace_compare_rows(tr_a, tr_b)
+        dl_none = next(r for r in none["summary"] if r[0] == "Deadline misses")
+        self.assertEqual(dl_none[1], 0)
+        self.assertEqual(dl_none[2], 0)
+
+        tables = _build_trace_compare_rows(
+            tr_a, tr_b, deadlines={"Worker[1]": 150})
+        dl = next(r for r in tables["summary"] if r[0] == "Deadline misses")
+        self.assertGreater(dl[1], 0)
+        self.assertEqual(dl[2], 0)
+        self.assertTrue(tables["response"])
+        self.assertTrue(any(r[0] == "Worker[1]" for r in tables["response"]))
 
 
 if __name__ == "__main__":

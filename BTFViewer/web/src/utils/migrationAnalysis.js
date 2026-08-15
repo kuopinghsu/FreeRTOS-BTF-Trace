@@ -8,6 +8,7 @@ import { computeFindHits } from './findAnalysis.js'
 import { blockingTimeSamples, schedulingStats } from './statsAnalysis.js'
 import { segFullyInRange, segOverlapsRange } from './statsRange.js'
 import { formatMigrationGapTime, formatTime } from './timeFormat.js'
+import { prepareUxEvents } from './uxExplore.js'
 
 const NS_PER_SCALE = { ns: 1e9, us: 1e6, ms: 1e3, s: 1 }
 
@@ -218,6 +219,9 @@ export function prepareFullTraceStats(trace) {
   }
   if (!Array.isArray(trace.migrationRowsFull)) {
     trace.migrationRowsFull = migrationRows(trace)
+  }
+  if (!Array.isArray(trace.uxEventsFull)) {
+    prepareUxEvents(trace)
   }
   return trace
 }

@@ -10,6 +10,11 @@ if str(BTF_ROOT) not in sys.path:
     sys.path.insert(0, str(BTF_ROOT))
 
 from btf_viewer_pkg.config import (  # noqa: E402
+    STATS_DEFAULT_EXPANDED_SECTIONS,
+    STATS_HEAVY_SECTIONS,
+    STATS_LOAD_DEFER_SEGMENTS,
+    STATS_PINNABLE_SECTIONS,
+    STATS_SECTION_HELP,
     STATS_TABLE_DISPLAY_ROW_CAP,
     _cursor_colors,
     _is_tag_sti_channel,
@@ -19,6 +24,8 @@ from btf_viewer_pkg.config import (  # noqa: E402
     cap_stats_table_rows,
     default_section_collapsed,
     default_section_table_heights,
+    sanitize_section_collapsed,
+    trace_needs_deferred_stats_load,
 )
 
 class StiChannelTests(unittest.TestCase):
@@ -72,6 +79,51 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertIn("cores", collapsed)
         self.assertIn("intervals", collapsed)
         self.assertFalse(collapsed["cores"])
+        self.assertFalse(collapsed["health"])
+        self.assertEqual(
+            {sid for sid, flag in collapsed.items() if not flag},
+            set(STATS_DEFAULT_EXPANDED_SECTIONS),
+        )
+        self.assertTrue(set(STATS_HEAVY_SECTIONS) <= set(collapsed))
+        self.assertEqual(set(collapsed), set(STATS_PINNABLE_SECTIONS))
+        self.assertTrue(any(collapsed.values()))
+
+    def test_sanitize_section_collapsed(self) -> None:
+        self.assertIsNone(sanitize_section_collapsed(None))
+        self.assertIsNone(sanitize_section_collapsed({"nope": True}))
+        self.assertEqual(
+            sanitize_section_collapsed({"exec": True, "cores": False, "x": True}),
+            {"exec": True, "cores": False},
+        )
+
+    def test_section_collapsed_rc_roundtrip(self) -> None:
+        from btf_viewer_pkg.config import (
+            section_collapsed_from_rc,
+            section_collapsed_to_rc,
+        )
+        flags = default_section_collapsed()
+        flags["exec"] = False
+        flags["cores"] = True
+        restored = section_collapsed_from_rc(section_collapsed_to_rc(flags))
+        self.assertFalse(restored["exec"])
+        self.assertTrue(restored["cores"])
+        self.assertFalse(restored["health"])
+        self.assertEqual(section_collapsed_from_rc(""), default_section_collapsed())
+
+    def test_expand_all_roundtrip_keeps_every_section_open(self) -> None:
+        from btf_viewer_pkg.config import (
+            section_collapsed_from_rc,
+            section_collapsed_to_rc,
+        )
+        flags = {sid: False for sid in default_section_collapsed()}
+        restored = section_collapsed_from_rc(section_collapsed_to_rc(flags))
+        self.assertTrue(all(v is False for v in restored.values()))
+        self.assertEqual(set(restored), set(default_section_collapsed()))
+
+    def test_every_pinnable_section_has_help(self) -> None:
+        self.assertEqual(set(STATS_SECTION_HELP), set(STATS_PINNABLE_SECTIONS))
+        for sid, text in STATS_SECTION_HELP.items():
+            self.assertTrue(text.strip(), sid)
 
     def test_section_table_heights_positive(self) -> None:
         heights = default_section_table_heights()
@@ -100,6 +152,26 @@ class ConfigDefaultsTests(unittest.TestCase):
         light = _cursor_colors(False)
         self.assertEqual(len(dark), len(light))
         self.assertNotEqual(dark[0], light[0])
+
+class StatsDeferLoadTests(unittest.TestCase):
+    def test_segment_count_triggers_defer(self) -> None:
+        class _Trace:
+            tasks = ["t"] * 8
+            core_names = ["Core_0"]
+            sync_issues = []
+            segments = [None] * (STATS_LOAD_DEFER_SEGMENTS + 1)
+
+        self.assertTrue(trace_needs_deferred_stats_load(_Trace()))
+
+    def test_small_trace_does_not_defer(self) -> None:
+        class _Trace:
+            tasks = ["t"] * 8
+            core_names = ["Core_0"]
+            sync_issues = []
+            segments = [None] * 16
+
+        self.assertFalse(trace_needs_deferred_stats_load(_Trace()))
+
 
 class StatsTableCapTests(unittest.TestCase):
     def test_cap_stats_table_rows_short(self) -> None:

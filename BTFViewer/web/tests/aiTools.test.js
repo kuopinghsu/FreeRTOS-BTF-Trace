@@ -8,10 +8,12 @@ import {
   aiViewerTools,
   btfHighlightHref,
   btfJumpHref,
+  btfRangeHref,
   buildAiReportCsv,
   buildAiReportHtml,
   parseBtfHighlightHref,
   parseBtfJumpHref,
+  parseBtfRangeHref,
   extractToolCalls,
   ensureGeminiThoughtSignatures,
   mergeToolCalls,
@@ -22,6 +24,7 @@ import {
   parseAiAutoApply,
   parseToolCallsFromText,
   queryRawMetric,
+  distributionTraceContext,
   resolveCoreKey,
   resolveTaskKey,
   searchTimelineHits,
@@ -179,6 +182,28 @@ describe('aiTools', () => {
     assert.equal(miss.ok, false)
   })
 
+  it('distributionTraceContext harvests tick gaps and execution slices', () => {
+    const mk = 'CS[22]'
+    const trace = {
+      tasks: ['CS[22]'],
+      tickStiTimes: [0, 1000, 2000, 4000],
+      taskRepr: new Map([[mk, 'CS[22]']]),
+      segByMergeKey: new Map([
+        [mk, [
+          { task: 'CS[22]', start: 0, end: 10, core: 'Core_0' },
+          { task: 'CS[22]', start: 20, end: 40, core: 'Core_0' },
+        ]],
+      ]),
+    }
+    const ticks = distributionTraceContext(trace, '', 'tick')
+    assert.deepEqual(ticks.values, [1000, 1000, 2000])
+    assert.equal(ticks.source, 'btf')
+    const execs = distributionTraceContext(trace, 'CS[22]', 'execution')
+    assert.deepEqual(execs.values, [10, 20])
+    const gaps = distributionTraceContext(trace, 'CS[22]', 'blocking')
+    assert.deepEqual(gaps.values, [10])
+  })
+
   it('builds AI report CSV and HTML', () => {
     const csv = buildAiReportCsv({
       meta: { file: 'demo.btf' },
@@ -313,6 +338,8 @@ describe('aiTools', () => {
     assert.match(AI_TOOL_SYSTEM_ADDENDUM, /mermaid sequenceDiagram/)
     assert.equal(parseBtfJumpHref(btfJumpHref(1805120)), 1805120)
     assert.equal(parseBtfJumpHref('btfjump:1805120'), 1805120)
+    assert.equal(btfRangeHref(1000, 2000), 'btfrange:1000/2000')
+    assert.deepEqual(parseBtfRangeHref('btfrange:1000/2000'), { lo: 1000, hi: 2000 })
     assert.equal(parseBtfHighlightHref(btfHighlightHref('PS[228]')), 'PS[228]')
   })
 

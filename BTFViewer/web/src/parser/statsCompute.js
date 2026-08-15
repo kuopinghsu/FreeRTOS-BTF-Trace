@@ -12,6 +12,7 @@ function summarizeNumeric(samples) {
   const mean = sum / n
   const p50Idx = Math.min(n - 1, Math.ceil(n * 0.5) - 1)
   const p95Idx = Math.min(n - 1, Math.ceil(n * 0.95) - 1)
+  const p99Idx = Math.min(n - 1, Math.ceil(n * 0.99) - 1)
   return {
     min: values[0],
     avg: Math.round(mean),
@@ -22,6 +23,7 @@ function summarizeNumeric(samples) {
     )),
     p50: values[p50Idx],
     p95: values[p95Idx],
+    p99: values[p99Idx],
   }
 }
 

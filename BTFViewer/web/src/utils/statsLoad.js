@@ -2,6 +2,7 @@
 
 import {
   STATS_LOAD_DEFER_CORES,
+  STATS_LOAD_DEFER_SEGMENTS,
   STATS_LOAD_DEFER_SYNC_ISSUES,
   STATS_LOAD_DEFER_TASKS,
   STATS_TABLE_DISPLAY_ROW_CAP,
@@ -10,6 +11,7 @@ import {
 export {
   STATS_HEAVY_SECTIONS,
   STATS_LOAD_DEFER_CORES,
+  STATS_LOAD_DEFER_SEGMENTS,
   STATS_LOAD_DEFER_SYNC_ISSUES,
   STATS_LOAD_DEFER_TASKS,
   STATS_TABLE_DISPLAY_ROW_CAP,
@@ -29,9 +31,13 @@ export function capStatsTableRows(rows, cap = STATS_TABLE_DISPLAY_ROW_CAP) {
 
 export function traceNeedsDeferredStatsLoad(trace) {
   if (!trace) return false
+  const segs = trace.segments?.length
+    ?? trace.segStore?.count
+    ?? 0
   return (
     (trace.tasks?.length ?? 0) > STATS_LOAD_DEFER_TASKS
     || (trace.coreNames?.length ?? 0) > STATS_LOAD_DEFER_CORES
     || (trace.syncIssues?.length ?? 0) > STATS_LOAD_DEFER_SYNC_ISSUES
+    || segs > STATS_LOAD_DEFER_SEGMENTS
   )
 }
