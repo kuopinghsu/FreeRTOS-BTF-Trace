@@ -178,6 +178,25 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("def build_investigate_context", inv_py)
         self.assertIn("buildCriticalPath", inv_js)
         self.assertIn("def build_critical_path", inv_py)
+        ux_py = (BTF_ROOT / "btf_viewer_pkg/ux_explore.py").read_text(encoding="utf-8")
+        ux_js = (BTF_ROOT / "web/src/utils/uxExplore.js").read_text(encoding="utf-8")
+        for py_name, js_name in (
+            ("def detect_timeline_anomalies", "export function detectTimelineAnomalies"),
+            ("def collect_worst_events", "export function collectWorstEvents"),
+            ("def best_finding_scope", "export function bestFindingScope"),
+            ("def compare_summary_strip", "export function compareSummaryStrip"),
+            ("def harvest_ux_events", "export function harvestUxEvents"),
+            ("def find_event_at_percentile", "export function findEventAtPercentile"),
+            ("def analyze_task_periods", "export function analyzeTaskPeriods"),
+            ("def task_core_matrix", "export function taskCoreMatrix"),
+            ("def pair_mutex_waits", "export function pairMutexWaits"),
+            ("def waiter_owner_matrix", "export function waiterOwnerMatrix"),
+            ("def task_health_scores", "export function taskHealthScores"),
+            ("def harvest_mutex_holds", "export function harvestMutexHolds"),
+            ("def health_inputs_from_events", "export function healthInputsFromEvents"),
+        ):
+            self.assertIn(py_name, ux_py, py_name)
+            self.assertIn(js_name, ux_js, js_name)
         tools_js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
         tools_py = (BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8")
         self.assertIn("find_critical_path", tools_js)
@@ -189,8 +208,10 @@ class AiWebParityTests(unittest.TestCase):
         stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
         self.assertIn("Investigate…", dlg)
         self.assertIn("Root cause…", dlg)
+        self.assertIn("Apply cursors", dlg)
         self.assertIn("Investigate…", stats)
         self.assertIn("Root cause…", stats)
+        self.assertIn("Apply cursors", stats)
         self.assertIn("emit('query-ai', 'investigate')", dlg)
         # Desktop wires templates via _make_ai_btn(..., template) → _query_with_ai.
         self.assertRegex(
@@ -202,6 +223,72 @@ class AiWebParityTests(unittest.TestCase):
         )
         self.assertIn("self._query_with_ai(", stats)
         self.assertIn("wants_ai_template", stats)
+        self._assert_stats_export_titles_match()
+        self._assert_stats_section_ids_match()
+        self._assert_investigation_docs_match()
+
+    def _assert_stats_export_titles_match(self) -> None:
+        """CSV/HTML export section titles stay Desktop / Web / README aligned."""
+        titles = (
+            "Task × Core",
+            "Task Health",
+            "Timeline Anomalies",
+            "Worst Events",
+            "Period / Jitter",
+            "Waiter × Owner",
+        )
+        stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
+        web = (BTF_ROOT / "web/src/components/StatisticsPanel.vue").read_text(
+            encoding="utf-8")
+        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
+        workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
+        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
+        for title in titles:
+            self.assertIn(f'<h2>{title}', stats.replace("{_esc(scope_title)}", ""), title)
+            self.assertGreaterEqual(stats.count(title), 3, title)
+            self.assertGreaterEqual(web.count(title), 3, title)
+            self.assertIn(title, readme, title)
+            self.assertIn(title, workflows, title)
+            self.assertIn(title, ai_md, title)
+        self.assertIn("Dispatch / Scheduling Latency", stats)
+        self.assertIn("<th>p99</th>", stats)
+        self.assertIn("<th>p99</th>", web)
+        self.assertIn("p95,p99", web)
+        self.assertIn('"p95", "p99"', stats)
+
+    def _assert_stats_section_ids_match(self) -> None:
+        """Pinnable section IDs and always-visible lifecycle/affinity stay aligned."""
+        from btf_viewer_pkg.config import STATS_PINNABLE_SECTIONS
+
+        pins_js = (BTF_ROOT / "web/src/utils/statsPins.js").read_text(
+            encoding="utf-8")
+        block = re.search(
+            r"export const STATS_PINNABLE_SECTIONS = Object\.freeze\(\[([\s\S]*?)\]\)",
+            pins_js)
+        self.assertIsNotNone(block)
+        js_ids = tuple(re.findall(r"'([^']+)'", block.group(1)))
+        self.assertEqual(js_ids, STATS_PINNABLE_SECTIONS)
+        stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
+        web = (BTF_ROOT / "web/src/components/StatisticsPanel.vue").read_text(
+            encoding="utf-8")
+        for sid in STATS_PINNABLE_SECTIONS:
+            self.assertIn(f'"{sid}"', stats, sid)
+            self.assertIn(f"'{sid}'", web, sid)
+        self.assertNotIn('v-if="lifecycleStats.length"', web)
+        self.assertNotIn('v-if="coreAffinityRows.length"', web)
+        self.assertIn("Task Lifecycle", web)
+        self.assertIn("Task Lifecycle", stats)
+        self.assertIn("Kind", web)
+        self.assertIn("'queue', 'kind'", web)
+        self.assertIn("'queue', 'bounces'", web)
+        self.assertNotIn('v-if="coreTimeBreakdown.length"', web)
+        self.assertNotIn('v-if="corePairRows.length"', web)
+        self.assertIn("No core segments", web)
+        self.assertIn("No migrations in scope", web)
+        self.assertIn("Core Util Std Dev (σ)", web)
+        self.assertIn("Core Util Std Dev (σ)", stats)
+
+    def _assert_investigation_docs_match(self) -> None:
         readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
         ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
         self.assertIn("`analyze`", ai_md)
@@ -251,7 +338,12 @@ class AiWebParityTests(unittest.TestCase):
             "`generate_fingerprint` / `find_similar_investigations` / "
             "`regression_localize` / `build_causal_chain` / "
             "`generate_experiment_plan` / `record_experiment_outcome` / "
-            "`score_investigation`",
+            "`score_investigation` / `analyze_temporal_causality` / "
+            "`build_task_dependency_graph` / `decompose_response_time` / "
+            "`rank_root_causes` / `verify_claim` / `challenge_conclusion` / "
+            "`investigation_memory` / `cluster_incidents` / "
+            "`close_investigation` / `analyze_distribution` / "
+            "`analyze_periodicity` / `summarize_investigation_context`",
             ai_md,
         )
         self.assertNotIn("Max≪Avg", readme)
@@ -320,7 +412,12 @@ class AiWebParityTests(unittest.TestCase):
             "`generate_fingerprint` / `find_similar_investigations` / "
             "`regression_localize` / `build_causal_chain` / "
             "`generate_experiment_plan` / `record_experiment_outcome` / "
-            "`score_investigation`",
+            "`score_investigation` / `analyze_temporal_causality` / "
+            "`build_task_dependency_graph` / `decompose_response_time` / "
+            "`rank_root_causes` / `verify_claim` / `challenge_conclusion` / "
+            "`investigation_memory` / `cluster_incidents` / "
+            "`close_investigation` / `analyze_distribution` / "
+            "`analyze_periodicity` / `summarize_investigation_context`",
             ai_md,
         )
         self.assertIn("Save selection as BTF", readme)
@@ -344,6 +441,17 @@ class AiWebParityTests(unittest.TestCase):
         ollama = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(encoding="utf-8")
         self.assertIn("High, Medium, or Low", AI_SYSTEM_PROMPT)
         self.assertIn("High, Medium, or Low", ollama)
+        for title in (
+            "Timeline Anomalies", "Worst Events", "Period / Jitter",
+            "Task Health", "Task × Core", "Waiter × Owner",
+        ):
+            self.assertIn(title, AI_SYSTEM_PROMPT, title)
+            self.assertIn(title, ollama, title)
+            self.assertIn(title, AI_TOOL_SYSTEM_ADDENDUM, title)
+            self.assertIn(title, js, title)
+        self.assertIn("do not invent a detect_timeline_anomalies tool", AI_TOOL_SYSTEM_ADDENDUM)
+        self.assertIn("do not invent a detect_timeline_anomalies tool", js)
+        self.assertNotIn("detect_timeline_anomalies", AI_VIEWER_TOOL_NAMES)
 
     def test_planner_tools_match_apps(self) -> None:
         """README / AI.md planner names stay aligned with Desktop and Web."""
@@ -442,6 +550,72 @@ class AiWebParityTests(unittest.TestCase):
         self.assertNotIn("TODO.md", readme)
         self.assertNotIn("TODO.md", ai_md)
 
+    def test_causal_tools_match_apps(self) -> None:
+        """AI.md causal engine names stay aligned with Desktop and Web."""
+        from btf_viewer_pkg.ai_investigation import EVIDENCE_PANEL_TOOLS
+
+        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
+        mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
+        app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
+        causal_py = (BTF_ROOT / "btf_viewer_pkg/ai_causal.py").read_text(
+            encoding="utf-8")
+        causal_js = (BTF_ROOT / "web/src/utils/aiCausal.js").read_text(
+            encoding="utf-8")
+        tools_py = (BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(
+            encoding="utf-8")
+        tools_js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(
+            encoding="utf-8")
+
+        shipped = (
+            "analyze_temporal_causality",
+            "build_task_dependency_graph",
+            "decompose_response_time",
+            "rank_root_causes",
+            "verify_claim",
+            "challenge_conclusion",
+            "investigation_memory",
+            "cluster_incidents",
+            "close_investigation",
+            "analyze_distribution",
+            "analyze_periodicity",
+            "summarize_investigation_context",
+        )
+        section = re.search(
+            r"id=\"causal-engines\".*?(?:\n<a id=)", ai_md, re.S)
+        self.assertIsNotNone(section)
+        listed = re.findall(r"\| `([a-z][a-z0-9_]*)` \|", section.group(0))
+        self.assertEqual(tuple(listed), shipped)
+
+        def const(name: str) -> str:
+            return f"AI_TOOL_{name.upper()}"
+
+        def camel(name: str) -> str:
+            parts = name.split("_")
+            return parts[0] + "".join(p.capitalize() for p in parts[1:])
+
+        for name in shipped:
+            self.assertIn(name, AI_VIEWER_TOOL_NAMES, name)
+            self.assertTrue(is_query_tool(name), name)
+            self.assertIn(name, EVIDENCE_PANEL_TOOLS, name)
+            self.assertIn(f"| `{name}` |", ai_md, name)
+            self.assertIn(const(name), mw, name)
+            self.assertIn(const(name), app, name)
+            self.assertIn(f"def {name}_tool(", tools_py, name)
+            self.assertIn(f"export function {camel(name)}Tool", tools_js, name)
+            self.assertIn(f"def {name}(", causal_py, name)
+            self.assertIn(f"export function {camel(name)}(", causal_js, name)
+
+        self.assertIn("btf_viewer_pkg/ai_causal.py", ai_md)
+        self.assertNotIn("simulate_schedule", AI_VIEWER_TOOL_NAMES)
+        self.assertIn("def dependency_trace_context", tools_py)
+        self.assertIn("export function dependencyTraceContext", tools_js)
+        self.assertIn("dependency_trace_context(", mw)
+        self.assertIn("dependencyTraceContext(", app)
+        self.assertIn("def distribution_trace_context", tools_py)
+        self.assertIn("export function distributionTraceContext", tools_js)
+        self.assertIn("distribution_trace_context(", mw)
+        self.assertIn("distributionTraceContext(", app)
+
     def test_ai_md_gui_tools_and_templates_match_apps(self) -> None:
         """AI.md / README template names and GUI-tool rows stay aligned with the apps."""
         from btf_viewer_pkg.ai_assistant import AI_TEMPLATE_QUESTIONS
@@ -498,6 +672,41 @@ class AiWebParityTests(unittest.TestCase):
         )
         self.assertIn("README.md#demo", workflows)
         self.assertIn("README.md#demo", slides)
+
+    def test_ai_templates_name_ux_pages(self) -> None:
+        """Existing templates name the Statistics UX pages; no new template IDs."""
+        from btf_viewer_pkg.ai_assistant import AI_TEMPLATE_QUESTIONS
+
+        by_id = {tid: prompt for tid, _label, prompt in AI_TEMPLATE_QUESTIONS}
+        self.assertEqual(len(AI_TEMPLATE_QUESTIONS), 20)
+        self.assertNotIn("detect_timeline_anomalies", by_id)
+
+        pages = (
+            "Timeline Anomalies", "Worst Events", "Period / Jitter",
+            "Task Health", "Task × Core", "Waiter × Owner",
+        )
+        for tid in ("findings", "investigate", "triage", "diagnostic_report"):
+            for title in pages:
+                self.assertIn(title, by_id[tid], f"{tid}: {title}")
+        self.assertIn("Period / Jitter", by_id["task_profile"])
+        self.assertIn("Task Health", by_id["task_profile"])
+        self.assertIn("Task × Core", by_id["task_profile"])
+        self.assertIn("Timeline Anomalies", by_id["wcet"])
+        self.assertIn("Worst Events", by_id["wcet"])
+        self.assertIn("Period / Jitter", by_id["wcet"])
+        self.assertIn("Task Health", by_id["wcet"])
+
+        self.assertIn("Worst Events", by_id["latency"])
+        self.assertIn("Waiter × Owner", by_id["latency"])
+        self.assertIn("Waiter × Owner", by_id["priority"])
+        self.assertIn("Task × Core", by_id["migrations"])
+        self.assertIn("Task × Core", by_id["balance"])
+        self.assertIn("Task Health", by_id["deadlines"])
+        self.assertIn("Do not conflate this with Period / Jitter", by_id["tick"])
+        self.assertIn("Compare summary strip", by_id["compare"])
+        self.assertIn("Apply cursors", by_id["auto_investigate"])
+        self.assertIn("btfrange:LO/HI", by_id["auto_investigate"])
+        self.assertIn("p95/p99 cells are clickable", AI_SYSTEM_PROMPT)
 
     def test_new_tool_dispatch_sites_match(self) -> None:
         mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
@@ -627,6 +836,10 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("recordExperimentOutcomeTool(", app)
         self.assertIn("score_investigation_metrics_tool(", mw)
         self.assertIn("scoreInvestigationMetricsTool(", app)
+        self.assertIn("analyze_temporal_causality_tool(", mw)
+        self.assertIn("analyzeTemporalCausalityTool(", app)
+        self.assertIn("verify_claim_tool(", mw)
+        self.assertIn("verifyClaimTool(", app)
         self.assertIn("search_timeline_hits(", mw)
         self.assertIn("searchTimelineHits(", app)
         self.assertIn("def _ai_clear_marks", mw)
@@ -1115,8 +1328,12 @@ class AiWebParityTests(unittest.TestCase):
             ("def infer_model_capabilities", "export function inferModelCapabilities"),
             ("def classify_trace_privacy", "export function classifyTracePrivacy"),
             ("def score_benchmark_case", "export function scoreBenchmarkCase"),
+            ("def score_adversarial_metrics", "export function scoreAdversarialMetrics"),
+            ("STATS_UX_PAGE_ALIASES", "export const STATS_UX_PAGE_ALIASES"),
+            ("def _metric_mentioned", "export function metricMentioned"),
             ("def format_cost_meter", "export function formatCostMeter"),
             ("def format_cost_status", "export function formatCostStatus"),
+            ("def clamp_ai_split_bottom", "export function clampAiSplitBottom"),
             ("def cost_meter_active", "export function costMeterActive"),
             ("def status_with_cost", "export function statusWithCost"),
             ("def tool_call_reason", "export function toolCallReason"),
@@ -1170,6 +1387,28 @@ class AiWebParityTests(unittest.TestCase):
         ):
             self.assertIn(py_name, planner_py, py_name)
             self.assertIn(js_name, planner_js, js_name)
+        causal_py = (BTF_ROOT / "btf_viewer_pkg/ai_causal.py").read_text(
+            encoding="utf-8")
+        causal_js = (BTF_ROOT / "web/src/utils/aiCausal.js").read_text(
+            encoding="utf-8")
+        for py_name, js_name in (
+            ("def analyze_temporal_causality", "export function analyzeTemporalCausality"),
+            ("def build_task_dependency_graph", "export function buildTaskDependencyGraph"),
+            ("def collect_dependency_edges", "export function collectDependencyEdges"),
+            ("def decompose_response_time", "export function decomposeResponseTime"),
+            ("def rank_root_causes", "export function rankRootCauses"),
+            ("def verify_claim", "export function verifyClaim"),
+            ("def challenge_conclusion", "export function challengeConclusion"),
+            ("def investigation_memory", "export function investigationMemory"),
+            ("def cluster_incidents", "export function clusterIncidents"),
+            ("def close_investigation", "export function closeInvestigation"),
+            ("def analyze_distribution", "export function analyzeDistribution"),
+            ("def collect_periodicity_times", "export function collectPeriodicityTimes"),
+            ("def analyze_periodicity", "export function analyzePeriodicity"),
+            ("def summarize_investigation_context", "export function summarizeInvestigationContext"),
+        ):
+            self.assertIn(py_name, causal_py, py_name)
+            self.assertIn(js_name, causal_js, js_name)
         for name in (
             "explain_finding", "interpret_query",
             "validate_experiment", "manage_hypotheses",
@@ -1177,8 +1416,13 @@ class AiWebParityTests(unittest.TestCase):
             "assess_evidence_sufficiency", "cluster_findings",
             "generate_fingerprint", "find_similar_investigations",
             "regression_localize", "build_causal_chain",
-            "generate_experiment_plan", "record_experiment_outcome",
+            "generate_experiment_plan",             "record_experiment_outcome",
             "score_investigation",
+            "analyze_temporal_causality", "build_task_dependency_graph",
+            "decompose_response_time", "rank_root_causes", "verify_claim",
+            "challenge_conclusion", "investigation_memory", "cluster_incidents",
+            "close_investigation", "analyze_distribution", "analyze_periodicity",
+            "summarize_investigation_context",
         ):
             self.assertIn(f'"{name}"', inv_py, name)
             self.assertIn(f"'{name}'", inv_js, name)
@@ -1354,8 +1598,15 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn('"aiMoreMenu"', in_bar)
         self.assertIn('"aiComposer"', in_bar)
         self.assertIn("def _set_status", assist)
-        self.assertIn("status_with_cost", assist)
-        self.assertIn("statusWithCost(base, costMeter.value)", panel)
+        self.assertIn("format_cost_status", assist)
+        self.assertIn("formatCostStatus(costMeter.value)", panel)
+        self.assertIn("class=\"ai-usage-bar\"", panel)
+        self.assertIn('setObjectName("aiUsageBar")', assist)
+        self.assertIn('setObjectName("aiSplit")', assist)
+        self.assertIn('setObjectName("aiSplitTop")', assist)
+        self.assertIn("class=\"ai-split\"", panel)
+        self.assertIn("class=\"ai-split-top\"", panel)
+        self.assertIn("class=\"ai-split-handle\"", panel)
         self.assertIn("def _flash_main_status", assist)
         self.assertIn('getattr(wnd, "statusBar", None)', assist)
         self.assertIn('showMessage(f"AI: {short}", 6000)', assist)

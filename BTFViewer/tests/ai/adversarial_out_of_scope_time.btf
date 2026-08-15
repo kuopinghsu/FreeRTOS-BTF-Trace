@@ -1,0 +1,3 @@
+#version 2.2.0
+#scenario adversarial_out_of_scope_time
+#comment Offline AI benchmark fixture: cited timestamp exists but is outside the cursor window.

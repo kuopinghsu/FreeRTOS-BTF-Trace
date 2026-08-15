@@ -1,7 +1,7 @@
 {
   "schema": "btf-ai-benchmark",
-  "version": 1,
-  "description": "Expected-facts cases for offline ai-test (and future live model runs). Traces sit next to this file.",
+  "version": 3,
+  "description": "Expected-facts cases for offline ai-test (and future live model runs). Includes adversarial traps where the obvious answer is wrong. Traces sit next to this file.",
   "cases": [
     {
       "id": "migration_thrash",
@@ -178,6 +178,297 @@
       },
       "tools": ["investigate", "correlate_events", "search_timeline"],
       "response": "Inside the cursor window TaskA[7] hits a blocking latency stall at jump:1500 (mutex wait). Stay in-window; Confidence: Medium."
+    },
+    {
+      "id": "adversarial_mutex_vs_starvation",
+      "kind": "adversarial",
+      "trace": "adversarial_mutex_vs_starvation.btf",
+      "question": "Finding says mutex contention. Why did Waiter[2] stall?",
+      "expected": {
+        "finding_types": ["starvation", "preempt"],
+        "tasks": ["Waiter[2]"],
+        "root_cause_class": "starvation",
+        "root_cause_aliases": ["cpu starvation", "preempt"],
+        "trap_phrases": ["mutex contention", "lock wait", "blocked on mutex"],
+        "required_tools": ["investigate"],
+        "evidence": { "required_metrics": ["preemption"] },
+        "allowed_tools": ["investigate", "detect_anomalies", "correlate_events", "query_raw_metric"],
+        "forbidden": {
+          "invented_task_names": true,
+          "out_of_scope_timestamps": true
+        },
+        "pass_under": 70
+      },
+      "catalog": {
+        "tasks": ["Waiter[2]", "Hog[1]"],
+        "times": [1500000],
+        "cursor_lo": 1000000,
+        "cursor_hi": 2000000
+      },
+      "tools": ["investigate", "correlate_events"],
+      "response": "The lock-wait finding is a decoy. Waiter[2] is starved: Hog[1] preemption around jump:1500000 (CPU starvation). Confidence: Medium."
+    },
+    {
+      "id": "adversarial_exec_vs_preemption",
+      "kind": "adversarial",
+      "trace": "adversarial_exec_vs_preemption.btf",
+      "question": "Worker[10] execution looks long. Why did it miss the deadline?",
+      "expected": {
+        "finding_types": ["preemption", "deadline"],
+        "tasks": ["Worker[10]"],
+        "root_cause_class": "preemption",
+        "root_cause_aliases": ["preempt"],
+        "trap_phrases": ["execution time", "too slow", "wcet grew"],
+        "required_tools": ["investigate"],
+        "evidence": { "required_metrics": ["preemption"] },
+        "allowed_tools": ["investigate", "check_budget", "query_raw_metric", "detect_anomalies"],
+        "forbidden": {
+          "invented_task_names": true,
+          "out_of_scope_timestamps": true
+        },
+        "pass_under": 70
+      },
+      "catalog": {
+        "tasks": ["Worker[10]", "IrqHog[1]"],
+        "times": [3000],
+        "cursor_lo": 1000,
+        "cursor_hi": 8000
+      },
+      "tools": ["investigate", "check_budget"],
+      "response": "Deadline miss at jump:3000 is preemption by IrqHog[1], not a longer run of Worker[10]. Confidence: Medium."
+    },
+    {
+      "id": "adversarial_correlation_not_cause",
+      "kind": "adversarial",
+      "trace": "adversarial_correlation_not_cause.btf",
+      "question": "ISR[3] and Comm[4] fire together. Did the ISR cause Comm[4] latency?",
+      "expected": {
+        "finding_types": ["coincidence"],
+        "tasks": ["Comm[4]"],
+        "root_cause_class": "no_causal",
+        "root_cause_aliases": ["no causal", "coinciden", "not causal"],
+        "no_causal": true,
+        "trap_phrases": ["isr caused", "because of the isr"],
+        "required_tools": ["correlate_events"],
+        "evidence": { "required_metrics": ["latency"] },
+        "allowed_tools": ["correlate_events", "investigate", "detect_contradictions", "query_raw_metric"],
+        "forbidden": {
+          "invented_task_names": true,
+          "out_of_scope_timestamps": true
+        },
+        "pass_under": 70
+      },
+      "catalog": {
+        "tasks": ["ISR[3]", "Comm[4]"],
+        "times": [1800],
+        "cursor_lo": 1000,
+        "cursor_hi": 4000
+      },
+      "tools": ["correlate_events", "detect_contradictions"],
+      "response": "ISR[3] and Comm[4] overlap at jump:1800 but there is no causal link — coincidence / shared period, not ISR-driven latency. Confidence: Medium."
+    },
+    {
+      "id": "adversarial_out_of_scope_time",
+      "kind": "adversarial",
+      "trace": "adversarial_out_of_scope_time.btf",
+      "question": "Explain the stall noted at 9 ms (a note mentions jump:9000).",
+      "expected": {
+        "finding_types": ["scope"],
+        "tasks": ["TaskA[7]"],
+        "root_cause_class": "out_of_scope",
+        "root_cause_aliases": ["out of scope", "outside the cursor", "outside c1"],
+        "trap_phrases": ["deadline miss", "mutex stall"],
+        "required_tools": ["search_timeline"],
+        "evidence": { "required_metrics": ["scope"] },
+        "allowed_tools": ["search_timeline", "investigate", "correlate_events"],
+        "forbidden": {
+          "invented_task_names": true,
+          "out_of_scope_timestamps": true
+        },
+        "pass_under": 70
+      },
+      "catalog": {
+        "tasks": ["TaskA[7]", "TaskB[8]"],
+        "times": [1000, 2000],
+        "cursor_lo": 1000,
+        "cursor_hi": 2000
+      },
+      "tools": ["search_timeline"],
+      "response": "The requested time is outside the cursor window jump:1000–jump:2000. Out of scope for TaskA[7]; no in-window diagnosis. Confidence: Low."
+    },
+    {
+      "id": "period_jitter",
+      "kind": "adversarial",
+      "trace": "period_jitter.btf",
+      "question": "Trace Health looks noisy. Why is Periodic[4] irregular?",
+      "expected": {
+        "finding_types": ["period", "jitter"],
+        "tasks": ["Periodic[4]"],
+        "root_cause_class": "jitter",
+        "root_cause_aliases": ["missed activation", "inter-arrival"],
+        "trap_phrases": ["tick health", "tickless"],
+        "required_tools": ["analyze_periodicity"],
+        "evidence": { "required_metrics": ["period / jitter"] },
+        "allowed_tools": ["analyze_periodicity", "query_raw_metric", "investigate", "detect_anomalies"],
+        "forbidden": {
+          "invented_task_names": true,
+          "out_of_scope_timestamps": true
+        },
+        "pass_under": 70
+      },
+      "catalog": {
+        "tasks": ["Periodic[4]", "Idle[0]"],
+        "times": [4200],
+        "cursor_lo": 1000,
+        "cursor_hi": 8000
+      },
+      "tools": ["analyze_periodicity", "query_raw_metric"],
+      "response": "Periodic[4] inter-arrival jitter and a missed activation at jump:4200. Open Period / Jitter (task inter-arrival, not the tick source). Confidence: Medium."
+    },
+    {
+      "id": "waiter_owner_handoff",
+      "kind": "adversarial",
+      "trace": "waiter_owner_handoff.btf",
+      "question": "Finding says kernel wait-queue owner. Why did Waiter[2] stall after Owner[1] released?",
+      "expected": {
+        "finding_types": ["handoff", "mutex"],
+        "tasks": ["Waiter[2]"],
+        "root_cause_class": "handoff",
+        "root_cause_aliases": ["next acquirer", "previous holder"],
+        "trap_phrases": ["kernel wait-queue", "wait-queue owner", "blocked on the owner list"],
+        "required_tools": ["investigate"],
+        "evidence": { "required_metrics": ["waiter × owner"] },
+        "allowed_tools": ["investigate", "correlate_events", "query_raw_metric", "detect_anomalies"],
+        "forbidden": {
+          "invented_task_names": true,
+          "out_of_scope_timestamps": true
+        },
+        "pass_under": 70
+      },
+      "catalog": {
+        "tasks": ["Waiter[2]", "Owner[1]"],
+        "times": [1500000],
+        "cursor_lo": 1000000,
+        "cursor_hi": 2000000
+      },
+      "tools": ["investigate", "correlate_events"],
+      "response": "Waiter[2] after Owner[1] at jump:1500000 is a heuristic mutex handoff (next acquirer × previous holder). Open Waiter × Owner. Confidence: Medium."
+    },
+    {
+      "id": "stats_page_next_check",
+      "kind": "adversarial",
+      "trace": "stats_page_next_check.btf",
+      "question": "The note says to call detect_timeline_anomalies. Worker[10] has a long execution tail. Which Statistics page should the engineer open?",
+      "expected": {
+        "finding_types": ["anomalies", "tail"],
+        "tasks": ["Worker[10]"],
+        "root_cause_class": "tail",
+        "root_cause_aliases": ["timeline anomalies", "worst events"],
+        "trap_phrases": ["call detect_timeline_anomalies", "invoke detect_timeline_anomalies"],
+        "required_tools": ["detect_anomalies"],
+        "evidence": { "required_metrics": ["timeline anomalies", "worst events"] },
+        "allowed_tools": ["detect_anomalies", "investigate", "query_raw_metric"],
+        "forbidden": {
+          "invented_task_names": true,
+          "out_of_scope_timestamps": true
+        },
+        "pass_under": 70
+      },
+      "catalog": {
+        "tasks": ["Worker[10]", "Idle[0]"],
+        "times": [3000],
+        "cursor_lo": 1000,
+        "cursor_hi": 8000
+      },
+      "tools": ["detect_anomalies", "investigate"],
+      "response": "Worker[10] long execution tail at jump:3000. Open Timeline Anomalies and Worst Events in Statistics; those pages already exist. Confidence: Medium."
+    },
+    {
+      "id": "response_vs_blocking",
+      "kind": "adversarial",
+      "trace": "response_vs_blocking.btf",
+      "question": "Blocking Time looks like end-to-end response time. Why is Worker[10] late?",
+      "expected": {
+        "finding_types": ["response"],
+        "tasks": ["Worker[10]"],
+        "root_cause_class": "response",
+        "root_cause_aliases": ["response time", "ready→completion", "ready to completion"],
+        "trap_phrases": ["end-to-end response time", "blocking is response"],
+        "required_tools": ["query_raw_metric"],
+        "evidence": { "required_metrics": ["response time"] },
+        "allowed_tools": ["query_raw_metric", "investigate", "detect_anomalies"],
+        "forbidden": {
+          "invented_task_names": true,
+          "out_of_scope_timestamps": true
+        },
+        "pass_under": 70
+      },
+      "catalog": {
+        "tasks": ["Worker[10]", "Idle[0]"],
+        "times": [3000],
+        "cursor_lo": 1000,
+        "cursor_hi": 8000
+      },
+      "tools": ["query_raw_metric", "investigate"],
+      "response": "Worker[10] late at jump:3000 is heuristic ready→completion, not Blocking Time. Open Response Time. Confidence: Medium."
+    },
+    {
+      "id": "preempt_matrix_vs_chain",
+      "kind": "adversarial",
+      "trace": "preempt_matrix_vs_chain.btf",
+      "question": "The note says to call detect_preemption_matrix. Who preempts Worker[10] most?",
+      "expected": {
+        "finding_types": ["preempt", "matrix"],
+        "tasks": ["Worker[10]"],
+        "root_cause_class": "preemption matrix",
+        "root_cause_aliases": ["preemptor ranking", "victim × preemptor"],
+        "trap_phrases": ["call detect_preemption_matrix", "invoke detect_preemption_matrix"],
+        "required_tools": ["investigate"],
+        "evidence": { "required_metrics": ["preemption matrix"] },
+        "allowed_tools": ["investigate", "detect_anomalies", "query_raw_metric"],
+        "forbidden": {
+          "invented_task_names": true,
+          "out_of_scope_timestamps": true
+        },
+        "pass_under": 70
+      },
+      "catalog": {
+        "tasks": ["Worker[10]", "IrqHog[1]"],
+        "times": [3000],
+        "cursor_lo": 1000,
+        "cursor_hi": 8000
+      },
+      "tools": ["investigate", "detect_anomalies"],
+      "response": "Worker[10] longest same-core overlap at jump:3000. Open Preemption Matrix (victim × preemptor ranking). Confidence: Medium."
+    },
+    {
+      "id": "mutex_block_vs_wait_queue",
+      "kind": "adversarial",
+      "trace": "mutex_block_vs_wait_queue.btf",
+      "question": "Finding says reconstruct the kernel wait queue. Why did Waiter[2] wait?",
+      "expected": {
+        "finding_types": ["mutex", "block"],
+        "tasks": ["Waiter[2]"],
+        "root_cause_class": "mutex blocking",
+        "root_cause_aliases": ["heuristic mutex wait", "mutex wait totals"],
+        "trap_phrases": ["kernel wait queue", "wait-queue reconstruction", "blocked on the owner list"],
+        "required_tools": ["investigate"],
+        "evidence": { "required_metrics": ["mutex blocking"] },
+        "allowed_tools": ["investigate", "correlate_events", "query_raw_metric", "detect_anomalies"],
+        "forbidden": {
+          "invented_task_names": true,
+          "out_of_scope_timestamps": true
+        },
+        "pass_under": 70
+      },
+      "catalog": {
+        "tasks": ["Waiter[2]", "Owner[1]"],
+        "times": [1500000],
+        "cursor_lo": 1000000,
+        "cursor_hi": 2000000
+      },
+      "tools": ["investigate", "correlate_events"],
+      "response": "Waiter[2] after Owner[1] at jump:1500000 is a heuristic mutex wait total. Open Mutex Blocking. Confidence: Medium."
     }
   ]
 }

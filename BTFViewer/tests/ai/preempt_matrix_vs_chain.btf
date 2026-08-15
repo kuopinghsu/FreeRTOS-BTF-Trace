@@ -1,0 +1,3 @@
+#version 2.2.0
+#scenario preempt_matrix_vs_chain
+#comment Offline AI benchmark fixture: inventing detect_preemption_matrix is a decoy; open Preemption Matrix.

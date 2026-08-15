@@ -710,6 +710,13 @@ class AiInvestigationTests(unittest.TestCase):
         }, "Simplified Chinese (简体中文)")
         self.assertIn("Core thrashing", md)
         self.assertIn("jump:1100000", md)
+        ranged = format_evidence_panel_markdown({
+            "conclusion": "Critical path slice",
+            "evidence": [{"label": "Blocked / off-CPU", "time": 1000,
+                          "start": 1000, "stop": 1800}],
+            "confidence": "Medium",
+        }, "English")
+        self.assertIn("range:1000/1800", ranged)
         self.assertIn("**证据**", md)
         self.assertIn("**置信度:** 高", md)
         self.assertIn("证据 / 推理", format_ai_conversation_markdown([
@@ -913,6 +920,18 @@ class AiInvestigationTests(unittest.TestCase):
                 "generate_experiment_plan",
                 "record_experiment_outcome",
                 "score_investigation",
+                "analyze_temporal_causality",
+                "build_task_dependency_graph",
+                "decompose_response_time",
+                "rank_root_causes",
+                "verify_claim",
+                "challenge_conclusion",
+                "investigation_memory",
+                "cluster_incidents",
+                "close_investigation",
+                "analyze_distribution",
+                "analyze_periodicity",
+                "summarize_investigation_context",
             ),
         )
         explained = extract_evidence_panel_payload("explain_finding", {

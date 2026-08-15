@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="552" height="250" viewBox="0 0 552 250">
+<title>Mutex Blocking — example-8cores</title>
+<rect width="552" height="250" fill="#1e1e1e"/>
+<text x="10" y="22" fill="#cccccc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">Mutex Blocking — example-8cores</text>
+<rect x="0" y="36" width="552" height="26" fill="#252526"/>
+<text x="10" y="54" fill="#9cdcfe" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Task</text>
+<text x="94" y="54" fill="#9cdcfe" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Object</text>
+<text x="229" y="54" fill="#9cdcfe" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Owner</text>
+<text x="306" y="54" fill="#9cdcfe" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Count</text>
+<text x="378" y="54" fill="#9cdcfe" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Total</text>
+<text x="470" y="54" fill="#9cdcfe" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Max</text>
+<line x1="0" y1="84" x2="552" y2="84" stroke="#3c3c3c" stroke-width="1"/>
+<text x="10" y="78" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">High[268]</text>
+<text x="94" y="78" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">mutex:0x80021ad0</text>
+<text x="229" y="78" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Low[266]</text>
+<text x="306" y="78" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">3</text>
+<text x="378" y="78" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">143.857 ms</text>
+<text x="470" y="78" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">47.965 ms</text>
+<rect x="0" y="84" width="552" height="22" fill="#252526"/>
+<line x1="0" y1="106" x2="552" y2="106" stroke="#3c3c3c" stroke-width="1"/>
+<text x="10" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">SM[87]</text>
+<text x="94" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">mutex:0x80021b80</text>
+<text x="229" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">SM[93]</text>
+<text x="306" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">48</text>
+<text x="378" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">17.164 ms</text>
+<text x="470" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">1.374 ms</text>
+<line x1="0" y1="128" x2="552" y2="128" stroke="#3c3c3c" stroke-width="1"/>
+<text x="10" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">SM[83]</text>
+<text x="94" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">mutex:0x80021b80</text>
+<text x="229" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">SM[96]</text>
+<text x="306" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">48</text>
+<text x="378" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">17.107 ms</text>
+<text x="470" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">1.003 ms</text>
+<rect x="0" y="128" width="552" height="22" fill="#252526"/>
+<line x1="0" y1="150" x2="552" y2="150" stroke="#3c3c3c" stroke-width="1"/>
+<text x="10" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">SM[97]</text>
+<text x="94" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">mutex:0x80021b80</text>
+<text x="229" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">SM[94]</text>
+<text x="306" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">48</text>
+<text x="378" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">16.603 ms</text>
+<text x="470" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">928.000 µs</text>
+<line x1="0" y1="172" x2="552" y2="172" stroke="#3c3c3c" stroke-width="1"/>
+<text x="10" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">SM[94]</text>
+<text x="94" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">mutex:0x80021b80</text>
+<text x="229" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">SM[88]</text>
+<text x="306" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">48</text>
+<text x="378" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">16.355 ms</text>
+<text x="470" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">1.229 ms</text>
+<rect x="0" y="172" width="552" height="22" fill="#252526"/>
+<line x1="0" y1="194" x2="552" y2="194" stroke="#3c3c3c" stroke-width="1"/>
+<text x="10" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">SM[90]</text>
+<text x="94" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">mutex:0x80021b80</text>
+<text x="229" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">SM[84]</text>
+<text x="306" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">48</text>
+<text x="378" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">16.011 ms</text>
+<text x="470" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">974.000 µs</text>
+<line x1="0" y1="216" x2="552" y2="216" stroke="#3c3c3c" stroke-width="1"/>
+<text x="10" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">SM[93]</text>
+<text x="94" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">mutex:0x80021b80</text>
+<text x="229" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">SM[94]</text>
+<text x="306" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">48</text>
+<text x="378" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">15.994 ms</text>
+<text x="470" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">1.005 ms</text>
+<rect x="0" y="216" width="552" height="22" fill="#252526"/>
+<line x1="0" y1="238" x2="552" y2="238" stroke="#3c3c3c" stroke-width="1"/>
+<text x="10" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">SM[89]</text>
+<text x="94" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">mutex:0x80021b80</text>
+<text x="229" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">SM[84]</text>
+<text x="306" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">48</text>
+<text x="378" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">15.947 ms</text>
+<text x="470" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">783.000 µs</text>
+</svg>

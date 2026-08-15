@@ -1,0 +1,3 @@
+#version 2.2.0
+#scenario adversarial_exec_vs_preemption
+#comment Offline AI benchmark fixture: long slices are preemption, not WCET growth.

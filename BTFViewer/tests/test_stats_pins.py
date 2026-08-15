@@ -28,7 +28,8 @@ class StatsPinsTest(unittest.TestCase):
         self.assertEqual(normalize_stats_pins(stats_pins_to_rc(pins)), pins)
 
     def test_catalogue_includes_common_sections(self) -> None:
-        for sid in ("cores", "tasks", "tags", "migrations"):
+        for sid in ("cores", "tasks", "tags", "migrations",
+                    "period", "task_core", "wait_owner", "task_health"):
             self.assertIn(sid, STATS_PINNABLE_SECTIONS)
 
 

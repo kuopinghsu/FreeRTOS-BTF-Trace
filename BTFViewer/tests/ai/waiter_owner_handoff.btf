@@ -1,0 +1,3 @@
+#version 2.2.0
+#scenario waiter_owner_handoff
+#comment Offline AI benchmark fixture: kernel wait-queue is a decoy; root cause is heuristic mutex handoff.

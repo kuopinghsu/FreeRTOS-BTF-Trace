@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="762" height="250" viewBox="0 0 762 250">
+<title>Preemption Matrix — example-8cores</title>
+<rect width="762" height="250" fill="#1e1e1e"/>
+<text x="10" y="22" fill="#cccccc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">Preemption Matrix — example-8cores</text>
+<rect x="0" y="36" width="762" height="26" fill="#252526"/>
+<text x="10" y="54" fill="#9cdcfe" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Victim</text>
+<text x="94" y="54" fill="#9cdcfe" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Count</text>
+<text x="166" y="54" fill="#9cdcfe" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Total</text>
+<text x="258" y="54" fill="#9cdcfe" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Max</text>
+<text x="342" y="54" fill="#9cdcfe" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Top preemptors</text>
+<line x1="0" y1="84" x2="762" y2="84" stroke="#3c3c3c" stroke-width="1"/>
+<text x="10" y="78" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Runner[1]</text>
+<text x="94" y="78" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">4743</text>
+<text x="166" y="78" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">1.857 s</text>
+<text x="258" y="78" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">17.374 ms</text>
+<text x="342" y="78" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Med[267] (1161), CS[13] (149), CS[26] (125), CS[17] (114)</text>
+<rect x="0" y="84" width="762" height="22" fill="#252526"/>
+<line x1="0" y1="106" x2="762" y2="106" stroke="#3c3c3c" stroke-width="1"/>
+<text x="10" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">CS[13]</text>
+<text x="94" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">1438</text>
+<text x="166" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">478.846 ms</text>
+<text x="258" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">2.656 ms</text>
+<text x="342" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">CS[23] (101), CS[25] (98), CS[27] (94), CS[11] (93)</text>
+<line x1="0" y1="128" x2="762" y2="128" stroke="#3c3c3c" stroke-width="1"/>
+<text x="10" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">CS[21]</text>
+<text x="94" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">1436</text>
+<text x="166" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">452.465 ms</text>
+<text x="258" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">3.187 ms</text>
+<text x="342" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">CS[26] (100), CS[28] (95), CS[27] (92), CS[14] (91)</text>
+<rect x="0" y="128" width="762" height="22" fill="#252526"/>
+<line x1="0" y1="150" x2="762" y2="150" stroke="#3c3c3c" stroke-width="1"/>
+<text x="10" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">CS[12]</text>
+<text x="94" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">1436</text>
+<text x="166" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">451.359 ms</text>
+<text x="258" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">3.126 ms</text>
+<text x="342" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">CS[21] (98), CS[22] (95), CS[16] (93), CS[14] (89)</text>
+<line x1="0" y1="172" x2="762" y2="172" stroke="#3c3c3c" stroke-width="1"/>
+<text x="10" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">CS[14]</text>
+<text x="94" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">1476</text>
+<text x="166" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">451.027 ms</text>
+<text x="258" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">2.935 ms</text>
+<text x="342" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">CS[21] (109), CS[17] (102), CS[16] (96), CS[24] (95)</text>
+<rect x="0" y="172" width="762" height="22" fill="#252526"/>
+<line x1="0" y1="194" x2="762" y2="194" stroke="#3c3c3c" stroke-width="1"/>
+<text x="10" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">CS[15]</text>
+<text x="94" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">1533</text>
+<text x="166" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">448.426 ms</text>
+<text x="258" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">2.179 ms</text>
+<text x="342" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">CS[26] (105), CS[16] (101), CS[11] (100), CS[21] (98)</text>
+<line x1="0" y1="216" x2="762" y2="216" stroke="#3c3c3c" stroke-width="1"/>
+<text x="10" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">CS[23]</text>
+<text x="94" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">1426</text>
+<text x="166" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">446.020 ms</text>
+<text x="258" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">2.615 ms</text>
+<text x="342" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">CS[17] (104), CS[19] (97), CS[25] (93), CS[14] (92)</text>
+<rect x="0" y="216" width="762" height="22" fill="#252526"/>
+<line x1="0" y1="238" x2="762" y2="238" stroke="#3c3c3c" stroke-width="1"/>
+<text x="10" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">CS[17]</text>
+<text x="94" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">1495</text>
+<text x="166" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">442.174 ms</text>
+<text x="258" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">2.466 ms</text>
+<text x="342" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">CS[19] (101), CS[22] (96), CS[23] (96), CS[26] (95)</text>
+</svg>

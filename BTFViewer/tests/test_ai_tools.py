@@ -14,8 +14,10 @@ if str(BTF_ROOT) not in sys.path:
 from btf_viewer_pkg.ai_tools import (  # noqa: E402
     btf_highlight_href,
     btf_jump_href,
+    btf_range_href,
     parse_btf_highlight_href,
     parse_btf_jump_href,
+    parse_btf_range_href,
     AI_RAW_METRIC_PRIORITY,
     AI_TOOL_ADD_ANNOTATION,
     AI_TOOL_CLEAR_MARKS,
@@ -357,6 +359,8 @@ class AiToolsTests(unittest.TestCase):
         self.assertTrue(href.startswith("btfhighlight:task/"))
         self.assertEqual(parse_btf_highlight_href(href), "PS[228]")
         self.assertEqual(parse_btf_highlight_href("btfhighlight:Low[266]"), "Low[266]")
+        self.assertEqual(btf_range_href(1000, 2000), "btfrange:1000/2000")
+        self.assertEqual(parse_btf_range_href("btfrange:1000/2000"), (1000.0, 2000.0))
 
     def test_auto_apply_default_off(self) -> None:
         self.assertFalse(parse_ai_auto_apply(None))

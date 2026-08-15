@@ -23,6 +23,7 @@ from btf_viewer_pkg.stats import (  # noqa: E402
     _HistogramWidget,
     _ScatterWidget,
     _StatsPanel,
+    _hist_bar_tip_lines,
     _hist_build_model,
     _hist_summarize,
 )
@@ -39,7 +40,7 @@ class TestStatsVariability(unittest.TestCase):
     def test_live_summary_jitter_and_population_stddev(self) -> None:
         summary = _StatsPanel._summarize_samples(None, [10, 20, 30], "ns")
         self.assertIsNotNone(summary)
-        mn, avg, mx, jitter, stddev, p95 = summary
+        mn, avg, mx, jitter, stddev, p95, p99 = summary
 
         self.assertEqual(mn, _format_time(10, "ns"))
         self.assertEqual(avg, _format_time(20, "ns"))
@@ -47,6 +48,7 @@ class TestStatsVariability(unittest.TestCase):
         self.assertEqual(jitter, _format_time(20, "ns"))
         self.assertEqual(stddev, _format_time(8, "ns"))
         self.assertEqual(p95, _format_time(30, "ns"))
+        self.assertEqual(p99, _format_time(30, "ns"))
 
     def test_export_summary_includes_variability(self) -> None:
         summary = _StatsPanel._summarize_samples_export(
@@ -66,7 +68,7 @@ class TestStatsVariability(unittest.TestCase):
     def test_single_sample_jitter_and_stddev_are_zero(self) -> None:
         summary = _StatsPanel._summarize_samples(None, [42], "ns")
         self.assertIsNotNone(summary)
-        _mn, _avg, _mx, jitter, stddev, _p95 = summary
+        _mn, _avg, _mx, jitter, stddev, _p95, _p99 = summary
         zero = _format_time(0, "ns")
         self.assertEqual(jitter, zero)
         self.assertEqual(stddev, zero)
@@ -116,15 +118,33 @@ class TestStatsVariability(unittest.TestCase):
         # Min/Max are already evident from the axis extents — no marker lines.
         self.assertEqual(
             [line[1] for line in model["ref_lines"]],
-            ["avg", "p50", "p95"],
+            ["avg", "p5", "p50", "p95"],
         )
 
         plain = _hist_build_model([10, 20, 30], "ns", "linear")
         self.assertIsNone(plain["sigma_band"])
         self.assertEqual(
             [line[1] for line in plain["ref_lines"]],
-            ["avg", "p50", "p95"],
+            ["avg", "p5", "p50", "p95"],
         )
+
+    def test_histogram_bar_hover_tip(self) -> None:
+        model = _hist_build_model([10, 20, 30], "ns", "linear")
+        self.assertEqual(model["n"], 3)
+        self.assertGreater(len(model["bars"]), 0)
+        bx, by, bw, bh, kind, count, edge_lo, edge_hi = model["bars"][0]
+        self.assertEqual(kind, "regular")
+        self.assertIsInstance(count, int)
+        line1, line2 = _hist_bar_tip_lines(
+            kind, count, edge_lo, edge_hi, model["n"], "ns", value_as_time=True,
+        )
+        self.assertIn("–", line1)
+        self.assertTrue(line2.endswith("%)"))
+        self.assertIn(" of 3 ", line2)
+        overflow_tip = _hist_bar_tip_lines(
+            "overflow", 2, 0, 0, 10, "ns", value_as_time=True,
+        )
+        self.assertEqual(overflow_tip, ("> p95", "2 of 10 (20%)"))
 
     def test_variability_widgets_render(self) -> None:
         points = [

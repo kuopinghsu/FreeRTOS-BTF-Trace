@@ -1,0 +1,3 @@
+#version 2.2.0
+#scenario mutex_block_vs_wait_queue
+#comment Offline AI benchmark fixture: kernel wait-queue reconstruction is a decoy; open Mutex Blocking.

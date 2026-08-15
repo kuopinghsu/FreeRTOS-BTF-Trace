@@ -1,0 +1,3 @@
+#version 2.2.0
+#scenario response_vs_blocking
+#comment Offline AI benchmark fixture: Blocking Time is a decoy; open Response Time.

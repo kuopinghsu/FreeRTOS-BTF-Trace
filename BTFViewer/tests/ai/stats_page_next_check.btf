@@ -1,0 +1,3 @@
+#version 2.2.0
+#scenario stats_page_next_check
+#comment Offline AI benchmark fixture: detect_timeline_anomalies is a decoy; open Timeline Anomalies / Worst Events.

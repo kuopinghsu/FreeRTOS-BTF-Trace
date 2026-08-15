@@ -1,0 +1,3 @@
+#version 2.2.0
+#scenario period_jitter
+#comment Offline AI benchmark fixture: tick-health noise is a decoy; root cause is task inter-arrival jitter.

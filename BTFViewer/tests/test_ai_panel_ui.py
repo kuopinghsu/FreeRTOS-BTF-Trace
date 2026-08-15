@@ -70,6 +70,18 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_TOOL_GENERATE_EXPERIMENT_PLAN,
     AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
     AI_TOOL_SCORE_INVESTIGATION,
+    AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY,
+    AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH,
+    AI_TOOL_DECOMPOSE_RESPONSE_TIME,
+    AI_TOOL_RANK_ROOT_CAUSES,
+    AI_TOOL_VERIFY_CLAIM,
+    AI_TOOL_CHALLENGE_CONCLUSION,
+    AI_TOOL_INVESTIGATION_MEMORY,
+    AI_TOOL_CLUSTER_INCIDENTS,
+    AI_TOOL_CLOSE_INVESTIGATION,
+    AI_TOOL_ANALYZE_DISTRIBUTION,
+    AI_TOOL_ANALYZE_PERIODICITY,
+    AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
     AI_TOOL_OPTIMIZE,
     AI_TOOL_OPTIMIZE_EXPERIMENT,
     AI_TOOL_QUERY_RAW_METRIC,
@@ -457,6 +469,30 @@ class AiPanelUiTests(unittest.TestCase):
                                "actual": "migrations -50%"}},
                 {"id": "c46", "name": AI_TOOL_SCORE_INVESTIGATION,
                  "arguments": {"conclusion": "migration thrash"}},
+                {"id": "c47", "name": AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY,
+                 "arguments": {"task": "CS[22]"}},
+                {"id": "c48", "name": AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH,
+                 "arguments": {}},
+                {"id": "c49", "name": AI_TOOL_DECOMPOSE_RESPONSE_TIME,
+                 "arguments": {"task": "CS[22]"}},
+                {"id": "c50", "name": AI_TOOL_RANK_ROOT_CAUSES,
+                 "arguments": {}},
+                {"id": "c51", "name": AI_TOOL_VERIFY_CLAIM,
+                 "arguments": {"claim": "Mutex M blocked CS[22]"}},
+                {"id": "c52", "name": AI_TOOL_CHALLENGE_CONCLUSION,
+                 "arguments": {"conclusion": "mutex blocking"}},
+                {"id": "c53", "name": AI_TOOL_INVESTIGATION_MEMORY,
+                 "arguments": {"action": "recall"}},
+                {"id": "c54", "name": AI_TOOL_CLUSTER_INCIDENTS,
+                 "arguments": {}},
+                {"id": "c55", "name": AI_TOOL_CLOSE_INVESTIGATION,
+                 "arguments": {"conclusion": "migration thrash"}},
+                {"id": "c56", "name": AI_TOOL_ANALYZE_DISTRIBUTION,
+                 "arguments": {"values": [1, 2, 3]}},
+                {"id": "c57", "name": AI_TOOL_ANALYZE_PERIODICITY,
+                 "arguments": {"times": [1, 2, 3, 4]}},
+                {"id": "c58", "name": AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
+                 "arguments": {"conclusion": "done"}},
             ],
         }))
         with patch.object(panel, "_continue_with_messages"):
@@ -626,14 +662,15 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertEqual(opened, [src])
 
     def test_chat_first_layout_stretches_log(self) -> None:
-        """Log is a direct stretch child; plan starts hidden until investigation."""
+        """Log stretches inside the splitter; plan starts hidden until investigation."""
         panel = self._panel()
         lay = panel.layout()
         self.assertIsInstance(lay, QVBoxLayout)
-        idx = lay.indexOf(panel._log)
+        idx = lay.indexOf(panel._split)
         self.assertGreaterEqual(idx, 0)
         self.assertEqual(lay.stretch(idx), 1)
-        self.assertIs(lay.itemAt(idx).widget(), panel._log)
+        self.assertIs(panel._log.parentWidget(), panel._split_top)
+        self.assertIs(panel._composer.parentWidget(), panel._split_bottom)
         self.assertFalse(isinstance(panel._log.parentWidget(), QScrollArea))
         self.assertTrue(panel._plan_host.isHidden())
         panel._set_investigation_plan({
@@ -918,19 +955,29 @@ class AiPanelUiTests(unittest.TestCase):
             model_time_s=1.5,
         )
         panel._set_status("Done.")
-        self.assertIn("Done.", panel._status.text())
-        self.assertIn("1.2k tok", panel._status.text())
-        self.assertIn("2 tools", panel._status.text())
+        self.assertEqual(panel._status.text(), "Done.")
+        self.assertIn("1.2k tok", panel._usage.text())
+        self.assertIn("2 tools", panel._usage.text())
+        self.assertIn("1.5s", panel._usage.text())
         panel._record_turn_usage(
             {"usage": {"prompt_tokens": 50, "completion_tokens": 10}},
             [],
         )
         panel._set_status("Done.")
-        self.assertIn("1.3k tok", panel._status.text())
+        self.assertIn("1.3k tok", panel._usage.text())
+        self.assertEqual(panel._status.text(), "Done.")
         panel.clear_conversation()
         self.assertEqual(panel._status.text(), "")
         self.assertEqual(panel._cost_meter["total_tokens"], 0)
         self.assertEqual(panel._cost_meter["tool_calls"], 0)
+        self.assertIn("0 tok", panel._usage.text())
+
+    def test_log_composer_splitter_exists(self) -> None:
+        panel = self._panel()
+        self.assertEqual(panel._split.objectName(), "aiSplit")
+        self.assertEqual(panel._split_bottom.objectName(), "aiSplitBottom")
+        self.assertEqual(panel._usage.objectName(), "aiUsageBar")
+        self.assertIn("0 tok", panel._usage.text())
 
     def test_disabled_template_chips_use_muted_color(self) -> None:
         from btf_viewer_pkg.ai_assistant import (

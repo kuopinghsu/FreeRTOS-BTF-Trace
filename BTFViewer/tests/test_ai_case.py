@@ -16,6 +16,7 @@ from btf_viewer_pkg.ai_case import (  # noqa: E402
     build_investigation_case,
     build_validation_catalog,
     classify_trace_privacy,
+    clamp_ai_split_bottom,
     compute_evidence_quality,
     dump_user_investigation_templates,
     empty_cost_meter,
@@ -23,6 +24,7 @@ from btf_viewer_pkg.ai_case import (  # noqa: E402
     evidence_quality_band,
     falsification_checks,
     format_capability_report,
+    format_cost_status,
     historical_knowledge_for_finding,
     infer_model_capability,
     interpret_investigation_query,
@@ -40,6 +42,8 @@ from btf_viewer_pkg.ai_case import (  # noqa: E402
     format_benchmark_markdown,
     run_live_benchmark,
     run_offline_benchmark,
+    score_adversarial_metrics,
+    score_benchmark_case,
     set_hypothesis_status,
     status_with_cost,
     validate_ai_response,
@@ -112,6 +116,10 @@ class InvestigationCaseTests(unittest.TestCase):
         meter = accumulate_cost(meter, prompt_tokens=50, completion_tokens=10)
         text = status_with_cost("Done.", meter)
         self.assertEqual(text, "Done. · 1.3k tok · 2 tools · 1.5s")
+        self.assertEqual(format_cost_status(empty_cost_meter()), "0 tok · 0 tools · 0s")
+        self.assertEqual(clamp_ai_split_bottom(""), 80)
+        self.assertEqual(clamp_ai_split_bottom(40), 64)
+        self.assertEqual(clamp_ai_split_bottom(900), 400)
 
     def test_falsify_migration(self) -> None:
         f = falsification_checks({
@@ -183,6 +191,8 @@ class InvestigationCaseTests(unittest.TestCase):
         prompt = investigation_mode_prompt("diagnose")
         self.assertIn("investigate", prompt)
         self.assertIn("correlate_events", prompt)
+        self.assertIn("rank_root_causes", prompt)
+        self.assertIn("challenge_conclusion", prompt)
         tpl = new_user_investigation_template(
             "CPU Latency", ["detect_anomalies", "investigate"])
         dumped = dump_user_investigation_templates([tpl])
@@ -349,6 +359,13 @@ class InvestigationCaseTests(unittest.TestCase):
                 "load_imbalance",
                 "trace_regression",
                 "explain_region",
+                "adversarial_mutex_vs_starvation",
+                "adversarial_exec_vs_preemption",
+                "adversarial_correlation_not_cause",
+                "adversarial_out_of_scope_time",
+                "period_jitter",
+                "waiter_owner_handoff",
+                "stats_page_next_check",
             ],
         )
         for case in cases:
@@ -359,7 +376,113 @@ class InvestigationCaseTests(unittest.TestCase):
             self.assertIn("#scenario", text)
         result = run_offline_benchmark(root, fail_under=50)
         self.assertTrue(result["ok"], result["report"])
-        self.assertEqual(len(result["rows"]), 7)
+        self.assertEqual(len(result["rows"]), 14)
+        adv_ids = {
+            "adversarial_mutex_vs_starvation",
+            "adversarial_exec_vs_preemption",
+            "adversarial_correlation_not_cause",
+            "adversarial_out_of_scope_time",
+            "period_jitter",
+            "waiter_owner_handoff",
+            "stats_page_next_check",
+        }
+        self.assertEqual({r["id"] for r in result["rows"] if r["id"] in adv_ids}, adv_ids)
+        for row in result["rows"]:
+            if row["id"] in adv_ids:
+                self.assertEqual(row.get("false_confirmation_rate"), 0, row["id"])
+                self.assertEqual(row.get("false_causal_rate"), 0, row["id"])
+                self.assertEqual(row.get("premature_conclusion_rate"), 0, row["id"])
+
+    def test_adversarial_trap_response_is_penalized(self) -> None:
+        expected = {
+            "finding_types": ["starvation"],
+            "tasks": ["Waiter[2]"],
+            "root_cause_class": "starvation",
+            "trap_phrases": ["mutex contention"],
+            "required_tools": ["investigate"],
+            "no_causal": False,
+        }
+        trap = score_benchmark_case(
+            expected,
+            actual_finding_ids=["mutex"],
+            actual_tasks=["Waiter[2]"],
+            actual_tools=[],
+            actual_conclusion=(
+                "Waiter[2] stalled from mutex contention. Confidence: High."
+            ),
+        )
+        self.assertEqual(trap["false_confirmation_rate"], 100)
+        self.assertEqual(trap["parts"]["root_cause"], 0)
+        self.assertEqual(trap["premature_conclusion_rate"], 100)
+        good = score_adversarial_metrics(
+            expected,
+            actual_conclusion="Waiter[2] CPU starvation from preemption, not mutex contention.",
+            tools=["investigate"],
+        )
+        self.assertEqual(good["false_confirmation_rate"], 0)
+        self.assertEqual(good["premature_conclusion_rate"], 0)
+
+    def test_required_metrics_accept_statistics_page_aliases(self) -> None:
+        expected = {
+            "finding_types": ["jitter"],
+            "tasks": ["Periodic[4]"],
+            "root_cause_class": "jitter",
+            "evidence": {"required_metrics": ["period / jitter", "waiter × owner", "task × core"]},
+        }
+        hit = score_benchmark_case(
+            expected,
+            actual_finding_ids=["jitter"],
+            actual_tasks=["Periodic[4]"],
+            actual_tools=["analyze_periodicity"],
+            actual_conclusion=(
+                "Periodic[4] missed a period. Open Period/Jitter, Waiter x Owner, "
+                "and Task-Core. Confidence: Medium."
+            ),
+        )
+        self.assertEqual(hit["parts"]["evidence"], 100)
+        miss = score_benchmark_case(
+            expected,
+            actual_finding_ids=["jitter"],
+            actual_tasks=["Periodic[4]"],
+            actual_tools=["analyze_periodicity"],
+            actual_conclusion="Periodic[4] jitter only. Confidence: Medium.",
+        )
+        self.assertLess(miss["parts"]["evidence"], 100)
+
+    def test_ux_page_traps_are_penalized(self) -> None:
+        tick = score_benchmark_case(
+            {
+                "finding_types": ["period"],
+                "tasks": ["Periodic[4]"],
+                "root_cause_class": "jitter",
+                "trap_phrases": ["tick health"],
+                "required_tools": ["analyze_periodicity"],
+                "evidence": {"required_metrics": ["period / jitter"]},
+            },
+            actual_finding_ids=["period"],
+            actual_tasks=["Periodic[4]"],
+            actual_tools=[],
+            actual_conclusion="Periodic[4] is a tick health problem. Confidence: High.",
+        )
+        self.assertEqual(tick["false_confirmation_rate"], 100)
+        self.assertEqual(tick["parts"]["root_cause"], 0)
+        fake_tool = score_benchmark_case(
+            {
+                "finding_types": ["anomalies"],
+                "tasks": ["Worker[10]"],
+                "root_cause_class": "tail",
+                "trap_phrases": ["call detect_timeline_anomalies"],
+                "required_tools": ["detect_anomalies"],
+                "evidence": {"required_metrics": ["timeline anomalies"]},
+            },
+            actual_finding_ids=["anomalies"],
+            actual_tasks=["Worker[10]"],
+            actual_tools=[],
+            actual_conclusion=(
+                "Call detect_timeline_anomalies for Worker[10]. Confidence: High."
+            ),
+        )
+        self.assertEqual(fake_tool["false_confirmation_rate"], 100)
 
     def test_benchmark_suite_xml_loads_endpoint_tls_and_env_key(self) -> None:
         import tempfile
@@ -499,6 +622,8 @@ class InvestigationCaseParitySurfaceTests(unittest.TestCase):
             "historicalKnowledgeForFinding",
             "statusWithCost",
             "formatCostStatus",
+            "clampAiSplitBottom",
+            "scoreAdversarialMetrics",
             "costMeterActive",
             "applyCloudPrivacy",
             "toggleInterpretedScope",

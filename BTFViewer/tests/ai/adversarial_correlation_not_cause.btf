@@ -1,0 +1,3 @@
+#version 2.2.0
+#scenario adversarial_correlation_not_cause
+#comment Offline AI benchmark fixture: correlated events with no causal link.
