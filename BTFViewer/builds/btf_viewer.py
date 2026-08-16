@@ -1450,7 +1450,7 @@ _STI_COLORS: Dict[str, QColor] = {
 APP_VERSION = _APP_VERSION
 APP_ICON_SVG = _APP_ICON_SVG
 PRODUCT_NAME = "BTFViewer"
-PRODUCT_TAGLINE = "RTOS context-switch timeline visualiser"
+PRODUCT_TAGLINE = "AI assistant for RTOS trace analysis — find evidence and explain"
 
 
 def app_icon_svg_markup(size: int = 48) -> str:
@@ -17507,10 +17507,24 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _mermaid_safe_label(text: Any, limit: int = 48) -> str:
+def _mermaid_safe_label(text: Any, limit: int = 96) -> str:
     cleaned = _MERMAID_STRIP_RE.sub("", str(text or "").replace("\n", " "))
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return (cleaned or "Node")[:limit]
+
+
+def mermaid_label_with_time(text: Any, time: Any = None, limit: int = 96) -> str:
+    """Node text plus ``jump:TIME`` so diagram clicks pan the timeline."""
+    lab = str(text or "").strip() or "Node"
+    tok = ""
+    try:
+        tn = float(time)
+        tok = str(int(tn)) if tn.is_integer() else str(tn)
+    except (TypeError, ValueError):
+        tok = ""
+    if tok and f"jump:{tok}" not in lab:
+        lab = f"{lab} jump:{tok}"
+    return _mermaid_safe_label(lab, limit)
 
 
 def empty_investigation_case(
@@ -17695,7 +17709,8 @@ def build_evidence_graph(
         nodes.append({
             "id": nid,
             "kind": "evidence",
-            "label": str(ev.get("label") or ev.get("kind") or "evidence"),
+            "label": mermaid_label_with_time(
+                ev.get("label") or ev.get("kind") or "evidence", ev.get("time")),
             "time": ev.get("time"),
         })
         if any(n["id"] == fid for n in nodes):
@@ -17707,7 +17722,8 @@ def build_evidence_graph(
         nodes.append({
             "id": nid,
             "kind": str(step.get("kind") or "step"),
-            "label": str(step.get("label") or f"Step {i + 1}"),
+            "label": mermaid_label_with_time(
+                step.get("label") or f"Step {i + 1}", step.get("time")),
             "time": step.get("time"),
         })
         prev = fid if i == 0 and any(n["id"] == fid for n in nodes) else f"C{i - 1}"
@@ -21401,7 +21417,7 @@ def detect_anomalies(
 _MERMAID_LABEL_STRIP_RE = re.compile(r'["\[\]{}()|]')
 
 
-def _mermaid_safe_label(text: Any, limit: int = 48) -> str:
+def _mermaid_safe_label(text: Any, limit: int = 96) -> str:
     """Strip mermaid delimiter characters so a label is safe as a node body."""
     cleaned = _MERMAID_LABEL_STRIP_RE.sub("", str(text or "").replace("\n", " ")).strip()
     cleaned = re.sub(r"\s+", " ", cleaned)
@@ -21428,7 +21444,8 @@ def investigation_tree_mermaid(
     node_ids: List[str] = []
     for i, step in enumerate(chain_items):
         nid = f"S{i}"
-        label = _mermaid_safe_label(step.get("label") or f"Step {i + 1}")
+        label = mermaid_label_with_time(
+            step.get("label") or f"Step {i + 1}", step.get("time"))
         lines.append(f"{nid}[{label}]")
         node_ids.append(nid)
     for i in range(1, len(node_ids)):
@@ -31743,7 +31760,8 @@ _NOTE_RE = re.compile(
     r"^Note\s+(?:over|left of|right of)\s+([^:]+):\s*(.*)$", re.IGNORECASE
 )
 _NODE_RE = re.compile(
-    r"^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\)|\{([^}]+)\})?\s*$"
+    r"^([A-Za-z0-9_]+)\s*(?:"
+    r"\[([^\]]+)\]|\(([^\)]+)\)|\{\{([^}]+)\}\}|\{([^}]+)\})?\s*$"
 )
 _EDGE_RE = re.compile(
     r"^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?"
@@ -31827,7 +31845,10 @@ def mermaid_link_targets(source: str) -> List[Tuple[str, str]]:
             continue
         nm = _NODE_RE.match(s)
         if nm:
-            _add_hl(nm.group(2) or nm.group(3) or nm.group(4) or nm.group(1) or "")
+            _add_hl(
+                nm.group(2) or nm.group(3) or nm.group(4)
+                or nm.group(5) or nm.group(1) or ""
+            )
     return found
 
 
@@ -31847,6 +31868,22 @@ def mermaid_hit_regions(source: str) -> List[Dict[str, Any]]:
     if first.startswith("graph ") or first.startswith("flowchart "):
         return _flowchart_hits(text)
     return []
+
+
+def mermaid_node_action(label: str) -> Tuple[str, str]:
+    """Click action for a diagram node: ``jump`` if the label has jump:TIME."""
+    text = str(label or "").strip()
+    m = _JUMP_RE.search(text)
+    if m:
+        return "jump", m.group(1)
+    return "highlight", text
+
+
+def _node_href_attr(label: str) -> str:
+    kind, value = mermaid_node_action(label)
+    if kind == "jump":
+        return f' href="{html.escape(btf_jump_href(value), quote=True)}"'
+    return f' href="{html.escape(btf_highlight_href(value), quote=True)}"'
 
 
 def hit_test_mermaid(
@@ -32058,9 +32095,10 @@ def _sequence_hits(source: str) -> List[Dict[str, Any]]:
     hits: List[Dict[str, Any]] = []
     for i, (_pid, label) in enumerate(geom["participants"]):
         x = geom["xs"][i]
+        kind, value = mermaid_node_action(label)
         hits.append({
             "x": x - box_w / 2, "y": top - 14, "w": float(box_w), "h": 28.0,
-            "kind": "highlight", "value": label,
+            "kind": kind, "value": value,
         })
     return hits
 
@@ -32082,7 +32120,7 @@ def _sequence_svg(source: str, *, interactive: bool) -> str:
     for i, (_pid, label) in enumerate(participants):
         x = xs[i]
         bx = x - box_w / 2
-        href = f' href="btfhighlight:{_esc(label)}"' if interactive else ""
+        href = _node_href_attr(label) if interactive else ""
         parts.append(
             f'<line x1="{x}" y1="{top + 22}" x2="{x}" y2="{height - 12}" '
             f'stroke="#3a4658" stroke-dasharray="4 3"/>'
@@ -32161,42 +32199,106 @@ def _parse_flowchart(
             continue
         nm = _NODE_RE.match(line)
         if nm:
-            _add_node(nm.group(1), nm.group(2) or nm.group(3) or nm.group(4))
+            _add_node(
+                nm.group(1),
+                nm.group(2) or nm.group(3) or nm.group(4) or nm.group(5),
+            )
     return nodes, order, edges
 
 
-def _node_box_w(label: str) -> float:
-    return float(max(72, min(130, 12 + 7 * len((label or "")[:18]))))
+def wrap_node_label(label: str, max_chars: int = 22) -> List[str]:
+    """Word-wrap a flowchart node label so the SVG rectangle can grow."""
+    text = re.sub(r"\s+", " ", str(label or "")).strip()
+    if not text:
+        return [""]
+    lines: List[str] = []
+    cur = ""
+
+    def _flush() -> None:
+        nonlocal cur
+        if cur:
+            lines.append(cur)
+            cur = ""
+
+    for word in text.split(" "):
+        while len(word) > max_chars:
+            room = max_chars - (len(cur) + (1 if cur else 0))
+            if room < 1:
+                _flush()
+                room = max_chars
+            if cur:
+                cur += " "
+            cur += word[:room]
+            word = word[room:]
+            _flush()
+        if not word:
+            continue
+        trial = word if not cur else f"{cur} {word}"
+        if len(trial) <= max_chars:
+            cur = trial
+        else:
+            _flush()
+            cur = word
+    _flush()
+    return lines or [""]
+
+
+def _node_box_size(label: str) -> Tuple[float, float, List[str]]:
+    """Return ``(width, height, wrapped_lines)`` for a flowchart node."""
+    lines = wrap_node_label(label)
+    longest = max((len(ln) for ln in lines), default=0)
+    bw = float(max(72.0, min(156.0, 14.0 + 6.6 * longest)))
+    bh = float(10.0 * 2 + 14.0 * max(len(lines), 1))
+    return bw, bh, lines
+
+
+def _node_ray_r(bw: float, bh: float, ux: float, uy: float) -> float:
+    """Distance from node centre to the ellipse that bounds the rectangle."""
+    hw, hh = bw / 2.0 + 2.0, bh / 2.0 + 2.0
+    denom = math.hypot(ux * hh, uy * hw) or 1.0
+    return (hw * hh) / denom
 
 
 def _flowchart_geom(source: str) -> Optional[Dict[str, Any]]:
     nodes, order, edges = _parse_flowchart(source)
     if not nodes:
         return None
-    col_w, row_h = 160.0, 78.0
+    sizes = {nid: _node_box_size(nodes[nid]) for nid in order}
     cols = min(4, max(1, len(order)))
-    max_half = 40.0
-    for nid in order:
-        max_half = max(max_half, _node_box_w(nodes[nid]) / 2.0)
+    max_bw = max(sz[0] for sz in sizes.values())
+    col_w = max(160.0, max_bw + 24.0)
+    row_h: Dict[int, float] = {}
+    for i, nid in enumerate(order):
+        r = i // cols
+        row_h[r] = max(row_h.get(r, 0.0), sizes[nid][1])
+    max_half = max(sz[0] / 2.0 for sz in sizes.values())
     pad = max_half + 18.0
     top = 36.0
+    row_cy: Dict[int, float] = {}
+    y = top
+    for r in range(max(row_h) + 1 if row_h else 0):
+        h = row_h.get(r, 32.0)
+        row_cy[r] = y + h / 2.0
+        y += h + 28.0
     pos: Dict[str, Tuple[float, float]] = {}
     for i, nid in enumerate(order):
         c, r = i % cols, i // cols
-        pos[nid] = (pad + c * col_w, top + r * row_h)
-    right = max(x + _node_box_w(nodes[nid]) / 2 for nid, (x, _y) in pos.items())
-    bottom = max(y + 20 for _x, y in pos.values())
+        pos[nid] = (pad + c * col_w, row_cy[r])
+    right = max(
+        pos[nid][0] + sizes[nid][0] / 2.0 for nid in order
+    )
+    bottom = y - 28.0
     width = right + pad
-    height = bottom + 24
+    height = bottom + 24.0
     return {
         "nodes": nodes, "order": order, "edges": edges, "pos": pos,
-        "width": width, "height": height,
+        "sizes": sizes, "width": width, "height": height,
     }
 
 
 def _flowchart_edge_paths(geom: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Offset reverse edges so Core_0→Core_1 and Core_1→Core_0 counts do not stack."""
-    nodes, edges, pos = geom["nodes"], geom["edges"], geom["pos"]
+    edges, pos = geom["edges"], geom["pos"]
     pairs = {(src, dst) for src, dst, _lab in edges}
     paths: List[Dict[str, float]] = []
     for src, dst, label in edges:
@@ -32208,8 +32310,10 @@ def _flowchart_edge_paths(geom: Dict[str, Any]) -> List[Dict[str, Any]]:
         nx, ny = -uy, ux
         sep = 12.0 if (dst, src) in pairs else 0.0
         ox, oy = nx * sep, ny * sep
-        src_r = _node_box_w(nodes[src]) / 2.0 + 2.0
-        dst_r = _node_box_w(nodes[dst]) / 2.0 + 2.0
+        src_bw, src_bh, _sl = geom["sizes"][src]
+        dst_bw, dst_bh, _dl = geom["sizes"][dst]
+        src_r = _node_ray_r(src_bw, src_bh, ux, uy)
+        dst_r = _node_ray_r(dst_bw, dst_bh, ux, uy)
         sx = x1 + ux * src_r + ox
         sy = y1 + uy * src_r + oy
         ex = x2 - ux * dst_r + ox
@@ -32232,10 +32336,11 @@ def _flowchart_hits(source: str) -> List[Dict[str, Any]]:
     for nid in geom["order"]:
         x, y = geom["pos"][nid]
         label = geom["nodes"][nid]
-        bw = _node_box_w(label)
+        bw, bh, _lines = geom["sizes"][nid]
+        kind, value = mermaid_node_action(label)
         hits.append({
-            "x": x - bw / 2, "y": y - 16, "w": float(bw), "h": 32.0,
-            "kind": "highlight", "value": label,
+            "x": x - bw / 2, "y": y - bh / 2, "w": float(bw), "h": float(bh),
+            "kind": kind, "value": value,
         })
     return hits
 
@@ -32270,14 +32375,23 @@ def _flowchart_svg(source: str, *, interactive: bool) -> str:
     for nid in order:
         x, y = pos[nid]
         label = nodes[nid]
-        href = f' href="btfhighlight:{_esc(label)}"' if interactive else ""
-        bw = _node_box_w(label)
+        href = _node_href_attr(label) if interactive else ""
+        bw, bh, lines = geom["sizes"][nid]
+        y0 = y - bh / 2.0 + 10.0 + 11.0
+        # Separate <text> nodes: Qt's SVG renderer ignores <tspan>, so a
+        # single <text> with tspans paints empty rectangles on Desktop.
+        labels = []
+        for i, line in enumerate(lines):
+            labels.append(
+                f'<text x="{x:.1f}" y="{y0 + i * 14.0:.1f}" text-anchor="middle" '
+                f'fill="#dbe2ea" font-size="11" font-family="{fam}">'
+                f"{_esc(line)}</text>"
+            )
         parts.append(
             f'<a{href}>'
-            f'<rect x="{x - bw / 2}" y="{y - 16}" width="{bw}" height="32" rx="6" '
-            f'fill="#1e3348" stroke="#5b9bd5"/>'
-            f'<text x="{x}" y="{y + 5}" text-anchor="middle" fill="#dbe2ea" '
-            f'font-size="11" font-family="{fam}">{_esc(label[:18])}</text>'
+            f'<rect x="{x - bw / 2:.1f}" y="{y - bh / 2:.1f}" width="{bw:.1f}" '
+            f'height="{bh:.1f}" rx="6" fill="#1e3348" stroke="#5b9bd5"/>'
+            f"{''.join(labels)}"
             f"</a>"
         )
     parts.append("</svg>")
@@ -32415,8 +32529,11 @@ class _MermaidZoomDialog(QDialog):
                 hit = hit_test_mermaid(
                     self._source, pos.x(), pos.y(), scale=self._hit_scale)
                 if hit:
-                    _kind, value = hit
-                    self._on_link(QUrl(f"btfhighlight:{urllib.parse.quote(value, safe='')}"))
+                    kind, value = hit
+                    if kind == "jump":
+                        self._on_link(QUrl(btf_jump_href(value)))
+                    else:
+                        self._on_link(QUrl(btf_highlight_href(value)))
                     return True
         return QDialog.eventFilter(self, obj, event)
 
@@ -32745,12 +32862,23 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
 )
 
 # Always-visible wrapping chips. Keep in sync with web/src/utils/ollamaClient.js.
+# Last primary id shares a row with More templates… (web `.ai-tpl-row`).
 AI_TEMPLATE_PRIMARY_IDS: Tuple[str, ...] = (
     "investigate",
     "findings",
     "explain_region",
     "auto_investigate",
 )
+
+
+def ai_template_primary_rows(
+    ids: Optional[Tuple[str, ...]] = None,
+) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """Split primary chips so Auto investigate + More sit on the last row."""
+    seq = tuple(ids if ids is not None else AI_TEMPLATE_PRIMARY_IDS)
+    if len(seq) <= 1:
+        return seq, ()
+    return seq[:-1], seq[-1:]
 
 # Overflow menu groups for the remaining templates (ids must cover every
 # AI_TEMPLATE_QUESTIONS entry that is not in AI_TEMPLATE_PRIMARY_IDS).
@@ -33847,6 +33975,10 @@ def _md_inline_to_html_escaped(text: str) -> str:
             label = html.escape(lm.group(1))
             href = lm.group(2).strip()
             low = href.lower()
+            if low.startswith("btfhighlight:"):
+                name = parse_btf_highlight_href(href)
+                href = btf_highlight_href(name) if name else href
+                low = href.lower()
             if (
                 low.startswith("http://")
                 or low.startswith("https://")
@@ -34308,7 +34440,7 @@ def _ai_log_style(is_dark: bool = True) -> str:
         f".ai-role-assistant{{color:{asst};}}"
         f".ai-tool-card{{color:{tool};}}"
         "img.ai-mermaid-img{max-width:100%;height:auto;border-radius:4px;}"
-        "a.ai-mermaid-zoom{cursor:zoom-in;text-decoration:none;}"
+        "a.ai-mermaid-zoom,.ai-mermaid-zoom{cursor:zoom-in;text-decoration:none;}"
         ".ai-evidence-score{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;}"
     )
 
@@ -35417,11 +35549,20 @@ def ai_test_connection(
 
 
 class _FlowLayout(QLayout):
-    """Wrap chips like web ``display:flex; flex-wrap:wrap; gap:4px``."""
+    """Wrap chips like web ``display:flex; flex-wrap:wrap; gap:4px``.
 
-    def __init__(self, parent: Optional[QWidget] = None, spacing: int = 4) -> None:
+    *break_before*: item indices that always start a new row (web ``.ai-tpl-row``).
+    """
+
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        spacing: int = 4,
+        break_before: Optional[Tuple[int, ...]] = None,
+    ) -> None:
         super().__init__(parent)
         self._items: List[Any] = []
+        self._break_before = frozenset(int(i) for i in (break_before or ()))
         self.setContentsMargins(0, 0, 0, 0)
         self.setSpacing(int(spacing))
 
@@ -35472,10 +35613,14 @@ class _FlowLayout(QLayout):
         y = effective.y()
         line_height = 0
         space = self.spacing()
-        for item in self._items:
+        for idx, item in enumerate(self._items):
             hint = item.sizeHint()
             next_x = x + hint.width() + space
-            if line_height > 0 and next_x - space > effective.right() + 1:
+            wrap = line_height > 0 and (
+                idx in self._break_before
+                or next_x - space > effective.right() + 1
+            )
+            if wrap:
                 x = effective.x()
                 y = y + line_height + space
                 next_x = x + hint.width() + space
@@ -35502,6 +35647,29 @@ def _ai_more_heading(label: str) -> QLabel:
     return hdr
 
 
+def qt_wrap_tooltip(text: str, width_px: int = 320) -> str:
+    """Rich-text tooltip that wraps at word boundaries at a readable width.
+
+    Native macOS tips stay on one line. Character ``textwrap`` plus Qt's own
+    wrap stacks two line-breaks, so a line often ends with a leftover word.
+    A table cell ``width`` is the reliable QTipLabel constraint; Qt then wraps
+    on spaces. Explicit newlines in the source stay as ``<br/>``.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    parts = []
+    for para in raw.split("\n"):
+        chunk = para.strip()
+        parts.append(html.escape(chunk) if chunk else "")
+    body = "<br/>".join(parts)
+    px = max(160, int(width_px))
+    return (
+        f'<html><body><table cellspacing="0" cellpadding="0"><tr>'
+        f'<td width="{px}">{body}</td></tr></table></body></html>'
+    )
+
+
 def _ai_more_item(label: str, tooltip: str = "") -> QPushButton:
     """Flat menu row matching web ``.ai-more-item``."""
     btn = QPushButton(label)
@@ -35517,7 +35685,7 @@ def _ai_more_item(label: str, tooltip: str = "") -> QPushButton:
     if fusion is not None:
         btn.setStyle(fusion)
     if tooltip:
-        btn.setToolTip(tooltip)
+        btn.setToolTip(qt_wrap_tooltip(tooltip))
     return btn
 
 
@@ -35963,7 +36131,7 @@ def create_ai_assistant_panel(
             self._mode_btns: List[QPushButton] = []
             for mid in INVESTIGATION_MODES:
                 btn = QPushButton(INVESTIGATION_MODE_LABELS.get(mid, mid.title()))
-                btn.setToolTip(investigation_mode_prompt(mid))
+                btn.setToolTip(qt_wrap_tooltip(investigation_mode_prompt(mid)))
                 btn.setSizePolicy(
                     QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 btn.setMinimumHeight(_AI_CHIP_MIN_HEIGHT)
@@ -35980,7 +36148,9 @@ def create_ai_assistant_panel(
             tpl_host.setSizePolicy(
                 QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             tpl_host.setStyleSheet(_AI_TPL_BTN_STYLE)
-            tpl_row = _FlowLayout(tpl_host, spacing=4)
+            _lead_ids, _last_ids = ai_template_primary_rows()
+            tpl_row = _FlowLayout(
+                tpl_host, spacing=4, break_before=(len(_lead_ids),))
 
             self._template_btns: List[QPushButton] = []
             self._template_actions: Dict[str, Any] = {}
@@ -35993,13 +36163,13 @@ def create_ai_assistant_panel(
                 if tid in AI_SMP_ONLY_TEMPLATE_IDS:
                     self._smp_only_btns[tid] = ctrl
 
-            for _tid in AI_TEMPLATE_PRIMARY_IDS:
+            for _tid in _lead_ids + _last_ids:
                 item = ai_template_by_id(_tid)
                 if item is None:
                     continue
                 _tid, label, prompt = item
                 btn = QPushButton(label)
-                btn.setToolTip(prompt)
+                btn.setToolTip(qt_wrap_tooltip(prompt))
                 btn.setSizePolicy(
                     QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 btn.setMinimumHeight(_AI_CHIP_MIN_HEIGHT)
@@ -36011,10 +36181,10 @@ def create_ai_assistant_panel(
                 _bind_template_ctrl(_tid, btn)
 
             more_btn = QPushButton("More templates\u2026")
-            more_btn.setToolTip(
+            more_btn.setToolTip(qt_wrap_tooltip(
                 "Uses Analysis Findings for the current Statistics scope. "
                 "Configure the endpoint in Settings \u2192 AI."
-            )
+            ))
             more_btn.setSizePolicy(
                 QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             more_btn.setMinimumHeight(_AI_CHIP_MIN_HEIGHT)
@@ -36380,8 +36550,11 @@ def create_ai_assistant_panel(
             hit = hit_test_mermaid(src, local[0], local[1])
             if not hit:
                 return False
-            _kind, value = hit
-            self._on_jump_link(QUrl(f"btfhighlight:{urllib.parse.quote(value, safe='')}"))
+            kind, value = hit
+            if kind == "jump":
+                self._on_jump_link(QUrl(btf_jump_href(value)))
+            else:
+                self._on_jump_link(QUrl(btf_highlight_href(value)))
             return True
 
         def _mermaid_img_local_pos(self, view_pos) -> Optional[Tuple[float, float]]:
@@ -36450,7 +36623,7 @@ def create_ai_assistant_panel(
                 in ("1", "true", "yes", "on"),
             )
             self._privacy_chip.setText(format_privacy_chip(priv))
-            self._privacy_chip.setToolTip(str(priv.get("note") or ""))
+            self._privacy_chip.setToolTip(qt_wrap_tooltip(str(priv.get("note") or "")))
             needs = bool(st["needs_auth"]) or bool(getattr(self, "_auth_forced", False))
             self._auth_cta.setVisible(needs)
             url = ai_preset_signin_url(active["preset"], active.get("base_url", ""))
@@ -36493,7 +36666,7 @@ def create_ai_assistant_panel(
             if bar is None:
                 return
             bar.setText(format_cost_status(self._cost_meter))
-            bar.setToolTip(format_cost_meter(self._cost_meter))
+            bar.setToolTip(qt_wrap_tooltip(format_cost_meter(self._cost_meter)))
 
         def _restore_ai_split(self) -> None:
             split = getattr(self, "_split", None)
@@ -36632,7 +36805,15 @@ def create_ai_assistant_panel(
                     self._on_tool_why(action, name)
                 return
             if scheme == "btfhighlight":
-                name = parse_btf_highlight_href(url.toString())
+                raw = url.toString()
+                name = parse_btf_highlight_href(raw)
+                if not name:
+                    try:
+                        name = parse_btf_highlight_href(
+                            bytes(url.toEncoded()).decode("ascii", "replace")
+                        )
+                    except Exception:
+                        name = ""
                 if on_highlight and name:
                     on_highlight(name)
                 return
@@ -37055,12 +37236,12 @@ def create_ai_assistant_panel(
                         (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS if tid == _tid), ""
                     )
                     btn.setEnabled(True)
-                    btn.setToolTip(prompt)
+                    btn.setToolTip(qt_wrap_tooltip(prompt))
                 else:
                     btn.setEnabled(False)
-                    btn.setToolTip(
+                    btn.setToolTip(qt_wrap_tooltip(
                         "This trace has a single core — not applicable."
-                    )
+                    ))
 
             if self._compare_btn is None:
                 return
@@ -37074,12 +37255,12 @@ def create_ai_assistant_panel(
                 return
             if n < 2:
                 self._compare_btn.setEnabled(False)
-                self._compare_btn.setToolTip(
+                self._compare_btn.setToolTip(qt_wrap_tooltip(
                     "Open at least two BTF tabs to use Trace Compare."
-                )
+                ))
             else:
                 self._compare_btn.setEnabled(True)
-                self._compare_btn.setToolTip(prompt)
+                self._compare_btn.setToolTip(qt_wrap_tooltip(prompt))
 
         def _trace_is_multi_core(self) -> bool:
             if not get_context:
@@ -55050,7 +55231,7 @@ class _AboutDialog(QDialog):
         name_lbl.setObjectName("about_title")
         hv.addWidget(name_lbl)
 
-        sub_lbl = QLabel(f"RTOS context-switch timeline visualiser  *  v{_APP_VERSION}")
+        sub_lbl = QLabel(f"AI assistant for RTOS trace analysis — find evidence and explain  *  v{_APP_VERSION}")
         sub_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         sub_lbl.setObjectName("about_sub")
         hv.addWidget(sub_lbl)
@@ -55114,7 +55295,7 @@ class _AboutDialog(QDialog):
         ]))
         iv.addWidget(_block("Application", [
             ("Product",   "RTOS BTF Viewer"),
-            ("Purpose",   "Interactive viewer for Best Trace Format (.btf) RTOS scheduling traces"),
+            ("Purpose",   "AI assistant for RTOS trace analysis: find evidence and explain"),
             ("Runtime",   f"Python {sys.version_info.major}.{sys.version_info.minor}  *  PySide6 desktop application"),
         ]))
         iv.addWidget(_block("License", [
@@ -55190,6 +55371,7 @@ class _SettingsDialog(QDialog):
     # Emitted whenever any control value changes so _open_settings can
     # apply a live preview while the dialog is still open.
     live_preview = Signal()
+    stats_layout_reset = Signal()
 
     def _schedule_live_preview(self, *_args) -> None:
         """Coalesce rapid control changes and defer preview to next UI turn."""
@@ -55937,7 +56119,8 @@ class _SettingsDialog(QDialog):
         btn_reset.setFixedHeight(_btn_h)
         btn_reset.setToolTip(
             "Restore built-in defaults, including Statistics pins, order, "
-            "and expand/collapse. OK writes them to btf_viewer.rc.")
+            "and expand/collapse. The Statistics panel updates immediately; "
+            "OK writes them to btf_viewer.rc.")
         btn_reset.clicked.connect(self._reset_to_defaults)
         footer.addWidget(btn_reset)
 
@@ -56484,6 +56667,8 @@ class _SettingsDialog(QDialog):
         self._load_ai_preset_fields(DEFAULT_AI_PRESET)
         self._response_lang_combo.setCurrentIndex(
             max(0, self._response_lang_combo.findText(DEFAULT_AI_RESPONSE_LANGUAGE)))
+        self.stats_layout_reset.emit()
+        self._schedule_live_preview()
 
     # -- result accessors (read after exec_() == Accepted) ------------------
     @property
@@ -68360,19 +68545,49 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._settings.set_many("view", updates)
             self._report_settings_io_failure(prefix="Settings save warning")
 
-    def _reset_stats_layout_to_defaults(self) -> None:
-        """Clear Statistics pins, order, collapse, and table heights in .rc."""
+    def _snapshot_stats_layout(self) -> dict:
+        """Capture Statistics pins, order, collapse, and table heights."""
+        panel = getattr(self, "_stats_panel", None)
+        if panel is None:
+            return {}
+        return {
+            "pins": list(panel.section_pins()),
+            "order": list(panel.section_order()),
+            "collapsed": dict(panel._section_collapsed),
+            "heights": dict(panel.section_table_heights()),
+        }
+
+    def _apply_stats_layout_defaults(self, *, persist: bool) -> None:
+        """Restore Statistics layout defaults; persist to .rc only when requested."""
         panel = getattr(self, "_stats_panel", None)
         if panel is not None:
             panel.set_section_pins([], emit=False)
             panel.set_section_order("", emit=False)
             panel.set_section_collapsed_map(default_section_collapsed(), emit=False)
             panel.apply_section_table_heights(default_section_table_heights())
+        if not persist:
+            return
         try:
             self._settings.clear_section("stats", flush=True)
         except Exception:
             pass
         self._report_settings_io_failure(prefix="Settings save warning")
+
+    def _restore_stats_layout_snapshot(self, snap: dict) -> None:
+        """Revert a live Reset-to-Defaults preview of Statistics layout."""
+        panel = getattr(self, "_stats_panel", None)
+        if panel is None or not snap:
+            return
+        panel.set_section_pins(snap.get("pins") or [], emit=False)
+        panel.set_section_order(snap.get("order") or [], emit=False)
+        panel.set_section_collapsed_map(
+            snap.get("collapsed") or default_section_collapsed(), emit=False)
+        panel.apply_section_table_heights(
+            snap.get("heights") or default_section_table_heights())
+
+    def _reset_stats_layout_to_defaults(self) -> None:
+        """Clear Statistics pins, order, collapse, and table heights in .rc."""
+        self._apply_stats_layout_defaults(persist=True)
 
     @_dialog_guard
     def _open_settings(self, page: str = "Appearance") -> None:
@@ -68495,6 +68710,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     dlg.is_dark, _ui_font_stylesheet_size(dlg.ui_font_size))
             )
         )
+        _stats_layout_snap = self._snapshot_stats_layout()
+        dlg.stats_layout_reset.connect(
+            lambda: self._apply_stats_layout_defaults(persist=False))
         if _exec_centred(dlg, self) == QDialog.Accepted:
             self._persist_settings_after_dlg(_snap)
             if dlg.reset_requested:
@@ -68543,6 +68761,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._sync_ai_compare_template()
         else:
             self._apply_settings_preview(_snap)
+            self._restore_stats_layout_snapshot(_stats_layout_snap)
 
     # -- Status / legend callbacks -------------------------------------
 
@@ -70165,7 +70384,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     parser = argparse.ArgumentParser(
         prog="btf_viewer.py",
         description=(
-            "RTOS BTF trace viewer (interactive GUI) and headless analysis (CLI).\n\n"
+            "AI assistant for RTOS trace analysis (interactive GUI) and headless analysis (CLI).\n\n"
             + _CLI_HELP
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,

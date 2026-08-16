@@ -295,29 +295,40 @@
     </div>
 
     <div class="ai-templates">
-      <button
-        v-for="t in primaryTemplates"
-        :key="t.id"
-        type="button"
-        class="ai-tpl-btn"
-        :class="{ gray: templateDisabled(t) }"
-        :title="templateTitle(t)"
-        :disabled="busy || !aiEnabled || templateDisabled(t)"
-        @click="onTemplate(t)"
+      <div
+        v-for="(row, ri) in primaryTemplateRows"
+        :key="'tpl-row-' + ri"
+        class="ai-tpl-row"
       >
-        {{ t.label }}
-      </button>
-      <div class="ai-more-wrap">
         <button
-          ref="moreBtnEl"
+          v-for="t in row"
+          :key="t.id"
           type="button"
           class="ai-tpl-btn"
-          title="Uses Analysis Findings for the current Statistics scope. Configure the endpoint in Settings → AI."
-          @click="toggleMore"
+          :class="{ gray: templateDisabled(t) }"
+          :title="templateTitle(t)"
+          :disabled="busy || !aiEnabled || templateDisabled(t)"
+          @click="onTemplate(t)"
         >
-          More templates…
+          {{ t.label }}
         </button>
-        <Teleport to="body">
+        <div
+          v-if="ri === primaryTemplateRows.length - 1"
+          class="ai-more-wrap"
+        >
+          <button
+            ref="moreBtnEl"
+            type="button"
+            class="ai-tpl-btn"
+            title="Uses Analysis Findings for the current Statistics scope. Configure the endpoint in Settings → AI."
+            @click="toggleMore"
+          >
+            More templates…
+          </button>
+        </div>
+      </div>
+    </div>
+    <Teleport to="body">
           <div
             v-if="moreOpen"
             ref="moreMenuEl"
@@ -383,9 +394,7 @@
               </button>
             </div>
           </div>
-        </Teleport>
-      </div>
-    </div>
+    </Teleport>
 
     <div
       v-if="toolBarFallback"
@@ -570,6 +579,7 @@ import {
   AI_TEMPLATE_MENU_GROUPS,
   AI_TEMPLATE_PRIMARY_IDS,
   AI_TEMPLATE_QUESTIONS,
+  aiTemplatePrimaryRows,
   DEFAULT_AI_PRESET,
   DEFAULT_AI_RESPONSE_LANGUAGE,
   aiAuthStatus,
@@ -671,6 +681,7 @@ import {
   saveAiUserHistoricalKnowledge,
   saveAiUserInvestigationTemplates,
 } from '../utils/settingsStore.js'
+import { templateRefEl } from '../utils/templateRefEl.js'
 
 const props = defineProps({
   aiEnabled: { type: Boolean, default: true },
@@ -703,6 +714,11 @@ const primaryTemplates = computed(() =>
   AI_TEMPLATE_PRIMARY_IDS
     .map(id => templates.find(t => t.id === id))
     .filter(Boolean),
+)
+const primaryTemplateRows = computed(() =>
+  aiTemplatePrimaryRows().map(ids =>
+    ids.map(id => templates.find(t => t.id === id)).filter(Boolean),
+  ),
 )
 const templateMenuGroups = computed(() =>
   AI_TEMPLATE_MENU_GROUPS.map(g => ({
@@ -949,7 +965,7 @@ function templateDisabled(t) {
 }
 
 function placeMoreMenu() {
-  const btn = moreBtnEl.value
+  const btn = templateRefEl(moreBtnEl.value)
   if (!btn) return
   const r = btn.getBoundingClientRect()
   const gap = 4
@@ -1118,39 +1134,52 @@ function onMermaidZoomWheel(ev) {
   mermaidZoom.value = { ...cur, scale }
 }
 
+function eventElement(ev) {
+  const t = ev?.target
+  if (t && t.nodeType === 1) return t
+  return t?.parentElement || null
+}
+
 function onMsgClick(ev) {
-  const hypA = ev.target?.closest?.('a[href^="btfhyp:"]')
+  const from = eventElement(ev)
+  if (!from?.closest) return
+  const hypA = from.closest('a[href^="btfhyp:"]')
   if (hypA) {
     ev.preventDefault()
     const parsed = parseBtfHypHref(hypA.getAttribute('href') || '')
     if (parsed.action) onHypothesisAction(parsed.action, parsed.hypId)
     return
   }
-  const scopeA = ev.target?.closest?.('a[href^="btfscope:"]')
+  const scopeA = from.closest('a[href^="btfscope:"]')
   if (scopeA) {
     ev.preventDefault()
     const parsed = parseBtfScopeHref(scopeA.getAttribute('href') || '')
     if (parsed.action) onScopeAction(parsed.action, parsed.key)
     return
   }
-  const expA = ev.target?.closest?.('a[href^="btfexp:"]')
+  const expA = from.closest('a[href^="btfexp:"]')
   if (expA) {
     ev.preventDefault()
     const parsed = parseBtfExpHref(expA.getAttribute('href') || '')
     if (parsed.action) onExperimentAction(parsed.action, parsed.key)
     return
   }
-  const toolA = ev.target?.closest?.('a[href^="btftool:"]')
+  const toolA = from.closest('a[href^="btftool:"]')
   if (toolA) {
     ev.preventDefault()
     const parsed = parseBtfToolHref(toolA.getAttribute('href') || '')
     if (parsed.action) onToolWhy(parsed.action, parsed.name)
     return
   }
-  const a = ev.target?.closest?.('a[data-jump], a[href^="btfjump:"], a[href^="btfrange:"], a[href^="btfhyp:"], a[href^="btfscope:"], a[href^="btfexp:"], a[href^="btftool:"], a[data-highlight], a[href^="btfhighlight:"]')
+  const a = from.closest('a[data-jump], a[href^="btfjump:"], a[href^="btfrange:"], a[href^="btfhyp:"], a[href^="btfscope:"], a[href^="btfexp:"], a[href^="btftool:"], a[data-highlight], a[href^="btfhighlight:"]')
   if (a && !a.classList.contains('ai-mermaid-zoom')) {
     ev.preventDefault()
     const href = a.getAttribute('href') || ''
+    const jumpFirst = parseBtfJumpHref(href, a.getAttribute('data-jump'))
+    if (Number.isFinite(jumpFirst)) {
+      emit('jump', jumpFirst)
+      return
+    }
     const hl = parseBtfHighlightHref(href, a.getAttribute('data-highlight'))
     if (hl) {
       emit('highlight', hl)
@@ -1165,8 +1194,8 @@ function onMsgClick(ev) {
     if (Number.isFinite(v)) emit('jump', v)
     return
   }
-  if (ev.target?.closest?.('.ai-mermaid-zoom-dialog')) return
-  const zoomHit = ev.target?.closest?.('.ai-mermaid-zoom, .ai-mermaid-svg, .ai-mermaid-img')
+  if (from.closest('.ai-mermaid-zoom-dialog')) return
+  const zoomHit = from.closest('.ai-mermaid-zoom, .ai-mermaid-svg, .ai-mermaid-img')
   if (!zoomHit) return
   ev.preventDefault()
   openMermaidZoom(zoomHit)
@@ -2008,8 +2037,9 @@ watch(() => props.aiEnabled, (on) => {
 function onDocMouseDown(ev) {
   closeLogMenu()
   if (!moreOpen.value) return
-  if (moreBtnEl.value?.contains(ev.target)) return
-  if (moreMenuEl.value?.contains(ev.target)) return
+  const t = ev.target
+  if (templateRefEl(moreBtnEl.value)?.contains(t)) return
+  if (templateRefEl(moreMenuEl.value)?.contains(t)) return
   closeMore()
 }
 
@@ -2184,13 +2214,24 @@ defineExpose({
   font-weight: 600;
   font-size: inherit;
 }
-.ai-templates,
 .ai-modes {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+}
+.ai-templates {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.ai-tpl-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
 }
 .ai-tpl-btn {
   min-width: 0;

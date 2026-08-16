@@ -4,7 +4,7 @@
  */
 
 import { mermaidBlockHtml } from './aiMermaid.js'
-import { btfJumpHref, btfRangeHref, summariseToolCall } from './aiTools.js'
+import { btfHighlightHref, btfJumpHref, btfRangeHref, parseBtfHighlightHref, summariseToolCall } from './aiTools.js'
 import { btfHtmlReportDocument } from './htmlReport.js'
 
 import { evidencePanelLabels } from './aiInvestigation.js'
@@ -88,8 +88,13 @@ function inlineToHtml(text) {
     while ((lm = LINK_RE.exec(seg))) {
       buf.push(escapeHtml(seg.slice(seglast, lm.index)))
       const label = escapeHtml(lm[1])
-      const href = String(lm[2] || '').trim()
-      const low = href.toLowerCase()
+      let href = String(lm[2] || '').trim()
+      let low = href.toLowerCase()
+      if (low.startsWith('btfhighlight:')) {
+        const name = parseBtfHighlightHref(href)
+        if (name) href = btfHighlightHref(name)
+        low = href.toLowerCase()
+      }
       if (low.startsWith('http://') || low.startsWith('https://')) {
         // Same-tab navigation would discard every loaded trace.
         buf.push(stash(

@@ -1,1 +1,1 @@
-Load draws CPU utilisation under the timeline. Core view stacks activity per core. Task view shows one row per task. Drag the divider if you need more room for the chart.
+Load draws CPU utilisation under the timeline. Core view stacks activity per core. Task view shows one row per task. Drag the divider if you need more room for the chart. Switch Task and Core, then turn Load on, before you trust any later statistic.

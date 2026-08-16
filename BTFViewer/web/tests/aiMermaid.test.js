@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { markdownToSafeHtml } from '../src/utils/aiMarkdown.js'
-import { hitTestMermaid, mermaidBlockHtml, mermaidHitRegions, mermaidLinkTargets, mermaidToSvg } from '../src/utils/aiMermaid.js'
+import { hitTestMermaid, mermaidBlockHtml, mermaidHitRegions, mermaidLinkTargets, mermaidToSvg, wrapNodeLabel } from '../src/utils/aiMermaid.js'
 import { AI_MERMAID_MIGRATION_EXAMPLE, AI_MERMAID_SEQUENCE_EXAMPLE } from '../src/utils/aiTools.js'
 
 describe('aiMermaid', () => {
@@ -28,12 +28,31 @@ describe('aiMermaid', () => {
     assert.ok(labels.includes('Core_1'))
   })
 
+  it('wraps long flowchart node labels inside taller rectangles', () => {
+    const label = 'Mutex contention on the shared queue blocks the high priority worker'
+    const lines = wrapNodeLabel(label)
+    assert.ok(lines.length > 1)
+    assert.equal(lines.join(' '), label)
+    assert.ok(lines.every(ln => ln.length <= 22))
+    const src = `graph TD\n  S0[${label}]\n`
+    const svg = mermaidToSvg(src)
+    for (const word of ['Mutex', 'contention', 'priority', 'worker']) {
+      assert.match(svg, new RegExp(word))
+    }
+    assert.doesNotMatch(svg, /<tspan/)
+    const hs = [...svg.matchAll(/height="([\d.]+)" rx="6"/g)].map(m => Number(m[1]))
+    assert.ok(hs.some(h => h > 32), JSON.stringify(hs))
+    const hits = mermaidHitRegions(src)
+    assert.equal(hits[0].value, label)
+    assert.ok(hits[0].h > 32)
+  })
+
   it('markdown turns mermaid fences into SVG', () => {
     const html = markdownToSafeHtml(AI_MERMAID_SEQUENCE_EXAMPLE)
     assert.match(html, /ai-mermaid/)
     assert.match(html, /<svg/)
-    assert.match(html, /btfhighlight:/)
-    assert.match(html, /ai-mermaid-zoom/)
+    assert.match(html, /btfhighlight:task\//)
+    assert.doesNotMatch(html, /<a[^>]*class="ai-mermaid-zoom"/)
     const exported = markdownToSafeHtml(AI_MERMAID_SEQUENCE_EXAMPLE, { zoomable: false })
     assert.doesNotMatch(exported, /ai-mermaid-zoom/)
     assert.doesNotMatch(exported, /#mermaid-zoom/)
@@ -77,8 +96,22 @@ describe('aiMermaid', () => {
   it('wraps the figure in a zoom control', () => {
     const src = 'sequenceDiagram\n  participant L as Low[266]\n  L->>H: take\n'
     const html = mermaidBlockHtml(src)
-    assert.match(html, /ai-mermaid-zoom/)
+    assert.match(html, /class="ai-mermaid-zoom"/)
     assert.match(html, /Open larger view/)
-    assert.match(html, /#mermaid-zoom/)
+    assert.doesNotMatch(html, /#mermaid-zoom/)
+    assert.match(html, /btfhighlight:task\//)
+  })
+
+  it('parses hexagon evidence nodes and jump:TIME clicks', () => {
+    const src = 'graph TD\n  F[Finding]\n  E0{{preempt Low jump:12345}}\n  F --> E0\n'
+    const svg = mermaidToSvg(src)
+    assert.match(svg, /preempt Low/)
+    assert.match(svg, /btfjump:time\/12345/)
+    const hits = mermaidHitRegions(src)
+    const ev = hits.find(h => h.kind === 'jump')
+    assert.equal(ev.value, '12345')
+    const cx = ev.x + ev.w / 2
+    const cy = ev.y + ev.h / 2
+    assert.deepEqual(hitTestMermaid(src, cx, cy), { kind: 'jump', value: '12345' })
   })
 })

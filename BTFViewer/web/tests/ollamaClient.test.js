@@ -9,6 +9,7 @@ import {
   AI_TEMPLATE_QUESTIONS,
   AI_TEMPLATE_PRIMARY_IDS,
   AI_TEMPLATE_MENU_GROUPS,
+  aiTemplatePrimaryRows,
   DEFAULT_AI_BASE_URL,
   DEFAULT_AI_PRESET,
   aiJumpAnnotationNote,
@@ -424,6 +425,10 @@ describe('AI endpoint helpers', () => {
     assert.deepEqual(AI_TEMPLATE_PRIMARY_IDS, [
       'investigate', 'findings', 'explain_region', 'auto_investigate',
     ])
+    assert.deepEqual(aiTemplatePrimaryRows(), [
+      ['investigate', 'findings', 'explain_region'],
+      ['auto_investigate'],
+    ])
   })
 
   it('AI template UX order matches the panel and Findings dialog', async () => {
@@ -449,7 +454,8 @@ describe('AI endpoint helpers', () => {
       ['Quick', 'Diagnose', 'Compare', 'Optimize', 'Report'],
     )
     assert.match(panel, /v-for="mid in investigationModes"/)
-    assert.match(panel, /v-for="t in primaryTemplates"/)
+    assert.match(panel, /v-for="\(row, ri\) in primaryTemplateRows"/)
+    assert.match(panel, /v-for="t in row"/)
     assert.match(panel, /v-for="group in templateMenuGroups"/)
     assert.match(panel, /class="ai-more-col"/)
     assert.match(panel, /<Teleport to="body">/)

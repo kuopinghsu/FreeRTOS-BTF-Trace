@@ -35,271 +35,413 @@ style: |
   tr:nth-child(even) td { background: #f4f8fd; }
   blockquote { border-left: 4px solid #f0a500; background: #fffbf0; padding: 0.45em 0.9em; color: #5a4000; font-style: normal; }
   ul li { margin-bottom: 0.2em; }
-  .check { color: #1a6eb5; font-weight: bold; }
 ---
 
 <!-- _class: title -->
 
 # BTF Viewer
 
-## Quick Metric Check Guide
+## Newbie workflow for RTOS trace diagnosis
 
-Open **Analysis** → follow findings down the ladder → stop when evidence explains the symptom
+Find evidence first → scope the phase → measure → verify on timeline → then ask AI to explain.
 
 ---
 
-# How to Check Fast
+# Documentation Map
 
-| Step | Action |
-|------|--------|
-| 1 | Open **Statistics** + toolbar **Analysis** |
-| 2 | Open only the sections named by findings |
-| 3 | Click **Max** / row / chart point / heatmap cell to jump the timeline |
-| 4 | Place cursors + **Limit to C1–Cn** for mixed-phase traces |
-| 5 | Optional: Analysis **Investigate…** / **Verify with AI…** ([WORKFLOWS §7](WORKFLOWS.md#7-ai-assistant-flow)) |
+| Document | Purpose |
+|---|---|
+| `README.md` | Product overview, quick start, UI, settings, export, [demo](README.md#demo) |
+| `WORKFLOWS.md` | Step-by-step diagnosis procedure |
+| `STATISTICS.md` | Metric definitions, formulas, charts |
+| `AI.md` | AI tools, planner, models, validator |
 
 ```text
-① Health      Trace Health (TICK)
-② Balance     Core Utilisation → Breakdown / Concurrent / Switch
-③ WCET        Top Tasks → Execution Time (Max)
-④ Latency     Blocking → Dispatch → Preemption
-⑤ Concurrency Migrations → Heatmap/Chord → Mutex → Priority Inheritance
-⑥ Compliance  Affinity · Lifecycle · Deadlines · Tags
+README → WORKFLOWS → STATISTICS → AI
 ```
 
-Default panel order (and CSV/HTML export) follows this catalogue. Toolbar **Heatmap** / **Chord** is viewport-scoped (zoom first) — not a Statistics section.
+---
 
-> Demo file `example-8cores.btf.gz` concatenates stress tests — scope a phase before treating a warning as a product defect.
+# The Core Rule
+
+```text
+Open trace
+  ↓
+Check health
+  ↓
+Scope phase
+  ↓
+Read Analysis findings
+  ↓
+Open named Statistics section
+  ↓
+Click to timeline evidence
+  ↓
+Confirm / reject
+  ↓
+AI explains after evidence exists
+  ↓
+Compare after the fix
+```
+
+> AI is an explanation layer. Statistics and the timeline are the evidence layer.
+
+---
+
+# 10-Minute Triage
+
+| Step | Action |
+|---:|---|
+| 1 | Open trace, press `Ctrl+0`, enable **Load** |
+| 2 | Open **Statistics** + toolbar **Analysis** |
+| 3 | Check **Trace Health (TICK)** first |
+| 4 | Open only Statistics sections named by Findings |
+| 5 | Click **Max** / **p95** / row / chart point |
+| 6 | Place C1–Cn cursors + **Limit to C1–Cn** |
+| 7 | Re-check findings inside the scoped phase |
+| 8 | Use AI only after the timeline agrees |
+| 9 | Export HTML or run **Trace Compare** |
 
 ---
 
 <!-- _class: section-header -->
 
-# ① System Health
-## Confirm the timer before trusting timing metrics
+# The Ladder
+
+## Use this order for most issues
+
+---
+
+# Top-Down Analysis Ladder
+
+```text
+① Health       Trace Health (TICK)
+② Scope        Cursors + Limit to C1–Cn
+③ Balance      Core Utilisation → Breakdown / Concurrent / Switch
+④ CPU / WCET   Top Tasks → Execution Time Per Slice
+⑤ Latency      Blocking → Dispatch → Preemption
+⑥ Concurrency  Migrations → Heatmap / Chord → Mutex → Priority Inheritance
+⑦ Compliance   Affinity → Lifecycle → Deadlines → Tags / Intervals
+⑧ Compare      Trace Compare before / after
+⑨ Explain      AI investigation / report
+```
+
+**Stop when the evidence explains the symptom.**
+
+---
+
+<!-- _class: section-header -->
+
+# ① Health
+
+## Can we trust timing?
 
 ---
 
 # Trace Health (TICK)
 
-**Where:** Statistics → **Trace Health (TICK)** → Tick Distribution…
+**Where:** Statistics → **Trace Health (TICK)** → **Tick Distribution…**
 
 | Check | Red flag | Next |
-|-------|----------|------|
-| Mode / CV | TICKLESS with CV ≫ 5 % | Scope a **busy** window; re-check |
-| Large gaps / missed | Gaps only in idle stretches | Expected on tickless — not lost IRQs alone |
-| Product hard-RT | Still not GOOD when busy | Capture tickful; expect CV ≪ 5 % |
+|---|---|---|
+| Mode / CV | TICKLESS with high CV | Scope a **busy** window |
+| Large gaps | Only idle stretches | Expected on tickless |
+| Hard real-time | Still WARNING when busy | Compare tickful capture |
+| Missing tick evidence | Weak timing basis | Prefer relative compare / intervals |
 
 ![w:680](../images/stats/stats-tick.svg)
 
-*Sample: TICKLESS, CV 35.9 %. Compare tick policies with Trace Compare if needed.*
+---
+
+<!-- _class: section-header -->
+
+# ② Scope
+
+## Most bad conclusions come from mixed phases
+
+---
+
+# Cursor-Scoped Analysis
+
+| Action | Effect |
+|---|---|
+| Click / `C` | Place cursor |
+| `Ctrl+R` | Zoom cursor range |
+| **Limit to C1–Cn** | Recompute Statistics + Analysis |
+| Clear cursors | Return to full trace |
+
+> Heatmap / Chord follows the **visible viewport**, not the cursor-scope checkbox. Zoom first.
+
+![w:720](../images/example.png)
 
 ---
 
 <!-- _class: section-header -->
 
-# ② Core Balance
-## Is work placed evenly — and are cores busy together?
+# ③ Balance
+
+## Is work placed evenly?
 
 ---
 
-# Core Utilisation
+# Core Balance
 
-**Where:** Statistics → **Core Utilisation** (Load Balance Score + σ)
+**Where:** Statistics → **Core Utilisation**
 
-| Signal | Meaning |
-|--------|---------|
-| Score **&lt; 70 %** or σ **&gt; 30 %** | Analysis warning — imbalance |
-| Score **≥ 85 %** and σ **≤ 30 %** | Reasonably balanced |
-| One core &gt; 90 %, others idle | → **Core Affinity** |
-| All high, one stuck low | → **Mutex** / **Preemption** |
+| Signal | Meaning | Next |
+|---|---|---|
+| Score ≥ 85%, σ ≤ 30% | Generally balanced | Continue |
+| Score < 70% | Imbalance warning | Affinity / Task × Core |
+| σ > 30% | Spread is high | Core Time Breakdown |
+| One core hot | Work may be pinned | Core Affinity |
+| All high, one low | Serialization | Mutex / Preemption |
 
-Then check (same default order):
+Then inspect **Core Time Breakdown**, **Concurrent Core Active**, and **Kernel Switch Overhead**.
 
-| Section | Quick question |
-|---------|----------------|
-| **Core Time Breakdown** | High **Gap %**? → switch cost |
-| **Concurrent Core Active** | How often are *N* cores busy together? |
-| **Kernel Switch Overhead** | Switch-gap Max / total % high? |
+---
+
+# Concurrent Activity / Switch Cost
+
+| Section | Question |
+|---|---|
+| **Core Time Breakdown** | Active / Idle / Tick / Gap % |
+| **Concurrent Core Active** | How often are N cores busy together? |
+| **Kernel Switch Overhead** | How large are switch gaps? |
+| **Task × Core** | Which task used which core? |
 
 ![w:760](../images/stats/stats-concurrency-4.svg)
 
-*Click a Concurrent / Switch row for the distribution chart.*
-
 ---
 
 <!-- _class: section-header -->
 
-# ③ Task CPU / WCET
-## Who burns CPU — and how long is a single slice?
+# ④ CPU / WCET
+
+## Which task runs too long?
 
 ---
 
-# Top Tasks & Execution Time
+# Top Tasks → Execution Max
 
-**Where:** **Top Tasks** → **Execution Time Per Slice** → sort **Max** → click **Max**
+**Where:** **Top Tasks by CPU** → **Execution Time Per Slice** → sort **Max**
 
 | Check | Red flag | Next |
-|-------|----------|------|
-| Top CPU tasks | Dominated by equal-priority workers | Cap fan-out or affinity-pin |
-| Max ≫ p95 | Rare spike | Design on **p95**; inspect that Max |
-| Max vs tick | Slice longer than tick period | Preemption / Mutex at that instant |
+|---|---|---|
+| Top CPU | One task dominates | Inspect task / deadline |
+| Equal-priority workers | Fan-out / stress | Reduce concurrency / pin |
+| Max ≫ p95 | Rare spike | Click Max on timeline |
+| Max exceeds budget | WCET issue | Set deadlines |
+| Long slice near lock/preemptor | Interference | Mutex / Preemption |
 
 ![w:780](../images/stats/stats-exec-cs11.svg)
 
-| Metric | Measures |
-|--------|----------|
-| **Execution** | On-CPU slice |
-| **Blocking** | Off-CPU until next resume |
-| **Dispatch** | Ready→run (create / `vTaskResume`) |
-| **Inter-Arrival** | Start-to-start cadence |
-
 ---
 
 <!-- _class: section-header -->
 
-# ④ Latency
-## Why did the task wait — or how long until it ran?
+# ⑤ Latency
+
+## Why did the task wait?
 
 ---
 
-# Blocking → Preemption → Dispatch
+# Latency Metrics
 
-**Blocking Time** — sort **Max** / **p95**; ignore orchestrator sleeps (`Runner`).
+| Metric | Meaning | Use when |
+|---|---|---|
+| **Blocking** | Off-CPU until next run | Task waits too long |
+| **Dispatch** | Ready/create/resume → run | Ready task delayed |
+| **Inter-Arrival** | Start-to-start cadence | Periodic task irregular |
+| **Response** | Heuristic adjacent-slice signal | Need rough tail behavior |
 
-| Pattern | Open next |
-|---------|-----------|
-| Spikes + one preemptor | **Preemption Chain** |
-| Aligns with lock hold | **Mutex / Semaphore** |
-| Ready→run (resume/create) | **Dispatch / Scheduling Latency** |
+**Path:** Blocking Max / p95 → Preemption Chain → Mutex / Queue → Dispatch.
 
 ![w:720](../images/stats/stats-dispatch-sr0.svg)
 
-*Dispatch: \(t_{\text{resume}}-t_{\text{ready}}\). Sync wakes not attributed yet. Click row / Min / Max.*
-
 ---
 
 <!-- _class: section-header -->
 
-# ⑤ Concurrency
-## Thrashing, heatmap / chord, lock-bounce, priority inheritance
+# ⑥ Concurrency
+
+## Migrations, lock-bounce, priority inheritance
 
 ---
 
-# Migrations & Lock Bounce
+# Core Migrations
 
-**Where:** **Core Migrations** → **Core-Pair** → toolbar **Heatmap** / **Chord** → **Mutex → Bounces**
+**Where:** Statistics → **Core Migrations**
 
-| Signal | Red flag |
-|--------|----------|
-| High **Rate** + short **Dwell** + high **Ping** | A↔B thrashing (Ping = A→B→A ≤ 1 µs) |
-| High Migr, low Ping | Spreads without oscillation |
-| Core-Pair **Bounce %** high on a busy pair | Migration while mutex/queue held |
+| Signal | Reading |
+|---|---|
+| High **Rate** | Task migrates often |
+| Short **Dwell** | Task does not stay on one core |
+| High **Ping** | A→B→A bouncing |
+| High **Gap after** | Migration followed by waiting |
+| High **STI±** | Migration near STI activity |
 
-**Quick path:** Task view → lock-highlight + **Load** → sort Migrations by Ping/Rate → Core-Pair Bounce % → Heatmap **Lock Bounces Only**.
-
-| Fix direction |
-|---------------|
-| Affinity-pin latency / lock-sharing tasks |
-| Fewer equal-priority runnables |
-| Co-locate producers/consumers on hot queues |
+Quick path: sort Rate/Ping → click chart → lock-highlight task → enable **Load**.
 
 ---
 
-# Migration Heatmap / Chord
+# Heatmap / Chord
 
-**Where:** toolbar **Heatmap** or **Chord** (same inspector, 2+ cores). Zoom the timeline first.
+**Where:** toolbar **Heatmap** or **Chord**
 
-| Check | Meaning |
-|-------|---------|
-| Scope | Grid follows **viewport**, not cursor-scoped Statistics |
-| Hot cells / ribbons | When & where hops burst (`cN→cM`) |
+| Feature | Use |
+|---|---|
+| Hot cell | Migration burst in time |
+| Ribbon | Directed core corridor |
 | **Lock Bounces Only** | Mutex/queue hops only |
-| **Task filter** | Name substring or exact numeric id |
-| Cell / ribbon → **Inspect** | Spotlight with C1–C2 |
+| Task filter | Name or numeric id |
+| Inspect | Spotlight window with C1–C2 |
 
 ![w:900](../images/migration.svg)
 
-*Core-Pair chart → **Open Heatmap** / **Open Chord** focuses that corridor.*
-
 ---
 
-# Priority Inheritance
+# Mutex / Queue / Priority
 
-**Where:** **Priority Inheritance** (needs inherit STI)
-
-| Pattern | Reading |
-|---------|---------|
-| **Mutex inherit** | Kernel boost working |
-| **L/M/H** | Design review — medium between base and peak |
-| **Boost only** | Manual / unexplained boost |
+| Section | Red flag | Fix direction |
+|---|---|---|
+| **Mutex / Semaphore** | Issues, long holds, bounces | Shorten hold, fix pairing |
+| **Queue** | Many cross-core bounces | Co-locate producer / consumer |
+| **Priority Inheritance** | L/M/H pattern | Design review |
+| **Boost only** | Manual / unclear boost | Verify with timeline |
 
 ![w:700](../images/stats/tasks-priority-low.svg)
-
-*Red stripe = inherit window. Click chart points to jump episodes.*
 
 ---
 
 <!-- _class: section-header -->
 
-# ⑥ Compliance
-## Affinity · Lifecycle · Deadlines · Tags
+# ⑦ Compliance
+
+## Did the system do what you configured?
 
 ---
 
 # Pass / Fail Checks
 
-| Section | Quick check |
-|---------|-------------|
-| **Core Affinity** | Observed cores ⊆ mask? Violations = 0 |
-| **Task Lifecycle** | Susp/Res match; no run between suspend and resume |
-| **Deadlines / CPU budget** | Set thresholds (ns); click violating slice |
-| **Tag / Interval Analysis** | Bind channels to real budgets; compare builds |
+| Section | Check |
+|---|---|
+| **Core Affinity** | Observed cores ⊆ mask |
+| **Task Lifecycle** | Susp/Res match; no run while suspended |
+| **Deadlines / CPU budget** | Violations match real budgets |
+| **Tag Analysis** | Custom values stay inside limits |
+| **Interval Analysis** | Instrumented regions meet budgets |
 
-**Thresholds:** Settings → Display → Analysis thresholds  
-Example: `CS[28]=2000000` (**ns**) = 2 ms on a `us` trace.
+Thresholds: Settings → Display → Analysis thresholds  
+Example: `CS[28]=2000000` ns = 2 ms.
 
-**Cursors:** C1…Cn → **Limit to C1–Cn** → all tables + Analysis recompute.
+---
+
+<!-- _class: section-header -->
+
+# ⑧ Compare
+
+## A fix is not done until measured again
+
+---
+
+# Trace Compare
+
+**Where:** open two traces → toolbar **Compare**
+
+| Page | Check |
+|---|---|
+| Summary | Context switches, migrations, tick, load balance |
+| Core Util | Per-core deltas |
+| Execution | Max / p95 / WCET movement |
+| Blocking | Wait-time movement |
+| Preemption | Interference movement |
+| Sync / Mutex | Holds, issues, bounces |
+| Response | Heuristic P99 |
+| Deadline misses | Pass/fail threshold result |
+
+Use the same workload phase on both traces.
+
+---
+
+<!-- _class: section-header -->
+
+# ⑨ Explain
+
+## AI after deterministic evidence
+
+---
+
+# AI Assistant Flow
+
+Use AI when:
+
+- Statistics are scoped correctly
+- Findings exist
+- You clicked at least one timeline event
+- You want ranking, explanation, or a report
+
+| Ask | Verify |
+|---|---|
+| **Investigate…** / **Root cause…** | Apply GUI cards; click `jump:TIME` |
+| **Verify with AI…** | Evidence panel result |
+| **Explain region** | Times inside C1–Cn |
+| **What-if / Optimize** | Estimate only; recapture required |
+| **Diagnostic report** | Export after timeline agrees |
 
 ---
 
 # Symptom → Metric
 
 | Symptom | Start here | Then |
-|---------|------------|------|
-| Unknown | **Analysis** | Named Statistics sections |
+|---|---|---|
+| Unknown | **Analysis** | Named Statistics section |
 | Tick / tickless | Trace Health | Scope busy window |
-| Uneven SMP | Core Utilisation | Concurrent · Migrations · Affinity |
-| Rarely *N* busy | Concurrent Core Active | Affinity · Top Tasks |
-| High switch cost | Kernel Switch Overhead | Breakdown Gap % |
-| Slice too long | Execution Max / p95 | Preemption · Mutex |
-| Waits too long | Blocking | Preemption · Mutex |
-| Ready→run delay | Dispatch Latency | Blocking · Preemption |
-| Thrashing | Migrations (Rate, Ping) | Task+Load · Heatmap / Chord |
-| Lock-bounce | Core-Pair Bounce % | Heatmap **Lock Bounces Only** · Mutex Bounces |
-| Priority inversion | Priority Inheritance | Mutex · Blocking |
-| Before / after | Trace Compare | Same cursor phases |
+| Uneven SMP | Core Utilisation | Task × Core / Affinity |
+| High switch cost | Switch Overhead | Breakdown Gap % |
+| Slice too long | Execution Max | Preemption / Mutex |
+| Waits too long | Blocking | Preemption / Mutex |
+| Ready delayed | Dispatch | STI create/resume evidence |
+| Thrashing | Migrations Rate/Ping | Heatmap / Chord |
+| Lock-bounce | Core-Pair Bounce % | Mutex Bounces |
+| Priority inversion | Priority Inheritance | Timeline stripe |
+| Regression | Compare | Same phase in both traces |
 
 ---
 
 # Checklist Card
 
 ```text
-☐ Analysis findings reviewed
-☐ Trace Health GOOD (or scoped busy window OK)
-☐ Load Balance Score ≥ 85 % and σ ≤ 30 %  (or Affinity explained)
-☐ Top Tasks + Execution Max within budget
-☐ Blocking / Dispatch Max acceptable for critical tasks
-☐ No thrashing (Rate/Ping/Dwell) on latency paths — confirm on Heatmap
-☐ No hot lock-bounce pairs (**Lock Bounces Only**); Mutex Status clean
-☐ Affinity / Lifecycle / Deadlines as required
-☐ Export HTML or Trace Compare for the record
+☐ Full span checked
+☐ Statistics + Analysis opened
+☐ Trace Health checked first
+☐ Relevant phase scoped with C1–Cn
+☐ Finding mapped to Statistics section
+☐ Max / p95 / chart point clicked
+☐ Balance checked
+☐ CPU / WCET checked
+☐ Blocking / Dispatch checked
+☐ Migrations / Mutex / Priority checked
+☐ Compliance checked
+☐ AI used after evidence
+☐ Before / after validated with Compare
 ```
 
+---
+
+# CI / Export Loop
+
 ```bash
-python builds/btf_viewer.py ../tracedata/example-8cores.btf.gz
 python builds/btf_viewer.py report ../tracedata/example-8cores.btf.gz \
     --output report.html --format html
+
+python builds/btf_viewer.py compare before.btf.gz after.btf.gz \
+    --output compare.html --format html \
+    --name-a "Before" --name-b "After"
+```
+
+```text
+Find issue → define expected improvement → change firmware/config
+          → recapture → Trace Compare → export report
 ```
 
 ---
@@ -308,8 +450,6 @@ python builds/btf_viewer.py report ../tracedata/example-8cores.btf.gz \
 
 # Start at the Top
 
-## Analysis → ladder → evidence → fix
+## Health → Scope → Measure → Verify → AI → Compare
 
-Drill only where findings point. Scope before you escalate.
-
-AI templates follow the same ladder ([WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow)). Narrated tour: [README → Demo](README.md#demo).
+Drill only where findings point. Scope before you escalate. AI after the timeline agrees.

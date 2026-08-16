@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -702,11 +703,41 @@ class AiPanelUiTests(unittest.TestCase):
             if b.text().startswith("More templates")
         ]
         self.assertEqual(len(more), 1)
+        self.assertEqual(
+            panel._template_btns[-1].text().replace("&", ""),
+            "Auto investigate",
+        )
+        self.assertEqual(panel._more_btn.text().replace("&", ""), "More templates…")
         menu_ids = [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids]
         self.assertEqual(set(panel._template_actions), set(menu_ids))
         reachable = set(AI_TEMPLATE_PRIMARY_IDS) | set(panel._template_actions)
         self.assertEqual(reachable, {t[0] for t in AI_TEMPLATE_QUESTIONS})
         self.assertEqual(len(reachable), 20)
+
+    def test_template_tooltips_wrap_for_qt(self) -> None:
+        from btf_viewer_pkg.ai_assistant import qt_wrap_tooltip
+
+        long_tip = (
+            "Walk through the Analysis Findings in the context. For each finding, "
+            "state its severity, what it means for this RTOS/SMP system, and which "
+            "Statistics section or timeline check to open next."
+        )
+        wrapped = qt_wrap_tooltip(long_tip)
+        self.assertTrue(wrapped.startswith("<html>"))
+        self.assertIn('width="320"', wrapped)
+        # One paragraph: no forced <br/> (Qt wraps on words inside the cell).
+        self.assertNotIn("<br/>", wrapped)
+        self.assertIn("finding,", wrapped)
+        two = qt_wrap_tooltip("First sentence.\nSecond sentence.")
+        self.assertIn("First sentence.<br/>Second sentence.", two)
+
+        panel = self._panel()
+        tips = [b.toolTip() for b in panel._template_btns]
+        self.assertTrue(tips)
+        self.assertTrue(any('width="320"' in t for t in tips), tips[0][:120])
+        self.assertIn('width="320"', panel._more_btn.toolTip())
+        investigate = next(iter(panel._template_actions.values()))
+        self.assertIn('width="320"', investigate.toolTip())
 
     def test_evidence_syncs_to_log_for_export(self) -> None:
         from btf_viewer_pkg.ai_assistant import format_ai_conversation_html
@@ -895,6 +926,8 @@ class AiPanelUiTests(unittest.TestCase):
         mode_h_wide = modes.layout().heightForWidth(800)
         mode_h_narrow = modes.layout().heightForWidth(180)
         self.assertGreater(mode_h_narrow, mode_h_wide)
+        # Forced wrap: Auto investigate + More stay on the last row even when wide.
+        self.assertGreaterEqual(tpls.layout().heightForWidth(800), 56)
         tpl_h_wide = tpls.layout().heightForWidth(800)
         tpl_h_narrow = tpls.layout().heightForWidth(180)
         self.assertGreater(tpl_h_narrow, tpl_h_wide)

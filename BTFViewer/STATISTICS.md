@@ -2,7 +2,7 @@
 
 Detailed reference for the **deterministic BTF statistics and analysis** exposed by BTFViewer Desktop and Web.
 
-> **Use this document when you need to understand a metric.** For installation, navigation, and everyday viewer usage, see [`README.md`](README.md). For AI-assisted investigation, see [`AI.md`](AI.md). For repeatable investigation playbooks, see [`WORKFLOWS.md`](WORKFLOWS.md).
+> **Use this document when you need to understand a metric.** For installation, navigation, and everyday viewer usage, see [`README.md`](README.md). BTFViewer is an AI-assistant tool for RTOS traces (find evidence and explain) — see [`AI.md`](AI.md). For repeatable investigation playbooks, see [`WORKFLOWS.md`](WORKFLOWS.md).
 
 ## Contents
 

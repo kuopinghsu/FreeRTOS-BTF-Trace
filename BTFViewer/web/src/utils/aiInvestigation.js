@@ -17,6 +17,7 @@ import {
   formatExperimentVerdict,
   formatQualityFlagLines,
   historicalKnowledgeForFinding,
+  mermaidLabelWithTime,
 } from './aiCase.js'
 
 export const INVESTIGATION_PLAN_STEPS = [
@@ -1950,7 +1951,7 @@ export function compareTasksMetrics(taskA, taskB, dataA, dataB, { metrics = null
 
 const MERMAID_LABEL_STRIP_RE = /["[\]{}()|]/g
 
-function mermaidSafeLabel(text, limit = 48) {
+function mermaidSafeLabel(text, limit = 96) {
   const cleaned = String(text ?? '').replace(/\n/g, ' ').replace(MERMAID_LABEL_STRIP_RE, '').trim()
     .replace(/\s+/g, ' ')
   return (cleaned || 'Step').slice(0, limit)
@@ -1968,7 +1969,7 @@ export function investigationTreeMermaid(chain = [], hypotheses = []) {
   const nodeIds = []
   chainItems.forEach((step, i) => {
     const nid = `S${i}`
-    const label = mermaidSafeLabel(step.label || `Step ${i + 1}`)
+    const label = mermaidLabelWithTime(step.label || `Step ${i + 1}`, step.time)
     lines.push(`${nid}[${label}]`)
     nodeIds.push(nid)
   })

@@ -32,7 +32,8 @@ _NOTE_RE = re.compile(
     r"^Note\s+(?:over|left of|right of)\s+([^:]+):\s*(.*)$", re.IGNORECASE
 )
 _NODE_RE = re.compile(
-    r"^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\)|\{([^}]+)\})?\s*$"
+    r"^([A-Za-z0-9_]+)\s*(?:"
+    r"\[([^\]]+)\]|\(([^\)]+)\)|\{\{([^}]+)\}\}|\{([^}]+)\})?\s*$"
 )
 _EDGE_RE = re.compile(
     r"^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?"
@@ -116,7 +117,10 @@ def mermaid_link_targets(source: str) -> List[Tuple[str, str]]:
             continue
         nm = _NODE_RE.match(s)
         if nm:
-            _add_hl(nm.group(2) or nm.group(3) or nm.group(4) or nm.group(1) or "")
+            _add_hl(
+                nm.group(2) or nm.group(3) or nm.group(4)
+                or nm.group(5) or nm.group(1) or ""
+            )
     return found
 
 
@@ -136,6 +140,22 @@ def mermaid_hit_regions(source: str) -> List[Dict[str, Any]]:
     if first.startswith("graph ") or first.startswith("flowchart "):
         return _flowchart_hits(text)
     return []
+
+
+def mermaid_node_action(label: str) -> Tuple[str, str]:
+    """Click action for a diagram node: ``jump`` if the label has jump:TIME."""
+    text = str(label or "").strip()
+    m = _JUMP_RE.search(text)
+    if m:
+        return "jump", m.group(1)
+    return "highlight", text
+
+
+def _node_href_attr(label: str) -> str:
+    kind, value = mermaid_node_action(label)
+    if kind == "jump":
+        return f' href="{html.escape(btf_jump_href(value), quote=True)}"'
+    return f' href="{html.escape(btf_highlight_href(value), quote=True)}"'
 
 
 def hit_test_mermaid(
@@ -347,9 +367,10 @@ def _sequence_hits(source: str) -> List[Dict[str, Any]]:
     hits: List[Dict[str, Any]] = []
     for i, (_pid, label) in enumerate(geom["participants"]):
         x = geom["xs"][i]
+        kind, value = mermaid_node_action(label)
         hits.append({
             "x": x - box_w / 2, "y": top - 14, "w": float(box_w), "h": 28.0,
-            "kind": "highlight", "value": label,
+            "kind": kind, "value": value,
         })
     return hits
 
@@ -371,7 +392,7 @@ def _sequence_svg(source: str, *, interactive: bool) -> str:
     for i, (_pid, label) in enumerate(participants):
         x = xs[i]
         bx = x - box_w / 2
-        href = f' href="btfhighlight:{_esc(label)}"' if interactive else ""
+        href = _node_href_attr(label) if interactive else ""
         parts.append(
             f'<line x1="{x}" y1="{top + 22}" x2="{x}" y2="{height - 12}" '
             f'stroke="#3a4658" stroke-dasharray="4 3"/>'
@@ -450,42 +471,106 @@ def _parse_flowchart(
             continue
         nm = _NODE_RE.match(line)
         if nm:
-            _add_node(nm.group(1), nm.group(2) or nm.group(3) or nm.group(4))
+            _add_node(
+                nm.group(1),
+                nm.group(2) or nm.group(3) or nm.group(4) or nm.group(5),
+            )
     return nodes, order, edges
 
 
-def _node_box_w(label: str) -> float:
-    return float(max(72, min(130, 12 + 7 * len((label or "")[:18]))))
+def wrap_node_label(label: str, max_chars: int = 22) -> List[str]:
+    """Word-wrap a flowchart node label so the SVG rectangle can grow."""
+    text = re.sub(r"\s+", " ", str(label or "")).strip()
+    if not text:
+        return [""]
+    lines: List[str] = []
+    cur = ""
+
+    def _flush() -> None:
+        nonlocal cur
+        if cur:
+            lines.append(cur)
+            cur = ""
+
+    for word in text.split(" "):
+        while len(word) > max_chars:
+            room = max_chars - (len(cur) + (1 if cur else 0))
+            if room < 1:
+                _flush()
+                room = max_chars
+            if cur:
+                cur += " "
+            cur += word[:room]
+            word = word[room:]
+            _flush()
+        if not word:
+            continue
+        trial = word if not cur else f"{cur} {word}"
+        if len(trial) <= max_chars:
+            cur = trial
+        else:
+            _flush()
+            cur = word
+    _flush()
+    return lines or [""]
+
+
+def _node_box_size(label: str) -> Tuple[float, float, List[str]]:
+    """Return ``(width, height, wrapped_lines)`` for a flowchart node."""
+    lines = wrap_node_label(label)
+    longest = max((len(ln) for ln in lines), default=0)
+    bw = float(max(72.0, min(156.0, 14.0 + 6.6 * longest)))
+    bh = float(10.0 * 2 + 14.0 * max(len(lines), 1))
+    return bw, bh, lines
+
+
+def _node_ray_r(bw: float, bh: float, ux: float, uy: float) -> float:
+    """Distance from node centre to the ellipse that bounds the rectangle."""
+    hw, hh = bw / 2.0 + 2.0, bh / 2.0 + 2.0
+    denom = math.hypot(ux * hh, uy * hw) or 1.0
+    return (hw * hh) / denom
 
 
 def _flowchart_geom(source: str) -> Optional[Dict[str, Any]]:
     nodes, order, edges = _parse_flowchart(source)
     if not nodes:
         return None
-    col_w, row_h = 160.0, 78.0
+    sizes = {nid: _node_box_size(nodes[nid]) for nid in order}
     cols = min(4, max(1, len(order)))
-    max_half = 40.0
-    for nid in order:
-        max_half = max(max_half, _node_box_w(nodes[nid]) / 2.0)
+    max_bw = max(sz[0] for sz in sizes.values())
+    col_w = max(160.0, max_bw + 24.0)
+    row_h: Dict[int, float] = {}
+    for i, nid in enumerate(order):
+        r = i // cols
+        row_h[r] = max(row_h.get(r, 0.0), sizes[nid][1])
+    max_half = max(sz[0] / 2.0 for sz in sizes.values())
     pad = max_half + 18.0
     top = 36.0
+    row_cy: Dict[int, float] = {}
+    y = top
+    for r in range(max(row_h) + 1 if row_h else 0):
+        h = row_h.get(r, 32.0)
+        row_cy[r] = y + h / 2.0
+        y += h + 28.0
     pos: Dict[str, Tuple[float, float]] = {}
     for i, nid in enumerate(order):
         c, r = i % cols, i // cols
-        pos[nid] = (pad + c * col_w, top + r * row_h)
-    right = max(x + _node_box_w(nodes[nid]) / 2 for nid, (x, _y) in pos.items())
-    bottom = max(y + 20 for _x, y in pos.values())
+        pos[nid] = (pad + c * col_w, row_cy[r])
+    right = max(
+        pos[nid][0] + sizes[nid][0] / 2.0 for nid in order
+    )
+    bottom = y - 28.0
     width = right + pad
-    height = bottom + 24
+    height = bottom + 24.0
     return {
         "nodes": nodes, "order": order, "edges": edges, "pos": pos,
-        "width": width, "height": height,
+        "sizes": sizes, "width": width, "height": height,
     }
 
 
 def _flowchart_edge_paths(geom: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Offset reverse edges so Core_0→Core_1 and Core_1→Core_0 counts do not stack."""
-    nodes, edges, pos = geom["nodes"], geom["edges"], geom["pos"]
+    edges, pos = geom["edges"], geom["pos"]
     pairs = {(src, dst) for src, dst, _lab in edges}
     paths: List[Dict[str, float]] = []
     for src, dst, label in edges:
@@ -497,8 +582,10 @@ def _flowchart_edge_paths(geom: Dict[str, Any]) -> List[Dict[str, Any]]:
         nx, ny = -uy, ux
         sep = 12.0 if (dst, src) in pairs else 0.0
         ox, oy = nx * sep, ny * sep
-        src_r = _node_box_w(nodes[src]) / 2.0 + 2.0
-        dst_r = _node_box_w(nodes[dst]) / 2.0 + 2.0
+        src_bw, src_bh, _sl = geom["sizes"][src]
+        dst_bw, dst_bh, _dl = geom["sizes"][dst]
+        src_r = _node_ray_r(src_bw, src_bh, ux, uy)
+        dst_r = _node_ray_r(dst_bw, dst_bh, ux, uy)
         sx = x1 + ux * src_r + ox
         sy = y1 + uy * src_r + oy
         ex = x2 - ux * dst_r + ox
@@ -521,10 +608,11 @@ def _flowchart_hits(source: str) -> List[Dict[str, Any]]:
     for nid in geom["order"]:
         x, y = geom["pos"][nid]
         label = geom["nodes"][nid]
-        bw = _node_box_w(label)
+        bw, bh, _lines = geom["sizes"][nid]
+        kind, value = mermaid_node_action(label)
         hits.append({
-            "x": x - bw / 2, "y": y - 16, "w": float(bw), "h": 32.0,
-            "kind": "highlight", "value": label,
+            "x": x - bw / 2, "y": y - bh / 2, "w": float(bw), "h": float(bh),
+            "kind": kind, "value": value,
         })
     return hits
 
@@ -559,14 +647,23 @@ def _flowchart_svg(source: str, *, interactive: bool) -> str:
     for nid in order:
         x, y = pos[nid]
         label = nodes[nid]
-        href = f' href="btfhighlight:{_esc(label)}"' if interactive else ""
-        bw = _node_box_w(label)
+        href = _node_href_attr(label) if interactive else ""
+        bw, bh, lines = geom["sizes"][nid]
+        y0 = y - bh / 2.0 + 10.0 + 11.0
+        # Separate <text> nodes: Qt's SVG renderer ignores <tspan>, so a
+        # single <text> with tspans paints empty rectangles on Desktop.
+        labels = []
+        for i, line in enumerate(lines):
+            labels.append(
+                f'<text x="{x:.1f}" y="{y0 + i * 14.0:.1f}" text-anchor="middle" '
+                f'fill="#dbe2ea" font-size="11" font-family="{fam}">'
+                f"{_esc(line)}</text>"
+            )
         parts.append(
             f'<a{href}>'
-            f'<rect x="{x - bw / 2}" y="{y - 16}" width="{bw}" height="32" rx="6" '
-            f'fill="#1e3348" stroke="#5b9bd5"/>'
-            f'<text x="{x}" y="{y + 5}" text-anchor="middle" fill="#dbe2ea" '
-            f'font-size="11" font-family="{fam}">{_esc(label[:18])}</text>'
+            f'<rect x="{x - bw / 2:.1f}" y="{y - bh / 2:.1f}" width="{bw:.1f}" '
+            f'height="{bh:.1f}" rx="6" fill="#1e3348" stroke="#5b9bd5"/>'
+            f"{''.join(labels)}"
             f"</a>"
         )
     parts.append("</svg>")

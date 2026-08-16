@@ -896,7 +896,7 @@
             v-html="aboutIconSvg"
           />
           <div class="about-title">RTOS BTF Viewer</div>
-          <div class="about-subtitle">RTOS context-switch timeline visualiser · v{{ appVersion }}</div>
+          <div class="about-subtitle">AI assistant for RTOS trace analysis — find evidence and explain · v{{ appVersion }}</div>
         </div>
 
         <div class="about-body">
@@ -912,7 +912,7 @@
             <div class="about-section-title">Application</div>
             <div class="about-grid">
               <div class="about-key">Product</div><div>RTOS BTF Viewer</div>
-              <div class="about-key">Purpose</div><div>Interactive viewer for Best Trace Format (.btf) RTOS scheduling traces</div>
+              <div class="about-key">Purpose</div><div>AI assistant for RTOS trace analysis: find evidence and explain</div>
               <div class="about-key">Runtime</div><div>Vue 3 · Vite · Canvas-based timeline renderer</div>
               <div class="about-key">Build Date</div><div>{{ buildDate }}</div>
             </div>

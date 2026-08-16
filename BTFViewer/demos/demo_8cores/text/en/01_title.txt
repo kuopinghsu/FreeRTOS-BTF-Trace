@@ -1,3 +1,3 @@
-Welcome to BTF Viewer — an interactive app for Free-RTOS context-switch traces in Best Trace Format. The desktop and web apps share the same analysis. Today we use the web app and the frozen eight-core demo sample.
+Welcome to BTF Viewer — an AI-assistant tool for Free-RTOS traces in Best Trace Format. The rule is: find deterministic evidence first, then ask AI to explain it. The desktop and web apps share the same analysis. Today we use the web app and the frozen eight-core demo sample.
 
-This capture lasts two point four two one seconds, on eight cores, with a hundred and sixty-three tasks. It was built by stitching several stress tests together, so warnings are expected. We will inspect the timeline, read Statistics from the top down, confirm each issue on the canvas, then try the AI assistant on Google Gemini.
+This capture lasts two point four two one seconds, on eight cores, with a hundred and sixty-three tasks. It was built by stitching several stress tests together, so warnings are expected. We will inspect the timeline, walk the diagnosis ladder in Statistics, confirm each issue on the canvas, then use the AI assistant only after that evidence exists.

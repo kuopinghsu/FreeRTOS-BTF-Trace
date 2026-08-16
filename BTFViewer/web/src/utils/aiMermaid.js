@@ -8,7 +8,7 @@ import { btfHighlightHref, btfJumpHref } from './aiTools.js'
 const PARTICIPANT_RE = /^participant\s+(\S+)(?:\s+as\s+(.+))?$/i
 const ARROW_RE = /^(\S+)\s*(-->>|->>|->|--x|-x|-->)\s*(\S+)\s*:\s*(.*)$/
 const NOTE_RE = /^Note\s+(?:over|left of|right of)\s+([^:]+):\s*(.*)$/i
-const NODE_RE = /^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\)|\{([^}]+)\})?\s*$/
+const NODE_RE = /^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\)|\{\{([^}]+)\}\}|\{([^}]+)\})?\s*$/
 const EDGE_RE = /^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?\s*-->(?:\|([^|]+)\|)?\s*([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?\s*$/
 
 const JUMP_RE = /jump:([0-9]+(?:\.[0-9]+)?)/g
@@ -25,8 +25,52 @@ function noteBoxW(note) {
   return Math.min(200, 16 + 6 * Math.min(String(note || '').length, 36))
 }
 
-function nodeBoxW(label) {
-  return Math.max(72, Math.min(130, 12 + 7 * Math.min(String(label || '').length, 18)))
+export function wrapNodeLabel(label, maxChars = 22) {
+  const text = String(label || '').replace(/\s+/g, ' ').trim()
+  if (!text) return ['']
+  const lines = []
+  let cur = ''
+  const flush = () => {
+    if (cur) {
+      lines.push(cur)
+      cur = ''
+    }
+  }
+  for (let word of text.split(' ')) {
+    while (word.length > maxChars) {
+      const room = maxChars - (cur.length + (cur ? 1 : 0))
+      const take = room < 1 ? maxChars : room
+      if (room < 1) flush()
+      if (cur) cur += ' '
+      cur += word.slice(0, take)
+      word = word.slice(take)
+      flush()
+    }
+    if (!word) continue
+    const trial = cur ? `${cur} ${word}` : word
+    if (trial.length <= maxChars) cur = trial
+    else {
+      flush()
+      cur = word
+    }
+  }
+  flush()
+  return lines.length ? lines : ['']
+}
+
+function nodeBoxSize(label) {
+  const lines = wrapNodeLabel(label)
+  const longest = lines.reduce((m, ln) => Math.max(m, ln.length), 0)
+  const bw = Math.max(72, Math.min(156, 14 + 6.6 * longest))
+  const bh = 10 * 2 + 14 * Math.max(lines.length, 1)
+  return { bw, bh, lines }
+}
+
+function nodeRayR(bw, bh, ux, uy) {
+  const hw = bw / 2 + 2
+  const hh = bh / 2 + 2
+  const denom = Math.hypot(ux * hh, uy * hw) || 1
+  return (hw * hh) / denom
 }
 
 /** Triangle at (x2,y2). Qt paints SVG <marker> as a stray blob at the origin. */
@@ -103,9 +147,25 @@ export function mermaidLinkTargets(source) {
       continue
     }
     const nm = NODE_RE.exec(s)
-    if (nm) addHl(nm[2] || nm[3] || nm[4] || nm[1] || '')
+    if (nm) addHl(nm[2] || nm[3] || nm[4] || nm[5] || nm[1] || '')
   }
   return found
+}
+
+export function mermaidNodeAction(label) {
+  const text = String(label || '').trim()
+  const m = /jump:([0-9]+(?:\.[0-9]+)?)/.exec(text)
+  if (m) return { kind: 'jump', value: m[1] }
+  return { kind: 'highlight', value: text }
+}
+
+function nodeHrefAttrs(label, interactive) {
+  if (!interactive) return ''
+  const { kind, value } = mermaidNodeAction(label)
+  if (kind === 'jump') {
+    return ` href="${esc(btfJumpHref(value))}" data-jump="${esc(value)}"`
+  }
+  return ` href="${esc(btfHighlightHref(value))}" data-highlight="${esc(value)}"`
 }
 
 export function mermaidHitRegions(source) {
@@ -175,7 +235,9 @@ export function mermaidBlockHtml(source, { inlineSvg = true, zoomable = true } =
     ? `<div class="ai-mermaid-svg">${svg}</div>`
     : `<img class="ai-mermaid-img" alt="mermaid diagram" src="${svgDataUri(svg)}">`
   if (zoomable) {
-    body = `<a href="#mermaid-zoom" class="ai-mermaid-zoom" title="Open larger view">${body}</a>`
+    // A wrapping <a> would nest inside node <a href="btfhighlight:…"> (invalid HTML)
+    // and browsers drop the inner highlight links.
+    body = `<div class="ai-mermaid-zoom" title="Open larger view">${body}</div>`
   }
   const links = linkRowHtml(source)
   return `<div class="ai-mermaid">${body}${links}</div>`
@@ -260,10 +322,13 @@ function sequenceHits(source) {
   const geom = sequenceGeom(source)
   if (!geom) return []
   const { participants, boxW, top, xs } = geom
-  return participants.map((p, i) => ({
-    x: xs[i] - boxW / 2, y: top - 14, w: boxW, h: 28,
-    kind: 'highlight', value: p.label,
-  }))
+  return participants.map((p, i) => {
+    const act = mermaidNodeAction(p.label)
+    return {
+      x: xs[i] - boxW / 2, y: top - 14, w: boxW, h: 28,
+      kind: act.kind, value: act.value,
+    }
+  })
 }
 
 function sequenceSvg(source, interactive) {
@@ -277,7 +342,7 @@ function sequenceSvg(source, interactive) {
   participants.forEach((p, i) => {
     const x = xs[i]
     const bx = x - boxW / 2
-    const href = interactive ? ` href="btfhighlight:${esc(p.label)}" data-highlight="${esc(p.label)}"` : ''
+    const href = nodeHrefAttrs(p.label, interactive)
     parts.push(`<line x1="${x}" y1="${top + 22}" x2="${x}" y2="${height - 12}" stroke="#3a4658" stroke-dasharray="4 3"/>`)
     parts.push(
       `<a${href}><rect x="${bx}" y="${top - 14}" width="${boxW}" height="28" rx="4" fill="#1e3348" stroke="#5b9bd5"/>`
@@ -334,7 +399,7 @@ function parseFlowchart(source) {
       continue
     }
     const nm = NODE_RE.exec(line)
-    if (nm) addNode(nm[1], nm[2] || nm[3] || nm[4])
+    if (nm) addNode(nm[1], nm[2] || nm[3] || nm[4] || nm[5])
   }
   return { nodes, order, edges }
 }
@@ -342,35 +407,48 @@ function parseFlowchart(source) {
 function flowchartGeom(source) {
   const { nodes, order, edges } = parseFlowchart(source)
   if (!nodes.size) return null
-  const colW = 160
-  const rowH = 78
+  const sizes = new Map(order.map(nid => [nid, nodeBoxSize(nodes.get(nid))]))
   const cols = Math.min(4, Math.max(1, order.length))
+  let maxBw = 0
+  for (const nid of order) maxBw = Math.max(maxBw, sizes.get(nid).bw)
+  const colW = Math.max(160, maxBw + 24)
+  const rowH = new Map()
+  order.forEach((nid, i) => {
+    const r = Math.floor(i / cols)
+    rowH.set(r, Math.max(rowH.get(r) || 0, sizes.get(nid).bh))
+  })
   let maxHalf = 40
-  for (const nid of order) maxHalf = Math.max(maxHalf, nodeBoxW(nodes.get(nid)) / 2)
+  for (const nid of order) maxHalf = Math.max(maxHalf, sizes.get(nid).bw / 2)
   const pad = maxHalf + 18
   const top = 36
+  const rowCy = new Map()
+  let y = top
+  const rowCount = rowH.size
+  for (let r = 0; r < rowCount; r += 1) {
+    const h = rowH.get(r) || 32
+    rowCy.set(r, y + h / 2)
+    y += h + 28
+  }
   const pos = new Map()
   order.forEach((nid, i) => {
     const c = i % cols
     const r = Math.floor(i / cols)
-    pos.set(nid, { x: pad + c * colW, y: top + r * rowH })
+    pos.set(nid, { x: pad + c * colW, y: rowCy.get(r) })
   })
   let right = 0
-  let bottom = 0
   for (const nid of order) {
-    const { x, y } = pos.get(nid)
-    right = Math.max(right, x + nodeBoxW(nodes.get(nid)) / 2)
-    bottom = Math.max(bottom, y + 20)
+    const { x } = pos.get(nid)
+    right = Math.max(right, x + sizes.get(nid).bw / 2)
   }
   return {
-    nodes, order, edges, pos,
+    nodes, order, edges, pos, sizes,
     width: right + pad,
-    height: bottom + 24,
+    height: y - 28 + 24,
   }
 }
 
 function flowchartEdgePaths(geom) {
-  const { nodes, edges, pos } = geom
+  const { edges, pos } = geom
   const pairs = new Set(edges.map(e => `${e.src}\0${e.dst}`))
   return edges.map((e) => {
     const a = pos.get(e.src)
@@ -385,8 +463,10 @@ function flowchartEdgePaths(geom) {
     const sep = pairs.has(`${e.dst}\0${e.src}`) ? 12 : 0
     const ox = nx * sep
     const oy = ny * sep
-    const srcR = nodeBoxW(nodes.get(e.src)) / 2 + 2
-    const dstR = nodeBoxW(nodes.get(e.dst)) / 2 + 2
+    const srcBox = geom.sizes.get(e.src)
+    const dstBox = geom.sizes.get(e.dst)
+    const srcR = nodeRayR(srcBox.bw, srcBox.bh, ux, uy)
+    const dstR = nodeRayR(dstBox.bw, dstBox.bh, ux, uy)
     const sx = a.x + ux * srcR + ox
     const sy = a.y + uy * srcR + oy
     const ex = b.x - ux * dstR + ox
@@ -407,10 +487,11 @@ function flowchartHits(source) {
   return geom.order.map((nid) => {
     const { x, y } = geom.pos.get(nid)
     const label = geom.nodes.get(nid)
-    const bw = nodeBoxW(label)
+    const { bw, bh } = geom.sizes.get(nid)
+    const act = mermaidNodeAction(label)
     return {
-      x: x - bw / 2, y: y - 16, w: bw, h: 32,
-      kind: 'highlight', value: label,
+      x: x - bw / 2, y: y - bh / 2, w: bw, h: bh,
+      kind: act.kind, value: act.value,
     }
   })
 }
@@ -433,11 +514,14 @@ function flowchartSvg(source, interactive) {
   for (const nid of order) {
     const { x, y } = pos.get(nid)
     const label = nodes.get(nid)
-    const href = interactive ? ` href="btfhighlight:${esc(label)}" data-highlight="${esc(label)}"` : ''
-    const bw = nodeBoxW(label)
+    const href = nodeHrefAttrs(label, interactive)
+    const { bw, bh, lines } = geom.sizes.get(nid)
+    const y0 = y - bh / 2 + 10 + 11
+    const labels = lines.map((line, i) =>
+      `<text x="${x.toFixed(1)}" y="${(y0 + i * 14).toFixed(1)}" text-anchor="middle" fill="#dbe2ea" font-size="11" font-family="sans-serif">${esc(line)}</text>`)
     parts.push(
-      `<a${href}><rect x="${x - bw / 2}" y="${y - 16}" width="${bw}" height="32" rx="6" fill="#1e3348" stroke="#5b9bd5"/>`
-      + `<text x="${x}" y="${y + 5}" text-anchor="middle" fill="#dbe2ea" font-size="11" font-family="sans-serif">${esc(label.slice(0, 18))}</text></a>`,
+      `<a${href}><rect x="${(x - bw / 2).toFixed(1)}" y="${(y - bh / 2).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="6" fill="#1e3348" stroke="#5b9bd5"/>`
+      + `${labels.join('')}</a>`,
     )
   }
   parts.push('</svg>')

@@ -92,10 +92,24 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _mermaid_safe_label(text: Any, limit: int = 48) -> str:
+def _mermaid_safe_label(text: Any, limit: int = 96) -> str:
     cleaned = _MERMAID_STRIP_RE.sub("", str(text or "").replace("\n", " "))
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return (cleaned or "Node")[:limit]
+
+
+def mermaid_label_with_time(text: Any, time: Any = None, limit: int = 96) -> str:
+    """Node text plus ``jump:TIME`` so diagram clicks pan the timeline."""
+    lab = str(text or "").strip() or "Node"
+    tok = ""
+    try:
+        tn = float(time)
+        tok = str(int(tn)) if tn.is_integer() else str(tn)
+    except (TypeError, ValueError):
+        tok = ""
+    if tok and f"jump:{tok}" not in lab:
+        lab = f"{lab} jump:{tok}"
+    return _mermaid_safe_label(lab, limit)
 
 
 def empty_investigation_case(
@@ -280,7 +294,8 @@ def build_evidence_graph(
         nodes.append({
             "id": nid,
             "kind": "evidence",
-            "label": str(ev.get("label") or ev.get("kind") or "evidence"),
+            "label": mermaid_label_with_time(
+                ev.get("label") or ev.get("kind") or "evidence", ev.get("time")),
             "time": ev.get("time"),
         })
         if any(n["id"] == fid for n in nodes):
@@ -292,7 +307,8 @@ def build_evidence_graph(
         nodes.append({
             "id": nid,
             "kind": str(step.get("kind") or "step"),
-            "label": str(step.get("label") or f"Step {i + 1}"),
+            "label": mermaid_label_with_time(
+                step.get("label") or f"Step {i + 1}", step.get("time")),
             "time": step.get("time"),
         })
         prev = fid if i == 0 and any(n["id"] == fid for n in nodes) else f"C{i - 1}"

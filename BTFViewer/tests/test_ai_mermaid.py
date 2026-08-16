@@ -63,10 +63,32 @@ class AiMermaidTests(unittest.TestCase):
         svg = mermaid_to_svg(src)
         self.assertIn("<svg", svg)
         self.assertIn("Core_0", svg)
+        self.assertIn("btfhighlight:task/", svg)
         self.assertIn("12", svg)
         labels = [v for k, v in mermaid_link_targets(src) if k == "highlight"]
         self.assertIn("Core_0", labels)
         self.assertIn("Core_1", labels)
+
+    def test_flowchart_node_wraps_long_labels(self) -> None:
+        from btf_viewer_pkg.ai_mermaid import wrap_node_label
+
+        label = (
+            "Mutex contention on the shared queue blocks the high priority worker"
+        )
+        lines = wrap_node_label(label)
+        self.assertGreater(len(lines), 1)
+        self.assertEqual(" ".join(lines), label)
+        self.assertTrue(all(len(ln) <= 22 for ln in lines))
+        src = f"graph TD\n  S0[{label}]\n"
+        svg = mermaid_to_svg(src)
+        for word in ("Mutex", "contention", "priority", "worker"):
+            self.assertIn(word, svg)
+        self.assertNotIn("<tspan", svg)
+        hs = [float(h) for h in re.findall(r'height="([\d.]+)" rx="6"', svg)]
+        self.assertTrue(any(h > 32 for h in hs), hs)
+        hits = mermaid_hit_regions(src)
+        self.assertEqual(hits[0]["value"], label)
+        self.assertGreater(hits[0]["h"], 32)
 
     def test_flowchart_bidirectional_counts_stay_on_their_arrows(self) -> None:
         src = (
@@ -164,6 +186,23 @@ class AiMermaidTests(unittest.TestCase):
         self.assertFalse(pm.isNull())
         self.assertLessEqual(max(pm.width(), pm.height()), _SVG_RASTER_MAX_EDGE)
         self.assertLess(user_scale, 2.0)
+
+    def test_hexagon_nodes_and_jump_clicks(self) -> None:
+        src = (
+            "graph TD\n"
+            "  F[Finding]\n"
+            "  E0{{preempt Low jump:12345}}\n"
+            "  F --> E0\n"
+        )
+        svg = mermaid_to_svg(src)
+        self.assertIn("preempt Low", svg)
+        self.assertIn("btfjump:time/12345", svg)
+        hits = mermaid_hit_regions(src)
+        ev = next(h for h in hits if "preempt" in str(h["value"]) or h["kind"] == "jump")
+        self.assertEqual(ev["kind"], "jump")
+        self.assertEqual(ev["value"], "12345")
+        cx, cy = ev["x"] + ev["w"] / 2, ev["y"] + ev["h"] / 2
+        self.assertEqual(hit_test_mermaid(src, cx, cy), ("jump", "12345"))
 
 
 if __name__ == "__main__":

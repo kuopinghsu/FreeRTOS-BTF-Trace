@@ -24,6 +24,7 @@ MIGRATION_IMG := ../images/migration.svg
 .DEFAULT_GOAL := all
 
 PANDOC ?= pandoc
+MARP ?= npx --yes @marp-team/marp-cli
 DOCS := $(BUILDS)
 
 DEMO_XML ?= demos/demo_8cores/demo_8cores.xml
@@ -42,7 +43,7 @@ help:
 	@echo "  make web          Web viewer only → builds/btf_viewer.html"
 	@echo "  make bundle       Desktop bundle only → builds/btf_viewer.py"
 	@echo "  make check-bundle Regenerate bundle; fail if it drifts from sources (CI)"
-	@echo "  make doc          Convert README.md + WORKFLOWS.md → builds/*.pdf (Eisvogel + XeLaTeX)"
+	@echo "  make doc          Convert README.md + AI.md + WORKFLOWS.md (Pandoc) and btf-viewer-slides.md (Marp) → builds/*.pdf"
 	@echo "  make update-images  Regenerate ../images/stats/*.svg via the desktop CLI"
 	@echo "  make demo         Run guided demo via builds/btf_viewer.py (DEMO_XML, DEMO_LANG, --launch)"
 	@echo "  make demo-voice   Voice pack status (DEMO_XML). See scripts/demo_voice.py"
@@ -54,7 +55,7 @@ help:
 	@echo "  make ci           test-all + check-bundle (local CI parity)"
 	@echo "  make help         Show this help"
 	@echo ""
-	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)  DEMO_XML=$(DEMO_XML)  DEMO_LANG=$(DEMO_LANG)  AI_DATASET=$(AI_DATASET)  AI_FAIL_UNDER=$(AI_FAIL_UNDER)  AI_CONFIG=$(AI_CONFIG)  AI_MODELS=$(AI_MODELS)"
+	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  MARP=$(MARP)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)  DEMO_XML=$(DEMO_XML)  DEMO_LANG=$(DEMO_LANG)  AI_DATASET=$(AI_DATASET)  AI_FAIL_UNDER=$(AI_FAIL_UNDER)  AI_CONFIG=$(AI_CONFIG)  AI_MODELS=$(AI_MODELS)"
 
 
 all: web bundle
@@ -102,7 +103,7 @@ ai-test-live: $(OUT)
 
 ci: test-all check-bundle
 
-doc: $(DOCS)/README.pdf $(DOCS)/AI.pdf $(DOCS)/WORKFLOWS.pdf
+doc: $(DOCS)/README.pdf $(DOCS)/STATISTICS.pdf $(DOCS)/AI.pdf $(DOCS)/WORKFLOWS.pdf $(DOCS)/btf-viewer-slides.pdf
 
 # Use the vendored Eisvogel template (scripts/eisvogel.latex). Do not pass
 # `--template=eisvogel`: pandoc prefers ~/.local/share/pandoc/templates/eisvogel.latex,
@@ -126,6 +127,10 @@ $(DOCS)/README.pdf: README.md
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF Trace Viewer" $< -o $@
 
+$(DOCS)/STATISTICS.pdf: STATISTICS.md
+	mkdir -p $(DOCS)
+	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF Viewer — Statistics" $< -o $@
+
 $(DOCS)/AI.pdf: AI.md
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF AI Assistant" $< -o $@
@@ -133,6 +138,10 @@ $(DOCS)/AI.pdf: AI.md
 $(DOCS)/WORKFLOWS.pdf: WORKFLOWS.md
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF Viewer — Analysis Workflows" $< -o $@
+
+$(DOCS)/btf-viewer-slides.pdf: btf-viewer-slides.md
+	mkdir -p $(DOCS)
+	$(MARP) $< --pdf --allow-local-files -o $@
 
 # Fail if builds/btf_viewer.py drifts from package sources (CI / pre-commit).
 check-bundle: bundle

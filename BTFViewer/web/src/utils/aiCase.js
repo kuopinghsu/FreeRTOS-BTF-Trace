@@ -82,10 +82,19 @@ function safeInt(value, fallback = 0) {
   return Number.isFinite(n) ? Math.round(n) : fallback
 }
 
-function mermaidSafeLabel(text, limit = 48) {
+function mermaidSafeLabel(text, limit = 96) {
   const cleaned = String(text ?? '').replace(/\n/g, ' ').replace(MERMAID_STRIP_RE, '')
     .replace(/\s+/g, ' ').trim()
   return (cleaned || 'Node').slice(0, limit)
+}
+
+export function mermaidLabelWithTime(text, time, limit = 96) {
+  let lab = String(text ?? '').trim() || 'Node'
+  const tn = Number(time)
+  let tok = ''
+  if (Number.isFinite(tn)) tok = Number.isInteger(tn) ? String(tn) : String(tn)
+  if (tok && !lab.includes(`jump:${tok}`)) lab = `${lab} jump:${tok}`
+  return mermaidSafeLabel(lab, limit)
 }
 
 export function emptyInvestigationCase({
@@ -235,7 +244,7 @@ export function buildEvidenceGraph(finding = null, {
     nodes.push({
       id: nid,
       kind: 'evidence',
-      label: String(ev.label || ev.kind || 'evidence'),
+      label: mermaidLabelWithTime(ev.label || ev.kind || 'evidence', ev.time),
       time: ev.time,
     })
     if (nodes.some(n => n.id === fid)) {
@@ -248,7 +257,7 @@ export function buildEvidenceGraph(finding = null, {
     nodes.push({
       id: nid,
       kind: String(step.kind || 'step'),
-      label: String(step.label || `Step ${i + 1}`),
+      label: mermaidLabelWithTime(step.label || `Step ${i + 1}`, step.time),
       time: step.time,
     })
     if (i === 0 && nodes.some(n => n.id === fid)) {

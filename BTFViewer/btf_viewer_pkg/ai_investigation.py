@@ -23,6 +23,7 @@ from .ai_case import (
     format_quality_flag_lines,
     format_experiment_verdict,
     historical_knowledge_for_finding,
+    mermaid_label_with_time,
 )
 
 # Default checklist shown while Investigate / Root cause / agent templates run.
@@ -805,7 +806,7 @@ def detect_anomalies(
 _MERMAID_LABEL_STRIP_RE = re.compile(r'["\[\]{}()|]')
 
 
-def _mermaid_safe_label(text: Any, limit: int = 48) -> str:
+def _mermaid_safe_label(text: Any, limit: int = 96) -> str:
     """Strip mermaid delimiter characters so a label is safe as a node body."""
     cleaned = _MERMAID_LABEL_STRIP_RE.sub("", str(text or "").replace("\n", " ")).strip()
     cleaned = re.sub(r"\s+", " ", cleaned)
@@ -832,7 +833,8 @@ def investigation_tree_mermaid(
     node_ids: List[str] = []
     for i, step in enumerate(chain_items):
         nid = f"S{i}"
-        label = _mermaid_safe_label(step.get("label") or f"Step {i + 1}")
+        label = mermaid_label_with_time(
+            step.get("label") or f"Step {i + 1}", step.get("time"))
         lines.append(f"{nid}[{label}]")
         node_ids.append(nid)
     for i in range(1, len(node_ids)):

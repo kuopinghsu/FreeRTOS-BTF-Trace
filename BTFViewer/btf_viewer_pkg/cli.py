@@ -448,7 +448,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     parser = argparse.ArgumentParser(
         prog="btf_viewer.py",
         description=(
-            "RTOS BTF trace viewer (interactive GUI) and headless analysis (CLI).\n\n"
+            "AI assistant for RTOS trace analysis (interactive GUI) and headless analysis (CLI).\n\n"
             + _CLI_HELP
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,

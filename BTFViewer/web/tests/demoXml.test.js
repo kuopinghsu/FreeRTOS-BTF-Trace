@@ -733,10 +733,10 @@ describe('demo_8cores.xml', () => {
     }
     const toolbar = demo.steps.find(s => s.id === '4')
     assert.ok(toolbar.children.some(c => c.tag === 'view_mode'))
-    const wcet = demo.steps.find(s => s.id === '11')
+    const wcet = demo.steps.find(s => s.title === 'Top Tasks WCET')
     const section = wcet.children.find(c => c.tag === 'stats_section')
     assert.equal(section.attrib.scroll, 'exec')
-    const aiSetup = demo.steps.find(s => s.id === '18')
+    const aiSetup = demo.steps.find(s => s.title === 'AI setup')
     assert.equal(aiSetup.title, 'AI setup')
     const settings = aiSetup.children.filter(c => c.tag === 'settings')
     assert.equal(settings[0].attrib.page, 'AI')

@@ -1708,7 +1708,7 @@ class AiWebParityTests(unittest.TestCase):
             ["Investigate", "Analysis Findings", "Explain region",
              "Auto investigate"],
         )
-        self.assertIn("v-for=\"t in primaryTemplates\"", panel)
+        self.assertIn("v-for=\"(row, ri) in primaryTemplateRows\"", panel)
         self.assertIn("AI_TEMPLATE_PRIMARY_IDS", assist)
 
         self.assertEqual(
@@ -1724,7 +1724,10 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("class _FlowLayout", assist)
         self.assertIn("_FlowLayout(actions_host", assist)
         self.assertIn("_FlowLayout(mode_host", assist)
-        self.assertIn("_FlowLayout(tpl_host", assist)
+        self.assertIn("tpl_host, spacing=4, break_before=", assist)
+        self.assertIn("ai_template_primary_rows", assist)
+        self.assertIn("aiTemplatePrimaryRows", panel)
+        self.assertIn("class=\"ai-tpl-row\"", panel)
         self.assertIn("_AI_CHIP_MIN_HEIGHT = 28", assist)
         self.assertIn("min-height: 28px", panel)
         self.assertIn("_ai_more_heading", assist)

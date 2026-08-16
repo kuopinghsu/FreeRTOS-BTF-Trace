@@ -25,7 +25,9 @@
   <meta>
     <title>BTFViewer demo — 8-core sample</title>
     <description>
-      Screen-capture + pre-rendered TTS. Narration: text/{lang}/*.txt → voice/{lang}/*.mp3.
+      Screen-capture + pre-rendered TTS. Order follows WORKFLOWS.md
+      (find evidence, then explain): UI → Analysis → Health → Scope →
+      Balance → WCET → Latency → Concurrency → Compliance → Export/Compare → AI.
       Trace: demo_8cores.btf.gz (frozen demo snapshot).
     </description>
     <cwd>${BTF}</cwd>
@@ -187,7 +189,18 @@
       <stats_reset/>
     </step>
 
-    <step id="10" title="Core Utilisation" tags="ladder">
+    <step id="10" title="Cursors Limit C1-Cn" tags="ladder">
+      <focus/>
+      <audio file="${XML_DIR}/voice/12_cursors.mp3"/>
+      <fit_view/>
+      <clear_cursors/>
+      <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
+      <wait seconds="1.5"/>
+      <wait_audio/>
+      <clear_cursors/>
+    </step>
+
+    <step id="11" title="Core Utilisation" tags="ladder">
       <focus/>
       <panel name="stats"/>
       <stats_section id="cores" expand="true" collapse_others="true"/>
@@ -196,7 +209,7 @@
       <stats_reset/>
     </step>
 
-    <step id="11" title="Top Tasks WCET" tags="ladder">
+    <step id="12" title="Top Tasks WCET" tags="ladder">
       <focus/>
       <panel name="stats"/>
       <stats_section id="tasks,exec" expand="true" collapse_others="true" scroll="exec"/>
@@ -209,19 +222,11 @@
       <stats_reset/>
     </step>
 
-    <step id="12" title="Cursors Limit C1-Cn" tags="ladder">
+    <step id="13" title="Blocking Inheritance" tags="ladder">
       <focus/>
-      <audio file="${XML_DIR}/voice/12_cursors.mp3"/>
       <fit_view/>
       <clear_cursors/>
       <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
-      <wait seconds="1.5"/>
-      <wait_audio/>
-      <clear_cursors/>
-    </step>
-
-    <step id="13" title="Blocking Inheritance" tags="ladder">
-      <focus/>
       <panel name="stats"/>
       <stats_section id="block,priority,preemption" expand="true" collapse_others="true" scroll="block"/>
       <move target="timeline"/>
@@ -235,6 +240,7 @@
       <wait seconds="1.5"/>
       <wait_audio/>
       <stats_reset/>
+      <clear_cursors/>
     </step>
 
     <step id="14" title="Migrations Mutex" tags="ladder">

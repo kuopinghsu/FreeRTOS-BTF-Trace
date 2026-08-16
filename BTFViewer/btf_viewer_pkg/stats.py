@@ -14854,7 +14854,7 @@ class _AboutDialog(QDialog):
         name_lbl.setObjectName("about_title")
         hv.addWidget(name_lbl)
 
-        sub_lbl = QLabel(f"RTOS context-switch timeline visualiser  *  v{_APP_VERSION}")
+        sub_lbl = QLabel(f"AI assistant for RTOS trace analysis — find evidence and explain  *  v{_APP_VERSION}")
         sub_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         sub_lbl.setObjectName("about_sub")
         hv.addWidget(sub_lbl)
@@ -14918,7 +14918,7 @@ class _AboutDialog(QDialog):
         ]))
         iv.addWidget(_block("Application", [
             ("Product",   "RTOS BTF Viewer"),
-            ("Purpose",   "Interactive viewer for Best Trace Format (.btf) RTOS scheduling traces"),
+            ("Purpose",   "AI assistant for RTOS trace analysis: find evidence and explain"),
             ("Runtime",   f"Python {sys.version_info.major}.{sys.version_info.minor}  *  PySide6 desktop application"),
         ]))
         iv.addWidget(_block("License", [

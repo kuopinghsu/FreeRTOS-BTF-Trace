@@ -93,6 +93,13 @@ export const AI_TEMPLATE_PRIMARY_IDS = [
   'auto_investigate',
 ]
 
+/** Last primary id shares a row with More templates… (`.ai-tpl-row`). */
+export function aiTemplatePrimaryRows(ids = AI_TEMPLATE_PRIMARY_IDS) {
+  const seq = [...ids]
+  if (seq.length <= 1) return [seq, []]
+  return [seq.slice(0, -1), seq.slice(-1)]
+}
+
 /** Overflow menu groups for templates not in AI_TEMPLATE_PRIMARY_IDS. */
 export const AI_TEMPLATE_MENU_GROUPS = [
   { label: 'Diagnose', ids: ['root_cause', 'verify', 'explain_finding', 'triage', 'diagnostic_report'] },

@@ -133,6 +133,12 @@ class AiAssistantHelpersTests(unittest.TestCase):
         web_primary = re.findall(r"'([^']+)'", prim.group(1))
         self.assertEqual(list(AI_TEMPLATE_PRIMARY_IDS), web_primary)
 
+        from btf_viewer_pkg.ai_assistant import ai_template_primary_rows
+        lead, last = ai_template_primary_rows()
+        self.assertEqual(list(lead), ["investigate", "findings", "explain_region"])
+        self.assertEqual(list(last), ["auto_investigate"])
+        self.assertIn("export function aiTemplatePrimaryRows", js)
+
         groups = re.search(
             r"export const AI_TEMPLATE_MENU_GROUPS = \[([\s\S]*?)\]\s*\n\n", js)
         self.assertIsNotNone(groups)

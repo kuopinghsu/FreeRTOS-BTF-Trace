@@ -31,7 +31,7 @@ SETTINGS_PAGES = ("Appearance", "Display", "Layout", "AI")
 class DemoSettingsSourceParityTests(unittest.TestCase):
     def test_step18_opens_ai_settings_then_closes(self) -> None:
         xml = DEMO_XML.read_text(encoding="utf-8")
-        step = re.search(r'<step id="18".*?</step>', xml, re.S)
+        step = re.search(r'<step[^>]*title="AI setup".*?</step>', xml, re.S)
         self.assertIsNotNone(step)
         body = step.group(0)
         self.assertIn('<settings page="AI"/>', body)

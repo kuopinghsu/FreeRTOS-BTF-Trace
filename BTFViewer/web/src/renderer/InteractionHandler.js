@@ -442,7 +442,9 @@ export class InteractionHandler {
 
   _onWheel(e) {
     e.preventDefault()
-    const rect = this._canvas.getBoundingClientRect()
+    const box = this._canvas
+    if (!box || typeof box.getBoundingClientRect !== 'function') return
+    const rect = box.getBoundingClientRect()
     const cx   = e.clientX - rect.left
     const cy   = e.clientY - rect.top
     const vert = this._isVertical()

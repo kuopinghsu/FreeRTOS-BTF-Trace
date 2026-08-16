@@ -5,7 +5,7 @@
 
 export const APP_VERSION = '1.4.0'
 export const PRODUCT_NAME = 'BTFViewer'
-export const PRODUCT_TAGLINE = 'RTOS context-switch timeline visualiser'
+export const PRODUCT_TAGLINE = 'AI assistant for RTOS trace analysis — find evidence and explain'
 
 /** Embedded app icon (same markup as Desktop About / config._APP_ICON_SVG). */
 export const APP_ICON_SVG = (

@@ -6,6 +6,7 @@ endpoint — never the raw BTF event stream.
 from __future__ import annotations
 
 import datetime
+import html
 import json
 import os
 import re
@@ -31,6 +32,7 @@ from .ai_tools import (
     AI_TOOL_EXPORT_REPORT,
     AI_TOOL_SYSTEM_ADDENDUM,
     ai_viewer_tools,
+    btf_highlight_href,
     btf_jump_href,
     btf_range_href,
     build_ai_report_csv,
@@ -251,8 +253,11 @@ class _MermaidZoomDialog(QDialog):
                 hit = hit_test_mermaid(
                     self._source, pos.x(), pos.y(), scale=self._hit_scale)
                 if hit:
-                    _kind, value = hit
-                    self._on_link(QUrl(f"btfhighlight:{urllib.parse.quote(value, safe='')}"))
+                    kind, value = hit
+                    if kind == "jump":
+                        self._on_link(QUrl(btf_jump_href(value)))
+                    else:
+                        self._on_link(QUrl(btf_highlight_href(value)))
                     return True
         return QDialog.eventFilter(self, obj, event)
 
@@ -581,12 +586,23 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
 )
 
 # Always-visible wrapping chips. Keep in sync with web/src/utils/ollamaClient.js.
+# Last primary id shares a row with More templates… (web `.ai-tpl-row`).
 AI_TEMPLATE_PRIMARY_IDS: Tuple[str, ...] = (
     "investigate",
     "findings",
     "explain_region",
     "auto_investigate",
 )
+
+
+def ai_template_primary_rows(
+    ids: Optional[Tuple[str, ...]] = None,
+) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """Split primary chips so Auto investigate + More sit on the last row."""
+    seq = tuple(ids if ids is not None else AI_TEMPLATE_PRIMARY_IDS)
+    if len(seq) <= 1:
+        return seq, ()
+    return seq[:-1], seq[-1:]
 
 # Overflow menu groups for the remaining templates (ids must cover every
 # AI_TEMPLATE_QUESTIONS entry that is not in AI_TEMPLATE_PRIMARY_IDS).
@@ -1683,6 +1699,10 @@ def _md_inline_to_html_escaped(text: str) -> str:
             label = html.escape(lm.group(1))
             href = lm.group(2).strip()
             low = href.lower()
+            if low.startswith("btfhighlight:"):
+                name = parse_btf_highlight_href(href)
+                href = btf_highlight_href(name) if name else href
+                low = href.lower()
             if (
                 low.startswith("http://")
                 or low.startswith("https://")
@@ -2144,7 +2164,7 @@ def _ai_log_style(is_dark: bool = True) -> str:
         f".ai-role-assistant{{color:{asst};}}"
         f".ai-tool-card{{color:{tool};}}"
         "img.ai-mermaid-img{max-width:100%;height:auto;border-radius:4px;}"
-        "a.ai-mermaid-zoom{cursor:zoom-in;text-decoration:none;}"
+        "a.ai-mermaid-zoom,.ai-mermaid-zoom{cursor:zoom-in;text-decoration:none;}"
         ".ai-evidence-score{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;}"
     )
 
@@ -3253,11 +3273,20 @@ def ai_test_connection(
 
 
 class _FlowLayout(QLayout):
-    """Wrap chips like web ``display:flex; flex-wrap:wrap; gap:4px``."""
+    """Wrap chips like web ``display:flex; flex-wrap:wrap; gap:4px``.
 
-    def __init__(self, parent: Optional[QWidget] = None, spacing: int = 4) -> None:
+    *break_before*: item indices that always start a new row (web ``.ai-tpl-row``).
+    """
+
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        spacing: int = 4,
+        break_before: Optional[Tuple[int, ...]] = None,
+    ) -> None:
         super().__init__(parent)
         self._items: List[Any] = []
+        self._break_before = frozenset(int(i) for i in (break_before or ()))
         self.setContentsMargins(0, 0, 0, 0)
         self.setSpacing(int(spacing))
 
@@ -3308,10 +3337,14 @@ class _FlowLayout(QLayout):
         y = effective.y()
         line_height = 0
         space = self.spacing()
-        for item in self._items:
+        for idx, item in enumerate(self._items):
             hint = item.sizeHint()
             next_x = x + hint.width() + space
-            if line_height > 0 and next_x - space > effective.right() + 1:
+            wrap = line_height > 0 and (
+                idx in self._break_before
+                or next_x - space > effective.right() + 1
+            )
+            if wrap:
                 x = effective.x()
                 y = y + line_height + space
                 next_x = x + hint.width() + space
@@ -3338,6 +3371,29 @@ def _ai_more_heading(label: str) -> QLabel:
     return hdr
 
 
+def qt_wrap_tooltip(text: str, width_px: int = 320) -> str:
+    """Rich-text tooltip that wraps at word boundaries at a readable width.
+
+    Native macOS tips stay on one line. Character ``textwrap`` plus Qt's own
+    wrap stacks two line-breaks, so a line often ends with a leftover word.
+    A table cell ``width`` is the reliable QTipLabel constraint; Qt then wraps
+    on spaces. Explicit newlines in the source stay as ``<br/>``.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    parts = []
+    for para in raw.split("\n"):
+        chunk = para.strip()
+        parts.append(html.escape(chunk) if chunk else "")
+    body = "<br/>".join(parts)
+    px = max(160, int(width_px))
+    return (
+        f'<html><body><table cellspacing="0" cellpadding="0"><tr>'
+        f'<td width="{px}">{body}</td></tr></table></body></html>'
+    )
+
+
 def _ai_more_item(label: str, tooltip: str = "") -> QPushButton:
     """Flat menu row matching web ``.ai-more-item``."""
     btn = QPushButton(label)
@@ -3353,7 +3409,7 @@ def _ai_more_item(label: str, tooltip: str = "") -> QPushButton:
     if fusion is not None:
         btn.setStyle(fusion)
     if tooltip:
-        btn.setToolTip(tooltip)
+        btn.setToolTip(qt_wrap_tooltip(tooltip))
     return btn
 
 
@@ -3799,7 +3855,7 @@ def create_ai_assistant_panel(
             self._mode_btns: List[QPushButton] = []
             for mid in INVESTIGATION_MODES:
                 btn = QPushButton(INVESTIGATION_MODE_LABELS.get(mid, mid.title()))
-                btn.setToolTip(investigation_mode_prompt(mid))
+                btn.setToolTip(qt_wrap_tooltip(investigation_mode_prompt(mid)))
                 btn.setSizePolicy(
                     QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 btn.setMinimumHeight(_AI_CHIP_MIN_HEIGHT)
@@ -3816,7 +3872,9 @@ def create_ai_assistant_panel(
             tpl_host.setSizePolicy(
                 QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             tpl_host.setStyleSheet(_AI_TPL_BTN_STYLE)
-            tpl_row = _FlowLayout(tpl_host, spacing=4)
+            _lead_ids, _last_ids = ai_template_primary_rows()
+            tpl_row = _FlowLayout(
+                tpl_host, spacing=4, break_before=(len(_lead_ids),))
 
             self._template_btns: List[QPushButton] = []
             self._template_actions: Dict[str, Any] = {}
@@ -3829,13 +3887,13 @@ def create_ai_assistant_panel(
                 if tid in AI_SMP_ONLY_TEMPLATE_IDS:
                     self._smp_only_btns[tid] = ctrl
 
-            for _tid in AI_TEMPLATE_PRIMARY_IDS:
+            for _tid in _lead_ids + _last_ids:
                 item = ai_template_by_id(_tid)
                 if item is None:
                     continue
                 _tid, label, prompt = item
                 btn = QPushButton(label)
-                btn.setToolTip(prompt)
+                btn.setToolTip(qt_wrap_tooltip(prompt))
                 btn.setSizePolicy(
                     QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 btn.setMinimumHeight(_AI_CHIP_MIN_HEIGHT)
@@ -3847,10 +3905,10 @@ def create_ai_assistant_panel(
                 _bind_template_ctrl(_tid, btn)
 
             more_btn = QPushButton("More templates\u2026")
-            more_btn.setToolTip(
+            more_btn.setToolTip(qt_wrap_tooltip(
                 "Uses Analysis Findings for the current Statistics scope. "
                 "Configure the endpoint in Settings \u2192 AI."
-            )
+            ))
             more_btn.setSizePolicy(
                 QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             more_btn.setMinimumHeight(_AI_CHIP_MIN_HEIGHT)
@@ -4216,8 +4274,11 @@ def create_ai_assistant_panel(
             hit = hit_test_mermaid(src, local[0], local[1])
             if not hit:
                 return False
-            _kind, value = hit
-            self._on_jump_link(QUrl(f"btfhighlight:{urllib.parse.quote(value, safe='')}"))
+            kind, value = hit
+            if kind == "jump":
+                self._on_jump_link(QUrl(btf_jump_href(value)))
+            else:
+                self._on_jump_link(QUrl(btf_highlight_href(value)))
             return True
 
         def _mermaid_img_local_pos(self, view_pos) -> Optional[Tuple[float, float]]:
@@ -4286,7 +4347,7 @@ def create_ai_assistant_panel(
                 in ("1", "true", "yes", "on"),
             )
             self._privacy_chip.setText(format_privacy_chip(priv))
-            self._privacy_chip.setToolTip(str(priv.get("note") or ""))
+            self._privacy_chip.setToolTip(qt_wrap_tooltip(str(priv.get("note") or "")))
             needs = bool(st["needs_auth"]) or bool(getattr(self, "_auth_forced", False))
             self._auth_cta.setVisible(needs)
             url = ai_preset_signin_url(active["preset"], active.get("base_url", ""))
@@ -4329,7 +4390,7 @@ def create_ai_assistant_panel(
             if bar is None:
                 return
             bar.setText(format_cost_status(self._cost_meter))
-            bar.setToolTip(format_cost_meter(self._cost_meter))
+            bar.setToolTip(qt_wrap_tooltip(format_cost_meter(self._cost_meter)))
 
         def _restore_ai_split(self) -> None:
             split = getattr(self, "_split", None)
@@ -4468,7 +4529,15 @@ def create_ai_assistant_panel(
                     self._on_tool_why(action, name)
                 return
             if scheme == "btfhighlight":
-                name = parse_btf_highlight_href(url.toString())
+                raw = url.toString()
+                name = parse_btf_highlight_href(raw)
+                if not name:
+                    try:
+                        name = parse_btf_highlight_href(
+                            bytes(url.toEncoded()).decode("ascii", "replace")
+                        )
+                    except Exception:
+                        name = ""
                 if on_highlight and name:
                     on_highlight(name)
                 return
@@ -4891,12 +4960,12 @@ def create_ai_assistant_panel(
                         (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS if tid == _tid), ""
                     )
                     btn.setEnabled(True)
-                    btn.setToolTip(prompt)
+                    btn.setToolTip(qt_wrap_tooltip(prompt))
                 else:
                     btn.setEnabled(False)
-                    btn.setToolTip(
+                    btn.setToolTip(qt_wrap_tooltip(
                         "This trace has a single core — not applicable."
-                    )
+                    ))
 
             if self._compare_btn is None:
                 return
@@ -4910,12 +4979,12 @@ def create_ai_assistant_panel(
                 return
             if n < 2:
                 self._compare_btn.setEnabled(False)
-                self._compare_btn.setToolTip(
+                self._compare_btn.setToolTip(qt_wrap_tooltip(
                     "Open at least two BTF tabs to use Trace Compare."
-                )
+                ))
             else:
                 self._compare_btn.setEnabled(True)
-                self._compare_btn.setToolTip(prompt)
+                self._compare_btn.setToolTip(qt_wrap_tooltip(prompt))
 
         def _trace_is_multi_core(self) -> bool:
             if not get_context:
