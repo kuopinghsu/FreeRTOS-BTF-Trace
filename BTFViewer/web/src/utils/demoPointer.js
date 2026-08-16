@@ -118,8 +118,14 @@ function wantFollowMouse() {
   return owners.has('record') && !owners.has('demo')
 }
 
+/** Hide OS cursor only for scripted demo; never while tab-recording (Chrome/Windows freeze). */
+export function shouldHideNativeCursor(ownerList) {
+  const set = ownerList instanceof Set ? ownerList : new Set(ownerList || [])
+  return set.has('demo') && !set.has('record')
+}
+
 function wantHideNative() {
-  return owners.has('record')
+  return shouldHideNativeCursor(owners)
 }
 
 function syncFollowMouse() {
@@ -135,10 +141,12 @@ function syncFollowMouse() {
       if (!e.relatedTarget && el) el.style.visibility = 'hidden'
     }
     window.addEventListener('pointermove', followMove, true)
+    window.addEventListener('mousemove', followMove, true)
     document.addEventListener('mouseout', followOut, true)
   }
   if (!follow && followMove) {
     window.removeEventListener('pointermove', followMove, true)
+    window.removeEventListener('mousemove', followMove, true)
     document.removeEventListener('mouseout', followOut, true)
     followMove = null
     followOut = null
@@ -165,6 +173,7 @@ function destroyDom() {
   }
   if (typeof window !== 'undefined' && followMove) {
     window.removeEventListener('pointermove', followMove, true)
+    window.removeEventListener('mousemove', followMove, true)
     followMove = null
   }
   if (typeof document !== 'undefined' && followOut) {

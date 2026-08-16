@@ -695,7 +695,7 @@
     <button
       class="tb-btn"
       :class="{ recording: recording }"
-      :title="recording ? 'Stop recording and download WebM' : 'Record this tab (share the tab, include tab audio; pointer is captured)'"
+      :title="recording ? 'Stop recording and download WebM' : 'Record this tab (share the tab and include tab audio)'"
       :aria-label="recording ? 'Stop recording and download WebM' : 'Record this tab'"
       @click="emit('toggleRecord')"
     >
