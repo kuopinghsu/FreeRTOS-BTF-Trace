@@ -177,25 +177,28 @@
         </div>
         <div class="demo-folder-body">
           The browser cannot read sibling files from
-          <strong>{{ demoFolderPrompt.xmlName }}</strong> alone.
-          Choose the folder that contains that XML, the
-          <code>.btf.gz</code>, and <code>voice/</code>
-          — or drop that folder onto the viewer.
-          If the pack lives under WSL (<code>\\wsl$</code> /
-          <code>\\wsl.localhost</code>), copy it to a Windows drive first.
+          <strong>{{ demoFolderPrompt.xmlName }}</strong> alone
+          (typical for <code>file://</code> and WSL paths).
+          Pick the matching <code>.btf.gz</code> next to that XML,
+          or drop the <code>demo_8cores</code> folder onto this window.
+          Folder pickers often fail on <code>\\wsl$</code> /
+          <code>\\wsl.localhost</code> — copy the pack to a Windows drive if needed.
         </div>
         <div class="demo-folder-footer">
-          <label class="demo-folder-btn primary">
+          <button
+            type="button"
+            class="demo-folder-btn primary"
+            @click="demoBtfInput?.click()"
+          >
+            Choose .btf.gz
+          </button>
+          <button
+            type="button"
+            class="demo-folder-btn"
+            @click="demoDirInput?.click()"
+          >
             Choose folder
-            <input
-              type="file"
-              class="demo-folder-file"
-              webkitdirectory
-              directory
-              multiple
-              @change="onDemoFolderFiles"
-            >
-          </label>
+          </button>
           <button
             type="button"
             class="demo-folder-btn"
@@ -206,6 +209,23 @@
         </div>
       </div>
     </div>
+    <input
+      ref="demoBtfInput"
+      type="file"
+      class="demo-folder-file"
+      accept=".xml,.btf,.gz,.bz2,.zip"
+      multiple
+      @change="onDemoFolderFiles"
+    >
+    <input
+      ref="demoDirInput"
+      type="file"
+      class="demo-folder-file"
+      webkitdirectory
+      directory
+      multiple
+      @change="onDemoFolderFiles"
+    >
 
     <div
       v-if="traceQualityText"
@@ -1530,6 +1550,8 @@ const demoVoiceLang = ref('en')
 const demoVoiceLangs = ref([])
 const DEMO_VOICE_LANG_KEY = 'btf-demo-voice-lang'
 const demoFolderPrompt = ref(null)
+const demoBtfInput = ref(null)
+const demoDirInput = ref(null)
 const zoomPresetValue = ref('fit')
 const zoomPresetOptions = ref(buildZoomPresetOptions(NaN, 0))
 let _demoRunner = null
@@ -1666,6 +1688,7 @@ function demoHost() {
     },
     clickPointer: async ({ x, y }) => {
       acquirePointer('demo')
+      await moveDemoPointer(x, y, 0)
       dispatchClickAt(x, y)
     },
     loadTraceFile: async (file) => {
@@ -1875,15 +1898,29 @@ function onDemoVoiceLang(e) {
 function onDemoFolderNeeded(prompt) {
   demoFolderPrompt.value = {
     xmlName: prompt?.xmlName || 'demo.xml',
+    xmlFile: prompt?.xmlFile || null,
+    files: prompt?.files || null,
     startIn: prompt?.startIn || null,
   }
+}
+
+function pendingDemoFiles() {
+  const extra = new Map()
+  const prompt = demoFolderPrompt.value
+  if (prompt?.files instanceof Map) {
+    for (const [k, v] of prompt.files) extra.set(k, v)
+  }
+  if (prompt?.xmlFile && !extra.has(prompt.xmlFile.name)) {
+    extra.set(prompt.xmlFile.name, prompt.xmlFile)
+  }
+  return extra
 }
 
 async function onDemoFolderFiles(e) {
   const list = e.target.files
   e.target.value = ''
   try {
-    const pack = await packFromFileList(list)
+    const pack = await packFromFileList(list, pendingDemoFiles())
     if (!pack) return
     demoFolderPrompt.value = null
     await startDemoPack(pack)
@@ -4102,6 +4139,18 @@ async function onFileDrop(e) {
     return
   }
   const kind = classifyOpenFiles(files)
+  if (demoFolderPrompt.value && (kind === 'btf' || kind === 'demo')) {
+    try {
+      const merged = pendingDemoFiles()
+      for (const [k, v] of files) merged.set(k, v)
+      const pack = await packFromFileMap(merged)
+      demoFolderPrompt.value = null
+      await startDemoPack(pack)
+    } catch (err) {
+      showToast(err?.message || 'Failed to open demo XML', 'error')
+    }
+    return
+  }
   if (kind === 'demo') {
     try {
       await startDemoPack(await packFromFileMap(files))
@@ -5669,7 +5718,12 @@ body {
 }
 
 .demo-folder-file {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
 }
 
 .demo-folder-btn.primary {

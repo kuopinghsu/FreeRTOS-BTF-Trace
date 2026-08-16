@@ -13,9 +13,9 @@ describe('demoRecorder cursor overlay', () => {
     assert.equal(displaySurfaceNeedsCursorOverlay('monitor'), false)
   })
 
-  it('does not hide the OS cursor while tab recording', () => {
+  it('does not hide the OS cursor for demo or tab recording', () => {
     assert.equal(shouldHideNativeCursor(['record']), false)
-    assert.equal(shouldHideNativeCursor(['demo']), true)
+    assert.equal(shouldHideNativeCursor(['demo']), false)
     assert.equal(shouldHideNativeCursor(['demo', 'record']), false)
   })
 })

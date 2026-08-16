@@ -184,9 +184,14 @@ export async function classifyPickedOpen(files, xmlHandle = null) {
       if (parent?.traceFile) pack = parent
     }
     if (pack.traceFile) return { kind: 'demo', pack }
+    const xmlFile = lookupFile(files, pack.xmlRel)
+      || [...files.values()].find(f => isXmlOpenName(f.name))
+      || null
     return {
       kind: 'demo-folder',
       xmlName: (pack.xmlRel || '').split('/').pop() || 'demo.xml',
+      xmlFile,
+      files,
       startIn: xmlHandle || null,
     }
   }
@@ -269,14 +274,23 @@ function pickDemoPackViaInput() {
   })
 }
 
+function mergeFileMaps(base, extra) {
+  const files = new Map()
+  for (const src of [base, extra]) {
+    if (!src) continue
+    for (const [k, v] of src) files.set(k, v)
+  }
+  return files
+}
+
 /** Build a pack from an <input webkitdirectory> FileList (Toolbar fallback). */
-export async function packFromFileList(list) {
-  const files = fileListToMap(list)
+export async function packFromFileList(list, extraFiles) {
+  const files = mergeFileMaps(extraFiles, fileListToMap(list))
   if (!files.size) {
     throw new Error(
-      'Could not read that folder. Copy the demo pack to a local disk '
-      + '(browser open often fails for WSL \\\\wsl$ / \\\\wsl.localhost paths) '
-      + 'and choose the copied folder.',
+      'Could not read those files. On WSL, pick the .xml and the .btf.gz '
+      + 'together (File → Open, multi-select), or copy the demo folder to a '
+      + 'Windows drive (not \\\\wsl$ / \\\\wsl.localhost) and open it from there.',
     )
   }
   return packFromFileMap(files)

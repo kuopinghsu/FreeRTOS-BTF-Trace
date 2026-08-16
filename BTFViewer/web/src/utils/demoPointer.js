@@ -118,10 +118,10 @@ function wantFollowMouse() {
   return owners.has('record') && !owners.has('demo')
 }
 
-/** Hide OS cursor only for scripted demo; never while tab-recording (Chrome/Windows freeze). */
-export function shouldHideNativeCursor(ownerList) {
-  const set = ownerList instanceof Set ? ownerList : new Set(ownerList || [])
-  return set.has('demo') && !set.has('record')
+/** Never hide the OS cursor: Chrome/Windows freezes tracking, and demo overlay
+ *  would leave the user with no pointer if the overlay missed a frame. */
+export function shouldHideNativeCursor(_ownerList) {
+  return false
 }
 
 function wantHideNative() {

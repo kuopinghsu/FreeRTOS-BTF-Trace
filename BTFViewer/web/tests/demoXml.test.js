@@ -172,6 +172,15 @@ describe('demoPack', () => {
     const result = await classifyPickedOpen(new Map([['demo.xml', xml]]))
     assert.equal(result.kind, 'demo-folder')
     assert.equal(result.xmlName, 'demo.xml')
+    assert.equal(result.xmlFile, xml)
+  })
+
+  it('merges a later btf pick with the already-open xml', async () => {
+    const xml = new File([SAMPLE], 'demo.xml', { type: 'text/xml' })
+    const btf = new File([new Uint8Array([1])], 'demo.btf.gz')
+    const first = await classifyPickedOpen(new Map([['demo.xml', xml]]))
+    const pack = await packFromFileList([btf], first.files)
+    assert.equal(pack.traceFile, btf)
   })
 
   it('starts a demo when xml and btf are opened together', async () => {

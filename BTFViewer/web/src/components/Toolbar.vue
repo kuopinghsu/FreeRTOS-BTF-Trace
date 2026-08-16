@@ -831,7 +831,12 @@ async function emitPickedOpen(picked) {
     return
   }
   if (picked.kind === 'demo-folder') {
-    emit('demoFolder', { xmlName: picked.xmlName, startIn: picked.startIn || null })
+    emit('demoFolder', {
+      xmlName: picked.xmlName,
+      xmlFile: picked.xmlFile || null,
+      files: picked.files || null,
+      startIn: picked.startIn || null,
+    })
     return
   }
   if (picked.kind === 'btf' && picked.file) await emitLoadedEntries(picked.file)
