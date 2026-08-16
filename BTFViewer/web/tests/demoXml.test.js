@@ -14,7 +14,7 @@ import {
   truthy,
 } from '../src/utils/demoXml.js'
 import { createDemoRunner, shouldSkipStep } from '../src/utils/demoRunner.js'
-import { classifyOpenFiles, classifyPickedOpen, normalizePackPath, packFromFileMap } from '../src/utils/demoPack.js'
+import { classifyOpenFiles, classifyPickedOpen, normalizePackPath, packFromDirectoryHandle, packFromFileList, packFromFileMap } from '../src/utils/demoPack.js'
 
 const SAMPLE = `<?xml version="1.0" encoding="UTF-8"?>
 <!-- comment: no double-hyphen inside -->
@@ -119,6 +119,52 @@ describe('demoPack', () => {
     assert.equal(classifyOpenFiles(new Map([['a.btf.gz', {}]])), 'btf')
     assert.equal(classifyOpenFiles(new Map([['demo.xml', {}], ['a.btf.gz', {}]])), 'demo')
     assert.equal(classifyOpenFiles(new Map([['notes.txt', {}]])), 'unknown')
+  })
+
+  it('reads the sibling btf via the xml parent handle', async () => {
+    const xml = new File([SAMPLE], 'demo.xml', { type: 'text/xml' })
+    const btf = new File([new Uint8Array([1])], 'demo.btf.gz')
+    const parent = {
+      async *entries() {
+        yield ['demo.xml', { kind: 'file', async getFile() { return xml } }]
+        yield ['demo.btf.gz', { kind: 'file', async getFile() { return btf } }]
+      },
+      async queryPermission() { return 'prompt' },
+      async requestPermission() { return 'granted' },
+    }
+    const result = await classifyPickedOpen(
+      new Map([['demo.xml', xml]]),
+      { getParent: async () => parent },
+    )
+    assert.equal(result.kind, 'demo')
+    assert.equal(result.pack.traceFile, btf)
+  })
+
+  it('skips unreadable WSL entries while walking a folder handle', async () => {
+    const xml = new File([SAMPLE], 'demo.xml', { type: 'text/xml' })
+    const btf = new File([new Uint8Array([1])], 'demo.btf.gz')
+    const handle = {
+      async *entries() {
+        yield ['demo.xml', { kind: 'file', async getFile() { return xml } }]
+        yield ['socket', { kind: 'file', async getFile() { throw new Error('EPERM') } }]
+        yield ['.git', {
+          kind: 'directory',
+          async *entries() {
+            yield ['HEAD', { kind: 'file', async getFile() { throw new Error('git') } }]
+          },
+        }]
+        yield ['demo.btf.gz', { kind: 'file', async getFile() { return btf } }]
+      },
+    }
+    const pack = await packFromDirectoryHandle(handle)
+    assert.equal(pack.traceFile, btf)
+  })
+
+  it('explains empty WSL folder reads', async () => {
+    await assert.rejects(
+      () => packFromFileList([]),
+      /WSL/,
+    )
   })
 
   it('asks for the pack folder when only the xml is opened', async () => {

@@ -77,11 +77,51 @@ export async function packFromFileMap(files) {
   }
 }
 
+const SKIP_DIR_NAMES = new Set([
+  '.git', 'node_modules', '.svn', '__pycache__', '.hg', '.ds_store',
+])
+
+async function grantRead(handle) {
+  if (!handle) return false
+  try {
+    if (typeof handle.queryPermission === 'function') {
+      const state = await handle.queryPermission({ mode: 'read' })
+      if (state === 'granted') return true
+    }
+    if (typeof handle.requestPermission === 'function') {
+      return (await handle.requestPermission({ mode: 'read' })) === 'granted'
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function walkDirectoryHandle(handle, prefix, out) {
-  for await (const [name, child] of handle.entries()) {
+  if (!handle || typeof handle.entries !== 'function') return
+  let iterator
+  try {
+    iterator = handle.entries()
+  } catch {
+    return
+  }
+  for await (const [name, child] of iterator) {
+    if (!name || name === '.' || name === '..') continue
     const rel = prefix ? `${prefix}/${name}` : name
-    if (child.kind === 'directory') await walkDirectoryHandle(child, rel, out)
-    else out.set(normalizePackPath(rel), await child.getFile())
+    if (child.kind === 'directory') {
+      if (SKIP_DIR_NAMES.has(name.toLowerCase()) || name.startsWith('.')) continue
+      try {
+        await walkDirectoryHandle(child, rel, out)
+      } catch {
+        // WSL / UNC shares often throw while iterating a child folder.
+      }
+      continue
+    }
+    try {
+      out.set(normalizePackPath(rel), await child.getFile())
+    } catch {
+      // Skip unreadable entries (symlinks, pipes, WSL special files).
+    }
   }
 }
 
@@ -116,7 +156,9 @@ function supportsDirectoryPicker() {
 async function tryParentDirectoryPack(handle) {
   if (!handle || typeof handle.getParent !== 'function') return null
   try {
-    return await packFromDirectoryHandle(await handle.getParent())
+    const parent = await handle.getParent()
+    if (!(await grantRead(parent))) return null
+    return await packFromDirectoryHandle(parent)
   } catch {
     return null
   }
@@ -152,6 +194,10 @@ export async function classifyPickedOpen(files, xmlHandle = null) {
   return btf ? { kind: 'btf', file: btf } : null
 }
 
+function isPickerCancel(err) {
+  return !!err && err.name === 'AbortError'
+}
+
 /**
  * Open a folder picker (File System Access API) or a webkitdirectory fallback.
  * Must be called from a user gesture (button click), not after another picker.
@@ -162,19 +208,23 @@ export async function pickDemoPack(opts = {}) {
     try {
       const dirOpts = { id: 'btf-demo-pack' }
       if (opts.startIn) dirOpts.startIn = opts.startIn
-      const dir = await window.showDirectoryPicker(dirOpts)
-      return packFromDirectoryHandle(dir)
-    } catch (err) {
-      if (err && (err.name === 'AbortError' || err.name === 'NotAllowedError')) return null
-      if (opts.startIn) {
-        try {
-          const dir = await window.showDirectoryPicker({ id: 'btf-demo-pack' })
-          return packFromDirectoryHandle(dir)
-        } catch (err2) {
-          if (err2 && (err2.name === 'AbortError' || err2.name === 'NotAllowedError')) return null
-        }
+      let dir
+      try {
+        dir = await window.showDirectoryPicker(dirOpts)
+      } catch (err) {
+        if (isPickerCancel(err)) return null
+        // WSL / UNC: startIn from a Linux file handle is often invalid.
+        if (!opts.startIn) throw err
+        dir = await window.showDirectoryPicker({ id: 'btf-demo-pack' })
       }
-      throw err
+      if (dir && typeof dir.requestPermission === 'function') {
+        await grantRead(dir)
+      }
+      return await packFromDirectoryHandle(dir)
+    } catch (err) {
+      if (isPickerCancel(err)) return null
+      // Chrome on Windows cannot walk \\wsl$ / \\wsl.localhost via FSA.
+      return pickDemoPackViaInput()
     }
   }
   return pickDemoPackViaInput()
@@ -221,7 +271,15 @@ function pickDemoPackViaInput() {
 
 /** Build a pack from an <input webkitdirectory> FileList (Toolbar fallback). */
 export async function packFromFileList(list) {
-  return packFromFileMap(fileListToMap(list))
+  const files = fileListToMap(list)
+  if (!files.size) {
+    throw new Error(
+      'Could not read that folder. Copy the demo pack to a local disk '
+      + '(browser open often fails for WSL \\\\wsl$ / \\\\wsl.localhost paths) '
+      + 'and choose the copied folder.',
+    )
+  }
+  return packFromFileMap(files)
 }
 
 function readAllDirectoryEntries(reader) {

@@ -181,15 +181,21 @@
           Choose the folder that contains that XML, the
           <code>.btf.gz</code>, and <code>voice/</code>
           — or drop that folder onto the viewer.
+          If the pack lives under WSL (<code>\\wsl$</code> /
+          <code>\\wsl.localhost</code>), copy it to a Windows drive first.
         </div>
         <div class="demo-folder-footer">
-          <button
-            type="button"
-            class="demo-folder-btn primary"
-            @click="onChooseDemoFolder"
-          >
+          <label class="demo-folder-btn primary">
             Choose folder
-          </button>
+            <input
+              type="file"
+              class="demo-folder-file"
+              webkitdirectory
+              directory
+              multiple
+              @change="onDemoFolderFiles"
+            >
+          </label>
           <button
             type="button"
             class="demo-folder-btn"
@@ -1343,8 +1349,8 @@ import { isBtfOpenName, loadBtfEntriesFromFile } from './utils/btfLoad.js'
 import {
   classifyOpenFiles,
   collectDroppedFiles,
+  packFromFileList,
   packFromFileMap,
-  pickDemoPack,
 } from './utils/demoPack.js'
 import { createDemoRunner, parseCursorTimes } from './utils/demoRunner.js'
 import { discoverVoiceLangs, mergeVoiceLangs, pickVoiceLang } from './utils/demoVoice.js'
@@ -1873,10 +1879,11 @@ function onDemoFolderNeeded(prompt) {
   }
 }
 
-async function onChooseDemoFolder() {
-  const startIn = demoFolderPrompt.value?.startIn || null
+async function onDemoFolderFiles(e) {
+  const list = e.target.files
+  e.target.value = ''
   try {
-    const pack = await pickDemoPack({ startIn })
+    const pack = await packFromFileList(list)
     if (!pack) return
     demoFolderPrompt.value = null
     await startDemoPack(pack)
@@ -5657,6 +5664,12 @@ body {
   color: var(--fg);
   font-size: 12px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.demo-folder-file {
+  display: none;
 }
 
 .demo-folder-btn.primary {
