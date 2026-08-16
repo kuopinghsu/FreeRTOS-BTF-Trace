@@ -64,6 +64,33 @@ describe('buildWorkflowAnalysisFindings', () => {
     assert.doesNotMatch(load.text, /reasonably balanced/)
   })
 
+  it('includes Load Balance Score metrics when cores are balanced', () => {
+    const findings = buildWorkflowAnalysisFindings({
+      coreRows: [{ pct: 40 }, { pct: 40 }, { pct: 40 }],
+    })
+    const load = findings.find(f => f.id === 'load_balance_ok')
+    assert.ok(load)
+    assert.equal(load.severity, 'info')
+    assert.equal(load.title, 'Core utilisation balance')
+    assert.match(load.text, /Load Balance Score/)
+    assert.match(load.text, /σ=/)
+    assert.match(load.text, /G=/)
+    assert.match(load.text, /reasonably balanced/)
+  })
+
+  it('omits load-balance findings for one core or zero utilisation', () => {
+    assert.equal(
+      buildWorkflowAnalysisFindings({ coreRows: [{ pct: 40 }] })
+        .filter(f => /balance/i.test(f.title)).length,
+      0,
+    )
+    assert.equal(
+      buildWorkflowAnalysisFindings({ coreRows: [{ pct: 0 }, { pct: 0 }] })
+        .filter(f => /balance/i.test(f.title)).length,
+      0,
+    )
+  })
+
   it('flags L/M/H priority pattern', () => {
     const findings = buildWorkflowAnalysisFindings({
       coreRows: [{ pct: 50 }, { pct: 50 }],

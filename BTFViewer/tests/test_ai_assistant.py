@@ -70,14 +70,14 @@ class AiAssistantHelpersTests(unittest.TestCase):
         ids = [t[0] for t in AI_TEMPLATE_QUESTIONS]
         self.assertEqual(ids[0], "findings")
         self.assertEqual(AI_TEMPLATE_QUESTIONS[0][1], "Analysis Findings")
-        self.assertEqual(ids[1], "investigate")
-        self.assertEqual(AI_TEMPLATE_QUESTIONS[1][1], "Investigate")
-        self.assertEqual(ids[2], "root_cause")
-        self.assertEqual(AI_TEMPLATE_QUESTIONS[2][1], "Root cause")
+        self.assertEqual(ids[1], "explain_region")
+        self.assertEqual(AI_TEMPLATE_QUESTIONS[1][1], "Explain region")
+        self.assertEqual(ids[2], "investigate")
+        self.assertEqual(AI_TEMPLATE_QUESTIONS[2][1], "Investigate")
         self.assertEqual(ids[3], "verify")
         self.assertEqual(AI_TEMPLATE_QUESTIONS[3][1], "Verify finding")
-        self.assertEqual(ids[4], "explain_region")
-        self.assertEqual(AI_TEMPLATE_QUESTIONS[4][1], "Explain region")
+        self.assertEqual(ids[4], "root_cause")
+        self.assertEqual(AI_TEMPLATE_QUESTIONS[4][1], "Root cause")
         self.assertEqual(ids[5], "compare")
         self.assertEqual(AI_TEMPLATE_QUESTIONS[5][1], "Trace Compare")
         self.assertIn("triage", ids)
@@ -121,7 +121,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
         menu_ids = [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids]
         self.assertEqual(
             list(AI_TEMPLATE_PRIMARY_IDS),
-            ["investigate", "findings", "explain_region", "auto_investigate"],
+            ["findings", "explain_region", "investigate", "auto_investigate"],
         )
         self.assertEqual(sorted(list(AI_TEMPLATE_PRIMARY_IDS) + menu_ids), sorted(all_ids))
         self.assertFalse(set(AI_TEMPLATE_PRIMARY_IDS) & set(menu_ids))
@@ -135,7 +135,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
 
         from btf_viewer_pkg.ai_assistant import ai_template_primary_rows
         lead, last = ai_template_primary_rows()
-        self.assertEqual(list(lead), ["investigate", "findings", "explain_region"])
+        self.assertEqual(list(lead), ["findings", "explain_region", "investigate"])
         self.assertEqual(list(last), ["auto_investigate"])
         self.assertIn("export function aiTemplatePrimaryRows", js)
 

@@ -336,6 +336,38 @@ STATS_HEAVY_SECTIONS         = frozenset({
     "task_health",
 })
 STATS_DEFAULT_EXPANDED_SECTIONS = frozenset({"cores", "health"})
+COMMAND_PALETTE_ACTIONS = (
+    ("analysis", "Analysis Findings"),
+    ("statistics", "Statistics"),
+    ("find", "Find"),
+    ("marks", "Marks"),
+    ("ai", "AI Assistant"),
+    ("compare", "Trace Compare"),
+    ("heatmap", "Migration heatmap"),
+    ("settings", "Settings"),
+    ("limit-scope", "Limit to C1–Cn"),
+    ("fit", "Zoom fit"),
+    ("inspect-task", "Inspect task"),
+    ("preset-triage", "Workspace: Triage"),
+    ("preset-latency", "Workspace: Latency"),
+    ("preset-smp", "Workspace: SMP"),
+    ("preset-compare", "Workspace: Compare"),
+)
+WORKSPACE_PRESETS = {
+    "preset-triage": ("health", "anomalies", "worst", "task_health"),
+    "preset-latency": ("exec", "response", "jitter", "period", "dispatch"),
+    "preset-smp": ("migrations", "core_pairs", "affinity", "task_core", "cores"),
+    "preset-compare": (),
+}
+
+
+def workspace_preset_collapsed(preset_id: str) -> Dict[str, bool]:
+    """Statistics collapse map for a workspace preset (expand listed sections)."""
+    flags = default_section_collapsed()
+    for sid in WORKSPACE_PRESETS.get(str(preset_id) or "", ()):
+        if sid in flags:
+            flags[sid] = False
+    return flags
 
 def _trace_segment_count(trace: "BtfTrace") -> int:
     segs = getattr(trace, "segments", None)
@@ -6163,6 +6195,27 @@ def _trace_summary_snapshot(trace: "BtfTrace",
         "missed_ticks": tick.get("missed_estimate", 0),
     }
 
+
+def cross_trace_trends(rows: Optional[Sequence[dict]] = None) -> List[dict]:
+    """Per-open-tab summary rows for Compare when 3+ traces are loaded."""
+    out: List[dict] = []
+    for raw in rows or []:
+        if not isinstance(raw, dict):
+            continue
+        snap = raw.get("snap") if isinstance(raw.get("snap"), dict) else raw
+        name = str(raw.get("name") or snap.get("name") or "").strip()
+        out.append({
+            "name": name,
+            "span_ns": snap.get("span_ns", snap.get("spanNs")),
+            "migrations": snap.get("migrations"),
+            "load_balance": snap.get(
+                "load_balance_score", snap.get("loadBalanceScore")),
+            "tick_health": snap.get("tick_health", snap.get("tickHealth")),
+            "tasks": snap.get("tasks"),
+        })
+    return out
+
+
 def _top_tasks_cpu_by_name(trace: "BtfTrace", limit: int = 10,
                            lo: Optional[int] = None, hi: Optional[int] = None) -> Dict[str, float]:
     """Top tasks by CPU%, keyed by display name."""
@@ -8618,6 +8671,8 @@ class TimelineScene(QGraphicsScene):
         # -- Find-hit overlay (all match positions from the Find panel) ---
         self._find_hit_ns_list: List[int] = []
         self._find_hit_items: list = []
+        self._finding_overlay_ns: List[int] = []
+        self._finding_overlay_items: list = []
         # -- Task highlight state ----------------------------------------
         self._locked_task:  Optional[str] = None   # click-locked task (persistent)
         self._locked_core:  Optional[str] = None   # core context for locked task (core view)
@@ -9004,6 +9059,11 @@ class TimelineScene(QGraphicsScene):
         self._find_hit_ns_list = list(ns_list)
         self._draw_find_markers()
 
+    def set_finding_overlays(self, ns_list: list) -> None:
+        """Vertical markers for Analysis Finding times (not user-editable marks)."""
+        self._finding_overlay_ns = list(ns_list or [])
+        self._draw_finding_overlays()
+
     def _draw_find_markers(self) -> None:
         """Draw thin vertical/horizontal lines for each find hit."""
         _safe_scene_remove_items(self, self._find_hit_items)
@@ -9024,6 +9084,26 @@ class TimelineScene(QGraphicsScene):
             line.setZValue(26)   # below marks (z=28) and cursors (z=30)
             self.addItem(line)
             self._find_hit_items.append(line)
+
+    def _draw_finding_overlays(self) -> None:
+        _safe_scene_remove_items(self, self._finding_overlay_items)
+        self._finding_overlay_items.clear()
+        if self._trace is None or not self._finding_overlay_ns:
+            return
+        scene_r = self.sceneRect()
+        pen = QPen(QColor("#C084FC"), 1.0, Qt.PenStyle.DashLine)
+        pen.setCosmetic(True)
+        for ns in self._finding_overlay_ns:
+            if self._horizontal:
+                x = self._label_width + self._ns_to_px(ns)
+                line = QGraphicsLineItem(x, 0, x, scene_r.height())
+            else:
+                y = self._label_width + self._ns_to_px(ns)
+                line = QGraphicsLineItem(0, y, scene_r.width(), y)
+            line.setPen(pen)
+            line.setZValue(25)
+            self.addItem(line)
+            self._finding_overlay_items.append(line)
 
     def _dim_brush_if_follow(self, brush: QBrush, merge_key: str) -> QBrush:
         """Dim segments of other tasks when one task is lock-highlighted."""
@@ -10206,6 +10286,7 @@ class TimelineScene(QGraphicsScene):
         self._hover_line_ns = None
         self._measure_items = []           # clear() removed them from the scene
         self._find_hit_items = []
+        self._finding_overlay_items = []
         if self._trace is None:
             return
         if self._view_mode == "core":
@@ -10224,6 +10305,7 @@ class TimelineScene(QGraphicsScene):
         self._draw_cursors()
         self._draw_marks()
         self._draw_find_markers()
+        self._draw_finding_overlays()
         if self._hover_ns is not None:
             self._draw_hover_line()
         self.scene_rebuilt.emit()
@@ -13383,7 +13465,7 @@ def _in_ai_actions_bar(w: QWidget) -> bool:
     while p is not None:
         if p.objectName() in (
                 "aiActions", "aiTemplates", "aiModes", "aiHeader", "aiMoreMenu",
-                "aiComposer"):
+                "aiComposer", "aiGuide", "aiGuideStepper"):
             return True
         p = p.parentWidget()
     return False
@@ -13990,6 +14072,34 @@ def _fix_collapsed_time_ns_range(
         ns_lo = max(t_min, min(ns_lo, t_max - 1))
         ns_hi = min(t_max, max(ns_hi, ns_lo + 1))
     return ns_lo, ns_hi
+
+
+def _ctrl_like_held(modifiers) -> bool:
+    """True when Control or Command is held.
+
+    Qt on macOS swaps keyboard modifiers (ControlModifier is ⌘, MetaModifier
+    is ⌃), but mouse events may still report the native Control key as
+    ControlModifier. Accept both so Ctrl+left-drag matches the web app.
+    """
+    return bool(
+        modifiers
+        & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier)
+    )
+
+
+def _is_ctrl_like_key(key) -> bool:
+    return key in (Qt.Key.Key_Control, Qt.Key.Key_Meta)
+
+
+def _event_view_pos(event):
+    """Viewport QPoint from a mouse or context-menu event."""
+    if hasattr(event, "position"):
+        try:
+            return event.position().toPoint()
+        except Exception:
+            pass
+    return event.pos()
+
 
 class TimelineView(QGraphicsView):
     """Pan + zoom QGraphicsView wrapping a TimelineScene."""
@@ -15661,7 +15771,7 @@ class TimelineView(QGraphicsView):
         # Releasing Ctrl mid-drag hides the measure-ruler even if the mouse
         # button is still held down.
         if (not event.isAutoRepeat()
-                and event.key() == Qt.Key.Key_Control
+                and _is_ctrl_like_key(event.key())
                 and self._measure_press_ns is not None):
             self._measure_press_ns = None
             self._scene.clear_measure_ruler()
@@ -15852,11 +15962,49 @@ class TimelineView(QGraphicsView):
                         best_ns   = seg.end
         return best_ns
 
+    def _try_start_measure(self, event) -> bool:
+        """Start the Ctrl+drag measure ruler. True if the gesture was claimed.
+
+        macOS turns Control+left-click into a right-click / context menu, so
+        LeftButton with a Ctrl-like modifier never arrives. Treat that remapped
+        RightButton the same as a left-button measure press.
+        """
+        if self._scene._trace is None:
+            return False
+        if not _ctrl_like_held(event.modifiers()):
+            return False
+        btn = event.button() if hasattr(event, "button") else Qt.MouseButton.NoButton
+        if btn not in (
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.RightButton,
+            Qt.MouseButton.NoButton,  # QContextMenuEvent
+        ):
+            return False
+        pos = _event_view_pos(event)
+        lw = self._scene._label_width
+        in_label = (pos.x() < lw if self._scene._horizontal else pos.y() < lw)
+        if in_label:
+            return False
+        scene_pt = self.mapToScene(pos)
+        coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
+        self._measure_press_ns = self._scene.scene_to_ns(coord)
+        self._measure_anchor_coord = (
+            scene_pt.y() if self._scene._horizontal else scene_pt.x()
+        )
+        self.setDragMode(QGraphicsView.NoDrag)
+        _HoverCursor.show(Qt.CursorShape.CrossCursor)
+        return True
+
     def mousePressEvent(self, event) -> None:
         if self._scene._trace is not None:
             self.setFocus(Qt.FocusReason.MouseFocusReason)
         self._press_pos = event.position().toPoint()
         self._press_btn = event.button()
+
+        if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
+            if self._try_start_measure(event):
+                event.accept()
+                return
 
         if event.button() == Qt.MouseButton.MiddleButton:
             if self._scene._trace is not None:
@@ -15872,24 +16020,6 @@ class TimelineView(QGraphicsView):
                 return
 
         if event.button() == Qt.MouseButton.LeftButton:
-            # --- Ctrl+drag: measure-ruler tool (takes priority over the
-            #     resize/cursor/mark drags below so it works anywhere) ---
-            if (event.modifiers() & Qt.KeyboardModifier.ControlModifier
-                    and self._scene._trace is not None):
-                lw = self._scene._label_width
-                in_label = (event.position().x() < lw if self._scene._horizontal
-                            else event.position().y() < lw)
-                if not in_label:
-                    scene_pt = self.mapToScene(event.position().toPoint())
-                    coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
-                    self._measure_press_ns = self._scene.scene_to_ns(coord)
-                    self._measure_anchor_coord = (scene_pt.y() if self._scene._horizontal
-                                                   else scene_pt.x())
-                    self.setDragMode(QGraphicsView.NoDrag)
-                    _HoverCursor.show(Qt.CursorShape.CrossCursor)
-                    event.accept()
-                    return
-
             # --- Check if we're starting a label-column/row resize drag ---
             if self._scene._horizontal:
                 lw = self._scene._label_width
@@ -16292,6 +16422,13 @@ class TimelineView(QGraphicsView):
             "" if on else "Enable AI Assistant in Settings → AI")
 
     def contextMenuEvent(self, event) -> None:
+        # macOS maps Ctrl+left-click to a context menu. Claim it as measure
+        # if the remapped right-press did not already start the ruler.
+        if _ctrl_like_held(event.modifiers()) or self._measure_press_ns is not None:
+            if self._measure_press_ns is None:
+                self._try_start_measure(event)
+            event.accept()
+            return
         # Suppress the context menu when the click lands inside the label column.
         # QContextMenuEvent uses .pos()/.globalPos() - NOT .position() (QMouseEvent only)
         lw = self._scene._label_width
@@ -17525,6 +17662,225 @@ def mermaid_label_with_time(text: Any, time: Any = None, limit: int = 96) -> str
     if tok and f"jump:{tok}" not in lab:
         lab = f"{lab} jump:{tok}"
     return _mermaid_safe_label(lab, limit)
+
+
+GUIDED_STAGES: Tuple[str, ...] = (
+    "triage", "scope", "investigate", "verify", "experiment", "compare",
+)
+GUIDED_STAGE_LABELS: Dict[str, str] = {
+    "idle": "Start",
+    "triage": "Triage",
+    "scope": "Scope",
+    "investigate": "Investigate",
+    "verify": "Verify",
+    "experiment": "Experiment",
+    "compare": "Compare",
+}
+
+
+def _guide_tool_names(payload: Optional[dict], plan: Optional[dict]) -> List[str]:
+    names: List[str] = []
+    if isinstance(payload, dict):
+        case = payload.get("investigation_case") or {}
+        for t in (case.get("tools_executed") or payload.get("tools_executed") or []):
+            names.append(str(t or "").strip())
+        for t in (payload.get("suggested_tools") or []):
+            if isinstance(t, dict):
+                names.append(str(t.get("name") or "").strip())
+            else:
+                names.append(str(t or "").strip())
+    if isinstance(plan, dict):
+        for s in (plan.get("steps") or []):
+            if isinstance(s, dict):
+                names.append(str(s.get("id") or s.get("label") or "").strip())
+            else:
+                names.append(str(s or "").strip())
+    return [n for n in names if n]
+
+
+def investigation_guide_stage(
+    payload: Optional[dict] = None,
+    *,
+    plan: Optional[dict] = None,
+    has_cursors: bool = False,
+    has_two_traces: bool = False,
+) -> str:
+    """Map an Investigation Case onto the beginner stepper stage."""
+    tools = " ".join(_guide_tool_names(payload, plan)).lower()
+    has_payload = isinstance(payload, dict) and bool(payload)
+    has_plan = isinstance(plan, dict) and bool(plan.get("steps") or plan.get("goal"))
+    if not has_payload and not has_plan:
+        return "idle"
+    quality = ""
+    if has_payload:
+        q = payload.get("evidence_quality") or {}
+        if isinstance(q, dict):
+            quality = str(q.get("band") or "").lower()
+    verified = any(k in tools for k in (
+        "verify_claim", "detect_contradictions", "assess_evidence_sufficiency",
+        "challenge_conclusion",
+    )) or quality in ("strong", "medium-high")
+    if has_two_traces and (
+        "validate_experiment" in tools or "compare_performance" in tools
+        or "analyze_traces" in tools
+    ):
+        return "compare"
+    if "what_if" in tools or "optimize_experiment" in tools:
+        return "experiment" if verified else "verify"
+    if verified:
+        return "verify"
+    if any(k in tools for k in (
+        "investigate", "correlate_events", "find_critical_path",
+        "rank_root_causes",
+    )) or (has_payload and (payload.get("evidence") or payload.get("root_cause_chain"))):
+        return "investigate"
+    if has_cursors:
+        return "scope"
+    return "triage"
+
+
+GUIDE_STAGE_NEEDLES: Dict[str, Tuple[str, ...]] = {
+    "triage": ("finding", "triage", "analysis"),
+    "scope": ("cursor", "scope", "c1"),
+    "investigate": ("evidence", "correlate", "critical path", "root cause"),
+    "verify": ("verify", "contradict", "alternative", "sufficiency"),
+    "experiment": ("what-if", "what_if", "optimize", "estimate"),
+    "compare": ("compare", "validate_experiment", "recapture"),
+}
+ESTIMATE_BANNER = (
+    "Heuristic estimate (What-if / Optimize) — recapture a trace and Compare "
+    "to measure."
+)
+VERIFY_HINT = (
+    "Verify alternatives and contradictions before treating What-if as measured."
+)
+
+
+def guide_stage_needles(stage: str) -> Tuple[str, ...]:
+    return GUIDE_STAGE_NEEDLES.get(str(stage or ""), ())
+
+
+def investigation_issue_card(payload: Optional[dict] = None) -> Dict[str, str]:
+    """Compact CURRENT ISSUE fields for the AI panel card."""
+    data = payload if isinstance(payload, dict) else {}
+    finding = data.get("finding") if isinstance(data.get("finding"), dict) else {}
+    quality = data.get("evidence_quality") if isinstance(data.get("evidence_quality"), dict) else {}
+    interpreted = data.get("interpreted") if isinstance(data.get("interpreted"), dict) else {}
+    title = str(
+        finding.get("title") or data.get("conclusion") or data.get("subtitle") or ""
+    ).strip()
+    task = ""
+    for key in ("task", "task_name", "primary_task"):
+        task = str(finding.get(key) or interpreted.get(key) or "").strip()
+        if task:
+            break
+    scope = str(interpreted.get("scope") or data.get("scope") or "").strip()
+    return {
+        "title": title or "Investigation",
+        "severity": str(finding.get("severity") or "").strip(),
+        "task": task,
+        "band": str(quality.get("band") or "").replace("-", " ").title(),
+        "scope": scope,
+        "status": str(data.get("conclusion") or "").strip()[:120],
+    }
+
+
+def format_investigation_issue_card(card: Optional[dict] = None) -> str:
+    """Desktop/Web lockstep text for the AI panel Current issue strip."""
+    data = card if isinstance(card, dict) else {}
+    title = str(data.get("title") or "").strip()
+    task = str(data.get("task") or "").strip()
+    band = str(data.get("band") or "").strip()
+    scope = str(data.get("scope") or "").strip()
+    if title in ("", "Investigation") and not task and not band:
+        return ""
+    bits = [title or "Investigation"]
+    if task:
+        bits.append(task)
+    if band:
+        bits.append(f"Evidence {band}")
+    if scope:
+        bits.append(scope)
+    return "CURRENT ISSUE\n" + " · ".join(bits)
+
+
+AI_SESSION_MAX_MESSAGES = 40
+AI_SESSION_MAX_CHARS = 80000
+
+
+def dump_investigation_session(
+    *,
+    payload: Optional[dict] = None,
+    plan: Optional[dict] = None,
+    messages: Optional[Sequence[Any]] = None,
+) -> str:
+    """JSON for session restore (evidence + plan + recent chat)."""
+    msgs: List[Dict[str, str]] = []
+    total = 0
+    for raw in list(messages or [])[-AI_SESSION_MAX_MESSAGES:]:
+        if isinstance(raw, dict):
+            role = str(raw.get("role") or "")
+            text = str(raw.get("content") or raw.get("text") or "")
+        elif isinstance(raw, (list, tuple)) and len(raw) >= 2:
+            role = str(raw[0] or "")
+            text = str(raw[1] or "")
+        else:
+            continue
+        if role not in ("user", "assistant", "evidence"):
+            continue
+        if total + len(text) > AI_SESSION_MAX_CHARS:
+            break
+        total += len(text)
+        msgs.append({"role": role, "content": text[:8000]})
+    blob = {
+        "v": 1,
+        "payload": payload if isinstance(payload, dict) else None,
+        "plan": plan if isinstance(plan, dict) else None,
+        "messages": msgs,
+    }
+    return json.dumps(blob, ensure_ascii=False, separators=(",", ":"))
+
+
+def parse_investigation_session(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        data = raw
+    else:
+        text = str(raw or "").strip()
+        if not text:
+            return {"payload": None, "plan": None, "messages": []}
+        try:
+            data = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {"payload": None, "plan": None, "messages": []}
+    if not isinstance(data, dict):
+        return {"payload": None, "plan": None, "messages": []}
+    msgs = []
+    for m in (data.get("messages") or [])[:AI_SESSION_MAX_MESSAGES]:
+        if not isinstance(m, dict):
+            continue
+        role = str(m.get("role") or "")
+        if role not in ("user", "assistant", "evidence"):
+            continue
+        msgs.append({"role": role, "content": str(m.get("content") or "")[:8000]})
+    payload = data.get("payload") if isinstance(data.get("payload"), dict) else None
+    plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
+    return {"payload": payload, "plan": plan, "messages": msgs}
+
+
+def investigation_session_has_chat(messages: Optional[Sequence[Any]] = None) -> bool:
+    """True when a session blob has a user or assistant turn (not evidence-only)."""
+    for raw in messages or []:
+        if isinstance(raw, dict):
+            role = str(raw.get("role") or "")
+            text = str(raw.get("content") or raw.get("text") or "")
+        elif isinstance(raw, (list, tuple)) and len(raw) >= 2:
+            role = str(raw[0] or "")
+            text = str(raw[1] or "")
+        else:
+            continue
+        if role in ("user", "assistant") and text.strip():
+            return True
+    return False
 
 
 def empty_investigation_case(
@@ -25292,6 +25648,7 @@ def cluster_findings(findings: Optional[Sequence[dict]] = None) -> Dict[str, Any
             "root_suspect": root,
             "patterns": sorted(pats),
             "findings": titles,
+            "finding_ids": [str(m.get("id") or "") for m in members],
             "count": len(members),
         })
     return {
@@ -25299,6 +25656,67 @@ def cluster_findings(findings: Optional[Sequence[dict]] = None) -> Dict[str, Any
         "message": f"{len(incidents)} incident cluster(s) from {len(items)} findings",
         "incidents": incidents,
     }
+
+
+def analysis_dashboard(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    quality_warnings: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """Overview strip for Analysis Findings (clusters, quality, phase window)."""
+    items = _items(findings)
+    clustered = cluster_findings(items)
+    scoped = suggest_scope("", items)
+    errors = sum(1 for f in items if str(f.get("severity") or "") == "error")
+    warns = sum(1 for f in items if str(f.get("severity") or "") == "warning")
+    quality = [str(q).strip() for q in (quality_warnings or []) if str(q or "").strip()]
+    lines = []
+    if quality:
+        lines.append("Trace quality: " + "; ".join(quality[:3]))
+    else:
+        lines.append("Trace quality: no integrity warnings.")
+    lines.append(
+        f"Top issues: {errors} error, {warns} warning, {len(items)} finding(s)."
+    )
+    lines.append(str(clustered.get("message") or ""))
+    for inc in clustered.get("incidents") or []:
+        titles = inc.get("findings") or []
+        lines.append(
+            f"{inc.get('id')}: {inc.get('root_suspect') or 'mixed'} "
+            f"({inc.get('count')} related) — {titles[0] if titles else ''}"
+        )
+    if scoped.get("time_lo") is not None:
+        lines.append(f"Phase window: {scoped.get('reason')}")
+    return {
+        "ok": True,
+        "summary": "\n".join(line for line in lines if line),
+        "clusters": clustered.get("incidents") or [],
+        "quality": quality,
+        "scope": scoped,
+        "errors": errors,
+        "warnings": warns,
+    }
+
+
+def format_analysis_story(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    quality_warnings: Optional[Sequence[str]] = None,
+    scope_title: str = "",
+) -> str:
+    """Narrative export from Analysis Findings overview + finding titles."""
+    dash = analysis_dashboard(findings, quality_warnings=quality_warnings)
+    lines = ["Analysis story" + (str(scope_title or "").strip())]
+    lines.append(str(dash.get("summary") or "").strip())
+    lines.append("")
+    for i, f in enumerate(_items(findings), 1):
+        title = str(f.get("title") or "Finding").strip()
+        sev = str(f.get("severity") or "info").strip()
+        text = str(f.get("text") or "").strip()
+        lines.append(f"{i}. [{sev}] {title}")
+        if text:
+            lines.append(f"   {text}")
+    return "\n".join(line for line in lines if line is not None).strip() + "\n"
 
 
 def generate_fingerprint(
@@ -31775,6 +32193,39 @@ def _note_box_w(note: str) -> float:
     return float(min(200, 16 + 6 * min(len(note or ""), 36)))
 
 
+def mermaid_palette(is_dark: bool = True) -> Dict[str, str]:
+    """SVG fills/strokes for evidence-graph and investigation-tree diagrams."""
+    if is_dark:
+        return {
+            "bg": "#12161d",
+            "lane": "#3a4658",
+            "node_fill": "#1e3348",
+            "node_stroke": "#5b9bd5",
+            "node_text": "#dbe2ea",
+            "edge": "#5b9bd5",
+            "edge_label": "#c5d0dc",
+            "arrow": "#6fbf9a",
+            "msg": "#a8b4c4",
+            "note_fill": "#2a2418",
+            "note_stroke": "#c9a227",
+            "note_text": "#e6d48a",
+        }
+    return {
+        "bg": "#F7F9FC",
+        "lane": "#C0C8D4",
+        "node_fill": "#E8F1FA",
+        "node_stroke": "#0066CC",
+        "node_text": "#1E1E1E",
+        "edge": "#0066CC",
+        "edge_label": "#333333",
+        "arrow": "#166534",
+        "msg": "#444444",
+        "note_fill": "#FFF8E6",
+        "note_stroke": "#9a4d00",
+        "note_text": "#5c3d00",
+    }
+
+
 def _svg_arrowhead(x1: float, y1: float, x2: float, y2: float, color: str, size: float = 8.0) -> str:
     """Triangle at (x2,y2); Qt paints ``<marker>`` as a stray blob at the origin."""
     dx, dy = x2 - x1, y2 - y1
@@ -31908,14 +32359,14 @@ def hit_test_mermaid(
     return None
 
 
-def _svg_to_png_bytes(svg: str) -> Optional[Tuple[bytes, int, int]]:
+def _svg_to_png_bytes(svg: str, fill: str = "#12161d") -> Optional[Tuple[bytes, int, int]]:
     """Rasterize SVG for QTextBrowser (avoids Qt's oversized SVG buffer warning)."""
     try:
         from ._imports import QBuffer, QByteArray, QColor, QIODevice
         from .config import rasterize_svg_pixmap
     except Exception:
         return None
-    pm, _ = rasterize_svg_pixmap(svg, fill=QColor("#12161d"))
+    pm, _ = rasterize_svg_pixmap(svg, fill=QColor(fill or "#12161d"))
     if pm.isNull():
         return None
     ba = QByteArray()
@@ -31927,7 +32378,7 @@ def _svg_to_png_bytes(svg: str) -> Optional[Tuple[bytes, int, int]]:
     return bytes(ba.data()), int(pm.width()), int(pm.height())
 
 
-def mermaid_to_svg(source: str, *, interactive: bool = True) -> str:
+def mermaid_to_svg(source: str, *, interactive: bool = True, is_dark: bool = True) -> str:
     """Return an SVG string, or empty if the dialect is unsupported."""
     text = (source or "").strip()
     if not text:
@@ -31939,9 +32390,9 @@ def mermaid_to_svg(source: str, *, interactive: bool = True) -> str:
             first = s.lower()
             break
     if first.startswith("sequencediagram"):
-        return _sequence_svg(text, interactive=interactive)
+        return _sequence_svg(text, interactive=interactive, is_dark=is_dark)
     if first.startswith("graph ") or first.startswith("flowchart "):
-        return _flowchart_svg(text, interactive=interactive)
+        return _flowchart_svg(text, interactive=interactive, is_dark=is_dark)
     return ""
 
 
@@ -31962,14 +32413,16 @@ def decode_mermaid_zoom_token(token: str) -> str:
         return ""
 
 
-def mermaid_block_html(source: str, *, as_img: bool = True, zoomable: bool = True) -> str:
+def mermaid_block_html(
+    source: str, *, as_img: bool = True, zoomable: bool = True, is_dark: bool = True,
+) -> str:
     """Wrap a mermaid source in HTML (img for QTextBrowser, inline SVG for export)."""
-    svg = mermaid_to_svg(source, interactive=not as_img)
+    svg = mermaid_to_svg(source, interactive=not as_img, is_dark=is_dark)
     if not svg:
         esc = html.escape(source)
         return f'<pre><code class="language-mermaid">{esc}</code></pre>'
     if as_img:
-        png = _svg_to_png_bytes(svg)
+        png = _svg_to_png_bytes(svg, fill=mermaid_palette(is_dark)["bg"])
         if png:
             raw, iw, ih = png
             b64 = base64.b64encode(raw).decode("ascii")
@@ -32103,7 +32556,7 @@ def _sequence_hits(source: str) -> List[Dict[str, Any]]:
     return hits
 
 
-def _sequence_svg(source: str, *, interactive: bool) -> str:
+def _sequence_svg(source: str, *, interactive: bool, is_dark: bool = True) -> str:
     geom = _sequence_geom(source)
     if not geom:
         return ""
@@ -32111,11 +32564,12 @@ def _sequence_svg(source: str, *, interactive: bool) -> str:
     box_w, top, row_h = geom["box_w"], geom["top"], geom["row_h"]
     width, height, xs = geom["width"], geom["height"], geom["xs"]
     fam = _esc(_svg_sans_family())
+    pal = mermaid_palette(is_dark)
 
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0f}" height="{height:.0f}" '
         f'viewBox="0 0 {width:.0f} {height:.0f}" class="ai-mermaid-seq">',
-        f'<rect x="0" y="0" width="{width:.0f}" height="{height:.0f}" fill="#12161d"/>',
+        f'<rect x="0" y="0" width="{width:.0f}" height="{height:.0f}" fill="{pal["bg"]}"/>',
     ]
     for i, (_pid, label) in enumerate(participants):
         x = xs[i]
@@ -32123,13 +32577,13 @@ def _sequence_svg(source: str, *, interactive: bool) -> str:
         href = _node_href_attr(label) if interactive else ""
         parts.append(
             f'<line x1="{x}" y1="{top + 22}" x2="{x}" y2="{height - 12}" '
-            f'stroke="#3a4658" stroke-dasharray="4 3"/>'
+            f'stroke="{pal["lane"]}" stroke-dasharray="4 3"/>'
         )
         parts.append(
             f'<a{href}>'
             f'<rect x="{bx}" y="{top - 14}" width="{box_w}" height="28" rx="4" '
-            f'fill="#1e3348" stroke="#5b9bd5"/>'
-            f'<text x="{x}" y="{top + 5}" text-anchor="middle" fill="#dbe2ea" '
+            f'fill="{pal["node_fill"]}" stroke="{pal["node_stroke"]}"/>'
+            f'<text x="{x}" y="{top + 5}" text-anchor="middle" fill="{pal["node_text"]}" '
             f'font-size="11" font-family="{fam}">{_esc(label[:28])}</text>'
             f"</a>"
         )
@@ -32144,12 +32598,12 @@ def _sequence_svg(source: str, *, interactive: bool) -> str:
             tip = 8 if x2 >= x1 else -8
             parts.append(
                 f'<line x1="{x1}" y1="{y}" x2="{x2 - tip}" y2="{y}" '
-                f'stroke="#6fbf9a" stroke-width="1.4"{dashed}/>'
+                f'stroke="{pal["arrow"]}" stroke-width="1.4"{dashed}/>'
             )
-            parts.append(_svg_arrowhead(x1, y, x2, y, "#6fbf9a"))
+            parts.append(_svg_arrowhead(x1, y, x2, y, pal["arrow"]))
             mx = (x1 + x2) / 2
             parts.append(
-                f'<text x="{mx}" y="{y - 6}" text-anchor="middle" fill="#a8b4c4" '
+                f'<text x="{mx}" y="{y - 6}" text-anchor="middle" fill="{pal["msg"]}" '
                 f'font-size="10" font-family="{fam}">{_esc(msg[:48])}</text>'
             )
         else:
@@ -32158,8 +32612,8 @@ def _sequence_svg(source: str, *, interactive: bool) -> str:
             nw = _note_box_w(note)
             parts.append(
                 f'<rect x="{x - nw / 2}" y="{y - 16}" width="{nw}" height="28" '
-                f'rx="3" fill="#2a2418" stroke="#c9a227"/>'
-                f'<text x="{x}" y="{y + 3}" text-anchor="middle" fill="#e6d48a" '
+                f'rx="3" fill="{pal["note_fill"]}" stroke="{pal["note_stroke"]}"/>'
+                f'<text x="{x}" y="{y + 3}" text-anchor="middle" fill="{pal["note_text"]}" '
                 f'font-size="10" font-family="{fam}">{_esc(note[:40])}</text>'
             )
         y += row_h
@@ -32345,31 +32799,32 @@ def _flowchart_hits(source: str) -> List[Dict[str, Any]]:
     return hits
 
 
-def _flowchart_svg(source: str, *, interactive: bool) -> str:
+def _flowchart_svg(source: str, *, interactive: bool, is_dark: bool = True) -> str:
     geom = _flowchart_geom(source)
     if not geom:
         return ""
     nodes, order, pos = geom["nodes"], geom["order"], geom["pos"]
     width, height = geom["width"], geom["height"]
     fam = _esc(_svg_sans_family())
+    pal = mermaid_palette(is_dark)
 
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0f}" height="{height:.0f}" '
         f'viewBox="0 0 {width:.0f} {height:.0f}" class="ai-mermaid-flow">',
-        f'<rect x="0" y="0" width="{width:.0f}" height="{height:.0f}" fill="#12161d"/>',
+        f'<rect x="0" y="0" width="{width:.0f}" height="{height:.0f}" fill="{pal["bg"]}"/>',
     ]
     for edge in _flowchart_edge_paths(geom):
         sx, sy, ex, ey = edge["sx"], edge["sy"], edge["ex"], edge["ey"]
         parts.append(
             f'<line x1="{sx:.1f}" y1="{sy:.1f}" x2="{ex:.1f}" y2="{ey:.1f}" '
-            f'stroke="#5b9bd5" stroke-width="1.3"/>'
+            f'stroke="{pal["edge"]}" stroke-width="1.3"/>'
         )
-        parts.append(_svg_arrowhead(sx, sy, ex, ey, "#5b9bd5"))
+        parts.append(_svg_arrowhead(sx, sy, ex, ey, pal["edge"]))
         label = str(edge.get("label") or "")
         if label:
             parts.append(
                 f'<text x="{edge["lx"]:.1f}" y="{edge["ly"]:.1f}" text-anchor="middle" '
-                f'fill="#c5d0dc" font-size="10" font-family="{fam}">'
+                f'fill="{pal["edge_label"]}" font-size="10" font-family="{fam}">'
                 f"{_esc(label[:16])}</text>"
             )
     for nid in order:
@@ -32384,13 +32839,14 @@ def _flowchart_svg(source: str, *, interactive: bool) -> str:
         for i, line in enumerate(lines):
             labels.append(
                 f'<text x="{x:.1f}" y="{y0 + i * 14.0:.1f}" text-anchor="middle" '
-                f'fill="#dbe2ea" font-size="11" font-family="{fam}">'
+                f'fill="{pal["node_text"]}" font-size="11" font-family="{fam}">'
                 f"{_esc(line)}</text>"
             )
         parts.append(
             f'<a{href}>'
             f'<rect x="{x - bw / 2:.1f}" y="{y - bh / 2:.1f}" width="{bw:.1f}" '
-            f'height="{bh:.1f}" rx="6" fill="#1e3348" stroke="#5b9bd5"/>'
+            f'height="{bh:.1f}" rx="6" fill="{pal["node_fill"]}" '
+            f'stroke="{pal["node_stroke"]}"/>'
             f"{''.join(labels)}"
             f"</a>"
         )
@@ -32467,19 +32923,25 @@ class _MermaidZoomDialog(QDialog):
         parent=None,
         *,
         on_link: Optional[Callable[[QUrl], None]] = None,
+        is_dark: bool = True,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Diagram")
         self.setModal(True)
         self._source = source or ""
-        self._svg = mermaid_to_svg(self._source, interactive=False)
+        self._is_dark = bool(is_dark)
+        pal = mermaid_palette(self._is_dark)
+        self._fill = pal["bg"]
+        self._svg = mermaid_to_svg(
+            self._source, interactive=False, is_dark=self._is_dark)
         self._scale = 2.0
         self._hit_scale = 2.0
         lay = QVBoxLayout(self)
         hint = QLabel(
             "Scroll to zoom. Click a task/core in the figure or a name below."
         )
-        hint.setStyleSheet("color:#8b98a8;font-size:11px;")
+        hint_fg = "#8b98a8" if self._is_dark else "#555555"
+        hint.setStyleSheet(f"color:{hint_fg};font-size:11px;")
         hint.setWordWrap(True)
         lay.addWidget(hint)
         self._scroll = QScrollArea()
@@ -32500,7 +32962,7 @@ class _MermaidZoomDialog(QDialog):
             links.setOpenLinks(False)
             links.setMaximumHeight(80)
             links.setHtml(
-                f"<html><body style=\"background:#12161d;color:#dbe2ea;\">"
+                f"<html><body style=\"background:{pal['bg']};color:{pal['node_text']};\">"
                 f"{links_html}</body></html>"
             )
             if on_link:
@@ -32542,7 +33004,7 @@ class _MermaidZoomDialog(QDialog):
             self._img.setText("Could not render diagram.")
             return
         pm, hit_scale = rasterize_svg_pixmap(
-            self._svg, scale=self._scale, fill=QColor("#12161d"))
+            self._svg, scale=self._scale, fill=QColor(self._fill))
         if pm.isNull():
             self._img.setText("Could not render diagram.")
             return
@@ -32630,6 +33092,19 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Execution / Blocking tails.",
     ),
     (
+        "explain_region",
+        "Explain region",
+        "Explain the current timeline cursor region (scope C1–Cn — see the "
+        "Cursor region window in context). Stay strictly inside that window: "
+        "every jump:TIME you cite must fall between C1 and Cn. Identify "
+        "longest blocking, migrations, priority changes, wakeups, mutex "
+        "contention, deadline issues, idle gaps, and CPU imbalance in this "
+        "window. Check in-window Timeline Anomalies and Worst Events. Call "
+        "correlate_events and query_raw_metric as needed. Use "
+        "only in-window jump:TIME evidence (or state that tools found none). "
+        "End with: Summary, Top issues, Evidence, Suggested next action.",
+    ),
+    (
         "investigate",
         "Investigate",
         "Investigate the main performance problem in this scope. First call "
@@ -32649,22 +33124,6 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "evidence, (5) next mitigation to try.",
     ),
     (
-        "root_cause",
-        "Root cause",
-        "Perform root-cause analysis for the top finding. Call "
-        "investigate(finding_id) first, then follow the chain "
-        "deadline/WCET → execution → preemption → blocking → mutex → "
-        "priority inheritance → migration only as far as the evidence "
-        "supports. Call build_task_dependency_graph and "
-        "analyze_temporal_causality on the victim task. Call "
-        "rank_root_causes then challenge_conclusion. Call "
-        "query_raw_metric / search_timeline when numbers are "
-        "missing. Set cursors around the worst episode, highlight the "
-        "victim task, name Timeline Anomalies or Worst Events when a tail "
-        "spike is the evidence, and answer with Root cause, Evidence (bullet list with "
-        "jump:TIME), Confidence, and Suggested fix.",
-    ),
-    (
         "verify",
         "Verify finding",
         "Verify the selected Analysis Finding. Call investigate(finding_id=ID) "
@@ -32679,17 +33138,20 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Alternatives considered; and one next check.",
     ),
     (
-        "explain_region",
-        "Explain region",
-        "Explain the current timeline cursor region (scope C1–Cn — see the "
-        "Cursor region window in context). Stay strictly inside that window: "
-        "every jump:TIME you cite must fall between C1 and Cn. Identify "
-        "longest blocking, migrations, priority changes, wakeups, mutex "
-        "contention, deadline issues, idle gaps, and CPU imbalance in this "
-        "window. Check in-window Timeline Anomalies and Worst Events. Call "
-        "correlate_events and query_raw_metric as needed. Use "
-        "only in-window jump:TIME evidence (or state that tools found none). "
-        "End with: Summary, Top issues, Evidence, Suggested next action.",
+        "root_cause",
+        "Root cause",
+        "Perform root-cause analysis for the top finding. Call "
+        "investigate(finding_id) first, then follow the chain "
+        "deadline/WCET → execution → preemption → blocking → mutex → "
+        "priority inheritance → migration only as far as the evidence "
+        "supports. Call build_task_dependency_graph and "
+        "analyze_temporal_causality on the victim task. Call "
+        "rank_root_causes then challenge_conclusion. Call "
+        "query_raw_metric / search_timeline when numbers are "
+        "missing. Set cursors around the worst episode, highlight the "
+        "victim task, name Timeline Anomalies or Worst Events when a tail "
+        "spike is the evidence, and answer with Root cause, Evidence (bullet list with "
+        "jump:TIME), Confidence, and Suggested fix.",
     ),
     (
         AI_COMPARE_TEMPLATE_ID,
@@ -32862,11 +33324,12 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
 )
 
 # Always-visible wrapping chips. Keep in sync with web/src/utils/ollamaClient.js.
-# Last primary id shares a row with More templates… (web `.ai-tpl-row`).
+# Newbie left-to-right: Triage → Scope → Investigate. Last id shares a row
+# with More templates… (web `.ai-tpl-row`).
 AI_TEMPLATE_PRIMARY_IDS: Tuple[str, ...] = (
-    "investigate",
     "findings",
     "explain_region",
+    "investigate",
     "auto_investigate",
 )
 
@@ -32883,7 +33346,7 @@ def ai_template_primary_rows(
 # Overflow menu groups for the remaining templates (ids must cover every
 # AI_TEMPLATE_QUESTIONS entry that is not in AI_TEMPLATE_PRIMARY_IDS).
 AI_TEMPLATE_MENU_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Diagnose", ("root_cause", "verify", "explain_finding", "triage", "diagnostic_report")),
+    ("Diagnose", ("triage", "verify", "root_cause", "explain_finding", "diagnostic_report")),
     ("Compare", (AI_COMPARE_TEMPLATE_ID,)),
     (
         "Metrics",
@@ -34266,7 +34729,8 @@ def markdown_to_safe_html(text: str, *, as_img: bool = True, is_dark: bool = Tru
                 i += 1
             if lang.lower() == "mermaid":
                 out.append(mermaid_block_html(
-                    "\n".join(code_lines), as_img=as_img, zoomable=as_img))
+                    "\n".join(code_lines), as_img=as_img, zoomable=as_img,
+                    is_dark=is_dark))
                 continue
             code_html = html.escape("\n".join(code_lines))
             cls = f' class="language-{html.escape(lang)}"' if lang else ""
@@ -34675,7 +35139,7 @@ def format_ai_conversation_html_body(
         text = ai_entry_text(entry)
         cls = "user" if role == "user" else (
             "evidence" if role == "evidence" else "assistant")
-        body = _ai_message_body_html(role, text, as_img=False) if (text or "").strip() else ""
+        body = _ai_message_body_html(role, text, as_img=False, is_dark=False) if (text or "").strip() else ""
         cards = _tool_cards_html(ai_entry_tools(entry), "", light=True)
         head = f"<h3>{html.escape(ai_role_label(role, response_language))}</h3>"
         parts.append(
@@ -35599,12 +36063,22 @@ class _FlowLayout(QLayout):
         return self.minimumSize()
 
     def minimumSize(self) -> QSize:  # noqa: N802
-        size = QSize()
-        for item in self._items:
-            size = size.expandedTo(item.minimumSize())
+        """Include wrapping height so QVBoxLayout does not clip extra rows."""
         m = self.contentsMargins()
-        size += QSize(m.left() + m.right(), m.top() + m.bottom())
-        return size
+        mh = m.top() + m.bottom()
+        mw = m.left() + m.right()
+        if not self._items:
+            return QSize(mw, mh)
+        row_h = 0
+        row_w = mw
+        min_w = 0
+        for item in self._items:
+            hint = item.sizeHint()
+            row_h = max(row_h, hint.height())
+            row_w += hint.width() + self.spacing()
+            min_w = max(min_w, item.minimumSize().width())
+        wrap_h = self.heightForWidth(max(240, min_w + mw))
+        return QSize(min_w + mw, max(row_h, wrap_h) + mh)
 
     def _do_layout(self, rect, test_only: bool) -> int:
         left, top, right, bottom = self.getContentsMargins()
@@ -35728,6 +36202,8 @@ def _ai_chrome_colors(is_dark: bool) -> dict:
             hover="#243044",
             accent="#2a6fb2",
             chip_hover="#dbe2ea",
+            guide_now="#dbe2ea",
+            guide_done="#6fbf9a",
         )
     return dict(
         panel="#F5F5F5",
@@ -35738,6 +36214,8 @@ def _ai_chrome_colors(is_dark: bool) -> dict:
         hover="#E0E8F0",
         accent="#0066CC",
         chip_hover="#1E1E1E",
+        guide_now="#1E1E1E",
+        guide_done="#2e7d57",
     )
 
 
@@ -36049,7 +36527,9 @@ def create_ai_assistant_panel(
                     )
                 return btn
 
-            self._clear_btn = _ai_action_btn("Clear", "Clear the conversation log")
+            self._clear_btn = _ai_action_btn(
+                "Clear",
+                "Clear the conversation log (keeps usage and investigation evidence)")
             self._clear_btn.clicked.connect(self.clear_conversation)
             actions_row.addWidget(self._clear_btn)
             self._lang_btn = _ai_action_btn(
@@ -36091,7 +36571,8 @@ def create_ai_assistant_panel(
             self._log.setOpenLinks(False)
             self._log.setPlaceholderText(
                 "Conversation appears here\u2026\n"
-                "Uses Analysis Findings for the current Statistics scope. "
+                "Uses Analysis Findings for the current Statistics scope "
+                "(Limit to C1\u2013Cn when cursors are set). "
                 "Configure the endpoint in Settings \u2192 AI."
             )
             self._log.setMinimumHeight(80)
@@ -36102,6 +36583,68 @@ def create_ai_assistant_panel(
             self._log.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             self._log.customContextMenuRequested.connect(self._show_log_menu)
             self._log.viewport().installEventFilter(self)
+
+            self._guide_host = QWidget()
+            self._guide_host.setObjectName("aiGuide")
+            self._guide_host.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+            g_lay = QVBoxLayout(self._guide_host)
+            g_lay.setContentsMargins(0, 0, 0, 0)
+            g_lay.setSpacing(4)
+            self._guide_stepper = QWidget()
+            self._guide_stepper.setObjectName("aiGuideStepper")
+            self._guide_stepper.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+            self._guide_stepper.setMinimumHeight(22)
+            self._guide_step_row = QHBoxLayout(self._guide_stepper)
+            self._guide_step_row.setContentsMargins(0, 0, 0, 0)
+            self._guide_step_row.setSpacing(2)
+            self._guide_step_btns: Dict[str, QPushButton] = {}
+            for sid in GUIDED_STAGES:
+                btn = QPushButton(GUIDED_STAGE_LABELS.get(sid, sid))
+                btn.setFlat(True)
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setSizePolicy(
+                    QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+                btn.setMinimumHeight(20)
+                btn.setStyleSheet(
+                    "QPushButton { color:#8a96a8; font-size:11px; border:none;"
+                    " padding:0 3px; text-align:left; }"
+                )
+                btn.clicked.connect(
+                    lambda _=False, s=sid: self._jump_guide_stage(s))
+                self._guide_step_row.addWidget(btn)
+                self._guide_step_btns[sid] = btn
+            self._guide_step_row.addStretch(1)
+            g_lay.addWidget(self._guide_stepper)
+            self._start_inv_btn = QPushButton("Start Investigation")
+            self._start_inv_btn.setToolTip(qt_wrap_tooltip(
+                "Triage findings, scope the top issue, gather evidence, "
+                "and verify the cause."))
+            self._start_inv_btn.clicked.connect(self._start_investigation)
+            g_lay.addWidget(self._start_inv_btn)
+            self._issue_view = QLabel("")
+            self._issue_view.setWordWrap(True)
+            self._issue_view.setStyleSheet(
+                "color:#dbe2ea;font-size:12px;padding:4px 6px;"
+                "border:1px solid #3a4658;border-radius:6px;"
+            )
+            self._issue_view.hide()
+            g_lay.addWidget(self._issue_view)
+            self._verify_hint = QLabel(VERIFY_HINT)
+            self._verify_hint.setWordWrap(True)
+            self._verify_hint.setStyleSheet("color:#8a96a8;font-size:11px;")
+            self._verify_hint.hide()
+            g_lay.addWidget(self._verify_hint)
+            self._estimate_banner = QLabel(ESTIMATE_BANNER)
+            self._estimate_banner.setWordWrap(True)
+            self._estimate_banner.setStyleSheet(
+                "color:#e6d48a;background:#2a2418;border:1px solid #c9a227;"
+                "padding:4px 6px;font-size:11px;"
+            )
+            self._estimate_banner.hide()
+            g_lay.addWidget(self._estimate_banner)
+            top_lay.addWidget(self._guide_host)
             top_lay.addWidget(self._log, 1)
 
             self._plan_host = QWidget()
@@ -36365,10 +36908,12 @@ def create_ai_assistant_panel(
             self._refresh_auth_chip()
 
             self._refresh_send_btn()
+            self._refresh_guide_ui()
             wnd = self.window()
             is_dark = bool(getattr(wnd, "_is_dark", True))
             self._is_dark = is_dark
             self.apply_theme(is_dark)
+            QTimer.singleShot(0, self._restore_investigation_session)
 
         def apply_theme(self, is_dark: bool) -> None:
             """Match AI chrome (More menu, chips, composer, log) to the app theme."""
@@ -36400,6 +36945,15 @@ def create_ai_assistant_panel(
             if getattr(self, "_plan_view", None) is not None:
                 self._plan_view.setStyleSheet(
                     f"color:{c['muted']};font-size:11px;padding:1px 0;"
+                )
+            if getattr(self, "_issue_view", None) is not None:
+                self._issue_view.setStyleSheet(
+                    f"color:{c['text']};font-size:12px;padding:4px 6px;"
+                    f"border:1px solid {c['border']};border-radius:6px;"
+                )
+            if getattr(self, "_verify_hint", None) is not None:
+                self._verify_hint.setStyleSheet(
+                    f"color:{c['muted']};font-size:11px;"
                 )
             if getattr(self, "_status", None) is not None:
                 self._status.setStyleSheet(f"color:{c['muted']};font-size:11px;")
@@ -36438,6 +36992,7 @@ def create_ai_assistant_panel(
                 log.document().setDefaultStyleSheet(_ai_log_style(self._is_dark))
                 if getattr(self, "_entries", None):
                     self._refresh_log()
+            self._refresh_guide_ui()
 
         def _paint_more_menu(self) -> None:
             menu = getattr(self, "_more_menu", None)
@@ -36830,7 +37385,9 @@ def create_ai_assistant_panel(
             on_jump(value)
 
         def _open_mermaid_zoom(self, source: str) -> None:
-            dlg = _MermaidZoomDialog(source, self, on_link=self._on_jump_link)
+            dlg = _MermaidZoomDialog(
+                source, self, on_link=self._on_jump_link,
+                is_dark=bool(getattr(self, "_is_dark", True)))
             dlg.exec()
 
         def _pending_batch_id(self) -> str:
@@ -36906,9 +37463,10 @@ def create_ai_assistant_panel(
             else:
                 self._entries.append((role, text))
             self._refresh_log()
+            self._persist_investigation_session()
 
         def clear_conversation(self) -> None:
-            """Clear the conversation log (also stops an in-flight query)."""
+            """Clear chat replies; keep usage meter and investigation evidence."""
             if self._busy:
                 self.stop_query()
             self._entries.clear()
@@ -36916,12 +37474,11 @@ def create_ai_assistant_panel(
             self._pending_batches.clear()
             self._tool_round = 0
             self._log.clear()
-            self._cost_meter = empty_cost_meter()
             self._set_status("")
-            self._refresh_usage()
-            self._clear_evidence_log_entry()
             self._interpreted_query = None
             self._refresh_tool_bar()
+            self._refresh_guide_ui()
+            self._persist_investigation_session()
 
         def _show_log_menu(self, pos) -> None:
             menu = self._log.createStandardContextMenu(pos)
@@ -37721,11 +38278,165 @@ def create_ai_assistant_panel(
             self._plan_view.setText(format_investigation_plan_status(
                 plan, self._reply_language()))
             self._plan_host.show()
+            self._refresh_guide_ui()
 
         def _clear_investigation_plan(self) -> None:
             self._investigation_plan = None
             self._plan_host.hide()
             self._plan_view.clear()
+            self._refresh_guide_ui()
+
+        def _start_investigation(self) -> None:
+            item = ai_template_by_id("auto_investigate")
+            if item is None:
+                return
+            _tid, _label, prompt = item
+            self._use_template(_tid, prompt)
+
+        def _jump_guide_stage(self, stage: str) -> None:
+            needles = [n.lower() for n in guide_stage_needles(stage)]
+            if not needles:
+                return
+            blob = self._log.toPlainText().lower()
+            best = -1
+            needle_len = 0
+            for n in needles:
+                i = blob.rfind(n)
+                if i > best:
+                    best = i
+                    needle_len = len(n)
+            if best < 0:
+                return
+            cur = self._log.textCursor()
+            cur.setPosition(best)
+            cur.setPosition(best + max(1, needle_len), QTextCursor.MoveMode.KeepAnchor)
+            self._log.setTextCursor(cur)
+            self._log.ensureCursorVisible()
+            fmt = QTextCharFormat()
+            fmt.setBackground(QColor("#3d5a80"))
+            sel = QTextEdit.ExtraSelection()
+            sel.cursor = QTextCursor(cur)
+            sel.format = fmt
+            self._log.setExtraSelections([sel])
+            QTimer.singleShot(1400, lambda: self._log.setExtraSelections([]))
+
+        def _investigation_session_blob(self) -> str:
+            msgs = []
+            for e in self._entries:
+                if isinstance(e, dict):
+                    msgs.append({
+                        "role": str(e.get("role") or ""),
+                        "content": str(e.get("content") or e.get("text") or ""),
+                    })
+                elif isinstance(e, (list, tuple)) and len(e) >= 2:
+                    msgs.append({"role": str(e[0] or ""), "content": str(e[1] or "")})
+            return dump_investigation_session(
+                payload=self._evidence_payload,
+                plan=self._investigation_plan,
+                messages=msgs,
+            )
+
+        def _persist_investigation_session(self) -> None:
+            if not on_save_settings:
+                return
+            try:
+                on_save_settings({
+                    "investigation_session": self._investigation_session_blob(),
+                })
+            except Exception:
+                pass
+
+        def _restore_investigation_session(self) -> None:
+            if not get_settings:
+                return
+            try:
+                cfg = get_settings() or {}
+            except Exception:
+                return
+            parsed = parse_investigation_session(cfg.get("investigation_session"))
+            msgs = parsed.get("messages") or []
+            if not investigation_session_has_chat(msgs):
+                self._refresh_guide_ui()
+                return
+            if parsed.get("payload"):
+                self._evidence_payload = parsed["payload"]
+            if parsed.get("plan"):
+                self._investigation_plan = parsed["plan"]
+                self._set_investigation_plan(parsed["plan"])
+            if msgs and not self._entries:
+                for m in msgs:
+                    role = str(m.get("role") or "")
+                    text = str(m.get("content") or "")
+                    if role and text:
+                        self._entries.append((role, text))
+                if self._entries:
+                    self._refresh_log()
+            self._refresh_guide_ui()
+
+        def _refresh_guide_ui(self) -> None:
+            if not getattr(self, "_guide_step_btns", None):
+                return
+            cursors = 0
+            if on_gui_state:
+                try:
+                    gui = on_gui_state() or {}
+                    cursors = len(placed_cursor_times(gui.get("cursors")))
+                except Exception:
+                    cursors = 0
+            tabs = 0
+            if get_loaded_tabs:
+                try:
+                    tabs = len(list(get_loaded_tabs() or []))
+                except Exception:
+                    tabs = 0
+            stage = investigation_guide_stage(
+                self._evidence_payload,
+                plan=self._investigation_plan,
+                has_cursors=cursors >= 2,
+                has_two_traces=tabs >= 2,
+            )
+            now_i = list(GUIDED_STAGES).index(stage) if stage in GUIDED_STAGES else -1
+            c = _ai_chrome_colors(bool(getattr(self, "_is_dark", True)))
+            pending, now_c, done_c = c["muted"], c["guide_now"], c["guide_done"]
+            for i, sid in enumerate(GUIDED_STAGES):
+                btn = self._guide_step_btns.get(sid)
+                if btn is None:
+                    continue
+                lab = GUIDED_STAGE_LABELS.get(sid, sid)
+                if i < now_i:
+                    mark, color, weight = "✓", done_c, "400"
+                elif sid == stage:
+                    mark, color, weight = "●", now_c, "600"
+                else:
+                    mark, color, weight = "○", pending, "400"
+                btn.setText(f"{mark} {lab}")
+                btn.setStyleSheet(
+                    "QPushButton { color:%s; font-size:11px; font-weight:%s;"
+                    " border:none; padding:0 3px; text-align:left;"
+                    " background: transparent; }"
+                    % (color, weight)
+                )
+            idle = stage == "idle"
+            start_btn = getattr(self, "_start_inv_btn", None)
+            if start_btn is not None:
+                start_btn.setVisible(idle and not self._entries)
+            issue = getattr(self, "_issue_view", None)
+            if issue is not None:
+                text = format_investigation_issue_card(
+                    investigation_issue_card(self._evidence_payload))
+                if (not idle) and text:
+                    issue.setText(text)
+                    issue.show()
+                else:
+                    issue.hide()
+                    issue.clear()
+            hint = getattr(self, "_verify_hint", None)
+            if hint is not None:
+                hint.setVisible(stage in ("investigate", "verify"))
+            banner = getattr(self, "_estimate_banner", None)
+            if banner is not None:
+                banner.setText(ESTIMATE_BANNER)
+                banner.setVisible(stage == "experiment")
 
         def _sync_evidence_log_entry(
             self, data: dict, language: Optional[str] = None,
@@ -37823,6 +38534,7 @@ def create_ai_assistant_panel(
                 )
             self._evidence_payload = dict(payload)
             self._sync_evidence_log_entry(self._evidence_payload)
+            self._refresh_guide_ui()
 
         def _clear_evidence_log_entry(self) -> None:
             self._evidence_payload = None
@@ -37830,6 +38542,7 @@ def create_ai_assistant_panel(
             if len(kept) != len(self._entries):
                 self._entries = kept
                 self._refresh_log()
+            self._refresh_guide_ui()
 
         def _advance_investigation_plan(self, tool_names: Sequence[str]) -> None:
             if not self._investigation_plan:
@@ -38730,6 +39443,58 @@ def best_finding_scope(
         "section": section,
         "mk": str((matched or {}).get("mk") or ""),
     }
+
+
+def finding_overlay_times(findings: Optional[Sequence[dict]], limit: int = 80) -> List[float]:
+    """Timestamps to paint on the timeline for Analysis Findings (not user marks)."""
+    times: List[float] = []
+    seen = set()
+    for finding in findings or []:
+        if not isinstance(finding, dict):
+            continue
+        for ev in finding.get("evidence") or []:
+            if not isinstance(ev, dict):
+                continue
+            for key in ("time", "start", "stop"):
+                try:
+                    if ev.get(key) is not None:
+                        t = float(ev[key])
+                    else:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                if t in seen:
+                    continue
+                seen.add(t)
+                times.append(t)
+        blob = f"{finding.get('title') or ''} {finding.get('text') or ''}"
+        for m in _JUMP_RE.finditer(blob):
+            try:
+                t = float(m.group(1))
+            except (TypeError, ValueError):
+                continue
+            if t in seen:
+                continue
+            seen.add(t)
+            times.append(t)
+        if len(times) >= limit:
+            break
+    return times[:limit]
+
+
+def task_inspector_line(
+    task: Any = "",
+    quality_warnings: Optional[Sequence[str]] = None,
+) -> str:
+    """Status-bar inspector: selected task plus first quality warning."""
+    name = str(task or "").strip()
+    parts = [f"Task {name}" if name else "No task selected"]
+    for q in quality_warnings or []:
+        text = str(q or "").strip()
+        if text:
+            parts.append(text[:96])
+            break
+    return " · ".join(parts)
 
 
 def parse_signed_delta(text: Any) -> Optional[Tuple[float, str]]:
@@ -43245,11 +44010,14 @@ class _TraceCompareDialog(QDialog):
         self._mutex_table = QTableWidget(0, 4)
         self._mutex_table.setHorizontalHeaderLabels(
             ["Task", "Total A", "Total B", "Δ"])
+        self._trends_table = QTableWidget(0, 6)
+        self._trends_table.setHorizontalHeaderLabels(
+            ["Trace", "Tasks", "Migrations", "Load balance", "Tick health", "Span"])
         self._all_tables = (
             self._summary_table, self._top_table, self._core_util_table,
             self._mig_table, self._exec_table, self._block_table,
             self._inter_table, self._preempt_table, self._sync_table,
-            self._response_table, self._mutex_table,
+            self._response_table, self._mutex_table, self._trends_table,
         )
         for tbl in self._all_tables:
             tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -43266,6 +44034,7 @@ class _TraceCompareDialog(QDialog):
         self._pages.addTab(self._sync_table, "Sync")
         self._pages.addTab(self._response_table, "Response")
         self._pages.addTab(self._mutex_table, "Mutex")
+        self._pages.addTab(self._trends_table, "Trends")
         lay.addWidget(self._pages, 1)
 
         exp_row = QHBoxLayout()
@@ -43287,6 +44056,16 @@ class _TraceCompareDialog(QDialog):
         self._btn_export_html.setToolTip("Export compare report as HTML")
         self._btn_export_html.clicked.connect(self._export_html)
         exp_row.addWidget(self._btn_export_html)
+        self._btn_save_baseline = QPushButton("Save as baseline")
+        self._btn_save_baseline.setToolTip(
+            "Store Trace A per-task metrics as the regression baseline")
+        self._btn_save_baseline.clicked.connect(self._save_as_baseline)
+        exp_row.addWidget(self._btn_save_baseline)
+        self._btn_score_baseline = QPushButton("Score vs baseline")
+        self._btn_score_baseline.setToolTip(
+            "Z-score Trace A metrics against the stored baseline")
+        self._btn_score_baseline.clicked.connect(self._score_vs_baseline)
+        exp_row.addWidget(self._btn_score_baseline)
         exp_row.addStretch(1)
         lay.addLayout(exp_row)
 
@@ -43423,6 +44202,51 @@ class _TraceCompareDialog(QDialog):
         self._fill_table(self._sync_table, tables.get("sync", []))
         self._fill_table(self._response_table, tables.get("response", []))
         self._fill_table(self._mutex_table, tables.get("mutex_block", []))
+        trend_rows = []
+        for idx, tab in enumerate(getattr(self._win, "_tabs", None) or []):
+            tr = getattr(tab, "trace", None)
+            if tr is None:
+                continue
+            lo = hi = None
+            if self._scope_cb.isChecked():
+                lo, hi = _cursor_range_for_tab(self._win, idx)
+            snap = _trace_summary_snapshot(tr, lo, hi)
+            trend_rows.append({
+                "name": os.path.basename(getattr(tab, "path", "") or ""),
+                "snap": snap,
+            })
+        filled = []
+        for row in cross_trace_trends(trend_rows):
+            lb = row.get("load_balance")
+            lb_s = "—" if lb is None else f"{round(float(lb))}%"
+            filled.append([
+                row.get("name") or "",
+                row.get("tasks") if row.get("tasks") is not None else "—",
+                row.get("migrations") if row.get("migrations") is not None else "—",
+                lb_s,
+                row.get("tick_health") or "—",
+                row.get("span_ns") if row.get("span_ns") is not None else "—",
+            ])
+        self._fill_table(self._trends_table, filled)
+
+    def _save_as_baseline(self) -> None:
+        ta = self._trace_for_combo(self._combo_a)
+        saver = getattr(self._win, "_ai_update_baseline_from_trace", None)
+        if ta is None or saver is None:
+            return
+        saver(ta)
+        QMessageBox.information(
+            self, "Baseline", "Saved Trace A metrics as the regression baseline.")
+
+    def _score_vs_baseline(self) -> None:
+        ta = self._trace_for_combo(self._combo_a)
+        snap_fn = getattr(self._win, "_ai_current_task_metrics_snapshot", None)
+        load_fn = getattr(self._win, "_ai_load_baseline_profile", None)
+        if ta is None or snap_fn is None or load_fn is None:
+            return
+        result = score_against_baseline(load_fn(), snap_fn(trace=ta))
+        QMessageBox.information(
+            self, "Baseline score", str(result.get("message") or ""))
 
     def _update_compare_strip(self, tables: dict) -> None:
         strip = getattr(self, "_strip", None)
@@ -47309,12 +48133,24 @@ def _build_workflow_analysis_findings(
     """
     findings: List[dict] = []
 
-    # Load balance
-    pcts = [pct for _, pct in core_rows]
-    if len(pcts) >= 2:
-        gini = _gini_coefficient(pcts)
-        sigma = _core_util_stddev(pcts)
-        score = max(0.0, 100.0 * (1.0 - gini))
+    # Load balance (same gate as web loadBalanceMetrics: ≥2 cores, total > 0)
+    pcts: List[float] = []
+    for r in core_rows or []:
+        if isinstance(r, dict):
+            v = r.get("pct")
+        elif isinstance(r, (list, tuple)) and len(r) >= 2:
+            v = r[1]
+        else:
+            continue
+        try:
+            pcts.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    lb = _load_balance_metrics(pcts)
+    if lb:
+        score = float(lb["score"])
+        gini = float(lb["gini"])
+        sigma = float(lb["stddev"])
         metrics = f"Load Balance Score {score:.0f}% (σ={sigma:.1f}%, G={gini:.3f})"
         if score < _WF_LOAD_SCORE_WARN or sigma > _WF_LOAD_SIGMA_WARN:
             findings.append(_finding(
@@ -47566,8 +48402,9 @@ def _render_workflow_analysis_html(
             "warning": "sev-warning",
             "info": "finding-info",
         }.get(sev, "finding-info")
+        extra = " finding-ok" if f.get("id") == "load_balance_ok" else ""
         items.append(
-            f'<li class="{cls}">'
+            f'<li class="{cls}{extra}">'
             f'<strong>{_esc(f.get("title", "Finding"))}</strong>'
             f' — {_esc(f.get("text", ""))}'
             f"</li>"
@@ -47589,7 +48426,9 @@ class _AnalysisFindingsDialog(QDialog):
                  ai_enabled: bool = True, ui_font_size: int = UI_FONT_SIZE,
                  on_apply_scope=None, scope_hint: str = "",
                  ux_events: Optional[List[dict]] = None,
-                 time_min: int = 0, time_max: int = 0):
+                 time_min: int = 0, time_max: int = 0,
+                 quality_warnings: Optional[List[str]] = None,
+                 is_dark: bool = True):
         super().__init__(parent)
         self._findings = findings or []
         self._scope_title = scope_title or ""
@@ -47598,6 +48437,27 @@ class _AnalysisFindingsDialog(QDialog):
         self._ux_events = ux_events or []
         self._time_min = int(time_min or 0)
         self._time_max = int(time_max or 0)
+        self._quality_warnings = list(quality_warnings or [])
+        self._is_dark = bool(is_dark)
+        if self._is_dark:
+            muted, ink, border = "#9a9a9a", "#c5d0dc", "#3a4658"
+            ask, err, warn = "#8a8a8a", "#e74c3c", "#e67e22"
+            ok_ink = "#7dcea0"
+        else:
+            muted, ink, border = "#555555", "#1E1E1E", "#C0C0C0"
+            ask, err, warn = "#555555", "#c0392b", "#9a4d00"
+            ok_ink = "#166534"
+        self._dashboard = analysis_dashboard(
+            self._findings, quality_warnings=self._quality_warnings)
+        title_cluster = {}
+        id_cluster = {}
+        for inc in self._dashboard.get("clusters") or []:
+            cid = str(inc.get("id") or "")
+            for t in inc.get("findings") or []:
+                title_cluster.setdefault(str(t), cid)
+            for fid in inc.get("finding_ids") or []:
+                if fid:
+                    id_cluster.setdefault(str(fid), cid)
         self.wants_ai_query = False
         self._ai_needs_settings = False
         self.wants_ai_finding_id = ""
@@ -47621,7 +48481,7 @@ class _AnalysisFindingsDialog(QDialog):
         note.setWordWrap(True)
         note.setObjectName("analysisNote")
         note.setStyleSheet(
-            f"color: #9a9a9a; font-size: {ui_fs}; padding-bottom: 2px;")
+            f"color: {muted}; font-size: {ui_fs}; padding-bottom: 2px;")
 
         list_w = QListWidget()
         list_w.setFont(ui_font)
@@ -47631,10 +48491,11 @@ class _AnalysisFindingsDialog(QDialog):
         list_w.setAlternatingRowColors(True)
         list_w.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         list_w.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        list_w.setTextElideMode(Qt.TextElideMode.ElideNone)
         list_w.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         list_w.setStyleSheet(
             f"QListWidget {{ padding: 8px; outline: none; border-radius: 6px;"
-            f" font-size: {ui_fs}; }}"
+            f" font-size: {ui_fs}; color: {ink}; }}"
             "QListWidget::item {"
             "  padding: 10px 12px;"
             "  margin: 3px 0;"
@@ -47645,32 +48506,53 @@ class _AnalysisFindingsDialog(QDialog):
             "}"
         )
         self._list_w = list_w
+        min_h = max(40, int(round(ui_pt * 5.0)))
         if self._findings:
             for f in self._findings:
                 sev = f.get("severity", "info")
                 title = str(f.get("title", "Finding")).strip() or "Finding"
                 text = str(f.get("text", "")).strip()
+                fid = str(f.get("id") or "")
+                cid = id_cluster.get(fid) or title_cluster.get(title, "")
+                prefix = f"[{cid}] " if cid else ""
                 badge = {"error": "●", "warning": "●"}.get(str(sev), "○")
-                display = f"{badge}  {title}\n{text}" if text else f"{badge}  {title}"
-                item = QListWidgetItem(display)
-                item.setData(Qt.ItemDataRole.UserRole, f.get("id") or "")
-                item.setFont(ui_font)
                 if sev == "error":
-                    item.setForeground(QBrush(QColor("#e74c3c")))
+                    color = err
                 elif sev == "warning":
-                    item.setForeground(QBrush(QColor("#e67e22")))
-                fm = QFontMetrics(ui_font)
-                wrap_w = 640
-                body_h = fm.boundingRect(
-                    0, 0, wrap_w, 8000,
-                    int(Qt.TextFlag.TextWordWrap),
-                    display,
-                ).height()
-                # Scale row height with UI font (was tuned for forced 11pt).
-                pad = max(16, int(round(ui_pt * 2.0)))
-                min_h = max(40, int(round(ui_pt * 5.0)))
-                item.setSizeHint(QSize(wrap_w, max(min_h, body_h + pad)))
+                    color = warn
+                elif fid == "load_balance_ok":
+                    color = ok_ink
+                else:
+                    color = ink
+                row = QWidget()
+                row.setObjectName("analysisFindingRow")
+                vbox = QVBoxLayout(row)
+                vbox.setContentsMargins(4, 2, 4, 2)
+                vbox.setSpacing(4)
+                title_l = QLabel(f"{badge}  {prefix}{title}")
+                title_l.setObjectName("analysisFindingTitle")
+                title_l.setWordWrap(True)
+                title_l.setFont(ui_font)
+                title_l.setStyleSheet(
+                    f"color: {color}; font-weight: 700; font-size: {ui_fs};")
+                vbox.addWidget(title_l)
+                if text:
+                    text_l = QLabel(text)
+                    text_l.setObjectName("analysisFindingText")
+                    text_l.setWordWrap(True)
+                    text_l.setFont(ui_font)
+                    text_l.setStyleSheet(
+                        f"color: {color}; font-size: {ui_fs};")
+                    vbox.addWidget(text_l)
+                item = QListWidgetItem()
+                item.setData(Qt.ItemDataRole.UserRole, fid)
+                item.setFont(ui_font)
+                item.setForeground(QBrush(QColor(color)))
                 list_w.addItem(item)
+                list_w.setItemWidget(item, row)
+                row.adjustSize()
+                hint = row.sizeHint()
+                item.setSizeHint(QSize(max(hint.width(), 200), max(hint.height(), min_h)))
             list_w.setCurrentRow(0)
             list_w.currentItemChanged.connect(lambda *_: self._refresh_scope_hint())
         else:
@@ -47701,9 +48583,8 @@ class _AnalysisFindingsDialog(QDialog):
                     ai_enabled, t))
             return btn
 
-        def _make_explain_btn() -> QToolButton:
-            btn = QToolButton()
-            btn.setText("Explain…")
+        def _make_explain_btn() -> QPushButton:
+            btn = QPushButton("Explain…")
             btn.setFont(ui_font)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setMinimumHeight(max(28, int(round(ui_pt * 3.2))))
@@ -47717,9 +48598,8 @@ class _AnalysisFindingsDialog(QDialog):
                 "Quick / Technical / Deep explanation of the selected finding"
                 if ai_enabled else "Enable AI Assistant in Settings → AI"
             )
-            btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
             btn.setStyleSheet(
-                f"QToolButton {{ padding: 7px 16px; border-radius: 6px;"
+                f"QPushButton {{ padding: 7px 16px; border-radius: 6px;"
                 f" font-size: {ui_fs}; }}"
             )
             menu = QMenu(btn)
@@ -47729,12 +48609,14 @@ class _AnalysisFindingsDialog(QDialog):
                     lambda _=False, lv=level: self._query_with_ai(
                         ai_enabled, "explain_finding", level=lv)
                 )
-            btn.setMenu(menu)
+            btn.clicked.connect(
+                lambda: menu.exec(btn.mapToGlobal(btn.rect().bottomLeft())))
+            btn._explain_menu = menu
             return btn
 
         ai_label = QLabel("Ask AI")
         ai_label.setStyleSheet(
-            f"color: #8a8a8a; font-size: {ui_fs}; font-weight: 600;"
+            f"color: {ask}; font-size: {ui_fs}; font-weight: 600;"
             " letter-spacing: 0.4px; padding-top: 2px;"
         )
 
@@ -47743,16 +48625,16 @@ class _AnalysisFindingsDialog(QDialog):
         ai_row.setSpacing(10)
         ai_btns = [
             _make_ai_btn(
+                "Query with AI…",
+                "Open the AI Assistant and walk through these Analysis Findings",
+                "Enable AI Assistant in Settings → AI",
+                "findings",
+            ),
+            _make_ai_btn(
                 "Investigate…",
                 "Open the AI Assistant and investigate the top findings with tools",
                 "Enable AI Assistant in Settings → AI",
                 "investigate",
-            ),
-            _make_ai_btn(
-                "Root cause…",
-                "Open the AI Assistant for evidence-driven root-cause analysis",
-                "Enable AI Assistant in Settings → AI",
-                "root_cause",
             ),
             _make_ai_btn(
                 "Verify with AI…",
@@ -47762,21 +48644,29 @@ class _AnalysisFindingsDialog(QDialog):
             ),
             _make_explain_btn(),
             _make_ai_btn(
+                "Root cause…",
+                "Open the AI Assistant for evidence-driven root-cause analysis",
+                "Enable AI Assistant in Settings → AI",
+                "root_cause",
+            ),
+            _make_ai_btn(
                 "Auto investigate…",
                 "Run the automatic investigate → correlate → critical-path → "
                 "what-if/optimize workflow",
                 "Enable AI Assistant in Settings → AI",
                 "auto_investigate",
             ),
-            _make_ai_btn(
-                "Query with AI…",
-                "Open the AI Assistant and walk through these Analysis Findings",
-                "Enable AI Assistant in Settings → AI",
-                "findings",
-            ),
         ]
         for btn in ai_btns:
             ai_row.addWidget(btn)
+        recipe_btn = QPushButton("Save recipe…")
+        recipe_btn.setToolTip("Save this finding set as a user investigation template")
+        recipe_btn.clicked.connect(self._save_recipe)
+        story_btn = QPushButton("Story…")
+        story_btn.setToolTip("Export an analysis story from the overview and findings")
+        story_btn.clicked.connect(self._save_story)
+        ai_row.addWidget(recipe_btn)
+        ai_row.addWidget(story_btn)
         ai_row.addStretch(1)
 
         btn_h = max(28, int(round(ui_pt * 3.2)))
@@ -47831,7 +48721,7 @@ class _AnalysisFindingsDialog(QDialog):
         self._scope_lbl = QLabel(self._scope_hint or "Select a finding to recommend a cursor window.")
         self._scope_lbl.setWordWrap(True)
         self._scope_lbl.setStyleSheet(
-            f"color: #9a9a9a; font-size: {ui_fs};")
+            f"color: {muted}; font-size: {ui_fs};")
         apply_scope = QPushButton("Apply cursors")
         apply_scope.setFont(ui_font)
         apply_scope.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -47847,6 +48737,15 @@ class _AnalysisFindingsDialog(QDialog):
         scope_row.addWidget(apply_scope, 0)
 
         lay.addWidget(note)
+        overview = QLabel(str(self._dashboard.get("summary") or ""))
+        overview.setWordWrap(True)
+        overview.setObjectName("analysisOverview")
+        overview.setStyleSheet(
+            f"color: {ink}; font-size: {ui_fs}; padding: 8px 10px;"
+            f"border: 1px solid {border}; border-radius: 6px;"
+            "background: rgba(52, 152, 219, 0.08);"
+        )
+        lay.addWidget(overview)
         lay.addWidget(list_w, 1)
         lay.addLayout(scope_row)
         lay.addLayout(footer)
@@ -47930,6 +48829,51 @@ class _AnalysisFindingsDialog(QDialog):
         except OSError as exc:
             QMessageBox.warning(
                 self, "Save failed", f"Could not write file:\n{exc}")
+
+    def _save_story(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save analysis story",
+            "analysis-story.txt",
+            "Text files (*.txt);;All files (*)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".txt"):
+            path += ".txt"
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(format_analysis_story(
+                    self._findings,
+                    quality_warnings=self._quality_warnings,
+                    scope_title=self._scope_title,
+                ))
+        except OSError as exc:
+            QMessageBox.warning(
+                self, "Save failed", f"Could not write file:\n{exc}")
+
+    def _save_recipe(self) -> None:
+        name, ok = QInputDialog.getText(
+            self, "Save recipe", "Template name:", text="Analysis recipe")
+        if not ok:
+            return
+        tpl = new_user_investigation_template(
+            name, ["investigate", "correlate", "generate_report"])
+        wnd = self.parent()
+        panel = getattr(wnd, "_ai_panel", None)
+        getter = getattr(wnd, "_ai_read_settings", None)
+        saver = getattr(wnd, "_ai_save_settings_patch", None)
+        if getter is None or saver is None:
+            return
+        cfg = getter() or {}
+        items = parse_user_investigation_templates(
+            cfg.get("user_investigation_templates"))
+        items = [it for it in items if it.get("id") != tpl["id"]]
+        items.append(tpl)
+        saver({"user_investigation_templates": dump_user_investigation_templates(items)})
+        rebuild = getattr(panel, "_rebuild_investigation_menu", None)
+        if callable(rebuild):
+            rebuild()
 
 
 def _parse_task_deadlines_text(text: str) -> Dict[str, int]:
@@ -51969,8 +52913,9 @@ tbody tr:nth-child(even) td {{ background: var(--stripe); }}
 .detail-note {{ margin: 6px 0 8px; font-size: 12px; color: var(--muted); }}
 h3.sub {{ margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }}
 .sev-error {{ color: #c0392b; font-weight: 600; }}
-.sev-warning {{ color: #d68910; font-weight: 600; }}
-.finding-info {{ color: var(--ink); }}
+.sev-warning {{ color: #9a4d00; font-weight: 600; }}
+.finding-info {{ color: var(--ink, #182230); }}
+.finding-ok {{ color: #166534; font-weight: 600; }}
 .findings-list {{ margin: 8px 0 0 18px; padding: 0; }}
 .findings-list li {{ margin: 8px 0; line-height: 1.45; }}
 .finding-wf {{
@@ -61301,6 +62246,55 @@ class _TraceTab:
     def plot_interval_id(self, value: Optional[str]) -> None:
         self.vm.plot_interval_id = value
 
+class _CommandPaletteDialog(QDialog):
+    """Ctrl+K jump list for existing surfaces (no extra toolbar buttons)."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Command palette")
+        self.setModal(True)
+        self.chosen = ""
+        lay = QVBoxLayout(self)
+        self._edit = QLineEdit()
+        self._edit.setPlaceholderText("Jump to Analysis, Statistics, AI…")
+        self._list = QListWidget()
+        self._list.setUniformItemSizes(True)
+        lay.addWidget(self._edit)
+        lay.addWidget(self._list)
+        hint = QLabel("Ctrl/Cmd+K · Enter to run · Esc to close")
+        hint.setStyleSheet("color:#8a96a8;font-size:11px;")
+        lay.addWidget(hint)
+        self.resize(420, 360)
+        self._edit.textChanged.connect(self._filter)
+        self._list.itemActivated.connect(self._accept_item)
+        self._filter("")
+
+    def _filter(self, text: str) -> None:
+        q = str(text or "").strip().lower()
+        self._list.clear()
+        for aid, label in COMMAND_PALETTE_ACTIONS:
+            blob = str(label).lower()
+            if q and q not in blob:
+                continue
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, aid)
+            self._list.addItem(item)
+        if self._list.count():
+            self._list.setCurrentRow(0)
+
+    def _accept_item(self, item: QListWidgetItem) -> None:
+        if item is None:
+            return
+        self.chosen = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        self.accept()
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._accept_item(self._list.currentItem())
+            return
+        super().keyPressEvent(event)
+
+
 class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     # ------------------------------------------------------------------
@@ -61389,6 +62383,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _sc_find_prev = QShortcut(QKeySequence.StandardKey.FindPrevious, self)
         _sc_find_prev.setContext(Qt.ShortcutContext.ApplicationShortcut)
         _sc_find_prev.activated.connect(self._find_prev)
+
+        _sc_palette = QShortcut(QKeySequence("Ctrl+K"), self)
+        _sc_palette.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        _sc_palette.activated.connect(self._open_command_palette)
 
         for _key in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
             _sc = QShortcut(QKeySequence(_key), self)
@@ -61730,6 +62728,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             graph.set_task(task_name, locked)
             if not self._cpu_splitter_user_sized:
                 self._autofit_cpu_load_height()
+            self._refresh_task_inspector()
 
         view._scene.highlight_changed.connect(_on_highlight_changed)
         view._scene.hover_changed.connect(_repaint_cpu_graph)
@@ -64527,6 +65526,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # --- LEFT: file info (stretches to fill available space) ---
         self._status_file  = QLabel("No file loaded")
         self._status_file.setContentsMargins(4, 0, 8, 0)
+        self._status_inspect = QLabel("No task selected")
+        self._status_inspect.setContentsMargins(4, 0, 8, 0)
+        self._status_inspect.setToolTip("Selected task inspector")
 
         # --- CENTER: cursor badge bar (permanent, but visually central) ---
         self._cursor_bar   = _CursorBarWidget()
@@ -64562,6 +65564,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._zoom_visible_label.setContentsMargins(0, 0, 8, 0)
 
         sb.addWidget(self._status_file)
+        sb.addWidget(self._status_inspect)
         sb.addPermanentWidget(self._cursor_bar)
         sb.addPermanentWidget(self._status_range)
         sb.addPermanentWidget(self._sti_toggle_cb)
@@ -64930,7 +65933,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         keys = ["enabled", "preset", "response_language", "auto_apply", "mcp_log",
                 "user_investigation_templates", "user_historical_knowledge",
                 "redact_task_names", "trace_sensitive", "extra_presets",
-                "split_bottom"]
+                "split_bottom", "investigation_session"]
         pids = [pid for pid, _label, _base, _model in AI_PRESETS]
         for pid in extra_ids:
             if pid and pid not in pids:
@@ -66785,6 +67788,76 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if scope:
             self._on_explore_range(scope)
 
+    def _open_command_palette(self) -> None:
+        dlg = _CommandPaletteDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._run_command_palette_action(dlg.chosen)
+
+    def _run_command_palette_action(self, action_id: str) -> None:
+        aid = str(action_id or "")
+        if aid == "analysis":
+            self._open_analysis_findings()
+        elif aid == "statistics":
+            self._focus_statistics_panel(force=True)
+        elif aid == "find":
+            self._focus_find()
+        elif aid == "marks":
+            self._focus_panel_tab(_PANEL_TAB_MARKS)
+        elif aid == "ai":
+            self._focus_ai_panel()
+        elif aid == "compare":
+            self._open_trace_compare()
+        elif aid == "heatmap":
+            self._open_migration_heatmap()
+        elif aid == "settings":
+            self._open_settings()
+        elif aid == "limit-scope":
+            panel = getattr(self, "_stats_panel", None)
+            cb = getattr(panel, "_scope_cb", None)
+            if cb is not None:
+                cb.setChecked(True)
+        elif aid == "fit":
+            view = getattr(self, "_view", None)
+            if view is not None and hasattr(view, "zoom_fit"):
+                view.zoom_fit()
+        elif aid == "inspect-task":
+            self._refresh_task_inspector()
+            self.statusBar().showMessage(
+                self._status_inspect.text() if hasattr(self, "_status_inspect") else "Inspect task",
+                4000)
+        elif str(aid).startswith("preset-"):
+            self._apply_workspace_preset(aid)
+
+    def _apply_workspace_preset(self, preset_id: str) -> None:
+        if preset_id == "preset-compare":
+            self._open_trace_compare()
+            return
+        panel = getattr(self, "_stats_panel", None)
+        if panel is not None:
+            panel.set_section_collapsed_map(
+                workspace_preset_collapsed(preset_id), emit=True)
+        self._focus_statistics_panel(force=True)
+
+    def _refresh_task_inspector(self) -> None:
+        if not hasattr(self, "_status_inspect"):
+            return
+        sc = getattr(getattr(self, "_view", None), "_scene", None)
+        task = getattr(sc, "_locked_task", None) or ""
+        qs = collect_trace_quality_warnings(self._trace) if self._trace is not None else []
+        self._status_inspect.setText(task_inspector_line(task, qs))
+
+    def _refresh_finding_overlays(self) -> None:
+        view = getattr(self, "_view", None)
+        scene = getattr(view, "_scene", None) if view is not None else None
+        panel = getattr(self, "_stats_panel", None)
+        if scene is None:
+            return
+        findings = []
+        if panel is not None and hasattr(panel, "build_analysis_findings"):
+            findings, _scope = panel.build_analysis_findings()
+        scene.set_finding_overlays(finding_overlay_times(findings))
+
     def _open_analysis_findings(self) -> None:
         """Show Analysis Findings dialog for the active tab / cursor scope."""
         if self._trace is None or self._stats_panel is None:
@@ -66799,6 +67872,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             except RuntimeError:
                 self._analysis_findings_dlg = None
         findings, scope_title = self._stats_panel.build_analysis_findings()
+        self._refresh_finding_overlays()
         lo = hi = None
         panel = self._stats_panel
         if getattr(panel, "_scope_to_cursors", False):
@@ -66814,6 +67888,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             ux_events=evs,
             time_min=self._trace.time_min,
             time_max=self._trace.time_max,
+            quality_warnings=collect_trace_quality_warnings(self._trace),
+            is_dark=self._is_dark,
         )
         self._analysis_findings_dlg = dlg
         dlg.exec()
@@ -69657,6 +70733,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Ctrl+0 / F",           "Fit entire trace to window"),
                 ("Ctrl+R",               "Zoom to earliest–latest cursor"),
                 ("Ctrl+,",               "Open Settings"),
+                ("Ctrl+K",               "Command palette"),
                 ("G",                    "Toggle grid lines on/off"),
                 ("I",                    "Toggle STI event rows on/off"),
                 ("D",                    "Toggle dark / light theme"),

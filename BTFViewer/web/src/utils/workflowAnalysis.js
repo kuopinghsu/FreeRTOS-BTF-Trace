@@ -309,7 +309,8 @@ export function renderWorkflowAnalysisHtml(findings, scopeSuffix = '') {
       : f.severity === 'warning'
         ? 'sev-warning'
         : 'finding-info'
-    return `<li class="${cls}"><strong>${escHtml(f.title)}</strong> — ${escHtml(f.text)}</li>`
+    const extra = f.id === 'load_balance_ok' ? ' finding-ok' : ''
+    return `<li class="${cls}${extra}"><strong>${escHtml(f.title)}</strong> — ${escHtml(f.text)}</li>`
   }).join('')
   return `<section class="report-card notes analysis-findings">
     <h2>Analysis Findings${escHtml(scopeSuffix)}</h2>

@@ -188,6 +188,23 @@ export function traceSummarySnapshot(trace, lo = null, hi = null) {
   }
 }
 
+export function crossTraceTrends(rows = []) {
+  const out = []
+  for (const raw of rows || []) {
+    if (!raw || typeof raw !== 'object') continue
+    const snap = raw.snap && typeof raw.snap === 'object' ? raw.snap : raw
+    out.push({
+      name: String(raw.name || snap.name || '').trim(),
+      spanNs: snap.spanNs ?? snap.span_ns ?? null,
+      migrations: snap.migrations ?? null,
+      loadBalance: snap.loadBalanceScore ?? snap.load_balance_score ?? null,
+      tickHealth: snap.tickHealth ?? snap.tick_health ?? '',
+      tasks: snap.tasks ?? null,
+    })
+  }
+  return out
+}
+
 /** Top tasks by CPU% keyed by display name. */
 export function topTasksCpuByName(trace, limit = 10, lo = null, hi = null) {
   if (!trace?.segByMergeKey) return new Map()

@@ -19,6 +19,8 @@ from btf_viewer_pkg.ai_case import (  # noqa: E402
     clamp_ai_split_bottom,
     compute_evidence_quality,
     dump_user_investigation_templates,
+    dump_investigation_session,
+    parse_investigation_session,
     empty_cost_meter,
     enrich_hypotheses,
     evidence_quality_band,
@@ -28,6 +30,9 @@ from btf_viewer_pkg.ai_case import (  # noqa: E402
     historical_knowledge_for_finding,
     infer_model_capability,
     interpret_investigation_query,
+    investigation_guide_stage,
+    investigation_issue_card,
+    format_investigation_issue_card,
     investigation_mode_prompt,
     load_benchmark_dataset,
     load_benchmark_suite_xml,
@@ -64,6 +69,94 @@ class InvestigationCaseTests(unittest.TestCase):
         )
         self.assertEqual(hyps[0]["status"], "supported")
         self.assertGreaterEqual(hyps[0]["confidence"], 70)
+
+    def test_investigation_guide_stage_and_issue_card(self) -> None:
+        self.assertEqual(investigation_guide_stage(None), "idle")
+        self.assertEqual(
+            investigation_guide_stage({"finding": {"title": "x"}}),
+            "triage",
+        )
+        self.assertEqual(
+            investigation_guide_stage(
+                {"finding": {"title": "x"}}, has_cursors=True,
+            ),
+            "scope",
+        )
+        self.assertEqual(
+            investigation_guide_stage(
+                {"evidence": [{"label": "m", "time": 1}]},
+            ),
+            "investigate",
+        )
+        self.assertEqual(
+            investigation_guide_stage(
+                {"tools_executed": ["verify_claim"]},
+            ),
+            "verify",
+        )
+        self.assertEqual(
+            investigation_guide_stage(
+                {"tools_executed": ["what_if"]},
+            ),
+            "verify",
+        )
+        self.assertEqual(
+            investigation_guide_stage(
+                {"tools_executed": ["verify_claim", "what_if"]},
+            ),
+            "experiment",
+        )
+        self.assertEqual(
+            investigation_guide_stage(
+                {"tools_executed": ["compare_performance"]},
+                has_two_traces=True,
+            ),
+            "compare",
+        )
+        card = investigation_issue_card({
+            "finding": {"title": "Queue bounce", "task": "CS[1]"},
+            "evidence_quality": {"band": "medium-high"},
+        })
+        self.assertEqual(card["title"], "Queue bounce")
+        self.assertEqual(card["task"], "CS[1]")
+        self.assertIn("Medium", card["band"])
+        self.assertEqual(
+            format_investigation_issue_card(card),
+            "CURRENT ISSUE\nQueue bounce · CS[1] · Evidence Medium High",
+        )
+        self.assertEqual(format_investigation_issue_card(None), "")
+
+    def test_dump_parse_investigation_session(self) -> None:
+        blob = dump_investigation_session(
+            payload={"finding": {"title": "x"}},
+            plan={"goal": "g", "steps": []},
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        parsed = parse_investigation_session(blob)
+        self.assertEqual(parsed["payload"]["finding"]["title"], "x")
+        self.assertEqual(parsed["plan"]["goal"], "g")
+        self.assertEqual(parsed["messages"][0]["content"], "hello")
+        self.assertEqual(parse_investigation_session("")["messages"], [])
+        from btf_viewer_pkg.ai_case import investigation_session_has_chat
+        self.assertTrue(investigation_session_has_chat(parsed["messages"]))
+        self.assertFalse(investigation_session_has_chat([]))
+        self.assertFalse(investigation_session_has_chat(
+            [{"role": "evidence", "content": "CURRENT ISSUE"}]))
+
+    def test_analysis_dashboard_clusters_and_quality(self) -> None:
+        from btf_viewer_pkg.ai_planner import analysis_dashboard
+        dash = analysis_dashboard(
+            [
+                {"id": "f1", "severity": "warning", "title": "Core thrashing",
+                 "text": "CS[1] migrates", "task": "CS[1]"},
+                {"id": "f2", "severity": "error", "title": "Bounce",
+                 "text": "CS[1] ping-pong", "task": "CS[1]"},
+            ],
+            quality_warnings=["Trace ring buffer overflow — oldest events may be missing."],
+        )
+        self.assertIn("Trace quality:", dash["summary"])
+        self.assertGreaterEqual(dash["errors"], 1)
+        self.assertTrue(dash["clusters"])
 
     def test_set_hypothesis_status_rejects(self) -> None:
         hyps = enrich_hypotheses(
@@ -645,6 +738,15 @@ class InvestigationCaseParitySurfaceTests(unittest.TestCase):
             "formatQualityFlagLines",
             "mergeLiveCapability",
             "INVESTIGATION_SCOPE_OPTIONS",
+            "investigationGuideStage",
+            "investigationIssueCard",
+            "formatInvestigationIssueCard",
+            "dumpInvestigationSession",
+            "parseInvestigationSession",
+            "investigationSessionHasChat",
+            "GUIDED_STAGES",
+            "ESTIMATE_BANNER",
+            "guideStageNeedles",
         ):
             self.assertIn(name, js, name)
 

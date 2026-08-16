@@ -24,7 +24,7 @@
       <button
         type="button"
         class="ai-link-btn"
-        title="Clear the conversation log"
+        title="Clear the conversation log (keeps usage and investigation evidence)"
         @click="clear"
       >
         Clear
@@ -191,6 +191,53 @@
     <div class="ai-split">
     <div class="ai-split-top">
     <div
+      class="ai-guide"
+    >
+      <div
+        class="ai-guide-stepper"
+        title="Investigation stage (from Findings and tools already run)"
+      >
+        <button
+          v-for="sid in guidedStages"
+          :key="sid"
+          type="button"
+          class="ai-guide-step"
+          :class="{ now: guideStage === sid, done: stageDone(sid) }"
+          @click="jumpGuideStage(sid)"
+        >{{ stageMark(sid) }} {{ guidedStageLabel(sid) }}</button>
+      </div>
+      <div
+        v-if="guideStage === 'idle' && !messages.length"
+        class="ai-start-inv"
+      >
+        <button
+          type="button"
+          class="ai-btn primary"
+          :disabled="busy || !aiEnabled"
+          title="Triage findings, scope the top issue, gather evidence, and verify the cause"
+          @click="startInvestigation"
+        >
+          Start Investigation
+        </button>
+      </div>
+      <div
+        v-else-if="issueCardText"
+        class="ai-issue-card"
+      >{{ issueCardText }}</div>
+      <div
+        v-if="guideStage === 'investigate' || guideStage === 'verify'"
+        class="ai-verify-hint"
+      >
+        {{ verifyHint }}
+      </div>
+      <div
+        v-if="estimateBanner"
+        class="ai-estimate-banner"
+      >
+        {{ estimateBannerText }}
+      </div>
+    </div>
+    <div
       ref="logRef"
       class="ai-log"
       @contextmenu.prevent="onLogContextMenu"
@@ -201,10 +248,9 @@
       >
         Conversation appears here…
         <span class="ai-empty-hint">
-          Uses Analysis Findings for the current Statistics scope.
+          Uses Analysis Findings for the current Statistics scope
+          (Limit to C1–Cn when cursors are set).
           Configure the endpoint in Settings → AI.
-          Prefer <code>npm run dev</code> / <code>preview</code> (proxies);
-          for <code>file://</code> set <code>OLLAMA_ORIGINS</code>.
         </span>
       </div>
       <div
@@ -649,6 +695,17 @@ import {
   updateCaseFromTool,
   validateAiResponse,
   VALIDATE_EXPERIMENT_PROMPT,
+  GUIDED_STAGES,
+  GUIDED_STAGE_LABELS,
+  ESTIMATE_BANNER,
+  VERIFY_HINT,
+  guideStageNeedles,
+  investigationGuideStage,
+  investigationIssueCard,
+  formatInvestigationIssueCard,
+  dumpInvestigationSession,
+  parseInvestigationSession,
+  investigationSessionHasChat,
 } from '../utils/aiCase.js'
 import {
   buildInvestigationPackage,
@@ -692,6 +749,7 @@ const props = defineProps({
   aiAutoApply: { type: Boolean, default: false },
   aiRedactTaskNames: { type: Boolean, default: false },
   aiTraceSensitive: { type: Boolean, default: false },
+  darkMode: { type: Boolean, default: true },
   /** () => Promise|{ findingsText, span, cores, scope } */
   getContext: { type: Function, required: true },
   /** () => [{ id, name }, ...] loaded BTF tabs */
@@ -707,6 +765,7 @@ const props = defineProps({
 
 const emit = defineEmits([
   'openSettings', 'jump', 'range', 'highlight', 'update:responseLanguage', 'statusMessage',
+  'sessionChange',
 ])
 
 const templates = AI_TEMPLATE_QUESTIONS
@@ -769,15 +828,80 @@ let skipInterpretOnce = false
 const investigationPlan = ref(null)
 let evidencePayload = null
 let interpretedQuery = null
+const evidenceRev = ref(0)
+
+function bumpEvidence() {
+  evidenceRev.value += 1
+}
 
 const planStatusText = computed(() =>
   formatInvestigationPlanStatus(investigationPlan.value, props.responseLanguage))
+
+const guidedStages = GUIDED_STAGES
+const verifyHint = VERIFY_HINT
+const estimateBannerText = ESTIMATE_BANNER
+const guideStage = computed(() => {
+  void evidenceRev.value
+  let cursors = 0
+  try {
+    const gui = typeof props.getGuiState === 'function' ? (props.getGuiState() || {}) : {}
+    cursors = (gui.cursors || []).filter(t => t != null && t !== '').length
+  } catch {
+    cursors = 0
+  }
+  return investigationGuideStage(evidencePayload, {
+    plan: investigationPlan.value,
+    hasCursors: cursors >= 2,
+    hasTwoTraces: loadedTabs.value.length >= 2,
+  })
+})
+const issueCardText = computed(() => {
+  void evidenceRev.value
+  if (guideStage.value === 'idle') return ''
+  return formatInvestigationIssueCard(investigationIssueCard(evidencePayload))
+})
+const estimateBanner = computed(() => {
+  void evidenceRev.value
+  return guideStage.value === 'experiment'
+})
+function stageDone(sid) {
+  return GUIDED_STAGES.indexOf(sid) < GUIDED_STAGES.indexOf(guideStage.value)
+}
+function stageMark(sid) {
+  if (stageDone(sid)) return '✓'
+  if (guideStage.value === sid) return '●'
+  return '○'
+}
+function guidedStageLabel(sid) {
+  return GUIDED_STAGE_LABELS[sid] || sid
+}
+function jumpGuideStage(sid) {
+  const needles = guideStageNeedles(sid).map(n => String(n).toLowerCase())
+  const el = logRef.value
+  if (!el || !needles.length) return
+  const nodes = el.querySelectorAll('.ai-msg')
+  for (let i = nodes.length - 1; i >= 0; i -= 1) {
+    const t = String(nodes[i].innerText || '').toLowerCase()
+    if (needles.some(n => t.includes(n))) {
+      nodes[i].scrollIntoView({ block: 'nearest' })
+      nodes[i].classList.add('ai-msg-flash')
+      window.setTimeout(() => nodes[i].classList.remove('ai-msg-flash'), 1400)
+      return
+    }
+  }
+}
+
+async function startInvestigation() {
+  const t = templates.find(x => x.id === 'auto_investigate')
+  if (t) await onTemplate(t)
+}
 
 function syncEvidenceLogEntry(data, language = props.responseLanguage) {
   const text = formatEvidencePanelMarkdown(data, language)
   if (!text) return
   messages.value = messages.value.filter(m => m.role !== 'evidence')
   messages.value.push({ role: 'evidence', content: text })
+  bumpEvidence()
   scrollLog()
 }
 
@@ -785,6 +909,7 @@ function removeEvidenceLogEntry() {
   const before = messages.value.length
   messages.value = messages.value.filter(m => m.role !== 'evidence')
   if (messages.value.length !== before) scrollLog()
+  bumpEvidence()
 }
 
 function updateEvidenceFromToolResult(name, res) {
@@ -847,6 +972,7 @@ function attachResponseValidation(text) {
     validation: report,
     cost: formatCostMeter(costMeter.value),
   }
+  bumpEvidence()
 }
 
 function setInvestigationPlan(plan) {
@@ -1107,7 +1233,7 @@ function onSignInCta() {
 }
 
 function formatMessage(role, text) {
-  return formatAiMessageHtml(role, text)
+  return formatAiMessageHtml(role, text, { dark: props.darkMode !== false })
 }
 
 function closeMermaidZoom() {
@@ -1400,10 +1526,35 @@ function clear() {
   toolRound = 0
   error.value = ''
   mermaidZoom.value = null
-  evidencePayload = null
   interpretedQuery = null
-  costMeter.value = emptyCostMeter()
   status.value = ''
+  bumpEvidence()
+}
+
+function investigationSnapshot() {
+  return parseInvestigationSession(dumpInvestigationSession({
+    payload: evidencePayload,
+    plan: investigationPlan.value,
+    messages: messages.value,
+  }))
+}
+
+function restoreInvestigation(raw) {
+  const parsed = parseInvestigationSession(raw)
+  const msgs = parsed.messages || []
+  if (!investigationSessionHasChat(msgs)) {
+    bumpEvidence()
+    return
+  }
+  if (parsed.payload) evidencePayload = parsed.payload
+  if (parsed.plan) investigationPlan.value = parsed.plan
+  if (msgs.length && !messages.value.length) {
+    messages.value = msgs.map(m => ({
+      role: m.role,
+      content: m.content,
+    }))
+  }
+  bumpEvidence()
 }
 
 function stop() {
@@ -2064,6 +2215,9 @@ onMounted(() => {
   window.addEventListener('resize', placeMoreMenu)
 })
 
+watch(messages, () => emit('sessionChange'), { deep: true })
+watch(investigationPlan, () => emit('sessionChange'))
+
 onBeforeUnmount(() => {
   endSplitDrag()
   document.removeEventListener('mousedown', onDocMouseDown)
@@ -2081,6 +2235,8 @@ defineExpose({
   clear,
   saveConversationAs,
   scrollLog,
+  investigationSnapshot,
+  restoreInvestigation,
 })
 </script>
 
@@ -2309,6 +2465,62 @@ defineExpose({
   padding: 1px 0;
   line-height: 1.3;
 }
+.ai-guide {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 0 6px;
+}
+.ai-guide-stepper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted, #8a96a8);
+}
+.ai-guide-step {
+  background: transparent;
+  border: none;
+  padding: 0 4px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  color: var(--muted, #8a96a8);
+}
+.ai-guide-step.done { color: #2e7d57; }
+.ai-guide-step.now {
+  color: var(--fg, #1E1E1E);
+  font-weight: 600;
+}
+.ai-verify-hint {
+  font-size: 11px;
+  color: var(--muted, #8a96a8);
+}
+.ai-start-inv {
+  font-size: 12px;
+  color: var(--muted, #8a96a8);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.ai-issue-card {
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid var(--border, #3a4658);
+  border-radius: 6px;
+  white-space: pre-line;
+  color: var(--fg, #dbe2ea);
+}
+.ai-estimate-banner {
+  font-size: 11px;
+  color: #e6d48a;
+  background: #2a2418;
+  border: 1px solid #c9a227;
+  border-radius: 4px;
+  padding: 4px 8px;
+}
 .ai-tpl-btn, .ai-btn {
   font: inherit;
   font-size: inherit;
@@ -2417,6 +2629,11 @@ defineExpose({
 }
 .ai-empty { color: var(--muted, #8a96a8); }
 .ai-msg { margin: 0 0 12px; }
+.ai-msg.ai-msg-flash {
+  outline: 2px solid var(--accent, #5b9bd5);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent, #5b9bd5) 18%, transparent);
+}
 .ai-msg + .ai-msg {
   padding-top: 12px;
   border-top: 1px solid #2b3442;
@@ -2588,8 +2805,8 @@ defineExpose({
   max-width: min(1100px, 96vw);
   max-height: 92vh;
   overflow: auto;
-  background: #12161d;
-  border: 1px solid #3a4658;
+  background: var(--panel-bg, #F7F9FC);
+  border: 1px solid var(--border, #DDDDDD);
   border-radius: 8px;
   padding: 12px 14px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
@@ -2600,7 +2817,7 @@ defineExpose({
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 8px;
-  color: #8b98a8;
+  color: var(--fg-dim, #666666);
   font-size: 12px;
 }
 .ai-mermaid-zoom-body :deep(svg),
@@ -2618,7 +2835,7 @@ defineExpose({
   font-size: 12px;
 }
 .ai-mermaid-zoom-links :deep(a) {
-  color: #5b9bd5;
+  color: var(--accent, #0066CC);
 }
 .ai-composer {
   position: relative;

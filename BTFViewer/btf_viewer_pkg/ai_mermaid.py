@@ -47,6 +47,39 @@ def _note_box_w(note: str) -> float:
     return float(min(200, 16 + 6 * min(len(note or ""), 36)))
 
 
+def mermaid_palette(is_dark: bool = True) -> Dict[str, str]:
+    """SVG fills/strokes for evidence-graph and investigation-tree diagrams."""
+    if is_dark:
+        return {
+            "bg": "#12161d",
+            "lane": "#3a4658",
+            "node_fill": "#1e3348",
+            "node_stroke": "#5b9bd5",
+            "node_text": "#dbe2ea",
+            "edge": "#5b9bd5",
+            "edge_label": "#c5d0dc",
+            "arrow": "#6fbf9a",
+            "msg": "#a8b4c4",
+            "note_fill": "#2a2418",
+            "note_stroke": "#c9a227",
+            "note_text": "#e6d48a",
+        }
+    return {
+        "bg": "#F7F9FC",
+        "lane": "#C0C8D4",
+        "node_fill": "#E8F1FA",
+        "node_stroke": "#0066CC",
+        "node_text": "#1E1E1E",
+        "edge": "#0066CC",
+        "edge_label": "#333333",
+        "arrow": "#166534",
+        "msg": "#444444",
+        "note_fill": "#FFF8E6",
+        "note_stroke": "#9a4d00",
+        "note_text": "#5c3d00",
+    }
+
+
 def _svg_arrowhead(x1: float, y1: float, x2: float, y2: float, color: str, size: float = 8.0) -> str:
     """Triangle at (x2,y2); Qt paints ``<marker>`` as a stray blob at the origin."""
     dx, dy = x2 - x1, y2 - y1
@@ -180,14 +213,14 @@ def hit_test_mermaid(
     return None
 
 
-def _svg_to_png_bytes(svg: str) -> Optional[Tuple[bytes, int, int]]:
+def _svg_to_png_bytes(svg: str, fill: str = "#12161d") -> Optional[Tuple[bytes, int, int]]:
     """Rasterize SVG for QTextBrowser (avoids Qt's oversized SVG buffer warning)."""
     try:
         from ._imports import QBuffer, QByteArray, QColor, QIODevice
         from .config import rasterize_svg_pixmap
     except Exception:
         return None
-    pm, _ = rasterize_svg_pixmap(svg, fill=QColor("#12161d"))
+    pm, _ = rasterize_svg_pixmap(svg, fill=QColor(fill or "#12161d"))
     if pm.isNull():
         return None
     ba = QByteArray()
@@ -199,7 +232,7 @@ def _svg_to_png_bytes(svg: str) -> Optional[Tuple[bytes, int, int]]:
     return bytes(ba.data()), int(pm.width()), int(pm.height())
 
 
-def mermaid_to_svg(source: str, *, interactive: bool = True) -> str:
+def mermaid_to_svg(source: str, *, interactive: bool = True, is_dark: bool = True) -> str:
     """Return an SVG string, or empty if the dialect is unsupported."""
     text = (source or "").strip()
     if not text:
@@ -211,9 +244,9 @@ def mermaid_to_svg(source: str, *, interactive: bool = True) -> str:
             first = s.lower()
             break
     if first.startswith("sequencediagram"):
-        return _sequence_svg(text, interactive=interactive)
+        return _sequence_svg(text, interactive=interactive, is_dark=is_dark)
     if first.startswith("graph ") or first.startswith("flowchart "):
-        return _flowchart_svg(text, interactive=interactive)
+        return _flowchart_svg(text, interactive=interactive, is_dark=is_dark)
     return ""
 
 
@@ -234,14 +267,16 @@ def decode_mermaid_zoom_token(token: str) -> str:
         return ""
 
 
-def mermaid_block_html(source: str, *, as_img: bool = True, zoomable: bool = True) -> str:
+def mermaid_block_html(
+    source: str, *, as_img: bool = True, zoomable: bool = True, is_dark: bool = True,
+) -> str:
     """Wrap a mermaid source in HTML (img for QTextBrowser, inline SVG for export)."""
-    svg = mermaid_to_svg(source, interactive=not as_img)
+    svg = mermaid_to_svg(source, interactive=not as_img, is_dark=is_dark)
     if not svg:
         esc = html.escape(source)
         return f'<pre><code class="language-mermaid">{esc}</code></pre>'
     if as_img:
-        png = _svg_to_png_bytes(svg)
+        png = _svg_to_png_bytes(svg, fill=mermaid_palette(is_dark)["bg"])
         if png:
             raw, iw, ih = png
             b64 = base64.b64encode(raw).decode("ascii")
@@ -375,7 +410,7 @@ def _sequence_hits(source: str) -> List[Dict[str, Any]]:
     return hits
 
 
-def _sequence_svg(source: str, *, interactive: bool) -> str:
+def _sequence_svg(source: str, *, interactive: bool, is_dark: bool = True) -> str:
     geom = _sequence_geom(source)
     if not geom:
         return ""
@@ -383,11 +418,12 @@ def _sequence_svg(source: str, *, interactive: bool) -> str:
     box_w, top, row_h = geom["box_w"], geom["top"], geom["row_h"]
     width, height, xs = geom["width"], geom["height"], geom["xs"]
     fam = _esc(_svg_sans_family())
+    pal = mermaid_palette(is_dark)
 
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0f}" height="{height:.0f}" '
         f'viewBox="0 0 {width:.0f} {height:.0f}" class="ai-mermaid-seq">',
-        f'<rect x="0" y="0" width="{width:.0f}" height="{height:.0f}" fill="#12161d"/>',
+        f'<rect x="0" y="0" width="{width:.0f}" height="{height:.0f}" fill="{pal["bg"]}"/>',
     ]
     for i, (_pid, label) in enumerate(participants):
         x = xs[i]
@@ -395,13 +431,13 @@ def _sequence_svg(source: str, *, interactive: bool) -> str:
         href = _node_href_attr(label) if interactive else ""
         parts.append(
             f'<line x1="{x}" y1="{top + 22}" x2="{x}" y2="{height - 12}" '
-            f'stroke="#3a4658" stroke-dasharray="4 3"/>'
+            f'stroke="{pal["lane"]}" stroke-dasharray="4 3"/>'
         )
         parts.append(
             f'<a{href}>'
             f'<rect x="{bx}" y="{top - 14}" width="{box_w}" height="28" rx="4" '
-            f'fill="#1e3348" stroke="#5b9bd5"/>'
-            f'<text x="{x}" y="{top + 5}" text-anchor="middle" fill="#dbe2ea" '
+            f'fill="{pal["node_fill"]}" stroke="{pal["node_stroke"]}"/>'
+            f'<text x="{x}" y="{top + 5}" text-anchor="middle" fill="{pal["node_text"]}" '
             f'font-size="11" font-family="{fam}">{_esc(label[:28])}</text>'
             f"</a>"
         )
@@ -416,12 +452,12 @@ def _sequence_svg(source: str, *, interactive: bool) -> str:
             tip = 8 if x2 >= x1 else -8
             parts.append(
                 f'<line x1="{x1}" y1="{y}" x2="{x2 - tip}" y2="{y}" '
-                f'stroke="#6fbf9a" stroke-width="1.4"{dashed}/>'
+                f'stroke="{pal["arrow"]}" stroke-width="1.4"{dashed}/>'
             )
-            parts.append(_svg_arrowhead(x1, y, x2, y, "#6fbf9a"))
+            parts.append(_svg_arrowhead(x1, y, x2, y, pal["arrow"]))
             mx = (x1 + x2) / 2
             parts.append(
-                f'<text x="{mx}" y="{y - 6}" text-anchor="middle" fill="#a8b4c4" '
+                f'<text x="{mx}" y="{y - 6}" text-anchor="middle" fill="{pal["msg"]}" '
                 f'font-size="10" font-family="{fam}">{_esc(msg[:48])}</text>'
             )
         else:
@@ -430,8 +466,8 @@ def _sequence_svg(source: str, *, interactive: bool) -> str:
             nw = _note_box_w(note)
             parts.append(
                 f'<rect x="{x - nw / 2}" y="{y - 16}" width="{nw}" height="28" '
-                f'rx="3" fill="#2a2418" stroke="#c9a227"/>'
-                f'<text x="{x}" y="{y + 3}" text-anchor="middle" fill="#e6d48a" '
+                f'rx="3" fill="{pal["note_fill"]}" stroke="{pal["note_stroke"]}"/>'
+                f'<text x="{x}" y="{y + 3}" text-anchor="middle" fill="{pal["note_text"]}" '
                 f'font-size="10" font-family="{fam}">{_esc(note[:40])}</text>'
             )
         y += row_h
@@ -617,31 +653,32 @@ def _flowchart_hits(source: str) -> List[Dict[str, Any]]:
     return hits
 
 
-def _flowchart_svg(source: str, *, interactive: bool) -> str:
+def _flowchart_svg(source: str, *, interactive: bool, is_dark: bool = True) -> str:
     geom = _flowchart_geom(source)
     if not geom:
         return ""
     nodes, order, pos = geom["nodes"], geom["order"], geom["pos"]
     width, height = geom["width"], geom["height"]
     fam = _esc(_svg_sans_family())
+    pal = mermaid_palette(is_dark)
 
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0f}" height="{height:.0f}" '
         f'viewBox="0 0 {width:.0f} {height:.0f}" class="ai-mermaid-flow">',
-        f'<rect x="0" y="0" width="{width:.0f}" height="{height:.0f}" fill="#12161d"/>',
+        f'<rect x="0" y="0" width="{width:.0f}" height="{height:.0f}" fill="{pal["bg"]}"/>',
     ]
     for edge in _flowchart_edge_paths(geom):
         sx, sy, ex, ey = edge["sx"], edge["sy"], edge["ex"], edge["ey"]
         parts.append(
             f'<line x1="{sx:.1f}" y1="{sy:.1f}" x2="{ex:.1f}" y2="{ey:.1f}" '
-            f'stroke="#5b9bd5" stroke-width="1.3"/>'
+            f'stroke="{pal["edge"]}" stroke-width="1.3"/>'
         )
-        parts.append(_svg_arrowhead(sx, sy, ex, ey, "#5b9bd5"))
+        parts.append(_svg_arrowhead(sx, sy, ex, ey, pal["edge"]))
         label = str(edge.get("label") or "")
         if label:
             parts.append(
                 f'<text x="{edge["lx"]:.1f}" y="{edge["ly"]:.1f}" text-anchor="middle" '
-                f'fill="#c5d0dc" font-size="10" font-family="{fam}">'
+                f'fill="{pal["edge_label"]}" font-size="10" font-family="{fam}">'
                 f"{_esc(label[:16])}</text>"
             )
     for nid in order:
@@ -656,13 +693,14 @@ def _flowchart_svg(source: str, *, interactive: bool) -> str:
         for i, line in enumerate(lines):
             labels.append(
                 f'<text x="{x:.1f}" y="{y0 + i * 14.0:.1f}" text-anchor="middle" '
-                f'fill="#dbe2ea" font-size="11" font-family="{fam}">'
+                f'fill="{pal["node_text"]}" font-size="11" font-family="{fam}">'
                 f"{_esc(line)}</text>"
             )
         parts.append(
             f'<a{href}>'
             f'<rect x="{x - bw / 2:.1f}" y="{y - bh / 2:.1f}" width="{bw:.1f}" '
-            f'height="{bh:.1f}" rx="6" fill="#1e3348" stroke="#5b9bd5"/>'
+            f'height="{bh:.1f}" rx="6" fill="{pal["node_fill"]}" '
+            f'stroke="{pal["node_stroke"]}"/>'
             f"{''.join(labels)}"
             f"</a>"
         )

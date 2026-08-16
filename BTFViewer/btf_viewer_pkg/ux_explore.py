@@ -387,6 +387,58 @@ def best_finding_scope(
     }
 
 
+def finding_overlay_times(findings: Optional[Sequence[dict]], limit: int = 80) -> List[float]:
+    """Timestamps to paint on the timeline for Analysis Findings (not user marks)."""
+    times: List[float] = []
+    seen = set()
+    for finding in findings or []:
+        if not isinstance(finding, dict):
+            continue
+        for ev in finding.get("evidence") or []:
+            if not isinstance(ev, dict):
+                continue
+            for key in ("time", "start", "stop"):
+                try:
+                    if ev.get(key) is not None:
+                        t = float(ev[key])
+                    else:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                if t in seen:
+                    continue
+                seen.add(t)
+                times.append(t)
+        blob = f"{finding.get('title') or ''} {finding.get('text') or ''}"
+        for m in _JUMP_RE.finditer(blob):
+            try:
+                t = float(m.group(1))
+            except (TypeError, ValueError):
+                continue
+            if t in seen:
+                continue
+            seen.add(t)
+            times.append(t)
+        if len(times) >= limit:
+            break
+    return times[:limit]
+
+
+def task_inspector_line(
+    task: Any = "",
+    quality_warnings: Optional[Sequence[str]] = None,
+) -> str:
+    """Status-bar inspector: selected task plus first quality warning."""
+    name = str(task or "").strip()
+    parts = [f"Task {name}" if name else "No task selected"]
+    for q in quality_warnings or []:
+        text = str(q or "").strip()
+        if text:
+            parts.append(text[:96])
+            break
+    return " · ".join(parts)
+
+
 def parse_signed_delta(text: Any) -> Optional[Tuple[float, str]]:
     """Parse a Trace Compare Δ cell into ``(signed, kind)``."""
     s = str(text or "").strip().replace("−", "-")

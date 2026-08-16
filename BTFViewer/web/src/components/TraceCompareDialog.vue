@@ -450,6 +450,38 @@
             </tr>
           </tbody>
         </table>
+
+        <table
+          v-else-if="activePage === 'trends'"
+          class="compare-table"
+        >
+          <thead>
+            <tr>
+              <th>Trace</th>
+              <th>Tasks</th>
+              <th>Migrations</th>
+              <th>Load balance</th>
+              <th>Tick health</th>
+              <th>Span</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in trendRows"
+              :key="row.name"
+            >
+              <td class="task-col">{{ row.name }}</td>
+              <td>{{ row.tasks ?? '—' }}</td>
+              <td>{{ row.migrations ?? '—' }}</td>
+              <td>{{ row.loadBalance == null ? '—' : `${Math.round(row.loadBalance)}%` }}</td>
+              <td>{{ row.tickHealth || '—' }}</td>
+              <td>{{ row.spanNs ?? '—' }}</td>
+            </tr>
+            <tr v-if="trendRows.length === 0">
+              <td colspan="6" class="compare-empty">Open 2+ traces to trend summaries</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
       <div class="compare-dialog-footer">
@@ -473,6 +505,22 @@
           @click="onQueryAi"
         >
           Query with AI…
+        </button>
+        <button
+          type="button"
+          class="compare-export-btn"
+          title="Store Trace A per-task metrics as the regression baseline"
+          @click="onSaveBaseline"
+        >
+          Save as baseline
+        </button>
+        <button
+          type="button"
+          class="compare-export-btn"
+          title="Z-score Trace A metrics against the stored baseline"
+          @click="onScoreBaseline"
+        >
+          Score vs baseline
         </button>
         </div>
         <div class="compare-footer-right">
@@ -548,6 +596,9 @@ import {
   buildSharedPatternCompareRows,
   downloadCompareCsv,
   downloadCompareHtml,
+  crossTraceTrends,
+  traceSummarySnapshot,
+  cursorRangeForCursors,
 } from '../utils/traceCompare.js'
 import { compareSummaryStrip } from '../utils/uxExplore.js'
 
@@ -559,7 +610,10 @@ const props = defineProps({
   analysisSettings: { type: Object, default: () => ({}) },
 })
 
-const emit = defineEmits(['close', 'query-ai', 'validate-experiment', 'compared'])
+const emit = defineEmits([
+  'close', 'query-ai', 'validate-experiment', 'compared',
+  'save-baseline', 'score-baseline',
+])
 
 function pickTabId(preferred, fallbackIndex) {
   const list = props.tabs || []
@@ -579,6 +633,7 @@ const pageTabs = [
   { id: 'sync', label: 'Sync' },
   { id: 'response', label: 'Response' },
   { id: 'mutex', label: 'Mutex' },
+  { id: 'trends', label: 'Trends' },
 ]
 
 const activePage = ref('summary')
@@ -639,6 +694,18 @@ const responseCompareRows = computed(() =>
   buildResponseCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value, deadlines.value))
 const mutexBlockCompareRows = computed(() =>
   buildMutexBlockCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value, deadlines.value))
+const trendRows = computed(() => {
+  const rows = []
+  for (const tab of props.tabs || []) {
+    if (!tab?.trace) continue
+    const range = scopeToCursors.value ? cursorRangeForCursors(tab.cursors) : { lo: null, hi: null }
+    rows.push({
+      name: tab.name,
+      snap: traceSummarySnapshot(tab.trace, range.lo, range.hi),
+    })
+  }
+  return crossTraceTrends(rows)
+})
 const sharedPatternRows = computed(() =>
   buildSharedPatternCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value, deadlines.value))
 
@@ -704,6 +771,14 @@ function onQueryAi() {
 
 function onValidateExperiment() {
   emit('validate-experiment', { idA: tabAId.value, idB: tabBId.value })
+}
+
+function onSaveBaseline() {
+  emit('save-baseline', tabAId.value)
+}
+
+function onScoreBaseline() {
+  emit('score-baseline', tabAId.value)
 }
 </script>
 

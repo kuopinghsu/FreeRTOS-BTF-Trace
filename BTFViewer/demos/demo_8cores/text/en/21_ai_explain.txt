@@ -1,1 +1,3 @@
-Explain region looks only at the cursor window — the inversion phase we already measured. The viewer puts those time bounds into the prompt so the model should not invent times outside the cursors. Click any jump link and check the axis: it must land between the two cursors. If it seeks elsewhere, call that out — that is why we verify every AI claim on the timeline.
+Next, explain one phase — not the whole stitched file. Place two cursors on the inversion window, three point zero eight five to three point three one zero, and enable Limit to C one through C n. Click Explain region. The viewer puts those bounds in the prompt, so every jump must land between the cursors. If a jump seeks elsewhere, reject that claim.
+
+When you are done, you can export a diagnostic report from the AI tab, or open Compare after a firmware change. That is the whole newbie loop: evidence first, Start Investigation, click every jump, then Explain region inside C one through C n.

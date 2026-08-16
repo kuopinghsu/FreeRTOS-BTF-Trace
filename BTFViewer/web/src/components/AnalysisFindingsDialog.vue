@@ -26,6 +26,10 @@
         Heuristic summary of load balance, WCET, blocking, thrashing, deadlines, tick health, and sync.
         Select a finding before Verify, Explain, or Auto investigate.
       </p>
+      <pre
+        v-if="dashboard.summary"
+        class="analysis-overview"
+      >{{ dashboard.summary }}</pre>
       <div class="analysis-body">
         <ul
           v-if="findings.length"
@@ -36,11 +40,12 @@
             :key="i"
             :class="[
               `sev-${f.severity || 'info'}`,
+              { 'sev-ok': f.id === 'load_balance_ok' },
               { selected: selectedId === (f.id || '') && (f.id || '') },
             ]"
             @click="selectedId = f.id || ''"
           >
-            <div class="finding-title">{{ f.title }}</div>
+            <div class="finding-title">{{ clusterPrefix(f) }}{{ f.title }}</div>
             <div class="finding-text">{{ f.text }}</div>
           </li>
         </ul>
@@ -69,12 +74,45 @@
             type="button"
             class="analysis-btn"
             :title="aiEnabled
+              ? 'Open the AI Assistant and walk through these Analysis Findings'
+              : 'Enable AI Assistant in Settings → AI'"
+            @click="emit('query-ai', 'findings')"
+          >
+            Query with AI…
+          </button>
+          <button
+            type="button"
+            class="analysis-btn"
+            :title="aiEnabled
               ? 'Open the AI Assistant and investigate the top findings with tools'
               : 'Enable AI Assistant in Settings → AI'"
             @click="emit('query-ai', 'investigate')"
           >
             Investigate…
           </button>
+          <button
+            type="button"
+            class="analysis-btn"
+            :title="aiEnabled
+              ? 'Open the AI Assistant and verify the selected finding with evidence'
+              : 'Enable AI Assistant in Settings → AI'"
+            @click="emit('query-ai', { template: 'verify', findingId: selectedId })"
+          >
+            Verify with AI…
+          </button>
+          <div class="analysis-explain-wrap">
+            <button
+              ref="explainBtn"
+              type="button"
+              class="analysis-btn"
+              :title="aiEnabled
+                ? 'Quick / Technical / Deep explanation of the selected finding'
+                : 'Enable AI Assistant in Settings → AI'"
+              @click.stop="toggleExplain"
+            >
+              Explain…
+            </button>
+          </div>
           <button
             type="button"
             class="analysis-btn"
@@ -89,44 +127,6 @@
             type="button"
             class="analysis-btn"
             :title="aiEnabled
-              ? 'Open the AI Assistant and verify the selected finding with evidence'
-              : 'Enable AI Assistant in Settings → AI'"
-            @click="emit('query-ai', { template: 'verify', findingId: selectedId })"
-          >
-            Verify with AI…
-          </button>
-          <div class="analysis-explain-wrap">
-            <button
-              type="button"
-              class="analysis-btn"
-              :title="aiEnabled
-                ? 'Quick / Technical / Deep explanation of the selected finding'
-                : 'Enable AI Assistant in Settings → AI'"
-              @click="explainOpen = !explainOpen"
-            >
-              Explain…
-            </button>
-            <div
-              v-if="explainOpen"
-              class="analysis-explain-menu"
-              role="menu"
-            >
-              <button
-                v-for="lv in explainLevels"
-                :key="lv.id"
-                type="button"
-                class="analysis-explain-item"
-                role="menuitem"
-                @click="explainFinding(lv.id)"
-              >
-                {{ lv.label }}
-              </button>
-            </div>
-          </div>
-          <button
-            type="button"
-            class="analysis-btn"
-            :title="aiEnabled
               ? 'Run the automatic investigate → correlate → critical-path → what-if/optimize workflow'
               : 'Enable AI Assistant in Settings → AI'"
             @click="emit('query-ai', { template: 'auto_investigate', findingId: selectedId })"
@@ -136,12 +136,18 @@
           <button
             type="button"
             class="analysis-btn"
-            :title="aiEnabled
-              ? 'Open the AI Assistant and walk through these Analysis Findings'
-              : 'Enable AI Assistant in Settings → AI'"
-            @click="emit('query-ai', 'findings')"
+            title="Save this finding set as a user investigation template"
+            @click="emit('save-recipe')"
           >
-            Query with AI…
+            Save recipe…
+          </button>
+          <button
+            type="button"
+            class="analysis-btn"
+            title="Export an analysis story from the overview and findings"
+            @click="emit('save-story')"
+          >
+            Story…
           </button>
         </div>
         <div class="analysis-footer-right">
@@ -163,12 +169,34 @@
         </div>
       </div>
     </div>
+    <Teleport to="body">
+      <div
+        v-if="explainOpen"
+        ref="explainMenuEl"
+        class="analysis-explain-menu"
+        role="menu"
+        :style="explainMenuStyle"
+        @click.stop
+      >
+        <button
+          v-for="lv in explainLevels"
+          :key="lv.id"
+          type="button"
+          class="analysis-explain-item"
+          role="menuitem"
+          @click="explainFinding(lv.id)"
+        >
+          {{ lv.label }}
+        </button>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { EXPLAIN_LEVELS } from '../utils/aiCase.js'
+import { analysisDashboard } from '../utils/aiPlanner.js'
 import { bestFindingScope } from '../utils/uxExplore.js'
 import { formatAnalysisFindingsText } from '../utils/workflowAnalysis.js'
 
@@ -179,12 +207,28 @@ const props = defineProps({
   uxEvents: { type: Array, default: () => [] },
   timeMin: { type: Number, default: 0 },
   timeMax: { type: Number, default: 0 },
+  qualityWarnings: { type: Array, default: () => [] },
 })
 
-const emit = defineEmits(['close', 'query-ai', 'apply-scope'])
+const emit = defineEmits(['close', 'query-ai', 'apply-scope', 'save-recipe', 'save-story'])
 
 const selectedId = ref('')
+const dashboard = computed(() =>
+  analysisDashboard(props.findings, { qualityWarnings: props.qualityWarnings }))
+
+function clusterPrefix(f) {
+  const id = String(f?.id || '')
+  const title = String(f?.title || '')
+  for (const inc of dashboard.value.clusters || []) {
+    if ((inc.finding_ids || []).includes(id) && id) return `[${inc.id}] `
+    if ((inc.findings || []).includes(title) && title) return `[${inc.id}] `
+  }
+  return ''
+}
 const explainOpen = ref(false)
+const explainBtn = ref(null)
+const explainMenuEl = ref(null)
+const explainMenuStyle = ref({})
 const explainLevels = EXPLAIN_LEVELS.map(id => ({
   id,
   label: `${id.charAt(0).toUpperCase()}${id.slice(1)}`,
@@ -210,11 +254,67 @@ function applyScope() {
   if (f) emit('apply-scope', f)
 }
 
+function placeExplainMenu() {
+  const btn = explainBtn.value
+  if (!btn) return
+  const r = btn.getBoundingClientRect()
+  const gap = 4
+  const spaceAbove = r.top
+  const spaceBelow = window.innerHeight - r.bottom
+  if (spaceAbove >= spaceBelow) {
+    explainMenuStyle.value = {
+      position: 'fixed',
+      left: `${Math.max(8, r.left)}px`,
+      bottom: `${window.innerHeight - r.top + gap}px`,
+      zIndex: 10100,
+    }
+  } else {
+    explainMenuStyle.value = {
+      position: 'fixed',
+      left: `${Math.max(8, r.left)}px`,
+      top: `${r.bottom + gap}px`,
+      zIndex: 10100,
+    }
+  }
+}
+
+function toggleExplain() {
+  explainOpen.value = !explainOpen.value
+  if (explainOpen.value) nextTick(placeExplainMenu)
+}
+
+function onDocMouseDown(ev) {
+  if (!explainOpen.value) return
+  const t = ev.target
+  if (explainBtn.value?.contains(t)) return
+  if (explainMenuEl.value?.contains(t)) return
+  explainOpen.value = false
+}
+
+function onDocKeyDown(ev) {
+  if (ev.key === 'Escape' && explainOpen.value) {
+    explainOpen.value = false
+    ev.preventDefault()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('mousedown', onDocMouseDown)
+  document.addEventListener('keydown', onDocKeyDown)
+  window.addEventListener('resize', placeExplainMenu)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('mousedown', onDocMouseDown)
+  document.removeEventListener('keydown', onDocKeyDown)
+  window.removeEventListener('resize', placeExplainMenu)
+})
+
 function explainFinding(level) {
   explainOpen.value = false
   emit('query-ai', {
     template: 'explain_finding',
-    findingId: selectedId.value,
+    findingId: selectedId.value || selectedFinding.value?.id || '',
     level,
   })
 }
@@ -293,6 +393,18 @@ function saveAsText() {
   color: var(--fg-dim);
 }
 
+.analysis-overview {
+  margin: 0 16px 8px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12px;
+  white-space: pre-wrap;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(52, 152, 219, 0.08);
+}
+
 .analysis-body {
   flex: 1 1 auto;
   overflow: auto;
@@ -326,13 +438,13 @@ function saveAsText() {
 }
 
 .finding-text {
-  opacity: 0.92;
   line-height: 1.45;
 }
 
-.analysis-list .sev-warning { color: #d68910; }
-.analysis-list .sev-error { color: #c0392b; }
+.analysis-list .sev-warning { color: var(--analysis-warn); }
+.analysis-list .sev-error { color: var(--analysis-err); }
 .analysis-list .sev-info { color: var(--fg); }
+.analysis-list .sev-ok { color: var(--analysis-ok); }
 
 .analysis-empty {
   font-size: 13px;
@@ -383,10 +495,6 @@ function saveAsText() {
 }
 
 .analysis-explain-menu {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 4px);
-  z-index: 40;
   min-width: 128px;
   padding: 4px;
   border: 1px solid var(--border);

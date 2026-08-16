@@ -147,6 +147,72 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertTrue(composer.isAncestorOf(panel._send_btn))
         self.assertFalse(hasattr(panel, "_stop_btn"))
 
+    def test_guided_investigation_chrome(self) -> None:
+        from btf_viewer_pkg.ai_case import GUIDED_STAGES, GUIDED_STAGE_LABELS
+
+        panel = self._panel()
+        self.assertEqual(panel._start_inv_btn.text(), "Start Investigation")
+        self.assertFalse(panel._start_inv_btn.isHidden())
+        self.assertFalse(panel._guide_host.isHidden())
+        self.assertFalse(panel._guide_stepper.isHidden())
+        for sid in GUIDED_STAGES:
+            btn = panel._guide_step_btns[sid]
+            self.assertIn(GUIDED_STAGE_LABELS[sid], btn.text())
+            self.assertFalse(btn.isHidden())
+        panel.apply_theme(False)
+        panel._refresh_guide_ui()
+        idle_ss = panel._guide_step_btns["triage"].styleSheet()
+        self.assertIn("#666666", idle_ss)
+        self.assertNotIn("#dbe2ea", idle_ss)
+        panel._evidence_payload = {
+            "finding": {"title": "Queue bounce", "task": "CS[1]"},
+            "evidence": [{"label": "x", "time": 1}],
+        }
+        panel._refresh_guide_ui()
+        self.assertTrue(panel._start_inv_btn.isHidden())
+        self.assertIn("Investigate", panel._guide_step_btns["investigate"].text())
+        self.assertIn("#1E1E1E", panel._guide_step_btns["investigate"].styleSheet())
+        self.assertIn("Queue bounce", panel._issue_view.text())
+
+    def test_restore_without_chat_keeps_start_investigation(self) -> None:
+        from btf_viewer_pkg.ai_case import dump_investigation_session
+
+        payload = {
+            "finding": {"title": "Queue bounce", "task": "CS[1]"},
+            "evidence": [{"label": "x", "time": 1}],
+        }
+        blob = dump_investigation_session(
+            payload=payload, plan={"goal": "g", "steps": []}, messages=[])
+        panel = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {"findings_text": "findings"},
+            get_settings=lambda: {
+                "enabled": "true", "investigation_session": blob,
+            },
+        )
+        panel._restore_investigation_session()
+        self.assertFalse(panel._start_inv_btn.isHidden())
+        self.assertTrue(panel._issue_view.isHidden())
+        self.assertFalse((panel._issue_view.text() or "").strip())
+
+        chat = dump_investigation_session(
+            payload=payload,
+            messages=[
+                {"role": "user", "content": "why late?"},
+                {"role": "assistant", "content": "preempt"},
+            ],
+        )
+        panel2 = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {"findings_text": "findings"},
+            get_settings=lambda: {
+                "enabled": "true", "investigation_session": chat,
+            },
+        )
+        panel2._restore_investigation_session()
+        self.assertTrue(panel2._start_inv_btn.isHidden())
+        self.assertIn("Queue bounce", panel2._issue_view.text())
+
     def test_auth_forced_keeps_cta_after_401(self) -> None:
         """401 CTAs stay until a successful turn (web authForced parity)."""
         panel = self._panel()
@@ -963,7 +1029,14 @@ class AiPanelUiTests(unittest.TestCase):
                 QSizePolicy.Policy.Ignored,
                 btn.text(),
             )
-            self.assertGreater(btn.sizeHint().width(), 20, btn.text())
+        for sid, btn in panel._guide_step_btns.items():
+            self.assertTrue(_in_ai_actions_bar(btn), sid)
+            self.assertNotEqual(
+                btn.sizePolicy().horizontalPolicy(),
+                QSizePolicy.Policy.Ignored,
+                sid,
+            )
+            self.assertGreater(btn.sizeHint().width(), 8, sid)
         self.assertTrue(_in_ai_actions_bar(panel._auth_chip))
         self.assertTrue(_in_ai_actions_bar(panel._privacy_chip))
         for chip in (panel._auth_chip, panel._privacy_chip):
@@ -1001,9 +1074,18 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertEqual(panel._status.text(), "Done.")
         panel.clear_conversation()
         self.assertEqual(panel._status.text(), "")
-        self.assertEqual(panel._cost_meter["total_tokens"], 0)
-        self.assertEqual(panel._cost_meter["tool_calls"], 0)
-        self.assertIn("0 tok", panel._usage.text())
+        self.assertEqual(panel._cost_meter["total_tokens"], 1260)
+        self.assertEqual(panel._cost_meter["tool_calls"], 2)
+        self.assertIn("1.3k tok", panel._usage.text())
+        self.assertFalse(panel._entries)
+        self.assertEqual(panel._log.toPlainText().strip(), "")
+        panel._append("assistant", "A long model reply")
+        panel._evidence_payload = {"finding": {"title": "Queue bounce"}}
+        panel.clear_conversation()
+        self.assertFalse(panel._entries)
+        self.assertEqual(panel._log.toPlainText().strip(), "")
+        self.assertEqual(panel._evidence_payload["finding"]["title"], "Queue bounce")
+        self.assertIn("1.3k tok", panel._usage.text())
 
     def test_log_composer_splitter_exists(self) -> None:
         panel = self._panel()

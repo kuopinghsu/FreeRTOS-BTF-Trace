@@ -7915,8 +7915,9 @@ tbody tr:nth-child(even) td { background: var(--stripe); }
 .detail-note { margin: 6px 0 8px; font-size: 12px; color: var(--muted); }
 h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }
 .sev-error { color: #c0392b; font-weight: 600; }
-.sev-warning { color: #d68910; font-weight: 600; }
-.finding-info { color: var(--ink); }
+.sev-warning { color: #9a4d00; font-weight: 600; }
+.finding-info { color: var(--ink, var(--fg, #182230)); }
+.finding-ok { color: #166534; font-weight: 600; }
 .findings-list { margin: 8px 0 0 18px; padding: 0; }
 .findings-list li { margin: 8px 0; line-height: 1.45; }
 .finding-wf {

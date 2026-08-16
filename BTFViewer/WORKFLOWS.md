@@ -51,13 +51,13 @@ Use this when you open an unknown trace.
 |---:|---|---|
 | 1 | Open the trace and press `Ctrl+0` / **Fit** | Confirm the whole capture is visible |
 | 2 | Turn on **Load** and switch between **Task** / **Core** view | Understand overall activity |
-| 3 | Open **Statistics** and toolbar **Analysis** | Get measured summary + severity-tagged findings |
+| 3 | Open **Statistics** and toolbar **Analysis** | Overview (quality, incident clusters, phase window) plus severity-tagged findings |
 | 4 | Read **Trace Health (TICK)** first | Bad or tickless timebase changes how timing should be interpreted |
 | 5 | Open only the Statistics sections named by Analysis | Avoid chasing every table |
 | 6 | Click **Max**, **p95**, a table row, chart point, or heatmap cell | Jump to the actual timeline evidence |
 | 7 | Place C1–Cn cursors around the phase and enable **Limit to C1–Cn** | Remove unrelated phases from the numbers |
 | 8 | Re-read Analysis and Statistics inside that scope | Confirm the issue is still present |
-| 9 | Use **Investigate…**, **Verify with AI…**, or **Explain region** | Ask AI to explain evidence, not invent it |
+| 9 | Use **Start Investigation**, **Investigate…**, **Verify with AI…**, or **Explain region** (`Ctrl+K` opens Analysis / AI / workspace presets / Inspect task) | Ask AI to explain evidence, not invent it |
 | 10 | Export HTML or run **Trace Compare** after a fix | Keep a record and validate improvement |
 
 ### Stop rule
@@ -141,7 +141,7 @@ Mixed traces often contain setup, stress tests, sleeps, and teardown. Whole-trac
 
 | Signal | Meaning | Next |
 |---|---|---|
-| Load Balance Score ≥ 85% and σ ≤ 30% | Generally balanced | Continue to CPU / latency |
+| Load Balance Score ≥ 85% and σ ≤ 30% | Generally balanced (**Analysis** still shows Score/σ/G; “reasonably balanced”) | Continue to CPU / latency |
 | Score < 70% | Imbalance likely | Check Affinity and Task × Core |
 | σ > 30% | Utilization spread is high | Check Core Time Breakdown |
 | One core hot, others idle | Work may be pinned | Check Core Affinity |
@@ -297,9 +297,10 @@ A fix is not validated until a second trace proves it.
 | **Preemption** | Whether interference improved |
 | **Sync / Mutex** | Holds, issues, bounces |
 | **Response** | Heuristic P99 signal |
+| **Trends** | All open tabs (3+): load balance, migrations, tick health |
 | **Deadline misses** | Pass/fail thresholds |
 
-**Comparison rule:** use equivalent workload phases. Place cursors in both traces and enable compare cursor scope when needed.
+**Comparison rule:** use equivalent workload phases. Place cursors in both traces and enable compare cursor scope when needed. **Save as baseline** on Trace A, then **Score vs baseline** after a recapture.
 
 ---
 
@@ -314,16 +315,16 @@ Use AI when:
 
 | AI action | Best use |
 |---|---|
-| **Triage findings** | Summarize top issues |
-| **Investigate…** | Rank hypotheses and gather evidence |
-| **Root cause…** | Walk the top finding through related metrics |
-| **Verify with AI…** | Confirm or reject a selected finding |
+| **Triage findings** / **Analysis Findings** | Summarize top issues |
 | **Explain region** | Explain a cursor-scoped phase |
-| **Auto investigate…** | Tool-driven drill-down |
+| **Investigate…** | Rank hypotheses and gather evidence |
+| **Verify with AI…** | Confirm or reject a selected finding |
+| **Root cause…** | Walk the top finding through related metrics |
+| **Start Investigation** / **Auto investigate…** | Empty AI log (also after restart with no user/assistant turn) or full tool-driven drill-down |
 | **What-if / Optimize** | Estimate possible experiments |
 | **Diagnostic report** | Write a structured summary |
 
-**Trust rule:** click every `jump:TIME` and verify it on the timeline. Treat What-if / Optimize as estimates, not measured results.
+**Trust rule:** click every `jump:TIME` and verify it on the timeline. Treat What-if / Optimize as estimates, not measured results. After **Clear**, investigation evidence stays in the session (the **Current Issue** card may remain). Restart does not restore **Current Issue** unless the log still has a user or assistant turn — **Start Investigation** stays available.
 
 ---
 
@@ -420,16 +421,8 @@ Find issue → define expected improvement → change firmware/config
 | Need | Read |
 |---|---|
 | Basic UI, demo, settings, export | [`README.md`](README.md) |
+| API keys | [`README.md#ai-api-keys`](README.md#ai-api-keys) |
 | Metric definitions and formulas | [`STATISTICS.md`](STATISTICS.md) |
 | AI setup, model choice, tools, validator | [`AI.md`](AI.md) |
 | Repeatable practical diagnosis | This document |
-
----
-
-## Appendix — names kept in sync with the apps
-
-Statistics pages (export / Analysis / AI templates): **Task × Core**, **Task Health**, **Timeline Anomalies**, **Worst Events**, **Period / Jitter**, **Waiter × Owner**, **Response Time**, **Critical Path**, **Unified Jitter**, **Recurring Patterns**, **Preemption Matrix**, **Mutex Blocking**, **Core Utilization Over Time**.
-
-AI after evidence: **Auto investigate…**, `find_critical_path`, `bookmark_finding`, `export_investigation`, `query_raw_metric`, `add_annotation`, `export_report`, `search_timeline`, `trigger_compare`, `clear_marks`, `reset_view`. Toolbar crop / **File → Save selection as BTF…**. Demo: [README.md#demo](README.md#demo).
-
-Keys: `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY` (`OPENAI_API_KEY`, then `GEMINI_API_KEY`, then `OLLAMA_API_KEY`). See [README.md#ai-api-keys](README.md#ai-api-keys). **Allow self-signed TLS**. Gemini HTTP 400 `thought_signature`. Import `ollama.json`, `gemini.json`, `openai.json`, `deepseek.json`, `grok.json`, `presets.json`. 401 keeps Sign in / Settings CTAs; open the Model dropdown to pick a served id. Local default `qwen3.5:9b`. Templates **Triage findings** triage overall findings.
+| Guided walkthrough | [`README.md#demo`](README.md#demo) |

@@ -87,6 +87,37 @@ export const STATS_HEAVY_SECTIONS = [
   'task_health',
 ]
 export const STATS_DEFAULT_EXPANDED_SECTIONS = ['cores', 'health']
+export const COMMAND_PALETTE_ACTIONS = [
+  ['analysis', 'Analysis Findings'],
+  ['statistics', 'Statistics'],
+  ['find', 'Find'],
+  ['marks', 'Marks'],
+  ['ai', 'AI Assistant'],
+  ['compare', 'Trace Compare'],
+  ['heatmap', 'Migration heatmap'],
+  ['settings', 'Settings'],
+  ['limit-scope', 'Limit to C1–Cn'],
+  ['fit', 'Zoom fit'],
+  ['inspect-task', 'Inspect task'],
+  ['preset-triage', 'Workspace: Triage'],
+  ['preset-latency', 'Workspace: Latency'],
+  ['preset-smp', 'Workspace: SMP'],
+  ['preset-compare', 'Workspace: Compare'],
+]
+export const WORKSPACE_PRESETS = {
+  'preset-triage': ['health', 'anomalies', 'worst', 'task_health'],
+  'preset-latency': ['exec', 'response', 'jitter', 'period', 'dispatch'],
+  'preset-smp': ['migrations', 'core_pairs', 'affinity', 'task_core', 'cores'],
+  'preset-compare': [],
+}
+
+export function workspacePresetCollapsed(presetId, defaults) {
+  const flags = { ...(defaults || {}) }
+  for (const sid of WORKSPACE_PRESETS[String(presetId || '')] || []) {
+    if (sid in flags) flags[sid] = false
+  }
+  return flags
+}
 
 /** Help under each Statistics section title. Keep lockstep with config.py STATS_SECTION_HELP. */
 export const STATS_SECTION_HELP = Object.freeze({

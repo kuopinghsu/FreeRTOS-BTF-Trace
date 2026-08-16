@@ -357,6 +357,47 @@ export function bestFindingScope(finding, events, timeMin, timeMax) {
   }
 }
 
+export function findingOverlayTimes(findings, limit = 80) {
+  const times = []
+  const seen = new Set()
+  for (const finding of findings || []) {
+    if (!finding || typeof finding !== 'object') continue
+    for (const ev of finding.evidence || []) {
+      if (!ev || typeof ev !== 'object') continue
+      for (const key of ['time', 'start', 'stop']) {
+        const t = Number(ev[key])
+        if (!Number.isFinite(t) || seen.has(t)) continue
+        seen.add(t)
+        times.push(t)
+      }
+    }
+    const blob = `${finding.title || ''} ${finding.text || ''}`
+    JUMP_RE.lastIndex = 0
+    let jm
+    while ((jm = JUMP_RE.exec(blob))) {
+      const t = Number(jm[1])
+      if (!Number.isFinite(t) || seen.has(t)) continue
+      seen.add(t)
+      times.push(t)
+    }
+    if (times.length >= limit) break
+  }
+  return times.slice(0, limit)
+}
+
+export function taskInspectorLine(task = '', qualityWarnings = []) {
+  const name = String(task || '').trim()
+  const parts = [name ? `Task ${name}` : 'No task selected']
+  for (const q of qualityWarnings || []) {
+    const text = String(q || '').trim()
+    if (text) {
+      parts.push(text.slice(0, 96))
+      break
+    }
+  }
+  return parts.join(' · ')
+}
+
 export function parseSignedDelta(text) {
   const s = String(text ?? '').trim().replace(/−/g, '-')
   if (!s || s === '—' || s === '–' || s === '-') return null

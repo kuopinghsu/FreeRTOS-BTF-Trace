@@ -1,14 +1,14 @@
 # FreeRTOS-BTF-Trace — Trace Format Reference
 
-This document defines the on-disk `trace.bin` layout, event encoding, BTF export mapping, and trace-quality metadata.
+Reference for the on-disk `trace.bin` layout, event encoding, BTF mapping, and trace-quality metadata.
 
-| Need | Read |
+| Document | Contents |
 |---|---|
-| Build, demo, viewing | [README.md](README.md) |
-| Integrating on a target | [PORTING.md](PORTING.md) |
-| C structures and `event_t` | `FreeRTOS-Trace/btf_trace.h` |
+| [README.md](README.md) | Build, demo, and viewing |
+| [PORTING.md](PORTING.md) | Target integration |
+| `FreeRTOS-Trace/btf_trace.h` | C structures and `event_t` definitions |
 
-## 1. Format overview
+## 1. File layout
 
 `traceEND()` writes one little-endian binary blob:
 
@@ -30,7 +30,7 @@ Total size:
 44 + max_tasks × max_taskname_len + max_events × 16
 ```
 
-Values are initialized at `traceSTART()` from:
+The size fields are set by `traceSTART()` from:
 
 | Binary field | Configuration |
 |---|---|
@@ -59,8 +59,6 @@ The header is **44 bytes**, little-endian.
 ## 3. Task-name table
 
 Each slot stores a NUL-terminated task name.
-
-Important rules:
 
 - The slot index is the FreeRTOS **task id** (`uxTCBNumber`).
 - It is **not** a dense `0…N−1` index.
@@ -97,8 +95,6 @@ Events append at:
 current_index % max_events
 ```
 
-Replay rules:
-
 ```text
 event_count < max_events
     → replay event 0 … event_count-1
@@ -111,11 +107,7 @@ event_count == max_events
 
 After the ring wraps, new events overwrite the oldest and `event_count` remains equal to `max_events`.
 
-Export then reports:
-
-```text
-#ringOverflow true
-```
+The export contains `#ringOverflow true` after a wrap.
 
 ## 6. Timestamp reconstruction
 
@@ -145,11 +137,7 @@ A BTF export starts with normal BTF metadata and may add trace-quality flags.
 | `#taskTableOverflow true` | At least one task id had no task-name slot |
 | `#truncated true` | `traceEND()` was not called, or `trace.bin` is shorter than a complete blob |
 
-A clean trace omits these lines.
-
-These flags are inferred during export; they are not fields in the 44-byte binary header.
-
-BTF Viewer shows a warning banner when any flag is present.
+A clean trace omits these lines. The flags are inferred during export and are not stored in the 44-byte binary header. BTF Viewer shows a warning banner when any flag is present.
 
 ## 8. Binary → BTF conversion
 
@@ -164,9 +152,7 @@ BTF Viewer shows a warning banner when any flag is present.
 #timeScale us
 ```
 
-Optional quality metadata follows.
-
-A synthetic clock line is then emitted for each core:
+Quality metadata, when present, follows the header. A synthetic clock line is emitted for each core:
 
 ```text
 <t>,Core_0,0,C,Core_0,0,set_frequency,<core_clock>
@@ -262,7 +248,7 @@ with a zero-padded four-digit task id, for example:
 
 ## 12. Decoder sanity checks
 
-A decoder should validate in roughly this order:
+Decoder checks:
 
 ```text
 1. Magic == BTF2

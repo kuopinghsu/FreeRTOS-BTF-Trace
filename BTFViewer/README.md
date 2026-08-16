@@ -353,7 +353,7 @@ Viewer analysis stays on **BTF → statistics → visualization → comparison**
 <a id="analysis-findings" name="analysis-findings">&#x200B;</a>
 ### Analysis Findings ![](../images/readme/h3.svg)
 
-Toolbar **Analysis** summarises likely issues for the current scope (load imbalance, WCET/CPU hotspots, blocking, priority inversion, core thrashing, deadline breaches, tick health, sync/mutex bounces, and similar). From the dialog: **Investigate…** runs an evidence-driven drill-down (tools + cursors), **Root cause…** follows the deadline→blocking→mutex chain for the top finding, **Verify with AI…** / **Auto investigate…** act on the selected finding, **Query with AI…** walks the findings card, **Apply cursors** places C1–C2 on a recommended window for the selected finding, or **Save as Text…** for a copy. The same card appears in **Export HTML**.
+Toolbar **Analysis** summarises likely issues for the current scope (load imbalance, WCET/CPU hotspots, blocking, priority inversion, core thrashing, deadline breaches, tick health, sync/mutex bounces, and similar). On traces with **two or more cores** and positive total utilisation, a **Core utilisation balance** finding always includes **Load Balance Score …% (σ=…%, G=…)** — Desktop and Web match, including when cores look **reasonably balanced** (Score ≥ 85% and σ ≤ 30%). Finding ink follows dark/light theme (info is not forced to dark-on-dark). The dialog opens with an **overview**: trace-quality warnings, related findings grouped as incident clusters (`[I1]`, `[I2]`, …), and a suggested phase window. Finding times are drawn as dashed overlays on the timeline. From the dialog, left to right: **Query with AI…** walks the findings card, **Investigate…** runs an evidence-driven drill-down (tools + cursors), **Verify with AI…** checks the selected finding, **Explain…** / **Root cause…** go deeper, **Auto investigate…** runs the full tool chain, **Save recipe…** stores a user investigation template, **Story…** exports the overview plus findings, **Apply cursors** places C1–C2 on a recommended window for the selected finding, or **Save as Text…** for a copy. The same card appears in **Export HTML**. **Ctrl+K** jumps to Analysis, workspace presets (Triage / Latency / SMP / Compare), Inspect task, and other surfaces without extra toolbar buttons. The status bar inspector shows the pinned task and the first trace-quality warning.
 
 **How to act on a finding**
 
@@ -361,7 +361,7 @@ Toolbar **Analysis** summarises likely issues for the current scope (load imbala
 2. Open that section, sort by Max / Rate / Bounce as relevant.
 3. Click **Min** / **Max** / **p95** / **p99**, a chart point, or an inspector cell to jump the timeline. Or click **Apply cursors** on the selected finding.
 4. Place cursors around the phase of interest and enable **Limit to C1–Cn**.
-5. Optionally click **Investigate…** / **Root cause…** / **Verify with AI…** / **Auto investigate…** / **Query with AI…** (or open the **AI** tab) ([WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow)).
+5. Optionally click **Query with AI…** / **Investigate…** / **Verify with AI…** / **Explain…** / **Root cause…** / **Auto investigate…** (or open the **AI** tab) ([WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow)).
 
 <a id="how-to-find-problems-quick-map" name="how-to-find-problems-quick-map">&#x200B;</a>
 ### How to find problems (quick map) ![](../images/readme/h3.svg)
@@ -383,7 +383,7 @@ Toolbar **Analysis** summarises likely issues for the current scope (load imbala
 <a id="trace-compare" name="trace-compare">&#x200B;</a>
 ### Trace Compare ![](../images/readme/h3.svg)
 
-With **two or more** tabs open, toolbar **Compare** (right after **Analysis**) diffs summary, top tasks, utilisation, migrations, execution, blocking, inter-arrival, preemption, sync, **Response P99**, and **mutex blocking**. The summary strip includes those latency/blocking deltas plus **deadline-miss** counts from **Settings → Display** task deadlines, a deterministic **Why?**, and shared recurring patterns. Optionally limit each side to its own cursor range. Export CSV/HTML from the dialog, **Validate experiment…** to score expected vs actual deltas in the **AI** tab (`validate_experiment`; actual percents come from this compare, including **Scope to cursors**), or **Query with AI…** to walk the same tables (Trace Compare template). See also [Core migration analysis](#core-migration-analysis) below.
+With **two or more** tabs open, toolbar **Compare** (right after **Analysis**) diffs summary, top tasks, utilisation, migrations, execution, blocking, inter-arrival, preemption, sync, **Response P99**, and **mutex blocking**. The **Trends** page lists every open tab (3+) with span, migrations, load-balance, and tick health. The summary strip includes those latency/blocking deltas plus **deadline-miss** counts from **Settings → Display** task deadlines, a deterministic **Why?**, and shared recurring patterns. Optionally limit each side to its own cursor range. **Save as baseline** / **Score vs baseline** store and z-score Trace A metrics (same profile as `baseline_score`). Export CSV/HTML from the dialog, **Validate experiment…** to score expected vs actual deltas in the **AI** tab (`validate_experiment`; actual percents come from this compare, including **Scope to cursors**), or **Query with AI…** to walk the same tables (Trace Compare template). See also [Core migration analysis](#core-migration-analysis) below.
 
 ---
 
@@ -415,7 +415,7 @@ Recapture → Trace Compare → Validate
 
 | Goal | Start here | Detailed guide |
 |---|---|---|
-| Triage a trace | **Analysis → Investigate…** | [WORKFLOWS.md](WORKFLOWS.md) |
+| Triage a trace | **Analysis → Query with AI…** | [WORKFLOWS.md](WORKFLOWS.md) |
 | Explain or verify a finding | Select a finding → **Explain… / Verify with AI…** | [AI.md](AI.md) |
 | Investigate a time region | Place ≥2 cursors → **Explain this region with AI** | [WORKFLOWS.md](WORKFLOWS.md) |
 | Compare before / after | **Trace Compare** → **Query with AI…** | [WORKFLOWS.md](WORKFLOWS.md) |
@@ -442,7 +442,7 @@ Same panel on **Desktop** and **Web**. Findings can include WCET **Max≫Avg** s
 <a id="ai-troubleshooting" name="ai-troubleshooting">&#x200B;</a>
 <a id="ai-developer-cli" name="ai-developer-cli">&#x200B;</a>
 
-Product entry points stay here; the system reference is **[AI.md](AI.md)**. **Triage findings**, **Verify finding**, **Auto investigate**, and the **Investigation plan** checklist live in the AI tab. **Cheapest evidence first** (planner). Keys: Settings → AI → API key first, then `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY` (`OPENAI_API_KEY`, then `GEMINI_API_KEY`, then `OLLAMA_API_KEY`). Local Ollama needs none. Web can inject the same names via `window.__BTF_AI_ENV__`. `CURSOR_API_KEY` is for live `ai-test` XML `<api-key env="VAR">` and is ignored for chat / Test connection. CLI: [AI.md → CLI regression gate](AI.md#cli-regression-gate).
+Product entry points stay here; the system reference is **[AI.md](AI.md)**. The AI tab shows a Triage → Scope → Investigate → Verify → Experiment → Compare stepper (click a stage to jump in the log). **Start Investigation** (empty log) runs **Auto investigate**. Restart restores an in-progress case only when the log still has a user or assistant turn; otherwise **Start Investigation** stays available and a leftover **Current Issue** card is not restored. **Clear** removes chat replies and keeps the usage meter and investigation evidence. What-if stays on **Verify** until verify tools or strong evidence quality; Experiment is labeled as a heuristic estimate (recapture and Compare to measure). **Triage findings**, **Verify finding**, **Auto investigate**, and the **Investigation plan** checklist live in the same tab. **Cheapest evidence first** (planner). Keys: Settings → AI → API key first, then `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY` (`OPENAI_API_KEY`, then `GEMINI_API_KEY`, then `OLLAMA_API_KEY`). Local Ollama needs none. Web can inject the same names via `window.__BTF_AI_ENV__`. `CURSOR_API_KEY` is for live `ai-test` XML `<api-key env="VAR">` and is ignored for chat / Test connection. CLI: [AI.md → CLI regression gate](AI.md#cli-regression-gate).
 
 ## Statistics ![](../images/readme/h2.svg)
 
@@ -561,6 +561,7 @@ Shortcuts marked **(W)** are Web-only. Others work on Desktop and Web. On Web, p
 | `Ctrl+0` / `F` | Fit to window |
 | `Ctrl+R` | Zoom to cursor range (earliest–latest cursor) |
 | `Ctrl+,` | Settings |
+| `Ctrl+K` | Command palette (Analysis, Statistics, AI, Compare, workspace presets, Inspect task, …) |
 | `G` / `I` / `D` | Grid / STI / theme |
 | `1` / `2` **(W)** | Task View / Core View |
 | `H` / `V` **(W)** | Horizontal / vertical layout |
@@ -636,7 +637,7 @@ Day-to-day users can ignore this section.
 | Docs PDF | `make -C BTFViewer doc` → `builds/{README,AI,WORKFLOWS,btf-viewer-slides}.pdf` |
 | Dev run (Desktop) | `python -m btf_viewer_pkg [trace.btf]` from `BTFViewer/` |
 
-Edit sources under `btf_viewer_pkg/` and `web/`; commit regenerated files under `builds/` with your changes. Keep AI tool schemas and mermaid layout in sync (`ai_tools.py` / `ai_mermaid.py` ↔ `web/src/utils/aiTools.js` / `aiMermaid.js`). Parser and Statistics numbers are pinned by shared goldens (`tests/fixtures/*-golden.json`) asserted from both `tests/test_parser_golden.py` / `tests/test_stats_web_parity.py` and `web/tests/`. Synthetic traces: `scripts/gen_trace.py --help`. BTF field reference: [`TRACE_FORMAT.md`](../TRACE_FORMAT.md). Live suite XML: [AI.md → Benchmark / evaluation suite](AI.md#benchmark-suite). Recorded scores: [`AI_BENCHMARK.md`](AI_BENCHMARK.md).
+Edit sources under `btf_viewer_pkg/` and `web/`; commit regenerated files under `builds/` with your changes. Keep AI tool schemas and mermaid layout in sync (`ai_tools.py` / `ai_mermaid.py` ↔ `web/src/utils/aiTools.js` / `aiMermaid.js`; `mermaid_palette(is_dark)` ↔ `mermaidPalette(dark)`). Parser and Statistics numbers are pinned by shared goldens (`tests/fixtures/*-golden.json`) asserted from both `tests/test_parser_golden.py` / `tests/test_stats_web_parity.py` and `web/tests/`. Synthetic traces: `scripts/gen_trace.py --help`. BTF field reference: [`TRACE_FORMAT.md`](../TRACE_FORMAT.md). Live suite XML: [AI.md → Benchmark / evaluation suite](AI.md#benchmark-suite). Recorded scores: [`AI_BENCHMARK.md`](AI_BENCHMARK.md).
 
 ---
 

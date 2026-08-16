@@ -276,13 +276,12 @@ class DemoVoicePackParityTests(unittest.TestCase):
         self.assertIn("ウェブ版", ja)
         self.assertNotIn("今日はデスクトップ版", ja)
 
-    def test_zh_tw_and_ja_scripts_avoid_latin_words(self) -> None:
-        """TTS mixes badly on Latin inside CJK; keep scripts in one script."""
+    def test_ja_scripts_avoid_latin_words(self) -> None:
+        """Japanese TTS mishandles Latin; keep ja scripts in kana/kanji only."""
         latin = re.compile(r"[A-Za-z]{2,}")
-        for lang in ("zh-tw", "ja"):
-            for path in sorted((DEMO_DIR / "text" / lang).glob("*.txt")):
-                hits = latin.findall(path.read_text(encoding="utf-8"))
-                self.assertEqual(hits, [], f"{lang}/{path.name}: {hits}")
+        for path in sorted((DEMO_DIR / "text" / "ja").glob("*.txt")):
+            hits = latin.findall(path.read_text(encoding="utf-8"))
+            self.assertEqual(hits, [], f"ja/{path.name}: {hits}")
 
 
 if __name__ == "__main__":

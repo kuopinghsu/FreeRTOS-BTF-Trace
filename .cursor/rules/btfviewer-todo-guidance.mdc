@@ -1,0 +1,14 @@
+---
+description: BTFViewer AI_TODO / UI / product TODO files are temporary guidance
+alwaysApply: true
+---
+
+# Temporary TODO guidance files
+
+`BTFViewer/AI_TODO.md`, `BTFViewer/BTFViewer_TODO.md`, and `BTFViewer/BTFViewer_UI.md` are **working TODO lists**, not product docs.
+
+- Keep them as **remaining work only** (no long “shipped” history).
+- When a remaining item is done: **sync the behavior into** `README.md`, `AI.md`, `WORKFLOWS.md`, and/or `STATISTICS.md` (Desktop/Web lockstep). Do not leave the only description in a TODO file.
+- After **all remaining items** in a file are done and synced, **delete that TODO file**.
+- Do not cite these files from user-facing docs or tests.
+- Investigation chrome stays in the **AI tab**; do not add tools/templates for TODO items.

@@ -290,6 +290,7 @@ export function clusterFindings(findings = []) {
       root_suspect: taskOf(members[0]),
       patterns: [...pats].sort(),
       findings: members.map((m) => String(m.title || m.id || '')),
+      finding_ids: members.map((m) => String(m.id || '')),
       count: members.length,
     })
   }
@@ -298,6 +299,51 @@ export function clusterFindings(findings = []) {
     message: `${incidents.length} incident cluster(s) from ${list.length} findings`,
     incidents,
   }
+}
+
+export function analysisDashboard(findings = [], { qualityWarnings = [] } = {}) {
+  const list = items(findings)
+  const clustered = clusterFindings(list)
+  const scoped = suggestScope('', list)
+  const errors = list.filter((f) => String(f.severity || '') === 'error').length
+  const warns = list.filter((f) => String(f.severity || '') === 'warning').length
+  const quality = (qualityWarnings || []).map((q) => String(q || '').trim()).filter(Boolean)
+  const lines = []
+  if (quality.length) lines.push(`Trace quality: ${quality.slice(0, 3).join('; ')}`)
+  else lines.push('Trace quality: no integrity warnings.')
+  lines.push(`Top issues: ${errors} error, ${warns} warning, ${list.length} finding(s).`)
+  if (clustered.message) lines.push(clustered.message)
+  for (const inc of clustered.incidents || []) {
+    const titles = inc.findings || []
+    lines.push(
+      `${inc.id}: ${inc.root_suspect || 'mixed'} (${inc.count} related) — ${titles[0] || ''}`,
+    )
+  }
+  if (scoped.time_lo != null) lines.push(`Phase window: ${scoped.reason}`)
+  return {
+    ok: true,
+    summary: lines.filter(Boolean).join('\n'),
+    clusters: clustered.incidents || [],
+    quality,
+    scope: scoped,
+    errors,
+    warnings: warns,
+  }
+}
+
+export function formatAnalysisStory(findings = [], { qualityWarnings = [], scopeTitle = '' } = {}) {
+  const dash = analysisDashboard(findings, { qualityWarnings })
+  const lines = [`Analysis story${String(scopeTitle || '').trim()}`]
+  if (dash.summary) lines.push(dash.summary)
+  lines.push('')
+  items(findings).forEach((f, i) => {
+    const title = String(f.title || 'Finding').trim()
+    const sev = String(f.severity || 'info').trim()
+    const text = String(f.text || '').trim()
+    lines.push(`${i + 1}. [${sev}] ${title}`)
+    if (text) lines.push(`   ${text}`)
+  })
+  return `${lines.filter(l => l != null).join('\n').trim()}\n`
 }
 
 export function generateFingerprint(findings = [], { metrics = {} } = {}) {

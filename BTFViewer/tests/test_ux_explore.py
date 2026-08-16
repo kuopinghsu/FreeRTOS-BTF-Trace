@@ -103,6 +103,18 @@ class UxExploreTest(unittest.TestCase):
         self.assertGreaterEqual(scope["hi"], 1200)
         self.assertEqual(scope["section"], "exec")
 
+    def test_finding_overlay_and_inspector(self) -> None:
+        from btf_viewer_pkg.ux_explore import finding_overlay_times, task_inspector_line
+        times = finding_overlay_times([{
+            "title": "A[1]",
+            "text": "at jump:42",
+            "evidence": [{"time": 10}, {"start": 20}],
+        }])
+        self.assertIn(10.0, times)
+        self.assertIn(42.0, times)
+        self.assertIn("Task T1", task_inspector_line("T1", ["gap"]))
+        self.assertIn("No task selected", task_inspector_line("", []))
+
     def test_parse_signed_delta_and_regressions(self) -> None:
         self.assertEqual(parse_signed_delta("+12.3 µs")[0], 12300.0)
         self.assertEqual(parse_signed_delta("−2")[0], -2.0)

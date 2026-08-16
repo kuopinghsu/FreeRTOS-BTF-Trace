@@ -25,6 +25,7 @@ from .config import (  # private symbols are not pulled in by import *
     normalize_stats_section_order,
 )
 from .html_report import btf_html_report_document
+from .ai_planner import analysis_dashboard, format_analysis_story
 from .ux_explore import (
     HEALTH_BAND_SECTION,
     HEALTH_MARK,
@@ -82,6 +83,7 @@ from .parser import (  # private symbols are not pulled in by import *
     _chord_ring_geometry,
     _heatmap_bin_range,
     _core_util_pct_rows,
+    _trace_summary_snapshot,
     _task_segs_in_range,
     _chord_label_step,
     _chord_label_visible,
@@ -93,11 +95,12 @@ from .timeline_util import (  # noqa: F401 — star-import skips leading _
 from .graphics_items import *  # noqa: F403,F401
 from .scene import *  # noqa: F403,F401
 from .view import *  # noqa: F403,F401
-from .ai_case import EXPLAIN_LEVELS
+from .ai_case import EXPLAIN_LEVELS, new_user_investigation_template, dump_user_investigation_templates, parse_user_investigation_templates
 from .ai_investigation import (
     append_migration_burst_anomaly,
     append_wcet_anomaly_finding,
     enrich_findings_with_ids,
+    score_against_baseline,
 )
 from .ai_assistant import (  # noqa: F401
     AI_AUTH_API_KEY,
@@ -2868,11 +2871,14 @@ class _TraceCompareDialog(QDialog):
         self._mutex_table = QTableWidget(0, 4)
         self._mutex_table.setHorizontalHeaderLabels(
             ["Task", "Total A", "Total B", "Δ"])
+        self._trends_table = QTableWidget(0, 6)
+        self._trends_table.setHorizontalHeaderLabels(
+            ["Trace", "Tasks", "Migrations", "Load balance", "Tick health", "Span"])
         self._all_tables = (
             self._summary_table, self._top_table, self._core_util_table,
             self._mig_table, self._exec_table, self._block_table,
             self._inter_table, self._preempt_table, self._sync_table,
-            self._response_table, self._mutex_table,
+            self._response_table, self._mutex_table, self._trends_table,
         )
         for tbl in self._all_tables:
             tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -2889,6 +2895,7 @@ class _TraceCompareDialog(QDialog):
         self._pages.addTab(self._sync_table, "Sync")
         self._pages.addTab(self._response_table, "Response")
         self._pages.addTab(self._mutex_table, "Mutex")
+        self._pages.addTab(self._trends_table, "Trends")
         lay.addWidget(self._pages, 1)
 
         exp_row = QHBoxLayout()
@@ -2910,6 +2917,16 @@ class _TraceCompareDialog(QDialog):
         self._btn_export_html.setToolTip("Export compare report as HTML")
         self._btn_export_html.clicked.connect(self._export_html)
         exp_row.addWidget(self._btn_export_html)
+        self._btn_save_baseline = QPushButton("Save as baseline")
+        self._btn_save_baseline.setToolTip(
+            "Store Trace A per-task metrics as the regression baseline")
+        self._btn_save_baseline.clicked.connect(self._save_as_baseline)
+        exp_row.addWidget(self._btn_save_baseline)
+        self._btn_score_baseline = QPushButton("Score vs baseline")
+        self._btn_score_baseline.setToolTip(
+            "Z-score Trace A metrics against the stored baseline")
+        self._btn_score_baseline.clicked.connect(self._score_vs_baseline)
+        exp_row.addWidget(self._btn_score_baseline)
         exp_row.addStretch(1)
         lay.addLayout(exp_row)
 
@@ -3046,6 +3063,51 @@ class _TraceCompareDialog(QDialog):
         self._fill_table(self._sync_table, tables.get("sync", []))
         self._fill_table(self._response_table, tables.get("response", []))
         self._fill_table(self._mutex_table, tables.get("mutex_block", []))
+        trend_rows = []
+        for idx, tab in enumerate(getattr(self._win, "_tabs", None) or []):
+            tr = getattr(tab, "trace", None)
+            if tr is None:
+                continue
+            lo = hi = None
+            if self._scope_cb.isChecked():
+                lo, hi = _cursor_range_for_tab(self._win, idx)
+            snap = _trace_summary_snapshot(tr, lo, hi)
+            trend_rows.append({
+                "name": os.path.basename(getattr(tab, "path", "") or ""),
+                "snap": snap,
+            })
+        filled = []
+        for row in cross_trace_trends(trend_rows):
+            lb = row.get("load_balance")
+            lb_s = "—" if lb is None else f"{round(float(lb))}%"
+            filled.append([
+                row.get("name") or "",
+                row.get("tasks") if row.get("tasks") is not None else "—",
+                row.get("migrations") if row.get("migrations") is not None else "—",
+                lb_s,
+                row.get("tick_health") or "—",
+                row.get("span_ns") if row.get("span_ns") is not None else "—",
+            ])
+        self._fill_table(self._trends_table, filled)
+
+    def _save_as_baseline(self) -> None:
+        ta = self._trace_for_combo(self._combo_a)
+        saver = getattr(self._win, "_ai_update_baseline_from_trace", None)
+        if ta is None or saver is None:
+            return
+        saver(ta)
+        QMessageBox.information(
+            self, "Baseline", "Saved Trace A metrics as the regression baseline.")
+
+    def _score_vs_baseline(self) -> None:
+        ta = self._trace_for_combo(self._combo_a)
+        snap_fn = getattr(self._win, "_ai_current_task_metrics_snapshot", None)
+        load_fn = getattr(self._win, "_ai_load_baseline_profile", None)
+        if ta is None or snap_fn is None or load_fn is None:
+            return
+        result = score_against_baseline(load_fn(), snap_fn(trace=ta))
+        QMessageBox.information(
+            self, "Baseline score", str(result.get("message") or ""))
 
     def _update_compare_strip(self, tables: dict) -> None:
         strip = getattr(self, "_strip", None)
@@ -6932,12 +6994,24 @@ def _build_workflow_analysis_findings(
     """
     findings: List[dict] = []
 
-    # Load balance
-    pcts = [pct for _, pct in core_rows]
-    if len(pcts) >= 2:
-        gini = _gini_coefficient(pcts)
-        sigma = _core_util_stddev(pcts)
-        score = max(0.0, 100.0 * (1.0 - gini))
+    # Load balance (same gate as web loadBalanceMetrics: ≥2 cores, total > 0)
+    pcts: List[float] = []
+    for r in core_rows or []:
+        if isinstance(r, dict):
+            v = r.get("pct")
+        elif isinstance(r, (list, tuple)) and len(r) >= 2:
+            v = r[1]
+        else:
+            continue
+        try:
+            pcts.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    lb = _load_balance_metrics(pcts)
+    if lb:
+        score = float(lb["score"])
+        gini = float(lb["gini"])
+        sigma = float(lb["stddev"])
         metrics = f"Load Balance Score {score:.0f}% (σ={sigma:.1f}%, G={gini:.3f})"
         if score < _WF_LOAD_SCORE_WARN or sigma > _WF_LOAD_SIGMA_WARN:
             findings.append(_finding(
@@ -7189,8 +7263,9 @@ def _render_workflow_analysis_html(
             "warning": "sev-warning",
             "info": "finding-info",
         }.get(sev, "finding-info")
+        extra = " finding-ok" if f.get("id") == "load_balance_ok" else ""
         items.append(
-            f'<li class="{cls}">'
+            f'<li class="{cls}{extra}">'
             f'<strong>{_esc(f.get("title", "Finding"))}</strong>'
             f' — {_esc(f.get("text", ""))}'
             f"</li>"
@@ -7212,7 +7287,9 @@ class _AnalysisFindingsDialog(QDialog):
                  ai_enabled: bool = True, ui_font_size: int = UI_FONT_SIZE,
                  on_apply_scope=None, scope_hint: str = "",
                  ux_events: Optional[List[dict]] = None,
-                 time_min: int = 0, time_max: int = 0):
+                 time_min: int = 0, time_max: int = 0,
+                 quality_warnings: Optional[List[str]] = None,
+                 is_dark: bool = True):
         super().__init__(parent)
         self._findings = findings or []
         self._scope_title = scope_title or ""
@@ -7221,6 +7298,27 @@ class _AnalysisFindingsDialog(QDialog):
         self._ux_events = ux_events or []
         self._time_min = int(time_min or 0)
         self._time_max = int(time_max or 0)
+        self._quality_warnings = list(quality_warnings or [])
+        self._is_dark = bool(is_dark)
+        if self._is_dark:
+            muted, ink, border = "#9a9a9a", "#c5d0dc", "#3a4658"
+            ask, err, warn = "#8a8a8a", "#e74c3c", "#e67e22"
+            ok_ink = "#7dcea0"
+        else:
+            muted, ink, border = "#555555", "#1E1E1E", "#C0C0C0"
+            ask, err, warn = "#555555", "#c0392b", "#9a4d00"
+            ok_ink = "#166534"
+        self._dashboard = analysis_dashboard(
+            self._findings, quality_warnings=self._quality_warnings)
+        title_cluster = {}
+        id_cluster = {}
+        for inc in self._dashboard.get("clusters") or []:
+            cid = str(inc.get("id") or "")
+            for t in inc.get("findings") or []:
+                title_cluster.setdefault(str(t), cid)
+            for fid in inc.get("finding_ids") or []:
+                if fid:
+                    id_cluster.setdefault(str(fid), cid)
         self.wants_ai_query = False
         self._ai_needs_settings = False
         self.wants_ai_finding_id = ""
@@ -7244,7 +7342,7 @@ class _AnalysisFindingsDialog(QDialog):
         note.setWordWrap(True)
         note.setObjectName("analysisNote")
         note.setStyleSheet(
-            f"color: #9a9a9a; font-size: {ui_fs}; padding-bottom: 2px;")
+            f"color: {muted}; font-size: {ui_fs}; padding-bottom: 2px;")
 
         list_w = QListWidget()
         list_w.setFont(ui_font)
@@ -7254,10 +7352,11 @@ class _AnalysisFindingsDialog(QDialog):
         list_w.setAlternatingRowColors(True)
         list_w.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         list_w.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        list_w.setTextElideMode(Qt.TextElideMode.ElideNone)
         list_w.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         list_w.setStyleSheet(
             f"QListWidget {{ padding: 8px; outline: none; border-radius: 6px;"
-            f" font-size: {ui_fs}; }}"
+            f" font-size: {ui_fs}; color: {ink}; }}"
             "QListWidget::item {"
             "  padding: 10px 12px;"
             "  margin: 3px 0;"
@@ -7268,32 +7367,53 @@ class _AnalysisFindingsDialog(QDialog):
             "}"
         )
         self._list_w = list_w
+        min_h = max(40, int(round(ui_pt * 5.0)))
         if self._findings:
             for f in self._findings:
                 sev = f.get("severity", "info")
                 title = str(f.get("title", "Finding")).strip() or "Finding"
                 text = str(f.get("text", "")).strip()
+                fid = str(f.get("id") or "")
+                cid = id_cluster.get(fid) or title_cluster.get(title, "")
+                prefix = f"[{cid}] " if cid else ""
                 badge = {"error": "●", "warning": "●"}.get(str(sev), "○")
-                display = f"{badge}  {title}\n{text}" if text else f"{badge}  {title}"
-                item = QListWidgetItem(display)
-                item.setData(Qt.ItemDataRole.UserRole, f.get("id") or "")
-                item.setFont(ui_font)
                 if sev == "error":
-                    item.setForeground(QBrush(QColor("#e74c3c")))
+                    color = err
                 elif sev == "warning":
-                    item.setForeground(QBrush(QColor("#e67e22")))
-                fm = QFontMetrics(ui_font)
-                wrap_w = 640
-                body_h = fm.boundingRect(
-                    0, 0, wrap_w, 8000,
-                    int(Qt.TextFlag.TextWordWrap),
-                    display,
-                ).height()
-                # Scale row height with UI font (was tuned for forced 11pt).
-                pad = max(16, int(round(ui_pt * 2.0)))
-                min_h = max(40, int(round(ui_pt * 5.0)))
-                item.setSizeHint(QSize(wrap_w, max(min_h, body_h + pad)))
+                    color = warn
+                elif fid == "load_balance_ok":
+                    color = ok_ink
+                else:
+                    color = ink
+                row = QWidget()
+                row.setObjectName("analysisFindingRow")
+                vbox = QVBoxLayout(row)
+                vbox.setContentsMargins(4, 2, 4, 2)
+                vbox.setSpacing(4)
+                title_l = QLabel(f"{badge}  {prefix}{title}")
+                title_l.setObjectName("analysisFindingTitle")
+                title_l.setWordWrap(True)
+                title_l.setFont(ui_font)
+                title_l.setStyleSheet(
+                    f"color: {color}; font-weight: 700; font-size: {ui_fs};")
+                vbox.addWidget(title_l)
+                if text:
+                    text_l = QLabel(text)
+                    text_l.setObjectName("analysisFindingText")
+                    text_l.setWordWrap(True)
+                    text_l.setFont(ui_font)
+                    text_l.setStyleSheet(
+                        f"color: {color}; font-size: {ui_fs};")
+                    vbox.addWidget(text_l)
+                item = QListWidgetItem()
+                item.setData(Qt.ItemDataRole.UserRole, fid)
+                item.setFont(ui_font)
+                item.setForeground(QBrush(QColor(color)))
                 list_w.addItem(item)
+                list_w.setItemWidget(item, row)
+                row.adjustSize()
+                hint = row.sizeHint()
+                item.setSizeHint(QSize(max(hint.width(), 200), max(hint.height(), min_h)))
             list_w.setCurrentRow(0)
             list_w.currentItemChanged.connect(lambda *_: self._refresh_scope_hint())
         else:
@@ -7324,9 +7444,8 @@ class _AnalysisFindingsDialog(QDialog):
                     ai_enabled, t))
             return btn
 
-        def _make_explain_btn() -> QToolButton:
-            btn = QToolButton()
-            btn.setText("Explain…")
+        def _make_explain_btn() -> QPushButton:
+            btn = QPushButton("Explain…")
             btn.setFont(ui_font)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setMinimumHeight(max(28, int(round(ui_pt * 3.2))))
@@ -7340,9 +7459,8 @@ class _AnalysisFindingsDialog(QDialog):
                 "Quick / Technical / Deep explanation of the selected finding"
                 if ai_enabled else "Enable AI Assistant in Settings → AI"
             )
-            btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
             btn.setStyleSheet(
-                f"QToolButton {{ padding: 7px 16px; border-radius: 6px;"
+                f"QPushButton {{ padding: 7px 16px; border-radius: 6px;"
                 f" font-size: {ui_fs}; }}"
             )
             menu = QMenu(btn)
@@ -7352,12 +7470,14 @@ class _AnalysisFindingsDialog(QDialog):
                     lambda _=False, lv=level: self._query_with_ai(
                         ai_enabled, "explain_finding", level=lv)
                 )
-            btn.setMenu(menu)
+            btn.clicked.connect(
+                lambda: menu.exec(btn.mapToGlobal(btn.rect().bottomLeft())))
+            btn._explain_menu = menu
             return btn
 
         ai_label = QLabel("Ask AI")
         ai_label.setStyleSheet(
-            f"color: #8a8a8a; font-size: {ui_fs}; font-weight: 600;"
+            f"color: {ask}; font-size: {ui_fs}; font-weight: 600;"
             " letter-spacing: 0.4px; padding-top: 2px;"
         )
 
@@ -7366,16 +7486,16 @@ class _AnalysisFindingsDialog(QDialog):
         ai_row.setSpacing(10)
         ai_btns = [
             _make_ai_btn(
+                "Query with AI…",
+                "Open the AI Assistant and walk through these Analysis Findings",
+                "Enable AI Assistant in Settings → AI",
+                "findings",
+            ),
+            _make_ai_btn(
                 "Investigate…",
                 "Open the AI Assistant and investigate the top findings with tools",
                 "Enable AI Assistant in Settings → AI",
                 "investigate",
-            ),
-            _make_ai_btn(
-                "Root cause…",
-                "Open the AI Assistant for evidence-driven root-cause analysis",
-                "Enable AI Assistant in Settings → AI",
-                "root_cause",
             ),
             _make_ai_btn(
                 "Verify with AI…",
@@ -7385,21 +7505,29 @@ class _AnalysisFindingsDialog(QDialog):
             ),
             _make_explain_btn(),
             _make_ai_btn(
+                "Root cause…",
+                "Open the AI Assistant for evidence-driven root-cause analysis",
+                "Enable AI Assistant in Settings → AI",
+                "root_cause",
+            ),
+            _make_ai_btn(
                 "Auto investigate…",
                 "Run the automatic investigate → correlate → critical-path → "
                 "what-if/optimize workflow",
                 "Enable AI Assistant in Settings → AI",
                 "auto_investigate",
             ),
-            _make_ai_btn(
-                "Query with AI…",
-                "Open the AI Assistant and walk through these Analysis Findings",
-                "Enable AI Assistant in Settings → AI",
-                "findings",
-            ),
         ]
         for btn in ai_btns:
             ai_row.addWidget(btn)
+        recipe_btn = QPushButton("Save recipe…")
+        recipe_btn.setToolTip("Save this finding set as a user investigation template")
+        recipe_btn.clicked.connect(self._save_recipe)
+        story_btn = QPushButton("Story…")
+        story_btn.setToolTip("Export an analysis story from the overview and findings")
+        story_btn.clicked.connect(self._save_story)
+        ai_row.addWidget(recipe_btn)
+        ai_row.addWidget(story_btn)
         ai_row.addStretch(1)
 
         btn_h = max(28, int(round(ui_pt * 3.2)))
@@ -7454,7 +7582,7 @@ class _AnalysisFindingsDialog(QDialog):
         self._scope_lbl = QLabel(self._scope_hint or "Select a finding to recommend a cursor window.")
         self._scope_lbl.setWordWrap(True)
         self._scope_lbl.setStyleSheet(
-            f"color: #9a9a9a; font-size: {ui_fs};")
+            f"color: {muted}; font-size: {ui_fs};")
         apply_scope = QPushButton("Apply cursors")
         apply_scope.setFont(ui_font)
         apply_scope.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -7470,6 +7598,15 @@ class _AnalysisFindingsDialog(QDialog):
         scope_row.addWidget(apply_scope, 0)
 
         lay.addWidget(note)
+        overview = QLabel(str(self._dashboard.get("summary") or ""))
+        overview.setWordWrap(True)
+        overview.setObjectName("analysisOverview")
+        overview.setStyleSheet(
+            f"color: {ink}; font-size: {ui_fs}; padding: 8px 10px;"
+            f"border: 1px solid {border}; border-radius: 6px;"
+            "background: rgba(52, 152, 219, 0.08);"
+        )
+        lay.addWidget(overview)
         lay.addWidget(list_w, 1)
         lay.addLayout(scope_row)
         lay.addLayout(footer)
@@ -7553,6 +7690,51 @@ class _AnalysisFindingsDialog(QDialog):
         except OSError as exc:
             QMessageBox.warning(
                 self, "Save failed", f"Could not write file:\n{exc}")
+
+    def _save_story(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save analysis story",
+            "analysis-story.txt",
+            "Text files (*.txt);;All files (*)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".txt"):
+            path += ".txt"
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(format_analysis_story(
+                    self._findings,
+                    quality_warnings=self._quality_warnings,
+                    scope_title=self._scope_title,
+                ))
+        except OSError as exc:
+            QMessageBox.warning(
+                self, "Save failed", f"Could not write file:\n{exc}")
+
+    def _save_recipe(self) -> None:
+        name, ok = QInputDialog.getText(
+            self, "Save recipe", "Template name:", text="Analysis recipe")
+        if not ok:
+            return
+        tpl = new_user_investigation_template(
+            name, ["investigate", "correlate", "generate_report"])
+        wnd = self.parent()
+        panel = getattr(wnd, "_ai_panel", None)
+        getter = getattr(wnd, "_ai_read_settings", None)
+        saver = getattr(wnd, "_ai_save_settings_patch", None)
+        if getter is None or saver is None:
+            return
+        cfg = getter() or {}
+        items = parse_user_investigation_templates(
+            cfg.get("user_investigation_templates"))
+        items = [it for it in items if it.get("id") != tpl["id"]]
+        items.append(tpl)
+        saver({"user_investigation_templates": dump_user_investigation_templates(items)})
+        rebuild = getattr(panel, "_rebuild_investigation_menu", None)
+        if callable(rebuild):
+            rebuild()
 
 
 def _parse_task_deadlines_text(text: str) -> Dict[str, int]:
@@ -11592,8 +11774,9 @@ tbody tr:nth-child(even) td {{ background: var(--stripe); }}
 .detail-note {{ margin: 6px 0 8px; font-size: 12px; color: var(--muted); }}
 h3.sub {{ margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }}
 .sev-error {{ color: #c0392b; font-weight: 600; }}
-.sev-warning {{ color: #d68910; font-weight: 600; }}
-.finding-info {{ color: var(--ink); }}
+.sev-warning {{ color: #9a4d00; font-weight: 600; }}
+.finding-info {{ color: var(--ink, #182230); }}
+.finding-ok {{ color: #166534; font-weight: 600; }}
 .findings-list {{ margin: 8px 0 0 18px; padding: 0; }}
 .findings-list li {{ margin: 8px 0; line-height: 1.45; }}
 .finding-wf {{

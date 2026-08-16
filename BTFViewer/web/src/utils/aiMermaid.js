@@ -13,6 +13,40 @@ const EDGE_RE = /^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?\s*-->(?:\|([^
 
 const JUMP_RE = /jump:([0-9]+(?:\.[0-9]+)?)/g
 
+/** SVG fills/strokes for evidence-graph and investigation-tree diagrams. */
+export function mermaidPalette(dark = true) {
+  if (dark) {
+    return {
+      bg: '#12161d',
+      lane: '#3a4658',
+      nodeFill: '#1e3348',
+      nodeStroke: '#5b9bd5',
+      nodeText: '#dbe2ea',
+      edge: '#5b9bd5',
+      edgeLabel: '#c5d0dc',
+      arrow: '#6fbf9a',
+      msg: '#a8b4c4',
+      noteFill: '#2a2418',
+      noteStroke: '#c9a227',
+      noteText: '#e6d48a',
+    }
+  }
+  return {
+    bg: '#F7F9FC',
+    lane: '#C0C8D4',
+    nodeFill: '#E8F1FA',
+    nodeStroke: '#0066CC',
+    nodeText: '#1E1E1E',
+    edge: '#0066CC',
+    edgeLabel: '#333333',
+    arrow: '#166534',
+    msg: '#444444',
+    noteFill: '#FFF8E6',
+    noteStroke: '#9a4d00',
+    noteText: '#5c3d00',
+  }
+}
+
 function esc(text) {
   return String(text || '')
     .replace(/&/g, '&amp;')
@@ -200,7 +234,7 @@ export function hitTestMermaid(source, localX, localY, scale = 1) {
   return null
 }
 
-export function mermaidToSvg(source, { interactive = true } = {}) {
+export function mermaidToSvg(source, { interactive = true, dark = true } = {}) {
   const text = String(source || '').trim()
   if (!text) return ''
   let first = ''
@@ -211,9 +245,9 @@ export function mermaidToSvg(source, { interactive = true } = {}) {
       break
     }
   }
-  if (first.startsWith('sequencediagram')) return sequenceSvg(text, interactive)
+  if (first.startsWith('sequencediagram')) return sequenceSvg(text, interactive, dark)
   if (first.startsWith('graph ') || first.startsWith('flowchart ')) {
-    return flowchartSvg(text, interactive)
+    return flowchartSvg(text, interactive, dark)
   }
   return ''
 }
@@ -226,8 +260,8 @@ function svgDataUri(svg) {
   return `data:image/svg+xml;base64,${b64}`
 }
 
-export function mermaidBlockHtml(source, { inlineSvg = true, zoomable = true } = {}) {
-  const svg = mermaidToSvg(source, { interactive: inlineSvg })
+export function mermaidBlockHtml(source, { inlineSvg = true, zoomable = true, dark = true } = {}) {
+  const svg = mermaidToSvg(source, { interactive: inlineSvg, dark })
   if (!svg) {
     return `<pre><code class="language-mermaid">${esc(source)}</code></pre>`
   }
@@ -331,22 +365,23 @@ function sequenceHits(source) {
   })
 }
 
-function sequenceSvg(source, interactive) {
+function sequenceSvg(source, interactive, dark = true) {
   const geom = sequenceGeom(source)
   if (!geom) return ''
   const { participants, index, rows, boxW, top, rowH, width, height, xs } = geom
+  const p = mermaidPalette(dark)
   const parts = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(width)}" height="${Math.round(height)}" viewBox="0 0 ${Math.round(width)} ${Math.round(height)}" class="ai-mermaid-seq">`,
-    `<rect x="0" y="0" width="${Math.round(width)}" height="${Math.round(height)}" fill="#12161d"/>`,
+    `<rect x="0" y="0" width="${Math.round(width)}" height="${Math.round(height)}" fill="${p.bg}"/>`,
   ]
-  participants.forEach((p, i) => {
+  participants.forEach((part, i) => {
     const x = xs[i]
     const bx = x - boxW / 2
-    const href = nodeHrefAttrs(p.label, interactive)
-    parts.push(`<line x1="${x}" y1="${top + 22}" x2="${x}" y2="${height - 12}" stroke="#3a4658" stroke-dasharray="4 3"/>`)
+    const href = nodeHrefAttrs(part.label, interactive)
+    parts.push(`<line x1="${x}" y1="${top + 22}" x2="${x}" y2="${height - 12}" stroke="${p.lane}" stroke-dasharray="4 3"/>`)
     parts.push(
-      `<a${href}><rect x="${bx}" y="${top - 14}" width="${boxW}" height="28" rx="4" fill="#1e3348" stroke="#5b9bd5"/>`
-      + `<text x="${x}" y="${top + 5}" text-anchor="middle" fill="#dbe2ea" font-size="11" font-family="sans-serif">${esc(p.label.slice(0, 28))}</text></a>`,
+      `<a${href}><rect x="${bx}" y="${top - 14}" width="${boxW}" height="28" rx="4" fill="${p.nodeFill}" stroke="${p.nodeStroke}"/>`
+      + `<text x="${x}" y="${top + 5}" text-anchor="middle" fill="${p.nodeText}" font-size="11" font-family="sans-serif">${esc(part.label.slice(0, 28))}</text></a>`,
     )
   })
   let y = top + 44
@@ -356,14 +391,14 @@ function sequenceSvg(source, interactive) {
       const x2 = xs[index.get(row.dst)]
       const dashed = row.arrow.startsWith('--') ? ' stroke-dasharray="5 3"' : ''
       const tip = x2 >= x1 ? 8 : -8
-      parts.push(`<line x1="${x1}" y1="${y}" x2="${x2 - tip}" y2="${y}" stroke="#6fbf9a" stroke-width="1.4"${dashed}/>`)
-      parts.push(svgArrowhead(x1, y, x2, y, '#6fbf9a'))
-      parts.push(`<text x="${(x1 + x2) / 2}" y="${y - 6}" text-anchor="middle" fill="#a8b4c4" font-size="10" font-family="sans-serif">${esc(row.msg.slice(0, 48))}</text>`)
+      parts.push(`<line x1="${x1}" y1="${y}" x2="${x2 - tip}" y2="${y}" stroke="${p.arrow}" stroke-width="1.4"${dashed}/>`)
+      parts.push(svgArrowhead(x1, y, x2, y, p.arrow))
+      parts.push(`<text x="${(x1 + x2) / 2}" y="${y - 6}" text-anchor="middle" fill="${p.msg}" font-size="10" font-family="sans-serif">${esc(row.msg.slice(0, 48))}</text>`)
     } else {
       const x = xs[index.get(row.who)]
       const nw = noteBoxW(row.note)
-      parts.push(`<rect x="${x - nw / 2}" y="${y - 16}" width="${nw}" height="28" rx="3" fill="#2a2418" stroke="#c9a227"/>`)
-      parts.push(`<text x="${x}" y="${y + 3}" text-anchor="middle" fill="#e6d48a" font-size="10" font-family="sans-serif">${esc(row.note.slice(0, 40))}</text>`)
+      parts.push(`<rect x="${x - nw / 2}" y="${y - 16}" width="${nw}" height="28" rx="3" fill="${p.noteFill}" stroke="${p.noteStroke}"/>`)
+      parts.push(`<text x="${x}" y="${y + 3}" text-anchor="middle" fill="${p.noteText}" font-size="10" font-family="sans-serif">${esc(row.note.slice(0, 40))}</text>`)
     }
     y += rowH
   }
@@ -496,19 +531,20 @@ function flowchartHits(source) {
   })
 }
 
-function flowchartSvg(source, interactive) {
+function flowchartSvg(source, interactive, dark = true) {
   const geom = flowchartGeom(source)
   if (!geom) return ''
   const { nodes, order, pos, width, height } = geom
+  const pal = mermaidPalette(dark)
   const parts = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(width)}" height="${Math.round(height)}" viewBox="0 0 ${Math.round(width)} ${Math.round(height)}" class="ai-mermaid-flow">`,
-    `<rect x="0" y="0" width="${Math.round(width)}" height="${Math.round(height)}" fill="#12161d"/>`,
+    `<rect x="0" y="0" width="${Math.round(width)}" height="${Math.round(height)}" fill="${pal.bg}"/>`,
   ]
   for (const edge of flowchartEdgePaths(geom)) {
-    parts.push(`<line x1="${edge.sx.toFixed(1)}" y1="${edge.sy.toFixed(1)}" x2="${edge.ex.toFixed(1)}" y2="${edge.ey.toFixed(1)}" stroke="#5b9bd5" stroke-width="1.3"/>`)
-    parts.push(svgArrowhead(edge.sx, edge.sy, edge.ex, edge.ey, '#5b9bd5'))
+    parts.push(`<line x1="${edge.sx.toFixed(1)}" y1="${edge.sy.toFixed(1)}" x2="${edge.ex.toFixed(1)}" y2="${edge.ey.toFixed(1)}" stroke="${pal.edge}" stroke-width="1.3"/>`)
+    parts.push(svgArrowhead(edge.sx, edge.sy, edge.ex, edge.ey, pal.edge))
     if (edge.label) {
-      parts.push(`<text x="${edge.lx.toFixed(1)}" y="${edge.ly.toFixed(1)}" text-anchor="middle" fill="#c5d0dc" font-size="10" font-family="sans-serif">${esc(String(edge.label).slice(0, 16))}</text>`)
+      parts.push(`<text x="${edge.lx.toFixed(1)}" y="${edge.ly.toFixed(1)}" text-anchor="middle" fill="${pal.edgeLabel}" font-size="10" font-family="sans-serif">${esc(String(edge.label).slice(0, 16))}</text>`)
     }
   }
   for (const nid of order) {
@@ -518,9 +554,9 @@ function flowchartSvg(source, interactive) {
     const { bw, bh, lines } = geom.sizes.get(nid)
     const y0 = y - bh / 2 + 10 + 11
     const labels = lines.map((line, i) =>
-      `<text x="${x.toFixed(1)}" y="${(y0 + i * 14).toFixed(1)}" text-anchor="middle" fill="#dbe2ea" font-size="11" font-family="sans-serif">${esc(line)}</text>`)
+      `<text x="${x.toFixed(1)}" y="${(y0 + i * 14).toFixed(1)}" text-anchor="middle" fill="${pal.nodeText}" font-size="11" font-family="sans-serif">${esc(line)}</text>`)
     parts.push(
-      `<a${href}><rect x="${(x - bw / 2).toFixed(1)}" y="${(y - bh / 2).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="6" fill="#1e3348" stroke="#5b9bd5"/>`
+      `<a${href}><rect x="${(x - bw / 2).toFixed(1)}" y="${(y - bh / 2).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="6" fill="${pal.nodeFill}" stroke="${pal.nodeStroke}"/>`
       + `${labels.join('')}</a>`,
     )
   }

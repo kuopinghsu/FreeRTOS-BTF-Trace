@@ -1,23 +1,21 @@
 # FreeRTOS-BTF-Trace
 
-Record FreeRTOS scheduling and synchronization events in RAM, export them as **BTF** or **VCD**, and analyze them offline without a commercial tracer.
+FreeRTOS trace recorder for scheduling and synchronization events. Events are kept in a compact RAM ring buffer and can be exported as **BTF** for BTF Viewer / Trace Compass or **VCD** for GTKWave.
 
 ![BTF Trace](images/btftrace.png)
 
 ## Documentation
 
-| Document | Question it answers |
+| Document | Contents |
 |---|---|
-| **README.md** | What is FreeRTOS-BTF-Trace, and how do I run it? |
-| **[PORTING.md](PORTING.md)** | How do I integrate the trace library on another FreeRTOS target? |
-| **[TRACE_FORMAT.md](TRACE_FORMAT.md)** | What is stored in `trace.bin`, and how is it mapped to BTF? |
-| **[BTFViewer/README.md](BTFViewer/README.md)** | How do I view and analyze a BTF trace? |
-| **[BTFViewer/WORKFLOWS.md](BTFViewer/WORKFLOWS.md)** | How do I diagnose RTOS issues step by step? |
-| **[BTFViewer/AI.md](BTFViewer/AI.md)** | How does the BTF Viewer AI Assistant work? |
+| **README.md** | Build the demo and open a trace |
+| **[PORTING.md](PORTING.md)** | Integrate the trace library on another FreeRTOS target |
+| **[TRACE_FORMAT.md](TRACE_FORMAT.md)** | `trace.bin` layout and BTF event mapping |
+| **[BTFViewer/README.md](BTFViewer/README.md)** | BTF Viewer usage |
+| **[BTFViewer/WORKFLOWS.md](BTFViewer/WORKFLOWS.md)** | RTOS analysis workflows |
+| **[BTFViewer/AI.md](BTFViewer/AI.md)** | BTF Viewer AI Assistant |
 
-## 1. Overview
-
-The trace path is deliberately simple:
+## Overview
 
 ```text
 FreeRTOS trace hooks
@@ -34,9 +32,9 @@ BTF Viewer  GTKWave
 Trace Compass
 ```
 
-| Format | Primary use |
+| Format | Use |
 |---|---|
-| **BTF** (Best Trace Format) | Scheduling/timing analysis in BTF Viewer or Eclipse Trace Compass |
+| **BTF** (Best Trace Format) | Scheduling and timing analysis in BTF Viewer or Eclipse Trace Compass |
 | **VCD** (Value Change Dump) | Waveform inspection in GTKWave |
 
 ![BTF Viewer](images/btfviewer.png)
@@ -54,25 +52,25 @@ BTFViewer/        Desktop + Web BTF analysis viewer
 tracedata/        Sample BTF / VCD traces
 ```
 
-## 2. Quick start
+## Quick start
 
-The bundled demo targets **RISC-V RV64** and runs in `sim/`.
+The bundled demo runs on the RISC-V RV64 simulator in `sim/`.
 
-### 2.1 Toolchain
+### Toolchain
 
-Install xPack RISC-V GCC. The default build looks for:
+Install xPack RISC-V GCC. The default path is:
 
 ```text
 /opt/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-gcc
 ```
 
-Override it when needed:
+Use a different toolchain prefix with:
 
 ```bash
 make run RISCV_PREFIX=/path/to/riscv-none-elf-
 ```
 
-### 2.2 Build and capture
+### Build and capture
 
 ```bash
 make run            # single core
@@ -80,21 +78,21 @@ make CORES=2 run    # 2-core SMP
 make CORES=8 run    # 8-core SMP
 ```
 
-The first run clones **FreeRTOS-Kernel V11.3.0**. When the simulator exits, `gentrace` generates:
+On the first run, the build clones **FreeRTOS-Kernel V11.3.0**. After the simulator exits, `gentrace` writes:
 
 ```text
 tracedata/trace.btf
 tracedata/trace.vcd
 ```
 
-### 2.3 Open the BTF trace
+### Open the BTF trace
 
 ```bash
 pip install -r BTFViewer/requirements.txt
 python BTFViewer/builds/btf_viewer.py tracedata/trace.btf
 ```
 
-Sample captures include:
+Sample captures:
 
 ```text
 example.btf.gz
@@ -106,9 +104,9 @@ example-16cores.btf.gz
 
 BTF Viewer Desktop and Web accept `.btf`, `.gz`, `.bz2`, and `.zip`.
 
-## 3. Demo workload
+## Demo workload
 
-`Demo/examples/freertos_test/` contains **11 tests**. Tests 1–10 stay busy using yields; test 11 uses `vTaskDelay` so tickful and tickless idle can be compared.
+`Demo/examples/freertos_test/` contains 11 tests. Tests 1–10 use yields to keep the workload active. Test 11 uses `vTaskDelay` for tickful/tickless-idle comparison.
 
 ```bash
 make TICKLESS=1 run
@@ -128,13 +126,13 @@ make TICKLESS=1 run
 | 10 | Core affinity | Pin/migrate with `vTaskCoreAffinitySet` |
 | 11 | Tickless idle | `vTaskDelay` windows for TICK vs TICKLESS |
 
-Interval id **0** wraps each test from the runner. IDs **1–11** identify the corresponding test.
+Interval id **0** wraps each test from the runner. IDs **1–11** identify the individual tests.
 
-## 4. Viewing traces
+## Viewing traces
 
 ### BTF Viewer
 
-Use BTF Viewer for task/core timelines, cursors, Statistics, Analysis Findings, migration inspection, Trace Compare, AI-assisted investigation, and export.
+BTF Viewer provides task/core timelines, cursors, Statistics, Analysis Findings, migration inspection, Trace Compare, AI-assisted investigation, and export.
 
 ```bash
 python BTFViewer/builds/btf_viewer.py tracedata/example-8cores.btf.gz
@@ -143,7 +141,7 @@ python BTFViewer/builds/btf_viewer.py tracedata/example-8cores.btf.gz
 
 Requirements: Python 3.8+ and PySide6 ≥ 6.4.
 
-For analysis procedures, continue with **[BTFViewer/WORKFLOWS.md](BTFViewer/WORKFLOWS.md)**.
+See **[BTFViewer/WORKFLOWS.md](BTFViewer/WORKFLOWS.md)** for analysis procedures.
 
 ### Trace Compass
 
@@ -159,7 +157,7 @@ gtkwave tracedata/trace.vcd
 
 ![VCD](images/vcd.png)
 
-## 5. Custom instrumentation
+## Custom instrumentation
 
 The demo records heap bytes in use on every tick:
 
@@ -167,42 +165,26 @@ The demo records heap bytes in use on every tick:
 btf_traceTAG(0, ...);
 ```
 
-This becomes STI `tag0_event`. The demo also uses interval start/stop events to mark test regions.
+The value appears in BTF as STI `tag0_event`. Interval start/stop events are used to mark test regions.
 
 ![Heap usage tag](images/memusage.png)
 
-On SMP traces, BTF Viewer can inspect task migrations and migration corridors.
+SMP traces can also be inspected for task migrations and migration corridors.
 
 ![Migration inspector](images/migration.svg)
 
-## 6. Porting to another target
+## Porting
 
-The minimum integration flow is:
+A port needs a FreeRTOS trace-hook integration, a free-running 32-bit cycle counter, and one of the supported dump modes. Capture starts with `traceSTART()` and ends with `traceEND()`.
 
-```text
-Include trace header
-      ↓
-Provide 32-bit cycle counter
-      ↓
-Choose dump mode
-      ↓
-Call traceSTART()
-      ↓
-Run workload
-      ↓
-Call traceEND()
-      ↓
-Convert / inspect trace
-```
+See **[PORTING.md](PORTING.md)** for configuration, the time source, dump modes, tags/intervals, and SMP locking.
 
-See **[PORTING.md](PORTING.md)** for configuration, time source, dump modes, tags/intervals, and SMP locking requirements.
+See **[TRACE_FORMAT.md](TRACE_FORMAT.md)** for the binary layout, event encoding, BTF mapping, and trace-quality flags.
 
-See **[TRACE_FORMAT.md](TRACE_FORMAT.md)** for the binary layout, event encoding, BTF mapping, and trace quality flags.
+## Related project
 
-## 7. Related project
+A related BareCTF + Trace Compass implementation is [freertos-barectf](https://github.com/gpollo/freertos-barectf).
 
-A related BareCTF + Trace Compass approach is [freertos-barectf](https://github.com/gpollo/freertos-barectf).
-
-## 8. License
+## License
 
 MIT

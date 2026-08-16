@@ -11,8 +11,11 @@ import {
   VALIDATE_EXPERIMENT_PROMPT,
   buildInvestigationCase,
   classifyPrivacy,
+  dumpInvestigationSession,
   dumpUserInvestigationTemplates,
   emptyCostMeter,
+  investigationSessionHasChat,
+  parseInvestigationSession,
   evidenceQualityFromScore,
   extractClaims,
   historicalKnowledgeForFinding,
@@ -243,5 +246,29 @@ describe('aiCase investigation lifecycle', () => {
     })
     assert.equal(good.false_confirmation_rate, 0)
     assert.equal(good.premature_conclusion_rate, 0)
+  })
+
+  it('treats evidence-only sessions as no chat (desktop restore gate)', () => {
+    assert.equal(investigationSessionHasChat([]), false)
+    assert.equal(investigationSessionHasChat([
+      { role: 'evidence', content: 'CURRENT ISSUE' },
+    ]), false)
+    assert.equal(investigationSessionHasChat([
+      { role: 'user', content: 'hello' },
+    ]), true)
+    assert.equal(investigationSessionHasChat([
+      { role: 'assistant', content: 'ok' },
+    ]), true)
+    assert.equal(investigationSessionHasChat([
+      { role: 'user', content: '  ' },
+    ]), false)
+    const blob = dumpInvestigationSession({
+      payload: { finding: { title: 'x' } },
+      plan: { goal: 'g', steps: [] },
+      messages: [{ role: 'user', content: 'hello' }],
+    })
+    const parsed = parseInvestigationSession(blob)
+    assert.equal(investigationSessionHasChat(parsed.messages), true)
+    assert.equal(parseInvestigationSession('').messages.length, 0)
   })
 })

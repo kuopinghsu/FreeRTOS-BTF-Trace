@@ -130,6 +130,8 @@ class TimelineScene(QGraphicsScene):
         # -- Find-hit overlay (all match positions from the Find panel) ---
         self._find_hit_ns_list: List[int] = []
         self._find_hit_items: list = []
+        self._finding_overlay_ns: List[int] = []
+        self._finding_overlay_items: list = []
         # -- Task highlight state ----------------------------------------
         self._locked_task:  Optional[str] = None   # click-locked task (persistent)
         self._locked_core:  Optional[str] = None   # core context for locked task (core view)
@@ -516,6 +518,11 @@ class TimelineScene(QGraphicsScene):
         self._find_hit_ns_list = list(ns_list)
         self._draw_find_markers()
 
+    def set_finding_overlays(self, ns_list: list) -> None:
+        """Vertical markers for Analysis Finding times (not user-editable marks)."""
+        self._finding_overlay_ns = list(ns_list or [])
+        self._draw_finding_overlays()
+
     def _draw_find_markers(self) -> None:
         """Draw thin vertical/horizontal lines for each find hit."""
         _safe_scene_remove_items(self, self._find_hit_items)
@@ -536,6 +543,26 @@ class TimelineScene(QGraphicsScene):
             line.setZValue(26)   # below marks (z=28) and cursors (z=30)
             self.addItem(line)
             self._find_hit_items.append(line)
+
+    def _draw_finding_overlays(self) -> None:
+        _safe_scene_remove_items(self, self._finding_overlay_items)
+        self._finding_overlay_items.clear()
+        if self._trace is None or not self._finding_overlay_ns:
+            return
+        scene_r = self.sceneRect()
+        pen = QPen(QColor("#C084FC"), 1.0, Qt.PenStyle.DashLine)
+        pen.setCosmetic(True)
+        for ns in self._finding_overlay_ns:
+            if self._horizontal:
+                x = self._label_width + self._ns_to_px(ns)
+                line = QGraphicsLineItem(x, 0, x, scene_r.height())
+            else:
+                y = self._label_width + self._ns_to_px(ns)
+                line = QGraphicsLineItem(0, y, scene_r.width(), y)
+            line.setPen(pen)
+            line.setZValue(25)
+            self.addItem(line)
+            self._finding_overlay_items.append(line)
 
     def _dim_brush_if_follow(self, brush: QBrush, merge_key: str) -> QBrush:
         """Dim segments of other tasks when one task is lock-highlighted."""
@@ -1718,6 +1745,7 @@ class TimelineScene(QGraphicsScene):
         self._hover_line_ns = None
         self._measure_items = []           # clear() removed them from the scene
         self._find_hit_items = []
+        self._finding_overlay_items = []
         if self._trace is None:
             return
         if self._view_mode == "core":
@@ -1736,6 +1764,7 @@ class TimelineScene(QGraphicsScene):
         self._draw_cursors()
         self._draw_marks()
         self._draw_find_markers()
+        self._draw_finding_overlays()
         if self._hover_ns is not None:
             self._draw_hover_line()
         self.scene_rebuilt.emit()

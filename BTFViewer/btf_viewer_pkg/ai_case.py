@@ -112,6 +112,225 @@ def mermaid_label_with_time(text: Any, time: Any = None, limit: int = 96) -> str
     return _mermaid_safe_label(lab, limit)
 
 
+GUIDED_STAGES: Tuple[str, ...] = (
+    "triage", "scope", "investigate", "verify", "experiment", "compare",
+)
+GUIDED_STAGE_LABELS: Dict[str, str] = {
+    "idle": "Start",
+    "triage": "Triage",
+    "scope": "Scope",
+    "investigate": "Investigate",
+    "verify": "Verify",
+    "experiment": "Experiment",
+    "compare": "Compare",
+}
+
+
+def _guide_tool_names(payload: Optional[dict], plan: Optional[dict]) -> List[str]:
+    names: List[str] = []
+    if isinstance(payload, dict):
+        case = payload.get("investigation_case") or {}
+        for t in (case.get("tools_executed") or payload.get("tools_executed") or []):
+            names.append(str(t or "").strip())
+        for t in (payload.get("suggested_tools") or []):
+            if isinstance(t, dict):
+                names.append(str(t.get("name") or "").strip())
+            else:
+                names.append(str(t or "").strip())
+    if isinstance(plan, dict):
+        for s in (plan.get("steps") or []):
+            if isinstance(s, dict):
+                names.append(str(s.get("id") or s.get("label") or "").strip())
+            else:
+                names.append(str(s or "").strip())
+    return [n for n in names if n]
+
+
+def investigation_guide_stage(
+    payload: Optional[dict] = None,
+    *,
+    plan: Optional[dict] = None,
+    has_cursors: bool = False,
+    has_two_traces: bool = False,
+) -> str:
+    """Map an Investigation Case onto the beginner stepper stage."""
+    tools = " ".join(_guide_tool_names(payload, plan)).lower()
+    has_payload = isinstance(payload, dict) and bool(payload)
+    has_plan = isinstance(plan, dict) and bool(plan.get("steps") or plan.get("goal"))
+    if not has_payload and not has_plan:
+        return "idle"
+    quality = ""
+    if has_payload:
+        q = payload.get("evidence_quality") or {}
+        if isinstance(q, dict):
+            quality = str(q.get("band") or "").lower()
+    verified = any(k in tools for k in (
+        "verify_claim", "detect_contradictions", "assess_evidence_sufficiency",
+        "challenge_conclusion",
+    )) or quality in ("strong", "medium-high")
+    if has_two_traces and (
+        "validate_experiment" in tools or "compare_performance" in tools
+        or "analyze_traces" in tools
+    ):
+        return "compare"
+    if "what_if" in tools or "optimize_experiment" in tools:
+        return "experiment" if verified else "verify"
+    if verified:
+        return "verify"
+    if any(k in tools for k in (
+        "investigate", "correlate_events", "find_critical_path",
+        "rank_root_causes",
+    )) or (has_payload and (payload.get("evidence") or payload.get("root_cause_chain"))):
+        return "investigate"
+    if has_cursors:
+        return "scope"
+    return "triage"
+
+
+GUIDE_STAGE_NEEDLES: Dict[str, Tuple[str, ...]] = {
+    "triage": ("finding", "triage", "analysis"),
+    "scope": ("cursor", "scope", "c1"),
+    "investigate": ("evidence", "correlate", "critical path", "root cause"),
+    "verify": ("verify", "contradict", "alternative", "sufficiency"),
+    "experiment": ("what-if", "what_if", "optimize", "estimate"),
+    "compare": ("compare", "validate_experiment", "recapture"),
+}
+ESTIMATE_BANNER = (
+    "Heuristic estimate (What-if / Optimize) — recapture a trace and Compare "
+    "to measure."
+)
+VERIFY_HINT = (
+    "Verify alternatives and contradictions before treating What-if as measured."
+)
+
+
+def guide_stage_needles(stage: str) -> Tuple[str, ...]:
+    return GUIDE_STAGE_NEEDLES.get(str(stage or ""), ())
+
+
+def investigation_issue_card(payload: Optional[dict] = None) -> Dict[str, str]:
+    """Compact CURRENT ISSUE fields for the AI panel card."""
+    data = payload if isinstance(payload, dict) else {}
+    finding = data.get("finding") if isinstance(data.get("finding"), dict) else {}
+    quality = data.get("evidence_quality") if isinstance(data.get("evidence_quality"), dict) else {}
+    interpreted = data.get("interpreted") if isinstance(data.get("interpreted"), dict) else {}
+    title = str(
+        finding.get("title") or data.get("conclusion") or data.get("subtitle") or ""
+    ).strip()
+    task = ""
+    for key in ("task", "task_name", "primary_task"):
+        task = str(finding.get(key) or interpreted.get(key) or "").strip()
+        if task:
+            break
+    scope = str(interpreted.get("scope") or data.get("scope") or "").strip()
+    return {
+        "title": title or "Investigation",
+        "severity": str(finding.get("severity") or "").strip(),
+        "task": task,
+        "band": str(quality.get("band") or "").replace("-", " ").title(),
+        "scope": scope,
+        "status": str(data.get("conclusion") or "").strip()[:120],
+    }
+
+
+def format_investigation_issue_card(card: Optional[dict] = None) -> str:
+    """Desktop/Web lockstep text for the AI panel Current issue strip."""
+    data = card if isinstance(card, dict) else {}
+    title = str(data.get("title") or "").strip()
+    task = str(data.get("task") or "").strip()
+    band = str(data.get("band") or "").strip()
+    scope = str(data.get("scope") or "").strip()
+    if title in ("", "Investigation") and not task and not band:
+        return ""
+    bits = [title or "Investigation"]
+    if task:
+        bits.append(task)
+    if band:
+        bits.append(f"Evidence {band}")
+    if scope:
+        bits.append(scope)
+    return "CURRENT ISSUE\n" + " · ".join(bits)
+
+
+AI_SESSION_MAX_MESSAGES = 40
+AI_SESSION_MAX_CHARS = 80000
+
+
+def dump_investigation_session(
+    *,
+    payload: Optional[dict] = None,
+    plan: Optional[dict] = None,
+    messages: Optional[Sequence[Any]] = None,
+) -> str:
+    """JSON for session restore (evidence + plan + recent chat)."""
+    msgs: List[Dict[str, str]] = []
+    total = 0
+    for raw in list(messages or [])[-AI_SESSION_MAX_MESSAGES:]:
+        if isinstance(raw, dict):
+            role = str(raw.get("role") or "")
+            text = str(raw.get("content") or raw.get("text") or "")
+        elif isinstance(raw, (list, tuple)) and len(raw) >= 2:
+            role = str(raw[0] or "")
+            text = str(raw[1] or "")
+        else:
+            continue
+        if role not in ("user", "assistant", "evidence"):
+            continue
+        if total + len(text) > AI_SESSION_MAX_CHARS:
+            break
+        total += len(text)
+        msgs.append({"role": role, "content": text[:8000]})
+    blob = {
+        "v": 1,
+        "payload": payload if isinstance(payload, dict) else None,
+        "plan": plan if isinstance(plan, dict) else None,
+        "messages": msgs,
+    }
+    return json.dumps(blob, ensure_ascii=False, separators=(",", ":"))
+
+
+def parse_investigation_session(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        data = raw
+    else:
+        text = str(raw or "").strip()
+        if not text:
+            return {"payload": None, "plan": None, "messages": []}
+        try:
+            data = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {"payload": None, "plan": None, "messages": []}
+    if not isinstance(data, dict):
+        return {"payload": None, "plan": None, "messages": []}
+    msgs = []
+    for m in (data.get("messages") or [])[:AI_SESSION_MAX_MESSAGES]:
+        if not isinstance(m, dict):
+            continue
+        role = str(m.get("role") or "")
+        if role not in ("user", "assistant", "evidence"):
+            continue
+        msgs.append({"role": role, "content": str(m.get("content") or "")[:8000]})
+    payload = data.get("payload") if isinstance(data.get("payload"), dict) else None
+    plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
+    return {"payload": payload, "plan": plan, "messages": msgs}
+
+
+def investigation_session_has_chat(messages: Optional[Sequence[Any]] = None) -> bool:
+    """True when a session blob has a user or assistant turn (not evidence-only)."""
+    for raw in messages or []:
+        if isinstance(raw, dict):
+            role = str(raw.get("role") or "")
+            text = str(raw.get("content") or raw.get("text") or "")
+        elif isinstance(raw, (list, tuple)) and len(raw) >= 2:
+            role = str(raw[0] or "")
+            text = str(raw[1] or "")
+        else:
+            continue
+        if role in ("user", "assistant") and text.strip():
+            return True
+    return False
+
+
 def empty_investigation_case(
     *,
     question: str = "",

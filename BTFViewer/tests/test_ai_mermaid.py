@@ -204,6 +204,22 @@ class AiMermaidTests(unittest.TestCase):
         cx, cy = ev["x"] + ev["w"] / 2, ev["y"] + ev["h"] / 2
         self.assertEqual(hit_test_mermaid(src, cx, cy), ("jump", "12345"))
 
+    def test_light_theme_flowchart_uses_readable_ink(self) -> None:
+        from btf_viewer_pkg.ai_mermaid import mermaid_palette
+
+        src = "graph TD\n  F[Finding]\n  E0[evidence]\n  F --> E0\n"
+        dark = mermaid_to_svg(src, is_dark=True)
+        light = mermaid_to_svg(src, is_dark=False)
+        pal = mermaid_palette(False)
+        self.assertIn(mermaid_palette(True)["bg"], dark)
+        self.assertIn(pal["bg"], light)
+        self.assertIn(pal["node_text"], light)
+        self.assertNotIn("#12161d", light)
+        self.assertNotIn("#dbe2ea", light)
+        html = markdown_to_safe_html(
+            "```mermaid\n" + src + "```", as_img=False, is_dark=False)
+        self.assertIn(pal["bg"], html)
+
 
 if __name__ == "__main__":
     unittest.main()

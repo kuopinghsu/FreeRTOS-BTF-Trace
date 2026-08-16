@@ -225,7 +225,7 @@ def _in_ai_actions_bar(w: QWidget) -> bool:
     while p is not None:
         if p.objectName() in (
                 "aiActions", "aiTemplates", "aiModes", "aiHeader", "aiMoreMenu",
-                "aiComposer"):
+                "aiComposer", "aiGuide", "aiGuideStepper"):
             return True
         p = p.parentWidget()
     return False
@@ -832,6 +832,34 @@ def _fix_collapsed_time_ns_range(
         ns_lo = max(t_min, min(ns_lo, t_max - 1))
         ns_hi = min(t_max, max(ns_hi, ns_lo + 1))
     return ns_lo, ns_hi
+
+
+def _ctrl_like_held(modifiers) -> bool:
+    """True when Control or Command is held.
+
+    Qt on macOS swaps keyboard modifiers (ControlModifier is ⌘, MetaModifier
+    is ⌃), but mouse events may still report the native Control key as
+    ControlModifier. Accept both so Ctrl+left-drag matches the web app.
+    """
+    return bool(
+        modifiers
+        & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier)
+    )
+
+
+def _is_ctrl_like_key(key) -> bool:
+    return key in (Qt.Key.Key_Control, Qt.Key.Key_Meta)
+
+
+def _event_view_pos(event):
+    """Viewport QPoint from a mouse or context-menu event."""
+    if hasattr(event, "position"):
+        try:
+            return event.position().toPoint()
+        except Exception:
+            pass
+    return event.pos()
+
 
 class TimelineView(QGraphicsView):
     """Pan + zoom QGraphicsView wrapping a TimelineScene."""
@@ -2503,7 +2531,7 @@ class TimelineView(QGraphicsView):
         # Releasing Ctrl mid-drag hides the measure-ruler even if the mouse
         # button is still held down.
         if (not event.isAutoRepeat()
-                and event.key() == Qt.Key.Key_Control
+                and _is_ctrl_like_key(event.key())
                 and self._measure_press_ns is not None):
             self._measure_press_ns = None
             self._scene.clear_measure_ruler()
@@ -2694,11 +2722,49 @@ class TimelineView(QGraphicsView):
                         best_ns   = seg.end
         return best_ns
 
+    def _try_start_measure(self, event) -> bool:
+        """Start the Ctrl+drag measure ruler. True if the gesture was claimed.
+
+        macOS turns Control+left-click into a right-click / context menu, so
+        LeftButton with a Ctrl-like modifier never arrives. Treat that remapped
+        RightButton the same as a left-button measure press.
+        """
+        if self._scene._trace is None:
+            return False
+        if not _ctrl_like_held(event.modifiers()):
+            return False
+        btn = event.button() if hasattr(event, "button") else Qt.MouseButton.NoButton
+        if btn not in (
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.RightButton,
+            Qt.MouseButton.NoButton,  # QContextMenuEvent
+        ):
+            return False
+        pos = _event_view_pos(event)
+        lw = self._scene._label_width
+        in_label = (pos.x() < lw if self._scene._horizontal else pos.y() < lw)
+        if in_label:
+            return False
+        scene_pt = self.mapToScene(pos)
+        coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
+        self._measure_press_ns = self._scene.scene_to_ns(coord)
+        self._measure_anchor_coord = (
+            scene_pt.y() if self._scene._horizontal else scene_pt.x()
+        )
+        self.setDragMode(QGraphicsView.NoDrag)
+        _HoverCursor.show(Qt.CursorShape.CrossCursor)
+        return True
+
     def mousePressEvent(self, event) -> None:
         if self._scene._trace is not None:
             self.setFocus(Qt.FocusReason.MouseFocusReason)
         self._press_pos = event.position().toPoint()
         self._press_btn = event.button()
+
+        if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
+            if self._try_start_measure(event):
+                event.accept()
+                return
 
         if event.button() == Qt.MouseButton.MiddleButton:
             if self._scene._trace is not None:
@@ -2714,24 +2780,6 @@ class TimelineView(QGraphicsView):
                 return
 
         if event.button() == Qt.MouseButton.LeftButton:
-            # --- Ctrl+drag: measure-ruler tool (takes priority over the
-            #     resize/cursor/mark drags below so it works anywhere) ---
-            if (event.modifiers() & Qt.KeyboardModifier.ControlModifier
-                    and self._scene._trace is not None):
-                lw = self._scene._label_width
-                in_label = (event.position().x() < lw if self._scene._horizontal
-                            else event.position().y() < lw)
-                if not in_label:
-                    scene_pt = self.mapToScene(event.position().toPoint())
-                    coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
-                    self._measure_press_ns = self._scene.scene_to_ns(coord)
-                    self._measure_anchor_coord = (scene_pt.y() if self._scene._horizontal
-                                                   else scene_pt.x())
-                    self.setDragMode(QGraphicsView.NoDrag)
-                    _HoverCursor.show(Qt.CursorShape.CrossCursor)
-                    event.accept()
-                    return
-
             # --- Check if we're starting a label-column/row resize drag ---
             if self._scene._horizontal:
                 lw = self._scene._label_width
@@ -3134,6 +3182,13 @@ class TimelineView(QGraphicsView):
             "" if on else "Enable AI Assistant in Settings → AI")
 
     def contextMenuEvent(self, event) -> None:
+        # macOS maps Ctrl+left-click to a context menu. Claim it as measure
+        # if the remapped right-press did not already start the ruler.
+        if _ctrl_like_held(event.modifiers()) or self._measure_press_ns is not None:
+            if self._measure_press_ns is None:
+                self._try_start_measure(event)
+            event.accept()
+            return
         # Suppress the context menu when the click lands inside the label column.
         # QContextMenuEvent uses .pos()/.globalPos() - NOT .position() (QMouseEvent only)
         lw = self._scene._label_width

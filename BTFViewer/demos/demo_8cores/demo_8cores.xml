@@ -27,8 +27,9 @@
     <description>
       Screen-capture + pre-rendered TTS. Order follows WORKFLOWS.md
       (find evidence, then explain): UI → Analysis → Health → Scope →
-      Balance → WCET → Latency → Concurrency → Compliance → Export/Compare → AI.
-      Trace: demo_8cores.btf.gz (frozen demo snapshot).
+      Balance → WCET → Latency → Concurrency → Compliance → Export/Compare →
+      AI for newbies (Settings, Start Investigation, verify jumps,
+      Explain region). Trace: demo_8cores.btf.gz (frozen demo snapshot).
     </description>
     <cwd>${BTF}</cwd>
     <trace>${XML_DIR}/demo_8cores.btf.gz</trace>
@@ -284,52 +285,46 @@
 
     <step id="18" title="AI setup" tags="ai">
       <focus/>
-      <audio file="${XML_DIR}/voice/18_ai_setup.mp3"/>
       <panel name="ai"/>
-      <wait seconds="24.5"/>
+      <audio file="${XML_DIR}/voice/18_ai_setup.mp3"/>
+      <wait seconds="16" why="voice: open Settings AI"/>
       <settings page="AI"/>
       <wait_audio/>
       <settings close="true"/>
     </step>
 
-    <step id="19" title="AI Analysis Findings" tags="ai">
+    <step id="19" title="AI Start Investigation" tags="ai">
       <focus/>
-      <audio file="${XML_DIR}/voice/19_ai_findings.mp3"/>
       <panel name="ai"/>
-      <confirm prompt="Click template Analysis Findings, wait for reply, optional jump — then continue"/>
-      <wait ai="true" why="model reply"/>
+      <audio file="${XML_DIR}/voice/19_ai_start.mp3"/>
+      <confirm prompt="Empty AI log: click Start Investigation (example ~20s, 11 tools); Apply cards if shown — then continue"/>
+      <wait ai="true" seconds="25" why="auto investigate (~20s flash-lite example)"/>
     </step>
 
-    <step id="20" title="AI Investigate" optional="true" tags="ai,long,optional">
+    <step id="20" title="AI verify jumps" tags="ai">
       <focus/>
-      <audio file="${XML_DIR}/voice/20_ai_investigate.mp3"/>
-      <confirm prompt="Clear AI log, click Investigate, Apply tool card when shown — then continue"/>
-      <wait ai="true" why="investigate"/>
+      <panel name="ai"/>
+      <audio file="${XML_DIR}/voice/20_ai_verify.mp3"/>
+      <confirm prompt="Click every jump:TIME in the reply and confirm it on the timeline — then continue"/>
     </step>
 
-    <step id="21" title="AI Explain region" optional="true" tags="ai,long,optional">
+    <step id="21" title="AI Explain region" tags="ai">
       <focus/>
       <audio file="${XML_DIR}/voice/21_ai_explain.mp3"/>
       <fit_view/>
       <clear_cursors/>
       <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
-      <confirm prompt="Limit ON; click Explain region; verify jump inside C1–Cn — then continue"/>
+      <panel name="ai"/>
+      <confirm prompt="Limit ON; click Explain region; every jump must land inside C1–Cn — then continue"/>
       <wait ai="true" why="explain region"/>
       <limit on="false"/>
       <clear_cursors/>
     </step>
 
-    <step id="22" title="AI Migration thrash" tags="ai">
-      <focus/>
-      <audio file="${XML_DIR}/voice/22_ai_thrash.mp3"/>
-      <confirm prompt="Full-trace; Clear; Migration thrash template; wait for reply — then continue"/>
-      <wait ai="true" why="thrash"/>
-    </step>
-
-    <step id="23" title="Close" tags="intro">
+    <step id="22" title="Close" tags="intro">
       <focus/>
       <macro ref="fit"/>
-      <audio file="${XML_DIR}/voice/23_close.mp3"/>
+      <audio file="${XML_DIR}/voice/22_close.mp3"/>
       <wait seconds="3" why="end hold"/>
     </step>
 

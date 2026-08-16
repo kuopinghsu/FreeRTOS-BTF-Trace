@@ -106,7 +106,7 @@ export class InteractionHandler {
     canvas.addEventListener('mouseup',     this._boundMouseUp)
     canvas.addEventListener('mouseleave',  this._boundMouseLeave)
     canvas.addEventListener('dblclick',    this._boundDblClick)
-    canvas.addEventListener('contextmenu', this._boundContextMenu)
+    canvas.addEventListener('contextmenu', this._boundContextMenu, { capture: true })
     // Ctrl release must cancel the measure-ruler even if it happens off-canvas.
     if (typeof document !== 'undefined') {
       document.addEventListener('keyup', this._boundKeyUp)
@@ -137,7 +137,7 @@ export class InteractionHandler {
     c.removeEventListener('mouseup',     this._boundMouseUp)
     c.removeEventListener('mouseleave',  this._boundMouseLeave)
     c.removeEventListener('dblclick',    this._boundDblClick)
-    c.removeEventListener('contextmenu', this._boundContextMenu)
+    c.removeEventListener('contextmenu', this._boundContextMenu, { capture: true })
     if (typeof document !== 'undefined') {
       document.removeEventListener('keyup', this._boundKeyUp)
     }
@@ -866,6 +866,9 @@ export class InteractionHandler {
 
   _onContextMenu(e) {
     e.preventDefault()
+    // macOS (and some Linux setups) maps Ctrl+left-click to contextmenu.
+    // Ctrl+drag is the measure-ruler tool — do not open the timeline menu.
+    if (e.ctrlKey || this._measureDragging) return
     const rect = this._canvas.getBoundingClientRect()
     const cx   = e.clientX - rect.left
     const cy   = e.clientY - rect.top

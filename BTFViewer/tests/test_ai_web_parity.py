@@ -1,8 +1,11 @@
 """Desktop ↔ web AI constants and call-site parity."""
 from __future__ import annotations
 
+import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -184,6 +187,8 @@ class AiWebParityTests(unittest.TestCase):
             ("def detect_timeline_anomalies", "export function detectTimelineAnomalies"),
             ("def collect_worst_events", "export function collectWorstEvents"),
             ("def best_finding_scope", "export function bestFindingScope"),
+            ("def finding_overlay_times", "export function findingOverlayTimes"),
+            ("def task_inspector_line", "export function taskInspectorLine"),
             ("def compare_summary_strip", "export function compareSummaryStrip"),
             ("def harvest_ux_events", "export function harvestUxEvents"),
             ("def prepare_ux_events", "export function prepareUxEvents"),
@@ -269,14 +274,12 @@ class AiWebParityTests(unittest.TestCase):
         web = (BTF_ROOT / "web/src/components/StatisticsPanel.vue").read_text(
             encoding="utf-8")
         readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
-        workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
         ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
         for title in titles:
             self.assertIn(f'<h2>{title}', stats.replace("{_esc(scope_title)}", ""), title)
             self.assertGreaterEqual(stats.count(title), 3, title)
             self.assertGreaterEqual(web.count(title), 3, title)
             self.assertIn(title, readme, title)
-            self.assertIn(title, workflows, title)
             self.assertIn(title, ai_md, title)
         self.assertIn("Dispatch / Scheduling Latency", stats)
         self.assertIn("<th>p99</th>", stats)
@@ -364,6 +367,16 @@ class AiWebParityTests(unittest.TestCase):
         js_ids = set(re.findall(r"'([^']+)'", block.group(1)))
         self.assertEqual(js_ids, set(STATS_HEAVY_SECTIONS))
         collapsed_keys = set(default_section_collapsed())
+        from btf_viewer_pkg.config import COMMAND_PALETTE_ACTIONS, WORKSPACE_PRESETS
+        self.assertIn("export const COMMAND_PALETTE_ACTIONS = [", js)
+        for aid, label in COMMAND_PALETTE_ACTIONS:
+            self.assertIn(f"['{aid}', '{label}']", js)
+        self.assertIn("export const WORKSPACE_PRESETS = {", js)
+        for pid, sections in WORKSPACE_PRESETS.items():
+            self.assertIn(f"'{pid}':", js, pid)
+            for sid in sections:
+                self.assertIn(f"'{sid}'", js, f"{pid}:{sid}")
+        self.assertIn("export function workspacePresetCollapsed", js)
         self.assertTrue(set(STATS_HEAVY_SECTIONS) <= collapsed_keys)
         js_exp = re.search(
             r"export const STATS_DEFAULT_EXPANDED_SECTIONS = \[([\s\S]*?)\]", js)
@@ -381,6 +394,11 @@ class AiWebParityTests(unittest.TestCase):
         portable_js = (BTF_ROOT / "web/src/utils/sessionPortable.js").read_text(
             encoding="utf-8")
         self.assertIn("statsSectionCollapsed", main)
+        self.assertIn("_apply_workspace_preset", main)
+        self.assertIn("inspect-task", main)
+        app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
+        self.assertIn("function applyWorkspacePreset", app)
+        self.assertIn("inspect-task", app)
         self.assertIn("statsSectionCollapsed", portable_js)
         self.assertNotIn("statsSectionCollapsed:", store)
         settings = (BTF_ROOT / "web/src/utils/settingsStore.js").read_text(
@@ -481,6 +499,78 @@ class AiWebParityTests(unittest.TestCase):
         )
         self.assertNotIn("Max≪Avg", readme)
         self.assertNotIn("Max≪Avg", ai_md)
+        workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
+        stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
+        dlg = (BTF_ROOT / "web/src/components/AnalysisFindingsDialog.vue").read_text(
+            encoding="utf-8")
+        compare = (BTF_ROOT / "web/src/components/TraceCompareDialog.vue").read_text(
+            encoding="utf-8")
+        mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
+        app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
+        assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
+            encoding="utf-8")
+        panel = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(
+            encoding="utf-8")
+        docs = readme + "\n" + ai_md + "\n" + workflows
+        for needle in (
+            "Save recipe…",
+            "Story…",
+            "Save as baseline",
+            "Score vs baseline",
+            "Start Investigation",
+            "Ctrl+K",
+            "Inspect task",
+        ):
+            self.assertIn(needle, docs, needle)
+        for needle in ("Save recipe…", "Story…"):
+            self.assertIn(needle, stats, needle)
+            self.assertIn(needle, dlg, needle)
+            self.assertIn(needle, readme, needle)
+            self.assertIn(needle, ai_md, needle)
+        for needle in ("Save as baseline", "Score vs baseline"):
+            self.assertIn(needle, stats, needle)
+            self.assertIn(needle, compare, needle)
+            self.assertIn(needle, readme, needle)
+            self.assertIn(needle, ai_md, needle)
+            self.assertIn(needle, workflows, needle)
+        self.assertIn("**Trends**", readme)
+        self.assertIn("**Trends**", workflows)
+        self.assertIn('addTab(self._trends_table, "Trends")', stats)
+        self.assertIn("{ id: 'trends', label: 'Trends' }", compare)
+        self.assertIn("Start Investigation", assist)
+        self.assertIn("Start Investigation", panel)
+        self.assertIn("Inspect task", mw)
+        cfg_js = (BTF_ROOT / "web/src/config.js").read_text(encoding="utf-8")
+        self.assertIn("['inspect-task', 'Inspect task']", cfg_js)
+        self.assertIn("inspect-task", app)
+        self.assertIn("inspect-task", mw)
+        self.assertIn("investigation_session", ai_md)
+        self.assertIn("investigation_session", mw)
+        self.assertIn("investigation_session", assist)
+        for needle in (
+            "user or assistant turn",
+            "Start Investigation",
+            "Current Issue",
+        ):
+            self.assertIn(needle, readme, needle)
+            self.assertIn(needle, ai_md, needle)
+            self.assertIn(needle, workflows, needle)
+        self.assertIn("investigation_session_has_chat", assist)
+        self.assertIn("investigationSessionHasChat", panel)
+        self.assertIn("reasonably balanced", stats)
+        wf_js = (BTF_ROOT / "web/src/utils/workflowAnalysis.js").read_text(
+            encoding="utf-8")
+        self.assertIn("reasonably balanced", wf_js)
+        statistics = (BTF_ROOT / "STATISTICS.md").read_text(encoding="utf-8")
+        self.assertIn("reasonably balanced", statistics)
+        self.assertIn("Load Balance Score", statistics)
+        self.assertIn("Load Balance Score", workflows)
+        self.assertIn("color: var(--fg)", dlg)
+        self.assertIn("--analysis-ok", app)
+        self.assertNotIn("`cross_trace_trends`", docs)
+        self.assertNotIn("`crossTraceTrends`", docs)
+        for name in ("AI_TODO.md", "BTFViewer_TODO.md", "BTFViewer_UI.md"):
+            self.assertNotIn(name, docs, name)
 
     def test_web_execute_tools_pushes_undo(self) -> None:
         app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
@@ -514,7 +604,6 @@ class AiWebParityTests(unittest.TestCase):
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
         ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
         readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
-        workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
         for name in AI_VIEWER_TOOL_NAMES:
             self.assertRegex(js, re.compile(rf"['\"]{re.escape(name)}['\"]"))
             self.assertIn(f"`{name}`", ai_md)
@@ -522,13 +611,6 @@ class AiWebParityTests(unittest.TestCase):
             self.assertIn(f"'{metric}'", js)
             self.assertIn(f'"{metric}"', (
                 BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8"))
-        self.assertIn("query_raw_metric", workflows)
-        self.assertIn("add_annotation", workflows)
-        self.assertIn("export_report", workflows)
-        self.assertIn("search_timeline", workflows)
-        self.assertIn("trigger_compare", workflows)
-        self.assertIn("clear_marks", workflows)
-        self.assertIn("reset_view", workflows)
         self.assertIn("`add_annotation` / `query_raw_metric` / `export_report`", ai_md)
         self.assertIn(
             "`clear_marks` / `reset_view` / `search_timeline` / "
@@ -554,7 +636,6 @@ class AiWebParityTests(unittest.TestCase):
             ai_md,
         )
         self.assertIn("Save selection as BTF", readme)
-        self.assertIn("Save selection as BTF", workflows)
         self.assertIn("MAX_SEARCH_HITS = 40", js)
         self.assertIn("_MAX_SEARCH_HITS = 40", (
             BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8"))
@@ -797,14 +878,15 @@ class AiWebParityTests(unittest.TestCase):
 
         workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
         slides = (BTF_ROOT / "btf-viewer-slides.md").read_text(encoding="utf-8")
-        for needle in ("Verify with AI…", "Auto investigate…", "Limit to C1–Cn"):
+        for needle in ("Verify with AI…", "Auto investigate…", "Limit to C1–Cn",
+                       "Save as baseline", "Score vs baseline", "Ctrl+K"):
             self.assertIn(needle, readme)
             self.assertIn(needle, workflows)
         self.assertIn("Limit to C1–Cn", slides)
         self.assertNotIn("Limit to cursor range", slides)
-        self.assertIn("find_critical_path", workflows)
-        self.assertIn("bookmark_finding", workflows)
-        self.assertIn("export_investigation", workflows)
+        self.assertIn("`find_critical_path`", ai_md)
+        self.assertIn("`bookmark_finding`", ai_md)
+        self.assertIn("`export_investigation`", ai_md)
         self.assertNotIn(
             "`query_raw_metric` / `search_timeline` / `trigger_compare` run immediately",
             workflows,
@@ -1093,8 +1175,6 @@ class AiWebParityTests(unittest.TestCase):
         readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
         ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
         self.assertIn("thought_signature", ai_md)
-        workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
-        self.assertIn("thought_signature", workflows)
         self.assertIn('"preset": active["preset"]', assist)
         self.assertIn("preset: active.preset", (
             BTF_ROOT / "web/src/components/AiAssistantPanel.vue"
@@ -1150,7 +1230,6 @@ class AiWebParityTests(unittest.TestCase):
             encoding="utf-8")
         readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
         ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
-        workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
 
         self.assertEqual(AI_AUTH_NONE, "none")
         self.assertEqual(AI_AUTH_API_KEY, "api_key")
@@ -1244,7 +1323,6 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("Allow self-signed TLS", vue)
         self.assertIn("Allow self-signed TLS", readme)
         self.assertIn("Allow self-signed TLS", ai_md)
-        self.assertIn("Allow self-signed TLS", workflows)
         self.assertIn("def parse_ai_tls_verify", assist)
         self.assertIn("export function parseAiTlsVerify", js)
         self.assertIn("ai_urlopen", assist)
@@ -1260,20 +1338,18 @@ class AiWebParityTests(unittest.TestCase):
             "deepseek.json", "grok.json", "presets.json",
         ):
             self.assertIn(name, ai_md)
-            self.assertIn(name, workflows)
             self.assertIn(name, stats)
             self.assertIn(name, vue)
-        self.assertIn("401 keeps Sign in / Settings CTAs", workflows)
-        self.assertIn("open the Model dropdown", workflows)
+        self.assertIn("401 / 403", ai_md)
+        self.assertIn("pick a served id from the dropdown", ai_md)
         self.assertIn("token-efficient", ai_md)
         self.assertIn("Parameters / targets", ai_md)
         self.assertIn("qwen2.5:7b", ai_md)
-        self.assertIn("qwen3.5:9b", workflows)
+        self.assertIn("qwen3.5:9b", ai_md)
         self.assertIn("8k", ai_md)
         self.assertIn("examples/ai/presets.json", readme)
         self.assertIn("## GUI tools", ai_md)
         self.assertIn("triage overall findings", ai_md)
-        self.assertIn("triage overall findings", workflows)
         self.assertIn(
             "Open the Model dropdown to pick one.", stats)
         self.assertIn(
@@ -1294,7 +1370,6 @@ class AiWebParityTests(unittest.TestCase):
             encoding="utf-8")
         readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
         ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
-        workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
         examples = (BTF_ROOT / "examples/ai/README.md").read_text(encoding="utf-8")
         cli = (BTF_ROOT / "btf_viewer_pkg/cli.py").read_text(encoding="utf-8")
 
@@ -1338,7 +1413,6 @@ class AiWebParityTests(unittest.TestCase):
             (cli, "cli.py"),
             (readme, "README.md"),
             (ai_md, "AI.md"),
-            (workflows, "WORKFLOWS.md"),
             (examples, "examples/ai/README.md"),
         ):
             self.assertTrue(
@@ -1347,13 +1421,11 @@ class AiWebParityTests(unittest.TestCase):
         for blob, label in (
             (readme, "README.md"),
             (ai_md, "AI.md"),
-            (workflows, "WORKFLOWS.md"),
         ):
             self.assertIn(order, blob, label)
 
         self.assertIn("id=\"ai-api-keys\"", readme)
         self.assertIn("README.md#ai-api-keys", ai_md)
-        self.assertIn("README.md#ai-api-keys", workflows)
         self.assertIn("README.md#ai-api-keys", examples)
         self.assertIn("ignored for chat / Test connection", readme)
         self.assertIn("<api-key env=\"VAR\">", ai_md)
@@ -1493,6 +1565,15 @@ class AiWebParityTests(unittest.TestCase):
             ("def dump_user_investigation_templates", "export function dumpUserInvestigationTemplates"),
             ("def historical_knowledge_for_finding", "export function historicalKnowledgeForFinding"),
             ("def update_case_from_tool", "export function updateCaseFromTool"),
+            ("def investigation_guide_stage", "export function investigationGuideStage"),
+            ("def investigation_issue_card", "export function investigationIssueCard"),
+            ("def format_investigation_issue_card", "export function formatInvestigationIssueCard"),
+            ("def dump_investigation_session", "export function dumpInvestigationSession"),
+            ("def parse_investigation_session", "export function parseInvestigationSession"),
+            ("def investigation_session_has_chat", "export function investigationSessionHasChat"),
+            ("GUIDED_STAGES", "export const GUIDED_STAGES"),
+            ("ESTIMATE_BANNER", "export const ESTIMATE_BANNER"),
+            ("def guide_stage_needles", "export function guideStageNeedles"),
         ):
             self.assertIn(py_name, py, py_name)
             self.assertIn(js_name, js, js_name)
@@ -1518,6 +1599,8 @@ class AiWebParityTests(unittest.TestCase):
             ("def detect_contradictions", "export function detectContradictions"),
             ("def assess_evidence_sufficiency", "export function assessEvidenceSufficiency"),
             ("def cluster_findings", "export function clusterFindings"),
+            ("def analysis_dashboard", "export function analysisDashboard"),
+            ("def format_analysis_story", "export function formatAnalysisStory"),
             ("def generate_fingerprint", "export function generateFingerprint"),
             ("def find_similar_investigations", "export function findSimilarInvestigations"),
             ("def regression_localize", "export function regressionLocalize"),
@@ -1700,12 +1783,23 @@ class AiWebParityTests(unittest.TestCase):
             "Open at least two BTF tabs to use Trace Compare.", panel)
         self.assertIn("This trace has a single core — not applicable.", assist)
         self.assertIn("This trace has a single core — not applicable.", panel)
+        self.assertIn("format_investigation_issue_card", assist)
+        self.assertIn("formatInvestigationIssueCard", panel)
+        self.assertIn("QHBoxLayout(self._guide_stepper)", assist)
+        self.assertIn("guide_now", assist)
+        self.assertIn("color: var(--fg, #1E1E1E)", panel)
+        self.assertNotIn("Not sure where to start?", panel)
+        self.assertNotIn("ai-issue-kicker", panel)
+        case_py = (BTF_ROOT / "btf_viewer_pkg/ai_case.py").read_text(encoding="utf-8")
+        case_js_src = (BTF_ROOT / "web/src/utils/aiCase.js").read_text(encoding="utf-8")
+        self.assertIn('"CURRENT ISSUE\\n"', case_py)
+        self.assertIn("CURRENT ISSUE\\n", case_js_src)
 
         primary = [
             ai_template_by_id(tid)[1] for tid in AI_TEMPLATE_PRIMARY_IDS]
         self.assertEqual(
             primary,
-            ["Investigate", "Analysis Findings", "Explain region",
+            ["Analysis Findings", "Explain region", "Investigate",
              "Auto investigate"],
         )
         self.assertIn("v-for=\"(row, ri) in primaryTemplateRows\"", panel)
@@ -1742,6 +1836,8 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn('"aiHeader"', in_bar)
         self.assertIn('"aiMoreMenu"', in_bar)
         self.assertIn('"aiComposer"', in_bar)
+        self.assertIn('"aiGuide"', in_bar)
+        self.assertIn('"aiGuideStepper"', in_bar)
         self.assertIn("def _set_status", assist)
         self.assertIn("format_cost_status", assist)
         self.assertIn("formatCostStatus(costMeter.value)", panel)
@@ -1774,10 +1870,11 @@ class AiWebParityTests(unittest.TestCase):
         self.assertNotIn("{{ busy ? 'Waiting…' : 'Ask' }}", panel)
         self.assertNotIn('_send_btn.setText("Waiting…"', assist)
         clear_fn = assist[assist.find("def clear_conversation"):assist.find("def _show_log_menu")]
-        self.assertIn("self._cost_meter = empty_cost_meter()", clear_fn)
+        self.assertNotIn("self._cost_meter = empty_cost_meter()", clear_fn)
+        self.assertNotIn("_sync_evidence_log_entry", clear_fn)
         send_fn = assist[assist.find("def _send_query"):]
         self.assertNotIn("self._cost_meter = empty_cost_meter()", send_fn)
-        self.assertEqual(panel.count("costMeter.value = emptyCostMeter()"), 1)
+        self.assertNotIn("costMeter.value = emptyCostMeter()", panel)
 
         menu_ids = [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids]
         self.assertEqual(
@@ -1822,8 +1919,8 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn('v-for="tpl in investigationTemplates"', panel)
 
         findings = [
-            "Investigate…", "Root cause…", "Verify with AI…", "Explain…",
-            "Auto investigate…", "Query with AI…",
+            "Query with AI…", "Investigate…", "Verify with AI…", "Explain…",
+            "Root cause…", "Auto investigate…", "Save recipe…", "Story…",
         ]
         pos = 0
         for label in findings:
@@ -1831,12 +1928,14 @@ class AiWebParityTests(unittest.TestCase):
             self.assertGreaterEqual(nxt, 0, f"web findings: {label}")
             pos = nxt
         desk_row = [
+            r'_make_ai_btn\(\s*"Query with AI…"',
             r'_make_ai_btn\(\s*"Investigate…"',
-            r'_make_ai_btn\(\s*"Root cause…"',
             r'_make_ai_btn\(\s*"Verify with AI…"',
             r'_make_explain_btn\(\)',
+            r'_make_ai_btn\(\s*"Root cause…"',
             r'_make_ai_btn\(\s*"Auto investigate…"',
-            r'_make_ai_btn\(\s*"Query with AI…"',
+            r'Save recipe…',
+            r'Story…',
         ]
         pos = 0
         for pat in desk_row:
@@ -1846,6 +1945,9 @@ class AiWebParityTests(unittest.TestCase):
         self.assertEqual(list(EXPLAIN_LEVELS), ["quick", "technical", "deep"])
         self.assertIn("for level in EXPLAIN_LEVELS", stats)
         self.assertIn("EXPLAIN_LEVELS.map", dlg)
+        self.assertIn('<Teleport to="body">', dlg)
+        self.assertIn("function placeExplainMenu", dlg)
+        self.assertIn("function toggleExplain", dlg)
         self.assertIn("query_template", assist)
         self.assertIn("extra=ex", (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(
             encoding="utf-8"))
@@ -1858,12 +1960,262 @@ class AiWebParityTests(unittest.TestCase):
         compare_dlg = (BTF_ROOT / "web/src/components/TraceCompareDialog.vue").read_text(
             encoding="utf-8")
         self.assertIn("Validate experiment…", compare_dlg)
+        self.assertIn("Save as baseline", stats)
+        self.assertIn("Save as baseline", compare_dlg)
+        self.assertIn("Score vs baseline", stats)
+        self.assertIn("Score vs baseline", compare_dlg)
+        self.assertIn('addTab(self._trends_table, "Trends")', stats)
+        self.assertIn("{ id: 'trends', label: 'Trends' }", compare_dlg)
+        parser_py = (BTF_ROOT / "btf_viewer_pkg/parser.py").read_text(encoding="utf-8")
+        cmp_js = (BTF_ROOT / "web/src/utils/traceCompare.js").read_text(encoding="utf-8")
+        self.assertIn("def cross_trace_trends", parser_py)
+        self.assertIn("export function crossTraceTrends", cmp_js)
         # Modes are not extra AI_TEMPLATE_QUESTIONS entries.
         ids = [t[0] for t in AI_TEMPLATE_QUESTIONS]
         self.assertEqual(ids[-1], "auto_investigate")
         self.assertNotIn("diagnose", ids)
         self.assertNotIn("validate_experiment", ids)
         self.assertEqual(len(menu_ids) + len(AI_TEMPLATE_PRIMARY_IDS), 20)
+
+    def test_ai_panel_theme_and_mermaid_match_web(self) -> None:
+        """AI log diagrams and Analysis finding ink stay Desktop/Web lockstep."""
+        from btf_viewer_pkg.ai_mermaid import mermaid_palette
+
+        assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
+            encoding="utf-8")
+        mermaid_py = (BTF_ROOT / "btf_viewer_pkg/ai_mermaid.py").read_text(
+            encoding="utf-8")
+        mermaid_js = (BTF_ROOT / "web/src/utils/aiMermaid.js").read_text(
+            encoding="utf-8")
+        md_js = (BTF_ROOT / "web/src/utils/aiMarkdown.js").read_text(
+            encoding="utf-8")
+        panel = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(
+            encoding="utf-8")
+        app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
+        dlg = (BTF_ROOT / "web/src/components/AnalysisFindingsDialog.vue").read_text(
+            encoding="utf-8")
+        stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
+
+        self.assertIn("def mermaid_palette", mermaid_py)
+        self.assertIn("export function mermaidPalette", mermaid_js)
+        key_map = {
+            "bg": "bg", "lane": "lane", "node_fill": "nodeFill",
+            "node_stroke": "nodeStroke", "node_text": "nodeText",
+            "edge": "edge", "edge_label": "edgeLabel", "arrow": "arrow",
+            "msg": "msg", "note_fill": "noteFill", "note_stroke": "noteStroke",
+            "note_text": "noteText",
+        }
+        for is_dark in (True, False):
+            pal = mermaid_palette(is_dark)
+            self.assertEqual(set(pal), set(key_map))
+            for py_key, js_key in key_map.items():
+                self.assertIn(f"{js_key}: '{pal[py_key]}'", mermaid_js, js_key)
+        self.assertIn(
+            "return _flowchart_svg(text, interactive=interactive, is_dark=is_dark)",
+            mermaid_py)
+        self.assertIn("return flowchartSvg(text, interactive, dark)", mermaid_js)
+        self.assertIn("is_dark=is_dark)", assist)
+        self.assertIn("mermaid_block_html(", assist)
+        self.assertIn("dark = true", md_js)
+        self.assertIn("{ inlineSvg, zoomable, dark }", md_js)
+        self.assertIn("darkMode: { type: Boolean, default: true }", panel)
+        self.assertIn(':dark-mode="timelineOptions.darkMode"', app)
+        self.assertIn(
+            "formatAiMessageHtml(role, text, { dark: props.darkMode !== false })",
+            panel)
+        self.assertIn("is_dark=bool(getattr(self, \"_is_dark\", True))", assist)
+        self.assertIn("background: var(--panel-bg", panel)
+        self.assertIn("color: var(--analysis-ok)", dlg)
+        self.assertIn("color: var(--fg)", dlg)
+        self.assertNotIn("color: #1E1E1E;", dlg)
+        self.assertIn("--analysis-ok:", app)
+        self.assertIn("#166534", stats)
+        self.assertIn("load_balance_ok", stats)
+        self.assertIn("analysisFindingText", stats)
+        self.assertIn('ok_ink = "#7dcea0"', stats)
+        self.assertIn('ok_ink = "#166534"', stats)
+        self.assertIn("--analysis-ok:   #7dcea0", app)
+        self.assertIn("--analysis-ok:   #166534", app)
+        self.assertIn("--analysis-warn: #e67e22", app)
+        self.assertIn("--analysis-err:  #e74c3c", app)
+        self.assertIn("--analysis-warn: #9a4d00", app)
+        self.assertIn("--analysis-err:  #c0392b", app)
+        self.assertIn('ask, err, warn = "#8a8a8a", "#e74c3c", "#e67e22"', stats)
+        self.assertIn('ask, err, warn = "#555555", "#c0392b", "#9a4d00"', stats)
+
+    def _node_json(self, source: str) -> object:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is required for Desktop/Web runtime parity")
+        proc = subprocess.run(
+            [node, "--input-type=module", "-e", source],
+            cwd=BTF_ROOT / "web",
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        if proc.returncode != 0:
+            self.fail(proc.stderr.strip() or proc.stdout.strip() or "node failed")
+        line = (proc.stdout or "").strip().splitlines()[-1]
+        return json.loads(line)
+
+    def test_runtime_analysis_mermaid_session_match_web(self) -> None:
+        """Run Analysis, mermaid palettes, and session-chat helpers on both apps."""
+        from btf_viewer_pkg.ai_case import (
+            dump_investigation_session,
+            investigation_session_has_chat,
+            parse_investigation_session,
+        )
+        from btf_viewer_pkg.ai_mermaid import mermaid_palette
+        from btf_viewer_pkg.stats import (
+            _build_workflow_analysis_findings,
+            _load_balance_metrics,
+        )
+
+        vectors = [
+            [40.0, 40.0, 40.0],
+            [55.0, 40.0, 30.0, 20.0, 15.0, 10.0, 5.0, 2.0],
+            [80.0, 10.0, 5.0, 5.0],
+            [50.0, 50.0],
+            [70.0, 50.0, 45.0, 40.0],
+            [0.0, 0.0],
+            [40.0],
+        ]
+        py_lb = [_load_balance_metrics(v) for v in vectors]
+        py_findings = []
+        for pcts in vectors:
+            rows = [(f"Core_{i}", p) for i, p in enumerate(pcts)]
+            found = _build_workflow_analysis_findings(
+                core_rows=rows,
+                exec_rows=[],
+                block_rows=[],
+                mig_rows=[],
+                pair_rows=[],
+                priority_rows=[],
+                sync_rows=[],
+                sync_issues=[],
+                tick={"tick_count": 0},
+            )
+            py_findings.append([
+                {
+                    "id": f.get("id") or "",
+                    "title": f.get("title"),
+                    "severity": f.get("severity"),
+                    "text": f.get("text"),
+                }
+                for f in found
+            ])
+        chat_cases = [
+            [],
+            [{"role": "evidence", "content": "CURRENT ISSUE"}],
+            [{"role": "user", "content": "hello"}],
+            [{"role": "assistant", "content": "ok"}],
+            [{"role": "user", "content": "  "}],
+        ]
+        py_chat = [investigation_session_has_chat(c) for c in chat_cases]
+        blob = dump_investigation_session(
+            payload={"finding": {"title": "x"}},
+            plan={"goal": "g", "steps": []},
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        py_parsed = parse_investigation_session(blob)
+        pal_py = {
+            "dark": mermaid_palette(True),
+            "light": mermaid_palette(False),
+        }
+
+        js_src = """
+import { mermaidPalette } from './src/utils/aiMermaid.js'
+import {
+  dumpInvestigationSession,
+  investigationSessionHasChat,
+  parseInvestigationSession,
+} from './src/utils/aiCase.js'
+import { loadBalanceMetrics } from './src/utils/loadBalanceGauge.js'
+import { buildWorkflowAnalysisFindings } from './src/utils/workflowAnalysis.js'
+const vectors = %s
+const chatCases = %s
+const blob = %s
+function slim(f) {
+  return { id: f.id || '', title: f.title, severity: f.severity, text: f.text }
+}
+function lb(v) {
+  const m = loadBalanceMetrics(v)
+  if (!m) return null
+  return { score: m.score, gini: m.gini, stddev: m.stddev }
+}
+console.log(JSON.stringify({
+  lb: vectors.map(lb),
+  findings: vectors.map(pcts => buildWorkflowAnalysisFindings({
+    coreRows: pcts.map(pct => ({ pct })),
+  }).map(slim)),
+  chat: chatCases.map(investigationSessionHasChat),
+  parsed: parseInvestigationSession(blob),
+  pal: { dark: mermaidPalette(true), light: mermaidPalette(false) },
+}))
+""" % (json.dumps(vectors), json.dumps(chat_cases), json.dumps(blob))
+        js = self._node_json(js_src)
+
+        for i, (a, b) in enumerate(zip(py_lb, js["lb"])):
+            if a is None:
+                self.assertIsNone(b, i)
+                continue
+            self.assertAlmostEqual(a["score"], b["score"], places=6, msg=i)
+            self.assertAlmostEqual(a["gini"], b["gini"], places=6, msg=i)
+            self.assertAlmostEqual(a["stddev"], b["stddev"], places=6, msg=i)
+        self.assertEqual(py_findings, js["findings"])
+        self.assertEqual(py_chat, js["chat"])
+        self.assertEqual(
+            py_parsed["payload"]["finding"]["title"],
+            js["parsed"]["payload"]["finding"]["title"],
+        )
+        self.assertTrue(js["parsed"]["messages"][0]["content"])
+        key_map = {
+            "bg": "bg", "lane": "lane", "node_fill": "nodeFill",
+            "node_stroke": "nodeStroke", "node_text": "nodeText",
+            "edge": "edge", "edge_label": "edgeLabel", "arrow": "arrow",
+            "msg": "msg", "note_fill": "noteFill", "note_stroke": "noteStroke",
+            "note_text": "noteText",
+        }
+        for theme in ("dark", "light"):
+            for py_key, js_key in key_map.items():
+                self.assertEqual(
+                    pal_py[theme][py_key],
+                    js["pal"][theme][js_key],
+                    f"{theme}.{py_key}",
+                )
+
+    def test_session_overlay_inspector_parity(self) -> None:
+        """Investigation restore, finding overlays, and task inspector stay lockstep."""
+        assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
+            encoding="utf-8")
+        panel = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(
+            encoding="utf-8")
+        mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
+        app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
+        scene = (BTF_ROOT / "btf_viewer_pkg/scene.py").read_text(encoding="utf-8")
+        renderer = (BTF_ROOT / "web/src/renderer/TimelineRenderer.js").read_text(
+            encoding="utf-8")
+        store = (BTF_ROOT / "web/src/utils/sessionStore.js").read_text(
+            encoding="utf-8")
+        self.assertIn("_persist_investigation_session", assist)
+        self.assertIn("_restore_investigation_session", assist)
+        self.assertIn("investigation_session", mw)
+        self.assertIn("investigationSnapshot", panel)
+        self.assertIn("restoreInvestigation", panel)
+        self.assertIn("aiCase:", store)
+        self.assertIn("restoreInvestigation", app)
+        self.assertIn("QTextEdit.ExtraSelection", assist)
+        self.assertIn("ai-msg-flash", panel)
+        self.assertIn("def set_finding_overlays", scene)
+        self.assertIn("export function drawFindingHits", renderer)
+        self.assertIn("_refresh_finding_overlays", mw)
+        self.assertIn("findingHits", app)
+        self.assertIn("_status_inspect", mw)
+        self.assertIn("status-inspect", app)
+        self.assertIn("task_inspector_line", mw)
+        self.assertIn("taskInspectorLine", app)
 
     def test_timeline_ai_context_menu_disabled_when_ai_off(self) -> None:
         view = (BTF_ROOT / "btf_viewer_pkg/view.py").read_text(encoding="utf-8")

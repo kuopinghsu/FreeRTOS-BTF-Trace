@@ -75,6 +75,47 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         self.assertIn("Load imbalance", load["title"])
         self.assertNotIn("reasonably balanced", load["text"])
 
+    def test_balanced_cores_include_score_metrics(self):
+        findings = _build_workflow_analysis_findings(
+            core_rows=[("Core_0", 40.0), ("Core_1", 40.0), ("Core_2", 40.0)],
+            exec_rows=[],
+            block_rows=[],
+            mig_rows=[],
+            pair_rows=[],
+            priority_rows=[],
+            sync_rows=[],
+            sync_issues=[],
+            tick={"tick_count": 0},
+        )
+        load = next(f for f in findings if f.get("id") == "load_balance_ok")
+        self.assertEqual(load["severity"], "info")
+        self.assertEqual(load["title"], "Core utilisation balance")
+        self.assertIn("Load Balance Score", load["text"])
+        self.assertIn("σ=", load["text"])
+        self.assertIn("G=", load["text"])
+        self.assertIn("reasonably balanced", load["text"])
+
+    def test_no_load_finding_for_one_core_or_zero_util(self):
+        for cores in (
+            [("Core_0", 40.0)],
+            [("Core_0", 0.0), ("Core_1", 0.0)],
+        ):
+            findings = _build_workflow_analysis_findings(
+                core_rows=cores,
+                exec_rows=[],
+                block_rows=[],
+                mig_rows=[],
+                pair_rows=[],
+                priority_rows=[],
+                sync_rows=[],
+                sync_issues=[],
+                tick={"tick_count": 0},
+            )
+            self.assertFalse(
+                any("balance" in f["title"].lower() for f in findings),
+                cores,
+            )
+
     def test_priority_lmh_uses_pattern_index(self):
         findings = _build_workflow_analysis_findings(
             core_rows=[("Core_0", 50.0), ("Core_1", 50.0)],
@@ -150,7 +191,7 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         self.assertEqual(dlg.font().pixelSize(), expected.pixelSize())
 
     def test_analysis_dialog_query_with_ai_button(self):
-        from PySide6.QtWidgets import QApplication, QPushButton
+        from PySide6.QtWidgets import QApplication, QPushButton, QLabel
         from btf_viewer_pkg.stats import _AnalysisFindingsDialog
 
         if QApplication.instance() is None:
@@ -159,6 +200,9 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         dlg = _AnalysisFindingsDialog(findings, " (scoped)", ai_enabled=True)
         labels = [b.text().replace("&", "") for b in dlg.findChildren(QPushButton)]
         self.assertIn("Query with AI…", labels)
+        overview = dlg.findChild(QLabel, "analysisOverview")
+        self.assertIsNotNone(overview)
+        self.assertIn("Top issues:", overview.text())
         self.assertIn("Save as Text…", labels)
         self.assertFalse(dlg.wants_ai_query)
         ai_btn = next(
@@ -168,6 +212,53 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         ai_btn.click()
         self.assertTrue(dlg.wants_ai_query)
         self.assertFalse(dlg._ai_needs_settings)
+
+    def test_analysis_dialog_light_theme_overview_ink(self):
+        from PySide6.QtWidgets import QApplication, QLabel
+        from btf_viewer_pkg.stats import _AnalysisFindingsDialog
+
+        if QApplication.instance() is None:
+            QApplication([])
+        findings = [{"severity": "info", "title": "Tick OK", "text": "steady"}]
+        dlg = _AnalysisFindingsDialog(
+            findings, "", ai_enabled=False, is_dark=False)
+        overview = dlg.findChild(QLabel, "analysisOverview")
+        note = dlg.findChild(QLabel, "analysisNote")
+        self.assertIsNotNone(overview)
+        self.assertIn("color: #1E1E1E", overview.styleSheet())
+        self.assertNotIn("#c5d0dc", overview.styleSheet())
+        self.assertIn("color: #555555", note.styleSheet())
+        self.assertEqual(
+            dlg._list_w.item(0).foreground().color().name().upper(),
+            "#1E1E1E",
+        )
+        body = dlg.findChild(QLabel, "analysisFindingText")
+        self.assertIsNotNone(body)
+        self.assertIn("color: #1E1E1E", body.styleSheet())
+
+    def test_analysis_dialog_balance_ok_shows_metrics_and_light_ok_ink(self):
+        from PySide6.QtWidgets import QApplication, QLabel
+        from btf_viewer_pkg.stats import _AnalysisFindingsDialog
+
+        if QApplication.instance() is None:
+            QApplication([])
+        findings = [{
+            "id": "load_balance_ok",
+            "severity": "info",
+            "title": "Core utilisation balance",
+            "text": "Load Balance Score 100% (σ=0.0%, G=0.000) — cores look reasonably balanced.",
+        }]
+        dlg = _AnalysisFindingsDialog(
+            findings, "", ai_enabled=False, is_dark=False)
+        title = dlg.findChild(QLabel, "analysisFindingTitle")
+        body = dlg.findChild(QLabel, "analysisFindingText")
+        self.assertIsNotNone(title)
+        self.assertIsNotNone(body)
+        self.assertIn("Core utilisation balance", title.text())
+        self.assertIn("Load Balance Score 100%", body.text())
+        self.assertIn("color: #166534", body.styleSheet())
+        self.assertNotIn("#c5d0dc", body.styleSheet())
+        self.assertNotIn("#d68910", body.styleSheet())
 
     def test_analysis_dialog_auto_investigate_button(self):
         from PySide6.QtWidgets import QApplication, QPushButton
@@ -190,7 +281,7 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         self.assertEqual(dlg.wants_ai_finding_id, "f1")
 
     def test_analysis_dialog_explain_levels(self):
-        from PySide6.QtWidgets import QApplication, QToolButton
+        from PySide6.QtWidgets import QApplication, QPushButton
         from btf_viewer_pkg.stats import _AnalysisFindingsDialog
 
         if QApplication.instance() is None:
@@ -199,10 +290,14 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         dlg = _AnalysisFindingsDialog(findings, " (scoped)", ai_enabled=True)
         dlg._list_w.setCurrentRow(0)
         btn = next(
-            b for b in dlg.findChildren(QToolButton)
+            b for b in dlg.findChildren(QPushButton)
             if "Explain" in b.text().replace("&", "")
         )
-        acts = {a.text().replace("&", ""): a for a in btn.menu().actions()}
+        self.assertEqual(btn.styleSheet(), next(
+            b for b in dlg.findChildren(QPushButton)
+            if "Investigate" in b.text().replace("&", "")
+        ).styleSheet())
+        acts = {a.text().replace("&", ""): a for a in btn._explain_menu.actions()}
         self.assertIn("Quick", acts)
         self.assertIn("Technical", acts)
         self.assertIn("Deep", acts)

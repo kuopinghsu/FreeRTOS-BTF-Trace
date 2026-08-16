@@ -25,6 +25,7 @@ from .ai_mermaid import (
     decode_mermaid_zoom_token,
     hit_test_mermaid,
     mermaid_block_html,
+    mermaid_palette,
     mermaid_to_svg,
 )
 from .ai_tools import (
@@ -109,6 +110,17 @@ from .ai_case import (
     tool_calling_from_chat_response,
     investigation_mode_plan,
     investigation_mode_prompt,
+    investigation_guide_stage,
+    investigation_issue_card,
+    format_investigation_issue_card,
+    GUIDED_STAGES,
+    GUIDED_STAGE_LABELS,
+    ESTIMATE_BANNER,
+    VERIFY_HINT,
+    guide_stage_needles,
+    dump_investigation_session,
+    parse_investigation_session,
+    investigation_session_has_chat,
     interpreted_run_prompt,
     investigation_template_prompt,
     new_user_historical_entry,
@@ -191,19 +203,25 @@ class _MermaidZoomDialog(QDialog):
         parent=None,
         *,
         on_link: Optional[Callable[[QUrl], None]] = None,
+        is_dark: bool = True,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Diagram")
         self.setModal(True)
         self._source = source or ""
-        self._svg = mermaid_to_svg(self._source, interactive=False)
+        self._is_dark = bool(is_dark)
+        pal = mermaid_palette(self._is_dark)
+        self._fill = pal["bg"]
+        self._svg = mermaid_to_svg(
+            self._source, interactive=False, is_dark=self._is_dark)
         self._scale = 2.0
         self._hit_scale = 2.0
         lay = QVBoxLayout(self)
         hint = QLabel(
             "Scroll to zoom. Click a task/core in the figure or a name below."
         )
-        hint.setStyleSheet("color:#8b98a8;font-size:11px;")
+        hint_fg = "#8b98a8" if self._is_dark else "#555555"
+        hint.setStyleSheet(f"color:{hint_fg};font-size:11px;")
         hint.setWordWrap(True)
         lay.addWidget(hint)
         self._scroll = QScrollArea()
@@ -224,7 +242,7 @@ class _MermaidZoomDialog(QDialog):
             links.setOpenLinks(False)
             links.setMaximumHeight(80)
             links.setHtml(
-                f"<html><body style=\"background:#12161d;color:#dbe2ea;\">"
+                f"<html><body style=\"background:{pal['bg']};color:{pal['node_text']};\">"
                 f"{links_html}</body></html>"
             )
             if on_link:
@@ -266,7 +284,7 @@ class _MermaidZoomDialog(QDialog):
             self._img.setText("Could not render diagram.")
             return
         pm, hit_scale = rasterize_svg_pixmap(
-            self._svg, scale=self._scale, fill=QColor("#12161d"))
+            self._svg, scale=self._scale, fill=QColor(self._fill))
         if pm.isNull():
             self._img.setText("Could not render diagram.")
             return
@@ -354,6 +372,19 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Execution / Blocking tails.",
     ),
     (
+        "explain_region",
+        "Explain region",
+        "Explain the current timeline cursor region (scope C1–Cn — see the "
+        "Cursor region window in context). Stay strictly inside that window: "
+        "every jump:TIME you cite must fall between C1 and Cn. Identify "
+        "longest blocking, migrations, priority changes, wakeups, mutex "
+        "contention, deadline issues, idle gaps, and CPU imbalance in this "
+        "window. Check in-window Timeline Anomalies and Worst Events. Call "
+        "correlate_events and query_raw_metric as needed. Use "
+        "only in-window jump:TIME evidence (or state that tools found none). "
+        "End with: Summary, Top issues, Evidence, Suggested next action.",
+    ),
+    (
         "investigate",
         "Investigate",
         "Investigate the main performance problem in this scope. First call "
@@ -373,22 +404,6 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "evidence, (5) next mitigation to try.",
     ),
     (
-        "root_cause",
-        "Root cause",
-        "Perform root-cause analysis for the top finding. Call "
-        "investigate(finding_id) first, then follow the chain "
-        "deadline/WCET → execution → preemption → blocking → mutex → "
-        "priority inheritance → migration only as far as the evidence "
-        "supports. Call build_task_dependency_graph and "
-        "analyze_temporal_causality on the victim task. Call "
-        "rank_root_causes then challenge_conclusion. Call "
-        "query_raw_metric / search_timeline when numbers are "
-        "missing. Set cursors around the worst episode, highlight the "
-        "victim task, name Timeline Anomalies or Worst Events when a tail "
-        "spike is the evidence, and answer with Root cause, Evidence (bullet list with "
-        "jump:TIME), Confidence, and Suggested fix.",
-    ),
-    (
         "verify",
         "Verify finding",
         "Verify the selected Analysis Finding. Call investigate(finding_id=ID) "
@@ -403,17 +418,20 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Alternatives considered; and one next check.",
     ),
     (
-        "explain_region",
-        "Explain region",
-        "Explain the current timeline cursor region (scope C1–Cn — see the "
-        "Cursor region window in context). Stay strictly inside that window: "
-        "every jump:TIME you cite must fall between C1 and Cn. Identify "
-        "longest blocking, migrations, priority changes, wakeups, mutex "
-        "contention, deadline issues, idle gaps, and CPU imbalance in this "
-        "window. Check in-window Timeline Anomalies and Worst Events. Call "
-        "correlate_events and query_raw_metric as needed. Use "
-        "only in-window jump:TIME evidence (or state that tools found none). "
-        "End with: Summary, Top issues, Evidence, Suggested next action.",
+        "root_cause",
+        "Root cause",
+        "Perform root-cause analysis for the top finding. Call "
+        "investigate(finding_id) first, then follow the chain "
+        "deadline/WCET → execution → preemption → blocking → mutex → "
+        "priority inheritance → migration only as far as the evidence "
+        "supports. Call build_task_dependency_graph and "
+        "analyze_temporal_causality on the victim task. Call "
+        "rank_root_causes then challenge_conclusion. Call "
+        "query_raw_metric / search_timeline when numbers are "
+        "missing. Set cursors around the worst episode, highlight the "
+        "victim task, name Timeline Anomalies or Worst Events when a tail "
+        "spike is the evidence, and answer with Root cause, Evidence (bullet list with "
+        "jump:TIME), Confidence, and Suggested fix.",
     ),
     (
         AI_COMPARE_TEMPLATE_ID,
@@ -586,11 +604,12 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
 )
 
 # Always-visible wrapping chips. Keep in sync with web/src/utils/ollamaClient.js.
-# Last primary id shares a row with More templates… (web `.ai-tpl-row`).
+# Newbie left-to-right: Triage → Scope → Investigate. Last id shares a row
+# with More templates… (web `.ai-tpl-row`).
 AI_TEMPLATE_PRIMARY_IDS: Tuple[str, ...] = (
-    "investigate",
     "findings",
     "explain_region",
+    "investigate",
     "auto_investigate",
 )
 
@@ -607,7 +626,7 @@ def ai_template_primary_rows(
 # Overflow menu groups for the remaining templates (ids must cover every
 # AI_TEMPLATE_QUESTIONS entry that is not in AI_TEMPLATE_PRIMARY_IDS).
 AI_TEMPLATE_MENU_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Diagnose", ("root_cause", "verify", "explain_finding", "triage", "diagnostic_report")),
+    ("Diagnose", ("triage", "verify", "root_cause", "explain_finding", "diagnostic_report")),
     ("Compare", (AI_COMPARE_TEMPLATE_ID,)),
     (
         "Metrics",
@@ -1990,7 +2009,8 @@ def markdown_to_safe_html(text: str, *, as_img: bool = True, is_dark: bool = Tru
                 i += 1
             if lang.lower() == "mermaid":
                 out.append(mermaid_block_html(
-                    "\n".join(code_lines), as_img=as_img, zoomable=as_img))
+                    "\n".join(code_lines), as_img=as_img, zoomable=as_img,
+                    is_dark=is_dark))
                 continue
             code_html = html.escape("\n".join(code_lines))
             cls = f' class="language-{html.escape(lang)}"' if lang else ""
@@ -2399,7 +2419,7 @@ def format_ai_conversation_html_body(
         text = ai_entry_text(entry)
         cls = "user" if role == "user" else (
             "evidence" if role == "evidence" else "assistant")
-        body = _ai_message_body_html(role, text, as_img=False) if (text or "").strip() else ""
+        body = _ai_message_body_html(role, text, as_img=False, is_dark=False) if (text or "").strip() else ""
         cards = _tool_cards_html(ai_entry_tools(entry), "", light=True)
         head = f"<h3>{html.escape(ai_role_label(role, response_language))}</h3>"
         parts.append(
@@ -3323,12 +3343,22 @@ class _FlowLayout(QLayout):
         return self.minimumSize()
 
     def minimumSize(self) -> QSize:  # noqa: N802
-        size = QSize()
-        for item in self._items:
-            size = size.expandedTo(item.minimumSize())
+        """Include wrapping height so QVBoxLayout does not clip extra rows."""
         m = self.contentsMargins()
-        size += QSize(m.left() + m.right(), m.top() + m.bottom())
-        return size
+        mh = m.top() + m.bottom()
+        mw = m.left() + m.right()
+        if not self._items:
+            return QSize(mw, mh)
+        row_h = 0
+        row_w = mw
+        min_w = 0
+        for item in self._items:
+            hint = item.sizeHint()
+            row_h = max(row_h, hint.height())
+            row_w += hint.width() + self.spacing()
+            min_w = max(min_w, item.minimumSize().width())
+        wrap_h = self.heightForWidth(max(240, min_w + mw))
+        return QSize(min_w + mw, max(row_h, wrap_h) + mh)
 
     def _do_layout(self, rect, test_only: bool) -> int:
         left, top, right, bottom = self.getContentsMargins()
@@ -3452,6 +3482,8 @@ def _ai_chrome_colors(is_dark: bool) -> dict:
             hover="#243044",
             accent="#2a6fb2",
             chip_hover="#dbe2ea",
+            guide_now="#dbe2ea",
+            guide_done="#6fbf9a",
         )
     return dict(
         panel="#F5F5F5",
@@ -3462,6 +3494,8 @@ def _ai_chrome_colors(is_dark: bool) -> dict:
         hover="#E0E8F0",
         accent="#0066CC",
         chip_hover="#1E1E1E",
+        guide_now="#1E1E1E",
+        guide_done="#2e7d57",
     )
 
 
@@ -3773,7 +3807,9 @@ def create_ai_assistant_panel(
                     )
                 return btn
 
-            self._clear_btn = _ai_action_btn("Clear", "Clear the conversation log")
+            self._clear_btn = _ai_action_btn(
+                "Clear",
+                "Clear the conversation log (keeps usage and investigation evidence)")
             self._clear_btn.clicked.connect(self.clear_conversation)
             actions_row.addWidget(self._clear_btn)
             self._lang_btn = _ai_action_btn(
@@ -3815,7 +3851,8 @@ def create_ai_assistant_panel(
             self._log.setOpenLinks(False)
             self._log.setPlaceholderText(
                 "Conversation appears here\u2026\n"
-                "Uses Analysis Findings for the current Statistics scope. "
+                "Uses Analysis Findings for the current Statistics scope "
+                "(Limit to C1\u2013Cn when cursors are set). "
                 "Configure the endpoint in Settings \u2192 AI."
             )
             self._log.setMinimumHeight(80)
@@ -3826,6 +3863,68 @@ def create_ai_assistant_panel(
             self._log.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             self._log.customContextMenuRequested.connect(self._show_log_menu)
             self._log.viewport().installEventFilter(self)
+
+            self._guide_host = QWidget()
+            self._guide_host.setObjectName("aiGuide")
+            self._guide_host.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+            g_lay = QVBoxLayout(self._guide_host)
+            g_lay.setContentsMargins(0, 0, 0, 0)
+            g_lay.setSpacing(4)
+            self._guide_stepper = QWidget()
+            self._guide_stepper.setObjectName("aiGuideStepper")
+            self._guide_stepper.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+            self._guide_stepper.setMinimumHeight(22)
+            self._guide_step_row = QHBoxLayout(self._guide_stepper)
+            self._guide_step_row.setContentsMargins(0, 0, 0, 0)
+            self._guide_step_row.setSpacing(2)
+            self._guide_step_btns: Dict[str, QPushButton] = {}
+            for sid in GUIDED_STAGES:
+                btn = QPushButton(GUIDED_STAGE_LABELS.get(sid, sid))
+                btn.setFlat(True)
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setSizePolicy(
+                    QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+                btn.setMinimumHeight(20)
+                btn.setStyleSheet(
+                    "QPushButton { color:#8a96a8; font-size:11px; border:none;"
+                    " padding:0 3px; text-align:left; }"
+                )
+                btn.clicked.connect(
+                    lambda _=False, s=sid: self._jump_guide_stage(s))
+                self._guide_step_row.addWidget(btn)
+                self._guide_step_btns[sid] = btn
+            self._guide_step_row.addStretch(1)
+            g_lay.addWidget(self._guide_stepper)
+            self._start_inv_btn = QPushButton("Start Investigation")
+            self._start_inv_btn.setToolTip(qt_wrap_tooltip(
+                "Triage findings, scope the top issue, gather evidence, "
+                "and verify the cause."))
+            self._start_inv_btn.clicked.connect(self._start_investigation)
+            g_lay.addWidget(self._start_inv_btn)
+            self._issue_view = QLabel("")
+            self._issue_view.setWordWrap(True)
+            self._issue_view.setStyleSheet(
+                "color:#dbe2ea;font-size:12px;padding:4px 6px;"
+                "border:1px solid #3a4658;border-radius:6px;"
+            )
+            self._issue_view.hide()
+            g_lay.addWidget(self._issue_view)
+            self._verify_hint = QLabel(VERIFY_HINT)
+            self._verify_hint.setWordWrap(True)
+            self._verify_hint.setStyleSheet("color:#8a96a8;font-size:11px;")
+            self._verify_hint.hide()
+            g_lay.addWidget(self._verify_hint)
+            self._estimate_banner = QLabel(ESTIMATE_BANNER)
+            self._estimate_banner.setWordWrap(True)
+            self._estimate_banner.setStyleSheet(
+                "color:#e6d48a;background:#2a2418;border:1px solid #c9a227;"
+                "padding:4px 6px;font-size:11px;"
+            )
+            self._estimate_banner.hide()
+            g_lay.addWidget(self._estimate_banner)
+            top_lay.addWidget(self._guide_host)
             top_lay.addWidget(self._log, 1)
 
             self._plan_host = QWidget()
@@ -4089,10 +4188,12 @@ def create_ai_assistant_panel(
             self._refresh_auth_chip()
 
             self._refresh_send_btn()
+            self._refresh_guide_ui()
             wnd = self.window()
             is_dark = bool(getattr(wnd, "_is_dark", True))
             self._is_dark = is_dark
             self.apply_theme(is_dark)
+            QTimer.singleShot(0, self._restore_investigation_session)
 
         def apply_theme(self, is_dark: bool) -> None:
             """Match AI chrome (More menu, chips, composer, log) to the app theme."""
@@ -4124,6 +4225,15 @@ def create_ai_assistant_panel(
             if getattr(self, "_plan_view", None) is not None:
                 self._plan_view.setStyleSheet(
                     f"color:{c['muted']};font-size:11px;padding:1px 0;"
+                )
+            if getattr(self, "_issue_view", None) is not None:
+                self._issue_view.setStyleSheet(
+                    f"color:{c['text']};font-size:12px;padding:4px 6px;"
+                    f"border:1px solid {c['border']};border-radius:6px;"
+                )
+            if getattr(self, "_verify_hint", None) is not None:
+                self._verify_hint.setStyleSheet(
+                    f"color:{c['muted']};font-size:11px;"
                 )
             if getattr(self, "_status", None) is not None:
                 self._status.setStyleSheet(f"color:{c['muted']};font-size:11px;")
@@ -4162,6 +4272,7 @@ def create_ai_assistant_panel(
                 log.document().setDefaultStyleSheet(_ai_log_style(self._is_dark))
                 if getattr(self, "_entries", None):
                     self._refresh_log()
+            self._refresh_guide_ui()
 
         def _paint_more_menu(self) -> None:
             menu = getattr(self, "_more_menu", None)
@@ -4554,7 +4665,9 @@ def create_ai_assistant_panel(
             on_jump(value)
 
         def _open_mermaid_zoom(self, source: str) -> None:
-            dlg = _MermaidZoomDialog(source, self, on_link=self._on_jump_link)
+            dlg = _MermaidZoomDialog(
+                source, self, on_link=self._on_jump_link,
+                is_dark=bool(getattr(self, "_is_dark", True)))
             dlg.exec()
 
         def _pending_batch_id(self) -> str:
@@ -4630,9 +4743,10 @@ def create_ai_assistant_panel(
             else:
                 self._entries.append((role, text))
             self._refresh_log()
+            self._persist_investigation_session()
 
         def clear_conversation(self) -> None:
-            """Clear the conversation log (also stops an in-flight query)."""
+            """Clear chat replies; keep usage meter and investigation evidence."""
             if self._busy:
                 self.stop_query()
             self._entries.clear()
@@ -4640,12 +4754,11 @@ def create_ai_assistant_panel(
             self._pending_batches.clear()
             self._tool_round = 0
             self._log.clear()
-            self._cost_meter = empty_cost_meter()
             self._set_status("")
-            self._refresh_usage()
-            self._clear_evidence_log_entry()
             self._interpreted_query = None
             self._refresh_tool_bar()
+            self._refresh_guide_ui()
+            self._persist_investigation_session()
 
         def _show_log_menu(self, pos) -> None:
             menu = self._log.createStandardContextMenu(pos)
@@ -5445,11 +5558,165 @@ def create_ai_assistant_panel(
             self._plan_view.setText(format_investigation_plan_status(
                 plan, self._reply_language()))
             self._plan_host.show()
+            self._refresh_guide_ui()
 
         def _clear_investigation_plan(self) -> None:
             self._investigation_plan = None
             self._plan_host.hide()
             self._plan_view.clear()
+            self._refresh_guide_ui()
+
+        def _start_investigation(self) -> None:
+            item = ai_template_by_id("auto_investigate")
+            if item is None:
+                return
+            _tid, _label, prompt = item
+            self._use_template(_tid, prompt)
+
+        def _jump_guide_stage(self, stage: str) -> None:
+            needles = [n.lower() for n in guide_stage_needles(stage)]
+            if not needles:
+                return
+            blob = self._log.toPlainText().lower()
+            best = -1
+            needle_len = 0
+            for n in needles:
+                i = blob.rfind(n)
+                if i > best:
+                    best = i
+                    needle_len = len(n)
+            if best < 0:
+                return
+            cur = self._log.textCursor()
+            cur.setPosition(best)
+            cur.setPosition(best + max(1, needle_len), QTextCursor.MoveMode.KeepAnchor)
+            self._log.setTextCursor(cur)
+            self._log.ensureCursorVisible()
+            fmt = QTextCharFormat()
+            fmt.setBackground(QColor("#3d5a80"))
+            sel = QTextEdit.ExtraSelection()
+            sel.cursor = QTextCursor(cur)
+            sel.format = fmt
+            self._log.setExtraSelections([sel])
+            QTimer.singleShot(1400, lambda: self._log.setExtraSelections([]))
+
+        def _investigation_session_blob(self) -> str:
+            msgs = []
+            for e in self._entries:
+                if isinstance(e, dict):
+                    msgs.append({
+                        "role": str(e.get("role") or ""),
+                        "content": str(e.get("content") or e.get("text") or ""),
+                    })
+                elif isinstance(e, (list, tuple)) and len(e) >= 2:
+                    msgs.append({"role": str(e[0] or ""), "content": str(e[1] or "")})
+            return dump_investigation_session(
+                payload=self._evidence_payload,
+                plan=self._investigation_plan,
+                messages=msgs,
+            )
+
+        def _persist_investigation_session(self) -> None:
+            if not on_save_settings:
+                return
+            try:
+                on_save_settings({
+                    "investigation_session": self._investigation_session_blob(),
+                })
+            except Exception:
+                pass
+
+        def _restore_investigation_session(self) -> None:
+            if not get_settings:
+                return
+            try:
+                cfg = get_settings() or {}
+            except Exception:
+                return
+            parsed = parse_investigation_session(cfg.get("investigation_session"))
+            msgs = parsed.get("messages") or []
+            if not investigation_session_has_chat(msgs):
+                self._refresh_guide_ui()
+                return
+            if parsed.get("payload"):
+                self._evidence_payload = parsed["payload"]
+            if parsed.get("plan"):
+                self._investigation_plan = parsed["plan"]
+                self._set_investigation_plan(parsed["plan"])
+            if msgs and not self._entries:
+                for m in msgs:
+                    role = str(m.get("role") or "")
+                    text = str(m.get("content") or "")
+                    if role and text:
+                        self._entries.append((role, text))
+                if self._entries:
+                    self._refresh_log()
+            self._refresh_guide_ui()
+
+        def _refresh_guide_ui(self) -> None:
+            if not getattr(self, "_guide_step_btns", None):
+                return
+            cursors = 0
+            if on_gui_state:
+                try:
+                    gui = on_gui_state() or {}
+                    cursors = len(placed_cursor_times(gui.get("cursors")))
+                except Exception:
+                    cursors = 0
+            tabs = 0
+            if get_loaded_tabs:
+                try:
+                    tabs = len(list(get_loaded_tabs() or []))
+                except Exception:
+                    tabs = 0
+            stage = investigation_guide_stage(
+                self._evidence_payload,
+                plan=self._investigation_plan,
+                has_cursors=cursors >= 2,
+                has_two_traces=tabs >= 2,
+            )
+            now_i = list(GUIDED_STAGES).index(stage) if stage in GUIDED_STAGES else -1
+            c = _ai_chrome_colors(bool(getattr(self, "_is_dark", True)))
+            pending, now_c, done_c = c["muted"], c["guide_now"], c["guide_done"]
+            for i, sid in enumerate(GUIDED_STAGES):
+                btn = self._guide_step_btns.get(sid)
+                if btn is None:
+                    continue
+                lab = GUIDED_STAGE_LABELS.get(sid, sid)
+                if i < now_i:
+                    mark, color, weight = "✓", done_c, "400"
+                elif sid == stage:
+                    mark, color, weight = "●", now_c, "600"
+                else:
+                    mark, color, weight = "○", pending, "400"
+                btn.setText(f"{mark} {lab}")
+                btn.setStyleSheet(
+                    "QPushButton { color:%s; font-size:11px; font-weight:%s;"
+                    " border:none; padding:0 3px; text-align:left;"
+                    " background: transparent; }"
+                    % (color, weight)
+                )
+            idle = stage == "idle"
+            start_btn = getattr(self, "_start_inv_btn", None)
+            if start_btn is not None:
+                start_btn.setVisible(idle and not self._entries)
+            issue = getattr(self, "_issue_view", None)
+            if issue is not None:
+                text = format_investigation_issue_card(
+                    investigation_issue_card(self._evidence_payload))
+                if (not idle) and text:
+                    issue.setText(text)
+                    issue.show()
+                else:
+                    issue.hide()
+                    issue.clear()
+            hint = getattr(self, "_verify_hint", None)
+            if hint is not None:
+                hint.setVisible(stage in ("investigate", "verify"))
+            banner = getattr(self, "_estimate_banner", None)
+            if banner is not None:
+                banner.setText(ESTIMATE_BANNER)
+                banner.setVisible(stage == "experiment")
 
         def _sync_evidence_log_entry(
             self, data: dict, language: Optional[str] = None,
@@ -5547,6 +5814,7 @@ def create_ai_assistant_panel(
                 )
             self._evidence_payload = dict(payload)
             self._sync_evidence_log_entry(self._evidence_payload)
+            self._refresh_guide_ui()
 
         def _clear_evidence_log_entry(self) -> None:
             self._evidence_payload = None
@@ -5554,6 +5822,7 @@ def create_ai_assistant_panel(
             if len(kept) != len(self._entries):
                 self._entries = kept
                 self._refresh_log()
+            self._refresh_guide_ui()
 
         def _advance_investigation_plan(self, tool_names: Sequence[str]) -> None:
             if not self._investigation_plan:

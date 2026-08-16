@@ -97,6 +97,183 @@ export function mermaidLabelWithTime(text, time, limit = 96) {
   return mermaidSafeLabel(lab, limit)
 }
 
+export const GUIDED_STAGES = [
+  'triage', 'scope', 'investigate', 'verify', 'experiment', 'compare',
+]
+export const GUIDED_STAGE_LABELS = {
+  idle: 'Start',
+  triage: 'Triage',
+  scope: 'Scope',
+  investigate: 'Investigate',
+  verify: 'Verify',
+  experiment: 'Experiment',
+  compare: 'Compare',
+}
+
+export const GUIDE_STAGE_NEEDLES = {
+  triage: ['finding', 'triage', 'analysis'],
+  scope: ['cursor', 'scope', 'c1'],
+  investigate: ['evidence', 'correlate', 'critical path', 'root cause'],
+  verify: ['verify', 'contradict', 'alternative', 'sufficiency'],
+  experiment: ['what-if', 'what_if', 'optimize', 'estimate'],
+  compare: ['compare', 'validate_experiment', 'recapture'],
+}
+export const ESTIMATE_BANNER = (
+  'Heuristic estimate (What-if / Optimize) — recapture a trace and Compare to measure.'
+)
+export const VERIFY_HINT = (
+  'Verify alternatives and contradictions before treating What-if as measured.'
+)
+
+export function guideStageNeedles(stage) {
+  return GUIDE_STAGE_NEEDLES[stage] || []
+}
+
+function guideToolNames(payload, plan) {
+  const names = []
+  if (payload && typeof payload === 'object') {
+    const cse = payload.investigation_case || {}
+    for (const t of (cse.tools_executed || payload.tools_executed || [])) {
+      names.push(String(t || '').trim())
+    }
+    for (const t of (payload.suggested_tools || [])) {
+      names.push(String(t?.name || t || '').trim())
+    }
+  }
+  if (plan && typeof plan === 'object') {
+    for (const s of (plan.steps || [])) {
+      names.push(String(s?.id || s?.label || s || '').trim())
+    }
+  }
+  return names.filter(Boolean)
+}
+
+export function investigationGuideStage(payload, {
+  plan = null, hasCursors = false, hasTwoTraces = false,
+} = {}) {
+  const tools = guideToolNames(payload, plan).join(' ').toLowerCase()
+  const hasPayload = !!(payload && typeof payload === 'object' && Object.keys(payload).length)
+  const hasPlan = !!(plan && (plan.steps?.length || plan.goal))
+  if (!hasPayload && !hasPlan) return 'idle'
+  let quality = ''
+  if (hasPayload && payload.evidence_quality && typeof payload.evidence_quality === 'object') {
+    quality = String(payload.evidence_quality.band || '').toLowerCase()
+  }
+  const verified = (
+    ['verify_claim', 'detect_contradictions', 'assess_evidence_sufficiency', 'challenge_conclusion']
+      .some(k => tools.includes(k))
+    || quality === 'strong' || quality === 'medium-high'
+  )
+  if (hasTwoTraces && (
+    tools.includes('validate_experiment')
+    || tools.includes('compare_performance')
+    || tools.includes('analyze_traces')
+  )) return 'compare'
+  if (tools.includes('what_if') || tools.includes('optimize_experiment')) {
+    return verified ? 'experiment' : 'verify'
+  }
+  if (verified) return 'verify'
+  if (
+    ['investigate', 'correlate_events', 'find_critical_path', 'rank_root_causes']
+      .some(k => tools.includes(k))
+    || (hasPayload && (payload.evidence?.length || payload.root_cause_chain?.length))
+  ) return 'investigate'
+  if (hasCursors) return 'scope'
+  return 'triage'
+}
+
+export function investigationIssueCard(payload) {
+  const data = payload && typeof payload === 'object' ? payload : {}
+  const finding = data.finding && typeof data.finding === 'object' ? data.finding : {}
+  const quality = data.evidence_quality && typeof data.evidence_quality === 'object'
+    ? data.evidence_quality : {}
+  const interpreted = data.interpreted && typeof data.interpreted === 'object'
+    ? data.interpreted : {}
+  const title = String(finding.title || data.conclusion || data.subtitle || '').trim()
+  let task = ''
+  for (const key of ['task', 'task_name', 'primary_task']) {
+    task = String(finding[key] || interpreted[key] || '').trim()
+    if (task) break
+  }
+  return {
+    title: title || 'Investigation',
+    severity: String(finding.severity || '').trim(),
+    task,
+    band: String(quality.band || '').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+    scope: String(interpreted.scope || data.scope || '').trim(),
+    status: String(data.conclusion || '').trim().slice(0, 120),
+  }
+}
+
+export function formatInvestigationIssueCard(card) {
+  const data = card && typeof card === 'object' ? card : {}
+  const title = String(data.title || '').trim()
+  const task = String(data.task || '').trim()
+  const band = String(data.band || '').trim()
+  const scope = String(data.scope || '').trim()
+  if ((title === '' || title === 'Investigation') && !task && !band) return ''
+  const bits = [title || 'Investigation']
+  if (task) bits.push(task)
+  if (band) bits.push(`Evidence ${band}`)
+  if (scope) bits.push(scope)
+  return `CURRENT ISSUE\n${bits.join(' · ')}`
+}
+
+export const AI_SESSION_MAX_MESSAGES = 40
+export const AI_SESSION_MAX_CHARS = 80000
+
+export function dumpInvestigationSession({ payload = null, plan = null, messages = [] } = {}) {
+  const msgs = []
+  let total = 0
+  const src = Array.isArray(messages) ? messages.slice(-AI_SESSION_MAX_MESSAGES) : []
+  for (const raw of src) {
+    const role = String(raw?.role || raw?.[0] || '')
+    const text = String(raw?.content || raw?.text || raw?.[1] || '')
+    if (!['user', 'assistant', 'evidence'].includes(role)) continue
+    if (total + text.length > AI_SESSION_MAX_CHARS) break
+    total += text.length
+    msgs.push({ role, content: text.slice(0, 8000) })
+  }
+  return JSON.stringify({
+    v: 1,
+    payload: payload && typeof payload === 'object' ? payload : null,
+    plan: plan && typeof plan === 'object' ? plan : null,
+    messages: msgs,
+  })
+}
+
+export function parseInvestigationSession(raw) {
+  let data = raw
+  if (typeof raw === 'string') {
+    const text = raw.trim()
+    if (!text) return { payload: null, plan: null, messages: [] }
+    try { data = JSON.parse(text) } catch { return { payload: null, plan: null, messages: [] } }
+  }
+  if (!data || typeof data !== 'object') return { payload: null, plan: null, messages: [] }
+  const messages = []
+  for (const m of (data.messages || []).slice(0, AI_SESSION_MAX_MESSAGES)) {
+    if (!m || typeof m !== 'object') continue
+    const role = String(m.role || '')
+    if (!['user', 'assistant', 'evidence'].includes(role)) continue
+    messages.push({ role, content: String(m.content || '').slice(0, 8000) })
+  }
+  return {
+    payload: data.payload && typeof data.payload === 'object' ? data.payload : null,
+    plan: data.plan && typeof data.plan === 'object' ? data.plan : null,
+    messages,
+  }
+}
+
+/** True when a session blob has a user or assistant turn (not evidence-only). */
+export function investigationSessionHasChat(messages) {
+  for (const raw of messages || []) {
+    const role = String(raw?.role || raw?.[0] || '')
+    const text = String(raw?.content || raw?.text || raw?.[1] || '')
+    if ((role === 'user' || role === 'assistant') && text.trim()) return true
+  }
+  return false
+}
+
 export function emptyInvestigationCase({
   question = '', trace = '', cursorLo = null, cursorHi = null,
   tasks = [], cores = [],

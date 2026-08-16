@@ -257,8 +257,8 @@ function sanitizeHtmlTableBlock(block) {
   return html
 }
 
-/** @param {string} text @param {{ inlineSvg?: boolean, zoomable?: boolean }} [opts] */
-export function markdownToSafeHtml(text, { inlineSvg = true, zoomable = true } = {}) {
+/** @param {string} text @param {{ inlineSvg?: boolean, zoomable?: boolean, dark?: boolean }} [opts] */
+export function markdownToSafeHtml(text, { inlineSvg = true, zoomable = true, dark = true } = {}) {
   const raw = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim()
   if (!raw) return ''
   const lines = raw.split('\n')
@@ -287,7 +287,7 @@ export function markdownToSafeHtml(text, { inlineSvg = true, zoomable = true } =
       }
       if (i < lines.length) i += 1
       if (String(lang).toLowerCase() === 'mermaid') {
-        out.push(mermaidBlockHtml(codeLines.join('\n'), { inlineSvg, zoomable }))
+        out.push(mermaidBlockHtml(codeLines.join('\n'), { inlineSvg, zoomable, dark }))
         continue
       }
       const cls = lang ? ` class="language-${escapeAttr(lang)}"` : ''
@@ -486,7 +486,7 @@ export function formatAiConversationHtmlBody(entries, responseLanguage = DEFAULT
     return (
       `<section class="msg ${cls}">`
       + head
-      + `<div class="body">${formatAiMessageHtml(role, content, { zoomable: false })}${toolCardsHtml(entry.tools)}</div>`
+      + `<div class="body">${formatAiMessageHtml(role, content, { zoomable: false, dark: false })}${toolCardsHtml(entry.tools)}</div>`
       + '</section>'
     )
   }).join('\n')
@@ -508,10 +508,10 @@ export function formatAiConversationHtml(entries, date = new Date(), responseLan
 }
 
 /** Format a chat message; assistant = Markdown preview, user = plain. */
-export function formatAiMessageHtml(role, text, { inlineSvg = true, zoomable = true } = {}) {
+export function formatAiMessageHtml(role, text, { inlineSvg = true, zoomable = true, dark = true } = {}) {
   const body = String(text || '').trim()
   if (role === 'assistant' || role === 'evidence') {
-    return markdownToSafeHtml(body, { inlineSvg, zoomable }) || '<p></p>'
+    return markdownToSafeHtml(body, { inlineSvg, zoomable, dark }) || '<p></p>'
   }
   return escapeHtml(body)
     .replace(

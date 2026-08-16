@@ -303,7 +303,7 @@ import LabelColumn from './LabelColumn.vue'
 import ColumnHeaderRow from './ColumnHeaderRow.vue'
 import StiTooltip  from './StiTooltip.vue'
 import SegmentTooltip from './SegmentTooltip.vue'
-import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawRangeSelect, drawRangeSelectVertical, drawMeasureRuler, drawMeasureRulerVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, drawFindHits, drawFindHitsVertical, RULER_H, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange, taskPassesRowFilter, filteredCoreViewTasks, coreViewTaskFilterActive } from '../renderer/TimelineRenderer.js'
+import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawRangeSelect, drawRangeSelectVertical, drawMeasureRuler, drawMeasureRulerVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, drawFindHits, drawFindHitsVertical, drawFindingHits, drawFindingHitsVertical, RULER_H, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange, taskPassesRowFilter, filteredCoreViewTasks, coreViewTaskFilterActive } from '../renderer/TimelineRenderer.js'
 import { getTimelineLayout, setTimelineLayout } from '../utils/timelineLayout.js'
 import { buildZoomPresetOptions, matchZoomPresetValue } from '../utils/zoomPresets.js'
 import { renderToSvg } from '../renderer/SvgExporter.js'
@@ -336,6 +336,7 @@ const props = defineProps({
   maxCursors: { type: Number, default: 8 },
   labelWidth: { type: Number, default: 160 },
   findHits: { type: Array, default: () => [] },
+  findingHits: { type: Array, default: () => [] },
   findMarkerNs: { type: Number, default: null },
   /** Per-tab viewport from session store; applied on trace load instead of fit-to-trace when valid. */
   persistedViewport: { type: Object, default: null },
@@ -840,6 +841,7 @@ function paintHoverOverlay() {
     drawMarksVertical(ctx, marks, props.trace, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode, props.options.selectedMarkId ?? null)
     drawCursorsVertical(ctx, props.cursors, props.trace, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode, props.timeDecimals)
     drawFindHitsVertical(ctx, props.findHits, props.findMarkerNs, props.trace, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode)
+    drawFindingHitsVertical(ctx, props.findingHits, props.trace, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode)
     if (rangeSelect.value)
       drawRangeSelectVertical(ctx, rangeSelect.value.t0, rangeSelect.value.t1, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode)
     if (measureRuler.value)
@@ -851,6 +853,7 @@ function paintHoverOverlay() {
     drawMarksHorizontal(ctx, marks, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode, props.options.selectedMarkId ?? null)
     drawCursors(ctx, props.cursors, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode, props.timeDecimals)
     drawFindHits(ctx, props.findHits, props.findMarkerNs, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode)
+    drawFindingHits(ctx, props.findingHits, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode)
     if (rangeSelect.value)
       drawRangeSelect(ctx, rangeSelect.value.t0, rangeSelect.value.t1, timeStart, pxPerNs, canvasW, canvasH, darkMode)
     if (measureRuler.value)
@@ -1025,6 +1028,7 @@ function setupHandler() {
       paintHoverOverlay()
     },
     onMeasureChange({ t0, t1, anchorPx }) {
+      contextMenu.visible = false
       measureRuler.value = { t0, t1, anchorPx }
       markInteracting(true)
       paintHoverOverlay()
@@ -2249,7 +2253,7 @@ watch(() => props.cursors, (c) => {
   paintHoverOverlay()  // cursors are on the overlay canvas — no full repaint needed
 }, { deep: true })
 
-watch(() => [props.findHits, props.findMarkerNs], () => {
+watch(() => [props.findHits, props.findMarkerNs, props.findingHits], () => {
   paintHoverOverlay()
 }, { deep: true })
 

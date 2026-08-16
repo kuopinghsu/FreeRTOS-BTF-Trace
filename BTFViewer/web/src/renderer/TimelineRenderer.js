@@ -1731,6 +1731,42 @@ export function drawFindHitsVertical(ctx, hitNsList, activeNs, trace, timeStart,
   ctx.restore()
 }
 
+export function drawFindingHits(ctx, hitNsList, trace, timeStart, pxPerNs, canvasW, canvasH, darkMode) {
+  if (!hitNsList?.length || !trace) return
+  ctx.save()
+  ctx.strokeStyle = darkMode ? 'rgba(192, 132, 252, 0.75)' : 'rgba(147, 51, 234, 0.55)'
+  ctx.lineWidth = 1
+  ctx.setLineDash([3, 4])
+  for (const ns of hitNsList) {
+    const x = Math.round((ns - timeStart) * pxPerNs)
+    if (x < 0 || x > canvasW) continue
+    ctx.beginPath()
+    ctx.moveTo(x + 0.5, 0)
+    ctx.lineTo(x + 0.5, canvasH)
+    ctx.stroke()
+  }
+  ctx.setLineDash([])
+  ctx.restore()
+}
+
+export function drawFindingHitsVertical(ctx, hitNsList, trace, timeStart, pxPerNs, canvasW, canvasH, headerH, darkMode) {
+  if (!hitNsList?.length || !trace) return
+  ctx.save()
+  ctx.strokeStyle = darkMode ? 'rgba(192, 132, 252, 0.75)' : 'rgba(147, 51, 234, 0.55)'
+  ctx.lineWidth = 1
+  ctx.setLineDash([3, 4])
+  for (const ns of hitNsList) {
+    const y = Math.round(headerH + (ns - timeStart) * pxPerNs)
+    if (y < headerH || y > canvasH) continue
+    ctx.beginPath()
+    ctx.moveTo(0, y + 0.5)
+    ctx.lineTo(canvasW, y + 0.5)
+    ctx.stroke()
+  }
+  ctx.setLineDash([])
+  ctx.restore()
+}
+
 // ---- Hover line (mouse position indicator) ---------------------------------
 
 export function drawHoverLine(ctx, t, trace, timeStart, pxPerNs, canvasW, canvasH, darkMode, decimals = 3) {

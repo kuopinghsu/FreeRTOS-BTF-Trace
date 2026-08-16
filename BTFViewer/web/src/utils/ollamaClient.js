@@ -87,9 +87,9 @@ export const AI_SMP_ONLY_TEMPLATE_IDS = new Set(['migrations', 'balance'])
 
 /** Always-visible wrapping chips. Keep in sync with btf_viewer_pkg/ai_assistant.py. */
 export const AI_TEMPLATE_PRIMARY_IDS = [
-  'investigate',
   'findings',
   'explain_region',
+  'investigate',
   'auto_investigate',
 ]
 
@@ -102,7 +102,7 @@ export function aiTemplatePrimaryRows(ids = AI_TEMPLATE_PRIMARY_IDS) {
 
 /** Overflow menu groups for templates not in AI_TEMPLATE_PRIMARY_IDS. */
 export const AI_TEMPLATE_MENU_GROUPS = [
-  { label: 'Diagnose', ids: ['root_cause', 'verify', 'explain_finding', 'triage', 'diagnostic_report'] },
+  { label: 'Diagnose', ids: ['triage', 'verify', 'root_cause', 'explain_finding', 'diagnostic_report'] },
   { label: 'Compare', ids: ['compare'] },
   {
     label: 'Metrics',
@@ -133,6 +133,20 @@ export const AI_TEMPLATE_QUESTIONS = [
       'Execution / Blocking tails.',
   },
   {
+    id: 'explain_region',
+    label: 'Explain region',
+    prompt:
+      'Explain the current timeline cursor region (scope C1–Cn — see the '
+      + 'Cursor region window in context). Stay strictly inside that window: '
+      + 'every jump:TIME you cite must fall between C1 and Cn. Identify '
+      + 'longest blocking, migrations, priority changes, wakeups, mutex '
+      + 'contention, deadline issues, idle gaps, and CPU imbalance in this '
+      + 'window. Check in-window Timeline Anomalies and Worst Events. Call '
+      + 'correlate_events and query_raw_metric as needed. Use '
+      + 'only in-window jump:TIME evidence (or state that tools found none). '
+      + 'End with: Summary, Top issues, Evidence, Suggested next action.',
+  },
+  {
     id: 'investigate',
     label: 'Investigate',
     prompt:
@@ -153,23 +167,6 @@ export const AI_TEMPLATE_QUESTIONS = [
       'evidence, (5) next mitigation to try.',
   },
   {
-    id: 'root_cause',
-    label: 'Root cause',
-    prompt:
-      'Perform root-cause analysis for the top finding. Call ' +
-      'investigate(finding_id) first, then follow the chain ' +
-      'deadline/WCET → execution → preemption → blocking → mutex → ' +
-      'priority inheritance → migration only as far as the evidence ' +
-      'supports. Call build_task_dependency_graph and ' +
-      'analyze_temporal_causality on the victim task. Call ' +
-      'rank_root_causes then challenge_conclusion. Call ' +
-      'query_raw_metric / search_timeline when numbers are ' +
-      'missing. Set cursors around the worst episode, highlight the ' +
-      'victim task, name Timeline Anomalies or Worst Events when a tail ' +
-      'spike is the evidence, and answer with Root cause, Evidence (bullet list with ' +
-      'jump:TIME), Confidence, and Suggested fix.',
-  },
-  {
     id: 'verify',
     label: 'Verify finding',
     prompt:
@@ -185,18 +182,21 @@ export const AI_TEMPLATE_QUESTIONS = [
       'Alternatives considered; and one next check.',
   },
   {
-    id: 'explain_region',
-    label: 'Explain region',
+    id: 'root_cause',
+    label: 'Root cause',
     prompt:
-      'Explain the current timeline cursor region (scope C1–Cn — see the '
-      + 'Cursor region window in context). Stay strictly inside that window: '
-      + 'every jump:TIME you cite must fall between C1 and Cn. Identify '
-      + 'longest blocking, migrations, priority changes, wakeups, mutex '
-      + 'contention, deadline issues, idle gaps, and CPU imbalance in this '
-      + 'window. Check in-window Timeline Anomalies and Worst Events. Call '
-      + 'correlate_events and query_raw_metric as needed. Use '
-      + 'only in-window jump:TIME evidence (or state that tools found none). '
-      + 'End with: Summary, Top issues, Evidence, Suggested next action.',
+      'Perform root-cause analysis for the top finding. Call ' +
+      'investigate(finding_id) first, then follow the chain ' +
+      'deadline/WCET → execution → preemption → blocking → mutex → ' +
+      'priority inheritance → migration only as far as the evidence ' +
+      'supports. Call build_task_dependency_graph and ' +
+      'analyze_temporal_causality on the victim task. Call ' +
+      'rank_root_causes then challenge_conclusion. Call ' +
+      'query_raw_metric / search_timeline when numbers are ' +
+      'missing. Set cursors around the worst episode, highlight the ' +
+      'victim task, name Timeline Anomalies or Worst Events when a tail ' +
+      'spike is the evidence, and answer with Root cause, Evidence (bullet list with ' +
+      'jump:TIME), Confidence, and Suggested fix.',
   },
   {
     id: AI_COMPARE_TEMPLATE_ID,

@@ -423,10 +423,10 @@ describe('AI endpoint helpers', () => {
     )
     assert.equal(new Set(all).size, all.length)
     assert.deepEqual(AI_TEMPLATE_PRIMARY_IDS, [
-      'investigate', 'findings', 'explain_region', 'auto_investigate',
+      'findings', 'explain_region', 'investigate', 'auto_investigate',
     ])
     assert.deepEqual(aiTemplatePrimaryRows(), [
-      ['investigate', 'findings', 'explain_region'],
+      ['findings', 'explain_region', 'investigate'],
       ['auto_investigate'],
     ])
   })
@@ -479,8 +479,8 @@ describe('AI endpoint helpers', () => {
     assert.match(panel, /flex-wrap: wrap/)
     assert.doesNotMatch(dlg, /analysis-btn primary/)
     const findings = [
-      'Investigate…', 'Root cause…', 'Verify with AI…', 'Explain…',
-      'Auto investigate…', 'Query with AI…',
+      'Query with AI…', 'Investigate…', 'Verify with AI…', 'Explain…',
+      'Root cause…', 'Auto investigate…',
     ]
     let pos = 0
     for (const label of findings) {
@@ -490,6 +490,9 @@ describe('AI endpoint helpers', () => {
     }
     assert.deepEqual([...EXPLAIN_LEVELS], ['quick', 'technical', 'deep'])
     assert.match(dlg, /EXPLAIN_LEVELS/)
+    assert.match(dlg, /<Teleport to="body">/)
+    assert.match(dlg, /toggleExplain/)
+    assert.match(dlg, /placeExplainMenu/)
     assert.match(panel, /Open at least two BTF tabs to use Trace Compare/)
     assert.match(panel, /This trace has a single core — not applicable/)
     assert.equal(AI_TEMPLATE_QUESTIONS.at(-1).id, 'auto_investigate')

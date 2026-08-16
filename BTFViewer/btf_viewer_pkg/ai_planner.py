@@ -358,6 +358,7 @@ def cluster_findings(findings: Optional[Sequence[dict]] = None) -> Dict[str, Any
             "root_suspect": root,
             "patterns": sorted(pats),
             "findings": titles,
+            "finding_ids": [str(m.get("id") or "") for m in members],
             "count": len(members),
         })
     return {
@@ -365,6 +366,67 @@ def cluster_findings(findings: Optional[Sequence[dict]] = None) -> Dict[str, Any
         "message": f"{len(incidents)} incident cluster(s) from {len(items)} findings",
         "incidents": incidents,
     }
+
+
+def analysis_dashboard(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    quality_warnings: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """Overview strip for Analysis Findings (clusters, quality, phase window)."""
+    items = _items(findings)
+    clustered = cluster_findings(items)
+    scoped = suggest_scope("", items)
+    errors = sum(1 for f in items if str(f.get("severity") or "") == "error")
+    warns = sum(1 for f in items if str(f.get("severity") or "") == "warning")
+    quality = [str(q).strip() for q in (quality_warnings or []) if str(q or "").strip()]
+    lines = []
+    if quality:
+        lines.append("Trace quality: " + "; ".join(quality[:3]))
+    else:
+        lines.append("Trace quality: no integrity warnings.")
+    lines.append(
+        f"Top issues: {errors} error, {warns} warning, {len(items)} finding(s)."
+    )
+    lines.append(str(clustered.get("message") or ""))
+    for inc in clustered.get("incidents") or []:
+        titles = inc.get("findings") or []
+        lines.append(
+            f"{inc.get('id')}: {inc.get('root_suspect') or 'mixed'} "
+            f"({inc.get('count')} related) — {titles[0] if titles else ''}"
+        )
+    if scoped.get("time_lo") is not None:
+        lines.append(f"Phase window: {scoped.get('reason')}")
+    return {
+        "ok": True,
+        "summary": "\n".join(line for line in lines if line),
+        "clusters": clustered.get("incidents") or [],
+        "quality": quality,
+        "scope": scoped,
+        "errors": errors,
+        "warnings": warns,
+    }
+
+
+def format_analysis_story(
+    findings: Optional[Sequence[dict]] = None,
+    *,
+    quality_warnings: Optional[Sequence[str]] = None,
+    scope_title: str = "",
+) -> str:
+    """Narrative export from Analysis Findings overview + finding titles."""
+    dash = analysis_dashboard(findings, quality_warnings=quality_warnings)
+    lines = ["Analysis story" + (str(scope_title or "").strip())]
+    lines.append(str(dash.get("summary") or "").strip())
+    lines.append("")
+    for i, f in enumerate(_items(findings), 1):
+        title = str(f.get("title") or "Finding").strip()
+        sev = str(f.get("severity") or "info").strip()
+        text = str(f.get("text") or "").strip()
+        lines.append(f"{i}. [{sev}] {title}")
+        if text:
+            lines.append(f"   {text}")
+    return "\n".join(line for line in lines if line is not None).strip() + "\n"
 
 
 def generate_fingerprint(

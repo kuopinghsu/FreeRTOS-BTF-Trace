@@ -9,6 +9,7 @@ Detailed reference for the **deterministic BTF statistics and analysis** exposed
 | Area | Topics |
 |------|--------|
 | [Panel and scope](#statistics-metric-tables) | Sections, cursor scope, pin/reorder, export |
+| [Analysis Findings](#analysis-findings) | Toolbar **Analysis** triage, load-balance Score/σ/G, theme ink |
 | [System load](#summary-scheduling-and-core-utilisation) | Summary, scheduling, utilisation, tick health, concurrency |
 | [Migrations & affinity](#core-migration-analysis) | Migration rate, dwell, corridors, affinity |
 | [Task timing](#execution-blocking-and-inter-arrival) | Execution, blocking, dispatch, inter-arrival, period/jitter, response |
@@ -74,6 +75,7 @@ Click a name to jump to the write-up. Sequence follows the Statistics panel defa
 | Section | Description |
 |---------|-------------|
 | [How to use the panel](#statistics-metric-tables) | Expand, pin, reorder, cursor scope, and export |
+| [Analysis Findings](#analysis-findings) | Toolbar **Analysis** (not a Statistics section); Score/σ/G even when reasonably balanced |
 
 **Cores and system load**
 
@@ -192,6 +194,13 @@ The Statistics panel (Desktop **Statistics** tab + Web **Statistics** tab) organ
 
 Example plots below use **`tracedata/example-8cores.btf.gz`**. Worked diagnosis steps for that sample: [WORKFLOWS.md §3](WORKFLOWS.md#3-worked-example--example-8cores).
 
+<a id="analysis-findings" name="analysis-findings">&#x200B;</a>
+#### Analysis Findings ![](../images/readme/h4.svg)
+
+Toolbar **Analysis** is the same heuristic card on Desktop and Web (not a Statistics panel section). Product buttons and overlays: [README → Analysis Findings](README.md#analysis-findings).
+
+Load-balance findings use the same Score / σ / Gini as **Core utilisation**. They are emitted only when there are **≥ 2 cores** and total utilisation is **&gt; 0**. Balanced and moderate cases still show the metric line (`Load Balance Score …% (σ=…%, G=…)`); “reasonably balanced” is reserved for Score ≥ 85 % and σ ≤ 30 %. Dialog text uses theme colours (`--fg`, `--analysis-ok`, `--analysis-warn`, `--analysis-err` on Web; matching Desktop QLabel ink) so info findings stay readable in **dark** and **light**.
+
 <a id="summary-scheduling-and-core-utilisation" name="summary-scheduling-and-core-utilisation">&#x200B;</a>
 #### Summary, scheduling, and core utilisation ![](../images/readme/h4.svg)
 
@@ -229,7 +238,7 @@ where *G* is the Gini coefficient of {*U*<sub>core</sub>}.
 | **Amber** | Score ≥ 70 % and σ &gt; 30 % | **σ &gt; 30%** chip; σ gauge amber (red if σ &gt; 50 %) |
 | **OK** (green) | Score ≥ 70 % and σ ≤ 30 % | Green needles |
 
-Toolbar **Analysis** also warns when Score &lt; 70 % *or* σ &gt; 30 %, and only describes cores as “reasonably balanced” when Score ≥ 85 % and σ ≤ 30 %. **Export HTML** includes the gauges; **Export CSV** includes the score, σ, and G values.
+Toolbar **Analysis** also warns when Score &lt; 70 % *or* σ &gt; 30 %, and only describes cores as “reasonably balanced” when Score ≥ 85 % and σ ≤ 30 %. When ≥ 2 cores have total utilisation &gt; 0, the dialog still lists **Core utilisation balance** with **Load Balance Score …% (σ=…%, G=…)** in the OK and moderate cases (same as the gauges; Desktop and Web). **Export HTML** includes the gauges and an Analysis Findings card (info/ok ink readable on white paper); **Export CSV** includes the score, σ, and G values.
 
 **What it tells you:** Imbalanced utilisation across cores may indicate poor affinity, lock pinning, or workload placement issues — cross-check with **Core Migrations**, the Migration & Corridor Inspector, and toolbar **Analysis**.
 

@@ -9,7 +9,11 @@ from .graphics_items import *  # noqa: F403,F401
 from .scene import *  # noqa: F403,F401
 from .view import *  # noqa: F403,F401
 from .stats import *  # noqa: F403,F401
-from .stats import _RcSettings, _parse_task_deadlines_text, _AnalysisFindingsDialog, _format_analysis_findings_text
+from .stats import (
+    _RcSettings, _parse_task_deadlines_text, _AnalysisFindingsDialog,
+    _format_analysis_findings_text,
+)
+from .trace_quality import collect_trace_quality_warnings
 from .ai_assistant import (
     create_ai_assistant_panel,
     AI_PRESET_FIELDS,
@@ -166,7 +170,7 @@ from .mvvm import (
 from .mvvm.tab_viewport import apply_viewport, viewport_from_json, viewport_to_json
 from .trace_quality import trace_quality_summary
 from .perfetto_export import export_perfetto
-from .ux_explore import best_finding_scope, harvest_ux_events
+from .ux_explore import best_finding_scope, harvest_ux_events, finding_overlay_times, task_inspector_line
 
 class _CpuLoadScrollArea(QScrollArea):
     """Scroll host for the CPU load graph — pane height comes from the splitter, not row count."""
@@ -1593,6 +1597,55 @@ class _TraceTab:
     def plot_interval_id(self, value: Optional[str]) -> None:
         self.vm.plot_interval_id = value
 
+class _CommandPaletteDialog(QDialog):
+    """Ctrl+K jump list for existing surfaces (no extra toolbar buttons)."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Command palette")
+        self.setModal(True)
+        self.chosen = ""
+        lay = QVBoxLayout(self)
+        self._edit = QLineEdit()
+        self._edit.setPlaceholderText("Jump to Analysis, Statistics, AI…")
+        self._list = QListWidget()
+        self._list.setUniformItemSizes(True)
+        lay.addWidget(self._edit)
+        lay.addWidget(self._list)
+        hint = QLabel("Ctrl/Cmd+K · Enter to run · Esc to close")
+        hint.setStyleSheet("color:#8a96a8;font-size:11px;")
+        lay.addWidget(hint)
+        self.resize(420, 360)
+        self._edit.textChanged.connect(self._filter)
+        self._list.itemActivated.connect(self._accept_item)
+        self._filter("")
+
+    def _filter(self, text: str) -> None:
+        q = str(text or "").strip().lower()
+        self._list.clear()
+        for aid, label in COMMAND_PALETTE_ACTIONS:
+            blob = str(label).lower()
+            if q and q not in blob:
+                continue
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, aid)
+            self._list.addItem(item)
+        if self._list.count():
+            self._list.setCurrentRow(0)
+
+    def _accept_item(self, item: QListWidgetItem) -> None:
+        if item is None:
+            return
+        self.chosen = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        self.accept()
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._accept_item(self._list.currentItem())
+            return
+        super().keyPressEvent(event)
+
+
 class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     # ------------------------------------------------------------------
@@ -1681,6 +1734,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _sc_find_prev = QShortcut(QKeySequence.StandardKey.FindPrevious, self)
         _sc_find_prev.setContext(Qt.ShortcutContext.ApplicationShortcut)
         _sc_find_prev.activated.connect(self._find_prev)
+
+        _sc_palette = QShortcut(QKeySequence("Ctrl+K"), self)
+        _sc_palette.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        _sc_palette.activated.connect(self._open_command_palette)
 
         for _key in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
             _sc = QShortcut(QKeySequence(_key), self)
@@ -2022,6 +2079,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             graph.set_task(task_name, locked)
             if not self._cpu_splitter_user_sized:
                 self._autofit_cpu_load_height()
+            self._refresh_task_inspector()
 
         view._scene.highlight_changed.connect(_on_highlight_changed)
         view._scene.hover_changed.connect(_repaint_cpu_graph)
@@ -4819,6 +4877,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # --- LEFT: file info (stretches to fill available space) ---
         self._status_file  = QLabel("No file loaded")
         self._status_file.setContentsMargins(4, 0, 8, 0)
+        self._status_inspect = QLabel("No task selected")
+        self._status_inspect.setContentsMargins(4, 0, 8, 0)
+        self._status_inspect.setToolTip("Selected task inspector")
 
         # --- CENTER: cursor badge bar (permanent, but visually central) ---
         self._cursor_bar   = _CursorBarWidget()
@@ -4854,6 +4915,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._zoom_visible_label.setContentsMargins(0, 0, 8, 0)
 
         sb.addWidget(self._status_file)
+        sb.addWidget(self._status_inspect)
         sb.addPermanentWidget(self._cursor_bar)
         sb.addPermanentWidget(self._status_range)
         sb.addPermanentWidget(self._sti_toggle_cb)
@@ -5222,7 +5284,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         keys = ["enabled", "preset", "response_language", "auto_apply", "mcp_log",
                 "user_investigation_templates", "user_historical_knowledge",
                 "redact_task_names", "trace_sensitive", "extra_presets",
-                "split_bottom"]
+                "split_bottom", "investigation_session"]
         pids = [pid for pid, _label, _base, _model in AI_PRESETS]
         for pid in extra_ids:
             if pid and pid not in pids:
@@ -7077,6 +7139,76 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if scope:
             self._on_explore_range(scope)
 
+    def _open_command_palette(self) -> None:
+        dlg = _CommandPaletteDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._run_command_palette_action(dlg.chosen)
+
+    def _run_command_palette_action(self, action_id: str) -> None:
+        aid = str(action_id or "")
+        if aid == "analysis":
+            self._open_analysis_findings()
+        elif aid == "statistics":
+            self._focus_statistics_panel(force=True)
+        elif aid == "find":
+            self._focus_find()
+        elif aid == "marks":
+            self._focus_panel_tab(_PANEL_TAB_MARKS)
+        elif aid == "ai":
+            self._focus_ai_panel()
+        elif aid == "compare":
+            self._open_trace_compare()
+        elif aid == "heatmap":
+            self._open_migration_heatmap()
+        elif aid == "settings":
+            self._open_settings()
+        elif aid == "limit-scope":
+            panel = getattr(self, "_stats_panel", None)
+            cb = getattr(panel, "_scope_cb", None)
+            if cb is not None:
+                cb.setChecked(True)
+        elif aid == "fit":
+            view = getattr(self, "_view", None)
+            if view is not None and hasattr(view, "zoom_fit"):
+                view.zoom_fit()
+        elif aid == "inspect-task":
+            self._refresh_task_inspector()
+            self.statusBar().showMessage(
+                self._status_inspect.text() if hasattr(self, "_status_inspect") else "Inspect task",
+                4000)
+        elif str(aid).startswith("preset-"):
+            self._apply_workspace_preset(aid)
+
+    def _apply_workspace_preset(self, preset_id: str) -> None:
+        if preset_id == "preset-compare":
+            self._open_trace_compare()
+            return
+        panel = getattr(self, "_stats_panel", None)
+        if panel is not None:
+            panel.set_section_collapsed_map(
+                workspace_preset_collapsed(preset_id), emit=True)
+        self._focus_statistics_panel(force=True)
+
+    def _refresh_task_inspector(self) -> None:
+        if not hasattr(self, "_status_inspect"):
+            return
+        sc = getattr(getattr(self, "_view", None), "_scene", None)
+        task = getattr(sc, "_locked_task", None) or ""
+        qs = collect_trace_quality_warnings(self._trace) if self._trace is not None else []
+        self._status_inspect.setText(task_inspector_line(task, qs))
+
+    def _refresh_finding_overlays(self) -> None:
+        view = getattr(self, "_view", None)
+        scene = getattr(view, "_scene", None) if view is not None else None
+        panel = getattr(self, "_stats_panel", None)
+        if scene is None:
+            return
+        findings = []
+        if panel is not None and hasattr(panel, "build_analysis_findings"):
+            findings, _scope = panel.build_analysis_findings()
+        scene.set_finding_overlays(finding_overlay_times(findings))
+
     def _open_analysis_findings(self) -> None:
         """Show Analysis Findings dialog for the active tab / cursor scope."""
         if self._trace is None or self._stats_panel is None:
@@ -7091,6 +7223,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             except RuntimeError:
                 self._analysis_findings_dlg = None
         findings, scope_title = self._stats_panel.build_analysis_findings()
+        self._refresh_finding_overlays()
         lo = hi = None
         panel = self._stats_panel
         if getattr(panel, "_scope_to_cursors", False):
@@ -7106,6 +7239,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             ux_events=evs,
             time_min=self._trace.time_min,
             time_max=self._trace.time_max,
+            quality_warnings=collect_trace_quality_warnings(self._trace),
+            is_dark=self._is_dark,
         )
         self._analysis_findings_dlg = dlg
         dlg.exec()
@@ -9949,6 +10084,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Ctrl+0 / F",           "Fit entire trace to window"),
                 ("Ctrl+R",               "Zoom to earliest–latest cursor"),
                 ("Ctrl+,",               "Open Settings"),
+                ("Ctrl+K",               "Command palette"),
                 ("G",                    "Toggle grid lines on/off"),
                 ("I",                    "Toggle STI event rows on/off"),
                 ("D",                    "Toggle dark / light theme"),

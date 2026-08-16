@@ -382,6 +382,7 @@ Use AI when:
 
 | Ask | Verify |
 |---|---|
+| **Start Investigation** / **Auto investigate** | Empty log; restart restores **Current Issue** only with a user or assistant turn |
 | **Investigate…** / **Root cause…** | Apply GUI cards; click `jump:TIME` |
 | **Verify with AI…** | Evidence panel result |
 | **Explain region** | Times inside C1–Cn |

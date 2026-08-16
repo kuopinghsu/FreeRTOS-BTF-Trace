@@ -1,28 +1,26 @@
 # FreeRTOS-BTF-Trace — Porting Guide
 
-Integrate the trace library into an existing FreeRTOS target.
+Notes for integrating the trace library into an existing FreeRTOS target.
 
-| Need | Read |
+| Document | Contents |
 |---|---|
-| Build/demo/viewing | [README.md](README.md) |
-| Binary layout and BTF event mapping | [TRACE_FORMAT.md](TRACE_FORMAT.md) |
-| BTF Viewer analysis | [BTFViewer/WORKFLOWS.md](BTFViewer/WORKFLOWS.md) |
+| [README.md](README.md) | Build, demo, and viewing |
+| [TRACE_FORMAT.md](TRACE_FORMAT.md) | Binary layout and BTF event mapping |
+| [BTFViewer/WORKFLOWS.md](BTFViewer/WORKFLOWS.md) | BTF Viewer analysis workflows |
 
-## Porting checklist
+## Checklist
 
-```text
-☐ Enable FreeRTOS trace facility
-☐ Include FreeRTOS-Trace.h
-☐ Compile btf_trace.c
-☐ Implement xGetCycles()
-☐ Set configCPU_CLOCK_HZ correctly
-☐ Choose file / live / buffer-only dump
-☐ Call traceSTART() before scheduler
-☐ Call traceEND() when capture ends
-☐ Size task table and event ring
-☐ Verify SMP trace locking if multicore
-☐ Convert trace.bin and check quality flags
-```
+- [ ] Enable the FreeRTOS trace facility
+- [ ] Include `FreeRTOS-Trace.h`
+- [ ] Compile `btf_trace.c`
+- [ ] Implement `xGetCycles()`
+- [ ] Set `configCPU_CLOCK_HZ` correctly
+- [ ] Choose file, live, or buffer-only dump mode
+- [ ] Call `traceSTART()` before the scheduler
+- [ ] Call `traceEND()` when capture ends
+- [ ] Size the task table and event ring
+- [ ] Verify trace locking on SMP targets
+- [ ] Convert `trace.bin` and check the quality flags
 
 ## 1. Add the trace library
 
@@ -42,7 +40,7 @@ Add `FreeRTOS-Trace/` to the include path and compile:
 FreeRTOS-Trace/btf_trace.c
 ```
 
-### Optional configuration
+### Configuration options
 
 | Macro | Default | Controls |
 |---|---:|---|
@@ -62,12 +60,7 @@ In `FreeRTOS-Trace/btf_port.h`, implement:
 uint32_t xGetCycles(void);
 ```
 
-Requirements:
-
-- Free-running **32-bit** counter.
-- DWT CYCCNT, GPT, `mtime`, or equivalent is suitable.
-- Wrap at 2³² is expected.
-- `configCPU_CLOCK_HZ` / `core_clock` must describe the counter frequency.
+The counter must be free-running and 32-bit. DWT CYCCNT, GPT, `mtime`, or an equivalent source can be used. A 2³² wrap is expected, and `configCPU_CLOCK_HZ` / `core_clock` must match the counter frequency.
 
 `gentrace` and `btf_dump()` extend wrapped timestamps offline.
 
@@ -175,8 +168,6 @@ The demo uses tag 0 for heap bytes and interval ids 0–11 for test regions.
 
 ## 6. SMP requirements
 
-This section is critical for multicore ports.
-
 Trace hooks use:
 
 ```text
@@ -231,7 +222,7 @@ Then open:
 
 ## 8. Validate the port
 
-Before trusting performance results, verify the capture itself.
+Verify the capture before using it for performance analysis.
 
 | Check | Expected |
 |---|---|
@@ -253,23 +244,3 @@ Quality flags:
 | `#truncated true` | `traceEND()` was not called or the binary dump is incomplete |
 
 For exact binary and BTF mappings, see **[TRACE_FORMAT.md](TRACE_FORMAT.md)**.
-
-## 9. Port complete
-
-A minimal successful port should follow this path:
-
-```text
-FreeRTOS hooks
-   ↓
-valid 32-bit timestamps
-   ↓
-trace ring
-   ↓
-trace.bin or live BTF
-   ↓
-gentrace
-   ↓
-clean BTF without unexpected quality flags
-   ↓
-BTF Viewer analysis
-```

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { markdownToSafeHtml } from '../src/utils/aiMarkdown.js'
-import { hitTestMermaid, mermaidBlockHtml, mermaidHitRegions, mermaidLinkTargets, mermaidToSvg, wrapNodeLabel } from '../src/utils/aiMermaid.js'
+import { hitTestMermaid, mermaidBlockHtml, mermaidHitRegions, mermaidLinkTargets, mermaidPalette, mermaidToSvg, wrapNodeLabel } from '../src/utils/aiMermaid.js'
 import { AI_MERMAID_MIGRATION_EXAMPLE, AI_MERMAID_SEQUENCE_EXAMPLE } from '../src/utils/aiTools.js'
 
 describe('aiMermaid', () => {
@@ -113,5 +113,27 @@ describe('aiMermaid', () => {
     const cx = ev.x + ev.w / 2
     const cy = ev.y + ev.h / 2
     assert.deepEqual(hitTestMermaid(src, cx, cy), { kind: 'jump', value: '12345' })
+  })
+
+  it('uses light-theme ink for flowchart diagrams', () => {
+    const src = 'graph TD\n  F[Finding]\n  E0[evidence]\n  F --> E0\n'
+    const dark = mermaidToSvg(src, { dark: true })
+    const light = mermaidToSvg(src, { dark: false })
+    assert.match(dark, /#12161d/)
+    assert.match(light, /#F7F9FC/)
+    assert.match(light, /#1E1E1E/)
+    assert.doesNotMatch(light, /#12161d/)
+    assert.doesNotMatch(light, /#dbe2ea/)
+    const html = markdownToSafeHtml('```mermaid\n' + src + '```', { dark: false })
+    assert.match(html, /#F7F9FC/)
+  })
+
+  it('exposes the same dark and light palette keys as desktop', () => {
+    for (const dark of [true, false]) {
+      const pal = mermaidPalette(dark)
+      assert.equal(pal.nodeText, dark ? '#dbe2ea' : '#1E1E1E')
+      assert.equal(pal.bg, dark ? '#12161d' : '#F7F9FC')
+      assert.equal(pal.arrow, dark ? '#6fbf9a' : '#166534')
+    }
   })
 })

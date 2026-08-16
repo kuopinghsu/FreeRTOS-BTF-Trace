@@ -4472,6 +4472,27 @@ def _trace_summary_snapshot(trace: "BtfTrace",
         "missed_ticks": tick.get("missed_estimate", 0),
     }
 
+
+def cross_trace_trends(rows: Optional[Sequence[dict]] = None) -> List[dict]:
+    """Per-open-tab summary rows for Compare when 3+ traces are loaded."""
+    out: List[dict] = []
+    for raw in rows or []:
+        if not isinstance(raw, dict):
+            continue
+        snap = raw.get("snap") if isinstance(raw.get("snap"), dict) else raw
+        name = str(raw.get("name") or snap.get("name") or "").strip()
+        out.append({
+            "name": name,
+            "span_ns": snap.get("span_ns", snap.get("spanNs")),
+            "migrations": snap.get("migrations"),
+            "load_balance": snap.get(
+                "load_balance_score", snap.get("loadBalanceScore")),
+            "tick_health": snap.get("tick_health", snap.get("tickHealth")),
+            "tasks": snap.get("tasks"),
+        })
+    return out
+
+
 def _top_tasks_cpu_by_name(trace: "BtfTrace", limit: int = 10,
                            lo: Optional[int] = None, hi: Optional[int] = None) -> Dict[str, float]:
     """Top tasks by CPU%, keyed by display name."""

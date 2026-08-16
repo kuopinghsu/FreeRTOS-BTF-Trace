@@ -273,6 +273,7 @@
             :label-width="appSettings.labelWidth"
             :time-decimals="appSettings.timeDecimals"
             :find-hits="findHits"
+            :finding-hits="findingHits"
             :find-marker-ns="findMarkerNs"
             :persisted-viewport="timelineViewport"
             @cursors-change="cursors = $event"
@@ -592,6 +593,7 @@
                 :ai-auto-apply="!!appSettings.aiAutoApply"
                 :ai-redact-task-names="!!appSettings.aiRedactTaskNames"
                 :ai-trace-sensitive="!!appSettings.aiTraceSensitive"
+                :dark-mode="timelineOptions.darkMode"
                 :get-context="buildAiContext"
                 :get-loaded-tabs="listAiLoadedTabs"
                 :build-compare-context="buildAiCompareContext"
@@ -604,6 +606,7 @@
                 @range="onAiRange"
                 @highlight="onAiHighlight"
                 @status-message="onAiStatusMessage"
+                @session-change="scheduleSessionSave"
               />
             </div>
           </div>
@@ -730,6 +733,9 @@
               <div class="k">
                 Ctrl+Shift+S
               </div><div>Save viewport as SVG</div>
+              <div class="k">
+                Ctrl+K
+              </div><div>Command palette</div>
               <div class="k">
                 Ctrl+0
               </div><div>Fit timeline to trace</div>
@@ -964,6 +970,37 @@
       @query-ai="queryCorridorWithAi"
     />
 
+    <div
+      v-if="paletteOpen"
+      class="palette-overlay"
+      @click.self="closePalette"
+    >
+      <div
+        class="palette-box"
+        role="dialog"
+        aria-label="Command palette"
+      >
+        <input
+          ref="paletteInput"
+          v-model="paletteQuery"
+          class="palette-input"
+          placeholder="Jump to Analysis, Statistics, AI…"
+          @keydown="onPaletteKeydown"
+        >
+        <ul class="palette-list">
+          <li
+            v-for="(a, i) in paletteHits"
+            :key="a[0]"
+            :class="{ on: i === paletteIndex }"
+            @mousedown.prevent="runPaletteAction(a[0])"
+          >
+            {{ a[1] }}
+          </li>
+        </ul>
+        <p class="palette-hint">Ctrl/Cmd+K · Esc to close</p>
+      </div>
+    </div>
+
     <AnalysisFindingsDialog
       v-if="analysisOpen && trace"
       :findings="analysisFindings"
@@ -972,9 +1009,12 @@
       :ux-events="analysisUxEvents"
       :time-min="trace.timeMin"
       :time-max="trace.timeMax"
+      :quality-warnings="analysisQuality"
       @close="analysisOpen = false"
       @query-ai="queryAnalysisWithAi"
       @apply-scope="onApplyFindingScope"
+      @save-recipe="onSaveAnalysisRecipe"
+      @save-story="onSaveAnalysisStory"
     />
 
     <TraceCompareDialog
@@ -988,6 +1028,8 @@
       @query-ai="queryCompareWithAi"
       @validate-experiment="queryValidateExperimentWithAi"
       @compared="onTraceCompared"
+      @save-baseline="onCompareSaveBaseline"
+      @score-baseline="onCompareScoreBaseline"
     />
 
     <!-- Snapshot editor -->
@@ -1025,6 +1067,10 @@
             {{ formatTime(trace.timeMax - trace.timeMin, trace.timeScale, appSettings.timeDecimals) }} total
           </template>
         </span>
+        <span
+          class="status-inspect"
+          :title="taskInspectorText"
+        >{{ taskInspectorText }}</span>
 
         <CursorBar
           class="status-cursor-bar"
@@ -1233,9 +1279,10 @@ import {
   validateToolCall,
   whatIfEstimate,
 } from './utils/aiTools.js'
-import { detectAnomalies, parseWhatIfChange, snapshotFromSummary, updateBaselineProfile } from './utils/aiInvestigation.js'
-import { bestFindingScope, harvestUxEvents } from './utils/uxExplore.js'
-import { experimentPercentsFromCompare } from './utils/aiCase.js'
+import { detectAnomalies, parseWhatIfChange, snapshotFromSummary, updateBaselineProfile, scoreAgainstBaseline } from './utils/aiInvestigation.js'
+import { formatAnalysisStory } from './utils/aiPlanner.js'
+import { bestFindingScope, harvestUxEvents, findingOverlayTimes, taskInspectorLine } from './utils/uxExplore.js'
+import { experimentPercentsFromCompare, newUserInvestigationTemplate } from './utils/aiCase.js'
 import { filterBtfTextToRange, reconstructBtfSlice } from './utils/btfSlice.js'
 import {
   DARK_MODE,
@@ -1249,9 +1296,12 @@ import {
   SHOW_STI,
   STI_LOG_SCALE,
   VIEW_MODE,
+  COMMAND_PALETTE_ACTIONS,
+  workspacePresetCollapsed,
 } from './config.js'
 import { loadSettings, saveSettings, applySettingsToRuntime, resizeTabCursors, normalizeSettings,
   loadAiBaselineProfile, saveAiBaselineProfile,
+  loadAiUserInvestigationTemplates, saveAiUserInvestigationTemplates,
 } from './utils/settingsStore.js'
 import { setTimelineLayout } from './utils/timelineLayout.js'
 import { traceIsMultiCore } from './utils/migrationAnalysis.js'
@@ -1288,7 +1338,7 @@ import {
   appendExplainRegionBounds,
   composeAskEventPrompt,
 } from './utils/ollamaClient.js'
-import { traceQualitySummary } from './utils/traceQuality.js'
+import { traceQualitySummary, collectTraceQualityWarnings } from './utils/traceQuality.js'
 import { isBtfOpenName, loadBtfEntriesFromFile } from './utils/btfLoad.js'
 import {
   classifyOpenFiles,
@@ -1346,6 +1396,10 @@ const inspectorMode = ref('heatmap') // 'heatmap' | 'chord'
 const inspectorFocusPair = ref(null)
 const inspectorVpProgrammatic = ref(false)
 const analysisOpen = ref(false)
+const paletteOpen = ref(false)
+const paletteQuery = ref('')
+const paletteIndex = ref(0)
+const paletteInput = ref(null)
 const compareOpen = ref(false)
 const compareInitialA = ref(null)
 const compareInitialB = ref(null)
@@ -2323,6 +2377,21 @@ const analysisScopeLabel = computed(() => {
   return scopeSuffix(range) || ''
 })
 
+const analysisQuality = computed(() => collectTraceQualityWarnings(trace.value))
+const findingHits = computed(() => findingOverlayTimes(analysisFindings.value || []))
+const taskInspectorText = computed(() => taskInspectorLine(
+  pinnedHighlightKey.value || '',
+  analysisQuality.value,
+))
+const paletteHits = computed(() => {
+  const q = String(paletteQuery.value || '').trim().toLowerCase()
+  const rows = COMMAND_PALETTE_ACTIONS
+  if (!q) return rows
+  return rows.filter(([, label]) => String(label).toLowerCase().includes(q)
+    || String(label).toLowerCase().replace(/[^\w]+/g, '').includes(q.replace(/[^\w]+/g, '')))
+})
+watch(paletteQuery, () => { paletteIndex.value = 0 })
+
 const cursorRangeStats = computed(() =>
   computeCursorRangeStats(trace.value, cursors.value, appSettings.timeDecimals))
 
@@ -2602,6 +2671,74 @@ function onZoom(factor) {
 function onFit() {
   timelinePanelRef.value?.fitToTrace()
   syncTimelineViewport()
+}
+
+function closePalette() {
+  paletteOpen.value = false
+  paletteQuery.value = ''
+  paletteIndex.value = 0
+}
+
+async function openPalette() {
+  paletteOpen.value = true
+  paletteQuery.value = ''
+  paletteIndex.value = 0
+  await nextTick()
+  paletteInput.value?.focus?.()
+}
+
+function runPaletteAction(id) {
+  closePalette()
+  if (id === 'analysis') analysisOpen.value = true
+  else if (id === 'statistics') rightPanelTab.value = 'stats'
+  else if (id === 'find') rightPanelTab.value = 'find'
+  else if (id === 'marks') rightPanelTab.value = 'marks'
+  else if (id === 'ai') rightPanelTab.value = 'ai'
+  else if (id === 'compare') compareOpen.value = true
+  else if (id === 'heatmap') onOpenHeatmap()
+  else if (id === 'settings') openSettingsDialog()
+  else if (id === 'limit-scope') onStatsScopeChange(true)
+  else if (id === 'fit') onFit()
+  else if (id === 'inspect-task') {
+    showToast(taskInspectorText.value, 'info')
+  } else if (String(id).startsWith('preset-')) {
+    applyWorkspacePreset(id)
+  }
+}
+
+function applyWorkspacePreset(id) {
+  if (id === 'preset-compare') {
+    compareOpen.value = true
+    return
+  }
+  rightPanelTab.value = 'stats'
+  appSettings.statsSectionCollapsed = workspacePresetCollapsed(
+    id, defaultSectionCollapsed())
+  saveSettings(appSettings)
+}
+
+function onPaletteKeydown(e) {
+  const hits = paletteHits.value
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    closePalette()
+    return
+  }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    paletteIndex.value = Math.min(hits.length - 1, paletteIndex.value + 1)
+    return
+  }
+  if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    paletteIndex.value = Math.max(0, paletteIndex.value - 1)
+    return
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    const row = hits[paletteIndex.value]
+    if (row) runPaletteAction(row[0])
+  }
 }
 
 function onZoomPreset(value) {
@@ -2894,6 +3031,30 @@ function onApplyFindingScope(finding) {
   if (!tr || !finding) return
   const scope = bestFindingScope(finding, analysisUxEvents.value, tr.timeMin, tr.timeMax)
   if (scope) applyExploreRange(scope)
+}
+
+function onSaveAnalysisRecipe() {
+  const tpl = newUserInvestigationTemplate('Analysis recipe', [
+    'investigate', 'correlate', 'generate_report',
+  ])
+  const items = (loadAiUserInvestigationTemplates() || []).filter(it => it.id !== tpl.id)
+  items.push(tpl)
+  saveAiUserInvestigationTemplates(items)
+  showToast(`Saved recipe “${tpl.label}”.`, 'info')
+}
+
+function onSaveAnalysisStory() {
+  const text = formatAnalysisStory(analysisFindings.value || [], {
+    qualityWarnings: analysisQuality.value,
+    scopeTitle: analysisScopeLabel.value,
+  })
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'analysis-story.txt'
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 async function queryAnalysisWithAi(payload = 'findings') {
@@ -3864,6 +4025,20 @@ function onTraceCompared({ idA, idB, scopeToCursors = true }) {
   }
 }
 
+function onCompareSaveBaseline(idA) {
+  const tab = tabs.value.find(t => t.id === idA)
+  if (tab?.trace) updateAiBaselineFromTrace(tab.trace)
+  showToast('Saved Trace A metrics as the regression baseline.', 'info')
+}
+
+function onCompareScoreBaseline(idA) {
+  const tab = tabs.value.find(t => t.id === idA)
+  if (!tab?.trace) return
+  const snapshot = buildAiTaskMetricsSnapshot(tab.trace)
+  const result = scoreAgainstBaseline(loadAiBaselineProfile(), snapshot)
+  showToast(result.message || 'Baseline score', 'info')
+}
+
 function openTraceCompare(idA, idB) {
   compareInitialA.value = idA ?? null
   compareInitialB.value = idB ?? null
@@ -4564,6 +4739,18 @@ function openAboutDialog() {
 }
 
 function onGlobalKeydown(e) {
+  const palMod = e.ctrlKey || e.metaKey
+  if (palMod && e.key.toLowerCase() === 'k') {
+    e.preventDefault()
+    if (paletteOpen.value) closePalette()
+    else openPalette()
+    return
+  }
+  if (paletteOpen.value && e.key === 'Escape') {
+    e.preventDefault()
+    closePalette()
+    return
+  }
   if (isTypingTarget(e.target)) return
 
   if (e.key === 'F3') {
@@ -4937,6 +5124,10 @@ onMounted(async () => {
   rightPanelTab.value = firstVisibleRightPanelTab(appSettings)
   window.addEventListener('keydown', onGlobalKeydown)
   await restoreSessionTabs(saved)
+  if (saved?.aiCase) {
+    await nextTick()
+    aiPanelRef.value?.restoreInvestigation?.(saved.aiCase)
+  }
   // Auto-load the demo trace only when explicitly requested via ?demo in the URL.
   if (new URLSearchParams(window.location.search).has('demo')) {
     onLoadDemo()
@@ -5057,6 +5248,7 @@ function scheduleSessionSave() {
       },
       tabs: tabs.value,
       activeTabId: activeTabId.value,
+      aiCase: aiPanelRef.value?.investigationSnapshot?.() || null,
     })
     _savedTabStateByTraceName = snapshot.tabStateByTraceName ?? {}
     saveSession(snapshot)
@@ -5219,6 +5411,9 @@ watch(
   --ai-md-td-fg:   #dbe2ea;
   --ai-tool-bg:    #2a2418;
   --ai-tool-fg:    #e6d48a;
+  --analysis-ok:   #7dcea0;
+  --analysis-warn: #e67e22;
+  --analysis-err:  #e74c3c;
 }
 
 .app:not(.dark),
@@ -5262,6 +5457,9 @@ body:has(.app:not(.dark)) {
   --ai-md-td-fg:   #1E1E1E;
   --ai-tool-bg:    #fff8e8;
   --ai-tool-fg:    #6b5508;
+  --analysis-ok:   #166534;
+  --analysis-warn: #9a4d00;
+  --analysis-err:  #c0392b;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -6022,6 +6220,16 @@ body.col-resizing * {
   color: #e07070;
 }
 
+.status-inspect {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-dim);
+  padding: 0 8px;
+}
+
 .status-range {
   flex-shrink: 1;
   min-width: 0;
@@ -6144,5 +6352,54 @@ body.col-resizing * {
 .toast-enter-from,
 .toast-leave-to {
   opacity: 0;
+}
+
+.palette-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  justify-content: center;
+  padding-top: 12vh;
+}
+.palette-box {
+  width: min(440px, calc(100vw - 32px));
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  padding: 10px;
+}
+.palette-input {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-inset);
+  color: var(--fg);
+}
+.palette-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 280px;
+  overflow: auto;
+}
+.palette-list li {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.palette-list li.on,
+.palette-list li:hover {
+  background: rgba(79, 139, 255, 0.2);
+}
+.palette-hint {
+  margin: 8px 2px 0;
+  font-size: 11px;
+  color: var(--fg-dim);
 }
 </style>
