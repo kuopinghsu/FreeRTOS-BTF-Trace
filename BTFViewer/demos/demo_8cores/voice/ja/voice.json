@@ -1,7 +1,0 @@
-{
-  "schema": "btf-demo-voice",
-  "version": 1,
-  "id": "ja",
-  "label": "日本語",
-  "demo": "demo_8cores"
-}
