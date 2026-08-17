@@ -24,7 +24,7 @@
       <button
         type="button"
         class="ai-link-btn"
-        title="Clear the conversation log (keeps usage and investigation evidence)"
+        title="Clear replies, usage cost, and current investigation issues"
         @click="clear"
       >
         Clear
@@ -1527,8 +1527,12 @@ function clear() {
   error.value = ''
   mermaidZoom.value = null
   interpretedQuery = null
+  evidencePayload = null
+  investigationPlan.value = null
+  costMeter.value = emptyCostMeter()
   status.value = ''
   bumpEvidence()
+  emit('sessionChange')
 }
 
 function investigationSnapshot() {

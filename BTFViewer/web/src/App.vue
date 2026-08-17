@@ -177,27 +177,20 @@
         </div>
         <div class="demo-folder-body">
           The browser cannot read sibling files from
-          <strong>{{ demoFolderPrompt.xmlName }}</strong> alone
-          (typical for <code>file://</code> and WSL paths).
-          Pick the matching <code>.btf.gz</code> next to that XML,
-          or drop the <code>demo_8cores</code> folder onto this window.
-          Folder pickers often fail on <code>\\wsl$</code> /
-          <code>\\wsl.localhost</code> — copy the pack to a Windows drive if needed.
+          <strong>{{ demoFolderPrompt.xmlName }}</strong> alone.
+          Choose the pack folder that contains that XML,
+          <code>{{ demoFolderPrompt.traceName || '.btf.gz' }}</code>,
+          and <code>voice/</code>
+          — then click Open / Select.
+          You can also drop that folder onto the viewer.
         </div>
         <div class="demo-folder-footer">
           <button
             type="button"
             class="demo-folder-btn primary"
-            @click="demoBtfInput?.click()"
+            @click="onOpenDemoPackFolder"
           >
-            Choose .btf.gz
-          </button>
-          <button
-            type="button"
-            class="demo-folder-btn"
-            @click="demoDirInput?.click()"
-          >
-            Choose folder
+            Open pack folder
           </button>
           <button
             type="button"
@@ -209,23 +202,6 @@
         </div>
       </div>
     </div>
-    <input
-      ref="demoBtfInput"
-      type="file"
-      class="demo-folder-file"
-      accept=".xml,.btf,.gz,.bz2,.zip"
-      multiple
-      @change="onDemoFolderFiles"
-    >
-    <input
-      ref="demoDirInput"
-      type="file"
-      class="demo-folder-file"
-      webkitdirectory
-      directory
-      multiple
-      @change="onDemoFolderFiles"
-    >
 
     <div
       v-if="traceQualityText"
@@ -380,6 +356,7 @@
           <button
             v-if="appSettings.showStats"
             class="panel-tab"
+            data-demo-target="stats_tab"
             :class="{ active: rightPanelTab === 'stats' }"
             role="tab"
             :aria-selected="rightPanelTab === 'stats'"
@@ -400,6 +377,7 @@
           <button
             v-if="appSettings.showFind"
             class="panel-tab"
+            data-demo-target="find_tab"
             :class="{ active: rightPanelTab === 'find' }"
             role="tab"
             :aria-selected="rightPanelTab === 'find'"
@@ -420,6 +398,7 @@
           <button
             v-if="aiTabVisible"
             class="panel-tab"
+            data-demo-target="ai_tab"
             :class="{ active: rightPanelTab === 'ai' }"
             role="tab"
             :aria-selected="rightPanelTab === 'ai'"
@@ -1368,9 +1347,9 @@ import { traceQualitySummary, collectTraceQualityWarnings } from './utils/traceQ
 import { isBtfOpenName, loadBtfEntriesFromFile } from './utils/btfLoad.js'
 import {
   classifyOpenFiles,
+  classifyPickedOpen,
   collectDroppedFiles,
-  packFromFileList,
-  packFromFileMap,
+  pickDemoPack,
 } from './utils/demoPack.js'
 import { createDemoRunner, parseCursorTimes } from './utils/demoRunner.js'
 import { discoverVoiceLangs, mergeVoiceLangs, pickVoiceLang } from './utils/demoVoice.js'
@@ -1550,8 +1529,6 @@ const demoVoiceLang = ref('en')
 const demoVoiceLangs = ref([])
 const DEMO_VOICE_LANG_KEY = 'btf-demo-voice-lang'
 const demoFolderPrompt = ref(null)
-const demoBtfInput = ref(null)
-const demoDirInput = ref(null)
 const zoomPresetValue = ref('fit')
 const zoomPresetOptions = ref(buildZoomPresetOptions(NaN, 0))
 let _demoRunner = null
@@ -1699,6 +1676,7 @@ function demoHost() {
       onFit()
     },
     fit: async () => { onFit() },
+    zoom1to1: async () => { onZoom1to1() },
     setViewMode: async (mode) => {
       const key = String(mode || 'task').toLowerCase()
       if (key !== 'task' && key !== 'core') return
@@ -1727,6 +1705,11 @@ function demoHost() {
         collapse_others: true,
         scroll: 'top',
       })
+    },
+    tickDist: async ({ close } = {}) => {
+      const panel = await demoEnsureStatsPanel()
+      if (close) await panel?.closePlot?.()
+      else await panel?.openTickDistPlot?.()
     },
     highlight: async (task) => { onAiHighlight(task) },
     clearHighlight: async () => { onAiHighlight('') },
@@ -1898,34 +1881,21 @@ function onDemoVoiceLang(e) {
 function onDemoFolderNeeded(prompt) {
   demoFolderPrompt.value = {
     xmlName: prompt?.xmlName || 'demo.xml',
-    xmlFile: prompt?.xmlFile || null,
-    files: prompt?.files || null,
+    traceName: prompt?.traceName || '',
     startIn: prompt?.startIn || null,
+    files: prompt?.files || null,
   }
 }
 
-function pendingDemoFiles() {
-  const extra = new Map()
-  const prompt = demoFolderPrompt.value
-  if (prompt?.files instanceof Map) {
-    for (const [k, v] of prompt.files) extra.set(k, v)
-  }
-  if (prompt?.xmlFile && !extra.has(prompt.xmlFile.name)) {
-    extra.set(prompt.xmlFile.name, prompt.xmlFile)
-  }
-  return extra
-}
-
-async function onDemoFolderFiles(e) {
-  const list = e.target.files
-  e.target.value = ''
+async function onOpenDemoPackFolder() {
+  const startIn = demoFolderPrompt.value?.startIn || null
   try {
-    const pack = await packFromFileList(list, pendingDemoFiles())
+    const pack = await pickDemoPack({ startIn })
     if (!pack) return
     demoFolderPrompt.value = null
     await startDemoPack(pack)
   } catch (err) {
-    showToast(err?.message || 'Failed to open demo folder', 'error')
+    showToast(err?.message || 'Failed to open demo pack', 'error')
   }
 }
 
@@ -4139,29 +4109,28 @@ async function onFileDrop(e) {
     return
   }
   const kind = classifyOpenFiles(files)
-  if (demoFolderPrompt.value && (kind === 'btf' || kind === 'demo')) {
+  if (kind === 'demo' || kind === 'xtf') {
     try {
-      const merged = pendingDemoFiles()
-      for (const [k, v] of files) merged.set(k, v)
-      const pack = await packFromFileMap(merged)
-      demoFolderPrompt.value = null
-      await startDemoPack(pack)
+      const picked = await classifyPickedOpen(files)
+      if (picked?.kind === 'demo' && picked.pack?.traceFile) {
+        await startDemoPack(picked.pack)
+        return
+      }
+      if (picked?.kind === 'demo-folder') {
+        onDemoFolderNeeded(picked)
+        return
+      }
+      showToast('Demo pack has no .btf / .btf.gz trace', 'error')
     } catch (err) {
-      showToast(err?.message || 'Failed to open demo XML', 'error')
-    }
-    return
-  }
-  if (kind === 'demo') {
-    try {
-      await startDemoPack(await packFromFileMap(files))
-    } catch (err) {
-      showToast(err?.message || 'Failed to open demo XML', 'error')
+      showToast(err?.message || 'Failed to open demo pack', 'error')
     }
     return
   }
   if (kind === 'btf') {
     stopDemo()
-    const btfs = [...files.values()].filter(f => isBtfOpenName(f.name))
+    const btfs = [...files.entries()]
+      .filter(([k, f]) => isBtfOpenName(f.name) || isBtfOpenName(k))
+      .map(([, f]) => f)
     if (!btfs.length) return
     if (btfs.length === 1) {
       onTraceReading({ name: btfs[0].name })
@@ -4185,7 +4154,12 @@ async function onFileDrop(e) {
     }
     return
   }
-  showToast('Drop a .btf trace or a demo .xml pack', 'error')
+  showToast(
+    files.size
+      ? 'Drop a .btf trace, a demo .xml / .xtf, or a pack folder (xml + .btf.gz + voice)'
+      : 'Could not read that drop. Drop the pack folder, .xtf, or the .xml and .btf.gz files together.',
+    'error',
+  )
 }
 
 async function onCopyClipboardDirect() {
@@ -5713,17 +5687,6 @@ body {
   color: var(--fg);
   font-size: 12px;
   cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-}
-
-.demo-folder-file {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
 }
 
 .demo-folder-btn.primary {

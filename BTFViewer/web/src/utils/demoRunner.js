@@ -409,7 +409,7 @@ export function createDemoRunner(host, pack, options = {}) {
     }
     if (tag === 'move' || tag === 'click') {
       const box = host.pointerBox?.() || { left: 0, top: 0, width: 0, height: 0 }
-          const xy = resolveDemoXy(el, parsed.targets || {}, box)
+      const xy = resolveDemoXy(el, parsed.targets || {}, box, host.demoTarget)
       if (xy && host.movePointer) {
         const dur = el.attrib.duration != null
           ? Number(el.attrib.duration)
@@ -529,6 +529,10 @@ export function createDemoRunner(host, pack, options = {}) {
       await host.fit()
       return
     }
+    if (tag === 'zoom_1to1' || tag === 'one_to_one' || tag === '1to1') {
+      await host.zoom1to1?.()
+      return
+    }
     if (tag === 'limit') {
       await host.setLimit(truthy(attr(el, 'on', vars, attr(el, 'enabled', vars, 'true')), true))
       return
@@ -570,6 +574,13 @@ export function createDemoRunner(host, pack, options = {}) {
       else if ('open' in (el.attrib || {})) close = !truthy(el.attrib.open, true)
       else if (String(el.attrib.action || '').toLowerCase() === 'close') close = true
       await host.openAnalysis({ close })
+      return
+    }
+    if (tag === 'tick_dist' || tag === 'tick_distribution') {
+      let close = false
+      if ('close' in (el.attrib || {})) close = truthy(el.attrib.close, true)
+      else if (String(el.attrib.action || '').toLowerCase() === 'close') close = true
+      await host.tickDist?.({ close })
       return
     }
     if (tag === 'find') {

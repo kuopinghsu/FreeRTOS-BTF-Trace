@@ -123,10 +123,11 @@ Call `traceEND()` when the run finishes:
 
 When the ring fills:
 
-```text
-new event → overwrites oldest event
-event_count → remains at max_events
-export → #ringOverflow true
+```mermaid
+flowchart TD
+  newEvt[new event] --> overwrite[overwrites oldest event]
+  overwrite --> count[event_count remains at max_events]
+  count --> export["export → #ringOverflow true"]
 ```
 
 Choose a ring large enough for the capture interval you intend to analyze.
@@ -170,9 +171,10 @@ The demo uses tag 0 for heap bytes and interval ids 0–11 for test regions.
 
 Trace hooks use:
 
-```text
-task context          → taskENTER_CRITICAL
-ISR / context switch  → taskENTER_CRITICAL_FROM_ISR
+```mermaid
+flowchart LR
+  task[task context] --> taskCrit[taskENTER_CRITICAL]
+  isr[ISR / context switch] --> isrCrit[taskENTER_CRITICAL_FROM_ISR]
 ```
 
 The RISC-V SMP port implements both as **recursive spinlocks**. This allows `traceTASK_SWITCHED_OUT` / `traceTASK_SWITCHED_IN` to run inside `vTaskSwitchContext` while the ISR lock is already held.
@@ -188,19 +190,13 @@ Affinity STI requires:
 #define configINCLUDE_SCHEDULING     1
 ```
 
-FreeRTOS V11 invokes:
+FreeRTOS V11 invokes `traceENTER_vTaskCoreAffinitySet`. The trace library records:
 
-```text
-traceENTER_vTaskCoreAffinitySet
+```mermaid
+flowchart LR
+  hook[traceENTER_vTaskCoreAffinitySet] --> record["affinity_set Name id 0xMASK"]
+  record --> viewer[BTF Viewer checks observed cores vs mask]
 ```
-
-The trace library records:
-
-```text
-affinity_set Name[id] 0xMASK
-```
-
-BTF Viewer compares observed cores against the active mask and reports violations.
 
 `configNUMBER_OF_CORES` must be **1–31**.
 
@@ -213,12 +209,12 @@ tools/gentrace trace.bin trace.btf
 tools/gentrace -v trace.bin trace.vcd
 ```
 
-Then open:
-
-| Output | Viewer |
-|---|---|
-| `.btf` | BTF Viewer or Trace Compass |
-| `.vcd` | GTKWave |
+```mermaid
+flowchart LR
+  bin[trace.bin] --> gentrace[gentrace]
+  gentrace --> btf[.btf — BTF Viewer / Trace Compass]
+  gentrace --> vcd[.vcd — GTKWave]
+```
 
 ## 8. Validate the port
 

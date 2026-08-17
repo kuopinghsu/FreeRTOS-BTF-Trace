@@ -6,6 +6,13 @@ FreeRTOS trace recorder for scheduling and synchronization events. Events are ke
 
 ## Documentation
 
+```mermaid
+flowchart LR
+  readme[README] --> porting[PORTING]
+  porting --> format[TRACE_FORMAT]
+  format --> viewer[BTFViewer]
+```
+
 | Document | Contents |
 |---|---|
 | **README.md** | Build the demo and open a trace |
@@ -17,19 +24,15 @@ FreeRTOS trace recorder for scheduling and synchronization events. Events are ke
 
 ## Overview
 
-```text
-FreeRTOS trace hooks
-        ↓
-compact ring buffer in RAM
-        ↓
-     trace.bin
-        ↓
-     gentrace
-      ↙    ↘
-    .btf   .vcd
-     ↓       ↓
-BTF Viewer  GTKWave
-Trace Compass
+```mermaid
+flowchart TD
+  hooks[FreeRTOS trace hooks] --> ring[compact ring buffer in RAM]
+  ring --> bin[trace.bin]
+  bin --> gentrace[gentrace]
+  gentrace --> btf[.btf]
+  gentrace --> vcd[.vcd]
+  btf --> viewer[BTF Viewer / Trace Compass]
+  vcd --> gtkwave[GTKWave]
 ```
 
 | Format | Use |
@@ -43,13 +46,15 @@ Trace Compass
 
 ### Repository layout
 
-```text
-FreeRTOS-Trace/   Trace hooks, ring buffer, dump support
-tools/            gentrace — trace.bin → BTF / VCD
-sim/              RV64 SMP simulator (--cores N)
-Demo/             FreeRTOS SMP demo running under sim/
-BTFViewer/        Desktop + Web BTF analysis viewer
-tracedata/        Sample BTF / VCD traces
+```mermaid
+flowchart TD
+  root[FreeRTOS-BTF-Trace]
+  root --> traceLib[FreeRTOS-Trace — hooks, ring buffer, dump]
+  root --> tools[tools — gentrace: trace.bin → BTF / VCD]
+  root --> sim[sim — RV64 SMP simulator]
+  root --> demo[Demo — FreeRTOS SMP under sim]
+  root --> viewer[BTFViewer — Desktop + Web analysis]
+  root --> data[tracedata — sample BTF / VCD]
 ```
 
 ## Quick start

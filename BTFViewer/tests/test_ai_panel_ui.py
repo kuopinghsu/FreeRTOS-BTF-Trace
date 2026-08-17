@@ -1074,9 +1074,9 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertEqual(panel._status.text(), "Done.")
         panel.clear_conversation()
         self.assertEqual(panel._status.text(), "")
-        self.assertEqual(panel._cost_meter["total_tokens"], 1260)
-        self.assertEqual(panel._cost_meter["tool_calls"], 2)
-        self.assertIn("1.3k tok", panel._usage.text())
+        self.assertEqual(panel._cost_meter["total_tokens"], 0)
+        self.assertEqual(panel._cost_meter["tool_calls"], 0)
+        self.assertIn("0 tok", panel._usage.text())
         self.assertFalse(panel._entries)
         self.assertEqual(panel._log.toPlainText().strip(), "")
         panel._append("assistant", "A long model reply")
@@ -1084,8 +1084,8 @@ class AiPanelUiTests(unittest.TestCase):
         panel.clear_conversation()
         self.assertFalse(panel._entries)
         self.assertEqual(panel._log.toPlainText().strip(), "")
-        self.assertEqual(panel._evidence_payload["finding"]["title"], "Queue bounce")
-        self.assertIn("1.3k tok", panel._usage.text())
+        self.assertIsNone(panel._evidence_payload)
+        self.assertIn("0 tok", panel._usage.text())
 
     def test_log_composer_splitter_exists(self) -> None:
         panel = self._panel()

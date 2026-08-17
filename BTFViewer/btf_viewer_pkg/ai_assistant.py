@@ -3809,7 +3809,7 @@ def create_ai_assistant_panel(
 
             self._clear_btn = _ai_action_btn(
                 "Clear",
-                "Clear the conversation log (keeps usage and investigation evidence)")
+                "Clear replies, usage cost, and current investigation issues")
             self._clear_btn.clicked.connect(self.clear_conversation)
             actions_row.addWidget(self._clear_btn)
             self._lang_btn = _ai_action_btn(
@@ -4746,7 +4746,7 @@ def create_ai_assistant_panel(
             self._persist_investigation_session()
 
         def clear_conversation(self) -> None:
-            """Clear chat replies; keep usage meter and investigation evidence."""
+            """Clear chat replies, accumulated cost, and current investigation issues."""
             if self._busy:
                 self.stop_query()
             self._entries.clear()
@@ -4754,10 +4754,13 @@ def create_ai_assistant_panel(
             self._pending_batches.clear()
             self._tool_round = 0
             self._log.clear()
-            self._set_status("")
+            self._cost_meter = empty_cost_meter()
+            self._cost_started = 0.0
             self._interpreted_query = None
+            self._clear_evidence_log_entry()
+            self._clear_investigation_plan()
+            self._set_status("")
             self._refresh_tool_bar()
-            self._refresh_guide_ui()
             self._persist_investigation_session()
 
         def _show_log_menu(self, pos) -> None:

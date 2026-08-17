@@ -29,12 +29,14 @@ DOCS := $(BUILDS)
 
 DEMO_XML ?= demos/demo_8cores/demo_8cores.xml
 DEMO_LANG ?=
+DEMO_LANGS ?= en
+DEMO_XTF ?= $(BUILDS)/demo_8cores.xtf
 AI_DATASET ?= tests/ai
 AI_FAIL_UNDER ?= 70
 AI_CONFIG ?= examples/ai/benchmark.xml
 AI_MODELS ?=
 
-.PHONY: all help web bundle check-bundle test test-web test-all ai-test ai-test-live ci doc update-images demo demo-voice
+.PHONY: all help web bundle check-bundle test test-web test-all ai-test ai-test-live ci doc update-images demo demo-voice demo-pack
 
 help:
 	@echo "BTF Viewer — make targets"
@@ -47,6 +49,7 @@ help:
 	@echo "  make update-images  Regenerate ../images/stats/*.svg via the desktop CLI"
 	@echo "  make demo         Run guided demo via builds/btf_viewer.py (DEMO_XML, DEMO_LANG, --launch)"
 	@echo "  make demo-voice   Voice pack status (DEMO_XML). See scripts/demo_voice.py"
+	@echo "  make demo-pack    Pack demos/demo_8cores → builds/demo_8cores.xtf (DEMO_LANGS=en or all)"
 	@echo "  make test         Desktop unit tests (QT_QPA_PLATFORM=offscreen)"
 	@echo "  make test-web     Web unit tests (node --test)"
 	@echo "  make test-all     Desktop + web unit tests"
@@ -55,7 +58,7 @@ help:
 	@echo "  make ci           test-all + check-bundle (local CI parity)"
 	@echo "  make help         Show this help"
 	@echo ""
-	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  MARP=$(MARP)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)  DEMO_XML=$(DEMO_XML)  DEMO_LANG=$(DEMO_LANG)  AI_DATASET=$(AI_DATASET)  AI_FAIL_UNDER=$(AI_FAIL_UNDER)  AI_CONFIG=$(AI_CONFIG)  AI_MODELS=$(AI_MODELS)"
+	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  MARP=$(MARP)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)  DEMO_XML=$(DEMO_XML)  DEMO_LANG=$(DEMO_LANG)  DEMO_LANGS=$(DEMO_LANGS)  AI_DATASET=$(AI_DATASET)  AI_FAIL_UNDER=$(AI_FAIL_UNDER)  AI_CONFIG=$(AI_CONFIG)  AI_MODELS=$(AI_MODELS)"
 
 
 all: web bundle
@@ -79,6 +82,14 @@ demo: $(OUT)
 
 demo-voice:
 	$(PYTHON) scripts/demo_voice.py status $(DEMO_XML)
+
+demo-pack:
+	mkdir -p $(BUILDS)
+	@if [ "$(DEMO_LANGS)" = "all" ]; then \
+		$(PYTHON) scripts/demo_pack.py demos/demo_8cores -o $(DEMO_XTF) --all-voices; \
+	else \
+		$(PYTHON) scripts/demo_pack.py demos/demo_8cores -o $(DEMO_XTF) --voice $(DEMO_LANGS); \
+	fi
 
 # Demo launches builds/btf_viewer.py; rebuild when package sources change.
 BUNDLE_SRCS := $(wildcard btf_viewer_pkg/*.py) \

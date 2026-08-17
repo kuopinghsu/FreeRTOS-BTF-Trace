@@ -3,18 +3,31 @@
  * <input type="file"> on file://.
  */
 
-import { BTF_FILE_ACCEPT, BTF_FILE_PICKER_ACCEPT, isBtfOpenName } from './btfLoad.js'
-import { classifyPickedOpen, isXmlOpenName, packFromDirectoryHandle } from './demoPack.js'
+import { BTF_FILE_ACCEPT, isBtfOpenName } from './btfLoad.js'
+import { classifyPickedOpen, isXmlOpenName, isXtfOpenName, packFromDirectoryHandle, filePickerOptions, rememberFileOpenHandle, lastRememberedFileOpenHandle } from './demoPack.js'
 
-const PICKER_ID = 'btf-trace-open'
+export const OPEN_FILE_ACCEPT = `${BTF_FILE_ACCEPT},.xml,.xtf`
 
-export const OPEN_FILE_ACCEPT = `${BTF_FILE_ACCEPT},.xml`
+/**
+ * Chromium's showOpenFilePicker strips unknown extensions from typed MIME
+ * lists (e.g. ``.xtf`` under ``application/zip``). Put every Open extension
+ * under ``application/octet-stream`` in one type entry so the *default*
+ * filter accepts ``.xtf`` on the first dialog open.
+ */
+export const OPEN_FILE_PICKER_TYPES = [
+  {
+    description: 'BTF trace, demo XML, or .xtf pack',
+    accept: {
+      'application/octet-stream': [
+        '.btf', '.btf.gz', '.gz', '.btf.bz2', '.bz2', '.btf.zip', '.zip',
+        '.xml', '.xtf',
+      ],
+    },
+  },
+]
 
-export const OPEN_FILE_PICKER_ACCEPT = {
-  ...BTF_FILE_PICKER_ACCEPT,
-  'text/xml': ['.xml'],
-  'application/xml': ['.xml'],
-}
+/** @deprecated Prefer OPEN_FILE_PICKER_TYPES; kept for tests / callers. */
+export const OPEN_FILE_PICKER_ACCEPT = OPEN_FILE_PICKER_TYPES[0].accept
 
 function isHttpOrigin() {
   if (typeof window === 'undefined') return false
@@ -46,12 +59,9 @@ export async function pickAndReadOpen() {
   if (!supportsFileHandles()) return null
   try {
     const handles = await window.showOpenFilePicker({
-      types: [{
-        description: 'BTF trace or demo XML',
-        accept: OPEN_FILE_PICKER_ACCEPT,
-      }],
-      multiple: true,
-      id: PICKER_ID,
+      ...filePickerOptions(lastRememberedFileOpenHandle()),
+      types: OPEN_FILE_PICKER_TYPES,
+      excludeAcceptAllOption: false,
     })
     const files = new Map()
     let xmlHandle = null
@@ -60,6 +70,7 @@ export async function pickAndReadOpen() {
       files.set(file.name, file)
       if (isXmlOpenName(file.name) && !xmlHandle) xmlHandle = handle
     }
+    rememberFileOpenHandle(xmlHandle || handles[0] || null)
     return await classifyPickedOpen(files, xmlHandle)
   } catch (err) {
     if (err && err.name === 'AbortError') return null
@@ -67,5 +78,4 @@ export async function pickAndReadOpen() {
   }
 }
 
-export { isBtfOpenName, isXmlOpenName, packFromDirectoryHandle }
-
+export { isBtfOpenName, isXmlOpenName, isXtfOpenName, packFromDirectoryHandle }

@@ -19,29 +19,19 @@ For day-to-day panel usage and the product-level AI overview, see [README.md →
 
 ### AI boundary
 
-```text
-                         BTF trace
-                            │
-                            ▼
-                Deterministic Analysis / Statistics
-                            │
-                            ▼
-                         Findings
-                            │
-                            ▼
-                    AI investigation
-                 ┌──────────┼──────────┐
-                 ▼          ▼          ▼
-              evidence  hypotheses  challenge
-                 │          │          │
-                 └──────────┼──────────┘
-                            ▼
-                       conclusion
-                            │
-                    optional experiment
-                            │
-                            ▼
-                         compare
+```mermaid
+flowchart TD
+  trace[BTF trace] --> stats[Deterministic Analysis / Statistics]
+  stats --> findings[Findings]
+  findings --> ai[AI investigation]
+  ai --> evidence[evidence]
+  ai --> hypotheses[hypotheses]
+  ai --> challenge[challenge]
+  evidence --> conclusion[conclusion]
+  hypotheses --> conclusion
+  challenge --> conclusion
+  conclusion --> experiment[optional experiment]
+  experiment --> compare[compare]
 ```
 
 AI may organize, explain, correlate, challenge, and estimate. It must not present heuristic estimates as measured trace results.
@@ -85,7 +75,7 @@ When a question needs granular per-task time-series, the model can call `query_r
 
 Important conclusions should cite evidence (`jump:TIME`, metric names) and state **confidence** (High / Medium / Low) plus evidence quality (Directly observed / Strong correlation / Possible explanation / Insufficient evidence). The system prompt asks the model not to invent numbers, task names, or `jump:TIME` values absent from findings, tool results, or Trace Compare tables — and, when a **Cursor region window** is listed, to cite only times inside that window.
 
-The AI panel stepper (Triage → Scope → Investigate → Verify → Experiment → Compare) follows Findings and tools already run; click a completed stage to jump to that output in the log (the matching message flashes). Empty log: **Start Investigation** runs **Auto investigate**. **Clear** removes chat replies and does not reset the usage meter or investigation evidence (the stepper does not return to idle). The investigation case, plan, and recent chat restore after app restart **when the log still has a user or assistant turn** (desktop `[ai] investigation_session`; web session snapshot). An empty log (or Clear then quit) does not restore a Current Issue card — **Start Investigation** stays available. What-if / Optimize stay on **Verify** until verify tools or strong evidence quality; the Experiment banner is a heuristic estimate (recapture a trace and Compare to measure). **Investigate / Root cause / Verify finding / Auto investigate / What-if / Optimize / Diagnostic report** show an **Investigation plan** checklist (steps advance as tools run; the final text reply marks remaining steps done). Analysis Findings may include anomaly rows (WCET Max≫Avg spikes, extreme migration bursts). **Explain finding** (Analysis **Explain…**: Quick / Technical / Deep) calls `explain_finding` with `level=`. Mode chips and **More → Investigations** (including **Save as template…**) start tool sequences without adding templates after Auto investigate. Diagnose / Investigate / Auto investigate walk graph → temporal → `rank_root_causes` → `challenge_conclusion` before `what_if`. Evidence hypothesis rows offer Support / Reject / Need evidence / Test / Compare.
+The AI panel stepper (Triage → Scope → Investigate → Verify → Experiment → Compare) follows Findings and tools already run; click a completed stage to jump to that output in the log (the matching message flashes). Empty log: **Start Investigation** runs **Auto investigate**. **Clear** removes chat replies, resets the usage meter, and clears current investigation issues (the stepper returns toward idle / **Start Investigation**). The investigation case, plan, and recent chat restore after app restart **when the log still has a user or assistant turn** (desktop `[ai] investigation_session`; web session snapshot). An empty log (or Clear then quit) does not restore a Current Issue card — **Start Investigation** stays available. What-if / Optimize stay on **Verify** until verify tools or strong evidence quality; the Experiment banner is a heuristic estimate (recapture a trace and Compare to measure). **Investigate / Root cause / Verify finding / Auto investigate / What-if / Optimize / Diagnostic report** show an **Investigation plan** checklist (steps advance as tools run; the final text reply marks remaining steps done). Analysis Findings may include anomaly rows (WCET Max≫Avg spikes, extreme migration bursts). **Explain finding** (Analysis **Explain…**: Quick / Technical / Deep) calls `explain_finding` with `level=`. Mode chips and **More → Investigations** (including **Save as template…**) start tool sequences without adding templates after Auto investigate. Diagnose / Investigate / Auto investigate walk graph → temporal → `rank_root_causes` → `challenge_conclusion` before `what_if`. Evidence hypothesis rows offer Support / Reject / Need evidence / Test / Compare.
 
 Right-click a timeline segment → **Ask AI about this event** to ask about that exact task/segment (`Explain the timeline event for task … around jump:TIME`), same as Explain region but scoped to one segment. With **≥2 cursors**, the timeline context menu also offers **Explain this region with AI** (`explain_region`); the AI panel **Explain region** template is always available — without two cursors it runs on full-trace Findings (no region window). When **Settings → AI** is off, those timeline items are grayed (they open Settings if clicked). When cursors are placed, the prompt includes an explicit **Cursor region window** (`jump:lo … jump:hi`) so replies should stay in-window. When `investigate` returns a root-cause chain and hypotheses, the Evidence panel renders a small **Investigation tree** plus an **Evidence Quality** meter (Strong / Medium-High / Medium / Weak — a diagnostic heuristic, **not** a probability). Direct evidence times, timeline correlation, and metric checks raise the band; untested alternatives lower it. The panel also lists **what would disprove** the conclusion, **evidence coverage**, and an **evidence graph** (finding → evidence → hypotheses). After the final reply, a host-side **validator** flags invented task names and `jump:TIME` values outside the cursor window.
 
@@ -120,32 +110,14 @@ Same flow on **Desktop** and **Web**. Panel chrome: [README → AI Assistant](RE
 
 For a first investigation, do **not** start by choosing individual tools. Use the six-step loop below and let **Investigate** choose the deeper tools.
 
-```text
-                 BTF trace
-                    │
-                    ▼
-              ① TRIAGE
-            What looks wrong?
-                    │
-                    ▼
-               ② SCOPE
-          Where does it happen?
-                    │
-                    ▼
-            ③ INVESTIGATE
-             Why did it happen?
-                    │
-                    ▼
-               ④ VERIFY
-           Is that really the cause?
-                    │
-                    ▼
-             ⑤ EXPERIMENT
-          What change is worth trying?
-                    │
-                    ▼
-               ⑥ COMPARE
-             Did the fix work?
+```mermaid
+flowchart TD
+  trace[BTF trace] --> triage["① TRIAGE<br/>What looks wrong?"]
+  triage --> scope["② SCOPE<br/>Where does it happen?"]
+  scope --> investigate["③ INVESTIGATE<br/>Why did it happen?"]
+  investigate --> verify["④ VERIFY<br/>Is that really the cause?"]
+  verify --> experiment["⑤ EXPERIMENT<br/>What change is worth trying?"]
+  experiment --> compare["⑥ COMPARE<br/>Did the fix work?"]
 ```
 
 | Step | Start with | What you should get | What you must verify |
@@ -159,14 +131,16 @@ For a first investigation, do **not** start by choosing individual tools. Use th
 
 #### The beginner rule
 
-```text
-Do not do this:
-
-Finding → mitigation
-
-Do this:
-
-Finding → scope → investigate → verify → experiment → recapture → compare
+```mermaid
+flowchart LR
+  subgraph skip["Do not do this"]
+    direction LR
+    badFind[Finding] --> badMit[mitigation]
+  end
+  subgraph good["Do this"]
+    direction LR
+    f[Finding] --> s[scope] --> i[investigate] --> v[verify] --> e[experiment] --> r[recapture] --> c[compare]
+  end
 ```
 
 A useful first session therefore needs only these user-facing actions:
@@ -185,19 +159,24 @@ Individual tool names such as `correlate_events`, `find_critical_path`, or `rank
 <a id="end-to-end-flow" name="end-to-end-flow">&#x200B;</a>
 ### End-to-end flow ![](../images/readme/h3.svg)
 
-```text
-① Load trace → Statistics (optional cursors + Limit to C1–Cn)
-② Toolbar Analysis → Findings for that scope
-③ AI entry (pick one):
-     • Triage / Investigate / Root cause / Auto investigate…
-     • Verify with AI… (selected finding)
-     • Explain this region with AI (≥2 cursors) or Explain region template
-     • Ask AI about this event (segment)
-     • Toolbar Compare → Query with AI… (two tabs)
-④ Apply GUI cards → click jump:TIME → Evidence / Reasoning (score + tree)
-⑤ Confirm on timeline + named Statistics sections
-⑥ What-if / Optimize / recommend_experiments  →  only after the cause matches
-⑦ Diagnostic report / export_report / export_investigation  →  or CLI analyze
+```mermaid
+flowchart TD
+  load["① Load trace → Statistics<br/>(optional cursors + Limit to C1–Cn)"]
+  load --> analysis["② Toolbar Analysis → Findings for that scope"]
+  analysis --> entry["③ AI entry — pick one"]
+  entry --> triage[Triage / Investigate / Root cause / Auto investigate…]
+  entry --> verify[Verify with AI… — selected finding]
+  entry --> region[Explain this region with AI / Explain region]
+  entry --> event[Ask AI about this event — segment]
+  entry --> cmpQuery[Toolbar Compare → Query with AI… — two tabs]
+  triage --> apply["④ Apply GUI cards → jump:TIME → Evidence / Reasoning"]
+  verify --> apply
+  region --> apply
+  event --> apply
+  cmpQuery --> apply
+  apply --> confirm["⑤ Confirm on timeline + named Statistics sections"]
+  confirm --> experiment["⑥ What-if / Optimize / recommend_experiments<br/>only after the cause matches"]
+  experiment --> report["⑦ Diagnostic report / export_report / export_investigation<br/>or CLI analyze"]
 ```
 
 Do not ask for mitigations before the timeline agrees with the finding. Empty or mis-scoped Statistics produce confident nonsense. Prefer built-in templates: they already name metrics and units.
@@ -417,28 +396,16 @@ The AI tool set is easier to understand by **purpose** than by function name. A 
 
 ### Tool mental model
 
-```text
-Question
-   │
-   ▼
-1. Scope & Navigate
-   │
-   ▼
-2. Measure & Search
-   │
-   ▼
-3. Investigate & Correlate
-   │
-   ▼
-4. Verify & Challenge
-   │
-   ├───────────────┐
-   ▼               ▼
-5. Compare      6. Experiment
-   │               │
-   └───────┬───────┘
-           ▼
-      7. Report / Close
+```mermaid
+flowchart TD
+  q[Question] --> scope[1. Scope and Navigate]
+  scope --> measure[2. Measure and Search]
+  measure --> investigate[3. Investigate and Correlate]
+  investigate --> verify[4. Verify and Challenge]
+  verify --> compare[5. Compare]
+  verify --> experiment[6. Experiment]
+  compare --> report[7. Report / Close]
+  experiment --> report
 ```
 
 ### Apply, Skip, and Undo
@@ -501,19 +468,17 @@ Use this group after Triage identifies a concrete issue.
 
 This group prevents a plausible story from being treated as a confirmed diagnosis.
 
-```text
-Hypothesis
-   │
-   ├── supporting evidence
-   ├── contradicting evidence
-   ├── alternative causes
-   └── missing evidence
-          │
-          ▼
-SUPPORTED / PARTIAL / UNSUPPORTED
-          │
-          ▼
-STOP / CONTINUE / REVISE
+```mermaid
+flowchart TD
+  hyp[Hypothesis] --> support[supporting evidence]
+  hyp --> contradict[contradicting evidence]
+  hyp --> alt[alternative causes]
+  hyp --> missing[missing evidence]
+  support --> verdict[SUPPORTED / PARTIAL / UNSUPPORTED]
+  contradict --> verdict
+  alt --> verdict
+  missing --> verdict
+  verdict --> next[STOP / CONTINUE / REVISE]
 ```
 
 | Purpose | Main tools |
@@ -548,30 +513,20 @@ A comparison is only meaningful when the two traces represent equivalent workloa
 
 These tools operate **after** a cause has enough evidence.
 
-```text
-MEASURED EVIDENCE
-      │
-      ▼
- confirmed / plausible cause
-      │
-      ▼
--------------------------------
-      ESTIMATION BOUNDARY
--------------------------------
-      │
-      ├── what_if
-      ├── optimize_experiment
-      ├── optimize
-      └── generate_experiment_plan
-      │
-      ▼
-change firmware / configuration
-      │
-      ▼
-capture a new trace
-      │
-      ▼
-Trace Compare / validate_experiment
+```mermaid
+flowchart TD
+  measured[MEASURED EVIDENCE] --> cause[confirmed / plausible cause]
+  cause --> boundary{{ESTIMATION BOUNDARY}}
+  boundary --> what_if[what_if]
+  boundary --> opt_exp[optimize_experiment]
+  boundary --> optimize[optimize]
+  boundary --> plan[generate_experiment_plan]
+  what_if --> change[change firmware / configuration]
+  opt_exp --> change
+  optimize --> change
+  plan --> change
+  change --> recapture[capture a new trace]
+  recapture --> validate[Trace Compare / validate_experiment]
 ```
 
 | Goal | Main tools |
@@ -600,20 +555,14 @@ Trace Compare / validate_experiment
 
 Only a small subset needs to be visible in the mental model:
 
-```text
-Triage findings
-      ↓
-Investigate
-      ↓
-Verify with AI…
-      ↓
-Explain region        (when scope matters)
-      ↓
-What-if / Optimize    (only after verification)
-      ↓
-Trace Compare
-      ↓
-Diagnostic report
+```mermaid
+flowchart TD
+  triage[Triage findings] --> investigate[Investigate]
+  investigate --> verify[Verify with AI…]
+  verify --> region["Explain region<br/>(when scope matters)"]
+  region --> experiment["What-if / Optimize<br/>(only after verification)"]
+  experiment --> compare[Trace Compare]
+  compare --> report[Diagnostic report]
 ```
 
 Everything else is supporting machinery selected by the planner or used by advanced users.
@@ -1039,16 +988,13 @@ Each run should save timestamp, app version, dataset version, model ids, endpoin
 
 `--fail-under N` can fail CI when a model drops below a threshold (live often wants `0` so HTTP errors still write the report).
 
-```text
-Benchmark Cases (known BTF + expected facts)
-        ↓
-Model Runner  →  Gemini / Ollama
-        ↓
-Tool / Response Validator
-        ↓
-Scoring Engine
-        ↓
-Comparison Report (AI_BENCHMARK.md)
+```mermaid
+flowchart TD
+  cases[Benchmark Cases — known BTF + expected facts]
+  cases --> runner[Model Runner → Gemini / Ollama]
+  runner --> validator[Tool / Response Validator]
+  validator --> scoring[Scoring Engine]
+  scoring --> report[Comparison Report — AI_BENCHMARK.md]
 ```
 
 ---
@@ -1077,20 +1023,14 @@ Modes (Quick / Diagnose / Compare / Optimize / Report) map onto existing templat
 
 Host-side planner (`btf_viewer_pkg/ai_planner.py` ↔ `web/src/utils/aiPlanner.js`). **Cheapest evidence first.** User-facing loop: [README → Investigation planner](README.md#investigation-planner).
 
-```text
-Question
-   ↓
-interpret_query + suggest_scope
-   ↓
-plan_investigation  (score_hypotheses)
-   ↓
-cluster_findings / cheapest query tools
-   ↓
-detect_contradictions
-   ↓
-assess_evidence_sufficiency
-   ↓
-STOP / CONTINUE / REVISE HYPOTHESIS
+```mermaid
+flowchart TD
+  q[Question] --> interpret[interpret_query + suggest_scope]
+  interpret --> plan[plan_investigation — score_hypotheses]
+  plan --> cluster[cluster_findings / cheapest query tools]
+  cluster --> contradict[detect_contradictions]
+  contradict --> assess[assess_evidence_sufficiency]
+  assess --> next[STOP / CONTINUE / REVISE HYPOTHESIS]
 ```
 
 | Tool / helper | Host behaviour |
@@ -1121,34 +1061,19 @@ Do **not** add chat templates after `auto_investigate`.
 
 Host-side heuristics (`btf_viewer_pkg/ai_causal.py` ↔ `web/src/utils/aiCausal.js`) over Analysis Findings — not a FreeRTOS scheduler replay. User-facing loop stays on [Investigation planner](#investigation-planner). Diagnose / Investigate / Auto investigate walk explanation tools before experiments: graph → temporal → `rank_root_causes` → `challenge_conclusion`, then `what_if`.
 
-```text
-                 ┌──────────────┐
-                 │  Findings    │
-                 └──────┬───────┘
-                        ↓
-             ┌─────────────────────┐
-             │ Temporal Event Graph│
-             └──────────┬──────────┘
-                        ↓
-             ┌─────────────────────┐
-             │ Task Dependency     │
-             │ Graph               │
-             └──────────┬──────────┘
-                        ↓
-             ┌─────────────────────┐
-             │ Causal Analysis     │
-             └──────────┬──────────┘
-                        ↓
-          ┌─────────────┴─────────────┐
-          ↓                           ↓
-    Root Cause                  Alternatives
-          ↓                           ↓
-    Experiment                  Falsification
-          ↓                           ↓
-    What-if                     Validation
-          └─────────────┬─────────────┘
-                        ↓
-                 Investigation Memory
+```mermaid
+flowchart TD
+  findings[Findings] --> temporal[Temporal Event Graph]
+  temporal --> deps[Task Dependency Graph]
+  deps --> causal[Causal Analysis]
+  causal --> root[Root Cause]
+  causal --> alt[Alternatives]
+  root --> experiment[Experiment]
+  alt --> falsify[Falsification]
+  experiment --> whatif[What-if]
+  falsify --> validation[Validation]
+  whatif --> memory[Investigation Memory]
+  validation --> memory
 ```
 
 | Tool / helper | Host behaviour |
@@ -1198,15 +1123,11 @@ Tech notes for keeping Desktop and Web in lockstep. User-facing Case / Evidence 
 
 Facts come from BTF Statistics pages first. AI ranks, explains, and navigates those facts. **Do not add AI tools** for work those pages already do (no `detect_timeline_anomalies`, extra jitter tools, or histogram tools). **Do not** invent kernel response time, inspect ELF/source, or simulate the scheduler.
 
-```text
-BTF
- ↓
-Deterministic statistics (anomalies, percentiles, period, preemption,
-blocking, cores, critical path, compare, health, distributions)
- ↓
-Existing tools (investigate, correlate, find_critical_path, …)
- ↓
-Explanation / ranking / investigation
+```mermaid
+flowchart TD
+  btf[BTF] --> stats["Deterministic statistics<br/>(anomalies, percentiles, period, preemption,<br/>blocking, cores, critical path, compare, health, distributions)"]
+  stats --> tools["Existing tools<br/>(investigate, correlate, find_critical_path, …)"]
+  tools --> explain[Explanation / ranking / investigation]
 ```
 
 The shipped loop stays **Triage → Investigate → Verify → Correlate → Critical Path → Dependency Graph → Temporal Causality → Rank → Challenge → What-if → Report**. Improve access to Statistics evidence; do not grow the tool list. User-facing page map: [README → BTF analysis pages](README.md#btf-analysis-pages).
@@ -1232,17 +1153,16 @@ The Desktop `ai-test` CLI and Web `runOfflineBenchmark` share `tests/ai` fixture
 <a id="validator-and-claims" name="validator-and-claims">&#x200B;</a>
 ### Validator ![](../images/readme/h3.svg)
 
-```text
-AI response
-     ↓
-Claim extraction (jump:TIME, Task[id])
-     ↓
-Evidence validator
-     ├── task exists?
-     ├── timestamp in cursor window?
-     └── conclusion supported?
-     ↓
-Evidence panel flags unverified claims
+```mermaid
+flowchart TD
+  reply[AI response] --> extract["Claim extraction<br/>(jump:TIME, Task id)"]
+  extract --> validator[Evidence validator]
+  validator --> taskExists[task exists?]
+  validator --> inWindow[timestamp in cursor window?]
+  validator --> supported[conclusion supported?]
+  taskExists --> flags[Evidence panel flags unverified claims]
+  inWindow --> flags
+  supported --> flags
 ```
 
 `validate_ai_response` / `validateAiResponse` runs on the host after the final reply. Prompting still forbids inventing numbers, task names, and `jump:TIME`; the validator is the guard, not the prompt.
@@ -1258,7 +1178,7 @@ Evidence panel flags unverified claims
 | Feature | Host behaviour |
 |---------|----------------|
 | Capability probe | **Test connection** lists models, chats with a JSON structured-output probe, then tool-calling (`btf_ping` then `btf_pong`). Live results overlay chat / structured output / tool calling / multi-tool chaining; long context and reasoning stay heuristic. |
-| Cost | A dedicated usage bar shows accumulated `tok · tools · s` (and estimated USD when priced). Evidence uses the full `format_cost_meter` line. **Clear** removes chat replies only; the meter and investigation evidence stay. |
+| Cost | A dedicated usage bar shows accumulated `tok · tools · s` (and estimated USD when priced). Evidence uses the full `format_cost_meter` line. **Clear** resets replies, the meter, and current investigation issues. |
 | Privacy | Chip 🟢 Local / 🟡 Cloud / 🔴 Sensitive. Cloud send is blocked when sensitive; otherwise annotations are sanitized and optional task-name aliases apply (`apply_cloud_privacy`). |
 | Knowledge | `investigate` matches user-saved entries (More → **Save current finding…**), then baseline, then the builtin catalog. Typical vs current rates show when both exist. |
 | Interpret | Free-form Ask host-interprets first (`interpret_query`). Templates / modes / **Run investigation** skip confirm. |

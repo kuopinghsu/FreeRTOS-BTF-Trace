@@ -23,10 +23,14 @@ make bundle   # once — demo launches builds/btf_viewer.py
 make demo
 # Chinese narration if voice/zh-tw/*.mp3 exist (else English fallback):
 make demo DEMO_LANG=zh-tw
+# Shareable zip pack (Open / drag in the viewer):
+make demo-pack                    # → builds/demo_8cores.xtf (en + zh-tw)
 # or:
 python3 scripts/demo_runner.py demos/demo_8cores/demo_8cores.xml --launch --interactive
 python3 scripts/demo_runner.py demos/demo_8cores/demo_8cores.xml --launch --lang zh-tw
+python3 scripts/demo_runner.py builds/demo_8cores.xtf --launch --lang zh-tw
 python3 scripts/demo_voice.py status demos/demo_8cores
+python3 scripts/demo_pack.py demos/demo_8cores -o builds/demo_8cores.xtf --lang en,zh-tw
 ```
 
 Settings for the demo session are stored in `builds/btf_viewer.rc` (next to the bundled app).
@@ -47,8 +51,12 @@ cursors / zoom / statistics sections over `http://127.0.0.1:8765/demo`
 <stats_section id="health" expand="true" collapse_others="true"/>
 <jump_wcet task="CS[27]"/>
 <view_mode mode="core"/>
+<zoom_1to1/>
+<fit_view/>
 <cpu_load on="true"/>
 <analysis/>
+<tick_dist/>
+<tick_dist close="true"/>
 <find query="CS[27]"/>
 <find clear="true"/>
 <panel name="stats"/>
@@ -129,13 +137,34 @@ discovered. Desktop: `--lang zh-tw`, `make demo DEMO_LANG=zh-tw`, or
 `BTFVIEWER_DEMO_LANG`. Otherwise the XML ``<languages default>`` is used
 (English for `demo_8cores`).
 
+**Shareable `.xtf` pack**
+
+```bash
+make demo-pack                              # en only (default)
+make demo-pack DEMO_LANGS=en,zh-tw          # English + 中文
+make demo-pack DEMO_LANGS=all               # every voice/<lang>/
+# or:
+python3 scripts/demo_pack.py demos/demo_8cores --list-voices
+python3 scripts/demo_pack.py demos/demo_8cores --voice en -o builds/demo_8cores-en.xtf
+python3 scripts/demo_pack.py demos/demo_8cores --voice en --voice zh-tw
+python3 scripts/demo_pack.py demos/demo_8cores --all-voices -o builds/demo_8cores.xtf
+```
+
+Writes a zip archive (``.xtf``) with a languages-filtered XML, the frozen
+``.btf.gz``, and `voice/en` + `voice/zh-tw` (override with ``--lang`` /
+``DEMO_LANGS``). Voice ``.mp3`` clips are converted to ``.aac``
+(``ffmpeg -c:a aac -ar 24000 -ac 1 -b:a 32k``) and ``<audio file=…>`` paths in
+the packed XML are rewritten to ``.aac``. Pass ``--keep-mp3`` to skip
+conversion. Open or drag the file in Web to play the tour; Desktop Open
+loads the pack’s BTF; ``demo_runner.py builds/demo_8cores.xtf --launch`` runs
+the desktop tour.
+
 Declare languages in `<meta>` (or generate that block with `sync-xml`):
 
 ```xml
 <languages default="en">
   <language id="en" label="English"/>
   <language id="zh-tw" label="中文"/>
-  <language id="ja" label="日本語"/>
 </languages>
 ```
 

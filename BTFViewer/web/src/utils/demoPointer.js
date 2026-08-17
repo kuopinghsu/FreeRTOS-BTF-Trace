@@ -4,6 +4,7 @@
  * The browser cannot move the OS cursor. This paints an in-page arrow, animates
  * it to demo XML targets, and dispatches hover events so timeline tooltips track.
  * Recording reuses the same overlay (follow-mouse) so tab capture includes it.
+ * A parked demo overlay hides as soon as the user moves the real mouse.
  */
 
 const STYLE_ID = 'btf-demo-cursor-style'
@@ -17,8 +18,10 @@ let el = null
 let pos = { x: 0, y: 0 }
 let hasPos = false
 let anim = null
+let animResolve = null
 let followMove = null
 let followOut = null
+let overlayHidden = false
 
 function now() {
   return typeof performance !== 'undefined' ? performance.now() : Date.now()
@@ -59,7 +62,26 @@ html.btf-hide-native-cursor, html.btf-hide-native-cursor * { cursor: none !impor
 function applyTransform() {
   if (!el) return
   el.style.transform = `translate3d(${pos.x}px, ${pos.y}px, 0)`
-  el.style.visibility = 'visible'
+  el.style.visibility = overlayHidden ? 'hidden' : 'visible'
+}
+
+function hideOverlay() {
+  overlayHidden = true
+  if (anim != null) {
+    caf(anim)
+    anim = null
+  }
+  if (animResolve) {
+    const done = animResolve
+    animResolve = null
+    done()
+  }
+  if (el) el.style.visibility = 'hidden'
+}
+
+function showOverlay() {
+  overlayHidden = false
+  applyTransform()
 }
 
 export function dispatchHoverAt(x, y) {
@@ -118,33 +140,48 @@ function wantFollowMouse() {
   return owners.has('record') && !owners.has('demo')
 }
 
-/** Never hide the OS cursor: Chrome/Windows freezes tracking, and demo overlay
- *  would leave the user with no pointer if the overlay missed a frame. */
+/** Hide OS cursor only when a scripted overlay is the pointer of record. Unused. */
 export function shouldHideNativeCursor(_ownerList) {
   return false
+}
+
+/** Real (trusted) mouse motion hides the parked demo overlay. */
+export function shouldHideSimulatedCursorOnMove(event, ownerList) {
+  if (!event?.isTrusted) return false
+  const set = ownerList instanceof Set ? ownerList : new Set(ownerList || [])
+  if (set.has('record') && !set.has('demo')) return false
+  return set.has('demo')
 }
 
 function wantHideNative() {
   return shouldHideNativeCursor(owners)
 }
 
+function onUserPointerMove(e) {
+  if (!e.isTrusted) return
+  if (wantFollowMouse()) {
+    overlayHidden = false
+    pos = { x: e.clientX, y: e.clientY }
+    hasPos = true
+    applyTransform()
+    return
+  }
+  if (shouldHideSimulatedCursorOnMove(e, owners)) hideOverlay()
+}
+
 function syncFollowMouse() {
   if (typeof window === 'undefined' || typeof document === 'undefined') return
-  const follow = wantFollowMouse()
-  if (follow && !followMove) {
-    followMove = (e) => {
-      pos = { x: e.clientX, y: e.clientY }
-      hasPos = true
-      applyTransform()
-    }
+  const needListen = owners.size > 0
+  if (needListen && !followMove) {
+    followMove = onUserPointerMove
     followOut = (e) => {
-      if (!e.relatedTarget && el) el.style.visibility = 'hidden'
+      if (!e.relatedTarget && el && wantFollowMouse()) el.style.visibility = 'hidden'
     }
     window.addEventListener('pointermove', followMove, true)
     window.addEventListener('mousemove', followMove, true)
     document.addEventListener('mouseout', followOut, true)
   }
-  if (!follow && followMove) {
+  if (!needListen && followMove) {
     window.removeEventListener('pointermove', followMove, true)
     window.removeEventListener('mousemove', followMove, true)
     document.removeEventListener('mouseout', followOut, true)
@@ -184,6 +221,8 @@ function destroyDom() {
   el?.remove()
   el = null
   hasPos = false
+  overlayHidden = false
+  animResolve = null
 }
 
 export function acquirePointer(owner) {
@@ -206,6 +245,7 @@ export function releasePointer(owner) {
 
 export async function moveTo(x, y, durationSec = 0, signal = null) {
   ensureDom()
+  showOverlay()
   if (!hasPos) setPos(x, Math.max(8, y - 64), false)
   const dur = Math.max(0, Number(durationSec) || 0) * 1000
   if (dur <= 0 || typeof document === 'undefined') {
@@ -216,24 +256,31 @@ export async function moveTo(x, y, durationSec = 0, signal = null) {
     caf(anim)
     anim = null
   }
+  if (animResolve) {
+    const prev = animResolve
+    animResolve = null
+    prev()
+  }
   const x0 = pos.x
   const y0 = pos.y
   const start = now()
   await new Promise((resolve) => {
+    animResolve = resolve
+    const finish = () => {
+      anim = null
+      animResolve = null
+      resolve()
+    }
     const tick = (t) => {
-      if (signal?.aborted) {
-        anim = null
-        resolve()
+      if (signal?.aborted || overlayHidden) {
+        finish()
         return
       }
       const p = Math.min(1, (t - start) / dur)
       const e = easeInOutCubic(p)
       setPos(x0 + (x - x0) * e, y0 + (y - y0) * e)
       if (p < 1) anim = raf(tick)
-      else {
-        anim = null
-        resolve()
-      }
+      else finish()
     }
     anim = raf(tick)
   })

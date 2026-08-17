@@ -1870,11 +1870,14 @@ class AiWebParityTests(unittest.TestCase):
         self.assertNotIn("{{ busy ? 'Waiting…' : 'Ask' }}", panel)
         self.assertNotIn('_send_btn.setText("Waiting…"', assist)
         clear_fn = assist[assist.find("def clear_conversation"):assist.find("def _show_log_menu")]
-        self.assertNotIn("self._cost_meter = empty_cost_meter()", clear_fn)
-        self.assertNotIn("_sync_evidence_log_entry", clear_fn)
+        self.assertIn("self._cost_meter = empty_cost_meter()", clear_fn)
+        self.assertIn("_clear_evidence_log_entry", clear_fn)
+        self.assertIn("_clear_investigation_plan", clear_fn)
         send_fn = assist[assist.find("def _send_query"):]
         self.assertNotIn("self._cost_meter = empty_cost_meter()", send_fn)
-        self.assertNotIn("costMeter.value = emptyCostMeter()", panel)
+        self.assertIn("costMeter.value = emptyCostMeter()", panel)
+        self.assertIn("evidencePayload = null", panel)
+        self.assertIn("investigationPlan.value = null", panel)
 
         menu_ids = [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids]
         self.assertEqual(

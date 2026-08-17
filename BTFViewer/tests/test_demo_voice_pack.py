@@ -35,10 +35,9 @@ class DemoVoicePackTests(unittest.TestCase):
         recs = {r["id"]: r for r in dv.iter_lang_records(DEMO_DIR)}
         self.assertIn("en", recs)
         self.assertIn("zh-tw", recs)
-        self.assertIn("ja", recs)
+        self.assertNotIn("ja", recs)
         self.assertGreaterEqual(len(recs["en"]["scripts"]), 20)
         self.assertEqual(len(recs["zh-tw"]["scripts"]), len(recs["en"]["scripts"]))
-        self.assertEqual(len(recs["ja"]["scripts"]), len(recs["en"]["scripts"]))
         self.assertGreaterEqual(len(recs["en"]["clips"]), 20)
         data = json.loads((DEMO_DIR / "voice" / "en" / "voice.json").read_text(encoding="utf-8"))
         self.assertEqual(data["schema"], "btf-demo-voice")

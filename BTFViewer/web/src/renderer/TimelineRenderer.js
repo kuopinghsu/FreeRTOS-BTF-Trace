@@ -59,6 +59,12 @@ export {
 
 export { formatTime, formatMigrationGapTime }
 export { getTimelineLayout } from '../utils/timelineLayout.js'
+export {
+  niceStep,
+  tickOrigin,
+  firstTickOnOrBefore,
+  firstTickOnOrAfter,
+}
 
 // ---- Layout (defaults; live values from Settings via getTimelineLayout()) --
 export const RULER_H        =  40  // height of ruler row (px)
@@ -300,6 +306,33 @@ function niceStep(span) {
     if (mag * m >= rough) return mag * m
   }
   return mag * 10
+}
+
+/**
+ * Major-tick grid anchored at trace.timeMin (desktop _RulerItem parity).
+ * Absolute 0-based snaps put a "1.000 s" tick just left of a 1.014 s start,
+ * clipping the leading digit to ".000 s".
+ */
+function tickOrigin(trace) {
+  const t = Number(trace?.timeMin)
+  return Number.isFinite(t) ? t : 0
+}
+
+/** First grid tick at or before *timeStart* on the origin-anchored step grid. */
+function firstTickOnOrBefore(timeStart, step, origin) {
+  if (!(step > 0)) return timeStart
+  const rel = timeStart - origin
+  const k = Math.floor(rel / step + 1e-12)
+  return origin + k * step
+}
+
+/** First grid tick at or after *timeStart* on the origin-anchored step grid. */
+function firstTickOnOrAfter(timeStart, step, origin) {
+  if (!(step > 0)) return timeStart
+  const rel = timeStart - origin
+  if (rel <= 0) return origin
+  const k = Math.ceil(rel / step - 1e-12)
+  return origin + k * step
 }
 
 // ---- Row layout helper -----------------------------------------------------
@@ -589,7 +622,8 @@ export function render(ctx, trace, viewport, options = {}) {
   // ---- Grid lines (optional) ----
   if (showGrid && !paintFast) {
     const step = niceStep(timeSpan)
-    const startSnap = Math.ceil(timeStart / step) * step
+    const origin = tickOrigin(trace)
+    const startSnap = firstTickOnOrAfter(timeStart, step, origin)
     ctx.strokeStyle = darkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'
     ctx.lineWidth = 1
     for (let t = startSnap; t <= timeEnd; t += step) {
@@ -650,7 +684,8 @@ function drawRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasW, darkMode, f
   const timeSpan = timeEnd - timeStart
   const step = niceStep(timeSpan)
   const minorStep = step / 5
-  const startSnap = Math.ceil(timeStart / step) * step
+  const origin = tickOrigin(trace)
+  const startSnap = firstTickOnOrBefore(timeStart, step, origin)
 
   const textColor  = darkMode ? '#CCCCCC' : '#444444'
   const tickColor  = darkMode ? '#555555' : '#BBBBBB'
@@ -662,13 +697,13 @@ function drawRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasW, darkMode, f
 
   // Minor ticks (skip while interacting — expensive at wide zoom)
   if (!fastPaint && minorStep > 0) {
-    const minorStart = Math.ceil(timeStart / minorStep) * minorStep
+    const minorStart = firstTickOnOrAfter(timeStart, minorStep, origin)
     ctx.strokeStyle = minorTickColor
     ctx.lineWidth = 1
     for (let t = minorStart; t <= timeEnd + minorStep; t += minorStep) {
       // Skip major positions; they are rendered below with longer ticks.
-      const k = Math.round(t / step)
-      if (Math.abs(t - k * step) < minorStep * 0.08) continue
+      const k = Math.round((t - origin) / step)
+      if (Math.abs(t - (origin + k * step)) < minorStep * 0.08) continue
       const x = Math.round((t - timeStart) * pxPerNs)
       if (x < -10 || x > canvasW + 10) continue
       ctx.beginPath()
@@ -678,9 +713,10 @@ function drawRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasW, darkMode, f
     }
   }
 
-  for (let t = startSnap - step; t <= timeEnd + step; t += step) {
+  for (let t = startSnap; t <= timeEnd + step; t += step) {
+    if (t < origin - step * 0.01) continue
     const x = Math.round((t - timeStart) * pxPerNs)
-    if (x < -50 || x > canvasW + 50) continue
+    if (x < -10 || x > canvasW + 50) continue
 
     // Major tick
     ctx.strokeStyle = tickColor
@@ -690,7 +726,9 @@ function drawRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasW, darkMode, f
     ctx.lineTo(x + 0.5, RULER_H)
     ctx.stroke()
 
-    // Label
+    // Label — skip when the tick is left of the canvas so "1.000 s" cannot
+    // clip to a misleading ".000 s".
+    if (x < 0) continue
     const label = formatTime(t, trace.timeScale)
     ctx.fillStyle = textColor
     ctx.fillText(label, x + 3, RULER_H / 2)
@@ -2276,7 +2314,8 @@ function drawVerticalRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasH, hea
   const timeSpan = timeEnd - timeStart
   const step = niceStep(timeSpan)
   const minorStep = step / 5
-  const startSnap = Math.ceil(timeStart / step) * step
+  const origin = tickOrigin(trace)
+  const startSnap = firstTickOnOrBefore(timeStart, step, origin)
 
   const textColor = darkMode ? '#CCCCCC' : '#444444'
   const tickColor = darkMode ? '#555555' : '#BBBBBB'
@@ -2296,12 +2335,12 @@ function drawVerticalRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasH, hea
 
   // Minor ticks
   if (!fastPaint && minorStep > 0) {
-    const minorStart = Math.ceil(timeStart / minorStep) * minorStep
+    const minorStart = firstTickOnOrAfter(timeStart, minorStep, origin)
     ctx.strokeStyle = minorTickColor
     ctx.lineWidth = 1
     for (let t = minorStart; t <= timeEnd + minorStep; t += minorStep) {
-      const k = Math.round(t / step)
-      if (Math.abs(t - k * step) < minorStep * 0.08) continue
+      const k = Math.round((t - origin) / step)
+      if (Math.abs(t - (origin + k * step)) < minorStep * 0.08) continue
       const y = headerH + (t - timeStart) * pxPerNs
       if (y < headerH - 10 || y > canvasH + 10) continue
       ctx.beginPath()
@@ -2311,7 +2350,8 @@ function drawVerticalRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasH, hea
     }
   }
 
-  for (let t = startSnap - step; t <= timeEnd + step; t += step) {
+  for (let t = startSnap; t <= timeEnd + step; t += step) {
+    if (t < origin - step * 0.01) continue
     const y = headerH + (t - timeStart) * pxPerNs
     if (y < headerH - 5 || y > canvasH + 5) continue
 
@@ -2322,6 +2362,7 @@ function drawVerticalRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasH, hea
     ctx.lineTo(rulerW,     Math.round(y) + 0.5)
     ctx.stroke()
 
+    if (y < headerH) continue
     const label = formatTime(t, trace.timeScale)
     ctx.fillStyle = textColor
     ctx.fillText(label, rulerW - 10, Math.round(y))
@@ -3098,7 +3139,8 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
   // Grid lines (horizontal, optional)
   if (showGrid && !paintFast) {
     const step = niceStep(timeSpan)
-    const startSnap = Math.ceil(timeStart / step) * step
+    const origin = tickOrigin(trace)
+    const startSnap = firstTickOnOrAfter(timeStart, step, origin)
     ctx.strokeStyle = darkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'
     ctx.lineWidth = 1
     for (let t = startSnap; t <= timeEnd; t += step) {

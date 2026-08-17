@@ -7816,6 +7816,7 @@ class _StatsPanel(QWidget):
         self._util_label_col_w: int = STATS_UTIL_LABEL_W
         self._util_scroll_areas: List[QScrollArea] = []
         self._util_scroll_filters: List[_UtilScrollResizeFilter] = []
+        self._stats_summary: Optional[QWidget] = None
         self._defer_heavy_sections: bool = False
         self._defer_heavy_collapse_done: bool = False
         self._deferred_sections: List[str] = []
@@ -7884,6 +7885,13 @@ class _StatsPanel(QWidget):
         self._scroll_tail = QWidget()
         self._scroll_tail.setObjectName("stats_scroll_tail")
         self._scroll_tail.setMinimumHeight(0)
+        empty = self._lbl(
+            "Open a trace file to view statistics.",
+            color="#888888",
+            ui_fs=self._ui_fs(),
+        )
+        self._stats_summary = empty
+        self._ilay.addWidget(empty)
         self._ilay.addWidget(self._scroll_tail)
         scroll.setWidget(self._inner)
         outer.addWidget(scroll)
@@ -8023,6 +8031,7 @@ class _StatsPanel(QWidget):
         self._drop_target_sid = None
         self._dragging_sid = None
         self._scroll_tail = None
+        self._stats_summary = None
         while self._ilay.count():
             item = self._ilay.takeAt(0)
             if item.widget():
@@ -8523,6 +8532,7 @@ class _StatsPanel(QWidget):
         )
         btn.setToolTip("Open tick interval distribution chart")
         btn.clicked.connect(lambda: self._open_tick_dist_plot(self._trace))
+        self._btn_tick_dist = btn
         return btn
 
     @staticmethod
@@ -12674,11 +12684,13 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
         self._scope_cb.setEnabled(False)
         self._clear()
         self._update_scope_header()
-        self._ilay.addWidget(self._lbl(
+        empty = self._lbl(
             "Open a trace file to view statistics.",
             color="#888888",
             ui_fs=self._ui_fs(),
-        ))
+        )
+        self._stats_summary = empty
+        self._ilay.addWidget(empty)
 
     def rebuild(self, trace: Optional["BtfTrace"]) -> None:
         if trace is None:
@@ -12729,8 +12741,13 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
         )
         self._util_label_col_natural = self._compute_util_label_col_width(_util_labels)
 
-        # -- Summary row ---------------------------------------------------
-        self._ilay.addWidget(self._lbl(
+        # -- Summary row (demo target: statistics status, not Core Util) ---
+        summary = QWidget()
+        summary.setObjectName("stats_summary")
+        sum_lay = QVBoxLayout(summary)
+        sum_lay.setContentsMargins(0, 0, 0, 0)
+        sum_lay.setSpacing(2)
+        sum_lay.addWidget(self._lbl(
             f"Span: {span_str}{scope}  |  Tasks: {task_count}  |  "
             f"Segments: {seg_count:,}  |  STI events: {sti_count:,}",
             color="#888888",
@@ -12746,11 +12763,13 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                     f"Core gap avg: {_format_time(gap_avg, trace.time_scale)}")
                 sched_parts.append(
                     f"max: {_format_time(max(core_gaps), trace.time_scale)}")
-            self._ilay.addWidget(self._lbl(
+            sum_lay.addWidget(self._lbl(
                 "  |  ".join(sched_parts),
                 color="#888888",
                 ui_fs=_fs,
             ))
+        self._stats_summary = summary
+        self._ilay.addWidget(summary)
 
         # -- Core utilisation (excl. IDLE) ---------------------------------
         if trace.core_names:

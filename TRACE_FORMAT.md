@@ -12,16 +12,12 @@ Reference for the on-disk `trace.bin` layout, event encoding, BTF mapping, and t
 
 `traceEND()` writes one little-endian binary blob:
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│ TRACE_HEADER — 44 bytes                                     │
-├─────────────────────────────────────────────────────────────┤
-│ task_lists[max_tasks × max_taskname_len]                    │
-│   NUL-terminated task name per FreeRTOS task id             │
-├─────────────────────────────────────────────────────────────┤
-│ event_lists[max_events]                                     │
-│   16-byte EVENT records                                     │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+  file[trace.bin]
+  file --> hdr["TRACE_HEADER — 44 bytes"]
+  file --> tasks["task_lists — max_tasks × max_taskname_len<br/>NUL-terminated name per FreeRTOS task id"]
+  file --> events["event_lists — max_events × 16-byte EVENT records"]
 ```
 
 Total size:
@@ -89,20 +85,15 @@ On a single-core build, `types` is simply the `event_t` value.
 
 ## 5. Ring-buffer ordering
 
-Events append at:
+Events append at `current_index % max_events`.
 
-```text
-current_index % max_events
-```
-
-```text
-event_count < max_events
-    → replay event 0 … event_count-1
-
-event_count == max_events
-    → current_index is the oldest event
-    → replay current_index … end
-    → then 0 … current_index-1
+```mermaid
+flowchart TD
+  start{event_count vs max_events}
+  start -->|"event_count < max_events"| short["replay event 0 … event_count-1"]
+  start -->|"event_count == max_events"| full["current_index is oldest"]
+  full --> wrap1["replay current_index … end"]
+  wrap1 --> wrap2["then 0 … current_index-1"]
 ```
 
 After the ring wraps, new events overwrite the oldest and `event_count` remains equal to `max_events`.
@@ -113,16 +104,12 @@ The export contains `#ringOverflow true` after a wrap.
 
 `timestamp` comes from the free-running 32-bit `xGetCycles()` counter.
 
-```text
-32-bit counter
-     ↓
-detect 2³² wrap
-     ↓
-extend to monotonic 64-bit time
-     ↓
-scale using core_clock
-     ↓
-BTF timestamp
+```mermaid
+flowchart TD
+  counter[32-bit counter] --> wrap[detect 2³² wrap]
+  wrap --> extend[extend to monotonic 64-bit time]
+  extend --> scale[scale using core_clock]
+  scale --> btf[BTF timestamp]
 ```
 
 Both `gentrace` and live `btf_dump()` perform this reconstruction.
@@ -248,19 +235,17 @@ with a zero-padded four-digit task id, for example:
 
 ## 12. Decoder sanity checks
 
-Decoder checks:
-
-```text
-1. Magic == BTF2
-2. Endian tag == 1
-3. Header is complete
-4. Declared task/event regions fit the blob
-5. event_count <= max_events
-6. Ring replay order is reconstructed
-7. 32-bit timestamps are extended across wraps
-8. Core id is valid for num_cores
-9. Event type is decoded
-10. Quality metadata is emitted
+```mermaid
+flowchart TD
+  c1["1. Magic == BTF2"] --> c2["2. Endian tag == 1"]
+  c2 --> c3["3. Header is complete"]
+  c3 --> c4["4. Declared task/event regions fit the blob"]
+  c4 --> c5["5. event_count ≤ max_events"]
+  c5 --> c6["6. Ring replay order is reconstructed"]
+  c6 --> c7["7. 32-bit timestamps are extended across wraps"]
+  c7 --> c8["8. Core id is valid for num_cores"]
+  c8 --> c9["9. Event type is decoded"]
+  c9 --> c10["10. Quality metadata is emitted"]
 ```
 
 For target-side requirements that produce this format, see **[PORTING.md](PORTING.md)**.

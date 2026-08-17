@@ -194,16 +194,64 @@ export function parseTargets(root) {
   return out
 }
 
+function queryDemoTargetRect(name, lookup) {
+  if (!name) return null
+  if (typeof lookup === 'function') {
+    const node = lookup(name)
+    if (node?.getBoundingClientRect) {
+      const r = node.getBoundingClientRect()
+      if (r && r.width > 0 && r.height > 0) return r
+    }
+    if (node && Number.isFinite(Number(node.left)) && Number.isFinite(Number(node.width))) {
+      return node
+    }
+  }
+  if (typeof document === 'undefined') return null
+  try {
+    const esc = (typeof CSS !== 'undefined' && CSS.escape)
+      ? CSS.escape(name)
+      : String(name).replace(/["\\]/g, '')
+    const nodes = document.querySelectorAll(`[data-demo-target="${esc}"]`)
+    let fallback = null
+    for (const node of nodes) {
+      const r = node.getBoundingClientRect?.()
+      if (!r || !(r.width > 0) || !(r.height > 0)) continue
+      // Prefer toolbar icons that are not parked in the closed overflow menu.
+      if (node.closest?.('.tb-overflow-panel')) {
+        if (!fallback) fallback = r
+        continue
+      }
+      return r
+    }
+    return fallback
+  } catch {
+    /* ignore invalid selectors */
+  }
+  return null
+}
+
 /**
  * Resolve a move/click element to client pixels (same rules as desktop resolve_xy).
+ * Live `data-demo-target` geometry wins over XML window fractions.
  * Fractions are relative to *box*; values with abs > 1 are treated as pixels.
  */
-export function resolveDemoXy(el, targets, box) {
+export function resolveDemoXy(el, targets, box, lookup) {
+  const name = (el?.attrib?.target || '').trim()
+  if (name) {
+    const r = queryDemoTargetRect(name, lookup)
+    const w = Number(r?.width)
+    const h = Number(r?.height)
+    if (r && w > 0 && h > 0) {
+      return {
+        x: Math.round(Number(r.left) + w / 2),
+        y: Math.round(Number(r.top) + h / 2),
+      }
+    }
+  }
   const left = Number(box?.left) || 0
   const top = Number(box?.top) || 0
   const width = Number(box?.width) || 0
   const height = Number(box?.height) || 0
-  const name = (el?.attrib?.target || '').trim()
   let fx
   let fy
   if (name) {

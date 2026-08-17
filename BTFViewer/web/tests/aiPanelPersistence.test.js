@@ -103,7 +103,10 @@ describe('AI conversation turn layout', () => {
     assert.doesNotMatch(aiPanel, /busy \? 'Waiting…' : 'Ask'/)
     assert.match(aiPanel, /\.ai-more-item:disabled/)
     assert.match(aiPanel, /color: var\(--muted, #8a96a8\)/)
-    assert.equal((aiPanel.match(/costMeter.value = emptyCostMeter\(\)/g) || []).length, 0)
+    assert.ok((aiPanel.match(/costMeter\.value = emptyCostMeter\(\)/g) || []).length >= 1)
+    assert.match(aiPanel, /evidencePayload = null/)
+    assert.match(aiPanel, /investigationPlan\.value = null/)
+    assert.match(aiPanel, /Clear replies, usage cost, and current investigation issues/)
   })
 
   it('opens a mermaid zoom overlay from the figure', () => {

@@ -19,7 +19,58 @@
 
     <div class="tb-sep" />
 
-    <!-- g1: File — Open · Snapshot · SVG · Perfetto · Slice -->
+    <!-- Open stays outside overflow so demo live targets always resolve. -->
+    <label
+      v-if="!useFsaOpen"
+      class="tb-btn file-btn"
+      data-demo-target="toolbar_open"
+      title="Open a BTF trace, demo XML, or .xtf pack (Ctrl+O)"
+      aria-label="Open a BTF trace, demo XML, or .xtf pack (Ctrl+O)"
+    >
+      <svg
+        viewBox="0 0 16 16"
+        width="16"
+        height="16"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path
+          fill-rule="evenodd"
+          :d="IC.open"
+        />
+      </svg>
+      <input
+        ref="fileInputRef"
+        type="file"
+        :accept="OPEN_FILE_ACCEPT"
+        multiple
+        style="display:none"
+        @change="onFileChange"
+      >
+    </label>
+    <button
+      v-else
+      class="tb-btn"
+      data-demo-target="toolbar_open"
+      title="Open a BTF trace, demo XML, or .xtf pack (Ctrl+O)"
+      aria-label="Open a BTF trace, demo XML, or .xtf pack (Ctrl+O)"
+      @click="onOpenClick"
+    >
+      <svg
+        viewBox="0 0 16 16"
+        width="16"
+        height="16"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path
+          fill-rule="evenodd"
+          :d="IC.open"
+        />
+      </svg>
+    </button>
+
+    <!-- g1: File extras — Snapshot · SVG · Perfetto · Slice -->
     <Teleport
       :to="overflowPanelEl ?? 'body'"
       :disabled="!overflow.g1"
@@ -28,53 +79,6 @@
         :ref="el => setGroupRef('g1', el)"
         class="tb-group"
       >
-        <label
-          v-if="!useFsaOpen"
-          class="tb-btn file-btn"
-          title="Open a BTF trace or demo XML (Ctrl+O)"
-          aria-label="Open a BTF trace or demo XML (Ctrl+O)"
-        >
-          <svg
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path
-              fill-rule="evenodd"
-              :d="IC.open"
-            />
-          </svg>
-          <input
-            ref="fileInputRef"
-            type="file"
-            :accept="OPEN_FILE_ACCEPT"
-            multiple
-            style="display:none"
-            @change="onFileChange"
-          >
-        </label>
-        <button
-          v-else
-          class="tb-btn"
-          title="Open a BTF trace or demo XML (Ctrl+O)"
-          aria-label="Open a BTF trace or demo XML (Ctrl+O)"
-          @click="onOpenClick"
-        >
-          <svg
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path
-              fill-rule="evenodd"
-              :d="IC.open"
-            />
-          </svg>
-        </button>
         <button
           v-if="traceInfo"
           class="tb-btn"
@@ -259,6 +263,7 @@
         <button
           v-if="traceInfo"
           class="tb-btn"
+          data-demo-target="toolbar_1to1"
           :title="zoom1to1Title"
           :aria-label="zoom1to1Title"
           @click="emit('zoom1to1')"
@@ -278,6 +283,7 @@
         </button>
         <button
           class="tb-btn"
+          data-demo-target="toolbar_fit"
           title="Fit entire trace to window (Ctrl+0)"
           @click="emit('fit')"
         >
@@ -372,6 +378,7 @@
         <button
           type="button"
           class="tb-btn tb-btn-labeled"
+          data-demo-target="toolbar_task"
           :class="{ active: modelValue.viewMode === 'task' }"
           title="Task View — one row per task, merges across cores"
           @click="emit('update:modelValue', { ...modelValue, viewMode: 'task' })"
@@ -393,6 +400,7 @@
         <button
           type="button"
           class="tb-btn tb-btn-labeled"
+          data-demo-target="toolbar_core"
           :class="{ active: modelValue.viewMode === 'core' }"
           title="Core View — one expandable row per CPU core"
           @click="emit('update:modelValue', { ...modelValue, viewMode: 'core' })"
@@ -439,6 +447,7 @@
         <button
           type="button"
           class="tb-btn tb-btn-labeled"
+          data-demo-target="toolbar_load"
           :class="{ active: modelValue.showCpuLoad !== false }"
           title="Show / hide CPU load graph"
           @click="emit('update:modelValue', { ...modelValue, showCpuLoad: modelValue.showCpuLoad === false })"
@@ -520,6 +529,7 @@
 
         <button
           class="tb-btn tb-btn-labeled"
+          data-demo-target="toolbar_analysis"
           :class="{ disabled: !analysisEnabled }"
           :disabled="!analysisEnabled"
           title="Analysis Findings — heuristic load balance, WCET, blocking, thrashing, deadlines, tick, sync"
@@ -833,9 +843,9 @@ async function emitPickedOpen(picked) {
   if (picked.kind === 'demo-folder') {
     emit('demoFolder', {
       xmlName: picked.xmlName,
-      xmlFile: picked.xmlFile || null,
-      files: picked.files || null,
+      traceName: picked.traceName || '',
       startIn: picked.startIn || null,
+      files: picked.files || null,
     })
     return
   }

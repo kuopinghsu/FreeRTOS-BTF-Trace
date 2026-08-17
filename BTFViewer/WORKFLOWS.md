@@ -19,24 +19,16 @@ This document is the procedure guide for diagnosing RTOS trace behavior with BTF
 
 BTFViewer is evidence-first:
 
-```text
-Open trace
-   ↓
-Check capture health
-   ↓
-Scope to the phase that matters
-   ↓
-Read Analysis findings
-   ↓
-Open the named Statistics section
-   ↓
-Jump to the timeline evidence
-   ↓
-Confirm / reject the hypothesis
-   ↓
-Use AI only after evidence exists
-   ↓
-Compare another trace to validate the fix
+```mermaid
+flowchart TD
+  open[Open trace] --> health[Check capture health]
+  health --> scope[Scope to the phase that matters]
+  scope --> findings[Read Analysis findings]
+  findings --> stats[Open the named Statistics section]
+  stats --> timeline[Jump to the timeline evidence]
+  timeline --> hypothesis[Confirm / reject the hypothesis]
+  hypothesis --> ai[Use AI only after evidence exists]
+  ai --> compare[Compare another trace to validate the fix]
 ```
 
 The AI Assistant is useful, but it is not the first source of truth. It explains **Analysis Findings**, **Statistics**, and **Trace Compare** data. It does not replace the deterministic BTF measurements.
@@ -75,16 +67,18 @@ Stop drilling when one of these is true:
 
 Most trace problems can be handled by this order:
 
-```text
-① Health       Trace Health (TICK)
-② Scope        Cursors + Limit to C1–Cn
-③ Balance      Core Utilisation → Core Time Breakdown → Concurrent Active → Switch Overhead
-④ CPU / WCET   Top Tasks → Execution Time Per Slice
-⑤ Latency      Blocking → Dispatch → Preemption
-⑥ Concurrency  Core Migrations → Heatmap / Chord → Mutex / Queue → Priority Inheritance
-⑦ Compliance   Affinity → Lifecycle → Deadlines → Tags / Intervals
-⑧ Compare      Trace Compare before / after
-⑨ Explain      AI investigation / report
+```mermaid
+flowchart TD
+  health["① Health — Trace Health TICK"]
+  scope["② Scope — Cursors + Limit to C1–Cn"]
+  balance["③ Balance — Core Utilisation → Core Time Breakdown → Concurrent Active → Switch Overhead"]
+  cpu["④ CPU / WCET — Top Tasks → Execution Time Per Slice"]
+  latency["⑤ Latency — Blocking → Dispatch → Preemption"]
+  concurrency["⑥ Concurrency — Core Migrations → Heatmap / Chord → Mutex / Queue → Priority Inheritance"]
+  compliance["⑦ Compliance — Affinity → Lifecycle → Deadlines → Tags / Intervals"]
+  compare["⑧ Compare — Trace Compare before / after"]
+  explain["⑨ Explain — AI investigation / report"]
+  health --> scope --> balance --> cpu --> latency --> concurrency --> compliance --> compare --> explain
 ```
 
 ### Why this order works
@@ -324,7 +318,7 @@ Use AI when:
 | **What-if / Optimize** | Estimate possible experiments |
 | **Diagnostic report** | Write a structured summary |
 
-**Trust rule:** click every `jump:TIME` and verify it on the timeline. Treat What-if / Optimize as estimates, not measured results. After **Clear**, investigation evidence stays in the session (the **Current Issue** card may remain). Restart does not restore **Current Issue** unless the log still has a user or assistant turn — **Start Investigation** stays available.
+**Trust rule:** click every `jump:TIME` and verify it on the timeline. Treat What-if / Optimize as estimates, not measured results. After **Clear**, replies, usage cost, and current investigation issues are gone (no leftover **Current Issue** card). Restart does not restore **Current Issue** unless the log still has a user or assistant turn — **Start Investigation** stays available.
 
 ---
 
@@ -409,9 +403,14 @@ python builds/btf_viewer.py compare before.btf.gz after.btf.gz \
 
 Recommended loop:
 
-```text
-Find issue → define expected improvement → change firmware/config
-          → recapture → Trace Compare → export report → close investigation
+```mermaid
+flowchart LR
+  find[Find issue] --> expect[define expected improvement]
+  expect --> change[change firmware/config]
+  change --> recapture[recapture]
+  recapture --> cmp[Trace Compare]
+  cmp --> report[export report]
+  report --> close[close investigation]
 ```
 
 ---

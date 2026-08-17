@@ -51,7 +51,14 @@ Metric definitions and formulas are in [Statistics](STATISTICS.md). Step-by-step
 | `STATISTICS.md` | **What does this measurement mean?** | Deterministic BTF metrics, distributions, scope, comparison, interpretation |
 | `AI.md` | **How does AI-assisted investigation work?** | AI architecture, models, tools, privacy, CLI, evaluation, implementation |
 
-**Recommended path:** `README → WORKFLOWS → STATISTICS → AI`.
+**Recommended path:**
+
+```mermaid
+flowchart LR
+  readme[README] --> workflows[WORKFLOWS]
+  workflows --> statistics[STATISTICS]
+  statistics --> ai[AI]
+```
 
 Use **README** for the product (find evidence and explain), **WORKFLOWS** when you have a symptom to investigate, **STATISTICS** when you need metric-level detail, and **AI** when you need AI configuration or implementation details.
 
@@ -116,6 +123,7 @@ cd BTFViewer && make web    # → builds/btf_viewer.html
 | `.btf.gz` / `.gz`, `.btf.bz2` / `.bz2` | Compressed single traces |
 | `.btf.zip` / `.zip` | One or more `.btf` members — each opens in its own tab. Desktop keeps `archive.zip::member.btf` paths (re-read on launch). Web titles multi-member zips `archive.zip::member` so two archives cannot collide. |
 | `.xml` **(W)** | Demo pack script — see [Demo](#demo). |
+| `.xtf` | Shareable demo tour pack (zip of xml + btf + voice/) — Open or drag to play. |
 
 Sample traces are under `tracedata/` (for example `example-2cores.btf.gz`).
 
@@ -148,7 +156,19 @@ Engine: [`scripts/demo_runner.py`](scripts/demo_runner.py).
 <a id="web-demo-pack" name="web-demo-pack">&#x200B;</a>
 ### Web pack and recording ![](../images/readme/h3.svg)
 
-Toolbar **Demo** loads the bundled sample without a file picker. **Open** a demo `.xml` (or drop the pack folder) to run the same script as desktop `make demo`. After picking the XML, choose the folder that contains it — browsers block a second file dialog on the same click, so that folder step needs its own button. The viewer then loads the pack’s `.btf.gz`, plays `voice/<lang>/*.mp3`, and drives view mode, Load, Statistics sections, highlights, cursors, and Analysis through in-app APIs. `<move>` / `<sweep>` animate a pointer overlay to the XML `<targets>` (the browser cannot move the OS cursor; hover events still fire so timeline tooltips appear). Opening a `.btf` still loads the trace as usual.
+Toolbar **Demo** loads the bundled sample without a file picker. **Open** a demo `.xml`, a shareable `.xtf` pack, or drop the pack folder to run the same script as desktop `make demo`. After picking the XML alone, **Open pack folder** opens a folder dialog (Select/Open is enabled on a directory). The dialog may start in Documents on macOS; navigate to the pack folder. Dropping the pack folder or a `.xtf` onto the viewer skips this step. The viewer then loads the pack’s `.btf.gz`, plays `voice/<lang>/*.mp3`, and drives view mode, Load, Statistics sections, highlights, cursors, and Analysis through in-app APIs. `<move>` / `<sweep>` animate a pointer overlay to the XML `<targets>` (the browser cannot move the OS cursor; hover events still fire so timeline tooltips appear). Opening a `.btf` still loads the trace as usual.
+
+Build a shareable pack (choose voice packs with ``--voice`` / ``DEMO_LANGS``):
+
+```bash
+make demo-pack                          # → builds/demo_8cores.xtf (en only)
+make demo-pack DEMO_LANGS=en,zh-tw      # English + 中文
+make demo-pack DEMO_LANGS=all           # every voice/<lang>/
+python3 scripts/demo_pack.py demos/demo_8cores --list-voices
+python3 scripts/demo_pack.py demos/demo_8cores --voice en,zh-tw -o builds/demo_8cores.xtf
+```
+
+An `.xtf` is a zip of `*.xml` (languages filtered; audio paths → `.aac`), `*.btf*`, and `voice/<lang>/` (MP3 transcoded to AAC 24 kHz mono 32 kb/s via ffmpeg). Open or drag it in Web to play the tour; Desktop Open/drop loads the pack’s BTF; `demo_runner.py path/to/demo.xtf --launch` runs the desktop tour. Use `--keep-mp3` / `make demo-pack` with a custom pack command to skip AAC conversion.
 
 **Record** uses the browser’s display capture; choose this tab and include tab audio. The mouse pointer is included (page overlay for tab capture; native pointer for window/screen). Tab capture does not include the OS pointer, so Record paints one in the page.
 
@@ -165,7 +185,7 @@ voice/<lang>/01_title.mp3
 voice/<lang>/voice.json
 ```
 
-Shipped languages for `demo_8cores`: **en** (English, default), **zh-tw** (中文), **ja** (日本語). On Web, a **Voice** menu on the demo bar restarts the current section in that language (remembered in the browser; otherwise the browser locale). Desktop uses the XML default unless you pass a language flag as above.
+Shipped languages for `demo_8cores`: **en** (English, default), **zh-tw** (中文). On Web, a **Voice** menu on the demo bar restarts the current section in that language (remembered in the browser; otherwise the browser locale). Desktop uses the XML default unless you pass a language flag as above.
 
 ```bash
 python3 scripts/demo_voice.py status demos/demo_8cores
@@ -397,20 +417,14 @@ BTFViewer is an **AI-assistant tool for RTOS trace analysis**. The **AI** tab **
 
 ### Recommended workflow
 
-```text
-Analysis / Findings
-      ↓
-Choose a question or finding
-      ↓
-Scope with cursors / task / core
-      ↓
-Gather deterministic evidence
-      ↓
-Verify and challenge the leading cause
-      ↓
-What-if / experiment (optional)
-      ↓
-Recapture → Trace Compare → Validate
+```mermaid
+flowchart TD
+  findings[Analysis / Findings] --> question[Choose a question or finding]
+  question --> scope[Scope with cursors / task / core]
+  scope --> evidence[Gather deterministic evidence]
+  evidence --> verify[Verify and challenge the leading cause]
+  verify --> experiment[What-if / experiment — optional]
+  experiment --> validate[Recapture → Trace Compare → Validate]
 ```
 
 | Goal | Start here | Detailed guide |
@@ -442,7 +456,7 @@ Same panel on **Desktop** and **Web**. Findings can include WCET **Max≫Avg** s
 <a id="ai-troubleshooting" name="ai-troubleshooting">&#x200B;</a>
 <a id="ai-developer-cli" name="ai-developer-cli">&#x200B;</a>
 
-Product entry points stay here; the system reference is **[AI.md](AI.md)**. The AI tab shows a Triage → Scope → Investigate → Verify → Experiment → Compare stepper (click a stage to jump in the log). **Start Investigation** (empty log) runs **Auto investigate**. Restart restores an in-progress case only when the log still has a user or assistant turn; otherwise **Start Investigation** stays available and a leftover **Current Issue** card is not restored. **Clear** removes chat replies and keeps the usage meter and investigation evidence. What-if stays on **Verify** until verify tools or strong evidence quality; Experiment is labeled as a heuristic estimate (recapture and Compare to measure). **Triage findings**, **Verify finding**, **Auto investigate**, and the **Investigation plan** checklist live in the same tab. **Cheapest evidence first** (planner). Keys: Settings → AI → API key first, then `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY` (`OPENAI_API_KEY`, then `GEMINI_API_KEY`, then `OLLAMA_API_KEY`). Local Ollama needs none. Web can inject the same names via `window.__BTF_AI_ENV__`. `CURSOR_API_KEY` is for live `ai-test` XML `<api-key env="VAR">` and is ignored for chat / Test connection. CLI: [AI.md → CLI regression gate](AI.md#cli-regression-gate).
+Product entry points stay here; the system reference is **[AI.md](AI.md)**. The AI tab shows a Triage → Scope → Investigate → Verify → Experiment → Compare stepper (click a stage to jump in the log). **Start Investigation** (empty log) runs **Auto investigate**. Restart restores an in-progress case only when the log still has a user or assistant turn; otherwise **Start Investigation** stays available and a leftover **Current Issue** card is not restored. **Clear** removes chat replies, resets the usage meter, and clears current investigation issues. What-if stays on **Verify** until verify tools or strong evidence quality; Experiment is labeled as a heuristic estimate (recapture and Compare to measure). **Triage findings**, **Verify finding**, **Auto investigate**, and the **Investigation plan** checklist live in the same tab. **Cheapest evidence first** (planner). Keys: Settings → AI → API key first, then `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY` (`OPENAI_API_KEY`, then `GEMINI_API_KEY`, then `OLLAMA_API_KEY`). Local Ollama needs none. Web can inject the same names via `window.__BTF_AI_ENV__`. `CURSOR_API_KEY` is for live `ai-test` XML `<api-key env="VAR">` and is ignored for chat / Test connection. CLI: [AI.md → CLI regression gate](AI.md#cli-regression-gate).
 
 ## Statistics ![](../images/readme/h2.svg)
 

@@ -1,4 +1,4 @@
-With an empty log, click Start Investigation. That runs Auto investigate: the host sends the top Analysis finding and a fixed tool plan. Your prompt appears in the You bubble. Do not type a long free-form question yet.
+With an empty log, click Start Investigation. That runs Auto investigate: the host sends the top Analysis finding and a fixed tool plan. Your prompt appears in the "Your prompt". Do not type a long free-form question yet.
 
 This example used Gemini three point one flash-lite. One run took about twenty seconds, one hundred twenty-eight point eight thousand tokens, and eleven tools. Your numbers will not match.
 

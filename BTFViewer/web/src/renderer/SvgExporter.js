@@ -119,6 +119,26 @@ function niceStep(span) {
   return mag * 10
 }
 
+function tickOrigin(trace) {
+  const t = Number(trace?.timeMin)
+  return Number.isFinite(t) ? t : 0
+}
+
+function firstTickOnOrBefore(timeStart, step, origin) {
+  if (!(step > 0)) return timeStart
+  const rel = timeStart - origin
+  const k = Math.floor(rel / step + 1e-12)
+  return origin + k * step
+}
+
+function firstTickOnOrAfter(timeStart, step, origin) {
+  if (!(step > 0)) return timeStart
+  const rel = timeStart - origin
+  if (rel <= 0) return origin
+  const k = Math.ceil(rel / step - 1e-12)
+  return origin + k * step
+}
+
 function getSegsForRow(trace, row) {
   if (row.type === 'task')      return trace.segByMergeKey.get(row.key)
   if (row.type === 'core')      return trace.coreSegs.get(row.key)
@@ -231,7 +251,8 @@ export function renderToSvg(trace, viewport, options = {}) {
   // ---- Grid lines (optional) ----
   if (showGrid) {
     const step = niceStep(timeSpan)
-    const startSnap = Math.ceil(timeStart / step) * step
+    const origin = tickOrigin(trace)
+    const startSnap = firstTickOnOrAfter(timeStart, step, origin)
     for (let t = startSnap; t <= timeEnd; t += step) {
       const rawX = (t - timeStart) * pxPerNs
       if (rawX >= 0 && rawX <= canvasW) {
@@ -412,9 +433,11 @@ export function renderToSvg(trace, viewport, options = {}) {
 
   // ---- Ruler ticks and labels ----
   {
-    const step      = niceStep(timeSpan)
-    const startSnap = Math.ceil(timeStart / step) * step
-    for (let t = startSnap; t <= timeEnd; t += step) {
+    const step = niceStep(timeSpan)
+    const origin = tickOrigin(trace)
+    const startSnap = firstTickOnOrBefore(timeStart, step, origin)
+    for (let t = startSnap; t <= timeEnd + step; t += step) {
+      if (t < origin - step * 0.01) continue
       const rawX = (t - timeStart) * pxPerNs
       if (rawX < 0 || rawX > canvasW) continue
       const x = OX + rawX

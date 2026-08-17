@@ -120,9 +120,9 @@ describe('demo_8cores voice pack parity', () => {
   const textRoot = fileURLToPath(new URL('../../demos/demo_8cores/text', import.meta.url))
   const xmlPath = fileURLToPath(new URL('../../demos/demo_8cores/demo_8cores.xml', import.meta.url))
 
-  it('keeps the same script stems in en, zh-tw, and ja', () => {
+  it('keeps the same script stems in en and zh-tw', () => {
     const en = readdirSync(`${textRoot}/en`).filter(n => n.endsWith('.txt')).sort()
-    for (const lang of ['en', 'zh-tw', 'ja']) {
+    for (const lang of ['en', 'zh-tw']) {
       const names = readdirSync(`${textRoot}/${lang}`).filter(n => n.endsWith('.txt')).sort()
       assert.deepEqual(names, en, lang)
       const man = JSON.parse(readFileSync(`${textRoot}/${lang}/voice.json`, 'utf8'))
@@ -131,6 +131,6 @@ describe('demo_8cores voice pack parity', () => {
     }
     const xml = readFileSync(xmlPath, 'utf8')
     const demo = parseDemoXml(xml)
-    assert.deepEqual(demo.languages.list.map(l => l.id), ['en', 'zh-tw', 'ja'])
+    assert.deepEqual(demo.languages.list.map(l => l.id), ['en', 'zh-tw'])
   })
 })

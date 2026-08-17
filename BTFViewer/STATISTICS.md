@@ -29,7 +29,13 @@ Detailed reference for the **deterministic BTF statistics and analysis** exposed
 
 ### Reading order
 
-**Symptom → Workflow → Statistic → Evidence → Compare.**
+```mermaid
+flowchart LR
+  symptom[Symptom] --> workflow[Workflow]
+  workflow --> statistic[Statistic]
+  statistic --> evidence[Evidence]
+  evidence --> compare[Compare]
+```
 
 Use this document after a workflow identifies a metric, or whenever you need to understand its scope, derivation, distribution, limitations, and interpretation.
 
@@ -37,18 +43,13 @@ Use this document after a workflow identifies a metric, or whenever you need to 
 
 ## Analysis model
 
-```text
-BTF trace
-   ↓
-Parsing / derived events
-   ↓
-Statistics
-   ↓
-Visualization / distributions
-   ↓
-Analysis Findings
-   ↓
-Timeline verification / comparison
+```mermaid
+flowchart TD
+  trace[BTF trace] --> parse[Parsing / derived events]
+  parse --> stats[Statistics]
+  stats --> viz[Visualization / distributions]
+  viz --> findings[Analysis Findings]
+  findings --> verify[Timeline verification / comparison]
 ```
 
 BTFViewer's statistics are **measurements and deterministic derivations from the captured BTF/STI data**. They are not source-code analysis or a FreeRTOS scheduler simulation. Where BTF lacks an explicit release/completion or wake-owner relationship, the corresponding viewer metric is explicitly labelled as heuristic or limited.
@@ -707,13 +708,15 @@ Per-episode detail (distribution chart tooltips, **Export HTML → Boost episode
 
 Without mutex priority inheritance, **M** would run while **H** waited on **L** — unbounded inversion. FreeRTOS boosts **L** to **H**'s priority (e.g. first `priority_inherit Low[266] pri:4` near ~3099 ms) so **L** finishes its critical section before **M** can starve **H**.
 
-```text
-  pri 4  ─── High ───────── blocks on mutex ────────┐
-  pri 3  ─── Med  ─── runs while Low held lock ────┤  classic inversion
-  pri 2  ─── Low  ─── holds mutex ─────────────────┘
-              │
-              └── kernel boosts Low → pri 4 (priority_inherit)
-                    (×3 rounds in example-8cores.btf.gz)
+```mermaid
+flowchart TD
+  high["pri 4 — High blocks on mutex"]
+  med["pri 3 — Med runs while Low held lock"]
+  low["pri 2 — Low holds mutex"]
+  high --> invert[classic inversion]
+  med --> invert
+  low --> invert
+  invert --> boost["kernel boosts Low → pri 4<br/>(priority_inherit ×3 rounds in example-8cores)"]
 ```
 
 **How the viewer detects L/M/H:** at the end of each boost episode, it scans every task with a known `create pri:N`. Any task whose **base priority** satisfies **Base** &lt; *p* &lt; **Peak** (strictly between the boosted task's base and peak) is a **medium blocker**. If at least one exists, the episode is an **inversion suspect** and contributes to the **L/M/H** pattern.

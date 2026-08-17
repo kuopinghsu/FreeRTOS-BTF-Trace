@@ -6,9 +6,9 @@ Enable with env ``BTFVIEWER_DEMO_API=1`` (optional ``BTFVIEWER_DEMO_API_PORT``).
 The demo runner posts JSON ``{"op": "...", ...}`` to ``POST /demo``.
 
 Ops include ``highlight``, ``cursors``, ``clear_cursors``, ``clear_bookmarks``,
-``clear_annotations``, ``zoom_range``, ``fit``, ``limit``, ``stats_section``,
-``jump_wcet``, ``panel``, ``view_mode``, ``cpu_load``, ``analysis``, ``find``,
-``settings``, and ``ui`` (alias: ``command``).
+``clear_annotations``, ``zoom_range``, ``fit``, ``zoom_1to1``, ``limit``, ``stats_section``,
+``jump_wcet``, ``panel``, ``target``, ``view_mode``, ``cpu_load``, ``analysis``, ``tick_dist``,
+``find``, ``settings``, and ``ui`` (alias: ``command``).
 """
 from __future__ import annotations
 

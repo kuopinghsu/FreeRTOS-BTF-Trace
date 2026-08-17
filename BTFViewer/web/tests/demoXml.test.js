@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { zipSync } from 'fflate'
 import {
   buildVariables,
   demoTimeToTraceUnits,
@@ -14,7 +15,7 @@ import {
   truthy,
 } from '../src/utils/demoXml.js'
 import { createDemoRunner, shouldSkipStep } from '../src/utils/demoRunner.js'
-import { classifyOpenFiles, classifyPickedOpen, normalizePackPath, packFromDirectoryHandle, packFromFileList, packFromFileMap } from '../src/utils/demoPack.js'
+import { classifyOpenFiles, classifyPickedOpen, collectDroppedFiles, demoPackHintFromParsed, directoryPickerOptions, filePickerOptions, FILE_OPEN_PICKER_ID, filesFromXtf, isXtfOpenName, normalizePackPath, packFromFileMap } from '../src/utils/demoPack.js'
 
 const SAMPLE = `<?xml version="1.0" encoding="UTF-8"?>
 <!-- comment: no double-hyphen inside -->
@@ -97,6 +98,15 @@ describe('demoXml', () => {
       { x: 510, y: 145 },
     )
     assert.equal(resolveDemoXy({ attrib: { target: 'missing' } }, targets, box), null)
+    assert.deepEqual(
+      resolveDemoXy(
+        { attrib: { target: 'toolbar_core' } },
+        { toolbar_core: { x: 0.4, y: 0.055 } },
+        box,
+        () => ({ left: 200, top: 10, width: 40, height: 20 }),
+      ),
+      { x: 220, y: 20 },
+    )
   })
 
   it('converts demo times to trace units', () => {
@@ -119,52 +129,40 @@ describe('demoPack', () => {
     assert.equal(classifyOpenFiles(new Map([['a.btf.gz', {}]])), 'btf')
     assert.equal(classifyOpenFiles(new Map([['demo.xml', {}], ['a.btf.gz', {}]])), 'demo')
     assert.equal(classifyOpenFiles(new Map([['notes.txt', {}]])), 'unknown')
+    assert.equal(classifyOpenFiles(new Map([['demo.xtf', {}]])), 'xtf')
+    assert.equal(isXtfOpenName('demo_8cores.xtf'), true)
   })
 
-  it('reads the sibling btf via the xml parent handle', async () => {
-    const xml = new File([SAMPLE], 'demo.xml', { type: 'text/xml' })
-    const btf = new File([new Uint8Array([1])], 'demo.btf.gz')
-    const parent = {
-      async *entries() {
-        yield ['demo.xml', { kind: 'file', async getFile() { return xml } }]
-        yield ['demo.btf.gz', { kind: 'file', async getFile() { return btf } }]
-      },
-      async queryPermission() { return 'prompt' },
-      async requestPermission() { return 'granted' },
-    }
-    const result = await classifyPickedOpen(
-      new Map([['demo.xml', xml]]),
-      { getParent: async () => parent },
+  it('keeps .xtf in the FSA picker accept map', async () => {
+    const {
+      OPEN_FILE_PICKER_ACCEPT,
+      OPEN_FILE_PICKER_TYPES,
+      OPEN_FILE_ACCEPT,
+    } = await import('../src/utils/fileOpen.js')
+    assert.ok(OPEN_FILE_ACCEPT.includes('.xtf'))
+    assert.ok(OPEN_FILE_PICKER_ACCEPT['application/octet-stream'].includes('.xtf'))
+    assert.equal(OPEN_FILE_PICKER_TYPES.length, 1)
+    assert.ok(
+      OPEN_FILE_PICKER_TYPES[0].accept['application/octet-stream'].includes('.xtf'),
     )
-    assert.equal(result.kind, 'demo')
-    assert.equal(result.pack.traceFile, btf)
+    // Do not list .xtf under application/zip — Chromium strips it there.
+    assert.equal(OPEN_FILE_PICKER_ACCEPT['application/zip'], undefined)
   })
 
-  it('skips unreadable WSL entries while walking a folder handle', async () => {
-    const xml = new File([SAMPLE], 'demo.xml', { type: 'text/xml' })
-    const btf = new File([new Uint8Array([1])], 'demo.btf.gz')
-    const handle = {
-      async *entries() {
-        yield ['demo.xml', { kind: 'file', async getFile() { return xml } }]
-        yield ['socket', { kind: 'file', async getFile() { throw new Error('EPERM') } }]
-        yield ['.git', {
-          kind: 'directory',
-          async *entries() {
-            yield ['HEAD', { kind: 'file', async getFile() { throw new Error('git') } }]
-          },
-        }]
-        yield ['demo.btf.gz', { kind: 'file', async getFile() { return btf } }]
-      },
-    }
-    const pack = await packFromDirectoryHandle(handle)
-    assert.equal(pack.traceFile, btf)
-  })
-
-  it('explains empty WSL folder reads', async () => {
-    await assert.rejects(
-      () => packFromFileList([]),
-      /WSL/,
-    )
+  it('expands a .xtf zip into a demo pack', async () => {
+    const zipped = zipSync({
+      'demo.xml': new TextEncoder().encode(SAMPLE),
+      'demo.btf.gz': new Uint8Array([1, 2, 3]),
+      'voice/en/01_title.mp3': new Uint8Array([4]),
+    })
+    const xtf = new File([zipped], 'demo.xtf')
+    assert.equal(classifyOpenFiles(new Map([['demo.xtf', xtf]])), 'xtf')
+    const files = await filesFromXtf(xtf)
+    assert.ok(files.has('demo.xml'))
+    assert.ok(files.has('demo.btf.gz'))
+    const picked = await classifyPickedOpen(new Map([['demo.xtf', xtf]]))
+    assert.equal(picked.kind, 'demo')
+    assert.equal(picked.pack.traceFile.name, 'demo.btf.gz')
   })
 
   it('asks for the pack folder when only the xml is opened', async () => {
@@ -172,14 +170,108 @@ describe('demoPack', () => {
     const result = await classifyPickedOpen(new Map([['demo.xml', xml]]))
     assert.equal(result.kind, 'demo-folder')
     assert.equal(result.xmlName, 'demo.xml')
-    assert.equal(result.xmlFile, xml)
+    assert.equal(result.traceName, 'demo.btf.gz')
   })
 
-  it('merges a later btf pick with the already-open xml', async () => {
+  it('names the pack folder from XML_DIR and <trace>', () => {
+    const parsed = parseDemoXml(SAMPLE, { xmlDir: '.' })
+    assert.deepEqual(demoPackHintFromParsed(parsed, 'demo_8cores/demo.xml'), {
+      xmlName: 'demo.xml',
+      traceName: 'demo.btf.gz',
+    })
+  })
+
+  it('starts the pack file picker at the last opened file', () => {
+    const dir = { kind: 'directory' }
+    const file = { kind: 'file' }
+    assert.equal(filePickerOptions(dir).startIn, dir)
+    assert.equal(filePickerOptions(dir).id, FILE_OPEN_PICKER_ID)
+    assert.equal(filePickerOptions(file).startIn, file)
+    assert.equal(filePickerOptions(file).id, FILE_OPEN_PICKER_ID)
+    assert.equal(filePickerOptions(file).multiple, true)
+    assert.equal(filePickerOptions(null).id, FILE_OPEN_PICKER_ID)
+    const folder = directoryPickerOptions(file)
+    assert.equal(folder.id, 'btf-demo-pack')
+    assert.equal(folder.startIn, file)
+    assert.equal(folder.multiple, undefined)
+  })
+
+  it('matches a trace by basename when files come from the Open dialog', async () => {
     const xml = new File([SAMPLE], 'demo.xml', { type: 'text/xml' })
     const btf = new File([new Uint8Array([1])], 'demo.btf.gz')
-    const first = await classifyPickedOpen(new Map([['demo.xml', xml]]))
-    const pack = await packFromFileList([btf], first.files)
+    const pack = await packFromFileMap(new Map([
+      ['pack/demo.xml', xml],
+      ['demo.btf.gz', btf],
+    ]))
+    assert.equal(pack.traceFile, btf)
+  })
+
+  it('reads a dropped .btf.gz from DataTransfer.files if FileSystemEntry.file fails', async () => {
+    const gz = new File([new Uint8Array([0x1f, 0x8b])], 'trace.btf.gz')
+    const dt = {
+      files: [gz],
+      items: [{
+        kind: 'file',
+        getAsFile: () => gz,
+        webkitGetAsEntry() {
+          return {
+            isFile: true,
+            isDirectory: false,
+            name: 'trace.btf.gz',
+            file() {
+              throw new Error('A URI supplied to the API was malformed.')
+            },
+          }
+        },
+      }],
+    }
+    const files = await collectDroppedFiles(dt)
+    assert.equal(files.get('trace.btf.gz'), gz)
+  })
+
+  it('collects a dropped pack folder from webkitRelativePath FileList', async () => {
+    const xml = new File([SAMPLE], 'demo_8cores.xml', { type: 'text/xml' })
+    const btf = new File([new Uint8Array([1])], 'demo_8cores.btf.gz')
+    Object.defineProperty(xml, 'webkitRelativePath', { value: 'demo_8cores/demo_8cores.xml' })
+    Object.defineProperty(btf, 'webkitRelativePath', { value: 'demo_8cores/demo_8cores.btf.gz' })
+    const dt = {
+      files: [xml, btf],
+      items: [{
+        kind: 'file',
+        getAsFile: () => null,
+        webkitGetAsEntry() {
+          return { isFile: false, isDirectory: true, name: 'demo_8cores' }
+        },
+      }],
+    }
+    const files = await collectDroppedFiles(dt)
+    assert.equal(classifyOpenFiles(files), 'demo')
+    const pack = await packFromFileMap(files)
+    assert.equal(pack.traceFile, btf)
+  })
+
+  it('reads a dropped folder via getAsFileSystemHandle', async () => {
+    const xml = new File([SAMPLE], 'demo_8cores.xml', { type: 'text/xml' })
+    const btf = new File([new Uint8Array([1])], 'demo_8cores.btf.gz')
+    async function* entries() {
+      yield ['demo_8cores.xml', { kind: 'file', getFile: async () => xml }]
+      yield ['demo_8cores.btf.gz', { kind: 'file', getFile: async () => btf }]
+    }
+    const dt = {
+      files: [],
+      items: [{
+        kind: 'file',
+        getAsFile: () => null,
+        getAsFileSystemHandle: async () => ({
+          kind: 'directory',
+          name: 'demo_8cores',
+          entries,
+        }),
+      }],
+    }
+    const files = await collectDroppedFiles(dt)
+    assert.equal(classifyOpenFiles(files), 'demo')
+    const pack = await packFromFileMap(files)
     assert.equal(pack.traceFile, btf)
   })
 
@@ -761,7 +853,7 @@ describe('demo_8cores.xml', () => {
     assert.equal(root.tag, 'demo')
     const demo = parseDemoXml(xml, { xmlDir: '/demos/demo_8cores' })
     assert.match(demo.trace, /demo_8cores\.btf\.gz$/)
-    assert.deepEqual(demo.targets.timeline, { x: 0.42, y: 0.42 })
+    assert.deepEqual(demo.targets.timeline, { x: 0.31, y: 0.30 })
     assert.ok(demo.steps.length >= 20)
     const title = demo.steps.find(s => s.id === '1')
     const titleTags = title.children.map(c => c.tag)
@@ -771,6 +863,8 @@ describe('demo_8cores.xml', () => {
     assert.ok(titleTags.indexOf('clear_cursors') < titleTags.indexOf('audio'))
     assert.ok(titleTags.indexOf('clear_bookmarks') < titleTags.indexOf('audio'))
     assert.ok(titleTags.indexOf('clear_annotations') < titleTags.indexOf('audio'))
+    assert.ok(title.children.some(c => c.tag === 'move' && c.attrib.target === 'stats_summary'))
+    assert.deepEqual(demo.targets.stats_summary, { x: 0.84, y: 0.20 })
     for (const step of demo.steps) {
       let lastPlace = -1
       let lastClear = -1
@@ -787,12 +881,70 @@ describe('demo_8cores.xml', () => {
       )
     }
     const toolbar = demo.steps.find(s => s.id === '4')
-    assert.ok(toolbar.children.some(c => c.tag === 'view_mode'))
+    const toolbarKids = toolbar.children
+    assert.ok(!toolbarKids.some(c => c.tag === 'view_mode' || c.tag === 'analysis'))
+    const taskHover = toolbarKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'toolbar_task')
+    const coreHover = toolbarKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'toolbar_core')
+    const analysisHover = toolbarKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'toolbar_analysis')
+    assert.ok(taskHover >= 0 && coreHover > taskHover && analysisHover > coreHover)
+    const views = demo.steps.find(s => s.id === '5')
+    const viewsKids = views.children
+    const coreMove = viewsKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'toolbar_core')
+    const coreClick = viewsKids.findIndex(c => c.tag === 'view_mode' && c.attrib.mode === 'core')
+    const taskMove = viewsKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'toolbar_task')
+    const taskClick = viewsKids.findIndex(c => c.tag === 'view_mode' && c.attrib.mode === 'task')
+    assert.ok(coreMove >= 0 && coreClick > coreMove)
+    assert.ok(taskMove > coreClick && taskClick > taskMove)
+    const openStep = demo.steps.find(s => s.id === '2')
+    assert.ok(openStep.children.some(c => c.tag === 'move' && c.attrib.target === 'toolbar_open'))
+    assert.deepEqual(demo.targets.toolbar_open, { x: 0.025, y: 0.055 })
+    const fit = demo.steps.find(s => s.id === '6')
+    const fitKids = fit.children
+    const oneMove = fitKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'toolbar_1to1')
+    const oneZoom = fitKids.findIndex(c => c.tag === 'zoom_1to1')
+    const fitMove = fitKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'toolbar_fit')
+    const fitView = fitKids.findIndex(c => c.tag === 'fit_view')
+    assert.ok(oneMove >= 0 && oneZoom > oneMove)
+    assert.ok(fitMove > oneZoom && fitView > fitMove)
+    const summary = demo.steps.find(s => s.id === '7')
+    const summaryKids = summary.children
+    const statsMove = summaryKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'stats_tab')
+    const statsPanel = summaryKids.findIndex(c => c.tag === 'panel' && c.attrib.name === 'stats')
+    const summaryMove = summaryKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'stats_summary')
+    assert.ok(statsMove >= 0 && statsPanel > statsMove)
+    assert.ok(summaryMove > statsPanel)
+    const analysis = demo.steps.find(s => s.id === '8')
+    const analysisKids = analysis.children
+    const moveIdx = analysisKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'toolbar_analysis')
+    const openIdx = analysisKids.findIndex(c => c.tag === 'analysis' && c.attrib.close !== 'true')
+    assert.ok(moveIdx >= 0 && openIdx > moveIdx)
+    const health = demo.steps.find(s => s.id === '9')
+    const healthKids = health.children
+    const healthMove = healthKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'stats_health')
+    const healthOpen = healthKids.findIndex(c => c.tag === 'stats_section' && String(c.attrib.id || '').includes('health'))
+    const tickMove = healthKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'stats_tick_dist')
+    const tickOpen = healthKids.findIndex(c => c.tag === 'tick_dist' && c.attrib.close !== 'true')
+    const tickClose = healthKids.findIndex(c => c.tag === 'tick_dist' && c.attrib.close === 'true')
+    assert.ok(healthMove >= 0 && healthOpen > healthMove)
+    assert.ok(tickMove > healthOpen && tickOpen > tickMove && tickClose > tickOpen)
+    const findStep = demo.steps.find(s => s.id === '16')
+    const findKids = findStep.children
+    const findMove = findKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'find_tab')
+    const findOpen = findKids.findIndex(c => c.tag === 'find' && c.attrib.query)
+    assert.ok(findMove >= 0 && findOpen > findMove)
+    const exportStep = demo.steps.find(s => s.id === '17')
+    const exportKids = exportStep.children
+    const statsIdx = exportKids.findIndex(c => c.tag === 'panel' && c.attrib.name === 'stats')
+    const exportMove = exportKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'stats_export_csv')
+    assert.ok(statsIdx >= 0 && exportMove > statsIdx)
     const wcet = demo.steps.find(s => s.title === 'Top Tasks WCET')
     const section = wcet.children.find(c => c.tag === 'stats_section')
     assert.equal(section.attrib.scroll, 'exec')
     const aiSetup = demo.steps.find(s => s.title === 'AI setup')
     assert.equal(aiSetup.title, 'AI setup')
+    const aiMove = aiSetup.children.findIndex(c => c.tag === 'move' && c.attrib.target === 'ai_tab')
+    const aiPanel = aiSetup.children.findIndex(c => c.tag === 'panel' && c.attrib.name === 'ai')
+    assert.ok(aiMove >= 0 && aiPanel > aiMove)
     const settings = aiSetup.children.filter(c => c.tag === 'settings')
     assert.equal(settings[0].attrib.page, 'AI')
     assert.equal(settings[1].attrib.close, 'true')
@@ -802,7 +954,7 @@ describe('demo_8cores.xml', () => {
     assert.equal(demo.languages.defaultId, 'en')
     assert.deepEqual(
       demo.languages.list.map(l => l.id),
-      ['en', 'zh-tw', 'ja'],
+      ['en', 'zh-tw'],
     )
   })
 })

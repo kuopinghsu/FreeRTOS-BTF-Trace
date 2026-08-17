@@ -29,7 +29,7 @@ PY_VOICE = BTF_ROOT / "scripts" / "demo_voice.py"
 PY_RUNNER = BTF_ROOT / "scripts" / "demo_runner.py"
 MAKEFILE = BTF_ROOT / "Makefile"
 
-PACK_LANGS = ("en", "zh-tw", "ja")
+PACK_LANGS = ("en", "zh-tw")
 NORMALIZE_CASES = (
     ("en-US", "en"),
     ("zh_TW", "zh-tw"),
@@ -268,20 +268,10 @@ class DemoVoicePackParityTests(unittest.TestCase):
     def test_step1_says_web_in_every_language(self) -> None:
         en = (DEMO_DIR / "text" / "en" / "01_title.txt").read_text(encoding="utf-8")
         zh = (DEMO_DIR / "text" / "zh-tw" / "01_title.txt").read_text(encoding="utf-8")
-        ja = (DEMO_DIR / "text" / "ja" / "01_title.txt").read_text(encoding="utf-8")
         self.assertIn("web app", en.lower())
         self.assertNotIn("use the desktop app", en.lower())
         self.assertIn("網頁版", zh)
         self.assertNotIn("今天我們使用桌面版", zh)
-        self.assertIn("ウェブ版", ja)
-        self.assertNotIn("今日はデスクトップ版", ja)
-
-    def test_ja_scripts_avoid_latin_words(self) -> None:
-        """Japanese TTS mishandles Latin; keep ja scripts in kana/kanji only."""
-        latin = re.compile(r"[A-Za-z]{2,}")
-        for path in sorted((DEMO_DIR / "text" / "ja").glob("*.txt")):
-            hits = latin.findall(path.read_text(encoding="utf-8"))
-            self.assertEqual(hits, [], f"ja/{path.name}: {hits}")
 
 
 if __name__ == "__main__":

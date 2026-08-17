@@ -28,10 +28,17 @@ EXAMPLE_BTF = Path(__file__).resolve().parents[2] / "tracedata" / "example-2core
 
 def _stats_texts(panel) -> list[str]:
     out = []
-    for i in range(panel._ilay.count()):
-        w = panel._ilay.itemAt(i).widget()
+
+    def _walk(w) -> None:
+        if w is None:
+            return
         if isinstance(w, QLabel):
             out.append(w.text())
+        for child in w.findChildren(QLabel):
+            out.append(child.text())
+
+    for i in range(panel._ilay.count()):
+        _walk(panel._ilay.itemAt(i).widget())
     return out
 
 

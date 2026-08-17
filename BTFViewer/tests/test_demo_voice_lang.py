@@ -55,7 +55,7 @@ class DemoVoiceLangTests(unittest.TestCase):
         root = dr.load_demo_xml(DEMO_XML)
         langs = dr.parse_languages(root)
         self.assertEqual(langs["defaultId"], "en")
-        self.assertEqual([x["id"] for x in langs["list"]], ["en", "zh-tw", "ja"])
+        self.assertEqual([x["id"] for x in langs["list"]], ["en", "zh-tw"])
         vars_ = dr.build_variables(root, DEMO_XML, {})
         self.assertNotIn("languages", vars_)
 

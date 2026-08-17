@@ -3549,15 +3549,58 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
-            if any(is_btf_open_path(u.toLocalFile()) for u in event.mimeData().urls()):
-                event.acceptProposedAction()
+            for u in event.mimeData().urls():
+                path = u.toLocalFile() or ""
+                if not path:
+                    continue
+                if (is_btf_open_path(path)
+                        or is_xtf_open_path(path)
+                        or path.lower().endswith(".xml")
+                        or Path(path).is_dir()):
+                    event.acceptProposedAction()
+                    return
+
+    @staticmethod
+    def _drop_candidate_paths(raw: str) -> list:
+        """Resolve a dropped file/folder URL to one or more BTF paths."""
+        if not raw:
+            return []
+        p = Path(raw)
+        if p.is_file() and is_xtf_open_path(raw):
+            return [raw]
+        if p.is_file() and is_btf_open_path(raw):
+            return [raw]
+        folder = None
+        if p.is_file() and p.suffix.lower() == ".xml":
+            folder = p.parent
+        elif p.is_dir():
+            folder = p
+        if folder is None or not folder.is_dir():
+            return []
+        found = []
+        try:
+            for child in sorted(folder.iterdir()):
+                if child.is_file() and is_btf_open_path(str(child)):
+                    found.append(str(child))
+        except OSError:
+            return []
+        return found
 
     def dropEvent(self, event) -> None:
+        opened = False
         for url in event.mimeData().urls():
-            path = url.toLocalFile()
-            if is_btf_open_path(path):
+            paths = self._drop_candidate_paths(url.toLocalFile())
+            for path in paths:
                 self._open_file(path)
+                opened = True
+            if opened:
                 break
+        if not opened:
+            QMessageBox.information(
+                self, "Open",
+                "Drop a .btf / .btf.gz file, a demo .xtf pack, a demo .xml next to its "
+                "trace, or a folder that contains a BTF trace.",
+            )
 
     # ------------------------------------------------------------------
     # Theme
@@ -3990,8 +4033,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 self._welcome_label.setText(
                     f"<h2 style='color:{c['welcome_h2']};'>RTOS BTF Viewer</h2>"
                     f"<p style='color:{c['welcome_p']}; font-size:11pt;'>"
-                    "Drop a <b>.btf</b> file here<br>"
-                    "or press <b>Ctrl+O</b> to open one</p>"
+                    "Drop a <b>.btf</b> / <b>.btf.gz</b>, a demo <b>.xtf</b>, a demo <b>.xml</b>, or a pack folder<br>"
+                    "or press <b>Ctrl+O</b> to open</p>"
                 )
             if hasattr(self, '_view'):
                 defer_rebuilds = any(
@@ -4154,8 +4197,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _wlbl = QLabel(
             "<h2 style='color:#888;'>RTOS BTF Viewer</h2>"
             "<p style='color:#666; font-size:11pt;'>"
-            "Drop a <b>.btf</b> file here<br>"
-            "or press <b>Ctrl+O</b> to open one</p>"
+            "Drop a <b>.btf</b> / <b>.btf.gz</b>, a demo <b>.xtf</b>, a demo <b>.xml</b>, or a pack folder<br>"
+            "or press <b>Ctrl+O</b> to open</p>"
         )
         _wlbl.setTextFormat(Qt.TextFormat.RichText)
         _wlbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -4705,7 +4748,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return act
 
         # --- File actions (same cluster as web: Open · Snapshot · SVG · Perfetto · Slice) ---
-        _ia("Open", self._on_open, _IC_OPEN, "Open BTF trace file  (Ctrl+O)")
+        self._tb_open_btn = _ia("Open", self._on_open, _IC_OPEN, "Open BTF trace file  (Ctrl+O)")
         self._tb_snap_btn = _ia(
             "Snapshot", self._on_save_image, _IC_SHOT,
             "Open snapshot editor  (Ctrl+S)")
@@ -4736,7 +4779,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _ia("Zoom In",  lambda: self._view.zoom_in(),   _IC_ZIN,  "Zoom in  (Ctrl++)")
         _ia("Zoom Out", lambda: self._view.zoom_out(),  _IC_ZOUT, "Zoom out  (Ctrl+-)")
         self._act_zoom_1to1 = _ia("1:1", lambda: self._view.zoom_1to1(), _IC_1TO1, "Zoom to 1:1 scale")
-        _ia("Fit",      lambda: self._view.zoom_fit(),  _IC_FIT,  "Fit entire trace to window  (Ctrl+0)")
+        self._tb_fit_btn = _ia("Fit", lambda: self._view.zoom_fit(), _IC_FIT,
+                               "Fit entire trace to window  (Ctrl+0)")
         self._tb_zoom_range_btn = _ia("Range", self._zoom_to_cursor_range, _IC_EXPAND,
                                       "Zoom view to fit between cursor C1 and last cursor  (Ctrl+R)")
         self._tb_zoom_range_btn.setEnabled(False)
@@ -5561,6 +5605,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if view is not None:
                 view.zoom_fit()
             return {}
+        if op in ("zoom_1to1", "1to1"):
+            view = getattr(self, "_view", None)
+            if view is not None and hasattr(view, "zoom_1to1"):
+                view.zoom_1to1()
+            return {}
         if op == "limit":
             on = self._demo_truthy(
                 payload.get("on", payload.get("enabled", payload.get("limit"))),
@@ -5576,6 +5625,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if op == "panel":
             return self._demo_panel(
                 str(payload.get("name") or payload.get("tab") or "stats"))
+        if op == "target":
+            return self._demo_target(str(payload.get("name") or payload.get("target") or ""))
         if op in ("view_mode", "view"):
             return self._demo_view_mode(
                 str(payload.get("mode") or payload.get("name") or "task"))
@@ -5587,6 +5638,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return self._demo_cpu_load(on)
         if op == "analysis":
             return self._demo_analysis(payload)
+        if op in ("tick_dist", "tick_distribution"):
+            return self._demo_tick_dist(payload)
         if op == "find":
             return self._demo_find(payload)
         if op == "settings":
@@ -5705,6 +5758,85 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             raise ValueError(f"unknown panel {name!r}")
         return {"panel": key}
 
+    def _demo_widget_screen_center(self, widget) -> dict:
+        if widget is None:
+            raise ValueError("demo target widget missing")
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+        r = widget.rect()
+        p = widget.mapToGlobal(r.center())
+        return {"x": int(p.x()), "y": int(p.y())}
+
+    def _demo_action_center(self, action) -> dict:
+        tb = getattr(self, "_tb", None)
+        if tb is None or action is None:
+            raise ValueError("demo target toolbar action missing")
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+        geo = tb.actionGeometry(action)
+        if geo.isValid() and geo.width() > 0 and geo.height() > 0:
+            p = tb.mapToGlobal(geo.center())
+            return {"x": int(p.x()), "y": int(p.y())}
+        return self._demo_widget_screen_center(tb.widgetForAction(action))
+
+    def _demo_panel_tab_center(self, index: int) -> dict:
+        tabs = getattr(self, "_panel_tabs", None)
+        if tabs is None:
+            raise ValueError("demo target panel tabs missing")
+        bar = tabs.tabBar()
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+        r = bar.tabRect(int(index))
+        p = bar.mapToGlobal(r.center())
+        return {"x": int(p.x()), "y": int(p.y())}
+
+    def _demo_target(self, name: str) -> dict:
+        key = (name or "").strip().lower()
+        actions = {
+            "toolbar_task": "_tb_task_btn",
+            "toolbar_core": "_tb_core_btn",
+            "toolbar_load": "_tb_cpu_load_btn",
+            "toolbar_analysis": "_tb_analysis_btn",
+            "toolbar_fit": "_tb_fit_btn",
+            "toolbar_1to1": "_act_zoom_1to1",
+            "toolbar_open": "_tb_open_btn",
+        }
+        if key in actions:
+            return self._demo_action_center(getattr(self, actions[key], None))
+        tabs = {
+            "stats_tab": _PANEL_TAB_STATS,
+            "find_tab": _PANEL_TAB_FIND,
+            "ai_tab": _PANEL_TAB_AI,
+        }
+        if key in tabs:
+            return self._demo_panel_tab_center(tabs[key])
+        panel = getattr(self, "_stats_panel", None)
+        headers = getattr(panel, "_section_headers", None) or {}
+        widgets = {
+            # Prefer Span/Tasks summary (statistics status), not panel center
+            # (which lands in Core Utilisation).
+            "stats_summary": (
+                getattr(panel, "_stats_summary", None)
+                or getattr(panel, "_scope_label", None)
+                or panel
+            ),
+            "stats_panel": (
+                getattr(panel, "_stats_summary", None)
+                or getattr(panel, "_scope_label", None)
+                or panel
+            ),
+            "stats_export_csv": getattr(panel, "_btn_export_csv", None),
+            "stats_export_html": getattr(panel, "_btn_export_html", None),
+            "stats_health": headers.get("health") if isinstance(headers, dict) else None,
+            "stats_tick_dist": getattr(panel, "_btn_tick_dist", None),
+        }
+        if key in widgets:
+            return self._demo_widget_screen_center(widgets[key])
+        raise ValueError(f"unknown target {name!r}")
+
     def _demo_view_mode(self, mode: str) -> dict:
         key = (mode or "task").strip().lower()
         if key not in ("task", "core"):
@@ -5729,6 +5861,32 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         elif btn is None:
             self._show_cpu_load = want
         return {"cpu_load": want}
+
+    def _demo_tick_dist(self, payload: dict) -> dict:
+        panel = getattr(self, "_stats_panel", None)
+        if panel is None:
+            raise RuntimeError("No statistics panel")
+        action = str(payload.get("action") or "").strip().lower()
+        if "close" in payload:
+            want_open = not self._demo_truthy(payload.get("close"), default=True)
+        elif action in ("close", "hide", "dismiss"):
+            want_open = False
+        else:
+            want_open = True
+        if not want_open:
+            if hasattr(panel, "clear_plot_session"):
+                panel.clear_plot_session()
+            return {"tick_dist": "closed"}
+        self._focus_statistics_panel(force=True)
+        trace = getattr(self, "_trace", None)
+        if hasattr(panel, "_ensure_section_body"):
+            panel._ensure_section_body("health")
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+        if hasattr(panel, "_open_tick_dist_plot"):
+            panel._open_tick_dist_plot(trace)
+        return {"tick_dist": "opening"}
 
     def _demo_analysis(self, payload: dict) -> dict:
         action = str(payload.get("action") or "").strip().lower()
@@ -7711,11 +7869,29 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _on_open(self) -> None:
         last_dir = self._settings.get("files", "last_dir", os.path.expanduser("~"))
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open BTF trace", last_dir,
+            self, "Open BTF trace or demo pack", last_dir,
             _BTF_OPEN_FILTER
         )
         if path:
             self._open_file(path)
+
+    def _open_xtf_pack(self, path: str) -> None:
+        """Extract a shareable ``.xtf`` demo pack and open its BTF trace."""
+        try:
+            _xml, btf = extract_xtf_pack(path)
+        except (OSError, ValueError, zipfile.BadZipFile) as exc:
+            QMessageBox.warning(self, "Open Error", str(exc))
+            return
+        # Keep the extract dir alive for the session (BTF path is inside it).
+        if not hasattr(self, "_xtf_extract_dirs"):
+            self._xtf_extract_dirs = []
+        self._xtf_extract_dirs.append(os.path.dirname(btf))
+        self.statusBar().showMessage(
+            f"Opened demo pack {os.path.basename(path)} — loaded trace "
+            f"{os.path.basename(btf)}",
+            5000,
+        )
+        self._open_file(btf)
 
     def _save_recent_files(self, path: str) -> None:
         norm = _normalize_open_path(path)
@@ -8497,6 +8673,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 pass
 
     def _open_file(self, path: str) -> None:
+        if is_xtf_open_path(path):
+            self._open_xtf_pack(path)
+            return
         path = _normalize_open_path(path)
 
         try:

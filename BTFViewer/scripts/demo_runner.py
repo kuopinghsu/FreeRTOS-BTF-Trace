@@ -38,8 +38,8 @@ Actions: ``voice``, ``audio`` / ``play``, ``wait``, ``hotkey``, ``press``, ``typ
 ``move``, ``click``, ``scroll``, ``sweep``, ``confirm``, ``focus``, ``macro``,
 ``highlight``, ``clear_highlight``, ``cursors``, ``clear_cursors``,
 ``clear_bookmarks``, ``clear_annotations``, ``zoom_range``,
-``fit_view``, ``stats_section``, ``stats_reset``, ``limit``, ``jump_wcet``, ``panel``,
-``view_mode``, ``cpu_load``, ``analysis``, ``find``, ``settings``, ``ui``, ``demo_api``,
+``fit_view``, ``zoom_1to1``, ``stats_section``, ``stats_reset``, ``limit``, ``jump_wcet``, ``panel``,
+``view_mode``, ``cpu_load``, ``analysis``, ``tick_dist``, ``find``, ``settings``, ``ui``, ``demo_api``,
 ``launch`` (usually from meta + ``--launch``).
 
 Demo API (viewer must be started with ``BTFVIEWER_DEMO_API=1``, default port 8765)::
@@ -57,11 +57,14 @@ Demo API (viewer must be started with ``BTFVIEWER_DEMO_API=1``, default port 876
     <clear_annotations/>
     <clear_highlight/>
     <fit_view/>
+    <zoom_1to1/>
     <panel name="stats"/>
     <view_mode mode="core"/>
     <cpu_load on="true"/>
     <analysis/>
     <analysis close="true"/>
+    <tick_dist/>
+    <tick_dist close="true"/>
     <find query="CS[27]"/>
     <find clear="true"/>
     <settings page="AI"/>
@@ -320,7 +323,7 @@ def resolve_media_path(raw: str, variables: Dict[str, str]) -> Path:
                 parent.parent / "mp3" / stem,
             ])
         stem_paths.extend(alts)
-        exts = (".mp3", ".wav", ".m4a", ".aiff", ".aif", ".ogg", ".flac")
+        exts = (".mp3", ".aac", ".wav", ".m4a", ".aiff", ".aif", ".ogg", ".flac")
         for sp in list(stem_paths):
             if sp.suffix:
                 out.append(sp)
@@ -1598,6 +1601,13 @@ class DemoRunner:
             raise RuntimeError(f"invalid window size {self.cfg.win}")
         if "target" in el.attrib:
             name = el.attrib["target"]
+            if self.cfg.demo_api_enabled and not self.cfg.dry_run:
+                try:
+                    hit = self.demo_api({"op": "target", "name": name}, settle=0)
+                    if isinstance(hit, dict) and "x" in hit and "y" in hit:
+                        return int(hit["x"]), int(hit["y"])
+                except Exception:
+                    pass
             if name not in self.cfg.targets:
                 raise KeyError(f"unknown target {name!r} (define <point> in <targets>)")
             fx, fy = self.cfg.targets[name]
@@ -1959,6 +1969,14 @@ class DemoRunner:
                 self.demo_api(payload, settle=0.6)
             elif tag in ("fit_view", "fit_api"):
                 self.demo_api({"op": "fit"}, settle=0.4)
+            elif tag in ("zoom_1to1", "one_to_one", "1to1"):
+                self.demo_api({"op": "zoom_1to1"}, settle=0.4)
+            elif tag in ("tick_dist", "tick_distribution"):
+                close = "close" in el.attrib
+                payload = {"op": "tick_dist"}
+                if close:
+                    payload["close"] = expand(el.attrib.get("close", "true"), self.cfg.vars)
+                self.demo_api(payload, settle=0.4)
             elif tag == "limit":
                 on = expand(
                     el.attrib.get("on", el.attrib.get("enabled", "true")),
@@ -2280,7 +2298,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         type=Path,
         nargs="?",
         default=BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.xml",
-        help="demo description XML (default: demos/demo_8cores/demo_8cores.xml)",
+        help="demo description XML or .xtf pack (default: demos/demo_8cores/demo_8cores.xml)",
     )
     ap.add_argument("--launch", action="store_true", help="start app from <meta>/<launch> or <trace>")
     ap.add_argument("--attach-wait", type=float, default=4.0, help="wait after launch")
@@ -2346,6 +2364,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not xml_path.is_file():
         log(f"XML not found: {xml_path}")
         return 2
+
+    # Shareable .xtf packs are zip archives of xml + btf + voice/.
+    _xtf_tmpdir = None
+    if xml_path.suffix.lower() == ".xtf":
+        import tempfile
+        import zipfile
+        if not zipfile.is_zipfile(xml_path):
+            log(f"not a valid .xtf archive: {xml_path}")
+            return 2
+        _xtf_tmpdir = Path(tempfile.mkdtemp(prefix="btf_xtf_"))
+        with zipfile.ZipFile(xml_path, "r") as zf:
+            zf.extractall(_xtf_tmpdir)
+        xmls = sorted(_xtf_tmpdir.glob("*.xml"))
+        if not xmls:
+            log(f"no .xml inside .xtf: {xml_path}")
+            return 2
+        demoish = [p for p in xmls if "demo" in p.name.lower()]
+        xml_path = (demoish or xmls)[0]
+        log(f"extracted .xtf → {xml_path}")
 
     pag = _import_pyautogui()
     if args.calibrate:

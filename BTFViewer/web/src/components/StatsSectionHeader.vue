@@ -3,6 +3,7 @@
   <div
     class="stats-section-title collapsible"
     :class="{ pinned }"
+    :data-demo-target="demoTarget || undefined"
     @click="$emit('toggle')"
   >
     <span
@@ -87,6 +88,7 @@ const props = defineProps({
   collapsed: { type: Boolean, default: false },
   pinned: { type: Boolean, default: false },
   sectionId: { type: String, default: '' },
+  demoTarget: { type: String, default: '' },
 })
 
 const helpText = computed(() => STATS_SECTION_HELP[props.sectionId] || '')

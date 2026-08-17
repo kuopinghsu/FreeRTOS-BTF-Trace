@@ -1,5 +1,7 @@
 <template>
-  <div class="stats-panel">
+  <div
+    class="stats-panel"
+  >
     <!-- Cursor range scope -->
     <div class="stats-scope-row">
       <div class="stats-scope-top">
@@ -60,7 +62,10 @@
     >
     <!-- Summary and sections (require loaded trace) -->
     <template v-if="trace">
-    <div class="stats-summary">
+    <div
+      class="stats-summary"
+      data-demo-target="stats_summary"
+    >
       <div class="summary-row">
         <span class="summary-key">Span{{ scopeSuffixStr }}</span>
         <span class="summary-val">{{ spanStr }}</span>
@@ -429,6 +434,7 @@
       <!-- Trace health (TICK) -->
       <StatsSectionHeader
         :section-id="'health'"
+        demo-target="stats_health"
         :collapsed="healthCollapsed"
         :pinned="isSectionPinned('health')"
         @toggle="toggleSectionCollapse('health')"
@@ -465,6 +471,7 @@
               v-if="tickHealth.tickCount >= 2"
               type="button"
               class="tick-dist-btn"
+              data-demo-target="stats_tick_dist"
               title="Open tick interval distribution chart"
               @click="openTickDistPlot"
             >
@@ -3494,6 +3501,7 @@
     <div
       v-else
       class="range-hint stats-empty-hint"
+      data-demo-target="stats_summary"
     >
       Open a trace file to view statistics.
     </div>
@@ -3508,6 +3516,7 @@
     <div class="stats-export-row">
       <button
         class="action-btn"
+        data-demo-target="stats_export_csv"
         :disabled="!trace"
         title="Export statistics as CSV"
         @click="exportCsv"
@@ -3526,6 +3535,7 @@
       </button>
       <button
         class="action-btn"
+        data-demo-target="stats_export_html"
         :disabled="!trace"
         title="Export statistics as HTML report"
         @click="exportHtml"
@@ -8503,6 +8513,8 @@ defineExpose({
   scrollDemoSectionIntoView,
   expandAllSections,
   collapseAllSections,
+  openTickDistPlot,
+  closePlot,
 })
 </script>
 

@@ -64,6 +64,7 @@ class DemoXmlUsesApiTests(unittest.TestCase):
         self.assertLess(body1.index("<clear_cursors/>"), body1.index("<audio"))
         self.assertLess(body1.index("<clear_bookmarks/>"), body1.index("<audio"))
         self.assertLess(body1.index("<clear_annotations/>"), body1.index("<audio"))
+        self.assertIn('target="stats_summary"', body1)
         # Find step must not hop to Statistics after the query.
         step16 = re.search(
             r'<step id="16".*?</step>', xml, re.S)
@@ -93,9 +94,100 @@ class DemoXmlUsesApiTests(unittest.TestCase):
         step4 = re.search(r'<step id="4".*?</step>', xml, re.S)
         self.assertIsNotNone(step4)
         body = step4.group(0)
-        self.assertIn('<view_mode mode="core"/>', body)
-        self.assertIn('<view_mode mode="task"/>', body)
+        self.assertNotIn("<view_mode", body)
+        self.assertNotIn("<analysis", body)
+        self.assertIn('target="toolbar_task"', body)
+        self.assertIn('target="toolbar_core"', body)
+        self.assertIn('target="toolbar_analysis"', body)
+        self.assertLess(
+            body.index('target="toolbar_task"'),
+            body.index('target="toolbar_core"'),
+        )
+        self.assertLess(
+            body.index('target="toolbar_core"'),
+            body.index('target="toolbar_analysis"'),
+        )
         self.assertIn("<cpu_load", body)
+        self.assertLess(body.index('target="toolbar_load"'), body.index("<cpu_load"))
+        self.assertLess(body.index('target="stats_tab"'), body.index('<panel name="stats"/>'))
+        self.assertLess(body.index('target="find_tab"'), body.index('<panel name="find"/>'))
+        self.assertLess(body.index('target="ai_tab"'), body.index('<panel name="ai"/>'))
+
+    def test_views_step_clicks_core_then_task(self) -> None:
+        xml = DEMO_XML.read_text(encoding="utf-8")
+        step5 = re.search(r'<step id="5".*?</step>', xml, re.S)
+        self.assertIsNotNone(step5)
+        body = step5.group(0)
+        self.assertLess(body.index('target="toolbar_core"'), body.index('<view_mode mode="core"/>'))
+        self.assertLess(body.index('<view_mode mode="core"/>'), body.index('target="toolbar_task"'))
+        self.assertLess(body.index('target="toolbar_task"'), body.index('<view_mode mode="task"/>'))
+
+    def test_open_step_moves_to_toolbar_icon(self) -> None:
+        xml = DEMO_XML.read_text(encoding="utf-8")
+        step2 = re.search(r'<step id="2".*?</step>', xml, re.S)
+        self.assertIsNotNone(step2)
+        body = step2.group(0)
+        self.assertIn('target="toolbar_open"', body)
+
+    def test_fit_step_moves_to_toolbar_icon(self) -> None:
+        xml = DEMO_XML.read_text(encoding="utf-8")
+        step6 = re.search(r'<step id="6".*?</step>', xml, re.S)
+        self.assertIsNotNone(step6)
+        body = step6.group(0)
+        self.assertLess(body.index('target="toolbar_1to1"'), body.index("<zoom_1to1"))
+        self.assertLess(body.index("<zoom_1to1"), body.index('target="toolbar_fit"'))
+        self.assertLess(body.index('target="toolbar_fit"'), body.index("<fit_view"))
+
+    def test_summary_step_moves_to_stats_tab(self) -> None:
+        xml = DEMO_XML.read_text(encoding="utf-8")
+        step7 = re.search(r'<step id="7".*?</step>', xml, re.S)
+        self.assertIsNotNone(step7)
+        body = step7.group(0)
+        self.assertLess(body.index('target="stats_tab"'), body.index('<panel name="stats"/>'))
+        self.assertLess(body.index('<panel name="stats"/>'), body.index('target="stats_summary"'))
+        self.assertLess(body.index('target="stats_summary"'), body.index('id="cores"'))
+
+    def test_analysis_step_moves_to_toolbar_icon(self) -> None:
+        xml = DEMO_XML.read_text(encoding="utf-8")
+        step8 = re.search(r'<step id="8".*?</step>', xml, re.S)
+        self.assertIsNotNone(step8)
+        body = step8.group(0)
+        self.assertLess(body.index('target="toolbar_analysis"'), body.index("<analysis/>"))
+
+    def test_health_step_opens_tick_distribution(self) -> None:
+        xml = DEMO_XML.read_text(encoding="utf-8")
+        step9 = re.search(r'<step id="9".*?</step>', xml, re.S)
+        self.assertIsNotNone(step9)
+        body = step9.group(0)
+        self.assertLess(body.index('target="stats_health"'), body.index('id="health"'))
+        self.assertLess(body.index('id="health"'), body.index('target="stats_tick_dist"'))
+        self.assertLess(body.index('target="stats_tick_dist"'), body.index("<tick_dist/>"))
+        self.assertLess(body.index("<tick_dist/>"), body.index('<tick_dist close="true"/>'))
+
+    def test_find_step_moves_to_find_tab(self) -> None:
+        xml = DEMO_XML.read_text(encoding="utf-8")
+        step16 = re.search(r'<step id="16".*?</step>', xml, re.S)
+        self.assertIsNotNone(step16)
+        body = step16.group(0)
+        self.assertLess(body.index('target="find_tab"'), body.index("<find "))
+
+    def test_export_step_moves_to_csv_button(self) -> None:
+        xml = DEMO_XML.read_text(encoding="utf-8")
+        step17 = re.search(r'<step id="17".*?</step>', xml, re.S)
+        self.assertIsNotNone(step17)
+        body = step17.group(0)
+        self.assertIn('<panel name="stats"/>', body)
+        self.assertLess(
+            body.index('<panel name="stats"/>'),
+            body.index('target="stats_export_csv"'),
+        )
+
+    def test_ai_setup_step_moves_to_ai_tab(self) -> None:
+        xml = DEMO_XML.read_text(encoding="utf-8")
+        step18 = re.search(r'<step id="18".*?</step>', xml, re.S)
+        self.assertIsNotNone(step18)
+        body = step18.group(0)
+        self.assertLess(body.index('target="ai_tab"'), body.index('<panel name="ai"/>'))
 
     def test_runner_maps_ui_tags(self) -> None:
         runner = (BTF_ROOT / "scripts" / "demo_runner.py").read_text(
@@ -113,6 +205,10 @@ class DemoXmlUsesApiTests(unittest.TestCase):
             'tag == "clear_annotations"',
             '"op": "clear_bookmarks"',
             '"op": "clear_annotations"',
+            '"op": "zoom_1to1"',
+            'tag in ("zoom_1to1"',
+            '"op": "tick_dist"',
+            'tag in ("tick_dist"',
         ):
             self.assertIn(needle, runner)
 
@@ -232,6 +328,50 @@ class DemoApiUiTests(unittest.TestCase):
         via_ui = win._demo_handle({"op": "ui", "action": "panel", "name": "find"})
         self.assertEqual(via_ui.get("panel"), "find")
         self.assertEqual(win._panel_tabs.currentIndex(), _PANEL_TAB_FIND)
+
+        open_hit = win._demo_handle({"op": "target", "name": "toolbar_open"})
+        open_geo = win._tb.actionGeometry(win._tb_open_btn)
+        open_pt = win._tb.mapToGlobal(open_geo.center())
+        self.assertEqual(open_hit.get("x"), int(open_pt.x()))
+        self.assertEqual(open_hit.get("y"), int(open_pt.y()))
+        snap_geo = win._tb.actionGeometry(win._tb_snap_btn)
+        snap_pt = win._tb.mapToGlobal(snap_geo.center())
+        self.assertLess(int(open_hit.get("x")), int(snap_pt.x()))
+        core = win._demo_handle({"op": "target", "name": "toolbar_core"})
+        core_geo = win._tb.actionGeometry(win._tb_core_btn)
+        core_pt = win._tb.mapToGlobal(core_geo.center())
+        self.assertEqual(core.get("x"), int(core_pt.x()))
+        self.assertEqual(core.get("y"), int(core_pt.y()))
+        fit = win._demo_handle({"op": "target", "name": "toolbar_fit"})
+        fit_geo = win._tb.actionGeometry(win._tb_fit_btn)
+        fit_pt = win._tb.mapToGlobal(fit_geo.center())
+        self.assertEqual(fit.get("x"), int(fit_pt.x()))
+        self.assertEqual(fit.get("y"), int(fit_pt.y()))
+        combo_pt = win._zoom_preset_combo.mapToGlobal(
+            win._zoom_preset_combo.rect().center())
+        self.assertLess(int(fit.get("x")), int(combo_pt.x()))
+        self.assertLess(int(fit.get("x")), int(core.get("x")))
+        self.assertLess(int(open_hit.get("x")), int(fit.get("x")))
+        find_tab = win._demo_handle({"op": "target", "name": "find_tab"})
+        bar = win._panel_tabs.tabBar()
+        tab_pt = bar.mapToGlobal(bar.tabRect(_PANEL_TAB_FIND).center())
+        self.assertEqual(find_tab.get("x"), int(tab_pt.x()))
+        self.assertEqual(find_tab.get("y"), int(tab_pt.y()))
+        stats_hit = win._demo_handle({"op": "target", "name": "stats_summary"})
+        summary = getattr(win._stats_panel, "_stats_summary", None)
+        self.assertIsNotNone(summary)
+        sum_pt = summary.mapToGlobal(summary.rect().center())
+        self.assertEqual(stats_hit.get("x"), int(sum_pt.x()))
+        self.assertEqual(stats_hit.get("y"), int(sum_pt.y()))
+        alias = win._demo_handle({"op": "target", "name": "stats_panel"})
+        self.assertEqual(alias.get("x"), stats_hit.get("x"))
+        self.assertEqual(alias.get("y"), stats_hit.get("y"))
+        cores_hdr = win._stats_panel._section_headers.get("cores")
+        if cores_hdr is not None:
+            cores_pt = cores_hdr.mapToGlobal(cores_hdr.rect().center())
+            self.assertLess(int(stats_hit.get("y")), int(cores_pt.y()))
+        with self.assertRaises(ValueError):
+            win._demo_handle({"op": "target", "name": "missing_icon"})
 
     def test_view_mode_updates_loaded_scene(self) -> None:
         if not DEMO_BTF.is_file():

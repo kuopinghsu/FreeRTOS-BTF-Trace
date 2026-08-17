@@ -97,15 +97,63 @@ class SyncIssueRef:
 
 _MAX_TRACE_FILE_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB guard vs. memory exhaustion on a huge/adversarial file
 
-# Open dialog / drag-drop accept list (plain + compressed BTF).
+# Open dialog / drag-drop accept list (plain + compressed BTF + demo packs).
+# Put *.xtf in the *first* filter: macOS/Qt remember the last selected filter, so
+# a BTF-only default leaves .xtf grayed until the user switches once.
 _BTF_OPEN_FILTER = (
-    "BTF traces (*.btf *.btf.gz *.btf.bz2 *.btf.zip *.gz *.bz2 *.zip);;"
+    "BTF traces and demo packs "
+    "(*.btf *.btf.gz *.btf.bz2 *.btf.zip *.xtf *.gz *.bz2 *.zip);;"
+    "Demo packs (*.xtf);;"
     "All files (*)"
 )
 _BTF_NAME_EXTS = (".btf", ".btf.gz", ".btf.bz2", ".btf.zip", ".gz", ".bz2", ".zip")
 
 # Virtual path for a BTF member inside a zip: ``/path/archive.zip::subdir/a.btf``
 _ZIP_MEMBER_SEP = "::"
+
+
+def is_xtf_open_path(path: str) -> bool:
+    """True if *path* is a shareable demo tour pack (``.xtf`` zip)."""
+    return (path or "").lower().endswith(".xtf")
+
+
+def extract_xtf_pack(path: str, dest_dir: Optional[str] = None) -> Tuple[str, str]:
+    """Extract a ``.xtf`` zip. Returns ``(xml_path, btf_path)`` under *dest_dir*."""
+    import tempfile
+
+    src = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isfile(src):
+        raise FileNotFoundError(src)
+    if not zipfile.is_zipfile(src):
+        raise ValueError(f"not a zip/.xtf archive: {src}")
+    out = dest_dir or tempfile.mkdtemp(prefix="btf_xtf_")
+    os.makedirs(out, exist_ok=True)
+    with zipfile.ZipFile(src, "r") as zf:
+        zf.extractall(out)
+
+    xml_path = ""
+    xmls = []
+    btfs = []
+    for root, _dirs, files in os.walk(out):
+        for name in files:
+            full = os.path.join(root, name)
+            lower = name.lower()
+            if lower.endswith(".xml"):
+                xmls.append(full)
+            elif is_btf_open_path(full) and not lower.endswith(".xtf"):
+                # Prefer real BTF containers over treating nested zips oddly.
+                btfs.append(full)
+    if not xmls:
+        raise ValueError(f"no .xml demo script inside {src}")
+    demoish = [p for p in xmls if "demo" in os.path.basename(p).lower()]
+    xml_path = sorted(demoish or xmls)[0]
+    if not btfs:
+        raise ValueError(f"no .btf / .btf.gz inside {src}")
+    # Prefer the BTF next to the XML when several exist.
+    xml_dir = os.path.dirname(xml_path)
+    same = [p for p in btfs if os.path.dirname(p) == xml_dir]
+    btf_path = sorted(same or btfs)[0]
+    return xml_path, btf_path
 
 
 def is_btf_open_path(path: str) -> bool:

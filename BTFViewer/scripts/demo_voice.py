@@ -46,7 +46,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 SCHEMA = "btf-demo-voice"
 SCHEMA_VERSION = 1
 MANIFEST_NAME = "voice.json"
-AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aiff", ".aif", ".ogg", ".flac"}
+AUDIO_EXTS = {".mp3", ".aac", ".wav", ".m4a", ".aiff", ".aif", ".ogg", ".flac"}
 TEXT_EXTS = {".txt"}
 LANG_RE = re.compile(r"^[a-z]{2}(?:-[a-z0-9]+)?$", re.I)
 LABELS = {
