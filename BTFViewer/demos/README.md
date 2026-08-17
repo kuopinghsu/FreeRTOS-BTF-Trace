@@ -140,8 +140,8 @@ discovered. Desktop: `--lang zh-tw`, `make demo DEMO_LANG=zh-tw`, or
 **Shareable `.xtf` pack**
 
 ```bash
-make demo-pack                              # en only (default)
-make demo-pack DEMO_LANGS=en,zh-tw          # English + 中文
+make demo-pack                              # en + zh-tw (default)
+make demo-pack DEMO_LANGS=en                # English only
 make demo-pack DEMO_LANGS=all               # every voice/<lang>/
 # or:
 python3 scripts/demo_pack.py demos/demo_8cores --list-voices

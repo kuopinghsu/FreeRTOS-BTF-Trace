@@ -1,1 +1,5 @@
-That is the diagnosis loop. Open a trace, Fit, Statistics and Analysis, Trace Health, scope with cursors if the file mixes phases, then Balance, C-P-U, Latency, Concurrency, and Compliance. Confirm every issue on the timeline. Only then open AI: enable an endpoint, click Start Investigation, click every jump timestamp, and Explain region inside the cursors. Export HTML or Compare a second trace after a fix. Thank you for watching. Open the eight-core demo sample in BTF Viewer and try every step yourself.
+That is the diagnosis loop. Open a trace, Fit, Statistics and Analysis, Trace Health; if the span mixes phases, scope with cursors; then walk Balance, C-P-U, Latency, Concurrency, and Compliance. Confirm every issue on the timeline. Only then open AI: connect an endpoint, click Start Investigation, click every jump timestamp, and Explain region inside the cursors. After a fix, export HTML or Compare a second trace.
+
+Thank you for watching.
+
+Open the eight-core demo sample in BTF Viewer and walk through it yourself.

@@ -4,4 +4,4 @@ Open Settings, then AI. Tick Enable AI Assistant. This recording uses Google Gem
 
 Every run can differ — another model, another day, or a different scope will change the tools, the wording, and the timestamps. Treat this clip as one worked example, not a script the assistant must repeat.
 
-The AI tab is the investigation surface. You will see a stepper: Triage, Scope, Investigate, Verify, Experiment, Compare. An empty log shows Start Investigation. Language sets the reply language. Ask sends the box. Command-enter or control-enter is the shortcut. Stop cancels. Clear removes chat replies; the usage meter and investigation evidence stay.
+The AI tab is the investigation surface. You will see a stepper: Triage, Scope, Investigate, Verify, Experiment, Compare. An empty log shows Start Investigation. Language sets the reply language. Ask sends the box. Stop cancels. Clear removes chat replies; the usage meter and investigation evidence stay.

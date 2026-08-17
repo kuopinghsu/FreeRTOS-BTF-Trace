@@ -119,6 +119,8 @@ Same flow on **Desktop** and **Web**. Panel chrome: [README → AI Assistant](RE
 
 ​
 
+<a id="newbie-ai-workflow" name="newbie-ai-workflow">&#x200B;</a>
+
 ### Newbie AI workflow — “I don’t know what is wrong” 
 
 For a first investigation, do **not** start by choosing individual tools. Use the six-step loop below and let **Investigate** choose the deeper tools.
@@ -731,7 +733,7 @@ The table below is the exhaustive schema reference. Use it when implementing, de
 
 Models without native tool calling can emit a fenced ````btftool` JSON block; the viewer renders the same GUI cards. Prefer a tool-capable model for investigation-heavy workflows.
 
-​
+<a id="desktop-vs-web" name="desktop-vs-web">&#x200B;</a>
 
 ## Desktop and web behavior 
 
@@ -870,7 +872,7 @@ See also [Export → Headless CLI](README.md#headless-cli-desktop-only) in the u
 
 ---
 
-
+<a id="benchmark-suite" name="benchmark-suite">&#x200B;</a>
 
 ## Benchmark / evaluation suite 
 
@@ -1188,7 +1190,7 @@ Do **not** add chat templates after `auto_investigate`.
 
 ---
 
-
+<a id="causal-engines" name="causal-engines">&#x200B;</a>
 
 ## Causal and temporal engines 
 

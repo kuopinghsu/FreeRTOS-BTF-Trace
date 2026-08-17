@@ -288,7 +288,7 @@ Switch from the toolbar (both apps) or the **View** menu (Desktop). The last ori
 
 Toggle **Load** on the toolbar for a utilisation chart under the timeline. Drag the divider to resize. With two or more cursors, the chart can show a cursor-range average.
 
-With a task **lock-highlighted**, Task View shows that task’s utilisation **per core** in the load strip — useful when investigating migrations (see [Highlight a migrating task](#highlight-a-migrating-task-on-the-timeline)).
+With a task **lock-highlighted**, Task View shows that task’s utilisation **per core** in the load strip — useful when investigating migrations (see [Highlight a migrating task](STATISTICS.md#highlight-a-migrating-task-on-the-timeline)).
 
 <a id="cursors" name="cursors">&#x200B;</a>
 ### Cursors ![](../images/readme/h3.svg)
@@ -356,18 +356,18 @@ Viewer analysis stays on **BTF → statistics → visualization → comparison**
 
 | Page | What to use it for |
 |------|--------------------|
-| [Timeline Anomalies](#timeline-anomalies) | Unusual regions (spikes, bursts, idle, deadline misses) without relying only on Findings. **Investigate…** opens the AI template. |
-| [Worst Events](#worst-events) | Top-N outliers; click a row to jump. Response p99 sits next to execution Max. |
-| [Response Time](#response-time) | Min / mean / median / P90–P99.9 / max / σ / jitter. Click P99 like Execution. |
-| [Period / Jitter](#period--jitter) | Activation gaps, sparkline, missed / extra / burst / long-gap counts. |
-| [Unified Jitter](#unified-jitter) | Execution, period, dispatch (STI), and wake (block-wait) CVs. |
-| [Distribution Explorer](#distribution-explorer) | Histogram for one metric × task. |
-| [Task × Core](#task--core) / [Core Utilization Over Time](#core-utilization-over-time) | Hot vs idle cores, load imbalance, saturation windows. |
-| [Preemption Matrix](#preemption-matrix) / Chain / Story | Who preempted whom, duration, recurring chains. |
-| [Mutex Blocking](#mutex-blocking) / [Waiter × Owner](#waiter--owner) | Wait totals, top blockers, owner handoff. |
-| [Critical Path](#critical-path) | Execution / preemption / mutex / migration / Other; click a component. |
-| [Task Health](#task-health) | Heuristic 0–100 score (not an AI probability). |
-| [Recurring Patterns](#recurring-patterns) | Repeat incidents in one trace; Compare lists patterns shared across traces. |
+| [Timeline Anomalies](STATISTICS.md#timeline-anomalies) | Unusual regions (spikes, bursts, idle, deadline misses) without relying only on Findings. **Investigate…** opens the AI template. |
+| [Worst Events](STATISTICS.md#worst-events) | Top-N outliers; click a row to jump. Response p99 sits next to execution Max. |
+| [Response Time](STATISTICS.md#response-time) | Min / mean / median / P90–P99.9 / max / σ / jitter. Click P99 like Execution. |
+| [Period / Jitter](STATISTICS.md#period--jitter) | Activation gaps, sparkline, missed / extra / burst / long-gap counts. |
+| [Unified Jitter](STATISTICS.md#unified-jitter) | Execution, period, dispatch (STI), and wake (block-wait) CVs. |
+| [Distribution Explorer](STATISTICS.md#distribution-explorer) | Histogram for one metric × task. |
+| [Task × Core](STATISTICS.md#task--core) / [Core Utilization Over Time](STATISTICS.md#core-utilization-over-time) | Hot vs idle cores, load imbalance, saturation windows. |
+| [Preemption Matrix](STATISTICS.md#preemption-matrix) / Chain / Story | Who preempted whom, duration, recurring chains. |
+| [Mutex Blocking](STATISTICS.md#mutex-blocking) / [Waiter × Owner](STATISTICS.md#waiter--owner) | Wait totals, top blockers, owner handoff. |
+| [Critical Path](STATISTICS.md#critical-path) | Execution / preemption / mutex / migration / Other; click a component. |
+| [Task Health](STATISTICS.md#task-health) | Heuristic 0–100 score (not an AI probability). |
+| [Recurring Patterns](STATISTICS.md#recurring-patterns) | Repeat incidents in one trace; Compare lists patterns shared across traces. |
 | [Trace Compare](#trace-compare) | A vs B including Response P99, mutex, deadline misses, and a deterministic **Why?**. |
 
 <a id="analysis-findings" name="analysis-findings">&#x200B;</a>
@@ -403,7 +403,7 @@ Toolbar **Analysis** summarises likely issues for the current scope (load imbala
 <a id="trace-compare" name="trace-compare">&#x200B;</a>
 ### Trace Compare ![](../images/readme/h3.svg)
 
-With **two or more** tabs open, toolbar **Compare** (right after **Analysis**) diffs summary, top tasks, utilisation, migrations, execution, blocking, inter-arrival, preemption, sync, **Response P99**, and **mutex blocking**. The **Trends** page lists every open tab (3+) with span, migrations, load-balance, and tick health. The summary strip includes those latency/blocking deltas plus **deadline-miss** counts from **Settings → Display** task deadlines, a deterministic **Why?**, and shared recurring patterns. Optionally limit each side to its own cursor range. **Save as baseline** / **Score vs baseline** store and z-score Trace A metrics (same profile as `baseline_score`). Export CSV/HTML from the dialog, **Validate experiment…** to score expected vs actual deltas in the **AI** tab (`validate_experiment`; actual percents come from this compare, including **Scope to cursors**), or **Query with AI…** to walk the same tables (Trace Compare template). See also [Core migration analysis](#core-migration-analysis) below.
+With **two or more** tabs open, toolbar **Compare** (right after **Analysis**) diffs summary, top tasks, utilisation, migrations, execution, blocking, inter-arrival, preemption, sync, **Response P99**, and **mutex blocking**. The **Trends** page lists every open tab (3+) with span, migrations, load-balance, and tick health. The summary strip includes those latency/blocking deltas plus **deadline-miss** counts from **Settings → Display** task deadlines, a deterministic **Why?**, and shared recurring patterns. Optionally limit each side to its own cursor range. **Save as baseline** / **Score vs baseline** store and z-score Trace A metrics (same profile as `baseline_score`). Export CSV/HTML from the dialog, **Validate experiment…** to score expected vs actual deltas in the **AI** tab (`validate_experiment`; actual percents come from this compare, including **Scope to cursors**), or **Query with AI…** to walk the same tables (Trace Compare template). See also [Core migration analysis](STATISTICS.md#core-migration-analysis).
 
 ---
 
@@ -648,7 +648,7 @@ Day-to-day users can ignore this section.
 | Web only | `make -C BTFViewer web` → `builds/btf_viewer.html` |
 | Guided demo | `make -C BTFViewer demo` — see [Demo](#demo) |
 | Tests | `make -C BTFViewer test` (desktop) / `test-web` / `test-all` / `ai-test` |
-| Docs PDF | `make -C BTFViewer doc` → `builds/{README,AI,WORKFLOWS,btf-viewer-slides}.pdf` |
+| Docs PDF | `make -C BTFViewer doc` → `builds/{README,STATISTICS,AI,WORKFLOWS,btf-viewer-slides}.pdf` (Mermaid via Node/`npx @mermaid-js/mermaid-cli`) |
 | Dev run (Desktop) | `python -m btf_viewer_pkg [trace.btf]` from `BTFViewer/` |
 
 Edit sources under `btf_viewer_pkg/` and `web/`; commit regenerated files under `builds/` with your changes. Keep AI tool schemas and mermaid layout in sync (`ai_tools.py` / `ai_mermaid.py` ↔ `web/src/utils/aiTools.js` / `aiMermaid.js`; `mermaid_palette(is_dark)` ↔ `mermaidPalette(dark)`). Parser and Statistics numbers are pinned by shared goldens (`tests/fixtures/*-golden.json`) asserted from both `tests/test_parser_golden.py` / `tests/test_stats_web_parity.py` and `web/tests/`. Synthetic traces: `scripts/gen_trace.py --help`. BTF field reference: [`TRACE_FORMAT.md`](../TRACE_FORMAT.md). Live suite XML: [AI.md → Benchmark / evaluation suite](AI.md#benchmark-suite). Recorded scores: [`AI_BENCHMARK.md`](AI_BENCHMARK.md).

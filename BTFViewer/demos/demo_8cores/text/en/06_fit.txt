@@ -1,1 +1,1 @@
-Every session starts with two checks. Is the capture usable, and are we looking at the whole trace? Click Fit — or press the Fit shortcut — so the full span fills the view.
+Every session starts with two checks. Is the captured time span suitable, and are we looking at the whole trace? Click Fit — or use the Fit shortcut — so the full span fills the view.

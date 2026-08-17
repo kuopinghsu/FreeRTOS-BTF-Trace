@@ -1,5 +1,5 @@
-The toolbar is mostly icons — hover any icon for its name. You can switch layout between Horizontal and Vertical. Zoom in, zoom one-to-one, or Fit the whole trace. Task view versus Core view. Load turns on the CPU utilisation strip under the timeline. Heatmap and Chord show migrations between cores; they follow the visible viewport, not the cursor-scope checkbox.
+The toolbar is mostly icons — hover any icon for its name. You can switch layout between Horizontal and Vertical. Zoom in, zoom one-to-one, or Fit the whole trace. Task view versus Core view. Load turns on the CPU utilisation strip under the timeline. Heatmap and Chord show migrations between cores; they show migration data for the range you can see on screen. To see migrations for the full span, Fit first, then open the migration views.
 
-Now look at Analysis on the toolbar — it opens a short triage card of findings. Compare sits next to it when two traces are open. Settings is on the far right.
+Now look at Analysis on the toolbar — it opens a short triage card of findings. Compare is available when two or more traces are open. Settings is on the far right.
 
 On the right-hand panel: Statistics, Marks, Find, Legend, and AI. We work in Statistics first. AI comes last, after the timeline agrees.

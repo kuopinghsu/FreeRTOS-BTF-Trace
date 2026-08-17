@@ -10,7 +10,8 @@ and ``<audio file=…>`` paths in the packed XML are rewritten to ``.aac``.
 Example (from ``BTFViewer/``)::
 
     python3 scripts/demo_pack.py demos/demo_8cores \\
-        -o builds/demo_8cores.xtf --voice en,zh-tw
+        -o builds/demo_8cores.xtf
+    # default voices: en, zh-tw  (override with --voice / --all-voices)
 
 Equivalent layout inside the archive (flat, no folder prefix)::
 
@@ -43,9 +44,9 @@ from demo_voice import (  # noqa: E402
     voice_label,
 )
 
-DEFAULT_LANGS = ("en",)
+DEFAULT_LANGS = ("en", "zh-tw")
 BTF_GLOBS = ("*.btf", "*.btf.gz", "*.btf.bz2", "*.btf.zip")
-FFMPEG_AAC_ARGS = ("-c:a", "aac", "-ar", "24000", "-ac", "1", "-b:a", "32k")
+FFMPEG_AAC_ARGS = ("-c:a", "aac", "-ar", "24000", "-ac", "1", "-b:a", "48k")
 
 
 def list_voice_packs(demo_dir: Path) -> List[dict]:
@@ -193,7 +194,7 @@ def _which_ffmpeg() -> Optional[str]:
 
 
 def mp3_to_aac(src: Path, dest: Path, *, ffmpeg: Optional[str] = None) -> None:
-    """``ffmpeg -i input.mp3 -c:a aac -ar 24000 -ac 1 -b:a 32k output.aac``."""
+    """``ffmpeg -i input.mp3 -c:a aac -ar 24000 -ac 1 -b:a 48k output.aac``."""
     exe = ffmpeg or _which_ffmpeg()
     if not exe:
         raise SystemExit("ffmpeg not found on PATH (needed to convert .mp3 → .aac)")
@@ -369,7 +370,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "  --lang en,zh-tw            alias for --voice\n"
             "  --all-voices               every voice/<lang>/ on disk\n"
             "  --list-voices              list available packs and exit\n"
-            "  (default voice pack: en)\n"
+            "  (default voice packs: en, zh-tw)\n"
         ),
     )
     ap.add_argument(

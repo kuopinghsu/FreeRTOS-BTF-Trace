@@ -37,7 +37,7 @@
       <language id="en" label="English"/>
       <language id="zh-tw" label="中文"/>
     </languages>
-    <launch cwd="${BTF}" cmd="${PYTHON} builds/btf_viewer.py ${trace}"/>
+<launch cwd="${BTF}" cmd="${PYTHON} builds/btf_viewer.py ${trace}"/>
   </meta>
 
   <defaults after_voice="1.5" pause="0.8" ai_wait="35" move_duration="0.35" audio_block="false"/>

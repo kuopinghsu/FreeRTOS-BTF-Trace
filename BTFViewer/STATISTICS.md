@@ -1093,7 +1093,7 @@ To *see* a hot migrating task in context (not only read rates in a table):
 
 1. Stay in **Task View** (toolbar **Task**).
 2. Click the task label (e.g. `CS[22]`) to **lock-highlight** it — other tasks stay on the timeline but gray out; do **not** use the legend filter.
-3. Enable **Load** to see that task’s CPU usage **per core** under the timeline (see [CPU Load](#cpu-load)).
+3. Enable **Load** to see that task’s CPU usage **per core** under the timeline (see [CPU Load](README.md#cpu-load)).
 4. Optionally place cursors around the burst and enable **Limit to C1–Cn** so **Statistics → Core Migrations** recomputes for that window. The inspector grid follows the **visible timeline viewport** independently.
 
 ![CS[22] highlighted in Task View with per-core CPU Load](../images/stats/tasks-cpu-load-cs22.svg)
@@ -1485,9 +1485,6 @@ The CDF is included in **Export PNG / SVG** from the plot dialog. It is not inte
 
 Example plots from `tracedata/example-4cores.btf.gz` (4-core SMP trace, 67 tasks) are in [Statistics metric tables](#statistics-metric-tables).
 
----
-
-<a id="export" name="export">&#x200B;</a>
 ---
 
 ## Documentation navigation

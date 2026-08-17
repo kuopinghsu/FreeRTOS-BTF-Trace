@@ -29,7 +29,7 @@ DOCS := $(BUILDS)
 
 DEMO_XML ?= demos/demo_8cores/demo_8cores.xml
 DEMO_LANG ?=
-DEMO_LANGS ?= en
+DEMO_LANGS ?= en,zh-tw
 DEMO_XTF ?= $(BUILDS)/demo_8cores.xtf
 AI_DATASET ?= tests/ai
 AI_FAIL_UNDER ?= 70
@@ -45,11 +45,11 @@ help:
 	@echo "  make web          Web viewer only → builds/btf_viewer.html"
 	@echo "  make bundle       Desktop bundle only → builds/btf_viewer.py"
 	@echo "  make check-bundle Regenerate bundle; fail if it drifts from sources (CI)"
-	@echo "  make doc          Convert README.md + AI.md + WORKFLOWS.md (Pandoc) and btf-viewer-slides.md (Marp) → builds/*.pdf"
+	@echo "  make doc          Convert README/STATISTICS/AI/WORKFLOWS (Pandoc+Mermaid) and slides (Marp) → builds/*.pdf"
 	@echo "  make update-images  Regenerate ../images/stats/*.svg via the desktop CLI"
 	@echo "  make demo         Run guided demo via builds/btf_viewer.py (DEMO_XML, DEMO_LANG, --launch)"
 	@echo "  make demo-voice   Voice pack status (DEMO_XML). See scripts/demo_voice.py"
-	@echo "  make demo-pack    Pack demos/demo_8cores → builds/demo_8cores.xtf (DEMO_LANGS=en or all)"
+	@echo "  make demo-pack    Pack demos/demo_8cores → builds/demo_8cores.xtf (DEMO_LANGS=en,zh-tw or all)"
 	@echo "  make test         Desktop unit tests (QT_QPA_PLATFORM=offscreen)"
 	@echo "  make test-web     Web unit tests (node --test)"
 	@echo "  make test-all     Desktop + web unit tests"
@@ -125,28 +125,69 @@ doc: $(DOCS)/README.pdf $(DOCS)/STATISTICS.pdf $(DOCS)/AI.pdf $(DOCS)/WORKFLOWS.
 # Pandoc's default +blank_before_header extension then refuses to parse those
 # `#`/`##` lines as headings at all — they show up as literal "# Heading" body
 # text in the PDF. Disabling the extension restores normal heading rendering.
+#
+# Mermaid: ```mermaid fences are rendered to PNG via scripts/mermaid-filter.lua
+# (mmdc or npx @mermaid-js/mermaid-cli). Cached under builds/mermaid-cache/.
+#
+# GitHub `<a id="…">` anchors: scripts/html-anchor-filter.lua emits LaTeX
+# \hypertarget so in-document links match GitHub slugs (Keyboard & mouse, etc.).
+#
+# Sibling manuals: scripts/md-pdf-links.lua turns STATISTICS.md#… into
+# STATISTICS.pdf#… so PDF cross-links land on those hypertargets.
+#
+# Emoji: DejaVu has no ❌/🟢/🟡/🔴; scripts/emoji-fallback.lua substitutes
+# for LaTeX only (GitHub keeps the UI glyphs).
+#
+# CJK: DejaVu has no 中/文. If xeCJK.sty is installed, Eisvogel uses it
+# (override font with CJK_MAINFONT=…). Otherwise fontspec + ucharclasses
+# (scripts/cjk-fallback.tex) — this machine often has Droid Sans Fallback
+# without texlive-xecjk.
+CJK_MAINFONT ?= $(shell fc-list :lang=zh family 2>/dev/null | head -1 | cut -d',' -f1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$$//')
+HAS_XECJK := $(shell kpsewhich xeCJK.sty 2>/dev/null)
+CJK_HEADER := $(if $(and $(CJK_MAINFONT),$(if $(HAS_XECJK),,1)),$(BUILDS)/cjk-fallback.tex,)
 PANDOC_PDF_FLAGS := --pdf-engine=xelatex \
     --template=scripts/eisvogel.latex \
 	--lua-filter scripts/math-codeblock.lua \
+	--lua-filter scripts/mermaid-filter.lua \
+	--lua-filter scripts/html-anchor-filter.lua \
+	--lua-filter scripts/md-pdf-links.lua \
+	--lua-filter scripts/emoji-fallback.lua \
 	--resource-path=..:. \
 	-f markdown-blank_before_header \
 	-V mainfont="DejaVu Sans" \
 	-V monofont="DejaVu Sans Mono" \
+	$(if $(and $(CJK_MAINFONT),$(HAS_XECJK)),-V CJKmainfont="$(CJK_MAINFONT)" -V CJKmonofont="$(CJK_MAINFONT)",) \
+	$(if $(CJK_HEADER),--include-in-header=$(CJK_HEADER),) \
 	-V colorlinks=true
 
-$(DOCS)/README.pdf: README.md
+DOC_LUA := scripts/mermaid-filter.lua scripts/math-codeblock.lua \
+	scripts/html-anchor-filter.lua scripts/md-pdf-links.lua \
+	scripts/emoji-fallback.lua
+
+# Ensure mermaid PNG cache exists before pandoc runs.
+$(DOCS)/README.pdf $(DOCS)/STATISTICS.pdf $(DOCS)/AI.pdf $(DOCS)/WORKFLOWS.pdf: | $(DOCS)/.mermaid-cache-stamp
+
+$(DOCS)/.mermaid-cache-stamp:
+	mkdir -p $(BUILDS)/mermaid-cache
+	@touch $@
+
+$(BUILDS)/cjk-fallback.tex: scripts/cjk-fallback.tex
+	mkdir -p $(BUILDS)
+	sed 's/CJKFONT/$(CJK_MAINFONT)/g' $< > $@
+
+$(DOCS)/README.pdf: README.md $(DOC_LUA) $(CJK_HEADER)
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF Trace Viewer" $< -o $@
 
-$(DOCS)/STATISTICS.pdf: STATISTICS.md
+$(DOCS)/STATISTICS.pdf: STATISTICS.md $(DOC_LUA) $(CJK_HEADER)
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF Viewer — Statistics" $< -o $@
 
-$(DOCS)/AI.pdf: AI.md
+$(DOCS)/AI.pdf: AI.md $(DOC_LUA) $(CJK_HEADER)
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF AI Assistant" $< -o $@
 
-$(DOCS)/WORKFLOWS.pdf: WORKFLOWS.md
+$(DOCS)/WORKFLOWS.pdf: WORKFLOWS.md $(DOC_LUA) $(CJK_HEADER)
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF Viewer — Analysis Workflows" $< -o $@
 
