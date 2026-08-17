@@ -1,6 +1,8 @@
 # Demo XML descriptions
 
-Generic GUI demos for [`../scripts/demo_runner.py`](../scripts/demo_runner.py).
+Generic GUI demos for the in-app overlay tour
+([`../btf_viewer_pkg/demo_inapp.py`](../btf_viewer_pkg/demo_inapp.py),
+Web [`../web/src/utils/demoRunner.js`](../web/src/utils/demoRunner.js)).
 
 Each full demo lives in its own folder (XML + frozen trace + narration).
 
@@ -26,24 +28,27 @@ make demo DEMO_LANG=zh-tw
 # Shareable zip pack (Open / drag in the viewer):
 make demo-pack                    # → builds/demo_8cores.xtf (en + zh-tw)
 # or:
-python3 scripts/demo_runner.py demos/demo_8cores/demo_8cores.xml --launch --interactive
-python3 scripts/demo_runner.py demos/demo_8cores/demo_8cores.xml --launch --lang zh-tw
-python3 scripts/demo_runner.py builds/demo_8cores.xtf --launch --lang zh-tw
+python3 builds/btf_viewer.py demos/demo_8cores/demo_8cores.xml
+BTFVIEWER_DEMO_LANG=zh-tw python3 builds/btf_viewer.py demos/demo_8cores/demo_8cores.xml
+python3 builds/btf_viewer.py builds/demo_8cores.xtf
 python3 scripts/demo_voice.py status demos/demo_8cores
 python3 scripts/demo_pack.py demos/demo_8cores -o builds/demo_8cores.xtf --lang en,zh-tw
 ```
 
 Settings for the demo session are stored in `builds/btf_viewer.rc` (next to the bundled app).
 
-See the runner module docstring for the action reference
-(`voice`, `audio` / `play`, `hotkey`, `click`, `macro`, `highlight`,
-`cursors`, `stats_section`, …).
+See [`demo_inapp.py`](../btf_viewer_pkg/demo_inapp.py) and
+[`demoRunner.js`](../web/src/utils/demoRunner.js) for the action reference
+(`audio` / `play`, `move` / `sweep` / `click` overlay, `macro`, `highlight`,
+`cursors`, `stats_section`, …). Keyboard injection (`hotkey` / `type` / `focus`)
+is skipped except Esc to close overlays. Moving the real mouse hides the overlay
+pointer until the next scripted `<move>` (Desktop and Web).
 
 **Viewer demo API**
 
-`--launch` sets `BTFVIEWER_DEMO_API=1` so the runner can drive highlight /
-cursors / zoom / statistics sections over `http://127.0.0.1:8765/demo`
-(override with `--demo-api-port`; disable with `--no-demo-api`).
+The in-app runner calls `MainWindow._demo_handle` directly. Opt-in HTTP
+`BTFVIEWER_DEMO_API=1` still serves `POST http://127.0.0.1:8765/demo` for
+headless control (no extra packages).
 
 ```xml
 <highlight task="CS[27]"/>
@@ -155,9 +160,7 @@ Writes a zip archive (``.xtf``) with a languages-filtered XML, the frozen
 ``DEMO_LANGS``). Voice ``.mp3`` clips are converted to ``.aac``
 (``ffmpeg -c:a aac -ar 24000 -ac 1 -b:a 32k``) and ``<audio file=…>`` paths in
 the packed XML are rewritten to ``.aac``. Pass ``--keep-mp3`` to skip
-conversion. Open or drag the file in Web to play the tour; Desktop Open
-loads the pack’s BTF; ``demo_runner.py builds/demo_8cores.xtf --launch`` runs
-the desktop tour.
+conversion. Open or drag the file in **Web or Desktop** to play the tour.
 
 Declare languages in `<meta>` (or generate that block with `sync-xml`):
 
@@ -169,23 +172,18 @@ Declare languages in `<meta>` (or generate that block with `sync-xml`):
 ```
 
 Default players: **stdlib on Windows** (`scripts/play_audio_clip.py` via winmm/MCI — no pip),
-else macOS `afplay`, `ffplay` / `paplay` / `aplay`. Optional `pygame` if you already have a wheel.  
-Override: `--audio-cmd 'ffplay -nodisp -autoexit'`. Skip clips: `--no-audio`.
+else macOS `afplay`, `ffplay` / `paplay` / `aplay`. Desktop also tries QtMultimedia
+when the PySide6 build includes it.
 
 **Narration + UI overlap**
 
-By default `<audio>` is **non-blocking**: mouse/hotkey actions run while the
+By default `<audio>` is **non-blocking**: overlay and API actions run while the
 clip plays; the runner waits for the clip at the end of each step. Use
-`block="true"`, `defaults audio_block="true"`, or `--audio-block` to wait
-per clip.
+`block="true"` or `defaults audio_block="true"` to wait per clip.
 
 **Window-relative coordinates**
 
-`<point x="0.42" y="0.42"/>` is a fraction of the **detected BTFViewer window**
-(not the full screen). The runner refreshes bounds on `<focus/>` and before
-clicks (macOS: Accessibility / System Events; Linux: `xdotool`; or
-`--win L,T,W,H` / `--window-title`). Calibrate fractions with:
-
-```bash
-python3 scripts/demo_runner.py --calibrate
-```
+`<point x="0.42" y="0.42"/>` is a fraction of the **viewer window**
+(not the full screen). Live toolbar / panel targets from `_demo_target`
+win over XML fractions. `<move>` / `<sweep>` / `<click>` drive a Qt overlay
+pointer (same as Web), not the OS cursor.

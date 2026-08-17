@@ -140,23 +140,24 @@ Scripted tour of the 8-core sample. Desktop (`make demo`) and Web (toolbar **Dem
 <a id="desktop-demo" name="desktop-demo">&#x200B;</a>
 ### Desktop recording ![](../images/readme/h3.svg)
 
-`make demo` launches `builds/btf_viewer.py` with the frozen pack and drives the UI through the demo API (rebuilds the bundle if `btf_viewer_pkg/` is newer).
+`make demo` launches `builds/btf_viewer.py` on the pack XML (rebuilds the bundle if `btf_viewer_pkg/` is newer). **Open** or drop a demo `.xml`, `.xtf`, or pack folder to play the same in-app tour as Web: demo bar, overlay pointer, and XML APIs. Moving the real mouse hides the overlay pointer until the next scripted `<move>`.
 
 ```bash
 cd BTFViewer
 make demo
 make demo DEMO_LANG=zh-tw
-python3 scripts/demo_runner.py demos/demo_8cores/demo_8cores.xml --launch --interactive
+python3 builds/btf_viewer.py demos/demo_8cores/demo_8cores.xml
+python3 builds/btf_viewer.py builds/demo_8cores.xtf
 ```
 
-Narration defaults to the XML `<languages default>` (**English**). Override with `--lang`, `DEMO_LANG`, or `BTFVIEWER_DEMO_LANG`. Recording session settings go in `builds/btf_viewer.rc`. Move the mouse to a screen corner to abort (PyAutoGUI failsafe); Ctrl-C twice exits the runner.
+Narration defaults to the XML `<languages default>` (**English**). Override with `DEMO_LANG`, `BTFVIEWER_DEMO_LANG`, or the demo bar **Voice** menu (remembered in `builds/btf_viewer.rc`). **Space** pauses; **Esc** twice (within 2.5 s) stops.
 
-Engine: [`scripts/demo_runner.py`](scripts/demo_runner.py).
+Engine: [`btf_viewer_pkg/demo_inapp.py`](btf_viewer_pkg/demo_inapp.py) (lockstep with Web [`web/src/utils/demoRunner.js`](web/src/utils/demoRunner.js)). Opt-in HTTP [`demo_api.py`](btf_viewer_pkg/demo_api.py) remains available as `BTFVIEWER_DEMO_API=1`.
 
 <a id="web-demo-pack" name="web-demo-pack">&#x200B;</a>
 ### Web pack and recording ![](../images/readme/h3.svg)
 
-Toolbar **Demo** loads the bundled sample without a file picker. **Open** a demo `.xml`, a shareable `.xtf` pack, or drop the pack folder to run the same script as desktop `make demo`. After picking the XML alone, **Open pack folder** opens a folder dialog (Select/Open is enabled on a directory). The dialog may start in Documents on macOS; navigate to the pack folder. Dropping the pack folder or a `.xtf` onto the viewer skips this step. The viewer then loads the pack’s `.btf.gz`, plays `voice/<lang>/*.mp3`, and drives view mode, Load, Statistics sections, highlights, cursors, and Analysis through in-app APIs. `<move>` / `<sweep>` animate a pointer overlay to the XML `<targets>` (the browser cannot move the OS cursor; hover events still fire so timeline tooltips appear). Opening a `.btf` still loads the trace as usual.
+Toolbar **Demo** loads the bundled sample without a file picker. **Open** a demo `.xml`, a shareable `.xtf` pack, or drop the pack folder to run the same script as desktop `make demo`. After picking the XML alone, **Open pack folder** opens a folder dialog (Select/Open is enabled on a directory). The dialog may start in Documents on macOS; navigate to the pack folder. Dropping the pack folder or a `.xtf` onto the viewer skips this step. The viewer then loads the pack’s `.btf.gz`, plays `voice/<lang>/*.mp3`, and drives view mode, Load, Statistics sections, highlights, cursors, and Analysis through in-app APIs. `<move>` / `<sweep>` animate a pointer overlay to the XML `<targets>` (the browser cannot move the OS cursor; hover events still fire so timeline tooltips appear). Moving the real mouse hides the overlay pointer until the next scripted `<move>`. Opening a `.btf` still loads the trace as usual.
 
 Build a shareable pack (choose voice packs with ``--voice`` / ``DEMO_LANGS``):
 
@@ -168,7 +169,7 @@ python3 scripts/demo_pack.py demos/demo_8cores --list-voices
 python3 scripts/demo_pack.py demos/demo_8cores --voice en,zh-tw -o builds/demo_8cores.xtf
 ```
 
-An `.xtf` is a zip of `*.xml` (languages filtered; audio paths → `.aac`), `*.btf*`, and `voice/<lang>/` (MP3 transcoded to AAC 24 kHz mono 32 kb/s via ffmpeg). Open or drag it in Web to play the tour; Desktop Open/drop loads the pack’s BTF; `demo_runner.py path/to/demo.xtf --launch` runs the desktop tour. Use `--keep-mp3` / `make demo-pack` with a custom pack command to skip AAC conversion.
+An `.xtf` is a zip of `*.xml` (languages filtered; audio paths → `.aac`), `*.btf*`, and `voice/<lang>/` (MP3 transcoded to AAC 24 kHz mono 32 kb/s via ffmpeg). Open or drag it in **Web or Desktop** to play the tour. Use `--keep-mp3` / `make demo-pack` with a custom pack command to skip AAC conversion.
 
 **Record** uses the browser’s display capture; choose this tab and include tab audio. The mouse pointer is included (page overlay for tab capture; native pointer for window/screen). Tab capture does not include the OS pointer, so Record paints one in the page.
 
@@ -185,7 +186,7 @@ voice/<lang>/01_title.mp3
 voice/<lang>/voice.json
 ```
 
-Shipped languages for `demo_8cores`: **en** (English, default), **zh-tw** (中文). On Web, a **Voice** menu on the demo bar restarts the current section in that language (remembered in the browser; otherwise the browser locale). Desktop uses the XML default unless you pass a language flag as above.
+Shipped languages for `demo_8cores`: **en** (English, default), **zh-tw** (中文). A **Voice** menu on the demo bar restarts the current section in that language (Web: remembered in the browser, else the browser locale; Desktop: remembered in settings, else `BTFVIEWER_DEMO_LANG` / `DEMO_LANG`, else the UI locale).
 
 ```bash
 python3 scripts/demo_voice.py status demos/demo_8cores
@@ -535,7 +536,7 @@ Open **Settings** from the toolbar or `Ctrl+,`. Toolbar **Help** opens the keybo
 | **Appearance** | Dark/light theme, fonts, colorblind-safe palette. Desktop font sizes are **pt** (HiDPI-scaled); web sizes are **CSS px**. Defaults look similar; the numbers are not interchangeable. |
 | **Display** | Show/hide Legend, Statistics, Marks, Find, AI, CPU Load; **Timeline overlays** (STI, grid, hover highlight); **Analysis thresholds** (CPU budget % and per-task deadline ns) |
 | **Layout** | Label width, row height, zoom 1:1 density, max cursors, time decimals, CPU/STI sizes |
-| **AI** | Enable, **Auto-apply GUI actions**, **Anonymize task names for cloud**, **Treat this trace as sensitive**, **Log MCP messages to file** (Desktop debug; off by default), preset (Ollama / OpenAI / Gemini / Custom), base URL, model, authentication (none / API key / Sign in), **Allow self-signed TLS**, reply language |
+| **AI** | Enable, **Auto-apply GUI actions**, **Anonymize task names for cloud**, **Treat this trace as sensitive**, **Log MCP messages to file** (Desktop debug; off by default), preset (Ollama / OpenAI / Gemini / Custom), base URL, model, authentication (none / API key / Sign in), **Allow self-signed TLS** (Desktop only; browsers still verify certificates), reply language |
 
 | | Desktop | Web |
 |--|---------|-----|

@@ -190,7 +190,7 @@ class DemoXmlUsesApiTests(unittest.TestCase):
         self.assertLess(body.index('target="ai_tab"'), body.index('<panel name="ai"/>'))
 
     def test_runner_maps_ui_tags(self) -> None:
-        runner = (BTF_ROOT / "scripts" / "demo_runner.py").read_text(
+        runner = (BTF_ROOT / "btf_viewer_pkg" / "demo_inapp.py").read_text(
             encoding="utf-8")
         for needle in (
             '"op": "analysis"',
@@ -211,24 +211,6 @@ class DemoXmlUsesApiTests(unittest.TestCase):
             'tag in ("tick_dist"',
         ):
             self.assertIn(needle, runner)
-
-    def test_pick_free_demo_api_port_avoids_busy(self) -> None:
-        import socket
-        import sys
-
-        scripts = str(BTF_ROOT / "scripts")
-        if scripts not in sys.path:
-            sys.path.insert(0, scripts)
-        import demo_runner as mod  # noqa: E402
-
-        holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.addCleanup(holder.close)
-        holder.bind(("127.0.0.1", 0))
-        holder.listen(1)
-        busy = int(holder.getsockname()[1])
-        chosen = mod.pick_free_demo_api_port(busy)
-        self.assertNotEqual(chosen, busy)
-        self.assertTrue(mod._localhost_port_bindable(chosen))
 
 
 class DemoApiUiTests(unittest.TestCase):

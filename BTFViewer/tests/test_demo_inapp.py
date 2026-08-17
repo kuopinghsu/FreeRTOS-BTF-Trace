@@ -21,6 +21,7 @@ install()
 
 from btf_viewer_pkg.demo_inapp import (  # noqa: E402
     SKIP_TAGS,
+    DemoPointerOverlay,
     build_variables,
     discover_demo_pack,
     expand_vars,
@@ -29,17 +30,42 @@ from btf_viewer_pkg.demo_inapp import (  # noqa: E402
     parse_languages,
     parse_steps,
     parse_targets,
+    should_hide_native_cursor,
+    should_hide_simulated_cursor_on_move,
     should_skip_step,
+    silence_demo_media_logs,
     truthy,
     voice_path_candidates,
 )
+from btf_viewer_pkg.platform import _stderr_line_is_noise  # noqa: E402
 from btf_viewer_pkg.parser import _BTF_OPEN_FILTER  # noqa: E402
 
 DEMO_XML = BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.xml"
 WEB_RUNNER = BTF_ROOT / "web" / "src" / "utils" / "demoRunner.js"
 WEB_APP = BTF_ROOT / "web" / "src" / "App.vue"
+WEB_POINTER = BTF_ROOT / "web" / "src" / "utils" / "demoPointer.js"
 DESKTOP_INAPP = BTF_ROOT / "btf_viewer_pkg" / "demo_inapp.py"
 DESKTOP_MW = BTF_ROOT / "btf_viewer_pkg" / "mainwindow.py"
+README = BTF_ROOT / "README.md"
+
+_PY_TAG_EQ = re.compile(r'tag == "([^"]+)"')
+_PY_TAG_IN = re.compile(r'tag in \(([^)]+)\)')
+_JS_TAG_EQ = re.compile(r"tag === '([^']+)'")
+
+
+def _python_run_action_tags(src: str) -> set[str]:
+    m = re.search(r"def _run_action\(self.*?\n    def run\(", src, re.S)
+    body = m.group(0) if m else src
+    tags = set(_PY_TAG_EQ.findall(body))
+    for inner in _PY_TAG_IN.findall(body):
+        tags.update(re.findall(r'"([^"]+)"', inner))
+    return tags
+
+
+def _js_run_action_tags(src: str) -> set[str]:
+    m = re.search(r"async function runAction\(el\).*?\n  async function run\(", src, re.S)
+    body = m.group(0) if m else src
+    return set(_JS_TAG_EQ.findall(body))
 
 SAMPLE = """<?xml version="1.0" encoding="UTF-8"?>
 <demo name="sample" version="1">
@@ -170,21 +196,7 @@ class DemoInappSourceParityTests(unittest.TestCase):
     def test_runner_maps_same_api_tags(self) -> None:
         py = DESKTOP_INAPP.read_text(encoding="utf-8")
         js = WEB_RUNNER.read_text(encoding="utf-8")
-        for needle in (
-            "analysis",
-            "find",
-            "settings",
-            "tick_dist",
-            "view_mode",
-            "cpu_load",
-            "clear_bookmarks",
-            "clear_annotations",
-            "zoom_1to1",
-            "stats_section",
-            "jump_wcet",
-        ):
-            self.assertIn(f'tag == "{needle}"' if False else needle, py)
-            self.assertIn(needle, js)
+        self.assertEqual(_python_run_action_tags(py), _js_run_action_tags(js))
 
     def test_hotkey_and_type_are_skipped(self) -> None:
         py = DESKTOP_INAPP.read_text(encoding="utf-8")
@@ -201,6 +213,21 @@ class DemoInappSourceParityTests(unittest.TestCase):
         self.assertIn("_start_pending_demo", mw)
         self.assertIn("is_xtf_open_path", mw)
 
+    def test_hover_uses_non_deprecated_qhover_ctor(self) -> None:
+        py = DESKTOP_INAPP.read_text(encoding="utf-8")
+        self.assertIn("QPointF(gp)", py)
+        self.assertIn("silence_demo_media_logs", py)
+        self.assertIn("qt.multimedia.ffmpeg=false", py)
+        self.assertIn("should_hide_simulated_cursor_on_move", py)
+        js_ptr = WEB_POINTER.read_text(encoding="utf-8")
+        self.assertIn("shouldHideSimulatedCursorOnMove", js_ptr)
+        self.assertIn("A parked demo overlay hides as soon as the user moves", js_ptr)
+
+    def test_readme_hides_overlay_on_mouse_move_desktop_and_web(self) -> None:
+        md = README.read_text(encoding="utf-8")
+        needle = "Moving the real mouse hides the overlay pointer until the next scripted `<move>`."
+        self.assertGreaterEqual(md.count(needle), 2)
+
 
 class DemoInappXtfTests(unittest.TestCase):
     def test_xtf_extract_still_returns_xml(self) -> None:
@@ -215,6 +242,97 @@ class DemoInappXtfTests(unittest.TestCase):
             self.assertTrue(xml.endswith("demo_8cores.xml"))
             pack = discover_demo_pack(os.path.dirname(xml))
             self.assertIsNotNone(pack)
+
+
+class DemoPointerHideOnMoveTests(unittest.TestCase):
+    def test_hide_rules_match_web(self) -> None:
+        self.assertFalse(should_hide_native_cursor(["demo"]))
+        self.assertFalse(should_hide_native_cursor(["record"]))
+        self.assertTrue(
+            should_hide_simulated_cursor_on_move({"isTrusted": True}, ["demo"]))
+        self.assertFalse(
+            should_hide_simulated_cursor_on_move({"isTrusted": False}, ["demo"]))
+        self.assertFalse(
+            should_hide_simulated_cursor_on_move({"isTrusted": True}, ["record"]))
+        self.assertTrue(
+            should_hide_simulated_cursor_on_move(
+                {"isTrusted": True}, ["demo", "record"]))
+
+    def test_overlay_hides_on_trusted_move_not_synthetic(self) -> None:
+        from PySide6.QtCore import QEvent
+        from PySide6.QtWidgets import QApplication, QWidget
+
+        app = QApplication.instance() or QApplication(["btf-demo-overlay-test"])
+        host = QWidget()
+        host.show()
+        ov = DemoPointerOverlay(host)
+        ov._user_hidden = False
+        ov.show()
+
+        class TrustedMove:
+            isTrusted = True
+
+            def type(self):
+                return QEvent.Type.MouseMove
+
+        ov.eventFilter(host, TrustedMove())
+        self.assertTrue(ov._user_hidden)
+        self.assertFalse(ov.isVisible())
+
+        ov._user_hidden = False
+        ov.show()
+
+        class Synthetic:
+            isTrusted = False
+
+            def type(self):
+                return QEvent.Type.MouseMove
+
+        ov.eventFilter(host, Synthetic())
+        self.assertFalse(ov._user_hidden)
+        self.assertTrue(ov.isVisible())
+        ov.hide_pointer()
+        host.deleteLater()
+        _ = app
+
+
+class DemoMediaLogSilenceTests(unittest.TestCase):
+    def test_ffmpeg_pipewire_lines_are_noise(self) -> None:
+        samples = (
+            "qt.multimedia.ffmpeg: Using Qt multimedia with FFmpeg version 7.1.3 "
+            "LGPL version 2.1 or later",
+            "[W][15:49:10.560236] pw.conf      | [          conf.c: 1182 "
+            "try_load_conf()] can't load config client.conf: No such file or directory",
+            "[E][15:49:10.560527] pw.conf      | [          conf.c: 1215 "
+            "pw_conf_load_conf_for_context()] can't load config client.conf: "
+            "No such file or directory",
+            "[aac @ 0x74bdd40015c0] Estimating duration from bitrate, "
+            "this may be inaccurate",
+            "Input #0, aac, from '/tmp/btf_xtf_zoy5no_u/voice/en/01_title.aac':",
+            "  Duration: 00:00:33.56, bitrate: 52 kb/s",
+            "  Stream #0:0: Audio: aac (LC), 24000 Hz, mono, fltp, 52 kb/s",
+        )
+        for line in samples:
+            self.assertTrue(_stderr_line_is_noise(line.encode()), line)
+        self.assertFalse(_stderr_line_is_noise(b"error: failed to open trace"))
+
+    def test_silence_demo_media_logs_sets_pipewire(self) -> None:
+        old_pw = os.environ.pop("PIPEWIRE_DEBUG", None)
+        old_rules = os.environ.get("QT_LOGGING_RULES")
+        try:
+            silence_demo_media_logs()
+            self.assertEqual(os.environ.get("PIPEWIRE_DEBUG"), "0")
+            self.assertIn(
+                "qt.multimedia.ffmpeg=false", os.environ.get("QT_LOGGING_RULES", ""))
+        finally:
+            if old_pw is None:
+                os.environ.pop("PIPEWIRE_DEBUG", None)
+            else:
+                os.environ["PIPEWIRE_DEBUG"] = old_pw
+            if old_rules is None:
+                os.environ.pop("QT_LOGGING_RULES", None)
+            else:
+                os.environ["QT_LOGGING_RULES"] = old_rules
 
 
 if __name__ == "__main__":

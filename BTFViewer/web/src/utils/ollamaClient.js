@@ -1336,20 +1336,14 @@ export function aiReachabilityTip(urlBase) {
 }
 
 /** Tip when HTTPS to a private / self-signed AI gateway fails in the browser. */
-export function aiTlsTip(urlBase, tlsVerify = true) {
+export function aiTlsTip(urlBase, _tlsVerify = true) {
   const u = String(urlBase || '')
   if (!/^https:/i.test(u)) return ''
-  if (parseAiTlsVerify(tlsVerify, true)) {
-    return (
-      ' If this host uses a self-signed certificate, the browser cannot skip '
-      + 'the check — trust the cert in the OS/browser, use http:// on a private '
-      + 'LAN, or enable Allow self-signed TLS in the Desktop app.'
-    )
-  }
   return (
-    ' Allow self-signed TLS is on, but browsers still verify certificates. '
-    + 'Trust the cert in the OS/browser, use http:// on a private LAN, or '
-    + 'use the Desktop app.'
+    ' If this host uses a self-signed or private CA certificate, the browser '
+    + 'cannot skip TLS checks — trust the cert in the OS/browser, use http:// '
+    + 'on a private LAN, or use the Desktop app (Settings → AI → '
+    + 'Allow self-signed TLS).'
   )
 }
 

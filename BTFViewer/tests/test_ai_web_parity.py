@@ -474,29 +474,6 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("id=\"what-if-and-optimize-workflow\"", ai_md)
         self.assertIn("id=\"use-cases\"", ai_md)
         self.assertIn("Simulator limits", ai_md)
-        self.assertIn(
-            "`clear_marks` / `reset_view` / `search_timeline` / "
-            "`trigger_compare` / `investigate` / `detect_anomalies` / "
-            "`correlate_events` / `find_critical_path` / `compare_performance` / "
-            "`generate_report` / `check_budget` / `optimize` / `regression_explain` / "
-            "`investigation_replay` / `what_if` / `optimize_experiment` / "
-            "`analyze_traces` / `baseline_score` / `recommend_experiments` / "
-            "`export_investigation` / `bookmark_finding` / `detect_priority_inversion` / "
-            "`find_related_findings` / `compare_tasks` / `explain_finding` / "
-            "`interpret_query` / `validate_experiment` / `manage_hypotheses` / "
-            "`plan_investigation` / `suggest_scope` / `detect_contradictions` / "
-            "`assess_evidence_sufficiency` / `cluster_findings` / "
-            "`generate_fingerprint` / `find_similar_investigations` / "
-            "`regression_localize` / `build_causal_chain` / "
-            "`generate_experiment_plan` / `record_experiment_outcome` / "
-            "`score_investigation` / `analyze_temporal_causality` / "
-            "`build_task_dependency_graph` / `decompose_response_time` / "
-            "`rank_root_causes` / `verify_claim` / `challenge_conclusion` / "
-            "`investigation_memory` / `cluster_incidents` / "
-            "`close_investigation` / `analyze_distribution` / "
-            "`analyze_periodicity` / `summarize_investigation_context`",
-            ai_md,
-        )
         self.assertNotIn("Max≪Avg", readme)
         self.assertNotIn("Max≪Avg", ai_md)
         workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
@@ -611,30 +588,6 @@ class AiWebParityTests(unittest.TestCase):
             self.assertIn(f"'{metric}'", js)
             self.assertIn(f'"{metric}"', (
                 BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8"))
-        self.assertIn("`add_annotation` / `query_raw_metric` / `export_report`", ai_md)
-        self.assertIn(
-            "`clear_marks` / `reset_view` / `search_timeline` / "
-            "`trigger_compare` / `investigate` / `detect_anomalies` / "
-            "`correlate_events` / `find_critical_path` / `compare_performance` / "
-            "`generate_report` / `check_budget` / `optimize` / `regression_explain` / "
-            "`investigation_replay` / `what_if` / `optimize_experiment` / "
-            "`analyze_traces` / `baseline_score` / `recommend_experiments` / "
-            "`export_investigation` / `bookmark_finding` / `detect_priority_inversion` / "
-            "`find_related_findings` / `compare_tasks` / `explain_finding` / "
-            "`interpret_query` / `validate_experiment` / `manage_hypotheses` / "
-            "`plan_investigation` / `suggest_scope` / `detect_contradictions` / "
-            "`assess_evidence_sufficiency` / `cluster_findings` / "
-            "`generate_fingerprint` / `find_similar_investigations` / "
-            "`regression_localize` / `build_causal_chain` / "
-            "`generate_experiment_plan` / `record_experiment_outcome` / "
-            "`score_investigation` / `analyze_temporal_causality` / "
-            "`build_task_dependency_graph` / `decompose_response_time` / "
-            "`rank_root_causes` / `verify_claim` / `challenge_conclusion` / "
-            "`investigation_memory` / `cluster_incidents` / "
-            "`close_investigation` / `analyze_distribution` / "
-            "`analyze_periodicity` / `summarize_investigation_context`",
-            ai_md,
-        )
         self.assertIn("Save selection as BTF", readme)
         self.assertIn("MAX_SEARCH_HITS = 40", js)
         self.assertIn("_MAX_SEARCH_HITS = 40", (
@@ -763,7 +716,7 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("id=\"investigation-planner\"", readme)
         self.assertIn("id=\"investigation-planner\"", ai_md)
         self.assertIn("Cheapest evidence first", readme)
-        self.assertIn("btf_viewer_pkg/ai_planner.py", ai_md)
+        self.assertIn("Cheapest evidence first", ai_md)
         self.assertNotIn("TODO.md", readme)
         self.assertNotIn("TODO.md", ai_md)
         self.assertFalse((BTF_ROOT / "TODO.md").exists())
@@ -825,7 +778,7 @@ class AiWebParityTests(unittest.TestCase):
             self.assertIn(f"def {name}(", causal_py, name)
             self.assertIn(f"export function {camel(name)}(", causal_js, name)
 
-        self.assertIn("btf_viewer_pkg/ai_causal.py", ai_md)
+        self.assertIn("Host-side heuristics", ai_md)
         self.assertNotIn("simulate_schedule", AI_VIEWER_TOOL_NAMES)
         self.assertIn("def dependency_trace_context", tools_py)
         self.assertIn("export function dependencyTraceContext", tools_js)
@@ -848,14 +801,11 @@ class AiWebParityTests(unittest.TestCase):
 
         gui = re.search(r"## GUI tools.*?(?:\n## )", ai_md, re.S)
         self.assertIsNotNone(gui)
-        immediate = re.search(
-            r"Read-only ((?:`[^`]+` / )+`[^`]+`) batches run immediately",
-            gui.group(0),
-        )
-        self.assertIsNotNone(immediate)
-        listed = re.findall(r"`([^`]+)`", immediate.group(1))
+        self.assertIn("run immediately", gui.group(0))
+        self.assertIn("Complete GUI tool reference", gui.group(0))
         query = [n for n in AI_VIEWER_TOOL_NAMES if is_query_tool(n)]
-        self.assertEqual(listed, query)
+        for name in query:
+            self.assertIn(f"| `{name}` |", ai_md, name)
 
         leftover = [
             n for n in AI_VIEWER_TOOL_NAMES
@@ -1320,7 +1270,8 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("Self-signed TLS |", ai_md)
         self.assertIn("Model picker |", ai_md)
         self.assertIn("Allow self-signed TLS", stats)
-        self.assertIn("Allow self-signed TLS", vue)
+        self.assertNotIn("Allow self-signed TLS", vue)
+        self.assertIn("Allow self-signed TLS", js)
         self.assertIn("Allow self-signed TLS", readme)
         self.assertIn("Allow self-signed TLS", ai_md)
         self.assertIn("def parse_ai_tls_verify", assist)

@@ -23,7 +23,7 @@ WEB_APP = BTF_ROOT / "web" / "src" / "App.vue"
 WEB_SETTINGS = BTF_ROOT / "web" / "src" / "components" / "SettingsDialog.vue"
 DESKTOP_MW = BTF_ROOT / "btf_viewer_pkg" / "mainwindow.py"
 DESKTOP_STATS = BTF_ROOT / "btf_viewer_pkg" / "stats.py"
-PY_RUNNER = BTF_ROOT / "scripts" / "demo_runner.py"
+PY_RUNNER = BTF_ROOT / "btf_viewer_pkg" / "demo_inapp.py"
 
 SETTINGS_PAGES = ("Appearance", "Display", "Layout", "AI")
 
@@ -76,8 +76,6 @@ class DemoSettingsSourceParityTests(unittest.TestCase):
 
         self.assertIn('"op": "settings"', py_runner)
         self.assertIn('for key in ("page", "name", "open", "close", "action")', py_runner)
-        self.assertIn('<settings page="AI"/>', py_runner)
-        self.assertIn('<settings close="true"/>', py_runner)
 
     def test_page_mapper_order_matches_web(self) -> None:
         """AI is matched before Display/Layout on both sides."""

@@ -596,33 +596,6 @@
                 </div>
               </div>
 
-              <div class="settings-form-row settings-form-row--check">
-                <span
-                  class="settings-form-label"
-                  aria-hidden="true"
-                ></span>
-                <div class="settings-form-field">
-                  <label
-                    class="settings-check"
-                    title="Skip HTTPS certificate checks for this preset (self-signed or private CA). Use only on networks you trust. Browsers cannot skip this check — trust the cert in the OS, use http:// on a private LAN, or use the Desktop app."
-                  >
-                    <input
-                      v-model="aiAllowInsecureTls"
-                      type="checkbox"
-                    >
-                    Allow self-signed TLS
-                  </label>
-                  <p
-                    v-if="aiAllowInsecureTls"
-                    class="settings-help"
-                  >
-                    Desktop skips certificate checks for this preset. This browser
-                    still verifies TLS — trust the cert in the OS/browser, use
-                    http:// on a private LAN, or use the Desktop app.
-                  </p>
-                </div>
-              </div>
-
               <div class="settings-form-row">
                 <span class="settings-form-label">Reply language:</span>
                 <select
@@ -776,7 +749,6 @@ import {
   normalizeAiAuthMode,
   normalizeAiPreset,
   parseAiSettingsJson,
-  parseAiTlsVerify,
   parseExtraAiPresets,
   resolveAiSettings,
   sanitizeAiPresetId,
@@ -857,16 +829,6 @@ const aiAuthMode = computed({
         ...cur,
         authMode: normalizeAiAuthMode(v, { presetId: aiPreset.value }),
       },
-    }
-  },
-})
-const aiAllowInsecureTls = computed({
-  get: () => !parseAiTlsVerify(draft.aiPresets?.[aiPreset.value]?.tlsVerify, true),
-  set: (v) => {
-    const cur = draft.aiPresets?.[aiPreset.value] || {}
-    draft.aiPresets = {
-      ...draft.aiPresets,
-      [aiPreset.value]: { ...cur, tlsVerify: !v },
     }
   },
 })

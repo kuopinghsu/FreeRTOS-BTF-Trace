@@ -26,8 +26,9 @@ WEB_XML = BTF_ROOT / "web" / "src" / "utils" / "demoXml.js"
 WEB_RUNNER = BTF_ROOT / "web" / "src" / "utils" / "demoRunner.js"
 WEB_APP = BTF_ROOT / "web" / "src" / "App.vue"
 PY_VOICE = BTF_ROOT / "scripts" / "demo_voice.py"
-PY_RUNNER = BTF_ROOT / "scripts" / "demo_runner.py"
+PY_RUNNER = BTF_ROOT / "btf_viewer_pkg" / "demo_inapp.py"
 MAKEFILE = BTF_ROOT / "Makefile"
+DESKTOP_MW = BTF_ROOT / "btf_viewer_pkg" / "mainwindow.py"
 
 PACK_LANGS = ("en", "zh-tw")
 NORMALIZE_CASES = (
@@ -77,7 +78,13 @@ def _load_mod(name: str, path: Path):
 
 
 dv = _load_mod("demo_voice", PY_VOICE)
-dr = _load_mod("demo_runner", PY_RUNNER)
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+if str(BTF_ROOT) not in sys.path:
+    sys.path.insert(0, str(BTF_ROOT))
+from btf_viewer_pkg._bootstrap import install  # noqa: E402
+install()
+from btf_viewer_pkg import demo_inapp as dr  # noqa: E402
 
 
 def _js_labels(src: str) -> dict:
@@ -164,7 +171,8 @@ class DemoVoiceSourceParityTests(unittest.TestCase):
         js_voice = WEB_VOICE.read_text(encoding="utf-8")
         py_voice = PY_VOICE.read_text(encoding="utf-8")
         self.assertIn("voicePathCandidates(rel, voiceLang, voiceLangs.defaultId)", web)
-        self.assertIn("voice_path_candidates(p, lang, default_lang)", py)
+        self.assertIn("voice_path_candidates(", py)
+        self.assertIn("self._voice_lang, self.languages[\"defaultId\"]", py)
         self.assertIn("${prefix}/${langN}/${basename}", js_voice)
         self.assertIn("${prefix}/${basename}", js_voice)
         self.assertIn("${prefix}/${defN}/${basename}", js_voice)
@@ -175,14 +183,16 @@ class DemoVoiceSourceParityTests(unittest.TestCase):
     def test_web_voice_menu_and_desktop_lang_flag(self) -> None:
         app = WEB_APP.read_text(encoding="utf-8")
         runner = PY_RUNNER.read_text(encoding="utf-8")
+        mw = DESKTOP_MW.read_text(encoding="utf-8")
         mk = MAKEFILE.read_text(encoding="utf-8")
         self.assertIn('class="demo-lang-select"', app)
         self.assertIn("setVoiceLang", app)
         self.assertIn("btf-demo-voice-lang", app)
-        self.assertIn('"--lang"', runner)
+        self.assertIn("demo_lang_select", runner)
         self.assertIn("BTFVIEWER_DEMO_LANG", runner)
-        self.assertIn("XML <languages default>", runner)
+        self.assertIn("languages default", runner)
         self.assertNotIn("LC_MESSAGES", runner)
+        self.assertIn("voice_lang", mw)
         self.assertIn("DEMO_LANG", mk)
         self.assertIn("demo_voice.py status", mk)
 

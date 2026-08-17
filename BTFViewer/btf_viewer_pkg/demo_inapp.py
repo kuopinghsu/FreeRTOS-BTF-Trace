@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from PySide6.QtCore import (
-    QEasingCurve, QEvent, QPoint, QPointF, QRect, QSize, Qt, QTimer,
+    QEasingCurve, QEvent, QLoggingCategory, QPoint, QPointF, QRect, QSize, Qt,
     QUrl, QVariantAnimation, Signal,
 )
 from PySide6.QtGui import QColor, QHoverEvent, QMouseEvent, QPainter, QPainterPath
@@ -33,6 +33,23 @@ SKIP_TAGS = frozenset({
 })
 _LANG_RE = re.compile(r"^[a-z]{2}(?:-[a-z0-9]+)?$", re.I)
 _AUDIO_RE = re.compile(r"\.(mp3|wav|m4a|ogg|flac|aac|aiff|aif)$", re.I)
+_DEMO_MEDIA_LOG_RULES = "qt.multimedia.ffmpeg=false"
+
+
+def silence_demo_media_logs() -> None:
+    """Quiet Qt FFmpeg / PipeWire chatter from in-app AAC playback."""
+    os.environ.setdefault("PIPEWIRE_DEBUG", "0")
+    os.environ.setdefault("WIREPLUMBER_DEBUG", "0")
+    cur = (os.environ.get("QT_LOGGING_RULES") or "").strip()
+    if _DEMO_MEDIA_LOG_RULES not in cur:
+        os.environ["QT_LOGGING_RULES"] = (
+            f"{cur};{_DEMO_MEDIA_LOG_RULES}" if cur else _DEMO_MEDIA_LOG_RULES
+        )
+    try:
+        rules = os.environ["QT_LOGGING_RULES"].replace(",", "\n").replace(";", "\n")
+        QLoggingCategory.setFilterRules(rules)
+    except Exception:
+        pass
 _VOICE_LABELS = {
     "en": "English",
     "zh": "简体中文",
@@ -154,7 +171,10 @@ def voice_path_candidates(
 ) -> List[Any]:
     as_path = isinstance(rel, Path)
     n = rel.as_posix() if as_path else str(rel or "")
-    n = n.replace("\\", "/").lstrip("./").replace("//", "/")
+    n = n.replace("\\", "/")
+    if n.startswith("./"):
+        n = n[2:]
+    n = n.replace("//", "/")
     if not n:
         return []
     parts = n.split("/")
@@ -467,6 +487,42 @@ def should_skip_step(
     return False
 
 
+def _event_is_trusted(event: Any) -> bool:
+    """Web ``event.isTrusted``; Qt maps that to ``QEvent.spontaneous()``."""
+    if event is None:
+        return False
+    if isinstance(event, dict):
+        return bool(event.get("isTrusted"))
+    trusted = getattr(event, "isTrusted", None)
+    if trusted is not None:
+        return bool(trusted)
+    spontaneous = getattr(event, "spontaneous", None)
+    if callable(spontaneous):
+        return bool(spontaneous())
+    return False
+
+
+def should_hide_native_cursor(_owner_list: Any = None) -> bool:
+    """Lockstep with Web ``shouldHideNativeCursor`` (always false)."""
+    return False
+
+
+def should_hide_simulated_cursor_on_move(event: Any, owner_list: Any = None) -> bool:
+    """Real mouse motion hides the parked demo overlay (Web lockstep)."""
+    if not _event_is_trusted(event):
+        return False
+    owners = owner_list if isinstance(owner_list, set) else set(owner_list or [])
+    if "record" in owners and "demo" not in owners:
+        return False
+    return "demo" in owners
+
+
+_DEMO_MOVE_EVENT_TYPES = {QEvent.Type.MouseMove, QEvent.Type.HoverMove}
+_ptr_move = getattr(QEvent.Type, "PointerMove", None)
+if _ptr_move is not None:
+    _DEMO_MOVE_EVENT_TYPES.add(_ptr_move)
+
+
 # ---------------------------------------------------------------------------
 # Overlay + banner
 # ---------------------------------------------------------------------------
@@ -482,7 +538,22 @@ class DemoPointerOverlay(QWidget):
         self.setFixedSize(24, 24)
         self.hide()
         self._anim: Optional[QVariantAnimation] = None
+        self._anim_done: Optional[Callable[[], None]] = None
+        self._user_hidden = False
         self.on_moved: Optional[Callable[[QPoint], None]] = None
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        try:
+            et = event.type()
+        except Exception:
+            return False
+        if et in _DEMO_MOVE_EVENT_TYPES and should_hide_simulated_cursor_on_move(
+                event, ("demo",)):
+            self.hide_pointer()
+        return False
 
     def paintEvent(self, event) -> None:  # noqa: N802
         p = QPainter(self)
@@ -501,7 +572,19 @@ class DemoPointerOverlay(QWidget):
         p.drawPath(path)
         p.end()
 
+    def _stop_anim(self, *, complete: bool) -> None:
+        anim = self._anim
+        cb = self._anim_done
+        self._anim = None
+        self._anim_done = None
+        if anim is not None:
+            anim.stop()
+        if complete and cb is not None:
+            cb()
+
     def _place(self, local: QPoint) -> None:
+        if self._user_hidden:
+            return
         self.move(local.x(), local.y())
         self.raise_()
         self.show()
@@ -509,15 +592,14 @@ class DemoPointerOverlay(QWidget):
             self.on_moved(local)
 
     def jump_to_window(self, local: QPoint) -> None:
-        if self._anim is not None:
-            self._anim.stop()
-            self._anim = None
+        self._user_hidden = False
+        self._stop_anim(complete=True)
         self._place(local)
 
     def animate_to_window(self, local: QPoint, duration_s: float, done: Callable[[], None]) -> None:
+        self._user_hidden = False
         start = QPoint(self.x(), self.y()) if self.isVisible() else local
-        if self._anim is not None:
-            self._anim.stop()
+        self._stop_anim(complete=True)
         ms = max(0, int(duration_s * 1000))
         if ms <= 0 or start == local:
             self._place(local)
@@ -539,19 +621,22 @@ class DemoPointerOverlay(QWidget):
         anim.valueChanged.connect(_step)
 
         def _finished() -> None:
+            if self._anim is not anim:
+                return
             self._anim = None
+            self._anim_done = None
             self._place(local)
             done()
 
         anim.finished.connect(_finished)
         self._anim = anim
+        self._anim_done = done
         self.show()
         anim.start()
 
     def hide_pointer(self) -> None:
-        if self._anim is not None:
-            self._anim.stop()
-            self._anim = None
+        self._user_hidden = True
+        self._stop_anim(complete=True)
         self.hide()
 
 
@@ -722,6 +807,7 @@ class InAppDemoRunner:
         self._audio_done = threading.Event()
         self._audio_done.set()
         self.aborted = False
+        silence_demo_media_logs()
 
     @property
     def voice_lang(self) -> str:
@@ -891,6 +977,7 @@ class InAppDemoRunner:
             hover = QHoverEvent(
                 QEvent.Type.HoverMove,
                 QPointF(lp),
+                QPointF(gp),
                 QPointF(lp),
                 Qt.KeyboardModifier.NoModifier,
             )
@@ -1025,6 +1112,7 @@ class InAppDemoRunner:
             self._wait_audio()
 
     def _start_audio_gui(self, path: Path) -> bool:
+        silence_demo_media_logs()
         try:
             from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
         except ImportError:

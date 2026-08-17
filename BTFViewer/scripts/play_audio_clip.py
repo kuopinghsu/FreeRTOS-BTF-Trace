@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Play one audio file to completion (helper for demo_runner).
+"""Play one audio file to completion (helper for the in-app demo tour).
 
 Prefer order (first that works):
   1. Windows: stdlib ``ctypes`` + ``winmm`` MCI (no pip; MP3/WAV)
@@ -20,7 +20,7 @@ from pathlib import Path
 
 
 def _ignore_sigint() -> None:
-    """Parent demo_runner owns Ctrl-C; do not dump a traceback from afplay wait."""
+    """Parent owns Ctrl-C; do not dump a traceback from afplay wait."""
     try:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
     except Exception:
@@ -165,7 +165,7 @@ def play_file(path: Path) -> None:
         "No lightweight player worked.\n"
         "  Windows: winmm MCI should work with stdlib only — see errors below.\n"
         "  Optional: python -m pip install pygame  (needs a wheel for your Python)\n"
-        "  Or: install ffplay, or pass --audio-cmd to demo_runner\n"
+        "  Or: install ffplay\n"
     )
     raise RuntimeError(tip + "\n".join(f"  - {e}" for e in errors))
 

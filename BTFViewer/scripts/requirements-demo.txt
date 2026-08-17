@@ -1,2 +1,0 @@
-# Optional deps for scripts/demo_runner.py (screen-capture demo)
-pyautogui>=0.9.54

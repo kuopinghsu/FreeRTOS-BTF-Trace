@@ -39,7 +39,8 @@ from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from operator import attrgetter as _attrgetter
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Sequence, Tuple, Any
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Any, Set, Union
+import xml.etree.ElementTree as ET
 
 from PySide6.QtCore import (
     QBuffer, QByteArray, QEasingCurve, QEvent, QEventLoop, QIODevice, QLineF, QMimeData,
@@ -47,7 +48,7 @@ from PySide6.QtCore import (
     QPropertyAnimation, QVariantAnimation, Signal, Slot,
 )
 from PySide6.QtGui import (
-    QBrush, QColor, QCursor, QDesktopServices, QDrag, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage, QKeySequence, QLinearGradient, QPainter,
+    QBrush, QColor, QCursor, QDesktopServices, QDrag, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QHoverEvent, QIcon, QImage, QKeySequence, QLinearGradient, QMouseEvent, QPainter,
     QPainterPath, QPainterPathStroker, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTextCharFormat, QTextCursor, QTextOption, QTransform, QWheelEvent,
 )
 from PySide6.QtSvg import QSvgGenerator, QSvgRenderer

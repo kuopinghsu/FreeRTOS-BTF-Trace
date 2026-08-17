@@ -33,7 +33,7 @@ class DemoPackTests(unittest.TestCase):
         self.assertIn("en", ids)
         self.assertEqual(
             resolve_voice_selection(DEMO_DIR, voice_args=[]),
-            ["en"],
+            ["en", "zh-tw"],
         )
         self.assertEqual(
             resolve_voice_selection(DEMO_DIR, voice_args=["en"]),

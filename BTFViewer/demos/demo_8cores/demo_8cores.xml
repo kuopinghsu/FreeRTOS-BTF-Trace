@@ -1,24 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  BTFViewer demo recording script (demo_runner.py).
+  BTFViewer demo script (in-app overlay tour).
 
   Run (from BTFViewer/):
     make demo
-    # or: python3 scripts/demo_runner.py demos/demo_8cores/demo_8cores.xml
-    #     (add the launch flag to start builds/btf_viewer.py)
-    Flags: launch, interactive, dry-run, short, skip-tags, demo-api-port (see runner -h).
+    # or: python3 builds/btf_viewer.py demos/demo_8cores/demo_8cores.xml
     Note: XML comments must not contain double-hyphen sequences.
-    The launch flag enables BTFVIEWER_DEMO_API for highlight/cursors/stats_section
-    and UI commands (view_mode, cpu_load, analysis, find, panel). Do not click
-    toolbar icons by screen coordinate — send those as demo API events.
-    Launch uses builds/btf_viewer.py (settings: builds/btf_viewer.rc).
+    Open or drop this XML, the folder, or a packed .xtf in Desktop or Web.
+    Toolbar icons, tabs, Analysis, and Find are demo API events, not overlay clicks.
 
   Trace snapshot: demo_8cores.btf.gz (frozen copy in this demo folder;
   do not point at tracedata/example-8cores.btf.gz — that file may change).
   Narration: text/{lang}/*.txt → voice/{lang}/*.mp3 (see scripts/demo_voice.py)
   TTS tip: write Free-RTOS (with hyphen) so speech engines say it correctly.
   Variables: REPO, BTF, PYTHON, MOD, XML_DIR, trace, cwd (as ${name})
-  Hotkey "mod" expands to Command on macOS, Ctrl elsewhere.
 -->
 <demo name="BTFViewer demo 8cores" version="1">
 

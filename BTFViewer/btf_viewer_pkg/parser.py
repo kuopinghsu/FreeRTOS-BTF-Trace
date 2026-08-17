@@ -102,8 +102,8 @@ _MAX_TRACE_FILE_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB guard vs. memory exhaust
 # a BTF-only default leaves .xtf grayed until the user switches once.
 _BTF_OPEN_FILTER = (
     "BTF traces and demo packs "
-    "(*.btf *.btf.gz *.btf.bz2 *.btf.zip *.xtf *.gz *.bz2 *.zip);;"
-    "Demo packs (*.xtf);;"
+    "(*.btf *.btf.gz *.btf.bz2 *.btf.zip *.xtf *.xml *.gz *.bz2 *.zip);;"
+    "Demo packs (*.xtf *.xml);;"
     "All files (*)"
 )
 _BTF_NAME_EXTS = (".btf", ".btf.gz", ".btf.bz2", ".btf.zip", ".gz", ".bz2", ".zip")

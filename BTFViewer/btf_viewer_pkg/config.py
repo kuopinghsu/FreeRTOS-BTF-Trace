@@ -1061,6 +1061,22 @@ _IC_HELP = (
     "c.1-.6.5-1 1.1-1 .7 0 1.1.4 1.1 1 0 .4-.2.7-.8 1.1-.8.5-1.3 1-1.3 2v.3h1"
     "v-.2c0-.6.3-.9.9-1.3.7-.5 1.2-1 1.2-1.9 0-1.1-.9-1.9-2.1-1.9z"
 )
+# Demo bar glyphs: keep in sync with web/src/utils/toolbarIcons.js.
+_IC_DEMO_PREV = (
+    "M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708"
+    "l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0z"
+)
+_IC_DEMO_PAUSE = (
+    "M4.5 2a1 1 0 0 1 1 1v10a1 1 0 0 1-2 0V3a1 1 0 0 1 1-1zm6 0a1 1 0 0 1 1 1"
+    "v10a1 1 0 0 1-2 0V3a1 1 0 0 1 1-1z"
+)
+_IC_DEMO_PLAY = (
+    "M4.5 2.5a.5.5 0 0 1 .78-.42l8 5.5a.5.5 0 0 1 0 .84l-8 5.5A.5.5 0 0 1 4.5 13.5v-11z"
+)
+_IC_DEMO_NEXT = (
+    "M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708"
+    "L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708z"
+)
 
 # App icon - multi-colour 72x72 SVG rendered in the About dialog header.
 # Timeline lanes + amber cursor + AI insight badge (keep in sync with

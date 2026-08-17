@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -10,6 +11,17 @@ import zipfile
 from pathlib import Path
 
 BTF_ROOT = Path(__file__).resolve().parents[1]
+if str(BTF_ROOT) not in sys.path:
+    sys.path.insert(0, str(BTF_ROOT))
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from btf_viewer_pkg._bootstrap import install  # noqa: E402
+
+install()
+
+from btf_viewer_pkg import demo_inapp as dr  # noqa: E402
+
 DEMO_DIR = BTF_ROOT / "demos" / "demo_8cores"
 
 
@@ -23,7 +35,6 @@ def _load_mod(name: str, path: Path):
 
 
 dv = _load_mod("demo_voice", BTF_ROOT / "scripts" / "demo_voice.py")
-dr = _load_mod("demo_runner", BTF_ROOT / "scripts" / "demo_runner.py")
 
 
 class DemoVoicePackTests(unittest.TestCase):

@@ -1,5 +1,5 @@
 /**
- * Parse BTFViewer demo XML (same schema as scripts/demo_runner.py).
+ * Parse BTFViewer demo XML (same schema as btf_viewer_pkg/demo_inapp.py).
  * Stack parser — no DOMParser — so Node tests can import this module.
  */
 

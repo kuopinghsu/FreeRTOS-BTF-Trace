@@ -9,13 +9,28 @@ _STDERR_NOISE_MACOS: tuple = (
     b"NSSoftLinking",
     b"HIToolbox framework",
 )
+# Qt multimedia FFmpeg / PipeWire dump AAC probes on Linux (in-app demo).
+_STDERR_NOISE_MEDIA: tuple = (
+    b"qt.multimedia.ffmpeg",
+    b"pw.conf",
+    b"can't load config client.conf",
+    b"Estimating duration from bitrate",
+    b"Input #0, aac, from ",
+    b"Stream #0:0: Audio: aac",
+)
+
+def _stderr_line_is_noise(line: bytes) -> bool:
+    if any(p in line for p in _STDERR_NOISE_MACOS):
+        return True
+    if any(p in line for p in _STDERR_NOISE_MEDIA):
+        return True
+    stripped = line.lstrip()
+    return stripped.startswith(b"Duration:") and b"bitrate:" in line
 
 def _macos_stderr_line_is_noise(line: bytes) -> bool:
-    return any(p in line for p in _STDERR_NOISE_MACOS)
+    return _stderr_line_is_noise(line)
 
 def _install_macos_stderr_filter() -> None:
-    if sys.platform != "darwin":
-        return
     if os.environ.get("BTF_NO_STDERR_FILTER"):
         return
     try:
@@ -43,12 +58,12 @@ def _install_macos_stderr_filter() -> None:
                     leftover += chunk
                     while b"\n" in leftover:
                         line, leftover = leftover.split(b"\n", 1)
-                        if not _macos_stderr_line_is_noise(line):
+                        if not _stderr_line_is_noise(line):
                             try:
                                 os.write(original_fd, line + b"\n")
                             except OSError:
                                 pass
-            if leftover and not _macos_stderr_line_is_noise(leftover):
+            if leftover and not _stderr_line_is_noise(leftover):
                 try:
                     os.write(original_fd, leftover)
                 except OSError:

@@ -106,6 +106,7 @@ describe('AI endpoint helpers', () => {
     })
     assert.equal(active.tlsVerify, false)
     assert.match(aiTlsTip(active.baseUrl, true), /self-signed/)
+    assert.match(aiTlsTip(active.baseUrl, false), /self-signed/)
     assert.match(aiTlsTip(active.baseUrl, false), /Desktop/)
     assert.equal(aiTlsTip('http://localhost:11434/v1', true), '')
   })

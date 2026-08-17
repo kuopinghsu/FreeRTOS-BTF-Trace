@@ -30,6 +30,10 @@ from .ai_assistant import (
     set_ai_mcp_log_enabled,
 )
 from .demo_api import demo_api_enabled, demo_api_port, start_demo_api
+from .demo_inapp import (
+    DemoPointerOverlay, DemoStatusBanner, InAppDemoRunner, discover_demo_pack,
+    preferred_voice_lang,
+)
 from .ai_tools import (
     AI_TOOL_ADD_ANNOTATION,
     AI_TOOL_ANALYZE_TRACES,
@@ -1676,6 +1680,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._dock_stabilize_timer: Optional[QTimer] = None
         self._right_dock_custom_drag: bool = False
         self._progress_dialog: Optional[QProgressDialog] = None
+        self._pending_demo: Optional[dict] = None
+        self._demo_runner: Optional[InAppDemoRunner] = None
+        self._demo_overlay: Optional[DemoPointerOverlay] = None
+        self._demo_thread: Optional[threading.Thread] = None
+        self._demo_nav_armed: bool = False
+        self._demo_nav_arm_timer: Optional[QTimer] = None
+        self._demo_esc_at: float = 0.0
+        self._demo_skip_at: float = 0.0
 
         self._find_marker_items: List[QGraphicsItem] = []
         self._heatmap_dlg: Optional[_CorridorInspectorDialog] = None
@@ -1744,6 +1756,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             _sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
             _sc.activated.connect(
                 lambda k=_key: self._pan_timeline_arrow(k))
+
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
 
         # Restore all persisted settings (geometry, zoom, orientation, ...).
         self._restore_settings()
@@ -1837,8 +1853,23 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         finally:
             self._dock_layout_settling = False
 
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if (event.type() == QEvent.Type.KeyPress
+                and self._demo_runner is not None
+                and not getattr(event, "isAutoRepeat", lambda: False)()):
+            key = event.key()
+            if key == Qt.Key.Key_Escape:
+                self._on_demo_escape()
+                return True
+            if key == Qt.Key.Key_Space:
+                if self._demo_nav_armed:
+                    self._demo_runner.toggle_pause()
+                return True
+        return super().eventFilter(obj, event)
+
     def _on_app_about_to_quit(self) -> None:
         """Last-chance parse-thread join (closeEvent already did the heavy lifting)."""
+        self._stop_inapp_demo()
         self._stop_parse_thread(wait_ms=200)
 
     def _dismiss_auxiliary_windows(self) -> None:
@@ -3582,7 +3613,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     @staticmethod
     def _drop_candidate_paths(raw: str) -> list:
-        """Resolve a dropped file/folder URL to one or more BTF paths."""
+        """Resolve a dropped file/folder URL to one or more open paths."""
         if not raw:
             return []
         p = Path(raw)
@@ -3590,11 +3621,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return [raw]
         if p.is_file() and is_btf_open_path(raw):
             return [raw]
-        folder = None
         if p.is_file() and p.suffix.lower() == ".xml":
+            if discover_demo_pack(raw):
+                return [raw]
             folder = p.parent
         elif p.is_dir():
+            if discover_demo_pack(raw):
+                return [raw]
             folder = p
+        else:
+            folder = None
         if folder is None or not folder.is_dir():
             return []
         found = []
@@ -3804,6 +3840,27 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QLabel#trace_quality_banner {{
                 background:#5c3d00; color:#ffe8a3; padding:6px 12px; font-size:12px;
                 border-bottom:1px solid #8a6200;
+            }}
+            QWidget#demo_status_banner {{
+                background:#1b3a4a; color:#cdefff; padding:0px;
+                border-bottom:1px solid #2a5a70;
+            }}
+            QWidget#demo_status_banner QPushButton {{
+                background:transparent; border:none; border-radius:3px; padding:0;
+                color:#cdefff;
+            }}
+            QWidget#demo_status_banner QPushButton:hover {{
+                background:rgba(255,255,255,0.14);
+            }}
+            QWidget#demo_status_banner QPushButton:disabled {{
+                color:rgba(205,239,255,0.35);
+            }}
+            QWidget#demo_status_banner QComboBox {{
+                background:#16303c; color:#cdefff; border:1px solid #2a5a70;
+                padding:0 4px; min-height:1.4em; font-size:11px;
+            }}
+            QWidget#demo_status_banner QLabel {{
+                color:#cdefff; font-size:12px;
             }}
             QCheckBox   {{ font-size:{_ui_fs}; }}
             QCheckBox::indicator              {{ width:13px; height:13px; border-radius:2px;
@@ -4247,10 +4304,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._trace_quality_banner.setWordWrap(True)
         self._trace_quality_banner.setVisible(False)
 
+        self._demo_status_banner = DemoStatusBanner()
+        self._demo_status_banner.prevClicked.connect(self._on_demo_prev)
+        self._demo_status_banner.pauseClicked.connect(self._on_demo_pause)
+        self._demo_status_banner.nextClicked.connect(self._on_demo_next)
+        self._demo_status_banner.voiceChanged.connect(self._on_demo_voice_lang)
+
         self._central_host = QWidget()
         _central_lay = QVBoxLayout(self._central_host)
         _central_lay.setContentsMargins(0, 0, 0, 0)
         _central_lay.setSpacing(0)
+        _central_lay.addWidget(self._demo_status_banner)
         _central_lay.addWidget(self._trace_quality_banner)
         _central_lay.addWidget(self._central_stack, 1)
         self.setCentralWidget(self._central_host)
@@ -5246,6 +5310,208 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._load_in_progress = False
         self._continue_session_restore()
         self._drain_pending_open_paths()
+        self._start_pending_demo()
+
+    def _preferred_demo_voice_lang(self) -> str:
+        preferred = preferred_voice_lang()
+        if preferred:
+            return preferred
+        saved = self._settings.get("demo", "voice_lang", "")
+        if saved:
+            return saved
+        try:
+            from PySide6.QtCore import QLocale
+            return QLocale.system().name()
+        except Exception:
+            return ""
+
+    def _demo_toast(self, text: str, kind: str = "info") -> None:
+        timeout = 6000 if kind == "error" else 4000
+        self.statusBar().showMessage(text, timeout)
+
+    def _demo_press_escape(self) -> None:
+        self._demo_close_settings()
+        self._demo_analysis({"close": True})
+        for title_prefix in (
+            "Keyboard & Mouse Shortcuts",
+            "About RTOS BTF Viewer",
+            "Jump to Time",
+            "Snapshot Editor",
+        ):
+            app = QApplication.instance()
+            if app is None:
+                break
+            for w in app.topLevelWidgets():
+                try:
+                    title = w.windowTitle()
+                except RuntimeError:
+                    continue
+                if title.startswith(title_prefix) and w.isVisible():
+                    try:
+                        w.reject()
+                    except RuntimeError:
+                        pass
+
+    def _disarm_demo_nav(self) -> None:
+        self._demo_nav_armed = False
+        banner = getattr(self, "_demo_status_banner", None)
+        if banner is not None:
+            banner.set_armed(False)
+        timer = self._demo_nav_arm_timer
+        if timer is not None:
+            timer.stop()
+
+    def _arm_demo_nav(self) -> None:
+        self._disarm_demo_nav()
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(self._arm_demo_nav_now)
+        self._demo_nav_arm_timer = timer
+        timer.start(800)
+
+    def _arm_demo_nav_now(self) -> None:
+        self._demo_nav_arm_timer = None
+        if self._demo_runner is None:
+            return
+        self._demo_nav_armed = True
+        self._demo_status_banner.set_armed(True)
+
+    def _stop_inapp_demo(self) -> None:
+        runner = self._demo_runner
+        self._demo_runner = None
+        self._disarm_demo_nav()
+        self._demo_esc_at = 0.0
+        if runner is not None:
+            try:
+                runner.stop()
+            except Exception:
+                pass
+        overlay = self._demo_overlay
+        if overlay is not None:
+            overlay.hide_pointer()
+        banner = getattr(self, "_demo_status_banner", None)
+        if banner is not None:
+            banner.setVisible(False)
+            banner.set_status("")
+            banner.set_nav(None)
+            banner.set_paused(False)
+
+    def _start_pending_demo(self) -> None:
+        pending = self._pending_demo
+        self._pending_demo = None
+        if not pending:
+            return
+        xml_path = pending.get("xml")
+        if not xml_path or not os.path.isfile(xml_path):
+            return
+        self._stop_inapp_demo()
+        old = self._demo_overlay
+        self._demo_overlay = None
+        if old is not None:
+            old.hide_pointer()
+            old.deleteLater()
+        overlay = DemoPointerOverlay(self)
+        overlay.raise_()
+        self._demo_overlay = overlay
+        banner = self._demo_status_banner
+        voice = self._preferred_demo_voice_lang()
+        runner = InAppDemoRunner(
+            self,
+            self._demo_handle,
+            overlay,
+            xml_path=Path(xml_path),
+            voice_lang=voice,
+            ai_wait_cap_sec=4.0,
+            on_status=banner.set_status,
+            on_nav=banner.set_nav,
+            on_paused=banner.set_paused,
+            on_voice=self._persist_demo_voice_lang,
+            on_toast=self._demo_toast,
+            press_escape=self._demo_press_escape,
+        )
+        self._demo_runner = runner
+        banner.set_languages(runner.languages["list"], runner.voice_lang)
+        banner.set_paused(False)
+        banner.setVisible(True)
+        self._arm_demo_nav()
+
+        def _work() -> None:
+            try:
+                runner.run()
+                if not runner.aborted:
+                    QTimer.singleShot(
+                        0, lambda: self.statusBar().showMessage("Demo finished", 4000))
+            except Exception as exc:
+                QTimer.singleShot(
+                    0, lambda: self.statusBar().showMessage(f"Demo failed: {exc}", 6000))
+            finally:
+                QTimer.singleShot(0, lambda r=runner: self._on_demo_thread_done(r))
+
+        thread = threading.Thread(target=_work, name="btf-inapp-demo", daemon=True)
+        self._demo_thread = thread
+        thread.start()
+
+    def _on_demo_thread_done(self, runner: InAppDemoRunner) -> None:
+        if self._demo_runner is not None and self._demo_runner is not runner:
+            return
+        if self._demo_runner is runner:
+            self._demo_runner = None
+        overlay = self._demo_overlay
+        self._demo_overlay = None
+        if overlay is not None:
+            overlay.hide_pointer()
+            overlay.deleteLater()
+        banner = getattr(self, "_demo_status_banner", None)
+        if banner is not None:
+            banner.setVisible(False)
+            banner.set_status("")
+            banner.set_nav(None)
+            banner.set_paused(False)
+            banner.set_armed(False)
+
+    def _persist_demo_voice_lang(self, lang_id: str) -> None:
+        if lang_id:
+            self._settings.set("demo", "voice_lang", lang_id)
+
+    def _on_demo_prev(self) -> None:
+        if self._demo_runner is None or not self._demo_nav_armed:
+            return
+        now = time.monotonic()
+        if now - self._demo_skip_at < 0.4:
+            return
+        self._demo_skip_at = now
+        self._demo_runner.skip_prev()
+
+    def _on_demo_next(self) -> None:
+        if self._demo_runner is None or not self._demo_nav_armed:
+            return
+        now = time.monotonic()
+        if now - self._demo_skip_at < 0.4:
+            return
+        self._demo_skip_at = now
+        self._demo_runner.skip_next()
+
+    def _on_demo_pause(self) -> None:
+        if self._demo_runner is None or not self._demo_nav_armed:
+            return
+        self._demo_runner.toggle_pause()
+
+    def _on_demo_voice_lang(self, lang_id: str) -> None:
+        if self._demo_runner is None or not lang_id:
+            return
+        self._persist_demo_voice_lang(lang_id)
+        self._demo_runner.set_voice_lang(lang_id)
+
+    def _on_demo_escape(self) -> None:
+        if self._demo_runner is None:
+            return
+        now = time.monotonic()
+        if now - self._demo_esc_at < 2.5:
+            self._stop_inapp_demo()
+            self.statusBar().showMessage("Demo stopped", 4000)
+            return
+        self._demo_esc_at = now
+        self.statusBar().showMessage("Esc: press again to stop the demo", 2500)
 
     def _finalize_tab_deferred_work(self, tab: _TraceTab) -> None:
         """Build per-tab CPU bins and statistics after the timeline is shown."""
@@ -7899,7 +8165,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _open_xtf_pack(self, path: str) -> None:
         """Extract a shareable ``.xtf`` demo pack and open its BTF trace."""
         try:
-            _xml, btf = extract_xtf_pack(path)
+            xml, btf = extract_xtf_pack(path)
         except (OSError, ValueError, zipfile.BadZipFile) as exc:
             QMessageBox.warning(self, "Open Error", str(exc))
             return
@@ -7912,6 +8178,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             f"{os.path.basename(btf)}",
             5000,
         )
+        self._pending_demo = {"xml": xml}
         self._open_file(btf)
 
     def _save_recent_files(self, path: str) -> None:
@@ -8695,8 +8962,28 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _open_file(self, path: str) -> None:
         if is_xtf_open_path(path):
+            self._stop_inapp_demo()
             self._open_xtf_pack(path)
             return
+        pack = None
+        lowered = (path or "").lower()
+        if lowered.endswith(".xml") or os.path.isdir(path):
+            pack = discover_demo_pack(path)
+            if pack:
+                xml, btf = pack
+                self._stop_inapp_demo()
+                self._pending_demo = {"xml": xml}
+                if os.path.abspath(btf) != os.path.abspath(path):
+                    self._open_file(btf)
+                    return
+                path = btf
+            elif lowered.endswith(".xml"):
+                QMessageBox.warning(
+                    self, "Open Error",
+                    "Not a demo pack XML, or no BTF trace was found next to it.")
+                return
+        elif self._pending_demo is None:
+            self._stop_inapp_demo()
         path = _normalize_open_path(path)
 
         try:

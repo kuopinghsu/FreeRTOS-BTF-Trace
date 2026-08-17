@@ -57,6 +57,7 @@ BUNDLE_MODULES: list[str] = [
     "trace_quality",
     "perfetto_export",
     "demo_api",
+    "demo_inapp",
     "mainwindow",
     "platform",
     "cli",
@@ -77,6 +78,7 @@ SECTION_MARKERS: dict[str, str] = {
     "trace_quality": "# Trace quality metadata",
     "perfetto_export": "# Perfetto export",
     "demo_api": "# Demo HTTP API",
+    "demo_inapp": "# In-app demo tour",
     "mainwindow": "# CPU Load Graph",
     "platform": "# Entry point",
     "cli": "# Entry point",
@@ -84,10 +86,11 @@ SECTION_MARKERS: dict[str, str] = {
 
 MACOS_STDERR_HEADER = """\
 # ---------------------------------------------------------------------------
-# macOS: suppress harmless TSM / HIToolbox stderr noise that macOS prints
-# whenever keys or menus are used in a Qt app (CapsLock LED, NSSoftLinking, …).
-# Installed from main() after QApplication() — redirecting stderr before Qt
-# initialises NSApplication can abort inside _RegisterApplication on macOS.
+# Suppress harmless stderr noise: macOS TSM / HIToolbox (CapsLock LED,
+# NSSoftLinking) and Qt multimedia FFmpeg / PipeWire AAC probe dumps used by
+# the in-app demo. Installed from main() after QApplication() — redirecting
+# stderr before Qt initialises NSApplication can abort inside
+# _RegisterApplication on macOS.
 # ---------------------------------------------------------------------------
 """
 
@@ -135,7 +138,8 @@ from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from operator import attrgetter as _attrgetter
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
+import xml.etree.ElementTree as ET
 
 from PySide6.QtCore import (
     QBuffer, QByteArray, QEasingCurve, QEvent, QEventLoop, QIODevice, QLineF, QMimeData,
@@ -143,7 +147,7 @@ from PySide6.QtCore import (
     QPropertyAnimation, QVariantAnimation, Signal, Slot,
 )
 from PySide6.QtGui import (
-    QBrush, QColor, QCursor, QDesktopServices, QDrag, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage, QKeySequence, QLinearGradient, QPainter,
+    QBrush, QColor, QCursor, QDesktopServices, QDrag, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QHoverEvent, QIcon, QImage, QKeySequence, QLinearGradient, QMouseEvent, QPainter,
     QPainterPath, QPainterPathStroker, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTextOption, QTransform, QWheelEvent,
 )
 from PySide6.QtSvg import QSvgGenerator, QSvgRenderer

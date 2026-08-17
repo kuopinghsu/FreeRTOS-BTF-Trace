@@ -47,7 +47,7 @@ help:
 	@echo "  make check-bundle Regenerate bundle; fail if it drifts from sources (CI)"
 	@echo "  make doc          Convert README/STATISTICS/AI/WORKFLOWS (Pandoc+Mermaid) and slides (Marp) → builds/*.pdf"
 	@echo "  make update-images  Regenerate ../images/stats/*.svg via the desktop CLI"
-	@echo "  make demo         Run guided demo via builds/btf_viewer.py (DEMO_XML, DEMO_LANG, --launch)"
+	@echo "  make demo         Run guided demo via builds/btf_viewer.py (DEMO_XML, DEMO_LANG)"
 	@echo "  make demo-voice   Voice pack status (DEMO_XML). See scripts/demo_voice.py"
 	@echo "  make demo-pack    Pack demos/demo_8cores → builds/demo_8cores.xtf (DEMO_LANGS=en,zh-tw or all)"
 	@echo "  make test         Desktop unit tests (QT_QPA_PLATFORM=offscreen)"
@@ -78,7 +78,7 @@ test:
 	$(PYTHON) -m unittest discover -s tests -v
 
 demo: $(OUT)
-	$(PYTHON) scripts/demo_runner.py $(DEMO_XML) --launch $(if $(DEMO_LANG),--lang $(DEMO_LANG),)
+	BTFVIEWER_DEMO_LANG="$(DEMO_LANG)" $(PYTHON) $(OUT) $(DEMO_XML)
 
 demo-voice:
 	$(PYTHON) scripts/demo_voice.py status $(DEMO_XML)

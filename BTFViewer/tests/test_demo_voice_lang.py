@@ -1,7 +1,6 @@
 """Demo narration language: path candidates and XML/meta parsing."""
 from __future__ import annotations
 
-import importlib.util
 import os
 import sys
 import tempfile
@@ -10,21 +9,18 @@ from pathlib import Path
 from unittest import mock
 
 BTF_ROOT = Path(__file__).resolve().parents[1]
+if str(BTF_ROOT) not in sys.path:
+    sys.path.insert(0, str(BTF_ROOT))
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from btf_viewer_pkg._bootstrap import install  # noqa: E402
+
+install()
+
+from btf_viewer_pkg import demo_inapp as dr  # noqa: E402
+
 DEMO_XML = BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.xml"
-
-
-def _load_demo_runner():
-    spec = importlib.util.spec_from_file_location(
-        "demo_runner", BTF_ROOT / "scripts" / "demo_runner.py"
-    )
-    mod = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-dr = _load_demo_runner()
 
 
 class DemoVoiceLangTests(unittest.TestCase):

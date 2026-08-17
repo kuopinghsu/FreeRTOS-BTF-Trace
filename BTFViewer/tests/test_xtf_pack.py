@@ -32,6 +32,7 @@ class XtfExtractTests(unittest.TestCase):
     def test_open_filter_includes_xtf_in_default_entry(self) -> None:
         primary = _BTF_OPEN_FILTER.split(";;")[0]
         self.assertIn("*.xtf", primary)
+        self.assertIn("*.xml", primary)
         self.assertIn("*.btf", primary)
 
     def test_extract_xtf_pack(self) -> None:
