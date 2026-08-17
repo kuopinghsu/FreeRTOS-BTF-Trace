@@ -229,6 +229,38 @@ def _strip_module_preamble(source: str) -> str:
         i += 1
     return "".join(lines[i:])
 
+_BODY_RELATIVE_IMPORT = re.compile(r"^(\s*)from\s+\.+[\w.]*\s+import\s+(.*)$")
+
+def _neutralize_body_relative_imports(body: str) -> str:
+    """Turn function-local `from .module import x` lines into `pass`.
+
+    `_strip_module_preamble` only removes each module's *leading* import
+    block; lazy in-function relative imports deeper in a file (used to dodge
+    circular imports between package modules) survive verbatim into the
+    single-file bundle, where the package no longer exists and they raise
+    ImportError at call time. All the imported names are already plain
+    globals in the flattened file, so the statement can simply become a
+    no-op — replaced with `pass` (not deleted) so it can't leave a block
+    (try/if/etc.) syntactically empty.
+    """
+    lines = body.splitlines(keepends=True)
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        m = _BODY_RELATIVE_IMPORT.match(lines[i])
+        if not m:
+            out.append(lines[i])
+            i += 1
+            continue
+        indent = m.group(1)
+        j = i
+        if _import_opens_paren(lines[i]):
+            while j < len(lines) and ")" not in lines[j]:
+                j += 1
+        out.append(f"{indent}pass\n")
+        i = j + 1
+    return "".join(out)
+
 def _git_show_ref(ref: str) -> str | None:
     probe = subprocess.run(
         ["git", "cat-file", "-e", ref],
@@ -338,6 +370,7 @@ def bundle(pkg_dir: Path, out_path: Path, monolith: Path) -> None:
             raw = mod_path.read_text(encoding="utf-8")
             body = _strip_module_preamble(raw)
             body = _section_banner(name, body)
+        body = _neutralize_body_relative_imports(body)
         parts.append(body)
         if not body.endswith("\n"):
             parts.append("\n")

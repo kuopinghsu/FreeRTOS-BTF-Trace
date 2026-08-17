@@ -6676,7 +6676,7 @@ def _build_trace_compare_rows(
 
     extras_fn = globals().get("compare_analysis_tables")
     if extras_fn is None:
-        from .ux_explore import compare_analysis_tables as extras_fn
+        pass
     extras = extras_fn(trace_a, trace_b, lo_a, hi_a, lo_b, hi_b, deadlines)
     metrics = extras.get("metrics") or {}
     summary_rows.extend([
@@ -7670,7 +7670,7 @@ def _parse_btf(filepath: str,
     # Bundle concatenates modules into one file, so a relative import fails there.
     prepare = globals().get("prepare_ux_events")
     if prepare is None:
-        from .ux_explore import prepare_ux_events as prepare
+        pass
     prepare(trace)
     return trace
 
@@ -20273,7 +20273,7 @@ def score_benchmark_case(
     overall = int(round(sum(
         parts[k] * BENCHMARK_METRIC_WEIGHTS[k] for k in parts
     )))
-    from .ai_planner import score_investigation_metrics
+    pass
     extras = score_investigation_metrics(
         expected=exp,
         actual_conclusion=actual_conclusion,
@@ -20517,7 +20517,7 @@ def _xml_child(parent: Any, *names: str) -> Any:
 
 def resolve_benchmark_api_key(*, text: str = "", env: str = "") -> str:
     """Named env, else XML text, else shared env fallbacks."""
-    from .ai_assistant import normalize_api_key, read_ai_env_key, resolve_ai_api_key
+    pass
 
     env_name = str(env or "").strip()
     if env_name:
@@ -20531,10 +20531,7 @@ def resolve_benchmark_api_key(*, text: str = "", env: str = "") -> str:
 
 
 def _parse_benchmark_endpoint_xml(el: Any, defaults: Optional[dict] = None) -> Dict[str, Any]:
-    from .ai_assistant import (
-        normalize_ai_base_url,
-        parse_ai_tls_verify,
-    )
+    pass
 
     out = dict(defaults or {})
     if not out.get("base_url"):
@@ -30708,7 +30705,7 @@ def search_timeline_hits(
     # Bundle-safe: the monolith merges mvvm/find_logic before this call site,
     # so fall back to the already-defined global if the relative import fails.
     try:
-        from .mvvm.find_logic import recompute_find_hits as _recompute_find_hits
+        pass
     except ImportError:
         _recompute_find_hits = globals().get("recompute_find_hits") or globals().get("FIND_RECOMPUTE")
 
@@ -30813,7 +30810,7 @@ def query_raw_metric(
     if not resolved:
         return tool_result_payload(False, f"Unknown task {task!r}")
     try:
-        from .parser import _task_merge_key
+        pass
         mk = _task_merge_key(resolved)
     except Exception:
         mk = resolved
@@ -31044,7 +31041,7 @@ def explain_finding_tool(
 ) -> Dict[str, Any]:
     items = enrich_findings_with_ids(findings) if findings else []
     focus = resolve_finding(items, finding_id) if items else None
-    from .ai_investigation import _hypotheses_for_finding
+    pass
     hyps = []
     if focus:
         hyps = _hypotheses_for_finding(
@@ -31280,7 +31277,7 @@ def dependency_trace_context(
 
     preemptions: List[dict] = []
     try:
-        from .parser import _collect_preemption_events, _task_display_name
+        pass
         agg: Dict[Tuple[str, str], dict] = {}
         repr_map = getattr(trace, "task_repr", None) or {}
         for mk, pre_disp, _t, duration, _seg in _collect_preemption_events(
@@ -31299,7 +31296,7 @@ def dependency_trace_context(
 
     migrations: List[dict] = []
     try:
-        from .parser import _migrations_in_range, _task_display_name
+        pass
         repr_map = getattr(trace, "task_repr", None) or {}
         for m in _migrations_in_range(trace, lo_i, hi_i):
             raw = repr_map.get(m.merge_key, m.merge_key) if isinstance(
@@ -31507,7 +31504,7 @@ def distribution_trace_context(
             "task": want,
         }
     try:
-        from .parser import _task_merge_key
+        pass
         mk = _task_merge_key(resolved)
     except Exception:
         mk = resolved
@@ -31600,7 +31597,7 @@ def periodicity_trace_context(trace: Any, task: str = "") -> Dict[str, Any]:
         resolved = resolve_task_key(want, _task_candidates_from_trace(trace))
         if resolved:
             try:
-                from .parser import _task_merge_key
+                pass
                 mk = _task_merge_key(resolved)
             except Exception:
                 mk = resolved
@@ -31937,7 +31934,7 @@ def gather_simulation_inputs(
     core_utils: List[Any] = []
     if trace is not None:
         try:
-            from .parser import _core_util_pct_rows
+            pass
             lo_i = int(lo) if lo is not None else None
             hi_i = int(hi) if hi is not None else None
             core_utils = list(_core_util_pct_rows(trace, lo_i, hi_i))
@@ -32075,7 +32072,7 @@ def _gather_priority_episodes(
         if not resolved:
             return out
         try:
-            from .parser import _task_merge_key
+            pass
             mk_filter = _task_merge_key(resolved)
         except Exception:
             mk_filter = resolved
@@ -32213,7 +32210,7 @@ def compare_tasks_host(
 def _svg_sans_family() -> str:
     """Qt SVG needs a real face; CSS ``sans-serif`` warns as ``Sans-serif``."""
     try:
-        from .timeline_util import _get_sans_font_family
+        pass
         return _get_sans_font_family()
     except Exception:
         return "Arial"
@@ -32412,8 +32409,8 @@ def hit_test_mermaid(
 def _svg_to_png_bytes(svg: str, fill: str = "#12161d") -> Optional[Tuple[bytes, int, int]]:
     """Rasterize SVG for QTextBrowser (avoids Qt's oversized SVG buffer warning)."""
     try:
-        from ._imports import QBuffer, QByteArray, QColor, QIODevice
-        from .config import rasterize_svg_pixmap
+        pass
+        pass
     except Exception:
         return None
     pm, _ = rasterize_svg_pixmap(svg, fill=QColor(fill or "#12161d"))
@@ -67263,7 +67260,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if not task:
                 # Bundle-safe: fall back to the monolith's already-defined globals.
                 try:
-                    from .ai_investigation import _guess_task_name, parse_what_if_change
+                    pass
                 except ImportError:
                     _guess_task_name = globals().get("_guess_task_name")
                     parse_what_if_change = globals().get("parse_what_if_change")
@@ -67305,7 +67302,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if not task:
                 # Bundle-safe: fall back to the monolith's already-defined globals.
                 try:
-                    from .ai_investigation import detect_anomalies, _guess_task_name
+                    pass
                 except ImportError:
                     detect_anomalies = globals().get("detect_anomalies")
                     _guess_task_name = globals().get("_guess_task_name")
@@ -67519,7 +67516,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if name == AI_TOOL_GENERATE_FINGERPRINT:
             return generate_fingerprint_tool(findings)
         if name == AI_TOOL_FIND_SIMILAR_INVESTIGATIONS:
-            from .ai_planner import set_experiment_outcomes
+            pass
             raw = self._settings.get("ai", "experiment_outcomes", "")
             hist = []
             if raw:
@@ -67552,7 +67549,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 limit=int(args.get("limit") or 3),
             )
         if name == AI_TOOL_RECORD_EXPERIMENT_OUTCOME:
-            from .ai_planner import experiment_outcomes
+            pass
             payload = record_experiment_outcome_tool(
                 change=str(args.get("change") or ""),
                 predicted=str(args.get("predicted") or ""),
@@ -67631,7 +67628,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return challenge_conclusion_tool(
                 str(args.get("conclusion") or ""), findings=findings)
         if name == AI_TOOL_INVESTIGATION_MEMORY:
-            from .ai_causal import set_investigation_memory, investigation_memory_store
+            pass
             raw = self._settings.get("ai", "investigation_memory", "")
             hist = []
             if raw:
@@ -73169,13 +73166,8 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
         offline = run_offline_benchmark(
             path, fail_under=fail_under if suite is None else 0)
         if suite is not None:
-            from .ai_assistant import (
-                AI_CHAT_TIMEOUT_S,
-                is_local_ai_host,
-                live_benchmark_chat,
-                normalize_ai_base_url,
-            )
-            from .ai_tools import ai_viewer_tools
+            pass
+            pass
             try:
                 selected = select_benchmark_suite_models(suite, models_raw)
             except ValueError as exc:
