@@ -138,6 +138,9 @@ doc: $(DOCS)/README.pdf $(DOCS)/STATISTICS.pdf $(DOCS)/AI.pdf $(DOCS)/WORKFLOWS.
 # Emoji: DejaVu has no ❌/🟢/🟡/🔴; scripts/emoji-fallback.lua substitutes
 # for LaTeX only (GitHub keeps the UI glyphs).
 #
+# Tables: scripts/table-widths.lua sizes columns from cell text so a short
+# `| --- |` ruler cannot squeeze the first column until names overprint.
+#
 # CJK: DejaVu has no 中/文. If xeCJK.sty is installed, Eisvogel uses it
 # (override font with CJK_MAINFONT=…). Otherwise fontspec + ucharclasses
 # (scripts/cjk-fallback.tex) — this machine often has Droid Sans Fallback
@@ -152,6 +155,8 @@ PANDOC_PDF_FLAGS := --pdf-engine=xelatex \
 	--lua-filter scripts/html-anchor-filter.lua \
 	--lua-filter scripts/md-pdf-links.lua \
 	--lua-filter scripts/emoji-fallback.lua \
+	--lua-filter scripts/table-widths.lua \
+	--include-in-header=scripts/table-layout.tex \
 	--resource-path=..:. \
 	-f markdown-blank_before_header \
 	-V mainfont="DejaVu Sans" \
@@ -162,7 +167,7 @@ PANDOC_PDF_FLAGS := --pdf-engine=xelatex \
 
 DOC_LUA := scripts/mermaid-filter.lua scripts/math-codeblock.lua \
 	scripts/html-anchor-filter.lua scripts/md-pdf-links.lua \
-	scripts/emoji-fallback.lua
+	scripts/emoji-fallback.lua scripts/table-widths.lua
 
 # Ensure mermaid PNG cache exists before pandoc runs.
 $(DOCS)/README.pdf $(DOCS)/STATISTICS.pdf $(DOCS)/AI.pdf $(DOCS)/WORKFLOWS.pdf: | $(DOCS)/.mermaid-cache-stamp
@@ -175,19 +180,19 @@ $(BUILDS)/cjk-fallback.tex: scripts/cjk-fallback.tex
 	mkdir -p $(BUILDS)
 	sed 's/CJKFONT/$(CJK_MAINFONT)/g' $< > $@
 
-$(DOCS)/README.pdf: README.md $(DOC_LUA) $(CJK_HEADER)
+$(DOCS)/README.pdf: README.md $(DOC_LUA) scripts/table-layout.tex $(CJK_HEADER)
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF Trace Viewer" $< -o $@
 
-$(DOCS)/STATISTICS.pdf: STATISTICS.md $(DOC_LUA) $(CJK_HEADER)
+$(DOCS)/STATISTICS.pdf: STATISTICS.md $(DOC_LUA) scripts/table-layout.tex $(CJK_HEADER)
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF Viewer — Statistics" $< -o $@
 
-$(DOCS)/AI.pdf: AI.md $(DOC_LUA) $(CJK_HEADER)
+$(DOCS)/AI.pdf: AI.md $(DOC_LUA) scripts/table-layout.tex $(CJK_HEADER)
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF AI Assistant" $< -o $@
 
-$(DOCS)/WORKFLOWS.pdf: WORKFLOWS.md $(DOC_LUA) $(CJK_HEADER)
+$(DOCS)/WORKFLOWS.pdf: WORKFLOWS.md $(DOC_LUA) scripts/table-layout.tex $(CJK_HEADER)
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF Viewer — Analysis Workflows" $< -o $@
 
