@@ -1,1 +1,1 @@
-Every session starts with two checks. Is the captured time span suitable, and are we looking at the whole trace? Click Fit — or use the Fit shortcut — so the full span fills the view.
+Start every analysis with two checks. Is the recorded time range useful? Are you viewing the full trace? Click Fit, or use its shortcut, to show the complete trace in the timeline.

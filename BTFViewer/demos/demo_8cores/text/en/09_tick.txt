@@ -1,1 +1,5 @@
-First ladder rung: can I trust timing? In Statistics, open Trace Health. Mode is tickless. The coefficient of variation is about thirty-seven percent — well above the five percent line that means a steady periodic tick. Average period is around nine hundred forty-five microseconds. The largest gap is about three point three milliseconds. Estimated missed ticks is ten. On a tickless build the kernel skips ticks when nothing is runnable, so multi-tick gaps in idle stretches are normal. Do not treat a tickless warning as a bug until you scope to a busy region and re-read this section.
+Step 1: check whether the timing data is reliable.
+
+In Statistics, open Trace Health. This trace uses tickless mode. The coefficient of variation is about 37%, which is much higher than the 5% reference for a stable periodic tick. The average period is about 945 microseconds. The largest gap is about 3.3 milliseconds, and the estimated number of missed ticks is 10.
+
+In tickless mode, the kernel skips ticks when no task is ready to run. Long gaps during idle time can therefore be normal. Limit the scope to a busy region and check Trace Health again before treating this warning as a defect.

@@ -1,1 +1,3 @@
-Open Statistics. The panel follows the diagnosis ladder: Health, Scope, Balance, C-P-U and worst-case execution, Latency, Concurrency, and related statistics. This file has eight cores, about thirty-one thousand run segments, and extra instrumentation for priority, mutexes, queues, and intervals. One caution: it stitches several test phases together. Warnings above are investigation clues — not automatically product defects — until you limit the view to a single phase and check in order.
+Open Statistics. The sections follow a diagnostic order: trace health, scope, load balance, CPU execution, latency, and concurrency.
+
+This trace contains eight cores, about 31,000 execution slices, and measurements for priorities, mutexes, queues, and intervals. It also contains several test phases. Treat warnings as investigation clues, not confirmed defects. First limit the analysis to one phase, then check each warning in order.

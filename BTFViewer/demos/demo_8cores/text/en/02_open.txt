@@ -1,1 +1,1 @@
-Open a trace from File, Open — or drag a file onto the window. Compressed and uncompressed BTF both work. We load the eight-core demo sample that ships with this recording script.
+From the File menu, select Open, or drag a trace file into the window. BTFViewer supports both compressed and uncompressed BTF files. For this demo, we will open the included eight-core sample trace.

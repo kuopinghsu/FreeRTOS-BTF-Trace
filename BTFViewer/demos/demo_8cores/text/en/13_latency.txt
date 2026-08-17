@@ -1,1 +1,7 @@
-Fifth rung: check latency, inside the inversion window again. Blocking Time is how long a task stayed off CPU until it ran again. task High two-sixty-eight waits up to about fifty-three milliseconds here. Low and Medium wait about thirty-five to forty milliseconds. Ignore Runner — that task sleeps between test phases on purpose. Blocking is not true end-to-end response time. Dispatch asks, after create or resume, how long until the first switch-in. Preemption Chain names who preempted whom. Priority Inheritance also belongs here. Low is boosted by mutex inherit — the kernel doing its job; look for red stripes under that task. A Low, Medium, High pattern on task PS two-twenty-eight is the classic three-task inversion and deserves a design review.
+Step 5: check latency inside the priority-inversion window.
+
+Blocking Time measures how long a task stays off the CPU before it runs again. In this window, task High[268] waits up to about 53 milliseconds. Low and Medium wait about 35 to 40 milliseconds. You can ignore Runner because it sleeps between test phases by design.
+
+Blocking Time is not the same as end-to-end response time. Dispatch measures the delay from task creation or resume to its first switch-in. Preemption Chain shows which task preempted another task. Priority Inheritance shows temporary priority changes caused by a mutex. Look for the red boost bar below Low.
+
+Task PS[228] shows the classic Low, Medium, and High priority-inversion pattern. This pattern needs further design review.
