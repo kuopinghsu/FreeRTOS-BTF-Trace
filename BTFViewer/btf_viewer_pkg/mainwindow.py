@@ -3368,6 +3368,26 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if app is not None:
             app.processEvents()
 
+        # Drop focus before tearing down QGraphicsView widgets. Otherwise
+        # PySide/Qt can SEGV in QWidget::clearFocus during atexit shutdown
+        # (~QGraphicsView → clearFocus with a half-destroyed focus chain).
+        if app is not None:
+            fw = app.focusWidget()
+            if fw is not None:
+                fw.clearFocus()
+        for tab in self._tabs:
+            try:
+                tab.view.clearFocus()
+                tab.view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            except RuntimeError:
+                pass
+        if hasattr(self, "_settings_view"):
+            try:
+                self._settings_view.clearFocus()
+                self._settings_view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            except RuntimeError:
+                pass
+
         self._teardown_scene()
         super().closeEvent(event)
 
@@ -3764,6 +3784,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QMenuBar::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
             QMenu     {{ background:{c['menu_bg']}; color:{c['text']}; font-size:{_ui_fs}; }}
             QMenu::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
+            QMenu::separator {{ height:1px; background:{c['sep']}; margin:4px 8px; }}
             QToolBar  {{ background:{c['mid']}; color:{c['text']}; border:none; spacing:4px;
                          font-size:{_ui_fs}; }}
             QToolBar::separator {{ width:1px; background:{c['sep']}; margin:3px 2px; }}

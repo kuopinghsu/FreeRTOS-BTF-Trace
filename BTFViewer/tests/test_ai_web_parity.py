@@ -2234,6 +2234,8 @@ console.log(JSON.stringify({
         self.assertIn("Clear all marks", tl)
         self.assertIn("clear_all_marks_requested", view)
         self.assertIn("onCtxClearAllMarks", tl)
+        self.assertLess(view.index("Clear all marks"), view.index("Place cursor here"))
+        self.assertLess(tl.index("Clear all marks"), tl.index("Place cursor here"))
         self.assertIn("self._style_ai_menu_action(act_ask)", view)
         self.assertIn("self._style_ai_menu_action(act_region)", view)
         self.assertIn('action.setEnabled(on)', view)

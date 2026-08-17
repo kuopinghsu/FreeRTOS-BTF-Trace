@@ -12741,21 +12741,26 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
         )
         self._util_label_col_natural = self._compute_util_label_col_width(_util_labels)
 
-        # -- Summary row (demo target: statistics status, not Core Util) ---
+        # -- Summary (dense 3 lines; demo target: status, not Core Util) ---
         summary = QWidget()
         summary.setObjectName("stats_summary")
         sum_lay = QVBoxLayout(summary)
         sum_lay.setContentsMargins(0, 0, 0, 0)
-        sum_lay.setSpacing(2)
-        sum_lay.addWidget(self._lbl(
-            f"Span: {span_str}{scope}  |  Tasks: {task_count}  |  "
-            f"Segments: {seg_count:,}  |  STI events: {sti_count:,}",
-            color="#888888",
-            ui_fs=_fs,
-        ))
+        sum_lay.setSpacing(1)
+
+        def _sum_line(text: str) -> QLabel:
+            w = self._lbl(text, color="#888888", ui_fs=_fs)
+            w.setWordWrap(False)
+            return w
+
+        sum_lay.addWidget(_sum_line(
+            f"Span: {span_str}{scope} | Tasks: {task_count:,}"))
+        sum_lay.addWidget(_sum_line(
+            f"Segments: {seg_count:,} | STI events: {sti_count:,}"))
 
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
         if ctx_count > 0:
+            sum_lay.addWidget(self._sep())
             sched_parts = [f"Context switches: {ctx_count:,}{scope}"]
             if core_gaps:
                 gap_avg = int(round(sum(core_gaps) / len(core_gaps)))
@@ -12763,11 +12768,7 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                     f"Core gap avg: {_format_time(gap_avg, trace.time_scale)}")
                 sched_parts.append(
                     f"max: {_format_time(max(core_gaps), trace.time_scale)}")
-            sum_lay.addWidget(self._lbl(
-                "  |  ".join(sched_parts),
-                color="#888888",
-                ui_fs=_fs,
-            ))
+            sum_lay.addWidget(_sum_line(" | ".join(sched_parts)))
         self._stats_summary = summary
         self._ilay.addWidget(summary)
 

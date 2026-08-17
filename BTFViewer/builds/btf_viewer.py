@@ -16494,6 +16494,22 @@ class TimelineView(QGraphicsView):
         # Shared icon color - timeline always uses a dark background
         _icon_color = "#D4D4D4"
 
+        _has_cursors = bool(self._scene.cursor_times())
+        _has_bm = getattr(self, '_has_bookmarks', False)
+        _has_an = getattr(self, '_has_annotations', False)
+        _has_marks = _has_cursors or _has_bm or _has_an
+        act_marks = menu.addAction(
+            _svg_icon(_IC_CLEAR, _icon_color),
+            "Clear all marks",
+            lambda: self.clear_all_marks_requested.emit(),
+        )
+        act_marks.setEnabled(_has_marks)
+        act_marks.setToolTip(
+            "Clear all cursors, bookmarks, and annotations"
+            if _has_marks else
+            "No cursors, bookmarks, or annotations to clear")
+        menu.addSeparator()
+
         # --- Segment-specific actions (shown when right-clicking on a segment) ---
         hit_seg = self._hit_segment_at(scene_pt)
         if hit_seg is not None:
@@ -16570,8 +16586,6 @@ class TimelineView(QGraphicsView):
                 f"Add Annotation here  ({_format_time(ns, self._scene._trace.time_scale, decimals=self._scene._time_decimals)})",
                 lambda: self.annotation_requested.emit(ns)
             )
-            _has_bm = getattr(self, '_has_bookmarks', False)
-            _has_an = getattr(self, '_has_annotations', False)
             if _has_bm or _has_an:
                 menu.addSeparator()
                 if _has_bm:
@@ -16586,22 +16600,10 @@ class TimelineView(QGraphicsView):
                         "Clear all annotations",
                         lambda: self.clear_annotations_requested.emit()
                     )
-        menu.addSeparator()
-        _has_cursors = bool(self._scene.cursor_times())
-        _has_bm = getattr(self, '_has_bookmarks', False)
-        _has_an = getattr(self, '_has_annotations', False)
-        act_marks = menu.addAction(
-            _svg_icon(_IC_CLEAR, _icon_color),
-            "Clear all marks",
-            lambda: self.clear_all_marks_requested.emit(),
-        )
-        _has_marks = _has_cursors or _has_bm or _has_an
-        act_marks.setEnabled(_has_marks)
-        act_marks.setToolTip(
-            "Clear all cursors, bookmarks, and annotations"
-            if _has_marks else
-            "No cursors, bookmarks, or annotations to clear")
-        menu.exec(event.globalPos())
+        try:
+            menu.exec(event.globalPos())
+        finally:
+            menu.deleteLater()
 
     # ------------------------------------------------------------------
     # Wheel and touch zoom
@@ -53931,21 +53933,26 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
         )
         self._util_label_col_natural = self._compute_util_label_col_width(_util_labels)
 
-        # -- Summary row (demo target: statistics status, not Core Util) ---
+        # -- Summary (dense 3 lines; demo target: status, not Core Util) ---
         summary = QWidget()
         summary.setObjectName("stats_summary")
         sum_lay = QVBoxLayout(summary)
         sum_lay.setContentsMargins(0, 0, 0, 0)
-        sum_lay.setSpacing(2)
-        sum_lay.addWidget(self._lbl(
-            f"Span: {span_str}{scope}  |  Tasks: {task_count}  |  "
-            f"Segments: {seg_count:,}  |  STI events: {sti_count:,}",
-            color="#888888",
-            ui_fs=_fs,
-        ))
+        sum_lay.setSpacing(1)
+
+        def _sum_line(text: str) -> QLabel:
+            w = self._lbl(text, color="#888888", ui_fs=_fs)
+            w.setWordWrap(False)
+            return w
+
+        sum_lay.addWidget(_sum_line(
+            f"Span: {span_str}{scope} | Tasks: {task_count:,}"))
+        sum_lay.addWidget(_sum_line(
+            f"Segments: {seg_count:,} | STI events: {sti_count:,}"))
 
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
         if ctx_count > 0:
+            sum_lay.addWidget(self._sep())
             sched_parts = [f"Context switches: {ctx_count:,}{scope}"]
             if core_gaps:
                 gap_avg = int(round(sum(core_gaps) / len(core_gaps)))
@@ -53953,11 +53960,7 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                     f"Core gap avg: {_format_time(gap_avg, trace.time_scale)}")
                 sched_parts.append(
                     f"max: {_format_time(max(core_gaps), trace.time_scale)}")
-            sum_lay.addWidget(self._lbl(
-                "  |  ".join(sched_parts),
-                color="#888888",
-                ui_fs=_fs,
-            ))
+            sum_lay.addWidget(_sum_line(" | ".join(sched_parts)))
         self._stats_summary = summary
         self._ilay.addWidget(summary)
 
@@ -64087,6 +64090,26 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if app is not None:
             app.processEvents()
 
+        # Drop focus before tearing down QGraphicsView widgets. Otherwise
+        # PySide/Qt can SEGV in QWidget::clearFocus during atexit shutdown
+        # (~QGraphicsView → clearFocus with a half-destroyed focus chain).
+        if app is not None:
+            fw = app.focusWidget()
+            if fw is not None:
+                fw.clearFocus()
+        for tab in self._tabs:
+            try:
+                tab.view.clearFocus()
+                tab.view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            except RuntimeError:
+                pass
+        if hasattr(self, "_settings_view"):
+            try:
+                self._settings_view.clearFocus()
+                self._settings_view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            except RuntimeError:
+                pass
+
         self._teardown_scene()
         super().closeEvent(event)
 
@@ -64483,6 +64506,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QMenuBar::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
             QMenu     {{ background:{c['menu_bg']}; color:{c['text']}; font-size:{_ui_fs}; }}
             QMenu::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
+            QMenu::separator {{ height:1px; background:{c['sep']}; margin:4px 8px; }}
             QToolBar  {{ background:{c['mid']}; color:{c['text']}; border:none; spacing:4px;
                          font-size:{_ui_fs}; }}
             QToolBar::separator {{ width:1px; background:{c['sep']}; margin:3px 2px; }}

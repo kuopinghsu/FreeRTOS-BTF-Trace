@@ -3206,6 +3206,22 @@ class TimelineView(QGraphicsView):
         # Shared icon color - timeline always uses a dark background
         _icon_color = "#D4D4D4"
 
+        _has_cursors = bool(self._scene.cursor_times())
+        _has_bm = getattr(self, '_has_bookmarks', False)
+        _has_an = getattr(self, '_has_annotations', False)
+        _has_marks = _has_cursors or _has_bm or _has_an
+        act_marks = menu.addAction(
+            _svg_icon(_IC_CLEAR, _icon_color),
+            "Clear all marks",
+            lambda: self.clear_all_marks_requested.emit(),
+        )
+        act_marks.setEnabled(_has_marks)
+        act_marks.setToolTip(
+            "Clear all cursors, bookmarks, and annotations"
+            if _has_marks else
+            "No cursors, bookmarks, or annotations to clear")
+        menu.addSeparator()
+
         # --- Segment-specific actions (shown when right-clicking on a segment) ---
         hit_seg = self._hit_segment_at(scene_pt)
         if hit_seg is not None:
@@ -3282,8 +3298,6 @@ class TimelineView(QGraphicsView):
                 f"Add Annotation here  ({_format_time(ns, self._scene._trace.time_scale, decimals=self._scene._time_decimals)})",
                 lambda: self.annotation_requested.emit(ns)
             )
-            _has_bm = getattr(self, '_has_bookmarks', False)
-            _has_an = getattr(self, '_has_annotations', False)
             if _has_bm or _has_an:
                 menu.addSeparator()
                 if _has_bm:
@@ -3298,22 +3312,10 @@ class TimelineView(QGraphicsView):
                         "Clear all annotations",
                         lambda: self.clear_annotations_requested.emit()
                     )
-        menu.addSeparator()
-        _has_cursors = bool(self._scene.cursor_times())
-        _has_bm = getattr(self, '_has_bookmarks', False)
-        _has_an = getattr(self, '_has_annotations', False)
-        act_marks = menu.addAction(
-            _svg_icon(_IC_CLEAR, _icon_color),
-            "Clear all marks",
-            lambda: self.clear_all_marks_requested.emit(),
-        )
-        _has_marks = _has_cursors or _has_bm or _has_an
-        act_marks.setEnabled(_has_marks)
-        act_marks.setToolTip(
-            "Clear all cursors, bookmarks, and annotations"
-            if _has_marks else
-            "No cursors, bookmarks, or annotations to clear")
-        menu.exec(event.globalPos())
+        try:
+            menu.exec(event.globalPos())
+        finally:
+            menu.deleteLater()
 
     # ------------------------------------------------------------------
     # Wheel and touch zoom

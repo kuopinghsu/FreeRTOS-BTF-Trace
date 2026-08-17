@@ -94,6 +94,20 @@
           @contextmenu.prevent.stop
           @mouseleave="contextMenu.visible = false"
         >
+        <div
+          class="ctx-item"
+          :class="{ disabled: !hasMarks }"
+          :title="hasMarks
+            ? 'Clear all cursors, bookmarks, and annotations'
+            : 'No cursors, bookmarks, or annotations to clear'"
+          @click="onCtxClearAllMarks"
+        >
+          Clear all marks
+        </div>
+        <div
+          class="ctx-sep"
+          role="separator"
+        />
         <template v-if="contextMenu.segment">
           <div
             class="ctx-item"
@@ -123,7 +137,10 @@
           >
             Ask AI about this event
           </div>
-          <div class="ctx-sep" />
+          <div
+            class="ctx-sep"
+            role="separator"
+          />
         </template>
         <div
           class="ctx-item"
@@ -156,7 +173,10 @@
         >
           Explain this region with AI
         </div>
-        <div class="ctx-sep" />
+        <div
+          class="ctx-sep"
+          role="separator"
+        />
         <div
           class="ctx-item"
           @click="onAddBookmark"
@@ -188,7 +208,10 @@
           Add Annotation here{{ ctxTimeLabel ? `  (${ctxTimeLabel})` : '' }}
         </div>
         <template v-if="hasBookmarks || hasAnnotations">
-          <div class="ctx-sep" />
+          <div
+            class="ctx-sep"
+            role="separator"
+          />
           <div
             v-if="hasBookmarks"
             class="ctx-item"
@@ -204,17 +227,10 @@
             Clear all annotations
           </div>
         </template>
-        <div class="ctx-sep" />
         <div
-          class="ctx-item"
-          :class="{ disabled: !hasMarks }"
-          :title="hasMarks
-            ? 'Clear all cursors, bookmarks, and annotations'
-            : 'No cursors, bookmarks, or annotations to clear'"
-          @click="onCtxClearAllMarks"
-        >
-          Clear all marks
-        </div>
+          class="ctx-sep"
+          role="separator"
+        />
         <div
           class="ctx-item"
           @click="onCopyCursorTime"
@@ -3208,8 +3224,9 @@ canvas {
 }
 .ctx-sep {
   height: 1px;
-  margin: 4px 8px;
+  margin: 4px 0;
   background: var(--border);
+  flex-shrink: 0;
 }
 .ctx-item:hover {
   background: var(--tb-btn-hover);

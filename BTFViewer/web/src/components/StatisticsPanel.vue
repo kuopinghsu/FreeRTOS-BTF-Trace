@@ -66,37 +66,23 @@
       class="stats-summary"
       data-demo-target="stats_summary"
     >
-      <div class="summary-row">
-        <span class="summary-key">Span{{ scopeSuffixStr }}</span>
-        <span class="summary-val">{{ spanStr }}</span>
+      <div class="summary-line">
+        Span: {{ spanStr }}{{ scopeSuffixStr }} | Tasks: {{ summaryTaskCount.toLocaleString() }}
       </div>
-      <div class="summary-row">
-        <span class="summary-key">Tasks</span>
-        <span class="summary-val">{{ summaryTaskCount.toLocaleString() }}</span>
-      </div>
-      <div class="summary-row">
-        <span class="summary-key">Segments</span>
-        <span class="summary-val">{{ summarySegCount.toLocaleString() }}</span>
-      </div>
-      <div class="summary-row">
-        <span class="summary-key">STI Events</span>
-        <span class="summary-val">{{ summaryStiCount.toLocaleString() }}</span>
+      <div class="summary-line">
+        Segments: {{ summarySegCount.toLocaleString() }} | STI events: {{ summaryStiCount.toLocaleString() }}
       </div>
       <template v-if="schedulingSummary">
-        <div class="summary-row">
-          <span class="summary-key">Context switches{{ scopeSuffixStr }}</span>
-          <span class="summary-val">{{ schedulingSummary.contextSwitches.toLocaleString() }}</span>
-        </div>
-        <div class="summary-row">
-          <span class="summary-key">Core gap avg{{ scopeSuffixStr }}</span>
-          <span class="summary-val">{{ schedulingSummary.gapAvg }}</span>
-        </div>
-        <div class="summary-row">
-          <span class="summary-key">Core gap max{{ scopeSuffixStr }}</span>
-          <span class="summary-val">{{ schedulingSummary.gapMax }}</span>
+        <div class="stats-sep summary-sep" />
+        <div class="summary-line">
+          Context switches: {{ schedulingSummary.contextSwitches.toLocaleString() }}{{ scopeSuffixStr }}
+          <template v-if="schedulingSummary.hasGaps">
+            | Core gap avg: {{ schedulingSummary.gapAvg }} | max: {{ schedulingSummary.gapMax }}
+          </template>
         </div>
       </template>
     </div>
+    <div class="stats-sep" />
 
     <div class="stats-sections-stack">
     <StatsSectionBlock
@@ -5273,11 +5259,15 @@ const schedulingSummary = computed(() => {
   const { contextSwitches, coreGaps, gapMax } = schedulingStats(tr, lo, hi)
   if (contextSwitches <= 0) return null
   const scale = tr.timeScale
-  const avg = Math.round(coreGaps.reduce((a, b) => a + b, 0) / coreGaps.length)
+  const hasGaps = coreGaps.length > 0
+  const avg = hasGaps
+    ? Math.round(coreGaps.reduce((a, b) => a + b, 0) / coreGaps.length)
+    : 0
   return {
     contextSwitches,
-    gapAvg: formatTime(avg, scale),
-    gapMax: formatTime(gapMax, scale),
+    hasGaps,
+    gapAvg: hasGaps ? formatTime(avg, scale) : '',
+    gapMax: hasGaps ? formatTime(gapMax, scale) : '',
   }
 })
 
@@ -8629,26 +8619,16 @@ defineExpose({
 .stats-summary {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-}
-
-.summary-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 4px;
-}
-
-.summary-key {
+  gap: 1px;
   color: var(--fg-dim);
-  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1.25;
 }
 
-.summary-val {
-  color: var(--fg);
-  text-align: right;
+.summary-line {
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .stats-sep {
@@ -8656,6 +8636,10 @@ defineExpose({
   background: var(--border);
   margin: 6px 0;
   flex-shrink: 0;
+}
+
+.stats-summary .summary-sep {
+  margin: 3px 0;
 }
 
 .stats-section-title {
