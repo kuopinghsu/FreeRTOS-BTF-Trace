@@ -1062,6 +1062,7 @@ class AiPanelUiTests(unittest.TestCase):
         )
         panel._set_status("Done.")
         self.assertEqual(panel._status.text(), "Done.")
+        self.assertIn("Context: Balanced", panel._usage.text())
         self.assertIn("1.2k tok", panel._usage.text())
         self.assertIn("2 tools", panel._usage.text())
         self.assertIn("1.5s", panel._usage.text())
@@ -1071,12 +1072,35 @@ class AiPanelUiTests(unittest.TestCase):
         )
         panel._set_status("Done.")
         self.assertIn("1.3k tok", panel._usage.text())
+        self.assertIn("2 tools", panel._usage.text())
+        self.assertIn("1.5s", panel._usage.text())
+        self.assertNotIn("input", panel._usage.text())
+        self.assertNotIn("output", panel._usage.text())
+        cfg = {"enabled": "true", "context_mode": "compact"}
+        panel2 = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {"findings_text": "findings"},
+            get_settings=lambda: cfg,
+        )
+        self.addCleanup(panel2.deleteLater)
+        panel2._cost_meter = dict(panel._cost_meter)
+        panel2._refresh_usage()
+        self.assertIn("Context: Compact", panel2._usage.text())
+        self.assertIn("1.3k tok", panel2._usage.text())
+        self.assertNotIn("input", panel2._usage.text())
+        cfg["context_mode"] = "balanced"
+        panel2._refresh_usage()
+        self.assertIn("Context: Balanced", panel2._usage.text())
+        self.assertIn("1.3k tok", panel2._usage.text())
+        self.assertIn("2 tools", panel2._usage.text())
+        self.assertIn("1.5s", panel2._usage.text())
+        self.assertNotIn("input", panel2._usage.text())
         self.assertEqual(panel._status.text(), "Done.")
         panel.clear_conversation()
         self.assertEqual(panel._status.text(), "")
         self.assertEqual(panel._cost_meter["total_tokens"], 0)
         self.assertEqual(panel._cost_meter["tool_calls"], 0)
-        self.assertIn("0 tok", panel._usage.text())
+        self.assertEqual(panel._usage.text(), "Context: Balanced")
         self.assertFalse(panel._entries)
         self.assertEqual(panel._log.toPlainText().strip(), "")
         panel._append("assistant", "A long model reply")
@@ -1085,14 +1109,14 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertFalse(panel._entries)
         self.assertEqual(panel._log.toPlainText().strip(), "")
         self.assertIsNone(panel._evidence_payload)
-        self.assertIn("0 tok", panel._usage.text())
+        self.assertEqual(panel._usage.text(), "Context: Balanced")
 
     def test_log_composer_splitter_exists(self) -> None:
         panel = self._panel()
         self.assertEqual(panel._split.objectName(), "aiSplit")
         self.assertEqual(panel._split_bottom.objectName(), "aiSplitBottom")
         self.assertEqual(panel._usage.objectName(), "aiUsageBar")
-        self.assertIn("0 tok", panel._usage.text())
+        self.assertEqual(panel._usage.text(), "Context: Balanced")
 
     def test_disabled_template_chips_use_muted_color(self) -> None:
         from btf_viewer_pkg.ai_assistant import (

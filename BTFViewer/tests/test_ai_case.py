@@ -17,6 +17,9 @@ from btf_viewer_pkg.ai_case import (  # noqa: E402
     build_validation_catalog,
     classify_trace_privacy,
     clamp_ai_split_bottom,
+    compact_chat_history,
+    compact_findings_text,
+    compact_tool_result_payload,
     compute_evidence_quality,
     dump_user_investigation_templates,
     dump_investigation_session,
@@ -26,10 +29,14 @@ from btf_viewer_pkg.ai_case import (  # noqa: E402
     evidence_quality_band,
     falsification_checks,
     format_capability_report,
+    format_context_usage_status,
     format_cost_status,
     historical_knowledge_for_finding,
     infer_model_capability,
     interpret_investigation_query,
+    normalize_ai_context_mode,
+    ai_context_mode_settings_overview,
+    tool_names_for_context_mode,
     investigation_guide_stage,
     investigation_issue_card,
     format_investigation_issue_card,
@@ -42,6 +49,7 @@ from btf_viewer_pkg.ai_case import (  # noqa: E402
     quality_bar,
     benchmark_model_category,
     parse_live_benchmark_models,
+    parse_benchmark_context_modes,
     select_benchmark_suite_models,
     benchmark_prompt_context,
     format_benchmark_markdown,
@@ -210,9 +218,97 @@ class InvestigationCaseTests(unittest.TestCase):
         text = status_with_cost("Done.", meter)
         self.assertEqual(text, "Done. · 1.3k tok · 2 tools · 1.5s")
         self.assertEqual(format_cost_status(empty_cost_meter()), "0 tok · 0 tools · 0s")
+        self.assertEqual(
+            format_context_usage_status(empty_cost_meter(), "compact"),
+            "Context: Compact",
+        )
+        self.assertEqual(
+            format_context_usage_status(meter, "compact"),
+            "Context: Compact · 1.3k tok · 2 tools · 1.5s",
+        )
+        self.assertEqual(
+            format_context_usage_status(meter, "balanced"),
+            "Context: Balanced · 1.3k tok · 2 tools · 1.5s",
+        )
+        shown = format_context_usage_status(meter, "balanced")
+        self.assertNotIn("input", shown)
+        self.assertNotIn("output", shown)
         self.assertEqual(clamp_ai_split_bottom(""), 80)
         self.assertEqual(clamp_ai_split_bottom(40), 64)
         self.assertEqual(clamp_ai_split_bottom(900), 400)
+
+    def test_context_mode_compacts_findings_tools_and_history(self) -> None:
+        self.assertEqual(normalize_ai_context_mode(""), "balanced")
+        self.assertEqual(normalize_ai_context_mode("Full evidence"), "full")
+        overview = ai_context_mode_settings_overview()
+        self.assertIn("Compact — fewer", overview)
+        self.assertIn("Balanced (default)", overview)
+        self.assertIn("Full evidence — complete", overview)
+        compact_tools = tool_names_for_context_mode("compact", "triage")
+        self.assertIsNotNone(compact_tools)
+        self.assertIn("detect_anomalies", compact_tools)
+        self.assertIn("search_timeline", compact_tools)
+        self.assertNotIn("what_if", compact_tools)
+        self.assertIsNone(tool_names_for_context_mode("full", "triage"))
+        findings = "\n".join(
+            [
+                "Analysis Findings",
+                "",
+                "1. [ERROR] id=e1 Critical stall",
+                "   CS[22] blocked jump:100",
+                "",
+                "2. [INFO] id=i1 Idle note",
+                "   Idle[0] idle",
+                "",
+                "3. [WARNING] id=w1 Thrash",
+                "   CS[22] migrates jump:200",
+                "",
+                "4. [INFO] id=i2 Tick",
+                "   TICK ok",
+                "",
+                "5. [INFO] id=i3 Load",
+                "   load ok",
+                "",
+                "6. [INFO] id=i4 Extra",
+                "   extra",
+                "",
+                "7. [WARNING] id=w2 Mutex",
+                "   mutex jump:300",
+                "",
+            ]
+        )
+        compact = compact_findings_text(findings, "compact")
+        self.assertIn("Critical stall", compact)
+        self.assertIn("jump:100", compact)
+        self.assertIn("Thrash", compact)
+        self.assertIn("2 more finding", compact)
+        self.assertNotIn("id=i4 Extra", compact)
+        payload = compact_tool_result_payload(
+            {"ok": True, "message": "rows", "rows": list(range(25)),
+             "experiments": [{"change": f"c{i}"} for i in range(8)]},
+            "compact",
+        )
+        self.assertEqual(len(payload["rows"]), 10)
+        self.assertEqual(len(payload["experiments"]), 3)
+        self.assertTrue(payload["truncated"])
+        hist = compact_chat_history(
+            [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "q1"},
+                {"role": "assistant", "content": "a1"},
+                {"role": "user", "content": "q2"},
+                {"role": "assistant", "content": "a2"},
+                {"role": "user", "content": "q3"},
+                {"role": "assistant", "content": "a3"},
+            ],
+            "compact",
+            investigation_summary="Focus: CS[22] stall",
+        )
+        users = [m["content"] for m in hist if m["role"] == "user"]
+        self.assertTrue(any("Investigation summary" in u for u in users))
+        self.assertIn("q2", users)
+        self.assertIn("q3", users)
+        self.assertNotIn("q1", users)
 
     def test_falsify_migration(self) -> None:
         f = falsification_checks({
@@ -691,6 +787,54 @@ class InvestigationCaseTests(unittest.TestCase):
         )
         self.assertFalse(weak["ok"])
 
+    def test_parse_benchmark_context_modes(self) -> None:
+        self.assertEqual(
+            parse_benchmark_context_modes("all"),
+            ["compact", "balanced", "full"],
+        )
+        self.assertEqual(parse_benchmark_context_modes("compact"), ["compact"])
+        self.assertEqual(
+            parse_benchmark_context_modes("compact,balanced"),
+            ["compact", "balanced"],
+        )
+
+    def test_live_benchmark_compare_context_modes(self) -> None:
+        root = BTF_ROOT / "tests" / "ai"
+        cases = {c["id"]: c for c in load_benchmark_dataset(str(root))}
+        model = "fixture-model"
+
+        def complete(_query, _findings, used_model, case, context_mode="full"):
+            self.assertEqual(used_model, model)
+            canned = cases[case["id"]]
+            tok = {"compact": 900, "balanced": 1800, "full": 3200}[context_mode]
+            return {
+                "content": canned["response"],
+                "tool_calls": [{"name": n} for n in canned.get("tools") or []],
+                "elapsed_s": {"compact": 1.0, "balanced": 2.0, "full": 3.0}[context_mode],
+                "usage": {
+                    "prompt_tokens": tok - 100,
+                    "completion_tokens": 100,
+                    "total_tokens": tok,
+                },
+            }
+
+        live = run_live_benchmark(
+            root,
+            [model],
+            complete=complete,
+            fail_under=50,
+            context_modes=["compact", "balanced", "full"],
+        )
+        self.assertEqual(live["context_modes"], ["compact", "balanced", "full"])
+        self.assertEqual(len(live["models"]), 3)
+        by_mode = {b["context_mode"]: b for b in live["models"]}
+        self.assertEqual(by_mode["compact"]["rows"][0]["total_tokens"], 900)
+        self.assertEqual(by_mode["full"]["rows"][0]["total_tokens"], 3200)
+        md = format_benchmark_markdown(live=live, dataset="tests/ai")
+        self.assertIn("Context mode comparison", md)
+        self.assertIn("Compact", md)
+        self.assertIn("Total tok", md)
+
     def test_cli_ai_test_runs_dataset(self) -> None:
         from btf_viewer_pkg.cli import _cli_ai_test_run
         from argparse import Namespace
@@ -721,6 +865,11 @@ class InvestigationCaseParitySurfaceTests(unittest.TestCase):
             "historicalKnowledgeForFinding",
             "statusWithCost",
             "formatCostStatus",
+            "formatContextUsageStatus",
+            "normalizeAiContextMode",
+            "compactFindingsText",
+            "compactChatHistory",
+            "toolNamesForContextMode",
             "clampAiSplitBottom",
             "scoreAdversarialMetrics",
             "costMeterActive",

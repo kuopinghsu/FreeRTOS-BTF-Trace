@@ -832,6 +832,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
             "  %(prog)s ai-test --dataset tests/ai\n"
             "  %(prog)s ai-test --dataset tests/ai --fail-under 70\n"
             "  %(prog)s ai-test --config examples/ai/benchmark.xml -o AI_BENCHMARK.md\n"
+            "  %(prog)s ai-test --config examples/ai/benchmark.xml --compare-context\n"
             "  %(prog)s ai-test --config examples/ai/benchmark-selfsigned.xml\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -869,6 +870,16 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         "-o", "--output", metavar="PATH",
         default="",
         help="write a markdown report (e.g. AI_BENCHMARK.md; or <output> in --config)",
+    )
+    ai_test.add_argument(
+        "--context-mode", metavar="MODE",
+        default="",
+        help="live context packing: compact, balanced, full (default full), or compact,balanced,full",
+    )
+    ai_test.add_argument(
+        "--compare-context",
+        action="store_true",
+        help="live: run Compact, Balanced, and Full evidence and compare score, tokens, latency",
     )
 
     return parser, {
@@ -1889,7 +1900,20 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
                 live_benchmark_chat,
                 normalize_ai_base_url,
             )
+            from .ai_case import (
+                AI_CONTEXT_MODE_FULL,
+                ai_context_mode_label,
+                parse_benchmark_context_modes,
+            )
             from .ai_tools import ai_viewer_tools
+            compare_ctx = bool(getattr(args, "compare_context", False))
+            ctx_raw = str(getattr(args, "context_mode", "") or "").strip()
+            if compare_ctx:
+                context_modes = parse_benchmark_context_modes("all")
+            elif ctx_raw:
+                context_modes = parse_benchmark_context_modes(ctx_raw)
+            else:
+                context_modes = [AI_CONTEXT_MODE_FULL]
             try:
                 selected = select_benchmark_suite_models(suite, models_raw)
             except ValueError as exc:
@@ -1935,14 +1959,18 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
                     flush=True,
                 )
 
-            def complete(query, findings_text, model, case):
+            def complete(query, findings_text, model, case, context_mode=AI_CONTEXT_MODE_FULL):
                 spec = by_id.get(str(model) or "") or {}
                 cid = str((case or {}).get("id") or "?")
                 url = override_url or str(spec.get("base_url") or "")
                 tls_ok = False if insecure else bool(spec.get("tls_verify", True))
                 timeout = float(spec.get("timeout_s") or 0.0) or max(
                     float(AI_CHAT_TIMEOUT_S), 180.0)
-                print(f"[ai-test] {model}  {cid} …", file=sys.stderr, flush=True)
+                ctx_label = ai_context_mode_label(context_mode)
+                print(
+                    f"[ai-test] {model}  {cid}  {ctx_label} …",
+                    file=sys.stderr, flush=True,
+                )
                 turn = live_benchmark_chat(
                     query,
                     findings_text,
@@ -1954,10 +1982,11 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
                     preset=str(spec.get("preset") or ""),
                     tls_verify=tls_ok,
                     timeout_s=timeout,
+                    context_mode=context_mode,
                 )
                 if turn.get("error"):
                     print(
-                        f"[ai-test] {model}  {cid}  error: {turn['error']}",
+                        f"[ai-test] {model}  {cid}  {ctx_label}  error: {turn['error']}",
                         file=sys.stderr, flush=True,
                     )
                 return turn
@@ -1967,6 +1996,7 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
                 [str(m.get("id") or "") for m in selected],
                 complete=complete,
                 fail_under=fail_under,
+                context_modes=context_modes,
             )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)

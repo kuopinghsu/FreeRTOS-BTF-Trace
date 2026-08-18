@@ -21,9 +21,11 @@ import {
 import {
   CAPABILITY_CHAT_PROBE,
   capabilityProbeBody,
+  contextModeSystemAddendum,
   formatCapabilityReport,
   inferModelCapability,
   mergeLiveCapability,
+  normalizeAiContextMode,
   toolCallingFromChatResponse,
 } from './aiCase.js'
 
@@ -73,10 +75,14 @@ export const AI_CHAT_TIMEOUT_MS = 120000
 export const AI_LIST_MODELS_TIMEOUT_MS = 12000
 export const AI_TEST_TIMEOUT_MS = 120000
 
-export function buildAiSystemPrompt(responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE) {
+export function buildAiSystemPrompt(
+  responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE,
+  contextMode = '',
+) {
   const lang = String(responseLanguage || DEFAULT_AI_RESPONSE_LANGUAGE).trim()
     || DEFAULT_AI_RESPONSE_LANGUAGE
-  return `${AI_SYSTEM_PROMPT} Always write your entire reply in ${lang}.`
+  const extra = contextModeSystemAddendum(contextMode)
+  return `${AI_SYSTEM_PROMPT} Always write your entire reply in ${lang}.${extra}`
 }
 
 export const AI_COMPARE_TEMPLATE_ID = 'compare'
@@ -849,6 +855,9 @@ export function parseAiSettingsJson(data) {
     const value = jsonBool(parsed, ...keys)
     if (value !== undefined) out[dest] = value
   }
+  const contextMode = jsonStr(
+    parsed, 'context_mode', 'ai_context_mode', 'aiContextMode')
+  if (contextMode) out.aiContextMode = normalizeAiContextMode(contextMode)
   return out
 }
 
@@ -1418,6 +1427,7 @@ export async function aiChatCompletion({
   tools = null,
   signal,
   timeoutMs = AI_CHAT_TIMEOUT_MS,
+  maxTokens = null,
 } = {}) {
   const urlBase = normalizeAiBaseUrl(baseUrl)
   const chatModel = String(model || DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL
@@ -1452,6 +1462,8 @@ export async function aiChatCompletion({
     // Omit tool_choice — Ollama/some proxies 400 on it and used to drop tools.
     payload.tools = useTools
   }
+  const cap = Number(maxTokens)
+  if (Number.isFinite(cap) && cap > 0) payload.max_tokens = Math.trunc(cap)
 
   const chatCtrl = new AbortController()
   let timedOut = false

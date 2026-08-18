@@ -5615,7 +5615,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         keys = ["enabled", "preset", "response_language", "auto_apply", "mcp_log",
                 "user_investigation_templates", "user_historical_knowledge",
                 "redact_task_names", "trace_sensitive", "extra_presets",
-                "split_bottom", "investigation_session"]
+                "split_bottom", "investigation_session", "context_mode"]
         pids = [pid for pid, _label, _base, _model in AI_PRESETS]
         for pid in extra_ids:
             if pid and pid not in pids:
@@ -9588,6 +9588,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             in ("1", "true", "yes", "on"),
             ai_trace_sensitive=str(_ai_cfg.get("trace_sensitive", "false")).lower()
             in ("1", "true", "yes", "on"),
+            ai_context_mode=_ai_cfg.get("context_mode") or "",
             initial_page=page if isinstance(page, str) else "Appearance",
         )
         dlg.live_preview.connect(lambda: self._apply_settings_preview({
@@ -9650,6 +9651,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 "mcp_log": str(dlg.ai_mcp_log).lower(),
                 "redact_task_names": str(dlg.ai_redact_task_names).lower(),
                 "trace_sensitive": str(dlg.ai_trace_sensitive).lower(),
+                "context_mode": dlg.ai_context_mode,
                 "extra_presets": dump_extra_ai_presets(dlg.ai_extra_presets),
             }
             for _pid, _vals in dlg.ai_preset_settings.items():
@@ -9667,6 +9669,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 refresh = getattr(panel, "_refresh_localized_chrome", None)
                 if callable(refresh):
                     refresh(_ai_upd.get("response_language"))
+                usage = getattr(panel, "_refresh_usage", None)
+                if callable(usage):
+                    usage()
             set_ai_mcp_log_enabled(bool(dlg.ai_mcp_log))
             # Tab visibility follows Enable AI even when only that flag changed.
             self._sync_panel_tab_visibility()

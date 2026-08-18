@@ -17760,6 +17760,470 @@ GUIDED_STAGE_LABELS: Dict[str, str] = {
     "compare": "Compare",
 }
 
+AI_CONTEXT_MODE_COMPACT = "compact"
+AI_CONTEXT_MODE_BALANCED = "balanced"
+AI_CONTEXT_MODE_FULL = "full"
+AI_CONTEXT_MODES: Tuple[str, ...] = (
+    AI_CONTEXT_MODE_COMPACT, AI_CONTEXT_MODE_BALANCED, AI_CONTEXT_MODE_FULL,
+)
+DEFAULT_AI_CONTEXT_MODE = AI_CONTEXT_MODE_BALANCED
+AI_CONTEXT_MODE_LABELS: Dict[str, str] = {
+    AI_CONTEXT_MODE_COMPACT: "Compact",
+    AI_CONTEXT_MODE_BALANCED: "Balanced",
+    AI_CONTEXT_MODE_FULL: "Full evidence",
+}
+AI_CONTEXT_MODE_SETTINGS_TOOLTIP = (
+    "How much Findings, tools, and chat history are sent to the model."
+)
+AI_CONTEXT_MODE_SETTINGS_LINES: Dict[str, str] = {
+    AI_CONTEXT_MODE_COMPACT: (
+        "Compact — fewer Findings and tools; best for small local models."
+    ),
+    AI_CONTEXT_MODE_BALANCED: (
+        "Balanced (default) — moderate Findings, tools, and history."
+    ),
+    AI_CONTEXT_MODE_FULL: (
+        "Full evidence — complete Findings, tools, and history."
+    ),
+}
+# Stage-only tool names for Compact; Balanced adds neighbours + extras.
+AI_CONTEXT_STAGE_TOOLS: Dict[str, Tuple[str, ...]] = {
+    "triage": ("detect_anomalies", "cluster_findings", "suggest_scope"),
+    "scope": ("set_cursors", "zoom_to_range", "highlight_task"),
+    "investigate": ("investigate", "correlate_events", "find_critical_path"),
+    "verify": ("verify_claim", "detect_contradictions", "challenge_conclusion"),
+    "experiment": ("what_if", "optimize_experiment", "recommend_experiments"),
+    "compare": ("compare_performance", "validate_experiment"),
+    "report": ("generate_report", "export_investigation"),
+}
+AI_CONTEXT_ALWAYS_TOOLS: Tuple[str, ...] = (
+    "search_timeline", "query_raw_metric", "summarize_investigation_context",
+)
+AI_CONTEXT_BALANCED_EXTRA_TOOLS: Tuple[str, ...] = (
+    "detect_anomalies", "investigate", "set_cursors", "zoom_to_range",
+    "highlight_task", "challenge_conclusion", "what_if",
+)
+_CONTEXT_TOOL_ROW_KEYS: Tuple[str, ...] = (
+    "rows", "episodes", "slices", "events", "gaps", "hits", "times",
+    "experiments", "anomalies", "candidates", "samples", "values",
+)
+_FINDING_ITEM_RE = re.compile(r"(?m)^(\d+)\. \[([A-Z]+)\]")
+_SEV_CONTEXT_RANK = {"error": 0, "critical": 0, "warning": 1, "info": 2}
+
+
+def normalize_ai_context_mode(value: Any) -> str:
+    """Settings → AI context mode (default Balanced)."""
+    raw = str(value or "").strip().lower().replace("-", " ").replace("_", " ")
+    if raw in ("compact", "reduced", "reduce", "low"):
+        return AI_CONTEXT_MODE_COMPACT
+    if raw in ("full", "full evidence", "fullevidence", "complete", "max"):
+        return AI_CONTEXT_MODE_FULL
+    return DEFAULT_AI_CONTEXT_MODE
+
+
+def ai_context_mode_label(mode: Any) -> str:
+    return AI_CONTEXT_MODE_LABELS.get(
+        normalize_ai_context_mode(mode), AI_CONTEXT_MODE_LABELS[DEFAULT_AI_CONTEXT_MODE])
+
+
+def ai_context_mode_settings_overview() -> str:
+    """Multi-line Settings → AI help describing all three context modes."""
+    return "\n".join(AI_CONTEXT_MODE_SETTINGS_LINES[m] for m in AI_CONTEXT_MODES)
+
+
+def ai_context_mode_settings_help(mode: Any = None) -> str:
+    """One-line Settings help for the selected context mode."""
+    key = normalize_ai_context_mode(mode)
+    return AI_CONTEXT_MODE_SETTINGS_LINES.get(
+        key, AI_CONTEXT_MODE_SETTINGS_LINES[DEFAULT_AI_CONTEXT_MODE])
+
+
+def ai_context_limits(mode: Any = None) -> Dict[str, Any]:
+    """Token-budget knobs for Compact / Balanced / Full evidence."""
+    key = normalize_ai_context_mode(mode)
+    if key == AI_CONTEXT_MODE_COMPACT:
+        return {
+            "findings": 5,
+            "tool_rows": 10,
+            "history_user_turns": 2,
+            "max_tokens": 500,
+            "what_if": 3,
+            "diagrams": "asked",
+        }
+    if key == AI_CONTEXT_MODE_FULL:
+        return {
+            "findings": None,
+            "tool_rows": 40,
+            "history_user_turns": 20,
+            "max_tokens": None,
+            "what_if": 12,
+            "diagrams": "useful",
+        }
+    return {
+        "findings": 12,
+        "tool_rows": 20,
+        "history_user_turns": 6,
+        "max_tokens": None,
+        "what_if": 5,
+        "diagrams": "useful",
+    }
+
+
+def context_mode_system_addendum(mode: Any = None) -> str:
+    """Extra system-prompt rules for the selected context mode."""
+    key = normalize_ai_context_mode(mode)
+    keep = (
+        "Never omit jump:TIME, range:LO/HI, real task names, measurements "
+        "with units, confidence, evidence quality, what-if disclaimers, or "
+        "at least one alternative / falsification."
+    )
+    if key == AI_CONTEXT_MODE_COMPACT:
+        return (
+            " Context mode is Compact: keep the reply around 300–500 tokens. "
+            "Generate mermaid diagrams only if the user asks. " + keep
+        )
+    if key == AI_CONTEXT_MODE_FULL:
+        return (
+            " Context mode is Full evidence: you may use the complete Findings, "
+            "tools, and history. Include mermaid when it clarifies a sequence "
+            "or migration. " + keep
+        )
+    return (
+        " Context mode is Balanced: prefer concise evidence-backed answers. "
+        "Include mermaid when it clarifies a sequence or migration. " + keep
+    )
+
+
+def _stage_tool_names(stage: Any) -> Tuple[str, ...]:
+    sid = str(stage or "").strip().lower()
+    if sid in ("", "idle", "start"):
+        sid = "triage"
+    return AI_CONTEXT_STAGE_TOOLS.get(sid, AI_CONTEXT_STAGE_TOOLS["triage"])
+
+
+def tool_names_for_context_mode(
+    mode: Any = None,
+    stage: Any = "",
+) -> Optional[List[str]]:
+    """Tool names to send, or None to send the full catalog."""
+    key = normalize_ai_context_mode(mode)
+    if key == AI_CONTEXT_MODE_FULL:
+        return None
+    names: List[str] = []
+    seen = set()
+
+    def _add(seq: Sequence[str]) -> None:
+        for name in seq:
+            n = str(name or "").strip()
+            if n and n not in seen:
+                seen.add(n)
+                names.append(n)
+
+    sid = str(stage or "").strip().lower()
+    if sid in ("", "idle", "start"):
+        sid = "triage"
+    _add(_stage_tool_names(sid))
+    _add(AI_CONTEXT_ALWAYS_TOOLS)
+    if key == AI_CONTEXT_MODE_BALANCED:
+        if sid in GUIDED_STAGES:
+            idx = list(GUIDED_STAGES).index(sid)
+            if idx > 0:
+                _add(_stage_tool_names(GUIDED_STAGES[idx - 1]))
+            if idx + 1 < len(GUIDED_STAGES):
+                _add(_stage_tool_names(GUIDED_STAGES[idx + 1]))
+        _add(AI_CONTEXT_BALANCED_EXTRA_TOOLS)
+        _add(AI_CONTEXT_STAGE_TOOLS["report"])
+    return names
+
+
+def filter_tools_for_context_mode(
+    tools: Optional[Sequence[Dict[str, Any]]],
+    mode: Any = None,
+    stage: Any = "",
+) -> List[Dict[str, Any]]:
+    """Subset of OpenAI tool schemas for the selected context mode."""
+    catalog = [t for t in (tools or []) if isinstance(t, dict)]
+    names = tool_names_for_context_mode(mode, stage)
+    if names is None:
+        return list(catalog)
+    want = set(names)
+    out: List[Dict[str, Any]] = []
+    for tool in catalog:
+        fn = tool.get("function") if isinstance(tool.get("function"), dict) else {}
+        name = str(fn.get("name") or "").strip()
+        if name in want:
+            out.append(tool)
+    return out
+
+
+def investigation_context_summary(payload: Optional[dict] = None) -> str:
+    """Short investigation recap used instead of older chat turns."""
+    if not isinstance(payload, dict) or not payload:
+        return ""
+    case = payload.get("investigation_case")
+    if not isinstance(case, dict):
+        case = {}
+    finding = payload.get("finding")
+    if not isinstance(finding, dict):
+        finding = {}
+    parts: List[str] = []
+    title = str(
+        case.get("goal") or finding.get("title") or finding.get("id") or ""
+    ).strip()
+    if title:
+        parts.append(f"Focus: {title}")
+    quality = payload.get("evidence_quality")
+    if isinstance(quality, dict):
+        band = str(quality.get("band") or "").strip()
+        if band:
+            parts.append(f"Evidence quality: {band}")
+    hyps = case.get("hypotheses") or payload.get("hypotheses") or []
+    for hyp in hyps:
+        if not isinstance(hyp, dict):
+            continue
+        text = str(hyp.get("hypothesis") or hyp.get("id") or "").strip()
+        if not text:
+            continue
+        status = str(hyp.get("status") or "").strip()
+        parts.append(f"- {status + ': ' if status else ''}{text}")
+        if len(parts) >= 8:
+            break
+    tools = case.get("tools_executed") or payload.get("tools_executed") or []
+    labels = [str(t).strip() for t in tools if str(t).strip()]
+    if labels:
+        parts.append("Tools: " + ", ".join(labels[:12]))
+    return "\n".join(parts).strip()
+
+
+def _finding_blocks(text: str) -> Tuple[str, List[Dict[str, str]]]:
+    blob = str(text or "")
+    matches = list(_FINDING_ITEM_RE.finditer(blob))
+    if not matches:
+        return blob.rstrip(), []
+    header = blob[: matches[0].start()].rstrip()
+    items: List[Dict[str, str]] = []
+    for i, match in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(blob)
+        items.append({
+            "sev": match.group(2).lower(),
+            "block": blob[match.start():end].rstrip(),
+        })
+    return header, items
+
+
+def compact_findings_text(
+    text: Any,
+    mode: Any = None,
+    findings: Optional[Sequence[dict]] = None,
+) -> str:
+    """Keep the most important Findings for the selected context mode."""
+    limits = ai_context_limits(mode)
+    cap = limits.get("findings")
+    raw = str(text or "").rstrip()
+    if cap is None or not raw:
+        return raw
+    header, items = _finding_blocks(raw)
+    if items:
+        ranked = sorted(
+            enumerate(items),
+            key=lambda row: (_SEV_CONTEXT_RANK.get(row[1]["sev"], 3), row[0]),
+        )
+        kept = [row[1]["block"] for row in ranked[: int(cap)]]
+        omitted = max(0, len(items) - len(kept))
+        lines = [header] if header else []
+        if lines:
+            lines.append("")
+        lines.extend(kept)
+        if omitted:
+            lines.append("")
+            lines.append(
+                f"{omitted} more finding(s) omitted "
+                f"({ai_context_mode_label(mode)}). Ask for Full evidence or a "
+                "specific finding id if needed."
+            )
+        return "\n".join(lines).rstrip() + "\n"
+    if findings:
+        ranked: List[Tuple[Any, ...]] = []
+        for i, finding in enumerate(findings):
+            if not isinstance(finding, dict):
+                continue
+            sev = str(finding.get("severity") or "info").lower()
+            ranked.append((_SEV_CONTEXT_RANK.get(sev, 3), i, finding))
+        ranked.sort(key=lambda row: row[:2])
+        kept_f = [row[2] for row in ranked[: int(cap)]]
+        omitted = max(0, len(ranked) - len(kept_f))
+        lines = ["Analysis Findings", ""]
+        for i, finding in enumerate(kept_f, 1):
+            sev = str(finding.get("severity") or "info").upper()
+            fid = str(finding.get("id") or "").strip()
+            id_bit = f" id={fid}" if fid else ""
+            lines.append(f"{i}. [{sev}]{id_bit} {finding.get('title') or 'Finding'}")
+            lines.append(f"   {finding.get('text') or ''}")
+            for ev in (finding.get("evidence") or []):
+                if isinstance(ev, dict) and ev.get("time") is not None:
+                    lines.append(
+                        f"   evidence: {ev.get('label') or 'event'} jump:{ev.get('time')}"
+                    )
+                elif ev:
+                    lines.append(f"   evidence: {ev}")
+            lines.append("")
+        if omitted:
+            lines.append(
+                f"{omitted} more finding(s) omitted "
+                f"({ai_context_mode_label(mode)})."
+            )
+        return "\n".join(lines).rstrip() + "\n"
+    if len(raw) > 8000 and normalize_ai_context_mode(mode) == AI_CONTEXT_MODE_COMPACT:
+        return raw[:8000].rstrip() + "\n… (truncated for Compact context)\n"
+    if len(raw) > 20000 and normalize_ai_context_mode(mode) == AI_CONTEXT_MODE_BALANCED:
+        return raw[:20000].rstrip() + "\n… (truncated for Balanced context)\n"
+    return raw if raw.endswith("\n") else raw + "\n"
+
+
+def _truncate_tool_lists(obj: Any, row_cap: int, what_if_cap: int) -> Any:
+    if isinstance(obj, list):
+        if len(obj) > row_cap:
+            return obj[:row_cap]
+        return [_truncate_tool_lists(v, row_cap, what_if_cap) for v in obj]
+    if not isinstance(obj, dict):
+        return obj
+    out: Dict[str, Any] = {}
+    for key, value in obj.items():
+        if key in ("experiments", "candidates") and isinstance(value, list):
+            cap = min(row_cap, what_if_cap)
+            if len(value) > cap:
+                out[key] = [_truncate_tool_lists(v, row_cap, what_if_cap) for v in value[:cap]]
+                out.setdefault("truncated", True)
+                out["omitted"] = max(int(out.get("omitted") or 0), len(value) - cap)
+            else:
+                out[key] = [_truncate_tool_lists(v, row_cap, what_if_cap) for v in value]
+        elif key in _CONTEXT_TOOL_ROW_KEYS and isinstance(value, list):
+            if len(value) > row_cap:
+                out[key] = [_truncate_tool_lists(v, row_cap, what_if_cap) for v in value[:row_cap]]
+                out.setdefault("truncated", True)
+                out["omitted"] = max(int(out.get("omitted") or 0), len(value) - row_cap)
+            else:
+                out[key] = [_truncate_tool_lists(v, row_cap, what_if_cap) for v in value]
+        else:
+            out[key] = _truncate_tool_lists(value, row_cap, what_if_cap)
+    return out
+
+
+def compact_tool_result_payload(result: Any, mode: Any = None) -> Any:
+    """Shrink list-heavy tool payloads before they go back to the model."""
+    limits = ai_context_limits(mode)
+    row_cap = int(limits.get("tool_rows") or 40)
+    what_if_cap = int(limits.get("what_if") or 12)
+    payload = result
+    parsed_json = False
+    if isinstance(result, str):
+        text = result.strip()
+        if text.startswith("{") or text.startswith("["):
+            try:
+                payload = json.loads(text)
+                parsed_json = True
+            except ValueError:
+                payload = result
+    if not isinstance(payload, (dict, list)):
+        return result
+    compacted = _truncate_tool_lists(payload, row_cap, what_if_cap)
+    if isinstance(compacted, dict) and compacted.get("omitted"):
+        msg = str(compacted.get("message") or "").rstrip()
+        extra = (
+            f"{compacted['omitted']} more row(s) omitted "
+            f"({ai_context_mode_label(mode)})."
+        )
+        compacted["message"] = f"{msg} {extra}".strip() if msg else extra
+    if parsed_json:
+        return json.dumps(compacted, default=str)
+    return compacted
+
+
+def compact_chat_history(
+    messages: Optional[Sequence[Dict[str, Any]]],
+    mode: Any = None,
+    investigation_summary: str = "",
+) -> List[Dict[str, Any]]:
+    """Keep system + last N user turns (and their tool follow-ups)."""
+    limits = ai_context_limits(mode)
+    keep_turns = max(1, int(limits.get("history_user_turns") or 2))
+    msgs = [m for m in (messages or []) if isinstance(m, dict)]
+    system: List[Dict[str, Any]] = []
+    rest: List[Dict[str, Any]] = []
+    for msg in msgs:
+        if str(msg.get("role") or "") == "system" and not rest:
+            system.append(dict(msg))
+        else:
+            rest.append(dict(msg))
+    user_idxs = []
+    for i, msg in enumerate(rest):
+        if str(msg.get("role") or "") != "user":
+            continue
+        content = str(msg.get("content") or "").lower()
+        if "tool-call limit" in content:
+            continue
+        user_idxs.append(i)
+    omitted = 0
+    if len(user_idxs) > keep_turns:
+        omitted = len(user_idxs) - keep_turns
+        rest = rest[user_idxs[-keep_turns]:]
+    extra: List[Dict[str, Any]] = []
+    if omitted:
+        summary = str(investigation_summary or "").strip()
+        if summary:
+            extra.append({
+                "role": "user",
+                "content": "### Investigation summary\n" + summary,
+            })
+        else:
+            extra.append({
+                "role": "user",
+                "content": (
+                    f"[{omitted} earlier turn(s) omitted for "
+                    f"{ai_context_mode_label(mode)} context.]"
+                ),
+            })
+        extra.append({
+            "role": "assistant",
+            "content": "Understood. Continue from the recent turns.",
+        })
+    compacted: List[Dict[str, Any]] = []
+    for msg in rest:
+        copied = dict(msg)
+        if str(copied.get("role") or "") == "tool":
+            copied["content"] = compact_tool_result_payload(
+                copied.get("content"), mode)
+        compacted.append(copied)
+    return system + extra + compacted
+
+
+def format_context_usage_status(
+    meter: Optional[dict] = None,
+    mode: Any = None,
+) -> str:
+    """AI panel usage bar: ``Context: Compact · 1.3k tok · 2 tools · 1.5s``."""
+    label = ai_context_mode_label(mode)
+    m = meter if isinstance(meter, dict) else empty_cost_meter()
+    try:
+        tokens = int(m.get("total_tokens") or 0)
+    except (TypeError, ValueError):
+        tokens = 0
+    try:
+        tools = int(m.get("tool_calls") or 0)
+    except (TypeError, ValueError):
+        tools = 0
+    try:
+        time_s = float(m.get("model_time_s") or 0)
+    except (TypeError, ValueError):
+        time_s = 0.0
+    if tokens <= 0 and tools <= 0 and time_s <= 0:
+        return f"Context: {label}"
+    time_part = f"{time_s:g}s" if time_s else "0s"
+    return (
+        f"Context: {label} · {_format_token_count(tokens)} tok · "
+        f"{tools} tools · {time_part}"
+    )
+
 
 def _guide_tool_names(payload: Optional[dict], plan: Optional[dict]) -> List[str]:
     names: List[str] = []
@@ -20780,6 +21244,9 @@ def score_benchmark_response(
     tools: Optional[Sequence[str]] = None,
     fail_under: int = 0,
     elapsed_s: Optional[float] = None,
+    prompt_tokens: Optional[int] = None,
+    completion_tokens: Optional[int] = None,
+    total_tokens: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Score one case from a model (or fixture) reply."""
     expected = case.get("expected") if isinstance(case.get("expected"), dict) else case
@@ -20833,6 +21300,12 @@ def score_benchmark_response(
     scored["validation"] = report
     if elapsed_s is not None:
         scored["elapsed_s"] = round(float(elapsed_s), 2)
+    if prompt_tokens is not None:
+        scored["prompt_tokens"] = max(0, _safe_int(prompt_tokens))
+    if completion_tokens is not None:
+        scored["completion_tokens"] = max(0, _safe_int(completion_tokens))
+    if total_tokens is not None:
+        scored["total_tokens"] = max(0, _safe_int(total_tokens))
     scored["tools"] = list(tools or [])
     return scored
 
@@ -20865,69 +21338,117 @@ def run_offline_benchmark(
     }
 
 
+def parse_benchmark_context_modes(raw: str = "") -> List[str]:
+    """Parse ``--context-mode`` / ``--compare-context`` for live ai-test."""
+    text = str(raw or "").strip().lower()
+    if text in ("", "all", "compare", "compare-context", "three"):
+        return list(AI_CONTEXT_MODES)
+    if text in ("default", "full", "full evidence"):
+        return [AI_CONTEXT_MODE_FULL]
+    out: List[str] = []
+    seen = set()
+    for part in re.split(r"[\s,]+", text):
+        key = normalize_ai_context_mode(part)
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out or [DEFAULT_AI_CONTEXT_MODE]
+
+
 def run_live_benchmark(
     dataset_path: Any,
     models: Sequence[str],
     *,
     complete: Callable[..., Dict[str, Any]],
     fail_under: int = 0,
+    context_modes: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
-    """Score live model replies. *complete(query, findings_text, model, case)*."""
+    """Score live model replies. *complete(query, findings_text, model, case, context_mode=...)*."""
     from datetime import datetime, timezone
     ids = [str(m).strip() for m in (models or []) if str(m).strip()]
     if not ids:
         raise ValueError("live benchmark needs at least one model id")
+    modes = [
+        normalize_ai_context_mode(m)
+        for m in (context_modes or [AI_CONTEXT_MODE_FULL])
+    ]
+    seen_modes = set()
+    mode_list: List[str] = []
+    for m in modes:
+        if m not in seen_modes:
+            seen_modes.add(m)
+            mode_list.append(m)
     cases = load_benchmark_dataset(str(dataset_path))
     run_id = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
     per_model: List[Dict[str, Any]] = []
     for model in ids:
-        rows: List[Dict[str, Any]] = []
-        error = ""
-        for case in cases:
-            query = str(case.get("question") or "").strip() or "Investigate the main problem."
-            findings = benchmark_prompt_context(case)
-            try:
-                turn = complete(query, findings, model, case) or {}
-            except Exception as exc:
-                error = str(exc)
-                turn = {"content": "", "tool_calls": [], "elapsed_s": 0, "error": error}
-            if not isinstance(turn, dict):
-                turn = {"content": str(turn or "")}
-            content = str(turn.get("content") or "")
-            raw_calls = turn.get("tool_calls") or []
-            names: List[str] = []
-            for c in raw_calls:
-                if isinstance(c, dict):
-                    name = str(c.get("name") or "")
-                    if name:
-                        names.append(name)
-                elif c:
-                    names.append(str(c))
-            row = score_benchmark_response(
-                case,
-                response=content,
-                tools=names,
-                fail_under=fail_under,
-                elapsed_s=turn.get("elapsed_s"),
-            )
-            if turn.get("error"):
-                row["error"] = str(turn.get("error"))
-                row["pass"] = False
-            rows.append(row)
-        failed = [r for r in rows if not r.get("pass")]
-        per_model.append({
-            "model": model,
-            "category": benchmark_model_category(model),
-            "run_id": run_id,
-            "rows": rows,
-            "failed": failed,
-            "report": format_benchmark_report(f"{run_id}-{model}", rows),
-            "ok": not failed and not error,
-            "error": error,
-        })
+        for ctx_mode in mode_list:
+            rows: List[Dict[str, Any]] = []
+            error = ""
+            for case in cases:
+                query = str(case.get("question") or "").strip() or "Investigate the main problem."
+                findings = benchmark_prompt_context(case)
+                try:
+                    turn = complete(
+                        query, findings, model, case, context_mode=ctx_mode) or {}
+                except TypeError:
+                    turn = complete(query, findings, model, case) or {}
+                except Exception as exc:
+                    error = str(exc)
+                    turn = {
+                        "content": "",
+                        "tool_calls": [],
+                        "elapsed_s": 0,
+                        "usage": {},
+                        "error": error,
+                    }
+                if not isinstance(turn, dict):
+                    turn = {"content": str(turn or "")}
+                content = str(turn.get("content") or "")
+                raw_calls = turn.get("tool_calls") or []
+                names: List[str] = []
+                for c in raw_calls:
+                    if isinstance(c, dict):
+                        name = str(c.get("name") or "")
+                        if name:
+                            names.append(name)
+                    elif c:
+                        names.append(str(c))
+                usage = turn.get("usage") if isinstance(turn.get("usage"), dict) else {}
+                row = score_benchmark_response(
+                    case,
+                    response=content,
+                    tools=names,
+                    fail_under=fail_under,
+                    elapsed_s=turn.get("elapsed_s"),
+                    prompt_tokens=usage.get("prompt_tokens"),
+                    completion_tokens=usage.get("completion_tokens"),
+                    total_tokens=usage.get("total_tokens"),
+                )
+                if turn.get("error"):
+                    row["error"] = str(turn.get("error"))
+                    row["pass"] = False
+                rows.append(row)
+            failed = [r for r in rows if not r.get("pass")]
+            label = ai_context_mode_label(ctx_mode)
+            block_id = model if len(mode_list) == 1 else f"{model} ({label})"
+            per_model.append({
+                "model": model,
+                "context_mode": ctx_mode,
+                "context_label": label,
+                "block_id": block_id,
+                "category": benchmark_model_category(model),
+                "run_id": run_id,
+                "rows": rows,
+                "failed": failed,
+                "report": format_benchmark_report(f"{run_id}-{block_id}", rows),
+                "ok": not failed and not error,
+                "error": error,
+            })
     return {
         "run_id": run_id,
         "mode": "live",
+        "context_modes": mode_list,
         "models": per_model,
         "ok": all(m.get("ok") for m in per_model),
         "report": "".join(m["report"] for m in per_model),
@@ -20956,6 +21477,29 @@ def format_benchmark_markdown(
     part_keys = (
         "finding", "evidence", "tool_use", "root_cause", "calibration", "safety",
     )
+
+    def _row_stats(rows: Sequence[dict]) -> Dict[str, Any]:
+        seq = list(rows or [])
+        n = len(seq)
+        avg_overall = int(round(sum(int(r.get("overall") or 0) for r in seq) / n)) if n else 0
+        passed = sum(1 for r in seq if r.get("pass"))
+        lat = [
+            float(r.get("elapsed_s") or 0)
+            for r in seq if r.get("elapsed_s") is not None
+        ]
+        mean_lat = sum(lat) / len(lat) if lat else None
+        prompt = sum(int(r.get("prompt_tokens") or 0) for r in seq)
+        completion = sum(int(r.get("completion_tokens") or 0) for r in seq)
+        total = sum(int(r.get("total_tokens") or 0) for r in seq)
+        return {
+            "n": n,
+            "avg_overall": avg_overall,
+            "passed": passed,
+            "mean_lat": mean_lat,
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": total or (prompt + completion),
+        }
 
     def _table(rows: Sequence[dict]) -> List[str]:
         out = [
@@ -20990,28 +21534,85 @@ def format_benchmark_markdown(
         lines.append("")
     if live:
         blocks = list(live.get("models") or [])
+        mode_list = list(live.get("context_modes") or [])
+        multi_ctx = len(mode_list) > 1
         if blocks:
+            header = (
+                "| Model | Context | Category | Overall | Pass | Total tok | Mean latency |"
+                if multi_ctx else
+                "| Model | Category | Overall | Pass | Total tok | Mean latency |"
+            )
+            sep = (
+                "|---|---|---|---:|---:|---:|---:|"
+                if multi_ctx else
+                "|---|---|---:|---:|---:|---:|"
+            )
             lines.extend([
                 "## Comparison",
                 "",
-                "| Model | Category | Overall | Pass | Mean latency |",
-                "|---|---|---:|---:|---:|",
+                header,
+                sep,
             ])
             for block in blocks:
-                rows = list(block.get("rows") or [])
-                n = len(rows)
-                avg = int(round(sum(int(r.get("overall") or 0) for r in rows) / n)) if n else 0
-                passed = sum(1 for r in rows if r.get("pass"))
-                lat = [
-                    float(r.get("elapsed_s") or 0)
-                    for r in rows if r.get("elapsed_s") is not None
-                ]
-                mean_lat = f"{sum(lat) / len(lat):.1f}s" if lat else "—"
-                lines.append(
-                    f"| `{block.get('model') or '?'}` | "
-                    f"{block.get('category') or ''} | {avg} | "
-                    f"{passed}/{n} | {mean_lat} |"
-                )
+                stats = _row_stats(block.get("rows") or [])
+                mean_lat = f"{stats['mean_lat']:.1f}s" if stats["mean_lat"] is not None else "—"
+                tok = stats["total_tokens"] or "—"
+                cells = [f"`{block.get('model') or '?'}`"]
+                if multi_ctx:
+                    cells.append(str(block.get("context_label") or ai_context_mode_label(
+                        block.get("context_mode"))))
+                cells.extend([
+                    str(block.get("category") or ""),
+                    str(stats["avg_overall"]),
+                    f"{stats['passed']}/{stats['n']}",
+                    str(tok),
+                    mean_lat,
+                ])
+                lines.append("| " + " | ".join(cells) + " |")
+            if multi_ctx:
+                by_model: Dict[str, List[dict]] = {}
+                for block in blocks:
+                    by_model.setdefault(str(block.get("model") or "?"), []).append(block)
+                lines.extend([
+                    "",
+                    "## Context mode comparison",
+                    "",
+                    "Same model and dataset; Compact / Balanced / Full evidence packing.",
+                    "",
+                ])
+                for model, group in by_model.items():
+                    lines.extend([f"### `{model}`", ""])
+                    lines.extend([
+                        "| Context | Overall | Pass | Prompt tok | Completion tok | "
+                        "Total tok | Mean latency |",
+                        "|---|---:|---:|---:|---:|---:|---:|",
+                    ])
+                    for block in sorted(
+                        group,
+                        key=lambda b: AI_CONTEXT_MODES.index(
+                            normalize_ai_context_mode(b.get("context_mode"))
+                        ) if normalize_ai_context_mode(
+                            b.get("context_mode")) in AI_CONTEXT_MODES else 99,
+                    ):
+                        stats = _row_stats(block.get("rows") or [])
+                        mean_lat = (
+                            f"{stats['mean_lat']:.1f}s"
+                            if stats["mean_lat"] is not None else "—"
+                        )
+                        lines.append(
+                            "| "
+                            + " | ".join([
+                                str(block.get("context_label") or "?"),
+                                str(stats["avg_overall"]),
+                                f"{stats['passed']}/{stats['n']}",
+                                str(stats["prompt_tokens"] or "—"),
+                                str(stats["completion_tokens"] or "—"),
+                                str(stats["total_tokens"] or "—"),
+                                mean_lat,
+                            ])
+                            + " |"
+                        )
+                    lines.append("")
             lines.extend([
                 "",
                 "| Model | Finding | Evidence | Tool use | Root cause | Calibration | Safety |",
@@ -21025,7 +21626,8 @@ def format_benchmark_markdown(
                     parts_avg[key] = int(round(sum(
                         int((r.get("parts") or {}).get(key) or 0) for r in rows
                     ) / n)) if rows else 0
-                cells = [f"`{block.get('model') or '?'}`"]
+                label = str(block.get("block_id") or block.get("model") or "?")
+                cells = [f"`{label}`"]
                 cells.extend(str(parts_avg[k]) for k in part_keys)
                 lines.append("| " + " | ".join(cells) + " |")
             lines.append("")
@@ -21033,8 +21635,12 @@ def format_benchmark_markdown(
         for block in live.get("models") or []:
             model = str(block.get("model") or "")
             cat = str(block.get("category") or benchmark_model_category(model))
+            ctx = str(block.get("context_label") or "").strip()
+            title = f"`{model}`"
+            if ctx:
+                title = f"`{model}` — {ctx}"
             lines.extend([
-                f"### `{model}`",
+                f"### {title}",
                 "",
                 f"{cat}. Run `{block.get('run_id') or live.get('run_id') or ''}`.",
                 "",
@@ -21064,6 +21670,14 @@ def format_benchmark_markdown(
             if lat:
                 avg_s = sum(lat) / len(lat)
                 lines.extend(["", f"Mean latency: **{avg_s:.1f}s** / case."])
+            tok = _row_stats(block.get("rows") or [])
+            if tok["total_tokens"]:
+                lines.extend([
+                    "",
+                    f"Tokens: **{tok['prompt_tokens']}** prompt + "
+                    f"**{tok['completion_tokens']}** completion = "
+                    f"**{tok['total_tokens']}** total.",
+                ])
             lines.append("")
     if not offline and not live:
         lines.append("_No runs recorded._")
@@ -27677,6 +28291,12 @@ _MAX_CURSORS_TOOL = 8
 _MAX_TOOL_ROUNDS = 4
 
 
+def ai_viewer_tools_for_mode(mode: Any = None, stage: Any = "") -> List[Dict[str, Any]]:
+    """Tool schemas for Settings → AI context mode (Full = complete catalog)."""
+    pass
+    return filter_tools_for_context_mode(ai_viewer_tools(), mode, stage)
+
+
 def ai_viewer_tools() -> List[Dict[str, Any]]:
     """OpenAI-compatible ``tools`` array."""
     return [
@@ -33141,11 +33761,13 @@ AI_RESPONSE_LANGUAGES: Tuple[str, ...] = (
 
 def build_ai_system_prompt(
     response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
+    context_mode: str = "",
 ) -> str:
     """System prompt with an explicit reply-language instruction."""
     lang = (response_language or DEFAULT_AI_RESPONSE_LANGUAGE).strip() or DEFAULT_AI_RESPONSE_LANGUAGE
+    extra = context_mode_system_addendum(context_mode)
     return (
-        f"{AI_SYSTEM_PROMPT} Always write your entire reply in {lang}."
+        f"{AI_SYSTEM_PROMPT} Always write your entire reply in {lang}.{extra}"
     )
 
 # (id, label, prompt) — keep in sync with web/src/utils/ollamaClient.js
@@ -34039,6 +34661,10 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
         data, "response_language", "responseLanguage", "aiResponseLanguage")
     if language:
         patch["response_language"] = language
+    context_mode = _ai_json_str(
+        data, "context_mode", "ai_context_mode", "aiContextMode")
+    if context_mode:
+        patch["context_mode"] = normalize_ai_context_mode(context_mode)
     flags = (
         ("enabled", ("enabled", "ai_enabled", "aiEnabled")),
         ("auto_apply", ("auto_apply", "ai_auto_apply", "aiAutoApply")),
@@ -35312,22 +35938,28 @@ def _build_chat_messages(
     scope: str = "",
     cursors: Optional[Sequence[Any]] = None,
     response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
-    history: Optional[Sequence[Dict[str, str]]] = None,
-) -> List[Dict[str, str]]:
-    messages: List[Dict[str, str]] = [
-        {"role": "system", "content": build_ai_system_prompt(response_language)},
+    history: Optional[Sequence[Dict[str, Any]]] = None,
+    context_mode: str = "",
+    investigation_summary: str = "",
+    findings: Optional[Sequence[dict]] = None,
+) -> List[Dict[str, Any]]:
+    mode = normalize_ai_context_mode(context_mode)
+    messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": build_ai_system_prompt(
+            response_language, context_mode=mode)},
     ]
-    if history:
-        for m in history:
-            role = m.get("role")
-            content = m.get("content")
-            if role in ("user", "assistant") and content:
-                messages.append({"role": role, "content": str(content)})
+    for m in (history or []):
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("role") or "") == "system":
+            continue
+        messages.append(dict(m))
     messages.append({
         "role": "user",
         "content": build_ai_user_message(
             query,
-            findings_text=findings_text,
+            findings_text=compact_findings_text(
+                findings_text, mode, findings=findings),
             metrics=metrics,
             span=span,
             cores=cores,
@@ -35335,7 +35967,8 @@ def _build_chat_messages(
             cursors=cursors,
         ),
     })
-    return messages
+    return compact_chat_history(
+        messages, mode, investigation_summary=investigation_summary)
 
 
 def _read_http_body(
@@ -35508,6 +36141,7 @@ def ai_chat_completion(
     cancel_event: Optional[threading.Event] = None,
     on_response: Optional[Callable[[Any], None]] = None,
     log_mcp: bool = False,
+    max_tokens: Optional[int] = None,
 ) -> Dict[str, Any]:
     """One OpenAI-compatible ``/chat/completions`` round (non-streaming).
 
@@ -35540,6 +36174,13 @@ def ai_chat_completion(
         "messages": messages,
         "stream": False,
     }
+    if max_tokens:
+        try:
+            cap = int(max_tokens)
+        except (TypeError, ValueError):
+            cap = 0
+        if cap > 0:
+            payload_obj["max_tokens"] = cap
     use_tools = list(tools) if tools else []
     if use_tools:
         # Do not send tool_choice: Ollama/some proxies 400 on it and our old
@@ -35744,6 +36385,7 @@ def live_benchmark_chat(
     preset: str = "",
     tls_verify: bool = True,
     timeout_s: float = AI_CHAT_TIMEOUT_S,
+    context_mode: str = AI_CONTEXT_MODE_FULL,
 ) -> Dict[str, Any]:
     """One live benchmark turn, with a tool-result follow-up when needed.
 
@@ -35752,41 +36394,65 @@ def live_benchmark_chat(
     live scorer must do the same or finding/evidence/root-cause stay at 0.
     Models that already write a conclusion on the first turn are not called
     again.
+
+    *context_mode* selects Compact / Balanced / Full evidence packing (same
+    helpers as Settings → AI → Context). Default is Full evidence.
     """
+    mode = normalize_ai_context_mode(context_mode)
+    limits = ai_context_limits(mode)
+    reply_cap = limits.get("max_tokens")
+    tool_schemas = filter_tools_for_context_mode(
+        list(tools or []), mode, "triage")
     t0 = time.time()
-    messages = _build_chat_messages(query, findings_text=findings_text)
+    messages = _build_chat_messages(
+        query,
+        findings_text=findings_text,
+        context_mode=mode,
+    )
     collected: List[Dict[str, Any]] = []
     content = ""
-    usage: Dict[str, Any] = {}
+    meter = empty_cost_meter()
     error = ""
 
-    def _one(*, use_tools: bool) -> Dict[str, Any]:
-        return ai_chat_completion(
-            "",
-            findings_text="",
-            model=model,
-            base_url=base_url,
-            api_key=api_key,
-            preset=preset,
-            tls_verify=tls_verify,
-            timeout_s=timeout_s,
-            messages=messages,
-            tools=list(tools or []) if use_tools else [],
+    def _record(turn: Dict[str, Any]) -> None:
+        nonlocal meter
+        u = turn.get("usage") if isinstance(turn.get("usage"), dict) else {}
+        meter = accumulate_cost(
+            meter,
+            prompt_tokens=int(u.get("prompt_tokens") or 0),
+            completion_tokens=int(u.get("completion_tokens") or 0),
+            tool_calls=len(turn.get("tool_calls") or []),
         )
 
+    def _one(*, use_tools: bool) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {
+            "model": model,
+            "base_url": base_url,
+            "api_key": api_key,
+            "preset": preset,
+            "tls_verify": tls_verify,
+            "timeout_s": timeout_s,
+            "messages": messages,
+            "tools": list(tool_schemas) if use_tools else [],
+        }
+        if reply_cap:
+            kwargs["max_tokens"] = int(reply_cap)
+        return ai_chat_completion("", findings_text="", **kwargs)
+
     try:
-        turn = _one(use_tools=bool(tools))
+        turn = _one(use_tools=bool(tool_schemas))
     except Exception as exc:
         return {
             "content": "",
             "tool_calls": [],
             "usage": {},
             "elapsed_s": time.time() - t0,
+            "context_mode": mode,
             "error": str(exc),
         }
     content = str((turn or {}).get("content") or "")
     calls = list((turn or {}).get("tool_calls") or [])
-    usage = (turn or {}).get("usage") or {}
+    _record(turn or {})
     collected.extend(c for c in calls if isinstance(c, dict))
 
     if _benchmark_needs_tool_followup(content, calls):
@@ -35797,11 +36463,16 @@ def live_benchmark_chat(
         for i, call in enumerate(calls):
             if not isinstance(call, dict):
                 continue
-            payload = _benchmark_catalog_tool_payload(call, case)
+            payload = compact_tool_result_payload(
+                _benchmark_catalog_tool_payload(call, case), mode)
+            if isinstance(payload, str):
+                tool_body: Any = payload
+            else:
+                tool_body = format_tool_result_content(payload)
             messages.append(tool_result_message(
                 tool_call_id=str(call.get("id") or f"call_{i}"),
                 name=str(call.get("name") or ""),
-                content=format_tool_result_content(payload),
+                content=tool_body,
             ))
         messages.append({
             "role": "user",
@@ -35823,14 +36494,18 @@ def live_benchmark_chat(
                 content = follow
             more = list(turn2.get("tool_calls") or [])
             collected.extend(c for c in more if isinstance(c, dict))
-            if turn2.get("usage"):
-                usage = turn2.get("usage") or usage
+            _record(turn2)
 
     out: Dict[str, Any] = {
         "content": content,
         "tool_calls": collected,
-        "usage": usage if isinstance(usage, dict) else {},
+        "usage": {
+            "prompt_tokens": int(meter.get("prompt_tokens") or 0),
+            "completion_tokens": int(meter.get("completion_tokens") or 0),
+            "total_tokens": int(meter.get("total_tokens") or 0),
+        },
         "elapsed_s": time.time() - t0,
+        "context_mode": mode,
     }
     if error:
         out["error"] = error
@@ -37300,7 +37975,8 @@ def create_ai_assistant_panel(
             bar = getattr(self, "_usage", None)
             if bar is None:
                 return
-            bar.setText(format_cost_status(self._cost_meter))
+            bar.setText(format_context_usage_status(
+                self._cost_meter, self._context_mode()))
             bar.setToolTip(qt_wrap_tooltip(format_cost_meter(self._cost_meter)))
 
         def _restore_ai_split(self) -> None:
@@ -38690,7 +39366,45 @@ def create_ai_assistant_panel(
                 "enabled": "true",
                 "preset": DEFAULT_AI_PRESET,
                 "response_language": DEFAULT_AI_RESPONSE_LANGUAGE,
+                "context_mode": DEFAULT_AI_CONTEXT_MODE,
             }
+
+        def _context_mode(self) -> str:
+            return normalize_ai_context_mode(
+                self._settings_dict().get("context_mode"))
+
+        def _current_guide_stage(self) -> str:
+            cursors = 0
+            if on_gui_state:
+                try:
+                    gui = on_gui_state() or {}
+                    cursors = len(placed_cursor_times(gui.get("cursors")))
+                except Exception:
+                    cursors = 0
+            tabs = 0
+            if get_loaded_tabs:
+                try:
+                    tabs = len(list(get_loaded_tabs() or []))
+                except Exception:
+                    tabs = 0
+            return investigation_guide_stage(
+                getattr(self, "_evidence_payload", None),
+                plan=getattr(self, "_investigation_plan", None),
+                has_cursors=cursors >= 2,
+                has_two_traces=tabs >= 2,
+            )
+
+        def _chat_tools(self) -> List[Dict[str, Any]]:
+            return ai_viewer_tools_for_mode(
+                self._context_mode(), self._current_guide_stage())
+
+        def _chat_max_tokens(self) -> Optional[int]:
+            cap = ai_context_limits(self._context_mode()).get("max_tokens")
+            try:
+                n = int(cap) if cap else 0
+            except (TypeError, ValueError):
+                n = 0
+            return n or None
 
         def _on_ok(self, payload: str) -> None:
             self._auth_forced = False
@@ -38835,7 +39549,11 @@ def create_ai_assistant_panel(
                     tool_call_id=str(t.get("id") or ""),
                     name=str(t.get("name") or ""),
                     content=format_tool_result_content(
-                        res if isinstance(res, dict) else tool_result_payload(False, str(res))
+                        compact_tool_result_payload(
+                            res if isinstance(res, dict)
+                            else tool_result_payload(False, str(res)),
+                            self._context_mode(),
+                        )
                     ),
                 ))
                 tool_name = str(t.get("name") or "")
@@ -38874,7 +39592,7 @@ def create_ai_assistant_panel(
             kwargs = {
                 "query": "",
                 "messages": messages,
-                "tools": [] if final_round else ai_viewer_tools(),
+                "tools": [] if final_round else self._chat_tools(),
                 "base_url": active["base_url"],
                 "model": active["model"],
                 "api_key": active["api_key"],
@@ -38884,6 +39602,7 @@ def create_ai_assistant_panel(
                     "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ),
                 "log_mcp": parse_ai_mcp_log(cfg.get("mcp_log")),
+                "max_tokens": self._chat_max_tokens(),
             }
             self._set_busy(True)
             label = ai_preset_info(active["preset"])[1]
@@ -38979,9 +39698,12 @@ def create_ai_assistant_panel(
             query = str(privacy.get("query") or query)
             self._append("user", query)
             self._tool_round = 0
+            mode = self._context_mode()
+            prior = list(self._chat_messages)
             self._chat_messages = _build_chat_messages(
                 query,
                 findings_text=ctx.get("findings_text", ""),
+                findings=ctx.get("findings"),
                 metrics=ctx.get("metrics"),
                 span=ctx.get("span", ""),
                 cores=ctx.get("cores", ""),
@@ -38990,6 +39712,10 @@ def create_ai_assistant_panel(
                 response_language=cfg.get(
                     "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ),
+                history=prior,
+                context_mode=mode,
+                investigation_summary=investigation_context_summary(
+                    getattr(self, "_evidence_payload", None)),
             )
             self._set_busy(True)
             label = ai_preset_info(active["preset"])[1]
@@ -38998,7 +39724,7 @@ def create_ai_assistant_panel(
             kwargs = {
                 "query": query,
                 "messages": list(self._chat_messages),
-                "tools": ai_viewer_tools(),
+                "tools": self._chat_tools(),
                 "base_url": active["base_url"],
                 "model": active["model"],
                 "api_key": active["api_key"],
@@ -39008,6 +39734,7 @@ def create_ai_assistant_panel(
                     "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ),
                 "log_mcp": parse_ai_mcp_log(cfg.get("mcp_log")),
+                "max_tokens": self._chat_max_tokens(),
             }
             # Worker stays on the GUI thread; only the HTTP call runs off-thread.
             worker = _OllamaWorker(self, kwargs)
@@ -56411,6 +57138,98 @@ class _AboutDialog(QDialog):
 # Settings Dialog
 # ---------------------------------------------------------------------------
 
+class _SettingsHelpLabel(QLabel):
+    """Word-wrapped muted help (lockstep with web ``settings-help``)."""
+
+    _MIN_W = 280
+
+    def __init__(self, text: str = "", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setWordWrap(True)
+        self.setMinimumWidth(self._MIN_W)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.setStyleSheet("color:#888; font-size:11px;")
+        self.setText(text)
+
+    def hasHeightForWidth(self) -> bool:
+        return bool(self.wordWrap())
+
+    def _wrap_width(self, width: int = 0) -> int:
+        # Never wrap in a sliver (QFormLayout HFW(0)); never wrap tighter
+        # than _MIN_W. Prefer the laid-out width when it is already wide.
+        laid = int(self.width())
+        return max(
+            self._MIN_W,
+            int(width) if width else 0,
+            laid if laid >= self._MIN_W else 0,
+        )
+
+    def _wrap_flags(self) -> int:
+        flags = int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        if self.wordWrap():
+            flags |= int(Qt.TextFlag.TextWordWrap)
+            wrap_any = getattr(Qt.TextFlag, "TextWrapAnywhere", None)
+            if wrap_any is not None:
+                flags |= int(wrap_any)
+        return flags
+
+    def _wrapped_height(self, width: int = 0) -> int:
+        text = str(self.text() or "")
+        if not text.strip():
+            return 0
+        br = self.fontMetrics().boundingRect(
+            0, 0, self._wrap_width(width), 10000, self._wrap_flags(), text)
+        return max(self.fontMetrics().lineSpacing(), br.height()) + 6
+
+    def heightForWidth(self, width: int) -> int:
+        return self._wrapped_height(width)
+
+    def sizeHint(self) -> QSize:
+        sh = super().sizeHint()
+        h = self._wrapped_height(self.width())
+        if h:
+            sh.setHeight(h)
+        sh.setWidth(max(int(sh.width()), self._MIN_W))
+        return sh
+
+    def minimumSizeHint(self) -> QSize:
+        sh = super().minimumSizeHint()
+        h = self._wrapped_height(self._MIN_W)
+        if h:
+            sh.setHeight(h)
+        return sh
+
+    def _apply_min_height(self) -> None:
+        if not self.wordWrap() or not str(self.text() or "").strip():
+            if self.minimumHeight() != 0:
+                self.setMinimumHeight(0)
+            return
+        h = self._wrapped_height(self.width())
+        if self.minimumHeight() != h:
+            self.setMinimumHeight(h)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 — QWidget API
+        super().resizeEvent(event)
+        self._apply_min_height()
+
+    def setText(self, text: str) -> None:  # noqa: D401 — QLabel API
+        plain = str(text or "").strip()
+        if not plain:
+            super().setText("")
+            self.setVisible(False)
+            self.setMinimumHeight(0)
+            self.updateGeometry()
+            return
+        self.setVisible(True)
+        super().setText(plain)
+        self._apply_min_height()
+        self.updateGeometry()
+
+
 class _SettingsDialog(QDialog):
     """Modal settings dialog - sidebar navigation: Appearance | Display | Layout."""
 
@@ -56452,6 +57271,30 @@ class _SettingsDialog(QDialog):
         return w
 
     @staticmethod
+    def _tip(widget: QWidget, text: str, width_px: int = 320) -> None:
+        """Hover tooltip with word wrap (native macOS tips stay on one line)."""
+        widget.setToolTip(qt_wrap_tooltip(str(text or ""), width_px))
+
+    @staticmethod
+    def _ai_help(text: str) -> _SettingsHelpLabel:
+        return _SettingsHelpLabel(str(text or "").strip())
+
+    @staticmethod
+    def _ai_field(*widgets: QWidget, spacing: int = 2) -> QWidget:
+        """Control + visible help in one form cell (web ``settings-form-field``)."""
+        wrap = QWidget()
+        wrap.setMinimumWidth(_SettingsHelpLabel._MIN_W)
+        lay = QVBoxLayout(wrap)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(spacing)
+        lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+        for w in widgets:
+            lay.addWidget(w)
+        wrap.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        return wrap
+
+    @staticmethod
     def _dialog_ss(is_dark: bool, ui_fs: str) -> str:
         """Return a scoped stylesheet for the settings dialog."""
         if is_dark:
@@ -56472,12 +57315,12 @@ class _SettingsDialog(QDialog):
                 QLabel#section_header             {{ color:#888888; font-weight:600;
                                                      font-size:{ui_fs}; }}
                 QLabel                            {{ font-size:{ui_fs}; }}
-                QCheckBox                         {{ font-size:{ui_fs}; }}
-                QSpinBox, QDoubleSpinBox, QComboBox {{
+                QCheckBox                         {{ font-size:{ui_fs}; spacing:8px; }}
+                QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit {{
                     background:#3C3C3C; color:#D4D4D4;
                     border:1.5px solid #555555; border-radius:4px;
                     padding:1px 6px; min-height:1.3em; font-size:{ui_fs}; }}
-                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus
+                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QLineEdit:focus
                                                   {{ border-color:#0E4D80; }}
                 QComboBox QAbstractItemView       {{ background:#3C3C3C; color:#D4D4D4;
                                                      selection-background-color:#0E4D80;
@@ -56522,12 +57365,12 @@ class _SettingsDialog(QDialog):
                 QLabel#section_header             {{ color:#888888; font-weight:600;
                                                      font-size:{ui_fs}; }}
                 QLabel                            {{ font-size:{ui_fs}; }}
-                QCheckBox                         {{ font-size:{ui_fs}; }}
-                QSpinBox, QDoubleSpinBox, QComboBox {{
+                QCheckBox                         {{ font-size:{ui_fs}; spacing:8px; }}
+                QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit {{
                     background:#FFFFFF; color:#1E1E1E;
                     border:1.5px solid #AAAAAA; border-radius:4px;
                     padding:1px 6px; min-height:1.3em; font-size:{ui_fs}; }}
-                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus
+                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QLineEdit:focus
                                                   {{ border-color:#005A9E; }}
                 QComboBox QAbstractItemView       {{ background:#FFFFFF; color:#1E1E1E;
                                                      selection-background-color:#005A9E;
@@ -56584,6 +57427,7 @@ class _SettingsDialog(QDialog):
                  ai_mcp_log: bool = False,
                  ai_redact_task_names: bool = False,
                  ai_trace_sensitive: bool = False,
+                 ai_context_mode: str = DEFAULT_AI_CONTEXT_MODE,
                  initial_page: str = "Appearance"):
         super().__init__(parent, Qt.WindowType.Dialog)
         self.reset_requested = False
@@ -56651,12 +57495,15 @@ class _SettingsDialog(QDialog):
 
         def _wide_combo(combo: QComboBox, labels, *, min_w: int = 240) -> QComboBox:
             """Combo wide enough for long AI labels (not _INPUT_W=110)."""
-            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+            combo.setSizeAdjustPolicy(
+                QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             fm = combo.fontMetrics()
             texts = [str(s) for s in labels if s]
             w = max((fm.horizontalAdvance(s) for s in texts), default=120) + 56
             w = max(w, min_w)
+            combo.setMinimumContentsLength(max(8, len(max(texts, key=len, default="x"))))
             combo.setMinimumWidth(w)
+            combo.setMaximumWidth(16777215)
             combo.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             try:
@@ -56664,6 +57511,13 @@ class _SettingsDialog(QDialog):
             except Exception:
                 pass
             return combo
+
+        def _wide_edit(edit: QLineEdit, *, min_w: int = 240) -> QLineEdit:
+            """Line edit matching AI combo width (web ``settings-input--grow``)."""
+            edit.setMinimumWidth(min_w)
+            edit.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            return edit
 
         def _form(page: QWidget) -> QFormLayout:
             f = QFormLayout(page)
@@ -56682,12 +57536,13 @@ class _SettingsDialog(QDialog):
         self._theme_combo.addItem("Dark")
         self._theme_combo.addItem("Light")
         self._theme_combo.setCurrentIndex(0 if is_dark else 1)
-        self._theme_combo.setToolTip("Application colour theme")
+        self._tip(self._theme_combo, "Application colour theme")
         f1.addRow("Theme:", _inp(self._theme_combo))
 
         self._colorblind_cb = QCheckBox("Colorblind-safe colors (Okabe-Ito palette)")
         self._colorblind_cb.setChecked(colorblind_safe)
-        self._colorblind_cb.setToolTip(
+        self._tip(
+            self._colorblind_cb,
             "Replace the task colour palette with the Okabe-Ito 8-colour set,\n"
             "designed to be distinguishable for deuteranopia and protanopia.")
         f1.addRow("", self._colorblind_cb)
@@ -56699,7 +57554,8 @@ class _SettingsDialog(QDialog):
         self._font_spin.setRange(6, 24)
         self._font_spin.setSuffix(" pt")
         self._font_spin.setValue(font_size)
-        self._font_spin.setToolTip(
+        self._tip(
+            self._font_spin,
             "Font size for task / core labels drawn on the timeline "
             "(Qt points, HiDPI-scaled). The web viewer uses CSS pixels; "
             "defaults look similar, numbers are not interchangeable.")
@@ -56709,7 +57565,8 @@ class _SettingsDialog(QDialog):
         self._ui_font_spin.setRange(8, 18)
         self._ui_font_spin.setSuffix(" pt")
         self._ui_font_spin.setValue(ui_font_size)
-        self._ui_font_spin.setToolTip(
+        self._tip(
+            self._ui_font_spin,
             "Font size for menus, toolbar and status bar (Qt points). "
             "The web viewer uses CSS pixels.")
         f1.addRow("UI / menus:", _inp(self._ui_font_spin))
@@ -56753,7 +57610,8 @@ class _SettingsDialog(QDialog):
         self._grid_cb.setChecked(show_grid)
         self._hover_hl_cb = QCheckBox("Highlight segments on label hover")
         self._hover_hl_cb.setChecked(show_hover_highlight)
-        self._hover_hl_cb.setToolTip(
+        self._tip(
+            self._hover_hl_cb,
             "Dim all other segments when hovering a task label.\n"
             "Disable for better performance with large traces.")
         v2.addWidget(self._indented(self._sti_cb))
@@ -56778,7 +57636,8 @@ class _SettingsDialog(QDialog):
         self._cpu_budget_spin.setSuffix("%")
         self._cpu_budget_spin.setValue(cpu_budget_pct)
         self._cpu_budget_spin.setFixedWidth(self._INPUT_W)
-        self._cpu_budget_spin.setToolTip(
+        self._tip(
+            self._cpu_budget_spin,
             "Global CPU budget threshold: tasks consuming more than this\n"
             "percentage of CPU time in the current scope will be flagged.\n"
             "Set to 0 to disable.")
@@ -56792,7 +57651,8 @@ class _SettingsDialog(QDialog):
             "One entry per line:\n  TaskName=nanoseconds\n\nExample:\n  Runner1=1000000\n  Worker=500000")
         self._task_deadlines_edit.setFixedHeight(100)
         self._task_deadlines_edit.setPlainText(task_deadlines_text)
-        self._task_deadlines_edit.setToolTip(
+        self._tip(
+            self._task_deadlines_edit,
             "Per-task execution deadline in nanoseconds.\n"
             "Any execution slice longer than the limit will be flagged.\n"
             "Use the task display name (e.g. 'Runner1') or 'TaskName[id]' form.")
@@ -56811,21 +57671,21 @@ class _SettingsDialog(QDialog):
         self._label_width_spin.setSuffix(" px")
         self._label_width_spin.setSingleStep(10)
         self._label_width_spin.setValue(label_width)
-        self._label_width_spin.setToolTip("Width of the task / core label column (60\u2013600 px)")
+        self._tip(self._label_width_spin, "Width of the task / core label column (60\u2013600 px)")
         f3.addRow("Label column:", _inp(self._label_width_spin))
 
         self._row_height_spin = QSpinBox()
         self._row_height_spin.setRange(12, 60)
         self._row_height_spin.setSuffix(" px")
         self._row_height_spin.setValue(row_height)
-        self._row_height_spin.setToolTip("Height of each task / core row (12\u201360 px)")
+        self._tip(self._row_height_spin, "Height of each task / core row (12\u201360 px)")
         f3.addRow("Row height:", _inp(self._row_height_spin))
 
         self._row_gap_spin = QSpinBox()
         self._row_gap_spin.setRange(0, 20)
         self._row_gap_spin.setSuffix(" px")
         self._row_gap_spin.setValue(row_gap)
-        self._row_gap_spin.setToolTip("Vertical gap between rows (0\u201320 px)")
+        self._tip(self._row_gap_spin, "Vertical gap between rows (0\u201320 px)")
         f3.addRow("Row gap:", _inp(self._row_gap_spin))
 
         f3.addRow(self._hline())
@@ -56835,14 +57695,14 @@ class _SettingsDialog(QDialog):
         self._sti_row_h_spin.setRange(12, 60)
         self._sti_row_h_spin.setSuffix(" px")
         self._sti_row_h_spin.setValue(sti_row_h)
-        self._sti_row_h_spin.setToolTip("Height of collapsed STI channel rows (12\u201360 px)")
+        self._tip(self._sti_row_h_spin, "Height of collapsed STI channel rows (12\u201360 px)")
         f3.addRow("STI collapsed height:", _inp(self._sti_row_h_spin))
 
         self._sti_waveform_h_spin = QSpinBox()
         self._sti_waveform_h_spin.setRange(40, 300)
         self._sti_waveform_h_spin.setSuffix(" px")
         self._sti_waveform_h_spin.setValue(sti_waveform_h)
-        self._sti_waveform_h_spin.setToolTip("Height of expanded STI waveform rows (40\u2013300 px)")
+        self._tip(self._sti_waveform_h_spin, "Height of expanded STI waveform rows (40\u2013300 px)")
         f3.addRow("STI expanded height:", _inp(self._sti_waveform_h_spin))
 
         self._sti_line_style_combo = QComboBox()
@@ -56850,7 +57710,8 @@ class _SettingsDialog(QDialog):
         self._sti_line_style_combo.addItem("Linear (point to point)", "linear")
         _style_idx = 1 if sti_line_style == "linear" else 0
         self._sti_line_style_combo.setCurrentIndex(_style_idx)
-        self._sti_line_style_combo.setToolTip(
+        self._tip(
+            self._sti_line_style_combo,
             "How the waveform line is drawn between events:\n"
             "\u2022 Step: hold the previous value until the next event (staircase)\n"
             "\u2022 Linear: connect events with a straight diagonal line")
@@ -56866,7 +57727,8 @@ class _SettingsDialog(QDialog):
         _disp_zoom_unit = "µs" if zoom_unit == "us" else zoom_unit
         self._timescale_per_px_spin.setSuffix(f" {_disp_zoom_unit}/px")
         self._timescale_per_px_spin.setValue(timescale_per_px_default)
-        self._timescale_per_px_spin.setToolTip(
+        self._tip(
+            self._timescale_per_px_spin,
             f"Maximum zoom-in level (0.5\u2013200 {_disp_zoom_unit}/px).\n"
             "Also sets the target level of the 1:1 zoom button.")
         f3.addRow("1:1 zoom level:", _inp(self._timescale_per_px_spin))
@@ -56874,13 +57736,16 @@ class _SettingsDialog(QDialog):
         self._cursor_spin = QSpinBox()
         self._cursor_spin.setRange(4, _MAX_CURSORS)
         self._cursor_spin.setValue(max_cursors)
-        self._cursor_spin.setToolTip(f"Maximum number of simultaneous cursors (4\u2013{_MAX_CURSORS})")
+        self._tip(
+            self._cursor_spin,
+            f"Maximum number of simultaneous cursors (4\u2013{_MAX_CURSORS})")
         f3.addRow("Max cursors:", _inp(self._cursor_spin))
 
         self._time_decimals_spin = QSpinBox()
         self._time_decimals_spin.setRange(0, 9)
         self._time_decimals_spin.setValue(time_decimals)
-        self._time_decimals_spin.setToolTip(
+        self._tip(
+            self._time_decimals_spin,
             "Decimal-digit precision for times shown throughout the UI "
             "(tooltips, cursors, bookmarks, status bar, etc.) (0\u20139)")
         f3.addRow("Time display precision:", _inp(self._time_decimals_spin))
@@ -56892,51 +57757,88 @@ class _SettingsDialog(QDialog):
         self._cpu_row_h_spin.setRange(16, 120)
         self._cpu_row_h_spin.setSuffix(" px")
         self._cpu_row_h_spin.setValue(cpu_load_row_h)
-        self._cpu_row_h_spin.setToolTip("Height of each CPU load row (16\u2013120 px) \u2014 independent of timeline row height")
+        self._tip(
+            self._cpu_row_h_spin,
+            "Height of each CPU load row (16\u2013120 px) \u2014 independent of timeline row height")
         f3.addRow("Row height:", _inp(self._cpu_row_h_spin))
 
         self._content_stack.addWidget(p3)
 
         # -- Page 4: AI --------------------------------------------------------
         p4 = QWidget()
-        f4 = _form(p4)
+        p4_body = QVBoxLayout(p4)
+        p4_body.setContentsMargins(0, 0, 0, 0)
+        p4_body.setSpacing(0)
+        p4_form = QWidget()
+        f4 = _form(p4_form)
         # URLs / long combo labels need room; fixed-width spins on other pages
         # stay narrow via _inp().
         f4.setFieldGrowthPolicy(
             QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        f4.setFormAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        f4.setVerticalSpacing(8)
         self._ai_enabled_cb = QCheckBox("Enable AI Assistant")
         self._ai_enabled_cb.setChecked(ai_enabled)
-        self._ai_enabled_cb.setToolTip(
+        self._tip(
+            self._ai_enabled_cb,
             "When off, hides the AI tab. When on, the AI panel can send "
             "Analysis Findings to the configured endpoint.")
-        f4.addRow("", self._ai_enabled_cb)
+        self._ai_enabled_help = self._ai_help("When off, the AI tab is hidden.")
+        self._ai_enabled_help.setObjectName("aiEnabledHelp")
+        self._ai_enabled_help.setWordWrap(False)
+        self._ai_enabled_help.setFixedHeight(
+            self._ai_enabled_help.fontMetrics().lineSpacing() + 2)
+        f4.addRow("", self._ai_field(
+            self._ai_enabled_cb,
+            self._ai_enabled_help,
+            spacing=4,
+        ))
         self._ai_auto_apply_cb = QCheckBox("Auto-apply GUI actions")
         self._ai_auto_apply_cb.setChecked(bool(ai_auto_apply))
-        self._ai_auto_apply_cb.setToolTip(
+        self._tip(
+            self._ai_auto_apply_cb,
             "When on, tool calls from the model update the timeline immediately. "
             "When off, the chat shows Apply / Skip on each action card.")
         f4.addRow("", self._ai_auto_apply_cb)
+        self._ai_context_combo = QComboBox()
+        for _mid in AI_CONTEXT_MODES:
+            self._ai_context_combo.addItem(AI_CONTEXT_MODE_LABELS[_mid], _mid)
+        self._ai_context_combo.setCurrentIndex(
+            max(0, self._ai_context_combo.findData(
+                normalize_ai_context_mode(ai_context_mode))))
+        self._tip(self._ai_context_combo, AI_CONTEXT_MODE_SETTINGS_TOOLTIP)
+        _wide_combo(
+            self._ai_context_combo,
+            list(AI_CONTEXT_MODE_LABELS.values()),
+            min_w=180)
+        self._ai_context_help = self._ai_help(ai_context_mode_settings_overview())
+        self._ai_context_help.setWordWrap(False)
+        _ctx_fm = self._ai_context_help.fontMetrics()
+        self._ai_context_help.setFixedHeight(_ctx_fm.lineSpacing() * 3 + 2)
+        f4.addRow("Context:", self._ai_field(
+            self._ai_context_combo,
+            self._ai_context_help,
+        ))
         self._ai_redact_cb = QCheckBox("Anonymize task names for cloud")
         self._ai_redact_cb.setChecked(bool(ai_redact_task_names))
-        self._ai_redact_cb.setToolTip(
+        self._tip(
+            self._ai_redact_cb,
             "When the endpoint is not local, replace task names with Task-N "
             "aliases before Findings leave the machine.")
         f4.addRow("", self._ai_redact_cb)
         self._ai_sensitive_cb = QCheckBox("Treat this trace as sensitive")
         self._ai_sensitive_cb.setChecked(bool(ai_trace_sensitive))
-        self._ai_sensitive_cb.setToolTip(
+        self._tip(
+            self._ai_sensitive_cb,
             "Disables cloud AI for this machine. Local endpoints still work.")
         f4.addRow("", self._ai_sensitive_cb)
         self._ai_mcp_log_cb = QCheckBox("Log MCP messages to file")
         self._ai_mcp_log_cb.setChecked(bool(ai_mcp_log))
-        self._ai_mcp_log_cb.setToolTip(
+        self._tip(
+            self._ai_mcp_log_cb,
             f"Debugging only. Appends to ./{AI_MCP_LOG_FILENAME} (can grow large).")
         f4.addRow("", self._ai_mcp_log_cb)
-        _mcp_log_note = QLabel(
-            f"Debugging only — appends to ./{AI_MCP_LOG_FILENAME} (can grow large).")
-        _mcp_log_note.setWordWrap(True)
-        _mcp_log_note.setStyleSheet("color:#888;")
-        f4.addRow("", self._indented(_mcp_log_note))
 
         # Field values per preset; switching presets stashes the current inputs
         # so credentials survive a round trip.
@@ -56963,7 +57865,8 @@ class _SettingsDialog(QDialog):
             self._ai_preset_combo.addItem(_label, _pid)
         self._ai_preset_combo.setCurrentIndex(
             max(0, self._ai_preset_combo.findData(normalize_ai_preset(ai_preset))))
-        self._ai_preset_combo.setToolTip(
+        self._tip(
+            self._ai_preset_combo,
             "Ollama runs locally; OpenAI and Gemini are cloud APIs; Custom is "
             "any other OpenAI-compatible endpoint. Importing a JSON file whose "
             "preset name is not in this list adds it. Each preset keeps its own "
@@ -56977,9 +57880,10 @@ class _SettingsDialog(QDialog):
 
         self._ai_url_edit = QLineEdit()
         self._ai_url_edit.setPlaceholderText(DEFAULT_AI_BASE_URL)
-        self._ai_url_edit.setToolTip(
+        self._tip(
+            self._ai_url_edit,
             "OpenAI-compatible API root, e.g. http://localhost:11434/v1 for Ollama.")
-        self._ai_url_edit.setMinimumWidth(280)
+        _wide_edit(self._ai_url_edit)
         f4.addRow("Base URL:", self._ai_url_edit)
 
         self._ai_model_lists: Dict[str, List[str]] = {
@@ -56988,7 +57892,8 @@ class _SettingsDialog(QDialog):
         self._ai_model_combo = QComboBox()
         self._ai_model_combo.setEditable(True)
         self._ai_model_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self._ai_model_combo.setToolTip(
+        self._tip(
+            self._ai_model_combo,
             "Model id served by that endpoint (e.g. `ollama list` name, "
             "gpt-4o-mini, or gemini-flash-lite-latest). Refresh to list "
             "models from GET /models.")
@@ -56999,7 +57904,7 @@ class _SettingsDialog(QDialog):
         self._ai_model_refresh.setIcon(_svg_icon(_IC_REFRESH, _ic, 14))
         self._ai_model_refresh.setIconSize(QSize(14, 14))
         self._ai_model_refresh.setFixedSize(26, 26)
-        self._ai_model_refresh.setToolTip("Refresh model list from this endpoint")
+        self._tip(self._ai_model_refresh, "Refresh model list from this endpoint")
         self._ai_model_refresh.clicked.connect(self._refresh_ai_models)
         _model_row = QWidget()
         _model_h = QHBoxLayout(_model_row)
@@ -57012,7 +57917,8 @@ class _SettingsDialog(QDialog):
         self._ai_auth_combo = QComboBox()
         for _mode, _mlabel in AI_AUTH_MODE_LABELS:
             self._ai_auth_combo.addItem(_mlabel, _mode)
-        self._ai_auth_combo.setToolTip(
+        self._tip(
+            self._ai_auth_combo,
             "How this preset authenticates. None for a local server; API key "
             "to paste a provider key; Sign in opens the vendor page so you can "
             "log in and paste the key or token.")
@@ -57024,16 +57930,19 @@ class _SettingsDialog(QDialog):
         f4.addRow("Authentication:", self._ai_auth_combo)
 
         self._ai_cred_wrap = QWidget()
+        self._ai_cred_wrap.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         _cred = QVBoxLayout(self._ai_cred_wrap)
         _cred.setContentsMargins(0, 0, 0, 0)
         _cred.setSpacing(6)
-        self._ai_auth_status = QLabel("")
-        self._ai_auth_status.setWordWrap(True)
-        self._ai_auth_status.setStyleSheet("color:#888;")
+        _cred.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._ai_auth_status = _SettingsHelpLabel("")
         _cred.addWidget(self._ai_auth_status)
         self._ai_api_key_edit = QLineEdit()
         self._ai_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self._ai_api_key_edit.setToolTip(
+        _wide_edit(self._ai_api_key_edit)
+        self._tip(
+            self._ai_api_key_edit,
             "API key or access token for this preset (or OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY). "
             "Local Ollama needs none. Stored per preset in btf_viewer.rc.")
         _cred.addWidget(self._ai_api_key_edit)
@@ -57042,12 +57951,13 @@ class _SettingsDialog(QDialog):
         _auth_h.setContentsMargins(0, 0, 0, 0)
         _auth_h.setSpacing(8)
         self._ai_signin_btn = QPushButton("Sign in…")
-        self._ai_signin_btn.setToolTip(
+        self._tip(
+            self._ai_signin_btn,
             "Open the provider sign-in or API-key page in your browser, then "
             "paste the key or token above.")
         self._ai_signin_btn.clicked.connect(self._ai_open_signin)
         self._ai_logout_btn = QPushButton("Log out")
-        self._ai_logout_btn.setToolTip("Clear the saved key or token for this preset.")
+        self._tip(self._ai_logout_btn, "Clear the saved key or token for this preset.")
         self._ai_logout_btn.clicked.connect(self._ai_logout)
         _auth_h.addWidget(self._ai_signin_btn)
         _auth_h.addWidget(self._ai_logout_btn)
@@ -57058,7 +57968,8 @@ class _SettingsDialog(QDialog):
         self._ai_auth_combo.currentIndexChanged.connect(self._on_ai_auth_mode_changed)
 
         self._ai_insecure_tls_cb = QCheckBox("Allow self-signed TLS")
-        self._ai_insecure_tls_cb.setToolTip(
+        self._tip(
+            self._ai_insecure_tls_cb,
             "Skip HTTPS certificate checks for this preset (self-signed or "
             "private CA). Use only on networks you trust. Browsers cannot "
             "skip this check — trust the cert in the OS, use http:// on a "
@@ -57073,7 +57984,8 @@ class _SettingsDialog(QDialog):
             self._response_lang_combo.addItem(_lang)
             _idx = self._response_lang_combo.findText(_lang)
         self._response_lang_combo.setCurrentIndex(max(0, _idx))
-        self._response_lang_combo.setToolTip(
+        self._tip(
+            self._response_lang_combo,
             "Language for AI Assistant replies (also available via Language… in the AI panel).")
         _wide_combo(
             self._response_lang_combo,
@@ -57087,13 +57999,15 @@ class _SettingsDialog(QDialog):
         _test_h.setContentsMargins(0, 0, 0, 0)
         _test_h.setSpacing(8)
         self._ollama_test_btn = QPushButton("Test connection")
-        self._ollama_test_btn.setToolTip(
+        self._tip(
+            self._ollama_test_btn,
             "List models and run a tiny chat probe against this endpoint. "
             "Status updates appear below — first model load can take a couple of minutes.")
         self._ollama_test_btn.clicked.connect(self._test_ollama_connection)
         _test_h.addWidget(self._ollama_test_btn)
         self._ai_import_btn = QPushButton("Import…")
-        self._ai_import_btn.setToolTip(
+        self._tip(
+            self._ai_import_btn,
             "Load preset, checkbox flags, base URL, model, and API key from a "
             "JSON file. Unknown preset names are added to the list "
             "(see examples/ai/ollama.json, gemini.json, openai.json, "
@@ -57102,26 +58016,25 @@ class _SettingsDialog(QDialog):
         _test_h.addWidget(self._ai_import_btn)
         _test_h.addStretch()
         f4.addRow("", _test_row)
+        self._ai_form = f4
+        p4_body.addWidget(p4_form)
 
-        self._ollama_test_status = QLabel(
+        p4_tail = QWidget()
+        t4 = QVBoxLayout(p4_tail)
+        t4.setContentsMargins(20, 0, 20, 12)
+        t4.setSpacing(8)
+        self._ollama_test_status = _SettingsHelpLabel(
             "Click Test connection to verify the endpoint and model.")
         self._ollama_test_status.setObjectName("aiTestStatus")
-        self._ollama_test_status.setWordWrap(True)
         self._ollama_test_status.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._ollama_test_status.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        self._ollama_test_status.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        self._ollama_test_status.setMinimumHeight(40)
         self._ollama_test_status.setStyleSheet(
-            "color:#888; padding:4px 0;")
-        f4.addRow(self._ollama_test_status)
-
-        self._ai_hint = QLabel("")
-        self._ai_hint.setWordWrap(True)
-        self._ai_hint.setStyleSheet("color:#888;")
-        f4.addRow(self._ai_hint)
+            "color:#888; font-size:11px; padding:2px 0;")
+        t4.addWidget(self._ollama_test_status)
+        self._ai_hint = _SettingsHelpLabel("")
+        t4.addWidget(self._ai_hint)
+        p4_body.addWidget(p4_tail)
+        p4_body.addStretch(1)
 
         self._ai_active_preset = normalize_ai_preset(ai_preset)
         self._load_ai_preset_fields(self._ai_active_preset)
@@ -57165,7 +58078,8 @@ class _SettingsDialog(QDialog):
         btn_reset.setObjectName("btn_cancel")
         btn_reset.setMinimumWidth(_btn_w)
         btn_reset.setFixedHeight(_btn_h)
-        btn_reset.setToolTip(
+        self._tip(
+            btn_reset,
             "Restore built-in defaults, including Statistics pins, order, "
             "and expand/collapse. The Statistics panel updates immediately; "
             "OK writes them to btf_viewer.rc.")
@@ -57194,6 +58108,10 @@ class _SettingsDialog(QDialog):
 
         # -- Scoped stylesheet ------------------------------------------------
         self.setStyleSheet(self._dialog_ss(is_dark, _ui_fs))
+        fusion = QStyleFactory.create("Fusion")
+        if fusion is not None:
+            for cb in self.findChildren(QCheckBox):
+                cb.setStyle(fusion)
 
         # -- Live-preview wiring -----------------------------------------------
         # Each signal sends a typed argument (int/float).  Route them through
@@ -57310,6 +58228,12 @@ class _SettingsDialog(QDialog):
         show_cred = mode != AI_AUTH_NONE
         self._ai_cred_wrap.setVisible(show_cred)
         self._ai_cred_label.setVisible(show_cred)
+        _form_lay = getattr(self, "_ai_form", None)
+        if _form_lay is not None and hasattr(_form_lay, "setRowVisible"):
+            try:
+                _form_lay.setRowVisible(self._ai_cred_wrap, show_cred)
+            except (TypeError, RuntimeError):
+                pass
         self._ai_cred_label.setText(
             "Token:" if mode == AI_AUTH_BROWSER else "API key:")
         self._ai_signin_btn.setVisible(mode == AI_AUTH_BROWSER)
@@ -57381,24 +58305,9 @@ class _SettingsDialog(QDialog):
 
     def _set_ai_status(self, message: str, kind: str = "info") -> None:
         color = {"ok": "#1e8449", "error": "#c0392b"}.get(kind, "#888")
-        self._ollama_test_status.setStyleSheet(f"color:{color}; padding:4px 0;")
+        self._ollama_test_status.setStyleSheet(
+            f"color:{color}; font-size:11px; padding:2px 0;")
         self._ollama_test_status.setText(message)
-        self._ollama_test_status.updateGeometry()
-        scroll = None
-        w = self._ollama_test_status.parentWidget()
-        while w is not None:
-            if isinstance(w, QScrollArea):
-                scroll = w
-                break
-            w = w.parentWidget()
-        if scroll is not None:
-            inner = scroll.widget()
-            if inner is not None:
-                inner.adjustSize()
-            QTimer.singleShot(
-                0,
-                lambda: scroll.ensureWidgetVisible(self._ollama_test_status, 0, 8),
-            )
 
     def _ai_combo_preset_ids(self) -> List[str]:
         return [
@@ -57415,6 +58324,9 @@ class _SettingsDialog(QDialog):
         w = max((fm.horizontalAdvance(s) for s in labels if s), default=120) + 56
         w = max(w, 240)
         self._ai_preset_combo.setMinimumWidth(w)
+        self._ai_preset_combo.setMaximumWidth(16777215)
+        self._ai_preset_combo.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         try:
             self._ai_preset_combo.view().setMinimumWidth(w)
         except Exception:
@@ -57490,6 +58402,11 @@ class _SettingsDialog(QDialog):
                 self._response_lang_combo.addItem(language)
                 idx = self._response_lang_combo.findText(language)
             self._response_lang_combo.setCurrentIndex(max(0, idx))
+        if patch.get("context_mode"):
+            idx = self._ai_context_combo.findData(
+                normalize_ai_context_mode(patch.get("context_mode")))
+            if idx >= 0:
+                self._ai_context_combo.setCurrentIndex(idx)
         flag_map = (
             ("enabled", self._ai_enabled_cb),
             ("auto_apply", self._ai_auto_apply_cb),
@@ -57687,6 +58604,8 @@ class _SettingsDialog(QDialog):
         self._time_decimals_spin.setValue(_DEFAULT_TIME_DECIMALS)
         self._ai_enabled_cb.setChecked(True)
         self._ai_auto_apply_cb.setChecked(False)
+        self._ai_context_combo.setCurrentIndex(
+            max(0, self._ai_context_combo.findData(DEFAULT_AI_CONTEXT_MODE)))
         self._ai_redact_cb.setChecked(False)
         self._ai_sensitive_cb.setChecked(False)
         self._ai_mcp_log_cb.setChecked(False)
@@ -57773,6 +58692,9 @@ class _SettingsDialog(QDialog):
     def ai_enabled(self) -> bool:         return self._ai_enabled_cb.isChecked()
     @property
     def ai_auto_apply(self) -> bool:      return self._ai_auto_apply_cb.isChecked()
+    @property
+    def ai_context_mode(self) -> str:
+        return normalize_ai_context_mode(self._ai_context_combo.currentData())
     @property
     def ai_redact_task_names(self) -> bool: return self._ai_redact_cb.isChecked()
     @property
@@ -67841,7 +68763,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         keys = ["enabled", "preset", "response_language", "auto_apply", "mcp_log",
                 "user_investigation_templates", "user_historical_knowledge",
                 "redact_task_names", "trace_sensitive", "extra_presets",
-                "split_bottom", "investigation_session"]
+                "split_bottom", "investigation_session", "context_mode"]
         pids = [pid for pid, _label, _base, _model in AI_PRESETS]
         for pid in extra_ids:
             if pid and pid not in pids:
@@ -71814,6 +72736,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             in ("1", "true", "yes", "on"),
             ai_trace_sensitive=str(_ai_cfg.get("trace_sensitive", "false")).lower()
             in ("1", "true", "yes", "on"),
+            ai_context_mode=_ai_cfg.get("context_mode") or "",
             initial_page=page if isinstance(page, str) else "Appearance",
         )
         dlg.live_preview.connect(lambda: self._apply_settings_preview({
@@ -71876,6 +72799,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 "mcp_log": str(dlg.ai_mcp_log).lower(),
                 "redact_task_names": str(dlg.ai_redact_task_names).lower(),
                 "trace_sensitive": str(dlg.ai_trace_sensitive).lower(),
+                "context_mode": dlg.ai_context_mode,
                 "extra_presets": dump_extra_ai_presets(dlg.ai_extra_presets),
             }
             for _pid, _vals in dlg.ai_preset_settings.items():
@@ -71893,6 +72817,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 refresh = getattr(panel, "_refresh_localized_chrome", None)
                 if callable(refresh):
                     refresh(_ai_upd.get("response_language"))
+                usage = getattr(panel, "_refresh_usage", None)
+                if callable(usage):
+                    usage()
             set_ai_mcp_log_enabled(bool(dlg.ai_mcp_log))
             # Tab visibility follows Enable AI even when only that flag changed.
             self._sync_panel_tab_visibility()
@@ -73909,6 +74836,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
             "  %(prog)s ai-test --dataset tests/ai\n"
             "  %(prog)s ai-test --dataset tests/ai --fail-under 70\n"
             "  %(prog)s ai-test --config examples/ai/benchmark.xml -o AI_BENCHMARK.md\n"
+            "  %(prog)s ai-test --config examples/ai/benchmark.xml --compare-context\n"
             "  %(prog)s ai-test --config examples/ai/benchmark-selfsigned.xml\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -73946,6 +74874,16 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         "-o", "--output", metavar="PATH",
         default="",
         help="write a markdown report (e.g. AI_BENCHMARK.md; or <output> in --config)",
+    )
+    ai_test.add_argument(
+        "--context-mode", metavar="MODE",
+        default="",
+        help="live context packing: compact, balanced, full (default full), or compact,balanced,full",
+    )
+    ai_test.add_argument(
+        "--compare-context",
+        action="store_true",
+        help="live: run Compact, Balanced, and Full evidence and compare score, tokens, latency",
     )
 
     return parser, {
@@ -74962,6 +75900,15 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
         if suite is not None:
             pass
             pass
+            pass
+            compare_ctx = bool(getattr(args, "compare_context", False))
+            ctx_raw = str(getattr(args, "context_mode", "") or "").strip()
+            if compare_ctx:
+                context_modes = parse_benchmark_context_modes("all")
+            elif ctx_raw:
+                context_modes = parse_benchmark_context_modes(ctx_raw)
+            else:
+                context_modes = [AI_CONTEXT_MODE_FULL]
             try:
                 selected = select_benchmark_suite_models(suite, models_raw)
             except ValueError as exc:
@@ -75007,14 +75954,18 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
                     flush=True,
                 )
 
-            def complete(query, findings_text, model, case):
+            def complete(query, findings_text, model, case, context_mode=AI_CONTEXT_MODE_FULL):
                 spec = by_id.get(str(model) or "") or {}
                 cid = str((case or {}).get("id") or "?")
                 url = override_url or str(spec.get("base_url") or "")
                 tls_ok = False if insecure else bool(spec.get("tls_verify", True))
                 timeout = float(spec.get("timeout_s") or 0.0) or max(
                     float(AI_CHAT_TIMEOUT_S), 180.0)
-                print(f"[ai-test] {model}  {cid} …", file=sys.stderr, flush=True)
+                ctx_label = ai_context_mode_label(context_mode)
+                print(
+                    f"[ai-test] {model}  {cid}  {ctx_label} …",
+                    file=sys.stderr, flush=True,
+                )
                 turn = live_benchmark_chat(
                     query,
                     findings_text,
@@ -75026,10 +75977,11 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
                     preset=str(spec.get("preset") or ""),
                     tls_verify=tls_ok,
                     timeout_s=timeout,
+                    context_mode=context_mode,
                 )
                 if turn.get("error"):
                     print(
-                        f"[ai-test] {model}  {cid}  error: {turn['error']}",
+                        f"[ai-test] {model}  {cid}  {ctx_label}  error: {turn['error']}",
                         file=sys.stderr, flush=True,
                     )
                 return turn
@@ -75039,6 +75991,7 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
                 [str(m.get("id") or "") for m in selected],
                 complete=complete,
                 fail_under=fail_under,
+                context_modes=context_modes,
             )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)

@@ -33,6 +33,7 @@ from .ai_tools import (
     AI_TOOL_EXPORT_REPORT,
     AI_TOOL_SYSTEM_ADDENDUM,
     ai_viewer_tools,
+    ai_viewer_tools_for_mode,
     btf_highlight_href,
     btf_jump_href,
     btf_range_href,
@@ -84,6 +85,7 @@ from .ai_case import (
     INVESTIGATION_MODE_LABELS,
     INVESTIGATION_MODES,
     accumulate_cost,
+    ai_context_limits,
     build_validation_catalog,
     builtin_investigation_templates,
     chat_usage_from_response,
@@ -93,14 +95,25 @@ from .ai_case import (
     classify_trace_privacy,
     clamp_ai_split_bottom,
     compare_hypotheses,
+    compact_chat_history,
+    compact_findings_text,
+    accumulate_cost,
+    ai_context_limits,
+    compact_tool_result_payload,
+    context_mode_system_addendum,
+    empty_cost_meter,
+    filter_tools_for_context_mode,
+    AI_CONTEXT_MODE_FULL,
+    DEFAULT_AI_CONTEXT_MODE,
     dump_user_historical_knowledge,
     dump_user_investigation_templates,
-    empty_cost_meter,
     format_capability_report,
     format_confidence_evolution,
+    format_context_usage_status,
     format_cost_meter,
-    format_cost_status,
     format_privacy_chip,
+    investigation_context_summary,
+    normalize_ai_context_mode,
     historical_knowledge_for_finding,
     capability_probe_body,
     infer_model_capability,
@@ -341,11 +354,13 @@ AI_RESPONSE_LANGUAGES: Tuple[str, ...] = (
 
 def build_ai_system_prompt(
     response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
+    context_mode: str = "",
 ) -> str:
     """System prompt with an explicit reply-language instruction."""
     lang = (response_language or DEFAULT_AI_RESPONSE_LANGUAGE).strip() or DEFAULT_AI_RESPONSE_LANGUAGE
+    extra = context_mode_system_addendum(context_mode)
     return (
-        f"{AI_SYSTEM_PROMPT} Always write your entire reply in {lang}."
+        f"{AI_SYSTEM_PROMPT} Always write your entire reply in {lang}.{extra}"
     )
 
 # (id, label, prompt) — keep in sync with web/src/utils/ollamaClient.js
@@ -1239,6 +1254,10 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
         data, "response_language", "responseLanguage", "aiResponseLanguage")
     if language:
         patch["response_language"] = language
+    context_mode = _ai_json_str(
+        data, "context_mode", "ai_context_mode", "aiContextMode")
+    if context_mode:
+        patch["context_mode"] = normalize_ai_context_mode(context_mode)
     flags = (
         ("enabled", ("enabled", "ai_enabled", "aiEnabled")),
         ("auto_apply", ("auto_apply", "ai_auto_apply", "aiAutoApply")),
@@ -2512,22 +2531,28 @@ def _build_chat_messages(
     scope: str = "",
     cursors: Optional[Sequence[Any]] = None,
     response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
-    history: Optional[Sequence[Dict[str, str]]] = None,
-) -> List[Dict[str, str]]:
-    messages: List[Dict[str, str]] = [
-        {"role": "system", "content": build_ai_system_prompt(response_language)},
+    history: Optional[Sequence[Dict[str, Any]]] = None,
+    context_mode: str = "",
+    investigation_summary: str = "",
+    findings: Optional[Sequence[dict]] = None,
+) -> List[Dict[str, Any]]:
+    mode = normalize_ai_context_mode(context_mode)
+    messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": build_ai_system_prompt(
+            response_language, context_mode=mode)},
     ]
-    if history:
-        for m in history:
-            role = m.get("role")
-            content = m.get("content")
-            if role in ("user", "assistant") and content:
-                messages.append({"role": role, "content": str(content)})
+    for m in (history or []):
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("role") or "") == "system":
+            continue
+        messages.append(dict(m))
     messages.append({
         "role": "user",
         "content": build_ai_user_message(
             query,
-            findings_text=findings_text,
+            findings_text=compact_findings_text(
+                findings_text, mode, findings=findings),
             metrics=metrics,
             span=span,
             cores=cores,
@@ -2535,7 +2560,8 @@ def _build_chat_messages(
             cursors=cursors,
         ),
     })
-    return messages
+    return compact_chat_history(
+        messages, mode, investigation_summary=investigation_summary)
 
 
 def _read_http_body(
@@ -2708,6 +2734,7 @@ def ai_chat_completion(
     cancel_event: Optional[threading.Event] = None,
     on_response: Optional[Callable[[Any], None]] = None,
     log_mcp: bool = False,
+    max_tokens: Optional[int] = None,
 ) -> Dict[str, Any]:
     """One OpenAI-compatible ``/chat/completions`` round (non-streaming).
 
@@ -2740,6 +2767,13 @@ def ai_chat_completion(
         "messages": messages,
         "stream": False,
     }
+    if max_tokens:
+        try:
+            cap = int(max_tokens)
+        except (TypeError, ValueError):
+            cap = 0
+        if cap > 0:
+            payload_obj["max_tokens"] = cap
     use_tools = list(tools) if tools else []
     if use_tools:
         # Do not send tool_choice: Ollama/some proxies 400 on it and our old
@@ -2944,6 +2978,7 @@ def live_benchmark_chat(
     preset: str = "",
     tls_verify: bool = True,
     timeout_s: float = AI_CHAT_TIMEOUT_S,
+    context_mode: str = AI_CONTEXT_MODE_FULL,
 ) -> Dict[str, Any]:
     """One live benchmark turn, with a tool-result follow-up when needed.
 
@@ -2952,41 +2987,65 @@ def live_benchmark_chat(
     live scorer must do the same or finding/evidence/root-cause stay at 0.
     Models that already write a conclusion on the first turn are not called
     again.
+
+    *context_mode* selects Compact / Balanced / Full evidence packing (same
+    helpers as Settings → AI → Context). Default is Full evidence.
     """
+    mode = normalize_ai_context_mode(context_mode)
+    limits = ai_context_limits(mode)
+    reply_cap = limits.get("max_tokens")
+    tool_schemas = filter_tools_for_context_mode(
+        list(tools or []), mode, "triage")
     t0 = time.time()
-    messages = _build_chat_messages(query, findings_text=findings_text)
+    messages = _build_chat_messages(
+        query,
+        findings_text=findings_text,
+        context_mode=mode,
+    )
     collected: List[Dict[str, Any]] = []
     content = ""
-    usage: Dict[str, Any] = {}
+    meter = empty_cost_meter()
     error = ""
 
-    def _one(*, use_tools: bool) -> Dict[str, Any]:
-        return ai_chat_completion(
-            "",
-            findings_text="",
-            model=model,
-            base_url=base_url,
-            api_key=api_key,
-            preset=preset,
-            tls_verify=tls_verify,
-            timeout_s=timeout_s,
-            messages=messages,
-            tools=list(tools or []) if use_tools else [],
+    def _record(turn: Dict[str, Any]) -> None:
+        nonlocal meter
+        u = turn.get("usage") if isinstance(turn.get("usage"), dict) else {}
+        meter = accumulate_cost(
+            meter,
+            prompt_tokens=int(u.get("prompt_tokens") or 0),
+            completion_tokens=int(u.get("completion_tokens") or 0),
+            tool_calls=len(turn.get("tool_calls") or []),
         )
 
+    def _one(*, use_tools: bool) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {
+            "model": model,
+            "base_url": base_url,
+            "api_key": api_key,
+            "preset": preset,
+            "tls_verify": tls_verify,
+            "timeout_s": timeout_s,
+            "messages": messages,
+            "tools": list(tool_schemas) if use_tools else [],
+        }
+        if reply_cap:
+            kwargs["max_tokens"] = int(reply_cap)
+        return ai_chat_completion("", findings_text="", **kwargs)
+
     try:
-        turn = _one(use_tools=bool(tools))
+        turn = _one(use_tools=bool(tool_schemas))
     except Exception as exc:
         return {
             "content": "",
             "tool_calls": [],
             "usage": {},
             "elapsed_s": time.time() - t0,
+            "context_mode": mode,
             "error": str(exc),
         }
     content = str((turn or {}).get("content") or "")
     calls = list((turn or {}).get("tool_calls") or [])
-    usage = (turn or {}).get("usage") or {}
+    _record(turn or {})
     collected.extend(c for c in calls if isinstance(c, dict))
 
     if _benchmark_needs_tool_followup(content, calls):
@@ -2997,11 +3056,16 @@ def live_benchmark_chat(
         for i, call in enumerate(calls):
             if not isinstance(call, dict):
                 continue
-            payload = _benchmark_catalog_tool_payload(call, case)
+            payload = compact_tool_result_payload(
+                _benchmark_catalog_tool_payload(call, case), mode)
+            if isinstance(payload, str):
+                tool_body: Any = payload
+            else:
+                tool_body = format_tool_result_content(payload)
             messages.append(tool_result_message(
                 tool_call_id=str(call.get("id") or f"call_{i}"),
                 name=str(call.get("name") or ""),
-                content=format_tool_result_content(payload),
+                content=tool_body,
             ))
         messages.append({
             "role": "user",
@@ -3023,14 +3087,18 @@ def live_benchmark_chat(
                 content = follow
             more = list(turn2.get("tool_calls") or [])
             collected.extend(c for c in more if isinstance(c, dict))
-            if turn2.get("usage"):
-                usage = turn2.get("usage") or usage
+            _record(turn2)
 
     out: Dict[str, Any] = {
         "content": content,
         "tool_calls": collected,
-        "usage": usage if isinstance(usage, dict) else {},
+        "usage": {
+            "prompt_tokens": int(meter.get("prompt_tokens") or 0),
+            "completion_tokens": int(meter.get("completion_tokens") or 0),
+            "total_tokens": int(meter.get("total_tokens") or 0),
+        },
         "elapsed_s": time.time() - t0,
+        "context_mode": mode,
     }
     if error:
         out["error"] = error
@@ -4500,7 +4568,8 @@ def create_ai_assistant_panel(
             bar = getattr(self, "_usage", None)
             if bar is None:
                 return
-            bar.setText(format_cost_status(self._cost_meter))
+            bar.setText(format_context_usage_status(
+                self._cost_meter, self._context_mode()))
             bar.setToolTip(qt_wrap_tooltip(format_cost_meter(self._cost_meter)))
 
         def _restore_ai_split(self) -> None:
@@ -5890,7 +5959,45 @@ def create_ai_assistant_panel(
                 "enabled": "true",
                 "preset": DEFAULT_AI_PRESET,
                 "response_language": DEFAULT_AI_RESPONSE_LANGUAGE,
+                "context_mode": DEFAULT_AI_CONTEXT_MODE,
             }
+
+        def _context_mode(self) -> str:
+            return normalize_ai_context_mode(
+                self._settings_dict().get("context_mode"))
+
+        def _current_guide_stage(self) -> str:
+            cursors = 0
+            if on_gui_state:
+                try:
+                    gui = on_gui_state() or {}
+                    cursors = len(placed_cursor_times(gui.get("cursors")))
+                except Exception:
+                    cursors = 0
+            tabs = 0
+            if get_loaded_tabs:
+                try:
+                    tabs = len(list(get_loaded_tabs() or []))
+                except Exception:
+                    tabs = 0
+            return investigation_guide_stage(
+                getattr(self, "_evidence_payload", None),
+                plan=getattr(self, "_investigation_plan", None),
+                has_cursors=cursors >= 2,
+                has_two_traces=tabs >= 2,
+            )
+
+        def _chat_tools(self) -> List[Dict[str, Any]]:
+            return ai_viewer_tools_for_mode(
+                self._context_mode(), self._current_guide_stage())
+
+        def _chat_max_tokens(self) -> Optional[int]:
+            cap = ai_context_limits(self._context_mode()).get("max_tokens")
+            try:
+                n = int(cap) if cap else 0
+            except (TypeError, ValueError):
+                n = 0
+            return n or None
 
         def _on_ok(self, payload: str) -> None:
             self._auth_forced = False
@@ -6035,7 +6142,11 @@ def create_ai_assistant_panel(
                     tool_call_id=str(t.get("id") or ""),
                     name=str(t.get("name") or ""),
                     content=format_tool_result_content(
-                        res if isinstance(res, dict) else tool_result_payload(False, str(res))
+                        compact_tool_result_payload(
+                            res if isinstance(res, dict)
+                            else tool_result_payload(False, str(res)),
+                            self._context_mode(),
+                        )
                     ),
                 ))
                 tool_name = str(t.get("name") or "")
@@ -6074,7 +6185,7 @@ def create_ai_assistant_panel(
             kwargs = {
                 "query": "",
                 "messages": messages,
-                "tools": [] if final_round else ai_viewer_tools(),
+                "tools": [] if final_round else self._chat_tools(),
                 "base_url": active["base_url"],
                 "model": active["model"],
                 "api_key": active["api_key"],
@@ -6084,6 +6195,7 @@ def create_ai_assistant_panel(
                     "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ),
                 "log_mcp": parse_ai_mcp_log(cfg.get("mcp_log")),
+                "max_tokens": self._chat_max_tokens(),
             }
             self._set_busy(True)
             label = ai_preset_info(active["preset"])[1]
@@ -6179,9 +6291,12 @@ def create_ai_assistant_panel(
             query = str(privacy.get("query") or query)
             self._append("user", query)
             self._tool_round = 0
+            mode = self._context_mode()
+            prior = list(self._chat_messages)
             self._chat_messages = _build_chat_messages(
                 query,
                 findings_text=ctx.get("findings_text", ""),
+                findings=ctx.get("findings"),
                 metrics=ctx.get("metrics"),
                 span=ctx.get("span", ""),
                 cores=ctx.get("cores", ""),
@@ -6190,6 +6305,10 @@ def create_ai_assistant_panel(
                 response_language=cfg.get(
                     "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ),
+                history=prior,
+                context_mode=mode,
+                investigation_summary=investigation_context_summary(
+                    getattr(self, "_evidence_payload", None)),
             )
             self._set_busy(True)
             label = ai_preset_info(active["preset"])[1]
@@ -6198,7 +6317,7 @@ def create_ai_assistant_panel(
             kwargs = {
                 "query": query,
                 "messages": list(self._chat_messages),
-                "tools": ai_viewer_tools(),
+                "tools": self._chat_tools(),
                 "base_url": active["base_url"],
                 "model": active["model"],
                 "api_key": active["api_key"],
@@ -6208,6 +6327,7 @@ def create_ai_assistant_panel(
                     "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ),
                 "log_mcp": parse_ai_mcp_log(cfg.get("mcp_log")),
+                "max_tokens": self._chat_max_tokens(),
             }
             # Worker stays on the GUI thread; only the HTTP call runs off-thread.
             worker = _OllamaWorker(self, kwargs)

@@ -36,7 +36,7 @@ AI_FAIL_UNDER ?= 70
 AI_CONFIG ?= examples/ai/benchmark.xml
 AI_MODELS ?=
 
-.PHONY: all help web bundle check-bundle test test-web test-all ai-test ai-test-live ci doc update-images demo demo-voice demo-pack
+.PHONY: all help web bundle check-bundle test test-web test-all ai-test ai-test-live ai-test-context ci doc update-images demo demo-voice demo-pack
 
 help:
 	@echo "BTF Viewer — make targets"
@@ -55,6 +55,7 @@ help:
 	@echo "  make test-all     Desktop + web unit tests"
 	@echo "  make ai-test      Offline AI benchmark ($(AI_DATASET); AI_FAIL_UNDER=$(AI_FAIL_UNDER))"
 	@echo "  make ai-test-live Live suite XML → AI_BENCHMARK.md (AI_CONFIG=$(AI_CONFIG))"
+	@echo "  make ai-test-context Live suite, all three context modes → AI_BENCHMARK.md"
 	@echo "  make ci           test-all + check-bundle (local CI parity)"
 	@echo "  make help         Show this help"
 	@echo ""
@@ -111,6 +112,11 @@ ai-test-live: $(OUT)
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) ai-test \
 		--config $(AI_CONFIG) $(if $(AI_MODELS),--models $(AI_MODELS),) \
 		--fail-under 0 -o AI_BENCHMARK.md
+
+ai-test-context: $(OUT)
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) ai-test \
+		--config $(AI_CONFIG) $(if $(AI_MODELS),--models $(AI_MODELS),) \
+		--compare-context --fail-under 0 -o AI_BENCHMARK.md
 
 ci: test-all check-bundle
 

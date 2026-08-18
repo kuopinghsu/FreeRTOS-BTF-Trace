@@ -12,6 +12,8 @@
 
 如需了解產品操作與介面導覽，請參閱 [`README.md`](README.md)。如需依照步驟進行問題分析，請參閱 [`WORKFLOWS.md`](WORKFLOWS.md)。如需使用 AI 輔助分析，請參閱 [`AI.md`](AI.md)。
 
+原文：[English](STATISTICS.md)。
+
 > **重要：** BTFViewer 的統計結果代表 BTF/STI Trace 中實際擷取到的證據。最大值（Maximum）不代表系統保證值；相關性（correlation）不代表因果關係（causation）；Trace 中沒有某個事件，也不能證明該事件從未發生。
 
 ## 快速開始

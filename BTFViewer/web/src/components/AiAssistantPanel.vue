@@ -643,7 +643,7 @@ import {
 } from '../utils/ollamaClient.js'
 import {
   AI_TOOL_EXPORT_INVESTIGATION,
-  aiViewerTools,
+  aiViewerToolsForMode,
   buildAiReportCsv,
   buildAiReportHtml,
   canonicalAssistantToolMessage,
@@ -674,9 +674,15 @@ import {
   dumpUserHistoricalKnowledge,
   dumpUserInvestigationTemplates,
   emptyCostMeter,
+  formatContextUsageStatus,
   formatCostMeter,
-  formatCostStatus,
   clampAiSplitBottom,
+  compactChatHistory,
+  compactFindingsText,
+  compactToolResultPayload,
+  aiContextLimits,
+  investigationContextSummary,
+  normalizeAiContextMode,
   formatConfidenceEvolution,
   formatPrivacyChip,
   historicalKnowledgeForFinding,
@@ -747,6 +753,7 @@ const props = defineProps({
   aiPresets: { type: Object, default: () => ({}) },
   responseLanguage: { type: String, default: DEFAULT_AI_RESPONSE_LANGUAGE },
   aiAutoApply: { type: Boolean, default: false },
+  aiContextMode: { type: String, default: 'balanced' },
   aiRedactTaskNames: { type: Boolean, default: false },
   aiTraceSensitive: { type: Boolean, default: false },
   darkMode: { type: Boolean, default: true },
@@ -1155,7 +1162,8 @@ const statusText = computed(() => {
     ? 'AI is disabled in Settings → AI.'
     : (error.value || status.value)
 })
-const usageText = computed(() => formatCostStatus(costMeter.value))
+const usageText = computed(() => formatContextUsageStatus(
+  costMeter.value, props.aiContextMode))
 const usageTip = computed(() => formatCostMeter(costMeter.value))
 
 function onSplitPointerMove(ev) {
@@ -1920,7 +1928,7 @@ async function runCompletion(active, finalRound = false) {
   costStarted = Date.now()
   return aiChatCompletion({
     messages,
-    tools: finalRound ? [] : aiViewerTools(),
+    tools: finalRound ? [] : aiViewerToolsForMode(props.aiContextMode, guideStage.value),
     baseUrl: active.baseUrl,
     model: active.model,
     apiKey: active.apiKey,
@@ -1928,6 +1936,7 @@ async function runCompletion(active, finalRound = false) {
     tlsVerify: active.tlsVerify,
     responseLanguage: props.responseLanguage,
     signal: abortCtrl?.signal,
+    maxTokens: aiContextLimits(props.aiContextMode).max_tokens,
   })
 }
 
@@ -2015,7 +2024,7 @@ function commitBatch(batchId, skipped) {
     chatMessages.push(toolResultMessage({
       toolCallId: t.id,
       name: t.name,
-      content: results[i] || { ok: false, message: '' },
+      content: compactToolResultPayload(results[i] || { ok: false, message: '' }, props.aiContextMode),
     }))
     const toolName = String(t.name || '')
     if (EVIDENCE_PANEL_TOOLS.includes(toolName)) {
@@ -2144,12 +2153,16 @@ async function send(overrideQuery = null, overrideCtx = null) {
       if (last && last.role === 'user') last.content = sendQuery
     }
     if (overrideCtx == null) refreshLoadedTabs()
-    chatMessages = [
-      { role: 'system', content: buildAiSystemPrompt(props.responseLanguage) },
+    const mode = normalizeAiContextMode(props.aiContextMode)
+    const prior = chatMessages
+    chatMessages = compactChatHistory([
+      { role: 'system', content: buildAiSystemPrompt(props.responseLanguage, mode) },
+      ...prior.filter(m => String(m.role || '') !== 'system'),
       {
         role: 'user',
         content: buildAiUserMessage(sendQuery, {
-          findingsText: ctx.findingsText || '',
+          findingsText: compactFindingsText(
+            ctx.findingsText || '', mode, ctx.findings || null),
           metrics: ctx.metrics || null,
           span: ctx.span || '',
           cores: ctx.cores ?? '',
@@ -2157,7 +2170,7 @@ async function send(overrideQuery = null, overrideCtx = null) {
           cursors: ctx.cursors || [],
         }),
       },
-    ]
+    ], mode, investigationContextSummary(evidencePayload))
     const turn = await runCompletion(active)
     authForced.value = false
     const pending = ingestTurn(turn)

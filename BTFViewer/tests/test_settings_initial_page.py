@@ -20,7 +20,7 @@ install()
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from btf_viewer_pkg.stats import _SettingsDialog  # noqa: E402
+from btf_viewer_pkg.stats import _SettingsDialog, _SettingsHelpLabel  # noqa: E402
 
 
 def _app() -> QApplication:
@@ -72,6 +72,7 @@ class SettingsInitialPageTests(unittest.TestCase):
         self.assertEqual(dlg._content_stack.currentIndex(), 3)
         self.assertTrue(dlg.ai_enabled)
         self.assertFalse(dlg.ai_auto_apply)
+        self.assertEqual(dlg.ai_context_mode, "balanced")
         self.assertFalse(dlg.ai_mcp_log)
         self.assertEqual(dlg.ai_preset, "ollama")
         self.assertIn("11434", dlg._ai_url_edit.text())
@@ -89,6 +90,34 @@ class SettingsInitialPageTests(unittest.TestCase):
         self.assertEqual(dlg._ai_auth_combo.currentData(), "none")
         self.assertTrue(dlg._ai_cred_wrap.isHidden())
         self.assertFalse(dlg._ai_insecure_tls_cb.isChecked())
+        help_texts = " ".join(
+            lbl.text() for lbl in dlg.findChildren(type(dlg._ai_context_help)))
+        self.assertIn("When off, the AI tab is hidden.", help_texts)
+        help_lbl = dlg.findChild(type(dlg._ai_context_help), "aiEnabledHelp")
+        self.assertIsNotNone(help_lbl)
+        self.assertEqual(dlg._ai_enabled_cb.text().replace("&", ""), "Enable AI Assistant")
+        dlg.resize(720, 520)
+        dlg.show()
+        QApplication.processEvents()
+        enable_x = dlg._ai_enabled_cb.mapTo(dlg, dlg._ai_enabled_cb.rect().topLeft()).x()
+        auto_x = dlg._ai_auto_apply_cb.mapTo(dlg, dlg._ai_auto_apply_cb.rect().topLeft()).x()
+        help_x = help_lbl.mapTo(dlg, help_lbl.rect().topLeft()).x()
+        ctx_x = dlg._ai_context_help.mapTo(dlg, dlg._ai_context_help.rect().topLeft()).x()
+        self.assertEqual(enable_x, auto_x)
+        self.assertEqual(help_x, ctx_x)
+        self.assertIn("Compact", dlg._ai_context_help.text())
+        self.assertIn("Balanced (default)", dlg._ai_context_help.text())
+        self.assertIn("Full evidence", dlg._ai_context_help.text())
+        self.assertIn("\n", dlg._ai_context_help.text())
+        self.assertGreaterEqual(dlg._ai_context_help.minimumWidth(), 280)
+        self.assertLess(dlg._ai_context_help.heightForWidth(360), 80)
+        self.assertLess(dlg._ollama_test_status.heightForWidth(360), 80)
+        self.assertIn('width="320"', dlg._ai_enabled_cb.toolTip())
+        self.assertIn('width="320"', dlg._ai_preset_combo.toolTip())
+        self.assertIn("How much Findings", dlg._ai_context_combo.toolTip())
+        self.assertEqual(dlg._ai_url_edit.width(), dlg._ai_preset_combo.width())
+        self.assertGreaterEqual(
+            dlg._ai_url_edit.height(), dlg._ai_preset_combo.height() - 4)
 
     def test_ai_preset_switch_keeps_each_preset_fields(self) -> None:
         dlg = self._dlg("AI")
@@ -171,6 +200,7 @@ class SettingsInitialPageTests(unittest.TestCase):
             "deepseek_auth_mode": "api_key",
             "enabled": "true",
             "auto_apply": "true",
+            "context_mode": "compact",
             "redact_task_names": "true",
             "trace_sensitive": "false",
             "mcp_log": "true",
@@ -182,6 +212,7 @@ class SettingsInitialPageTests(unittest.TestCase):
         self.assertEqual(dlg._ai_model_text(), "deepseek-v4-flash")
         self.assertTrue(dlg.ai_enabled)
         self.assertTrue(dlg.ai_auto_apply)
+        self.assertEqual(dlg.ai_context_mode, "compact")
         self.assertTrue(dlg.ai_redact_task_names)
         self.assertFalse(dlg.ai_trace_sensitive)
         self.assertTrue(dlg.ai_mcp_log)
@@ -226,6 +257,14 @@ class SettingsInitialPageTests(unittest.TestCase):
         dlg = self._dlg("AI")
         self.addCleanup(dlg.deleteLater)
         self.assertIsNotNone(dlg.findChild(QScrollArea, "aiSettingsScroll"))
+        dlg.resize(720, 520)
+        dlg.show()
+        QApplication.processEvents()
+        ctx_h = dlg._ai_context_help.height()
+        redact_y = dlg._ai_redact_cb.mapTo(dlg, dlg._ai_redact_cb.rect().topLeft()).y()
+        tls_y = dlg._ai_insecure_tls_cb.mapTo(
+            dlg, dlg._ai_insecure_tls_cb.rect().topLeft()).y()
+        auth_h = dlg._ai_cred_wrap.height()
         cap = format_capability_report({
             "chat": "yes",
             "structured_output": "yes",
@@ -235,17 +274,94 @@ class SettingsInitialPageTests(unittest.TestCase):
             "complex_reasoning": "yes",
             "recommended": "Investigation modes",
         })
+        dlg._set_ai_status(
+            "Starting test for http://127.0.0.1:11434/v1 / llama3.2…")
+        QApplication.processEvents()
+        self.assertEqual(dlg._ai_context_help.height(), ctx_h)
+        self.assertEqual(
+            dlg._ai_redact_cb.mapTo(
+                dlg, dlg._ai_redact_cb.rect().topLeft()).y(),
+            redact_y)
+        self.assertEqual(
+            dlg._ai_insecure_tls_cb.mapTo(
+                dlg, dlg._ai_insecure_tls_cb.rect().topLeft()).y(),
+            tls_y)
+        self.assertEqual(dlg._ai_cred_wrap.height(), auth_h)
         msg = (
             "Connected to http://localhost:11434/v1. Model llama3 ready.\n\n"
             + cap
         )
         dlg._set_ai_status(msg, "ok")
+        QApplication.processEvents()
         shown = dlg._ollama_test_status.text()
         self.assertIn("Model capability", shown)
         self.assertIn("Tool calling", shown)
         self.assertIn("Recommended:", shown)
+        wrap_h = dlg._ollama_test_status.heightForWidth(360)
+        self.assertGreater(wrap_h, 40, shown)
+        self.assertLess(wrap_h, 320, wrap_h)
         self.assertGreater(
             dlg._ollama_test_status.sizeHint().height(), 40, shown)
+        st = dlg._ollama_test_status
+        st_w = max(st.width(), 280)
+        self.assertGreaterEqual(st.height(), st.heightForWidth(st_w) - 6, shown)
+        self.assertTrue(st.hasHeightForWidth())
+        self.assertEqual(dlg._ai_context_help.height(), ctx_h)
+        self.assertEqual(
+            dlg._ai_redact_cb.mapTo(
+                dlg, dlg._ai_redact_cb.rect().topLeft()).y(),
+            redact_y)
+        self.assertEqual(
+            dlg._ai_insecure_tls_cb.mapTo(
+                dlg, dlg._ai_insecure_tls_cb.rect().topLeft()).y(),
+            tls_y)
+        self.assertEqual(dlg._ai_cred_wrap.height(), auth_h)
+        self.assertLess(dlg._ai_context_help.heightForWidth(0), 80)
+        self.assertLess(dlg._ai_context_help.heightForWidth(20), 80)
+        self.assertEqual(
+            dlg._ollama_test_status.heightForWidth(0),
+            dlg._ollama_test_status.heightForWidth(280))
+        self.assertTrue(dlg._ollama_test_status.hasHeightForWidth())
+
+    def test_ai_test_status_does_not_move_tls_when_auth_shown(self) -> None:
+        dlg = self._dlg("AI")
+        self.addCleanup(dlg.deleteLater)
+        dlg.resize(720, 520)
+        dlg.show()
+        QApplication.processEvents()
+        dlg._ai_preset_combo.setCurrentIndex(
+            dlg._ai_preset_combo.findData("gemini"))
+        QApplication.processEvents()
+        self.assertFalse(dlg._ai_cred_wrap.isHidden())
+        self.assertGreaterEqual(
+            dlg._ai_api_key_edit.minimumWidth(), 240)
+        self.assertEqual(
+            dlg._ai_api_key_edit.width(), dlg._ai_preset_combo.width())
+        self.assertGreaterEqual(
+            dlg._ai_api_key_edit.height(), dlg._ai_preset_combo.height() - 4)
+        auth = dlg._ai_auth_status
+        auth_w = max(auth.width(), 280)
+        self.assertGreaterEqual(
+            auth.height(), auth.heightForWidth(auth_w) - 6, auth.text())
+        tls_y = dlg._ai_insecure_tls_cb.mapTo(
+            dlg, dlg._ai_insecure_tls_cb.rect().topLeft()).y()
+        cred_h = dlg._ai_cred_wrap.height()
+        dlg._set_ai_status(
+            "Starting test for https://generativelanguage.googleapis.com/v1beta/openai / gemini-flash-lite-latest…")
+        QApplication.processEvents()
+        self.assertEqual(
+            dlg._ai_insecure_tls_cb.mapTo(
+                dlg, dlg._ai_insecure_tls_cb.rect().topLeft()).y(),
+            tls_y)
+        self.assertEqual(dlg._ai_cred_wrap.height(), cred_h)
+
+    def test_settings_help_label_hfw_zero_matches_min_width(self) -> None:
+        lbl = _SettingsHelpLabel("Paste a provider API key, or set "
+                                 "OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY.")
+        self.addCleanup(lbl.deleteLater)
+        self.assertTrue(lbl.hasHeightForWidth())
+        self.assertEqual(lbl.heightForWidth(0), lbl.heightForWidth(280))
+        self.assertLess(lbl.heightForWidth(0), 80)
 
     def test_bundle_qtgui_includes_desktop_services(self) -> None:
         """The single-file app must import QDesktopServices (Sign in)."""

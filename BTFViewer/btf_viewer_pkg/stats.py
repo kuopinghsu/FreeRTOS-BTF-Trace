@@ -95,7 +95,18 @@ from .timeline_util import (  # noqa: F401 — star-import skips leading _
 from .graphics_items import *  # noqa: F403,F401
 from .scene import *  # noqa: F403,F401
 from .view import *  # noqa: F403,F401
-from .ai_case import EXPLAIN_LEVELS, new_user_investigation_template, dump_user_investigation_templates, parse_user_investigation_templates
+from .ai_case import (
+    AI_CONTEXT_MODE_LABELS,
+    AI_CONTEXT_MODES,
+    AI_CONTEXT_MODE_SETTINGS_TOOLTIP,
+    DEFAULT_AI_CONTEXT_MODE,
+    EXPLAIN_LEVELS,
+    ai_context_mode_settings_overview,
+    normalize_ai_context_mode,
+    new_user_investigation_template,
+    dump_user_investigation_templates,
+    parse_user_investigation_templates,
+)
 from .ai_investigation import (
     append_migration_burst_anomaly,
     append_wcet_anomaly_finding,
@@ -135,6 +146,7 @@ from .ai_assistant import (  # noqa: F401
     parse_extra_ai_presets,
     resolve_ai_api_key,
     resolve_ai_settings,
+    qt_wrap_tooltip,
     sanitize_ai_preset_id,
 )
 from .rc_secrets import (
@@ -15189,6 +15201,98 @@ class _AboutDialog(QDialog):
 # Settings Dialog
 # ---------------------------------------------------------------------------
 
+class _SettingsHelpLabel(QLabel):
+    """Word-wrapped muted help (lockstep with web ``settings-help``)."""
+
+    _MIN_W = 280
+
+    def __init__(self, text: str = "", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setWordWrap(True)
+        self.setMinimumWidth(self._MIN_W)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.setStyleSheet("color:#888; font-size:11px;")
+        self.setText(text)
+
+    def hasHeightForWidth(self) -> bool:
+        return bool(self.wordWrap())
+
+    def _wrap_width(self, width: int = 0) -> int:
+        # Never wrap in a sliver (QFormLayout HFW(0)); never wrap tighter
+        # than _MIN_W. Prefer the laid-out width when it is already wide.
+        laid = int(self.width())
+        return max(
+            self._MIN_W,
+            int(width) if width else 0,
+            laid if laid >= self._MIN_W else 0,
+        )
+
+    def _wrap_flags(self) -> int:
+        flags = int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        if self.wordWrap():
+            flags |= int(Qt.TextFlag.TextWordWrap)
+            wrap_any = getattr(Qt.TextFlag, "TextWrapAnywhere", None)
+            if wrap_any is not None:
+                flags |= int(wrap_any)
+        return flags
+
+    def _wrapped_height(self, width: int = 0) -> int:
+        text = str(self.text() or "")
+        if not text.strip():
+            return 0
+        br = self.fontMetrics().boundingRect(
+            0, 0, self._wrap_width(width), 10000, self._wrap_flags(), text)
+        return max(self.fontMetrics().lineSpacing(), br.height()) + 6
+
+    def heightForWidth(self, width: int) -> int:
+        return self._wrapped_height(width)
+
+    def sizeHint(self) -> QSize:
+        sh = super().sizeHint()
+        h = self._wrapped_height(self.width())
+        if h:
+            sh.setHeight(h)
+        sh.setWidth(max(int(sh.width()), self._MIN_W))
+        return sh
+
+    def minimumSizeHint(self) -> QSize:
+        sh = super().minimumSizeHint()
+        h = self._wrapped_height(self._MIN_W)
+        if h:
+            sh.setHeight(h)
+        return sh
+
+    def _apply_min_height(self) -> None:
+        if not self.wordWrap() or not str(self.text() or "").strip():
+            if self.minimumHeight() != 0:
+                self.setMinimumHeight(0)
+            return
+        h = self._wrapped_height(self.width())
+        if self.minimumHeight() != h:
+            self.setMinimumHeight(h)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 — QWidget API
+        super().resizeEvent(event)
+        self._apply_min_height()
+
+    def setText(self, text: str) -> None:  # noqa: D401 — QLabel API
+        plain = str(text or "").strip()
+        if not plain:
+            super().setText("")
+            self.setVisible(False)
+            self.setMinimumHeight(0)
+            self.updateGeometry()
+            return
+        self.setVisible(True)
+        super().setText(plain)
+        self._apply_min_height()
+        self.updateGeometry()
+
+
 class _SettingsDialog(QDialog):
     """Modal settings dialog - sidebar navigation: Appearance | Display | Layout."""
 
@@ -15230,6 +15334,30 @@ class _SettingsDialog(QDialog):
         return w
 
     @staticmethod
+    def _tip(widget: QWidget, text: str, width_px: int = 320) -> None:
+        """Hover tooltip with word wrap (native macOS tips stay on one line)."""
+        widget.setToolTip(qt_wrap_tooltip(str(text or ""), width_px))
+
+    @staticmethod
+    def _ai_help(text: str) -> _SettingsHelpLabel:
+        return _SettingsHelpLabel(str(text or "").strip())
+
+    @staticmethod
+    def _ai_field(*widgets: QWidget, spacing: int = 2) -> QWidget:
+        """Control + visible help in one form cell (web ``settings-form-field``)."""
+        wrap = QWidget()
+        wrap.setMinimumWidth(_SettingsHelpLabel._MIN_W)
+        lay = QVBoxLayout(wrap)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(spacing)
+        lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+        for w in widgets:
+            lay.addWidget(w)
+        wrap.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        return wrap
+
+    @staticmethod
     def _dialog_ss(is_dark: bool, ui_fs: str) -> str:
         """Return a scoped stylesheet for the settings dialog."""
         if is_dark:
@@ -15250,12 +15378,12 @@ class _SettingsDialog(QDialog):
                 QLabel#section_header             {{ color:#888888; font-weight:600;
                                                      font-size:{ui_fs}; }}
                 QLabel                            {{ font-size:{ui_fs}; }}
-                QCheckBox                         {{ font-size:{ui_fs}; }}
-                QSpinBox, QDoubleSpinBox, QComboBox {{
+                QCheckBox                         {{ font-size:{ui_fs}; spacing:8px; }}
+                QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit {{
                     background:#3C3C3C; color:#D4D4D4;
                     border:1.5px solid #555555; border-radius:4px;
                     padding:1px 6px; min-height:1.3em; font-size:{ui_fs}; }}
-                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus
+                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QLineEdit:focus
                                                   {{ border-color:#0E4D80; }}
                 QComboBox QAbstractItemView       {{ background:#3C3C3C; color:#D4D4D4;
                                                      selection-background-color:#0E4D80;
@@ -15300,12 +15428,12 @@ class _SettingsDialog(QDialog):
                 QLabel#section_header             {{ color:#888888; font-weight:600;
                                                      font-size:{ui_fs}; }}
                 QLabel                            {{ font-size:{ui_fs}; }}
-                QCheckBox                         {{ font-size:{ui_fs}; }}
-                QSpinBox, QDoubleSpinBox, QComboBox {{
+                QCheckBox                         {{ font-size:{ui_fs}; spacing:8px; }}
+                QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit {{
                     background:#FFFFFF; color:#1E1E1E;
                     border:1.5px solid #AAAAAA; border-radius:4px;
                     padding:1px 6px; min-height:1.3em; font-size:{ui_fs}; }}
-                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus
+                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QLineEdit:focus
                                                   {{ border-color:#005A9E; }}
                 QComboBox QAbstractItemView       {{ background:#FFFFFF; color:#1E1E1E;
                                                      selection-background-color:#005A9E;
@@ -15362,6 +15490,7 @@ class _SettingsDialog(QDialog):
                  ai_mcp_log: bool = False,
                  ai_redact_task_names: bool = False,
                  ai_trace_sensitive: bool = False,
+                 ai_context_mode: str = DEFAULT_AI_CONTEXT_MODE,
                  initial_page: str = "Appearance"):
         super().__init__(parent, Qt.WindowType.Dialog)
         self.reset_requested = False
@@ -15429,12 +15558,15 @@ class _SettingsDialog(QDialog):
 
         def _wide_combo(combo: QComboBox, labels, *, min_w: int = 240) -> QComboBox:
             """Combo wide enough for long AI labels (not _INPUT_W=110)."""
-            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+            combo.setSizeAdjustPolicy(
+                QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             fm = combo.fontMetrics()
             texts = [str(s) for s in labels if s]
             w = max((fm.horizontalAdvance(s) for s in texts), default=120) + 56
             w = max(w, min_w)
+            combo.setMinimumContentsLength(max(8, len(max(texts, key=len, default="x"))))
             combo.setMinimumWidth(w)
+            combo.setMaximumWidth(16777215)
             combo.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             try:
@@ -15442,6 +15574,13 @@ class _SettingsDialog(QDialog):
             except Exception:
                 pass
             return combo
+
+        def _wide_edit(edit: QLineEdit, *, min_w: int = 240) -> QLineEdit:
+            """Line edit matching AI combo width (web ``settings-input--grow``)."""
+            edit.setMinimumWidth(min_w)
+            edit.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            return edit
 
         def _form(page: QWidget) -> QFormLayout:
             f = QFormLayout(page)
@@ -15460,12 +15599,13 @@ class _SettingsDialog(QDialog):
         self._theme_combo.addItem("Dark")
         self._theme_combo.addItem("Light")
         self._theme_combo.setCurrentIndex(0 if is_dark else 1)
-        self._theme_combo.setToolTip("Application colour theme")
+        self._tip(self._theme_combo, "Application colour theme")
         f1.addRow("Theme:", _inp(self._theme_combo))
 
         self._colorblind_cb = QCheckBox("Colorblind-safe colors (Okabe-Ito palette)")
         self._colorblind_cb.setChecked(colorblind_safe)
-        self._colorblind_cb.setToolTip(
+        self._tip(
+            self._colorblind_cb,
             "Replace the task colour palette with the Okabe-Ito 8-colour set,\n"
             "designed to be distinguishable for deuteranopia and protanopia.")
         f1.addRow("", self._colorblind_cb)
@@ -15477,7 +15617,8 @@ class _SettingsDialog(QDialog):
         self._font_spin.setRange(6, 24)
         self._font_spin.setSuffix(" pt")
         self._font_spin.setValue(font_size)
-        self._font_spin.setToolTip(
+        self._tip(
+            self._font_spin,
             "Font size for task / core labels drawn on the timeline "
             "(Qt points, HiDPI-scaled). The web viewer uses CSS pixels; "
             "defaults look similar, numbers are not interchangeable.")
@@ -15487,7 +15628,8 @@ class _SettingsDialog(QDialog):
         self._ui_font_spin.setRange(8, 18)
         self._ui_font_spin.setSuffix(" pt")
         self._ui_font_spin.setValue(ui_font_size)
-        self._ui_font_spin.setToolTip(
+        self._tip(
+            self._ui_font_spin,
             "Font size for menus, toolbar and status bar (Qt points). "
             "The web viewer uses CSS pixels.")
         f1.addRow("UI / menus:", _inp(self._ui_font_spin))
@@ -15531,7 +15673,8 @@ class _SettingsDialog(QDialog):
         self._grid_cb.setChecked(show_grid)
         self._hover_hl_cb = QCheckBox("Highlight segments on label hover")
         self._hover_hl_cb.setChecked(show_hover_highlight)
-        self._hover_hl_cb.setToolTip(
+        self._tip(
+            self._hover_hl_cb,
             "Dim all other segments when hovering a task label.\n"
             "Disable for better performance with large traces.")
         v2.addWidget(self._indented(self._sti_cb))
@@ -15556,7 +15699,8 @@ class _SettingsDialog(QDialog):
         self._cpu_budget_spin.setSuffix("%")
         self._cpu_budget_spin.setValue(cpu_budget_pct)
         self._cpu_budget_spin.setFixedWidth(self._INPUT_W)
-        self._cpu_budget_spin.setToolTip(
+        self._tip(
+            self._cpu_budget_spin,
             "Global CPU budget threshold: tasks consuming more than this\n"
             "percentage of CPU time in the current scope will be flagged.\n"
             "Set to 0 to disable.")
@@ -15570,7 +15714,8 @@ class _SettingsDialog(QDialog):
             "One entry per line:\n  TaskName=nanoseconds\n\nExample:\n  Runner1=1000000\n  Worker=500000")
         self._task_deadlines_edit.setFixedHeight(100)
         self._task_deadlines_edit.setPlainText(task_deadlines_text)
-        self._task_deadlines_edit.setToolTip(
+        self._tip(
+            self._task_deadlines_edit,
             "Per-task execution deadline in nanoseconds.\n"
             "Any execution slice longer than the limit will be flagged.\n"
             "Use the task display name (e.g. 'Runner1') or 'TaskName[id]' form.")
@@ -15589,21 +15734,21 @@ class _SettingsDialog(QDialog):
         self._label_width_spin.setSuffix(" px")
         self._label_width_spin.setSingleStep(10)
         self._label_width_spin.setValue(label_width)
-        self._label_width_spin.setToolTip("Width of the task / core label column (60\u2013600 px)")
+        self._tip(self._label_width_spin, "Width of the task / core label column (60\u2013600 px)")
         f3.addRow("Label column:", _inp(self._label_width_spin))
 
         self._row_height_spin = QSpinBox()
         self._row_height_spin.setRange(12, 60)
         self._row_height_spin.setSuffix(" px")
         self._row_height_spin.setValue(row_height)
-        self._row_height_spin.setToolTip("Height of each task / core row (12\u201360 px)")
+        self._tip(self._row_height_spin, "Height of each task / core row (12\u201360 px)")
         f3.addRow("Row height:", _inp(self._row_height_spin))
 
         self._row_gap_spin = QSpinBox()
         self._row_gap_spin.setRange(0, 20)
         self._row_gap_spin.setSuffix(" px")
         self._row_gap_spin.setValue(row_gap)
-        self._row_gap_spin.setToolTip("Vertical gap between rows (0\u201320 px)")
+        self._tip(self._row_gap_spin, "Vertical gap between rows (0\u201320 px)")
         f3.addRow("Row gap:", _inp(self._row_gap_spin))
 
         f3.addRow(self._hline())
@@ -15613,14 +15758,14 @@ class _SettingsDialog(QDialog):
         self._sti_row_h_spin.setRange(12, 60)
         self._sti_row_h_spin.setSuffix(" px")
         self._sti_row_h_spin.setValue(sti_row_h)
-        self._sti_row_h_spin.setToolTip("Height of collapsed STI channel rows (12\u201360 px)")
+        self._tip(self._sti_row_h_spin, "Height of collapsed STI channel rows (12\u201360 px)")
         f3.addRow("STI collapsed height:", _inp(self._sti_row_h_spin))
 
         self._sti_waveform_h_spin = QSpinBox()
         self._sti_waveform_h_spin.setRange(40, 300)
         self._sti_waveform_h_spin.setSuffix(" px")
         self._sti_waveform_h_spin.setValue(sti_waveform_h)
-        self._sti_waveform_h_spin.setToolTip("Height of expanded STI waveform rows (40\u2013300 px)")
+        self._tip(self._sti_waveform_h_spin, "Height of expanded STI waveform rows (40\u2013300 px)")
         f3.addRow("STI expanded height:", _inp(self._sti_waveform_h_spin))
 
         self._sti_line_style_combo = QComboBox()
@@ -15628,7 +15773,8 @@ class _SettingsDialog(QDialog):
         self._sti_line_style_combo.addItem("Linear (point to point)", "linear")
         _style_idx = 1 if sti_line_style == "linear" else 0
         self._sti_line_style_combo.setCurrentIndex(_style_idx)
-        self._sti_line_style_combo.setToolTip(
+        self._tip(
+            self._sti_line_style_combo,
             "How the waveform line is drawn between events:\n"
             "\u2022 Step: hold the previous value until the next event (staircase)\n"
             "\u2022 Linear: connect events with a straight diagonal line")
@@ -15644,7 +15790,8 @@ class _SettingsDialog(QDialog):
         _disp_zoom_unit = "µs" if zoom_unit == "us" else zoom_unit
         self._timescale_per_px_spin.setSuffix(f" {_disp_zoom_unit}/px")
         self._timescale_per_px_spin.setValue(timescale_per_px_default)
-        self._timescale_per_px_spin.setToolTip(
+        self._tip(
+            self._timescale_per_px_spin,
             f"Maximum zoom-in level (0.5\u2013200 {_disp_zoom_unit}/px).\n"
             "Also sets the target level of the 1:1 zoom button.")
         f3.addRow("1:1 zoom level:", _inp(self._timescale_per_px_spin))
@@ -15652,13 +15799,16 @@ class _SettingsDialog(QDialog):
         self._cursor_spin = QSpinBox()
         self._cursor_spin.setRange(4, _MAX_CURSORS)
         self._cursor_spin.setValue(max_cursors)
-        self._cursor_spin.setToolTip(f"Maximum number of simultaneous cursors (4\u2013{_MAX_CURSORS})")
+        self._tip(
+            self._cursor_spin,
+            f"Maximum number of simultaneous cursors (4\u2013{_MAX_CURSORS})")
         f3.addRow("Max cursors:", _inp(self._cursor_spin))
 
         self._time_decimals_spin = QSpinBox()
         self._time_decimals_spin.setRange(0, 9)
         self._time_decimals_spin.setValue(time_decimals)
-        self._time_decimals_spin.setToolTip(
+        self._tip(
+            self._time_decimals_spin,
             "Decimal-digit precision for times shown throughout the UI "
             "(tooltips, cursors, bookmarks, status bar, etc.) (0\u20139)")
         f3.addRow("Time display precision:", _inp(self._time_decimals_spin))
@@ -15670,51 +15820,88 @@ class _SettingsDialog(QDialog):
         self._cpu_row_h_spin.setRange(16, 120)
         self._cpu_row_h_spin.setSuffix(" px")
         self._cpu_row_h_spin.setValue(cpu_load_row_h)
-        self._cpu_row_h_spin.setToolTip("Height of each CPU load row (16\u2013120 px) \u2014 independent of timeline row height")
+        self._tip(
+            self._cpu_row_h_spin,
+            "Height of each CPU load row (16\u2013120 px) \u2014 independent of timeline row height")
         f3.addRow("Row height:", _inp(self._cpu_row_h_spin))
 
         self._content_stack.addWidget(p3)
 
         # -- Page 4: AI --------------------------------------------------------
         p4 = QWidget()
-        f4 = _form(p4)
+        p4_body = QVBoxLayout(p4)
+        p4_body.setContentsMargins(0, 0, 0, 0)
+        p4_body.setSpacing(0)
+        p4_form = QWidget()
+        f4 = _form(p4_form)
         # URLs / long combo labels need room; fixed-width spins on other pages
         # stay narrow via _inp().
         f4.setFieldGrowthPolicy(
             QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        f4.setFormAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        f4.setVerticalSpacing(8)
         self._ai_enabled_cb = QCheckBox("Enable AI Assistant")
         self._ai_enabled_cb.setChecked(ai_enabled)
-        self._ai_enabled_cb.setToolTip(
+        self._tip(
+            self._ai_enabled_cb,
             "When off, hides the AI tab. When on, the AI panel can send "
             "Analysis Findings to the configured endpoint.")
-        f4.addRow("", self._ai_enabled_cb)
+        self._ai_enabled_help = self._ai_help("When off, the AI tab is hidden.")
+        self._ai_enabled_help.setObjectName("aiEnabledHelp")
+        self._ai_enabled_help.setWordWrap(False)
+        self._ai_enabled_help.setFixedHeight(
+            self._ai_enabled_help.fontMetrics().lineSpacing() + 2)
+        f4.addRow("", self._ai_field(
+            self._ai_enabled_cb,
+            self._ai_enabled_help,
+            spacing=4,
+        ))
         self._ai_auto_apply_cb = QCheckBox("Auto-apply GUI actions")
         self._ai_auto_apply_cb.setChecked(bool(ai_auto_apply))
-        self._ai_auto_apply_cb.setToolTip(
+        self._tip(
+            self._ai_auto_apply_cb,
             "When on, tool calls from the model update the timeline immediately. "
             "When off, the chat shows Apply / Skip on each action card.")
         f4.addRow("", self._ai_auto_apply_cb)
+        self._ai_context_combo = QComboBox()
+        for _mid in AI_CONTEXT_MODES:
+            self._ai_context_combo.addItem(AI_CONTEXT_MODE_LABELS[_mid], _mid)
+        self._ai_context_combo.setCurrentIndex(
+            max(0, self._ai_context_combo.findData(
+                normalize_ai_context_mode(ai_context_mode))))
+        self._tip(self._ai_context_combo, AI_CONTEXT_MODE_SETTINGS_TOOLTIP)
+        _wide_combo(
+            self._ai_context_combo,
+            list(AI_CONTEXT_MODE_LABELS.values()),
+            min_w=180)
+        self._ai_context_help = self._ai_help(ai_context_mode_settings_overview())
+        self._ai_context_help.setWordWrap(False)
+        _ctx_fm = self._ai_context_help.fontMetrics()
+        self._ai_context_help.setFixedHeight(_ctx_fm.lineSpacing() * 3 + 2)
+        f4.addRow("Context:", self._ai_field(
+            self._ai_context_combo,
+            self._ai_context_help,
+        ))
         self._ai_redact_cb = QCheckBox("Anonymize task names for cloud")
         self._ai_redact_cb.setChecked(bool(ai_redact_task_names))
-        self._ai_redact_cb.setToolTip(
+        self._tip(
+            self._ai_redact_cb,
             "When the endpoint is not local, replace task names with Task-N "
             "aliases before Findings leave the machine.")
         f4.addRow("", self._ai_redact_cb)
         self._ai_sensitive_cb = QCheckBox("Treat this trace as sensitive")
         self._ai_sensitive_cb.setChecked(bool(ai_trace_sensitive))
-        self._ai_sensitive_cb.setToolTip(
+        self._tip(
+            self._ai_sensitive_cb,
             "Disables cloud AI for this machine. Local endpoints still work.")
         f4.addRow("", self._ai_sensitive_cb)
         self._ai_mcp_log_cb = QCheckBox("Log MCP messages to file")
         self._ai_mcp_log_cb.setChecked(bool(ai_mcp_log))
-        self._ai_mcp_log_cb.setToolTip(
+        self._tip(
+            self._ai_mcp_log_cb,
             f"Debugging only. Appends to ./{AI_MCP_LOG_FILENAME} (can grow large).")
         f4.addRow("", self._ai_mcp_log_cb)
-        _mcp_log_note = QLabel(
-            f"Debugging only — appends to ./{AI_MCP_LOG_FILENAME} (can grow large).")
-        _mcp_log_note.setWordWrap(True)
-        _mcp_log_note.setStyleSheet("color:#888;")
-        f4.addRow("", self._indented(_mcp_log_note))
 
         # Field values per preset; switching presets stashes the current inputs
         # so credentials survive a round trip.
@@ -15741,7 +15928,8 @@ class _SettingsDialog(QDialog):
             self._ai_preset_combo.addItem(_label, _pid)
         self._ai_preset_combo.setCurrentIndex(
             max(0, self._ai_preset_combo.findData(normalize_ai_preset(ai_preset))))
-        self._ai_preset_combo.setToolTip(
+        self._tip(
+            self._ai_preset_combo,
             "Ollama runs locally; OpenAI and Gemini are cloud APIs; Custom is "
             "any other OpenAI-compatible endpoint. Importing a JSON file whose "
             "preset name is not in this list adds it. Each preset keeps its own "
@@ -15755,9 +15943,10 @@ class _SettingsDialog(QDialog):
 
         self._ai_url_edit = QLineEdit()
         self._ai_url_edit.setPlaceholderText(DEFAULT_AI_BASE_URL)
-        self._ai_url_edit.setToolTip(
+        self._tip(
+            self._ai_url_edit,
             "OpenAI-compatible API root, e.g. http://localhost:11434/v1 for Ollama.")
-        self._ai_url_edit.setMinimumWidth(280)
+        _wide_edit(self._ai_url_edit)
         f4.addRow("Base URL:", self._ai_url_edit)
 
         self._ai_model_lists: Dict[str, List[str]] = {
@@ -15766,7 +15955,8 @@ class _SettingsDialog(QDialog):
         self._ai_model_combo = QComboBox()
         self._ai_model_combo.setEditable(True)
         self._ai_model_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self._ai_model_combo.setToolTip(
+        self._tip(
+            self._ai_model_combo,
             "Model id served by that endpoint (e.g. `ollama list` name, "
             "gpt-4o-mini, or gemini-flash-lite-latest). Refresh to list "
             "models from GET /models.")
@@ -15777,7 +15967,7 @@ class _SettingsDialog(QDialog):
         self._ai_model_refresh.setIcon(_svg_icon(_IC_REFRESH, _ic, 14))
         self._ai_model_refresh.setIconSize(QSize(14, 14))
         self._ai_model_refresh.setFixedSize(26, 26)
-        self._ai_model_refresh.setToolTip("Refresh model list from this endpoint")
+        self._tip(self._ai_model_refresh, "Refresh model list from this endpoint")
         self._ai_model_refresh.clicked.connect(self._refresh_ai_models)
         _model_row = QWidget()
         _model_h = QHBoxLayout(_model_row)
@@ -15790,7 +15980,8 @@ class _SettingsDialog(QDialog):
         self._ai_auth_combo = QComboBox()
         for _mode, _mlabel in AI_AUTH_MODE_LABELS:
             self._ai_auth_combo.addItem(_mlabel, _mode)
-        self._ai_auth_combo.setToolTip(
+        self._tip(
+            self._ai_auth_combo,
             "How this preset authenticates. None for a local server; API key "
             "to paste a provider key; Sign in opens the vendor page so you can "
             "log in and paste the key or token.")
@@ -15802,16 +15993,19 @@ class _SettingsDialog(QDialog):
         f4.addRow("Authentication:", self._ai_auth_combo)
 
         self._ai_cred_wrap = QWidget()
+        self._ai_cred_wrap.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         _cred = QVBoxLayout(self._ai_cred_wrap)
         _cred.setContentsMargins(0, 0, 0, 0)
         _cred.setSpacing(6)
-        self._ai_auth_status = QLabel("")
-        self._ai_auth_status.setWordWrap(True)
-        self._ai_auth_status.setStyleSheet("color:#888;")
+        _cred.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._ai_auth_status = _SettingsHelpLabel("")
         _cred.addWidget(self._ai_auth_status)
         self._ai_api_key_edit = QLineEdit()
         self._ai_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self._ai_api_key_edit.setToolTip(
+        _wide_edit(self._ai_api_key_edit)
+        self._tip(
+            self._ai_api_key_edit,
             "API key or access token for this preset (or OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY). "
             "Local Ollama needs none. Stored per preset in btf_viewer.rc.")
         _cred.addWidget(self._ai_api_key_edit)
@@ -15820,12 +16014,13 @@ class _SettingsDialog(QDialog):
         _auth_h.setContentsMargins(0, 0, 0, 0)
         _auth_h.setSpacing(8)
         self._ai_signin_btn = QPushButton("Sign in…")
-        self._ai_signin_btn.setToolTip(
+        self._tip(
+            self._ai_signin_btn,
             "Open the provider sign-in or API-key page in your browser, then "
             "paste the key or token above.")
         self._ai_signin_btn.clicked.connect(self._ai_open_signin)
         self._ai_logout_btn = QPushButton("Log out")
-        self._ai_logout_btn.setToolTip("Clear the saved key or token for this preset.")
+        self._tip(self._ai_logout_btn, "Clear the saved key or token for this preset.")
         self._ai_logout_btn.clicked.connect(self._ai_logout)
         _auth_h.addWidget(self._ai_signin_btn)
         _auth_h.addWidget(self._ai_logout_btn)
@@ -15836,7 +16031,8 @@ class _SettingsDialog(QDialog):
         self._ai_auth_combo.currentIndexChanged.connect(self._on_ai_auth_mode_changed)
 
         self._ai_insecure_tls_cb = QCheckBox("Allow self-signed TLS")
-        self._ai_insecure_tls_cb.setToolTip(
+        self._tip(
+            self._ai_insecure_tls_cb,
             "Skip HTTPS certificate checks for this preset (self-signed or "
             "private CA). Use only on networks you trust. Browsers cannot "
             "skip this check — trust the cert in the OS, use http:// on a "
@@ -15851,7 +16047,8 @@ class _SettingsDialog(QDialog):
             self._response_lang_combo.addItem(_lang)
             _idx = self._response_lang_combo.findText(_lang)
         self._response_lang_combo.setCurrentIndex(max(0, _idx))
-        self._response_lang_combo.setToolTip(
+        self._tip(
+            self._response_lang_combo,
             "Language for AI Assistant replies (also available via Language… in the AI panel).")
         _wide_combo(
             self._response_lang_combo,
@@ -15865,13 +16062,15 @@ class _SettingsDialog(QDialog):
         _test_h.setContentsMargins(0, 0, 0, 0)
         _test_h.setSpacing(8)
         self._ollama_test_btn = QPushButton("Test connection")
-        self._ollama_test_btn.setToolTip(
+        self._tip(
+            self._ollama_test_btn,
             "List models and run a tiny chat probe against this endpoint. "
             "Status updates appear below — first model load can take a couple of minutes.")
         self._ollama_test_btn.clicked.connect(self._test_ollama_connection)
         _test_h.addWidget(self._ollama_test_btn)
         self._ai_import_btn = QPushButton("Import…")
-        self._ai_import_btn.setToolTip(
+        self._tip(
+            self._ai_import_btn,
             "Load preset, checkbox flags, base URL, model, and API key from a "
             "JSON file. Unknown preset names are added to the list "
             "(see examples/ai/ollama.json, gemini.json, openai.json, "
@@ -15880,26 +16079,25 @@ class _SettingsDialog(QDialog):
         _test_h.addWidget(self._ai_import_btn)
         _test_h.addStretch()
         f4.addRow("", _test_row)
+        self._ai_form = f4
+        p4_body.addWidget(p4_form)
 
-        self._ollama_test_status = QLabel(
+        p4_tail = QWidget()
+        t4 = QVBoxLayout(p4_tail)
+        t4.setContentsMargins(20, 0, 20, 12)
+        t4.setSpacing(8)
+        self._ollama_test_status = _SettingsHelpLabel(
             "Click Test connection to verify the endpoint and model.")
         self._ollama_test_status.setObjectName("aiTestStatus")
-        self._ollama_test_status.setWordWrap(True)
         self._ollama_test_status.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._ollama_test_status.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        self._ollama_test_status.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        self._ollama_test_status.setMinimumHeight(40)
         self._ollama_test_status.setStyleSheet(
-            "color:#888; padding:4px 0;")
-        f4.addRow(self._ollama_test_status)
-
-        self._ai_hint = QLabel("")
-        self._ai_hint.setWordWrap(True)
-        self._ai_hint.setStyleSheet("color:#888;")
-        f4.addRow(self._ai_hint)
+            "color:#888; font-size:11px; padding:2px 0;")
+        t4.addWidget(self._ollama_test_status)
+        self._ai_hint = _SettingsHelpLabel("")
+        t4.addWidget(self._ai_hint)
+        p4_body.addWidget(p4_tail)
+        p4_body.addStretch(1)
 
         self._ai_active_preset = normalize_ai_preset(ai_preset)
         self._load_ai_preset_fields(self._ai_active_preset)
@@ -15943,7 +16141,8 @@ class _SettingsDialog(QDialog):
         btn_reset.setObjectName("btn_cancel")
         btn_reset.setMinimumWidth(_btn_w)
         btn_reset.setFixedHeight(_btn_h)
-        btn_reset.setToolTip(
+        self._tip(
+            btn_reset,
             "Restore built-in defaults, including Statistics pins, order, "
             "and expand/collapse. The Statistics panel updates immediately; "
             "OK writes them to btf_viewer.rc.")
@@ -15972,6 +16171,10 @@ class _SettingsDialog(QDialog):
 
         # -- Scoped stylesheet ------------------------------------------------
         self.setStyleSheet(self._dialog_ss(is_dark, _ui_fs))
+        fusion = QStyleFactory.create("Fusion")
+        if fusion is not None:
+            for cb in self.findChildren(QCheckBox):
+                cb.setStyle(fusion)
 
         # -- Live-preview wiring -----------------------------------------------
         # Each signal sends a typed argument (int/float).  Route them through
@@ -16088,6 +16291,12 @@ class _SettingsDialog(QDialog):
         show_cred = mode != AI_AUTH_NONE
         self._ai_cred_wrap.setVisible(show_cred)
         self._ai_cred_label.setVisible(show_cred)
+        _form_lay = getattr(self, "_ai_form", None)
+        if _form_lay is not None and hasattr(_form_lay, "setRowVisible"):
+            try:
+                _form_lay.setRowVisible(self._ai_cred_wrap, show_cred)
+            except (TypeError, RuntimeError):
+                pass
         self._ai_cred_label.setText(
             "Token:" if mode == AI_AUTH_BROWSER else "API key:")
         self._ai_signin_btn.setVisible(mode == AI_AUTH_BROWSER)
@@ -16159,24 +16368,9 @@ class _SettingsDialog(QDialog):
 
     def _set_ai_status(self, message: str, kind: str = "info") -> None:
         color = {"ok": "#1e8449", "error": "#c0392b"}.get(kind, "#888")
-        self._ollama_test_status.setStyleSheet(f"color:{color}; padding:4px 0;")
+        self._ollama_test_status.setStyleSheet(
+            f"color:{color}; font-size:11px; padding:2px 0;")
         self._ollama_test_status.setText(message)
-        self._ollama_test_status.updateGeometry()
-        scroll = None
-        w = self._ollama_test_status.parentWidget()
-        while w is not None:
-            if isinstance(w, QScrollArea):
-                scroll = w
-                break
-            w = w.parentWidget()
-        if scroll is not None:
-            inner = scroll.widget()
-            if inner is not None:
-                inner.adjustSize()
-            QTimer.singleShot(
-                0,
-                lambda: scroll.ensureWidgetVisible(self._ollama_test_status, 0, 8),
-            )
 
     def _ai_combo_preset_ids(self) -> List[str]:
         return [
@@ -16193,6 +16387,9 @@ class _SettingsDialog(QDialog):
         w = max((fm.horizontalAdvance(s) for s in labels if s), default=120) + 56
         w = max(w, 240)
         self._ai_preset_combo.setMinimumWidth(w)
+        self._ai_preset_combo.setMaximumWidth(16777215)
+        self._ai_preset_combo.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         try:
             self._ai_preset_combo.view().setMinimumWidth(w)
         except Exception:
@@ -16268,6 +16465,11 @@ class _SettingsDialog(QDialog):
                 self._response_lang_combo.addItem(language)
                 idx = self._response_lang_combo.findText(language)
             self._response_lang_combo.setCurrentIndex(max(0, idx))
+        if patch.get("context_mode"):
+            idx = self._ai_context_combo.findData(
+                normalize_ai_context_mode(patch.get("context_mode")))
+            if idx >= 0:
+                self._ai_context_combo.setCurrentIndex(idx)
         flag_map = (
             ("enabled", self._ai_enabled_cb),
             ("auto_apply", self._ai_auto_apply_cb),
@@ -16465,6 +16667,8 @@ class _SettingsDialog(QDialog):
         self._time_decimals_spin.setValue(_DEFAULT_TIME_DECIMALS)
         self._ai_enabled_cb.setChecked(True)
         self._ai_auto_apply_cb.setChecked(False)
+        self._ai_context_combo.setCurrentIndex(
+            max(0, self._ai_context_combo.findData(DEFAULT_AI_CONTEXT_MODE)))
         self._ai_redact_cb.setChecked(False)
         self._ai_sensitive_cb.setChecked(False)
         self._ai_mcp_log_cb.setChecked(False)
@@ -16551,6 +16755,9 @@ class _SettingsDialog(QDialog):
     def ai_enabled(self) -> bool:         return self._ai_enabled_cb.isChecked()
     @property
     def ai_auto_apply(self) -> bool:      return self._ai_auto_apply_cb.isChecked()
+    @property
+    def ai_context_mode(self) -> str:
+        return normalize_ai_context_mode(self._ai_context_combo.currentData())
     @property
     def ai_redact_task_names(self) -> bool: return self._ai_redact_cb.isChecked()
     @property

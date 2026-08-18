@@ -420,6 +420,12 @@ _MAX_CURSORS_TOOL = 8
 _MAX_TOOL_ROUNDS = 4
 
 
+def ai_viewer_tools_for_mode(mode: Any = None, stage: Any = "") -> List[Dict[str, Any]]:
+    """Tool schemas for Settings → AI context mode (Full = complete catalog)."""
+    from .ai_case import filter_tools_for_context_mode
+    return filter_tools_for_context_mode(ai_viewer_tools(), mode, stage)
+
+
 def ai_viewer_tools() -> List[Dict[str, Any]]:
     """OpenAI-compatible ``tools`` array."""
     return [

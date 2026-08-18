@@ -35,6 +35,7 @@ import {
 } from './aiInvestigation.js'
 import {
   explainFindingPayload,
+  filterToolsForContextMode,
   interpretInvestigationQuery,
   setHypothesisStatus,
   validateExperiment,
@@ -404,6 +405,10 @@ graph LR
 
 const MAX_CURSORS_TOOL = 8
 export const MAX_TOOL_ROUNDS = 4
+
+export function aiViewerToolsForMode(mode = null, stage = '') {
+  return filterToolsForContextMode(aiViewerTools(), mode, stage)
+}
 
 export function aiViewerTools() {
   return [

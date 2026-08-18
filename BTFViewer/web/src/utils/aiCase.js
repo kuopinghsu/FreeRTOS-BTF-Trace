@@ -110,6 +110,395 @@ export const GUIDED_STAGE_LABELS = {
   compare: 'Compare',
 }
 
+export const AI_CONTEXT_MODE_COMPACT = 'compact'
+export const AI_CONTEXT_MODE_BALANCED = 'balanced'
+export const AI_CONTEXT_MODE_FULL = 'full'
+export const AI_CONTEXT_MODES = [
+  AI_CONTEXT_MODE_COMPACT, AI_CONTEXT_MODE_BALANCED, AI_CONTEXT_MODE_FULL,
+]
+export const DEFAULT_AI_CONTEXT_MODE = AI_CONTEXT_MODE_BALANCED
+export const AI_CONTEXT_MODE_LABELS = {
+  [AI_CONTEXT_MODE_COMPACT]: 'Compact',
+  [AI_CONTEXT_MODE_BALANCED]: 'Balanced',
+  [AI_CONTEXT_MODE_FULL]: 'Full evidence',
+}
+export const AI_CONTEXT_MODE_SETTINGS_TOOLTIP = (
+  'How much Findings, tools, and chat history are sent to the model.'
+)
+export const AI_CONTEXT_MODE_SETTINGS_LINES = {
+  [AI_CONTEXT_MODE_COMPACT]: (
+    'Compact — fewer Findings and tools; best for small local models.'
+  ),
+  [AI_CONTEXT_MODE_BALANCED]: (
+    'Balanced (default) — moderate Findings, tools, and history.'
+  ),
+  [AI_CONTEXT_MODE_FULL]: (
+    'Full evidence — complete Findings, tools, and history.'
+  ),
+}
+export const AI_CONTEXT_STAGE_TOOLS = {
+  triage: ['detect_anomalies', 'cluster_findings', 'suggest_scope'],
+  scope: ['set_cursors', 'zoom_to_range', 'highlight_task'],
+  investigate: ['investigate', 'correlate_events', 'find_critical_path'],
+  verify: ['verify_claim', 'detect_contradictions', 'challenge_conclusion'],
+  experiment: ['what_if', 'optimize_experiment', 'recommend_experiments'],
+  compare: ['compare_performance', 'validate_experiment'],
+  report: ['generate_report', 'export_investigation'],
+}
+export const AI_CONTEXT_ALWAYS_TOOLS = [
+  'search_timeline', 'query_raw_metric', 'summarize_investigation_context',
+]
+export const AI_CONTEXT_BALANCED_EXTRA_TOOLS = [
+  'detect_anomalies', 'investigate', 'set_cursors', 'zoom_to_range',
+  'highlight_task', 'challenge_conclusion', 'what_if',
+]
+const CONTEXT_TOOL_ROW_KEYS = new Set([
+  'rows', 'episodes', 'slices', 'events', 'gaps', 'hits', 'times',
+  'experiments', 'anomalies', 'candidates', 'samples', 'values',
+])
+const FINDING_ITEM_RE = /^(\d+)\. \[([A-Z]+)\]/gm
+const SEV_CONTEXT_RANK = { error: 0, critical: 0, warning: 1, info: 2 }
+
+export function normalizeAiContextMode(value) {
+  const raw = String(value || '').trim().toLowerCase().replace(/[-_]/g, ' ')
+  if (raw === 'compact' || raw === 'reduced' || raw === 'reduce' || raw === 'low') {
+    return AI_CONTEXT_MODE_COMPACT
+  }
+  if (raw === 'full' || raw === 'full evidence' || raw === 'fullevidence'
+      || raw === 'complete' || raw === 'max') {
+    return AI_CONTEXT_MODE_FULL
+  }
+  return DEFAULT_AI_CONTEXT_MODE
+}
+
+export function aiContextModeLabel(mode) {
+  return AI_CONTEXT_MODE_LABELS[normalizeAiContextMode(mode)]
+    || AI_CONTEXT_MODE_LABELS[DEFAULT_AI_CONTEXT_MODE]
+}
+
+export function aiContextModeSettingsOverview() {
+  return AI_CONTEXT_MODES.map(m => AI_CONTEXT_MODE_SETTINGS_LINES[m]).join('\n')
+}
+
+export function aiContextModeSettingsHelp(mode = null) {
+  const key = normalizeAiContextMode(mode)
+  return AI_CONTEXT_MODE_SETTINGS_LINES[key]
+    || AI_CONTEXT_MODE_SETTINGS_LINES[DEFAULT_AI_CONTEXT_MODE]
+}
+
+export function aiContextLimits(mode = null) {
+  const key = normalizeAiContextMode(mode)
+  if (key === AI_CONTEXT_MODE_COMPACT) {
+    return {
+      findings: 5, tool_rows: 10, history_user_turns: 2,
+      max_tokens: 500, what_if: 3, diagrams: 'asked',
+    }
+  }
+  if (key === AI_CONTEXT_MODE_FULL) {
+    return {
+      findings: null, tool_rows: 40, history_user_turns: 20,
+      max_tokens: null, what_if: 12, diagrams: 'useful',
+    }
+  }
+  return {
+    findings: 12, tool_rows: 20, history_user_turns: 6,
+    max_tokens: null, what_if: 5, diagrams: 'useful',
+  }
+}
+
+export function contextModeSystemAddendum(mode = null) {
+  const key = normalizeAiContextMode(mode)
+  const keep = 'Never omit jump:TIME, range:LO/HI, real task names, measurements '
+    + 'with units, confidence, evidence quality, what-if disclaimers, or '
+    + 'at least one alternative / falsification.'
+  if (key === AI_CONTEXT_MODE_COMPACT) {
+    return ' Context mode is Compact: keep the reply around 300–500 tokens. '
+      + 'Generate mermaid diagrams only if the user asks. ' + keep
+  }
+  if (key === AI_CONTEXT_MODE_FULL) {
+    return ' Context mode is Full evidence: you may use the complete Findings, '
+      + 'tools, and history. Include mermaid when it clarifies a sequence '
+      + 'or migration. ' + keep
+  }
+  return ' Context mode is Balanced: prefer concise evidence-backed answers. '
+    + 'Include mermaid when it clarifies a sequence or migration. ' + keep
+}
+
+function stageToolNames(stage) {
+  let sid = String(stage || '').trim().toLowerCase()
+  if (!sid || sid === 'idle' || sid === 'start') sid = 'triage'
+  return AI_CONTEXT_STAGE_TOOLS[sid] || AI_CONTEXT_STAGE_TOOLS.triage
+}
+
+export function toolNamesForContextMode(mode = null, stage = '') {
+  const key = normalizeAiContextMode(mode)
+  if (key === AI_CONTEXT_MODE_FULL) return null
+  const names = []
+  const seen = new Set()
+  const add = (seq) => {
+    for (const name of seq || []) {
+      const n = String(name || '').trim()
+      if (n && !seen.has(n)) {
+        seen.add(n)
+        names.push(n)
+      }
+    }
+  }
+  let sid = String(stage || '').trim().toLowerCase()
+  if (!sid || sid === 'idle' || sid === 'start') sid = 'triage'
+  add(stageToolNames(sid))
+  add(AI_CONTEXT_ALWAYS_TOOLS)
+  if (key === AI_CONTEXT_MODE_BALANCED) {
+    const idx = GUIDED_STAGES.indexOf(sid)
+    if (idx > 0) add(stageToolNames(GUIDED_STAGES[idx - 1]))
+    if (idx >= 0 && idx + 1 < GUIDED_STAGES.length) {
+      add(stageToolNames(GUIDED_STAGES[idx + 1]))
+    }
+    add(AI_CONTEXT_BALANCED_EXTRA_TOOLS)
+    add(AI_CONTEXT_STAGE_TOOLS.report)
+  }
+  return names
+}
+
+export function filterToolsForContextMode(tools, mode = null, stage = '') {
+  const catalog = Array.isArray(tools) ? tools.filter(t => t && typeof t === 'object') : []
+  const names = toolNamesForContextMode(mode, stage)
+  if (names == null) return [...catalog]
+  const want = new Set(names)
+  return catalog.filter((tool) => want.has(String(tool?.function?.name || '').trim()))
+}
+
+export function investigationContextSummary(payload = null) {
+  if (!payload || typeof payload !== 'object') return ''
+  const cse = payload.investigation_case && typeof payload.investigation_case === 'object'
+    ? payload.investigation_case
+    : {}
+  const finding = payload.finding && typeof payload.finding === 'object'
+    ? payload.finding
+    : {}
+  const parts = []
+  const title = String(cse.goal || finding.title || finding.id || '').trim()
+  if (title) parts.push(`Focus: ${title}`)
+  const quality = payload.evidence_quality
+  if (quality && typeof quality === 'object') {
+    const band = String(quality.band || '').trim()
+    if (band) parts.push(`Evidence quality: ${band}`)
+  }
+  const hyps = cse.hypotheses || payload.hypotheses || []
+  for (const hyp of hyps) {
+    if (!hyp || typeof hyp !== 'object') continue
+    const text = String(hyp.hypothesis || hyp.id || '').trim()
+    if (!text) continue
+    const status = String(hyp.status || '').trim()
+    parts.push(`- ${status ? `${status}: ` : ''}${text}`)
+    if (parts.length >= 8) break
+  }
+  const tools = cse.tools_executed || payload.tools_executed || []
+  const labels = tools.map(t => String(t || '').trim()).filter(Boolean)
+  if (labels.length) parts.push(`Tools: ${labels.slice(0, 12).join(', ')}`)
+  return parts.join('\n').trim()
+}
+
+function findingBlocks(text) {
+  const blob = String(text || '')
+  const re = new RegExp(FINDING_ITEM_RE.source, 'gm')
+  const matches = [...blob.matchAll(re)]
+  if (!matches.length) return { header: blob.replace(/\s+$/, ''), items: [] }
+  const header = blob.slice(0, matches[0].index).replace(/\s+$/, '')
+  const items = matches.map((match, i) => {
+    const start = match.index
+    const end = i + 1 < matches.length ? matches[i + 1].index : blob.length
+    return {
+      sev: String(match[2] || '').toLowerCase(),
+      block: blob.slice(start, end).replace(/\s+$/, ''),
+    }
+  })
+  return { header, items }
+}
+
+export function compactFindingsText(text, mode = null, findings = null) {
+  const limits = aiContextLimits(mode)
+  const cap = limits.findings
+  const raw = String(text || '').replace(/\s+$/, '')
+  if (cap == null || !raw) return raw
+  const { header, items } = findingBlocks(raw)
+  if (items.length) {
+    const ranked = items.map((item, i) => ({ i, item }))
+      .sort((a, b) => (SEV_CONTEXT_RANK[a.item.sev] ?? 3) - (SEV_CONTEXT_RANK[b.item.sev] ?? 3)
+        || a.i - b.i)
+    const kept = ranked.slice(0, Number(cap)).map(row => row.item.block)
+    const omitted = Math.max(0, items.length - kept.length)
+    const lines = header ? [header, ''] : []
+    lines.push(...kept)
+    if (omitted) {
+      lines.push(
+        '',
+        `${omitted} more finding(s) omitted (${aiContextModeLabel(mode)}). `
+          + 'Ask for Full evidence or a specific finding id if needed.',
+      )
+    }
+    return `${lines.join('\n').replace(/\s+$/, '')}\n`
+  }
+  if (Array.isArray(findings) && findings.length) {
+    const ranked = findings
+      .map((finding, i) => ({ i, finding }))
+      .filter(row => row.finding && typeof row.finding === 'object')
+      .sort((a, b) => (
+        (SEV_CONTEXT_RANK[String(a.finding.severity || 'info').toLowerCase()] ?? 3)
+        - (SEV_CONTEXT_RANK[String(b.finding.severity || 'info').toLowerCase()] ?? 3)
+      ) || a.i - b.i)
+    const kept = ranked.slice(0, Number(cap)).map(row => row.finding)
+    const omitted = Math.max(0, ranked.length - kept.length)
+    const lines = ['Analysis Findings', '']
+    kept.forEach((finding, i) => {
+      const sev = String(finding.severity || 'info').toUpperCase()
+      const fid = String(finding.id || '').trim()
+      const idBit = fid ? ` id=${fid}` : ''
+      lines.push(`${i + 1}. [${sev}]${idBit} ${finding.title || 'Finding'}`)
+      lines.push(`   ${finding.text || ''}`)
+      for (const ev of (finding.evidence || [])) {
+        if (ev && typeof ev === 'object' && ev.time != null) {
+          lines.push(`   evidence: ${ev.label || 'event'} jump:${ev.time}`)
+        } else if (ev) {
+          lines.push(`   evidence: ${ev}`)
+        }
+      }
+      lines.push('')
+    })
+    if (omitted) {
+      lines.push(`${omitted} more finding(s) omitted (${aiContextModeLabel(mode)}).`)
+    }
+    return `${lines.join('\n').replace(/\s+$/, '')}\n`
+  }
+  const key = normalizeAiContextMode(mode)
+  if (raw.length > 8000 && key === AI_CONTEXT_MODE_COMPACT) {
+    return `${raw.slice(0, 8000).replace(/\s+$/, '')}\n… (truncated for Compact context)\n`
+  }
+  if (raw.length > 20000 && key === AI_CONTEXT_MODE_BALANCED) {
+    return `${raw.slice(0, 20000).replace(/\s+$/, '')}\n… (truncated for Balanced context)\n`
+  }
+  return raw.endsWith('\n') ? raw : `${raw}\n`
+}
+
+function truncateToolLists(obj, rowCap, whatIfCap) {
+  if (Array.isArray(obj)) {
+    if (obj.length > rowCap) return obj.slice(0, rowCap)
+    return obj.map(v => truncateToolLists(v, rowCap, whatIfCap))
+  }
+  if (!obj || typeof obj !== 'object') return obj
+  const out = {}
+  for (const [key, value] of Object.entries(obj)) {
+    if ((key === 'experiments' || key === 'candidates') && Array.isArray(value)) {
+      const cap = Math.min(rowCap, whatIfCap)
+      if (value.length > cap) {
+        out[key] = value.slice(0, cap).map(v => truncateToolLists(v, rowCap, whatIfCap))
+        out.truncated = true
+        out.omitted = Math.max(Number(out.omitted || 0), value.length - cap)
+      } else {
+        out[key] = value.map(v => truncateToolLists(v, rowCap, whatIfCap))
+      }
+    } else if (CONTEXT_TOOL_ROW_KEYS.has(key) && Array.isArray(value)) {
+      if (value.length > rowCap) {
+        out[key] = value.slice(0, rowCap).map(v => truncateToolLists(v, rowCap, whatIfCap))
+        out.truncated = true
+        out.omitted = Math.max(Number(out.omitted || 0), value.length - rowCap)
+      } else {
+        out[key] = value.map(v => truncateToolLists(v, rowCap, whatIfCap))
+      }
+    } else {
+      out[key] = truncateToolLists(value, rowCap, whatIfCap)
+    }
+  }
+  return out
+}
+
+export function compactToolResultPayload(result, mode = null) {
+  const limits = aiContextLimits(mode)
+  const rowCap = Number(limits.tool_rows || 40)
+  const whatIfCap = Number(limits.what_if || 12)
+  let payload = result
+  let parsedJson = false
+  if (typeof result === 'string') {
+    const text = result.trim()
+    if (text.startsWith('{') || text.startsWith('[')) {
+      try {
+        payload = JSON.parse(text)
+        parsedJson = true
+      } catch {
+        payload = result
+      }
+    }
+  }
+  if (!payload || (typeof payload !== 'object')) return result
+  const compacted = truncateToolLists(payload, rowCap, whatIfCap)
+  if (compacted && typeof compacted === 'object' && !Array.isArray(compacted) && compacted.omitted) {
+    const msg = String(compacted.message || '').trim()
+    const extra = `${compacted.omitted} more row(s) omitted (${aiContextModeLabel(mode)}).`
+    compacted.message = msg ? `${msg} ${extra}` : extra
+  }
+  return parsedJson ? JSON.stringify(compacted) : compacted
+}
+
+export function compactChatHistory(messages, mode = null, investigationSummary = '') {
+  const limits = aiContextLimits(mode)
+  const keepTurns = Math.max(1, Number(limits.history_user_turns || 2))
+  const msgs = (messages || []).filter(m => m && typeof m === 'object')
+  const system = []
+  const rest = []
+  for (const msg of msgs) {
+    if (String(msg.role || '') === 'system' && !rest.length) system.push({ ...msg })
+    else rest.push({ ...msg })
+  }
+  const userIdxs = []
+  rest.forEach((msg, i) => {
+    if (String(msg.role || '') !== 'user') return
+    const content = String(msg.content || '').toLowerCase()
+    if (content.includes('tool-call limit')) return
+    userIdxs.push(i)
+  })
+  let omitted = 0
+  let kept = rest
+  if (userIdxs.length > keepTurns) {
+    omitted = userIdxs.length - keepTurns
+    kept = rest.slice(userIdxs[userIdxs.length - keepTurns])
+  }
+  const extra = []
+  if (omitted) {
+    const summary = String(investigationSummary || '').trim()
+    extra.push({
+      role: 'user',
+      content: summary
+        ? `### Investigation summary\n${summary}`
+        : `[${omitted} earlier turn(s) omitted for ${aiContextModeLabel(mode)} context.]`,
+    })
+    extra.push({
+      role: 'assistant',
+      content: 'Understood. Continue from the recent turns.',
+    })
+  }
+  const compacted = kept.map((msg) => {
+    const copied = { ...msg }
+    if (String(copied.role || '') === 'tool') {
+      copied.content = compactToolResultPayload(copied.content, mode)
+    }
+    return copied
+  })
+  return [...system, ...extra, ...compacted]
+}
+
+export function formatContextUsageStatus(meter = null, mode = null) {
+  const label = aiContextModeLabel(mode)
+  const m = meter && typeof meter === 'object' ? meter : emptyCostMeter()
+  const tokens = Number(m.total_tokens || 0)
+  const tools = Number(m.tool_calls || 0)
+  const timeS = Number(m.model_time_s || 0)
+  if (tokens <= 0 && tools <= 0 && timeS <= 0) return `Context: ${label}`
+  const timePart = timeS ? `${timeS}s` : '0s'
+  return `Context: ${label} · ${formatTokenCount(tokens)} tok · `
+    + `${Number.isFinite(tools) ? Math.max(0, Math.trunc(tools) || 0) : 0} tools · `
+    + timePart
+}
+
 export const GUIDE_STAGE_NEEDLES = {
   triage: ['finding', 'triage', 'analysis'],
   scope: ['cursor', 'scope', 'c1'],

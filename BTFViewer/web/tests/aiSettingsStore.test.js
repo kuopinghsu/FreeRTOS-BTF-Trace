@@ -32,6 +32,7 @@ describe('AI settings storage', () => {
     const s = normalizeSettings(null)
     assert.equal(s.aiPreset, 'ollama')
     assert.equal(s.aiAutoApply, false)
+    assert.equal(s.aiContextMode, 'balanced')
     assert.deepEqual(Object.keys(s.aiPresets).sort(), ['custom', 'gemini', 'ollama', 'openai'])
     assert.deepEqual(s.aiExtraPresets, [])
     assert.deepEqual(s.aiPresets.gemini, {

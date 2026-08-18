@@ -1184,11 +1184,53 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(turn["tool_calls"][0]["name"], "investigate")
         self.assertNotIn("error", turn)
 
+    def test_live_benchmark_chat_compact_mode(self) -> None:
+        seen = {"system": "", "max_tokens": None, "tools": 0}
+
+        def fake_chat(*_a, **kwargs):
+            msgs = kwargs.get("messages") or []
+            if msgs and str(msgs[0].get("role") or "") == "system":
+                seen["system"] = str(msgs[0].get("content") or "")
+            seen["max_tokens"] = kwargs.get("max_tokens")
+            seen["tools"] = len(kwargs.get("tools") or [])
+            return {
+                "content": "Compact answer. Confidence: High.",
+                "tool_calls": [],
+                "usage": {"prompt_tokens": 400, "completion_tokens": 80, "total_tokens": 480},
+            }
+
+        full_catalog = [{
+            "type": "function",
+            "function": {"name": n, "parameters": {}},
+        } for n in (
+            "detect_anomalies", "cluster_findings", "suggest_scope",
+            "search_timeline", "query_raw_metric", "summarize_investigation_context",
+            "investigate", "what_if",
+        )]
+        with patch("btf_viewer_pkg.ai_assistant.ai_chat_completion", fake_chat):
+            turn = live_benchmark_chat(
+                "Why?",
+                findings_text="1. [ERROR] id=a Bad\n   x\n\n2. [INFO] id=b Mild\n   y\n",
+                model="qwen3.5:9b",
+                tools=full_catalog,
+                context_mode="compact",
+            )
+        self.assertIn("Context mode is Compact", seen["system"])
+        self.assertEqual(seen["max_tokens"], 500)
+        self.assertLess(seen["tools"], len(full_catalog))
+        self.assertEqual(turn["usage"]["total_tokens"], 480)
+        self.assertEqual(turn["context_mode"], "compact")
+
     def test_live_benchmark_chat_skips_followup_when_text_present(self) -> None:
         n = {"n": 0}
+        seen = {"system": "", "max_tokens": "missing"}
 
-        def fake_chat(*_a, **_kw):
+        def fake_chat(*_a, **kwargs):
             n["n"] += 1
+            msgs = kwargs.get("messages") or []
+            if msgs and str(msgs[0].get("role") or "") == "system":
+                seen["system"] = str(msgs[0].get("content") or "")
+            seen["max_tokens"] = kwargs.get("max_tokens")
             return {
                 "content": "TASK_A[1] blocked. Confidence: High.",
                 "tool_calls": [{"id": "c1", "name": "investigate", "arguments": {}}],
@@ -1204,6 +1246,8 @@ class AiAssistantHelpersTests(unittest.TestCase):
             )
         self.assertEqual(n["n"], 1)
         self.assertIn("TASK_A[1]", turn["content"])
+        self.assertIn("Context mode is Full evidence", seen["system"])
+        self.assertIn(seen["max_tokens"], (None, "missing"))
 
     def test_live_benchmark_chat_follows_planning_text_plus_tools(self) -> None:
         n = {"n": 0}

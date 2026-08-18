@@ -457,7 +457,7 @@ Same panel on **Desktop** and **Web**. Findings can include WCET **Max≫Avg** s
 <a id="ai-troubleshooting" name="ai-troubleshooting">&#x200B;</a>
 <a id="ai-developer-cli" name="ai-developer-cli">&#x200B;</a>
 
-Product entry points stay here; the system reference is **[AI.md](AI.md)**. The AI tab shows a Triage → Scope → Investigate → Verify → Experiment → Compare stepper (click a stage to jump in the log). **Start Investigation** (empty log) runs **Auto investigate**. Restart restores an in-progress case only when the log still has a user or assistant turn; otherwise **Start Investigation** stays available and a leftover **Current Issue** card is not restored. **Clear** removes chat replies, resets the usage meter, and clears current investigation issues. What-if stays on **Verify** until verify tools or strong evidence quality; Experiment is labeled as a heuristic estimate (recapture and Compare to measure). **Triage findings**, **Verify finding**, **Auto investigate**, and the **Investigation plan** checklist live in the same tab. **Cheapest evidence first** (planner). Keys: Settings → AI → API key first, then `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY` (`OPENAI_API_KEY`, then `GEMINI_API_KEY`, then `OLLAMA_API_KEY`). Local Ollama needs none. Web can inject the same names via `window.__BTF_AI_ENV__`. `CURSOR_API_KEY` is for live `ai-test` XML `<api-key env="VAR">` and is ignored for chat / Test connection. CLI: [AI.md → CLI regression gate](AI.md#cli-regression-gate).
+Product entry points stay here; the system reference is **[AI.md](AI.md)**. The AI tab shows a Triage → Scope → Investigate → Verify → Experiment → Compare stepper (click a stage to jump in the log). **Start Investigation** (empty log) runs **Auto investigate**. Restart restores an in-progress case only when the log still has a user or assistant turn; otherwise **Start Investigation** stays available and a leftover **Current Issue** card is not restored. **Clear** removes chat replies, resets the usage meter, and clears current investigation issues. The usage bar shows **Context: Compact · 4.6k tok · 3 tools · 12s**. **Settings → AI → Context** is Compact / Balanced (default) / Full evidence. What-if stays on **Verify** until verify tools or strong evidence quality; Experiment is labeled as a heuristic estimate (recapture and Compare to measure). **Triage findings**, **Verify finding**, **Auto investigate**, and the **Investigation plan** checklist live in the same tab. **Cheapest evidence first** (planner). Keys: Settings → AI → API key first, then `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY` (`OPENAI_API_KEY`, then `GEMINI_API_KEY`, then `OLLAMA_API_KEY`). Local Ollama needs none. Web can inject the same names via `window.__BTF_AI_ENV__`. `CURSOR_API_KEY` is for live `ai-test` XML `<api-key env="VAR">` and is ignored for chat / Test connection. CLI: [AI.md → CLI regression gate](AI.md#cli-regression-gate).
 
 ## Statistics ![](../images/readme/h2.svg)
 
@@ -502,7 +502,7 @@ Same engine as the GUI, suitable for CI. Use `QT_QPA_PLATFORM=offscreen` when no
 | `report` | Full statistics CSV/HTML |
 | `compare` | Two-trace diff (two paths or one multi-BTF zip) |
 | `analyze` | CI regression gate vs baseline `.btf` or metrics JSON (`--fail-on-regression`; optional `--ai`; `--save-baseline`) — details in [AI.md](AI.md#cli-regression-gate) |
-| `ai-test` | AI evidence/validator benchmark (`tests/ai`; `--config examples/ai/benchmark.xml` for live, `-o AI_BENCHMARK.md`) — [AI.md](AI.md#cli-regression-gate) |
+| `ai-test` | AI evidence/validator benchmark (`tests/ai`; live `--config examples/ai/benchmark.xml`, optional `--compare-context` for Compact/Balanced/Full, `-o AI_BENCHMARK.md`) — [AI.md](AI.md#benchmark-suite) |
 | `migrations` | Migrations table as CSV |
 | `snapshot` | PNG/SVG of timeline, migration inspector, or a metric plot |
 | `perfetto` | Chrome Trace JSON |
@@ -536,7 +536,7 @@ Open **Settings** from the toolbar or `Ctrl+,`. Toolbar **Help** opens the keybo
 | **Appearance** | Dark/light theme, fonts, colorblind-safe palette. Desktop font sizes are **pt** (HiDPI-scaled); web sizes are **CSS px**. Defaults look similar; the numbers are not interchangeable. |
 | **Display** | Show/hide Legend, Statistics, Marks, Find, AI, CPU Load; **Timeline overlays** (STI, grid, hover highlight); **Analysis thresholds** (CPU budget % and per-task deadline ns) |
 | **Layout** | Label width, row height, zoom 1:1 density, max cursors, time decimals, CPU/STI sizes |
-| **AI** | Enable, **Auto-apply GUI actions**, **Anonymize task names for cloud**, **Treat this trace as sensitive**, **Log MCP messages to file** (Desktop debug; off by default), preset (Ollama / OpenAI / Gemini / Custom), base URL, model, authentication (none / API key / Sign in), **Allow self-signed TLS** (Desktop only; browsers still verify certificates), reply language |
+| **AI** | Enable, **Auto-apply GUI actions**, **Context** (Compact / Balanced / Full evidence), **Anonymize task names for cloud**, **Treat this trace as sensitive**, **Log MCP messages to file** (Desktop debug; off by default), preset (Ollama / OpenAI / Gemini / Custom), base URL, model, authentication (none / API key / Sign in), **Allow self-signed TLS** (Desktop only; browsers still verify certificates), reply language |
 
 | | Desktop | Web |
 |--|---------|-----|
@@ -648,7 +648,7 @@ Day-to-day users can ignore this section.
 | Desktop package only | `make -C BTFViewer bundle` → `builds/btf_viewer.py` |
 | Web only | `make -C BTFViewer web` → `builds/btf_viewer.html` |
 | Guided demo | `make -C BTFViewer demo` — see [Demo](#demo) |
-| Tests | `make -C BTFViewer test` (desktop) / `test-web` / `test-all` / `ai-test` |
+| Tests | `make -C BTFViewer test` (desktop) / `test-web` / `test-all` / `ai-test` / `ai-test-live` / `ai-test-context` |
 | Docs PDF | `make -C BTFViewer doc` → `builds/{README,STATISTICS,AI,WORKFLOWS,btf-viewer-slides}.pdf` (Mermaid via Node/`npx @mermaid-js/mermaid-cli`) |
 | Dev run (Desktop) | `python -m btf_viewer_pkg [trace.btf]` from `BTFViewer/` |
 

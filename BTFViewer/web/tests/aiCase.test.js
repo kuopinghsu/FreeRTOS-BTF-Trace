@@ -26,6 +26,12 @@ import {
   parseUserInvestigationTemplates,
   statusWithCost,
   formatCostStatus,
+  formatContextUsageStatus,
+  compactFindingsText,
+  compactChatHistory,
+  normalizeAiContextMode,
+  aiContextModeSettingsOverview,
+  toolNamesForContextMode,
   clampAiSplitBottom,
   metricMentioned,
   scoreAdversarialMetrics,
@@ -219,8 +225,59 @@ describe('aiCase investigation lifecycle', () => {
     const text = statusWithCost('Done.', meter)
     assert.equal(text, 'Done. · 1.3k tok · 2 tools · 1.5s')
     assert.equal(formatCostStatus(emptyCostMeter()), '0 tok · 0 tools · 0s')
+    assert.equal(formatContextUsageStatus(emptyCostMeter(), 'compact'), 'Context: Compact')
+    assert.equal(
+      formatContextUsageStatus(meter, 'compact'),
+      'Context: Compact · 1.3k tok · 2 tools · 1.5s',
+    )
+    const balanced = formatContextUsageStatus(meter, 'balanced')
+    assert.equal(balanced, 'Context: Balanced · 1.3k tok · 2 tools · 1.5s')
+    assert.equal(balanced.includes('input'), false)
+    assert.equal(balanced.includes('output'), false)
     assert.equal(clampAiSplitBottom(''), 80)
     assert.equal(clampAiSplitBottom(40), 64)
+  })
+
+  it('compacts findings, tools, and history in Compact mode', () => {
+    assert.equal(normalizeAiContextMode('Full evidence'), 'full')
+    const overview = aiContextModeSettingsOverview()
+    assert.match(overview, /Compact — fewer/)
+    assert.match(overview, /Balanced \(default\)/)
+    assert.match(overview, /Full evidence — complete/)
+    const compactTools = toolNamesForContextMode('compact', 'triage')
+    assert.ok(compactTools.includes('detect_anomalies'))
+    assert.ok(compactTools.includes('search_timeline'))
+    assert.equal(compactTools.includes('what_if'), false)
+    assert.equal(toolNamesForContextMode('full', 'triage'), null)
+    const findings = [
+      'Analysis Findings', '',
+      '1. [ERROR] id=e1 Critical stall', '   CS[22] blocked jump:100', '',
+      '2. [INFO] id=i1 Idle note', '   Idle[0] idle', '',
+      '3. [WARNING] id=w1 Thrash', '   CS[22] migrates jump:200', '',
+      '4. [INFO] id=i2 Tick', '   TICK ok', '',
+      '5. [INFO] id=i3 Load', '   load ok', '',
+      '6. [INFO] id=i4 Extra', '   extra', '',
+      '7. [WARNING] id=w2 Mutex', '   mutex jump:300', '',
+    ].join('\n')
+    const compact = compactFindingsText(findings, 'compact')
+    assert.match(compact, /Critical stall/)
+    assert.match(compact, /jump:100/)
+    assert.match(compact, /2 more finding/)
+    assert.doesNotMatch(compact, /id=i4 Extra/)
+    const hist = compactChatHistory([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'q1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'q2' },
+      { role: 'assistant', content: 'a2' },
+      { role: 'user', content: 'q3' },
+      { role: 'assistant', content: 'a3' },
+    ], 'compact', 'Focus: CS[22] stall')
+    const users = hist.filter(m => m.role === 'user').map(m => m.content)
+    assert.ok(users.some(u => u.includes('Investigation summary')))
+    assert.ok(users.includes('q2'))
+    assert.ok(users.includes('q3'))
+    assert.equal(users.includes('q1'), false)
   })
 
   it('penalizes adversarial trap confirmations', () => {

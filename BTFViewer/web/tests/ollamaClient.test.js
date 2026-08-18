@@ -294,12 +294,14 @@ describe('AI endpoint helpers', () => {
       model: 'qwen3.5:9b',
       enabled: false,
       auto_apply: true,
+      context_mode: 'compact',
       redact_task_names: true,
       trace_sensitive: true,
       mcp_log: true,
     })
     assert.equal(patch.aiEnabled, false)
     assert.equal(patch.aiAutoApply, true)
+    assert.equal(patch.aiContextMode, 'compact')
     assert.equal(patch.aiRedactTaskNames, true)
     assert.equal(patch.aiTraceSensitive, true)
     assert.equal(patch.aiMcpLog, true)

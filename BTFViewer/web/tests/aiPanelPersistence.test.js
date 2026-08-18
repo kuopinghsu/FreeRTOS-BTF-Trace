@@ -87,7 +87,7 @@ describe('AI conversation turn layout', () => {
     assert.doesNotMatch(aiPanel, /overflowOpen/)
     assert.match(aiPanel, /formatEvidencePanelMarkdown/)
     assert.doesNotMatch(aiPanel, /evidencePanel/)
-    assert.match(aiPanel, /formatCostStatus\(costMeter.value\)/)
+    assert.match(aiPanel, /formatContextUsageStatus\(/)
     assert.match(aiPanel, /class="ai-usage-bar"/)
     assert.match(aiPanel, /class="ai-split"/)
     assert.match(aiPanel, /class="ai-split-top"/)

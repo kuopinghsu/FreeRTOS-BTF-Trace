@@ -474,6 +474,9 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("id=\"what-if-and-optimize-workflow\"", ai_md)
         self.assertIn("id=\"use-cases\"", ai_md)
         self.assertIn("Simulator limits", ai_md)
+        self.assertIn("Context mode (token usage)", ai_md)
+        self.assertIn("Settings → AI → Context", readme)
+        self.assertIn("**Context** (Compact / Balanced / Full evidence)", readme)
         self.assertNotIn("Max≪Avg", readme)
         self.assertNotIn("Max≪Avg", ai_md)
         workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
@@ -595,6 +598,9 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("MAX_RAW_METRIC_ROWS = 40", js)
         self.assertIn("_MAX_RAW_METRIC_ROWS = 40", (
             BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8"))
+        tools_py = (BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8")
+        self.assertIn("def ai_viewer_tools_for_mode", tools_py)
+        self.assertIn("export function aiViewerToolsForMode", js)
         self.assertIn("MAX_ANNOTATION_NOTE = 240", js)
         self.assertIn("_MAX_ANNOTATION_NOTE = 240", (
             BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8"))
@@ -1498,6 +1504,12 @@ class AiWebParityTests(unittest.TestCase):
             ("def _metric_mentioned", "export function metricMentioned"),
             ("def format_cost_meter", "export function formatCostMeter"),
             ("def format_cost_status", "export function formatCostStatus"),
+            ("def format_context_usage_status", "export function formatContextUsageStatus"),
+            ("def normalize_ai_context_mode", "export function normalizeAiContextMode"),
+            ("def ai_context_mode_settings_overview", "export function aiContextModeSettingsOverview"),
+            ("def compact_findings_text", "export function compactFindingsText"),
+            ("def compact_chat_history", "export function compactChatHistory"),
+            ("def tool_names_for_context_mode", "export function toolNamesForContextMode"),
             ("def clamp_ai_split_bottom", "export function clampAiSplitBottom"),
             ("def cost_meter_active", "export function costMeterActive"),
             ("def status_with_cost", "export function statusWithCost"),
@@ -1790,8 +1802,28 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn('"aiGuide"', in_bar)
         self.assertIn('"aiGuideStepper"', in_bar)
         self.assertIn("def _set_status", assist)
-        self.assertIn("format_cost_status", assist)
-        self.assertIn("formatCostStatus(costMeter.value)", panel)
+        self.assertIn("format_context_usage_status", assist)
+        self.assertIn("formatContextUsageStatus(", panel)
+        settings = (BTF_ROOT / "web/src/components/SettingsDialog.vue").read_text(
+            encoding="utf-8")
+        self.assertIn("_ai_context_combo", stats)
+        self.assertIn("draft.aiContextMode", settings)
+        self.assertIn("aiContextModeSettingsOverview", settings)
+        self.assertIn("settings-help--pre", settings)
+        self.assertIn("ai_context_mode_settings_overview", stats)
+        self.assertIn("_SettingsHelpLabel", stats)
+        self.assertIn("def _tip", stats)
+        self.assertIn("def _ai_help", stats)
+        self.assertIn("def _ai_field", stats)
+        self.assertIn("def _wide_edit", stats)
+        self.assertIn("QComboBox, QLineEdit", stats)
+        self.assertIn("p4_body.addStretch", stats)
+        self.assertIn("p4_tail", stats)
+        self.assertIn("qt_wrap_tooltip", stats)
+        self.assertIn("When off, the AI tab is hidden.", stats)
+        self.assertIn("When off, the AI tab is hidden.", settings)
+        self.assertIn("settings-form-field", settings)
+        self.assertIn("spacing:8px", stats)
         self.assertIn("class=\"ai-usage-bar\"", panel)
         self.assertIn('setObjectName("aiUsageBar")', assist)
         self.assertIn('setObjectName("aiSplit")', assist)

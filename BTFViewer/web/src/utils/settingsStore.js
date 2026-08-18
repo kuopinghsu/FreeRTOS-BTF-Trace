@@ -49,6 +49,8 @@ import {
   parseUserHistoricalKnowledge,
   parseUserInvestigationTemplates,
   clampAiSplitBottom,
+  DEFAULT_AI_CONTEXT_MODE,
+  normalizeAiContextMode,
 } from './aiCase.js'
 
 const SETTINGS_KEY = 'btf-viewer-settings-v1'
@@ -102,6 +104,7 @@ export const DEFAULT_SETTINGS = {
   aiAutoApply: false,
   aiRedactTaskNames: false,
   aiTraceSensitive: false,
+  aiContextMode: DEFAULT_AI_CONTEXT_MODE,
   aiExtraPresets: [],
 }
 
@@ -202,6 +205,7 @@ export function normalizeSettings(raw) {
     aiAutoApply: !!s.aiAutoApply,
     aiRedactTaskNames: !!s.aiRedactTaskNames,
     aiTraceSensitive: !!s.aiTraceSensitive,
+    aiContextMode: normalizeAiContextMode(s.aiContextMode),
   }
 }
 

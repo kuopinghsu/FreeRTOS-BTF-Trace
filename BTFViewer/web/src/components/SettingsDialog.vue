@@ -333,30 +333,26 @@
           >
             <h3 class="settings-section">AI connection</h3>
             <div class="settings-form">
-              <div class="settings-form-row settings-form-row--check">
+              <div class="settings-form-row settings-form-row--check settings-form-row--top">
                 <span
                   class="settings-form-label"
                   aria-hidden="true"
                 ></span>
-                <label
-                  class="settings-check"
-                  title="When off, hides the AI tab. When on, the AI panel can send Analysis Findings to the configured endpoint."
-                >
-                  <input
-                    v-model="draft.aiEnabled"
-                    type="checkbox"
+                <div class="settings-form-field">
+                  <label
+                    class="settings-check"
+                    title="When off, hides the AI tab. When on, the AI panel can send Analysis Findings to the configured endpoint."
                   >
-                  Enable AI Assistant
-                </label>
-              </div>
-              <div class="settings-form-row settings-form-row--check">
-                <span
-                  class="settings-form-label"
-                  aria-hidden="true"
-                ></span>
-                <p class="settings-help settings-help--tight">
-                  When off, the AI tab is hidden.
-                </p>
+                    <input
+                      v-model="draft.aiEnabled"
+                      type="checkbox"
+                    >
+                    Enable AI Assistant
+                  </label>
+                  <p class="settings-help settings-help--tight">
+                    When off, the AI tab is hidden.
+                  </p>
+                </div>
               </div>
               <div class="settings-form-row settings-form-row--check">
                 <span
@@ -373,6 +369,27 @@
                   >
                   Auto-apply GUI actions
                 </label>
+              </div>
+              <div class="settings-form-row settings-form-row--top">
+                <span class="settings-form-label">Context:</span>
+                <div class="settings-form-field">
+                  <select
+                    v-model="draft.aiContextMode"
+                    class="settings-input settings-input--grow"
+                    :title="AI_CONTEXT_MODE_SETTINGS_TOOLTIP"
+                  >
+                    <option
+                      v-for="mode in aiContextModes"
+                      :key="mode.id"
+                      :value="mode.id"
+                    >
+                      {{ mode.label }}
+                    </option>
+                  </select>
+                  <p class="settings-help settings-help--tight settings-help--pre">
+                    {{ aiContextSettingsHelp }}
+                  </p>
+                </div>
               </div>
               <div class="settings-form-row settings-form-row--check">
                 <span
@@ -753,6 +770,12 @@ import {
   resolveAiSettings,
   sanitizeAiPresetId,
 } from '../utils/ollamaClient.js'
+import {
+  AI_CONTEXT_MODE_LABELS,
+  AI_CONTEXT_MODES,
+  AI_CONTEXT_MODE_SETTINGS_TOOLTIP,
+  aiContextModeSettingsOverview,
+} from '../utils/aiCase.js'
 
 const props = defineProps({
   modelValue: { type: Object, required: true },
@@ -769,6 +792,11 @@ const tabs = [
   { id: 'layout', label: 'Layout' },
   { id: 'ai', label: 'AI' },
 ]
+const aiContextModes = AI_CONTEXT_MODES.map((id) => ({
+  id,
+  label: AI_CONTEXT_MODE_LABELS[id] || id,
+}))
+const aiContextSettingsHelp = aiContextModeSettingsOverview()
 
 const _tabIds = new Set(tabs.map(t => t.id))
 const activeTab = ref(_tabIds.has(props.initialTab) ? props.initialTab : 'appearance')
@@ -1010,6 +1038,7 @@ function applyAiSettingsPatch(patch) {
   if (patch.responseLanguage) draft.aiResponseLanguage = patch.responseLanguage
   if (patch.aiEnabled != null) draft.aiEnabled = !!patch.aiEnabled
   if (patch.aiAutoApply != null) draft.aiAutoApply = !!patch.aiAutoApply
+  if (patch.aiContextMode) draft.aiContextMode = patch.aiContextMode
   if (patch.aiRedactTaskNames != null) draft.aiRedactTaskNames = !!patch.aiRedactTaskNames
   if (patch.aiTraceSensitive != null) draft.aiTraceSensitive = !!patch.aiTraceSensitive
   const preset = normalizeAiPreset(patch.preset || draft.aiPreset)
@@ -1342,12 +1371,15 @@ async function onTestAi() {
 .settings-form-field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
   width: 100%;
 }
 .settings-help--tight {
   margin: 0;
+}
+.settings-help--pre {
+  white-space: pre-line;
 }
 .settings-model-wrap--grow {
   grid-column: auto;

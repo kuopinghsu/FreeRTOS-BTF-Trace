@@ -41,7 +41,7 @@ The key rule is simple: **do not jump from a finding directly to a mitigation**.
 ### Engineering reference
 
 8. [CLI regression gate](#cli-regression-gate)
-9. [Benchmark and evaluation suite](#benchmark-suite)
+9. [Benchmark and evaluation suite](#benchmark-suite) — [Context mode benchmarking](#context-mode-benchmarking)
 10. [Investigation Case](#investigation-case)
 11. [Investigation planner](#investigation-planner)
 12. [Causal and temporal engines](#causal-engines)
@@ -75,6 +75,7 @@ AI may explain, correlate, rank, challenge, and estimate. Deterministic Statisti
 - The stepper tracks **Triage → Scope → Investigate → Verify → Experiment → Compare**. Select a completed stage to return to its output.
 - **Investigate**, **Root cause**, **Verify finding**, **Auto investigate**, **What-if**, **Optimize**, and **Diagnostic report** display an Investigation plan.
 - **Clear** removes the conversation, resets usage, and clears the current investigation.
+- The usage bar shows **Context: Compact · 4.6k tok · 3 tools · 12s** (mode, tokens, tools, and model time). **Settings → AI → Context** chooses Compact, Balanced (default), or Full evidence.
 - A non-empty investigation restores after restart. An empty or cleared log does not restore a Current Issue card.
 - Read-only tools run immediately. GUI-changing actions wait for **Apply** unless **Auto-apply GUI actions** is enabled. Exports always open a save dialog.
 
@@ -286,7 +287,7 @@ Phrase changes as **pin / affinity / priority / mutex / migration** so the simul
 
 ### Connect an endpoint
 
-Any OpenAI-compatible endpoint works, including Ollama (`http://localhost:11434/v1`). Chat requests time out after 120s (**Stop** still cancels sooner). Give the endpoint at least an **8k** context window so a full Findings card plus a tool round still fits.
+Any OpenAI-compatible endpoint works, including Ollama (`http://localhost:11434/v1`). Chat requests time out after 120s (**Stop** still cancels sooner). Give the endpoint at least an **8k** context window so a full Findings card plus a tool round still fits. **Settings → AI → Context → Compact** shrinks Findings, tool schemas, tool rows, and history when a smaller window or a local model is the limit.
 
 The shipped Ollama default is `qwen3.5:9b`:
 
@@ -365,6 +366,23 @@ Small local models may skip native tool calls and emit a fenced `btftool` block 
 
 
 Prefer local Ollama for confidential traces. Redact sensitive task names in annotations before using a cloud preset.
+
+<a id="context-mode-token-usage" name="context-mode-token-usage">&#x200B;</a>
+
+### Context mode (token usage)
+
+**Settings → AI → Context** controls how much evidence is sent with each request. It reduces input tokens; Compact also caps the reply at about 300–500 tokens.
+
+| | Compact | Balanced (default) | Full evidence |
+| --- | --- | --- | --- |
+| Findings | Top 5 by severity | Top 12 | All in scope |
+| Tool schemas | Current stage + search / raw metric | Stage plus neighbours | Complete catalog |
+| Tool results | 10 rows; rest summarised | 20 rows | 40 rows |
+| Chat history | Investigation summary + last 2 turns | Last 6 turns | Last 20 turns |
+| Diagrams | Only if requested | When useful | When useful |
+| What-if | Top 3 candidates | Top 5 | Complete |
+
+Compact still keeps the cursor region window, real task names, `jump:TIME` / `range:LO/HI`, measurements with units, confidence / evidence quality, what-if disclaimers, and at least one alternative or falsification. Switch to Full evidence for a complex case, or ask the model for a specific finding id when Compact omitted it. Live `ai-test` defaults to Full evidence; use **`--compare-context`** to measure all three modes, or **`--context-mode compact`** (or `balanced`) for a single mode. Settings → Context does not apply to the CLI scorer.
 
 ---
 
@@ -730,10 +748,11 @@ python builds/btf_viewer.py analyze candidate.btf --save-baseline /tmp/base.json
 python builds/btf_viewer.py analyze candidate.btf --baseline /tmp/base.json --fail-on-regression --ai
 python builds/btf_viewer.py ai-test --dataset tests/ai --fail-under 70
 python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml -o AI_BENCHMARK.md
+python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml --compare-context -o AI_BENCHMARK.md
 python builds/btf_viewer.py ai-test --config examples/ai/benchmark-selfsigned.xml --insecure
 ```
 
-Or `make -C BTFViewer ai-test` (`AI_DATASET`, `AI_FAIL_UNDER`) and `make -C BTFViewer ai-test-live` (`AI_CONFIG`, optional `AI_MODELS` filter, writes [AI_BENCHMARK.md](AI_BENCHMARK.md)). Dataset, scoring rules, and remaining in-app work: [Benchmark / evaluation suite](#benchmark-suite).
+Or `make -C BTFViewer ai-test` (`AI_DATASET`, `AI_FAIL_UNDER`), `make -C BTFViewer ai-test-live` (`AI_CONFIG`, optional `AI_MODELS`, writes [AI_BENCHMARK.md](AI_BENCHMARK.md)), and `make -C BTFViewer ai-test-context` (same as live + `--compare-context`). Dataset, scoring rules, and context-mode flags: [Benchmark / evaluation suite](#benchmark-suite).
 
 See also [Export → Headless CLI](README.md#headless-cli-desktop-only) in the user guide.
 
@@ -743,9 +762,30 @@ See also [Export → Headless CLI](README.md#headless-cli-desktop-only) in the u
 
 ## Benchmark and evaluation suite
 
-Offline `ai-test` / `runOfflineBenchmark` already ships. Live runs read **model id, base URL, TLS, and API key** from a suite XML (`--config examples/ai/benchmark.xml`) and write [AI_BENCHMARK.md](AI_BENCHMARK.md). Commands: [CLI regression gate](#cli-regression-gate).
+Offline `ai-test` / `runOfflineBenchmark` already ships. Live runs read **model id, base URL, TLS, and API key** from a suite XML (`--config examples/ai/benchmark.xml`) and write [AI_BENCHMARK.md](AI_BENCHMARK.md). Commands: [CLI regression gate](#cli-regression-gate). Default live scoring uses **Full evidence** (`--context-mode full`). **`--compare-context`** runs Compact, Balanced, and Full on the same cases and reports score, token totals, and latency side by side.
 
 The capability matrix above is qualitative (small local vs 9B+ vs cloud). The suite turns those expectations into repeatable measurements: **which model is most reliable for BTF Viewer trace investigation**, not which model is largest or “smartest.”
+
+<a id="context-mode-benchmarking" name="context-mode-benchmarking">&#x200B;</a>
+
+### Context mode benchmarking
+
+Live `ai-test` uses the same Compact / Balanced / Full evidence packing as **Settings → AI → Context** (Findings trim, stage-filtered tool schemas, Compact reply cap). Settings in the GUI do not affect the CLI scorer.
+
+| Flag | Purpose |
+| --- | --- |
+| *(default)* | **Full evidence** — complete Findings and tool catalog |
+| `--context-mode compact` | Single run in Compact (or `balanced`, `full`; comma-separated for a subset) |
+| `--compare-context` | Run **all three** modes per model on the same cases |
+
+Each live case records **overall score**, **pass/fail**, **prompt / completion / total tokens** (summed across tool follow-ups), and **elapsed time**. With `--compare-context`, [AI_BENCHMARK.md](AI_BENCHMARK.md) adds a **Context mode comparison** table per model (score vs tokens vs mean latency).
+
+```bash
+python builds/btf_viewer.py ai-test -c examples/ai/benchmark.xml --compare-context -o AI_BENCHMARK.md
+make -C BTFViewer ai-test-context   # AI_CONFIG, optional AI_MODELS
+```
+
+Use this when picking a default Context setting for a local model: Compact may save tokens and time if scores stay within your pass threshold. Details: [Context mode (token usage)](#context-mode-token-usage).
 
 ### Scope
 
@@ -937,6 +977,8 @@ Same suite against selected Gemini and local Ollama models. Recorded 2026-08-14;
 
 Live `--config` runs a tool-result follow-up when the first turn is tools-only (or planning text without a Confidence line). Single-turn scores are not comparable.
 
+**Context mode comparison** (`--compare-context`): runs the same live suite three times per model (Compact → Balanced → Full evidence) and writes a **Context mode comparison** table with overall score, pass rate, prompt/completion/total tokens, and mean latency. Use this to see whether a smaller context budget saves tokens/time without hurting investigation scores on your hardware.
+
 **Context-size** (Findings + tools + history). Do not judge a local model only by tokens/sec — check tool use and grounding as context grows:
 
 
@@ -1124,7 +1166,7 @@ Desktop and Web share one Case, Evidence, planner, causal, tool, and mermaid imp
 
 **UI lockstep:** mode chips wrap. Primary templates are two rows: Analysis Findings / Explain region / Investigate, then **Auto investigate** + **More templates…**. Chip min-height 28px, disabled chips/menu items `#8a96a8`. Findings **Investigate…** uses the same outline style as the other Analysis footer buttons (not accent/primary). **More** templates use the same groups in a 2-column overlay. Trace Compare opens from toolbar **Compare**, not the Statistics footer.
 
-The Desktop `ai-test` CLI and the Web offline benchmark share `tests/ai` fixtures (tracked `.btf` stubs + `dataset.json`).
+The Desktop `ai-test` CLI and the Web offline benchmark share `tests/ai` fixtures (tracked `.btf` stubs + `dataset.json`). Live runs accept `--context-mode` and `--compare-context` (see [Context mode benchmarking](#context-mode-benchmarking)).
 
 ### Validator
 
@@ -1153,7 +1195,7 @@ The host validator runs after the final reply. Prompting still forbids inventing
 | Feature          | Host behaviour                                                                                                                                                                                                                                              |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Capability probe | **Test connection** lists models, chats with a JSON structured-output probe, then tool-calling (`btf_ping` then `btf_pong`). Live results overlay chat / structured output / tool calling / multi-tool chaining; long context and reasoning stay heuristic. |
-| Cost             | A dedicated usage bar shows accumulated `tok · tools · s` (and estimated USD when priced). Evidence uses the full `format_cost_meter` line. **Clear** resets replies, the meter, and current investigation issues.                                          |
+| Cost             | A dedicated usage bar shows `Context: Compact · 4.6k tok · 3 tools · 12s` (mode, tokens, tools, model time). Evidence uses the full `format_cost_meter` line. **Clear** resets replies, the meter, and current investigation issues.                                          |
 | Privacy          | Chip 🟢 Local / 🟡 Cloud / 🔴 Sensitive. Cloud send is blocked when sensitive; otherwise annotations are sanitized and optional task-name aliases apply (`apply_cloud_privacy`).                                                                            |
 | Knowledge        | `investigate` matches user-saved entries (More → **Save current finding…**), then baseline, then the builtin catalog. Typical vs current rates show when both exist.                                                                                        |
 | Interpret        | Free-form Ask host-interprets first (`interpret_query`). Templates / modes / **Run investigation** skip confirm.                                                                                                                                            |
@@ -1164,7 +1206,7 @@ The host validator runs after the final reply. Prompting still forbids inventing
 
 ## Diagrams
 
-Replies may include Mermaid sequence diagrams for mutex, blocking, and priority events, or flowcharts for core migrations. Markdown tables and sanitized HTML tables from Findings render as tables in the reply pane. The Evidence panel also generates an Investigation tree when `investigate` returns a root-cause chain. Diagrams follow the current light or dark theme; **Save As…** HTML exports use the light palette.
+Replies may include Mermaid sequence diagrams for mutex, blocking, and priority events, or flowcharts for core migrations. **Compact** context mode emits diagrams only when the user asks. Markdown tables and sanitized HTML tables from Findings render as tables in the reply pane. The Evidence panel also generates an Investigation tree when `investigate` returns a root-cause chain. Diagrams follow the current light or dark theme; **Save As…** HTML exports use the light palette.
 
 - Click a **task** node to lock-highlight that timeline row (`Low[266] (Core 0)` resolves to `Low[266]`).
 - Click a **core** node (`Core_0`, `C0`, `C1`) to switch to Core View and scroll to that core.

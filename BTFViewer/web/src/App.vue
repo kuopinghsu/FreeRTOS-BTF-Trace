@@ -596,6 +596,7 @@
                 :ai-presets="appSettings.aiPresets"
                 :response-language="appSettings.aiResponseLanguage"
                 :ai-auto-apply="!!appSettings.aiAutoApply"
+                :ai-context-mode="appSettings.aiContextMode"
                 :ai-redact-task-names="!!appSettings.aiRedactTaskNames"
                 :ai-trace-sensitive="!!appSettings.aiTraceSensitive"
                 :dark-mode="timelineOptions.darkMode"

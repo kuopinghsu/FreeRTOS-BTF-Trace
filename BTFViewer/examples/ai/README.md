@@ -34,6 +34,7 @@ After import: review **Authentication**, paste a key or use **Sign in…** (open
 | `response_language` | Optional reply language for the assistant. |
 | `enabled` | Optional. Settings → **Enable AI Assistant**. |
 | `auto_apply` | Optional. Settings → **Auto-apply GUI actions**. |
+| `context_mode` | Optional. Settings → **Context**: `compact`, `balanced` (default), or `full` (`full evidence` also accepted). |
 | `redact_task_names` | Optional. Settings → **Anonymize task names for cloud** (`anonymize_task_names` also accepted). |
 | `trace_sensitive` | Optional. Settings → **Treat this trace as sensitive**. |
 | `mcp_log` | Optional. Desktop Settings → **Log MCP messages to file**. |
@@ -65,6 +66,7 @@ are **not** Settings import files. They configure Desktop `ai-test`:
 
 ```bash
 python builds/btf_viewer.py ai-test -c examples/ai/benchmark.xml -o AI_BENCHMARK.md
+python builds/btf_viewer.py ai-test -c examples/ai/benchmark.xml --compare-context -o AI_BENCHMARK.md
 python builds/btf_viewer.py ai-test -c examples/ai/benchmark-selfsigned.xml
 ```
 
@@ -77,7 +79,10 @@ python builds/btf_viewer.py ai-test -c examples/ai/benchmark-selfsigned.xml
 | `<timeout-s>` | Per-request timeout |
 | `<preset>` | Optional (`gemini` for Gemini OpenAI-compat) |
 
-`--models id1,id2` runs a subset of the XML list. Details: [AI.md → Benchmark / evaluation suite](../AI.md#benchmark-suite).
+| `--compare-context` | Run Compact, Balanced, and Full evidence; compare score, tokens, and latency |
+| `--context-mode` | Single mode: `compact`, `balanced`, or `full` (default `full`) |
+
+`--models id1,id2` runs a subset of the XML list. Context-mode flags: [AI.md → Context mode benchmarking](../AI.md#context-mode-benchmarking). Full suite: [Benchmark / evaluation suite](../AI.md#benchmark-suite).
+Setup, tools, and troubleshooting: [AI.md](../AI.md).
 
 Panel usage: [BTFViewer README → AI Assistant](../README.md#ai-assistant).
-Setup, tools, and troubleshooting: [AI.md](../AI.md).

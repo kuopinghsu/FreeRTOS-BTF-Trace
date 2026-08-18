@@ -34,6 +34,7 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_TOOL_ZOOM_TO_RANGE,
     AI_VIEWER_TOOL_NAMES,
     ai_viewer_tools,
+    ai_viewer_tools_for_mode,
     build_ai_report_csv,
     build_ai_report_html,
     GEMINI_SKIP_THOUGHT_SIGNATURE,
@@ -66,6 +67,21 @@ class AiToolsTests(unittest.TestCase):
     def test_schema_names(self) -> None:
         names = [t["function"]["name"] for t in ai_viewer_tools()]
         self.assertEqual(tuple(names), AI_VIEWER_TOOL_NAMES)
+
+    def test_schema_names_for_compact_mode(self) -> None:
+        names = [
+            t["function"]["name"]
+            for t in ai_viewer_tools_for_mode("compact", "triage")
+        ]
+        self.assertIn("detect_anomalies", names)
+        self.assertIn("query_raw_metric", names)
+        self.assertNotIn("what_if", names)
+        self.assertLess(len(names), len(AI_VIEWER_TOOL_NAMES))
+        full = [
+            t["function"]["name"]
+            for t in ai_viewer_tools_for_mode("full", "triage")
+        ]
+        self.assertEqual(tuple(full), AI_VIEWER_TOOL_NAMES)
 
     def test_validate_set_cursors_and_zoom(self) -> None:
         args, err = validate_tool_call(

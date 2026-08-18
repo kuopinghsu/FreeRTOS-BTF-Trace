@@ -343,7 +343,8 @@ Use AI when:
 | Suspend/resume issue | Task Lifecycle | Timeline STI |
 | Custom latency | Interval / Tag Analysis | Instrumentation design |
 | Regression after change | Trace Compare | Same scoped phase on both traces |
-| Need explanation | AI Assistant | Verify timeline evidence first |
+| Need explanation | AI Assistant | Verify timeline evidence first; use **Settings → AI → Context → Compact** on small local models |
+| Context vs score / cost | `ai-test --compare-context` | Live suite runs Compact, Balanced, and Full; compare score, tokens, and latency in [AI_BENCHMARK.md](AI_BENCHMARK.md) — [AI.md → Benchmark](AI.md#context-mode-benchmarking) |
 
 ---
 

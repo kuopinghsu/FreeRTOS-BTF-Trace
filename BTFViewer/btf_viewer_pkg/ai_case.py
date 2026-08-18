@@ -125,6 +125,470 @@ GUIDED_STAGE_LABELS: Dict[str, str] = {
     "compare": "Compare",
 }
 
+AI_CONTEXT_MODE_COMPACT = "compact"
+AI_CONTEXT_MODE_BALANCED = "balanced"
+AI_CONTEXT_MODE_FULL = "full"
+AI_CONTEXT_MODES: Tuple[str, ...] = (
+    AI_CONTEXT_MODE_COMPACT, AI_CONTEXT_MODE_BALANCED, AI_CONTEXT_MODE_FULL,
+)
+DEFAULT_AI_CONTEXT_MODE = AI_CONTEXT_MODE_BALANCED
+AI_CONTEXT_MODE_LABELS: Dict[str, str] = {
+    AI_CONTEXT_MODE_COMPACT: "Compact",
+    AI_CONTEXT_MODE_BALANCED: "Balanced",
+    AI_CONTEXT_MODE_FULL: "Full evidence",
+}
+AI_CONTEXT_MODE_SETTINGS_TOOLTIP = (
+    "How much Findings, tools, and chat history are sent to the model."
+)
+AI_CONTEXT_MODE_SETTINGS_LINES: Dict[str, str] = {
+    AI_CONTEXT_MODE_COMPACT: (
+        "Compact — fewer Findings and tools; best for small local models."
+    ),
+    AI_CONTEXT_MODE_BALANCED: (
+        "Balanced (default) — moderate Findings, tools, and history."
+    ),
+    AI_CONTEXT_MODE_FULL: (
+        "Full evidence — complete Findings, tools, and history."
+    ),
+}
+# Stage-only tool names for Compact; Balanced adds neighbours + extras.
+AI_CONTEXT_STAGE_TOOLS: Dict[str, Tuple[str, ...]] = {
+    "triage": ("detect_anomalies", "cluster_findings", "suggest_scope"),
+    "scope": ("set_cursors", "zoom_to_range", "highlight_task"),
+    "investigate": ("investigate", "correlate_events", "find_critical_path"),
+    "verify": ("verify_claim", "detect_contradictions", "challenge_conclusion"),
+    "experiment": ("what_if", "optimize_experiment", "recommend_experiments"),
+    "compare": ("compare_performance", "validate_experiment"),
+    "report": ("generate_report", "export_investigation"),
+}
+AI_CONTEXT_ALWAYS_TOOLS: Tuple[str, ...] = (
+    "search_timeline", "query_raw_metric", "summarize_investigation_context",
+)
+AI_CONTEXT_BALANCED_EXTRA_TOOLS: Tuple[str, ...] = (
+    "detect_anomalies", "investigate", "set_cursors", "zoom_to_range",
+    "highlight_task", "challenge_conclusion", "what_if",
+)
+_CONTEXT_TOOL_ROW_KEYS: Tuple[str, ...] = (
+    "rows", "episodes", "slices", "events", "gaps", "hits", "times",
+    "experiments", "anomalies", "candidates", "samples", "values",
+)
+_FINDING_ITEM_RE = re.compile(r"(?m)^(\d+)\. \[([A-Z]+)\]")
+_SEV_CONTEXT_RANK = {"error": 0, "critical": 0, "warning": 1, "info": 2}
+
+
+def normalize_ai_context_mode(value: Any) -> str:
+    """Settings → AI context mode (default Balanced)."""
+    raw = str(value or "").strip().lower().replace("-", " ").replace("_", " ")
+    if raw in ("compact", "reduced", "reduce", "low"):
+        return AI_CONTEXT_MODE_COMPACT
+    if raw in ("full", "full evidence", "fullevidence", "complete", "max"):
+        return AI_CONTEXT_MODE_FULL
+    return DEFAULT_AI_CONTEXT_MODE
+
+
+def ai_context_mode_label(mode: Any) -> str:
+    return AI_CONTEXT_MODE_LABELS.get(
+        normalize_ai_context_mode(mode), AI_CONTEXT_MODE_LABELS[DEFAULT_AI_CONTEXT_MODE])
+
+
+def ai_context_mode_settings_overview() -> str:
+    """Multi-line Settings → AI help describing all three context modes."""
+    return "\n".join(AI_CONTEXT_MODE_SETTINGS_LINES[m] for m in AI_CONTEXT_MODES)
+
+
+def ai_context_mode_settings_help(mode: Any = None) -> str:
+    """One-line Settings help for the selected context mode."""
+    key = normalize_ai_context_mode(mode)
+    return AI_CONTEXT_MODE_SETTINGS_LINES.get(
+        key, AI_CONTEXT_MODE_SETTINGS_LINES[DEFAULT_AI_CONTEXT_MODE])
+
+
+def ai_context_limits(mode: Any = None) -> Dict[str, Any]:
+    """Token-budget knobs for Compact / Balanced / Full evidence."""
+    key = normalize_ai_context_mode(mode)
+    if key == AI_CONTEXT_MODE_COMPACT:
+        return {
+            "findings": 5,
+            "tool_rows": 10,
+            "history_user_turns": 2,
+            "max_tokens": 500,
+            "what_if": 3,
+            "diagrams": "asked",
+        }
+    if key == AI_CONTEXT_MODE_FULL:
+        return {
+            "findings": None,
+            "tool_rows": 40,
+            "history_user_turns": 20,
+            "max_tokens": None,
+            "what_if": 12,
+            "diagrams": "useful",
+        }
+    return {
+        "findings": 12,
+        "tool_rows": 20,
+        "history_user_turns": 6,
+        "max_tokens": None,
+        "what_if": 5,
+        "diagrams": "useful",
+    }
+
+
+def context_mode_system_addendum(mode: Any = None) -> str:
+    """Extra system-prompt rules for the selected context mode."""
+    key = normalize_ai_context_mode(mode)
+    keep = (
+        "Never omit jump:TIME, range:LO/HI, real task names, measurements "
+        "with units, confidence, evidence quality, what-if disclaimers, or "
+        "at least one alternative / falsification."
+    )
+    if key == AI_CONTEXT_MODE_COMPACT:
+        return (
+            " Context mode is Compact: keep the reply around 300–500 tokens. "
+            "Generate mermaid diagrams only if the user asks. " + keep
+        )
+    if key == AI_CONTEXT_MODE_FULL:
+        return (
+            " Context mode is Full evidence: you may use the complete Findings, "
+            "tools, and history. Include mermaid when it clarifies a sequence "
+            "or migration. " + keep
+        )
+    return (
+        " Context mode is Balanced: prefer concise evidence-backed answers. "
+        "Include mermaid when it clarifies a sequence or migration. " + keep
+    )
+
+
+def _stage_tool_names(stage: Any) -> Tuple[str, ...]:
+    sid = str(stage or "").strip().lower()
+    if sid in ("", "idle", "start"):
+        sid = "triage"
+    return AI_CONTEXT_STAGE_TOOLS.get(sid, AI_CONTEXT_STAGE_TOOLS["triage"])
+
+
+def tool_names_for_context_mode(
+    mode: Any = None,
+    stage: Any = "",
+) -> Optional[List[str]]:
+    """Tool names to send, or None to send the full catalog."""
+    key = normalize_ai_context_mode(mode)
+    if key == AI_CONTEXT_MODE_FULL:
+        return None
+    names: List[str] = []
+    seen = set()
+
+    def _add(seq: Sequence[str]) -> None:
+        for name in seq:
+            n = str(name or "").strip()
+            if n and n not in seen:
+                seen.add(n)
+                names.append(n)
+
+    sid = str(stage or "").strip().lower()
+    if sid in ("", "idle", "start"):
+        sid = "triage"
+    _add(_stage_tool_names(sid))
+    _add(AI_CONTEXT_ALWAYS_TOOLS)
+    if key == AI_CONTEXT_MODE_BALANCED:
+        if sid in GUIDED_STAGES:
+            idx = list(GUIDED_STAGES).index(sid)
+            if idx > 0:
+                _add(_stage_tool_names(GUIDED_STAGES[idx - 1]))
+            if idx + 1 < len(GUIDED_STAGES):
+                _add(_stage_tool_names(GUIDED_STAGES[idx + 1]))
+        _add(AI_CONTEXT_BALANCED_EXTRA_TOOLS)
+        _add(AI_CONTEXT_STAGE_TOOLS["report"])
+    return names
+
+
+def filter_tools_for_context_mode(
+    tools: Optional[Sequence[Dict[str, Any]]],
+    mode: Any = None,
+    stage: Any = "",
+) -> List[Dict[str, Any]]:
+    """Subset of OpenAI tool schemas for the selected context mode."""
+    catalog = [t for t in (tools or []) if isinstance(t, dict)]
+    names = tool_names_for_context_mode(mode, stage)
+    if names is None:
+        return list(catalog)
+    want = set(names)
+    out: List[Dict[str, Any]] = []
+    for tool in catalog:
+        fn = tool.get("function") if isinstance(tool.get("function"), dict) else {}
+        name = str(fn.get("name") or "").strip()
+        if name in want:
+            out.append(tool)
+    return out
+
+
+def investigation_context_summary(payload: Optional[dict] = None) -> str:
+    """Short investigation recap used instead of older chat turns."""
+    if not isinstance(payload, dict) or not payload:
+        return ""
+    case = payload.get("investigation_case")
+    if not isinstance(case, dict):
+        case = {}
+    finding = payload.get("finding")
+    if not isinstance(finding, dict):
+        finding = {}
+    parts: List[str] = []
+    title = str(
+        case.get("goal") or finding.get("title") or finding.get("id") or ""
+    ).strip()
+    if title:
+        parts.append(f"Focus: {title}")
+    quality = payload.get("evidence_quality")
+    if isinstance(quality, dict):
+        band = str(quality.get("band") or "").strip()
+        if band:
+            parts.append(f"Evidence quality: {band}")
+    hyps = case.get("hypotheses") or payload.get("hypotheses") or []
+    for hyp in hyps:
+        if not isinstance(hyp, dict):
+            continue
+        text = str(hyp.get("hypothesis") or hyp.get("id") or "").strip()
+        if not text:
+            continue
+        status = str(hyp.get("status") or "").strip()
+        parts.append(f"- {status + ': ' if status else ''}{text}")
+        if len(parts) >= 8:
+            break
+    tools = case.get("tools_executed") or payload.get("tools_executed") or []
+    labels = [str(t).strip() for t in tools if str(t).strip()]
+    if labels:
+        parts.append("Tools: " + ", ".join(labels[:12]))
+    return "\n".join(parts).strip()
+
+
+def _finding_blocks(text: str) -> Tuple[str, List[Dict[str, str]]]:
+    blob = str(text or "")
+    matches = list(_FINDING_ITEM_RE.finditer(blob))
+    if not matches:
+        return blob.rstrip(), []
+    header = blob[: matches[0].start()].rstrip()
+    items: List[Dict[str, str]] = []
+    for i, match in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(blob)
+        items.append({
+            "sev": match.group(2).lower(),
+            "block": blob[match.start():end].rstrip(),
+        })
+    return header, items
+
+
+def compact_findings_text(
+    text: Any,
+    mode: Any = None,
+    findings: Optional[Sequence[dict]] = None,
+) -> str:
+    """Keep the most important Findings for the selected context mode."""
+    limits = ai_context_limits(mode)
+    cap = limits.get("findings")
+    raw = str(text or "").rstrip()
+    if cap is None or not raw:
+        return raw
+    header, items = _finding_blocks(raw)
+    if items:
+        ranked = sorted(
+            enumerate(items),
+            key=lambda row: (_SEV_CONTEXT_RANK.get(row[1]["sev"], 3), row[0]),
+        )
+        kept = [row[1]["block"] for row in ranked[: int(cap)]]
+        omitted = max(0, len(items) - len(kept))
+        lines = [header] if header else []
+        if lines:
+            lines.append("")
+        lines.extend(kept)
+        if omitted:
+            lines.append("")
+            lines.append(
+                f"{omitted} more finding(s) omitted "
+                f"({ai_context_mode_label(mode)}). Ask for Full evidence or a "
+                "specific finding id if needed."
+            )
+        return "\n".join(lines).rstrip() + "\n"
+    if findings:
+        ranked: List[Tuple[Any, ...]] = []
+        for i, finding in enumerate(findings):
+            if not isinstance(finding, dict):
+                continue
+            sev = str(finding.get("severity") or "info").lower()
+            ranked.append((_SEV_CONTEXT_RANK.get(sev, 3), i, finding))
+        ranked.sort(key=lambda row: row[:2])
+        kept_f = [row[2] for row in ranked[: int(cap)]]
+        omitted = max(0, len(ranked) - len(kept_f))
+        lines = ["Analysis Findings", ""]
+        for i, finding in enumerate(kept_f, 1):
+            sev = str(finding.get("severity") or "info").upper()
+            fid = str(finding.get("id") or "").strip()
+            id_bit = f" id={fid}" if fid else ""
+            lines.append(f"{i}. [{sev}]{id_bit} {finding.get('title') or 'Finding'}")
+            lines.append(f"   {finding.get('text') or ''}")
+            for ev in (finding.get("evidence") or []):
+                if isinstance(ev, dict) and ev.get("time") is not None:
+                    lines.append(
+                        f"   evidence: {ev.get('label') or 'event'} jump:{ev.get('time')}"
+                    )
+                elif ev:
+                    lines.append(f"   evidence: {ev}")
+            lines.append("")
+        if omitted:
+            lines.append(
+                f"{omitted} more finding(s) omitted "
+                f"({ai_context_mode_label(mode)})."
+            )
+        return "\n".join(lines).rstrip() + "\n"
+    if len(raw) > 8000 and normalize_ai_context_mode(mode) == AI_CONTEXT_MODE_COMPACT:
+        return raw[:8000].rstrip() + "\n… (truncated for Compact context)\n"
+    if len(raw) > 20000 and normalize_ai_context_mode(mode) == AI_CONTEXT_MODE_BALANCED:
+        return raw[:20000].rstrip() + "\n… (truncated for Balanced context)\n"
+    return raw if raw.endswith("\n") else raw + "\n"
+
+
+def _truncate_tool_lists(obj: Any, row_cap: int, what_if_cap: int) -> Any:
+    if isinstance(obj, list):
+        if len(obj) > row_cap:
+            return obj[:row_cap]
+        return [_truncate_tool_lists(v, row_cap, what_if_cap) for v in obj]
+    if not isinstance(obj, dict):
+        return obj
+    out: Dict[str, Any] = {}
+    for key, value in obj.items():
+        if key in ("experiments", "candidates") and isinstance(value, list):
+            cap = min(row_cap, what_if_cap)
+            if len(value) > cap:
+                out[key] = [_truncate_tool_lists(v, row_cap, what_if_cap) for v in value[:cap]]
+                out.setdefault("truncated", True)
+                out["omitted"] = max(int(out.get("omitted") or 0), len(value) - cap)
+            else:
+                out[key] = [_truncate_tool_lists(v, row_cap, what_if_cap) for v in value]
+        elif key in _CONTEXT_TOOL_ROW_KEYS and isinstance(value, list):
+            if len(value) > row_cap:
+                out[key] = [_truncate_tool_lists(v, row_cap, what_if_cap) for v in value[:row_cap]]
+                out.setdefault("truncated", True)
+                out["omitted"] = max(int(out.get("omitted") or 0), len(value) - row_cap)
+            else:
+                out[key] = [_truncate_tool_lists(v, row_cap, what_if_cap) for v in value]
+        else:
+            out[key] = _truncate_tool_lists(value, row_cap, what_if_cap)
+    return out
+
+
+def compact_tool_result_payload(result: Any, mode: Any = None) -> Any:
+    """Shrink list-heavy tool payloads before they go back to the model."""
+    limits = ai_context_limits(mode)
+    row_cap = int(limits.get("tool_rows") or 40)
+    what_if_cap = int(limits.get("what_if") or 12)
+    payload = result
+    parsed_json = False
+    if isinstance(result, str):
+        text = result.strip()
+        if text.startswith("{") or text.startswith("["):
+            try:
+                payload = json.loads(text)
+                parsed_json = True
+            except ValueError:
+                payload = result
+    if not isinstance(payload, (dict, list)):
+        return result
+    compacted = _truncate_tool_lists(payload, row_cap, what_if_cap)
+    if isinstance(compacted, dict) and compacted.get("omitted"):
+        msg = str(compacted.get("message") or "").rstrip()
+        extra = (
+            f"{compacted['omitted']} more row(s) omitted "
+            f"({ai_context_mode_label(mode)})."
+        )
+        compacted["message"] = f"{msg} {extra}".strip() if msg else extra
+    if parsed_json:
+        return json.dumps(compacted, default=str)
+    return compacted
+
+
+def compact_chat_history(
+    messages: Optional[Sequence[Dict[str, Any]]],
+    mode: Any = None,
+    investigation_summary: str = "",
+) -> List[Dict[str, Any]]:
+    """Keep system + last N user turns (and their tool follow-ups)."""
+    limits = ai_context_limits(mode)
+    keep_turns = max(1, int(limits.get("history_user_turns") or 2))
+    msgs = [m for m in (messages or []) if isinstance(m, dict)]
+    system: List[Dict[str, Any]] = []
+    rest: List[Dict[str, Any]] = []
+    for msg in msgs:
+        if str(msg.get("role") or "") == "system" and not rest:
+            system.append(dict(msg))
+        else:
+            rest.append(dict(msg))
+    user_idxs = []
+    for i, msg in enumerate(rest):
+        if str(msg.get("role") or "") != "user":
+            continue
+        content = str(msg.get("content") or "").lower()
+        if "tool-call limit" in content:
+            continue
+        user_idxs.append(i)
+    omitted = 0
+    if len(user_idxs) > keep_turns:
+        omitted = len(user_idxs) - keep_turns
+        rest = rest[user_idxs[-keep_turns]:]
+    extra: List[Dict[str, Any]] = []
+    if omitted:
+        summary = str(investigation_summary or "").strip()
+        if summary:
+            extra.append({
+                "role": "user",
+                "content": "### Investigation summary\n" + summary,
+            })
+        else:
+            extra.append({
+                "role": "user",
+                "content": (
+                    f"[{omitted} earlier turn(s) omitted for "
+                    f"{ai_context_mode_label(mode)} context.]"
+                ),
+            })
+        extra.append({
+            "role": "assistant",
+            "content": "Understood. Continue from the recent turns.",
+        })
+    compacted: List[Dict[str, Any]] = []
+    for msg in rest:
+        copied = dict(msg)
+        if str(copied.get("role") or "") == "tool":
+            copied["content"] = compact_tool_result_payload(
+                copied.get("content"), mode)
+        compacted.append(copied)
+    return system + extra + compacted
+
+
+def format_context_usage_status(
+    meter: Optional[dict] = None,
+    mode: Any = None,
+) -> str:
+    """AI panel usage bar: ``Context: Compact · 1.3k tok · 2 tools · 1.5s``."""
+    label = ai_context_mode_label(mode)
+    m = meter if isinstance(meter, dict) else empty_cost_meter()
+    try:
+        tokens = int(m.get("total_tokens") or 0)
+    except (TypeError, ValueError):
+        tokens = 0
+    try:
+        tools = int(m.get("tool_calls") or 0)
+    except (TypeError, ValueError):
+        tools = 0
+    try:
+        time_s = float(m.get("model_time_s") or 0)
+    except (TypeError, ValueError):
+        time_s = 0.0
+    if tokens <= 0 and tools <= 0 and time_s <= 0:
+        return f"Context: {label}"
+    time_part = f"{time_s:g}s" if time_s else "0s"
+    return (
+        f"Context: {label} · {_format_token_count(tokens)} tok · "
+        f"{tools} tools · {time_part}"
+    )
+
 
 def _guide_tool_names(payload: Optional[dict], plan: Optional[dict]) -> List[str]:
     names: List[str] = []
@@ -3148,6 +3612,9 @@ def score_benchmark_response(
     tools: Optional[Sequence[str]] = None,
     fail_under: int = 0,
     elapsed_s: Optional[float] = None,
+    prompt_tokens: Optional[int] = None,
+    completion_tokens: Optional[int] = None,
+    total_tokens: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Score one case from a model (or fixture) reply."""
     expected = case.get("expected") if isinstance(case.get("expected"), dict) else case
@@ -3201,6 +3668,12 @@ def score_benchmark_response(
     scored["validation"] = report
     if elapsed_s is not None:
         scored["elapsed_s"] = round(float(elapsed_s), 2)
+    if prompt_tokens is not None:
+        scored["prompt_tokens"] = max(0, _safe_int(prompt_tokens))
+    if completion_tokens is not None:
+        scored["completion_tokens"] = max(0, _safe_int(completion_tokens))
+    if total_tokens is not None:
+        scored["total_tokens"] = max(0, _safe_int(total_tokens))
     scored["tools"] = list(tools or [])
     return scored
 
@@ -3233,69 +3706,117 @@ def run_offline_benchmark(
     }
 
 
+def parse_benchmark_context_modes(raw: str = "") -> List[str]:
+    """Parse ``--context-mode`` / ``--compare-context`` for live ai-test."""
+    text = str(raw or "").strip().lower()
+    if text in ("", "all", "compare", "compare-context", "three"):
+        return list(AI_CONTEXT_MODES)
+    if text in ("default", "full", "full evidence"):
+        return [AI_CONTEXT_MODE_FULL]
+    out: List[str] = []
+    seen = set()
+    for part in re.split(r"[\s,]+", text):
+        key = normalize_ai_context_mode(part)
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out or [DEFAULT_AI_CONTEXT_MODE]
+
+
 def run_live_benchmark(
     dataset_path: Any,
     models: Sequence[str],
     *,
     complete: Callable[..., Dict[str, Any]],
     fail_under: int = 0,
+    context_modes: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
-    """Score live model replies. *complete(query, findings_text, model, case)*."""
+    """Score live model replies. *complete(query, findings_text, model, case, context_mode=...)*."""
     from datetime import datetime, timezone
     ids = [str(m).strip() for m in (models or []) if str(m).strip()]
     if not ids:
         raise ValueError("live benchmark needs at least one model id")
+    modes = [
+        normalize_ai_context_mode(m)
+        for m in (context_modes or [AI_CONTEXT_MODE_FULL])
+    ]
+    seen_modes = set()
+    mode_list: List[str] = []
+    for m in modes:
+        if m not in seen_modes:
+            seen_modes.add(m)
+            mode_list.append(m)
     cases = load_benchmark_dataset(str(dataset_path))
     run_id = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
     per_model: List[Dict[str, Any]] = []
     for model in ids:
-        rows: List[Dict[str, Any]] = []
-        error = ""
-        for case in cases:
-            query = str(case.get("question") or "").strip() or "Investigate the main problem."
-            findings = benchmark_prompt_context(case)
-            try:
-                turn = complete(query, findings, model, case) or {}
-            except Exception as exc:
-                error = str(exc)
-                turn = {"content": "", "tool_calls": [], "elapsed_s": 0, "error": error}
-            if not isinstance(turn, dict):
-                turn = {"content": str(turn or "")}
-            content = str(turn.get("content") or "")
-            raw_calls = turn.get("tool_calls") or []
-            names: List[str] = []
-            for c in raw_calls:
-                if isinstance(c, dict):
-                    name = str(c.get("name") or "")
-                    if name:
-                        names.append(name)
-                elif c:
-                    names.append(str(c))
-            row = score_benchmark_response(
-                case,
-                response=content,
-                tools=names,
-                fail_under=fail_under,
-                elapsed_s=turn.get("elapsed_s"),
-            )
-            if turn.get("error"):
-                row["error"] = str(turn.get("error"))
-                row["pass"] = False
-            rows.append(row)
-        failed = [r for r in rows if not r.get("pass")]
-        per_model.append({
-            "model": model,
-            "category": benchmark_model_category(model),
-            "run_id": run_id,
-            "rows": rows,
-            "failed": failed,
-            "report": format_benchmark_report(f"{run_id}-{model}", rows),
-            "ok": not failed and not error,
-            "error": error,
-        })
+        for ctx_mode in mode_list:
+            rows: List[Dict[str, Any]] = []
+            error = ""
+            for case in cases:
+                query = str(case.get("question") or "").strip() or "Investigate the main problem."
+                findings = benchmark_prompt_context(case)
+                try:
+                    turn = complete(
+                        query, findings, model, case, context_mode=ctx_mode) or {}
+                except TypeError:
+                    turn = complete(query, findings, model, case) or {}
+                except Exception as exc:
+                    error = str(exc)
+                    turn = {
+                        "content": "",
+                        "tool_calls": [],
+                        "elapsed_s": 0,
+                        "usage": {},
+                        "error": error,
+                    }
+                if not isinstance(turn, dict):
+                    turn = {"content": str(turn or "")}
+                content = str(turn.get("content") or "")
+                raw_calls = turn.get("tool_calls") or []
+                names: List[str] = []
+                for c in raw_calls:
+                    if isinstance(c, dict):
+                        name = str(c.get("name") or "")
+                        if name:
+                            names.append(name)
+                    elif c:
+                        names.append(str(c))
+                usage = turn.get("usage") if isinstance(turn.get("usage"), dict) else {}
+                row = score_benchmark_response(
+                    case,
+                    response=content,
+                    tools=names,
+                    fail_under=fail_under,
+                    elapsed_s=turn.get("elapsed_s"),
+                    prompt_tokens=usage.get("prompt_tokens"),
+                    completion_tokens=usage.get("completion_tokens"),
+                    total_tokens=usage.get("total_tokens"),
+                )
+                if turn.get("error"):
+                    row["error"] = str(turn.get("error"))
+                    row["pass"] = False
+                rows.append(row)
+            failed = [r for r in rows if not r.get("pass")]
+            label = ai_context_mode_label(ctx_mode)
+            block_id = model if len(mode_list) == 1 else f"{model} ({label})"
+            per_model.append({
+                "model": model,
+                "context_mode": ctx_mode,
+                "context_label": label,
+                "block_id": block_id,
+                "category": benchmark_model_category(model),
+                "run_id": run_id,
+                "rows": rows,
+                "failed": failed,
+                "report": format_benchmark_report(f"{run_id}-{block_id}", rows),
+                "ok": not failed and not error,
+                "error": error,
+            })
     return {
         "run_id": run_id,
         "mode": "live",
+        "context_modes": mode_list,
         "models": per_model,
         "ok": all(m.get("ok") for m in per_model),
         "report": "".join(m["report"] for m in per_model),
@@ -3324,6 +3845,29 @@ def format_benchmark_markdown(
     part_keys = (
         "finding", "evidence", "tool_use", "root_cause", "calibration", "safety",
     )
+
+    def _row_stats(rows: Sequence[dict]) -> Dict[str, Any]:
+        seq = list(rows or [])
+        n = len(seq)
+        avg_overall = int(round(sum(int(r.get("overall") or 0) for r in seq) / n)) if n else 0
+        passed = sum(1 for r in seq if r.get("pass"))
+        lat = [
+            float(r.get("elapsed_s") or 0)
+            for r in seq if r.get("elapsed_s") is not None
+        ]
+        mean_lat = sum(lat) / len(lat) if lat else None
+        prompt = sum(int(r.get("prompt_tokens") or 0) for r in seq)
+        completion = sum(int(r.get("completion_tokens") or 0) for r in seq)
+        total = sum(int(r.get("total_tokens") or 0) for r in seq)
+        return {
+            "n": n,
+            "avg_overall": avg_overall,
+            "passed": passed,
+            "mean_lat": mean_lat,
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": total or (prompt + completion),
+        }
 
     def _table(rows: Sequence[dict]) -> List[str]:
         out = [
@@ -3358,28 +3902,85 @@ def format_benchmark_markdown(
         lines.append("")
     if live:
         blocks = list(live.get("models") or [])
+        mode_list = list(live.get("context_modes") or [])
+        multi_ctx = len(mode_list) > 1
         if blocks:
+            header = (
+                "| Model | Context | Category | Overall | Pass | Total tok | Mean latency |"
+                if multi_ctx else
+                "| Model | Category | Overall | Pass | Total tok | Mean latency |"
+            )
+            sep = (
+                "|---|---|---|---:|---:|---:|---:|"
+                if multi_ctx else
+                "|---|---|---:|---:|---:|---:|"
+            )
             lines.extend([
                 "## Comparison",
                 "",
-                "| Model | Category | Overall | Pass | Mean latency |",
-                "|---|---|---:|---:|---:|",
+                header,
+                sep,
             ])
             for block in blocks:
-                rows = list(block.get("rows") or [])
-                n = len(rows)
-                avg = int(round(sum(int(r.get("overall") or 0) for r in rows) / n)) if n else 0
-                passed = sum(1 for r in rows if r.get("pass"))
-                lat = [
-                    float(r.get("elapsed_s") or 0)
-                    for r in rows if r.get("elapsed_s") is not None
-                ]
-                mean_lat = f"{sum(lat) / len(lat):.1f}s" if lat else "—"
-                lines.append(
-                    f"| `{block.get('model') or '?'}` | "
-                    f"{block.get('category') or ''} | {avg} | "
-                    f"{passed}/{n} | {mean_lat} |"
-                )
+                stats = _row_stats(block.get("rows") or [])
+                mean_lat = f"{stats['mean_lat']:.1f}s" if stats["mean_lat"] is not None else "—"
+                tok = stats["total_tokens"] or "—"
+                cells = [f"`{block.get('model') or '?'}`"]
+                if multi_ctx:
+                    cells.append(str(block.get("context_label") or ai_context_mode_label(
+                        block.get("context_mode"))))
+                cells.extend([
+                    str(block.get("category") or ""),
+                    str(stats["avg_overall"]),
+                    f"{stats['passed']}/{stats['n']}",
+                    str(tok),
+                    mean_lat,
+                ])
+                lines.append("| " + " | ".join(cells) + " |")
+            if multi_ctx:
+                by_model: Dict[str, List[dict]] = {}
+                for block in blocks:
+                    by_model.setdefault(str(block.get("model") or "?"), []).append(block)
+                lines.extend([
+                    "",
+                    "## Context mode comparison",
+                    "",
+                    "Same model and dataset; Compact / Balanced / Full evidence packing.",
+                    "",
+                ])
+                for model, group in by_model.items():
+                    lines.extend([f"### `{model}`", ""])
+                    lines.extend([
+                        "| Context | Overall | Pass | Prompt tok | Completion tok | "
+                        "Total tok | Mean latency |",
+                        "|---|---:|---:|---:|---:|---:|---:|",
+                    ])
+                    for block in sorted(
+                        group,
+                        key=lambda b: AI_CONTEXT_MODES.index(
+                            normalize_ai_context_mode(b.get("context_mode"))
+                        ) if normalize_ai_context_mode(
+                            b.get("context_mode")) in AI_CONTEXT_MODES else 99,
+                    ):
+                        stats = _row_stats(block.get("rows") or [])
+                        mean_lat = (
+                            f"{stats['mean_lat']:.1f}s"
+                            if stats["mean_lat"] is not None else "—"
+                        )
+                        lines.append(
+                            "| "
+                            + " | ".join([
+                                str(block.get("context_label") or "?"),
+                                str(stats["avg_overall"]),
+                                f"{stats['passed']}/{stats['n']}",
+                                str(stats["prompt_tokens"] or "—"),
+                                str(stats["completion_tokens"] or "—"),
+                                str(stats["total_tokens"] or "—"),
+                                mean_lat,
+                            ])
+                            + " |"
+                        )
+                    lines.append("")
             lines.extend([
                 "",
                 "| Model | Finding | Evidence | Tool use | Root cause | Calibration | Safety |",
@@ -3393,7 +3994,8 @@ def format_benchmark_markdown(
                     parts_avg[key] = int(round(sum(
                         int((r.get("parts") or {}).get(key) or 0) for r in rows
                     ) / n)) if rows else 0
-                cells = [f"`{block.get('model') or '?'}`"]
+                label = str(block.get("block_id") or block.get("model") or "?")
+                cells = [f"`{label}`"]
                 cells.extend(str(parts_avg[k]) for k in part_keys)
                 lines.append("| " + " | ".join(cells) + " |")
             lines.append("")
@@ -3401,8 +4003,12 @@ def format_benchmark_markdown(
         for block in live.get("models") or []:
             model = str(block.get("model") or "")
             cat = str(block.get("category") or benchmark_model_category(model))
+            ctx = str(block.get("context_label") or "").strip()
+            title = f"`{model}`"
+            if ctx:
+                title = f"`{model}` — {ctx}"
             lines.extend([
-                f"### `{model}`",
+                f"### {title}",
                 "",
                 f"{cat}. Run `{block.get('run_id') or live.get('run_id') or ''}`.",
                 "",
@@ -3432,6 +4038,14 @@ def format_benchmark_markdown(
             if lat:
                 avg_s = sum(lat) / len(lat)
                 lines.extend(["", f"Mean latency: **{avg_s:.1f}s** / case."])
+            tok = _row_stats(block.get("rows") or [])
+            if tok["total_tokens"]:
+                lines.extend([
+                    "",
+                    f"Tokens: **{tok['prompt_tokens']}** prompt + "
+                    f"**{tok['completion_tokens']}** completion = "
+                    f"**{tok['total_tokens']}** total.",
+                ])
             lines.append("")
     if not offline and not live:
         lines.append("_No runs recorded._")
