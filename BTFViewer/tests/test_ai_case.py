@@ -686,7 +686,12 @@ class InvestigationCaseTests(unittest.TestCase):
         example = BTF_ROOT / "examples" / "ai" / "benchmark.xml"
         with patch.dict(
             os.environ,
-            {"ANTHROPIC_API_KEY": "", "MOONSHOT_API_KEY": ""},
+            {
+                "ANTHROPIC_API_KEY": "",
+                "MOONSHOT_API_KEY": "",
+                "GEMINI_API_KEY": "sk-gemini-must-not-fill-optional",
+                "OPENAI_API_KEY": "sk-openai-must-not-fill-optional",
+            },
             clear=False,
         ):
             suite = load_benchmark_suite_xml(str(example))

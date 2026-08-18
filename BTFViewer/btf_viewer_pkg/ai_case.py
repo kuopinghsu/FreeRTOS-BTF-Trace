@@ -3378,7 +3378,12 @@ def _xml_child(parent: Any, *names: str) -> Any:
 
 
 def resolve_benchmark_api_key(*, text: str = "", env: str = "") -> str:
-    """Named env, else XML text, else shared env fallbacks."""
+    """Named env, else XML text. Shared env fallbacks only when no env= is set.
+
+    A model with ``env="ANTHROPIC_API_KEY"`` must not inherit ``GEMINI_API_KEY``
+    / ``OPENAI_API_KEY`` when its own variable is empty — that would keep
+    optional suite models enabled on a Gemini-only host.
+    """
     from .ai_assistant import normalize_api_key, read_ai_env_key, resolve_ai_api_key
 
     env_name = str(env or "").strip()
@@ -3389,6 +3394,8 @@ def resolve_benchmark_api_key(*, text: str = "", env: str = "") -> str:
     got = normalize_api_key(text)
     if got:
         return got
+    if env_name:
+        return ""
     return resolve_ai_api_key("")
 
 
