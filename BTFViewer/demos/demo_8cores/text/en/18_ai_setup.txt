@@ -2,10 +2,12 @@ Step 9: use AI only after Statistics and the timeline show the same evidence.
 
 The assistant does not read the raw BTF event stream. It uses Analysis Findings, summary statistics, timeline queries, and comparison results for the current scope. If the scope is wrong, the answer may also be wrong.
 
-Open Settings, then AI. Enable AI Assistant. This demo uses Google Gemini with the gemini-3.1-flash-lite model. Enter a Gemini API key, select Test connection, and save the settings. You can also use a local Ollama model without an API key.
+Open Settings, then AI. Enable AI Assistant. This demo uses Google Gemini with the Gemini 3.1 Flash-Lite model. Enter a Gemini API key, select Test connection, and save the settings. You can also use a local Ollama model without an API key.
+
+You can choose how much context to send. Compact reduces token use by sending only the highest-ranked Findings, relevant tools, and a short investigation history. Balanced is the default for most investigations. Full evidence sends complete Findings, tools, and history for complex cases. Compact still keeps the cursor window, task names, jump times, key measurements, confidence, and the What-if disclaimer. If the evidence is insufficient, switch to Full evidence and try again.
 
 Keep Auto-apply GUI actions off for this demo. You can then choose Apply or Skip for each action that changes the view. Export actions still open a save dialog.
 
 Results can change with the model, scope, or trace. The tool calls, wording, and timestamps may be different. Treat this video as an example, not a fixed script.
 
-The AI tab contains six stages: Triage, Scope, Investigate, Verify, Experiment, and Compare. An empty log shows Start Investigation. Language selects the reply language. Ask sends a question, and Stop cancels the current request. Clear removes the replies, resets the usage meter, and clears the current investigation issues.
+The AI tab contains six stages: Triage, Scope, Investigate, Verify, Experiment, and Compare. An empty log shows Start Investigation. Language selects the reply language. Ask sends a question, Stop cancels the current request, and Clear removes the replies, resets the usage meter, and clears the current investigation issues.
