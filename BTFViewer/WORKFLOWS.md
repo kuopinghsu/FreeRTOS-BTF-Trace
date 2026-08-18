@@ -1,8 +1,6 @@
 # BTFViewer Workflow
 
-**English** · [繁體中文](WORKFLOWS_zh-TW.md)
-
-A beginner-friendly workflow for investigating FreeRTOS scheduling traces with BTFViewer.
+A beginner-friendly workflow for investigating RTOS scheduling traces with BTFViewer.
 
 Use this guide when you know the symptom but do not yet know where to look. For viewer controls, see [`README.md`](README.md). For metric definitions and limitations, see [`STATISTICS.md`](STATISTICS.md). For AI setup and advanced investigation tools, see [`AI.md`](AI.md).
 
@@ -58,7 +56,7 @@ Have the following ready when possible:
 - A rough incident time or a repeatable way to trigger the problem.
 - STI events when you need dispatch latency, lifecycle, mutex, queue, interval, or priority-inheritance evidence.
 
-Do not expect BTFViewer to inspect source code or simulate the FreeRTOS scheduler. It measures events present in the trace. If the required event was not captured, record the limitation instead of inferring a precise value.
+Do not expect BTFViewer to inspect source code or simulate the RTOS scheduler. It measures events present in the trace. If the required event was not captured, record the limitation instead of inferring a precise value.
 
 ## 1. Open and orient the trace
 
@@ -161,7 +159,7 @@ Use a small, meaningful window instead of repeatedly analysing the entire trace.
 
 Choose a window that contains enough context to see what ran immediately before and after the incident. If the window is too wide, unrelated activity may dominate the statistics; if it is too narrow, the triggering event may be excluded.
 
-> **Viewport note:** the Migration **Heatmap / Chord** inspector follows the visible timeline viewport rather than the **Limit to C1–Cn** checkbox. Zoom to the cursor range before opening it.
+> **Viewport note:** the Migration **Heatmap / Chord** inspector follows the visible timeline viewport rather than the **Limit to C1–Cn** checkbox. The top banner is **Full view** (with the trace time range) after Fit to window, or **Viewport view** (orange, with the visible range) when zoomed. Zoom to the cursor range before opening it if you want the inspector to match C1–Cn.
 
 ## 7. Measure before explaining
 

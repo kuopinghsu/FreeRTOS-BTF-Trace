@@ -2124,7 +2124,7 @@ def infer_model_capabilities(model_name: str, *, endpoint_is_local: bool = True)
     name = str(model_name or "").strip().lower()
     cloud = (not endpoint_is_local) or any(
         k in name for k in (
-            "gpt-", "gemini", "claude", "deepseek", "grok", "o1", "o3",
+            "gpt-", "gemini", "claude", "kimi", "moonshot", "deepseek", "grok", "o1", "o3",
         )
     )
     small = bool(re.search(r"(^|[^\d])([1-3]b)\b", name)) or "mini" in name or "phi" in name
@@ -3458,6 +3458,7 @@ def _parse_benchmark_endpoint_xml(el: Any, defaults: Optional[dict] = None) -> D
 def load_benchmark_suite_xml(path: Any) -> Dict[str, Any]:
     """Load a live ``ai-test`` suite from XML (models, URL, TLS, API key)."""
     import xml.etree.ElementTree as ET
+    from .ai_assistant import parse_ai_tls_verify
 
     src = Path(path)
     if not src.is_file():
@@ -3516,6 +3517,8 @@ def load_benchmark_suite_xml(path: Any) -> Dict[str, Any]:
             "api_key_env": str(ep.get("api_key_env") or ""),
             "preset": str(ep.get("preset") or ""),
             "timeout_s": float(ep.get("timeout_s") or 0.0),
+            "optional": parse_ai_tls_verify(
+                node.get("optional") or node.get("opt"), default=False),
         })
     if not models:
         raise ValueError("benchmark XML has no <model id=...> entries")
@@ -3540,11 +3543,25 @@ def select_benchmark_suite_models(
     suite: dict,
     models_raw: str = "",
 ) -> List[Dict[str, Any]]:
-    """Return suite model dicts, optionally filtered by ``--models`` ids."""
+    """Return suite model dicts, optionally filtered by ``--models`` ids.
+
+    With no ``--models`` filter, optional remote models without an API key
+    are skipped (``optional="true"`` in the suite XML).
+    """
+    from .ai_assistant import is_local_ai_host
+
     models = list((suite or {}).get("models") or [])
     want = parse_live_benchmark_models(models_raw)
     if not want:
-        return models
+        out: List[Dict[str, Any]] = []
+        for m in models:
+            if m.get("optional"):
+                url = str(m.get("base_url") or "")
+                key = str(m.get("api_key") or "")
+                if not is_local_ai_host(url) and not key:
+                    continue
+            out.append(m)
+        return out
     by_id = {str(m.get("id") or ""): m for m in models}
     out: List[Dict[str, Any]] = []
     missing: List[str] = []
@@ -3570,6 +3587,10 @@ def benchmark_model_category(model: str) -> str:
             return "Cloud / frontier"
         return "Cloud"
     if "gpt-" in low or "gpt4" in low:
+        return "Cloud"
+    if "claude" in low:
+        return "Cloud"
+    if "kimi" in low or "moonshot" in low:
         return "Cloud"
     if "phi4" in low or "phi-4" in low:
         return "Local / historical baseline"

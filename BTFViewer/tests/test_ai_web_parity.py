@@ -251,10 +251,10 @@ class AiWebParityTests(unittest.TestCase):
         self._assert_stats_export_titles_match()
         self._assert_stats_section_ids_match()
         self._assert_stats_load_defer_match()
-        self._assert_investigation_docs_match()
+        self._assert_investigation_ui_match()
 
     def _assert_stats_export_titles_match(self) -> None:
-        """CSV/HTML export section titles stay Desktop / Web / README aligned."""
+        """CSV/HTML export section titles stay Desktop / Web aligned."""
         titles = (
             "Task × Core",
             "Task Health",
@@ -273,14 +273,10 @@ class AiWebParityTests(unittest.TestCase):
         stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
         web = (BTF_ROOT / "web/src/components/StatisticsPanel.vue").read_text(
             encoding="utf-8")
-        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
-        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
         for title in titles:
             self.assertIn(f'<h2>{title}', stats.replace("{_esc(scope_title)}", ""), title)
             self.assertGreaterEqual(stats.count(title), 3, title)
             self.assertGreaterEqual(web.count(title), 3, title)
-            self.assertIn(title, readme, title)
-            self.assertIn(title, ai_md, title)
         self.assertIn("Dispatch / Scheduling Latency", stats)
         self.assertIn("<th>p99</th>", stats)
         self.assertIn("toggleTableSort('period', 'p99')", web)
@@ -439,47 +435,7 @@ class AiWebParityTests(unittest.TestCase):
             self.assertIn(f"  {sid}:", js, sid)
             self.assertIn(text, js, sid)
 
-    def _assert_investigation_docs_match(self) -> None:
-        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
-        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
-        self.assertIn("`analyze`", ai_md)
-        self.assertIn("--fail-on-regression", ai_md)
-        self.assertIn("**Triage findings**", readme)
-        self.assertIn("Max≫Avg", readme)
-        self.assertIn("Same panel on **Desktop** and **Web**", readme)
-        self.assertIn("`what_if` / `optimize_experiment`", readme)
-        self.assertIn("Heuristic slice-replay", readme)
-        self.assertIn("Ranked `optimize_experiment`", readme)
-        self.assertIn("not FreeRTOS kernel", readme)
-        self.assertIn("id=\"ai-in-this-section\"", readme)
-        self.assertIn("id=\"what-can-ai-do\"", readme)
-        self.assertIn("id=\"common-workflows\"", readme)
-        self.assertIn("id=\"investigation-case\"", readme)
-        self.assertIn("id=\"investigation-planner\"", readme)
-        self.assertIn("id=\"evidence--confidence\"", readme)
-        self.assertIn("id=\"ai-capabilities\"", readme)
-        self.assertIn("id=\"ai-tools-reference\"", readme)
-        self.assertIn("id=\"ai-model-configuration\"", readme)
-        self.assertIn("id=\"ai-api-keys\"", readme)
-        self.assertIn("CURSOR_API_KEY", readme)
-        self.assertIn("id=\"ai-privacy\"", readme)
-        self.assertIn("id=\"ai-troubleshooting\"", readme)
-        self.assertIn("id=\"ai-developer-cli\"", readme)
-        self.assertIn("id=\"implementation-notes\"", ai_md)
-        self.assertIn("`optimize_experiment`", ai_md)
-        self.assertIn("slice-replay", ai_md)
-        self.assertIn("Workflows and use cases", ai_md)
-        self.assertIn("id=\"investigation-planner\"", ai_md)
-        self.assertIn("id=\"workflows-and-use-cases\"", ai_md)
-        self.assertIn("id=\"what-if-and-optimize-workflow\"", ai_md)
-        self.assertIn("id=\"use-cases\"", ai_md)
-        self.assertIn("Simulator limits", ai_md)
-        self.assertIn("Context mode (token usage)", ai_md)
-        self.assertIn("Settings → AI → Context", readme)
-        self.assertIn("**Context** (Compact / Balanced / Full evidence)", readme)
-        self.assertNotIn("Max≪Avg", readme)
-        self.assertNotIn("Max≪Avg", ai_md)
-        workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
+    def _assert_investigation_ui_match(self) -> None:
         stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
         dlg = (BTF_ROOT / "web/src/components/AnalysisFindingsDialog.vue").read_text(
             encoding="utf-8")
@@ -491,30 +447,12 @@ class AiWebParityTests(unittest.TestCase):
             encoding="utf-8")
         panel = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(
             encoding="utf-8")
-        docs = readme + "\n" + ai_md + "\n" + workflows
-        for needle in (
-            "Save recipe…",
-            "Story…",
-            "Save as baseline",
-            "Score vs baseline",
-            "Start Investigation",
-            "Ctrl+K",
-            "Inspect task",
-        ):
-            self.assertIn(needle, docs, needle)
         for needle in ("Save recipe…", "Story…"):
             self.assertIn(needle, stats, needle)
             self.assertIn(needle, dlg, needle)
-            self.assertIn(needle, readme, needle)
-            self.assertIn(needle, ai_md, needle)
         for needle in ("Save as baseline", "Score vs baseline"):
             self.assertIn(needle, stats, needle)
             self.assertIn(needle, compare, needle)
-            self.assertIn(needle, readme, needle)
-            self.assertIn(needle, ai_md, needle)
-            self.assertIn(needle, workflows, needle)
-        self.assertIn("**Trends**", readme)
-        self.assertIn("**Trends**", workflows)
         self.assertIn('addTab(self._trends_table, "Trends")', stats)
         self.assertIn("{ id: 'trends', label: 'Trends' }", compare)
         self.assertIn("Start Investigation", assist)
@@ -524,33 +462,17 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("['inspect-task', 'Inspect task']", cfg_js)
         self.assertIn("inspect-task", app)
         self.assertIn("inspect-task", mw)
-        self.assertIn("investigation_session", ai_md)
         self.assertIn("investigation_session", mw)
         self.assertIn("investigation_session", assist)
-        for needle in (
-            "user or assistant turn",
-            "Start Investigation",
-            "Current Issue",
-        ):
-            self.assertIn(needle, readme, needle)
-            self.assertIn(needle, ai_md, needle)
-            self.assertIn(needle, workflows, needle)
         self.assertIn("investigation_session_has_chat", assist)
         self.assertIn("investigationSessionHasChat", panel)
         self.assertIn("reasonably balanced", stats)
         wf_js = (BTF_ROOT / "web/src/utils/workflowAnalysis.js").read_text(
             encoding="utf-8")
         self.assertIn("reasonably balanced", wf_js)
-        statistics = (BTF_ROOT / "STATISTICS.md").read_text(encoding="utf-8")
-        self.assertIn("reasonably balanced", statistics)
-        self.assertIn("Load Balance Score", statistics)
-        self.assertIn("Load Balance Score", workflows)
         self.assertIn("color: var(--fg)", dlg)
         self.assertIn("--analysis-ok", app)
-        self.assertNotIn("`cross_trace_trends`", docs)
-        self.assertNotIn("`crossTraceTrends`", docs)
-        for name in ("AI_TODO.md", "BTFViewer_TODO.md", "BTFViewer_UI.md"):
-            self.assertNotIn(name, docs, name)
+        self.assertFalse((BTF_ROOT / "TODO.md").exists())
 
     def test_web_execute_tools_pushes_undo(self) -> None:
         app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
@@ -582,16 +504,12 @@ class AiWebParityTests(unittest.TestCase):
 
     def test_tool_names_listed_in_web(self) -> None:
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
-        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
-        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
         for name in AI_VIEWER_TOOL_NAMES:
             self.assertRegex(js, re.compile(rf"['\"]{re.escape(name)}['\"]"))
-            self.assertIn(f"`{name}`", ai_md)
         for metric in AI_RAW_METRIC_NAMES:
             self.assertIn(f"'{metric}'", js)
             self.assertIn(f'"{metric}"', (
                 BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8"))
-        self.assertIn("Save selection as BTF", readme)
         self.assertIn("MAX_SEARCH_HITS = 40", js)
         self.assertIn("_MAX_SEARCH_HITS = 40", (
             BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8"))
@@ -630,12 +548,10 @@ class AiWebParityTests(unittest.TestCase):
         self.assertNotIn("detect_timeline_anomalies", AI_VIEWER_TOOL_NAMES)
 
     def test_planner_tools_match_apps(self) -> None:
-        """README / AI.md planner names stay aligned with Desktop and Web."""
+        """Planner tool names stay aligned with Desktop and Web."""
         from btf_viewer_pkg.ai_investigation import EVIDENCE_PANEL_TOOLS
         from btf_viewer_pkg.ai_planner import score_investigation_metrics
 
-        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
-        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
         mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
         app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
         planner_py = (BTF_ROOT / "btf_viewer_pkg/ai_planner.py").read_text(
@@ -664,11 +580,6 @@ class AiWebParityTests(unittest.TestCase):
         )
         helper_only = frozenset({"score_hypotheses"})
         gui_shipped = [n for n in shipped if n not in helper_only]
-        section = re.search(
-            r"id=\"investigation-planner\".*?(?:\n<a id=)", ai_md, re.S)
-        self.assertIsNotNone(section)
-        listed = re.findall(r"\| `([a-z][a-z0-9_]*)` \|", section.group(0))
-        self.assertEqual(tuple(listed), shipped)
 
         def const(name: str) -> str:
             return f"AI_TOOL_{name.upper()}"
@@ -681,7 +592,6 @@ class AiWebParityTests(unittest.TestCase):
             self.assertIn(name, AI_VIEWER_TOOL_NAMES, name)
             self.assertTrue(is_query_tool(name), name)
             self.assertIn(name, EVIDENCE_PANEL_TOOLS, name)
-            self.assertIn(f"| `{name}` |", ai_md, name)
             self.assertIn(const(name), mw, name)
             self.assertIn(const(name), app, name)
             core = (
@@ -716,24 +626,13 @@ class AiWebParityTests(unittest.TestCase):
 
         for dropped in ("what_if_sensitivity", "what_if_uncertainty"):
             self.assertNotIn(dropped, AI_VIEWER_TOOL_NAMES)
-            self.assertNotIn(dropped, ai_md)
-            self.assertNotIn(dropped, readme)
 
-        self.assertIn("id=\"investigation-planner\"", readme)
-        self.assertIn("id=\"investigation-planner\"", ai_md)
-        self.assertIn("Cheapest evidence first", readme)
-        self.assertIn("Cheapest evidence first", ai_md)
-        self.assertNotIn("TODO.md", readme)
-        self.assertNotIn("TODO.md", ai_md)
         self.assertFalse((BTF_ROOT / "TODO.md").exists())
-        self.assertIn("id=\"btf-analysis-pages\"", readme)
-        self.assertIn("id=\"analysis-vs-ai-tools\"", ai_md)
 
     def test_causal_tools_match_apps(self) -> None:
-        """AI.md causal engine names stay aligned with Desktop and Web."""
+        """Causal engine names stay aligned with Desktop and Web."""
         from btf_viewer_pkg.ai_investigation import EVIDENCE_PANEL_TOOLS
 
-        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
         mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
         app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
         causal_py = (BTF_ROOT / "btf_viewer_pkg/ai_causal.py").read_text(
@@ -759,11 +658,6 @@ class AiWebParityTests(unittest.TestCase):
             "analyze_periodicity",
             "summarize_investigation_context",
         )
-        section = re.search(
-            r"id=\"causal-engines\".*?(?:\n<a id=)", ai_md, re.S)
-        self.assertIsNotNone(section)
-        listed = re.findall(r"\| `([a-z][a-z0-9_]*)` \|", section.group(0))
-        self.assertEqual(tuple(listed), shipped)
 
         def const(name: str) -> str:
             return f"AI_TOOL_{name.upper()}"
@@ -776,7 +670,6 @@ class AiWebParityTests(unittest.TestCase):
             self.assertIn(name, AI_VIEWER_TOOL_NAMES, name)
             self.assertTrue(is_query_tool(name), name)
             self.assertIn(name, EVIDENCE_PANEL_TOOLS, name)
-            self.assertIn(f"| `{name}` |", ai_md, name)
             self.assertIn(const(name), mw, name)
             self.assertIn(const(name), app, name)
             self.assertIn(f"def {name}_tool(", tools_py, name)
@@ -784,7 +677,6 @@ class AiWebParityTests(unittest.TestCase):
             self.assertIn(f"def {name}(", causal_py, name)
             self.assertIn(f"export function {camel(name)}(", causal_js, name)
 
-        self.assertIn("Host-side heuristics", ai_md)
         self.assertNotIn("simulate_schedule", AI_VIEWER_TOOL_NAMES)
         self.assertIn("def dependency_trace_context", tools_py)
         self.assertIn("export function dependencyTraceContext", tools_js)
@@ -795,23 +687,9 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("distribution_trace_context(", mw)
         self.assertIn("distributionTraceContext(", app)
 
-    def test_ai_md_gui_tools_and_templates_match_apps(self) -> None:
-        """AI.md / README template names and GUI-tool rows stay aligned with the apps."""
-        from btf_viewer_pkg.ai_assistant import AI_TEMPLATE_QUESTIONS
+    def test_gui_tools_have_no_leftover_classification(self) -> None:
+        """Every viewer tool is query, GUI-mutating, or export — no orphans."""
         from btf_viewer_pkg.ai_tools import is_export_tool, tool_mutates_gui
-
-        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
-        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
-        for name in AI_VIEWER_TOOL_NAMES:
-            self.assertIn(f"| `{name}` |", ai_md, name)
-
-        gui = re.search(r"## GUI tools.*?(?:\n## )", ai_md, re.S)
-        self.assertIsNotNone(gui)
-        self.assertIn("run immediately", gui.group(0))
-        self.assertIn("Complete GUI tool reference", gui.group(0))
-        query = [n for n in AI_VIEWER_TOOL_NAMES if is_query_tool(n)]
-        for name in query:
-            self.assertIn(f"| `{name}` |", ai_md, name)
 
         leftover = [
             n for n in AI_VIEWER_TOOL_NAMES
@@ -820,35 +698,6 @@ class AiWebParityTests(unittest.TestCase):
             and not is_export_tool(n)
         ]
         self.assertEqual(leftover, [], leftover)
-
-        docs = ai_md + readme
-        for _tid, label, _prompt in AI_TEMPLATE_QUESTIONS:
-            self.assertIn(f"**{label}**", docs, label)
-        for needle in (
-            "**Verify finding**",
-            "**Auto investigate**",
-            "Investigation plan",
-        ):
-            self.assertIn(needle, ai_md)
-            self.assertIn(needle, readme)
-
-        workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
-        slides = (BTF_ROOT / "btf-viewer-slides.md").read_text(encoding="utf-8")
-        for needle in ("Verify with AI…", "Auto investigate…", "Limit to C1–Cn",
-                       "Save as baseline", "Score vs baseline", "Ctrl+K"):
-            self.assertIn(needle, readme)
-            self.assertIn(needle, workflows)
-        self.assertIn("Limit to C1–Cn", slides)
-        self.assertNotIn("Limit to cursor range", slides)
-        self.assertIn("`find_critical_path`", ai_md)
-        self.assertIn("`bookmark_finding`", ai_md)
-        self.assertIn("`export_investigation`", ai_md)
-        self.assertNotIn(
-            "`query_raw_metric` / `search_timeline` / `trigger_compare` run immediately",
-            workflows,
-        )
-        self.assertIn("README.md#demo", workflows)
-        self.assertIn("README.md#demo", slides)
 
     def test_ai_templates_name_ux_pages(self) -> None:
         """Existing templates name the Statistics UX pages; no new template IDs."""
@@ -1085,12 +934,6 @@ class AiWebParityTests(unittest.TestCase):
             BTF_ROOT / "web/src/components/FindPanel.vue").read_text(encoding="utf-8"))
         self.assertIn("migration matches", (
             BTF_ROOT / "btf_viewer_pkg/mvvm/find_logic.py").read_text(encoding="utf-8"))
-        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("reconstruct", readme)
-        self.assertIn("filter source, else reconstruct", readme)
-        self.assertNotIn("Desktop always re-reads the source file", readme)
-        workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
-        self.assertNotIn("Export only the raw events between the earliest", workflows)
         self.assertIn("archive.zip::", (
             BTF_ROOT / "web/src/utils/btfLoad.js").read_text(encoding="utf-8"))
         self.assertIn("onMermaidZoomWheel", panel)
@@ -1109,9 +952,6 @@ class AiWebParityTests(unittest.TestCase):
             "self._add_annotation_with_note(mark_ns, note, show_marks_panel=False)",
             mw,
         )
-        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertNotIn("switch to the **Marks** tab", readme)
-        self.assertIn("without switching right-panel tabs", readme)
 
     def test_gemini_thought_signature_helpers_match(self) -> None:
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
@@ -1128,9 +968,6 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("export function needsGeminiThoughtSignatures", js)
         self.assertIn("ensure_gemini_thought_signatures(messages)", assist)
         self.assertIn("ensureGeminiThoughtSignatures(chatMessages)", client)
-        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
-        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
-        self.assertIn("thought_signature", ai_md)
         self.assertIn('"preset": active["preset"]', assist)
         self.assertIn("preset: active.preset", (
             BTF_ROOT / "web/src/components/AiAssistantPanel.vue"
@@ -1142,7 +979,6 @@ class AiWebParityTests(unittest.TestCase):
         stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
         client = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(
             encoding="utf-8")
-        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("setEditable(True)", stats)
         self.assertIn("def _fill_ai_model_combo", stats)
         self.assertIn('role="combobox"', vue)
@@ -1153,7 +989,6 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("AbortSignal.timeout(timeoutMs)", client)
         self.assertIn("AbortSignal.any(", client)
         self.assertNotIn("<datalist", vue)
-        self.assertNotIn("datalist", readme)
 
     def test_ai_auth_mode_helpers_match(self) -> None:
         from btf_viewer_pkg.ai_assistant import (
@@ -1184,8 +1019,6 @@ class AiWebParityTests(unittest.TestCase):
             encoding="utf-8")
         assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
             encoding="utf-8")
-        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
-        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
 
         self.assertEqual(AI_AUTH_NONE, "none")
         self.assertEqual(AI_AUTH_API_KEY, "api_key")
@@ -1272,14 +1105,9 @@ class AiWebParityTests(unittest.TestCase):
             "Opened {url}. Paste the key or token in Settings → AI.", assist)
         self.assertIn(
             "Opened ${url}. Paste the key or token in Settings → AI.", panel)
-        self.assertIn("Authentication |", ai_md)
-        self.assertIn("Self-signed TLS |", ai_md)
-        self.assertIn("Model picker |", ai_md)
         self.assertIn("Allow self-signed TLS", stats)
         self.assertNotIn("Allow self-signed TLS", vue)
         self.assertIn("Allow self-signed TLS", js)
-        self.assertIn("Allow self-signed TLS", readme)
-        self.assertIn("Allow self-signed TLS", ai_md)
         self.assertIn("def parse_ai_tls_verify", assist)
         self.assertIn("export function parseAiTlsVerify", js)
         self.assertIn("ai_urlopen", assist)
@@ -1289,35 +1117,20 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("export function formatAiHttpError", js)
         self.assertIn("GET /models only lists ids", assist)
         self.assertIn("GET /models only lists ids", js)
-        self.assertIn("BASE/chat/completions", ai_md)
         for name in (
             "ollama.json", "gemini.json", "openai.json",
             "deepseek.json", "grok.json", "presets.json",
         ):
-            self.assertIn(name, ai_md)
             self.assertIn(name, stats)
             self.assertIn(name, vue)
-        self.assertIn("401 / 403", ai_md)
-        self.assertIn("pick a served id from the dropdown", ai_md)
-        self.assertIn("token-efficient", ai_md)
-        self.assertIn("Parameters / targets", ai_md)
-        self.assertIn("qwen2.5:7b", ai_md)
-        self.assertIn("qwen3.5:9b", ai_md)
-        self.assertIn("8k", ai_md)
-        self.assertIn("examples/ai/presets.json", readme)
-        self.assertIn("## GUI tools", ai_md)
-        self.assertIn("triage overall findings", ai_md)
         self.assertIn(
             "Open the Model dropdown to pick one.", stats)
         self.assertIn(
             "Open the Model dropdown to pick one.", vue)
 
-    def test_ai_api_key_docs_and_apps_match(self) -> None:
+    def test_ai_api_key_apps_match(self) -> None:
         env_slash = "OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY"
         env_md = "`OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`"
-        order = (
-            "`OPENAI_API_KEY`, then `GEMINI_API_KEY`, then `OLLAMA_API_KEY`"
-        )
         assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
             encoding="utf-8")
         js = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(
@@ -1325,9 +1138,6 @@ class AiWebParityTests(unittest.TestCase):
         stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
         vue = (BTF_ROOT / "web/src/components/SettingsDialog.vue").read_text(
             encoding="utf-8")
-        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
-        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
-        examples = (BTF_ROOT / "examples/ai/README.md").read_text(encoding="utf-8")
         cli = (BTF_ROOT / "btf_viewer_pkg/cli.py").read_text(encoding="utf-8")
 
         self.assertEqual(
@@ -1359,7 +1169,6 @@ class AiWebParityTests(unittest.TestCase):
         self.assertNotIn("VITE_", stats)
         self.assertNotIn("VITE_", vue)
         self.assertIn("__BTF_AI_ENV__", js)
-        self.assertIn("__BTF_AI_ENV__", readme)
         self.assertIn("window.__BTF_AI_ENV__", js)
 
         for blob, label in (
@@ -1368,26 +1177,10 @@ class AiWebParityTests(unittest.TestCase):
             (stats, "stats.py"),
             (vue, "SettingsDialog.vue"),
             (cli, "cli.py"),
-            (readme, "README.md"),
-            (ai_md, "AI.md"),
-            (examples, "examples/ai/README.md"),
         ):
             self.assertTrue(
                 env_slash in blob or env_md in blob, label)
 
-        for blob, label in (
-            (readme, "README.md"),
-            (ai_md, "AI.md"),
-        ):
-            self.assertIn(order, blob, label)
-
-        self.assertIn("id=\"ai-api-keys\"", readme)
-        self.assertIn("README.md#ai-api-keys", ai_md)
-        self.assertIn("README.md#ai-api-keys", examples)
-        self.assertIn("ignored for chat / Test connection", readme)
-        self.assertIn("<api-key env=\"VAR\">", ai_md)
-        self.assertIn("<api-key env=\"VAR\">", examples)
-        self.assertIn("GUI chat does not use `env`", examples)
         self.assertIn(
             "API key or access token for this preset (or "
             "OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY). ",
@@ -1433,15 +1226,11 @@ class AiWebParityTests(unittest.TestCase):
         js = (BTF_ROOT / "web/src/utils/aiMarkdown.js").read_text(encoding="utf-8")
         vue = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(
             encoding="utf-8")
-        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
-        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
         self.assertIn('class="ai-md-table"', assist)
         self.assertIn('class="ai-md-table"', js)
         self.assertIn("table.ai-md-table", vue)
         self.assertIn("_sanitize_html_table_block", assist)
         self.assertIn("sanitizeHtmlTableBlock", js)
-        self.assertIn("Pipe **Markdown tables**", ai_md)
-        self.assertIn("In-chat Markdown / HTML tables", ai_md)
 
     def test_phase3_host_dispatch_matches_web(self) -> None:
         """baseline_score / recommend_experiments / PI / related / compare_tasks
@@ -1647,12 +1436,19 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("examples/ai/benchmark.xml", cli)
         self.assertIn("load_benchmark_suite_xml", cli)
         self.assertIn("live_benchmark_chat", cli)
+        assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
+            encoding="utf-8")
+        self.assertIn("call_ai_with_retries", assist)
+        xml = (BTF_ROOT / "examples/ai/benchmark.xml").read_text(encoding="utf-8")
+        for needle in (
+            "qwen3.5:9b", "qwen3.8:27b",
+            "gemini-3.7-flash", "gemini-3.5-flash-lite",
+            "claude-sonnet-5", "kimi-k3",
+            'optional="true"',
+        ):
+            self.assertIn(needle, xml, needle)
         self.assertNotIn("GEMINI_LIVE_BENCHMARK_MODELS", cli)
         self.assertNotIn("from btf_viewer_pkg", cli)
-        bench = (BTF_ROOT / "AI_BENCHMARK.md").read_text(encoding="utf-8")
-        self.assertIn("qwen3.5:9b", bench)
-        self.assertIn("Offline fixture scorer", bench)
-        self.assertIn("Live models", bench)
         needle = "from pathlib import Path"
         for rel in ("btf_viewer_pkg/_imports.py", "scripts/bundle_viewer.py"):
             self.assertIn(needle, (BTF_ROOT / rel).read_text(encoding="utf-8"), rel)

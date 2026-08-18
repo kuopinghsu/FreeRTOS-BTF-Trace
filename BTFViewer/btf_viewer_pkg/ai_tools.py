@@ -375,7 +375,7 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "tabs are open to pull Trace Compare diffs. Use add_annotation to pin a "
     "note on a spike. Use export_report to save findings, diagrams, and GUI "
     "state as HTML or CSV. "
-    "For what-if / optimize_experiment, label results as heuristic (not FreeRTOS kernel). For optimize advice questions, label estimates as "
+    "For what-if / optimize_experiment, label results as heuristic (not an RTOS kernel). For optimize advice questions, label estimates as "
     "'Simulation / estimate — not measured behavior' and cite evidence. "
     "Name the Statistics page the engineer should open next "
     "(Timeline Anomalies, Worst Events, Response Time, Critical Path, "
@@ -1010,7 +1010,7 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 "name": AI_TOOL_WHAT_IF,
                 "description": (
                     "Heuristic what-if simulation from measured execution slices, "
-                    "migrations, blocking gaps, and core util (not FreeRTOS kernel)."
+                    "migrations, blocking gaps, and core util (not an RTOS kernel)."
                 ),
                 "parameters": {
                     "type": "object",

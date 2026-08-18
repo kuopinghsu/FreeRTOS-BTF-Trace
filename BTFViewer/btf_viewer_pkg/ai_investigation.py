@@ -3696,7 +3696,7 @@ def simulate_what_if(
     core_utils: Optional[Sequence[Any]] = None,
     findings: Optional[Sequence[dict]] = None,
 ) -> Dict[str, Any]:
-    """Heuristic replay of a change against measured slices (not FreeRTOS kernel).
+    """Heuristic replay of a change against measured slices (not an RTOS kernel).
 
     Uses measured execution durations and migration counts; reallocates task CPU
     when pinning and scales blocking for contention/priority experiments.
@@ -3827,7 +3827,7 @@ def simulate_what_if(
     return {
         "ok": True,
         "message": "What-if heuristic simulation",
-        "disclaimer": "Heuristic simulator — not FreeRTOS kernel / not measured",
+        "disclaimer": "Heuristic simulator — not an RTOS kernel / not measured",
         "simulator": "slice_replay_v1",
         "change": change,
         "task": task,
@@ -3991,7 +3991,7 @@ def run_optimization_experiments(
             f"{len(results)} experiment(s); best={best['change']}" if best
             else "No runnable experiments (need task slices / metrics)"
         ),
-        "disclaimer": "Heuristic simulator — not FreeRTOS kernel / not measured",
+        "disclaimer": "Heuristic simulator — not an RTOS kernel / not measured",
         "experiments": results,
         "best": best,
         "suggested_tools": ([

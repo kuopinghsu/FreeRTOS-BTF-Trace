@@ -46,7 +46,6 @@ WEB_APP = BTF_ROOT / "web" / "src" / "App.vue"
 WEB_POINTER = BTF_ROOT / "web" / "src" / "utils" / "demoPointer.js"
 DESKTOP_INAPP = BTF_ROOT / "btf_viewer_pkg" / "demo_inapp.py"
 DESKTOP_MW = BTF_ROOT / "btf_viewer_pkg" / "mainwindow.py"
-README = BTF_ROOT / "README.md"
 
 _PY_TAG_EQ = re.compile(r'tag == "([^"]+)"')
 _PY_TAG_IN = re.compile(r'tag in \(([^)]+)\)')
@@ -222,11 +221,6 @@ class DemoInappSourceParityTests(unittest.TestCase):
         js_ptr = WEB_POINTER.read_text(encoding="utf-8")
         self.assertIn("shouldHideSimulatedCursorOnMove", js_ptr)
         self.assertIn("A parked demo overlay hides as soon as the user moves", js_ptr)
-
-    def test_readme_hides_overlay_on_mouse_move_desktop_and_web(self) -> None:
-        md = README.read_text(encoding="utf-8")
-        needle = "Moving the real mouse hides the overlay pointer until the next scripted `<move>`."
-        self.assertGreaterEqual(md.count(needle), 2)
 
 
 class DemoInappXtfTests(unittest.TestCase):

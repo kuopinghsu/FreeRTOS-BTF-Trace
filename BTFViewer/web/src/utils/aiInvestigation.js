@@ -3035,7 +3035,7 @@ export function simulateWhatIf({
   return {
     ok: true,
     message: 'What-if heuristic simulation',
-    disclaimer: 'Heuristic simulator — not FreeRTOS kernel / not measured',
+    disclaimer: 'Heuristic simulator — not an RTOS kernel / not measured',
     simulator: 'slice_replay_v1',
     change: String(change || '').trim(),
     task: taskS,
@@ -3223,7 +3223,7 @@ export function runOptimizationExperiments({
     message: best
       ? `${results.length} experiment(s); best=${best.change}`
       : 'No runnable experiments (need task slices / metrics)',
-    disclaimer: 'Heuristic simulator — not FreeRTOS kernel / not measured',
+    disclaimer: 'Heuristic simulator — not an RTOS kernel / not measured',
     experiments: results,
     best,
     suggested_tools: suggested,

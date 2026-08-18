@@ -30,6 +30,38 @@ export function coresInScope(segs, migs, lo, hi) {
   return cores
 }
 
+/** Visible span ≥ this fraction of the trace counts as Fit / Full view. */
+export const INSPECTOR_FULL_VIEW_RATIO = 0.92
+
+export function inspectorViewportIsFull(lo, hi, timeMin, timeMax, fitMode = false) {
+  if (fitMode || lo == null || hi == null) return true
+  const tlo = Number(timeMin)
+  const thi = Number(timeMax)
+  const span = Math.max(thi - tlo, 1)
+  return (Number(hi) - Number(lo)) / span >= INSPECTOR_FULL_VIEW_RATIO
+}
+
+/** Banner for heatmap Full view vs Viewport view (distribution-chart colors). */
+export function inspectorViewportBanner(lo, hi, timeMin, timeMax, timeScale, formatTimeFn, fitMode = false) {
+  const tlo = Number.isFinite(Number(timeMin)) ? Number(timeMin) : 0
+  const thi = Number.isFinite(Number(timeMax)) ? Number(timeMax) : 0
+  let full = inspectorViewportIsFull(lo, hi, tlo, thi, fitMode)
+  let a = full ? tlo : Number(lo)
+  let b = full ? thi : Number(hi)
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) {
+    a = tlo
+    b = thi
+    full = true
+  }
+  const fmt = formatTimeFn || formatTime
+  const detail = `${fmt(a, timeScale)} … ${fmt(b, timeScale)} (${fmt(b - a, timeScale)})`
+  return {
+    scoped: !full,
+    badge: full ? 'Full view' : 'Viewport view',
+    detail,
+  }
+}
+
 function clipSegmentsForScope(segs, lo, hi) {
   const clipped = []
   for (const s of segs) {

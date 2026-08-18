@@ -930,7 +930,7 @@ export function simulateSchedule(changes = {}, { findings = [] } = {}) {
   predicted.level = 1
   predicted.changes = changes && typeof changes === 'object' ? changes : {}
   predicted.ok = true
-  predicted.message = 'LEVEL 1 heuristic replay only — not a FreeRTOS-compatible scheduler.'
+  predicted.message = 'LEVEL 1 heuristic replay only — not an RTOS scheduler.'
   predicted.disclaimer = predicted.message
   return predicted
 }

@@ -1,10 +1,8 @@
 # AI 助理（AI Assistant）
 
-[English](AI.md) · **繁體中文**
-
 BTFViewer 的 **AI 助理（AI Assistant）**可協助分析 RTOS Trace。它會整理實際量測到的證據、驗證可能的解釋，並引導你回到 Timeline 中相關的時間區段進行確認。
 
-> **適用範圍（Scope）：** AI 使用 BTFViewer 的 **Findings、Statistics、Timeline Query** 與 **Trace Compare** 結果進行分析。它不會讀取韌體原始碼（firmware source）或 ELF 檔案。`what_if` 的結果屬於啟發式估算（heuristic estimate），不是 FreeRTOS 排程器模擬，也不是實際量測到的 Trace 資料。
+> **適用範圍（Scope）：** AI 使用 BTFViewer 的 **Findings、Statistics、Timeline Query** 與 **Trace Compare** 結果進行分析。它不會讀取韌體原始碼（firmware source）或 ELF 檔案。`what_if` 的結果屬於啟發式估算（heuristic estimate），不是 RTOS 排程器模擬，也不是實際量測到的 Trace 資料。
 
 ## 從哪裡開始（Where to start）
 
@@ -194,7 +192,7 @@ flowchart TD
 
 `what_if` 與 `optimize_experiment` 是**啟發式 Slice Replay（heuristic slice-replay）**工具：它們會重新分配實際量測的 Execution Slice、縮放 Migration / Blocking，並調整 Core Utilisation Balance。
 
-它們**不是 FreeRTOS Kernel，也不是確定性的排程器（deterministic scheduler）**。每個結果都會附帶免責說明。若估算結果值得進一步測試，`recommend_experiments` 會建議後續的 Simulation / Firmware / Measurement 驗證步驟。
+它們**不是 RTOS Kernel，也不是確定性的排程器（deterministic scheduler）**。每個結果都會附帶免責說明。若估算結果值得進一步測試，`recommend_experiments` 會建議後續的 Simulation / Firmware / Measurement 驗證步驟。
 
 | 目的 | 執行方式 | 常見修改描述 |
 | --- | --- | --- |
@@ -274,7 +272,7 @@ flowchart TD
 
 | 可以做 | 不能做 |
 | --- | --- |
-| 針對目前 Statistics Scope，重播實際量測的 Slice / Migration / Blocking Gap | 執行 FreeRTOS Scheduling、ISR 或 Cache Model |
+| 針對目前 Statistics Scope，重播實際量測的 Slice / Migration / Blocking Gap | 執行 RTOS Scheduling、ISR 或 Cache Model |
 | 對 Pin / Priority / Contention / Migration Experiment 評分 | 保證 Firmware 修改後的 WCET 或 Deadline |
 | 明確將每個結果標示為 Estimate / Not measured | 取代 Timeline 驗證或重新擷取 Trace |
 
@@ -608,7 +606,7 @@ flowchart TD
 | `regression_explain` | 可選 `tab_a` / `tab_b` | Read-only：比較兩個 Tab，再說明主要 Regression；包含相同的 `regression_type` 分類 |
 | `bookmark_finding` | `time`, `kind`（`root_cause` / `evidence` / `correlated` / `reference`）；可選 `note` | GUI：加入 Semantic Investigation Annotation；需要 Apply |
 | `investigation_replay` | 可選 `finding_id`, `conclusion`, `tools_run`, `evidence_times` | Read-only：產生結構化 Investigation Replay Card |
-| `what_if` | `change`；可選 `task` | Read-only：Heuristic Slice-replay What-if，估算 Migration / Blocking / Load Balance；不是 FreeRTOS Kernel |
+| `what_if` | `change`；可選 `task` | Read-only：Heuristic Slice-replay What-if，估算 Migration / Blocking / Load Balance；不是 RTOS Kernel |
 | `optimize_experiment` | 可選 `task`, `limit`（1–12，預設 5） | Read-only：自動執行並排序 Pin / Priority / Contention / Migration Experiment |
 | `analyze_traces` | 無 | Read-only：依 Scheduling Behavior 排序所有已載入的 Tab |
 | `baseline_score` | 可選 `task`, `baseline`, `snapshot` | Read-only：將目前每個工作的 WCET / Blocking / Migrations / Response 與已儲存 Historical Baseline 比較；標示 `|z|>2` |
@@ -775,6 +773,8 @@ python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml --insecur
 - `make -C BTFViewer ai-test-live` — `AI_CONFIG`，可選 `AI_MODELS`，輸出 [AI_BENCHMARK.md](AI_BENCHMARK.md)
 - `make -C BTFViewer ai-test-context` — 與 Live 相同，另外加入 `--compare-context`
 
+選用模型在缺少 API Key 時會跳過。若要強制執行：`make -C BTFViewer ai-test-context AI_MODELS=claude-sonnet-5,kimi-k3`。
+
 Dataset、Scoring Rule 與 Context-mode Flag 請參閱 [Benchmark / Evaluation Suite](#benchmark-suite)。
 
 使用者指南另可參閱 [Export → Headless CLI](README.md#headless-cli-desktop-only)。
@@ -789,7 +789,7 @@ Offline `ai-test` / `runOfflineBenchmark` 已內建。Live Run 會從 Suite XML�
 
 Command 請參閱 [CLI Regression Gate](#cli-regression-gate)。
 
-預設 Live Scoring 使用 **Full evidence**（`--context-mode full`）。使用 **`--compare-context`** 時，會讓 Compact、Balanced 與 Full 在相同 Case 上執行，並並排顯示 Score、Token Total 與 Latency。
+預設 Live Scoring 使用 **Full evidence**（`--context-mode full`）。使用 **`--compare-context`** 時，會讓 Compact、Balanced 與 Full 在相同 Case 上執行，並並排顯示 Score、Token Total 與 Latency。每個 Live Model Call 若遇到暫時性錯誤（HTTP 429/503 high demand、timeout、空回覆），最多重試 **3** 次；Auth / Not found 不會重試。
 
 前面的 Capability Matrix 是定性比較（Small Local vs 9B+ vs Cloud）。Evaluation Suite 則將這些預期轉換成可重複的量測：
 
@@ -833,35 +833,49 @@ Live Set 應聚焦在：
 
 - **Gemini Cloud Models**
 - **一般開發工作站實際能執行的 Local Ollama Models**
+- **選用 Cloud Models**（有 API Key 時才跑）：`claude-sonnet-5`、`kimi-k3`
 
 Local Model 不應只因為「最新」或「最大」就納入測試。應選擇能與 BTFViewer、Ollama，以及 AI Context / Tooling Workload 同時執行的模型。
 
 ### 建議測試模型（Recommended models）
 
-**Gemini** — 可由設定檔調整；新增較新的 Model ID 不需要修改 Runner：
-
-- **Gemini 3.6 Flash** — High-reasoning Cloud Reference
-- **Gemini 3.1 Flash-Lite** — Fast / Efficient Cloud Reference
-
 **Local — Developer Workstation：**
 
 - **Qwen3.5 9B**（`qwen3.5:9b`）— App 內建預設值；主要的實用 Local Investigator。
-- **Qwen3.5 27B** — 較高品質的 Local Model，同時作為 Memory / Latency Stress Test。
-- **Qwen3.8 27B**（`qwen3.8:27b`）— 較新的 Qwen 27B Local Comparison。
-- **Gemma 4 26B** — 非 Qwen 的 Local Comparison。
+- **Qwen3.8 27B**（`qwen3.8:27b`）— 較高品質的 Local Comparison。
 
-舊版 7B / 14B Model ID 可作為選用項目。不要加入 3B 等級模型；它們容易略過 Native Tool Call，並在 Investigation Suite 中失敗。
+**Gemini** — 可由設定檔調整；新增較新的 Model ID 不需要修改 Runner：
+
+- **Gemini 3.7 Flash**（`gemini-3.7-flash`）— High-reasoning Cloud Reference
+- **Gemini 3.5 Flash-Lite**（`gemini-3.5-flash-lite`）— Fast / Efficient Cloud Reference
+
+**選用 Cloud**（未設定環境變數時會跳過，或用 `--models` / `AI_MODELS` 指定）：
+
+- **Claude Sonnet 5**（`claude-sonnet-5`）— `ANTHROPIC_API_KEY`
+- **Kimi K3**（`kimi-k3`）— `MOONSHOT_API_KEY`
+
+選用模型在缺少 API Key 時會跳過。若要強制執行：
+
+```bash
+make -C BTFViewer ai-test-context AI_MODELS=claude-sonnet-5,kimi-k3
+```
+
+舊版 7B / 14B 以及其他本機 27B 級 ID（`qwen3.5:27b`、`gemma4:26b`）可在此 Suite 之外選用。不要加入 3B 等級模型；它們容易略過 Native Tool Call，並在 Investigation Suite 中失敗。
 
 ```text
-本機 AI — 開發工作站
+出貨 Live Suite
 │
-├── 實用／預設
-│   └── Qwen3.5 9B
+├── Local
+│   ├── Qwen3.5 9B
+│   └── Qwen3.8 27B
 │
-└── 高品質本機模型
-    ├── Qwen3.5 27B
-    ├── Qwen3.8 27B
-    └── Gemma 4 26B
+├── Gemini
+│   ├── Gemini 3.7 Flash
+│   └── Gemini 3.5 Flash-Lite
+│
+└── 選用（需要 API Key）
+    ├── Claude Sonnet 5
+    └── Kimi K3
 ```
 
 在這個應用情境中，9B 模型可能比 27B 模型更適合：如果較大的模型只帶來少量 Accuracy 改善，卻大幅增加 Latency 與 Memory 使用量，整體實用性反而較低。
@@ -886,15 +900,25 @@ Local Model 不應只因為「最新」或「最大」就納入測試。應選�
   <models>
     <model id="qwen3.5:9b"/>
     <model id="qwen3.8:27b"/>
-    <model id="gemini-3.6-flash" preset="gemini">
+    <model id="gemini-3.7-flash" preset="gemini">
       <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
       <tls-verify>true</tls-verify>
       <api-key env="GEMINI_API_KEY"/>
     </model>
-    <model id="gemini-3.1-flash-lite" preset="gemini">
+    <model id="gemini-3.5-flash-lite" preset="gemini">
       <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
       <tls-verify>true</tls-verify>
       <api-key env="GEMINI_API_KEY"/>
+    </model>
+    <model id="claude-sonnet-5" preset="claude" optional="true">
+      <base-url>https://api.anthropic.com/v1</base-url>
+      <tls-verify>true</tls-verify>
+      <api-key env="ANTHROPIC_API_KEY"/>
+    </model>
+    <model id="kimi-k3" preset="kimi" optional="true">
+      <base-url>https://api.moonshot.ai/v1</base-url>
+      <tls-verify>true</tls-verify>
+      <api-key env="MOONSHOT_API_KEY"/>
     </model>
   </models>
 </ai-benchmark>
@@ -914,7 +938,7 @@ Self-signed / Private CA Gateway：
 
 `tls-verify` 設為 `false`，或使用 `ai-test --insecure`，可在 Desktop 跳過 Certificate Check。
 
-`--models id1,id2` 可選擇 `<model>` 中的部分項目。Ollama 應只列出實際已經 Pull 的 Model ID。Benchmark 結果應記錄完整的 Model Identifier 與 Runtime Configuration。
+`--models id1,id2`（或 `make ai-test-context AI_MODELS=id1,id2`）可選擇 `<model>` 中的部分項目。標了 `optional="true"` 的模型在沒有 API Key 時會跳過，除非你在 `--models` / `AI_MODELS` 裡點名。Ollama 應只列出實際已經 Pull 的 Model ID。Benchmark 結果應記錄完整的 Model Identifier 與 Runtime Configuration。
 
 目前 App 內尚未提供的 Picker：
 
@@ -1164,7 +1188,7 @@ flowchart TD
 
 ## 因果與時間引擎（Causal and temporal engines）
 
-這些功能是在 Analysis Findings 上執行的 **Host-side Heuristic**，不是 FreeRTOS Scheduler Replay。
+這些功能是在 Analysis Findings 上執行的 **Host-side Heuristic**，不是 RTOS Scheduler Replay。
 
 使用者操作流程仍以 [Investigation Planner](#investigation-planner) 為主。Diagnose / Investigate / Auto investigate 會先依序使用 Explanation Tool，再進入 Experiment：
 
@@ -1215,7 +1239,7 @@ flowchart TD
 | `close_investigation` | Case Status `closed` + Conclusion | 完整 Firmware A/B Lifecycle |
 | `analyze_distribution` | BTF Execution / Blocking / PI / Tick Sample，最多 8000 筆 | Parser 本身沒有的 Response-time Series |
 | `analyze_periodicity` | Inter-arrival Jitter 與 Kind | Kernel Period Timer |
-| `simulate_schedule` | `what_if` 內部使用的 LEVEL 1 Helper | GUI Tool 或 FreeRTOS Kernel |
+| `simulate_schedule` | `what_if` 內部使用的 LEVEL 1 Helper | GUI Tool 或 RTOS Kernel |
 
 以下內容不在 Scope 內，**不要為這些功能新增 Chat Template**：
 

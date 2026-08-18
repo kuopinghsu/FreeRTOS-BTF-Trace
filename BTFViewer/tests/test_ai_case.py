@@ -684,9 +684,16 @@ class InvestigationCaseTests(unittest.TestCase):
         from unittest.mock import patch
 
         example = BTF_ROOT / "examples" / "ai" / "benchmark.xml"
-        suite = load_benchmark_suite_xml(str(example))
+        with patch.dict(
+            os.environ,
+            {"ANTHROPIC_API_KEY": "", "MOONSHOT_API_KEY": ""},
+            clear=False,
+        ):
+            suite = load_benchmark_suite_xml(str(example))
         ids = [m["id"] for m in suite["models"]]
         self.assertGreaterEqual(len(ids), 1)
+        self.assertIn("qwen3.5:9b", ids)
+        self.assertIn("qwen3.8:27b", ids)
         local = next(m for m in suite["models"] if m["base_url"].startswith("http://"))
         self.assertFalse(local["tls_verify"])
         self.assertTrue(local["base_url"])
@@ -694,8 +701,20 @@ class InvestigationCaseTests(unittest.TestCase):
             m["id"] for m in suite["models"] if m.get("api_key_env") == "GEMINI_API_KEY"
         ]
         self.assertEqual(
-            gemini_ids, ["gemini-3.6-flash", "gemini-3.1-flash-lite"])
-        cloud = next(m for m in suite["models"] if m.get("api_key_env"))
+            gemini_ids, ["gemini-3.7-flash", "gemini-3.5-flash-lite"])
+        self.assertIn("claude-sonnet-5", ids)
+        self.assertIn("kimi-k3", ids)
+        optional = [m for m in suite["models"] if m.get("optional")]
+        self.assertEqual(
+            [m["id"] for m in optional], ["claude-sonnet-5", "kimi-k3"])
+        default_ids = [m["id"] for m in select_benchmark_suite_models(suite, "")]
+        self.assertIn("qwen3.5:9b", default_ids)
+        self.assertIn("qwen3.8:27b", default_ids)
+        self.assertNotIn("claude-sonnet-5", default_ids)
+        self.assertNotIn("kimi-k3", default_ids)
+        explicit = select_benchmark_suite_models(suite, "claude-sonnet-5")
+        self.assertEqual([m["id"] for m in explicit], ["claude-sonnet-5"])
+        cloud = next(m for m in suite["models"] if m.get("api_key_env") == "GEMINI_API_KEY")
         self.assertEqual(cloud["api_key_env"], "GEMINI_API_KEY")
         self.assertTrue(cloud["tls_verify"])
         picked = select_benchmark_suite_models(suite, local["id"])
@@ -736,13 +755,15 @@ class InvestigationCaseTests(unittest.TestCase):
             str(BTF_ROOT / "examples" / "ai" / "benchmark.xml"))
         model = suite["models"][0]["id"]
         self.assertEqual(
-            benchmark_model_category("gemini-3.6-flash"),
+            benchmark_model_category("gemini-3.7-flash"),
             "Cloud",
         )
         self.assertEqual(
-            benchmark_model_category("models/gemini-3.1-flash-lite"),
+            benchmark_model_category("models/gemini-3.5-flash-lite"),
             "Cloud / fast",
         )
+        self.assertEqual(benchmark_model_category("claude-sonnet-5"), "Cloud")
+        self.assertEqual(benchmark_model_category("kimi-k3"), "Cloud")
         ctx = benchmark_prompt_context(cases["migration_thrash"])
         self.assertIn("CS[22]", ctx)
         self.assertNotIn("finding_types", ctx)

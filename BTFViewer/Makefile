@@ -54,8 +54,9 @@ help:
 	@echo "  make test-web     Web unit tests (node --test)"
 	@echo "  make test-all     Desktop + web unit tests"
 	@echo "  make ai-test      Offline AI benchmark ($(AI_DATASET); AI_FAIL_UNDER=$(AI_FAIL_UNDER))"
-	@echo "  make ai-test-live Live suite XML → AI_BENCHMARK.md (AI_CONFIG=$(AI_CONFIG))"
-	@echo "  make ai-test-context Live suite, all three context modes → AI_BENCHMARK.md"
+	@echo "  make ai-test-live Live suite XML → AI_BENCHMARK.md (AI_CONFIG=$(AI_CONFIG); 3× retry)"
+	@echo "  make ai-test-context Live suite, all three context modes → AI_BENCHMARK.md (3× retry)"
+	@echo "                      Optional models skipped without keys; force: AI_MODELS=claude-sonnet-5,kimi-k3"
 	@echo "  make ci           test-all + check-bundle (local CI parity)"
 	@echo "  make help         Show this help"
 	@echo ""
@@ -104,17 +105,17 @@ test-web:
 
 test-all: test test-web
 
-ai-test: $(OUT)
-	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) ai-test \
+ai-test:
+	PYTHONPATH=. QT_QPA_PLATFORM=offscreen $(PYTHON) -m btf_viewer_pkg ai-test \
 		--dataset $(AI_DATASET) --fail-under $(AI_FAIL_UNDER)
 
-ai-test-live: $(OUT)
-	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) ai-test \
+ai-test-live:
+	PYTHONPATH=. QT_QPA_PLATFORM=offscreen $(PYTHON) -m btf_viewer_pkg ai-test \
 		--config $(AI_CONFIG) $(if $(AI_MODELS),--models $(AI_MODELS),) \
 		--fail-under 0 -o AI_BENCHMARK.md
 
-ai-test-context: $(OUT)
-	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) ai-test \
+ai-test-context:
+	PYTHONPATH=. QT_QPA_PLATFORM=offscreen $(PYTHON) -m btf_viewer_pkg ai-test \
 		--config $(AI_CONFIG) $(if $(AI_MODELS),--models $(AI_MODELS),) \
 		--compare-context --fail-under 0 -o AI_BENCHMARK.md
 

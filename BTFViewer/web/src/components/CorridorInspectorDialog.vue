@@ -71,9 +71,12 @@
         </label>
       </div>
       <div class="ci-sub">{{ subtitle }}</div>
-      <div class="ci-scope-note">
-        Note: this map follows the current timeline viewport, not the full
-        trace. Press Fit (F) to show the full range.
+      <div
+        class="ci-scope-banner"
+        :class="scopeBanner.scoped ? 'ci-scope-viewport' : 'ci-scope-full'"
+      >
+        <span class="ci-scope-badge">{{ scopeBanner.badge }}</span>
+        <span class="ci-scope-detail">{{ scopeBanner.detail }}</span>
       </div>
 
       <div
@@ -330,6 +333,7 @@ import {
   coreShortName,
   defaultCorridorTopPct,
   heatmapBinRange,
+  inspectorViewportBanner,
   traceHasCoreBounceHolds,
 } from '../utils/migrationAnalysis.js'
 import MiniChordPanel from './MiniChordPanel.vue'
@@ -488,11 +492,14 @@ watch([viewportLoHi, () => props.viewportProgrammatic], ([next, programmatic]) =
   else _scopeTimer = window.setTimeout(apply, 80)
 }, { immediate: true })
 
-const scopeSuffix = computed(() => {
-  const { lo, hi } = scopeLoHi.value
-  if (lo == null || hi == null) return ''
-  return ` (viewport: ${formatTime(lo, props.trace.timeScale)} … ${formatTime(hi, props.trace.timeScale)})`
-})
+const scopeBanner = computed(() => inspectorViewportBanner(
+  scopeLoHi.value.lo,
+  scopeLoHi.value.hi,
+  props.trace?.timeMin,
+  props.trace?.timeMax,
+  props.trace?.timeScale,
+  formatTime,
+))
 
 const traceHasBounces = computed(() => traceHasCoreBounceHolds(props.trace))
 
@@ -544,7 +551,7 @@ const subtitle = computed(() => {
     : ''
   const nCorr = model.value.corridors?.length || 0
   const q = taskQuery.value ? ` · filter “${taskQuery.value}”` : ''
-  return `${n} cores · ${nCorr} corridors · Top ${topPct.value}%${q}${focus}${scopeSuffix.value}`
+  return `${n} cores · ${nCorr} corridors · Top ${topPct.value}%${q}${focus}`
 })
 
 const tipText = computed(() => {
@@ -1086,12 +1093,47 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   flex-shrink: 0;
 }
-.ci-scope-note {
+.ci-scope-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  padding: 8px 12px;
   font-size: 11px;
-  color: var(--fg-dim);
-  margin-top: 2px;
   line-height: 1.35;
+  border-radius: 4px;
   flex-shrink: 0;
+}
+.ci-scope-viewport {
+  background: color-mix(in srgb, #ff9800 18%, var(--panel-bg));
+  border-left: 4px solid #ff9800;
+}
+.ci-scope-full {
+  background: color-mix(in srgb, var(--fg-dim) 10%, var(--panel-bg));
+  border-left: 4px solid var(--fg-dim);
+}
+.ci-scope-badge {
+  flex-shrink: 0;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+.ci-scope-viewport .ci-scope-badge {
+  background: #ff9800;
+  color: #1a1200;
+}
+.ci-scope-full .ci-scope-badge {
+  background: var(--border);
+  color: var(--fg);
+}
+.ci-scope-viewport .ci-scope-detail {
+  color: color-mix(in srgb, #ff9800 70%, var(--fg));
+}
+.ci-scope-full .ci-scope-detail {
+  color: var(--fg-dim);
 }
 .ci-triage {
   display: flex;

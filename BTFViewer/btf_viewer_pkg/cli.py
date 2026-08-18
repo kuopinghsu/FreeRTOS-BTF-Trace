@@ -1919,6 +1919,18 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
             except ValueError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 return 1
+            if not models_raw:
+                selected_ids = {str(m.get("id") or "") for m in selected}
+                for spec in suite.get("models") or []:
+                    mid = str(spec.get("id") or "")
+                    if spec.get("optional") and mid and mid not in selected_ids:
+                        env_name = str(spec.get("api_key_env") or "")
+                        hint = env_name or "API key"
+                        print(
+                            f"[ai-test] skip optional {mid} (set {hint} or --models {mid})",
+                            file=sys.stderr,
+                            flush=True,
+                        )
             override_url = str(getattr(args, "base_url", "") or "").strip()
             insecure = bool(getattr(args, "insecure", False))
             tool_catalog = ai_viewer_tools()

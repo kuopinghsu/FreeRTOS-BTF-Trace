@@ -12,8 +12,6 @@
 
 如需了解產品操作與介面導覽，請參閱 [`README.md`](README.md)。如需依照步驟進行問題分析，請參閱 [`WORKFLOWS_zh-TW.md`](WORKFLOWS_zh-TW.md)。如需使用 AI 輔助分析，請參閱 [`AI_zh-TW.md`](AI_zh-TW.md)。
 
-原文：[English](STATISTICS.md)。
-
 > **重要：** BTFViewer 的統計結果代表 BTF/STI Trace 中實際擷取到的證據。最大值（Maximum）不代表系統保證值；相關性（correlation）不代表因果關係（causation）；Trace 中沒有某個事件，也不能證明該事件從未發生。
 
 ## 快速開始
@@ -1583,7 +1581,7 @@ Core-pair chart 的 **Open Chord**，以及 Inspector 內的 **Show topology**�
 | 功能 | 說明 |
 |---|---|
 | **Open** | 2 個以上核心時，可從工具列 **Heatmap** 開啟。Pair chart 的 **Open Chord** 或 Inspector 的 **Show topology** 可切換到以 chord 為主的版面。Desktop 為 non-modal；Web 使用 overlay，但 Timeline 仍可操作。切換分頁時 Inspector 會關閉 |
-| **Scope** | 使用目前 Timeline 可見範圍，與 Statistics 的 **Limit to C1–Cn** 相互獨立。若目前範圍沒有 migration，tree/grid 顯示 *No migrations in scope*，但 topology 仍可使用 |
+| **Scope** | 使用目前 Timeline 可見範圍，與 Statistics 的 **Limit to C1–Cn** 相互獨立。頂端 **Full view** / **Viewport view** 橫幅（顏色與 distribution chart 相同）顯示目前時間範圍：Fit to window 或縮放後的視窗。若目前範圍沒有 migration，tree/grid 顯示 *No migrations in scope*，但 topology 仍可使用 |
 | **Filter** | **Top corridors**、**Direction**、**Task filter**。Trace 存在跨核心 Mutex hold 時，另外提供 **Lock Bounces Only** |
 | **Select** | 可點選 tree row、grid cell 或 chord ribbon。Double-click 或 **Inspect in Timeline** 會以 C1–C2 Spotlight 該 time bin 或工作。工具列 **All** / **Show all tasks** 可清除 filter |
 | **Query with AI…** | 在 **AI** 分頁執行 **Migration thrash** template，使用與 Statistics 相同的 findings context。若 AI 尚未啟用，會開啟 **Settings → AI** |

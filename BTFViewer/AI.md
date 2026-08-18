@@ -1,10 +1,8 @@
 # AI Assistant
 
-**English** · [繁體中文](AI_zh-TW.md)
-
 BTFViewer's AI Assistant helps you investigate RTOS traces by organizing measured evidence, testing explanations, and guiding you back to the relevant timeline region.
 
-> **Scope:** AI works with BTFViewer Findings, Statistics, timeline queries, and Trace Compare results. It does not read firmware source or ELF files. `what_if` results are heuristic estimates, not FreeRTOS scheduler simulation or measured trace data.
+> **Scope:** AI works with BTFViewer Findings, Statistics, timeline queries, and Trace Compare results. It does not read firmware source or ELF files. `what_if` results are heuristic estimates, not RTOS scheduler simulation or measured trace data.
 
 ## Where to start
 
@@ -194,7 +192,7 @@ Stay inside the stated window: every `jump:TIME` in the reply should fall betwee
 
 ### What-if and optimize workflow
 
-`what_if` and `optimize_experiment` are **heuristic slice-replay** tools: they reallocate measured execution slices, scale migrations / blocking, and adjust core-util balance. They are **not** a FreeRTOS kernel or deterministic scheduler. Every result carries a disclaimer. After a promising estimate, `recommend_experiments` suggests validation steps (simulation / firmware / measurement).
+`what_if` and `optimize_experiment` are **heuristic slice-replay** tools: they reallocate measured execution slices, scale migrations / blocking, and adjust core-util balance. They are **not** an RTOS kernel or deterministic scheduler. Every result carries a disclaimer. After a promising estimate, `recommend_experiments` suggests validation steps (simulation / firmware / measurement).
 
 
 | Goal                          | What to run                                                                           | Typical change phrases                                                                 |
@@ -277,7 +275,7 @@ Stay inside the stated window: every `jump:TIME` in the reply should fall betwee
 
 | Does                                                                         | Does not                                           |
 | ---------------------------------------------------------------------------- | -------------------------------------------------- |
-| Replay measured slices / migrations / blocking gaps for the Statistics scope | Run FreeRTOS scheduling, ISRs, or cache models     |
+| Replay measured slices / migrations / blocking gaps for the Statistics scope | Run RTOS scheduling, ISRs, or cache models         |
 | Score pin / priority / contention / migration experiments                    | Guarantee WCET or deadline after a firmware change |
 | Label every result as estimate / not measured                                | Replace timeline verification or a new capture     |
 
@@ -609,7 +607,7 @@ The table below is the exhaustive schema reference. Use it when implementing, de
 | `regression_explain` | optional `tab_a` / `tab_b`                                                                                                         | Read-only: compare two tabs then narrate the primary regression; includes the same `regression_type` classification                                                                                                                                                                                                                  |
 | `bookmark_finding` | `time`, `kind` (`root_cause` / `evidence` / `correlated` / `reference`); optional `note`                                           | GUI: pin a semantic investigation annotation (Apply required)                                                                                                                                                                                                                                                                        |
 | `investigation_replay` | optional `finding_id`, `conclusion`, `tools_run`, `evidence_times`                                                                 | Read-only: structured investigation replay card                                                                                                                                                                                                                                                                                      |
-| `what_if` | `change`; optional `task`                                                                                                          | Read-only: heuristic slice-replay what-if (migrations / blocking / load balance; not FreeRTOS kernel)                                                                                                                                                                                                                                |
+| `what_if` | `change`; optional `task`                                                                                                          | Read-only: heuristic slice-replay what-if (migrations / blocking / load balance; not an RTOS kernel)                                                                                                                                                                                                                                 |
 | `optimize_experiment` | optional `task`, `limit` (1–12, default 5)                                                                                         | Read-only: run ranked automatic pin/priority/contention/migration experiments                                                                                                                                                                                                                                                        |
 | `analyze_traces` | (none)                                                                                                                             | Read-only: rank all loaded tabs by scheduling behavior                                                                                                                                                                                                                                                                               |
 | `baseline_score` | optional `task`, `baseline`, `snapshot`                                                                                            | Read-only: score current per-task metrics (WCET/blocking/migrations/response) against the stored historical baseline; flags `|z|>2`                                                                                                                                                                                                  |
@@ -762,7 +760,7 @@ python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml --compare
 python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml --insecure
 ```
 
-Or `make -C BTFViewer ai-test` (`AI_DATASET`, `AI_FAIL_UNDER`), `make -C BTFViewer ai-test-live` (`AI_CONFIG`, optional `AI_MODELS`, writes [AI_BENCHMARK.md](AI_BENCHMARK.md)), and `make -C BTFViewer ai-test-context` (same as live + `--compare-context`). Dataset, scoring rules, and context-mode flags: [Benchmark / evaluation suite](#benchmark-suite).
+Or `make -C BTFViewer ai-test` (`AI_DATASET`, `AI_FAIL_UNDER`), `make -C BTFViewer ai-test-live` (`AI_CONFIG`, optional `AI_MODELS`, writes [AI_BENCHMARK.md](AI_BENCHMARK.md)), and `make -C BTFViewer ai-test-context` (same as live + `--compare-context`). Optional models are skipped when their key is missing; force with `AI_MODELS=claude-sonnet-5,kimi-k3`. Dataset, scoring rules, and context-mode flags: [Benchmark / evaluation suite](#benchmark-suite).
 
 See also [Export → Headless CLI](README.md#headless-cli-desktop-only) in the user guide.
 
@@ -772,7 +770,7 @@ See also [Export → Headless CLI](README.md#headless-cli-desktop-only) in the u
 
 ## Benchmark and evaluation suite
 
-Offline `ai-test` / `runOfflineBenchmark` already ships. Live runs read **model id, base URL, TLS, and API key** from a suite XML (`--config examples/ai/benchmark.xml`) and write [AI_BENCHMARK.md](AI_BENCHMARK.md). Commands: [CLI regression gate](#cli-regression-gate). Default live scoring uses **Full evidence** (`--context-mode full`). **`--compare-context`** runs Compact, Balanced, and Full on the same cases and reports score, token totals, and latency side by side.
+Offline `ai-test` / `runOfflineBenchmark` already ships. Live runs read **model id, base URL, TLS, and API key** from a suite XML (`--config examples/ai/benchmark.xml`) and write [AI_BENCHMARK.md](AI_BENCHMARK.md). Commands: [CLI regression gate](#cli-regression-gate). Default live scoring uses **Full evidence** (`--context-mode full`). **`--compare-context`** runs Compact, Balanced, and Full on the same cases and reports score, token totals, and latency side by side. Each live model call **retries up to 3 times** on transient errors (HTTP 429/503 high demand, timeouts, empty replies); auth and not-found errors are not retried.
 
 The capability matrix above is qualitative (small local vs 9B+ vs cloud). The suite turns those expectations into repeatable measurements: **which model is most reliable for BTF Viewer trace investigation**, not which model is largest or “smartest.”
 
@@ -803,35 +801,49 @@ Keep the live set focused on:
 
 - **Gemini cloud models**
 - **Local Ollama models that are practical on a typical developer workstation**
+- **Optional cloud models** when their API keys are present (`claude-sonnet-5`, `kimi-k3`)
 
 Do **not** pick local models only because they are newest or largest. Measure models that can run alongside BTF Viewer, Ollama, and the AI context/tooling workload.
 
 ### Recommended models
 
-**Gemini** (configurable; newer ids can be added without changing the runner):
-
-- **Gemini 3.6 Flash** — high-reasoning cloud reference
-- **Gemini 3.1 Flash-Lite** — fast/efficient cloud reference
-
 **Local — developer workstation:**
 
 - **Qwen3.5 9B** (`qwen3.5:9b`) — shipped in-app default; primary practical local investigator
-- **Qwen3.5 27B** — higher-quality local / memory-and-latency stress test
-- **Qwen3.8 27B** (`qwen3.8:27b`) — newer Qwen 27B local comparison
-- **Gemma 4 26B** — non-Qwen local comparison
+- **Qwen3.8 27B** (`qwen3.8:27b`) — higher-quality local comparison
 
-Older 7B/14B ids stay optional. Do not include 3B-class models — they skip native tool calls and fail the investigation suite.
+**Gemini** (configurable; newer ids can be added without changing the runner):
+
+- **Gemini 3.7 Flash** (`gemini-3.7-flash`) — high-reasoning cloud reference
+- **Gemini 3.5 Flash-Lite** (`gemini-3.5-flash-lite`) — fast/efficient cloud reference
+
+**Optional cloud** (skipped unless the env key is set, or pass `--models` / `AI_MODELS`):
+
+- **Claude Sonnet 5** (`claude-sonnet-5`) — `ANTHROPIC_API_KEY`
+- **Kimi K3** (`kimi-k3`) — `MOONSHOT_API_KEY`
+
+Optional models are skipped when their key is missing. To force them:
+
+```bash
+make -C BTFViewer ai-test-context AI_MODELS=claude-sonnet-5,kimi-k3
+```
+
+Older 7B/14B ids and other local 27B-class ids (`qwen3.5:27b`, `gemma4:26b`) stay optional outside this suite. Do not include 3B-class models — they skip native tool calls and fail the investigation suite.
 
 ```text
-Local AI — developer workstation
+Shipped live suite
 │
-├── Practical / default
-│   └── Qwen3.5 9B
+├── Local
+│   ├── Qwen3.5 9B
+│   └── Qwen3.8 27B
 │
-├── High-quality local
-│   ├── Qwen3.5 27B
-│   ├── Qwen3.8 27B
-│   └── Gemma 4 26B
+├── Gemini
+│   ├── Gemini 3.7 Flash
+│   └── Gemini 3.5 Flash-Lite
+│
+└── Optional (key required)
+    ├── Claude Sonnet 5
+    └── Kimi K3
 ```
 
 A 9B model may beat a 27B model on this app if the larger id only slightly improves accuracy while blowing latency and memory. Measure **diagnostic quality** and **practical system performance**.
@@ -851,15 +863,25 @@ Do not hard-code the model list into the runner. Copy [examples/ai/benchmark.xml
   <models>
     <model id="qwen3.5:9b"/>
     <model id="qwen3.8:27b"/>
-    <model id="gemini-3.6-flash" preset="gemini">
+    <model id="gemini-3.7-flash" preset="gemini">
       <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
       <tls-verify>true</tls-verify>
       <api-key env="GEMINI_API_KEY"/>
     </model>
-    <model id="gemini-3.1-flash-lite" preset="gemini">
+    <model id="gemini-3.5-flash-lite" preset="gemini">
       <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
       <tls-verify>true</tls-verify>
       <api-key env="GEMINI_API_KEY"/>
+    </model>
+    <model id="claude-sonnet-5" preset="claude" optional="true">
+      <base-url>https://api.anthropic.com/v1</base-url>
+      <tls-verify>true</tls-verify>
+      <api-key env="ANTHROPIC_API_KEY"/>
+    </model>
+    <model id="kimi-k3" preset="kimi" optional="true">
+      <base-url>https://api.moonshot.ai/v1</base-url>
+      <tls-verify>true</tls-verify>
+      <api-key env="MOONSHOT_API_KEY"/>
     </model>
   </models>
 </ai-benchmark>
@@ -874,7 +896,7 @@ Do not hard-code the model list into the runner. Copy [examples/ai/benchmark.xml
 </endpoint>
 ```
 
-`<api-key env="VAR">` reads the environment first, then any text inside the element. Omit the text (and do not commit secrets). `tls-verify` false, or `ai-test --insecure`, skips certificate checks on Desktop. `--models id1,id2` selects a subset of `<model>` entries. For Ollama, list the ids you actually have pulled. Record the exact model identifier and runtime configuration.
+`<api-key env="VAR">` reads the environment first, then any text inside the element. Omit the text (and do not commit secrets). `tls-verify` false, or `ai-test --insecure`, skips certificate checks on Desktop. `--models id1,id2` (or `make ai-test-context AI_MODELS=id1,id2`) selects a subset of `<model>` entries. Optional models (`optional="true"`) are skipped when their API key is missing unless you name them in `--models` / `AI_MODELS`. For Ollama, list the ids you actually have pulled. Record the exact model identifier and runtime configuration.
 
 In-app picker (not shipped): **Settings → AI → Benchmark** with checkboxes for Gemini and local Ollama models, then **Run Benchmark**.
 
@@ -1091,7 +1113,7 @@ Do **not** add chat templates after `auto_investigate`.
 
 ## Causal and temporal engines
 
-Host-side heuristics over Analysis Findings — not a FreeRTOS scheduler replay. User-facing loop stays on [Investigation planner](#investigation-planner). Diagnose / Investigate / Auto investigate walk explanation tools before experiments: graph → temporal → `rank_root_causes` → `challenge_conclusion`, then `what_if`.
+Host-side heuristics over Analysis Findings — not an RTOS scheduler replay. User-facing loop stays on [Investigation planner](#investigation-planner). Diagnose / Investigate / Auto investigate walk explanation tools before experiments: graph → temporal → `rank_root_causes` → `challenge_conclusion`, then `what_if`.
 
 ```mermaid
 flowchart TD
@@ -1141,7 +1163,7 @@ flowchart TD
 | `close_investigation`         | Case status `closed` plus conclusion                               | Full firmware A/B lifecycle                     |
 | `analyze_distribution`        | BTF execution / blocking / PI / tick samples (cap 8000)            | A response-time series the parser does not have |
 | `analyze_periodicity`         | Inter-arrival jitter and kind                                      | A kernel period timer                           |
-| `simulate_schedule`           | LEVEL 1 helper inside `what_if`                                    | A GUI tool or FreeRTOS kernel                   |
+| `simulate_schedule`           | LEVEL 1 helper inside `what_if`                                    | A GUI tool or RTOS kernel                       |
 
 
 Out of scope (do **not** add chat templates for these): trace-to-code (ELF / DWARF), real scheduler or hardware-aware simulation, model routing, automatic benchmark-case generation, natural-language → metric compiler, anomaly discovery without Analysis Findings, shared team investigation database.

@@ -68,6 +68,13 @@ configures Desktop `ai-test`:
 python builds/btf_viewer.py ai-test -c examples/ai/benchmark.xml -o AI_BENCHMARK.md
 python builds/btf_viewer.py ai-test -c examples/ai/benchmark.xml --compare-context -o AI_BENCHMARK.md
 python builds/btf_viewer.py ai-test -c examples/ai/benchmark.xml --insecure
+make ai-test-context
+```
+
+Optional models are skipped when their key is missing. To force them:
+
+```bash
+make ai-test-context AI_MODELS=claude-sonnet-5,kimi-k3
 ```
 
 | Element | Meaning |
@@ -82,7 +89,7 @@ python builds/btf_viewer.py ai-test -c examples/ai/benchmark.xml --insecure
 | `--compare-context` | Run Compact, Balanced, and Full evidence; compare score, tokens, and latency |
 | `--context-mode` | Single mode: `compact`, `balanced`, or `full` (default `full`) |
 
-`--models id1,id2` runs a subset of the XML list. Context-mode flags: [AI.md → Context mode benchmarking](../AI.md#context-mode-benchmarking). Full suite: [Benchmark / evaluation suite](../AI.md#benchmark-suite).
+`--models id1,id2` (or `make ai-test-context AI_MODELS=id1,id2`) runs a subset of the XML list. Optional models are skipped when their key is missing unless you name them. Context-mode flags: [AI.md → Context mode benchmarking](../AI.md#context-mode-benchmarking). Full suite: [Benchmark / evaluation suite](../AI.md#benchmark-suite).
 Setup, tools, and troubleshooting: [AI.md](../AI.md).
 
 Panel usage: [BTFViewer README → AI Assistant](../README.md#ai-assistant).

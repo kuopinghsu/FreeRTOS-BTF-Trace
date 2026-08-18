@@ -2129,28 +2129,8 @@ class _MetricsPlotDialog(QDialog):
 
     def _set_scope_banner(self, scoped: bool, badge: str, detail: str) -> None:
         """Show a high-contrast banner indicating cursor-range vs full-trace scope."""
-        if scoped:
-            if self._is_dark:
-                bg, border, badge_bg, badge_fg, detail_fg = (
-                    "#4E342E", "#FF9800", "#FF9800", "#1A1200", "#FFE0B2")
-            else:
-                bg, border, badge_bg, badge_fg, detail_fg = (
-                    "#FFF3E0", "#F57C00", "#FF9800", "#1A1200", "#5D4037")
-        else:
-            if self._is_dark:
-                bg, border, badge_bg, badge_fg, detail_fg = (
-                    "#263238", "#78909C", "#546E7A", "#ECEFF1", "#B0BEC5")
-            else:
-                bg, border, badge_bg, badge_fg, detail_fg = (
-                    "#ECEFF1", "#90A4AE", "#CFD8DC", "#37474F", "#546E7A")
-        self._scope_banner.setText(
-            f'<span style="background:{badge_bg}; color:{badge_fg}; font-weight:700; '
-            f'padding:2px 8px; border-radius:3px; letter-spacing:0.5px;">'
-            f'{badge.upper()}</span>&nbsp;&nbsp;'
-            f'<span style="color:{detail_fg};">{detail}</span>')
-        self._scope_banner.setStyleSheet(
-            f"background:{bg}; border-left:4px solid {border}; "
-            f"padding:8px 12px; border-radius:4px;")
+        _apply_scope_banner(
+            self._scope_banner, scoped, badge, detail, self._is_dark)
 
     def update_data(self, title: str, points: list,
                     *, scope_scoped: bool, scope_badge: str,
@@ -5293,6 +5273,63 @@ _CI_FIELD_H = 22
 _CI_SIDEBAR_H = 248
 
 
+def _apply_scope_banner(label: "QLabel", scoped: bool, badge: str, detail: str,
+                        is_dark: bool) -> None:
+    """High-contrast Full-view vs scoped banner (distribution plots + heatmap)."""
+    if scoped:
+        if is_dark:
+            bg, border, badge_bg, badge_fg, detail_fg = (
+                "#4E342E", "#FF9800", "#FF9800", "#1A1200", "#FFE0B2")
+        else:
+            bg, border, badge_bg, badge_fg, detail_fg = (
+                "#FFF3E0", "#F57C00", "#FF9800", "#1A1200", "#5D4037")
+    else:
+        if is_dark:
+            bg, border, badge_bg, badge_fg, detail_fg = (
+                "#263238", "#78909C", "#546E7A", "#ECEFF1", "#B0BEC5")
+        else:
+            bg, border, badge_bg, badge_fg, detail_fg = (
+                "#ECEFF1", "#90A4AE", "#CFD8DC", "#37474F", "#546E7A")
+    label.setText(
+        f'<span style="background:{badge_bg}; color:{badge_fg}; font-weight:700; '
+        f'padding:2px 8px; border-radius:3px; letter-spacing:0.5px;">'
+        f'{badge.upper()}</span>&nbsp;&nbsp;'
+        f'<span style="color:{detail_fg};">{detail}</span>')
+    label.setStyleSheet(
+        f"background:{bg}; border-left:4px solid {border}; "
+        f"padding:8px 12px; border-radius:4px;")
+
+
+# Visible span ≥ this fraction of the trace counts as Fit / Full view (web lockstep).
+_INSPECTOR_FULL_VIEW_RATIO = 0.92
+
+
+def _inspector_viewport_is_full(lo, hi, t_min, t_max, fit_mode: bool = False) -> bool:
+    if fit_mode or lo is None or hi is None:
+        return True
+    span = max(int(t_max) - int(t_min), 1)
+    return (int(hi) - int(lo)) / span >= _INSPECTOR_FULL_VIEW_RATIO
+
+
+def _inspector_viewport_banner(trace, lo, hi, fit_mode: bool = False
+                               ) -> Tuple[bool, str, str]:
+    """Return (is_viewport, badge, detail) for the heatmap scope banner."""
+    t_min = int(trace.time_min)
+    t_max = int(trace.time_max)
+    unit = trace.time_scale
+    full = _inspector_viewport_is_full(lo, hi, t_min, t_max, fit_mode)
+    a, b = (t_min, t_max) if full else (int(lo), int(hi))
+    if b <= a:
+        a, b = t_min, t_max
+        full = True
+    detail = (
+        f"{_format_time(a, unit)} … {_format_time(b, unit)} "
+        f"({_format_time(b - a, unit)})")
+    if full:
+        return False, "Full view", detail
+    return True, "Viewport view", detail
+
+
 def _dim_css_color(widget: QWidget) -> str:
     """Muted text color blended from the current palette (theme-aware)."""
     fg = widget.palette().color(QPalette.ColorRole.WindowText)
@@ -5328,6 +5365,7 @@ class _CorridorInspectorDialog(QDialog):
         self._top_pct = _default_corridor_top_pct(len(trace.core_names))
         self._scope_lo = self._scope_hi = None
         self._scope_suffix = ""
+        self._scope_fit = False
         self._owner_tab_path: Optional[str] = None
         self._model: dict = {}
         self._selected = None
@@ -5418,14 +5456,12 @@ class _CorridorInspectorDialog(QDialog):
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self._sub.setStyleSheet(f"color:{_dim_css_color(self)}; font-size:11px;")
         lay.addWidget(self._sub)
-        self._scope_note = QLabel(
-            "Note: this map follows the current timeline viewport, not the full "
-            "trace. Press Fit (F / Ctrl+0) to show the full range.")
-        self._scope_note.setObjectName("ciScopeNote")
-        self._scope_note.setWordWrap(True)
-        self._scope_note.setStyleSheet(
-            f"color:{_dim_css_color(self)}; font-size:11px;")
-        lay.addWidget(self._scope_note)
+        self._scope_banner = QLabel()
+        self._scope_banner.setObjectName("ciScopeBanner")
+        self._scope_banner.setWordWrap(True)
+        self._scope_banner.setMinimumWidth(0)
+        lay.addWidget(self._scope_banner)
+        self._refresh_scope_banner()
 
         self._triage = QLabel()
         self._triage.setStyleSheet(
@@ -5760,7 +5796,7 @@ class _CorridorInspectorDialog(QDialog):
         qnote = f" · filter “{self._task_query.strip()}”" if self._task_query.strip() else ""
         self._sub.setText(
             f"{n} cores · {n_corr} corridors · Top {self._top_pct}%"
-            f"{qnote}{self._scope_suffix}")
+            f"{qnote}")
         cores = self._model.get("cores") or []
         pair_count = {(c["from_core"], c["to_core"]): c["count"] for c in vis}
         filtered_grid = []
@@ -6250,11 +6286,18 @@ class _CorridorInspectorDialog(QDialog):
             return
         self._hint.setText(self._HINT_DEFAULT)
 
+    def _refresh_scope_banner(self) -> None:
+        scoped, badge, detail = _inspector_viewport_banner(
+            self._trace, self._scope_lo, self._scope_hi, self._scope_fit)
+        is_dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        _apply_scope_banner(self._scope_banner, scoped, badge, detail, is_dark)
+
     def refresh_scope(self) -> None:
         if not getattr(self, "_scope_follow", True) and self._model:
+            self._refresh_scope_banner()
             return
         lo = hi = None
-        suffix = ""
+        fit_mode = False
         wnd = self.parent()
         if isinstance(wnd, QMainWindow):
             tab = getattr(wnd, "_active_tab", None)
@@ -6266,15 +6309,16 @@ class _CorridorInspectorDialog(QDialog):
                     vlo = vhi = None
                 if vlo is not None and vhi is not None and vhi > vlo:
                     lo, hi = int(vlo), int(vhi)
-                    suffix = (
-                        f"  (viewport: "
-                        f"{_format_time(lo, self._trace.time_scale)} … "
-                        f"{_format_time(hi, self._trace.time_scale)})")
-        if lo == self._scope_lo and hi == self._scope_hi and self._model:
-            self._scope_suffix = suffix
+                fit_mode = bool(getattr(view, "_fit_mode", False))
+        if (lo == self._scope_lo and hi == self._scope_hi
+                and fit_mode == self._scope_fit and self._model):
+            self._scope_fit = fit_mode
+            self._refresh_scope_banner()
             return
         self._scope_lo, self._scope_hi = lo, hi
-        self._scope_suffix = suffix
+        self._scope_fit = fit_mode
+        self._scope_suffix = ""
+        self._refresh_scope_banner()
         self._rebuild()
 
 

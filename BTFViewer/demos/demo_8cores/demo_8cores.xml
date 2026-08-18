@@ -39,8 +39,8 @@
 
   <targets>
     <!-- x/y are fractions of the detected BTFViewer window (0..1), not the screen -->
-    <point name="timeline" x="0.31" y="0.30"/>
-    <point name="timeline_bar" x="0.42" y="0.78"/>
+    <point name="timeline" x="0.32" y="0.30"/>
+    <point name="timeline_bar" x="0.47" y="0.78"/>
     <point name="status" x="0.35" y="0.965"/>
     <point name="stats_panel" x="0.84" y="0.20"/>
     <point name="stats_summary" x="0.84" y="0.20"/>
@@ -122,13 +122,14 @@
       <move target="timeline" duration="0.6"/>
       <wait seconds="2.0"/>
       <move target="timeline_bar" duration="0.5"/>
-      <wait seconds="2.0" why="hover tooltip"/>
+      <wait seconds="9.0" why="hover tooltip"/>
       <move target="status" duration="0.5"/>
       <wait seconds="0.6"/>
     </step>
 
     <step id="4" title="Toolbar tour" tags="ui">
       <focus/>
+      <view_mode mode="task"/>
       <audio file="${XML_DIR}/voice/04_toolbar.mp3"/>
       <wait seconds="5.0" why="voice: icons H/V zoom to Task/Core"/>
       <wait seconds="5.0"/>
@@ -137,23 +138,23 @@
       <move target="toolbar_core"/>
       <wait seconds="1.0" why="voice: Core view"/>
       <move target="toolbar_load"/>
-      <wait seconds="0.25"/>
+      <wait seconds="5.25"/>
       <cpu_load on="true"/>
-      <wait seconds="1.2" why="voice: Load Heatmap Chord into Analysis"/>
+      <wait seconds="5.2" why="voice: Load Heatmap Chord into Analysis"/>
       <move target="toolbar_analysis"/>
       <wait seconds="5" why="voice: Analysis triage card"/>
       <move target="stats_tab"/>
       <wait seconds="0.25"/>
       <panel name="stats"/>
-      <wait seconds="3.5" why="voice: right panel tabs"/>
+      <wait seconds="2.5" why="voice: right panel tabs"/>
       <move target="find_tab"/>
       <wait seconds="0.25"/>
       <panel name="find"/>
-      <wait seconds="1.25"/>
+      <wait seconds="0.25"/>
       <move target="ai_tab"/>
       <wait seconds="0.25"/>
       <panel name="ai"/>
-      <wait seconds="1.25"/>
+      <wait seconds="0.25"/>
       <move target="stats_tab"/>
       <wait seconds="0.25"/>
       <panel name="stats"/>

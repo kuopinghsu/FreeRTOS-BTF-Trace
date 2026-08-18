@@ -19759,7 +19759,7 @@ def infer_model_capabilities(model_name: str, *, endpoint_is_local: bool = True)
     name = str(model_name or "").strip().lower()
     cloud = (not endpoint_is_local) or any(
         k in name for k in (
-            "gpt-", "gemini", "claude", "deepseek", "grok", "o1", "o3",
+            "gpt-", "gemini", "claude", "kimi", "moonshot", "deepseek", "grok", "o1", "o3",
         )
     )
     small = bool(re.search(r"(^|[^\d])([1-3]b)\b", name)) or "mini" in name or "phi" in name
@@ -21090,6 +21090,7 @@ def _parse_benchmark_endpoint_xml(el: Any, defaults: Optional[dict] = None) -> D
 def load_benchmark_suite_xml(path: Any) -> Dict[str, Any]:
     """Load a live ``ai-test`` suite from XML (models, URL, TLS, API key)."""
     import xml.etree.ElementTree as ET
+    pass
 
     src = Path(path)
     if not src.is_file():
@@ -21148,6 +21149,8 @@ def load_benchmark_suite_xml(path: Any) -> Dict[str, Any]:
             "api_key_env": str(ep.get("api_key_env") or ""),
             "preset": str(ep.get("preset") or ""),
             "timeout_s": float(ep.get("timeout_s") or 0.0),
+            "optional": parse_ai_tls_verify(
+                node.get("optional") or node.get("opt"), default=False),
         })
     if not models:
         raise ValueError("benchmark XML has no <model id=...> entries")
@@ -21172,11 +21175,25 @@ def select_benchmark_suite_models(
     suite: dict,
     models_raw: str = "",
 ) -> List[Dict[str, Any]]:
-    """Return suite model dicts, optionally filtered by ``--models`` ids."""
+    """Return suite model dicts, optionally filtered by ``--models`` ids.
+
+    With no ``--models`` filter, optional remote models without an API key
+    are skipped (``optional="true"`` in the suite XML).
+    """
+    pass
+
     models = list((suite or {}).get("models") or [])
     want = parse_live_benchmark_models(models_raw)
     if not want:
-        return models
+        out: List[Dict[str, Any]] = []
+        for m in models:
+            if m.get("optional"):
+                url = str(m.get("base_url") or "")
+                key = str(m.get("api_key") or "")
+                if not is_local_ai_host(url) and not key:
+                    continue
+            out.append(m)
+        return out
     by_id = {str(m.get("id") or ""): m for m in models}
     out: List[Dict[str, Any]] = []
     missing: List[str] = []
@@ -21202,6 +21219,10 @@ def benchmark_model_category(model: str) -> str:
             return "Cloud / frontier"
         return "Cloud"
     if "gpt-" in low or "gpt4" in low:
+        return "Cloud"
+    if "claude" in low:
+        return "Cloud"
+    if "kimi" in low or "moonshot" in low:
         return "Cloud"
     if "phi4" in low or "phi-4" in low:
         return "Local / historical baseline"
@@ -25357,7 +25378,7 @@ def simulate_what_if(
     core_utils: Optional[Sequence[Any]] = None,
     findings: Optional[Sequence[dict]] = None,
 ) -> Dict[str, Any]:
-    """Heuristic replay of a change against measured slices (not FreeRTOS kernel).
+    """Heuristic replay of a change against measured slices (not an RTOS kernel).
 
     Uses measured execution durations and migration counts; reallocates task CPU
     when pinning and scales blocking for contention/priority experiments.
@@ -25488,7 +25509,7 @@ def simulate_what_if(
     return {
         "ok": True,
         "message": "What-if heuristic simulation",
-        "disclaimer": "Heuristic simulator — not FreeRTOS kernel / not measured",
+        "disclaimer": "Heuristic simulator — not an RTOS kernel / not measured",
         "simulator": "slice_replay_v1",
         "change": change,
         "task": task,
@@ -25652,7 +25673,7 @@ def run_optimization_experiments(
             f"{len(results)} experiment(s); best={best['change']}" if best
             else "No runnable experiments (need task slices / metrics)"
         ),
-        "disclaimer": "Heuristic simulator — not FreeRTOS kernel / not measured",
+        "disclaimer": "Heuristic simulator — not an RTOS kernel / not measured",
         "experiments": results,
         "best": best,
         "suggested_tools": ([
@@ -27922,7 +27943,7 @@ def simulate_schedule(
     *,
     findings: Optional[Sequence[dict]] = None,
 ) -> Dict[str, Any]:
-    """LEVEL 1 heuristic replay only — not a FreeRTOS scheduler."""
+    """LEVEL 1 heuristic replay only — not an RTOS scheduler."""
     decomp = decompose_response_time(findings)
     ch = changes if isinstance(changes, dict) else {}
     predicted = dict(decomp)
@@ -27930,7 +27951,7 @@ def simulate_schedule(
     predicted["changes"] = ch
     predicted["ok"] = True
     predicted["message"] = (
-        "LEVEL 1 heuristic replay only — not a FreeRTOS-compatible scheduler."
+        "LEVEL 1 heuristic replay only — not an RTOS scheduler."
     )
     predicted["disclaimer"] = predicted["message"]
     return predicted
@@ -28246,7 +28267,7 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "tabs are open to pull Trace Compare diffs. Use add_annotation to pin a "
     "note on a spike. Use export_report to save findings, diagrams, and GUI "
     "state as HTML or CSV. "
-    "For what-if / optimize_experiment, label results as heuristic (not FreeRTOS kernel). For optimize advice questions, label estimates as "
+    "For what-if / optimize_experiment, label results as heuristic (not an RTOS kernel). For optimize advice questions, label estimates as "
     "'Simulation / estimate — not measured behavior' and cite evidence. "
     "Name the Statistics page the engineer should open next "
     "(Timeline Anomalies, Worst Events, Response Time, Critical Path, "
@@ -28881,7 +28902,7 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 "name": AI_TOOL_WHAT_IF,
                 "description": (
                     "Heuristic what-if simulation from measured execution slices, "
-                    "migrations, blocking gaps, and core util (not FreeRTOS kernel)."
+                    "migrations, blocking gaps, and core util (not an RTOS kernel)."
                 ),
                 "parameters": {
                     "type": "object",
@@ -33718,7 +33739,7 @@ class _MermaidZoomDialog(QDialog):
 AiCancelled = OllamaCancelled
 AI_SYSTEM_PROMPT = (
     "You are an expert Real-Time Operating System (RTOS) and SMP trace analysis "
-    "assistant for FreeRTOS BTF traces. Analyse the provided structured metrics "
+    "assistant for RTOS BTF traces. Analyse the provided structured metrics "
     "and answer the user's diagnostic question clearly. Focus on root causes "
     "(preemption, priority inversion, lock contention, core thrashing, switch "
     "overhead, tick health). Prefer concrete task names, cores, and durations. "
@@ -33914,7 +33935,7 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "What-if",
         "Call what_if with a concrete change (pin TASK to Core_N, raise "
         "priority, reduce mutex contention). The tool runs a heuristic "
-        "slice-replay simulator (not FreeRTOS kernel). Summarise baseline vs "
+        "slice-replay simulator (not an RTOS kernel). Summarise baseline vs "
         "simulated migrations/blocking/load-balance and the labelled "
         "disclaimer. Cite evidence; do not invent numbers beyond the tool.",
     ),
@@ -33925,7 +33946,7 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "contention / migration candidates), then summarise the ranked "
         "experiments and best cost delta. Optionally call optimize for "
         "qualitative mitigations. Label results as heuristic estimates — not "
-        "measured FreeRTOS behavior. Call investigate() if the top finding "
+        "measured RTOS behavior. Call investigate() if the top finding "
         "is unclear.",
     ),
     (
@@ -34139,6 +34160,9 @@ AI_STOP_ICON_PATH = "M5 5h6v6H5z"
 AI_CHAT_TIMEOUT_S = 120.0
 AI_LIST_MODELS_TIMEOUT_S = 12.0
 AI_TEST_TIMEOUT_S = 120.0
+# Live ``ai-test`` / ``ai-test-context``: retry transient model errors.
+AI_LIVE_RETRY_ATTEMPTS = 3
+AI_LIVE_RETRY_DELAY_S = 2.0
 
 # Per-preset settings stored in btf_viewer.rc / browser storage.
 AI_PRESET_FIELDS: Tuple[str, ...] = (
@@ -34188,6 +34212,8 @@ AI_EXTRA_PRESET_LABELS: Dict[str, str] = {
     "xai": "xAI",
     "claude": "Claude",
     "anthropic": "Anthropic",
+    "kimi": "Kimi",
+    "moonshot": "Moonshot",
     "mistral": "Mistral",
     "openrouter": "OpenRouter",
 }
@@ -36071,6 +36097,84 @@ def format_ai_http_error(
     return text
 
 
+_AI_RETRYABLE_HTTP = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+_AI_RETRYABLE_TEXT = (
+    "try again",
+    "high demand",
+    "unavailable",
+    "overloaded",
+    "temporarily",
+    "resource_exhausted",
+    "rate limit",
+    "timed out",
+    "timeout",
+    "cannot reach",
+    "connection",
+    "reset by peer",
+    "empty reply",
+    "empty (no text",
+)
+
+
+def ai_error_is_retryable(exc: BaseException) -> bool:
+    """True for transient live-benchmark errors (503 high demand, 429, timeouts)."""
+    if isinstance(exc, (OllamaCancelled, KeyboardInterrupt, SystemExit)):
+        return False
+    msg = str(exc or "")
+    low = msg.lower()
+    if AI_API_KEY_REQUIRED.lower() in low:
+        return False
+    code = 0
+    try:
+        code = int(getattr(exc, "http_code", 0) or 0)
+    except (TypeError, ValueError):
+        code = 0
+    if code in (401, 403, 404):
+        return False
+    if any(s in low for s in ("http 401", "http 403", "http 404")):
+        return False
+    if code in _AI_RETRYABLE_HTTP:
+        return True
+    if any(s in low for s in _AI_RETRYABLE_TEXT):
+        return True
+    if code == 400:
+        return False
+    return True
+
+
+def call_ai_with_retries(
+    fn: Callable[[], Any],
+    *,
+    attempts: int = AI_LIVE_RETRY_ATTEMPTS,
+    delay_s: float = AI_LIVE_RETRY_DELAY_S,
+    log: bool = True,
+) -> Any:
+    """Call *fn* up to *attempts* times on retryable model errors."""
+    last: Optional[BaseException] = None
+    tries = max(1, int(attempts or 1))
+    wait_s = max(0.0, float(delay_s or 0.0))
+    for attempt in range(1, tries + 1):
+        try:
+            return fn()
+        except OllamaCancelled:
+            raise
+        except Exception as exc:
+            last = exc
+            if attempt >= tries or not ai_error_is_retryable(exc):
+                raise
+            wait = wait_s * attempt
+            if log:
+                print(
+                    f"[ai-test] retry {attempt}/{tries} in {wait:.0f}s: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            if wait:
+                time.sleep(wait)
+    assert last is not None
+    raise last
+
+
 def _ai_http_error_tip(code: int, detail: str = "", *, base_url: str = "") -> str:
     """Short remediation hint for OpenAI-compatible HTTP errors."""
     low = (detail or "").lower()
@@ -36439,8 +36543,11 @@ def live_benchmark_chat(
             kwargs["max_tokens"] = int(reply_cap)
         return ai_chat_completion("", findings_text="", **kwargs)
 
+    def _one_or_retry(*, use_tools: bool) -> Dict[str, Any]:
+        return call_ai_with_retries(lambda: _one(use_tools=use_tools))
+
     try:
-        turn = _one(use_tools=bool(tool_schemas))
+        turn = _one_or_retry(use_tools=bool(tool_schemas))
     except Exception as exc:
         return {
             "content": "",
@@ -36484,7 +36591,7 @@ def live_benchmark_chat(
             ),
         })
         try:
-            turn2 = _one(use_tools=False)
+            turn2 = _one_or_retry(use_tools=False)
         except Exception as exc:
             error = str(exc)
             turn2 = {}
@@ -44066,28 +44173,8 @@ class _MetricsPlotDialog(QDialog):
 
     def _set_scope_banner(self, scoped: bool, badge: str, detail: str) -> None:
         """Show a high-contrast banner indicating cursor-range vs full-trace scope."""
-        if scoped:
-            if self._is_dark:
-                bg, border, badge_bg, badge_fg, detail_fg = (
-                    "#4E342E", "#FF9800", "#FF9800", "#1A1200", "#FFE0B2")
-            else:
-                bg, border, badge_bg, badge_fg, detail_fg = (
-                    "#FFF3E0", "#F57C00", "#FF9800", "#1A1200", "#5D4037")
-        else:
-            if self._is_dark:
-                bg, border, badge_bg, badge_fg, detail_fg = (
-                    "#263238", "#78909C", "#546E7A", "#ECEFF1", "#B0BEC5")
-            else:
-                bg, border, badge_bg, badge_fg, detail_fg = (
-                    "#ECEFF1", "#90A4AE", "#CFD8DC", "#37474F", "#546E7A")
-        self._scope_banner.setText(
-            f'<span style="background:{badge_bg}; color:{badge_fg}; font-weight:700; '
-            f'padding:2px 8px; border-radius:3px; letter-spacing:0.5px;">'
-            f'{badge.upper()}</span>&nbsp;&nbsp;'
-            f'<span style="color:{detail_fg};">{detail}</span>')
-        self._scope_banner.setStyleSheet(
-            f"background:{bg}; border-left:4px solid {border}; "
-            f"padding:8px 12px; border-radius:4px;")
+        _apply_scope_banner(
+            self._scope_banner, scoped, badge, detail, self._is_dark)
 
     def update_data(self, title: str, points: list,
                     *, scope_scoped: bool, scope_badge: str,
@@ -47230,6 +47317,63 @@ _CI_FIELD_H = 22
 _CI_SIDEBAR_H = 248
 
 
+def _apply_scope_banner(label: "QLabel", scoped: bool, badge: str, detail: str,
+                        is_dark: bool) -> None:
+    """High-contrast Full-view vs scoped banner (distribution plots + heatmap)."""
+    if scoped:
+        if is_dark:
+            bg, border, badge_bg, badge_fg, detail_fg = (
+                "#4E342E", "#FF9800", "#FF9800", "#1A1200", "#FFE0B2")
+        else:
+            bg, border, badge_bg, badge_fg, detail_fg = (
+                "#FFF3E0", "#F57C00", "#FF9800", "#1A1200", "#5D4037")
+    else:
+        if is_dark:
+            bg, border, badge_bg, badge_fg, detail_fg = (
+                "#263238", "#78909C", "#546E7A", "#ECEFF1", "#B0BEC5")
+        else:
+            bg, border, badge_bg, badge_fg, detail_fg = (
+                "#ECEFF1", "#90A4AE", "#CFD8DC", "#37474F", "#546E7A")
+    label.setText(
+        f'<span style="background:{badge_bg}; color:{badge_fg}; font-weight:700; '
+        f'padding:2px 8px; border-radius:3px; letter-spacing:0.5px;">'
+        f'{badge.upper()}</span>&nbsp;&nbsp;'
+        f'<span style="color:{detail_fg};">{detail}</span>')
+    label.setStyleSheet(
+        f"background:{bg}; border-left:4px solid {border}; "
+        f"padding:8px 12px; border-radius:4px;")
+
+
+# Visible span ≥ this fraction of the trace counts as Fit / Full view (web lockstep).
+_INSPECTOR_FULL_VIEW_RATIO = 0.92
+
+
+def _inspector_viewport_is_full(lo, hi, t_min, t_max, fit_mode: bool = False) -> bool:
+    if fit_mode or lo is None or hi is None:
+        return True
+    span = max(int(t_max) - int(t_min), 1)
+    return (int(hi) - int(lo)) / span >= _INSPECTOR_FULL_VIEW_RATIO
+
+
+def _inspector_viewport_banner(trace, lo, hi, fit_mode: bool = False
+                               ) -> Tuple[bool, str, str]:
+    """Return (is_viewport, badge, detail) for the heatmap scope banner."""
+    t_min = int(trace.time_min)
+    t_max = int(trace.time_max)
+    unit = trace.time_scale
+    full = _inspector_viewport_is_full(lo, hi, t_min, t_max, fit_mode)
+    a, b = (t_min, t_max) if full else (int(lo), int(hi))
+    if b <= a:
+        a, b = t_min, t_max
+        full = True
+    detail = (
+        f"{_format_time(a, unit)} … {_format_time(b, unit)} "
+        f"({_format_time(b - a, unit)})")
+    if full:
+        return False, "Full view", detail
+    return True, "Viewport view", detail
+
+
 def _dim_css_color(widget: QWidget) -> str:
     """Muted text color blended from the current palette (theme-aware)."""
     fg = widget.palette().color(QPalette.ColorRole.WindowText)
@@ -47265,6 +47409,7 @@ class _CorridorInspectorDialog(QDialog):
         self._top_pct = _default_corridor_top_pct(len(trace.core_names))
         self._scope_lo = self._scope_hi = None
         self._scope_suffix = ""
+        self._scope_fit = False
         self._owner_tab_path: Optional[str] = None
         self._model: dict = {}
         self._selected = None
@@ -47355,14 +47500,12 @@ class _CorridorInspectorDialog(QDialog):
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self._sub.setStyleSheet(f"color:{_dim_css_color(self)}; font-size:11px;")
         lay.addWidget(self._sub)
-        self._scope_note = QLabel(
-            "Note: this map follows the current timeline viewport, not the full "
-            "trace. Press Fit (F / Ctrl+0) to show the full range.")
-        self._scope_note.setObjectName("ciScopeNote")
-        self._scope_note.setWordWrap(True)
-        self._scope_note.setStyleSheet(
-            f"color:{_dim_css_color(self)}; font-size:11px;")
-        lay.addWidget(self._scope_note)
+        self._scope_banner = QLabel()
+        self._scope_banner.setObjectName("ciScopeBanner")
+        self._scope_banner.setWordWrap(True)
+        self._scope_banner.setMinimumWidth(0)
+        lay.addWidget(self._scope_banner)
+        self._refresh_scope_banner()
 
         self._triage = QLabel()
         self._triage.setStyleSheet(
@@ -47697,7 +47840,7 @@ class _CorridorInspectorDialog(QDialog):
         qnote = f" · filter “{self._task_query.strip()}”" if self._task_query.strip() else ""
         self._sub.setText(
             f"{n} cores · {n_corr} corridors · Top {self._top_pct}%"
-            f"{qnote}{self._scope_suffix}")
+            f"{qnote}")
         cores = self._model.get("cores") or []
         pair_count = {(c["from_core"], c["to_core"]): c["count"] for c in vis}
         filtered_grid = []
@@ -48187,11 +48330,18 @@ class _CorridorInspectorDialog(QDialog):
             return
         self._hint.setText(self._HINT_DEFAULT)
 
+    def _refresh_scope_banner(self) -> None:
+        scoped, badge, detail = _inspector_viewport_banner(
+            self._trace, self._scope_lo, self._scope_hi, self._scope_fit)
+        is_dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        _apply_scope_banner(self._scope_banner, scoped, badge, detail, is_dark)
+
     def refresh_scope(self) -> None:
         if not getattr(self, "_scope_follow", True) and self._model:
+            self._refresh_scope_banner()
             return
         lo = hi = None
-        suffix = ""
+        fit_mode = False
         wnd = self.parent()
         if isinstance(wnd, QMainWindow):
             tab = getattr(wnd, "_active_tab", None)
@@ -48203,15 +48353,16 @@ class _CorridorInspectorDialog(QDialog):
                     vlo = vhi = None
                 if vlo is not None and vhi is not None and vhi > vlo:
                     lo, hi = int(vlo), int(vhi)
-                    suffix = (
-                        f"  (viewport: "
-                        f"{_format_time(lo, self._trace.time_scale)} … "
-                        f"{_format_time(hi, self._trace.time_scale)})")
-        if lo == self._scope_lo and hi == self._scope_hi and self._model:
-            self._scope_suffix = suffix
+                fit_mode = bool(getattr(view, "_fit_mode", False))
+        if (lo == self._scope_lo and hi == self._scope_hi
+                and fit_mode == self._scope_fit and self._model):
+            self._scope_fit = fit_mode
+            self._refresh_scope_banner()
             return
         self._scope_lo, self._scope_hi = lo, hi
-        self._scope_suffix = suffix
+        self._scope_fit = fit_mode
+        self._scope_suffix = ""
+        self._refresh_scope_banner()
         self._rebuild()
 
 
@@ -57204,7 +57355,11 @@ class _SettingsHelpLabel(QLabel):
         return sh
 
     def _apply_min_height(self) -> None:
-        if not self.wordWrap() or not str(self.text() or "").strip():
+        # Callers that setWordWrap(False) + setFixedHeight must keep that
+        # floor; clearing minimumHeight lets a later relayout squash the label.
+        if not self.wordWrap():
+            return
+        if not str(self.text() or "").strip():
             if self.minimumHeight() != 0:
                 self.setMinimumHeight(0)
             return
@@ -57769,7 +57924,12 @@ class _SettingsDialog(QDialog):
         p4_body = QVBoxLayout(p4)
         p4_body.setContentsMargins(0, 0, 0, 0)
         p4_body.setSpacing(0)
+        p4_body.setAlignment(Qt.AlignmentFlag.AlignTop)
+        p4.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         p4_form = QWidget()
+        p4_form.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         f4 = _form(p4_form)
         # URLs / long combo labels need room; fixed-width spins on other pages
         # stay narrow via _inp().
@@ -58018,6 +58178,7 @@ class _SettingsDialog(QDialog):
         f4.addRow("", _test_row)
         self._ai_form = f4
         p4_body.addWidget(p4_form)
+        p4_body.addStretch(1)
 
         p4_tail = QWidget()
         t4 = QVBoxLayout(p4_tail)
@@ -58033,8 +58194,6 @@ class _SettingsDialog(QDialog):
         t4.addWidget(self._ollama_test_status)
         self._ai_hint = _SettingsHelpLabel("")
         t4.addWidget(self._ai_hint)
-        p4_body.addWidget(p4_tail)
-        p4_body.addStretch(1)
 
         self._ai_active_preset = normalize_ai_preset(ai_preset)
         self._load_ai_preset_fields(self._ai_active_preset)
@@ -58050,7 +58209,13 @@ class _SettingsDialog(QDialog):
         p4_scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         p4_scroll.setWidget(p4)
-        self._content_stack.addWidget(p4_scroll)
+        p4_page = QWidget()
+        p4_page_lay = QVBoxLayout(p4_page)
+        p4_page_lay.setContentsMargins(0, 0, 0, 0)
+        p4_page_lay.setSpacing(0)
+        p4_page_lay.addWidget(p4_scroll, 1)
+        p4_page_lay.addWidget(p4_tail, 0)
+        self._content_stack.addWidget(p4_page)
 
         # -- Sidebar <-> stack sync ---------------------------------------------
         self._sidebar.currentRowChanged.connect(self._content_stack.setCurrentIndex)
@@ -75914,6 +76079,18 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
             except ValueError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 return 1
+            if not models_raw:
+                selected_ids = {str(m.get("id") or "") for m in selected}
+                for spec in suite.get("models") or []:
+                    mid = str(spec.get("id") or "")
+                    if spec.get("optional") and mid and mid not in selected_ids:
+                        env_name = str(spec.get("api_key_env") or "")
+                        hint = env_name or "API key"
+                        print(
+                            f"[ai-test] skip optional {mid} (set {hint} or --models {mid})",
+                            file=sys.stderr,
+                            flush=True,
+                        )
             override_url = str(getattr(args, "base_url", "") or "").strip()
             insecure = bool(getattr(args, "insecure", False))
             tool_catalog = ai_viewer_tools()

@@ -11,6 +11,7 @@ import json
 import os
 import re
 import ssl
+import sys
 import threading
 import time
 import urllib.error
@@ -311,7 +312,7 @@ class _MermaidZoomDialog(QDialog):
 AiCancelled = OllamaCancelled
 AI_SYSTEM_PROMPT = (
     "You are an expert Real-Time Operating System (RTOS) and SMP trace analysis "
-    "assistant for FreeRTOS BTF traces. Analyse the provided structured metrics "
+    "assistant for RTOS BTF traces. Analyse the provided structured metrics "
     "and answer the user's diagnostic question clearly. Focus on root causes "
     "(preemption, priority inversion, lock contention, core thrashing, switch "
     "overhead, tick health). Prefer concrete task names, cores, and durations. "
@@ -507,7 +508,7 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "What-if",
         "Call what_if with a concrete change (pin TASK to Core_N, raise "
         "priority, reduce mutex contention). The tool runs a heuristic "
-        "slice-replay simulator (not FreeRTOS kernel). Summarise baseline vs "
+        "slice-replay simulator (not an RTOS kernel). Summarise baseline vs "
         "simulated migrations/blocking/load-balance and the labelled "
         "disclaimer. Cite evidence; do not invent numbers beyond the tool.",
     ),
@@ -518,7 +519,7 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "contention / migration candidates), then summarise the ranked "
         "experiments and best cost delta. Optionally call optimize for "
         "qualitative mitigations. Label results as heuristic estimates — not "
-        "measured FreeRTOS behavior. Call investigate() if the top finding "
+        "measured RTOS behavior. Call investigate() if the top finding "
         "is unclear.",
     ),
     (
@@ -732,6 +733,9 @@ AI_STOP_ICON_PATH = "M5 5h6v6H5z"
 AI_CHAT_TIMEOUT_S = 120.0
 AI_LIST_MODELS_TIMEOUT_S = 12.0
 AI_TEST_TIMEOUT_S = 120.0
+# Live ``ai-test`` / ``ai-test-context``: retry transient model errors.
+AI_LIVE_RETRY_ATTEMPTS = 3
+AI_LIVE_RETRY_DELAY_S = 2.0
 
 # Per-preset settings stored in btf_viewer.rc / browser storage.
 AI_PRESET_FIELDS: Tuple[str, ...] = (
@@ -781,6 +785,8 @@ AI_EXTRA_PRESET_LABELS: Dict[str, str] = {
     "xai": "xAI",
     "claude": "Claude",
     "anthropic": "Anthropic",
+    "kimi": "Kimi",
+    "moonshot": "Moonshot",
     "mistral": "Mistral",
     "openrouter": "OpenRouter",
 }
@@ -2664,6 +2670,84 @@ def format_ai_http_error(
     return text
 
 
+_AI_RETRYABLE_HTTP = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+_AI_RETRYABLE_TEXT = (
+    "try again",
+    "high demand",
+    "unavailable",
+    "overloaded",
+    "temporarily",
+    "resource_exhausted",
+    "rate limit",
+    "timed out",
+    "timeout",
+    "cannot reach",
+    "connection",
+    "reset by peer",
+    "empty reply",
+    "empty (no text",
+)
+
+
+def ai_error_is_retryable(exc: BaseException) -> bool:
+    """True for transient live-benchmark errors (503 high demand, 429, timeouts)."""
+    if isinstance(exc, (OllamaCancelled, KeyboardInterrupt, SystemExit)):
+        return False
+    msg = str(exc or "")
+    low = msg.lower()
+    if AI_API_KEY_REQUIRED.lower() in low:
+        return False
+    code = 0
+    try:
+        code = int(getattr(exc, "http_code", 0) or 0)
+    except (TypeError, ValueError):
+        code = 0
+    if code in (401, 403, 404):
+        return False
+    if any(s in low for s in ("http 401", "http 403", "http 404")):
+        return False
+    if code in _AI_RETRYABLE_HTTP:
+        return True
+    if any(s in low for s in _AI_RETRYABLE_TEXT):
+        return True
+    if code == 400:
+        return False
+    return True
+
+
+def call_ai_with_retries(
+    fn: Callable[[], Any],
+    *,
+    attempts: int = AI_LIVE_RETRY_ATTEMPTS,
+    delay_s: float = AI_LIVE_RETRY_DELAY_S,
+    log: bool = True,
+) -> Any:
+    """Call *fn* up to *attempts* times on retryable model errors."""
+    last: Optional[BaseException] = None
+    tries = max(1, int(attempts or 1))
+    wait_s = max(0.0, float(delay_s or 0.0))
+    for attempt in range(1, tries + 1):
+        try:
+            return fn()
+        except OllamaCancelled:
+            raise
+        except Exception as exc:
+            last = exc
+            if attempt >= tries or not ai_error_is_retryable(exc):
+                raise
+            wait = wait_s * attempt
+            if log:
+                print(
+                    f"[ai-test] retry {attempt}/{tries} in {wait:.0f}s: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            if wait:
+                time.sleep(wait)
+    assert last is not None
+    raise last
+
+
 def _ai_http_error_tip(code: int, detail: str = "", *, base_url: str = "") -> str:
     """Short remediation hint for OpenAI-compatible HTTP errors."""
     low = (detail or "").lower()
@@ -3032,8 +3116,11 @@ def live_benchmark_chat(
             kwargs["max_tokens"] = int(reply_cap)
         return ai_chat_completion("", findings_text="", **kwargs)
 
+    def _one_or_retry(*, use_tools: bool) -> Dict[str, Any]:
+        return call_ai_with_retries(lambda: _one(use_tools=use_tools))
+
     try:
-        turn = _one(use_tools=bool(tool_schemas))
+        turn = _one_or_retry(use_tools=bool(tool_schemas))
     except Exception as exc:
         return {
             "content": "",
@@ -3077,7 +3164,7 @@ def live_benchmark_chat(
             ),
         })
         try:
-            turn2 = _one(use_tools=False)
+            turn2 = _one_or_retry(use_tools=False)
         except Exception as exc:
             error = str(exc)
             turn2 = {}

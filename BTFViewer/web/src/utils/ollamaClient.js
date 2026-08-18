@@ -31,7 +31,7 @@ import {
 
 export const AI_SYSTEM_PROMPT =
   'You are an expert Real-Time Operating System (RTOS) and SMP trace analysis ' +
-  'assistant for FreeRTOS BTF traces. Analyse the provided structured metrics ' +
+  'assistant for RTOS BTF traces. Analyse the provided structured metrics ' +
   'and answer the user\'s diagnostic question clearly. Focus on root causes ' +
   '(preemption, priority inversion, lock contention, core thrashing, switch ' +
   'overhead, tick health). Prefer concrete task names, cores, and durations. ' +
@@ -268,7 +268,7 @@ export const AI_TEMPLATE_QUESTIONS = [
     prompt:
       'Call what_if with a concrete change (pin TASK to Core_N, raise ' +
       'priority, reduce mutex contention). The tool runs a heuristic ' +
-      'slice-replay simulator (not FreeRTOS kernel). Summarise baseline vs ' +
+      'slice-replay simulator (not an RTOS kernel). Summarise baseline vs ' +
       'simulated migrations/blocking/load-balance and the labelled ' +
       'disclaimer. Cite evidence; do not invent numbers beyond the tool.',
   },
@@ -280,7 +280,7 @@ export const AI_TEMPLATE_QUESTIONS = [
       'contention / migration candidates), then summarise the ranked ' +
       'experiments and best cost delta. Optionally call optimize for ' +
       'qualitative mitigations. Label results as heuristic estimates — not ' +
-      'measured FreeRTOS behavior. Call investigate() if the top finding ' +
+      'measured RTOS behavior. Call investigate() if the top finding ' +
       'is unclear.',
   },
   {
@@ -507,6 +507,8 @@ export const AI_EXTRA_PRESET_LABELS = {
   xai: 'xAI',
   claude: 'Claude',
   anthropic: 'Anthropic',
+  kimi: 'Kimi',
+  moonshot: 'Moonshot',
   mistral: 'Mistral',
   openrouter: 'OpenRouter',
 }

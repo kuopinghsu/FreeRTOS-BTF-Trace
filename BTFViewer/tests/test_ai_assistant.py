@@ -27,6 +27,9 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     AI_PRESET_OLLAMA,
     AI_PRESET_OPENAI,
     AI_CHAT_TIMEOUT_S,
+    AI_LIVE_RETRY_ATTEMPTS,
+    ai_error_is_retryable,
+    call_ai_with_retries,
     AI_TEMPLATE_MENU_GROUPS,
     AI_TEMPLATE_PRIMARY_IDS,
     AI_TEMPLATE_QUESTIONS,
@@ -1285,6 +1288,74 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(n["n"], 2)
         self.assertIn("blocking", turn["content"].lower())
         self.assertNotIn("Let me start", turn["content"])
+
+    def test_live_benchmark_retries_high_demand_then_succeeds(self) -> None:
+        n = {"n": 0}
+
+        def fake_chat(*_a, **_kwargs):
+            n["n"] += 1
+            if n["n"] < 3:
+                err = RuntimeError(
+                    "HTTP 503: This model is currently experiencing high demand. "
+                    "Please try again later."
+                )
+                err.http_code = 503  # type: ignore[attr-defined]
+                raise err
+            return {
+                "content": "CS[22] is fine. Confidence: High.",
+                "tool_calls": [],
+            }
+
+        with patch("btf_viewer_pkg.ai_assistant.time.sleep"), patch(
+            "btf_viewer_pkg.ai_assistant.ai_chat_completion", fake_chat,
+        ):
+            turn = live_benchmark_chat(
+                "Why?",
+                findings_text="Known tasks: CS[22]",
+                model="gemini-flash-lite-latest",
+                api_key="test-key",
+            )
+        self.assertEqual(n["n"], 3)
+        self.assertEqual(AI_LIVE_RETRY_ATTEMPTS, 3)
+        self.assertIn("CS[22]", turn["content"])
+        self.assertNotIn("error", turn)
+
+    def test_live_benchmark_does_not_retry_unauthorized(self) -> None:
+        n = {"n": 0}
+
+        def fake_chat(*_a, **_kwargs):
+            n["n"] += 1
+            err = RuntimeError("HTTP 401: unauthorized")
+            err.http_code = 401  # type: ignore[attr-defined]
+            raise err
+
+        with patch("btf_viewer_pkg.ai_assistant.time.sleep"), patch(
+            "btf_viewer_pkg.ai_assistant.ai_chat_completion", fake_chat,
+        ):
+            turn = live_benchmark_chat(
+                "Why?",
+                findings_text="Known tasks: CS[22]",
+                model="gemini-flash-lite-latest",
+                api_key="test-key",
+            )
+        self.assertEqual(n["n"], 1)
+        self.assertIn("401", turn.get("error") or "")
+
+    def test_ai_error_is_retryable_and_call_retries(self) -> None:
+        n = {"n": 0}
+
+        def boom():
+            n["n"] += 1
+            if n["n"] < 2:
+                raise RuntimeError("timed out after 120s")
+            return "ok"
+
+        self.assertTrue(ai_error_is_retryable(RuntimeError(
+            "HTTP 503: high demand. Please try again later.")))
+        self.assertFalse(ai_error_is_retryable(RuntimeError("HTTP 401: no")))
+        with patch("btf_viewer_pkg.ai_assistant.time.sleep"):
+            self.assertEqual(call_ai_with_retries(boom, delay_s=0.0, log=False), "ok")
+        self.assertEqual(n["n"], 2)
 
     def test_chat_completion_empty_reply_error_is_actionable(self) -> None:
         empty = {

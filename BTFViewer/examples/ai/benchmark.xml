@@ -5,6 +5,10 @@
   From BTFViewer/:
     python builds/btf_viewer.py ai-test -c examples/ai/benchmark.xml
     make ai-test-live
+    make ai-test-context
+  Optional models are skipped when their key is missing. To force them:
+    make ai-test-context AI_MODELS=claude-sonnet-5,kimi-k3
+  Live model calls retry up to 3 times on high demand / timeouts.
 
   Copy this file and edit <base-url>, <model id>, and keys for your lab.
   Do not commit real API keys. Prefer env="VARNAME" and leave the element empty.
@@ -21,7 +25,7 @@
   <endpoint>
     <base-url>http://localhost:11434/v1</base-url>
     <tls-verify>false</tls-verify>
-    <timeout-s>360</timeout-s>
+    <timeout-s>600</timeout-s>
     <!-- Local Ollama needs no key. Uncomment if the proxy requires one:
     <api-key env="OLLAMA_API_KEY"/>
     -->
@@ -32,18 +36,33 @@
     <model id="qwen3.8:27b"/>
 
     <!-- Gemini: same provider, two ids. They share URL and GEMINI_API_KEY.
-         Both:  -m gemini-3.6-flash,gemini-3.1-flash-lite -->
-    <model id="gemini-3.6-flash" preset="gemini">
+         Both:  -m gemini-3.7-flash,gemini-3.5-flash-lite -->
+    <model id="gemini-3.7-flash" preset="gemini">
       <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
       <tls-verify>true</tls-verify>
       <timeout-s>300</timeout-s>
       <api-key env="GEMINI_API_KEY"/>
     </model>
-    <model id="gemini-3.1-flash-lite" preset="gemini">
+    <model id="gemini-3.5-flash-lite" preset="gemini">
       <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
       <tls-verify>true</tls-verify>
       <timeout-s>300</timeout-s>
       <api-key env="GEMINI_API_KEY"/>
+    </model>
+
+    <!-- Optional cloud models: skipped unless the env key is set.
+         Force with models=claude-sonnet-5,kimi-k3 -->
+    <model id="claude-sonnet-5" preset="claude" optional="true">
+      <base-url>https://api.anthropic.com/v1</base-url>
+      <tls-verify>true</tls-verify>
+      <timeout-s>300</timeout-s>
+      <api-key env="ANTHROPIC_API_KEY"/>
+    </model>
+    <model id="kimi-k3" preset="kimi" optional="true">
+      <base-url>https://api.moonshot.ai/v1</base-url>
+      <tls-verify>true</tls-verify>
+      <timeout-s>300</timeout-s>
+      <api-key env="MOONSHOT_API_KEY"/>
     </model>
   </models>
 </ai-benchmark>

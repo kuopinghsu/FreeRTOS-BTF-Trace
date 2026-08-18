@@ -1,6 +1,6 @@
 """Causal / temporal investigation engines (Desktop). Keep in sync with web aiCausal.js.
 
-Host-side heuristics over Analysis Findings — not a FreeRTOS scheduler.
+Host-side heuristics over Analysis Findings — not an RTOS scheduler.
 """
 from __future__ import annotations
 
@@ -1159,7 +1159,7 @@ def simulate_schedule(
     *,
     findings: Optional[Sequence[dict]] = None,
 ) -> Dict[str, Any]:
-    """LEVEL 1 heuristic replay only — not a FreeRTOS scheduler."""
+    """LEVEL 1 heuristic replay only — not an RTOS scheduler."""
     decomp = decompose_response_time(findings)
     ch = changes if isinstance(changes, dict) else {}
     predicted = dict(decomp)
@@ -1167,7 +1167,7 @@ def simulate_schedule(
     predicted["changes"] = ch
     predicted["ok"] = True
     predicted["message"] = (
-        "LEVEL 1 heuristic replay only — not a FreeRTOS-compatible scheduler."
+        "LEVEL 1 heuristic replay only — not an RTOS scheduler."
     )
     predicted["disclaimer"] = predicted["message"]
     return predicted

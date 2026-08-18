@@ -12,8 +12,6 @@ Use this document when you need to answer questions such as:
 
 For product usage and navigation, see [`README.md`](README.md). For step-by-step investigations, see [`WORKFLOWS.md`](WORKFLOWS.md). For AI-assisted analysis, see [`AI.md`](AI.md).
 
-Translation: [正體中文](STATISTICS_zh-TW.md).
-
 > **Important:** BTFViewer statistics describe evidence captured in the BTF/STI trace. A maximum value is not a guarantee, correlation does not prove causation, and a missing event does not prove that the event never occurred.
 
 ## Quick start
@@ -1212,7 +1210,7 @@ Toolbar **Heatmap** opens the inspector (Desktop + Web): corridor/task tree, tim
 | | |
 |--|--|
 | **Open** | Toolbar **Heatmap** (2+ cores). Pair-chart **Open Chord** / inspector **Show topology** for the chord-first layout. Desktop: non-modal. Web: overlay keeps the timeline interactive. Tab switch closes the inspector. |
-| **Scope** | Visible timeline viewport. Independent of Statistics **Limit to C1–Cn**. Empty tree/grid shows *No migrations in scope*; topology stays available. |
+| **Scope** | Visible timeline viewport. Independent of Statistics **Limit to C1–Cn**. A **Full view** / **Viewport view** banner (same colors as the distribution chart) shows the current time range — Fit to window vs zoomed. Empty tree/grid shows *No migrations in scope*; topology stays available. |
 | **Filter** | **Top corridors**, **Direction**, **Task filter**. **Lock Bounces Only** when the trace has cross-core mutex holds. |
 | **Select** | Click a tree row, grid cell, or chord ribbon. Double-click or **Inspect in Timeline** spotlights that bin (or task) with C1–C2. Toolbar **All** / **Show all tasks** clears the filter. |
 | **Query with AI…** | Runs the **Migration thrash** template in the **AI** tab (same findings context as Statistics). If AI is disabled, opens **Settings → AI**. |

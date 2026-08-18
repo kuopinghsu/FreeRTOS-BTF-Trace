@@ -5,7 +5,7 @@
 
 ![BTFViewer AI-assisted](../images/btfviewer-ai.png)
 
-**BTFViewer** is an **AI-assistant tool for RTOS trace analysis**: find evidence in a captured schedule, then explain it. Open FreeRTOS context-switch traces in **Best Trace Format** (`.btf`), inspect the timeline, measure with cursors, review statistics, and ask the **AI** tab to cite findings and walk the cause.
+**BTFViewer** is an **AI-assistant tool for RTOS trace analysis**: find evidence in a captured schedule, then explain it. Open RTOS context-switch traces in **Best Trace Format** (`.btf`), inspect the timeline, measure with cursors, review statistics, and ask the **AI** tab to cite findings and walk the cause.
 
 ![BTF Viewer screenshot](../images/btfviewer.png)
 
@@ -244,7 +244,7 @@ Left to right (Desktop; Web is the same cluster except as noted):
 | **Core** | **Core View** — one expandable row per CPU |
 | Expand arrows | **Expand / collapse all cores** (Core View only) |
 | **Load** | Show / hide the **CPU load** chart under the timeline |
-| Grid | **Heatmap** — Migration & Corridor Inspector (multi-core traces) |
+| Grid | **Heatmap** — Migration & Corridor Inspector (multi-core; Full view / Viewport view banner) |
 | **Analysis** | **Analysis Findings** — heuristic triage for the current Statistics scope |
 | Overlap squares | **Compare** — Trace Compare between two open tabs |
 | **Log₂** | STI waveform y-axis linear ↔ log₂ (when an STI row is expanded) |
@@ -441,7 +441,7 @@ flowchart TD
 
 See **[AI.md](AI.md)** for models, endpoints, GUI tools, privacy, CLI, benchmark methodology, planner, causal engines, and implementation details. See **[WORKFLOWS.md](WORKFLOWS.md)** for repeatable analysis and investigation playbooks.
 
-Same panel on **Desktop** and **Web**. Findings can include WCET **Max≫Avg** spikes. Optional experiments use `what_if` / `optimize_experiment` (**Heuristic slice-replay**, **not FreeRTOS kernel**; Ranked `optimize_experiment`).
+Same panel on **Desktop** and **Web**. Findings can include WCET **Max≫Avg** spikes. Optional experiments use `what_if` / `optimize_experiment` (**Heuristic slice-replay**, **not an RTOS kernel**; Ranked `optimize_experiment`).
 
 <a id="ai-in-this-section" name="ai-in-this-section">&#x200B;</a>
 <a id="what-can-ai-do" name="what-can-ai-do">&#x200B;</a>
@@ -649,6 +649,7 @@ Day-to-day users can ignore this section.
 | Web only | `make -C BTFViewer web` → `builds/btf_viewer.html` |
 | Guided demo | `make -C BTFViewer demo` — see [Demo](#demo) |
 | Tests | `make -C BTFViewer test` (desktop) / `test-web` / `test-all` / `ai-test` / `ai-test-live` / `ai-test-context` |
+| Force optional live models | `make -C BTFViewer ai-test-context AI_MODELS=claude-sonnet-5,kimi-k3` (skipped when the API key is missing) |
 | Docs PDF | `make -C BTFViewer doc` → `builds/{README,STATISTICS,AI,WORKFLOWS,btf-viewer-slides}.pdf` (Mermaid via Node/`npx @mermaid-js/mermaid-cli`) |
 | Dev run (Desktop) | `python -m btf_viewer_pkg [trace.btf]` from `BTFViewer/` |
 

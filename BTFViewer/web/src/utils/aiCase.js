@@ -1721,7 +1721,7 @@ export function investigationTemplatePrompt(template = null) {
 export function inferModelCapabilities(modelName, { endpointIsLocal = true } = {}) {
   const name = String(modelName || '').trim().toLowerCase()
   const cloud = (!endpointIsLocal) || [
-    'gpt-', 'gemini', 'claude', 'deepseek', 'grok', 'o1', 'o3',
+    'gpt-', 'gemini', 'claude', 'kimi', 'moonshot', 'deepseek', 'grok', 'o1', 'o3',
   ].some(k => name.includes(k))
   const small = /(^|[^\d])([1-3]b)\b/.test(name) || name.includes('mini') || name.includes('phi')
   const largeLocal = /([7-9]b|\d{2,}b)\b/.test(name)

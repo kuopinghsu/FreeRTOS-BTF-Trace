@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 
 import {
   applyCorridorDirectionFilter,
@@ -11,10 +14,19 @@ import {
   defaultCorridorTopPct,
   filterCorridorsByTaskQuery,
   filterCorridorsByTopPct,
+  inspectorViewportBanner,
+  inspectorViewportIsFull,
+  INSPECTOR_FULL_VIEW_RATIO,
   netMigrationBalance,
   CHORD_TAPER_DEST_RATIO,
   CHORD_GRAD_SOURCE_STOP,
 } from '../src/utils/migrationAnalysis.js'
+
+const webRoot = dirname(fileURLToPath(import.meta.url))
+const statsPy = readFileSync(join(webRoot, '../../btf_viewer_pkg/stats.py'), 'utf8')
+const ciVue = readFileSync(join(webRoot, '../src/components/CorridorInspectorDialog.vue'), 'utf8')
+const plotVue = readFileSync(join(webRoot, '../src/components/StatisticsPanel.vue'), 'utf8')
+const timelineVue = readFileSync(join(webRoot, '../src/components/TimelinePanel.vue'), 'utf8')
 
 describe('defaultCorridorTopPct', () => {
   it('returns 100 for small core counts', () => {
@@ -263,5 +275,52 @@ describe('buildCorridorInspectorModel', () => {
     assert.ok(model.groups.length >= 2)
     assert.equal(model.groups[0].source, 'Core_0')
     assert.equal(model.groups[0].corridors.length, 2)
+  })
+})
+
+describe('inspectorViewportBanner', () => {
+  const fmt = (ns) => `${ns}ns`
+
+  it('shows Full view for the whole trace and for Fit mode', () => {
+    const full = inspectorViewportBanner(null, null, 0, 1000, 'ns', fmt)
+    assert.equal(full.scoped, false)
+    assert.equal(full.badge, 'Full view')
+    assert.match(full.detail, /0ns … 1000ns/)
+    const fitted = inspectorViewportBanner(10, 20, 0, 1000, 'ns', fmt, true)
+    assert.equal(fitted.scoped, false)
+    assert.equal(fitted.badge, 'Full view')
+  })
+
+  it('shows Viewport view when the window is zoomed in', () => {
+    const vp = inspectorViewportBanner(100, 200, 0, 1000, 'ns', fmt)
+    assert.equal(vp.scoped, true)
+    assert.equal(vp.badge, 'Viewport view')
+    assert.match(vp.detail, /100ns … 200ns/)
+  })
+
+  it('stays lockstep with Desktop stats.py and the distribution-chart colors', () => {
+    assert.equal(INSPECTOR_FULL_VIEW_RATIO, 0.92)
+    assert.match(statsPy, /_INSPECTOR_FULL_VIEW_RATIO = 0\.92/)
+    assert.match(timelineVue, /return ratio >= 0\.92/)
+    assert.match(statsPy, /"Full view"/)
+    assert.match(statsPy, /"Viewport view"/)
+    assert.match(statsPy, /setObjectName\("ciScopeBanner"\)/)
+    assert.match(statsPy, /if fit_mode or lo is None or hi is None:/)
+    assert.match(ciVue, /class="ci-scope-banner"/)
+    assert.match(ciVue, /inspectorViewportBanner\(/)
+    assert.match(ciVue, /text-transform: uppercase/)
+    assert.equal(inspectorViewportIsFull(null, null, 0, 1000), true)
+    assert.equal(inspectorViewportIsFull(100, 200, 0, 1000), false)
+    assert.equal(inspectorViewportIsFull(100, 200, 0, 1000, true), true)
+    assert.equal(inspectorViewportIsFull(0, 921, 0, 1000), true)
+    assert.equal(inspectorViewportIsFull(0, 919, 0, 1000), false)
+    assert.match(plotVue, /border-left: 4px solid #ff9800/)
+    assert.match(ciVue, /border-left: 4px solid #ff9800/)
+    assert.match(plotVue, /background: #ff9800/)
+    assert.match(ciVue, /background: #ff9800/)
+    assert.match(plotVue, /color: #1a1200/)
+    assert.match(ciVue, /color: #1a1200/)
+    assert.match(plotVue, /color-mix\(in srgb, #ff9800 18%, var\(--panel-bg\)\)/)
+    assert.match(ciVue, /color-mix\(in srgb, #ff9800 18%, var\(--panel-bg\)\)/)
   })
 })
