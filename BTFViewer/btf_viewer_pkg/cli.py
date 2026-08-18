@@ -833,7 +833,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
             "  %(prog)s ai-test --dataset tests/ai --fail-under 70\n"
             "  %(prog)s ai-test --config examples/ai/benchmark.xml -o AI_BENCHMARK.md\n"
             "  %(prog)s ai-test --config examples/ai/benchmark.xml --compare-context\n"
-            "  %(prog)s ai-test --config examples/ai/benchmark-selfsigned.xml\n"
+            "  %(prog)s ai-test --config examples/ai/benchmark.xml --insecure\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

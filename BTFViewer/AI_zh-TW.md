@@ -1,5 +1,7 @@
 # AI 助理（AI Assistant）
 
+[English](AI.md) · **繁體中文**
+
 BTFViewer 的 **AI 助理（AI Assistant）**可協助分析 RTOS Trace。它會整理實際量測到的證據、驗證可能的解釋，並引導你回到 Timeline 中相關的時間區段進行確認。
 
 > **適用範圍（Scope）：** AI 使用 BTFViewer 的 **Findings、Statistics、Timeline Query** 與 **Trace Compare** 結果進行分析。它不會讀取韌體原始碼（firmware source）或 ELF 檔案。`what_if` 的結果屬於啟發式估算（heuristic estimate），不是 FreeRTOS 排程器模擬，也不是實際量測到的 Trace 資料。
@@ -9,8 +11,8 @@ BTFViewer 的 **AI 助理（AI Assistant）**可協助分析 RTOS Trace。它會
 | 你的目的 | 建議閱讀 |
 | --- | --- |
 | 了解產品並開啟 AI 面板 | [README.md → AI Assistant](README.md#ai-assistant) |
-| 依照可重複的流程進行問題診斷 | [WORKFLOWS.md](WORKFLOWS.md) |
-| 了解某項指標或 Statistics 頁面 | [STATISTICS.md](STATISTICS.md) |
+| 依照可重複的流程進行問題診斷 | [WORKFLOWS_zh-TW.md](WORKFLOWS_zh-TW.md) |
+| 了解某項指標或 Statistics 頁面 | [STATISTICS_zh-TW.md](STATISTICS_zh-TW.md) |
 | 設定、評估或實作 AI 系統 | 本文件 |
 
 第一次進行分析時，建議依照以下順序：
@@ -77,7 +79,7 @@ AI 可以解釋、建立關聯、排序、質疑假設與進行估算；但 **De
 - **Investigate**、**Root cause**、**Verify finding**、**Auto investigate**、**What-if**、**Optimize** 與 **Diagnostic report** 都會顯示 Investigation plan。
 - **Clear** 會清除對話、重設使用量資訊，並清除目前的 investigation。
 - Usage bar 會顯示例如 **Context: Compact · 4.6k tok · 3 tools · 12s**，依序代表 Context mode、Token 數、工具數量與模型執行時間。可在 **Settings → AI → Context** 選擇 **Compact、Balanced（預設）或 Full evidence**。
-- 非空白的 investigation 會在重新啟動後還原。若紀錄為空或已執行 Clear，則不會還原 Current Issue card。
+- 非空白的 `investigation_session` 僅在紀錄仍有 user 或 assistant turn 時，才會在重新啟動後還原。若紀錄為空或已執行 Clear，則不會還原 Current Issue card。
 - 唯讀工具（read-only tools）會立即執行。會修改 GUI 的動作則會等待使用者按下 **Apply**；若啟用 **Auto-apply GUI actions**，則會自動套用。Export 一律會開啟儲存對話框。
 
 至少開啟兩份 Trace 後，工具列上的 **Compare** 才會啟用。**Query with AI…** 傳送的是 Trace Compare 表格，而不是目前的 Findings。**Save as baseline** 與 **Score vs baseline** 使用與 `baseline_score` 相同的已儲存 profile。按下 **Ctrl+K** 可快速存取 Analysis、AI、Compare、Workspace Preset 與 Inspect task。
@@ -103,7 +105,9 @@ AI 可以解釋、建立關聯、排序、質疑假設與進行估算；但 **De
 
 **Evidence** 面板會顯示 Investigation Tree、Evidence Graph、Coverage、Hypotheses，以及 Evidence Quality band。這個 band 是用於診斷的啟發式指標，**不是機率值**。AI 完成最後回覆後，Host Validator 會標示不存在的工作名稱，以及落在 Cursor Window 之外的時間戳記。
 
-建議優先使用內建 Template。這些 Template 已選好相關指標與 Statistics 頁面。必要時也可以使用自然語言，例如「find STI wait around TaskA」；Host 會將這類問題導向 `search_timeline`。
+建議優先使用內建 Template。這些 Template 已選好相關指標與 Statistics 頁面。必要時也可以使用自然語言，例如「find STI wait around TaskA」；Host 會將這類問題導向 `search_timeline`。**Analysis Findings** 可 triage overall findings。**Explain finding** 解釋目前選取的 Analysis Finding。其他 chips：**Explain region**、**Investigate**、**Verify finding**、**Root cause**、**Trace Compare**、**Triage findings**、**Task profile**、**Diagnostic report**、**What-if**、**Optimize**、**Highest latency**、**WCET / hot CPU**、**Migration thrash**、**Core balance**、**Tick health**、**Priority inversion**、**Deadline / budget**、**Auto investigate**。Findings 另提供 **Save recipe…** 與 **Story…**。
+
+Template 會引用的 Statistics 頁面：Timeline Anomalies、Worst Events、Period / Jitter、Unified Jitter、Recurring Patterns、Task Health、Task × Core、Waiter × Owner、Response Time、Critical Path、Preemption Matrix、Mutex Blocking、Core Utilization Over Time。
 
 ---
 
@@ -289,7 +293,7 @@ flowchart TD
 ollama pull qwen3.5:9b
 ```
 
-較大的 Local Model，例如 `qwen3.5:27b`、`qwen3.8:27b` 與 `gemma4:26b`，會以較高的執行時間與記憶體用量換取更高的模型能力。
+較大的 Local Model，例如 `qwen3.5:27b`、`qwen3.8:27b` 與 `gemma4:26b`，會以較高的執行時間與記憶體用量換取更高的模型能力。舊版 7B / 14B Model ID（例如 `qwen2.5:7b`）可作為選用項目。
 
 不建議使用 3B 等級的模型進行 Investigation：這類模型經常略過 Native Tool Call、將 Tool JSON 當成一般文字輸出，或無法完成多步驟分析。
 
@@ -306,7 +310,13 @@ ollama pull qwen3.5:9b
 
 每個 Preset 都會保存自己的 Base URL、Model、API Key、Authentication Mode 與 TLS 設定。若 Preset 中出現未知的模型名稱，會自動加入 Model List。
 
-Desktop 與 Web 的 API Key 使用相同的優先順序：
+| 欄位 | 說明 |
+| --- | --- |
+| Authentication | 每個 Preset 可選 none / API key / Sign in |
+| Model picker | 重新整理 Endpoint 提供的 Model List 後再選擇 |
+| Self-signed TLS | Desktop **Allow self-signed TLS** 可跳過該 Preset 的憑證檢查 |
+
+Desktop 與 Web 的 API Key 使用相同的優先順序：先使用 Settings → AI，再依序為 `OPENAI_API_KEY`，then `GEMINI_API_KEY`，then `OLLAMA_API_KEY`。
 
 1. 在 **Settings → AI** 輸入的 Key
 2. `OPENAI_API_KEY`
@@ -372,7 +382,7 @@ Live `ai-test` XML 可以使用 `<api-key env="VAR">`。完整範例請參閱 [R
 
 ### Context Mode（Token 使用量）
 
-**Settings → AI → Context** 控制每次 Request 傳送多少證據。這項設定主要用來降低 Input Token；其中 **Compact** 也會將回覆限制在約 300–500 Tokens。
+**Settings → AI → Context** 控制每次 Request 傳送多少證據。Compact 是較 token-efficient 的打包模式。這項設定主要用來降低 Input Token；其中 **Compact** 也會將回覆限制在約 300–500 Tokens。
 
 | | Compact | Balanced（預設） | Full evidence |
 | --- | --- | --- | --- |
@@ -756,7 +766,7 @@ python builds/btf_viewer.py analyze candidate.btf --baseline /tmp/base.json --fa
 python builds/btf_viewer.py ai-test --dataset tests/ai --fail-under 70
 python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml -o AI_BENCHMARK.md
 python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml --compare-context -o AI_BENCHMARK.md
-python builds/btf_viewer.py ai-test --config examples/ai/benchmark-selfsigned.xml --insecure
+python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml --insecure
 ```
 
 也可以使用：
@@ -861,7 +871,7 @@ Local Model 不應只因為「最新」或「最大」就納入測試。應選�
 - **Diagnostic Quality**
 - **Practical System Performance**
 
-不要將 Model List Hard-code 在 Runner 中。可複製 [examples/ai/benchmark.xml](examples/ai/benchmark.xml)；Self-signed TLS 則使用 [benchmark-selfsigned.xml](examples/ai/benchmark-selfsigned.xml)：
+不要將 Model List Hard-code 在 Runner 中。可複製 [examples/ai/benchmark.xml](examples/ai/benchmark.xml)。Self-signed 或 Private CA Gateway 請保持 `<tls-verify>false</tls-verify>`（Suite 預設值）；公開 HTTPS 模型可覆寫為 `true`：
 
 ```xml
 <ai-benchmark version="1">
@@ -870,7 +880,7 @@ Local Model 不應只因為「最新」或「最大」就納入測試。應選�
   <output>AI_BENCHMARK.md</output>
   <endpoint>
     <base-url>http://localhost:11434/v1</base-url>
-    <tls-verify>true</tls-verify>
+    <tls-verify>false</tls-verify>
     <timeout-s>360</timeout-s>
   </endpoint>
   <models>
@@ -878,10 +888,12 @@ Local Model 不應只因為「最新」或「最大」就納入測試。應選�
     <model id="qwen3.8:27b"/>
     <model id="gemini-3.6-flash" preset="gemini">
       <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
+      <tls-verify>true</tls-verify>
       <api-key env="GEMINI_API_KEY"/>
     </model>
     <model id="gemini-3.1-flash-lite" preset="gemini">
       <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
+      <tls-verify>true</tls-verify>
       <api-key env="GEMINI_API_KEY"/>
     </model>
   </models>
@@ -1281,6 +1293,7 @@ make -C BTFViewer web
 - Disabled Chip / Menu Item 使用 `#8a96a8`。
 - Findings 的 **Investigate…** 使用與其他 Analysis Footer Button 相同的 Outline Style，不使用 Accent / Primary Style。
 - **More** Template 在 2-column Overlay 中使用相同 Group。
+- Findings 的 **Save recipe…** 與 **Story…** 保留在該 Dialog。
 - Trace Compare 從工具列 **Compare** 開啟，而不是 Statistics Footer。
 
 Desktop `ai-test` CLI 與 Web Offline Benchmark 共用 `tests/ai` Fixture，包括被追蹤的 `.btf` Stub + `dataset.json`。
@@ -1343,7 +1356,7 @@ Firmware 修改與重新擷取仍然由使用者完成：
 
 使用 **Compact** Context Mode 時，只有使用者要求才會產生 Diagram。
 
-Findings 中的 Markdown Table 與 Sanitized HTML Table，都會在 Reply Pane 中顯示為 Table。`investigate` 回傳 Root-cause Chain 時，Evidence Panel 也會建立 Investigation Tree。
+Findings 中的 Pipe **Markdown tables** 與 Sanitized HTML Table，都會在 Reply Pane 中顯示為 Table。In-chat Markdown / HTML tables 會配合目前 Theme。`investigate` 回傳 Root-cause Chain 時，Evidence Panel 也會建立 Investigation Tree。
 
 Diagram 會配合目前的 Light / Dark Theme；**Save As…** 匯出的 HTML 則使用 Light Palette。
 
@@ -1363,6 +1376,6 @@ Diagram 會配合目前的 Light / Dark Theme；**Save As…** 匯出的 HTML �
 | 文件 | 回答的問題 |
 | --- | --- |
 | [README.md](README.md) | 如何使用 BTFViewer？ |
-| [WORKFLOWS.md](WORKFLOWS.md) | 如何診斷問題？ |
-| [STATISTICS.md](STATISTICS.md) | 這項量測代表什麼？ |
-| [AI.md](AI.md) | AI 輔助調查如何運作？ |
+| [WORKFLOWS_zh-TW.md](WORKFLOWS_zh-TW.md) | 如何診斷問題？ |
+| [STATISTICS_zh-TW.md](STATISTICS_zh-TW.md) | 這項量測代表什麼？ |
+| [AI.md](AI.md) | AI 輔助調查如何運作？（英文） |

@@ -1,5 +1,7 @@
 # BTFViewer 新手分析流程
 
+[English](WORKFLOWS.md) · **繁體中文**
+
 本文件提供一套適合新手的 FreeRTOS 排程追蹤分析流程，協助你從現象逐步找到可驗證的證據。
 
 若要了解介面操作，請參閱 [`README.md`](README.md)；若要查詢統計指標的定義與限制，請參閱 [`STATISTICS.md`](STATISTICS.md)；若要設定 AI 或使用進階調查工具，請參閱 [`AI.md`](AI.md)。
@@ -125,7 +127,7 @@ BTFViewer 不會分析原始碼，也不會模擬 FreeRTOS 排程器；它只能
 | 超過截止期限或 CPU 預算 | **Deadlines / CPU budget** | Execution p95/p99/Max、Period / Jitter、Critical Path |
 | 啟動週期不規律 | **Period / Jitter** | Inter-Arrival Time、Unified Jitter、Recurring Patterns |
 | Tick 抖動或遺漏 | **Trace Health (TICK)** | Tick Distribution、忙碌時段的 Execution Max |
-| 多核心負載不平均 | **Core utilisation** | Task × Core、Concurrent Core Active、Core Time Breakdown |
+| 多核心負載不平均 | **Core utilisation** | Task × Core、Concurrent Core Active、Core Time Breakdown；**Load Balance Score** |
 | 核心頻繁遷移或來回跳動 | **Core Migrations** | Heatmap、Corridor Inspector、Core Affinity、mutex bounces |
 | 優先權反轉 | **Priority Inheritance** | Mutex pairing、Mutex Blocking、Waiter × Owner |
 | 鎖定或佇列延遲 | **Mutex / Semaphore / Queue** | Blocking Time、Critical Path、Migrations |
@@ -259,6 +261,8 @@ flowchart LR
 
 若 AI 的說法無法在 Statistics 重現、引用游標範圍外的時間、把估算結果當成量測值，或假設追蹤檔未記錄的事件，就不應採用該說法。
 
+**Start Investigation**（紀錄為空時）會執行 **Auto investigate**。重新啟動後，只有當紀錄仍有 user 或 assistant turn 時才會還原 **Current Issue** card。**Ctrl+K** 可開啟 Analysis、AI、Compare、workspace presets 與 Inspect task。工具列 **Compare** 提供 **Save as baseline** / **Score vs baseline**；**Trends** 頁面會列出所有已開啟的分頁。
+
 ## 10. 測試一項可量測的修改
 
 當證據足以支持某個原因後：
@@ -323,7 +327,7 @@ flowchart LR
 
 ## 文件導覽
 
-- [`README.md`](README.md) — 安裝、介面操作、時間軸瀏覽與匯出
-- [`STATISTICS.md`](STATISTICS.md) — 指標定義、公式、解讀方式與限制
-- [`AI.md`](AI.md) — AI 模型、工具、隱私、調查引擎與評估方式
-- [`WORKFLOW.md`](WORKFLOW.md) — 英文版
+- [`README.md`](README.md) — 安裝、介面操作、時間軸瀏覽、匯出與 [Demo](README.md#demo)
+- [`STATISTICS_zh-TW.md`](STATISTICS_zh-TW.md) — 指標定義、公式、解讀方式與限制
+- [`AI_zh-TW.md`](AI_zh-TW.md) — AI 模型、工具、隱私、調查引擎與評估方式
+- [`WORKFLOWS.md`](WORKFLOWS.md) — 英文版

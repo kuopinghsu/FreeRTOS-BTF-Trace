@@ -15267,7 +15267,11 @@ class _SettingsHelpLabel(QLabel):
         return sh
 
     def _apply_min_height(self) -> None:
-        if not self.wordWrap() or not str(self.text() or "").strip():
+        # Callers that setWordWrap(False) + setFixedHeight must keep that
+        # floor; clearing minimumHeight lets a later relayout squash the label.
+        if not self.wordWrap():
+            return
+        if not str(self.text() or "").strip():
             if self.minimumHeight() != 0:
                 self.setMinimumHeight(0)
             return
@@ -15832,7 +15836,12 @@ class _SettingsDialog(QDialog):
         p4_body = QVBoxLayout(p4)
         p4_body.setContentsMargins(0, 0, 0, 0)
         p4_body.setSpacing(0)
+        p4_body.setAlignment(Qt.AlignmentFlag.AlignTop)
+        p4.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         p4_form = QWidget()
+        p4_form.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         f4 = _form(p4_form)
         # URLs / long combo labels need room; fixed-width spins on other pages
         # stay narrow via _inp().
@@ -16081,6 +16090,7 @@ class _SettingsDialog(QDialog):
         f4.addRow("", _test_row)
         self._ai_form = f4
         p4_body.addWidget(p4_form)
+        p4_body.addStretch(1)
 
         p4_tail = QWidget()
         t4 = QVBoxLayout(p4_tail)
@@ -16096,8 +16106,6 @@ class _SettingsDialog(QDialog):
         t4.addWidget(self._ollama_test_status)
         self._ai_hint = _SettingsHelpLabel("")
         t4.addWidget(self._ai_hint)
-        p4_body.addWidget(p4_tail)
-        p4_body.addStretch(1)
 
         self._ai_active_preset = normalize_ai_preset(ai_preset)
         self._load_ai_preset_fields(self._ai_active_preset)
@@ -16113,7 +16121,13 @@ class _SettingsDialog(QDialog):
         p4_scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         p4_scroll.setWidget(p4)
-        self._content_stack.addWidget(p4_scroll)
+        p4_page = QWidget()
+        p4_page_lay = QVBoxLayout(p4_page)
+        p4_page_lay.setContentsMargins(0, 0, 0, 0)
+        p4_page_lay.setSpacing(0)
+        p4_page_lay.addWidget(p4_scroll, 1)
+        p4_page_lay.addWidget(p4_tail, 0)
+        self._content_stack.addWidget(p4_page)
 
         # -- Sidebar <-> stack sync ---------------------------------------------
         self._sidebar.currentRowChanged.connect(self._content_stack.setCurrentIndex)

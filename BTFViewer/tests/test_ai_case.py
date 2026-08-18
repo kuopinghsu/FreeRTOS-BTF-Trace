@@ -688,7 +688,7 @@ class InvestigationCaseTests(unittest.TestCase):
         ids = [m["id"] for m in suite["models"]]
         self.assertGreaterEqual(len(ids), 1)
         local = next(m for m in suite["models"] if m["base_url"].startswith("http://"))
-        self.assertTrue(local["tls_verify"])
+        self.assertFalse(local["tls_verify"])
         self.assertTrue(local["base_url"])
         gemini_ids = [
             m["id"] for m in suite["models"] if m.get("api_key_env") == "GEMINI_API_KEY"
@@ -701,11 +701,6 @@ class InvestigationCaseTests(unittest.TestCase):
         picked = select_benchmark_suite_models(suite, local["id"])
         self.assertEqual([m["id"] for m in picked], [local["id"]])
         self.assertEqual(parse_live_benchmark_models(local["id"]), [local["id"]])
-
-        insecure = BTF_ROOT / "examples" / "ai" / "benchmark-selfsigned.xml"
-        tls_suite = load_benchmark_suite_xml(str(insecure))
-        self.assertFalse(tls_suite["models"][0]["tls_verify"])
-        self.assertEqual(tls_suite["models"][0]["api_key_env"], "GATEWAY_API_KEY")
 
         xml = """<?xml version="1.0" encoding="UTF-8"?>
 <ai-benchmark>

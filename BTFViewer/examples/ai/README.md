@@ -61,20 +61,20 @@ values, run **Test connection**, then confirm the dialog.
 
 ## Live benchmark suite (XML)
 
-[`benchmark.xml`](benchmark.xml) and [`benchmark-selfsigned.xml`](benchmark-selfsigned.xml)
-are **not** Settings import files. They configure Desktop `ai-test`:
+[`benchmark.xml`](benchmark.xml) is **not** a Settings import file. It
+configures Desktop `ai-test`:
 
 ```bash
 python builds/btf_viewer.py ai-test -c examples/ai/benchmark.xml -o AI_BENCHMARK.md
 python builds/btf_viewer.py ai-test -c examples/ai/benchmark.xml --compare-context -o AI_BENCHMARK.md
-python builds/btf_viewer.py ai-test -c examples/ai/benchmark-selfsigned.xml
+python builds/btf_viewer.py ai-test -c examples/ai/benchmark.xml --insecure
 ```
 
 | Element | Meaning |
 |---------|---------|
 | `<base-url>` | OpenAI-compatible API root (suite default or per `<model>`) |
 | `<model id="…">` | Live model id to score |
-| `<tls-verify>` | `true` (default) or `false` for a self-signed / private-CA cert. CLI `--insecure` forces false. |
+| `<tls-verify>` | `false` (shipped default) skips checks for a self-signed / private-CA cert; `true` verifies the HTTPS certificate. CLI `--insecure` forces false. |
 | `<api-key env="VAR">` | Desktop `ai-test` only: read `VAR` from the environment; if unset, use the element text, then the three shared names. Leave the text empty and do not commit secrets. GUI chat does not use `env`. [README → API keys](../README.md#ai-api-keys). |
 | `<timeout-s>` | Per-request timeout |
 | `<preset>` | Optional (`gemini` for Gemini OpenAI-compat) |

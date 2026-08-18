@@ -278,7 +278,7 @@ class DemoVoicePackParityTests(unittest.TestCase):
     def test_step1_says_web_in_every_language(self) -> None:
         en = (DEMO_DIR / "text" / "en" / "01_title.txt").read_text(encoding="utf-8")
         zh = (DEMO_DIR / "text" / "zh-tw" / "01_title.txt").read_text(encoding="utf-8")
-        self.assertIn("web app", en.lower())
+        self.assertIn("web version", en.lower())
         self.assertNotIn("use the desktop app", en.lower())
         self.assertIn("網頁版", zh)
         self.assertNotIn("今天我們使用桌面版", zh)

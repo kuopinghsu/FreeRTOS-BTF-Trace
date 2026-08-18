@@ -1,5 +1,7 @@
 # AI Assistant
 
+**English** · [繁體中文](AI_zh-TW.md)
+
 BTFViewer's AI Assistant helps you investigate RTOS traces by organizing measured evidence, testing explanations, and guiding you back to the relevant timeline region.
 
 > **Scope:** AI works with BTFViewer Findings, Statistics, timeline queries, and Trace Compare results. It does not read firmware source or ELF files. `what_if` results are heuristic estimates, not FreeRTOS scheduler simulation or measured trace data.
@@ -76,7 +78,7 @@ AI may explain, correlate, rank, challenge, and estimate. Deterministic Statisti
 - **Investigate**, **Root cause**, **Verify finding**, **Auto investigate**, **What-if**, **Optimize**, and **Diagnostic report** display an Investigation plan.
 - **Clear** removes the conversation, resets usage, and clears the current investigation.
 - The usage bar shows **Context: Compact · 4.6k tok · 3 tools · 12s** (mode, tokens, tools, and model time). **Settings → AI → Context** chooses Compact, Balanced (default), or Full evidence.
-- A non-empty investigation restores after restart. An empty or cleared log does not restore a Current Issue card.
+- A non-empty `investigation_session` restores after restart only when the log still has a user or assistant turn. An empty or cleared log does not restore a Current Issue card.
 - Read-only tools run immediately. GUI-changing actions wait for **Apply** unless **Auto-apply GUI actions** is enabled. Exports always open a save dialog.
 
 Toolbar **Compare** becomes available when at least two traces are open. **Query with AI…** sends the Trace Compare tables rather than the current Findings. **Save as baseline** and **Score vs baseline** use the same stored profile as `baseline_score`. **Ctrl+K** provides quick access to Analysis, AI, Compare, workspace presets, and Inspect task.
@@ -102,7 +104,9 @@ Important conclusions should include:
 
 The Evidence panel shows the investigation tree, evidence graph, coverage, hypotheses, and an evidence-quality band. This band is a diagnostic heuristic, not a probability. After the final reply, the host validator flags unknown task names and timestamps outside the cursor window.
 
-Prefer built-in templates. They already select the relevant metrics and Statistics pages. Use natural-language questions such as “find STI wait around TaskA” when needed; the host routes them through `search_timeline`.
+Prefer built-in templates. They already select the relevant metrics and Statistics pages. Use natural-language questions such as “find STI wait around TaskA” when needed; the host routes them through `search_timeline`. **Analysis Findings** can triage overall findings. **Explain finding** explains the selected Analysis Finding. Other chips: **Explain region**, **Investigate**, **Verify finding**, **Root cause**, **Trace Compare**, **Triage findings**, **Task profile**, **Diagnostic report**, **What-if**, **Optimize**, **Highest latency**, **WCET / hot CPU**, **Migration thrash**, **Core balance**, **Tick health**, **Priority inversion**, **Deadline / budget**, **Auto investigate**. Findings also offer **Save recipe…** and **Story…**.
+
+Named Statistics pages the templates cite: Timeline Anomalies, Worst Events, Period / Jitter, Unified Jitter, Recurring Patterns, Task Health, Task × Core, Waiter × Owner, Response Time, Critical Path, Preemption Matrix, Mutex Blocking, Core Utilization Over Time.
 
 ---
 
@@ -295,13 +299,19 @@ The shipped Ollama default is `qwen3.5:9b`:
 ollama pull qwen3.5:9b
 ```
 
-Larger local models (`qwen3.5:27b`, `qwen3.8:27b`, and `gemma4:26b`) trade speed and memory use for additional capacity. Avoid 3B-class models for investigations: they often skip native tools, return tool JSON as text, or fail multi-step cases.
+Larger local models (`qwen3.5:27b`, `qwen3.8:27b`, and `gemma4:26b`) trade speed and memory use for additional capacity. Older 7B/14B ids such as `qwen2.5:7b` stay optional. Avoid 3B-class models for investigations: they often skip native tools, return tool JSON as text, or fail multi-step cases.
 
 Configuration examples are available in [examples/ai](examples/ai/README.md): [ollama.json](examples/ai/ollama.json), [gemini.json](examples/ai/gemini.json), [openai.json](examples/ai/openai.json), [deepseek.json](examples/ai/deepseek.json), [grok.json](examples/ai/grok.json), and [presets.json](examples/ai/presets.json).
 
 Importing a preset fills **Settings → AI**, including any checkbox flags defined by the file. Review the values before saving. Each preset keeps its own base URL, model, API key, authentication mode, and TLS setting. Unknown preset names are added to the model list.
 
-API keys use the same precedence on Desktop and Web:
+| Field | Meaning |
+| --- | --- |
+| Authentication | none / API key / Sign in, per preset |
+| Model picker | Refresh the served id list, then pick a model |
+| Self-signed TLS | Desktop **Allow self-signed TLS** skips certificate checks for that preset |
+
+API keys use the same precedence on Desktop and Web: Settings → AI first, then `OPENAI_API_KEY`, then `GEMINI_API_KEY`, then `OLLAMA_API_KEY`.
 
 1. Key entered in **Settings → AI**
 2. `OPENAI_API_KEY`
@@ -371,7 +381,7 @@ Prefer local Ollama for confidential traces. Redact sensitive task names in anno
 
 ### Context mode (token usage)
 
-**Settings → AI → Context** controls how much evidence is sent with each request. It reduces input tokens; Compact also caps the reply at about 300–500 tokens.
+**Settings → AI → Context** controls how much evidence is sent with each request. Compact is the token-efficient packing mode. It reduces input tokens; Compact also caps the reply at about 300–500 tokens.
 
 | | Compact | Balanced (default) | Full evidence |
 | --- | --- | --- | --- |
@@ -749,7 +759,7 @@ python builds/btf_viewer.py analyze candidate.btf --baseline /tmp/base.json --fa
 python builds/btf_viewer.py ai-test --dataset tests/ai --fail-under 70
 python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml -o AI_BENCHMARK.md
 python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml --compare-context -o AI_BENCHMARK.md
-python builds/btf_viewer.py ai-test --config examples/ai/benchmark-selfsigned.xml --insecure
+python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml --insecure
 ```
 
 Or `make -C BTFViewer ai-test` (`AI_DATASET`, `AI_FAIL_UNDER`), `make -C BTFViewer ai-test-live` (`AI_CONFIG`, optional `AI_MODELS`, writes [AI_BENCHMARK.md](AI_BENCHMARK.md)), and `make -C BTFViewer ai-test-context` (same as live + `--compare-context`). Dataset, scoring rules, and context-mode flags: [Benchmark / evaluation suite](#benchmark-suite).
@@ -826,7 +836,7 @@ Local AI — developer workstation
 
 A 9B model may beat a 27B model on this app if the larger id only slightly improves accuracy while blowing latency and memory. Measure **diagnostic quality** and **practical system performance**.
 
-Do not hard-code the model list into the runner. Copy [examples/ai/benchmark.xml](examples/ai/benchmark.xml) (self-signed TLS: [benchmark-selfsigned.xml](examples/ai/benchmark-selfsigned.xml)):
+Do not hard-code the model list into the runner. Copy [examples/ai/benchmark.xml](examples/ai/benchmark.xml). For a self-signed or private-CA gateway, keep `<tls-verify>false</tls-verify>` (the suite default); public HTTPS models can override to `true`:
 
 ```xml
 <ai-benchmark version="1">
@@ -835,7 +845,7 @@ Do not hard-code the model list into the runner. Copy [examples/ai/benchmark.xml
   <output>AI_BENCHMARK.md</output>
   <endpoint>
     <base-url>http://localhost:11434/v1</base-url>
-    <tls-verify>true</tls-verify>
+    <tls-verify>false</tls-verify>
     <timeout-s>360</timeout-s>
   </endpoint>
   <models>
@@ -843,10 +853,12 @@ Do not hard-code the model list into the runner. Copy [examples/ai/benchmark.xml
     <model id="qwen3.8:27b"/>
     <model id="gemini-3.6-flash" preset="gemini">
       <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
+      <tls-verify>true</tls-verify>
       <api-key env="GEMINI_API_KEY"/>
     </model>
     <model id="gemini-3.1-flash-lite" preset="gemini">
       <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
+      <tls-verify>true</tls-verify>
       <api-key env="GEMINI_API_KEY"/>
     </model>
   </models>
@@ -1164,7 +1176,7 @@ The shipped loop stays **Triage → Investigate → Verify → Correlate → Cri
 
 Desktop and Web share one Case, Evidence, planner, causal, tool, and mermaid implementation. After AI UI changes: `make -C BTFViewer bundle` and `make -C BTFViewer web`.
 
-**UI lockstep:** mode chips wrap. Primary templates are two rows: Analysis Findings / Explain region / Investigate, then **Auto investigate** + **More templates…**. Chip min-height 28px, disabled chips/menu items `#8a96a8`. Findings **Investigate…** uses the same outline style as the other Analysis footer buttons (not accent/primary). **More** templates use the same groups in a 2-column overlay. Trace Compare opens from toolbar **Compare**, not the Statistics footer.
+**UI lockstep:** mode chips wrap. Primary templates are two rows: **Analysis Findings** / **Explain region** / **Investigate**, then **Auto investigate** + **More templates…**. Chip min-height 28px, disabled chips/menu items `#8a96a8`. Findings **Investigate…** uses the same outline style as the other Analysis footer buttons (not accent/primary). **More** templates use the same groups in a 2-column overlay. Findings **Save recipe…** and **Story…** stay on that dialog. Trace Compare opens from toolbar **Compare**, not the Statistics footer.
 
 The Desktop `ai-test` CLI and the Web offline benchmark share `tests/ai` fixtures (tracked `.btf` stubs + `dataset.json`). Live runs accept `--context-mode` and `--compare-context` (see [Context mode benchmarking](#context-mode-benchmarking)).
 
@@ -1206,7 +1218,7 @@ The host validator runs after the final reply. Prompting still forbids inventing
 
 ## Diagrams
 
-Replies may include Mermaid sequence diagrams for mutex, blocking, and priority events, or flowcharts for core migrations. **Compact** context mode emits diagrams only when the user asks. Markdown tables and sanitized HTML tables from Findings render as tables in the reply pane. The Evidence panel also generates an Investigation tree when `investigate` returns a root-cause chain. Diagrams follow the current light or dark theme; **Save As…** HTML exports use the light palette.
+Replies may include Mermaid sequence diagrams for mutex, blocking, and priority events, or flowcharts for core migrations. **Compact** context mode emits diagrams only when the user asks. Pipe **Markdown tables** and sanitized HTML tables from Findings render as tables in the reply pane. In-chat Markdown / HTML tables follow the current theme. The Evidence panel also generates an Investigation tree when `investigate` returns a root-cause chain. Diagrams follow the current light or dark theme; **Save As…** HTML exports use the light palette.
 
 - Click a **task** node to lock-highlight that timeline row (`Low[266] (Core 0)` resolves to `Low[266]`).
 - Click a **core** node (`Core_0`, `C0`, `C1`) to switch to Core View and scroll to that core.

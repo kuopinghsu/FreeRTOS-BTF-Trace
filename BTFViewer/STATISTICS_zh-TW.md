@@ -10,7 +10,7 @@
 - 這項指標有哪些限制？
 - 接下來應該交叉檢查哪些相關指標？
 
-如需了解產品操作與介面導覽，請參閱 [`README.md`](README.md)。如需依照步驟進行問題分析，請參閱 [`WORKFLOWS.md`](WORKFLOWS.md)。如需使用 AI 輔助分析，請參閱 [`AI.md`](AI.md)。
+如需了解產品操作與介面導覽，請參閱 [`README.md`](README.md)。如需依照步驟進行問題分析，請參閱 [`WORKFLOWS_zh-TW.md`](WORKFLOWS_zh-TW.md)。如需使用 AI 輔助分析，請參閱 [`AI_zh-TW.md`](AI_zh-TW.md)。
 
 原文：[English](STATISTICS.md)。
 
@@ -1940,6 +1940,6 @@ CDF 本身不支援 click-to-jump；如果要跳至單一事件，請使用 Hist
 | 文件 | 回答的問題 |
 |---|---|
 | [README.md](README.md) | 如何使用 BTFViewer？ |
-| [WORKFLOWS.md](WORKFLOWS.md) | 如何分析問題？ |
-| [STATISTICS.md](STATISTICS.md) | 這項測量值代表什麼？ |
-| [AI.md](AI.md) | 如何使用 AI 輔助分析？ |
+| [WORKFLOWS_zh-TW.md](WORKFLOWS_zh-TW.md) | 如何分析問題？ |
+| [STATISTICS.md](STATISTICS.md) | 這項測量值代表什麼？（英文） |
+| [AI_zh-TW.md](AI_zh-TW.md) | 如何使用 AI 輔助分析？ |

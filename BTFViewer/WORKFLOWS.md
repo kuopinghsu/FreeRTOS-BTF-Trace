@@ -1,428 +1,328 @@
-# BTF Viewer — Newbie Analysis Workflows
+# BTFViewer Workflow
 
-> **Goal:** give a new BTFViewer user a repeatable way to find most RTOS scheduling issues step by step.
->
-> **Rule:** find deterministic evidence first, then ask AI to explain it.
+**English** · [繁體中文](WORKFLOWS_zh-TW.md)
 
-This document is the procedure guide for diagnosing RTOS trace behavior with BTFViewer.
+A beginner-friendly workflow for investigating FreeRTOS scheduling traces with BTFViewer.
 
-| Document | Use it for |
-|---|---|
-| [`README.md`](README.md) | Product overview, UI tour, quick start, demo, export, settings |
-| [`WORKFLOWS.md`](WORKFLOWS.md) | Step-by-step diagnosis procedure — this document |
-| [`STATISTICS.md`](STATISTICS.md) | Metric definitions, formulas, interpretation, chart behavior |
-| [`AI.md`](AI.md) | AI Assistant architecture, model setup, tools, planner, validator, benchmark |
+Use this guide when you know the symptom but do not yet know where to look. For viewer controls, see [`README.md`](README.md). For metric definitions and limitations, see [`STATISTICS.md`](STATISTICS.md). For AI setup and advanced investigation tools, see [`AI.md`](AI.md).
 
----
+> **Core rule:** treat the trace and Statistics as measured evidence. Treat Analysis Findings as leads, AI explanations as interpretations, and What-if results as estimates.
 
-## 0. Mental model
-
-BTFViewer is evidence-first:
+## Workflow at a glance
 
 ```mermaid
 flowchart TD
-  open[Open trace] --> health[Check capture health]
-  health --> scope[Scope to the phase that matters]
-  scope --> findings[Read Analysis findings]
-  findings --> stats[Open the named Statistics section]
-  stats --> timeline[Jump to the timeline evidence]
-  timeline --> hypothesis[Confirm / reject the hypothesis]
-  hypothesis --> ai[Use AI only after evidence exists]
-  ai --> compare[Compare another trace to validate the fix]
+  open["1. Open the trace"] --> health{"2. Trace quality usable?"}
+  health -- No --> recapture["Fix capture settings and recapture"]
+  health -- Yes --> overview["3. Review full-trace overview"]
+  overview --> triage["4. Run Analysis Findings"]
+  triage --> route["5. Choose a symptom path"]
+  route --> scope["6. Scope the incident with cursors"]
+  scope --> measure["7. Check Statistics"]
+  measure --> timeline["8. Verify on the timeline"]
+  timeline --> evidence{"Evidence sufficient?"}
+  evidence -- No --> refine["Refine scope or test another hypothesis"]
+  refine --> measure
+  evidence -- Yes --> explain["9. Explain or verify with AI — optional"]
+  explain --> change["10. Plan one measurable change"]
+  change --> recapture2["Recapture the same workload"]
+  recapture2 --> remeasure["Repeat the same scoped measurements"]
+  remeasure --> close["Record evidence and conclusion"]
 ```
 
-The AI Assistant is useful, but it is not the first source of truth. It explains **Analysis Findings**, **Statistics**, and **Trace Compare** data. It does not replace the deterministic BTF measurements.
+You do not need AI to complete the workflow. Deterministic Statistics and timeline evidence should remain the basis of the conclusion.
 
----
+## 10-minute first pass
 
-## 1. Fast path: 10-minute triage
+When opening an unfamiliar trace, use this short pass before reading every Statistics table:
 
-Use this when you open an unknown trace.
-
-| Step | What to do | Why |
+| Step | Action | Result |
 |---:|---|---|
-| 1 | Open the trace and press `Ctrl+0` / **Fit** | Confirm the whole capture is visible |
-| 2 | Turn on **Load** and switch between **Task** / **Core** view | Understand overall activity |
-| 3 | Open **Statistics** and toolbar **Analysis** | Overview (quality, incident clusters, phase window) plus severity-tagged findings |
-| 4 | Read **Trace Health (TICK)** first | Bad or tickless timebase changes how timing should be interpreted |
-| 5 | Open only the Statistics sections named by Analysis | Avoid chasing every table |
-| 6 | Click **Max**, **p95**, a table row, chart point, or heatmap cell | Jump to the actual timeline evidence |
-| 7 | Place C1–Cn cursors around the phase and enable **Limit to C1–Cn** | Remove unrelated phases from the numbers |
-| 8 | Re-read Analysis and Statistics inside that scope | Confirm the issue is still present |
-| 9 | Use **Start Investigation**, **Investigate…**, **Verify with AI…**, or **Explain region** (`Ctrl+K` opens Analysis / AI / workspace presets / Inspect task) | Ask AI to explain evidence, not invent it |
-| 10 | Export HTML or run **Trace Compare** after a fix | Keep a record and validate improvement |
+| 1 | Open the trace and select **Fit** | Confirm the whole capture is visible |
+| 2 | Enable **Load**; switch between **Task View** and **Core View** | Identify workload phases and overall activity |
+| 3 | Open **Statistics** and **Analysis** | See trace warnings, incident clusters, and ranked findings |
+| 4 | Read **Trace Health (TICK)** | Decide whether timing evidence is usable or tickless behavior is expected |
+| 5 | Open the Statistics sections named by the most relevant finding | Avoid inspecting unrelated metrics |
+| 6 | Click **Max**, **p95**, a row, chart point, or heatmap cell | Jump to measured timeline evidence |
+| 7 | Place C1–C2 and enable **Limit to C1–Cn** | Remove unrelated workload phases |
+| 8 | Recheck Analysis and Statistics | Confirm the issue remains inside the selected scope |
+| 9 | Optionally use **Investigate…**, **Verify with AI…**, or **Explain region** | Ask AI about evidence already found |
+| 10 | Save evidence and repeat the same measurements after a change | Preserve and validate the result |
 
-### Stop rule
+## Before you start
 
-Stop drilling when one of these is true:
+Have the following ready when possible:
 
-- The measured evidence explains the symptom.
-- The issue disappears after scoping to the relevant phase.
-- The required instrumentation is missing.
-- The next step is a firmware change and recapture.
+- A trace that includes the reported failure or slow period.
+- The expected workload, task names, priorities, deadlines, and CPU budgets.
+- A rough incident time or a repeatable way to trigger the problem.
+- STI events when you need dispatch latency, lifecycle, mutex, queue, interval, or priority-inheritance evidence.
 
----
+Do not expect BTFViewer to inspect source code or simulate the FreeRTOS scheduler. It measures events present in the trace. If the required event was not captured, record the limitation instead of inferring a precise value.
 
-## 2. The top-down ladder
+## 1. Open and orient the trace
 
-Most trace problems can be handled by this order:
+1. Open the `.btf`, compressed BTF, or archive.
+2. Select **Fit** to view the whole capture.
+3. Start in **Task View** to identify active tasks, then switch to **Core View** for multicore placement.
+4. Enable **Load** to see CPU utilisation over time.
+5. Hover representative slices to learn their task, core, start time, and duration.
+
+At this stage, look for phases rather than causes: startup, steady state, bursts, idle periods, and shutdown.
+
+## 2. Check trace quality first
+
+Open **Statistics** and review **Summary** and **Trace Health (TICK)** before diagnosing application behaviour.
+
+Check for:
+
+- Missing or irregular tick data.
+- Large gaps or an unexpectedly short capture.
+- Missing STI channels required by the intended analysis.
+- Tasks or cores that appear absent despite being expected.
+- A trace window that does not contain the reported incident.
+
+If capture quality is poor, recapture before continuing. A gap in the trace is not evidence that the system was idle, and a missing event is not evidence that it never happened.
+
+A **TICKLESS** result is not automatically a defect. If tick suppression is expected during idle periods, place cursors around a busy phase and check Trace Health again.
+
+## 3. Build a full-trace overview
+
+Review these Statistics sections before narrowing the scope:
+
+| Check | What it establishes |
+|---|---|
+| **Summary / Core utilisation** | Trace duration, tasks, cores, total load, and load balance |
+| **Top tasks by CPU** | Tasks that dominate CPU time |
+| **Core Time Breakdown** | Active, Idle, Tick, and Gap time by core |
+| **Execution Time Per Slice** | Typical and worst on-CPU slice durations |
+| **Blocking Time** | Tasks with long off-CPU intervals |
+| **Core Migrations** | Tasks that frequently move between cores |
+| **Timeline Anomalies / Worst Events** | Candidate regions and outliers to inspect |
+
+Use distributions, not only averages. Compare **Avg**, **p95**, **p99**, and **Max** when available. A high maximum with a normal average often indicates a short incident that should be scoped separately.
+
+## 4. Run deterministic triage
+
+Click **Analysis** to open **Analysis Findings** for the current Statistics scope.
+
+For each relevant finding:
+
+1. Note its severity, task or core, metric, and suggested Statistics section.
+2. Treat the finding as a hypothesis, not a confirmed root cause.
+3. Open the named Statistics section and reproduce the reported value.
+4. Use **Apply cursors** when the finding recommends a useful time window.
+
+If no finding stands out, begin with **Timeline Anomalies**, **Worst Events**, and the symptom table below.
+
+## 5. Choose a symptom path
+
+| Observed symptom | Start here | Cross-check next |
+|---|---|---|
+| Unknown problem | **Analysis Findings** | Timeline Anomalies, Worst Events, Task Health |
+| Task runs too long | **Execution Time Per Slice** | Preemption Chain, Mutex Blocking, Critical Path |
+| Task waits too long | **Blocking Time** | Preemption Chain, Mutex / Semaphore, Waiter × Owner |
+| Ready task starts late | **Dispatch / Scheduling Latency** | Blocking, preemption, STI ready/resume events |
+| Deadline or CPU budget miss | **Deadlines / CPU budget** | Execution p95/p99/Max, Period / Jitter, Critical Path |
+| Irregular activation | **Period / Jitter** | Inter-Arrival Time, Unified Jitter, Recurring Patterns |
+| Tick jitter or missed ticks | **Trace Health (TICK)** | Tick Distribution, busy-window Execution Max |
+| Uneven multicore load | **Core utilisation** | Task × Core, Concurrent Core Active, Core Time Breakdown; **Load Balance Score** |
+| Migration thrash or ping-pong | **Core Migrations** | Heatmap, corridor inspector, Core Affinity, mutex bounces |
+| Priority inversion | **Priority Inheritance** | Mutex pairing, Mutex Blocking, Waiter × Owner |
+| Lock or queue delay | **Mutex / Semaphore / Queue** | Blocking Time, Critical Path, migrations |
+
+### Symptom decision map
 
 ```mermaid
 flowchart TD
-  health["① Health — Trace Health TICK"]
-  scope["② Scope — Cursors + Limit to C1–Cn"]
-  balance["③ Balance — Core Utilisation → Core Time Breakdown → Concurrent Active → Switch Overhead"]
-  cpu["④ CPU / WCET — Top Tasks → Execution Time Per Slice"]
-  latency["⑤ Latency — Blocking → Dispatch → Preemption"]
-  concurrency["⑥ Concurrency — Core Migrations → Heatmap / Chord → Mutex / Queue → Priority Inheritance"]
-  compliance["⑦ Compliance — Affinity → Lifecycle → Deadlines → Tags / Intervals"]
-  compare["⑧ Compare — Trace Compare before / after"]
-  explain["⑨ Explain — AI investigation / report"]
-  health --> scope --> balance --> cpu --> latency --> concurrency --> compliance --> compare --> explain
+  symptom{"What is most visible?"}
+  symptom -->|Long CPU slice| execution["Execution Time"]
+  symptom -->|Long wait| blocking["Blocking and sync"]
+  symptom -->|Late or irregular| timing["Dispatch, period, jitter"]
+  symptom -->|Multicore issue| smp["Utilisation and migrations"]
+  symptom -->|Tick issue| tick["Trace Health"]
+  execution --> verify["Scope and verify on timeline"]
+  blocking --> verify
+  timing --> verify
+  smp --> verify
+  tick --> verify
 ```
 
-### Why this order works
+## 6. Scope one incident with cursors
 
-| Ladder rung | Question answered |
-|---|---|
-| **Health** | Can I trust timing metrics in this capture? |
-| **Scope** | Am I looking at the right phase? |
-| **Balance** | Is work distributed across cores? |
-| **CPU / WCET** | Which task runs too long on CPU? |
-| **Latency** | Which task waits too long, and why? |
-| **Concurrency** | Is SMP scheduling causing migration, lock-bounce, or priority issues? |
-| **Compliance** | Did affinity, suspend/resume, deadlines, and custom signals behave as expected? |
-| **Compare** | Did a change actually improve the measured behavior? |
-| **Explain** | Can AI summarize and challenge the evidence? |
+Use a small, meaningful window instead of repeatedly analysing the entire trace.
 
----
+1. Jump to an outlier by clicking a Statistics row, percentile, chart point, or finding.
+2. Place **C1** before the suspected cause and **C2** after the visible effect.
+3. Select **Zoom to cursor range**.
+4. Enable **Limit to C1–Cn** in Statistics.
+5. Reopen **Analysis** so its findings use the same window.
+6. Add a bookmark or annotation at the strongest evidence time.
 
-## 3. Step-by-step workflow
+Choose a window that contains enough context to see what ran immediately before and after the incident. If the window is too wide, unrelated activity may dominate the statistics; if it is too narrow, the triggering event may be excluded.
 
-### Step 1 — Check trace health
+> **Viewport note:** the Migration **Heatmap / Chord** inspector follows the visible timeline viewport rather than the **Limit to C1–Cn** checkbox. Zoom to the cursor range before opening it.
 
-**Open:** Statistics → **Trace Health (TICK)**
+## 7. Measure before explaining
 
-| Check | If you see this | Do this |
-|---|---|---|
-| TICK mode, low CV | Timing source looks stable | Continue |
-| TICKLESS, high CV | Idle tick suppression may be expected | Scope to a busy window and re-check |
-| Large gaps during busy work | Possible lost ticks, long critical section, or trace gap | Inspect the timeline and compare with Execution / Blocking |
-| No useful TICK evidence | Timing interpretation is weaker | Prefer relative comparisons and explicit interval/tag instrumentation |
+For the suspect task or core, record:
 
-**Newbie rule:** do not treat a tickless warning as a bug until you scope to a busy region.
+- The scoped **Avg**, **p95**, **p99**, and **Max** values.
+- The outlier timestamp and duration.
+- The task and core active immediately before the incident.
+- Related preemption, blocking, migration, mutex, queue, or STI events.
+- Whether the behavior repeats elsewhere in the trace.
 
----
+Use **Find** when you know a task name, core, migration, STI event, interval, lifecycle event, or synchronization pointer. Use **Recurring Patterns** when the same type of incident appears several times.
 
-### Step 2 — Scope the phase
+## 8. Verify the hypothesis on the timeline
 
-Mixed traces often contain setup, stress tests, sleeps, and teardown. Whole-trace numbers may hide the real issue.
-
-| Action | Result |
-|---|---|
-| Click timeline / press `C` | Place cursors |
-| `Ctrl+R` | Zoom to cursor range |
-| Enable **Limit to C1–Cn** | Recompute Statistics and Analysis for that phase |
-| Clear cursors | Return to full-trace statistics |
-
-**Important:** the Migration **Heatmap / Chord** inspector follows the visible viewport, not the cursor-scope checkbox. Zoom the timeline before opening the inspector.
-
----
-
-### Step 3 — Check core balance
-
-**Open:** Statistics → **Core Utilisation**
-
-| Signal | Meaning | Next |
-|---|---|---|
-| Load Balance Score ≥ 85% and σ ≤ 30% | Generally balanced (**Analysis** still shows Score/σ/G; “reasonably balanced”) | Continue to CPU / latency |
-| Score < 70% | Imbalance likely | Check Affinity and Task × Core |
-| σ > 30% | Utilization spread is high | Check Core Time Breakdown |
-| One core hot, others idle | Work may be pinned | Check Core Affinity |
-| All cores high, one underused | Serialization or lock contention | Check Mutex / Preemption |
-
-Then open:
-
-| Section | What it reveals |
-|---|---|
-| **Core Time Breakdown** | Active / Idle / Tick / Gap time per core |
-| **Concurrent Core Active** | How often N cores are busy together |
-| **Kernel Switch Overhead** | Gap between one slice ending and the next starting |
-| **Task × Core** | Which task used which core |
-
----
-
-### Step 4 — Find CPU / WCET problems
-
-**Open:** Statistics → **Top Tasks by CPU**, then **Execution Time Per Slice**
-
-| Check | Red flag | Next |
-|---|---|---|
-| Top CPU tasks | One task dominates CPU | Inspect task behavior and deadline |
-| Equal-priority workers dominate | Scheduler stress or fan-out issue | Consider affinity or reducing concurrency |
-| Execution **Max** much larger than p95 | Rare spike | Click Max and inspect the timeline |
-| Execution Max exceeds budget | WCET concern | Set **Deadlines / CPU budget** thresholds |
-| Long slice overlaps lock or preemptor activity | Interference | Open Mutex / Preemption |
-
-**Do not rely only on Average.** Use Max, p95/p99, and the distribution chart.
-
----
-
-### Step 5 — Diagnose latency
-
-Latency questions usually split into three different metrics.
-
-| Metric | Meaning | Start here when… |
-|---|---|---|
-| **Blocking Time** | Off-CPU gap until the task runs again | A task waits too long |
-| **Dispatch / Scheduling Latency** | Ready/create/resume → first run | A ready task does not run soon enough |
-| **Inter-Arrival / Period / Jitter** | Start-to-start cadence | A periodic task is late or irregular |
-| **Response Time** | Heuristic adjacent-slice ready→completion | You need a rough tail signal, not kernel release/completion |
-
-**Workflow**
-
-1. Open **Blocking Time**, sort by **Max** or **p95**.
-2. Ignore known orchestrator sleeps and setup/teardown phases.
-3. Click the long gap and inspect the timeline.
-4. Open **Preemption Chain** to see who ran while the task waited.
-5. Open **Mutex / Semaphore / Queue** if the gap aligns with a hold.
-6. Open **Dispatch / Scheduling Latency** only when the trace has create/resume STI evidence.
-
-**Important:** BTFViewer Blocking Time is not true end-to-end response time. For true application response time, instrument release/completion with intervals or tags.
-
----
-
-### Step 6 — Diagnose SMP concurrency issues
-
-This catches many multi-core problems: thrash, lock-bounce, queue sharing, and priority inheritance.
-
-#### 6.1 Core migrations
-
-**Open:** Statistics → **Core Migrations**
-
-| Signal | Meaning |
-|---|---|
-| High **Rate** | Task moves often relative to active time |
-| Short **Dwell** | Task does not stay on one core long |
-| High **Ping** | A→B→A bouncing |
-| High **Gap after** | Migration may be followed by extra waiting |
-| High **STI±** | Migration near software trace events |
-
-**Procedure**
-
-1. Sort by **Rate**, **Dwell**, or **Ping**.
-2. Click the row and inspect **Dwell / Rate / Gap** charts.
-3. Switch to **Task View**, lock-highlight the task, enable **Load**.
-4. Check whether the task is bouncing between cores or simply spreading.
-
-#### 6.2 Core-pair and heatmap
-
-**Open:** Statistics → **Core-Pair Migration Summary**, then toolbar **Heatmap** / **Chord**
-
-| Signal | Meaning |
-|---|---|
-| High pair count | Hot migration corridor |
-| High **Bounce %** | Task migrated while holding a sync object |
-| Hot heatmap cell | Burst of migrations in one time window |
-| Hot chord ribbon | Heavy directed core-to-core movement |
-
-Use **Lock Bounces Only** when chasing mutex/queue-related hops.
-
-#### 6.3 Mutex / semaphore / queue
-
-**Open:** Statistics → **Mutex / Semaphore** or **Queue**
-
-| Signal | Meaning |
-|---|---|
-| Issues > 0 | Pairing problem, teardown, cross-task give, unmatched take/give |
-| Bounces high | Object crossed core boundaries while held |
-| Long hold | Contention risk |
-| Warning / Error | Inspect the timeline before acting |
-
-Typical fixes:
-
-- Co-locate producer/consumer tasks.
-- Pin tasks that share hot locks.
-- Shorten critical sections.
-- Reduce equal-priority runnable fan-out.
-
-#### 6.4 Priority inheritance
-
-**Open:** Statistics → **Priority Inheritance**
-
-| Pattern | Reading |
-|---|---|
-| **Mutex inherit** | Kernel boost is working |
-| **L/M/H pattern** | Classic priority inversion geometry; review design |
-| **Boost only** | Manual priority change or incomplete evidence |
-
-Click a boost episode or red timeline stripe to verify.
-
----
-
-### Step 7 — Compliance checks
-
-Use this rung to verify that configured behavior actually happened.
-
-| Section | Check |
-|---|---|
-| **Core Affinity** | Observed cores should fit the active affinity mask |
-| **Task Lifecycle** | Suspend/resume counts should match; task should not run while suspended |
-| **Deadlines / CPU budget** | Violations should match your real budgets |
-| **Tag Analysis** | Custom values should stay inside application limits |
-| **Interval Analysis** | Instrumented regions should meet duration budgets |
-
-Deadline values are configured in **nanoseconds** under Settings → Display → Analysis thresholds.
-
----
-
-### Step 8 — Compare before / after
-
-A fix is not validated until a second trace proves it.
-
-**Open:** two traces → toolbar **Compare**
-
-| Compare page | What to check |
-|---|---|
-| **Summary** | Span, context switches, migrations, load balance, tick health |
-| **Core Util** | Per-core utilization delta |
-| **Execution** | WCET / p95 / Max changes |
-| **Blocking** | Wait-time changes |
-| **Preemption** | Whether interference improved |
-| **Sync / Mutex** | Holds, issues, bounces |
-| **Response** | Heuristic P99 signal |
-| **Trends** | All open tabs (3+): load balance, migrations, tick health |
-| **Deadline misses** | Pass/fail thresholds |
-
-**Comparison rule:** use equivalent workload phases. Place cursors in both traces and enable compare cursor scope when needed. **Save as baseline** on Trace A, then **Score vs baseline** after a recapture.
-
----
-
-### Step 9 — Use AI after deterministic evidence
-
-Use AI when:
-
-- Analysis Findings exist.
-- Statistics are scoped correctly.
-- You have clicked at least one timeline event.
-- You want a narrative, hypothesis ranking, or experiment plan.
-
-| AI action | Best use |
-|---|---|
-| **Triage findings** / **Analysis Findings** | Summarize top issues |
-| **Explain region** | Explain a cursor-scoped phase |
-| **Investigate…** | Rank hypotheses and gather evidence |
-| **Verify with AI…** | Confirm or reject a selected finding |
-| **Root cause…** | Walk the top finding through related metrics |
-| **Start Investigation** / **Auto investigate…** | Empty AI log (also after restart with no user/assistant turn) or full tool-driven drill-down |
-| **What-if / Optimize** | Estimate possible experiments |
-| **Diagnostic report** | Write a structured summary |
-
-**Trust rule:** click every `jump:TIME` and verify it on the timeline. Treat What-if / Optimize as estimates, not measured results. After **Clear**, replies, usage cost, and current investigation issues are gone (no leftover **Current Issue** card). Restart does not restore **Current Issue** unless the log still has a user or assistant turn — **Start Investigation** stays available.
-
----
-
-## 4. Symptom → metric map
-
-| Symptom | Start here | Then check |
-|---|---|---|
-| Unknown problem | Toolbar **Analysis** | Statistics sections named by findings |
-| Tick irregularity | Trace Health (TICK) | Scope busy window; Tick Distribution |
-| Uneven SMP load | Core Utilisation | Task × Core, Affinity, Concurrent Active |
-| Rarely N cores active | Concurrent Core Active | Worker count, affinity, locks |
-| High switch cost | Kernel Switch Overhead | Core Time Breakdown Gap % |
-| Task burns CPU | Top Tasks by CPU | Execution Time Max / p95 |
-| Task slice too long | Execution Time Per Slice | Preemption, Mutex, Deadlines |
-| Task waits too long | Blocking Time | Preemption Chain, Mutex |
-| Ready task delayed | Dispatch / Scheduling Latency | create/resume STI evidence |
-| Periodic task irregular | Period / Jitter | Inter-Arrival, Tick Health |
-| Core thrashing | Core Migrations | Rate, Dwell, Ping, Heatmap |
-| Lock-bounce | Core-Pair Bounce % | Heatmap Lock Bounces Only, Mutex Bounces |
-| Priority inversion | Priority Inheritance | Mutex, Blocking, timeline stripes |
-| Affinity wrong | Core Affinity | Task × Core, migrations |
-| Suspend/resume issue | Task Lifecycle | Timeline STI |
-| Custom latency | Interval / Tag Analysis | Instrumentation design |
-| Regression after change | Trace Compare | Same scoped phase on both traces |
-| Need explanation | AI Assistant | Verify timeline evidence first; use **Settings → AI → Context → Compact** on small local models |
-| Context vs score / cost | `ai-test --compare-context` | Live suite runs Compact, Balanced, and Full; compare score, tokens, and latency in [AI_BENCHMARK.md](AI_BENCHMARK.md) — [AI.md → Benchmark](AI.md#context-mode-benchmarking) |
-
----
-
-## 5. Newbie checklist
-
-Before concluding:
-
-```text
-☐ Trace opened and full span checked
-☐ Statistics + Analysis opened
-☐ Trace Health checked first
-☐ Relevant phase scoped with C1–Cn if needed
-☐ Analysis finding mapped to a Statistics section
-☐ Max / p95 / row / chart point clicked on timeline
-☐ Core balance checked
-☐ CPU / WCET checked
-☐ Blocking / dispatch / preemption checked for latency issues
-☐ Migrations / Heatmap / Mutex / Priority Inheritance checked for SMP issues
-☐ Affinity / Lifecycle / Deadlines / Tags checked
-☐ AI used only after deterministic evidence exists
-☐ Any jump:TIME verified on timeline
-☐ Before/after fix validated with Trace Compare or exported report
-```
-
----
-
-## 6. Worked example summary: `example-8cores`
-
-The sample trace is intentionally noisy because it concatenates stress tests. Scope to one phase before treating a warning as a product defect.
-
-| Ladder rung | Example observation | Reading |
-|---|---|---|
-| Health | TICKLESS, CV ~36.7%, missed ~10 | Expected in idle/tickless phases; scope busy window |
-| Balance | Load Balance Score ~95%, σ ~6.3% | Generally balanced |
-| CPU / WCET | CS workers around 15% CPU; Max slices ~3–4 ms | Equal-priority stress; inspect long slices |
-| Latency | High task max block ~53 ms in inversion demo | Scope inversion phase; verify preemption/mutex |
-| Migrations | ~19k migrations; hot CS tasks ~1.6k/s | Scheduler thrash |
-| Lock-bounce | Hot queue with hundreds of bounces | Co-locate producers/consumers |
-| Priority | Low task boosted by priority inheritance | Kernel inheritance working |
-| Compliance | Affinity and lifecycle checks pass | Keep as CI checks |
-| Verdict | Thrash + queue bounces are P0 | Pin/co-locate/reduce fan-out, then compare |
-
----
-
-## 7. Export and CI loop
-
-After you find an issue:
-
-```bash
-python builds/btf_viewer.py report ../tracedata/example-8cores.btf.gz \
-    --output report.html --format html
-
-python builds/btf_viewer.py compare before.btf.gz after.btf.gz \
-    --output compare.html --format html \
-    --name-a "Before" --name-b "After"
-```
-
-Recommended loop:
+A useful conclusion must connect the metric to visible events.
 
 ```mermaid
 flowchart LR
-  find[Find issue] --> expect[define expected improvement]
-  expect --> change[change firmware/config]
-  change --> recapture[recapture]
-  recapture --> cmp[Trace Compare]
-  cmp --> report[export report]
-  report --> close[close investigation]
+  claim["Candidate cause"] --> metric["Metric reproduces it"]
+  metric --> time["Exact time identified"]
+  time --> events["Timeline shows related events"]
+  events --> alternative["Alternatives checked"]
+  alternative --> verdict{"Supported?"}
 ```
 
----
+Ask these questions:
 
-## 8. What to read next
+1. Does the Statistics value reproduce inside the cursor scope?
+2. Can you jump to an exact timestamp that shows the event?
+3. Do the task, core, duration, and surrounding events match the claim?
+4. Is the relationship causal, merely correlated, or only close in time?
+5. What evidence would disprove the hypothesis?
+6. Is a simpler alternative consistent with the same data?
 
-| Need | Read |
+Use the following confidence labels:
+
+| Confidence | Minimum evidence |
 |---|---|
-| Basic UI, demo, settings, export | [`README.md`](README.md) |
-| API keys | [`README.md#ai-api-keys`](README.md#ai-api-keys) |
-| Metric definitions and formulas | [`STATISTICS.md`](STATISTICS.md) |
-| AI setup, model choice, tools, validator | [`AI.md`](AI.md) |
-| Repeatable practical diagnosis | This document |
-| Guided walkthrough | [`README.md#demo`](README.md#demo) |
+| **Confirmed** | Reproducible metric, matching timeline event, and a repeated measurement that supports the conclusion |
+| **Supported** | Reproducible metric and matching timeline evidence; alternatives checked |
+| **Plausible** | Some matching evidence, but a required event or relationship is missing |
+| **Unsupported** | The scoped metric or timeline contradicts the claim |
+
+Do not call a cause confirmed only because two events occur near each other.
+
+### When to stop drilling down
+
+Stop and record the current result when any of the following is true:
+
+- The measured evidence explains the symptom.
+- The suspected issue disappears when the correct workload phase is selected.
+- Required instrumentation is missing, so the hypothesis cannot be verified.
+- The next useful step is a firmware or configuration change followed by a new capture.
+
+Continuing to inspect more tables after one of these conditions usually adds detail, not confidence.
+
+### Optional compliance checks
+
+Use these checks when the expected configuration is known:
+
+| Statistics section | Verify |
+|---|---|
+| **Core Affinity** | Observed cores fit the configured affinity mask |
+| **Task Lifecycle** | Create, suspend, resume, and delete behavior matches expectations |
+| **Deadlines / CPU budget** | Violations use the real engineering limits; configured thresholds are in nanoseconds |
+| **Tag Analysis** | Application-defined values remain inside their limits |
+| **Interval Analysis** | Instrumented regions meet their duration budgets |
+
+## 9. Use the AI Assistant only after scoping
+
+AI is optional. It is most useful after you have selected a finding, task, event, or cursor range.
+
+| Goal | Recommended entry point | What to verify yourself |
+|---|---|---|
+| Explain a finding | Select it → **Explain…** | Named metrics and timestamps |
+| Check a finding | **Verify with AI…** | Supporting and contradicting evidence |
+| Investigate a region | Two or more cursors → **Explain this region with AI** | Every `jump:TIME` lies within C1–Cn |
+| Investigate one segment | Right-click → **Ask AI about this event** | Task, core, duration, nearby STI events |
+| Run a guided investigation | **Investigate…** or **Auto investigate…** | Scope, tool results, evidence quality, alternatives |
+
+Recommended AI sequence:
+
+```mermaid
+flowchart LR
+  triage["Triage"] --> scope["Scope"]
+  scope --> investigate["Investigate"]
+  investigate --> verify["Verify and challenge"]
+  verify --> experiment["Estimate an experiment"]
+  experiment --> remeasure["Recapture and remeasure"]
+```
+
+Reject an AI statement when it cannot be reproduced in Statistics, cites a time outside the cursor range, presents an estimate as a measurement, or assumes events that the trace did not capture.
+
+**Start Investigation** (empty log) runs **Auto investigate**. Restart restores a **Current Issue** card only when the log still has a user or assistant turn. **Ctrl+K** opens Analysis, AI, Compare, workspace presets, and Inspect task. Toolbar **Compare** can **Save as baseline** / **Score vs baseline**; the **Trends** page lists every open tab.
+
+## 10. Test one measurable change
+
+After the evidence supports a cause:
+
+1. Define one change, such as affinity, priority, mutex scope, task period, or workload distribution.
+2. State the expected metric change before editing firmware or configuration.
+3. Optionally use **What-if** or **Optimize** to rank ideas. Treat the result as a heuristic estimate, not scheduler simulation.
+4. Reproduce the same workload and capture a new trace.
+5. Open the new trace and select the same workload phase with equivalent cursor boundaries.
+6. Repeat the same Statistics measurements used in the original investigation.
+7. Check both the target metric and possible side effects, then record the difference.
+
+Example acceptance criteria:
+
+- Execution p99 decreases without increasing deadline misses.
+- Blocking time decreases without causing migration or CPU imbalance to rise sharply.
+- Migrations decrease without overloading the pinned core.
+- Load balance improves while throughput and timing remain comparable.
+
+If the result does not match the prediction, revise the hypothesis rather than adjusting the explanation to fit the outcome.
+
+## 11. Close the investigation
+
+Record enough information for another engineer to reproduce the conclusion:
+
+- Trace name and capture conditions.
+- Full-trace and cursor scope.
+- Symptom and affected task or core.
+- Measured baseline values and exact evidence times.
+- Supported cause, alternatives considered, and missing evidence.
+- Change applied and expected outcome.
+- New-capture values and their change from the original measurements.
+- Final confidence and any follow-up capture required.
+
+Use bookmarks and annotations for important timestamps. Export an HTML/CSV report, annotated snapshot, selected BTF range, or an Investigation Case when useful.
+
+## Beginner checklist
+
+- [ ] I checked trace quality before application behavior.
+- [ ] I reviewed the full trace before narrowing the scope.
+- [ ] I treated Analysis Findings as leads, not facts.
+- [ ] I used at least two cursors and enabled **Limit to C1–Cn**.
+- [ ] I checked a distribution or percentile, not only the average.
+- [ ] I reproduced the claim in Statistics.
+- [ ] I verified the exact event on the timeline.
+- [ ] I considered contradictory evidence and alternative causes.
+- [ ] I labeled estimates and missing trace data clearly.
+- [ ] I recaptured the same workload and repeated the same scoped measurements after a change.
+
+## Common mistakes
+
+| Mistake | Better practice |
+|---|---|
+| Starting with AI on the whole trace | Select a finding or cursor range first |
+| Treating Max as guaranteed WCET | Describe it as the maximum observed in this capture |
+| Using Avg alone | Check p95, p99, Max, and the distribution |
+| Calling off-CPU time a mutex wait | Confirm synchronization events or label it as blocking only |
+| Comparing different workload phases | Match capture conditions and cursor scopes |
+| Assuming correlation proves causation | Check sequence, alternatives, and contradicting evidence |
+| Treating What-if as measured behavior | Recapture and repeat the same Statistics measurements |
+| Continuing with a poor trace | Fix instrumentation or capture settings first |
+
+## Documentation navigation
+
+- [`README.md`](README.md) — installation, controls, timeline navigation, export, and [demo](README.md#demo)
+- [`STATISTICS.md`](STATISTICS.md) — metric definitions, formulas, interpretation, and limitations
+- [`AI.md`](AI.md) — AI models, tools, privacy, investigation engine, and evaluation
+- [`WORKFLOWS_zh-TW.md`](WORKFLOWS_zh-TW.md) — Traditional Chinese version

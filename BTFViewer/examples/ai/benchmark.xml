@@ -9,7 +9,8 @@
   Copy this file and edit <base-url>, <model id>, and keys for your lab.
   Do not commit real API keys. Prefer env="VARNAME" and leave the element empty.
   Filter models: pass models=id1,id2 on the ai-test command (ids from this file).
-  Self-signed TLS: examples/ai/benchmark-selfsigned.xml (tls-verify false).
+  Self-signed / private-CA TLS: <tls-verify>false</tls-verify> (default below).
+  Public HTTPS models can override to true.
 -->
 <ai-benchmark version="1">
   <dataset>tests/ai</dataset>
@@ -19,7 +20,7 @@
   <!-- Defaults for every <model> that does not override them. -->
   <endpoint>
     <base-url>http://localhost:11434/v1</base-url>
-    <tls-verify>true</tls-verify>
+    <tls-verify>false</tls-verify>
     <timeout-s>360</timeout-s>
     <!-- Local Ollama needs no key. Uncomment if the proxy requires one:
     <api-key env="OLLAMA_API_KEY"/>
@@ -28,9 +29,7 @@
 
   <models>
     <model id="qwen3.5:9b"/>
-    <model id="qwen3.5:27b"/>
     <model id="qwen3.8:27b"/>
-    <model id="gemma4:26b"/>
 
     <!-- Gemini: same provider, two ids. They share URL and GEMINI_API_KEY.
          Both:  -m gemini-3.6-flash,gemini-3.1-flash-lite -->
