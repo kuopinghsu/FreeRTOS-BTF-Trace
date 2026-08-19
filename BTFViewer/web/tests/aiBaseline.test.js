@@ -20,7 +20,7 @@ import {
   isQueryTool,
   recommendExperimentsFinding,
 } from '../src/utils/aiTools.js'
-import { AI_TEMPLATE_QUESTIONS } from '../src/utils/ollamaClient.js'
+import { AI_TEMPLATE_QUESTIONS } from '../src/utils/aiClient.js'
 
 describe('Historical baseline learning', () => {
   it('updateBaselineProfile merges running mean/variance (Welford)', () => {

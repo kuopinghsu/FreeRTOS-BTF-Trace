@@ -418,6 +418,56 @@ class AiToolsTests(unittest.TestCase):
         )
         self.assertTrue(all(m.get("tool_call_id") for m in by_order if m["role"] == "tool"))
 
+        empty_ids = [
+            {"role": "user", "content": "fix inversion"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "",
+                        "type": "function",
+                        "function": {"name": "investigate", "arguments": "{}"},
+                    },
+                    {
+                        "id": "",
+                        "type": "function",
+                        "function": {"name": "query_raw_metric", "arguments": "{}"},
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "", "content": '{"ok": true}'},
+            {"role": "tool", "content": '{"ok": true}'},
+        ]
+        fixed_ids = normalize_tool_chat_messages(empty_ids)
+        asst_ids = [c["id"] for c in fixed_ids[1]["tool_calls"]]
+        self.assertEqual(asst_ids, ["call_0", "call_1"])
+        self.assertTrue(all(asst_ids))
+        tools = [m for m in fixed_ids if m.get("role") == "tool"]
+        self.assertEqual([m.get("name") for m in tools], [
+            "investigate", "query_raw_metric",
+        ])
+        self.assertEqual(
+            [m.get("tool_call_id") for m in tools], ["call_0", "call_1"])
+        nested = extract_tool_calls({
+            "tool_calls": [{
+                "id": "",
+                "function": {"arguments": "{}"},
+                "extra_content": {
+                    "google": {"function_call": {"name": "investigate"}},
+                },
+            }],
+        })
+        self.assertEqual(nested[0]["name"], "investigate")
+        self.assertEqual(nested[0]["id"], "call_0")
+        parts = extract_tool_calls({
+            "content": [{
+                "functionCall": {"name": "query_raw_metric", "args": {"metric": "sync"}},
+            }],
+        })
+        self.assertEqual(parts[0]["name"], "query_raw_metric")
+        self.assertEqual(parts[0]["arguments"]["metric"], "sync")
+
     def test_gemini_thought_signatures_roundtrip_and_skip(self) -> None:
         sig = "CvcQAdHtimRealSignature=="
         msg = {

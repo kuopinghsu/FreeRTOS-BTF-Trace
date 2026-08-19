@@ -364,11 +364,11 @@ def build_ai_system_prompt(
         f"{AI_SYSTEM_PROMPT} Always write your entire reply in {lang}.{extra}"
     )
 
-# (id, label, prompt) — keep in sync with web/src/utils/ollamaClient.js
+# (id, label, prompt) — keep in sync with web/src/utils/aiClient.js
 AI_COMPARE_TEMPLATE_ID = "compare"
 
 # Templates that only make sense for a multi-core (SMP) trace — keep in sync
-# with web/src/utils/ollamaClient.js AI_SMP_ONLY_TEMPLATE_IDS.
+# with web/src/utils/aiClient.js AI_SMP_ONLY_TEMPLATE_IDS.
 AI_SMP_ONLY_TEMPLATE_IDS = frozenset({"migrations", "balance"})
 
 AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
@@ -619,7 +619,7 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
     ),
 )
 
-# Always-visible wrapping chips. Keep in sync with web/src/utils/ollamaClient.js.
+# Always-visible wrapping chips. Keep in sync with web/src/utils/aiClient.js.
 # Newbie left-to-right: Triage → Scope → Investigate. Last id shares a row
 # with More templates… (web `.ai-tpl-row`).
 AI_TEMPLATE_PRIMARY_IDS: Tuple[str, ...] = (
@@ -672,7 +672,7 @@ def ai_template_by_id(tid: str) -> Optional[Tuple[str, str, str]]:
 
 # "Ask AI about this event" (timeline segment context menu) — intentionally
 # kept out of AI_TEMPLATE_QUESTIONS so it does not show in the template grid.
-# Keep in sync with web/src/utils/ollamaClient.js ASK_EVENT_PROMPT.
+# Keep in sync with web/src/utils/aiClient.js ASK_EVENT_PROMPT.
 ASK_EVENT_PROMPT = (
     "Explain the timeline event for task {task} on {core} around jump:{ns} "
     "(segment {start}-{stop}). Call correlate_events and query_raw_metric as "
@@ -729,13 +729,13 @@ DEFAULT_AI_MODEL = "qwen3.5:9b"
 # Composer icons (16x16). Keep in sync with AiAssistantPanel.vue.
 AI_SEND_ICON_PATH = "M8 2.5l4.5 5H9.25v6.5h-2.5V7.5H3.5L8 2.5z"
 AI_STOP_ICON_PATH = "M5 5h6v6H5z"
-# Keep in sync with web/src/utils/ollamaClient.js (ms equivalents).
+# Keep in sync with web/src/utils/aiClient.js (ms equivalents).
 AI_CHAT_TIMEOUT_S = 120.0
 AI_LIST_MODELS_TIMEOUT_S = 12.0
 AI_TEST_TIMEOUT_S = 120.0
 # Live ``ai-test`` / ``ai-test-context``: retry transient model errors.
-AI_LIVE_RETRY_ATTEMPTS = 3
-AI_LIVE_RETRY_DELAY_S = 2.0
+AI_LIVE_RETRY_ATTEMPTS = 6
+AI_LIVE_RETRY_DELAY_S = 10.0
 
 # Per-preset settings stored in btf_viewer.rc / browser storage.
 AI_PRESET_FIELDS: Tuple[str, ...] = (
@@ -753,7 +753,7 @@ AI_AUTH_MODE_LABELS: Tuple[Tuple[str, str], ...] = (
 )
 
 # Hosts that serve a local model and therefore need no API key.
-# Keep in sync with LOCAL_AI_HOSTS in web/src/utils/ollamaClient.js.
+# Keep in sync with LOCAL_AI_HOSTS in web/src/utils/aiClient.js.
 LOCAL_AI_HOSTS: Tuple[str, ...] = (
     "localhost",
     "127.0.0.1",
@@ -2722,20 +2722,29 @@ def call_ai_with_retries(
     delay_s: float = AI_LIVE_RETRY_DELAY_S,
     log: bool = True,
 ) -> Any:
-    """Call *fn* up to *attempts* times on retryable model errors."""
+    """Call *fn* up to *attempts* times on retryable model errors.
+
+    Waits a fixed *delay_s* seconds between each retry (no backoff).
+    """
     last: Optional[BaseException] = None
     tries = max(1, int(attempts or 1))
-    wait_s = max(0.0, float(delay_s or 0.0))
+    wait = max(0.0, float(delay_s or 0.0))
     for attempt in range(1, tries + 1):
         try:
-            return fn()
+            result = fn()
+            if log and attempt > 1:
+                print(
+                    f"[ai-test] recovered after retry {attempt}/{tries}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            return result
         except OllamaCancelled:
             raise
         except Exception as exc:
             last = exc
             if attempt >= tries or not ai_error_is_retryable(exc):
                 raise
-            wait = wait_s * attempt
             if log:
                 print(
                     f"[ai-test] retry {attempt}/{tries} in {wait:.0f}s: {exc}",
@@ -2975,6 +2984,10 @@ def ai_chat_completion(
         calls = merge_tool_calls(calls, text_calls)
         if text_calls:
             content = strip_parsed_tool_markup(content)
+        if calls:
+            src = msg if isinstance(msg, dict) else {}
+            msg = canonical_assistant_tool_message(
+                src.get("content", content), calls)
         return content, calls, msg
 
     content, calls, msg = _parse_turn(body)
@@ -3136,9 +3149,12 @@ def live_benchmark_chat(
     collected.extend(c for c in calls if isinstance(c, dict))
 
     if _benchmark_needs_tool_followup(content, calls):
-        asst = (turn or {}).get("message")
-        if not isinstance(asst, dict) or str(asst.get("role") or "") != "assistant":
-            asst = canonical_assistant_tool_message(content, calls)
+        raw = (turn or {}).get("message")
+        raw_content: Any = content
+        if isinstance(raw, dict):
+            if raw.get("content") is not None:
+                raw_content = raw.get("content")
+        asst = canonical_assistant_tool_message(raw_content, calls)
         messages.append(asst)
         for i, call in enumerate(calls):
             if not isinstance(call, dict):
@@ -3151,7 +3167,7 @@ def live_benchmark_chat(
                 tool_body = format_tool_result_content(payload)
             messages.append(tool_result_message(
                 tool_call_id=str(call.get("id") or f"call_{i}"),
-                name=str(call.get("name") or ""),
+                name=str(call.get("name") or "").strip(),
                 content=tool_body,
             ))
         messages.append({

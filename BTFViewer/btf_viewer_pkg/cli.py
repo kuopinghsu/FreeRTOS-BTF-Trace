@@ -17,6 +17,7 @@ from .platform import *  # noqa: F403,F401
 from .ai_case import (
     format_benchmark_markdown,
     load_benchmark_suite_xml,
+    merge_benchmark_report,
     run_live_benchmark,
     run_offline_benchmark,
     select_benchmark_suite_models,
@@ -834,6 +835,10 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
             "  %(prog)s ai-test --config examples/ai/benchmark.xml -o AI_BENCHMARK.md\n"
             "  %(prog)s ai-test --config examples/ai/benchmark.xml --compare-context\n"
             "  %(prog)s ai-test --config examples/ai/benchmark.xml --insecure\n"
+            "  %(prog)s ai-test --config examples/ai/benchmark.xml "
+            "--only-cases priority_inversion,period_jitter\n"
+            "  %(prog)s ai-test --config examples/ai/benchmark.xml --models gemini-3.7-flash "
+            "--context-mode full -o AI_BENCHMARK.md   # merges into the existing file\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -857,6 +862,16 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         help="comma-separated model ids to run from the suite XML (default: all <model> entries)",
     )
     ai_test.add_argument(
+        "--only-cases", metavar="IDS",
+        default="",
+        help=(
+            "comma-separated dataset case ids to score (default: every case). "
+            "With -o pointing at an existing report, only these cases are "
+            "updated (see -o); with --replace-report or a fresh file, the "
+            "written report only covers these cases."
+        ),
+    )
+    ai_test.add_argument(
         "--base-url", metavar="URL",
         default="",
         help="override every model's OpenAI-compatible base URL",
@@ -869,7 +884,16 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     ai_test.add_argument(
         "-o", "--output", metavar="PATH",
         default="",
-        help="write a markdown report (e.g. AI_BENCHMARK.md; or <output> in --config)",
+        help=(
+            "write a markdown report (e.g. AI_BENCHMARK.md; or <output> in --config). "
+            "If it already exists, this run's models/context-modes/cases are merged "
+            "into it — everything else in the file is left untouched"
+        ),
+    )
+    ai_test.add_argument(
+        "--replace-report",
+        action="store_true",
+        help="overwrite --output instead of merging into its existing report",
     )
     ai_test.add_argument(
         "--context-mode", metavar="MODE",
@@ -1858,6 +1882,7 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
     )
     config_path = str(getattr(args, "config", "") or "").strip()
     models_raw = str(getattr(args, "models", "") or "").strip()
+    case_ids_raw = str(getattr(args, "only_cases", "") or "").strip()
     out_path = str(getattr(args, "output", "") or "").strip()
     suite = None
     if config_path:
@@ -1892,7 +1917,8 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
     live = None
     try:
         offline = run_offline_benchmark(
-            path, fail_under=fail_under if suite is None else 0)
+            path, fail_under=fail_under if suite is None else 0,
+            case_ids=case_ids_raw)
         if suite is not None:
             from .ai_assistant import (
                 AI_CHAT_TIMEOUT_S,
@@ -2009,6 +2035,7 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
                 complete=complete,
                 fail_under=fail_under,
                 context_modes=context_modes,
+                case_ids=case_ids_raw,
             )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -2021,8 +2048,32 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
         dataset_label = path
         if path.replace("\\", "/").rstrip("/").endswith("tests/ai"):
             dataset_label = "tests/ai"
+        merge_offline, merge_live = offline, live
+        replace_report = bool(getattr(args, "replace_report", False))
+        if not replace_report and os.path.exists(out_path):
+            try:
+                with open(out_path, "r", encoding="utf-8") as fh:
+                    prior_text = fh.read()
+            except OSError:
+                prior_text = ""
+            if prior_text.strip():
+                merge_offline, merge_live = merge_benchmark_report(
+                    prior_text, offline=offline, live=live)
+                print(
+                    f"[ai-test] merging this run into the existing {out_path} "
+                    "(pass --replace-report to overwrite it instead)",
+                    file=sys.stderr,
+                    flush=True,
+                )
+        elif case_ids_raw:
+            print(
+                f"[ai-test] --only-cases limits {out_path} to: {case_ids_raw} "
+                "(other cases are dropped from this report)",
+                file=sys.stderr,
+                flush=True,
+            )
         md = format_benchmark_markdown(
-            offline=offline, live=live, dataset=dataset_label,
+            offline=merge_offline, live=merge_live, dataset=dataset_label,
         )
         try:
             with open(out_path, "w", encoding="utf-8") as fh:

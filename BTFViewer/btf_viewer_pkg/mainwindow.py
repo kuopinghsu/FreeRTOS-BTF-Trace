@@ -3367,6 +3367,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._shutting_down = True
         self._block_dock_widget_signals(True)
 
+        # Undo the app-wide event filter installed in __init__ — without this
+        # every closed MainWindow keeps intercepting every event dispatched
+        # anywhere in the process for the rest of its lifetime (a real leak
+        # for embedders/tests that create more than one MainWindow).
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+
         for tab in self._tabs:
             tab.view._zoom_timer.stop()
             tab.view._pan_timer.stop()

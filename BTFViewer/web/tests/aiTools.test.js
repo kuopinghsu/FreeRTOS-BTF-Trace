@@ -261,6 +261,37 @@ describe('aiTools', () => {
       }]),
     })
     assert.equal(asStr[0].name, 'set_view_mode')
+
+    const emptyId = extractToolCalls({
+      tool_calls: [{
+        id: '',
+        function: { arguments: '{}' },
+        extra_content: { google: { function_call: { name: 'investigate' } } },
+      }],
+    })
+    assert.equal(emptyId[0].name, 'investigate')
+    assert.equal(emptyId[0].id, 'call_0')
+    const parts = extractToolCalls({
+      content: [{ functionCall: { name: 'query_raw_metric', args: { metric: 'sync' } } }],
+    })
+    assert.equal(parts[0].name, 'query_raw_metric')
+    assert.equal(parts[0].arguments.metric, 'sync')
+    const fixedIds = normalizeToolChatMessages([
+      {
+        role: 'assistant',
+        tool_calls: [
+          { id: '', type: 'function', function: { name: 'investigate', arguments: '{}' } },
+          { id: '', type: 'function', function: { name: 'query_raw_metric', arguments: '{}' } },
+        ],
+      },
+      { role: 'tool', tool_call_id: '', content: '{"ok":true}' },
+      { role: 'tool', content: '{"ok":true}' },
+    ])
+    assert.deepEqual(fixedIds[0].tool_calls.map(c => c.id), ['call_0', 'call_1'])
+    assert.deepEqual(
+      fixedIds.filter(m => m.role === 'tool').map(m => m.name),
+      ['investigate', 'query_raw_metric'],
+    )
   })
 
   it('parses ```btftool fences and XML fallbacks', () => {

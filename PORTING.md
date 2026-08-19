@@ -1,40 +1,40 @@
-# FreeRTOS-BTF-Trace — Porting Guide
+# FreeRTOS-BTF-Trace Porting Guide
 
-Notes for integrating the trace library into an existing FreeRTOS target.
+This guide explains how to integrate the trace library with an existing FreeRTOS target.
 
-| Document | Contents |
+| Document | Purpose |
 |---|---|
-| [README.md](README.md) | Build, demo, and viewing |
-| [TRACE_FORMAT.md](TRACE_FORMAT.md) | Binary layout and BTF event mapping |
-| [BTFViewer/WORKFLOWS.md](BTFViewer/WORKFLOWS.md) | BTF Viewer analysis workflows |
+| [README.md](README.md) | Build the demo, capture events, and open a trace |
+| [TRACE_FORMAT.md](TRACE_FORMAT.md) | Understand the binary layout and BTF event mapping |
+| [BTFViewer/WORKFLOWS.md](BTFViewer/WORKFLOWS.md) | Follow trace-analysis procedures |
 
-## Checklist
+## Porting checklist
 
-- [ ] Enable the FreeRTOS trace facility
-- [ ] Include `FreeRTOS-Trace.h`
-- [ ] Compile `btf_trace.c`
-- [ ] Implement `xGetCycles()`
-- [ ] Set `configCPU_CLOCK_HZ` correctly
-- [ ] Choose file, live, or buffer-only dump mode
-- [ ] Call `traceSTART()` before the scheduler
-- [ ] Call `traceEND()` when capture ends
-- [ ] Size the task table and event ring
-- [ ] Verify trace locking on SMP targets
-- [ ] Convert `trace.bin` and check the quality flags
+- [ ] Enable the FreeRTOS trace facility.
+- [ ] Include `FreeRTOS-Trace.h`.
+- [ ] Compile `btf_trace.c`.
+- [ ] Implement `xGetCycles()`.
+- [ ] Set `configCPU_CLOCK_HZ` to the counter frequency.
+- [ ] Select file, live, or buffer-only output.
+- [ ] Call `traceSTART()` before starting the scheduler.
+- [ ] Call `traceEND()` when capture ends.
+- [ ] Size the task table and event ring.
+- [ ] Verify trace locking on SMP targets.
+- [ ] Convert `trace.bin` and check the quality flags.
 
 ## 1. Add the trace library
 
-In `FreeRTOSConfig.h`:
+Add these definitions to `FreeRTOSConfig.h`:
 
 ```c
 #include "FreeRTOS-Trace/FreeRTOS-Trace.h"
 
 #define configUSE_TRACE_FACILITY  1
-#define configMAX_TRACE_EVENTS    4096   /* ring capacity; 16 bytes each */
+#define configMAX_TRACE_EVENTS    4096   /* Ring capacity; 16 bytes per event. */
 #define configMAX_TRACE_TASKS     64
 ```
 
-Add `FreeRTOS-Trace/` to the include path and compile:
+Add `FreeRTOS-Trace/` to the compiler include path and compile:
 
 ```text
 FreeRTOS-Trace/btf_trace.c
@@ -42,60 +42,66 @@ FreeRTOS-Trace/btf_trace.c
 
 ### Configuration options
 
-| Macro | Default | Controls |
+| Macro | Default | Purpose |
 |---|---:|---|
-| `configMAX_TRACE_TASK_NAME_LEN` | 8 | Stored task-name bytes plus NUL; slot is 4-byte aligned |
-| `configINCLUDE_SCHEDULING` | 1 | Switch, create/delete, suspend/resume, priority, affinity |
-| `configINCLUDE_TAGS` | 1 | Tags and interval start/stop |
-| `configINCLUDE_QUEUE_EVENTS` | 1 | Queue, mutex, semaphore STI |
-| `configINCLUDE_OSTICK_EVENTS` | 1 | TICK STI |
+| `configMAX_TRACE_TASK_NAME_LEN` | 8 | Maximum stored task-name length; the NUL-terminated slot is aligned to 4 bytes |
+| `configINCLUDE_SCHEDULING` | 1 | Record task switching, lifecycle, priority, and affinity events |
+| `configINCLUDE_TAGS` | 1 | Record tags and interval start/stop events |
+| `configINCLUDE_QUEUE_EVENTS` | 1 | Record queue, mutex, and semaphore STI events |
+| `configINCLUDE_OSTICK_EVENTS` | 1 | Record TICK STI events |
 
-Defaults are defined in `FreeRTOS-Trace.h` / `btf_trace.h`.
+Default values are defined in `FreeRTOS-Trace.h` and `btf_trace.h`.
 
 ## 2. Provide the time source
 
-In `FreeRTOS-Trace/btf_port.h`, implement:
+Implement this function in `FreeRTOS-Trace/btf_port.h`:
 
 ```c
 uint32_t xGetCycles(void);
 ```
 
-The counter must be free-running and 32-bit. DWT CYCCNT, GPT, `mtime`, or an equivalent source can be used. A 2³² wrap is expected, and `configCPU_CLOCK_HZ` / `core_clock` must match the counter frequency.
+The function must return a free-running 32-bit counter. Suitable sources include DWT CYCCNT, GPT, `mtime`, or an equivalent hardware counter.
 
-`gentrace` and `btf_dump()` extend wrapped timestamps offline.
+Requirements:
+
+- A 2³² counter wrap is expected.
+- `configCPU_CLOCK_HZ` and the exported `core_clock` must match the counter frequency.
+- The counter must remain consistent across all captured events.
+
+`gentrace` and `btf_dump()` reconstruct wrapped timestamps during export.
 
 ### RISC-V demo
 
-The demo maps `xGetCycles()` to the lower 32 bits of CLINT `mtime` through:
+The RISC-V demo maps `xGetCycles()` to the lower 32 bits of CLINT `mtime` through:
 
 ```c
 portGET_RUN_TIME_COUNTER_VALUE()
 ```
 
-Non-RISC-V builds intentionally hit `#error` until this port hook is implemented.
+Other targets stop at `#error` until this port hook is implemented.
 
-## 3. Choose a dump mode
+## 3. Select an output mode
 
 Configure the mode in `btf_port.h`, or define it before including the trace header.
 
 | Mode | Configuration | Result |
 |---|---|---|
-| **File dump** | `HAVE_FILE_DUMP` | `traceEND()` writes `TRACE_DUMP_FILENAME` (`trace.bin` by default) using stdio |
-| **Live BTF** | `PRINT_BTF_DUMP` | `btf_dump()` prints BTF 2.2.0 CSV at `traceEND()` |
-| **Buffer only** | Define neither | Trace remains in RAM; read `trace_data` with JTAG/debugger |
+| **File dump** | `HAVE_FILE_DUMP` | `traceEND()` writes `TRACE_DUMP_FILENAME`; the default is `trace.bin` |
+| **Live BTF** | `PRINT_BTF_DUMP` | `btf_dump()` prints BTF 2.2.0 CSV when `traceEND()` runs |
+| **Buffer only** | Define neither option | Trace data remains in RAM and can be read from `trace_data` with a debugger |
 
-For live BTF:
+Live BTF supports these time scales:
 
-| `TIMESCALE_US` | BTF time scale |
+| `TIMESCALE_US` | BTF header |
 |---:|---|
 | 1 | `#timeScale us` |
 | 0 | `#timeScale ns` |
 
-File dump requires a working C library `FILE` implementation. On bare metal without stdio, use buffer-only or live dump.
+File output requires a working C library `FILE` implementation. On a bare-metal target without standard I/O, use live BTF or buffer-only mode.
 
 ## 4. Start and stop capture
 
-Call `traceSTART()` before the scheduler:
+Call `traceSTART()` before starting the scheduler:
 
 ```c
 int main(void)
@@ -109,7 +115,7 @@ int main(void)
 }
 ```
 
-Call `traceEND()` when the run finishes:
+Call `traceEND()` when the capture period finishes:
 
 ```c
 #if configUSE_TRACE_FACILITY
@@ -117,37 +123,38 @@ Call `traceEND()` when the run finishes:
 #endif
 ```
 
-### Ring sizing
+### Event-ring size
 
-`configMAX_TRACE_EVENTS` controls the number of 16-byte event records retained.
+`configMAX_TRACE_EVENTS` sets the number of retained 16-byte event records.
 
-When the ring fills:
+When the ring is full:
 
-```mermaid
-flowchart TD
-  newEvt[new event] --> overwrite[overwrites oldest event]
-  overwrite --> count[event_count remains at max_events]
-  count --> export["export → #ringOverflow true"]
-```
+1. A new event overwrites the oldest event.
+2. `event_count` remains equal to `max_events`.
+3. The BTF export contains `#ringOverflow true`.
 
-Choose a ring large enough for the capture interval you intend to analyze.
+Choose a capacity large enough for the workload period that you need to analyze.
 
 ## 5. Add application instrumentation
 
-With `configINCLUDE_TAGS=1`:
+Enable instrumentation with `configINCLUDE_TAGS=1`.
 
 ### Tags
+
+Use a tag to record a 32-bit application value:
 
 ```c
 traceTAG(0, (int)allocated);
 ```
 
-| API | Purpose |
+| Item | Meaning |
 |---|---|
-| `traceTAG(t, v)` | Sample a 32-bit value; `t = 0…7` |
-| BTF output | `tag0_event … tag7_event` |
+| `traceTAG(t, v)` | Record value `v` on tag channel `t`, where `t` is 0–7 |
+| BTF target | `tag0_event` through `tag7_event` |
 
 ### Intervals
+
+Use an interval to mark the start and end of an application phase:
 
 ```c
 traceINTERVAL_START(1);
@@ -158,85 +165,82 @@ traceINTERVAL_STOP(1);
 | API | Stored data |
 |---|---|
 | `traceINTERVAL_START(id)` | `param1=id`, `param2=caller task id` |
-| `traceINTERVAL_STOP(id)` | Same id/task pairing |
+| `traceINTERVAL_STOP(id)` | The same interval and task IDs |
 | BTF note | `{id} tid:{task_id}` |
 
-Prefer `traceTAG()` and `traceINTERVAL_*()` in task code because they take the trace lock.
+Use `traceTAG()` and `traceINTERVAL_*()` in normal task code because these wrappers acquire the trace lock.
 
-Use `btf_traceTAG()` / `btf_traceINTERVAL_*()` only when you already hold the lock or the wrappers are unsuitable.
+Use `btf_traceTAG()` or `btf_traceINTERVAL_*()` only when the caller already holds the required lock or cannot use the wrappers.
 
-The demo uses tag 0 for heap bytes and interval ids 0–11 for test regions.
+The demo uses tag 0 for heap bytes and interval IDs 0–11 for its test regions.
 
-## 6. SMP requirements
+## 6. Meet the SMP requirements
 
-Trace hooks use:
+Trace hooks run from two contexts:
 
-```mermaid
-flowchart LR
-  task[task context] --> taskCrit[taskENTER_CRITICAL]
-  isr[ISR / context switch] --> isrCrit[taskENTER_CRITICAL_FROM_ISR]
-```
+| Context | Lock operation |
+|---|---|
+| Task context | `taskENTER_CRITICAL` |
+| ISR or context-switch path | `taskENTER_CRITICAL_FROM_ISR` |
 
-The RISC-V SMP port implements both as **recursive spinlocks**. This allows `traceTASK_SWITCHED_OUT` / `traceTASK_SWITCHED_IN` to run inside `vTaskSwitchContext` while the ISR lock is already held.
+The RISC-V SMP port uses recursive spinlocks for both paths. This allows `traceTASK_SWITCHED_OUT` and `traceTASK_SWITCHED_IN` to run inside `vTaskSwitchContext` while the ISR lock is held.
 
-> A non-recursive lock can deadlock in this path. Match the recursive behavior on another SMP port.
+> A non-recursive lock can deadlock in this path. An SMP port must provide equivalent recursive behavior.
 
 ### Core-affinity tracing
 
-Affinity STI requires:
+Enable both options:
 
 ```c
-#define configUSE_CORE_AFFINITY      1
-#define configINCLUDE_SCHEDULING     1
+#define configUSE_CORE_AFFINITY   1
+#define configINCLUDE_SCHEDULING  1
 ```
 
-FreeRTOS V11 invokes `traceENTER_vTaskCoreAffinitySet`. The trace library records:
+FreeRTOS V11 calls `traceENTER_vTaskCoreAffinitySet`. The trace library converts the hook to an affinity event:
 
-```mermaid
-flowchart LR
-  hook[traceENTER_vTaskCoreAffinitySet] --> record["affinity_set Name id 0xMASK"]
-  record --> viewer[BTF Viewer checks observed cores vs mask]
+```text
+affinity_set Name id 0xMASK
 ```
 
-`configNUMBER_OF_CORES` must be **1–31**.
+BTFViewer compares the cores used by the task with this affinity mask.
+
+`configNUMBER_OF_CORES` must be from **1 through 31**.
 
 ## 7. Convert the capture
 
-For file-dump mode:
+For file-output mode, convert `trace.bin` after capture:
 
 ```bash
 tools/gentrace trace.bin trace.btf
 tools/gentrace -v trace.bin trace.vcd
 ```
 
-```mermaid
-flowchart LR
-  bin[trace.bin] --> gentrace[gentrace]
-  gentrace --> btf[.btf — BTF Viewer / Trace Compass]
-  gentrace --> vcd[.vcd — GTKWave]
-```
+| Output | Viewer |
+|---|---|
+| `.btf` | BTFViewer or Eclipse Trace Compass |
+| `.vcd` | GTKWave |
 
 ## 8. Validate the port
 
-Verify the capture before using it for performance analysis.
+Validate the capture before using it for performance analysis.
 
-| Check | Expected |
+| Check | Expected result |
 |---|---|
-| BTF opens successfully | Header and event layout accepted |
-| Task names appear | Task table is sized correctly |
-| Timeline is monotonic | Counter frequency / wrap handling correct |
-| Core ids are valid | SMP encoding works |
-| TICK events appear when enabled | `configINCLUDE_OSTICK_EVENTS` works |
-| Tags / intervals pair correctly | Application instrumentation works |
-| Affinity events appear when enabled | Scheduling hooks work |
-| No unexpected quality flags | Capture was complete |
+| Open the BTF file | The viewer accepts the header and event layout |
+| Check task names | Expected names appear; the task table is large enough |
+| Check the timeline | Timestamps are monotonic after wrap reconstruction |
+| Check core IDs | All IDs are valid for the configured SMP system |
+| Check TICK events | Events appear when `configINCLUDE_OSTICK_EVENTS=1` |
+| Check tags and intervals | Values and start/stop pairs are correct |
+| Check affinity events | Events appear when affinity and scheduling hooks are enabled |
+| Check quality metadata | No unexpected capture-quality flags appear |
 
-Quality flags:
+### Quality flags
 
 | Flag | Meaning |
 |---|---|
-| `#ringOverflow true` | Ring wrapped; oldest events were lost |
-| `#taskTableOverflow true` | A task id could not be represented in the name table |
-| `#truncated true` | `traceEND()` was not called or the binary dump is incomplete |
+| `#ringOverflow true` | The ring wrapped and the oldest events were lost |
+| `#taskTableOverflow true` | A task ID had no available task-name slot |
+| `#truncated true` | `traceEND()` was not called, or the binary dump is incomplete |
 
-For exact binary and BTF mappings, see **[TRACE_FORMAT.md](TRACE_FORMAT.md)**.
+See [TRACE_FORMAT.md](TRACE_FORMAT.md) for the exact binary layout and BTF mapping.

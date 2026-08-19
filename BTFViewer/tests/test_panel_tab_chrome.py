@@ -28,6 +28,8 @@ from btf_viewer_pkg.config import (  # noqa: E402
 from btf_viewer_pkg.mainwindow import MainWindow  # noqa: E402
 from btf_viewer_pkg.stats import _RcSettings  # noqa: E402
 
+from tests import destroy_main_window  # noqa: E402
+
 
 def _wait_ms(app: QApplication, ms: int) -> None:
     timer = QElapsedTimer()
@@ -68,7 +70,7 @@ class PanelTabChromeTest(unittest.TestCase):
 
     def _make_win(self) -> MainWindow:
         win = MainWindow()
-        self.addCleanup(win.close)
+        self.addCleanup(destroy_main_window, win)
         win.show()
         _wait_ms(self._app, 150)
         placeholder = QWidget()

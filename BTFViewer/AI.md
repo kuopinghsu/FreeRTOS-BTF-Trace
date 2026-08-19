@@ -335,8 +335,8 @@ A local Ollama endpoint normally needs no key. For a custom endpoint, enter its 
 
 | If you…                                                                       | Use                                                                                                                                  |
 | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Want a local investigator (no key)                                            | `qwen3.5:9b` — shipped Ollama default; best practical local on the investigation suite (~52s/case, 78 overall)                       |
-| Need more local quality                                                       | `qwen3.8:27b` (88, ~190s/case) or `qwen3.5:27b` (81, ~149s/case). `gemma4:26b` is slower than 9b and slightly worse (73, ~111s/case) |
+| Want a local investigator (no key)                                            | `qwen3.5:9b` — shipped Ollama default; best practical local on the investigation suite (overall 78–88 across context modes, 10.8–16.2s/case; see [AI_BENCHMARK.md](AI_BENCHMARK.md)) |
+| Need more local quality                                                       | `qwen3.8:27b` (overall 78–88, 186–332s/case). Optional 27B-class alternatives such as `qwen3.5:27b` or `gemma4:26b` are not part of the shipped suite and are not benchmarked here |
 | Have a large scope (many findings, long chat) or want the strongest reasoning | Cloud (`gpt-4o`, Gemini, DeepSeek, Grok) — mind the [privacy](#what-leaves-the-machine) trade-off                                    |
 | Handle confidential traces                                                    | Local Ollama regardless of size — nothing leaves the machine                                                                         |
 
@@ -691,6 +691,7 @@ Detailed platform-specific setup problems are documented in **Troubleshooting** 
 | Chat probe timed out / `The read operation timed out` | `GET /models` lists ids only; inference is slow or hung              | **Test connection** POSTs `/chat/completions` (non-streaming, 120s). Warm the model (`ollama run MODEL`) and retry. Debug with the curl probe below; if curl hangs too, the gateway's chat upstream is stuck. Try `"stream": true` if non-stream never returns. Lower context length on a VRAM-tight local host. |
 | Model not found                                       | Typed id is not served                                               | Refresh the Model list (or Test connection) and pick a served id from the dropdown, or `ollama pull` it                                                                                                                                                                                                          |
 | Gemini HTTP 400 `thought_signature`                   | Gemini 3 requires a thought blob on tool follow-ups                  | Retry the question — the viewer echoes Gemini thought signatures                                                                                                                                                                                                                                                 |
+| Gemini HTTP 400 `function_response.name`              | OpenAI-compat follow-up with empty `tool_calls[].id`                 | The viewer fills ids and `role=tool` names before the next turn. Retry the case.                                                                                                                                                                                                                                  |
 | Raw `btftool` JSON instead of native tool calls       | Model lacks or skips function calling                               | The viewer renders the same cards. Select **Apply** or enable **Auto-apply GUI actions**. For reliable native calls, use a tool-capable model such as `qwen3.5:9b` or a supported cloud model.                                                                                                                |
 | Ask times out (over 120s) or stays on Waiting…        | Cold start, CPU offload, or VRAM spill                               | **Stop** (composer icon), warm with `ollama run MODEL`, retry. Use **Clear** between long threads. Smaller model or shorter Statistics scope if the Findings card is huge                                                                                                                                        |
 | Later turns ignore earlier facts                      | Chat history exceeded the context window                             | **Clear** on the AI bar, or **Analysis → Query with AI…** / toolbar **Compare → Query with AI…** for a fresh scoped prompt                                                                                                                                                                                       |
@@ -760,7 +761,7 @@ python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml --compare
 python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml --insecure
 ```
 
-Or `make -C BTFViewer ai-test` (`AI_DATASET`, `AI_FAIL_UNDER`), `make -C BTFViewer ai-test-live` (`AI_CONFIG`, optional `AI_MODELS`, writes [AI_BENCHMARK.md](AI_BENCHMARK.md)), and `make -C BTFViewer ai-test-context` (same as live + `--compare-context`). Optional models are skipped when their key is missing; force with `AI_MODELS=claude-sonnet-5,kimi-k3`. Dataset, scoring rules, and context-mode flags: [Benchmark / evaluation suite](#benchmark-suite).
+Or `make -C BTFViewer ai-test` (`AI_DATASET`, `AI_FAIL_UNDER`), `make -C BTFViewer ai-test-live` (`AI_CONFIG`, optional `AI_MODELS`, writes [AI_BENCHMARK.md](AI_BENCHMARK.md)), and `make -C BTFViewer ai-test-context` (same as live + `--compare-context`). Dataset, scoring rules, and context-mode flags: [Benchmark / evaluation suite](#benchmark-suite).
 
 See also [Export → Headless CLI](README.md#headless-cli-desktop-only) in the user guide.
 
@@ -770,7 +771,7 @@ See also [Export → Headless CLI](README.md#headless-cli-desktop-only) in the u
 
 ## Benchmark and evaluation suite
 
-Offline `ai-test` / `runOfflineBenchmark` already ships. Live runs read **model id, base URL, TLS, and API key** from a suite XML (`--config examples/ai/benchmark.xml`) and write [AI_BENCHMARK.md](AI_BENCHMARK.md). Commands: [CLI regression gate](#cli-regression-gate). Default live scoring uses **Full evidence** (`--context-mode full`). **`--compare-context`** runs Compact, Balanced, and Full on the same cases and reports score, token totals, and latency side by side. Each live model call **retries up to 3 times** on transient errors (HTTP 429/503 high demand, timeouts, empty replies); auth and not-found errors are not retried.
+Offline `ai-test` / `runOfflineBenchmark` already ships. Live runs read **model id, base URL, TLS, and API key** from a suite XML (`--config examples/ai/benchmark.xml`) and write [AI_BENCHMARK.md](AI_BENCHMARK.md) — a rerun **merges** into an existing file (untouched models/context-modes/cases are preserved byte-for-byte; `--replace-report` overwrites fully). Commands: [CLI regression gate](#cli-regression-gate). Default live scoring uses **Full evidence** (`--context-mode full`). **`--compare-context`** runs Compact, Balanced, and Full on the same cases and reports score, token totals, and latency side by side. Each live model call **retries up to 6 times, pausing 10s between attempts** on transient errors (HTTP 429/503 high demand, timeouts, empty replies); auth and not-found errors are not retried.
 
 The capability matrix above is qualitative (small local vs 9B+ vs cloud). The suite turns those expectations into repeatable measurements: **which model is most reliable for BTF Viewer trace investigation**, not which model is largest or “smartest.”
 
@@ -801,7 +802,6 @@ Keep the live set focused on:
 
 - **Gemini cloud models**
 - **Local Ollama models that are practical on a typical developer workstation**
-- **Optional cloud models** when their API keys are present (`claude-sonnet-5`, `kimi-k3`)
 
 Do **not** pick local models only because they are newest or largest. Measure models that can run alongside BTF Viewer, Ollama, and the AI context/tooling workload.
 
@@ -817,19 +817,6 @@ Do **not** pick local models only because they are newest or largest. Measure mo
 - **Gemini 3.7 Flash** (`gemini-3.7-flash`) — high-reasoning cloud reference
 - **Gemini 3.5 Flash-Lite** (`gemini-3.5-flash-lite`) — fast/efficient cloud reference
 
-**Optional cloud** (skipped unless the env key is set, or pass `--models` / `AI_MODELS`):
-
-- **Claude Sonnet 5** (`claude-sonnet-5`) — `ANTHROPIC_API_KEY`
-- **Kimi K3** (`kimi-k3`) — `MOONSHOT_API_KEY`
-
-Optional models are skipped when their key is missing. To force them:
-
-```bash
-make -C BTFViewer ai-test-context AI_MODELS=claude-sonnet-5,kimi-k3
-```
-
-Older 7B/14B ids and other local 27B-class ids (`qwen3.5:27b`, `gemma4:26b`) stay optional outside this suite. Do not include 3B-class models — they skip native tool calls and fail the investigation suite.
-
 ```text
 Shipped live suite
 │
@@ -837,13 +824,9 @@ Shipped live suite
 │   ├── Qwen3.5 9B
 │   └── Qwen3.8 27B
 │
-├── Gemini
-│   ├── Gemini 3.7 Flash
-│   └── Gemini 3.5 Flash-Lite
-│
-└── Optional (key required)
-    ├── Claude Sonnet 5
-    └── Kimi K3
+└── Gemini
+    ├── Gemini 3.7 Flash
+    └── Gemini 3.5 Flash-Lite
 ```
 
 A 9B model may beat a 27B model on this app if the larger id only slightly improves accuracy while blowing latency and memory. Measure **diagnostic quality** and **practical system performance**.
@@ -873,16 +856,6 @@ Do not hard-code the model list into the runner. Copy [examples/ai/benchmark.xml
       <tls-verify>true</tls-verify>
       <api-key env="GEMINI_API_KEY"/>
     </model>
-    <model id="claude-sonnet-5" preset="claude" optional="true">
-      <base-url>https://api.anthropic.com/v1</base-url>
-      <tls-verify>true</tls-verify>
-      <api-key env="ANTHROPIC_API_KEY"/>
-    </model>
-    <model id="kimi-k3" preset="kimi" optional="true">
-      <base-url>https://api.moonshot.ai/v1</base-url>
-      <tls-verify>true</tls-verify>
-      <api-key env="MOONSHOT_API_KEY"/>
-    </model>
   </models>
 </ai-benchmark>
 ```
@@ -896,7 +869,19 @@ Do not hard-code the model list into the runner. Copy [examples/ai/benchmark.xml
 </endpoint>
 ```
 
-`<api-key env="VAR">` reads the environment first, then any text inside the element. Omit the text (and do not commit secrets). `tls-verify` false, or `ai-test --insecure`, skips certificate checks on Desktop. `--models id1,id2` (or `make ai-test-context AI_MODELS=id1,id2`) selects a subset of `<model>` entries. Optional models (`optional="true"`) are skipped when their API key is missing unless you name them in `--models` / `AI_MODELS`. For Ollama, list the ids you actually have pulled. Record the exact model identifier and runtime configuration.
+`<api-key env="VAR">` reads the environment first, then any text inside the element. Omit the text (and do not commit secrets). `tls-verify` false, or `ai-test --insecure`, skips certificate checks on Desktop. `--models id1,id2` (or `make ai-test-context AI_MODELS=id1,id2`) selects a subset of `<model>` entries. A custom suite may mark models `optional="true"` so they are skipped when their API key is missing unless you name them in `--models` / `AI_MODELS`. For Ollama, list the ids you actually have pulled. Record the exact model identifier and runtime configuration.
+
+`--only-cases id1,id2` (or `make ai-test-context AI_CASES=id1,id2`) restricts scoring to specific `tests/ai` dataset case ids — handy for re-testing a few cases that returned `ERROR` (transient HTTP 429/503) without rerunning the whole suite.
+
+When `-o`/`--output` already exists, `ai-test` **merges** this run into it instead of overwriting: any model/context-mode block or offline case that was actually rerun is replaced, and every other block/case already in the file is left byte-for-byte untouched (the Comparison, Context mode comparison, and Metric breakdown tables are recomputed from the merged set). This makes narrow reruns safe, e.g. re-scoring just one model in one context mode:
+
+```bash
+python builds/btf_viewer.py ai-test -c examples/ai/benchmark.xml \
+  --models gemini-3.7-flash --context-mode full -o AI_BENCHMARK.md
+make -C BTFViewer ai-test-live AI_MODELS=gemini-3.7-flash AI_CONTEXT=full
+```
+
+Pass `--replace-report` (or `AI_REPLACE=1`) to overwrite the file fully instead of merging — useful for a fresh, full-suite run you want to replace stale results wholesale.
 
 In-app picker (not shipped): **Settings → AI → Benchmark** with checkboxes for Gemini and local Ollama models, then **Run Benchmark**.
 
@@ -997,16 +982,14 @@ For local runs, memory and latency are first-class. A slightly more accurate mod
 
 ### Model matrix
 
-Same suite against selected Gemini and local Ollama models. Recorded 2026-08-14; full case tables: [AI_BENCHMARK.md](AI_BENCHMARK.md).
+Same suite against the shipped Gemini and local Ollama models. Recorded 2026-08-19 (17-case dataset); full case tables and Compact/Balanced numbers: [AI_BENCHMARK.md](AI_BENCHMARK.md). Scores below are the **Full evidence** context mode (the live-scoring default).
 
-
-| Model                 | Category             | Finding | Evidence | Root cause | Calibration | Notes                                                  |
-| --------------------- | -------------------- | ------- | -------- | ---------- | ----------- | ------------------------------------------------------ |
-| Gemini 3.1 Flash-Lite | Cloud / fast         | **79**  | 64       | **71**     | 80          | overall **81**, 5.5s; tool follow-up                   |
-| Gemini 3.6 Flash      | Cloud                | —       | —        | —          | —           | overall **75**, 6/7; free-tier 429 split the part dump |
-| Qwen3.5 9B            | Local / practical    | **79**  | **86**   | 57         | 80          | overall **82**, 10.7s                                  |
-| Qwen3.5 27B           | Local / high-quality | 71      | 71       | 71         | 80          | overall **80**, 64.4s                                  |
-| Gemma 4 26B           | Local / high-quality | 71      | 57       | **86**     | 80          | overall **80**, 72.6s; 5/7 PASS                        |
+| Model                    | Category              | Finding | Evidence | Root cause | Calibration | Notes                                                     |
+| ------------------------ | --------------------- | ------- | -------- | ---------- | ----------- | ---------------------------------------------------------- |
+| `qwen3.5:9b`              | Local / practical     | 85      | **93**   | **82**     | 80          | overall **88**, 16.2s/case, 14/17 PASS                     |
+| `qwen3.8:27b`             | Local / high-quality  | **88**  | **94**   | 65         | 80          | overall **86**, 332s/case, 13/17 PASS                      |
+| `gemini-3.5-flash-lite`   | Cloud / fast          | 82      | 90       | 71         | 80          | overall **83**, 2.6s/case, 13/17 PASS                      |
+| `gemini-3.7-flash`        | Cloud                 | 65      | 76       | 53         | 80          | overall **77**, 57.9s/case, 12/17 PASS; 3/17 API errors    |
 
 
 Live `--config` runs a tool-result follow-up when the first turn is tools-only (or planning text without a Confidence line). Single-turn scores are not comparable.
@@ -1027,12 +1010,10 @@ Live `--config` runs a tool-result follow-up when the first turn is tools-only (
 Practical comparison on a developer workstation:
 
 ```text
-Gemini 3.6 Flash / Gemini 3.1 Flash-Lite
+Gemini 3.7 Flash / Gemini 3.5 Flash-Lite
       vs
 Qwen3.5 9B        (shipped default)
-Qwen3.5 27B
 Qwen3.8 27B
-Gemma 4 26B
 ```
 
 Does extra local capacity improve investigation quality enough to justify memory and latency?

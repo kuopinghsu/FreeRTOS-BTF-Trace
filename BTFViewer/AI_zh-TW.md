@@ -340,8 +340,8 @@ Live `ai-test` XML 可以使用 `<api-key env="VAR">`。完整範例請參閱 [R
 
 | 如果你…… | 建議 |
 | --- | --- |
-| 希望完全在本機進行 Investigation，不使用 API Key | `qwen3.5:9b` — 內建 Ollama 預設模型；Investigation Suite 中最實用的 Local Model（約 52 秒/case，Overall 78） |
-| 需要更高的 Local Model 品質 | `qwen3.8:27b`（88，約 190 秒/case）或 `qwen3.5:27b`（81，約 149 秒/case）。`gemma4:26b` 比 9B 慢，分數也略低（73，約 111 秒/case） |
+| 希望完全在本機進行 Investigation，不使用 API Key | `qwen3.5:9b` — 內建 Ollama 預設模型；Investigation Suite 中最實用的 Local Model（各 Context Mode Overall 78–88，10.8–16.2 秒/case；詳見 [AI_BENCHMARK.md](AI_BENCHMARK.md)） |
+| 需要更高的 Local Model 品質 | `qwen3.8:27b`（Overall 78–88，186–332 秒/case）。`qwen3.5:27b`、`gemma4:26b` 等選用的 27B 級模型不在內建 Suite 中，本文件未提供其 Benchmark 數字 |
 | Scope 很大，例如 Findings 很多、對話很長，或需要較強推理能力 | Cloud（`gpt-4o`、Gemini、DeepSeek、Grok）；同時應考量[隱私](#what-leaves-the-machine) |
 | 處理機密 Trace | 不論模型大小都優先使用 Local Ollama，資料不會離開本機 |
 
@@ -687,6 +687,7 @@ BTFViewer Desktop 與 Web 的設計目標，是提供**相同的 AI Investigatio
 | Chat Probe Timeout / `The read operation timed out` | `GET /models` 只列出 ID；Inference 本身過慢或卡住 | **Test connection** 會以 Non-streaming POST 呼叫 `/chat/completions`，Timeout 120 秒。先執行 `ollama run MODEL` Warm-up，再重試。可使用下方 curl Probe 除錯；若 curl 也卡住，代表 Gateway Chat Upstream 卡住。Non-streaming 無回應時可嘗試 `"stream": true`。Local Host VRAM 不足時降低 Context Length |
 | Model not found | 輸入的 Model ID 沒有被目前 Endpoint 提供 | Refresh Model List 或執行 Test connection，再從 Dropdown 選擇可用 ID；Ollama 可先執行 `ollama pull` |
 | Gemini HTTP 400 `thought_signature` | Gemini 3 的 Tool Follow-up 需要 Thought Blob | 重新送出問題；Viewer 會回傳 Gemini Thought Signature |
+| Gemini HTTP 400 `function_response.name` | OpenAI-compat Follow-up 的 `tool_calls[].id` 為空 | Viewer 會補上 id 與 `role=tool` 的 name；請重跑該 Case |
 | 顯示 Raw `btftool` JSON，而不是 Native Tool Call | 模型不支援或略過 Function Calling | Viewer 仍會顯示相同 Card。選擇 **Apply**，或啟用 **Auto-apply GUI actions**。需要穩定 Native Call 時，使用 `qwen3.5:9b` 或支援 Tool Calling 的 Cloud Model |
 | Ask 超過 120 秒 Timeout，或一直停在 Waiting… | Cold Start、CPU Offload 或 VRAM Spill | 按 **Stop**，使用 `ollama run MODEL` Warm-up 後重試。長對話之間可使用 **Clear**。Findings Card 太大時，改用較小模型或縮小 Statistics Scope |
 | 後續 Turn 忽略前面已知資訊 | Chat History 超出 Context Window | AI Bar 按 **Clear**；或使用 **Analysis → Query with AI…** / **Compare → Query with AI…** 建立新的 Scoped Prompt |
@@ -773,8 +774,6 @@ python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml --insecur
 - `make -C BTFViewer ai-test-live` — `AI_CONFIG`，可選 `AI_MODELS`，輸出 [AI_BENCHMARK.md](AI_BENCHMARK.md)
 - `make -C BTFViewer ai-test-context` — 與 Live 相同，另外加入 `--compare-context`
 
-選用模型在缺少 API Key 時會跳過。若要強制執行：`make -C BTFViewer ai-test-context AI_MODELS=claude-sonnet-5,kimi-k3`。
-
 Dataset、Scoring Rule 與 Context-mode Flag 請參閱 [Benchmark / Evaluation Suite](#benchmark-suite)。
 
 使用者指南另可參閱 [Export → Headless CLI](README.md#headless-cli-desktop-only)。
@@ -785,11 +784,11 @@ Dataset、Scoring Rule 與 Context-mode Flag 請參閱 [Benchmark / Evaluation S
 
 ## Benchmark 與 Evaluation Suite
 
-Offline `ai-test` / `runOfflineBenchmark` 已內建。Live Run 會從 Suite XML（`--config examples/ai/benchmark.xml`）讀取 **Model ID、Base URL、TLS 與 API Key**，並輸出 [AI_BENCHMARK.md](AI_BENCHMARK.md)。
+Offline `ai-test` / `runOfflineBenchmark` 已內建。Live Run 會從 Suite XML（`--config examples/ai/benchmark.xml`）讀取 **Model ID、Base URL、TLS 與 API Key**，並輸出 [AI_BENCHMARK.md](AI_BENCHMARK.md)——若該檔案已存在，重跑會**合併**進去（沒被重跑到的 Model / Context Mode / Case 會逐字保留；`--replace-report` 可改回整個覆寫）。
 
 Command 請參閱 [CLI Regression Gate](#cli-regression-gate)。
 
-預設 Live Scoring 使用 **Full evidence**（`--context-mode full`）。使用 **`--compare-context`** 時，會讓 Compact、Balanced 與 Full 在相同 Case 上執行，並並排顯示 Score、Token Total 與 Latency。每個 Live Model Call 若遇到暫時性錯誤（HTTP 429/503 high demand、timeout、空回覆），最多重試 **3** 次；Auth / Not found 不會重試。
+預設 Live Scoring 使用 **Full evidence**（`--context-mode full`）。使用 **`--compare-context`** 時，會讓 Compact、Balanced 與 Full 在相同 Case 上執行，並並排顯示 Score、Token Total 與 Latency。每個 Live Model Call 若遇到暫時性錯誤（HTTP 429/503 high demand、timeout、空回覆），最多重試 **6** 次，每次間隔 **10 秒**；Auth / Not found 不會重試。
 
 前面的 Capability Matrix 是定性比較（Small Local vs 9B+ vs Cloud）。Evaluation Suite 則將這些預期轉換成可重複的量測：
 
@@ -833,7 +832,6 @@ Live Set 應聚焦在：
 
 - **Gemini Cloud Models**
 - **一般開發工作站實際能執行的 Local Ollama Models**
-- **選用 Cloud Models**（有 API Key 時才跑）：`claude-sonnet-5`、`kimi-k3`
 
 Local Model 不應只因為「最新」或「最大」就納入測試。應選擇能與 BTFViewer、Ollama，以及 AI Context / Tooling Workload 同時執行的模型。
 
@@ -849,19 +847,6 @@ Local Model 不應只因為「最新」或「最大」就納入測試。應選�
 - **Gemini 3.7 Flash**（`gemini-3.7-flash`）— High-reasoning Cloud Reference
 - **Gemini 3.5 Flash-Lite**（`gemini-3.5-flash-lite`）— Fast / Efficient Cloud Reference
 
-**選用 Cloud**（未設定環境變數時會跳過，或用 `--models` / `AI_MODELS` 指定）：
-
-- **Claude Sonnet 5**（`claude-sonnet-5`）— `ANTHROPIC_API_KEY`
-- **Kimi K3**（`kimi-k3`）— `MOONSHOT_API_KEY`
-
-選用模型在缺少 API Key 時會跳過。若要強制執行：
-
-```bash
-make -C BTFViewer ai-test-context AI_MODELS=claude-sonnet-5,kimi-k3
-```
-
-舊版 7B / 14B 以及其他本機 27B 級 ID（`qwen3.5:27b`、`gemma4:26b`）可在此 Suite 之外選用。不要加入 3B 等級模型；它們容易略過 Native Tool Call，並在 Investigation Suite 中失敗。
-
 ```text
 出貨 Live Suite
 │
@@ -869,13 +854,9 @@ make -C BTFViewer ai-test-context AI_MODELS=claude-sonnet-5,kimi-k3
 │   ├── Qwen3.5 9B
 │   └── Qwen3.8 27B
 │
-├── Gemini
-│   ├── Gemini 3.7 Flash
-│   └── Gemini 3.5 Flash-Lite
-│
-└── 選用（需要 API Key）
-    ├── Claude Sonnet 5
-    └── Kimi K3
+└── Gemini
+    ├── Gemini 3.7 Flash
+    └── Gemini 3.5 Flash-Lite
 ```
 
 在這個應用情境中，9B 模型可能比 27B 模型更適合：如果較大的模型只帶來少量 Accuracy 改善，卻大幅增加 Latency 與 Memory 使用量，整體實用性反而較低。
@@ -910,16 +891,6 @@ make -C BTFViewer ai-test-context AI_MODELS=claude-sonnet-5,kimi-k3
       <tls-verify>true</tls-verify>
       <api-key env="GEMINI_API_KEY"/>
     </model>
-    <model id="claude-sonnet-5" preset="claude" optional="true">
-      <base-url>https://api.anthropic.com/v1</base-url>
-      <tls-verify>true</tls-verify>
-      <api-key env="ANTHROPIC_API_KEY"/>
-    </model>
-    <model id="kimi-k3" preset="kimi" optional="true">
-      <base-url>https://api.moonshot.ai/v1</base-url>
-      <tls-verify>true</tls-verify>
-      <api-key env="MOONSHOT_API_KEY"/>
-    </model>
   </models>
 </ai-benchmark>
 ```
@@ -938,7 +909,19 @@ Self-signed / Private CA Gateway：
 
 `tls-verify` 設為 `false`，或使用 `ai-test --insecure`，可在 Desktop 跳過 Certificate Check。
 
-`--models id1,id2`（或 `make ai-test-context AI_MODELS=id1,id2`）可選擇 `<model>` 中的部分項目。標了 `optional="true"` 的模型在沒有 API Key 時會跳過，除非你在 `--models` / `AI_MODELS` 裡點名。Ollama 應只列出實際已經 Pull 的 Model ID。Benchmark 結果應記錄完整的 Model Identifier 與 Runtime Configuration。
+`--models id1,id2`（或 `make ai-test-context AI_MODELS=id1,id2`）可選擇 `<model>` 中的部分項目。自訂 Suite 可把模型標成 `optional="true"`，沒有 API Key 時會跳過，除非你在 `--models` / `AI_MODELS` 裡點名。Ollama 應只列出實際已經 Pull 的 Model ID。Benchmark 結果應記錄完整的 Model Identifier 與 Runtime Configuration。
+
+`--only-cases id1,id2`（或 `make ai-test-context AI_CASES=id1,id2`）可只針對 `tests/ai` Dataset 裡指定的 Case ID 評分——適合只想重跑幾個回 `ERROR`（暫時性 HTTP 429/503）的 Case，不必整套 Suite 都重跑。
+
+當 `-o`/`--output` 指定的檔案已存在時，`ai-test` 會把這次執行**合併**進去，而不是整個覆寫：這次真正重跑到的 Model / Context Mode Block，或 Offline Case 會被取代，檔案裡其他沒被重跑的 Block / Case 會完全保持原樣（Comparison、Context mode comparison、Metric breakdown 等表格會依合併後的結果重新計算）。因此可以放心只重跑一個 Model 的一種 Context Mode：
+
+```bash
+python builds/btf_viewer.py ai-test -c examples/ai/benchmark.xml \
+  --models gemini-3.7-flash --context-mode full -o AI_BENCHMARK.md
+make -C BTFViewer ai-test-live AI_MODELS=gemini-3.7-flash AI_CONTEXT=full
+```
+
+加上 `--replace-report`（或 `AI_REPLACE=1`）可改回整個覆寫而非合併——適合想用一次全套 Suite 的結果整批取代舊資料的情境。
 
 目前 App 內尚未提供的 Picker：
 
@@ -1045,15 +1028,14 @@ Local Run 應將 **Memory 與 Latency 視為第一級指標（First-class Metric
 
 ### 模型比較矩陣（Model matrix）
 
-使用相同 Suite 測試指定的 Gemini 與 Local Ollama Model。以下結果記錄於 **2026-08-14**；完整 Case Table 請參閱 [AI_BENCHMARK.md](AI_BENCHMARK.md)。
+使用相同 Suite 測試內建的 Gemini 與 Local Ollama Model。以下結果記錄於 **2026-08-19**（17-case Dataset）；完整 Case Table 與 Compact / Balanced 數字請參閱 [AI_BENCHMARK.md](AI_BENCHMARK.md)。下表為 **Full evidence** Context Mode（Live Scoring 的預設值）。
 
 | Model | 類別 | Finding | Evidence | Root cause | Calibration | Notes |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
-| Gemini 3.1 Flash-Lite | Cloud / fast | **79** | 64 | **71** | 80 | Overall **81**，5.5s；Tool Follow-up |
-| Gemini 3.6 Flash | Cloud | — | — | — | — | Overall **75**，6/7；Free-tier 429 導致 Part Dump 被拆開 |
-| Qwen3.5 9B | Local / practical | **79** | **86** | 57 | 80 | Overall **82**，10.7s |
-| Qwen3.5 27B | Local / high-quality | 71 | 71 | 71 | 80 | Overall **80**，64.4s |
-| Gemma 4 26B | Local / high-quality | 71 | 57 | **86** | 80 | Overall **80**，72.6s；5/7 PASS |
+| `qwen3.5:9b` | Local / practical | 85 | **93** | **82** | 80 | Overall **88**，16.2s/case，14/17 PASS |
+| `qwen3.8:27b` | Local / high-quality | **88** | **94** | 65 | 80 | Overall **86**，332s/case，13/17 PASS |
+| `gemini-3.5-flash-lite` | Cloud / fast | 82 | 90 | 71 | 80 | Overall **83**，2.6s/case，13/17 PASS |
+| `gemini-3.7-flash` | Cloud | 65 | 76 | 53 | 80 | Overall **77**，57.9s/case，12/17 PASS；3/17 API 錯誤 |
 
 Live `--config` Run 如果第一個 Turn 只有 Tool Result，或只有 Planning Text 而沒有 Confidence Line，會再執行一次 Tool-result Follow-up。**Single-turn Score 不能直接互相比較。**
 
@@ -1071,12 +1053,10 @@ Live `--config` Run 如果第一個 Turn 只有 Tool Result，或只有 Planning
 開發工作站上的實際比較：
 
 ```text
-Gemini 3.6 Flash / Gemini 3.1 Flash-Lite
+Gemini 3.7 Flash / Gemini 3.5 Flash-Lite
       vs
 Qwen3.5 9B        （內建預設）
-Qwen3.5 27B
 Qwen3.8 27B
-Gemma 4 26B
 ```
 
 真正需要回答的問題是：

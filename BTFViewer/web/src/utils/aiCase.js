@@ -2701,7 +2701,7 @@ export function formatBenchmarkReport(runId, rows = []) {
   for (const row of rows) {
     const name = String(row.id || '?')
     const score = row.overall
-    const flag = row.pass ? 'PASS' : 'FAIL'
+    const flag = row.error ? 'ERROR' : (row.pass ? 'PASS' : 'FAIL')
     lines.push(`  ${String(name).padEnd(24)} ${String(score).padStart(3)}  ${flag}`)
   }
   if (rows.length) {

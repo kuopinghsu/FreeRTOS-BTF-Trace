@@ -23,6 +23,8 @@ from btf_viewer_pkg.mainwindow import MainWindow  # noqa: E402
 from btf_viewer_pkg.parser import _parse_btf  # noqa: E402
 from btf_viewer_pkg.stats import _RcSettings  # noqa: E402
 
+from tests import destroy_main_window  # noqa: E402
+
 EXAMPLE_BTF = Path(__file__).resolve().parents[2] / "tracedata" / "example-2cores.btf.gz"
 
 
@@ -68,7 +70,7 @@ class StatsClearOnCloseTabsTest(unittest.TestCase):
             self.skipTest(f"missing {EXAMPLE_BTF}")
         trace = _parse_btf(str(EXAMPLE_BTF))
         win = MainWindow()
-        self.addCleanup(win.close)
+        self.addCleanup(destroy_main_window, win)
         path = os.path.join(self._tmpdir, "restored.btf")
         tab = win._add_trace_tab(path, trace)
         tab.view.load_trace(trace)

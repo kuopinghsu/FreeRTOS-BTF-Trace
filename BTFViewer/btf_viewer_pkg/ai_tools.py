@@ -1980,6 +1980,44 @@ def ensure_gemini_thought_signatures(
     return out
 
 
+def _tool_call_name(obj: Any) -> str:
+    """Function name from OpenAI / Gemini OpenAI-compat / extra_content shapes."""
+    if not isinstance(obj, dict):
+        return ""
+    fn = obj.get("function") if isinstance(obj.get("function"), dict) else {}
+    name = str(fn.get("name") or obj.get("name") or obj.get("tool") or "").strip()
+    if name:
+        return name
+    for key in ("function_call", "functionCall"):
+        nested = obj.get(key)
+        if isinstance(nested, dict):
+            name = str(nested.get("name") or "").strip()
+            if name:
+                return name
+    extra = obj.get("extra_content")
+    if isinstance(extra, dict):
+        google = extra.get("google") if isinstance(extra.get("google"), dict) else {}
+        for src in (google, extra):
+            for key in ("function_call", "functionCall"):
+                nested = src.get(key)
+                if isinstance(nested, dict):
+                    name = str(nested.get("name") or "").strip()
+                    if name:
+                        return name
+            name = str(src.get("name") or "").strip()
+            if name:
+                return name
+    return ""
+
+
+def _tool_call_id(obj: Any, index: int) -> str:
+    """Non-empty tool_call id. Gemini rejects follow-ups that echo ``id: ''``."""
+    if not isinstance(obj, dict):
+        return f"call_{index}"
+    cid = str(obj.get("id") or "").strip()
+    return cid or f"call_{index}"
+
+
 def _extracted_tool_call(
     *,
     cid: str,
@@ -2009,18 +2047,15 @@ def extract_tool_calls(message: Optional[Dict[str, Any]]) -> List[Dict[str, Any]
             if not isinstance(call, dict):
                 continue
             fn = call.get("function") if isinstance(call.get("function"), dict) else {}
-            name = str(
-                fn.get("name") or call.get("name") or call.get("tool") or ""
-            ).strip()
+            name = _tool_call_name(call)
             if not name:
                 continue
             args = parse_tool_arguments(
                 fn.get("arguments",
                        call.get("arguments", call.get("args", call.get("input"))))
             )
-            cid = str(call.get("id") or f"call_{i}")
             out.append(_extracted_tool_call(
-                cid=cid,
+                cid=_tool_call_id(call, i),
                 name=name,
                 arguments=args,
                 signature=thought_signature_from_obj(call),
@@ -2040,18 +2075,30 @@ def extract_tool_calls(message: Optional[Dict[str, Any]]) -> List[Dict[str, Any]
             if not isinstance(part, dict):
                 continue
             ptype = str(part.get("type") or "")
-            if ptype in ("tool_use", "function_call", "tool_call"):
-                name = str(part.get("name") or "").strip()
-                if not name:
-                    continue
-                args = parse_tool_arguments(
-                    part.get("input", part.get("arguments", part.get("args"))))
-                out.append(_extracted_tool_call(
-                    cid=str(part.get("id") or f"part_{i}"),
-                    name=name,
-                    arguments=args,
-                    signature=thought_signature_from_obj(part),
-                ))
+            nested = part.get("functionCall") if isinstance(
+                part.get("functionCall"), dict) else (
+                part.get("function_call") if isinstance(
+                    part.get("function_call"), dict) else None
+            )
+            if (
+                ptype not in (
+                    "tool_use", "function_call", "tool_call", "functionCall")
+                and not (isinstance(nested, dict) and nested.get("name"))
+            ):
+                continue
+            name = _tool_call_name(part)
+            if not name:
+                continue
+            nested_args = nested if isinstance(nested, dict) else {}
+            args = parse_tool_arguments(
+                part.get("input", part.get("arguments", part.get("args",
+                    nested_args.get("args", nested_args.get("arguments"))))))
+            out.append(_extracted_tool_call(
+                cid=str(part.get("id") or "").strip() or f"part_{i}",
+                name=name,
+                arguments=args,
+                signature=thought_signature_from_obj(part),
+            ))
     if out and not str(out[0].get("thought_signature") or "").strip():
         fallback = thought_signature_from_obj(message)
         if not fallback and isinstance(content, list):
@@ -3045,7 +3092,7 @@ def canonical_assistant_tool_message(
         name = str(call.get("name") or "").strip()
         if not name:
             continue
-        cid = str(call.get("id") or f"call_{i}").strip() or f"call_{i}"
+        cid = _tool_call_id(call, i)
         args = call.get("arguments")
         if isinstance(args, str):
             arg_s = args
@@ -3129,7 +3176,7 @@ def normalize_tool_chat_messages(
         if role == "tool":
             copied = dict(msg)
             cid = str(copied.get("tool_call_id") or copied.get("id") or "").strip()
-            name = str(copied.get("name") or "").strip()
+            name = str(copied.get("name") or "").strip() or _tool_call_name(copied)
             if not name and cid:
                 for i, (uid, uname) in enumerate(unused):
                     if uid == cid:

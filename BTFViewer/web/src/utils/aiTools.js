@@ -1782,6 +1782,41 @@ function extractedToolCall({ id, name, arguments: args, signature = '' }) {
   return item
 }
 
+function toolCallName(obj) {
+  if (!obj || typeof obj !== 'object') return ''
+  const fn = obj.function && typeof obj.function === 'object' ? obj.function : {}
+  let name = String(fn.name || obj.name || obj.tool || '').trim()
+  if (name) return name
+  for (const key of ['function_call', 'functionCall']) {
+    const nested = obj[key]
+    if (nested && typeof nested === 'object') {
+      name = String(nested.name || '').trim()
+      if (name) return name
+    }
+  }
+  const extra = obj.extra_content
+  if (extra && typeof extra === 'object') {
+    const google = extra.google && typeof extra.google === 'object' ? extra.google : {}
+    for (const src of [google, extra]) {
+      for (const key of ['function_call', 'functionCall']) {
+        const nested = src[key]
+        if (nested && typeof nested === 'object') {
+          name = String(nested.name || '').trim()
+          if (name) return name
+        }
+      }
+      name = String(src.name || '').trim()
+      if (name) return name
+    }
+  }
+  return ''
+}
+
+function toolCallId(obj, index) {
+  if (!obj || typeof obj !== 'object') return `call_${index}`
+  return String(obj.id || '').trim() || `call_${index}`
+}
+
 export function extractToolCalls(message) {
   if (!message || typeof message !== 'object') return []
   const out = []
@@ -1793,10 +1828,10 @@ export function extractToolCalls(message) {
     calls.forEach((call, i) => {
       if (!call || typeof call !== 'object') return
       const fn = call.function && typeof call.function === 'object' ? call.function : {}
-      const name = String(fn.name || call.name || call.tool || '').trim()
+      const name = toolCallName(call)
       if (!name) return
       out.push(extractedToolCall({
-        id: String(call.id || `call_${i}`),
+        id: toolCallId(call, i),
         name,
         arguments: parseToolArguments(fn.arguments ?? call.arguments ?? call.args ?? call.input),
         signature: thoughtSignatureFromObj(call),
@@ -1816,13 +1851,20 @@ export function extractToolCalls(message) {
     message.content.forEach((part, i) => {
       if (!part || typeof part !== 'object') return
       const ptype = String(part.type || '')
-      if (!['tool_use', 'function_call', 'tool_call'].includes(ptype)) return
-      const name = String(part.name || '').trim()
+      const nested = (part.functionCall && typeof part.functionCall === 'object')
+        ? part.functionCall
+        : ((part.function_call && typeof part.function_call === 'object')
+          ? part.function_call
+          : null)
+      if (!['tool_use', 'function_call', 'tool_call', 'functionCall'].includes(ptype)
+          && !(nested && nested.name)) return
+      const name = toolCallName(part)
       if (!name) return
       out.push(extractedToolCall({
-        id: String(part.id || `part_${i}`),
+        id: String(part.id || '').trim() || `part_${i}`,
         name,
-        arguments: parseToolArguments(part.input ?? part.arguments ?? part.args),
+        arguments: parseToolArguments(
+          part.input ?? part.arguments ?? part.args ?? nested?.args ?? nested?.arguments),
         signature: thoughtSignatureFromObj(part),
       }))
     })
@@ -2007,7 +2049,7 @@ export function canonicalAssistantToolMessage(content, toolCalls) {
     if (!call || typeof call !== 'object') return
     const name = String(call.name || '').trim()
     if (!name) return
-    const id = String(call.id || `call_${i}`).trim() || `call_${i}`
+    const id = toolCallId(call, i)
     const args = call.arguments
     const argS = typeof args === 'string'
       ? args
@@ -2063,7 +2105,7 @@ export function normalizeToolChatMessages(messages) {
     if (role === 'tool') {
       const copied = { ...msg }
       let cid = String(copied.tool_call_id || copied.id || '').trim()
-      let name = String(copied.name || '').trim()
+      let name = String(copied.name || '').trim() || toolCallName(copied)
       if (!name && cid) {
         const idx = unused.findIndex(u => u.id === cid)
         if (idx >= 0) {

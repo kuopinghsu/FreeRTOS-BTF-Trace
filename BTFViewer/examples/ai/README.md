@@ -71,12 +71,6 @@ python builds/btf_viewer.py ai-test -c examples/ai/benchmark.xml --insecure
 make ai-test-context
 ```
 
-Optional models are skipped when their key is missing. To force them:
-
-```bash
-make ai-test-context AI_MODELS=claude-sonnet-5,kimi-k3
-```
-
 | Element | Meaning |
 |---------|---------|
 | `<base-url>` | OpenAI-compatible API root (suite default or per `<model>`) |
@@ -89,7 +83,7 @@ make ai-test-context AI_MODELS=claude-sonnet-5,kimi-k3
 | `--compare-context` | Run Compact, Balanced, and Full evidence; compare score, tokens, and latency |
 | `--context-mode` | Single mode: `compact`, `balanced`, or `full` (default `full`) |
 
-`--models id1,id2` (or `make ai-test-context AI_MODELS=id1,id2`) runs a subset of the XML list. Optional models are skipped when their key is missing unless you name them. Context-mode flags: [AI.md → Context mode benchmarking](../AI.md#context-mode-benchmarking). Full suite: [Benchmark / evaluation suite](../AI.md#benchmark-suite).
+`--models id1,id2` (or `make ai-test-context AI_MODELS=id1,id2`) runs a subset of the XML list. A custom copy may mark models `optional="true"` so they are skipped when their key is missing unless you name them. `--only-cases id1,id2` (or `AI_CASES=id1,id2`) scores a subset of the dataset — useful for re-running a few cases that came back `ERROR`. When `-o` already exists, a narrowed run like this **merges** into it (only the rerun models/context-modes/cases change; everything else is untouched) — pass `--replace-report` (`AI_REPLACE=1`) to overwrite fully instead. Context-mode flags: [AI.md → Context mode benchmarking](../AI.md#context-mode-benchmarking). Full suite: [Benchmark / evaluation suite](../AI.md#benchmark-suite).
 Setup, tools, and troubleshooting: [AI.md](../AI.md).
 
 Panel usage: [BTFViewer README → AI Assistant](../README.md#ai-assistant).

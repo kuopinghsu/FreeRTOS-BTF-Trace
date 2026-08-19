@@ -3355,7 +3355,7 @@ def format_benchmark_report(run_id: str, rows: Sequence[Dict[str, Any]]) -> str:
     for row in rows:
         name = str(row.get("id") or "?")
         score = row.get("overall")
-        flag = "PASS" if row.get("pass") else "FAIL"
+        flag = "ERROR" if row.get("error") else ("PASS" if row.get("pass") else "FAIL")
         lines.append(f"  {name:24} {score!s:>3}  {flag}")
     if rows:
         avg = int(round(sum(int(r.get("overall") or 0) for r in rows) / len(rows)))
@@ -3546,6 +3546,34 @@ def parse_live_benchmark_models(models_raw: str) -> List[str]:
     return [m.strip() for m in str(models_raw or "").split(",") if m.strip()]
 
 
+def select_benchmark_cases(
+    cases: Sequence[Dict[str, Any]],
+    case_ids_raw: str = "",
+) -> List[Dict[str, Any]]:
+    """Dataset cases, optionally filtered by ``--only-cases`` ids.
+
+    With no filter, every case is scored (unchanged order). Unknown ids raise
+    ``ValueError`` (mirrors :func:`select_benchmark_suite_models`).
+    """
+    want = parse_live_benchmark_models(case_ids_raw)
+    if not want:
+        return list(cases)
+    by_id = {str(c.get("id") or ""): c for c in cases}
+    out: List[Dict[str, Any]] = []
+    missing: List[str] = []
+    for cid in want:
+        if cid in by_id:
+            out.append(by_id[cid])
+        else:
+            missing.append(cid)
+    if missing:
+        known = ", ".join(by_id) or "(none)"
+        raise ValueError(
+            f"case id(s) not in dataset: {', '.join(missing)} (have {known})"
+        )
+    return out
+
+
 def select_benchmark_suite_models(
     suite: dict,
     models_raw: str = "",
@@ -3710,10 +3738,15 @@ def run_offline_benchmark(
     dataset_path: Any,
     *,
     fail_under: int = 0,
+    case_ids: str = "",
 ) -> Dict[str, Any]:
-    """Score fixture responses in a dataset (no live model calls)."""
+    """Score fixture responses in a dataset (no live model calls).
+
+    *case_ids*: optional comma-separated ``--only-cases`` filter (see
+    :func:`select_benchmark_cases`); empty scores every case.
+    """
     from datetime import datetime, timezone
-    cases = load_benchmark_dataset(str(dataset_path))
+    cases = select_benchmark_cases(load_benchmark_dataset(str(dataset_path)), case_ids)
     rows: List[Dict[str, Any]] = []
     for case in cases:
         actual = case.get("actual") if isinstance(case.get("actual"), dict) else {}
@@ -3758,8 +3791,13 @@ def run_live_benchmark(
     complete: Callable[..., Dict[str, Any]],
     fail_under: int = 0,
     context_modes: Optional[Sequence[str]] = None,
+    case_ids: str = "",
 ) -> Dict[str, Any]:
-    """Score live model replies. *complete(query, findings_text, model, case, context_mode=...)*."""
+    """Score live model replies. *complete(query, findings_text, model, case, context_mode=...)*.
+
+    *case_ids*: optional comma-separated ``--only-cases`` filter (see
+    :func:`select_benchmark_cases`); empty scores every case.
+    """
     from datetime import datetime, timezone
     ids = [str(m).strip() for m in (models or []) if str(m).strip()]
     if not ids:
@@ -3774,7 +3812,7 @@ def run_live_benchmark(
         if m not in seen_modes:
             seen_modes.add(m)
             mode_list.append(m)
-    cases = load_benchmark_dataset(str(dataset_path))
+    cases = select_benchmark_cases(load_benchmark_dataset(str(dataset_path)), case_ids)
     run_id = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
     per_model: List[Dict[str, Any]] = []
     for model in ids:
@@ -4079,3 +4117,262 @@ def format_benchmark_markdown(
         lines.append("_No runs recorded._")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+_BENCH_CASE_ROW_KEYS = (
+    "finding", "evidence", "tool_use", "root_cause", "calibration", "safety",
+)
+_BENCH_LIVE_HEADER_RE = re.compile(r"^###\s+`([^`]+)`(?:\s+—\s+(.+))?\s*$")
+_BENCH_RUN_LINE_RE = re.compile(r"Run `([^`]*)`")
+_BENCH_ERROR_SUMMARY_RE = re.compile(
+    r"^\d+/\d+ cases returned an API error \(first: (.*)\)\.$"
+)
+_BENCH_MEAN_LAT_RE = re.compile(r"Mean latency: \*\*([\d.]+)s\*\* / case\.")
+_BENCH_TOKENS_RE = re.compile(
+    r"Tokens: \*\*(\d+)\*\* prompt \+ \*\*(\d+)\*\* completion = \*\*(\d+)\*\* total\."
+)
+_BENCH_STALE_ERROR_TEXT = (
+    "carried over from a previous AI_BENCHMARK.md (original error text unavailable)"
+)
+
+
+def _split_benchmark_md_row(line: str) -> List[str]:
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip() for c in s.split("|")]
+
+
+def _parse_benchmark_case_table(
+    lines: Sequence[str], start: int,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Parse a ``| Case | Overall | ... | Result |`` table (see ``_table`` in
+    :func:`format_benchmark_markdown`) starting at ``lines[start]``.
+
+    Returns ``(rows, index_after_table)``; ``rows`` round-trip enough of the
+    prior report (overall, parts, pass/fail/error) for
+    :func:`merge_benchmark_report` to recompute an unchanged block's stats.
+    """
+    if start >= len(lines) or "| Case |" not in lines[start]:
+        return [], start
+    i = start + 2
+    rows: List[Dict[str, Any]] = []
+    while i < len(lines) and lines[i].strip().startswith("|"):
+        cells = _split_benchmark_md_row(lines[i])
+        if len(cells) < 9:
+            break
+        case_id = cells[0]
+        flag = cells[8].strip().upper()
+        rows.append({
+            "id": case_id,
+            "overall": _safe_int(cells[1]),
+            "parts": {
+                key: _safe_int(cells[2 + idx])
+                for idx, key in enumerate(_BENCH_CASE_ROW_KEYS)
+            },
+            "pass": flag == "PASS",
+            "error": _BENCH_STALE_ERROR_TEXT if flag == "ERROR" else "",
+        })
+        i += 1
+    return rows, i
+
+
+def _parse_benchmark_offline_section(
+    lines: Sequence[str], start: int, end: int,
+) -> Optional[Dict[str, Any]]:
+    run_id = ""
+    for i in range(start, end):
+        m = _BENCH_RUN_LINE_RE.search(lines[i])
+        if m:
+            run_id = m.group(1)
+        if lines[i].strip().startswith("| Case |"):
+            rows, _ = _parse_benchmark_case_table(lines, i)
+            return {"run_id": run_id, "rows": rows} if rows else None
+    return None
+
+
+def _parse_benchmark_live_blocks(
+    lines: Sequence[str], start: int, end: int,
+) -> List[Dict[str, Any]]:
+    blocks: List[Dict[str, Any]] = []
+    i = start
+    while i < end:
+        m = _BENCH_LIVE_HEADER_RE.match(lines[i].strip())
+        if not m:
+            i += 1
+            continue
+        model = m.group(1)
+        label = (m.group(2) or "").strip()
+        ctx_mode = normalize_ai_context_mode(label) if label else AI_CONTEXT_MODE_FULL
+        j = i + 1
+        run_id = ""
+        block_error = ""
+        while j < end and not lines[j].strip().startswith(("| Case |", "### ", "## ")):
+            line = lines[j].strip()
+            rm = _BENCH_RUN_LINE_RE.search(line)
+            if rm:
+                run_id = rm.group(1)
+            elif line.startswith("Error: "):
+                block_error = line[len("Error: "):]
+            j += 1
+        rows: List[Dict[str, Any]] = []
+        if j < end and lines[j].strip().startswith("| Case |"):
+            rows, j = _parse_benchmark_case_table(lines, j)
+        mean_lat: Optional[float] = None
+        prompt_tok = completion_tok = total_tok = None
+        error_msg = ""
+        while j < end and not lines[j].strip().startswith(("### ", "## ")):
+            line = lines[j].strip()
+            em = _BENCH_ERROR_SUMMARY_RE.match(line)
+            if em:
+                error_msg = em.group(1)
+            lm = _BENCH_MEAN_LAT_RE.search(line)
+            if lm:
+                mean_lat = float(lm.group(1))
+            tm = _BENCH_TOKENS_RE.search(line)
+            if tm:
+                prompt_tok, completion_tok, total_tok = (
+                    int(tm.group(1)), int(tm.group(2)), int(tm.group(3)),
+                )
+            j += 1
+        if rows:
+            if mean_lat is not None:
+                for r in rows:
+                    r["elapsed_s"] = mean_lat
+            if prompt_tok is not None:
+                rows[0]["prompt_tokens"] = prompt_tok
+                rows[0]["completion_tokens"] = completion_tok
+                rows[0]["total_tokens"] = total_tok
+            if error_msg:
+                for r in rows:
+                    if r.get("error"):
+                        r["error"] = error_msg
+        blocks.append({
+            "model": model,
+            "context_mode": ctx_mode,
+            "context_label": ai_context_mode_label(ctx_mode),
+            "block_id": model,
+            "category": benchmark_model_category(model),
+            "run_id": run_id,
+            "rows": rows,
+            "failed": [r for r in rows if not r.get("pass")],
+            "ok": all(r.get("pass") for r in rows) if rows else True,
+            "error": block_error,
+        })
+        i = j
+    return blocks
+
+
+def parse_benchmark_markdown(text: str) -> Dict[str, Any]:
+    """Recover ``offline``/``live`` structures from a previously written
+    AI_BENCHMARK.md so :func:`merge_benchmark_report` can update only the
+    models/cases that were actually rerun. Returns ``{}`` for text that
+    doesn't look like a benchmark report (e.g. an empty or hand-edited file).
+    """
+    lines = (text or "").splitlines()
+    headings = [
+        (i, ln.strip()[3:].strip())
+        for i, ln in enumerate(lines) if ln.strip().startswith("## ")
+    ]
+    if not headings:
+        return {}
+    bounds: Dict[str, Tuple[int, int]] = {}
+    for k, (idx, title) in enumerate(headings):
+        end = headings[k + 1][0] if k + 1 < len(headings) else len(lines)
+        bounds.setdefault(title, (idx, end))
+    result: Dict[str, Any] = {}
+    if "Offline fixture scorer" in bounds:
+        start, end = bounds["Offline fixture scorer"]
+        offline = _parse_benchmark_offline_section(lines, start, end)
+        if offline:
+            result["offline"] = offline
+    if "Live models" in bounds:
+        start, end = bounds["Live models"]
+        blocks = _parse_benchmark_live_blocks(lines, start, end)
+        if blocks:
+            modes: List[str] = []
+            seen = set()
+            for b in blocks:
+                cm = b["context_mode"]
+                if cm not in seen:
+                    seen.add(cm)
+                    modes.append(cm)
+            single_mode = len(modes) <= 1
+            for b in blocks:
+                b["block_id"] = (
+                    b["model"] if single_mode else f"{b['model']} ({b['context_label']})"
+                )
+            result["live"] = {"models": blocks, "context_modes": modes}
+    return result
+
+
+def merge_benchmark_report(
+    existing_text: str,
+    *,
+    offline: Optional[dict] = None,
+    live: Optional[dict] = None,
+) -> Tuple[Optional[dict], Optional[dict]]:
+    """Combine a freshly scored run with whatever ``existing_text`` (a prior
+    AI_BENCHMARK.md) already recorded, so e.g. rerunning just
+    ``gemini-3.7-flash`` in Full evidence updates that one model/context
+    block — and the offline cases actually rescored — without dropping every
+    other model, context mode, or case from the report.
+
+    Returns ``(merged_offline, merged_live)`` ready for
+    :func:`format_benchmark_markdown`. Falls back to ``(offline, live)``
+    unchanged (a plain overwrite) when ``existing_text`` doesn't parse as a
+    benchmark report.
+    """
+    prior = parse_benchmark_markdown(existing_text or "")
+    merged_offline = offline
+    prior_offline = prior.get("offline")
+    if prior_offline:
+        old_rows = list(prior_offline.get("rows") or [])
+        new_rows = list((offline or {}).get("rows") or [])
+        by_id = {r["id"]: r for r in old_rows}
+        order = [r["id"] for r in old_rows]
+        for r in new_rows:
+            if r["id"] not in by_id:
+                order.append(r["id"])
+            by_id[r["id"]] = r
+        merged_rows = [by_id[cid] for cid in order]
+        run_id = (offline or {}).get("run_id") or prior_offline.get("run_id") or ""
+        merged_offline = {**(offline or {}), "run_id": run_id, "rows": merged_rows}
+    merged_live = live
+    prior_live = prior.get("live")
+    if prior_live:
+        old_blocks = list(prior_live.get("models") or [])
+        new_blocks = list((live or {}).get("models") or [])
+        by_key = {(b.get("model"), b.get("context_mode")): b for b in old_blocks}
+        order_keys = list(by_key.keys())
+        for b in new_blocks:
+            key = (b.get("model"), b.get("context_mode"))
+            if key not in by_key:
+                order_keys.append(key)
+            by_key[key] = b
+        merged_blocks = [by_key[k] for k in order_keys]
+        modes: List[str] = []
+        seen_modes = set()
+        for b in merged_blocks:
+            cm = b.get("context_mode")
+            if cm not in seen_modes:
+                seen_modes.add(cm)
+                modes.append(cm)
+        modes.sort(
+            key=lambda m: AI_CONTEXT_MODES.index(m) if m in AI_CONTEXT_MODES else 99
+        )
+        single_mode = len(modes) <= 1
+        for b in merged_blocks:
+            label = b.get("context_label") or ai_context_mode_label(b.get("context_mode"))
+            b["block_id"] = b.get("model") if single_mode else f"{b.get('model')} ({label})"
+        run_id = (live or {}).get("run_id") or prior_live.get("run_id") or ""
+        merged_live = {
+            **(live or {}),
+            "run_id": run_id,
+            "models": merged_blocks,
+            "context_modes": modes,
+            "ok": all(b.get("ok", True) for b in merged_blocks),
+        }
+    return merged_offline, merged_live

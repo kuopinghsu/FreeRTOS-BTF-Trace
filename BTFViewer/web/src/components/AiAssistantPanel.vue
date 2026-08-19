@@ -640,7 +640,7 @@ import {
   isLocalAiHost,
   normalizeAiContext,
   resolveAiSettings,
-} from '../utils/ollamaClient.js'
+} from '../utils/aiClient.js'
 import {
   AI_TOOL_EXPORT_INVESTIGATION,
   aiViewerToolsForMode,

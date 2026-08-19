@@ -68,8 +68,9 @@ class LegendTabRestoreTest(unittest.TestCase):
         win.show()
         _wait_ms(app, 400)
         if persist:
-            win.close()
-            app.processEvents()
+            from tests import destroy_main_window
+
+            destroy_main_window(win)
         return win
 
     def test_legend_tab_visible_after_two_starts(self) -> None:
@@ -106,7 +107,9 @@ class LegendTabRestoreTest(unittest.TestCase):
             win2._panel_tabs.isTabVisible(self.btf._PANEL_TAB_LEGEND),
             "Legend tab hidden on second start",
         )
-        win2.close()
+        from tests import destroy_main_window
+
+        destroy_main_window(win2)
 
     def test_hiding_legend_tab_does_not_hide_marks(self) -> None:
         from PySide6.QtWidgets import QApplication
@@ -124,7 +127,9 @@ class LegendTabRestoreTest(unittest.TestCase):
         self.assertFalse(win._show_legend)
         self.assertFalse(win._panel_tabs.isTabVisible(self.btf._PANEL_TAB_LEGEND))
         self.assertTrue(win._panel_tabs.isTabVisible(self.btf._PANEL_TAB_MARKS))
-        win.close()
+        from tests import destroy_main_window
+
+        destroy_main_window(win)
 
 
 if __name__ == "__main__":

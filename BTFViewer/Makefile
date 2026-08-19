@@ -35,6 +35,9 @@ AI_DATASET ?= tests/ai
 AI_FAIL_UNDER ?= 70
 AI_CONFIG ?= examples/ai/benchmark.xml
 AI_MODELS ?=
+AI_CASES ?=
+AI_CONTEXT ?=
+AI_REPLACE ?=
 
 .PHONY: all help web bundle check-bundle test test-web test-all ai-test ai-test-live ai-test-context ci doc update-images demo demo-voice demo-pack
 
@@ -54,13 +57,17 @@ help:
 	@echo "  make test-web     Web unit tests (node --test)"
 	@echo "  make test-all     Desktop + web unit tests"
 	@echo "  make ai-test      Offline AI benchmark ($(AI_DATASET); AI_FAIL_UNDER=$(AI_FAIL_UNDER))"
-	@echo "  make ai-test-live Live suite XML → AI_BENCHMARK.md (AI_CONFIG=$(AI_CONFIG); 3× retry)"
-	@echo "  make ai-test-context Live suite, all three context modes → AI_BENCHMARK.md (3× retry)"
-	@echo "                      Optional models skipped without keys; force: AI_MODELS=claude-sonnet-5,kimi-k3"
+	@echo "  make ai-test-live Live suite XML → AI_BENCHMARK.md (AI_CONFIG=$(AI_CONFIG); 6× retry, 10s each)"
+	@echo "  make ai-test-context Live suite, all three context modes → AI_BENCHMARK.md (6× retry, 10s each)"
+	@echo "                      Subset of XML models: AI_MODELS=id1,id2"
+	@echo "                      Subset of dataset cases: AI_CASES=id1,id2"
+	@echo "                      ai-test-live single context mode: AI_CONTEXT=compact|balanced|full"
+	@echo "                      A run restricted this way merges into an existing AI_BENCHMARK.md"
+	@echo "                      instead of overwriting it; AI_REPLACE=1 forces a full overwrite"
 	@echo "  make ci           test-all + check-bundle (local CI parity)"
 	@echo "  make help         Show this help"
 	@echo ""
-	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  MARP=$(MARP)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)  DEMO_XML=$(DEMO_XML)  DEMO_LANG=$(DEMO_LANG)  DEMO_LANGS=$(DEMO_LANGS)  AI_DATASET=$(AI_DATASET)  AI_FAIL_UNDER=$(AI_FAIL_UNDER)  AI_CONFIG=$(AI_CONFIG)  AI_MODELS=$(AI_MODELS)"
+	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  MARP=$(MARP)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)  DEMO_XML=$(DEMO_XML)  DEMO_LANG=$(DEMO_LANG)  DEMO_LANGS=$(DEMO_LANGS)  AI_DATASET=$(AI_DATASET)  AI_FAIL_UNDER=$(AI_FAIL_UNDER)  AI_CONFIG=$(AI_CONFIG)  AI_MODELS=$(AI_MODELS)  AI_CASES=$(AI_CASES)  AI_CONTEXT=$(AI_CONTEXT)  AI_REPLACE=$(AI_REPLACE)"
 
 
 all: web bundle
@@ -107,16 +114,22 @@ test-all: test test-web
 
 ai-test:
 	PYTHONPATH=. QT_QPA_PLATFORM=offscreen $(PYTHON) -m btf_viewer_pkg ai-test \
-		--dataset $(AI_DATASET) --fail-under $(AI_FAIL_UNDER)
+		--dataset $(AI_DATASET) --fail-under $(AI_FAIL_UNDER) \
+		$(if $(AI_CASES),--only-cases $(AI_CASES),)
 
 ai-test-live:
 	PYTHONPATH=. QT_QPA_PLATFORM=offscreen $(PYTHON) -m btf_viewer_pkg ai-test \
 		--config $(AI_CONFIG) $(if $(AI_MODELS),--models $(AI_MODELS),) \
+		$(if $(AI_CASES),--only-cases $(AI_CASES),) \
+		$(if $(AI_CONTEXT),--context-mode $(AI_CONTEXT),) \
+		$(if $(AI_REPLACE),--replace-report,) \
 		--fail-under 0 -o AI_BENCHMARK.md
 
 ai-test-context:
 	PYTHONPATH=. QT_QPA_PLATFORM=offscreen $(PYTHON) -m btf_viewer_pkg ai-test \
 		--config $(AI_CONFIG) $(if $(AI_MODELS),--models $(AI_MODELS),) \
+		$(if $(AI_CASES),--only-cases $(AI_CASES),) \
+		$(if $(AI_REPLACE),--replace-report,) \
 		--compare-context --fail-under 0 -o AI_BENCHMARK.md
 
 ci: test-all check-bundle

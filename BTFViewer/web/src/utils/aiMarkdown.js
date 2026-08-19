@@ -8,7 +8,7 @@ import { btfHighlightHref, btfJumpHref, btfRangeHref, parseBtfHighlightHref, sum
 import { btfHtmlReportDocument } from './htmlReport.js'
 
 import { evidencePanelLabels } from './aiInvestigation.js'
-import { DEFAULT_AI_RESPONSE_LANGUAGE } from './ollamaClient.js'
+import { DEFAULT_AI_RESPONSE_LANGUAGE } from './aiClient.js'
 
 /** Visible role labels (panel + Save As). Keep in sync with ai_assistant.py. */
 export const AI_ROLE_LABEL_USER = 'Your prompt'

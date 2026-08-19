@@ -29,6 +29,8 @@ from btf_viewer_pkg.config import (  # noqa: E402
 from btf_viewer_pkg.mainwindow import MainWindow  # noqa: E402
 from btf_viewer_pkg.stats import _RcSettings  # noqa: E402
 
+from tests import destroy_main_window  # noqa: E402
+
 DEMO_XML = BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.xml"
 DEMO_BTF = BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.btf.gz"
 
@@ -273,7 +275,7 @@ class DemoApiUiTests(unittest.TestCase):
 
     def test_view_find_panel_and_analysis_ops(self) -> None:
         win = MainWindow()
-        self.addCleanup(win.close)
+        self.addCleanup(destroy_main_window, win)
         win.show()
         self._app.processEvents()
 
@@ -362,7 +364,7 @@ class DemoApiUiTests(unittest.TestCase):
         if not DEMO_BTF.is_file():
             self.skipTest(f"missing demo BTF: {DEMO_BTF}")
         win = MainWindow()
-        self.addCleanup(win.close)
+        self.addCleanup(destroy_main_window, win)
         win.show()
         self._app.processEvents()
         self._wait_trace_loaded(win)
@@ -383,7 +385,7 @@ class DemoApiUiTests(unittest.TestCase):
         if not DEMO_BTF.is_file():
             self.skipTest(f"missing demo BTF: {DEMO_BTF}")
         win = MainWindow()
-        self.addCleanup(win.close)
+        self.addCleanup(destroy_main_window, win)
         win.show()
         win.resize(1280, 800)
         self._app.processEvents()
@@ -419,7 +421,7 @@ class DemoApiUiTests(unittest.TestCase):
         if not DEMO_BTF.is_file():
             self.skipTest(f"missing demo BTF: {DEMO_BTF}")
         win = MainWindow()
-        self.addCleanup(win.close)
+        self.addCleanup(destroy_main_window, win)
         win.show()
         self._app.processEvents()
         self._wait_trace_loaded(win)

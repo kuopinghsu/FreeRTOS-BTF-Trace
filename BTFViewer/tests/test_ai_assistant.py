@@ -28,6 +28,7 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     AI_PRESET_OPENAI,
     AI_CHAT_TIMEOUT_S,
     AI_LIVE_RETRY_ATTEMPTS,
+    AI_LIVE_RETRY_DELAY_S,
     ai_error_is_retryable,
     call_ai_with_retries,
     AI_TEMPLATE_MENU_GROUPS,
@@ -95,11 +96,11 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(AI_TEMPLATE_QUESTIONS[-1][1], "Auto investigate")
         self.assertNotIn("tooldemo", ids)
 
-    def test_templates_match_web_ollama_client(self) -> None:
-        """Keep AI_TEMPLATE_QUESTIONS in sync with web/src/utils/ollamaClient.js."""
+    def test_templates_match_web_ai_client(self) -> None:
+        """Keep AI_TEMPLATE_QUESTIONS in sync with web/src/utils/aiClient.js."""
         import re
 
-        js = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(encoding="utf-8")
+        js = (BTF_ROOT / "web/src/utils/aiClient.js").read_text(encoding="utf-8")
         start = js.index("export const AI_TEMPLATE_QUESTIONS = [")
         chunk = js[start:]
         web = []
@@ -117,7 +118,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(list(AI_TEMPLATE_QUESTIONS), web)
 
     def test_template_primary_ids_match_web_and_cover_all(self) -> None:
-        """Primary chips + More groups stay in sync with ollamaClient.js."""
+        """Primary chips + More groups stay in sync with aiClient.js."""
         import re
 
         all_ids = [t[0] for t in AI_TEMPLATE_QUESTIONS]
@@ -129,7 +130,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(sorted(list(AI_TEMPLATE_PRIMARY_IDS) + menu_ids), sorted(all_ids))
         self.assertFalse(set(AI_TEMPLATE_PRIMARY_IDS) & set(menu_ids))
 
-        js = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(encoding="utf-8")
+        js = (BTF_ROOT / "web/src/utils/aiClient.js").read_text(encoding="utf-8")
         prim = re.search(
             r"export const AI_TEMPLATE_PRIMARY_IDS = \[([^\]]+)\]", js, re.S)
         self.assertIsNotNone(prim)
@@ -948,6 +949,89 @@ class AiAssistantHelpersTests(unittest.TestCase):
         asst = next(m for m in sent if m.get("role") == "assistant")
         self.assertNotIn("extra_content", (asst.get("tool_calls") or [{}])[0])
 
+    def test_chat_completion_rewrites_empty_gemini_tool_call_ids(self) -> None:
+        captured = []
+
+        class _FakeResp:
+            def __init__(self, body: bytes) -> None:
+                self._body = body
+
+            def read(self, n: int = -1) -> bytes:
+                if not self._body:
+                    return b""
+                if n is None or n < 0:
+                    out, self._body = self._body, b""
+                    return out
+                out, self._body = self._body[:n], self._body[n:]
+                return out
+
+            def close(self) -> None:
+                return None
+
+        def _urlopen(req, timeout=None, **_kw):  # noqa: ANN001, ARG001
+            captured.append(json.loads(req.data.decode("utf-8")))
+            return _FakeResp(
+                b'{"choices":[{"message":{"role":"assistant","content":"ok"}}]}'
+            )
+
+        messages = [
+            {"role": "user", "content": "Why is CS[22] bouncing?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "",
+                        "type": "function",
+                        "function": {"name": "investigate", "arguments": "{}"},
+                    },
+                    {
+                        "id": "",
+                        "type": "function",
+                        "function": {
+                            "name": "query_raw_metric",
+                            "arguments": "{}",
+                        },
+                    },
+                    {
+                        "id": "",
+                        "type": "function",
+                        "function": {
+                            "name": "correlate_events",
+                            "arguments": "{}",
+                        },
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "", "content": '{"ok":true}'},
+            {"role": "tool", "content": '{"ok":true}'},
+            {"role": "tool", "content": '{"ok":true}'},
+        ]
+        with patch("btf_viewer_pkg.ai_assistant.urllib.request.urlopen", _urlopen):
+            ai_chat_completion(
+                query="",
+                messages=messages,
+                tools=ai_viewer_tools(),
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+                model="gemini-3.5-flash-lite",
+                preset="gemini",
+                api_key="test-key",
+            )
+        sent = captured[0]["messages"]
+        asst = next(m for m in sent if m.get("role") == "assistant")
+        self.assertEqual(
+            [c.get("id") for c in asst.get("tool_calls") or []],
+            ["call_0", "call_1", "call_2"],
+        )
+        tools = [m for m in sent if m.get("role") == "tool"]
+        self.assertEqual([m.get("name") for m in tools], [
+            "investigate", "query_raw_metric", "correlate_events",
+        ])
+        self.assertEqual(
+            [m.get("tool_call_id") for m in tools],
+            ["call_0", "call_1", "call_2"],
+        )
+
     def test_chat_completion_echoes_gemini_thought_signatures(self) -> None:
         captured = []
 
@@ -1187,6 +1271,93 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(turn["tool_calls"][0]["name"], "investigate")
         self.assertNotIn("error", turn)
 
+    def test_live_benchmark_chat_rewrites_empty_gemini_tool_call_ids(self) -> None:
+        n = {"n": 0}
+        follow = {"messages": []}
+
+        def fake_chat(*_a, **kwargs):
+            n["n"] += 1
+            if n["n"] == 1:
+                return {
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "",
+                        "name": "investigate",
+                        "arguments": {},
+                    }, {
+                        "id": "",
+                        "name": "query_raw_metric",
+                        "arguments": {"metric": "sync"},
+                    }, {
+                        "id": "",
+                        "name": "correlate_events",
+                        "arguments": {"task": "CS[22]"},
+                    }],
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "",
+                                "type": "function",
+                                "function": {
+                                    "name": "investigate",
+                                    "arguments": "{}",
+                                },
+                            },
+                            {
+                                "id": "",
+                                "type": "function",
+                                "function": {
+                                    "name": "query_raw_metric",
+                                    "arguments": '{"metric":"sync"}',
+                                },
+                            },
+                            {
+                                "id": "",
+                                "type": "function",
+                                "function": {
+                                    "name": "correlate_events",
+                                    "arguments": '{"task":"CS[22]"}',
+                                },
+                            },
+                        ],
+                    },
+                }
+            follow["messages"] = list(kwargs.get("messages") or [])
+            return {
+                "content": "CS[22] thrashes. Confidence: Medium.",
+                "tool_calls": [],
+            }
+
+        with patch("btf_viewer_pkg.ai_assistant.ai_chat_completion", fake_chat):
+            turn = live_benchmark_chat(
+                "Why is CS[22] bouncing?",
+                findings_text="Known tasks: CS[22]",
+                model="gemini-3.5-flash-lite",
+                case={"id": "migration_thrash", "catalog": {"tasks": ["CS[22]"]}},
+                tools=[{
+                    "type": "function",
+                    "function": {"name": "investigate", "parameters": {}},
+                }],
+                api_key="test-key",
+                preset="gemini",
+            )
+        self.assertEqual(n["n"], 2)
+        self.assertNotIn("error", turn)
+        asst = next(m for m in follow["messages"] if m.get("role") == "assistant")
+        ids = [c.get("id") for c in (asst.get("tool_calls") or [])]
+        self.assertEqual(ids, ["call_0", "call_1", "call_2"])
+        self.assertTrue(all(ids))
+        tools = [m for m in follow["messages"] if m.get("role") == "tool"]
+        self.assertEqual([m.get("name") for m in tools], [
+            "investigate", "query_raw_metric", "correlate_events",
+        ])
+        self.assertEqual(
+            [m.get("tool_call_id") for m in tools],
+            ["call_0", "call_1", "call_2"],
+        )
+
     def test_live_benchmark_chat_compact_mode(self) -> None:
         seen = {"system": "", "max_tokens": None, "tools": 0}
 
@@ -1316,7 +1487,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
                 api_key="test-key",
             )
         self.assertEqual(n["n"], 3)
-        self.assertEqual(AI_LIVE_RETRY_ATTEMPTS, 3)
+        self.assertEqual(AI_LIVE_RETRY_ATTEMPTS, 6)
         self.assertIn("CS[22]", turn["content"])
         self.assertNotIn("error", turn)
 
@@ -1356,6 +1527,46 @@ class AiAssistantHelpersTests(unittest.TestCase):
         with patch("btf_viewer_pkg.ai_assistant.time.sleep"):
             self.assertEqual(call_ai_with_retries(boom, delay_s=0.0, log=False), "ok")
         self.assertEqual(n["n"], 2)
+
+    def test_call_ai_with_retries_waits_fixed_delay_six_times(self) -> None:
+        """6 attempts, a fixed 10s pause between each (no escalating backoff)."""
+        self.assertEqual(AI_LIVE_RETRY_ATTEMPTS, 6)
+        self.assertEqual(AI_LIVE_RETRY_DELAY_S, 10.0)
+        n = {"n": 0}
+
+        def always_fails():
+            n["n"] += 1
+            raise RuntimeError("HTTP 503: high demand. Please try again later.")
+
+        waits = []
+        with patch(
+            "btf_viewer_pkg.ai_assistant.time.sleep", side_effect=waits.append,
+        ):
+            with self.assertRaises(RuntimeError):
+                call_ai_with_retries(always_fails, log=False)
+        self.assertEqual(n["n"], AI_LIVE_RETRY_ATTEMPTS)
+        self.assertEqual(waits, [AI_LIVE_RETRY_DELAY_S] * (AI_LIVE_RETRY_ATTEMPTS - 1))
+
+    def test_call_ai_with_retries_logs_recovery_on_eventual_success(self) -> None:
+        """A retry warning alone doesn't say the case passed — log a recovery
+        line too, so a case that succeeds after retrying isn't mistaken for a
+        silent drop between the retry warnings and the next case's log line."""
+        n = {"n": 0}
+
+        def flaky():
+            n["n"] += 1
+            if n["n"] < 3:
+                raise RuntimeError("HTTP 503: high demand. Please try again later.")
+            return "ok"
+
+        with patch("btf_viewer_pkg.ai_assistant.time.sleep"):
+            with patch("builtins.print") as mock_print:
+                result = call_ai_with_retries(flaky, delay_s=0.0)
+        self.assertEqual(result, "ok")
+        logged = [str(c.args[0]) for c in mock_print.call_args_list]
+        self.assertTrue(any("retry 1/6" in line for line in logged))
+        self.assertTrue(any("retry 2/6" in line for line in logged))
+        self.assertTrue(any("recovered after retry 3/6" in line for line in logged))
 
     def test_chat_completion_empty_reply_error_is_actionable(self) -> None:
         empty = {

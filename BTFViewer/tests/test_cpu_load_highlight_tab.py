@@ -24,6 +24,8 @@ from btf_viewer_pkg.parser import _parse_btf, _task_merge_key  # noqa: E402
 from btf_viewer_pkg.stats import _RcSettings  # noqa: E402
 from btf_viewer_pkg.view import TimelineView  # noqa: E402
 
+from tests import destroy_main_window  # noqa: E402
+
 EXAMPLE_BTF = Path(__file__).resolve().parents[2] / "tracedata" / "example-2cores.btf.gz"
 
 
@@ -90,7 +92,7 @@ class CpuLoadHighlightTabTest(unittest.TestCase):
         mk = _first_user_mk(trace_a)
 
         win = MainWindow()
-        self.addCleanup(win.close)
+        self.addCleanup(destroy_main_window, win)
         path_a = os.path.join(self._tmpdir, "a.btf")
         path_b = os.path.join(self._tmpdir, "b.btf")
         tab_a = win._add_trace_tab(path_a, trace_a)

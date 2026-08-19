@@ -28,6 +28,8 @@ from btf_viewer_pkg.view import (  # noqa: E402
     _RIGHT_DOCK_MIN_W,
 )
 
+from tests import destroy_main_window  # noqa: E402
+
 
 def _wait_ms(app: QApplication, ms: int) -> None:
     timer = QElapsedTimer()
@@ -67,7 +69,7 @@ class PanelSeamResizeTest(unittest.TestCase):
 
     def _make_win(self) -> MainWindow:
         win = MainWindow()
-        self.addCleanup(win.close)
+        self.addCleanup(destroy_main_window, win)
         win.show()
         _wait_ms(self._app, 150)
         win._sync_panel_seam_resizers()

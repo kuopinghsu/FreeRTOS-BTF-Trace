@@ -69,6 +69,8 @@ class PanelTabVisibilityTest(unittest.TestCase):
         return app, win
 
     def test_all_five_tabs_visible_by_default(self) -> None:
+        from tests import destroy_main_window
+
         self._write_rc("true", "true")
         app, win = self._start()
         try:
@@ -78,10 +80,12 @@ class PanelTabVisibilityTest(unittest.TestCase):
                     f"{name} tab hidden with show_* all true",
                 )
         finally:
-            win.close()
+            destroy_main_window(win)
 
     def test_rc_hides_marks_and_find(self) -> None:
         """The reported symptom: only Statistics and AI survive a false-y rc."""
+        from tests import destroy_main_window
+
         self._write_rc("false", "false")
         app, win = self._start()
         try:
@@ -100,9 +104,11 @@ class PanelTabVisibilityTest(unittest.TestCase):
                 "View → Show Find Panel checked while the tab is hidden",
             )
         finally:
-            win.close()
+            destroy_main_window(win)
 
     def test_menu_toggle_brings_hidden_tabs_back(self) -> None:
+        from tests import destroy_main_window
+
         self._write_rc("false", "false")
         app, win = self._start()
         try:
@@ -114,7 +120,7 @@ class PanelTabVisibilityTest(unittest.TestCase):
             self.assertTrue(win._act_show_marks.isChecked())
             self.assertTrue(win._act_show_find.isChecked())
         finally:
-            win.close()
+            destroy_main_window(win)
 
 
 if __name__ == "__main__":

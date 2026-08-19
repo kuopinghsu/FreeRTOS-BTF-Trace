@@ -50,9 +50,12 @@ from btf_viewer_pkg.ai_case import (  # noqa: E402
     benchmark_model_category,
     parse_live_benchmark_models,
     parse_benchmark_context_modes,
+    select_benchmark_cases,
     select_benchmark_suite_models,
     benchmark_prompt_context,
     format_benchmark_markdown,
+    merge_benchmark_report,
+    parse_benchmark_markdown,
     run_live_benchmark,
     run_offline_benchmark,
     score_adversarial_metrics,
@@ -684,21 +687,13 @@ class InvestigationCaseTests(unittest.TestCase):
         from unittest.mock import patch
 
         example = BTF_ROOT / "examples" / "ai" / "benchmark.xml"
-        with patch.dict(
-            os.environ,
-            {
-                "ANTHROPIC_API_KEY": "",
-                "MOONSHOT_API_KEY": "",
-                "GEMINI_API_KEY": "sk-gemini-must-not-fill-optional",
-                "OPENAI_API_KEY": "sk-openai-must-not-fill-optional",
-            },
-            clear=False,
-        ):
-            suite = load_benchmark_suite_xml(str(example))
+        suite = load_benchmark_suite_xml(str(example))
         ids = [m["id"] for m in suite["models"]]
-        self.assertGreaterEqual(len(ids), 1)
-        self.assertIn("qwen3.5:9b", ids)
-        self.assertIn("qwen3.8:27b", ids)
+        self.assertEqual(
+            ids,
+            ["qwen3.5:9b", "qwen3.8:27b",
+             "gemini-3.7-flash", "gemini-3.5-flash-lite"],
+        )
         local = next(m for m in suite["models"] if m["base_url"].startswith("http://"))
         self.assertFalse(local["tls_verify"])
         self.assertTrue(local["base_url"])
@@ -707,18 +702,9 @@ class InvestigationCaseTests(unittest.TestCase):
         ]
         self.assertEqual(
             gemini_ids, ["gemini-3.7-flash", "gemini-3.5-flash-lite"])
-        self.assertIn("claude-sonnet-5", ids)
-        self.assertIn("kimi-k3", ids)
-        optional = [m for m in suite["models"] if m.get("optional")]
-        self.assertEqual(
-            [m["id"] for m in optional], ["claude-sonnet-5", "kimi-k3"])
+        self.assertFalse(any(m.get("optional") for m in suite["models"]))
         default_ids = [m["id"] for m in select_benchmark_suite_models(suite, "")]
-        self.assertIn("qwen3.5:9b", default_ids)
-        self.assertIn("qwen3.8:27b", default_ids)
-        self.assertNotIn("claude-sonnet-5", default_ids)
-        self.assertNotIn("kimi-k3", default_ids)
-        explicit = select_benchmark_suite_models(suite, "claude-sonnet-5")
-        self.assertEqual([m["id"] for m in explicit], ["claude-sonnet-5"])
+        self.assertEqual(default_ids, ids)
         cloud = next(m for m in suite["models"] if m.get("api_key_env") == "GEMINI_API_KEY")
         self.assertEqual(cloud["api_key_env"], "GEMINI_API_KEY")
         self.assertTrue(cloud["tls_verify"])
@@ -736,6 +722,10 @@ class InvestigationCaseTests(unittest.TestCase):
   </endpoint>
   <models>
     <model id="lab-model"/>
+    <model id="optional-cloud" optional="true">
+      <base-url>https://api.example.com/v1</base-url>
+      <api-key env="BENCH_OPTIONAL_KEY"/>
+    </model>
   </models>
 </ai-benchmark>
 """
@@ -746,10 +736,23 @@ class InvestigationCaseTests(unittest.TestCase):
             with patch.dict(os.environ, {"BENCH_TEST_KEY": "from-env"}, clear=False):
                 env_suite = load_benchmark_suite_xml(tmp)
             self.assertEqual(env_suite["models"][0]["api_key"], "from-env")
-            with patch.dict(os.environ, {"BENCH_TEST_KEY": ""}, clear=False):
+            with patch.dict(
+                os.environ,
+                {
+                    "BENCH_TEST_KEY": "",
+                    "BENCH_OPTIONAL_KEY": "",
+                    "GEMINI_API_KEY": "sk-gemini-must-not-fill-optional",
+                },
+                clear=False,
+            ):
                 xml_suite = load_benchmark_suite_xml(tmp)
             self.assertEqual(xml_suite["models"][0]["api_key"], "xml-fallback-key")
             self.assertFalse(xml_suite["models"][0]["tls_verify"])
+            self.assertEqual(xml_suite["models"][1]["api_key"], "")
+            skipped = select_benchmark_suite_models(xml_suite, "")
+            self.assertEqual([m["id"] for m in skipped], ["lab-model"])
+            forced = select_benchmark_suite_models(xml_suite, "optional-cloud")
+            self.assertEqual([m["id"] for m in forced], ["optional-cloud"])
         finally:
             os.unlink(tmp)
 
@@ -856,6 +859,44 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertIn("Compact", md)
         self.assertIn("Total tok", md)
 
+    def test_live_benchmark_report_marks_error_rows_not_fail(self) -> None:
+        """A case that raised (API error) must print ERROR, not FAIL — matches
+        the AI_BENCHMARK.md table's ``ERROR`` flag (see format_benchmark_markdown)."""
+        root = BTF_ROOT / "tests" / "ai"
+        cases = {c["id"]: c for c in load_benchmark_dataset(str(root))}
+        model = "fixture-model"
+        boom_id = next(iter(cases))
+
+        def complete(_query, _findings, _used_model, case, context_mode="full"):
+            if case["id"] == boom_id:
+                raise RuntimeError(
+                    "HTTP 503: This model is currently experiencing high demand.")
+            canned = cases[case["id"]]
+            return {
+                "content": canned["response"],
+                "tool_calls": [{"name": n} for n in canned.get("tools") or []],
+                "elapsed_s": 0.1,
+            }
+
+        live = run_live_benchmark(root, [model], complete=complete, fail_under=50)
+        block = live["models"][0]
+        boom_row = next(r for r in block["rows"] if r["id"] == boom_id)
+        self.assertTrue(boom_row.get("error"))
+        self.assertFalse(boom_row.get("pass"))
+        self.assertIn(f"  {boom_id:24}", block["report"])
+        boom_line = next(
+            line for line in block["report"].splitlines()
+            if line.strip().startswith(boom_id)
+        )
+        self.assertIn("ERROR", boom_line)
+        self.assertNotIn("FAIL", boom_line)
+
+        md = format_benchmark_markdown(live=live, dataset="tests/ai")
+        self.assertIn(f"| {boom_id} |", md)
+        md_line = next(
+            line for line in md.splitlines() if line.startswith(f"| {boom_id} |"))
+        self.assertTrue(md_line.rstrip().endswith("ERROR |"))
+
     def test_cli_ai_test_runs_dataset(self) -> None:
         from btf_viewer_pkg.cli import _cli_ai_test_run
         from argparse import Namespace
@@ -863,6 +904,189 @@ class InvestigationCaseTests(unittest.TestCase):
         path = str(BTF_ROOT / "tests" / "ai")
         rc = _cli_ai_test_run(Namespace(dataset=path, fail_under=50))
         self.assertEqual(rc, 0)
+
+    def test_select_benchmark_cases_filters_by_only_cases(self) -> None:
+        """``--only-cases`` narrows the dataset the same way ``--models`` narrows
+        the suite XML: empty keeps everything, known ids filter in order given,
+        and an unknown id raises so a typo doesn't silently score zero cases."""
+        cases = load_benchmark_dataset(str(BTF_ROOT / "tests" / "ai"))
+        all_ids = [c["id"] for c in cases]
+        self.assertGreater(len(all_ids), 1)
+
+        self.assertEqual(
+            [c["id"] for c in select_benchmark_cases(cases, "")], all_ids)
+
+        one_id = all_ids[-1]
+        two_id = all_ids[0]
+        picked = select_benchmark_cases(cases, f" {one_id} , {two_id} ")
+        self.assertEqual([c["id"] for c in picked], [one_id, two_id])
+
+        with self.assertRaises(ValueError) as ctx:
+            select_benchmark_cases(cases, "not-a-real-case")
+        self.assertIn("not-a-real-case", str(ctx.exception))
+
+    def test_parse_benchmark_markdown_round_trips_offline_and_live(self) -> None:
+        """merge_benchmark_report needs to recover enough from a prior
+        AI_BENCHMARK.md to regenerate byte-identical tables/aggregates for
+        blocks that were not rerun — verify the round trip is lossless for a
+        multi-context-mode live run plus the offline scorer."""
+        root = BTF_ROOT / "tests" / "ai"
+        offline = run_offline_benchmark(root, fail_under=50)
+
+        def complete(_query, _findings, _used_model, case, context_mode="full"):
+            return {
+                "content": case.get("response") or "",
+                "tool_calls": [{"name": n} for n in case.get("tools") or []],
+                "elapsed_s": 1.5,
+                "usage": {
+                    "prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120,
+                },
+            }
+
+        live = run_live_benchmark(
+            root, ["fixture-model"], complete=complete, fail_under=50,
+            context_modes=["compact", "full"])
+        md = format_benchmark_markdown(offline=offline, live=live, dataset="tests/ai")
+        parsed = parse_benchmark_markdown(md)
+        self.assertIn("offline", parsed)
+        self.assertIn("live", parsed)
+        re_md = format_benchmark_markdown(
+            offline=parsed["offline"], live=parsed["live"], dataset="tests/ai")
+        self.assertEqual(md, re_md)
+
+    def test_parse_benchmark_markdown_round_trips_error_rows(self) -> None:
+        root = BTF_ROOT / "tests" / "ai"
+        cases = {c["id"]: c for c in load_benchmark_dataset(str(root))}
+        boom_id = next(iter(cases))
+
+        def complete(_query, _findings, _used_model, case, context_mode="full"):
+            if case["id"] == boom_id:
+                raise RuntimeError("HTTP 503: high demand, try again later.")
+            return {"content": case.get("response") or "", "elapsed_s": 1.0}
+
+        live = run_live_benchmark(root, ["m"], complete=complete, fail_under=50)
+        md = format_benchmark_markdown(live=live, dataset="tests/ai")
+        parsed = parse_benchmark_markdown(md)
+        re_md = format_benchmark_markdown(live=parsed["live"], dataset="tests/ai")
+        self.assertEqual(md, re_md)
+
+    def test_merge_benchmark_report_preserves_untouched_blocks(self) -> None:
+        """Rerunning just one model/context (e.g. gemini-3.7-flash in Full
+        evidence) must update only that block — every other model, context
+        mode, and offline case already in AI_BENCHMARK.md stays untouched."""
+        root = BTF_ROOT / "tests" / "ai"
+        offline = run_offline_benchmark(root, fail_under=50)
+
+        def complete_v1(_q, _f, model, case, context_mode="full"):
+            return {"content": case.get("response") or "", "elapsed_s": 1.0}
+
+        first_live = run_live_benchmark(
+            root, ["model-a", "model-b"], complete=complete_v1, fail_under=50,
+            context_modes=["compact", "full"])
+        original_md = format_benchmark_markdown(
+            offline=offline, live=first_live, dataset="tests/ai")
+
+        def complete_v2(_q, _f, model, case, context_mode="full"):
+            return {"content": "totally different reply", "elapsed_s": 9.9}
+
+        rerun_live = run_live_benchmark(
+            root, ["model-a"], complete=complete_v2, fail_under=0,
+            context_modes=["full"])
+        merged_offline, merged_live = merge_benchmark_report(
+            original_md, offline=None, live=rerun_live)
+        # No fresh offline run this time — the prior offline table (untouched)
+        # is still recovered from original_md so it isn't dropped from the file.
+        self.assertEqual(
+            [r["id"] for r in merged_offline["rows"]],
+            [r["id"] for r in offline["rows"]],
+        )
+        merged_md = format_benchmark_markdown(
+            offline=merged_offline, live=merged_live, dataset="tests/ai")
+        self.assertIn("## Offline fixture scorer", merged_md)
+
+        # model-b (untouched) keeps every one of its original blocks verbatim.
+        for mode_label in ("Compact", "Full evidence"):
+            marker = f"### `model-b` — {mode_label}"
+            self.assertIn(marker, original_md)
+            self.assertIn(marker, merged_md)
+        b_compact_old = original_md.split("### `model-b` — Compact")[1].split("### `")[0]
+        b_compact_new = merged_md.split("### `model-b` — Compact")[1].split("### `")[0]
+        self.assertEqual(b_compact_old, b_compact_new)
+
+        # model-a Compact (untouched by the rerun) is also preserved verbatim.
+        a_compact_old = original_md.split("### `model-a` — Compact")[1].split("### `")[0]
+        a_compact_new = merged_md.split("### `model-a` — Compact")[1].split("### `")[0]
+        self.assertEqual(a_compact_old, a_compact_new)
+
+        # model-a Full evidence (rerun) reflects the new response.
+        a_full_new = merged_md.split("### `model-a` — Full evidence")[1].split("### `")[0]
+        self.assertIn("Mean latency: **9.9s**", a_full_new)
+        self.assertNotIn("Mean latency: **1.0s**", a_full_new)
+
+    def test_cli_ai_test_only_cases_narrows_offline_report(self) -> None:
+        from btf_viewer_pkg.cli import _cli_ai_test_run
+        from argparse import Namespace
+
+        path = str(BTF_ROOT / "tests" / "ai")
+        cases = load_benchmark_dataset(path)
+        case_id = cases[0]["id"]
+        rc = _cli_ai_test_run(
+            Namespace(dataset=path, fail_under=50, only_cases=case_id))
+        self.assertEqual(rc, 0)
+
+        rc = _cli_ai_test_run(
+            Namespace(dataset=path, fail_under=50, only_cases="not-a-real-case"))
+        self.assertEqual(rc, 1)
+
+    def test_cli_ai_test_output_merges_with_existing_report(self) -> None:
+        """Writing -o over an existing AI_BENCHMARK.md-style report merges in
+        the new (possibly --only-cases-restricted) run instead of dropping
+        every case that wasn't rerun this time; --replace-report opts out."""
+        import tempfile
+        from btf_viewer_pkg.cli import _cli_ai_test_run
+        from argparse import Namespace
+
+        path = str(BTF_ROOT / "tests" / "ai")
+        all_ids = [c["id"] for c in load_benchmark_dataset(path)]
+        self.assertGreater(len(all_ids), 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "AI_BENCHMARK.md")
+            rc = _cli_ai_test_run(Namespace(dataset=path, fail_under=50, output=out))
+            self.assertEqual(rc, 0)
+            full_text = Path(out).read_text(encoding="utf-8")
+            for cid in all_ids:
+                self.assertIn(f"| {cid} |", full_text)
+
+            one_id = all_ids[0]
+            rc = _cli_ai_test_run(Namespace(
+                dataset=path, fail_under=50, output=out, only_cases=one_id))
+            self.assertEqual(rc, 0)
+            merged_text = Path(out).read_text(encoding="utf-8")
+            for cid in all_ids:
+                self.assertIn(f"| {cid} |", merged_text)
+
+            rc = _cli_ai_test_run(Namespace(
+                dataset=path, fail_under=50, output=out, only_cases=one_id,
+                replace_report=True))
+            self.assertEqual(rc, 0)
+            replaced_text = Path(out).read_text(encoding="utf-8")
+            self.assertIn(f"| {one_id} |", replaced_text)
+            other_id = next(cid for cid in all_ids if cid != one_id)
+            self.assertNotIn(f"| {other_id} |", replaced_text)
+
+    def test_run_live_benchmark_only_cases_scores_subset(self) -> None:
+        root = BTF_ROOT / "tests" / "ai"
+        all_cases = load_benchmark_dataset(str(root))
+        case_id = all_cases[0]["id"]
+        model = "fixture-model"
+
+        def complete(_query, _findings, _used_model, case, context_mode="full"):
+            return {"content": case.get("response") or "", "tool_calls": []}
+
+        live = run_live_benchmark(
+            root, [model], complete=complete, fail_under=0, case_ids=case_id)
+        rows = live["models"][0]["rows"]
+        self.assertEqual([r["id"] for r in rows], [case_id])
 
 
 class InvestigationCaseParitySurfaceTests(unittest.TestCase):

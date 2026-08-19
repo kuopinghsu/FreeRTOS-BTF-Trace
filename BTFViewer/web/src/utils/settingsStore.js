@@ -42,7 +42,7 @@ import {
   parseExtraAiPresets,
   sanitizeAiPresetId,
   aiPresetDisplayLabel,
-} from './ollamaClient.js'
+} from './aiClient.js'
 import {
   dumpUserHistoricalKnowledge,
   dumpUserInvestigationTemplates,

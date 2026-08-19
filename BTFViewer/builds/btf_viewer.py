@@ -20990,7 +20990,7 @@ def format_benchmark_report(run_id: str, rows: Sequence[Dict[str, Any]]) -> str:
     for row in rows:
         name = str(row.get("id") or "?")
         score = row.get("overall")
-        flag = "PASS" if row.get("pass") else "FAIL"
+        flag = "ERROR" if row.get("error") else ("PASS" if row.get("pass") else "FAIL")
         lines.append(f"  {name:24} {score!s:>3}  {flag}")
     if rows:
         avg = int(round(sum(int(r.get("overall") or 0) for r in rows) / len(rows)))
@@ -21013,7 +21013,12 @@ def _xml_child(parent: Any, *names: str) -> Any:
 
 
 def resolve_benchmark_api_key(*, text: str = "", env: str = "") -> str:
-    """Named env, else XML text, else shared env fallbacks."""
+    """Named env, else XML text. Shared env fallbacks only when no env= is set.
+
+    A model with ``env="ANTHROPIC_API_KEY"`` must not inherit ``GEMINI_API_KEY``
+    / ``OPENAI_API_KEY`` when its own variable is empty — that would keep
+    optional suite models enabled on a Gemini-only host.
+    """
     pass
 
     env_name = str(env or "").strip()
@@ -21024,6 +21029,8 @@ def resolve_benchmark_api_key(*, text: str = "", env: str = "") -> str:
     got = normalize_api_key(text)
     if got:
         return got
+    if env_name:
+        return ""
     return resolve_ai_api_key("")
 
 
@@ -21169,6 +21176,34 @@ def load_benchmark_suite_xml(path: Any) -> Dict[str, Any]:
 def parse_live_benchmark_models(models_raw: str) -> List[str]:
     """Comma-separated model ids from ``--models`` (filters the suite XML)."""
     return [m.strip() for m in str(models_raw or "").split(",") if m.strip()]
+
+
+def select_benchmark_cases(
+    cases: Sequence[Dict[str, Any]],
+    case_ids_raw: str = "",
+) -> List[Dict[str, Any]]:
+    """Dataset cases, optionally filtered by ``--only-cases`` ids.
+
+    With no filter, every case is scored (unchanged order). Unknown ids raise
+    ``ValueError`` (mirrors :func:`select_benchmark_suite_models`).
+    """
+    want = parse_live_benchmark_models(case_ids_raw)
+    if not want:
+        return list(cases)
+    by_id = {str(c.get("id") or ""): c for c in cases}
+    out: List[Dict[str, Any]] = []
+    missing: List[str] = []
+    for cid in want:
+        if cid in by_id:
+            out.append(by_id[cid])
+        else:
+            missing.append(cid)
+    if missing:
+        known = ", ".join(by_id) or "(none)"
+        raise ValueError(
+            f"case id(s) not in dataset: {', '.join(missing)} (have {known})"
+        )
+    return out
 
 
 def select_benchmark_suite_models(
@@ -21335,10 +21370,15 @@ def run_offline_benchmark(
     dataset_path: Any,
     *,
     fail_under: int = 0,
+    case_ids: str = "",
 ) -> Dict[str, Any]:
-    """Score fixture responses in a dataset (no live model calls)."""
+    """Score fixture responses in a dataset (no live model calls).
+
+    *case_ids*: optional comma-separated ``--only-cases`` filter (see
+    :func:`select_benchmark_cases`); empty scores every case.
+    """
     from datetime import datetime, timezone
-    cases = load_benchmark_dataset(str(dataset_path))
+    cases = select_benchmark_cases(load_benchmark_dataset(str(dataset_path)), case_ids)
     rows: List[Dict[str, Any]] = []
     for case in cases:
         actual = case.get("actual") if isinstance(case.get("actual"), dict) else {}
@@ -21383,8 +21423,13 @@ def run_live_benchmark(
     complete: Callable[..., Dict[str, Any]],
     fail_under: int = 0,
     context_modes: Optional[Sequence[str]] = None,
+    case_ids: str = "",
 ) -> Dict[str, Any]:
-    """Score live model replies. *complete(query, findings_text, model, case, context_mode=...)*."""
+    """Score live model replies. *complete(query, findings_text, model, case, context_mode=...)*.
+
+    *case_ids*: optional comma-separated ``--only-cases`` filter (see
+    :func:`select_benchmark_cases`); empty scores every case.
+    """
     from datetime import datetime, timezone
     ids = [str(m).strip() for m in (models or []) if str(m).strip()]
     if not ids:
@@ -21399,7 +21444,7 @@ def run_live_benchmark(
         if m not in seen_modes:
             seen_modes.add(m)
             mode_list.append(m)
-    cases = load_benchmark_dataset(str(dataset_path))
+    cases = select_benchmark_cases(load_benchmark_dataset(str(dataset_path)), case_ids)
     run_id = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
     per_model: List[Dict[str, Any]] = []
     for model in ids:
@@ -21704,6 +21749,265 @@ def format_benchmark_markdown(
         lines.append("_No runs recorded._")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+_BENCH_CASE_ROW_KEYS = (
+    "finding", "evidence", "tool_use", "root_cause", "calibration", "safety",
+)
+_BENCH_LIVE_HEADER_RE = re.compile(r"^###\s+`([^`]+)`(?:\s+—\s+(.+))?\s*$")
+_BENCH_RUN_LINE_RE = re.compile(r"Run `([^`]*)`")
+_BENCH_ERROR_SUMMARY_RE = re.compile(
+    r"^\d+/\d+ cases returned an API error \(first: (.*)\)\.$"
+)
+_BENCH_MEAN_LAT_RE = re.compile(r"Mean latency: \*\*([\d.]+)s\*\* / case\.")
+_BENCH_TOKENS_RE = re.compile(
+    r"Tokens: \*\*(\d+)\*\* prompt \+ \*\*(\d+)\*\* completion = \*\*(\d+)\*\* total\."
+)
+_BENCH_STALE_ERROR_TEXT = (
+    "carried over from a previous AI_BENCHMARK.md (original error text unavailable)"
+)
+
+
+def _split_benchmark_md_row(line: str) -> List[str]:
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip() for c in s.split("|")]
+
+
+def _parse_benchmark_case_table(
+    lines: Sequence[str], start: int,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Parse a ``| Case | Overall | ... | Result |`` table (see ``_table`` in
+    :func:`format_benchmark_markdown`) starting at ``lines[start]``.
+
+    Returns ``(rows, index_after_table)``; ``rows`` round-trip enough of the
+    prior report (overall, parts, pass/fail/error) for
+    :func:`merge_benchmark_report` to recompute an unchanged block's stats.
+    """
+    if start >= len(lines) or "| Case |" not in lines[start]:
+        return [], start
+    i = start + 2
+    rows: List[Dict[str, Any]] = []
+    while i < len(lines) and lines[i].strip().startswith("|"):
+        cells = _split_benchmark_md_row(lines[i])
+        if len(cells) < 9:
+            break
+        case_id = cells[0]
+        flag = cells[8].strip().upper()
+        rows.append({
+            "id": case_id,
+            "overall": _safe_int(cells[1]),
+            "parts": {
+                key: _safe_int(cells[2 + idx])
+                for idx, key in enumerate(_BENCH_CASE_ROW_KEYS)
+            },
+            "pass": flag == "PASS",
+            "error": _BENCH_STALE_ERROR_TEXT if flag == "ERROR" else "",
+        })
+        i += 1
+    return rows, i
+
+
+def _parse_benchmark_offline_section(
+    lines: Sequence[str], start: int, end: int,
+) -> Optional[Dict[str, Any]]:
+    run_id = ""
+    for i in range(start, end):
+        m = _BENCH_RUN_LINE_RE.search(lines[i])
+        if m:
+            run_id = m.group(1)
+        if lines[i].strip().startswith("| Case |"):
+            rows, _ = _parse_benchmark_case_table(lines, i)
+            return {"run_id": run_id, "rows": rows} if rows else None
+    return None
+
+
+def _parse_benchmark_live_blocks(
+    lines: Sequence[str], start: int, end: int,
+) -> List[Dict[str, Any]]:
+    blocks: List[Dict[str, Any]] = []
+    i = start
+    while i < end:
+        m = _BENCH_LIVE_HEADER_RE.match(lines[i].strip())
+        if not m:
+            i += 1
+            continue
+        model = m.group(1)
+        label = (m.group(2) or "").strip()
+        ctx_mode = normalize_ai_context_mode(label) if label else AI_CONTEXT_MODE_FULL
+        j = i + 1
+        run_id = ""
+        block_error = ""
+        while j < end and not lines[j].strip().startswith(("| Case |", "### ", "## ")):
+            line = lines[j].strip()
+            rm = _BENCH_RUN_LINE_RE.search(line)
+            if rm:
+                run_id = rm.group(1)
+            elif line.startswith("Error: "):
+                block_error = line[len("Error: "):]
+            j += 1
+        rows: List[Dict[str, Any]] = []
+        if j < end and lines[j].strip().startswith("| Case |"):
+            rows, j = _parse_benchmark_case_table(lines, j)
+        mean_lat: Optional[float] = None
+        prompt_tok = completion_tok = total_tok = None
+        error_msg = ""
+        while j < end and not lines[j].strip().startswith(("### ", "## ")):
+            line = lines[j].strip()
+            em = _BENCH_ERROR_SUMMARY_RE.match(line)
+            if em:
+                error_msg = em.group(1)
+            lm = _BENCH_MEAN_LAT_RE.search(line)
+            if lm:
+                mean_lat = float(lm.group(1))
+            tm = _BENCH_TOKENS_RE.search(line)
+            if tm:
+                prompt_tok, completion_tok, total_tok = (
+                    int(tm.group(1)), int(tm.group(2)), int(tm.group(3)),
+                )
+            j += 1
+        if rows:
+            if mean_lat is not None:
+                for r in rows:
+                    r["elapsed_s"] = mean_lat
+            if prompt_tok is not None:
+                rows[0]["prompt_tokens"] = prompt_tok
+                rows[0]["completion_tokens"] = completion_tok
+                rows[0]["total_tokens"] = total_tok
+            if error_msg:
+                for r in rows:
+                    if r.get("error"):
+                        r["error"] = error_msg
+        blocks.append({
+            "model": model,
+            "context_mode": ctx_mode,
+            "context_label": ai_context_mode_label(ctx_mode),
+            "block_id": model,
+            "category": benchmark_model_category(model),
+            "run_id": run_id,
+            "rows": rows,
+            "failed": [r for r in rows if not r.get("pass")],
+            "ok": all(r.get("pass") for r in rows) if rows else True,
+            "error": block_error,
+        })
+        i = j
+    return blocks
+
+
+def parse_benchmark_markdown(text: str) -> Dict[str, Any]:
+    """Recover ``offline``/``live`` structures from a previously written
+    AI_BENCHMARK.md so :func:`merge_benchmark_report` can update only the
+    models/cases that were actually rerun. Returns ``{}`` for text that
+    doesn't look like a benchmark report (e.g. an empty or hand-edited file).
+    """
+    lines = (text or "").splitlines()
+    headings = [
+        (i, ln.strip()[3:].strip())
+        for i, ln in enumerate(lines) if ln.strip().startswith("## ")
+    ]
+    if not headings:
+        return {}
+    bounds: Dict[str, Tuple[int, int]] = {}
+    for k, (idx, title) in enumerate(headings):
+        end = headings[k + 1][0] if k + 1 < len(headings) else len(lines)
+        bounds.setdefault(title, (idx, end))
+    result: Dict[str, Any] = {}
+    if "Offline fixture scorer" in bounds:
+        start, end = bounds["Offline fixture scorer"]
+        offline = _parse_benchmark_offline_section(lines, start, end)
+        if offline:
+            result["offline"] = offline
+    if "Live models" in bounds:
+        start, end = bounds["Live models"]
+        blocks = _parse_benchmark_live_blocks(lines, start, end)
+        if blocks:
+            modes: List[str] = []
+            seen = set()
+            for b in blocks:
+                cm = b["context_mode"]
+                if cm not in seen:
+                    seen.add(cm)
+                    modes.append(cm)
+            single_mode = len(modes) <= 1
+            for b in blocks:
+                b["block_id"] = (
+                    b["model"] if single_mode else f"{b['model']} ({b['context_label']})"
+                )
+            result["live"] = {"models": blocks, "context_modes": modes}
+    return result
+
+
+def merge_benchmark_report(
+    existing_text: str,
+    *,
+    offline: Optional[dict] = None,
+    live: Optional[dict] = None,
+) -> Tuple[Optional[dict], Optional[dict]]:
+    """Combine a freshly scored run with whatever ``existing_text`` (a prior
+    AI_BENCHMARK.md) already recorded, so e.g. rerunning just
+    ``gemini-3.7-flash`` in Full evidence updates that one model/context
+    block — and the offline cases actually rescored — without dropping every
+    other model, context mode, or case from the report.
+
+    Returns ``(merged_offline, merged_live)`` ready for
+    :func:`format_benchmark_markdown`. Falls back to ``(offline, live)``
+    unchanged (a plain overwrite) when ``existing_text`` doesn't parse as a
+    benchmark report.
+    """
+    prior = parse_benchmark_markdown(existing_text or "")
+    merged_offline = offline
+    prior_offline = prior.get("offline")
+    if prior_offline:
+        old_rows = list(prior_offline.get("rows") or [])
+        new_rows = list((offline or {}).get("rows") or [])
+        by_id = {r["id"]: r for r in old_rows}
+        order = [r["id"] for r in old_rows]
+        for r in new_rows:
+            if r["id"] not in by_id:
+                order.append(r["id"])
+            by_id[r["id"]] = r
+        merged_rows = [by_id[cid] for cid in order]
+        run_id = (offline or {}).get("run_id") or prior_offline.get("run_id") or ""
+        merged_offline = {**(offline or {}), "run_id": run_id, "rows": merged_rows}
+    merged_live = live
+    prior_live = prior.get("live")
+    if prior_live:
+        old_blocks = list(prior_live.get("models") or [])
+        new_blocks = list((live or {}).get("models") or [])
+        by_key = {(b.get("model"), b.get("context_mode")): b for b in old_blocks}
+        order_keys = list(by_key.keys())
+        for b in new_blocks:
+            key = (b.get("model"), b.get("context_mode"))
+            if key not in by_key:
+                order_keys.append(key)
+            by_key[key] = b
+        merged_blocks = [by_key[k] for k in order_keys]
+        modes: List[str] = []
+        seen_modes = set()
+        for b in merged_blocks:
+            cm = b.get("context_mode")
+            if cm not in seen_modes:
+                seen_modes.add(cm)
+                modes.append(cm)
+        modes.sort(
+            key=lambda m: AI_CONTEXT_MODES.index(m) if m in AI_CONTEXT_MODES else 99
+        )
+        single_mode = len(modes) <= 1
+        for b in merged_blocks:
+            label = b.get("context_label") or ai_context_mode_label(b.get("context_mode"))
+            b["block_id"] = b.get("model") if single_mode else f"{b.get('model')} ({label})"
+        run_id = (live or {}).get("run_id") or prior_live.get("run_id") or ""
+        merged_live = {
+            **(live or {}),
+            "run_id": run_id,
+            "models": merged_blocks,
+            "context_modes": modes,
+            "ok": all(b.get("ok", True) for b in merged_blocks),
+        }
+    return merged_offline, merged_live
 # ===========================================================================
 # ai_investigation
 # ===========================================================================
@@ -29872,6 +30176,44 @@ def ensure_gemini_thought_signatures(
     return out
 
 
+def _tool_call_name(obj: Any) -> str:
+    """Function name from OpenAI / Gemini OpenAI-compat / extra_content shapes."""
+    if not isinstance(obj, dict):
+        return ""
+    fn = obj.get("function") if isinstance(obj.get("function"), dict) else {}
+    name = str(fn.get("name") or obj.get("name") or obj.get("tool") or "").strip()
+    if name:
+        return name
+    for key in ("function_call", "functionCall"):
+        nested = obj.get(key)
+        if isinstance(nested, dict):
+            name = str(nested.get("name") or "").strip()
+            if name:
+                return name
+    extra = obj.get("extra_content")
+    if isinstance(extra, dict):
+        google = extra.get("google") if isinstance(extra.get("google"), dict) else {}
+        for src in (google, extra):
+            for key in ("function_call", "functionCall"):
+                nested = src.get(key)
+                if isinstance(nested, dict):
+                    name = str(nested.get("name") or "").strip()
+                    if name:
+                        return name
+            name = str(src.get("name") or "").strip()
+            if name:
+                return name
+    return ""
+
+
+def _tool_call_id(obj: Any, index: int) -> str:
+    """Non-empty tool_call id. Gemini rejects follow-ups that echo ``id: ''``."""
+    if not isinstance(obj, dict):
+        return f"call_{index}"
+    cid = str(obj.get("id") or "").strip()
+    return cid or f"call_{index}"
+
+
 def _extracted_tool_call(
     *,
     cid: str,
@@ -29901,18 +30243,15 @@ def extract_tool_calls(message: Optional[Dict[str, Any]]) -> List[Dict[str, Any]
             if not isinstance(call, dict):
                 continue
             fn = call.get("function") if isinstance(call.get("function"), dict) else {}
-            name = str(
-                fn.get("name") or call.get("name") or call.get("tool") or ""
-            ).strip()
+            name = _tool_call_name(call)
             if not name:
                 continue
             args = parse_tool_arguments(
                 fn.get("arguments",
                        call.get("arguments", call.get("args", call.get("input"))))
             )
-            cid = str(call.get("id") or f"call_{i}")
             out.append(_extracted_tool_call(
-                cid=cid,
+                cid=_tool_call_id(call, i),
                 name=name,
                 arguments=args,
                 signature=thought_signature_from_obj(call),
@@ -29932,18 +30271,30 @@ def extract_tool_calls(message: Optional[Dict[str, Any]]) -> List[Dict[str, Any]
             if not isinstance(part, dict):
                 continue
             ptype = str(part.get("type") or "")
-            if ptype in ("tool_use", "function_call", "tool_call"):
-                name = str(part.get("name") or "").strip()
-                if not name:
-                    continue
-                args = parse_tool_arguments(
-                    part.get("input", part.get("arguments", part.get("args"))))
-                out.append(_extracted_tool_call(
-                    cid=str(part.get("id") or f"part_{i}"),
-                    name=name,
-                    arguments=args,
-                    signature=thought_signature_from_obj(part),
-                ))
+            nested = part.get("functionCall") if isinstance(
+                part.get("functionCall"), dict) else (
+                part.get("function_call") if isinstance(
+                    part.get("function_call"), dict) else None
+            )
+            if (
+                ptype not in (
+                    "tool_use", "function_call", "tool_call", "functionCall")
+                and not (isinstance(nested, dict) and nested.get("name"))
+            ):
+                continue
+            name = _tool_call_name(part)
+            if not name:
+                continue
+            nested_args = nested if isinstance(nested, dict) else {}
+            args = parse_tool_arguments(
+                part.get("input", part.get("arguments", part.get("args",
+                    nested_args.get("args", nested_args.get("arguments"))))))
+            out.append(_extracted_tool_call(
+                cid=str(part.get("id") or "").strip() or f"part_{i}",
+                name=name,
+                arguments=args,
+                signature=thought_signature_from_obj(part),
+            ))
     if out and not str(out[0].get("thought_signature") or "").strip():
         fallback = thought_signature_from_obj(message)
         if not fallback and isinstance(content, list):
@@ -30937,7 +31288,7 @@ def canonical_assistant_tool_message(
         name = str(call.get("name") or "").strip()
         if not name:
             continue
-        cid = str(call.get("id") or f"call_{i}").strip() or f"call_{i}"
+        cid = _tool_call_id(call, i)
         args = call.get("arguments")
         if isinstance(args, str):
             arg_s = args
@@ -31021,7 +31372,7 @@ def normalize_tool_chat_messages(
         if role == "tool":
             copied = dict(msg)
             cid = str(copied.get("tool_call_id") or copied.get("id") or "").strip()
-            name = str(copied.get("name") or "").strip()
+            name = str(copied.get("name") or "").strip() or _tool_call_name(copied)
             if not name and cid:
                 for i, (uid, uname) in enumerate(unused):
                     if uid == cid:
@@ -33791,11 +34142,11 @@ def build_ai_system_prompt(
         f"{AI_SYSTEM_PROMPT} Always write your entire reply in {lang}.{extra}"
     )
 
-# (id, label, prompt) — keep in sync with web/src/utils/ollamaClient.js
+# (id, label, prompt) — keep in sync with web/src/utils/aiClient.js
 AI_COMPARE_TEMPLATE_ID = "compare"
 
 # Templates that only make sense for a multi-core (SMP) trace — keep in sync
-# with web/src/utils/ollamaClient.js AI_SMP_ONLY_TEMPLATE_IDS.
+# with web/src/utils/aiClient.js AI_SMP_ONLY_TEMPLATE_IDS.
 AI_SMP_ONLY_TEMPLATE_IDS = frozenset({"migrations", "balance"})
 
 AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
@@ -34046,7 +34397,7 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
     ),
 )
 
-# Always-visible wrapping chips. Keep in sync with web/src/utils/ollamaClient.js.
+# Always-visible wrapping chips. Keep in sync with web/src/utils/aiClient.js.
 # Newbie left-to-right: Triage → Scope → Investigate. Last id shares a row
 # with More templates… (web `.ai-tpl-row`).
 AI_TEMPLATE_PRIMARY_IDS: Tuple[str, ...] = (
@@ -34099,7 +34450,7 @@ def ai_template_by_id(tid: str) -> Optional[Tuple[str, str, str]]:
 
 # "Ask AI about this event" (timeline segment context menu) — intentionally
 # kept out of AI_TEMPLATE_QUESTIONS so it does not show in the template grid.
-# Keep in sync with web/src/utils/ollamaClient.js ASK_EVENT_PROMPT.
+# Keep in sync with web/src/utils/aiClient.js ASK_EVENT_PROMPT.
 ASK_EVENT_PROMPT = (
     "Explain the timeline event for task {task} on {core} around jump:{ns} "
     "(segment {start}-{stop}). Call correlate_events and query_raw_metric as "
@@ -34156,13 +34507,13 @@ DEFAULT_AI_MODEL = "qwen3.5:9b"
 # Composer icons (16x16). Keep in sync with AiAssistantPanel.vue.
 AI_SEND_ICON_PATH = "M8 2.5l4.5 5H9.25v6.5h-2.5V7.5H3.5L8 2.5z"
 AI_STOP_ICON_PATH = "M5 5h6v6H5z"
-# Keep in sync with web/src/utils/ollamaClient.js (ms equivalents).
+# Keep in sync with web/src/utils/aiClient.js (ms equivalents).
 AI_CHAT_TIMEOUT_S = 120.0
 AI_LIST_MODELS_TIMEOUT_S = 12.0
 AI_TEST_TIMEOUT_S = 120.0
 # Live ``ai-test`` / ``ai-test-context``: retry transient model errors.
-AI_LIVE_RETRY_ATTEMPTS = 3
-AI_LIVE_RETRY_DELAY_S = 2.0
+AI_LIVE_RETRY_ATTEMPTS = 6
+AI_LIVE_RETRY_DELAY_S = 10.0
 
 # Per-preset settings stored in btf_viewer.rc / browser storage.
 AI_PRESET_FIELDS: Tuple[str, ...] = (
@@ -34180,7 +34531,7 @@ AI_AUTH_MODE_LABELS: Tuple[Tuple[str, str], ...] = (
 )
 
 # Hosts that serve a local model and therefore need no API key.
-# Keep in sync with LOCAL_AI_HOSTS in web/src/utils/ollamaClient.js.
+# Keep in sync with LOCAL_AI_HOSTS in web/src/utils/aiClient.js.
 LOCAL_AI_HOSTS: Tuple[str, ...] = (
     "localhost",
     "127.0.0.1",
@@ -36149,20 +36500,29 @@ def call_ai_with_retries(
     delay_s: float = AI_LIVE_RETRY_DELAY_S,
     log: bool = True,
 ) -> Any:
-    """Call *fn* up to *attempts* times on retryable model errors."""
+    """Call *fn* up to *attempts* times on retryable model errors.
+
+    Waits a fixed *delay_s* seconds between each retry (no backoff).
+    """
     last: Optional[BaseException] = None
     tries = max(1, int(attempts or 1))
-    wait_s = max(0.0, float(delay_s or 0.0))
+    wait = max(0.0, float(delay_s or 0.0))
     for attempt in range(1, tries + 1):
         try:
-            return fn()
+            result = fn()
+            if log and attempt > 1:
+                print(
+                    f"[ai-test] recovered after retry {attempt}/{tries}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            return result
         except OllamaCancelled:
             raise
         except Exception as exc:
             last = exc
             if attempt >= tries or not ai_error_is_retryable(exc):
                 raise
-            wait = wait_s * attempt
             if log:
                 print(
                     f"[ai-test] retry {attempt}/{tries} in {wait:.0f}s: {exc}",
@@ -36402,6 +36762,10 @@ def ai_chat_completion(
         calls = merge_tool_calls(calls, text_calls)
         if text_calls:
             content = strip_parsed_tool_markup(content)
+        if calls:
+            src = msg if isinstance(msg, dict) else {}
+            msg = canonical_assistant_tool_message(
+                src.get("content", content), calls)
         return content, calls, msg
 
     content, calls, msg = _parse_turn(body)
@@ -36563,9 +36927,12 @@ def live_benchmark_chat(
     collected.extend(c for c in calls if isinstance(c, dict))
 
     if _benchmark_needs_tool_followup(content, calls):
-        asst = (turn or {}).get("message")
-        if not isinstance(asst, dict) or str(asst.get("role") or "") != "assistant":
-            asst = canonical_assistant_tool_message(content, calls)
+        raw = (turn or {}).get("message")
+        raw_content: Any = content
+        if isinstance(raw, dict):
+            if raw.get("content") is not None:
+                raw_content = raw.get("content")
+        asst = canonical_assistant_tool_message(raw_content, calls)
         messages.append(asst)
         for i, call in enumerate(calls):
             if not isinstance(call, dict):
@@ -36578,7 +36945,7 @@ def live_benchmark_chat(
                 tool_body = format_tool_result_content(payload)
             messages.append(tool_result_message(
                 tool_call_id=str(call.get("id") or f"call_{i}"),
-                name=str(call.get("name") or ""),
+                name=str(call.get("name") or "").strip(),
                 content=tool_body,
             ))
         messages.append({
@@ -66680,6 +67047,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._shutting_down = True
         self._block_dock_widget_signals(True)
 
+        # Undo the app-wide event filter installed in __init__ — without this
+        # every closed MainWindow keeps intercepting every event dispatched
+        # anywhere in the process for the rest of its lifetime (a real leak
+        # for embedders/tests that create more than one MainWindow).
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+
         for tab in self._tabs:
             tab.view._zoom_timer.stop()
             tab.view._pan_timer.stop()
@@ -75003,6 +75378,10 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
             "  %(prog)s ai-test --config examples/ai/benchmark.xml -o AI_BENCHMARK.md\n"
             "  %(prog)s ai-test --config examples/ai/benchmark.xml --compare-context\n"
             "  %(prog)s ai-test --config examples/ai/benchmark.xml --insecure\n"
+            "  %(prog)s ai-test --config examples/ai/benchmark.xml "
+            "--only-cases priority_inversion,period_jitter\n"
+            "  %(prog)s ai-test --config examples/ai/benchmark.xml --models gemini-3.7-flash "
+            "--context-mode full -o AI_BENCHMARK.md   # merges into the existing file\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -75026,6 +75405,16 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         help="comma-separated model ids to run from the suite XML (default: all <model> entries)",
     )
     ai_test.add_argument(
+        "--only-cases", metavar="IDS",
+        default="",
+        help=(
+            "comma-separated dataset case ids to score (default: every case). "
+            "With -o pointing at an existing report, only these cases are "
+            "updated (see -o); with --replace-report or a fresh file, the "
+            "written report only covers these cases."
+        ),
+    )
+    ai_test.add_argument(
         "--base-url", metavar="URL",
         default="",
         help="override every model's OpenAI-compatible base URL",
@@ -75038,7 +75427,16 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     ai_test.add_argument(
         "-o", "--output", metavar="PATH",
         default="",
-        help="write a markdown report (e.g. AI_BENCHMARK.md; or <output> in --config)",
+        help=(
+            "write a markdown report (e.g. AI_BENCHMARK.md; or <output> in --config). "
+            "If it already exists, this run's models/context-modes/cases are merged "
+            "into it — everything else in the file is left untouched"
+        ),
+    )
+    ai_test.add_argument(
+        "--replace-report",
+        action="store_true",
+        help="overwrite --output instead of merging into its existing report",
     )
     ai_test.add_argument(
         "--context-mode", metavar="MODE",
@@ -76027,6 +76425,7 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
     )
     config_path = str(getattr(args, "config", "") or "").strip()
     models_raw = str(getattr(args, "models", "") or "").strip()
+    case_ids_raw = str(getattr(args, "only_cases", "") or "").strip()
     out_path = str(getattr(args, "output", "") or "").strip()
     suite = None
     if config_path:
@@ -76061,7 +76460,8 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
     live = None
     try:
         offline = run_offline_benchmark(
-            path, fail_under=fail_under if suite is None else 0)
+            path, fail_under=fail_under if suite is None else 0,
+            case_ids=case_ids_raw)
         if suite is not None:
             pass
             pass
@@ -76169,6 +76569,7 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
                 complete=complete,
                 fail_under=fail_under,
                 context_modes=context_modes,
+                case_ids=case_ids_raw,
             )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -76181,8 +76582,32 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
         dataset_label = path
         if path.replace("\\", "/").rstrip("/").endswith("tests/ai"):
             dataset_label = "tests/ai"
+        merge_offline, merge_live = offline, live
+        replace_report = bool(getattr(args, "replace_report", False))
+        if not replace_report and os.path.exists(out_path):
+            try:
+                with open(out_path, "r", encoding="utf-8") as fh:
+                    prior_text = fh.read()
+            except OSError:
+                prior_text = ""
+            if prior_text.strip():
+                merge_offline, merge_live = merge_benchmark_report(
+                    prior_text, offline=offline, live=live)
+                print(
+                    f"[ai-test] merging this run into the existing {out_path} "
+                    "(pass --replace-report to overwrite it instead)",
+                    file=sys.stderr,
+                    flush=True,
+                )
+        elif case_ids_raw:
+            print(
+                f"[ai-test] --only-cases limits {out_path} to: {case_ids_raw} "
+                "(other cases are dropped from this report)",
+                file=sys.stderr,
+                flush=True,
+            )
         md = format_benchmark_markdown(
-            offline=offline, live=live, dataset=dataset_label,
+            offline=merge_offline, live=merge_live, dataset=dataset_label,
         )
         try:
             with open(out_path, "w", encoding="utf-8") as fh:

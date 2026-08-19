@@ -52,12 +52,12 @@ class AiWebParityTests(unittest.TestCase):
         from btf_viewer_pkg.ai_assistant import AI_RESPONSE_LANGUAGES
         from btf_viewer_pkg.ai_investigation import EVIDENCE_PANEL_LABELS
 
-        ollama = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(
+        ai_client_js = (BTF_ROOT / "web/src/utils/aiClient.js").read_text(
             encoding="utf-8")
         inv_js = (BTF_ROOT / "web/src/utils/aiInvestigation.js").read_text(
             encoding="utf-8")
         block = re.search(
-            r"export const AI_RESPONSE_LANGUAGES = \[([\s\S]*?)\]\n", ollama)
+            r"export const AI_RESPONSE_LANGUAGES = \[([\s\S]*?)\]\n", ai_client_js)
         self.assertIsNotNone(block)
         js_langs = tuple(re.findall(r"'([^']+)'", block.group(1)))
         self.assertEqual(js_langs, AI_RESPONSE_LANGUAGES)
@@ -66,7 +66,7 @@ class AiWebParityTests(unittest.TestCase):
             self.assertIn(lang, inv_js)
         self.assertNotIn("Klingon", "".join(AI_RESPONSE_LANGUAGES))
         self.assertNotIn("Klingon", inv_js)
-        self.assertNotIn("Klingon", ollama)
+        self.assertNotIn("Klingon", ai_client_js)
         for key in (
             "role", "evidence", "confidence", "score", "investigation",
             "high", "medium", "low", "quality", "coverage", "disprove",
@@ -81,7 +81,7 @@ class AiWebParityTests(unittest.TestCase):
                 self.assertIn(key, labels)
 
     def test_timeouts_match_web(self) -> None:
-        js = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(encoding="utf-8")
+        js = (BTF_ROOT / "web/src/utils/aiClient.js").read_text(encoding="utf-8")
         self.assertIn(f"AI_CHAT_TIMEOUT_MS = {int(AI_CHAT_TIMEOUT_S * 1000)}", js)
         self.assertIn(
             f"AI_LIST_MODELS_TIMEOUT_MS = {int(AI_LIST_MODELS_TIMEOUT_S * 1000)}", js)
@@ -98,7 +98,7 @@ class AiWebParityTests(unittest.TestCase):
     def test_btftool_ndjson_and_ask_event_match_web(self) -> None:
         """Text-tool fences + Ask-event prompt stay aligned with the web client."""
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
-        ollama = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(
+        ai_client_js = (BTF_ROOT / "web/src/utils/aiClient.js").read_text(
             encoding="utf-8")
         clause = "one object, a JSON array, or several objects"
         self.assertIn(clause, AI_TOOL_SYSTEM_ADDENDUM)
@@ -106,10 +106,11 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("function loadsJsonValues", js)
         self.assertIn("def _loads_json_values", (
             BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8"))
-        self.assertIn("if (textCalls.length) content = stripParsedToolMarkup", ollama)
-        self.assertIn("ASK_EVENT_PROMPT", ollama)
-        self.assertIn(ASK_EVENT_PROMPT.split("{task}")[0], ollama)
-        self.assertIn("Call correlate_events and query_raw_metric", ollama)
+        self.assertIn(
+            "if (textCalls.length) content = stripParsedToolMarkup", ai_client_js)
+        self.assertIn("ASK_EVENT_PROMPT", ai_client_js)
+        self.assertIn(ASK_EVENT_PROMPT.split("{task}")[0], ai_client_js)
+        self.assertIn("Call correlate_events and query_raw_metric", ai_client_js)
         # NDJSON fence (same shape that previously leaked raw JSON in chat)
         text = (
             "Focusing the segment.\n"
@@ -529,9 +530,9 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("Valid tools: set_cursors, zoom_to_range, highlight_task,", AI_TOOL_SYSTEM_ADDENDUM)
         self.assertIn("investigate, explain", AI_TOOL_SYSTEM_ADDENDUM)
         self.assertIn("investigate, explain", js)
-        ollama = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(encoding="utf-8")
+        ai_client_js = (BTF_ROOT / "web/src/utils/aiClient.js").read_text(encoding="utf-8")
         self.assertIn("High, Medium, or Low", AI_SYSTEM_PROMPT)
-        self.assertIn("High, Medium, or Low", ollama)
+        self.assertIn("High, Medium, or Low", ai_client_js)
         for title in (
             "Timeline Anomalies", "Worst Events", "Period / Jitter",
             "Task Health", "Task × Core", "Waiter × Owner",
@@ -540,7 +541,7 @@ class AiWebParityTests(unittest.TestCase):
             "Core Utilization Over Time",
         ):
             self.assertIn(title, AI_SYSTEM_PROMPT, title)
-            self.assertIn(title, ollama, title)
+            self.assertIn(title, ai_client_js, title)
             self.assertIn(title, AI_TOOL_SYSTEM_ADDENDUM, title)
             self.assertIn(title, js, title)
         self.assertIn("do not invent a detect_timeline_anomalies tool", AI_TOOL_SYSTEM_ADDENDUM)
@@ -956,7 +957,7 @@ class AiWebParityTests(unittest.TestCase):
     def test_gemini_thought_signature_helpers_match(self) -> None:
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
         py = (BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8")
-        client = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(
+        client = (BTF_ROOT / "web/src/utils/aiClient.js").read_text(
             encoding="utf-8")
         assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
             encoding="utf-8")
@@ -968,6 +969,11 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("export function needsGeminiThoughtSignatures", js)
         self.assertIn("ensure_gemini_thought_signatures(messages)", assist)
         self.assertIn("ensureGeminiThoughtSignatures(chatMessages)", client)
+        self.assertIn("def _tool_call_id", py)
+        self.assertIn("function toolCallId", js)
+        self.assertIn("canonical_assistant_tool_message(raw_content, calls)", assist)
+        self.assertIn(
+            "canonicalAssistantToolMessage(msg?.content ?? content, calls)", client)
         self.assertIn('"preset": active["preset"]', assist)
         self.assertIn("preset: active.preset", (
             BTF_ROOT / "web/src/components/AiAssistantPanel.vue"
@@ -977,7 +983,7 @@ class AiWebParityTests(unittest.TestCase):
         vue = (BTF_ROOT / "web/src/components/SettingsDialog.vue").read_text(
             encoding="utf-8")
         stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
-        client = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(
+        client = (BTF_ROOT / "web/src/utils/aiClient.js").read_text(
             encoding="utf-8")
         self.assertIn("setEditable(True)", stats)
         self.assertIn("def _fill_ai_model_combo", stats)
@@ -1011,7 +1017,7 @@ class AiWebParityTests(unittest.TestCase):
             normalize_ai_auth_mode,
         )
 
-        js = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(encoding="utf-8")
+        js = (BTF_ROOT / "web/src/utils/aiClient.js").read_text(encoding="utf-8")
         vue = (BTF_ROOT / "web/src/components/SettingsDialog.vue").read_text(
             encoding="utf-8")
         stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
@@ -1133,7 +1139,7 @@ class AiWebParityTests(unittest.TestCase):
         env_md = "`OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`"
         assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
             encoding="utf-8")
-        js = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(
+        js = (BTF_ROOT / "web/src/utils/aiClient.js").read_text(
             encoding="utf-8")
         stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
         vue = (BTF_ROOT / "web/src/components/SettingsDialog.vue").read_text(
@@ -1173,7 +1179,7 @@ class AiWebParityTests(unittest.TestCase):
 
         for blob, label in (
             (assist, "ai_assistant.py"),
-            (js, "ollamaClient.js"),
+            (js, "aiClient.js"),
             (stats, "stats.py"),
             (vue, "SettingsDialog.vue"),
             (cli, "cli.py"),
@@ -1209,7 +1215,7 @@ class AiWebParityTests(unittest.TestCase):
             encoding="utf-8")
         vue = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(
             encoding="utf-8")
-        client = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(
+        client = (BTF_ROOT / "web/src/utils/aiClient.js").read_text(
             encoding="utf-8")
         self.assertIn("def normalize_tool_chat_messages", py)
         self.assertIn("export function normalizeToolChatMessages", js)
@@ -1329,6 +1335,14 @@ class AiWebParityTests(unittest.TestCase):
         ):
             self.assertIn(py_name, py, py_name)
             self.assertIn(js_name, js, js_name)
+        # format_benchmark_report / formatBenchmarkReport must flag API-error
+        # rows as ERROR (not FAIL) — matches the AI_BENCHMARK.md table's flag.
+        self.assertIn(
+            '"ERROR" if row.get("error") else ("PASS" if row.get("pass") else "FAIL")',
+            py,
+        )
+        self.assertIn(
+            "row.error ? 'ERROR' : (row.pass ? 'PASS' : 'FAIL')", js)
         inv_py = (BTF_ROOT / "btf_viewer_pkg/ai_investigation.py").read_text(
             encoding="utf-8")
         inv_js = (BTF_ROOT / "web/src/utils/aiInvestigation.js").read_text(
@@ -1443,10 +1457,10 @@ class AiWebParityTests(unittest.TestCase):
         for needle in (
             "qwen3.5:9b", "qwen3.8:27b",
             "gemini-3.7-flash", "gemini-3.5-flash-lite",
-            "claude-sonnet-5", "kimi-k3",
-            'optional="true"',
         ):
             self.assertIn(needle, xml, needle)
+        self.assertNotIn("claude-sonnet-5", xml)
+        self.assertNotIn("kimi-k3", xml)
         self.assertNotIn("GEMINI_LIVE_BENCHMARK_MODELS", cli)
         self.assertNotIn("from btf_viewer_pkg", cli)
         needle = "from pathlib import Path"

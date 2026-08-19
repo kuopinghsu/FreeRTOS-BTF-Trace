@@ -769,7 +769,7 @@ import {
   parseExtraAiPresets,
   resolveAiSettings,
   sanitizeAiPresetId,
-} from '../utils/ollamaClient.js'
+} from '../utils/aiClient.js'
 import {
   AI_CONTEXT_MODE_LABELS,
   AI_CONTEXT_MODES,

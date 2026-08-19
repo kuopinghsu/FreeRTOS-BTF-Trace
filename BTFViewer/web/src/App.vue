@@ -1343,7 +1343,7 @@ import {
   aiJumpAnnotationNote,
   appendExplainRegionBounds,
   composeAskEventPrompt,
-} from './utils/ollamaClient.js'
+} from './utils/aiClient.js'
 import { traceQualitySummary, collectTraceQualityWarnings } from './utils/traceQuality.js'
 import { isBtfOpenName, loadBtfEntriesFromFile } from './utils/btfLoad.js'
 import {

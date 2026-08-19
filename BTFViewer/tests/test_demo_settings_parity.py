@@ -126,8 +126,10 @@ class DemoSettingsRuntimeParityTests(unittest.TestCase):
     def test_demo_api_maps_ai_page_without_opening_modal(self) -> None:
         from btf_viewer_pkg.mainwindow import MainWindow
 
+        from tests import destroy_main_window
+
         win = MainWindow()
-        self.addCleanup(win.close)
+        self.addCleanup(destroy_main_window, win)
         win._open_settings = lambda *args, **kwargs: None
         opened = win._demo_handle({"op": "settings", "page": "ai"})
         self.assertEqual(opened.get("settings"), "AI")
@@ -138,8 +140,10 @@ class DemoSettingsRuntimeParityTests(unittest.TestCase):
         from PySide6.QtWidgets import QDialog
         from btf_viewer_pkg.mainwindow import MainWindow
 
+        from tests import destroy_main_window
+
         win = MainWindow()
-        self.addCleanup(win.close)
+        self.addCleanup(destroy_main_window, win)
         dlg = QDialog()
         self.addCleanup(dlg.close)
         dlg.setWindowTitle("Settings")
