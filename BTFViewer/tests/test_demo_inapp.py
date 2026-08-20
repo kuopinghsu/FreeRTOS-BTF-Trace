@@ -114,7 +114,10 @@ class DemoInappParseTests(unittest.TestCase):
             root = load_demo_xml(xml)
             vars_ = build_variables(root, xml)
             self.assertNotIn("languages", vars_)
-            self.assertEqual(vars_["trace"], f"{tmp}/demo.btf.gz")
+            # resolve(): macOS TemporaryDirectory is /var/... which is
+            # /private/var/... (same as Path.resolve() in build_variables).
+            self.assertEqual(
+                vars_["trace"], str(Path(tmp).resolve() / "demo.btf.gz"))
             langs = parse_languages(root)
             self.assertEqual(langs["defaultId"], "en")
             self.assertEqual([x["id"] for x in langs["list"]], ["en", "zh-tw"])
