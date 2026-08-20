@@ -49,7 +49,12 @@ describe('timeline overlay draws', () => {
     assert.equal(deltaRects[0].y, expectedTy)
   })
 
-  it('drawCursors aligns horizontal Δ badge Y to later cursor label row', () => {
+  it('drawCursors gives the Δ badge its own row, never the later cursor\'s row', () => {
+    // Regression: the Δ badge used to share a row with the later cursor's
+    // own badge, positioned at their midpoint. When the two cursors are
+    // close together on screen, that midpoint lands on top of the cursor's
+    // own badge and both become unreadable. The Δ badge must always get a
+    // dedicated row below every cursor badge instead.
     const { ctx, log } = createMockCanvas(60)
     const canvasW = 900
     const canvasH = 400
@@ -62,7 +67,9 @@ describe('timeline overlay draws', () => {
     assert.equal(deltaTexts.length, 1)
     const th = 16
     const laterLabelY = 2 + 2 * (th + 2)
-    assert.equal(deltaTexts[0].y, laterLabelY + 2)
+    const deltaRowY = 2 + 3 * (th + 2)
+    assert.notEqual(deltaTexts[0].y, laterLabelY + 2)
+    assert.equal(deltaTexts[0].y, deltaRowY + 2)
   })
 
   it('findNearestCursorIndex returns closest cursor within snap window', () => {

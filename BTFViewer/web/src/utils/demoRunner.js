@@ -354,7 +354,8 @@ export function createDemoRunner(host, pack, options = {}) {
 
   async function runMacro(name, callEl) {
     if (name === 'fit') {
-      await host.fit()
+      // Macro "fit" is Ctrl+0 / Zoom Full View, not C1–Cn <fit_view/>.
+      await (host.zoomView?.() ?? host.fit())
       return
     }
     if (name === 'clear_cursors') {
@@ -451,6 +452,27 @@ export function createDemoRunner(host, pack, options = {}) {
       if (prompt) host.toast?.(prompt, 'info')
       return
     }
+    if (tag === 'show_message' || tag === 'message' || tag === 'show_msg') {
+      const text = expandVars(
+        attr(el, 'text', vars, attr(el, 'message', vars, elementText(el))),
+        vars,
+      ).trim()
+      const sec = Number(attr(el, 'seconds', vars, attr(el, 'duration', vars, '2')))
+      let animateClear = true
+      try {
+        await host.showMessage?.({ text })
+        await waitMs(Math.max(0, sec) * 1000)
+      } catch (err) {
+        if (err instanceof DemoSkip) {
+          animateClear = false
+          throw err
+        }
+        throw err
+      } finally {
+        if (text) await host.clearMessage?.({ animate: animateClear })
+      }
+      return
+    }
     if (tag === 'audio' || tag === 'play') {
       const rel = attr(el, 'file', vars)
       let file = null
@@ -495,6 +517,12 @@ export function createDemoRunner(host, pack, options = {}) {
       await host.clearHighlight()
       return
     }
+    if (tag === 'tab_nav') {
+      const direction = String(attr(el, 'dir', vars, attr(el, 'direction', vars, 'next'))).toLowerCase()
+      const forward = !['prev', 'previous', 'back', 'shift', 'shift+tab'].includes(direction)
+      await host.tabNav?.(forward)
+      return
+    }
     if (tag === 'cursors') {
       await host.setCursors({
         times: attr(el, 'times', vars, attr(el, 'timestamps', vars)),
@@ -525,12 +553,26 @@ export function createDemoRunner(host, pack, options = {}) {
       })
       return
     }
+    if (tag === 'zoom_view' || tag === 'full_view' || tag === 'zoom_full') {
+      // XML <zoom_view/> = Zoom Full View (toolbar Fit / Ctrl+0).
+      await (host.zoomView?.() ?? host.fit())
+      return
+    }
     if (tag === 'fit_view' || tag === 'fit_api') {
+      // XML <fit_view/> = Zoom fit to C1–Cn when cursors are placed.
       await host.fit()
       return
     }
     if (tag === 'zoom_1to1' || tag === 'one_to_one' || tag === '1to1') {
       await host.zoom1to1?.()
+      return
+    }
+    if (tag === 'zoom_in') {
+      await host.zoomIn?.()
+      return
+    }
+    if (tag === 'zoom_out') {
+      await host.zoomOut?.()
       return
     }
     if (tag === 'limit') {
@@ -554,6 +596,16 @@ export function createDemoRunner(host, pack, options = {}) {
     }
     if (tag === 'jump_wcet') {
       await host.jumpWcet(attr(el, 'task', vars, attr(el, 'name', vars)))
+      return
+    }
+    if (tag === 'move_view' || tag === 'move_viewport' || tag === 'pan_view') {
+      const attrib = el.attrib || {}
+      await host.moveView?.({
+        time: attr(el, 'time', vars, attr(el, 'ns', vars, attr(el, 'at', vars))),
+        unit: attr(el, 'unit', vars),
+        task: attr(el, 'task', vars, attr(el, 'name', vars)),
+        timeOmitted: !('time' in attrib || 'ns' in attrib || 'at' in attrib),
+      })
       return
     }
     if (tag === 'panel') {
@@ -645,6 +697,7 @@ export function createDemoRunner(host, pack, options = {}) {
         } catch (err) {
           if (abort.signal.aborted) throw new DemoAborted()
           if (err instanceof DemoSkip || skipDir || skipRestart) {
+            await host.clearMessage?.({ animate: false })
             const dir = skipRestart ? 0 : (skipDir || err.direction || 1)
             resetSkipGate()
             if (dir === 0) continue

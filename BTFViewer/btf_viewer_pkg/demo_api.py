@@ -7,7 +7,7 @@ The demo runner posts JSON ``{"op": "...", ...}`` to ``POST /demo``.
 
 Ops include ``highlight``, ``cursors``, ``clear_cursors``, ``clear_bookmarks``,
 ``clear_annotations``, ``zoom_range``, ``fit``, ``zoom_1to1``, ``limit``, ``stats_section``,
-``jump_wcet``, ``panel``, ``target``, ``view_mode``, ``cpu_load``, ``analysis``, ``tick_dist``,
+``jump_wcet``, ``move_view``, ``show_message``, ``panel``, ``target``, ``view_mode``, ``cpu_load``, ``analysis``, ``tick_dist``,
 ``find``, ``settings``, and ``ui`` (alias: ``command``).
 """
 from __future__ import annotations

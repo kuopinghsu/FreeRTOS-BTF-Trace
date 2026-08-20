@@ -5,6 +5,7 @@ from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
 from .parser import *  # noqa: F403,F401
 from .timeline_util import *  # noqa: F403,F401
+from .timeline_util import _process_ui_events_safely
 from .graphics_items import *  # noqa: F403,F401
 from .scene import *  # noqa: F403,F401
 
@@ -861,6 +862,13 @@ def _event_view_pos(event):
     return event.pos()
 
 
+# One toolbar/keyboard Zoom In / Zoom Out step multiplies the visible time
+# span by this much — kept in lockstep with Web's onZoom(0.7) / onZoom(1.43)
+# (App.vue's Ctrl+=/Ctrl+- handlers), not the old desktop-only 2x/0.5x.
+_ZOOM_STEP_IN_SPAN = 0.7
+_ZOOM_STEP_OUT_SPAN = 1.43
+
+
 class TimelineView(QGraphicsView):
     """Pan + zoom QGraphicsView wrapping a TimelineScene."""
 
@@ -964,10 +972,17 @@ class TimelineView(QGraphicsView):
         self._scene.scene_rebuilt.connect(self._sync_timeline_column_clip)
         self._scene.scene_rebuilt.connect(self._update_label_grip_geometry)
 
+        # Optional hook (set by MainWindow) fired at the start of any manual
+        # zoom (toolbar/keyboard/wheel/pinch/Fit/1:1/demo op). Lets the AI
+        # assistant's animated zoom_to_range cancel itself instead of
+        # clobbering the manual zoom a moment later.
+        self._on_manual_zoom: Optional[Callable[[], None]] = None
+
         # Debounce zoom: accumulate factor across rapid wheel events and
         # fire a single rebuild once the user stops scrolling.
         self._zoom_accum: float = 1.0
         self._zoom_anchor_pos: Optional[QPoint] = None
+        self._zoom_anchor_ns: Optional[int] = None
         self._zoom_timer = QTimer(self)
         self._zoom_timer.setSingleShot(True)
         self._zoom_timer.setInterval(60)   # tuned in load_trace
@@ -1879,16 +1894,36 @@ class TimelineView(QGraphicsView):
         )
         return self._fit_mode or at_fit_limit
 
+    def _at_fit_zoom(self) -> bool:
+        """True when Zoom Out would not change the scale (already Fit-to-window)."""
+        if self._scene._trace is None:
+            return True
+        if self._fit_mode:
+            return True
+        fit = self._scene._timescale_per_px_fit
+        if not math.isfinite(fit) or fit <= 0:
+            return False
+        return self._scene._timescale_per_px >= fit * 0.999
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def _fit_viewport_size(self) -> int:
-        """Return the viewport dimension relevant to the time axis for fit calculations."""
+        """Return the viewport dimension relevant to the time axis for fit
+        calculations. The 800/600 fallback only applies when the widget
+        hasn't been laid out yet (viewport size is still ~0, e.g. before the
+        first show()) - once realized, the real (even if narrow) viewport
+        size must be used. Flooring an already-known, narrower size to 800
+        made zoom_fit() compute a scale for more pixels than actually exist,
+        so Fit silently stopped short of the trace's true end in any window
+        narrower than 800px (matches Web, which has no such floor)."""
         if self._scene._horizontal:
-            return max(self.viewport().width(), 800)
+            w = self.viewport().width()
+            return w if w > 50 else 800
         else:
-            return max(self.viewport().height(), 600)
+            h = self.viewport().height()
+            return h if h > 50 else 600
 
     def _time_axis_viewport_px(self) -> int:
         """Actual time-axis pixel extent of the viewport (no fit-time floor)."""
@@ -2002,6 +2037,28 @@ class TimelineView(QGraphicsView):
         self._navigate_time_to_ns(ns)
         self.viewport().update()
 
+    def align_time_start(self) -> None:
+        """Pin the trace start to the left of the time plot (keep zoom)."""
+        if self._scene._trace is None:
+            return
+        ns = int(self._scene._trace.time_min)
+        self.scroll_to_ns(ns)
+        if self._virtual_time_scroll_active:
+            self._apply_virt_time_scroll_px(self._virt_px_from_ns_lo(float(ns)))
+        else:
+            bar = self._native_time_axis_bar()
+            bar.setValue(bar.minimum())
+        self.viewport().update()
+        self.viewport_changed.emit()
+
+    def align_row_start(self) -> None:
+        """Pin the first task row/column to the top (or left in vertical mode)."""
+        bar = (self.verticalScrollBar() if self._scene._horizontal
+               else self.horizontalScrollBar())
+        bar.setValue(bar.minimum())
+        self.viewport().update()
+        self.viewport_changed.emit()
+
     def set_horizontal(self, horizontal: bool) -> None:
         trace = self._scene._trace
         old_h = self._scene._horizontal
@@ -2086,25 +2143,46 @@ class TimelineView(QGraphicsView):
     def set_max_cursors(self, n: int) -> None:
         self._scene.set_max_cursors(n)
 
-    def zoom_in(self) -> None:
+    def _fire_manual_zoom_hook(self) -> None:
+        """Let an owner (MainWindow) cancel an in-flight AI zoom_to_range
+        animation before a manual zoom action (toolbar/keyboard/wheel/pinch/
+        Fit/1:1/demo op) takes effect — otherwise the animation's next tick
+        can silently overwrite the manual zoom a moment later."""
+        hook = self._on_manual_zoom
+        if hook is not None:
+            hook()
+
+    def zoom_in(self, center_ns: Optional[int] = None) -> None:
+        self._fire_manual_zoom_hook()
         self._fit_mode = False
-        self._zoom_accum *= 2.0
-        if self._zoom_anchor_pos is None:
+        self._zoom_accum *= 1.0 / _ZOOM_STEP_IN_SPAN
+        if center_ns is not None:
+            self._zoom_anchor_ns = int(center_ns)
+            self._zoom_anchor_pos = self.viewport().rect().center()
+        elif self._zoom_anchor_pos is None:
             self._zoom_anchor_pos = self.viewport().rect().center()
         self._zoom_timer.start()
 
-    def zoom_out(self) -> None:
+    def zoom_out(self, center_ns: Optional[int] = None) -> None:
+        if self._at_fit_zoom():
+            return
+        self._fire_manual_zoom_hook()
         self._fit_mode = False
-        self._zoom_accum *= 0.5
-        if self._zoom_anchor_pos is None:
+        self._zoom_accum *= 1.0 / _ZOOM_STEP_OUT_SPAN
+        if center_ns is not None:
+            self._zoom_anchor_ns = int(center_ns)
+            self._zoom_anchor_pos = self.viewport().rect().center()
+        elif self._zoom_anchor_pos is None:
             self._zoom_anchor_pos = self.viewport().rect().center()
         self._zoom_timer.start()
 
     def _cancel_pending_zoom(self) -> None:
         """Drop coalesced wheel/toolbar zoom so it cannot undo Fit / 1:1."""
+        self._fire_manual_zoom_hook()
         self._zoom_timer.stop()
         self._zoom_accum = 1.0
         self._zoom_anchor_pos = None
+        self._zoom_anchor_ns = None
         self._pinch_accum = 1.0
 
     def _prepare_full_trace_window(self) -> None:
@@ -2124,10 +2202,51 @@ class TimelineView(QGraphicsView):
             sc._scene_origin_ns = trace.time_min
             sc._ns_range_hint = (trace.time_min, trace.time_max)
 
+    def zoom_to_cursor_range(self) -> bool:
+        """Fit C1–Cn to the timeline (same as toolbar Range / Ctrl+R).
+
+        Returns False when fewer than two cursors are placed.
+        """
+        times = sorted(self._scene.cursor_times())
+        if len(times) < 2:
+            return False
+        ns_lo, ns_hi = times[0], times[-1]
+        if ns_lo == ns_hi:
+            return False
+        self._cancel_pending_zoom()
+        self._fit_mode = False
+        vp = self.viewport().rect()
+        is_horiz = self._scene._horizontal
+        vp_px = max(vp.width() if is_horiz else vp.height(), 100)
+        self._scene.zoom_to_range(ns_lo, ns_hi, vp_px)
+        ns_lo_scene = self._scene.ns_to_scene_coord(ns_lo)
+        label_w = self._scene._label_width
+        center_coord = ns_lo_scene - label_w + vp_px / 2
+        cur_scene = self.mapToScene(vp.center())
+        if is_horiz:
+            self.centerOn(center_coord, cur_scene.y())
+        else:
+            self.centerOn(cur_scene.x(), center_coord)
+        self.resetTransform()
+        self.zoom_changed.emit(self._scene.timescale_per_px)
+        return True
+
     def zoom_fit(self) -> None:
+        """Fit the full trace to the window (toolbar Fit / Ctrl+0).
+
+        Independent of placed cursors — Zoom fit to C1–Cn is
+        ``zoom_to_cursor_range()`` (Ctrl+R).
+        """
         self._cancel_pending_zoom()
         self._fit_mode = True
         self._prepare_full_trace_window()
+        # Do not processEvents() here: that pumps QVariantAnimation timers and
+        # can run an in-flight <cursors zoom="true"/> range-zoom to completion
+        # *inside* this call, after which fit_to_width() overwrites it (the
+        # 2.7ms/px / 4.5ms/px bug vs Web, which never drains rAF inside Fit).
+        lay = self.window().layout() if self.window() is not None else None
+        if lay is not None:
+            lay.activate()
         self._scene.fit_to_width(self._fit_viewport_size())
         # Ensure the view transform is identity: all zoom is handled at the
         # scene level (timescale_per_px) so there must be no view-level scale active.
@@ -2307,11 +2426,64 @@ class TimelineView(QGraphicsView):
                 idx -= 1
         return None
 
+    def _earliest_marker_in_viewport(self) -> Optional[int]:
+        """Earliest cursor / bookmark / annotation time visible in the current
+        viewport's time-axis range, or ``None`` if none are visible there."""
+        sc = self._scene
+        if sc._trace is None:
+            return None
+        ns_lo, ns_hi = self._visible_time_ns_range()
+        times = [t for t in sc.cursor_times() if ns_lo <= t <= ns_hi]
+        times.extend(ns for ns, _label, _color, _kind, _id in sc._mark_data
+                     if ns_lo <= ns <= ns_hi)
+        return min(times) if times else None
+
+    def _core_at_viewport_center(self, core_names: List[str],
+                                  core_tasks: dict) -> Optional[str]:
+        """Return the core whose row/column block currently occupies the
+        viewport's orthogonal center, in Core view (mirrors the web app's
+        ``getCoreAtViewportCenter``). ``core_names``/``core_tasks`` should
+        already reflect any active task-name filter."""
+        sc = self._scene
+        if not core_names:
+            return None
+
+        vp_center = self.mapToScene(self.viewport().rect().center())
+        center_orth = vp_center.y() if sc._horizontal else vp_center.x()
+
+        stride = (sc._row_height + sc._row_gap) if sc._horizontal else max(
+            sc._row_height + sc._row_gap, 26)
+        base = RULER_HEIGHT if sc._horizontal else RULER_WIDTH
+
+        idx = 0
+        spans = []
+        for core in core_names:
+            start_idx = idx
+            idx += 1  # core summary row/column
+            if sc._core_is_expanded(core):
+                idx += len(core_tasks.get(core, []))
+            spans.append((core, base + start_idx * stride, base + idx * stride))
+
+        for core, top, bottom in spans:
+            if top <= center_orth < bottom:
+                return core
+        return spans[0][0] if center_orth < spans[0][1] else spans[-1][0]
+
     def _cycle_highlighted_task(self, forward: bool) -> bool:
         """Select next/previous task by segment time order.
 
         Task view: global timeline order.
         Core view: timeline order within the selected core.
+
+        This only decides the *first stop*: when nothing is selected yet,
+        Tab/Shift+Tab jump to the first segment at or after the earliest
+        cursor / bookmark / annotation visible in the current viewport (in
+        that priority order), or - if none of those are visible - the
+        first segment at or after the viewport's start edge (both keys
+        behave the same here, since there is no current segment to move
+        away from). Once a task is selected, every further Tab/Shift+Tab
+        press keeps cycling to the next/previous *task* exactly as before
+        (same-task repeats are still skipped).
         """
         sc = self._scene
         tr = sc._trace
@@ -2325,7 +2497,15 @@ class TimelineView(QGraphicsView):
         target_ns: Optional[int] = None
         target_seg_end: Optional[int] = None
         cur_task = sc._locked_task
-        ref_ns = sc._locked_ns if sc._locked_ns is not None else self.view_center_ns()
+        pick_forward = forward
+        if cur_task is not None:
+            ref_ns = sc._locked_ns if sc._locked_ns is not None else self.view_center_ns()
+        else:
+            anchor_ns = self._earliest_marker_in_viewport()
+            if anchor_ns is None:
+                anchor_ns, _hi = self._visible_time_ns_range()
+            ref_ns = anchor_ns - 1
+            pick_forward = True
 
         if sc._view_mode == "core":
             core_names = tr.core_names
@@ -2348,7 +2528,8 @@ class TimelineView(QGraphicsView):
                         target_core = _c
                         break
             if target_core is None:
-                target_core = core_names[0 if forward else -1]
+                target_core = (self._core_at_viewport_center(core_names, core_tasks)
+                                or core_names[0 if forward else -1])
 
             allowed_mk = {_task_merge_key(raw) for raw in core_tasks.get(target_core, [])}
             if not allowed_mk:
@@ -2357,7 +2538,7 @@ class TimelineView(QGraphicsView):
             events = self._seg_nav_by_core.get(target_core, [])
             starts = self._seg_nav_by_core_starts.get(target_core, [])
             picked = self._pick_next_task_by_time(
-                events, starts, ref_ns, cur_task, forward,
+                events, starts, ref_ns, cur_task, pick_forward,
                 lambda mk: mk in allowed_mk and sc._task_merge_key_matches_filter(mk),
             )
             if picked is None:
@@ -2367,7 +2548,7 @@ class TimelineView(QGraphicsView):
             events = self._seg_nav_all
             starts = self._seg_nav_all_starts
             picked = self._pick_next_task_by_time(
-                events, starts, ref_ns, cur_task, forward,
+                events, starts, ref_ns, cur_task, pick_forward,
                 lambda mk: sc._task_merge_key_matches_filter(mk),
             )
             if picked is None:
@@ -3325,6 +3506,9 @@ class TimelineView(QGraphicsView):
         factor = _native_gesture_zoom_factor(event)
         if factor <= 0.1:
             return
+        if factor < 1.0 and self._at_fit_zoom():
+            return
+        self._fire_manual_zoom_hook()
         self._fit_mode = False
         self._do_zoom(factor, _native_gesture_local_pos(event))
 
@@ -3357,6 +3541,11 @@ class TimelineView(QGraphicsView):
             factor = 1.15 if angle > 0 else 1 / 1.15
             # Accumulate factor; record anchor from the *first* event in the
             # batch so the zoom stays anchored at the initial cursor position.
+            if factor < 1.0 and self._at_fit_zoom():
+                event.accept()
+                return
+            if self._zoom_accum == 1.0 and self._zoom_anchor_pos is None:
+                self._fire_manual_zoom_hook()
             self._zoom_accum *= factor
             if self._zoom_anchor_pos is None:
                 self._zoom_anchor_pos = event.position().toPoint()
@@ -3384,11 +3573,18 @@ class TimelineView(QGraphicsView):
         """Called by the debounce timer: apply all accumulated wheel-zoom at once."""
         factor = self._zoom_accum
         anchor = self._zoom_anchor_pos
+        center_ns = self._zoom_anchor_ns
         self._zoom_accum       = 1.0
         self._zoom_anchor_pos  = None
+        self._zoom_anchor_ns   = None
         # Fit/1:1 cancel the timer; ignore a stale timeout that already queued.
-        if factor != 1.0 and not self._fit_mode:
-            self._do_zoom(factor, anchor)
+        # Zoom-out is a no-op at Fit-to-window (toolbar button is grayed).
+        if factor == 1.0:
+            return
+        if factor < 1.0 and self._at_fit_zoom():
+            return
+        if not self._fit_mode or center_ns is not None:
+            self._do_zoom(factor, anchor, center_ns=center_ns)
 
     def eventFilter(self, obj, e) -> bool:
         """Intercept native pinch-zoom gestures delivered to the viewport."""
@@ -3420,8 +3616,16 @@ class TimelineView(QGraphicsView):
     # Zoom internals
     # ------------------------------------------------------------------
 
-    def _do_zoom(self, factor: float, vp_pos=None) -> None:
+    def _do_zoom(self, factor: float, vp_pos=None, center_ns=None) -> None:
         """Zoom by factor, keeping vp_pos (viewport coords) fixed on screen."""
+        if factor < 1.0:
+            fit = self._scene._timescale_per_px_fit
+            if math.isfinite(fit) and fit > 0:
+                target = self._scene._timescale_per_px / factor
+                if self._at_fit_zoom() or target >= fit * 0.999:
+                    if not self._fit_mode:
+                        self.zoom_fit()
+                    return
         self._fit_mode = False   # any manual zoom leaves fit mode
         if vp_pos is None:
             vp_pos = self.viewport().rect().center()
@@ -3429,31 +3633,39 @@ class TimelineView(QGraphicsView):
         # Convert anchor viewport position to ns coordinate
         scene_pt = self.mapToScene(vp_pos)
         center_coord = scene_pt.x() if is_horiz else scene_pt.y()
-        center_ns = self._scene.scene_to_ns(center_coord)
+        if center_ns is not None:
+            anchor_ns = int(center_ns)
+        else:
+            # Unclamped: after zoom-out past Fit the visual center can sit
+            # in empty margin before time_min / after time_max.
+            sc = self._scene
+            anchor_ns = int(
+                (center_coord - sc._label_width) * sc._timescale_per_px
+            ) + sc._scene_origin_ns
         # Compute the viewport-center offset from the anchor
         vp_center = self.viewport().rect().center()
 
         prev_timescale_per_px = self._scene.timescale_per_px
         trace = self._scene._trace
-        anchor_ns = center_ns
         if trace is not None:
             target_timescale = prev_timescale_per_px / factor
-            target_timescale = max(
-                self._scene._timescale_per_px_default,
-                min(target_timescale, self._scene._timescale_per_px_fit),
-            )
+            # Zoom in is capped at the 1:1 floor; zoom out is capped at
+            # Fit-to-window. Matches Web (wheel already min()s to full span).
+            target_timescale = max(self._scene._timescale_per_px_default, target_timescale)
+            fit = self._scene._timescale_per_px_fit
+            if math.isfinite(fit):
+                target_timescale = min(fit, target_timescale)
             if target_timescale != prev_timescale_per_px:
                 anchor_off_px = self._timeline_offset_px(vp_pos)
                 anchor_left_ns = int(anchor_ns - anchor_off_px * target_timescale)
-                anchor_left_ns = max(trace.time_min, min(trace.time_max, anchor_left_ns))
                 vis_ns = max(1, int(self._timeline_viewport_px() * target_timescale))
                 margin_ns = max(vis_ns // 2, (trace.time_max - trace.time_min) // 100)
-                hint_lo = max(trace.time_min, anchor_left_ns - margin_ns)
-                hint_hi = min(trace.time_max, anchor_left_ns + vis_ns + margin_ns)
+                hint_lo = max(trace.time_min, min(trace.time_max, anchor_left_ns - margin_ns))
+                hint_hi = min(trace.time_max, max(trace.time_min, anchor_left_ns + vis_ns + margin_ns))
                 if hint_hi > hint_lo:
                     self._scene._ns_range_hint = (hint_lo, hint_hi)
-                if target_timescale < self._scene._timescale_per_px_fit * 0.999:
-                    self._scene._virt_jump_origin_ns = anchor_left_ns
+                # Keep even when zoomed out past Fit (origin may be < time_min).
+                self._scene._virt_jump_origin_ns = anchor_left_ns
         self._zoom_reanchor_pending = True
         try:
             self._scene.zoom(factor)
@@ -3469,8 +3681,12 @@ class TimelineView(QGraphicsView):
                 orth = cur_scene_center.y()
             else:
                 orth = cur_scene_center.x()
-            self._reposition_time_at_viewport(
-                anchor_ns, vp_pos, orth_scene=orth, force_window=True)
+            if trace is not None and (
+                    self._scene._timescale_per_px
+                    < self._scene._timescale_per_px_fit * 0.999):
+                self._reposition_time_at_viewport(
+                    max(trace.time_min, min(trace.time_max, anchor_ns)),
+                    vp_pos, orth_scene=orth, force_window=True)
             self._nav_zoom_timer.start()
         finally:
             self._zoom_reanchor_pending = False

@@ -450,7 +450,7 @@ export class InteractionHandler {
     const vert = this._isVertical()
 
     if (e.ctrlKey || e.metaKey) {
-      // Pinch-to-zoom (Ctrl-wheel)
+      // Pinch-to-zoom (Ctrl-wheel). Zoom-out is capped at Fit in _applyZoomAround*.
       const factor = e.deltaY > 0 ? 1.15 : 0.87
       if (vert) this._queueViewport(vp => this._applyZoomAroundV(vp, cy, factor))
       else       this._queueViewport(vp => this._applyZoomAroundH(vp, cx, factor))

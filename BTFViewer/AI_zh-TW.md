@@ -2,15 +2,15 @@
 
 BTFViewer 的 **AI 助理（AI Assistant）**可協助分析 RTOS Trace。它會整理實際量測到的證據、驗證可能的解釋，並引導你回到 Timeline 中相關的時間區段進行確認。
 
-> **適用範圍（Scope）：** AI 使用 BTFViewer 的 **Findings、Statistics、Timeline Query** 與 **Trace Compare** 結果進行分析。它不會讀取韌體原始碼（firmware source）或 ELF 檔案。`what_if` 的結果屬於啟發式估算（heuristic estimate），不是 RTOS 排程器模擬，也不是實際量測到的 Trace 資料。
+> **適用範圍（Scope）：** AI 使用 BTFViewer 的 **Findings、Statistics、Timeline Query** 與 **Trace Compare** 結果進行分析。它不會讀取韌體原始碼（firmware source）或 ELF 檔案。`what_if` 的結果屬於啟發式估算（heuristic estimate），不是 FreeRTOS 排程器模擬，也不是實際量測到的 Trace 資料。
 
 ## 從哪裡開始（Where to start）
 
 | 你的目的 | 建議閱讀 |
 | --- | --- |
 | 了解產品並開啟 AI 面板 | [README.md → AI Assistant](README.md#ai-assistant) |
-| 依照可重複的流程進行問題診斷 | [WORKFLOWS_zh-TW.md](WORKFLOWS_zh-TW.md) |
-| 了解某項指標或 Statistics 頁面 | [STATISTICS_zh-TW.md](STATISTICS_zh-TW.md) |
+| 依照可重複的流程進行問題診斷 | [WORKFLOWS.md](WORKFLOWS.md) |
+| 了解某項指標或 Statistics 頁面 | [STATISTICS.md](STATISTICS.md) |
 | 設定、評估或實作 AI 系統 | 本文件 |
 
 第一次進行分析時，建議依照以下順序：
@@ -77,7 +77,7 @@ AI 可以解釋、建立關聯、排序、質疑假設與進行估算；但 **De
 - **Investigate**、**Root cause**、**Verify finding**、**Auto investigate**、**What-if**、**Optimize** 與 **Diagnostic report** 都會顯示 Investigation plan。
 - **Clear** 會清除對話、重設使用量資訊，並清除目前的 investigation。
 - Usage bar 會顯示例如 **Context: Compact · 4.6k tok · 3 tools · 12s**，依序代表 Context mode、Token 數、工具數量與模型執行時間。可在 **Settings → AI → Context** 選擇 **Compact、Balanced（預設）或 Full evidence**。
-- 非空白的 `investigation_session` 僅在紀錄仍有 user 或 assistant turn 時，才會在重新啟動後還原。若紀錄為空或已執行 Clear，則不會還原 Current Issue card。
+- 非空白的 investigation 會在重新啟動後還原。若紀錄為空或已執行 Clear，則不會還原 Current Issue card。
 - 唯讀工具（read-only tools）會立即執行。會修改 GUI 的動作則會等待使用者按下 **Apply**；若啟用 **Auto-apply GUI actions**，則會自動套用。Export 一律會開啟儲存對話框。
 
 至少開啟兩份 Trace 後，工具列上的 **Compare** 才會啟用。**Query with AI…** 傳送的是 Trace Compare 表格，而不是目前的 Findings。**Save as baseline** 與 **Score vs baseline** 使用與 `baseline_score` 相同的已儲存 profile。按下 **Ctrl+K** 可快速存取 Analysis、AI、Compare、Workspace Preset 與 Inspect task。
@@ -103,9 +103,7 @@ AI 可以解釋、建立關聯、排序、質疑假設與進行估算；但 **De
 
 **Evidence** 面板會顯示 Investigation Tree、Evidence Graph、Coverage、Hypotheses，以及 Evidence Quality band。這個 band 是用於診斷的啟發式指標，**不是機率值**。AI 完成最後回覆後，Host Validator 會標示不存在的工作名稱，以及落在 Cursor Window 之外的時間戳記。
 
-建議優先使用內建 Template。這些 Template 已選好相關指標與 Statistics 頁面。必要時也可以使用自然語言，例如「find STI wait around TaskA」；Host 會將這類問題導向 `search_timeline`。**Analysis Findings** 可 triage overall findings。**Explain finding** 解釋目前選取的 Analysis Finding。其他 chips：**Explain region**、**Investigate**、**Verify finding**、**Root cause**、**Trace Compare**、**Triage findings**、**Task profile**、**Diagnostic report**、**What-if**、**Optimize**、**Highest latency**、**WCET / hot CPU**、**Migration thrash**、**Core balance**、**Tick health**、**Priority inversion**、**Deadline / budget**、**Auto investigate**。Findings 另提供 **Save recipe…** 與 **Story…**。
-
-Template 會引用的 Statistics 頁面：Timeline Anomalies、Worst Events、Period / Jitter、Unified Jitter、Recurring Patterns、Task Health、Task × Core、Waiter × Owner、Response Time、Critical Path、Preemption Matrix、Mutex Blocking、Core Utilization Over Time。
+建議優先使用內建 Template。這些 Template 已選好相關指標與 Statistics 頁面。必要時也可以使用自然語言，例如「find STI wait around TaskA」；Host 會將這類問題導向 `search_timeline`。
 
 ---
 
@@ -192,7 +190,7 @@ flowchart TD
 
 `what_if` 與 `optimize_experiment` 是**啟發式 Slice Replay（heuristic slice-replay）**工具：它們會重新分配實際量測的 Execution Slice、縮放 Migration / Blocking，並調整 Core Utilisation Balance。
 
-它們**不是 RTOS Kernel，也不是確定性的排程器（deterministic scheduler）**。每個結果都會附帶免責說明。若估算結果值得進一步測試，`recommend_experiments` 會建議後續的 Simulation / Firmware / Measurement 驗證步驟。
+它們**不是 FreeRTOS Kernel，也不是確定性的排程器（deterministic scheduler）**。每個結果都會附帶免責說明。若估算結果值得進一步測試，`recommend_experiments` 會建議後續的 Simulation / Firmware / Measurement 驗證步驟。
 
 | 目的 | 執行方式 | 常見修改描述 |
 | --- | --- | --- |
@@ -272,7 +270,7 @@ flowchart TD
 
 | 可以做 | 不能做 |
 | --- | --- |
-| 針對目前 Statistics Scope，重播實際量測的 Slice / Migration / Blocking Gap | 執行 RTOS Scheduling、ISR 或 Cache Model |
+| 針對目前 Statistics Scope，重播實際量測的 Slice / Migration / Blocking Gap | 執行 FreeRTOS Scheduling、ISR 或 Cache Model |
 | 對 Pin / Priority / Contention / Migration Experiment 評分 | 保證 Firmware 修改後的 WCET 或 Deadline |
 | 明確將每個結果標示為 Estimate / Not measured | 取代 Timeline 驗證或重新擷取 Trace |
 
@@ -291,7 +289,7 @@ flowchart TD
 ollama pull qwen3.5:9b
 ```
 
-較大的 Local Model，例如 `qwen3.5:27b`、`qwen3.8:27b` 與 `gemma4:26b`，會以較高的執行時間與記憶體用量換取更高的模型能力。舊版 7B / 14B Model ID（例如 `qwen2.5:7b`）可作為選用項目。
+較大的 Local Model，例如 `qwen3.5:27b`、`qwen3.8:27b` 與 `gemma4:26b`，會以較高的執行時間與記憶體用量換取更高的模型能力。
 
 不建議使用 3B 等級的模型進行 Investigation：這類模型經常略過 Native Tool Call、將 Tool JSON 當成一般文字輸出，或無法完成多步驟分析。
 
@@ -308,13 +306,7 @@ ollama pull qwen3.5:9b
 
 每個 Preset 都會保存自己的 Base URL、Model、API Key、Authentication Mode 與 TLS 設定。若 Preset 中出現未知的模型名稱，會自動加入 Model List。
 
-| 欄位 | 說明 |
-| --- | --- |
-| Authentication | 每個 Preset 可選 none / API key / Sign in |
-| Model picker | 重新整理 Endpoint 提供的 Model List 後再選擇 |
-| Self-signed TLS | Desktop **Allow self-signed TLS** 可跳過該 Preset 的憑證檢查 |
-
-Desktop 與 Web 的 API Key 使用相同的優先順序：先使用 Settings → AI，再依序為 `OPENAI_API_KEY`，then `GEMINI_API_KEY`，then `OLLAMA_API_KEY`。
+Desktop 與 Web 的 API Key 使用相同的優先順序：
 
 1. 在 **Settings → AI** 輸入的 Key
 2. `OPENAI_API_KEY`
@@ -340,8 +332,8 @@ Live `ai-test` XML 可以使用 `<api-key env="VAR">`。完整範例請參閱 [R
 
 | 如果你…… | 建議 |
 | --- | --- |
-| 希望完全在本機進行 Investigation，不使用 API Key | `qwen3.5:9b` — 內建 Ollama 預設模型；Investigation Suite 中最實用的 Local Model（各 Context Mode Overall 78–88，10.8–16.2 秒/case；詳見 [AI_BENCHMARK.md](AI_BENCHMARK.md)） |
-| 需要更高的 Local Model 品質 | `qwen3.8:27b`（Overall 78–88，186–332 秒/case）。`qwen3.5:27b`、`gemma4:26b` 等選用的 27B 級模型不在內建 Suite 中，本文件未提供其 Benchmark 數字 |
+| 希望完全在本機進行 Investigation，不使用 API Key | `qwen3.5:9b` — 內建 Ollama 預設模型；Investigation Suite 中最實用的 Local Model（約 52 秒/case，Overall 78） |
+| 需要更高的 Local Model 品質 | `qwen3.8:27b`（88，約 190 秒/case）或 `qwen3.5:27b`（81，約 149 秒/case）。`gemma4:26b` 比 9B 慢，分數也略低（73，約 111 秒/case） |
 | Scope 很大，例如 Findings 很多、對話很長，或需要較強推理能力 | Cloud（`gpt-4o`、Gemini、DeepSeek、Grok）；同時應考量[隱私](#what-leaves-the-machine) |
 | 處理機密 Trace | 不論模型大小都優先使用 Local Ollama，資料不會離開本機 |
 
@@ -380,7 +372,7 @@ Live `ai-test` XML 可以使用 `<api-key env="VAR">`。完整範例請參閱 [R
 
 ### Context Mode（Token 使用量）
 
-**Settings → AI → Context** 控制每次 Request 傳送多少證據。Compact 是較 token-efficient 的打包模式。這項設定主要用來降低 Input Token；其中 **Compact** 也會將回覆限制在約 300–500 Tokens。
+**Settings → AI → Context** 控制每次 Request 傳送多少證據。這項設定主要用來降低 Input Token；其中 **Compact** 也會將回覆限制在約 300–500 Tokens。
 
 | | Compact | Balanced（預設） | Full evidence |
 | --- | --- | --- | --- |
@@ -606,7 +598,7 @@ flowchart TD
 | `regression_explain` | 可選 `tab_a` / `tab_b` | Read-only：比較兩個 Tab，再說明主要 Regression；包含相同的 `regression_type` 分類 |
 | `bookmark_finding` | `time`, `kind`（`root_cause` / `evidence` / `correlated` / `reference`）；可選 `note` | GUI：加入 Semantic Investigation Annotation；需要 Apply |
 | `investigation_replay` | 可選 `finding_id`, `conclusion`, `tools_run`, `evidence_times` | Read-only：產生結構化 Investigation Replay Card |
-| `what_if` | `change`；可選 `task` | Read-only：Heuristic Slice-replay What-if，估算 Migration / Blocking / Load Balance；不是 RTOS Kernel |
+| `what_if` | `change`；可選 `task` | Read-only：Heuristic Slice-replay What-if，估算 Migration / Blocking / Load Balance；不是 FreeRTOS Kernel |
 | `optimize_experiment` | 可選 `task`, `limit`（1–12，預設 5） | Read-only：自動執行並排序 Pin / Priority / Contention / Migration Experiment |
 | `analyze_traces` | 無 | Read-only：依 Scheduling Behavior 排序所有已載入的 Tab |
 | `baseline_score` | 可選 `task`, `baseline`, `snapshot` | Read-only：將目前每個工作的 WCET / Blocking / Migrations / Response 與已儲存 Historical Baseline 比較；標示 `|z|>2` |
@@ -687,7 +679,6 @@ BTFViewer Desktop 與 Web 的設計目標，是提供**相同的 AI Investigatio
 | Chat Probe Timeout / `The read operation timed out` | `GET /models` 只列出 ID；Inference 本身過慢或卡住 | **Test connection** 會以 Non-streaming POST 呼叫 `/chat/completions`，Timeout 120 秒。先執行 `ollama run MODEL` Warm-up，再重試。可使用下方 curl Probe 除錯；若 curl 也卡住，代表 Gateway Chat Upstream 卡住。Non-streaming 無回應時可嘗試 `"stream": true`。Local Host VRAM 不足時降低 Context Length |
 | Model not found | 輸入的 Model ID 沒有被目前 Endpoint 提供 | Refresh Model List 或執行 Test connection，再從 Dropdown 選擇可用 ID；Ollama 可先執行 `ollama pull` |
 | Gemini HTTP 400 `thought_signature` | Gemini 3 的 Tool Follow-up 需要 Thought Blob | 重新送出問題；Viewer 會回傳 Gemini Thought Signature |
-| Gemini HTTP 400 `function_response.name` | OpenAI-compat Follow-up 的 `tool_calls[].id` 為空 | Viewer 會補上 id 與 `role=tool` 的 name；請重跑該 Case |
 | 顯示 Raw `btftool` JSON，而不是 Native Tool Call | 模型不支援或略過 Function Calling | Viewer 仍會顯示相同 Card。選擇 **Apply**，或啟用 **Auto-apply GUI actions**。需要穩定 Native Call 時，使用 `qwen3.5:9b` 或支援 Tool Calling 的 Cloud Model |
 | Ask 超過 120 秒 Timeout，或一直停在 Waiting… | Cold Start、CPU Offload 或 VRAM Spill | 按 **Stop**，使用 `ollama run MODEL` Warm-up 後重試。長對話之間可使用 **Clear**。Findings Card 太大時，改用較小模型或縮小 Statistics Scope |
 | 後續 Turn 忽略前面已知資訊 | Chat History 超出 Context Window | AI Bar 按 **Clear**；或使用 **Analysis → Query with AI…** / **Compare → Query with AI…** 建立新的 Scoped Prompt |
@@ -765,7 +756,7 @@ python builds/btf_viewer.py analyze candidate.btf --baseline /tmp/base.json --fa
 python builds/btf_viewer.py ai-test --dataset tests/ai --fail-under 70
 python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml -o AI_BENCHMARK.md
 python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml --compare-context -o AI_BENCHMARK.md
-python builds/btf_viewer.py ai-test --config examples/ai/benchmark.xml --insecure
+python builds/btf_viewer.py ai-test --config examples/ai/benchmark-selfsigned.xml --insecure
 ```
 
 也可以使用：
@@ -784,11 +775,11 @@ Dataset、Scoring Rule 與 Context-mode Flag 請參閱 [Benchmark / Evaluation S
 
 ## Benchmark 與 Evaluation Suite
 
-Offline `ai-test` / `runOfflineBenchmark` 已內建。Live Run 會從 Suite XML（`--config examples/ai/benchmark.xml`）讀取 **Model ID、Base URL、TLS 與 API Key**，並輸出 [AI_BENCHMARK.md](AI_BENCHMARK.md)——若該檔案已存在，重跑會**合併**進去（沒被重跑到的 Model / Context Mode / Case 會逐字保留；`--replace-report` 可改回整個覆寫）。
+Offline `ai-test` / `runOfflineBenchmark` 已內建。Live Run 會從 Suite XML（`--config examples/ai/benchmark.xml`）讀取 **Model ID、Base URL、TLS 與 API Key**，並輸出 [AI_BENCHMARK.md](AI_BENCHMARK.md)。
 
 Command 請參閱 [CLI Regression Gate](#cli-regression-gate)。
 
-預設 Live Scoring 使用 **Full evidence**（`--context-mode full`）。使用 **`--compare-context`** 時，會讓 Compact、Balanced 與 Full 在相同 Case 上執行，並並排顯示 Score、Token Total 與 Latency。每個 Live Model Call 若遇到暫時性錯誤（HTTP 429/503 high demand、timeout、空回覆），最多重試 **6** 次，每次間隔 **10 秒**；Auth / Not found 不會重試。
+預設 Live Scoring 使用 **Full evidence**（`--context-mode full`）。使用 **`--compare-context`** 時，會讓 Compact、Balanced 與 Full 在相同 Case 上執行，並並排顯示 Score、Token Total 與 Latency。
 
 前面的 Capability Matrix 是定性比較（Small Local vs 9B+ vs Cloud）。Evaluation Suite 則將這些預期轉換成可重複的量測：
 
@@ -837,26 +828,30 @@ Local Model 不應只因為「最新」或「最大」就納入測試。應選�
 
 ### 建議測試模型（Recommended models）
 
+**Gemini** — 可由設定檔調整；新增較新的 Model ID 不需要修改 Runner：
+
+- **Gemini 3.6 Flash** — High-reasoning Cloud Reference
+- **Gemini 3.1 Flash-Lite** — Fast / Efficient Cloud Reference
+
 **Local — Developer Workstation：**
 
 - **Qwen3.5 9B**（`qwen3.5:9b`）— App 內建預設值；主要的實用 Local Investigator。
-- **Qwen3.8 27B**（`qwen3.8:27b`）— 較高品質的 Local Comparison。
+- **Qwen3.5 27B** — 較高品質的 Local Model，同時作為 Memory / Latency Stress Test。
+- **Qwen3.8 27B**（`qwen3.8:27b`）— 較新的 Qwen 27B Local Comparison。
+- **Gemma 4 26B** — 非 Qwen 的 Local Comparison。
 
-**Gemini** — 可由設定檔調整；新增較新的 Model ID 不需要修改 Runner：
-
-- **Gemini 3.7 Flash**（`gemini-3.7-flash`）— High-reasoning Cloud Reference
-- **Gemini 3.5 Flash-Lite**（`gemini-3.5-flash-lite`）— Fast / Efficient Cloud Reference
+舊版 7B / 14B Model ID 可作為選用項目。不要加入 3B 等級模型；它們容易略過 Native Tool Call，並在 Investigation Suite 中失敗。
 
 ```text
-出貨 Live Suite
+本機 AI — 開發工作站
 │
-├── Local
-│   ├── Qwen3.5 9B
-│   └── Qwen3.8 27B
+├── 實用／預設
+│   └── Qwen3.5 9B
 │
-└── Gemini
-    ├── Gemini 3.7 Flash
-    └── Gemini 3.5 Flash-Lite
+└── 高品質本機模型
+    ├── Qwen3.5 27B
+    ├── Qwen3.8 27B
+    └── Gemma 4 26B
 ```
 
 在這個應用情境中，9B 模型可能比 27B 模型更適合：如果較大的模型只帶來少量 Accuracy 改善，卻大幅增加 Latency 與 Memory 使用量，整體實用性反而較低。
@@ -866,7 +861,7 @@ Local Model 不應只因為「最新」或「最大」就納入測試。應選�
 - **Diagnostic Quality**
 - **Practical System Performance**
 
-不要將 Model List Hard-code 在 Runner 中。可複製 [examples/ai/benchmark.xml](examples/ai/benchmark.xml)。Self-signed 或 Private CA Gateway 請保持 `<tls-verify>false</tls-verify>`（Suite 預設值）；公開 HTTPS 模型可覆寫為 `true`：
+不要將 Model List Hard-code 在 Runner 中。可複製 [examples/ai/benchmark.xml](examples/ai/benchmark.xml)；Self-signed TLS 則使用 [benchmark-selfsigned.xml](examples/ai/benchmark-selfsigned.xml)：
 
 ```xml
 <ai-benchmark version="1">
@@ -875,20 +870,18 @@ Local Model 不應只因為「最新」或「最大」就納入測試。應選�
   <output>AI_BENCHMARK.md</output>
   <endpoint>
     <base-url>http://localhost:11434/v1</base-url>
-    <tls-verify>false</tls-verify>
+    <tls-verify>true</tls-verify>
     <timeout-s>360</timeout-s>
   </endpoint>
   <models>
     <model id="qwen3.5:9b"/>
     <model id="qwen3.8:27b"/>
-    <model id="gemini-3.7-flash" preset="gemini">
+    <model id="gemini-3.6-flash" preset="gemini">
       <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
-      <tls-verify>true</tls-verify>
       <api-key env="GEMINI_API_KEY"/>
     </model>
-    <model id="gemini-3.5-flash-lite" preset="gemini">
+    <model id="gemini-3.1-flash-lite" preset="gemini">
       <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
-      <tls-verify>true</tls-verify>
       <api-key env="GEMINI_API_KEY"/>
     </model>
   </models>
@@ -909,19 +902,7 @@ Self-signed / Private CA Gateway：
 
 `tls-verify` 設為 `false`，或使用 `ai-test --insecure`，可在 Desktop 跳過 Certificate Check。
 
-`--models id1,id2`（或 `make ai-test-context AI_MODELS=id1,id2`）可選擇 `<model>` 中的部分項目。自訂 Suite 可把模型標成 `optional="true"`，沒有 API Key 時會跳過，除非你在 `--models` / `AI_MODELS` 裡點名。Ollama 應只列出實際已經 Pull 的 Model ID。Benchmark 結果應記錄完整的 Model Identifier 與 Runtime Configuration。
-
-`--only-cases id1,id2`（或 `make ai-test-context AI_CASES=id1,id2`）可只針對 `tests/ai` Dataset 裡指定的 Case ID 評分——適合只想重跑幾個回 `ERROR`（暫時性 HTTP 429/503）的 Case，不必整套 Suite 都重跑。
-
-當 `-o`/`--output` 指定的檔案已存在時，`ai-test` 會把這次執行**合併**進去，而不是整個覆寫：這次真正重跑到的 Model / Context Mode Block，或 Offline Case 會被取代，檔案裡其他沒被重跑的 Block / Case 會完全保持原樣（Comparison、Context mode comparison、Metric breakdown 等表格會依合併後的結果重新計算）。因此可以放心只重跑一個 Model 的一種 Context Mode：
-
-```bash
-python builds/btf_viewer.py ai-test -c examples/ai/benchmark.xml \
-  --models gemini-3.7-flash --context-mode full -o AI_BENCHMARK.md
-make -C BTFViewer ai-test-live AI_MODELS=gemini-3.7-flash AI_CONTEXT=full
-```
-
-加上 `--replace-report`（或 `AI_REPLACE=1`）可改回整個覆寫而非合併——適合想用一次全套 Suite 的結果整批取代舊資料的情境。
+`--models id1,id2` 可選擇 `<model>` 中的部分項目。Ollama 應只列出實際已經 Pull 的 Model ID。Benchmark 結果應記錄完整的 Model Identifier 與 Runtime Configuration。
 
 目前 App 內尚未提供的 Picker：
 
@@ -1028,14 +1009,15 @@ Local Run 應將 **Memory 與 Latency 視為第一級指標（First-class Metric
 
 ### 模型比較矩陣（Model matrix）
 
-使用相同 Suite 測試內建的 Gemini 與 Local Ollama Model。以下結果記錄於 **2026-08-19**（17-case Dataset）；完整 Case Table 與 Compact / Balanced 數字請參閱 [AI_BENCHMARK.md](AI_BENCHMARK.md)。下表為 **Full evidence** Context Mode（Live Scoring 的預設值）。
+使用相同 Suite 測試指定的 Gemini 與 Local Ollama Model。以下結果記錄於 **2026-08-14**；完整 Case Table 請參閱 [AI_BENCHMARK.md](AI_BENCHMARK.md)。
 
 | Model | 類別 | Finding | Evidence | Root cause | Calibration | Notes |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
-| `qwen3.5:9b` | Local / practical | 85 | **93** | **82** | 80 | Overall **88**，16.2s/case，14/17 PASS |
-| `qwen3.8:27b` | Local / high-quality | **88** | **94** | 65 | 80 | Overall **86**，332s/case，13/17 PASS |
-| `gemini-3.5-flash-lite` | Cloud / fast | 82 | 90 | 71 | 80 | Overall **83**，2.6s/case，13/17 PASS |
-| `gemini-3.7-flash` | Cloud | 65 | 76 | 53 | 80 | Overall **77**，57.9s/case，12/17 PASS；3/17 API 錯誤 |
+| Gemini 3.1 Flash-Lite | Cloud / fast | **79** | 64 | **71** | 80 | Overall **81**，5.5s；Tool Follow-up |
+| Gemini 3.6 Flash | Cloud | — | — | — | — | Overall **75**，6/7；Free-tier 429 導致 Part Dump 被拆開 |
+| Qwen3.5 9B | Local / practical | **79** | **86** | 57 | 80 | Overall **82**，10.7s |
+| Qwen3.5 27B | Local / high-quality | 71 | 71 | 71 | 80 | Overall **80**，64.4s |
+| Gemma 4 26B | Local / high-quality | 71 | 57 | **86** | 80 | Overall **80**，72.6s；5/7 PASS |
 
 Live `--config` Run 如果第一個 Turn 只有 Tool Result，或只有 Planning Text 而沒有 Confidence Line，會再執行一次 Tool-result Follow-up。**Single-turn Score 不能直接互相比較。**
 
@@ -1053,10 +1035,12 @@ Live `--config` Run 如果第一個 Turn 只有 Tool Result，或只有 Planning
 開發工作站上的實際比較：
 
 ```text
-Gemini 3.7 Flash / Gemini 3.5 Flash-Lite
+Gemini 3.6 Flash / Gemini 3.1 Flash-Lite
       vs
 Qwen3.5 9B        （內建預設）
+Qwen3.5 27B
 Qwen3.8 27B
+Gemma 4 26B
 ```
 
 真正需要回答的問題是：
@@ -1168,7 +1152,7 @@ flowchart TD
 
 ## 因果與時間引擎（Causal and temporal engines）
 
-這些功能是在 Analysis Findings 上執行的 **Host-side Heuristic**，不是 RTOS Scheduler Replay。
+這些功能是在 Analysis Findings 上執行的 **Host-side Heuristic**，不是 FreeRTOS Scheduler Replay。
 
 使用者操作流程仍以 [Investigation Planner](#investigation-planner) 為主。Diagnose / Investigate / Auto investigate 會先依序使用 Explanation Tool，再進入 Experiment：
 
@@ -1219,7 +1203,7 @@ flowchart TD
 | `close_investigation` | Case Status `closed` + Conclusion | 完整 Firmware A/B Lifecycle |
 | `analyze_distribution` | BTF Execution / Blocking / PI / Tick Sample，最多 8000 筆 | Parser 本身沒有的 Response-time Series |
 | `analyze_periodicity` | Inter-arrival Jitter 與 Kind | Kernel Period Timer |
-| `simulate_schedule` | `what_if` 內部使用的 LEVEL 1 Helper | GUI Tool 或 RTOS Kernel |
+| `simulate_schedule` | `what_if` 內部使用的 LEVEL 1 Helper | GUI Tool 或 FreeRTOS Kernel |
 
 以下內容不在 Scope 內，**不要為這些功能新增 Chat Template**：
 
@@ -1297,7 +1281,6 @@ make -C BTFViewer web
 - Disabled Chip / Menu Item 使用 `#8a96a8`。
 - Findings 的 **Investigate…** 使用與其他 Analysis Footer Button 相同的 Outline Style，不使用 Accent / Primary Style。
 - **More** Template 在 2-column Overlay 中使用相同 Group。
-- Findings 的 **Save recipe…** 與 **Story…** 保留在該 Dialog。
 - Trace Compare 從工具列 **Compare** 開啟，而不是 Statistics Footer。
 
 Desktop `ai-test` CLI 與 Web Offline Benchmark 共用 `tests/ai` Fixture，包括被追蹤的 `.btf` Stub + `dataset.json`。
@@ -1360,7 +1343,7 @@ Firmware 修改與重新擷取仍然由使用者完成：
 
 使用 **Compact** Context Mode 時，只有使用者要求才會產生 Diagram。
 
-Findings 中的 Pipe **Markdown tables** 與 Sanitized HTML Table，都會在 Reply Pane 中顯示為 Table。In-chat Markdown / HTML tables 會配合目前 Theme。`investigate` 回傳 Root-cause Chain 時，Evidence Panel 也會建立 Investigation Tree。
+Findings 中的 Markdown Table 與 Sanitized HTML Table，都會在 Reply Pane 中顯示為 Table。`investigate` 回傳 Root-cause Chain 時，Evidence Panel 也會建立 Investigation Tree。
 
 Diagram 會配合目前的 Light / Dark Theme；**Save As…** 匯出的 HTML 則使用 Light Palette。
 
@@ -1380,6 +1363,6 @@ Diagram 會配合目前的 Light / Dark Theme；**Save As…** 匯出的 HTML �
 | 文件 | 回答的問題 |
 | --- | --- |
 | [README.md](README.md) | 如何使用 BTFViewer？ |
-| [WORKFLOWS_zh-TW.md](WORKFLOWS_zh-TW.md) | 如何診斷問題？ |
-| [STATISTICS_zh-TW.md](STATISTICS_zh-TW.md) | 這項量測代表什麼？ |
-| [AI.md](AI.md) | AI 輔助調查如何運作？（英文） |
+| [WORKFLOWS.md](WORKFLOWS.md) | 如何診斷問題？ |
+| [STATISTICS.md](STATISTICS.md) | 這項量測代表什麼？ |
+| [AI.md](AI.md) | AI 輔助調查如何運作？ |

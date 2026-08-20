@@ -328,6 +328,7 @@ describe('demoRunner', () => {
     const host = {
       loadTraceFile: async (f) => { calls.push(['load', f.name]) },
       fit: async () => { calls.push(['fit']) },
+      zoomView: async () => { calls.push(['zoomView']) },
       setViewMode: async (m) => { calls.push(['view', m]) },
       setCpuLoad: async (on) => { calls.push(['loadStrip', on]) },
       setPanel: async (n) => { calls.push(['panel', n]) },
@@ -351,13 +352,142 @@ describe('demoRunner', () => {
     const runner = createDemoRunner(host, pack, { skipTags: ['ai'], aiWaitCapSec: 0 })
     await runner.run()
     assert.deepEqual(calls[0], ['load', 'demo.btf.gz'])
-    assert.ok(calls.some(c => c[0] === 'fit'))
+    assert.ok(calls.some(c => c[0] === 'zoomView'))
     assert.ok(calls.some(c => c[0] === 'view' && c[1] === 'core'))
     assert.ok(calls.some(c => c[0] === 'stats' && c[1] === 'tasks,exec' && c[2] === 'exec'))
     assert.ok(calls.some(c => c[0] === 'cursors' && c[4] === true))
     assert.ok(calls.some(c => c[0] === 'move' && c[1] === 420 && c[2] === 210))
     assert.ok(!calls.some(c => c[0] === 'toast'))
     assert.equal(xml.name, 'demo.xml')
+  })
+
+  it('maps zoom_view to Full View and fit_view to C1–Cn', async () => {
+    const parsed = {
+      vars: {},
+      defaults: { pause: 0, after_voice: 0, ai_wait: 0, move_duration: 0, audio_block: false },
+      macros: {},
+      targets: {},
+      steps: [
+        {
+          id: '1', title: 'Zoom', optional: false, tags: new Set(),
+          children: [
+            { tag: 'zoom_view', attrib: {}, children: [], text: '', tail: '' },
+            { tag: 'fit_view', attrib: {}, children: [], text: '', tail: '' },
+          ],
+        },
+      ],
+    }
+    const calls = []
+    const host = {
+      zoomView: async () => { calls.push('zoomView') },
+      fit: async () => { calls.push('fit') },
+      setStatus: () => {},
+      setDemoNav: () => {},
+    }
+    const runner = createDemoRunner(host, { parsed, traceFile: null, resolve: () => null })
+    await runner.run()
+    assert.deepEqual(calls, ['zoomView', 'fit'])
+  })
+
+  it('maps move_view to host.moveView with time and task', async () => {
+    const parsed = {
+      vars: {},
+      defaults: { pause: 0, after_voice: 0, ai_wait: 0, move_duration: 0, audio_block: false },
+      macros: {},
+      targets: {},
+      steps: [
+        {
+          id: '1', title: 'Pan', optional: false, tags: new Set(),
+          children: [
+            { tag: 'move_view', attrib: { time: '3.085', unit: 's', task: 'CS[27]' }, children: [], text: '', tail: '' },
+            { tag: 'move_view', attrib: { time: '0' }, children: [], text: '', tail: '' },
+            { tag: 'move_view', attrib: { task: 'CS[27]' }, children: [], text: '', tail: '' },
+          ],
+        },
+      ],
+    }
+    const calls = []
+    const host = {
+      moveView: async (p) => { calls.push(p) },
+      setStatus: () => {},
+      setDemoNav: () => {},
+    }
+    const runner = createDemoRunner(host, { parsed, traceFile: null, resolve: () => null })
+    await runner.run()
+    assert.equal(calls.length, 3)
+    assert.equal(calls[0].time, '3.085')
+    assert.equal(calls[0].unit, 's')
+    assert.equal(calls[0].task, 'CS[27]')
+    assert.equal(calls[0].timeOmitted, false)
+    assert.equal(calls[1].time, '0')
+    assert.equal(calls[1].timeOmitted, false)
+    assert.equal(calls[2].task, 'CS[27]')
+    assert.equal(calls[2].timeOmitted, true)
+  })
+
+  it('maps show_message to host show/wait/clear', async () => {
+    const parsed = {
+      vars: {},
+      defaults: { pause: 0, after_voice: 0, ai_wait: 0, move_duration: 0, audio_block: false },
+      macros: {},
+      targets: {},
+      steps: [
+        {
+          id: '1', title: 'Msg', optional: false, tags: new Set(),
+          children: [
+            { tag: 'show_message', attrib: { text: 'Hello', seconds: '0' }, children: [], text: '', tail: '' },
+            { tag: 'message', attrib: { duration: '0' }, children: [], text: 'Body text', tail: '' },
+          ],
+        },
+      ],
+    }
+    const calls = []
+    const host = {
+      showMessage: async (p) => { calls.push(['show', p.text]) },
+      clearMessage: async () => { calls.push(['clear']) },
+      setStatus: () => {},
+      setDemoNav: () => {},
+    }
+    const runner = createDemoRunner(host, { parsed, traceFile: null, resolve: () => null })
+    await runner.run()
+    assert.deepEqual(calls, [['show', 'Hello'], ['clear'], ['show', 'Body text'], ['clear']])
+  })
+
+  it('skipNext during show_message clears the caption instantly', async () => {
+    const parsed = {
+      vars: {},
+      defaults: { pause: 0, after_voice: 0, ai_wait: 0, move_duration: 0, audio_block: false },
+      macros: {},
+      targets: {},
+      steps: [
+        {
+          id: '1', title: 'First', optional: false, tags: new Set(),
+          children: [
+            { tag: 'show_message', attrib: { text: 'Hello', seconds: '5' }, children: [], text: '', tail: '' },
+          ],
+        },
+        {
+          id: '2', title: 'Second', optional: false, tags: new Set(),
+          children: [
+            { tag: 'highlight', attrib: { task: 'B' }, children: [], text: '', tail: '' },
+          ],
+        },
+      ],
+    }
+    const clears = []
+    const host = {
+      showMessage: async () => {},
+      clearMessage: async (opts) => { clears.push(opts?.animate === false ? 'instant' : 'fade') },
+      highlight: async () => {},
+      setStatus: () => {},
+      setDemoNav: () => {},
+    }
+    const runner = createDemoRunner(host, { parsed, traceFile: null, resolve: () => null })
+    const done = runner.run()
+    await new Promise(r => setTimeout(r, 40))
+    runner.skipNext()
+    await done
+    assert.ok(clears.includes('instant'))
   })
 
   it('clears cursors, bookmarks, and annotations via demo API tags', async () => {
@@ -853,7 +983,7 @@ describe('demo_8cores.xml', () => {
     assert.equal(root.tag, 'demo')
     const demo = parseDemoXml(xml, { xmlDir: '/demos/demo_8cores' })
     assert.match(demo.trace, /demo_8cores\.btf\.gz$/)
-    assert.deepEqual(demo.targets.timeline, { x: 0.31, y: 0.30 })
+    assert.deepEqual(demo.targets.timeline, { x: 0.32, y: 0.30 })
     assert.ok(demo.steps.length >= 20)
     const title = demo.steps.find(s => s.id === '1')
     const titleTags = title.children.map(c => c.tag)
@@ -882,7 +1012,14 @@ describe('demo_8cores.xml', () => {
     }
     const toolbar = demo.steps.find(s => s.id === '4')
     const toolbarKids = toolbar.children
-    assert.ok(!toolbarKids.some(c => c.tag === 'view_mode' || c.tag === 'analysis'))
+    assert.ok(!toolbarKids.some(c => c.tag === 'analysis'))
+    // The step may reset to a known Task-view starting state before the
+    // hover tour begins, but must not demonstrate switching modes mid-tour
+    // (that is step 5's job) — so any view_mode must land before narration.
+    const audioIdx = toolbarKids.findIndex(c => c.tag === 'audio')
+    toolbarKids.forEach((c, i) => {
+      if (c.tag === 'view_mode') assert.ok(i < audioIdx, 'toolbar step view_mode must precede narration')
+    })
     const taskHover = toolbarKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'toolbar_task')
     const coreHover = toolbarKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'toolbar_core')
     const analysisHover = toolbarKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'toolbar_analysis')
@@ -903,9 +1040,9 @@ describe('demo_8cores.xml', () => {
     const oneMove = fitKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'toolbar_1to1')
     const oneZoom = fitKids.findIndex(c => c.tag === 'zoom_1to1')
     const fitMove = fitKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'toolbar_fit')
-    const fitView = fitKids.findIndex(c => c.tag === 'fit_view')
+    const zoomView = fitKids.findIndex(c => c.tag === 'zoom_view')
     assert.ok(oneMove >= 0 && oneZoom > oneMove)
-    assert.ok(fitMove > oneZoom && fitView > fitMove)
+    assert.ok(fitMove > oneZoom && zoomView > fitMove)
     const summary = demo.steps.find(s => s.id === '7')
     const summaryKids = summary.children
     const statsMove = summaryKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'stats_tab')

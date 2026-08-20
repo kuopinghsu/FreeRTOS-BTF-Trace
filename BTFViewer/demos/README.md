@@ -55,9 +55,14 @@ headless control (no extra packages).
 <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
 <stats_section id="health" expand="true" collapse_others="true"/>
 <jump_wcet task="CS[27]"/>
+<move_view time="3.085" unit="s" task="CS[27]"/>
+<show_message text="Centered demo caption" seconds="2"/>
 <view_mode mode="core"/>
 <zoom_1to1/>
+<zoom_view/>
 <fit_view/>
+<zoom_in/>
+<zoom_out/>
 <cpu_load on="true"/>
 <analysis/>
 <tick_dist/>
@@ -71,10 +76,93 @@ headless control (no extra packages).
 <clear_bookmarks/>
 <clear_annotations/>
 <clear_highlight/>
+<tab_nav/>
+<tab_nav dir="prev"/>
+```
+
+`<zoom_view/>` is **Zoom Full View** (toolbar Fit / Ctrl+0): the entire
+trace, even if C1–Cn exist. `<macro ref="fit"/>` (the Ctrl+0 shortcut) uses
+this same action.
+
+`<fit_view/>` is **Zoom fit to C1–Cn** (toolbar Range / Ctrl+R) when two or
+more cursors are placed. With fewer than two cursors it falls back to
+Zoom Full View.
+
+`<zoom_in/>` / `<zoom_out/>` step the timeline zoom one toolbar increment
+(Ctrl+= / Ctrl+-), anchored at the viewport center (or the C1–Cn midpoint
+when those cursors are placed). Zooming out stops at **Zoom Full View** —
+the Zoom Out control is grayed there, and `<zoom_out/>` is a no-op. After
+`<fit_view/>` (C1–Cn) the view is still zoomed in, so `<zoom_out/>` still
+steps out until Full View.
+
+`<tab_nav/>` (alias attribute `direction`) drives the timeline's Tab / Shift+Tab
+task-segment navigation: `dir="next"` (default) or `dir="prev"`. With nothing
+selected, it jumps to the first task segment at/after the earliest visible
+cursor/bookmark/annotation (or the viewport start edge if none are visible);
+with a task/segment already selected, it keeps cycling next/previous by task.
+Pair with `<clear_highlight/>` beforehand to guarantee the "nothing selected"
+first-stop behavior.
+
+`<move_view/>` (aliases `<move_viewport/>`, `<pan_view/>`) pans the current
+zoom to a time and/or centers a task row. It does not zoom or highlight.
+
+| Attributes | Result |
+|---|---|
+| omitted / empty / `0` / before trace start, no `task` | Pin the trace start to the **left** of the plot and scroll the task list to the **top**. |
+| omitted / empty `time`, with `task` | Center that task's **first segment** in time, and center the task row. |
+| `0` / before trace start, with `task` | Pin the trace start left, and center the task row. |
+| a later `time`, no `task` | Center that timestamp; leave the row scroll unchanged. |
+| a later `time`, with `task` | Center that timestamp **and** the task row. |
+
+Time uses the same `time` / `ns` / `at` plus optional `unit` as `<cursors/>`.
+An unknown task name is treated as missing: leftmost time also scrolls the
+task list to the top. In Core View the parent core is expanded so the task
+sub-row can be centered.
+
+```xml
+<move_view time="3.085" unit="s" task="CS[27]"/>
+<move_view time="0"/>
+<move_view task="CS[27]"/>
+```
+
+`<show_message/>` (aliases `<message/>`, `<show_msg/>`) shows a centered caption
+over the trace window (fade in, hold, fade out), waits, then clears it. Does not
+block pointer overlay moves. Text comes from `text` / `message` or element body;
+duration from `seconds` / `duration` (default **2**).
+
+```xml
+<show_message text="Watch the CS row" seconds="2.5"/>
+<show_message seconds="1">Jumping to trace start</show_message>
 ```
 
 Toolbar buttons, tabs, Analysis, and Find are driven by these API events — not
 mouse clicks at window fractions (those miss when the window is not fullscreen).
+
+**Live `<move target="…"/>` names**
+
+`<move target="name"/>` prefers live widget geometry (Desktop `_demo_target`,
+Web `data-demo-target`) over XML `<point/>` window fractions. Use these names:
+
+| Target | Widget |
+|---|---|
+| `toolbar_open` | Open |
+| `toolbar_1to1` | 1:1 zoom |
+| `toolbar_fit` | Fit / Zoom Full View |
+| `toolbar_task` | Task view |
+| `toolbar_core` | Core view |
+| `toolbar_load` | CPU Load |
+| `toolbar_heatmap` | Migration Heatmap |
+| `toolbar_analysis` | Analysis |
+| `stats_tab` / `find_tab` / `ai_tab` | Right-panel tabs |
+| `stats_summary` / `stats_panel` | Statistics summary |
+| `stats_health` | Health section header |
+| `stats_tick_dist` | Tick distribution button |
+| `stats_export_csv` / `stats_export_html` | Statistics export |
+
+`toolbar_heatmap` only **points** at the Heatmap button; it does not open the
+inspector. The 8-core pack also has XML-only fractions (`timeline`,
+`timeline_bar`, `status`, `load_strip`, `toolbar_settings`, `toolbar_find`,
+`limit_checkbox`) for canvas/status hover, not live widgets.
 
 Expanding a section scrolls its header near the top of the Statistics panel so
 the table stays on screen. `<stats_reset/>` (alias `<stats_done/>`) collapses
@@ -184,6 +272,6 @@ clip plays; the runner waits for the clip at the end of each step. Use
 **Window-relative coordinates**
 
 `<point x="0.42" y="0.42"/>` is a fraction of the **viewer window**
-(not the full screen). Live toolbar / panel targets from `_demo_target`
+(not the full screen). Live toolbar / panel targets (see the table above)
 win over XML fractions. `<move>` / `<sweep>` / `<click>` drive a Qt overlay
 pointer (same as Web), not the OS cursor.

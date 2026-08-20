@@ -244,8 +244,10 @@
         </button>
         <button
           class="tb-btn"
-          title="Zoom out (Ctrl+-)"
-          @click="emit('zoom', 1.43)"
+          :class="{ disabled: !zoomOutEnabled }"
+          :disabled="!zoomOutEnabled"
+          :title="zoomOutEnabled ? 'Zoom out (Ctrl+-)' : 'Already fitted to window'"
+          @click="zoomOutEnabled && emit('zoom', 1.43)"
         >
           <svg
             viewBox="0 0 16 16"
@@ -469,6 +471,7 @@
 
         <button
           class="tb-btn"
+          data-demo-target="toolbar_heatmap"
           :class="{ disabled: !heatmapEnabled }"
           :disabled="!heatmapEnabled"
           title="Migration & Corridor Inspector — topology + timeline (multi-core traces only)"
@@ -783,6 +786,7 @@ const props = defineProps({
   compareEnabled: { type: Boolean, default: false },
   taskFilterActive: { type: Boolean, default: false },
   rangeEnabled: { type: Boolean, default: false },
+  zoomOutEnabled: { type: Boolean, default: false },
   loading:     { type: Boolean, default: false },
   loadingPct:  { type: Number,  default: 0 },
   loadingMsg:  { type: String,  default: '' },

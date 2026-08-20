@@ -31,8 +31,8 @@ from .ai_assistant import (
 )
 from .demo_api import demo_api_enabled, demo_api_port, start_demo_api
 from .demo_inapp import (
-    DemoPointerOverlay, DemoStatusBanner, InAppDemoRunner, discover_demo_pack,
-    preferred_voice_lang,
+    DemoMessageOverlay, DemoPointerOverlay, DemoStatusBanner, InAppDemoRunner,
+    discover_demo_pack, preferred_voice_lang,
 )
 from .ai_tools import (
     AI_TOOL_ADD_ANNOTATION,
@@ -1683,6 +1683,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._pending_demo: Optional[dict] = None
         self._demo_runner: Optional[InAppDemoRunner] = None
         self._demo_overlay: Optional[DemoPointerOverlay] = None
+        self._demo_message_overlay: Optional[DemoMessageOverlay] = None
         self._demo_thread: Optional[threading.Thread] = None
         self._demo_nav_armed: bool = False
         self._demo_nav_arm_timer: Optional[QTimer] = None
@@ -2032,6 +2033,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         return self._vm.tab_for_path(path, normalizer=_normalize_open_path)
 
     def _wire_timeline_view(self, view: TimelineView) -> None:
+        # A manual zoom (toolbar/keyboard/wheel/pinch/Fit/1:1/demo op) must
+        # cancel any in-flight AI zoom_to_range animation, or its next tick
+        # silently overwrites the manual zoom a moment later.
+        view._on_manual_zoom = self._ai_stop_zoom_anim
         view.zoom_changed.connect(lambda tpp, v=view: self._on_zoom_changed(tpp, v))
         view.viewport_changed.connect(
             lambda v=view: self._on_timeline_viewport_changed(v))
@@ -4751,7 +4756,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_horiz.setChecked(True)
         vm.addSeparator()
         vm.addAction("&Zoom In",        lambda: self._view.zoom_in(),   QKeySequence.ZoomIn)
-        vm.addAction("Zoom &Out",       lambda: self._view.zoom_out(),  QKeySequence.ZoomOut)
+        self._act_zoom_out = vm.addAction(
+            "Zoom &Out", lambda: self._view.zoom_out(), QKeySequence.ZoomOut)
+        self._act_zoom_out.setEnabled(False)
         _fit_act = vm.addAction("&Fit to window",  lambda: self._view.zoom_fit())
         _fit_act.setShortcuts([QKeySequence("Ctrl+0"), QKeySequence("F")])
         vm.addSeparator()
@@ -4870,7 +4877,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._tb_vert_btn.setToolTip("Vertical layout — time runs top → bottom")
         tb.addSeparator()
         _ia("Zoom In",  lambda: self._view.zoom_in(),   _IC_ZIN,  "Zoom in  (Ctrl++)")
-        _ia("Zoom Out", lambda: self._view.zoom_out(),  _IC_ZOUT, "Zoom out  (Ctrl+-)")
+        self._tb_zoom_out_btn = _ia(
+            "Zoom Out", lambda: self._view.zoom_out(),  _IC_ZOUT, "Zoom out  (Ctrl+-)")
+        self._tb_zoom_out_btn.setEnabled(False)
         self._act_zoom_1to1 = _ia("1:1", lambda: self._view.zoom_1to1(), _IC_1TO1, "Zoom to 1:1 scale")
         self._tb_fit_btn = _ia("Fit", lambda: self._view.zoom_fit(), _IC_FIT,
                                "Fit entire trace to window  (Ctrl+0)")
@@ -5172,6 +5181,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if self._trace is None:
             self._zoom_scale_label.setText("—")
             self._zoom_visible_label.setText("")
+            self._sync_zoom_out_enabled()
             return
         self._on_zoom_changed(self._view._scene.timescale_per_px)
 
@@ -5337,6 +5347,22 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         timeout = 6000 if kind == "error" else 4000
         self.statusBar().showMessage(text, timeout)
 
+    def _demo_show_center_message(self, text: str) -> None:
+        ov = self._demo_message_overlay
+        if ov is None:
+            host = getattr(self, "_central_host", None)
+            if host is None:
+                return
+            ov = DemoMessageOverlay(host)
+            ov.raise_()
+            self._demo_message_overlay = ov
+        ov.show_message(text)
+
+    def _demo_clear_center_message(self, *, animate: bool = True) -> None:
+        ov = self._demo_message_overlay
+        if ov is not None:
+            ov.clear_message(animate=animate)
+
     def _demo_press_escape(self) -> None:
         self._demo_close_settings()
         self._demo_analysis({"close": True})
@@ -5397,6 +5423,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         overlay = self._demo_overlay
         if overlay is not None:
             overlay.hide_pointer()
+        msg_ov = self._demo_message_overlay
+        if msg_ov is not None:
+            msg_ov.clear_message(animate=False)
         banner = getattr(self, "_demo_status_banner", None)
         if banner is not None:
             banner.setVisible(False)
@@ -5421,6 +5450,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         overlay = DemoPointerOverlay(self)
         overlay.raise_()
         self._demo_overlay = overlay
+        msg_ov = DemoMessageOverlay(self._central_host)
+        msg_ov.raise_()
+        self._demo_message_overlay = msg_ov
         banner = self._demo_status_banner
         voice = self._preferred_demo_voice_lang()
         runner = InAppDemoRunner(
@@ -5469,6 +5501,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if overlay is not None:
             overlay.hide_pointer()
             overlay.deleteLater()
+        msg_ov = self._demo_message_overlay
+        self._demo_message_overlay = None
+        if msg_ov is not None:
+            msg_ov.clear_message(animate=False)
+            msg_ov.deleteLater()
         banner = getattr(self, "_demo_status_banner", None)
         if banner is not None:
             banner.setVisible(False)
@@ -5765,14 +5802,39 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             panel.refresh_template_availability()
 
     def _ai_stop_zoom_anim(self) -> None:
+        """Invalidate an in-flight range-zoom so late valueChanged ticks
+        cannot snap timescale back to the animation's start (Fit) after
+        <fit_view/> / <zoom_out/> have already run."""
+        self._ai_zoom_gen = getattr(self, "_ai_zoom_gen", 0) + 1
         anim = getattr(self, "_ai_zoom_anim", None)
+        self._ai_zoom_anim = None
         if anim is None:
             return
         try:
             anim.stop()
         except RuntimeError:
             pass
-        self._ai_zoom_anim = None
+        anim.deleteLater()
+
+    def _ai_wait_zoom_anim(self, timeout_ms: int = 400) -> None:
+        """Let an in-flight range-zoom animation finish. Do not stop it —
+        the next demo op (fit / zoom_out) must run against the completed
+        zoom so every XML step applies exactly, in order."""
+        anim = getattr(self, "_ai_zoom_anim", None)
+        if anim is None:
+            return
+        loop = QEventLoop(self)
+
+        def _done() -> None:
+            if loop.isRunning():
+                loop.quit()
+
+        try:
+            anim.finished.connect(_done)
+        except RuntimeError:
+            return
+        QTimer.singleShot(timeout_ms, _done)
+        loop.exec()
 
     def _ai_jump_time_unit(self, value: float) -> None:
         """Jump to *value* (trace time unit) and drop an annotation there."""
@@ -5857,6 +5919,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if op == "clear_highlight":
             self._ai_highlight_task("")
             return {}
+        if op == "tab_nav":
+            forward = self._demo_truthy(payload.get("forward"), default=True)
+            view = getattr(self, "_view", None)
+            if view is not None:
+                view._cycle_highlighted_task(forward)
+            return {}
         if op == "cursors":
             times = self._demo_parse_times_payload(payload)
             view = getattr(self, "_view", None)
@@ -5879,6 +5947,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 self._demo_set_limit(self._demo_truthy(payload.get("limit")))
             if self._demo_truthy(payload.get("zoom"), default=False) and len(times) >= 2:
                 self._ai_zoom_to_range(times[0], times[-1])
+                self._ai_wait_zoom_anim()
             return {"cursors": list(view._scene.cursor_times())}
         if op == "clear_cursors":
             view = getattr(self, "_view", None)
@@ -5895,15 +5964,48 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             lo, hi = self._demo_parse_range_payload(payload)
             self._ai_zoom_to_range(lo, hi)
             return {"start": lo, "end": hi}
-        if op == "fit":
+        if op in ("zoom_view", "full_view", "zoom_full"):
+            # XML <zoom_view/> = Zoom Full View (toolbar Fit / Ctrl+0).
+            self._ai_wait_zoom_anim()
             view = getattr(self, "_view", None)
             if view is not None:
                 view.zoom_fit()
             return {}
+        if op == "fit":
+            self._ai_wait_zoom_anim()
+            view = getattr(self, "_view", None)
+            if view is not None:
+                # <fit_view/> with C1–Cn placed matches toolbar "Zoom fit to
+                # C1–Cn" (Ctrl+R), not "Zoom Full View" (Ctrl+0).
+                if len(view._scene.cursor_times()) >= 2:
+                    view.zoom_to_cursor_range()
+                else:
+                    view.zoom_fit()
+            return {}
         if op in ("zoom_1to1", "1to1"):
+            self._ai_wait_zoom_anim()
             view = getattr(self, "_view", None)
             if view is not None and hasattr(view, "zoom_1to1"):
                 view.zoom_1to1()
+            return {}
+        if op == "zoom_in":
+            self._ai_wait_zoom_anim()
+            view = getattr(self, "_view", None)
+            if view is not None:
+                view.zoom_in()
+                view._flush_zoom()
+            return {}
+        if op == "zoom_out":
+            self._ai_wait_zoom_anim()
+            # Drop the finished QVariantAnimation so a late valueChanged
+            # (start_tpp = Fit) cannot overwrite the zoom-out scale.
+            self._ai_stop_zoom_anim()
+            view = getattr(self, "_view", None)
+            if view is not None:
+                times = view._scene.cursor_times()
+                mid = ((min(times) + max(times)) // 2) if len(times) >= 2 else None
+                view.zoom_out(center_ns=mid)
+                view._flush_zoom()
             return {}
         if op == "limit":
             on = self._demo_truthy(
@@ -5917,6 +6019,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if op == "jump_wcet":
             return self._demo_jump_wcet(
                 str(payload.get("task") or payload.get("name") or ""))
+        if op in ("move_view", "move_viewport", "pan_view"):
+            return self._demo_move_view(payload)
+        if op == "show_message":
+            text = str(payload.get("text") or payload.get("message") or "").strip()
+            self._demo_show_center_message(text)
+            return {"shown": bool(text)}
+        if op == "clear_message":
+            animate = True
+            if "animate" in payload:
+                animate = self._demo_truthy(payload.get("animate"), default=True)
+            self._demo_clear_center_message(animate=animate)
+            return {}
         if op == "panel":
             return self._demo_panel(
                 str(payload.get("name") or payload.get("tab") or "stats"))
@@ -6094,6 +6208,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "toolbar_task": "_tb_task_btn",
             "toolbar_core": "_tb_core_btn",
             "toolbar_load": "_tb_cpu_load_btn",
+            "toolbar_heatmap": "_tb_heatmap_btn",
             "toolbar_analysis": "_tb_analysis_btn",
             "toolbar_fit": "_tb_fit_btn",
             "toolbar_1to1": "_act_zoom_1to1",
@@ -6403,6 +6518,75 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "end": int(seg.end),
         }
 
+    def _demo_move_view(self, payload: dict) -> dict:
+        """Pan the timeline to a time and/or center a task row.
+
+        Missing / zero / pre-trace time → leftmost (trace start). With no
+        resolved task that also scrolls the task rows to the top. Missing
+        time with a task → that task's first segment. A task name always
+        centers its row as much as the layout allows.
+        """
+        if self._trace is None:
+            raise RuntimeError("No trace loaded")
+        view = getattr(self, "_view", None)
+        if view is None:
+            return {}
+        unit = str(payload.get("unit") or "")
+        task_raw = str(payload.get("task") or payload.get("name") or "").strip()
+        raw_time = payload.get("time", payload.get("ns", payload.get("at")))
+        empty_time = raw_time is None or (
+            isinstance(raw_time, str) and not str(raw_time).strip())
+        time_omitted = bool(payload.get("time_omitted")) or empty_time
+        mk = ""
+        resolved = ""
+        if task_raw:
+            resolved = resolve_task_key(task_raw, self._ai_task_candidates()) or ""
+            if resolved:
+                mk = _task_merge_key(resolved)
+                self._demo_expand_core_for_task(mk)
+        align_left = False
+        ns = None
+        if time_omitted:
+            if mk:
+                segs = self._trace.seg_map_by_merge_key.get(mk, [])
+                if segs:
+                    ns = min(int(s.start) for s in segs)
+                else:
+                    align_left = True
+            else:
+                align_left = True
+        else:
+            ns = int(self._demo_parse_time_value(raw_time, unit))
+            if ns <= int(self._trace.time_min):
+                align_left = True
+                ns = None
+        if align_left:
+            view.align_time_start()
+        elif ns is not None:
+            view.scroll_to_ns(int(ns))
+        if mk:
+            self._scroll_view_to_task(mk, center=True)
+        elif align_left:
+            view.align_row_start()
+        return {
+            "time": None if align_left else ns,
+            "align_left": align_left,
+            "task": resolved or task_raw,
+        }
+
+    def _demo_expand_core_for_task(self, mk: str) -> None:
+        sc = self._view._scene
+        if getattr(sc, "_view_mode", "task") != "core":
+            return
+        order = getattr(self._trace, "core_task_order", None) or {}
+        for core, tasks in order.items():
+            if any(_task_merge_key(t) == mk for t in (tasks or [])):
+                sc.set_core_expanded(core, True)
+                cpu = getattr(self, "_cpu_load_graph", None)
+                if cpu is not None and hasattr(cpu, "set_core_expanded"):
+                    cpu.set_core_expanded(core, True)
+                return
+
     def _ai_capture_gui_snapshot(self) -> dict:
         view = getattr(self, "_view", None)
         scene = view._scene if view is not None else None
@@ -6533,9 +6717,30 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         avail = max(vp_px - scene._label_width, 100)
         end_tpp = max(span / avail, float(scene._timescale_per_px_default))
 
+        gen = getattr(self, "_ai_zoom_gen", 0) + 1
+        self._ai_zoom_gen = gen
+        anim = None
+
         def _finish() -> None:
+            if getattr(self, "_ai_zoom_gen", 0) != gen:
+                return
+            self._ai_zoom_gen = gen + 1
+            if getattr(self, "_ai_zoom_anim", None) is anim:
+                self._ai_zoom_anim = None
+            view._fit_mode = False
             scene.zoom_to_range(lo, hi, vp_px)
             view.scroll_to_ns(mid)
+            # zoom_to_range() mutates scene state directly (unlike zoom_fit/
+            # _do_zoom), so the status-bar zoom label, "visible" time label,
+            # and zoom-preset combo must be told explicitly or they stay
+            # frozen at whatever they showed before this AI-driven zoom.
+            view.zoom_changed.emit(scene.timescale_per_px)
+            if anim is not None:
+                try:
+                    anim.stop()
+                except RuntimeError:
+                    pass
+                anim.deleteLater()
 
         if abs(end_tpp - start_tpp) < 1e-6:
             _finish()
@@ -6546,11 +6751,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         anim.setEndValue(1.0)
 
         def _tick(value) -> None:
+            if getattr(self, "_ai_zoom_gen", 0) != gen:
+                return
             t = max(0.0, min(1.0, float(value)))
             te = 1.0 - (1.0 - t) * (1.0 - t)
+            view._fit_mode = False
             scene._timescale_per_px = start_tpp + (end_tpp - start_tpp) * te
             scene.rebuild()
             view.scroll_to_ns(mid)
+            view.zoom_changed.emit(scene.timescale_per_px)
 
         anim.valueChanged.connect(_tick)
         anim.finished.connect(_finish)
@@ -9737,6 +9946,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         self._persist_label_width(width)
 
+    def _sync_zoom_out_enabled(self) -> None:
+        """Gray Zoom Out at Fit-to-window; enable it when zoomed in."""
+        view = getattr(self, "_view", None)
+        can = (
+            self._trace is not None
+            and view is not None
+            and not view._at_fit_zoom()
+        )
+        tip = "Zoom out  (Ctrl+-)" if can else "Already fitted to window"
+        for act in (
+            getattr(self, "_tb_zoom_out_btn", None),
+            getattr(self, "_act_zoom_out", None),
+        ):
+            if act is None:
+                continue
+            act.setEnabled(can)
+            act.setToolTip(tip)
+
     def _on_zoom_changed(self, timescale_per_px: float,
                          view: TimelineView = None) -> None:
         if view is not None and view is not self._view:
@@ -9762,7 +9989,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._zoom_scale_label.setToolTip("Current zoom level (time per pixel)")
         # Sync zoom-preset combo
         fit_idx = len(self._zoom_presets) - 1  # "Fit" is always last
-        if self._view._fit_mode:
+        if self._view._at_fit_zoom():
             self._zoom_preset_combo.setCurrentIndex(fit_idx)
         else:
             matched = False
@@ -9773,6 +10000,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     break
             if not matched:
                 self._zoom_preset_combo.setCurrentIndex(-1)  # no preset matches
+        self._sync_zoom_out_enabled()
         self._refresh_find_marker()
         self._on_timeline_viewport_changed(self._view)
 
@@ -10048,12 +10276,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             on_compare=self._remember_trace_compare,
         ), self)
 
-    def _scroll_view_to_task(self, task: str) -> None:
+    def _scroll_view_to_task(self, task: str, *, center: bool = False) -> None:
         """Scroll the orthogonal axis to bring *task*'s row/column fully into view.
 
         The time-axis scroll position is preserved; only the row (horizontal
         mode) or column (vertical mode) axis is adjusted.  Scrolls whenever
         the row/column is partially or fully outside the current viewport.
+        With *center* True (demo ``<move_view task=…/>``), always center the
+        row as much as the layout allows.
         """
         sc = self._view._scene
         orth = sc.task_orth_scene_coord(task)
@@ -10071,14 +10301,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if sc._horizontal:
             vp_lo = self._view.mapToScene(vp.topLeft()).y()
             vp_hi = self._view.mapToScene(vp.bottomLeft()).y()
-            if row_lo >= vp_lo and row_hi <= vp_hi:
+            if not center and row_lo >= vp_lo and row_hi <= vp_hi:
                 return                              # row fully visible - nothing to do
             cur = self._view.mapToScene(vp.center())
             self._view.centerOn(cur.x(), orth)
         else:
             vp_lo = self._view.mapToScene(vp.topLeft()).x()
             vp_hi = self._view.mapToScene(vp.topRight()).x()
-            if row_lo >= vp_lo and row_hi <= vp_hi:
+            if not center and row_lo >= vp_lo and row_hi <= vp_hi:
                 return                              # column fully visible - nothing to do
             cur = self._view.mapToScene(vp.center())
             self._view.centerOn(orth, cur.y())
@@ -10087,36 +10317,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Fit the view tightly between the earliest and latest cursor."""
         if self._trace is None:
             return
-        times = sorted(self._view._scene.cursor_times())
-        if len(times) < 2:
+        if not self._view.zoom_to_cursor_range():
             self.statusBar().showMessage("Place at least 2 cursors to zoom to range", 3000)
             return
-        ns_lo, ns_hi = times[0], times[-1]
-        if ns_lo == ns_hi:
-            return
-
-        # Use the real viewport dimension (not the _fit_viewport_size() floor)
-        # so that zoom_to_range and the centering formula are always consistent.
-        vp = self._view.viewport().rect()
-        is_horiz = self._view._scene._horizontal
-        vp_px = max(vp.width() if is_horiz else vp.height(), 100)
-
-        self._view._scene.zoom_to_range(ns_lo, ns_hi, vp_px)
-
-        # Position so C1 aligns with the right edge of the frozen label column
-        # and C2 aligns with the right edge of the viewport.
-        #   avail = vp_px - label_w  ->  ns_hi_scene - ns_lo_scene == avail
-        #   centerOn(x) puts scene-x at viewport pixel-centre, so:
-        #     center_scene = ns_lo_scene - label_w + vp_px / 2
-        ns_lo_scene = self._view._scene.ns_to_scene_coord(ns_lo)
-        label_w     = self._view._scene._label_width
-        center_coord = ns_lo_scene - label_w + vp_px / 2
-        cur_scene = self._view.mapToScene(vp.center())
-        if is_horiz:
-            self._view.centerOn(center_coord, cur_scene.y())
-        else:
-            self._view.centerOn(cur_scene.x(), center_coord)
-        self._view.zoom_changed.emit(self._view._scene.timescale_per_px)
         self._refresh_find_marker()
 
     # -- Navigation helpers ---------------------------------------------
@@ -10580,7 +10783,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             ]),
             ("View / Zoom", [
                 ("Ctrl++",               "Zoom in"),
-                ("Ctrl+-",               "Zoom out"),
+                ("Ctrl+-",               "Zoom out (until Fit)"),
                 ("Ctrl+0 / F",           "Fit entire trace to window"),
                 ("Ctrl+R",               "Zoom to earliest–latest cursor"),
                 ("Ctrl+,",               "Open Settings"),

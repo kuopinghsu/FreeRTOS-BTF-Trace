@@ -674,12 +674,12 @@ class TimelineScene(QGraphicsScene):
 
     def zoom(self, factor: float, center_ns: Optional[int] = None) -> None:
         new_val = self._timescale_per_px / factor
-        # Clamp: don't zoom in past _timescale_per_px_default (2 ns/px in trace
-        # units, scaled by set_trace) or zoom out past fit-to-view level.
-        # _timescale_per_px_default is always <= _timescale_per_px_fit after
-        # set_trace() rescales it, so max(default, min(val, fit)) is correct.
-        new_val = max(self._timescale_per_px_default,
-                      min(new_val, self._timescale_per_px_fit))
+        # Clamp: don't zoom in past _timescale_per_px_default (2 ns/px in
+        # trace units, scaled by set_trace). Don't zoom out past Fit-to-window
+        # (_timescale_per_px_fit). Matches Web's wheel/zoomCenter cap.
+        new_val = max(self._timescale_per_px_default, new_val)
+        if self._timescale_per_px_fit < float("inf"):
+            new_val = min(self._timescale_per_px_fit, new_val)
         if new_val == self._timescale_per_px:
             return  # already at limit - skip expensive rebuild
         self._timescale_per_px = new_val
@@ -1380,6 +1380,11 @@ class TimelineScene(QGraphicsScene):
 
         sorted_cursors = sorted(enumerate(self._cursor_times), key=lambda x: x[1])
         cursor_palette = _cursor_colors(self._is_dark_ui)
+        # Delta badges get their own row, below every cursor's own badge row -
+        # otherwise when two cursors are close together on screen (a common
+        # case: measuring a short interval), the delta's midpoint lands right
+        # on top of the later cursor's badge and both become unreadable.
+        delta_row_index = len(sorted_cursors) + 1
 
         for order, (orig_idx, ns) in enumerate(sorted_cursors):
             color = QColor(cursor_palette[orig_idx % len(cursor_palette)])
@@ -1426,9 +1431,12 @@ class TimelineScene(QGraphicsScene):
                     d_h     = QFontMetrics(font).height()
                     d_lbl.setBrush(QBrush(QColor("#000000")))
                     d_lbl.setZValue(32)
-                    # Align Δ text with the later cursor label row (C2 for C1–C2, etc.).
-                    _delta_orig_y_lbl = _orig_y
-                    _delta_orig_y_bg = _orig_y - 1
+                    # Own dedicated row below all cursor badges - never shares
+                    # a row with a cursor's own badge, even when the cursors
+                    # are close enough together that the midpoint would
+                    # otherwise land on top of it (see delta_row_index above).
+                    _delta_orig_y_lbl = 2 + delta_row_index * (th + 2)
+                    _delta_orig_y_bg = _delta_orig_y_lbl - 1
                     bg_rect = self.addRect(
                         QRectF(0, 0, d_w + 6, d_h + 2),
                         QPen(Qt.PenStyle.NoPen),
@@ -1722,6 +1730,14 @@ class TimelineScene(QGraphicsScene):
             # Orth / margin rebuild: keep the sliding-window origin; do not
             # re-anchor to _vp_ns_lo (would jump time when scrolling rows).
             pass
+        elif (self._trace is not None
+              and view is not None
+              and not getattr(view, "_fit_mode", False)
+              and self._timescale_per_px > self._timescale_per_px_fit * 1.02):
+            # Zoomed out past Fit: origin may sit before time_min (overscan
+            # so C1–C2 can sit at the viewport center). Do not re-anchor to
+            # clamped _vp_ns_lo. Fit mode must still reset to time_min.
+            pass
         elif self._trace is not None:
             self._scene_origin_ns = self._vp_ns_lo
         self.clear()
@@ -1780,6 +1796,13 @@ class TimelineScene(QGraphicsScene):
         """Visible timeline span in pixels (capped for Qt scroll-bar limits)."""
         visible_ns = max(self._vp_ns_hi - self._vp_ns_lo, 1)
         span_px = visible_ns / self._timescale_per_px
+        views = self.views()
+        if views:
+            # Zoomed out past Fit, the viewport is wider than the trace.
+            # Size the scene to the viewport so empty margin (and a cursor
+            # midpoint placed at screen center) is real scene space, not
+            # QGraphicsView letterboxing that AlignLeft cannot pan.
+            span_px = max(span_px, views[0]._timeline_viewport_px())
         return min(span_px, _MAX_SCENE_TIMELINE_PX)
 
     # ------------------------------------------------------------------

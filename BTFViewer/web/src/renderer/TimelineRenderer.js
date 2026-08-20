@@ -1684,6 +1684,12 @@ export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, ca
 
   ctx.save()
 
+  // Delta badges get their own row, below every cursor's own badge row -
+  // otherwise when two cursors are close together on screen (a common case:
+  // measuring a short interval), the delta's midpoint lands right on top of
+  // the later cursor's badge and both become unreadable.
+  const deltaRowIndex = sorted.length + 1
+
   for (let order = 0; order < sorted.length; order++) {
     const { t, slotIndex } = sorted[order]
     const x = Math.round((t - timeStart) * pxPerNs)
@@ -1718,8 +1724,9 @@ export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, ca
       const delta = Math.abs(t - prevT)
       const dStr = `Δ ${formatTime(delta, trace.timeScale, decimals)}`
       const midX = ((t + prevT) / 2 - timeStart) * pxPerNs
+      const deltaY = 2 + deltaRowIndex * (th + 2)
       if (midX >= 0 && midX <= canvasW) {
-        _drawCursorDeltaBadgeH(ctx, dStr, midX, color, canvasW, ly)
+        _drawCursorDeltaBadgeH(ctx, dStr, midX, color, canvasW, deltaY)
       }
     }
   }

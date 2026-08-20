@@ -5,34 +5,65 @@
  * the shared demo pointer overlay is used. Window / monitor shares use the
  * `cursor: 'always'` constraint instead (native pointer is already in the frame).
  *
- * Quality is tuned for UI/text screen content rather than the browser's video-call
- * defaults: native device-pixel resolution, a high explicit bitrate, a `detail`
- * content hint, and the best real-time codec available (AV1 > VP9 > VP8).
+ * Native HTML `title` tooltips are also outside the captured page; the Web app
+ * uses in-DOM tips (`domTooltip.js`) so button hover captions appear in the
+ * recording.
+ *
+ * Quality is tuned for UI/text (timeline lines, small glyphs), not video-call
+ * defaults: device-pixel capture with `resizeMode: 'none'`, VP9 over realtime
+ * AV1, a `detail` content hint, and a bitrate that scales with pixel count.
  */
 
 import { acquirePointer, releasePointer } from './demoPointer.js'
 
-// VP9 (or AV1, where MediaRecorder support it) compresses screen/UI content
-// — sharp edges, small text — much better than VP8 at the same bitrate, so
-// prefer the highest-quality codec the browser can encode in real time.
-function pickMimeType() {
-  if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return ''
+const RECORD_AUDIO_BITS_PER_SECOND = 192_000
+const RECORD_VIDEO_BITS_MIN = 24_000_000
+const RECORD_VIDEO_BITS_MAX = 80_000_000
+/** Bits per pixel per frame — high enough that thin lines and UI text stay sharp. */
+const RECORD_BITS_PER_PIXEL = 0.5
+
+/**
+ * Prefer VP9 for screen/UI. Realtime AV1 in Chromium is cheaper/softer and
+ * blocks glyphs and 1px timeline lines; VP8 is worse still.
+ */
+export function pickRecordMimeType(isTypeSupported = MediaRecorder?.isTypeSupported?.bind(MediaRecorder)) {
+  if (typeof isTypeSupported !== 'function') return ''
   const candidates = [
-    'video/webm;codecs=av01,opus',
     'video/webm;codecs=vp9,opus',
-    'video/webm;codecs=vp8,opus',
     'video/webm;codecs=vp9',
+    'video/webm;codecs=vp09,opus',
+    'video/webm;codecs=av01,opus',
+    'video/webm;codecs=vp8,opus',
     'video/webm',
     'video/mp4',
   ]
-  return candidates.find(t => MediaRecorder.isTypeSupported(t)) || ''
+  return candidates.find(t => {
+    try { return isTypeSupported(t) } catch { return false }
+  }) || ''
 }
 
-// Bitrate the browser picks with no explicit target (a couple Mbps, tuned for
-// webcam/motion video) visibly blocks fine text and thin timeline lines.
-// These are generous "near-lossless for UI content" targets instead.
-const RECORD_VIDEO_BITS_PER_SECOND = 12_000_000
-const RECORD_AUDIO_BITS_PER_SECOND = 128_000
+export function videoBitrateForCapture(width, height, fps = 30) {
+  const w = Math.max(1, Number(width) || 1920)
+  const h = Math.max(1, Number(height) || 1080)
+  const f = Math.max(1, Number(fps) || 30)
+  const bits = Math.round(w * h * f * RECORD_BITS_PER_PIXEL)
+  return Math.min(RECORD_VIDEO_BITS_MAX, Math.max(RECORD_VIDEO_BITS_MIN, bits))
+}
+
+export function displayCaptureVideoConstraints(dpr, innerWidth, innerHeight) {
+  const scale = Math.max(1, Number(dpr) || 1)
+  const width = Math.min(3840, Math.round((Number(innerWidth) || 1920) * scale))
+  const height = Math.min(2160, Math.round((Number(innerHeight) || 1080) * scale))
+  return {
+    displaySurface: 'browser',
+    cursor: 'always',
+    // Do not let the UA downscale the tab for "performance".
+    resizeMode: 'none',
+    frameRate: { ideal: 30, max: 30 },
+    width: { ideal: width, max: 3840 },
+    height: { ideal: height, max: 2160 },
+  }
+}
 
 function stampName(mime) {
   const d = new Date()
@@ -60,6 +91,56 @@ export function installCursorOverlay() {
   return () => releasePointer('record')
 }
 
+async function sharpenDisplayTrack(track, constraints) {
+  if (!track) return
+  if ('contentHint' in track) track.contentHint = 'detail'
+  if (typeof track.applyConstraints !== 'function') return
+  try {
+    await track.applyConstraints({
+      resizeMode: 'none',
+      frameRate: constraints.frameRate,
+      width: constraints.width,
+      height: constraints.height,
+    })
+  } catch {
+    try {
+      await track.applyConstraints({
+        width: constraints.width,
+        height: constraints.height,
+      })
+    } catch { /* UA may ignore size; bitrate still helps */ }
+  }
+}
+
+function createMediaRecorder(stream, mime, videoBps, audioBps) {
+  const attempts = [
+    {
+      mimeType: mime,
+      videoBitsPerSecond: videoBps,
+      audioBitsPerSecond: audioBps,
+      bitsPerSecond: videoBps + audioBps,
+    },
+    {
+      mimeType: mime,
+      videoBitsPerSecond: videoBps,
+      audioBitsPerSecond: audioBps,
+    },
+    mime ? { mimeType: mime } : {},
+    {},
+  ]
+  let lastErr
+  for (const opts of attempts) {
+    const clean = { ...opts }
+    if (!clean.mimeType) delete clean.mimeType
+    try {
+      return new MediaRecorder(stream, clean)
+    } catch (err) {
+      lastErr = err
+    }
+  }
+  throw lastErr || new Error('MediaRecorder is not available')
+}
+
 /**
  * @returns {Promise<{ stop: () => Promise<void>, stream: MediaStream }>}
  */
@@ -67,36 +148,30 @@ export async function startDemoRecording() {
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) {
     throw new Error('Screen recording is not supported in this browser')
   }
-  // Request the tab's actual device-pixel size (not the CSS pixel size) so
-  // HiDPI/Retina displays aren't captured blurrier than the screen itself.
   const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1
-  const idealWidth = Math.min(3840, Math.round((window.innerWidth || 1920) * dpr))
-  const idealHeight = Math.min(2160, Math.round((window.innerHeight || 1080) * dpr))
+  const videoConstraints = displayCaptureVideoConstraints(
+    dpr,
+    window.innerWidth,
+    window.innerHeight,
+  )
   const stream = await navigator.mediaDevices.getDisplayMedia({
-    video: {
-      displaySurface: 'browser',
-      frameRate: 30,
-      width: { ideal: idealWidth },
-      height: { ideal: idealHeight },
-      cursor: 'always',
-    },
+    video: videoConstraints,
     audio: true,
     preferCurrentTab: true,
     selfBrowserSurface: 'include',
     surfaceSwitching: 'exclude',
     systemAudio: 'include',
   })
-  // 'detail' tells the encoder to favor sharpness over motion smoothness —
-  // right trade-off for a mostly-static UI full of small text and thin lines.
   const videoTrack = stream.getVideoTracks()[0]
-  if (videoTrack && 'contentHint' in videoTrack) videoTrack.contentHint = 'detail'
-  const mime = pickMimeType()
-  const recOptions = {
-    videoBitsPerSecond: RECORD_VIDEO_BITS_PER_SECOND,
-    audioBitsPerSecond: RECORD_AUDIO_BITS_PER_SECOND,
-  }
-  if (mime) recOptions.mimeType = mime
-  const rec = new MediaRecorder(stream, recOptions)
+  await sharpenDisplayTrack(videoTrack, videoConstraints)
+  const settings = videoTrack?.getSettings?.() || {}
+  const videoBps = videoBitrateForCapture(
+    settings.width || videoConstraints.width.ideal,
+    settings.height || videoConstraints.height.ideal,
+    settings.frameRate || 30,
+  )
+  const mime = pickRecordMimeType()
+  const rec = createMediaRecorder(stream, mime, videoBps, RECORD_AUDIO_BITS_PER_SECOND)
   const chunks = []
   rec.ondataavailable = (e) => {
     if (e.data && e.data.size) chunks.push(e.data)
@@ -106,7 +181,7 @@ export async function startDemoRecording() {
   rec.onstop = () => settle()
   rec.onerror = () => settle()
 
-  const surface = stream.getVideoTracks()[0]?.getSettings?.()?.displaySurface
+  const surface = videoTrack?.getSettings?.()?.displaySurface
   const removeOverlay = displaySurfaceNeedsCursorOverlay(surface)
     ? installCursorOverlay()
     : () => {}
@@ -124,7 +199,7 @@ export async function startDemoRecording() {
     if (blob.size) downloadBlob(blob, stampName(type))
   }
 
-  stream.getVideoTracks()[0]?.addEventListener('ended', () => { void stop() })
+  videoTrack?.addEventListener('ended', () => { void stop() })
   rec.start(1000)
 
   return { stop, stream }

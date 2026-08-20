@@ -39,7 +39,7 @@
 
   <targets>
     <!-- x/y are fractions of the detected BTFViewer window (0..1), not the screen -->
-    <point name="timeline" x="0.32" y="0.30"/>
+    <point name="timeline" x="0.19" y="0.30"/>
     <point name="timeline_bar" x="0.47" y="0.78"/>
     <point name="status" x="0.35" y="0.965"/>
     <point name="stats_panel" x="0.84" y="0.20"/>
@@ -56,6 +56,7 @@
     <point name="toolbar_core" x="0.40" y="0.055"/>
     <point name="toolbar_task" x="0.37" y="0.055"/>
     <point name="toolbar_load" x="0.43" y="0.055"/>
+    <point name="toolbar_heatmap" x="0.48" y="0.055"/>
     <point name="toolbar_find" x="0.52" y="0.055"/>
     <point name="limit_checkbox" x="0.82" y="0.16"/>
     <point name="stats_export_csv" x="0.88" y="0.92"/>
@@ -100,18 +101,24 @@
       <clear_cursors/>
       <clear_bookmarks/>
       <clear_annotations/>
+      <clear_highlight/>
+      <view_mode mode="task"/>
+      <zoom_view/>
+      <move_view time="0"/>
       <wait seconds="1" why="title hold"/>
       <audio file="${XML_DIR}/voice/01_title.mp3"/>
-      <wait seconds="12"/>
+      <show_message text="Welcome to BTFViewer Demo" seconds="3"/>
+      <wait seconds="9"/>
       <move target="stats_summary"/>
       <wait seconds="2"/>
+      <show_message text="Span: 2.421 / Tasks: 163 / Core: 8" seconds="10"/>
     </step>
 
     <step id="2" title="Open example-8cores" tags="intro">
       <focus/>
       <audio file="${XML_DIR}/voice/02_open.mp3"/>
       <move target="toolbar_open"/>
-      <wait seconds="0.25"/>
+      <show_message text="Open File" seconds="3"/>
       <macro ref="fit"/>
       <wait seconds="2" why="fit after open"/>
     </step>
@@ -119,9 +126,12 @@
     <step id="3" title="Timeline canvas" tags="ui">
       <focus/>
       <audio file="${XML_DIR}/voice/03_timeline.mp3"/>
-      <move target="timeline" duration="0.6"/>
+      <zoom_view/>
+      <zoom_in/>
+      <zoom_in/>
+      <move target="timeline" duration="3"/>
       <wait seconds="2.0"/>
-      <move target="timeline_bar" duration="0.5"/>
+      <move target="timeline_bar" duration="3"/>
       <wait seconds="9.0" why="hover tooltip"/>
       <move target="status" duration="0.5"/>
       <wait seconds="0.6"/>
@@ -132,19 +142,23 @@
       <view_mode mode="task"/>
       <audio file="${XML_DIR}/voice/04_toolbar.mp3"/>
       <wait seconds="5.0" why="voice: icons H/V zoom to Task/Core"/>
-      <wait seconds="5.0"/>
+      <wait seconds="2.5"/>
+      <move target="toolbar_fit"/>
+      <wait seconds="2.5"/>
       <move target="toolbar_task"/>
       <wait seconds="2.0" why="voice: Task view"/>
       <move target="toolbar_core"/>
       <wait seconds="1.0" why="voice: Core view"/>
       <move target="toolbar_load"/>
-      <wait seconds="5.25"/>
+      <wait seconds="2.25"/>
+      <move target="toolbar_heatmap"/>
+      <wait seconds="3.00"/>
       <cpu_load on="true"/>
       <wait seconds="5.2" why="voice: Load Heatmap Chord into Analysis"/>
       <move target="toolbar_analysis"/>
       <wait seconds="5" why="voice: Analysis triage card"/>
+      <wait seconds="3.25"/>
       <move target="stats_tab"/>
-      <wait seconds="0.25"/>
       <panel name="stats"/>
       <wait seconds="2.5" why="voice: right panel tabs"/>
       <move target="find_tab"/>
@@ -169,10 +183,12 @@
       <move target="toolbar_core"/>
       <wait seconds="0.25"/>
       <view_mode mode="core"/>
+      <show_message text="Core View" seconds="3"/>
       <wait seconds="3.0" why="voice: Core view"/>
       <move target="toolbar_task"/>
       <wait seconds="0.25"/>
       <view_mode mode="task"/>
+      <show_message text="Task View" seconds="3"/>
       <wait seconds="1.5" why="voice: Task view"/>
       <wait_audio/>
     </step>
@@ -186,7 +202,7 @@
       <wait seconds="1.0"/>
       <move target="toolbar_fit"/>
       <wait seconds="0.25"/>
-      <fit_view/>
+      <zoom_view/>
       <wait seconds="1.0"/>
     </step>
 
@@ -233,10 +249,14 @@
 
     <step id="10" title="Cursors Limit C1-Cn" tags="ladder">
       <focus/>
-      <audio file="${XML_DIR}/voice/12_cursors.mp3"/>
-      <fit_view/>
+      <audio file="${XML_DIR}/voice/10_cursors.mp3"/>
+      <zoom_view/>
       <clear_cursors/>
       <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
+      <fit_view/>
+      <zoom_out/>
+      <clear_highlight/>
+      <tab_nav/>
       <wait seconds="1.5"/>
       <wait_audio/>
       <clear_cursors/>
@@ -246,7 +266,7 @@
       <focus/>
       <panel name="stats"/>
       <stats_section id="cores" expand="true" collapse_others="true"/>
-      <audio file="${XML_DIR}/voice/10_balance.mp3"/>
+      <audio file="${XML_DIR}/voice/11_balance.mp3"/>
       <wait_audio/>
       <stats_reset/>
     </step>
@@ -255,7 +275,7 @@
       <focus/>
       <panel name="stats"/>
       <stats_section id="tasks,exec" expand="true" collapse_others="true" scroll="exec"/>
-      <audio file="${XML_DIR}/voice/11_wcet.mp3"/>
+      <audio file="${XML_DIR}/voice/12_wcet.mp3"/>
       <highlight task="CS[27]"/>
       <wait seconds="0.8"/>
       <jump_wcet task="CS[27]"/>
@@ -266,7 +286,7 @@
 
     <step id="13" title="Blocking Inheritance" tags="ladder">
       <focus/>
-      <fit_view/>
+      <zoom_view/>
       <clear_cursors/>
       <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
       <panel name="stats"/>
@@ -290,7 +310,7 @@
       <audio file="${XML_DIR}/voice/14_migrations.mp3"/>
       <limit on="false"/>
       <clear_cursors/>
-      <fit_view/>
+      <zoom_view/>
       <panel name="stats"/>
       <stats_section id="migrations,sync,queue" expand="true" collapse_others="true" scroll="migrations"/>
       <highlight task="CS[18]"/>
@@ -359,7 +379,7 @@
     <step id="21" title="AI Explain region" tags="ai">
       <focus/>
       <audio file="${XML_DIR}/voice/21_ai_explain.mp3"/>
-      <fit_view/>
+      <zoom_view/>
       <clear_cursors/>
       <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
       <panel name="ai"/>

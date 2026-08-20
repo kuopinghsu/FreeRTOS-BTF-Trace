@@ -2,7 +2,8 @@
  * Synthetic pointer overlay for web demo / tab recording.
  *
  * The browser cannot move the OS cursor. This paints an in-page arrow, animates
- * it to demo XML targets, and dispatches hover events so timeline tooltips track.
+ * it to demo XML targets, and dispatches hover events so timeline tooltips track
+ * and toolbar `title` tips (in-DOM) follow the overlay.
  * Recording reuses the same overlay (follow-mouse) so tab capture includes it.
  * A parked demo overlay hides as soon as the user moves the real mouse.
  */
@@ -84,13 +85,23 @@ function showOverlay() {
   applyTransform()
 }
 
+let lastHoverEl = null
+
+function isOverlayNode(n) {
+  return !!(n?.classList?.contains?.('btf-demo-cursor')
+    || n?.classList?.contains?.('btf-dom-tooltip'))
+}
+
 export function dispatchHoverAt(x, y) {
   if (typeof document === 'undefined') return
   const stack = typeof document.elementsFromPoint === 'function'
     ? document.elementsFromPoint(x, y)
     : [document.elementFromPoint(x, y)].filter(Boolean)
   const canvas = stack.find(n => n && n.tagName === 'CANVAS')
-  const target = canvas || stack[0]
+  const hit = stack.find(n => n && !isOverlayNode(n)) || stack[0]
+  // Prefer canvas for timeline tooltips; otherwise the top real element
+  // (toolbar buttons) so in-DOM title tips track the demo pointer.
+  const target = canvas || hit
   if (!target) return
   const opts = {
     bubbles: true,
@@ -98,6 +109,33 @@ export function dispatchHoverAt(x, y) {
     clientX: x,
     clientY: y,
     view: typeof window !== 'undefined' ? window : undefined,
+  }
+  if (hit !== lastHoverEl) {
+    const leaveOpts = { ...opts, relatedTarget: hit || undefined }
+    const enterOpts = { ...opts, relatedTarget: lastHoverEl || undefined }
+    if (lastHoverEl) {
+      try {
+        lastHoverEl.dispatchEvent(new PointerEvent('pointerout', {
+          ...leaveOpts, pointerId: 1, pointerType: 'mouse',
+        }))
+      } catch { /* jsdom */ }
+      lastHoverEl.dispatchEvent(new MouseEvent('mouseout', leaveOpts))
+      lastHoverEl.dispatchEvent(new MouseEvent('mouseleave', {
+        ...leaveOpts, bubbles: false,
+      }))
+    }
+    if (hit) {
+      try {
+        hit.dispatchEvent(new PointerEvent('pointerover', {
+          ...enterOpts, pointerId: 1, pointerType: 'mouse',
+        }))
+      } catch { /* jsdom */ }
+      hit.dispatchEvent(new MouseEvent('mouseover', enterOpts))
+      hit.dispatchEvent(new MouseEvent('mouseenter', {
+        ...enterOpts, bubbles: false,
+      }))
+    }
+    lastHoverEl = hit || null
   }
   try {
     target.dispatchEvent(new PointerEvent('pointermove', {

@@ -9296,12 +9296,12 @@ class TimelineScene(QGraphicsScene):
 
     def zoom(self, factor: float, center_ns: Optional[int] = None) -> None:
         new_val = self._timescale_per_px / factor
-        # Clamp: don't zoom in past _timescale_per_px_default (2 ns/px in trace
-        # units, scaled by set_trace) or zoom out past fit-to-view level.
-        # _timescale_per_px_default is always <= _timescale_per_px_fit after
-        # set_trace() rescales it, so max(default, min(val, fit)) is correct.
-        new_val = max(self._timescale_per_px_default,
-                      min(new_val, self._timescale_per_px_fit))
+        # Clamp: don't zoom in past _timescale_per_px_default (2 ns/px in
+        # trace units, scaled by set_trace). Don't zoom out past Fit-to-window
+        # (_timescale_per_px_fit). Matches Web's wheel/zoomCenter cap.
+        new_val = max(self._timescale_per_px_default, new_val)
+        if self._timescale_per_px_fit < float("inf"):
+            new_val = min(self._timescale_per_px_fit, new_val)
         if new_val == self._timescale_per_px:
             return  # already at limit - skip expensive rebuild
         self._timescale_per_px = new_val
@@ -10002,6 +10002,11 @@ class TimelineScene(QGraphicsScene):
 
         sorted_cursors = sorted(enumerate(self._cursor_times), key=lambda x: x[1])
         cursor_palette = _cursor_colors(self._is_dark_ui)
+        # Delta badges get their own row, below every cursor's own badge row -
+        # otherwise when two cursors are close together on screen (a common
+        # case: measuring a short interval), the delta's midpoint lands right
+        # on top of the later cursor's badge and both become unreadable.
+        delta_row_index = len(sorted_cursors) + 1
 
         for order, (orig_idx, ns) in enumerate(sorted_cursors):
             color = QColor(cursor_palette[orig_idx % len(cursor_palette)])
@@ -10048,9 +10053,12 @@ class TimelineScene(QGraphicsScene):
                     d_h     = QFontMetrics(font).height()
                     d_lbl.setBrush(QBrush(QColor("#000000")))
                     d_lbl.setZValue(32)
-                    # Align Δ text with the later cursor label row (C2 for C1–C2, etc.).
-                    _delta_orig_y_lbl = _orig_y
-                    _delta_orig_y_bg = _orig_y - 1
+                    # Own dedicated row below all cursor badges - never shares
+                    # a row with a cursor's own badge, even when the cursors
+                    # are close enough together that the midpoint would
+                    # otherwise land on top of it (see delta_row_index above).
+                    _delta_orig_y_lbl = 2 + delta_row_index * (th + 2)
+                    _delta_orig_y_bg = _delta_orig_y_lbl - 1
                     bg_rect = self.addRect(
                         QRectF(0, 0, d_w + 6, d_h + 2),
                         QPen(Qt.PenStyle.NoPen),
@@ -10344,6 +10352,14 @@ class TimelineScene(QGraphicsScene):
             # Orth / margin rebuild: keep the sliding-window origin; do not
             # re-anchor to _vp_ns_lo (would jump time when scrolling rows).
             pass
+        elif (self._trace is not None
+              and view is not None
+              and not getattr(view, "_fit_mode", False)
+              and self._timescale_per_px > self._timescale_per_px_fit * 1.02):
+            # Zoomed out past Fit: origin may sit before time_min (overscan
+            # so C1–C2 can sit at the viewport center). Do not re-anchor to
+            # clamped _vp_ns_lo. Fit mode must still reset to time_min.
+            pass
         elif self._trace is not None:
             self._scene_origin_ns = self._vp_ns_lo
         self.clear()
@@ -10402,6 +10418,13 @@ class TimelineScene(QGraphicsScene):
         """Visible timeline span in pixels (capped for Qt scroll-bar limits)."""
         visible_ns = max(self._vp_ns_hi - self._vp_ns_lo, 1)
         span_px = visible_ns / self._timescale_per_px
+        views = self.views()
+        if views:
+            # Zoomed out past Fit, the viewport is wider than the trace.
+            # Size the scene to the viewport so empty margin (and a cursor
+            # midpoint placed at screen center) is real scene space, not
+            # QGraphicsView letterboxing that AlignLeft cannot pan.
+            span_px = max(span_px, views[0]._timeline_viewport_px())
         return min(span_px, _MAX_SCENE_TIMELINE_PX)
 
     # ------------------------------------------------------------------
@@ -14182,6 +14205,13 @@ def _event_view_pos(event):
     return event.pos()
 
 
+# One toolbar/keyboard Zoom In / Zoom Out step multiplies the visible time
+# span by this much — kept in lockstep with Web's onZoom(0.7) / onZoom(1.43)
+# (App.vue's Ctrl+=/Ctrl+- handlers), not the old desktop-only 2x/0.5x.
+_ZOOM_STEP_IN_SPAN = 0.7
+_ZOOM_STEP_OUT_SPAN = 1.43
+
+
 class TimelineView(QGraphicsView):
     """Pan + zoom QGraphicsView wrapping a TimelineScene."""
 
@@ -14285,10 +14315,17 @@ class TimelineView(QGraphicsView):
         self._scene.scene_rebuilt.connect(self._sync_timeline_column_clip)
         self._scene.scene_rebuilt.connect(self._update_label_grip_geometry)
 
+        # Optional hook (set by MainWindow) fired at the start of any manual
+        # zoom (toolbar/keyboard/wheel/pinch/Fit/1:1/demo op). Lets the AI
+        # assistant's animated zoom_to_range cancel itself instead of
+        # clobbering the manual zoom a moment later.
+        self._on_manual_zoom: Optional[Callable[[], None]] = None
+
         # Debounce zoom: accumulate factor across rapid wheel events and
         # fire a single rebuild once the user stops scrolling.
         self._zoom_accum: float = 1.0
         self._zoom_anchor_pos: Optional[QPoint] = None
+        self._zoom_anchor_ns: Optional[int] = None
         self._zoom_timer = QTimer(self)
         self._zoom_timer.setSingleShot(True)
         self._zoom_timer.setInterval(60)   # tuned in load_trace
@@ -15200,16 +15237,36 @@ class TimelineView(QGraphicsView):
         )
         return self._fit_mode or at_fit_limit
 
+    def _at_fit_zoom(self) -> bool:
+        """True when Zoom Out would not change the scale (already Fit-to-window)."""
+        if self._scene._trace is None:
+            return True
+        if self._fit_mode:
+            return True
+        fit = self._scene._timescale_per_px_fit
+        if not math.isfinite(fit) or fit <= 0:
+            return False
+        return self._scene._timescale_per_px >= fit * 0.999
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def _fit_viewport_size(self) -> int:
-        """Return the viewport dimension relevant to the time axis for fit calculations."""
+        """Return the viewport dimension relevant to the time axis for fit
+        calculations. The 800/600 fallback only applies when the widget
+        hasn't been laid out yet (viewport size is still ~0, e.g. before the
+        first show()) - once realized, the real (even if narrow) viewport
+        size must be used. Flooring an already-known, narrower size to 800
+        made zoom_fit() compute a scale for more pixels than actually exist,
+        so Fit silently stopped short of the trace's true end in any window
+        narrower than 800px (matches Web, which has no such floor)."""
         if self._scene._horizontal:
-            return max(self.viewport().width(), 800)
+            w = self.viewport().width()
+            return w if w > 50 else 800
         else:
-            return max(self.viewport().height(), 600)
+            h = self.viewport().height()
+            return h if h > 50 else 600
 
     def _time_axis_viewport_px(self) -> int:
         """Actual time-axis pixel extent of the viewport (no fit-time floor)."""
@@ -15323,6 +15380,28 @@ class TimelineView(QGraphicsView):
         self._navigate_time_to_ns(ns)
         self.viewport().update()
 
+    def align_time_start(self) -> None:
+        """Pin the trace start to the left of the time plot (keep zoom)."""
+        if self._scene._trace is None:
+            return
+        ns = int(self._scene._trace.time_min)
+        self.scroll_to_ns(ns)
+        if self._virtual_time_scroll_active:
+            self._apply_virt_time_scroll_px(self._virt_px_from_ns_lo(float(ns)))
+        else:
+            bar = self._native_time_axis_bar()
+            bar.setValue(bar.minimum())
+        self.viewport().update()
+        self.viewport_changed.emit()
+
+    def align_row_start(self) -> None:
+        """Pin the first task row/column to the top (or left in vertical mode)."""
+        bar = (self.verticalScrollBar() if self._scene._horizontal
+               else self.horizontalScrollBar())
+        bar.setValue(bar.minimum())
+        self.viewport().update()
+        self.viewport_changed.emit()
+
     def set_horizontal(self, horizontal: bool) -> None:
         trace = self._scene._trace
         old_h = self._scene._horizontal
@@ -15407,25 +15486,46 @@ class TimelineView(QGraphicsView):
     def set_max_cursors(self, n: int) -> None:
         self._scene.set_max_cursors(n)
 
-    def zoom_in(self) -> None:
+    def _fire_manual_zoom_hook(self) -> None:
+        """Let an owner (MainWindow) cancel an in-flight AI zoom_to_range
+        animation before a manual zoom action (toolbar/keyboard/wheel/pinch/
+        Fit/1:1/demo op) takes effect — otherwise the animation's next tick
+        can silently overwrite the manual zoom a moment later."""
+        hook = self._on_manual_zoom
+        if hook is not None:
+            hook()
+
+    def zoom_in(self, center_ns: Optional[int] = None) -> None:
+        self._fire_manual_zoom_hook()
         self._fit_mode = False
-        self._zoom_accum *= 2.0
-        if self._zoom_anchor_pos is None:
+        self._zoom_accum *= 1.0 / _ZOOM_STEP_IN_SPAN
+        if center_ns is not None:
+            self._zoom_anchor_ns = int(center_ns)
+            self._zoom_anchor_pos = self.viewport().rect().center()
+        elif self._zoom_anchor_pos is None:
             self._zoom_anchor_pos = self.viewport().rect().center()
         self._zoom_timer.start()
 
-    def zoom_out(self) -> None:
+    def zoom_out(self, center_ns: Optional[int] = None) -> None:
+        if self._at_fit_zoom():
+            return
+        self._fire_manual_zoom_hook()
         self._fit_mode = False
-        self._zoom_accum *= 0.5
-        if self._zoom_anchor_pos is None:
+        self._zoom_accum *= 1.0 / _ZOOM_STEP_OUT_SPAN
+        if center_ns is not None:
+            self._zoom_anchor_ns = int(center_ns)
+            self._zoom_anchor_pos = self.viewport().rect().center()
+        elif self._zoom_anchor_pos is None:
             self._zoom_anchor_pos = self.viewport().rect().center()
         self._zoom_timer.start()
 
     def _cancel_pending_zoom(self) -> None:
         """Drop coalesced wheel/toolbar zoom so it cannot undo Fit / 1:1."""
+        self._fire_manual_zoom_hook()
         self._zoom_timer.stop()
         self._zoom_accum = 1.0
         self._zoom_anchor_pos = None
+        self._zoom_anchor_ns = None
         self._pinch_accum = 1.0
 
     def _prepare_full_trace_window(self) -> None:
@@ -15445,10 +15545,51 @@ class TimelineView(QGraphicsView):
             sc._scene_origin_ns = trace.time_min
             sc._ns_range_hint = (trace.time_min, trace.time_max)
 
+    def zoom_to_cursor_range(self) -> bool:
+        """Fit C1–Cn to the timeline (same as toolbar Range / Ctrl+R).
+
+        Returns False when fewer than two cursors are placed.
+        """
+        times = sorted(self._scene.cursor_times())
+        if len(times) < 2:
+            return False
+        ns_lo, ns_hi = times[0], times[-1]
+        if ns_lo == ns_hi:
+            return False
+        self._cancel_pending_zoom()
+        self._fit_mode = False
+        vp = self.viewport().rect()
+        is_horiz = self._scene._horizontal
+        vp_px = max(vp.width() if is_horiz else vp.height(), 100)
+        self._scene.zoom_to_range(ns_lo, ns_hi, vp_px)
+        ns_lo_scene = self._scene.ns_to_scene_coord(ns_lo)
+        label_w = self._scene._label_width
+        center_coord = ns_lo_scene - label_w + vp_px / 2
+        cur_scene = self.mapToScene(vp.center())
+        if is_horiz:
+            self.centerOn(center_coord, cur_scene.y())
+        else:
+            self.centerOn(cur_scene.x(), center_coord)
+        self.resetTransform()
+        self.zoom_changed.emit(self._scene.timescale_per_px)
+        return True
+
     def zoom_fit(self) -> None:
+        """Fit the full trace to the window (toolbar Fit / Ctrl+0).
+
+        Independent of placed cursors — Zoom fit to C1–Cn is
+        ``zoom_to_cursor_range()`` (Ctrl+R).
+        """
         self._cancel_pending_zoom()
         self._fit_mode = True
         self._prepare_full_trace_window()
+        # Do not processEvents() here: that pumps QVariantAnimation timers and
+        # can run an in-flight <cursors zoom="true"/> range-zoom to completion
+        # *inside* this call, after which fit_to_width() overwrites it (the
+        # 2.7ms/px / 4.5ms/px bug vs Web, which never drains rAF inside Fit).
+        lay = self.window().layout() if self.window() is not None else None
+        if lay is not None:
+            lay.activate()
         self._scene.fit_to_width(self._fit_viewport_size())
         # Ensure the view transform is identity: all zoom is handled at the
         # scene level (timescale_per_px) so there must be no view-level scale active.
@@ -15628,11 +15769,64 @@ class TimelineView(QGraphicsView):
                 idx -= 1
         return None
 
+    def _earliest_marker_in_viewport(self) -> Optional[int]:
+        """Earliest cursor / bookmark / annotation time visible in the current
+        viewport's time-axis range, or ``None`` if none are visible there."""
+        sc = self._scene
+        if sc._trace is None:
+            return None
+        ns_lo, ns_hi = self._visible_time_ns_range()
+        times = [t for t in sc.cursor_times() if ns_lo <= t <= ns_hi]
+        times.extend(ns for ns, _label, _color, _kind, _id in sc._mark_data
+                     if ns_lo <= ns <= ns_hi)
+        return min(times) if times else None
+
+    def _core_at_viewport_center(self, core_names: List[str],
+                                  core_tasks: dict) -> Optional[str]:
+        """Return the core whose row/column block currently occupies the
+        viewport's orthogonal center, in Core view (mirrors the web app's
+        ``getCoreAtViewportCenter``). ``core_names``/``core_tasks`` should
+        already reflect any active task-name filter."""
+        sc = self._scene
+        if not core_names:
+            return None
+
+        vp_center = self.mapToScene(self.viewport().rect().center())
+        center_orth = vp_center.y() if sc._horizontal else vp_center.x()
+
+        stride = (sc._row_height + sc._row_gap) if sc._horizontal else max(
+            sc._row_height + sc._row_gap, 26)
+        base = RULER_HEIGHT if sc._horizontal else RULER_WIDTH
+
+        idx = 0
+        spans = []
+        for core in core_names:
+            start_idx = idx
+            idx += 1  # core summary row/column
+            if sc._core_is_expanded(core):
+                idx += len(core_tasks.get(core, []))
+            spans.append((core, base + start_idx * stride, base + idx * stride))
+
+        for core, top, bottom in spans:
+            if top <= center_orth < bottom:
+                return core
+        return spans[0][0] if center_orth < spans[0][1] else spans[-1][0]
+
     def _cycle_highlighted_task(self, forward: bool) -> bool:
         """Select next/previous task by segment time order.
 
         Task view: global timeline order.
         Core view: timeline order within the selected core.
+
+        This only decides the *first stop*: when nothing is selected yet,
+        Tab/Shift+Tab jump to the first segment at or after the earliest
+        cursor / bookmark / annotation visible in the current viewport (in
+        that priority order), or - if none of those are visible - the
+        first segment at or after the viewport's start edge (both keys
+        behave the same here, since there is no current segment to move
+        away from). Once a task is selected, every further Tab/Shift+Tab
+        press keeps cycling to the next/previous *task* exactly as before
+        (same-task repeats are still skipped).
         """
         sc = self._scene
         tr = sc._trace
@@ -15646,7 +15840,15 @@ class TimelineView(QGraphicsView):
         target_ns: Optional[int] = None
         target_seg_end: Optional[int] = None
         cur_task = sc._locked_task
-        ref_ns = sc._locked_ns if sc._locked_ns is not None else self.view_center_ns()
+        pick_forward = forward
+        if cur_task is not None:
+            ref_ns = sc._locked_ns if sc._locked_ns is not None else self.view_center_ns()
+        else:
+            anchor_ns = self._earliest_marker_in_viewport()
+            if anchor_ns is None:
+                anchor_ns, _hi = self._visible_time_ns_range()
+            ref_ns = anchor_ns - 1
+            pick_forward = True
 
         if sc._view_mode == "core":
             core_names = tr.core_names
@@ -15669,7 +15871,8 @@ class TimelineView(QGraphicsView):
                         target_core = _c
                         break
             if target_core is None:
-                target_core = core_names[0 if forward else -1]
+                target_core = (self._core_at_viewport_center(core_names, core_tasks)
+                                or core_names[0 if forward else -1])
 
             allowed_mk = {_task_merge_key(raw) for raw in core_tasks.get(target_core, [])}
             if not allowed_mk:
@@ -15678,7 +15881,7 @@ class TimelineView(QGraphicsView):
             events = self._seg_nav_by_core.get(target_core, [])
             starts = self._seg_nav_by_core_starts.get(target_core, [])
             picked = self._pick_next_task_by_time(
-                events, starts, ref_ns, cur_task, forward,
+                events, starts, ref_ns, cur_task, pick_forward,
                 lambda mk: mk in allowed_mk and sc._task_merge_key_matches_filter(mk),
             )
             if picked is None:
@@ -15688,7 +15891,7 @@ class TimelineView(QGraphicsView):
             events = self._seg_nav_all
             starts = self._seg_nav_all_starts
             picked = self._pick_next_task_by_time(
-                events, starts, ref_ns, cur_task, forward,
+                events, starts, ref_ns, cur_task, pick_forward,
                 lambda mk: sc._task_merge_key_matches_filter(mk),
             )
             if picked is None:
@@ -16646,6 +16849,9 @@ class TimelineView(QGraphicsView):
         factor = _native_gesture_zoom_factor(event)
         if factor <= 0.1:
             return
+        if factor < 1.0 and self._at_fit_zoom():
+            return
+        self._fire_manual_zoom_hook()
         self._fit_mode = False
         self._do_zoom(factor, _native_gesture_local_pos(event))
 
@@ -16678,6 +16884,11 @@ class TimelineView(QGraphicsView):
             factor = 1.15 if angle > 0 else 1 / 1.15
             # Accumulate factor; record anchor from the *first* event in the
             # batch so the zoom stays anchored at the initial cursor position.
+            if factor < 1.0 and self._at_fit_zoom():
+                event.accept()
+                return
+            if self._zoom_accum == 1.0 and self._zoom_anchor_pos is None:
+                self._fire_manual_zoom_hook()
             self._zoom_accum *= factor
             if self._zoom_anchor_pos is None:
                 self._zoom_anchor_pos = event.position().toPoint()
@@ -16705,11 +16916,18 @@ class TimelineView(QGraphicsView):
         """Called by the debounce timer: apply all accumulated wheel-zoom at once."""
         factor = self._zoom_accum
         anchor = self._zoom_anchor_pos
+        center_ns = self._zoom_anchor_ns
         self._zoom_accum       = 1.0
         self._zoom_anchor_pos  = None
+        self._zoom_anchor_ns   = None
         # Fit/1:1 cancel the timer; ignore a stale timeout that already queued.
-        if factor != 1.0 and not self._fit_mode:
-            self._do_zoom(factor, anchor)
+        # Zoom-out is a no-op at Fit-to-window (toolbar button is grayed).
+        if factor == 1.0:
+            return
+        if factor < 1.0 and self._at_fit_zoom():
+            return
+        if not self._fit_mode or center_ns is not None:
+            self._do_zoom(factor, anchor, center_ns=center_ns)
 
     def eventFilter(self, obj, e) -> bool:
         """Intercept native pinch-zoom gestures delivered to the viewport."""
@@ -16741,8 +16959,16 @@ class TimelineView(QGraphicsView):
     # Zoom internals
     # ------------------------------------------------------------------
 
-    def _do_zoom(self, factor: float, vp_pos=None) -> None:
+    def _do_zoom(self, factor: float, vp_pos=None, center_ns=None) -> None:
         """Zoom by factor, keeping vp_pos (viewport coords) fixed on screen."""
+        if factor < 1.0:
+            fit = self._scene._timescale_per_px_fit
+            if math.isfinite(fit) and fit > 0:
+                target = self._scene._timescale_per_px / factor
+                if self._at_fit_zoom() or target >= fit * 0.999:
+                    if not self._fit_mode:
+                        self.zoom_fit()
+                    return
         self._fit_mode = False   # any manual zoom leaves fit mode
         if vp_pos is None:
             vp_pos = self.viewport().rect().center()
@@ -16750,31 +16976,39 @@ class TimelineView(QGraphicsView):
         # Convert anchor viewport position to ns coordinate
         scene_pt = self.mapToScene(vp_pos)
         center_coord = scene_pt.x() if is_horiz else scene_pt.y()
-        center_ns = self._scene.scene_to_ns(center_coord)
+        if center_ns is not None:
+            anchor_ns = int(center_ns)
+        else:
+            # Unclamped: after zoom-out past Fit the visual center can sit
+            # in empty margin before time_min / after time_max.
+            sc = self._scene
+            anchor_ns = int(
+                (center_coord - sc._label_width) * sc._timescale_per_px
+            ) + sc._scene_origin_ns
         # Compute the viewport-center offset from the anchor
         vp_center = self.viewport().rect().center()
 
         prev_timescale_per_px = self._scene.timescale_per_px
         trace = self._scene._trace
-        anchor_ns = center_ns
         if trace is not None:
             target_timescale = prev_timescale_per_px / factor
-            target_timescale = max(
-                self._scene._timescale_per_px_default,
-                min(target_timescale, self._scene._timescale_per_px_fit),
-            )
+            # Zoom in is capped at the 1:1 floor; zoom out is capped at
+            # Fit-to-window. Matches Web (wheel already min()s to full span).
+            target_timescale = max(self._scene._timescale_per_px_default, target_timescale)
+            fit = self._scene._timescale_per_px_fit
+            if math.isfinite(fit):
+                target_timescale = min(fit, target_timescale)
             if target_timescale != prev_timescale_per_px:
                 anchor_off_px = self._timeline_offset_px(vp_pos)
                 anchor_left_ns = int(anchor_ns - anchor_off_px * target_timescale)
-                anchor_left_ns = max(trace.time_min, min(trace.time_max, anchor_left_ns))
                 vis_ns = max(1, int(self._timeline_viewport_px() * target_timescale))
                 margin_ns = max(vis_ns // 2, (trace.time_max - trace.time_min) // 100)
-                hint_lo = max(trace.time_min, anchor_left_ns - margin_ns)
-                hint_hi = min(trace.time_max, anchor_left_ns + vis_ns + margin_ns)
+                hint_lo = max(trace.time_min, min(trace.time_max, anchor_left_ns - margin_ns))
+                hint_hi = min(trace.time_max, max(trace.time_min, anchor_left_ns + vis_ns + margin_ns))
                 if hint_hi > hint_lo:
                     self._scene._ns_range_hint = (hint_lo, hint_hi)
-                if target_timescale < self._scene._timescale_per_px_fit * 0.999:
-                    self._scene._virt_jump_origin_ns = anchor_left_ns
+                # Keep even when zoomed out past Fit (origin may be < time_min).
+                self._scene._virt_jump_origin_ns = anchor_left_ns
         self._zoom_reanchor_pending = True
         try:
             self._scene.zoom(factor)
@@ -16790,8 +17024,12 @@ class TimelineView(QGraphicsView):
                 orth = cur_scene_center.y()
             else:
                 orth = cur_scene_center.x()
-            self._reposition_time_at_viewport(
-                anchor_ns, vp_pos, orth_scene=orth, force_window=True)
+            if trace is not None and (
+                    self._scene._timescale_per_px
+                    < self._scene._timescale_per_px_fit * 0.999):
+                self._reposition_time_at_viewport(
+                    max(trace.time_min, min(trace.time_max, anchor_ns)),
+                    vp_pos, orth_scene=orth, force_window=True)
             self._nav_zoom_timer.start()
         finally:
             self._zoom_reanchor_pending = False
@@ -34512,7 +34750,7 @@ AI_CHAT_TIMEOUT_S = 120.0
 AI_LIST_MODELS_TIMEOUT_S = 12.0
 AI_TEST_TIMEOUT_S = 120.0
 # Live ``ai-test`` / ``ai-test-context``: retry transient model errors.
-AI_LIVE_RETRY_ATTEMPTS = 6
+AI_LIVE_RETRY_ATTEMPTS = 10
 AI_LIVE_RETRY_DELAY_S = 10.0
 
 # Per-preset settings stored in btf_viewer.rc / browser storage.
@@ -62389,6 +62627,7 @@ SKIP_TAGS = frozenset({
 _LANG_RE = re.compile(r"^[a-z]{2}(?:-[a-z0-9]+)?$", re.I)
 _AUDIO_RE = re.compile(r"\.(mp3|wav|m4a|ogg|flac|aac|aiff|aif)$", re.I)
 _DEMO_MEDIA_LOG_RULES = "qt.multimedia.ffmpeg=false"
+_DEMO_MESSAGE_FADE_MS = 250
 
 
 def silence_demo_media_logs() -> None:
@@ -62995,6 +63234,166 @@ class DemoPointerOverlay(QWidget):
         self.hide()
 
 
+class DemoMessageOverlay(QWidget):
+    """Mouse-transparent centered caption for demo XML ``<show_message/>``."""
+
+    _MAX_TEXT_W = 640
+
+    def __init__(self, host: QWidget) -> None:
+        super().__init__(host)
+        self._host = host
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.hide()
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 24, 24, 24)
+        outer.addStretch(1)
+        self._card = QWidget()
+        self._card.setObjectName("demo_message_card")
+        card_lay = QVBoxLayout(self._card)
+        card_lay.setContentsMargins(16, 16, 22, 16)
+        card_lay.setSpacing(0)
+        self._label = QLabel("")
+        self._label.setObjectName("demo_message_text")
+        self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._label.setWordWrap(True)
+        self._label.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum,
+        )
+        self._label.setStyleSheet(
+            "color: #e8f4ff; font-size: 14pt; background: transparent; border: none;")
+        self._card.setStyleSheet(
+            "QWidget#demo_message_card {"
+            " background: rgba(20, 28, 38, 0.88);"
+            " color: #e8f4ff;"
+            " border: 1px solid #4a6a8a;"
+            " border-radius: 8px;"
+            "}")
+        card_lay.addWidget(self._label)
+        self._opacity = QGraphicsOpacityEffect(self._card)
+        self._card.setGraphicsEffect(self._opacity)
+        self._opacity.setOpacity(0.0)
+        outer.addWidget(self._card, 0, Qt.AlignmentFlag.AlignCenter)
+        outer.addStretch(1)
+        self._fade_anim: Optional[QVariantAnimation] = None
+        if host is not None:
+            host.installEventFilter(self)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is self._host and event.type() == QEvent.Type.Resize:
+            self._sync_geometry()
+            if self.isVisible() and self._label.text().strip():
+                self._resize_label()
+        return False
+
+    def _sync_geometry(self) -> None:
+        if self._host is not None:
+            self.setGeometry(self._host.rect())
+
+    def _resize_label(self) -> None:
+        avail = max(120, self.width() - 48)
+        max_w = min(self._MAX_TEXT_W, avail)
+        self._label.setMaximumWidth(max_w)
+        text = self._label.text().strip()
+        if not text:
+            self._label.setMinimumHeight(0)
+            self._card.adjustSize()
+            return
+        h = self._label.heightForWidth(max_w)
+        if h > 0:
+            self._label.setMinimumHeight(h)
+        self._label.adjustSize()
+        self._card.adjustSize()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._sync_geometry()
+        if self._label.text().strip():
+            self._resize_label()
+
+    def _stop_fade(self) -> None:
+        anim = self._fade_anim
+        self._fade_anim = None
+        if anim is not None:
+            anim.stop()
+
+    def _fade_to(
+        self, target: float, done: Optional[Callable[[], None]] = None,
+    ) -> None:
+        self._stop_fade()
+        start = float(self._opacity.opacity())
+        target = max(0.0, min(1.0, float(target)))
+        if abs(start - target) < 0.01:
+            self._opacity.setOpacity(target)
+            if done is not None:
+                done()
+            return
+        anim = QVariantAnimation(self)
+        anim.setDuration(_DEMO_MESSAGE_FADE_MS)
+        anim.setStartValue(start)
+        anim.setEndValue(target)
+        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        anim.valueChanged.connect(lambda v: self._opacity.setOpacity(float(v)))
+
+        def _finished() -> None:
+            if self._fade_anim is not anim:
+                return
+            self._fade_anim = None
+            self._opacity.setOpacity(target)
+            if done is not None:
+                done()
+
+        anim.finished.connect(_finished)
+        self._fade_anim = anim
+        anim.start()
+
+    def show_message(self, text: str) -> None:
+        msg = (text or "").strip()
+        self._label.setMinimumHeight(0)
+        self._label.setText(msg)
+        self._sync_geometry()
+        self._resize_label()
+        if not msg:
+            self.clear_message(animate=False)
+            return
+        self._stop_fade()
+        self._opacity.setOpacity(0.0)
+        self.raise_()
+        self.show()
+        loop = QEventLoop()
+        self._fade_to(1.0, loop.quit)
+        loop.exec()
+
+    def clear_message(self, *, animate: bool = True) -> None:
+        if not self.isVisible() and not self._label.text().strip():
+            self._label.clear()
+            self._opacity.setOpacity(0.0)
+            self.hide()
+            return
+
+        def _finish() -> None:
+            self._label.clear()
+            self._label.setMinimumHeight(0)
+            self._opacity.setOpacity(0.0)
+            self.hide()
+
+        if not animate:
+            self._stop_fade()
+            _finish()
+            return
+
+        loop: Optional[QEventLoop] = None
+
+        def _done() -> None:
+            _finish()
+            if loop is not None:
+                loop.quit()
+
+        self._fade_to(0.0, _done)
+        loop = QEventLoop()
+        loop.exec()
+
+
 class DemoStatusBanner(QWidget):
     prevClicked = Signal()
     pauseClicked = Signal()
@@ -63538,7 +63937,8 @@ class InAppDemoRunner:
 
     def _run_macro(self, name: str, call_el: Optional[ET.Element]) -> None:
         if name == "fit":
-            self._api({"op": "fit"}, settle=0.4)
+            # Macro "fit" is Ctrl+0 / Zoom Full View, not C1–Cn <fit_view/>.
+            self._api({"op": "zoom_view"}, settle=0.4)
             return
         if name == "clear_cursors":
             self._api({"op": "clear_cursors"})
@@ -63619,6 +64019,29 @@ class InAppDemoRunner:
                 msg = prompt
                 self._ui(lambda: self._on_toast(msg, "info"))
             return
+        if tag in ("show_message", "message", "show_msg"):
+            text = expand_vars(
+                self._attr(el, "text", self._attr(el, "message", text_content(el))),
+                self._vars,
+            ).strip()
+            try:
+                sec = float(self._attr(el, "seconds", self._attr(el, "duration", "2")))
+            except ValueError:
+                sec = 2.0
+            animate_clear = True
+            try:
+                self._api({"op": "show_message", "text": text}, settle=0.0)
+                self._wait_interruptible(max(0.0, sec))
+            except DemoSkip:
+                animate_clear = False
+                raise
+            finally:
+                if text:
+                    self._api(
+                        {"op": "clear_message", "animate": animate_clear},
+                        settle=0.0,
+                    )
+            return
         if tag in ("audio", "play"):
             rel = self._attr(el, "file")
             path = None
@@ -63668,6 +64091,11 @@ class InAppDemoRunner:
         if tag == "clear_highlight":
             self._api({"op": "clear_highlight"})
             return
+        if tag == "tab_nav":
+            direction = self._attr(el, "dir", self._attr(el, "direction", "next")).strip().lower()
+            forward = direction not in ("prev", "previous", "back", "shift", "shift+tab")
+            self._api({"op": "tab_nav", "forward": forward}, settle=0.4)
+            return
         if tag == "cursors":
             payload: Dict[str, Any] = {
                 "op": "cursors",
@@ -63679,7 +64107,7 @@ class InAppDemoRunner:
                 payload["limit"] = self._attr(el, "limit")
             if "zoom" in el.attrib:
                 payload["zoom"] = self._attr(el, "zoom")
-            self._api(payload, settle=0.5)
+            self._api(payload, settle=0.15)
             return
         if tag == "clear_cursors":
             self._api({"op": "clear_cursors"})
@@ -63704,11 +64132,22 @@ class InAppDemoRunner:
                 payload.pop("end", None)
             self._api(payload, settle=0.6)
             return
+        if tag in ("zoom_view", "full_view", "zoom_full"):
+            # XML <zoom_view/> = Zoom Full View (toolbar Fit / Ctrl+0).
+            self._api({"op": "zoom_view"}, settle=0.4)
+            return
         if tag in ("fit_view", "fit_api"):
+            # XML <fit_view/> = Zoom fit to C1–Cn when cursors are placed.
             self._api({"op": "fit"}, settle=0.4)
             return
         if tag in ("zoom_1to1", "one_to_one", "1to1"):
             self._api({"op": "zoom_1to1"}, settle=0.4)
+            return
+        if tag == "zoom_in":
+            self._api({"op": "zoom_in"}, settle=0.4)
+            return
+        if tag == "zoom_out":
+            self._api({"op": "zoom_out"}, settle=0.4)
             return
         if tag == "limit":
             self._api({
@@ -63742,6 +64181,21 @@ class InAppDemoRunner:
                 "op": "jump_wcet",
                 "task": self._attr(el, "task", self._attr(el, "name")),
             }, settle=0.7)
+            return
+        if tag in ("move_view", "move_viewport", "pan_view"):
+            payload = {
+                "op": "move_view",
+                "task": self._attr(el, "task", self._attr(el, "name")),
+            }
+            if "unit" in el.attrib:
+                payload["unit"] = self._attr(el, "unit")
+            time_keys = ("time", "ns", "at")
+            payload["time_omitted"] = not any(k in el.attrib for k in time_keys)
+            for key in time_keys:
+                if key in el.attrib:
+                    payload["time"] = self._attr(el, key)
+                    break
+            self._api(payload, settle=0.4)
             return
         if tag == "panel":
             self._api({
@@ -63838,6 +64292,7 @@ class InAppDemoRunner:
                     self._wait_interruptible(self._defaults.get("pause") or 0)
                     i += 1
                 except DemoSkip as err:
+                    self._api({"op": "clear_message", "animate": False}, settle=0.0)
                     direction = 0 if self._skip_restart else (self._skip_dir or err.direction or 1)
                     self._reset_skip()
                     if direction == 0:
@@ -65363,6 +65818,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._pending_demo: Optional[dict] = None
         self._demo_runner: Optional[InAppDemoRunner] = None
         self._demo_overlay: Optional[DemoPointerOverlay] = None
+        self._demo_message_overlay: Optional[DemoMessageOverlay] = None
         self._demo_thread: Optional[threading.Thread] = None
         self._demo_nav_armed: bool = False
         self._demo_nav_arm_timer: Optional[QTimer] = None
@@ -65712,6 +66168,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         return self._vm.tab_for_path(path, normalizer=_normalize_open_path)
 
     def _wire_timeline_view(self, view: TimelineView) -> None:
+        # A manual zoom (toolbar/keyboard/wheel/pinch/Fit/1:1/demo op) must
+        # cancel any in-flight AI zoom_to_range animation, or its next tick
+        # silently overwrites the manual zoom a moment later.
+        view._on_manual_zoom = self._ai_stop_zoom_anim
         view.zoom_changed.connect(lambda tpp, v=view: self._on_zoom_changed(tpp, v))
         view.viewport_changed.connect(
             lambda v=view: self._on_timeline_viewport_changed(v))
@@ -68431,7 +68891,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_horiz.setChecked(True)
         vm.addSeparator()
         vm.addAction("&Zoom In",        lambda: self._view.zoom_in(),   QKeySequence.ZoomIn)
-        vm.addAction("Zoom &Out",       lambda: self._view.zoom_out(),  QKeySequence.ZoomOut)
+        self._act_zoom_out = vm.addAction(
+            "Zoom &Out", lambda: self._view.zoom_out(), QKeySequence.ZoomOut)
+        self._act_zoom_out.setEnabled(False)
         _fit_act = vm.addAction("&Fit to window",  lambda: self._view.zoom_fit())
         _fit_act.setShortcuts([QKeySequence("Ctrl+0"), QKeySequence("F")])
         vm.addSeparator()
@@ -68550,7 +69012,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._tb_vert_btn.setToolTip("Vertical layout — time runs top → bottom")
         tb.addSeparator()
         _ia("Zoom In",  lambda: self._view.zoom_in(),   _IC_ZIN,  "Zoom in  (Ctrl++)")
-        _ia("Zoom Out", lambda: self._view.zoom_out(),  _IC_ZOUT, "Zoom out  (Ctrl+-)")
+        self._tb_zoom_out_btn = _ia(
+            "Zoom Out", lambda: self._view.zoom_out(),  _IC_ZOUT, "Zoom out  (Ctrl+-)")
+        self._tb_zoom_out_btn.setEnabled(False)
         self._act_zoom_1to1 = _ia("1:1", lambda: self._view.zoom_1to1(), _IC_1TO1, "Zoom to 1:1 scale")
         self._tb_fit_btn = _ia("Fit", lambda: self._view.zoom_fit(), _IC_FIT,
                                "Fit entire trace to window  (Ctrl+0)")
@@ -68852,6 +69316,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if self._trace is None:
             self._zoom_scale_label.setText("—")
             self._zoom_visible_label.setText("")
+            self._sync_zoom_out_enabled()
             return
         self._on_zoom_changed(self._view._scene.timescale_per_px)
 
@@ -69017,6 +69482,22 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         timeout = 6000 if kind == "error" else 4000
         self.statusBar().showMessage(text, timeout)
 
+    def _demo_show_center_message(self, text: str) -> None:
+        ov = self._demo_message_overlay
+        if ov is None:
+            host = getattr(self, "_central_host", None)
+            if host is None:
+                return
+            ov = DemoMessageOverlay(host)
+            ov.raise_()
+            self._demo_message_overlay = ov
+        ov.show_message(text)
+
+    def _demo_clear_center_message(self, *, animate: bool = True) -> None:
+        ov = self._demo_message_overlay
+        if ov is not None:
+            ov.clear_message(animate=animate)
+
     def _demo_press_escape(self) -> None:
         self._demo_close_settings()
         self._demo_analysis({"close": True})
@@ -69077,6 +69558,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         overlay = self._demo_overlay
         if overlay is not None:
             overlay.hide_pointer()
+        msg_ov = self._demo_message_overlay
+        if msg_ov is not None:
+            msg_ov.clear_message(animate=False)
         banner = getattr(self, "_demo_status_banner", None)
         if banner is not None:
             banner.setVisible(False)
@@ -69101,6 +69585,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         overlay = DemoPointerOverlay(self)
         overlay.raise_()
         self._demo_overlay = overlay
+        msg_ov = DemoMessageOverlay(self._central_host)
+        msg_ov.raise_()
+        self._demo_message_overlay = msg_ov
         banner = self._demo_status_banner
         voice = self._preferred_demo_voice_lang()
         runner = InAppDemoRunner(
@@ -69149,6 +69636,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if overlay is not None:
             overlay.hide_pointer()
             overlay.deleteLater()
+        msg_ov = self._demo_message_overlay
+        self._demo_message_overlay = None
+        if msg_ov is not None:
+            msg_ov.clear_message(animate=False)
+            msg_ov.deleteLater()
         banner = getattr(self, "_demo_status_banner", None)
         if banner is not None:
             banner.setVisible(False)
@@ -69445,14 +69937,39 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             panel.refresh_template_availability()
 
     def _ai_stop_zoom_anim(self) -> None:
+        """Invalidate an in-flight range-zoom so late valueChanged ticks
+        cannot snap timescale back to the animation's start (Fit) after
+        <fit_view/> / <zoom_out/> have already run."""
+        self._ai_zoom_gen = getattr(self, "_ai_zoom_gen", 0) + 1
         anim = getattr(self, "_ai_zoom_anim", None)
+        self._ai_zoom_anim = None
         if anim is None:
             return
         try:
             anim.stop()
         except RuntimeError:
             pass
-        self._ai_zoom_anim = None
+        anim.deleteLater()
+
+    def _ai_wait_zoom_anim(self, timeout_ms: int = 400) -> None:
+        """Let an in-flight range-zoom animation finish. Do not stop it —
+        the next demo op (fit / zoom_out) must run against the completed
+        zoom so every XML step applies exactly, in order."""
+        anim = getattr(self, "_ai_zoom_anim", None)
+        if anim is None:
+            return
+        loop = QEventLoop(self)
+
+        def _done() -> None:
+            if loop.isRunning():
+                loop.quit()
+
+        try:
+            anim.finished.connect(_done)
+        except RuntimeError:
+            return
+        QTimer.singleShot(timeout_ms, _done)
+        loop.exec()
 
     def _ai_jump_time_unit(self, value: float) -> None:
         """Jump to *value* (trace time unit) and drop an annotation there."""
@@ -69537,6 +70054,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if op == "clear_highlight":
             self._ai_highlight_task("")
             return {}
+        if op == "tab_nav":
+            forward = self._demo_truthy(payload.get("forward"), default=True)
+            view = getattr(self, "_view", None)
+            if view is not None:
+                view._cycle_highlighted_task(forward)
+            return {}
         if op == "cursors":
             times = self._demo_parse_times_payload(payload)
             view = getattr(self, "_view", None)
@@ -69559,6 +70082,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 self._demo_set_limit(self._demo_truthy(payload.get("limit")))
             if self._demo_truthy(payload.get("zoom"), default=False) and len(times) >= 2:
                 self._ai_zoom_to_range(times[0], times[-1])
+                self._ai_wait_zoom_anim()
             return {"cursors": list(view._scene.cursor_times())}
         if op == "clear_cursors":
             view = getattr(self, "_view", None)
@@ -69575,15 +70099,48 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             lo, hi = self._demo_parse_range_payload(payload)
             self._ai_zoom_to_range(lo, hi)
             return {"start": lo, "end": hi}
-        if op == "fit":
+        if op in ("zoom_view", "full_view", "zoom_full"):
+            # XML <zoom_view/> = Zoom Full View (toolbar Fit / Ctrl+0).
+            self._ai_wait_zoom_anim()
             view = getattr(self, "_view", None)
             if view is not None:
                 view.zoom_fit()
             return {}
+        if op == "fit":
+            self._ai_wait_zoom_anim()
+            view = getattr(self, "_view", None)
+            if view is not None:
+                # <fit_view/> with C1–Cn placed matches toolbar "Zoom fit to
+                # C1–Cn" (Ctrl+R), not "Zoom Full View" (Ctrl+0).
+                if len(view._scene.cursor_times()) >= 2:
+                    view.zoom_to_cursor_range()
+                else:
+                    view.zoom_fit()
+            return {}
         if op in ("zoom_1to1", "1to1"):
+            self._ai_wait_zoom_anim()
             view = getattr(self, "_view", None)
             if view is not None and hasattr(view, "zoom_1to1"):
                 view.zoom_1to1()
+            return {}
+        if op == "zoom_in":
+            self._ai_wait_zoom_anim()
+            view = getattr(self, "_view", None)
+            if view is not None:
+                view.zoom_in()
+                view._flush_zoom()
+            return {}
+        if op == "zoom_out":
+            self._ai_wait_zoom_anim()
+            # Drop the finished QVariantAnimation so a late valueChanged
+            # (start_tpp = Fit) cannot overwrite the zoom-out scale.
+            self._ai_stop_zoom_anim()
+            view = getattr(self, "_view", None)
+            if view is not None:
+                times = view._scene.cursor_times()
+                mid = ((min(times) + max(times)) // 2) if len(times) >= 2 else None
+                view.zoom_out(center_ns=mid)
+                view._flush_zoom()
             return {}
         if op == "limit":
             on = self._demo_truthy(
@@ -69597,6 +70154,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if op == "jump_wcet":
             return self._demo_jump_wcet(
                 str(payload.get("task") or payload.get("name") or ""))
+        if op in ("move_view", "move_viewport", "pan_view"):
+            return self._demo_move_view(payload)
+        if op == "show_message":
+            text = str(payload.get("text") or payload.get("message") or "").strip()
+            self._demo_show_center_message(text)
+            return {"shown": bool(text)}
+        if op == "clear_message":
+            animate = True
+            if "animate" in payload:
+                animate = self._demo_truthy(payload.get("animate"), default=True)
+            self._demo_clear_center_message(animate=animate)
+            return {}
         if op == "panel":
             return self._demo_panel(
                 str(payload.get("name") or payload.get("tab") or "stats"))
@@ -69774,6 +70343,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "toolbar_task": "_tb_task_btn",
             "toolbar_core": "_tb_core_btn",
             "toolbar_load": "_tb_cpu_load_btn",
+            "toolbar_heatmap": "_tb_heatmap_btn",
             "toolbar_analysis": "_tb_analysis_btn",
             "toolbar_fit": "_tb_fit_btn",
             "toolbar_1to1": "_act_zoom_1to1",
@@ -70083,6 +70653,75 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "end": int(seg.end),
         }
 
+    def _demo_move_view(self, payload: dict) -> dict:
+        """Pan the timeline to a time and/or center a task row.
+
+        Missing / zero / pre-trace time → leftmost (trace start). With no
+        resolved task that also scrolls the task rows to the top. Missing
+        time with a task → that task's first segment. A task name always
+        centers its row as much as the layout allows.
+        """
+        if self._trace is None:
+            raise RuntimeError("No trace loaded")
+        view = getattr(self, "_view", None)
+        if view is None:
+            return {}
+        unit = str(payload.get("unit") or "")
+        task_raw = str(payload.get("task") or payload.get("name") or "").strip()
+        raw_time = payload.get("time", payload.get("ns", payload.get("at")))
+        empty_time = raw_time is None or (
+            isinstance(raw_time, str) and not str(raw_time).strip())
+        time_omitted = bool(payload.get("time_omitted")) or empty_time
+        mk = ""
+        resolved = ""
+        if task_raw:
+            resolved = resolve_task_key(task_raw, self._ai_task_candidates()) or ""
+            if resolved:
+                mk = _task_merge_key(resolved)
+                self._demo_expand_core_for_task(mk)
+        align_left = False
+        ns = None
+        if time_omitted:
+            if mk:
+                segs = self._trace.seg_map_by_merge_key.get(mk, [])
+                if segs:
+                    ns = min(int(s.start) for s in segs)
+                else:
+                    align_left = True
+            else:
+                align_left = True
+        else:
+            ns = int(self._demo_parse_time_value(raw_time, unit))
+            if ns <= int(self._trace.time_min):
+                align_left = True
+                ns = None
+        if align_left:
+            view.align_time_start()
+        elif ns is not None:
+            view.scroll_to_ns(int(ns))
+        if mk:
+            self._scroll_view_to_task(mk, center=True)
+        elif align_left:
+            view.align_row_start()
+        return {
+            "time": None if align_left else ns,
+            "align_left": align_left,
+            "task": resolved or task_raw,
+        }
+
+    def _demo_expand_core_for_task(self, mk: str) -> None:
+        sc = self._view._scene
+        if getattr(sc, "_view_mode", "task") != "core":
+            return
+        order = getattr(self._trace, "core_task_order", None) or {}
+        for core, tasks in order.items():
+            if any(_task_merge_key(t) == mk for t in (tasks or [])):
+                sc.set_core_expanded(core, True)
+                cpu = getattr(self, "_cpu_load_graph", None)
+                if cpu is not None and hasattr(cpu, "set_core_expanded"):
+                    cpu.set_core_expanded(core, True)
+                return
+
     def _ai_capture_gui_snapshot(self) -> dict:
         view = getattr(self, "_view", None)
         scene = view._scene if view is not None else None
@@ -70213,9 +70852,30 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         avail = max(vp_px - scene._label_width, 100)
         end_tpp = max(span / avail, float(scene._timescale_per_px_default))
 
+        gen = getattr(self, "_ai_zoom_gen", 0) + 1
+        self._ai_zoom_gen = gen
+        anim = None
+
         def _finish() -> None:
+            if getattr(self, "_ai_zoom_gen", 0) != gen:
+                return
+            self._ai_zoom_gen = gen + 1
+            if getattr(self, "_ai_zoom_anim", None) is anim:
+                self._ai_zoom_anim = None
+            view._fit_mode = False
             scene.zoom_to_range(lo, hi, vp_px)
             view.scroll_to_ns(mid)
+            # zoom_to_range() mutates scene state directly (unlike zoom_fit/
+            # _do_zoom), so the status-bar zoom label, "visible" time label,
+            # and zoom-preset combo must be told explicitly or they stay
+            # frozen at whatever they showed before this AI-driven zoom.
+            view.zoom_changed.emit(scene.timescale_per_px)
+            if anim is not None:
+                try:
+                    anim.stop()
+                except RuntimeError:
+                    pass
+                anim.deleteLater()
 
         if abs(end_tpp - start_tpp) < 1e-6:
             _finish()
@@ -70226,11 +70886,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         anim.setEndValue(1.0)
 
         def _tick(value) -> None:
+            if getattr(self, "_ai_zoom_gen", 0) != gen:
+                return
             t = max(0.0, min(1.0, float(value)))
             te = 1.0 - (1.0 - t) * (1.0 - t)
+            view._fit_mode = False
             scene._timescale_per_px = start_tpp + (end_tpp - start_tpp) * te
             scene.rebuild()
             view.scroll_to_ns(mid)
+            view.zoom_changed.emit(scene.timescale_per_px)
 
         anim.valueChanged.connect(_tick)
         anim.finished.connect(_finish)
@@ -73417,6 +74081,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         self._persist_label_width(width)
 
+    def _sync_zoom_out_enabled(self) -> None:
+        """Gray Zoom Out at Fit-to-window; enable it when zoomed in."""
+        view = getattr(self, "_view", None)
+        can = (
+            self._trace is not None
+            and view is not None
+            and not view._at_fit_zoom()
+        )
+        tip = "Zoom out  (Ctrl+-)" if can else "Already fitted to window"
+        for act in (
+            getattr(self, "_tb_zoom_out_btn", None),
+            getattr(self, "_act_zoom_out", None),
+        ):
+            if act is None:
+                continue
+            act.setEnabled(can)
+            act.setToolTip(tip)
+
     def _on_zoom_changed(self, timescale_per_px: float,
                          view: TimelineView = None) -> None:
         if view is not None and view is not self._view:
@@ -73442,7 +74124,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._zoom_scale_label.setToolTip("Current zoom level (time per pixel)")
         # Sync zoom-preset combo
         fit_idx = len(self._zoom_presets) - 1  # "Fit" is always last
-        if self._view._fit_mode:
+        if self._view._at_fit_zoom():
             self._zoom_preset_combo.setCurrentIndex(fit_idx)
         else:
             matched = False
@@ -73453,6 +74135,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     break
             if not matched:
                 self._zoom_preset_combo.setCurrentIndex(-1)  # no preset matches
+        self._sync_zoom_out_enabled()
         self._refresh_find_marker()
         self._on_timeline_viewport_changed(self._view)
 
@@ -73728,12 +74411,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             on_compare=self._remember_trace_compare,
         ), self)
 
-    def _scroll_view_to_task(self, task: str) -> None:
+    def _scroll_view_to_task(self, task: str, *, center: bool = False) -> None:
         """Scroll the orthogonal axis to bring *task*'s row/column fully into view.
 
         The time-axis scroll position is preserved; only the row (horizontal
         mode) or column (vertical mode) axis is adjusted.  Scrolls whenever
         the row/column is partially or fully outside the current viewport.
+        With *center* True (demo ``<move_view task=…/>``), always center the
+        row as much as the layout allows.
         """
         sc = self._view._scene
         orth = sc.task_orth_scene_coord(task)
@@ -73751,14 +74436,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if sc._horizontal:
             vp_lo = self._view.mapToScene(vp.topLeft()).y()
             vp_hi = self._view.mapToScene(vp.bottomLeft()).y()
-            if row_lo >= vp_lo and row_hi <= vp_hi:
+            if not center and row_lo >= vp_lo and row_hi <= vp_hi:
                 return                              # row fully visible - nothing to do
             cur = self._view.mapToScene(vp.center())
             self._view.centerOn(cur.x(), orth)
         else:
             vp_lo = self._view.mapToScene(vp.topLeft()).x()
             vp_hi = self._view.mapToScene(vp.topRight()).x()
-            if row_lo >= vp_lo and row_hi <= vp_hi:
+            if not center and row_lo >= vp_lo and row_hi <= vp_hi:
                 return                              # column fully visible - nothing to do
             cur = self._view.mapToScene(vp.center())
             self._view.centerOn(orth, cur.y())
@@ -73767,36 +74452,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Fit the view tightly between the earliest and latest cursor."""
         if self._trace is None:
             return
-        times = sorted(self._view._scene.cursor_times())
-        if len(times) < 2:
+        if not self._view.zoom_to_cursor_range():
             self.statusBar().showMessage("Place at least 2 cursors to zoom to range", 3000)
             return
-        ns_lo, ns_hi = times[0], times[-1]
-        if ns_lo == ns_hi:
-            return
-
-        # Use the real viewport dimension (not the _fit_viewport_size() floor)
-        # so that zoom_to_range and the centering formula are always consistent.
-        vp = self._view.viewport().rect()
-        is_horiz = self._view._scene._horizontal
-        vp_px = max(vp.width() if is_horiz else vp.height(), 100)
-
-        self._view._scene.zoom_to_range(ns_lo, ns_hi, vp_px)
-
-        # Position so C1 aligns with the right edge of the frozen label column
-        # and C2 aligns with the right edge of the viewport.
-        #   avail = vp_px - label_w  ->  ns_hi_scene - ns_lo_scene == avail
-        #   centerOn(x) puts scene-x at viewport pixel-centre, so:
-        #     center_scene = ns_lo_scene - label_w + vp_px / 2
-        ns_lo_scene = self._view._scene.ns_to_scene_coord(ns_lo)
-        label_w     = self._view._scene._label_width
-        center_coord = ns_lo_scene - label_w + vp_px / 2
-        cur_scene = self._view.mapToScene(vp.center())
-        if is_horiz:
-            self._view.centerOn(center_coord, cur_scene.y())
-        else:
-            self._view.centerOn(cur_scene.x(), center_coord)
-        self._view.zoom_changed.emit(self._view._scene.timescale_per_px)
         self._refresh_find_marker()
 
     # -- Navigation helpers ---------------------------------------------
@@ -74260,7 +74918,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             ]),
             ("View / Zoom", [
                 ("Ctrl++",               "Zoom in"),
-                ("Ctrl+-",               "Zoom out"),
+                ("Ctrl+-",               "Zoom out (until Fit)"),
                 ("Ctrl+0 / F",           "Fit entire trace to window"),
                 ("Ctrl+R",               "Zoom to earliest–latest cursor"),
                 ("Ctrl+,",               "Open Settings"),

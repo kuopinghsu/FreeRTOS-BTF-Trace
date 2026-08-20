@@ -27,5 +27,8 @@ describe('zoomPresets', () => {
     assert.equal(matchZoomPresetValue(0.5, opts), '50')
     assert.equal(matchZoomPresetValue(0.503, opts), '50')
     assert.equal(matchZoomPresetValue(0.37, opts), '')
+    assert.equal(
+      matchZoomPresetValue(1.43, opts), 'fit',
+      'at or past Fit (span >= full trace) selects Fit so Zoom Out stays grayed')
   })
 })

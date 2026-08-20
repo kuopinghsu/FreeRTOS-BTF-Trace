@@ -734,7 +734,7 @@ AI_CHAT_TIMEOUT_S = 120.0
 AI_LIST_MODELS_TIMEOUT_S = 12.0
 AI_TEST_TIMEOUT_S = 120.0
 # Live ``ai-test`` / ``ai-test-context``: retry transient model errors.
-AI_LIVE_RETRY_ATTEMPTS = 6
+AI_LIVE_RETRY_ATTEMPTS = 10
 AI_LIVE_RETRY_DELAY_S = 10.0
 
 # Per-preset settings stored in btf_viewer.rc / browser storage.

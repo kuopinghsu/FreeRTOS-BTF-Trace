@@ -297,7 +297,7 @@ The shipped Ollama default is `qwen3.5:9b`:
 ollama pull qwen3.5:9b
 ```
 
-Larger local models (`qwen3.5:27b`, `qwen3.8:27b`, and `gemma4:26b`) trade speed and memory use for additional capacity. Older 7B/14B ids such as `qwen2.5:7b` stay optional. Avoid 3B-class models for investigations: they often skip native tools, return tool JSON as text, or fail multi-step cases.
+Larger local models (`qwen3.5:27b`, `qwen3.8:27b`, and `gemma4:26b`) require more memory and usually run more slowly. More parameters do not guarantee a better BTFViewer investigation result. In the recorded suite, `qwen3.8:27b` reached the same best Overall score as `qwen3.5:9b`, but its mean latency was about 20 times higher. Older 7B/14B ids such as `qwen2.5:7b` stay optional. Avoid 3B-class models for investigations: they often skip native tools, return tool JSON as text, or fail multi-step cases.
 
 Configuration examples are available in [examples/ai](examples/ai/README.md): [ollama.json](examples/ai/ollama.json), [gemini.json](examples/ai/gemini.json), [openai.json](examples/ai/openai.json), [deepseek.json](examples/ai/deepseek.json), [grok.json](examples/ai/grok.json), and [presets.json](examples/ai/presets.json).
 
@@ -333,12 +333,16 @@ A local Ollama endpoint normally needs no key. For a custom endpoint, enter its 
 
 ✓ reliable · △ inconsistent — works sometimes but often skips native tool calls, hallucinates numbers, or truncates on long context; always verify against the timeline before trusting a result.
 
-| If you…                                                                       | Use                                                                                                                                  |
-| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Want a local investigator (no key)                                            | `qwen3.5:9b` — shipped Ollama default; best practical local on the investigation suite (overall 78–88 across context modes, 10.8–16.2s/case; see [AI_BENCHMARK.md](AI_BENCHMARK.md)) |
-| Need more local quality                                                       | `qwen3.8:27b` (overall 78–88, 186–332s/case). Optional 27B-class alternatives such as `qwen3.5:27b` or `gemma4:26b` are not part of the shipped suite and are not benchmarked here |
-| Have a large scope (many findings, long chat) or want the strongest reasoning | Cloud (`gpt-4o`, Gemini, DeepSeek, Grok) — mind the [privacy](#what-leaves-the-machine) trade-off                                    |
-| Handle confidential traces                                                    | Local Ollama regardless of size — nothing leaves the machine                                                                         |
+The recommendations below are based on the 17-case run recorded on 2026-08-19. Scores and latency can change with the endpoint, hardware, model build, and dataset.
+
+| If you… | Use |
+| --- | --- |
+| Want the practical local default without an API key | `qwen3.5:9b` with **Balanced**. It passed 15/17 cases at 14.5s/case. **Full evidence** produced its highest Overall score, 88, but passed 14/17 cases at 16.2s/case. |
+| Want a fast cloud response | `gemini-3.5-flash-lite` with **Full evidence**. It scored 83, passed 13/17 cases, and averaged 2.6s/case. |
+| Want the best result from the shipped Gemini models | `gemini-3.7-flash` with **Full evidence**. It scored 85 and passed 14/17 cases at 25.0s/case. |
+| Want a second local comparison and can accept high latency | `qwen3.8:27b` with **Balanced**. It scored 88 and passed 13/17 cases, but averaged 325.2s/case. It did not provide a consistent quality advantage over `qwen3.5:9b`. |
+| Can use an optional cloud model outside the shipped suite | `gpt-5.6-sol` with **Compact** produced the highest recorded result: Overall 90, 16/17 PASS, and 10.4s/case. It is not included in the shipped benchmark configuration. |
+| Handle confidential traces | Use local Ollama. The raw trace and extracted evidence remain on the local machine. |
 
 
 Small local models may skip native tool calls and emit a fenced `btftool` block instead. The viewer renders the same GUI cards either way, but investigation-heavy templates need a tool-capable model such as `qwen3.5:9b` to chain calls reliably.
@@ -390,7 +394,11 @@ Prefer local Ollama for confidential traces. Redact sensitive task names in anno
 | Diagrams | Only if requested | When useful | When useful |
 | What-if | Top 3 candidates | Top 5 | Complete |
 
-Compact still keeps the cursor region window, real task names, `jump:TIME` / `range:LO/HI`, measurements with units, confidence / evidence quality, what-if disclaimers, and at least one alternative or falsification. Switch to Full evidence for a complex case, or ask the model for a specific finding id when Compact omitted it. Live `ai-test` defaults to Full evidence; use **`--compare-context`** to measure all three modes, or **`--context-mode compact`** (or `balanced`) for a single mode. Settings → Context does not apply to the CLI scorer.
+Compact still keeps the cursor region window, real task names, `jump:TIME` / `range:LO/HI`, measurements with units, confidence / evidence quality, what-if disclaimers, and at least one alternative or falsification. If Compact omits a relevant finding, ask for a specific finding id or select a larger mode.
+
+More context did not consistently improve the benchmark result. `qwen3.5:9b` had its best pass count in Balanced, while `gpt-5.6-sol` had its best score in Compact. `qwen3.8:27b` and `claude-sonnet-5` also scored lower in Full evidence than in Balanced. Treat Balanced as the general starting point, then use **`--compare-context`** on the intended model and workload. Select Full evidence when the investigation actually needs the additional findings, tool catalog, or history; do not assume it is always more accurate or faster.
+
+Live `ai-test` defaults to Full evidence. Use **`--compare-context`** to measure all three modes, or **`--context-mode compact`** (or `balanced`) for a single mode. Settings → Context does not apply to the CLI scorer.
 
 ---
 
@@ -771,7 +779,7 @@ See also [Export → Headless CLI](README.md#headless-cli-desktop-only) in the u
 
 ## Benchmark and evaluation suite
 
-Offline `ai-test` / `runOfflineBenchmark` already ships. Live runs read **model id, base URL, TLS, and API key** from a suite XML (`--config examples/ai/benchmark.xml`) and write [AI_BENCHMARK.md](AI_BENCHMARK.md) — a rerun **merges** into an existing file (untouched models/context-modes/cases are preserved byte-for-byte; `--replace-report` overwrites fully). Commands: [CLI regression gate](#cli-regression-gate). Default live scoring uses **Full evidence** (`--context-mode full`). **`--compare-context`** runs Compact, Balanced, and Full on the same cases and reports score, token totals, and latency side by side. Each live model call **retries up to 6 times, pausing 10s between attempts** on transient errors (HTTP 429/503 high demand, timeouts, empty replies); auth and not-found errors are not retried.
+Offline `ai-test` / `runOfflineBenchmark` already ships. Live runs read **model id, base URL, TLS, and API key** from a suite XML (`--config examples/ai/benchmark.xml`) and write [AI_BENCHMARK.md](AI_BENCHMARK.md) — a rerun **merges** into an existing file (untouched models/context-modes/cases are preserved byte-for-byte; `--replace-report` overwrites fully). Commands: [CLI regression gate](#cli-regression-gate). Default live scoring uses **Full evidence** (`--context-mode full`). **`--compare-context`** runs Compact, Balanced, and Full on the same cases and reports score, token totals, and latency side by side. Each live model call **retries up to 10 times, pausing 10s between attempts** on transient errors (HTTP 429/503 high demand, timeouts, empty replies); auth and not-found errors are not retried.
 
 The capability matrix above is qualitative (small local vs 9B+ vs cloud). The suite turns those expectations into repeatable measurements: **which model is most reliable for BTF Viewer trace investigation**, not which model is largest or “smartest.”
 
@@ -794,7 +802,7 @@ python builds/btf_viewer.py ai-test -c examples/ai/benchmark.xml --compare-conte
 make -C BTFViewer ai-test-context   # AI_CONFIG, optional AI_MODELS
 ```
 
-Use this when picking a default Context setting for a local model: Compact may save tokens and time if scores stay within your pass threshold. Details: [Context mode (token usage)](#context-mode-token-usage).
+Use this when choosing a default Context setting. Compact used fewer tokens for every measured model, but it did not always reduce latency or preserve the score. Compare all three modes on the intended endpoint and workload. Details: [Context mode (token usage)](#context-mode-token-usage).
 
 ### Scope
 
@@ -809,13 +817,13 @@ Do **not** pick local models only because they are newest or largest. Measure mo
 
 **Local — developer workstation:**
 
-- **Qwen3.5 9B** (`qwen3.5:9b`) — shipped in-app default; primary practical local investigator
-- **Qwen3.8 27B** (`qwen3.8:27b`) — higher-quality local comparison
+- **Qwen3.5 9B** (`qwen3.5:9b`) — shipped in-app default and the practical local choice. Balanced passed 15/17 cases; Full evidence produced Overall 88.
+- **Qwen3.8 27B** (`qwen3.8:27b`) — high-latency local comparison. Balanced reached Overall 88, but averaged 325.2s/case and did not consistently outperform the 9B model.
 
 **Gemini** (configurable; newer ids can be added without changing the runner):
 
-- **Gemini 3.7 Flash** (`gemini-3.7-flash`) — high-reasoning cloud reference
-- **Gemini 3.5 Flash-Lite** (`gemini-3.5-flash-lite`) — fast/efficient cloud reference
+- **Gemini 3.7 Flash** (`gemini-3.7-flash`) — higher-scoring shipped Gemini reference. Full evidence reached Overall 85 with 14/17 PASS.
+- **Gemini 3.5 Flash-Lite** (`gemini-3.5-flash-lite`) — latency-focused cloud reference. Full evidence reached Overall 83 at 2.6s/case.
 
 ```text
 Shipped live suite
@@ -829,7 +837,7 @@ Shipped live suite
     └── Gemini 3.5 Flash-Lite
 ```
 
-A 9B model may beat a 27B model on this app if the larger id only slightly improves accuracy while blowing latency and memory. Measure **diagnostic quality** and **practical system performance**.
+The recorded results show why model size alone is not a useful selection rule. The 27B local model matched the highest local Overall score only in Balanced mode, while taking about 325 seconds per case. The 9B model reached Overall 88 in Full evidence at 16.2 seconds per case. Measure both **diagnostic quality** and **practical system performance**.
 
 Do not hard-code the model list into the runner. Copy [examples/ai/benchmark.xml](examples/ai/benchmark.xml). For a self-signed or private-CA gateway, keep `<tls-verify>false</tls-verify>` (the suite default); public HTTPS models can override to `true`:
 
@@ -987,12 +995,27 @@ Same suite against the shipped Gemini and local Ollama models. Recorded 2026-08-
 | Model                    | Category              | Finding | Evidence | Root cause | Calibration | Notes                                                     |
 | ------------------------ | --------------------- | ------- | -------- | ---------- | ----------- | ---------------------------------------------------------- |
 | `qwen3.5:9b`              | Local / practical     | 85      | **93**   | **82**     | 80          | overall **88**, 16.2s/case, 14/17 PASS                     |
-| `qwen3.8:27b`             | Local / high-quality  | **88**  | **94**   | 65         | 80          | overall **86**, 332s/case, 13/17 PASS                      |
+| `qwen3.8:27b`             | Local / high-latency  | **88**  | **94**   | 65         | 80          | overall **86**, 332s/case, 13/17 PASS                      |
 | `gemini-3.5-flash-lite`   | Cloud / fast          | 82      | 90       | 71         | 80          | overall **83**, 2.6s/case, 13/17 PASS                      |
-| `gemini-3.7-flash`        | Cloud                 | 65      | 76       | 53         | 80          | overall **77**, 57.9s/case, 12/17 PASS; 3/17 API errors    |
+| `gemini-3.7-flash`        | Cloud                 | 82      | **94**   | 59         | 80          | overall **85**, 25.0s/case, 14/17 PASS                     |
+
+[AI_BENCHMARK.md](AI_BENCHMARK.md) also carries two cloud models run outside the shipped suite (`--models` against a private config), for reference only — they are not in `examples/ai/benchmark.xml` and are not part of the "Recommended models" guidance below:
+
+| Model               | Category                     | Finding | Evidence | Root cause | Calibration | Notes                                   |
+| ------------------- | ----------------------------- | ------- | -------- | ---------- | ----------- | ---------------------------------------- |
+| `claude-sonnet-5`    | Cloud (optional, not shipped) | 85      | **94**   | 59         | 80          | overall **82**, 15.9s/case, 12/17 PASS   |
+| `gpt-5.6-sol`        | Cloud (optional, not shipped) | **91**  | 90       | **76**     | 80          | overall **88**, 9.6s/case, 15/17 PASS    |
 
 
 Live `--config` runs a tool-result follow-up when the first turn is tools-only (or planning text without a Confidence line). Single-turn scores are not comparable.
+
+The results support these practical conclusions:
+
+- **Best practical local setup:** `qwen3.5:9b` with Balanced for the highest pass count, or Full evidence for the highest Overall score.
+- **Fastest measured cloud setup:** `gemini-3.5-flash-lite` with Compact at 2.3s/case; Full evidence improved its score to 83 at 2.6s/case.
+- **Best shipped Gemini result:** `gemini-3.7-flash` with Full evidence, Overall 85 and 14/17 PASS.
+- **Highest result in the complete report:** optional `gpt-5.6-sol` with Compact, Overall 90 and 16/17 PASS.
+- **More context is not automatically better:** the best mode depends on the model. Compare all three modes before choosing a deployment default.
 
 **Context mode comparison** (`--compare-context`): runs the same live suite three times per model (Compact → Balanced → Full evidence) and writes a **Context mode comparison** table with overall score, pass rate, prompt/completion/total tokens, and mean latency. Use this to see whether a smaller context budget saves tokens/time without hurting investigation scores on your hardware.
 

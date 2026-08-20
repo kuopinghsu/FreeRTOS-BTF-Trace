@@ -1,13 +1,13 @@
 # AI Benchmark results
 
-Generated: 2026-08-19 04:12 UTC
+Generated: 2026-08-19 22:38 UTC
 Dataset: `tests/ai`
 
 Live `--config` suite XML scores a real endpoint. Offline rows score the canned `response` fields in `dataset.json` and gate the scorer, not a model.
 
 ## Offline fixture scorer
 
-Run `2026-08-19-035307` — no live model.
+Run `2026-08-19-223109` — no live model.
 
 | Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
@@ -44,9 +44,9 @@ Run `2026-08-19-035307` — no live model.
 | `gemini-3.5-flash-lite` | Compact | Cloud / fast | 82 | 12/17 | 71718 | 2.3s |
 | `gemini-3.5-flash-lite` | Balanced | Cloud / fast | 80 | 11/17 | 74648 | 2.9s |
 | `gemini-3.5-flash-lite` | Full evidence | Cloud / fast | 83 | 13/17 | 75486 | 2.6s |
-| `gemini-3.7-flash` | Compact | Cloud | 85 | 14/17 | 72955 | 31.6s |
-| `gemini-3.7-flash` | Balanced | Cloud | 85 | 14/17 | 79797 | 29.6s |
-| `gemini-3.7-flash` | Full evidence | Cloud | 77 | 12/17 | 74317 | 57.9s |
+| `gemini-3.7-flash` | Compact | Cloud | 83 | 12/17 | 71453 | 39.4s |
+| `gemini-3.7-flash` | Balanced | Cloud | 83 | 13/17 | 78856 | 53.7s |
+| `gemini-3.7-flash` | Full evidence | Cloud | 85 | 14/17 | 81855 | 25.0s |
 | `claude-sonnet-5` | Compact | Cloud | 85 | 13/17 | 134649 | 10.3s |
 | `claude-sonnet-5` | Balanced | Cloud | 87 | 13/17 | 143486 | 14.1s |
 | `claude-sonnet-5` | Full evidence | Cloud | 82 | 12/17 | 149873 | 15.9s |
@@ -86,9 +86,9 @@ Same model and dataset; Compact / Balanced / Full evidence packing.
 
 | Context | Overall | Pass | Prompt tok | Completion tok | Total tok | Mean latency |
 |---|---:|---:|---:|---:|---:|---:|
-| Compact | 85 | 14/17 | 66868 | 6087 | 72955 | 31.6s |
-| Balanced | 85 | 14/17 | 72030 | 7767 | 79797 | 29.6s |
-| Full evidence | 77 | 12/17 | 67398 | 6919 | 74317 | 57.9s |
+| Compact | 83 | 12/17 | 66366 | 5087 | 71453 | 39.4s |
+| Balanced | 83 | 13/17 | 71424 | 7432 | 78856 | 53.7s |
+| Full evidence | 85 | 14/17 | 73474 | 8381 | 81855 | 25.0s |
 
 ### `claude-sonnet-5`
 
@@ -118,9 +118,9 @@ Same model and dataset; Compact / Balanced / Full evidence packing.
 | `gemini-3.5-flash-lite (Compact)` | 82 | 90 | 70 | 71 | 80 | 99 |
 | `gemini-3.5-flash-lite (Balanced)` | 82 | 90 | 56 | 71 | 80 | 99 |
 | `gemini-3.5-flash-lite (Full evidence)` | 82 | 90 | 77 | 71 | 80 | 99 |
-| `gemini-3.7-flash (Compact)` | 88 | 88 | 98 | 59 | 80 | 99 |
-| `gemini-3.7-flash (Balanced)` | 85 | 94 | 100 | 59 | 80 | 99 |
-| `gemini-3.7-flash (Full evidence)` | 65 | 76 | 101 | 53 | 80 | 99 |
+| `gemini-3.7-flash (Compact)` | 82 | 82 | 94 | 65 | 80 | 98 |
+| `gemini-3.7-flash (Balanced)` | 82 | 91 | 100 | 53 | 80 | 99 |
+| `gemini-3.7-flash (Full evidence)` | 82 | 94 | 100 | 59 | 80 | 99 |
 | `claude-sonnet-5 (Compact)` | 82 | 85 | 91 | 76 | 80 | 99 |
 | `claude-sonnet-5 (Balanced)` | 91 | 93 | 94 | 76 | 80 | 86 |
 | `claude-sonnet-5 (Full evidence)` | 85 | 94 | 81 | 59 | 80 | 95 |
@@ -402,46 +402,74 @@ Tokens: **67853** prompt + **7633** completion = **75486** total.
 
 ### `gemini-3.7-flash` — Compact
 
-Cloud. Run `2026-08-19-003934`.
-
-| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| migration_thrash | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
-| mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| priority_inversion | 38 | 0 | 0 | 100 | 0 | 80 | 100 | ERROR |
-| deadline_miss | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| trace_regression | 73 | 50 | 50 | 67 | 100 | 80 | 100 | PASS |
-| explain_region | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| adversarial_mutex_vs_starvation | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| adversarial_exec_vs_preemption | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| adversarial_correlation_not_cause | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| adversarial_out_of_scope_time | 75 | 100 | 100 | 100 | 0 | 80 | 80 | FAIL |
-| period_jitter | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| waiter_owner_handoff | 68 | 50 | 100 | 100 | 0 | 80 | 100 | FAIL |
-| stats_page_next_check | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| response_vs_blocking | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| preempt_matrix_vs_chain | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| mutex_block_vs_wait_queue | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-
-**Overall 85**
-
-1/17 cases returned an API error (first: HTTP 503: This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.).
-
-Mean latency: **31.6s** / case.
-
-Tokens: **66868** prompt + **6087** completion = **72955** total.
-
-### `gemini-3.7-flash` — Balanced
-
-Cloud. Run `2026-08-19-003934`.
+Cloud. Run `2026-08-19-043257`.
 
 | Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
 | migration_thrash | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
 | mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
 | priority_inversion | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| deadline_miss | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| deadline_miss | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
+| load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| trace_regression | 63 | 50 | 50 | 0 | 100 | 80 | 100 | FAIL |
+| explain_region | 48 | 0 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_mutex_vs_starvation | 45 | 0 | 50 | 100 | 0 | 80 | 80 | FAIL |
+| adversarial_exec_vs_preemption | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_correlation_not_cause | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_out_of_scope_time | 75 | 100 | 100 | 100 | 0 | 80 | 80 | FAIL |
+| period_jitter | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
+| waiter_owner_handoff | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| stats_page_next_check | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| response_vs_blocking | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| preempt_matrix_vs_chain | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| mutex_block_vs_wait_queue | 68 | 100 | 50 | 100 | 0 | 80 | 100 | FAIL |
+
+**Overall 83**
+
+Mean latency: **39.4s** / case.
+
+Tokens: **66366** prompt + **5087** completion = **71453** total.
+
+### `gemini-3.7-flash` — Balanced
+
+Cloud. Run `2026-08-19-043257`.
+
+| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| migration_thrash | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| priority_inversion | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| deadline_miss | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
+| load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| trace_regression | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
+| explain_region | 48 | 0 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_mutex_vs_starvation | 68 | 50 | 100 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_exec_vs_preemption | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_correlation_not_cause | 58 | 0 | 100 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_out_of_scope_time | 75 | 100 | 100 | 100 | 0 | 80 | 80 | FAIL |
+| period_jitter | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| waiter_owner_handoff | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| stats_page_next_check | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| response_vs_blocking | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| preempt_matrix_vs_chain | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| mutex_block_vs_wait_queue | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+
+**Overall 83**
+
+Mean latency: **53.7s** / case.
+
+Tokens: **71424** prompt + **7432** completion = **78856** total.
+
+### `gemini-3.7-flash` — Full evidence
+
+Cloud. Run `2026-08-19-223109`.
+
+| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| migration_thrash | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| priority_inversion | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| deadline_miss | 88 | 50 | 100 | 100 | 100 | 80 | 100 | PASS |
 | load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
 | trace_regression | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
 | explain_region | 48 | 0 | 50 | 100 | 0 | 80 | 100 | FAIL |
@@ -458,41 +486,9 @@ Cloud. Run `2026-08-19-003934`.
 
 **Overall 85**
 
-Mean latency: **29.6s** / case.
+Mean latency: **25.0s** / case.
 
-Tokens: **72030** prompt + **7767** completion = **79797** total.
-
-### `gemini-3.7-flash` — Full evidence
-
-Cloud. Run `2026-08-19-003934`.
-
-| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| migration_thrash | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| priority_inversion | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| deadline_miss | 88 | 50 | 100 | 100 | 100 | 80 | 100 | PASS |
-| load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| trace_regression | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
-| explain_region | 48 | 0 | 50 | 100 | 0 | 80 | 100 | FAIL |
-| adversarial_mutex_vs_starvation | 38 | 0 | 0 | 100 | 0 | 80 | 100 | ERROR |
-| adversarial_exec_vs_preemption | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| adversarial_correlation_not_cause | 82 | 0 | 100 | 125 | 100 | 80 | 100 | PASS |
-| adversarial_out_of_scope_time | 75 | 100 | 100 | 100 | 0 | 80 | 80 | FAIL |
-| period_jitter | 38 | 0 | 0 | 100 | 0 | 80 | 100 | ERROR |
-| waiter_owner_handoff | 38 | 0 | 0 | 100 | 0 | 80 | 100 | ERROR |
-| stats_page_next_check | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| response_vs_blocking | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| preempt_matrix_vs_chain | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| mutex_block_vs_wait_queue | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-
-**Overall 77**
-
-3/17 cases returned an API error (first: HTTP 503: This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.).
-
-Mean latency: **57.9s** / case.
-
-Tokens: **67398** prompt + **6919** completion = **74317** total.
+Tokens: **73474** prompt + **8381** completion = **81855** total.
 
 ### `claude-sonnet-5` — Compact
 

@@ -4,13 +4,13 @@
 
 ![BTFViewer AI-assisted analysis](../images/btfviewer-ai.png)
 
-BTFViewer is a trace-analysis tool for real-time operating systems (RTOSs). It opens context-switch traces in **Best Trace Format** (`.btf`) and helps you:
+BTFViewer analyzes context-switch traces from real-time operating systems (RTOSs). It opens **Best Trace Format** (`.btf`) files and provides the tools needed to:
 
 - inspect task activity on a timeline;
 - measure timing with cursors;
 - review scheduling and synchronization statistics;
 - identify load imbalance, latency, blocking, and migration issues; and
-- use the optional AI Assistant to investigate measured findings.
+- use the optional AI Assistant to review measured findings.
 
 ![BTFViewer](../images/btfviewer.png)
 
@@ -22,7 +22,7 @@ BTFViewer is a trace-analysis tool for real-time operating systems (RTOSs). It o
 - **Navigation and measurement:** Zoom, pan, search, place cursors, and add bookmarks or annotations.
 - **Statistics and findings:** Review utilization, latency, migration, mutex, semaphore, queue, and scheduling data.
 - **Multi-trace sessions:** Open several traces in tabs and compare results.
-- **AI-assisted investigation:** Ask the AI Assistant to explain measured findings and cite supporting evidence.
+- **AI-assisted investigation:** Ask the AI Assistant to explain measured findings and reference the supporting evidence.
 - **Export:** Save PNG or SVG images, CSV or HTML reports, Perfetto traces, and selected BTF ranges.
 - **Desktop CLI:** Generate reports and images in scripts or continuous integration (CI) systems.
 - **Guided demo:** Play an 8-core walkthrough with English or Traditional Chinese narration.
@@ -37,7 +37,7 @@ BTFViewer is a trace-analysis tool for real-time operating systems (RTOSs). It o
 | [AI.md](AI.md) | Configure and use AI-assisted investigation |
 | [demos/README.md](demos/README.md) | Create and maintain guided demos |
 
-New users should first complete [Quick start](#quick-start), then follow [Basic analysis workflow](#basic-analysis-workflow). Use the other documents when more detail is required.
+If you are new to BTFViewer, begin with [Quick start](#quick-start), then follow the [Basic analysis workflow](#basic-analysis-workflow). Refer to the other documents for detailed procedures and metric definitions.
 
 ## Quick start
 
@@ -45,8 +45,8 @@ New users should first complete [Quick start](#quick-start), then follow [Basic 
 
 Requirements:
 
-- Python 3.8 or later; Python 3.9 or later is recommended.
-- PySide6 6.4 or later. The requirements command below installs it.
+- Python 3.8 or later. Python 3.9 or later is recommended.
+- PySide6 6.4 or later. The command below installs it with the other dependencies.
 
 ```bash
 cd BTFViewer
@@ -54,7 +54,7 @@ pip install -r requirements.txt
 python builds/btf_viewer.py trace.btf
 ```
 
-Replace `trace.btf` with the path to your trace. If no file is given, BTFViewer restores the previous session. You can also open a file with **File → Open**, **File → Open Recent**, or drag and drop.
+Replace `trace.btf` with the path to the trace file. If no file is specified, BTFViewer restores the previous session. Files can also be opened through **File → Open**, **File → Open Recent**, or drag and drop.
 
 ### Web application
 
@@ -64,7 +64,7 @@ Open the standalone file in a modern browser:
 open BTFViewer/builds/btf_viewer.html
 ```
 
-You can also double-click the file or use the [hosted demo](https://apps.kuoping.com/btf_viewer.html). A local server is not normally required.
+You can also double-click the file or use the [hosted demo](https://apps.kuoping.com/btf_viewer.html). A local server is usually not required.
 
 To rebuild the Web application:
 
@@ -88,7 +88,7 @@ Sample traces are available in `tracedata/`, including `example-2cores.btf.gz`.
 
 ## Guided demo
 
-The `demo_8cores` package demonstrates the main workflow with an 8-core trace and spoken instructions. This is the easiest way to learn the interface before analyzing your own trace.
+The `demo_8cores` package presents the main workflow with an 8-core trace and spoken instructions. Run it before opening an application trace to become familiar with the interface and analysis sequence.
 
 ### Run the demo
 
@@ -126,13 +126,13 @@ python3 scripts/demo_pack.py demos/demo_8cores --list-voices
 
 The generated `builds/demo_8cores.xtf` contains the script, trace, and selected voice files. Open it in either the Desktop or Web application.
 
-The Web **Record** function uses browser display capture. Select the current tab and enable tab audio to include narration.
+The Web **Record** function uses browser display capture. Select the current tab and enable tab audio to include narration. Toolbar hover tips are drawn in the page (not the browser’s native `title` popup) so they appear in the recording. Capture requests the tab’s device-pixel size (no downscale), VP9, and a bitrate that scales with resolution so UI text and timeline lines stay sharp.
 
 See [demos/README.md](demos/README.md) for package layout, voice generation, recording, XML actions, and the demo API.
 
-## Using the viewer
+## Viewer controls
 
-Desktop and Web use the same main workflow. Platform-specific differences are noted below.
+The Desktop and Web applications use the same main workflow. Platform-specific differences are noted below.
 
 ### Main controls
 
@@ -166,7 +166,7 @@ Task View is useful for checking execution and migration. Core View is useful fo
 - Hold **Shift** while scrolling to change the pan axis.
 - Use a trackpad pinch gesture to zoom on macOS.
 - Middle-drag across the timeline to zoom into a selected time range.
-- Select **Fit** or press `Ctrl+0` to show the complete trace.
+- Select **Fit** or press `Ctrl+0` to show the complete trace. **Range** / `Ctrl+R` fits the time between the first and last cursor (C1–Cn). In a demo script, `<zoom_view/>` uses Fit, while `<fit_view/>` uses Range when cursors are present. **Zoom out** stops at Fit and is unavailable while the complete trace is visible.
 - Select **1:1** to return to the configured zoom density.
 - Click a task label or legend entry to keep that task highlighted.
 - Hover over a timeline segment to view its duration, core, and nearby activity.
@@ -175,7 +175,7 @@ Task View is useful for checking execution and migration. Core View is useful fo
 
 Select **Load** to display the utilization chart below the timeline. Drag the divider to resize it.
 
-When a task is locked as the current highlight, Task View shows that task's utilization on each core. This view helps determine whether its work is distributed normally or moves between cores too often.
+When a task is locked as the current highlight, Task View shows its utilization on each core. Use this display to check whether the work is distributed as expected or moves between cores too often.
 
 ### Cursors and time ranges
 
@@ -213,7 +213,7 @@ Desktop restores files from their original paths. Web can restore up to eight pa
 
 ## Basic analysis workflow
 
-Use this order for a first review:
+For an initial review, use the following sequence:
 
 1. Open the trace and select **Fit** to view its complete duration.
 2. Select **Load** and check whether all cores carry a reasonable share of the work.
@@ -224,13 +224,13 @@ Use this order for a first review:
 7. Inspect the task, core, preemption, blocking, synchronization, or migration details.
 8. If needed, ask the AI Assistant to explain or verify the measured evidence.
 
-Do not begin with a suspected cause. First confirm the issue in the timeline and Statistics. See [WORKFLOWS.md](WORKFLOWS.md) for detailed procedures.
+Start with measured evidence instead of an assumed cause. Confirm the behavior in the timeline and Statistics before drawing a conclusion. See [WORKFLOWS.md](WORKFLOWS.md) for detailed procedures.
 
 ## Analysis and Statistics
 
-BTFViewer calculates its results from BTF events. It does not inspect source code or ELF files, simulate an RTOS scheduler, or estimate data that is not present in the trace.
+BTFViewer calculates all results from recorded BTF events. It does not inspect source code or ELF files, simulate an RTOS scheduler, or estimate data that is not present in the trace.
 
-### Where to start
+### Choose the first check
 
 | Symptom | Start here | Check next |
 |---|---|---|
@@ -252,25 +252,25 @@ Detailed metric definitions and formulas are in [STATISTICS.md](STATISTICS.md).
 
 Select **Analysis** to review possible issues in the current trace or cursor range. Findings can include load imbalance, execution-time hotspots, blocking, priority inversion, frequent core migration, deadline misses, tick-health problems, and synchronization movement between cores.
 
-Each finding includes a severity, related Statistics section, and relevant time range when available. Select a finding to open its Statistics evidence, apply cursors, display its range on the timeline, start an AI-assisted investigation, or save the findings as text.
+Each finding includes a severity, a related Statistics section, and a relevant time range when available. Select a finding to open its statistical evidence, place cursors, show the range on the timeline, start an AI-assisted investigation, or save the findings as text.
 
 For multi-core traces with measurable utilization, the core-balance finding reports a **Load Balance Score** with supporting distribution values. A high score means work is distributed more evenly. Review the timeline and migration data before deciding whether the distribution is suitable for your workload.
 
-### Important statistical values
+### Reading Max, p95, and p99
 
 - **Max** is the largest measured value. Use it to locate the worst observed event.
 - **p95** is the value that 95% of samples do not exceed. It shows behavior during the slower part of normal operation without being dominated by one rare event.
-- **p99** is the value that 99% of samples do not exceed. It helps identify severe but recurring latency that an average may hide.
+- **p99** is the value that 99% of samples do not exceed. Use it to identify severe but recurring latency that an average may hide.
 
-p95 is important because real-time performance cannot be judged by the average alone. A good average can still contain frequent slow events. Compare p95 with Max and p99 to separate common delays from rare extremes.
+p95 is important because an average alone does not describe real-time performance. A good average can still hide repeated slow events. Compare p95 with p99 and Max to distinguish typical tail latency from less frequent extremes.
 
 ### Core migration checks
 
-Check load balance before judging migration counts. An SMP scheduler may move tasks to use idle cores and distribute work. Some migration is therefore expected.
+Check load balance before interpreting migration counts. An SMP scheduler may move tasks to idle cores to distribute the workload, so some migration is expected.
 
 After confirming load balance, check whether a task moves between cores more often than needed. Frequent migration can increase L1 cache misses. On Xtensa processors, migration can also reduce the benefit of lazy context switching: coprocessor registers may need to be saved when a task moves to another core, increasing context-switch overhead.
 
-Use Task View, per-core load, **Core Migrations**, and the migration heatmap together. A high migration count is most relevant when it coincides with poor cache behavior, increased switch overhead, latency, or unstable load distribution.
+Review Task View, per-core load, **Core Migrations**, and the migration heatmap together. A high migration count is significant when it coincides with poor cache behavior, greater context-switch overhead, higher latency, or unstable load distribution.
 
 ### Trace Compare
 
@@ -280,7 +280,7 @@ Use the same workload and measurement period on both traces. A difference is mea
 
 ## AI Assistant
 
-The optional AI Assistant works with Analysis Findings and Statistics. It helps organize an investigation and explain evidence already measured by BTFViewer. It does not replace the timeline or create measurements that are missing from the trace.
+The optional AI Assistant explains Analysis Findings and Statistics measured by BTFViewer. It does not replace timeline verification or create measurements that are missing from the trace.
 
 Recommended use:
 
@@ -290,7 +290,7 @@ Recommended use:
 4. Use **Verify with AI** to challenge the proposed cause.
 5. If a change is recommended, capture a new trace and compare the results.
 
-Available context levels are **Compact**, **Balanced**, and **Full evidence**. Compact uses fewer tokens; Balanced is the default. Configure the model, endpoint, authentication, context, privacy, and reply language in **Settings → AI**.
+Available context levels are **Compact**, **Balanced**, and **Full evidence**. Compact uses fewer tokens, and Balanced is the default. Configure the model, endpoint, authentication, context, privacy, and reply language in **Settings → AI**.
 
 Import `examples/ai/presets.json` for example Ollama, OpenAI, Gemini, DeepSeek, and Grok configurations. Local Ollama does not require an API key. Cloud services may send trace evidence to an external provider; use the anonymization and sensitive-trace settings when appropriate.
 
@@ -358,7 +358,7 @@ Desktop stores settings in `btf_viewer.rc` next to the viewer. Web stores them i
 | `Ctrl+O` | Open a file |
 | `Ctrl+W` | Close the current tab |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Move between tabs |
-| `Ctrl++` / `Ctrl+-` | Zoom in or out |
+| `Ctrl++` / `Ctrl+-` | Zoom in, or zoom out until Fit |
 | `Ctrl+0` / `F` | Fit the complete trace |
 | `Ctrl+R` | Zoom to the cursor range |
 | `Ctrl+F` / `F3` / `Shift+F3` | Find, next result, or previous result |
@@ -385,7 +385,7 @@ Desktop stores settings in `btf_viewer.rc` next to the viewer. Web stores them i
 | Drag a cursor or mark | Move it |
 | Right-click | Open the context menu |
 
-## Developer notes
+## Build and test
 
 Most users can ignore this section.
 

@@ -1450,9 +1450,25 @@ function applyViewport(vp) {
 }
 
 // ---- Zoom around center (called from parent via ref) ---------------------
-function zoomCenter(factor) {
-  const span   = (viewport.timeEnd - viewport.timeStart) * factor
-  const center = (viewport.timeStart + viewport.timeEnd) / 2
+function zoomCenter(factor, centerNs) {
+  const b = traceTimeBounds()
+  const cur = viewport.timeEnd - viewport.timeStart
+  let span = cur * factor
+  // Zoom-out is capped at Fit-to-window (full trace span). Toolbar Zoom Out
+  // is grayed at Fit; Ctrl+- / <zoom_out/> are no-ops there too. Matches
+  // Desktop scene.zoom() / _do_zoom() and this file's wheel _applyZoomAround*.
+  if (b && factor > 1) {
+    const fullSpan = Math.max(1, b.hi - b.lo)
+    if (cur >= fullSpan * 0.99) return
+    span = Math.min(span, fullSpan)
+    if (span >= fullSpan * 0.99) {
+      fitToTrace()
+      return
+    }
+  }
+  const center = (centerNs != null && Number.isFinite(centerNs))
+    ? centerNs
+    : (viewport.timeStart + viewport.timeEnd) / 2
   viewport.timeStart = center - span / 2
   viewport.timeEnd   = center + span / 2
   markInteracting(true)
@@ -1468,6 +1484,25 @@ function jumpToNs(ns) {
   viewport.timeEnd   = ns + span / 2
   emitViewportChange()
   scheduleRender()
+}
+
+function moveView({ ns, alignLeft, taskKey } = {}) {
+  if (!props.trace) return
+  if (alignLeft) {
+    const lo = props.trace.timeMin
+    const span = Math.max(1, viewport.timeEnd - viewport.timeStart)
+    viewport.timeStart = lo
+    viewport.timeEnd = lo + span
+    if (!taskKey) {
+      if (orientation.value === 'v') viewport.scrollX = 0
+      else viewport.scrollY = 0
+    }
+    emitViewportChange()
+    scheduleRender()
+  } else if (ns != null && Number.isFinite(Number(ns))) {
+    jumpToNs(Number(ns))
+  }
+  if (taskKey) scrollToTask(taskKey)
 }
 
 function zoomToTimeRange(lo, hi, paddingFrac = 0.05, opts = {}) {
@@ -1489,17 +1524,19 @@ function zoomToTimeRange(lo, hi, paddingFrac = 0.05, opts = {}) {
     const fromEnd = viewport.timeEnd
     const t0 = performance.now()
     const dur = 280
-    const tick = (now) => {
-      const t = Math.min(1, (now - t0) / dur)
-      const te = 1 - (1 - t) ** 2
-      viewport.timeStart = fromStart + (timeStart - fromStart) * te
-      viewport.timeEnd = fromEnd + (timeEnd - fromEnd) * te
-      emitViewportChange({ programmatic: !!opts.programmatic })
-      scheduleRender()
-      if (t < 1) requestAnimationFrame(tick)
-    }
-    requestAnimationFrame(tick)
-    return
+    return new Promise((resolve) => {
+      const tick = (now) => {
+        const t = Math.min(1, (now - t0) / dur)
+        const te = 1 - (1 - t) ** 2
+        viewport.timeStart = fromStart + (timeStart - fromStart) * te
+        viewport.timeEnd = fromEnd + (timeEnd - fromEnd) * te
+        emitViewportChange({ programmatic: !!opts.programmatic })
+        scheduleRender()
+        if (t < 1) requestAnimationFrame(tick)
+        else resolve()
+      }
+      requestAnimationFrame(tick)
+    })
   }
   viewport.timeStart = timeStart
   viewport.timeEnd = timeEnd
@@ -1954,7 +1991,7 @@ function getViewport() { return { ...viewport } }
 
 defineExpose({
   fitToTrace, applyViewport, applyTraceViewport, ensureTraceViewport, beginLoadSettle, scheduleRender,
-  zoomCenter, expandAll, collapseAll, expandCoresForMergeKeys, jumpToNs, zoomToTimeRange, zoomToCursorRange, zoom1to1,
+  zoomCenter, expandAll, collapseAll, expandCoresForMergeKeys, jumpToNs, moveView, zoomToTimeRange, zoomToCursorRange, zoom1to1,
   zoomToPercent, getZoomPresetSnapshot,
   jumpToTraceStart, jumpToTraceEnd, jumpSegmentBoundary, scrollTimeAxis, scrollRowAxis,
   placeCursorAtCenter, placeCursorAtTime, removeNearestCursorAt, clearAllCursorsViaHandler,

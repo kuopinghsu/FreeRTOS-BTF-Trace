@@ -197,6 +197,133 @@ class DemoInappSourceParityTests(unittest.TestCase):
         js = WEB_RUNNER.read_text(encoding="utf-8")
         self.assertEqual(_python_run_action_tags(py), _js_run_action_tags(js))
 
+    def test_move_view_desktop_web_lockstep(self) -> None:
+        """XML <move_view/> uses the same tags, time rules, and task-centering
+        on Desktop and Web (expand one core; do not collapse the rest)."""
+        py_runner = DESKTOP_INAPP.read_text(encoding="utf-8")
+        js_runner = WEB_RUNNER.read_text(encoding="utf-8")
+        mw = DESKTOP_MW.read_text(encoding="utf-8")
+        app = WEB_APP.read_text(encoding="utf-8")
+        view = (BTF_ROOT / "btf_viewer_pkg" / "view.py").read_text(encoding="utf-8")
+        panel = (
+            BTF_ROOT / "web" / "src" / "components" / "TimelinePanel.vue"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            'tag in ("move_view", "move_viewport", "pan_view")', py_runner)
+        self.assertIn('"op": "move_view"', py_runner)
+        self.assertIn('("time", "ns", "at")', py_runner)
+        self.assertIn("time_omitted", py_runner)
+        self.assertIn(
+            'self._attr(el, "task", self._attr(el, "name"))', py_runner)
+
+        self.assertIn(
+            "tag === 'move_view' || tag === 'move_viewport' || tag === 'pan_view'",
+            js_runner)
+        self.assertIn("host.moveView", js_runner)
+        self.assertIn("timeOmitted", js_runner)
+        self.assertIn(
+            "'time' in attrib || 'ns' in attrib || 'at' in attrib", js_runner)
+        self.assertIn("attr(el, 'task', vars, attr(el, 'name', vars))", js_runner)
+
+        idx = mw.find("def _demo_move_view")
+        self.assertGreaterEqual(idx, 0)
+        body = mw[idx:mw.find("def _demo_expand_core_for_task", idx)]
+        self.assertIn("align_time_start", body)
+        self.assertIn("align_row_start", body)
+        self.assertIn("time_omitted", body)
+        self.assertIn("min(int(s.start)", body)
+        self.assertIn("ns <= int(self._trace.time_min)", body)
+        self.assertIn("_scroll_view_to_task(mk, center=True)", body)
+        self.assertIn("_demo_expand_core_for_task", body)
+
+        aidx = app.find("moveView: async")
+        self.assertGreaterEqual(aidx, 0)
+        abody = app[aidx:app.find("setCursors: async", aidx)]
+        self.assertIn("timeOmitted || emptyTime", abody)
+        self.assertIn("Math.min(...segs.map(s => Number(s.start)))", abody)
+        self.assertIn("ns <= tr.timeMin", abody)
+        self.assertIn("expandCore", abody)
+        self.assertNotIn("expandCoresForMergeKeys", abody)
+        self.assertIn("timelinePanelRef.value?.moveView", abody)
+
+        vidx = view.find("def align_row_start")
+        self.assertGreaterEqual(vidx, 0)
+        vbody = view[vidx:vidx + 400]
+        self.assertIn("verticalScrollBar()", vbody)
+        self.assertIn("bar.setValue(bar.minimum())", vbody)
+
+        pidx = panel.find("function moveView")
+        self.assertGreaterEqual(pidx, 0)
+        pbody = panel[pidx:pidx + 900]
+        self.assertIn("alignLeft", pbody)
+        self.assertIn("viewport.scrollY = 0", pbody)
+        self.assertIn("viewport.scrollX = 0", pbody)
+        self.assertIn("jumpToNs", pbody)
+        self.assertIn("scrollToTask(taskKey)", pbody)
+        self.assertNotIn("expandCoresForMergeKeys", pbody)
+
+    def test_show_message_desktop_web_lockstep(self) -> None:
+        """XML <show_message/> shows a centered caption, waits, then clears."""
+        py_runner = DESKTOP_INAPP.read_text(encoding="utf-8")
+        js_runner = WEB_RUNNER.read_text(encoding="utf-8")
+        mw = DESKTOP_MW.read_text(encoding="utf-8")
+        app = WEB_APP.read_text(encoding="utf-8")
+
+        self.assertIn('tag in ("show_message", "message", "show_msg")', py_runner)
+        self.assertIn('"op": "show_message"', py_runner)
+        self.assertIn('"op": "clear_message"', py_runner)
+        self.assertIn('"animate": animate_clear', py_runner)
+        self.assertIn("_wait_interruptible", py_runner)
+
+        self.assertIn(
+            "tag === 'show_message' || tag === 'message' || tag === 'show_msg'",
+            js_runner)
+        self.assertIn("host.showMessage", js_runner)
+        self.assertIn("host.clearMessage", js_runner)
+        self.assertIn("animateClear", js_runner)
+
+        self.assertIn('op == "show_message"', mw)
+        self.assertIn('op == "clear_message"', mw)
+        self.assertIn("_demo_show_center_message", mw)
+        self.assertIn("DemoMessageOverlay", mw)
+
+        self.assertIn("showMessage: async", app)
+        self.assertIn("clearMessage: async", app)
+        self.assertIn("demoMessageText", app)
+        self.assertIn("demo-message-overlay", app)
+        self.assertIn("demo-message-enter-active", app)
+        self.assertIn("DEMO_MESSAGE_FADE_MS", app)
+
+        self.assertIn("class DemoMessageOverlay", (
+            BTF_ROOT / "btf_viewer_pkg" / "demo_inapp.py"
+        ).read_text(encoding="utf-8"))
+        self.assertIn("_DEMO_MESSAGE_FADE_MS", (
+            BTF_ROOT / "btf_viewer_pkg" / "demo_inapp.py"
+        ).read_text(encoding="utf-8"))
+        self.assertIn("QGraphicsOpacityEffect", (
+            BTF_ROOT / "btf_viewer_pkg" / "demo_inapp.py"
+        ).read_text(encoding="utf-8"))
+        self.assertIn("demo_message_card", (
+            BTF_ROOT / "btf_viewer_pkg" / "demo_inapp.py"
+        ).read_text(encoding="utf-8"))
+        self.assertIn("heightForWidth", (
+            BTF_ROOT / "btf_viewer_pkg" / "demo_inapp.py"
+        ).read_text(encoding="utf-8"))
+
+    def test_toolbar_heatmap_live_target_lockstep(self) -> None:
+        """<move target="toolbar_heatmap"/> resolves the Heatmap button."""
+        mw = DESKTOP_MW.read_text(encoding="utf-8")
+        tb = (BTF_ROOT / "web" / "src" / "components" / "Toolbar.vue").read_text(
+            encoding="utf-8")
+        readme = (BTF_ROOT / "demos" / "README.md").read_text(encoding="utf-8")
+        xml = (BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.xml").read_text(
+            encoding="utf-8")
+        self.assertIn('"toolbar_heatmap": "_tb_heatmap_btn"', mw)
+        self.assertIn('data-demo-target="toolbar_heatmap"', tb)
+        self.assertIn("`toolbar_heatmap`", readme)
+        self.assertIn('name="toolbar_heatmap"', xml)
+
     def test_hotkey_and_type_are_skipped(self) -> None:
         py = DESKTOP_INAPP.read_text(encoding="utf-8")
         js = WEB_RUNNER.read_text(encoding="utf-8")

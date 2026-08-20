@@ -1487,7 +1487,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
                 api_key="test-key",
             )
         self.assertEqual(n["n"], 3)
-        self.assertEqual(AI_LIVE_RETRY_ATTEMPTS, 6)
+        self.assertEqual(AI_LIVE_RETRY_ATTEMPTS, 10)
         self.assertIn("CS[22]", turn["content"])
         self.assertNotIn("error", turn)
 
@@ -1528,9 +1528,9 @@ class AiAssistantHelpersTests(unittest.TestCase):
             self.assertEqual(call_ai_with_retries(boom, delay_s=0.0, log=False), "ok")
         self.assertEqual(n["n"], 2)
 
-    def test_call_ai_with_retries_waits_fixed_delay_six_times(self) -> None:
-        """6 attempts, a fixed 10s pause between each (no escalating backoff)."""
-        self.assertEqual(AI_LIVE_RETRY_ATTEMPTS, 6)
+    def test_call_ai_with_retries_waits_fixed_delay_ten_times(self) -> None:
+        """10 attempts, a fixed 10s pause between each (no escalating backoff)."""
+        self.assertEqual(AI_LIVE_RETRY_ATTEMPTS, 10)
         self.assertEqual(AI_LIVE_RETRY_DELAY_S, 10.0)
         n = {"n": 0}
 
@@ -1564,9 +1564,9 @@ class AiAssistantHelpersTests(unittest.TestCase):
                 result = call_ai_with_retries(flaky, delay_s=0.0)
         self.assertEqual(result, "ok")
         logged = [str(c.args[0]) for c in mock_print.call_args_list]
-        self.assertTrue(any("retry 1/6" in line for line in logged))
-        self.assertTrue(any("retry 2/6" in line for line in logged))
-        self.assertTrue(any("recovered after retry 3/6" in line for line in logged))
+        self.assertTrue(any("retry 1/10" in line for line in logged))
+        self.assertTrue(any("retry 2/10" in line for line in logged))
+        self.assertTrue(any("recovered after retry 3/10" in line for line in logged))
 
     def test_chat_completion_empty_reply_error_is_actionable(self) -> None:
         empty = {

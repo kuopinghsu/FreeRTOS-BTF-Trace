@@ -17,6 +17,7 @@
       :compare-enabled="compareTabs.length >= 2"
       :task-filter-active="!!timelineOptions.taskFilterKeys?.length"
       :range-enabled="rangeEnabled"
+      :zoom-out-enabled="zoomOutEnabled"
       :loading="loading"
       :loading-pct="loadingPct"
       :loading-msg="loadingMsg"
@@ -263,6 +264,19 @@
             {{ loadingPct }}%
           </div>
         </div>
+      </div>
+      <div
+        class="demo-message-overlay"
+        aria-live="polite"
+      >
+        <Transition name="demo-message">
+          <div
+            v-if="demoMessageText"
+            class="demo-message-card"
+          >
+            {{ demoMessageText }}
+          </div>
+        </Transition>
       </div>
       <div ref="leftPaneRef" class="left-pane">
         <div class="timeline-wrap">
@@ -771,7 +785,7 @@
               </div><div>Zoom in</div>
               <div class="k">
                 -
-              </div><div>Zoom out</div>
+              </div><div>Zoom out (until Fit)</div>
               <div class="k">
                 Tab
               </div><div>Next segment</div>
@@ -1163,6 +1177,7 @@ import SettingsDialog from './components/SettingsDialog.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
 import { zoomStatusFromViewport } from './utils/timeFormat.js'
 import { taskDisplayName, taskMergeKey, setColorblindMode } from './utils/colors.js'
+import { taskPassesRowFilter, rawTaskNameMatchesTextFilter, normalizeTaskFilterText } from './utils/taskFilter.js'
 import {
   AI_TOOL_ADD_ANNOTATION,
   AI_TOOL_ANALYZE_TRACES,
@@ -1524,6 +1539,8 @@ const demoRunning = ref(false)
 const demoPaused = ref(false)
 const demoRecording = ref(false)
 const demoStatusText = ref('')
+const demoMessageText = ref('')
+const DEMO_MESSAGE_FADE_MS = 250
 const demoNav = ref({ index: 0, total: 0, canPrev: false, canNext: false })
 const demoNavReady = ref(false)
 const demoVoiceLang = ref('en')
@@ -1646,6 +1663,19 @@ function demoHost() {
   return {
     toast: showToast,
     setStatus: (text) => { demoStatusText.value = text || '' },
+    showMessage: async ({ text }) => {
+      demoMessageText.value = String(text || '').trim()
+      if (!demoMessageText.value) return
+      await nextTick()
+      await demoSleep(DEMO_MESSAGE_FADE_MS)
+    },
+    clearMessage: async ({ animate = true } = {}) => {
+      if (!demoMessageText.value) return
+      demoMessageText.value = ''
+      if (!animate) return
+      await nextTick()
+      await demoSleep(DEMO_MESSAGE_FADE_MS)
+    },
     setDemoPaused: (on) => { demoPaused.value = !!on },
     setDemoVoiceLang: (id) => { if (id) demoVoiceLang.value = id },
     setDemoNav: (nav) => {
@@ -1676,8 +1706,33 @@ function demoHost() {
       await nextTick()
       onFit()
     },
-    fit: async () => { onFit() },
+    zoomView: async () => {
+      // XML <zoom_view/> = Zoom Full View (toolbar Fit / Ctrl+0).
+      onFit()
+    },
+    fit: async () => {
+      // XML <fit_view/> = Zoom fit to C1–Cn when those cursors are placed
+      // (toolbar Range / Ctrl+R). Toolbar Fit (Ctrl+0) is onFit / fitToTrace.
+      const placed = (cursors.value || []).filter(c => c != null)
+      if (placed.length >= 2) {
+        timelinePanelRef.value?.zoomToCursorRange?.()
+        syncTimelineViewport()
+        return
+      }
+      onFit()
+    },
     zoom1to1: async () => { onZoom1to1() },
+    zoomIn: async () => { onZoom(0.7) },
+    zoomOut: async () => {
+      const placed = (cursors.value || []).filter(c => c != null).map(Number)
+      if (placed.length >= 2) {
+        const mid = (Math.min(...placed) + Math.max(...placed)) / 2
+        timelinePanelRef.value?.zoomCenter(1.43, mid)
+        syncTimelineViewport()
+        return
+      }
+      onZoom(1.43)
+    },
     setViewMode: async (mode) => {
       const key = String(mode || 'task').toLowerCase()
       if (key !== 'task' && key !== 'core') return
@@ -1714,6 +1769,7 @@ function demoHost() {
     },
     highlight: async (task) => { onAiHighlight(task) },
     clearHighlight: async () => { onAiHighlight('') },
+    tabNav: async (forward) => { cycleHighlightedSegment(forward !== false) },
     jumpWcet: async (task) => {
       onAiHighlight(task)
       const tr = trace.value
@@ -1744,6 +1800,59 @@ function demoHost() {
       timelinePanelRef.value?.scrollToSegmentIfNeeded(best)
       syncTimelineViewport()
     },
+    moveView: async ({ time, timeOmitted, unit, task } = {}) => {
+      const tr = trace.value
+      if (!tr) return
+      const scale = tr.timeScale || 'ns'
+      const taskRaw = String(task || '').trim()
+      let mk = ''
+      if (taskRaw) {
+        const candidates = [
+          ...(tr.tasks || []),
+          ...(tr.tasks || []).map(t => taskMergeKey(t)),
+        ]
+        const resolved = resolveTaskKey(taskRaw, candidates)
+        if (resolved) {
+          mk = taskMergeKey(resolved)
+          if (timelineOptions.viewMode === 'core' && tr.coreTaskOrder) {
+            for (const [core, tasks] of tr.coreTaskOrder.entries()) {
+              if ((tasks || []).some(t => taskMergeKey(t) === mk)) {
+                timelinePanelRef.value?.expandCore?.(core)
+                break
+              }
+            }
+          }
+        }
+      }
+      const emptyTime = time == null || String(time).trim() === ''
+      let alignLeft = false
+      let ns = null
+      if (timeOmitted || emptyTime) {
+        if (mk) {
+          const segs = tr.segByMergeKey?.get(mk) || []
+          if (segs.length) {
+            ns = Math.min(...segs.map(s => Number(s.start)))
+          } else {
+            alignLeft = true
+          }
+        } else {
+          alignLeft = true
+        }
+      } else {
+        const parsed = parseCursorTimes(String(time), unit || '', scale)
+        ns = parsed.length ? parsed[0] : null
+        if (ns == null || !Number.isFinite(ns) || ns <= tr.timeMin) {
+          alignLeft = true
+          ns = null
+        }
+      }
+      timelinePanelRef.value?.moveView({
+        ns,
+        alignLeft,
+        taskKey: mk || null,
+      })
+      syncTimelineViewport()
+    },
     setCursors: async ({ times, unit, limit, zoom }) => {
       const scale = trace.value?.timeScale || 'ns'
       const parsed = parseCursorTimes(times, unit, scale)
@@ -1754,7 +1863,7 @@ function demoHost() {
       if (limit != null) onStatsScopeChange(!!limit)
       await nextTick()
       if (zoom && parsed.length >= 2) {
-        timelinePanelRef.value?.zoomToTimeRange(
+        await timelinePanelRef.value?.zoomToTimeRange(
           parsed[0], parsed[parsed.length - 1], 0.05,
           { programmatic: true, animate: true },
         )
@@ -1829,6 +1938,7 @@ function stopDemo() {
   demoRunning.value = false
   demoPaused.value = false
   demoStatusText.value = ''
+  demoMessageText.value = ''
   demoNav.value = { index: 0, total: 0, canPrev: false, canNext: false }
   demoVoiceLangs.value = []
   disarmDemoNav()
@@ -2194,6 +2304,35 @@ function _ensureNavCache() {
   setNavCache(activeTab.value, _navCache)
 }
 
+/** Earliest cursor / bookmark / annotation time visible in the current
+ * viewport's time range, or null if none are visible there. */
+function _earliestMarkerInViewport() {
+  const vp = timelinePanelRef.value?.getViewport?.()
+  if (!vp) return null
+  const lo = Math.min(vp.timeStart, vp.timeEnd)
+  const hi = Math.max(vp.timeStart, vp.timeEnd)
+  const times = []
+  for (const c of cursors.value) {
+    if (c != null && c >= lo && c <= hi) times.push(c)
+  }
+  for (const m of marks.value) {
+    if (m.ns >= lo && m.ns <= hi) times.push(m.ns)
+  }
+  return times.length ? Math.min(...times) : null
+}
+
+/** Tab / Shift+Tab: select the next/previous task segment.
+ *
+ * This only decides the *first stop*: when nothing is selected yet,
+ * Tab/Shift+Tab jump to the first segment at or after the earliest cursor /
+ * bookmark / annotation visible in the current viewport (in that priority
+ * order), or - if none of those are visible - the first segment at or
+ * after the viewport's start edge (both keys behave the same here, since
+ * there is no current segment to move away from). Once a task is
+ * selected, every further Tab/Shift+Tab press keeps cycling to the
+ * next/previous task exactly as before (same-task repeats are still
+ * skipped).
+ */
 function cycleHighlightedSegment(forward) {
   if (!trace.value) return
   _ensureNavCache()
@@ -2201,18 +2340,41 @@ function cycleHighlightedSegment(forward) {
   if (!segs || segs.length === 0) return
 
   const cur      = highlightSegment.value
-  const centerNs = timelinePanelRef.value?.getViewportCenter?.() ?? 0
   const isCoreView = timelineOptions.viewMode === 'core'
-  const centerCore = isCoreView ? (timelinePanelRef.value?.getCoreAtViewportCenter?.() ?? null) : null
-  const curCore = cur?.core ?? centerCore
-  const navSegs = (isCoreView && curCore)
-    ? segs.filter(s => s.core === curCore)
-    : segs
-  if (!navSegs || navSegs.length === 0) return
-
   const curTaskKey = cur
     ? taskMergeKey(cur.task)
     : (timelineOptions.highlightKey ?? pinnedHighlightKey.value ?? null)
+
+  // Core view scoping (mirrors Desktop's _cycle_highlighted_task): an
+  // exact segment's own core wins; else, if a task is only pinned via the
+  // legend (no exact segment yet), scope to the first core whose task list
+  // still has that task under the active text filter; else fall back to
+  // the core at the viewport center.
+  const textQ = normalizeTaskFilterText(timelineOptions.taskFilterText)
+  let curCore = cur?.core ?? null
+  if (curCore == null && isCoreView && curTaskKey != null) {
+    for (const c of trace.value.coreNames || []) {
+      const tasks = trace.value.coreTaskOrder?.get(c) || []
+      if (tasks.some(t => taskMergeKey(t) === curTaskKey
+        && rawTaskNameMatchesTextFilter(trace.value, t, textQ))) { curCore = c; break }
+    }
+  }
+  if (curCore == null && isCoreView) {
+    curCore = timelinePanelRef.value?.getCoreAtViewportCenter?.() ?? null
+  }
+  let navSegs = (isCoreView && curCore)
+    ? segs.filter(s => s.core === curCore)
+    : segs
+  // Active filters (search text / migrated-only / heatmap selection) must
+  // hide their non-matching segments from Tab/Shift+Tab too, exactly as
+  // they hide them from the rendered timeline (Desktop: task_ok() inside
+  // _pick_next_task_by_time via _task_merge_key_matches_filter).
+  navSegs = navSegs.filter(s => taskPassesRowFilter(
+    trace.value, taskMergeKey(s.task),
+    timelineOptions.migratedOnlyFilter, timelineOptions.taskFilterKeys,
+    timelineOptions.taskFilterText,
+  ))
+  if (!navSegs || navSegs.length === 0) return
 
   let idx = -1
   if (cur) idx = navSegs.findIndex(s => _sameSegment(s, cur))
@@ -2237,19 +2399,23 @@ function cycleHighlightedSegment(forward) {
     return navSegs[startIdx]
   }
 
+  // A task is already selected - either an exact segment, or just pinned
+  // via the legend (curTaskKey set but no exact segment picked yet): keep
+  // the pre-existing next/previous-task cycling, unchanged.
   let next
-  if (forward) {
-    if (idx >= 0) {
-      let ni = (idx + 1) % navSegs.length
-      next = pickForwardFrom(ni)
-    } else {
-      const refNs = cur?.start ?? centerNs
-      let ni = navSegs.findIndex(s => s.start >= refNs)
-      if (ni < 0) ni = 0
-      next = pickForwardFrom(ni)
-    }
-  } else {
-    if (idx >= 0) {
+  if (curTaskKey != null) {
+    const centerNs = timelinePanelRef.value?.getViewportCenter?.() ?? 0
+    if (forward) {
+      if (idx >= 0) {
+        let ni = (idx + 1) % navSegs.length
+        next = pickForwardFrom(ni)
+      } else {
+        const refNs = cur?.start ?? centerNs
+        let ni = navSegs.findIndex(s => s.start >= refNs)
+        if (ni < 0) ni = 0
+        next = pickForwardFrom(ni)
+      }
+    } else if (idx >= 0) {
       let pi = (idx - 1 + navSegs.length) % navSegs.length
       next = pickBackwardFrom(pi)
     } else {
@@ -2260,6 +2426,15 @@ function cycleHighlightedSegment(forward) {
       }
       next = pickBackwardFrom(pi)
     }
+  } else {
+    // Nothing selected at all yet: anchor on the earliest visible cursor /
+    // bookmark / annotation, falling back to the viewport start edge. Tab
+    // and Shift+Tab behave the same here.
+    const anchorNs = _earliestMarkerInViewport()
+      ?? timelinePanelRef.value?.getViewport?.()?.timeStart ?? 0
+    let ni = navSegs.findIndex(s => s.start >= anchorNs)
+    if (ni < 0) ni = 0
+    next = pickForwardFrom(ni)
   }
 
   highlightSegment.value = next
@@ -2372,6 +2547,7 @@ const traceInfo = computed(() => {
 
 const heatmapEnabled = computed(() => traceIsMultiCore(trace.value))
 const rangeEnabled = computed(() => getPlacedCursors(cursors.value).length >= 2)
+const zoomOutEnabled = computed(() => !!trace.value && zoomPresetValue.value !== 'fit')
 
 const analysisFindings = computed(() => {
   const tr = trace.value
@@ -2679,6 +2855,7 @@ async function loadOneTrace({ text, name }) {
 
 // ---- Zoom ----------------------------------------------------------------
 function onZoom(factor) {
+  if (factor > 1 && !zoomOutEnabled.value) return
   timelinePanelRef.value?.zoomCenter(factor)
   syncTimelineViewport()
 }
@@ -3321,9 +3498,13 @@ function aiGuiStateForReport() {
 function onAiHighlight(name) {
   const key = String(name || '').trim()
   if (!key) {
+    // Mirrors Desktop's set_highlighted_task(None): clears the task-level
+    // pin *and* any exact-segment selection in one shot.
     pinnedHighlightKey.value = null
     timelineOptions.highlightKey = null
     timelineOptions.lockedTaskKey = null
+    highlightSegment.value = null
+    timelineOptions.highlightSegment = null
     scheduleRender()
     return
   }
@@ -5817,6 +5998,52 @@ body.row-resizing * {
   justify-content: center;
   background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(2px);
+}
+
+.demo-message-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 180;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  overflow: visible;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.demo-message-card {
+  background: rgba(20, 28, 38, 0.88);
+  color: #e8f4ff;
+  border: 1px solid #4a6a8a;
+  border-radius: 8px;
+  padding: 16px 22px;
+  max-width: min(640px, calc(100% - 48px));
+  box-sizing: border-box;
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: center;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+.demo-message-enter-active,
+.demo-message-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.demo-message-enter-from,
+.demo-message-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.app:not(.dark) .demo-message-card {
+  background: rgba(245, 245, 245, 0.94);
+  color: #1e1e1e;
+  border-color: #bbb;
 }
 
 .loading-card {

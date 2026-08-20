@@ -12,13 +12,13 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from PySide6.QtCore import (
-    QEasingCurve, QEvent, QLoggingCategory, QPoint, QPointF, QRect, QSize, Qt,
-    QUrl, QVariantAnimation, Signal,
+    QEasingCurve, QEvent, QEventLoop, QLoggingCategory, QPoint, QPointF, QRect,
+    QSize, Qt, QUrl, QVariantAnimation, Signal,
 )
 from PySide6.QtGui import QColor, QHoverEvent, QMouseEvent, QPainter, QPainterPath
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
-    QWidget,
+    QApplication, QComboBox, QGraphicsOpacityEffect, QHBoxLayout, QLabel,
+    QPushButton, QSizePolicy, QWidget,
 )
 
 from .config import (
@@ -34,6 +34,7 @@ SKIP_TAGS = frozenset({
 _LANG_RE = re.compile(r"^[a-z]{2}(?:-[a-z0-9]+)?$", re.I)
 _AUDIO_RE = re.compile(r"\.(mp3|wav|m4a|ogg|flac|aac|aiff|aif)$", re.I)
 _DEMO_MEDIA_LOG_RULES = "qt.multimedia.ffmpeg=false"
+_DEMO_MESSAGE_FADE_MS = 250
 
 
 def silence_demo_media_logs() -> None:
@@ -640,6 +641,166 @@ class DemoPointerOverlay(QWidget):
         self.hide()
 
 
+class DemoMessageOverlay(QWidget):
+    """Mouse-transparent centered caption for demo XML ``<show_message/>``."""
+
+    _MAX_TEXT_W = 640
+
+    def __init__(self, host: QWidget) -> None:
+        super().__init__(host)
+        self._host = host
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.hide()
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 24, 24, 24)
+        outer.addStretch(1)
+        self._card = QWidget()
+        self._card.setObjectName("demo_message_card")
+        card_lay = QVBoxLayout(self._card)
+        card_lay.setContentsMargins(16, 16, 22, 16)
+        card_lay.setSpacing(0)
+        self._label = QLabel("")
+        self._label.setObjectName("demo_message_text")
+        self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._label.setWordWrap(True)
+        self._label.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum,
+        )
+        self._label.setStyleSheet(
+            "color: #e8f4ff; font-size: 14pt; background: transparent; border: none;")
+        self._card.setStyleSheet(
+            "QWidget#demo_message_card {"
+            " background: rgba(20, 28, 38, 0.88);"
+            " color: #e8f4ff;"
+            " border: 1px solid #4a6a8a;"
+            " border-radius: 8px;"
+            "}")
+        card_lay.addWidget(self._label)
+        self._opacity = QGraphicsOpacityEffect(self._card)
+        self._card.setGraphicsEffect(self._opacity)
+        self._opacity.setOpacity(0.0)
+        outer.addWidget(self._card, 0, Qt.AlignmentFlag.AlignCenter)
+        outer.addStretch(1)
+        self._fade_anim: Optional[QVariantAnimation] = None
+        if host is not None:
+            host.installEventFilter(self)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is self._host and event.type() == QEvent.Type.Resize:
+            self._sync_geometry()
+            if self.isVisible() and self._label.text().strip():
+                self._resize_label()
+        return False
+
+    def _sync_geometry(self) -> None:
+        if self._host is not None:
+            self.setGeometry(self._host.rect())
+
+    def _resize_label(self) -> None:
+        avail = max(120, self.width() - 48)
+        max_w = min(self._MAX_TEXT_W, avail)
+        self._label.setMaximumWidth(max_w)
+        text = self._label.text().strip()
+        if not text:
+            self._label.setMinimumHeight(0)
+            self._card.adjustSize()
+            return
+        h = self._label.heightForWidth(max_w)
+        if h > 0:
+            self._label.setMinimumHeight(h)
+        self._label.adjustSize()
+        self._card.adjustSize()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._sync_geometry()
+        if self._label.text().strip():
+            self._resize_label()
+
+    def _stop_fade(self) -> None:
+        anim = self._fade_anim
+        self._fade_anim = None
+        if anim is not None:
+            anim.stop()
+
+    def _fade_to(
+        self, target: float, done: Optional[Callable[[], None]] = None,
+    ) -> None:
+        self._stop_fade()
+        start = float(self._opacity.opacity())
+        target = max(0.0, min(1.0, float(target)))
+        if abs(start - target) < 0.01:
+            self._opacity.setOpacity(target)
+            if done is not None:
+                done()
+            return
+        anim = QVariantAnimation(self)
+        anim.setDuration(_DEMO_MESSAGE_FADE_MS)
+        anim.setStartValue(start)
+        anim.setEndValue(target)
+        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        anim.valueChanged.connect(lambda v: self._opacity.setOpacity(float(v)))
+
+        def _finished() -> None:
+            if self._fade_anim is not anim:
+                return
+            self._fade_anim = None
+            self._opacity.setOpacity(target)
+            if done is not None:
+                done()
+
+        anim.finished.connect(_finished)
+        self._fade_anim = anim
+        anim.start()
+
+    def show_message(self, text: str) -> None:
+        msg = (text or "").strip()
+        self._label.setMinimumHeight(0)
+        self._label.setText(msg)
+        self._sync_geometry()
+        self._resize_label()
+        if not msg:
+            self.clear_message(animate=False)
+            return
+        self._stop_fade()
+        self._opacity.setOpacity(0.0)
+        self.raise_()
+        self.show()
+        loop = QEventLoop()
+        self._fade_to(1.0, loop.quit)
+        loop.exec()
+
+    def clear_message(self, *, animate: bool = True) -> None:
+        if not self.isVisible() and not self._label.text().strip():
+            self._label.clear()
+            self._opacity.setOpacity(0.0)
+            self.hide()
+            return
+
+        def _finish() -> None:
+            self._label.clear()
+            self._label.setMinimumHeight(0)
+            self._opacity.setOpacity(0.0)
+            self.hide()
+
+        if not animate:
+            self._stop_fade()
+            _finish()
+            return
+
+        loop: Optional[QEventLoop] = None
+
+        def _done() -> None:
+            _finish()
+            if loop is not None:
+                loop.quit()
+
+        self._fade_to(0.0, _done)
+        loop = QEventLoop()
+        loop.exec()
+
+
 class DemoStatusBanner(QWidget):
     prevClicked = Signal()
     pauseClicked = Signal()
@@ -1183,7 +1344,8 @@ class InAppDemoRunner:
 
     def _run_macro(self, name: str, call_el: Optional[ET.Element]) -> None:
         if name == "fit":
-            self._api({"op": "fit"}, settle=0.4)
+            # Macro "fit" is Ctrl+0 / Zoom Full View, not C1–Cn <fit_view/>.
+            self._api({"op": "zoom_view"}, settle=0.4)
             return
         if name == "clear_cursors":
             self._api({"op": "clear_cursors"})
@@ -1264,6 +1426,29 @@ class InAppDemoRunner:
                 msg = prompt
                 self._ui(lambda: self._on_toast(msg, "info"))
             return
+        if tag in ("show_message", "message", "show_msg"):
+            text = expand_vars(
+                self._attr(el, "text", self._attr(el, "message", text_content(el))),
+                self._vars,
+            ).strip()
+            try:
+                sec = float(self._attr(el, "seconds", self._attr(el, "duration", "2")))
+            except ValueError:
+                sec = 2.0
+            animate_clear = True
+            try:
+                self._api({"op": "show_message", "text": text}, settle=0.0)
+                self._wait_interruptible(max(0.0, sec))
+            except DemoSkip:
+                animate_clear = False
+                raise
+            finally:
+                if text:
+                    self._api(
+                        {"op": "clear_message", "animate": animate_clear},
+                        settle=0.0,
+                    )
+            return
         if tag in ("audio", "play"):
             rel = self._attr(el, "file")
             path = None
@@ -1313,6 +1498,11 @@ class InAppDemoRunner:
         if tag == "clear_highlight":
             self._api({"op": "clear_highlight"})
             return
+        if tag == "tab_nav":
+            direction = self._attr(el, "dir", self._attr(el, "direction", "next")).strip().lower()
+            forward = direction not in ("prev", "previous", "back", "shift", "shift+tab")
+            self._api({"op": "tab_nav", "forward": forward}, settle=0.4)
+            return
         if tag == "cursors":
             payload: Dict[str, Any] = {
                 "op": "cursors",
@@ -1324,7 +1514,7 @@ class InAppDemoRunner:
                 payload["limit"] = self._attr(el, "limit")
             if "zoom" in el.attrib:
                 payload["zoom"] = self._attr(el, "zoom")
-            self._api(payload, settle=0.5)
+            self._api(payload, settle=0.15)
             return
         if tag == "clear_cursors":
             self._api({"op": "clear_cursors"})
@@ -1349,11 +1539,22 @@ class InAppDemoRunner:
                 payload.pop("end", None)
             self._api(payload, settle=0.6)
             return
+        if tag in ("zoom_view", "full_view", "zoom_full"):
+            # XML <zoom_view/> = Zoom Full View (toolbar Fit / Ctrl+0).
+            self._api({"op": "zoom_view"}, settle=0.4)
+            return
         if tag in ("fit_view", "fit_api"):
+            # XML <fit_view/> = Zoom fit to C1–Cn when cursors are placed.
             self._api({"op": "fit"}, settle=0.4)
             return
         if tag in ("zoom_1to1", "one_to_one", "1to1"):
             self._api({"op": "zoom_1to1"}, settle=0.4)
+            return
+        if tag == "zoom_in":
+            self._api({"op": "zoom_in"}, settle=0.4)
+            return
+        if tag == "zoom_out":
+            self._api({"op": "zoom_out"}, settle=0.4)
             return
         if tag == "limit":
             self._api({
@@ -1387,6 +1588,21 @@ class InAppDemoRunner:
                 "op": "jump_wcet",
                 "task": self._attr(el, "task", self._attr(el, "name")),
             }, settle=0.7)
+            return
+        if tag in ("move_view", "move_viewport", "pan_view"):
+            payload = {
+                "op": "move_view",
+                "task": self._attr(el, "task", self._attr(el, "name")),
+            }
+            if "unit" in el.attrib:
+                payload["unit"] = self._attr(el, "unit")
+            time_keys = ("time", "ns", "at")
+            payload["time_omitted"] = not any(k in el.attrib for k in time_keys)
+            for key in time_keys:
+                if key in el.attrib:
+                    payload["time"] = self._attr(el, key)
+                    break
+            self._api(payload, settle=0.4)
             return
         if tag == "panel":
             self._api({
@@ -1483,6 +1699,7 @@ class InAppDemoRunner:
                     self._wait_interruptible(self._defaults.get("pause") or 0)
                     i += 1
                 except DemoSkip as err:
+                    self._api({"op": "clear_message", "animate": False}, settle=0.0)
                     direction = 0 if self._skip_restart else (self._skip_dir or err.direction or 1)
                     self._reset_skip()
                     if direction == 0:
