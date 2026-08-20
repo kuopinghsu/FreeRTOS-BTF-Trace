@@ -205,8 +205,12 @@ export function taskLabelForMergeKey(trace, mk) {
 
 /**
  * Short display name: 'Name[id]' for regular tasks; bare name for IDLE/TICK.
+ * Merge-key strings (\\0taskId\\0name) match Desktop `_task_display_name`.
  */
 export function taskDisplayName(raw) {
+  if (raw && raw.charCodeAt(0) === 0) {
+    return displayNameFromMergeKey(raw)
+  }
   if (IDLE_RE.test(raw)) return normalizeIdleName(raw)
   const { taskId, name } = parseTaskName(raw)
   if (isIdleTaskName(name)) return normalizeIdleName(name)

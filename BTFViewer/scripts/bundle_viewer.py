@@ -235,17 +235,35 @@ def _strip_module_preamble(source: str) -> str:
 
 _BODY_RELATIVE_IMPORT = re.compile(r"^(\s*)from\s+\.+[\w.]*\s+import\s+(.*)$")
 
+
+def _relative_import_bindings(clause: str) -> list[tuple[str, str]]:
+    """Parse ``import a, b as c`` into ``[(src, dest), ...]`` (no stars)."""
+    text = " ".join(clause.replace("(", " ").replace(")", " ").split())
+    out: list[tuple[str, str]] = []
+    for part in text.split(","):
+        part = part.strip()
+        if not part or part == "*":
+            continue
+        if " as " in part:
+            src, dst = part.split(" as ", 1)
+            src, dst = src.strip(), dst.strip()
+        else:
+            src = dst = part
+        if src and dst:
+            out.append((src, dst))
+    return out
+
+
 def _neutralize_body_relative_imports(body: str) -> str:
-    """Turn function-local `from .module import x` lines into `pass`.
+    """Rewrite function-local ``from .module import x`` for the monolith.
 
     `_strip_module_preamble` only removes each module's *leading* import
     block; lazy in-function relative imports deeper in a file (used to dodge
-    circular imports between package modules) survive verbatim into the
-    single-file bundle, where the package no longer exists and they raise
-    ImportError at call time. All the imported names are already plain
-    globals in the flattened file, so the statement can simply become a
-    no-op — replaced with `pass` (not deleted) so it can't leave a block
-    (try/if/etc.) syntactically empty.
+    circular imports between package modules) survive into the single-file
+    bundle, where the package no longer exists. Those names are already plain
+    globals in the flattened file, so each import becomes
+    ``name = globals().get("name")`` (preserving ``as`` aliases). Using bare
+    ``pass`` left try/except ImportError fallbacks unbound.
     """
     lines = body.splitlines(keepends=True)
     out: list[str] = []
@@ -258,10 +276,20 @@ def _neutralize_body_relative_imports(body: str) -> str:
             continue
         indent = m.group(1)
         j = i
+        clause = m.group(2)
         if _import_opens_paren(lines[i]):
             while j < len(lines) and ")" not in lines[j]:
                 j += 1
-        out.append(f"{indent}pass\n")
+            if j < len(lines):
+                # Append continuation lines after the first "import ".
+                for k in range(i + 1, j + 1):
+                    clause += " " + lines[k].strip()
+        bindings = _relative_import_bindings(clause)
+        if not bindings:
+            out.append(f"{indent}pass\n")
+        else:
+            for src, dst in bindings:
+                out.append(f'{indent}{dst} = globals().get("{src}")\n')
         i = j + 1
     return "".join(out)
 

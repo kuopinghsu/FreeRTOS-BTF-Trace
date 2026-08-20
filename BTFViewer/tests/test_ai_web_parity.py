@@ -872,6 +872,33 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("verifyClaimTool(", app)
         self.assertIn("search_timeline_hits(", mw)
         self.assertIn("searchTimelineHits(", app)
+        tools_py = (BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8")
+        tools_js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
+        # Bundle-safe find engine + shared search/correlate shape.
+        self.assertIn('globals().get("recompute_find_hits")', tools_py)
+        self.assertIn("computeFindHits(trace, q, findMode, annotations", tools_js)
+        self.assertIn('"times"', tools_py)
+        self.assertIn("times:", tools_js)
+        self.assertIn('"truncated"', tools_py)
+        self.assertIn("truncated:", tools_js)
+        for metric in (
+            "AI_RAW_METRIC_BLOCKING",
+            "AI_RAW_METRIC_EXECUTION",
+            "AI_RAW_METRIC_MIGRATIONS",
+            "AI_RAW_METRIC_SYNC",
+            "AI_RAW_METRIC_PRIORITY",
+        ):
+            self.assertIn(metric, tools_py)
+            self.assertIn(metric, tools_js)
+        # correlate_task_events / correlateTaskEvents call search after metrics.
+        self.assertRegex(
+            tools_py,
+            r"def correlate_task_events\([\s\S]*?search_timeline_hits\(",
+        )
+        self.assertRegex(
+            tools_js,
+            r"export function correlateTaskEvents\([\s\S]*?searchTimelineHits\(",
+        )
         self.assertIn("def _ai_clear_marks", mw)
         self.assertIn("def _on_export_btf_slice", mw)
         self.assertIn("function onExportBtfSlice", app)
@@ -939,6 +966,16 @@ class AiWebParityTests(unittest.TestCase):
             BTF_ROOT / "web/src/utils/btfLoad.js").read_text(encoding="utf-8"))
         self.assertIn("onMermaidZoomWheel", panel)
         self.assertIn("_scale = max(0.5, min(6.0", assist)
+
+    def test_task_display_name_decodes_merge_keys_like_web(self) -> None:
+        """Desktop `_task_display_name` and web `taskDisplayName` decode \\0id\\0name."""
+        from btf_viewer_pkg.parser import _task_display_name  # noqa: WPS433
+
+        self.assertEqual(_task_display_name("\x00267\x00Med"), "Med[267]")
+        self.assertEqual(_task_display_name("\x0028\x00CS"), "CS[28]")
+        colors_js = (BTF_ROOT / "web/src/utils/colors.js").read_text(encoding="utf-8")
+        self.assertIn("raw.charCodeAt(0) === 0", colors_js)
+        self.assertIn("return displayNameFromMergeKey(raw)", colors_js)
 
     def test_stats_table_annotation_does_not_switch_to_marks(self) -> None:
         mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")

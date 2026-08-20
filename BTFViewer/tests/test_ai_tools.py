@@ -52,6 +52,7 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     query_raw_metric,
     resolve_core_key,
     resolve_task_key,
+    correlate_task_events,
     search_timeline_hits,
     strip_parsed_tool_markup,
     summarise_tool_call,
@@ -249,6 +250,26 @@ class AiToolsTests(unittest.TestCase):
         bad_re = search_timeline_hits(trace, "[", "regex")
         self.assertFalse(bad_re["ok"])
         self.assertIn("Regex", bad_re["message"])
+
+    def test_correlate_task_events_uses_search_without_unbound_local(self) -> None:
+        from btf_viewer_pkg.parser import BtfTrace  # noqa: WPS433
+
+        trace = BtfTrace(
+            time_scale="us",
+            tasks=["Med[267]"],
+            segments=[],
+            sti_events=[],
+            sti_channels=[],
+            sti_events_by_target={},
+            time_min=0,
+            time_max=1000,
+        )
+        out = correlate_task_events(trace, "Med[267]")
+        self.assertIsInstance(out, dict)
+        self.assertIn("ok", out)
+        # Must not surface the monolith UnboundLocalError message.
+        self.assertNotIn("_recompute_find_hits", str(out.get("message") or ""))
+        self.assertNotIn("not associated with a value", str(out.get("message") or ""))
 
     def test_resolve_core_key(self) -> None:
         cores = ["Core_0", "Core_1", "Core_10"]

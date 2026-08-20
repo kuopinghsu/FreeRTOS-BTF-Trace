@@ -6709,7 +6709,7 @@ def _build_trace_compare_rows(
 
     extras_fn = globals().get("compare_analysis_tables")
     if extras_fn is None:
-        pass
+        extras_fn = globals().get("compare_analysis_tables")
     extras = extras_fn(trace_a, trace_b, lo_a, hi_a, lo_b, hi_b, deadlines)
     metrics = extras.get("metrics") or {}
     summary_rows.extend([
@@ -7703,7 +7703,7 @@ def _parse_btf(filepath: str,
     # Bundle concatenates modules into one file, so a relative import fails there.
     prepare = globals().get("prepare_ux_events")
     if prepare is None:
-        pass
+        prepare = globals().get("prepare_ux_events")
     prepare(trace)
     return trace
 
@@ -21149,7 +21149,7 @@ def score_benchmark_case(
     overall = int(round(sum(
         parts[k] * BENCHMARK_METRIC_WEIGHTS[k] for k in parts
     )))
-    pass
+    score_investigation_metrics = globals().get("score_investigation_metrics")
     extras = score_investigation_metrics(
         expected=exp,
         actual_conclusion=actual_conclusion,
@@ -21398,7 +21398,9 @@ def resolve_benchmark_api_key(*, text: str = "", env: str = "") -> str:
     / ``OPENAI_API_KEY`` when its own variable is empty — that would keep
     optional suite models enabled on a Gemini-only host.
     """
-    pass
+    normalize_api_key = globals().get("normalize_api_key")
+    read_ai_env_key = globals().get("read_ai_env_key")
+    resolve_ai_api_key = globals().get("resolve_ai_api_key")
 
     env_name = str(env or "").strip()
     if env_name:
@@ -21414,7 +21416,8 @@ def resolve_benchmark_api_key(*, text: str = "", env: str = "") -> str:
 
 
 def _parse_benchmark_endpoint_xml(el: Any, defaults: Optional[dict] = None) -> Dict[str, Any]:
-    pass
+    normalize_ai_base_url = globals().get("normalize_ai_base_url")
+    parse_ai_tls_verify = globals().get("parse_ai_tls_verify")
 
     out = dict(defaults or {})
     if not out.get("base_url"):
@@ -21476,7 +21479,7 @@ def _parse_benchmark_endpoint_xml(el: Any, defaults: Optional[dict] = None) -> D
 def load_benchmark_suite_xml(path: Any) -> Dict[str, Any]:
     """Load a live ``ai-test`` suite from XML (models, URL, TLS, API key)."""
     import xml.etree.ElementTree as ET
-    pass
+    parse_ai_tls_verify = globals().get("parse_ai_tls_verify")
 
     src = Path(path)
     if not src.is_file():
@@ -21594,7 +21597,7 @@ def select_benchmark_suite_models(
     With no ``--models`` filter, optional remote models without an API key
     are skipped (``optional="true"`` in the suite XML).
     """
-    pass
+    is_local_ai_host = globals().get("is_local_ai_host")
 
     models = list((suite or {}).get("models") or [])
     want = parse_live_benchmark_models(models_raw)
@@ -28997,7 +29000,7 @@ _MAX_TOOL_ROUNDS = 4
 
 def ai_viewer_tools_for_mode(mode: Any = None, stage: Any = "") -> List[Dict[str, Any]]:
     """Tool schemas for Settings → AI context mode (Full = complete catalog)."""
-    pass
+    filter_tools_for_context_mode = globals().get("filter_tools_for_context_mode")
     return filter_tools_for_context_mode(ai_viewer_tools(), mode, stage)
 
 
@@ -32106,25 +32109,28 @@ def search_timeline_hits(
     annotations: Optional[Sequence[Any]] = None,
 ) -> Dict[str, Any]:
     """Find-panel search for the AI ``search_timeline`` tool."""
-    # Bundle-safe: the monolith merges mvvm/find_logic before this call site,
-    # so fall back to the already-defined global if the relative import fails.
-    try:
-        pass
-    except ImportError:
-        _recompute_find_hits = globals().get("recompute_find_hits") or globals().get("FIND_RECOMPUTE")
+    # Bundle-safe: the monolith flattens mvvm/find_logic into module globals and
+    # rewrites in-function relative imports. Prefer globals first so a rewritten
+    # import cannot leave the name unbound.
+    recompute = globals().get("recompute_find_hits") or globals().get("FIND_RECOMPUTE")
+    if recompute is None:
+        try:
+            recompute = globals().get("recompute_find_hits")
+        except ImportError:
+            pass
 
     q = str(query or "").strip()
     if not q:
         return tool_result_payload(False, "query must be a non-empty string")
     if trace is None:
         return tool_result_payload(False, "No trace loaded")
-    if _recompute_find_hits is None:
+    if recompute is None:
         return tool_result_payload(False, "Find engine unavailable")
     find_mode = "sti" if str(mode or "").lower() in ("tags", "tag", "sti") else str(mode or "contains")
     anns: List[Any] = []
     for a in annotations or []:
         anns.append(a)
-    hits, status = _recompute_find_hits(trace, q, find_mode, anns)
+    hits, status = recompute(trace, q, find_mode, anns)
     status_s = str(status or "")
     if status_s in ("Regex error", "Regex too long"):
         return tool_result_payload(False, status_s)
@@ -32214,7 +32220,7 @@ def query_raw_metric(
     if not resolved:
         return tool_result_payload(False, f"Unknown task {task!r}")
     try:
-        pass
+        _task_merge_key = globals().get("_task_merge_key")
         mk = _task_merge_key(resolved)
     except Exception:
         mk = resolved
@@ -32445,7 +32451,7 @@ def explain_finding_tool(
 ) -> Dict[str, Any]:
     items = enrich_findings_with_ids(findings) if findings else []
     focus = resolve_finding(items, finding_id) if items else None
-    pass
+    _hypotheses_for_finding = globals().get("_hypotheses_for_finding")
     hyps = []
     if focus:
         hyps = _hypotheses_for_finding(
@@ -32681,7 +32687,8 @@ def dependency_trace_context(
 
     preemptions: List[dict] = []
     try:
-        pass
+        _collect_preemption_events = globals().get("_collect_preemption_events")
+        _task_display_name = globals().get("_task_display_name")
         agg: Dict[Tuple[str, str], dict] = {}
         repr_map = getattr(trace, "task_repr", None) or {}
         for mk, pre_disp, _t, duration, _seg in _collect_preemption_events(
@@ -32700,7 +32707,8 @@ def dependency_trace_context(
 
     migrations: List[dict] = []
     try:
-        pass
+        _migrations_in_range = globals().get("_migrations_in_range")
+        _task_display_name = globals().get("_task_display_name")
         repr_map = getattr(trace, "task_repr", None) or {}
         for m in _migrations_in_range(trace, lo_i, hi_i):
             raw = repr_map.get(m.merge_key, m.merge_key) if isinstance(
@@ -32908,7 +32916,7 @@ def distribution_trace_context(
             "task": want,
         }
     try:
-        pass
+        _task_merge_key = globals().get("_task_merge_key")
         mk = _task_merge_key(resolved)
     except Exception:
         mk = resolved
@@ -33001,7 +33009,7 @@ def periodicity_trace_context(trace: Any, task: str = "") -> Dict[str, Any]:
         resolved = resolve_task_key(want, _task_candidates_from_trace(trace))
         if resolved:
             try:
-                pass
+                _task_merge_key = globals().get("_task_merge_key")
                 mk = _task_merge_key(resolved)
             except Exception:
                 mk = resolved
@@ -33338,7 +33346,7 @@ def gather_simulation_inputs(
     core_utils: List[Any] = []
     if trace is not None:
         try:
-            pass
+            _core_util_pct_rows = globals().get("_core_util_pct_rows")
             lo_i = int(lo) if lo is not None else None
             hi_i = int(hi) if hi is not None else None
             core_utils = list(_core_util_pct_rows(trace, lo_i, hi_i))
@@ -33476,7 +33484,7 @@ def _gather_priority_episodes(
         if not resolved:
             return out
         try:
-            pass
+            _task_merge_key = globals().get("_task_merge_key")
             mk_filter = _task_merge_key(resolved)
         except Exception:
             mk_filter = resolved
@@ -33614,7 +33622,7 @@ def compare_tasks_host(
 def _svg_sans_family() -> str:
     """Qt SVG needs a real face; CSS ``sans-serif`` warns as ``Sans-serif``."""
     try:
-        pass
+        _get_sans_font_family = globals().get("_get_sans_font_family")
         return _get_sans_font_family()
     except Exception:
         return "Arial"
@@ -33813,8 +33821,11 @@ def hit_test_mermaid(
 def _svg_to_png_bytes(svg: str, fill: str = "#12161d") -> Optional[Tuple[bytes, int, int]]:
     """Rasterize SVG for QTextBrowser (avoids Qt's oversized SVG buffer warning)."""
     try:
-        pass
-        pass
+        QBuffer = globals().get("QBuffer")
+        QByteArray = globals().get("QByteArray")
+        QColor = globals().get("QColor")
+        QIODevice = globals().get("QIODevice")
+        rasterize_svg_pixmap = globals().get("rasterize_svg_pixmap")
     except Exception:
         return None
     pm, _ = rasterize_svg_pixmap(svg, fill=QColor(fill or "#12161d"))
@@ -71300,7 +71311,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if not task:
                 # Bundle-safe: fall back to the monolith's already-defined globals.
                 try:
-                    pass
+                    _guess_task_name = globals().get("_guess_task_name")
+                    parse_what_if_change = globals().get("parse_what_if_change")
                 except ImportError:
                     _guess_task_name = globals().get("_guess_task_name")
                     parse_what_if_change = globals().get("parse_what_if_change")
@@ -71342,7 +71354,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if not task:
                 # Bundle-safe: fall back to the monolith's already-defined globals.
                 try:
-                    pass
+                    detect_anomalies = globals().get("detect_anomalies")
+                    _guess_task_name = globals().get("_guess_task_name")
                 except ImportError:
                     detect_anomalies = globals().get("detect_anomalies")
                     _guess_task_name = globals().get("_guess_task_name")
@@ -71556,7 +71569,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if name == AI_TOOL_GENERATE_FINGERPRINT:
             return generate_fingerprint_tool(findings)
         if name == AI_TOOL_FIND_SIMILAR_INVESTIGATIONS:
-            pass
+            set_experiment_outcomes = globals().get("set_experiment_outcomes")
             raw = self._settings.get("ai", "experiment_outcomes", "")
             hist = []
             if raw:
@@ -71589,7 +71602,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 limit=int(args.get("limit") or 3),
             )
         if name == AI_TOOL_RECORD_EXPERIMENT_OUTCOME:
-            pass
+            experiment_outcomes = globals().get("experiment_outcomes")
             payload = record_experiment_outcome_tool(
                 change=str(args.get("change") or ""),
                 predicted=str(args.get("predicted") or ""),
@@ -71668,7 +71681,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return challenge_conclusion_tool(
                 str(args.get("conclusion") or ""), findings=findings)
         if name == AI_TOOL_INVESTIGATION_MEMORY:
-            pass
+            set_investigation_memory = globals().get("set_investigation_memory")
+            investigation_memory_store = globals().get("investigation_memory_store")
             raw = self._settings.get("ai", "investigation_memory", "")
             hist = []
             if raw:
@@ -77262,9 +77276,14 @@ def _cli_ai_test_run(args: argparse.Namespace) -> int:
             path, fail_under=fail_under if suite is None else 0,
             case_ids=case_ids_raw)
         if suite is not None:
-            pass
-            pass
-            pass
+            AI_CHAT_TIMEOUT_S = globals().get("AI_CHAT_TIMEOUT_S")
+            is_local_ai_host = globals().get("is_local_ai_host")
+            live_benchmark_chat = globals().get("live_benchmark_chat")
+            normalize_ai_base_url = globals().get("normalize_ai_base_url")
+            AI_CONTEXT_MODE_FULL = globals().get("AI_CONTEXT_MODE_FULL")
+            ai_context_mode_label = globals().get("ai_context_mode_label")
+            parse_benchmark_context_modes = globals().get("parse_benchmark_context_modes")
+            ai_viewer_tools = globals().get("ai_viewer_tools")
             compare_ctx = bool(getattr(args, "compare_context", False))
             ctx_raw = str(getattr(args, "context_mode", "") or "").strip()
             if compare_ctx:
