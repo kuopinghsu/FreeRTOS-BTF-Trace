@@ -16,6 +16,8 @@ BTFViewer analyzes context-switch traces from real-time operating systems (RTOSs
 
 [Try the live demo](https://apps.kuoping.com/btf_viewer.html?demo)
 
+<a id="features" name="features">&#x200B;</a>
+
 ## Features
 
 - **Timeline views:** Display activity by task or CPU core in horizontal or vertical layouts.
@@ -26,6 +28,8 @@ BTFViewer analyzes context-switch traces from real-time operating systems (RTOSs
 - **Export:** Save PNG or SVG images, CSV or HTML reports, Perfetto traces, and selected BTF ranges.
 - **Desktop CLI:** Generate reports and images in scripts or continuous integration (CI) systems.
 - **Guided demo:** Play an 8-core walkthrough with English or Traditional Chinese narration.
+
+<a id="documentation" name="documentation">&#x200B;</a>
 
 ## Documentation
 
@@ -38,6 +42,8 @@ BTFViewer analyzes context-switch traces from real-time operating systems (RTOSs
 | [demos/README.md](demos/README.md) | Create and maintain guided demos |
 
 If you are new to BTFViewer, begin with [Quick start](#quick-start), then follow the [Basic analysis workflow](#basic-analysis-workflow). Refer to the other documents for detailed procedures and metric definitions.
+
+<a id="quick-start" name="quick-start">&#x200B;</a>
 
 ## Quick start
 
@@ -86,6 +92,8 @@ make web
 
 Sample traces are available in `tracedata/`, including `example-2cores.btf.gz`.
 
+<a id="guided-demo" name="guided-demo">&#x200B;</a>
+
 ## Guided demo
 
 The `demo_8cores` package presents the main workflow with an 8-core trace and spoken instructions. Run it before opening an application trace to become familiar with the interface and analysis sequence.
@@ -126,9 +134,11 @@ python3 scripts/demo_pack.py demos/demo_8cores --list-voices
 
 The generated `builds/demo_8cores.xtf` contains the script, trace, and selected voice files. Open it in either the Desktop or Web application.
 
-The Web **Record** function uses browser display capture. Select the current tab and enable tab audio to include narration. Toolbar hover tips are drawn in the page (not the browser’s native `title` popup) so they appear in the recording. Capture requests the tab’s device-pixel size (no downscale), VP9, and a bitrate that scales with resolution so UI text and timeline lines stay sharp.
+The Web **Record** function uses browser display capture. Select the current tab and enable tab audio to include narration.
 
 See [demos/README.md](demos/README.md) for package layout, voice generation, recording, XML actions, and the demo API.
+
+<a id="viewer-controls" name="viewer-controls">&#x200B;</a>
 
 ## Viewer controls
 
@@ -211,6 +221,8 @@ Each trace opens in a separate tab and keeps its own zoom, cursors, marks, and f
 
 Desktop restores files from their original paths. Web can restore up to eight packed traces from browser storage. Private browsing, storage limits, or cleared site data can prevent restoration.
 
+<a id="basic-analysis-workflow" name="basic-analysis-workflow">&#x200B;</a>
+
 ## Basic analysis workflow
 
 For an initial review, use the following sequence:
@@ -225,6 +237,8 @@ For an initial review, use the following sequence:
 8. If needed, ask the AI Assistant to explain or verify the measured evidence.
 
 Start with measured evidence instead of an assumed cause. Confirm the behavior in the timeline and Statistics before drawing a conclusion. See [WORKFLOWS.md](WORKFLOWS.md) for detailed procedures.
+
+<a id="analysis-and-statistics" name="analysis-and-statistics">&#x200B;</a>
 
 ## Analysis and Statistics
 
@@ -244,7 +258,6 @@ BTFViewer calculates all results from recorded BTF events. It does not inspect s
 | Priority inversion | **Priority Inheritance** | Mutex pairing and blocking |
 | Frequent core movement | **Core Migrations** | Load balance, migration heatmap, and mutex bounces |
 | Lock or queue issue | **Mutex / Semaphore / Queue** | Blocking and migrations |
-| Before-and-after test | **Trace Compare** | Matching time ranges in both traces |
 
 Detailed metric definitions and formulas are in [STATISTICS.md](STATISTICS.md).
 
@@ -272,11 +285,13 @@ After confirming load balance, check whether a task moves between cores more oft
 
 Review Task View, per-core load, **Core Migrations**, and the migration heatmap together. A high migration count is significant when it coincides with poor cache behavior, greater context-switch overhead, higher latency, or unstable load distribution.
 
-### Trace Compare
+### Comparing open traces
 
-Open at least two traces, then select **Compare**. The comparison includes utilization, migrations, execution, blocking, response time, synchronization activity, and deadline misses. You can limit each trace to its own cursor range before comparing results.
+**Compare** is available when two or more traces are open. It summarizes differences in utilization, migrations, execution, blocking, response time, synchronization activity, and deadline misses.
 
-Use the same workload and measurement period on both traces. A difference is meaningful only when the test conditions are comparable.
+This is an optional comparison tool. It is not required by the basic investigation workflow. When you use it, compare equivalent workload phases and measurement ranges.
+
+<a id="ai-assistant" name="ai-assistant">&#x200B;</a>
 
 ## AI Assistant
 
@@ -288,13 +303,15 @@ Recommended use:
 2. Ask the AI Assistant to investigate or explain it.
 3. Review the cited Statistics and timeline evidence.
 4. Use **Verify with AI** to challenge the proposed cause.
-5. If a change is recommended, capture a new trace and compare the results.
+5. If you make a change, capture a new trace and repeat the same scoped measurements.
 
 Available context levels are **Compact**, **Balanced**, and **Full evidence**. Compact uses fewer tokens, and Balanced is the default. Configure the model, endpoint, authentication, context, privacy, and reply language in **Settings → AI**.
 
 Import `examples/ai/presets.json` for example Ollama, OpenAI, Gemini, DeepSeek, and Grok configurations. Local Ollama does not require an API key. Cloud services may send trace evidence to an external provider; use the anonymization and sensitive-trace settings when appropriate.
 
 See [AI.md](AI.md) for setup, privacy, model options, tools, troubleshooting, CLI testing, and evaluation details.
+
+<a id="export" name="export">&#x200B;</a>
 
 ## Export
 
@@ -307,6 +324,8 @@ See [AI.md](AI.md) for setup, privacy, model options, tools, troubleshooting, CL
 | Selected BTF range | **Save selection as BTF** | Download selected range |
 | Statistics report | CSV or HTML | CSV or HTML |
 | Trace comparison | CSV or HTML | CSV or HTML |
+
+<a id="desktop-command-line" name="desktop-command-line">&#x200B;</a>
 
 ## Desktop command line
 
@@ -336,6 +355,8 @@ python builds/btf_viewer.py slice trace.btf -o window.btf --lo 100000 --hi 50000
 
 Run `python builds/btf_viewer.py <command> -h` for all options.
 
+<a id="settings" name="settings">&#x200B;</a>
+
 ## Settings
 
 Open **Settings** from the toolbar or press `Ctrl+,`.
@@ -348,6 +369,8 @@ Open **Settings** from the toolbar or press `Ctrl+,`.
 | **AI** | Enablement, context level, privacy, provider, model, authentication, and reply language |
 
 Desktop stores settings in `btf_viewer.rc` next to the viewer. Web stores them in browser `localStorage`. Changes are previewed immediately; select **OK** to save or **Cancel** to restore the previous values.
+
+<a id="keyboard-and-mouse" name="keyboard-and-mouse">&#x200B;</a>
 
 ## Keyboard and mouse
 
@@ -385,6 +408,8 @@ Desktop stores settings in `btf_viewer.rc` next to the viewer. Web stores them i
 | Drag a cursor or mark | Move it |
 | Right-click | Open the context menu |
 
+<a id="build-and-test" name="build-and-test">&#x200B;</a>
+
 ## Build and test
 
 Most users can ignore this section.
@@ -404,6 +429,8 @@ Most users can ignore this section.
 Edit Desktop sources in `btf_viewer_pkg/` and Web sources in `web/`. Commit regenerated files under `builds/` with the source changes. Shared parser and Statistics results are checked with fixtures under `tests/fixtures/`.
 
 See `TRACE_FORMAT.md` in the parent directory for the BTF field reference.
+
+<a id="contributors" name="contributors">&#x200B;</a>
 
 ## Contributors
 

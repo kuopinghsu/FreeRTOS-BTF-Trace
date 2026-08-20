@@ -1,8 +1,10 @@
 # AI Assistant
 
-BTFViewer's AI Assistant helps you investigate RTOS traces by organizing measured evidence, testing explanations, and guiding you back to the relevant timeline region.
+BTFViewer's AI Assistant helps you investigate RTOS traces.
 
-> **Scope:** AI works with BTFViewer Findings, Statistics, timeline queries, and Trace Compare results. It does not read firmware source or ELF files. `what_if` results are heuristic estimates, not RTOS scheduler simulation or measured trace data.
+It organizes measured evidence, tests possible explanations, and guides you back to the relevant timeline region.
+
+> **Scope:** AI works with BTFViewer Findings, Statistics, timeline queries, and Trace Compare results. It does not read firmware source or ELF files. `what_if` results are heuristic estimates. They are not RTOS scheduler simulations or measured trace data.
 
 ## Where to start
 
@@ -30,27 +32,34 @@ The key rule is simple: **do not jump from a finding directly to a mitigation**.
 
 ### User guide
 
-1. [How the AI Assistant works](#how-the-ai-assistant-works)
-2. [Workflows and use cases](#workflows-and-use-cases)
-3. [Endpoints, models, and privacy](#endpoints-and-models)
-4. [GUI tools](#gui-tools)
-5. [Desktop and web behavior](#desktop-and-web-behavior)
-6. [Troubleshooting](#troubleshooting)
-7. [Opening the web app from `file://`](#opening-the-web-app-from-file)
+1. [Overview](#overview)
+2. [Getting started](#getting-started)
+3. [Investigation workflows](#investigation-workflows)
+4. [Common use cases](#common-use-cases)
+5. [Understanding AI results](#understanding-ai-results)
+6. [Configuration, models, and privacy](#configuration-models-and-privacy)
+7. [AI tools reference](#ai-tools-reference)
+8. [Desktop and web behavior](#desktop-and-web-behavior)
+9. [Troubleshooting](#troubleshooting)
+10. [Opening the web app from `file://`](#opening-the-web-app-from-file)
 
 ### Engineering reference
 
-8. [CLI regression gate](#cli-regression-gate)
-9. [Benchmark and evaluation suite](#benchmark-suite) — [Context mode benchmarking](#context-mode-benchmarking)
-10. [Investigation Case](#investigation-case)
-11. [Investigation planner](#investigation-planner)
-12. [Causal and temporal engines](#causal-engines)
-13. [Implementation notes](#implementation-notes)
-14. [Diagrams](#diagrams)
+11. [CLI regression gate](#cli-regression-gate)
+12. [Benchmark and evaluation suite](#benchmark-suite) — [Context mode benchmarking](#context-mode-benchmarking)
+13. [Investigation Case](#investigation-case)
+14. [Investigation planner](#investigation-planner)
+15. [Causal and temporal engines](#causal-engines)
+16. [Implementation notes](#implementation-notes)
+17. [Diagrams](#diagrams)
 
 ---
 
-## How the AI Assistant works
+<a id="overview" name="overview">&#x200B;</a>
+
+## Overview
+
+This section explains what the AI Assistant does, what evidence it uses, and where its responsibility ends.
 
 ### Data flow and responsibility
 
@@ -65,9 +74,21 @@ flowchart TD
   estimate --> compare[New trace and comparison]
 ```
 
-The AI receives structured Findings and summary metrics instead of the complete raw event stream. When it needs more detail, it requests scoped evidence through the [GUI tools](#gui-tools), such as per-task metrics, timeline search hits, correlations, critical paths, or Trace Compare tables. It still does not read the raw `.btf` file directly.
+The AI receives structured Findings and summary metrics. It does not receive the complete raw event stream.
 
-AI may explain, correlate, rank, challenge, and estimate. Deterministic Statistics and the timeline remain the source of truth.
+When more detail is needed, it requests scoped evidence through the [GUI tools](#ai-tools-reference). This evidence can include:
+
+- per-task metrics;
+- timeline search results;
+- correlations;
+- critical paths;
+- Trace Compare tables.
+
+The AI still does not read the raw `.btf` file directly.
+
+AI can explain evidence, find correlations, rank possible causes, challenge assumptions, and make estimates.
+
+**Deterministic Statistics and the timeline remain the source of truth.**
 
 ### What the panel does
 
@@ -91,32 +112,19 @@ Toolbar **Compare** becomes available when at least two traces are open. **Query
 
 Enable **Limit to C1–Cn** when diagnosing a phase-specific issue. The prompt then includes `Cursor region window: jump:lo … jump:hi`, and every cited `jump:TIME` should remain inside that interval.
 
-### Evidence and validation
+<a id="getting-started" name="getting-started">&#x200B;</a>
 
-Important conclusions should include:
+## Getting started
 
-- evidence links such as `jump:TIME`, `range:LO/HI`, and named metrics;
-- confidence: **High**, **Medium**, or **Low**;
-- evidence quality: **Directly observed**, **Strong correlation**, **Possible explanation**, or **Insufficient evidence**;
-- alternative explanations and what would disprove the conclusion.
-
-The Evidence panel shows the investigation tree, evidence graph, coverage, hypotheses, and an evidence-quality band. This band is a diagnostic heuristic, not a probability. After the final reply, the host validator flags unknown task names and timestamps outside the cursor window.
-
-Prefer built-in templates. They already select the relevant metrics and Statistics pages. Use natural-language questions such as “find STI wait around TaskA” when needed; the host routes them through `search_timeline`. **Analysis Findings** can triage overall findings. **Explain finding** explains the selected Analysis Finding. Other chips: **Explain region**, **Investigate**, **Verify finding**, **Root cause**, **Trace Compare**, **Triage findings**, **Task profile**, **Diagnostic report**, **What-if**, **Optimize**, **Highest latency**, **WCET / hot CPU**, **Migration thrash**, **Core balance**, **Tick health**, **Priority inversion**, **Deadline / budget**, **Auto investigate**. Findings also offer **Save recipe…** and **Story…**.
-
-Named Statistics pages the templates cite: Timeline Anomalies, Worst Events, Period / Jitter, Unified Jitter, Recurring Patterns, Task Health, Task × Core, Waiter × Owner, Response Time, Critical Path, Preemption Matrix, Mutex Blocking, Core Utilization Over Time.
-
----
-
-<a id="workflows-and-use-cases" name="workflows-and-use-cases">&#x200B;</a>
-
-## Workflows and use cases
+Start here if you are using the AI Assistant for the first time.
 
 This section explains how the AI supports common investigations. For symptom-to-metric playbooks and exact ask order, use [WORKFLOWS.md](WORKFLOWS.md).
 
 ### First investigation
 
-Do not begin by choosing individual tools. Start with the user-facing actions and let **Investigate** select the deeper evidence tools.
+Do not start by choosing individual tools.
+
+Start with the main user actions. Let **Investigate** select deeper evidence tools when they are needed.
 
 | Step | Action | Expected result | Check before continuing |
 | --- | --- | --- | --- |
@@ -152,7 +160,17 @@ flowchart TD
 ```
 
 
-Do not ask for mitigations before the timeline agrees with the finding. Empty or mis-scoped Statistics produce confident nonsense. Prefer built-in templates: they already name metrics and units.
+Do not ask for a fix before the timeline supports the finding.
+
+Empty Statistics or the wrong scope can produce an answer that sounds confident but has weak evidence.
+
+Prefer built-in templates. They already use the expected metrics and units.
+
+<a id="investigation-workflows" name="investigation-workflows">&#x200B;</a>
+
+## Investigation workflows
+
+Use these workflows after you have selected the task, finding, or time window to investigate.
 
 ### Investigation workflow
 
@@ -192,7 +210,7 @@ Stay inside the stated window: every `jump:TIME` in the reply should fall betwee
 
 ### What-if and optimize workflow
 
-`what_if` and `optimize_experiment` are **heuristic slice-replay** tools: they reallocate measured execution slices, scale migrations / blocking, and adjust core-util balance. They are **not** an RTOS kernel or deterministic scheduler. Every result carries a disclaimer. After a promising estimate, `recommend_experiments` suggests validation steps (simulation / firmware / measurement).
+`what_if` and `optimize_experiment` are **heuristic slice-replay** tools: they reallocate measured execution slices, scale migrations / blocking, and adjust core-util balance. They do **not** simulate an RTOS kernel or a deterministic scheduler. Every result carries a disclaimer. After a promising estimate, `recommend_experiments` suggests validation steps (simulation / firmware / measurement).
 
 
 | Goal                          | What to run                                                                           | Typical change phrases                                                                 |
@@ -203,9 +221,26 @@ Stay inside the stated window: every `jump:TIME` in the reply should fall betwee
 | What to try next on the bench | `recommend_experiments`                                                               | Validation experiments from findings heuristics                                        |
 
 
-**Reading the payload:** compare `baseline` vs `simulated` (migrations, blocking_ns, load_balance_score) and the `deltas.cost` ranking. Lower cost is better in the experiment list. Treat Medium confidence as “worth trying on the bench”; Low means the phrase was vague or slices were thin.
+**How to read the result:**
+
+Compare `baseline` with `simulated`. Check:
+
+- `migrations`;
+- `blocking_ns`;
+- `load_balance_score`;
+- the `deltas.cost` ranking.
+
+A lower cost is better in the Experiment List.
+
+**Medium confidence** means the change is worth testing on real hardware. **Low confidence** usually means the change description was vague or there were too few slices.
 
 <a id="use-cases" name="use-cases">&#x200B;</a>
+
+<a id="common-use-cases" name="common-use-cases">&#x200B;</a>
+
+## Common use cases
+
+These examples show how to apply the workflow to common RTOS trace problems.
 
 ### Use cases
 
@@ -285,11 +320,54 @@ Phrase changes as **pin / affinity / priority / mutex / migration** so the simul
 ---
 
 
-## Endpoints and models
+<a id="understanding-ai-results" name="understanding-ai-results">&#x200B;</a>
+
+## Understanding AI results
+
+AI output is an interpretation of measured evidence. Use this section to understand evidence, validation, and confidence before accepting a conclusion.
+
+### Evidence and validation
+
+Important conclusions should include:
+
+- evidence links such as `jump:TIME`, `range:LO/HI`, and named metrics;
+- confidence: **High**, **Medium**, or **Low**;
+- evidence quality: **Directly observed**, **Strong correlation**, **Possible explanation**, or **Insufficient evidence**;
+- alternative explanations and what would disprove the conclusion.
+
+The Evidence panel shows:
+
+- the investigation tree;
+- the evidence graph;
+- coverage;
+- hypotheses;
+- the Evidence Quality band.
+
+The Evidence Quality band is a diagnostic heuristic. It is **not a probability**.
+
+After the final reply, the host validator checks task names and timestamps. It flags unknown task names and timestamps outside the cursor window.
+
+Prefer built-in templates. They already select the relevant metrics and Statistics pages. Use natural-language questions such as “find STI wait around TaskA” when needed; the host routes them through `search_timeline`. **Analysis Findings** can triage overall findings. **Explain finding** explains the selected Analysis Finding. Other chips: **Explain region**, **Investigate**, **Verify finding**, **Root cause**, **Trace Compare**, **Triage findings**, **Task profile**, **Diagnostic report**, **What-if**, **Optimize**, **Highest latency**, **WCET / hot CPU**, **Migration thrash**, **Core balance**, **Tick health**, **Priority inversion**, **Deadline / budget**, **Auto investigate**. Findings also offer **Save recipe…** and **Story…**.
+
+Named Statistics pages the templates cite: Timeline Anomalies, Worst Events, Period / Jitter, Unified Jitter, Recurring Patterns, Task Health, Task × Core, Waiter × Owner, Response Time, Critical Path, Preemption Matrix, Mutex Blocking, Core Utilization Over Time.
+
+---
+
+<a id="workflows-and-use-cases" name="workflows-and-use-cases">&#x200B;</a>
+
+<a id="configuration-models-and-privacy" name="configuration-models-and-privacy">&#x200B;</a>
+
+## Configuration, models, and privacy
 
 ### Connect an endpoint
 
-Any OpenAI-compatible endpoint works, including Ollama (`http://localhost:11434/v1`). Chat requests time out after 120s (**Stop** still cancels sooner). Give the endpoint at least an **8k** context window so a full Findings card plus a tool round still fits. **Settings → AI → Context → Compact** shrinks Findings, tool schemas, tool rows, and history when a smaller window or a local model is the limit.
+You can use any OpenAI-compatible endpoint, including Ollama (`http://localhost:11434/v1`).
+
+Chat requests time out after 120 seconds. **Stop** can cancel a request earlier.
+
+Use a context window of at least **8k** when possible. This gives enough room for a full Findings card and one tool round.
+
+If a local model has a smaller context window, use **Settings → AI → Context → Compact**. Compact reduces Findings, tool schemas, tool rows, and chat history.
 
 The shipped Ollama default is `qwen3.5:9b`:
 
@@ -403,11 +481,17 @@ Live `ai-test` defaults to Full evidence. Use **`--compare-context`** to measure
 ---
 
 
-## GUI tools
+<a id="ai-tools-reference" name="ai-tools-reference">&#x200B;</a>
+
+## AI tools reference
 
 Read-only evidence tools run immediately; GUI-changing tools wait for **Apply** unless **Auto-apply GUI actions** is on. Names and parameters are in [Complete GUI tool reference](#complete-gui-tool-reference) below.
 
-The AI tool set is easier to understand by **purpose** than by function name. A normal user should start with the built-in templates and Investigation plan; the individual tool schema is primarily an advanced/debugging reference.
+It is easier to understand the AI tools by **purpose** than by function name.
+
+Most users should start with the built-in templates and the Investigation plan.
+
+The individual tool schema is mainly for advanced use, debugging, and implementation reference.
 
 ### Tool mental model
 

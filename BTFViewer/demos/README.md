@@ -1,16 +1,34 @@
-# Demo XML descriptions
+# Demo XML Guide
 
-Generic GUI demos for the in-app overlay tour
-([`../btf_viewer_pkg/demo_inapp.py`](../btf_viewer_pkg/demo_inapp.py),
-Web [`../web/src/utils/demoRunner.js`](../web/src/utils/demoRunner.js)).
+This document explains how to build, run, package, and extend BTFViewer in-app demos.
 
-Each full demo lives in its own folder (XML + frozen trace + narration).
+The same demo XML is used by the Desktop runner
+([`../btf_viewer_pkg/demo_inapp.py`](../btf_viewer_pkg/demo_inapp.py))
+and the Web runner
+([`../web/src/utils/demoRunner.js`](../web/src/utils/demoRunner.js)).
+
+Each complete demo has its own folder with the XML script, a frozen trace, narration text, and optional voice files.
+
+## Contents
+
+1. [Demo layout](#demo-layout)
+2. [Run the demo](#run-the-demo)
+3. [Demo action reference](#demo-action-reference)
+4. [Timeline and view actions](#timeline-and-view-actions)
+5. [Live UI targets](#live-ui-targets)
+6. [Audio and voice packs](#audio-and-voice-packs)
+7. [Shareable XTF packs](#shareable-xtf-packs)
+8. [Runner behavior](#runner-behavior)
+
+<a id="demo-layout" name="demo-layout">&#x200B;</a>
+
+## Demo layout
 
 | Path | Purpose |
 |------|---------|
 | [`demo_8cores/`](demo_8cores/) | 8-core BTFViewer recording demo |
 
-### `demo_8cores/` layout
+### `demo_8cores/` folder
 
 | Path | Purpose |
 |------|---------|
@@ -18,6 +36,12 @@ Each full demo lives in its own folder (XML + frozen trace + narration).
 | [`demo_8cores/demo_8cores.btf.gz`](demo_8cores/demo_8cores.btf.gz) | Frozen trace (stable vs `tracedata/`) |
 | [`demo_8cores/text/<lang>/`](demo_8cores/text/en/) | Narration scripts (`.txt`), one folder per language |
 | [`demo_8cores/voice/<lang>/`](demo_8cores/voice/en/) | TTS audio + `voice.json`, one folder per language |
+
+<a id="run-the-demo" name="run-the-demo">&#x200B;</a>
+
+## Run the demo
+
+Build the bundled application once, then start the demo with `make demo`. Use `DEMO_LANG` to select another narration language.
 
 ```bash
 cd BTFViewer
@@ -27,7 +51,8 @@ make demo
 make demo DEMO_LANG=zh-tw
 # Shareable zip pack (Open / drag in the viewer):
 make demo-pack                    # → builds/demo_8cores.xtf (en + zh-tw)
-# or:
+
+# Or run the tools directly:
 python3 builds/btf_viewer.py demos/demo_8cores/demo_8cores.xml
 BTFVIEWER_DEMO_LANG=zh-tw python3 builds/btf_viewer.py demos/demo_8cores/demo_8cores.xml
 python3 builds/btf_viewer.py builds/demo_8cores.xtf
@@ -37,14 +62,16 @@ python3 scripts/demo_pack.py demos/demo_8cores -o builds/demo_8cores.xtf --lang 
 
 Settings for the demo session are stored in `builds/btf_viewer.rc` (next to the bundled app).
 
-See [`demo_inapp.py`](../btf_viewer_pkg/demo_inapp.py) and
-[`demoRunner.js`](../web/src/utils/demoRunner.js) for the action reference
-(`audio` / `play`, `move` / `sweep` / `click` overlay, `macro`, `highlight`,
-`cursors`, `stats_section`, …). Keyboard injection (`hotkey` / `type` / `focus`)
-is skipped except Esc to close overlays. Moving the real mouse hides the overlay
-pointer until the next scripted `<move>` (Desktop and Web).
+<a id="demo-action-reference" name="demo-action-reference">&#x200B;</a>
 
-**Viewer demo API**
+## Demo action reference
+
+The XML runner provides actions for narration, pointer movement, highlighting, cursors, Statistics, timeline navigation, and view control.
+
+See [`demo_inapp.py`](../btf_viewer_pkg/demo_inapp.py) and
+[`demoRunner.js`](../web/src/utils/demoRunner.js) for the complete action implementation.
+
+### Viewer demo API
 
 The in-app runner calls `MainWindow._demo_handle` directly. Opt-in HTTP
 `BTFVIEWER_DEMO_API=1` still serves `POST http://127.0.0.1:8765/demo` for
@@ -80,6 +107,14 @@ headless control (no extra packages).
 <tab_nav dir="prev"/>
 ```
 
+<a id="timeline-and-view-actions" name="timeline-and-view-actions">&#x200B;</a>
+
+## Timeline and view actions
+
+These actions control timeline zoom, navigation, and viewport position without relying on screen coordinates.
+
+### Fit and zoom
+
 `<zoom_view/>` is **Zoom Full View** (toolbar Fit / Ctrl+0): the entire
 trace, even if C1–Cn exist. `<macro ref="fit"/>` (the Ctrl+0 shortcut) uses
 this same action.
@@ -95,13 +130,18 @@ the Zoom Out control is grayed there, and `<zoom_out/>` is a no-op. After
 `<fit_view/>` (C1–Cn) the view is still zoomed in, so `<zoom_out/>` still
 steps out until Full View.
 
-`<tab_nav/>` (alias attribute `direction`) drives the timeline's Tab / Shift+Tab
-task-segment navigation: `dir="next"` (default) or `dir="prev"`. With nothing
-selected, it jumps to the first task segment at/after the earliest visible
-cursor/bookmark/annotation (or the viewport start edge if none are visible);
-with a task/segment already selected, it keeps cycling next/previous by task.
-Pair with `<clear_highlight/>` beforehand to guarantee the "nothing selected"
-first-stop behavior.
+### Segment navigation
+
+`<tab_nav/>` controls the timeline's Tab / Shift+Tab task-segment navigation.
+
+- `dir="next"` is the default.
+- `dir="prev"` moves backward.
+- If nothing is selected, navigation starts from the earliest visible cursor, bookmark, or annotation. If none are visible, it starts from the viewport edge.
+- If a task segment is already selected, navigation continues to the next or previous segment.
+
+Use `<clear_highlight/>` first when the demo must start with no selection.
+
+### Move the viewport
 
 `<move_view/>` (aliases `<move_viewport/>`, `<pan_view/>`) pans the current
 zoom to a time and/or centers a task row. It does not zoom or highlight.
@@ -125,23 +165,24 @@ sub-row can be centered.
 <move_view task="CS[27]"/>
 ```
 
-`<show_message/>` (aliases `<message/>`, `<show_msg/>`) shows a centered caption
-over the trace window (fade in, hold, fade out), waits, then clears it. Does not
-block pointer overlay moves. Text comes from `text` / `message` or element body;
-duration from `seconds` / `duration` (default **2**).
+### Show a message
+
+`<show_message/>` displays a centered caption over the trace window. The message fades in, stays visible for the requested duration, and then fades out.
+
+It does not block pointer overlay movement. Set the text with `text`, `message`, or the element body. Set the duration with `seconds` or `duration`; the default is **2 seconds**.
 
 ```xml
 <show_message text="Watch the CS row" seconds="2.5"/>
 <show_message seconds="1">Jumping to trace start</show_message>
 ```
 
-Toolbar buttons, tabs, Analysis, and Find are driven by these API events — not
-mouse clicks at window fractions (those miss when the window is not fullscreen).
+Toolbar buttons, tabs, Analysis, and Find use API events instead of fixed screen positions. This keeps demos stable when the window size changes.
 
-**Live `<move target="…"/>` names**
+<a id="live-ui-targets" name="live-ui-targets">&#x200B;</a>
 
-`<move target="name"/>` prefers live widget geometry (Desktop `_demo_target`,
-Web `data-demo-target`) over XML `<point/>` window fractions. Use these names:
+## Live UI targets
+
+`<move target="…"/>` can point to a named UI element. The runner prefers live widget geometry over XML window fractions.
 
 | Target | Widget |
 |---|---|
@@ -172,7 +213,11 @@ Statistics section ids match the desktop panel (`health`, `cores`, `tasks`,
 `exec`, `block`, `priority`, `migrations`, `sync`, `queue`, `affinity`,
 `lifecycle`, …).
 
-**Audio narration**
+<a id="audio-and-voice-packs" name="audio-and-voice-packs">&#x200B;</a>
+
+## Audio and voice packs
+
+### Audio narration
 
 ```xml
 <audio file="${XML_DIR}/voice/01_title.mp3"/>
@@ -187,7 +232,9 @@ Convert `text/<lang>/*.txt` → `voice/<lang>/*.mp3` with your TTS tool (or
 so speech engines pronounce it correctly. The runner also tries common
 extensions (`.wav`, `.m4a`, `.aiff`, …).
 
-**Voice packs.** Every language uses the same layout. XML paths stay
+### Voice packs
+
+Every language uses the same layout. XML paths stay
 `voice/01_title.mp3`; the runner looks in `voice/<lang>/` first.
 
 ```
@@ -230,7 +277,9 @@ discovered. Desktop: `--lang zh-tw`, `make demo DEMO_LANG=zh-tw`, or
 `BTFVIEWER_DEMO_LANG`. Otherwise the XML ``<languages default>`` is used
 (English for `demo_8cores`).
 
-**Shareable `.xtf` pack**
+<a id="shareable-xtf-packs" name="shareable-xtf-packs">&#x200B;</a>
+
+## Shareable XTF packs
 
 ```bash
 make demo-pack                              # en + zh-tw (default)
@@ -243,12 +292,15 @@ python3 scripts/demo_pack.py demos/demo_8cores --voice en --voice zh-tw
 python3 scripts/demo_pack.py demos/demo_8cores --all-voices -o builds/demo_8cores.xtf
 ```
 
-Writes a zip archive (``.xtf``) with a languages-filtered XML, the frozen
-``.btf.gz``, and `voice/en` + `voice/zh-tw` (override with ``--lang`` /
-``DEMO_LANGS``). Voice ``.mp3`` clips are converted to ``.aac``
-(``ffmpeg -c:a aac -ar 24000 -ac 1 -b:a 32k``) and ``<audio file=…>`` paths in
-the packed XML are rewritten to ``.aac``. Pass ``--keep-mp3`` to skip
-conversion. Open or drag the file in **Web or Desktop** to play the tour.
+The command creates an `.xtf` zip archive with:
+
+- the language-filtered XML;
+- the frozen `.btf.gz` trace;
+- the selected voice packs.
+
+By default, MP3 narration is converted to 24 kHz mono AAC and the packed XML is updated to use the AAC files. Use `--keep-mp3` to keep the original MP3 files.
+
+Open or drag the `.xtf` file into the **Web** or **Desktop** viewer to play the tour.
 
 Declare languages in `<meta>` (or generate that block with `sync-xml`):
 
@@ -259,17 +311,21 @@ Declare languages in `<meta>` (or generate that block with `sync-xml`):
 </languages>
 ```
 
-Default players: **stdlib on Windows** (`scripts/play_audio_clip.py` via winmm/MCI — no pip),
-else macOS `afplay`, `ffplay` / `paplay` / `aplay`. Desktop also tries QtMultimedia
-when the PySide6 build includes it.
+<a id="runner-behavior" name="runner-behavior">&#x200B;</a>
 
-**Narration + UI overlap**
+## Runner behavior
+
+### Audio playback
+
+On Windows, playback uses the standard-library helper `scripts/play_audio_clip.py` through winmm/MCI. Other platforms use available system players such as macOS `afplay`, `ffplay`, `paplay`, or `aplay`. Desktop can also use QtMultimedia when it is available.
+
+### Narration and UI overlap
 
 By default `<audio>` is **non-blocking**: overlay and API actions run while the
 clip plays; the runner waits for the clip at the end of each step. Use
 `block="true"` or `defaults audio_block="true"` to wait per clip.
 
-**Window-relative coordinates**
+### Window-relative coordinates
 
 `<point x="0.42" y="0.42"/>` is a fraction of the **viewer window**
 (not the full screen). Live toolbar / panel targets (see the table above)

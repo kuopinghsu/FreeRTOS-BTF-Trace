@@ -16,6 +16,8 @@ BTFViewer 用於分析即時作業系統（RTOS）的 context-switch trace。它
 
 [開啟線上示範](https://apps.kuoping.com/btf_viewer.html?demo)
 
+<a id="features" name="features">&#x200B;</a>
+
 ## 功能
 
 - **時間軸檢視：** 依 task 或 CPU 核心顯示活動，並支援水平及垂直版面。
@@ -27,17 +29,21 @@ BTFViewer 用於分析即時作業系統（RTOS）的 context-switch trace。它
 - **Desktop CLI：** 透過指令稿或持續整合（CI）系統產生報告與圖片。
 - **導覽示範：** 播放 8 核心操作導覽，提供英文或繁體中文語音。
 
+<a id="documentation" name="documentation">&#x200B;</a>
+
 ## 文件
 
 | 文件 | 用途 |
 |---|---|
 | `README.md` | 安裝 BTFViewer 並了解主要功能 |
-| [WORKFLOWS.md](WORKFLOWS.md) | 依照步驟進行問題調查 |
-| [STATISTICS.md](STATISTICS.md) | 了解統計指標的定義、公式與判讀方式 |
-| [AI.md](AI.md) | 設定及使用 AI 輔助調查 |
+| [WORKFLOWS_zh-TW.md](WORKFLOWS_zh-TW.md) | 依照步驟進行問題調查 |
+| [STATISTICS_zh-TW.md](STATISTICS_zh-TW.md) | 了解統計指標的定義、公式與判讀方式 |
+| [AI_zh-TW.md](AI_zh-TW.md) | 設定及使用 AI 輔助調查 |
 | [demos/README.md](demos/README.md) | 建立及維護導覽示範 |
 
-若是第一次使用 BTFViewer，請先閱讀[快速開始](#快速開始)，再依照[基本分析流程](#基本分析流程)操作。需要詳細步驟或指標定義時，再查閱其他文件。
+若是第一次使用 BTFViewer，請先閱讀[快速開始](#quick-start)，再依照[基本分析流程](#basic-analysis-workflow)操作。需要詳細步驟或指標定義時，再查閱其他文件。
+
+<a id="quick-start" name="quick-start">&#x200B;</a>
 
 ## 快速開始
 
@@ -86,6 +92,8 @@ make web
 
 `tracedata/` 內提供範例 trace，包括 `example-2cores.btf.gz`。
 
+<a id="guided-demo" name="guided-demo">&#x200B;</a>
+
 ## 導覽示範
 
 `demo_8cores` 套件使用 8 核心 trace 與語音說明，示範主要分析流程。初次使用時，建議先執行此示範，熟悉介面及分析順序後，再開啟應用程式的 trace。
@@ -130,6 +138,8 @@ Web 的 **Record** 功能使用瀏覽器畫面擷取。若要錄下語音，請�
 
 套件結構、語音產生、錄影、XML 動作及示範 API 的詳細說明，請參閱 [demos/README.md](demos/README.md)。
 
+<a id="viewer-controls" name="viewer-controls">&#x200B;</a>
+
 ## Viewer 操作
 
 Desktop 與 Web 應用程式採用相同的主要操作流程。平台差異會在相關段落中說明。
@@ -166,7 +176,7 @@ Task View 適合檢查 task 的執行及核心遷移情形。Core View 適合檢
 - 按住 **Shift** 再捲動可切換平移軸向。
 - 在 macOS 上可使用觸控板的雙指開合手勢縮放。
 - 在時間軸上按住滑鼠中鍵拖曳，可放大選取的時間範圍。
-- 選取 **Fit** 或按 `Ctrl+0` 可顯示完整 trace。**Range** / `Ctrl+R` 會縮放至 C1–Cn；若已放置這些游標，示範指令 `<fit_view/>` 會使用 Range。
+- 選取 **Fit** 或按 `Ctrl+0` 可顯示完整 trace。**Range** / `Ctrl+R` 會縮放至第一個與最後一個游標（C1–Cn）之間。在示範指令中，`<zoom_view/>` 使用 Fit；若已有游標，`<fit_view/>` 則使用 Range。顯示完整 trace 時，**Zoom out** 會停在 Fit，且無法繼續縮小。
 - 選取 **1:1** 可回到設定的縮放密度。
 - 點選 task 標籤或圖例項目，可持續醒目顯示該 task。
 - 將游標停在時間軸區段上，可查看持續時間、所在核心及鄰近活動。
@@ -211,6 +221,8 @@ Task View 適合檢查 task 的執行及核心遷移情形。Core View 適合檢
 
 Desktop 會從原始路徑還原檔案。Web 最多可從瀏覽器儲存空間還原八份已封裝的 trace。無痕瀏覽、儲存空間限制或清除網站資料，都可能使還原功能無法使用。
 
+<a id="basic-analysis-workflow" name="basic-analysis-workflow">&#x200B;</a>
+
 ## 基本分析流程
 
 第一次檢查時，請依照以下順序操作：
@@ -224,7 +236,9 @@ Desktop 會從原始路徑還原檔案。Web 最多可從瀏覽器儲存空間�
 7. 檢查 task、核心、搶占、阻塞、同步或核心遷移的詳細資料。
 8. 必要時，請 AI Assistant 說明或驗證量測證據。
 
-請從量測證據開始，不要先假設原因。確認時間軸與 Statistics 中的行為後，再下結論。詳細流程請參閱 [WORKFLOWS.md](WORKFLOWS.md)。
+請從量測證據開始，不要先假設原因。確認時間軸與 Statistics 中的行為後，再下結論。詳細流程請參閱 [WORKFLOWS_zh-TW.md](WORKFLOWS_zh-TW.md)。
+
+<a id="analysis-and-statistics" name="analysis-and-statistics">&#x200B;</a>
 
 ## Analysis 與 Statistics
 
@@ -244,9 +258,8 @@ BTFViewer 的所有結果都由已記錄的 BTF 事件計算而來。它不會�
 | 優先權反轉 | **Priority Inheritance** | Mutex 配對及阻塞 |
 | 頻繁在核心間移動 | **Core Migrations** | 負載平衡、核心遷移熱圖及 mutex bounce |
 | Lock 或 queue 問題 | **Mutex / Semaphore / Queue** | 阻塞及核心遷移 |
-| 比較修改前後結果 | **Trace Compare** | 兩份 trace 中相符的時間範圍 |
 
-統計指標的詳細定義與公式請參閱 [STATISTICS.md](STATISTICS.md)。
+統計指標的詳細定義與公式請參閱 [STATISTICS_zh-TW.md](STATISTICS_zh-TW.md)。
 
 ### Analysis Findings
 
@@ -272,11 +285,13 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 
 請一併檢查 Task View、各核心負載、**Core Migrations** 及核心遷移熱圖。若偏高的核心遷移次數同時伴隨快取行為變差、context-switch overhead 增加、延遲升高或負載分配不穩，才具有較明確的分析意義。
 
-### Trace Compare
+### 比較已開啟的 trace（Comparing open traces）
 
-開啟至少兩份 trace，再選取 **Compare**。比較內容包括使用率、核心遷移、執行、阻塞、回應時間、同步活動及未達 deadline。比較前，可使用各 trace 自己的游標範圍限制資料。
+開啟兩份以上的 trace 時，可以使用 **Compare** 查看使用率、核心遷移、執行、阻塞、Response Time、同步活動及 Deadline Miss 等差異。
 
-兩份 trace 應採用相同的工作負載與量測期間。只有測試條件相當時，差異才具有分析意義。
+這是選用的比較工具，不是基本分析流程的必要步驟。使用時，應比較相同的工作負載階段與量測範圍。
+
+<a id="ai-assistant" name="ai-assistant">&#x200B;</a>
 
 ## AI Assistant
 
@@ -288,13 +303,15 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 2. 請 AI Assistant 調查或說明該項結果。
 3. 查看 AI 引用的 Statistics 與時間軸證據。
 4. 使用 **Verify with AI** 檢查提出的原因是否成立。
-5. 若建議修改系統，請擷取新的 trace 並比較結果。
+5. 若實際修改系統，請擷取新的 trace，並重複相同範圍的量測。
 
 可用的 context level 包括 **Compact**、**Balanced** 及 **Full evidence**。Compact 使用較少 token，預設值為 Balanced。可在 **Settings → AI** 中設定模型、endpoint、驗證方式、context、隱私選項及回覆語言。
 
 匯入 `examples/ai/presets.json`，可取得 Ollama、OpenAI、Gemini、DeepSeek 及 Grok 的範例設定。使用本機 Ollama 不需要 API key。雲端服務可能會將 trace 證據傳送給外部服務供應商；處理敏感 trace 時，請視需要啟用匿名化及敏感資料選項。
 
-設定、隱私、模型選項、工具、疑難排解、CLI 測試及評估方式的詳細說明，請參閱 [AI.md](AI.md)。
+設定、隱私、模型選項、工具、疑難排解、CLI 測試及評估方式的詳細說明，請參閱 [AI_zh-TW.md](AI_zh-TW.md)。
+
+<a id="export" name="export">&#x200B;</a>
 
 ## 匯出
 
@@ -307,6 +324,8 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 | 選取的 BTF 範圍 | **Save selection as BTF** | 下載選取範圍 |
 | Statistics 報告 | CSV 或 HTML | CSV 或 HTML |
 | Trace 比較結果 | CSV 或 HTML | CSV 或 HTML |
+
+<a id="desktop-command-line" name="desktop-command-line">&#x200B;</a>
 
 ## Desktop 命令列
 
@@ -336,6 +355,8 @@ python builds/btf_viewer.py slice trace.btf -o window.btf --lo 100000 --hi 50000
 
 執行 `python builds/btf_viewer.py <command> -h` 可查看所有選項。
 
+<a id="settings" name="settings">&#x200B;</a>
+
 ## 設定
 
 從工具列開啟 **Settings**，或按 `Ctrl+,`。
@@ -348,6 +369,8 @@ python builds/btf_viewer.py slice trace.btf -o window.btf --lo 100000 --hi 50000
 | **AI** | 啟用狀態、context level、隱私、服務供應商、模型、驗證方式及回覆語言 |
 
 Desktop 將設定儲存在 viewer 旁的 `btf_viewer.rc`。Web 則儲存在瀏覽器的 `localStorage`。變更會立即預覽；選取 **OK** 儲存，或選取 **Cancel** 還原先前的設定值。
+
+<a id="keyboard-and-mouse" name="keyboard-and-mouse">&#x200B;</a>
 
 ## 鍵盤與滑鼠操作
 
@@ -385,6 +408,8 @@ Desktop 將設定儲存在 viewer 旁的 `btf_viewer.rc`。Web 則儲存在瀏�
 | 拖曳游標或標記 | 移動游標或標記 |
 | 按滑鼠右鍵 | 開啟快顯功能表 |
 
+<a id="build-and-test" name="build-and-test">&#x200B;</a>
+
 ## 建置與測試
 
 一般使用者不需要執行本節中的操作。
@@ -404,6 +429,8 @@ Desktop 將設定儲存在 viewer 旁的 `btf_viewer.rc`。Web 則儲存在瀏�
 Desktop 原始碼位於 `btf_viewer_pkg/`，Web 原始碼位於 `web/`。修改原始碼時，請一併提交 `builds/` 下重新產生的檔案。共用解析器與 Statistics 結果會使用 `tests/fixtures/` 下的測試資料進行檢查。
 
 BTF 欄位定義請參閱上層目錄中的 `TRACE_FORMAT.md`。
+
+<a id="contributors" name="contributors">&#x200B;</a>
 
 ## 貢獻者
 

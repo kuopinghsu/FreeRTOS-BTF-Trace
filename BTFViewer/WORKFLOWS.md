@@ -6,7 +6,7 @@ Use this guide when you know the symptom but do not yet know where to look. For 
 
 > **Core rule:** treat the trace and Statistics as measured evidence. Treat Analysis Findings as leads, AI explanations as interpretations, and What-if results as estimates.
 
-## Workflow at a glance
+<a id="workflow-at-a-glance" name="workflow-at-a-glance">&#x200B;</a>\n\n## Workflow at a glance
 
 ```mermaid
 flowchart TD
@@ -30,7 +30,7 @@ flowchart TD
 
 You do not need AI to complete the workflow. Deterministic Statistics and timeline evidence should remain the basis of the conclusion.
 
-## 10-minute first pass
+<a id="10-minute-first-pass" name="10-minute-first-pass">&#x200B;</a>\n\n## 10-minute first pass
 
 When opening an unfamiliar trace, use this short pass before reading every Statistics table:
 
@@ -47,7 +47,7 @@ When opening an unfamiliar trace, use this short pass before reading every Stati
 | 9 | Optionally use **Investigate…**, **Verify with AI…**, or **Explain region** | Ask AI about evidence already found |
 | 10 | Save evidence and repeat the same measurements after a change | Preserve and validate the result |
 
-## Before you start
+<a id="before-you-start" name="before-you-start">&#x200B;</a>\n\n## Before you start
 
 Have the following ready when possible:
 
@@ -292,7 +292,7 @@ Record enough information for another engineer to reproduce the conclusion:
 
 Use bookmarks and annotations for important timestamps. Export an HTML/CSV report, annotated snapshot, selected BTF range, or an Investigation Case when useful.
 
-## Beginner checklist
+<a id="beginner-checklist" name="beginner-checklist">&#x200B;</a>\n\n## Beginner checklist
 
 - [ ] I checked trace quality before application behavior.
 - [ ] I reviewed the full trace before narrowing the scope.
@@ -305,7 +305,7 @@ Use bookmarks and annotations for important timestamps. Export an HTML/CSV repor
 - [ ] I labeled estimates and missing trace data clearly.
 - [ ] I recaptured the same workload and repeated the same scoped measurements after a change.
 
-## Common mistakes
+<a id="common-mistakes" name="common-mistakes">&#x200B;</a>\n\n## Common mistakes
 
 | Mistake | Better practice |
 |---|---|
@@ -318,7 +318,7 @@ Use bookmarks and annotations for important timestamps. Export an HTML/CSV repor
 | Treating What-if as measured behavior | Recapture and repeat the same Statistics measurements |
 | Continuing with a poor trace | Fix instrumentation or capture settings first |
 
-## Documentation navigation
+<a id="documentation-navigation" name="documentation-navigation">&#x200B;</a>\n\n## Documentation navigation
 
 - [`README.md`](README.md) — installation, controls, timeline navigation, export, and [demo](README.md#demo)
 - [`STATISTICS.md`](STATISTICS.md) — metric definitions, formulas, interpretation, and limitations

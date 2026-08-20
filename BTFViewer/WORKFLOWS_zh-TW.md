@@ -2,11 +2,11 @@
 
 本文件提供一套適合新手的 RTOS 排程追蹤分析流程，協助你從現象逐步找到可驗證的證據。
 
-若要了解介面操作，請參閱 [`README.md`](README.md)；若要查詢統計指標的定義與限制，請參閱 [`STATISTICS.md`](STATISTICS.md)；若要設定 AI 或使用進階調查工具，請參閱 [`AI.md`](AI.md)。
+若要了解介面操作，請參閱 [`README.md`](README.md)；若要查詢統計指標的定義與限制，請參閱 [`STATISTICS_zh-TW.md`](STATISTICS_zh-TW.md)；若要設定 AI 或使用進階調查工具，請參閱 [`AI_zh-TW.md`](AI_zh-TW.md)。
 
 > **核心原則：**追蹤資料與 Statistics 是實際量測的證據；Analysis Findings 是調查線索；AI 回覆是解讀；What-if 結果則是估算。
 
-## 流程總覽
+<a id="workflow-at-a-glance" name="workflow-at-a-glance">&#x200B;</a>\n\n## 流程總覽
 
 ```mermaid
 flowchart TD
@@ -24,13 +24,13 @@ flowchart TD
   evidence -- 是 --> explain["9. 使用 AI 解釋或驗證，可省略"]
   explain --> change["10. 規劃一項可量測的修改"]
   change --> recapture2["以相同負載重新擷取"]
-  recapture2 --> compare["使用 Trace Compare 驗證"]
-  compare --> close["記錄證據與結論"]
+  recapture2 --> remeasure["重複相同範圍的量測"]
+  remeasure --> close["記錄證據與結論"]
 ```
 
-即使不使用 AI，也能完成這套流程。步驟 1～8 與 Trace Compare 都以確定性的追蹤資料為基礎，應作為判斷結論的主要依據。
+即使不使用 AI，也能完成這套流程。步驟 1～8 都以確定性的追蹤資料為基礎，應作為判斷結論的主要依據。
 
-## 10 分鐘快速檢查
+<a id="10-minute-first-pass" name="10-minute-first-pass">&#x200B;</a>\n\n## 10 分鐘快速檢查
 
 第一次開啟不熟悉的追蹤檔時，先依下列步驟快速檢查，不必從頭閱讀所有 Statistics 表格：
 
@@ -40,21 +40,20 @@ flowchart TD
 | 2 | 開啟 **Load**，切換 **Task View** 與 **Core View** | 找出工作負載階段與整體活動狀況 |
 | 3 | 開啟 **Statistics** 與 **Analysis** | 查看追蹤警告、事件群組與排序後的發現 |
 | 4 | 查看 **Trace Health (TICK)** | 判斷時序資料是否可用，或 Tickless 行為是否符合預期 |
-| 5 | 開啟最相關 Findings 指定的 Statistics 項目 | 避免檢查無關指標 |
+| 5 | 開啟最相關 Finding 指定的 Statistics 項目 | 避免檢查無關指標 |
 | 6 | 按一下 **Max**、**p95**、資料列、圖表資料點或熱圖儲存格 | 跳到實際量測的時間軸證據 |
 | 7 | 設定 C1–C2，並啟用 **Limit to C1–Cn** | 排除無關的工作負載階段 |
 | 8 | 重新檢查 Analysis 與 Statistics | 確認問題在限定範圍內仍然存在 |
 | 9 | 視需要使用 **Investigate…**、**Verify with AI…** 或 **Explain region** | 讓 AI 解釋已找到的證據 |
-| 10 | 保存證據，或比較重新擷取的追蹤檔 | 保留並驗證分析結果 |
+| 10 | 保存證據，並在修改後重複相同量測 | 保留並驗證分析結果 |
 
-## 開始前的準備
+<a id="before-you-start" name="before-you-start">&#x200B;</a>\n\n## 開始前的準備
 
 請盡可能準備下列資訊：
 
 - 包含異常或效能問題時段的追蹤檔。
 - 預期的工作負載、工作名稱、優先權、截止期限與 CPU 預算。
 - 大致的事件時間，或能穩定重現問題的方式。
-- 分析效能退化時，以相同工作負載與設定擷取的正常基準追蹤檔。
 - 分析派送延遲、生命週期、互斥鎖、佇列、區間或優先權繼承時所需的 STI 事件。
 
 BTFViewer 不會分析原始碼，也不會模擬 RTOS 排程器；它只能量測追蹤檔內實際記錄的事件。若追蹤資料未包含必要事件，應清楚註明限制，不要推斷出看似精確的數值。
@@ -129,7 +128,6 @@ BTFViewer 不會分析原始碼，也不會模擬 RTOS 排程器；它只能量�
 | 核心頻繁遷移或來回跳動 | **Core Migrations** | Heatmap、Corridor Inspector、Core Affinity、mutex bounces |
 | 優先權反轉 | **Priority Inheritance** | Mutex pairing、Mutex Blocking、Waiter × Owner |
 | 鎖定或佇列延遲 | **Mutex / Semaphore / Queue** | Blocking Time、Critical Path、Migrations |
-| 修改前後效能退化 | **Trace Compare** | 相同的游標範圍與工作負載階段 |
 
 ### 症狀分流圖
 
@@ -141,13 +139,11 @@ flowchart TD
   symptom -->|延遲或週期不規律| timing["Dispatch、Period、Jitter"]
   symptom -->|多核心問題| smp["使用率與核心遷移"]
   symptom -->|Tick 問題| tick["Trace Health"]
-  symptom -->|版本效能退化| compare["Trace Compare"]
   execution --> verify["限定範圍並在時間軸驗證"]
   blocking --> verify
   timing --> verify
   smp --> verify
   tick --> verify
-  compare --> verify
 ```
 
 ## 6. 使用游標限定單一事件
@@ -172,7 +168,7 @@ flowchart TD
 - 限定範圍內的 **Avg**、**p95**、**p99** 與 **Max**。
 - 離群事件的時間與持續時間。
 - 事件發生前正在執行的工作與核心。
-- 相關的搶占、阻塞、核心遷移、互斥鎖、佇列或 STI 事件。
+- 相關的搶佔、阻塞、核心遷移、互斥鎖、佇列或 STI 事件。
 - 相同行為是否在追蹤檔的其他位置重複出現。
 
 若已知工作名稱、核心、核心遷移、STI 事件、區間、生命週期事件或同步物件指標，請使用 **Find**。若同類問題重複出現，請查看 **Recurring Patterns**。
@@ -244,7 +240,6 @@ AI 並非必要功能。選定發現、工作、事件或游標範圍後，AI �
 | 調查一段時間 | 設定兩個以上游標 → **Explain this region with AI** | 每個 `jump:TIME` 都位於 C1–Cn 內 |
 | 調查單一執行片段 | 按右鍵 → **Ask AI about this event** | 工作、核心、持續時間與鄰近 STI 事件 |
 | 執行引導式調查 | **Investigate…** 或 **Auto investigate…** | 範圍、工具結果、證據品質與其他原因 |
-| 比較兩個版本 | **Trace Compare → Query with AI…** | 差異是否來自相同工作負載階段 |
 
 建議的 AI 使用順序：
 
@@ -254,7 +249,7 @@ flowchart LR
   scope --> investigate["深入調查"]
   investigate --> verify["驗證並提出反證"]
   verify --> experiment["估算實驗效果"]
-  experiment --> compare["重新擷取並比較"]
+  experiment --> remeasure["重新擷取並重新量測"]
 ```
 
 若 AI 的說法無法在 Statistics 重現、引用游標範圍外的時間、把估算結果當成量測值，或假設追蹤檔未記錄的事件，就不應採用該說法。
@@ -269,9 +264,9 @@ flowchart LR
 2. 修改韌體或設定前，先寫下預期改善的指標。
 3. 可使用 **What-if** 或 **Optimize** 排列候選方案，但其結果只是啟發式估算，不是排程器模擬。
 4. 重現相同工作負載並擷取新的追蹤檔。
-5. 將基準與修改後的追蹤檔分別開在不同分頁。
-6. 對相同工作負載階段套用等效的游標範圍。
-7. 使用 **Trace Compare**，同時檢查目標指標與副作用。
+5. 在新的追蹤檔中選擇相同的工作負載階段，並使用等效的游標範圍。
+6. 重複原本調查使用的 Statistics 量測。
+7. 同時檢查目標指標與可能的副作用，並記錄差異。
 
 驗收條件範例：
 
@@ -292,12 +287,12 @@ flowchart LR
 - 基準量測值與確切證據時間。
 - 獲得支持的原因、其他可能原因，以及缺少的證據。
 - 實際修改內容與預期結果。
-- 修改後數值與 Trace Compare 差異。
+- 修改後數值，以及與原始量測結果的差異。
 - 最終信心程度，以及是否需要再次擷取。
 
 可使用書籤與註解保留重要時間點，並視需要匯出 HTML/CSV 報告、加註快照、選取範圍的 BTF，或完整的 Investigation Case。
 
-## 新手檢查清單
+<a id="beginner-checklist" name="beginner-checklist">&#x200B;</a>\n\n## 新手檢查清單
 
 - [ ] 我先檢查追蹤品質，再分析應用程式行為。
 - [ ] 我先查看完整追蹤，再縮小分析範圍。
@@ -308,9 +303,9 @@ flowchart LR
 - [ ] 我已在時間軸確認確切事件。
 - [ ] 我已考慮矛盾證據與其他可能原因。
 - [ ] 我已清楚標示估算結果與追蹤資料的限制。
-- [ ] 修改後，我以相同工作負載重新擷取並使用 Trace Compare。
+- [ ] 修改後，我以相同工作負載重新擷取，並重複相同範圍的量測。
 
-## 常見錯誤
+<a id="common-mistakes" name="common-mistakes">&#x200B;</a>\n\n## 常見錯誤
 
 | 錯誤做法 | 建議做法 |
 |---|---|
@@ -320,10 +315,10 @@ flowchart LR
 | 將所有離開 CPU 的時間都視為互斥鎖等待 | 先確認同步事件，否則只能稱為 Blocking |
 | 比較不同的工作負載階段 | 對齊擷取條件與游標範圍 |
 | 因為事件相關就判定具有因果關係 | 檢查事件順序、其他原因與矛盾證據 |
-| 將 What-if 當成實際量測結果 | 重新擷取並使用 Trace Compare 驗證 |
+| 將 What-if 當成實際量測結果 | 重新擷取並重複相同的 Statistics 量測 |
 | 追蹤品質不佳仍繼續分析 | 先修正插樁或擷取設定 |
 
-## 文件導覽
+<a id="documentation-navigation" name="documentation-navigation">&#x200B;</a>\n\n## 文件導覽
 
 - [`README.md`](README.md) — 安裝、介面操作、時間軸瀏覽、匯出與 [Demo](README.md#demo)
 - [`STATISTICS_zh-TW.md`](STATISTICS_zh-TW.md) — 指標定義、公式、解讀方式與限制

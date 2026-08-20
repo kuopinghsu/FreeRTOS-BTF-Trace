@@ -1,6 +1,6 @@
 # BTF Viewer 統計分析 ![](../images/readme/h1.svg)
 
-本文件說明 BTFViewer Desktop 與 Web 提供的**確定性統計與分析（deterministic statistics and analysis）**功能。
+本文件說明 BTFViewer Desktop 與 Web 提供的**確定性統計與分析（deterministic statistics and analysis）**功能。內容以短句與明確步驟為主，方便快速查找指標的定義、計算方式與限制。
 
 當你需要回答下列問題時，可查閱本文件：
 
@@ -12,7 +12,9 @@
 
 如需了解產品操作與介面導覽，請參閱 [`README.md`](README.md)。如需依照步驟進行問題分析，請參閱 [`WORKFLOWS_zh-TW.md`](WORKFLOWS_zh-TW.md)。如需使用 AI 輔助分析，請參閱 [`AI_zh-TW.md`](AI_zh-TW.md)。
 
-> **重要：** BTFViewer 的統計結果代表 BTF/STI Trace 中實際擷取到的證據。最大值（Maximum）不代表系統保證值；相關性（correlation）不代表因果關係（causation）；Trace 中沒有某個事件，也不能證明該事件從未發生。
+> **重要：** BTFViewer 的統計結果代表 BTF/STI Trace 中實際擷取到的證據。
+>
+> 最大值（Maximum）只是觀察到的數值，不代表系統保證值。相關性（correlation）不代表因果關係（causation）。Trace 中沒有某個事件，也不能證明該事件從未發生。
 
 ## 快速開始
 
@@ -47,18 +49,20 @@ flowchart LR
   findings --> verify["時間軸驗證（Timeline Verification）"]
 ```
 
-BTFViewer **不會**進行原始碼分析，也**不會**模擬 FreeRTOS 排程器（scheduler）。
+BTFViewer **不會**進行原始碼分析，也**不會**模擬 RTOS 排程器（scheduler）。
 
-部分數值無法精確測量，原因是 Trace 本身沒有記錄足夠的事件資訊。這類數值會明確標示為**啟發式（heuristic）**或**受限（limited）**。例如，真正的工作回應時間（task response time）需要明確的 release 與 completion 事件；僅靠 context-switch 資料無法可靠建立這兩個事件之間的關係。
+部分數值無法精確測量，因為 Trace 沒有記錄足夠的事件資訊。BTFViewer 會將這類結果明確標示為**啟發式（heuristic）**或**受限（limited）**。
+
+例如，真正的工作回應時間（task response time）需要明確的 release 與 completion 事件。只有 context-switch 資料時，無法可靠建立兩者的對應關係。
 
 ## 文件導覽
 
 | 文件 | 主要問題 | 適合用途 |
 |---|---|---|
 | [`README.md`](README.md) | 如何使用 BTFViewer？ | 安裝、介面導覽與一般操作 |
-| [`WORKFLOWS.md`](WORKFLOWS.md) | 如何分析問題？ | 依步驟執行的問題分析流程 |
+| [`WORKFLOWS_zh-TW.md`](WORKFLOWS_zh-TW.md) | 如何分析問題？ | 依步驟執行的問題分析流程 |
 | [`STATISTICS.md`](STATISTICS.md) | 這項測量值代表什麼？ | 指標定義、公式、判讀方式與限制 |
-| [`AI.md`](AI.md) | 如何使用 AI 輔助分析？ | AI 設定、工具、Planner、評估與實作 |
+| [`AI_zh-TW.md`](AI_zh-TW.md) | 如何使用 AI 輔助分析？ | AI 設定、工具、Planner、評估與實作 |
 
 ## 統計功能快速導覽
 
@@ -176,11 +180,20 @@ HTML 也會在 Core Utilisation 下方以 SVG 圖片嵌入 **Load Balance Score*
 2. 可先點選工具列的 **Analysis**，快速查看目前範圍內依嚴重程度分類的分析結果。
 3. 預設會展開 **Core utilisation** 與 **Trace Health**，其他區段則保持收合。依需要展開區段，或使用面板上方的 **+** / **−**。展開／收合狀態會保存，下一次啟動時自動恢復。常用區段可使用 Pin 固定展開。
 4. 可拖曳 **⠿** 調整區段順序；需要恢復內建順序時，使用 reset-order 圖示。
-5. 放置至少 **2 個游標**並啟用 **Limit to C1–Cn**，即可將所有指標與 Analysis Findings 限制在指定時間範圍內。
-6. 支援圖表的表格可點選資料列開啟分布圖；點選 **Min / Max / p95 / p99** 可跳至對應的 slice 或 gap 並加入註解。Timeline Anomalies / Worst Events 可直接縮放並放置 C1–C2；Mutex / Semaphore 的 issue row 可跳至對應 STI 事件；Deadlines / CPU budget 則可跳至超時 slice 或反白超過 CPU budget 的工作。
+5. 放置至少 **2 個游標**並啟用 **Limit to C1–Cn**，可將所有指標與 Analysis Findings 限制在指定時間範圍內。
+6. 可從 Statistics 直接回到 Timeline：
+   - 點選支援圖表的資料列，可開啟分布圖。
+   - 點選 **Min / Max / p95 / p99**，可跳至對應的 slice 或 gap 並加入註解。
+   - 點選 **Timeline Anomalies / Worst Events**，可縮放並放置 C1–C2。
+   - 點選 **Mutex / Semaphore** 的 issue row，可跳至對應 STI 事件。
+   - 在 **Deadlines / CPU budget** 中，可跳至超時 slice，或反白超過 CPU budget 的工作。
 7. 同時開啟兩份 Trace 時，可使用工具列的 **Compare** 比較摘要與核心遷移等統計結果。
 
-下方範例圖主要使用 **`tracedata/example-8cores.btf.gz`**。完整的實際分析流程請參閱 [WORKFLOWS.md §3](WORKFLOWS.md#3-worked-example--example-8cores)。
+下方範例圖主要使用 **`tracedata/example-8cores.btf.gz`**。完整的實際分析流程請參閱 [WORKFLOWS_zh-TW.md §3](WORKFLOWS_zh-TW.md#3-worked-example--example-8cores)。
+
+## 分析概觀（Analysis Overview）
+
+先使用 **Analysis Findings** 快速了解目前範圍。需要確認證據時，再查看後面的詳細指標。
 
 <a id="analysis-findings" name="analysis-findings">&#x200B;</a>
 ### 分析結果（Analysis Findings） ![](../images/readme/h4.svg)
@@ -195,6 +208,10 @@ HTML 也會在 Core Utilisation 下方以 SVG 圖片嵌入 **Load Balance Score*
 
 只有當 Score ≥ 85% 且 σ ≤ 30% 時，才會使用「reasonably balanced」的判定。對話框文字會依目前主題使用對應顏色，因此在深色與淺色模式下，資訊與正常狀態都能保持清楚可讀。
 
+## 1. 系統與 CPU 負載（System and CPU Load）
+
+用來了解整體 CPU 負載、核心使用率、Tick 健康狀態與排程切換開銷。
+
 <a id="summary-scheduling-and-core-utilisation" name="summary-scheduling-and-core-utilisation">&#x200B;</a>
 ### 摘要、排程與核心使用率（Summary, Scheduling, and Core Utilisation） ![](../images/readme/h4.svg)
 
@@ -202,7 +219,7 @@ HTML 也會在 Core Utilisation 下方以 SVG 圖片嵌入 **Load Balance Score*
 
 **Summary（摘要）** — 顯示目前範圍的整體計數，包括 Trace span、task、segment 與 STI event 數量。Span 為目前作用範圍內的 *t*<sub>max</sub> − *t*<sub>min</sub>，範圍可以是完整 Trace 或游標區間。
 
-**Scheduling summary（排程摘要）** — 針對每個核心統計 **context switches（內容切換）**，並計算同一核心上連續兩個 slice 之間的 **core gap（核心空檔）**：
+**Scheduling summary（排程摘要）** — 針對每個核心統計 **context switch（上下文切換）**，並計算同一核心上連續兩個 slice 之間的 **core gap（核心空檔）**：
 
 ```math
 g_{\mathrm{core}} = t_{\mathrm{start},k+1} - t_{\mathrm{end},k}
@@ -210,7 +227,7 @@ g_{\mathrm{core}} = t_{\mathrm{start},k+1} - t_{\mathrm{end},k}
 
 如果理論上應保持忙碌的核心出現很大的 **max core gap**，可能表示工作飢餓（starvation）、tickless idle，或某個長時間執行的工作阻礙其他工作取得 CPU。
 
-**Core utilisation（核心使用率）** — 計算每個核心在目前範圍內執行非 IDLE、非 TICK 工作的時間比例：
+**Core utilisation（核心使用率）** — 計算每個核心在目前範圍執行非 IDLE、非 TICK 工作的時間比例：
 
 ```math
 U_{\mathrm{core}} = \frac{T_{\mathrm{active,core}}}{T_{\mathrm{scope}}} \times 100
@@ -241,7 +258,7 @@ U_{\mathrm{core}} = \frac{T_{\mathrm{active,core}}}{T_{\mathrm{scope}}} \times 1
 <a id="trace-health-tick" name="trace-health-tick">&#x200B;</a>
 #### Trace 健康狀態（Trace Health / TICK） ![](../images/readme/h4.svg)
 
-此功能使用 STI **TICK** 時間戳記估算排程 Tick 的規律程度，並判斷 Trace 使用一般週期性 Tick，或 FreeRTOS 的 **tickless idle**（`configUSE_TICKLESS_IDLE`）。
+此功能使用 STI **TICK** 時間戳記估算排程 Tick 的規律程度，並判斷 Trace 使用週期性 Tick 或 **tickless idle**。如果分析的是 FreeRTOS Trace，可使用 `configUSE_TICKLESS_IDLE` 對照其設定模式。
 
 **公式** — 對於時間為 *t*<sub>n</sub> 的連續 TICK 事件：
 
@@ -281,7 +298,7 @@ U_{\mathrm{core}} = \frac{T_{\mathrm{active,core}}}{T_{\mathrm{scope}}} \times 1
 
 Histogram 中 1×、2×、3× 名義週期形成的多個峰值可確認 tickless idle 的行為：大部分 gap 為單一 Tick，但部分 Idle 區間會略過數個名義週期後才出現下一個 TICK。
 
-大型 gap 可能來自 CPU 過載、長時間 critical section、tickless idle 或 Trace 資料缺口，**不一定代表 FreeRTOS 設定錯誤**。
+大型 gap 可能來自 CPU 過載、長時間 critical section、tickless idle 或 Trace 資料缺口，**不一定代表 RTOS 設定錯誤**。
 
 <a id="core-time-breakdown" name="core-time-breakdown">&#x200B;</a>
 ### 核心時間分布（Core Time Breakdown） ![](../images/readme/h4.svg)
@@ -295,7 +312,11 @@ Histogram 中 1×、2×、3× 名義週期形成的多個峰值可確認 tickles
 | **Tick** | TICK handler 執行時間 |
 | **Gap** | 連續 `core_segs` 之間未被計入的時間，例如 scheduler latency、ISR overhead 或 Trace gap |
 
-**如何解讀：** 忙碌核心的 **Gap %** 偏高，通常可能與較大的 **Kernel Switch Overhead**、長時間 ISR 或 critical section 有關。如果部分核心的 **Idle %** 很高、**Active %** 很低，而其他核心卻接近過載，則可能存在核心親和性或工作配置不平均。建議搭配 **Core utilisation** 與 **Core Migrations** 檢查。Desktop 版可點選核心資料列，在 **Core View** 中聚焦該核心。
+**如何解讀：** 忙碌核心的 **Gap %** 偏高時，可能與較大的 **Kernel Switch Overhead**、長時間 ISR 或 critical section 有關。
+
+如果部分核心的 **Idle %** 很高、**Active %** 很低，但其他核心接近過載，可能代表核心親和性或工作配置不平均。建議搭配 **Core utilisation** 與 **Core Migrations** 檢查。
+
+Desktop 版可點選核心資料列，在 **Core View** 中聚焦該核心。
 
 <a id="concurrent-core-active-distribution" name="concurrent-core-active-distribution">&#x200B;</a>
 ### 同時作用中的核心分布（Concurrent Core Active Distribution） ![](../images/readme/h4.svg)
@@ -362,6 +383,10 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 
 核心遷移表格、工作反白／檢查流程、Corridor Inspector 與 **Trace Compare…** 請參閱 [Core migration analysis](#core-migration-analysis)。
 
+## 2. 工作配置與核心遷移（Task Placement and Migration）
+
+用來了解工作在哪些核心執行，以及是否有過度遷移、核心偏好或負載配置問題。
+
 <a id="core-affinity" name="core-affinity">&#x200B;</a>
 ### 核心親和性（Core Affinity） ![](../images/readme/h4.svg)
 
@@ -388,6 +413,226 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 此指標可補充 **Core Time Breakdown** 的整體範圍統計，以及 **Task × Core** 的個別工作分布。點選任一時間區間，可直接縮放到該時間範圍。
 
 ![Core utilization over time bins in example-8cores.btf.gz](../images/stats/stats-core-time.svg)
+
+<a id="core-migration-analysis" name="core-migration-analysis">&#x200B;</a>
+### 核心遷移與親和性（Core Migration and Affinity） ![](../images/readme/h3.svg)
+
+如果同一個工作的下一個 slice 改到另一個核心執行，Viewer 就記錄一次**核心遷移（Migration）**。
+
+Viewer 會在解析 segment timeline 時偵測 Migration。
+
+Timeline 不會另外畫出獨立的 migration marker。
+
+可使用下列功能檢查：
+
+- **Core Migrations** table。
+- 工具列 **Heatmap** 開啟的 **Migration & Corridor Inspector**。
+- **Trace Compare…**。
+- Find 的 **Migrations** mode。
+
+Affinity、Lifecycle 與 Deadline 的基本定義已在前面章節說明。本節進一步介紹 Migration table、Highlight／Inspect 流程、Corridor Inspector 與 Trace Compare。
+
+<a id="highlight-a-migrating-task-on-the-timeline" name="highlight-a-migrating-task-on-the-timeline">&#x200B;</a>
+### 在 Timeline 上反白核心遷移工作（Highlight a Migrating Task） ![](../images/readme/h4.svg)
+
+如果要在實際 Timeline 情境中觀察頻繁遷移的工作，而不只是查看表格數值：
+
+1. 保持在 **Task View**（工具列 **Task**）。
+2. 點選工作名稱，例如 `CS[22]`，將它設為 **lock-highlight**。其他工作仍會保留在 Timeline 上，但會變灰。此處**不要使用 Legend filter**。
+3. 啟用 **Load**，在 Timeline 下方查看該工作於**各核心**的 CPU usage。詳見 [CPU Load](README.md#cpu-load)。
+4. 如有需要，可在 migration burst 前後放置游標並啟用 **Limit to C1–Cn**，讓 **Statistics → Core Migrations** 只針對該時間範圍重新計算。Inspector grid 則會獨立依目前可見的 Timeline viewport 更新。
+
+![CS[22] highlighted in Task View with per-core CPU Load](../images/stats/tasks-cpu-load-cs22.svg)
+
+*`example-8cores.btf.gz` 中的 `CS[22]` 在 Task View 被 lock-highlight；CPU Load 顯示該工作在每個核心上的使用比例。*
+
+**Headless 範例** — 顯示完整範圍 Task View + CPU Load：
+
+```bash
+python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
+    -o /tmp/cs22-cpu-load.svg \
+    --view timeline --view-mode task --task "CS[22]" --cpu-load
+```
+
+只查看放大的 migration burst，不顯示 Load strip：
+
+```bash
+python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
+    -o /tmp/cs22-burst.svg \
+    --view timeline --view-mode task --task "CS[22]" \
+    --lo 1805000 --hi 1865000
+```
+
+<a id="inspect-migrations-involving-a-specific-core" name="inspect-migrations-involving-a-specific-core">&#x200B;</a>
+### 檢查特定核心相關的遷移（Inspect Migrations Involving a Specific Core） ![](../images/readme/h4.svg)
+
+反白頻繁遷移的工作後，可依下列順序檢查：
+
+1. **Statistics → Core Migrations**  
+   查看該工作的 **Primary core**、**Rate**、**Dwell** 與 **Ping**。點選資料列可開啟 **Dwell / Rate / Gap** chart。
+
+2. **Core-Pair Migration Summary**  
+   排序或尋找 **From** / **To** 包含目標核心的 core pair，例如 `Core_5→Core_7`。可確認哪個相鄰核心承接最多 migration，以及 **Bounce %** 是否偏高。點選資料列可查看 Gap / Rate chart；使用視窗底部的 **Open Heatmap** / **Open Chord** 可開啟 Inspector，並聚焦該 core pair。
+
+3. 工具列 **Heatmap**  
+   使用 Corridor tree + time-bin grid。點選 hot cell，或展開 corridor 查看哪些工作造成該流量，再使用 **Inspect in Timeline** 或 double-click 進入 Spotlight。
+
+4. **Show topology**  
+   在 Inspector 中啟用，或從 pair chart 使用 **Open Chord**。同一視窗會展開 topology sidebar。將滑鼠移到外圈 egress、內圈 ingress 或 ribbon 上，可隔離特定 flow。
+
+5. **Core Time Breakdown**  
+   點選 core row，可跳到以該核心為焦點的 Core View。
+
+6. **Headless CSV**  
+   可針對指定時間範圍輸出 migration：
+
+```bash
+python builds/btf_viewer.py migrations ../tracedata/example-8cores.btf.gz \
+    --lo 1805000 --hi 1865000 -o - | head
+```
+
+**Legend panel：** 啟用 **Migrated tasks only**，可隱藏從未離開初始核心的工作。
+
+**核心遷移統計（Core Migrations）**
+
+**Statistics → Core Migrations** 是可收合區段，只列出曾在兩個以上核心執行的工作。
+
+**遷移率（Migration Rate）**
+
+單看 migration 次數容易誤判：執行時間很長的工作，即使 migration 次數較多，實際遷移頻率也可能不高。因此 BTFViewer 會將 migration count 依工作實際 on-CPU 時間正規化：
+
+```math
+R_m = \frac{N_{\mathrm{migrations},i}}{T_{\mathrm{exec},i}}
+```
+
+**Rate** 欄位以工作 on-CPU 時間每秒發生的 migration 次數表示，例如 `1.23/s`。
+
+如果 Trace 包含 TICK event，也會顯示該工作每個 **on-CPU scheduler tick** 的 migration 次數，例如 `2.785/tick`。這裡只計算目前範圍內落在該工作 slice 中的 TICK STI，不使用整份 Trace 的 Tick 總數。
+
+**如何解讀：** Rate 很高，表示工作經常在不同核心之間移動。這種情況稱為 **Thrashing（頻繁遷移）**。
+
+對高優先權即時工作而言，通常希望 Rate 接近零。
+
+**平均核心停留時間（Average Core Dwell Time）**
+
+表示工作每次取得 CPU 後，在 block、yield 或 migration 之前，平均可以持續執行多久：
+
+```math
+\bar{T}_d = \frac{1}{N_{\mathrm{slices}}} \sum_k d_k
+= \frac{T_{\mathrm{exec},i}}{N_{\mathrm{slices},i}}
+```
+
+每個 *d*<sub>k</sub> 代表一次 switch-in episode。也可以理解成：對工作曾經執行過的每個核心，以 *T*<sub>on</sub> / *N*<sub>slices</sub> 計算 per-core dwell 後的整體平均。
+
+**如何解讀：** **Dwell** 很短，表示工作無法長時間留在同一個核心。
+
+例如，Dwell 只有數毫秒，而且接近系統 Tick period。這可能表示排程器太常把工作移到其他核心。
+
+| 欄位 | 說明 |
+|---|---|
+| **Task** | 工作顯示名稱（`Name[id]`） |
+| **Migr** | 目前範圍內的 migration 次數；範圍可以是完整 Trace，或啟用 **Limit to C1–Cn** 後的游標區間 |
+| **Rate** | Migration rate；`/s` 為每秒工作 active time 的遷移次數；`/tick` 為目前範圍內每個 on-CPU TICK 的遷移次數 |
+| **Dwell** | 目前範圍內平均 on-CPU slice duration，也就是平均 core dwell time |
+| **Cores** | 目前範圍內有 on-CPU time 或 migration 的不同核心數 |
+| **Primary** | Active time 最長的核心，以及該核心所占比例（%） |
+| **Ping** | Ping-pong migration；1 µs 內連續發生 A→B→A 三次 migration |
+| **STI±** | Migration 前後 ±500 ns 內存在 STI event 的次數 |
+| **Gap after** | Migration 後緊接著發生的平均 off-CPU gap |
+| **Gap other** | 同一工作其他位置的平均 blocking gap |
+
+點選資料列會開啟 **Distribution Chart（分布圖）**，對話框中提供三個分頁，不需要關閉視窗即可切換：
+
+- **Dwell**（預設）— 每次 on-core run 一個資料點。x = run start time；y = run duration *d*<sub>k</sub>。
+- **Rate** — 除第一次之外，每次 migration 一個資料點。x = migration time；y = 與該工作**前一次 migration**之間的時間。大量短 gap 聚集表示短時間內頻繁 bounce；分布平坦且間距較大則表示 migration 較少且分散。
+- **Gap** — 每次 migration 後存在正值 **Gap after** 時產生一個資料點。x = migration time；y = migration 後的 off-CPU gap。這些就是 **Gap after** 欄位的原始 sample。**Gap other** 不會畫在這裡；若要查看所有 off-CPU gap，應開啟同一工作的 **Blocking Time** chart。
+
+三個分頁都使用與其他 Statistics chart 相同的 **Adaptive Scaling（自適應縮放）**。
+
+`example-8cores.btf.gz` 中的 **CS[22]** 是經常遷移的 context-switch stress task：
+
+![On-core dwell time distribution for CS[22] in example-8cores.btf.gz](../images/stats/stats-mig-dwell-cs22.svg)
+
+![Time between migrations for CS[22] in example-8cores.btf.gz](../images/stats/stats-mig-rate-cs22.svg)
+
+![Post-migration gap distribution for CS[22] in example-8cores.btf.gz](../images/stats/stats-mig-gap-cs22.svg)
+
+可拖曳表格下方的 resize handle，增加或減少可見資料列數。
+
+<a id="core-pair-migration-summary" name="core-pair-migration-summary">&#x200B;</a>
+### 核心對遷移摘要（Core-Pair Migration Summary） ![](../images/readme/h4.svg)
+
+這個表格顯示所有工作的核心遷移方向。
+
+每一列代表一條 `From → To` 的核心路徑。
+
+兩個表格回答不同的問題：
+
+- **Core Migrations**：哪個工作遷移得太頻繁？
+- **Core-Pair Migration Summary**：哪一組核心之間的遷移最多？其中有多少是 Lock Bounce？
+
+| 欄位 | 說明 |
+|---|---|
+| **From / To** | 來源核心與目的核心 |
+| **Count** | 目前範圍內沿此方向發生的 migration 次數 |
+| **Bounces** | 持有 Mutex 跨核心遷移時發生的 migration 子集合 |
+| **Bounce %** | `100 × Bounces / Count` |
+| **Avg Gap** | 此 corridor 中 migration 後平均 off-CPU gap |
+
+點選資料列會開啟包含兩個分頁的 Distribution Chart：
+
+- **Gap**（預設）— 每次 directed migration 若有正值 gap，就顯示一個資料點。x = migration time；y = post-migration gap，也就是 **Avg Gap** 的原始 sample。Lock-bounce event 以**橘色**顯示，其餘使用來源核心的顏色。
+- **Rate** — 同一 directed pair 上，每次連續 migration 顯示一個資料點。x = migration time；y = 此 corridor 與前一次 hop 的時間差。緊密的垂直帶狀分布表示 corridor traffic 具有明顯 burst。
+
+對話框底部提供：
+
+- **Open Heatmap** — 開啟 **Migration & Corridor Inspector** 並聚焦目前 core pair；當 Bounce % 偏高時，會優先使用 **Lock Bounces Only**。
+- **Open Chord** — 開啟相同 Inspector，同時展開 topology，並反白目前 core pair。
+
+`example-8cores.btf.gz` 中，依 Count 排名最前面的 corridor 是 **`Core_5 → Core_7`**：
+
+![Post-migration gap for Core_5→Core_7](../images/stats/stats-pair-gap-c5-c7.svg)
+
+![Time between pair migrations for Core_5→Core_7](../images/stats/stats-pair-rate-c5-c7.svg)
+
+<a id="migration--corridor-inspector" name="migration--corridor-inspector">&#x200B;</a>
+### 遷移與路徑檢視器（Migration & Corridor Inspector） ![](../images/readme/h4.svg)
+
+工具列的 **Heatmap** 會在 Desktop 與 Web 開啟 Inspector，其中包含：
+
+- Corridor / Task tree。
+- Time-bin grid。
+- Mini-chord topology。
+
+Core-pair chart 的 **Open Chord**，以及 Inspector 內的 **Show topology**，都會在**同一個 Inspector 視窗**中展開 topology sidebar。
+
+| 功能 | 說明 |
+|---|---|
+| **Open** | 2 個以上核心時，可從工具列 **Heatmap** 開啟。Pair chart 的 **Open Chord** 或 Inspector 的 **Show topology** 可切換到以 chord 為主的版面。Desktop 為 non-modal；Web 使用 overlay，但 Timeline 仍可操作。切換分頁時 Inspector 會關閉 |
+| **Scope** | 使用目前 Timeline 可見範圍，與 Statistics 的 **Limit to C1–Cn** 相互獨立。頂端 **Full view** / **Viewport view** 橫幅（顏色與 distribution chart 相同）顯示目前時間範圍：Fit to window 或縮放後的視窗。若目前範圍沒有 migration，tree/grid 顯示 *No migrations in scope*，但 topology 仍可使用 |
+| **Filter** | **Top corridors**、**Direction**、**Task filter**。Trace 存在跨核心 Mutex hold 時，另外提供 **Lock Bounces Only** |
+| **Select** | 可點選 tree row、grid cell 或 chord ribbon。Double-click 或 **Inspect in Timeline** 會以 C1–C2 Spotlight 該 time bin 或工作。工具列 **All** / **Show all tasks** 可清除 filter |
+| **Query with AI…** | 在 **AI** 分頁執行 **Migration thrash** template，使用與 Statistics 相同的 findings context。若 AI 尚未啟用，會開啟 **Settings → AI** |
+| **> 16 cores** | Tree 依來源核心分組；topology 可切換 Circle ↔ Matrix，並可將 topology Dock 到 **Bottom** 或 **Right** |
+
+`example-8cores.btf.gz`：
+
+![Migration & Corridor Inspector](../images/migration.svg)
+
+將滑鼠停在 ribbon 上，footer 會顯示 `cN→cM: count`。每個工作的 ping-pong、STI 與 gap-after 彙整仍位於 Statistics 的 **Core Migrations**。
+
+```bash
+make -C BTFViewer update-images
+```
+
+```bash
+python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
+  -o /tmp/migration.svg --view chord --width 1000 --height 720 --drill-row 0
+```
+
+## 3. 工作時間與健康狀態（Task Timing and Health）
+
+用來檢查工作生命週期、Deadline、執行時間、阻塞、週期、Jitter 與 Response Time。
 
 <a id="task-lifecycle" name="task-lifecycle">&#x200B;</a>
 ### 工作生命週期（Task Lifecycle） ![](../images/readme/h4.svg)
@@ -427,12 +672,12 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 
 狀態使用 ✓ / ⚠ / ❌ 顯示。
 
-> **注意：** Task Health 並不是 AI probability，也不代表問題發生機率。它只是將多項統計指標整合成便於快速檢查的啟發式分數。
+> **注意：** Task Health 並不是 AI 機率，也不代表問題發生機率。它只是將多項統計指標整合成便於快速檢查的啟發式分數。
 
 點選任一狀態區間，可直接開啟對應的 Statistics 區段。
 
 <a id="execution-blocking-and-inter-arrival" name="execution-blocking-and-inter-arrival">&#x200B;</a>
-## 工作時間分析（Task Timing） ![](../images/readme/h3.svg)
+### 工作時間分析（Task Timing） ![](../images/readme/h3.svg)
 
 BTFViewer 會根據同一工作連續的 on-CPU slice，計算三個最基本的時間指標：**執行時間（Execution Time）**、**阻塞時間（Blocking Time）**與**到達間隔時間（Inter-Arrival Time）**。
 
@@ -452,72 +697,12 @@ BTFViewer 會根據同一工作連續的 on-CPU slice，計算三個最基本的
 
 這三個指標描述的是不同觀察角度。Execution Time 告訴你工作取得 CPU 後執行多久；Blocking Time 告訴你離開 CPU 後等待多久；Inter-Arrival Time 則反映兩次開始執行之間的整體間隔。
 
-<a id="timeline-anomalies" name="timeline-anomalies">&#x200B;</a>
-### Timeline 異常（Timeline Anomalies） ![](../images/readme/h4.svg)
-
-此區段會掃描目前的 Statistics 範圍，找出值得優先檢查的異常事件，包括：
-
-- 異常偏長的 execution、blocking 或啟發式 response tail，例如 `mean + 3σ` 或 ≥ p99。
-- 短時間內密集發生的 migration、preemption、ISR 或 wakeup。
-- CPU 使用率尖峰。
-- 異常 Idle gap。
-- Mutex wait spike。
-- 已設定 Deadline 的逾時事件。
-
-點選資料列後，BTFViewer 會縮放到對應時間、放置 C1–C2、反白相關工作，並捲動到對應的 Statistics 表格。
-
-**Investigate…** 可將目前選取的異常（若未選取則使用排名最前面的異常）送到 AI 分頁進一步分析。
-
-<a id="worst-events" name="worst-events">&#x200B;</a>
-### 最差事件（Worst Events） ![](../images/readme/h4.svg)
-
-將各工作中持續時間最長的 **Execution Time**、**Blocking Time**、**Inter-Arrival Time** 與啟發式 **Response Time** 集中列在同一份清單中。
-
-點選任一資料列，可直接跳至該事件，並在事件範圍前後設定游標。
-
-這個區段適合用來快速回答：
-
-> 「目前這段 Trace 中，最嚴重的時間異常發生在哪裡？」
-
-找到事件後，再回到對應的詳細 Statistics 指標判斷原因。
-
-<a id="critical-path" name="critical-path">&#x200B;</a>
-### 關鍵路徑（Critical Path） ![](../images/readme/h4.svg)
-
-此區段會找出最長的**啟發式 ready→completion 時間區間**，並將其中的時間拆分為：
-
-- `exec` — 工作實際執行的時間。
-- `preempt` — 被其他工作搶佔的時間。
-- `wait` — 等待時間。
-- `migration` — 與核心遷移相關的時間。
-- `other` — 無法歸入上述類別的時間。
-
-> **注意：** 這裡的 Critical Path 並不是由核心明確記錄的 release/completion event pair。它是根據 Trace 中可觀察到的事件建立的**啟發式分析（heuristic analysis）**。
-
-點選其中一個 component，可直接跳到對應事件。
-
-![Critical Path table for example-8cores.btf.gz](../images/stats/stats-crit-path.svg)
-
-<a id="recurring-patterns" name="recurring-patterns">&#x200B;</a>
-### 重複出現的異常模式（Recurring Patterns） ![](../images/readme/h4.svg)
-
-此區段依**工作**與**異常種類**整理 Timeline Anomalies，只保留重複發生的異常類型。
-
-點選資料列，可跳至該類型最嚴重的一次事件。
-
-這有助於區分：
-
-- 只發生一次的偶發事件。
-- 持續重複出現、可能代表系統性問題的模式。
-
-![Recurring Patterns table for example-8cores.btf.gz](../images/stats/stats-patterns.svg)
-
 <a id="execution-time-per-slice" name="execution-time-per-slice">&#x200B;</a>
 ### 每個 Slice 的執行時間（Execution Time Per Slice） ![](../images/readme/h4.svg)
 
 測量每個工作單次 **on-CPU slice** 的持續時間，也就是從 switch-in 開始，到工作 block、yield 或被 preempt 為止。
 
-**公式** — 對工作 *i* 在目前範圍內的每個 on-CPU slice *k*：
+**公式** — 對工作 *i* 在目前範圍的每個 on-CPU slice *k*：
 
 ```math
 d_k = t_{\mathrm{end},k} - t_{\mathrm{start},k}
@@ -753,36 +938,12 @@ BTFViewer 提供的是**啟發式 ready→completion（heuristic ready-to-comple
 
 ![Unified Jitter table for example-8cores.btf.gz](../images/stats/stats-jitter.svg)
 
-<a id="distribution-explorer" name="distribution-explorer">&#x200B;</a>
-### 分布瀏覽器（Distribution Explorer） ![](../images/readme/h4.svg)
+## 4. 搶佔與同步（Preemption and Synchronization）
 
-可選擇一項 metric 與一個工作，快速檢查該資料的分布。
-
-支援的 metric 包括：
-
-- execution
-- blocking
-- inter-arrival
-- response
-- dispatch
-- wake
-- preemption
-
-區段會顯示：
-
-- `n` — 樣本數。
-- `p50`。
-- `p99`。
-- `CV`。
-- Sparkline。
-- 區段底部的 histogram / CDF。
-
-Histogram / CDF 使用與其他 metric plot 相同的 adaptive scale。**Open histogram** 可開啟完整的 scatter + histogram 視窗。
-
-> **Wake 是啟發式 response wait，不是核心明確記錄的 wakeup event。**
+用來分析搶佔、Priority Inheritance、Mutex / Semaphore 與 Queue 行為。
 
 <a id="preemption-chain-analysis" name="preemption-chain-analysis">&#x200B;</a>
-## 搶佔分析（Preemption Analysis） ![](../images/readme/h3.svg)
+**搶佔分析（Preemption Analysis）**
 
 ### 搶佔鏈分析（Preemption Chain Analysis） ![](../images/readme/h4.svg)
 
@@ -907,7 +1068,9 @@ T_{\mathrm{boosted}} = \sum_{\mathrm{episodes}} (t_{\mathrm{end}} - t_{\mathrm{s
 - **M — Medium priority**
 - **H — High priority**
 
-在 demo firmware 的 `Demo/examples/freertos_test/main.c` test 8 中，工作名稱就是 **Low**、**Med** 與 **High**。在 SMP 測試中，三者固定於 **Core_0**。測試會重複 **`T8_ROUNDS`（3）次**，因此 Timeline 上可以看到多段 boost stripe，Priority Inheritance chart 也會出現多個 inherit point。
+在 demo firmware 的 `Demo/examples/freertos_test/main.c` test 8 中，工作名稱為 **Low**、**Med** 與 **High**。
+
+在 SMP 測試中，三個工作都固定在 **Core_0**。測試會重複 **`T8_ROUNDS`（3）次**。因此 Timeline 會出現多段 boost stripe，Priority Inheritance chart 也會看到多個 inherit point。
 
 | 角色 | 意義 | `example-8cores.btf.gz` test 8 |
 |---|---|---|
@@ -990,7 +1153,7 @@ Runner 使用 `vTaskPrioritySet(subject, BOOST_PRIORITY)`，因此 Trace 記錄�
 > **注意：** 當 `configUSE_MUTEXES` 啟用時，FreeRTOS kernel 會在 `xTaskPriorityInherit()` / `xTaskPriorityDisinherit()` 內呼叫 `traceTASK_PRIORITY_INHERIT` / `traceTASK_PRIORITY_DISINHERIT`。
 
 <a id="mutex--semaphore-pairing" name="mutex--semaphore-pairing">&#x200B;</a>
-## Mutex／Semaphore 配對（Mutex / Semaphore Pairing） ![](../images/readme/h4.svg)
+### Mutex／Semaphore 配對（Mutex / Semaphore Pairing） ![](../images/readme/h4.svg)
 
 啟用 Queue trace hook（`configINCLUDE_QUEUE_EVENTS`）後，Mutex 與 Semaphore 的 STI event 會在 note 中包含 **FreeRTOS object pointer（物件指標）**：
 
@@ -1003,7 +1166,7 @@ Viewer 會依**個別 object pointer** 配對 `take` / `give`，以及 `create` 
 
 Mutex 或 binary semaphore 建立後，kernel 可能立即產生一個 `give`。如果這個 `give` 發生在 `create` 後 **1 ms** 以內，Viewer 會將它視為初始化行為並忽略。
 
-### Semaphore 配對方向
+**Semaphore 配對方向**
 
 Semaphore 會自動判斷兩種配對模式：
 
@@ -1014,7 +1177,7 @@ Semaphore 會自動判斷兩種配對模式：
 
 **Mutex** 一律採用 Hold pairing，並使用 LIFO；Mutex owner 必須執行 `give`。
 
-### Hold Time
+**Hold Time**
 
 對每個已配對的 hold span *h*，其 duration 為 τ<sub>h</sub>：
 
@@ -1022,7 +1185,9 @@ Semaphore 會自動判斷兩種配對模式：
 \bar{\tau}_{\mathrm{hold}} = \frac{1}{N_{\mathrm{holds}}} \sum_h \tau_h
 ```
 
-**如何解讀：** **Avg hold（平均持有時間）**表示 Lock 或 Semaphore 一般會被占用多久。Hold time 過長可能增加其他 waiter 的 Blocking Time。
+**如何解讀：** **Avg hold（平均持有時間）**表示 Lock 或 Semaphore 一般會被持有多久。
+
+Hold Time 太長時，其他 waiter 可能需要等待更久。
 
 若 **Issues > 0**，例如 orphan give、cross-task give、unmatched take 或 delete while held，代表 Trace 中的 take/give event 無法形成完整且乾淨的配對，因此 Hold Time 統計可能不完整。
 
@@ -1037,7 +1202,7 @@ Semaphore 會自動判斷兩種配對模式：
 | **Avg hold** | 已配對 span 的平均 Hold Time |
 | **Status** | **OK**、**Warning** 或 **Error** |
 
-### 配對問題（Pairing Issues）
+**配對問題（Pairing Issues）**
 
 | 檢查項目 | 嚴重程度 | 說明 |
 |---|---|---|
@@ -1085,21 +1250,31 @@ Desktop 與 Web 行為相同。再次點選同一位置時，不會重複加入�
 <a id="waiter--owner" name="waiter--owner">&#x200B;</a>
 ### 等待者 × 持有者（Waiter × Owner） ![](../images/readme/h4.svg)
 
-此表是一個**啟發式矩陣（heuristic matrix）**，根據同一 Mutex object 上連續發生的 Hold 建立：
+這是一個**啟發式矩陣（heuristic matrix）**。
 
-- 下一個不同的 acquirer 視為 **Waiter（等待者）**。
-- 前一個 holder 視為 **Owner（持有者）**。
+它用來觀察同一個 Mutex 在不同工作之間的交接情況。
 
-Matrix cell 的值為這些 handoff 所對應 Hold Time 的總和。
+每次交接時：
 
-> **限制：** 這不是 kernel wait queue 的重建結果。BTF 記錄的是成功完成的 `take` / `give`，並沒有記錄所有被阻塞的 take attempt。
+- 下一個取得 Mutex 的工作，視為 **Waiter（等待者）**。
+- 前一個持有 Mutex 的工作，視為 **Owner（持有者）**。
 
-點選任一 cell，可 Zoom 到該 Waiter / Owner 組合中持續時間最長的 handoff。
+每個矩陣儲存格代表一組 Waiter / Owner。
+
+儲存格中的數值，是這組工作所有 Hold Time 的總和。
+
+> **限制：** 這不是 kernel wait queue 的重建結果。BTF 只記錄成功的 `take` / `give` 事件，不會記錄每一次被阻塞的 `take` 嘗試。
+
+點選任一儲存格，可跳到該 Waiter / Owner 組合中持續時間最長的一次交接。
 
 <a id="mutex-blocking" name="mutex-blocking">&#x200B;</a>
 ### Mutex 阻塞（Mutex Blocking） ![](../images/readme/h4.svg)
 
-依工作彙整前述啟發式 Mutex wait，包括：
+這個表格依工作整理 Mutex wait。
+
+這些等待時間是啟發式估算值。
+
+表格包含：
 
 - Object。
 - Previous owner。
@@ -1107,13 +1282,13 @@ Matrix cell 的值為這些 handoff 所對應 Hold Time 的總和。
 - Total wait。
 - Max wait。
 
-另外提供 **Top blocking contributors（主要阻塞來源）**排名，綜合比較：
+**Top blocking contributors（主要阻塞來源）**則用來比較不同的延遲來源，包括：
 
 - Mutex wait。
 - Preemption overlap。
 - 剩餘的 Idle gap。
 
-點選資料列可直接跳至該項目持續時間最長的等待事件。
+點選資料列，可直接跳到持續時間最長的等待事件。
 
 ![Mutex Blocking table for example-8cores.btf.gz](../images/stats/stats-mutex-block.svg)
 
@@ -1136,14 +1311,78 @@ Matrix cell 的值為這些 handoff 所對應 Hold Time 的總和。
 
 Mutex / Semaphore 的 Core Bounce 與 Issue 詳細說明，請參閱前面的 **Mutex / Semaphore Pairing**。
 
+## 5. 異常、Instrumentation 與進階分析（Anomalies, Instrumentation, and Advanced Analysis）
+
+用來找出異常事件、Critical Path、重複模式，以及分析 Interval 與 Tag instrumentation。
+
+<a id="timeline-anomalies" name="timeline-anomalies">&#x200B;</a>
+### Timeline 異常（Timeline Anomalies） ![](../images/readme/h4.svg)
+
+此區段會掃描目前的 Statistics 範圍，找出值得優先檢查的異常事件，包括：
+
+- 異常偏長的 execution、blocking 或啟發式 response tail，例如 `mean + 3σ` 或 ≥ p99。
+- 短時間內密集發生的 migration、preemption、ISR 或 wakeup。
+- CPU 使用率尖峰。
+- 異常 Idle gap。
+- Mutex wait spike。
+- 已設定 Deadline 的逾時事件。
+
+點選資料列後，BTFViewer 會縮放到對應時間、放置 C1–C2、反白相關工作，並捲動到對應的 Statistics 表格。
+
+**Investigate…** 可將目前選取的異常（若未選取則使用排名最前面的異常）送到 AI 分頁進一步分析。
+
+<a id="worst-events" name="worst-events">&#x200B;</a>
+### 最差事件（Worst Events） ![](../images/readme/h4.svg)
+
+將各工作中持續時間最長的 **Execution Time**、**Blocking Time**、**Inter-Arrival Time** 與啟發式 **Response Time** 集中列在同一份清單中。
+
+點選任一資料列，可直接跳至該事件，並在事件範圍前後設定游標。
+
+這個區段適合用來快速回答：
+
+> 「目前這段 Trace 中，最嚴重的時間異常發生在哪裡？」
+
+找到事件後，再回到對應的詳細 Statistics 指標判斷原因。
+
+<a id="critical-path" name="critical-path">&#x200B;</a>
+### 關鍵路徑（Critical Path） ![](../images/readme/h4.svg)
+
+此區段會找出最長的**啟發式 ready→completion 時間區間**，並將其中的時間拆分為：
+
+- `exec` — 工作實際執行的時間。
+- `preempt` — 被其他工作搶佔的時間。
+- `wait` — 等待時間。
+- `migration` — 與核心遷移相關的時間。
+- `other` — 無法歸入上述類別的時間。
+
+> **注意：** 這裡的 Critical Path 並不是由核心明確記錄的 release/completion event pair。它是根據 Trace 中可觀察到的事件建立的**啟發式分析（heuristic analysis）**。
+
+點選其中一個 component，可直接跳到對應事件。
+
+![Critical Path table for example-8cores.btf.gz](../images/stats/stats-crit-path.svg)
+
+<a id="recurring-patterns" name="recurring-patterns">&#x200B;</a>
+### 重複出現的異常模式（Recurring Patterns） ![](../images/readme/h4.svg)
+
+此區段依**工作**與**異常種類**整理 Timeline Anomalies，只保留重複發生的異常類型。
+
+點選資料列，可跳至該類型最嚴重的一次事件。
+
+這有助於區分：
+
+- 只發生一次的偶發事件。
+- 持續重複出現、可能代表系統性問題的模式。
+
+![Recurring Patterns table for example-8cores.btf.gz](../images/stats/stats-patterns.svg)
+
 <a id="interval-analysis" name="interval-analysis">&#x200B;</a>
-## 區間分析（Interval Analysis） ![](../images/readme/h4.svg)
+### 區間分析（Interval Analysis） ![](../images/readme/h4.svg)
 
 將 `interval_start` / `interval_stop` STI event 配對，形成可測量的程式執行區間。
 
 每個 Interval **id** 都會在水平 Task View 的 Timeline 上建立一列 **Interval N**，並以彩色 span bar 顯示。Statistics table 則依 id 彙整所有成功配對的 duration。
 
-### Duration 計算
+**Duration 計算**
 
 對每個成功配對的 instance *j*，開始時間為 *t*<sub>s</sub>、結束時間為 *t*<sub>e</sub>：
 
@@ -1153,11 +1392,13 @@ Mutex / Semaphore 的 Core Bounce 與 Issue 詳細說明，請參閱前面的 **
 
 **Count** 是目前範圍內成功配對的 span 數；Min / Avg / Max / p95 由所有 interval duration τ<sub>j</sub> 計算。
 
-**如何解讀：** Interval metric 適合測量**已加入 instrumentation 的程式區段實際執行多久**，例如：
+**如何解讀：** Interval metric 用來測量已加入 instrumentation 的程式區段執行多久。
 
-- Loop iteration。
-- Critical section。
-- End-to-end handler。
+例如：
+
+- 一次 Loop iteration。
+- 一段 Critical section。
+- 一次 End-to-end handler。
 
 如果 Distribution Chart 中的資料集中在狹窄範圍，表示 iteration time 相對穩定。
 
@@ -1179,7 +1420,7 @@ Mutex / Semaphore 的 Core Bounce 與 Issue 詳細說明，請參閱前面的 **
 >
 > 這種情況建議使用 **Tag channel**（`btf_traceTAG(id, value)`）。Tag sample 不需要 task/id pairing，因此同一 channel 上依時間排序的連續 sample，即使由不同工作產生，也可以直接測量跨工作的時間間隔。詳見 [Tag Analysis → Interval tab](#interval-tab-time-between-samples)。
 
-### BTF Note 格式
+**BTF Note 格式**
 
 | 格式 | 範例 | Viewer 配對方式 |
 |---|---|---|
@@ -1197,7 +1438,7 @@ Binary → BTF 的轉換方式請參閱 [Binary → BTF dump mapping](../TRACE_F
 | **Count** | 目前範圍內成功配對的 start→stop span 數 |
 | **Min / Avg / Max / p95** | Interval duration 統計 |
 
-### Distribution Chart
+**Distribution Chart**
 
 點選任一資料列：
 
@@ -1226,19 +1467,19 @@ Legacy Trace 若沒有 `tid`，只能依 Interval id / note 配對，因此多�
 <a id="limitations" name="limitations">&#x200B;</a>
 #### 限制（Limitations） ![](../images/readme/h5.svg)
 
-### 1. Legacy Trace 沒有 `tid`
+**1. Legacy Trace 沒有 `tid`**
 
 如果舊版 Trace 的 Interval note 只有 id，沒有 task id，Viewer 無法知道 START 與 STOP 分別屬於哪個工作。
 
 當多個工作平行使用同一 Interval id 時，**Count 可能仍正確，但 duration 的 Min / Avg / Max 可能受到錯誤配對影響**。
 
-### 2. 不使用 Core 作為配對依據
+**2. 不使用 Core 作為配對依據**
 
 Interval START 與 STOP 之間，工作可能發生**核心遷移（Core Migration）**。
 
 因此 Viewer 不會使用 core id 來區分 pairing key。Parsed data 中的 `start_core` / `stop_core` 只提供資訊，不參與配對。
 
-### 3. 真正的巢狀區間與平行重疊
+**3. 真正的巢狀區間與平行重疊**
 
 | 情況 | 配對正確？ | Statistics 是否有意義？ |
 |---|---|---|
@@ -1248,7 +1489,7 @@ Interval START 與 STOP 之間，工作可能發生**核心遷移（Core Migrati
 | 多個工作同時使用相同 id，但沒有 `tid`（legacy） | 通常否 | **Count** 可能正確，但 Min / Avg / Max 可能失真 |
 | START 沒有對應 STOP，例如 crash 或 Trace 被截斷 | 部分 | 未配對 START 不納入 Statistics |
 
-### 4. Timeline Bar 與 Statistics Count
+**4. Timeline Bar 與 Statistics Count**
 
 Statistics table 與 Distribution Chart 會使用目前範圍內的**所有成功配對 instance**。
 
@@ -1277,7 +1518,7 @@ Timeline 則只繪製 **top-level span**。
 
 若要查看特定 paired instance，可點選 Distribution Chart 的 scatter point，或使用較窄的 cursor range。
 
-### 5. Instrumentation 建議
+**5. Instrumentation 建議**
 
 若要取得可靠的 per-task Interval Statistics：
 
@@ -1298,7 +1539,7 @@ Start 與 Stop event 則在 Interval row 上以垂直線標記：
 - Stop：虛線。
 
 <a id="tag-analysis" name="tag-analysis">&#x200B;</a>
-## Tag 分析（Tag Analysis） ![](../images/readme/h4.svg)
+### Tag 分析（Tag Analysis） ![](../images/readme/h4.svg)
 
 彙整 8 個通用 STI **Tag channel**：
 
@@ -1318,7 +1559,7 @@ Firmware 可使用 `btf_traceTAG(id, value)` 記錄任何不適合現有 STI cha
 
 只要某個 channel 至少有一筆 sample，就會顯示一列。
 
-### 數值統計
+**數值統計**
 
 對目前範圍內 channel 上所有 sample value *v*<sub>k</sub>：
 
@@ -1374,7 +1615,7 @@ Distribution popup 內提供兩個分頁：
 
 點選 scatter point，可跳至較晚 sample 的時間並加入 annotation。
 
-### 跨工作／ISR 延遲量測
+**跨工作／ISR 延遲量測**
 
 這是 BTFViewer **建議用來測量兩個不同工作或 ISR 之間 elapsed time 的方式**。
 
@@ -1397,213 +1638,192 @@ Tag sample 是依 timestamp 排序的 marker，不需要 `tid` pairing，因此�
 
 只有 Trace 包含 `tag0_event` … `tag7_event` 或 `tag_event` STI sample 時，才會顯示此區段。
 
-<a id="core-migration-analysis" name="core-migration-analysis">&#x200B;</a>
-## 核心遷移與親和性（Core Migration and Affinity） ![](../images/readme/h3.svg)
+## 6. 圖表與 Trace 比較（Charts and Trace Comparison）
 
-當同一工作（相同 merge-key）的連續 slice 分別在不同核心執行時，Viewer 會記錄一次**核心遷移（Migration）**。
+用來查看指標分布，或比較兩份 Trace 的統計差異。
 
-Migration 是在解析 segment timeline 時偵測，不會另外在 Timeline 上畫出獨立 migration marker。
+<a id="distribution-explorer" name="distribution-explorer">&#x200B;</a>
+### 分布瀏覽器（Distribution Explorer） ![](../images/readme/h4.svg)
 
-可使用下列功能檢查：
+可選擇一項 metric 與一個工作，快速檢查該資料的分布。
 
-- **Core Migrations** table。
-- 工具列 **Heatmap** 開啟的 **Migration & Corridor Inspector**。
-- **Trace Compare…**。
-- Find 的 **Migrations** mode。
+支援的 metric 包括：
 
-Affinity、Lifecycle 與 Deadline 的基本定義已在前面章節說明。本節進一步介紹 Migration table、Highlight／Inspect 流程、Corridor Inspector 與 Trace Compare。
+- execution
+- blocking
+- inter-arrival
+- response
+- dispatch
+- wake
+- preemption
 
-<a id="highlight-a-migrating-task-on-the-timeline" name="highlight-a-migrating-task-on-the-timeline">&#x200B;</a>
-### 在 Timeline 上反白核心遷移工作（Highlight a Migrating Task） ![](../images/readme/h4.svg)
+區段會顯示：
 
-如果要在實際 Timeline 情境中觀察頻繁遷移的工作，而不只是查看表格數值：
+- `n` — 樣本數。
+- `p50`。
+- `p99`。
+- `CV`。
+- Sparkline。
+- 區段底部的 histogram / CDF。
 
-1. 保持在 **Task View**（工具列 **Task**）。
-2. 點選工作名稱，例如 `CS[22]`，將它設為 **lock-highlight**。其他工作仍會保留在 Timeline 上，但會變灰。此處**不要使用 Legend filter**。
-3. 啟用 **Load**，在 Timeline 下方查看該工作於**各核心**的 CPU usage。詳見 [CPU Load](README.md#cpu-load)。
-4. 如有需要，可在 migration burst 前後放置游標並啟用 **Limit to C1–Cn**，讓 **Statistics → Core Migrations** 只針對該時間範圍重新計算。Inspector grid 則會獨立依目前可見的 Timeline viewport 更新。
+Histogram / CDF 使用與其他 metric plot 相同的 adaptive scale。**Open histogram** 可開啟完整的 scatter + histogram 視窗。
 
-![CS[22] highlighted in Task View with per-core CPU Load](../images/stats/tasks-cpu-load-cs22.svg)
+> **Wake 是啟發式 response wait，不是核心明確記錄的 wakeup event。**
 
-*`example-8cores.btf.gz` 中的 `CS[22]` 在 Task View 被 lock-highlight；CPU Load 顯示該工作在每個核心上的使用比例。*
+<a id="metrics-distribution-charts" name="metrics-distribution-charts">&#x200B;</a>
+### 指標分布圖（Metrics Distribution Charts） ![](../images/readme/h3.svg)
 
-**Headless 範例** — 顯示完整範圍 Task View + CPU Load：
+在 **Statistics** 面板中，點選下列區段的資料列可開啟浮動 Chart popup：
 
-```bash
-python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
-    -o /tmp/cs22-cpu-load.svg \
-    --view timeline --view-mode task --task "CS[22]" --cpu-load
-```
+- **Concurrent Core Active**
+- **Kernel Switch Overhead**
+- **Execution Time**
+- **Blocking Time**
+- **Dispatch / Scheduling Latency**
+- **Inter-Arrival**
+- **Core Migrations**
+- **Preemption Chain**
+- **Priority Inheritance**
+- **Interval Analysis**
+- **Tag Analysis**
 
-只查看放大的 migration burst，不顯示 Load strip：
+在 **Trace Health (TICK)** 中，當目前範圍至少有 2 個 Tick 時，可使用 mode badge 旁的長條圖圖示 **Tick Distribution…**。
 
-```bash
-python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
-    -o /tmp/cs22-burst.svg \
-    --view timeline --view-mode task --task "CS[22]" \
-    --lo 1805000 --hi 1865000
-```
+**Core Migrations** popup 另外提供 **Dwell / Rate / Gap** 分頁；**Tag Analysis** 則提供 **Value / Interval** 分頁，因此可以直接切換 metric，不需要關閉圖表。
 
-<a id="inspect-migrations-involving-a-specific-core" name="inspect-migrations-involving-a-specific-core">&#x200B;</a>
-### 檢查特定核心相關的遷移（Inspect Migrations Involving a Specific Core） ![](../images/readme/h4.svg)
+**Scatter Plot（散佈圖）**
 
-反白頻繁遷移的工作後，可依下列順序檢查：
+每個事件依 Trace 時間順序顯示，可用來觀察：
 
-1. **Statistics → Core Migrations**  
-   查看該工作的 **Primary core**、**Rate**、**Dwell** 與 **Ping**。點選資料列可開啟 **Dwell / Rate / Gap** chart。
+- Trend（趨勢）。
+- Burst（短時間密集事件）。
+- Outlier（離群值）。
 
-2. **Core-Pair Migration Summary**  
-   排序或尋找 **From** / **To** 包含目標核心的 core pair，例如 `Core_5→Core_7`。可確認哪個相鄰核心承接最多 migration，以及 **Bounce %** 是否偏高。點選資料列可查看 Gap / Rate chart；使用視窗底部的 **Open Heatmap** / **Open Chord** 可開啟 Inspector，並聚焦該 core pair。
+**Histogram（直方圖）**
 
-3. 工具列 **Heatmap**  
-   使用 Corridor tree + time-bin grid。點選 hot cell，或展開 corridor 查看哪些工作造成該流量，再使用 **Inspect in Timeline** 或 double-click 進入 Spotlight。
+Histogram 會依資料分布自動調整：
 
-4. **Show topology**  
-   在 Inspector 中啟用，或從 pair chart 使用 **Open Chord**。同一視窗會展開 topology sidebar。將滑鼠移到外圈 egress、內圈 ingress 或 ribbon 上，可隔離特定 flow。
+- **Auto scale**（預設）會依資料 spread 自動選擇 **Linear**、**p5–p95** 或 **Log duration**，避免極端 Min / Max 或 outlier 讓大部分 bar 被擠在一起。
+- **Histogram scale** 下拉選單提供 **Auto / Linear / p5–p95 / Log duration**。
+- 使用 **Freedman–Diaconis** 方法自動決定 bin count，範圍為 12–80 bins，而不是固定切成 50 個 linear bin。
+- 使用 p5–p95 時，低於 p5 與高於 p95 的資料會放入獨立的淡色 **Overflow Bucket（溢位區間）**，caption 顯示 sample count。
+- 若單一 bin 遠高於其他 bar，count axis 會自動使用 log scale。
+- 將滑鼠停在 bar 上，可查看 bin range（或 `< p5` / `> p95`）以及該 bucket 的 sample 數。
+- Histogram 上會疊加 **CDF（Cumulative Distribution Function，累積分布函數）**。
+- 以虛線標示 **avg、p5、p50、p95**；caption 顯示目前 scale 與完整 Min–Max range。
 
-5. **Core Time Breakdown**  
-   點選 core row，可跳到以該核心為焦點的 Core View。
+圖表 footer 的 **Export PNG / SVG** 可匯出目前的 Scatter + Histogram。
 
-6. **Headless CSV**  
-   可針對指定時間範圍輸出 migration：
+Popup 可獨立拖曳、調整大小與關閉。如果圖表保持開啟，移動游標或切換 cursor-range scope 時，圖表會**即時更新**。切換 Trace tab 時，每個 tab 都會記住自己的 chart。
 
-```bash
-python builds/btf_viewer.py migrations ../tracedata/example-8cores.btf.gz \
-    --lo 1805000 --hi 1865000 -o - | head
-```
+<a id="cdf-overlay" name="cdf-overlay">&#x200B;</a>
+### 累積分布函數（CDF Overlay） ![](../images/readme/h4.svg)
 
-**Legend panel：** 啟用 **Migrated tasks only**，可隱藏從未離開初始核心的工作。
+每個 Metrics Histogram 都會在 bar 上疊加一條**藍色的累積分布函數（Cumulative Distribution Function, CDF）**。
 
-## 核心遷移統計（Core Migrations） ![](../images/readme/h4.svg)
+Histogram 與 CDF 回答的是不同問題：
 
-**Statistics → Core Migrations** 是可收合區段，只列出曾在兩個以上核心執行的工作。
-
-### 遷移率（Migration Rate）
-
-單看 migration 次數容易誤判：執行時間很長的工作，即使 migration 次數較多，實際遷移頻率也可能不高。因此 BTFViewer 會將 migration count 依工作實際 on-CPU 時間正規化：
-
-```math
-R_m = \frac{N_{\mathrm{migrations},i}}{T_{\mathrm{exec},i}}
-```
-
-**Rate** 欄位以工作 on-CPU 時間每秒發生的 migration 次數表示，例如 `1.23/s`。
-
-如果 Trace 包含 TICK event，也會顯示該工作每個 **on-CPU scheduler tick** 的 migration 次數，例如 `2.785/tick`。這裡只計算目前範圍內落在該工作 slice 中的 TICK STI，不使用整份 Trace 的 Tick 總數。
-
-**如何解讀：** Rate 很高表示工作經常在不同核心之間來回移動，也就是可能出現 **Thrashing（頻繁遷移）**。對高優先權即時工作而言，通常希望這個數值盡可能接近零。
-
-### 平均核心停留時間（Average Core Dwell Time）
-
-表示工作每次取得 CPU 後，在 block、yield 或 migration 之前，平均可以持續執行多久：
-
-```math
-\bar{T}_d = \frac{1}{N_{\mathrm{slices}}} \sum_k d_k
-= \frac{T_{\mathrm{exec},i}}{N_{\mathrm{slices},i}}
-```
-
-每個 *d*<sub>k</sub> 代表一次 switch-in episode。也可以理解成：對工作曾經執行過的每個核心，以 *T*<sub>on</sub> / *N*<sub>slices</sub> 計算 per-core dwell 後的整體平均。
-
-**如何解讀：** 如果 **Dwell** 非常短，例如只有數毫秒，甚至接近系統 Tick period，可能表示排程器花了過多時間讓工作在核心之間移動，而不是讓工作持續執行。
-
-| 欄位 | 說明 |
+| 顯示方式 | 回答的問題 |
 |---|---|
-| **Task** | 工作顯示名稱（`Name[id]`） |
-| **Migr** | 目前範圍內的 migration 次數；範圍可以是完整 Trace，或啟用 **Limit to C1–Cn** 後的游標區間 |
-| **Rate** | Migration rate；`/s` 為每秒工作 active time 的遷移次數；`/tick` 為目前範圍內每個 on-CPU TICK 的遷移次數 |
-| **Dwell** | 目前範圍內平均 on-CPU slice duration，也就是平均 core dwell time |
-| **Cores** | 目前範圍內有 on-CPU time 或 migration 的不同核心數 |
-| **Primary** | Active time 最長的核心，以及該核心所占比例（%） |
-| **Ping** | Ping-pong migration；1 µs 內連續發生 A→B→A 三次 migration |
-| **STI±** | Migration 前後 ±500 ns 內存在 STI event 的次數 |
-| **Gap after** | Migration 後緊接著發生的平均 off-CPU gap |
-| **Gap other** | 同一工作其他位置的平均 blocking gap |
+| **Histogram bars** | 每個 duration bucket 中有**多少筆** sample？ |
+| **CDF curve** | 有**多少比例**的 sample 小於或等於指定 duration？ |
 
-點選資料列會開啟 **Distribution Chart（分布圖）**，對話框中提供三個分頁，不需要關閉視窗即可切換：
+BTFViewer 使用的是**經驗累積分布函數（Empirical CDF, ECDF）**。
 
-- **Dwell**（預設）— 每次 on-core run 一個資料點。x = run start time；y = run duration *d*<sub>k</sub>。
-- **Rate** — 除第一次之外，每次 migration 一個資料點。x = migration time；y = 與該工作**前一次 migration**之間的時間。大量短 gap 聚集表示短時間內頻繁 bounce；分布平坦且間距較大則表示 migration 較少且分散。
-- **Gap** — 每次 migration 後存在正值 **Gap after** 時產生一個資料點。x = migration time；y = migration 後的 off-CPU gap。這些就是 **Gap after** 欄位的原始 sample。**Gap other** 不會畫在這裡；若要查看所有 off-CPU gap，應開啟同一工作的 **Blocking Time** chart。
+對目前範圍（完整 Trace 或 cursor range）的 sample 依 duration 由短到長排序後，曲線表示：
 
-三個分頁都使用與其他 Statistics chart 相同的 **Adaptive Scaling（自適應縮放）**。
+**duration → cumulative %**
 
-`example-8cores.btf.gz` 中的 **CS[22]** 是經常遷移的 context-switch stress task：
+每個 sample 對應一個 step。多個 sample 具有相同 duration 時，曲線會在同一 x 位置垂直上升。
 
-![On-core dwell time distribution for CS[22] in example-8cores.btf.gz](../images/stats/stats-mig-dwell-cs22.svg)
+**如何閱讀 CDF**
 
-![Time between migrations for CS[22] in example-8cores.btf.gz](../images/stats/stats-mig-rate-cs22.svg)
-
-![Post-migration gap distribution for CS[22] in example-8cores.btf.gz](../images/stats/stats-mig-gap-cs22.svg)
-
-可拖曳表格下方的 resize handle，增加或減少可見資料列數。
-
-<a id="core-pair-migration-summary" name="core-pair-migration-summary">&#x200B;</a>
-### 核心對遷移摘要（Core-Pair Migration Summary） ![](../images/readme/h4.svg)
-
-依所有工作彙整具有方向性的核心遷移路徑（`From → To`）。
-
-**Core Migrations** 著重回答「哪個工作正在頻繁遷移？」；**Core-Pair Migration Summary** 則從核心對的角度回答「哪些核心之間的流量最大？其中有多少與 Lock Bounce 有關？」
-
-| 欄位 | 說明 |
-|---|---|
-| **From / To** | 來源核心與目的核心 |
-| **Count** | 目前範圍內沿此方向發生的 migration 次數 |
-| **Bounces** | 持有 Mutex 跨核心遷移時發生的 migration 子集合 |
-| **Bounce %** | `100 × Bounces / Count` |
-| **Avg Gap** | 此 corridor 中 migration 後平均 off-CPU gap |
-
-點選資料列會開啟包含兩個分頁的 Distribution Chart：
-
-- **Gap**（預設）— 每次 directed migration 若有正值 gap，就顯示一個資料點。x = migration time；y = post-migration gap，也就是 **Avg Gap** 的原始 sample。Lock-bounce event 以**橘色**顯示，其餘使用來源核心的顏色。
-- **Rate** — 同一 directed pair 上，每次連續 migration 顯示一個資料點。x = migration time；y = 此 corridor 與前一次 hop 的時間差。緊密的垂直帶狀分布表示 corridor traffic 具有明顯 burst。
-
-對話框底部提供：
-
-- **Open Heatmap** — 開啟 **Migration & Corridor Inspector** 並聚焦目前 core pair；當 Bounce % 偏高時，會優先使用 **Lock Bounces Only**。
-- **Open Chord** — 開啟相同 Inspector，同時展開 topology，並反白目前 core pair。
-
-`example-8cores.btf.gz` 中，依 Count 排名最前面的 corridor 是 **`Core_5 → Core_7`**：
-
-![Post-migration gap for Core_5→Core_7](../images/stats/stats-pair-gap-c5-c7.svg)
-
-![Time between pair migrations for Core_5→Core_7](../images/stats/stats-pair-rate-c5-c7.svg)
-
-<a id="migration--corridor-inspector" name="migration--corridor-inspector">&#x200B;</a>
-### 遷移與路徑檢視器（Migration & Corridor Inspector） ![](../images/readme/h4.svg)
-
-工具列的 **Heatmap** 會在 Desktop 與 Web 開啟 Inspector，其中包含：
-
-- Corridor / Task tree。
-- Time-bin grid。
-- Mini-chord topology。
-
-Core-pair chart 的 **Open Chord**，以及 Inspector 內的 **Show topology**，都會在**同一個 Inspector 視窗**中展開 topology sidebar。
-
-| 功能 | 說明 |
-|---|---|
-| **Open** | 2 個以上核心時，可從工具列 **Heatmap** 開啟。Pair chart 的 **Open Chord** 或 Inspector 的 **Show topology** 可切換到以 chord 為主的版面。Desktop 為 non-modal；Web 使用 overlay，但 Timeline 仍可操作。切換分頁時 Inspector 會關閉 |
-| **Scope** | 使用目前 Timeline 可見範圍，與 Statistics 的 **Limit to C1–Cn** 相互獨立。頂端 **Full view** / **Viewport view** 橫幅（顏色與 distribution chart 相同）顯示目前時間範圍：Fit to window 或縮放後的視窗。若目前範圍沒有 migration，tree/grid 顯示 *No migrations in scope*，但 topology 仍可使用 |
-| **Filter** | **Top corridors**、**Direction**、**Task filter**。Trace 存在跨核心 Mutex hold 時，另外提供 **Lock Bounces Only** |
-| **Select** | 可點選 tree row、grid cell 或 chord ribbon。Double-click 或 **Inspect in Timeline** 會以 C1–C2 Spotlight 該 time bin 或工作。工具列 **All** / **Show all tasks** 可清除 filter |
-| **Query with AI…** | 在 **AI** 分頁執行 **Migration thrash** template，使用與 Statistics 相同的 findings context。若 AI 尚未啟用，會開啟 **Settings → AI** |
-| **> 16 cores** | Tree 依來源核心分組；topology 可切換 Circle ↔ Matrix，並可將 topology Dock 到 **Bottom** 或 **Right** |
-
-`example-8cores.btf.gz`：
-
-![Migration & Corridor Inspector](../images/migration.svg)
-
-將滑鼠停在 ribbon 上，footer 會顯示 `cN→cM: count`。每個工作的 ping-pong、STI 與 gap-after 彙整仍位於 Statistics 的 **Core Migrations**。
-
-```bash
-make -C BTFViewer update-images
+```text
+ 100% ┤                              ╭── CDF（藍色）
+      │                         ╭────╯
+  50% ┤              ╭──────────╯
+      │         ╭────╯
+   0% ┤─────────╯
+      └────────────────────────────────── duration →
+        短                                  長
 ```
 
-```bash
-python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
-  -o /tmp/migration.svg --view chord --width 1000 --height 720 --drill-row 0
-```
+- **水平軸（下方）** — Duration。使用與 Histogram bar 相同的 Linear、p5–p95 或 Log scale。
+- **左側垂直軸** — 每個 bin 的 sample **count**，也就是 bar 高度。
+- **右側垂直軸** — 累積**百分比**，以虛線 guide 顯示 0%、50%、100%。
+- **曲線方向** — 從左下方開始，逐漸往右上方上升直到 100%。
+- 曲線快速陡升，表示大量 sample 集中在相近且較短的 duration。
+- 曲線緩慢上升，表示 sample 分布較廣。
+
+**CDF 與表格欄位／Reference Line 的關係**
+
+Histogram 上的虛線 marker 是單一統計摘要；CDF 則顯示完整累積分布：
+
+| Marker／表格欄位 | CDF 上的意義 |
+|---|---|
+| **p5** | 曲線通過右側軸 **5%** 的位置；5% sample 的 duration 不超過此值 |
+| **p50** | 曲線通過 **50%**，也就是 median duration |
+| **p95** | 曲線通過 **95%**；95% sample 的 duration 不超過此值 |
+| **avg** | 以垂直線顯示；CDF **沒有固定的「avg %」**，因為 Mean 不是 Percentile |
+
+**CDF 判讀範例**
+
+假設某工作的 Execution Time 有 100 個 slice：
+
+- 若 duration *D* 的 CDF 為 **30%**，表示大約 **30 個 slice（30%）**在 *D* 以內完成。這很適合回答「有多少 activation 可以在 Deadline 內完成？」
+- 如果曲線在圖表左半部就已超過 **90%**，表示大部分執行時間很短，tail 較輕。
+- 如果曲線直到很靠右的位置才超過 **50%**，表示 distribution 很寬或具有明顯 skew。此時 Linear Histogram 可能擠在一起，可切換到 **Log duration** 或 **p5–p95**，再利用 CDF 判斷主要 sample 集中在哪裡。
+
+**Histogram Scale 對 CDF 的影響**
+
+CDF 始終使用與 Histogram bar **相同的 sample**，只有 x-axis mapping 會隨 scale 改變：
+
+| Histogram scale | 對 CDF 的影響 |
+|---|---|
+| **Auto / Linear** | Duration 由 Min 到 Max 線性映射 |
+| **p5–p95** | 主要曲線使用 p5–p95 範圍；outlier 會出現在左右兩側淡色 underflow / overflow bucket，CDF 在對應 percentile 進入這些 bucket |
+| **Log duration** | 短與長 duration 會在軸上拉開，當 bar 原本大量堆在左側時，CDF 更容易判讀 |
+
+Histogram 上方的 caption，例如：
+
+`log-scaled duration axis · full range 17 µs–975 µs`
+
+即使 x-axis 經過壓縮或裁切，仍會顯示**真正的 Min–Max range**。
+
+**什麼時候適合使用 CDF**
+
+- **Deadline / Budget 檢查** — 不必逐一查看 scatter point，就能估算多少比例的 activation 符合時間限制。
+- **比較資料分散程度** — 兩個工作即使 **p50** 接近，也可能具有完全不同的 CDF shape，例如一個高度集中、另一個有 long tail。
+- **偏斜資料（Skewed Data）** — Linear Histogram 過於擁擠時，可切換 scale，並搭配 **p5 / p50 / p95** 判斷主要資料分布。
+- **Cursor-scoped Analysis** — 啟用 **Limit to C1–Cn** 後，CDF 與 table、scatter 一樣，只會使用該時間範圍內的 slice 重新計算。
+
+CDF 會包含在 Plot Dialog 的 **Export PNG / SVG** 中。
+
+CDF 本身不支援 click-to-jump；如果要跳至單一事件，請使用 Histogram 上方的 **Scatter Plot**。
+
+**從 Statistics 跳回 Timeline**
+
+**Execution Time、Blocking Time、Inter-Arrival** table 中，可點選帶有虛線底線的 **Min / Max / p95 / p99**，跳到對應 slice 或 gap 並加入 **annotation（註解）**。
+
+其他指標：
+
+- **Dispatch / Scheduling Latency** — 可點選 **Min / Max**。
+- **Distribution Chart point** — 跳至對應事件並加入 annotation，不會切換右側 panel tab。
+- Task metric → segment start。
+- **Tick Distribution** → Tick timestamp。
+- Switch / concurrency plot → 對應 timestamp。
+- **Priority Inheritance** → Zoom + Highlight boost episode。
+- **Interval Analysis** → Interval start。
+- **Preemption Chain** → annotation 放在 preemptor segment start。
+- **Mutex / Semaphore** → 點選 **Pairing issues** row，Zoom 到該核心的 running-task segment、跳至 issue time 並加入 annotation。
+- **Timeline Anomalies / Worst Events** → Zoom 並在該 episode 放置 C1–C2。
+
+`tracedata/example-4cores.btf.gz`（4-core SMP、67 tasks）的範例圖可參閱前面的 [Statistics metric tables](#statistics-metric-tables)。
+
+---
 
 <a id="trace-compare-1" name="trace-compare-1">&#x200B;</a>
-## Trace 比較（Trace Compare…） ![](../images/readme/h4.svg)
+### Trace 比較（Trace Compare…） ![](../images/readme/h4.svg)
 
 可直接比較兩份已經開啟的 Trace：
 
@@ -1616,7 +1836,7 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 
 預設使用**完整 Trace**。啟用 cursor-range 選項後，A、B 兩側會各自使用該分頁自己的 cursor window。
 
-### Summary
+**Summary**
 
 提供高階差異摘要：
 
@@ -1632,7 +1852,7 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 
 每一列都會顯示 Trace A、Trace B 與帶正負號的 **Δ**。
 
-### 其他 Compare 分頁
+**其他 Compare 分頁**
 
 **Top Tasks** — 分別取兩份 Trace CPU% 最高的前 10 個 user task，再依顯示名稱（`Name[id]`）合併。只存在其中一份 Trace 的工作，另一側顯示 **—**。
 
@@ -1686,7 +1906,7 @@ Trace Compare 適合比較相同 workload 的不同 build、設定或執行結�
 
 GUI 開啟 ZIP 時會自動載入為兩個分頁；Headless CLI 也可以直接將 ZIP 作為單一 Compare input。
 
-### 擷取 Demo Trace
+**擷取 Demo Trace**
 
 ```bash
 # Fixed tick
@@ -1704,13 +1924,13 @@ zip -j tracedata/tickless-8cores.zip \
 
 兩個 build 都應保持 STI **TICK** 啟用，並使用相同 test suite 與 duration，這樣 Δ 才具有比較意義。
 
-### 在 UI 中比較
+**在 UI 中比較**
 
 1. 執行 `python builds/btf_viewer.py ../tracedata/tickless-8cores.zip` 開啟兩個分頁，或分別開啟兩份 `.btf`。
 2. 如有需要，在兩份 Trace 中對相同 busy 或 idle phase 設定相符的 cursor window，並啟用 **Limit to each tab's cursor range**。
 3. 工具列 **Compare** → 設定 Trace A / B 名稱，例如 Tickful / Tickless。
 
-### 效能與 Context Switch 應檢查哪些指標
+**效能與 Context Switch 應檢查哪些指標**
 
 | Compare 分頁／欄位 | 原因 |
 |---|---|
@@ -1723,7 +1943,7 @@ zip -j tracedata/tickless-8cores.zip \
 | **Preemption** | 比較 peer interference 與 Tick-driven preemption |
 | **Top Tasks / Core Util** | 找出哪些工作吸收了 Tick 或 wake-up overhead |
 
-### CLI
+**CLI**
 
 ```bash
 # Zip with two .btf members (archive-root order → Trace A, Trace B)
@@ -1739,7 +1959,7 @@ python builds/btf_viewer.py compare \
     --lo 1464000 --hi 1764000
 ```
 
-### 範例 Summary
+**範例 Summary**
 
 `tickless-8cores.zip`，完整 Trace；A = Tickful、B = Tickless、Δ = A − B：
 
@@ -1765,7 +1985,7 @@ python builds/btf_viewer.py compare \
 >
 > 這是 vanilla FreeRTOS kernel heuristic 在 SMP 情境下的限制，**不是 Capture 或 Viewer 的問題**。在 kernel 的 idle-ready-list 判斷變得 SMP-aware 之前，SMP build 的 Tickless 與 Tickful Tick count 可能仍會非常接近。
 
-### 判讀方式
+**判讀方式**
 
 | 觀察結果 | 一般判讀 |
 |---|---|
@@ -1775,161 +1995,9 @@ python builds/btf_viewer.py compare \
 | 某一側 Blocking / Execution Max 明顯變差 | 只有在差值仍符合 latency budget 時，才適合採用該 policy |
 | 某一 policy 的 Migrations ↑ | 應重新檢查 affinity；Tick wake pattern 可能改變工作配置 |
 
-如果 Idle power 是主要考量，而且 busy-window metric 仍符合預算，通常可優先考慮 **Tickless**。如果 Trace Health 必須維持 GOOD，或 soft real-time slice 無法接受 Tick stretching，則可考慮 **Tickful**。完整流程請參閱 [WORKFLOWS.md §5.2](WORKFLOWS.md#52-compare-two-builds)。
+如果 Idle power 是主要考量，而且 busy-window metric 仍符合預算，通常可優先考慮 **Tickless**。如果 Trace Health 必須維持 GOOD，或 soft real-time slice 無法接受 Tick stretching，則可考慮 **Tickful**。完整流程請參閱 [WORKFLOWS.md §5.2](WORKFLOWS_zh-TW.md#52-compare-two-builds)。
 
 **Find → Migrations** 會列出 migration boundary time。Desktop 與 Web 都可使用 `F3` / `Shift+F3` 在事件之間跳轉。
-
----
-
-<a id="metrics-distribution-charts" name="metrics-distribution-charts">&#x200B;</a>
-## 指標分布圖（Metrics Distribution Charts） ![](../images/readme/h3.svg)
-
-在 **Statistics** 面板中，點選下列區段的資料列可開啟浮動 Chart popup：
-
-- **Concurrent Core Active**
-- **Kernel Switch Overhead**
-- **Execution Time**
-- **Blocking Time**
-- **Dispatch / Scheduling Latency**
-- **Inter-Arrival**
-- **Core Migrations**
-- **Preemption Chain**
-- **Priority Inheritance**
-- **Interval Analysis**
-- **Tag Analysis**
-
-在 **Trace Health (TICK)** 中，當目前範圍至少有 2 個 Tick 時，可使用 mode badge 旁的長條圖圖示 **Tick Distribution…**。
-
-**Core Migrations** popup 另外提供 **Dwell / Rate / Gap** 分頁；**Tag Analysis** 則提供 **Value / Interval** 分頁，因此可以直接切換 metric，不需要關閉圖表。
-
-### Scatter Plot（散佈圖）
-
-每個事件依 Trace 時間順序顯示，可用來觀察：
-
-- Trend（趨勢）。
-- Burst（短時間密集事件）。
-- Outlier（離群值）。
-
-### Histogram（直方圖）
-
-Histogram 會依資料分布自動調整：
-
-- **Auto scale**（預設）會依資料 spread 自動選擇 **Linear**、**p5–p95** 或 **Log duration**，避免極端 Min / Max 或 outlier 讓大部分 bar 被擠在一起。
-- **Histogram scale** 下拉選單提供 **Auto / Linear / p5–p95 / Log duration**。
-- 使用 **Freedman–Diaconis** 方法自動決定 bin count，範圍為 12–80 bins，而不是固定切成 50 個 linear bin。
-- 使用 p5–p95 時，低於 p5 與高於 p95 的資料會放入獨立的淡色 **Overflow Bucket（溢位區間）**，caption 顯示 sample count。
-- 若單一 bin 遠高於其他 bar，count axis 會自動使用 log scale。
-- 將滑鼠停在 bar 上，可查看 bin range（或 `< p5` / `> p95`）以及該 bucket 的 sample 數。
-- Histogram 上會疊加 **CDF（Cumulative Distribution Function，累積分布函數）**。
-- 以虛線標示 **avg、p5、p50、p95**；caption 顯示目前 scale 與完整 Min–Max range。
-
-圖表 footer 的 **Export PNG / SVG** 可匯出目前的 Scatter + Histogram。
-
-Popup 可獨立拖曳、調整大小與關閉。如果圖表保持開啟，移動游標或切換 cursor-range scope 時，圖表會**即時更新**。切換 Trace tab 時，每個 tab 都會記住自己的 chart。
-
-<a id="cdf-overlay" name="cdf-overlay">&#x200B;</a>
-### 累積分布函數（CDF Overlay） ![](../images/readme/h4.svg)
-
-每個 Metrics Histogram 都會在 bar 上疊加一條**藍色的累積分布函數（Cumulative Distribution Function, CDF）**。
-
-Histogram 與 CDF 回答的是不同問題：
-
-| 顯示方式 | 回答的問題 |
-|---|---|
-| **Histogram bars** | 每個 duration bucket 中有**多少筆** sample？ |
-| **CDF curve** | 有**多少比例**的 sample 小於或等於指定 duration？ |
-
-BTFViewer 使用的是**經驗累積分布函數（Empirical CDF, ECDF）**。
-
-對目前範圍（完整 Trace 或 cursor range）的 sample 依 duration 由短到長排序後，曲線表示：
-
-**duration → cumulative %**
-
-每個 sample 對應一個 step。多個 sample 具有相同 duration 時，曲線會在同一 x 位置垂直上升。
-
-### 如何閱讀 CDF
-
-```text
- 100% ┤                              ╭── CDF（藍色）
-      │                         ╭────╯
-  50% ┤              ╭──────────╯
-      │         ╭────╯
-   0% ┤─────────╯
-      └────────────────────────────────── duration →
-        短                                  長
-```
-
-- **水平軸（下方）** — Duration。使用與 Histogram bar 相同的 Linear、p5–p95 或 Log scale。
-- **左側垂直軸** — 每個 bin 的 sample **count**，也就是 bar 高度。
-- **右側垂直軸** — 累積**百分比**，以虛線 guide 顯示 0%、50%、100%。
-- **曲線方向** — 從左下方開始，逐漸往右上方上升直到 100%。
-- 曲線快速陡升，表示大量 sample 集中在相近且較短的 duration。
-- 曲線緩慢上升，表示 sample 分布較廣。
-
-### CDF 與表格欄位／Reference Line 的關係
-
-Histogram 上的虛線 marker 是單一統計摘要；CDF 則顯示完整累積分布：
-
-| Marker／表格欄位 | CDF 上的意義 |
-|---|---|
-| **p5** | 曲線通過右側軸 **5%** 的位置；5% sample 的 duration 不超過此值 |
-| **p50** | 曲線通過 **50%**，也就是 median duration |
-| **p95** | 曲線通過 **95%**；95% sample 的 duration 不超過此值 |
-| **avg** | 以垂直線顯示；CDF **沒有固定的「avg %」**，因為 Mean 不是 Percentile |
-
-### CDF 判讀範例
-
-假設某工作的 Execution Time 有 100 個 slice：
-
-- 若 duration *D* 的 CDF 為 **30%**，表示大約 **30 個 slice（30%）**在 *D* 以內完成。這很適合回答「有多少 activation 可以在 Deadline 內完成？」
-- 如果曲線在圖表左半部就已超過 **90%**，表示大部分執行時間很短，tail 較輕。
-- 如果曲線直到很靠右的位置才超過 **50%**，表示 distribution 很寬或具有明顯 skew。此時 Linear Histogram 可能擠在一起，可切換到 **Log duration** 或 **p5–p95**，再利用 CDF 判斷主要 sample 集中在哪裡。
-
-### Histogram Scale 對 CDF 的影響
-
-CDF 始終使用與 Histogram bar **相同的 sample**，只有 x-axis mapping 會隨 scale 改變：
-
-| Histogram scale | 對 CDF 的影響 |
-|---|---|
-| **Auto / Linear** | Duration 由 Min 到 Max 線性映射 |
-| **p5–p95** | 主要曲線使用 p5–p95 範圍；outlier 會出現在左右兩側淡色 underflow / overflow bucket，CDF 在對應 percentile 進入這些 bucket |
-| **Log duration** | 短與長 duration 會在軸上拉開，當 bar 原本大量堆在左側時，CDF 更容易判讀 |
-
-Histogram 上方的 caption，例如：
-
-`log-scaled duration axis · full range 17 µs–975 µs`
-
-即使 x-axis 經過壓縮或裁切，仍會顯示**真正的 Min–Max range**。
-
-### 什麼時候適合使用 CDF
-
-- **Deadline / Budget 檢查** — 不必逐一查看 scatter point，就能估算多少比例的 activation 符合時間限制。
-- **比較資料分散程度** — 兩個工作即使 **p50** 接近，也可能具有完全不同的 CDF shape，例如一個高度集中、另一個有 long tail。
-- **偏斜資料（Skewed Data）** — Linear Histogram 過於擁擠時，可切換 scale，並搭配 **p5 / p50 / p95** 判斷主要資料分布。
-- **Cursor-scoped Analysis** — 啟用 **Limit to C1–Cn** 後，CDF 與 table、scatter 一樣，只會使用該時間範圍內的 slice 重新計算。
-
-CDF 會包含在 Plot Dialog 的 **Export PNG / SVG** 中。
-
-CDF 本身不支援 click-to-jump；如果要跳至單一事件，請使用 Histogram 上方的 **Scatter Plot**。
-
-### 從 Statistics 跳回 Timeline
-
-**Execution Time、Blocking Time、Inter-Arrival** table 中，可點選帶有虛線底線的 **Min / Max / p95 / p99**，跳到對應 slice 或 gap 並加入 **annotation（註解）**。
-
-其他指標：
-
-- **Dispatch / Scheduling Latency** — 可點選 **Min / Max**。
-- **Distribution Chart point** — 跳至對應事件並加入 annotation，不會切換右側 panel tab。
-- Task metric → segment start。
-- **Tick Distribution** → Tick timestamp。
-- Switch / concurrency plot → 對應 timestamp。
-- **Priority Inheritance** → Zoom + Highlight boost episode。
-- **Interval Analysis** → Interval start。
-- **Preemption Chain** → annotation 放在 preemptor segment start。
-- **Mutex / Semaphore** → 點選 **Pairing issues** row，Zoom 到該核心的 running-task segment、跳至 issue time 並加入 annotation。
-- **Timeline Anomalies / Worst Events** → Zoom 並在該 episode 放置 C1–C2。
-
-`tracedata/example-4cores.btf.gz`（4-core SMP、67 tasks）的範例圖可參閱前面的 [Statistics metric tables](#statistics-metric-tables)。
 
 ---
 
