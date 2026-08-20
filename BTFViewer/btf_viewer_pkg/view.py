@@ -3052,18 +3052,23 @@ class TimelineView(QGraphicsView):
         View mouse-moves always fire (mouse tracking is on).
         """
         tip = _get_popup()
-        if not tip.isVisible():
+        try:
+            visible = tip.isVisible()
+        except RuntimeError:
+            _hide_popup()
+            return
+        if not visible:
             return
         if event.buttons() != Qt.MouseButton.NoButton:
-            tip.hide()
+            _hide_popup()
             return
         try:
             scene_pt = self.mapToScene(event.position().toPoint())
         except RuntimeError:
-            tip.hide()
+            _hide_popup()
             return
         if not self._info_popup_should_stay(scene_pt):
-            tip.hide()
+            _hide_popup()
 
     def mouseMoveEvent(self, event) -> None:
         try:
@@ -3245,7 +3250,7 @@ class TimelineView(QGraphicsView):
     def leaveEvent(self, event) -> None:
         if self._scene._trace is not None:
             self._scene.clear_hover_line()
-        _get_popup().hide()
+        _hide_popup()
         if self._measure_press_ns is not None:
             self._measure_press_ns = None
             self._scene.clear_measure_ruler()
@@ -3259,7 +3264,7 @@ class TimelineView(QGraphicsView):
             if not getattr(self, "_dismissing_info_popup", False):
                 self._dismissing_info_popup = True
                 try:
-                    _get_popup().hide()
+                    _hide_popup()
                 finally:
                     self._dismissing_info_popup = False
         return super().viewportEvent(event)

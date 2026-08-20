@@ -342,28 +342,15 @@
             />
           </svg>
         </button>
-        <select
+        <DomSelect
           class="tb-zoom-preset"
           title="Zoom preset — pick a fixed scale or Fit"
           aria-label="Zoom preset"
-          :value="zoomPresetValue"
+          :model-value="zoomPresetValue"
+          :options="zoomPresetOptions"
           :disabled="!traceInfo"
-          @change="onZoomPresetChange"
-        >
-          <option
-            v-if="zoomPresetValue === ''"
-            value=""
-            disabled
-            hidden
-          />
-          <option
-            v-for="opt in zoomPresetOptions"
-            :key="opt.value"
-            :value="opt.value"
-          >
-            {{ opt.label }}
-          </option>
-        </select>
+          @update:model-value="v => emit('zoomPreset', v)"
+        />
         <div class="tb-sep" />
       </div>
     </Teleport>
@@ -769,6 +756,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import DomSelect from './DomSelect.vue'
 import { IC } from '../utils/toolbarIcons.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { supportsFileHandles, pickAndReadOpen, OPEN_FILE_ACCEPT } from '../utils/fileOpen.js'
@@ -824,9 +812,6 @@ const zoom1to1Title = computed(() => {
   return `Zoom to 1:1 scale (${tspx} ${u}/px)`
 })
 
-function onZoomPresetChange(e) {
-  emit('zoomPreset', e.target.value)
-}
 
 async function emitLoadedEntries(file) {
   emit('trace-reading', { name: file.name })
@@ -1063,10 +1048,10 @@ watch(
   cursor: pointer;
   flex-shrink: 0;
 }
-.tb-zoom-preset:hover:not(:disabled) {
+.tb-zoom-preset:hover:not(.disabled) {
   background: var(--tb-btn-hover);
 }
-.tb-zoom-preset:disabled {
+.tb-zoom-preset.disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }

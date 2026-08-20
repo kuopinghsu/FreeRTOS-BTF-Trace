@@ -50,13 +50,11 @@
             <h3 class="settings-section">Appearance</h3>
             <label class="settings-row">
               <span class="settings-label">Theme</span>
-              <select
+              <DomSelect
                 v-model="draft.darkMode"
                 class="settings-input"
-              >
-                <option :value="true">Dark</option>
-                <option :value="false">Light</option>
-              </select>
+                :options="themeOptions"
+              />
             </label>
             <label class="settings-check">
               <input
@@ -265,13 +263,11 @@
             </label>
             <label class="settings-row">
               <span class="settings-label">Line style</span>
-              <select
+              <DomSelect
                 v-model="draft.stiLineStyle"
                 class="settings-input wide"
-              >
-                <option value="step">Step (hold value)</option>
-                <option value="linear">Linear (point to point)</option>
-              </select>
+                :options="stiLineStyleOptions"
+              />
             </label>
 
             <h3 class="settings-section">Zoom &amp; cursors</h3>
@@ -373,19 +369,12 @@
               <div class="settings-form-row settings-form-row--top">
                 <span class="settings-form-label">Context:</span>
                 <div class="settings-form-field">
-                  <select
+                  <DomSelect
                     v-model="draft.aiContextMode"
                     class="settings-input settings-input--grow"
                     :title="AI_CONTEXT_MODE_SETTINGS_TOOLTIP"
-                  >
-                    <option
-                      v-for="mode in aiContextModes"
-                      :key="mode.id"
-                      :value="mode.id"
-                    >
-                      {{ mode.label }}
-                    </option>
-                  </select>
+                    :options="aiContextModeOptions"
+                  />
                   <p class="settings-help settings-help--tight settings-help--pre">
                     {{ aiContextSettingsHelp }}
                   </p>
@@ -426,19 +415,12 @@
 
               <div class="settings-form-row">
                 <span class="settings-form-label">Preset:</span>
-                <select
+                <DomSelect
                   v-model="aiPreset"
                   class="settings-input settings-input--grow"
                   title="Ollama runs locally; OpenAI and Gemini are cloud APIs; Custom is any other OpenAI-compatible endpoint. Importing a JSON file whose preset name is not in this list adds it. Each preset keeps its own base URL, model, and API key."
-                >
-                  <option
-                    v-for="p in aiPresets"
-                    :key="p.id"
-                    :value="p.id"
-                  >
-                    {{ p.label }}
-                  </option>
-                </select>
+                  :options="aiPresetOptions"
+                />
               </div>
 
               <div class="settings-form-row">
@@ -552,19 +534,12 @@
 
               <div class="settings-form-row">
                 <span class="settings-form-label">Authentication:</span>
-                <select
+                <DomSelect
                   v-model="aiAuthMode"
                   class="settings-input settings-input--grow"
                   title="How this preset authenticates. None for a local server; API key to paste a provider key; Sign in opens the vendor page so you can log in and paste the key or token."
-                >
-                  <option
-                    v-for="[id, label] in aiAuthModes"
-                    :key="id"
-                    :value="id"
-                  >
-                    {{ label }}
-                  </option>
-                </select>
+                  :options="aiAuthModeOptions"
+                />
               </div>
 
               <div
@@ -615,19 +590,12 @@
 
               <div class="settings-form-row">
                 <span class="settings-form-label">Reply language:</span>
-                <select
+                <DomSelect
                   v-model="draft.aiResponseLanguage"
                   class="settings-input settings-input--grow"
                   title="Language for AI Assistant replies (also available via Language… in the AI panel)."
-                >
-                  <option
-                    v-for="lang in aiLanguageOptions"
-                    :key="lang"
-                    :value="lang"
-                  >
-                    {{ lang }}
-                  </option>
-                </select>
+                  :options="aiLanguageOptions"
+                />
               </div>
 
               <div class="settings-form-row settings-form-row--check">
@@ -738,6 +706,7 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import DomSelect from './DomSelect.vue'
 import {
   formatDeadlinesText,
   normalizeSettings,
@@ -906,6 +875,20 @@ const aiLanguageOptions = computed(() => {
   }
   return AI_RESPONSE_LANGUAGES
 })
+const themeOptions = [
+  { value: true, label: 'Dark' },
+  { value: false, label: 'Light' },
+]
+const stiLineStyleOptions = [
+  { value: 'step', label: 'Step (hold value)' },
+  { value: 'linear', label: 'Linear (point to point)' },
+]
+const aiContextModeOptions = computed(() =>
+  aiContextModes.map(m => ({ value: m.id, label: m.label })))
+const aiPresetOptions = computed(() =>
+  aiPresets.value.map(p => ({ value: p.id, label: p.label })))
+const aiAuthModeOptions = computed(() =>
+  Object.entries(aiAuthModes).map(([id, label]) => ({ value: id, label })))
 const aiTesting = ref(false)
 const aiListing = ref(false)
 const aiTestStatus = ref('')
@@ -1394,7 +1377,7 @@ async function onTestAi() {
   text-overflow: clip;
   white-space: nowrap;
 }
-.settings-page--ai select.settings-input--grow {
+.settings-page--ai .settings-input.settings-input--grow.dom-select {
   overflow: hidden;
   text-overflow: ellipsis;
 }

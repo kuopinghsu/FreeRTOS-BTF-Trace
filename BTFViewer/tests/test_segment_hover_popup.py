@@ -21,7 +21,7 @@ from PySide6.QtGui import QBrush, QColor, QMouseEvent, QPen  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from btf_viewer_pkg.graphics_items import _BatchRowItem  # noqa: E402
-from btf_viewer_pkg.timeline_util import _get_popup  # noqa: E402
+from btf_viewer_pkg.timeline_util import _get_popup, _hide_popup  # noqa: E402
 from btf_viewer_pkg.view import TimelineView  # noqa: E402
 
 
@@ -101,9 +101,24 @@ class SegmentHoverPopupTests(unittest.TestCase):
         gi = (BTF_ROOT / "btf_viewer_pkg" / "graphics_items.py").read_text(
             encoding="utf-8")
         self.assertIn("def _sync_info_popup", src)
-        self.assertIn("_get_popup().hide()", src)
+        self.assertIn("_hide_popup()", src)
         self.assertIn("def contains(self, point: QPointF)", gi)
         self.assertIn("def _hit_seg_index", gi)
+
+    def test_destroying_host_view_does_not_kill_singleton(self) -> None:
+        view = TimelineView()
+        view.show()
+        self.app.processEvents()
+        tip = _get_popup()
+        tip.show_at(QPoint(20, 20), "<b>x</b>", host=view.viewport())
+        view.close()
+        view.deleteLater()
+        self.app.processEvents()
+        tip2 = _get_popup()
+        tip2.show_at(QPoint(0, 0), "<b>y</b>")
+        self.assertTrue(tip2.isVisible())
+        _hide_popup()
+        self.assertFalse(tip2.isVisible())
 
 
 if __name__ == "__main__":

@@ -20,22 +20,10 @@
       <div class="ci-toolbar">
         <label class="ci-field">
           Top corridors
-          <select
-            v-model.number="topPct"
-          >
-            <option :value="10">
-              Top 10%
-            </option>
-            <option :value="25">
-              Top 25%
-            </option>
-            <option :value="50">
-              Top 50%
-            </option>
-            <option :value="100">
-              All
-            </option>
-          </select>
+          <DomSelect
+            v-model="topPct"
+            :options="topPctOptions"
+          />
         </label>
         <button
           v-if="traceHasBounces"
@@ -48,17 +36,10 @@
         </button>
         <label class="ci-field">
           Direction
-          <select v-model="directionMode">
-            <option value="all">
-              All
-            </option>
-            <option value="egress">
-              Egress Only
-            </option>
-            <option value="ingress">
-              Ingress Only
-            </option>
-          </select>
+          <DomSelect
+            v-model="directionMode"
+            :options="directionModeOptions"
+          />
         </label>
         <label class="ci-field">
           Task filter
@@ -227,14 +208,10 @@
               class="ci-field ci-dock-field"
             >
               Dock
-              <select v-model="sidebarDock">
-                <option value="bottom">
-                  Bottom
-                </option>
-                <option value="right">
-                  Right
-                </option>
-              </select>
+              <DomSelect
+                v-model="sidebarDock"
+                :options="sidebarDockOptions"
+              />
             </label>
           </div>
           <div
@@ -324,6 +301,7 @@
 
 <script setup>
 import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import DomSelect from './DomSelect.vue'
 import { formatTime } from '../renderer/TimelineRenderer.js'
 import {
   applyCorridorDirectionFilter,
@@ -417,10 +395,25 @@ const GRID_FOOT_H = 16
 
 const bounceOnly = ref(false)
 const topPct = ref(100)
+const topPctOptions = [
+  { value: 10, label: 'Top 10%' },
+  { value: 25, label: 'Top 25%' },
+  { value: 50, label: 'Top 50%' },
+  { value: 100, label: 'All' },
+]
 const directionMode = ref('all')
+const directionModeOptions = [
+  { value: 'all', label: 'All' },
+  { value: 'egress', label: 'Egress Only' },
+  { value: 'ingress', label: 'Ingress Only' },
+]
 const taskQuery = ref('')
 const sidebarCollapsed = ref(false)
 const sidebarDock = ref('bottom')
+const sidebarDockOptions = [
+  { value: 'bottom', label: 'Bottom' },
+  { value: 'right', label: 'Right' },
+]
 const expandedCorridors = reactive(new Set())
 const expandedGroups = reactive(new Set())
 const selectedCorridor = ref(null)

@@ -7907,8 +7907,20 @@ class _InfoPopup(QLabel):
         self.setFont(_monospace_font(self._ui_font_size))
 
     def hide(self) -> None:
-        self.setText("")
-        super().hide()
+        try:
+            self.setText("")
+            # Detach from ephemeral hosts (viewports) so destroying a
+            # TimelineView does not delete this singleton's C++ object.
+            if self.parentWidget() is not None:
+                self.setParent(None)
+                self.setWindowFlags(
+                    Qt.WindowType.Tool
+                    | Qt.WindowType.FramelessWindowHint
+                    | Qt.WindowType.WindowDoesNotAcceptFocus
+                )
+            super().hide()
+        except RuntimeError:
+            pass
 
     def show_at(self, screen_pos: QPoint, html: str, is_dark: Optional[bool] = None,
                 host: Optional[QWidget] = None) -> None:
@@ -7940,22 +7952,43 @@ class _InfoPopup(QLabel):
 
 _info_popup: Optional[_InfoPopup] = None
 
+def _popup_alive(popup: Optional[_InfoPopup]) -> bool:
+    if popup is None:
+        return False
+    try:
+        popup.isHidden()
+        return True
+    except RuntimeError:
+        return False
+
+
 def _get_popup() -> _InfoPopup:
     global _info_popup
-    if _info_popup is None:
+    if not _popup_alive(_info_popup):
         _info_popup = _InfoPopup()
     return _info_popup
+
+
+def _hide_popup() -> None:
+    """Hide the hover box without recreating a deleted C++ singleton."""
+    global _info_popup
+    if not _popup_alive(_info_popup):
+        _info_popup = None
+        return
+    try:
+        _info_popup.hide()
+    except RuntimeError:
+        _info_popup = None
 
 
 def _apply_info_popup_ui_font(ui_font_size: int) -> None:
     """Keep the timeline hover tip in sync with Settings → UI font."""
     global _info_popup
-    if _info_popup is not None:
+    if _popup_alive(_info_popup):
         _info_popup.set_ui_font_size(ui_font_size)
-    else:
-        # Seed the singleton so the first hover already uses the saved size.
-        popup = _get_popup()
-        popup.set_ui_font_size(ui_font_size)
+        return
+    _info_popup = None
+    _get_popup().set_ui_font_size(ui_font_size)
 
 _GRID_STEPS = [
     1, 2, 5, 10, 20, 50, 100, 200, 500,
@@ -12846,7 +12879,7 @@ class _BatchRowItem(QGraphicsItem):
     def hoverMoveEvent(self, event) -> None:
         idx = self._hit_seg_index(event.pos())
         if idx is None:
-            _get_popup().hide()
+            _hide_popup()
             super().hoverMoveEvent(event)
             return
         seg = self._seg_data[idx][3]
@@ -12876,7 +12909,7 @@ class _BatchRowItem(QGraphicsItem):
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event) -> None:
-        _get_popup().hide()
+        _hide_popup()
         super().hoverLeaveEvent(event)
 
 class _BatchStiItem(QGraphicsItem):
@@ -12983,11 +13016,11 @@ class _BatchStiItem(QGraphicsItem):
                 _get_popup().show_at(event.screenPos(), tip, host=event.widget())
                 super().hoverMoveEvent(event)
                 return
-        _get_popup().hide()
+        _hide_popup()
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event) -> None:
-        _get_popup().hide()
+        _hide_popup()
         super().hoverLeaveEvent(event)
 
 class _TaskLabelItem(QGraphicsRectItem):
@@ -13045,7 +13078,7 @@ class _TaskLabelItem(QGraphicsRectItem):
 
     def hoverLeaveEvent(self, event):
         self._update_brush()
-        _get_popup().hide()
+        _hide_popup()
         super().hoverLeaveEvent(event)
         if self._tl_scene._hover_highlight:
             scene = self._tl_scene
@@ -13243,7 +13276,7 @@ class _BatchStiWaveformItem(QGraphicsItem):
 
     def hoverMoveEvent(self, event) -> None:
         if not self._events:
-            _get_popup().hide()
+            _hide_popup()
             super().hoverMoveEvent(event)
             return
         pos_x = event.pos().x()
@@ -13266,11 +13299,11 @@ class _BatchStiWaveformItem(QGraphicsItem):
                    f"Event: {best_ev.event}")
             _get_popup().show_at(event.screenPos(), tip, host=event.widget())
         else:
-            _get_popup().hide()
+            _hide_popup()
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event) -> None:
-        _get_popup().hide()
+        _hide_popup()
         super().hoverLeaveEvent(event)
 
 class _BatchStiWaveformColumnItem(QGraphicsItem):
@@ -16447,18 +16480,23 @@ class TimelineView(QGraphicsView):
         View mouse-moves always fire (mouse tracking is on).
         """
         tip = _get_popup()
-        if not tip.isVisible():
+        try:
+            visible = tip.isVisible()
+        except RuntimeError:
+            _hide_popup()
+            return
+        if not visible:
             return
         if event.buttons() != Qt.MouseButton.NoButton:
-            tip.hide()
+            _hide_popup()
             return
         try:
             scene_pt = self.mapToScene(event.position().toPoint())
         except RuntimeError:
-            tip.hide()
+            _hide_popup()
             return
         if not self._info_popup_should_stay(scene_pt):
-            tip.hide()
+            _hide_popup()
 
     def mouseMoveEvent(self, event) -> None:
         try:
@@ -16640,7 +16678,7 @@ class TimelineView(QGraphicsView):
     def leaveEvent(self, event) -> None:
         if self._scene._trace is not None:
             self._scene.clear_hover_line()
-        _get_popup().hide()
+        _hide_popup()
         if self._measure_press_ns is not None:
             self._measure_press_ns = None
             self._scene.clear_measure_ruler()
@@ -16654,7 +16692,7 @@ class TimelineView(QGraphicsView):
             if not getattr(self, "_dismissing_info_popup", False):
                 self._dismissing_info_popup = True
                 try:
-                    _get_popup().hide()
+                    _hide_popup()
                 finally:
                     self._dismissing_info_popup = False
         return super().viewportEvent(event)

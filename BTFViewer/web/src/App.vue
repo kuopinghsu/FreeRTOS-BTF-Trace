@@ -134,21 +134,14 @@
         class="demo-lang"
       >
         <span class="demo-lang-label">Voice</span>
-        <select
+        <DomSelect
           class="demo-lang-select"
-          :value="demoVoiceLang"
+          :model-value="demoVoiceLang"
           aria-label="Demo narration language"
+          :options="demoVoiceLangOptions"
           @pointerdown.stop
-          @change="onDemoVoiceLang"
-        >
-          <option
-            v-for="lang in demoVoiceLangs"
-            :key="lang.id"
-            :value="lang.id"
-          >
-            {{ lang.label }}
-          </option>
-        </select>
+          @update:model-value="onDemoVoiceLangPick"
+        />
       </label>
       <span class="demo-status-hint">{{ demoPaused ? 'Paused · Esc twice to stop' : 'Esc twice to stop' }}</span>
     </div>
@@ -1174,6 +1167,7 @@ import FindPanel from './components/FindPanel.vue'
 import AiAssistantPanel from './components/AiAssistantPanel.vue'
 import JumpToTimeDialog from './components/JumpToTimeDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
+import DomSelect from './components/DomSelect.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
 import { zoomStatusFromViewport } from './utils/timeFormat.js'
 import { taskDisplayName, taskMergeKey, setColorblindMode } from './utils/colors.js'
@@ -1545,6 +1539,8 @@ const demoNav = ref({ index: 0, total: 0, canPrev: false, canNext: false })
 const demoNavReady = ref(false)
 const demoVoiceLang = ref('en')
 const demoVoiceLangs = ref([])
+const demoVoiceLangOptions = computed(() =>
+  demoVoiceLangs.value.map(lang => ({ value: lang.id, label: lang.label })))
 const DEMO_VOICE_LANG_KEY = 'btf-demo-voice-lang'
 const demoFolderPrompt = ref(null)
 const zoomPresetValue = ref('fit')
@@ -1981,12 +1977,12 @@ function onDemoPause(e) {
   _demoRunner?.togglePause?.()
 }
 
-function onDemoVoiceLang(e) {
-  const id = String(e?.target?.value || '').trim()
-  if (!id || !demoRunning.value) return
-  demoVoiceLang.value = id
-  try { localStorage.setItem(DEMO_VOICE_LANG_KEY, id) } catch { /* ignore */ }
-  _demoRunner?.setVoiceLang?.(id)
+function onDemoVoiceLangPick(id) {
+  const v = String(id || '').trim()
+  if (!v || !demoRunning.value) return
+  demoVoiceLang.value = v
+  try { localStorage.setItem(DEMO_VOICE_LANG_KEY, v) } catch { /* ignore */ }
+  _demoRunner?.setVoiceLang?.(v)
 }
 
 function onDemoFolderNeeded(prompt) {
@@ -5799,7 +5795,7 @@ body {
   font-size: 11px;
 }
 
-.demo-lang-select:disabled {
+.demo-lang-select.disabled {
   opacity: 0.45;
 }
 

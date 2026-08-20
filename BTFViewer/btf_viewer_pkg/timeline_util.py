@@ -91,8 +91,20 @@ class _InfoPopup(QLabel):
         self.setFont(_monospace_font(self._ui_font_size))
 
     def hide(self) -> None:
-        self.setText("")
-        super().hide()
+        try:
+            self.setText("")
+            # Detach from ephemeral hosts (viewports) so destroying a
+            # TimelineView does not delete this singleton's C++ object.
+            if self.parentWidget() is not None:
+                self.setParent(None)
+                self.setWindowFlags(
+                    Qt.WindowType.Tool
+                    | Qt.WindowType.FramelessWindowHint
+                    | Qt.WindowType.WindowDoesNotAcceptFocus
+                )
+            super().hide()
+        except RuntimeError:
+            pass
 
     def show_at(self, screen_pos: QPoint, html: str, is_dark: Optional[bool] = None,
                 host: Optional[QWidget] = None) -> None:
@@ -124,22 +136,43 @@ class _InfoPopup(QLabel):
 
 _info_popup: Optional[_InfoPopup] = None
 
+def _popup_alive(popup: Optional[_InfoPopup]) -> bool:
+    if popup is None:
+        return False
+    try:
+        popup.isHidden()
+        return True
+    except RuntimeError:
+        return False
+
+
 def _get_popup() -> _InfoPopup:
     global _info_popup
-    if _info_popup is None:
+    if not _popup_alive(_info_popup):
         _info_popup = _InfoPopup()
     return _info_popup
+
+
+def _hide_popup() -> None:
+    """Hide the hover box without recreating a deleted C++ singleton."""
+    global _info_popup
+    if not _popup_alive(_info_popup):
+        _info_popup = None
+        return
+    try:
+        _info_popup.hide()
+    except RuntimeError:
+        _info_popup = None
 
 
 def _apply_info_popup_ui_font(ui_font_size: int) -> None:
     """Keep the timeline hover tip in sync with Settings → UI font."""
     global _info_popup
-    if _info_popup is not None:
+    if _popup_alive(_info_popup):
         _info_popup.set_ui_font_size(ui_font_size)
-    else:
-        # Seed the singleton so the first hover already uses the saved size.
-        popup = _get_popup()
-        popup.set_ui_font_size(ui_font_size)
+        return
+    _info_popup = None
+    _get_popup().set_ui_font_size(ui_font_size)
 
 _GRID_STEPS = [
     1, 2, 5, 10, 20, 50, 100, 200, 500,

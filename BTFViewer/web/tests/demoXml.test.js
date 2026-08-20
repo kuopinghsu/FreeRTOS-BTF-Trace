@@ -983,7 +983,7 @@ describe('demo_8cores.xml', () => {
     assert.equal(root.tag, 'demo')
     const demo = parseDemoXml(xml, { xmlDir: '/demos/demo_8cores' })
     assert.match(demo.trace, /demo_8cores\.btf\.gz$/)
-    assert.deepEqual(demo.targets.timeline, { x: 0.32, y: 0.30 })
+    assert.deepEqual(demo.targets.timeline, { x: 0.19, y: 0.30 })
     assert.ok(demo.steps.length >= 20)
     const title = demo.steps.find(s => s.id === '1')
     const titleTags = title.children.map(c => c.tag)

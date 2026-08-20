@@ -817,7 +817,7 @@ class _BatchRowItem(QGraphicsItem):
     def hoverMoveEvent(self, event) -> None:
         idx = self._hit_seg_index(event.pos())
         if idx is None:
-            _get_popup().hide()
+            _hide_popup()
             super().hoverMoveEvent(event)
             return
         seg = self._seg_data[idx][3]
@@ -847,7 +847,7 @@ class _BatchRowItem(QGraphicsItem):
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event) -> None:
-        _get_popup().hide()
+        _hide_popup()
         super().hoverLeaveEvent(event)
 
 class _BatchStiItem(QGraphicsItem):
@@ -954,11 +954,11 @@ class _BatchStiItem(QGraphicsItem):
                 _get_popup().show_at(event.screenPos(), tip, host=event.widget())
                 super().hoverMoveEvent(event)
                 return
-        _get_popup().hide()
+        _hide_popup()
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event) -> None:
-        _get_popup().hide()
+        _hide_popup()
         super().hoverLeaveEvent(event)
 
 class _TaskLabelItem(QGraphicsRectItem):
@@ -1016,7 +1016,7 @@ class _TaskLabelItem(QGraphicsRectItem):
 
     def hoverLeaveEvent(self, event):
         self._update_brush()
-        _get_popup().hide()
+        _hide_popup()
         super().hoverLeaveEvent(event)
         if self._tl_scene._hover_highlight:
             scene = self._tl_scene
@@ -1214,7 +1214,7 @@ class _BatchStiWaveformItem(QGraphicsItem):
 
     def hoverMoveEvent(self, event) -> None:
         if not self._events:
-            _get_popup().hide()
+            _hide_popup()
             super().hoverMoveEvent(event)
             return
         pos_x = event.pos().x()
@@ -1237,11 +1237,11 @@ class _BatchStiWaveformItem(QGraphicsItem):
                    f"Event: {best_ev.event}")
             _get_popup().show_at(event.screenPos(), tip, host=event.widget())
         else:
-            _get_popup().hide()
+            _hide_popup()
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event) -> None:
-        _get_popup().hide()
+        _hide_popup()
         super().hoverLeaveEvent(event)
 
 class _BatchStiWaveformColumnItem(QGraphicsItem):

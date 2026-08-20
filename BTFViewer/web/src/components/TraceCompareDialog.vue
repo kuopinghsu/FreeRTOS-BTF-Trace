@@ -23,33 +23,19 @@
       <div class="compare-select-row">
         <label class="compare-select-label">
           Trace A:
-          <select
+          <DomSelect
             v-model="tabAId"
             class="compare-select"
-          >
-            <option
-              v-for="tab in tabs"
-              :key="tab.id"
-              :value="tab.id"
-            >
-              {{ tab.name }}
-            </option>
-          </select>
+            :options="compareTabOptions"
+          />
         </label>
         <label class="compare-select-label">
           Trace B:
-          <select
+          <DomSelect
             v-model="tabBId"
             class="compare-select"
-          >
-            <option
-              v-for="tab in tabs"
-              :key="tab.id"
-              :value="tab.id"
-            >
-              {{ tab.name }}
-            </option>
-          </select>
+            :options="compareTabOptions"
+          />
         </label>
       </div>
 
@@ -581,6 +567,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
+import DomSelect from './DomSelect.vue'
 import {
   buildSummaryCompareRows,
   buildTopTasksCompareRows,
@@ -614,6 +601,9 @@ const emit = defineEmits([
   'close', 'query-ai', 'validate-experiment', 'compared',
   'save-baseline', 'score-baseline',
 ])
+
+const compareTabOptions = computed(() =>
+  (props.tabs || []).map(tab => ({ value: tab.id, label: tab.name })))
 
 function pickTabId(preferred, fallbackIndex) {
   const list = props.tabs || []

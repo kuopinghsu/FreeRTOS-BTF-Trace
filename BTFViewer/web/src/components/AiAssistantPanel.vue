@@ -59,18 +59,11 @@
       >
         <h3>AI response language</h3>
         <p>Preferred language for assistant replies:</p>
-        <select
+        <DomSelect
           v-model="langDraft"
           class="ai-lang-select"
-        >
-          <option
-            v-for="lang in languages"
-            :key="lang"
-            :value="lang"
-          >
-            {{ lang }}
-          </option>
-        </select>
+          :options="languages"
+        />
         <div class="ai-lang-actions">
           <button
             type="button"
@@ -103,31 +96,17 @@
         <h3>Trace Compare</h3>
         <p>Choose two open traces to compare:</p>
         <label class="ai-pick-label">Trace A</label>
-        <select
+        <DomSelect
           v-model="comparePickA"
           class="ai-lang-select"
-        >
-          <option
-            v-for="t in loadedTabs"
-            :key="`a-${t.id}`"
-            :value="t.id"
-          >
-            {{ t.name }}
-          </option>
-        </select>
+          :options="compareTabOptions"
+        />
         <label class="ai-pick-label">Trace B</label>
-        <select
+        <DomSelect
           v-model="comparePickB"
           class="ai-lang-select"
-        >
-          <option
-            v-for="t in loadedTabs"
-            :key="`b-${t.id}`"
-            :value="t.id"
-          >
-            {{ t.name }}
-          </option>
-        </select>
+          :options="compareTabOptions"
+        />
         <p
           v-if="comparePickSame"
           class="ai-pick-error"
@@ -618,6 +597,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import DomSelect from './DomSelect.vue'
 import {
   AI_COMPARE_TEMPLATE_ID,
   AI_RESPONSE_LANGUAGES,
@@ -807,6 +787,8 @@ const languages = computed(() => {
   if (!cur || AI_RESPONSE_LANGUAGES.includes(cur)) return AI_RESPONSE_LANGUAGES
   return [...AI_RESPONSE_LANGUAGES, cur]
 })
+const compareTabOptions = computed(() =>
+  loadedTabs.value.map(t => ({ value: t.id, label: t.name })))
 const draft = ref('')
 const messages = ref([])
 const busy = ref(false)

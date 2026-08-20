@@ -17,21 +17,13 @@
       @keydown.enter.prevent="emit('next')"
       @keydown.shift.enter.prevent="emit('prev')"
     >
-    <select
+    <DomSelect
       v-model="localMode"
       class="find-mode"
       :title="modeHelp"
+      :options="findModeOptions"
       @change="onModeChange"
-    >
-      <option
-        v-for="opt in FIND_MODE_CHOICES"
-        :key="opt.key"
-        :value="opt.key"
-        :title="opt.help"
-      >
-        {{ opt.label }}
-      </option>
-    </select>
+    />
     <p class="find-mode-help">
       {{ modeHelp }}
     </p>
@@ -58,6 +50,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
+import DomSelect from './DomSelect.vue'
 import { FIND_MODE_CHOICES, findModeHelp, formatFindStatus } from '../utils/findAnalysis.js'
 
 const props = defineProps({
@@ -78,6 +71,9 @@ watch(() => props.query, v => { localQuery.value = v })
 watch(() => props.mode, v => { localMode.value = v })
 
 const modeHelp = computed(() => findModeHelp(localMode.value))
+
+const findModeOptions = computed(() =>
+  FIND_MODE_CHOICES.map(opt => ({ value: opt.key, label: opt.label, title: opt.help })))
 
 const statusText = computed(() => formatFindStatus({
   hitCount: props.hitCount,

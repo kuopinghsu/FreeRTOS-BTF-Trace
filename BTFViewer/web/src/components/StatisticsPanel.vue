@@ -1904,28 +1904,17 @@
         <div class="distrib-toolbar">
           <label>
             Metric
-            <select v-model="distribKind">
-              <option
-                v-for="kind in distribKindOptions"
-                :key="kind.id"
-                :value="kind.id"
-              >
-                {{ kind.label }}
-              </option>
-            </select>
+            <DomSelect
+              v-model="distribKind"
+              :options="distribKindSelectOptions"
+            />
           </label>
           <label>
             Task
-            <select v-model="distribMk">
-              <option value="">(select)</option>
-              <option
-                v-for="row in jitterRows"
-                :key="'dx-' + row.mk"
-                :value="row.mk"
-              >
-                {{ row.task }}
-              </option>
-            </select>
+            <DomSelect
+              v-model="distribMk"
+              :options="distribTaskOptions"
+            />
           </label>
           <button
             type="button"
@@ -1957,15 +1946,11 @@
           <div class="plot-histogram-toolbar">
             <label class="plot-scale-label">
               Histogram scale
-              <select
+              <DomSelect
                 v-model="distribScaleMode"
                 class="plot-scale-select"
-              >
-                <option value="auto">Auto</option>
-                <option value="linear">Linear</option>
-                <option value="percentile">p5–p95</option>
-                <option value="log">Log duration</option>
-              </select>
+                :options="plotScaleOptions"
+              />
             </label>
             <span class="plot-histogram-caption">{{ distribHistogramModel.caption }}</span>
           </div>
@@ -3828,15 +3813,11 @@
             <div class="plot-histogram-toolbar">
               <label class="plot-scale-label">
                 Histogram scale
-                <select
+                <DomSelect
                   v-model="histogramScaleMode"
                   class="plot-scale-select"
-                >
-                  <option value="auto">Auto</option>
-                  <option value="linear">Linear</option>
-                  <option value="percentile">p5–p95</option>
-                  <option value="log">{{ plotData?.kind === 'tag' ? 'Log scale' : 'Log duration' }}</option>
-                </select>
+                  :options="histogramScaleOptions"
+                />
               </label>
               <span class="plot-histogram-caption">{{ histogramModel.caption }}</span>
             </div>
@@ -4072,6 +4053,7 @@
 
 <script setup>
 import { ref, computed, watch, onBeforeUnmount, nextTick } from 'vue'
+import DomSelect from './DomSelect.vue'
 import { toBlob as domToBlob, toSvg as domToSvg } from 'html-to-image'
 import { formatTime, isStiTagChannel } from '../renderer/TimelineRenderer.js'
 import { formatTimeFixed } from '../utils/timeFormat.js'
@@ -4301,6 +4283,13 @@ const distribKindOptions = [
   { id: 'dispatch', label: 'Dispatch' },
   { id: 'wakeup', label: 'Wake (stand-in)' },
   { id: 'preempt', label: 'Preemption' },
+]
+const distribKindSelectOptions = distribKindOptions.map(k => ({ value: k.id, label: k.label }))
+const plotScaleOptions = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'linear', label: 'Linear' },
+  { value: 'percentile', label: 'p5–p95' },
+  { value: 'log', label: 'Log duration' },
 ]
 
 function formatMigGapNs(ns) {
@@ -4933,6 +4922,10 @@ watch(jitterRows, (rows) => {
   if (distribMk.value || !rows.length) return
   distribMk.value = String(rows[0].mk || '')
 }, { immediate: true })
+const distribTaskOptions = computed(() => [
+  { value: '', label: '(select)' },
+  ...jitterRows.value.map(row => ({ value: row.mk, label: row.task })),
+])
 const patternRows = computed(() => recurringPatterns(anomalyRows.value, 2))
 const sortedPatternRows = computed(() =>
   sortStatsRows(patternRows.value, tableSort.value.patterns, PATTERN_SORT_ACCESSORS))
@@ -6205,6 +6198,16 @@ const plotData = computed(() => {
   }
   return _buildInterPlot(props.trace, open.mk, range)
 })
+
+const histogramScaleOptions = computed(() => [
+  { value: 'auto', label: 'Auto' },
+  { value: 'linear', label: 'Linear' },
+  { value: 'percentile', label: 'p5–p95' },
+  {
+    value: 'log',
+    label: plotData.value?.kind === 'tag' ? 'Log scale' : 'Log duration',
+  },
+])
 
 const plotScopeInfo = computed(() => {
   if (!openPlotRef.value) return null

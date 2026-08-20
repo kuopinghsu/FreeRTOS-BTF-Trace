@@ -5,9 +5,10 @@
  * the shared demo pointer overlay is used. Window / monitor shares use the
  * `cursor: 'always'` constraint instead (native pointer is already in the frame).
  *
- * Native HTML `title` tooltips are also outside the captured page; the Web app
- * uses in-DOM tips (`domTooltip.js`) so button hover captions appear in the
- * recording.
+ * Native HTML `title` tooltips and `<select>` dropdown lists are drawn outside
+ * the page and are not included in tab capture (`getDisplayMedia` / MediaRecorder).
+ * The Web app uses in-DOM tips (`domTooltip.js`) and pickers (`DomSelect.vue`)
+ * so hover captions and dropdown lists appear in the recording.
  *
  * Quality is tuned for UI/text (timeline lines, small glyphs), not video-call
  * defaults: device-pixel capture with `resizeMode: 'none'`, VP9 over realtime
