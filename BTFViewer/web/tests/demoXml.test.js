@@ -1077,6 +1077,8 @@ describe('demo_8cores.xml', () => {
     const wcet = demo.steps.find(s => s.title === 'Top Tasks WCET')
     const section = wcet.children.find(c => c.tag === 'stats_section')
     assert.equal(section.attrib.scroll, 'exec')
+    const jump = wcet.children.find(c => c.tag === 'jump_wcet')
+    assert.equal(jump.attrib.task, 'NC[118]')
     const aiSetup = demo.steps.find(s => s.title === 'AI setup')
     assert.equal(aiSetup.title, 'AI setup')
     const aiMove = aiSetup.children.findIndex(c => c.tag === 'move' && c.attrib.target === 'ai_tab')

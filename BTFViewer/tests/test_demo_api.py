@@ -57,6 +57,8 @@ class DemoXmlUsesApiTests(unittest.TestCase):
         self.assertIn('<settings close="true"/>', xml)
         self.assertIn('<find query="CS[27]"', xml)
         self.assertIn('<find clear="true"', xml)
+        self.assertIn('<highlight task="NC[118]"/>', xml)
+        self.assertIn('<jump_wcet task="NC[118]"/>', xml)
         # Title step starts from a clean overlay (session leftovers).
         step1 = re.search(r'<step id="1".*?</step>', xml, re.S)
         self.assertIsNotNone(step1)

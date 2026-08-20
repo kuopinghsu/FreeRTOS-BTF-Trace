@@ -111,7 +111,7 @@
       <wait seconds="9"/>
       <move target="stats_summary"/>
       <wait seconds="2"/>
-      <show_message text="Span: 2.421 / Tasks: 163 / Core: 8" seconds="10"/>
+      <show_message text="Span: 2.421 s / Tasks: 163 / Cores: 8" seconds="10"/>
     </step>
 
     <step id="2" title="Open example-8cores" tags="intro">
@@ -276,9 +276,9 @@
       <panel name="stats"/>
       <stats_section id="tasks,exec" expand="true" collapse_others="true" scroll="exec"/>
       <audio file="${XML_DIR}/voice/12_wcet.mp3"/>
-      <highlight task="CS[27]"/>
+      <highlight task="NC[118]"/>
       <wait seconds="0.8"/>
-      <jump_wcet task="CS[27]"/>
+      <jump_wcet task="NC[118]"/>
       <wait seconds="2.0" why="WCET jump settle"/>
       <wait_audio/>
       <stats_reset/>

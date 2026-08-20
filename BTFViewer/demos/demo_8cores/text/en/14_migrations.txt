@@ -4,4 +4,4 @@ Task CS[18] migrates about 1,560 times per second. Its average time on each core
 
 In Task View, lock the highlight on CS[18]. With Load enabled, the chart shows the task's CPU share on each core. Heatmap and Chord use the visible time range, so adjust the range first. Use Lock Bounces Only when checking mutex movement.
 
-Next, open Mutex and Queue. One mutex has hundreds of holds and a few cross-core bounces, so its status is Warning. The queue has a stronger signal: 858 of 864 holds moved across cores while still held, although its status may still be OK. Check each warning on the timeline before deciding whether it is a real defect or only cleanup activity.
+Next, open Mutex and Queue. One mutex has 864 holds and 9 cross-core bounces, so its status is Warning. The queue has a stronger signal: 858 of 864 holds moved across cores while still held, although its status may still be OK. Check each warning on the timeline before deciding whether it is a real defect or only cleanup activity.

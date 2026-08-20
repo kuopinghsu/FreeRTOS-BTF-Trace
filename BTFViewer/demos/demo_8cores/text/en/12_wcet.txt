@@ -1,5 +1,7 @@
 Step 3: find the tasks that use the most CPU and the longest execution slices.
 
-Open Top Tasks, then Execution Time Per Slice. Task CS[27] uses about 15% of the CPU time. Its longest slice is about 3.5 milliseconds. Sort by Max and click that value to move the timeline to the slice.
+Open Top Tasks, then Execution Time Per Slice. Task CS[27] uses about 15% of the CPU time. Several similar CS workers are close behind. CPU share is not the same as worst-case execution time. CS[27]'s longest slice is only about 3.5 milliseconds.
 
-Do not check only the average. A 3 to 4 millisecond slice is long compared with a 1 millisecond tick. You can set a deadline for each task under Settings, Display, Analysis thresholds. The values use nanoseconds. Before deciding that the task itself is slow, also check Preemption Chain and Mutex.
+Sort Execution Time Per Slice by Max. Idle tasks can look long because they run when a core has no work; ignore them. Among user tasks, NC[118] has the longest slice, about 110 milliseconds. Click that Max value to move the timeline to the slice.
+
+Do not check only the average or the CPU share. A 110 millisecond slice is far longer than a 1 millisecond tick. You can set a deadline for each task under Settings, Display, Analysis thresholds. The values use nanoseconds. Before deciding that the task itself is slow, also check Preemption Chain and Mutex.
