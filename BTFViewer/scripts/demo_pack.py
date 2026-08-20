@@ -46,7 +46,7 @@ from demo_voice import (  # noqa: E402
 
 DEFAULT_LANGS = ("en", "zh-tw")
 BTF_GLOBS = ("*.btf", "*.btf.gz", "*.btf.bz2", "*.btf.zip")
-FFMPEG_AAC_ARGS = ("-c:a", "aac", "-ar", "24000", "-ac", "1", "-b:a", "24k")
+FFMPEG_AAC_ARGS = ("-c:a", "aac", "-ar", "32000", "-ac", "1", "-b:a", "48k")
 
 
 def list_voice_packs(demo_dir: Path) -> List[dict]:
@@ -194,7 +194,7 @@ def _which_ffmpeg() -> Optional[str]:
 
 
 def mp3_to_aac(src: Path, dest: Path, *, ffmpeg: Optional[str] = None) -> None:
-    """``ffmpeg -i input.mp3 -c:a aac -ar 24000 -ac 1 -b:a 24k output.aac``."""
+    """``ffmpeg -i input.mp3 -c:a aac -ar 32000 -ac 1 -b:a 48k output.aac``."""
     exe = ffmpeg or _which_ffmpeg()
     if not exe:
         raise SystemExit("ffmpeg not found on PATH (needed to convert .mp3 → .aac)")

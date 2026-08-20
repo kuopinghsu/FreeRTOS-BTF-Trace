@@ -1,4 +1,4 @@
-Step 2: check whether the cores share the work evenly.
+Step 3: check whether the cores share the work evenly.
 
 Open Core Utilization. The cores are about 57% to 75% busy. The Load Balance Score is 95%, and the spread, or sigma, is about 6%. Load imbalance is therefore not the main issue.
 

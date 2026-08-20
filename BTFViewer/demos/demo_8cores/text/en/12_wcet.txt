@@ -1,4 +1,4 @@
-Step 3: find the tasks that use the most CPU and the longest execution slices.
+Step 4: find the tasks that use the most CPU and the longest execution slices.
 
 Open Top Tasks, then Execution Time Per Slice. Task CS[27] uses about 15% of the CPU time. Several similar CS workers are close behind. CPU share is not the same as worst-case execution time. CS[27]'s longest slice is only about 3.5 milliseconds.
 

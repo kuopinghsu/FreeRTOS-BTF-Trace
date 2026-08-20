@@ -1,4 +1,4 @@
-Step 4: limit the analysis to the test phase that matters.
+Step 2: limit the analysis to the test phase that matters.
 
 A trace with several phases can hide an issue among setup, stress, and cleanup activity. Place two cursors around the priority-inversion demo. Include the Low, Medium, and High tasks from about 3.085 to 3.310 seconds.
 
