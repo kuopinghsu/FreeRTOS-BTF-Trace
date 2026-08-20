@@ -7834,19 +7834,45 @@ def _filter_btf_lines(src: Iterable[str], lo: int, hi: int) -> Tuple[List[str], 
 # ---------------------------------------------------------------------------
 
 class _InfoPopup(QLabel):
-    """Frameless persistent info popup - shown on hover-enter, hidden on hover-leave."""
+    """Frameless hover-info box — shown over a segment, hidden when the pointer leaves.
+
+    Implemented as a child of the active viewer window (not a top-level
+    ``Qt.ToolTip``). On Wayland/WSL those tooltip windows can ignore
+    ``hide()`` and stay on screen after the pointer has moved.
+    """
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowFlags(
-            Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
-        )
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setTextFormat(Qt.TextFormat.RichText)
         self.setMargin(7)
         self._ss_applied_dark: Optional[bool] = None   # None = never applied
         self._ss_applied_font: Optional[int] = None
         self._ui_font_size: int = UI_FONT_SIZE
+        self._adopt_host(None)
+
+    def _adopt_host(self, host: Optional[QWidget]) -> None:
+        """Reparent onto *host* as an overlay widget (not a native tooltip)."""
+        if host is None or host is self:
+            self.setWindowFlags(
+                Qt.WindowType.Tool
+                | Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.WindowDoesNotAcceptFocus
+            )
+            return
+        if isinstance(host, QGraphicsView):
+            host = host.viewport()
+        if self.parentWidget() is host:
+            return
+        html = self.text()
+        super().hide()
+        self.setParent(host)
+        # Child widget: hide()/show() is reliable. Keep mouse events passing
+        # through so the timeline still receives moves.
+        self.setWindowFlags(Qt.WindowType.Widget)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        if html:
+            self.setText(html)
 
     def set_ui_font_size(self, ui_font_size: int) -> None:
         """Match Settings → Appearance → UI font (menus / status / tooltips)."""
@@ -7880,25 +7906,12 @@ class _InfoPopup(QLabel):
         # Native tooltip chrome can ignore QSS font-size (macOS); set QFont too.
         self.setFont(_monospace_font(self._ui_font_size))
 
-    def _ensure_transient_parent(self) -> None:
-        """Wayland: popup windows must declare a transient parent on their
-        native QWindow handle before show(), otherwise Qt logs a warning and
-        the popup is silently dropped."""
-        app = QApplication.instance()
-        if app is None:
-            return
-        active = app.activeWindow()
-        if active is None or active is self:
-            return
-        # Force creation of the native window handle if not yet realized.
-        if self.windowHandle() is None:
-            self.create()
-        handle = self.windowHandle()
-        parent_handle = active.windowHandle()
-        if handle is not None and parent_handle is not None:
-            handle.setTransientParent(parent_handle)
+    def hide(self) -> None:
+        self.setText("")
+        super().hide()
 
-    def show_at(self, screen_pos: QPoint, html: str, is_dark: Optional[bool] = None) -> None:
+    def show_at(self, screen_pos: QPoint, html: str, is_dark: Optional[bool] = None,
+                host: Optional[QWidget] = None) -> None:
         if is_dark is None:
             app = QApplication.instance()
             if app is not None:
@@ -7908,10 +7921,20 @@ class _InfoPopup(QLabel):
         self._apply_stylesheet(bool(is_dark))
         self.setText(html)
         self.adjustSize()
-        # offset so the cursor does not cover the box
-        self.move(screen_pos.x() + 16, screen_pos.y() + 8)
-        # Wayland requires popups to have a transient parent on their native handle.
-        self._ensure_transient_parent()
+        if host is None:
+            app = QApplication.instance()
+            if app is not None:
+                host = app.widgetAt(QPoint(int(screen_pos.x()), int(screen_pos.y())))
+                if host is self:
+                    host = self.parentWidget()
+        self._adopt_host(host)
+        overlay = self.parentWidget() or host
+        sp = QPoint(int(screen_pos.x()), int(screen_pos.y()))
+        if overlay is not None:
+            local = overlay.mapFromGlobal(sp)
+            self.move(local.x() + 16, local.y() + 8)
+        else:
+            self.move(sp.x() + 16, sp.y() + 8)
         self.show()
         self.raise_()
 
@@ -9810,6 +9833,7 @@ class TimelineScene(QGraphicsScene):
             line = QGraphicsLineItem(x, 0, x, scene_r.height())
             line.setPen(hover_pen)
             line.setZValue(25)
+            line.setAcceptHoverEvents(False)
             self.addItem(line)
             self._hover_items.append(line)
             # Time label centred on x, pinned near the bottom of the ruler band.
@@ -9821,10 +9845,12 @@ class TimelineScene(QGraphicsScene):
                 QRectF(0, 0, tw, th + 2),
                 QPen(Qt.PenStyle.NoPen), QBrush(lbl_bg))
             bg.setZValue(26)
+            bg.setAcceptHoverEvents(False)
             bg.setPos(lbl_x, _orig_y_bg)
             lbl = self.addSimpleText(t_str, font)
             lbl.setBrush(QBrush(lbl_txt))
             lbl.setZValue(27)
+            lbl.setAcceptHoverEvents(False)
             lbl.setPos(lbl_x + 4, _orig_y_lbl)
             self._hover_items.extend([bg, lbl])
             self._frozen_top_items.append((bg, _orig_y_bg))
@@ -9836,6 +9862,7 @@ class TimelineScene(QGraphicsScene):
             line = QGraphicsLineItem(RULER_WIDTH, y, scene_r.width(), y)
             line.setPen(hover_pen)
             line.setZValue(25)
+            line.setAcceptHoverEvents(False)
             self.addItem(line)
             self._hover_items.append(line)
             # Match web drawHoverLineVertical: label right-aligned in ruler column.
@@ -9849,10 +9876,12 @@ class TimelineScene(QGraphicsScene):
                 QRectF(0, 0, _badge_w, _badge_h),
                 QPen(Qt.PenStyle.NoPen), QBrush(lbl_bg))
             bg.setZValue(37)
+            bg.setAcceptHoverEvents(False)
             bg.setPos(_bg_x, ly)
             lbl = self.addSimpleText(t_str, font)
             lbl.setBrush(QBrush(lbl_txt))
             lbl.setZValue(38)
+            lbl.setAcceptHoverEvents(False)
             lbl.setPos(_lbl_x, ly + (_badge_h - th) / 2)
             self._hover_items.extend([bg, lbl])
             self._frozen_items.append((bg, _bg_x))
@@ -12574,6 +12603,45 @@ class _BatchRowItem(QGraphicsItem):
     def boundingRect(self) -> QRectF:
         return self._bounding_rect
 
+    def _hit_seg_index(self, point: QPointF) -> Optional[int]:
+        """Index into ``_seg_data`` for the bar under *point*, or None.
+
+        ``boundingRect`` spans the whole row so paint/clipping stay cheap.
+        Hover hit-testing must use the bars themselves; otherwise leaving a
+        segment into the empty part of the same row never sends hoverLeave
+        and the info popup stays up.
+        """
+        if not self._xs:
+            return None
+        br = self._bounding_rect
+        if self._horiz:
+            if point.y() < br.top() or point.y() > br.bottom():
+                return None
+            x = point.x()
+        else:
+            if point.x() < br.left() or point.x() > br.right():
+                return None
+            x = point.y()
+        xs = self._xs
+        lo, hi = 0, len(xs)
+        while lo < hi:
+            mid = (lo + hi) >> 1
+            if xs[mid][0] <= x:
+                lo = mid + 1
+            else:
+                hi = mid
+        for k in range(max(0, lo - _HOVER_BISECT_MARGIN),
+                       min(len(xs), lo + _HOVER_BISECT_MARGIN)):
+            x1, x2, idx = xs[k]
+            if x1 <= x <= x2:
+                seg = self._seg_data[idx][3]
+                if seg is not None:
+                    return idx
+        return None
+
+    def contains(self, point: QPointF) -> bool:
+        return self._hit_seg_index(point) is not None
+
     def paint(self, painter: QPainter, option, widget=None) -> None:
         lod = QStyleOptionGraphicsItem.levelOfDetailFromTransform(
                   painter.worldTransform())
@@ -12776,51 +12844,35 @@ class _BatchRowItem(QGraphicsItem):
         painter.restore()
 
     def hoverMoveEvent(self, event) -> None:
-        if not self._xs:
+        idx = self._hit_seg_index(event.pos())
+        if idx is None:
+            _get_popup().hide()
             super().hoverMoveEvent(event)
             return
-        x  = event.pos().x() if self._horiz else event.pos().y()
-        xs = self._xs
-        # Binary search: rightmost entry with x1 <= x
-        lo, hi = 0, len(xs)
-        while lo < hi:
-            mid = (lo + hi) >> 1
-            if xs[mid][0] <= x:
-                lo = mid + 1
-            else:
-                hi = mid
-        for k in range(max(0, lo - _HOVER_BISECT_MARGIN),
-                       min(len(xs), lo + _HOVER_BISECT_MARGIN)):
-            x1, x2, idx = xs[k]
-            if x1 <= x <= x2:
-                seg = self._seg_data[idx][3]
-                if seg is not None:
-                    dur = seg.end - seg.start
-                    tip = (f"<b>{seg.task}</b><br>"
-                           f"Core: {seg.core}<br>"
-                           f"Start: {_format_time(seg.start, self._time_scale, decimals=self._time_decimals)}<br>"
-                           f"End:   {_format_time(seg.end,   self._time_scale, decimals=self._time_decimals)}<br>"
-                           f"Duration: {_format_time(dur, self._time_scale, decimals=self._time_decimals)}")
-                    tr = self._trace
-                    if tr is not None:
-                        prev, nxt, seg_idx, total = _seg_core_neighbors(tr, seg)
-                        if seg_idx > 0:
-                            tip += f"<br>Slice: #{seg_idx}/{total} on {seg.core}"
-                        if prev is not None:
-                            _, _, pnm = _parse_task_name(prev.task)
-                            tip += (f"<br>← Prev on core: {_task_display_name(prev.task)} "
-                                    f"({_format_time(prev.end, self._time_scale, decimals=self._time_decimals)})")
-                        if nxt is not None:
-                            tip += (f"<br>→ Next on core: {_task_display_name(nxt.task)} "
-                                    f"({_format_time(nxt.start, self._time_scale, decimals=self._time_decimals)})")
-                        if prev is not None:
-                            gap = seg.start - prev.end
-                            if gap > 0:
-                                tip += f"<br>Gap before: {_format_time(gap, self._time_scale, decimals=self._time_decimals)}"
-                    _get_popup().show_at(event.screenPos(), tip)
-                    super().hoverMoveEvent(event)
-                    return
-        _get_popup().hide()
+        seg = self._seg_data[idx][3]
+        dur = seg.end - seg.start
+        tip = (f"<b>{seg.task}</b><br>"
+               f"Core: {seg.core}<br>"
+               f"Start: {_format_time(seg.start, self._time_scale, decimals=self._time_decimals)}<br>"
+               f"End:   {_format_time(seg.end,   self._time_scale, decimals=self._time_decimals)}<br>"
+               f"Duration: {_format_time(dur, self._time_scale, decimals=self._time_decimals)}")
+        tr = self._trace
+        if tr is not None:
+            prev, nxt, seg_idx, total = _seg_core_neighbors(tr, seg)
+            if seg_idx > 0:
+                tip += f"<br>Slice: #{seg_idx}/{total} on {seg.core}"
+            if prev is not None:
+                _, _, pnm = _parse_task_name(prev.task)
+                tip += (f"<br>← Prev on core: {_task_display_name(prev.task)} "
+                        f"({_format_time(prev.end, self._time_scale, decimals=self._time_decimals)})")
+            if nxt is not None:
+                tip += (f"<br>→ Next on core: {_task_display_name(nxt.task)} "
+                        f"({_format_time(nxt.start, self._time_scale, decimals=self._time_decimals)})")
+            if prev is not None:
+                gap = seg.start - prev.end
+                if gap > 0:
+                    tip += f"<br>Gap before: {_format_time(gap, self._time_scale, decimals=self._time_decimals)}"
+        _get_popup().show_at(event.screenPos(), tip, host=event.widget())
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event) -> None:
@@ -12928,7 +12980,7 @@ class _BatchStiItem(QGraphicsItem):
                        f"Core: {ev.core}<br>"
                        f"Target: {ev.target}<br>"
                        f"Event: {ev.event}")
-                _get_popup().show_at(event.screenPos(), tip)
+                _get_popup().show_at(event.screenPos(), tip, host=event.widget())
                 super().hoverMoveEvent(event)
                 return
         _get_popup().hide()
@@ -12978,7 +13030,7 @@ class _TaskLabelItem(QGraphicsRectItem):
         if self._tl_scene._locked_task != self._task_name:
             self.setBrush(self._HOVER_BRUSH)
         if self._tooltip_text:
-            _get_popup().show_at(event.screenPos(), self._tooltip_text)
+            _get_popup().show_at(event.screenPos(), self._tooltip_text, host=event.widget())
         super().hoverEnterEvent(event)
         if self._tl_scene._hover_highlight:
             # Defer rebuild so it never runs while this item's event handler is active
@@ -12988,7 +13040,7 @@ class _TaskLabelItem(QGraphicsRectItem):
 
     def hoverMoveEvent(self, event):
         if self._tooltip_text:
-            _get_popup().show_at(event.screenPos(), self._tooltip_text)
+            _get_popup().show_at(event.screenPos(), self._tooltip_text, host=event.widget())
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event):
@@ -13212,7 +13264,7 @@ class _BatchStiWaveformItem(QGraphicsItem):
                    f"Core: {best_ev.core}<br>"
                    f"Target: {best_ev.target}<br>"
                    f"Event: {best_ev.event}")
-            _get_popup().show_at(event.screenPos(), tip)
+            _get_popup().show_at(event.screenPos(), tip, host=event.widget())
         else:
             _get_popup().hide()
         super().hoverMoveEvent(event)
@@ -14252,6 +14304,8 @@ class TimelineView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
         self._programmatic_viewport = 0
 
         # -- Mouse interaction state -------------------------------------
@@ -16375,7 +16429,44 @@ class TimelineView(QGraphicsView):
 
         super().mousePressEvent(event)
 
+    def _info_popup_should_stay(self, scene_pt) -> bool:
+        """True if the pointer is still over a hover-tip target."""
+        for item in self._scene.items(scene_pt):
+            if isinstance(item, _BatchRowItem):
+                local = item.mapFromScene(scene_pt)
+                return item._hit_seg_index(local) is not None
+            if isinstance(item, (_TaskLabelItem, _BatchStiItem, _BatchStiWaveformItem)):
+                return True
+        return False
+
+    def _sync_info_popup(self, event) -> None:
+        """Hide the segment info box when the pointer is no longer on a tip target.
+
+        Graphics-item hoverLeave is not enough: the ghost time line sits under
+        the cursor, and on WSL a top-level tooltip window can ignore hide().
+        View mouse-moves always fire (mouse tracking is on).
+        """
+        tip = _get_popup()
+        if not tip.isVisible():
+            return
+        if event.buttons() != Qt.MouseButton.NoButton:
+            tip.hide()
+            return
+        try:
+            scene_pt = self.mapToScene(event.position().toPoint())
+        except RuntimeError:
+            tip.hide()
+            return
+        if not self._info_popup_should_stay(scene_pt):
+            tip.hide()
+
     def mouseMoveEvent(self, event) -> None:
+        try:
+            self._mouse_move_impl(event)
+        finally:
+            self._sync_info_popup(event)
+
+    def _mouse_move_impl(self, event) -> None:
         # Dispatch in order of drag states (mutually exclusive):
         #   0. Ctrl+drag measure ruler  (_measure_press_ns is not None)
         #   1. Label-column resize drag  (_label_resize_dragging)
@@ -16549,12 +16640,24 @@ class TimelineView(QGraphicsView):
     def leaveEvent(self, event) -> None:
         if self._scene._trace is not None:
             self._scene.clear_hover_line()
+        _get_popup().hide()
         if self._measure_press_ns is not None:
             self._measure_press_ns = None
             self._scene.clear_measure_ruler()
             self.setDragMode(QGraphicsView.ScrollHandDrag)
         self._set_view_hover_cursor(None)
         super().leaveEvent(event)
+
+    def viewportEvent(self, event):
+        et = event.type()
+        if et in (QEvent.Type.Leave, QEvent.Type.HoverLeave):
+            if not getattr(self, "_dismissing_info_popup", False):
+                self._dismissing_info_popup = True
+                try:
+                    _get_popup().hide()
+                finally:
+                    self._dismissing_info_popup = False
+        return super().viewportEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         # Dispatch in order (first match returns early):

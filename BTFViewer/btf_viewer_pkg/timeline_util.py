@@ -18,19 +18,45 @@ from .parser import *  # noqa: F403,F401
 # ---------------------------------------------------------------------------
 
 class _InfoPopup(QLabel):
-    """Frameless persistent info popup - shown on hover-enter, hidden on hover-leave."""
+    """Frameless hover-info box — shown over a segment, hidden when the pointer leaves.
+
+    Implemented as a child of the active viewer window (not a top-level
+    ``Qt.ToolTip``). On Wayland/WSL those tooltip windows can ignore
+    ``hide()`` and stay on screen after the pointer has moved.
+    """
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowFlags(
-            Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
-        )
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setTextFormat(Qt.TextFormat.RichText)
         self.setMargin(7)
         self._ss_applied_dark: Optional[bool] = None   # None = never applied
         self._ss_applied_font: Optional[int] = None
         self._ui_font_size: int = UI_FONT_SIZE
+        self._adopt_host(None)
+
+    def _adopt_host(self, host: Optional[QWidget]) -> None:
+        """Reparent onto *host* as an overlay widget (not a native tooltip)."""
+        if host is None or host is self:
+            self.setWindowFlags(
+                Qt.WindowType.Tool
+                | Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.WindowDoesNotAcceptFocus
+            )
+            return
+        if isinstance(host, QGraphicsView):
+            host = host.viewport()
+        if self.parentWidget() is host:
+            return
+        html = self.text()
+        super().hide()
+        self.setParent(host)
+        # Child widget: hide()/show() is reliable. Keep mouse events passing
+        # through so the timeline still receives moves.
+        self.setWindowFlags(Qt.WindowType.Widget)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        if html:
+            self.setText(html)
 
     def set_ui_font_size(self, ui_font_size: int) -> None:
         """Match Settings → Appearance → UI font (menus / status / tooltips)."""
@@ -64,25 +90,12 @@ class _InfoPopup(QLabel):
         # Native tooltip chrome can ignore QSS font-size (macOS); set QFont too.
         self.setFont(_monospace_font(self._ui_font_size))
 
-    def _ensure_transient_parent(self) -> None:
-        """Wayland: popup windows must declare a transient parent on their
-        native QWindow handle before show(), otherwise Qt logs a warning and
-        the popup is silently dropped."""
-        app = QApplication.instance()
-        if app is None:
-            return
-        active = app.activeWindow()
-        if active is None or active is self:
-            return
-        # Force creation of the native window handle if not yet realized.
-        if self.windowHandle() is None:
-            self.create()
-        handle = self.windowHandle()
-        parent_handle = active.windowHandle()
-        if handle is not None and parent_handle is not None:
-            handle.setTransientParent(parent_handle)
+    def hide(self) -> None:
+        self.setText("")
+        super().hide()
 
-    def show_at(self, screen_pos: QPoint, html: str, is_dark: Optional[bool] = None) -> None:
+    def show_at(self, screen_pos: QPoint, html: str, is_dark: Optional[bool] = None,
+                host: Optional[QWidget] = None) -> None:
         if is_dark is None:
             app = QApplication.instance()
             if app is not None:
@@ -92,10 +105,20 @@ class _InfoPopup(QLabel):
         self._apply_stylesheet(bool(is_dark))
         self.setText(html)
         self.adjustSize()
-        # offset so the cursor does not cover the box
-        self.move(screen_pos.x() + 16, screen_pos.y() + 8)
-        # Wayland requires popups to have a transient parent on their native handle.
-        self._ensure_transient_parent()
+        if host is None:
+            app = QApplication.instance()
+            if app is not None:
+                host = app.widgetAt(QPoint(int(screen_pos.x()), int(screen_pos.y())))
+                if host is self:
+                    host = self.parentWidget()
+        self._adopt_host(host)
+        overlay = self.parentWidget() or host
+        sp = QPoint(int(screen_pos.x()), int(screen_pos.y()))
+        if overlay is not None:
+            local = overlay.mapFromGlobal(sp)
+            self.move(local.x() + 16, local.y() + 8)
+        else:
+            self.move(sp.x() + 16, sp.y() + 8)
         self.show()
         self.raise_()
 

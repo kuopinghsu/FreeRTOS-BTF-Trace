@@ -1188,6 +1188,7 @@ class TimelineScene(QGraphicsScene):
             line = QGraphicsLineItem(x, 0, x, scene_r.height())
             line.setPen(hover_pen)
             line.setZValue(25)
+            line.setAcceptHoverEvents(False)
             self.addItem(line)
             self._hover_items.append(line)
             # Time label centred on x, pinned near the bottom of the ruler band.
@@ -1199,10 +1200,12 @@ class TimelineScene(QGraphicsScene):
                 QRectF(0, 0, tw, th + 2),
                 QPen(Qt.PenStyle.NoPen), QBrush(lbl_bg))
             bg.setZValue(26)
+            bg.setAcceptHoverEvents(False)
             bg.setPos(lbl_x, _orig_y_bg)
             lbl = self.addSimpleText(t_str, font)
             lbl.setBrush(QBrush(lbl_txt))
             lbl.setZValue(27)
+            lbl.setAcceptHoverEvents(False)
             lbl.setPos(lbl_x + 4, _orig_y_lbl)
             self._hover_items.extend([bg, lbl])
             self._frozen_top_items.append((bg, _orig_y_bg))
@@ -1214,6 +1217,7 @@ class TimelineScene(QGraphicsScene):
             line = QGraphicsLineItem(RULER_WIDTH, y, scene_r.width(), y)
             line.setPen(hover_pen)
             line.setZValue(25)
+            line.setAcceptHoverEvents(False)
             self.addItem(line)
             self._hover_items.append(line)
             # Match web drawHoverLineVertical: label right-aligned in ruler column.
@@ -1227,10 +1231,12 @@ class TimelineScene(QGraphicsScene):
                 QRectF(0, 0, _badge_w, _badge_h),
                 QPen(Qt.PenStyle.NoPen), QBrush(lbl_bg))
             bg.setZValue(37)
+            bg.setAcceptHoverEvents(False)
             bg.setPos(_bg_x, ly)
             lbl = self.addSimpleText(t_str, font)
             lbl.setBrush(QBrush(lbl_txt))
             lbl.setZValue(38)
+            lbl.setAcceptHoverEvents(False)
             lbl.setPos(_lbl_x, ly + (_badge_h - th) / 2)
             self._hover_items.extend([bg, lbl])
             self._frozen_items.append((bg, _bg_x))

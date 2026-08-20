@@ -574,6 +574,45 @@ class _BatchRowItem(QGraphicsItem):
     def boundingRect(self) -> QRectF:
         return self._bounding_rect
 
+    def _hit_seg_index(self, point: QPointF) -> Optional[int]:
+        """Index into ``_seg_data`` for the bar under *point*, or None.
+
+        ``boundingRect`` spans the whole row so paint/clipping stay cheap.
+        Hover hit-testing must use the bars themselves; otherwise leaving a
+        segment into the empty part of the same row never sends hoverLeave
+        and the info popup stays up.
+        """
+        if not self._xs:
+            return None
+        br = self._bounding_rect
+        if self._horiz:
+            if point.y() < br.top() or point.y() > br.bottom():
+                return None
+            x = point.x()
+        else:
+            if point.x() < br.left() or point.x() > br.right():
+                return None
+            x = point.y()
+        xs = self._xs
+        lo, hi = 0, len(xs)
+        while lo < hi:
+            mid = (lo + hi) >> 1
+            if xs[mid][0] <= x:
+                lo = mid + 1
+            else:
+                hi = mid
+        for k in range(max(0, lo - _HOVER_BISECT_MARGIN),
+                       min(len(xs), lo + _HOVER_BISECT_MARGIN)):
+            x1, x2, idx = xs[k]
+            if x1 <= x <= x2:
+                seg = self._seg_data[idx][3]
+                if seg is not None:
+                    return idx
+        return None
+
+    def contains(self, point: QPointF) -> bool:
+        return self._hit_seg_index(point) is not None
+
     def paint(self, painter: QPainter, option, widget=None) -> None:
         lod = QStyleOptionGraphicsItem.levelOfDetailFromTransform(
                   painter.worldTransform())
@@ -776,51 +815,35 @@ class _BatchRowItem(QGraphicsItem):
         painter.restore()
 
     def hoverMoveEvent(self, event) -> None:
-        if not self._xs:
+        idx = self._hit_seg_index(event.pos())
+        if idx is None:
+            _get_popup().hide()
             super().hoverMoveEvent(event)
             return
-        x  = event.pos().x() if self._horiz else event.pos().y()
-        xs = self._xs
-        # Binary search: rightmost entry with x1 <= x
-        lo, hi = 0, len(xs)
-        while lo < hi:
-            mid = (lo + hi) >> 1
-            if xs[mid][0] <= x:
-                lo = mid + 1
-            else:
-                hi = mid
-        for k in range(max(0, lo - _HOVER_BISECT_MARGIN),
-                       min(len(xs), lo + _HOVER_BISECT_MARGIN)):
-            x1, x2, idx = xs[k]
-            if x1 <= x <= x2:
-                seg = self._seg_data[idx][3]
-                if seg is not None:
-                    dur = seg.end - seg.start
-                    tip = (f"<b>{seg.task}</b><br>"
-                           f"Core: {seg.core}<br>"
-                           f"Start: {_format_time(seg.start, self._time_scale, decimals=self._time_decimals)}<br>"
-                           f"End:   {_format_time(seg.end,   self._time_scale, decimals=self._time_decimals)}<br>"
-                           f"Duration: {_format_time(dur, self._time_scale, decimals=self._time_decimals)}")
-                    tr = self._trace
-                    if tr is not None:
-                        prev, nxt, seg_idx, total = _seg_core_neighbors(tr, seg)
-                        if seg_idx > 0:
-                            tip += f"<br>Slice: #{seg_idx}/{total} on {seg.core}"
-                        if prev is not None:
-                            _, _, pnm = _parse_task_name(prev.task)
-                            tip += (f"<br>← Prev on core: {_task_display_name(prev.task)} "
-                                    f"({_format_time(prev.end, self._time_scale, decimals=self._time_decimals)})")
-                        if nxt is not None:
-                            tip += (f"<br>→ Next on core: {_task_display_name(nxt.task)} "
-                                    f"({_format_time(nxt.start, self._time_scale, decimals=self._time_decimals)})")
-                        if prev is not None:
-                            gap = seg.start - prev.end
-                            if gap > 0:
-                                tip += f"<br>Gap before: {_format_time(gap, self._time_scale, decimals=self._time_decimals)}"
-                    _get_popup().show_at(event.screenPos(), tip)
-                    super().hoverMoveEvent(event)
-                    return
-        _get_popup().hide()
+        seg = self._seg_data[idx][3]
+        dur = seg.end - seg.start
+        tip = (f"<b>{seg.task}</b><br>"
+               f"Core: {seg.core}<br>"
+               f"Start: {_format_time(seg.start, self._time_scale, decimals=self._time_decimals)}<br>"
+               f"End:   {_format_time(seg.end,   self._time_scale, decimals=self._time_decimals)}<br>"
+               f"Duration: {_format_time(dur, self._time_scale, decimals=self._time_decimals)}")
+        tr = self._trace
+        if tr is not None:
+            prev, nxt, seg_idx, total = _seg_core_neighbors(tr, seg)
+            if seg_idx > 0:
+                tip += f"<br>Slice: #{seg_idx}/{total} on {seg.core}"
+            if prev is not None:
+                _, _, pnm = _parse_task_name(prev.task)
+                tip += (f"<br>← Prev on core: {_task_display_name(prev.task)} "
+                        f"({_format_time(prev.end, self._time_scale, decimals=self._time_decimals)})")
+            if nxt is not None:
+                tip += (f"<br>→ Next on core: {_task_display_name(nxt.task)} "
+                        f"({_format_time(nxt.start, self._time_scale, decimals=self._time_decimals)})")
+            if prev is not None:
+                gap = seg.start - prev.end
+                if gap > 0:
+                    tip += f"<br>Gap before: {_format_time(gap, self._time_scale, decimals=self._time_decimals)}"
+        _get_popup().show_at(event.screenPos(), tip, host=event.widget())
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event) -> None:
@@ -928,7 +951,7 @@ class _BatchStiItem(QGraphicsItem):
                        f"Core: {ev.core}<br>"
                        f"Target: {ev.target}<br>"
                        f"Event: {ev.event}")
-                _get_popup().show_at(event.screenPos(), tip)
+                _get_popup().show_at(event.screenPos(), tip, host=event.widget())
                 super().hoverMoveEvent(event)
                 return
         _get_popup().hide()
@@ -978,7 +1001,7 @@ class _TaskLabelItem(QGraphicsRectItem):
         if self._tl_scene._locked_task != self._task_name:
             self.setBrush(self._HOVER_BRUSH)
         if self._tooltip_text:
-            _get_popup().show_at(event.screenPos(), self._tooltip_text)
+            _get_popup().show_at(event.screenPos(), self._tooltip_text, host=event.widget())
         super().hoverEnterEvent(event)
         if self._tl_scene._hover_highlight:
             # Defer rebuild so it never runs while this item's event handler is active
@@ -988,7 +1011,7 @@ class _TaskLabelItem(QGraphicsRectItem):
 
     def hoverMoveEvent(self, event):
         if self._tooltip_text:
-            _get_popup().show_at(event.screenPos(), self._tooltip_text)
+            _get_popup().show_at(event.screenPos(), self._tooltip_text, host=event.widget())
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event):
@@ -1212,7 +1235,7 @@ class _BatchStiWaveformItem(QGraphicsItem):
                    f"Core: {best_ev.core}<br>"
                    f"Target: {best_ev.target}<br>"
                    f"Event: {best_ev.event}")
-            _get_popup().show_at(event.screenPos(), tip)
+            _get_popup().show_at(event.screenPos(), tip, host=event.widget())
         else:
             _get_popup().hide()
         super().hoverMoveEvent(event)

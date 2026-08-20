@@ -909,6 +909,8 @@ class TimelineView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
         self._programmatic_viewport = 0
 
         # -- Mouse interaction state -------------------------------------
@@ -3032,7 +3034,44 @@ class TimelineView(QGraphicsView):
 
         super().mousePressEvent(event)
 
+    def _info_popup_should_stay(self, scene_pt) -> bool:
+        """True if the pointer is still over a hover-tip target."""
+        for item in self._scene.items(scene_pt):
+            if isinstance(item, _BatchRowItem):
+                local = item.mapFromScene(scene_pt)
+                return item._hit_seg_index(local) is not None
+            if isinstance(item, (_TaskLabelItem, _BatchStiItem, _BatchStiWaveformItem)):
+                return True
+        return False
+
+    def _sync_info_popup(self, event) -> None:
+        """Hide the segment info box when the pointer is no longer on a tip target.
+
+        Graphics-item hoverLeave is not enough: the ghost time line sits under
+        the cursor, and on WSL a top-level tooltip window can ignore hide().
+        View mouse-moves always fire (mouse tracking is on).
+        """
+        tip = _get_popup()
+        if not tip.isVisible():
+            return
+        if event.buttons() != Qt.MouseButton.NoButton:
+            tip.hide()
+            return
+        try:
+            scene_pt = self.mapToScene(event.position().toPoint())
+        except RuntimeError:
+            tip.hide()
+            return
+        if not self._info_popup_should_stay(scene_pt):
+            tip.hide()
+
     def mouseMoveEvent(self, event) -> None:
+        try:
+            self._mouse_move_impl(event)
+        finally:
+            self._sync_info_popup(event)
+
+    def _mouse_move_impl(self, event) -> None:
         # Dispatch in order of drag states (mutually exclusive):
         #   0. Ctrl+drag measure ruler  (_measure_press_ns is not None)
         #   1. Label-column resize drag  (_label_resize_dragging)
@@ -3206,12 +3245,24 @@ class TimelineView(QGraphicsView):
     def leaveEvent(self, event) -> None:
         if self._scene._trace is not None:
             self._scene.clear_hover_line()
+        _get_popup().hide()
         if self._measure_press_ns is not None:
             self._measure_press_ns = None
             self._scene.clear_measure_ruler()
             self.setDragMode(QGraphicsView.ScrollHandDrag)
         self._set_view_hover_cursor(None)
         super().leaveEvent(event)
+
+    def viewportEvent(self, event):
+        et = event.type()
+        if et in (QEvent.Type.Leave, QEvent.Type.HoverLeave):
+            if not getattr(self, "_dismissing_info_popup", False):
+                self._dismissing_info_popup = True
+                try:
+                    _get_popup().hide()
+                finally:
+                    self._dismissing_info_popup = False
+        return super().viewportEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         # Dispatch in order (first match returns early):

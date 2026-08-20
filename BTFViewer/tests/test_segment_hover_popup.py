@@ -16,8 +16,8 @@ from btf_viewer_pkg._bootstrap import install  # noqa: E402
 
 install()
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt  # noqa: E402
-from PySide6.QtGui import QBrush, QColor, QPen  # noqa: E402
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt  # noqa: E402
+from PySide6.QtGui import QBrush, QColor, QMouseEvent, QPen  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from btf_viewer_pkg.graphics_items import _BatchRowItem  # noqa: E402
@@ -55,17 +55,52 @@ class SegmentHoverPopupTests(unittest.TestCase):
 
     def test_view_leave_hides_info_popup(self) -> None:
         view = TimelineView()
+        view.resize(640, 480)
+        view.show()
+        self.app.processEvents()
         tip = _get_popup()
-        tip.show_at(QPointF(0, 0).toPoint(), "<b>stay</b>")
+        tip.show_at(QPoint(20, 20), "<b>stay</b>", host=view.viewport())
         self.assertTrue(tip.isVisible())
         QApplication.sendEvent(view, QEvent(QEvent.Type.Leave))
         self.assertFalse(tip.isVisible())
-        view.deleteLater()
+        view.close()
+
+    def test_mouse_move_to_empty_hides_info_popup(self) -> None:
+        """Moving to another row / empty area must close the box (not only Leave)."""
+        view = TimelineView()
+        view.resize(640, 480)
+        view.show()
+        self.app.processEvents()
+        tip = _get_popup()
+        tip.show_at(QPoint(20, 20), "<b>stay</b>", host=view.viewport())
+        self.assertTrue(tip.isVisible())
+        ev = QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(400.0, 400.0),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        view.mouseMoveEvent(ev)
+        self.assertFalse(tip.isVisible())
+        view.close()
+
+    def test_parented_popup_is_not_tooltip_window(self) -> None:
+        view = TimelineView()
+        view.show()
+        tip = _get_popup()
+        tip.show_at(QPoint(0, 0), "<b>x</b>", host=view.viewport())
+        self.assertIs(tip.parentWidget(), view.viewport())
+        self.assertFalse(bool(tip.windowFlags() & Qt.WindowType.ToolTip))
+        tip.hide()
+        self.assertFalse(tip.isVisible())
+        view.close()
 
     def test_leave_event_hides_popup_in_source(self) -> None:
         src = (BTF_ROOT / "btf_viewer_pkg" / "view.py").read_text(encoding="utf-8")
         gi = (BTF_ROOT / "btf_viewer_pkg" / "graphics_items.py").read_text(
             encoding="utf-8")
+        self.assertIn("def _sync_info_popup", src)
         self.assertIn("_get_popup().hide()", src)
         self.assertIn("def contains(self, point: QPointF)", gi)
         self.assertIn("def _hit_seg_index", gi)
