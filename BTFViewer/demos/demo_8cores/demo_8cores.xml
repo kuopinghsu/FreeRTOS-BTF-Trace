@@ -281,6 +281,7 @@
       <jump_wcet task="NC[118]"/>
       <wait seconds="2.0" why="WCET jump settle"/>
       <wait_audio/>
+      <clear_highlight/>
       <stats_reset/>
     </step>
 
@@ -288,6 +289,7 @@
       <focus/>
       <zoom_view/>
       <clear_cursors/>
+      <clear_annotations/>
       <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
       <panel name="stats"/>
       <stats_section id="block,priority,preemption" expand="true" collapse_others="true" scroll="block"/>
@@ -316,6 +318,7 @@
       <highlight task="CS[18]"/>
       <wait seconds="2.0"/>
       <wait_audio/>
+      <clear_highlight/>
       <stats_reset/>
     </step>
 
@@ -326,6 +329,7 @@
       <highlight task="SR0"/>
       <audio file="${XML_DIR}/voice/15_compliance.mp3"/>
       <wait_audio/>
+      <clear_highlight/>
       <stats_reset/>
     </step>
 
@@ -341,6 +345,8 @@
 
     <step id="17" title="Export" tags="ui">
       <focus/>
+      <zoom_view/>
+      <move_view time="0"/>
       <panel name="stats"/>
       <wait seconds="0.25"/>
       <move target="stats_export_csv"/>
