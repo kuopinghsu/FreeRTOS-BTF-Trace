@@ -48,7 +48,7 @@ help:
 	@echo "  make web          Web viewer only → builds/btf_viewer.html"
 	@echo "  make bundle       Desktop bundle only → builds/btf_viewer.py"
 	@echo "  make check-bundle Regenerate bundle; fail if it drifts from sources (CI)"
-	@echo "  make doc          Convert README/STATISTICS/AI/WORKFLOWS (Pandoc+Mermaid) and slides (Marp) → builds/*.pdf"
+	@echo "  make doc          Convert README/STATISTICS/AI/WORKFLOWS (Pandoc+Mermaid) → builds/*.pdf"
 	@echo "  make update-images  Regenerate ../images/stats/*.svg via the desktop CLI"
 	@echo "  make demo         Run guided demo via builds/btf_viewer.py (DEMO_XML, DEMO_LANG)"
 	@echo "  make demo-voice   Voice pack status (DEMO_XML). See scripts/demo_voice.py"
@@ -134,7 +134,7 @@ ai-test-context:
 
 ci: test-all check-bundle
 
-doc: $(DOCS)/README.pdf $(DOCS)/STATISTICS.pdf $(DOCS)/AI.pdf $(DOCS)/WORKFLOWS.pdf $(DOCS)/btf-viewer-slides.pdf
+doc: $(DOCS)/README.pdf $(DOCS)/STATISTICS.pdf $(DOCS)/AI.pdf $(DOCS)/WORKFLOWS.pdf
 
 # Use the vendored Eisvogel template (scripts/eisvogel.latex). Do not pass
 # `--template=eisvogel`: pandoc prefers ~/.local/share/pandoc/templates/eisvogel.latex,
@@ -216,18 +216,14 @@ $(DOCS)/WORKFLOWS.pdf: WORKFLOWS.md $(DOC_LUA) scripts/table-layout.tex $(CJK_HE
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF Viewer — Analysis Workflows" $< -o $@
 
-$(DOCS)/btf-viewer-slides.pdf: btf-viewer-slides.md
-	mkdir -p $(DOCS)
-	$(MARP) $< --pdf --allow-local-files -o $@
-
 # Fail if builds/btf_viewer.py drifts from package sources (CI / pre-commit).
 check-bundle: bundle
 	git diff --exit-code $(OUT)
 
 # Regenerate the statistics distribution plots + task-priority timeline crop
-# used as illustrations in README.md / WORKFLOWS.md / btf-viewer-slides.md,
-# headlessly via the desktop CLI `snapshot` command (Statistics -> click row
-# equivalents), sourced from STATS_TRACE (default: example-8cores.btf).
+# used as illustrations in README.md / WORKFLOWS.md, headlessly via the desktop
+# CLI `snapshot` command (Statistics -> click row equivalents), sourced from
+# STATS_TRACE (default: example-8cores.btf).
 update-images: bundle
 	mkdir -p $(STATS_IMG_DIR)
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
