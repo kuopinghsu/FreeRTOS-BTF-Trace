@@ -102,6 +102,10 @@ describe('aiTools', () => {
     assert.equal(toolMutatesGui('add_annotation'), true)
     assert.equal(toolMutatesGui('query_raw_metric'), false)
     assert.equal(toolBatchAutoRuns([{ name: 'query_raw_metric' }]), true)
+    assert.equal(toolBatchAutoRuns([{ name: 'export_report' }]), true)
+    assert.equal(toolBatchAutoRuns([
+      { name: 'generate_report' }, { name: 'export_report' },
+    ]), true)
     assert.equal(toolBatchAutoRuns([
       { name: 'query_raw_metric' }, { name: 'add_annotation' },
     ]), false)
@@ -216,10 +220,20 @@ describe('aiTools', () => {
     assert.match(csv, /spike/)
     const html = buildAiReportHtml({
       meta: { file: 'demo.btf' },
-      gui: { highlight: 'Low[266]' },
-      findings: 'ok',
+      gui: { highlight: 'Low[266]', cursors: [10, 20] },
+      findings: '1. [WARNING] Thrash on Med[267]',
       annotations: [{ time: 1, note: 'n' }],
       conversationHtml: '<p>hi</p>',
+      evidencePayload: {
+        conclusion: 'Med[267] off-CPU',
+        evidence: [
+          { label: 'off-CPU Med[267]', time: 15 },
+          { label: 'outside', time: 99 },
+        ],
+        evidence_quality: { band: 'medium', flags: { direct_evidence: true } },
+        falsify: { next_check: 'Open preemption' },
+      },
+      analysisComplete: true,
     })
     assert.match(html, /AI Diagnostic Report/)
     assert.match(html, /BTFViewer/)
@@ -227,6 +241,13 @@ describe('aiTools', () => {
     assert.match(html, /fill="#1C3A6E"/)
     assert.match(html, /Low\[266\]/)
     assert.match(html, /<p>hi<\/p>/)
+    assert.match(html, /Executive summary/)
+    assert.match(html, /Coverage summary/)
+    assert.match(html, /Appendix/)
+    assert.match(html, /Conversation export/)
+    assert.match(html, /Rejected evidence/)
+    assert.match(html, /In scope/)
+    assert.match(html, /Excluded/)
   })
 
   it('resolves core aliases like CLI Core_0 / 0 / c0', () => {

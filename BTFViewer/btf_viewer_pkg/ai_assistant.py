@@ -44,6 +44,7 @@ from .ai_tools import (
     ensure_gemini_thought_signatures,
     extract_tool_calls,
     empty_chat_completion_error,
+    filter_entries_for_ai_report,
     format_tool_result_content,
     is_export_tool,
     is_query_tool,
@@ -2042,6 +2043,25 @@ def markdown_to_safe_html(text: str, *, as_img: bool = True, is_dark: bool = Tru
             out.append(f"<pre><code{cls}>{code_html}</code></pre>")
             continue
 
+        # Models often omit ```mermaid; bare graph/flowchart/sequenceDiagram.
+        if re.match(r"^(graph|flowchart|sequencediagram)\b", stripped, re.I):
+            _flush_para(para)
+            code_lines = []
+            while i < n:
+                s = lines[i].strip()
+                if not s:
+                    break
+                if s.startswith("```"):
+                    break
+                if code_lines and re.match(r"^(#{1,4}\s+|[-*+]\s+|\d+\.\s+)", s):
+                    break
+                code_lines.append(lines[i])
+                i += 1
+            out.append(mermaid_block_html(
+                "\n".join(code_lines), as_img=as_img, zoomable=as_img,
+                is_dark=is_dark))
+            continue
+
         if not stripped:
             _flush_para(para)
             i += 1
@@ -2294,7 +2314,7 @@ def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str,
 # Visible role labels (panel + Save As). Keep in sync with aiMarkdown.js.
 AI_ROLE_LABEL_USER = "Your prompt"
 AI_ROLE_LABEL_ASSISTANT = "AI Assistant"
-AI_ROLE_LABEL_EVIDENCE = "Evidence / Reasoning"
+AI_ROLE_LABEL_EVIDENCE = "Evidence & Validation"
 
 
 def ai_role_label(
@@ -5093,6 +5113,9 @@ def create_ai_assistant_panel(
             fmt = str(args.get("format") or "html").strip().lower()
             if fmt not in ("html", "csv", "json"):
                 fmt = "html"
+            # Still export while a follow-up turn may be scheduled; the HTML
+            # completeness banner uses analysis_complete below.
+            mid_flight = bool(self._busy)
             gui: Dict[str, Any] = {}
             if on_gui_state:
                 try:
@@ -5117,6 +5140,12 @@ def create_ai_assistant_panel(
             if name == AI_TOOL_EXPORT_INVESTIGATION or fmt == "json":
                 return self._export_investigation_package(args, meta=meta)
             stamp = _ai_file_stamp()
+            report_entries = filter_entries_for_ai_report(self._entries)
+            has_assistant = any(
+                ai_entry_role(e) == "assistant" for e in report_entries
+            )
+            analysis_complete = bool(has_assistant) and (not mid_flight)
+            mode = str(args.get("mode") or args.get("report_mode") or "summary")
             if fmt == "csv":
                 start = f"ai-report-{stamp}.csv"
                 filters = "CSV (*.csv);;All files (*)"
@@ -5125,18 +5154,21 @@ def create_ai_assistant_panel(
                     gui=gui,
                     findings=findings,
                     annotations=annotations,
-                    conversation=format_ai_conversation_text(self._entries),
+                    conversation=format_ai_conversation_text(report_entries),
                 )
             else:
                 start = f"ai-report-{stamp}.html"
                 filters = "HTML (*.html);;All files (*)"
-                conv_html = format_ai_conversation_html_body(self._entries)
+                conv_html = format_ai_conversation_html_body(report_entries)
                 data = build_ai_report_html(
                     meta=meta,
                     gui=gui,
                     findings=findings,
                     annotations=annotations,
                     conversation_html=conv_html,
+                    evidence_payload=getattr(self, "_evidence_payload", None),
+                    analysis_complete=analysis_complete,
+                    report_mode=mode,
                 )
             path, _selected = QFileDialog.getSaveFileName(
                 self, "Export AI Report", start, filters)

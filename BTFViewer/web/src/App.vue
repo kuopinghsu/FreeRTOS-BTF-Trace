@@ -2567,7 +2567,10 @@ const analysisScopeLabel = computed(() => {
 const analysisQuality = computed(() => collectTraceQualityWarnings(trace.value))
 const findingHits = computed(() => findingOverlayTimes(analysisFindings.value || []))
 const taskInspectorText = computed(() => taskInspectorLine(
-  pinnedHighlightKey.value || '',
+  selectedTaskFromHighlight({
+    highlightSegment: highlightSegment.value,
+    pinnedHighlightKey: pinnedHighlightKey.value,
+  }) || '',
   analysisQuality.value,
 ))
 const paletteHits = computed(() => {

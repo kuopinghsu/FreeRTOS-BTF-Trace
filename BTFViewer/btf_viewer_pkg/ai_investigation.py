@@ -92,7 +92,7 @@ _TOOL_STEP_MAP: Dict[str, Tuple[str, ...]] = {
     "summarize_investigation_context": ("validate",),
 }
 
-# Tools whose results refresh the Evidence / Reasoning log. Keep in sync with
+# Tools whose results refresh the Evidence & Validation log. Keep in sync with
 # web/src/utils/aiInvestigation.js EVIDENCE_PANEL_TOOLS.
 EVIDENCE_PANEL_TOOLS: Tuple[str, ...] = (
     "investigate",
@@ -1525,11 +1525,11 @@ def parse_btf_tool_href(href: Any) -> Tuple[str, str]:
     return m.group(1).lower(), (m.group(2) or "")
 
 
-# UI strings for Evidence / Reasoning and plan status. Keep in sync with
+# UI strings for Evidence & Validation and plan status. Keep in sync with
 # web/src/utils/aiInvestigation.js EVIDENCE_PANEL_LABELS.
 EVIDENCE_PANEL_LABELS: Dict[str, Dict[str, str]] = {
     "English": {
-        "role": "Evidence / Reasoning",
+        "role": "Evidence & Validation",
         "evidence": "Evidence",
         "evidence_chain": "Evidence chain",
         "confidence": "Confidence",
@@ -1554,7 +1554,7 @@ EVIDENCE_PANEL_LABELS: Dict[str, Dict[str, str]] = {
         "plausible": "plausible",
     },
     "Traditional Chinese (繁體中文)": {
-        "role": "證據 / 推理",
+        "role": "證據與驗證",
         "evidence": "證據",
         "evidence_chain": "證據鏈",
         "confidence": "置信度",
@@ -1579,7 +1579,7 @@ EVIDENCE_PANEL_LABELS: Dict[str, Dict[str, str]] = {
         "plausible": "可能",
     },
     "Simplified Chinese (简体中文)": {
-        "role": "证据 / 推理",
+        "role": "证据与验证",
         "evidence": "证据",
         "evidence_chain": "证据链",
         "confidence": "置信度",
@@ -1604,7 +1604,7 @@ EVIDENCE_PANEL_LABELS: Dict[str, Dict[str, str]] = {
         "plausible": "可能",
     },
     "Japanese (日本語)": {
-        "role": "根拠 / 推論",
+        "role": "根拠と検証",
         "evidence": "根拠",
         "evidence_chain": "根拠チェーン",
         "confidence": "信頼度",
@@ -1629,7 +1629,7 @@ EVIDENCE_PANEL_LABELS: Dict[str, Dict[str, str]] = {
         "plausible": "妥当",
     },
     "Korean (한국어)": {
-        "role": "증거 / 추론",
+        "role": "증거 및 검증",
         "evidence": "증거",
         "evidence_chain": "증거 체인",
         "confidence": "신뢰도",
@@ -1654,7 +1654,7 @@ EVIDENCE_PANEL_LABELS: Dict[str, Dict[str, str]] = {
         "plausible": "가능",
     },
     "German": {
-        "role": "Belege / Begründung",
+        "role": "Belege & Validierung",
         "evidence": "Belege",
         "evidence_chain": "Belegkette",
         "confidence": "Vertrauen",
@@ -1679,7 +1679,7 @@ EVIDENCE_PANEL_LABELS: Dict[str, Dict[str, str]] = {
         "plausible": "plausibel",
     },
     "French": {
-        "role": "Preuves / Raisonnement",
+        "role": "Preuves et validation",
         "evidence": "Preuves",
         "evidence_chain": "Chaîne de preuves",
         "confidence": "Confiance",
@@ -1704,7 +1704,7 @@ EVIDENCE_PANEL_LABELS: Dict[str, Dict[str, str]] = {
         "plausible": "plausible",
     },
     "Spanish": {
-        "role": "Evidencia / Razonamiento",
+        "role": "Evidencia y validación",
         "evidence": "Evidencia",
         "evidence_chain": "Cadena de evidencia",
         "confidence": "Confianza",
@@ -1735,6 +1735,29 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
     "English": {
         "quality": "Evidence Quality",
         "coverage": "Evidence Coverage",
+        "finding": "Finding",
+        "direct_evidence": "Direct evidence",
+        "interpretation": "Interpretation",
+        "checks": "Checks",
+        "missing_evidence": "Missing evidence",
+        "next_action": "Next action",
+        "investigation_details": "Investigation details",
+        "status": "Status",
+        "status_confirmed": "Confirmed",
+        "status_correlated": "Correlated",
+        "status_suspected": "Suspected",
+        "status_not_observed": "Not observed",
+        "status_insufficient": "Insufficient data",
+        "col_time": "Time",
+        "col_event": "Observed event",
+        "col_task": "Task",
+        "col_core": "Core",
+        "col_duration": "Duration",
+        "check_header": "Check",
+        "observed": "Observed",
+        "not_observed": "Not observed",
+        "not_evaluated": "Not evaluated",
+        "insufficient_evidence": "Insufficient evidence",
         "disprove": "What would disprove this",
         "graph": "Evidence graph",
         "supported": "supported",
@@ -2212,28 +2235,213 @@ def _localize_evidence_token(text: str, labels: Dict[str, str]) -> str:
     return t
 
 
+
+_TASK_IN_LABEL_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9_.-]*\[\d+\])")
+_CORE_IN_LABEL_RE = re.compile(r"\b(?:Core[_\s-]?(\d+)|C(\d+))\b", re.IGNORECASE)
+
+CONCLUSION_STATUSES: Tuple[str, ...] = (
+    "confirmed", "correlated", "suspected", "not_observed", "insufficient",
+)
+
+
+def conclusion_status_from_payload(data: Optional[Dict[str, Any]] = None) -> str:
+    """Map evidence payload fields onto a reader-facing conclusion status."""
+    payload = data if isinstance(data, dict) else {}
+    quality = payload.get("evidence_quality") if isinstance(
+        payload.get("evidence_quality"), dict) else {}
+    band = str(quality.get("band") or "").strip().lower()
+    flags = quality.get("flags") if isinstance(quality.get("flags"), dict) else {}
+    evidence = [e for e in (payload.get("evidence") or []) if isinstance(e, dict)]
+    checks = [c for c in (payload.get("checks") or []) if isinstance(c, dict)]
+    validation = payload.get("validation") if isinstance(
+        payload.get("validation"), dict) else {}
+    conf = str(payload.get("confidence") or "").strip().lower()
+
+    if band == "insufficient":
+        return "insufficient"
+    if not evidence and not str(payload.get("conclusion") or "").strip():
+        return "insufficient"
+    if not evidence and checks and all(
+        str(c.get("status") or "").lower() in (
+            "not observed", "not_observed", "absent", "none", "")
+        for c in checks
+    ):
+        return "not_observed"
+    if band == "strong" and (flags.get("direct_evidence") or evidence):
+        if validation and validation.get("ok") is False:
+            return "suspected"
+        return "confirmed"
+    if band in ("medium-high", "medium") and evidence:
+        return "correlated"
+    if conf in ("high",) and evidence and band in ("strong", "medium-high", ""):
+        if band == "insufficient":
+            return "insufficient"
+        return "confirmed" if band == "strong" else "correlated"
+    if evidence or str(payload.get("conclusion") or "").strip():
+        return "suspected"
+    return "insufficient"
+
+
+def _format_evidence_duration(start: Any, stop: Any) -> str:
+    try:
+        lo = float(start)
+        hi = float(stop)
+    except (TypeError, ValueError):
+        return ""
+    if not (hi > lo):
+        return ""
+    delta = hi - lo
+    # Prefer µs for sub-second spans; otherwise seconds.
+    if delta < 1.0:
+        return f"{delta * 1_000_000:.0f} µs"
+    if delta < 1000.0:
+        return f"{delta:.6g} s"
+    return f"{delta:.0f}"
+
+
+def _evidence_row_fields(ev: dict) -> Tuple[str, str, str, str, str]:
+    label = str(ev.get("label") or "").strip() or "item"
+    task = str(ev.get("task") or "").strip()
+    core = str(ev.get("core") or "").strip()
+    if not task:
+        m = _TASK_IN_LABEL_RE.search(label)
+        if m:
+            task = m.group(1)
+    if not core:
+        m = _CORE_IN_LABEL_RE.search(label)
+        if m:
+            core = f"Core {m.group(1) or m.group(2)}"
+    start, stop, t = ev.get("start"), ev.get("stop"), ev.get("time")
+    dur = _format_evidence_duration(start, stop)
+    try:
+        s_lo = float(start) if start is not None else None
+        s_hi = float(stop) if stop is not None else None
+    except (TypeError, ValueError):
+        s_lo = s_hi = None
+    if s_lo is not None and s_hi is not None and s_hi > s_lo:
+        time_cell = (
+            f"jump:{_evidence_jump_token(s_lo)}–jump:{_evidence_jump_token(s_hi)}"
+        )
+    elif t is not None:
+        time_cell = f"jump:{_evidence_jump_token(t)}"
+    else:
+        time_cell = "—"
+    return time_cell, label, task or "—", core or "—", dur or "—"
+
+
+def _format_direct_evidence_table(
+    evidence: Sequence[Any], labels: Dict[str, str],
+) -> List[str]:
+    rows = [e for e in evidence if isinstance(e, dict)]
+    if not rows:
+        return []
+    lines = [
+        f"| {labels.get('col_time', 'Time')} "
+        f"| {labels.get('col_event', 'Observed event')} "
+        f"| {labels.get('col_task', 'Task')} "
+        f"| {labels.get('col_core', 'Core')} "
+        f"| {labels.get('col_duration', 'Duration')} |",
+        "| --- | --- | --- | --- | ---: |",
+    ]
+    for ev in rows[:20]:
+        time_cell, label, task, core, dur = _evidence_row_fields(ev)
+        lines.append(f"| {time_cell} | {label} | {task} | {core} | {dur} |")
+    return lines
+
+
+def _coverage_check_rows(
+    coverage: Optional[dict], checks: Sequence[Any], labels: Dict[str, str],
+) -> List[Tuple[str, str]]:
+    """Build Checks table rows from coverage flags and tool checklist."""
+    out: List[Tuple[str, str]] = []
+    cov = coverage if isinstance(coverage, dict) else {}
+    flags = cov.get("flags") if isinstance(cov.get("flags"), dict) else {}
+    # Prefer explicit checklist entries when present.
+    for c in checks:
+        if not isinstance(c, dict):
+            continue
+        name = str(c.get("label") or c.get("metric") or labels.get("check", "check"))
+        status = _localize_evidence_token(str(c.get("status") or ""), labels)
+        detail = str(c.get("detail") or "").strip()
+        cell = status if not detail else f"{status} — {detail}"
+        out.append((name, cell or labels.get("not_evaluated", "Not evaluated")))
+    if out:
+        return out
+    mapping = [
+        ("directly_observed", labels.get("coverage_observed", "Blocking/off-CPU")),
+        ("timeline_verified", labels.get("coverage_timeline", "Timeline")),
+        ("metric_verified", labels.get("coverage_metric", "Metric")),
+    ]
+    observed = labels.get("observed", "Observed")
+    not_obs = labels.get("not_observed", "Not observed")
+    insuff = labels.get("insufficient_evidence", "Insufficient evidence")
+    if cov.get("directly_observed") is not None or flags:
+        # Count-style coverage from compute_evidence_coverage
+        for key, title in (
+            ("directly_observed", labels.get("coverage_observed", "Directly observed")),
+            ("timeline_verified", labels.get("coverage_timeline", "Timeline verified")),
+            ("metric_verified", labels.get("coverage_metric", "Metric verified")),
+            ("unverified_assumptions", labels.get(
+                "coverage_unverified", "Unverified assumptions")),
+        ):
+            val = cov.get(key)
+            if val is None:
+                continue
+            try:
+                n = int(val)
+            except (TypeError, ValueError):
+                out.append((title, str(val)))
+                continue
+            if key == "unverified_assumptions":
+                cell = insuff if n > 0 else observed
+            else:
+                cell = observed if n > 0 else not_obs
+            out.append((title, cell))
+        return out
+    qflags = flags
+    # quality flags reused if coverage empty — caller may pass quality.flags
+    return out
+
+
 def format_evidence_panel_markdown(
     data: Optional[Dict[str, Any]],
     response_language: str = "English",
 ) -> str:
-    """Markdown for Evidence / Reasoning (panel + conversation log + export)."""
+    """Markdown for Evidence & Validation (panel + conversation log + export)."""
     if not isinstance(data, dict):
         return ""
     labels = evidence_panel_labels(response_language)
     lines: List[str] = []
+    details: List[str] = []
+
+    status_key = conclusion_status_from_payload(data)
+    status_label = {
+        "confirmed": labels.get("status_confirmed", "Confirmed"),
+        "correlated": labels.get("status_correlated", "Correlated"),
+        "suspected": labels.get("status_suspected", "Suspected"),
+        "not_observed": labels.get("status_not_observed", "Not observed"),
+        "insufficient": labels.get("status_insufficient", "Insufficient data"),
+    }.get(status_key, labels.get("status_suspected", "Suspected"))
+    lines.append(f"**{labels.get('status', 'Status')}:** {status_label}")
+
     conclusion = _localize_evidence_token(
         str(data.get("conclusion") or "").strip(), labels)
     if conclusion:
-        lines.append(f"**{conclusion}**")
+        lines.append("")
+        lines.append(f"**{labels.get('finding', 'Finding')}**")
+        lines.append(conclusion)
     subtitle = str(data.get("subtitle") or "").strip()
-    if subtitle:
+    # Subtitle that is only a mode/scope tag stays under Finding as a short line.
+    if subtitle and not data.get("evidence_chain"):
         lines.append(subtitle[:320])
+
     interpreted = data.get("interpreted")
     if isinstance(interpreted, dict) and (
         interpreted.get("interpreted_question") or interpreted.get("scope")
     ):
         lines.append("")
         lines.append(format_scope_action_links(interpreted, labels))
+
     experiment = data.get("experiment")
     if isinstance(experiment, dict) and experiment.get("result"):
         lines.append("")
@@ -2250,103 +2458,165 @@ def format_evidence_panel_markdown(
             f"[{labels.get('save_knowledge', 'Save to knowledge')}]"
             f"({btf_exp_href('save', 'all')})"
         )
+
     evidence = data.get("evidence") or []
-    if evidence:
+    table = _format_direct_evidence_table(evidence, labels)
+    if table:
         lines.append("")
-        lines.append(f"**{labels['evidence']}**")
-        for ev in evidence:
-            if not isinstance(ev, dict):
-                continue
-            label = str(ev.get("label") or labels["item"])
-            start, stop = ev.get("start"), ev.get("stop")
-            t = ev.get("time")
-            try:
-                s_lo = float(start) if start is not None else None
-                s_hi = float(stop) if stop is not None else None
-            except (TypeError, ValueError):
-                s_lo = s_hi = None
-            if s_lo is not None and s_hi is not None and s_hi > s_lo:
-                lines.append(
-                    f"- {label} range:{_evidence_jump_token(s_lo)}/"
-                    f"{_evidence_jump_token(s_hi)}"
-                )
-            elif t is not None:
-                token = _evidence_jump_token(t)
-                lines.append(f"- {label} jump:{token}")
-            else:
-                lines.append(f"- {label}")
+        lines.append(f"**{labels.get('direct_evidence', labels['evidence'])}**")
+        lines.extend(table)
+
     chain = str(data.get("evidence_chain") or "").strip()
     if chain:
         lines.append("")
-        lines.append(f"**{labels['evidence_chain']}**")
+        lines.append(f"**{labels.get('interpretation', labels['evidence_chain'])}**")
         lines.append(chain)
-    conf = data.get("confidence")
-    if conf:
+    elif subtitle and data.get("evidence"):
+        # Prefer interpretation wording when we only have a free-text subtitle.
+        pass
+
+    checks = [c for c in (data.get("checks") or []) if isinstance(c, dict)]
+    coverage = data.get("coverage") if isinstance(data.get("coverage"), dict) else {}
+    check_rows = _coverage_check_rows(coverage, checks, labels)
+    if not check_rows:
+        quality = data.get("evidence_quality") if isinstance(
+            data.get("evidence_quality"), dict) else {}
+        qflags = quality.get("flags") if isinstance(quality.get("flags"), dict) else {}
+        if qflags:
+            mapping = [
+                ("direct_evidence", labels.get("quality_direct", "Direct evidence"),
+                 labels.get("observed", "Observed"),
+                 labels.get("not_observed", "Not observed")),
+                ("timeline_correlation", labels.get(
+                    "quality_timeline", "Timeline correlation"),
+                 labels.get("observed", "Observed"),
+                 labels.get("not_observed", "Not observed")),
+                ("metric_correlation", labels.get(
+                    "quality_metric", "Metric correlation"),
+                 labels.get("observed", "Observed"),
+                 labels.get("not_observed", "Not observed")),
+            ]
+            for fk, title, yes, no in mapping:
+                val = qflags.get(fk)
+                if val is True:
+                    check_rows.append((title, yes))
+                elif val is False:
+                    check_rows.append((title, no))
+                elif val is not None:
+                    check_rows.append((
+                        title,
+                        _localize_evidence_token(str(val), labels),
+                    ))
+    if check_rows:
+        lines.append("")
+        lines.append(f"**{labels.get('checks', labels.get('checklist', 'Checks'))}**")
+        lines.append(
+            f"| {labels.get('check_header', 'Check')} "
+            f"| {labels.get('status', 'Status')} |"
+        )
+        lines.append("| --- | --- |")
+        for name, cell in check_rows[:12]:
+            lines.append(f"| {name} | {cell} |")
+
+    hyps_m = [h for h in (data.get("hypotheses_managed") or []) if isinstance(h, dict)]
+    alts = [a for a in (data.get("alternatives") or []) if isinstance(a, dict)]
+    alt_src = hyps_m or alts
+    if alt_src:
+        lines.append("")
+        lines.append(f"**{labels['alternatives']}**")
+        for h in alt_src[:8]:
+            hyp = str(h.get("hypothesis") or "").strip()
+            if not hyp:
+                continue
+            status = _localize_evidence_token(
+                str(h.get("status") or "needs_evidence"), labels)
+            why = str(h.get("why") or "").strip()
+            # Omit artificial percentage probabilities in the default view.
+            hid = str(h.get("id") or "")
+            actions = format_hypothesis_action_links(hid, labels) if hid else ""
+            bit = f"- *{hyp}* ({status})"
+            if why:
+                bit += f" — {why}"
+            if actions:
+                bit += f" {actions}"
+            lines.append(bit)
+        if hyps_m:
+            lines.append(
+                f"[{labels.get('compare_action', 'Compare hypotheses')}]"
+                f"({btf_hyp_href('compare', 'all')})"
+            )
+
+    falsify = data.get("falsify") if isinstance(data.get("falsify"), dict) else {}
+    supporting = [s for s in (falsify.get("supporting") or []) if s]
+    disprove = [
+        s for s in (falsify.get("disprove") or falsify.get("would_disprove") or [])
+        if s
+    ]
+    if disprove:
+        lines.append("")
+        lines.append(f"**{labels.get('missing_evidence', 'Missing evidence')}**")
+        for s in disprove:
+            lines.append(f"- {s}")
+    nxt = str(falsify.get("next_check") or "").strip()
+    if nxt:
         lines.append("")
         lines.append(
-            f"**{labels['confidence']}:** "
-            f"{_localize_evidence_token(str(conf), labels)}"
+            f"**{labels.get('next_action', labels.get('next_check', 'Next action'))}:** "
+            f"{nxt}"
         )
+
+    # --- Investigation details (secondary / debug chrome) -----------------
+    if supporting:
+        details.append(f"**{labels.get('supporting', 'Supporting evidence')}**")
+        for s in supporting:
+            details.append(f"- {s}")
+    conf = data.get("confidence")
+    if conf:
+        # Do not promote High confidence when status is Insufficient.
+        show_conf = not (
+            status_key == "insufficient"
+            and str(conf).strip().lower() in ("high", labels.get("high", "High").lower())
+        )
+        if show_conf:
+            details.append(
+                f"**{labels['confidence']}:** "
+                f"{_localize_evidence_token(str(conf), labels)}"
+            )
     score = data.get("evidence_score")
     quality = data.get("evidence_quality")
     if isinstance(quality, dict) and quality.get("bar"):
-        lines.append("")
-        lines.append(f"**{labels.get('quality', labels['score'])}:** {quality['bar']}")
-        lines.extend(format_quality_flag_lines(quality, labels))
+        details.append(
+            f"**{labels.get('quality', labels['score'])}:** {quality['bar']}"
+        )
+        details.extend(format_quality_flag_lines(quality, labels))
     elif score is not None:
         bar = str(data.get("evidence_score_bar") or "")
-        lines.append("")
-        lines.append(f"**{labels['score']}:** {bar}")
-    coverage = data.get("coverage")
+        details.append(f"**{labels['score']}:** {bar}")
     if isinstance(coverage, dict) and coverage.get("bar"):
-        lines.append("")
-        lines.append(
+        details.append(
             f"**{labels.get('coverage', 'Evidence Coverage')}:** {coverage['bar']}"
         )
-        lines.extend(format_coverage_count_lines(coverage, labels))
-    falsify = data.get("falsify")
-    if isinstance(falsify, dict):
-        supporting = [s for s in (falsify.get("supporting") or []) if s]
-        disprove = [
-            s for s in (
-                falsify.get("disprove") or falsify.get("would_disprove") or []
-            ) if s
-        ]
-        if supporting:
-            lines.append("")
-            lines.append(f"**{labels.get('supporting', 'Supporting evidence')}**")
-            for s in supporting:
-                lines.append(f"- {s}")
-        if disprove:
-            lines.append("")
-            lines.append(f"**{labels.get('disprove', 'What would disprove this')}**")
-            for s in disprove:
-                lines.append(f"- {s}")
-        nxt = str(falsify.get("next_check") or "").strip()
-        if nxt:
-            lines.append("")
-            lines.append(f"**{labels.get('next_check', 'Recommended next check')}:** {nxt}")
+        details.extend(format_coverage_count_lines(coverage, labels))
     hk = data.get("historical_knowledge")
     if isinstance(hk, dict) and (
         hk.get("previous_issue") or hk.get("message") or hk.get("flags")
     ):
-        lines.append("")
-        lines.append(f"**{labels.get('historical', 'Historical knowledge')}**")
+        details.append(f"**{labels.get('historical', 'Historical knowledge')}**")
         issue = str(hk.get("previous_issue") or "").strip()
         if issue:
-            lines.append(
+            details.append(
                 f"- {labels.get('previous_issue', 'Previous issue')}: {issue}"
             )
         fix = str(hk.get("known_fix") or "").strip()
         if fix:
-            lines.append(f"- {labels.get('known_fix', 'Known fix')}: {fix}")
+            details.append(f"- {labels.get('known_fix', 'Known fix')}: {fix}")
         occ = str(hk.get("last_occurrence") or "").strip()
         if occ:
-            lines.append(
+            details.append(
                 f"- {labels.get('last_occurrence', 'Last occurrence')}: {occ}"
             )
         for flag in (hk.get("flags") or [])[:4]:
-            lines.append(f"- {flag}")
+            details.append(f"- {flag}")
         typical = hk.get("typical") if isinstance(hk.get("typical"), dict) else {}
         current = hk.get("current") if isinstance(hk.get("current"), dict) else {}
         for key in ("migrations", "migration_rate", "blocking", "wcet"):
@@ -2354,46 +2624,40 @@ def format_evidence_panel_markdown(
                 t = typical.get(key)
                 c = current.get(key)
                 if t is not None:
-                    lines.append(
+                    details.append(
                         f"- {labels.get('typical_rate', 'Typical rate')} ({key}): {t:g}"
                     )
                 if c is not None:
-                    lines.append(
+                    details.append(
                         f"- {labels.get('current_rate', 'Current')} ({key}): {c:g}"
                     )
         msg = str(hk.get("message") or "").strip()
         if msg and msg not in ("No historical match", "Within historical range"):
-            lines.append(f"- {msg}")
+            details.append(f"- {msg}")
     validation = data.get("validation")
     if isinstance(validation, dict) and not validation.get("ok", True):
         n = int(validation.get("unverified") or len(validation.get("issues") or []))
-        lines.append("")
-        lines.append(
+        details.append(
             f"**{labels.get('validation', 'Validation')}:** "
             f"{n} {labels.get('unverified', 'unverified claims')}"
         )
         for issue in (validation.get("issues") or [])[:6]:
             if isinstance(issue, dict):
-                lines.append(
-                    f"- {issue.get('kind')}: {issue.get('detail')}"
-                )
+                details.append(f"- {issue.get('kind')}: {issue.get('detail')}")
         for flag in (validation.get("flags") or [])[:6]:
-            lines.append(f"- {flag}")
+            details.append(f"- {flag}")
     cost = str(data.get("cost") or "").strip()
     if cost:
-        lines.append("")
-        lines.append(f"**{labels.get('cost', 'Investigation cost')}:** {cost}")
+        details.append(f"**{labels.get('cost', 'Investigation cost')}:** {cost}")
     evo = str(data.get("confidence_evolution") or "").strip()
     if evo:
-        lines.append("")
-        lines.append(f"**{labels.get('evolution', 'Confidence evolution')}**")
+        details.append(f"**{labels.get('evolution', 'Confidence evolution')}**")
         for line in evo.splitlines():
             if line.strip():
-                lines.append(f"- {line.strip()}")
+                details.append(f"- {line.strip()}")
     reasons = data.get("tool_reasons") or []
     if reasons:
-        lines.append("")
-        lines.append(f"**{labels.get('investigation', 'Investigation')}**")
+        details.append(f"**{labels.get('investigation', 'Investigation')}**")
         for r in reasons:
             if not isinstance(r, dict):
                 continue
@@ -2404,67 +2668,30 @@ def format_evidence_panel_markdown(
                     f"[{labels.get('why_action', 'Why?')}]"
                     f"({btf_tool_href('why', tool)})"
                 )
-                lines.append(f"- {tool}: {why} {why_link}")
-    hyps_m = data.get("hypotheses_managed") or []
-    if hyps_m:
-        lines.append("")
-        lines.append(f"**{labels['alternatives']}**")
-        for h in hyps_m:
-            if not isinstance(h, dict):
-                continue
-            hyp = str(h.get("hypothesis") or "")
-            status = _localize_evidence_token(
-                str(h.get("status") or "needs_evidence"), labels)
-            why = str(h.get("why") or "")
-            conf = h.get("confidence")
-            extra = f" {conf}%" if conf is not None else ""
-            hid = str(h.get("id") or "")
-            actions = format_hypothesis_action_links(hid, labels)
-            lines.append(f"- *{hyp}* ({status}{extra}) — {why} {actions}")
-        lines.append(
-            f"[{labels.get('compare_action', 'Compare hypotheses')}]"
-            f"({btf_hyp_href('compare', 'all')})"
-        )
-    alts = data.get("alternatives") or []
-    if alts and not hyps_m:
-        lines.append("")
-        lines.append(f"**{labels['alternatives']}**")
-        for alt in alts:
-            if not isinstance(alt, dict):
-                continue
-            hyp = str(alt.get("hypothesis") or "")
-            status = _localize_evidence_token(
-                str(alt.get("status") or "untested"), labels)
-            why = str(alt.get("why") or "")
-            lines.append(f"- *{hyp}* ({status}) — {why}")
-    checks = data.get("checks") or []
-    if checks:
-        lines.append("")
-        lines.append(f"**{labels['checklist']}**")
-        for c in checks:
-            if not isinstance(c, dict):
-                continue
-            label = str(c.get("label") or c.get("metric") or labels["check"])
-            status = _localize_evidence_token(str(c.get("status") or ""), labels)
-            detail = str(c.get("detail") or "")
-            lines.append(f"- {label}: {status} — {detail}")
+                details.append(f"- {tool}: {why} {why_link}")
     root_chain = data.get("root_cause_chain") or []
     hyps = data.get("hypotheses") or []
     if root_chain or hyps:
         tree_src = investigation_tree_mermaid(root_chain, hyps)
         if tree_src:
-            lines.append("")
-            lines.append(f"**{labels['tree']}**")
-            lines.append("```mermaid")
-            lines.append(tree_src.rstrip())
-            lines.append("```")
+            details.append(f"**{labels['tree']}**")
+            details.append("```mermaid")
+            details.append(tree_src.rstrip())
+            details.append("```")
     graph_src = str(data.get("graph_mermaid") or "").strip()
     if graph_src:
+        details.append(f"**{labels.get('graph', 'Evidence graph')}**")
+        details.append("```mermaid")
+        details.append(graph_src)
+        details.append("```")
+
+    if details:
         lines.append("")
-        lines.append(f"**{labels.get('graph', 'Evidence graph')}**")
-        lines.append("```mermaid")
-        lines.append(graph_src)
-        lines.append("```")
+        lines.append(
+            f"**▸ {labels.get('investigation_details', 'Investigation details')}**"
+        )
+        lines.extend(details)
+
     return "\n".join(lines).strip()
 
 

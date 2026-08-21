@@ -89,7 +89,7 @@ AI 可以解釋證據、找出關聯、排序可能原因、檢查假設，也�
 - **Clear** 會清除對話、重設使用量資訊，並清除目前的 investigation。
 - Usage bar 會顯示例如 **Context: Compact · 4.6k tok · 3 tools · 12s**，依序代表 Context mode、Token 數、工具數量與模型執行時間。可在 **Settings → AI → Context** 選擇 **Compact、Balanced（預設）或 Full evidence**。
 - 非空白的 investigation 會在重新啟動後還原。若紀錄為空或已執行 Clear，則不會還原 Current Issue card。
-- 唯讀工具（read-only tools）會立即執行。會修改 GUI 的動作則會等待使用者按下 **Apply**；若啟用 **Auto-apply GUI actions**，則會自動套用。Export 一律會開啟儲存對話框。
+- 唯讀工具與 `export_report` / `export_investigation` 會立即執行。會修改 GUI 的動作則會等待使用者按下 **Apply**；若啟用 **Auto-apply GUI actions**，則會自動套用。Desktop 匯出開啟儲存對話框；Web 則直接下載檔案。
 
 至少開啟兩份 Trace 後，工具列上的 **Compare** 才會啟用。**Query with AI…** 傳送的是 Trace Compare 表格，而不是目前的 Findings。**Save as baseline** 與 **Score vs baseline** 使用與 `baseline_score` 相同的已儲存 profile。按下 **Ctrl+K** 可快速存取 Analysis、AI、Compare、Workspace Preset 與 Inspect task。
 
@@ -140,7 +140,7 @@ flowchart TD
   entry --> region["Explain this region with AI / Explain region"]
   entry --> event["Ask AI about this event - 分析單一 Segment"]
   entry --> cmpQuery["工具列 Compare / Query with AI - 比較兩個分頁"]
-  triage --> apply["4. Apply GUI Cards<br/>jump:TIME / Evidence / Reasoning"]
+  triage --> apply["4. Apply GUI Cards<br/>jump:TIME / Evidence & Validation"]
   verify --> apply
   region --> apply
   event --> apply
@@ -175,7 +175,7 @@ flowchart TD
 | 7 | `rank_root_causes` / `challenge_conclusion` | 在執行 `what_if` 前先排序原因並檢查替代解釋 |
 | 8 | `find_related_findings` / `compare_tasks` | 尋找相關 Finding，或並排比較工作差異 |
 | 9 | `set_cursors` / `zoom_to_range` / `highlight_task` / `bookmark_finding` | 縮小 Timeline 範圍；未啟用 Auto-apply 時需 Apply Cursor。可點選 Critical Path 證據中的 `range:LO/HI` / `btfrange:` |
-| 10 | Evidence panel | 查看 Investigation Tree、**Evidence Quality** 與可推翻結論的條件 |
+| 10 | Evidence & Validation panel | Status、直接證據表、Checks、Missing evidence、Next action；詳細區放 quality/cost/trees |
 | 11 | `investigation_replay` / `generate_report` / `export_investigation` | 結構化完成分析；可選擇使用 `export_report` |
 
 **Root cause** 會針對排名最高的 Finding，依序檢查 **Deadline/WCET → Preemption → Blocking → Mutex → Inheritance → Migration**。如果 Triage 已經指出可疑工作，適合直接使用這個功能。
@@ -306,7 +306,7 @@ AI 的輸出是對量測證據的解讀。接受結論前，應先確認 Evidenc
 - 證據品質（Evidence Quality）：**Directly observed、Strong correlation、Possible explanation 或 Insufficient evidence**。
 - 其他可能的解釋，以及哪些證據可以推翻目前的結論。
 
-**Evidence** 面板會顯示 Investigation Tree、Evidence Graph、Coverage、Hypotheses，以及 Evidence Quality band。這個 band 是用於診斷的啟發式指標，**不是機率值**。AI 完成最後回覆後，Host Validator 會標示不存在的工作名稱，以及落在 Cursor Window 之外的時間戳記。
+**Evidence & Validation** 面板會顯示結論 **Status**、可點擊的 **Direct evidence** 表、**Interpretation**、**Checks**、替代解釋、**Missing evidence**、以及一個 **Next action**。品質 band、成本、工具理由與調查樹放在 **Investigation details**。Evidence Quality band 是用於診斷的啟發式指標，**不是機率值**。AI 完成最後回覆後，Host Validator 會標示不存在的工作名稱，以及落在 Cursor Window 之外的時間戳記。
 
 建議優先使用內建 Template。這些 Template 已選好相關指標與 Statistics 頁面。必要時也可以使用自然語言，例如「find STI wait around TaskA」；Host 會將這類問題導向 `search_timeline`。
 
@@ -464,7 +464,7 @@ Live `ai-test` 預設使用 **Full evidence**。使用 **`--compare-context`** �
 
 ## AI 工具參考（AI tools reference）
 
-Read-only Evidence Tool 會立即執行；會修改 GUI 的工具則會等待使用者按下 **Apply**，除非已啟用 **Auto-apply GUI actions**。
+Read-only Evidence Tool 與 Export Tool（`export_report`、`export_investigation`）會立即執行；會修改 GUI 的工具則會等待使用者按下 **Apply**，除非已啟用 **Auto-apply GUI actions**。
 
 完整工具名稱與參數請參閱下方的 [Complete GUI tool reference](#complete-gui-tool-reference)。
 
@@ -569,7 +569,7 @@ flowchart TD
 | 檢查 Priority Inversion 證據 | `detect_priority_inversion` |
 | 評估 Investigation 品質 | `score_investigation` |
 
-Evidence Panel 會補充顯示 Evidence Quality、Coverage、可以推翻結論的條件，以及 Investigation Tree。
+Evidence & Validation 面板會補充顯示 Status、直接證據表、Checks、Missing evidence、Next action，以及 Investigation details（quality、成本、調查樹）。
 
 ### 5. Compare —「改變了什麼？」
 
@@ -623,11 +623,13 @@ flowchart TD
 | 目的 | 主要工具 |
 | --- | --- |
 | 產生結構化 Engineering Text | `generate_report` |
-| 儲存報告 | `export_report` |
+| 儲存診斷報告 | `export_report`（HTML 以摘要為主；對話在附錄） |
 | 儲存完整 Investigation Case | `export_investigation` |
 | Replay／摘要 Investigation | `investigation_replay`、`summarize_investigation_context` |
 | 記住類似案例 | `investigation_memory`、`find_similar_investigations` |
 | 結束 Case | `close_investigation` |
+
+HTML `export_report` 會產生**診斷報告**：Executive summary（狀態與完成度）、Coverage、Ranked findings、Observation vs Interpretation、範圍內 Evidence 表、Next action。Conversation、GUI state、超出 Cursor 的證據與 metadata 放在可展開的 **Appendix**。Query／export 批次會立即執行（不必按 Apply）；若回合仍在進行，HTML 會標示 **Analysis incomplete**。可選 `mode`：`summary`（預設）、`technical`、`full`。
 
 <a id="complete-gui-tool-reference" name="complete-gui-tool-reference">&#x200B;</a>
 ### 完整 GUI 工具參考（Complete GUI tool reference）
@@ -643,7 +645,7 @@ flowchart TD
 | `open_corridor_inspector` | 可選 `core_from` / `core_to`（`Core_0`、`0`、`c0`、`Core 0`） | 開啟 Migration Inspector；不同 Alias 使用相同解析方式 |
 | `add_annotation` | `time`, `note`（≤240 字元） | 在指定時間點加入橘色 Timeline Note；目前右側 Panel Tab 不會切換 |
 | `query_raw_metric` | `task`, `metric`（`priority_inheritance`, `execution`, `migrations`, `blocking`, `sync`, `findings`） | Read-only：回傳目前 Statistics Scope 中指定工作的 Series，最多 40 Rows |
-| `export_report` | 可選 `format`（`html` / `csv` / `json`） | 匯出 HTML/CSV/JSON，包含 Analysis Findings、Chat 中的 Mermaid Diagram、Annotations 與 GUI State（Cursor / Highlight / View）。`json` 會儲存完整 Investigation Package，參閱 `export_investigation` |
+| `export_report` | 可選 `format`（`html` / `csv` / `json`）、可選 `mode`（`summary` / `technical` / `full`） | HTML 診斷報告：Executive summary、Coverage、Ranked findings、範圍內 Evidence、Next action；Conversation／GUI／Rejected evidence 放在 `<details>` 附錄。立即執行（不必 Apply）。進行中仍會下載，並在 HTML 標示 **Analysis incomplete**。會剔除 `export_report` tool cards。`json` 儲存完整 Investigation Package，參閱 `export_investigation` |
 | `clear_marks` | 可選 `what`（`annotations` / `cursors` / `bookmarks` / `all` / `everything`） | 清除 AI 產生的標記。`all`（預設）清除 Annotation + Cursor；`everything` 也會清除 Bookmark |
 | `reset_view` | 無 | 將 Timeline Fit 回完整範圍並清除 Task Highlight；Mark 保留 |
 | `search_timeline` | `query`；可選 `mode`（`contains` / `exact` / `regex` / `sti` / `tags` / `intervals` / `lifecycle` / `pointers` / `migrations`） | Find Panel Search；回傳最多 40 個符合條件的 Timestamp |
@@ -1449,7 +1451,7 @@ Diagram 會配合目前的 Light / Dark Theme；**Save As…** 匯出的 HTML �
 - 點選 **Core Node**（`Core_0`、`C0`、`C1`）：切換到 Core View，並捲動至該 Core。
 - Mutex Hex 與其他無法解析的 Label：不執行任何動作，Timeline 不會被淡化。
 - 點選 Figure 空白區域：開啟較大的 Zoom Window。Scroll 可縮放 0.5–6×；按 **Esc** 或 **Close** 關閉。Trackpad Pinch 會視為 Scroll。
-- Figure 下方的 Link Row 使用相同 Target。
+- Figure 下方的 Link Row 只列出 `jump:TIME` 與可解析的 Task／Core 名稱，不會列出 Finding 標題、Hypothesis 或圖節點 id（`F`、`C0`…）。
 - **Save As…** HTML 會保留可點選 Node 的 Inline SVG，但不包含 Chat Zoom Wrapper。
 
 ---

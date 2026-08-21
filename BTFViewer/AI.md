@@ -98,7 +98,7 @@ AI can explain evidence, find correlations, rank possible causes, challenge assu
 - **Clear** removes the conversation, resets usage, and clears the current investigation.
 - The usage bar shows **Context: Compact · 4.6k tok · 3 tools · 12s** (mode, tokens, tools, and model time). **Settings → AI → Context** chooses Compact, Balanced (default), or Full evidence.
 - A non-empty `investigation_session` restores after restart only when the log still has a user or assistant turn. An empty or cleared log does not restore a Current Issue card.
-- Read-only tools run immediately. GUI-changing actions wait for **Apply** unless **Auto-apply GUI actions** is enabled. Exports always open a save dialog.
+- Read-only tools and `export_report` / `export_investigation` run immediately. GUI-changing actions wait for **Apply** unless **Auto-apply GUI actions** is enabled. Desktop exports open a save dialog; the web app downloads the file.
 
 Toolbar **Compare** becomes available when at least two traces are open. **Query with AI…** sends the Trace Compare tables rather than the current Findings. **Save as baseline** and **Score vs baseline** use the same stored profile as `baseline_score`. **Ctrl+K** provides quick access to Analysis, AI, Compare, workspace presets, and Inspect task.
 
@@ -149,7 +149,7 @@ flowchart TD
   entry --> region[Explain this region with AI / Explain region]
   entry --> event[Ask AI about this event — segment]
   entry --> cmpQuery[Toolbar Compare → Query with AI… — two tabs]
-  triage --> apply["④ Apply GUI cards → jump:TIME → Evidence / Reasoning"]
+  triage --> apply["④ Apply GUI cards → jump:TIME → Evidence & Validation"]
   verify --> apply
   region --> apply
   event --> apply
@@ -186,7 +186,7 @@ Use these workflows after you have selected the task, finding, or time window to
 | 7    | `rank_root_causes` / `challenge_conclusion`                             | Rank then alternatives before `what_if`                                                                                  |
 | 8    | `find_related_findings` / `compare_tasks`                               | Adjacent findings; side-by-side task deltas                                                                              |
 | 9    | `set_cursors` / `zoom_to_range` / `highlight_task` / `bookmark_finding` | Narrow the timeline (Apply cursors unless auto-apply is on); click `range:LO/HI` / `btfrange:` on critical-path evidence |
-| 10   | Evidence panel                                                          | Investigation tree + **Evidence Quality** + what would disprove this                                                     |
+| 10   | Evidence & Validation panel                                             | Status, direct-evidence table, checks, missing evidence, next action; details hold quality/cost/trees                    |
 | 11   | `investigation_replay` / `generate_report` / `export_investigation`     | Structured close-out; optional `export_report`                                                                           |
 
 
@@ -335,15 +335,14 @@ Important conclusions should include:
 - evidence quality: **Directly observed**, **Strong correlation**, **Possible explanation**, or **Insufficient evidence**;
 - alternative explanations and what would disprove the conclusion.
 
-The Evidence panel shows:
+The Evidence & Validation panel shows:
 
-- the investigation tree;
-- the evidence graph;
-- coverage;
-- hypotheses;
-- the Evidence Quality band.
+- conclusion **Status** (Confirmed / Correlated / Suspected / Not observed / Insufficient data);
+- **Finding**, a clickable **Direct evidence** table, and **Interpretation**;
+- **Checks**, alternative explanations, **Missing evidence**, and one **Next action**;
+- **Investigation details** for quality band, cost, tool reasons, and trees.
 
-The Evidence Quality band is a diagnostic heuristic. It is **not a probability**.
+The Evidence Quality band (under Investigation details) is a diagnostic heuristic. It is **not a probability**.
 
 After the final reply, the host validator checks task names and timestamps. It flags unknown task names and timestamps outside the cursor window.
 
@@ -485,7 +484,7 @@ Live `ai-test` defaults to Full evidence. Use **`--compare-context`** to measure
 
 ## AI tools reference
 
-Read-only evidence tools run immediately; GUI-changing tools wait for **Apply** unless **Auto-apply GUI actions** is on. Names and parameters are in [Complete GUI tool reference](#complete-gui-tool-reference) below.
+Read-only evidence tools and export tools (`export_report`, `export_investigation`) run immediately; GUI-changing tools wait for **Apply** unless **Auto-apply GUI actions** is on. Names and parameters are in [Complete GUI tool reference](#complete-gui-tool-reference) below.
 
 It is easier to understand the AI tools by **purpose** than by function name.
 
@@ -601,7 +600,7 @@ flowchart TD
 | Evaluate investigation quality                   | `score_investigation` |
 
 
-The Evidence panel complements these tools with evidence quality, coverage, what would disprove the conclusion, and the investigation tree.
+The Evidence & Validation panel complements these tools with status, a direct-evidence table, checks, missing evidence, next action, and investigation details (quality, cost, trees).
 
 ### 5. Compare — “What changed?”
 
@@ -660,11 +659,13 @@ flowchart TD
 | Goal                                 | Main tools                                                |
 | ------------------------------------ | --------------------------------------------------------- |
 | Generate structured engineering text | `generate_report`                                         |
-| Save a report                        | `export_report`                                           |
+| Save a diagnostic report             | `export_report` (HTML summary first; transcript in appendix) |
 | Save a complete Investigation Case   | `export_investigation`                                    |
 | Replay/summarize the investigation   | `investigation_replay`, `summarize_investigation_context` |
 | Remember similar cases               | `investigation_memory`, `find_similar_investigations`     |
 | Finish the Case                      | `close_investigation`                                     |
+
+HTML `export_report` builds a **diagnostic report**: executive summary (status + completeness), coverage, ranked findings, observation vs interpretation, in-scope evidence table, and next action. Conversation, GUI state, out-of-window evidence, and metadata sit in an expandable **Appendix**. Export runs immediately (query/export batches need no Apply); if a turn is still in flight the HTML marks **Analysis incomplete**. Optional `mode`: `summary` (default), `technical`, or `full` (appendix conversation open).
 
 
 <a id="complete-gui-tool-reference" name="complete-gui-tool-reference">&#x200B;</a>
@@ -683,7 +684,7 @@ The table below is the exhaustive schema reference. Use it when implementing, de
 | `open_corridor_inspector` | optional `core_from` / `core_to` (`Core_0`, `0`, `c0`, `Core 0`)                                                                   | Open Migration Inspector; aliases resolve the same way                                                                                                                                                                                                                                                                               |
 | `add_annotation` | `time`, `note` (≤240 chars)                                                                                                        | Pin an orange timeline note at a timestamp (stays on the current right-panel tab)                                                                                                                                                                                                                                                    |
 | `query_raw_metric` | `task`, `metric` (`priority_inheritance`, `execution`, `migrations`, `blocking`, `sync`, `findings`)                               | Read-only: return the per-task series for the current Statistics scope (up to 40 rows)                                                                                                                                                                                                                                               |
-| `export_report` | optional `format` (`html` / `csv` / `json`)                                                                                        | Download HTML/CSV/JSON bundling Analysis Findings, mermaid diagrams from the chat, annotations, and GUI state (cursors / highlight / view); `json` saves a full investigation package (see `export_investigation`).                                                                                                                  |
+| `export_report` | optional `format` (`html` / `csv` / `json`), optional `mode` (`summary` / `technical` / `full`) | HTML diagnostic report: executive summary, coverage, ranked findings, in-scope evidence, next action; conversation/GUI/rejected evidence in `<details>` appendix. Runs immediately (no Apply). Mid-flight exports still download and mark **Analysis incomplete** in the HTML. Strips `export_report` tool cards from the transcript. `json` saves a full investigation package (see `export_investigation`). |
 | `clear_marks` | optional `what` (`annotations` / `cursors` / `bookmarks` / `all` / `everything`)                                                   | Clear AI clutter. `all` (default) drops annotations + cursors; `everything` also clears bookmarks                                                                                                                                                                                                                                    |
 | `reset_view` | (none)                                                                                                                             | Fit the timeline to the full span and clear the task highlight (marks stay)                                                                                                                                                                                                                                                          |
 | `search_timeline` | `query`; optional `mode` (`contains` / `exact` / `regex` / `sti` / `tags` / `intervals` / `lifecycle` / `pointers` / `migrations`) | Find-panel search; returns matching timestamps (up to 40)                                                                                                                                                                                                                                                                            |
@@ -1334,7 +1335,7 @@ Replies may include Mermaid sequence diagrams for mutex, blocking, and priority 
 - Click a **core** node (`Core_0`, `C0`, `C1`) to switch to Core View and scroll to that core.
 - Mutex hex and other unresolved labels do nothing (the timeline stays undimmed).
 - Click empty figure area to open a larger zoom window (scroll to zoom 0.5–6×; **Esc** or **Close**). Trackpad pinch is treated as scroll.
-- The link row under the figure has the same targets.
+- The link row under the figure lists only `jump:TIME` and resolvable task/core names — not finding titles, hypotheses, or graph node ids (`F`, `C0`, …).
 - **Save As…** HTML keeps inline SVG with clickable nodes (chat zoom wrappers are omitted).
 
 ---

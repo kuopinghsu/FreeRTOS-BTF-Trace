@@ -839,7 +839,7 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertEqual(ai_entry_role(panel._entries[0]), "evidence")
         self.assertIn("jump:3200000", ai_entry_text(panel._entries[0]))
         html = format_ai_conversation_html(panel._entries, "Simplified Chinese (简体中文)")
-        self.assertIn("证据 / 推理", html)
+        self.assertIn("证据与验证", html)
         self.assertIn("jump:3200000", html)
         panel._update_evidence_from_tool_result("investigate", {
             "ok": True,

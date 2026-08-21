@@ -22,6 +22,7 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_TOOL_ADD_ANNOTATION,
     AI_TOOL_CLEAR_MARKS,
     AI_TOOL_EXPORT_REPORT,
+    AI_TOOL_GENERATE_REPORT,
     AI_TOOL_HIGHLIGHT_TASK,
     AI_TOOL_OPEN_CORRIDOR,
     AI_TOOL_QUERY_RAW_METRIC,
@@ -176,6 +177,13 @@ class AiToolsTests(unittest.TestCase):
         self.assertFalse(tool_mutates_gui(AI_TOOL_QUERY_RAW_METRIC))
         self.assertTrue(tool_batch_auto_runs([
             {"name": AI_TOOL_QUERY_RAW_METRIC},
+        ]))
+        self.assertTrue(tool_batch_auto_runs([
+            {"name": AI_TOOL_EXPORT_REPORT},
+        ]))
+        self.assertTrue(tool_batch_auto_runs([
+            {"name": AI_TOOL_GENERATE_REPORT},
+            {"name": AI_TOOL_EXPORT_REPORT},
         ]))
         self.assertFalse(tool_batch_auto_runs([
             {"name": AI_TOOL_QUERY_RAW_METRIC},
@@ -620,10 +628,23 @@ class AiToolsTests(unittest.TestCase):
         self.assertIn("Thrash", csv_text)
         html = build_ai_report_html(
             meta={"file": "demo.btf"},
-            gui={"highlight": "Low[266]"},
-            findings="ok",
+            gui={"highlight": "Low[266]", "cursors": [10, 20]},
+            findings="1. [WARNING] Thrash on Med[267]",
             annotations=[{"time": 1, "note": "n"}],
             conversation_html="<p>hi</p>",
+            evidence_payload={
+                "conclusion": "Med[267] off-CPU",
+                "evidence": [
+                    {"label": "off-CPU Med[267]", "time": 15},
+                    {"label": "outside", "time": 99},
+                ],
+                "evidence_quality": {
+                    "band": "medium",
+                    "flags": {"direct_evidence": True},
+                },
+                "falsify": {"next_check": "Open preemption"},
+            },
+            analysis_complete=True,
         )
         self.assertIn("AI Diagnostic Report", html)
         self.assertIn("BTFViewer", html)
@@ -631,6 +652,20 @@ class AiToolsTests(unittest.TestCase):
         self.assertIn('fill="#1C3A6E"', html)
         self.assertIn("Low[266]", html)
         self.assertIn("<p>hi</p>", html)
+        self.assertIn("Executive summary", html)
+        self.assertIn("Coverage summary", html)
+        self.assertIn("Appendix", html)
+        self.assertIn("Conversation export", html)
+        self.assertIn("Rejected evidence", html)
+        self.assertIn("In scope", html)
+        self.assertIn("Excluded", html)
+        from btf_viewer_pkg.ai_tools import filter_entries_for_ai_report
+        kept = filter_entries_for_ai_report([
+            {"role": "assistant", "text": "ok",
+             "tools": [{"name": "export_report", "status": "pending"}]},
+            {"role": "user", "text": "why"},
+        ])
+        self.assertEqual(len(kept), 1)
 
     def test_tools_match_web(self) -> None:
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")

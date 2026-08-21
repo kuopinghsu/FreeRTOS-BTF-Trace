@@ -2847,6 +2847,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _on_scene_highlight_for_legend(self, task, locked: bool) -> None:
         self._legend.set_locked_task(task if locked else None)
+        self._refresh_task_inspector()
 
     def _on_trace_tab_changed(self, index: int) -> None:
         if self._tab_switch_guard:

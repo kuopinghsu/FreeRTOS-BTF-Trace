@@ -159,7 +159,7 @@ AI_CONTEXT_STAGE_TOOLS: Dict[str, Tuple[str, ...]] = {
     "verify": ("verify_claim", "detect_contradictions", "challenge_conclusion"),
     "experiment": ("what_if", "optimize_experiment", "recommend_experiments"),
     "compare": ("compare_performance", "validate_experiment"),
-    "report": ("generate_report", "export_investigation"),
+    "report": ("generate_report", "export_report"),
 }
 AI_CONTEXT_ALWAYS_TOOLS: Tuple[str, ...] = (
     "search_timeline", "query_raw_metric", "summarize_investigation_context",

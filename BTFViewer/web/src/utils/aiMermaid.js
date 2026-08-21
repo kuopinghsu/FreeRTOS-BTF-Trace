@@ -9,9 +9,26 @@ const PARTICIPANT_RE = /^participant\s+(\S+)(?:\s+as\s+(.+))?$/i
 const ARROW_RE = /^(\S+)\s*(-->>|->>|->|--x|-x|-->)\s*(\S+)\s*:\s*(.*)$/
 const NOTE_RE = /^Note\s+(?:over|left of|right of)\s+([^:]+):\s*(.*)$/i
 const NODE_RE = /^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\)|\{\{([^}]+)\}\}|\{([^}]+)\})?\s*$/
-const EDGE_RE = /^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?\s*-->(?:\|([^|]+)\|)?\s*([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?\s*$/
+// Supports A --> B, A -->|lab| B, and A -- lab --> B (models often emit the last).
+const EDGE_RE = /^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?\s*(?:-->\|([^|]+)\||--\s+(.+?)\s+-->|-->)\s*([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?\s*$/
 
 const JUMP_RE = /jump:([0-9]+(?:\.[0-9]+)?)/g
+const GRAPH_NODE_ID_RE = /^[A-Za-z]\d{0,3}$/
+const TASK_ID_RE = /\[[0-9]+\]|\[[0-9a-fA-FxX]+\]/
+const CORE_LABEL_RE = /^Core[_\s]?\d+$/i
+const TASK_TOKEN_RE = /^[A-Za-z][A-Za-z0-9_.\-]{0,47}$/
+
+/** Highlight target when *label* can resolve to a task or core (not finding prose). */
+export function actionableDiagramHighlight(label) {
+  let text = String(label || '').replace(/jump:([0-9]+(?:\.[0-9]+)?)/g, '').trim()
+  text = text.replace(/\s+/g, ' ').replace(/^[ ·,-]+|[ ·,-]+$/g, '')
+  if (!text || GRAPH_NODE_ID_RE.test(text)) return null
+  if (TASK_ID_RE.test(text)) return text
+  if (CORE_LABEL_RE.test(text)) return text
+  if (text.includes(' ') || text.length > 48) return null
+  if (TASK_TOKEN_RE.test(text)) return text
+  return null
+}
 
 /** SVG fills/strokes for evidence-graph and investigation-tree diagrams. */
 export function mermaidPalette(dark = true) {
@@ -149,7 +166,7 @@ export function mermaidLinkTargets(source) {
   const seen = new Set()
   const src = String(source || '')
   const addHl = (raw) => {
-    const label = String(raw || '').trim()
+    const label = actionableDiagramHighlight(raw)
     const key = `hl:${label}`
     if (!label || seen.has(key)) return
     seen.add(key)
@@ -176,12 +193,12 @@ export function mermaidLinkTargets(source) {
     }
     const em = EDGE_RE.exec(s)
     if (em) {
-      addHl(em[2] || em[3] || em[1] || '')
-      addHl(em[6] || em[7] || em[5] || '')
+      addHl(em[2] || em[3] || '')
+      addHl(em[7] || em[8] || '')
       continue
     }
     const nm = NODE_RE.exec(s)
-    if (nm) addHl(nm[2] || nm[3] || nm[4] || nm[5] || nm[1] || '')
+    if (nm) addHl(nm[2] || nm[3] || nm[4] || nm[5] || '')
   }
   return found
 }
@@ -425,12 +442,12 @@ function parseFlowchart(source) {
   for (const raw of source.split('\n')) {
     const line = raw.trim().replace(/;$/, '')
     if (!line || line.toLowerCase().startsWith('graph ') || line.toLowerCase().startsWith('flowchart ')) continue
-    if (line.startsWith('%%')) continue
+    if (line.startsWith('%%') || line.toLowerCase().startsWith('style ')) continue
     const em = EDGE_RE.exec(line)
     if (em) {
       addNode(em[1], em[2] || em[3])
-      addNode(em[5], em[6] || em[7])
-      edges.push({ src: em[1], dst: em[5], label: String(em[4] || '').trim() })
+      addNode(em[6], em[7] || em[8])
+      edges.push({ src: em[1], dst: em[6], label: String(em[4] || em[5] || '').trim() })
       continue
     }
     const nm = NODE_RE.exec(line)

@@ -34,6 +34,17 @@ describe('aiMarkdown', () => {
     assert.equal(html.includes('<code>jump:1501325</code>'), false)
   })
 
+  it('renders unfenced graph LR as a mermaid diagram', () => {
+    const html = markdownToSafeHtml(
+      '任務遷移流向圖\n\n'
+      + 'graph LR\n'
+      + '  Core_X[Core X] -- 595 migrations --> Core_Y[Core Y]\n',
+    )
+    assert.match(html, /ai-mermaid/)
+    assert.match(html, /任務遷移流向圖/)
+    assert.equal(html.includes('graph LR<br>'), false)
+  })
+
   it('preserves source numbers when ordered lists are interrupted', () => {
     // Same shape as models often emit: 1. title, prose, bullet, then 2./3.
     const html = markdownToSafeHtml(

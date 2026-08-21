@@ -13,7 +13,7 @@ import { DEFAULT_AI_RESPONSE_LANGUAGE } from './aiClient.js'
 /** Visible role labels (panel + Save As). Keep in sync with ai_assistant.py. */
 export const AI_ROLE_LABEL_USER = 'Your prompt'
 export const AI_ROLE_LABEL_ASSISTANT = 'AI Assistant'
-export const AI_ROLE_LABEL_EVIDENCE = 'Evidence / Reasoning'
+export const AI_ROLE_LABEL_EVIDENCE = 'Evidence & Validation'
 
 export function aiRoleLabel(role, responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE) {
   if (role === 'user') return AI_ROLE_LABEL_USER
@@ -292,6 +292,22 @@ export function markdownToSafeHtml(text, { inlineSvg = true, zoomable = true, da
       }
       const cls = lang ? ` class="language-${escapeAttr(lang)}"` : ''
       out.push(`<pre><code${cls}>${escapeHtml(codeLines.join('\n'))}</code></pre>`)
+      continue
+    }
+
+    // Models often omit ```mermaid; bare graph/flowchart/sequenceDiagram.
+    if (/^(graph|flowchart|sequencediagram)\b/i.test(stripped)) {
+      flushPara()
+      const codeLines = []
+      while (i < lines.length) {
+        const s = lines[i].trim()
+        if (!s) break
+        if (s.startsWith('```')) break
+        if (codeLines.length && /^(#{1,4}\s+|[-*+]\s+|\d+\.\s+)/.test(s)) break
+        codeLines.push(lines[i])
+        i += 1
+      }
+      out.push(mermaidBlockHtml(codeLines.join('\n'), { inlineSvg, zoomable, dark }))
       continue
     }
 

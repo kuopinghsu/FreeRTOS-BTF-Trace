@@ -24,6 +24,7 @@ import {
   explainRegression,
   findRelatedFindings,
   formatBookmarkLabel,
+  conclusionStatusFromPayload,
   generateStructuredReport,
   maxToolRoundsForTemplate,
   recommendValidationExperiments,
@@ -380,8 +381,8 @@ export const AI_TOOL_SYSTEM_ADDENDUM =
   + '```\n'
   + 'When a mutex take/give, block, resume, or priority-boost sequence is the point, '
   + 'include a fenced mermaid sequenceDiagram. When summarising core-to-core '
-  + 'migrations, include a fenced mermaid graph LR flowchart with cores as nodes '
-  + 'and migration counts on edges.'
+  + 'migrations, include a fenced ```mermaid graph LR flowchart with cores as nodes '
+  + 'and migration counts on edges (prefer A -->|count| B; A -- count --> B is also ok).'
 
 export const AI_MERMAID_SEQUENCE_EXAMPLE = `\`\`\`mermaid
 sequenceDiagram
@@ -2217,7 +2218,9 @@ export function validateToolCall(name, args) {
     else if (fmt === 'csv') fmt = 'csv'
     else if (fmt === 'json') fmt = 'json'
     else return { args: null, error: 'format must be "html", "csv", or "json"' }
-    return { args: { format: fmt }, error: '' }
+    let mode = String(a.mode || a.report_mode || 'summary').trim().toLowerCase()
+    if (!['summary', 'technical', 'full'].includes(mode)) mode = 'summary'
+    return { args: { format: fmt, mode }, error: '' }
   }
   if (name === AI_TOOL_CLEAR_MARKS) {
     let what = String(a.what || 'all').trim().toLowerCase()
@@ -3114,7 +3117,7 @@ export function toolMutatesGui(name) {
 
 export function toolBatchAutoRuns(tools) {
   const names = (tools || []).map(t => String(t?.name || ''))
-  return names.length > 0 && names.every(isQueryTool)
+  return names.length > 0 && names.every(n => isQueryTool(n) || isExportTool(n))
 }
 
 function csvEscape(value) {
@@ -3159,8 +3162,127 @@ function htmlEscape(text) {
     .replace(/"/g, '&quot;')
 }
 
+
+const TASK_FINDING_RE = /\b([A-Za-z][A-Za-z0-9_.-]*\[\d+\])/
+const SEVERITY_RE = /\[?\s*(CRITICAL|WARNING|WARN|ERROR|INFO|HIGH|MEDIUM|LOW)\s*\]?/i
+
+export function filterEntriesForAiReport(entries = []) {
+  const out = []
+  for (const entry of entries || []) {
+    let tools = []
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      tools = [...(entry.tools || [])]
+    }
+    const keptTools = tools.filter(t => t && typeof t === 'object' && !isExportTool(t.name))
+    if (tools.length && !keptTools.length) continue
+    let next = entry
+    if (entry && typeof entry === 'object' && !Array.isArray(entry) && tools.length && keptTools.length !== tools.length) {
+      next = { ...entry, tools: keptTools }
+    }
+    let text = ''
+    if (next && typeof next === 'object' && !Array.isArray(next)) {
+      text = String(next.text || next.content || '')
+    } else if (Array.isArray(next) && next.length >= 2) {
+      text = String(next[1] || '')
+    }
+    const low = text.toLowerCase()
+    if ((low.includes('export html report') || (low.includes('export_report') && low.includes('pending')))
+      && low.includes('pending') && text.trim().length < 80) {
+      continue
+    }
+    out.push(next)
+  }
+  return out
+}
+
+function cursorBoundsFromGui(gui = {}) {
+  const cursors = gui?.cursors
+  if (!Array.isArray(cursors) || cursors.length < 2) return [null, null]
+  const vals = cursors.map(Number).filter(Number.isFinite)
+  if (vals.length < 2) return [null, null]
+  return [Math.min(...vals), Math.max(...vals)]
+}
+
+function fmtReportTime(t) {
+  const v = Number(t)
+  if (!Number.isFinite(v)) return String(t ?? '')
+  if (Math.abs(v) >= 1000) return String(Math.round(v))
+  return String(v)
+}
+
+function evidenceInScope(ev, lo, hi) {
+  if (lo == null || hi == null) return true
+  if (ev.start != null && ev.stop != null) return overlapsRange(ev.start, ev.stop, lo, hi)
+  if (ev.time != null) return inTimeRange(ev.time, lo, hi)
+  return true
+}
+
+function partitionReportEvidence(evidence, lo, hi) {
+  const kept = []
+  const rejected = []
+  for (const ev of evidence || []) {
+    if (!ev || typeof ev !== 'object') continue
+    ;(evidenceInScope(ev, lo, hi) ? kept : rejected).push(ev)
+  }
+  return [kept, rejected]
+}
+
+function statusLabelForReport(key) {
+  return ({
+    confirmed: 'Confirmed',
+    correlated: 'Correlated',
+    suspected: 'Suspected',
+    not_observed: 'Not observed',
+    insufficient: 'Insufficient data',
+  })[String(key || '')] || 'Suspected'
+}
+
+function rankedFindingsFromText(findings) {
+  const rows = []
+  for (const line of String(findings || '').split('\n')) {
+    const raw = line.trim()
+    if (!raw) continue
+    let sev = 'Info'
+    const m = SEVERITY_RE.exec(raw)
+    if (m) {
+      const token = m[1].toUpperCase()
+      sev = ({
+        CRITICAL: 'High', ERROR: 'High', HIGH: 'High',
+        WARNING: 'Medium', WARN: 'Medium', MEDIUM: 'Medium',
+        INFO: 'Info', LOW: 'Info',
+      })[token] || 'Info'
+    }
+    const taskM = TASK_FINDING_RE.exec(raw)
+    const task = taskM ? taskM[1] : '—'
+    let title = raw.replace(SEVERITY_RE, '')
+    title = title.replace(/^\d+[\.)]\s*/, '').replace(/^[\s\-–—:]+|[\s\-–—:]+$/g, '')
+    rows.push({
+      severity: sev,
+      finding: (title || raw).slice(0, 160),
+      task,
+      scope: 'Current scope',
+      confidence: 'Suspected',
+    })
+    if (rows.length >= 12) break
+  }
+  return rows
+}
+
+function htmlTable(headers, rows) {
+  const head = headers.map(h => `<th>${htmlEscape(h)}</th>`).join('')
+  const body = rows.map(row => `<tr>${row.map(c => `<td>${htmlEscape(c)}</td>`).join('')}</tr>`).join('')
+  return `<table class="ai-md-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
+}
+
+function detailsBlock(title, innerHtml, open = false) {
+  return `<details class="report-appendix"${open ? ' open' : ''}>`
+    + `<summary>${htmlEscape(title)}</summary>`
+    + `<div class="appendix-body">${innerHtml}</div></details>`
+}
+
 export function buildAiReportHtml({
   meta = {}, gui = {}, findings = '', annotations = [], conversationHtml = '',
+  evidencePayload = null, analysisComplete = true, reportMode = 'summary',
 } = {}) {
   const stamp = (() => {
     const d = new Date()
@@ -3168,16 +3290,147 @@ export function buildAiReportHtml({
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
       + ` ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
   })()
-  const metaRows = Object.entries(meta || {}).map(
+  let mode = String(reportMode || 'summary').trim().toLowerCase()
+  if (!['summary', 'technical', 'full'].includes(mode)) mode = 'summary'
+  const metaD = { ...(meta || {}) }
+  const guiD = { ...(gui || {}) }
+  const payload = evidencePayload && typeof evidencePayload === 'object' ? evidencePayload : {}
+  const [lo, hi] = cursorBoundsFromGui(guiD)
+  const statusKey = Object.keys(payload).length
+    ? conclusionStatusFromPayload(payload)
+    : (String(findings || '').trim() ? 'suspected' : 'insufficient')
+  const statusLabel = statusLabelForReport(statusKey)
+  const completeness = analysisComplete ? 'Complete' : 'Analysis incomplete'
+  const overall = ['suspected', 'insufficient'].includes(statusKey) ? 'Warning'
+    : (['confirmed', 'correlated', 'not_observed'].includes(statusKey) ? 'OK' : 'Warning')
+
+  const conclusion = String(payload.conclusion || '').trim()
+  const subtitleBits = [
+    `Scope: ${htmlEscape(metaD.scope || 'full trace')}`,
+    `Span: ${htmlEscape(metaD.span || '—')}`,
+    `Cores: ${htmlEscape(metaD.cores || '—')}`,
+    `Analysis: ${htmlEscape(completeness)}`,
+  ]
+  if (lo != null && hi != null) {
+    subtitleBits.unshift(`Cursor: ${htmlEscape(fmtReportTime(lo))}–${htmlEscape(fmtReportTime(hi))}`)
+  }
+  const execLines = [
+    `<p class="status-row"><span class="badge">${htmlEscape(overall)}</span> `
+    + `<span class="badge badge-status">${htmlEscape(statusLabel)}</span> `
+    + `<span class="badge badge-${analysisComplete ? 'ok' : 'warn'}">${htmlEscape(completeness)}</span></p>`,
+    `<p class="report-scope">${subtitleBits.join(' · ')}</p>`,
+  ]
+  if (!analysisComplete) {
+    execLines.push(
+      '<p class="warn-banner"><strong>Analysis incomplete.</strong> '
+      + 'Export again after the investigation finishes for a consistent snapshot.</p>',
+    )
+  }
+  if (conclusion) execLines.push(`<p>${htmlEscape(conclusion)}</p>`)
+  else {
+    const first = String(findings || '').split('\n').map(s => s.trim()).find(Boolean) || ''
+    if (first) execLines.push(`<p>${htmlEscape(first.slice(0, 320))}</p>`)
+    else execLines.push('<p>No consolidated finding yet.</p>')
+  }
+
+  const covRows = []
+  const checks = (payload.checks || []).filter(c => c && typeof c === 'object')
+  const quality = payload.evidence_quality && typeof payload.evidence_quality === 'object'
+    ? payload.evidence_quality : {}
+  const qflags = quality.flags && typeof quality.flags === 'object' ? quality.flags : {}
+  if (checks.length) {
+    for (const c of checks.slice(0, 12)) {
+      covRows.push([
+        String(c.label || c.metric || 'check'),
+        String(c.status || 'Not evaluated'),
+        String(c.detail || '—').slice(0, 120),
+      ])
+    }
+  } else if (Object.keys(qflags).length) {
+    for (const [key, title] of [
+      ['direct_evidence', 'Direct evidence'],
+      ['timeline_correlation', 'Timeline correlation'],
+      ['metric_correlation', 'Metric correlation'],
+    ]) {
+      const val = qflags[key]
+      const cell = val === true ? 'Observed' : val === false ? 'Not observed'
+        : (val == null ? 'Not evaluated' : String(val))
+      covRows.push([title, cell, '—'])
+    }
+  }
+  const coverageHtml = covRows.length
+    ? htmlTable(['Category', 'Result', 'Strongest evidence'], covRows)
+    : '<p>No coverage checklist recorded for this session.</p>'
+
+  let ranked = rankedFindingsFromText(findings)
+  if (!ranked.length && conclusion) {
+    ranked = [{
+      severity: 'Medium', finding: conclusion.slice(0, 160), task: '—',
+      scope: 'Current scope', confidence: statusLabel,
+    }]
+  }
+  const rankedHtml = ranked.length
+    ? htmlTable(
+      ['Severity', 'Finding', 'Task', 'Scope', 'Confidence'],
+      ranked.map(r => [r.severity, r.finding, r.task, r.scope, r.confidence]),
+    )
+    : '<p>No ranked findings.</p>'
+
+  const evidence = (payload.evidence || []).filter(e => e && typeof e === 'object')
+  const [kept, rejected] = partitionReportEvidence(evidence, lo, hi)
+  const evRows = []
+  for (const ev of kept.slice(0, 40)) {
+    const label = String(ev.label || 'event')
+    const taskM = TASK_FINDING_RE.exec(label)
+    const task = String(ev.task || (taskM ? taskM[1] : '—'))
+    const t = ev.time ?? ev.start ?? ''
+    let dur = '—'
+    if (ev.start != null && ev.stop != null) {
+      const delta = Number(ev.stop) - Number(ev.start)
+      if (Number.isFinite(delta)) {
+        dur = delta < 1 ? `${Math.round(delta * 1_000_000)} µs` : `${delta} s`
+      }
+    }
+    evRows.push([fmtReportTime(t), label, task, String(ev.core || '—'), dur, 'In scope'])
+  }
+  const evidenceHtml = evRows.length
+    ? htmlTable(['Time', 'Event', 'Task', 'Core', 'Duration', 'Scope'], evRows)
+    : '<p>No in-scope evidence rows.</p>'
+  const rejectedRows = rejected.slice(0, 40).map(ev => [
+    fmtReportTime(ev.time ?? ev.start ?? ''), String(ev.label || 'event'), 'Excluded',
+  ])
+  const rejectedHtml = rejectedRows.length
+    ? htmlTable(['Time', 'Event', 'Scope'], rejectedRows)
+    : '<p>None.</p>'
+
+  const falsify = payload.falsify && typeof payload.falsify === 'object' ? payload.falsify : {}
+  const nxt = String(falsify.next_check || '').trim()
+  const nextHtml = nxt ? `<p>${htmlEscape(nxt)}</p>` : '<p>No next action recorded.</p>'
+  const chain = String(payload.evidence_chain || '').trim()
+  let detailHtml = '<p>See ranked findings and evidence table.</p>'
+  if (conclusion || chain) {
+    detailHtml = (
+      `<p><strong>Observation</strong> — ${htmlEscape(conclusion || 'See evidence table.')}</p>`
+      + `<p><strong>Interpretation</strong> — ${htmlEscape(chain || 'Cause not confirmed from direct events alone.')}</p>`
+      + `<p><strong>Confidence</strong> — ${htmlEscape(statusLabel)} `
+      + '(derived from evidence status; not a free-form model claim).</p>'
+    )
+  }
+
+  const metaRows = Object.entries(metaD).map(
     ([k, v]) => `<tr><th>${htmlEscape(k)}</th><td>${htmlEscape(v)}</td></tr>`,
   ).join('')
-  const guiD = { ...(gui || {}) }
   let anns = Array.isArray(annotations) ? annotations : []
   if (!anns.length && Array.isArray(guiD.annotations)) anns = guiD.annotations
   delete guiD.annotations
   const guiRows = Object.entries(guiD).map(([k, v]) => {
     let val = v
-    if (k === 'cursors' && Array.isArray(v)) val = v.join(', ')
+    if (k === 'cursors' && Array.isArray(v)) {
+      val = v.map(c => {
+        const n = Number(c)
+        return Number.isFinite(n) ? fmtReportTime(n) : String(c)
+      }).join(', ')
+    }
     return `<tr><th>${htmlEscape(k)}</th><td>${htmlEscape(val)}</td></tr>`
   }).join('')
   const annRows = anns.filter(a => a && typeof a === 'object').map(
@@ -3186,32 +3439,55 @@ export function buildAiReportHtml({
   const findingsBody = String(findings || '').trim()
     ? `<pre>${htmlEscape(findings)}</pre>`
     : '<p>No findings for the current scope.</p>'
-  const conv = String(conversationHtml || '').trim()
+  const conv = String(conversationHtml || '').trim() || '<p>No conversation.</p>'
+  const appendixOpen = mode === 'full'
+  const appendix = (
+    detailsBlock('Rejected evidence (out of cursor window)', rejectedHtml)
+    + detailsBlock('Raw Analysis Findings', findingsBody)
+    + detailsBlock('GUI state', `<table class="gui-table">${guiRows || '<tr><td>None</td></tr>'}</table>`)
+    + detailsBlock('Annotations', `<table class="ann-table"><tr><th>Time</th><th>Note</th></tr>${annRows}</table>`)
+    + detailsBlock('Report metadata', `<table class="meta-table">${metaRows || '<tr><td>None</td></tr>'}</table>`)
+    + detailsBlock('Conversation export', conv, appendixOpen)
+  )
+  const note = (
+    '<p class="export-note">Standalone export: <code>btfjump:</code> / '
+    + '<code>jump:</code> links require BTFViewer. Timestamps above are '
+    + 'readable forms of the raw cursor values.</p>'
+  )
   const body = (
     `<section class="report-card">
-<h2>Report metadata</h2>
-<table class="meta-table">${metaRows || '<tr><td>None</td></tr>'}</table>
+<h2>Executive summary</h2>
+${execLines.join('\n')}
 </section>
 <section class="report-card">
-<h2>GUI state</h2>
-<table class="gui-table">${guiRows || '<tr><td>None</td></tr>'}</table>
+<h2>Coverage summary</h2>
+${coverageHtml}
 </section>
 <section class="report-card">
-<h2>Annotations</h2>
-<table class="ann-table"><tr><th>Time</th><th>Note</th></tr>${annRows}</table>
+<h2>Ranked findings</h2>
+${rankedHtml}
 </section>
 <section class="report-card">
-<h2>Analysis Findings</h2>
-${findingsBody}
+<h2>Finding details</h2>
+${detailHtml}
 </section>
 <section class="report-card">
-<h2>Conversation</h2>
-${conv}
+<h2>Evidence</h2>
+${evidenceHtml}
+</section>
+<section class="report-card">
+<h2>Next action</h2>
+${nextHtml}
+</section>
+<section class="report-card">
+<h2>Appendix</h2>
+${appendix}
+${note}
 </section>
 `
   )
   return btfHtmlReportDocument('AI Diagnostic Report', body, {
-    subtitle: `Saved ${stamp}`,
+    subtitle: `Saved ${stamp} · mode=${mode}`,
     docTitle: 'BTFViewer — AI Report',
   })
 }

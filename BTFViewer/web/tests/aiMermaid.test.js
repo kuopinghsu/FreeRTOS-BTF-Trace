@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { markdownToSafeHtml } from '../src/utils/aiMarkdown.js'
-import { hitTestMermaid, mermaidBlockHtml, mermaidHitRegions, mermaidLinkTargets, mermaidPalette, mermaidToSvg, wrapNodeLabel } from '../src/utils/aiMermaid.js'
+import { hitTestMermaid, mermaidBlockHtml, mermaidHitRegions, mermaidLinkTargets, mermaidPalette, mermaidToSvg, wrapNodeLabel, actionableDiagramHighlight } from '../src/utils/aiMermaid.js'
 import { AI_MERMAID_MIGRATION_EXAMPLE, AI_MERMAID_SEQUENCE_EXAMPLE } from '../src/utils/aiTools.js'
 
 describe('aiMermaid', () => {
@@ -26,6 +26,41 @@ describe('aiMermaid', () => {
       .map(t => t.value)
     assert.ok(labels.includes('Core_0'))
     assert.ok(labels.includes('Core_1'))
+    assert.equal(labels.includes('C0'), false)
+  })
+
+  it('omits evidence-graph prose from the link row', () => {
+    const src = (
+      'graph TD\n'
+      + '  F[Excessive bouncing / core thrashing]\n'
+      + '  C0[Focus task CS20]\n'
+      + '  C1[Core migration / thrash]\n'
+      + '  H0(Likely affinity / lock bounce)\n'
+      + '  F --> C0\n'
+      + '  C0 --> C1\n'
+      + '  F --> H0\n'
+    )
+    assert.deepEqual(mermaidLinkTargets(src), [])
+    const html = mermaidBlockHtml(src)
+    assert.doesNotMatch(html, /ai-mermaid-links/)
+    assert.equal(actionableDiagramHighlight('Low[266]'), 'Low[266]')
+    assert.equal(actionableDiagramHighlight('Core_0'), 'Core_0')
+    assert.equal(actionableDiagramHighlight('F'), null)
+  })
+
+  it('renders A -- text --> B edge labels and ignores style lines', () => {
+    const src = (
+      'graph LR\n'
+      + '    Core_X[Core X] -- 595 migrations --> Core_Y[Core Y]\n'
+      + '    style CS[20] fill:#f9f,stroke:#333,stroke-width:2px\n'
+    )
+    const svg = mermaidToSvg(src)
+    assert.match(svg, /<svg/)
+    assert.match(svg, /Core X/)
+    assert.match(svg, /595 migrations/)
+    const html = mermaidBlockHtml(src)
+    assert.match(html, /ai-mermaid/)
+    assert.doesNotMatch(html, /language-mermaid/)
   })
 
   it('wraps long flowchart node labels inside taller rectangles', () => {

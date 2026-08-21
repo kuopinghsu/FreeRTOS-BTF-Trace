@@ -47,7 +47,7 @@ body {
   font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   color: var(--ink);
   background: radial-gradient(circle at top right, #f6f8fb 0%, var(--bg) 52%, #dde4ee 100%);
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.5;
 }
 .report { max-width: 960px; margin: 0 auto; }
@@ -196,6 +196,46 @@ table.ai-md-table th {
 table.ai-md-table td {
   background: #fff;
   color: var(--ink);
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e8eef7;
+  color: #123355;
+  font-size: 12px;
+  font-weight: 650;
+  margin-right: 6px;
+}
+.badge-status { background: #dfe9f8; }
+.badge-ok { background: #d9f0e3; color: #1f6b45; }
+.badge-warn { background: #fce8c8; color: #8a4b00; }
+.warn-banner {
+  background: #fff6e8;
+  border: 1px solid #f0d2a0;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.report-scope { color: var(--muted); font-size: 13px; }
+.status-row { margin: 0 0 8px; }
+details.report-appendix {
+  margin: 8px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: #f8fafc;
+}
+details.report-appendix > summary {
+  cursor: pointer;
+  font-weight: 650;
+  color: #123355;
+}
+.appendix-body { margin-top: 8px; }
+.export-note { color: var(--muted); font-size: 12px; margin-top: 12px; }
+@media print {
+  details.report-appendix { break-inside: avoid; }
+  .report-card { break-inside: avoid; }
 }
 .report-foot {
   margin-top: 18px;

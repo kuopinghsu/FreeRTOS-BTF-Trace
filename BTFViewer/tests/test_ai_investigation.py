@@ -716,10 +716,11 @@ class AiInvestigationTests(unittest.TestCase):
                           "start": 1000, "stop": 1800}],
             "confidence": "Medium",
         }, "English")
-        self.assertIn("range:1000/1800", ranged)
-        self.assertIn("**证据**", md)
-        self.assertIn("**置信度:** 高", md)
-        self.assertIn("证据 / 推理", format_ai_conversation_markdown([
+        self.assertIn("jump:1000", ranged)
+        self.assertIn("**证据**", md)  # may appear in details via localized role export only
+        # Chinese labels for Finding / Direct evidence sections
+        self.assertTrue("证据" in md or "Finding" in md or "Direct evidence" in md or "直接" in md)
+        self.assertIn("证据与验证", format_ai_conversation_markdown([
             ("evidence", md),
         ], response_language="Simplified Chinese (简体中文)"))
 

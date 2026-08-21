@@ -68,6 +68,66 @@ class AiMermaidTests(unittest.TestCase):
         labels = [v for k, v in mermaid_link_targets(src) if k == "highlight"]
         self.assertIn("Core_0", labels)
         self.assertIn("Core_1", labels)
+        self.assertNotIn("C0", labels)
+
+    def test_evidence_graph_link_row_skips_prose(self) -> None:
+        from btf_viewer_pkg.ai_case import evidence_graph_mermaid
+        from btf_viewer_pkg.ai_mermaid import actionable_diagram_highlight
+
+        self.assertIsNone(actionable_diagram_highlight("Excessive bouncing / core thrashing"))
+        self.assertIsNone(actionable_diagram_highlight("F"))
+        self.assertIsNone(actionable_diagram_highlight("C0"))
+        self.assertEqual(actionable_diagram_highlight("Core_0"), "Core_0")
+        self.assertEqual(actionable_diagram_highlight("Low[266] (Core 0)"), "Low[266] (Core 0)")
+        self.assertEqual(actionable_diagram_highlight("CS20"), "CS20")
+
+        src = evidence_graph_mermaid(
+            [
+                {"id": "F", "kind": "finding", "label": "Excessive bouncing / core thrashing"},
+                {"id": "C0", "kind": "step", "label": "Focus task CS20"},
+                {"id": "C1", "kind": "step", "label": "Core migration / thrash"},
+                {"id": "H0", "kind": "hypothesis", "label": "Likely affinity / lock bounce"},
+            ],
+            [
+                {"from": "F", "to": "C0", "rel": "chain"},
+                {"from": "C0", "to": "C1", "rel": "chain"},
+                {"from": "F", "to": "H0", "rel": "hypothesizes"},
+            ],
+        )
+        targets = mermaid_link_targets(src)
+        self.assertEqual(targets, [])
+        html = mermaid_block_html(src, as_img=True)
+        self.assertIn("ai-mermaid", html)
+        self.assertNotIn("ai-mermaid-links", html)
+
+    def test_flowchart_dashed_text_edge_label(self) -> None:
+        """Models often emit ``A -- count --> B`` instead of ``A -->|count| B``."""
+        src = (
+            "graph LR\n"
+            "    Core_X[Core X] -- 595 migrations --> Core_Y[Core Y]\n"
+            "    style CS[20] fill:#f9f,stroke:#333,stroke-width:2px\n"
+        )
+        svg = mermaid_to_svg(src)
+        self.assertIn("<svg", svg)
+        self.assertIn("Core X", svg)
+        self.assertIn("Core Y", svg)
+        self.assertIn("595 migrations", svg)
+        html = mermaid_block_html(src, as_img=True)
+        self.assertIn("ai-mermaid", html)
+        self.assertNotIn("language-mermaid", html)
+
+    def test_markdown_unfenced_mermaid(self) -> None:
+        from btf_viewer_pkg.ai_assistant import markdown_to_safe_html
+
+        md = (
+            "任務遷移流向圖\n\n"
+            "graph LR\n"
+            "  Core_X[Core X] -- 595 migrations --> Core_Y[Core Y]\n"
+        )
+        html = markdown_to_safe_html(md)
+        self.assertIn("ai-mermaid", html)
+        self.assertIn("任務遷移流向圖", html)
+        self.assertNotIn("graph LR<br>", html)
 
     def test_flowchart_node_wraps_long_labels(self) -> None:
         from btf_viewer_pkg.ai_mermaid import wrap_node_label

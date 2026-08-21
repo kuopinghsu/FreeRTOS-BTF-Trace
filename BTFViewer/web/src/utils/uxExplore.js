@@ -386,7 +386,9 @@ export function findingOverlayTimes(findings, limit = 80) {
 }
 
 export function taskInspectorLine(task = '', qualityWarnings = []) {
-  const name = String(task || '').trim()
+  // Callers pass merge keys (`\0id\0name`); show Name[id], not NULs.
+  const raw = String(task || '').trim()
+  const name = raw ? taskDisplayName(raw) : ''
   const parts = [name ? `Task ${name}` : 'No task selected']
   for (const q of qualityWarnings || []) {
     const text = String(q || '').trim()

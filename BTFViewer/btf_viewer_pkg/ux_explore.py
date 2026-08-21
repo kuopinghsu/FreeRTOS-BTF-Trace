@@ -429,7 +429,8 @@ def task_inspector_line(
     quality_warnings: Optional[Sequence[str]] = None,
 ) -> str:
     """Status-bar inspector: selected task plus first quality warning."""
-    name = str(task or "").strip()
+    # Callers pass merge keys (``\\0id\\0name``); show Name[id], not NULs.
+    name = _task_display_name(str(task or "").strip()) if str(task or "").strip() else ""
     parts = [f"Task {name}" if name else "No task selected"]
     for q in quality_warnings or []:
         text = str(q or "").strip()

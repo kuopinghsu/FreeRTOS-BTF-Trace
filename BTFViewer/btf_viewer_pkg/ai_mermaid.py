@@ -35,12 +35,44 @@ _NODE_RE = re.compile(
     r"^([A-Za-z0-9_]+)\s*(?:"
     r"\[([^\]]+)\]|\(([^\)]+)\)|\{\{([^}]+)\}\}|\{([^}]+)\})?\s*$"
 )
+# Supports A --> B, A -->|lab| B, and A -- lab --> B (models often emit the last).
 _EDGE_RE = re.compile(
     r"^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?"
-    r"\s*-->(?:\|([^|]+)\|)?\s*"
-    r"([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?\s*$"
+    r"\s*(?:"
+    r"-->\|([^|]+)\|"
+    r"|--\s+(.+?)\s+-->"
+    r"|-->"
+    r")"
+    r"\s*([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?\s*$"
 )
 _JUMP_RE = re.compile(r"jump:([0-9]+(?:\.[0-9]+)?)")
+# Graph node ids (F, E0, C3, H1, S0) — not timeline targets.
+_GRAPH_NODE_ID_RE = re.compile(r"^[A-Za-z]\d{0,3}$")
+_TASK_ID_RE = re.compile(r"\[[0-9]+\]|\[[0-9a-fA-FxX]+\]")
+_CORE_LABEL_RE = re.compile(r"^Core[_\s]?\d+$", re.IGNORECASE)
+_TASK_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-]{0,47}$")
+
+
+def actionable_diagram_highlight(label: str) -> Optional[str]:
+    """Return a highlight target when *label* can resolve to a task or core.
+
+    Evidence-graph / investigation-tree nodes are prose findings and
+    hypotheses; listing them under the figure is noise. Keep task ids
+    (``Low[266]``), core names (``Core_0``), and short tokens (``CS20``).
+    """
+    text = _JUMP_RE.sub("", str(label or "")).strip()
+    text = re.sub(r"\s+", " ", text).strip(" ·,-")
+    if not text or _GRAPH_NODE_ID_RE.fullmatch(text):
+        return None
+    if _TASK_ID_RE.search(text):
+        return text
+    if _CORE_LABEL_RE.fullmatch(text):
+        return text
+    if " " in text or len(text) > 48:
+        return None
+    if _TASK_TOKEN_RE.fullmatch(text):
+        return text
+    return None
 
 
 def _note_box_w(note: str) -> float:
@@ -118,16 +150,16 @@ def extract_mermaid_fences(text: str) -> List[str]:
 
 
 def mermaid_link_targets(source: str) -> List[Tuple[str, str]]:
-    """``(kind, value)`` pairs: jump times and highlight labels from a diagram."""
+    """``(kind, value)`` pairs: jump times and actionable highlight labels."""
     found: List[Tuple[str, str]] = []
     seen = set()
 
     def _add_hl(label: str) -> None:
-        label = (label or "").strip()
-        if not label or ("highlight", label) in seen:
+        target = actionable_diagram_highlight(label)
+        if not target or ("highlight", target) in seen:
             return
-        seen.add(("highlight", label))
-        found.append(("highlight", label))
+        seen.add(("highlight", target))
+        found.append(("highlight", target))
 
     for m in _JUMP_RE.finditer(source or ""):
         key = ("jump", m.group(1))
@@ -145,14 +177,15 @@ def mermaid_link_targets(source: str) -> List[Tuple[str, str]]:
             continue
         em = _EDGE_RE.match(s)
         if em:
-            _add_hl(em.group(2) or em.group(3) or em.group(1) or "")
-            _add_hl(em.group(6) or em.group(7) or em.group(5) or "")
+            # Prefer display labels; bare ids (F, C0) are not timeline targets.
+            _add_hl(em.group(2) or em.group(3) or "")
+            _add_hl(em.group(7) or em.group(8) or "")
             continue
         nm = _NODE_RE.match(s)
         if nm:
             _add_hl(
                 nm.group(2) or nm.group(3) or nm.group(4)
-                or nm.group(5) or nm.group(1) or ""
+                or nm.group(5) or ""
             )
     return found
 
@@ -497,13 +530,17 @@ def _parse_flowchart(
         line = raw.strip().rstrip(";")
         if not line or line.lower().startswith("graph ") or line.lower().startswith("flowchart "):
             continue
-        if line.startswith("%%"):
+        if line.startswith("%%") or line.lower().startswith("style "):
             continue
         em = _EDGE_RE.match(line)
         if em:
             _add_node(em.group(1), em.group(2) or em.group(3))
-            _add_node(em.group(5), em.group(6) or em.group(7))
-            edges.append((em.group(1), em.group(5), (em.group(4) or "").strip()))
+            _add_node(em.group(6), em.group(7) or em.group(8))
+            edges.append((
+                em.group(1),
+                em.group(6),
+                (em.group(4) or em.group(5) or "").strip(),
+            ))
             continue
         nm = _NODE_RE.match(line)
         if nm:

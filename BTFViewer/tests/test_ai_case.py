@@ -253,6 +253,10 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertIn("search_timeline", compact_tools)
         self.assertNotIn("what_if", compact_tools)
         self.assertIsNone(tool_names_for_context_mode("full", "triage"))
+        report_tools = tool_names_for_context_mode("compact", "report")
+        self.assertIn("generate_report", report_tools)
+        self.assertIn("export_report", report_tools)
+        self.assertNotIn("export_investigation", report_tools)
         findings = "\n".join(
             [
                 "Analysis Findings",
@@ -407,12 +411,14 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertIn("evidence_quality", payload)
         md = format_evidence_panel_markdown(payload, "English")
         self.assertIn("Evidence Quality", md)
-        self.assertIn("disprove", md.lower())
+        self.assertIn("missing evidence", md.lower())
         self.assertIn("Confidence evolution", md)
         self.assertIn("Historical knowledge", md)
         self.assertIn("btfhyp:supported", md)
         self.assertIn("btfhyp:compare/all", md)
         self.assertIn("Supporting evidence", md)
+        self.assertIn("**Status:**", md)
+        self.assertIn("Investigation details", md)
 
     def test_scope_privacy_experiment_and_knowledge(self) -> None:
         from btf_viewer_pkg.ai_case import (

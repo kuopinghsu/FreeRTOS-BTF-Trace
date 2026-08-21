@@ -41,6 +41,11 @@ describe('App.vue tab-switch parity', () => {
     assert.match(app, /timelineOptions\.lockedTaskKey = lockKey/)
   })
 
+  it('status-bar inspector uses segment or pin (same as CPU Load)', () => {
+    assert.match(app, /taskInspectorText = computed\(\(\) => taskInspectorLine\(/)
+    assert.match(app, /selectedTaskFromHighlight\(\{\s*highlightSegment:/)
+  })
+
   it('does not force Statistics when switching trace tabs', () => {
     const start = app.indexOf('watch(activeTabId')
     assert.ok(start >= 0)

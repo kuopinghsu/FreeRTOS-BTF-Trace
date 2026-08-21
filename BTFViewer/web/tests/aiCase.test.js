@@ -67,8 +67,10 @@ describe('aiCase investigation lifecycle', () => {
     assert.match(md, /btfhyp:supported/)
     assert.match(md, /btfhyp:compare\/all/)
     assert.match(md, /Direct evidence/)
-    assert.match(md, /Directly observed/)
+    assert.match(md, /\*\*Status:\*\*/)
+    assert.match(md, /Investigation details/)
     assert.match(md, /Supporting evidence/)
+    assert.match(md, /Missing evidence|missing evidence|Checks/)
   })
 
   it('flags invented tasks and out-of-window jumps', () => {
@@ -256,6 +258,10 @@ describe('aiCase investigation lifecycle', () => {
     assert.ok(compactTools.includes('search_timeline'))
     assert.equal(compactTools.includes('what_if'), false)
     assert.equal(toolNamesForContextMode('full', 'triage'), null)
+    const reportTools = toolNamesForContextMode('compact', 'report')
+    assert.ok(reportTools.includes('generate_report'))
+    assert.ok(reportTools.includes('export_report'))
+    assert.equal(reportTools.includes('export_investigation'), false)
     const findings = [
       'Analysis Findings', '',
       '1. [ERROR] id=e1 Critical stall', '   CS[22] blocked jump:100', '',

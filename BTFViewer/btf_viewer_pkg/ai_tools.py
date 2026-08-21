@@ -28,6 +28,7 @@ from .ai_investigation import (
     estimate_what_if,
     explain_regression,
     find_related_findings,
+    conclusion_status_from_payload,
     generate_structured_report,
     max_tool_rounds_for_template,
     recommend_validation_experiments,
@@ -392,8 +393,8 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "```\n"
     "When a mutex take/give, block, resume, or priority-boost sequence is the point, "
     "include a fenced mermaid sequenceDiagram. When summarising core-to-core "
-    "migrations, include a fenced mermaid graph LR flowchart with cores as nodes "
-    "and migration counts on edges."
+    "migrations, include a fenced ```mermaid graph LR flowchart with cores as nodes "
+    "and migration counts on edges (prefer A -->|count| B; A -- count --> B is also ok)."
 )
 
 AI_MERMAID_SEQUENCE_EXAMPLE = """```mermaid
@@ -2343,9 +2344,11 @@ def tool_mutates_gui(name: str) -> bool:
 
 
 def tool_batch_auto_runs(tools: Optional[Sequence[Any]]) -> bool:
-    """Query-only batches run immediately (no Apply card)."""
+    """Query/export-only batches run immediately (no Apply card)."""
     names = [str((t or {}).get("name") or "") for t in (tools or [])]
-    return bool(names) and all(is_query_tool(n) for n in names)
+    return bool(names) and all(
+        is_query_tool(n) or is_export_tool(n) for n in names
+    )
 
 
 def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optional[Dict[str, Any]], str]:
@@ -2424,7 +2427,10 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
             fmt = "json"
         else:
             return None, 'format must be "html", "csv", or "json"'
-        return {"format": fmt}, ""
+        mode = str(a.get("mode") or a.get("report_mode") or "summary").strip().lower()
+        if mode not in ("summary", "technical", "full"):
+            mode = "summary"
+        return {"format": fmt, "mode": mode}, ""
     if name == AI_TOOL_CLEAR_MARKS:
         what = str(a.get("what") or "all").strip().lower()
         aliases = {
@@ -3437,6 +3443,160 @@ def _html_escape(text: Any) -> str:
     )
 
 
+
+_TASK_FINDING_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9_.-]*\[\d+\])")
+_SEVERITY_RE = re.compile(
+    r"\[?\s*(CRITICAL|WARNING|WARN|ERROR|INFO|HIGH|MEDIUM|LOW)\s*\]?",
+    re.IGNORECASE,
+)
+
+
+def filter_entries_for_ai_report(entries: Optional[Sequence[Any]] = None) -> List[Any]:
+    """Drop export-tool cards and empty shells so the report is not self-referential."""
+    out: List[Any] = []
+    for entry in entries or []:
+        tools = []
+        if isinstance(entry, dict):
+            tools = list(entry.get("tools") or [])
+        kept_tools = [
+            t for t in tools
+            if isinstance(t, dict) and not is_export_tool(str(t.get("name") or ""))
+        ]
+        if tools and not kept_tools:
+            # Pure export batch — omit from the diagnostic report.
+            continue
+        if isinstance(entry, dict) and tools and kept_tools != tools:
+            entry = dict(entry)
+            entry["tools"] = kept_tools
+        text = ""
+        if isinstance(entry, dict):
+            text = str(entry.get("text") or entry.get("content") or "")
+        elif isinstance(entry, (list, tuple)) and len(entry) >= 2:
+            text = str(entry[1] or "")
+        low = text.lower()
+        if "export html report" in low or "export_report" in low and "pending" in low:
+            if not kept_tools and not (text.strip() and "export" not in low[:40]):
+                # Skip pending export status lines when they are the whole entry.
+                if "pending" in low and len(text.strip()) < 80:
+                    continue
+        out.append(entry)
+    return out
+
+
+def _cursor_bounds_from_gui(gui: Optional[dict] = None) -> Tuple[Optional[float], Optional[float]]:
+    data = gui if isinstance(gui, dict) else {}
+    cursors = data.get("cursors")
+    if not isinstance(cursors, (list, tuple)) or len(cursors) < 2:
+        return None, None
+    try:
+        vals = [float(c) for c in cursors]
+    except (TypeError, ValueError):
+        return None, None
+    return min(vals), max(vals)
+
+
+def _fmt_report_time(t: Any) -> str:
+    try:
+        v = float(t)
+    except (TypeError, ValueError):
+        return str(t or "")
+    if abs(v) >= 1000:
+        return f"{v:.0f}"
+    return f"{v:.6g}"
+
+
+def _evidence_in_scope(ev: dict, lo: Optional[float], hi: Optional[float]) -> bool:
+    if lo is None or hi is None:
+        return True
+    start, stop, t = ev.get("start"), ev.get("stop"), ev.get("time")
+    if start is not None and stop is not None:
+        return _overlaps_range(start, stop, lo, hi)
+    if t is not None:
+        return _in_time_range(t, lo, hi)
+    return True
+
+
+def _partition_report_evidence(
+    evidence: Sequence[Any],
+    lo: Optional[float],
+    hi: Optional[float],
+) -> Tuple[List[dict], List[dict]]:
+    kept: List[dict] = []
+    rejected: List[dict] = []
+    for ev in evidence or []:
+        if not isinstance(ev, dict):
+            continue
+        if _evidence_in_scope(ev, lo, hi):
+            kept.append(ev)
+        else:
+            rejected.append(ev)
+    return kept, rejected
+
+
+def _status_label_for_report(key: str) -> str:
+    return {
+        "confirmed": "Confirmed",
+        "correlated": "Correlated",
+        "suspected": "Suspected",
+        "not_observed": "Not observed",
+        "insufficient": "Insufficient data",
+    }.get(str(key or ""), "Suspected")
+
+
+def _ranked_findings_from_text(findings: str) -> List[Dict[str, str]]:
+    rows: List[Dict[str, str]] = []
+    for line in str(findings or "").splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        sev = "Info"
+        m = _SEVERITY_RE.search(raw)
+        if m:
+            token = m.group(1).upper()
+            sev = {
+                "CRITICAL": "High", "ERROR": "High", "HIGH": "High",
+                "WARNING": "Medium", "WARN": "Medium", "MEDIUM": "Medium",
+                "INFO": "Info", "LOW": "Info",
+            }.get(token, "Info")
+        task_m = _TASK_FINDING_RE.search(raw)
+        task = task_m.group(1) if task_m else "—"
+        title = _SEVERITY_RE.sub("", raw)
+        title = re.sub(r"^\d+[\.)]\s*", "", title).strip(" -–—:")
+        rows.append({
+            "severity": sev,
+            "finding": title[:160] or raw[:160],
+            "task": task,
+            "scope": "Current scope",
+            "confidence": "Suspected",
+        })
+        if len(rows) >= 12:
+            break
+    return rows
+
+
+def _html_table(headers: Sequence[str], rows: Sequence[Sequence[Any]]) -> str:
+    head = "".join(f"<th>{_html_escape(h)}</th>" for h in headers)
+    body = []
+    for row in rows:
+        cells = "".join(f"<td>{_html_escape(c)}</td>" for c in row)
+        body.append(f"<tr>{cells}</tr>")
+    return (
+        f'<table class="ai-md-table"><thead><tr>{head}</tr></thead>'
+        f"<tbody>{''.join(body)}</tbody></table>"
+    )
+
+
+def _details_block(title: str, inner_html: str, *, open_: bool = False) -> str:
+    op = " open" if open_ else ""
+    return (
+        f"<details class=\"report-appendix\"{op}>"
+        f"<summary>{_html_escape(title)}</summary>"
+        f"<div class=\"appendix-body\">{inner_html}</div>"
+        f"</details>"
+    )
+
+
+
 def build_ai_report_html(
     *,
     meta: Optional[Dict[str, Any]] = None,
@@ -3444,23 +3604,197 @@ def build_ai_report_html(
     findings: str = "",
     annotations: Optional[Sequence[Dict[str, Any]]] = None,
     conversation_html: str = "",
+    evidence_payload: Optional[Dict[str, Any]] = None,
+    analysis_complete: bool = True,
+    report_mode: str = "summary",
 ) -> str:
-    """Standalone HTML report wrapping findings, GUI state, and the chat."""
+    """Standalone HTML diagnostic report (summary first; transcript in appendix)."""
     import datetime
 
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    mode = str(report_mode or "summary").strip().lower()
+    if mode not in ("summary", "technical", "full"):
+        mode = "summary"
+    meta_d = dict(meta or {})
+    gui_d = dict(gui or {})
+    payload = evidence_payload if isinstance(evidence_payload, dict) else {}
+    lo, hi = _cursor_bounds_from_gui(gui_d)
+
+    status_key = conclusion_status_from_payload(payload) if payload else (
+        "insufficient" if not str(findings or "").strip() else "suspected"
+    )
+    status_label = _status_label_for_report(status_key)
+    completeness = "Complete" if analysis_complete else "Analysis incomplete"
+    overall = "Warning" if status_key in ("suspected", "insufficient") else (
+        "OK" if status_key in ("confirmed", "correlated", "not_observed") else "Warning"
+    )
+
+    # --- Header / executive summary ---
+    conclusion = str(payload.get("conclusion") or "").strip()
+    subtitle_bits = [
+        f"Scope: {_html_escape(meta_d.get('scope') or 'full trace')}",
+        f"Span: {_html_escape(meta_d.get('span') or '—')}",
+        f"Cores: {_html_escape(meta_d.get('cores') or '—')}",
+        f"Analysis: {_html_escape(completeness)}",
+    ]
+    if lo is not None and hi is not None:
+        subtitle_bits.insert(
+            0,
+            f"Cursor: {_html_escape(_fmt_report_time(lo))}–{_html_escape(_fmt_report_time(hi))}",
+        )
+    exec_lines = [
+        f'<p class="status-row"><span class="badge">{_html_escape(overall)}</span> '
+        f'<span class="badge badge-status">{_html_escape(status_label)}</span> '
+        f'<span class="badge badge-{"ok" if analysis_complete else "warn"}">'
+        f"{_html_escape(completeness)}</span></p>",
+        f'<p class="report-scope">{" · ".join(subtitle_bits)}</p>',
+    ]
+    if not analysis_complete:
+        exec_lines.append(
+            '<p class="warn-banner"><strong>Analysis incomplete.</strong> '
+            "Export again after the investigation finishes for a consistent snapshot."
+            "</p>"
+        )
+    if conclusion:
+        exec_lines.append(f"<p>{_html_escape(conclusion)}</p>")
+    elif str(findings or "").strip():
+        first = next(
+            (ln.strip() for ln in str(findings).splitlines() if ln.strip()),
+            "",
+        )
+        if first:
+            exec_lines.append(f"<p>{_html_escape(first[:320])}</p>")
+    else:
+        exec_lines.append("<p>No consolidated finding yet.</p>")
+
+    # --- Coverage ---
+    cov_rows: List[List[str]] = []
+    checks = [c for c in (payload.get("checks") or []) if isinstance(c, dict)]
+    quality = payload.get("evidence_quality") if isinstance(
+        payload.get("evidence_quality"), dict) else {}
+    qflags = quality.get("flags") if isinstance(quality.get("flags"), dict) else {}
+    if checks:
+        for c in checks[:12]:
+            cov_rows.append([
+                str(c.get("label") or c.get("metric") or "check"),
+                str(c.get("status") or "Not evaluated"),
+                str(c.get("detail") or "—")[:120],
+            ])
+    elif qflags:
+        for key, title in (
+            ("direct_evidence", "Direct evidence"),
+            ("timeline_correlation", "Timeline correlation"),
+            ("metric_correlation", "Metric correlation"),
+        ):
+            val = qflags.get(key)
+            if val is True:
+                cell = "Observed"
+            elif val is False:
+                cell = "Not observed"
+            elif val is None:
+                cell = "Not evaluated"
+            else:
+                cell = str(val)
+            cov_rows.append([title, cell, "—"])
+    coverage_html = (
+        _html_table(["Category", "Result", "Strongest evidence"], cov_rows)
+        if cov_rows else "<p>No coverage checklist recorded for this session.</p>"
+    )
+
+    # --- Ranked findings ---
+    ranked = _ranked_findings_from_text(findings)
+    if not ranked and conclusion:
+        ranked = [{
+            "severity": "Medium",
+            "finding": conclusion[:160],
+            "task": "—",
+            "scope": "Current scope",
+            "confidence": status_label,
+        }]
+    ranked_html = (
+        _html_table(
+            ["Severity", "Finding", "Task", "Scope", "Confidence"],
+            [[r["severity"], r["finding"], r["task"], r["scope"], r["confidence"]]
+             for r in ranked],
+        ) if ranked else "<p>No ranked findings.</p>"
+    )
+
+    # --- Evidence table (in-scope) + rejected ---
+    evidence = [e for e in (payload.get("evidence") or []) if isinstance(e, dict)]
+    kept, rejected = _partition_report_evidence(evidence, lo, hi)
+    ev_rows = []
+    for ev in kept[:40]:
+        label = str(ev.get("label") or "event")
+        task_m = _TASK_FINDING_RE.search(label)
+        task = str(ev.get("task") or (task_m.group(1) if task_m else "—"))
+        t = ev.get("time", ev.get("start", ""))
+        dur = ""
+        if ev.get("start") is not None and ev.get("stop") is not None:
+            try:
+                delta = float(ev["stop"]) - float(ev["start"])
+                dur = f"{delta * 1_000_000:.0f} µs" if delta < 1 else f"{delta:.6g} s"
+            except (TypeError, ValueError):
+                dur = "—"
+        ev_rows.append([
+            _fmt_report_time(t), label, task,
+            str(ev.get("core") or "—"), dur or "—", "In scope",
+        ])
+    evidence_html = (
+        _html_table(
+            ["Time", "Event", "Task", "Core", "Duration", "Scope"],
+            ev_rows,
+        ) if ev_rows else "<p>No in-scope evidence rows.</p>"
+    )
+    rejected_rows = []
+    for ev in rejected[:40]:
+        rejected_rows.append([
+            _fmt_report_time(ev.get("time", ev.get("start", ""))),
+            str(ev.get("label") or "event"),
+            "Excluded",
+        ])
+    rejected_html = (
+        _html_table(["Time", "Event", "Scope"], rejected_rows)
+        if rejected_rows else "<p>None.</p>"
+    )
+
+    # --- Next action ---
+    falsify = payload.get("falsify") if isinstance(payload.get("falsify"), dict) else {}
+    nxt = str(falsify.get("next_check") or "").strip()
+    next_html = f"<p>{_html_escape(nxt)}</p>" if nxt else "<p>No next action recorded.</p>"
+
+    # --- Finding detail (observation vs interpretation) ---
+    chain = str(payload.get("evidence_chain") or "").strip()
+    detail_html = ""
+    if conclusion or chain:
+        detail_html = (
+            f"<p><strong>Observation</strong> — {_html_escape(conclusion or 'See evidence table.')}</p>"
+            f"<p><strong>Interpretation</strong> — "
+            f"{_html_escape(chain or 'Cause not confirmed from direct events alone.')}</p>"
+            f"<p><strong>Confidence</strong> — {_html_escape(status_label)} "
+            f"(derived from evidence status; not a free-form model claim).</p>"
+        )
+
+    # --- Appendix pieces ---
     meta_rows = "".join(
         f"<tr><th>{_html_escape(k)}</th><td>{_html_escape(v)}</td></tr>"
-        for k, v in dict(meta or {}).items()
+        for k, v in meta_d.items()
     )
-    gui_d = dict(gui or {})
     gui_rows = []
     for key, val in gui_d.items():
         if key == "annotations":
             continue
         if key == "cursors" and isinstance(val, (list, tuple)):
-            val = ", ".join(f"{c:g}" if isinstance(c, (int, float)) else str(c) for c in val)
-        gui_rows.append(f"<tr><th>{_html_escape(key)}</th><td>{_html_escape(val)}</td></tr>")
+            # Preserve precision (avoid scientific notation for integers).
+            bits = []
+            for c in val:
+                try:
+                    bits.append(_fmt_report_time(float(c)))
+                except (TypeError, ValueError):
+                    bits.append(str(c))
+            val = ", ".join(bits)
+        gui_rows.append(
+            f"<tr><th>{_html_escape(key)}</th><td>{_html_escape(val)}</td></tr>"
+        )
     anns = list(annotations or [])
     if not anns and isinstance(gui_d.get("annotations"), list):
         anns = list(gui_d["annotations"])
@@ -3473,33 +3807,75 @@ def build_ai_report_html(
         f"<pre>{_html_escape(findings)}</pre>" if (findings or "").strip()
         else "<p>No findings for the current scope.</p>"
     )
-    conv = (conversation_html or "").strip()
+    conv = (conversation_html or "").strip() or "<p>No conversation.</p>"
+
+    appendix_open = mode == "full"
+    appendix = (
+        _details_block("Rejected evidence (out of cursor window)", rejected_html)
+        + _details_block("Raw Analysis Findings", findings_body)
+        + _details_block(
+            "GUI state",
+            f'<table class="gui-table">{"".join(gui_rows) or "<tr><td>None</td></tr>"}</table>',
+        )
+        + _details_block(
+            "Annotations",
+            f'<table class="ann-table"><tr><th>Time</th><th>Note</th></tr>{ann_rows}</table>',
+        )
+        + _details_block(
+            "Report metadata",
+            f'<table class="meta-table">{meta_rows or "<tr><td>None</td></tr>"}</table>',
+        )
+        + _details_block(
+            "Conversation export",
+            conv,
+            open_=appendix_open,
+        )
+    )
+    if mode == "technical":
+        # Technical mode opens coverage-adjacent appendix pieces.
+        pass
+
+    note = (
+        '<p class="export-note">Standalone export: <code>btfjump:</code> / '
+        "<code>jump:</code> links require BTFViewer. Timestamps above are "
+        "readable forms of the raw cursor values.</p>"
+    )
+
     body = (
         f'<section class="report-card">\n'
-        f"<h2>Report metadata</h2>\n"
-        f'<table class="meta-table">{meta_rows or "<tr><td>None</td></tr>"}</table>\n'
+        f"<h2>Executive summary</h2>\n"
+        f"{''.join(exec_lines)}\n"
         f"</section>\n"
         f'<section class="report-card">\n'
-        f"<h2>GUI state</h2>\n"
-        f'<table class="gui-table">{"".join(gui_rows) or "<tr><td>None</td></tr>"}</table>\n'
+        f"<h2>Coverage summary</h2>\n"
+        f"{coverage_html}\n"
         f"</section>\n"
         f'<section class="report-card">\n'
-        f"<h2>Annotations</h2>\n"
-        f'<table class="ann-table"><tr><th>Time</th><th>Note</th></tr>{ann_rows}</table>\n'
+        f"<h2>Ranked findings</h2>\n"
+        f"{ranked_html}\n"
         f"</section>\n"
         f'<section class="report-card">\n'
-        f"<h2>Analysis Findings</h2>\n"
-        f"{findings_body}\n"
+        f"<h2>Finding details</h2>\n"
+        f"{detail_html or '<p>See ranked findings and evidence table.</p>'}\n"
         f"</section>\n"
         f'<section class="report-card">\n'
-        f"<h2>Conversation</h2>\n"
-        f"{conv}\n"
+        f"<h2>Evidence</h2>\n"
+        f"{evidence_html}\n"
+        f"</section>\n"
+        f'<section class="report-card">\n'
+        f"<h2>Next action</h2>\n"
+        f"{next_html}\n"
+        f"</section>\n"
+        f'<section class="report-card">\n'
+        f"<h2>Appendix</h2>\n"
+        f"{appendix}\n"
+        f"{note}\n"
         f"</section>\n"
     )
     return btf_html_report_document(
         "AI Diagnostic Report",
         body,
-        subtitle=f"Saved {stamp}",
+        subtitle=f"Saved {stamp} · mode={mode}",
         doc_title="BTFViewer — AI Report",
     )
 

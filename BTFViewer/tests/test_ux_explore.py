@@ -114,6 +114,12 @@ class UxExploreTest(unittest.TestCase):
         self.assertIn(42.0, times)
         self.assertIn("Task T1", task_inspector_line("T1", ["gap"]))
         self.assertIn("No task selected", task_inspector_line("", []))
+        self.assertEqual(
+            task_inspector_line("\x0028\x00CS", []),
+            "Task CS[28]",
+        )
+        self.assertNotIn("\x00", task_inspector_line("\x00267\x00Med", ["warn"]))
+        self.assertIn("Med[267]", task_inspector_line("\x00267\x00Med", ["warn"]))
 
     def test_parse_signed_delta_and_regressions(self) -> None:
         self.assertEqual(parse_signed_delta("+12.3 µs")[0], 12300.0)

@@ -626,6 +626,7 @@ import {
   buildAiReportCsv,
   buildAiReportHtml,
   canonicalAssistantToolMessage,
+  filterEntriesForAiReport,
   isExportTool,
   isQueryTool,
   maxToolRounds,
@@ -711,6 +712,7 @@ import {
   aiFileStamp,
   aiRoleLabel,
   formatAiConversationHtml,
+  formatAiConversationHtmlBody,
   formatAiConversationMarkdown,
   formatAiConversationText,
   formatAiMessageHtml,
@@ -1348,6 +1350,18 @@ async function writeClipboard(text) {
   }
 }
 
+function triggerBrowserDownload(data, name, mime) {
+  const url = URL.createObjectURL(new Blob([data], { type: mime }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = name
+  link.rel = 'noopener'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 4000)
+}
+
 function saveConversationAs(format) {
   closeLogMenu()
   if (!messages.value.length) return
@@ -1366,12 +1380,7 @@ function saveConversationAs(format) {
     mime = 'text/markdown;charset=utf-8'
   }
   const name = `ai-conversation-${aiFileStamp()}.${format}`
-  const url = URL.createObjectURL(new Blob([data], { type: mime }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = name
-  a.click()
-  URL.revokeObjectURL(url)
+  triggerBrowserDownload(data, name, mime)
   status.value = `Saved conversation to ${name}`
 }
 
@@ -1424,17 +1433,23 @@ function exportInvestigationFile(args, meta) {
   })
   const data = JSON.stringify(pkg, null, 2)
   const fname = `ai-investigation-${aiFileStamp()}.json`
-  const url = URL.createObjectURL(new Blob([data], { type: 'application/json;charset=utf-8' }))
-  const link = document.createElement('a')
-  link.href = url
-  link.download = fname
-  link.click()
-  URL.revokeObjectURL(url)
+  triggerBrowserDownload(data, fname, 'application/json;charset=utf-8')
   status.value = `Saved investigation to ${fname}`
   return { ok: true, message: `Saved investigation package to ${fname}`, path: fname }
 }
 
 function exportAiReport(toolName, args = {}) {
+  try {
+    return exportAiReportInner(toolName, args || {})
+  } catch (err) {
+    return { ok: false, message: err?.message || String(err) }
+  }
+}
+
+function exportAiReportInner(toolName, args = {}) {
+  // Still download while a follow-up turn may be scheduled; completeness
+  // in the HTML uses analysisComplete below (matches desktop).
+  const midFlight = !!busy.value
   let fmt = String(args.format || 'html').trim().toLowerCase()
   if (fmt !== 'csv' && fmt !== 'json') fmt = 'html'
   let gui = {}
@@ -1468,6 +1483,10 @@ function exportAiReport(toolName, args = {}) {
     return exportInvestigationFile(args, meta)
   }
   const stamp = aiFileStamp()
+  const reportEntries = filterEntriesForAiReport(messages.value)
+  const hasAssistant = reportEntries.some(m => m && m.role === 'assistant')
+  const analysisComplete = hasAssistant && !midFlight
+  const mode = String(args.mode || args.report_mode || 'summary')
   let data
   let name
   let mime
@@ -1477,7 +1496,7 @@ function exportAiReport(toolName, args = {}) {
       gui,
       findings,
       annotations,
-      conversation: formatAiConversationText(messages.value),
+      conversation: formatAiConversationText(reportEntries),
     })
     name = `ai-report-${stamp}.csv`
     mime = 'text/csv;charset=utf-8'
@@ -1487,17 +1506,15 @@ function exportAiReport(toolName, args = {}) {
       gui,
       findings,
       annotations,
-      conversationHtml: formatAiConversationHtmlBody(messages.value),
+      conversationHtml: formatAiConversationHtmlBody(reportEntries),
+      evidencePayload,
+      analysisComplete,
+      reportMode: mode,
     })
     name = `ai-report-${stamp}.html`
     mime = 'text/html;charset=utf-8'
   }
-  const url = URL.createObjectURL(new Blob([data], { type: mime }))
-  const link = document.createElement('a')
-  link.href = url
-  link.download = name
-  link.click()
-  URL.revokeObjectURL(url)
+  triggerBrowserDownload(data, name, mime)
   status.value = `Saved report to ${name}`
   return { ok: true, message: `Saved ${fmt} report to ${name}`, path: name }
 }
@@ -1999,6 +2016,7 @@ function commitBatch(batchId, skipped) {
     msg.tools.forEach((t, i) => {
       const res = results[i] || {}
       t.status = res.ok === false ? 'failed' : 'applied'
+      t.result = String(res.message || '')
     })
   }
   msg.tools.forEach((t, i) => {
@@ -2031,6 +2049,8 @@ async function continueAfterTools() {
     authForced.value = false
     const pending = ingestTurn(turn)
     if (pending && pending.auto) {
+      // Match desktop: clear busy before export/download, then continue.
+      busy.value = false
       commitBatch(pending.batchId, false)
       await continueAfterTools()
     } else if (pending) {
@@ -2164,6 +2184,8 @@ async function send(overrideQuery = null, overrideCtx = null) {
     authForced.value = false
     const pending = ingestTurn(turn)
     if (pending && pending.auto) {
+      // Match desktop: clear busy before export/download, then continue.
+      busy.value = false
       commitBatch(pending.batchId, false)
       await continueAfterTools()
     } else if (pending) {

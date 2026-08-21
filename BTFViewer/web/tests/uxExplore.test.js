@@ -29,6 +29,7 @@ import {
   waiterOwnerMatrix,
   sparkline,
   distributionExplorer,
+  taskInspectorLine,
 } from '../src/utils/uxExplore.js'
 
 function ev(kind, task, start, duration) {
@@ -284,5 +285,14 @@ describe('uxExplore', () => {
     )
     assert.equal(periods[0].burst, 1)
     assert.ok(periods[0].spark)
+  })
+})
+
+describe('taskInspectorLine', () => {
+  it('decodes merge keys to Name[id] (no NUL glyphs)', () => {
+    assert.equal(taskInspectorLine('\x0028\x00CS', []), 'Task CS[28]')
+    assert.equal(taskInspectorLine('T1', ['gap']), 'Task T1 · gap')
+    assert.equal(taskInspectorLine('', []), 'No task selected')
+    assert.equal(taskInspectorLine('\x00267\x00Med', []).includes('\x00'), false)
   })
 })
