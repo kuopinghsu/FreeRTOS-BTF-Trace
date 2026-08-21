@@ -2,9 +2,9 @@
 
 本文件提供一套適合新手的 RTOS 排程追蹤分析流程，協助你從現象逐步找到可驗證的證據。
 
-若要了解介面操作，請參閱 [`README.md`](README.md)；若要查詢統計指標的定義與限制，請參閱 [`STATISTICS_zh-TW.md`](STATISTICS_zh-TW.md)；若要設定 AI 或使用進階調查工具，請參閱 [`AI_zh-TW.md`](AI_zh-TW.md)。
+若要了解介面操作，請參閱 [`README_zh-TW.md`](README_zh-TW.md)；若要查詢統計指標的定義與限制，請參閱 [`STATISTICS_zh-TW.md`](STATISTICS_zh-TW.md)；若要設定 AI 或使用進階調查工具，請參閱 [`AI_zh-TW.md`](AI_zh-TW.md)。
 
-> **核心原則：**追蹤資料與 Statistics 是實際量測的證據；Analysis Findings 是調查線索；AI 回覆是解讀；What-if 結果則是估算。
+> **核心原則：** 追蹤資料與 **Statistics** 是實際量測的證據；**Analysis Findings** 是調查線索；AI 回覆是對證據的解讀；What-if 結果則是估算。
 
 <a id="workflow-at-a-glance" name="workflow-at-a-glance">&#x200B;</a>
 
@@ -36,18 +36,18 @@ flowchart TD
 
 ## 10 分鐘快速檢查
 
-第一次開啟不熟悉的追蹤檔時，先依下列步驟快速檢查，不必從頭閱讀所有 Statistics 表格：
+第一次開啟不熟悉的追蹤檔時，先依下列步驟快速檢查，不必從頭閱讀所有 **Statistics** 表格：
 
 | 步驟 | 操作 | 結果 |
 |---:|---|---|
 | 1 | 開啟追蹤檔並選擇 **Fit** | 確認完整擷取範圍可見 |
 | 2 | 開啟 **Load**，切換 **Task View** 與 **Core View** | 找出工作負載階段與整體活動狀況 |
-| 3 | 開啟 **Statistics** 與 **Analysis** | 查看追蹤警告、事件群組與排序後的發現 |
+| 3 | 開啟 **Statistics** 與 **Analysis** | 查看追蹤警告、事件群組與依嚴重程度排序的分析結果 |
 | 4 | 查看 **Trace Health (TICK)** | 判斷時序資料是否可用，或 Tickless 行為是否符合預期 |
-| 5 | 開啟最相關 Finding 指定的 Statistics 項目 | 避免檢查無關指標 |
+| 5 | 開啟最相關分析結果（Finding）指定的 **Statistics** 項目 | 避免檢查無關指標 |
 | 6 | 按一下 **Max**、**p95**、資料列、圖表資料點或熱圖儲存格 | 跳到實際量測的時間軸證據 |
 | 7 | 設定 C1–C2，並啟用 **Limit to C1–Cn** | 排除無關的工作負載階段 |
-| 8 | 重新檢查 Analysis 與 Statistics | 確認問題在限定範圍內仍然存在 |
+| 8 | 重新檢查 **Analysis** 與 **Statistics** | 確認問題在限定範圍內仍然存在 |
 | 9 | 視需要使用 **Investigate…**、**Verify with AI…** 或 **Explain region** | 讓 AI 解釋已找到的證據 |
 | 10 | 保存證據，並在修改後重複相同量測 | 保留並驗證分析結果 |
 
@@ -70,7 +70,7 @@ BTFViewer 不會分析原始碼，也不會模擬 RTOS 排程器；它只能量�
 2. 選擇 **Fit**，先查看完整擷取範圍。
 3. 先用 **Task View** 找出執行中的工作，再切換至 **Core View** 檢查多核心配置。
 4. 開啟 **Load**，觀察 CPU 使用率隨時間的變化。
-5. 將滑鼠移到代表性的執行片段上，確認工作、核心、開始時間與持續時間。
+5. 將滑鼠移到代表性的執行區段上，確認工作、核心、開始時間與持續時間。
 
 此時先辨識階段，不要急著判定原因，例如：啟動、穩定執行、突發負載、閒置與結束階段。
 
@@ -81,7 +81,7 @@ BTFViewer 不會分析原始碼，也不會模擬 RTOS 排程器；它只能量�
 請確認：
 
 - Tick 資料是否缺漏或不規律。
-- 是否出現大型間隙，或擷取時間短於預期。
+- 是否出現大型間隔，或擷取時間短於預期。
 - 分析所需的 STI 通道是否存在。
 - 預期出現的工作或核心是否缺少。
 - 追蹤範圍是否真的包含使用者回報的問題。
@@ -92,7 +92,7 @@ BTFViewer 不會分析原始碼，也不會模擬 RTOS 排程器；它只能量�
 
 ## 3. 建立完整追蹤的基準
 
-限定範圍之前，先查看下列 Statistics 項目：
+限定範圍之前，先查看下列 **Statistics** 項目：
 
 | 檢查項目 | 用途 |
 |---|---|
@@ -108,16 +108,16 @@ BTFViewer 不會分析原始碼，也不會模擬 RTOS 排程器；它只能量�
 
 ## 4. 執行確定性初步分析
 
-按一下 **Analysis**，開啟目前 Statistics 範圍的 **Analysis Findings**。
+按一下 **Analysis**，開啟目前 **Statistics** 範圍的 **Analysis Findings**。
 
-針對每項相關發現：
+針對每項相關分析結果：
 
-1. 記下嚴重程度、工作或核心、相關指標，以及建議查看的 Statistics 項目。
-2. 將發現視為待驗證的假設，不要直接當成根本原因。
-3. 開啟指定的 Statistics 項目，確認能否重現報告中的數值。
-4. 若發現內容提供合適的時間範圍，可使用 **Apply cursors**。
+1. 記下嚴重程度、工作或核心、相關指標，以及建議查看的 **Statistics** 項目。
+2. 將分析結果視為待驗證的假設，不要直接當成根本原因。
+3. 開啟指定的 **Statistics** 項目，確認能否重現報告中的數值。
+4. 若分析結果提供合適的時間範圍，可使用 **Apply cursors**。
 
-若沒有明顯發現，請先查看 **Timeline Anomalies**、**Worst Events**，再依下表選擇分析路徑。
+若沒有明顯的分析結果，請先查看 **Timeline Anomalies**、**Worst Events**，再依下表選擇分析路徑。
 
 ## 5. 依症狀選擇分析路徑
 
@@ -131,7 +131,7 @@ BTFViewer 不會分析原始碼，也不會模擬 RTOS 排程器；它只能量�
 | 啟動週期不規律 | **Period / Jitter** | Inter-Arrival Time、Unified Jitter、Recurring Patterns |
 | Tick 抖動或遺漏 | **Trace Health (TICK)** | Tick Distribution、忙碌時段的 Execution Max |
 | 多核心負載不平均 | **Core utilisation** | Task × Core、Concurrent Core Active、Core Time Breakdown；**Load Balance Score** |
-| 核心頻繁遷移或來回跳動 | **Core Migrations** | Heatmap、Corridor Inspector、Core Affinity、mutex bounces |
+| 核心頻繁遷移或來回跳動 | **Core Migrations** | Heatmap、Corridor Inspector、Core Affinity、Mutex 跨核心移動 |
 | 優先權反轉 | **Priority Inheritance** | Mutex pairing、Mutex Blocking、Waiter × Owner |
 | 鎖定或佇列延遲 | **Mutex / Semaphore / Queue** | Blocking Time、Critical Path、Migrations |
 
@@ -140,7 +140,7 @@ BTFViewer 不會分析原始碼，也不會模擬 RTOS 排程器；它只能量�
 ```mermaid
 flowchart TD
   symptom{"最明顯的現象是什麼？"}
-  symptom -->|CPU 執行片段過長| execution["Execution Time"]
+  symptom -->|CPU 執行區段過長| execution["Execution Time"]
   symptom -->|等待時間過長| blocking["Blocking 與同步"]
   symptom -->|延遲或週期不規律| timing["Dispatch、Period、Jitter"]
   symptom -->|多核心問題| smp["使用率與核心遷移"]
@@ -156,16 +156,16 @@ flowchart TD
 
 不要一直分析整份追蹤檔；請將範圍縮小到一個有意義的時段。
 
-1. 按一下 Statistics 列、百分位數、圖表資料點或發現項目，跳到離群事件。
+1. 按一下 **Statistics** 資料列、百分位數、圖表資料點或分析結果，跳到離群事件。
 2. 將 **C1** 放在疑似原因之前，將 **C2** 放在可見結果之後。
 3. 選擇 **Zoom to cursor range**。
-4. 在 Statistics 啟用 **Limit to C1–Cn**。
-5. 重新開啟 **Analysis**，讓 Findings 使用相同範圍。
+4. 在 **Statistics** 啟用 **Limit to C1–Cn**。
+5. 重新開啟 **Analysis**，讓分析結果（Findings）使用相同範圍。
 6. 在最重要的證據時間加入書籤或註解。
 
 範圍必須包含事件前後足夠的上下文。範圍過大時，無關活動可能主導統計結果；範圍過小時，則可能排除真正的觸發事件。
 
-> **可見範圍注意事項：**核心遷移的 **Heatmap / Chord** 檢視器使用時間軸目前顯示的範圍，不會跟隨 **Limit to C1–Cn** 核取方塊。頂端橫幅在 Fit to window 時顯示 **Full view**（含完整時間範圍），縮放後改為橘色 **Viewport view**（含目前可見範圍）。若要讓檢視器對齊 C1–Cn，請先縮放至游標範圍再開啟。
+> **可見範圍注意事項：** 核心遷移的 **Heatmap / Chord** 檢視器使用時間軸目前顯示的範圍，不會跟隨 **Limit to C1–Cn** 核取方塊。使用 **Fit to window** 時，頂端橫幅會顯示 **Full view**（含完整時間範圍）；縮放後則改為橘色 **Viewport view**（含目前可見範圍）。若要讓檢視器對齊 C1–Cn，請先縮放至游標範圍再開啟。
 
 ## 7. 先量測，再解釋
 
@@ -194,7 +194,7 @@ flowchart LR
 
 請逐項確認：
 
-1. 在游標範圍內，Statistics 是否能重現該數值？
+1. 在游標範圍內，**Statistics** 是否能重現該數值？
 2. 是否能跳到顯示該事件的確切時間？
 3. 工作、核心、持續時間與前後事件是否符合假設？
 4. 兩者之間是因果關係、相關性，還是只有時間相近？
@@ -227,7 +227,7 @@ flowchart LR
 
 若已知預期設定，可使用下列項目確認實際行為是否符合規格：
 
-| Statistics 項目 | 檢查內容 |
+| **Statistics** 項目 | 檢查內容 |
 |---|---|
 | **Core Affinity** | 實際執行核心是否符合設定的親和性遮罩 |
 | **Task Lifecycle** | 建立、暫停、恢復與刪除行為是否符合預期 |
@@ -235,16 +235,16 @@ flowchart LR
 | **Tag Analysis** | 應用程式自訂數值是否維持在限制範圍內 |
 | **Interval Analysis** | 已插樁區間是否符合持續時間預算 |
 
-## 9. 限定範圍後再使用 AI Assistant
+## 9. 限定範圍後再使用 AI 助理（AI Assistant）
 
-AI 並非必要功能。選定發現、工作、事件或游標範圍後，AI 才能提供較有價值的協助。
+AI 並非必要功能。選定分析結果、工作、事件或游標範圍後，AI 才能提供較有價值的協助。
 
 | 目的 | 建議入口 | 必須自行驗證的內容 |
 |---|---|---|
-| 解釋一項發現 | 選取發現 → **Explain…** | 指標名稱與時間 |
-| 檢查一項發現 | **Verify with AI…** | 支持與反對證據 |
+| 解釋一項分析結果 | 選取分析結果 → **Explain…** | 指標名稱與時間 |
+| 檢查一項分析結果 | **Verify with AI…** | 支持與反對證據 |
 | 調查一段時間 | 設定兩個以上游標 → **Explain this region with AI** | 每個 `jump:TIME` 都位於 C1–Cn 內 |
-| 調查單一執行片段 | 按右鍵 → **Ask AI about this event** | 工作、核心、持續時間與鄰近 STI 事件 |
+| 調查單一執行區段 | 按右鍵 → **Ask AI about this event** | 工作、核心、持續時間與鄰近 STI 事件 |
 | 執行引導式調查 | **Investigate…** 或 **Auto investigate…** | 範圍、工具結果、證據品質與其他原因 |
 
 建議的 AI 使用順序：
@@ -258,9 +258,9 @@ flowchart LR
   experiment --> remeasure["重新擷取並重新量測"]
 ```
 
-若 AI 的說法無法在 Statistics 重現、引用游標範圍外的時間、把估算結果當成量測值，或假設追蹤檔未記錄的事件，就不應採用該說法。
+若 AI 的說法無法在 **Statistics** 重現、引用游標範圍外的時間、把估算結果當成量測值，或假設追蹤檔未記錄的事件，就不應採用該說法。
 
-**Start Investigation**（紀錄為空時）會執行 **Auto investigate**。重新啟動後，只有當紀錄仍有 user 或 assistant turn 時才會還原 **Current Issue** card。**Ctrl+K** 可開啟 Analysis、AI、Compare、workspace presets 與 Inspect task。工具列 **Compare** 提供 **Save as baseline** / **Score vs baseline**；**Trends** 頁面會列出所有已開啟的分頁。
+**Start Investigation**（紀錄為空時）會執行 **Auto investigate**。重新啟動後，只有當紀錄中仍有使用者或助理回合時，才會還原 **Current Issue** 卡片。**Ctrl+K** 可開啟 Analysis、AI、Compare、Workspace Preset 與 Inspect task。工具列 **Compare** 提供 **Save as baseline** / **Score vs baseline**；**Trends** 頁面會列出所有已開啟的分頁。
 
 ## 10. 測試一項可量測的修改
 
@@ -271,7 +271,7 @@ flowchart LR
 3. 可使用 **What-if** 或 **Optimize** 排列候選方案，但其結果只是啟發式估算，不是排程器模擬。
 4. 重現相同工作負載並擷取新的追蹤檔。
 5. 在新的追蹤檔中選擇相同的工作負載階段，並使用等效的游標範圍。
-6. 重複原本調查使用的 Statistics 量測。
+6. 重複原本調查使用的 **Statistics** 量測。
 7. 同時檢查目標指標與可能的副作用，並記錄差異。
 
 驗收條件範例：
@@ -296,7 +296,7 @@ flowchart LR
 - 修改後數值，以及與原始量測結果的差異。
 - 最終信心程度，以及是否需要再次擷取。
 
-可使用書籤與註解保留重要時間點，並視需要匯出 HTML/CSV 報告、加註快照、選取範圍的 BTF，或完整的 Investigation Case。
+可使用書籤與註解保留重要時間點，並視需要匯出 HTML／CSV 報告、加註快照、選取範圍的 BTF，或完整的調查案例（Investigation Case）。
 
 <a id="beginner-checklist" name="beginner-checklist">&#x200B;</a>
 
@@ -304,10 +304,10 @@ flowchart LR
 
 - [ ] 我先檢查追蹤品質，再分析應用程式行為。
 - [ ] 我先查看完整追蹤，再縮小分析範圍。
-- [ ] 我將 Analysis Findings 視為線索，而不是事實。
+- [ ] 我將 **Analysis Findings** 視為線索，而不是事實。
 - [ ] 我至少設定兩個游標，並啟用 **Limit to C1–Cn**。
 - [ ] 我查看分布或百分位數，而不是只看平均值。
-- [ ] 我已在 Statistics 重現相關數值。
+- [ ] 我已在 **Statistics** 重現相關數值。
 - [ ] 我已在時間軸確認確切事件。
 - [ ] 我已考慮矛盾證據與其他可能原因。
 - [ ] 我已清楚標示估算結果與追蹤資料的限制。
@@ -319,20 +319,20 @@ flowchart LR
 
 | 錯誤做法 | 建議做法 |
 |---|---|
-| 一開始就讓 AI 分析整份追蹤檔 | 先選擇發現或設定游標範圍 |
+| 一開始就讓 AI 分析整份追蹤檔 | 先選擇分析結果或設定游標範圍 |
 | 將 Max 視為保證的 WCET | 說明它只是本次擷取中觀察到的最大值 |
 | 只查看 Avg | 同時查看 p95、p99、Max 與資料分布 |
 | 將所有離開 CPU 的時間都視為互斥鎖等待 | 先確認同步事件，否則只能稱為 Blocking |
 | 比較不同的工作負載階段 | 對齊擷取條件與游標範圍 |
 | 因為事件相關就判定具有因果關係 | 檢查事件順序、其他原因與矛盾證據 |
-| 將 What-if 當成實際量測結果 | 重新擷取並重複相同的 Statistics 量測 |
+| 將 What-if 當成實際量測結果 | 重新擷取並重複相同的 **Statistics** 量測 |
 | 追蹤品質不佳仍繼續分析 | 先修正插樁或擷取設定 |
 
 <a id="documentation-navigation" name="documentation-navigation">&#x200B;</a>
 
 ## 文件導覽
 
-- [`README.md`](README.md) — 安裝、介面操作、時間軸瀏覽、匯出與 [Demo](README.md#demo)
+- [`README_zh-TW.md`](README_zh-TW.md) — 安裝、介面操作、時間軸瀏覽、匯出與[導覽示範](README_zh-TW.md#導覽示範)
 - [`STATISTICS_zh-TW.md`](STATISTICS_zh-TW.md) — 指標定義、公式、解讀方式與限制
 - [`AI_zh-TW.md`](AI_zh-TW.md) — AI 模型、工具、隱私、調查引擎與評估方式
 - [`WORKFLOWS.md`](WORKFLOWS.md) — 英文版
