@@ -1076,19 +1076,19 @@ For local runs, memory and latency are first-class. A slightly more accurate mod
 
 Same suite against the shipped Gemini and local Ollama models. Recorded 2026-08-19 (17-case dataset); full case tables and Compact/Balanced numbers: [AI_BENCHMARK.md](AI_BENCHMARK.md). Scores below are the **Full evidence** context mode (the live-scoring default).
 
-| Model                    | Category              | Finding | Evidence | Root cause | Calibration | Notes                                                     |
+| Model                    | Category              | Finding | Evidence | Root cause | Calibration | Notes                                                      |
 | ------------------------ | --------------------- | ------- | -------- | ---------- | ----------- | ---------------------------------------------------------- |
-| `qwen3.5:9b`              | Local / practical     | 85      | **93**   | **82**     | 80          | overall **88**, 16.2s/case, 14/17 PASS                     |
-| `qwen3.8:27b`             | Local / high-latency  | **88**  | **94**   | 65         | 80          | overall **86**, 332s/case, 13/17 PASS                      |
-| `gemini-3.5-flash-lite`   | Cloud / fast          | 82      | 90       | 71         | 80          | overall **83**, 2.6s/case, 13/17 PASS                      |
-| `gemini-3.7-flash`        | Cloud                 | 82      | **94**   | 59         | 80          | overall **85**, 25.0s/case, 14/17 PASS                     |
+| `qwen3.5:9b`             | Local / practical     | 85      | **93**   | **82**     | 80          | overall **88**, 16.2s/case, 14/17 PASS                     |
+| `qwen3.8:27b`            | Local / high-latency  | **88**  | **94**   | 65         | 80          | overall **86**, 332s/case, 13/17 PASS                      |
+| `gemini-3.5-flash-lite`  | Cloud / fast          | 82      | 90       | 71         | 80          | overall **83**, 2.6s/case, 13/17 PASS                      |
+| `gemini-3.7-flash`       | Cloud                 | 82      | **94**   | 59         | 80          | overall **85**, 25.0s/case, 14/17 PASS                     |
 
 [AI_BENCHMARK.md](AI_BENCHMARK.md) also carries two cloud models run outside the shipped suite (`--models` against a private config), for reference only — they are not in `examples/ai/benchmark.xml` and are not part of the "Recommended models" guidance below:
 
-| Model               | Category                     | Finding | Evidence | Root cause | Calibration | Notes                                   |
+| Model               | Category                      | Finding | Evidence | Root cause | Calibration | Notes                                    |
 | ------------------- | ----------------------------- | ------- | -------- | ---------- | ----------- | ---------------------------------------- |
-| `claude-sonnet-5`    | Cloud (optional, not shipped) | 85      | **94**   | 59         | 80          | overall **82**, 15.9s/case, 12/17 PASS   |
-| `gpt-5.6-sol`        | Cloud (optional, not shipped) | **91**  | 90       | **76**     | 80          | overall **88**, 9.6s/case, 15/17 PASS    |
+| `claude-sonnet-5`   | Cloud (optional, not shipped) | 85      | **94**   | 59         | 80          | overall **82**, 15.9s/case, 12/17 PASS   |
+| `gpt-5.6-sol`       | Cloud (optional, not shipped) | **91**  | 90       | **76**     | 80          | overall **88**, 9.6s/case, 15/17 PASS    |
 
 
 Live `--config` runs a tool-result follow-up when the first turn is tools-only (or planning text without a Confidence line). Single-turn scores are not comparable.
@@ -1178,19 +1178,19 @@ flowchart TD
 
 | Tool / helper                 | Host behaviour                                                                                                                                                                                                  |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `plan_investigation` | Rank hypotheses and a cheap tool sequence from findings + question                                                                                                                                              |
-| `suggest_scope` | Task, related tasks, evidence times (or current cursors)                                                                                                                                                        |
-| `detect_contradictions` | `SUPPORTED` / `CONTRADICTED` / `INSUFFICIENT` (e.g. execution ≫ blocking vs mutex hypothesis)                                                                                                                   |
+| `plan_investigation`          | Rank hypotheses and a cheap tool sequence from findings + question                                                                                                                                              |
+| `suggest_scope`               | Task, related tasks, evidence times (or current cursors)                                                                                                                                                        |
+| `detect_contradictions`       | `SUPPORTED` / `CONTRADICTED` / `INSUFFICIENT` (e.g. execution ≫ blocking vs mutex hypothesis)                                                                                                                   |
 | `assess_evidence_sufficiency` | Coverage heuristic → stop / continue / revise                                                                                                                                                                   |
-| `score_hypotheses` | Evidence-weighted scores (not a GUI tool)                                                                                                                                                                       |
-| `cluster_findings` | Group by shared task or pattern                                                                                                                                                                                 |
-| `generate_fingerprint` | HIGH / MEDIUM / LOW scheduling, sync, timing bands                                                                                                                                                              |
+| `score_hypotheses`            | Evidence-weighted scores (not a GUI tool)                                                                                                                                                                       |
+| `cluster_findings`            | Group by shared task or pattern                                                                                                                                                                                 |
+| `generate_fingerprint`        | HIGH / MEDIUM / LOW scheduling, sync, timing bands                                                                                                                                                              |
 | `find_similar_investigations` | Jaccard-style match vs recorded experiment outcomes                                                                                                                                                             |
-| `regression_localize` | A vs B deltas → task / region / likely mechanism                                                                                                                                                                |
-| `build_causal_chain` | Edges tagged causal / correlated / temporal; disclaimer required                                                                                                                                                |
-| `generate_experiment_plan` | Ranked pin / contention / priority experiments                                                                                                                                                                  |
-| `record_experiment_outcome` | Persist outcome (Desktop `[ai] experiment_outcomes`, Web `localStorage`)                                                                                                                                        |
-| `score_investigation` | Phase 3 extras: `evidence_efficiency`, `investigation_cost`, `false_confidence`, `falsification_quality`, `scope_accuracy`, `stop_efficiency` (also spread into `score_benchmark_case`, with adversarial rates) |
+| `regression_localize`         | A vs B deltas → task / region / likely mechanism                                                                                                                                                                |
+| `build_causal_chain`          | Edges tagged causal / correlated / temporal; disclaimer required                                                                                                                                                |
+| `generate_experiment_plan`    | Ranked pin / contention / priority experiments                                                                                                                                                                  |
+| `record_experiment_outcome`   | Persist outcome (Desktop `[ai] experiment_outcomes`, Web `localStorage`)                                                                                                                                        |
+| `score_investigation`         | Phase 3 extras: `evidence_efficiency`, `investigation_cost`, `false_confidence`, `falsification_quality`, `scope_accuracy`, `stop_efficiency` (also spread into `score_benchmark_case`, with adversarial rates) |
 
 
 Do **not** add chat templates after `auto_investigate`.
@@ -1221,17 +1221,17 @@ flowchart TD
 
 | Tool / helper                     | Host behaviour                                                                                               |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `analyze_temporal_causality` | Happens-before chain from finding times (`jump:TIME`)                                                        |
-| `build_task_dependency_graph` | BTF sync/preempt/migrate/PI graph (finding-wording fallback); optional `task` neighborhood                   |
-| `decompose_response_time` | Relative delay shares (mutex, preemption, migration, execution, scheduler)                                   |
-| `rank_root_causes` | Rank hypotheses or finding buckets                                                                           |
-| `verify_claim` | `SUPPORTED` / `PARTIAL` / `UNSUPPORTED` vs findings and cursors                                              |
-| `challenge_conclusion` | Alternatives and missing evidence                                                                            |
-| `investigation_memory` | Store/recall (Desktop `[ai] investigation_memory`, Web `localStorage`)                                       |
-| `cluster_incidents` | Group findings by time proximity                                                                             |
-| `close_investigation` | Record conclusion and close the case                                                                         |
-| `analyze_distribution` | p50 / p90 / p95 / p99 / p99.9, stddev, CV, 3-sigma outlier rate; BTF execution/blocking/PI/tick harvest      |
-| `analyze_periodicity` | Period/jitter from tick, STI, ISR, timer, or task-release times; kind = drift vs jitter vs WCET vs scheduler |
+| `analyze_temporal_causality`      | Happens-before chain from finding times (`jump:TIME`)                                                        |
+| `build_task_dependency_graph`     | BTF sync/preempt/migrate/PI graph (finding-wording fallback); optional `task` neighborhood                   |
+| `decompose_response_time`         | Relative delay shares (mutex, preemption, migration, execution, scheduler)                                   |
+| `rank_root_causes`                | Rank hypotheses or finding buckets                                                                           |
+| `verify_claim`                    | `SUPPORTED` / `PARTIAL` / `UNSUPPORTED` vs findings and cursors                                              |
+| `challenge_conclusion`            | Alternatives and missing evidence                                                                            |
+| `investigation_memory`            | Store/recall (Desktop `[ai] investigation_memory`, Web `localStorage`)                                       |
+| `cluster_incidents`               | Group findings by time proximity                                                                             |
+| `close_investigation`             | Record conclusion and close the case                                                                         |
+| `analyze_distribution`            | p50 / p90 / p95 / p99 / p99.9, stddev, CV, 3-sigma outlier rate; BTF execution/blocking/PI/tick harvest      |
+| `analyze_periodicity`             | Period/jitter from tick, STI, ISR, timer, or task-release times; kind = drift vs jitter vs WCET vs scheduler |
 | `summarize_investigation_context` | Compact findings, hypotheses, and tools run                                                                  |
 
 
@@ -1317,10 +1317,10 @@ The host validator runs after the final reply. Prompting still forbids inventing
 | Feature          | Host behaviour                                                                                                                                                                                                                                              |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Capability probe | **Test connection** lists models, chats with a JSON structured-output probe, then tool-calling (`btf_ping` then `btf_pong`). Live results overlay chat / structured output / tool calling / multi-tool chaining; long context and reasoning stay heuristic. |
-| Cost             | A dedicated usage bar shows `Context: Compact · 4.6k tok · 3 tools · 12s` (mode, tokens, tools, model time). Evidence uses the full `format_cost_meter` line. **Clear** resets replies, the meter, and current investigation issues.                                          |
+| Cost             | A dedicated usage bar shows `Context: Compact · 4.6k tok · 3 tools · 12s` (mode, tokens, tools, model time). Evidence uses the full `format_cost_meter` line. **Clear** resets replies, the meter, and current investigation issues.                        |
 | Privacy          | Chip 🟢 Local / 🟡 Cloud / 🔴 Sensitive. Cloud send is blocked when sensitive; otherwise annotations are sanitized and optional task-name aliases apply (`apply_cloud_privacy`).                                                                            |
 | Knowledge        | `investigate` matches user-saved entries (More → **Save current finding…**), then baseline, then the builtin catalog. Typical vs current rates show when both exist.                                                                                        |
-| Interpret        | Free-form Ask host-interprets first (`interpret_query`). Templates / modes / **Run investigation** skip confirm.                                                                                                                                            |
+| Interpret        | Free-form Ask host-interprets (`interpret_query`), shows the scope card, then **auto-runs** (same as **Run investigation**). Templates / modes / prior assistant replies / short follow-ups skip the host interpret step. Scope toggles still allow re-run. |
 | Tool Why?        | Evidence **Investigation** lists each tool with a host-side reason (`btftool:why/name`).                                                                                                                                                                    |
 
 

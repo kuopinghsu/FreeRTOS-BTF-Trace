@@ -6,7 +6,9 @@
 
 > **核心原則：**追蹤資料與 Statistics 是實際量測的證據；Analysis Findings 是調查線索；AI 回覆是解讀；What-if 結果則是估算。
 
-<a id="workflow-at-a-glance" name="workflow-at-a-glance">&#x200B;</a>\n\n## 流程總覽
+<a id="workflow-at-a-glance" name="workflow-at-a-glance">&#x200B;</a>
+
+## 流程總覽
 
 ```mermaid
 flowchart TD
@@ -30,7 +32,9 @@ flowchart TD
 
 即使不使用 AI，也能完成這套流程。步驟 1～8 都以確定性的追蹤資料為基礎，應作為判斷結論的主要依據。
 
-<a id="10-minute-first-pass" name="10-minute-first-pass">&#x200B;</a>\n\n## 10 分鐘快速檢查
+<a id="10-minute-first-pass" name="10-minute-first-pass">&#x200B;</a>
+
+## 10 分鐘快速檢查
 
 第一次開啟不熟悉的追蹤檔時，先依下列步驟快速檢查，不必從頭閱讀所有 Statistics 表格：
 
@@ -47,7 +51,9 @@ flowchart TD
 | 9 | 視需要使用 **Investigate…**、**Verify with AI…** 或 **Explain region** | 讓 AI 解釋已找到的證據 |
 | 10 | 保存證據，並在修改後重複相同量測 | 保留並驗證分析結果 |
 
-<a id="before-you-start" name="before-you-start">&#x200B;</a>\n\n## 開始前的準備
+<a id="before-you-start" name="before-you-start">&#x200B;</a>
+
+## 開始前的準備
 
 請盡可能準備下列資訊：
 
@@ -292,7 +298,9 @@ flowchart LR
 
 可使用書籤與註解保留重要時間點，並視需要匯出 HTML/CSV 報告、加註快照、選取範圍的 BTF，或完整的 Investigation Case。
 
-<a id="beginner-checklist" name="beginner-checklist">&#x200B;</a>\n\n## 新手檢查清單
+<a id="beginner-checklist" name="beginner-checklist">&#x200B;</a>
+
+## 新手檢查清單
 
 - [ ] 我先檢查追蹤品質，再分析應用程式行為。
 - [ ] 我先查看完整追蹤，再縮小分析範圍。
@@ -305,7 +313,9 @@ flowchart LR
 - [ ] 我已清楚標示估算結果與追蹤資料的限制。
 - [ ] 修改後，我以相同工作負載重新擷取，並重複相同範圍的量測。
 
-<a id="common-mistakes" name="common-mistakes">&#x200B;</a>\n\n## 常見錯誤
+<a id="common-mistakes" name="common-mistakes">&#x200B;</a>
+
+## 常見錯誤
 
 | 錯誤做法 | 建議做法 |
 |---|---|
@@ -318,7 +328,9 @@ flowchart LR
 | 將 What-if 當成實際量測結果 | 重新擷取並重複相同的 Statistics 量測 |
 | 追蹤品質不佳仍繼續分析 | 先修正插樁或擷取設定 |
 
-<a id="documentation-navigation" name="documentation-navigation">&#x200B;</a>\n\n## 文件導覽
+<a id="documentation-navigation" name="documentation-navigation">&#x200B;</a>
+
+## 文件導覽
 
 - [`README.md`](README.md) — 安裝、介面操作、時間軸瀏覽、匯出與 [Demo](README.md#demo)
 - [`STATISTICS_zh-TW.md`](STATISTICS_zh-TW.md) — 指標定義、公式、解讀方式與限制

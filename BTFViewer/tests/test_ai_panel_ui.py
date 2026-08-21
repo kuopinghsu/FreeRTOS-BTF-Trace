@@ -20,7 +20,8 @@ install()
 
 from unittest.mock import patch  # noqa: E402
 
-from PySide6.QtCore import QPoint, QUrl  # noqa: E402
+from PySide6.QtCore import QEvent, QPoint, Qt, QUrl  # noqa: E402
+from PySide6.QtGui import QKeyEvent  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication, QGridLayout, QLabel, QMainWindow, QPushButton, QScrollArea,
     QVBoxLayout, QWidget,
@@ -127,8 +128,23 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertFalse(panel._send_btn.icon().isNull())
         self.assertFalse(panel._send_btn.isEnabled())
         self.assertIn("Send", panel._send_btn.toolTip())
+        self.assertIn("Enter", panel._send_btn.toolTip())
+        self.assertIn("Shift+Enter", panel._send_btn.toolTip())
+        self.assertIn("Enter to send", panel._input.placeholderText())
         panel._input.setPlainText("why is CS[22] late?")
         self.assertTrue(panel._send_btn.isEnabled())
+        with patch.object(panel, "send_current") as send:
+            enter = QKeyEvent(
+                QEvent.Type.KeyPress, Qt.Key.Key_Return,
+                Qt.KeyboardModifier.NoModifier)
+            self.assertTrue(panel.eventFilter(panel._input, enter))
+            send.assert_called_once()
+            send.reset_mock()
+            shift_enter = QKeyEvent(
+                QEvent.Type.KeyPress, Qt.Key.Key_Return,
+                Qt.KeyboardModifier.ShiftModifier)
+            self.assertFalse(panel.eventFilter(panel._input, shift_enter))
+            send.assert_not_called()
         panel._input.setPlainText("   ")
         self.assertFalse(panel._send_btn.isEnabled())
         panel._set_busy(True)

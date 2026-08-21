@@ -468,16 +468,15 @@
         v-model="draft"
         class="ai-input"
         rows="3"
-        placeholder="Ask about this trace… (Ctrl/Cmd+Enter to send)"
+        placeholder="Ask about this trace… (Enter to send, Shift+Enter for a new line)"
         :disabled="busy || !aiEnabled"
-        @keydown.meta.enter.prevent="send()"
-        @keydown.ctrl.enter.prevent="send()"
+        @keydown.enter.exact.prevent="send()"
       />
       <div class="ai-composer-icons">
         <button
           type="button"
           class="ai-icon-btn primary"
-          :title="busy ? 'Stop the current query' : 'Send the question (Ctrl/Cmd+Enter)'"
+          :title="busy ? 'Stop the current query' : 'Send the question (Enter; Shift+Enter for a new line)'"
           :aria-label="busy ? 'Stop' : 'Send'"
           :disabled="!busy && (!aiEnabled || !draft.trim())"
           @click="onComposerAction"
@@ -2075,7 +2074,11 @@ async function send(overrideQuery = null, overrideCtx = null) {
   if (!query || busy.value || !props.aiEnabled) return
   const skip = skipInterpretOnce
   skipInterpretOnce = false
-  if (shouldConfirmInterpretedQuery(query, { alreadyInterpreted: skip })) {
+  const hasConversation = messages.value.some(m => m && m.role === 'assistant')
+  if (shouldConfirmInterpretedQuery(query, {
+    alreadyInterpreted: skip,
+    hasConversation,
+  })) {
     messages.value.push({ role: 'user', content: query })
     draft.value = ''
     try {
@@ -2096,7 +2099,11 @@ async function send(overrideQuery = null, overrideCtx = null) {
         cursorHi: hi,
       })
       updateEvidenceFromToolResult('interpret_query', { ok: true, ...data })
-      status.value = 'Confirm investigation scope, then Run investigation.'
+      // Same as clicking Run investigation — free-form Ask must not stall
+      // on the scope card with no model reply.
+      activeTemplateId = 'investigate'
+      skipInterpretOnce = true
+      await send(interpretedRunPrompt(interpretedQuery || data), ctx)
     } catch (err) {
       status.value = err?.message || String(err)
     }

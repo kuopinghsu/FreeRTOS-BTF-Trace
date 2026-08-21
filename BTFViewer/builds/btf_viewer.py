@@ -19276,19 +19276,36 @@ def format_coverage_count_lines(
     ]
 
 
+_FOLLOWUP_ASK_RE = re.compile(
+    r"^(tell me more|more details?|go on|continue|keep going|"
+    r"elaborate|explain more|what else|and then\??|please continue)\.?$",
+    re.IGNORECASE,
+)
+
+
+def looks_like_followup_ask(query: str = "") -> bool:
+    """True for short conversational follow-ups that should skip scope confirm."""
+    return bool(_FOLLOWUP_ASK_RE.match(str(query or "").strip()))
+
+
 def should_confirm_interpreted_query(
     query: str = "",
     *,
     template_id: str = "",
     already_interpreted: bool = False,
+    has_conversation: bool = False,
 ) -> bool:
     """True when a free-form Ask should show the interpret/scope card first."""
     if already_interpreted or str(template_id or "").strip():
+        return False
+    if has_conversation:
         return False
     q = str(query or "").strip()
     if not q:
         return False
     if "Investigation scope:" in q and "Interpreted as " in q:
+        return False
+    if looks_like_followup_ask(q):
         return False
     return True
 
@@ -38424,7 +38441,8 @@ def create_ai_assistant_panel(
 
             self._input = QPlainTextEdit()
             self._input.setObjectName("aiInput")
-            self._input.setPlaceholderText("Ask about this trace\u2026 (Ctrl/Cmd+Enter to send)")
+            self._input.setPlaceholderText(
+                "Ask about this trace\u2026 (Enter to send, Shift+Enter for a new line)")
             self._input.setMinimumHeight(64)
             self._input.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -38466,7 +38484,7 @@ def create_ai_assistant_panel(
             self._icon_send = _svg_icon(AI_SEND_ICON_PATH, "#ffffff", 16)
             self._icon_stop = _svg_icon(AI_STOP_ICON_PATH, "#ffffff", 16)
             self._send_btn = _ai_icon_btn(
-                "aiSendBtn", "Send the question (Ctrl/Cmd+Enter)")
+                "aiSendBtn", "Send the question (Enter; Shift+Enter for a new line)")
             self._send_btn.setIcon(self._icon_send)
             self._send_btn.clicked.connect(self._on_composer_action)
             icon_row.addWidget(self._send_btn)
@@ -38689,9 +38707,10 @@ def create_ai_assistant_panel(
             if inp is not None and obj is inp and event.type() == QEvent.Type.KeyPress:
                 key = event.key()
                 mods = event.modifiers()
-                if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and (
-                    mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier)
-                ):
+                if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    # Enter sends; Shift+Enter inserts a newline (default).
+                    if mods & Qt.KeyboardModifier.ShiftModifier:
+                        return False
                     self.send_current()
                     return True
             log = getattr(self, "_log", None)
@@ -39350,7 +39369,7 @@ def create_ai_assistant_panel(
                 self._send_btn.setEnabled(True)
                 return
             self._send_btn.setIcon(self._icon_send)
-            self._send_btn.setToolTip("Send the question (Ctrl/Cmd+Enter)")
+            self._send_btn.setToolTip("Send the question (Enter; Shift+Enter for a new line)")
             self._send_btn.setEnabled(
                 self._ai_is_enabled()
                 and bool(self._input.toPlainText().strip())
@@ -40513,8 +40532,13 @@ def create_ai_assistant_panel(
 
             skip = bool(getattr(self, "_skip_interpret", False))
             self._skip_interpret = False
+            has_conversation = any(
+                ai_entry_role(e) == "assistant" for e in (self._entries or [])
+            )
             if should_confirm_interpreted_query(
-                query, already_interpreted=skip,
+                query,
+                already_interpreted=skip,
+                has_conversation=has_conversation,
             ):
                 self._input.clear()
                 self._append("user", query)
@@ -40531,8 +40555,11 @@ def create_ai_assistant_panel(
                 self._update_evidence_from_tool_result(
                     "interpret_query", {"ok": True, **data},
                 )
-                self._set_status(
-                    "Confirm investigation scope, then Run investigation."
+                # Same as clicking Run investigation — free-form Ask must not
+                # stall on the scope card with no model reply.
+                interpreted = getattr(self, "_interpreted_query", None) or data
+                self._use_template(
+                    "investigate", interpreted_run_prompt(interpreted),
                 )
                 return
             self._input.clear()

@@ -187,6 +187,9 @@ describe('AI settings storage', () => {
     assert.match(src, /Authentication/)
     assert.match(src, /onAiSignIn/)
     assert.match(src, /aiAuthMode/)
+    // AI_AUTH_MODE_LABELS is [[id, label], …] — map pairs, not Object.entries.
+    assert.match(src, /aiAuthModes\.map\(\(\[id, label\]\)/)
+    assert.doesNotMatch(src, /Object\.entries\(aiAuthModes\)/)
     const panel = readFileSync(new URL('../src/components/AiAssistantPanel.vue', import.meta.url), 'utf8')
     assert.match(panel, /ai-auth-chip/)
     assert.match(panel, /authChipLabel/)

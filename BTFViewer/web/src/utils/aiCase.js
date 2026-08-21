@@ -1041,13 +1041,21 @@ export function formatCoverageCountLines(coverage = null, labels = {}) {
   ]
 }
 
+const FOLLOWUP_ASK_RE = /^(tell me more|more details?|go on|continue|keep going|elaborate|explain more|what else|and then\??|please continue)\.?$/i
+
+export function looksLikeFollowupAsk(query = '') {
+  return FOLLOWUP_ASK_RE.test(String(query || '').trim())
+}
+
 export function shouldConfirmInterpretedQuery(query = '', {
-  templateId = '', alreadyInterpreted = false,
+  templateId = '', alreadyInterpreted = false, hasConversation = false,
 } = {}) {
   if (alreadyInterpreted || String(templateId || '').trim()) return false
+  if (hasConversation) return false
   const q = String(query || '').trim()
   if (!q) return false
   if (q.includes('Investigation scope:') && q.includes('Interpreted as ')) return false
+  if (looksLikeFollowupAsk(q)) return false
   return true
 }
 

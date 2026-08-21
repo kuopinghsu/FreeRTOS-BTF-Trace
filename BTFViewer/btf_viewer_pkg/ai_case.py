@@ -1262,19 +1262,36 @@ def format_coverage_count_lines(
     ]
 
 
+_FOLLOWUP_ASK_RE = re.compile(
+    r"^(tell me more|more details?|go on|continue|keep going|"
+    r"elaborate|explain more|what else|and then\??|please continue)\.?$",
+    re.IGNORECASE,
+)
+
+
+def looks_like_followup_ask(query: str = "") -> bool:
+    """True for short conversational follow-ups that should skip scope confirm."""
+    return bool(_FOLLOWUP_ASK_RE.match(str(query or "").strip()))
+
+
 def should_confirm_interpreted_query(
     query: str = "",
     *,
     template_id: str = "",
     already_interpreted: bool = False,
+    has_conversation: bool = False,
 ) -> bool:
     """True when a free-form Ask should show the interpret/scope card first."""
     if already_interpreted or str(template_id or "").strip():
+        return False
+    if has_conversation:
         return False
     q = str(query or "").strip()
     if not q:
         return False
     if "Investigation scope:" in q and "Interpreted as " in q:
+        return False
+    if looks_like_followup_ask(q):
         return False
     return True
 

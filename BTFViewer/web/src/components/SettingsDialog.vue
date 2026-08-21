@@ -888,7 +888,7 @@ const aiContextModeOptions = computed(() =>
 const aiPresetOptions = computed(() =>
   aiPresets.value.map(p => ({ value: p.id, label: p.label })))
 const aiAuthModeOptions = computed(() =>
-  Object.entries(aiAuthModes).map(([id, label]) => ({ value: id, label })))
+  aiAuthModes.map(([id, label]) => ({ value: id, label })))
 const aiTesting = ref(false)
 const aiListing = ref(false)
 const aiTestStatus = ref('')

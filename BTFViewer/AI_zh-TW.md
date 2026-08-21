@@ -1058,28 +1058,28 @@ expected:
 
 ### 評估指標（Evaluation metrics）
 
-| 指標 | 評估內容 |
-| --- | --- |
-| Finding identification | 模型是否找出預期的問題？ |
-| Evidence accuracy | 引用的 Metric / Event 是否真的存在？`required_metrics` 也接受 Statistics Page Title，例如 Period / Jitter、Waiter × Owner、Timeline Anomalies，以及常見 Alias（`Period/Jitter`、`Waiter x Owner`） |
-| Timestamp validity | `jump:TIME` 是否真實存在，而且位於 Scope 內？ |
-| Task-name validity | 是否只使用已知的 Task Name？ |
-| Tool selection | 是否呼叫適合的 Investigation Tool？ |
-| Tool-chain quality | 在得出結論前，是否取得足夠 Evidence？ |
-| Root-cause accuracy | 結論是否符合預期診斷？ |
-| Alternative handling | 是否考慮合理的其他可能原因？ |
-| Confidence calibration | Confidence 是否符合現有 Evidence？ |
-| Response completeness | 是否完整回答 Investigation Question？ |
-| Latency | 完成 Investigation 花費多久？ |
-| Tool-call count | 需要多少輪 Tool Call？ |
-| Peak memory | Inference 過程使用多少 RAM？ |
-| Time to first token（TTFT） | 模型多快開始產生回覆？ |
-| Generation throughput | Investigation 過程的持續 Tokens/sec |
-| Investigation success rate | 在設定的時間／資源限制內正確完成 Case 的比例 |
-| False-causal rate | 對 Case 標示為 Coincidence / Non-causal 的關係錯誤宣稱因果；0–100，越高越差 |
-| False-confirmation rate | 錯誤確認 `trap_phrases` 中的 Decoy Finding，而不是實際原因 |
-| Unsupported-claim rate | Validator Claim 中未通過 Task / Time / Scope 檢查的比例 |
-| Premature-conclusion rate | Required Tools 尚未執行，就先給出 High Confidence 或結論 |
+| 指標                       | 評估內容                                                                                                                                                                                   |
+|----------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Finding identification     | 模型是否找出預期的問題？                                                                                                                                                                    |
+| Evidence accuracy          | 引用的 Metric / Event 是否真的存在？`required_metrics` 也接受 Statistics Page Title，例如 Period / Jitter、Waiter × Owner、Timeline Anomalies，以及常見 Alias（`Period/Jitter`、`Waiter x Owner`） |
+| Timestamp validity         | `jump:TIME` 是否真實存在，而且位於 Scope 內？                                                                                                                                                |
+| Task-name validity         | 是否只使用已知的 Task Name？                                                                                                                                                                |
+| Tool selection             | 是否呼叫適合的 Investigation Tool？                                                                                                                                                         |
+| Tool-chain quality         | 在得出結論前，是否取得足夠 Evidence？                                                                                                                                                        |
+| Root-cause accuracy        | 結論是否符合預期診斷？                                                                                                                                                                      |
+| Alternative handling       | 是否考慮合理的其他可能原因？                                                                                                                                                                |
+| Confidence calibration     | Confidence 是否符合現有 Evidence？                                                                                                                                                          |
+| Response completeness      | 是否完整回答 Investigation Question？                                                                                                                                                       |
+| Latency                    | 完成 Investigation 花費多久？                                                                                                                                                               |
+| Tool-call count            | 需要多少輪 Tool Call？                                                                                                                                                                      |
+| Peak memory                | Inference 過程使用多少 RAM？                                                                                                                                                                |
+| Time to first token（TTFT）  | 模型多快開始產生回覆？                                                                                                                                                                      |
+| Generation throughput      | Investigation 過程的持續 Tokens/sec                                                                                                                                                        |
+| Investigation success rate | 在設定的時間／資源限制內正確完成 Case 的比例                                                                                                                                                |
+| False-causal rate          | 對 Case 標示為 Coincidence / Non-causal 的關係錯誤宣稱因果；0–100，越高越差                                                                                                                  |
+| False-confirmation rate    | 錯誤確認 `trap_phrases` 中的 Decoy Finding，而不是實際原因                                                                                                                                  |
+| Unsupported-claim rate     | Validator Claim 中未通過 Task / Time / Scope 檢查的比例                                                                                                                                    |
+| Premature-conclusion rate  | Required Tools 尚未執行，就先給出 High Confidence 或結論                                                                                                                                    |
 
 Local Run 應將 **Memory 與 Latency 視為第一級指標（First-class Metrics）**。稍微準確一些、但在記憶體壓力下無法實際使用的模型，不應因此自動取得更高排名。
 
@@ -1104,19 +1104,19 @@ Local Run 應將 **Memory 與 Latency 視為第一級指標（First-class Metric
 
 下表為 **Full evidence** Context Mode，也是 Live Scoring 的預設模式。
 
-| Model | 類別 | Finding | Evidence | Root cause | Calibration | Notes |
-| --- | --- | ---: | ---: | ---: | ---: | --- |
-| `qwen3.5:9b` | Local / practical | 85 | **93** | **82** | 80 | Overall **88**，16.2s/case，14/17 PASS |
-| `qwen3.8:27b` | Local / high-latency | **88** | **94** | 65 | 80 | Overall **86**，332s/case，13/17 PASS |
-| `gemini-3.5-flash-lite` | Cloud / fast | 82 | 90 | 71 | 80 | Overall **83**，2.6s/case，13/17 PASS |
-| `gemini-3.7-flash` | Cloud | 82 | **94** | 59 | 80 | Overall **85**，25.0s/case，14/17 PASS |
+| Model                   | 類別                 | Finding | Evidence | Root cause | Calibration | Notes                                |
+|-------------------------|----------------------|--------:|---------:|-----------:|------------:|--------------------------------------|
+| `qwen3.5:9b`            | Local / practical    |      85 |   **93** |     **82** |          80 | Overall **88**，16.2s/case，14/17 PASS |
+| `qwen3.8:27b`           | Local / high-latency |  **88** |   **94** |         65 |          80 | Overall **86**，332s/case，13/17 PASS  |
+| `gemini-3.5-flash-lite` | Cloud / fast         |      82 |       90 |         71 |          80 | Overall **83**，2.6s/case，13/17 PASS  |
+| `gemini-3.7-flash`      | Cloud                |      82 |   **94** |         59 |          80 | Overall **85**，25.0s/case，14/17 PASS |
 
 [AI_BENCHMARK.md](AI_BENCHMARK.md) 另外包含兩個不在內建 Suite 中的 Cloud Model。這些結果來自 Private Config，只供參考。它們不在 `examples/ai/benchmark.xml` 中，也不屬於前述 Recommended Models。
 
-| Model | 類別 | Finding | Evidence | Root cause | Calibration | Notes |
-| --- | --- | ---: | ---: | ---: | ---: | --- |
-| `claude-sonnet-5` | Cloud（optional, not shipped） | 85 | **94** | 59 | 80 | Overall **82**，15.9s/case，12/17 PASS |
-| `gpt-5.6-sol` | Cloud（optional, not shipped） | **91** | 90 | **76** | 80 | Overall **88**，9.6s/case，15/17 PASS |
+| Model             | 類別                         | Finding | Evidence | Root cause | Calibration | Notes                                |
+|-------------------|------------------------------|--------:|---------:|-----------:|------------:|--------------------------------------|
+| `claude-sonnet-5` | Cloud（optional, not shipped） |      85 |   **94** |         59 |          80 | Overall **82**，15.9s/case，12/17 PASS |
+| `gpt-5.6-sol`     | Cloud（optional, not shipped） |  **91** |       90 |     **76** |          80 | Overall **88**，9.6s/case，15/17 PASS  |
 
 Live `--config` Run 如果第一個 Turn 只有 Tool Result，或只有 Planning Text 而沒有 Confidence Line，會再執行一次 Tool-result Follow-up。Single-turn Score 不能直接互相比較。
 
@@ -1132,12 +1132,12 @@ Live `--config` Run 如果第一個 Turn 只有 Tool Result，或只有 Planning
 
 **Context Size** 指 Findings + Tools + History。評估 Local Model 時，不應只看 Tokens/sec。Context 變大時，也要檢查 Tool Use 與 Grounding。
 
-| Context | 用途 |
-| --- | --- |
-| 8K | Investigation 的最低需求 |
-| 16K | 一般 Investigation |
-| 32K | 大型 Findings / Multi-tool Investigation |
-| 64K | 支援時用於 Stress Test |
+| Context | 用途                                     |
+|---------|------------------------------------------|
+| 8K      | Investigation 的最低需求                 |
+| 16K     | 一般 Investigation                       |
+| 32K     | 大型 Findings / Multi-tool Investigation |
+| 64K     | 支援時用於 Stress Test                   |
 
 開發工作站上的實際比較：
 
@@ -1222,21 +1222,21 @@ flowchart TD
   assess --> next["停止 / 繼續 / 修正假設 - STOP / CONTINUE / REVISE HYPOTHESIS"]
 ```
 
-| Tool / Helper | Host 行為 |
-| --- | --- |
-| `plan_investigation` | 根據 Findings + Question 排序 Hypotheses 與低成本 Tool Sequence |
-| `suggest_scope` | 建議 Task、Related Tasks、Evidence Times，或使用目前 Cursor |
-| `detect_contradictions` | `SUPPORTED` / `CONTRADICTED` / `INSUFFICIENT`；例如 Execution ≫ Blocking 時，會與 Mutex Hypothesis 矛盾 |
-| `assess_evidence_sufficiency` | 使用 Coverage Heuristic 判斷 Stop / Continue / Revise |
-| `score_hypotheses` | 依 Evidence 加權評分；不是 GUI Tool |
-| `cluster_findings` | 依共用 Task 或 Pattern 分組 |
-| `generate_fingerprint` | 產生 HIGH / MEDIUM / LOW Scheduling、Sync、Timing Band |
-| `find_similar_investigations` | 使用類似 Jaccard 的方式，與已記錄 Experiment Outcome 比對 |
-| `regression_localize` | 將 A vs B Delta 定位至 Task / Region / Likely Mechanism |
-| `build_causal_chain` | Edge 標示為 Causal / Correlated / Temporal；必須附 Disclaimer |
-| `generate_experiment_plan` | 排序 Pin / Contention / Priority Experiment |
-| `record_experiment_outcome` | 保存 Outcome；Desktop 使用 `[ai] experiment_outcomes`，Web 使用 `localStorage` |
-| `score_investigation` | Phase 3 額外指標：`evidence_efficiency`、`investigation_cost`、`false_confidence`、`falsification_quality`、`scope_accuracy`、`stop_efficiency`；同時整合到 `score_benchmark_case`，包括 Adversarial Rate |
+| Tool / Helper                 | Host 行為                                                                                                                                                                                         |
+|-------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `plan_investigation`          | 根據 Findings + Question 排序 Hypotheses 與低成本 Tool Sequence                                                                                                                                   |
+| `suggest_scope`               | 建議 Task、Related Tasks、Evidence Times，或使用目前 Cursor                                                                                                                                          |
+| `detect_contradictions`       | `SUPPORTED` / `CONTRADICTED` / `INSUFFICIENT`；例如 Execution ≫ Blocking 時，會與 Mutex Hypothesis 矛盾                                                                                             |
+| `assess_evidence_sufficiency` | 使用 Coverage Heuristic 判斷 Stop / Continue / Revise                                                                                                                                             |
+| `score_hypotheses`            | 依 Evidence 加權評分；不是 GUI Tool                                                                                                                                                                |
+| `cluster_findings`            | 依共用 Task 或 Pattern 分組                                                                                                                                                                       |
+| `generate_fingerprint`        | 產生 HIGH / MEDIUM / LOW Scheduling、Sync、Timing Band                                                                                                                                              |
+| `find_similar_investigations` | 使用類似 Jaccard 的方式，與已記錄 Experiment Outcome 比對                                                                                                                                          |
+| `regression_localize`         | 將 A vs B Delta 定位至 Task / Region / Likely Mechanism                                                                                                                                           |
+| `build_causal_chain`          | Edge 標示為 Causal / Correlated / Temporal；必須附 Disclaimer                                                                                                                                      |
+| `generate_experiment_plan`    | 排序 Pin / Contention / Priority Experiment                                                                                                                                                       |
+| `record_experiment_outcome`   | 保存 Outcome；Desktop 使用 `[ai] experiment_outcomes`，Web 使用 `localStorage`                                                                                                                      |
+| `score_investigation`         | Phase 3 額外指標：`evidence_efficiency`、`investigation_cost`、`false_confidence`、`falsification_quality`、`scope_accuracy`、`stop_efficiency`；同時整合到 `score_benchmark_case`，包括 Adversarial Rate |
 
 **不要在 `auto_investigate` 之後再增加 Chat Template。**
 
@@ -1267,37 +1267,37 @@ flowchart TD
   validation --> memory
 ```
 
-| Tool / Helper | Host 行為 |
-| --- | --- |
-| `analyze_temporal_causality` | 根據 Finding Time（`jump:TIME`）建立 Happens-before Chain |
-| `build_task_dependency_graph` | 建立 BTF Sync / Preempt / Migrate / PI Graph；Finding Wording 作為 Fallback，可指定 `task` Neighborhood |
-| `decompose_response_time` | 計算 Mutex / Preemption / Migration / Execution / Scheduler 的相對 Delay Share |
-| `rank_root_causes` | 排序 Hypothesis 或 Finding Bucket |
-| `verify_claim` | 依 Findings 與 Cursor 判定 `SUPPORTED` / `PARTIAL` / `UNSUPPORTED` |
-| `challenge_conclusion` | 提出 Alternatives 與 Missing Evidence |
-| `investigation_memory` | 儲存／回想；Desktop 使用 `[ai] investigation_memory`，Web 使用 `localStorage` |
-| `cluster_incidents` | 依時間接近程度將 Findings 分組 |
-| `close_investigation` | 記錄 Conclusion 並關閉 Case |
-| `analyze_distribution` | p50 / p90 / p95 / p99 / p99.9、Stddev、CV、3-sigma Outlier Rate；取得 BTF Execution / Blocking / PI / Tick Sample |
-| `analyze_periodicity` | 根據 Tick、STI、ISR、Timer 或 Task-release Time 分析 Period / Jitter；Kind = Drift / Jitter / WCET / Scheduler |
-| `summarize_investigation_context` | 精簡整理 Findings、Hypotheses 與已執行 Tools |
+| Tool / Helper                     | Host 行為                                                                                                     |
+|-----------------------------------|---------------------------------------------------------------------------------------------------------------|
+| `analyze_temporal_causality`      | 根據 Finding Time（`jump:TIME`）建立 Happens-before Chain                                                       |
+| `build_task_dependency_graph`     | 建立 BTF Sync / Preempt / Migrate / PI Graph；Finding Wording 作為 Fallback，可指定 `task` Neighborhood         |
+| `decompose_response_time`         | 計算 Mutex / Preemption / Migration / Execution / Scheduler 的相對 Delay Share                                |
+| `rank_root_causes`                | 排序 Hypothesis 或 Finding Bucket                                                                             |
+| `verify_claim`                    | 依 Findings 與 Cursor 判定 `SUPPORTED` / `PARTIAL` / `UNSUPPORTED`                                            |
+| `challenge_conclusion`            | 提出 Alternatives 與 Missing Evidence                                                                         |
+| `investigation_memory`            | 儲存／回想；Desktop 使用 `[ai] investigation_memory`，Web 使用 `localStorage`                                    |
+| `cluster_incidents`               | 依時間接近程度將 Findings 分組                                                                                |
+| `close_investigation`             | 記錄 Conclusion 並關閉 Case                                                                                   |
+| `analyze_distribution`            | p50 / p90 / p95 / p99 / p99.9、Stddev、CV、3-sigma Outlier Rate；取得 BTF Execution / Blocking / PI / Tick Sample |
+| `analyze_periodicity`             | 根據 Tick、STI、ISR、Timer 或 Task-release Time 分析 Period / Jitter；Kind = Drift / Jitter / WCET / Scheduler    |
+| `summarize_investigation_context` | 精簡整理 Findings、Hypotheses 與已執行 Tools                                                                   |
 
 <a id="engine-limits" name="engine-limits">&#x200B;</a>
 
 ### Engine 限制（Engine limits）
 
-| Engine | 它是什麼 | 它不是什麼 |
-| --- | --- | --- |
-| `analyze_temporal_causality` | 根據 Finding `jump:TIME` 建立 Happens-before | Kernel Event Replay |
-| `build_task_dependency_graph` | BTF Sync / Preempt / Migrate / PI Edge；2-hop `task` Neighborhood | 完整 ISR / Object Graph |
-| `decompose_response_time` | 根據 Finding Magnitude 計算相對占比 | Cycle-accurate Milliseconds |
-| `rank_root_causes` | Hypothesis 或 Finding-bucket Ranking | 機率 |
-| `investigation_memory` | Local Store / Recall Notepad | Team Knowledge Base |
-| `cluster_incidents` | 依時間接近程度分組 | Shared-mutex / Causal Clustering |
-| `close_investigation` | Case Status `closed` + Conclusion | 完整 Firmware A/B Lifecycle |
-| `analyze_distribution` | BTF Execution / Blocking / PI / Tick Sample，最多 8000 筆 | Parser 本身沒有的 Response-time Series |
-| `analyze_periodicity` | Inter-arrival Jitter 與 Kind | Kernel Period Timer |
-| `simulate_schedule` | `what_if` 內部使用的 LEVEL 1 Helper | GUI Tool 或 FreeRTOS Kernel |
+| Engine                        | 它是什麼                                                         | 它不是什麼                             |
+|-------------------------------|------------------------------------------------------------------|----------------------------------------|
+| `analyze_temporal_causality`  | 根據 Finding `jump:TIME` 建立 Happens-before                     | Kernel Event Replay                    |
+| `build_task_dependency_graph` | BTF Sync / Preempt / Migrate / PI Edge；2-hop `task` Neighborhood | 完整 ISR / Object Graph                |
+| `decompose_response_time`     | 根據 Finding Magnitude 計算相對占比                              | Cycle-accurate Milliseconds            |
+| `rank_root_causes`            | Hypothesis 或 Finding-bucket Ranking                             | 機率                                   |
+| `investigation_memory`        | Local Store / Recall Notepad                                     | Team Knowledge Base                    |
+| `cluster_incidents`           | 依時間接近程度分組                                               | Shared-mutex / Causal Clustering       |
+| `close_investigation`         | Case Status `closed` + Conclusion                                | 完整 Firmware A/B Lifecycle            |
+| `analyze_distribution`        | BTF Execution / Blocking / PI / Tick Sample，最多 8000 筆         | Parser 本身沒有的 Response-time Series |
+| `analyze_periodicity`         | Inter-arrival Jitter 與 Kind                                     | Kernel Period Timer                    |
+| `simulate_schedule`           | `what_if` 內部使用的 LEVEL 1 Helper                              | GUI Tool 或 FreeRTOS Kernel            |
 
 以下內容不在 Scope 內，**不要為這些功能新增 Chat Template**：
 
@@ -1423,7 +1423,7 @@ Firmware 修改與重新擷取仍然由使用者完成：
 | Cost | 獨立 Usage Bar 顯示 `Context: Compact · 4.6k tok · 3 tools · 12s`，依序代表 Mode、Tokens、Tools、Model Time。Evidence 使用完整 `format_cost_meter` Line。**Clear** 會重設 Replies、Meter 與 Current Investigation Issues |
 | Privacy | Chip：🟢 Local / 🟡 Cloud / 🔴 Sensitive。Sensitive 時會阻擋 Cloud Send；其他情況會清理 Annotation，並可選擇套用 Task-name Alias（`apply_cloud_privacy`） |
 | Knowledge | `investigate` 先比對使用者保存的 Entry（More → **Save current finding…**），再比對 Baseline，最後使用 Built-in Catalog。有 Typical 與 Current Rate 時會同時顯示 |
-| Interpret | Free-form Ask 會先由 Host 執行 `interpret_query`。Template / Mode / **Run investigation** 不需要 Confirm |
+| Interpret | Free-form Ask 會先由 Host 執行 `interpret_query`、顯示範圍卡，然後**自動執行**（等同 **Run investigation**）。Template / Mode / 既有助理回覆 / 簡短追問會跳過 Host 解讀步驟；仍可用範圍開關後再跑一次 |
 | Tool Why? | Evidence **Investigation** 會列出每個 Tool 及 Host-side Reason（`btftool:why/name`） |
 
 ---
@@ -1456,9 +1456,9 @@ Diagram 會配合目前的 Light / Dark Theme；**Save As…** 匯出的 HTML �
 
 ## 文件導覽（Documentation navigation）
 
-| 文件 | 回答的問題 |
-| --- | --- |
-| [README.md](README.md) | 如何使用 BTFViewer？ |
-| [WORKFLOWS.md](WORKFLOWS.md) | 如何診斷問題？ |
-| [STATISTICS.md](STATISTICS.md) | 這項量測代表什麼？ |
-| [AI.md](AI.md) | AI 輔助調查如何運作？ |
+| 文件                           | 回答的問題            |
+|--------------------------------|-----------------------|
+| [README.md](README.md)         | 如何使用 BTFViewer？  |
+| [WORKFLOWS.md](WORKFLOWS.md)   | 如何診斷問題？        |
+| [STATISTICS.md](STATISTICS.md) | 這項量測代表什麼？    |
+| [AI.md](AI.md)                 | AI 輔助調查如何運作？ |

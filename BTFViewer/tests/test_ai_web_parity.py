@@ -1349,6 +1349,7 @@ class AiWebParityTests(unittest.TestCase):
             ("def run_offline_benchmark", "export function runOfflineBenchmark"),
             ("def format_privacy_chip", "export function formatPrivacyChip"),
             ("def should_confirm_interpreted_query", "export function shouldConfirmInterpretedQuery"),
+            ("def looks_like_followup_ask", "export function looksLikeFollowupAsk"),
             ("def experiment_percents_from_compare", "export function experimentPercentsFromCompare"),
             ("def sanitize_annotations_text", "export function sanitizeAnnotationsText"),
             ("def format_quality_flag_lines", "export function formatQualityFlagLines"),
@@ -1529,6 +1530,12 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("onInvestigationMode", panel)
         self.assertIn("self._skip_interpret = True", assist)
         self.assertIn("skipInterpretOnce = true", panel)
+        self.assertIn('interpreted_run_prompt(interpreted)', assist)
+        self.assertIn("interpretedRunPrompt(interpretedQuery || data)", panel)
+        self.assertNotIn(
+            "Confirm investigation scope, then Run investigation.", assist)
+        self.assertNotIn(
+            "Confirm investigation scope, then Run investigation.", panel)
         self.assertIn("Save as template", assist)
         self.assertIn("Save as template", panel)
         self.assertIn("user_investigation_templates", assist)
@@ -1697,6 +1704,11 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn(AI_STOP_ICON_PATH, panel)
         self.assertIn("def _on_composer_action", assist)
         self.assertIn("function onComposerAction", panel)
+        self.assertIn("Enter to send, Shift+Enter for a new line", assist)
+        self.assertIn("Enter to send, Shift+Enter for a new line", panel)
+        self.assertIn("keydown.enter.exact.prevent", panel)
+        self.assertNotIn("Ctrl/Cmd+Enter to send", assist)
+        self.assertNotIn("Ctrl/Cmd+Enter to send", panel)
         self.assertNotIn("{{ busy ? 'Waiting…' : 'Ask' }}", panel)
         self.assertNotIn('_send_btn.setText("Waiting…"', assist)
         clear_fn = assist[assist.find("def clear_conversation"):assist.find("def _show_log_menu")]

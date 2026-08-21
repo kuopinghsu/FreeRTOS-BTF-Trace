@@ -203,6 +203,13 @@ describe('aiCase investigation lifecycle', () => {
     assert.equal(shouldConfirmInterpretedQuery(
       'Why?\n\nInterpreted as diagnose. Investigation scope: blocking.',
     ), false)
+    assert.equal(shouldConfirmInterpretedQuery('Why?', { alreadyInterpreted: true }), false)
+    assert.equal(shouldConfirmInterpretedQuery('Why is CS[22] slow?', {
+      hasConversation: true,
+    }), false)
+    assert.equal(shouldConfirmInterpretedQuery('tell me more'), false)
+    assert.equal(shouldConfirmInterpretedQuery('Continue'), false)
+    assert.equal(shouldConfirmInterpretedQuery('Why is it still slow?'), true)
     assert.equal(experimentPercentsFromCompare({
       checks: [{ id: 'migrations', delta: -72, detail: '-72.0% (threshold 20%)' }],
     }).migrations, -72)

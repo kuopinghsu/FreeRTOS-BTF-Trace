@@ -474,6 +474,12 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertFalse(should_confirm_interpreted_query(
             "Why?", already_interpreted=True,
         ))
+        self.assertFalse(should_confirm_interpreted_query(
+            "Why is CS[22] slow?", has_conversation=True,
+        ))
+        self.assertFalse(should_confirm_interpreted_query("tell me more"))
+        self.assertFalse(should_confirm_interpreted_query("Continue"))
+        self.assertTrue(should_confirm_interpreted_query("Why is it still slow?"))
         percents = experiment_percents_from_compare({
             "checks": [{
                 "id": "migrations", "delta": -72.0, "detail": "-72.0% (threshold 20%)",
@@ -1126,6 +1132,7 @@ class InvestigationCaseParitySurfaceTests(unittest.TestCase):
             "parseUserHistoricalKnowledge",
             "toolCallingFromChatResponse",
             "shouldConfirmInterpretedQuery",
+            "looksLikeFollowupAsk",
             "experimentPercentsFromCompare",
             "VALIDATE_EXPERIMENT_PROMPT",
             "sanitizeAnnotationsText",
