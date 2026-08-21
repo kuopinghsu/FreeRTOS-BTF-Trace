@@ -47,9 +47,9 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         )
         titles = [f["title"] for f in findings]
         self.assertIn("Load imbalance across cores", titles)
-        self.assertIn("Excessive bouncing / core thrashing", titles)
+        self.assertIn("Excessive core migration", titles)
         self.assertIn("Hot core-pair migration traffic", titles)
-        self.assertIn("Top tasks by CPU (WCET candidates)", titles)
+        self.assertIn("Highest CPU consumers", titles)
         load = next(f for f in findings if f["title"].startswith("Load imbalance"))
         self.assertEqual(load["severity"], "warning")
         self.assertNotIn("workflow", load)
@@ -145,6 +145,7 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         html_out = _render_workflow_analysis_html(findings, " (cursor range C1–C2)")
         self.assertIn("Analysis Findings", html_out)
         self.assertIn("analysis-findings", html_out)
+        self.assertIn("finding-card", html_out)
         self.assertIn("sev-warning", html_out)
         self.assertNotIn("WORKFLOWS", html_out)
 

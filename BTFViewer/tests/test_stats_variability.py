@@ -97,13 +97,18 @@ class TestStatsVariability(unittest.TestCase):
         )
         exec_text = next(
             f["text"] for f in findings
-            if f["title"].startswith("Top tasks by CPU")
+            if f["title"].startswith("Highest CPU")
+        )
+        max_text = next(
+            f["text"] for f in findings
+            if f["title"].startswith("Largest execution")
         )
         block_text = next(
             f["text"] for f in findings
-            if "Blocking" in f["title"]
+            if "Off-CPU" in f["title"]
         )
-        self.assertIn("Max 10us", exec_text)
+        self.assertIn("Worker (40.0%)", exec_text)
+        self.assertIn("Max 10us", max_text)
         self.assertIn("Max 20us", block_text)
 
     def test_histogram_variability_overlay_model(self) -> None:

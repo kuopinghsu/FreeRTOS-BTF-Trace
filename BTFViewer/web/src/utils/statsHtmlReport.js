@@ -98,6 +98,7 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; 
 .finding-card.finding-ok { border-left-color: #5FCF6F; }
 .finding-card h3 { margin: 0 0 6px; font-size: 14px; color: #123355; }
 .finding-meta { font-size: 12px; color: var(--muted); margin: 4px 0; }
+.finding-card a { color: var(--accent); }
 .scope-table th { width: 28%; }
 .heat-wrap { overflow-x: auto; margin: 8px 0 12px; }
 .heat-cell { font-size: 10px; text-anchor: middle; }
@@ -160,7 +161,7 @@ export function htmlScopeIdentityCard({
     ['End', end],
     ['Duration', duration],
     ['Cores', String(cores)],
-    ['Tasks in scope', Number(taskCount || 0).toLocaleString()],
+    ['Tasks in scope', Number(taskCount || 0).toLocaleString('en-US')],
     ['Filters', filters || 'None'],
     ['Timestamps', timestampMode],
   ]
@@ -175,10 +176,10 @@ export function htmlTraceMetadataCard({
 }) {
   const rows = [
     [`Span${scopeTitle}`, span],
-    ['Tasks', Number(tasks || 0).toLocaleString()],
-    ['Segments', Number(segments || 0).toLocaleString()],
-    ['STI events', Number(stiEvents || 0).toLocaleString()],
-    [`Context switches${scopeTitle}`, Number(contextSwitches || 0).toLocaleString()],
+    ['Tasks', Number(tasks || 0).toLocaleString('en-US')],
+    ['Segments', Number(segments || 0).toLocaleString('en-US')],
+    ['STI events', Number(stiEvents || 0).toLocaleString('en-US')],
+    [`Context switches${scopeTitle}`, Number(contextSwitches || 0).toLocaleString('en-US')],
   ]
   if (coreGapAvg) rows.push([`Core gap avg${scopeTitle}`, coreGapAvg])
   if (coreGapMax) rows.push([`Core gap max${scopeTitle}`, coreGapMax])
@@ -407,8 +408,10 @@ export function htmlInvestigateAnomalies({
 }
 
 export function htmlGlossary({ rangeNote = '' } = {}) {
+  let note = String(rangeNote || '').trim()
+  if (note.startsWith('<li>') && note.endsWith('</li>')) note = note.slice(4, -5).trim()
   const items = [
-    rangeNote,
+    note,
     '<strong>Execution Time Per Slice:</strong> Duration of each continuous task run between two context switches.',
     '<strong>Highest CPU consumers</strong> are tasks with the largest share of active CPU time. They are not automatically WCET candidates. Largest execution-time maxima live in Execution Time Per Slice.',
     '<strong>Inter-Arrival Time:</strong> Time between consecutive activations of the same task (slice start to next slice start).',

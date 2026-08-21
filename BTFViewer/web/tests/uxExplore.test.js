@@ -18,6 +18,8 @@ import {
   compareMigrationHeatmapRows,
   compareMigrationHeatmapSvg,
   filterCompareMigrationRows,
+  formatBurstReason,
+  formatBurstWindowNs,
   coreUtilOverTime,
   criticalPathRows,
   detectTimelineAnomalies,
@@ -58,6 +60,11 @@ function ev(kind, task, start, duration) {
 }
 
 describe('uxExplore', () => {
+  it('formats burst windows as human units', () => {
+    assert.equal(formatBurstWindowNs(1_000_000), '1 ms')
+    assert.equal(formatBurstReason(9693, 'wakeup', 1_000_000), '9,693 wakeups within 1 ms')
+  })
+
   it('percentile index matches the stats-table formula', () => {
     assert.equal(percentileIndex(10, 0.95), 9)
     assert.equal(percentileIndex(20, 0.95), 18)

@@ -179,6 +179,36 @@ describe('Statistics distribution Query with AI', () => {
     assert.match(statsPanel, /Enable AI Assistant in Settings → AI/)
     assert.match(app, /@query-ai="queryAnalysisWithAi"/)
   })
+
+  it('keeps explorer Metric/Task and actions on separate rows (desktop lockstep)', () => {
+    const start = statsPanel.indexOf('Distribution Explorer{{ scopeSuffixStr }}')
+    assert.ok(start >= 0)
+    const chunk = statsPanel.slice(start, start + 1200)
+    assert.match(chunk, /class="distrib-selectors"/)
+    assert.match(chunk, /class="distrib-actions"/)
+    const selectors = chunk.indexOf('class="distrib-selectors"')
+    const actions = chunk.indexOf('class="distrib-actions"')
+    assert.ok(selectors >= 0 && actions > selectors)
+    assert.match(chunk, /Open histogram/)
+    assert.match(chunk, /Query with AI…/)
+    assert.match(chunk, /class="stats-tool-btn"/)
+    assert.match(statsPanel, /\.distrib-toolbar \{[\s\S]*?flex-direction:\s*column/)
+    assert.match(statsPanel, /\.distrib-actions \{[\s\S]*?flex-wrap:\s*nowrap/)
+  })
+})
+
+describe('Statistics timeline anomalies Investigate', () => {
+  it('matches desktop: always shown, AI-gated, theme-aware tool button', () => {
+    const start = statsPanel.indexOf('Timeline Anomalies{{ scopeSuffixStr }}')
+    assert.ok(start >= 0)
+    const chunk = statsPanel.slice(start, start + 900)
+    assert.match(chunk, /Investigate…/)
+    assert.match(chunk, /class="stats-tool-btn"/)
+    assert.match(chunk, /:disabled="!aiFeatureEnabled \|\| !anomalyRows\.length"/)
+    assert.match(chunk, /Enable AI Assistant in Settings → AI/)
+    assert.doesNotMatch(chunk, /compare-mig-btn/)
+    assert.match(statsPanel, /\.stats-tool-btn \{[\s\S]*?color:\s*var\(--fg\)/)
+  })
 })
 
 describe('right-panel tab visibility (desktop parity)', () => {

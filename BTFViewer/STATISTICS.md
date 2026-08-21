@@ -162,7 +162,7 @@ Section order, pinned sections, expanded/collapsed state, and table heights are 
 **Export CSV** and **Export HTML** use the current cursor scope.
 
 - **CSV** exports the Statistics summary tables and related calculated values.
-- **HTML** exports the same summaries and adds presentation-oriented details such as **Analysis Findings**, the **Load Balance Score** gauge, and supported detail tables. The HTML table of contents includes **Expand all** / **Collapse all**.
+- **HTML** exports the same summaries and begins with a diagnostic overview: **Analysis Scope** (filename, full trace or C1–Cn, start/end, duration, cores, filters, and timestamp origin), diagnostic KPIs (status, load balance, utilisation range, worst Response P99 (heuristic), migrations, tick, synchronization, and deadlines), and **Analysis Findings** evidence cards. Trace-size counts (tasks, segments, and STI events) appear under **Trace Metadata**, while an SVG **Load Balance Score** gauge appears under Core Utilisation. The table of contents groups sections into five diagnostic areas and provides **Expand all** / **Collapse all**. Large tables initially show about 20 rows and support search, sorting, **Problems only**, **Show all**, and CSV export. **Statistics Notes** provides a glossary at the end.
 - **Trace Compare…** compares supported metrics between two open traces. Trace A is the **baseline** and Trace B is the **candidate**. **Δ** is Baseline A − Candidate B. Enable **Limit to each tab's cursor range** when the two traces should use different time windows. **Export CSV** / **Export HTML** write every Compare table (not only the dialog top-N preview). HTML adds a table of contents with **Expand all** / **Collapse all**; Overview and Summary start expanded. Overview is a comparison identity, verdict, and Notable Changes summary (Improved / Regressed above threshold). Summary, Core Util, Response, and Core Migrations include charts; Core Migrations defaults to the largest count changes.
 
 For exact exported fields and section-specific behavior, see the detailed metric descriptions below.
@@ -174,12 +174,21 @@ The Statistics panel is available on both Desktop and Web. Metrics are grouped i
 
 **Export CSV** and **Export HTML** use the current cursor scope. Both exports include the summary table from each section.
 
-**Export HTML** starts with an **Analysis Findings** card.
-It contains the same main findings as toolbar **Analysis**: load balance, WCET, blocking, thrashing, deadlines, tick health, and synchronization.
-It also adds the **Load Balance Score** gauge as an SVG under Core Utilisation.
-The report includes a **Table of Contents** with **Expand all** / **Collapse all** for every section card. Analysis Findings, Statistics Notes, Core Utilisation, Top Tasks, and Trace Health start expanded; other sections start collapsed.
+**Export HTML** begins with:
 
-Priority Inheritance, Mutex / Semaphore, and Interval Analysis also include detail tables. The longest instances or hold episodes appear first. Each detail table is limited to about 150–200 rows.
+- diagnostic KPIs for overall status, load balance, utilisation range, worst Response P99 (heuristic), migrations, tick, synchronization, and deadlines;
+- an **Analysis Scope** card showing the trace file, full-trace or cursor scope, start/end, duration, cores, filters, and timestamp origin; and
+- **Analysis Findings** evidence cards based on the same heuristics as toolbar **Analysis**, including load balance, high CPU consumers, tasks with the largest observed execution-time maxima, off-CPU gaps, migration thrashing, deadlines, tick health, and synchronization.
+
+Each finding shows its severity, impact, evidence, confidence, and an **Inspect** link. The link opens the relevant report section; it does not return to BTFViewer. Under Core Utilisation, the report includes an SVG **Load Balance Score** gauge.
+
+The **Table of Contents** groups sections into Overview, CPU and Scheduling, Migrations, Timing, and Synchronization. **Expand all** / **Collapse all** apply to every section card. Analysis Scope, Analysis Findings, Core Utilisation, Trace Health, and Investigate Anomalies start expanded; **Statistics Notes** remains collapsed as a glossary at the end.
+
+Large tables initially show about 20 rows. They support search, sortable headers, a sticky header and first column, horizontal scrolling, **Show all**, and CSV export. **Problems only** appears when the table contains severity cells.
+
+Timeline Anomalies, Worst Events, Recurring Patterns, and Critical Path appear as tabs under **Investigate Anomalies**. Tag Analysis condenses repeated samples into a time series instead of listing hundreds of identical rows.
+
+Priority Inheritance, Mutex / Semaphore, and Interval Analysis also include detail tables. Boost episodes are ordered by start time; interval instances and hold episodes list the longest entries first. Depending on the section, a detail table contains up to about 150–200 rows.
 
 Use toolbar **Analysis** for interactive triage. Use **Save as Text…** when you need a text copy.
 
@@ -256,7 +265,7 @@ where *G* is the Gini coefficient of {*U*<sub>core</sub>}.
 
 σ is the population standard deviation of `{U_core}`.
 
-The Score gauge uses a 0–100 % scale. A value of 100 means perfect balance. A value of 0 means the load is concentrated on one core.
+The Score gauge uses a 0–100 % scale. **100 = evenly distributed utilisation**; **0 = highly uneven utilisation** (load concentrated on one or a few cores). The score describes balance, not overall load: a system can be evenly overloaded or evenly idle, and a low score does not necessarily mean overload.
 
 The σ gauge uses a 0–60 % scale. Its warning threshold is at the middle of the scale. The zones match toolbar **Analysis**:
 
@@ -695,25 +704,27 @@ d_k = t_{\mathrm{end},k} - t_{\mathrm{start},k}
 
 Table statistics are computed over all slice durations *d*<sub>k</sub> in scope.
 **Jitter** is the observed range, `Max − Min`; **σ** is the population standard deviation (the observed slices are treated as the complete population in scope).
-**CPU%** is the task's share of total active CPU time in scope:
+**CPU%** is the task's share of total **non-IDLE/TICK active CPU time** in scope (not wall-clock span, and not total multicore capacity):
 
 ```math
 \mathrm{CPU}_i = \frac{T_{\mathrm{exec},i}}{\sum_j T_{\mathrm{exec},j}} \times 100
 ```
 
 **What it tells you:** Short, uniform slices suggest periodic or tick-driven scheduling.
-A long **Max** or heavy **p95** tail marks worst-case execution time (WCET) slices. These often come from critical sections, lock holds, or interrupt-disabled regions.
-Compare **Min** (BCET) and **Max** (WCET) to judge jitter; a wide spread on a real-time task may violate deadline assumptions even when **Avg** looks acceptable.
+A long **Max** or heavy **p95** tail identifies the longest **observed** slices, not a proven WCET. Long slices may coincide with critical sections, lock holds, or interrupt-disabled regions, but timing data alone does not establish the cause.
+**Min** is the shortest observed sample; it is not a proven BCET under zero load.
+Percentiles such as **P95** are useful when tied to a deadline or acceptance criterion, but P95 is not a universal real-time acceptance threshold.
+Compare **Min** and **Max** to judge jitter; a wide spread on a real-time task may violate deadline assumptions even when **Avg** looks acceptable.
 
 | Column | Meaning |
 |--------|---------|
 | **Task** | Display name (`Name[id]`) |
 | **Runs** | Number of slices in scope |
-| **CPU%** | Share of total trace (or cursor-range) active time |
+| **CPU%** | Share of total non-IDLE/TICK active CPU time in scope (not wall-clock span) |
 | **Min / Avg / Max / p95** | Slice duration statistics |
 | **Jitter** | Observed duration range (`Max − Min`) |
 | **σ** | Population standard deviation of slice durations |
-| **Min / Max** links | Jump and annotate BCET / WCET slice |
+| **Min / Max** links | Jump to and annotate the shortest / longest observed slice |
 
 **Distribution chart** — click any row:
 
@@ -731,9 +742,9 @@ The **CDF** rises steeply on the left (most slices are short) then levels toward
 <a id="blocking-time" name="blocking-time">&#x200B;</a>
 ### Blocking Time ![](../images/readme/h4.svg)
 
-Measures the **off-CPU gap** between the end of one slice and the start of the next for the same task. This is the time spent waiting to run again (preempted, blocked on a resource, or delayed by the scheduler).
+Also called **Off-CPU Time** in exported HTML. Measures the **off-CPU gap** between the end of one slice and the start of the next for the same task. This wait may include preemption, suspension, periodic waiting, or scheduling delay — not necessarily resource blocking.
 
-> **Not end-to-end response time:** BTFViewer's **Blocking Time** is only the off-CPU gap until the task next resumes.
+> **Not end-to-end response time:** BTFViewer's **Blocking Time** / **Off-CPU Time** is only the off-CPU gap until the task next resumes.
 True response time is normally measured from an explicit release event to completion and cannot be derived reliably from context-switch slices alone.
 It requires matching release/completion instrumentation (for example, paired interval events).
 
@@ -745,7 +756,7 @@ g_k = t_{\mathrm{start},k+1} - t_{\mathrm{end},k}
 
 Only positive gaps are counted. Min / Avg / Max / p95 are taken over all gaps *g*<sub>k</sub> in scope.
 
-**What it tells you:** Blocking time is pure **wait time**. The task is runnable or blocked but not on-CPU.
+**What it tells you:** Blocking Time measures when the task is **not executing on a CPU**; it does not identify the exact task state. The task may be runnable, blocked, suspended, or waiting for its next periodic activation.
 High **Avg** or **Max** gaps often point to lock contention, priority inversion, or a higher-priority task monopolizing the core.
 Spikes clustered at specific times in the scatter plot usually correlate with a particular preemptor or synchronization object; use **Preemption Chain Analysis** or **Mutex / Semaphore** pairing to find the cause.
 
@@ -1164,8 +1175,9 @@ One list of the longest execution, blocking, inter-arrival, and heuristic respon
 <a id="critical-path" name="critical-path">&#x200B;</a>
 ### Critical Path ![](../images/readme/h4.svg)
 
-Takes the longest heuristic ready→completion windows and splits each into overlapping exec / preempt / wait / migration / other.
-This is **not** a kernel release/completion pair.
+Takes the longest heuristic ready→completion windows. **Duration** is the complete window, **Exec** is the task's own on-CPU time, and **Off-CPU** is `Duration − Exec`.
+**Preempt**, **Wait**, and **Migration** overlap—**Wait** includes preemption gaps—so they must not be stacked as a breakdown of Duration. The Statistics table retains these components so you can jump to each episode.
+This is **not** a release/completion pair explicitly recorded by the kernel.
 Click a component to jump to that episode.
 
 ![Critical Path table for example-8cores.btf.gz](../images/stats/stats-crit-path.svg)
@@ -1687,7 +1699,7 @@ Keep STI **TICK** enabled on both builds and use the same suite / duration so Δ
 | Summary → **Tick mode** / **Tick count** / **Tick health** | Confirms config; tickful should favour lower CV when idle stretches dominate |
 | Summary → **Core gap avg/max**, **Load Balance Score** / **σ** | Idle/busy structure and SMP balance |
 | Summary → **Migrations** | Whether tick wake pattern changes cross-core bouncing |
-| **Execution** (Max / p95) | Slice WCET and CPU-share shifts |
+| **Execution** (Max / p95) | Longest observed slices and CPU-share shifts |
 | **Blocking** (Max / p95) | Response-time impact under each policy |
 | **Preemption** | Peer interference / tick-driven preemption differences |
 | **Top Tasks** / **Core Util** | Who absorbs tick or wake-up overhead |

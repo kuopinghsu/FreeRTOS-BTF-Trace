@@ -81,14 +81,10 @@ tbody tr:nth-child(even) td { background: var(--stripe); }
 h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }
 .sev-error { color: #c0392b; font-weight: 600; }
 .sev-warning { color: #9a4d00; font-weight: 600; }
-.finding-info { color: var(--ink, #182230); }
+.finding-info { color: var(--ink, var(--fg, #182230)); }
 .finding-ok { color: #166534; font-weight: 600; }
 .findings-list { margin: 8px 0 0 18px; padding: 0; }
 .findings-list li { margin: 8px 0; line-height: 1.45; }
-.finding-wf {
-  color: var(--muted); font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.4px;
-}
 .analysis-findings { border-left: 4px solid #c0392b; }
 .finding-cards { display: grid; gap: 10px; }
 .finding-card {
@@ -118,14 +114,9 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; 
 }
 .table-check { font-size: 12px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }
 .table-count { font-size: 12px; color: var(--muted); margin-left: auto; }
-.table-scroll {
-  overflow-x: auto;
-  max-width: 100%;
-}
+.table-scroll { overflow-x: auto; max-width: 100%; }
 .table-scroll table { min-width: 100%; }
-.table-scroll thead th {
-  position: sticky; top: 0; z-index: 2;
-}
+.table-scroll thead th { position: sticky; top: 0; z-index: 2; }
 .table-scroll td:first-child, .table-scroll th:first-child {
   position: sticky; left: 0; z-index: 1; background: #fff;
 }
@@ -558,8 +549,11 @@ def html_investigate_anomalies(
 
 
 def html_glossary(*, range_note: str = "") -> str:
+    note = (range_note or "").strip()
+    if note.startswith("<li>") and note.endswith("</li>"):
+        note = note[4:-5].strip()
     items = [
-        range_note,
+        note,
         "<strong>Execution Time Per Slice:</strong> Duration of each continuous task run between two context switches.",
         "<strong>Highest CPU consumers</strong> are tasks with the largest share of active CPU time. "
         "They are not automatically WCET candidates. Largest execution-time maxima live in Execution Time Per Slice.",
@@ -599,24 +593,3 @@ def html_glossary(*, range_note: str = "") -> str:
     )
 
 
-def format_burst_window_ns(window_ns: int) -> str:
-    """Human window for burst detectors (always nanoseconds)."""
-    ns = int(window_ns or 0)
-    if ns <= 0:
-        return "0 ns"
-    if ns % 1_000_000_000 == 0:
-        return f"{ns // 1_000_000_000} s"
-    if ns % 1_000_000 == 0:
-        return f"{ns // 1_000_000} ms"
-    if ns % 1_000 == 0:
-        return f"{ns // 1_000} µs"
-    if ns >= 1_000_000:
-        return f"{ns / 1_000_000:g} ms"
-    if ns >= 1_000:
-        return f"{ns / 1_000:g} µs"
-    return f"{ns} ns"
-
-
-def format_burst_reason(count: int, label: str, window_ns: int) -> str:
-    stem = str(label or "").replace(" burst", "").strip() or "event"
-    return f"{count:,} {stem}s within {format_burst_window_ns(window_ns)}"

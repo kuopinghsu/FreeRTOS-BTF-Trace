@@ -30,6 +30,8 @@ from btf_viewer_pkg.ux_explore import (  # noqa: E402
     compare_migration_heatmap_svg,
     compare_row_delta_status,
     filter_compare_migration_rows,
+    format_burst_reason,
+    format_burst_window_ns,
     COMPARE_DELTA_FORMULA,
     core_util_over_time,
     critical_path_rows,
@@ -72,6 +74,13 @@ def _ev(kind, task, start, duration, mk=None):
 
 
 class UxExploreTest(unittest.TestCase):
+    def test_burst_reason_uses_human_window(self) -> None:
+        self.assertEqual(format_burst_window_ns(1_000_000), "1 ms")
+        self.assertEqual(
+            format_burst_reason(9693, "wakeup", 1_000_000),
+            "9,693 wakeups within 1 ms",
+        )
+
     def test_percentile_index_matches_stats_table(self) -> None:
         self.assertEqual(percentile_index(10, 0.95), 9)
         self.assertEqual(percentile_index(20, 0.95), 18)

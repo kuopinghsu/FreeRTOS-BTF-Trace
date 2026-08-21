@@ -229,7 +229,7 @@ export function loadBalanceGaugeSvg(metrics, opts = {}) {
     zone: scoreZone,
     title: 'Load Balance Score',
     valueLabel: `${score.toFixed(0)}%`,
-    legend: '100 = balanced · 0 = overload',
+    legend: '100 = evenly distributed · 0 = highly uneven',
   })
   const right = _gaugeSvgBody({
     uid: `${uid}D`,

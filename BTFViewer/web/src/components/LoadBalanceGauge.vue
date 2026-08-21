@@ -71,7 +71,7 @@
             dominant-baseline="middle"
           >{{ scoreLabel }}</text>
         </svg>
-        <div class="lb-caption">100 = balanced · 0 = overload</div>
+        <div class="lb-caption">100 = evenly distributed · 0 = highly uneven</div>
       </div>
 
       <!-- σ gauge -->

@@ -406,8 +406,9 @@ STATS_SECTION_HELP: dict[str, str] = {
         "episodes. Click a row to jump and set cursors on that episode."
     ),
     "crit_path": (
-        "Longest heuristic ready→completion windows, split into exec / "
-        "preempt / wait / migration / other. Click a component to jump to "
+        "Longest heuristic ready→completion windows. Exec is own on-CPU time; "
+        "Off-CPU is Duration − Exec. Preempt, Wait, and Migration overlap and "
+        "are not a stacked split of Duration. Click a component to jump to "
         "that episode. Not a kernel release/completion pair."
     ),
     "patterns": (

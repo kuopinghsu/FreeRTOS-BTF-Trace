@@ -4,30 +4,38 @@
 
 ![BTFViewer AI-assisted analysis](../images/btfviewer-ai.png)
 
-BTFViewer analyzes context-switch traces from real-time operating systems (RTOSs). It opens **Best Trace Format** (`.btf`) files and provides the tools needed to:
+**BTFViewer turns BTF traces into verifiable multicore scheduling evidence—with deterministic statistics, before-and-after comparison, CI-ready reports, and optional AI-assisted investigation.**
 
-- inspect task activity on a timeline;
-- measure timing with cursors;
-- review scheduling and synchronization statistics;
-- identify load imbalance, latency, blocking, and migration issues; and
-- use the optional AI Assistant to review measured findings.
+BTFViewer analyzes recorded context-switch activity from real-time operating systems (RTOSs) in **Best Trace Format** (`.btf`). It is designed for post-capture analysis on Desktop or Web and complements low-level debuggers and target-side trace recorders. It does not read source code or ELF files, or simulate an RTOS scheduler; its conclusions remain tied to events recorded in the trace.
 
 ![BTFViewer](../images/btfviewer.png)
 
 [Try the live demo](https://apps.kuoping.com/btf_viewer.html?demo)
 
+<a id="why-btfviewer" name="why-btfviewer">&#x200B;</a>
+
+## Why BTFViewer?
+
+BTFViewer is designed to shorten the path from a timing symptom to evidence that can be reviewed and reproduced.
+
+- **Evidence you can verify:** Statistics and Analysis Findings are calculated from recorded BTF/STI events. Metric definitions, limitations, and timeline locations remain visible, so every conclusion can be checked against the trace.
+- **Multicore behavior made explicit:** Dedicated diagnostics reveal load imbalance, concurrent core activity, task affinity, migration frequency, ping-pong movement, and hot core-to-core migration paths—not just which task ran when.
+- **Comparison built into the workflow:** Open multiple traces, measure before-and-after deltas and distribution changes, save baselines, and use the Desktop CLI as a regression gate in automated tests or CI.
+- **AI grounded in measured data:** The optional AI Assistant can triage, investigate, verify, evaluate heuristic experiments, and explain trace comparisons. Statistics and the timeline remain the source of truth; a local OpenAI-compatible endpoint can keep extracted evidence on the local machine.
+- **Easy to run and share:** Desktop and Web use the same analysis workflow. The standalone Web build and bilingual guided demo make it easy to review or demonstrate a trace without a specialized analysis installation.
+
 <a id="features" name="features">&#x200B;</a>
 
 ## Features
 
-- **Timeline views:** Display activity by task or CPU core in horizontal or vertical layouts.
-- **Navigation and measurement:** Zoom, pan, search, place cursors, and add bookmarks or annotations.
-- **Statistics and findings:** Review utilization, latency, migration, mutex, semaphore, queue, and scheduling data.
-- **Multi-trace sessions:** Open several traces in tabs and compare results.
-- **AI-assisted investigation:** Ask the AI Assistant to explain measured findings and reference the supporting evidence.
-- **Export:** Save PNG or SVG images, CSV or HTML reports, Perfetto traces, and selected BTF ranges.
-- **Desktop CLI:** Generate reports and images in scripts or continuous integration (CI) systems.
-- **Guided demo:** Play an 8-core walkthrough with English or Traditional Chinese narration.
+| Area | Capabilities |
+|---|---|
+| **Timeline and measurement** | Task or CPU-core views, horizontal or vertical layouts, zoom, pan, search, cursors, bookmarks, and annotations |
+| **Statistics and diagnostics** | Utilisation, execution, blocking, dispatch latency, jitter, preemption, migration, mutex, semaphore, queue, deadline, and anomaly analysis |
+| **Trace comparison** | Multi-tab sessions, before-and-after deltas, distribution comparisons, saved baselines, and experiment validation |
+| **AI Assistant** | Finding triage, scoped investigation, evidence verification, heuristic what-if analysis, and comparison explanations |
+| **Export and automation** | PNG, SVG, CSV, HTML, Perfetto, selected BTF ranges, and Desktop CLI support for scripts and CI |
+| **Learning and sharing** | Standalone Web application and an 8-core guided demo with English or Traditional Chinese narration |
 
 <a id="documentation" name="documentation">&#x200B;</a>
 

@@ -769,14 +769,16 @@
         Timeline Anomalies{{ scopeSuffixStr }}
       </StatsSectionHeader>
       <template v-if="!anomaliesCollapsed">
-        <div
-          v-if="anomalyRows.length"
-          class="distrib-toolbar"
-        >
+        <div class="stats-tool-row">
           <button
             type="button"
-            class="compare-mig-btn"
-            title="Open the AI Assistant and investigate the selected or top anomaly"
+            class="stats-tool-btn"
+            :disabled="!aiFeatureEnabled || !anomalyRows.length"
+            :title="!aiFeatureEnabled
+              ? 'Enable AI Assistant in Settings → AI'
+              : !anomalyRows.length
+                ? 'No timeline anomalies in this scope'
+                : 'Open the AI Assistant and investigate the selected or top anomaly'"
             @click="onInvestigateAnomaly"
           >
             Investigate…
@@ -1902,39 +1904,43 @@
       </StatsSectionHeader>
       <template v-if="!distribCollapsed">
         <div class="distrib-toolbar">
-          <label>
-            Metric
-            <DomSelect
-              v-model="distribKind"
-              :options="distribKindSelectOptions"
-            />
-          </label>
-          <label>
-            Task
-            <DomSelect
-              v-model="distribMk"
-              :options="distribTaskOptions"
-            />
-          </label>
-          <button
-            type="button"
-            class="compare-mig-btn"
-            :disabled="!distribMk"
-            @click="onOpenDistributionPlot"
-          >
-            Open histogram
-          </button>
-          <button
-            type="button"
-            class="action-btn"
-            :disabled="!aiFeatureEnabled || !distribMk"
-            :title="aiFeatureEnabled
-              ? 'Open the AI Assistant and explain this distribution'
-              : 'Enable AI Assistant in Settings → AI'"
-            @click="queryDistributionWithAi('explorer')"
-          >
-            Query with AI…
-          </button>
+          <div class="distrib-selectors">
+            <label>
+              Metric
+              <DomSelect
+                v-model="distribKind"
+                :options="distribKindSelectOptions"
+              />
+            </label>
+            <label>
+              Task
+              <DomSelect
+                v-model="distribMk"
+                :options="distribTaskOptions"
+              />
+            </label>
+          </div>
+          <div class="distrib-actions">
+            <button
+              type="button"
+              class="stats-tool-btn"
+              :disabled="!distribMk"
+              @click="onOpenDistributionPlot"
+            >
+              Open histogram
+            </button>
+            <button
+              type="button"
+              class="stats-tool-btn"
+              :disabled="!aiFeatureEnabled || !distribMk"
+              :title="aiFeatureEnabled
+                ? 'Open the AI Assistant and explain this distribution'
+                : 'Enable AI Assistant in Settings → AI'"
+              @click="queryDistributionWithAi('explorer')"
+            >
+              Query with AI…
+            </button>
+          </div>
         </div>
         <div class="range-hint">
           {{ distribSummary }}
@@ -4180,7 +4186,21 @@ import { normalizeStatsPins, normalizeStatsSectionOrder, moveStatsSection, toggl
 import { buildHistogramModel, histogramBarTooltip } from '../utils/histogramModel.js'
 import { plotTabsForKind, resolvePlotTabSwitch } from '../utils/plotTabs.js'
 import { classifyLoadBalance, loadBalanceGaugeImgHtml, loadBalanceMetrics } from '../utils/loadBalanceGauge.js'
-import { btfHtmlReportDocument, htmlApplyCollapsibleToc, htmlMakeCollapsibleSections, HTML_REPORT_TOC_SCRIPT } from '../utils/htmlReport.js'
+import { btfHtmlReportDocument, htmlApplyCollapsibleToc, htmlMakeCollapsibleSections, HTML_REPORT_TOC_SCRIPT, HTML_REPORT_INTERACTIVE_SCRIPT } from '../utils/htmlReport.js'
+import {
+  STATS_DEFAULT_EXPANDED,
+  STATS_HTML_EXTRA_CSS,
+  STATS_TOC_GROUPS,
+  htmlDiagnosticKpiGrid,
+  htmlGlossary,
+  htmlHealthBars,
+  htmlInvestigateAnomalies,
+  htmlMatrixHeatmap,
+  htmlPercentileBars,
+  htmlScopeIdentityCard,
+  htmlTagOverview,
+  htmlTraceMetadataCard,
+} from '../utils/statsHtmlReport.js'
 import {
   HEALTH_BAND_SECTION,
   analyzeResponseTimes,
@@ -5120,6 +5140,7 @@ function onAnomalyRowClick(row) {
 }
 
 function onInvestigateAnomaly() {
+  if (!aiFeatureEnabled.value) return
   const ev = lastAnomaly.value || anomalyRows.value[0]
   if (!ev) return
   const extra = `Investigate this timeline anomaly: kind=${ev.kind || ''} task=${ev.task || ev.mk || ''} jump:${Math.trunc(ev.jump_ns || ev.start || 0)} duration=${Math.trunc(ev.duration || 0)} why=${ev.reason || ''}.`
@@ -6632,9 +6653,8 @@ function _htmlCell(v) {
 
 // Wraps every <section class="report-card ..."> block in <details> so it can be
 // collapsed/expanded, and builds a table-of-contents nav linking to each one.
-const _DEFAULT_EXPANDED_TITLES = ['Analysis Findings', 'Statistics Notes', 'Core Utilisation (excl. IDLE/TICK)', 'Top Tasks by CPU (excl. IDLE/TICK)', 'Trace Health (TICK)']
 function _makeCollapsibleSections(docHtml) {
-  return htmlMakeCollapsibleSections(docHtml, _DEFAULT_EXPANDED_TITLES)
+  return htmlMakeCollapsibleSections(docHtml, STATS_DEFAULT_EXPANDED, STATS_TOC_GROUPS)
 }
 
 const _HTML_EXPORT_UTIL_CSS = `
@@ -7766,21 +7786,11 @@ function _renderTagReportHtml(tr, lo, hi, suffix) {
         `<tr><td>${_htmlCell(row.channel)}</td><td>${_htmlCell(row.label)}</td><td>${row.count}</td><td>${_htmlCell(row.min)}</td><td>${_htmlCell(row.avg)}</td><td>${_htmlCell(row.max)}</td><td>${_htmlCell(row.p95)}</td></tr>`,
       ).join('')
     : '<tr><td colspan="7" class="empty">No tag data</td></tr>'
-  const sampleBody = samples.length
-    ? samples.map(s =>
-        `<tr><td>${_htmlCell(s.label)}</td><td>${_htmlCell(s.time)}</td><td>${_htmlCell(s.value)}</td><td>${_htmlCell(s.core || '—')}</td></tr>`,
-      ).join('')
-    : '<tr><td colspan="4" class="empty">No tag samples in scope</td></tr>'
-  const sampleNote = samples.length >= 200
-    ? '<p class="detail-note">Showing highest 200 tag samples in scope.</p>'
-    : ''
   return `<section class="report-card"><h2>Tag Analysis${_htmlCell(suffix)}</h2>
     <table><thead><tr><th>Channel</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
     <tbody>${summaryBody}</tbody></table>
-    <h3 class="sub">Tag samples (highest value first)</h3>
-    ${sampleNote}
-    <table><thead><tr><th>Tag</th><th>Time</th><th>Value</th><th>Core</th></tr></thead>
-    <tbody>${sampleBody}</tbody></table></section>`
+    <h3 class="sub">Tag channels over time</h3>
+    ${htmlTagOverview(samples, { timeOf: s => s.time })}</section>`
 }
 
 function _renderDeadlineReportHtml(suffix) {
@@ -7821,20 +7831,6 @@ function exportHtml() {
   const migReportRows = migrationRows(tr, lo, hi)
   const { rows: preemptHtmlRows } = preemptionChainRows(tr, lo, hi)
   const schedKpi = schedulingSummary.value
-  const range = !r ? rangeStats.value : null
-  const rangeHtml = range
-    ? `<section class="report-card"><h2>Cursor Range</h2><table><tbody>
-        <tr><th>Span</th><td>${_htmlCell(range.span)}</td></tr>
-        <tr><th>Slices</th><td>${_htmlCell(range.switches)}</td></tr>
-        ${range.topTask ? `<tr><th>Top task</th><td>${_htmlCell(`${range.topTask} (${range.topPct}%)`)}</td></tr>` : ''}
-        ${range.dMin ? `<tr><th>Seg min</th><td>${_htmlCell(range.dMin)}</td></tr>` : ''}
-        ${range.dAvg ? `<tr><th>Seg avg</th><td>${_htmlCell(range.dAvg)}</td></tr>` : ''}
-        ${range.dMax ? `<tr><th>Seg max</th><td>${_htmlCell(range.dMax)}</td></tr>` : ''}
-      </tbody></table></section>`
-    : ''
-  const scopeNote = r
-    ? `<li><strong>Cursor range:</strong> ${_htmlCell(scopeRangeLabel.value)}. CPU% uses overlapping active time; slice metrics use segments fully inside the range.</li>`
-    : ''
   const coreHtml = (() => {
     const section = _htmlUtilSection(
       `Core Utilisation (excl. IDLE/TICK)${suffix}`,
@@ -7860,7 +7856,7 @@ function exportHtml() {
         <tr><th>Status</th><td>${_htmlCell(tick.health.toUpperCase())}</td></tr>
         <tr><th>Mode</th><td>${tick.isTickless ? 'TICKLESS' : 'TICK'}</td></tr>
         <tr><th>Interval CV</th><td>${(tick.tickCv * 100).toFixed(2)}%</td></tr>
-        <tr><th>Ticks</th><td>${tick.tickCount.toLocaleString()}</td></tr>
+        <tr><th>Ticks</th><td>${tick.tickCount.toLocaleString('en-US')}</td></tr>
         <tr><th>Avg period</th><td>${_htmlCell(formatTime(tick.avgPeriod, tr.timeScale))}</td></tr>
         <tr><th>Max gap</th><td>${_htmlCell(formatTime(tick.maxGap, tr.timeScale))}</td></tr>
         <tr><th>Missed ticks (est.)</th><td>${tick.missedTicksEstimate}</td></tr>
@@ -7873,153 +7869,99 @@ function exportHtml() {
     : '<tr><td colspan="10" class="empty">No migrated tasks</td></tr>'
   }</tbody></table></section>`
 
-  const analysisHtml = renderWorkflowAnalysisHtml(analysisFindings.value, suffix)
+  const findings = analysisFindings.value || []
+  const analysisHtml = renderWorkflowAnalysisHtml(findings, suffix)
+  const warnN = findings.filter(f => f.severity === 'warning').length
+  const errN = findings.filter(f => f.severity === 'error').length
+  const statusKind = errN ? 'error' : (warnN ? 'warn' : 'ok')
+  const statusValue = (errN || warnN)
+    ? `${errN} error(s), ${warnN} warning(s)`
+    : 'No heuristic warnings'
+  const pcts = coreRows.map(row => Number(row.pct) || 0)
+  const utilLo = pcts.length ? Math.min(...pcts) : 0
+  const utilHi = pcts.length ? Math.max(...pcts) : 0
+  const lbKpi = loadBalanceScore.value
+  const worstRt = [...(responseRows.value || [])].sort((a, b) => (b.p99_ns || 0) - (a.p99_ns || 0))[0]
+  const migTotal = migReportRows.reduce((s, row) => s + (Number(row.migrations) || 0), 0)
+  const tickLabel = tick.tickCount ? String(tick.health || 'n/a').toUpperCase() : 'No TICK'
+  const tickHealthKind = tick.tickCount
+    ? (String(tick.health || '').toLowerCase() === 'bad' ? 'error'
+      : (tick.health && String(tick.health).toLowerCase() !== 'good' ? 'warn' : 'ok'))
+    : 'ok'
+  const dlN = hasDeadlineConfig.value
+    ? ((deadlineViolations.value.sliceViolations || []).length
+      + (deadlineViolations.value.cpuViolations || []).length)
+    : 0
+  const syncN = (syncIssueList.value || []).length
+  const kpis = [
+    { label: 'Overall status', value: statusValue, kind: statusKind },
+    {
+      label: 'Load balance',
+      value: lbKpi ? `${lbKpi.score.toFixed(0)}%` : '—',
+      hint: lbKpi ? (lbKpi.score >= 85 ? 'Balanced' : 'Uneven') : 'Need 2+ cores',
+      kind: lbKpi && (lbKpi.score < 70 || lbKpi.stddev > 30) ? 'warn' : 'ok',
+    },
+    {
+      label: 'Core utilisation range',
+      value: `${utilLo.toFixed(1)}–${utilHi.toFixed(1)}%`,
+      hint: 'Wall-clock span, one-core = 100%',
+    },
+    {
+      label: 'Worst response P99',
+      value: worstRt ? formatTime(worstRt.p99_ns, tr.timeScale) : '—',
+      hint: worstRt?.task || '',
+    },
+    { label: 'Migration activity', value: migTotal.toLocaleString('en-US'), hint: 'Total core hops in scope' },
+    { label: 'Tick health', value: tickLabel, kind: tickHealthKind },
+    { label: 'Synchronization issues', value: syncN.toLocaleString('en-US'), kind: syncN ? 'warn' : 'ok' },
+    { label: 'Deadline misses', value: dlN.toLocaleString('en-US'), kind: dlN ? 'error' : 'ok' },
+  ]
+  const startS = formatTime(lo ?? tr.timeMin, tr.timeScale)
+  const endS = formatTime(hi ?? tr.timeMax, tr.timeScale)
+  const sampleNote = execReportRows.length && execReportRows.every(row => row.runs < 8)
+    ? 'Few execution samples in this scope; percentiles and comparisons may be unreliable.'
+    : ''
+  const tab = (props.tabs || []).find(t => t.trace === tr)
+  const scopeHtml = htmlScopeIdentityCard({
+    filename: tab?.name || 'trace',
+    scopeType: r ? `Cursor range C1–C${r.nCursors}` : 'Full trace',
+    start: startS,
+    end: endS,
+    duration: spanStr.value,
+    cores: (tr.coreNames || []).length,
+    filters: r ? 'Limit to C1–Cn' : 'None',
+    timestampMode: 'Trace capture origin (not wall-clock)',
+    taskCount: summaryTaskCount.value,
+    sampleNote,
+  })
+  const metaHtml = htmlTraceMetadataCard({
+    span: spanStr.value,
+    tasks: summaryTaskCount.value,
+    segments: summarySegCount.value,
+    stiEvents: summaryStiCount.value,
+    contextSwitches: schedKpi?.contextSwitches || 0,
+    coreGapAvg: schedKpi?.gapAvg || '',
+    coreGapMax: schedKpi?.gapMax || '',
+    scopeTitle: suffix,
+  })
+  const glossaryHtml = htmlGlossary({
+    rangeNote: r
+      ? `<strong>Cursor range:</strong> ${_htmlCell(scopeRangeLabel.value)}. CPU% uses overlapping active time; slice metrics use segments fully inside the range.`
+      : '',
+  })
 
-  const stamp = new Date().toLocaleString()
-  const statsExtraCss = `
-:root { --line-strong: #c8d2e0; --stripe: #f7f9fc; }
-.report.report-wide { max-width: 1160px; }
-.kpi-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 10px;
-  margin-bottom: 16px;
-}
-.kpi {
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 12px 14px;
-  box-shadow: 0 2px 8px rgba(30, 60, 90, 0.06);
-}
-.kpi .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }
-.kpi .v { margin-top: 4px; font-size: 20px; font-weight: 700; color: #0f2b47; }
-.notes { border-left: 4px solid var(--accent); }
-.notes ul { margin: 8px 0 0 18px; padding: 0; }
-.notes li { margin: 6px 0; line-height: 1.45; }
-table { border-collapse: separate; border-spacing: 0; width: 100%; }
-th, td { border-bottom: 1px solid var(--line); padding: 8px 10px; font-size: 13px; text-align: right; }
-th:first-child, td:first-child { text-align: left; }
-thead th {
-  background: #f1f5fb;
-  color: #284563;
-  font-weight: 600;
-  border-top: 1px solid var(--line-strong);
-  border-bottom: 1px solid var(--line-strong);
-}
-tbody tr:nth-child(even) td { background: var(--stripe); }
-.empty { text-align: center !important; color: var(--muted); }
-.detail-note { margin: 6px 0 8px; font-size: 12px; color: var(--muted); }
-h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }
-.sev-error { color: #c0392b; font-weight: 600; }
-.sev-warning { color: #9a4d00; font-weight: 600; }
-.finding-info { color: var(--ink, var(--fg, #182230)); }
-.finding-ok { color: #166534; font-weight: 600; }
-.findings-list { margin: 8px 0 0 18px; padding: 0; }
-.findings-list li { margin: 8px 0; line-height: 1.45; }
-.finding-wf {
-  color: var(--muted); font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.4px;
-}
-.analysis-findings { border-left: 4px solid #c0392b; }
-.report-toc {
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 12px 14px;
-  margin: 14px 0;
-  box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
-}
-.report-toc-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin: 0 0 8px 0;
-}
-.report-toc h2 { margin: 0; }
-.report-toc-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.toc-btn {
-  font: inherit;
-  font-size: 12px;
-  padding: 4px 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #f1f5fb;
-  color: var(--accent);
-  cursor: pointer;
-}
-.toc-btn:hover { background: #e4edf8; }
-.report-toc ul { margin: 0; padding: 0 0 0 18px; columns: 2; column-gap: 24px; }
-.report-toc li { margin: 4px 0; }
-.report-toc a { color: var(--accent); text-decoration: none; }
-.report-toc a:hover { text-decoration: underline; }
-details.report-card { scroll-margin-top: 12px; }
-details.report-card > summary { cursor: pointer; list-style: none; }
-details.report-card > summary::-webkit-details-marker { display: none; }
-details.report-card > summary h2 { display: inline-block; margin: 0; }
-details.report-card > summary::before {
-  content: "\\25B8";
-  display: inline-block;
-  width: 14px;
-  margin-right: 6px;
-  color: var(--accent);
-  transition: transform 0.15s ease;
-}
-details.report-card[open] > summary::before { transform: rotate(90deg); }
-${_HTML_EXPORT_UTIL_CSS}
-`.trim()
+
+  const now = new Date()
+  const pad = n => String(n).padStart(2, '0')
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
+  const statsExtraCss = `${STATS_HTML_EXTRA_CSS}\n${_HTML_EXPORT_UTIL_CSS}`.trim()
 
   const body = `
-    <section class="kpi-grid">
-      <article class="kpi"><div class="k">Span${_htmlCell(suffix)}</div><div class="v">${_htmlCell(spanStr.value)}</div></article>
-      <article class="kpi"><div class="k">Tasks</div><div class="v">${_htmlCell(summaryTaskCount.value.toLocaleString())}</div></article>
-      <article class="kpi"><div class="k">Segments</div><div class="v">${_htmlCell(summarySegCount.value.toLocaleString())}</div></article>
-      <article class="kpi"><div class="k">STI Events</div><div class="v">${_htmlCell(summaryStiCount.value.toLocaleString())}</div></article>
-      ${schedKpi ? `<article class="kpi"><div class="k">Context switches${_htmlCell(suffix)}</div><div class="v">${_htmlCell(schedKpi.contextSwitches.toLocaleString())}</div></article>` : ''}
-      ${schedKpi?.gapAvg ? `<article class="kpi"><div class="k">Core gap avg${_htmlCell(suffix)}</div><div class="v">${_htmlCell(schedKpi.gapAvg)}</div></article>` : ''}
-      ${schedKpi?.gapMax ? `<article class="kpi"><div class="k">Core gap max${_htmlCell(suffix)}</div><div class="v">${_htmlCell(schedKpi.gapMax)}</div></article>` : ''}
-    </section>
+    ${htmlDiagnosticKpiGrid(kpis)}
     <!--TOC-->
+    ${scopeHtml}
     ${analysisHtml}
-    <section class="report-card notes">
-    <h2>Statistics Notes</h2>
-    <ul>
-      ${scopeNote}
-      <li><strong>Execution Time Per Slice:</strong> Duration of each continuous task run between two context switches. Lower and tighter values indicate more predictable execution.</li>
-      <li><strong>Inter-Arrival Time:</strong> Time between consecutive activations of the same task (slice start to next slice start). It reflects activation cadence and jitter.</li>
-      <li><strong>Blocking Time:</strong> Off-CPU gap between the end of one slice and the start of the next for the same task (scheduling latency until resume). It is not end-to-end response time, which requires explicit release and completion events.</li>
-      <li><strong>Preemption Chain Analysis:</strong> For each blocking gap of a victim task, identifies which task ran on the same core during that gap. High counts or long totals point to recurring preemption bottlenecks.</li>
-      <li><strong>Priority Inheritance:</strong> When traces include <code>create pri:N</code> on task create and <code>set_priority</code> STI events, lists tasks boosted above their base priority. <em>L/M/H pattern</em> flags classic priority-inversion geometry (medium-priority task between base and peak).</li>
-      <li><strong>Mutex / Semaphore:</strong> Pairs <code>take</code>/<code>give</code> STI events by object pointer (<code>0x........</code> in the note). Reports orphan gives, cross-task gives, unmatched takes, delete-while-held, and multi-mutex hold at trace end (deadlock risk).</li>
-      <li><strong>Interval Analysis:</strong> Pairs <code>interval_start</code> / <code>interval_stop</code> STI events by id; shows count, min/avg/max/p95 duration per interval id (Tracealyzer-style interval plot).</li>
-      <li><strong>Tag Analysis:</strong> Numeric samples from <code>tag0_event</code> … <code>tag7_event</code> STI channels (note field); scatter plot shows value over time.</li>
-      <li><strong>Task × Core:</strong> Per-task execution share of the scoped span on each core.</li>
-      <li><strong>Task Health:</strong> Heuristic 0–100 score from measured statistics, not an AI probability.</li>
-      <li><strong>Timeline Anomalies / Worst Events:</strong> Unusual long tails, migration / preemption / ISR / wakeup bursts, CPU spikes, idle gaps, and the longest execution, blocking, and inter-arrival episodes in scope.</li>
-      <li><strong>Response Time:</strong> Heuristic ready→completion from adjacent slices (previous slice end → this slice end). Not an explicit BTF release/completion pair.</li>
-      <li><strong>Critical Path:</strong> Longest heuristic response windows split into exec / preempt / wait / migration.</li>
-      <li><strong>Period / Jitter:</strong> Median inter-arrival as expected period, with RMS jitter, CV, missed (&gt; 1.5×) and extra (&lt; 0.5×) activations.</li>
-      <li><strong>Unified Jitter:</strong> Max−Min spread and CV for execution, blocking, inter-arrival, heuristic response, STI dispatch latency, and wake-to-run (response wait stand-in).</li>
-      <li><strong>Distribution Explorer:</strong> Choose a metric and task, then open the existing histogram/CDF plot.</li>
-      <li><strong>Recurring Patterns:</strong> Anomaly kinds that repeat for the same task in this scope.</li>
-      <li><strong>Preemption Matrix:</strong> Victim × preemptor overlap during off-CPU gaps on the same core, plus preemptor ranking.</li>
-      <li><strong>Waiter × Owner:</strong> Heuristic mutex handoff matrix (next distinct acquirer × previous holder), not a kernel wait queue.</li>
-      <li><strong>Mutex Blocking:</strong> Per-task mutex wait totals from those heuristic handoffs.</li>
-      <li><strong>Core Utilization Over Time:</strong> Per-core busy percent in equal time bins of the current scope.</li>
-      <li><strong>Context switches:</strong> Count of segment boundaries on all cores whose start time falls inside the statistics scope.</li>
-      <li><strong>Min (Minimum):</strong> The fastest execution time recorded. It represents the best-case scenario under zero system load.</li>
-      <li><strong>Max (Maximum):</strong> The slowest execution time recorded. It identifies worst-case bottlenecks, spikes, or resource contention.</li>
-      <li><strong>Average (Mean):</strong> Total execution time divided by the number of slices. It shows general performance but is heavily skewed by extreme outliers.</li>
-      <li><strong>TrimMean(5%):</strong> Average after removing the fastest 5% and slowest 5% slices. It reflects typical performance while reducing outlier impact.</li>
-      <li><strong>Jitter:</strong> Observed spread, calculated as Max − Min for samples in scope.</li>
-      <li><strong>σ (Population Standard Deviation):</strong> Typical dispersion of all observed samples around their arithmetic mean.</li>
-      <li><strong>P50 (Median):</strong> The midpoint latency where half of slices are faster and half are slower. It captures typical-case behaviour.</li>
-      <li><strong>P95 (95th Percentile):</strong> The threshold under which 95% of all slices execute. It is the best metric for user experience because it ignores rare anomalies while capturing real-world slowdowns.</li>
-    </ul>
-    </section>
-    ${rangeHtml}
+    ${metaHtml}
     ${coreHtml}
     ${tickHealthHtml}
     ${(() => {
@@ -8076,7 +8018,26 @@ ${_HTML_EXPORT_UTIL_CSS}
             `<td>${_htmlCell(formatMigrationGapTime(r.avgGapNs, tr.timeScale))}</td></tr>`
           ).join('')
         : '<tr><td colspan="6" class="empty">No migrations in scope</td></tr>'
+      const pairCores = []
+      for (const row of pairRows) {
+        if (!pairCores.includes(row.fromCore)) pairCores.push(row.fromCore)
+        if (!pairCores.includes(row.toCore)) pairCores.push(row.toCore)
+      }
+      const pairIdx = Object.fromEntries(pairCores.map((c, i) => [c, i]))
+      const pairCells = pairCores.map(() => pairCores.map(() => 0))
+      for (const row of pairRows) {
+        if (row.fromCore in pairIdx && row.toCore in pairIdx) {
+          pairCells[pairIdx[row.fromCore]][pairIdx[row.toCore]] = Number(row.count) || 0
+        }
+      }
+      const pairHeat = pairCores.length
+        ? htmlMatrixHeatmap(pairCores, pairCores, pairCells, {
+          title: 'Core migration count (source → destination)',
+          unit: '',
+        })
+        : ''
       return `<section class="report-card"><h2>Core-Pair Migration Summary${_htmlCell(suffix)}</h2>` +
+        pairHeat +
         '<table><thead><tr><th>From</th><th>To</th><th>Count</th>' +
         '<th>Bounces</th><th>Bounce %</th><th>Avg Gap</th></tr></thead>' +
         `<tbody>${pairBody}</tbody></table></section>`
@@ -8108,7 +8069,14 @@ ${_HTML_EXPORT_UTIL_CSS}
             }).join('') + '</tr>'
           ).join('')
         : `<tr><td colspan="${cores.length + 1}" class="empty">No on-CPU slices</td></tr>`
+      const heat = htmlMatrixHeatmap(
+        (matrix.rows || []).slice(0, 24).map(row => row.task || ''),
+        cores,
+        (matrix.rows || []).slice(0, 24).map(row => cores.map(c => Number(row.cells?.[c]?.pct_span) || 0)),
+        { title: 'Task × Core utilisation (% of span)', unit: '%' },
+      )
       return `<section class="report-card"><h2>Task × Core${_htmlCell(suffix)}</h2>` +
+        heat +
         `<table><thead>${head}</thead><tbody>${body}</tbody></table></section>`
     })()}
     ${(() => {
@@ -8124,7 +8092,14 @@ ${_HTML_EXPORT_UTIL_CSS}
             }).join('') + '</tr>'
           ).join('')
         : `<tr><td colspan="${cores.length + 1}" class="empty">No on-CPU slices</td></tr>`
+      const heat = htmlMatrixHeatmap(
+        (grid.bins || []).map(row => formatTime(row.start, tr.timeScale)),
+        cores,
+        (grid.bins || []).map(row => cores.map(c => Number(row.cells?.[c]?.pct) || 0)),
+        { title: 'Core utilisation over time', unit: '%' },
+      )
       return `<section class="report-card"><h2>Core Utilization Over Time${_htmlCell(suffix)}</h2>` +
+        heat +
         `<table><thead>${head}</thead><tbody>${body}</tbody></table></section>`
     })()}
     ${(() => {
@@ -8157,14 +8132,14 @@ ${_HTML_EXPORT_UTIL_CSS}
         : '<tr><td colspan="8" class="empty">No task slices</td></tr>'
       return `<section class="report-card"><h2>Task Health${_htmlCell(suffix)}</h2>` +
         '<p class="detail-note">Heuristic score from measured statistics, not an AI probability.</p>' +
+        htmlHealthBars(rows) +
         '<table><thead><tr><th>Task</th><th>Score</th><th>Exec</th><th>Block</th>' +
         '<th>Period</th><th>Mig</th><th>Deadline</th><th>CPU</th></tr></thead>' +
         `<tbody>${body}</tbody></table></section>`
     })()}
     ${(() => {
-      const rows = anomalyRows.value
-      const body = rows.length
-        ? rows.map(r =>
+      const anBody = anomalyRows.value.length
+        ? anomalyRows.value.map(r =>
             `<tr><td>${_htmlCell(formatTime(r.start, tr.timeScale))}</td>` +
             `<td>${_htmlCell(uxKindLabel(r.kind))}</td>` +
             `<td>${_htmlCell(r.task)}</td>` +
@@ -8172,15 +8147,8 @@ ${_HTML_EXPORT_UTIL_CSS}
             `<td>${_htmlCell(r.reason || '')}</td></tr>`
           ).join('')
         : '<tr><td colspan="5" class="empty">No timeline anomalies in this scope</td></tr>'
-      return `<section class="report-card"><h2>Timeline Anomalies${_htmlCell(suffix)}</h2>` +
-        '<table><thead><tr><th>Time</th><th>Kind</th><th>Task</th>' +
-        '<th>Duration</th><th>Why</th></tr></thead>' +
-        `<tbody>${body}</tbody></table></section>`
-    })()}
-    ${(() => {
-      const rows = worstRows.value
-      const body = rows.length
-        ? rows.map(r =>
+      const woBody = worstRows.value.length
+        ? worstRows.value.map(r =>
             `<tr><td>${_htmlCell(formatTime(r.start, tr.timeScale))}</td>` +
             `<td>${_htmlCell(uxKindLabel(r.kind))}</td>` +
             `<td>${_htmlCell(r.task)}</td>` +
@@ -8188,45 +8156,44 @@ ${_HTML_EXPORT_UTIL_CSS}
             `<td>${_htmlCell(r.reason || uxKindLabel(r.kind))}</td></tr>`
           ).join('')
         : '<tr><td colspan="5" class="empty">No episodes in this scope</td></tr>'
-      return `<section class="report-card"><h2>Worst Events${_htmlCell(suffix)}</h2>` +
-        '<table><thead><tr><th>Time</th><th>Kind</th><th>Task</th>' +
-        '<th>Duration</th><th>Why</th></tr></thead>' +
-        `<tbody>${body}</tbody></table></section>`
-    })()}
-    ${(() => {
-      const rows = critPathRows.value
-      const body = rows.length
-        ? rows.map(r =>
-            `<tr><td>${_htmlCell(r.task)}</td>` +
-            `<td>${_htmlCell(formatTime(r.duration, tr.timeScale))}</td>` +
-            `<td>${_htmlCell(formatTime(r.exec_ns, tr.timeScale))}</td>` +
-            `<td>${_htmlCell(formatTime(r.preempt_ns, tr.timeScale))}</td>` +
-            `<td>${_htmlCell(formatTime(r.wait_ns, tr.timeScale))}</td>` +
-            `<td>${_htmlCell(formatTime(r.migration_ns, tr.timeScale))}</td>` +
-            `<td>${_htmlCell(formatTime(r.other_ns, tr.timeScale))}</td></tr>`
-          ).join('')
-        : '<tr><td colspan="7" class="empty">Need at least one on-CPU slice</td></tr>'
-      return `<section class="report-card"><h2>Critical Path${_htmlCell(suffix)}</h2>` +
-        '<table><thead><tr><th>Task</th><th>Duration</th><th>Exec</th>' +
-        '<th>Preempt</th><th>Wait</th><th>Mig</th><th>Other</th></tr></thead>' +
-        `<tbody>${body}</tbody></table></section>`
-    })()}
-    ${(() => {
-      const rows = patternRows.value
-      const body = rows.length
-        ? rows.map(r =>
+      const patBody = patternRows.value.length
+        ? patternRows.value.map(r =>
             `<tr><td>${_htmlCell(r.task)}</td><td>${_htmlCell(uxKindLabel(r.kind))}</td>` +
             `<td>${r.count}</td><td>${_htmlCell(formatTime(r.duration, tr.timeScale))}</td>` +
             `<td>${_htmlCell(r.reason || '')}</td></tr>`
           ).join('')
         : '<tr><td colspan="5" class="empty">No repeating anomaly kinds in this scope</td></tr>'
-      return `<section class="report-card"><h2>Recurring Patterns${_htmlCell(suffix)}</h2>` +
-        '<table><thead><tr><th>Task</th><th>Kind</th><th>Count</th>' +
-        '<th>Worst</th><th>Why</th></tr></thead>' +
-        `<tbody>${body}</tbody></table></section>`
+      const cpBody = critPathRows.value.length
+        ? critPathRows.value.map(r =>
+            `<tr><td>${_htmlCell(r.task)}</td>` +
+            `<td>${_htmlCell(formatTime(r.duration, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.exec_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(Math.max(0, (r.duration || 0) - (r.exec_ns || 0)), tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.preempt_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.wait_ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.migration_ns, tr.timeScale))}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="7" class="empty">Need at least one on-CPU slice</td></tr>'
+      return htmlInvestigateAnomalies({
+        anomaliesTable: '<table><thead><tr><th>Time</th><th>Kind</th><th>Task</th><th>Duration</th><th>Why</th></tr></thead>'
+          + `<tbody>${anBody}</tbody></table>`,
+        worstTable: '<table><thead><tr><th>Time</th><th>Kind</th><th>Task</th><th>Duration</th><th>Why</th></tr></thead>'
+          + `<tbody>${woBody}</tbody></table>`,
+        patternsTable: '<table><thead><tr><th>Task</th><th>Kind</th><th>Count</th><th>Worst</th><th>Why</th></tr></thead>'
+          + `<tbody>${patBody}</tbody></table>`,
+        critPathTable: '<table><thead><tr><th>Task</th><th>Duration</th><th>Exec</th>'
+          + '<th>Off-CPU</th><th>Preempt (overlap)</th><th>Wait (overlap)</th>'
+          + '<th>Mig (overlap)</th></tr></thead>'
+          + `<tbody>${cpBody}</tbody></table>`,
+        critNote: '<p class="detail-note">Duration is the heuristic ready-to-completion window. '
+          + 'Exec is own on-CPU time; Off-CPU is Duration − Exec. '
+          + 'Preempt, Wait, and Migration overlap (Wait includes preemption gaps) '
+          + 'and must not be stacked as a split of Duration.</p>',
+        scopeTitle: suffix,
+      })
     })()}
     ${_renderHtmlTableReport(`Execution Time Per Slice${suffix}`, execReportRows, true)}
-    ${_renderHtmlTableReport(`Blocking Time (off-CPU gap)${suffix}`, blockReportRows)}
+    ${_renderHtmlTableReport(`Off-CPU Time (Blocking Time)${suffix}`, blockReportRows)}
     ${(() => {
       const dispRows = dispatchLatencyRows(tr, lo, hi)
       const body = dispRows.length
@@ -8285,6 +8252,7 @@ ${_HTML_EXPORT_UTIL_CSS}
         : '<tr><td colspan="12" class="empty">Need at least one on-CPU slice</td></tr>'
       return `<section class="report-card"><h2>Response Time${_htmlCell(suffix)}</h2>` +
         '<p class="detail-note">Heuristic ready→completion from adjacent slices, not an explicit BTF release/completion pair.</p>' +
+        htmlPercentileBars(rows, { title: 'Response P50–P99' }) +
         '<table><thead><tr><th>Task</th><th>N</th><th>Min</th><th>Avg</th><th>Max</th>' +
         '<th>p50</th><th>p90</th><th>p95</th><th>p99</th><th>p99.9</th><th>Jitter</th><th>CV</th></tr></thead>' +
         `<tbody>${body}</tbody></table></section>`
@@ -8392,7 +8360,9 @@ ${_HTML_EXPORT_UTIL_CSS}
     })() : ''}
     ${_renderIntervalReportHtml(tr, lo, hi, suffix)}
     ${_renderTagReportHtml(tr, lo, hi, suffix)}
+    ${glossaryHtml}
     ${HTML_REPORT_TOC_SCRIPT}
+    ${HTML_REPORT_INTERACTIVE_SCRIPT}
 `
 
   const html = btfHtmlReportDocument('Statistics Report', body, {
@@ -8402,7 +8372,7 @@ ${_HTML_EXPORT_UTIL_CSS}
     reportClass: 'report-wide',
   })
 
-  const finalHtml = htmlApplyCollapsibleToc(html, _DEFAULT_EXPANDED_TITLES)
+  const finalHtml = htmlApplyCollapsibleToc(html, STATS_DEFAULT_EXPANDED, STATS_TOC_GROUPS)
   _downloadText(`statistics-${_stamp()}.html`, finalHtml, 'text/html;charset=utf-8')
 }
 
@@ -9092,7 +9062,36 @@ defineExpose({
   cursor: not-allowed;
 }
 
-.compare-mig-btn:disabled {
+.stats-tool-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0 8px;
+}
+
+.stats-tool-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.stats-tool-btn:hover:not(:disabled) {
+  background: var(--tb-btn-hover);
+  color: var(--fg);
+}
+
+.stats-tool-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -9382,17 +9381,44 @@ defineExpose({
 
 .distrib-toolbar {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
   padding: 4px 0 8px;
 }
 
-.distrib-toolbar label {
+.distrib-selectors {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.distrib-selectors label {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.distrib-selectors label > :deep(.dom-select) {
+  flex: 1 1 auto;
+  min-width: 72px;
+}
+
+.distrib-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.distrib-actions .stats-tool-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .distrib-hist {

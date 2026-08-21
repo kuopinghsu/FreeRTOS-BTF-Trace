@@ -63,6 +63,22 @@ const ISR_RE = /(isr|irq|interrupt)/i
 export const CORE_TIME_BINS = 16
 export const BURST_WINDOW_NS = 1_000_000
 
+export function formatBurstWindowNs(windowNs) {
+  const ns = Math.trunc(windowNs || 0)
+  if (ns <= 0) return '0 ns'
+  if (ns % 1_000_000_000 === 0) return `${ns / 1_000_000_000} s`
+  if (ns % 1_000_000 === 0) return `${ns / 1_000_000} ms`
+  if (ns % 1_000 === 0) return `${ns / 1_000} µs`
+  if (ns >= 1_000_000) return `${ns / 1_000_000} ms`
+  if (ns >= 1_000) return `${ns / 1_000} µs`
+  return `${ns} ns`
+}
+
+export function formatBurstReason(count, label, windowNs) {
+  const stem = String(label || '').replace(/ burst$/, '').trim() || 'event'
+  return `${Number(count).toLocaleString('en-US')} ${stem}s within ${formatBurstWindowNs(windowNs)}`
+}
+
 const JUMP_RE = /jump:([0-9]+(?:\.[0-9]+)?)/gi
 const TASK_RE = /\b([A-Za-z_][\w.-]*\[\d+\])/
 const DELTA_RE = /^([+\-−])?\s*([\d.]+)\s*(?:(ns|µs|us|μs|ms|s|\/s|%|pp)(\/s)?)?$/i
@@ -1260,7 +1276,7 @@ function migrationBursts(events, windowNs = 1000) {
             Math.trunc(last.stop || last.start || 0) - Math.trunc(first.start || 0),
             count,
           ),
-          reason: `${count} migrations within ${windowNs} ns`,
+          reason: formatBurstReason(count, 'migration', windowNs),
         })
         i = j + 1
       } else {
@@ -1739,7 +1755,6 @@ function kindBursts(events, kind, windowNs, minCount, label) {
     if (count >= minCount) {
       const first = group[i]
       const last = group[j]
-      const stem = String(label).replace(/ burst$/, '')
       out.push({
         ...last,
         start: Math.trunc(first.start || 0),
@@ -1748,7 +1763,7 @@ function kindBursts(events, kind, windowNs, minCount, label) {
           Math.trunc(last.stop || last.start || 0) - Math.trunc(first.start || 0),
           count,
         ),
-        reason: `${count} ${stem}s within ${windowNs} ns`,
+        reason: formatBurstReason(count, label, windowNs),
       })
       i = j + 1
     } else {

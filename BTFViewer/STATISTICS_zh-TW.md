@@ -160,7 +160,7 @@ Desktop 與 Web 的右側面板都提供 **Statistics** 分頁。
 **Export CSV** 與 **Export HTML** 都會套用目前的游標範圍。
 
 - **CSV**：匯出 Statistics 各區段的摘要表格與相關計算值。
-- **HTML**：除了相同的摘要資料外，也會加入較適合閱讀與報告使用的內容，例如 **Analysis Findings**、**Load Balance Score** 儀表，以及支援的詳細資料表。HTML 目錄提供 **Expand all** / **Collapse all**。
+- **HTML**：除了相同的摘要資料外，開頭會先呈現診斷概觀，包括 **Analysis Scope**（檔名、完整 Trace 或 C1–Cn、起迄時間、持續時間、核心數、篩選條件及時間戳基準）、診斷 KPI（狀態、負載平衡、使用率範圍、最差的 Response P99（啟發式）、核心遷移、Tick、同步及 Deadline），以及 **Analysis Findings** 證據卡片。工作數、segment 數與 STI event 數列在 **Trace Metadata**；Core Utilisation 區段則提供 SVG **Load Balance Score** 儀表。目錄將內容分成五個診斷類別，並提供 **Expand all** / **Collapse all**。大型表格起初顯示約 20 筆資料，並支援搜尋、排序、**Problems only**、**Show all** 及 CSV 匯出。文末的 **Statistics Notes** 提供詞彙說明。
 - **Trace Compare…**：比較兩份已開啟 Trace 的支援指標。Trace A 為 **baseline**，Trace B 為 **candidate**。**Δ** 為 Baseline A − Candidate B。若兩份 Trace 要使用不同的分析時間範圍，可啟用 **Limit to each tab's cursor range**。**Export CSV** / **Export HTML** 會寫出所有 Compare 表格（不只 Dialog 的 top-N 預覽）。HTML 會加上目錄，並提供 **Expand all** / **Collapse all**；Overview 與 Summary 預設展開。Overview 會顯示比較身分、結論與 Notable Changes 摘要（門檻以上的 Improved / Regressed）。Summary、Core Util、Response 與 Core Migrations 會附圖表；Core Migrations 預設顯示 count 變化最大的列。
 
 各區段實際匯出的欄位與詳細行為，請參閱下方的指標說明。
@@ -170,9 +170,23 @@ Desktop 與 Web 的右側面板都提供 **Statistics** 分頁。
 
 Desktop 與 Web 都提供 Statistics 面板。各項指標依功能分組為可展開／收合的區段。點選表格欄位標題，可切換遞增或遞減排序。
 
-面板底部的 **Export CSV** 與 **Export HTML** 會依目前的游標範圍匯出所有區段的摘要資料。**Export HTML** 會在文件開頭加入 **Analysis Findings** 卡片，其內容與工具列的 **Analysis** 相同，包括負載平衡、WCET、阻塞、核心頻繁遷移（thrashing）、Deadline、Tick 健康狀態與同步問題。HTML 目錄（Table of Contents）提供 **Expand all** / **Collapse all**；Analysis Findings、Statistics Notes、Core Utilisation、Top Tasks、Trace Health 預設展開，其餘區段預設收合。
+面板底部的 **Export CSV** 與 **Export HTML** 會依目前的游標範圍，匯出各區段的摘要資料。
 
-HTML 也會在 Core Utilisation 下方以 SVG 圖片嵌入 **Load Balance Score** 儀表，並在 Priority Inheritance、Mutex / Semaphore 與 Interval Analysis 下加入詳細子表。這些子表會優先列出持續時間最長的 instance 或 hold episode，每個子表最多保留約 150–200 筆資料。
+**Export HTML** 開頭依序呈現：
+
+- 診斷 KPI，包括整體狀態、負載平衡、使用率範圍、最差的 Response P99（啟發式）、核心遷移、Tick、同步及 Deadline；
+- **Analysis Scope** 卡片，包括 Trace 檔名、完整 Trace 或游標範圍、起迄時間、持續時間、核心數、篩選條件及時間戳基準；
+- **Analysis Findings** 證據卡片，使用與工具列 **Analysis** 相同的啟發式分析，涵蓋負載平衡、高 CPU 使用量工作、execution-time Max 較大的工作、off-CPU gap、核心頻繁遷移（thrashing）、Deadline、Tick 健康狀態及同步問題。
+
+每則 finding 都會顯示嚴重程度、影響、證據、信心及 **Inspect** 連結。Inspect 只會開啟報告內的相關區段，不會跳回 BTFViewer。Core Utilisation 區段另提供 SVG **Load Balance Score** 儀表。
+
+**Table of Contents** 將內容分成 Overview、CPU and Scheduling、Migrations、Timing、Synchronization 五組，並提供 **Expand all** / **Collapse all**。Analysis Scope、Analysis Findings、Core Utilisation、Trace Health 與 Investigate Anomalies 預設展開；文末作為詞彙表的 **Statistics Notes** 預設收合。
+
+大型表格起初顯示約 20 筆資料，並支援搜尋、欄位排序、凍結表頭與第一欄、橫向捲動、**Show all** 及 CSV 匯出。表格包含嚴重程度欄位時，還會提供 **Problems only**。
+
+Timeline Anomalies、Worst Events、Recurring Patterns 與 Critical Path 會整合為 **Investigate Anomalies** 分頁。Tag Analysis 會將重複樣本整理成時間序列，避免列出大量相同數值。
+
+Priority Inheritance、Mutex / Semaphore 與 Interval Analysis 也會提供詳細子表。Boost episode 依開始時間排列；interval instance 與 hold episode 則優先顯示持續時間最長的資料。依區段而定，每個詳細子表最多包含約 150–200 筆資料。
 
 **建議操作流程**
 
@@ -241,7 +255,7 @@ U_{\mathrm{core}} = \frac{T_{\mathrm{active,core}}}{T_{\mathrm{scope}}} \times 1
 
 其中 *G* 為各核心使用率 {*U*<sub>core</sub>} 的 **Gini coefficient（吉尼係數）**。
 
-σ 是 `{U_core}` 的母體標準差（population standard deviation）。Score 儀表範圍為 0–100%，100 代表完全平衡，0 代表負載高度集中於單一核心。σ 儀表範圍為 0–60%，警告門檻位於量表中間。其狀態區間與工具列 **Analysis** 相同：
+σ 是 `{U_core}` 的母體標準差（population standard deviation）。Score 儀表範圍為 0–100%，**100 = 使用率分布均勻**，**0 = 使用率高度不均**（負載集中在一個或少數核心）。此分數描述的是負載平衡程度，而不是整體負載高低：系統可能均勻過載，也可能均勻閒置；低分也不一定代表系統過載。σ 儀表範圍為 0–60%，警告門檻位於量表中間。其狀態區間與工具列 **Analysis** 相同：
 
 | 區間 | 條件 | UI 顯示 |
 |------|------|-----|
@@ -716,7 +730,7 @@ d_k = t_{\mathrm{end},k} - t_{\mathrm{start},k}
 
 **σ（標準差）**使用母體標準差（population standard deviation），因為目前範圍內觀察到的 slice 被視為完整樣本集合。
 
-**CPU%** 則表示該工作占目前範圍內所有有效 CPU 執行時間的比例：
+**CPU%** 則表示該工作占目前範圍內所有 **非 IDLE/TICK 有效 CPU 執行時間** 的比例（不是 wall-clock span，也不是全部多核心容量）：
 
 ```math
 \mathrm{CPU}_i = \frac{T_{\mathrm{exec},i}}{\sum_j T_{\mathrm{exec},j}} \times 100
@@ -724,19 +738,23 @@ d_k = t_{\mathrm{end},k} - t_{\mathrm{start},k}
 
 **如何解讀：** 短且集中的 slice 通常表示工作執行時間穩定，可能具有週期性或由 Tick 驅動。若 **Max** 明顯偏大，或 p95/p99 形成很長的 tail，表示存在較長的執行事件。
 
-對即時系統而言，可將 **Min** 視為觀察到的最佳案例執行時間（Best-Case Execution Time, **BCET**），將 **Max** 視為觀察到的最差案例執行時間（Worst-Case Execution Time, **WCET**）。兩者差距過大代表執行時間變異較高，即使 Avg 看起來正常，也可能影響 Deadline。
+**Max** 或偏長的 **p95** tail 代表觀察到的最長 slice，不是已證明的 WCET。較長的 slice 可能與 critical section、lock hold 或 interrupt-disabled region 同時發生，但只憑時間資料仍無法確認原因。
 
-較長的 slice 可能與 critical section、lock hold 或 interrupt-disabled region 有關，但 Statistics 本身只提供時間證據，仍應回到 Timeline 與其他指標確認原因。
+**Min** 是觀察到的最短樣本，不代表零負載條件下已證明的 BCET。**P95** 必須搭配 Deadline 或驗收標準才有明確意義，不能當成所有即時系統都適用的判定門檻。
+
+對即時系統而言，可將 **Min** 與 **Max** 視為觀察到的最短／最長執行時間。兩者差距過大代表執行時間變異較高，即使 Avg 看起來正常，也可能影響 Deadline。
+
+Statistics 本身只提供時間證據，仍應回到 Timeline 並搭配其他指標確認原因。
 
 | 欄位 | 說明 |
 |---|---|
 | **Task** | 顯示名稱，例如 `Name[id]` |
 | **Runs** | 目前範圍內的 slice 數 |
-| **CPU%** | 該工作占目前 Trace／游標範圍內有效 CPU 時間的比例 |
+| **CPU%** | 該工作占目前範圍內非 IDLE/TICK 有效 CPU 時間的比例（不是 wall-clock span） |
 | **Min / Avg / Max / p95** | Slice duration 統計 |
 | **Jitter** | 觀察到的 duration 範圍（`Max − Min`） |
 | **σ** | Slice duration 的母體標準差 |
-| **Min / Max** links | 跳至並標註 BCET / WCET slice |
+| **Min / Max** links | 跳至並標註觀察到的最短／最長 slice |
 
 **Distribution chart（分布圖）** — 點選工作資料列後：
 
@@ -758,12 +776,13 @@ CDF 左側快速上升，表示大多數 slice 都很短；之後逐漸趨近 10
 <a id="blocking-time" name="blocking-time">&#x200B;</a>
 ### 阻塞時間（Blocking Time） ![](../images/readme/h4.svg)
 
-測量同一工作前一個 slice 結束，到下一個 slice 開始之間的 **off-CPU gap**。
+匯出 HTML 時的主要名稱是 **Off-CPU Time**。測量同一工作前一個 slice 結束，到下一個 slice 開始之間的 **off-CPU gap**。
 
 這段時間代表工作尚未再次取得 CPU。可能原因包括：
 
 - 被其他工作 preempt。
-- 等待資源。
+- 暫停或週期性等待。
+- 等待資源（不一定是 lock blocking）。
 - 等待排程器再次派送。
 
 > **Blocking Time 不是端到端回應時間（end-to-end response time）。**
@@ -778,7 +797,7 @@ g_k = t_{\mathrm{start},k+1} - t_{\mathrm{end},k}
 
 只計算正值 gap。Min / Avg / Max / p95 等統計值皆由目前範圍內的 *g*<sub>k</sub> 計算。
 
-**如何解讀：** Blocking Time 代表工作沒有在 CPU 上執行的**等待時間**。Avg 或 Max 偏高，可能與 lock contention（鎖競爭）、priority inversion（優先權反轉），或較高優先權工作長時間占用核心有關。
+**如何解讀：** Blocking Time 代表工作**未在 CPU 上執行的時間**，但無法單靠此指標判斷確切的 task state。工作可能處於 runnable、blocked、suspended，或等待下一次週期啟動。Avg 或 Max 偏高時，可能與 lock contention（鎖競爭）、priority inversion（優先權反轉），或較高優先權工作長時間占用核心有關。
 
 如果 Scatter 中的 spike 集中在特定時間，可搭配 **Preemption Chain Analysis** 或 **Mutex / Semaphore** pairing，確認當時是哪個工作或同步物件造成等待。
 
@@ -1347,15 +1366,15 @@ Mutex / Semaphore 的 Core Bounce 與 Issue 詳細說明，請參閱前面的 **
 <a id="critical-path" name="critical-path">&#x200B;</a>
 ### 關鍵路徑（Critical Path） ![](../images/readme/h4.svg)
 
-此區段會找出最長的**啟發式 ready→completion 時間區間**，並將其中的時間拆分為：
+此區段會找出最長的**啟發式 ready→completion 時間區間**。**Duration** 是完整區間；**Exec** 是該工作本身的 on-CPU 時間；**Off-CPU** 則是 `Duration − Exec`。
+**Preempt**、**Wait** 與 **Migration** 會互相重疊，其中 **Wait** 包含 preemption gap，因此不能將這些數值相加後視為 Duration 的組成。Statistics 表格仍會保留這些項目，方便跳至對應事件。
 
 - `exec` — 工作實際執行的時間。
-- `preempt` — 被其他工作搶佔的時間。
-- `wait` — 等待時間。
+- `preempt` — 被其他工作搶佔的時間（與 Wait 重疊）。
+- `wait` — 等待時間（含 preemption gap）。
 - `migration` — 與核心遷移相關的時間。
-- `other` — 無法歸入上述類別的時間。
 
-> **注意：** 這裡的 Critical Path 並不是由核心明確記錄的 release/completion event pair。它是根據 Trace 中可觀察到的事件建立的**啟發式分析（heuristic analysis）**。
+> **注意：** 這裡的 Critical Path 並不是由 kernel 明確記錄的 release/completion event pair，而是根據 Trace 中可觀察事件建立的**啟發式分析（heuristic analysis）**。
 
 點選其中一個 component，可直接跳到對應事件。
 
@@ -1980,7 +1999,7 @@ zip -j tracedata/tickless-8cores.zip \
 | Summary → **Tick mode / Tick count / Tick health** | 確認設定是否符合預期；Idle 區段較多時，tickful 通常具有較低 CV |
 | Summary → **Core gap avg/max、Load Balance Score / σ** | 比較 Idle / Busy 結構與 SMP 負載平衡 |
 | Summary → **Migrations** | 檢查 Tick wake pattern 是否改變跨核心遷移 |
-| **Execution**（Max / p95） | 比較 Slice WCET 與 CPU share 變化 |
+| **Execution**（Max / p95） | 比較觀察到的最長 slice 與 CPU share 變化 |
 | **Blocking**（Max / p95） | 比較兩種 policy 對 Response Time 的影響 |
 | **Preemption** | 比較 peer interference 與 Tick-driven preemption |
 | **Top Tasks / Core Util** | 找出哪些工作吸收了 Tick 或 wake-up overhead |

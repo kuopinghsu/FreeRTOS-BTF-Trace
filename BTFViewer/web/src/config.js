@@ -137,7 +137,7 @@ export const STATS_SECTION_HELP = Object.freeze({
   task_health: "Heuristic score from measured statistics, not an AI probability. Click a band to open that Statistics section.",
   anomalies: "Unusual long tails, migration / preemption / ISR / wakeup bursts, CPU spikes, idle gaps, response-time tails, mutex-wait spikes, and deadline misses in the current scope. Click a row to zoom, place C1–C2, and open the matching table. Investigate… sends the selected (or top) anomaly to the AI tab.",
   worst: "Longest execution, blocking, inter-arrival, and heuristic response episodes. Click a row to jump and set cursors on that episode.",
-  crit_path: "Longest heuristic ready→completion windows, split into exec / preempt / wait / migration / other. Click a component to jump to that episode. Not a kernel release/completion pair.",
+  crit_path: "Longest heuristic ready→completion windows. Exec is own on-CPU time; Off-CPU is Duration − Exec. Preempt, Wait, and Migration overlap and are not a stacked split of Duration. Click a component to jump to that episode. Not a kernel release/completion pair.",
   patterns: "Anomaly kinds that repeat for the same task in this scope. Click a row to jump to the worst instance.",
   exec: "On-CPU slice duration per task: runs, CPU%, min/avg/max, jitter (max−min), σ, p95, and p99. Click the task for the plot; click min, max, p95, or p99 to jump to that slice.",
   block: "Off-CPU gap from one slice end to the next activation. Click the task for the plot; click min, max, p95, or p99 to jump to that gap.",

@@ -262,7 +262,7 @@ describe('new compare builders', () => {
     assert.match(html, /<h2>Mutex Blocking<\/h2>/)
     assert.match(html, /<h2>Shared Patterns<\/h2>/)
     assert.match(html, /<h2>Trends<\/h2>/)
-    assert.match(html, /<details class="report-card" id="sec-\d+" open>/)
+    assert.match(html, /<details class="report-card" id="sec-overview" open>/)
     assert.match(html, /compare-chart/)
     assert.match(html, /Core utilisation/)
     assert.match(html, /Expand all/)

@@ -336,6 +336,19 @@ HTML_REPORT_TOC_CSS = """
 .report-toc li { margin: 4px 0; }
 .report-toc a { color: var(--accent); text-decoration: none; }
 .report-toc a:hover { text-decoration: underline; }
+.toc-groups { display: grid; gap: 10px; }
+.toc-group h3 {
+  margin: 8px 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.toc-group ul { columns: 1; padding-left: 16px; }
+@media (min-width: 720px) {
+  .toc-groups { grid-template-columns: 1fr 1fr; }
+}
 details.report-card { scroll-margin-top: 12px; }
 details.report-card > summary { cursor: pointer; list-style: none; }
 details.report-card > summary::-webkit-details-marker { display: none; }
@@ -357,6 +370,10 @@ HTML_REPORT_TOC_SCRIPT = """
   function openTarget(id) {
     var el = document.getElementById(id);
     if (el && el.tagName === 'DETAILS') el.open = true;
+    if (el && el.closest) {
+      var host = el.closest('details.report-card');
+      if (host) host.open = true;
+    }
   }
   function setAllOpen(open) {
     document.querySelectorAll('details.report-card').forEach(function (el) {
@@ -378,13 +395,177 @@ HTML_REPORT_TOC_SCRIPT = """
 </script>
 """.strip()
 
+HTML_REPORT_INTERACTIVE_SCRIPT = """
+<script>
+(function () {
+  var PAGE = 20;
+  function textOf(el) { return (el && (el.textContent || '')).replace(/\\s+/g, ' ').trim(); }
+  function csvEscape(v) { return /[",\\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+  function downloadCsv(name, rows) {
+    var csv = rows.map(function (r) { return r.map(csvEscape).join(','); }).join('\\n');
+    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 500);
+  }
+  function parseVal(s) {
+    s = String(s || '').trim();
+    if (!s || s === '—' || s === '-') return NaN;
+    var n = Number(s.replace(/[% ,]/g, ''));
+    if (!isNaN(n) && /[-+0-9]/.test(s[0] || '')) return n;
+    var m = s.match(/^(-?[0-9.]+)\\s*(ns|µs|us|ms|s)\\b/i);
+    if (!m) return NaN;
+    var v = Number(m[1]), u = m[2].toLowerCase();
+    return v * (u === 's' ? 1e9 : u === 'ms' ? 1e6 : (u === 'us' || u === 'µs') ? 1e3 : 1);
+  }
+  function enhanceTable(table, idx) {
+    if (!table.tHead || !table.tBodies.length) return;
+    if (table.closest('.kpi-grid, .finding-card, .meta-table, .scope-table')) return;
+    var tbody = table.tBodies[0];
+    var rows = Array.prototype.slice.call(tbody.rows);
+    if (!rows.length) return;
+    var hasProblems = !!table.querySelector('.sev-error, .sev-warning');
+    var wrap = document.createElement('div');
+    wrap.className = 'table-tools';
+    var scroll = document.createElement('div');
+    scroll.className = 'table-scroll';
+    table.parentNode.insertBefore(wrap, table);
+    wrap.appendChild(scroll);
+    scroll.appendChild(table);
+    var bar = document.createElement('div');
+    bar.className = 'table-toolbar';
+    bar.innerHTML = '<input type="search" class="table-search" placeholder="Search table…">'
+      + (hasProblems ? '<label class="table-check"><input type="checkbox" data-problems> Problems only</label>' : '')
+      + '<label class="table-check"><input type="checkbox" data-all> Show all</label>'
+      + '<button type="button" class="toc-btn" data-csv>CSV</button>'
+      + '<span class="table-count"></span>';
+    wrap.insertBefore(bar, scroll);
+    var q = '', problems = false, showAll = rows.length <= PAGE, sortCol = -1, sortDir = 1, page = 0;
+    Array.prototype.forEach.call(table.tHead.rows[0].cells, function (th, i) {
+      th.tabIndex = 0;
+      th.classList.add('sortable');
+      th.addEventListener('click', function () {
+        if (sortCol === i) sortDir = -sortDir; else { sortCol = i; sortDir = 1; }
+        apply();
+      });
+    });
+    function apply() {
+      var filtered = rows.filter(function (tr) {
+        if (problems && !tr.querySelector('.sev-error, .sev-warning')) return false;
+        if (q && textOf(tr).toLowerCase().indexOf(q) < 0) return false;
+        return true;
+      });
+      if (sortCol >= 0) {
+        filtered.sort(function (a, b) {
+          var av = textOf(a.cells[sortCol]), bv = textOf(b.cells[sortCol]);
+          var an = parseVal(av), bn = parseVal(bv);
+          var cmp = (!isNaN(an) && !isNaN(bn)) ? an - bn : av.localeCompare(bv);
+          return cmp * sortDir;
+        });
+      }
+      rows.forEach(function (tr) { tr.style.display = 'none'; });
+      var start = showAll ? 0 : page * PAGE;
+      var vis = showAll ? filtered : filtered.slice(start, start + PAGE);
+      vis.forEach(function (tr) { tbody.appendChild(tr); tr.style.display = ''; });
+      var count = wrap.querySelector('.table-count');
+      count.textContent = filtered.length === rows.length
+        ? (vis.length < filtered.length ? vis.length + ' of ' + filtered.length : filtered.length + ' rows')
+        : vis.length + ' of ' + filtered.length + ' (filtered)';
+    }
+    bar.querySelector('.table-search').addEventListener('input', function (e) {
+      q = String(e.target.value || '').toLowerCase(); page = 0; apply();
+    });
+    var pb = bar.querySelector('[data-problems]');
+    if (pb) pb.addEventListener('change', function (e) { problems = e.target.checked; page = 0; apply(); });
+    bar.querySelector('[data-all]').addEventListener('change', function (e) {
+      showAll = e.target.checked; page = 0; apply();
+    });
+    if (rows.length <= PAGE) bar.querySelector('[data-all]').checked = true;
+    bar.querySelector('[data-csv]').addEventListener('click', function () {
+      var head = Array.prototype.map.call(table.tHead.rows[0].cells, textOf);
+      var body = rows.filter(function (tr) { return tr.style.display !== 'none'; })
+        .map(function (tr) { return Array.prototype.map.call(tr.cells, textOf); });
+      downloadCsv('statistics-table-' + (idx + 1) + '.csv', [head].concat(body));
+    });
+    apply();
+  }
+  document.querySelectorAll('details.report-card table').forEach(enhanceTable);
+  document.querySelectorAll('.report-tabs').forEach(function (tabs) {
+    var btns = tabs.querySelectorAll('[data-tab]');
+    var panels = tabs.querySelectorAll('[data-panel]');
+    function show(id) {
+      btns.forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-tab') === id); });
+      panels.forEach(function (p) { p.hidden = p.getAttribute('data-panel') !== id; });
+    }
+    btns.forEach(function (b) {
+      b.addEventListener('click', function () { show(b.getAttribute('data-tab')); });
+    });
+    var first = tabs.querySelector('[data-tab]');
+    if (first) show(first.getAttribute('data-tab'));
+  });
+})();
+</script>
+""".strip()
 
-def html_toc_nav(entries) -> str:
-    """Table of Contents nav with Expand all / Collapse all."""
-    items = "".join(
-        f'<li><a href="#{sec_id}">{title}</a></li>'
-        for sec_id, title in (entries or [])
-    )
+
+_SCOPE_SUFFIX_RE = re.compile(r"\s*\(cursor range[^)]*\)\s*$", re.I)
+
+
+def html_section_slug(title: str) -> str:
+    """Stable HTML id fragment from a report-card heading."""
+    text = _SCOPE_SUFFIX_RE.sub("", str(title or "")).strip()
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug[:72] or "section"
+
+
+def _attr_value(attrs: str, name: str) -> str:
+    m = re.search(rf'\b{name}="([^"]*)"', attrs or "")
+    return m.group(1) if m else ""
+
+
+def html_toc_nav(entries, groups=None) -> str:
+    """Table of Contents nav with Expand all / Collapse all.
+
+    *groups* is an optional sequence of ``(group_title, title_prefixes)``.
+    """
+    grouped_items = ""
+    if groups:
+        remaining = list(entries or [])
+        blocks = []
+        for group_title, prefixes in groups:
+            pref = tuple(prefixes or ())
+            chosen = []
+            keep = []
+            for sec_id, title in remaining:
+                if pref and str(title).startswith(pref):
+                    chosen.append((sec_id, title))
+                else:
+                    keep.append((sec_id, title))
+            remaining = keep
+            if not chosen:
+                continue
+            lis = "".join(
+                f'<li><a href="#{sec_id}">{html.escape(str(title))}</a></li>'
+                for sec_id, title in chosen
+            )
+            blocks.append(
+                f'<div class="toc-group"><h3>{html.escape(str(group_title))}</h3>'
+                f"<ul>{lis}</ul></div>"
+            )
+        if remaining:
+            lis = "".join(
+                f'<li><a href="#{sec_id}">{html.escape(str(title))}</a></li>'
+                for sec_id, title in remaining
+            )
+            blocks.append(f'<div class="toc-group"><h3>Other</h3><ul>{lis}</ul></div>')
+        grouped_items = f'<div class="toc-groups">{"".join(blocks)}</div>'
+    else:
+        grouped_items = "<ul>" + "".join(
+            f'<li><a href="#{sec_id}">{html.escape(str(title))}</a></li>'
+            for sec_id, title in (entries or [])
+        ) + "</ul>"
     return (
         '<nav class="report-toc"><div class="report-toc-head">'
         "<h2>Table of Contents</h2>"
@@ -392,24 +573,26 @@ def html_toc_nav(entries) -> str:
         '<button type="button" class="toc-btn" data-toc="expand">Expand all</button>'
         '<button type="button" class="toc-btn" data-toc="collapse">Collapse all</button>'
         "</div></div>"
-        f"<ul>{items}</ul></nav>"
+        f"{grouped_items}</nav>"
     )
 
 
 def html_make_collapsible_sections(
     doc_html: str,
     default_expanded: tuple = (),
+    toc_groups=None,
 ) -> tuple:
     """Wrap every ``<section class="report-card ...">`` in ``<details>``
     and build a table-of-contents nav. Returns ``(nav_html, new_doc_html)``.
     """
     prefixes = tuple(default_expanded or ())
     toc_entries: list = []
+    used_ids: set = set()
     counter = 0
 
     def _wrap(m: "re.Match") -> str:
         nonlocal counter
-        classes, inner = m.group(1), m.group(2)
+        classes, attrs, inner = m.group(1), m.group(2) or "", m.group(3)
         h2_m = re.search(r"<h2[^>]*>.*?</h2>", inner, re.S)
         if h2_m:
             title_html = h2_m.group(0)
@@ -418,30 +601,44 @@ def html_make_collapsible_sections(
         else:
             title_html, title_text, rest = "<h2>Section</h2>", "Section", inner
         counter += 1
-        sec_id = f"sec-{counter}"
+        existing = _attr_value(attrs, "id")
+        if existing:
+            sec_id = existing
+        else:
+            slug = html_section_slug(title_text)
+            sec_id = f"sec-{slug}"
+            n = 2
+            while sec_id in used_ids:
+                sec_id = f"sec-{slug}-{n}"
+                n += 1
+        used_ids.add(sec_id)
         toc_entries.append((sec_id, title_text))
         open_attr = " open" if prefixes and title_text.startswith(prefixes) else ""
+        extra = re.sub(r'\s*\bid="[^"]*"', "", attrs).strip()
+        extra_attr = f" {extra}" if extra else ""
         return (
-            f'<details class="{classes}" id="{sec_id}"{open_attr}>'
+            f'<details class="{classes}" id="{sec_id}"{extra_attr}{open_attr}>'
             f"<summary>{title_html}</summary>{rest}</details>"
         )
 
     new_doc = re.sub(
-        r'<section class="(report-card[^"]*)">(.*?)</section>',
+        r'<section class="(report-card[^"]*)"([^>]*)>(.*?)</section>',
         _wrap, doc_html, flags=re.S,
     )
     if not toc_entries:
         return "", new_doc
-    return html_toc_nav(toc_entries), new_doc
+    return html_toc_nav(toc_entries, groups=toc_groups), new_doc
 
 
 def html_apply_collapsible_toc(
     document_html: str,
     *,
     default_expanded: tuple = (),
+    toc_groups=None,
 ) -> str:
     """Wrap report cards, inject TOC at ``<!--TOC-->`` (or after the header)."""
-    nav, doc = html_make_collapsible_sections(document_html, default_expanded)
+    nav, doc = html_make_collapsible_sections(
+        document_html, default_expanded, toc_groups=toc_groups)
     if not nav:
         return doc
     if "<!--TOC-->" in doc:

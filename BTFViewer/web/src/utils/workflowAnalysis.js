@@ -18,6 +18,7 @@ import {
   appendWcetAnomalyFinding,
   enrichFindingsWithIds,
 } from './aiInvestigation.js'
+import { htmlFindingCards } from './statsHtmlReport.js'
 
 const FINDING_CAP = 5
 const LOAD_SIGMA_WARN = 30.0
@@ -39,6 +40,11 @@ function finding(severity, title, text, extra = {}) {
     id: extra.id || '',
     task: extra.task || '',
     evidence: extra.evidence || [],
+    impact: extra.impact || '',
+    inspect: extra.inspect || '',
+    inspect_href: extra.inspect_href || extra.inspectHref || '',
+    confidence: extra.confidence || '',
+    evidence_text: extra.evidence_text || extra.evidenceText || '',
   }
 }
 
@@ -72,21 +78,37 @@ export function buildWorkflowAnalysisFindings({
         'warning',
         'Load imbalance across cores',
         `${metrics}. Uneven core placement — check Core Affinity and Core Migrations.`,
-        { id: 'load_imbalance' },
+        {
+          id: 'load_imbalance',
+          impact: 'Uneven utilisation can hide a hot core even when average load looks fine.',
+          inspect: 'Core Utilisation (excl. IDLE/TICK)',
+          confidence: 'High — derived from measured core utilisation',
+          evidence_text: metrics,
+        },
       ))
     } else if (score >= LOAD_SCORE_OK) {
       findings.push(finding(
         'info',
         'Core utilisation balance',
-        `${metrics} — cores look reasonably balanced.`,
-        { id: 'load_balance_ok' },
+        `${metrics} — cores look reasonably balanced. A high score means even distribution, not healthy utilisation.`,
+        {
+          id: 'load_balance_ok',
+          inspect: 'Core Utilisation (excl. IDLE/TICK)',
+          confidence: 'High — derived from measured core utilisation',
+          evidence_text: metrics,
+        },
       ))
     } else {
       findings.push(finding(
         'info',
         'Core utilisation balance',
         `${metrics} — moderate spread; review Core Utilisation if the workload is expected to be even.`,
-        { id: 'load_balance_moderate' },
+        {
+          id: 'load_balance_moderate',
+          inspect: 'Core Utilisation (excl. IDLE/TICK)',
+          confidence: 'High — derived from measured core utilisation',
+          evidence_text: metrics,
+        },
       ))
     }
   }
@@ -95,13 +117,33 @@ export function buildWorkflowAnalysisFindings({
     const top = [...execRows]
       .sort((a, b) => (b.cpuPct ?? 0) - (a.cpuPct ?? 0))
       .slice(0, FINDING_CAP)
-    const names = top.map(r => `${r.name} (${(r.cpuPct ?? 0).toFixed(1)}%, Max ${r.max})`).join(', ')
+    const names = top.map(r => `${r.name} (${(r.cpuPct ?? 0).toFixed(1)}%)`).join(', ')
     findings.push(finding(
       'info',
-      'Top tasks by CPU (WCET candidates)',
-      `Highest CPU% tasks: ${names}. Open Execution Time and click Max to jump to the worst-case slice.`,
-      { id: 'top_cpu' },
+      'Highest CPU consumers',
+      `Largest share of active CPU time: ${names}. High CPU share is not the same as a long worst-case slice.`,
+      {
+        id: 'top_cpu',
+        inspect: 'Top Tasks by CPU (excl. IDLE/TICK)',
+        confidence: 'High — measured CPU share',
+        evidence_text: names,
+      },
     ))
+    const byMax = [...execRows].sort((a, b) => String(b.max || '').localeCompare(String(a.max || ''), undefined, { numeric: true }))
+    const maxNames = byMax.slice(0, FINDING_CAP).map(r => `${r.name} (Max ${r.max})`).join(', ')
+    if (maxNames) {
+      findings.push(finding(
+        'info',
+        'Largest execution-time maxima',
+        `Longest observed slices: ${maxNames}. See Execution Time Per Slice for the maximum observed slice. These are observed maxima, not proven WCET.`,
+        {
+          id: 'exec_max',
+          inspect: 'Execution Time Per Slice',
+          confidence: 'High — measured slice durations',
+          evidence_text: maxNames,
+        },
+      ))
+    }
   }
 
   if (blockRows.length) {
@@ -111,9 +153,15 @@ export function buildWorkflowAnalysisFindings({
     const names = topB.map(r => `${r.name} (n=${r.runs}, Max ${r.max})`).join(', ')
     findings.push(finding(
       topB[0]?.runs >= 20 ? 'warning' : 'info',
-      'Blocking / scheduling-delay candidates',
-      `Tasks with the most off-CPU gaps: ${names}. Cross-check Preemption Chain and Mutex/Semaphore.`,
-      { id: 'blocking' },
+      'Off-CPU / scheduling-delay candidates',
+      `Tasks with the most off-CPU gaps: ${names}. Cross-check Preemption Chain and Mutex/Semaphore. Off-CPU time is not necessarily resource blocking.`,
+      {
+        id: 'blocking',
+        inspect: 'Off-CPU Time (Blocking Time)',
+        confidence: 'Medium — measured gaps, mixed causes',
+        evidence_text: names,
+        impact: 'Long or frequent off-CPU gaps delay the next resume.',
+      },
     ))
   }
 
@@ -152,9 +200,15 @@ export function buildWorkflowAnalysisFindings({
   if (thrash.length) {
     findings.push(finding(
       'warning',
-      'Excessive bouncing / core thrashing',
-      `High migration rate, short dwell, and/or ping-pong detected: ${thrash.slice(0, FINDING_CAP).join('; ')}. See Core-Pair Migration Summary and the Migration Heatmap.`,
-      { id: 'thrashing' },
+      'Excessive core migration',
+      `High migration rate, short dwell, and/or ping-pong detected: ${thrash.slice(0, FINDING_CAP).join('; ')}. See Core Migrations and Core-Pair Migration Summary.`,
+      {
+        id: 'thrashing',
+        inspect: 'Core Migrations',
+        confidence: 'Medium — heuristic threshold',
+        evidence_text: thrash.slice(0, FINDING_CAP).join('; '),
+        impact: 'May increase cache misses and scheduling overhead.',
+      },
     ))
   }
 
@@ -239,7 +293,12 @@ export function buildWorkflowAnalysisFindings({
     ))
   }
 
-  appendMigrationBurstAnomaly(findings, burstRows, { rateThreshold: MIG_BURST_RATE })
+  const thrashNames = new Set(thrash.map(t => String(t).split(' ')[0]))
+  appendMigrationBurstAnomaly(
+    findings,
+    burstRows.filter(row => !thrashNames.has(row[0])),
+    { rateThreshold: MIG_BURST_RATE },
+  )
 
   // WCET anomalies when callers pass avgNs/maxNs/runs on exec rows
   const spikeRows = []
@@ -251,7 +310,7 @@ export function buildWorkflowAnalysisFindings({
   appendWcetAnomalyFinding(findings, spikeRows, { ratioThreshold: WCET_MAX_AVG_RATIO })
 
   const actionable = findings.filter(f => f.severity === 'warning' || f.severity === 'error')
-  if (!actionable.length && !findings.some(f => f.title.startsWith('Top tasks'))) {
+  if (!actionable.length && !findings.some(f => f.id === 'top_cpu')) {
     findings.push(finding(
       'info',
       'No analysis heuristics flagged',
@@ -302,21 +361,7 @@ export function formatAnalysisFindingsText(findings, scopeSuffix = '') {
 
 /** @param {{severity: string, title: string, text: string}[]} findings */
 export function renderWorkflowAnalysisHtml(findings, scopeSuffix = '') {
-  if (!findings?.length) return ''
-  const items = findings.map(f => {
-    const cls = f.severity === 'error'
-      ? 'sev-error'
-      : f.severity === 'warning'
-        ? 'sev-warning'
-        : 'finding-info'
-    const extra = f.id === 'load_balance_ok' ? ' finding-ok' : ''
-    return `<li class="${cls}${extra}"><strong>${escHtml(f.title)}</strong> — ${escHtml(f.text)}</li>`
-  }).join('')
-  return `<section class="report-card notes analysis-findings">
-    <h2>Analysis Findings${escHtml(scopeSuffix)}</h2>
-    <p class="detail-note">Heuristic summary of load balance, WCET, blocking, thrashing, deadlines, tick health, and sync.</p>
-    <ul class="findings-list">${items}</ul>
-  </section>`
+  return htmlFindingCards(findings, scopeSuffix)
 }
 
 function _fmtDur(ns, scale) {

@@ -28,6 +28,7 @@ GENERATED_BANNER = (
 BUNDLE_MODULES: list[str] = [
     "config",
     "html_report",
+    "stats_html",
     "parser",
     "btf_slice",
     "timeline_util",

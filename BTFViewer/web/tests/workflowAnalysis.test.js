@@ -46,8 +46,9 @@ describe('buildWorkflowAnalysisFindings', () => {
     })
     const titles = findings.map(f => f.title)
     assert.ok(titles.includes('Load imbalance across cores'))
-    assert.ok(titles.includes('Excessive bouncing / core thrashing'))
+    assert.ok(titles.includes('Excessive core migration'))
     assert.ok(titles.includes('Hot core-pair migration traffic'))
+    assert.ok(titles.includes('Highest CPU consumers'))
   })
 
   it('warns on low load-balance score even when σ < 30%', () => {
@@ -111,6 +112,7 @@ describe('buildWorkflowAnalysisFindings', () => {
     ], ' (scoped)')
     assert.match(html, /Analysis Findings/)
     assert.match(html, /analysis-findings/)
+    assert.match(html, /finding-card/)
     assert.match(html, /sev-warning/)
     assert.doesNotMatch(html, /WORKFLOWS/)
   })

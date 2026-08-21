@@ -185,6 +185,8 @@ class AiWebParityTests(unittest.TestCase):
         ux_py = (BTF_ROOT / "btf_viewer_pkg/ux_explore.py").read_text(encoding="utf-8")
         ux_js = (BTF_ROOT / "web/src/utils/uxExplore.js").read_text(encoding="utf-8")
         for py_name, js_name in (
+            ("def format_burst_window_ns", "export function formatBurstWindowNs"),
+            ("def format_burst_reason", "export function formatBurstReason"),
             ("def detect_timeline_anomalies", "export function detectTimelineAnomalies"),
             ("def collect_worst_events", "export function collectWorstEvents"),
             ("def best_finding_scope", "export function bestFindingScope"),
@@ -269,25 +271,42 @@ class AiWebParityTests(unittest.TestCase):
         titles = (
             "Task × Core",
             "Task Health",
-            "Timeline Anomalies",
-            "Worst Events",
             "Period / Jitter",
             "Waiter × Owner",
             "Response Time",
-            "Critical Path",
             "Unified Jitter",
-            "Recurring Patterns",
             "Preemption Matrix",
             "Mutex Blocking",
             "Core Utilization Over Time",
         )
+        investigate = (
+            "Timeline Anomalies",
+            "Worst Events",
+            "Critical Path",
+            "Recurring Patterns",
+        )
         stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
         web = (BTF_ROOT / "web/src/components/StatisticsPanel.vue").read_text(
+            encoding="utf-8")
+        stats_html = (BTF_ROOT / "btf_viewer_pkg/stats_html.py").read_text(
+            encoding="utf-8")
+        web_html = (BTF_ROOT / "web/src/utils/statsHtmlReport.js").read_text(
             encoding="utf-8")
         for title in titles:
             self.assertIn(f'<h2>{title}', stats.replace("{_esc(scope_title)}", ""), title)
             self.assertGreaterEqual(stats.count(title), 3, title)
             self.assertGreaterEqual(web.count(title), 3, title)
+        self.assertIn("<h2>Investigate Anomalies", stats_html)
+        self.assertIn("<h2>Investigate Anomalies", web_html)
+        self.assertIn("html_investigate_anomalies", stats)
+        self.assertIn("htmlInvestigateAnomalies", web)
+        self.assertIn("Off-CPU Time (Blocking Time)", stats)
+        self.assertIn("Off-CPU Time (Blocking Time)", web)
+        for title in investigate:
+            self.assertIn(title, stats_html, title)
+            self.assertIn(title, web_html, title)
+            self.assertGreaterEqual(stats.count(title), 2, title)
+            self.assertGreaterEqual(web.count(title), 2, title)
         self.assertIn("Dispatch / Scheduling Latency", stats)
         self.assertIn("<th>p99</th>", stats)
         self.assertIn("toggleTableSort('period', 'p99')", web)
@@ -339,6 +358,22 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn('QLabel("Task")', stats)
         self.assertIn("hist_btns.addWidget(open_btn", stats)
         self.assertIn("class=\"distrib-toolbar\"", web)
+        self.assertIn("class=\"stats-tool-btn\"", web)
+        self.assertIn("_style_stats_tool_button", stats)
+        self.assertIn("setFixedHeight(200)", stats)
+        self.assertIn("tools_w = QWidget()", stats)
+        self.assertIn("_sync_anomaly_investigate_btn", stats)
+        self.assertIn("Investigate…", stats)
+        self.assertIn("Investigate…", web)
+        self.assertIn("!aiFeatureEnabled || !anomalyRows.length", web)
+        self.assertRegex(
+            stats,
+            re.compile(
+                r"def _investigate_anomaly\(.*?\n(?:.*\n){0,6}?"
+                r"\s+if not self\._ai_enabled:\n\s+return",
+                re.MULTILINE,
+            ),
+        )
         self.assertIn("distribution_metric_samples", stats)
         self.assertIn("_HistogramWidget(", stats)
         self.assertIn("distribHistogramModel", web)
@@ -1851,6 +1886,30 @@ class AiWebParityTests(unittest.TestCase):
             BTF_ROOT / "btf_viewer_pkg/html_report.py").read_text(encoding="utf-8"))
         self.assertIn("export function htmlTocNav", (
             BTF_ROOT / "web/src/utils/htmlReport.js").read_text(encoding="utf-8"))
+        self.assertIn("def html_section_slug", (
+            BTF_ROOT / "btf_viewer_pkg/html_report.py").read_text(encoding="utf-8"))
+        self.assertIn("export function htmlSectionSlug", (
+            BTF_ROOT / "web/src/utils/htmlReport.js").read_text(encoding="utf-8"))
+        self.assertIn("HTML_REPORT_INTERACTIVE_SCRIPT", (
+            BTF_ROOT / "btf_viewer_pkg/html_report.py").read_text(encoding="utf-8"))
+        self.assertIn("export const HTML_REPORT_INTERACTIVE_SCRIPT", (
+            BTF_ROOT / "web/src/utils/htmlReport.js").read_text(encoding="utf-8"))
+        stats_html_py = (BTF_ROOT / "btf_viewer_pkg/stats_html.py").read_text(encoding="utf-8")
+        stats_html_js = (BTF_ROOT / "web/src/utils/statsHtmlReport.js").read_text(encoding="utf-8")
+        for py_name, js_name in (
+            ("def html_glossary", "export function htmlGlossary"),
+            ("def html_finding_cards", "export function htmlFindingCards"),
+            ("def html_investigate_anomalies", "export function htmlInvestigateAnomalies"),
+            ("def html_scope_identity_card", "export function htmlScopeIdentityCard"),
+            ("def html_matrix_heatmap", "export function htmlMatrixHeatmap"),
+            ("def html_percentile_bars", "export function htmlPercentileBars"),
+            ("def html_health_bars", "export function htmlHealthBars"),
+            ("def html_tag_overview", "export function htmlTagOverview"),
+            ("STATS_TOC_GROUPS", "export const STATS_TOC_GROUPS"),
+            ("STATS_DEFAULT_EXPANDED", "export const STATS_DEFAULT_EXPANDED"),
+        ):
+            self.assertIn(py_name, stats_html_py)
+            self.assertIn(js_name, stats_html_js)
         self.assertIn("html_apply_collapsible_toc", parser_py)
         self.assertIn("htmlApplyCollapsibleToc", cmp_js)
         self.assertIn("Shared Patterns", parser_py)

@@ -345,6 +345,19 @@ export const HTML_REPORT_TOC_CSS = `
 .report-toc li { margin: 4px 0; }
 .report-toc a { color: var(--accent); text-decoration: none; }
 .report-toc a:hover { text-decoration: underline; }
+.toc-groups { display: grid; gap: 10px; }
+.toc-group h3 {
+  margin: 8px 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.toc-group ul { columns: 1; padding-left: 16px; }
+@media (min-width: 720px) {
+  .toc-groups { grid-template-columns: 1fr 1fr; }
+}
 details.report-card { scroll-margin-top: 12px; }
 details.report-card > summary { cursor: pointer; list-style: none; }
 details.report-card > summary::-webkit-details-marker { display: none; }
@@ -366,6 +379,10 @@ export const HTML_REPORT_TOC_SCRIPT = `
   function openTarget(id) {
     var el = document.getElementById(id)
     if (el && el.tagName === 'DETAILS') el.open = true
+    if (el && el.closest) {
+      var host = el.closest('details.report-card')
+      if (host) host.open = true
+    }
   }
   function setAllOpen(open) {
     document.querySelectorAll('details.report-card').forEach(function (el) {
@@ -387,43 +404,208 @@ export const HTML_REPORT_TOC_SCRIPT = `
 </` + `script>
 `.trim()
 
-export function htmlTocNav(entries) {
-  const items = (entries || []).map(t => `<li><a href="#${t.id}">${t.title}</a></li>`).join('')
+export const HTML_REPORT_INTERACTIVE_SCRIPT = `
+<script>
+(function () {
+  var PAGE = 20
+  function textOf(el) { return (el && (el.textContent || '')).replace(/\\s+/g, ' ').trim() }
+  function csvEscape(v) { return /[",\\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v }
+  function downloadCsv(name, rows) {
+    var csv = rows.map(function (r) { return r.map(csvEscape).join(',') }).join('\\n')
+    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    var a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = name
+    a.click()
+    setTimeout(function () { URL.revokeObjectURL(a.href) }, 500)
+  }
+  function parseVal(s) {
+    s = String(s || '').trim()
+    if (!s || s === '—' || s === '-') return NaN
+    var n = Number(s.replace(/[% ,]/g, ''))
+    if (!isNaN(n) && /[-+0-9]/.test(s[0] || '')) return n
+    var m = s.match(/^(-?[0-9.]+)\\s*(ns|µs|us|ms|s)\\b/i)
+    if (!m) return NaN
+    var v = Number(m[1]), u = m[2].toLowerCase()
+    return v * (u === 's' ? 1e9 : u === 'ms' ? 1e6 : (u === 'us' || u === 'µs') ? 1e3 : 1)
+  }
+  function enhanceTable(table, idx) {
+    if (!table.tHead || !table.tBodies.length) return
+    if (table.closest('.kpi-grid, .finding-card, .meta-table, .scope-table')) return
+    var tbody = table.tBodies[0]
+    var rows = Array.prototype.slice.call(tbody.rows)
+    if (!rows.length) return
+    var hasProblems = !!table.querySelector('.sev-error, .sev-warning')
+    var wrap = document.createElement('div')
+    wrap.className = 'table-tools'
+    var scroll = document.createElement('div')
+    scroll.className = 'table-scroll'
+    table.parentNode.insertBefore(wrap, table)
+    wrap.appendChild(scroll)
+    scroll.appendChild(table)
+    var bar = document.createElement('div')
+    bar.className = 'table-toolbar'
+    bar.innerHTML = '<input type="search" class="table-search" placeholder="Search table…">'
+      + (hasProblems ? '<label class="table-check"><input type="checkbox" data-problems> Problems only</label>' : '')
+      + '<label class="table-check"><input type="checkbox" data-all> Show all</label>'
+      + '<button type="button" class="toc-btn" data-csv>CSV</button>'
+      + '<span class="table-count"></span>'
+    wrap.insertBefore(bar, scroll)
+    var q = '', problems = false, showAll = rows.length <= PAGE, sortCol = -1, sortDir = 1, page = 0
+    Array.prototype.forEach.call(table.tHead.rows[0].cells, function (th) {
+      th.tabIndex = 0
+      th.classList.add('sortable')
+      th.addEventListener('click', function () {
+        var i = th.cellIndex
+        if (sortCol === i) sortDir = -sortDir; else { sortCol = i; sortDir = 1 }
+        apply()
+      })
+    })
+    function apply() {
+      var filtered = rows.filter(function (tr) {
+        if (problems && !tr.querySelector('.sev-error, .sev-warning')) return false
+        if (q && textOf(tr).toLowerCase().indexOf(q) < 0) return false
+        return true
+      })
+      if (sortCol >= 0) {
+        filtered.sort(function (a, b) {
+          var av = textOf(a.cells[sortCol]), bv = textOf(b.cells[sortCol])
+          var an = parseVal(av), bn = parseVal(bv)
+          var cmp = (!isNaN(an) && !isNaN(bn)) ? an - bn : av.localeCompare(bv)
+          return cmp * sortDir
+        })
+      }
+      rows.forEach(function (tr) { tr.style.display = 'none' })
+      var start = showAll ? 0 : page * PAGE
+      var vis = showAll ? filtered : filtered.slice(start, start + PAGE)
+      vis.forEach(function (tr) { tbody.appendChild(tr); tr.style.display = '' })
+      var count = wrap.querySelector('.table-count')
+      count.textContent = filtered.length === rows.length
+        ? (vis.length < filtered.length ? vis.length + ' of ' + filtered.length : filtered.length + ' rows')
+        : vis.length + ' of ' + filtered.length + ' (filtered)'
+    }
+    bar.querySelector('.table-search').addEventListener('input', function (e) {
+      q = String(e.target.value || '').toLowerCase(); page = 0; apply()
+    })
+    var pb = bar.querySelector('[data-problems]')
+    if (pb) pb.addEventListener('change', function (e) { problems = e.target.checked; page = 0; apply() })
+    bar.querySelector('[data-all]').addEventListener('change', function (e) {
+      showAll = e.target.checked; page = 0; apply()
+    })
+    if (rows.length <= PAGE) bar.querySelector('[data-all]').checked = true
+    bar.querySelector('[data-csv]').addEventListener('click', function () {
+      var head = Array.prototype.map.call(table.tHead.rows[0].cells, textOf)
+      var body = rows.filter(function (tr) { return tr.style.display !== 'none' })
+        .map(function (tr) { return Array.prototype.map.call(tr.cells, textOf) })
+      downloadCsv('statistics-table-' + (idx + 1) + '.csv', [head].concat(body))
+    })
+    apply()
+  }
+  document.querySelectorAll('details.report-card table').forEach(enhanceTable)
+  document.querySelectorAll('.report-tabs').forEach(function (tabs) {
+    var btns = tabs.querySelectorAll('[data-tab]')
+    var panels = tabs.querySelectorAll('[data-panel]')
+    function show(id) {
+      btns.forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-tab') === id) })
+      panels.forEach(function (p) { p.hidden = p.getAttribute('data-panel') !== id })
+    }
+    btns.forEach(function (b) {
+      b.addEventListener('click', function () { show(b.getAttribute('data-tab')) })
+    })
+    var first = tabs.querySelector('[data-tab]')
+    if (first) show(first.getAttribute('data-tab'))
+  })
+})()
+</` + `script>
+`.trim()
+
+const SCOPE_SUFFIX_RE = /\s*\(cursor range[^)]*\)\s*$/i
+
+export function htmlSectionSlug(title) {
+  const text = String(title || '').replace(SCOPE_SUFFIX_RE, '').trim()
+  const slug = text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  return (slug || 'section').slice(0, 72)
+}
+
+function attrValue(attrs, name) {
+  const m = String(attrs || '').match(new RegExp('\\b' + name + '="([^"]*)"'))
+  return m ? m[1] : ''
+}
+
+export function htmlTocNav(entries, groups = null) {
+  let groupedItems = ''
+  if (groups && groups.length) {
+    let remaining = [...(entries || [])]
+    const blocks = []
+    for (const [groupTitle, prefixes] of groups) {
+      const pref = prefixes || []
+      const chosen = []
+      const keep = []
+      for (const item of remaining) {
+        if (pref.some(p => String(item.title).startsWith(p))) chosen.push(item)
+        else keep.push(item)
+      }
+      remaining = keep
+      if (!chosen.length) continue
+      const lis = chosen.map(t => `<li><a href="#${t.id}">${escapeHtml(t.title)}</a></li>`).join('')
+      blocks.push(`<div class="toc-group"><h3>${escapeHtml(groupTitle)}</h3><ul>${lis}</ul></div>`)
+    }
+    if (remaining.length) {
+      const lis = remaining.map(t => `<li><a href="#${t.id}">${escapeHtml(t.title)}</a></li>`).join('')
+      blocks.push(`<div class="toc-group"><h3>Other</h3><ul>${lis}</ul></div>`)
+    }
+    groupedItems = `<div class="toc-groups">${blocks.join('')}</div>`
+  } else {
+    groupedItems = '<ul>' + (entries || []).map(t => `<li><a href="#${t.id}">${escapeHtml(t.title)}</a></li>`).join('') + '</ul>'
+  }
   return `<nav class="report-toc"><div class="report-toc-head">`
     + '<h2>Table of Contents</h2>'
     + '<div class="report-toc-actions">'
     + '<button type="button" class="toc-btn" data-toc="expand">Expand all</button>'
     + '<button type="button" class="toc-btn" data-toc="collapse">Collapse all</button>'
     + '</div></div>'
-    + `<ul>${items}</ul></nav>`
+    + `${groupedItems}</nav>`
 }
 
 /** Wrap every ``<section class="report-card ...">`` in ``<details>`` and build TOC nav. */
-export function htmlMakeCollapsibleSections(docHtml, defaultExpanded = []) {
+export function htmlMakeCollapsibleSections(docHtml, defaultExpanded = [], tocGroups = null) {
   const prefixes = defaultExpanded || []
   const toc = []
+  const used = new Set()
   let counter = 0
   const newDoc = String(docHtml || '').replace(
-    /<section class="(report-card[^"]*)">([\s\S]*?)<\/section>/g,
-    (_match, classes, inner) => {
+    /<section class="(report-card[^"]*)"([^>]*)>([\s\S]*?)<\/section>/g,
+    (_match, classes, attrs, inner) => {
       const h2Match = inner.match(/<h2[^>]*>[\s\S]*?<\/h2>/)
       const titleHtml = h2Match ? h2Match[0] : '<h2>Section</h2>'
       const titleText = titleHtml.replace(/<[^>]+>/g, '')
       const rest = h2Match ? inner.slice(h2Match.index + h2Match[0].length) : inner
       counter++
-      const id = `sec-${counter}`
+      let id = attrValue(attrs, 'id')
+      if (!id) {
+        const slug = htmlSectionSlug(titleText)
+        id = `sec-${slug}`
+        let n = 2
+        while (used.has(id)) {
+          id = `sec-${slug}-${n}`
+          n++
+        }
+      }
+      used.add(id)
       toc.push({ id, title: titleText })
       const openAttr = prefixes.some(t => titleText.startsWith(t)) ? ' open' : ''
-      return `<details class="${classes}" id="${id}"${openAttr}><summary>${titleHtml}</summary>${rest}</details>`
+      const extra = String(attrs || '').replace(/\s*\bid="[^"]*"/, '').trim()
+      const extraAttr = extra ? ` ${extra}` : ''
+      return `<details class="${classes}" id="${id}"${extraAttr}${openAttr}><summary>${titleHtml}</summary>${rest}</details>`
     },
   )
   if (!toc.length) return { nav: '', html: newDoc }
-  return { nav: htmlTocNav(toc), html: newDoc }
+  return { nav: htmlTocNav(toc, tocGroups), html: newDoc }
 }
 
 /** Wrap report cards and inject TOC at ``<!--TOC-->`` (or after the header). */
-export function htmlApplyCollapsibleToc(documentHtml, defaultExpanded = []) {
-  const { nav, html } = htmlMakeCollapsibleSections(documentHtml, defaultExpanded)
+export function htmlApplyCollapsibleToc(documentHtml, defaultExpanded = [], tocGroups = null) {
+  const { nav, html } = htmlMakeCollapsibleSections(documentHtml, defaultExpanded, tocGroups)
   if (!nav) return html
   if (html.includes('<!--TOC-->')) return html.replace('<!--TOC-->', nav)
   return html.replace('</header>', `</header>\n${nav}`)

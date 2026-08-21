@@ -626,8 +626,9 @@ STATS_SECTION_HELP: dict[str, str] = {
         "episodes. Click a row to jump and set cursors on that episode."
     ),
     "crit_path": (
-        "Longest heuristic ready→completion windows, split into exec / "
-        "preempt / wait / migration / other. Click a component to jump to "
+        "Longest heuristic ready→completion windows. Exec is own on-CPU time; "
+        "Off-CPU is Duration − Exec. Preempt, Wait, and Migration overlap and "
+        "are not a stacked split of Duration. Click a component to jump to "
         "that episode. Not a kernel release/completion pair."
     ),
     "patterns": (
@@ -1837,6 +1838,19 @@ HTML_REPORT_TOC_CSS = """
 .report-toc li { margin: 4px 0; }
 .report-toc a { color: var(--accent); text-decoration: none; }
 .report-toc a:hover { text-decoration: underline; }
+.toc-groups { display: grid; gap: 10px; }
+.toc-group h3 {
+  margin: 8px 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.toc-group ul { columns: 1; padding-left: 16px; }
+@media (min-width: 720px) {
+  .toc-groups { grid-template-columns: 1fr 1fr; }
+}
 details.report-card { scroll-margin-top: 12px; }
 details.report-card > summary { cursor: pointer; list-style: none; }
 details.report-card > summary::-webkit-details-marker { display: none; }
@@ -1858,6 +1872,10 @@ HTML_REPORT_TOC_SCRIPT = """
   function openTarget(id) {
     var el = document.getElementById(id);
     if (el && el.tagName === 'DETAILS') el.open = true;
+    if (el && el.closest) {
+      var host = el.closest('details.report-card');
+      if (host) host.open = true;
+    }
   }
   function setAllOpen(open) {
     document.querySelectorAll('details.report-card').forEach(function (el) {
@@ -1879,13 +1897,177 @@ HTML_REPORT_TOC_SCRIPT = """
 </script>
 """.strip()
 
+HTML_REPORT_INTERACTIVE_SCRIPT = """
+<script>
+(function () {
+  var PAGE = 20;
+  function textOf(el) { return (el && (el.textContent || '')).replace(/\\s+/g, ' ').trim(); }
+  function csvEscape(v) { return /[",\\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+  function downloadCsv(name, rows) {
+    var csv = rows.map(function (r) { return r.map(csvEscape).join(','); }).join('\\n');
+    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 500);
+  }
+  function parseVal(s) {
+    s = String(s || '').trim();
+    if (!s || s === '—' || s === '-') return NaN;
+    var n = Number(s.replace(/[% ,]/g, ''));
+    if (!isNaN(n) && /[-+0-9]/.test(s[0] || '')) return n;
+    var m = s.match(/^(-?[0-9.]+)\\s*(ns|µs|us|ms|s)\\b/i);
+    if (!m) return NaN;
+    var v = Number(m[1]), u = m[2].toLowerCase();
+    return v * (u === 's' ? 1e9 : u === 'ms' ? 1e6 : (u === 'us' || u === 'µs') ? 1e3 : 1);
+  }
+  function enhanceTable(table, idx) {
+    if (!table.tHead || !table.tBodies.length) return;
+    if (table.closest('.kpi-grid, .finding-card, .meta-table, .scope-table')) return;
+    var tbody = table.tBodies[0];
+    var rows = Array.prototype.slice.call(tbody.rows);
+    if (!rows.length) return;
+    var hasProblems = !!table.querySelector('.sev-error, .sev-warning');
+    var wrap = document.createElement('div');
+    wrap.className = 'table-tools';
+    var scroll = document.createElement('div');
+    scroll.className = 'table-scroll';
+    table.parentNode.insertBefore(wrap, table);
+    wrap.appendChild(scroll);
+    scroll.appendChild(table);
+    var bar = document.createElement('div');
+    bar.className = 'table-toolbar';
+    bar.innerHTML = '<input type="search" class="table-search" placeholder="Search table…">'
+      + (hasProblems ? '<label class="table-check"><input type="checkbox" data-problems> Problems only</label>' : '')
+      + '<label class="table-check"><input type="checkbox" data-all> Show all</label>'
+      + '<button type="button" class="toc-btn" data-csv>CSV</button>'
+      + '<span class="table-count"></span>';
+    wrap.insertBefore(bar, scroll);
+    var q = '', problems = false, showAll = rows.length <= PAGE, sortCol = -1, sortDir = 1, page = 0;
+    Array.prototype.forEach.call(table.tHead.rows[0].cells, function (th, i) {
+      th.tabIndex = 0;
+      th.classList.add('sortable');
+      th.addEventListener('click', function () {
+        if (sortCol === i) sortDir = -sortDir; else { sortCol = i; sortDir = 1; }
+        apply();
+      });
+    });
+    function apply() {
+      var filtered = rows.filter(function (tr) {
+        if (problems && !tr.querySelector('.sev-error, .sev-warning')) return false;
+        if (q && textOf(tr).toLowerCase().indexOf(q) < 0) return false;
+        return true;
+      });
+      if (sortCol >= 0) {
+        filtered.sort(function (a, b) {
+          var av = textOf(a.cells[sortCol]), bv = textOf(b.cells[sortCol]);
+          var an = parseVal(av), bn = parseVal(bv);
+          var cmp = (!isNaN(an) && !isNaN(bn)) ? an - bn : av.localeCompare(bv);
+          return cmp * sortDir;
+        });
+      }
+      rows.forEach(function (tr) { tr.style.display = 'none'; });
+      var start = showAll ? 0 : page * PAGE;
+      var vis = showAll ? filtered : filtered.slice(start, start + PAGE);
+      vis.forEach(function (tr) { tbody.appendChild(tr); tr.style.display = ''; });
+      var count = wrap.querySelector('.table-count');
+      count.textContent = filtered.length === rows.length
+        ? (vis.length < filtered.length ? vis.length + ' of ' + filtered.length : filtered.length + ' rows')
+        : vis.length + ' of ' + filtered.length + ' (filtered)';
+    }
+    bar.querySelector('.table-search').addEventListener('input', function (e) {
+      q = String(e.target.value || '').toLowerCase(); page = 0; apply();
+    });
+    var pb = bar.querySelector('[data-problems]');
+    if (pb) pb.addEventListener('change', function (e) { problems = e.target.checked; page = 0; apply(); });
+    bar.querySelector('[data-all]').addEventListener('change', function (e) {
+      showAll = e.target.checked; page = 0; apply();
+    });
+    if (rows.length <= PAGE) bar.querySelector('[data-all]').checked = true;
+    bar.querySelector('[data-csv]').addEventListener('click', function () {
+      var head = Array.prototype.map.call(table.tHead.rows[0].cells, textOf);
+      var body = rows.filter(function (tr) { return tr.style.display !== 'none'; })
+        .map(function (tr) { return Array.prototype.map.call(tr.cells, textOf); });
+      downloadCsv('statistics-table-' + (idx + 1) + '.csv', [head].concat(body));
+    });
+    apply();
+  }
+  document.querySelectorAll('details.report-card table').forEach(enhanceTable);
+  document.querySelectorAll('.report-tabs').forEach(function (tabs) {
+    var btns = tabs.querySelectorAll('[data-tab]');
+    var panels = tabs.querySelectorAll('[data-panel]');
+    function show(id) {
+      btns.forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-tab') === id); });
+      panels.forEach(function (p) { p.hidden = p.getAttribute('data-panel') !== id; });
+    }
+    btns.forEach(function (b) {
+      b.addEventListener('click', function () { show(b.getAttribute('data-tab')); });
+    });
+    var first = tabs.querySelector('[data-tab]');
+    if (first) show(first.getAttribute('data-tab'));
+  });
+})();
+</script>
+""".strip()
 
-def html_toc_nav(entries) -> str:
-    """Table of Contents nav with Expand all / Collapse all."""
-    items = "".join(
-        f'<li><a href="#{sec_id}">{title}</a></li>'
-        for sec_id, title in (entries or [])
-    )
+
+_SCOPE_SUFFIX_RE = re.compile(r"\s*\(cursor range[^)]*\)\s*$", re.I)
+
+
+def html_section_slug(title: str) -> str:
+    """Stable HTML id fragment from a report-card heading."""
+    text = _SCOPE_SUFFIX_RE.sub("", str(title or "")).strip()
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug[:72] or "section"
+
+
+def _attr_value(attrs: str, name: str) -> str:
+    m = re.search(rf'\b{name}="([^"]*)"', attrs or "")
+    return m.group(1) if m else ""
+
+
+def html_toc_nav(entries, groups=None) -> str:
+    """Table of Contents nav with Expand all / Collapse all.
+
+    *groups* is an optional sequence of ``(group_title, title_prefixes)``.
+    """
+    grouped_items = ""
+    if groups:
+        remaining = list(entries or [])
+        blocks = []
+        for group_title, prefixes in groups:
+            pref = tuple(prefixes or ())
+            chosen = []
+            keep = []
+            for sec_id, title in remaining:
+                if pref and str(title).startswith(pref):
+                    chosen.append((sec_id, title))
+                else:
+                    keep.append((sec_id, title))
+            remaining = keep
+            if not chosen:
+                continue
+            lis = "".join(
+                f'<li><a href="#{sec_id}">{html.escape(str(title))}</a></li>'
+                for sec_id, title in chosen
+            )
+            blocks.append(
+                f'<div class="toc-group"><h3>{html.escape(str(group_title))}</h3>'
+                f"<ul>{lis}</ul></div>"
+            )
+        if remaining:
+            lis = "".join(
+                f'<li><a href="#{sec_id}">{html.escape(str(title))}</a></li>'
+                for sec_id, title in remaining
+            )
+            blocks.append(f'<div class="toc-group"><h3>Other</h3><ul>{lis}</ul></div>')
+        grouped_items = f'<div class="toc-groups">{"".join(blocks)}</div>'
+    else:
+        grouped_items = "<ul>" + "".join(
+            f'<li><a href="#{sec_id}">{html.escape(str(title))}</a></li>'
+            for sec_id, title in (entries or [])
+        ) + "</ul>"
     return (
         '<nav class="report-toc"><div class="report-toc-head">'
         "<h2>Table of Contents</h2>"
@@ -1893,24 +2075,26 @@ def html_toc_nav(entries) -> str:
         '<button type="button" class="toc-btn" data-toc="expand">Expand all</button>'
         '<button type="button" class="toc-btn" data-toc="collapse">Collapse all</button>'
         "</div></div>"
-        f"<ul>{items}</ul></nav>"
+        f"{grouped_items}</nav>"
     )
 
 
 def html_make_collapsible_sections(
     doc_html: str,
     default_expanded: tuple = (),
+    toc_groups=None,
 ) -> tuple:
     """Wrap every ``<section class="report-card ...">`` in ``<details>``
     and build a table-of-contents nav. Returns ``(nav_html, new_doc_html)``.
     """
     prefixes = tuple(default_expanded or ())
     toc_entries: list = []
+    used_ids: set = set()
     counter = 0
 
     def _wrap(m: "re.Match") -> str:
         nonlocal counter
-        classes, inner = m.group(1), m.group(2)
+        classes, attrs, inner = m.group(1), m.group(2) or "", m.group(3)
         h2_m = re.search(r"<h2[^>]*>.*?</h2>", inner, re.S)
         if h2_m:
             title_html = h2_m.group(0)
@@ -1919,35 +2103,640 @@ def html_make_collapsible_sections(
         else:
             title_html, title_text, rest = "<h2>Section</h2>", "Section", inner
         counter += 1
-        sec_id = f"sec-{counter}"
+        existing = _attr_value(attrs, "id")
+        if existing:
+            sec_id = existing
+        else:
+            slug = html_section_slug(title_text)
+            sec_id = f"sec-{slug}"
+            n = 2
+            while sec_id in used_ids:
+                sec_id = f"sec-{slug}-{n}"
+                n += 1
+        used_ids.add(sec_id)
         toc_entries.append((sec_id, title_text))
         open_attr = " open" if prefixes and title_text.startswith(prefixes) else ""
+        extra = re.sub(r'\s*\bid="[^"]*"', "", attrs).strip()
+        extra_attr = f" {extra}" if extra else ""
         return (
-            f'<details class="{classes}" id="{sec_id}"{open_attr}>'
+            f'<details class="{classes}" id="{sec_id}"{extra_attr}{open_attr}>'
             f"<summary>{title_html}</summary>{rest}</details>"
         )
 
     new_doc = re.sub(
-        r'<section class="(report-card[^"]*)">(.*?)</section>',
+        r'<section class="(report-card[^"]*)"([^>]*)>(.*?)</section>',
         _wrap, doc_html, flags=re.S,
     )
     if not toc_entries:
         return "", new_doc
-    return html_toc_nav(toc_entries), new_doc
+    return html_toc_nav(toc_entries, groups=toc_groups), new_doc
 
 
 def html_apply_collapsible_toc(
     document_html: str,
     *,
     default_expanded: tuple = (),
+    toc_groups=None,
 ) -> str:
     """Wrap report cards, inject TOC at ``<!--TOC-->`` (or after the header)."""
-    nav, doc = html_make_collapsible_sections(document_html, default_expanded)
+    nav, doc = html_make_collapsible_sections(
+        document_html, default_expanded, toc_groups=toc_groups)
     if not nav:
         return doc
     if "<!--TOC-->" in doc:
         return doc.replace("<!--TOC-->", nav, 1)
     return doc.replace("</header>", "</header>\n" + nav, 1)
+# ===========================================================================
+# stats_html
+# ===========================================================================
+
+STATS_TOC_GROUPS = (
+    ("Overview and Findings", (
+        "Analysis Scope", "Analysis Findings", "Trace Metadata",
+    )),
+    ("CPU and Scheduling", (
+        "Core Utilisation", "Trace Health (TICK)", "Core Time Breakdown",
+        "Concurrent Core Active Distribution", "Kernel Switch Overhead",
+        "Top Tasks by CPU",
+    )),
+    ("Migrations and Core Affinity", (
+        "Core Migrations", "Core-Pair Migration Summary", "Core Affinity",
+        "Task × Core", "Core Utilization Over Time", "Task Lifecycle",
+        "Deadlines / CPU budget", "Task Health",
+    )),
+    ("Timing, Latency and Jitter", (
+        "Investigate Anomalies", "Execution Time Per Slice",
+        "Off-CPU Time", "Dispatch / Scheduling Latency", "Inter-Arrival Time",
+        "Period / Jitter", "Response Time", "Unified Jitter",
+    )),
+    ("Synchronization and Custom Events", (
+        "Preemption Chain Analysis", "Preemption Matrix", "Priority Inheritance",
+        "Mutex / Semaphore", "Waiter × Owner", "Mutex Blocking", "Queue",
+        "Interval Analysis", "Tag Analysis", "Statistics Notes",
+    )),
+)
+
+STATS_DEFAULT_EXPANDED = (
+    "Analysis Scope",
+    "Analysis Findings",
+    "Core Utilisation (excl. IDLE/TICK)",
+    "Trace Health (TICK)",
+    "Investigate Anomalies",
+)
+
+STATS_HTML_EXTRA_CSS = """
+:root { --line-strong: #c8d2e0; --stripe: #f7f9fc; }
+.report.report-wide { max-width: 1160px; }
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.kpi {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: 0 2px 8px rgba(30, 60, 90, 0.06);
+}
+.kpi .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }
+.kpi .v { margin-top: 4px; font-size: 20px; font-weight: 700; color: #0f2b47; }
+.kpi .s { margin-top: 2px; font-size: 12px; color: var(--muted); }
+.kpi.warn { border-color: #e0a020; }
+.kpi.error { border-color: #c0392b; }
+.kpi.ok { border-color: #5FCF6F; }
+.notes { border-left: 4px solid var(--accent); }
+.notes ul { margin: 8px 0 0 18px; padding: 0; }
+.notes li { margin: 6px 0; line-height: 1.45; }
+table { border-collapse: separate; border-spacing: 0; width: 100%; }
+th, td { border-bottom: 1px solid var(--line); padding: 8px 10px; font-size: 13px; text-align: right; }
+th:first-child, td:first-child { text-align: left; }
+thead th {
+  background: #f1f5fb;
+  color: #284563;
+  font-weight: 600;
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+}
+tbody tr:nth-child(even) td { background: var(--stripe); }
+.empty { text-align: center !important; color: var(--muted); }
+.detail-note { margin: 6px 0 8px; font-size: 12px; color: var(--muted); }
+h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }
+.sev-error { color: #c0392b; font-weight: 600; }
+.sev-warning { color: #9a4d00; font-weight: 600; }
+.finding-info { color: var(--ink, var(--fg, #182230)); }
+.finding-ok { color: #166534; font-weight: 600; }
+.findings-list { margin: 8px 0 0 18px; padding: 0; }
+.findings-list li { margin: 8px 0; line-height: 1.45; }
+.analysis-findings { border-left: 4px solid #c0392b; }
+.finding-cards { display: grid; gap: 10px; }
+.finding-card {
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fff;
+}
+.finding-card.sev-error { border-left-color: #c0392b; }
+.finding-card.sev-warning { border-left-color: #e0a020; }
+.finding-card.finding-info { border-left-color: var(--accent); }
+.finding-card.finding-ok { border-left-color: #5FCF6F; }
+.finding-card h3 { margin: 0 0 6px; font-size: 14px; color: #123355; }
+.finding-meta { font-size: 12px; color: var(--muted); margin: 4px 0; }
+.finding-card a { color: var(--accent); }
+.scope-table th { width: 28%; }
+.heat-wrap { overflow-x: auto; margin: 8px 0 12px; }
+.heat-cell { font-size: 10px; text-anchor: middle; }
+.table-tools { margin: 8px 0 12px; }
+.table-toolbar {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px;
+}
+.table-search {
+  font: inherit; font-size: 12px; padding: 4px 8px; border: 1px solid var(--line);
+  border-radius: 6px; min-width: 160px;
+}
+.table-check { font-size: 12px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }
+.table-count { font-size: 12px; color: var(--muted); margin-left: auto; }
+.table-scroll { overflow-x: auto; max-width: 100%; }
+.table-scroll table { min-width: 100%; }
+.table-scroll thead th { position: sticky; top: 0; z-index: 2; }
+.table-scroll td:first-child, .table-scroll th:first-child {
+  position: sticky; left: 0; z-index: 1; background: #fff;
+}
+.table-scroll tbody tr:nth-child(even) td:first-child { background: var(--stripe); }
+.sortable { cursor: pointer; }
+.sortable:hover { color: var(--accent); }
+.report-tabs .tab-bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.report-tabs .tab-btn {
+  font: inherit; font-size: 12px; padding: 4px 10px; border: 1px solid var(--line);
+  border-radius: 999px; background: #f1f5fb; color: var(--accent); cursor: pointer;
+}
+.report-tabs .tab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.pct-bar { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
+.pct-bar .lab { flex: 0 0 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pct-bar .track { flex: 1; height: 10px; background: #eef2f7; border-radius: 6px; overflow: hidden; }
+.pct-bar .fill { height: 100%; border-radius: 6px; }
+""".strip()
+
+
+def _esc(v: object) -> str:
+    return html.escape(str(v), quote=True)
+
+
+def html_inspect_href(section_title: str) -> str:
+    return f"#sec-{html_section_slug(section_title)}"
+
+
+def html_kpi(label: str, value: str, *, hint: str = "", kind: str = "") -> str:
+    cls = f" kpi {kind}".rstrip() if kind else "kpi"
+    extra = f'<div class="s">{_esc(hint)}</div>' if hint else ""
+    return (
+        f'<article class="{cls}"><div class="k">{_esc(label)}</div>'
+        f'<div class="v">{_esc(value)}</div>{extra}</article>'
+    )
+
+
+def html_scope_identity_card(
+    *,
+    filename: str,
+    scope_type: str,
+    start: str,
+    end: str,
+    duration: str,
+    cores: int,
+    filters: str,
+    timestamp_mode: str,
+    task_count: int,
+    sample_note: str = "",
+) -> str:
+    rows = [
+        ("Trace file", filename or "—"),
+        ("Scope", scope_type),
+        ("Start", start),
+        ("End", end),
+        ("Duration", duration),
+        ("Cores", f"{cores}"),
+        ("Tasks in scope", f"{task_count:,}"),
+        ("Filters", filters or "None"),
+        ("Timestamps", timestamp_mode),
+    ]
+    body = "".join(
+        f"<tr><th>{_esc(k)}</th><td>{_esc(v)}</td></tr>" for k, v in rows
+    )
+    note = (
+        f'<p class="detail-note">{_esc(sample_note)}</p>' if sample_note else ""
+    )
+    return (
+        '<section class="report-card" id="sec-analysis-scope">'
+        "<h2>Analysis Scope</h2>"
+        f'<table class="meta-table scope-table"><tbody>{body}</tbody></table>'
+        f"{note}</section>"
+    )
+
+
+def html_trace_metadata_card(
+    *,
+    span: str,
+    tasks: int,
+    segments: int,
+    sti_events: int,
+    context_switches: int,
+    core_gap_avg: str = "",
+    core_gap_max: str = "",
+    scope_title: str = "",
+) -> str:
+    rows = [
+        (f"Span{scope_title}", span),
+        ("Tasks", f"{tasks:,}"),
+        ("Segments", f"{segments:,}"),
+        ("STI events", f"{sti_events:,}"),
+        (f"Context switches{scope_title}", f"{context_switches:,}"),
+    ]
+    if core_gap_avg:
+        rows.append((f"Core gap avg{scope_title}", core_gap_avg))
+    if core_gap_max:
+        rows.append((f"Core gap max{scope_title}", core_gap_max))
+    body = "".join(
+        f"<tr><th>{_esc(k)}</th><td>{_esc(v)}</td></tr>" for k, v in rows
+    )
+    return (
+        '<section class="report-card">'
+        "<h2>Trace Metadata</h2>"
+        '<p class="detail-note">Trace-size counts. Diagnostic KPIs above summarise health.</p>'
+        f'<table class="meta-table"><tbody>{body}</tbody></table></section>'
+    )
+
+
+def html_diagnostic_kpi_grid(kpis: Sequence[dict]) -> str:
+    parts = []
+    for k in kpis or []:
+        parts.append(html_kpi(
+            k.get("label") or "",
+            k.get("value") or "—",
+            hint=k.get("hint") or "",
+            kind=k.get("kind") or "",
+        ))
+    return f'<section class="kpi-grid">{"".join(parts)}</section>' if parts else ""
+
+
+def html_finding_cards(findings: Sequence[dict], scope_title: str = "") -> str:
+    if not findings:
+        return ""
+    cards = []
+    for f in findings:
+        sev = str(f.get("severity") or "info")
+        cls = {
+            "error": "sev-error",
+            "warning": "sev-warning",
+            "info": "finding-info",
+        }.get(sev, "finding-info")
+        if f.get("id") == "load_balance_ok":
+            cls = "finding-ok"
+        inspect = str(f.get("inspect") or "").strip()
+        href = str(f.get("inspect_href") or "").strip()
+        if inspect and not href:
+            href = html_inspect_href(inspect)
+        inspect_html = (
+            f'<div class="finding-meta"><strong>Inspect:</strong> '
+            f'<a href="{_esc(href)}">{_esc(inspect)}</a></div>'
+            if inspect else ""
+        )
+        impact = str(f.get("impact") or "").strip()
+        evidence = str(f.get("evidence_text") or "").strip()
+        if not evidence:
+            ev = f.get("evidence")
+            if isinstance(ev, list) and ev:
+                evidence = "; ".join(str(x) for x in ev if x)
+            elif ev:
+                evidence = str(ev)
+        conf = str(f.get("confidence") or "").strip()
+        cards.append(
+            f'<article class="finding-card {cls}">'
+            f'<h3>{_esc(sev.title())} · {_esc(f.get("title") or "Finding")}</h3>'
+            f'<p>{_esc(f.get("text") or "")}</p>'
+            + (f'<div class="finding-meta"><strong>Impact:</strong> {_esc(impact)}</div>' if impact else "")
+            + (f'<div class="finding-meta"><strong>Evidence:</strong> {_esc(evidence)}</div>' if evidence else "")
+            + inspect_html
+            + (f'<div class="finding-meta"><strong>Confidence:</strong> {_esc(conf)}</div>' if conf else "")
+            + "</article>"
+        )
+    return (
+        f'<section class="report-card notes analysis-findings">'
+        f"<h2>Analysis Findings{_esc(scope_title)}</h2>"
+        '<p class="detail-note">Heuristic summary of load balance, CPU consumers, '
+        "off-CPU gaps, thrashing, deadlines, tick health, and sync. "
+        "Exported links open the matching report section; they do not jump back into BTFViewer.</p>"
+        f'<div class="finding-cards">{"".join(cards)}</div></section>'
+    )
+
+
+def _heat_color(frac: float) -> str:
+    f = max(0.0, min(1.0, float(frac)))
+    r = int(241 + (192 - 241) * f)
+    g = int(245 + (57 - 245) * f)
+    b = int(251 + (43 - 251) * f)
+    return f"rgb({r},{g},{b})"
+
+
+def html_matrix_heatmap(
+    row_labels: Sequence[str],
+    col_labels: Sequence[str],
+    cells: Sequence[Sequence[float]],
+    *,
+    title: str,
+    unit: str = "%",
+    width: int = 640,
+) -> str:
+    rows = list(row_labels or [])
+    cols = list(col_labels or [])
+    if not rows or not cols:
+        return ""
+    max_v = 0.0
+    for line in cells or []:
+        for v in line:
+            try:
+                max_v = max(max_v, float(v or 0))
+            except (TypeError, ValueError):
+                pass
+    max_v = max(max_v, 1.0)
+    label_w = 88
+    head_h = 36
+    cell = 22
+    w = max(width, label_w + 12 + len(cols) * cell)
+    h = head_h + 8 + len(rows) * cell + 8
+    parts = [
+        f'<div class="heat-wrap"><svg xmlns="http://www.w3.org/2000/svg" '
+        f'viewBox="0 0 {w} {h}" width="{w}" height="{h}" role="img" '
+        f'aria-label="{_esc(title)}">',
+        f'<text x="8" y="16" font-size="12" fill="#123355" font-weight="600">'
+        f"{_esc(title)}</text>",
+    ]
+    for j, col in enumerate(cols):
+        x = label_w + j * cell + cell / 2
+        lab = _esc(str(col)[:10])
+        parts.append(
+            f'<text x="{x:.1f}" y="{head_h - 4}" font-size="9" fill="#5f6f82" '
+            f'text-anchor="middle">{lab}</text>'
+        )
+    for i, row in enumerate(rows):
+        y = head_h + i * cell
+        parts.append(
+            f'<text x="8" y="{y + 15}" font-size="10" fill="#182230">'
+            f"{_esc(str(row)[:14])}</text>"
+        )
+        line = cells[i] if i < len(cells) else []
+        for j, _col in enumerate(cols):
+            raw = line[j] if j < len(line) else 0
+            try:
+                val = float(raw or 0)
+            except (TypeError, ValueError):
+                val = 0.0
+            x = label_w + j * cell
+            color = _heat_color(val / max_v) if val > 0 else "#f7f9fc"
+            parts.append(
+                f'<rect x="{x:.1f}" y="{y:.1f}" width="{cell - 2}" height="{cell - 2}" '
+                f'rx="3" fill="{color}"/>'
+            )
+            if val > 0:
+                label = f"{val:.0f}{unit}" if unit == "%" else f"{val:.0f}"
+                parts.append(
+                    f'<text class="heat-cell" x="{x + (cell - 2) / 2:.1f}" y="{y + 14:.1f}" '
+                    f'fill="#123355">{_esc(label)}</text>'
+                )
+    parts.append("</svg></div>")
+    return "".join(parts)
+
+
+def html_percentile_bars(
+    rows: Sequence[dict],
+    *,
+    title: str = "Response P50–P99",
+    width: int = 640,
+) -> str:
+    items = [r for r in (rows or []) if isinstance(r, dict)][:12]
+    if not items:
+        return ""
+    max_v = 1.0
+    for r in items:
+        max_v = max(max_v, float(r.get("p99_ns") or r.get("max_ns") or 0), 1.0)
+    label_w = 110
+    pad = 12
+    row_h = 22
+    header = 28
+    h = header + len(items) * row_h + 10
+    plot_w = max(80.0, width - label_w - pad - 80)
+    parts = [
+        f'<div class="heat-wrap"><svg xmlns="http://www.w3.org/2000/svg" '
+        f'viewBox="0 0 {width} {h}" width="{width}" height="{h}" role="img" '
+        f'aria-label="{_esc(title)}">',
+        f'<text x="{pad}" y="16" font-size="12" fill="#123355" font-weight="600">'
+        f"{_esc(title)}</text>",
+        f'<text x="{width - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">'
+        "interval = P50–P99</text>",
+    ]
+    for i, r in enumerate(items):
+        y = header + i * row_h
+        lab = _esc(str(r.get("task") or "")[:16])
+        p50 = float(r.get("p50_ns") or 0)
+        p95 = float(r.get("p95_ns") or 0)
+        p99 = float(r.get("p99_ns") or 0)
+        x0 = label_w + plot_w * p50 / max_v
+        x1 = label_w + plot_w * max(p99, p50) / max_v
+        x95 = label_w + plot_w * p95 / max_v
+        parts.append(f'<text x="8" y="{y + 14}" font-size="11" fill="#182230">{lab}</text>')
+        parts.append(
+            f'<rect x="{x0:.1f}" y="{y + 6}" width="{max(x1 - x0, 2):.1f}" height="8" '
+            f'rx="3" fill="#9ec5e8"/>'
+        )
+        parts.append(
+            f'<line x1="{x95:.1f}" y1="{y + 4}" x2="{x95:.1f}" y2="{y + 16}" '
+            f'stroke="#2a6fb2" stroke-width="2"/>'
+        )
+    parts.append("</svg></div>")
+    return "".join(parts)
+
+
+def html_health_bars(rows: Sequence[dict], *, width: int = 640) -> str:
+    items = [r for r in (rows or []) if isinstance(r, dict)]
+    items = sorted(items, key=lambda r: int(r.get("score") or 0))[:16]
+    if not items:
+        return ""
+    parts = ['<div class="health-bars">']
+    for r in items:
+        score = int(r.get("score") or 0)
+        marks = r.get("marks") or {}
+        reasons = [k for k, v in marks.items() if v]
+        reason = ", ".join(reasons) if reasons else "no deductions"
+        color = "#c0392b" if score < 50 else "#e0a020" if score < 80 else "#1a8a2a"
+        parts.append(
+            f'<div class="pct-bar"><span class="lab" title="{_esc(r.get("task") or "")}">'
+            f'{_esc(str(r.get("task") or "")[:18])}</span>'
+            f'<div class="track"><div class="fill" style="width:{score}%;background:{color}"></div></div>'
+            f'<span>{score} · {_esc(reason)}</span></div>'
+        )
+    parts.append("</div>")
+    del width
+    return "".join(parts)
+
+
+def html_tag_overview(
+    samples: Sequence[dict],
+    *,
+    time_fmt,
+    max_rows: int = 12,
+) -> str:
+    by_label: dict = {}
+    for s in samples or []:
+        if not isinstance(s, dict):
+            continue
+        lab = str(s.get("label") or s.get("tag") or "")
+        by_label.setdefault(lab, []).append(s)
+    if not by_label:
+        return '<p class="empty">No tag samples in scope</p>'
+    blocks = []
+    for lab, group in list(by_label.items())[:8]:
+        vals = []
+        for s in group:
+            try:
+                vals.append(float(str(s.get("value") or "0").replace(",", "")))
+            except (TypeError, ValueError):
+                continue
+        if not vals:
+            continue
+        transitions = 0
+        plateau = 1
+        run = 1
+        for i in range(1, len(vals)):
+            if vals[i] != vals[i - 1]:
+                transitions += 1
+                plateau = max(plateau, run)
+                run = 1
+            else:
+                run += 1
+        plateau = max(plateau, run)
+        unique = len(set(vals))
+        mn, mx = min(vals), max(vals)
+        spark = _sparkline(vals)
+        extrema = sorted(group, key=lambda s: float(str(s.get("value") or 0).replace(",", "") or 0))
+        shown = []
+        if extrema:
+            shown.append(extrema[0])
+            if extrema[-1] is not extrema[0]:
+                shown.append(extrema[-1])
+            shown.append(group[0])
+            if group[-1] not in shown:
+                shown.append(group[-1])
+        rows = "".join(
+            f"<tr><td>{_esc(s.get('time') if not callable(time_fmt) else time_fmt(s))}</td>"
+            f"<td>{_esc(s.get('value'))}</td><td>{_esc(s.get('core') or '—')}</td></tr>"
+            for s in shown[:max_rows]
+        )
+        blocks.append(
+            f"<h3 class=\"sub\">{_esc(lab)}</h3>"
+            f'<p class="detail-note">{len(group)} samples · {unique} distinct values · '
+            f"{transitions} transitions · longest plateau {plateau} · "
+            f"min {mn:g} / max {mx:g}</p>"
+            f"{spark}"
+            f"<table><thead><tr><th>Time</th><th>Value</th><th>Core</th></tr></thead>"
+            f"<tbody>{rows}</tbody></table>"
+        )
+    return "".join(blocks) or '<p class="empty">No tag samples in scope</p>'
+
+
+def _sparkline(vals: Sequence[float], *, width: int = 420, height: int = 48) -> str:
+    if len(vals) < 2:
+        return ""
+    mn, mx = min(vals), max(vals)
+    span = (mx - mn) or 1.0
+    n = len(vals)
+    pts = []
+    for i, v in enumerate(vals[:200]):
+        x = 4 + (width - 8) * i / max(n - 1, 1)
+        y = height - 6 - (height - 12) * ((v - mn) / span)
+        pts.append(f"{x:.1f},{y:.1f}")
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
+        f'width="{width}" height="{height}" role="img" aria-label="Tag time series">'
+        f'<polyline fill="none" stroke="#2a6fb2" stroke-width="1.5" '
+        f'points="{" ".join(pts)}"/></svg>'
+    )
+
+
+def html_investigate_anomalies(
+    *,
+    anomalies_table: str,
+    worst_table: str,
+    patterns_table: str,
+    crit_path_table: str,
+    crit_note: str,
+    scope_title: str = "",
+) -> str:
+    return (
+        f'<section class="report-card"><h2>Investigate Anomalies{_esc(scope_title)}</h2>'
+        '<p class="detail-note">Timeline anomalies, longest events, repeating kinds, '
+        "and the longest heuristic ready-to-completion windows. "
+        "Critical Path components can overlap; they are not additive parts of Duration.</p>"
+        '<div class="report-tabs">'
+        '<div class="tab-bar">'
+        '<button type="button" class="tab-btn" data-tab="anomalies">Timeline Anomalies</button>'
+        '<button type="button" class="tab-btn" data-tab="worst">Worst Events</button>'
+        '<button type="button" class="tab-btn" data-tab="patterns">Recurring Patterns</button>'
+        '<button type="button" class="tab-btn" data-tab="crit">Critical Path</button>'
+        "</div>"
+        f'<div data-panel="anomalies">{anomalies_table}</div>'
+        f'<div data-panel="worst">{worst_table}</div>'
+        f'<div data-panel="patterns">{patterns_table}</div>'
+        f'<div data-panel="crit">{crit_note}{crit_path_table}</div>'
+        "</div></section>"
+    )
+
+
+def html_glossary(*, range_note: str = "") -> str:
+    note = (range_note or "").strip()
+    if note.startswith("<li>") and note.endswith("</li>"):
+        note = note[4:-5].strip()
+    items = [
+        note,
+        "<strong>Execution Time Per Slice:</strong> Duration of each continuous task run between two context switches.",
+        "<strong>Highest CPU consumers</strong> are tasks with the largest share of active CPU time. "
+        "They are not automatically WCET candidates. Largest execution-time maxima live in Execution Time Per Slice.",
+        "<strong>Inter-Arrival Time:</strong> Time between consecutive activations of the same task (slice start to next slice start).",
+        "<strong>Off-CPU Time (Blocking Time):</strong> Gap between the end of one slice and the start of the next for the same task. "
+        "It may include preemption, suspension, periodic waiting, or scheduling delay — not necessarily resource blocking. "
+        "It is not end-to-end response time.",
+        "<strong>CPU% (task):</strong> Share of total non-IDLE/TICK <em>active CPU time</em> in scope, not wall-clock span and not total multicore capacity.",
+        "<strong>Core utilisation:</strong> Non-IDLE/TICK active time on that core divided by the scoped wall-clock span (one-core capacity = 100%).",
+        "<strong>Load Balance Score:</strong> 100% × (1 − Gini of core utilisation). "
+        "100 = evenly distributed utilisation; 0 = highly uneven. Even overload or even idle can still score high.",
+        "<strong>Preemption Chain Analysis:</strong> For each off-CPU gap of a victim task, which task ran on the same core during that gap.",
+        "<strong>Priority Inheritance:</strong> Tasks boosted above base priority when <code>create pri:N</code> and <code>set_priority</code> STI events are present.",
+        "<strong>Mutex / Semaphore:</strong> Paired <code>take</code>/<code>give</code> STI events by object pointer.",
+        "<strong>Interval Analysis:</strong> Paired <code>interval_start</code> / <code>interval_stop</code> STI events by id.",
+        "<strong>Tag Analysis:</strong> Numeric samples from tag STI channels. Repeated identical values are summarised as a time series, not dumped row-by-row.",
+        "<strong>Task × Core:</strong> Per-task execution share of the scoped span on each core.",
+        "<strong>Task Health:</strong> Heuristic 0–100 score from measured statistics, not an AI probability.",
+        "<strong>Response Time:</strong> Heuristic ready→completion from adjacent slices. Not an explicit BTF release/completion pair.",
+        "<strong>Critical Path:</strong> Longest heuristic response windows. Exec is own on-CPU time; Off-CPU is Duration − Exec. "
+        "Preempt, Wait, and Migration overlap and are not a stacked split of Duration.",
+        "<strong>Period / Jitter:</strong> Median inter-arrival as expected period, with RMS jitter, CV, missed (&gt; 1.5×) and extra (&lt; 0.5×) activations.",
+        "<strong>Min:</strong> Smallest observed sample in scope. It does not prove zero system load.",
+        "<strong>Max:</strong> Largest observed sample in scope. It is an observed peak, not a guaranteed WCET.",
+        "<strong>Average (Mean):</strong> Arithmetic mean; outliers can skew it.",
+        "<strong>TrimMean(5%):</strong> Mean after dropping the fastest and slowest 5%.",
+        "<strong>Jitter:</strong> Observed spread (Max − Min) for samples in scope.",
+        "<strong>σ:</strong> Population standard deviation of samples in scope.",
+        "<strong>P50 (Median):</strong> Half the samples are at or below this value.",
+        "<strong>P95 / P99:</strong> Percentile of the observed distribution. Usefulness depends on the deadline or acceptance criterion; P95 is not universally the best user-experience metric for real-time systems.",
+    ]
+    lis = "".join(f"<li>{item}</li>" for item in items if item)
+    return (
+        '<section class="report-card notes"><h2>Statistics Notes</h2>'
+        '<p class="detail-note">Glossary of metric definitions used in this report.</p>'
+        f"<ul>{lis}</ul></section>"
+    )
+
+
 # ===========================================================================
 # BTF Parser
 # ===========================================================================
@@ -42076,6 +42865,29 @@ _ISR_RE = re.compile(r"(isr|irq|interrupt)", re.IGNORECASE)
 CORE_TIME_BINS = 16
 BURST_WINDOW_NS = 1_000_000
 
+
+def format_burst_window_ns(window_ns: int) -> str:
+    """Format a burst detector window that is always stored in nanoseconds."""
+    ns = int(window_ns or 0)
+    if ns <= 0:
+        return "0 ns"
+    if ns % 1_000_000_000 == 0:
+        return f"{ns // 1_000_000_000} s"
+    if ns % 1_000_000 == 0:
+        return f"{ns // 1_000_000} ms"
+    if ns % 1_000 == 0:
+        return f"{ns // 1_000} µs"
+    if ns >= 1_000_000:
+        return f"{ns / 1_000_000:g} ms"
+    if ns >= 1_000:
+        return f"{ns / 1_000:g} µs"
+    return f"{ns} ns"
+
+
+def format_burst_reason(count: int, label: str, window_ns: int) -> str:
+    stem = str(label or "").replace(" burst", "").strip() or "event"
+    return f"{count:,} {stem}s within {format_burst_window_ns(window_ns)}"
+
 _JUMP_RE = re.compile(r"jump:([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
 _TASK_RE = re.compile(r"\b([A-Za-z_][\w.-]*\[\d+\])")
 _DELTA_RE = re.compile(
@@ -43481,7 +44293,7 @@ def _migration_bursts(events: Sequence[dict], window_ns: int = 1000) -> List[dic
                 item["stop"] = int(last.get("stop") or last.get("start") or 0)
                 item["duration"] = max(
                     int(item["stop"]) - int(item["start"]), count)
-                item["reason"] = f"{count} migrations within {window_ns} ns"
+                item["reason"] = format_burst_reason(count, "migration", window_ns)
                 out.append(item)
                 i = j + 1
             else:
@@ -43970,9 +44782,7 @@ def _kind_bursts(
             item["start"] = int(first.get("start") or 0)
             item["stop"] = int(last.get("stop") or last.get("start") or 0)
             item["duration"] = max(int(item["stop"]) - int(item["start"]), count)
-            item["reason"] = f"{count} {label}s within {window_ns} ns"
-            if label.endswith(" burst"):
-                item["reason"] = f"{count} {label.replace(' burst', '')}s within {window_ns} ns"
+            item["reason"] = format_burst_reason(count, label, window_ns)
             out.append(item)
             i = j + 1
         else:
@@ -51876,7 +52686,7 @@ def _load_balance_gauge_svg(metrics: dict, *, width: int = 300, dark: bool = Fal
         zone=score_zone,
         title="Load Balance Score",
         value_label=f"{score:.0f}%",
-        legend="100 = balanced · 0 = overload",
+        legend="100 = evenly distributed · 0 = highly uneven",
     )
     right = _lb_gauge_svg_body(
         uid=f"{uid}D",
@@ -52124,7 +52934,7 @@ class _LoadBalanceGaugeWidget(QWidget):
             zone=score_zone,
             title="Load Balance Score",
             value_label=f"{score:.0f}%",
-            caption="100 = balanced · 0 = overload",
+            caption="100 = evenly distributed · 0 = highly uneven",
             card_bg=card_bg,
             fg=fg,
             muted=muted,
@@ -52200,6 +53010,11 @@ def _finding(
     fid: str = "",
     task: str = "",
     evidence: Optional[list] = None,
+    impact: str = "",
+    inspect: str = "",
+    inspect_href: str = "",
+    confidence: str = "",
+    evidence_text: str = "",
 ) -> dict:
     out = {
         "severity": severity,
@@ -52208,6 +53023,11 @@ def _finding(
         "id": fid or "",
         "task": task or "",
         "evidence": list(evidence or []),
+        "impact": impact or "",
+        "inspect": inspect or "",
+        "inspect_href": inspect_href or "",
+        "confidence": confidence or "",
+        "evidence_text": evidence_text or "",
     }
     return out
 
@@ -52259,13 +53079,21 @@ def _build_workflow_analysis_findings(
                 f"{metrics}. Uneven core placement — "
                 "check Core Affinity and Core Migrations.",
                 fid="load_imbalance",
+                impact="Uneven utilisation can hide a hot core even when average load looks fine.",
+                inspect="Core Utilisation (excl. IDLE/TICK)",
+                confidence="High — derived from measured core utilisation",
+                evidence_text=metrics,
             ))
         elif score >= _WF_LOAD_SCORE_OK:
             findings.append(_finding(
                 "info",
                 "Core utilisation balance",
-                f"{metrics} — cores look reasonably balanced.",
+                f"{metrics} — cores look reasonably balanced. "
+                "A high score means even distribution, not healthy utilisation.",
                 fid="load_balance_ok",
+                inspect="Core Utilisation (excl. IDLE/TICK)",
+                confidence="High — derived from measured core utilisation",
+                evidence_text=metrics,
             ))
         else:
             findings.append(_finding(
@@ -52274,19 +53102,41 @@ def _build_workflow_analysis_findings(
                 f"{metrics} — moderate spread; review Core Utilisation "
                 "if the workload is expected to be even.",
                 fid="load_balance_moderate",
+                inspect="Core Utilisation (excl. IDLE/TICK)",
+                confidence="High — derived from measured core utilisation",
+                evidence_text=metrics,
             ))
 
-    # WCET / high CPU tasks
+    # Highest CPU consumers (not the same as largest execution maxima)
     if exec_rows:
         top = exec_rows[:_WF_FINDING_CAP]
-        names = ", ".join(f"{r[1]} ({r[3]:.1f}%, Max {r[7]})" for r in top)
+        names = ", ".join(f"{r[1]} ({r[3]:.1f}%)" for r in top)
         findings.append(_finding(
             "info",
-            "Top tasks by CPU (WCET candidates)",
-            f"Highest CPU% tasks: {names}. "
-            "Open Execution Time and click Max to jump to the worst-case slice.",
+            "Highest CPU consumers",
+            f"Largest share of active CPU time: {names}. "
+            "High CPU share is not the same as a long worst-case slice.",
             fid="top_cpu",
+            inspect="Top Tasks by CPU (excl. IDLE/TICK)",
+            confidence="High — measured CPU share",
+            evidence_text=names,
         ))
+        by_max = sorted(
+            exec_rows, key=lambda r: -_time_label_sort_key(r[7]) if len(r) > 7 else 0)
+        max_names = ", ".join(
+            f"{r[1]} (Max {r[7]})" for r in by_max[:_WF_FINDING_CAP])
+        if max_names:
+            findings.append(_finding(
+                "info",
+                "Largest execution-time maxima",
+                f"Longest observed slices: {max_names}. "
+                "See Execution Time Per Slice for the maximum observed slice. "
+                "These are observed maxima, not proven WCET.",
+                fid="exec_max",
+                inspect="Execution Time Per Slice",
+                confidence="High — measured slice durations",
+                evidence_text=max_names,
+            ))
 
     # Blocking
     if block_rows:
@@ -52294,10 +53144,15 @@ def _build_workflow_analysis_findings(
         names = ", ".join(f"{r[1]} (n={r[2]}, Max {r[6]})" for r in top_b)
         findings.append(_finding(
             "warning" if top_b and top_b[0][2] >= 20 else "info",
-            "Blocking / scheduling-delay candidates",
+            "Off-CPU / scheduling-delay candidates",
             f"Tasks with the most off-CPU gaps: {names}. "
-            "Cross-check Preemption Chain and Mutex/Semaphore.",
+            "Cross-check Preemption Chain and Mutex/Semaphore. "
+            "Off-CPU time is not necessarily resource blocking.",
             fid="blocking",
+            inspect="Off-CPU Time (Blocking Time)",
+            confidence="Medium — measured gaps, mixed causes",
+            evidence_text=names,
+            impact="Long or frequent off-CPU gaps delay the next resume.",
         ))
 
     # Priority inversion — row: (mk, label, base, peak, n, total_str, pattern, total_ns)
@@ -52337,11 +53192,15 @@ def _build_workflow_analysis_findings(
     if thrash:
         findings.append(_finding(
             "warning",
-            "Excessive bouncing / core thrashing",
+            "Excessive core migration",
             "High migration rate, short dwell, and/or ping-pong detected: "
             + "; ".join(thrash[:_WF_FINDING_CAP])
-            + ". See Core-Pair Migration Summary and the Migration Heatmap.",
+            + ". See Core Migrations and Core-Pair Migration Summary.",
             fid="thrashing",
+            inspect="Core Migrations",
+            confidence="Medium — heuristic threshold",
+            evidence_text="; ".join(thrash[:_WF_FINDING_CAP]),
+            impact="May increase cache misses and scheduling overhead.",
         ))
 
     hot_pairs: List[str] = []
@@ -52380,6 +53239,9 @@ def _build_workflow_analysis_findings(
                 ", ".join(parts) + " in scope. "
                 "See Deadlines / CPU budget tables below.",
                 fid="deadlines",
+                inspect="Deadlines / CPU budget",
+                confidence="High — compared with configured limits",
+                evidence_text=", ".join(parts),
             ))
 
     # Tick health
@@ -52394,6 +53256,8 @@ def _build_workflow_analysis_findings(
                 f"CV={float(tick.get('tick_cv') or 0) * 100:.2f}%, "
                 f"missed≈{missed}. Investigate large TICK gaps and long slices.",
                 fid="tick_health",
+                inspect="Trace Health (TICK)",
+                confidence="High — measured TICK intervals",
             ))
         elif missed > 0:
             findings.append(_finding(
@@ -52433,14 +53297,22 @@ def _build_workflow_analysis_findings(
             f"{issue_n} mutex/semaphore pairing issue(s) in scope "
             "(orphan give, unmatched take, etc.).",
             fid="sync_issues",
+            inspect="Mutex / Semaphore",
+            confidence="High — unpaired STI events",
         ))
 
-    # Anomalies (beyond fixed thrash/load thresholds)
+    # Anomalies (beyond fixed thrash/load thresholds). Skip names already in thrash.
+    thrash_names = {
+        str(r[1]) for r in (mig_rows or [])
+        if any(str(r[1]) in t for t in thrash)
+    } if thrash else set()
+    remaining_bursts = [
+        row for row in burst_rows if row[0] not in thrash_names]
     append_migration_burst_anomaly(
-        findings, burst_rows, rate_threshold=_WF_MIG_BURST_RATE)
+        findings, remaining_bursts, rate_threshold=_WF_MIG_BURST_RATE)
 
     actionable = [f for f in findings if f["severity"] in ("warning", "error")]
-    if not actionable and not any(f["title"].startswith("Top tasks") for f in findings):
+    if not actionable and not any(f.get("id") == "top_cpu" for f in findings):
         findings.append(_finding(
             "info",
             "No analysis heuristics flagged",
@@ -52487,36 +53359,9 @@ def _format_analysis_findings_text(
 def _render_workflow_analysis_html(
     findings: List[dict], scope_title: str = "",
 ) -> str:
-    """Render Analysis Findings as an HTML report-card section."""
-    if not findings:
-        return ""
-
-    def _esc(v: object) -> str:
-        return html.escape(str(v), quote=True)
-
-    items = []
-    for f in findings:
-        sev = f.get("severity", "info")
-        cls = {
-            "error": "sev-error",
-            "warning": "sev-warning",
-            "info": "finding-info",
-        }.get(sev, "finding-info")
-        extra = " finding-ok" if f.get("id") == "load_balance_ok" else ""
-        items.append(
-            f'<li class="{cls}{extra}">'
-            f'<strong>{_esc(f.get("title", "Finding"))}</strong>'
-            f' — {_esc(f.get("text", ""))}'
-            f"</li>"
-        )
-    body = "".join(items)
-    return (
-        f'<section class="report-card notes analysis-findings">'
-        f"<h2>Analysis Findings{_esc(scope_title)}</h2>"
-        f"<p class=\"detail-note\">Heuristic summary of load balance, WCET, "
-        f"blocking, thrashing, deadlines, tick health, and sync.</p>"
-        f"<ul class=\"findings-list\">{body}</ul></section>"
-    )
+    """Render Analysis Findings as structured HTML evidence cards."""
+    html_finding_cards = globals().get("html_finding_cards")
+    return html_finding_cards(findings, scope_title)
 
 
 class _AnalysisFindingsDialog(QDialog):
@@ -53029,7 +53874,10 @@ class _StatsPanel(QWidget):
         self._plot_interval_id: Optional[str] = None
         self._ai_enabled: bool = True
         self._distrib_ai_btn: Optional[QPushButton] = None
+        self._distrib_open_btn: Optional[QPushButton] = None
         self._distrib_has_task: bool = False
+        self._anomaly_inv_btn: Optional[QPushButton] = None
+        self._anomaly_has_rows: bool = False
         self._last_anomaly: Optional[dict] = None
         self._trace: Optional["BtfTrace"] = None
         self._export_scope_override: Optional[Tuple[int, int]] = None
@@ -53272,7 +54120,10 @@ class _StatsPanel(QWidget):
         self._section_drag_filter_by_id.clear()
         self._pending_sections.clear()
         self._distrib_ai_btn = None
+        self._distrib_open_btn = None
         self._distrib_has_task = False
+        self._anomaly_inv_btn = None
+        self._anomaly_has_rows = False
         self._drop_target_sid = None
         self._dragging_sid = None
         self._scroll_tail = None
@@ -53861,13 +54712,8 @@ class _StatsPanel(QWidget):
         html_make_collapsible_sections = globals().get("html_make_collapsible_sections")
         return html_make_collapsible_sections(
             doc_html,
-            default_expanded=(
-                "Analysis Findings",
-                "Statistics Notes",
-                "Core Utilisation (excl. IDLE/TICK)",
-                "Top Tasks by CPU (excl. IDLE/TICK)",
-                "Trace Health (TICK)",
-            ),
+            default_expanded=STATS_DEFAULT_EXPANDED,
+            toc_groups=STATS_TOC_GROUPS,
         )
 
     def _add_utilisation_row(self, blay: QVBoxLayout, ui_fs: str,
@@ -54002,6 +54848,13 @@ class _StatsPanel(QWidget):
             self._update_section_header_icon(sid)
         for grip in self._table_grips:
             grip.set_dark(is_dark)
+        for btn in (
+            getattr(self, "_distrib_ai_btn", None),
+            getattr(self, "_distrib_open_btn", None),
+            getattr(self, "_anomaly_inv_btn", None),
+        ):
+            if btn is not None:
+                self._style_stats_tool_button(btn)
         if refresh_tables:
             self._refresh_stats_table_themes()
         if self._plot_dlg is not None:
@@ -54288,12 +55141,32 @@ class _StatsPanel(QWidget):
         self._plot_interval_id = None
 
     def set_ai_enabled(self, enabled: bool) -> None:
-        """Gray out distribution Query with AI… when Settings → AI is off."""
+        """Gray out distribution / anomaly AI actions when Settings → AI is off."""
         self._ai_enabled = bool(enabled)
         dlg = getattr(self, "_plot_dlg", None)
         if dlg is not None and hasattr(dlg, "set_ai_enabled"):
             dlg.set_ai_enabled(self._ai_enabled)
         self._sync_distrib_query_ai_btn()
+        self._sync_anomaly_investigate_btn()
+
+    def _stats_tool_button_style(self) -> str:
+        """Theme-aware QSS for Statistics panel tool buttons (Web ``stats-tool-btn``)."""
+        if self._is_dark:
+            fg, border, hover = "#D4D4D4", "#3C3C3C", "rgba(255,255,255,0.08)"
+        else:
+            fg, border, hover = "#1E1E1E", "#C8C8C8", "rgba(0,0,0,0.06)"
+        return (
+            "QPushButton {"
+            f" color: {fg}; background: transparent; border: 1px solid {border};"
+            " border-radius: 4px; padding: 3px 8px;"
+            "}"
+            f"QPushButton:hover:!disabled {{ background: {hover}; }}"
+            "QPushButton:disabled { color: #858585; }"
+        )
+
+    def _style_stats_tool_button(self, btn: QPushButton) -> None:
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(self._stats_tool_button_style())
 
     def _sync_distrib_query_ai_btn(self) -> None:
         btn = getattr(self, "_distrib_ai_btn", None)
@@ -54308,6 +55181,21 @@ class _StatsPanel(QWidget):
             btn.setToolTip("Select a task to query this distribution")
         else:
             btn.setToolTip("Open the AI Assistant and explain this distribution")
+
+    def _sync_anomaly_investigate_btn(self) -> None:
+        btn = getattr(self, "_anomaly_inv_btn", None)
+        if btn is None:
+            return
+        on = bool(self._ai_enabled)
+        has_rows = bool(getattr(self, "_anomaly_has_rows", False))
+        btn.setEnabled(on and has_rows)
+        if not on:
+            btn.setToolTip("Enable AI Assistant in Settings → AI")
+        elif not has_rows:
+            btn.setToolTip("No timeline anomalies in this scope")
+        else:
+            btn.setToolTip(
+                "Open the AI Assistant and investigate the selected or top anomaly")
 
     def _query_plot_distribution_ai(self) -> None:
         if not self._ai_enabled:
@@ -55720,6 +56608,8 @@ class _StatsPanel(QWidget):
         })
 
     def _investigate_anomaly(self, rows: Optional[List[dict]] = None) -> None:
+        if not self._ai_enabled:
+            return
         ev = self._last_anomaly
         if not isinstance(ev, dict):
             ev = (rows or [None])[0] if rows else None
@@ -56281,15 +57171,23 @@ class _StatsPanel(QWidget):
 
         rng = self._stats_range()
         lo = hi = None
+        n_cur = 0
         if rng is not None:
-            lo, hi, _n_cur = rng
+            lo, hi, n_cur = rng
             total_ns = hi - lo
             span_str = _format_time(total_ns, trace.time_scale)
-            scope_title = f" (cursor range C1–C{_n_cur})"
+            scope_title = f" (cursor range C1–C{n_cur})"
+            scope_type = f"Cursor range C1–C{n_cur}"
         else:
             total_ns = trace.time_max - trace.time_min
             span_str = _format_time(total_ns, trace.time_scale)
             scope_title = ""
+            scope_type = "Full trace"
+            n_cur = 0
+
+        wnd = self.window()
+        tab = getattr(wnd, "_active_tab", None) if wnd is not None else None
+        trace_name = os.path.basename(str(getattr(tab, "path", "") or "")) or "trace"
 
         if lo is not None and hi is not None:
             sti_count = sum(
@@ -56431,7 +57329,7 @@ class _StatsPanel(QWidget):
             )
             seg_count = sum(1 for s in trace.segments if _seg_overlaps_range(s, lo, hi))
             range_note = (
-                f"<li><strong>Cursor range:</strong> C1–C{_n_cur}, "
+                f"<li><strong>Cursor range:</strong> C1–C{n_cur}, "
                 f"{_esc(_format_time(lo, trace.time_scale))} … "
                 f"{_esc(_format_time(hi, trace.time_scale))}. "
                 f"CPU% uses overlapping active time; slice metrics use segments fully inside the range.</li>"
@@ -56564,9 +57462,8 @@ class _StatsPanel(QWidget):
     <section class=\"report-card\"><h2>Tag Analysis{_esc(scope_title)}</h2>
     <table><thead><tr><th>Channel</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
     <tbody>{tag_body}</tbody></table>
-    <h3 class=\"sub\">Tag samples (highest value first)</h3>{tag_note}
-    <table><thead><tr><th>Tag</th><th>Time</th><th>Value</th><th>Core</th></tr></thead>
-    <tbody>{tag_sample_body}</tbody></table></section>"""
+    <h3 class=\"sub\">Tag channels over time</h3>
+    {html_tag_overview(tag_samples, time_fmt=lambda s: s.get("time") or "")}</section>"""
 
         ts = trace.time_scale
         lc_rows_html = _task_lifecycle_rows(trace, lo, hi)
@@ -56592,8 +57489,25 @@ class _StatsPanel(QWidget):
             f"<td>{100.0*bnc/cnt:.1f}%</td><td>{_esc(_format_time(avg_gap, ts))}</td></tr>"
             for fc, tc, cnt, bnc, avg_gap in pair_rows_html
         ) or '<tr><td colspan="6" class="empty">No migrations in scope</td></tr>'
+        _pair_cores = []
+        for fc, tc, *_rest in pair_rows_html:
+            if fc not in _pair_cores:
+                _pair_cores.append(fc)
+            if tc not in _pair_cores:
+                _pair_cores.append(tc)
+        _pair_idx = {c: i for i, c in enumerate(_pair_cores)}
+        _pair_cells = [[0.0] * len(_pair_cores) for _ in _pair_cores]
+        for fc, tc, cnt, *_r in pair_rows_html:
+            if fc in _pair_idx and tc in _pair_idx:
+                _pair_cells[_pair_idx[fc]][_pair_idx[tc]] = float(cnt)
+        _pair_heat = html_matrix_heatmap(
+            _pair_cores, _pair_cores, _pair_cells,
+            title="Core migration count (source → destination)",
+            unit="",
+        ) if _pair_cores else ""
         core_pair_html = (
             f'<section class="report-card"><h2>Core-Pair Migration Summary{_esc(scope_title)}</h2>'
+            f'{_pair_heat}'
             '<table><thead><tr><th>From</th><th>To</th><th>Count</th>'
             '<th>Bounces</th><th>Bounce %</th><th>Avg Gap</th></tr></thead>'
             f'<tbody>{pair_body}</tbody></table></section>'
@@ -56689,8 +57603,22 @@ class _StatsPanel(QWidget):
             ) + "</tr>"
             for r in _tc.get("rows") or []
         ) or f'<tr><td colspan="{len(_tc_cores) + 1}" class="empty">No on-CPU slices</td></tr>'
+        _tc_heat = html_matrix_heatmap(
+            [r.get("task") or "" for r in (_tc.get("rows") or [])][:24],
+            _tc_cores,
+            [
+                [
+                    float((r.get("cells") or {}).get(c, {}).get("pct_span") or 0)
+                    for c in _tc_cores
+                ]
+                for r in (_tc.get("rows") or [])[:24]
+            ],
+            title="Task × Core utilisation (% of span)",
+            unit="%",
+        )
         task_core_html = (
             f'<section class="report-card"><h2>Task × Core{_esc(scope_title)}</h2>'
+            f'{_tc_heat}'
             f'<table><thead><tr>{_tc_head}</tr></thead>'
             f'<tbody>{_tc_body}</tbody></table></section>'
         )
@@ -56741,6 +57669,7 @@ class _StatsPanel(QWidget):
         task_health_html = (
             f'<section class="report-card"><h2>Task Health{_esc(scope_title)}</h2>'
             '<p class="detail-note">Heuristic score from measured statistics, not an AI probability.</p>'
+            f'{html_health_bars(_th_rows)}'
             '<table><thead><tr><th>Task</th><th>Score</th><th>Exec</th><th>Block</th>'
             '<th>Period</th><th>Mig</th><th>Deadline</th><th>CPU</th></tr></thead>'
             f'<tbody>{_th_body}</tbody></table></section>'
@@ -56781,11 +57710,10 @@ class _StatsPanel(QWidget):
             f"<td>{_esc(r.get('reason') or '')}</td></tr>"
             for r in _an_rows
         ) or '<tr><td colspan="5" class="empty">No timeline anomalies in this scope</td></tr>'
-        anomalies_html = (
-            f'<section class="report-card"><h2>Timeline Anomalies{_esc(scope_title)}</h2>'
+        anomalies_table = (
             '<table><thead><tr><th>Time</th><th>Kind</th><th>Task</th>'
             '<th>Duration</th><th>Why</th></tr></thead>'
-            f'<tbody>{_an_body}</tbody></table></section>'
+            f'<tbody>{_an_body}</tbody></table>'
         )
         _woe_rows = collect_worst_events(_ux_evs, 12)
         _woe_body = "".join(
@@ -56796,11 +57724,10 @@ class _StatsPanel(QWidget):
             f"<td>{_esc(r.get('reason') or KIND_LABEL.get(str(r.get('kind') or ''), ''))}</td></tr>"
             for r in _woe_rows
         ) or '<tr><td colspan="5" class="empty">No episodes in this scope</td></tr>'
-        worst_html = (
-            f'<section class="report-card"><h2>Worst Events{_esc(scope_title)}</h2>'
+        worst_table = (
             '<table><thead><tr><th>Time</th><th>Kind</th><th>Task</th>'
             '<th>Duration</th><th>Why</th></tr></thead>'
-            f'<tbody>{_woe_body}</tbody></table></section>'
+            f'<tbody>{_woe_body}</tbody></table>'
         )
         _wo = waiter_owner_matrix(pair_mutex_waits(harvest_mutex_holds(trace, lo, hi)))
         _wo_tasks = _wo.get("tasks") or []
@@ -56855,6 +57782,7 @@ class _StatsPanel(QWidget):
             f'<section class="report-card"><h2>Response Time{_esc(scope_title)}</h2>'
             '<p class="detail-note">Heuristic ready→completion from adjacent slices, '
             'not an explicit BTF release/completion pair.</p>'
+            f'{html_percentile_bars(_rt_rows, title="Response P50–P99")}'
             '<table><thead><tr><th>Task</th><th>N</th><th>Min</th><th>Avg</th><th>Max</th>'
             '<th>p50</th><th>p90</th><th>p95</th><th>p99</th><th>p99.9</th>'
             '<th>Jitter</th><th>CV</th></tr></thead>'
@@ -56865,17 +57793,23 @@ class _StatsPanel(QWidget):
             f"<tr><td>{_esc(r.get('task') or '')}</td>"
             f"<td>{_esc(_format_time(int(r.get('duration') or 0), trace.time_scale))}</td>"
             f"<td>{_esc(_format_time(int(r.get('exec_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time(max(0, int(r.get('duration') or 0) - int(r.get('exec_ns') or 0)), trace.time_scale))}</td>"
             f"<td>{_esc(_format_time(int(r.get('preempt_ns') or 0), trace.time_scale))}</td>"
             f"<td>{_esc(_format_time(int(r.get('wait_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('migration_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('other_ns') or 0), trace.time_scale))}</td></tr>"
+            f"<td>{_esc(_format_time(int(r.get('migration_ns') or 0), trace.time_scale))}</td></tr>"
             for r in _cp_rows
         ) or '<tr><td colspan="7" class="empty">Need at least one on-CPU slice</td></tr>'
-        crit_path_html = (
-            f'<section class="report-card"><h2>Critical Path{_esc(scope_title)}</h2>'
+        crit_note = (
+            '<p class="detail-note">Duration is the heuristic ready-to-completion window. '
+            "Exec is own on-CPU time; Off-CPU is Duration − Exec. "
+            "Preempt, Wait, and Migration overlap (Wait includes preemption gaps) "
+            "and must not be stacked as a split of Duration.</p>"
+        )
+        crit_path_table = (
             '<table><thead><tr><th>Task</th><th>Duration</th><th>Exec</th>'
-            '<th>Preempt</th><th>Wait</th><th>Mig</th><th>Other</th></tr></thead>'
-            f'<tbody>{_cp_body}</tbody></table></section>'
+            '<th>Off-CPU</th><th>Preempt (overlap)</th><th>Wait (overlap)</th>'
+            '<th>Mig (overlap)</th></tr></thead>'
+            f'<tbody>{_cp_body}</tbody></table>'
         )
         _pat_rows = recurring_patterns(_an_rows, 2)
         _pat_body = "".join(
@@ -56886,11 +57820,18 @@ class _StatsPanel(QWidget):
             f"<td>{_esc(r.get('reason') or '')}</td></tr>"
             for r in _pat_rows
         ) or '<tr><td colspan="5" class="empty">No repeating anomaly kinds in this scope</td></tr>'
-        patterns_html = (
-            f'<section class="report-card"><h2>Recurring Patterns{_esc(scope_title)}</h2>'
+        patterns_table = (
             '<table><thead><tr><th>Task</th><th>Kind</th><th>Count</th>'
             '<th>Worst</th><th>Why</th></tr></thead>'
-            f'<tbody>{_pat_body}</tbody></table></section>'
+            f'<tbody>{_pat_body}</tbody></table>'
+        )
+        investigate_html = html_investigate_anomalies(
+            anomalies_table=anomalies_table,
+            worst_table=worst_table,
+            patterns_table=patterns_table,
+            crit_path_table=crit_path_table,
+            crit_note=crit_note,
+            scope_title=scope_title,
         )
         _jit_rows = unified_jitter(_ux_evs, self._dispatch_sample_map(trace, lo, hi))
         _jit_body = "".join(
@@ -56956,8 +57897,19 @@ class _StatsPanel(QWidget):
             ) + "</tr>"
             for r in (_ct.get("bins") or [])
         ) or f'<tr><td colspan="{len(_ct_cores) + 1}" class="empty">No on-CPU slices</td></tr>'
+        _ct_heat = html_matrix_heatmap(
+            [_format_time(int(r.get("start") or 0), trace.time_scale) for r in (_ct.get("bins") or [])],
+            _ct_cores,
+            [
+                [float(((r.get("cells") or {}).get(c) or {}).get("pct") or 0) for c in _ct_cores]
+                for r in (_ct.get("bins") or [])
+            ],
+            title="Core utilisation over time",
+            unit="%",
+        )
         core_time_html = (
             f'<section class="report-card"><h2>Core Utilization Over Time{_esc(scope_title)}</h2>'
+            f'{_ct_heat}'
             f'<table><thead><tr>{_ct_head}</tr></thead>'
             f'<tbody>{_ct_body}</tbody></table></section>'
         )
@@ -56979,152 +57931,94 @@ class _StatsPanel(QWidget):
             analysis_findings, trace, lo, hi)
         analysis_html = _render_workflow_analysis_html(analysis_findings, scope_title)
 
+        warn_n = sum(1 for f in analysis_findings if f.get("severity") == "warning")
+        err_n = sum(1 for f in analysis_findings if f.get("severity") == "error")
+        status_kind = "error" if err_n else ("warn" if warn_n else "ok")
+        status_value = (
+            f"{err_n} error(s), {warn_n} warning(s)" if (err_n or warn_n)
+            else "No heuristic warnings"
+        )
+        _pcts = [pct for _, pct in core_rows] or [0.0]
+        util_lo, util_hi = min(_pcts), max(_pcts)
+        lb_txt = f"{_lb['score']:.0f}%" if _lb else "—"
+        lb_hint = (
+            f"{'Balanced' if _lb and _lb['score'] >= 85 else 'Uneven'}"
+            if _lb else "Need 2+ cores"
+        )
+        worst_rt = None
+        for r in _rt_rows:
+            p99 = int(r.get("p99_ns") or 0)
+            if worst_rt is None or p99 > int(worst_rt.get("p99_ns") or 0):
+                worst_rt = r
+        mig_total = sum(int(r[2]) for r in mig_rows) if mig_rows else 0
+        tick_label = str(tick.get("health") or "n/a").upper() if tick.get("tick_count") else "No TICK"
+        tick_kind = "ok"
+        if tick.get("tick_count"):
+            h = str(tick.get("health") or "").lower()
+            tick_kind = "error" if h == "bad" else ("warn" if h and h != "good" else "ok")
+        dl_n = 0
+        if self._cpu_budget_pct > 0 or self._task_deadlines_ns:
+            dl_n = len(_dl_viols.get("slice_violations") or []) + len(_dl_viols.get("cpu_violations") or [])
+        kpis = [
+            {"label": "Overall status", "value": status_value, "kind": status_kind},
+            {"label": "Load balance", "value": lb_txt, "hint": lb_hint,
+             "kind": "warn" if _lb and (_lb["score"] < 70 or _lb["stddev"] > 30) else "ok"},
+            {"label": "Core utilisation range",
+             "value": f"{util_lo:.1f}–{util_hi:.1f}%",
+             "hint": "Wall-clock span, one-core = 100%"},
+            {"label": "Worst response P99",
+             "value": (_format_time(int(worst_rt.get("p99_ns") or 0), trace.time_scale)
+                       if worst_rt else "—"),
+             "hint": str(worst_rt.get("task") or "") if worst_rt else ""},
+            {"label": "Migration activity", "value": f"{mig_total:,}",
+             "hint": "Total core hops in scope"},
+            {"label": "Tick health", "value": tick_label, "kind": tick_kind},
+            {"label": "Synchronization issues", "value": f"{len(sync_issues_scoped):,}",
+             "kind": "warn" if sync_issues_scoped else "ok"},
+            {"label": "Deadline misses", "value": f"{dl_n:,}",
+             "kind": "error" if dl_n else "ok"},
+        ]
+        start_s = _format_time(lo if lo is not None else trace.time_min, trace.time_scale)
+        end_s = _format_time(hi if hi is not None else trace.time_max, trace.time_scale)
+        sample_note = ""
+        if exec_rows and all(int(r[2]) < 8 for r in exec_rows):
+            sample_note = (
+                "Few execution samples in this scope; percentiles and comparisons "
+                "may be unreliable."
+            )
+        scope_html = html_scope_identity_card(
+            filename=trace_name,
+            scope_type=scope_type,
+            start=start_s,
+            end=end_s,
+            duration=span_str,
+            cores=len(trace.core_names or []),
+            filters="Limit to C1–Cn" if lo is not None else "None",
+            timestamp_mode="Trace capture origin (not wall-clock)",
+            task_count=task_count,
+            sample_note=sample_note,
+        )
+        meta_html = html_trace_metadata_card(
+            span=span_str,
+            tasks=task_count,
+            segments=seg_count,
+            sti_events=sti_count,
+            context_switches=ctx_count,
+            core_gap_avg=_format_time(int(round(sum(core_gaps) / len(core_gaps))), trace.time_scale) if core_gaps else "",
+            core_gap_max=_format_time(max(core_gaps), trace.time_scale) if core_gaps else "",
+            scope_title=scope_title,
+        )
+        glossary_html = html_glossary(range_note=range_note)
+
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        stats_extra_css = f"""
-:root {{ --line-strong: #c8d2e0; --stripe: #f7f9fc; }}
-.report.report-wide {{ max-width: 1160px; }}
-.kpi-grid {{
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 10px;
-  margin-bottom: 16px;
-}}
-.kpi {{
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 12px 14px;
-  box-shadow: 0 2px 8px rgba(30, 60, 90, 0.06);
-}}
-.kpi .k {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }}
-.kpi .v {{ margin-top: 4px; font-size: 20px; font-weight: 700; color: #0f2b47; }}
-.notes {{ border-left: 4px solid var(--accent); }}
-.notes ul {{ margin: 8px 0 0 18px; padding: 0; }}
-.notes li {{ margin: 6px 0; line-height: 1.45; }}
-table {{ border-collapse: separate; border-spacing: 0; width: 100%; }}
-th, td {{ border-bottom: 1px solid var(--line); padding: 8px 10px; font-size: 13px; text-align: right; }}
-th:first-child, td:first-child {{ text-align: left; }}
-thead th {{
-  background: #f1f5fb;
-  color: #284563;
-  font-weight: 600;
-  border-top: 1px solid var(--line-strong);
-  border-bottom: 1px solid var(--line-strong);
-}}
-tbody tr:nth-child(even) td {{ background: var(--stripe); }}
-.empty {{ text-align: center !important; color: var(--muted); }}
-.detail-note {{ margin: 6px 0 8px; font-size: 12px; color: var(--muted); }}
-h3.sub {{ margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }}
-.sev-error {{ color: #c0392b; font-weight: 600; }}
-.sev-warning {{ color: #9a4d00; font-weight: 600; }}
-.finding-info {{ color: var(--ink, #182230); }}
-.finding-ok {{ color: #166534; font-weight: 600; }}
-.findings-list {{ margin: 8px 0 0 18px; padding: 0; }}
-.findings-list li {{ margin: 8px 0; line-height: 1.45; }}
-.finding-wf {{
-  color: var(--muted); font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.4px;
-}}
-.analysis-findings {{ border-left: 4px solid #c0392b; }}
-.report-toc {{
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 12px 14px;
-  margin: 14px 0;
-  box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
-}}
-.report-toc-head {{
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin: 0 0 8px 0;
-}}
-.report-toc h2 {{ margin: 0; }}
-.report-toc-actions {{ display: flex; gap: 8px; flex-wrap: wrap; }}
-.toc-btn {{
-  font: inherit;
-  font-size: 12px;
-  padding: 4px 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #f1f5fb;
-  color: var(--accent);
-  cursor: pointer;
-}}
-.toc-btn:hover {{ background: #e4edf8; }}
-.report-toc ul {{ margin: 0; padding: 0 0 0 18px; columns: 2; column-gap: 24px; }}
-.report-toc li {{ margin: 4px 0; }}
-.report-toc a {{ color: var(--accent); text-decoration: none; }}
-.report-toc a:hover {{ text-decoration: underline; }}
-details.report-card {{ scroll-margin-top: 12px; }}
-details.report-card > summary {{ cursor: pointer; list-style: none; }}
-details.report-card > summary::-webkit-details-marker {{ display: none; }}
-details.report-card > summary h2 {{ display: inline-block; margin: 0; }}
-details.report-card > summary::before {{
-  content: "\\25B8";
-  display: inline-block;
-  width: 14px;
-  margin-right: 6px;
-  color: var(--accent);
-  transition: transform 0.15s ease;
-}}
-details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
-{self._html_export_util_css()}
-""".strip()
+        stats_extra_css = f"{STATS_HTML_EXTRA_CSS}\n{self._html_export_util_css()}".strip()
 
         body = f"""
-        <section class=\"kpi-grid\">
-            <article class=\"kpi\"><div class=\"k\">Span{_esc(scope_title)}</div><div class=\"v\">{_esc(span_str)}</div></article>
-            <article class=\"kpi\"><div class=\"k\">Tasks</div><div class=\"v\">{task_count:,}</div></article>
-            <article class=\"kpi\"><div class=\"k\">Segments</div><div class=\"v\">{seg_count:,}</div></article>
-            <article class=\"kpi\"><div class=\"k\">STI Events</div><div class=\"v\">{sti_count:,}</div></article>
-            {sched_kpi}
-        </section>
-
+        {html_diagnostic_kpi_grid(kpis)}
         <!--TOC-->
-
+        {scope_html}
         {analysis_html}
-
-        <section class=\"report-card notes\">
-        <h2>Statistics Notes</h2>
-        <ul>
-            {range_note}
-            <li><strong>Execution Time Per Slice:</strong> Duration of each continuous task run between two context switches. Lower and tighter values indicate more predictable execution.</li>
-            <li><strong>Inter-Arrival Time:</strong> Time between consecutive activations of the same task (slice start to next slice start). It reflects activation cadence and jitter.</li>
-            <li><strong>Blocking Time:</strong> Off-CPU gap between the end of one slice and the start of the next for the same task (scheduling latency until resume). It is not end-to-end response time, which requires explicit release and completion events.</li>
-      <li><strong>Preemption Chain Analysis:</strong> For each blocking gap of a victim task, identifies which task ran on the same core during that gap. High counts or long totals point to recurring preemption bottlenecks.</li>
-      <li><strong>Priority Inheritance:</strong> When traces include <code>create pri:N</code> on task create and <code>set_priority</code> STI events, lists tasks boosted above their base priority. <em>L/M/H pattern</em> flags classic priority-inversion geometry (medium-priority task between base and peak).</li>
-      <li><strong>Mutex / Semaphore:</strong> Pairs <code>take</code>/<code>give</code> STI events by object pointer (<code>0x........</code> in the note). Reports orphan gives, cross-task gives, unmatched takes, delete-while-held, and multi-mutex hold at trace end (deadlock risk).</li>
-      <li><strong>Interval Analysis:</strong> Pairs <code>interval_start</code> / <code>interval_stop</code> STI events by id; shows count, min/avg/max/p95 duration per interval id (Tracealyzer-style interval plot).</li>
-      <li><strong>Tag Analysis:</strong> Numeric samples from tag0_event … tag7_event STI channels (note field); scatter plot shows value over time.</li>
-      <li><strong>Task × Core:</strong> Per-task execution share of the scoped span on each core.</li>
-      <li><strong>Task Health:</strong> Heuristic 0–100 score from measured statistics, not an AI probability.</li>
-      <li><strong>Timeline Anomalies / Worst Events:</strong> Unusual long tails, migration / preemption / ISR / wakeup bursts, CPU spikes, idle gaps, and the longest execution, blocking, and inter-arrival episodes in scope.</li>
-      <li><strong>Response Time:</strong> Heuristic ready→completion from adjacent slices (previous slice end → this slice end). Not an explicit BTF release/completion pair.</li>
-      <li><strong>Critical Path:</strong> Longest heuristic response windows split into exec / preempt / wait / migration.</li>
-      <li><strong>Period / Jitter:</strong> Median inter-arrival as expected period, with RMS jitter, CV, missed (&gt; 1.5×) and extra (&lt; 0.5×) activations.</li>
-      <li><strong>Unified Jitter:</strong> Max−Min spread and CV for execution, blocking, inter-arrival, heuristic response, STI dispatch latency, and wake-to-run (response wait stand-in).</li>
-      <li><strong>Distribution Explorer:</strong> Choose a metric and task, then open the existing histogram/CDF plot.</li>
-      <li><strong>Recurring Patterns:</strong> Anomaly kinds that repeat for the same task in this scope.</li>
-      <li><strong>Preemption Matrix:</strong> Victim × preemptor overlap during off-CPU gaps on the same core, plus preemptor ranking.</li>
-      <li><strong>Waiter × Owner:</strong> Heuristic mutex handoff matrix (next distinct acquirer × previous holder), not a kernel wait queue.</li>
-      <li><strong>Mutex Blocking:</strong> Per-task mutex wait totals from those heuristic handoffs.</li>
-      <li><strong>Core Utilization Over Time:</strong> Per-core busy percent in equal time bins of the current scope.</li>
-            <li><strong>Context switches:</strong> Count of segment boundaries on all cores whose start time falls inside the statistics scope.</li>
-            <li><strong>Min (Minimum):</strong> The fastest execution time recorded. It represents the best-case scenario under zero system load.</li>
-            <li><strong>Max (Maximum):</strong> The slowest execution time recorded. It identifies worst-case bottlenecks, spikes, or resource contention.</li>
-            <li><strong>Average (Mean):</strong> Total execution time divided by the number of slices. It shows general performance but is heavily skewed by extreme outliers.</li>
-            <li><strong>TrimMean(5%):</strong> Average after removing the fastest 5% and slowest 5% slices. It reflects typical performance while reducing outlier impact.</li>
-            <li><strong>Jitter:</strong> Observed spread, calculated as Max − Min for samples in scope.</li>
-            <li><strong>σ (Population Standard Deviation):</strong> Typical dispersion of all observed samples around their arithmetic mean.</li>
-            <li><strong>P50 (Median):</strong> The midpoint latency where half of slices are faster and half are slower. It captures typical-case behaviour.</li>
-            <li><strong>P95 (95th Percentile):</strong> The threshold under which 95% of all slices execute. It is the best metric for user experience because it ignores rare anomalies while capturing real-world slowdowns.</li>
-        </ul>
-    </section>
-
+        {meta_html}
     {core_util_html}
     {tick_health_html}
     {core_breakdown_html}
@@ -57145,12 +58039,9 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
     {lifecycle_html}
     {deadline_html}
     {task_health_html}
-    {anomalies_html}
-    {worst_html}
-    {crit_path_html}
-    {patterns_html}
+    {investigate_html}
     {_render_exec_table(exec_rows)}
-    {_render_stats_table(f'Blocking Time (off-CPU gap){scope_title}', block_rows)}
+    {_render_stats_table(f'Off-CPU Time (Blocking Time){scope_title}', block_rows)}
     {dispatch_html}
     {_render_stats_table(f'Inter-Arrival Time{scope_title}', inter_rows)}
     {period_html}
@@ -57169,7 +58060,9 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
     {queue_html}
     {interval_html}
     {tag_html}
+    {glossary_html}
     {HTML_REPORT_TOC_SCRIPT}
+    {HTML_REPORT_INTERACTIVE_SCRIPT}
 """
 
         report = btf_html_report_document(
@@ -57184,13 +58077,8 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
         with open(path, "w", encoding="utf-8") as f:
             f.write(html_apply_collapsible_toc(
                 report,
-                default_expanded=(
-                    "Analysis Findings",
-                    "Statistics Notes",
-                    "Core Utilisation (excl. IDLE/TICK)",
-                    "Top Tasks by CPU (excl. IDLE/TICK)",
-                    "Trace Health (TICK)",
-                ),
+                default_expanded=STATS_DEFAULT_EXPANDED,
+                toc_groups=STATS_TOC_GROUPS,
             ))
 
     def _export_html(self) -> None:
@@ -58478,9 +59366,13 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
                 evs, 12, waits, self._task_deadlines_ns)
             inv_row = QHBoxLayout()
             inv_btn = QPushButton("Investigate…")
-            inv_btn.setToolTip(
-                "Open the AI Assistant and investigate the selected or top anomaly")
+            inv_btn.setSizePolicy(
+                QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            self._style_stats_tool_button(inv_btn)
             inv_btn.clicked.connect(lambda _=False, rs=rows: self._investigate_anomaly(rs))
+            self._anomaly_inv_btn = inv_btn
+            self._anomaly_has_rows = bool(rows)
+            self._sync_anomaly_investigate_btn()
             inv_row.addWidget(inv_btn)
             inv_row.addStretch(1)
             blay.addLayout(inv_row)
@@ -58872,7 +59764,11 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             hist = _HistogramWidget(
                 [], trace.time_scale, QColor("#5B9BD5"), self._is_dark,
                 value_as_time=True, show_variability=True)
-            hist.setMinimumHeight(200)
+            # Fixed height — Expanding steals space from Metric/Task and the
+            # Open histogram / Query with AI… row when the stats dock is short.
+            hist.setFixedHeight(200)
+            hist.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             scale_box = QComboBox()
             scale_box.addItems(["Auto", "Linear", "p5–p95", "Log duration"])
 
@@ -58939,26 +59835,38 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             open_btn = QPushButton("Open histogram")
             open_btn.setSizePolicy(
                 QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            open_btn.setMinimumHeight(22)
+            self._style_stats_tool_button(open_btn)
             open_btn.clicked.connect(_open)
+            self._distrib_open_btn = open_btn
             ai_btn = QPushButton("Query with AI…")
             ai_btn.setSizePolicy(
                 QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            ai_btn.setMinimumHeight(22)
+            self._style_stats_tool_button(ai_btn)
             ai_btn.clicked.connect(_query_ai)
             self._distrib_ai_btn = ai_btn
+            self._sync_distrib_query_ai_btn()
             combo_pol = QSizePolicy(
                 QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             metric.setSizePolicy(combo_pol)
             task_box.setSizePolicy(combo_pol)
             metric.setMinimumWidth(72)
             task_box.setMinimumWidth(72)
+            # Container widget (not a bare nested layout) so the toolbar keeps
+            # a non-zero height when the section body is height-constrained.
+            tools_w = QWidget()
+            tools_w.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            tools = QVBoxLayout(tools_w)
+            tools.setContentsMargins(0, 0, 0, 0)
+            tools.setSpacing(4)
             sel = QHBoxLayout()
             sel.setSpacing(6)
             sel.addWidget(QLabel("Metric"))
             sel.addWidget(metric, 1)
             sel.addWidget(QLabel("Task"))
             sel.addWidget(task_box, 1)
-            tools = QVBoxLayout()
-            tools.setSpacing(4)
             tools.addLayout(sel)
             hist_btns = QHBoxLayout()
             hist_btns.setSpacing(6)
@@ -58966,13 +59874,17 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
             hist_btns.addWidget(ai_btn, 0, Qt.AlignmentFlag.AlignLeft)
             hist_btns.addStretch(1)
             tools.addLayout(hist_btns)
-            blay.addLayout(tools)
+            blay.addWidget(tools_w)
             blay.addWidget(summary)
-            scale_row = QHBoxLayout()
+            scale_row_w = QWidget()
+            scale_row_w.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            scale_row = QHBoxLayout(scale_row_w)
+            scale_row.setContentsMargins(0, 0, 0, 0)
             scale_row.addWidget(QLabel("Histogram scale"))
             scale_row.addWidget(scale_box)
             scale_row.addStretch(1)
-            blay.addLayout(scale_row)
+            blay.addWidget(scale_row_w)
             blay.addWidget(hist)
             _refresh_summary()
 

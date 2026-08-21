@@ -150,7 +150,7 @@ class TraceCompareTests(unittest.TestCase):
         self.assertIn("Cores A", csv)
         self.assertIn("Primary A", csv)
         self.assertIn("Max A", csv)
-        self.assertRegex(html, r'<details class="report-card" id="sec-\d+" open>')
+        self.assertRegex(html, r'<details class="report-card" id="sec-overview" open>')
         self.assertIn("compare-chart", html)
         self.assertIn("Core utilisation", html)
         self.assertIn("Summary changes", html)

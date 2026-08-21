@@ -76,6 +76,29 @@ _ISR_RE = re.compile(r"(isr|irq|interrupt)", re.IGNORECASE)
 CORE_TIME_BINS = 16
 BURST_WINDOW_NS = 1_000_000
 
+
+def format_burst_window_ns(window_ns: int) -> str:
+    """Format a burst detector window that is always stored in nanoseconds."""
+    ns = int(window_ns or 0)
+    if ns <= 0:
+        return "0 ns"
+    if ns % 1_000_000_000 == 0:
+        return f"{ns // 1_000_000_000} s"
+    if ns % 1_000_000 == 0:
+        return f"{ns // 1_000_000} ms"
+    if ns % 1_000 == 0:
+        return f"{ns // 1_000} µs"
+    if ns >= 1_000_000:
+        return f"{ns / 1_000_000:g} ms"
+    if ns >= 1_000:
+        return f"{ns / 1_000:g} µs"
+    return f"{ns} ns"
+
+
+def format_burst_reason(count: int, label: str, window_ns: int) -> str:
+    stem = str(label or "").replace(" burst", "").strip() or "event"
+    return f"{count:,} {stem}s within {format_burst_window_ns(window_ns)}"
+
 _JUMP_RE = re.compile(r"jump:([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
 _TASK_RE = re.compile(r"\b([A-Za-z_][\w.-]*\[\d+\])")
 _DELTA_RE = re.compile(
@@ -1481,7 +1504,7 @@ def _migration_bursts(events: Sequence[dict], window_ns: int = 1000) -> List[dic
                 item["stop"] = int(last.get("stop") or last.get("start") or 0)
                 item["duration"] = max(
                     int(item["stop"]) - int(item["start"]), count)
-                item["reason"] = f"{count} migrations within {window_ns} ns"
+                item["reason"] = format_burst_reason(count, "migration", window_ns)
                 out.append(item)
                 i = j + 1
             else:
@@ -1970,9 +1993,7 @@ def _kind_bursts(
             item["start"] = int(first.get("start") or 0)
             item["stop"] = int(last.get("stop") or last.get("start") or 0)
             item["duration"] = max(int(item["stop"]) - int(item["start"]), count)
-            item["reason"] = f"{count} {label}s within {window_ns} ns"
-            if label.endswith(" burst"):
-                item["reason"] = f"{count} {label.replace(' burst', '')}s within {window_ns} ns"
+            item["reason"] = format_burst_reason(count, label, window_ns)
             out.append(item)
             i = j + 1
         else:
