@@ -25,7 +25,7 @@ MIGRATION_IMG := ../images/migration.svg
 
 PANDOC ?= pandoc
 MARP ?= npx --yes @marp-team/marp-cli
-DOCS := $(BUILDS)
+DOCS := docs
 
 DEMO_XML ?= demos/demo_8cores/demo_8cores.xml
 DEMO_LANG ?=

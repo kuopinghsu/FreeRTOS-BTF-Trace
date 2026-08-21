@@ -173,8 +173,16 @@ export async function parseBtf(text, progressCallback) {
         if (spaceIdx !== -1) {
           const key = stripped.slice(0, spaceIdx)
           const value = stripped.slice(spaceIdx + 1).trim()
-          if (/^[\w.-]+$/.test(key)) meta[key] = value
-          if (key === 'timeScale') timeScale = value
+          if (/^[\w.-]+$/.test(key)) {
+            // Spec Table uses #timescale; Vector examples and FreeRTOS
+            // emitters use #timeScale — accept any case.
+            if (key.toLowerCase() === 'timescale') {
+              meta.timeScale = value
+              timeScale = value
+            } else {
+              meta[key] = value
+            }
+          }
         }
       } else {
         const parts = line.split(',')

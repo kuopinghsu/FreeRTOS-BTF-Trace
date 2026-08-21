@@ -63,6 +63,26 @@ class TestParseTimeBounds(unittest.TestCase):
         self.assertEqual(trace.segments[0].start, 22_000)
         self.assertEqual(trace.segments[0].end, 30_000)
 
+    def test_timescale_header_case_insensitive(self) -> None:
+        for header in ("#timeScale us", "#timescale us", "#TIMESCALE us", "#TimeScale us"):
+            text = "\n".join([
+                "#version 2.2.0",
+                header,
+                "1000,Core_0,0,T,Worker,0,resume,",
+                "2000,Core_0,0,T,Worker,0,preempt,",
+                "",
+            ])
+            with tempfile.NamedTemporaryFile("w", suffix=".btf", delete=False,
+                                             encoding="utf-8") as fh:
+                fh.write(text)
+                path = fh.name
+            try:
+                trace = _parse_btf(path)
+            finally:
+                Path(path).unlink(missing_ok=True)
+            self.assertEqual(trace.time_scale, "us", msg=header)
+            self.assertEqual(trace.meta.get("timeScale"), "us", msg=header)
+
 
 if __name__ == "__main__":
     unittest.main()

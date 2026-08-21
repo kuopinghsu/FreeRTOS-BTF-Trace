@@ -391,10 +391,10 @@ int genbtf(
 
         switch(event->types & EVENT_MASK) {
             case TRACE_EVENT_TASK_SWITCHED_IN:
-                fprintf(fout, "%" PRIu64 ",[%d/%04d]%s,0,T,[%d/%04d]%s,0,%s,%s\n",
+                /* BTF 2.3: resume source must be the Core (not the previous task). */
+                fprintf(fout, "%" PRIu64 ",Core_%d,0,T,[%d/%04d]%s,0,%s,%s\n",
                         current_time,
                         coreid,
-                        current_task[coreid], display_taskname(trace_data, current_task[coreid]),
                         coreid,
                         event->param1, display_taskname(trace_data, (int)event->param1),
                         "resume",

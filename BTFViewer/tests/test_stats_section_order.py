@@ -100,6 +100,49 @@ class StatsSectionOrderLayoutTest(unittest.TestCase):
              "sep_block", "hdr_block", "body_block"],
         )
 
+    def test_scroll_tail_is_zero_at_rest(self) -> None:
+        """Last section must not leave blank space (web parity: height 0 at rest)."""
+        panel = _StatsPanel()
+        panel.resize(360, 500)
+        panel.show()
+        _app().processEvents()
+
+        while panel._ilay.count():
+            item = panel._ilay.takeAt(0)
+            w = item.widget() if item is not None else None
+            if w is not None:
+                w.setParent(None)
+        panel._section_seps.clear()
+        panel._section_header_rows.clear()
+        panel._section_bodies.clear()
+
+        hdr = QWidget()
+        body = QWidget()
+        hdr.setFixedHeight(24)
+        body.setFixedHeight(200)
+        panel._section_header_rows["tags"] = hdr
+        panel._section_bodies["tags"] = body
+        panel._section_order = ["tags"]
+        panel._ilay.addWidget(hdr)
+        panel._ilay.addWidget(body)
+        tail = QWidget()
+        tail.setObjectName("stats_scroll_tail")
+        panel._ilay.addWidget(tail)
+        panel._scroll_tail = tail
+
+        panel._scroll.setFixedHeight(400)
+        panel._inner.adjustSize()
+        _app().processEvents()
+        panel.clear_scroll_tail_pin()
+        _app().processEvents()
+        self.assertEqual(tail.height(), 0)
+
+        panel._update_scroll_tail_height(for_pin=True)
+        _app().processEvents()
+        self.assertGreater(tail.height(), 100)
+        panel.clear_scroll_tail_pin()
+        self.assertEqual(tail.height(), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

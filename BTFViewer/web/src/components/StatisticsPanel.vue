@@ -4401,10 +4401,19 @@ function sleepMs(ms) {
 }
 
 function updateScrollTailHeight() {
+  // Web parity with desktop: keep the tail at 0 during normal browsing so the
+  // last section (Tag Analysis) has no blank below it. Grow only while a
+  // demo/AI scroll pins a section header near the top of the viewport.
   const body = statsBodyRef.value
   const tail = statsTailRef.value
   if (!body || !tail) return
-  tail.style.height = `${Math.max(0, body.clientHeight - 48)}px`
+  const vh = body.clientHeight
+  tail.style.height = `${Math.max(0, vh - 48)}px`
+}
+
+function clearScrollTailPin() {
+  const tail = statsTailRef.value
+  if (tail) tail.style.height = '0px'
 }
 
 function parseDemoSectionIds(raw) {
@@ -4417,6 +4426,7 @@ async function scrollDemoSectionIntoView(scroll, ids, expand) {
   if (!body) return
   const key = String(scroll || '').trim().toLowerCase()
   if (['top', '0', 'start'].includes(key)) {
+    clearScrollTailPin()
     body.scrollTop = 0
     return
   }
@@ -8544,6 +8554,7 @@ defineExpose({
 .stats-scroll-tail {
   flex-shrink: 0;
   pointer-events: none;
+  height: 0;
 }
 
 .stats-sections-stack {

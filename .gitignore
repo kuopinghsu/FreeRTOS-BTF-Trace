@@ -84,6 +84,7 @@ BTFViewer/scripts/.monolith_doc_cache.py
 .vite/
 
 # Pandoc/Mermaid intermediates from `make -C BTFViewer doc` (PDFs under builds/ stay committed)
+BTFViewer/docs/.mermaid-cache-stamp
 BTFViewer/builds/.mermaid-cache-stamp
 BTFViewer/builds/cjk-fallback.tex
 BTFViewer/builds/mermaid-cache/

@@ -5461,9 +5461,13 @@ def _parse_btf(filepath: str,
                     key, _, value = stripped.partition(" ")
                     if _meta_re_match(key):
                         value = value.strip()
-                        meta[key] = value
-                        if key == "timeScale":
+                        # Spec Table uses #timescale; Vector examples and
+                        # FreeRTOS emitters use #timeScale — accept any case.
+                        if key.lower() == "timescale":
+                            meta["timeScale"] = value
                             time_scale = value
+                        else:
+                            meta[key] = value
                 continue
 
             parts = line.split(",", 8)

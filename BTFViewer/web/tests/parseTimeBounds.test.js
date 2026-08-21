@@ -47,4 +47,19 @@ describe('parseBtf time bounds', () => {
     assert.equal(trace.segments[0].start, 22_000)
     assert.equal(trace.segments[0].end, 30_000)
   })
+
+  it('accepts #timeScale / #timescale case-insensitively', async () => {
+    for (const header of ['#timeScale us', '#timescale us', '#TIMESCALE us', '#TimeScale us']) {
+      const text = [
+        '#version 2.2.0',
+        header,
+        '1000,Core_0,0,T,Worker,0,resume,',
+        '2000,Core_0,0,T,Worker,0,preempt,',
+        '',
+      ].join('\n')
+      const trace = await parseBtf(text)
+      assert.equal(trace.timeScale, 'us', header)
+      assert.equal(trace.meta?.timeScale, 'us', header)
+    }
+  })
 })

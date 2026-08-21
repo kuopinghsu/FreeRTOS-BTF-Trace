@@ -2549,6 +2549,8 @@ class _StatsPanelViewportFilter(QObject):
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if event.type() == QEvent.Type.Resize:
             self._panel._pin_main_inner_width()
+            # Keep pin pad sized while a demo/AI scroll pin is active; otherwise
+            # leave the tail at 0 so the last section has no blank below it.
             self._panel._update_scroll_tail_height()
             QTimer.singleShot(0, self._panel.sync_util_layout)
         return False
@@ -7858,6 +7860,7 @@ class _StatsPanel(QWidget):
         self._pending_sections: List[Tuple[str, str, str, object]] = []
         self._drop_target_sid: Optional[str] = None
         self._dragging_sid: Optional[str] = None
+        self._scroll_tail_pin_active: bool = False
         self._section_headers: Dict[str, QPushButton] = {}
         self._section_header_rows: Dict[str, QWidget] = {}
         self._section_seps: Dict[str, QWidget] = {}
@@ -7933,14 +7936,19 @@ class _StatsPanel(QWidget):
         self._inner = QWidget()
         self._inner.setObjectName("stats_inner")
         self._inner.setMinimumWidth(0)
+        # Prefer content height (not Expanding) so QScrollArea widgetResizable
+        # does not stretch the stack and leave empty space under Tag Analysis.
+        self._inner.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self._ilay = QVBoxLayout(self._inner)
-        self._ilay.setContentsMargins(8, 6, 8, 6)
+        self._ilay.setContentsMargins(8, 6, 8, 0)
         self._ilay.setSpacing(2)
-        # Trailing pad so late sections can scroll up to the top of the viewport
-        # (a layout stretch collapses when content is taller than the viewport).
+        # Trailing pad for demo/AI "scroll section to top" only (height 0 at rest,
+        # matching web). A permanent viewport pad left a large blank under Tag Analysis.
         self._scroll_tail = QWidget()
         self._scroll_tail.setObjectName("stats_scroll_tail")
         self._scroll_tail.setMinimumHeight(0)
+        self._scroll_tail.setFixedHeight(0)
         empty = self._lbl(
             "Open a trace file to view statistics.",
             color="#888888",
@@ -8087,6 +8095,7 @@ class _StatsPanel(QWidget):
         self._drop_target_sid = None
         self._dragging_sid = None
         self._scroll_tail = None
+        self._scroll_tail_pin_active = False
         self._stats_summary = None
         while self._ilay.count():
             item = self._ilay.takeAt(0)
@@ -9448,25 +9457,46 @@ class _StatsPanel(QWidget):
         self._update_section_header_icon(section_id)
 
     def _ensure_scroll_tail(self) -> QWidget:
-        """Trailing spacer that lets any section header scroll to the viewport top."""
+        """Trailing spacer used only while pinning a section header to the top."""
         tail = getattr(self, "_scroll_tail", None)
         if tail is None:
             tail = QWidget()
             tail.setObjectName("stats_scroll_tail")
             tail.setMinimumHeight(0)
+            tail.setFixedHeight(0)
             self._scroll_tail = tail
         self._ilay.removeWidget(tail)
         self._ilay.addWidget(tail)
         return tail
 
-    def _update_scroll_tail_height(self) -> None:
-        """Size the trailing pad to roughly one viewport so late sections can pin."""
+    def _update_scroll_tail_height(self, *, for_pin: bool = False) -> None:
+        """Keep no blank under the last section (web parity), unless pinning.
+
+        Web leaves ``.stats-scroll-tail`` at height 0 during normal browsing and
+        only grows it for demo/AI ``scroll section into view``. Desktop used to
+        keep a near-viewport pad always, which showed as empty space under Tag
+        Analysis.
+        """
         if not hasattr(self, "_scroll"):
             return
         tail = self._ensure_scroll_tail()
+        if for_pin:
+            self._scroll_tail_pin_active = True
+        if not getattr(self, "_scroll_tail_pin_active", False):
+            if tail.height() != 0:
+                tail.setFixedHeight(0)
+            return
+
         vh = max(0, int(self._scroll.viewport().height()))
-        # Leave a small strip so the header is not flush against the bottom chrome.
-        tail.setFixedHeight(max(0, vh - 24))
+        # Full viewport pad so any section (including the last) can pin to top.
+        needed = max(0, vh - 24)
+        if needed != tail.height():
+            tail.setFixedHeight(needed)
+
+    def clear_scroll_tail_pin(self) -> None:
+        """Drop temporary pin pad (e.g. after rebuild or scroll-to-top)."""
+        self._scroll_tail_pin_active = False
+        self._update_scroll_tail_height()
 
     def scroll_section_into_view(self, section_id: str, *, margin: int = 8,
                                  prefer_top: bool = True) -> None:
@@ -9475,15 +9505,13 @@ class _StatsPanel(QWidget):
         Expanded tables are often taller than the viewport, so ``ensureWidgetVisible``
         on the header alone can leave the body clipped. Pinning the header near the
         top of the scroll area keeps the table content on screen for demos.
-        A trailing viewport-sized pad is required so sections near the end of the
-        list can actually reach the top (layout stretch alone collapses when the
-        content is taller than the viewport).
+        A temporary trailing pad is added only for that pin (cleared on rebuild).
         """
         row = self._section_header_rows.get(section_id)
         if row is None or not hasattr(self, "_scroll"):
             return
         body = self._section_bodies.get(section_id)
-        self._update_scroll_tail_height()
+        self._update_scroll_tail_height(for_pin=prefer_top)
         app = QApplication.instance()
         if app is not None:
             app.processEvents()
@@ -9520,6 +9548,7 @@ class _StatsPanel(QWidget):
         """Scroll the statistics list to the top."""
         if not hasattr(self, "_scroll"):
             return
+        self.clear_scroll_tail_pin()
         bar = self._scroll.verticalScrollBar()
         bar.setValue(bar.minimum())
 
@@ -9760,9 +9789,9 @@ class _StatsPanel(QWidget):
                     continue
                 self._ilay.removeWidget(w)
                 widgets.append(w)
-        # The trailing pad is a QWidget (viewport-tall), not a QSpacerItem.
-        # Inserting after "the first spacer" used to leave that pad in the
-        # middle of the list — a large empty gap between tables.
+        # The trailing pad is a QWidget (sized to pin late headers), not a
+        # QSpacerItem. Inserting after "the first spacer" used to leave that
+        # pad in the middle of the list — a large empty gap between tables.
         tail = getattr(self, "_scroll_tail", None)
         if tail is not None:
             self._ilay.removeWidget(tail)
@@ -14682,7 +14711,7 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
 
         self._flush_pending_sections()
         self._ensure_scroll_tail()
-        self._update_scroll_tail_height()
+        self.clear_scroll_tail_pin()
         self.relax_content_width()
         self._util_label_col_w = self._resolve_util_label_width(
             self._util_label_col_natural)
