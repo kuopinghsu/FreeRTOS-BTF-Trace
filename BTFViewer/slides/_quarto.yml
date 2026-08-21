@@ -1,0 +1,26 @@
+project:
+  type: default
+  output-dir: _site
+
+format:
+  revealjs:
+    theme: [default, btfviewer.scss]
+    title-slide: false
+    slide-level: 2
+    embed-resources: false
+    slide-number: c/t
+    transition: fade
+    background-transition: fade
+    navigation-mode: linear
+    controls: false
+    progress: true
+    center: false
+    width: 1600
+    height: 900
+    margin: 0.055
+    hash: true
+    history: true
+    mermaid-format: js
+
+execute:
+  enabled: false

@@ -1,0 +1,12 @@
+BTFViewer beginner presentation
+Package version: 14
+Expected Reveal.js slides: 35
+Cover marker: 35-SLIDE GUIDED TUTORIAL
+
+Render from this directory:
+  quarto render slides.qmd
+
+Confirm the source before rendering:
+  grep -c '^## ' slides.qmd
+
+Expected result: 35
