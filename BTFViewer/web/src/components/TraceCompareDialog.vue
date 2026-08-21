@@ -21,16 +21,16 @@
       </div>
 
       <div class="compare-select-row">
-        <label class="compare-select-label">
-          Trace A:
+        <label class="compare-select-label compare-label-baseline">
+          Trace A (Baseline):
           <DomSelect
             v-model="tabAId"
             class="compare-select"
             :options="compareTabOptions"
           />
         </label>
-        <label class="compare-select-label">
-          Trace B:
+        <label class="compare-select-label compare-label-candidate">
+          Trace B (Candidate):
           <DomSelect
             v-model="tabBId"
             class="compare-select"
@@ -46,6 +46,8 @@
         />
         Limit to each tab's cursor range (C1–Cn, when 2+ cursors placed)
       </label>
+
+      <div class="compare-formula">{{ compareFormula }}</div>
 
       <div
         v-if="compareStripText"
@@ -70,30 +72,64 @@
       </div>
 
       <div class="compare-table-wrap">
-        <table
+        <div
           v-if="activePage === 'summary'"
-          class="compare-table"
+          class="compare-page"
         >
-          <thead>
-            <tr>
-              <th>Metric</th>
-              <th>Trace A</th>
-              <th>Trace B</th>
-              <th>Δ</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in summaryRows"
+          <div
+            v-if="summaryChartModel.length"
+            class="compare-chart"
+          >
+            <div class="compare-chart-head">
+              <span class="compare-chart-title">Summary changes</span>
+              <span class="compare-chart-legend">Candidate B − Baseline A</span>
+            </div>
+            <div class="p99-axis">
+              <span class="p99-improved">Improved</span>
+              <span class="p99-regressed">Regressed</span>
+            </div>
+            <div
+              v-for="row in summaryChartModel"
               :key="row.label"
+              class="p99-chart-row"
             >
-              <td class="task-col">{{ row.label }}</td>
-              <td>{{ row.a }}</td>
-              <td>{{ row.b }}</td>
-              <td>{{ row.delta }}</td>
-            </tr>
-          </tbody>
-        </table>
+              <span class="chart-label">{{ row.label }}</span>
+              <div class="p99-track">
+                <div class="p99-mid" />
+                <div
+                  class="p99-bar"
+                  :class="row.side"
+                  :style="row.barStyle"
+                />
+              </div>
+              <span
+                class="p99-change"
+                :class="row.side"
+              >{{ row.change }}</span>
+            </div>
+          </div>
+          <table class="compare-table">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Baseline A</th>
+                <th>Candidate B</th>
+                <th>Δ</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in summaryRows"
+                :key="row.label"
+              >
+                <td class="task-col">{{ row.label }}</td>
+                <td>{{ row.a }}</td>
+                <td>{{ row.b }}</td>
+                <td :class="deltaClass(row.label, row.delta)">{{ row.delta }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
         <table
           v-else-if="activePage === 'top'"
@@ -102,9 +138,9 @@
           <thead>
             <tr>
               <th>Task</th>
-              <th>CPU% A</th>
-              <th>CPU% B</th>
-              <th>Δ</th>
+              <th>CPU A (%)</th>
+              <th>CPU B (%)</th>
+              <th>Δ (pp)</th>
             </tr>
           </thead>
           <tbody>
@@ -115,7 +151,7 @@
               <td class="task-col">{{ row.name }}</td>
               <td>{{ row.cpuA }}</td>
               <td>{{ row.cpuB }}</td>
-              <td>{{ row.delta }}</td>
+              <td :class="deltaClass(row.name, row.delta, 'cpu')">{{ row.delta }}</td>
             </tr>
             <tr v-if="topTaskRows.length === 0">
               <td
@@ -128,90 +164,172 @@
           </tbody>
         </table>
 
-        <table
+        <div
           v-else-if="activePage === 'coreUtil'"
-          class="compare-table"
+          class="compare-page"
         >
-          <thead>
-            <tr>
-              <th>Core</th>
-              <th>Util% A</th>
-              <th>Util% B</th>
-              <th>Δ</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in coreUtilRows"
-              :key="row.core"
+          <div
+            v-if="coreUtilChartModel.length"
+            class="compare-chart"
+          >
+            <div class="compare-chart-head">
+              <span class="compare-chart-title">Core utilisation</span>
+              <span class="compare-chart-legend">
+                <span class="swatch swatch-a"></span>Baseline A
+                <span class="swatch swatch-b"></span>Candidate B
+              </span>
+            </div>
+            <div
+              v-for="row in coreUtilChartModel"
+              :key="row.label"
+              class="util-chart-row"
             >
-              <td class="task-col">{{ row.core }}</td>
-              <td>{{ row.utilA }}</td>
-              <td>{{ row.utilB }}</td>
-              <td>{{ row.delta }}</td>
-            </tr>
-            <tr v-if="coreUtilRows.length === 0">
-              <td colspan="4" class="compare-empty">No core utilisation data</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <table
-          v-else-if="activePage === 'migrations'"
-          class="compare-table"
-        >
-          <thead>
-            <tr>
-              <th>Task</th>
-              <th>Migr A</th>
-              <th>Migr B</th>
-              <th>Δ</th>
-              <th>Rate A</th>
-              <th>Rate B</th>
-              <th>Rate Δ</th>
-              <th>Dwell A</th>
-              <th>Dwell B</th>
-              <th>Dwell Δ</th>
-              <th>Ping A</th>
-              <th>Ping B</th>
-              <th>Cores A</th>
-              <th>Cores B</th>
-              <th>Primary A</th>
-              <th>Primary B</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in migrationRows"
-              :key="row.mk"
-            >
-              <td class="task-col">{{ row.name }}</td>
-              <td>{{ row.migrationsA }}</td>
-              <td>{{ row.migrationsB }}</td>
-              <td>{{ row.delta }}</td>
-              <td>{{ row.rateA }}</td>
-              <td>{{ row.rateB }}</td>
-              <td>{{ row.rateDelta }}</td>
-              <td>{{ row.dwellA }}</td>
-              <td>{{ row.dwellB }}</td>
-              <td>{{ row.dwellDelta }}</td>
-              <td>{{ row.pingA }}</td>
-              <td>{{ row.pingB }}</td>
-              <td>{{ row.coresA }}</td>
-              <td>{{ row.coresB }}</td>
-              <td>{{ row.primaryA }}</td>
-              <td>{{ row.primaryB }}</td>
-            </tr>
-            <tr v-if="migrationRows.length === 0">
-              <td
-                colspan="16"
-                class="compare-empty"
+              <span class="chart-label">{{ row.label }}</span>
+              <div class="util-chart-bars">
+                <div class="util-track">
+                  <div
+                    class="util-fill util-fill-a"
+                    :style="{ width: row.aPct + '%' }"
+                  />
+                </div>
+                <div class="util-track">
+                  <div
+                    class="util-fill util-fill-b"
+                    :style="{ width: row.bPct + '%' }"
+                  />
+                </div>
+              </div>
+              <span class="chart-pct">
+                <span class="pct-a">{{ row.a.toFixed(1) }}%</span>
+                <span class="pct-b">{{ row.b.toFixed(1) }}%</span>
+              </span>
+            </div>
+          </div>
+          <table class="compare-table">
+            <thead>
+              <tr>
+                <th>Core</th>
+                <th>Util A (%)</th>
+                <th>Util B (%)</th>
+                <th>Δ (pp)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in coreUtilRows"
+                :key="row.core"
               >
-                No migrated tasks in either trace
-              </td>
-            </tr>
-          </tbody>
-        </table>
+                <td class="task-col">{{ row.core }}</td>
+                <td>{{ row.utilA }}</td>
+                <td>{{ row.utilB }}</td>
+                <td :class="deltaClass(row.core, row.delta, 'util')">{{ row.delta }}</td>
+              </tr>
+              <tr v-if="coreUtilRows.length === 0">
+                <td colspan="4" class="compare-empty">No core utilisation data</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div
+          v-else-if="activePage === 'migrations'"
+          class="compare-page"
+        >
+          <div class="compare-mig-controls">
+            <select v-model="migView" class="compare-mig-select">
+              <option value="count">Count &amp; rate</option>
+              <option value="dwell">Dwell &amp; ping</option>
+              <option value="cores">Cores</option>
+            </select>
+            <select v-model="migFilter" class="compare-mig-select">
+              <option value="top">Top 10 changes</option>
+              <option value="changed">Changed only</option>
+              <option value="regressed">Regressions only</option>
+              <option value="all">Show all</option>
+            </select>
+            <select v-model="migSort" class="compare-mig-select">
+              <option value="abs">Sort |Δ|</option>
+              <option value="rel">Sort relative</option>
+            </select>
+            <select v-model="migFamily" class="compare-mig-select">
+              <option value="">All families</option>
+              <option
+                v-for="fam in migFamilies"
+                :key="fam"
+                :value="fam"
+              >
+                {{ fam }}
+              </option>
+            </select>
+            <span class="compare-mig-hint">{{ migHint }}</span>
+          </div>
+          <div
+            v-if="migHeatmapModel.length"
+            class="compare-chart"
+          >
+            <div class="compare-chart-head">
+              <span class="compare-chart-title">Migration Δ</span>
+              <span class="compare-chart-legend">Δ = A − B</span>
+            </div>
+            <div class="p99-axis">
+              <span class="p99-improved">Improved</span>
+              <span class="p99-regressed">Regressed</span>
+            </div>
+            <div
+              v-for="row in migHeatmapModel"
+              :key="row.label"
+              class="p99-chart-row"
+            >
+              <span class="chart-label">{{ row.label }}</span>
+              <div class="p99-track">
+                <div class="p99-mid" />
+                <div
+                  class="p99-bar"
+                  :class="row.side"
+                  :style="row.barStyle"
+                />
+              </div>
+              <span
+                class="p99-change"
+                :class="row.side"
+              >{{ row.change }}</span>
+            </div>
+          </div>
+          <table class="compare-table">
+            <thead>
+              <tr>
+                <th
+                  v-for="h in migHeaders"
+                  :key="h"
+                >
+                  {{ h }}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="(row, ri) in migViewRows"
+                :key="ri"
+              >
+                <td
+                  v-for="(cell, ci) in row"
+                  :key="ci"
+                  :class="migCellClass(ci, row)"
+                >
+                  {{ cell }}
+                </td>
+              </tr>
+              <tr v-if="migViewRows.length === 0">
+                <td
+                  :colspan="Math.max(migHeaders.length, 1)"
+                  class="compare-empty"
+                >
+                  No migrated tasks in either trace
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
         <table
           v-else-if="activePage === 'execution'"
@@ -241,7 +359,7 @@
               <td>{{ row.avgB }}</td>
               <td>{{ row.maxA }}</td>
               <td>{{ row.maxB }}</td>
-              <td>{{ row.deltaMax }}</td>
+              <td :class="deltaClass(row.name, row.deltaMax, 'exec max')">{{ row.deltaMax }}</td>
             </tr>
             <tr v-if="executionRows.length === 0">
               <td colspan="8" class="compare-empty">No execution samples in either trace</td>
@@ -277,7 +395,7 @@
               <td>{{ row.avgB }}</td>
               <td>{{ row.maxA }}</td>
               <td>{{ row.maxB }}</td>
-              <td>{{ row.delta }}</td>
+              <td :class="deltaClass(row.name, row.delta, 'block')">{{ row.delta }}</td>
             </tr>
             <tr v-if="blockingRows.length === 0">
               <td colspan="8" class="compare-empty">No blocking samples in either trace</td>
@@ -313,7 +431,7 @@
               <td>{{ row.avgB }}</td>
               <td>{{ row.maxA }}</td>
               <td>{{ row.maxB }}</td>
-              <td>{{ row.delta }}</td>
+              <td :class="deltaClass(row.name, row.delta, 'inter')">{{ row.delta }}</td>
             </tr>
             <tr v-if="interArrivalRows.length === 0">
               <td colspan="8" class="compare-empty">No inter-arrival samples in either trace</td>
@@ -343,7 +461,7 @@
               <td class="task-col">{{ row.name }}</td>
               <td>{{ row.countA }}</td>
               <td>{{ row.countB }}</td>
-              <td>{{ row.delta }}</td>
+              <td :class="deltaClass(row.name, row.delta, 'preempt')">{{ row.delta }}</td>
               <td>{{ row.totalA }}</td>
               <td>{{ row.totalB }}</td>
             </tr>
@@ -360,8 +478,8 @@
           <thead>
             <tr>
               <th>Metric</th>
-              <th>Trace A</th>
-              <th>Trace B</th>
+              <th>Baseline A</th>
+              <th>Candidate B</th>
               <th>Δ</th>
             </tr>
           </thead>
@@ -373,7 +491,7 @@
               <td class="task-col">{{ row.label }}</td>
               <td>{{ row.a }}</td>
               <td>{{ row.b }}</td>
-              <td>{{ row.delta }}</td>
+              <td :class="deltaClass(row.label, row.delta)">{{ row.delta }}</td>
             </tr>
             <tr v-if="syncCompareRows.length === 0">
               <td colspan="4" class="compare-empty">No sync instrumentation in either trace</td>
@@ -381,33 +499,67 @@
           </tbody>
         </table>
 
-        <table
+        <div
           v-else-if="activePage === 'response'"
-          class="compare-table"
+          class="compare-page"
         >
-          <thead>
-            <tr>
-              <th>Task</th>
-              <th>P99 A</th>
-              <th>P99 B</th>
-              <th>Δ</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in responseCompareRows"
-              :key="row.name"
+          <div
+            v-if="p99ChartModel.length"
+            class="compare-chart"
+          >
+            <div class="compare-chart-head">
+              <span class="compare-chart-title">Response P99 change</span>
+              <span class="compare-chart-legend">Candidate B − Baseline A</span>
+            </div>
+            <div class="p99-axis">
+              <span class="p99-improved">Improved</span>
+              <span class="p99-regressed">Regressed</span>
+            </div>
+            <div
+              v-for="row in p99ChartModel"
+              :key="row.label"
+              class="p99-chart-row"
             >
-              <td class="task-col">{{ row.name }}</td>
-              <td>{{ row.a }}</td>
-              <td>{{ row.b }}</td>
-              <td>{{ row.delta }}</td>
-            </tr>
-            <tr v-if="responseCompareRows.length === 0">
-              <td colspan="4" class="compare-empty">No response samples in either trace</td>
-            </tr>
-          </tbody>
-        </table>
+              <span class="chart-label">{{ row.label }}</span>
+              <div class="p99-track">
+                <div class="p99-mid" />
+                <div
+                  class="p99-bar"
+                  :class="row.side"
+                  :style="row.barStyle"
+                />
+              </div>
+              <span
+                class="p99-change"
+                :class="row.side"
+              >{{ row.change }}</span>
+            </div>
+          </div>
+          <table class="compare-table">
+            <thead>
+              <tr>
+                <th>Task</th>
+                <th>P99 A</th>
+                <th>P99 B</th>
+                <th>Δ</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in responseCompareRows"
+                :key="row.name"
+              >
+                <td class="task-col">{{ row.name }}</td>
+                <td>{{ row.a }}</td>
+                <td>{{ row.b }}</td>
+                <td :class="deltaClass(row.name, row.delta, 'response')">{{ row.delta }}</td>
+              </tr>
+              <tr v-if="responseCompareRows.length === 0">
+                <td colspan="4" class="compare-empty">No response samples in either trace</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
         <table
           v-else-if="activePage === 'mutex'"
@@ -429,7 +581,7 @@
               <td class="task-col">{{ row.name }}</td>
               <td>{{ row.a }}</td>
               <td>{{ row.b }}</td>
-              <td>{{ row.delta }}</td>
+              <td :class="deltaClass(row.name, row.delta, 'mutex')">{{ row.delta }}</td>
             </tr>
             <tr v-if="mutexBlockCompareRows.length === 0">
               <td colspan="4" class="compare-empty">No mutex blocking in either trace</td>
@@ -581,13 +733,23 @@ import {
   buildResponseCompareRows,
   buildMutexBlockCompareRows,
   buildSharedPatternCompareRows,
+  buildAllCompareTables,
   downloadCompareCsv,
   downloadCompareHtml,
   crossTraceTrends,
   traceSummarySnapshot,
   cursorRangeForCursors,
 } from '../utils/traceCompare.js'
-import { compareSummaryStrip } from '../utils/uxExplore.js'
+import {
+  compareSummaryStrip,
+  COMPARE_DELTA_FORMULA,
+  compareCoreUtilChartRows,
+  compareP99DeltaChartRows,
+  compareSummaryChangeBarRows,
+  compareMigrationHeatmapRows,
+  compareRowDeltaStatus,
+  filterCompareMigrationRows,
+} from '../utils/uxExplore.js'
 
 const props = defineProps({
   tabs: { type: Array, required: true },
@@ -670,6 +832,70 @@ const coreUtilRows = computed(() =>
   buildCoreUtilCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
 const migrationRows = computed(() =>
   buildMigrationCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
+const migView = ref('count')
+const migFilter = ref('top')
+const migSort = ref('abs')
+const migFamily = ref('')
+const migFiltered = computed(() =>
+  filterCompareMigrationRows(
+    migrationRows.value, migView.value, migFilter.value, migFamily.value, 10, migSort.value))
+const migHeaders = computed(() => migFiltered.value.headers || [])
+const migViewRows = computed(() => migFiltered.value.rows || [])
+const migFamilies = computed(() => migFiltered.value.families || [])
+const migHint = computed(() => `${migFiltered.value.shown || 0} of ${migFiltered.value.total || 0} tasks`)
+watch(migFamilies, (fams) => {
+  if (migFamily.value && !fams.includes(migFamily.value)) migFamily.value = ''
+})
+const coreUtilChartModel = computed(() => {
+  const rows = compareCoreUtilChartRows({ coreUtil: coreUtilRows.value })
+  const maxV = Math.max(1, ...rows.map(r => Math.max(Number(r.a) || 0, Number(r.b) || 0)))
+  return rows.map(r => ({
+    ...r,
+    aPct: Math.max(1, (Number(r.a) || 0) / maxV * 100),
+    bPct: Math.max(1, (Number(r.b) || 0) / maxV * 100),
+  }))
+})
+function divergingBarModel(rows, valueKey = 'cand') {
+  const maxV = Math.max(1, ...rows.map(r => Math.abs(Number(r[valueKey]) || 0)))
+  return rows.map((r) => {
+    const cand = Number(r[valueKey]) || 0
+    const pct = Math.abs(cand) / maxV * 50
+    const improved = cand < 0
+    return {
+      ...r,
+      side: improved ? 'improved' : 'regressed',
+      barStyle: improved
+        ? { width: `${pct}%`, right: '50%' }
+        : { width: `${pct}%`, left: '50%' },
+    }
+  })
+}
+const summaryChartModel = computed(() =>
+  divergingBarModel(compareSummaryChangeBarRows({ summary: summaryRows.value }, 8)))
+const migHeatmapModel = computed(() => {
+  const rows = compareMigrationHeatmapRows(migrationRows.value, 12).map((r) => {
+    const d = Number(r.delta) || 0
+    const change = d === 0 ? '0' : `${d > 0 ? '+' : '−'}${Math.abs(Math.trunc(d))}`
+    return { ...r, cand: -d, change }
+  })
+  return divergingBarModel(rows)
+})
+function deltaClass(label, delta, metric = '') {
+  const status = compareRowDeltaStatus(label, delta, metric)
+  if (status === 'Improved') return 'delta-improved'
+  if (status === 'Regressed') return 'delta-regressed'
+  return ''
+}
+function migCellClass(ci, row) {
+  const classes = []
+  if (ci === 0) classes.push('task-col')
+  const deltaCol = migView.value === 'cores' ? -1 : 3
+  if (ci === deltaCol) {
+    const statusCls = deltaClass(row[0], row[ci], 'migrations')
+    if (statusCls) classes.push(statusCls)
+  }
+  return classes
+}
 const executionRows = computed(() =>
   buildExecutionCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
 const blockingRows = computed(() =>
@@ -682,6 +908,8 @@ const syncCompareRows = computed(() =>
   buildSyncCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
 const responseCompareRows = computed(() =>
   buildResponseCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value, deadlines.value))
+const p99ChartModel = computed(() =>
+  divergingBarModel(compareP99DeltaChartRows({ response: responseCompareRows.value }, 12)))
 const mutexBlockCompareRows = computed(() =>
   buildMutexBlockCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value, deadlines.value))
 const trendRows = computed(() => {
@@ -699,6 +927,8 @@ const trendRows = computed(() => {
 const sharedPatternRows = computed(() =>
   buildSharedPatternCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value, deadlines.value))
 
+const compareFormula = COMPARE_DELTA_FORMULA
+
 const compareStripText = computed(() => {
   const data = compareSummaryStrip({
     summary: summaryRows.value,
@@ -708,33 +938,27 @@ const compareStripText = computed(() => {
     response: responseCompareRows.value,
     mutex_block: mutexBlockCompareRows.value,
     shared_patterns: sharedPatternRows.value,
-  }, 4)
-  const parts = (data.headline || []).map(h => `${h.label} ${h.delta}`)
-  if (data.regressions?.length) {
-    parts.push(
-      'Largest regressions: '
-      + data.regressions.map(r => `${r.label} ${r.delta}`).join(' · '),
-    )
+  }, 4, tabA.value?.name ?? '', tabB.value?.name ?? '')
+  const notable = data.notable || {}
+  const parts = []
+  const verdict = String(notable.verdict || data.why || '').trim()
+  if (verdict) parts.push(verdict)
+  for (const row of (notable.rows || []).slice(0, 4)) {
+    parts.push(`${row.status}: ${row.label} ${row.change}`)
   }
-  if (data.why) parts.push(data.why)
+  for (const warn of (data.warnings || []).slice(0, 2)) {
+    parts.push(`Warning: ${warn}`)
+  }
   return parts.join('  ·  ')
 })
 
 function exportTables() {
-  return {
-    summary: summaryRows.value,
-    top: topTaskRows.value,
-    coreUtil: coreUtilRows.value,
-    migrations: migrationRows.value,
-    execution: executionRows.value,
-    blocking: blockingRows.value,
-    interArrival: interArrivalRows.value,
-    preemption: preemptionCompareRows.value,
-    sync: syncCompareRows.value,
-    response: responseCompareRows.value,
-    mutex_block: mutexBlockCompareRows.value,
-    shared_patterns: sharedPatternRows.value,
-  }
+  const tables = buildAllCompareTables(
+    traceA.value, traceB.value, tabA.value, tabB.value,
+    scopeToCursors.value, deadlines.value, 0,
+  )
+  tables.trends = trendRows.value
+  return tables
 }
 
 function onExportCsv() {
@@ -836,6 +1060,182 @@ function onScoreBaseline() {
   color: var(--fg-dim);
   cursor: pointer;
   flex-shrink: 0;
+}
+
+.compare-select-label.compare-label-baseline {
+  color: #2a6fb2;
+}
+
+.compare-select-label.compare-label-candidate {
+  color: #6b4ea8;
+}
+
+.compare-formula {
+  padding: 4px 14px 0;
+  font-size: 11px;
+  color: var(--fg-dim);
+  flex-shrink: 0;
+}
+
+.compare-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.compare-chart {
+  margin: 8px 0 4px;
+  padding: 6px 0 2px;
+}
+
+.compare-chart-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+
+.compare-chart-title {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.compare-chart-legend {
+  color: var(--fg-dim);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.swatch-a { background: #2a6fb2; }
+.swatch-b { background: #6b4ea8; }
+
+.util-chart-row,
+.p99-chart-row {
+  display: grid;
+  grid-template-columns: 78px 1fr 52px;
+  gap: 8px;
+  align-items: center;
+  margin: 2px 0;
+}
+
+.p99-chart-row {
+  grid-template-columns: 96px 1fr 88px;
+}
+
+.chart-label {
+  font-size: 11px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.util-chart-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.util-track {
+  height: 9px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  overflow: hidden;
+}
+
+.util-fill {
+  height: 100%;
+  border-radius: 3px;
+  min-width: 2px;
+}
+
+.util-fill-a { background: #2a6fb2; }
+.util-fill-b { background: #6b4ea8; }
+
+.chart-pct {
+  display: flex;
+  flex-direction: column;
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.pct-a { color: #2a6fb2; }
+.pct-b { color: #6b4ea8; }
+
+.p99-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  margin: 0 96px 2px 96px;
+}
+
+.p99-improved { color: #3cb371; }
+.p99-regressed { color: #e07070; }
+
+.p99-track {
+  position: relative;
+  height: 18px;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  border-radius: 3px;
+}
+
+.p99-mid {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+
+.p99-bar {
+  position: absolute;
+  top: 3px;
+  height: 12px;
+  border-radius: 2px;
+  min-width: 2px;
+}
+
+.p99-bar.improved { background: #3cb371; }
+.p99-bar.regressed { background: #e07070; }
+
+.p99-change {
+  font-size: 10px;
+}
+
+.p99-change.improved { color: #3cb371; }
+.p99-change.regressed { color: #e07070; }
+
+.compare-mig-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0 4px;
+}
+
+.compare-mig-select {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 11px;
+}
+
+.compare-mig-hint {
+  font-size: 11px;
+  color: var(--fg-dim);
 }
 
 .compare-strip {
@@ -945,6 +1345,14 @@ function onScoreBaseline() {
   color: var(--fg-dim);
   font-weight: 600;
   z-index: 1;
+}
+
+.delta-improved {
+  color: #3cb371;
+}
+
+.delta-regressed {
+  color: #e07070;
 }
 
 .compare-empty {

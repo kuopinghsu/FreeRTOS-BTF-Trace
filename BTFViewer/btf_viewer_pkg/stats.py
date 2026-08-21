@@ -24,9 +24,14 @@ from .config import (  # private symbols are not pulled in by import *
     normalize_stats_pins,
     normalize_stats_section_order,
 )
-from .html_report import btf_html_report_document
+from .html_report import (
+    HTML_REPORT_TOC_SCRIPT,
+    btf_html_report_document,
+    html_apply_collapsible_toc,
+)
 from .ai_planner import analysis_dashboard, format_analysis_story
 from .ux_explore import (
+    COMPARE_DELTA_FORMULA,
     HEALTH_BAND_SECTION,
     HEALTH_MARK,
     KIND_LABEL,
@@ -35,6 +40,13 @@ from .ux_explore import (
     analyze_task_periods,
     best_finding_scope,
     collect_worst_events,
+    compare_summary_strip,
+    compare_core_util_chart_rows,
+    compare_p99_delta_chart_rows,
+    compare_summary_change_bar_rows,
+    compare_migration_heatmap_rows,
+    compare_row_delta_status,
+    filter_compare_migration_rows,
     core_util_over_time,
     critical_path_rows,
     detect_timeline_anomalies,
@@ -2784,6 +2796,134 @@ class _StatsSectionGrip(QWidget):
         p.drawLine(0, y, self.width(), y)
         p.end()
 
+
+class _CompareBarChart(QWidget):
+    """Theme-aware Core Util paired bars or Response/Summary/Migration diverging bars."""
+
+    def __init__(self, kind: str, parent=None) -> None:
+        super().__init__(parent)
+        self._kind = kind if kind in ("util", "p99", "summary", "heatmap") else "util"
+        self._rows: List[dict] = []
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumHeight(0)
+        self.hide()
+
+    def set_rows(self, rows: Sequence[dict]) -> None:
+        self._rows = [r for r in (rows or []) if isinstance(r, dict)]
+        n = len(self._rows)
+        if not n:
+            self.hide()
+            self.setFixedHeight(0)
+            self.update()
+            return
+        row_h = 32 if self._kind == "util" else 22
+        self.setFixedHeight(26 + n * row_h + 8)
+        self.show()
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        rows = self._rows
+        if not rows:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        pal = self.palette()
+        ink = pal.color(QPalette.ColorRole.WindowText)
+        muted = QColor(ink)
+        muted.setAlpha(170)
+        w = self.width()
+        pad = 8
+        label_w = 78 if self._kind == "util" else 96
+        right_w = 52 if self._kind == "util" else 88
+        plot_x = pad + label_w
+        plot_w = max(40.0, w - plot_x - right_w - pad)
+        header_h = 22
+        p.setPen(ink)
+        p.setFont(self.font())
+        if self._kind == "util":
+            title = "Core utilisation"
+        elif self._kind == "summary":
+            title = "Summary changes"
+        elif self._kind == "heatmap":
+            title = "Migration Δ"
+        else:
+            title = "Response P99 change"
+        p.drawText(pad, 16, title)
+        p.setPen(muted)
+        if self._kind == "util":
+            p.drawText(QRectF(w - pad - 220, 2, 220, 16),
+                       int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+                       "Baseline A · Candidate B")
+            max_v = max((max(float(r.get("a") or 0), float(r.get("b") or 0)) for r in rows), default=1.0)
+            max_v = max(max_v, 1.0)
+            for i, row in enumerate(rows):
+                y = header_h + 4 + i * 32
+                p.setPen(ink)
+                p.drawText(QRectF(pad, y, label_w - 6, 28),
+                           int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                           str(row.get("label") or "")[:18])
+                a_v = max(0.0, float(row.get("a") or 0))
+                b_v = max(0.0, float(row.get("b") or 0))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor("#2a6fb2"))
+                p.drawRoundedRect(QRectF(plot_x, y + 2, max(2.0, plot_w * a_v / max_v), 9), 3, 3)
+                p.setBrush(QColor("#6b4ea8"))
+                p.drawRoundedRect(QRectF(plot_x, y + 14, max(2.0, plot_w * b_v / max_v), 9), 3, 3)
+                p.setPen(QColor("#2a6fb2"))
+                p.drawText(QRectF(plot_x + plot_w + 6, y, right_w, 12),
+                           int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                           f"{a_v:.1f}%")
+                p.setPen(QColor("#6b4ea8"))
+                p.drawText(QRectF(plot_x + plot_w + 6, y + 12, right_w, 12),
+                           int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                           f"{b_v:.1f}%")
+        else:
+            subtitle = "Δ = A − B" if self._kind == "heatmap" else "Candidate B − Baseline A"
+            p.drawText(QRectF(w - pad - 220, 2, 220, 16),
+                       int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+                       subtitle)
+            max_v = max((abs(float(r.get("cand") or r.get("delta") or 0)) for r in rows), default=1.0) or 1.0
+            mid = plot_x + plot_w / 2.0
+            half = plot_w / 2.0
+            p.setPen(QPen(QColor("#888888"), 1))
+            p.drawLine(int(mid), header_h, int(mid), self.height() - 6)
+            p.setPen(QColor("#3cb371"))
+            p.drawText(QRectF(plot_x, 2, 70, 16),
+                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                       "Improved")
+            p.setPen(QColor("#e07070"))
+            p.drawText(QRectF(plot_x + plot_w - 70, 2, 70, 16),
+                       int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+                       "Regressed")
+            for i, row in enumerate(rows):
+                y = header_h + 4 + i * 22
+                p.setPen(ink)
+                p.drawText(QRectF(pad, y, label_w - 6, 18),
+                           int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                           str(row.get("label") or "")[:16])
+                if "cand" in row:
+                    cand = float(row.get("cand") or 0)
+                else:
+                    # heatmap stores table Δ = A−B; chart wants B−A
+                    cand = -float(row.get("delta") or 0)
+                bar_w = abs(cand) / max_v * half
+                color = QColor("#e07070") if cand > 0 else QColor("#3cb371")
+                x = mid if cand >= 0 else mid - bar_w
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(color)
+                p.drawRoundedRect(QRectF(x, y + 3, max(2.0, bar_w), 12), 2, 2)
+                p.setPen(color)
+                change = str(row.get("change") or "")
+                if not change and self._kind == "heatmap":
+                    d = float(row.get("delta") or 0)
+                    change = f"{'+' if d > 0 else '−'}{abs(int(d))}" if d else "0"
+                p.drawText(QRectF(plot_x + plot_w + 6, y, right_w, 18),
+                           int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                           change)
+        p.end()
+
+
 class _TraceCompareDialog(QDialog):
     """Compare summary and Statistics-aligned metrics between two tabs."""
 
@@ -2806,10 +2946,14 @@ class _TraceCompareDialog(QDialog):
         self.resize(980, 560)
         lay = QVBoxLayout(self)
         row = QHBoxLayout()
-        row.addWidget(QLabel("Trace A:"))
+        lab_a = QLabel("Trace A (Baseline):")
+        lab_a.setStyleSheet("QLabel { color: #2a6fb2; }")
+        row.addWidget(lab_a)
         self._combo_a = QComboBox()
         row.addWidget(self._combo_a, 1)
-        row.addWidget(QLabel("Trace B:"))
+        lab_b = QLabel("Trace B (Candidate):")
+        lab_b.setStyleSheet("QLabel { color: #6b4ea8; }")
+        row.addWidget(lab_b)
         self._combo_b = QComboBox()
         row.addWidget(self._combo_b, 1)
         lay.addLayout(row)
@@ -2818,6 +2962,12 @@ class _TraceCompareDialog(QDialog):
             "Limit to each tab's cursor range (C1–Cn, when 2+ cursors placed)")
         self._scope_cb.setChecked(True)
         lay.addWidget(self._scope_cb)
+
+        self._formula = QLabel(COMPARE_DELTA_FORMULA)
+        self._formula.setWordWrap(True)
+        self._formula.setStyleSheet(
+            "QLabel { color: #8a8a8a; padding: 0 8px; font-size: 11px; }")
+        lay.addWidget(self._formula)
 
         self._strip = QLabel("")
         self._strip.setWordWrap(True)
@@ -2832,13 +2982,13 @@ class _TraceCompareDialog(QDialog):
         self._pages = QTabWidget()
         self._summary_table = QTableWidget(0, 4)
         self._summary_table.setHorizontalHeaderLabels(
-            ["Metric", "Trace A", "Trace B", "Δ"])
+            ["Metric", "Baseline A", "Candidate B", "Δ"])
         self._top_table = QTableWidget(0, 4)
         self._top_table.setHorizontalHeaderLabels(
-            ["Task", "CPU% A", "CPU% B", "Δ"])
+            ["Task", "CPU A (%)", "CPU B (%)", "Δ (pp)"])
         self._core_util_table = QTableWidget(0, 4)
         self._core_util_table.setHorizontalHeaderLabels(
-            ["Core", "Util% A", "Util% B", "Δ"])
+            ["Core", "Util A (%)", "Util B (%)", "Δ (pp)"])
         self._mig_table = QTableWidget(0, 16)
         self._mig_table.setHorizontalHeaderLabels(
             ["Task", "Migr A", "Migr B", "Δ", "Rate A", "Rate B", "Rate Δ",
@@ -2858,7 +3008,7 @@ class _TraceCompareDialog(QDialog):
             ["Victim", "Count A", "Count B", "Δ", "Total A", "Total B"])
         self._sync_table = QTableWidget(0, 4)
         self._sync_table.setHorizontalHeaderLabels(
-            ["Metric", "Trace A", "Trace B", "Δ"])
+            ["Metric", "Baseline A", "Candidate B", "Δ"])
         self._response_table = QTableWidget(0, 4)
         self._response_table.setHorizontalHeaderLabels(
             ["Task", "P99 A", "P99 B", "Δ"])
@@ -2878,16 +3028,78 @@ class _TraceCompareDialog(QDialog):
             tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             tbl.verticalHeader().setVisible(False)
             tbl.horizontalHeader().setStretchLastSection(True)
-        self._pages.addTab(self._summary_table, "Summary")
+            tbl.setStyleSheet(
+                "QHeaderView::section { position: sticky; }"
+            )
+            hdr = tbl.horizontalHeader()
+            hdr.setSectionsClickable(False)
+            tbl.setWordWrap(False)
+
+        self._chart_tables = (
+            self._summary_table,
+            self._core_util_table,
+            self._mig_table,
+            self._response_table,
+        )
+        for tbl in self._chart_tables:
+            self._prepare_compare_embedded_table(tbl)
+
+        self._core_util_chart = _CompareBarChart("util")
+        self._response_chart = _CompareBarChart("p99")
+        self._summary_chart = _CompareBarChart("summary")
+        self._mig_heatmap = _CompareBarChart("heatmap")
+
+        mig_ctrl_w = QWidget()
+        mig_ctrl = QHBoxLayout(mig_ctrl_w)
+        mig_ctrl.setContentsMargins(0, 0, 0, 0)
+        mig_ctrl.setSpacing(6)
+        self._mig_view = QComboBox()
+        self._mig_view.addItem("Count & rate", "count")
+        self._mig_view.addItem("Dwell & ping", "dwell")
+        self._mig_view.addItem("Cores", "cores")
+        self._mig_filter = QComboBox()
+        self._mig_filter.addItem("Top 10 changes", "top")
+        self._mig_filter.addItem("Changed only", "changed")
+        self._mig_filter.addItem("Regressions only", "regressed")
+        self._mig_filter.addItem("Show all", "all")
+        self._mig_sort = QComboBox()
+        self._mig_sort.addItem("Sort |Δ|", "abs")
+        self._mig_sort.addItem("Sort relative", "rel")
+        self._mig_family = QComboBox()
+        self._mig_family.addItem("All families", "")
+        self._mig_hint = QLabel("")
+        self._mig_hint.setStyleSheet("QLabel { color: #8a8a8a; font-size: 11px; }")
+        mig_ctrl.addWidget(self._mig_view)
+        mig_ctrl.addWidget(self._mig_filter)
+        mig_ctrl.addWidget(self._mig_sort)
+        mig_ctrl.addWidget(self._mig_family)
+        mig_ctrl.addWidget(self._mig_hint, 1)
+        self._mig_all_rows: List[List] = []
+        self._mig_view.currentIndexChanged.connect(self._apply_mig_view)
+        self._mig_filter.currentIndexChanged.connect(self._apply_mig_view)
+        self._mig_sort.currentIndexChanged.connect(self._apply_mig_view)
+        self._mig_family.currentIndexChanged.connect(self._apply_mig_view)
+
+        # Chart + table pages share one scroll viewport (Web compare-table-wrap parity).
+        summary_page = self._make_compare_scroll_page(
+            self._summary_chart, self._summary_table)
+        core_page = self._make_compare_scroll_page(
+            self._core_util_chart, self._core_util_table)
+        resp_page = self._make_compare_scroll_page(
+            self._response_chart, self._response_table)
+        mig_page = self._make_compare_scroll_page(
+            mig_ctrl_w, self._mig_heatmap, self._mig_table)
+
+        self._pages.addTab(summary_page, "Summary")
         self._pages.addTab(self._top_table, "Top Tasks")
-        self._pages.addTab(self._core_util_table, "Core Util")
-        self._pages.addTab(self._mig_table, "Core Migrations")
+        self._pages.addTab(core_page, "Core Util")
+        self._pages.addTab(mig_page, "Core Migrations")
         self._pages.addTab(self._exec_table, "Execution")
         self._pages.addTab(self._block_table, "Blocking")
         self._pages.addTab(self._inter_table, "Inter-Arrival")
         self._pages.addTab(self._preempt_table, "Preemption")
         self._pages.addTab(self._sync_table, "Sync")
-        self._pages.addTab(self._response_table, "Response")
+        self._pages.addTab(resp_page, "Response")
         self._pages.addTab(self._mutex_table, "Mutex")
         self._pages.addTab(self._trends_table, "Trends")
         lay.addWidget(self._pages, 1)
@@ -3015,16 +3227,134 @@ class _TraceCompareDialog(QDialog):
         return ta, tb, lo_a, hi_a, lo_b, hi_b
 
     @staticmethod
-    def _fill_table(table: QTableWidget, rows: List[List], left_cols: int = 1) -> None:
+    def _make_compare_scroll_page(*widgets) -> QScrollArea:
+        """One scroll viewport for chart + table (Web compare-table-wrap parity)."""
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(0, 4, 0, 0)
+        lay.setSpacing(4)
+        for w in widgets:
+            if w is not None:
+                lay.addWidget(w)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setWidget(body)
+        return scroll
+
+    @staticmethod
+    def _prepare_compare_embedded_table(table: QTableWidget) -> None:
+        """Disable inner scrollbars so the outer page scroll moves chart + table."""
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    @staticmethod
+    def _fit_compare_embedded_table(table: QTableWidget) -> None:
+        """Size an embedded compare table to its content height (and min width)."""
+        if table.rowCount() <= 0:
+            hdr_h = table.horizontalHeader().height()
+            table.setFixedHeight(max(hdr_h + 8, 28))
+            return
+        table.resizeRowsToContents()
+        table.resizeColumnsToContents()
+        hdr = table.horizontalHeader()
+        hdr_h = hdr.height() if not hdr.isHidden() else 0
+        rows_h = sum(table.rowHeight(i) for i in range(table.rowCount()))
+        frame = table.frameWidth() * 2
+        table.setFixedHeight(hdr_h + rows_h + frame + 2)
+        # Prefer content width so wide migration tables scroll with the page.
+        col_w = hdr.length() if hdr.length() > 0 else sum(
+            table.columnWidth(i) for i in range(table.columnCount()))
+        min_w = col_w + frame + 4
+        if table.verticalHeader().isVisible():
+            min_w += table.verticalHeader().width()
+        table.setMinimumWidth(min_w)
+
+    @staticmethod
+    def _fill_table(
+        table: QTableWidget,
+        rows: List[List],
+        left_cols: int = 1,
+        *,
+        status_metric: str = "",
+        delta_col: int = -1,
+        fit_embedded: bool = False,
+    ) -> None:
         table.setRowCount(len(rows))
+        improved = QColor("#3cb371")
+        regressed = QColor("#e07070")
         for ri, vals in enumerate(rows):
+            label = str(vals[0]) if vals else ""
+            status = None
+            if delta_col >= 0 and delta_col < len(vals):
+                status = compare_row_delta_status(
+                    label, vals[delta_col], status_metric)
             for ci, val in enumerate(vals):
                 item = QTableWidgetItem(str(val))
                 if ci < left_cols:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
                 else:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+                if status and ci == delta_col:
+                    if status == "Improved":
+                        item.setForeground(QBrush(improved))
+                        item.setToolTip("Improved (Candidate B better)")
+                    elif status == "Regressed":
+                        item.setForeground(QBrush(regressed))
+                        item.setToolTip("Regressed (Candidate B worse)")
                 table.setItem(ri, ci, item)
+        if fit_embedded:
+            _TraceCompareDialog._fit_compare_embedded_table(table)
+
+    def _apply_mig_view(self) -> None:
+        view = self._mig_view.currentData() if hasattr(self, "_mig_view") else "count"
+        filt = self._mig_filter.currentData() if hasattr(self, "_mig_filter") else "top"
+        sort_by = self._mig_sort.currentData() if hasattr(self, "_mig_sort") else "abs"
+        family = ""
+        if hasattr(self, "_mig_family"):
+            family = self._mig_family.currentData() or ""
+        result = filter_compare_migration_rows(
+            getattr(self, "_mig_all_rows", []) or [],
+            view=str(view or "count"),
+            filt=str(filt or "top"),
+            family=str(family or ""),
+            limit=10,
+            sort_by=str(sort_by or "abs"),
+        )
+        headers = list(result.get("headers") or [])
+        rows = list(result.get("rows") or [])
+        self._mig_table.setColumnCount(len(headers))
+        self._mig_table.setHorizontalHeaderLabels(headers)
+        delta_col = 3 if str(view or "count") == "count" else (
+            3 if str(view or "") == "dwell" else -1)
+        self._fill_table(
+            self._mig_table, rows, status_metric="migrations", delta_col=delta_col,
+            fit_embedded=True)
+        shown = int(result.get("shown") or 0)
+        total = int(result.get("total") or 0)
+        if hasattr(self, "_mig_hint"):
+            self._mig_hint.setText(f"{shown} of {total} tasks")
+        if hasattr(self, "_mig_heatmap"):
+            self._mig_heatmap.set_rows(
+                compare_migration_heatmap_rows(
+                    getattr(self, "_mig_all_rows", []) or [], 12))
+
+    def _refresh_mig_families(self, families: Sequence[str]) -> None:
+        combo = getattr(self, "_mig_family", None)
+        if combo is None:
+            return
+        prev = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("All families", "")
+        for fam in families or []:
+            combo.addItem(str(fam), str(fam))
+        idx = combo.findData(prev)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.blockSignals(False)
 
     def _refresh(self) -> None:
         args = self._compare_args()
@@ -3033,6 +3363,20 @@ class _TraceCompareDialog(QDialog):
                 tbl.setRowCount(0)
             if getattr(self, "_strip", None) is not None:
                 self._strip.hide()
+            self._mig_all_rows = []
+            if hasattr(self, "_core_util_chart"):
+                self._core_util_chart.set_rows([])
+            if hasattr(self, "_response_chart"):
+                self._response_chart.set_rows([])
+            if hasattr(self, "_summary_chart"):
+                self._summary_chart.set_rows([])
+            if hasattr(self, "_mig_heatmap"):
+                self._mig_heatmap.set_rows([])
+            if hasattr(self, "_apply_mig_view"):
+                self._refresh_mig_families([])
+                self._apply_mig_view()
+            for tbl in getattr(self, "_chart_tables", ()):
+                self._fit_compare_embedded_table(tbl)
             return
         tables = _build_trace_compare_rows(
             *args, deadlines=self._compare_deadlines())
@@ -3046,17 +3390,38 @@ class _TraceCompareDialog(QDialog):
                 )
             except Exception:
                 pass
-        self._fill_table(self._summary_table, tables.get("summary", []))
-        self._fill_table(self._top_table, tables.get("top", []))
-        self._fill_table(self._core_util_table, tables.get("core_util", []))
-        self._fill_table(self._mig_table, tables.get("migrations", []))
-        self._fill_table(self._exec_table, tables.get("execution", []))
-        self._fill_table(self._block_table, tables.get("blocking", []))
-        self._fill_table(self._inter_table, tables.get("inter_arrival", []))
-        self._fill_table(self._preempt_table, tables.get("preemption", []))
-        self._fill_table(self._sync_table, tables.get("sync", []))
-        self._fill_table(self._response_table, tables.get("response", []))
-        self._fill_table(self._mutex_table, tables.get("mutex_block", []))
+        self._fill_table(self._summary_table, tables.get("summary", []),
+                         delta_col=3, fit_embedded=True)
+        self._fill_table(self._top_table, tables.get("top", []),
+                         status_metric="cpu", delta_col=3)
+        self._fill_table(self._core_util_table, tables.get("core_util", []),
+                         status_metric="util", delta_col=3, fit_embedded=True)
+        self._mig_all_rows = list(tables.get("migrations") or [])
+        self._refresh_mig_families(
+            filter_compare_migration_rows(self._mig_all_rows, "count", "all").get("families") or [])
+        self._apply_mig_view()
+        self._fill_table(self._exec_table, tables.get("execution", []),
+                         status_metric="exec max", delta_col=7)
+        self._fill_table(self._block_table, tables.get("blocking", []),
+                         status_metric="block", delta_col=7)
+        self._fill_table(self._inter_table, tables.get("inter_arrival", []),
+                         status_metric="inter", delta_col=7)
+        self._fill_table(self._preempt_table, tables.get("preemption", []),
+                         status_metric="preempt", delta_col=3)
+        self._fill_table(self._sync_table, tables.get("sync", []),
+                         delta_col=3)
+        self._fill_table(self._response_table, tables.get("response", []),
+                         status_metric="response", delta_col=3, fit_embedded=True)
+        self._fill_table(self._mutex_table, tables.get("mutex_block", []),
+                         status_metric="mutex", delta_col=3)
+        self._fill_table(self._trends_table, self._current_trend_rows())
+        self._core_util_chart.set_rows(compare_core_util_chart_rows(tables))
+        self._response_chart.set_rows(compare_p99_delta_chart_rows(tables, 12))
+        self._summary_chart.set_rows(compare_summary_change_bar_rows(tables, 8))
+        for tbl in getattr(self, "_chart_tables", ()):
+            self._fit_compare_embedded_table(tbl)
+
+    def _current_trend_rows(self) -> List[List]:
         trend_rows = []
         for idx, tab in enumerate(getattr(self._win, "_tabs", None) or []):
             tr = getattr(tab, "trace", None)
@@ -3070,19 +3435,17 @@ class _TraceCompareDialog(QDialog):
                 "name": os.path.basename(getattr(tab, "path", "") or ""),
                 "snap": snap,
             })
-        filled = []
-        for row in cross_trace_trends(trend_rows):
-            lb = row.get("load_balance")
-            lb_s = "—" if lb is None else f"{round(float(lb))}%"
-            filled.append([
-                row.get("name") or "",
-                row.get("tasks") if row.get("tasks") is not None else "—",
-                row.get("migrations") if row.get("migrations") is not None else "—",
-                lb_s,
-                row.get("tick_health") or "—",
-                row.get("span_ns") if row.get("span_ns") is not None else "—",
-            ])
-        self._fill_table(self._trends_table, filled)
+        return _compare_trend_table_rows(cross_trace_trends(trend_rows))
+
+    def _tables_for_export(self) -> Optional[dict]:
+        args = self._compare_args()
+        if args is None:
+            return None
+        tables = _build_trace_compare_rows(
+            *args, deadlines=self._compare_deadlines(),
+            row_limit=None, top_limit=None)
+        tables["trends"] = self._current_trend_rows()
+        return tables
 
     def _save_as_baseline(self) -> None:
         ta = self._trace_for_combo(self._combo_a)
@@ -3107,16 +3470,20 @@ class _TraceCompareDialog(QDialog):
         strip = getattr(self, "_strip", None)
         if strip is None:
             return
-        data = compare_summary_strip(tables or {}, 4)
-        parts = [f"{h['label']} {h['delta']}" for h in data.get("headline") or []]
-        regs = data.get("regressions") or []
-        if regs:
-            parts.append(
-                "Largest regressions: "
-                + " · ".join(f"{r['label']} {r['delta']}" for r in regs)
-            )
-        if data.get("why"):
-            parts.append(str(data["why"]))
+        data = compare_summary_strip(
+            tables or {}, 4,
+            name_a=self._tab_name(self._combo_a),
+            name_b=self._tab_name(self._combo_b),
+        )
+        notable = data.get("notable") or {}
+        parts = []
+        verdict = str(notable.get("verdict") or data.get("why") or "").strip()
+        if verdict:
+            parts.append(verdict)
+        for row in (notable.get("rows") or [])[:4]:
+            parts.append(f"{row.get('status')}: {row.get('label')} {row.get('change')}")
+        for warn in (data.get("warnings") or [])[:2]:
+            parts.append(f"Warning: {warn}")
         text = "  ·  ".join(parts)
         if text:
             strip.setText(text)
@@ -3128,8 +3495,8 @@ class _TraceCompareDialog(QDialog):
         return combo.currentText() or "Trace"
 
     def _export_csv(self) -> None:
-        args = self._compare_args()
-        if args is None:
+        tables = self._tables_for_export()
+        if tables is None:
             QMessageBox.warning(self, "Export CSV", "Select two loaded traces to export.")
             return
 
@@ -3143,8 +3510,6 @@ class _TraceCompareDialog(QDialog):
         if not path:
             return
 
-        tables = _build_trace_compare_rows(
-            *args, deadlines=self._compare_deadlines())
         text = _build_compare_csv(
             self._tab_name(self._combo_a),
             self._tab_name(self._combo_b),
@@ -3163,8 +3528,8 @@ class _TraceCompareDialog(QDialog):
             wnd.statusBar().showMessage(f"Exported trace compare: {path}", 4000)
 
     def _export_html(self) -> None:
-        args = self._compare_args()
-        if args is None:
+        tables = self._tables_for_export()
+        if tables is None:
             QMessageBox.warning(self, "Export HTML", "Select two loaded traces to export.")
             return
 
@@ -3178,8 +3543,6 @@ class _TraceCompareDialog(QDialog):
         if not path:
             return
 
-        tables = _build_trace_compare_rows(
-            *args, deadlines=self._compare_deadlines())
         report = _build_compare_html(
             self._tab_name(self._combo_a),
             self._tab_name(self._combo_b),
@@ -8676,52 +9039,18 @@ class _StatsPanel(QWidget):
 
     @staticmethod
     def _html_make_collapsible_sections(doc_html: str) -> Tuple[str, str]:
-        """Wrap every ``<section class="report-card ...">`` block in ``<details>``
-        so it can be collapsed/expanded, and build a table-of-contents nav
-        linking to each one. Returns ``(nav_html, transformed_doc_html)``.
-        """
-        # Titles (prefix match, ignoring any appended scope suffix) expanded by default.
-        default_expanded = (
-            "Analysis Findings",
-            "Statistics Notes",
-            "Core Utilisation (excl. IDLE/TICK)",
-            "Top Tasks by CPU (excl. IDLE/TICK)",
-            "Trace Health (TICK)",
+        """Wrap report cards and build a TOC with Expand all / Collapse all."""
+        from .html_report import html_make_collapsible_sections
+        return html_make_collapsible_sections(
+            doc_html,
+            default_expanded=(
+                "Analysis Findings",
+                "Statistics Notes",
+                "Core Utilisation (excl. IDLE/TICK)",
+                "Top Tasks by CPU (excl. IDLE/TICK)",
+                "Trace Health (TICK)",
+            ),
         )
-        toc_entries: List[Tuple[str, str]] = []
-        counter = 0
-
-        def _wrap(m: "re.Match") -> str:
-            nonlocal counter
-            classes, inner = m.group(1), m.group(2)
-            h2_m = re.search(r"<h2[^>]*>.*?</h2>", inner, re.S)
-            if h2_m:
-                title_html = h2_m.group(0)
-                title_text = re.sub(r"<[^>]+>", "", title_html)
-                rest = inner[h2_m.end():]
-            else:
-                title_html, title_text, rest = "<h2>Section</h2>", "Section", inner
-            counter += 1
-            sec_id = f"sec-{counter}"
-            toc_entries.append((sec_id, title_text))
-            open_attr = " open" if title_text.startswith(default_expanded) else ""
-            return (
-                f'<details class="{classes}" id="{sec_id}"{open_attr}>'
-                f"<summary>{title_html}</summary>{rest}</details>"
-            )
-
-        new_doc = re.sub(
-            r'<section class="(report-card[^"]*)">(.*?)</section>',
-            _wrap, doc_html, flags=re.S,
-        )
-        if not toc_entries:
-            return "", new_doc
-        items = "".join(
-            f'<li><a href="#{sec_id}">{title}</a></li>'
-            for sec_id, title in toc_entries
-        )
-        nav = f'<nav class="report-toc"><h2>Table of Contents</h2><ul>{items}</ul></nav>'
-        return nav, new_doc
 
     def _add_utilisation_row(self, blay: QVBoxLayout, ui_fs: str,
                              label: str, pct: float, *,
@@ -11887,7 +12216,27 @@ h3.sub {{ margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600;
   margin: 14px 0;
   box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
 }}
-.report-toc h2 {{ margin: 0 0 8px 0; }}
+.report-toc-head {{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 8px 0;
+}}
+.report-toc h2 {{ margin: 0; }}
+.report-toc-actions {{ display: flex; gap: 8px; flex-wrap: wrap; }}
+.toc-btn {{
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f1f5fb;
+  color: var(--accent);
+  cursor: pointer;
+}}
+.toc-btn:hover {{ background: #e4edf8; }}
 .report-toc ul {{ margin: 0; padding: 0 0 0 18px; columns: 2; column-gap: 24px; }}
 .report-toc li {{ margin: 4px 0; }}
 .report-toc a {{ color: var(--accent); text-decoration: none; }}
@@ -12002,19 +12351,7 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
     {queue_html}
     {interval_html}
     {tag_html}
-    <script>
-    (function () {{
-      function openTarget(id) {{
-        var el = document.getElementById(id)
-        if (el && el.tagName === 'DETAILS') el.open = true
-      }}
-      document.querySelectorAll('.report-toc a[href^="#"]').forEach(function (a) {{
-        a.addEventListener('click', function () {{ openTarget(a.getAttribute('href').slice(1)) }})
-      }})
-      window.addEventListener('hashchange', function () {{ openTarget(location.hash.slice(1)) }})
-      if (location.hash) openTarget(location.hash.slice(1))
-    }})()
-    </script>
+    {HTML_REPORT_TOC_SCRIPT}
 """
 
         report = btf_html_report_document(
@@ -12027,8 +12364,16 @@ details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
         )
 
         with open(path, "w", encoding="utf-8") as f:
-            nav_html, report = self._html_make_collapsible_sections(report)
-            f.write(report.replace("<!--TOC-->", nav_html))
+            f.write(html_apply_collapsible_toc(
+                report,
+                default_expanded=(
+                    "Analysis Findings",
+                    "Statistics Notes",
+                    "Core Utilisation (excl. IDLE/TICK)",
+                    "Top Tasks by CPU (excl. IDLE/TICK)",
+                    "Trace Health (TICK)",
+                ),
+            ))
 
     def _export_html(self) -> None:
         if self._trace is None:

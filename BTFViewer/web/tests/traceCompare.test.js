@@ -4,6 +4,8 @@ import { describe, it } from 'node:test'
 import {
   buildCompareCsv,
   buildCompareHtml,
+  buildAllCompareTables,
+  buildTopTasksCompareRows,
   buildCoreUtilCompareRows,
   buildExecutionCompareRows,
   buildInterArrivalCompareRows,
@@ -213,32 +215,114 @@ describe('new compare builders', () => {
     assert.ok(worker.delta != null)
   })
 
-  it('CSV/HTML exports include new sections', () => {
+    it('CSV/HTML exports include new sections', () => {
     const summary = buildSummaryCompareRows(traceA, traceB)
     const coreUtil = buildCoreUtilCompareRows(traceA, traceB)
     const execution = buildExecutionCompareRows(traceA, traceB)
     const interArrival = buildInterArrivalCompareRows(traceA, traceB)
-    const tables = { summary, coreUtil, execution, interArrival, sync: [] }
+    const tables = {
+      summary, coreUtil, execution, interArrival, sync: [],
+      trends: [{ name: 'A.btf', tasks: 2, migrations: 1, loadBalance: 90, tickHealth: 'good', spanNs: 1000 }],
+      shared_patterns: [{ task: 'Worker[1]', kind: 'block', count_a: 2, count_b: 1, reason: 'block for Worker[1]' }],
+    }
 
     const csv = buildCompareCsv('A.btf', 'B.btf', false, tables)
     assert.match(csv, /Core Util/)
+    assert.match(csv, /CPU A \(%\),CPU B \(%\),Δ \(pp\)/)
+    assert.match(csv, /Util A \(%\),Util B \(%\),Δ \(pp\)/)
     assert.match(csv, /Execution Time/)
     assert.match(csv, /Inter-Arrival Time/)
     assert.match(csv, /Load Balance Score/)
     assert.match(csv, /Sync Objects/)
     assert.match(csv, /Response P99/)
     assert.match(csv, /Mutex Blocking/)
+    assert.match(csv, /Shared Patterns/)
+    assert.match(csv, /Trends/)
 
     const html = buildCompareHtml('A.btf', 'B.btf', false, tables)
     assert.match(html, /BTFViewer/)
     assert.match(html, /class="report-head"/)
     assert.match(html, /class="brand-icon"/)
     assert.match(html, /fill="#1C3A6E"/)
-    assert.match(html, /<h2>Core Util<\/h2>/)
+    assert.match(html, /class="report-toc"/)
+    assert.match(html, /Table of Contents/)
+    assert.match(html, /<details/)
+    assert.match(html, /<h2>Overview<\/h2>/)
+    assert.match(html, /Notable Changes/)
+    assert.match(html, /Baseline A/)
+    assert.match(html, /Candidate B/)
+    assert.match(html, /Δ = Baseline A/)
+    assert.match(html, /CPU A \(%\)/)
+    assert.match(html, /Util A \(%\)/)
+    assert.match(html, /Δ \(pp\)/)
+    assert.match(html, /<h2>Core Utilisation<\/h2>/)
     assert.match(html, /<h2>Execution Time<\/h2>/)
     assert.match(html, /<h2>Inter-Arrival Time<\/h2>/)
     assert.match(html, /<h2>Response P99<\/h2>/)
     assert.match(html, /<h2>Mutex Blocking<\/h2>/)
+    assert.match(html, /<h2>Shared Patterns<\/h2>/)
+    assert.match(html, /<h2>Trends<\/h2>/)
+    assert.match(html, /<details class="report-card" id="sec-\d+" open>/)
+    assert.match(html, /compare-chart/)
+    assert.match(html, /Core utilisation/)
+    assert.match(html, /Expand all/)
+    assert.match(html, /Collapse all/)
+    assert.match(html, /data-toc="expand"/)
+  })
+
+  it('exports summary change bars and migration heatmap in HTML', () => {
+    const summary = [
+      { label: 'Migrations (total)', a: '10', b: '25', delta: '−15' },
+      { label: 'Blocking total', a: '1 ms', b: '3 ms', delta: '−2 ms' },
+      { label: 'Tasks', a: '5', b: '5', delta: '0' },
+    ]
+    const migrations = [
+      {
+        name: 'QP[1]', migrationsA: 2, migrationsB: 12, delta: -10,
+        rateA: '1/s', rateB: '2/s', rateDelta: '−1/s',
+        dwellA: '1 ms', dwellB: '2 ms', dwellDelta: '−1 ms',
+        pingA: 0, pingB: 1, coresA: 2, coresB: 2, primaryA: '0 90%', primaryB: '1 80%',
+      },
+      {
+        name: 'CS[2]', migrationsA: 8, migrationsB: 1, delta: 7,
+        rateA: '2/s', rateB: '0.2/s', rateDelta: '+1.8/s',
+        dwellA: '2 ms', dwellB: '1 ms', dwellDelta: '+1 ms',
+        pingA: 2, pingB: 0, coresA: 3, coresB: 1, primaryA: '1 70%', primaryB: '0 90%',
+      },
+    ]
+    const html = buildCompareHtml('A.btf', 'B.btf', false, { summary, migrations })
+    assert.match(html, /Summary changes/)
+    assert.match(html, /Migration Δ heatmap/)
+    assert.match(html, /QP\[1\]/)
+  })
+
+  it('formats CPU/util deltas with pp and unicode minus', () => {
+    const top = buildTopTasksCompareRows(traceA, traceB)
+    assert.ok(top.some(r => /\bpp\b/.test(String(r.delta))))
+    const util = buildCoreUtilCompareRows(traceA, traceB)
+    assert.ok(util.some(r => /\bpp\b/.test(String(r.delta))))
+    const neg = [...top, ...util].find(r => String(r.delta).includes('−'))
+    if (neg) assert.doesNotMatch(String(neg.delta), /^-/)
+  })
+
+  it('unlimited export includes every task', () => {
+    const segsA = []
+    const segsB = []
+    for (let i = 0; i < 16; i++) {
+      segsA.push(makeSeg(`W[${i}]`, 'Core_0', 0, 50 + i))
+      segsB.push(makeSeg(`W[${i}]`, 'Core_0', 0, 40 + i))
+    }
+    const manyA = makeTrace({ timeMax: 200, segments: segsA })
+    const manyB = makeTrace({ timeMax: 200, segments: segsB })
+    const capped = buildAllCompareTables(manyA, manyB)
+    const full = buildAllCompareTables(manyA, manyB, null, null, false, null, 0)
+    assert.equal(capped.top.length, 10)
+    assert.equal(full.top.length, 16)
+    assert.equal(capped.execution.length, 15)
+    assert.equal(full.execution.length, 16)
+    const html = buildCompareHtml('A', 'B', false, full)
+    assert.match(html, /W\[15\]/)
+    assert.match(html, /W\[10\]/)
   })
 
   it('deadline misses use Settings taskDeadlines', () => {
@@ -268,5 +352,38 @@ describe('new compare builders', () => {
     const dl = rows.find(r => r.label === 'Deadline misses')
     assert.ok(dl.a > 0)
     assert.equal(dl.b, 0)
+  })
+
+  it('top tasks lookup uses the full dataset', () => {
+    const traceA = makeTrace({
+      timeMax: 1000,
+      timeScale: 'ns',
+      segments: [
+        makeSeg('W[0]', 'Core_0', 0, 1000),
+        makeSeg('W[1]', 'Core_0', 0, 900),
+        makeSeg('W[2]', 'Core_0', 0, 800),
+        makeSeg('W[3]', 'Core_0', 0, 50),
+      ],
+    })
+    const traceB = makeTrace({
+      timeMax: 1000,
+      timeScale: 'ns',
+      segments: [
+        makeSeg('W[0]', 'Core_0', 0, 40),
+        makeSeg('W[1]', 'Core_0', 0, 30),
+        makeSeg('W[2]', 'Core_0', 0, 20),
+        makeSeg('W[3]', 'Core_0', 0, 900),
+      ],
+    })
+    const rows = buildTopTasksCompareRows(traceA, traceB, null, null, false, 3)
+    const byName = Object.fromEntries(rows.map(r => [r.name, r]))
+    assert.ok(byName['W[2]'])
+    assert.ok(byName['W[3]'])
+    assert.notEqual(byName['W[2]'].cpuB, '—')
+    assert.notEqual(byName['W[3]'].cpuA, '—')
+    const summary = buildSummaryCompareRows(traceA, traceB)
+    const p99 = summary.find(r => r.label === 'Response P99 (worst task)')
+    assert.match(String(p99.a), /\(/)
+    assert.match(String(p99.b), /\(/)
   })
 })

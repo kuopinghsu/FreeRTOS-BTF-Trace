@@ -19,6 +19,18 @@ from btf_viewer_pkg.ux_explore import (  # noqa: E402
     best_finding_scope,
     collect_worst_events,
     compare_summary_strip,
+    compare_notable_changes,
+    compare_core_util_chart_rows,
+    compare_core_util_chart_svg,
+    compare_p99_delta_chart_rows,
+    compare_p99_delta_chart_svg,
+    compare_summary_change_bar_rows,
+    compare_summary_change_bars_svg,
+    compare_migration_heatmap_rows,
+    compare_migration_heatmap_svg,
+    compare_row_delta_status,
+    filter_compare_migration_rows,
+    COMPARE_DELTA_FORMULA,
     core_util_over_time,
     critical_path_rows,
     detect_timeline_anomalies,
@@ -135,7 +147,8 @@ class UxExploreTest(unittest.TestCase):
         }
         strip = compare_summary_strip(tables, 4)
         self.assertTrue(any(h["label"] == "Span" for h in strip["headline"]))
-        regs = top_compare_regressions(strip["regressions"] and [
+        self.assertTrue(strip.get("improvements"))
+        regs = top_compare_regressions([
             {"label": "CS[22] exec max", "delta": "+60 µs", "signed": 60000, "kind": "time"},
             {"label": "Context switches", "delta": "+2", "signed": 2, "kind": "count"},
         ], 4)
@@ -342,6 +355,94 @@ class UxExploreTest(unittest.TestCase):
             "response": [{"name": "A[1]", "delta": "+80 µs"}],
         }, 4)
         self.assertIn("response", strip["why"].lower())
+
+    def test_notable_changes_polarity_threshold_and_tick_warning(self) -> None:
+        notable = compare_notable_changes({
+            "summary": [
+                ["Migrations (total)", 18440, 19018, "-578"],
+                ["Tick mode", "TICKLESS", "TICKLESS", "—"],
+                ["Response P99 (worst task)",
+                 "13.698 ms (QP[198])", "29.062 ms (QP[197])", "-15.364 ms"],
+            ],
+            "response": [
+                ["QP[198]", "13.698 ms", "29.062 ms", "-15.364 ms"],
+                ["QP[197]", "25.780 ms", "14.687 ms", "+11.093 ms"],
+            ],
+        }, 8, "tickful-8cores.btf", "tickless-8cores.btf")
+        statuses = {r["status"] for r in notable["rows"]}
+        self.assertIn("Regressed", statuses)
+        self.assertIn("Improved", statuses)
+        self.assertTrue(any("tickful" in w.lower() for w in notable["warnings"]))
+        self.assertTrue(any("different tasks" in w.lower() for w in notable["warnings"]))
+        self.assertEqual(notable["formula"], COMPARE_DELTA_FORMULA)
+        self.assertGreater(notable["cards"]["regressions"], 0)
+        self.assertGreater(notable["cards"]["improvements"], 0)
+        self.assertIn("Candidate B", notable["verdict"])
+
+    def test_compare_charts_and_migration_views(self) -> None:
+        util = compare_core_util_chart_rows({
+            "core_util": [
+                ["Core_0", "40.0", "55.0", "-15.0"],
+                ["Core_1", "10.0", "8.0", "+2.0"],
+            ],
+        })
+        self.assertEqual(util[0]["label"], "Core_0")
+        svg = compare_core_util_chart_svg(util)
+        self.assertIn("Core_0", svg)
+        self.assertIn("#2a6fb2", svg)
+        self.assertIn("#6b4ea8", svg)
+        p99 = compare_p99_delta_chart_rows({
+            "response": [
+                ["QP[198]", "13 ms", "29 ms", "-16 ms"],
+                ["QP[197]", "25 ms", "14 ms", "+11 ms"],
+            ],
+        })
+        self.assertEqual(p99[0]["label"], "QP[198]")
+        self.assertEqual(p99[0]["status"], "Regressed")
+        self.assertEqual(p99[1]["status"], "Improved")
+        p99_svg = compare_p99_delta_chart_svg(p99)
+        self.assertIn("#c0392b", p99_svg)
+        self.assertIn("#1f6b45", p99_svg)
+        mig = [
+            [f"QP[{i}]", 10 + i, 20 + i, -(10 + i), "1/s", "2/s", "-1/s",
+             "1 ms", "2 ms", "-1 ms", 0, 1, 2, 2, "0 90%", "1 80%"]
+            for i in range(8)
+        ]
+        mig.append(["CS[1]", 4, 4, 0, "1/s", "1/s", "0",
+                    "1 ms", "1 ms", "0", 0, 0, 1, 1, "0 100%", "0 100%"])
+        mig.append(["CS[2]", 9, 1, 8, "2/s", "0.2/s", "+1.8/s",
+                    "2 ms", "1 ms", "+1 ms", 2, 0, 3, 1, "1 70%", "0 90%"])
+        top = filter_compare_migration_rows(mig, "count", "top", "", 10)
+        self.assertEqual(top["shown"], 9)
+        self.assertEqual(len(top["headers"]), 7)
+        self.assertTrue(all(r[3] != 0 for r in top["rows"]))
+        dwell = filter_compare_migration_rows(mig, "dwell", "all", "CS", 10)
+        self.assertEqual(dwell["view"], "dwell")
+        self.assertEqual(len(dwell["headers"]), 6)
+        self.assertEqual(dwell["shown"], 2)
+        regs = filter_compare_migration_rows(mig, "count", "regressed")
+        self.assertTrue(all(r[3] < 0 for r in regs["rows"]))
+        rel = filter_compare_migration_rows(mig, "count", "all", "", 10, sort_by="rel")
+        self.assertEqual(rel["sort_by"], "rel")
+        self.assertEqual(rel["rows"][0][0], "CS[2]")
+        heat = compare_migration_heatmap_rows(mig, 5)
+        self.assertEqual(len(heat), 5)
+        self.assertIn("Migration Δ heatmap", compare_migration_heatmap_svg(heat))
+        bars = compare_summary_change_bar_rows({
+            "summary": [
+                ["Migrations (total)", 100, 200, "−100"],
+                ["Context switches", 10, 5, "+5"],
+                ["Tasks", 3, 3, "0"],
+            ],
+        })
+        self.assertTrue(any(r["label"] == "Migrations (total)" for r in bars))
+        self.assertIn("Summary changes", compare_summary_change_bars_svg(bars))
+        self.assertEqual(
+            compare_row_delta_status("Migrations (total)", "−100"), "Regressed")
+        self.assertEqual(
+            compare_row_delta_status("Load Balance Score", "−0.5 pp"), "Improved")
+        self.assertIn("pp = percentage points", COMPARE_DELTA_FORMULA)
+        self.assertGreater(regs["shown"], 0)
 
     def test_anomaly_flags_deadline_and_mutex(self) -> None:
         evs = [_ev("exec", "A[1]", i * 20, 10) for i in range(4)]

@@ -93,12 +93,17 @@ class TraceCompareTests(unittest.TestCase):
         labels = [r[0] for r in tables["summary"]]
         self.assertIn("Load Balance Score", labels)
         self.assertIn("Load Balance σ", labels)
+        self.assertIn("Context switches /s", labels)
+        self.assertIn("Migrations /s", labels)
+        self.assertIn("Blocking time /s", labels)
         self.assertIn("Tick health", labels)
         self.assertIn("Tick mode", labels)
         self.assertIn("Tick count", labels)
         self.assertIn("Missed ticks (est.)", labels)
         lb_row = next(r for r in tables["summary"] if r[0] == "Load Balance Score")
         self.assertTrue(str(lb_row[1]).endswith("%"))
+        self.assertRegex(str(lb_row[1]), r"^\d+\.\d%$")
+        self.assertIn("pp", str(lb_row[3]))
 
     def test_multi_section_dict_keys(self):
         tr_a = _mini_trace({
@@ -112,11 +117,12 @@ class TraceCompareTests(unittest.TestCase):
         expected = {
             "summary", "top", "core_util", "migrations", "execution",
             "blocking", "inter_arrival", "preemption", "sync",
-            "response", "mutex_block", "shared_patterns",
+            "response", "mutex_block", "shared_patterns", "trends",
         }
         self.assertEqual(set(tables.keys()), expected)
         self.assertTrue(tables["core_util"])
         self.assertTrue(tables["execution"])
+        self.assertTrue(tables["trends"])
         self.assertTrue(any(r[0] == "A[1]" for r in tables["blocking"]))
         self.assertTrue(any(r[0] == "A[1]" for r in tables["inter_arrival"]))
 
@@ -126,15 +132,50 @@ class TraceCompareTests(unittest.TestCase):
         self.assertIn('class="report-head"', html)
         self.assertIn('class="brand-icon"', html)
         self.assertIn('fill="#1C3A6E"', html)
+        self.assertIn('class="report-toc"', html)
+        self.assertIn("Table of Contents", html)
+        self.assertIn("<details", html)
+        self.assertIn("Overview", html)
+        self.assertIn("Notable Changes", html)
+        self.assertIn("Baseline A", html)
+        self.assertIn("Candidate B", html)
+        self.assertIn("Δ = Baseline A", html)
         for section in (
             "Core Utilisation", "Execution Time", "Blocking Time",
             "Inter-Arrival", "Sync Objects", "Response P99", "Mutex Blocking",
+            "Shared Patterns", "Trends",
         ):
             self.assertIn(section, csv)
             self.assertIn(section, html)
         self.assertIn("Cores A", csv)
         self.assertIn("Primary A", csv)
         self.assertIn("Max A", csv)
+        self.assertRegex(html, r'<details class="report-card" id="sec-\d+" open>')
+        self.assertIn("compare-chart", html)
+        self.assertIn("Core utilisation", html)
+        self.assertIn("Summary changes", html)
+        self.assertIn("CPU A (%)", html)
+        self.assertIn("Util A (%)", html)
+        self.assertIn("Δ (pp)", html)
+        self.assertIn("Expand all", html)
+        self.assertIn("Collapse all", html)
+        self.assertIn('data-toc="expand"', html)
+
+    def test_html_export_includes_every_task_when_unlimited(self):
+        segs_a = {f"W[{i}]": [(0, 50 + i, "Core_0")] for i in range(16)}
+        segs_b = {f"W[{i}]": [(0, 40 + i, "Core_0")] for i in range(16)}
+        tr_a = _mini_trace(segs_a, cores=("Core_0",))
+        tr_b = _mini_trace(segs_b, cores=("Core_0",))
+        capped = _build_trace_compare_rows(tr_a, tr_b)
+        full = _build_trace_compare_rows(
+            tr_a, tr_b, row_limit=None, top_limit=None)
+        self.assertEqual(len(capped["top"]), 10)
+        self.assertEqual(len(full["top"]), 16)
+        self.assertEqual(len(capped["execution"]), 15)
+        self.assertEqual(len(full["execution"]), 16)
+        html = _build_compare_html("A", "B", False, full)
+        self.assertIn("W[15]", html)
+        self.assertIn("W[10]", html)
 
     def test_empty_sync_still_works(self):
         tr = _mini_trace({"T[1]": [(0, 50, "Core_0")]}, cores=("Core_0",))
@@ -173,6 +214,29 @@ class TraceCompareTests(unittest.TestCase):
         self.assertEqual(dl[2], 0)
         self.assertTrue(tables["response"])
         self.assertTrue(any(r[0] == "Worker[1]" for r in tables["response"]))
+
+    def test_top_tasks_lookup_uses_full_dataset(self):
+        tr_a = _mini_trace({
+            "W[0]": [(0, 1000, "Core_0")],
+            "W[1]": [(0, 900, "Core_0")],
+            "W[2]": [(0, 800, "Core_0")],
+            "W[3]": [(0, 50, "Core_0")],
+        }, cores=("Core_0",), time_max=1000)
+        tr_b = _mini_trace({
+            "W[0]": [(0, 40, "Core_0")],
+            "W[1]": [(0, 30, "Core_0")],
+            "W[2]": [(0, 20, "Core_0")],
+            "W[3]": [(0, 900, "Core_0")],
+        }, cores=("Core_0",), time_max=1000)
+        tables = _build_trace_compare_rows(tr_a, tr_b, top_limit=3)
+        by_name = {r[0]: r for r in tables["top"]}
+        self.assertIn("W[2]", by_name)
+        self.assertIn("W[3]", by_name)
+        self.assertNotEqual(by_name["W[2]"][2], "—")
+        self.assertNotEqual(by_name["W[3]"][1], "—")
+        p99 = next(r for r in tables["summary"] if r[0] == "Response P99 (worst task)")
+        self.assertIn("(", str(p99[1]))
+        self.assertIn("(", str(p99[2]))
 
 
 if __name__ == "__main__":

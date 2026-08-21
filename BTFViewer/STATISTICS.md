@@ -162,8 +162,8 @@ Section order, pinned sections, expanded/collapsed state, and table heights are 
 **Export CSV** and **Export HTML** use the current cursor scope.
 
 - **CSV** exports the Statistics summary tables and related calculated values.
-- **HTML** exports the same summaries and adds presentation-oriented details such as **Analysis Findings**, the **Load Balance Score** gauge, and supported detail tables.
-- **Trace Compare…** compares supported metrics between two open traces. Enable **Limit to each tab's cursor range** when the two traces should use different time windows.
+- **HTML** exports the same summaries and adds presentation-oriented details such as **Analysis Findings**, the **Load Balance Score** gauge, and supported detail tables. The HTML table of contents includes **Expand all** / **Collapse all**.
+- **Trace Compare…** compares supported metrics between two open traces. Trace A is the **baseline** and Trace B is the **candidate**. **Δ** is Baseline A − Candidate B. Enable **Limit to each tab's cursor range** when the two traces should use different time windows. **Export CSV** / **Export HTML** write every Compare table (not only the dialog top-N preview). HTML adds a table of contents with **Expand all** / **Collapse all**; Overview and Summary start expanded. Overview is a comparison identity, verdict, and Notable Changes summary (Improved / Regressed above threshold). Summary, Core Util, Response, and Core Migrations include charts; Core Migrations defaults to the largest count changes.
 
 For exact exported fields and section-specific behavior, see the detailed metric descriptions below.
 
@@ -177,6 +177,7 @@ The Statistics panel is available on both Desktop and Web. Metrics are grouped i
 **Export HTML** starts with an **Analysis Findings** card.
 It contains the same main findings as toolbar **Analysis**: load balance, WCET, blocking, thrashing, deadlines, tick health, and synchronization.
 It also adds the **Load Balance Score** gauge as an SVG under Core Utilisation.
+The report includes a **Table of Contents** with **Expand all** / **Collapse all** for every section card. Analysis Findings, Statistics Notes, Core Utilisation, Top Tasks, and Trace Health start expanded; other sections start collapsed.
 
 Priority Inheritance, Mutex / Semaphore, and Interval Analysis also include detail tables. The longest instances or hold episodes appear first. Each detail table is limited to about 150–200 rows.
 
@@ -1552,16 +1553,50 @@ Example plots from `tracedata/example-4cores.btf.gz` (4-core SMP trace, 67 tasks
 <a id="trace-compare-1" name="trace-compare-1">&#x200B;</a>
 ### Trace Compare… ![](../images/readme/h4.svg)
 
-Compare two traces you already have open side-by-side:
+Use **Trace Compare…** to compare two runs of the same workload, such as a baseline build and a candidate build. For a meaningful comparison, keep the workload, instrumentation, core count, and capture phase as similar as possible. If the trace lengths differ, prefer the normalized `/s`, `%`, and `pp` metrics over raw totals.
+
+**Before you compare**
+
+- Use **Trace A** for the baseline and **Trace B** for the candidate.
+- Compare equivalent phases. When full traces include different setup or teardown periods, place cursors around the matching workload in each tab.
+- Check the Overview identity and validation warnings before interpreting a delta. A different span, task set, tick mode, or worst-P99 task can make a numerical difference misleading.
+- Task rows are matched by display name (`Name[id]`). If task IDs change between runs, logically identical tasks may appear as separate rows.
+
+**Open a comparison**
 
 1. Open at least **two** `.btf` files (Desktop: **File → Open** adds a tab; Web: **Open** adds a tab in the bar under the toolbar).
 2. Click toolbar **Compare** (right after **Analysis**; enabled when two or more tabs are loaded).
-3. Choose **Trace A** and **Trace B** from the dropdowns.
+3. Choose **Trace A (Baseline)** and **Trace B (Candidate)** from the dropdowns.
 4. Optionally check **Limit to each tab's cursor range** to compare metrics within C1–Cn on each trace (requires 2+ cursors per tab).
-5. Switch between **Summary**, **Top Tasks**, **Core Util**, **Core Migrations**, **Execution**, **Blocking**, **Inter-Arrival**, **Preemption**, **Sync**, **Response**, and **Mutex** tabs.
-6. Optionally click **Validate experiment…** to score expected compared with actual deltas in the **AI** tab (host fills actual percents from this compare, including **Scope to cursors**), or **Query with AI…** to send the current Trace A / B tables (opens **Settings → AI** if the assistant is disabled).
+5. Switch between **Summary**, **Top Tasks**, **Core Util**, **Core Migrations**, **Execution**, **Blocking**, **Inter-Arrival**, **Preemption**, **Sync**, **Response**, **Mutex**, and **Trends** tabs.
+6. Optionally click **Validate experiment…** to compare the expected and actual deltas and score the experiment in the **AI** tab. The host fills the actual percentages from the current comparison, including **Scope to cursors**. Use **Query with AI…** to send the current Trace A / B tables to the AI tab; if AI is disabled, BTFViewer opens **Settings → AI**.
 
-By default, compare views use the **full trace**. With the cursor-range checkbox enabled, each side uses that tab's own cursor window independently.
+By default, Compare uses the **full trace** on both sides. With the cursor-range option enabled, each side uses its own tab's cursor window independently; the two windows do not need the same absolute timestamps, but they should represent equivalent workload phases.
+
+**Export CSV** and **Export HTML** include every Compare table the dialog reports — **Summary**, **Top Tasks**, **Core Util**, **Core Migrations**, **Execution**, **Blocking**, **Inter-Arrival**, **Preemption**, **Sync**, **Response**, **Mutex**, **Shared Patterns**, and **Trends** — with every task row, not only the top-N preview in the dialog. **Export HTML** adds a table of contents with **Expand all** / **Collapse all**. **Overview** and **Summary** start expanded; the remaining tables collapse, matching Statistics HTML export. Summary includes compact change bars; Core Util and Response include charts; Core Migrations starts with a **migration Δ heatmap** and a **Largest changes (count & rate)** preview, then the full 16-column table.
+
+**Overview** — comparison identity (file, range, tick mode), the delta convention, a short verdict, four status cards (regressions, improvements, significant changes, validation warnings), and a **Notable Changes** table. Status always describes **Candidate B relative to Baseline A**: **Improved**, **Regressed**, or **Changed**. A change is listed only when it clears both an absolute and a relative threshold, so small differences are not automatically labelled as regressions. Tick-mode detection is checked against filenames containing `tickful` or `tickless`. Worst response P99 names the task on each side; a warning appears when the two sides refer to different tasks. The formula line also explains that **—** means unavailable, not zero; **pp** means percentage points; and STI, σ, Dwell, Ping, P99, and `/tick` are expanded.
+
+#### Read the delta direction correctly
+
+The report uses two numerical directions for different purposes:
+
+| Location | Formula | How to read it |
+|---|---|---|
+| Compare data tables | **Δ = Baseline A − Candidate B** | Positive means A is numerically larger; negative means B is numerically larger |
+| Notable Changes and change-bar charts | **Change = Candidate B − Baseline A** | Positive means the candidate increased; negative means it decreased |
+| Status and colour | Candidate B relative to Baseline A | **Improved** / **Regressed** is based on metric meaning, not on the sign alone |
+
+For a lower-is-better metric such as response time, blocking time, issue count, or migration count, a positive table Δ usually means Candidate B improved. For a higher-is-better metric such as Load Balance Score, a negative table Δ may mean Candidate B improved. Metrics without a clear preferred direction are labelled **Changed**. Always use the status/colour and metric meaning instead of assuming that `+` is good or bad.
+
+Percentage-point deltas (CPU, utilisation, and load balance) use a **pp** suffix. Times omit trailing zeros (`19 µs`, not `19.000 µs`).
+
+**Recommended reading order**
+
+1. Confirm the files, scopes, tick modes, and validation warnings in **Overview**.
+2. Use normalized rows in **Summary** when spans differ.
+3. Review **Notable Changes** to find changes large enough to investigate.
+4. Open the related detail tab, then return to each timeline to verify the events behind the numbers.
 
 **Summary** — high-level diff:
 
@@ -1570,26 +1605,30 @@ By default, compare views use the **full trace**. With the cursor-range checkbox
 | Span | Total trace duration (or cursor-range width when scoped) |
 | Tasks / Segments / STI events | Counts |
 | Context switches | Total across all cores |
+| Context switches /s | Span-normalized rate (comparable across unequal lengths) |
 | Core gap avg / max | Idle time between consecutive slices on each core |
 | Migrations (total) / Migrated tasks | Core-migration counts |
-| Load Balance Score / σ | Same Gini-based score and util stddev as Statistics Core Utilisation |
+| Migrations /s | Span-normalized migration rate |
+| Blocking time /s | Accumulated off-CPU blocking-gap time per second of trace span |
+| Mutex blocking (total) / Mutex blocking /s | Mutex-wait total and span-normalized rate |
+| Load Balance Score / σ | Same Gini-based score and util stddev as Statistics Core Utilisation (one decimal; Δ in **pp**) |
 | Tick health / mode / count / missed | Same Trace Health (TICK) summary as Statistics |
 
-Each row shows Trace A, Trace B, and **Δ** (signed difference).
+Each row shows Baseline A, Candidate B, and **Δ** (signed difference A − B). A compact change-bar chart highlights the largest Summary shifts (Candidate B − Baseline A).
 
-**Top Tasks** — top 10 user tasks by CPU% from each trace, unioned by display name (`Name[id]`). Tasks present in only one trace show **—** for the missing side.
+**Top Tasks** — top 10 user tasks by CPU% from each trace, unioned by display name (`Name[id]`). After the union, CPU% is looked up from the **full** dataset on each side. Headers are **CPU A (%)** / **CPU B (%)** / **Δ (pp)**. **—** means the task is absent from that trace, not that it fell outside the top 10.
 
-**Core Util** — per-core utilisation % (IDLE/TICK excluded), A compared with B with Δ.
+**Core Util** — per-core utilisation % (IDLE/TICK excluded), A compared with B with Δ (**Util A (%)** / **Util B (%)** / **Δ (pp)**). A paired bar chart shows Baseline A (blue) above Candidate B (purple) for each core.
 
 **Execution** / **Blocking** / **Inter-Arrival** — top tasks by sample count with Runs/Gaps, Avg, Max, and Δ (aligned with the Statistics metric tables).
 
-**Core Migrations** — same columns as the Statistics panel, compared side-by-side:
+**Core Migrations** — same columns as the Statistics panel, compared side-by-side. The dialog defaults to the **ten largest count changes** and three views (**Count & rate**, **Dwell & ping**, **Cores**), plus **Changed only**, **Regressions only** (Candidate B has more migrations), **Show all**, a task-family filter (`QP`, `CS`, …), and **Sort |Δ|** / **Sort relative**. A migration Δ heatmap (and HTML export) shows the largest count changes. HTML export still includes every column.
 
 | Column | Meaning |
 |--------|---------|
 | **Task** | Display name (`Name[id]`) |
 | **Migr A** / **B** | Migration count in scope for that trace |
-| **Δ** | Difference (A − B) |
+| **Δ** | Difference (Baseline A − Candidate B) |
 | **Rate A** / **B** | Migration rate label (`/s` and `/tick`) per trace |
 | **Rate Δ** | Signed difference of migrations per second of on-CPU time (A − B) |
 | **Dwell A** / **B** | Average on-CPU slice duration per trace |
@@ -1600,14 +1639,16 @@ Each row shows Trace A, Trace B, and **Δ** (signed difference).
 
 **Preemption** / **Sync** — victim totals and sync-object aggregates (holds, issues, lock-bounce / affinity violations, mutex/sem/queue counts).
 
-**Response** — per-task heuristic response P99 (ready→completion from adjacent slices) with A / B / Δ.
+**Response** — per-task heuristic response P99 (ready→completion from adjacent slices) with A / B / Δ. A diverging chart shows Candidate B − Baseline A: improvements to the left, regressions to the right. Summary **Response P99 (worst task)** names the task responsible on each side.
 **Mutex** — per-task mutex-wait totals.
-**Deadline misses** on Summary use the same **Settings → Display** task-deadline map as Statistics (0 when none are configured).
+**Shared Patterns** — compares recurring anomaly patterns reported for both traces.
+**Trends** — one row per open tab (tasks, migrations, load balance, tick health, span).
+**Deadline misses** on Summary use the same **Settings → Display** task-deadline map as Statistics. When no deadlines are configured, `0` means that no configured deadline was evaluated; it is not proof that the workload met an unspecified deadline.
 
 Use this to compare builds, configurations, or runs of the same workload without merging traces manually.
 
 <a id="use-case-tickful-vs-tickless-performance-and-context-switches" name="use-case-tickful-vs-tickless-performance-and-context-switches">&#x200B;</a>
-##### Use case: tickful compared with tickless (performance and context switches) ![](../images/readme/h5.svg)
+#### Use case: tickful compared with tickless (performance and context switches) ![](../images/readme/h5.svg)
 
 Capture the **same workload** twice — once with a fixed tick (`configUSE_TICKLESS_IDLE = 0`) and once with FreeRTOS **tickless idle** (`= 1`) — then use **Trace Compare…** to measure scheduler cost and application latency.
 
@@ -1667,7 +1708,7 @@ python builds/btf_viewer.py compare \
     --lo 1464000 --hi 1764000
 ```
 
-**Example Summary** (`tickless-8cores.zip`, full-trace scope, A = Tickful, B = Tickless, Δ = A − B):
+**Example Summary** (`tickless-8cores.zip`, full-trace scope, Baseline A = Tickful, Candidate B = Tickless, Δ = A − B):
 
 | Metric | Tickful | Tickless | Δ |
 |--------|--------:|---------:|--:|
@@ -1680,10 +1721,8 @@ python builds/btf_viewer.py compare \
 On a **full** stress-suite capture (high core util), context-switch and tick counts can stay close. Tick policy matters most in **idle-heavy** windows.
 Scope cursors (or `--lo`/`--hi`) around an idle phase (for example, demo test 11) when measuring power-oriented tickless gains; keep a busy CS window when checking that latency budgets still hold.
 
-> **Known limitation — SMP tickless idle:** on the bundled `tickless-8cores.zip` sample, test 11's TICK STI still fires every ~1 ms in *both* builds (no widened gaps in the tickless capture).
-Root cause is upstream in `FreeRTOS-Kernel/tasks.c`'s `prvGetExpectedIdleTime()`, which forces the expected idle time to 0 whenever more than one task is ready at idle priority.
-Under SMP, a *running* task stays in its ready list (only `xTaskRunState` changes), so with `configNUMBER_OF_CORES = 8` all 8 per-core IDLE tasks are simultaneously "ready", and tickless idle never actually engages.
-This is a vanilla-kernel heuristic gap, not a capture or viewer bug. Expect tickless compared with tickful tick counts to stay close on SMP builds until the kernel's idle-ready-list check is made SMP-aware.
+> **Known limitation of the bundled SMP sample:** in `tickless-8cores.zip`, test 11's TICK STI still fires about every 1 ms in both captures, so the tickless trace does not show the expected wider gaps.
+In the FreeRTOS kernel revision used by this sample, `prvGetExpectedIdleTime()` returns zero when more than one task is ready at idle priority. Under this SMP configuration, the per-core IDLE tasks remain in the ready list while running, so tickless idle does not engage as expected. This is a limitation of the sample's kernel/configuration combination, not evidence of a BTF capture or BTFViewer error. Do not generalize this result to every FreeRTOS SMP version or configuration.
 
 **Interpretation**
 
@@ -1695,8 +1734,8 @@ This is a vanilla-kernel heuristic gap, not a capture or viewer bug. Expect tick
 | Blocking / Execution Max worse on one side | Prefer that policy only if the Δ fits latency budgets |
 | Migrations ↑ with one policy | Re-check affinity; tick wake pattern can change placement |
 
-Prefer **tickless** when idle power matters and scoped busy-window metrics stay within budget.
-Prefer **tickful** when Trace Health must stay GOOD or soft real-time slices cannot tolerate tick stretching.
+Choose **tickless** when idle power matters and the matched busy- and idle-window comparisons remain within the required latency and scheduling budgets.
+Choose **tickful** only when the measured candidate results better satisfy those requirements; a `GOOD` Trace Health label alone is not a performance verdict.
 Longer walkthrough: [WORKFLOWS.md §5.2](WORKFLOWS.md#52-compare-two-builds).
 
 **Find → Migrations**: lists migration boundary times; `F3` / `Shift+F3` jump between them (Desktop + Web).
@@ -1711,4 +1750,3 @@ Longer walkthrough: [WORKFLOWS.md §5.2](WORKFLOWS.md#52-compare-two-builds).
 | [WORKFLOWS.md](WORKFLOWS.md) | How do I diagnose a problem? |
 | [STATISTICS.md](STATISTICS.md) | What does this measurement mean? |
 | [AI.md](AI.md) | How does AI-assisted investigation work? |
-

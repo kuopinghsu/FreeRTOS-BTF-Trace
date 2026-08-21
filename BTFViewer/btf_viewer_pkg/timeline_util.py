@@ -357,6 +357,22 @@ def _format_time(value: float, time_scale: str = "ns", decimals: int = 3) -> str
             return f"{fmt.format(ns / divisor)} {label}"
     return f"{fmt.format(ns)} ns"  # unreachable; satisfies type checkers
 
+
+def _format_time_trim(value: float, time_scale: str = "ns") -> str:
+    """Like ``_format_time`` but drops trailing zeros (``19 µs``, not ``19.000 µs``)."""
+    text = _format_time(value, time_scale, decimals=3)
+    parts = text.rsplit(" ", 1)
+    if len(parts) != 2:
+        return text
+    num, unit = parts
+    if "." not in num:
+        return text
+    whole, frac = num.split(".", 1)
+    frac = frac.rstrip("0")
+    if not frac:
+        return f"{whole} {unit}"
+    return f"{whole}.{frac} {unit}"
+
 _TIME_LABEL_TO_NS: Dict[str, float] = {
     "ns": 1.0,
     "µs": 1_000.0,

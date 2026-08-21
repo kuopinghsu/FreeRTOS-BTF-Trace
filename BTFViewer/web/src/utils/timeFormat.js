@@ -67,6 +67,20 @@ export function formatTimeFixed(t, scale, decimals = 3) {
   return `${fmt(ns)} ns`
 }
 
+/** Like formatTimeFixed but drops trailing zeros (``19 µs``, not ``19.000 µs``). */
+export function formatTimeTrim(t, scale) {
+  const text = formatTimeFixed(t, scale, 3)
+  const parts = text.split(' ')
+  if (parts.length < 2) return text
+  const unit = parts[parts.length - 1]
+  const num = parts.slice(0, -1).join(' ')
+  if (!num.includes('.')) return text
+  const [whole, fracRaw = ''] = num.split('.')
+  const frac = fracRaw.replace(/0+$/, '')
+  if (!frac) return `${whole} ${unit}`
+  return `${whole}.${frac} ${unit}`
+}
+
 /** Format migration gap columns in native trace units (Core Migrations table).
  * Truncates to an integer native-unit value before formatting, matching the
  * desktop app's `_format_time(int(avg), scale)` (parity for Core Migrations /

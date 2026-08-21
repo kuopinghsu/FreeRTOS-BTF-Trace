@@ -4180,7 +4180,7 @@ import { normalizeStatsPins, normalizeStatsSectionOrder, moveStatsSection, toggl
 import { buildHistogramModel, histogramBarTooltip } from '../utils/histogramModel.js'
 import { plotTabsForKind, resolvePlotTabSwitch } from '../utils/plotTabs.js'
 import { classifyLoadBalance, loadBalanceGaugeImgHtml, loadBalanceMetrics } from '../utils/loadBalanceGauge.js'
-import { btfHtmlReportDocument } from '../utils/htmlReport.js'
+import { btfHtmlReportDocument, htmlApplyCollapsibleToc, htmlMakeCollapsibleSections, HTML_REPORT_TOC_SCRIPT } from '../utils/htmlReport.js'
 import {
   HEALTH_BAND_SECTION,
   analyzeResponseTimes,
@@ -6634,23 +6634,7 @@ function _htmlCell(v) {
 // collapsed/expanded, and builds a table-of-contents nav linking to each one.
 const _DEFAULT_EXPANDED_TITLES = ['Analysis Findings', 'Statistics Notes', 'Core Utilisation (excl. IDLE/TICK)', 'Top Tasks by CPU (excl. IDLE/TICK)', 'Trace Health (TICK)']
 function _makeCollapsibleSections(docHtml) {
-  const toc = []
-  let counter = 0
-  const newDoc = docHtml.replace(/<section class="(report-card[^"]*)">([\s\S]*?)<\/section>/g, (_match, classes, inner) => {
-    const h2Match = inner.match(/<h2[^>]*>[\s\S]*?<\/h2>/)
-    const titleHtml = h2Match ? h2Match[0] : '<h2>Section</h2>'
-    const titleText = titleHtml.replace(/<[^>]+>/g, '')
-    const rest = h2Match ? inner.slice(h2Match.index + h2Match[0].length) : inner
-    counter++
-    const id = `sec-${counter}`
-    toc.push({ id, title: titleText })
-    const openAttr = _DEFAULT_EXPANDED_TITLES.some(t => titleText.startsWith(t)) ? ' open' : ''
-    return `<details class="${classes}" id="${id}"${openAttr}><summary>${titleHtml}</summary>${rest}</details>`
-  })
-  if (!toc.length) return { nav: '', html: newDoc }
-  const items = toc.map(t => `<li><a href="#${t.id}">${t.title}</a></li>`).join('')
-  const nav = `<nav class="report-toc"><h2>Table of Contents</h2><ul>${items}</ul></nav>`
-  return { nav, html: newDoc }
+  return htmlMakeCollapsibleSections(docHtml, _DEFAULT_EXPANDED_TITLES)
 }
 
 const _HTML_EXPORT_UTIL_CSS = `
@@ -7946,7 +7930,27 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; 
   margin: 14px 0;
   box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
 }
-.report-toc h2 { margin: 0 0 8px 0; }
+.report-toc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 8px 0;
+}
+.report-toc h2 { margin: 0; }
+.report-toc-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.toc-btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f1f5fb;
+  color: var(--accent);
+  cursor: pointer;
+}
+.toc-btn:hover { background: #e4edf8; }
 .report-toc ul { margin: 0; padding: 0 0 0 18px; columns: 2; column-gap: 24px; }
 .report-toc li { margin: 4px 0; }
 .report-toc a { color: var(--accent); text-decoration: none; }
@@ -8388,19 +8392,7 @@ ${_HTML_EXPORT_UTIL_CSS}
     })() : ''}
     ${_renderIntervalReportHtml(tr, lo, hi, suffix)}
     ${_renderTagReportHtml(tr, lo, hi, suffix)}
-    <script>
-    (function () {
-      function openTarget(id) {
-        var el = document.getElementById(id)
-        if (el && el.tagName === 'DETAILS') el.open = true
-      }
-      document.querySelectorAll('.report-toc a[href^="#"]').forEach(function (a) {
-        a.addEventListener('click', function () { openTarget(a.getAttribute('href').slice(1)) })
-      })
-      window.addEventListener('hashchange', function () { openTarget(location.hash.slice(1)) })
-      if (location.hash) openTarget(location.hash.slice(1))
-    })()
-    </` + `script>
+    ${HTML_REPORT_TOC_SCRIPT}
 `
 
   const html = btfHtmlReportDocument('Statistics Report', body, {
@@ -8410,8 +8402,7 @@ ${_HTML_EXPORT_UTIL_CSS}
     reportClass: 'report-wide',
   })
 
-  const { nav, html: collapsibleHtml } = _makeCollapsibleSections(html)
-  const finalHtml = collapsibleHtml.replace('<!--TOC-->', nav)
+  const finalHtml = htmlApplyCollapsibleToc(html, _DEFAULT_EXPANDED_TITLES)
   _downloadText(`statistics-${_stamp()}.html`, finalHtml, 'text/html;charset=utf-8')
 }
 

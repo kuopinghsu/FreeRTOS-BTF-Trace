@@ -300,3 +300,150 @@ def btf_html_report_document(
         "</body>\n"
         "</html>\n"
     )
+
+
+HTML_REPORT_TOC_CSS = """
+.report-toc {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin: 14px 0;
+  box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
+}
+.report-toc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 8px 0;
+}
+.report-toc h2 { margin: 0; }
+.report-toc-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.toc-btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f1f5fb;
+  color: var(--accent);
+  cursor: pointer;
+}
+.toc-btn:hover { background: #e4edf8; }
+.report-toc ul { margin: 0; padding: 0 0 0 18px; columns: 2; column-gap: 24px; }
+.report-toc li { margin: 4px 0; }
+.report-toc a { color: var(--accent); text-decoration: none; }
+.report-toc a:hover { text-decoration: underline; }
+details.report-card { scroll-margin-top: 12px; }
+details.report-card > summary { cursor: pointer; list-style: none; }
+details.report-card > summary::-webkit-details-marker { display: none; }
+details.report-card > summary h2 { display: inline-block; margin: 0; }
+details.report-card > summary::before {
+  content: "\\25B8";
+  display: inline-block;
+  width: 14px;
+  margin-right: 6px;
+  color: var(--accent);
+  transition: transform 0.15s ease;
+}
+details.report-card[open] > summary::before { transform: rotate(90deg); }
+""".strip()
+
+HTML_REPORT_TOC_SCRIPT = """
+<script>
+(function () {
+  function openTarget(id) {
+    var el = document.getElementById(id);
+    if (el && el.tagName === 'DETAILS') el.open = true;
+  }
+  function setAllOpen(open) {
+    document.querySelectorAll('details.report-card').forEach(function (el) {
+      el.open = open;
+    });
+  }
+  document.querySelectorAll('.report-toc a[href^="#"]').forEach(function (a) {
+    a.addEventListener('click', function () { openTarget(a.getAttribute('href').slice(1)); });
+  });
+  document.querySelectorAll('[data-toc="expand"]').forEach(function (btn) {
+    btn.addEventListener('click', function () { setAllOpen(true); });
+  });
+  document.querySelectorAll('[data-toc="collapse"]').forEach(function (btn) {
+    btn.addEventListener('click', function () { setAllOpen(false); });
+  });
+  window.addEventListener('hashchange', function () { openTarget(location.hash.slice(1)); });
+  if (location.hash) openTarget(location.hash.slice(1));
+})();
+</script>
+""".strip()
+
+
+def html_toc_nav(entries) -> str:
+    """Table of Contents nav with Expand all / Collapse all."""
+    items = "".join(
+        f'<li><a href="#{sec_id}">{title}</a></li>'
+        for sec_id, title in (entries or [])
+    )
+    return (
+        '<nav class="report-toc"><div class="report-toc-head">'
+        "<h2>Table of Contents</h2>"
+        '<div class="report-toc-actions">'
+        '<button type="button" class="toc-btn" data-toc="expand">Expand all</button>'
+        '<button type="button" class="toc-btn" data-toc="collapse">Collapse all</button>'
+        "</div></div>"
+        f"<ul>{items}</ul></nav>"
+    )
+
+
+def html_make_collapsible_sections(
+    doc_html: str,
+    default_expanded: tuple = (),
+) -> tuple:
+    """Wrap every ``<section class="report-card ...">`` in ``<details>``
+    and build a table-of-contents nav. Returns ``(nav_html, new_doc_html)``.
+    """
+    prefixes = tuple(default_expanded or ())
+    toc_entries: list = []
+    counter = 0
+
+    def _wrap(m: "re.Match") -> str:
+        nonlocal counter
+        classes, inner = m.group(1), m.group(2)
+        h2_m = re.search(r"<h2[^>]*>.*?</h2>", inner, re.S)
+        if h2_m:
+            title_html = h2_m.group(0)
+            title_text = re.sub(r"<[^>]+>", "", title_html)
+            rest = inner[h2_m.end():]
+        else:
+            title_html, title_text, rest = "<h2>Section</h2>", "Section", inner
+        counter += 1
+        sec_id = f"sec-{counter}"
+        toc_entries.append((sec_id, title_text))
+        open_attr = " open" if prefixes and title_text.startswith(prefixes) else ""
+        return (
+            f'<details class="{classes}" id="{sec_id}"{open_attr}>'
+            f"<summary>{title_html}</summary>{rest}</details>"
+        )
+
+    new_doc = re.sub(
+        r'<section class="(report-card[^"]*)">(.*?)</section>',
+        _wrap, doc_html, flags=re.S,
+    )
+    if not toc_entries:
+        return "", new_doc
+    return html_toc_nav(toc_entries), new_doc
+
+
+def html_apply_collapsible_toc(
+    document_html: str,
+    *,
+    default_expanded: tuple = (),
+) -> str:
+    """Wrap report cards, inject TOC at ``<!--TOC-->`` (or after the header)."""
+    nav, doc = html_make_collapsible_sections(document_html, default_expanded)
+    if not nav:
+        return doc
+    if "<!--TOC-->" in doc:
+        return doc.replace("<!--TOC-->", nav, 1)
+    return doc.replace("</header>", "</header>\n" + nav, 1)

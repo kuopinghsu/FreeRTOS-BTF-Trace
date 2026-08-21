@@ -191,6 +191,14 @@ class AiWebParityTests(unittest.TestCase):
             ("def finding_overlay_times", "export function findingOverlayTimes"),
             ("def task_inspector_line", "export function taskInspectorLine"),
             ("def compare_summary_strip", "export function compareSummaryStrip"),
+            ("def compare_notable_changes", "export function compareNotableChanges"),
+            ("def compare_core_util_chart_svg", "export function compareCoreUtilChartSvg"),
+            ("def compare_p99_delta_chart_svg", "export function compareP99DeltaChartSvg"),
+            ("def compare_summary_change_bars_svg", "export function compareSummaryChangeBarsSvg"),
+            ("def compare_migration_heatmap_svg", "export function compareMigrationHeatmapSvg"),
+            ("def compare_row_delta_status", "export function compareRowDeltaStatus"),
+            ("def filter_compare_migration_rows", "export function filterCompareMigrationRows"),
+            ("COMPARE_DELTA_FORMULA", "export const COMPARE_DELTA_FORMULA"),
             ("def harvest_ux_events", "export function harvestUxEvents"),
             ("def prepare_ux_events", "export function prepareUxEvents"),
             ("def find_event_at_percentile", "export function findEventAtPercentile"),
@@ -1833,6 +1841,18 @@ class AiWebParityTests(unittest.TestCase):
         cmp_js = (BTF_ROOT / "web/src/utils/traceCompare.js").read_text(encoding="utf-8")
         self.assertIn("def cross_trace_trends", parser_py)
         self.assertIn("export function crossTraceTrends", cmp_js)
+        self.assertIn("def html_make_collapsible_sections", (
+            BTF_ROOT / "btf_viewer_pkg/html_report.py").read_text(encoding="utf-8"))
+        self.assertIn("export function htmlMakeCollapsibleSections", (
+            BTF_ROOT / "web/src/utils/htmlReport.js").read_text(encoding="utf-8"))
+        self.assertIn("def html_toc_nav", (
+            BTF_ROOT / "btf_viewer_pkg/html_report.py").read_text(encoding="utf-8"))
+        self.assertIn("export function htmlTocNav", (
+            BTF_ROOT / "web/src/utils/htmlReport.js").read_text(encoding="utf-8"))
+        self.assertIn("html_apply_collapsible_toc", parser_py)
+        self.assertIn("htmlApplyCollapsibleToc", cmp_js)
+        self.assertIn("Shared Patterns", parser_py)
+        self.assertIn("Shared Patterns", cmp_js)
         # Modes are not extra AI_TEMPLATE_QUESTIONS entries.
         ids = [t[0] for t in AI_TEMPLATE_QUESTIONS]
         self.assertEqual(ids[-1], "auto_investigate")

@@ -7,6 +7,17 @@ import {
   bestFindingScope,
   collectWorstEvents,
   compareSummaryStrip,
+  compareNotableChanges,
+  compareCoreUtilChartRows,
+  compareCoreUtilChartSvg,
+  compareP99DeltaChartRows,
+  compareP99DeltaChartSvg,
+  compareRowDeltaStatus,
+  compareSummaryChangeBarRows,
+  compareSummaryChangeBarsSvg,
+  compareMigrationHeatmapRows,
+  compareMigrationHeatmapSvg,
+  filterCompareMigrationRows,
   coreUtilOverTime,
   criticalPathRows,
   detectTimelineAnomalies,
@@ -265,6 +276,117 @@ describe('uxExplore', () => {
       response: [{ name: 'A[1]', delta: '+80 µs' }],
     }, 4)
     assert.match(strip.why.toLowerCase(), /response/)
+  })
+
+  it('notable changes classify polarity, threshold, and tick warning', () => {
+    const notable = compareNotableChanges({
+      summary: [
+        { label: 'Migrations (total)', a: 18440, b: 19018, delta: '-578' },
+        { label: 'Tick mode', a: 'TICKLESS', b: 'TICKLESS', delta: '—' },
+        {
+          label: 'Response P99 (worst task)',
+          a: '13.698 ms (QP[198])',
+          b: '29.062 ms (QP[197])',
+          delta: '-15.364 ms',
+        },
+      ],
+      response: [
+        { name: 'QP[198]', a: '13.698 ms', b: '29.062 ms', delta: '-15.364 ms' },
+        { name: 'QP[197]', a: '25.780 ms', b: '14.687 ms', delta: '+11.093 ms' },
+      ],
+    }, 8, 'tickful-8cores.btf', 'tickless-8cores.btf')
+    const statuses = new Set(notable.rows.map(r => r.status))
+    assert.ok(statuses.has('Regressed'))
+    assert.ok(statuses.has('Improved'))
+    assert.ok(notable.warnings.some(w => w.toLowerCase().includes('tickful')))
+    assert.ok(notable.warnings.some(w => w.toLowerCase().includes('different tasks')))
+    assert.ok(notable.cards.regressions > 0)
+    assert.ok(notable.cards.improvements > 0)
+    assert.match(notable.verdict, /Candidate B/)
+  })
+
+  it('compare charts and migration views', () => {
+    const util = compareCoreUtilChartRows({
+      coreUtil: [
+        { core: 'Core_0', utilA: '40.0', utilB: '55.0', delta: '-15.0' },
+        { core: 'Core_1', utilA: '10.0', utilB: '8.0', delta: '+2.0' },
+      ],
+    })
+    const svg = compareCoreUtilChartSvg(util)
+    assert.match(svg, /Core_0/)
+    assert.match(svg, /#2a6fb2/)
+    assert.match(svg, /#6b4ea8/)
+    const p99 = compareP99DeltaChartRows({
+      response: [
+        { name: 'QP[198]', a: '13 ms', b: '29 ms', delta: '-16 ms' },
+        { name: 'QP[197]', a: '25 ms', b: '14 ms', delta: '+11 ms' },
+      ],
+    })
+    assert.equal(p99[0].label, 'QP[198]')
+    assert.equal(p99[0].status, 'Regressed')
+    assert.equal(p99[1].status, 'Improved')
+    const p99Svg = compareP99DeltaChartSvg(p99)
+    assert.match(p99Svg, /#c0392b/)
+    assert.match(p99Svg, /#1f6b45/)
+    const mig = []
+    for (let i = 0; i < 8; i++) {
+      mig.push({
+        name: `QP[${i}]`, migrationsA: 10 + i, migrationsB: 20 + i, delta: -(10 + i),
+        rateA: '1/s', rateB: '2/s', rateDelta: '-1/s',
+        dwellA: '1 ms', dwellB: '2 ms', dwellDelta: '-1 ms',
+        pingA: 0, pingB: 1, coresA: 2, coresB: 2, primaryA: '0 90%', primaryB: '1 80%',
+      })
+    }
+    mig.push({
+      name: 'CS[1]', migrationsA: 4, migrationsB: 4, delta: 0,
+      rateA: '1/s', rateB: '1/s', rateDelta: '0',
+      dwellA: '1 ms', dwellB: '1 ms', dwellDelta: '0',
+      pingA: 0, pingB: 0, coresA: 1, coresB: 1, primaryA: '0 100%', primaryB: '0 100%',
+    })
+    mig.push({
+      name: 'CS[2]', migrationsA: 9, migrationsB: 1, delta: 8,
+      rateA: '2/s', rateB: '0.2/s', rateDelta: '+1.8/s',
+      dwellA: '2 ms', dwellB: '1 ms', dwellDelta: '+1 ms',
+      pingA: 2, pingB: 0, coresA: 3, coresB: 1, primaryA: '1 70%', primaryB: '0 90%',
+    })
+    const top = filterCompareMigrationRows(mig, 'count', 'top', '', 10)
+    assert.equal(top.shown, 9)
+    assert.equal(top.headers.length, 7)
+    assert.ok(top.rows.every(r => r[3] !== 0))
+    assert.equal(top.sort_by, 'abs')
+    const rel = filterCompareMigrationRows(mig, 'count', 'top', '', 3, 'rel')
+    assert.equal(rel.sort_by, 'rel')
+    assert.equal(rel.shown, 3)
+    // Relative: CS[2] (+8 on base 9) outranks a mid QP absolute delta.
+    assert.equal(rel.rows[0][0], 'CS[2]')
+    const dwell = filterCompareMigrationRows(mig, 'dwell', 'all', 'CS', 10)
+    assert.equal(dwell.view, 'dwell')
+    assert.equal(dwell.headers.length, 6)
+    assert.equal(dwell.shown, 2)
+    const regs = filterCompareMigrationRows(mig, 'count', 'regressed')
+    assert.ok(regs.rows.every(r => r[3] < 0))
+    assert.ok(regs.shown > 0)
+
+    const bars = compareSummaryChangeBarRows({
+      summary: [
+        { label: 'Migrations (total)', a: '10', b: '25', delta: '−15' },
+        { label: 'Tasks', a: '5', b: '5', delta: '0' },
+        { label: 'Blocking total', a: '1 ms', b: '4 ms', delta: '−3 ms' },
+      ],
+    }, 8)
+    assert.equal(bars.length, 2)
+    assert.ok(bars.every(r => r.cand !== 0))
+    const barSvg = compareSummaryChangeBarsSvg(bars)
+    assert.match(barSvg, /Summary changes/)
+
+    const heat = compareMigrationHeatmapRows(mig, 5)
+    assert.equal(heat.length, 5)
+    assert.ok(heat.every(r => r.delta !== 0))
+    const heatSvg = compareMigrationHeatmapSvg(heat)
+    assert.match(heatSvg, /Migration Δ heatmap/)
+
+    assert.equal(compareRowDeltaStatus('Migrations (total)', '−15'), 'Regressed')
+    assert.equal(compareRowDeltaStatus('QP[1]', '+8', 'migrations'), 'Improved')
   })
 
   it('unified jitter has dispatch/wakeup and period spark', () => {

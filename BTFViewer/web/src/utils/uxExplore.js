@@ -65,7 +65,7 @@ export const BURST_WINDOW_NS = 1_000_000
 
 const JUMP_RE = /jump:([0-9]+(?:\.[0-9]+)?)/gi
 const TASK_RE = /\b([A-Za-z_][\w.-]*\[\d+\])/
-const DELTA_RE = /^([+\-−])?\s*([\d.]+)\s*(ns|µs|us|μs|ms|s|\/s|%)?$/i
+const DELTA_RE = /^([+\-−])?\s*([\d.]+)\s*(?:(ns|µs|us|μs|ms|s|\/s|%|pp)(\/s)?)?$/i
 const UNIT_NS = {
   ns: 1,
   us: 1000,
@@ -78,12 +78,30 @@ const SUMMARY_STRIP_LABELS = new Set([
   'Span',
   'Span (cursor range)',
   'Context switches',
+  'Context switches /s',
   'Migrations (total)',
+  'Migrations /s',
   'Missed ticks (est.)',
   'Response P99 (worst task)',
   'Mutex blocking (total)',
+  'Mutex blocking /s',
+  'Blocking time /s',
   'Deadline misses',
 ])
+export const COMPARE_DELTA_FORMULA =
+  'Δ = Baseline A − Candidate B (positive means A is larger). '
+  + '— = unavailable (not zero). '
+  + 'pp = percentage points. '
+  + 'STI = software trace item; σ = util stddev; '
+  + 'Dwell = avg on-CPU slice; Ping = A↔B core ping-pong; '
+  + 'P99 = 99th percentile; /tick = per TICK period.'
+export const COMPARE_NOTABLE_REL = 0.05
+export const COMPARE_NOTABLE_TIME_NS = 50_000
+export const COMPARE_NOTABLE_COUNT = 2
+export const COMPARE_NOTABLE_COUNT_ABS = 50
+export const COMPARE_NOTABLE_PP = 1.0
+const TASK_PAREN_RE = /\(([^)]+)\)\s*$/
+const VALUE_PAREN_RE = /\s*\([^)]*\)\s*$/
 
 export function percentileIndex(n, p) {
   if (n <= 0) return 0
@@ -401,7 +419,8 @@ export function taskInspectorLine(task = '', qualityWarnings = []) {
 }
 
 export function parseSignedDelta(text) {
-  const s = String(text ?? '').trim().replace(/−/g, '-')
+  let s = String(text ?? '').trim().replace(/−/g, '-').replace(/,/g, '')
+  s = s.replace(VALUE_PAREN_RE, '').trim()
   if (!s || s === '—' || s === '–' || s === '-') return null
   const m = DELTA_RE.exec(s)
   if (!m) return null
@@ -409,8 +428,12 @@ export function parseSignedDelta(text) {
   const val = Number(m[2])
   if (!Number.isFinite(val)) return null
   const unit = String(m[3] || '').toLowerCase()
-  if (unit in UNIT_NS) return { signed: sign * val * UNIT_NS[unit], kind: 'time' }
-  if (unit === '%') return { signed: sign * val, kind: 'pct' }
+  const perS = Boolean(m[4])
+  if (unit in UNIT_NS) {
+    const signedNs = sign * val * UNIT_NS[unit]
+    return { signed: signedNs, kind: perS ? 'rate' : 'time' }
+  }
+  if (unit === '%' || unit === 'pp') return { signed: sign * val, kind: 'pct' }
   if (unit === '/s') return { signed: sign * val, kind: 'rate' }
   return { signed: sign * val, kind: 'count' }
 }
@@ -419,25 +442,26 @@ export function compareCandidatesFromTables(tables) {
   if (!tables || typeof tables !== 'object') return []
   const out = []
   for (const row of tables.summary || []) {
-    const { label, delta } = rowLabelDelta(row, 'label', 'delta', 0, 3)
+    const { label, delta, a, b } = rowCells(row, 'label', 'delta', 0, 3)
     if (!label || skipSummaryLabel(label)) continue
     const parsed = parseSignedDelta(delta)
     if (!parsed) continue
-    out.push({ label, metric: 'summary', delta: String(delta), ...parsed })
+    out.push({ label, metric: 'summary', delta: String(delta), a, b, ...parsed })
   }
   const specs = [
-    ['execution', 'exec max', 0, 7, 'name', 'deltaMax'],
-    ['blocking', 'block avg', 0, 7, 'name', 'delta'],
-    ['inter_arrival', 'inter avg', 0, 7, 'name', 'delta'],
-    ['interArrival', 'inter avg', 0, 7, 'name', 'delta'],
-    ['response', 'response p99', 0, 3, 'name', 'delta'],
-    ['mutex_block', 'mutex block', 0, 3, 'name', 'delta'],
-    ['mutexBlock', 'mutex block', 0, 3, 'name', 'delta'],
-    ['deadlines', 'deadline misses', 0, 3, 'name', 'delta'],
+    ['execution', 'exec max', 0, 7, 'name', 'deltaMax', 5, 6, 'maxA', 'maxB'],
+    ['blocking', 'block avg', 0, 7, 'name', 'delta', 3, 4, 'avgA', 'avgB'],
+    ['inter_arrival', 'inter avg', 0, 7, 'name', 'delta', 3, 4, 'avgA', 'avgB'],
+    ['interArrival', 'inter avg', 0, 7, 'name', 'delta', 3, 4, 'avgA', 'avgB'],
+    ['response', 'response p99', 0, 3, 'name', 'delta', 1, 2, 'a', 'b'],
+    ['mutex_block', 'mutex block', 0, 3, 'name', 'delta', 1, 2, 'a', 'b'],
+    ['mutexBlock', 'mutex block', 0, 3, 'name', 'delta', 1, 2, 'a', 'b'],
+    ['deadlines', 'deadline misses', 0, 3, 'name', 'delta', 1, 2, 'a', 'b'],
   ]
-  for (const [key, metric, nameIdx, deltaIdx, nameKey, deltaKey] of specs) {
+  for (const [key, metric, nameIdx, deltaIdx, nameKey, deltaKey, aIdx, bIdx, aKey, bKey] of specs) {
     for (const row of tables[key] || []) {
-      const { label: name, delta } = rowLabelDelta(row, nameKey, deltaKey, nameIdx, deltaIdx)
+      const { label: name, delta, a, b } = rowCells(
+        row, nameKey, deltaKey, nameIdx, deltaIdx, aKey, bKey, aIdx, bIdx)
       if (!name) continue
       const parsed = parseSignedDelta(delta)
       if (!parsed) continue
@@ -445,6 +469,8 @@ export function compareCandidatesFromTables(tables) {
         label: `${name} ${metric}`,
         metric,
         delta: String(delta),
+        a,
+        b,
         ...parsed,
       })
     }
@@ -470,8 +496,7 @@ export function topCompareRegressions(candidates, limit = 4) {
   return picked.slice(0, lim)
 }
 
-export function compareSummaryStrip(tables, limit = 4) {
-  const cands = compareCandidatesFromTables(tables)
+export function compareSummaryStrip(tables, limit = 4, nameA = '', nameB = '') {
   const headline = []
   for (const row of tables?.summary || []) {
     const { label, delta } = rowLabelDelta(row, 'label', 'delta', 0, 3)
@@ -479,14 +504,576 @@ export function compareSummaryStrip(tables, limit = 4) {
       headline.push({ label: label.replace(' (cursor range)', ''), delta: String(delta) })
     }
   }
-  const regressions = topCompareRegressions(cands, limit)
+  const notable = compareNotableChanges(tables, limit, nameA, nameB)
+  const rows = [...(notable.rows || [])]
+  const regressions = rows.filter(r => r.status === 'Regressed')
+  const improvements = rows.filter(r => r.status === 'Improved')
   const shared = [...(tables?.shared_patterns || tables?.sharedPatterns || [])]
+  let why = String(notable.verdict || '').trim()
+  const hint = compareWhy({ regressions, shared_patterns: shared })
+  if (hint && !hint.startsWith('No positive')) why = `${why} ${hint}`.trim()
   return {
     headline,
     regressions,
+    improvements,
+    notable,
+    warnings: [...(notable.warnings || [])],
     shared_patterns: shared,
-    why: compareWhy({ regressions, shared_patterns: shared }),
+    why: why || hint,
+    formula: COMPARE_DELTA_FORMULA,
   }
+}
+
+function compareSummaryPair(tables, prefix) {
+  for (const row of tables?.summary || []) {
+    const { label, a, b } = rowCells(row, 'label', 'delta', 0, 3)
+    if (label === prefix || (prefix === 'Span' && String(label).startsWith('Span'))) {
+      return [a != null ? String(a) : '—', b != null ? String(b) : '—']
+    }
+  }
+  return ['—', '—']
+}
+
+export function compareTickModeWarnings(nameA, nameB, modeA, modeB) {
+  const warnings = []
+  const ma = String(modeA || '').trim().toUpperCase()
+  const mb = String(modeB || '').trim().toUpperCase()
+  const skip = new Set(['', '—', '-', 'UNKNOWN'])
+  if (!skip.has(ma) && !skip.has(mb) && ma !== mb) {
+    warnings.push(`Tick mode differs: Baseline A is ${ma}, Candidate B is ${mb}.`)
+  }
+  for (const [name, mode, side] of [[nameA, ma, 'Baseline A'], [nameB, mb, 'Candidate B']]) {
+    const low = String(name || '').toLowerCase()
+    if (low.includes('tickful') && mode === 'TICKLESS') {
+      warnings.push(`${side} filename suggests tickful, but detection is ${mode}.`)
+    }
+    if (low.includes('tickless') && mode === 'TICK') {
+      warnings.push(`${side} filename suggests tickless, but detection is ${mode}.`)
+    }
+  }
+  return warnings
+}
+
+function compareMetricPolarity(label, metric = '') {
+  const blob = `${label} ${metric}`.toLowerCase()
+  if (blob.includes('tick health') || blob.includes('tick mode')) return null
+  if (blob.includes('load balance score')) return 'better'
+  if (['response', 'mutex', 'deadline', 'block', 'migrat', 'core gap',
+    'context switch', 'missed tick', 'preempt', 'ping', 'σ', 'sigma',
+    'bounce', 'affinity', 'issues', 'exec max'].some(k => blob.includes(k))) {
+    return 'worse'
+  }
+  if (blob.includes('inter')) return 'worse'
+  return null
+}
+
+function compareChangeIsSignificant(signed, kind, aMag, bMag) {
+  const mag = Math.abs(Number(signed || 0))
+  if (mag <= 0) return false
+  const base = Math.max(Number(aMag || 0), Number(bMag || 0), 1e-12)
+  const rel = mag / base
+  if (kind === 'time') return mag >= COMPARE_NOTABLE_TIME_NS || rel >= COMPARE_NOTABLE_REL
+  if (kind === 'pct') return mag >= COMPARE_NOTABLE_PP
+  if (kind === 'count') {
+    return mag >= COMPARE_NOTABLE_COUNT_ABS
+      || (mag >= COMPARE_NOTABLE_COUNT && rel >= COMPARE_NOTABLE_REL)
+  }
+  if (kind === 'rate') return rel >= COMPARE_NOTABLE_REL
+  return rel >= COMPARE_NOTABLE_REL
+}
+
+function compareStatus(polarity, signed) {
+  if (polarity === 'worse') {
+    if (signed < 0) return 'Regressed'
+    if (signed > 0) return 'Improved'
+  } else if (polarity === 'better') {
+    if (signed > 0) return 'Regressed'
+    if (signed < 0) return 'Improved'
+  }
+  return 'Changed'
+}
+
+function cellMagnitude(text) {
+  const parsed = parseSignedDelta(text)
+  return parsed ? Math.abs(Number(parsed.signed)) : null
+}
+
+function flipDeltaText(text) {
+  const s = String(text || '').trim()
+  if (!s || s === '—' || s === '–' || s === '0' || s === '0.0') return s
+  if (s[0] === '+') return `−${s.slice(1)}`
+  if (s[0] === '-' || s[0] === '−') return `+${s.slice(1)}`
+  return `+${s}`
+}
+
+function taskFromCell(text) {
+  const m = TASK_PAREN_RE.exec(String(text || ''))
+  return m ? m[1].trim() : ''
+}
+
+function extraSummaryCandidates(tables) {
+  const extra = []
+  for (const row of tables?.summary || []) {
+    const { label, delta, a, b } = rowCells(row, 'label', 'delta', 0, 3)
+    const low = String(label).toLowerCase()
+    if (!low.includes('load balance score')
+      && !(low.includes('load balance') && (label.includes('σ') || low.includes('sigma')))) {
+      continue
+    }
+    const parsed = parseSignedDelta(delta)
+    if (!parsed) continue
+    extra.push({
+      label, metric: 'summary', delta: String(delta), a, b, ...parsed,
+    })
+  }
+  return extra
+}
+
+export function compareNotableChanges(tables, limit = 8, nameA = '', nameB = '') {
+  const lim = Math.max(1, Math.min(16, Number(limit) || 8))
+  const cands = [...compareCandidatesFromTables(tables), ...extraSummaryCandidates(tables)]
+  const classified = []
+  for (const cand of cands) {
+    if (!cand || typeof cand !== 'object') continue
+    const signed = Number(cand.signed || 0)
+    const kind = String(cand.kind || 'count')
+    const aMag = cellMagnitude(cand.a)
+    const bMag = cellMagnitude(cand.b)
+    if (!compareChangeIsSignificant(signed, kind, aMag, bMag)) continue
+    const polarity = compareMetricPolarity(String(cand.label || ''), String(cand.metric || ''))
+    const status = compareStatus(polarity, signed)
+    const aTxt = cand.a == null ? '—' : String(cand.a)
+    const bTxt = cand.b == null ? '—' : String(cand.b)
+    const deltaTxt = String(cand.delta || '')
+    const candTxt = flipDeltaText(deltaTxt)
+    let change = candTxt
+    if (aMag && aMag > 0) {
+      const rel = (-signed) * 100 / aMag
+      const relTxt = `${rel >= 0 ? '+' : ''}${rel.toFixed(1)}%`
+      change = `${candTxt} / ${relTxt}`
+    }
+    classified.push({
+      status,
+      label: String(cand.label || ''),
+      a: aTxt,
+      b: bTxt,
+      delta: deltaTxt,
+      change,
+      signed,
+      kind,
+    })
+  }
+  classified.sort((a, b) => Math.abs(b.signed) - Math.abs(a.signed))
+  const [modeA, modeB] = compareSummaryPair(tables, 'Tick mode')
+  const warnings = compareTickModeWarnings(nameA, nameB, modeA, modeB)
+  const [p99A, p99B] = compareSummaryPair(tables, 'Response P99 (worst task)')
+  const taskA = taskFromCell(p99A)
+  const taskB = taskFromCell(p99B)
+  if (taskA && taskB && taskA !== taskB) {
+    warnings.push(
+      `Worst response P99 compares different tasks (Baseline A: ${taskA}, Candidate B: ${taskB}).`,
+    )
+  }
+  const nReg = classified.filter(r => r.status === 'Regressed').length
+  const nImp = classified.filter(r => r.status === 'Improved').length
+  const cards = {
+    regressions: nReg,
+    improvements: nImp,
+    significant: classified.length,
+    warnings: warnings.length,
+  }
+  const rows = classified.slice(0, lim)
+  const regs = classified.filter(r => r.status === 'Regressed')
+  const imps = classified.filter(r => r.status === 'Improved')
+  const tickNote = warnings.some(w => w.toLowerCase().includes('tick'))
+    ? ' Tick-mode detection requires verification.'
+    : ''
+  let verdict
+  if (nReg && nImp) {
+    verdict = `Overall: Mixed — Candidate B has ${nReg} regression(s) and ${nImp} improvement(s) above threshold.${tickNote}`
+  } else if (nReg) {
+    const top = regs[0]
+    verdict = `Overall: Candidate B regressed on ${top.label} (${top.change}).${tickNote}`
+  } else if (nImp) {
+    const top = imps[0]
+    verdict = `Overall: Candidate B improved on ${top.label} (${top.change}).${tickNote}`
+  } else if (warnings.length) {
+    verdict = `Overall: Mostly similar. ${warnings[0]}`
+  } else {
+    verdict = 'Overall: Mostly similar; no significant improvements or regressions above the compare threshold.'
+  }
+  const [spanA, spanB] = compareSummaryPair(tables, 'Span')
+  return {
+    verdict: verdict.trim(),
+    formula: COMPARE_DELTA_FORMULA,
+    identity: {
+      a: { file: nameA || 'Trace A', span: spanA, tick_mode: modeA },
+      b: { file: nameB || 'Trace B', span: spanB, tick_mode: modeB },
+    },
+    cards,
+    rows,
+    warnings,
+  }
+}
+
+export const COMPARE_CHART_BASELINE = '#2a6fb2'
+export const COMPARE_CHART_CANDIDATE = '#6b4ea8'
+export const COMPARE_CHART_REGRESSED = '#c0392b'
+export const COMPARE_CHART_IMPROVED = '#1f6b45'
+export const COMPARE_MIG_VIEWS = Object.freeze(['count', 'dwell', 'cores'])
+export const COMPARE_MIG_FILTERS = Object.freeze(['top', 'changed', 'regressed', 'all'])
+const MIG_VIEW_SPEC = {
+  count: {
+    headers: ['Task', 'Migr A', 'Migr B', 'Δ', 'Rate A', 'Rate B', 'Rate Δ'],
+    idx: [0, 1, 2, 3, 4, 5, 6],
+    keys: ['name', 'migrationsA', 'migrationsB', 'delta', 'rateA', 'rateB', 'rateDelta'],
+  },
+  dwell: {
+    headers: ['Task', 'Dwell A', 'Dwell B', 'Dwell Δ', 'Ping A', 'Ping B'],
+    idx: [0, 7, 8, 9, 10, 11],
+    keys: ['name', 'dwellA', 'dwellB', 'dwellDelta', 'pingA', 'pingB'],
+  },
+  cores: {
+    headers: ['Task', 'Cores A', 'Cores B', 'Primary A', 'Primary B'],
+    idx: [0, 12, 13, 14, 15],
+    keys: ['name', 'coresA', 'coresB', 'primaryA', 'primaryB'],
+  },
+}
+const MIG_FAMILY_RE = /^([A-Za-z_][\w.-]*)/
+
+function svgEscape(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+export function compareCoreUtilChartRows(tables) {
+  const rows = tables?.core_util || tables?.coreUtil || []
+  const out = []
+  for (const row of rows) {
+    let label = ''
+    let aRaw
+    let bRaw
+    if (row && typeof row === 'object' && !Array.isArray(row)) {
+      label = String(row.core || row.label || '')
+      aRaw = 'utilA' in row ? row.utilA : row.a
+      bRaw = 'utilB' in row ? row.utilB : row.b
+    } else if (Array.isArray(row) && row.length >= 3) {
+      label = String(row[0] || '')
+      aRaw = row[1]
+      bRaw = row[2]
+    } else continue
+    if (!label) continue
+    out.push({ label, a: cellMagnitude(aRaw) || 0, b: cellMagnitude(bRaw) || 0 })
+  }
+  return out
+}
+
+export function compareP99DeltaChartRows(tables, limit = 12) {
+  const lim = Math.max(1, Math.min(24, Number(limit) || 12))
+  const rows = tables?.response || []
+  const out = []
+  for (const row of rows) {
+    let label = ''
+    let delta
+    if (row && typeof row === 'object' && !Array.isArray(row)) {
+      label = String(row.name || row.label || '')
+      delta = row.delta
+    } else if (Array.isArray(row) && row.length >= 4) {
+      label = String(row[0] || '')
+      delta = row[3]
+    } else continue
+    const parsed = parseSignedDelta(delta)
+    if (!parsed || !label) continue
+    const cand = -parsed.signed
+    if (cand === 0) continue
+    out.push({
+      label,
+      signed: parsed.signed,
+      cand,
+      status: cand > 0 ? 'Regressed' : 'Improved',
+      delta: String(delta),
+      change: flipDeltaText(delta),
+    })
+  }
+  out.sort((a, b) => Math.abs(b.cand) - Math.abs(a.cand))
+  return out.slice(0, lim)
+}
+
+export function compareCoreUtilChartSvg(rows, width = 640) {
+  const items = (rows || []).filter(r => r && typeof r === 'object')
+  if (!items.length) return ''
+  const w = Math.max(280, Number(width) || 640)
+  const labelW = 78
+  const pad = 12
+  const rowH = 32
+  const header = 22
+  const pctW = 52
+  const h = header + pad + items.length * rowH + 8
+  let maxV = 1
+  for (const r of items) maxV = Math.max(maxV, Number(r.a || 0), Number(r.b || 0))
+  const plotW = Math.max(80, w - labelW - pad - pctW)
+  const ax = labelW
+  const parts = [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="Core utilisation Baseline A vs Candidate B">`,
+    `<text x="${pad}" y="16" font-size="12" fill="#123355" font-weight="600">Core utilisation</text>`,
+    `<text x="${w - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">`,
+    `<tspan fill="${COMPARE_CHART_BASELINE}">Baseline A</tspan>`,
+    '<tspan fill="#5f6f82"> · </tspan>',
+    `<tspan fill="${COMPARE_CHART_CANDIDATE}">Candidate B</tspan></text>`,
+  ]
+  items.forEach((row, i) => {
+    const y = header + pad + i * rowH
+    const lab = svgEscape(String(row.label || '').slice(0, 18))
+    const aV = Math.max(0, Number(row.a || 0))
+    const bV = Math.max(0, Number(row.b || 0))
+    const aw = plotW * aV / maxV
+    const bw = plotW * bV / maxV
+    parts.push(`<text x="${pad}" y="${y + 14}" font-size="11" fill="#182230">${lab}</text>`)
+    parts.push(`<rect x="${ax.toFixed(1)}" y="${y}" width="${Math.max(aw, 0.5).toFixed(1)}" height="9" rx="3" fill="${COMPARE_CHART_BASELINE}"/>`)
+    parts.push(`<rect x="${ax.toFixed(1)}" y="${y + 12}" width="${Math.max(bw, 0.5).toFixed(1)}" height="9" rx="3" fill="${COMPARE_CHART_CANDIDATE}"/>`)
+    parts.push(`<text x="${(ax + plotW + 6).toFixed(1)}" y="${y + 9}" font-size="10" fill="${COMPARE_CHART_BASELINE}">${aV.toFixed(1)}%</text>`)
+    parts.push(`<text x="${(ax + plotW + 6).toFixed(1)}" y="${y + 21}" font-size="10" fill="${COMPARE_CHART_CANDIDATE}">${bV.toFixed(1)}%</text>`)
+  })
+  parts.push('</svg>')
+  return parts.join('')
+}
+
+export function compareP99DeltaChartSvg(rows, width = 640) {
+  const items = (rows || []).filter(r => r && typeof r === 'object')
+  if (!items.length) return ''
+  const w = Math.max(280, Number(width) || 640)
+  const labelW = 96
+  const pad = 12
+  const rowH = 22
+  const header = 28
+  const changeW = 88
+  const h = header + items.length * rowH + 16
+  let maxV = 1
+  for (const r of items) maxV = Math.max(maxV, Math.abs(Number(r.cand || 0)))
+  const plotW = Math.max(80, w - labelW - pad - changeW)
+  const mid = labelW + plotW / 2
+  const half = plotW / 2
+  const parts = [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="Response P99 change Candidate B minus Baseline A">`,
+    `<text x="${pad}" y="16" font-size="12" fill="#123355" font-weight="600">Response P99 change</text>`,
+    `<text x="${w - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">Candidate B − Baseline A</text>`,
+    `<line x1="${mid.toFixed(1)}" y1="${header - 4}" x2="${mid.toFixed(1)}" y2="${h - 10}" stroke="#d9e0ea" stroke-width="1"/>`,
+    `<text x="${labelW.toFixed(1)}" y="${header - 6}" font-size="9" fill="${COMPARE_CHART_IMPROVED}">Improved</text>`,
+    `<text x="${(mid + half).toFixed(1)}" y="${header - 6}" text-anchor="end" font-size="9" fill="${COMPARE_CHART_REGRESSED}">Regressed</text>`,
+  ]
+  items.forEach((row, i) => {
+    const y = header + i * rowH
+    const lab = svgEscape(String(row.label || '').slice(0, 16))
+    const cand = Number(row.cand || 0)
+    const barW = Math.abs(cand) / maxV * half
+    const color = cand > 0 ? COMPARE_CHART_REGRESSED : COMPARE_CHART_IMPROVED
+    const x = cand >= 0 ? mid : mid - barW
+    parts.push(`<text x="${pad}" y="${y + 14}" font-size="11" fill="#182230">${lab}</text>`)
+    parts.push(`<rect x="${x.toFixed(1)}" y="${y + 4}" width="${Math.max(barW, 0.8).toFixed(1)}" height="12" rx="2" fill="${color}"/>`)
+    parts.push(`<text x="${(mid + half + 8).toFixed(1)}" y="${y + 14}" font-size="10" fill="${color}">${svgEscape(row.change || '')}</text>`)
+  })
+  parts.push('</svg>')
+  return parts.join('')
+}
+
+function migName(row) {
+  if (row && typeof row === 'object' && !Array.isArray(row)) return String(row.name || row.label || '')
+  if (Array.isArray(row) && row.length) return String(row[0] || '')
+  return ''
+}
+
+function migFamily(name) {
+  const m = String(name || '').trim().match(MIG_FAMILY_RE)
+  return m ? m[1] : String(name || '').trim()
+}
+
+function migDeltaNum(row) {
+  let raw
+  if (row && typeof row === 'object' && !Array.isArray(row)) raw = row.delta
+  else if (Array.isArray(row) && row.length > 3) raw = row[3]
+  const n = Number(raw)
+  if (Number.isFinite(n)) return n
+  const parsed = parseSignedDelta(raw)
+  return parsed ? parsed.signed : 0
+}
+
+export function compareMigrationFamilies(rows) {
+  const fams = new Set()
+  for (const row of rows || []) {
+    const name = migName(row)
+    if (name) fams.add(migFamily(name))
+  }
+  return [...fams].filter(Boolean).sort()
+}
+
+function migProject(row, spec) {
+  if (row && typeof row === 'object' && !Array.isArray(row)) {
+    const out = {}
+    for (const k of spec.keys) out[k] = row[k]
+    return out
+  }
+  const cells = spec.idx.map(i => (Array.isArray(row) && row.length > i ? row[i] : ''))
+  const out = {}
+  spec.keys.forEach((k, i) => { out[k] = cells[i] })
+  return out
+}
+
+export function filterCompareMigrationRows(rows, view = 'count', filt = 'top', family = '', limit = 10, sortBy = 'abs') {
+  const useView = COMPARE_MIG_VIEWS.includes(view) ? view : 'count'
+  const spec = MIG_VIEW_SPEC[useView]
+  const useFilt = COMPARE_MIG_FILTERS.includes(filt) ? filt : 'top'
+  const useSort = sortBy === 'rel' ? 'rel' : 'abs'
+  let items = [...(rows || [])]
+  const fam = String(family || '').trim()
+  if (fam) items = items.filter(r => migFamily(migName(r)) === fam)
+  if (useFilt === 'changed') items = items.filter(r => migDeltaNum(r) !== 0)
+  else if (useFilt === 'regressed') items = items.filter(r => migDeltaNum(r) < 0)
+  else if (useFilt === 'top') items = items.filter(r => migDeltaNum(r) !== 0)
+
+  const sortKey = (r) => {
+    const d = Math.abs(migDeltaNum(r))
+    if (useSort === 'rel') {
+      let base = 1
+      if (r && typeof r === 'object' && !Array.isArray(r)) {
+        base = Math.max(Math.abs(Number(r.migrationsA) || 0), Math.abs(Number(r.migrationsB) || 0), 1)
+      } else if (Array.isArray(r) && r.length > 2) {
+        base = Math.max(Math.abs(Number(r[1]) || 0), Math.abs(Number(r[2]) || 0), 1)
+      }
+      return -d / base
+    }
+    return -d
+  }
+  items.sort((a, b) => sortKey(a) - sortKey(b) || migName(a).localeCompare(migName(b)))
+  if (useFilt === 'top') items = items.slice(0, Math.max(1, Number(limit) || 10))
+  const objects = items.map(r => migProject(r, spec))
+  return {
+    view: useView,
+    filter: useFilt,
+    sort_by: useSort,
+    headers: [...spec.headers],
+    rows: objects.map(obj => spec.keys.map(k => obj[k])),
+    objects,
+    families: compareMigrationFamilies(rows),
+    shown: objects.length,
+    total: (rows || []).length,
+  }
+}
+
+export function compareRowDeltaStatus(label, delta, metric = '') {
+  const parsed = parseSignedDelta(delta)
+  if (!parsed) return null
+  if (Number(parsed.signed) === 0) return null
+  let pol = compareMetricPolarity(label, metric)
+  if (!pol && metric) pol = compareMetricPolarity(metric)
+  if (!pol) return 'Changed'
+  return compareStatus(pol, parsed.signed)
+}
+
+export function compareSummaryChangeBarRows(tables, limit = 8) {
+  const lim = Math.max(1, Math.min(16, Number(limit) || 8))
+  const out = []
+  for (const row of tables?.summary || []) {
+    let label = ''
+    let delta
+    if (row && typeof row === 'object' && !Array.isArray(row)) {
+      label = String(row.label || '')
+      delta = row.delta
+    } else if (Array.isArray(row) && row.length >= 4) {
+      label = String(row[0] || '')
+      delta = row[3]
+    } else continue
+    const low = label.toLowerCase()
+    if (low.startsWith('tick ') || ['tasks', 'segments', 'sti events'].includes(low)) continue
+    const parsed = parseSignedDelta(delta)
+    if (!parsed || parsed.signed === 0) continue
+    const cand = -parsed.signed
+    out.push({
+      label,
+      signed: parsed.signed,
+      cand,
+      kind: parsed.kind,
+      status: compareRowDeltaStatus(label, delta) || 'Changed',
+      delta: String(delta),
+      change: flipDeltaText(delta),
+    })
+  }
+  out.sort((a, b) => Math.abs(b.cand) - Math.abs(a.cand))
+  return out.slice(0, lim)
+}
+
+export function compareSummaryChangeBarsSvg(rows, width = 640) {
+  return compareP99DeltaChartSvg(
+    (rows || []).filter(r => r && typeof r === 'object').map(r => ({
+      ...r,
+      label: String(r.label || '').slice(0, 22),
+    })),
+    width,
+  )
+    .replace('Response P99 change', 'Summary changes')
+    .replace(
+      'aria-label="Response P99 change Candidate B minus Baseline A"',
+      'aria-label="Summary changes Candidate B minus Baseline A"',
+    )
+}
+
+export function compareMigrationHeatmapRows(rows, limit = 16) {
+  const lim = Math.max(1, Math.min(40, Number(limit) || 16))
+  const items = [...(rows || [])].filter(r => migDeltaNum(r) !== 0)
+  items.sort((a, b) => Math.abs(migDeltaNum(b)) - Math.abs(migDeltaNum(a)) || migName(a).localeCompare(migName(b)))
+  return items.slice(0, lim).map((r) => {
+    const d = migDeltaNum(r)
+    let aV = 0
+    let bV = 0
+    if (r && typeof r === 'object' && !Array.isArray(r)) {
+      aV = Number(r.migrationsA) || 0
+      bV = Number(r.migrationsB) || 0
+    } else if (Array.isArray(r)) {
+      aV = Number(r[1]) || 0
+      bV = Number(r[2]) || 0
+    }
+    return {
+      label: migName(r),
+      a: aV,
+      b: bV,
+      delta: d,
+      status: d < 0 ? 'Regressed' : (d > 0 ? 'Improved' : 'Changed'),
+    }
+  })
+}
+
+export function compareMigrationHeatmapSvg(rows, width = 640) {
+  const items = (rows || []).filter(r => r && typeof r === 'object')
+  if (!items.length) return ''
+  const w = Math.max(280, Number(width) || 640)
+  const labelW = 110
+  const pad = 12
+  const rowH = 18
+  const header = 24
+  const h = header + items.length * rowH + 10
+  let maxV = 1
+  for (const r of items) maxV = Math.max(maxV, Math.abs(Number(r.delta) || 0))
+  const barW = Math.max(80, w - labelW - pad - 60)
+  const parts = [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="Migration count change heatmap">`,
+    `<text x="${pad}" y="16" font-size="12" fill="#123355" font-weight="600">Migration Δ heatmap</text>`,
+    `<text x="${w - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">Δ = A − B</text>`,
+  ]
+  items.forEach((row, i) => {
+    const y = header + i * rowH
+    const lab = svgEscape(String(row.label || '').slice(0, 18))
+    const d = Number(row.delta) || 0
+    const frac = Math.abs(d) / maxV
+    const color = d > 0 ? COMPARE_CHART_IMPROVED : COMPARE_CHART_REGRESSED
+    const sign = d > 0 ? '+' : (d < 0 ? '−' : '')
+    parts.push(`<text x="${pad}" y="${y + 13}" font-size="11" fill="#182230">${lab}</text>`)
+    parts.push(`<rect x="${labelW.toFixed(1)}" y="${y + 3}" width="${Math.max(barW * frac, 2).toFixed(1)}" height="12" rx="2" fill="${color}" opacity="0.85"/>`)
+    parts.push(`<text x="${(labelW + barW + 8).toFixed(1)}" y="${y + 13}" font-size="10" fill="${color}">${sign}${Math.abs(Math.trunc(d))}</text>`)
+  })
+  parts.push('</svg>')
+  return parts.join('')
 }
 
 export function prepareUxEvents(trace) {
@@ -692,6 +1279,20 @@ function rowLabelDelta(row, nameKey, deltaKey, nameIdx, deltaIdx) {
     return { label: String(row[nameIdx] || ''), delta: row[deltaIdx] }
   }
   return { label: '', delta: null }
+}
+
+function rowCells(row, nameKey, deltaKey, nameIdx, deltaIdx, aKey = 'a', bKey = 'b', aIdx = 1, bIdx = 2) {
+  const { label, delta } = rowLabelDelta(row, nameKey, deltaKey, nameIdx, deltaIdx)
+  let a = null
+  let b = null
+  if (row && typeof row === 'object' && !Array.isArray(row)) {
+    a = row[aKey] ?? row.a
+    b = row[bKey] ?? row.b
+  } else if (Array.isArray(row)) {
+    if (row.length > aIdx) a = row[aIdx]
+    if (row.length > bIdx) b = row[bIdx]
+  }
+  return { label, delta, a, b }
 }
 
 function skipSummaryLabel(label) {
@@ -1913,7 +2514,7 @@ export function recurringPatternsAcross(anomaliesA, anomaliesB, minCount = 1) {
   return rows
 }
 
-export function compareAnalysisTables(traceA, traceB, loA = null, hiA = null, loB = null, hiB = null, deadlines = null) {
+export function compareAnalysisTables(traceA, traceB, loA = null, hiA = null, loB = null, hiB = null, deadlines = null, rowLimit = 15) {
   const evsA = harvestUxEvents(traceA, loA, hiA)
   const evsB = harvestUxEvents(traceB, loB, hiB)
   const waitsA = pairMutexWaits(harvestMutexHolds(traceA, loA, hiA))
@@ -1926,11 +2527,19 @@ export function compareAnalysisTables(traceA, traceB, loA = null, hiA = null, lo
   const responseRows = []
   let worstP99A = 0
   let worstP99B = 0
+  let worstTaskA = ''
+  let worstTaskB = ''
   for (const name of names) {
     const pa = Math.trunc(byA.get(name)?.p99_ns || 0)
     const pb = Math.trunc(byB.get(name)?.p99_ns || 0)
-    worstP99A = Math.max(worstP99A, pa)
-    worstP99B = Math.max(worstP99B, pb)
+    if (pa > worstP99A) {
+      worstP99A = pa
+      worstTaskA = name
+    }
+    if (pb > worstP99B) {
+      worstP99B = pb
+      worstTaskB = name
+    }
     if (pa || pb) responseRows.push({ name, p99_a: pa, p99_b: pb, delta_ns: pa - pb })
   }
   responseRows.sort((a, b) => Math.abs(b.delta_ns) - Math.abs(a.delta_ns))
@@ -1970,18 +2579,26 @@ export function compareAnalysisTables(traceA, traceB, loA = null, hiA = null, lo
     detectTimelineAnomalies(evsA, 12, waitsA, dlMap),
     detectTimelineAnomalies(evsB, 12, waitsB, dlMap),
   )
+  let unlimited = rowLimit == null
+  let n = 15
+  if (!unlimited) {
+    n = Number(rowLimit)
+    if (!Number.isFinite(n) || n <= 0) unlimited = true
+  }
   return {
-    response: responseRows.slice(0, 15),
-    mutex_block: mutexRows.slice(0, 15),
+    response: unlimited ? [...responseRows] : responseRows.slice(0, n),
+    mutex_block: unlimited ? [...mutexRows] : mutexRows.slice(0, n),
     metrics: {
       response_p99_a: worstP99A,
       response_p99_b: worstP99B,
+      response_p99_task_a: worstTaskA,
+      response_p99_task_b: worstTaskB,
       mutex_ns_a: mutexNsA,
       mutex_ns_b: mutexNsB,
       deadline_misses_a: missesA,
       deadline_misses_b: missesB,
     },
-    shared_patterns: shared.slice(0, 6),
+    shared_patterns: unlimited ? [...shared] : shared.slice(0, n === 15 ? 6 : n),
   }
 }
 
@@ -2016,7 +2633,15 @@ export function compareWhy(strip) {
   }
   if (shared.length) {
     const top = shared[0]
-    why += ` Shared pattern: ${top.reason || top.kind || 'anomaly'}.`
+    let reason = 'anomaly'
+    if (top && typeof top === 'object' && !Array.isArray(top)) {
+      reason = top.reason || top.kind || 'anomaly'
+    } else if (Array.isArray(top)) {
+      reason = top[4] || top[1] || 'anomaly'
+    } else if (top) {
+      reason = String(top)
+    }
+    why += ` Shared pattern: ${reason}.`
   }
   return why
 }

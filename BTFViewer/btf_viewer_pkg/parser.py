@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
-from .html_report import btf_html_report_document
+from .html_report import (
+    HTML_REPORT_TOC_CSS,
+    HTML_REPORT_TOC_SCRIPT,
+    btf_html_report_document,
+    html_apply_collapsible_toc,
+)
 
 # ===========================================================================
 # BTF Parser
@@ -4541,9 +4546,58 @@ def cross_trace_trends(rows: Optional[Sequence[dict]] = None) -> List[dict]:
     return out
 
 
-def _top_tasks_cpu_by_name(trace: "BtfTrace", limit: int = 10,
+def _take_compare_limit(items, limit) -> list:
+    """Keep *limit* rows; ``None`` or ``<= 0`` keeps every row."""
+    seq = list(items)
+    if limit is None:
+        return seq
+    try:
+        n = int(limit)
+    except (TypeError, ValueError):
+        return seq
+    if n <= 0:
+        return seq
+    return seq[:n]
+
+
+def _compare_trend_table_rows(trend_dicts: Optional[Sequence[dict]] = None) -> List[List]:
+    """Format ``cross_trace_trends`` dicts as Compare Trends table rows."""
+    filled: List[List] = []
+    for row in trend_dicts or []:
+        if not isinstance(row, dict):
+            continue
+        lb = row.get("load_balance")
+        lb_s = "—" if lb is None else f"{round(float(lb))}%"
+        filled.append([
+            row.get("name") or "",
+            row.get("tasks") if row.get("tasks") is not None else "—",
+            row.get("migrations") if row.get("migrations") is not None else "—",
+            lb_s,
+            row.get("tick_health") or "—",
+            row.get("span_ns") if row.get("span_ns") is not None else "—",
+        ])
+    return filled
+
+
+def _shared_pattern_table_row(row) -> List:
+    """Normalize a shared-pattern dict or list into CSV/HTML cells."""
+    if isinstance(row, dict):
+        return [
+            row.get("task") or row.get("name") or "",
+            row.get("kind") or "",
+            row.get("count_a", row.get("countA", "")),
+            row.get("count_b", row.get("countB", "")),
+            row.get("reason") or "",
+        ]
+    return list(row)[:5]
+
+
+def _top_tasks_cpu_by_name(trace: "BtfTrace", limit: Optional[int] = 10,
                            lo: Optional[int] = None, hi: Optional[int] = None) -> Dict[str, float]:
-    """Top tasks by CPU%, keyed by display name."""
+    """Top tasks by CPU%, keyed by display name.
+
+    *limit* ``None`` or ``<= 0`` returns every user task (HTML/CSV export).
+    """
     if lo is not None and hi is not None:
         total_ns = max(1, hi - lo)
     else:
@@ -4567,7 +4621,8 @@ def _top_tasks_cpu_by_name(trace: "BtfTrace", limit: int = 10,
         if t_ns > 0:
             task_times[mk] = t_ns
     result: Dict[str, float] = {}
-    for mk, t_ns in sorted(task_times.items(), key=lambda kv: kv[1], reverse=True)[:limit]:
+    ranked = sorted(task_times.items(), key=lambda kv: kv[1], reverse=True)
+    for mk, t_ns in _take_compare_limit(ranked, limit):
         raw = trace.task_repr.get(mk, mk)
         result[_task_display_name(raw)] = 100.0 * t_ns / total_ns
     return result
@@ -4664,18 +4719,19 @@ def _fmt_signed_time_delta(delta_ns: int, scale: str) -> str:
     if delta_ns == 0:
         return "0"
     sign = "+" if delta_ns >= 0 else "−"
-    return f"{sign}{_format_time(abs(delta_ns), scale)}"
+    return f"{sign}{_format_time_trim(abs(delta_ns), scale)}"
 
 def _fmt_signed_int_delta(delta: int) -> str:
     if delta == 0:
         return "0"
-    return f"+{delta}" if delta > 0 else str(delta)
+    return f"+{delta}" if delta > 0 else f"−{abs(delta)}"
 
 def _fmt_signed_pct_delta(delta: float) -> str:
+    """Percentage-point delta (Load Balance Score / σ)."""
     if abs(delta) < 0.05:
-        return "0.0"
-    sign = "+" if delta >= 0 else ""
-    return f"{sign}{delta:.1f}"
+        return "0.0 pp"
+    sign = "+" if delta >= 0 else "−"
+    return f"{sign}{abs(delta):.1f} pp"
 
 def _fmt_signed_rate_delta(rate_a: float, rate_b: float) -> str:
     if rate_a < 0 or rate_b < 0:
@@ -4683,8 +4739,8 @@ def _fmt_signed_rate_delta(rate_a: float, rate_b: float) -> str:
     delta = rate_a - rate_b
     if abs(delta) < 0.005:
         return "0"
-    sign = "+" if delta >= 0 else ""
-    return f"{sign}{delta:.2f}/s"
+    sign = "+" if delta >= 0 else "−"
+    return f"{sign}{abs(delta):.2f}/s"
 
 def _fmt_signed_dwell_delta(dwell_a: int, dwell_b: int, scale: str) -> str:
     if dwell_a < 0 or dwell_b < 0:
@@ -4693,7 +4749,45 @@ def _fmt_signed_dwell_delta(dwell_a: int, dwell_b: int, scale: str) -> str:
     if delta == 0:
         return "0"
     sign = "+" if delta > 0 else "−"
-    return f"{sign}{_format_time(abs(delta), scale)}"
+    return f"{sign}{_format_time_trim(abs(delta), scale)}"
+
+
+def _fmt_p99_with_task(ns: int, task: str, scale: str) -> str:
+    text = _format_time_trim(int(ns or 0), scale)
+    name = str(task or "").strip()
+    return f"{text} ({name})" if name else text
+
+
+def _per_second(count: float, span_ns: int) -> Optional[float]:
+    """Count / span as per-second rate; None when span is empty."""
+    if span_ns is None or int(span_ns) <= 0:
+        return None
+    return float(count) / (float(span_ns) / 1_000_000_000.0)
+
+
+def _fmt_rate_per_s(rate: Optional[float]) -> str:
+    if rate is None:
+        return "—"
+    if abs(rate) < 0.005:
+        return "0/s"
+    return f"{rate:.2f}/s"
+
+
+def _blocking_total_ns(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> int:
+    """Sum of off-CPU blocking gaps for user tasks in scope."""
+    total = 0
+    for mk, segs in (getattr(trace, "seg_map_by_merge_key", None) or {}).items():
+        raw = (getattr(trace, "task_repr", None) or {}).get(mk, mk)
+        _, _, tname = _parse_task_name(raw)
+        if _is_idle_task_name(tname) or tname == "TICK":
+            continue
+        for gap in _blocking_time_samples(segs, lo, hi):
+            total += int(gap)
+    return total
 
 def _build_trace_compare_rows(
     trace_a: "BtfTrace",
@@ -4703,14 +4797,20 @@ def _build_trace_compare_rows(
     lo_b: Optional[int] = None,
     hi_b: Optional[int] = None,
     deadlines: Optional[dict] = None,
+    row_limit: Optional[int] = 15,
+    top_limit: Optional[int] = 10,
 ) -> Dict[str, List[List]]:
-    """Build all Trace Compare tables as a dict of row lists."""""
+    """Build all Trace Compare tables as a dict of row lists.
+
+    Dialog views pass the default caps. HTML/CSV export pass
+    ``row_limit=None`` / ``top_limit=None`` for every row.
+    """
     a = _trace_summary_snapshot(trace_a, lo_a, hi_a)
     b = _trace_summary_snapshot(trace_b, lo_b, hi_b)
     scale = a["time_scale"]
 
     def _lb_score(v) -> str:
-        return f"{v:.0f}%" if v is not None else "—"
+        return f"{v:.1f}%" if v is not None else "—"
 
     def _lb_sigma(v) -> str:
         return f"{v:.1f}%" if v is not None else "—"
@@ -4718,10 +4818,30 @@ def _build_trace_compare_rows(
     def _tick_health_label(v: str) -> str:
         return (v or "unknown").upper() if v != "unknown" else "unknown"
 
+    cs_rate_a = _per_second(a["context_switches"], a["span_ns"])
+    cs_rate_b = _per_second(b["context_switches"], b["span_ns"])
+    mig_rate_a = _per_second(a["migrations"], a["span_ns"])
+    mig_rate_b = _per_second(b["migrations"], b["span_ns"])
+    block_ns_a = _blocking_total_ns(trace_a, lo_a, hi_a)
+    block_ns_b = _blocking_total_ns(trace_b, lo_b, hi_b)
+
+    def _fmt_blocking_per_s(block_ns: int, span_ns: int) -> str:
+        if span_ns <= 0:
+            return "—"
+        per_s = int(round(block_ns / (span_ns / 1_000_000_000.0)))
+        return f"{_format_time_trim(per_s, scale)}/s"
+
+    def _fmt_blocking_per_s_delta(ba: int, bb: int, sa: int, sb: int) -> str:
+        if sa <= 0 or sb <= 0:
+            return "—"
+        ra = int(round(ba / (sa / 1_000_000_000.0)))
+        rb = int(round(bb / (sb / 1_000_000_000.0)))
+        return _fmt_signed_time_delta(ra - rb, scale) + "/s" if (ra - rb) != 0 else "0"
+
     summary_rows = [
         ["Span",
-         _format_time(a["span_ns"], scale),
-         _format_time(b["span_ns"], scale),
+         _format_time_trim(a["span_ns"], scale),
+         _format_time_trim(b["span_ns"], scale),
          _fmt_signed_time_delta(a["span_ns"] - b["span_ns"], scale)],
         ["Tasks", a["tasks"], b["tasks"], _fmt_signed_int_delta(a["tasks"] - b["tasks"])],
         ["Segments", a["segments"], b["segments"],
@@ -4730,18 +4850,30 @@ def _build_trace_compare_rows(
          _fmt_signed_int_delta(a["sti_events"] - b["sti_events"])],
         ["Context switches", a["context_switches"], b["context_switches"],
          _fmt_signed_int_delta(a["context_switches"] - b["context_switches"])],
+        ["Context switches /s",
+         _fmt_rate_per_s(cs_rate_a), _fmt_rate_per_s(cs_rate_b),
+         _fmt_signed_rate_delta(cs_rate_a if cs_rate_a is not None else -1.0,
+                                cs_rate_b if cs_rate_b is not None else -1.0)],
         ["Core gap avg",
-         _format_time(a["gap_avg_ns"], scale),
-         _format_time(b["gap_avg_ns"], scale),
+         _format_time_trim(a["gap_avg_ns"], scale),
+         _format_time_trim(b["gap_avg_ns"], scale),
          _fmt_signed_time_delta(a["gap_avg_ns"] - b["gap_avg_ns"], scale)],
         ["Core gap max",
-         _format_time(a["gap_max_ns"], scale),
-         _format_time(b["gap_max_ns"], scale),
+         _format_time_trim(a["gap_max_ns"], scale),
+         _format_time_trim(b["gap_max_ns"], scale),
          _fmt_signed_time_delta(a["gap_max_ns"] - b["gap_max_ns"], scale)],
         ["Migrations (total)", a["migrations"], b["migrations"],
          _fmt_signed_int_delta(a["migrations"] - b["migrations"])],
+        ["Migrations /s",
+         _fmt_rate_per_s(mig_rate_a), _fmt_rate_per_s(mig_rate_b),
+         _fmt_signed_rate_delta(mig_rate_a if mig_rate_a is not None else -1.0,
+                                mig_rate_b if mig_rate_b is not None else -1.0)],
         ["Migrated tasks", a["migrated_tasks"], b["migrated_tasks"],
          _fmt_signed_int_delta(a["migrated_tasks"] - b["migrated_tasks"])],
+        ["Blocking time /s",
+         _fmt_blocking_per_s(block_ns_a, a["span_ns"]),
+         _fmt_blocking_per_s(block_ns_b, b["span_ns"]),
+         _fmt_blocking_per_s_delta(block_ns_a, block_ns_b, a["span_ns"], b["span_ns"])],
         ["Load Balance Score",
          _lb_score(a["load_balance_score"]),
          _lb_score(b["load_balance_score"]),
@@ -4767,9 +4899,14 @@ def _build_trace_compare_rows(
          _fmt_signed_int_delta(a["missed_ticks"] - b["missed_ticks"])],
     ]
 
-    map_a = _top_tasks_cpu_by_name(trace_a, lo=lo_a, hi=hi_a)
-    map_b = _top_tasks_cpu_by_name(trace_b, lo=lo_b, hi=hi_b)
-    names = sorted(set(map_a) | set(map_b),
+    map_rank_a = _top_tasks_cpu_by_name(trace_a, limit=top_limit, lo=lo_a, hi=hi_a)
+    map_rank_b = _top_tasks_cpu_by_name(trace_b, limit=top_limit, lo=lo_b, hi=hi_b)
+    if top_limit is None or (isinstance(top_limit, int) and top_limit <= 0):
+        map_a, map_b = map_rank_a, map_rank_b
+    else:
+        map_a = _top_tasks_cpu_by_name(trace_a, limit=None, lo=lo_a, hi=hi_a)
+        map_b = _top_tasks_cpu_by_name(trace_b, limit=None, lo=lo_b, hi=hi_b)
+    names = sorted(set(map_rank_a) | set(map_rank_b),
                    key=lambda n: (-max(map_a.get(n, 0.0), map_b.get(n, 0.0)), n.lower()))
     top_rows: List[List] = []
     for name in names:
@@ -4836,11 +4973,11 @@ def _build_trace_compare_rows(
         trace_a, _exec_slice_samples, lo_a, hi_a, include_cpu=True)
     exec_b = _task_metric_compare_by_name(
         trace_b, _exec_slice_samples, lo_b, hi_b, include_cpu=True)
-    exec_names = sorted(
+    exec_names = _take_compare_limit(sorted(
         set(exec_a) | set(exec_b),
         key=lambda n: (-max(exec_a.get(n, {}).get("count", 0),
                             exec_b.get(n, {}).get("count", 0)), n.lower()),
-    )[:15]
+    ), row_limit)
     exec_rows: List[List] = []
     for name in exec_names:
         ea = exec_a.get(name)
@@ -4860,11 +4997,11 @@ def _build_trace_compare_rows(
 
     block_a = _blocking_compare_by_name(trace_a, lo_a, hi_a)
     block_b = _blocking_compare_by_name(trace_b, lo_b, hi_b)
-    block_names = sorted(
+    block_names = _take_compare_limit(sorted(
         set(block_a) | set(block_b),
         key=lambda n: (-max(block_a.get(n, {}).get("gaps", 0),
                             block_b.get(n, {}).get("gaps", 0)), n.lower()),
-    )[:15]
+    ), row_limit)
     block_rows: List[List] = []
     for name in block_names:
         ba = block_a.get(name)
@@ -4886,11 +5023,11 @@ def _build_trace_compare_rows(
         trace_a, _inter_arrival_samples, lo_a, hi_a)
     ia_b = _task_metric_compare_by_name(
         trace_b, _inter_arrival_samples, lo_b, hi_b)
-    ia_names = sorted(
+    ia_names = _take_compare_limit(sorted(
         set(ia_a) | set(ia_b),
         key=lambda n: (-max(ia_a.get(n, {}).get("count", 0),
                             ia_b.get(n, {}).get("count", 0)), n.lower()),
-    )[:15]
+    ), row_limit)
     inter_rows: List[List] = []
     for name in ia_names:
         xa = ia_a.get(name)
@@ -4910,11 +5047,11 @@ def _build_trace_compare_rows(
 
     pre_a = _preemption_totals_by_victim(trace_a, lo_a, hi_a)
     pre_b = _preemption_totals_by_victim(trace_b, lo_b, hi_b)
-    pre_names = sorted(
+    pre_names = _take_compare_limit(sorted(
         set(pre_a) | set(pre_b),
         key=lambda n: (-max(pre_a.get(n, {}).get("count", 0),
                             pre_b.get(n, {}).get("count", 0)), n.lower()),
-    )[:15]
+    ), row_limit)
     pre_rows: List[List] = []
     for name in pre_names:
         pa = pre_a.get(name)
@@ -4954,21 +5091,30 @@ def _build_trace_compare_rows(
     extras_fn = globals().get("compare_analysis_tables")
     if extras_fn is None:
         from .ux_explore import compare_analysis_tables as extras_fn
-    extras = extras_fn(trace_a, trace_b, lo_a, hi_a, lo_b, hi_b, deadlines)
+    extras = extras_fn(
+        trace_a, trace_b, lo_a, hi_a, lo_b, hi_b, deadlines, row_limit)
     metrics = extras.get("metrics") or {}
+    mutex_a = int(metrics.get("mutex_ns_a") or 0)
+    mutex_b = int(metrics.get("mutex_ns_b") or 0)
     summary_rows.extend([
         ["Response P99 (worst task)",
-         _format_time(int(metrics.get("response_p99_a") or 0), scale),
-         _format_time(int(metrics.get("response_p99_b") or 0), scale),
+         _fmt_p99_with_task(
+             int(metrics.get("response_p99_a") or 0),
+             str(metrics.get("response_p99_task_a") or ""), scale),
+         _fmt_p99_with_task(
+             int(metrics.get("response_p99_b") or 0),
+             str(metrics.get("response_p99_task_b") or ""), scale),
          _fmt_signed_time_delta(
              int(metrics.get("response_p99_a") or 0)
              - int(metrics.get("response_p99_b") or 0), scale)],
         ["Mutex blocking (total)",
-         _format_time(int(metrics.get("mutex_ns_a") or 0), scale),
-         _format_time(int(metrics.get("mutex_ns_b") or 0), scale),
-         _fmt_signed_time_delta(
-             int(metrics.get("mutex_ns_a") or 0)
-             - int(metrics.get("mutex_ns_b") or 0), scale)],
+         _format_time_trim(mutex_a, scale),
+         _format_time_trim(mutex_b, scale),
+         _fmt_signed_time_delta(mutex_a - mutex_b, scale)],
+        ["Mutex blocking /s",
+         _fmt_blocking_per_s(mutex_a, a["span_ns"]),
+         _fmt_blocking_per_s(mutex_b, b["span_ns"]),
+         _fmt_blocking_per_s_delta(mutex_a, mutex_b, a["span_ns"], b["span_ns"])],
         ["Deadline misses",
          int(metrics.get("deadline_misses_a") or 0),
          int(metrics.get("deadline_misses_b") or 0),
@@ -4990,6 +5136,10 @@ def _build_trace_compare_rows(
          _fmt_signed_time_delta(int(r.get("delta_ns") or 0), scale)]
         for r in extras.get("mutex_block") or []
     ]
+    trend_rows = _compare_trend_table_rows(cross_trace_trends([
+        {"name": "Trace A", "snap": a},
+        {"name": "Trace B", "snap": b},
+    ]))
 
     return {
         "summary": summary_rows,
@@ -5004,6 +5154,7 @@ def _build_trace_compare_rows(
         "response": response_rows,
         "mutex_block": mutex_rows,
         "shared_patterns": extras.get("shared_patterns") or [],
+        "trends": trend_rows,
     }
 
 _CSV_FORMULA_LEAD_CHARS = ("=", "+", "-", "@", "\t", "\r")
@@ -5053,9 +5204,38 @@ def _table_widget_rows(table: "QTableWidget") -> List[List[str]]:
 def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
                        tables: Dict[str, List[List]]) -> str:
     lines: List[str] = []
-    lines.append(f"Trace A,{_compare_csv_cell(name_a)}")
-    lines.append(f"Trace B,{_compare_csv_cell(name_b)}")
+    notable_fn = globals().get("compare_notable_changes")
+    formula = globals().get("COMPARE_DELTA_FORMULA")
+    if notable_fn is None or formula is None:
+        from .ux_explore import COMPARE_DELTA_FORMULA as formula
+        from .ux_explore import compare_notable_changes as notable_fn
+    notable = notable_fn(tables or {}, 8, name_a, name_b) or {}
+    ident = notable.get("identity") or {}
+    ident_a = ident.get("a") or {}
+    ident_b = ident.get("b") or {}
+    lines.append(f"Baseline A (Trace A),{_compare_csv_cell(ident_a.get('file') or name_a)}")
+    lines.append(f"Candidate B (Trace B),{_compare_csv_cell(ident_b.get('file') or name_b)}")
+    lines.append(f"Delta formula,{_compare_csv_cell(formula)}")
     lines.append(f"Cursor scope per tab,{'yes' if scope_enabled else 'no'}")
+    lines.append("")
+    lines.append("Overview")
+    lines.append(f"Verdict,{_compare_csv_cell(notable.get('verdict') or '')}")
+    cards = notable.get("cards") or {}
+    lines.append(
+        "Status cards,"
+        f"regressions {int(cards.get('regressions') or 0)},"
+        f"improvements {int(cards.get('improvements') or 0)},"
+        f"significant {int(cards.get('significant') or 0)},"
+        f"warnings {int(cards.get('warnings') or 0)}"
+    )
+    for warn in notable.get("warnings") or []:
+        lines.append(f"Warning,{_compare_csv_cell(warn)}")
+    lines.append("Status,Metric,Baseline A,Candidate B,Change")
+    for row in notable.get("rows") or []:
+        lines.append(",".join(_compare_csv_cell(c) for c in (
+            row.get("status"), row.get("label"), row.get("a"),
+            row.get("b"), row.get("change"),
+        )))
     lines.append("")
 
     def _section(title: str, header: str, rows: List[List], ncols: int) -> None:
@@ -5066,9 +5246,9 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
                 lines.append(",".join(_compare_csv_cell(c) for c in row[:ncols]))
         lines.append("")
 
-    _section("Summary", "Metric,Trace A,Trace B,Δ", tables.get("summary", []), 4)
-    _section("Top Tasks", "Task,CPU% A,CPU% B,Δ", tables.get("top", []), 4)
-    _section("Core Utilisation", "Core,Util% A,Util% B,Δ", tables.get("core_util", []), 4)
+    _section("Summary", "Metric,Baseline A,Candidate B,Δ", tables.get("summary", []), 4)
+    _section("Top Tasks", "Task,CPU A (%),CPU B (%),Δ (pp)", tables.get("top", []), 4)
+    _section("Core Utilisation", "Core,Util A (%),Util B (%),Δ (pp)", tables.get("core_util", []), 4)
     _section(
         "Core Migrations",
         "Task,Migrations A,Migrations B,Δ,Rate A,Rate B,Rate Δ,"
@@ -5090,7 +5270,7 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
         "Preemption Chains",
         "Victim,Count A,Count B,Δ,Total A,Total B",
         tables.get("preemption", []), 6)
-    _section("Sync Objects", "Metric,Trace A,Trace B,Δ", tables.get("sync", []), 4)
+    _section("Sync Objects", "Metric,Baseline A,Candidate B,Δ", tables.get("sync", []), 4)
     _section(
         "Response P99",
         "Task,P99 A,P99 B,Δ",
@@ -5099,31 +5279,62 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
         "Mutex Blocking",
         "Task,Total A,Total B,Δ",
         tables.get("mutex_block", []), 4)
+    shared_rows = [
+        _shared_pattern_table_row(r) for r in (tables.get("shared_patterns") or [])
+    ]
+    _section(
+        "Shared Patterns",
+        "Task,Kind,Count A,Count B,Description",
+        shared_rows, 5)
+    _section(
+        "Trends",
+        "Trace,Tasks,Migrations,Load balance,Tick health,Span",
+        tables.get("trends") or tables.get("trend", []), 6)
 
     while lines and lines[-1] == "":
         lines.pop()
     return "\n".join(lines)
 
-_COMPARE_HTML_EXTRA_CSS = """
-.report.report-compare { max-width: min(1280px, 100%); }
-.report-card { overflow: hidden; }
-.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
-table { border-collapse: collapse; width: max-content; min-width: 100%; }
-th, td {
+_COMPARE_HTML_EXTRA_CSS = f"""
+.report.report-compare {{ max-width: min(1280px, 100%); }}
+.report-card {{ overflow: hidden; }}
+.table-scroll {{ overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }}
+table {{ border-collapse: collapse; width: max-content; min-width: 100%; }}
+th, td {{
   border-bottom: 1px solid var(--line);
   padding: 6px 8px;
   font-size: 12px;
   text-align: right;
   white-space: nowrap;
-}
-th:first-child, td:first-child { text-align: left; }
-thead th { background: #f1f5fb; font-weight: 600; }
-thead th:first-child, tbody td:first-child { position: sticky; left: 0; z-index: 1; }
-thead th:first-child { background: #f1f5fb; }
-tbody td:first-child { background: #fff; }
-tbody tr:nth-child(even) td { background: #f7f9fc; }
-tbody tr:nth-child(even) td:first-child { background: #f7f9fc; }
-.empty { text-align: center; color: var(--muted); white-space: normal; }
+}}
+th:first-child, td:first-child {{ text-align: left; }}
+thead th {{ background: #f1f5fb; font-weight: 600; }}
+thead th:first-child, tbody td:first-child {{ position: sticky; left: 0; z-index: 1; }}
+thead th:first-child {{ background: #f1f5fb; }}
+tbody td:first-child {{ background: #fff; }}
+tbody tr:nth-child(even) td {{ background: #f7f9fc; }}
+tbody tr:nth-child(even) td:first-child {{ background: #f7f9fc; }}
+.empty {{ text-align: center; color: var(--muted); white-space: normal; }}
+.overview-why {{ color: var(--muted); margin: 0 0 10px; }}
+.overview-sub {{ margin: 12px 0 6px; font-size: 13px; color: #123355; }}
+.overview-formula {{ color: var(--muted); font-size: 12px; margin: 0 0 10px; }}
+.col-baseline {{ color: #2a6fb2; }}
+.col-candidate {{ color: #6b4ea8; }}
+.status-cards {{ display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 12px; }}
+.status-card {{
+  flex: 1 1 120px; border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; background: #fff;
+}}
+.status-card .n {{ font-size: 20px; font-weight: 700; line-height: 1.1; }}
+.status-regressed {{ border-left: 4px solid #c0392b; }}
+.status-improved {{ border-left: 4px solid #1f6b45; }}
+.status-changed {{ border-left: 4px solid #2a6fb2; }}
+.status-warn {{ border-left: 4px solid #c87a12; }}
+.badge-regressed {{ background: #fde8e6; color: #9b2c2c; }}
+.badge-changed {{ background: #e8eef7; color: #123355; }}
+.compare-chart {{ margin: 0 0 12px; overflow-x: auto; }}
+.compare-chart svg {{ max-width: 100%; height: auto; display: block; }}
+{HTML_REPORT_TOC_CSS}
 """.strip()
 
 
@@ -5145,32 +5356,185 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
             parts.append(f"<tr>{cells}</tr>")
         return "".join(parts)
 
-    def _card(title: str, headers: List[str], rows: List[List], empty: str) -> str:
+    def _card(title: str, headers: List[str], rows: List[List], empty: str,
+              lead_html: str = "") -> str:
         cols = len(headers)
         th = "".join(f"<th>{_esc(h)}</th>" for h in headers)
         return (
             f'<section class="report-card"><h2>{_esc(title)}</h2>'
+            f"{lead_html}"
             f'<div class="table-scroll">'
             f'<table><thead><tr>{th}</tr></thead>'
             f'<tbody>{_rows_html(rows, cols, empty)}</tbody></table>'
             f'</div></section>'
         )
 
+    def _overview_card() -> str:
+        notable_fn = globals().get("compare_notable_changes")
+        formula = globals().get("COMPARE_DELTA_FORMULA")
+        if notable_fn is None or formula is None:
+            from .ux_explore import COMPARE_DELTA_FORMULA as formula
+            from .ux_explore import compare_notable_changes as notable_fn
+        notable = notable_fn(tables or {}, 8, name_a, name_b) or {}
+        ident = notable.get("identity") or {}
+        ident_a = ident.get("a") or {}
+        ident_b = ident.get("b") or {}
+        ident_rows = [
+            ["File", ident_a.get("file") or name_a, ident_b.get("file") or name_b],
+            ["Range", ident_a.get("span") or "—", ident_b.get("span") or "—"],
+            ["Tick mode", ident_a.get("tick_mode") or "—", ident_b.get("tick_mode") or "—"],
+        ]
+        verdict = str(notable.get("verdict") or "").strip()
+        cards = notable.get("cards") or {}
+        notable_rows = [
+            [r.get("status"), r.get("label"), r.get("a"), r.get("b"), r.get("change")]
+            for r in (notable.get("rows") or [])
+            if isinstance(r, dict)
+        ]
+        warn_html = "".join(
+            f'<p class="warn-banner">{_esc(w)}</p>'
+            for w in (notable.get("warnings") or [])
+        )
+        badge = {
+            "Regressed": "badge-regressed",
+            "Improved": "badge-ok",
+            "Changed": "badge-changed",
+        }
+
+        def _notable_rows_html() -> str:
+            if not notable_rows:
+                return (
+                    '<tr><td colspan="5" class="empty">'
+                    "No significant improvements or regressions above threshold"
+                    "</td></tr>"
+                )
+            parts = []
+            for status, label, a_val, b_val, change in notable_rows:
+                cls = badge.get(str(status), "badge-changed")
+                parts.append(
+                    "<tr>"
+                    f'<td><span class="badge {cls}">{_esc(status)}</span></td>'
+                    f"<td>{_esc(label)}</td>"
+                    f"<td>{_esc(a_val)}</td>"
+                    f"<td>{_esc(b_val)}</td>"
+                    f"<td>{_esc(change)}</td>"
+                    "</tr>"
+                )
+            return "".join(parts)
+
+        parts = ['<section class="report-card"><h2>Overview</h2>']
+        if verdict:
+            parts.append(f'<p class="overview-why">{_esc(verdict)}</p>')
+        parts.append(f'<p class="overview-formula">{_esc(formula)}</p>')
+        parts.append(
+            '<div class="status-cards">'
+            f'<div class="status-card status-regressed"><div class="n">'
+            f'{int(cards.get("regressions") or 0)}</div>Regressions</div>'
+            f'<div class="status-card status-improved"><div class="n">'
+            f'{int(cards.get("improvements") or 0)}</div>Improvements</div>'
+            f'<div class="status-card status-changed"><div class="n">'
+            f'{int(cards.get("significant") or 0)}</div>Significant changes</div>'
+            f'<div class="status-card status-warn"><div class="n">'
+            f'{int(cards.get("warnings") or 0)}</div>Validation warnings</div>'
+            "</div>"
+        )
+        if warn_html:
+            parts.append(warn_html)
+        parts.append('<h3 class="overview-sub">Comparison identity</h3>')
+        parts.append(
+            '<div class="table-scroll"><table><thead><tr>'
+            '<th></th><th class="col-baseline">Baseline A</th>'
+            '<th class="col-candidate">Candidate B</th></tr></thead><tbody>'
+            f'{_rows_html(ident_rows, 3, "No identity")}'
+            "</tbody></table></div>"
+        )
+        parts.append('<h3 class="overview-sub">Notable Changes</h3>')
+        parts.append(
+            '<div class="table-scroll"><table><thead><tr>'
+            "<th>Status</th><th>Metric</th>"
+            '<th class="col-baseline">Baseline A</th>'
+            '<th class="col-candidate">Candidate B</th>'
+            "<th>Change</th></tr></thead><tbody>"
+            f"{_notable_rows_html()}"
+            "</tbody></table></div></section>"
+        )
+        return "".join(parts)
+
+    shared_rows = [
+        _shared_pattern_table_row(r) for r in (tables.get("shared_patterns") or [])
+    ]
+    trend_rows = list(tables.get("trends") or tables.get("trend") or [])
+
+    util_svg_fn = globals().get("compare_core_util_chart_svg")
+    util_rows_fn = globals().get("compare_core_util_chart_rows")
+    p99_svg_fn = globals().get("compare_p99_delta_chart_svg")
+    p99_rows_fn = globals().get("compare_p99_delta_chart_rows")
+    sum_svg_fn = globals().get("compare_summary_change_bars_svg")
+    sum_rows_fn = globals().get("compare_summary_change_bar_rows")
+    heat_svg_fn = globals().get("compare_migration_heatmap_svg")
+    heat_rows_fn = globals().get("compare_migration_heatmap_rows")
+    mig_filt_fn = globals().get("filter_compare_migration_rows")
+    if any(fn is None for fn in (
+        util_svg_fn, util_rows_fn, p99_svg_fn, p99_rows_fn,
+        sum_svg_fn, sum_rows_fn, heat_svg_fn, heat_rows_fn, mig_filt_fn,
+    )):
+        from .ux_explore import (
+            compare_core_util_chart_rows as util_rows_fn,
+            compare_core_util_chart_svg as util_svg_fn,
+            compare_p99_delta_chart_rows as p99_rows_fn,
+            compare_p99_delta_chart_svg as p99_svg_fn,
+            compare_summary_change_bar_rows as sum_rows_fn,
+            compare_summary_change_bars_svg as sum_svg_fn,
+            compare_migration_heatmap_rows as heat_rows_fn,
+            compare_migration_heatmap_svg as heat_svg_fn,
+            filter_compare_migration_rows as mig_filt_fn,
+        )
+    util_svg = util_svg_fn(util_rows_fn(tables or {}))
+    p99_svg = p99_svg_fn(p99_rows_fn(tables or {}, 12))
+    sum_svg = sum_svg_fn(sum_rows_fn(tables or {}, 8)) if sum_svg_fn and sum_rows_fn else ""
+    heat_svg = heat_svg_fn(heat_rows_fn(tables.get("migrations") or [], 12)) if heat_svg_fn and heat_rows_fn else ""
+    util_lead = f'<div class="compare-chart">{util_svg}</div>' if util_svg else ""
+    p99_lead = f'<div class="compare-chart">{p99_svg}</div>' if p99_svg else ""
+    sum_lead = f'<div class="compare-chart">{sum_svg}</div>' if sum_svg else ""
+    heat_lead = f'<div class="compare-chart">{heat_svg}</div>' if heat_svg else ""
+    mig_top = mig_filt_fn(tables.get("migrations") or [], "count", "top", "", 10)
+    mig_lead = heat_lead
+    if mig_top.get("rows"):
+        mig_th = "".join(f"<th>{_esc(h)}</th>" for h in (mig_top.get("headers") or []))
+        mig_body = _rows_html(
+            mig_top.get("rows") or [],
+            len(mig_top.get("headers") or []),
+            "No migration count changes",
+        )
+        shown = int(mig_top.get("shown") or 0)
+        total = int(mig_top.get("total") or 0)
+        mig_lead += (
+            f'<h3 class="overview-sub">Largest changes (count &amp; rate)</h3>'
+            f'<p class="overview-formula">{shown} of {total} migrated tasks</p>'
+            f'<div class="table-scroll"><table><thead><tr>{mig_th}</tr></thead>'
+            f'<tbody>{mig_body}</tbody></table></div>'
+            '<h3 class="overview-sub">All columns</h3>'
+        )
+
     sections = [
+        _overview_card(),
         _card("Summary",
-              ["Metric", "Trace A", "Trace B", "Δ"],
-              tables.get("summary", []), "No data"),
+              ["Metric", "Baseline A", "Candidate B", "Δ"],
+              tables.get("summary", []), "No data",
+              lead_html=sum_lead),
         _card("Top Tasks",
-              ["Task", "CPU% A", "CPU% B", "Δ"],
+              ["Task", "CPU A (%)", "CPU B (%)", "Δ (pp)"],
               tables.get("top", []), "No user tasks in either trace"),
         _card("Core Utilisation",
-              ["Core", "Util% A", "Util% B", "Δ"],
-              tables.get("core_util", []), "No core util data"),
+              ["Core", "Util A (%)", "Util B (%)", "Δ (pp)"],
+              tables.get("core_util", []), "No core util data",
+              lead_html=util_lead),
         _card("Core Migrations",
               ["Task", "Migr A", "Migr B", "Δ", "Rate A", "Rate B", "Rate Δ",
                "Dwell A", "Dwell B", "Dwell Δ", "Ping A", "Ping B",
                "Cores A", "Cores B", "Primary A", "Primary B"],
-              tables.get("migrations", []), "No migrated tasks in either trace"),
+              tables.get("migrations", []), "No migrated tasks in either trace",
+              lead_html=mig_lead),
         _card("Execution Time",
               ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B", "Δ max"],
               tables.get("execution", []), "No execution samples in either trace"),
@@ -5184,24 +5548,32 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
               ["Victim", "Count A", "Count B", "Δ", "Total A", "Total B"],
               tables.get("preemption", []), "No preemption chains in either trace"),
         _card("Sync Objects",
-              ["Metric", "Trace A", "Trace B", "Δ"],
+              ["Metric", "Baseline A", "Candidate B", "Δ"],
               tables.get("sync", []), "No sync instrumentation in either trace"),
         _card("Response P99",
               ["Task", "P99 A", "P99 B", "Δ"],
-              tables.get("response", []), "No response samples in either trace"),
+              tables.get("response", []), "No response samples in either trace",
+              lead_html=p99_lead),
         _card("Mutex Blocking",
               ["Task", "Total A", "Total B", "Δ"],
               tables.get("mutex_block", []), "No mutex blocking in either trace"),
+        _card("Shared Patterns",
+              ["Task", "Kind", "Count A", "Count B", "Description"],
+              shared_rows, "No shared anomaly patterns"),
+        _card("Trends",
+              ["Trace", "Tasks", "Migrations", "Load balance", "Tick health", "Span"],
+              trend_rows, "Open 2+ traces to trend summaries"),
     ]
 
-    return btf_html_report_document(
+    report = btf_html_report_document(
         "Trace Compare",
-        "\n".join(sections),
-        subtitle=f"{name_a} vs {name_b} · {scope_note}",
+        "<!--TOC-->\n" + "\n".join(sections) + "\n" + HTML_REPORT_TOC_SCRIPT,
+        subtitle=f"Baseline A: {name_a} vs Candidate B: {name_b} · {scope_note}",
         extra_css=_COMPARE_HTML_EXTRA_CSS,
         doc_title="BTFViewer — Trace Compare",
         report_class="report-compare",
     )
+    return html_apply_collapsible_toc(report, default_expanded=("Overview", "Summary"))
 
 def _core_sort_key_tuple(c: str) -> tuple:
     if c.startswith("Core_"):

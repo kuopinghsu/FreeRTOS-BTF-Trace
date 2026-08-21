@@ -160,8 +160,8 @@ Desktop 與 Web 的右側面板都提供 **Statistics** 分頁。
 **Export CSV** 與 **Export HTML** 都會套用目前的游標範圍。
 
 - **CSV**：匯出 Statistics 各區段的摘要表格與相關計算值。
-- **HTML**：除了相同的摘要資料外，也會加入較適合閱讀與報告使用的內容，例如 **Analysis Findings**、**Load Balance Score** 儀表，以及支援的詳細資料表。
-- **Trace Compare…**：比較兩份已開啟 Trace 的支援指標。若兩份 Trace 要使用不同的分析時間範圍，可啟用 **Limit to each tab's cursor range**。
+- **HTML**：除了相同的摘要資料外，也會加入較適合閱讀與報告使用的內容，例如 **Analysis Findings**、**Load Balance Score** 儀表，以及支援的詳細資料表。HTML 目錄提供 **Expand all** / **Collapse all**。
+- **Trace Compare…**：比較兩份已開啟 Trace 的支援指標。Trace A 為 **baseline**，Trace B 為 **candidate**。**Δ** 為 Baseline A − Candidate B。若兩份 Trace 要使用不同的分析時間範圍，可啟用 **Limit to each tab's cursor range**。**Export CSV** / **Export HTML** 會寫出所有 Compare 表格（不只 Dialog 的 top-N 預覽）。HTML 會加上目錄，並提供 **Expand all** / **Collapse all**；Overview 與 Summary 預設展開。Overview 會顯示比較身分、結論與 Notable Changes 摘要（門檻以上的 Improved / Regressed）。Summary、Core Util、Response 與 Core Migrations 會附圖表；Core Migrations 預設顯示 count 變化最大的列。
 
 各區段實際匯出的欄位與詳細行為，請參閱下方的指標說明。
 
@@ -170,7 +170,7 @@ Desktop 與 Web 的右側面板都提供 **Statistics** 分頁。
 
 Desktop 與 Web 都提供 Statistics 面板。各項指標依功能分組為可展開／收合的區段。點選表格欄位標題，可切換遞增或遞減排序。
 
-面板底部的 **Export CSV** 與 **Export HTML** 會依目前的游標範圍匯出所有區段的摘要資料。**Export HTML** 會在文件開頭加入 **Analysis Findings** 卡片，其內容與工具列的 **Analysis** 相同，包括負載平衡、WCET、阻塞、核心頻繁遷移（thrashing）、Deadline、Tick 健康狀態與同步問題。
+面板底部的 **Export CSV** 與 **Export HTML** 會依目前的游標範圍匯出所有區段的摘要資料。**Export HTML** 會在文件開頭加入 **Analysis Findings** 卡片，其內容與工具列的 **Analysis** 相同，包括負載平衡、WCET、阻塞、核心頻繁遷移（thrashing）、Deadline、Tick 健康狀態與同步問題。HTML 目錄（Table of Contents）提供 **Expand all** / **Collapse all**；Analysis Findings、Statistics Notes、Core Utilisation、Top Tasks、Trace Health 預設展開，其餘區段預設收合。
 
 HTML 也會在 Core Utilisation 下方以 SVG 圖片嵌入 **Load Balance Score** 儀表，並在 Priority Inheritance、Mutex / Semaphore 與 Interval Analysis 下加入詳細子表。這些子表會優先列出持續時間最長的 instance 或 hold episode，每個子表最多保留約 150–200 筆資料。
 
@@ -1825,16 +1825,50 @@ CDF 本身不支援 click-to-jump；如果要跳至單一事件，請使用 Hist
 <a id="trace-compare-1" name="trace-compare-1">&#x200B;</a>
 ### Trace 比較（Trace Compare…） ![](../images/readme/h4.svg)
 
-可直接比較兩份已經開啟的 Trace：
+**Trace Compare…** 用來比較相同 workload 的兩次執行結果，例如 Baseline build 與 Candidate build。若要讓比較結果具有意義，兩側應盡量使用相同的 workload、instrumentation、核心數與擷取階段。若 Trace 長度不同，應優先查看經過正規化的 `/s`、`%` 與 `pp` 指標，不要只比較原始總數。
+
+**比較前先確認**
+
+- **Trace A** 應設為 Baseline，**Trace B** 應設為 Candidate。
+- 比較相同的 workload phase。如果完整 Trace 包含不同長度的初始化或結束階段，請分別在兩個分頁以游標框出相對應的工作區間。
+- 判讀差值前，先檢查 Overview 中的比較身分與 validation warning。Span、task set、tick mode 或 worst-P99 task 不同，都可能使數值差異產生誤導。
+- Task row 會依顯示名稱（`Name[id]`）配對。如果兩次執行的 task ID 改變，邏輯上相同的工作可能會被列為不同資料列。
+
+**開啟比較**
 
 1. 至少開啟 **兩份** `.btf`。Desktop 使用 **File → Open** 新增分頁；Web 使用工具列下方 tab bar 的 **Open**。
 2. 點選工具列 **Compare**。此按鈕位於 **Analysis** 後方，載入兩個以上分頁後才會啟用。
-3. 從下拉選單指定 **Trace A** 與 **Trace B**。
+3. 從下拉選單指定 **Trace A (Baseline)** 與 **Trace B (Candidate)**。
 4. 如有需要，啟用 **Limit to each tab's cursor range**，分別使用兩份 Trace 自己的 C1–Cn 範圍進行比較；每個分頁都至少需要 2 個游標。
-5. 可切換 **Summary**、**Top Tasks**、**Core Util**、**Core Migrations**、**Execution**、**Blocking**、**Inter-Arrival**、**Preemption**、**Sync**、**Response** 與 **Mutex** 分頁。
-6. 可使用 **Validate experiment…**，將預期與實際 delta 送到 **AI** 分頁評分。Host 會從目前 Compare 自動填入實際百分比，包括 **Scope to cursors**。也可使用 **Query with AI…** 將目前 Trace A / B table 送給 AI；若 AI 未啟用，會開啟 **Settings → AI**。
+5. 可切換 **Summary**、**Top Tasks**、**Core Util**、**Core Migrations**、**Execution**、**Blocking**、**Inter-Arrival**、**Preemption**、**Sync**、**Response**、**Mutex** 與 **Trends** 分頁。
+6. 可使用 **Validate experiment…**，在 **AI** 分頁比較預期與實際差值，並為實驗結果評分。系統會依目前的比較結果自動填入實際百分比，包括 **Scope to cursors**。也可使用 **Query with AI…**，將目前的 Trace A / B 表格送到 AI 分頁；若 AI 尚未啟用，BTFViewer 會開啟 **Settings → AI**。
 
-預設使用**完整 Trace**。啟用 cursor-range 選項後，A、B 兩側會各自使用該分頁自己的 cursor window。
+預設會使用兩側的**完整 Trace**。啟用 cursor-range 選項後，A、B 會各自使用所屬分頁的 cursor window。兩個視窗不需使用相同的絕對時間戳，但應代表相對應的 workload phase。
+
+**Export CSV** 與 **Export HTML** 會匯出 Dialog 回報的所有 Compare 表格（**Summary**、**Top Tasks**、**Core Util**、**Core Migrations**、**Execution**、**Blocking**、**Inter-Arrival**、**Preemption**、**Sync**、**Response**、**Mutex**、**Shared Patterns**、**Trends**），而且是每一個 task 列，不只 Dialog 預覽的 top-N。**Export HTML** 會加上目錄（Table of Contents），並提供 **Expand all** / **Collapse all**；**Overview** 與 **Summary** 預設展開，其餘表格預設收合，行為與 Statistics HTML 匯出相同。Summary 會附 compact change bars；Core Util 與 Response 會附圖表；Core Migrations 會先顯示 **migration Δ heatmap** 與 **Largest changes (count & rate)** 預覽，再列出完整的 16 欄表格。
+
+**Overview** — 顯示比較身分（檔名、範圍、tick mode）、差值規則、簡短結論、四張狀態卡（regressions、improvements、significant changes、validation warnings），以及 **Notable Changes** 表格。Status 一律表示 **Candidate B 相對 Baseline A** 的結果：**Improved**、**Regressed** 或 **Changed**。只有同時超過絕對與相對門檻的變化才會列出，避免將微小差異自動標示為 regression。檔名含 `tickful` 或 `tickless` 時，會與偵測到的 tick mode 交叉檢查。Summary 的 worst response P99 會標出兩側各自的 task；若不是同一個 task，會顯示 warning。公式列也會說明 **—** 代表無可用資料，不是零；**pp** 代表百分點；並展開 STI、σ、Dwell、Ping、P99 與 `/tick` 等縮寫。
+
+#### 正確解讀差值方向
+
+報告依使用情境採用兩種數值方向：
+
+| 位置 | 公式 | 解讀方式 |
+|---|---|---|
+| Compare 資料表 | **Δ = Baseline A − Candidate B** | 正值代表 A 的數值較大；負值代表 B 的數值較大 |
+| Notable Changes 與 change-bar chart | **Change = Candidate B − Baseline A** | 正值代表 Candidate 增加；負值代表 Candidate 減少 |
+| Status 與顏色 | Candidate B 相對 Baseline A | **Improved** / **Regressed** 依指標意義判定，不能只看正負號 |
+
+對 Response Time、Blocking Time、Issue count 或 Migration count 這類「越低越好」的指標，資料表中的正 Δ 通常代表 Candidate B 改善。對 Load Balance Score 這類「越高越好」的指標，負 Δ 反而可能代表 Candidate B 改善。沒有明確優劣方向的指標會標示為 **Changed**。因此，應搭配 Status、顏色與指標意義判讀，不要直接把 `+` 當成改善或退步。
+
+CPU、核心使用率與負載平衡等百分點差值使用 **pp** 後綴。時間值會省略尾端的零，例如顯示 `19 µs`，而不是 `19.000 µs`。
+
+**建議判讀順序**
+
+1. 在 **Overview** 確認檔案、範圍、tick mode 與 validation warning。
+2. 若兩份 Trace 的 span 不同，先查看 **Summary** 中經過正規化的指標。
+3. 使用 **Notable Changes** 找出差異足夠大、值得調查的項目。
+4. 開啟對應的詳細分頁，再回到兩側 Timeline 驗證數值背後的實際事件。
 
 **Summary**
 
@@ -1845,28 +1879,32 @@ CDF 本身不支援 click-to-jump；如果要跳至單一事件，請使用 Hist
 | **Span** | Trace 總時間；使用 cursor scope 時則為游標範圍寬度 |
 | **Tasks / Segments / STI events** | 各項數量 |
 | **Context switches** | 所有核心的 context switch 總數 |
+| **Context switches /s** | 依 span 正規化的速率（長度不同也可比較） |
 | **Core gap avg / max** | 同一核心連續 slice 之間的 Idle time |
 | **Migrations (total) / Migrated tasks** | Core migration 數量 |
-| **Load Balance Score / σ** | 與 Statistics → Core Utilisation 相同的 Gini-based score 與使用率標準差 |
+| **Migrations /s** | 依 span 正規化的 migration rate |
+| **Blocking time /s** | 每秒 Trace span 所累積的 off-CPU blocking-gap 時間 |
+| **Mutex blocking (total) / Mutex blocking /s** | Mutex wait 總量與 span 正規化速率 |
+| **Load Balance Score / σ** | 與 Statistics → Core Utilisation 相同的 Gini-based score 與使用率標準差（一位小數；Δ 以 **pp** 表示） |
 | **Tick health / mode / count / missed** | 與 Statistics → Trace Health (TICK) 相同的摘要 |
 
-每一列都會顯示 Trace A、Trace B 與帶正負號的 **Δ**。
+每一列都會顯示 Baseline A、Candidate B 與帶正負號的 **Δ**（A − B）。Summary 會附 compact change-bar 圖，標出最大的變化（Candidate B − Baseline A）。
 
 **其他 Compare 分頁**
 
-**Top Tasks** — 分別取兩份 Trace CPU% 最高的前 10 個 user task，再依顯示名稱（`Name[id]`）合併。只存在其中一份 Trace 的工作，另一側顯示 **—**。
+**Top Tasks** — 分別取兩份 Trace CPU% 最高的前 10 個 user task，再依顯示名稱（`Name[id]`）合併。合併後會從**完整資料集**查回該 task 的 CPU%。表頭為 **CPU A (%)** / **CPU B (%)** / **Δ (pp)**。**—** 只代表該 Trace 沒有這個 task，不是因為它沒進前 10。
 
-**Core Util** — 比較每個核心的 utilisation %；不包含 IDLE / TICK，並顯示 A、B 與 Δ。
+**Core Util** — 比較每個核心的 utilisation %；不包含 IDLE / TICK，並顯示 A、B 與 Δ（**Util A (%)** / **Util B (%)** / **Δ (pp)**）。配對長條圖以藍色顯示 Baseline A、紫色顯示 Candidate B。
 
 **Execution / Blocking / Inter-Arrival** — 依 sample count 選出主要工作，比較 Runs/Gaps、Avg、Max 與 Δ，欄位定義與 Statistics metric table 一致。
 
-**Core Migrations** — 使用與 Statistics panel 相同的欄位並排比較：
+**Core Migrations** — 使用與 Statistics panel 相同的欄位並排比較。Dialog 預設只顯示 **count 變化最大的 10 筆**，並提供三種檢視（**Count & rate**、**Dwell & ping**、**Cores**），以及 **Changed only**、**Regressions only**（Candidate B 的 migration 較多）、**Show all**、task-family 篩選（`QP`、`CS` 等），以及 **Sort |Δ|** / **Sort relative**。Migration Δ heatmap（含 HTML 匯出）會標出 count 變化最大的列。HTML 匯出仍包含全部欄位。
 
 | 欄位 | 說明 |
 |---|---|
 | **Task** | 工作顯示名稱（`Name[id]`） |
 | **Migr A / B** | 各 Trace 目前範圍內的 migration count |
-| **Δ** | 差值（A − B） |
+| **Δ** | 差值（Baseline A − Candidate B） |
 | **Rate A / B** | 各 Trace 的 migration rate label（`/s` 與 `/tick`） |
 | **Rate Δ** | 每秒 on-CPU time migration rate 的帶正負號差值（A − B） |
 | **Dwell A / B** | 各 Trace 的平均 on-CPU slice duration |
@@ -1877,16 +1915,20 @@ CDF 本身不支援 click-to-jump；如果要跳至單一事件，請使用 Hist
 
 **Preemption / Sync** — 比較 victim total 與 synchronization object aggregate，包括 holds、issues、lock-bounce / affinity violation，以及 Mutex / Semaphore / Queue 數量。
 
-**Response** — 依工作比較啟發式 Response P99（由相鄰 slice 推導的 ready→completion），顯示 A / B / Δ。
+**Response** — 依工作比較啟發式 Response P99（由相鄰 slice 推導的 ready→completion），顯示 A / B / Δ。發散圖顯示 Candidate B − Baseline A：改善向左、退步向右。Summary 的 **Response P99 (worst task)** 會標出兩側各自負責的 task。
 
 **Mutex** — 依工作比較 Mutex wait total。
 
-Summary 中的 **Deadline misses** 使用與 Statistics 相同的 **Settings → Display** task-deadline map；若沒有設定 Deadline，數值為 0。
+**Shared Patterns** — 比較兩份 Trace 各自回報的重複異常模式。
+
+**Trends** — 每個已開啟分頁一列（tasks、migrations、load balance、tick health、span）。
+
+Summary 中的 **Deadline misses** 使用與 Statistics 相同的 **Settings → Display** task-deadline map。若沒有設定 Deadline，`0` 只代表沒有可評估的已設定 Deadline，不能視為 workload 已符合未定義的 Deadline。
 
 Trace Compare 適合比較相同 workload 的不同 build、設定或執行結果，不需要先手動合併 Trace。
 
 <a id="use-case-tickful-vs-tickless-performance-and-context-switches" name="use-case-tickful-vs-tickless-performance-and-context-switches">&#x200B;</a>
-### 使用案例：Tickful 與 Tickless（效能與 Context Switch） ![](../images/readme/h5.svg)
+#### 使用案例：Tickful 與 Tickless（效能與 Context Switch） ![](../images/readme/h5.svg)
 
 對**相同 workload** 擷取兩次 Trace：
 
@@ -1961,7 +2003,7 @@ python builds/btf_viewer.py compare \
 
 **範例 Summary**
 
-`tickless-8cores.zip`，完整 Trace；A = Tickful、B = Tickless、Δ = A − B：
+`tickless-8cores.zip`，完整 Trace；Baseline A = Tickful、Candidate B = Tickless、Δ = A − B：
 
 | Metric | Tickful | Tickless | Δ |
 |---|---:|---:|---:|
@@ -1975,15 +2017,15 @@ python builds/btf_viewer.py compare \
 
 若要評估 Tickless 的省電效果，可將 cursor（或 `--lo` / `--hi`）限制在 Idle phase，例如 demo test 11。若要確認 latency budget 是否仍符合需求，則應保留 busy CS window 進行比較。
 
-> **已知限制 — SMP Tickless Idle**
+> **內附 SMP 範例的已知限制**
 >
 > 在內附的 `tickless-8cores.zip` 範例中，test 11 的 TICK STI 在兩個 build 仍約每 1 ms 觸發一次，Tickless capture 沒有出現預期的較大 gap。
 >
-> 原因位於上游 `FreeRTOS-Kernel/tasks.c` 的 `prvGetExpectedIdleTime()`：只要 Idle priority 的 ready task 超過一個，就會將 expected idle time 強制設為 0。
+> 在此範例使用的 FreeRTOS kernel 版本中，`prvGetExpectedIdleTime()` 會在 Idle priority 的 ready task 超過一個時回傳 0。
 >
 > SMP 下，正在執行的 task 仍留在 ready list 中，只改變 `xTaskRunState`。因此 `configNUMBER_OF_CORES = 8` 時，8 個 per-core IDLE task 同時被視為 ready，導致 tickless idle 實際上無法啟動。
 >
-> 這是 vanilla FreeRTOS kernel heuristic 在 SMP 情境下的限制，**不是 Capture 或 Viewer 的問題**。在 kernel 的 idle-ready-list 判斷變得 SMP-aware 之前，SMP build 的 Tickless 與 Tickful Tick count 可能仍會非常接近。
+> 這是此範例的 kernel 與設定組合限制，**不代表 BTF Capture 或 BTFViewer 出錯**。也不應將這個結果直接推廣到所有 FreeRTOS SMP 版本與設定。
 
 **判讀方式**
 
@@ -1995,7 +2037,7 @@ python builds/btf_viewer.py compare \
 | 某一側 Blocking / Execution Max 明顯變差 | 只有在差值仍符合 latency budget 時，才適合採用該 policy |
 | 某一 policy 的 Migrations ↑ | 應重新檢查 affinity；Tick wake pattern 可能改變工作配置 |
 
-如果 Idle power 是主要考量，而且 busy-window metric 仍符合預算，通常可優先考慮 **Tickless**。如果 Trace Health 必須維持 GOOD，或 soft real-time slice 無法接受 Tick stretching，則可考慮 **Tickful**。完整流程請參閱 [WORKFLOWS.md §5.2](WORKFLOWS_zh-TW.md#52-compare-two-builds)。
+如果 Idle power 是主要考量，且相對應的 busy-window 與 idle-window 比較都符合必要的 latency 與 scheduling budget，可考慮使用 **Tickless**。只有當實際量測結果顯示 **Tickful** 更符合這些需求時，才應選擇 Tickful；單看 `GOOD` Trace Health 標籤不能作為效能結論。完整流程請參閱 [WORKFLOWS_zh-TW.md §5.2](WORKFLOWS_zh-TW.md#52-compare-two-builds)。
 
 **Find → Migrations** 會列出 migration boundary time。Desktop 與 Web 都可使用 `F3` / `Shift+F3` 在事件之間跳轉。
 

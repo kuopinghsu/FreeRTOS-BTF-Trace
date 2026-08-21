@@ -298,7 +298,9 @@ Same tables as Trace Compare → Export:
 
   Summary        span, tasks, segments, STI, context switches, core gaps,
                  migration totals (with Δ column).
-  Top Tasks      CPU%% per display name (union of both traces).
+  Top Tasks      CPU%% per display name (union of top-N names; values from
+                 the full dataset).
+  Overview       Baseline A vs Candidate B, Δ formula, Notable Changes.
   Core Migrations  per-task migr count, rate, dwell, ping-pong (A vs B + Δ).
 
 Inputs:
@@ -1018,7 +1020,8 @@ def _cli_compare_run(args: argparse.Namespace) -> int:
     name_b = args.name_b or _trace_display_name(path_b)
     scope_enabled = (lo_a is not None) or (lo_b is not None)
     tables = _build_trace_compare_rows(
-        trace_a, trace_b, lo_a, hi_a, lo_b, hi_b)
+        trace_a, trace_b, lo_a, hi_a, lo_b, hi_b,
+        row_limit=None, top_limit=None)
 
     fmt, html_path, csv_path = _cli_export_output_paths(args.output, args.format)
     written: List[str] = []

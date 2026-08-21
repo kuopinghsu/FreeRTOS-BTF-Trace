@@ -5,6 +5,7 @@ Host harvest walks BTF slices; ranking and scope stay shared with
 """
 from __future__ import annotations
 
+import html
 import math
 import re
 from bisect import bisect_right
@@ -78,7 +79,7 @@ BURST_WINDOW_NS = 1_000_000
 _JUMP_RE = re.compile(r"jump:([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
 _TASK_RE = re.compile(r"\b([A-Za-z_][\w.-]*\[\d+\])")
 _DELTA_RE = re.compile(
-    r"^([+\-−])?\s*([\d.]+)\s*(ns|µs|us|μs|ms|s|/s|%)?$",
+    r"^([+\-−])?\s*([\d.]+)\s*(?:(ns|µs|us|μs|ms|s|/s|%|pp)(/s)?)?$",
     re.IGNORECASE,
 )
 _UNIT_NS = {
@@ -93,12 +94,31 @@ _SUMMARY_STRIP_LABELS = (
     "Span",
     "Span (cursor range)",
     "Context switches",
+    "Context switches /s",
     "Migrations (total)",
+    "Migrations /s",
     "Missed ticks (est.)",
     "Response P99 (worst task)",
     "Mutex blocking (total)",
+    "Mutex blocking /s",
+    "Blocking time /s",
     "Deadline misses",
 )
+COMPARE_DELTA_FORMULA = (
+    "Δ = Baseline A − Candidate B (positive means A is larger). "
+    "— = unavailable (not zero). "
+    "pp = percentage points. "
+    "STI = software trace item; σ = util stddev; "
+    "Dwell = avg on-CPU slice; Ping = A↔B core ping-pong; "
+    "P99 = 99th percentile; /tick = per TICK period."
+)
+COMPARE_NOTABLE_REL = 0.05
+COMPARE_NOTABLE_TIME_NS = 50_000
+COMPARE_NOTABLE_COUNT = 2
+COMPARE_NOTABLE_COUNT_ABS = 50
+COMPARE_NOTABLE_PP = 1.0
+_TASK_PAREN_RE = re.compile(r"\(([^)]+)\)\s*$")
+_VALUE_PAREN_RE = re.compile(r"\s*\([^)]*\)\s*$")
 
 
 def percentile_index(n: int, p: float) -> int:
@@ -442,7 +462,8 @@ def task_inspector_line(
 
 def parse_signed_delta(text: Any) -> Optional[Tuple[float, str]]:
     """Parse a Trace Compare Δ cell into ``(signed, kind)``."""
-    s = str(text or "").strip().replace("−", "-")
+    s = str(text or "").strip().replace("−", "-").replace(",", "")
+    s = _VALUE_PAREN_RE.sub("", s).strip()
     if not s or s in ("—", "–", "-"):
         return None
     m = _DELTA_RE.match(s)
@@ -454,9 +475,11 @@ def parse_signed_delta(text: Any) -> Optional[Tuple[float, str]]:
     except (TypeError, ValueError):
         return None
     unit = (m.group(3) or "").lower()
+    per_s = bool(m.group(4))
     if unit in _UNIT_NS:
-        return sign * val * _UNIT_NS[unit], "time"
-    if unit == "%":
+        signed_ns = sign * val * _UNIT_NS[unit]
+        return signed_ns, ("rate" if per_s else "time")
+    if unit in ("%", "pp"):
         return sign * val, "pct"
     if unit == "/s":
         return sign * val, "rate"
@@ -469,7 +492,7 @@ def compare_candidates_from_tables(tables: dict) -> List[dict]:
         return []
     out: List[dict] = []
     for row in tables.get("summary") or []:
-        label, delta = _row_label_delta(row, "label", "delta", 0, 3)
+        label, delta, a_val, b_val = _row_cells(row, "label", "delta", 0, 3)
         if not label or _skip_summary_label(label):
             continue
         parsed = parse_signed_delta(delta)
@@ -482,19 +505,22 @@ def compare_candidates_from_tables(tables: dict) -> List[dict]:
             "delta": str(delta),
             "signed": signed,
             "kind": kind,
+            "a": a_val,
+            "b": b_val,
         })
-    for key, metric, name_idx, delta_idx, name_key, delta_key in (
-        ("execution", "exec max", 0, 7, "name", "deltaMax"),
-        ("blocking", "block avg", 0, 7, "name", "delta"),
-        ("inter_arrival", "inter avg", 0, 7, "name", "delta"),
-        ("interArrival", "inter avg", 0, 7, "name", "delta"),
-        ("response", "response p99", 0, 3, "name", "delta"),
-        ("mutex_block", "mutex block", 0, 3, "name", "delta"),
-        ("mutexBlock", "mutex block", 0, 3, "name", "delta"),
-        ("deadlines", "deadline misses", 0, 3, "name", "delta"),
+    for key, metric, name_idx, delta_idx, name_key, delta_key, a_idx, b_idx, a_key, b_key in (
+        ("execution", "exec max", 0, 7, "name", "deltaMax", 5, 6, "maxA", "maxB"),
+        ("blocking", "block avg", 0, 7, "name", "delta", 3, 4, "avgA", "avgB"),
+        ("inter_arrival", "inter avg", 0, 7, "name", "delta", 3, 4, "avgA", "avgB"),
+        ("interArrival", "inter avg", 0, 7, "name", "delta", 3, 4, "avgA", "avgB"),
+        ("response", "response p99", 0, 3, "name", "delta", 1, 2, "a", "b"),
+        ("mutex_block", "mutex block", 0, 3, "name", "delta", 1, 2, "a", "b"),
+        ("mutexBlock", "mutex block", 0, 3, "name", "delta", 1, 2, "a", "b"),
+        ("deadlines", "deadline misses", 0, 3, "name", "delta", 1, 2, "a", "b"),
     ):
         for row in tables.get(key) or []:
-            name, delta = _row_label_delta(row, name_key, delta_key, name_idx, delta_idx)
+            name, delta, a_val, b_val = _row_cells(
+                row, name_key, delta_key, name_idx, delta_idx, a_key, b_key, a_idx, b_idx)
             if not name:
                 continue
             parsed = parse_signed_delta(delta)
@@ -507,6 +533,8 @@ def compare_candidates_from_tables(tables: dict) -> List[dict]:
                 "delta": str(delta),
                 "signed": signed,
                 "kind": kind,
+                "a": a_val,
+                "b": b_val,
             })
     return out
 
@@ -534,22 +562,702 @@ def top_compare_regressions(candidates: Sequence[dict], limit: int = 4) -> List[
     return picked[:lim]
 
 
-def compare_summary_strip(tables: dict, limit: int = 4) -> dict:
-    """Headline deltas plus the largest regressions for the Compare dialog."""
-    cands = compare_candidates_from_tables(tables)
+def compare_summary_strip(
+    tables: dict,
+    limit: int = 4,
+    name_a: str = "",
+    name_b: str = "",
+) -> dict:
+    """Headline deltas plus Notable Changes for the Compare dialog."""
     headline: List[dict] = []
     for row in (tables or {}).get("summary") or []:
         label, delta = _row_label_delta(row, "label", "delta", 0, 3)
         if label in _SUMMARY_STRIP_LABELS:
             headline.append({"label": label.replace(" (cursor range)", ""), "delta": str(delta)})
-    regs = top_compare_regressions(cands, limit)
+    notable = compare_notable_changes(tables, limit=limit, name_a=name_a, name_b=name_b)
+    rows = list(notable.get("rows") or [])
+    regs = [r for r in rows if r.get("status") == "Regressed"]
+    imps = [r for r in rows if r.get("status") == "Improved"]
     shared = list((tables or {}).get("shared_patterns") or [])
+    why = str(notable.get("verdict") or "").strip()
+    hint = compare_why({"regressions": regs, "shared_patterns": shared})
+    if hint and not hint.startswith("No positive"):
+        why = f"{why} {hint}".strip()
     return {
         "headline": headline,
         "regressions": regs,
+        "improvements": imps,
+        "notable": notable,
+        "warnings": list(notable.get("warnings") or []),
         "shared_patterns": shared,
-        "why": compare_why({"regressions": regs, "shared_patterns": shared}),
+        "why": why or hint,
+        "formula": COMPARE_DELTA_FORMULA,
     }
+
+
+def _compare_summary_pair(tables: dict, prefix: str) -> Tuple[str, str]:
+    for row in (tables or {}).get("summary") or []:
+        label, _delta, a_val, b_val = _row_cells(row, "label", "delta", 0, 3)
+        if label == prefix or (prefix == "Span" and label.startswith("Span")):
+            return str(a_val if a_val is not None else "—"), str(b_val if b_val is not None else "—")
+    return "—", "—"
+
+
+def compare_tick_mode_warnings(name_a: str, name_b: str, mode_a: str, mode_b: str) -> List[str]:
+    """Filename vs detection mismatches, or A/B tick-mode disagreement."""
+    warnings: List[str] = []
+    ma = str(mode_a or "").strip().upper()
+    mb = str(mode_b or "").strip().upper()
+    skip = {"", "—", "-", "UNKNOWN"}
+    if ma not in skip and mb not in skip and ma != mb:
+        warnings.append(
+            f"Tick mode differs: Baseline A is {ma}, Candidate B is {mb}."
+        )
+    for name, mode, side in ((name_a, ma, "Baseline A"), (name_b, mb, "Candidate B")):
+        low = str(name or "").lower()
+        if "tickful" in low and mode == "TICKLESS":
+            warnings.append(
+                f"{side} filename suggests tickful, but detection is {mode}."
+            )
+        if "tickless" in low and mode == "TICK":
+            warnings.append(
+                f"{side} filename suggests tickless, but detection is {mode}."
+            )
+    return warnings
+
+
+def _compare_metric_polarity(label: str, metric: str = "") -> Optional[str]:
+    blob = f"{label} {metric}".lower()
+    if "tick health" in blob or "tick mode" in blob:
+        return None
+    if "load balance score" in blob:
+        return "better"
+    if any(k in blob for k in (
+        "response", "mutex", "deadline", "block", "migrat", "core gap",
+        "context switch", "missed tick", "preempt", "ping", "σ", "sigma",
+        "bounce", "affinity", "issues", "exec max",
+    )):
+        return "worse"
+    if "inter" in blob:
+        return "worse"
+    return None
+
+
+def _compare_change_is_significant(
+    signed: float, kind: str, a_mag: Optional[float], b_mag: Optional[float],
+) -> bool:
+    mag = abs(float(signed or 0))
+    if mag <= 0:
+        return False
+    base = max(float(a_mag or 0), float(b_mag or 0), 1e-12)
+    rel = mag / base
+    if kind == "time":
+        return mag >= COMPARE_NOTABLE_TIME_NS or rel >= COMPARE_NOTABLE_REL
+    if kind == "pct":
+        return mag >= COMPARE_NOTABLE_PP
+    if kind == "count":
+        return mag >= COMPARE_NOTABLE_COUNT_ABS or (
+            mag >= COMPARE_NOTABLE_COUNT and rel >= COMPARE_NOTABLE_REL)
+    if kind == "rate":
+        return rel >= COMPARE_NOTABLE_REL
+    return rel >= COMPARE_NOTABLE_REL
+
+
+def _compare_status(polarity: Optional[str], signed: float) -> str:
+    if polarity == "worse":
+        if signed < 0:
+            return "Regressed"
+        if signed > 0:
+            return "Improved"
+    elif polarity == "better":
+        if signed > 0:
+            return "Regressed"
+        if signed < 0:
+            return "Improved"
+    return "Changed"
+
+
+def _flip_delta_text(text: Any) -> str:
+    s = str(text or "").strip()
+    if not s or s in ("—", "–", "0", "0.0"):
+        return s
+    if s[0] == "+":
+        return "−" + s[1:]
+    if s[0] in "-−":
+        return "+" + s[1:]
+    return "+" + s
+
+
+def _cell_magnitude(text: Any) -> Optional[float]:
+    parsed = parse_signed_delta(text)
+    if parsed is None:
+        return None
+    return abs(float(parsed[0]))
+
+
+def _task_from_cell(text: Any) -> str:
+    m = _TASK_PAREN_RE.search(str(text or ""))
+    return m.group(1).strip() if m else ""
+
+
+def _extra_summary_candidates(tables: dict) -> List[dict]:
+    extra: List[dict] = []
+    for row in (tables or {}).get("summary") or []:
+        label, delta, a_val, b_val = _row_cells(row, "label", "delta", 0, 3)
+        low = label.lower()
+        if "load balance score" not in low and not (
+            "load balance" in low and ("σ" in label or "sigma" in low)
+        ):
+            continue
+        parsed = parse_signed_delta(delta)
+        if parsed is None:
+            continue
+        signed, kind = parsed
+        extra.append({
+            "label": label,
+            "metric": "summary",
+            "delta": str(delta),
+            "signed": signed,
+            "kind": kind,
+            "a": a_val,
+            "b": b_val,
+        })
+    return extra
+
+
+def compare_notable_changes(
+    tables: dict,
+    limit: int = 8,
+    name_a: str = "",
+    name_b: str = "",
+) -> dict:
+    """Verdict, status cards, and thresholded Improved/Regressed rows.
+
+    Status is Candidate B vs Baseline A. Table Δ stays ``A − B``.
+    Changes below the absolute+relative threshold are omitted.
+    """
+    lim = max(1, min(16, int(limit or 8)))
+    cands = list(compare_candidates_from_tables(tables)) + _extra_summary_candidates(tables)
+    classified: List[dict] = []
+    for cand in cands:
+        if not isinstance(cand, dict):
+            continue
+        signed = float(cand.get("signed") or 0)
+        kind = str(cand.get("kind") or "count")
+        a_mag = _cell_magnitude(cand.get("a"))
+        b_mag = _cell_magnitude(cand.get("b"))
+        if not _compare_change_is_significant(signed, kind, a_mag, b_mag):
+            continue
+        polarity = _compare_metric_polarity(
+            str(cand.get("label") or ""), str(cand.get("metric") or ""))
+        status = _compare_status(polarity, signed)
+        a_txt = "—" if cand.get("a") is None else str(cand.get("a"))
+        b_txt = "—" if cand.get("b") is None else str(cand.get("b"))
+        delta_txt = str(cand.get("delta") or "")
+        if a_mag and a_mag > 0:
+            rel_signed = 100.0 * (-signed) / a_mag
+            change = f"{_flip_delta_text(delta_txt)} / {rel_signed:+.1f}%"
+        else:
+            change = _flip_delta_text(delta_txt)
+        classified.append({
+            "status": status,
+            "label": str(cand.get("label") or ""),
+            "a": a_txt,
+            "b": b_txt,
+            "delta": delta_txt,
+            "change": change,
+            "signed": signed,
+            "kind": kind,
+        })
+    classified.sort(key=lambda r: -abs(float(r.get("signed") or 0)))
+    warnings = compare_tick_mode_warnings(
+        name_a, name_b, *_compare_summary_pair(tables, "Tick mode"))
+    p99_a, p99_b = _compare_summary_pair(tables, "Response P99 (worst task)")
+    task_a = _task_from_cell(p99_a)
+    task_b = _task_from_cell(p99_b)
+    if task_a and task_b and task_a != task_b:
+        warnings.append(
+            "Worst response P99 compares different tasks "
+            f"(Baseline A: {task_a}, Candidate B: {task_b})."
+        )
+    n_reg = sum(1 for r in classified if r["status"] == "Regressed")
+    n_imp = sum(1 for r in classified if r["status"] == "Improved")
+    cards = {
+        "regressions": n_reg,
+        "improvements": n_imp,
+        "significant": len(classified),
+        "warnings": len(warnings),
+    }
+    rows = classified[:lim]
+    regs = [r for r in classified if r["status"] == "Regressed"]
+    imps = [r for r in classified if r["status"] == "Improved"]
+    tick_note = (
+        " Tick-mode detection requires verification."
+        if any("tick" in w.lower() for w in warnings) else ""
+    )
+    if n_reg and n_imp:
+        verdict = (
+            f"Overall: Mixed — Candidate B has {n_reg} regression(s) and "
+            f"{n_imp} improvement(s) above threshold.{tick_note}"
+        )
+    elif n_reg:
+        top = regs[0]
+        verdict = (
+            f"Overall: Candidate B regressed on {top['label']} "
+            f"({top['change']}).{tick_note}"
+        )
+    elif n_imp:
+        top = imps[0]
+        verdict = (
+            f"Overall: Candidate B improved on {top['label']} "
+            f"({top['change']}).{tick_note}"
+        )
+    elif warnings:
+        verdict = f"Overall: Mostly similar. {warnings[0]}"
+    else:
+        verdict = (
+            "Overall: Mostly similar; no significant improvements or "
+            "regressions above the compare threshold."
+        )
+    span_a, span_b = _compare_summary_pair(tables, "Span")
+    mode_a, mode_b = _compare_summary_pair(tables, "Tick mode")
+    return {
+        "verdict": verdict.strip(),
+        "formula": COMPARE_DELTA_FORMULA,
+        "identity": {
+            "a": {"file": name_a or "Trace A", "span": span_a, "tick_mode": mode_a},
+            "b": {"file": name_b or "Trace B", "span": span_b, "tick_mode": mode_b},
+        },
+        "cards": cards,
+        "rows": rows,
+        "warnings": warnings,
+    }
+
+
+COMPARE_CHART_BASELINE = "#2a6fb2"
+COMPARE_CHART_CANDIDATE = "#6b4ea8"
+COMPARE_CHART_REGRESSED = "#c0392b"
+COMPARE_CHART_IMPROVED = "#1f6b45"
+COMPARE_MIG_VIEWS = ("count", "dwell", "cores")
+COMPARE_MIG_FILTERS = ("top", "changed", "regressed", "all")
+_MIG_VIEW_SPEC = {
+    "count": {
+        "headers": ["Task", "Migr A", "Migr B", "Δ", "Rate A", "Rate B", "Rate Δ"],
+        "idx": (0, 1, 2, 3, 4, 5, 6),
+        "keys": ("name", "migrationsA", "migrationsB", "delta", "rateA", "rateB", "rateDelta"),
+    },
+    "dwell": {
+        "headers": ["Task", "Dwell A", "Dwell B", "Dwell Δ", "Ping A", "Ping B"],
+        "idx": (0, 7, 8, 9, 10, 11),
+        "keys": ("name", "dwellA", "dwellB", "dwellDelta", "pingA", "pingB"),
+    },
+    "cores": {
+        "headers": ["Task", "Cores A", "Cores B", "Primary A", "Primary B"],
+        "idx": (0, 12, 13, 14, 15),
+        "keys": ("name", "coresA", "coresB", "primaryA", "primaryB"),
+    },
+}
+_MIG_FAMILY_RE = re.compile(r"^([A-Za-z_][\w.-]*)")
+
+
+def compare_core_util_chart_rows(tables: dict) -> List[dict]:
+    """Numeric core-util pairs for the paired-bar chart."""
+    rows = (tables or {}).get("core_util") or (tables or {}).get("coreUtil") or []
+    out: List[dict] = []
+    for row in rows:
+        if isinstance(row, dict):
+            label = str(row.get("core") or row.get("label") or "")
+            a_raw = row.get("utilA") if "utilA" in row else row.get("a")
+            b_raw = row.get("utilB") if "utilB" in row else row.get("b")
+        elif isinstance(row, (list, tuple)) and len(row) >= 3:
+            label = str(row[0] or "")
+            a_raw, b_raw = row[1], row[2]
+        else:
+            continue
+        if not label:
+            continue
+        out.append({
+            "label": label,
+            "a": _cell_magnitude(a_raw) or 0.0,
+            "b": _cell_magnitude(b_raw) or 0.0,
+        })
+    return out
+
+
+def compare_p99_delta_chart_rows(tables: dict, limit: int = 12) -> List[dict]:
+    """Largest Response P99 candidate changes (B − A) for the diverging chart."""
+    lim = max(1, min(24, int(limit or 12)))
+    rows = (tables or {}).get("response") or []
+    out: List[dict] = []
+    for row in rows:
+        if isinstance(row, dict):
+            label = str(row.get("name") or row.get("label") or "")
+            delta = row.get("delta")
+        elif isinstance(row, (list, tuple)) and len(row) >= 4:
+            label = str(row[0] or "")
+            delta = row[3]
+        else:
+            continue
+        parsed = parse_signed_delta(delta)
+        if parsed is None or not label:
+            continue
+        signed, _kind = parsed
+        cand = -signed
+        if cand == 0:
+            continue
+        status = "Regressed" if cand > 0 else "Improved"
+        out.append({
+            "label": label,
+            "signed": signed,
+            "cand": cand,
+            "status": status,
+            "delta": str(delta),
+            "change": _flip_delta_text(delta),
+        })
+    out.sort(key=lambda r: -abs(float(r.get("cand") or 0)))
+    return out[:lim]
+
+
+def compare_core_util_chart_svg(rows: Sequence[dict], width: int = 640) -> str:
+    """Paired horizontal bars: Baseline A (blue) above Candidate B (purple)."""
+    items = [r for r in (rows or []) if isinstance(r, dict)]
+    if not items:
+        return ""
+    w = max(280, int(width or 640))
+    label_w = 78
+    pad = 12
+    row_h = 32
+    header = 22
+    pct_w = 52
+    h = header + pad + len(items) * row_h + 8
+    max_v = max((max(float(r.get("a") or 0), float(r.get("b") or 0)) for r in items), default=1.0)
+    max_v = max(max_v, 1.0)
+    plot_w = max(80.0, w - label_w - pad - pct_w)
+    ax = label_w
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" '
+        f'width="{w}" height="{h}" role="img" '
+        'aria-label="Core utilisation Baseline A vs Candidate B">',
+        f'<text x="{pad}" y="16" font-size="12" fill="#123355" font-weight="600">'
+        "Core utilisation</text>",
+        f'<text x="{w - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">'
+        '<tspan fill="#2a6fb2">Baseline A</tspan>'
+        '<tspan fill="#5f6f82"> · </tspan>'
+        '<tspan fill="#6b4ea8">Candidate B</tspan></text>',
+    ]
+    for i, row in enumerate(items):
+        y = header + pad + i * row_h
+        lab = html.escape(str(row.get("label") or "")[:18])
+        a_v = max(0.0, float(row.get("a") or 0))
+        b_v = max(0.0, float(row.get("b") or 0))
+        aw = plot_w * a_v / max_v
+        bw = plot_w * b_v / max_v
+        parts.append(f'<text x="{pad}" y="{y + 14}" font-size="11" fill="#182230">{lab}</text>')
+        parts.append(
+            f'<rect x="{ax:.1f}" y="{y}" width="{max(aw, 0.5):.1f}" height="9" rx="3" '
+            f'fill="{COMPARE_CHART_BASELINE}"/>'
+        )
+        parts.append(
+            f'<rect x="{ax:.1f}" y="{y + 12}" width="{max(bw, 0.5):.1f}" height="9" rx="3" '
+            f'fill="{COMPARE_CHART_CANDIDATE}"/>'
+        )
+        parts.append(
+            f'<text x="{ax + plot_w + 6:.1f}" y="{y + 9}" font-size="10" '
+            f'fill="{COMPARE_CHART_BASELINE}">{a_v:.1f}%</text>'
+        )
+        parts.append(
+            f'<text x="{ax + plot_w + 6:.1f}" y="{y + 21}" font-size="10" '
+            f'fill="{COMPARE_CHART_CANDIDATE}">{b_v:.1f}%</text>'
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def compare_p99_delta_chart_svg(rows: Sequence[dict], width: int = 640) -> str:
+    """Diverging bars: improvements left, regressions right (Candidate B − Baseline A)."""
+    items = [r for r in (rows or []) if isinstance(r, dict)]
+    if not items:
+        return ""
+    w = max(280, int(width or 640))
+    label_w = 96
+    pad = 12
+    row_h = 22
+    header = 28
+    change_w = 88
+    h = header + len(items) * row_h + 16
+    max_v = max((abs(float(r.get("cand") or 0)) for r in items), default=1.0) or 1.0
+    plot_w = max(80.0, w - label_w - pad - change_w)
+    mid = label_w + plot_w / 2.0
+    half = plot_w / 2.0
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" '
+        f'width="{w}" height="{h}" role="img" '
+        'aria-label="Response P99 change Candidate B minus Baseline A">',
+        f'<text x="{pad}" y="16" font-size="12" fill="#123355" font-weight="600">'
+        "Response P99 change</text>",
+        f'<text x="{w - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">'
+        "Candidate B − Baseline A</text>",
+        f'<line x1="{mid:.1f}" y1="{header - 4}" x2="{mid:.1f}" y2="{h - 10}" '
+        'stroke="#d9e0ea" stroke-width="1"/>',
+        f'<text x="{label_w:.1f}" y="{header - 6}" font-size="9" fill="{COMPARE_CHART_IMPROVED}">'
+        "Improved</text>",
+        f'<text x="{mid + half:.1f}" y="{header - 6}" text-anchor="end" font-size="9" '
+        f'fill="{COMPARE_CHART_REGRESSED}">Regressed</text>',
+    ]
+    for i, row in enumerate(items):
+        y = header + i * row_h
+        lab = html.escape(str(row.get("label") or "")[:16])
+        cand = float(row.get("cand") or 0)
+        bar_w = abs(cand) / max_v * half
+        color = COMPARE_CHART_REGRESSED if cand > 0 else COMPARE_CHART_IMPROVED
+        x = mid if cand >= 0 else mid - bar_w
+        parts.append(f'<text x="{pad}" y="{y + 14}" font-size="11" fill="#182230">{lab}</text>')
+        parts.append(
+            f'<rect x="{x:.1f}" y="{y + 4}" width="{max(bar_w, 0.8):.1f}" height="12" rx="2" '
+            f'fill="{color}"/>'
+        )
+        parts.append(
+            f'<text x="{mid + half + 8:.1f}" y="{y + 14}" font-size="10" fill="{color}">'
+            f'{html.escape(str(row.get("change") or ""))}</text>'
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _mig_name(row) -> str:
+    if isinstance(row, dict):
+        return str(row.get("name") or row.get("label") or "")
+    if isinstance(row, (list, tuple)) and row:
+        return str(row[0] or "")
+    return ""
+
+
+def _mig_family(name: str) -> str:
+    m = _MIG_FAMILY_RE.match(str(name or "").strip())
+    return m.group(1) if m else str(name or "").strip()
+
+
+def _mig_delta_num(row) -> float:
+    raw = None
+    if isinstance(row, dict):
+        raw = row.get("delta")
+    elif isinstance(row, (list, tuple)) and len(row) > 3:
+        raw = row[3]
+    try:
+        return float(raw or 0)
+    except (TypeError, ValueError):
+        parsed = parse_signed_delta(raw)
+        return float(parsed[0]) if parsed else 0.0
+
+
+def compare_migration_families(rows: Sequence) -> List[str]:
+    fams = {_mig_family(_mig_name(r)) for r in (rows or []) if _mig_name(r)}
+    return sorted(f for f in fams if f)
+
+
+def _mig_project(row, spec: dict) -> dict:
+    if isinstance(row, dict):
+        return {k: row.get(k) for k in spec["keys"]}
+    cells = []
+    for idx in spec["idx"]:
+        cells.append(row[idx] if isinstance(row, (list, tuple)) and len(row) > idx else "")
+    return dict(zip(spec["keys"], cells))
+
+
+def filter_compare_migration_rows(
+    rows: Sequence,
+    view: str = "count",
+    filt: str = "top",
+    family: str = "",
+    limit: int = 10,
+    sort_by: str = "abs",
+) -> dict:
+    """Project Core Migrations into a smaller view with optional filters.
+
+    *filt* ``top`` keeps the largest |Δ| count changes (default 10).
+    ``regressed`` is Candidate B worse (more migrations: table Δ = A − B < 0).
+    *sort_by* ``rel`` ranks by |Δ| / max(|A|,|B|,1); default ``abs``.
+    """
+    view = view if view in _MIG_VIEW_SPEC else "count"
+    filt = filt if filt in COMPARE_MIG_FILTERS else "top"
+    sort_by = "rel" if sort_by == "rel" else "abs"
+    spec = _MIG_VIEW_SPEC[view]
+    items = list(rows or [])
+    fam = str(family or "").strip()
+    if fam:
+        items = [r for r in items if _mig_family(_mig_name(r)) == fam]
+    if filt == "changed":
+        items = [r for r in items if _mig_delta_num(r) != 0]
+    elif filt == "regressed":
+        items = [r for r in items if _mig_delta_num(r) < 0]
+    elif filt == "top":
+        items = [r for r in items if _mig_delta_num(r) != 0]
+
+    def _sort_key(r):
+        d = abs(_mig_delta_num(r))
+        if sort_by == "rel":
+            if isinstance(r, dict):
+                base = max(abs(float(r.get("migrationsA") or 0)),
+                           abs(float(r.get("migrationsB") or 0)), 1.0)
+            elif isinstance(r, (list, tuple)) and len(r) > 2:
+                try:
+                    base = max(abs(float(r[1] or 0)), abs(float(r[2] or 0)), 1.0)
+                except (TypeError, ValueError):
+                    base = 1.0
+            else:
+                base = 1.0
+            return (-d / base, _mig_name(r).lower())
+        return (-d, _mig_name(r).lower())
+
+    items.sort(key=_sort_key)
+    if filt == "top":
+        items = items[:max(1, int(limit or 10))]
+    objects = [_mig_project(r, spec) for r in items]
+    projected = [[obj.get(k) for k in spec["keys"]] for obj in objects]
+    return {
+        "view": view,
+        "filter": filt,
+        "sort_by": sort_by,
+        "headers": list(spec["headers"]),
+        "rows": projected,
+        "objects": objects,
+        "families": compare_migration_families(rows),
+        "shown": len(projected),
+        "total": len(rows or []),
+    }
+
+
+def compare_row_delta_status(label: str, delta: Any, metric: str = "") -> Optional[str]:
+    """Improved / Regressed / Changed for a table Δ cell, or None if blank/zero."""
+    parsed = parse_signed_delta(delta)
+    if parsed is None:
+        return None
+    signed, _kind = parsed
+    if signed == 0:
+        return None
+    pol = _compare_metric_polarity(label, metric)
+    if pol is None and metric:
+        pol = _compare_metric_polarity(metric)
+    if pol is None:
+        return "Changed"
+    return _compare_status(pol, signed)
+
+
+def compare_summary_change_bar_rows(tables: dict, limit: int = 8) -> List[dict]:
+    """Compact Summary change bars (Candidate B − Baseline A) for key metrics."""
+    lim = max(1, min(16, int(limit or 8)))
+    out: List[dict] = []
+    for row in (tables or {}).get("summary") or []:
+        if isinstance(row, dict):
+            label = str(row.get("label") or "")
+            delta = row.get("delta")
+        elif isinstance(row, (list, tuple)) and len(row) >= 4:
+            label = str(row[0] or "")
+            delta = row[3]
+        else:
+            continue
+        low = label.lower()
+        if low.startswith("tick ") or low in ("tasks", "segments", "sti events"):
+            continue
+        parsed = parse_signed_delta(delta)
+        if parsed is None:
+            continue
+        signed, kind = parsed
+        if signed == 0:
+            continue
+        cand = -signed
+        status = compare_row_delta_status(label, delta) or "Changed"
+        out.append({
+            "label": label,
+            "signed": signed,
+            "cand": cand,
+            "kind": kind,
+            "status": status,
+            "delta": str(delta),
+            "change": _flip_delta_text(delta),
+        })
+    out.sort(key=lambda r: -abs(float(r.get("cand") or 0)))
+    return out[:lim]
+
+
+def compare_summary_change_bars_svg(rows: Sequence[dict], width: int = 640) -> str:
+    """Compact diverging bars for Summary metric changes."""
+    return compare_p99_delta_chart_svg([
+        {**r, "label": str(r.get("label") or "")[:22]}
+        for r in (rows or []) if isinstance(r, dict)
+    ], width=width).replace(
+        "Response P99 change", "Summary changes", 1,
+    ).replace(
+        'aria-label="Response P99 change Candidate B minus Baseline A"',
+        'aria-label="Summary changes Candidate B minus Baseline A"',
+        1,
+    )
+
+
+def compare_migration_heatmap_rows(rows: Sequence, limit: int = 16) -> List[dict]:
+    """Task migration Δ cells for a compact heatmap (largest |Δ| first)."""
+    lim = max(1, min(40, int(limit or 16)))
+    items = [r for r in (rows or []) if _mig_delta_num(r) != 0]
+    items.sort(key=lambda r: (-abs(_mig_delta_num(r)), _mig_name(r).lower()))
+    out: List[dict] = []
+    for r in items[:lim]:
+        d = _mig_delta_num(r)
+        if isinstance(r, dict):
+            a_v = float(r.get("migrationsA") or 0)
+            b_v = float(r.get("migrationsB") or 0)
+        else:
+            a_v = float(r[1] or 0) if isinstance(r, (list, tuple)) and len(r) > 1 else 0.0
+            b_v = float(r[2] or 0) if isinstance(r, (list, tuple)) and len(r) > 2 else 0.0
+        out.append({
+            "label": _mig_name(r),
+            "a": a_v,
+            "b": b_v,
+            "delta": d,
+            "status": "Regressed" if d < 0 else ("Improved" if d > 0 else "Changed"),
+        })
+    return out
+
+
+def compare_migration_heatmap_svg(rows: Sequence[dict], width: int = 640) -> str:
+    """Task-by-task migration Δ color strip (green=improved, red=regressed)."""
+    items = [r for r in (rows or []) if isinstance(r, dict)]
+    if not items:
+        return ""
+    w = max(280, int(width or 640))
+    label_w = 110
+    pad = 12
+    row_h = 18
+    header = 24
+    h = header + len(items) * row_h + 10
+    max_v = max((abs(float(r.get("delta") or 0)) for r in items), default=1.0) or 1.0
+    bar_w = max(80.0, w - label_w - pad - 60)
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" '
+        f'width="{w}" height="{h}" role="img" '
+        'aria-label="Migration count change heatmap">',
+        f'<text x="{pad}" y="16" font-size="12" fill="#123355" font-weight="600">'
+        "Migration Δ heatmap</text>",
+        f'<text x="{w - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">'
+        "Δ = A − B</text>",
+    ]
+    for i, row in enumerate(items):
+        y = header + i * row_h
+        lab = html.escape(str(row.get("label") or "")[:18])
+        d = float(row.get("delta") or 0)
+        frac = abs(d) / max_v
+        color = COMPARE_CHART_IMPROVED if d > 0 else COMPARE_CHART_REGRESSED
+        parts.append(f'<text x="{pad}" y="{y + 13}" font-size="11" fill="#182230">{lab}</text>')
+        parts.append(
+            f'<rect x="{label_w:.1f}" y="{y + 3}" width="{max(bar_w * frac, 2):.1f}" '
+            f'height="12" rx="2" fill="{color}" opacity="0.85"/>'
+        )
+        sign = "+" if d > 0 else "−" if d < 0 else ""
+        parts.append(
+            f'<text x="{label_w + bar_w + 8:.1f}" y="{y + 13}" font-size="10" '
+            f'fill="{color}">{sign}{abs(int(d))}</text>'
+        )
+    parts.append("</svg>")
+    return "".join(parts)
 
 
 def prepare_ux_events(trace: Any) -> List[dict]:
@@ -787,6 +1495,25 @@ def _row_label_delta(row, name_key, delta_key, name_idx, delta_idx):
     if isinstance(row, (list, tuple)) and len(row) > max(name_idx, delta_idx):
         return str(row[name_idx] or ""), row[delta_idx]
     return "", None
+
+
+def _row_cells(row, name_key, delta_key, name_idx, delta_idx,
+               a_key: str = "a", b_key: str = "b", a_idx: int = 1, b_idx: int = 2):
+    label, delta = _row_label_delta(row, name_key, delta_key, name_idx, delta_idx)
+    a_val = b_val = None
+    if isinstance(row, dict):
+        a_val = row.get(a_key)
+        if a_val is None:
+            a_val = row.get("a")
+        b_val = row.get(b_key)
+        if b_val is None:
+            b_val = row.get("b")
+    elif isinstance(row, (list, tuple)):
+        if len(row) > a_idx:
+            a_val = row[a_idx]
+        if len(row) > b_idx:
+            b_val = row[b_idx]
+    return label, delta, a_val, b_val
 
 
 def _skip_summary_label(label: str) -> bool:
@@ -2117,8 +2844,13 @@ def compare_analysis_tables(
     lo_b: Optional[int] = None,
     hi_b: Optional[int] = None,
     deadlines: Optional[dict] = None,
+    row_limit: Optional[int] = 15,
 ) -> dict:
-    """Response P99 / mutex / deadline / shared-pattern tables for Compare."""
+    """Response P99 / mutex / deadline / shared-pattern tables for Compare.
+
+    *row_limit* caps per-task tables (default 15, matching the dialog).
+    ``None`` or ``<= 0`` exports every row.
+    """
     evs_a = harvest_ux_events(trace_a, lo_a, hi_a)
     evs_b = harvest_ux_events(trace_b, lo_b, hi_b)
     waits_a = pair_mutex_waits(harvest_mutex_holds(trace_a, lo_a, hi_a))
@@ -2130,11 +2862,16 @@ def compare_analysis_tables(
     names = sorted(set(by_a) | set(by_b))
     response_rows = []
     worst_p99_a = worst_p99_b = 0
+    worst_task_a = worst_task_b = ""
     for name in names:
         pa = int((by_a.get(name) or {}).get("p99_ns") or 0)
         pb = int((by_b.get(name) or {}).get("p99_ns") or 0)
-        worst_p99_a = max(worst_p99_a, pa)
-        worst_p99_b = max(worst_p99_b, pb)
+        if pa > worst_p99_a:
+            worst_p99_a = pa
+            worst_task_a = name
+        if pb > worst_p99_b:
+            worst_p99_b = pb
+            worst_task_b = name
         if pa or pb:
             response_rows.append({
                 "name": name, "p99_a": pa, "p99_b": pb, "delta_ns": pa - pb,
@@ -2172,18 +2909,37 @@ def compare_analysis_tables(
         detect_timeline_anomalies(evs_a, 12, waits_a, dl_map),
         detect_timeline_anomalies(evs_b, 12, waits_b, dl_map),
     )
+    unlimited = row_limit is None
+    n = 15
+    if not unlimited:
+        try:
+            n = int(row_limit)
+        except (TypeError, ValueError):
+            n = 15
+        if n <= 0:
+            unlimited = True
+    if unlimited:
+        response_out, mutex_out, shared_out = (
+            list(response_rows), list(mutex_rows), list(shared))
+    else:
+        response_out = list(response_rows)[:n]
+        mutex_out = list(mutex_rows)[:n]
+        shared_out = list(shared)[:6 if n == 15 else n]
+
     return {
-        "response": response_rows[:15],
-        "mutex_block": mutex_rows[:15],
+        "response": response_out,
+        "mutex_block": mutex_out,
         "metrics": {
             "response_p99_a": worst_p99_a,
             "response_p99_b": worst_p99_b,
+            "response_p99_task_a": worst_task_a,
+            "response_p99_task_b": worst_task_b,
             "mutex_ns_a": mutex_ns_a,
             "mutex_ns_b": mutex_ns_b,
             "deadline_misses_a": misses_a,
             "deadline_misses_b": misses_b,
         },
-        "shared_patterns": shared[:6],
+        "shared_patterns": shared_out,
     }
 
 
@@ -2219,7 +2975,11 @@ def compare_why(strip: Optional[dict]) -> str:
     shared = list((strip or {}).get("shared_patterns") or [])
     if shared:
         top = shared[0]
-        why += (
-            f" Shared pattern: {top.get('reason') or top.get('kind') or 'anomaly'}."
-        )
+        if isinstance(top, dict):
+            reason = top.get("reason") or top.get("kind") or "anomaly"
+        elif isinstance(top, (list, tuple)):
+            reason = top[4] if len(top) > 4 else (top[1] if len(top) > 1 else "anomaly")
+        else:
+            reason = str(top) or "anomaly"
+        why += f" Shared pattern: {reason}."
     return why
