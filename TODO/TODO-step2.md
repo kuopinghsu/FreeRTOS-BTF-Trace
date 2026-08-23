@@ -1,6 +1,6 @@
 # BTFViewer UX Improvement TODO — Step 2
 
-Step 2 builds on the interaction foundation established in `TODO-step1.md`.
+Step 2 builds on the interaction foundation established in Step 1 (documented in `BTFViewer/README.md`, `WORKFLOWS.md`, and `STATISTICS.md`).
 
 The focus is to connect analytical results to Timeline Evidence and make
 Statistics, Migration, AI, and Trace Compare work as one investigation

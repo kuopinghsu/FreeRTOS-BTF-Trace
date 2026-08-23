@@ -136,11 +136,13 @@ BTFViewer **不會**進行原始碼分析，也**不會**模擬 RTOS 排程器�
 
 桌面版與網頁版的右側面板都提供 **Statistics** 分頁。
 
+面板頂端會顯示目前 **Scope**（**Full Trace** 或 **C1–Cn · duration**，與狀態列一致）。當 Task、Core 或 Migration **Filter** 生效時，會顯示 **Filtered:** 指示，列出與狀態列相同的晶片，避免分析範圍被隱藏。
+
 ### 將統計範圍限制在指定時間
 
 先放置至少兩個游標，再啟用 **Limit to C1–Cn**。所有統計指標與 **Analysis Findings** 都會依選定的時間範圍重新計算。啟用範圍限制後，區段標題會顯示 **(cursor range)**。
 
-清除所有游標後，即恢復為整份追蹤資料的統計結果。
+清除所有游標後，即恢復為 **Full Trace** 統計。游標定義的範圍一變更，狀態列 Scope 會立即更新。
 
 ### 面板控制項
 
@@ -153,7 +155,9 @@ BTFViewer **不會**進行原始碼分析，也**不會**模擬 RTOS 排程器�
 | **⠿** grip | 拖曳控制點以調整區段位置 |
 | Pin | 使用 **Collapse all** 時仍保持該區段展開（懸停／焦點顯示外框 Pin；已固定為實心）。手動收合已 Pin 的區段會同時清除 Pin |
 
-區段順序、Pin 狀態、展開／收合狀態與表格高度都會保留至下次啟動。**Settings → Reset to Defaults** 會依目前 Trace 恢復內建版面：若有超過一個核心出現有意義的執行活動（SMP-active），**Core utilisation** 會預設展開並 Pin；否則所有區段預設收合且未 Pin。每個區段右側會顯示分類徽章（**OVERVIEW**、**TRIAGE**、**TIMING**、**SCHED**、**SYNC**、**DETAIL**）。徽章會依分類使用低飽和度底色與邊框（視覺權重低於 Warning／Error）；類別名稱文字仍是主要識別方式。重新排序不會改變分類。Pin 圖示維持單色，且與徽章顏色獨立。
+區段順序、Pin 狀態、展開／收合狀態與表格高度都會保留至下次啟動。**Settings → Reset to Defaults** 會依目前 Trace 恢復內建版面：若有超過一個核心出現有意義的執行活動（SMP-active），**Core utilisation** 會預設展開並 Pin；否則所有區段預設收合且未 Pin。每個區段右側會顯示分類徽章（**OVERVIEW**、**TRIAGE**、**TIMING**、**SCHED**、**SYNC**、**DETAIL**）。徽章會依分類使用低飽和度底色與邊框（視覺權重低於 Warning／Error）；類別名稱文字仍是主要識別方式。重新排序不會改變分類。Pin 圖示維持單色，且與徽章顏色獨立。Desktop 與 Web 皆保留固定 22px 的 Pin 欄位，因此懸停顯示外框 Pin 時分類徽章不會左右移動。
+
+預設順序在該目錄內以 Triage 為先：固定的 Summary／Scheduling summary 之後，TRIAGE 區段（**Timeline Anomalies**、**Worst Events**、**Recurring Patterns**、**Response Time**、**Task Health** 等）會先呈現可疑行為，再進入較細的 Timing／Sched／Sync／Detail 表格。
 
 ### 匯出與比較（Export and Compare）
 
@@ -213,6 +217,8 @@ Priority Inheritance、Mutex / Semaphore 與 Interval Analysis 也會提供詳�
 ### 分析結果（Analysis Findings） ![](../images/readme/h4.svg)
 
 工具列的 **Analysis** 在桌面版與網頁版使用相同的啟發式分析卡片；它不是 **Statistics** 面板中的獨立區段。相關按鈕與時間軸疊圖的操作方式，請參閱 [README → Analysis Findings](README.md#analysis-findings)。
+
+每項 Finding 會顯示嚴重程度、問題導向標題、主要支持指標，以及分開的 **Evidence** 列（量測觀察，與詮釋文字分離）。**Investigate** 會開啟對應 Statistics 區段並保留 Scope 與 Filters。**Show Evidence** 保留給跨介面 Evidence Navigation，在該流程完成前為停用。若已設定 AI，仍可使用選配的 AI 動作。
 
 負載平衡相關的分析使用與 **Core utilisation** 相同的 Score / σ / Gini。只有在系統具有 **至少 2 個核心**，且總使用率 **> 0** 時才會產生相關結果。
 

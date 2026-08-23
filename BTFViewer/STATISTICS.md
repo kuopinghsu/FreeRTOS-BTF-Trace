@@ -136,13 +136,15 @@ The Statistics panel is shared by Desktop and Web. Most sections are collapsible
 
 The **Statistics** tab appears in the right-side panel on both Desktop and Web.
 
+The panel header shows the current **Scope** (**Full Trace** or **C1–Cn · duration**, matching the status bar). When a Task, Core, or Migration **Filter** is active, a **Filtered:** indicator lists the same chips shown in the status bar so analytical narrowing is never hidden.
+
 ### Limit statistics to a time range
 
 Place at least two cursors, then enable **Limit to C1–Cn**.
 All Statistics metrics and **Analysis Findings** are recalculated for the selected range.
 Section titles show **(cursor range)** while this scope is active.
 
-Clear the cursors to return to full-trace statistics.
+Clear the cursors to return to **Full Trace** statistics. The status-bar Scope line updates immediately when the cursor-defined range changes.
 
 ### Panel controls
 
@@ -155,7 +157,9 @@ Clear the cursors to return to full-trace statistics.
 | **⠿** grip | Drag a section to a new position |
 | Pin | Keep a section open when **Collapse all** is used (outline pin on hover/focus; filled when pinned). Manually collapsing a pinned section clears the pin |
 
-Section order, pinned sections, expanded/collapsed state, and table heights are saved across launches. **Settings → Reset to Defaults** restores the built-in layout for the current Trace: when meaningful work appears on more than one core (SMP-active), **Core utilisation** starts expanded and pinned; otherwise every section starts collapsed and unpinned. Each section shows a category badge on the right (**OVERVIEW**, **TRIAGE**, **TIMING**, **SCHED**, **SYNC**, **DETAIL**). Badges use a soft tinted background and border per category (quieter than Warning/Error); the label text remains the primary identifier. Reordering does not change a section's category. The pin control stays monochrome and independent of badge colour.
+Section order, pinned sections, expanded/collapsed state, and table heights are saved across launches. **Settings → Reset to Defaults** restores the built-in layout for the current Trace: when meaningful work appears on more than one core (SMP-active), **Core utilisation** starts expanded and pinned; otherwise every section starts collapsed and unpinned. Each section shows a category badge on the right (**OVERVIEW**, **TRIAGE**, **TIMING**, **SCHED**, **SYNC**, **DETAIL**). Badges use a soft tinted background and border per category (quieter than Warning/Error); the label text remains the primary identifier. Reordering does not change a section's category. The pin control stays monochrome and independent of badge colour. Desktop and Web both reserve a fixed 22px pin column so the category badge does not shift when the outline pin fades in on hover.
+
+Default order is triage-first within that catalogue: after fixed Summary / Scheduling summary, TRIAGE sections (**Timeline Anomalies**, **Worst Events**, **Recurring Patterns**, **Response Time**, **Task Health**, and related) surface suspicious behavior before low-level Timing / Sched / Sync / Detail tables.
 
 ### Export and compare
 
@@ -217,6 +221,8 @@ Start with **Analysis Findings** for a quick summary of the current scope. Use t
 ### Analysis Findings ![](../images/readme/h4.svg)
 
 Toolbar **Analysis** is the same heuristic card on Desktop and Web (not a Statistics panel section). Product buttons and overlays: [README → Analysis Findings](README.md#analysis-findings).
+
+Each finding shows severity, a problem-oriented title, the main supporting metric, and a distinct **Evidence** line (measured observation, separate from interpretive text). **Investigate** opens the relevant Statistics section while preserving Scope and Filters. **Show Evidence** is reserved for cross-surface Evidence Navigation and stays disabled until that workflow ships. Optional AI actions remain available when configured.
 
 Load-balance findings use the same Score, σ, and Gini values as **Core utilisation**. BTFViewer creates these findings only when there are **at least 2 cores** and total utilisation is **greater than 0**.
 

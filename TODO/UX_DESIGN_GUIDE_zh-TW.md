@@ -1696,17 +1696,17 @@ Start with Statistics → Analysis Findings.
 
 UX Design Guide 負責定義 Interaction Model 與 Design Rules。
 
-實作優先順序另外維護在三份 TODO 文件中。
+實作優先順序另外維護在後續 TODO 文件中（Step 1 已完成並寫入產品文件）。
 
 ## Step 1 — Core Clarity and Investigation Foundation
 
-參考：
+**已完成。** 產品行為請見：
 
-```text
-TODO-step1.md
-```
+* [`BTFViewer/README.md`](../BTFViewer/README.md) / [`README_zh-TW.md`](../BTFViewer/README_zh-TW.md) — 用語、狀態列 Scope/Filters、Selection 與 Highlight、Fit Trace / Fit Cursors、Findings **Investigate**
+* [`BTFViewer/WORKFLOWS.md`](../BTFViewer/WORKFLOWS.md) / [`WORKFLOWS_zh-TW.md`](../BTFViewer/WORKFLOWS_zh-TW.md) — SEE → TRIAGE → SCOPE → INVESTIGATE
+* [`BTFViewer/STATISTICS.md`](../BTFViewer/STATISTICS.md) / [`STATISTICS_zh-TW.md`](../BTFViewer/STATISTICS_zh-TW.md) — Triage 優先順序、Scope/Filtered 指示、Findings Evidence 列
 
-重點：
+重點（已上線）：
 
 * Canonical Terminology
 * Investigation Context

@@ -1695,17 +1695,17 @@ For every significant UI change, verify:
 
 The UX Design Guide defines the interaction model and design rules.
 
-Implementation priority is maintained separately in three files.
+Implementation priority is maintained separately for remaining steps.
 
 ## Step 1 — Core Clarity and Investigation Foundation
 
-See:
+**Completed.** Product behavior is documented in:
 
-```text
-TODO-step1.md
-```
+* [`BTFViewer/README.md`](../BTFViewer/README.md) / [`README_zh-TW.md`](../BTFViewer/README_zh-TW.md) — terminology, status-bar Scope/Filters, Selection vs Highlight, Fit Trace / Fit Cursors, Findings **Investigate**
+* [`BTFViewer/WORKFLOWS.md`](../BTFViewer/WORKFLOWS.md) / [`WORKFLOWS_zh-TW.md`](../BTFViewer/WORKFLOWS_zh-TW.md) — SEE → TRIAGE → SCOPE → INVESTIGATE
+* [`BTFViewer/STATISTICS.md`](../BTFViewer/STATISTICS.md) / [`STATISTICS_zh-TW.md`](../BTFViewer/STATISTICS_zh-TW.md) — triage-first order, Scope/Filtered indicators, Findings Evidence line
 
-Focus:
+Focus (shipped):
 
 * canonical terminology;
 * Investigation Context;

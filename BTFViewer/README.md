@@ -152,17 +152,53 @@ See [demos/README.md](demos/README.md) for package layout, voice generation, rec
 
 The Desktop and Web applications use the same main workflow. Platform-specific differences are noted below.
 
+Target investigation path:
+
+```text
+SEE → TRIAGE → SCOPE → INVESTIGATE
+```
+
+At every step you should be able to see or clearly determine: active Trace, **Scope**, **Filters**, View Mode, **Selection**, and **Highlight**.
+
+### Investigation terminology
+
+| Term | Meaning |
+|---|---|
+| **Full Trace** | No cursor-defined time window; analysis uses the whole capture |
+| **Scope** | The analyzed time region (**Full Trace** or **C1–Cn · duration**) |
+| **Filter** | A data subset inside the Scope (Task, Core, or Migration). Clears with **×** or **Clear All** |
+| **Selection** | The object locked for inspection (persistent). Does not change analytical input by itself |
+| **Highlight** | Transient visual emphasis (for example Legend hover). Does not change analytical input |
+| **Fit Trace** | Zoom the viewport to the complete capture (`Ctrl+0` / `F`) |
+| **Fit Cursors** | Zoom the viewport to the earliest–latest cursor span (`Ctrl+R`) |
+| **Baseline / Candidate** | Trace A and Trace B in Trace Compare |
+| **Regressed / Improved** | Compare verdicts when a metric moves against or toward the baseline |
+
+Selection and Highlight never silently become a Filter. View Mode (**Task** / **Core**) is independent of Selection, Highlight, and Filter.
+
+### Investigation context
+
+The status bar keeps investigation state visible without opening another panel:
+
+- **Scope:** `Full Trace`, or `C1–Cn · span` when a cursor range is active.
+- **Filter chips:** Task Filter, Core Filter (`Core: N of M`), and Migration Filter (`Migration: X→Y`), each with **×**. **Clear All** removes every Filter.
+- **Zoom:** relative zoom (and physical scale when shown).
+
+Statistics shows a matching **Filtered:** indicator when any Filter narrows the analytical subset. Filters persist per Analysis Tab.
+
 ### Main controls
+
+Toolbar groups follow the common path: **Open** → Zoom / Fit → View Mode → investigation entry points (**Find**, Heatmap, **Analysis**, **Compare**). Low-frequency actions stay in the menu (Desktop) or overflow (Web).
 
 | Control | Purpose |
 |---|---|
 | **Open** | Open a BTF trace or demo package |
 | **Task / Core** | Show one row per task or group activity by CPU core |
 | **Horizontal / Vertical** | Change the direction of the time axis |
-| **Zoom in / Zoom out / 1:1 / Fit** | Adjust the visible time range |
+| **Zoom in / Zoom out / 1:1 / Fit Trace / Fit Cursors** | Adjust the visible time range |
 | **Load** | Show or hide the CPU-load chart |
 | **Heatmap** | Inspect task migration and core movement |
-| **Analysis** | Open automatically generated findings for the current scope |
+| **Analysis** | Open automatically generated findings for the current Scope |
 | **Compare** | Compare two or more open traces |
 | **Find** | Search for tasks, events, migrations, intervals, or synchronization objects |
 | **Settings** | Configure display, layout, cursors, and AI options |
@@ -176,28 +212,30 @@ The Web toolbar also provides **Demo**, **Record**, and **About**. Some controls
 | **Task View** | Follow each task across all cores |
 | **Core View** | See which task ran on each core; cores can be expanded or collapsed |
 
-Task View is useful for checking execution and migration. Core View is useful for checking utilization, idle periods, and load distribution.
+Task View is useful for checking execution and migration. Core View is useful for checking utilization, idle periods, and load distribution. Switching View Mode preserves Timeline position, Zoom, Cursors, and Scope.
 
-### Zoom, labels, and highlights
+In **Core View**, the Legend **Cores** checklist is the **Core Filter**: unchecked cores are removed from Timeline Core View rows, the CPU Load graph, the status-bar chip, Statistics **Filtered:** state, and AI context.
+
+### Zoom, Selection, and Highlight
 
 - Use the mouse wheel to pan. Hold **Ctrl** while scrolling to zoom.
 - Hold **Shift** while scrolling to change the pan axis.
 - Use a trackpad pinch gesture to zoom on macOS.
 - Middle-drag across the timeline to zoom into a selected time range.
-- Select **Fit** or press `Ctrl+0` to show the complete trace. **Range** / `Ctrl+R` fits the time between the first and last cursor (C1–Cn). In a demo script, `<zoom_view/>` uses Fit, while `<fit_view/>` uses Range when cursors are present. **Zoom out** stops at Fit and is unavailable while the complete trace is visible.
+- Select **Fit Trace** or press `Ctrl+0` / `F` to show the complete capture. **Fit Cursors** / `Ctrl+R` fits the time between the earliest and latest cursor (C1–Cn). In a demo script, `<zoom_view/>` uses Fit Trace, while `<fit_view/>` uses Fit Cursors when cursors are present. **Zoom out** stops at Fit Trace and is unavailable while the complete trace is visible.
 - Select **1:1** to return to the configured zoom density.
-- Click a task label or legend entry to keep that task highlighted.
-- Hover over a timeline segment to view its duration, core, and nearby activity.
+- **Hover** a Legend entry or timeline segment for **Highlight** (transient). **Click** a task label or Legend entry for **Selection** (persistent). These do not apply a Filter.
+- Hover over a timeline segment to view task, core, start/end time, and duration.
 
 ### CPU load
 
 Select **Load** to display the utilization chart below the timeline. Drag the divider to resize it.
 
-When a task is locked as the current highlight, Task View shows its utilization on each core. Use this display to check whether the work is distributed as expected or moves between cores too often.
+When a task is the current **Selection**, Task View can show its utilization on each core. Use this display to check whether the work is distributed as expected or moves between cores too often.
 
-### Cursors and time ranges
+### Cursors and Scope
 
-Cursors mark timestamps and define a measurement range. BTFViewer supports four cursors by default; the maximum can be changed in **Settings**.
+Cursors mark timestamps and define measurement and **Scope**. BTFViewer supports four cursors by default; the maximum can be changed in **Settings**. Markers use a theme-aware contrast halo so they stay visible over nearby segment colours. Overlapping labels stack by cursor slot so they do not cover each other.
 
 | Action | Method |
 |---|---|
@@ -207,21 +245,24 @@ Cursors mark timestamps and define a measurement range. BTFViewer supports four 
 | Clear all cursors | Press `Shift+C` or Shift-right-click |
 | Snap to an event boundary | Shift-click |
 
-Place at least two cursors around the period you want to inspect. Statistics can then limit calculations to the time between the first and last cursor. **Zoom to cursor range** (`Ctrl+R`) displays only this period. **Save selection as BTF** exports it as a smaller trace.
+Place at least two cursors around the period you want to inspect. Enable **Limit to C1–Cn** in Statistics so calculations use the earliest–latest span. The status-bar Scope line updates immediately. **Fit Cursors** (`Ctrl+R`) displays only this period. **Save selection as BTF** exports it as a smaller trace.
 
-### Bookmarks, annotations, and search
+### Marks, bookmarks, annotations, and Find
 
 | Tool | Purpose |
 |---|---|
-| **Bookmark** | Add a named timestamp |
-| **Annotation** | Add a note at a timestamp |
+| **Cursor** | Temporary measurement / investigation point |
+| **Bookmark** | Saved location for later return |
+| **Annotation** | Human-written note tied to a Trace timestamp |
 | **Find** | Locate tasks, migrations, STI events, intervals, lifecycle events, and synchronization objects |
 
-Use `Ctrl+F` to open Find. Use `F3` and `Shift+F3` to move between results. Right-click the timeline to add or edit cursors and marks.
+The Marks panel lists **Cursors**, **Cursor Range**, then **Marks** (bookmarks and annotations). Use **Export Marks** / **Import Marks** and **Export Session** / **Import Session** for portable notes. Avoid calling a known type a generic “marker”.
+
+Use `Ctrl+F` to open Find. Status shows **`k of N matches`**. Use Previous/Next, `F3`, and `Shift+F3` to move between results without changing Scope or Filters. Match Mode details live in tooltips. Right-click the timeline for cursor and mark actions.
 
 ### Multiple traces
 
-Each trace opens in a separate tab and keeps its own zoom, cursors, marks, and filters.
+Each trace opens in a separate tab and keeps its own zoom, cursors, marks, and Filters.
 
 - `Ctrl+Tab`: next tab
 - `Ctrl+Shift+Tab`: previous tab
@@ -235,12 +276,12 @@ Desktop restores files from their original paths. Web can restore up to eight pa
 
 For an initial review, use the following sequence:
 
-1. Open the trace and select **Fit** to view its complete duration.
+1. Open the trace and select **Fit Trace** to view its complete duration.
 2. Select **Load** and check whether all cores carry a reasonable share of the work.
-3. Open **Analysis** and review the highest-severity findings.
-4. Open the Statistics section named by a finding.
+3. Open **Analysis** and review the highest-severity findings (Triage).
+4. Select **Investigate** on a finding to open the relevant Statistics section (Scope and Filters are preserved).
 5. Select a high value or outlier to jump to the corresponding timeline event.
-6. Place cursors around the affected period and limit Statistics to that range.
+6. Place cursors around the affected period, confirm **Scope: C1–Cn** in the status bar, and enable **Limit to C1–Cn**.
 7. Inspect the task, core, preemption, blocking, synchronization, or migration details.
 8. If needed, ask the AI Assistant to explain or verify the measured evidence.
 
@@ -271,9 +312,18 @@ Detailed metric definitions and formulas are in [STATISTICS.md](STATISTICS.md).
 
 ### Analysis Findings
 
-Select **Analysis** to review possible issues in the current trace or cursor range. Findings can include load imbalance, execution-time hotspots, blocking, priority inversion, frequent core migration, deadline misses, tick-health problems, and synchronization movement between cores.
+Select **Analysis** to review possible issues in the current **Scope** (**Full Trace** or **C1–Cn**). Findings can include load imbalance, execution-time hotspots, blocking, priority inversion, frequent core migration, deadline misses, tick-health problems, and synchronization movement between cores.
 
-Each finding includes a severity, a related Statistics section, and a relevant time range when available. Select a finding to open its statistical evidence, place cursors, show the range on the timeline, start an AI-assisted investigation, or save the findings as text.
+Each finding includes:
+
+- A clear **Severity** and problem-oriented title.
+- The most relevant supporting metric.
+- An **Evidence** line from measured `evidence_text` (observation, separate from interpretive text).
+- **Investigate** — scopes the finding and opens the relevant Statistics section without requiring AI.
+- **Show Evidence** — reserved for cross-surface Evidence Navigation (disabled until that workflow ships).
+- Optional AI actions such as **Investigate…** / **Auto investigate…** when AI is configured.
+
+Treat findings as leads, not confirmed root causes. Apply cursors when a finding recommends a useful window, then recheck Statistics inside that Scope.
 
 For multi-core traces with measurable utilization, the core-balance finding reports a **Load Balance Score** with supporting distribution values. A high score means work is distributed more evenly. Review the timeline and migration data before deciding whether the distribution is suitable for your workload.
 
@@ -389,9 +439,9 @@ Desktop stores settings in `btf_viewer.rc` next to the viewer. Web stores them i
 | `Ctrl+O` | Open a file |
 | `Ctrl+W` | Close the current tab |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Move between tabs |
-| `Ctrl++` / `Ctrl+-` | Zoom in, or zoom out until Fit |
-| `Ctrl+0` / `F` | Fit the complete trace |
-| `Ctrl+R` | Zoom to the cursor range |
+| `Ctrl++` / `Ctrl+-` | Zoom in, or zoom out until Fit Trace |
+| `Ctrl+0` / `F` | Fit Trace (complete capture) |
+| `Ctrl+R` | Fit Cursors (earliest–latest cursor span) |
 | `Ctrl+F` / `F3` / `Shift+F3` | Find, next result, or previous result |
 | `Ctrl+G` | Jump to a timestamp |
 | `Ctrl+K` | Open the command palette |

@@ -48393,15 +48393,19 @@ class _StatsPinButton(QLabel):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("stats_section_pin")
+        # Always reserve a 22×22 slot (Web parity) so the category badge does
+        # not shift when the outline pin fades in on hover.
         self.setFixedSize(22, 22)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._pinned = False
         self._hovered = False
         self._row_active = False
         self._dark = True
+        self._opacity_fx: Optional[QGraphicsOpacityEffect] = None
+        self._refresh_icon()
 
     def set_row_active(self, active: bool) -> None:
         """Show outline pin while the section header row is hovered."""
@@ -48424,16 +48428,21 @@ class _StatsPinButton(QLabel):
             self._pinned or self._row_active or self._hovered or self.hasFocus())
 
     def _refresh_icon(self) -> None:
-        if not self._pin_visible():
-            self.clear()
-            self.update()
-            return
-        # Monochrome from theme palette; filled vs outline conveys state.
+        # Always paint the icon; hide with opacity (Web ``opacity: 0``) so the
+        # fixed 22×22 layout slot never collapses and the badge stays put.
+        visible = self._pin_visible()
         fg = self.palette().color(QPalette.ColorRole.WindowText)
         if not fg.isValid() or fg.alpha() == 0:
             fg = QColor("#D0D0D0" if self._dark else "#555555")
         path = _IC_PIN_FILLED if self._pinned else _IC_PIN
         self.setPixmap(_svg_pixmap(path, fg.name(), 14))
+        if self._opacity_fx is None:
+            self._opacity_fx = QGraphicsOpacityEffect(self)
+            self.setGraphicsEffect(self._opacity_fx)
+        self._opacity_fx.setOpacity(1.0 if visible else 0.0)
+        self.setCursor(
+            Qt.CursorShape.PointingHandCursor if visible
+            else Qt.CursorShape.ArrowCursor)
         self.update()
 
     def enterEvent(self, event) -> None:  # noqa: N802
@@ -48466,6 +48475,11 @@ class _StatsPinButton(QLabel):
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
+            # Invisible (opacity-0) pin must not steal clicks — Web uses
+            # pointer-events: none for the same state.
+            if not self._pin_visible():
+                event.ignore()
+                return
             self.clicked.emit()
             event.accept()
             return
@@ -56182,6 +56196,16 @@ class _StatsPanel(QWidget):
         pin = _StatsPinButton()
         pin.clicked.connect(
             lambda sid=section_id: self._toggle_section_pin(sid))
+        # Fixed-width pin slot (Web parity): badge never shifts when the pin
+        # fades in/out — the 22px column is always present.
+        pin_slot = QWidget()
+        pin_slot.setObjectName("stats_section_pin_slot")
+        pin_slot.setFixedSize(22, 22)
+        pin_slot.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        pin_slot_lay = QHBoxLayout(pin_slot)
+        pin_slot_lay.setContentsMargins(0, 0, 0, 0)
+        pin_slot_lay.setSpacing(0)
+        pin_slot_lay.addWidget(pin)
         row_lay.addWidget(grip, 0)
         row_lay.addWidget(hdr, 1)
         category = STATS_SECTION_CATEGORY.get(section_id)
@@ -56196,7 +56220,8 @@ class _StatsPanel(QWidget):
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self._section_category_badges[section_id] = cat_badge
         row_lay.addWidget(
-            pin, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            pin_slot, 0,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._ilay.addWidget(row)
         self._section_headers[section_id] = hdr
         self._section_header_rows[section_id] = row
@@ -56208,7 +56233,7 @@ class _StatsPanel(QWidget):
         hover = _StatsHeaderHoverFilter(pin)
         row.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         row.installEventFilter(hover)
-        for w in (row, grip, hdr, pin):
+        for w in (row, grip, hdr, pin, pin_slot):
             w.setAcceptDrops(True)
             w.installEventFilter(filt)
         self._sync_pin_buttons()

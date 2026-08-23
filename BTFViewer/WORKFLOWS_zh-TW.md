@@ -2,9 +2,11 @@
 
 本文件提供一套適合新手的 RTOS 排程追蹤分析流程，協助你從現象逐步找到可驗證的證據。
 
-若要了解介面操作，請參閱 [`README_zh-TW.md`](README_zh-TW.md)；若要查詢統計指標的定義與限制，請參閱 [`STATISTICS_zh-TW.md`](STATISTICS_zh-TW.md)；若要設定 AI 或使用進階調查工具，請參閱 [`AI_zh-TW.md`](AI_zh-TW.md)。
+若要了解介面操作與調查用語（**Scope**、**Filter**、**Selection**、**Highlight**、**Fit Trace**、**Fit Cursors**），請參閱 [`README_zh-TW.md`](README_zh-TW.md)；若要查詢統計指標的定義與限制，請參閱 [`STATISTICS_zh-TW.md`](STATISTICS_zh-TW.md)；若要設定 AI 或使用進階調查工具，請參閱 [`AI_zh-TW.md`](AI_zh-TW.md)。
 
-> **核心原則：** 追蹤資料與 **Statistics** 是實際量測的證據；**Analysis Findings** 是調查線索；AI 回覆是對證據的解讀；What-if 結果則是估算。
+> **核心原則：** 追蹤資料與 **Statistics** 是實際量測的證據；**Analysis Findings** 是調查線索；AI 回覆是對證據的解讀；What-if 結果則是估算。請保持 Scope、Filter、Selection、Highlight 彼此獨立——不要把 Highlight 當成 Filter。
+
+目標路徑：**SEE → TRIAGE → SCOPE → INVESTIGATE**。狀態列會持續顯示目前 Scope 與 Filter 晶片。
 
 <a id="workflow-at-a-glance" name="workflow-at-a-glance">&#x200B;</a>
 
@@ -40,16 +42,16 @@ flowchart TD
 
 | 步驟 | 操作 | 結果 |
 |---:|---|---|
-| 1 | 開啟追蹤檔並選擇 **Fit** | 確認完整擷取範圍可見 |
-| 2 | 開啟 **Load**，切換 **Task View** 與 **Core View** | 找出工作負載階段與整體活動狀況 |
-| 3 | 開啟 **Statistics** 與 **Analysis** | 查看追蹤警告、事件群組與依嚴重程度排序的分析結果 |
+| 1 | 開啟追蹤檔並選擇 **Fit Trace** | 確認完整擷取範圍可見；狀態列顯示 **Scope: Full Trace** |
+| 2 | 開啟 **Load**，切換 **Task View** 與 **Core View** | 找出工作負載階段與整體活動（位置、Zoom、游標與 Scope 會保留） |
+| 3 | 開啟 **Statistics** 與 **Analysis** | 查看 TRIAGE 區段（TRIAGE 徽章）、事件群組與依嚴重程度排序的分析結果 |
 | 4 | 查看 **Trace Health (TICK)** | 判斷時序資料是否可用，或 Tickless 行為是否符合預期 |
-| 5 | 開啟最相關分析結果（Finding）指定的 **Statistics** 項目 | 避免檢查無關指標 |
+| 5 | 在最相關 Finding 上選 **Investigate** | 直接跳到對應 Statistics 區段，不必猜階層 |
 | 6 | 按一下 **Max**、**p95**、資料列、圖表資料點或熱圖儲存格 | 跳到實際量測的時間軸證據 |
-| 7 | 設定 C1–C2，並啟用 **Limit to C1–Cn** | 排除無關的工作負載階段 |
-| 8 | 重新檢查 **Analysis** 與 **Statistics** | 確認問題在限定範圍內仍然存在 |
-| 9 | 視需要使用 **Investigate…**、**Verify with AI…** 或 **Explain region** | 讓 AI 解釋已找到的證據 |
-| 10 | 保存證據，並在修改後重複相同量測 | 保留並驗證分析結果 |
+| 7 | 設定 C1–C2，確認狀態列 **Scope: C1–Cn**，並啟用 **Limit to C1–Cn** | 排除無關的工作負載階段 |
+| 8 | 重新檢查 **Analysis** 與 **Statistics**；注意 **Filtered:** 指示 | 確認問題在限定 Scope 與 Filters 內仍然存在 |
+| 9 | 可選用 AI **Investigate…**、**Verify with AI…** 或 **Explain region** | 針對已找到的證據詢問 AI |
+| 10 | 儲存證據，並在修改後重複相同量測 | 保留並驗證結果 |
 
 <a id="before-you-start" name="before-you-start">&#x200B;</a>
 
@@ -67,7 +69,7 @@ BTFViewer 不會分析原始碼，也不會模擬 RTOS 排程器；它只能量�
 ## 1. 開啟並掌握追蹤內容
 
 1. 開啟 `.btf`、壓縮 BTF 或封裝檔。
-2. 選擇 **Fit**，先查看完整擷取範圍。
+2. 選擇 **Fit Trace**，先查看完整擷取範圍。
 3. 先用 **Task View** 找出執行中的工作，再切換至 **Core View** 檢查多核心配置。
 4. 開啟 **Load**，觀察 CPU 使用率隨時間的變化。
 5. 將滑鼠移到代表性的執行區段上，確認工作、核心、開始時間與持續時間。
@@ -108,16 +110,16 @@ BTFViewer 不會分析原始碼，也不會模擬 RTOS 排程器；它只能量�
 
 ## 4. 執行確定性初步分析
 
-按一下 **Analysis**，開啟目前 **Statistics** 範圍的 **Analysis Findings**。
+按一下 **Analysis**，開啟目前 **Statistics Scope** 的 **Analysis Findings**。
 
 針對每項相關分析結果：
 
-1. 記下嚴重程度、工作或核心、相關指標，以及建議查看的 **Statistics** 項目。
+1. 記下嚴重程度、標題、支持指標，以及分開顯示的 **Evidence** 列。
 2. 將分析結果視為待驗證的假設，不要直接當成根本原因。
-3. 開啟指定的 **Statistics** 項目，確認能否重現報告中的數值。
-4. 若分析結果提供合適的時間範圍，可使用 **Apply cursors**。
+3. 選 **Investigate** 開啟指定的 **Statistics** 區段（Scope 與 Filters 維持不變）。**Show Evidence** 保留給後續 Evidence Navigation。
+4. 在 Statistics 中重現報告數值；若分析結果建議有用的時間窗，使用 **Apply cursors**。
 
-若沒有明顯的分析結果，請先查看 **Timeline Anomalies**、**Worst Events**，再依下表選擇分析路徑。
+若沒有明顯的分析結果，請先查看 TRIAGE 區段（**Timeline Anomalies**、**Worst Events**、**Recurring Patterns**、**Response Time**、**Task Health**），再依下表選擇分析路徑。
 
 ## 5. 依症狀選擇分析路徑
 
@@ -158,14 +160,15 @@ flowchart TD
 
 1. 按一下 **Statistics** 資料列、百分位數、圖表資料點或分析結果，跳到離群事件。
 2. 將 **C1** 放在疑似原因之前，將 **C2** 放在可見結果之後。
-3. 選擇 **Zoom to cursor range**。
-4. 在 **Statistics** 啟用 **Limit to C1–Cn**。
-5. 重新開啟 **Analysis**，讓分析結果（Findings）使用相同範圍。
-6. 在最重要的證據時間加入書籤或註解。
+3. 確認狀態列顯示 **Scope: C1–Cn · duration**。
+4. 選擇 **Fit Cursors**。
+5. 在 **Statistics** 啟用 **Limit to C1–Cn**。
+6. 重新開啟 **Analysis**，讓分析結果（Findings）使用相同範圍。
+7. 在最重要的證據時間加入書籤或註解。
 
 範圍必須包含事件前後足夠的上下文。範圍過大時，無關活動可能主導統計結果；範圍過小時，則可能排除真正的觸發事件。
 
-> **可見範圍注意事項：** 核心遷移的 **Heatmap / Chord** 檢視器使用時間軸目前顯示的範圍，不會跟隨 **Limit to C1–Cn** 核取方塊。使用 **Fit to window** 時，頂端橫幅會顯示 **Full view**（含完整時間範圍）；縮放後則改為橘色 **Viewport view**（含目前可見範圍）。若要讓檢視器對齊 C1–Cn，請先縮放至游標範圍再開啟。
+> **可見範圍注意事項：** 核心遷移的 **Heatmap / Chord** 檢視器使用時間軸目前顯示的範圍，不會跟隨 **Limit to C1–Cn** 核取方塊。使用 **Fit Trace** 時，頂端橫幅會顯示 **Full view**（含完整時間範圍）；縮放後則改為橘色 **Viewport view**（含目前可見範圍）。若要讓檢視器對齊 C1–Cn，請先使用 **Fit Cursors** 再開啟。
 
 ## 7. 先量測，再解釋
 
@@ -177,7 +180,7 @@ flowchart TD
 - 相關的搶佔、阻塞、核心遷移、互斥鎖、佇列或 STI 事件。
 - 相同行為是否在追蹤檔的其他位置重複出現。
 
-若已知工作名稱、核心、核心遷移、STI 事件、區間、生命週期事件或同步物件指標，請使用 **Find**。若同類問題重複出現，請查看 **Recurring Patterns**。
+若已知工作名稱、核心、核心遷移、STI 事件、區間、生命週期事件或同步物件指標，請使用 **Find**。狀態顯示 **`k of N matches`**；Previous/Next 不會改變 Scope 或 Filters。若同類問題重複出現，請查看 **Recurring Patterns**。
 
 ## 8. 在時間軸驗證假設
 

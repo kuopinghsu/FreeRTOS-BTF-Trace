@@ -77,10 +77,12 @@ class CoreUtilDefaultViewTests(unittest.TestCase):
     def test_gauge_inside_scroll_default_shows_gauge_and_two_cores(self) -> None:
         panel = _StatsPanel()
         self.addCleanup(panel.deleteLater)
-        panel._section_collapsed["cores"] = False
         panel.apply_section_table_heights(
             {"cores": STATS_CORES_UTIL_DEFAULT_H})
         panel.rebuild(_multi_core_trace(4))
+        # Expand after rebuild: presentation defaults overwrite collapse flags
+        # set before rebuild (synthetic traces are not SMP-active without util).
+        panel._set_section_collapsed("cores", False)
         panel.resize(400, 800)
         panel.show()
         app = QApplication.instance()

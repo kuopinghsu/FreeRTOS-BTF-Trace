@@ -103,6 +103,8 @@ AI 可以解釋證據、找出關聯、排序可能原因、檢查假設，也�
 
 診斷特定階段的問題時，請啟用 **Limit to C1–Cn**。提示內容會包含 `Cursor region window: jump:lo … jump:hi`，回覆中引用的每個 `jump:TIME` 都應位於這個區間內。
 
+AI 內容也會帶入與狀態列／圖例相同的 **Filter** 與 **Selection** 表示（Task Filter、Core Filter、Migration Filter，以及目前 Selection）。Highlight 僅為視覺強調，不會被當成 Filter。跨介面 Evidence Navigation 與 Findings 內擴充的 Ask AI 屬後續流程；非 AI 的 Statistics 跳轉請使用工具列 **Analysis → Investigate**。
+
 <a id="getting-started" name="getting-started">&#x200B;</a>
 
 ## 開始使用（Getting started）

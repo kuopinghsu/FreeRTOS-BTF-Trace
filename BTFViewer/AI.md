@@ -112,6 +112,8 @@ Toolbar **Compare** becomes available when at least two traces are open. **Query
 
 Enable **Limit to C1–Cn** when diagnosing a phase-specific issue. The prompt then includes `Cursor region window: jump:lo … jump:hi`, and every cited `jump:TIME` should remain inside that interval.
 
+AI context also carries the same **Filter** and **Selection** representation shown in the status bar and Legend (Task Filter, Core Filter, Migration Filter, and current Selection). Highlight remains visual-only and is not treated as a Filter. Cross-surface Evidence Navigation and Ask-AI-from-Findings expansion remain later workflows; use toolbar **Analysis → Investigate** for the non-AI Statistics jump.
+
 <a id="getting-started" name="getting-started">&#x200B;</a>
 
 ## Getting started

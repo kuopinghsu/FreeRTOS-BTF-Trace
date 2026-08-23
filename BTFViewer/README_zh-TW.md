@@ -152,17 +152,53 @@ Web 的 **Record** 功能使用瀏覽器畫面擷取。若要錄下語音，請�
 
 Desktop 與 Web 應用程式採用相同的主要操作流程。平台差異會在相關段落中說明。
 
+目標調查路徑：
+
+```text
+SEE → TRIAGE → SCOPE → INVESTIGATE
+```
+
+每一步都應能清楚知道：目前 Trace、**Scope**、**Filters**、檢視模式（View Mode）、**Selection** 與 **Highlight**。
+
+### 調查用語（Investigation terminology）
+
+| 用語 | 意義 |
+|---|---|
+| **Full Trace** | 未以游標定義時間窗；分析使用整段擷取 |
+| **Scope** | 目前分析的時間範圍（**Full Trace** 或 **C1–Cn · duration**） |
+| **Filter** | Scope 內的資料子集（Task、Core 或 Migration）。以 **×** 或 **Clear All** 清除 |
+| **Selection** | 鎖定以供檢查的物件（持續）。本身不會改變分析輸入 |
+| **Highlight** | 暫時視覺強調（例如圖例懸停）。不會改變分析輸入 |
+| **Fit Trace** | 將視窗縮放至完整擷取（`Ctrl+0` / `F`） |
+| **Fit Cursors** | 將視窗縮放至最早–最晚游標區間（`Ctrl+R`） |
+| **Baseline / Candidate** | Trace Compare 中的 Trace A 與 Trace B |
+| **Regressed / Improved** | 比較判定：指標相對基準變差或變好 |
+
+**Selection** 與 **Highlight** 不會默默變成 **Filter**。檢視模式（**Task** / **Core**）與 Selection、Highlight、Filter 彼此獨立。
+
+### 調查狀態（Investigation context）
+
+狀態列會持續顯示調查狀態，不必再開其他面板：
+
+- **Scope：** `Full Trace`，或游標範圍啟用時的 `C1–Cn · span`。
+- **Filter 晶片：** Task Filter、Core Filter（`Core: N of M`）、Migration Filter（`Migration: X→Y`），各自可按 **×**。**Clear All** 清除全部 Filter。
+- **Zoom：** 相對縮放（以及有顯示時的物理刻度）。
+
+當任何 Filter 縮小分析子集時，Statistics 會顯示對應的 **Filtered:** 指示。Filter 會依 Analysis 分頁保留。
+
 ### 主要控制項目
+
+工具列分組對應常見路徑：**Open** → Zoom / Fit → 檢視模式 → 調查入口（**Find**、Heatmap、**Analysis**、**Compare**）。較少用的動作放在功能表（Desktop）或溢位選單（Web）。
 
 | 控制項目 | 用途 |
 |---|---|
 | **Open** | 開啟 BTF trace 或示範套件 |
 | **Task / Core** | 每個工作顯示一列，或依 CPU 核心分組顯示活動 |
 | **Horizontal / Vertical** | 切換時間軸方向 |
-| **Zoom in / Zoom out / 1:1 / Fit** | 調整可見的時間範圍 |
+| **Zoom in / Zoom out / 1:1 / Fit Trace / Fit Cursors** | 調整可見的時間範圍 |
 | **Load** | 顯示或隱藏 CPU 負載圖 |
 | **Heatmap** | 檢視工作遷移及核心移動情形 |
-| **Analysis** | 開啟目前範圍內自動產生的分析結果 |
+| **Analysis** | 開啟目前 **Scope** 內自動產生的分析結果 |
 | **Compare** | 比較兩份以上已開啟的 trace |
 | **Find** | 搜尋工作、事件、核心遷移、時間區段或同步物件 |
 | **Settings** | 設定顯示方式、版面、游標及 AI 選項 |
@@ -176,28 +212,30 @@ Web 工具列另外提供 **Demo**、**Record** 及 **About**。視窗較窄時�
 | **Task View** | 追蹤各工作在所有核心上的執行情形 |
 | **Core View** | 查看各核心執行的工作；核心可以展開或收合 |
 
-**Task View** 適合檢查工作的執行及核心遷移情形；**Core View** 適合檢查使用率、閒置時間及負載分配。
+**Task View** 適合檢查工作的執行及核心遷移情形；**Core View** 適合檢查使用率、閒置時間及負載分配。切換檢視模式會保留時間軸位置、Zoom、游標與 Scope。
 
-### 縮放、標籤與醒目顯示
+在 **Core View** 中，圖例的 **Cores** 核取清單即為 **Core Filter**：取消勾選的核心會從 Timeline Core View 列、CPU Load 圖、狀態列晶片、Statistics **Filtered:** 狀態與 AI 內容中排除。
+
+### 縮放、Selection 與 Highlight
 
 - 使用滑鼠滾輪平移。按住 **Ctrl** 再捲動可縮放。
 - 按住 **Shift** 再捲動可切換平移軸向。
 - 在 macOS 上可使用觸控板的雙指開合手勢縮放。
 - 在時間軸上按住滑鼠中鍵拖曳，可放大選取的時間範圍。
-- 選取 **Fit** 或按 `Ctrl+0` 可顯示完整 trace。**Range** / `Ctrl+R` 會縮放至第一個與最後一個游標（C1–Cn）之間。在示範指令中，`<zoom_view/>` 使用 Fit；若已有游標，`<fit_view/>` 則使用 Range。顯示完整 trace 時，**Zoom out** 會停在 Fit，且無法繼續縮小。
+- 選取 **Fit Trace** 或按 `Ctrl+0` / `F` 可顯示完整擷取。**Fit Cursors** / `Ctrl+R` 會縮放至最早與最晚游標（C1–Cn）之間。在示範指令中，`<zoom_view/>` 使用 Fit Trace；若已有游標，`<fit_view/>` 則使用 Fit Cursors。顯示完整 trace 時，**Zoom out** 會停在 Fit Trace，且無法繼續縮小。
 - 選取 **1:1** 可回到設定的縮放密度。
-- 點選工作標籤或圖例項目，可持續醒目顯示該工作。
-- 將游標停在時間軸區段上，可查看持續時間、所在核心及鄰近活動。
+- **懸停**圖例或時間軸區段為 **Highlight**（暫時）；**點選**工作標籤或圖例為 **Selection**（持續）。兩者都不會套用 Filter。
+- 將游標停在時間軸區段上，可查看工作、核心、起迄時間與持續時間。
 
 ### CPU 負載
 
 選取 **Load**，在時間軸下方顯示使用率圖。拖曳分隔線可調整圖表大小。
 
-鎖定目前醒目顯示的工作後，**Task View** 會顯示該工作在各核心上的使用率。可利用此畫面確認工作是否依預期分配，或是否過度頻繁地在核心之間移動。
+當工作為目前 **Selection** 時，**Task View** 可顯示該工作在各核心上的使用率。可利用此畫面確認工作是否依預期分配，或是否過度頻繁地在核心之間移動。
 
-### 游標與時間範圍
+### 游標與 Scope
 
-游標可標記時間點及定義量測範圍。BTFViewer 預設支援四個游標；可在 **Settings** 中調整數量上限。
+游標標記時間點，並定義量測與 **Scope**。BTFViewer 預設支援四個游標；可在 **Settings** 中調整數量上限。游標線帶有依主題調整的對比光暈，避免與鄰近區段顏色混淆；重疊標籤依游標槽位堆疊，不會互相覆蓋。
 
 | 操作 | 方法 |
 |---|---|
@@ -207,21 +245,24 @@ Web 工具列另外提供 **Demo**、**Record** 及 **About**。視窗較窄時�
 | 清除所有游標 | 按 `Shift+C`，或按住 Shift 再按滑鼠右鍵 |
 | 對齊事件邊界 | 按住 Shift 再點選 |
 
-請在需要檢查的區段前後至少放置兩個游標。Statistics 便可將計算範圍限制在第一個與最後一個游標之間。**Zoom to cursor range**（`Ctrl+R`）只顯示此區段；**Save selection as BTF** 則可將該區段匯出為較小的 trace。
+請在需要檢查的區段前後至少放置兩個游標。啟用 Statistics 的 **Limit to C1–Cn**，計算會使用最早–最晚區間；狀態列 Scope 會立即更新。**Fit Cursors**（`Ctrl+R`）只顯示此區段；**Save selection as BTF** 可將該區段匯出為較小的 trace。
 
-### 書籤、註解與搜尋
+### Marks、書籤、註解與 Find
 
 | 工具 | 用途 |
 |---|---|
-| **Bookmark** | 在指定時間點加入名稱 |
-| **Annotation** | 在指定時間點加入註解 |
+| **Cursor** | 暫時量測／調查點 |
+| **Bookmark** | 儲存位置以便稍後返回 |
+| **Annotation** | 綁定 Trace 時間點的人工註解 |
 | **Find** | 尋找工作、核心遷移、STI 事件、時間區段、生命週期事件及同步物件 |
 
-按 `Ctrl+F` 開啟 Find。按 `F3` 與 `Shift+F3` 可在搜尋結果之間移動。在時間軸上按滑鼠右鍵，可新增或編輯游標與標記。
+Marks 面板依序為 **Cursors**、**Cursor Range**，再是 **Marks**（書籤與註解）。使用 **Export Marks** / **Import Marks** 與 **Export Session** / **Import Session**。已知類型時避免泛稱「Marker」。
+
+按 `Ctrl+F` 開啟 Find。狀態顯示 **`k of N matches`**。使用 Previous/Next、`F3`、`Shift+F3` 在結果間移動時不會改變 Scope 或 Filters。Match Mode 說明放在工具提示中。在時間軸上按滑鼠右鍵可操作游標與標記。
 
 ### 多份 trace
 
-每份 trace 會在個別分頁中開啟，並保留各自的縮放比例、游標、標記及篩選條件。
+每份 trace 會在個別分頁中開啟，並保留各自的縮放比例、游標、標記及 Filters。
 
 - `Ctrl+Tab`：下一個分頁
 - `Ctrl+Shift+Tab`：上一個分頁
@@ -235,12 +276,12 @@ Desktop 會從原始路徑還原檔案。Web 最多可從瀏覽器儲存空間�
 
 第一次檢查時，請依照以下順序操作：
 
-1. 開啟 trace，並選取 **Fit** 查看完整時間範圍。
+1. 開啟 trace，並選取 **Fit Trace** 查看完整時間範圍。
 2. 選取 **Load**，確認所有核心是否分擔合理的工作量。
-3. 開啟 **Analysis**，先查看嚴重程度最高的分析結果。
-4. 開啟 Statistics 中由分析結果指出的項目。
+3. 開啟 **Analysis**，先查看嚴重程度最高的分析結果（Triage）。
+4. 在結果上選 **Investigate**，開啟對應 Statistics 區段（保留 Scope 與 Filters）。
 5. 選取偏高數值或離群值，跳至時間軸上的對應事件。
-6. 在問題區段前後放置游標，並將 Statistics 的計算範圍限制在該區段。
+6. 在問題區段前後放置游標，確認狀態列 **Scope: C1–Cn**，並啟用 **Limit to C1–Cn**。
 7. 檢查工作、核心、搶佔、阻塞、同步或核心遷移的詳細資料。
 8. 必要時，請 AI Assistant 說明或驗證量測證據。
 
@@ -271,9 +312,18 @@ BTFViewer 的所有結果都由已記錄的 BTF 事件計算而來。它不會�
 
 ### 分析結果（Analysis Findings）
 
-選取 **Analysis**，查看目前 trace 或游標範圍內的可能問題。分析結果可能包括負載不均、執行時間熱點、阻塞、優先權反轉、頻繁的核心遷移、錯過截止期限、Tick 健康狀態問題，以及同步物件在核心間移動等情形。
+選取 **Analysis**，查看目前 **Scope**（**Full Trace** 或 **C1–Cn**）內的可能問題。分析結果可能包括負載不均、執行時間熱點、阻塞、優先權反轉、頻繁的核心遷移、錯過截止期限、Tick 健康狀態問題，以及同步物件在核心間移動等情形。
 
-每項結果都包含嚴重程度、相關的 Statistics 項目，以及可取得時的時間範圍。選取結果後，可開啟統計證據、放置游標、在時間軸上顯示其範圍、啟動 AI 輔助調查，或將結果儲存為文字。
+每項結果包含：
+
+- 清楚的 **Severity** 與問題導向標題。
+- 最相關的支持指標。
+- 由量測 `evidence_text` 產生的 **Evidence** 列（觀察結果，與詮釋文字分開）。
+- **Investigate** — 界定 Finding 並開啟對應 Statistics 區段，不需 AI。
+- **Show Evidence** — 保留給跨介面 Evidence Navigation（該流程完成前為停用）。
+- 若已設定 AI，可使用 **Investigate…** / **Auto investigate…** 等選項。
+
+請將 Finding 視為線索，而非已確認的根因。若 Finding 建議有用的時間窗，請套用游標後再於該 Scope 內重查 Statistics。
 
 對於可量測使用率的多核心 trace，核心平衡分析會顯示 **Load Balance Score** 與相關分布數值。分數越高，表示工作分配越平均。判斷分配方式是否適合目前工作負載前，仍應檢查時間軸及核心遷移資料。
 
@@ -389,9 +439,9 @@ Desktop 將設定儲存在 BTFViewer 旁的 `btf_viewer.rc`；Web 則儲存在�
 | `Ctrl+O` | 開啟檔案 |
 | `Ctrl+W` | 關閉目前分頁 |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 切換分頁 |
-| `Ctrl++` / `Ctrl+-` | 放大或縮小 |
-| `Ctrl+0` / `F` | 顯示完整 trace |
-| `Ctrl+R` | 縮放至游標範圍 |
+| `Ctrl++` / `Ctrl+-` | 放大，或縮小至 Fit Trace |
+| `Ctrl+0` / `F` | Fit Trace（完整擷取） |
+| `Ctrl+R` | Fit Cursors（最早–最晚游標區間） |
 | `Ctrl+F` / `F3` / `Shift+F3` | 搜尋、下一個結果或上一個結果 |
 | `Ctrl+G` | 跳至指定時間點 |
 | `Ctrl+K` | 開啟指令選單（command palette） |

@@ -2,9 +2,11 @@
 
 A beginner-friendly workflow for investigating RTOS scheduling traces with BTFViewer.
 
-Use this guide when you know the symptom but do not yet know where to look. For viewer controls, see [`README.md`](README.md). For metric definitions and limitations, see [`STATISTICS.md`](STATISTICS.md). For AI setup and advanced investigation tools, see [`AI.md`](AI.md).
+Use this guide when you know the symptom but do not yet know where to look. For viewer controls and investigation terminology (**Scope**, **Filter**, **Selection**, **Highlight**, **Fit Trace**, **Fit Cursors**), see [`README.md`](README.md). For metric definitions and limitations, see [`STATISTICS.md`](STATISTICS.md). For AI setup and advanced investigation tools, see [`AI.md`](AI.md).
 
-> **Core rule:** treat the trace and Statistics as measured evidence. Treat Analysis Findings as leads, AI explanations as interpretations, and What-if results as estimates.
+> **Core rule:** treat the trace and Statistics as measured evidence. Treat Analysis Findings as leads, AI explanations as interpretations, and What-if results as estimates. Keep Scope, Filter, Selection, and Highlight distinct — never assume a Highlight is a Filter.
+
+Target path: **SEE → TRIAGE → SCOPE → INVESTIGATE**. The status bar shows active Scope and Filter chips at all times.
 
 <a id="workflow-at-a-glance" name="workflow-at-a-glance">&#x200B;</a>
 
@@ -40,15 +42,15 @@ When opening an unfamiliar trace, use this short pass before reading every Stati
 
 | Step | Action | Result |
 |---:|---|---|
-| 1 | Open the trace and select **Fit** | Confirm the whole capture is visible |
-| 2 | Enable **Load**; switch between **Task View** and **Core View** | Identify workload phases and overall activity |
-| 3 | Open **Statistics** and **Analysis** | See trace warnings, incident clusters, and ranked findings |
+| 1 | Open the trace and select **Fit Trace** | Confirm the whole capture is visible; status bar shows **Scope: Full Trace** |
+| 2 | Enable **Load**; switch between **Task View** and **Core View** | Identify workload phases and overall activity (position, Zoom, Cursors, and Scope are preserved) |
+| 3 | Open **Statistics** and **Analysis** | See triage sections (TRIAGE badges), incident clusters, and ranked findings |
 | 4 | Read **Trace Health (TICK)** | Decide whether timing evidence is usable or tickless behavior is expected |
-| 5 | Open the Statistics sections named by the most relevant finding | Avoid inspecting unrelated metrics |
+| 5 | Select **Investigate** on the most relevant finding | Jump to the named Statistics section without guessing the hierarchy |
 | 6 | Click **Max**, **p95**, a row, chart point, or heatmap cell | Jump to measured timeline evidence |
-| 7 | Place C1–C2 and enable **Limit to C1–Cn** | Remove unrelated workload phases |
-| 8 | Recheck Analysis and Statistics | Confirm the issue remains inside the selected scope |
-| 9 | Optionally use **Investigate…**, **Verify with AI…**, or **Explain region** | Ask AI about evidence already found |
+| 7 | Place C1–C2, confirm **Scope: C1–Cn** in the status bar, enable **Limit to C1–Cn** | Remove unrelated workload phases |
+| 8 | Recheck Analysis and Statistics; note any **Filtered:** chips | Confirm the issue remains inside the selected Scope and Filters |
+| 9 | Optionally use AI **Investigate…**, **Verify with AI…**, or **Explain region** | Ask AI about evidence already found |
 | 10 | Save evidence and repeat the same measurements after a change | Preserve and validate the result |
 
 <a id="before-you-start" name="before-you-start">&#x200B;</a>
@@ -67,7 +69,7 @@ Do not expect BTFViewer to inspect source code or simulate the RTOS scheduler. I
 ## 1. Open and orient the trace
 
 1. Open the `.btf`, compressed BTF, or archive.
-2. Select **Fit** to view the whole capture.
+2. Select **Fit Trace** to view the whole capture.
 3. Start in **Task View** to identify active tasks, then switch to **Core View** for multicore placement.
 4. Enable **Load** to see CPU utilisation over time.
 5. Hover representative slices to learn their task, core, start time, and duration.
@@ -108,16 +110,16 @@ Use distributions, not only averages. Compare **Avg**, **p95**, **p99**, and **M
 
 ## 4. Run deterministic triage
 
-Click **Analysis** to open **Analysis Findings** for the current Statistics scope.
+Click **Analysis** to open **Analysis Findings** for the current Statistics **Scope**.
 
 For each relevant finding:
 
-1. Note its severity, task or core, metric, and suggested Statistics section.
+1. Note its severity, title, supporting metric, and the separate **Evidence** line.
 2. Treat the finding as a hypothesis, not a confirmed root cause.
-3. Open the named Statistics section and reproduce the reported value.
-4. Use **Apply cursors** when the finding recommends a useful time window.
+3. Select **Investigate** to open the named Statistics section (Scope and Filters stay as they are). **Show Evidence** remains reserved for later Evidence Navigation.
+4. Reproduce the reported value in Statistics; use **Apply cursors** when the finding recommends a useful time window.
 
-If no finding stands out, begin with **Timeline Anomalies**, **Worst Events**, and the symptom table below.
+If no finding stands out, begin with the TRIAGE Statistics sections (**Timeline Anomalies**, **Worst Events**, **Recurring Patterns**, **Response Time**, **Task Health**) and the symptom table below.
 
 ## 5. Choose a symptom path
 
@@ -158,14 +160,15 @@ Use a small, meaningful window instead of repeatedly analysing the entire trace.
 
 1. Jump to an outlier by clicking a Statistics row, percentile, chart point, or finding.
 2. Place **C1** before the suspected cause and **C2** after the visible effect.
-3. Select **Zoom to cursor range**.
-4. Enable **Limit to C1–Cn** in Statistics.
-5. Reopen **Analysis** so its findings use the same window.
-6. Add a bookmark or annotation at the strongest evidence time.
+3. Confirm the status bar shows **Scope: C1–Cn · duration**.
+4. Select **Fit Cursors**.
+5. Enable **Limit to C1–Cn** in Statistics.
+6. Reopen **Analysis** so its findings use the same window.
+7. Add a bookmark or annotation at the strongest evidence time.
 
 Choose a window that contains enough context to see what ran immediately before and after the incident. If the window is too wide, unrelated activity may dominate the statistics; if it is too narrow, the triggering event may be excluded.
 
-> **Viewport note:** the Migration **Heatmap / Chord** inspector follows the visible timeline viewport rather than the **Limit to C1–Cn** checkbox. The top banner is **Full view** (with the trace time range) after Fit to window, or **Viewport view** (orange, with the visible range) when zoomed. Zoom to the cursor range before opening it if you want the inspector to match C1–Cn.
+> **Viewport note:** the Migration **Heatmap / Chord** inspector follows the visible timeline viewport rather than the **Limit to C1–Cn** checkbox. The top banner is **Full view** (with the trace time range) after **Fit Trace**, or **Viewport view** (orange, with the visible range) when zoomed. Use **Fit Cursors** before opening it if you want the inspector to match C1–Cn.
 
 ## 7. Measure before explaining
 
@@ -177,7 +180,7 @@ For the suspect task or core, record:
 - Related preemption, blocking, migration, mutex, queue, or STI events.
 - Whether the behavior repeats elsewhere in the trace.
 
-Use **Find** when you know a task name, core, migration, STI event, interval, lifecycle event, or synchronization pointer. Use **Recurring Patterns** when the same type of incident appears several times.
+Use **Find** when you know a task name, core, migration, STI event, interval, lifecycle event, or synchronization pointer. Match status shows **`k of N matches`**; Previous/Next keep Scope and Filters unchanged. Use **Recurring Patterns** when the same type of incident appears several times.
 
 ## 8. Verify the hypothesis on the timeline
 

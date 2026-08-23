@@ -151,10 +151,12 @@ class CoreAffinityInteractionTests(unittest.TestCase):
         )
         panel = _StatsPanel()
         self.addCleanup(panel.deleteLater)
-        panel._section_collapsed["affinity"] = False
         clicked = []
         panel.task_clicked.connect(clicked.append)
         panel.rebuild(tr)
+        # Expand after rebuild: presentation defaults overwrite collapse flags
+        # set before rebuild, and bodies are created only when expanded.
+        panel._set_section_collapsed("affinity", False)
 
         affinity = next(
             table for table in panel.findChildren(QTableWidget)
