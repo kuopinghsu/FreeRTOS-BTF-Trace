@@ -99,9 +99,9 @@ class SegmentTabNavWebParityTest(unittest.TestCase):
         app = WEB_APP.read_text(encoding="utf-8")
         self.assertIn(
             "import { taskPassesRowFilter, rawTaskNameMatchesTextFilter, "
-            "normalizeTaskFilterText } from './utils/taskFilter.js'", app)
+            "normalizeTaskFilterText, coreFilterActive } from './utils/taskFilter.js'", app)
         fn_start = app.index("function cycleHighlightedSegment(forward) {")
-        fn_body = app[fn_start:fn_start + 2500]
+        fn_body = app[fn_start:fn_start + 2800]
         idx_filter = fn_body.index("navSegs = navSegs.filter(s => taskPassesRowFilter(")
         idx_empty_check = fn_body.index("if (!navSegs || navSegs.length === 0) return")
         self.assertLess(idx_filter, idx_empty_check)

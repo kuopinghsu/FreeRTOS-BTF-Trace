@@ -51,19 +51,25 @@ export function cpuLoadRowCount(trace, viewMode, selectedTask, filterOpts = {}) 
     migratedOnlyFilter = false,
     taskFilterKeys = null,
     taskFilterText = '',
+    coreFilterKeys = null,
   } = filterOpts
   const filterActive = coreViewTaskFilterActive(migratedOnlyFilter, taskFilterKeys, taskFilterText)
+  const totalCores = coreFilterKeys?.length
+    ? trace.coreNames?.filter(c => coreFilterKeys.includes(c)).length ?? 0
+    : trace.coreNames?.length ?? 0
 
   if (selectedTask) {
-    return trace.coreNames?.length ?? 0
+    return totalCores
   }
   if (filterActive && viewMode === 'task') return 1
   if (filterActive && viewMode === 'core') {
-    const n = filteredCoreViewTasks(trace, migratedOnlyFilter, taskFilterKeys, taskFilterText).length
+    const n = filteredCoreViewTasks(
+      trace, migratedOnlyFilter, taskFilterKeys, taskFilterText, coreFilterKeys,
+    ).length
     return n > 0 ? n : 0
   }
   if (viewMode === 'task') return 1
-  return trace.coreNames?.length ?? 0
+  return totalCores
 }
 
 /** Per-bin load on one core from filtered tasks (sum of task-on-core bins, capped at 1). */

@@ -1,55 +1,95 @@
 <template>
   <div class="legend-panel">
-    <div class="legend-title">
-      Tasks
-    </div>
-    <input
-      :value="taskFilterText"
-      class="legend-search"
-      type="search"
-      placeholder="Filter tasks…"
-      @input="onSearchInput"
-    >
-    <div
-      v-if="taskFilterSet"
-      class="heatmap-filter-banner"
-    >
-      <span>Heatmap: {{ heatmapFilterLabel || 'filtered' }} ({{ taskFilterSet.size }})</span>
-      <button
-        type="button"
-        class="heatmap-filter-clear"
-        @click="emit('clearTaskFilter')"
-      >
-        Clear
-      </button>
-    </div>
-    <label class="migrated-filter">
+    <div class="legend-header">
+      <div class="legend-title">
+        Tasks
+      </div>
       <input
-        :checked="migratedOnlyFilter"
-        type="checkbox"
-        @change="onMigratedChange"
+        :value="taskFilterText"
+        class="legend-search"
+        type="search"
+        placeholder="Filter tasks…"
+        @input="onSearchInput"
       >
-      Migrated tasks only
-    </label>
-    <div class="legend-list">
       <div
-        v-for="mk in visibleTasks"
-        :key="String(mk).replace(/\0|\uFFFD/g, '|')"
-        class="legend-item"
-        :class="{ highlighted: highlightKey === mk }"
-        @mouseenter="emit('highlightChange', mk)"
-        @mouseleave="emit('highlightChange', null)"
-        @click="emit('highlightClick', mk)"
+        v-if="taskFilterSet"
+        class="heatmap-filter-banner"
       >
-        <span
-          class="swatch"
-          :style="{ background: taskColor(mk, trace.taskRepr.get(mk)) }"
-        />
-        <span class="name">{{ taskDisplayName(trace.taskRepr.get(mk) || mk) }}</span>
+        <span>Migration: {{ heatmapFilterLabel || 'tasks' }} ({{ taskFilterSet.size }})</span>
+        <button
+          type="button"
+          class="heatmap-filter-clear"
+          title="Clear this Filter"
+          @click="emit('clearTaskFilter')"
+        >
+          Clear
+        </button>
+      </div>
+      <label class="migrated-filter">
+        <input
+          :checked="migratedOnlyFilter"
+          type="checkbox"
+          @change="onMigratedChange"
+        >
+        Migrated tasks only
+      </label>
+    </div>
+
+    <div class="legend-list-scroll">
+      <div class="legend-list">
+        <div
+          v-for="mk in visibleTasks"
+          :key="String(mk).replace(/\0|\uFFFD/g, '|')"
+          class="legend-item"
+          :class="{ highlighted: highlightKey === mk, selected: selectedKey === mk, filtered: taskFilterSet && taskFilterSet.has(mk) }"
+          :title="`${taskDisplayName(trace.taskRepr.get(mk) || mk)} \u2014 hover to Highlight, click to Select`"
+          @mouseenter="emit('highlightChange', mk)"
+          @mouseleave="emit('highlightChange', null)"
+          @click="emit('highlightClick', mk)"
+        >
+          <span
+            class="swatch"
+            :style="{ background: swatchColor(mk, trace.taskRepr.get(mk)) }"
+          />
+          <span class="name">{{ taskDisplayName(trace.taskRepr.get(mk) || mk) }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-if="showCoreFilter"
+      class="legend-cores"
+    >
+      <div class="legend-cores-header">
+        <span class="legend-title legend-cores-title">Cores</span>
+        <button
+          v-if="coreFilterKeys?.length"
+          type="button"
+          class="heatmap-filter-clear"
+          title="Clear Core Filter and show all cores"
+          @click="emit('coreFilterChange', null)"
+        >
+          Clear
+        </button>
+      </div>
+      <div class="legend-cores-scroll">
+        <label
+          v-for="coreName in trace.coreNames"
+          :key="coreName"
+          class="migrated-filter core-filter-item"
+        >
+          <input
+            :checked="coreChecked(coreName)"
+            type="checkbox"
+            @change="onCoreCheckChange(coreName, $event.target.checked)"
+          >
+          {{ coreName }}
+        </label>
       </div>
     </div>
   </div>
 </template>
+
 
 <script setup>
 import { computed } from 'vue'
@@ -60,12 +100,25 @@ import { mergeKeyMatchesTextFilter, normalizeTaskFilterText } from '../utils/tas
 const props = defineProps({
   trace:        { type: Object, default: null },
   highlightKey: { type: [String, null], default: null },
+  selectedKey:  { type: [String, null], default: null },
   taskFilterKeys:     { type: Array, default: null },
   taskFilterText:     { type: String, default: '' },
   migratedOnlyFilter: { type: Boolean, default: false },
   heatmapFilterLabel: { type: String, default: null },
+  viewMode:           { type: String, default: 'task' },
+  coreFilterKeys:     { type: Array, default: null },
+  darkMode:           { type: Boolean, default: true },
+  colorblindSafe:     { type: Boolean, default: false },
 })
-const emit = defineEmits(['highlightChange', 'highlightClick', 'migratedFilterChange', 'clearTaskFilter', 'filterChange'])
+const emit = defineEmits(['highlightChange', 'highlightClick', 'migratedFilterChange', 'clearTaskFilter', 'filterChange', 'coreFilterChange'])
+
+function swatchColor(mk, repr) {
+  // taskColor() reads non-reactive module state; touch the props here so
+  // Vue re-renders swatches when the theme or colorblind-safe setting changes.
+  void props.darkMode
+  void props.colorblindSafe
+  return taskColor(mk, repr)
+}
 
 const taskFilterSet = computed(() => {
   const keys = props.taskFilterKeys
@@ -91,13 +144,34 @@ const visibleTasks = computed(() => {
     return mergeKeyMatchesTextFilter(props.trace, mk, q)
   })
 })
+
+/** Core Filter (Core View only) — narrows Scope to a subset of cores, mirrors the Task list. */
+const showCoreFilter = computed(() => props.viewMode === 'core' && (props.trace?.coreNames?.length ?? 0) > 1)
+
+function coreChecked(coreName) {
+  return !props.coreFilterKeys?.length || props.coreFilterKeys.includes(coreName)
+}
+
+function onCoreCheckChange(coreName, checked) {
+  const all = props.trace?.coreNames || []
+  const cur = props.coreFilterKeys?.length ? props.coreFilterKeys : [...all]
+  const next = checked ? [...new Set([...cur, coreName])] : cur.filter(c => c !== coreName)
+  emit('coreFilterChange', next)
+}
 </script>
 
 <style scoped>
 .legend-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
   padding: 8px;
-  overflow-y: auto;
   font-size: 11px;
+}
+
+.legend-header {
+  flex-shrink: 0;
 }
 
 .legend-title {
@@ -169,6 +243,41 @@ const visibleTasks = computed(() => {
   gap: 2px;
 }
 
+.legend-list-scroll {
+  flex: 1;
+  min-height: 40px;
+  overflow-y: auto;
+}
+
+.legend-cores {
+  flex-shrink: 0;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.legend-cores-scroll {
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.legend-cores-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.legend-cores-title {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.core-filter-item {
+  margin-bottom: 4px;
+}
+
 .legend-item {
   display: flex;
   align-items: center;
@@ -183,6 +292,15 @@ const visibleTasks = computed(() => {
 }
 .legend-item.highlighted {
   background: rgba(255, 255, 180, 0.12);
+}
+.legend-item.selected {
+  background: rgba(255, 255, 180, 0.12);
+  border: 1px solid var(--accent);
+  padding: 1px 3px;
+}
+.legend-item.filtered {
+  border-left: 2px solid #5B9BD5;
+  padding-left: 2px;
 }
 
 .swatch {

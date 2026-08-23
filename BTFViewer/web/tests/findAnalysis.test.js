@@ -86,7 +86,7 @@ describe('find mode help', () => {
     }), '3 migration matches')
     assert.equal(formatFindStatus({
       hitCount: 3, hitIndex: 1, mode: 'migrations', query: 'Core_0',
-    }), '3 matches (at 2)')
+    }), '2 of 3 matches')
     assert.equal(formatFindStatus({
       hitCount: 2, mode: 'sti', query: 'TICK',
     }), '2 matches')

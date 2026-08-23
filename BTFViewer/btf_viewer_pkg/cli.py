@@ -389,7 +389,7 @@ Views (--view):
              lock-highlighted and other tasks remain visible but grayed out
              (no filter).  --cpu-load appends the synchronised CPU Load strip;
              with a locked --task it shows that task's usage on each core.
-             Without --lo/--hi the timeline fits the full trace (Fit to Window).
+             Without --lo/--hi the timeline fits the full trace (Fit Trace).
   heatmap    Migration & Corridor Inspector (tree + time-bin grid; topology
              sidebar collapsed). --task is not supported; --lo/--hi scope
              the inspector. --drill-row selects that corridor (0 = top) and

@@ -79,15 +79,17 @@
       <button
         class="action-btn"
         :disabled="marks.length === 0"
+        title="Export Marks (bookmarks + annotations) as CSV"
         @click="exportCsv"
       >
-        Export
+        Export Marks
       </button>
       <button
         class="action-btn"
+        title="Import Marks (bookmarks + annotations) from CSV"
         @click="triggerImport"
       >
-        Import
+        Import Marks
       </button>
       <button
         class="action-btn"

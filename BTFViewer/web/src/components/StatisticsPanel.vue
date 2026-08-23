@@ -54,6 +54,11 @@
         </div>
       </div>
       <span class="stats-scope-label">{{ scopeRangeLabel }}</span>
+      <span
+        v-if="activeFilterLabel"
+        class="stats-scope-filtered"
+        :title="`Statistics reflect the active Filter: ${activeFilterLabel}`"
+      >Filtered: {{ activeFilterLabel }}</span>
     </div>
 
     <div
@@ -4240,6 +4245,7 @@ const props = defineProps({
   sectionCollapsedState: { type: Object, default: null },
   sectionPins: { type: Array, default: () => [] },
   sectionOrder: { type: Array, default: () => [] },
+  activeFilterLabel: { type: String, default: null },
 })
 
 const emit = defineEmits([
@@ -8589,6 +8595,17 @@ defineExpose({
   font-size: 10px;
   line-height: 1.35;
   word-break: break-word;
+}
+
+.stats-scope-filtered {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  color: var(--fg);
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .stats-summary {

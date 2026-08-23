@@ -5,42 +5,61 @@
 
 import { STATS_DEFAULT_EXPANDED_SECTIONS } from '../config.js'
 
+// Triage sections (Step-1 item 6): visually distinguished in the section
+// header from Overview/Timing/SMP/Sync "detailed analysis" sections. Keep in
+// sync with btf_viewer_pkg/config.py STATS_TRIAGE_SECTIONS.
+export const STATS_TRIAGE_SECTIONS = Object.freeze([
+  'anomalies',
+  'worst',
+  'patterns',
+  'response',
+  'task_health',
+])
+
+// Triage-first default order (Step-1 item 6): surface "what deserves
+// attention" before detailed/overview metrics, then Timing, then
+// SMP/Scheduling, then Synchronization/Detail.
 export const STATS_PINNABLE_SECTIONS = Object.freeze([
+  // Triage
+  'anomalies',
+  'worst',
+  'patterns',
+  'response',
+  'task_health',
+  // Overview
   'cores',
-  'health',
   'core_breakdown',
   'concurrency',
   'switch_overhead',
   'tasks',
-  'migrations',
-  'core_pairs',
-  'affinity',
-  'task_core',
-  'core_time',
-  'lifecycle',
-  'deadline',
-  'task_health',
-  'anomalies',
-  'worst',
-  'crit_path',
-  'patterns',
+  'health',
+  // Timing Investigation
   'exec',
   'block',
-  'response',
   'dispatch',
+  'crit_path',
   'inter',
   'period',
   'jitter',
   'distrib',
-  'preemption',
+  // SMP / Scheduling
+  'task_core',
+  'core_time',
+  'migrations',
+  'core_pairs',
+  'affinity',
   'preempt_matrix',
+  'preemption',
   'priority',
+  // Synchronization / Detail
   'sync',
   'wait_owner',
   'mutex_block',
   'queue',
   'intervals',
   'tags',
+  'lifecycle',
+  'deadline',
 ])
 
 /** @param {unknown} raw @returns {string[]} */

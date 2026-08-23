@@ -47,6 +47,10 @@
           >
             <div class="finding-title">{{ clusterPrefix(f) }}{{ f.title }}</div>
             <div class="finding-text">{{ f.text }}</div>
+            <div
+              v-if="f.evidence_text"
+              class="finding-evidence"
+            ><span class="finding-evidence-label">Evidence</span> {{ f.evidence_text }}</div>
           </li>
         </ul>
         <div
@@ -65,6 +69,25 @@
           @click="applyScope"
         >
           Apply cursors
+        </button>
+        <button
+          type="button"
+          class="analysis-btn"
+          disabled
+          title="Reserved for Step 2 — cross-surface Evidence Navigation"
+        >
+          Show Evidence
+        </button>
+        <button
+          type="button"
+          class="analysis-btn analysis-btn-primary"
+          :disabled="!investigateSectionId"
+          :title="investigateSectionId
+            ? `Scope the investigation and jump to the relevant Statistics section`
+            : 'No specific Statistics section is associated with this finding'"
+          @click="investigate"
+        >
+          Investigate
         </button>
       </div>
       <div class="analysis-footer">
@@ -198,7 +221,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { EXPLAIN_LEVELS } from '../utils/aiCase.js'
 import { analysisDashboard } from '../utils/aiPlanner.js'
 import { bestFindingScope } from '../utils/uxExplore.js'
-import { formatAnalysisFindingsText } from '../utils/workflowAnalysis.js'
+import { formatAnalysisFindingsText, FINDING_SECTION_MAP } from '../utils/workflowAnalysis.js'
 
 const props = defineProps({
   findings: { type: Array, default: () => [] },
@@ -210,7 +233,7 @@ const props = defineProps({
   qualityWarnings: { type: Array, default: () => [] },
 })
 
-const emit = defineEmits(['close', 'query-ai', 'apply-scope', 'save-recipe', 'save-story'])
+const emit = defineEmits(['close', 'query-ai', 'apply-scope', 'investigate', 'save-recipe', 'save-story'])
 
 const selectedId = ref('')
 const dashboard = computed(() =>
@@ -252,6 +275,18 @@ const scopeHint = computed(() => {
 function applyScope() {
   const f = selectedFinding.value
   if (f) emit('apply-scope', f)
+}
+
+const investigateSectionId = computed(() => {
+  const f = selectedFinding.value
+  return (f && FINDING_SECTION_MAP[f.id || '']) || null
+})
+
+function investigate() {
+  const f = selectedFinding.value
+  const sectionId = investigateSectionId.value
+  if (!f || !sectionId) return
+  emit('investigate', { finding: f, sectionId })
 }
 
 function placeExplainMenu() {
@@ -441,6 +476,21 @@ function saveAsText() {
   line-height: 1.45;
 }
 
+.finding-evidence {
+  margin-top: 4px;
+  font-size: 11px;
+  font-family: monospace;
+  opacity: 0.85;
+}
+
+.finding-evidence-label {
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 0.4px;
+  margin-right: 4px;
+}
+
 .analysis-list .sev-warning { color: var(--analysis-warn); }
 .analysis-list .sev-error { color: var(--analysis-err); }
 .analysis-list .sev-info { color: var(--fg); }
@@ -543,5 +593,16 @@ function saveAsText() {
 
 .analysis-btn:hover {
   background: var(--tb-btn-hover);
+}
+
+.analysis-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.analysis-btn-primary {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
 }
 </style>

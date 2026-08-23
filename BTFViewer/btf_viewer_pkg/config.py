@@ -297,43 +297,85 @@ def section_collapsed_from_rc(raw) -> Dict[str, bool]:
 
 # Statistics sections that can be pinned open (stay expanded) and the default
 # display order. Keep in sync with web/src/utils/statsPins.js.
+# Triage-first order (Step-1 item 6): surface "what deserves attention"
+# before detailed/overview metrics, then Timing, then SMP/Scheduling, then
+# Synchronization/Detail.
 STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
+    # Triage
+    "anomalies",
+    "worst",
+    "patterns",
+    "response",
+    "task_health",
+    # Overview
     "cores",
-    "health",
     "core_breakdown",
     "concurrency",
     "switch_overhead",
     "tasks",
-    "migrations",
-    "core_pairs",
-    "affinity",
-    "task_core",
-    "core_time",
-    "lifecycle",
-    "deadline",
-    "task_health",
-    "anomalies",
-    "worst",
-    "crit_path",
-    "patterns",
+    "health",
+    # Timing Investigation
     "exec",
     "block",
-    "response",
     "dispatch",
+    "crit_path",
     "inter",
     "period",
     "jitter",
     "distrib",
-    "preemption",
+    # SMP / Scheduling
+    "task_core",
+    "core_time",
+    "migrations",
+    "core_pairs",
+    "affinity",
     "preempt_matrix",
+    "preemption",
     "priority",
+    # Synchronization / Detail
     "sync",
     "wait_owner",
     "mutex_block",
     "queue",
     "intervals",
     "tags",
+    "lifecycle",
+    "deadline",
 )
+
+# Triage sections (Step-1 item 6): visually distinguished from Overview/
+# Timing/SMP/Sync "detailed analysis" sections. Keep in sync with
+# web/src/utils/statsPins.js STATS_TRIAGE_SECTIONS.
+STATS_TRIAGE_SECTIONS: Tuple[str, ...] = (
+    "anomalies",
+    "worst",
+    "patterns",
+    "response",
+    "task_health",
+)
+
+# Analysis Finding id -> Statistics section id (Step-1 item 7: non-AI
+# "Investigate" routes straight to the relevant Statistics section instead of
+# requiring the AI Assistant). Keep in sync with
+# web/src/utils/workflowAnalysis.js FINDING_SECTION_MAP.
+FINDING_SECTION_MAP: dict = {
+    "load_imbalance": "cores",
+    "load_balance_ok": "cores",
+    "load_balance_moderate": "cores",
+    "top_cpu": "tasks",
+    "exec_max": "exec",
+    "blocking": "block",
+    "priority_inversion": "priority",
+    "thrashing": "migrations",
+    "hot_pairs": "core_pairs",
+    "deadlines": "deadline",
+    "tick_health": "health",
+    "missed_ticks": "health",
+    "sync_bounce": "sync",
+    "sync_issues": "sync",
+    "migration_burst_anomaly": "migrations",
+    "wcet_anomaly": "exec",
+}
 
 # One-line (or short paragraph) help shown under every Statistics section
 # title. Keep lockstep with web ``config.js`` ``STATS_SECTION_HELP``.
@@ -710,11 +752,14 @@ def _snapshot_tab_filters(scene) -> dict:
         "migratedOnlyFilter": bool(scene._migrated_only_filter),
         "taskFilterKeys": None,
         "heatmapFilterLabel": None,
+        "coreFilterKeys": sorted(scene._core_filter_keys) if scene._core_filter_keys else None,
     }
 
 def _sanitize_tab_filters(src) -> Optional[dict]:
     if not isinstance(src, dict):
         return None
+    core_keys = src.get("coreFilterKeys")
+    core_keys = [c for c in core_keys if isinstance(c, str)] if isinstance(core_keys, list) else None
     return {
         "taskFilterText": str(src.get("taskFilterText") or ""),
         "migratedOnlyFilter": bool(src.get("migratedOnlyFilter")),
@@ -722,6 +767,7 @@ def _sanitize_tab_filters(src) -> Optional[dict]:
         # shows all tasks (ignore legacy rc / portable JSON keys).
         "taskFilterKeys": None,
         "heatmapFilterLabel": None,
+        "coreFilterKeys": core_keys or None,
     }
 _META_KEY_RE = re.compile(r"^[\w.-]+$")
 _MAX_FIND_REGEX_LEN = 200
@@ -771,11 +817,16 @@ _PALETTE_COLORBLIND = [
     "#000000",  # black
 ]
 
+# Same palette, black swapped for white — pure black is invisible against a
+# dark timeline/CPU-load background, so dark mode needs its own variant.
+_PALETTE_COLORBLIND_DARK = _PALETTE_COLORBLIND[:-1] + ["#FFFFFF"]
+
 @dataclass
 class _RenderRuntimeState:
     """Process-local mutable render toggles and cache-affecting state."""
 
     colorblind_active: bool = False
+    is_dark: bool = True
 
 _RENDER_RUNTIME = _RenderRuntimeState()
 
@@ -1257,10 +1308,14 @@ def app_icon() -> QIcon:
 
 def _core_color(core_name: str) -> str:
     """Return a distinct color hex string for a core name like 'Core_N'."""
+    if _RENDER_RUNTIME.colorblind_active:
+        palette = _PALETTE_COLORBLIND_DARK if _RENDER_RUNTIME.is_dark else _PALETTE_COLORBLIND
+    else:
+        palette = _CORE_PALETTE
     if core_name.startswith("Core_"):
         tail = core_name[5:]
         if tail.isdigit():
-            return _CORE_PALETTE[int(tail) % len(_CORE_PALETTE)]
+            return palette[int(tail) % len(palette)]
     return "#AAAAAA"
 
 # Alpha-tint overlaid on task colours to indicate which core a segment ran on.

@@ -20,7 +20,12 @@ const PALETTE_COLORBLIND = [
   '#56B4E9', '#D55E00', '#F0E442', '#000000',
 ]
 
+// Same palette, black swapped for white — pure black is invisible against a
+// dark timeline/CPU-load background, so dark mode needs its own variant.
+const PALETTE_COLORBLIND_DARK = [...PALETTE_COLORBLIND.slice(0, -1), '#FFFFFF']
+
 let _colorblindActive = false
+let _darkModeActive = true
 
 /** Switch task palette to/from Okabe-Ito (desktop parity). */
 export function setColorblindMode(enabled) {
@@ -29,6 +34,15 @@ export function setColorblindMode(enabled) {
 
 export function isColorblindMode() {
   return _colorblindActive
+}
+
+/** Track the active theme so the colorblind palette can swap black/white. */
+export function setDarkMode(enabled) {
+  _darkModeActive = !!enabled
+}
+
+function _activeColorblindPalette() {
+  return _darkModeActive ? PALETTE_COLORBLIND_DARK : PALETTE_COLORBLIND
 }
 
 // Per-core header / dot colours.
@@ -254,7 +268,7 @@ export function taskColor(mergeKey, repr) {
     const v = Math.max(80, 130 - idx * 15)
     return `rgb(${v},${v},${v})`
   }
-  const palette = _colorblindActive ? PALETTE_COLORBLIND : PALETTE
+  const palette = _colorblindActive ? _activeColorblindPalette() : PALETTE
   const idx = crc32(mergeKey) % palette.length
   return palette[idx]
 }
@@ -274,7 +288,8 @@ export function coreTint(coreName) {
 export function coreColor(coreName) {
   if (coreName.startsWith('Core_')) {
     const tail = coreName.slice(5)
-    if (/^\d+$/.test(tail)) return CORE_PALETTE[parseInt(tail) % CORE_PALETTE.length]
+    const palette = _colorblindActive ? _activeColorblindPalette() : CORE_PALETTE
+    if (/^\d+$/.test(tail)) return palette[parseInt(tail) % palette.length]
   }
   return '#AAAAAA'
 }

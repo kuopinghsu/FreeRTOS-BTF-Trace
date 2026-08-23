@@ -60,11 +60,16 @@ export function computeCursorRangeStats(trace, cursors, decimals = 3) {
   return result
 }
 
-/** Compact status-bar line (desktop _status_range). */
-export function formatStatusRangeLine(stats) {
-  if (!stats) return null
+/**
+ * Compact status-bar Scope line (desktop _status_range), using the canonical
+ * "Scope" terminology: "Scope: Full Trace" with no cursor-defined range, or
+ * "Scope: C1\u2013C3 \u00b7 span" (+ optional min/max/avg) once a range is set.
+ */
+export function formatStatusRangeLine(stats, cursorLabel) {
+  if (!stats) return 'Scope: Full Trace'
+  const label = cursorLabel ? `Scope: ${cursorLabel} \u00b7 ${stats.span}` : `Scope: ${stats.span}`
   if (stats.dMin) {
-    return `Range: ${stats.span}  min ${stats.dMin}  max ${stats.dMax}  avg ${stats.dAvg}`
+    return `${label}  min ${stats.dMin}  max ${stats.dMax}  avg ${stats.dAvg}`
   }
-  return `Range: ${stats.span}`
+  return label
 }

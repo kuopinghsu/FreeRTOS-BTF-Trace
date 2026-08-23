@@ -235,7 +235,9 @@ const props = defineProps({
   migratedOnlyFilter: { type: Boolean, default: false },
   taskFilterKeys: { type: Array, default: null },
   taskFilterText: { type: String, default: '' },
+  coreFilterKeys: { type: Array, default: null },
   labelWidth: { type: Number, default: 160 },
+  colorblindSafe: { type: Boolean, default: false },
 })
 const emit = defineEmits(['clearSelection', 'viewportChange', 'toggleExpandAll'])
 
@@ -270,6 +272,14 @@ const filterOpts = computed(() => ({
   taskFilterKeys: props.taskFilterKeys,
   taskFilterText: props.taskFilterText,
 }))
+
+/** Cores narrowed by the active Core Filter (null = all cores). */
+const visibleCoreNames = computed(() => {
+  const all = props.trace?.coreNames || []
+  if (!props.coreFilterKeys?.length) return all
+  const set = new Set(props.coreFilterKeys)
+  return all.filter(c => set.has(c))
+})
 
 const filterActive = computed(() => coreViewTaskFilterActive(
   filterOpts.value.migratedOnlyFilter,
@@ -306,13 +316,15 @@ const filteredBins = computed(() => {
 
 const rows = computed(() => {
   void props.layoutRev
+  void props.colorblindSafe   // core colours swap palette on toggle
+  void props.darkMode         // colorblind palette swaps black/white on theme toggle
   const trace = props.trace
   if (!trace) return []
   const selectedTask = props.selectedTask
 
   // Highlighted / locked task → always show that task's usage per core.
   if (selectedTask) {
-    return (trace.coreNames || []).map(coreName => ({
+    return visibleCoreNames.value.map(coreName => ({
       kind: 'core',
       key: coreName,
       label: coreName,
@@ -330,6 +342,7 @@ const rows = computed(() => {
       filterOpts.value.migratedOnlyFilter,
       filterOpts.value.taskFilterKeys,
       filterOpts.value.taskFilterText,
+      props.coreFilterKeys,
     ).map(({ coreName }) => ({
       kind: 'core',
       key: coreName,
@@ -342,7 +355,7 @@ const rows = computed(() => {
     return [{ kind: 'total', key: 'total', label: 'CPU Load', color: '#4CAF50' }]
   }
 
-  return (trace.coreNames || []).map(coreName => ({
+  return visibleCoreNames.value.map(coreName => ({
     kind: 'core',
     key: coreName,
     label: coreName,

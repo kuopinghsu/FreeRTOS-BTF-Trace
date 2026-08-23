@@ -30,8 +30,8 @@ describe('statsPins', () => {
       assert.ok(STATS_PINNABLE_SECTIONS.includes(sid), sid)
     }
     assert.deepEqual(STATS_PINNABLE_SECTIONS.slice(0, 9), [
-      'cores', 'health', 'core_breakdown', 'concurrency',
-      'switch_overhead', 'tasks', 'migrations', 'core_pairs', 'affinity',
+      'anomalies', 'worst', 'patterns', 'response', 'task_health',
+      'cores', 'core_breakdown', 'concurrency', 'switch_overhead',
     ])
   })
 

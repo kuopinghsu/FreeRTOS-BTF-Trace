@@ -347,7 +347,7 @@ function firstTickOnOrAfter(timeStart, step, origin) {
  * @param {number}  yStart     Top Y coordinate of the first row (after ruler).
  * @returns {{ rows: Array, totalHeight: number }}
  */
-export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true, stiExpanded = new Set(), migratedOnlyFilter = false, taskFilterKeys = null, taskFilterText = '') {
+export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true, stiExpanded = new Set(), migratedOnlyFilter = false, taskFilterKeys = null, taskFilterText = '', coreFilterKeys = null) {
   const rows = []
   let y = yStart
   const stiFilterQ = normalizeTaskFilterText(taskFilterText)
@@ -364,7 +364,7 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
     }
   } else {
     // Core view
-    const cores = filteredCoreViewTasks(trace, migratedOnlyFilter, taskFilterKeys, taskFilterText)
+    const cores = filteredCoreViewTasks(trace, migratedOnlyFilter, taskFilterKeys, taskFilterText, coreFilterKeys)
     for (const { coreName, tasks } of cores) {
       const cc = coreColor(coreName)
       rows.push({ type: 'core', key: coreName, label: coreName, color: cc, y, stripeIdx: 0 })
@@ -846,7 +846,11 @@ function queryPaintIndices(trace, wasmKind, wasmKey, ld, timeStart, timeEnd, nsP
     : accelVisibleSegIndices(handles, ld, timeStart, timeEnd, nsPerPx, lodTpp, ultraTpp)
   if (!q.segs?.length || q.from > q.to) return { segs: q.segs || [], indices: null }
   const visibleCount = q.to - q.from + 1
-  if (visibleCount <= indexCap) {
+  // Reduce against the actual draw budget (not indexCap) — the paint loop
+  // below stops once it hits budgetMax, so returning more indices than that
+  // just gets silently truncated left-to-right, dropping the right side of
+  // the row instead of sampling evenly across the whole visible width.
+  if (visibleCount <= budgetMax) {
     const indices = new Array(visibleCount)
     for (let i = q.from, j = 0; i <= q.to; i++, j++) indices[j] = i
     return { segs: q.segs, indices }
@@ -1677,12 +1681,13 @@ function _drawCursorDeltaBadgeV(ctx, text, labelY, color, canvasH, headerH) {
   ctx.restore()
 }
 
-export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, canvasH, _darkMode, decimals = 3) {
+export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, canvasH, darkMode, decimals = 3) {
   if (!cursors || cursors.length === 0 || !trace) return
   const sorted = cursorSortedPlaced(cursors)
   if (!sorted.length) return
 
   ctx.save()
+  const haloStyle = darkMode ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.65)'
 
   // Delta badges get their own row, below every cursor's own badge row -
   // otherwise when two cursors are close together on screen (a common case:
@@ -1700,6 +1705,14 @@ export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, ca
     ctx.textAlign = 'left'
 
     const color = CURSOR_COLORS[slotIndex % CURSOR_COLORS.length]
+    // Halo: a solid, theme-contrasting stroke under the dashed colour line so
+    // the marker stays visible over task segments of a similar hue.
+    ctx.strokeStyle = haloStyle
+    ctx.lineWidth = 3
+    ctx.beginPath()
+    ctx.moveTo(x + 0.5, 0)
+    ctx.lineTo(x + 0.5, canvasH)
+    ctx.stroke()
     ctx.strokeStyle = color
     ctx.lineWidth = 1.5
     ctx.setLineDash([4, 3])
@@ -2220,7 +2233,7 @@ export function drawMarksHorizontal(ctx, marks, trace, timeStart, pxPerNs, canva
  * @param {Set}    stiExpanded   Set of expanded STI channel names
  * @returns {{ cols: Array, totalWidth: number }}
  */
-export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSti = true, stiExpanded = new Set(), migratedOnlyFilter = false, taskFilterKeys = null, taskFilterText = '') {
+export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSti = true, stiExpanded = new Set(), migratedOnlyFilter = false, taskFilterKeys = null, taskFilterText = '', coreFilterKeys = null) {
   const cols = []
   let rawIdx = 0
   let xAcc   = 0  // accumulated pixel offset from RULER_W (before scrollX)
@@ -2242,7 +2255,7 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
     }
   } else {
     // Core view
-    const cores = filteredCoreViewTasks(trace, migratedOnlyFilter, taskFilterKeys, taskFilterText)
+    const cores = filteredCoreViewTasks(trace, migratedOnlyFilter, taskFilterKeys, taskFilterText, coreFilterKeys)
     for (const { coreName, tasks } of cores) {
       const cc = coreColor(coreName)
       const x = RULER_W + xAcc - scrollX
@@ -2904,12 +2917,13 @@ function drawStiColumnWaveform(ctx, trace, col, colW, timeStart, timeEnd, pxPerN
 
 // ---- Cursors (vertical mode – horizontal lines) ----------------------------
 
-export function drawCursorsVertical(ctx, cursors, trace, timeStart, pxPerNs, canvasW, canvasH, headerH, _darkMode, decimals = 3) {
+export function drawCursorsVertical(ctx, cursors, trace, timeStart, pxPerNs, canvasW, canvasH, headerH, darkMode, decimals = 3) {
   if (!cursors || cursors.length === 0 || !trace) return
   const sorted = cursorSortedPlaced(cursors)
   if (!sorted.length) return
 
   ctx.save()
+  const haloStyle = darkMode ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.65)'
 
   for (let order = 0; order < sorted.length; order++) {
     const { t, slotIndex } = sorted[order]
@@ -2921,6 +2935,12 @@ export function drawCursorsVertical(ctx, cursors, trace, timeStart, pxPerNs, can
     ctx.textAlign = 'left'
 
     const color = CURSOR_COLORS[slotIndex % CURSOR_COLORS.length]
+    ctx.strokeStyle = haloStyle
+    ctx.lineWidth = 3
+    ctx.beginPath()
+    ctx.moveTo(0, y + 0.5)
+    ctx.lineTo(canvasW, y + 0.5)
+    ctx.stroke()
     ctx.strokeStyle = color
     ctx.lineWidth = 1.5
     ctx.setLineDash([4, 3])

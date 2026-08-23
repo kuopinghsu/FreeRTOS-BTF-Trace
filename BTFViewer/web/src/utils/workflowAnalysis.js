@@ -32,6 +32,30 @@ const PAIR_COUNT_MIN = 5
 const WCET_MAX_AVG_RATIO = 5.0
 const MIG_BURST_RATE = 10.0
 
+/**
+ * Analysis Finding id -> Statistics section id (Step-1 item 7: non-AI
+ * "Investigate" routes straight to the relevant Statistics section instead
+ * of requiring the AI Assistant).
+ */
+export const FINDING_SECTION_MAP = Object.freeze({
+  load_imbalance: 'cores',
+  load_balance_ok: 'cores',
+  load_balance_moderate: 'cores',
+  top_cpu: 'tasks',
+  exec_max: 'exec',
+  blocking: 'block',
+  priority_inversion: 'priority',
+  thrashing: 'migrations',
+  hot_pairs: 'core_pairs',
+  deadlines: 'deadline',
+  tick_health: 'health',
+  missed_ticks: 'health',
+  sync_bounce: 'sync',
+  sync_issues: 'sync',
+  migration_burst_anomaly: 'migrations',
+  wcet_anomaly: 'exec',
+})
+
 function finding(severity, title, text, extra = {}) {
   return {
     severity,

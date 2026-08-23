@@ -306,6 +306,7 @@
             @explain-region="queryExplainRegionWithAi"
             @ask-ai-event="queryAskAiEvent"
             :ai-enabled="appSettings.aiEnabled !== false"
+            :colorblind-safe="appSettings.colorblindSafe"
           />
         </div>
 
@@ -337,7 +338,9 @@
           :migrated-only-filter="timelineOptions.migratedOnlyFilter"
           :task-filter-keys="timelineOptions.taskFilterKeys"
           :task-filter-text="timelineOptions.taskFilterText"
+          :core-filter-keys="timelineOptions.coreFilterKeys"
           :label-width="appSettings.labelWidth"
+          :colorblind-safe="appSettings.colorblindSafe"
           @clear-selection="clearCpuLoadSelection"
           @viewport-change="onCpuLoadViewportChange"
           @toggle-expand-all="onCpuLoadToggleExpandAll"
@@ -538,15 +541,21 @@
               <LegendPanel
                 :trace="trace"
                 :highlight-key="timelineOptions.highlightKey"
+                :selected-key="pinnedHighlightKey"
                 :task-filter-keys="timelineOptions.taskFilterKeys"
                 :task-filter-text="timelineOptions.taskFilterText"
                 :migrated-only-filter="timelineOptions.migratedOnlyFilter"
                 :heatmap-filter-label="timelineOptions.heatmapFilterLabel"
+                :view-mode="timelineOptions.viewMode"
+                :core-filter-keys="timelineOptions.coreFilterKeys"
+                :dark-mode="timelineOptions.darkMode"
+                :colorblind-safe="appSettings.colorblindSafe"
                 @highlight-change="(k) => { timelineOptions.highlightKey = k ?? pinnedHighlightKey; scheduleRender() }"
                 @highlight-click="onHighlightClick"
                 @migrated-filter-change="onMigratedFilterChange"
                 @filter-change="onTaskFilterChange"
                 @clear-task-filter="clearHeatmapTaskFilter"
+                @core-filter-change="onCoreFilterChange"
               />
             </div>
           </div>
@@ -569,6 +578,7 @@
                 :section-collapsed-state="appSettings.statsSectionCollapsed"
                 :section-pins="appSettings.statsPinnedSections || []"
                 :section-order="appSettings.statsSectionOrder || []"
+                :active-filter-label="activeFilterSummaryLabel"
                 @update:open-plot="onOpenPlotChange"
                 @update:section-heights="onSectionHeightsChange"
                 @update:scope-to-cursors="onStatsScopeChange"
@@ -709,7 +719,7 @@
               </div><div>Find next / previous match</div>
               <div class="k">
                 Ctrl+R
-              </div><div>Zoom to cursor range</div>
+              </div><div>Fit Cursors — zoom to the C1–Cn Scope</div>
               <div class="k">
                 Ctrl+G
               </div><div>Jump to time</div>
@@ -730,7 +740,7 @@
               </div><div>Previous trace tab</div>
               <div class="k">
                 F
-              </div><div>Fit timeline to trace</div>
+              </div><div>Fit Trace — zoom to show the entire trace</div>
               <div class="k">
                 G
               </div><div>Toggle grid</div>
@@ -751,7 +761,7 @@
               </div><div>Command palette</div>
               <div class="k">
                 Ctrl+0
-              </div><div>Fit timeline to trace</div>
+              </div><div>Fit Trace — zoom to show the entire trace</div>
               <div class="k">
                 Ctrl+B
               </div><div>Add bookmark at current position</div>
@@ -837,7 +847,7 @@
               </div><div>Copy screenshot</div>
               <div class="k">
                 Double-click ruler
-              </div><div>Fit timeline</div>
+              </div><div>Fit Trace</div>
             </div>
           </div>
 
@@ -1026,6 +1036,7 @@
       @close="analysisOpen = false"
       @query-ai="queryAnalysisWithAi"
       @apply-scope="onApplyFindingScope"
+      @investigate="onInvestigateFinding"
       @save-recipe="onSaveAnalysisRecipe"
       @save-story="onSaveAnalysisStory"
     />
@@ -1085,6 +1096,37 @@
           :title="taskInspectorText"
         >{{ taskInspectorText }}</span>
 
+        <div
+          v-if="activeFilterChips.length"
+          class="status-filters"
+        >
+          <span
+            v-for="chip in activeFilterChips"
+            :key="chip.key"
+            class="status-filter-chip"
+          >
+            <span
+              class="status-filter-chip-label"
+              :title="chip.label"
+            >{{ chip.label }}</span>
+            <button
+              type="button"
+              class="status-filter-clear"
+              title="Clear this filter"
+              @click="chip.clear()"
+            >×</button>
+          </span>
+          <button
+            v-if="activeFilterChips.length > 1"
+            type="button"
+            class="status-filter-clear-all"
+            title="Clear all active Filters"
+            @click="activeFilterChips.forEach(c => c.clear())"
+          >
+            Clear All
+          </button>
+        </div>
+
         <CursorBar
           class="status-cursor-bar"
           :cursors="cursors"
@@ -1096,7 +1138,6 @@
         />
 
         <span
-          v-if="statusRangeLine"
           class="status-range"
           :title="statusRangeLine"
         >{{ statusRangeLine }}</span>
@@ -1170,8 +1211,8 @@ import SettingsDialog from './components/SettingsDialog.vue'
 import DomSelect from './components/DomSelect.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
 import { zoomStatusFromViewport } from './utils/timeFormat.js'
-import { taskDisplayName, taskMergeKey, setColorblindMode } from './utils/colors.js'
-import { taskPassesRowFilter, rawTaskNameMatchesTextFilter, normalizeTaskFilterText } from './utils/taskFilter.js'
+import { taskDisplayName, taskMergeKey, setColorblindMode, setDarkMode } from './utils/colors.js'
+import { taskPassesRowFilter, rawTaskNameMatchesTextFilter, normalizeTaskFilterText, coreFilterActive } from './utils/taskFilter.js'
 import {
   AI_TOOL_ADD_ANNOTATION,
   AI_TOOL_ANALYZE_TRACES,
@@ -1332,6 +1373,7 @@ import { useTraceTabs } from './composables/useTraceTabs.js'
 import { loadSession, saveSession, buildSessionSnapshot, isRestorableViewport, applySavedLayout, applyTabState, mergeLegacyTabFilters } from './utils/sessionStore.js'
 import { putTrace, getTrace, pruneTraces } from './utils/traceCache.js'
 import { computeCursorRangeStats, formatStatusRangeLine } from './utils/rangeStats.js'
+import { cursorSortedPlaced } from './utils/cursorAnalysis.js'
 import { createUndoStack } from './utils/undoStack.js'
 import {
   buildPortableSession, parsePortableSession, applyPortableSession, downloadPortableSession,
@@ -1496,6 +1538,7 @@ function autofitCpuLoadPaneHeight() {
       migratedOnlyFilter: timelineOptions.migratedOnlyFilter,
       taskFilterKeys: timelineOptions.taskFilterKeys,
       taskFilterText: timelineOptions.taskFilterText,
+      coreFilterKeys: timelineOptions.coreFilterKeys,
     },
   )
 }
@@ -2105,10 +2148,15 @@ const timelineOptions = reactive({
   taskFilterKeys:     null,
   taskFilterText:     '',
   heatmapFilterLabel: null,
+  coreFilterKeys:     null,
   lockedTaskKey:   null,
   showHoverHighlight: HOVER_HIGHLIGHT,
   layoutRev:       0,
 })
+
+// Keep colors.js's dark-mode tracking in sync so the colorblind palette can
+// swap its black entry for white (pure black is invisible on a dark bg).
+watch(() => timelineOptions.darkMode, (v) => setDarkMode(v), { immediate: true })
 
 function tabUndoStack(tab = activeTab.value) {
   if (!tab) return null
@@ -2252,6 +2300,7 @@ function saveFiltersToActiveTab(tab = activeTab.value) {
   tab.migratedOnlyFilter = !!timelineOptions.migratedOnlyFilter
   tab.taskFilterKeys = timelineOptions.taskFilterKeys ?? null
   tab.heatmapFilterLabel = timelineOptions.heatmapFilterLabel ?? null
+  tab.coreFilterKeys = timelineOptions.coreFilterKeys ?? null
 }
 
 function syncFiltersFromTab(tab) {
@@ -2259,6 +2308,7 @@ function syncFiltersFromTab(tab) {
   timelineOptions.migratedOnlyFilter = !!tab?.migratedOnlyFilter
   timelineOptions.taskFilterKeys = tab?.taskFilterKeys ?? null
   timelineOptions.heatmapFilterLabel = tab?.heatmapFilterLabel ?? null
+  timelineOptions.coreFilterKeys = tab?.coreFilterKeys ?? null
 }
 
 /** Saved per-trace state from localStorage (restored when trace opens / session reload). */
@@ -2370,6 +2420,10 @@ function cycleHighlightedSegment(forward) {
     timelineOptions.migratedOnlyFilter, timelineOptions.taskFilterKeys,
     timelineOptions.taskFilterText,
   ))
+  if (isCoreView && timelineOptions.coreFilterKeys?.length) {
+    const coreSet = new Set(timelineOptions.coreFilterKeys)
+    navSegs = navSegs.filter(s => coreSet.has(s.core))
+  }
   if (!navSegs || navSegs.length === 0) return
 
   let idx = -1
@@ -2502,6 +2556,7 @@ watch(
     timelineOptions.migratedOnlyFilter,
     timelineOptions.taskFilterKeys,
     timelineOptions.taskFilterText,
+    timelineOptions.coreFilterKeys,
   ],
   () => nextTick(() => autofitCpuLoadPaneHeight()),
 )
@@ -2526,6 +2581,7 @@ watch(
     taskFilterKeys: timelineOptions.taskFilterKeys,
     heatmapFilterLabel: timelineOptions.heatmapFilterLabel,
     migratedOnlyFilter: timelineOptions.migratedOnlyFilter,
+    coreFilterKeys: timelineOptions.coreFilterKeys,
   }),
   scheduleSessionSave,
 )
@@ -2585,8 +2641,48 @@ watch(paletteQuery, () => { paletteIndex.value = 0 })
 const cursorRangeStats = computed(() =>
   computeCursorRangeStats(trace.value, cursors.value, appSettings.timeDecimals))
 
+/** "C1–C3" label for the current cursor-defined Scope (null when Scope is Full Trace). */
+const scopeCursorLabel = computed(() => {
+  const sorted = cursorSortedPlaced(cursors.value)
+  if (sorted.length < 2) return null
+  const first = sorted[0].slotIndex + 1
+  const last = sorted[sorted.length - 1].slotIndex + 1
+  return first === last ? `C${first}` : `C${first}–C${last}`
+})
+
 const statusRangeLine = computed(() =>
-  formatStatusRangeLine(cursorRangeStats.value))
+  formatStatusRangeLine(cursorRangeStats.value, scopeCursorLabel.value))
+
+/** Active analytical Filters shown as removable chips in the status bar (Step-1 item 3). */
+const activeFilterChips = computed(() => {
+  const chips = []
+  if (timelineOptions.taskFilterKeys?.length) {
+    chips.push({
+      key: 'migration',
+      label: `Migration: ${timelineOptions.heatmapFilterLabel || `${timelineOptions.taskFilterKeys.length} tasks`}`,
+      clear: clearHeatmapTaskFilter,
+    })
+  }
+  if (timelineOptions.migratedOnlyFilter) {
+    chips.push({
+      key: 'task',
+      label: 'Task: Migrated only',
+      clear: () => onMigratedFilterChange(false),
+    })
+  }
+  if (coreFilterActive(timelineOptions.coreFilterKeys, trace.value)) {
+    const total = trace.value?.coreNames?.length ?? 0
+    chips.push({
+      key: 'core',
+      label: `Core: ${timelineOptions.coreFilterKeys.length} of ${total}`,
+      clear: clearCoreFilter,
+    })
+  }
+  return chips
+})
+
+const activeFilterSummaryLabel = computed(() =>
+  activeFilterChips.value.length ? activeFilterChips.value.map(c => c.label).join(', ') : null)
 
 const zoomStatus = computed(() => zoomStatusFromViewport(
   timelineViewport.value,
@@ -2795,7 +2891,7 @@ async function loadOneTrace({ text, name }) {
       await parseTraceOnMainThread(text, name)
     } catch (err) {
       console.error('BTF parse error:', err)
-      showToast('Failed to parse BTF file: ' + err.message, 'error')
+      showToast('Failed to parse the trace file — check that it is a valid .btf/.xml trace and try again.', 'error')
       loading.value = false
     }
     return
@@ -2827,7 +2923,7 @@ async function loadOneTrace({ text, name }) {
         loadingMsg.value = 'Parsing on main thread…'
         parseTraceOnMainThread(text, name).then(() => resolve()).catch((err) => {
           console.error('BTF main-thread fallback failed:', err)
-          showToast('Failed to parse BTF file: ' + (err?.message || data.message), 'error')
+          showToast('Failed to parse the trace file — check that it is a valid .btf/.xml trace and try again.', 'error')
           loading.value = false
           resolve()
         })
@@ -2842,7 +2938,7 @@ async function loadOneTrace({ text, name }) {
       loadingMsg.value = 'Parsing on main thread…'
       parseTraceOnMainThread(text, name).then(() => resolve()).catch((err) => {
         console.error('BTF main-thread fallback failed:', err)
-        showToast('Failed to parse BTF file: ' + (err?.message || e.message), 'error')
+        showToast('Failed to parse the trace file — check that it is a valid .btf/.xml trace and try again.', 'error')
         loading.value = false
         resolve()
       })
@@ -3224,6 +3320,16 @@ function onApplyFindingScope(finding) {
   if (scope) applyExploreRange(scope)
 }
 
+/** Step-1 item 7: plain, non-AI Investigate — scope the finding then jump to its Statistics section. */
+async function onInvestigateFinding({ finding, sectionId } = {}) {
+  if (!finding || !sectionId) return
+  onApplyFindingScope(finding)
+  analysisOpen.value = false
+  rightPanelTab.value = 'stats'
+  await nextTick()
+  statsPanelRef.value?.applyDemoSections?.({ id: sectionId, expand: true, scroll: 'section' })
+}
+
 function onSaveAnalysisRecipe() {
   const tpl = newUserInvestigationTemplate('Analysis recipe', [
     'investigate', 'correlate', 'generate_report',
@@ -3312,7 +3418,10 @@ async function queryValidateExperimentWithAi(payload) {
 function buildAiContext() {
   const tr = trace.value
   if (!tr) {
-    return { findingsText: 'No trace loaded.', scope: '', span: '', cores: '', cursors: [] }
+    return {
+      findingsText: 'No trace loaded.', scope: '', span: '', cores: '', cursors: [],
+      filters: [], selection: null,
+    }
   }
   const scopeOn = activeTab.value?.scopeToCursors !== false
   const range = getStatsRange(cursors.value, scopeOn)
@@ -3331,6 +3440,10 @@ function buildAiContext() {
     span,
     cores: tr.coreNames?.length ?? tr.cores?.length ?? 0,
     cursors: (cursors.value || []).filter(c => c != null),
+    // Reserved for Step 2 AI context (item 3/4): same Filter/Selection
+    // representation shown in the status bar and Legend.
+    filters: activeFilterChips.value.map(c => c.label),
+    selection: pinnedHighlightKey.value || null,
   }
 }
 
@@ -4478,7 +4591,8 @@ function onExportPerfetto() {
       'info',
     )
   } catch (err) {
-    showToast(`Perfetto export failed: ${err?.message || err}`, 'error')
+    console.error('Perfetto export failed:', err)
+    showToast('Perfetto export failed \u2014 try again, or export a Statistics report instead.', 'error')
   }
 }
 
@@ -4720,6 +4834,29 @@ function onTaskFilterChange(text) {
   }, 150)
 }
 
+/** Core Filter (Legend "Cores" list, Core View only) — narrows Scope to a subset of cores. */
+function onCoreFilterChange(coreNames) {
+  const tr = trace.value
+  const all = tr?.coreNames || []
+  const keys = Array.isArray(coreNames) ? coreNames : []
+  // Selecting every core is equivalent to no filter — store null (Step-1 "never silently
+  // convert" rule doesn't apply here since this is the Filter's own reset, not a different
+  // concept taking it over).
+  timelineOptions.coreFilterKeys = (keys.length && keys.length < all.length) ? keys : null
+  saveFiltersToActiveTab()
+  timelineOptions.layoutRev += 1
+  scheduleRender()
+  autofitCpuLoadPaneHeight()
+}
+
+function clearCoreFilter() {
+  timelineOptions.coreFilterKeys = null
+  saveFiltersToActiveTab()
+  timelineOptions.layoutRev += 1
+  scheduleRender()
+  autofitCpuLoadPaneHeight()
+}
+
 function _captureInspectorRestoreSnapshot() {
   syncTimelineViewport()
   if (activeTab.value) {
@@ -4856,7 +4993,7 @@ function onCorridorSpotlight(payload) {
 
   const n = payload.mergeKeys?.length || 0
   showToast(
-    `Spotlight: ${payload.pairLabel} · ${n} task${n === 1 ? '' : 's'}. Toolbar or Legend → Clear to show all.`,
+    `Migration Filter: ${payload.pairLabel} · ${n} task${n === 1 ? '' : 's'}. Toolbar or Legend → Clear to show all.`,
     'info',
   )
 }
@@ -5372,6 +5509,33 @@ onBeforeUnmount(() => {
 })
 
 // ---- Marks (bookmarks + annotations) -------------------------------------
+const MARK_TOGGLE_TOLERANCE_PX = 8   // matches desktop's cursor_drag_threshold
+
+/** Pixel position of *ns* in the current viewport, or null if unknown. */
+function _nsToViewportPx(ns) {
+  const vp = timelinePanelRef.value?.getViewport?.()
+  if (!vp) return null
+  const span = vp.timeEnd - vp.timeStart
+  if (!(span > 0)) return null
+  const horiz = (timelineOptions.orientation || 'h') === 'h'
+  const px = horiz ? (vp.canvasW || 1) : (vp.canvasH || 1)
+  return (ns - vp.timeStart) * (px / span)
+}
+
+/** Remove a bookmark/annotation already near *ns* instead of stacking a
+ * duplicate — matches the cursor 'C' toggle (press again to clear).
+ * Returns true if an existing mark was removed. */
+function _toggleMarkAt(type, ns) {
+  const px = _nsToViewportPx(ns)
+  if (px == null) return false
+  const hit = marks.value.find(m => m.type === type
+    && Math.abs((_nsToViewportPx(m.ns) ?? Infinity) - px) <= MARK_TOGGLE_TOLERANCE_PX)
+  if (!hit) return false
+  pushUndoSnapshot()
+  marks.value = marks.value.filter(m => m.id !== hit.id)
+  return true
+}
+
 function onAddMark() {
   // Priority: mouse hover position → last-moved/placed cursor → viewport center
   if (!trace.value) return
@@ -5379,6 +5543,7 @@ function onAddMark() {
   const cursorNs = timelinePanelRef.value?.getLastActiveCursorTime?.() ?? null
   const ns = hoverNs ?? cursorNs ?? (timelinePanelRef.value?.getViewportCenter?.()
     ?? (trace.value.timeMin + (trace.value.timeMax - trace.value.timeMin) / 2))
+  if (_toggleMarkAt('bookmark', ns)) return
   addMarkAtNs(ns, 'bookmark')
 }
 
@@ -5388,6 +5553,7 @@ function onAddAnnotationAtCenter() {
   const cursorNs = timelinePanelRef.value?.getLastActiveCursorTime?.() ?? null
   const ns = hoverNs ?? cursorNs ?? (timelinePanelRef.value?.getViewportCenter?.()
     ?? (trace.value.timeMin + (trace.value.timeMax - trace.value.timeMin) / 2))
+  if (_toggleMarkAt('annotation', ns)) return
   addMarkAtNs(ns, 'annotation')
 }
 
@@ -6496,6 +6662,68 @@ body.col-resizing * {
   color: var(--fg-dim);
   font-size: 10px;
   max-width: 36%;
+}
+
+.status-filters {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.status-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  color: var(--fg);
+  background: var(--tb-btn-active);
+  white-space: nowrap;
+  font-size: 10px;
+  min-width: 0;
+}
+
+.status-filter-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 22vw;
+}
+
+.status-filter-clear {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  padding: 0;
+  opacity: 0.75;
+}
+
+.status-filter-clear:hover {
+  opacity: 1;
+}
+
+.status-filter-clear-all {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-dim);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.status-filter-clear-all:hover {
+  color: var(--fg);
+  background: var(--tb-btn-hover);
 }
 
 .status-cursor-bar {

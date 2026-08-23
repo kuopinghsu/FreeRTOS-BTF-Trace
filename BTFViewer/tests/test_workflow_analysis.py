@@ -296,7 +296,7 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         )
         self.assertEqual(btn.styleSheet(), next(
             b for b in dlg.findChildren(QPushButton)
-            if "Investigate" in b.text().replace("&", "")
+            if "Investigate…" in b.text().replace("&", "")
         ).styleSheet())
         acts = {a.text().replace("&", ""): a for a in btn._explain_menu.actions()}
         self.assertIn("Quick", acts)

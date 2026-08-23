@@ -236,7 +236,8 @@ def _relax_widget_tree(root: QWidget) -> None:
     for w in (root, *root.findChildren(QWidget)):
         if isinstance(w, _StatsSectionGrip) or _in_legend_panel(w):
             continue
-        if w.objectName() in ("stats_scope_action", "panel_seam_resizer"):
+        if w.objectName() in ("stats_scope_action", "panel_seam_resizer",
+                              "cursors_clear_all_btn"):
             continue
         # AI header actions: Ignored + row stretch collapses them to 0 width.
         if _in_ai_actions_bar(w):
@@ -1985,22 +1986,37 @@ class TimelineView(QGraphicsView):
         else:
             _HoverCursor.show(shape)
 
+    def _place_or_remove_cursor(self, ns: int) -> None:
+        """Place a cursor at *ns*, or remove one already there instead of
+        stacking a duplicate — matches direct timeline clicks and the web
+        viewer's 'C' shortcut (press again at the same spot to clear it)."""
+        coord = self._scene.ns_to_scene_coord(ns)
+        for _ci, _cns in enumerate(self._scene._cursor_times):
+            if abs(self._scene.ns_to_scene_coord(_cns) - coord) <= self._cursor_drag_threshold:
+                self.pre_change.emit()
+                self._scene.remove_cursor_at_index(_ci)
+                self.cursors_changed.emit(self._scene.cursor_times())
+                return
+        self.pre_change.emit()
+        self._scene.add_cursor(ns)
+        self.cursors_changed.emit(self._scene.cursor_times())
+
     def add_cursor_at_view_center(self) -> None:
         vp = self.viewport().rect()
         scene_pt = self.mapToScene(vp.center())
         coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
         ns = self._scene.scene_to_ns(coord)
-        self.pre_change.emit()
-        self._scene.add_cursor(ns)
-        self.cursors_changed.emit(self._scene.cursor_times())
+        self._place_or_remove_cursor(ns)
 
     def add_cursor_at_hover_or_center(self) -> None:
-        """Place a cursor at the mouse-pointer position, falling back to viewport centre."""
+        """Place a cursor at the mouse-pointer position, falling back to viewport centre.
+
+        Pressing again at (approximately) the same spot removes that cursor
+        instead of stacking another one on top of it.
+        """
         hover_ns = self._scene._hover_ns
         if hover_ns is not None:
-            self.pre_change.emit()
-            self._scene.add_cursor(hover_ns)
-            self.cursors_changed.emit(self._scene.cursor_times())
+            self._place_or_remove_cursor(hover_ns)
         else:
             self.add_cursor_at_view_center()
 

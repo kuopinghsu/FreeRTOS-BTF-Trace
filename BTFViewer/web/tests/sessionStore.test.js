@@ -20,7 +20,13 @@ describe('sessionStore filters', () => {
       migratedOnlyFilter: true,
       taskFilterKeys: null,
       heatmapFilterLabel: null,
+      coreFilterKeys: null,
     })
+  })
+
+  it('snapshotTabFilters persists coreFilterKeys (not ephemeral like the heatmap filter)', () => {
+    const snap = snapshotTabFilters({ coreFilterKeys: ['Core_0', 'Core_2'] })
+    assert.deepEqual(snap.coreFilterKeys, ['Core_0', 'Core_2'])
   })
 
   it('sanitizeTabFilters drops heatmap spotlight keys', () => {
@@ -32,6 +38,11 @@ describe('sessionStore filters', () => {
     assert.equal(out.taskFilterKeys, null)
     assert.equal(out.heatmapFilterLabel, null)
     assert.equal(out.taskFilterText, 'x')
+  })
+
+  it('sanitizeTabFilters keeps coreFilterKeys', () => {
+    const out = sanitizeTabFilters({ coreFilterKeys: ['Core_1'] })
+    assert.deepEqual(out.coreFilterKeys, ['Core_1'])
   })
 
   it('sanitizeTabFilters returns null for non-objects', () => {

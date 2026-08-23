@@ -286,7 +286,7 @@
         <button
           class="tb-btn"
           data-demo-target="toolbar_fit"
-          title="Fit entire trace to window (Ctrl+0)"
+          title="Fit Trace — zoom to show the entire trace (Ctrl+0)"
           @click="emit('fit')"
         >
           <svg
@@ -307,7 +307,7 @@
           class="tb-btn"
           :class="{ disabled: !rangeEnabled }"
           :disabled="!rangeEnabled"
-          title="Zoom view to fit between cursor C1 and last cursor (Ctrl+R)"
+          title="Fit Cursors — zoom to the C1–Cn cursor Scope (Ctrl+R)"
           @click="rangeEnabled && emit('zoomRange')"
         >
           <svg
@@ -320,25 +320,6 @@
             <path
               fill-rule="evenodd"
               :d="IC.expand"
-            />
-          </svg>
-        </button>
-        <button
-          v-if="traceInfo"
-          class="tb-btn"
-          title="Find task, annotation, or migration (Ctrl+F)"
-          @click="emit('showFind')"
-        >
-          <svg
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path
-              fill-rule="evenodd"
-              :d="IC.find"
             />
           </svg>
         </button>
@@ -355,7 +336,7 @@
       </div>
     </Teleport>
 
-    <!-- g4: View — Task · Core · Expand All · Load · Heatmap · All · Analysis · Compare -->
+    <!-- g4: View Mode — Task · Core · Expand All · Load -->
     <Teleport
       :to="overflowPanelEl ?? 'body'"
       :disabled="!overflow.g4"
@@ -455,6 +436,38 @@
           </svg>
           <span class="tb-label">Load</span>
         </button>
+        <div class="tb-sep" />
+      </div>
+    </Teleport>
+
+    <!-- g4b: Investigation entry points — Find · Heatmap · All · Analysis · Compare -->
+    <Teleport
+      :to="overflowPanelEl ?? 'body'"
+      :disabled="!overflow.g4b"
+    >
+      <div
+        :ref="el => setGroupRef('g4b', el)"
+        class="tb-group"
+      >
+        <button
+          v-if="traceInfo"
+          class="tb-btn"
+          title="Find task, annotation, or migration (Ctrl+F)"
+          @click="emit('showFind')"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            width="16"
+            height="16"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              fill-rule="evenodd"
+              :d="IC.find"
+            />
+          </svg>
+        </button>
 
         <button
           class="tb-btn"
@@ -481,7 +494,7 @@
         <button
           v-if="taskFilterActive"
           class="tb-btn active tb-btn-labeled"
-          title="Clear heatmap task filter and show all tasks"
+          title="Clear Migration Filter and show all tasks"
           @click="emit('clearTaskFilter')"
         >
           <svg
@@ -544,7 +557,9 @@
           class="tb-btn tb-btn-labeled"
           :class="{ disabled: !compareEnabled }"
           :disabled="!compareEnabled"
-          title="Trace Compare — summary, top tasks, and core migrations between two open trace tabs"
+          :title="compareEnabled
+            ? 'Trace Compare — summary, top tasks, and core migrations between two open trace tabs'
+            : 'Open at least two traces to compare'"
           @click="compareEnabled && emit('showCompare')"
         >
           <svg
@@ -875,7 +890,7 @@ const overflowBtnEl = ref(null)
 const overflowPanelEl = ref(null)
 const overflowMenuOpen = ref(false)
 
-const GROUP_ORDER = ['g1', 'g2', 'g3', 'g4', 'g5', 'g6']
+const GROUP_ORDER = ['g1', 'g2', 'g3', 'g4', 'g4b', 'g5', 'g6']
 const overflow = reactive(Object.fromEntries(GROUP_ORDER.map(k => [k, false])))
 const anyOverflow = computed(() => GROUP_ORDER.some(k => overflow[k]))
 

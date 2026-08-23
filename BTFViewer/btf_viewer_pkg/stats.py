@@ -726,11 +726,13 @@ class _LegendTaskRow(QWidget):
 class _LegendWidget(QWidget):
     """Compact scrollable colour legend with click -> timeline highlight."""
 
-    task_clicked     = Signal(str)   # click: task merge key
+    task_clicked     = Signal(str)   # click: task merge key (Selection)
+    task_hovered     = Signal(object)  # hover: task merge key or None (Highlight)
     cancel_highlight = Signal()      # click on background -> cancel highlight
     filter_changed   = Signal(str)   # search text changed
     migrated_filter_changed = Signal(bool)
     clear_heatmap_filter = Signal()
+    core_filter_changed = Signal(list)   # Core Filter (Core View only): [] = no filter
 
     @staticmethod
     def _swatch_icon(color: QColor, is_dark: bool) -> QIcon:
@@ -765,6 +767,9 @@ class _LegendWidget(QWidget):
         self._heatmap_filter_label: Optional[str] = None
         self._locked_task: Optional[str] = None
         self._locked_bg = QBrush(QColor(255, 215, 0, 45))
+        self._view_mode: str = "task"
+        self._core_filter_keys: Optional[set] = None
+        self._core_checks: Dict[str, QCheckBox] = {}
         self._search = QLineEdit()
         self._search.setPlaceholderText("Filter tasks...")
         self._sync_search_theme()
@@ -791,7 +796,7 @@ class _LegendWidget(QWidget):
         self._heatmap_banner_label.setStyleSheet("color:#5B9BD5; font-size:11px;")
         hb.addWidget(self._heatmap_banner_label, 1)
         self._heatmap_clear_btn = QPushButton("Clear")
-        self._heatmap_clear_btn.setToolTip("Show all tasks (clear heatmap filter)")
+        self._heatmap_clear_btn.setToolTip("Show all tasks (clear Migration Filter)")
         self._heatmap_clear_btn.clicked.connect(self.clear_heatmap_filter.emit)
         hb.addWidget(self._heatmap_clear_btn)
         self._heatmap_banner.setVisible(False)
@@ -818,12 +823,19 @@ class _LegendWidget(QWidget):
         # QListWidget::item QSS is set app-wide; pin icon size + padding here.
         self._task_list.setIconSize(QSize(14, 14))
         self._task_list.setSpacing(0)
+        self._task_list.setCursor(Qt.CursorShape.PointingHandCursor)
         self._task_list.setStyleSheet(
             "QListWidget#legend_task_list{border:none;outline:none;}"
             "QListWidget#legend_task_list::item{"
             "padding:1px 2px;margin:0px;min-height:14px;}"
+            "QListWidget#legend_task_list::item:hover{"
+            "background:rgba(128,128,128,0.18);}"
         )
         self._task_list.itemClicked.connect(self._on_task_item_clicked)
+        self._task_list.setMouseTracking(True)
+        self._task_list.viewport().setMouseTracking(True)
+        self._task_list.itemEntered.connect(self._on_task_item_hovered)
+        self._task_list.viewport().installEventFilter(self)
         list_outer.addWidget(self._task_list, 1)
         self._scroll = QScrollArea()
         self._scroll.setObjectName("legend_scroll")
@@ -833,6 +845,41 @@ class _LegendWidget(QWidget):
         self._scroll.viewport().setObjectName("legend_scroll_viewport")
         self._scroll.viewport().setAutoFillBackground(True)
         outer.addWidget(self._scroll, 1)
+
+        # --- Cores section (Core View only) — Core Filter, mirrors Task list ---
+        self._cores_section = QWidget()
+        cs_outer = QVBoxLayout(self._cores_section)
+        cs_outer.setContentsMargins(0, 8, 0, 0)
+        cs_outer.setSpacing(2)
+        cs_hdr_row = QHBoxLayout()
+        cs_hdr_row.setContentsMargins(0, 0, 0, 0)
+        self._cores_header = QLabel()
+        self._cores_header.setTextFormat(Qt.TextFormat.RichText)
+        cs_hdr_row.addWidget(self._cores_header, 1)
+        self._cores_clear_btn = QPushButton("Clear")
+        self._cores_clear_btn.setToolTip("Clear Core Filter and show all cores")
+        self._cores_clear_btn.clicked.connect(self._on_core_filter_clear_clicked)
+        self._cores_clear_btn.setVisible(False)
+        cs_hdr_row.addWidget(self._cores_clear_btn)
+        cs_outer.addLayout(cs_hdr_row)
+        # Own bounded QScrollArea — Cores scrolls independently of the Task
+        # list above rather than sharing one scrollbar or growing unbounded.
+        self._cores_list_host = QWidget()
+        self._cores_list_layout = QVBoxLayout(self._cores_list_host)
+        self._cores_list_layout.setContentsMargins(0, 0, 0, 0)
+        self._cores_list_layout.setSpacing(2)
+        self._cores_list_layout.addStretch(1)
+        self._cores_scroll = QScrollArea()
+        self._cores_scroll.setObjectName("legend_cores_scroll")
+        self._cores_scroll.setWidgetResizable(True)
+        self._cores_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._cores_scroll.setWidget(self._cores_list_host)
+        self._cores_scroll.setMaximumHeight(160)
+        self._cores_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        cs_outer.addWidget(self._cores_scroll)
+        self._cores_section.setVisible(False)
+        outer.addWidget(self._cores_section)
 
     def _sync_search_theme(self) -> None:
         """Keep the filter field colours in sync (palette avoids per-widget QSS crashes)."""
@@ -856,7 +903,8 @@ class _LegendWidget(QWidget):
         self.setPalette(palette)
         # Keep child surfaces explicitly in sync; otherwise some platforms keep
         # stale dark backgrounds on the scroll viewport when switching theme.
-        for w in (self._list_host, self._scroll.viewport(), self._task_list):
+        for w in (self._list_host, self._scroll.viewport(), self._task_list,
+                  self._cores_list_host, self._cores_scroll.viewport()):
             p = w.palette()
             p.setColor(QPalette.ColorRole.Window, bg)
             p.setColor(QPalette.ColorRole.Base, bg)
@@ -892,7 +940,7 @@ class _LegendWidget(QWidget):
         if active:
             n = len(self._heatmap_filter_mks)
             self._heatmap_banner_label.setText(
-                f"Heatmap: {label or 'filtered'} ({n})")
+                f"Migration: {label or 'tasks'} ({n})")
         self._filter_tasks(self._search.text())
 
     def set_migrated_only_checked(self, checked: bool) -> None:
@@ -900,6 +948,61 @@ class _LegendWidget(QWidget):
         self._migrated_only_cb.blockSignals(True)
         self._migrated_only_cb.setChecked(bool(checked))
         self._migrated_only_cb.blockSignals(False)
+
+    def set_view_mode(self, mode: str) -> None:
+        """Core Filter only applies where cores have their own rows (Core View)."""
+        self._view_mode = "core" if mode == "core" else "task"
+        if self._trace_ref is not None:
+            self._rebuild_cores_section(self._trace_ref)
+
+    def set_core_filter(self, keys: Optional[list]) -> None:
+        """Set the Core Filter checkboxes without re-emitting core_filter_changed."""
+        self._core_filter_keys = set(keys) if keys else None
+        for name, cb in self._core_checks.items():
+            cb.blockSignals(True)
+            cb.setChecked(self._core_filter_keys is None or name in self._core_filter_keys)
+            cb.blockSignals(False)
+        self._cores_clear_btn.setVisible(self._core_filter_keys is not None)
+
+    def _rebuild_cores_section(self, trace: Optional[BtfTrace]) -> None:
+        """Rebuild the Cores checkbox list (Core View only, mirrors the Task list)."""
+        # Remove only the checkbox widgets — keep the trailing stretch so
+        # short core lists stay top-aligned in the scroll area.
+        for cb in self._core_checks.values():
+            self._cores_list_layout.removeWidget(cb)
+            cb.deleteLater()
+        self._core_checks.clear()
+        core_names = list(getattr(trace, "core_names", None) or []) if trace else []
+        show = self._view_mode == "core" and len(core_names) > 1
+        self._cores_section.setVisible(show)
+        hdr_color = "#AAAAAA" if self._is_dark else "#555555"
+        self._cores_header.setText(f"<b style='color:{hdr_color}'>Cores</b>")
+        if not show:
+            return
+        for core_name in core_names:
+            cb = QCheckBox(core_name)
+            cb.setChecked(self._core_filter_keys is None or core_name in self._core_filter_keys)
+            cb.toggled.connect(
+                lambda checked, c=core_name: self._on_core_check_toggled(c, checked))
+            self._cores_list_layout.insertWidget(self._cores_list_layout.count() - 1, cb)
+            self._core_checks[core_name] = cb
+        self._cores_clear_btn.setVisible(self._core_filter_keys is not None)
+
+    def _on_core_check_toggled(self, core_name: str, checked: bool) -> None:
+        all_cores = list(self._core_checks.keys())
+        cur = set(self._core_filter_keys) if self._core_filter_keys else set(all_cores)
+        if checked:
+            cur.add(core_name)
+        else:
+            cur.discard(core_name)
+        keys = [c for c in all_cores if c in cur] if len(cur) < len(all_cores) else None
+        self._core_filter_keys = set(keys) if keys else None
+        self._cores_clear_btn.setVisible(self._core_filter_keys is not None)
+        self.core_filter_changed.emit(list(keys) if keys else [])
+
+    def _on_core_filter_clear_clicked(self) -> None:
+        self.set_core_filter(None)
+        self.core_filter_changed.emit([])
 
     def set_filter_text(self, text: str) -> None:
         """Set legend search text without notifying the timeline scene."""
@@ -919,6 +1022,17 @@ class _LegendWidget(QWidget):
         if mk:
             self.task_clicked.emit(str(mk))
 
+    def _on_task_item_hovered(self, item: QListWidgetItem) -> None:
+        """Transient Highlight preview — does not change Selection (click-lock)."""
+        mk = item.data(Qt.ItemDataRole.UserRole)
+        if mk:
+            self.task_hovered.emit(str(mk))
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is self._task_list.viewport() and event.type() == QEvent.Type.Leave:
+            self.task_hovered.emit(None)
+        return super().eventFilter(obj, event)
+
     def _item_matches_filter(self, mk: str, q: str) -> bool:
         if not q:
             return True
@@ -933,6 +1047,7 @@ class _LegendWidget(QWidget):
         self._task_display.clear()
         self._sti_rows = []
         scroll_pos = self._task_list.verticalScrollBar().value()
+        self._rebuild_cores_section(trace)
 
         is_dark = self._is_dark
         hdr_color = "#AAAAAA" if is_dark else "#555555"
@@ -951,7 +1066,7 @@ class _LegendWidget(QWidget):
                 display = _task_display_name(_rep_raw)
                 item = QListWidgetItem(self._swatch_icon(color, is_dark), display)
                 item.setData(Qt.ItemDataRole.UserRole, _mk)
-                item.setToolTip(_rep_raw)
+                item.setToolTip(f"{_rep_raw}\nClick to Select, hover to Highlight")
                 item.setSizeHint(QSize(0, row_h))
                 self._task_list.addItem(item)
                 self._task_items[_mk] = item
@@ -976,13 +1091,18 @@ class _LegendWidget(QWidget):
         """Show / hide task rows in the legend based on the search filter."""
         q = text.strip().lower()
         trace = self._trace_ref
+        filter_accent = QBrush(QColor("#5B9BD5"))
         for mk, item in self._task_items.items():
             visible = self._item_matches_filter(mk, q)
+            in_filter = self._heatmap_filter_mks is not None and mk in self._heatmap_filter_mks
             if visible and self._heatmap_filter_mks is not None:
-                visible = mk in self._heatmap_filter_mks
+                visible = in_filter
             if visible and self._migrated_only_cb.isChecked() and trace is not None:
                 visible = _is_migrated_task(trace, mk)
             item.setHidden(not visible)
+            # Step-1 item 10: mark rows that are part of the active Migration
+            # Filter's scope, distinct from Highlight/Selection.
+            item.setForeground(filter_accent if in_filter else QBrush())
         for key_lc, row_w in self._sti_rows:
             row_w.setVisible((not q) or (q in key_lc))
 
@@ -4029,7 +4149,7 @@ class _MigrationHeatmapDialog(QDialog):
             self._show_all_btn = btns.addButton(
                 "Show all tasks", QDialogButtonBox.ActionRole)
             self._show_all_btn.setToolTip(
-                "Clear heatmap task filter and show all tasks")
+                "Clear Migration Filter and show all tasks")
             self._show_all_btn.clicked.connect(on_clear)
         else:
             self._show_all_btn = None
@@ -5504,7 +5624,7 @@ class _CorridorTimelineCanvas(QWidget):
         tasks = c.get("tasks") or []
         if n and tasks:
             lines.append(f"top task: {tasks[0].get('label', '')}")
-        lines.append("click to select bin · double-click to spotlight")
+        lines.append("click to select bin · double-click to apply as Migration Filter")
         return "\n".join(lines)
 
     def _hide_tip(self) -> None:
@@ -5721,6 +5841,27 @@ def _dim_css_color(widget: QWidget) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
+class _CiRef:
+    """Opaque QTreeWidgetItem UserRole payload.
+
+    PySide recursively converts plain dict/list values passed to setData()
+    into QVariantMap/QVariantList, which is O(total nested size) per call —
+    with ~50 corridors x tasks each holding two 32-int bin arrays this made
+    opening the inspector take 10+ seconds. Wrapping in a plain object with
+    no Qt-recognized container type makes Qt store it as an opaque pointer.
+    """
+    __slots__ = ("value",)
+
+    def __init__(self, value):
+        self.value = value
+
+
+def _ci_item_data(item):
+    """Unwrap a QTreeWidgetItem's UserRole payload set via _CiRef."""
+    data = item.data(0, Qt.ItemDataRole.UserRole)
+    return data.value if isinstance(data, _CiRef) else data
+
+
 class _CorridorInspectorDialog(QDialog):
     """Unified Migration & Corridor Inspector (TODO2) — tree + timeline + mini-chord."""
 
@@ -5762,8 +5903,8 @@ class _CorridorInspectorDialog(QDialog):
         self._initial_mode = initial_mode
         self._scope_follow = True
         self._HINT_DEFAULT = (
-            "Click a time cell to select that bin · double-click for Spotlight · "
-            "outer ring = egress · inner ring = ingress")
+            "Click a time cell to select that bin · double-click to apply as "
+            "Migration Filter · outer ring = egress · inner ring = ingress")
 
         lay = QVBoxLayout(self)
 
@@ -6257,7 +6398,7 @@ class _CorridorInspectorDialog(QDialog):
             c["label"], str(c["count"]),
             f"{c['bounce_pct']:.0f}%", net_s,
         ])
-        item.setData(0, Qt.ItemDataRole.UserRole, c)
+        item.setData(0, Qt.ItemDataRole.UserRole, _CiRef(c))
         for col in (1, 2, 3):
             item.setTextAlignment(col, num_align)
         for t in c.get("tasks") or []:
@@ -6265,7 +6406,7 @@ class _CorridorInspectorDialog(QDialog):
                 f"└── {t['label']}", str(t["count"]),
                 f"{t['bounce_pct']:.0f}%", f"{t['share_pct']:.0f}%",
             ])
-            child.setData(0, Qt.ItemDataRole.UserRole, {"corridor": c, "task": t})
+            child.setData(0, Qt.ItemDataRole.UserRole, _CiRef({"corridor": c, "task": t}))
             for col in (1, 2, 3):
                 child.setTextAlignment(col, num_align)
             item.addChild(child)
@@ -6276,7 +6417,7 @@ class _CorridorInspectorDialog(QDialog):
         expanded_corridors = set()
 
         def walk(item) -> None:
-            data = item.data(0, Qt.ItemDataRole.UserRole)
+            data = _ci_item_data(item)
             if item.isExpanded():
                 if isinstance(data, dict) and "group" in data:
                     expanded_groups.add(data["group"])
@@ -6306,7 +6447,7 @@ class _CorridorInspectorDialog(QDialog):
                 gitem = QTreeWidgetItem([
                     g["label"], str(g["count"]), "—", "—",
                 ])
-                gitem.setData(0, Qt.ItemDataRole.UserRole, {"group": g["source"]})
+                gitem.setData(0, Qt.ItemDataRole.UserRole, _CiRef({"group": g["source"]}))
                 for col in (1, 2, 3):
                     gitem.setTextAlignment(col, num_align)
                 for c in g.get("corridors") or []:
@@ -6341,7 +6482,7 @@ class _CorridorInspectorDialog(QDialog):
         parent = found.parent()
         if parent:
             parent.setExpanded(True)
-            pdata = parent.data(0, Qt.ItemDataRole.UserRole)
+            pdata = _ci_item_data(parent)
             if isinstance(pdata, dict) and pdata.get("group"):
                 self._expanded_groups.add(pdata["group"])
         self._tree.setCurrentItem(found)
@@ -6359,7 +6500,7 @@ class _CorridorInspectorDialog(QDialog):
         want_mk = task.get("mk")
         for i in range(corr_item.childCount()):
             child = corr_item.child(i)
-            data = child.data(0, Qt.ItemDataRole.UserRole)
+            data = _ci_item_data(child)
             t = data.get("task") if isinstance(data, dict) else None
             if isinstance(t, dict) and t.get("mk") == want_mk:
                 self._tree.setCurrentItem(child)
@@ -6372,7 +6513,7 @@ class _CorridorInspectorDialog(QDialog):
         want_from, want_to = c.get("from_core"), c.get("to_core")
 
         def walk(item):
-            data = item.data(0, Qt.ItemDataRole.UserRole)
+            data = _ci_item_data(item)
             if (isinstance(data, dict) and data.get("from_core") == want_from
                     and data.get("to_core") == want_to):
                 return item
@@ -6555,7 +6696,7 @@ class _CorridorInspectorDialog(QDialog):
                 return
 
     def _on_tree_click(self, item, _col) -> None:
-        data = item.data(0, Qt.ItemDataRole.UserRole)
+        data = _ci_item_data(item)
         if isinstance(data, dict) and "group" in data:
             return
         if isinstance(data, dict) and "from_core" in data:
@@ -6568,7 +6709,7 @@ class _CorridorInspectorDialog(QDialog):
                 data["corridor"], reveal_tree=False, task=data.get("task"))
 
     def _on_tree_dbl(self, item, _col) -> None:
-        data = item.data(0, Qt.ItemDataRole.UserRole)
+        data = _ci_item_data(item)
         if isinstance(data, dict) and "task" in data:
             self._spotlight_task(data["corridor"], data["task"])
         elif isinstance(data, dict) and "from_core" in data:
@@ -7761,11 +7902,12 @@ class _AnalysisFindingsDialog(QDialog):
                  ux_events: Optional[List[dict]] = None,
                  time_min: int = 0, time_max: int = 0,
                  quality_warnings: Optional[List[str]] = None,
-                 is_dark: bool = True):
+                 is_dark: bool = True, on_investigate=None):
         super().__init__(parent)
         self._findings = findings or []
         self._scope_title = scope_title or ""
         self._on_apply_scope = on_apply_scope
+        self._on_investigate = on_investigate
         self._scope_hint = scope_hint or ""
         self._ux_events = ux_events or []
         self._time_min = int(time_min or 0)
@@ -7877,6 +8019,15 @@ class _AnalysisFindingsDialog(QDialog):
                     text_l.setStyleSheet(
                         f"color: {color}; font-size: {ui_fs};")
                     vbox.addWidget(text_l)
+                evidence_text = str(f.get("evidence_text") or "").strip()
+                if evidence_text:
+                    ev_l = QLabel(f"EVIDENCE  {evidence_text}")
+                    ev_l.setObjectName("analysisFindingEvidence")
+                    ev_l.setWordWrap(True)
+                    ev_l.setFont(ui_font)
+                    ev_l.setStyleSheet(
+                        f"color: {muted}; font-size: {ui_fs}; font-family: monospace;")
+                    vbox.addWidget(ev_l)
                 item = QListWidgetItem()
                 item.setData(Qt.ItemDataRole.UserRole, fid)
                 item.setFont(ui_font)
@@ -8069,6 +8220,26 @@ class _AnalysisFindingsDialog(QDialog):
         scope_row.addWidget(self._scope_lbl, 1)
         scope_row.addWidget(apply_scope, 0)
 
+        show_evidence_btn = QPushButton("Show Evidence")
+        show_evidence_btn.setFont(ui_font)
+        show_evidence_btn.setEnabled(False)
+        show_evidence_btn.setToolTip("Reserved for Step 2 — cross-surface Evidence Navigation")
+        show_evidence_btn.setStyleSheet(
+            f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
+            f" font-size: {ui_fs}; }}"
+        )
+        scope_row.addWidget(show_evidence_btn, 0)
+
+        self._investigate_btn = QPushButton("Investigate")
+        self._investigate_btn.setFont(ui_font)
+        self._investigate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._investigate_btn.setStyleSheet(
+            f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
+            f" font-size: {ui_fs}; font-weight: 600; }}"
+        )
+        self._investigate_btn.clicked.connect(self._investigate_selected)
+        scope_row.addWidget(self._investigate_btn, 0)
+
         lay.addWidget(note)
         overview = QLabel(str(self._dashboard.get("summary") or ""))
         overview.setWordWrap(True)
@@ -8106,6 +8277,14 @@ class _AnalysisFindingsDialog(QDialog):
         if lbl is None:
             return
         finding = self._selected_finding()
+        btn = getattr(self, "_investigate_btn", None)
+        if btn is not None:
+            sid = FINDING_SECTION_MAP.get(str((finding or {}).get("id") or ""))
+            btn.setEnabled(self._on_investigate is not None and bool(sid))
+            btn.setToolTip(
+                "Scope the investigation and jump to the relevant Statistics section"
+                if sid else "No specific Statistics section is associated with this finding"
+            )
         if finding is None:
             lbl.setText("Select a finding to recommend a cursor window.")
             return
@@ -8127,6 +8306,18 @@ class _AnalysisFindingsDialog(QDialog):
         if finding is None:
             return
         self._on_apply_scope(finding)
+
+    def _investigate_selected(self) -> None:
+        if self._on_investigate is None:
+            return
+        finding = self._selected_finding()
+        if finding is None:
+            return
+        sid = FINDING_SECTION_MAP.get(str(finding.get("id") or ""))
+        if not sid:
+            return
+        self._on_investigate(finding, sid)
+        self.accept()
 
     def _query_with_ai(
         self, ai_enabled: bool, template_id: str = "findings",
@@ -8343,6 +8534,12 @@ class _StatsPanel(QWidget):
         self._scope_label.setWordWrap(True)
         self._scope_label.setMinimumWidth(0)
         scope_block.addWidget(self._scope_label)
+        self._filter_label = QLabel("")
+        self._filter_label.setStyleSheet("color:#5B9BD5;")
+        self._filter_label.setWordWrap(True)
+        self._filter_label.setMinimumWidth(0)
+        self._filter_label.setVisible(False)
+        scope_block.addWidget(self._filter_label)
         outer.addLayout(scope_block)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -10080,6 +10277,15 @@ class _StatsPanel(QWidget):
             lambda sid=section_id: self._toggle_section_pin(sid))
         row_lay.addWidget(grip, 0)
         row_lay.addWidget(hdr, 1)
+        if section_id in STATS_TRIAGE_SECTIONS:
+            triage_badge = QLabel("TRIAGE")
+            triage_badge.setToolTip("Triage \u2014 check this before detailed analysis")
+            triage_badge.setStyleSheet(
+                "color:#5B9BD5; font-size:7pt; font-weight:700; letter-spacing:0.4px;"
+                " border:1px solid #5B9BD5; border-radius:8px; padding:0 5px;"
+                " background:transparent;"
+            )
+            row_lay.addWidget(triage_badge, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         row_lay.addWidget(pin, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._ilay.addWidget(row)
         self._section_headers[section_id] = hdr
@@ -11372,6 +11578,18 @@ class _StatsPanel(QWidget):
         hdr = self._section_header_rows.get(sid)
         if hdr is not None and hasattr(self, "_scroll"):
             self._scroll.ensureWidgetVisible(hdr)
+
+    def set_active_filter_label(self, label: Optional[str]) -> None:
+        """Step-1 item 6: show the active Filter next to the Statistics Scope."""
+        lbl = getattr(self, "_filter_label", None)
+        if lbl is None:
+            return
+        if label:
+            lbl.setText(f"Filtered: {label}")
+            lbl.setVisible(True)
+        else:
+            lbl.setText("")
+            lbl.setVisible(False)
 
     def _build_preemption_table(self, rows: List[tuple], ui_fs: str,
                                 empty_hint: str, on_row_click=None) -> QWidget:

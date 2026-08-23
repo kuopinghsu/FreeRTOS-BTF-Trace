@@ -361,6 +361,7 @@ const props = defineProps({
   /** Decimal-digit precision for times shown in the segment-hover tooltip. */
   timeDecimals: { type: Number, default: 3 },
   aiEnabled: { type: Boolean, default: true },
+  colorblindSafe: { type: Boolean, default: false },
 })
 const emit = defineEmits([
   'viewportChange', 'cursorsChange', 'hoverTimeChange', 'highlightChange', 'highlightClick',
@@ -399,12 +400,17 @@ function layoutFilterArgs() {
     !!props.options.migratedOnlyFilter,
     props.options.taskFilterKeys || null,
     props.options.taskFilterText || '',
+    props.options.coreFilterKeys || null,
   ]
 }
 
 // Cached row/column structure (scroll-independent — offset applied at paint time).
 const cachedRowLayout = computed(() => {
   void props.options.layoutRev
+  // row.color is baked in below via taskColor()/coreColor(), which read
+  // non-reactive module state — force a rebuild on theme/colorblind toggle.
+  void props.options.darkMode
+  void props.colorblindSafe
   if (!props.trace) return null
   return buildRowLayout(
     props.trace, props.options.viewMode, expanded, 0,
@@ -415,6 +421,8 @@ const cachedRowLayout = computed(() => {
 
 const cachedColumnLayout = computed(() => {
   void props.options.layoutRev
+  void props.options.darkMode
+  void props.colorblindSafe
   if (!props.trace) return null
   return buildColumnLayout(
     props.trace, props.options.viewMode, expanded, 0,
@@ -1335,9 +1343,7 @@ function getCaptureSize() {
   const { totalHeight } = buildRowLayout(
     props.trace, props.options.viewMode, expanded, 0,
     props.options.showSti !== false, stiExpanded,
-    !!props.options.migratedOnlyFilter,
-    props.options.taskFilterKeys || null,
-    props.options.taskFilterText || '',
+    ...layoutFilterArgs(),
   )
   const neededH = RULER_H + Math.max(layout().rowH, totalHeight)
   const captureH = Math.max(RULER_H + layout().rowH, Math.min(panelH, Math.ceil(neededH)))
@@ -1826,9 +1832,7 @@ function scrollToTask(mergeKey) {
   const { rows } = buildRowLayout(
     props.trace, props.options.viewMode, expanded, 0,
     props.options.showSti !== false, stiExpanded,
-    !!props.options.migratedOnlyFilter,
-    props.options.taskFilterKeys || null,
-    props.options.taskFilterText || '',
+    ...layoutFilterArgs(),
   )
   const targetRow = findRowForTask(rows, mergeKey)
   if (!targetRow) return
@@ -1847,11 +1851,12 @@ function scrollToIntervalRow(intervalId) {
   const migrated = !!props.options.migratedOnlyFilter
   const taskFilterKeys = props.options.taskFilterKeys || null
   const taskFilterText = props.options.taskFilterText || ''
+  const coreFilterKeys = props.options.coreFilterKeys || null
 
   if (orientation.value === 'v') {
     const { cols } = buildColumnLayout(
       props.trace, props.options.viewMode, expanded, 0,
-      showSti, stiExpanded, migrated, taskFilterKeys, taskFilterText,
+      showSti, stiExpanded, migrated, taskFilterKeys, taskFilterText, coreFilterKeys,
     )
     const targetCol = cols.find(c => c.type === 'interval' && String(c.key) === String(intervalId))
     if (!targetCol) return
@@ -1860,7 +1865,7 @@ function scrollToIntervalRow(intervalId) {
   } else {
     const { rows } = buildRowLayout(
       props.trace, props.options.viewMode, expanded, 0,
-      showSti, stiExpanded, migrated, taskFilterKeys, taskFilterText,
+      showSti, stiExpanded, migrated, taskFilterKeys, taskFilterText, coreFilterKeys,
     )
     const targetRow = rows.find(r => r.type === 'interval' && String(r.key) === String(intervalId))
     if (!targetRow) return
@@ -1877,11 +1882,12 @@ function scrollToStiChannel(channel) {
   const migrated = !!props.options.migratedOnlyFilter
   const taskFilterKeys = props.options.taskFilterKeys || null
   const taskFilterText = props.options.taskFilterText || ''
+  const coreFilterKeys = props.options.coreFilterKeys || null
 
   if (orientation.value === 'v') {
     const { cols } = buildColumnLayout(
       props.trace, props.options.viewMode, expanded, 0,
-      showSti, stiExpanded, migrated, taskFilterKeys, taskFilterText,
+      showSti, stiExpanded, migrated, taskFilterKeys, taskFilterText, coreFilterKeys,
     )
     const targetCol = cols.find(c => c.type === 'sti' && c.key === channel)
     if (!targetCol) return
@@ -1890,7 +1896,7 @@ function scrollToStiChannel(channel) {
   } else {
     const { rows } = buildRowLayout(
       props.trace, props.options.viewMode, expanded, 0,
-      showSti, stiExpanded, migrated, taskFilterKeys, taskFilterText,
+      showSti, stiExpanded, migrated, taskFilterKeys, taskFilterText, coreFilterKeys,
     )
     const targetRow = rows.find(r => r.type === 'sti' && r.key === channel)
     if (!targetRow) return
@@ -2623,6 +2629,7 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
   const migratedOnly = !!props.options.migratedOnlyFilter
   const taskFilterKeys = props.options.taskFilterKeys || null
   const taskFilterText = props.options.taskFilterText || ''
+  const coreFilterKeys = props.options.coreFilterKeys || null
   const skipCoreHdr = coreViewTaskFilterActive(migratedOnly, taskFilterKeys, taskFilterText)
 
   ctx.fillStyle = dark ? '#1a1a1a' : '#e8e8e8'
@@ -2641,7 +2648,7 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
         stripDefs.push({ segs, color: taskColor(mk, repr), blend: true })
       }
     } else {
-      const cores = filteredCoreViewTasks(tr, migratedOnly, taskFilterKeys, taskFilterText)
+      const cores = filteredCoreViewTasks(tr, migratedOnly, taskFilterKeys, taskFilterText, coreFilterKeys)
       for (const { coreName, tasks } of cores) {
         if (!skipCoreHdr) {
           const hdrSegs = tr.coreSegLodUltra.get(coreName) || tr.coreSegs.get(coreName) || []
@@ -2669,7 +2676,7 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
     const layout = buildColumnLayout(
       tr, props.options.viewMode, expanded, 0,
       props.options.showSti !== false, stiExpanded, migratedOnly,
-      taskFilterKeys, taskFilterText,
+      taskFilterKeys, taskFilterText, coreFilterKeys,
     )
     for (const col of layout.cols) {
       if (col.type === 'sti') {

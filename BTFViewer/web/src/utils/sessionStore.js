@@ -28,6 +28,7 @@ export function snapshotTabFilters(tab) {
     migratedOnlyFilter: !!tab.migratedOnlyFilter,
     taskFilterKeys: null,
     heatmapFilterLabel: null,
+    coreFilterKeys: Array.isArray(tab.coreFilterKeys) ? tab.coreFilterKeys : null,
   }
 }
 
@@ -46,6 +47,7 @@ export function applyTabFilters(tab, filters) {
   tab.migratedOnlyFilter = !!filters.migratedOnlyFilter
   tab.taskFilterKeys = filters.taskFilterKeys ?? null
   tab.heatmapFilterLabel = filters.heatmapFilterLabel ?? null
+  tab.coreFilterKeys = Array.isArray(filters.coreFilterKeys) ? filters.coreFilterKeys : null
 }
 
 export function sanitizeTabFilters(src) {
@@ -56,6 +58,7 @@ export function sanitizeTabFilters(src) {
     // Heatmap drill-down is ephemeral — opening a trace always shows all tasks.
     taskFilterKeys: null,
     heatmapFilterLabel: null,
+    coreFilterKeys: Array.isArray(src.coreFilterKeys) ? src.coreFilterKeys.filter(c => typeof c === 'string') : null,
   }
 }
 

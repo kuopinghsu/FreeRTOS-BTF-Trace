@@ -65,6 +65,7 @@ class TimelineScene(QGraphicsScene):
         self._migrated_only_filter: bool = False
         self._heatmap_filter_mks: Optional[set] = None
         self._heatmap_filter_label: Optional[str] = None
+        self._core_filter_keys: Optional[set] = None   # Core Filter (Core View only)
         self._rebuild_suspend: int = 0
         # -- Viewport time bounds (updated at each rebuild for segment clipping) --
         # Set to None initially; _update_viewport_bounds() fills them from the
@@ -114,6 +115,7 @@ class TimelineScene(QGraphicsScene):
         # Stored as ns timestamps; drawn as colored dash-lines above everything.
         self._cursor_times: List[int] = []
         self._cursor_items: list = []    # live QGraphicsItems for cursors
+        self._cursor_halo_items: list = []   # contrast halo lines, tracked separately
         # Set of cursor-label QGraphicsItems appended to _frozen_top_items by
         # the most recent _draw_cursors() call.  Used to purge stale entries
         # on a direct (non-rebuild) _draw_cursors() call (e.g. cursor drag).
@@ -222,6 +224,7 @@ class TimelineScene(QGraphicsScene):
         self._heatmap_filter_label = None
         self._task_filter_q = ""
         self._migrated_only_filter = False
+        self._core_filter_keys = None
         self._core_expanded.clear()
         if trace.core_names:
             _auto_expand = len(trace.core_names) <= _AUTO_EXPAND_CORES_MAX
@@ -630,14 +633,18 @@ class TimelineScene(QGraphicsScene):
         mks = set(mks_raw) if mks_raw else None
         migrated = bool(filters.get("migratedOnlyFilter")) and mks is None
         label = filters.get("heatmapFilterLabel") if mks else None
+        core_keys_raw = filters.get("coreFilterKeys")
+        core_keys = set(core_keys_raw) if core_keys_raw else None
         if (q == self._task_filter_q and migrated == self._migrated_only_filter
                 and mks == self._heatmap_filter_mks
-                and label == self._heatmap_filter_label):
+                and label == self._heatmap_filter_label
+                and core_keys == self._core_filter_keys):
             return
         self._task_filter_q = q
         self._migrated_only_filter = migrated
         self._heatmap_filter_mks = mks
         self._heatmap_filter_label = label
+        self._core_filter_keys = core_keys
         if mks and self._trace is not None:
             for core in self._trace.core_names:
                 self._core_expanded[core] = any(
@@ -1363,6 +1370,8 @@ class TimelineScene(QGraphicsScene):
     def _draw_cursors(self) -> None:
         _safe_scene_remove_items(self, self._cursor_items)
         self._cursor_items.clear()
+        _safe_scene_remove_items(self, self._cursor_halo_items)
+        self._cursor_halo_items.clear()
 
         # Purge any cursor-label entries that were appended to _frozen_top_items
         # by the previous _draw_cursors() call.  This is only needed on direct
@@ -1386,6 +1395,10 @@ class TimelineScene(QGraphicsScene):
 
         sorted_cursors = sorted(enumerate(self._cursor_times), key=lambda x: x[1])
         cursor_palette = _cursor_colors(self._is_dark_ui)
+        # Halo drawn under every cursor line so the marker stays visible over
+        # task segments whose colour is close to the cursor's own colour.
+        halo_color = QColor(0, 0, 0, 140) if self._is_dark_ui else QColor(255, 255, 255, 170)
+        halo_pen = QPen(halo_color, 2.6, Qt.PenStyle.SolidLine)
         # Delta badges get their own row, below every cursor's own badge row -
         # otherwise when two cursors are close together on screen (a common
         # case: measuring a short interval), the delta's midpoint lands right
@@ -1398,6 +1411,11 @@ class TimelineScene(QGraphicsScene):
 
             if self._horizontal:
                 x = self._label_width + self._ns_to_px(ns)
+                halo = QGraphicsLineItem(x, 0, x, scene_r.height())
+                halo.setPen(halo_pen)
+                halo.setZValue(29)
+                self.addItem(halo)
+                self._cursor_halo_items.append(halo)
                 line = QGraphicsLineItem(x, 0, x, scene_r.height())
                 line.setPen(pen)
                 line.setZValue(30)
@@ -1459,6 +1477,11 @@ class TimelineScene(QGraphicsScene):
             else:  # vertical mode
                 label_row_h = self._label_width
                 y = label_row_h + self._ns_to_px(ns)
+                halo = QGraphicsLineItem(0, y, scene_r.width(), y)
+                halo.setPen(halo_pen)
+                halo.setZValue(29)
+                self.addItem(halo)
+                self._cursor_halo_items.append(halo)
                 line = QGraphicsLineItem(0, y, scene_r.width(), y)
                 line.setPen(pen)
                 line.setZValue(30)
@@ -1748,6 +1771,7 @@ class TimelineScene(QGraphicsScene):
             self._scene_origin_ns = self._vp_ns_lo
         self.clear()
         self._cursor_items = []
+        self._cursor_halo_items = []
         self._mark_items = []
         self._frozen_items = []
         self._frozen_top_items = []
@@ -1846,10 +1870,23 @@ class TimelineScene(QGraphicsScene):
                 or self._migrated_only_filter
                 or bool(self._task_filter_q))
 
+    def set_core_filter(self, keys: Optional[List[str]]) -> None:
+        """Core Filter (Core View only) — narrows Scope to a subset of cores."""
+        self._core_filter_keys = set(keys) if keys else None
+        self.rebuild()
+
+    def _core_filter_active(self) -> bool:
+        """True when the Core Filter narrows Scope to fewer than all cores."""
+        if not self._core_filter_keys or self._trace is None:
+            return False
+        return len(self._core_filter_keys) < len(self._trace.core_names)
+
     def _filtered_core_view_tasks(self) -> Tuple[List[str], Dict[str, List[str]]]:
         """Core names and per-core task lists (no TICK) after active filters."""
         trace = self._trace
         core_names = list(trace.core_names)
+        if self._core_filter_keys:
+            core_names = [c for c in core_names if c in self._core_filter_keys]
         core_tasks = {
             c: [t for t in trace.core_task_order.get(c, [])
                 if _parse_task_name(t)[2] != "TICK"]

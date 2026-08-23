@@ -86,12 +86,18 @@ export function formatFindStatus({
   error = '',
 } = {}) {
   if (error) return String(error)
-  if (!String(query || '').trim()) return '0 matches'
+  const q = String(query || '').trim()
+  if (!q) return '0 matches'
   const n = Number(hitCount) || 0
-  // Stepping always uses plain "matches (at k)" on desktop.
-  if (hitIndex >= 0 && n > 0) return `${n} matches (at ${hitIndex + 1})`
-  if (normalizeFindMode(mode) === 'migrations') {
-    return n === 0 ? '0 migration matches' : `${n} migration matches`
+  // "k of N matches" — matches the Step-1 canonical Find status wording.
+  if (hitIndex >= 0 && n > 0) return `${hitIndex + 1} of ${n} matches`
+  const modeKey = normalizeFindMode(mode)
+  if (n === 0) {
+    const label = modeKey === 'migrations' ? '0 migration matches' : '0 matches'
+    return `${label} for "${q}" — try a different Match Mode`
+  }
+  if (modeKey === 'migrations') {
+    return `${n} migration matches`
   }
   return `${n} matches`
 }

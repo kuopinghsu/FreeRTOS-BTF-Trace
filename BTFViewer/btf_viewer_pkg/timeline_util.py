@@ -210,7 +210,10 @@ def _task_color(task_raw: str) -> QColor:
         return _SPECIAL_COLORS[name]
     # Use a deterministic hash so palette selection is stable across runs.
     _key = _task_merge_key(task_raw).encode("utf-8", errors="replace")
-    palette = _PALETTE_COLORBLIND if _RENDER_RUNTIME.colorblind_active else _PALETTE
+    if _RENDER_RUNTIME.colorblind_active:
+        palette = _PALETTE_COLORBLIND_DARK if _RENDER_RUNTIME.is_dark else _PALETTE_COLORBLIND
+    else:
+        palette = _PALETTE
     idx = zlib.crc32(_key) % len(palette)
     return QColor(palette[idx])
 
@@ -295,6 +298,14 @@ def _clear_render_color_caches(include_complementary: bool = False) -> None:
 def _set_colorblind_mode(enabled: bool) -> None:
     """Apply colorblind palette mode and invalidate dependent caches."""
     _RENDER_RUNTIME.colorblind_active = bool(enabled)
+    _clear_render_color_caches()
+
+def _set_render_dark_mode(is_dark: bool) -> None:
+    """Track the active theme so the colorblind palette can swap black/white."""
+    is_dark = bool(is_dark)
+    if _RENDER_RUNTIME.is_dark == is_dark:
+        return
+    _RENDER_RUNTIME.is_dark = is_dark
     _clear_render_color_caches()
 
 def _reset_render_state_for_new_trace() -> None:

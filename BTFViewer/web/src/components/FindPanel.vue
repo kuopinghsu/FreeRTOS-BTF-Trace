@@ -24,9 +24,6 @@
       :options="findModeOptions"
       @change="onModeChange"
     />
-    <p class="find-mode-help">
-      {{ modeHelp }}
-    </p>
     <div class="find-btns">
       <button
         type="button"
@@ -136,12 +133,6 @@ defineExpose({ focusInput })
   background: var(--bg);
   color: var(--fg);
   font-size: 12px;
-}
-.find-mode-help {
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.35;
-  color: var(--fg-dim, #8b98a8);
 }
 .find-btns {
   display: flex;

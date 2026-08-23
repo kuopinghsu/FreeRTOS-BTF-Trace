@@ -2,7 +2,7 @@
   <div class="stats-section-header-wrap">
   <div
     class="stats-section-title collapsible"
-    :class="{ pinned }"
+    :class="{ pinned, triage: isTriage }"
     :data-demo-target="demoTarget || undefined"
     @click="$emit('toggle')"
   >
@@ -32,6 +32,11 @@
         stroke-linejoin="round"
       />
     </svg>
+    <span
+      v-if="isTriage"
+      class="stats-triage-badge"
+      title="Triage — check this before detailed analysis"
+    >Triage</span>
     <span class="stats-section-label"><slot /></span>
     <button
       type="button"
@@ -81,6 +86,7 @@
 <script setup>
 import { computed } from 'vue'
 import { STATS_SECTION_HELP } from '../config.js'
+import { STATS_TRIAGE_SECTIONS } from '../utils/statsPins.js'
 
 const MIME = 'application/x-btf-stats-section'
 
@@ -92,6 +98,7 @@ const props = defineProps({
 })
 
 const helpText = computed(() => STATS_SECTION_HELP[props.sectionId] || '')
+const isTriage = computed(() => STATS_TRIAGE_SECTIONS.includes(props.sectionId))
 
 const emit = defineEmits(['toggle', 'togglePin', 'dragStart', 'dragEnd'])
 
@@ -177,6 +184,19 @@ function onDragEnd() {
 
 .stats-drag-handle:active {
   cursor: grabbing;
+}
+
+.stats-triage-badge {
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--accent, #5B9BD5);
+  border: 1px solid var(--accent, #5B9BD5);
+  border-radius: 999px;
+  padding: 0 5px;
+  line-height: 1.5;
 }
 
 .stats-section-label {

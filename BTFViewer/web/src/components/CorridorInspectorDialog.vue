@@ -551,7 +551,7 @@ const tipText = computed(() => {
   if (chordHover.value?.type === 'corridor') {
     return `${coreShortName(chordHover.value.fromCore)}→${coreShortName(chordHover.value.toCore)}: ${chordHover.value.count}`
   }
-  return 'Click a time cell to select that bin · double-click for Spotlight · outer ring = egress · inner ring = ingress'
+  return 'Click a time cell to select that bin · double-click to apply as Migration Filter · outer ring = egress · inner ring = ingress'
 })
 
 const selectionCard = computed(() => {
@@ -1053,6 +1053,8 @@ onBeforeUnmount(() => {
   gap: 6px;
   font-size: 12px;
   color: var(--fg-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .ci-field select {
   background: var(--tb-bg);
@@ -1061,6 +1063,10 @@ onBeforeUnmount(() => {
   border-radius: 4px;
   padding: 2px 6px;
   font-size: 12px;
+}
+.ci-field :deep(.dom-select) {
+  width: auto;
+  min-width: 90px;
 }
 .ci-bounce-toggle {
   border: 1px solid var(--border);

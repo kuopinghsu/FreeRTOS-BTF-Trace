@@ -45,8 +45,7 @@ class StatsSectionOrderTest(unittest.TestCase):
     def test_move_section(self) -> None:
         base = list(STATS_PINNABLE_SECTIONS)
         moved = move_stats_section(base, "tags", "cores")
-        self.assertEqual(moved[0], "tags")
-        self.assertEqual(moved[1], "cores")
+        self.assertEqual(moved.index("tags") + 1, moved.index("cores"))
         self.assertEqual(len(moved), len(base))
 
     def test_rc_roundtrip(self) -> None:
@@ -68,9 +67,8 @@ class StatsSectionOrderTest(unittest.TestCase):
         self.assertEqual(
             default_stats_section_order()[:9],
             [
-                "cores", "health", "core_breakdown", "concurrency",
-                "switch_overhead", "tasks", "migrations", "core_pairs",
-                "affinity",
+                "anomalies", "worst", "patterns", "response", "task_health",
+                "cores", "core_breakdown", "concurrency", "switch_overhead",
             ],
         )
 

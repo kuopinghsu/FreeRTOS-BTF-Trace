@@ -280,6 +280,11 @@ class _CpuLoadGraph(QWidget):
         self._bars_pm_key = None          # invalidate paint cache
         self.update()
 
+    def invalidate_color_cache(self) -> None:
+        """Force bars to redraw with fresh colours (e.g. colorblind-safe toggle)."""
+        self._bars_pm_key = None
+        self.update()
+
     def set_view_mode(self, mode: str) -> None:
         self._view_mode   = mode
         self._bars_pm_key = None          # invalidate paint cache
@@ -550,7 +555,10 @@ class _CpuLoadGraph(QWidget):
         if not self._trace:
             return []
         task  = self._selected_task
+        sc = self._scene()
         cores = self._trace.core_names or []
+        if sc is not None and sc._core_filter_keys:
+            cores = [c for c in cores if c in sc._core_filter_keys]
         filter_keys = self._filtered_task_merge_keys()
         filter_active = bool(filter_keys)
 
@@ -561,7 +569,6 @@ class _CpuLoadGraph(QWidget):
         if filter_active:
             if self._view_mode == "task":
                 return [("filtered", "filtered", "CPU Load", QColor("#4CAF50"))]
-            sc = self._scene()
             core_names = sc._filtered_core_view_tasks()[0] if sc else cores
             return [("core", c, c, QColor(_core_color(c))) for c in core_names]
 
@@ -1155,6 +1162,90 @@ def _normalize_settings_page(page: str) -> str:
     if "layout" in low:
         return "Layout"
     return "Appearance"
+
+
+# Cap on the Cursors table's "Task at cursor" column width (px) — keeps a
+# timestamp with many simultaneous tasks from stretching the whole table;
+# matches the web app's `.task-cell { max-width: 120px }` ellipsis behavior.
+_CURSOR_TABLE_TASK_COL_MAX_W = 160
+
+
+def _critical_with_detail(parent, title: str, message: str, detail: str) -> None:
+    """Step-1 item 13: show *message* as the primary text and the raw
+    exception/technical detail behind a native "Show Details..." disclosure,
+    instead of concatenating the exception into the primary Error text."""
+    box = QMessageBox(QMessageBox.Icon.Critical, title, message,
+                      QMessageBox.StandardButton.Ok, parent)
+    if detail:
+        box.setDetailedText(detail)
+    box.exec()
+
+
+class _MarkRowWidget(QWidget):
+    """One row in the flattened Marks list (bookmark or annotation).
+
+    Mirrors the web MarksPanel row: a coloured kind badge, a coloured
+    timestamp, an always-editable inline label field, and a delete button.
+    Clicking the row (outside the input/button) jumps to its timestamp.
+    """
+
+    labelEdited = Signal(int, str, str)      # mark_id, kind, new_text
+    deleteRequested = Signal(str, int)       # kind, mark_id
+    jumpRequested = Signal(int)              # ns
+
+    _KIND_COLOR = {"bookmark": "#FFD700", "annotation": "#FF8C00"}
+
+    def __init__(self, kind: str, mark_id: int, ns: int, text: str,
+                 time_str: str, tooltip: str, parent=None):
+        super().__init__(parent)
+        self.kind = kind
+        self.mark_id = mark_id
+        self.ns = ns
+        color = self._KIND_COLOR.get(kind, "#FFD700")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(4, 2, 4, 2)
+        lay.setSpacing(6)
+
+        badge = QLabel("A" if kind == "annotation" else "B")
+        badge.setFixedSize(16, 16)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setToolTip("Annotation" if kind == "annotation" else "Bookmark")
+        badge.setStyleSheet(
+            f"background:{color}; color:#000; border-radius:8px; font-weight:700; font-size:8pt;")
+        lay.addWidget(badge, 0)
+
+        time_lbl = QLabel(time_str)
+        time_lbl.setStyleSheet(f"color:{color}; font-family:monospace; font-size:9pt;")
+        time_lbl.setToolTip(tooltip)
+        time_lbl.setMinimumWidth(0)
+        lay.addWidget(time_lbl, 0)
+
+        edit = QLineEdit(text)
+        edit.setPlaceholderText("label…")
+        edit.setFrame(False)
+        edit.editingFinished.connect(self._on_edit_finished)
+        lay.addWidget(edit, 1)
+        self._edit = edit
+
+        del_btn = QToolButton()
+        del_btn.setText("×")
+        del_btn.setAutoRaise(True)
+        del_btn.setToolTip("Delete mark")
+        del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        del_btn.clicked.connect(lambda: self.deleteRequested.emit(self.kind, self.mark_id))
+        lay.addWidget(del_btn, 0)
+
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def _on_edit_finished(self) -> None:
+        self.labelEdited.emit(self.mark_id, self.kind, self._edit.text().strip())
+
+    def mousePressEvent(self, event) -> None:
+        # Clicks on the input/delete button are consumed by those children
+        # and never reach here (matches the web row's @click.stop on both).
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.jumpRequested.emit(self.ns)
+        super().mousePressEvent(event)
 
 
 def _dialog_guard(fn):
@@ -2307,27 +2398,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             host.setPalette(pal)
             host.setAutoFillBackground(True)
 
-        marks_tabs = getattr(self, "_marks_tabs", None)
-        if marks_tabs is not None:
-            marks_tabs.setObjectName("marks_tab_widget")
-            mtb = marks_tabs.tabBar()
-            mtb.setObjectName("marks_tab_bar")
-            for w in (marks_tabs, mtb):
-                pal = w.palette()
-                pal.setColor(QPalette.Window, win_bg)
-                pal.setColor(QPalette.Base, win_bg)
-                w.setPalette(pal)
-                w.setAutoFillBackground(True)
-            for i in range(marks_tabs.count()):
-                page = marks_tabs.widget(i)
-                if page is None:
-                    continue
-                pal = page.palette()
-                pal.setColor(QPalette.Window, win_bg)
-                pal.setColor(QPalette.Base, win_bg)
-                page.setPalette(pal)
-                page.setAutoFillBackground(True)
-
         panel_dock = getattr(self, "_panel_dock", None)
         if panel_dock is not None:
             pal = panel_dock.palette()
@@ -2409,6 +2479,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         scene._migrated_only_filter = bool(
             self._legend._migrated_only_cb.isChecked()
             and not scene._heatmap_filter_mks)
+        scene._core_filter_keys = (
+            set(self._legend._core_filter_keys) if self._legend._core_filter_keys else None)
 
     def _sync_legend_filters_from_scene(self, scene) -> None:
         """Refresh shared legend UI from *scene* filter state."""
@@ -2417,6 +2489,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._legend.set_filter_text(scene._task_filter_q)
         self._legend.set_migrated_only_checked(scene._migrated_only_filter)
         self._legend.set_heatmap_filter(scene._heatmap_filter_label, scene._heatmap_filter_mks)
+        self._legend.set_view_mode(self._view_mode)
+        self._legend.set_core_filter(
+            list(scene._core_filter_keys) if scene._core_filter_keys else None)
 
     def _stash_tab_state(self, tab: _TraceTab) -> None:
         tab.vm.stats.copy_from_panel(self._stats_panel)
@@ -2713,6 +2788,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         sc = tab.view._scene
         self._sync_legend_filters_from_scene(sc)
         self._sync_show_all_tasks_btn()
+        self._sync_core_filter_chip()
         self._stats_panel._ui_font_size = self._ui_font_size_val
         tab.vm.stats.apply_to_panel(self._stats_panel, refresh_stats=False)
         self._stats_panel.set_cursor_times(self._view._scene.cursor_times(), refresh_stats=False)
@@ -3791,6 +3867,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self.setUpdatesEnabled(False)
         try:
             self._is_dark = bool(is_dark)
+            _set_render_dark_mode(self._is_dark)
 
             # Application-wide font (menus, toolbar, status bar).
             _ui_font_size = getattr(self, '_ui_font_size_val', UI_FONT_SIZE)
@@ -4109,10 +4186,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _ok = False
         self.setUpdatesEnabled(False)
         try:
-            if hasattr(self, '_range_stats_label'):
-                _pal = self._range_stats_label.palette()
+            if hasattr(self, '_cursor_range_hint'):
+                _pal = self._cursor_range_hint.palette()
                 _pal.setColor(QPalette.WindowText, QColor(c['muted_text']))
-                self._range_stats_label.setPalette(_pal)
+                self._cursor_range_hint.setPalette(_pal)
             if hasattr(self, '_find_status'):
                 _pal = self._find_status.palette()
                 _pal.setColor(QPalette.WindowText, QColor(c['muted_text']))
@@ -4215,6 +4292,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 if sc._trace is not None:
                     sc.rebuild()
                     view.viewport().update()
+            # Legend swatches cache task/core colours at build time and were
+            # skipped above (update_theme(defer_rebuild=True)); colorblind-safe
+            # colours depend on the theme (black/white swap), so the legend
+            # must be rebuilt here too, or swatches go stale after a toggle.
+            if self._colorblind_val and hasattr(self, "_legend") and self._trace is not None:
+                self._legend.rebuild(self._trace, show_sti=self._show_sti)
         finally:
             self.setUpdatesEnabled(True)
             self._release_theme_change()
@@ -4340,6 +4423,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._build_stats_panel()
 
         # --- Marks dock (bookmarks + annotations) ---
+        # Flattened layout (Cursors / Cursor Range / Marks stacked sections),
+        # matching the web app's MarksPanel — no sub-tabs.
         marks_host = QWidget()
         marks_host.setMinimumWidth(0)
         self._marks_host = marks_host
@@ -4347,115 +4432,152 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         marks_v.setContentsMargins(6, 6, 6, 6)
         marks_v.setSpacing(6)
         marks_v.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
-        marks_tabs = QTabWidget()
 
-        # ---- Cursors comparison tab ----
-        cur_page = QWidget()
-        cur_v = QVBoxLayout(cur_page)
+        def _section_header(text: str) -> QLabel:
+            lbl = QLabel(text)
+            lbl.setStyleSheet("font-weight:bold;")
+            return lbl
+
+        # ---- Cursors section ----
+        marks_v.addWidget(_section_header("Cursors"))
+        cur_v = QVBoxLayout()
         cur_v.setContentsMargins(0, 0, 0, 0)
         cur_v.setSpacing(2)
+        cur_clear_row = QHBoxLayout()
+        cur_clear_row.setContentsMargins(0, 0, 0, 0)
+        cur_clear_row.addStretch(1)
+        self._cursors_clear_all_btn = QPushButton("Clear All")
+        self._cursors_clear_all_btn.setObjectName("cursors_clear_all_btn")
+        self._cursors_clear_all_btn.setToolTip("Clear all cursors (Shift+C)")
+        self._cursors_clear_all_btn.setEnabled(False)
+        self._cursors_clear_all_btn.clicked.connect(lambda: self._view.clear_cursors())
+        cur_clear_row.addWidget(self._cursors_clear_all_btn, 0)
+        cur_v.addLayout(cur_clear_row)
+        cur_v.addWidget(_section_header("Task at cursor"))
         self._cursor_table = QTableWidget(0, 4)
-        self._cursor_table.setHorizontalHeaderLabels(["#", "Time", "Task at cursor", "Delta to C1"])
+        self._cursor_table.setHorizontalHeaderLabels(["#", "Time", "Task", "Δ C1"])
         self._cursor_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._cursor_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._cursor_table.verticalHeader().setVisible(False)
         self._cursor_table.setAlternatingRowColors(True)
+        self._cursor_table.setTextElideMode(Qt.TextElideMode.ElideRight)
         self._cursor_table.cellClicked.connect(self._on_cursor_table_clicked)
         _StatsPanel._fix_stats_table_column_widths(self._cursor_table)
         cur_v.addWidget(self._cursor_table)
         self._cur_hint = QLabel("Click a row to navigate to that cursor")
         self._cur_hint.setStyleSheet("color:#999; font-size:9pt;")
         cur_v.addWidget(self._cur_hint)
-        marks_tabs.addTab(cur_page, "Curs.")
+        marks_v.addLayout(cur_v)
 
-        bm_page = QWidget()
-        bm_v = QVBoxLayout(bm_page)
-        bm_v.setContentsMargins(0, 0, 0, 0)
-        bm_v.setSpacing(4)
-        self._bookmark_list = QListWidget()
-        self._bookmark_list.itemClicked.connect(lambda item: self._jump_to_ns(int(item.data(Qt.ItemDataRole.UserRole + 1))))
-        self._bookmark_list.itemDoubleClicked.connect(lambda item: self._jump_to_ns(int(item.data(Qt.ItemDataRole.UserRole + 1))))
-        self._bookmark_list.itemChanged.connect(self._on_bookmark_item_changed)
-        _bm_del_key = QShortcut(QKeySequence(Qt.Key.Key_Delete), self._bookmark_list)
-        _bm_del_key.setContext(Qt.ShortcutContext.WidgetShortcut)
-        _bm_del_key.activated.connect(self._delete_selected_bookmark)
-        bm_v.addWidget(self._bookmark_list)
-        bm_btns = QHBoxLayout()
-        bm_btns.setContentsMargins(0, 0, 0, 0)
-        bm_add = QPushButton("Add")
-        bm_add.clicked.connect(self._add_bookmark_at_center)
-        bm_jump = QPushButton("Jump")
-        bm_jump.clicked.connect(self._jump_selected_bookmark)
-        bm_del = QPushButton("Delete")
-        bm_del.clicked.connect(self._delete_selected_bookmark)
-        bm_btns.addWidget(bm_add)
-        bm_btns.addWidget(bm_jump)
-        bm_btns.addWidget(bm_del)
-        bm_v.addLayout(bm_btns)
-        marks_tabs.addTab(bm_page, "Bookm.")
+        # ---- Cursor Range section ----
+        marks_v.addWidget(_section_header("Cursor Range"))
 
-        an_page = QWidget()
-        an_v = QVBoxLayout(an_page)
-        an_v.setContentsMargins(0, 0, 0, 0)
-        an_v.setSpacing(4)
-        self._annotation_list = QListWidget()
-        self._annotation_list.itemClicked.connect(lambda item: self._jump_to_ns(int(item.data(Qt.ItemDataRole.UserRole + 1))))
-        self._annotation_list.itemDoubleClicked.connect(
-            lambda item: self._edit_selected_annotation())
-        _an_del_key = QShortcut(QKeySequence(Qt.Key.Key_Delete), self._annotation_list)
-        _an_del_key.setContext(Qt.ShortcutContext.WidgetShortcut)
-        _an_del_key.activated.connect(self._delete_selected_annotation)
-        an_v.addWidget(self._annotation_list)
-        self._annotation_input = QLineEdit()
-        self._annotation_input.setPlaceholderText("Annotation note...")
-        self._annotation_input.returnPressed.connect(self._add_annotation_at_center)
-        an_v.addWidget(self._annotation_input)
-        an_btns = QHBoxLayout()
-        an_btns.setContentsMargins(0, 0, 0, 0)
-        an_add = QPushButton("Add")
-        an_add.clicked.connect(self._add_annotation_at_center)
-        an_jump = QPushButton("Jump")
-        an_jump.clicked.connect(self._jump_selected_annotation)
-        an_edit = QPushButton("Edit")
-        an_edit.clicked.connect(self._edit_selected_annotation)
-        an_del = QPushButton("Delete")
-        an_del.clicked.connect(self._delete_selected_annotation)
-        an_btns.addWidget(an_add)
-        an_btns.addWidget(an_jump)
-        an_btns.addWidget(an_edit)
-        an_btns.addWidget(an_del)
-        an_v.addLayout(an_btns)
-        marks_tabs.addTab(an_page, "Anno.")
-        marks_v.addWidget(marks_tabs)
-        self._marks_tabs = marks_tabs
-        self._range_stats_label = QLabel("Range: place two cursors to measure")
-        self._range_stats_label.setStyleSheet("color:#999;")
-        self._range_stats_label.setWordWrap(True)
-        marks_v.addWidget(self._range_stats_label)
+        def _range_row(key: str) -> tuple:
+            row = QWidget()
+            row_lay = QHBoxLayout(row)
+            row_lay.setContentsMargins(0, 0, 0, 0)
+            row_lay.setSpacing(6)
+            key_lbl = QLabel(key)
+            key_lbl.setStyleSheet("color:#999; font-size:9pt;")
+            val_lbl = QLabel("")
+            val_lbl.setStyleSheet("font-size:9pt;")
+            row_lay.addWidget(key_lbl, 0)
+            row_lay.addStretch(1)
+            row_lay.addWidget(val_lbl, 0)
+            return row, val_lbl
+
+        self._cursor_range_body = QWidget()
+        cr_v = QVBoxLayout(self._cursor_range_body)
+        cr_v.setContentsMargins(0, 0, 0, 0)
+        cr_v.setSpacing(1)
+        self._cr_span_row, self._cr_span_val = _range_row("Span")
+        cr_v.addWidget(self._cr_span_row)
+        self._cr_slices_row, self._cr_slices_val = _range_row("Slices")
+        cr_v.addWidget(self._cr_slices_row)
+        self._cr_top_row, self._cr_top_val = _range_row("Top task")
+        cr_v.addWidget(self._cr_top_row)
+        self._cr_min_row, self._cr_min_val = _range_row("Seg min")
+        cr_v.addWidget(self._cr_min_row)
+        self._cr_avg_row, self._cr_avg_val = _range_row("Seg avg")
+        cr_v.addWidget(self._cr_avg_row)
+        self._cr_max_row, self._cr_max_val = _range_row("Seg max")
+        cr_v.addWidget(self._cr_max_row)
+        marks_v.addWidget(self._cursor_range_body)
+        self._cursor_range_hint = QLabel("Place 2+ cursors to measure range")
+        self._cursor_range_hint.setStyleSheet("color:#999;")
+        self._cursor_range_hint.setWordWrap(True)
+        marks_v.addWidget(self._cursor_range_hint)
+        self._cursor_range_body.setVisible(False)
+
+        # ---- Marks section (flattened bookmarks + annotations, sorted by time) ----
+        marks_hdr_row = QHBoxLayout()
+        marks_hdr_row.setContentsMargins(0, 0, 0, 0)
+        marks_hdr_row.setSpacing(6)
+        self._marks_count_label = _section_header("Marks (0)")
+        marks_hdr_row.addWidget(self._marks_count_label, 1)
+        mark_add_b = QPushButton("+B")
+        mark_add_b.setToolTip("Add bookmark at viewport centre")
+        mark_add_b.setFixedWidth(32)
+        mark_add_b.clicked.connect(self._add_bookmark_at_center)
+        marks_hdr_row.addWidget(mark_add_b, 0)
+        mark_add_a = QPushButton("+A")
+        mark_add_a.setToolTip("Add annotation at viewport centre")
+        mark_add_a.setFixedWidth(32)
+        mark_add_a.clicked.connect(self._add_annotation_at_center)
+        marks_hdr_row.addWidget(mark_add_a, 0)
+        marks_v.addLayout(marks_hdr_row)
+
+        self._marks_list = QListWidget()
+        self._marks_list.setObjectName("marks_list")
+        self._marks_list.setFrameShape(QFrame.Shape.NoFrame)
+        self._marks_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._marks_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._marks_list.setUniformItemSizes(True)
+        _mark_del_key = QShortcut(QKeySequence(Qt.Key.Key_Delete), self._marks_list)
+        _mark_del_key.setContext(Qt.ShortcutContext.WidgetShortcut)
+        _mark_del_key.activated.connect(self._delete_selected_mark)
+        marks_v.addWidget(self._marks_list)
+
+        self._marks_empty_hint = QLabel("Right-click timeline to add")
+        self._marks_empty_hint.setStyleSheet("color:#999; font-size:9pt;")
+        self._marks_empty_hint.setVisible(False)
+        marks_v.addWidget(self._marks_empty_hint)
+
 
         marks_io_row = QGridLayout()
         marks_io_row.setContentsMargins(0, 0, 0, 0)
         marks_io_row.setHorizontalSpacing(6)
         marks_io_row.setVerticalSpacing(4)
-        marks_import_btn = QPushButton("Import")
-        marks_import_btn.setToolTip("Load bookmarks and annotations from a CSV file")
-        marks_import_btn.clicked.connect(self._import_marks_csv)
-        marks_io_row.addWidget(marks_import_btn, 0, 0)
-        marks_export_btn = QPushButton("Export")
-        marks_export_btn.setToolTip("Save all bookmarks and annotations to a CSV file")
+        marks_export_btn = QPushButton("Export Marks")
+        marks_export_btn.setToolTip("Export Marks (bookmarks + annotations) to a CSV file")
         marks_export_btn.clicked.connect(self._export_marks_csv)
-        marks_io_row.addWidget(marks_export_btn, 0, 1)
+        marks_io_row.addWidget(marks_export_btn, 0, 0)
+        marks_import_btn = QPushButton("Import Marks")
+        marks_import_btn.setToolTip("Import Marks (bookmarks + annotations) from a CSV file")
+        marks_import_btn.clicked.connect(self._import_marks_csv)
+        marks_io_row.addWidget(marks_import_btn, 0, 1)
+        self._marks_clear_b_btn = QPushButton("Clear B")
+        self._marks_clear_b_btn.setToolTip("Clear all bookmarks (Shift+B)")
+        self._marks_clear_b_btn.setEnabled(False)
+        self._marks_clear_b_btn.clicked.connect(self._clear_all_bookmarks)
+        marks_io_row.addWidget(self._marks_clear_b_btn, 0, 2)
+        self._marks_clear_a_btn = QPushButton("Clear A")
+        self._marks_clear_a_btn.setToolTip("Clear all annotations (Shift+A)")
+        self._marks_clear_a_btn.setEnabled(False)
+        self._marks_clear_a_btn.clicked.connect(self._clear_all_annotations)
+        marks_io_row.addWidget(self._marks_clear_a_btn, 1, 0)
         marks_session_btn = QPushButton("Session")
         marks_session_btn.setToolTip(
             "Export portable session JSON (cursors, marks, viewport — Web compatible)")
         marks_session_btn.clicked.connect(self._export_portable_session)
-        marks_io_row.addWidget(marks_session_btn, 1, 0)
-        marks_session_import_btn = QPushButton("Import session")
+        marks_io_row.addWidget(marks_session_btn, 1, 1)
+        marks_session_import_btn = QPushButton("Import Session")
         marks_session_import_btn.setToolTip("Import portable session JSON")
         marks_session_import_btn.clicked.connect(self._import_portable_session)
-        marks_io_row.addWidget(marks_session_import_btn, 1, 1)
-        for btn in (marks_import_btn, marks_export_btn, marks_session_btn,
-                    marks_session_import_btn):
+        marks_io_row.addWidget(marks_session_import_btn, 1, 2)
+        for btn in (marks_import_btn, marks_export_btn,
+                    self._marks_clear_b_btn, self._marks_clear_a_btn,
+                    marks_session_btn, marks_session_import_btn):
             btn.setMinimumWidth(0)
             btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         marks_v.addLayout(marks_io_row)
@@ -4497,6 +4619,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._find_mode_help.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self._find_mode_help.setStyleSheet("color:#8b98a8; font-size:11px;")
+        # Step-1 item 8: keep the (long) mode explanation in the combo's
+        # Tooltip/Help only, not as a permanently-visible paragraph.
+        self._find_mode_help.setVisible(False)
         find_v.addWidget(self._find_mode_help)
         find_btns = QHBoxLayout()
         find_btns.setContentsMargins(0, 0, 0, 0)
@@ -4569,8 +4694,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         # --- Signal wiring: legend <-> scene highlight sync (bound per active tab) ---
         self._legend.task_clicked.connect(self._on_legend_task_clicked)
+        self._legend.task_hovered.connect(self._on_legend_task_hovered)
         self._legend.migrated_filter_changed.connect(self._on_legend_migrated_filter)
         self._legend.clear_heatmap_filter.connect(self._clear_heatmap_task_filter)
+        self._legend.core_filter_changed.connect(self._on_legend_core_filter)
 
     def _on_close_tab_action(self) -> None:
         idx = self._tab_widget.currentIndex()
@@ -4760,7 +4887,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_zoom_out = vm.addAction(
             "Zoom &Out", lambda: self._view.zoom_out(), QKeySequence.ZoomOut)
         self._act_zoom_out.setEnabled(False)
-        _fit_act = vm.addAction("&Fit to window",  lambda: self._view.zoom_fit())
+        _fit_act = vm.addAction("Fit &Trace",  lambda: self._view.zoom_fit())
         _fit_act.setShortcuts([QKeySequence("Ctrl+0"), QKeySequence("F")])
         vm.addSeparator()
         self._act_task_view = vm.addAction("Task &View", lambda: self._set_view_mode("task"))
@@ -4775,6 +4902,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _grid_act.setShortcut(QKeySequence("G"))
         _sti_act  = vm.addAction("Toggle &STI events", lambda: self._set_show_sti(not self._show_sti))
         _sti_act.setShortcut(QKeySequence("I"))
+        self._act_sti_log2 = vm.addAction(
+            "STI Waveform &Log\u2082 Scale", self._toggle_sti_log_scale_from_menu)
+        self._act_sti_log2.setCheckable(True)
+        self._act_sti_log2.setToolTip(
+            "STI waveform y-axis: toggle between linear and log\u2082 scale\n"
+            "(only active when an STI row is expanded)")
         vm.addSeparator()
         vm.addAction("⚙ &Settings…", self._open_settings, "Ctrl+,")
         vm.addSeparator()
@@ -4812,7 +4945,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         nm.addAction("Clear all Ann&otations", self._clear_all_annotations, "Shift+A")
         nm.addSeparator()
         self._act_zoom_range = nm.addAction(
-            "Zoom to Cursor &Range", self._zoom_to_cursor_range, "Ctrl+R"
+            "Fit &Cursors", self._zoom_to_cursor_range, "Ctrl+R"
         )
         self._act_zoom_range.setEnabled(False)
         nm.addSeparator()
@@ -4882,16 +5015,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "Zoom Out", lambda: self._view.zoom_out(),  _IC_ZOUT, "Zoom out  (Ctrl+-)")
         self._tb_zoom_out_btn.setEnabled(False)
         self._act_zoom_1to1 = _ia("1:1", lambda: self._view.zoom_1to1(), _IC_1TO1, "Zoom to 1:1 scale")
-        self._tb_fit_btn = _ia("Fit", lambda: self._view.zoom_fit(), _IC_FIT,
-                               "Fit entire trace to window  (Ctrl+0)")
-        self._tb_zoom_range_btn = _ia("Range", self._zoom_to_cursor_range, _IC_EXPAND,
-                                      "Zoom view to fit between cursor C1 and last cursor  (Ctrl+R)")
+        self._tb_fit_btn = _ia("Fit Trace", lambda: self._view.zoom_fit(), _IC_FIT,
+                               "Fit Trace \u2014 zoom to show the entire trace  (Ctrl+0)")
+        self._tb_zoom_range_btn = _ia("Fit Cursors", self._zoom_to_cursor_range, _IC_EXPAND,
+                                      "Fit Cursors \u2014 zoom to the C1\u2013Cn cursor Scope  (Ctrl+R)")
         self._tb_zoom_range_btn.setEnabled(False)
-
-        _ia("Find", self._focus_find, _IC_FIND,
-            "Find task, annotation, or migration  (Ctrl+F)")
-        self._tb_find_btn = self._tb_icon_actions[-1][0]
-        self._tb_find_btn.setShortcut(QKeySequence.StandardKey.Find)
 
         # Zoom-preset quick-pick combo (labels/values rebuilt per trace unit)
         self._zoom_presets: list = []   # populated by _rebuild_zoom_presets()
@@ -4937,6 +5065,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _clw = tb.widgetForAction(self._tb_cpu_load_btn)
         if _clw:
             _clw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        tb.addSeparator()
+
+        # --- Investigation entry points (Find, Heatmap, Analysis, Compare) ---
+        _ia("Find", self._focus_find, _IC_FIND,
+            "Find task, annotation, or migration  (Ctrl+F)")
+        self._tb_find_btn = self._tb_icon_actions[-1][0]
+        self._tb_find_btn.setShortcut(QKeySequence.StandardKey.Find)
         self._tb_heatmap_btn = _ia(
             "Heatmap", self._open_migration_heatmap, _IC_HEATMAP,
             "Migration & Corridor Inspector — topology + timeline "
@@ -4949,7 +5084,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._tb_show_all_tasks_btn.setIcon(
             _heatmap_clear_icon(is_dark=getattr(self, "_is_dark", True)))
         self._tb_show_all_tasks_btn.setToolTip(
-            "Clear heatmap task filter and show all tasks")
+            "Clear Migration Filter and show all tasks")
         self._tb_show_all_tasks_btn.setVisible(False)
         _saw = tb.widgetForAction(self._tb_show_all_tasks_btn)
         if _saw:
@@ -5038,6 +5173,34 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._status_range.setContentsMargins(6, 0, 6, 0)
         self._status_range.setVisible(False)
 
+        # --- Active Filter chip (Step-1 item 3: visible, removable Filter state) ---
+        self._status_filter_btn = QToolButton()
+        self._status_filter_btn.setText("")
+        self._status_filter_btn.setToolTip("Clear this Migration Filter")
+        self._status_filter_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._status_filter_btn.setAutoRaise(True)
+        self._status_filter_btn.setVisible(False)
+        self._status_filter_btn.setMaximumWidth(220)
+        self._status_filter_btn.clicked.connect(self._clear_heatmap_task_filter)
+
+        self._status_migrated_filter_btn = QToolButton()
+        self._status_migrated_filter_btn.setText("")
+        self._status_migrated_filter_btn.setToolTip("Clear this Task Filter")
+        self._status_migrated_filter_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._status_migrated_filter_btn.setAutoRaise(True)
+        self._status_migrated_filter_btn.setVisible(False)
+        self._status_migrated_filter_btn.clicked.connect(
+            lambda: (self._legend.set_migrated_only_checked(False),
+                     self._on_legend_migrated_filter(False)))
+
+        self._status_core_filter_btn = QToolButton()
+        self._status_core_filter_btn.setText("")
+        self._status_core_filter_btn.setToolTip("Clear this Core Filter")
+        self._status_core_filter_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._status_core_filter_btn.setAutoRaise(True)
+        self._status_core_filter_btn.setVisible(False)
+        self._status_core_filter_btn.clicked.connect(self._clear_core_filter)
+
         # --- RIGHT permanent zone ---
 
         # Quick view toggles - compact pill-style checkboxes
@@ -5064,6 +5227,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         sb.addWidget(self._status_file)
         sb.addWidget(self._status_inspect)
         sb.addPermanentWidget(self._cursor_bar)
+        sb.addPermanentWidget(self._status_migrated_filter_btn)
+        sb.addPermanentWidget(self._status_core_filter_btn)
+        sb.addPermanentWidget(self._status_filter_btn)
         sb.addPermanentWidget(self._status_range)
         sb.addPermanentWidget(self._sti_toggle_cb)
         sb.addPermanentWidget(self._grid_toggle_cb)
@@ -5129,10 +5295,22 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _toggle_sti_log_scale(self) -> None:
         """Toggle the STI waveform y-axis between linear and log2 scale."""
         enabled = self._tb_log2_btn.isChecked()
+        if hasattr(self, "_act_sti_log2"):
+            self._act_sti_log2.blockSignals(True)
+            self._act_sti_log2.setChecked(enabled)
+            self._act_sti_log2.blockSignals(False)
+        self._view.set_sti_log_scale(enabled)
+
+    def _toggle_sti_log_scale_from_menu(self) -> None:
+        """View-menu counterpart of the toolbar Log\u2082 toggle — kept in sync."""
+        enabled = self._act_sti_log2.isChecked()
+        self._tb_log2_btn.blockSignals(True)
+        self._tb_log2_btn.setChecked(enabled)
+        self._tb_log2_btn.blockSignals(False)
         self._view.set_sti_log_scale(enabled)
 
     def _set_colorblind_safe(self, enabled: bool) -> None:
-        """Switch the task colour palette to/from the Okabe-Ito colorblind-safe set."""
+        """Switch the task/core colour palette to/from the Okabe-Ito colorblind-safe set."""
         self._colorblind_val = bool(enabled)
         _set_colorblind_mode(self._colorblind_val)
         if self._view._scene._trace is not None:
@@ -5140,6 +5318,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # Also refresh legend swatches which cache colors at build time.
         if self._trace is not None:
             self._legend.rebuild(self._trace)
+        # CPU Load graph caches its bars into a pixmap keyed on a tuple that
+        # does not include the colorblind flag — force every open tab (and
+        # the Settings preview graph) to redraw with the new palette.
+        for tab in self._tabs:
+            tab.cpu_load_graph.invalidate_color_cache()
+        if hasattr(self, "_settings_cpu_graph"):
+            self._settings_cpu_graph.invalidate_color_cache()
 
     def _current_time_unit(self) -> str:
         if self._trace is not None and getattr(self._trace, "time_scale", ""):
@@ -5217,6 +5402,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # legend via _set_show_sti even though task/core mode does not change it.
         self._vm.settings._model.view_mode = mode
         self._sync_view_mode_toolbar()
+        self._legend.set_view_mode(mode)
         for tab in self._tabs:
             tab.view.set_view_mode(mode)
             self._sync_cpu_load_graph(tab)
@@ -5720,18 +5906,35 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 "span": "",
                 "cores": "",
                 "cursors": [],
+                "filters": [],
+                "selection": None,
             }
         findings, scope_title = self._stats_panel.build_analysis_findings()
         text = _format_analysis_findings_text(findings, scope_title)
         tr = self._trace
         span = _format_time(tr.time_max - tr.time_min, tr.time_scale)
         cursors: list = []
+        sc = None
         try:
             view = getattr(self, "_view", None)
             if view is not None and hasattr(view, "_scene"):
-                cursors = list(view._scene.cursor_times() or [])
+                sc = view._scene
+                cursors = list(sc.cursor_times() or [])
         except Exception:
             cursors = []
+        # Reserved for Step 2 AI context (item 3/4): same Filter/Selection
+        # representation shown in the status bar and Legend.
+        filters: list = []
+        if sc is not None:
+            if sc._heatmap_filter_mks is not None:
+                label = sc._heatmap_filter_label or "tasks"
+                filters.append(f"Migration: {label} ({len(sc._heatmap_filter_mks)})")
+            if sc._migrated_only_filter:
+                filters.append("Task: Migrated only")
+            if sc._core_filter_active():
+                filters.append(
+                    f"Core: {len(sc._core_filter_keys)} of {len(tr.core_names)}")
+        selection = sc._locked_task if sc is not None else None
         return {
             "findings_text": text,
             "findings": findings,
@@ -5739,6 +5942,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "span": span,
             "cores": len(tr.core_names or []),
             "cursors": cursors,
+            "filters": filters,
+            "selection": selection,
         }
 
     def _ai_list_loaded_tabs(self) -> list:
@@ -7802,6 +8007,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if scope:
             self._on_explore_range(scope)
 
+    def _investigate_finding(self, finding: dict, section_id: str) -> None:
+        """Step-1 item 7: plain, non-AI Investigate — scope the finding then
+        jump straight to its Statistics section (no AI Assistant required)."""
+        self._apply_finding_scope(finding)
+        self._focus_statistics_panel(force=True)
+        panel = getattr(self, "_stats_panel", None)
+        if panel is not None and hasattr(panel, "scroll_to_section"):
+            QTimer.singleShot(0, lambda: panel.scroll_to_section(section_id))
+
     def _open_command_palette(self) -> None:
         dlg = _CommandPaletteDialog(self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
@@ -7899,6 +8113,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             ai_enabled=self._ai_feature_enabled(),
             ui_font_size=getattr(self, "_ui_font_size_val", UI_FONT_SIZE),
             on_apply_scope=self._apply_finding_scope,
+            on_investigate=self._investigate_finding,
             ux_events=evs,
             time_min=self._trace.time_min,
             time_max=self._trace.time_max,
@@ -8252,6 +8467,87 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         active = self._heatmap_filter_active()
         self._tb_show_all_tasks_btn.setVisible(active)
         self._tb_show_all_tasks_btn.setChecked(active)
+        if hasattr(self, "_status_filter_btn"):
+            tab = self._active_tab
+            sc = tab.view._scene if tab is not None else None
+            if active and sc is not None:
+                mks = sc._heatmap_filter_mks or ()
+                label = sc._heatmap_filter_label or "tasks"
+                filter_label = f"{label} ({len(mks)})"
+                _chip_text = f"Migration: {filter_label} ×"
+                _fm = self._status_filter_btn.fontMetrics()
+                self._status_filter_btn.setText(
+                    _fm.elidedText(_chip_text, Qt.TextElideMode.ElideMiddle, 200))
+                self._status_filter_btn.setToolTip(f"Clear this Migration Filter: {filter_label}")
+            self._status_filter_btn.setVisible(active)
+        self._sync_migrated_filter_chip()
+
+    def _active_filter_summary_label(self) -> Optional[str]:
+        """Combined Filtered: label for Statistics — mirrors web's activeFilterSummaryLabel."""
+        tab = self._active_tab
+        sc = tab.view._scene if tab is not None else None
+        if sc is None:
+            return None
+        parts: list = []
+        if sc._heatmap_filter_mks is not None:
+            label = sc._heatmap_filter_label or "tasks"
+            parts.append(f"Migration: {label} ({len(sc._heatmap_filter_mks)})")
+        if sc._migrated_only_filter:
+            parts.append("Task: Migrated only")
+        if sc._core_filter_active():
+            parts.append(
+                f"Core: {len(sc._core_filter_keys)} of {len(sc._trace.core_names)}")
+        return ", ".join(parts) if parts else None
+
+    def _sync_active_filter_label(self) -> None:
+        if hasattr(self, "_stats_panel") and self._stats_panel is not None:
+            self._stats_panel.set_active_filter_label(self._active_filter_summary_label())
+
+    def _sync_migrated_filter_chip(self) -> None:
+        """Step-1 item 3: reflect the "Migrated tasks only" Task Filter as a chip."""
+        if not hasattr(self, "_status_migrated_filter_btn"):
+            return
+        tab = self._active_tab
+        sc = tab.view._scene if tab is not None else None
+        active = bool(sc is not None and sc._migrated_only_filter)
+        self._status_migrated_filter_btn.setVisible(active)
+        if active:
+            self._status_migrated_filter_btn.setText("Task: Migrated only ×")
+        self._sync_active_filter_label()
+
+    def _on_legend_core_filter(self, keys: list) -> None:
+        """Core Filter (Legend "Cores" list, Core View only) — narrows Scope to some cores."""
+        tab = self._active_tab
+        if tab is None:
+            return
+        tab.view._scene.set_core_filter(keys or None)
+        self._sync_core_filter_chip()
+        if not self._cpu_splitter_user_sized:
+            self._autofit_cpu_load_height()
+
+    def _clear_core_filter(self) -> None:
+        tab = self._active_tab
+        if tab is None:
+            return
+        self._legend.set_core_filter(None)
+        tab.view._scene.set_core_filter(None)
+        self._sync_core_filter_chip()
+        if not self._cpu_splitter_user_sized:
+            self._autofit_cpu_load_height()
+
+    def _sync_core_filter_chip(self) -> None:
+        """Core Filter status-bar chip — mirrors the Task Filter chip pattern."""
+        if not hasattr(self, "_status_core_filter_btn"):
+            return
+        tab = self._active_tab
+        sc = tab.view._scene if tab is not None else None
+        active = bool(sc is not None and sc._core_filter_active())
+        self._status_core_filter_btn.setVisible(active)
+        if active:
+            total = len(sc._trace.core_names) if sc._trace else 0
+            n = len(sc._core_filter_keys or ())
+            self._status_core_filter_btn.setText(f"Core: {n} of {total} ×")
+        self._sync_active_filter_label()
 
     def _on_heatmap_drill(self, from_core: str, to_core: str, label: str,
                           bin_lo: int, bin_hi: int, merge_keys: set,
@@ -8341,7 +8637,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _sync_trace_compare_btn(self) -> None:
         """Enable toolbar Compare when two or more traces are loaded."""
         if hasattr(self, "_tb_compare_btn"):
-            self._tb_compare_btn.setEnabled(len(getattr(self, "_tabs", ())) >= 2)
+            enabled = len(getattr(self, "_tabs", ())) >= 2
+            self._tb_compare_btn.setEnabled(enabled)
+            self._tb_compare_btn.setToolTip(
+                "Trace Compare — summary, top tasks, and core migrations "
+                "between two open trace tabs" if enabled
+                else "Open at least two traces to compare")
 
     def _sync_toolbar_to_active_tab(self) -> None:
         """Refresh toolbar toggles that reflect per-tab view state."""
@@ -8358,6 +8659,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._tb_log2_btn.blockSignals(True)
             self._tb_log2_btn.setChecked(log2)
             self._tb_log2_btn.blockSignals(False)
+            if hasattr(self, "_act_sti_log2"):
+                self._act_sti_log2.blockSignals(True)
+                self._act_sti_log2.setChecked(log2)
+                self._act_sti_log2.blockSignals(False)
         if hasattr(self, "_tb_expand_all_btn") and self._view_mode == "core":
             scene = self._view._scene
             trace = scene._trace
@@ -8768,16 +9073,36 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 return
         self._add_annotation_with_note(mark_ns, note, show_marks_panel=False)
 
+    def _toggle_mark_near_ns(self, kind: str, ns: int) -> bool:
+        """Remove a bookmark/annotation already near *ns* instead of stacking a
+        duplicate — matches the cursor 'C' toggle (press again to clear).
+        Returns True if an existing mark was removed."""
+        marks = self._bookmarks if kind == "bookmark" else self._annotations
+        if not marks:
+            return False
+        coord = self._view._scene.ns_to_scene_coord(ns)
+        th = self._view._cursor_drag_threshold
+        for m in marks:
+            if abs(self._view._scene.ns_to_scene_coord(m.ns) - coord) <= th:
+                self._push_undo_snapshot()
+                marks.remove(m)
+                self._rebuild_marks_list()
+                self._save_current_trace_state()
+                return True
+        return False
+
     def _add_bookmark_at_center(self) -> None:
         if self._trace is None:
             return
-        self._push_undo_snapshot()
         # Priority: hover position -> first placed cursor -> viewport centre
         hover_ns   = self._view._scene._hover_ns
         cursor_times = self._view._scene.cursor_times()
         ns = (hover_ns if hover_ns is not None
               else cursor_times[0] if cursor_times
               else self._view.view_center_ns())
+        if self._toggle_mark_near_ns("bookmark", ns):
+            return
+        self._push_undo_snapshot()
         unit = self._current_time_unit()
         label = f"Bookmark @{_format_time(ns, unit, decimals=self._time_decimals_val)}"
         self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
@@ -8786,70 +9111,60 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._rebuild_bookmark_list()
         self._save_current_trace_state()
 
-    def _jump_selected_bookmark(self) -> None:
-        item = self._bookmark_list.currentItem()
+    def _delete_selected_mark(self) -> None:
+        """Delete the currently-selected row in the flattened Marks list."""
+        item = self._marks_list.currentItem()
         if item is None:
             return
-        self._jump_to_ns(int(item.data(Qt.ItemDataRole.UserRole + 1)))
+        kind = str(item.data(Qt.ItemDataRole.UserRole + 2))
+        mid = int(item.data(Qt.ItemDataRole.UserRole))
+        self._on_mark_row_delete(kind, mid)
 
-    def _delete_selected_bookmark(self) -> None:
-        item = self._bookmark_list.currentItem()
-        if item is None:
-            return
+    def _on_mark_row_delete(self, kind: str, mark_id: int) -> None:
         self._push_undo_snapshot()
-        bid = int(item.data(Qt.ItemDataRole.UserRole))
-        for i, b in enumerate(self._bookmarks):
-            if b.id == bid:
-                self._bookmarks.pop(i)
-                break
-        self._rebuild_bookmark_list()
+        if kind == "annotation":
+            self._annotations[:] = [a for a in self._annotations if a.id != mark_id]
+        else:
+            self._bookmarks[:] = [b for b in self._bookmarks if b.id != mark_id]
+        self._rebuild_marks_list()
         self._save_current_trace_state()
 
-    def _rebuild_bookmark_list(self) -> None:
-        self._bookmark_list.blockSignals(True)
-        self._bookmark_list.clear()
-        if self._trace is None:
-            self._bookmark_list.blockSignals(False)
-            return
-        unit = self._current_time_unit()
-        for b in sorted(self._bookmarks, key=lambda x: x.ns):
-            txt = b.label or f"Bookmark @{_format_time(b.ns, unit, decimals=self._time_decimals_val)}"
-            item = QListWidgetItem(txt)
-            item.setData(Qt.ItemDataRole.UserRole, int(b.id))
-            item.setData(Qt.ItemDataRole.UserRole + 1, int(b.ns))
-            item.setToolTip(f"{_format_time(b.ns, unit, decimals=self._time_decimals_val)}")
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
-            self._bookmark_list.addItem(item)
-        self._bookmark_list.blockSignals(False)
-        self._view._scene.set_marks(self._bookmarks, self._annotations)
-        self._view._has_bookmarks = bool(self._bookmarks)
+    def _on_mark_row_jump(self, item: QListWidgetItem, ns: int) -> None:
+        self._marks_list.setCurrentItem(item)
+        self._jump_to_ns(int(ns))
 
-    def _on_bookmark_item_changed(self, item: QListWidgetItem) -> None:
-        if item is None:
-            return
-        bid = int(item.data(Qt.ItemDataRole.UserRole))
-        new_label = item.text().strip()
-        for b in self._bookmarks:
-            if b.id == bid:
-                # Empty label -> revert to the default timestamp label so the
-                # bookmark keeps useful identity information.
-                b.label = new_label or f"Bookmark @{_format_time(b.ns, self._current_time_unit(), decimals=self._time_decimals_val)}"
-                break
+    def _on_mark_label_edited(self, mark_id: int, kind: str, new_text: str) -> None:
+        if kind == "annotation":
+            for a in self._annotations:
+                if a.id == mark_id:
+                    a.note = new_text
+                    break
+        else:
+            unit = self._current_time_unit()
+            for b in self._bookmarks:
+                if b.id == mark_id:
+                    b.label = new_text or f"Bookmark @{_format_time(b.ns, unit, decimals=self._time_decimals_val)}"
+                    break
+        self._recompute_find_hits()
         self._save_current_trace_state()
 
     def _add_annotation_at_center(self) -> None:
         if self._trace is None:
             return
-        note = self._annotation_input.text().strip()
-        if not note:
+        # Priority: hover position -> first placed cursor -> viewport centre
+        # (same priority as _add_bookmark_at_center, for consistency).
+        hover_ns   = self._view._scene._hover_ns
+        cursor_times = self._view._scene.cursor_times()
+        ns = (hover_ns if hover_ns is not None
+              else cursor_times[0] if cursor_times
+              else self._view.view_center_ns())
+        if self._toggle_mark_near_ns("annotation", ns):
             return
         self._push_undo_snapshot()
-        ns = self._view.view_center_ns()
-        self._annotations.append(TraceAnnotation(id=self._mark_next_id, ns=ns, note=note))
+        self._annotations.append(TraceAnnotation(id=self._mark_next_id, ns=ns, note=""))
         self._mark_next_id += 1
         self._annotations.sort(key=lambda a: a.ns)
-        self._annotation_input.clear()
-        self._rebuild_annotation_list()
+        self._rebuild_marks_list()
         self._save_current_trace_state()
 
     def _add_bookmark_at_ns(self, ns: int) -> None:
@@ -8862,7 +9177,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
         self._mark_next_id += 1
         self._bookmarks.sort(key=lambda b: b.ns)
-        self._rebuild_bookmark_list()
+        self._rebuild_marks_list()
         self._save_current_trace_state()
         self._focus_panel_tab(_PANEL_TAB_MARKS)
 
@@ -8888,7 +9203,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._annotations.append(TraceAnnotation(id=ann_id, ns=ns, note=note or ""))
         self._mark_next_id += 1
         self._annotations.sort(key=lambda a: a.ns)
-        self._rebuild_annotation_list()
+        self._rebuild_marks_list()
         self._save_current_trace_state()
         if focus_annotation_tab:
             self._focus_marks_annotation_panel(ann_id)
@@ -8901,7 +9216,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         self._push_undo_snapshot()
         self._bookmarks.clear()
-        self._rebuild_bookmark_list()
+        self._rebuild_marks_list()
         self._save_current_trace_state()
 
     def _clear_all_annotations(self) -> None:
@@ -8910,7 +9225,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         self._push_undo_snapshot()
         self._annotations.clear()
-        self._rebuild_annotation_list()
+        self._rebuild_marks_list()
         self._save_current_trace_state()
 
     def _clear_all_marks(self) -> None:
@@ -8926,90 +9241,74 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._view.cursors_changed.emit([])
         if has_bm:
             self._bookmarks.clear()
-            self._rebuild_bookmark_list()
         if has_an:
             self._annotations.clear()
-            self._rebuild_annotation_list()
         if has_bm or has_an:
+            self._rebuild_marks_list()
             self._save_current_trace_state()
 
-    def _jump_selected_annotation(self) -> None:
-        item = self._annotation_list.currentItem()
-        if item is None:
-            return
-        self._jump_to_ns(int(item.data(Qt.ItemDataRole.UserRole + 1)))
-
-    def _delete_selected_annotation(self) -> None:
-        item = self._annotation_list.currentItem()
-        if item is None:
-            return
-        self._push_undo_snapshot()
-        aid = int(item.data(Qt.ItemDataRole.UserRole))
-        for i, a in enumerate(self._annotations):
-            if a.id == aid:
-                self._annotations.pop(i)
-                break
-        self._rebuild_annotation_list()
-        self._save_current_trace_state()
-
-    def _edit_selected_annotation(self) -> None:
-        item = self._annotation_list.currentItem()
-        if item is None:
-            return
-        aid = int(item.data(Qt.ItemDataRole.UserRole))
-        for a in self._annotations:
-            if a.id == aid:
-                dlg = QInputDialog(self)
-                dlg.setWindowTitle("Edit Annotation")
-                dlg.setLabelText("Note:")
-                dlg.setTextValue(a.note)
-                dlg.setInputMode(QInputDialog.TextInput)
-                dlg.adjustSize()
-                if _exec_centred(dlg, self) != QDialog.Accepted:
-                    return
-                note = dlg.textValue().strip()
-                self._push_undo_snapshot()
-                a.note = note
-                self._rebuild_annotation_list()
-                self._recompute_find_hits()
-                self._save_current_trace_state()
-                break
+    def _rebuild_bookmark_list(self) -> None:
+        self._rebuild_marks_list()
 
     def _rebuild_annotation_list(self) -> None:
+        self._rebuild_marks_list()
+
+    def _rebuild_marks_list(self) -> None:
+        """Repopulate the flattened Marks list (bookmarks + annotations, by time)."""
         stay_tab = self._panel_tabs.currentIndex() if hasattr(self, "_panel_tabs") else None
-        self._annotation_list.blockSignals(True)
-        self._annotation_list.clear()
-        if self._trace is None:
-            self._annotation_list.blockSignals(False)
-        else:
+        lst = self._marks_list
+        lst.clear()
+        if self._trace is not None:
             unit = self._current_time_unit()
-            for a in sorted(self._annotations, key=lambda x: x.ns):
-                txt = f"{_format_time(a.ns, unit, decimals=self._time_decimals_val)}  {a.note}"
-                item = QListWidgetItem(txt)
-                item.setData(Qt.ItemDataRole.UserRole, int(a.id))
-                item.setData(Qt.ItemDataRole.UserRole + 1, int(a.ns))
-                item.setToolTip(f"@ {_format_time(a.ns, unit, decimals=self._time_decimals_val)}\n{a.note}")
-                self._annotation_list.addItem(item)
-            self._annotation_list.blockSignals(False)
+            rows = []
+            for b in self._bookmarks:
+                label = b.label or f"Bookmark @{_format_time(b.ns, unit, decimals=self._time_decimals_val)}"
+                rows.append(("bookmark", b.id, b.ns, label))
+            for a in self._annotations:
+                rows.append(("annotation", a.id, a.ns, a.note or ""))
+            rows.sort(key=lambda r: r[2])
+            for kind, mid, ns, text in rows:
+                time_str = _format_time(ns, unit, decimals=self._time_decimals_val)
+                kind_label = "Annotation" if kind == "annotation" else "Bookmark"
+                tooltip = f"{kind_label} @ {time_str}"
+                item = QListWidgetItem()
+                item.setData(Qt.ItemDataRole.UserRole, int(mid))
+                item.setData(Qt.ItemDataRole.UserRole + 1, int(ns))
+                item.setData(Qt.ItemDataRole.UserRole + 2, kind)
+                item.setSizeHint(QSize(0, 26))
+                lst.addItem(item)
+                row_w = _MarkRowWidget(kind, mid, ns, text, time_str, tooltip)
+                row_w.labelEdited.connect(self._on_mark_label_edited)
+                row_w.deleteRequested.connect(self._on_mark_row_delete)
+                row_w.jumpRequested.connect(
+                    lambda ns=ns, it=item: self._on_mark_row_jump(it, ns))
+                lst.setItemWidget(item, row_w)
             self._view._scene.set_marks(self._bookmarks, self._annotations)
+            self._view._has_bookmarks = bool(self._bookmarks)
             self._view._has_annotations = bool(self._annotations)
-        # Updating a focused QListWidget on a hidden tab can make QTabWidget
-        # switch to Marks; keep the user on Statistics / Find / AI / …
+        n = len(self._bookmarks) + len(self._annotations)
+        self._marks_count_label.setText(f"Marks ({n})")
+        self._marks_empty_hint.setVisible(n == 0 and self._trace is not None)
+        if hasattr(self, "_marks_clear_b_btn"):
+            self._marks_clear_b_btn.setEnabled(bool(self._bookmarks))
+        if hasattr(self, "_marks_clear_a_btn"):
+            self._marks_clear_a_btn.setEnabled(bool(self._annotations))
+        # Updating the list on a hidden tab can make QTabWidget switch to
+        # Marks; keep the user on Statistics / Find / AI / …
         if stay_tab is not None and self._panel_tabs.currentIndex() != stay_tab:
             self._panel_tabs.setCurrentIndex(stay_tab)
 
     def _focus_marks_annotation_panel(self, annotation_id: Optional[int] = None) -> None:
-        """Show Marks tab, switch to Anno. sub-tab, optionally select a row."""
+        """Show the Marks panel, optionally selecting/scrolling to a mark row."""
         self._show_marks = True
         self._sync_panel_tab_visibility()
         self._focus_panel_tab(_PANEL_TAB_MARKS)
-        self._marks_tabs.setCurrentIndex(2)
         if annotation_id is not None:
-            for row in range(self._annotation_list.count()):
-                item = self._annotation_list.item(row)
+            for row in range(self._marks_list.count()):
+                item = self._marks_list.item(row)
                 if item is not None and int(item.data(Qt.ItemDataRole.UserRole)) == annotation_id:
-                    self._annotation_list.setCurrentItem(item)
-                    self._annotation_list.scrollToItem(item)
+                    self._marks_list.setCurrentItem(item)
+                    self._marks_list.scrollToItem(item)
                     break
 
     def _typing_focus_active(self) -> bool:
@@ -9062,6 +9361,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         vm.find_mode = str(mode) if mode else normalize_find_mode(
             self._find_mode_combo.currentText())
         status = vm.recompute_find_hits()
+        if not vm.find_hits and str(vm.find_query or "").strip():
+            status = f"{status} for \u201c{vm.find_query.strip()}\u201d \u2014 try a different Match Mode"
         self._find_status.setText(status)
         self._find_status.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
@@ -9109,7 +9410,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._find_hit_idx = idx
         self._jump_to_ns(self._find_hits[idx])
         self._set_find_marker_ns(self._find_hits[idx])
-        self._find_status.setText(f"{n} matches (at {idx + 1})")
+        self._find_status.setText(f"{idx + 1} of {n} matches")
 
     def _set_find_marker_ns(self, ns: Optional[int]) -> None:
         self._find_marker_ns = ns
@@ -9289,8 +9590,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     load_ok = True
                 except (ValueError, RuntimeError, KeyError, OSError) as exc:
                     self._status_file.setText("  No file loaded")
-                    QMessageBox.critical(self, "Render Error",
-                                         f"Failed to display:\n{path}\n\n{exc}")
+                    _critical_with_detail(
+                        self, "Render Error",
+                        f"Failed to display:\n{path}\n\n"
+                        "Check that the file is a valid BTF/XML trace, then try again.",
+                        str(exc))
             finally:
                 if self._progress_dialog is progress_dialog:
                     _teardown_loading_dialog(clear_load_flag=not load_ok)
@@ -9299,8 +9603,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         def _on_error(msg):
             try:
                 self._status_file.setText("  No file loaded")
-                QMessageBox.critical(self, "Parse Error",
-                                     f"Failed to parse:\n{path}\n\n{msg}")
+                _critical_with_detail(
+                    self, "Parse Error",
+                    f"Failed to parse:\n{path}\n\n"
+                    "Check that the file is a valid BTF/XML trace, then try again.",
+                    str(msg))
             finally:
                 _teardown_loading_dialog()
                 self._finish_parse_thread()
@@ -9325,8 +9632,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             _teardown_loading_dialog()
             self._finish_parse_thread()
             self._status_file.setText("  No file loaded")
-            QMessageBox.critical(self, "Load Error",
-                                 f"Failed to start parser thread:\n{path}\n\n{exc}")
+            _critical_with_detail(
+                self, "Load Error",
+                f"Failed to start parser thread:\n{path}\n\n"
+                "Try reopening the file. If the problem persists, restart the app.",
+                str(exc))
 
     def _finalize_loaded_trace(self, trace: BtfTrace, path: str,
                                progress_dialog: _LoadProgressDialog) -> None:
@@ -9445,7 +9755,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     painter.end()
             self.statusBar().showMessage(f"Saved: {path}", 4000)
         except (OSError, RuntimeError) as exc:
-            QMessageBox.critical(self, "Save Error", f"Could not save SVG:\n{exc}")
+            _critical_with_detail(
+                self, "Save Error",
+                "Could not save SVG.\n\nCheck the destination path is writable, then try again.",
+                str(exc))
 
     @_dialog_guard
     def _on_copy_image(self) -> None:
@@ -9507,8 +9820,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self.statusBar().showMessage(
                 f"Perfetto exported ({scope}) → {os.path.basename(path)}", 4000)
         except (OSError, TypeError, ValueError, AttributeError, RuntimeError) as exc:
-            QMessageBox.critical(
-                self, "Export Error", f"Could not export Perfetto file:\n{exc}")
+            _critical_with_detail(
+                self, "Export Error",
+                "Could not export Perfetto file.\n\nTry again, or export a Statistics report instead.",
+                str(exc))
 
     # -- Settings actions -----------------------------------------------
 
@@ -10043,13 +10358,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if hasattr(self, "_stats_panel"):
             self._stats_panel.set_cursor_times(times, refresh_stats=refresh_stats)
         self._cursor_bar.rebuild(times, self._trace, time_decimals=self._time_decimals_val)
+        if hasattr(self, "_cursors_clear_all_btn"):
+            self._cursors_clear_all_btn.setEnabled(placed_n > 0)
         has_range = len(times) >= 2
         self._act_zoom_range.setEnabled(has_range)
         self._tb_zoom_range_btn.setEnabled(has_range)
         self._sync_file_export_actions(has_range=has_range)
         if self._trace is None or not has_range:
-            self._range_stats_label.setText("Range: place two cursors to measure")
-            self._status_range.setVisible(False)
+            self._cursor_range_body.setVisible(False)
+            self._cursor_range_hint.setVisible(True)
+            self._status_range.setText("Scope: Full Trace")
+            self._status_range.setToolTip("Scope: Full Trace")
+            self._status_range.setVisible(True)
             self._rebuild_cursor_table()
             return
         t_sorted = sorted(times)
@@ -10064,21 +10384,33 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if task_acc:
             top_task, top_ns = max(task_acc.items(), key=lambda kv: kv[1])
         top_pct = (100.0 * top_ns / dt) if dt > 0 else 0.0
-        self._range_stats_label.setText(
-            f"Range C1-C{len(times)}: {_format_time(dt, unit, decimals=1)} | slices: {switches} | "
-            f"top: {top_task} ({top_pct:.1f}%)"
-        )
+        # Structured "Cursor Range" section in the Marks panel (matches web).
+        self._cursor_range_hint.setVisible(False)
+        self._cursor_range_body.setVisible(True)
+        self._cr_span_val.setText(_format_time(dt, unit, decimals=1))
+        self._cr_slices_val.setText(str(switches))
+        self._cr_top_row.setVisible(bool(task_acc))
+        if task_acc:
+            self._cr_top_val.setText(f"{top_task} ({top_pct:.1f}%)")
+        has_durations = bool(durations)
+        self._cr_min_row.setVisible(has_durations)
+        self._cr_avg_row.setVisible(has_durations)
+        self._cr_max_row.setVisible(has_durations)
+        if has_durations:
+            self._cr_min_val.setText(_format_time(min(durations), unit, decimals=1))
+            self._cr_avg_val.setText(_format_time(sum(durations) / len(durations), unit, decimals=1))
+            self._cr_max_val.setText(_format_time(max(durations), unit, decimals=1))
         # Compact status-bar version: span + segment min/max/avg
         if durations:
             d_min = _format_time(min(durations), unit, decimals=1)
             d_max = _format_time(max(durations), unit, decimals=1)
             d_avg = _format_time(sum(durations) / len(durations), unit, decimals=1)
             range_text = (
-                f"Range: {_format_time(dt, unit, decimals=1)}  "
+                f"Scope C1-C{len(times)}: {_format_time(dt, unit, decimals=1)}  "
                 f"min {d_min}  max {d_max}  avg {d_avg}"
             )
         else:
-            range_text = f"Range: {_format_time(dt, unit, decimals=1)}  (no segments)"
+            range_text = f"Scope C1-C{len(times)}: {_format_time(dt, unit, decimals=1)}  (no segments)"
         self._status_range.setText(range_text)
         self._status_range.setToolTip(range_text)
         self._status_range.setVisible(True)
@@ -10143,7 +10475,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             ci = QTableWidgetItem(f"C{row + 1}")
             ci.setData(Qt.ItemDataRole.UserRole, ns)
             ti = QTableWidgetItem(_format_time(ns, unit, decimals=self._time_decimals_val))
-            task_item = QTableWidgetItem(self._task_at_time(ns))
+            task_text = self._task_at_time(ns)
+            task_item = QTableWidgetItem(task_text)
+            # Full list on hover; the cell itself stays compact (elided) like
+            # the web app's `.task-cell` (max-width + ellipsis) so a busy
+            # timestamp with many simultaneous tasks doesn't blow up the
+            # column width.
+            task_item.setToolTip(task_text)
             if row == 0:
                 delta_item = QTableWidgetItem("—")
             else:
@@ -10157,6 +10495,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._cursor_table.setItem(row, 2, task_item)
             self._cursor_table.setItem(row, 3, delta_item)
         self._cursor_table.resizeColumnsToContents()
+        _task_col_w = self._cursor_table.columnWidth(2)
+        if _task_col_w > _CURSOR_TABLE_TASK_COL_MAX_W:
+            self._cursor_table.setColumnWidth(2, _CURSOR_TABLE_TASK_COL_MAX_W)
 
     def _on_cursor_table_clicked(self, row: int, _col: int) -> None:
         """Jump the timeline to the cursor selected in the comparison table."""
@@ -10251,6 +10592,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             sc.set_highlighted_task(task, locked=True)
             self._scroll_view_to_task(task)
 
+    def _on_legend_task_hovered(self, task: Optional[str]) -> None:
+        """Transient Legend hover -> timeline Highlight; never changes Selection."""
+        sc = self._view._scene
+        if task:
+            sc.set_highlighted_task(task, locked=False)
+        else:
+            sc.clear_hover()
+
     def _on_legend_migrated_filter(self, enabled: bool) -> None:
         tab = self._active_tab
         if tab is None:
@@ -10259,6 +10608,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if enabled:
             self._legend.set_heatmap_filter(None, None)
             self._sync_show_all_tasks_btn()
+        self._sync_migrated_filter_chip()
         if not self._cpu_splitter_user_sized:
             self._autofit_cpu_load_height()
 
@@ -10347,16 +10697,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 self._jump_to_ns(ns)
 
     def _prompt_annotation_at_center(self) -> None:
-        """Prompt for a note then add annotation at the first cursor (or viewport centre)."""
-        if self._trace is None:
-            return
-        # Priority: hover position -> first placed cursor -> viewport centre
-        hover_ns     = self._view._scene._hover_ns
-        cursor_times = self._view._scene.cursor_times()
-        ns = (hover_ns if hover_ns is not None
-              else cursor_times[0] if cursor_times
-              else self._view.view_center_ns())
-        self._add_annotation_at_ns(ns)
+        """Add annotation at the hover/cursor/viewport-centre position (Navigate menu, 'A').
+
+        Delegates to `_add_annotation_at_center()` so the 'A' shortcut gets the
+        same toggle-off-if-already-there behavior as the +A button and 'B'/'C'.
+        """
+        self._add_annotation_at_center()
 
     # -- Marks export ---------------------------------------------------
 
@@ -10497,6 +10843,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             sc.apply_tab_filters(filters)
             self._sync_legend_filters_from_scene(sc)
             self._sync_show_all_tasks_btn()
+            self._sync_core_filter_chip()
 
         tvp = data.get("timelineViewport")
         if isinstance(tvp, dict) and self._trace is not None:
@@ -10616,7 +10963,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self.statusBar().showMessage(
                 f"Session exported → {os.path.basename(path)}", 4000)
         except OSError as exc:
-            QMessageBox.critical(self, "Export Error", str(exc))
+            _critical_with_detail(
+                self, "Export Error",
+                "Check the destination path is writable, then try again.", str(exc))
 
     def _import_portable_session(self) -> None:
         """Import portable session JSON."""
@@ -10637,7 +10986,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self.statusBar().showMessage(
                 f"Session imported from {os.path.basename(path)}", 4000)
         except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
-            QMessageBox.critical(self, "Import Session", str(exc))
+            _critical_with_detail(
+                self, "Import Session",
+                "Check the file is a portable session JSON exported from BTFViewer, "
+                "then try again.", str(exc))
 
     def _export_marks_csv(self) -> None:
         """Export all bookmarks and annotations to a CSV file."""
@@ -10676,7 +11028,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 writer.writerows(rows)
             self.statusBar().showMessage(f"Marks exported → {os.path.basename(path)}", 4000)
         except OSError as exc:
-            QMessageBox.critical(self, "Export Error", str(exc))
+            _critical_with_detail(
+                self, "Export Error",
+                "Check the destination path is writable, then try again.", str(exc))
 
     def _import_marks_csv(self) -> None:
         """Import bookmarks and annotations from a CSV file."""
@@ -10741,7 +11095,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._rebuild_annotation_list()
             self.statusBar().showMessage(f"Imported {imported} mark(s) from {os.path.basename(path)}", 4000)
         except (OSError, OverflowError, ValueError, TypeError) as exc:
-            QMessageBox.critical(self, "Import Error", str(exc))
+            _critical_with_detail(
+                self, "Import Error",
+                "Check the file is a Marks CSV exported from BTFViewer, then try again.",
+                str(exc))
 
     # -- Right panel / Find ------------------------------------------------
 

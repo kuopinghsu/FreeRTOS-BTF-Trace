@@ -65,6 +65,13 @@ export function taskPassesRowFilter(
   return mergeKeyMatchesTextFilter(trace, mk, q)
 }
 
+/** True when a Core Filter narrows Scope to a subset of the trace's cores. */
+export function coreFilterActive(coreFilterKeys, trace) {
+  if (!coreFilterKeys?.length) return false
+  const total = trace?.coreNames?.length ?? 0
+  return coreFilterKeys.length < total
+}
+
 /** True when core view should hide non-matching tasks (heatmap, migrated, search). */
 export function coreViewTaskFilterActive(
   migratedOnlyFilter, taskFilterKeys, taskFilterText = '',
@@ -78,14 +85,20 @@ export function coreViewTaskFilterActive(
 
 /**
  * Per-core task lists (no TICK). Cores with no matching tasks are omitted when a filter is active.
+ * Cores excluded by *coreFilterKeys* (Core Filter — Scope narrowed to specific cores) are omitted
+ * entirely, regardless of task filter results.
  * @returns {{ coreName: string, tasks: string[] }[]}
  */
 export function filteredCoreViewTasks(
-  trace, migratedOnlyFilter, taskFilterKeys, taskFilterText = '',
+  trace, migratedOnlyFilter, taskFilterKeys, taskFilterText = '', coreFilterKeys = null,
 ) {
   const filterActive = coreViewTaskFilterActive(migratedOnlyFilter, taskFilterKeys, taskFilterText)
+  const coreSet = coreFilterKeys?.length
+    ? (coreFilterKeys instanceof Set ? coreFilterKeys : new Set(coreFilterKeys))
+    : null
   const out = []
   for (const coreName of trace.coreNames) {
+    if (coreSet && !coreSet.has(coreName)) continue
     const taskOrder = (trace.coreTaskOrder.get(coreName) || [])
       .filter(t => parseTaskName(t).name !== 'TICK')
     const tasks = filterActive
