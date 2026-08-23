@@ -466,6 +466,8 @@ describe('AI endpoint helpers', () => {
       AI_TEMPLATE_MENU_GROUPS.at(-1),
       { label: 'What-if / Optimize', ids: ['what_if', 'optimize'] },
     )
+    assert.equal(AI_TEMPLATE_MENU_GROUPS[0].label, 'Start')
+    assert.equal(AI_TEMPLATE_MENU_GROUPS[2].label, 'SMP')
     assert.equal(
       AI_TEMPLATE_QUESTIONS.find(t => t.id === 'what_if')?.label,
       'What-if',

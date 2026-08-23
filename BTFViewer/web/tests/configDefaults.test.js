@@ -57,12 +57,14 @@ describe('config.js is the single source of web defaults', () => {
   })
 
   it('persists statistics collapse with pins and section order', () => {
-    assert.equal(DEFAULT_SETTINGS.statsSectionCollapsed.cores, false)
-    assert.equal(DEFAULT_SETTINGS.statsSectionCollapsed.health, false)
+    // Step 1.1: factory default is all collapsed; SMP expand+pin is applied
+    // via defaultStatsPresentation(trace) on open / Reset, not in DEFAULT_SETTINGS.
+    assert.equal(DEFAULT_SETTINGS.statsSectionCollapsed.cores, true)
+    assert.equal(DEFAULT_SETTINGS.statsSectionCollapsed.health, true)
     assert.equal(DEFAULT_SETTINGS.statsSectionCollapsed.exec, true)
     const s = normalizeSettings({ statsSectionCollapsed: { exec: false } })
     assert.equal(s.statsSectionCollapsed.exec, false)
-    assert.equal(s.statsSectionCollapsed.health, false)
+    assert.equal(s.statsSectionCollapsed.health, true)
     assert.deepEqual(s.statsPinnedSections, [])
     const expanded = Object.fromEntries(
       Object.keys(DEFAULT_SETTINGS.statsSectionCollapsed).map((k) => [k, false]),

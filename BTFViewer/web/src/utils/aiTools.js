@@ -6,7 +6,12 @@ import { taskDisplayName, taskMergeKey, taskReprGet } from './colors.js'
 import { migrationsInRange } from './migrationAnalysis.js'
 import { preemptionChainRows } from './statsAnalysis.js'
 import { computeFindHits } from './findAnalysis.js'
-import { btfHtmlReportDocument } from './htmlReport.js'
+import {
+  btfHtmlReportDocument,
+  HTML_REPORT_TOC_CSS,
+  HTML_REPORT_TOC_SCRIPT,
+  htmlApplyCollapsibleToc,
+} from './htmlReport.js'
 import {
   analyzeMultiTraces,
   buildCorrelationTimeline,
@@ -307,6 +312,24 @@ export function parseBtfHighlightHref(href, dataHighlight) {
   } catch {
     return m[1]
   }
+}
+
+const BTF_STATS_HREF_RE = /^btfstats:(?:section\/)?([A-Za-z0-9_\-]+)$/i
+
+export function btfStatsHref(sectionId) {
+  const sid = String(sectionId || '').trim()
+  return sid ? `btfstats:section/${sid}` : 'btfstats:section/'
+}
+
+export function parseBtfStatsHref(href) {
+  const raw = String(href || '').trim()
+  const m = BTF_STATS_HREF_RE.exec(raw)
+  if (m) return String(m[1] || '').trim()
+  const low = raw.toLowerCase()
+  if (low.startsWith('btfstats:')) {
+    return raw.split(':', 2)[1].replace(/^\/+/, '').replace(/^section\//i, '').trim()
+  }
+  return ''
 }
 
 export const AI_TOOL_SYSTEM_ADDENDUM =
@@ -3455,7 +3478,8 @@ export function buildAiReportHtml({
     + 'readable forms of the raw cursor values.</p>'
   )
   const body = (
-    `<section class="report-card">
+    `<!--TOC-->
+<section class="report-card">
 <h2>Executive summary</h2>
 ${execLines.join('\n')}
 </section>
@@ -3484,12 +3508,16 @@ ${nextHtml}
 ${appendix}
 ${note}
 </section>
+${HTML_REPORT_TOC_SCRIPT}
 `
   )
-  return btfHtmlReportDocument('AI Diagnostic Report', body, {
+  const report = btfHtmlReportDocument('AI Diagnostic Report', body, {
     subtitle: `Saved ${stamp} · mode=${mode}`,
+    extraCss: HTML_REPORT_TOC_CSS,
     docTitle: 'BTFViewer — AI Report',
   })
+  // Same Expand all / Collapse all TOC chrome as Statistics HTML reports.
+  return htmlApplyCollapsibleToc(report, ['Executive summary'])
 }
 
 function inTimeRange(t, lo, hi) {

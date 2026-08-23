@@ -20,6 +20,9 @@ from btf_viewer_pkg.ux_explore import (  # noqa: E402
     collect_worst_events,
     compare_summary_strip,
     compare_notable_changes,
+    compare_investigate_target,
+    compare_section_for_metric,
+    compare_task_for_row,
     compare_core_util_chart_rows,
     compare_core_util_chart_svg,
     compare_p99_delta_chart_rows,
@@ -387,6 +390,19 @@ class UxExploreTest(unittest.TestCase):
         self.assertGreater(notable["cards"]["regressions"], 0)
         self.assertGreater(notable["cards"]["improvements"], 0)
         self.assertIn("Candidate B", notable["verdict"])
+        self.assertTrue(all(r.get("significance") == "engineering" for r in notable["rows"]))
+        self.assertIn("next_investigation", notable)
+        self.assertTrue(str(notable.get("next_investigation") or "").startswith("Next:"))
+        self.assertIn("small_omitted_count", notable)
+        self.assertIn("investigate", notable)
+        inv = notable["investigate"]
+        self.assertEqual(inv.get("section_id") or inv.get("section"), "response")
+        self.assertTrue(any(r.get("section") for r in notable["rows"]))
+        self.assertEqual(compare_section_for_metric("T1 exec max", "exec max"), "exec")
+        self.assertEqual(
+            compare_task_for_row("QP[198] response p99", "response p99"), "QP[198]")
+        empty = compare_investigate_target({"rows": []})
+        self.assertEqual(empty["section_id"], "response")
 
     def test_compare_charts_and_migration_views(self) -> None:
         util = compare_core_util_chart_rows({

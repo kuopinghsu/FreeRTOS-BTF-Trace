@@ -376,7 +376,9 @@ HTML_REPORT_TOC_SCRIPT = """
     }
   }
   function setAllOpen(open) {
-    document.querySelectorAll('details.report-card').forEach(function (el) {
+    document.querySelectorAll(
+      'details.report-card, details.report-appendix'
+    ).forEach(function (el) {
       el.open = open;
     });
   }

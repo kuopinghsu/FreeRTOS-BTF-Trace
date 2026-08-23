@@ -110,16 +110,30 @@ export function aiTemplatePrimaryRows(ids = AI_TEMPLATE_PRIMARY_IDS) {
 
 /** Overflow menu groups for templates not in AI_TEMPLATE_PRIMARY_IDS. */
 export const AI_TEMPLATE_MENU_GROUPS = [
-  { label: 'Diagnose', ids: ['triage', 'verify', 'root_cause', 'explain_finding', 'diagnostic_report'] },
-  { label: 'Compare', ids: ['compare'] },
+  { label: 'Start', ids: ['triage'] },
   {
-    label: 'Metrics',
+    label: 'Investigate',
     ids: [
-      'task_profile', 'latency', 'wcet', 'migrations', 'balance',
+      'task_profile', 'latency', 'wcet', 'root_cause',
       'tick', 'priority', 'deadlines',
     ],
   },
+  { label: 'SMP', ids: ['migrations', 'balance'] },
+  { label: 'Verify', ids: ['verify', 'explain_finding'] },
+  { label: 'Compare', ids: ['compare', 'diagnostic_report'] },
   { label: 'What-if / Optimize', ids: ['what_if', 'optimize'] },
+]
+
+/** Intent landing groups for the AI empty state (includes primary chips). */
+export const AI_TEMPLATE_INTENT_GROUPS = [
+  { label: 'Start', ids: ['findings', 'triage'] },
+  {
+    label: 'Investigate',
+    ids: ['investigate', 'explain_region', 'latency', 'wcet', 'task_profile'],
+  },
+  { label: 'SMP', ids: ['migrations', 'balance'] },
+  { label: 'Verify', ids: ['verify', 'explain_finding', 'auto_investigate'] },
+  { label: 'Compare', ids: ['compare', 'diagnostic_report'] },
 ]
 
 /** @type {{ id: string, label: string, prompt: string }[]} */
@@ -963,6 +977,9 @@ export function normalizeAiContext(ctx = {}) {
   let cursors = c.cursors
   if (cursors == null) cursors = []
   else if (!Array.isArray(cursors)) cursors = [cursors]
+  let filters = c.filters
+  if (filters == null) filters = []
+  else if (!Array.isArray(filters)) filters = [filters]
   return {
     findingsText: String(c.findingsText ?? c.findings_text ?? ''),
     span: String(c.span ?? ''),
@@ -971,6 +988,7 @@ export function normalizeAiContext(ctx = {}) {
     metrics: c.metrics ?? null,
     cursors,
     findings: Array.isArray(c.findings) ? c.findings : [],
+    filters: filters.filter(Boolean).map(String),
   }
 }
 

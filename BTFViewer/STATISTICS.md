@@ -30,7 +30,7 @@ flowchart LR
 
 1. Start from a symptom or an **Analysis Finding**.
 2. Open the related Statistics section.
-3. Check **Min / Avg / p95 / p99 / Max** and the distribution, when available.
+3. Check **Min / Avg / p50 / p95 / p99 / Max** and the distribution, when available.
 4. Jump from an unusual value or chart point to the timeline.
 5. Place at least two cursors around the relevant period and enable **Limit to C1–Cn**.
 6. Check related metrics before deciding on the cause.
@@ -136,7 +136,7 @@ The Statistics panel is shared by Desktop and Web. Most sections are collapsible
 
 The **Statistics** tab appears in the right-side panel on both Desktop and Web.
 
-The panel header shows the current **Scope** (**Full Trace** or **C1–Cn · duration**, matching the status bar). When a Task, Core, or Migration **Filter** is active, a **Filtered:** indicator lists the same chips shown in the status bar so analytical narrowing is never hidden.
+The panel header shows the current **Scope** (**Full Trace** or **C1–Cn · duration**, matching the status bar). When a Task, Core, or Migration **Filter** is active, a **Filtered:** indicator lists the same chips shown in the status bar so analytical narrowing is never hidden. Each section title also shows compact **Scope** (`C1–Cn`) and **Filtered** chips when those apply. Rebuilding Statistics for a new Scope or Filter preserves the panel scroll position; Evidence / Investigate jumps that call **scroll to section** still move intentionally.
 
 ### Limit statistics to a time range
 
@@ -157,7 +157,7 @@ Clear the cursors to return to **Full Trace** statistics. The status-bar Scope l
 | **⠿** grip | Drag a section to a new position |
 | Pin | Keep a section open when **Collapse all** is used (outline pin on hover/focus; filled when pinned). Manually collapsing a pinned section clears the pin |
 
-Section order, pinned sections, expanded/collapsed state, and table heights are saved across launches. **Settings → Reset to Defaults** restores the built-in layout for the current Trace: when meaningful work appears on more than one core (SMP-active), **Core utilisation** starts expanded and pinned; otherwise every section starts collapsed and unpinned. Each section shows a category badge on the right (**OVERVIEW**, **TRIAGE**, **TIMING**, **SCHED**, **SYNC**, **DETAIL**). Badges use a soft tinted background and border per category (quieter than Warning/Error); the label text remains the primary identifier. Reordering does not change a section's category. The pin control stays monochrome and independent of badge colour. Desktop and Web both reserve a fixed 22px pin column so the category badge does not shift when the outline pin fades in on hover.
+Section order, pinned sections, expanded/collapsed state, and table heights are saved across launches. **Settings → Reset to Defaults** restores the built-in layout for the current Trace: when meaningful work appears on more than one core (SMP-active), **Core utilisation** starts expanded and pinned; otherwise every section starts collapsed and unpinned. Each section shows a category badge on the right (**OVERVIEW**, **TRIAGE**, **TIMING**, **SCHED**, **SYNC**, **DETAIL**). Badges use a soft tinted background and border per category (quieter than Warning/Error); the label text remains the primary identifier. Reordering does not change a section's category. The pin control stays monochrome and independent of badge colour.
 
 Default order is triage-first within that catalogue: after fixed Summary / Scheduling summary, TRIAGE sections (**Timeline Anomalies**, **Worst Events**, **Recurring Patterns**, **Response Time**, **Task Health**, and related) surface suspicious behavior before low-level Timing / Sched / Sync / Detail tables.
 
@@ -166,8 +166,8 @@ Default order is triage-first within that catalogue: after fixed Summary / Sched
 **Export CSV** and **Export HTML** use the current cursor scope.
 
 - **CSV** exports the Statistics summary tables and related calculated values.
-- **HTML** exports the same summaries and begins with a diagnostic overview: **Analysis Scope** (filename, full trace or C1–Cn, start/end, duration, cores, filters, and timestamp origin), diagnostic KPIs (status, load balance, utilisation range, worst Response P99 (heuristic), migrations, tick, synchronization, and deadlines), and **Analysis Findings** evidence cards. Trace-size counts (tasks, segments, and STI events) appear under **Trace Metadata**, while an SVG **Load Balance Score** gauge appears under Core Utilisation. The table of contents groups sections into five diagnostic areas and provides **Expand all** / **Collapse all**. Large tables initially show about 20 rows and support search, sorting, **Problems only**, **Show all**, and CSV export. **Statistics Notes** provides a glossary at the end.
-- **Trace Compare…** compares supported metrics between two open traces. Trace A is the **baseline** and Trace B is the **candidate**. **Δ** is Baseline A − Candidate B. Enable **Limit to each tab's cursor range** when the two traces should use different time windows. **Export CSV** / **Export HTML** write every Compare table (not only the dialog top-N preview). HTML adds a table of contents with **Expand all** / **Collapse all**; Overview and Summary start expanded. Overview is a comparison identity, verdict, and Notable Changes summary (Improved / Regressed above threshold). Summary, Core Util, Response, and Core Migrations include charts; Core Migrations defaults to the largest count changes.
+- **HTML** exports the same summaries and begins with a diagnostic overview: **Analysis Scope** (filename, full trace or C1–Cn, start/end, duration, cores, filters including the active Timeline Filter when set, and timestamp origin), optional **Evidence Refs** (finding labels with evidence text / timestamps), diagnostic KPIs (status, load balance, utilisation range, worst Response P99 (heuristic), migrations, tick, synchronization, and deadlines), and **Analysis Findings** evidence cards. Trace-size counts (tasks, segments, and STI events) appear under **Trace Metadata**, while an SVG **Load Balance Score** gauge appears under Core Utilisation. The table of contents groups sections into five diagnostic areas and provides **Expand all** / **Collapse all**. Large tables initially show about 20 rows and support search, sorting, **Problems only**, **Show all**, and CSV export. **Statistics Notes** provides a glossary at the end.
+- **Trace Compare…** compares supported metrics between two open traces. Trace A is the **baseline** and Trace B is the **candidate**. **Δ** is Baseline A − Candidate B. The dialog opens with a **decision strip** (identity, regression/improvement counts, largest regression, Why?, **Investigate on Baseline** / **Investigate on Candidate**). Those buttons close Compare, switch to that tab, open Statistics on the largest regression section (and highlight the related task when known). Click the largest-regression line for the same action on Candidate. Enable **Limit to each tab's cursor range** when the two traces should use different time windows. **Export CSV** / **Export HTML** write every Compare table (not only the dialog top-N preview). HTML adds a table of contents with **Expand all** / **Collapse all**; Overview and Summary start expanded. Overview is a comparison identity, verdict, and Notable Changes summary (Improved / Regressed above threshold). Summary, Core Util, Response, and Core Migrations include charts; Core Migrations defaults to the largest count changes.
 
 For exact exported fields and section-specific behavior, see the detailed metric descriptions below.
 
@@ -181,7 +181,8 @@ The Statistics panel is available on both Desktop and Web. Metrics are grouped i
 **Export HTML** begins with:
 
 - diagnostic KPIs for overall status, load balance, utilisation range, worst Response P99 (heuristic), migrations, tick, synchronization, and deadlines;
-- an **Analysis Scope** card showing the trace file, full-trace or cursor scope, start/end, duration, cores, filters, and timestamp origin; and
+- an **Analysis Scope** card showing the trace file, full-trace or cursor scope, start/end, duration, cores, filters (including the active Timeline Filter when set), and timestamp origin;
+- an optional **Evidence Refs** card listing finding labels with evidence text or timestamps when Analysis Findings provide them; and
 - **Analysis Findings** evidence cards based on the same heuristics as toolbar **Analysis**, including load balance, high CPU consumers, tasks with the largest observed execution-time maxima, off-CPU gaps, migration thrashing, deadlines, tick health, and synchronization.
 
 Each finding shows its severity, impact, evidence, confidence, and an **Inspect** link. The link opens the relevant report section; it does not return to BTFViewer. Under Core Utilisation, the report includes an SVG **Load Balance Score** gauge.
@@ -205,7 +206,7 @@ Use toolbar **Analysis** for interactive triage. Use **Save as Text…** when yo
 5. Optionally place **2+ cursors** and enable **Limit to C1–Cn** to restrict every metric (and Analysis Findings) to a time window.
 6. Use table actions to move from statistics back to the timeline:
    - Click a **table row** to open a distribution chart, when supported.
-   - Click **Min** / **Max** / **p95** / **p99** to jump to that slice or gap and add an annotation.
+   - Click **Max** / **p50** / **p95** / **p99** (↗ Evidence affordance) to jump to that slice or gap without changing Scope. **Min** still jumps to the shortest sample.
    - Click a **Timeline Anomalies** or **Worst Events** row to zoom and place C1–C2.
    - Click a **Mutex / Semaphore** issue row to jump to that STI event and add an annotation.
    - In **Deadlines / CPU budget**, click a slice row to annotate it or a CPU-budget row to highlight the task. Use **Settings → Display** to edit thresholds.
@@ -220,9 +221,9 @@ Start with **Analysis Findings** for a quick summary of the current scope. Use t
 <a id="analysis-findings" name="analysis-findings">&#x200B;</a>
 ### Analysis Findings ![](../images/readme/h4.svg)
 
-Toolbar **Analysis** is the same heuristic card on Desktop and Web (not a Statistics panel section). Product buttons and overlays: [README → Analysis Findings](README.md#analysis-findings).
+Toolbar **Analysis** is the same heuristic card on Desktop and Web (not a Statistics panel section). It opens as a **non-modal inbox** so the Timeline stays clickable. Product buttons and overlays: [README → Analysis Findings](README.md#analysis-findings).
 
-Each finding shows severity, a problem-oriented title, the main supporting metric, and a distinct **Evidence** line (measured observation, separate from interpretive text). **Investigate** opens the relevant Statistics section while preserving Scope and Filters. **Show Evidence** is reserved for cross-surface Evidence Navigation and stays disabled until that workflow ships. Optional AI actions remain available when configured.
+Each finding shows severity, a problem-oriented title, the main supporting metric, and a distinct **Evidence** line (measured observation, separate from interpretive text). **Investigate** opens the relevant Statistics section while preserving Scope and Filters (Findings stays open). **Show Evidence** centers the Timeline on the finding’s Evidence (one Evidence cursor; optional Task Highlight) without changing Scope or Filters and without closing Findings. Optional AI actions remain available when configured.
 
 Load-balance findings use the same Score, σ, and Gini values as **Core utilisation**. BTFViewer creates these findings only when there are **at least 2 cores** and total utilisation is **greater than 0**.
 
@@ -509,7 +510,7 @@ python builds/btf_viewer.py migrations ../tracedata/example-8cores.btf.gz \
 
 **Legend panel:** check **Migrated tasks only** to hide tasks that never left their first core.
 
-**Statistics → Core Migrations** (collapsible section) lists tasks that ran on two or more cores:
+**Statistics → Core Migrations** (collapsible section) lists tasks that ran on two or more cores. A compact **Migration Summary** strip above the table shows total migrations, rate, most migrated task, hottest core pair, median dwell, and a thrash hint, with click-through to **Task × Core** / core-pair detail.
 
 **Migration rate** — normalizes raw migration count against task active time and (when TICK STIs exist) scheduler ticks, so a task that migrates often relative to how much it runs stands out:
 
@@ -583,7 +584,13 @@ Use this table to find:
 | **Bounce %** | Percentage of migrations on this path that are lock bounces: `100 × Bounces / Count`. |
 | **Avg Gap** | Mean post-migration off-CPU gap for that corridor |
 
-Click a row to open a **distribution chart** with two tabs:
+Click a row to select that corridor and show a detail strip:
+
+- **Show Events** — jump to the first migration timestamp on that pair (Evidence Navigation; does not change Scope or Filters).
+- **Filter Timeline** — filter to tasks that migrate on that corridor.
+- **Open Statistics** — keep the section expanded and open the **Gap / Rate** distribution for the pair.
+
+The distribution chart has two tabs:
 
 - **Gap** (default) — one point per directed migration with a positive gap: x = migration time, y = post-migration gap (the samples behind **Avg Gap**). Lock-bounce events are drawn in **orange**; others use the source-core colour.
 - **Rate** — one point per consecutive migration on the *same* directed pair: x = migration time, y = time since the previous hop on this corridor. Tight vertical bands mean bursty corridor traffic.
@@ -1557,7 +1564,7 @@ The caption above the histogram (for example, `log-scaled duration axis · full 
 
 The CDF is included in **Export PNG / SVG** from the plot dialog. It is not interactive (no click-to-jump); use the **scatter plot** above the histogram to jump to individual events.
 
-**Jump links:** in Execution Time, Blocking Time, and Inter-Arrival tables, click **Min** / **Max** / **p95** / **p99** (dotted underline) to jump to that slice or gap and add an **annotation**.
+**Jump links:** in Execution Time, Blocking Time, Dispatch, and Inter-Arrival tables, click **Max** / **p50** / **p95** / **p99** (↗) to jump to Evidence without changing Scope. **Min** jumps to the shortest sample.
 In **Dispatch / Scheduling Latency**, click **Min** or **Max**.
 Click any **distribution-chart** point to jump to that event and add an annotation without switching right-panel tabs (segment start for task metrics; tick timestamp for **Tick Distribution**; switch/concurrency timestamp for those plots; zoom + highlight for **Priority Inheritance** episodes; interval start for **Interval Analysis**).
 In Preemption Chain, the annotation is placed at the **preemptor segment** start.

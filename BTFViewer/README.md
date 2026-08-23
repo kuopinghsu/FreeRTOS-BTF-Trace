@@ -280,10 +280,11 @@ For an initial review, use the following sequence:
 2. Select **Load** and check whether all cores carry a reasonable share of the work.
 3. Open **Analysis** and review the highest-severity findings (Triage).
 4. Select **Investigate** on a finding to open the relevant Statistics section (Scope and Filters are preserved).
-5. Select a high value or outlier to jump to the corresponding timeline event.
-6. Place cursors around the affected period, confirm **Scope: C1–Cn** in the status bar, and enable **Limit to C1–Cn**.
-7. Inspect the task, core, preemption, blocking, synchronization, or migration details.
-8. If needed, ask the AI Assistant to explain or verify the measured evidence.
+5. Select **Show Evidence** to center the Timeline on the finding’s Evidence timestamp (places/reuses one Evidence cursor and may Highlight the related Task). **Show Evidence does not change Scope or Filters.**
+6. Select a high value or outlier to jump to the corresponding timeline event.
+7. Place cursors around the affected period, confirm **Scope: C1–Cn** in the status bar, and enable **Limit to C1–Cn**.
+8. Inspect the task, core, preemption, blocking, synchronization, or migration details.
+9. If needed, ask the AI Assistant to explain or verify the measured evidence.
 
 Start with measured evidence instead of an assumed cause. Confirm the behavior in the timeline and Statistics before drawing a conclusion. See [WORKFLOWS.md](WORKFLOWS.md) for detailed procedures.
 
@@ -312,16 +313,17 @@ Detailed metric definitions and formulas are in [STATISTICS.md](STATISTICS.md).
 
 ### Analysis Findings
 
-Select **Analysis** to review possible issues in the current **Scope** (**Full Trace** or **C1–Cn**). Findings can include load imbalance, execution-time hotspots, blocking, priority inversion, frequent core migration, deadline misses, tick-health problems, and synchronization movement between cores.
+Select **Analysis** to open a non-modal **Findings inbox** (floating tool window on Desktop and Web) for the current **Scope** (**Full Trace** or **C1–Cn**). The Timeline stays usable while Findings remain open. Findings can include load imbalance, execution-time hotspots, blocking, priority inversion, frequent core migration, deadline misses, tick-health problems, and synchronization movement between cores.
 
 Each finding includes:
 
 - A clear **Severity** and problem-oriented title.
 - The most relevant supporting metric.
 - An **Evidence** line from measured `evidence_text` (observation, separate from interpretive text).
-- **Investigate** — scopes the finding and opens the relevant Statistics section without requiring AI.
-- **Show Evidence** — reserved for cross-surface Evidence Navigation (disabled until that workflow ships).
-- Optional AI actions such as **Investigate…** / **Auto investigate…** when AI is configured.
+- **Investigate** — scopes the finding and opens the relevant Statistics section without requiring AI (Findings stays open).
+- **Show Evidence** — jump to Timeline Evidence for the selected finding (centers the view, places/reuses one Evidence cursor, optional Task Highlight). Does **not** change Scope or Filters, and does **not** close Findings. When several samples exist, the latest/representative Evidence is used; if none can be located, a status message is shown instead of inventing a jump.
+- Timing table cells for **Max / p50 / p95 / p99** (where those percentiles are shown) use the **↗** Evidence affordance with the same Scope-preserving jump behavior.
+- Optional AI actions such as **Investigate…** / **Auto investigate…** when AI is configured (Ask AI runs while Findings stays open).
 
 Treat findings as leads, not confirmed root causes. Apply cursors when a finding recommends a useful window, then recheck Statistics inside that Scope.
 
@@ -346,6 +348,8 @@ Review Task View, per-core load, **Core Migrations**, and the migration heatmap 
 ### Comparing open traces
 
 **Compare** is available when two or more traces are open. It summarizes differences in utilization, migrations, execution, blocking, response time, synchronization activity, and deadline misses.
+
+The decision strip shows Baseline/Candidate identity, regression and improvement counts, a concise verdict with Why?, and a **Next** investigation hint when the result is mixed, ambiguous, or mostly similar. Only engineering-significant deltas are listed (small changes are omitted).
 
 This is an optional comparison tool. It is not required by the basic investigation workflow. When you use it, compare equivalent workload phases and measurement ranges.
 
@@ -444,7 +448,7 @@ Desktop stores settings in `btf_viewer.rc` next to the viewer. Web stores them i
 | `Ctrl+R` | Fit Cursors (earliest–latest cursor span) |
 | `Ctrl+F` / `F3` / `Shift+F3` | Find, next result, or previous result |
 | `Ctrl+G` | Jump to a timestamp |
-| `Ctrl+K` | Open the command palette |
+| `Ctrl+K` | Open the command palette (shortcuts, synonyms, recent/frequent; disabled actions show why) |
 | `C` / `Shift+C` | Place a cursor or clear all cursors |
 | `Ctrl+B` | Add a bookmark |
 | `A` | Add an annotation |

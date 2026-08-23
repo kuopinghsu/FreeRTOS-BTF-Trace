@@ -970,7 +970,15 @@ export function buildCompareCsv(nameA, nameB, scopeEnabled, tables = {}) {
   lines.push('')
   lines.push('Overview')
   lines.push(`Verdict,${csvCell(notable.verdict || '')}`)
+  const nxt = String(notable.next_investigation || '').trim()
+  if (nxt) lines.push(`Next investigation,${csvCell(nxt)}`)
+  const omitted = Number(notable.small_omitted_count || 0) || 0
   const cards = notable.cards || {}
+  if (omitted || Number(cards.significant || 0)) {
+    lines.push(
+      'Significance note,Showing engineering-significant deltas only (small changes omitted)',
+    )
+  }
   lines.push(
     `Status cards,regressions ${Number(cards.regressions || 0)},`
     + `improvements ${Number(cards.improvements || 0)},`
@@ -986,6 +994,32 @@ export function buildCompareCsv(nameA, nameB, scopeEnabled, tables = {}) {
       csvCell(row.status), csvCell(row.label), csvCell(row.a),
       csvCell(row.b), csvCell(row.change),
     ].join(','))
+  }
+  const evRefs = []
+  for (const row of t.shared_patterns || t.sharedPatterns || []) {
+    let task = 'pattern'
+    let reason = ''
+    if (row && typeof row === 'object' && !Array.isArray(row)) {
+      task = String(row.task || row.name || 'pattern')
+      reason = String(row.reason || '')
+    } else if (Array.isArray(row) && row.length >= 5) {
+      task = String(row[0] || 'pattern')
+      reason = String(row[4] || '')
+    } else continue
+    const low = reason.toLowerCase()
+    if (low.includes(' ms') || low.includes(' µs') || low.includes(' us')
+      || low.includes(' ns') || low.includes('jump:')) {
+      evRefs.push([task, reason.slice(0, 120)])
+    }
+    if (evRefs.length >= 4) break
+  }
+  if (evRefs.length) {
+    lines.push('')
+    lines.push('Evidence refs')
+    lines.push('Finding,Evidence / Time')
+    for (const [lab, ttxt] of evRefs) {
+      lines.push(`${csvCell(lab)},${csvCell(ttxt)}`)
+    }
   }
   lines.push('')
 
@@ -1193,6 +1227,8 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
   ]
   const notableRows = (notable.rows || []).filter(r => r && typeof r === 'object')
   const verdict = String(notable.verdict || '').trim()
+  const nextInv = String(notable.next_investigation || '').trim()
+  const omitted = Number(notable.small_omitted_count || 0) || 0
   const warnHtml = (notable.warnings || []).map(w => `<p class="warn-banner">${htmlCell(w)}</p>`).join('')
   const notableBody = notableRows.length
     ? notableRows.map(r => {
@@ -1202,8 +1238,37 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
         + `<td>${htmlCell(r.b)}</td><td>${htmlCell(r.change)}</td></tr>`
     }).join('')
     : '<tr><td colspan="5" class="empty">No significant improvements or regressions above threshold</td></tr>'
+  const evRefs = []
+  for (const row of t.shared_patterns || t.sharedPatterns || []) {
+    let task = 'pattern'
+    let reason = ''
+    if (row && typeof row === 'object' && !Array.isArray(row)) {
+      task = String(row.task || row.name || 'pattern')
+      reason = String(row.reason || '')
+    } else if (Array.isArray(row) && row.length >= 5) {
+      task = String(row[0] || 'pattern')
+      reason = String(row[4] || '')
+    } else continue
+    const low = reason.toLowerCase()
+    if (low.includes(' ms') || low.includes(' µs') || low.includes(' us')
+      || low.includes(' ns') || low.includes('jump:')) {
+      evRefs.push([task, reason.slice(0, 120)])
+    }
+    if (evRefs.length >= 4) break
+  }
+  const evHtml = evRefs.length
+    ? '<h3 class="overview-sub">Evidence refs</h3>'
+      + '<div class="table-scroll"><table><thead><tr><th>Finding</th>'
+      + '<th>Evidence / Time</th></tr></thead><tbody>'
+      + evRefs.map(r => `<tr><td>${htmlCell(r[0])}</td><td>${htmlCell(r[1])}</td></tr>`).join('')
+      + '</tbody></table></div>'
+    : ''
   const overviewHtml = `<section class="report-card"><h2>Overview</h2>`
     + (verdict ? `<p class="overview-why">${htmlCell(verdict)}</p>` : '')
+    + (nextInv ? `<p class="overview-why">${htmlCell(nextInv)}</p>` : '')
+    + ((omitted || Number(cards.significant || 0))
+      ? '<p class="overview-formula">Showing engineering-significant deltas only (small changes omitted)</p>'
+      : '')
     + `<p class="overview-formula">${htmlCell(COMPARE_DELTA_FORMULA)}</p>`
     + '<div class="status-cards">'
     + `<div class="status-card status-regressed"><div class="n">${Number(cards.regressions || 0)}</div>Regressions</div>`
@@ -1219,6 +1284,7 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
       r => `<tr><td>${htmlCell(r[0])}</td><td>${htmlCell(r[1])}</td><td>${htmlCell(r[2])}</td></tr>`,
       'No identity')
     + '</tbody></table></div>'
+    + evHtml
     + '<h3 class="overview-sub">Notable Changes</h3>'
     + '<div class="table-scroll"><table><thead><tr><th>Status</th><th>Metric</th>'
     + '<th class="col-baseline">Baseline A</th><th class="col-candidate">Candidate B</th>'

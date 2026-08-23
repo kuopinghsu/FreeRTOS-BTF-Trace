@@ -14,6 +14,8 @@ from btf_viewer_pkg import _bootstrap  # noqa: E402
 _bootstrap.install()
 
 from btf_viewer_pkg.stats_html import (  # noqa: E402
+    evidence_refs_from_findings,
+    html_evidence_refs_card,
     html_finding_cards,
     html_glossary,
     html_investigate_anomalies,
@@ -48,6 +50,21 @@ class StatsHtmlHelpersTest(unittest.TestCase):
         self.assertIn("href=\"#sec-core-migrations\"", html)
         self.assertIn("Impact:", html)
         self.assertNotIn("click Max", html)
+
+    def test_evidence_refs_card(self):
+        refs = evidence_refs_from_findings([
+            {
+                "title": "Excessive core migration",
+                "evidence_text": "564 migrations",
+                "evidence": [{"label": "burst", "time": 1_487_000}],
+            },
+        ], format_ns=lambda ns: f"{ns / 1e6:.3f} ms")
+        self.assertEqual(refs[0]["label"], "Excessive core migration")
+        self.assertIn("ms", refs[0]["time_text"])
+        html = html_evidence_refs_card(refs)
+        self.assertIn("Evidence Refs", html)
+        self.assertIn("Excessive core migration", html)
+        self.assertEqual(html_evidence_refs_card([]), "")
 
     def test_scope_card_and_investigate_tabs(self):
         scope = html_scope_identity_card(
@@ -90,13 +107,18 @@ class StatsHtmlHelpersTest(unittest.TestCase):
         export_js = vue[start:end]
         self.assertNotIn("<h2>Cursor Range", export_js)
         self.assertIn("htmlInvestigateAnomalies", export_js)
+        self.assertIn("htmlEvidenceRefsCard", export_js)
         self.assertIn("Off-CPU Time (Blocking Time)", export_js)
         self.assertIn("html_investigate_anomalies", stats)
+        self.assertIn("html_evidence_refs_card", stats)
         self.assertIn("Off-CPU Time (Blocking Time)", stats)
         for py_name, js_name in (
             ("def html_glossary", "export function htmlGlossary"),
             ("def html_finding_cards", "export function htmlFindingCards"),
             ("def html_investigate_anomalies", "export function htmlInvestigateAnomalies"),
+            ("def html_scope_identity_card", "export function htmlScopeIdentityCard"),
+            ("def html_evidence_refs_card", "export function htmlEvidenceRefsCard"),
+            ("def evidence_refs_from_findings", "export function evidenceRefsFromFindings"),
             ("def html_matrix_heatmap", "export function htmlMatrixHeatmap"),
             ("def html_percentile_bars", "export function htmlPercentileBars"),
             ("def html_health_bars", "export function htmlHealthBars"),

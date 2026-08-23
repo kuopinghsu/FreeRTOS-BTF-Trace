@@ -34,7 +34,9 @@ from .stats_html import (
     STATS_DEFAULT_EXPANDED,
     STATS_HTML_EXTRA_CSS,
     STATS_TOC_GROUPS,
+    evidence_refs_from_findings,
     html_diagnostic_kpi_grid,
+    html_evidence_refs_card,
     html_glossary,
     html_health_bars,
     html_investigate_anomalies,
@@ -45,6 +47,11 @@ from .stats_html import (
     html_trace_metadata_card,
 )
 from .ai_planner import analysis_dashboard, format_analysis_story
+from .evidence_nav import (
+    EVIDENCE_GLYPH,
+    EVIDENCE_TOOLTIP,
+    resolve_timestamp_evidence,
+)
 from .ux_explore import (
     COMPARE_DELTA_FORMULA,
     HEALTH_BAND_SECTION,
@@ -56,6 +63,7 @@ from .ux_explore import (
     best_finding_scope,
     collect_worst_events,
     compare_summary_strip,
+    compare_investigate_target,
     compare_core_util_chart_rows,
     compare_p99_delta_chart_rows,
     compare_summary_change_bar_rows,
@@ -114,6 +122,11 @@ from .parser import (  # private symbols are not pulled in by import *
     _task_segs_in_range,
     _chord_label_step,
     _chord_label_visible,
+    _migration_rows,
+    _core_pair_rows,
+    _pair_migrations,
+    _migration_summary,
+    _blocking_time_samples,
 )
 from .timeline_util import *  # noqa: F403,F401
 from .timeline_util import (  # noqa: F401 — star-import skips leading _
@@ -2554,9 +2567,9 @@ class _StatsPinButton(QLabel):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("stats_section_pin")
-        # Always reserve a 22×22 slot (Web parity) so the category badge does
+        # Always reserve a narrow vertical bar (14×22) so the category badge does
         # not shift when the outline pin fades in on hover.
-        self.setFixedSize(22, 22)
+        self.setFixedSize(STATS_PIN_SLOT_W, STATS_PIN_SLOT_H)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
@@ -2590,13 +2603,13 @@ class _StatsPinButton(QLabel):
 
     def _refresh_icon(self) -> None:
         # Always paint the icon; hide with opacity (Web ``opacity: 0``) so the
-        # fixed 22×22 layout slot never collapses and the badge stays put.
+        # fixed narrow bar layout slot never collapses and the badge stays put.
         visible = self._pin_visible()
         fg = self.palette().color(QPalette.ColorRole.WindowText)
         if not fg.isValid() or fg.alpha() == 0:
             fg = QColor("#D0D0D0" if self._dark else "#555555")
         path = _IC_PIN_FILLED if self._pinned else _IC_PIN
-        self.setPixmap(_svg_pixmap(path, fg.name(), 14))
+        self.setPixmap(_svg_pixmap(path, fg.name(), STATS_PIN_ICON_PX))
         if self._opacity_fx is None:
             self._opacity_fx = QGraphicsOpacityEffect(self)
             self.setGraphicsEffect(self._opacity_fx)
@@ -3166,15 +3179,67 @@ class _TraceCompareDialog(QDialog):
             "QLabel { color: #8a8a8a; padding: 0 8px; font-size: 11px; }")
         lay.addWidget(self._formula)
 
-        self._strip = QLabel("")
-        self._strip.setWordWrap(True)
-        self._strip.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._strip.setStyleSheet(
-            "QLabel { color: #9a9a9a; padding: 6px 8px; border-radius: 6px;"
-            " background: rgba(52, 152, 219, 0.10); }")
-        self._strip.hide()
-        lay.addWidget(self._strip)
+        self._decision = QWidget()
+        self._decision.setObjectName("compareDecision")
+        dec = QVBoxLayout(self._decision)
+        dec.setContentsMargins(8, 6, 8, 6)
+        dec.setSpacing(4)
+        self._decision.setStyleSheet(
+            "QWidget#compareDecision {"
+            " background: rgba(52, 152, 219, 0.10); border-radius: 6px; }"
+        )
+        self._dec_identity = QLabel("")
+        self._dec_identity.setWordWrap(True)
+        self._dec_identity.setStyleSheet("QLabel { color: #9a9a9a; font-size: 11px; }")
+        dec.addWidget(self._dec_identity)
+        self._dec_counts = QLabel("")
+        self._dec_counts.setStyleSheet(
+            "QLabel { color: #cfd8dc; font-weight: 600; font-size: 12px; }")
+        dec.addWidget(self._dec_counts)
+        self._dec_largest = QLabel("")
+        self._dec_largest.setWordWrap(True)
+        self._dec_largest.setStyleSheet("QLabel { color: #e0e0e0; font-size: 12px; }")
+        self._dec_largest_clickable = False
+        self._dec_largest.mousePressEvent = (  # type: ignore[method-assign]
+            lambda ev: self._on_largest_clicked(ev))
+        dec.addWidget(self._dec_largest)
+        self._dec_why = QLabel("")
+        self._dec_why.setWordWrap(True)
+        self._dec_why.setStyleSheet("QLabel { color: #9a9a9a; font-size: 11px; }")
+        dec.addWidget(self._dec_why)
+        self._dec_next = QLabel("")
+        self._dec_next.setWordWrap(True)
+        self._dec_next.setStyleSheet("QLabel { color: #b0bec5; font-size: 11px; }")
+        self._dec_next.hide()
+        dec.addWidget(self._dec_next)
+        self._dec_sig_note = QLabel("")
+        self._dec_sig_note.setWordWrap(True)
+        self._dec_sig_note.setStyleSheet("QLabel { color: #7a8690; font-size: 10px; }")
+        self._dec_sig_note.hide()
+        dec.addWidget(self._dec_sig_note)
+        insp = QHBoxLayout()
+        insp.setContentsMargins(0, 2, 0, 0)
+        insp.setSpacing(8)
+        tip = (
+            "Open Statistics for the largest regression on this tab "
+            "(preserves Scope/Filters)"
+        )
+        self._btn_inspect_a = QPushButton("Investigate on Baseline")
+        self._btn_inspect_a.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_inspect_a.setToolTip(tip)
+        self._btn_inspect_a.clicked.connect(lambda: self._investigate_side("a"))
+        insp.addWidget(self._btn_inspect_a)
+        self._btn_inspect_b = QPushButton("Investigate on Candidate")
+        self._btn_inspect_b.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_inspect_b.setToolTip(tip)
+        self._btn_inspect_b.clicked.connect(lambda: self._investigate_side("b"))
+        insp.addWidget(self._btn_inspect_b)
+        insp.addStretch(1)
+        dec.addLayout(insp)
+        self._decision.hide()
+        lay.addWidget(self._decision)
+        # Back-compat alias for tests that look for _strip
+        self._strip = self._dec_largest
 
         self._pages = QTabWidget()
         self._summary_table = QTableWidget(0, 4)
@@ -3663,9 +3728,46 @@ class _TraceCompareDialog(QDialog):
         QMessageBox.information(
             self, "Baseline score", str(result.get("message") or ""))
 
+    def _on_largest_clicked(self, _ev) -> None:
+        if getattr(self, "_dec_largest_clickable", False):
+            self._investigate_side("b")
+
+    def _investigate_side(self, side: str) -> None:
+        """Close Compare, activate tab, open Statistics for the largest regression."""
+        combo = self._combo_a if side == "a" else self._combo_b
+        idx = combo.currentData()
+        tab_name = self._tab_name(combo)
+        target = getattr(self, "_investigate_target", None) or compare_investigate_target(
+            getattr(self, "_last_notable", None))
+        self.done(int(QDialog.DialogCode.Accepted))
+        win = getattr(self, "_win", None)
+        if win is None or idx is None:
+            return
+        try:
+            idx = int(idx)
+        except (TypeError, ValueError):
+            return
+        tabs = getattr(win, "_tabs", None) or []
+        if not (0 <= idx < len(tabs)):
+            return
+        handler = getattr(win, "_investigate_compare_side", None)
+        if callable(handler):
+            handler(
+                idx,
+                section_id=str(target.get("section_id") or target.get("section") or "response"),
+                task=str(target.get("task") or ""),
+                section_label=str(target.get("section_label") or ""),
+                tab_name=tab_name,
+            )
+            return
+        # Fallback: tab switch only (older hosts).
+        tab_widget = getattr(win, "_tab_widget", None)
+        if tab_widget is not None and hasattr(tab_widget, "setCurrentIndex"):
+            tab_widget.setCurrentIndex(idx)
+
     def _update_compare_strip(self, tables: dict) -> None:
-        strip = getattr(self, "_strip", None)
-        if strip is None:
+        decision = getattr(self, "_decision", None)
+        if decision is None:
             return
         data = compare_summary_strip(
             tables or {}, 4,
@@ -3673,20 +3775,71 @@ class _TraceCompareDialog(QDialog):
             name_b=self._tab_name(self._combo_b),
         )
         notable = data.get("notable") or {}
-        parts = []
-        verdict = str(notable.get("verdict") or data.get("why") or "").strip()
-        if verdict:
-            parts.append(verdict)
-        for row in (notable.get("rows") or [])[:4]:
-            parts.append(f"{row.get('status')}: {row.get('label')} {row.get('change')}")
-        for warn in (data.get("warnings") or [])[:2]:
-            parts.append(f"Warning: {warn}")
-        text = "  ·  ".join(parts)
-        if text:
-            strip.setText(text)
-            strip.show()
+        self._last_notable = notable if isinstance(notable, dict) else {}
+        self._investigate_target = (
+            (notable.get("investigate") if isinstance(notable, dict) else None)
+            or compare_investigate_target(self._last_notable)
+        )
+        identity = (notable.get("identity") or {}) if isinstance(notable, dict) else {}
+        id_a = identity.get("a") or {}
+        id_b = identity.get("b") or {}
+        name_a = self._tab_name(self._combo_a)
+        name_b = self._tab_name(self._combo_b)
+        scope_a = str(id_a.get("span") or "Full Trace")
+        scope_b = str(id_b.get("span") or "Full Trace")
+        self._dec_identity.setText(
+            f"Baseline: {name_a} · Scope {scope_a}    |    "
+            f"Candidate: {name_b} · Scope {scope_b}"
+        )
+        cards = notable.get("cards") or {}
+        n_reg = int(cards.get("regressions") or len(data.get("regressions") or []))
+        n_imp = int(cards.get("improvements") or len(data.get("improvements") or []))
+        n_warn = int(cards.get("warnings") or len(data.get("warnings") or []))
+        self._dec_counts.setText(
+            f"{n_reg} REGRESSIONS    {n_imp} IMPROVEMENTS"
+            + (f"    {n_warn} WARNING{'S' if n_warn != 1 else ''}" if n_warn else "")
+        )
+        regs = list(data.get("regressions") or [])
+        if regs:
+            top = regs[0]
+            self._dec_largest.setText(
+                f"Largest regression — {top.get('label')}: {top.get('change')}"
+            )
+            self._dec_largest_clickable = True
+            self._dec_largest.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._dec_largest.setToolTip(
+                "Open Statistics for this regression on the Candidate tab")
         else:
-            strip.hide()
+            verdict = str(notable.get("verdict") or "").strip()
+            self._dec_largest.setText(verdict or "No significant regressions")
+            self._dec_largest_clickable = False
+            self._dec_largest.setCursor(Qt.CursorShape.ArrowCursor)
+            self._dec_largest.setToolTip("")
+        why = str(data.get("why") or "").strip()
+        if why:
+            self._dec_why.setText(f"Why? {why}")
+            self._dec_why.show()
+        else:
+            self._dec_why.hide()
+        nxt = str(notable.get("next_investigation") or "").strip()
+        if nxt:
+            self._dec_next.setText(nxt)
+            self._dec_next.show()
+        else:
+            self._dec_next.hide()
+        omitted = int(notable.get("small_omitted_count") or 0)
+        if int(cards.get("significant") or 0) or omitted:
+            self._dec_sig_note.setText(
+                "Showing engineering-significant deltas only (small changes omitted)"
+            )
+            self._dec_sig_note.show()
+        else:
+            self._dec_sig_note.hide()
+        has = bool(
+            n_reg or n_imp or n_warn or regs or why or nxt
+            or notable.get("verdict")
+        )
+        decision.setVisible(has)
 
     def _tab_name(self, combo: QComboBox) -> str:
         return combo.currentText() or "Trace"
@@ -7963,12 +8116,15 @@ class _AnalysisFindingsDialog(QDialog):
                  ux_events: Optional[List[dict]] = None,
                  time_min: int = 0, time_max: int = 0,
                  quality_warnings: Optional[List[str]] = None,
-                 is_dark: bool = True, on_investigate=None):
+                 is_dark: bool = True, on_investigate=None,
+                 on_show_evidence=None, on_ai_query=None):
         super().__init__(parent)
         self._findings = findings or []
         self._scope_title = scope_title or ""
         self._on_apply_scope = on_apply_scope
         self._on_investigate = on_investigate
+        self._on_show_evidence = on_show_evidence
+        self._on_ai_query = on_ai_query
         self._scope_hint = scope_hint or ""
         self._ux_events = ux_events or []
         self._time_min = int(time_min or 0)
@@ -7998,8 +8154,16 @@ class _AnalysisFindingsDialog(QDialog):
         self._ai_needs_settings = False
         self.wants_ai_finding_id = ""
         self.wants_ai_template = "findings"
+        self.wants_ai_level = ""
         self.setWindowTitle(f"Analysis Findings{self._scope_title}")
-        self.setModal(True)
+        # Non-modal inbox: Timeline Evidence stays clickable while Findings is open.
+        self.setModal(False)
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowCloseButtonHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
         # Match menus/toolbar (Settings → Display → UI / menus), not a fixed 11pt.
         ui_pt = max(6, min(int(ui_font_size), 24))
         ui_font = _application_ui_font(ui_pt)
@@ -8283,12 +8447,17 @@ class _AnalysisFindingsDialog(QDialog):
 
         show_evidence_btn = QPushButton("Show Evidence")
         show_evidence_btn.setFont(ui_font)
-        show_evidence_btn.setEnabled(False)
-        show_evidence_btn.setToolTip("Reserved for Step 2 — cross-surface Evidence Navigation")
+        show_evidence_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        show_evidence_btn.setToolTip(
+            "Jump to Timeline Evidence for the selected finding "
+            "(does not change Scope or Filters)")
         show_evidence_btn.setStyleSheet(
             f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
             f" font-size: {ui_fs}; }}"
         )
+        show_evidence_btn.clicked.connect(self._show_evidence_selected)
+        show_evidence_btn.setEnabled(self._on_show_evidence is not None)
+        self._show_evidence_btn = show_evidence_btn
         scope_row.addWidget(show_evidence_btn, 0)
 
         self._investigate_btn = QPushButton("Investigate")
@@ -8346,6 +8515,10 @@ class _AnalysisFindingsDialog(QDialog):
                 "Scope the investigation and jump to the relevant Statistics section"
                 if sid else "No specific Statistics section is associated with this finding"
             )
+        ev_btn = getattr(self, "_show_evidence_btn", None)
+        if ev_btn is not None:
+            ev_btn.setEnabled(
+                self._on_show_evidence is not None and finding is not None)
         if finding is None:
             lbl.setText("Select a finding to recommend a cursor window.")
             return
@@ -8368,6 +8541,14 @@ class _AnalysisFindingsDialog(QDialog):
             return
         self._on_apply_scope(finding)
 
+    def _show_evidence_selected(self) -> None:
+        if self._on_show_evidence is None:
+            return
+        finding = self._selected_finding()
+        if finding is None:
+            return
+        self._on_show_evidence(finding)
+
     def _investigate_selected(self) -> None:
         if self._on_investigate is None:
             return
@@ -8377,8 +8558,8 @@ class _AnalysisFindingsDialog(QDialog):
         sid = FINDING_SECTION_MAP.get(str(finding.get("id") or ""))
         if not sid:
             return
+        # Keep the inbox open so Timeline Evidence remains visible.
         self._on_investigate(finding, sid)
-        self.accept()
 
     def _query_with_ai(
         self, ai_enabled: bool, template_id: str = "findings",
@@ -8394,7 +8575,14 @@ class _AnalysisFindingsDialog(QDialog):
                 self.wants_ai_finding_id = str(
                     item.data(Qt.ItemDataRole.UserRole) or "")
         self._ai_needs_settings = not ai_enabled
-        self.accept()
+        # Fire immediately; do not close the non-modal Findings inbox.
+        if callable(self._on_ai_query):
+            self._on_ai_query(
+                self.wants_ai_template,
+                self.wants_ai_finding_id,
+                self.wants_ai_level,
+                self._ai_needs_settings,
+            )
 
     def _save_as_text(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -8492,6 +8680,8 @@ class _StatsPanel(QWidget):
     # Core-Pair chart footer → open heatmap/chord focused on (from, to, bounce_only)
     open_pair_heatmap = Signal(str, str, bool)
     open_pair_chord = Signal(str, str, bool)
+    # Task × Core → Filter Timeline (merge keys + Context Bar label)
+    filter_timeline_requested = Signal(list, str)
     # Open Settings dialog on a named sidebar page (e.g. "Display")
     open_settings_requested = Signal(str)
     # Pinned section IDs (stay expanded); persist to btf_viewer.rc
@@ -8554,6 +8744,13 @@ class _StatsPanel(QWidget):
         self._defer_populate_timer = QTimer(self)
         self._defer_populate_timer.setSingleShot(True)
         self._defer_populate_timer.timeout.connect(self._populate_next_deferred_section)
+        # Preserve Statistics scroll across rebuilds (scope/filter). Evidence
+        # scroll_to_section intentionally jumps — see _restore_scroll_y.
+        self._preserve_scroll: bool = True
+        self._saved_scroll_y: int = 0
+        self._scroll_to_section_requested: bool = False
+        self._section_scope_chip: str = ""
+        self._section_filter_chip: str = ""
         self._ux_events_key: Optional[Tuple[int, Optional[int], Optional[int]]] = None
         self._ux_events_cached: Optional[List[dict]] = None
         self._cpu_budget_pct: float = 0.0
@@ -8784,6 +8981,47 @@ class _StatsPanel(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
+    def _meta_chip_label(self, text: str, *, kind: str, tip: str) -> QLabel:
+        """Compact Scope / Filtered chip for section headers (Web parity)."""
+        chip = QLabel(text)
+        chip.setObjectName(f"stats_meta_chip_{kind}")
+        chip.setToolTip(tip)
+        chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        chip.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        chip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        chip.setStyleSheet(
+            stats_meta_chip_stylesheet(kind, dark=self._is_dark))
+        return chip
+
+    def _refresh_section_meta_chips(self) -> None:
+        """Cache compact Scope / Filtered labels for section headers."""
+        rng = self._stats_range() if self._trace is not None else None
+        if rng is not None:
+            _lo, _hi, n_cur = rng
+            self._section_scope_chip = f"C1–C{n_cur}"
+        else:
+            self._section_scope_chip = ""
+        filt = ""
+        lbl = getattr(self, "_filter_label", None)
+        if lbl is not None and lbl.isVisible():
+            raw = (lbl.text() or "").strip()
+            if raw.startswith("Filtered:"):
+                filt = raw.split(":", 1)[1].strip() or "Filtered"
+            elif raw:
+                filt = raw
+        self._section_filter_chip = filt
+
+    def _restore_scroll_y(self, y: int) -> None:
+        """Restore saved scroll unless Evidence/Investigate requested a jump."""
+        if self._scroll_to_section_requested:
+            self._scroll_to_section_requested = False
+            return
+        if not hasattr(self, "_scroll") or self._scroll is None:
+            return
+        try:
+            self._scroll.verticalScrollBar().setValue(int(y))
+        except RuntimeError:
+            pass
     def apply_section_table_heights(self, heights: Dict[str, int]) -> None:
         """Apply persisted max heights for collapsible stats tables."""
         for key, val in heights.items():
@@ -10167,10 +10405,9 @@ class _StatsPanel(QWidget):
     def _update_scroll_tail_height(self, *, for_pin: bool = False) -> None:
         """Keep no blank under the last section (web parity), unless pinning.
 
-        Web leaves ``.stats-scroll-tail`` at height 0 during normal browsing and
-        only grows it for demo/AI ``scroll section into view``. Desktop used to
-        keep a near-viewport pad always, which showed as empty space under Tag
-        Analysis.
+        Both Desktop and Web leave ``stats_scroll_tail`` / ``.stats-scroll-tail``
+        at height 0 during normal browsing and only grow it for demo/AI
+        ``scroll section into view`` (``for_pin=True`` / ``forPin``).
         """
         if not hasattr(self, "_scroll"):
             return
@@ -10361,7 +10598,7 @@ class _StatsPanel(QWidget):
         # fades in/out — the 22px column is always present.
         pin_slot = QWidget()
         pin_slot.setObjectName("stats_section_pin_slot")
-        pin_slot.setFixedSize(22, 22)
+        pin_slot.setFixedSize(STATS_PIN_SLOT_W, STATS_PIN_SLOT_H)
         pin_slot.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         pin_slot_lay = QHBoxLayout(pin_slot)
         pin_slot_lay.setContentsMargins(0, 0, 0, 0)
@@ -10369,11 +10606,34 @@ class _StatsPanel(QWidget):
         pin_slot_lay.addWidget(pin)
         row_lay.addWidget(grip, 0)
         row_lay.addWidget(hdr, 1)
+        # Meta order matches Web: Scope → Filtered → category → pin.
+        if self._section_scope_chip:
+            row_lay.addWidget(
+                self._meta_chip_label(
+                    self._section_scope_chip, kind="scope",
+                    tip=f"Scope limited to {self._section_scope_chip}"),
+                0,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        if self._section_filter_chip:
+            row_lay.addWidget(
+                self._meta_chip_label(
+                    "Filtered", kind="filter",
+                    tip=f"Statistics reflect Filter: {self._section_filter_chip}"),
+                0,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         category = STATS_SECTION_CATEGORY.get(section_id)
         if category:
             cat_badge = QLabel(category)
             cat_badge.setObjectName("stats_section_category")
-            cat_badge.setToolTip(f"{category} \u2014 investigation category")
+            cat_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            cat_badge.setSizePolicy(
+                QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            cat_badge.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            # Prefer the real section help (Web badge title). A bare
+            # "Category — investigation category" tip is not useful.
+            help_tip = (STATS_SECTION_HELP.get(section_id) or "").strip()
+            cat_badge.setToolTip(
+                qt_wrap_tooltip(help_tip) if help_tip else category)
             cat_badge.setStyleSheet(
                 stats_category_badge_stylesheet(category, dark=self._is_dark))
             row_lay.addWidget(
@@ -10569,11 +10829,12 @@ class _StatsPanel(QWidget):
 
     def _summarize_samples(
         self, samples: List[int], scale: str
-    ) -> Optional[Tuple[str, str, str, str, str, str]]:
+    ) -> Optional[Tuple[str, str, str, str, str, str, str, str]]:
         if not samples:
             return None
         vals = sorted(samples)
         n = len(vals)
+        p50_idx = min(n - 1, math.ceil(n * 0.50) - 1)
         p95_idx = min(n - 1, math.ceil(n * 0.95) - 1)
         p99_idx = min(n - 1, math.ceil(n * 0.99) - 1)
         mean = sum(vals) / n
@@ -10586,6 +10847,7 @@ class _StatsPanel(QWidget):
             _format_time(vals[-1], scale),
             _format_time(jitter, scale),
             _format_time(stddev, scale),
+            _format_time(vals[p50_idx], scale),
             _format_time(vals[p95_idx], scale),
             _format_time(vals[p99_idx], scale),
         )
@@ -10658,11 +10920,11 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, jitter, stddev, p95, p99 = summary
+            mn, avg, mx, jitter, stddev, p50, p95, p99 = summary
             cpu_pct = 100.0 * sum(samples) / total_ns
             rows.append((
                 mk, _task_display_name(raw), len(samples), cpu_pct,
-                mn, avg, mx, jitter, stddev, p95, p99,
+                mn, avg, mx, jitter, stddev, p50, p95, p99,
             ))
         rows.sort(key=lambda r: (-r[3], -r[2], r[1].lower()))
         return rows
@@ -10682,14 +10944,14 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, jitter, stddev, p95, p99 = summary
+            mn, avg, mx, jitter, stddev, p50, p95, p99 = summary
             if lo is not None and hi is not None:
                 n_runs = sum(1 for s in segs if lo <= s.start <= hi)
             else:
                 n_runs = len(segs)
             rows.append((
                 mk, _task_display_name(raw), n_runs,
-                mn, avg, mx, jitter, stddev, p95, p99,
+                mn, avg, mx, jitter, stddev, p50, p95, p99,
             ))
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
         return rows
@@ -10709,10 +10971,10 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, jitter, stddev, p95, p99 = summary
+            mn, avg, mx, jitter, stddev, p50, p95, p99 = summary
             rows.append((
                 mk, _task_display_name(raw), len(samples),
-                mn, avg, mx, jitter, stddev, p95, p99,
+                mn, avg, mx, jitter, stddev, p50, p95, p99,
             ))
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
         return rows
@@ -10731,10 +10993,10 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(data["samples"], trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, jitter, stddev, p95, p99 = summary
+            mn, avg, mx, jitter, stddev, p50, p95, p99 = summary
             rows.append((
                 mk, _task_display_name(raw), len(data["samples"]),
-                mn, avg, mx, jitter, stddev, p95, p99,
+                mn, avg, mx, jitter, stddev, p50, p95, p99,
                 data.get("min_seg"), data.get("max_seg"),
             ))
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
@@ -10922,8 +11184,8 @@ class _StatsPanel(QWidget):
                            include_variability: bool = False,
                            migrations: bool = False,
                            on_row_click=None, on_min_click=None,
-                           on_max_click=None, on_p95_click=None,
-                           on_p99_click=None) -> QWidget:
+                           on_max_click=None, on_p50_click=None,
+                           on_p95_click=None, on_p99_click=None) -> QWidget:
         host = QWidget()
         lay = QVBoxLayout(host)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -10940,10 +11202,10 @@ class _StatsPanel(QWidget):
         elif include_variability:
             headers = (
                 ["Task", count_header, "CPU%", "Min", "Avg", "Max",
-                 "Jitter", "σ", "p95", "p99"]
+                 "Jitter", "σ", "p50", "p95", "p99"]
                 if include_cpu
                 else ["Task", count_header, "Min", "Avg", "Max",
-                      "Jitter", "σ", "p95", "p99"]
+                      "Jitter", "σ", "p50", "p95", "p99"]
             )
             cols = len(headers)
         else:
@@ -11003,16 +11265,20 @@ class _StatsPanel(QWidget):
 
         _min_col = 3 if include_cpu else 2
         _max_col = 5 if include_cpu else 4
+        _p50_col = (cols - 3) if include_variability else None
         _p95_col = (cols - 2) if include_variability else (cols - 1)
         _p99_col = (cols - 1) if include_variability else None
         _link_color = QBrush(QColor("#88AAFF"))
         _hovered_row = [-1]
         _interactive = bool(
             on_row_click or on_min_click or on_max_click
-            or on_p95_click or on_p99_click)
+            or on_p50_click or on_p95_click or on_p99_click)
         _row_tip = "Click to view distribution chart"
         _metric_key = (_tag_value_sort_key if section_id == "tags"
                        else _time_label_sort_key)
+
+        def _evidence_text(label: str) -> str:
+            return f"{label} {EVIDENCE_GLYPH}"
 
         def _clear_row_hover() -> None:
             row = _hovered_row[0]
@@ -11052,17 +11318,17 @@ class _StatsPanel(QWidget):
                     _time_label_sort_key(g_after), _time_label_sort_key(g_other),
                 ]
             elif include_cpu and include_variability:
-                mk_r, name, runs, cpu, mn, avg, mx, jitter, stddev, p95, p99 = row
+                mk_r, name, runs, cpu, mn, avg, mx, jitter, stddev, p50, p95, p99 = row
                 vals = [
                     name, runs, f"{cpu:.1f}%", mn, avg, mx,
-                    jitter, stddev, p95, p99,
+                    jitter, stddev, p50, p95, p99,
                 ]
                 sort_keys = [
                     name.lower(), runs, cpu,
                     _time_label_sort_key(mn), _time_label_sort_key(avg),
                     _time_label_sort_key(mx), _time_label_sort_key(jitter),
-                    _time_label_sort_key(stddev), _time_label_sort_key(p95),
-                    _time_label_sort_key(p99),
+                    _time_label_sort_key(stddev), _time_label_sort_key(p50),
+                    _time_label_sort_key(p95), _time_label_sort_key(p99),
                 ]
             elif include_cpu:
                 mk_r, name, runs, cpu, mn, avg, mx, p95 = row
@@ -11078,13 +11344,13 @@ class _StatsPanel(QWidget):
                 vals = [name, runs, mn, avg, mx, p95]
                 sort_keys = [name.lower(), runs, mn_raw, avg_raw, mx_raw, p95_raw]
             elif include_variability:
-                mk_r, name, runs, mn, avg, mx, jitter, stddev, p95, p99 = row
-                vals = [name, runs, mn, avg, mx, jitter, stddev, p95, p99]
+                mk_r, name, runs, mn, avg, mx, jitter, stddev, p50, p95, p99 = row
+                vals = [name, runs, mn, avg, mx, jitter, stddev, p50, p95, p99]
                 sort_keys = [
                     name.lower(), runs,
                     _metric_key(mn), _metric_key(avg), _metric_key(mx),
-                    _metric_key(jitter), _metric_key(stddev), _metric_key(p95),
-                    _metric_key(p99),
+                    _metric_key(jitter), _metric_key(stddev), _metric_key(p50),
+                    _metric_key(p95), _metric_key(p99),
                 ]
             else:
                 mk_r, name, runs, mn, avg, mx, p95 = row
@@ -11096,7 +11362,20 @@ class _StatsPanel(QWidget):
                 ]
 
             for c, v in enumerate(vals):
-                item = _StatsSortItem(v, sort_keys[c])
+                display = v
+                evidence_cell = (
+                    not migrations and include_variability
+                    and c in (_max_col, _p50_col, _p95_col, _p99_col)
+                    and (
+                        (c == _max_col and on_max_click is not None)
+                        or (c == _p50_col and on_p50_click is not None)
+                        or (c == _p95_col and on_p95_click is not None)
+                        or (c == _p99_col and on_p99_click is not None)
+                    )
+                )
+                if evidence_cell and isinstance(v, str) and v:
+                    display = _evidence_text(v)
+                item = _StatsSortItem(display, sort_keys[c])
                 item.setBackground(_default_bg)
                 if migrations:
                     if c == 0:
@@ -11123,27 +11402,18 @@ class _StatsPanel(QWidget):
                             f"Click to jump to shortest {tip_kind} for {name}")
                         item.setForeground(_link_color)
                     elif c == _max_col and on_max_click is not None:
-                        if include_cpu:
-                            item.setToolTip(
-                                f"Click to jump to longest slice (WCET) for {name}")
-                        elif section_id == "block":
-                            item.setToolTip(
-                                f"Click to jump to longest off-CPU gap for {name}")
-                        elif section_id == "inter":
-                            item.setToolTip(
-                                f"Click to jump to longest inter-arrival for {name}")
-                        else:
-                            item.setToolTip(
-                                f"Click to jump to longest sample for {name}")
+                        item.setToolTip(EVIDENCE_TOOLTIP)
+                        item.setForeground(_link_color)
+                    elif (_p50_col is not None and c == _p50_col
+                          and on_p50_click is not None):
+                        item.setToolTip(EVIDENCE_TOOLTIP)
                         item.setForeground(_link_color)
                     elif c == _p95_col and on_p95_click is not None:
-                        item.setToolTip(
-                            f"Click to jump to the p95 sample for {name}")
+                        item.setToolTip(EVIDENCE_TOOLTIP)
                         item.setForeground(_link_color)
                     elif (_p99_col is not None and c == _p99_col
                           and on_p99_click is not None):
-                        item.setToolTip(
-                            f"Click to jump to the p99 sample for {name}")
+                        item.setToolTip(EVIDENCE_TOOLTIP)
                         item.setForeground(_link_color)
                     elif on_row_click is not None:
                         item.setToolTip(f"{_row_tip} for {name}")
@@ -11154,6 +11424,9 @@ class _StatsPanel(QWidget):
             table.horizontalHeader().setStretchLastSection(False)
             p95_col = _p95_col
             table.setColumnWidth(p95_col, min(table.columnWidth(p95_col), 76))
+            if _p50_col is not None:
+                table.setColumnWidth(
+                    _p50_col, min(table.columnWidth(_p50_col), 76))
             if _p99_col is not None:
                 table.setColumnWidth(
                     _p99_col, min(table.columnWidth(_p99_col), 76))
@@ -11193,6 +11466,9 @@ class _StatsPanel(QWidget):
                         on_min_click(mk)
                     elif on_max_click is not None and c == _max_col:
                         on_max_click(mk)
+                    elif (on_p50_click is not None and _p50_col is not None
+                          and c == _p50_col):
+                        on_p50_click(mk)
                     elif on_p95_click is not None and c == _p95_col:
                         on_p95_click(mk)
                     elif (on_p99_click is not None and _p99_col is not None
@@ -11497,6 +11773,64 @@ class _StatsPanel(QWidget):
         if not rows or not cores:
             lay.addWidget(self._lbl(empty_hint, color="#888888", ui_fs=ui_fs))
             return host
+
+        action_row = QWidget()
+        action_lay = QHBoxLayout(action_row)
+        action_lay.setContentsMargins(0, 0, 0, 2)
+        action_lay.setSpacing(6)
+        sel_lab = self._lbl("Select a cell for investigation actions", color="#888888", ui_fs=ui_fs)
+        action_lay.addWidget(sel_lab, 1)
+        btn_hl = QPushButton("Highlight Task")
+        btn_ft = QPushButton("Filter Timeline")
+        btn_mig = QPushButton("Show Migrations")
+        for b in (btn_hl, btn_ft, btn_mig):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setEnabled(False)
+            action_lay.addWidget(b, 0)
+        lay.addWidget(action_row)
+        selected: Dict[str, Any] = {}
+
+        def _set_selection(payload: dict) -> None:
+            selected.clear()
+            selected.update(payload or {})
+            mk = str(selected.get("mk") or "")
+            task = str(selected.get("task") or mk)
+            core = str(selected.get("core") or "")
+            if mk and core:
+                sel_lab.setText(f"Selected: {task} @ {core}")
+            elif mk:
+                sel_lab.setText(f"Selected: {task}")
+            else:
+                sel_lab.setText("Select a cell for investigation actions")
+            enabled = bool(mk)
+            btn_hl.setEnabled(enabled)
+            btn_ft.setEnabled(enabled)
+            btn_mig.setEnabled(enabled)
+
+        def _on_highlight() -> None:
+            mk = str(selected.get("mk") or "")
+            if mk:
+                self.task_clicked.emit(mk)
+
+        def _on_filter() -> None:
+            mk = str(selected.get("mk") or "")
+            if not mk:
+                return
+            task = str(selected.get("task") or mk)
+            core = str(selected.get("core") or "")
+            label = f"{task} @ {core}" if core else task
+            self.filter_timeline_requested.emit([mk], label)
+
+        def _on_migrations() -> None:
+            mk = str(selected.get("mk") or "")
+            if mk:
+                self.task_clicked.emit(mk)
+            self.scroll_to_section("migrations")
+
+        btn_hl.clicked.connect(_on_highlight)
+        btn_ft.clicked.connect(_on_filter)
+        btn_mig.clicked.connect(_on_migrations)
+
         headers = ["Task"] + cores
         table = self._make_plain_stats_table(headers, ui_fs)
         table.setRowCount(len(rows))
@@ -11505,9 +11839,11 @@ class _StatsPanel(QWidget):
         for r, row in enumerate(rows):
             task_item = self._stats_sort_item(
                 str(row.get("task") or ""), str(row.get("task") or "").lower(), bg)
-            task_item.setData(Qt.ItemDataRole.UserRole, {"mk": row.get("mk")})
+            task_item.setData(Qt.ItemDataRole.UserRole, {
+                "mk": row.get("mk"), "task": row.get("task"),
+            })
             task_item.setForeground(link)
-            task_item.setToolTip("Click to highlight this task")
+            task_item.setToolTip("Click to select / highlight this task")
             table.setItem(r, 0, task_item)
             cells = row.get("cells") or {}
             for c, core in enumerate(cores, start=1):
@@ -11522,6 +11858,7 @@ class _StatsPanel(QWidget):
                     item.setData(Qt.ItemDataRole.UserRole, {
                         "mk": row.get("mk"),
                         "task": row.get("task"),
+                        "core": core,
                         "start": cell.get("start"),
                         "stop": cell.get("stop"),
                         "jump_ns": cell.get("jump_ns"),
@@ -11538,11 +11875,18 @@ class _StatsPanel(QWidget):
             data = item.data(Qt.ItemDataRole.UserRole) if item else None
             if not isinstance(data, dict):
                 return
+            mk = str(data.get("mk") or "")
             if col == 0:
-                mk = str(data.get("mk") or "")
                 if mk:
+                    _set_selection({"mk": mk, "task": data.get("task"), "core": ""})
                     self.task_clicked.emit(mk)
                 return
+            if mk:
+                _set_selection({
+                    "mk": mk,
+                    "task": data.get("task"),
+                    "core": data.get("core") or "",
+                })
             self._emit_explore_event(trace, data, "task_core")
 
         table.cellClicked.connect(_cell_clicked)
@@ -11671,6 +12015,8 @@ class _StatsPanel(QWidget):
         sid = str(section_id or "").strip()
         if not sid:
             return
+        # Intentional Evidence/Investigate jump — skip scroll restore after rebuild.
+        self._scroll_to_section_requested = True
         self._section_collapsed[sid] = False
         self._ensure_section_body(sid)
         self._update_section_header_icon(sid)
@@ -11689,6 +12035,7 @@ class _StatsPanel(QWidget):
         else:
             lbl.setText("")
             lbl.setVisible(False)
+        self._refresh_section_meta_chips()
 
     def _build_preemption_table(self, rows: List[tuple], ui_fs: str,
                                 empty_hint: str, on_row_click=None) -> QWidget:
@@ -12265,18 +12612,18 @@ class _StatsPanel(QWidget):
             f"<tr><td>{_esc(label)}</td><td>{n}</td>"
             f"<td>{_esc(mn)}</td><td>{_esc(avg)}</td><td>{_esc(mx)}</td>"
             f"<td>{_esc(jitter)}</td><td>{_esc(stddev)}</td>"
-            f"<td>{_esc(p95)}</td><td>{_esc(p99)}</td></tr>"
-            for (_mk, label, n, mn, avg, mx, jitter, stddev, p95, p99,
+            f"<td>{_esc(p50)}</td><td>{_esc(p95)}</td><td>{_esc(p99)}</td></tr>"
+            for (_mk, label, n, mn, avg, mx, jitter, stddev, p50, p95, p99,
                  _a, _b) in disp_rows_html
         ) or (
-            '<tr><td colspan="9" class="empty">No dispatch samples '
+            '<tr><td colspan="10" class="empty">No dispatch samples '
             '(needs STI resume Name[id] or create→first-run)</td></tr>'
         )
         dispatch_html = (
             f'<section class="report-card"><h2>Dispatch / Scheduling Latency{_esc(scope_title)}</h2>'
             '<p class="detail-note">Ready from STI resume / create; sync wakes not attributed.</p>'
             '<table><thead><tr><th>Task</th><th>Activations</th><th>Min</th><th>Avg</th>'
-            '<th>Max</th><th>Jitter</th><th>σ</th><th>p95</th><th>p99</th></tr></thead>'
+            '<th>Max</th><th>Jitter</th><th>σ</th><th>p50</th><th>p95</th><th>p99</th></tr></thead>'
             f'<tbody>{disp_body}</tbody></table></section>'
         )
 
@@ -12691,6 +13038,17 @@ class _StatsPanel(QWidget):
                 "Few execution samples in this scope; percentiles and comparisons "
                 "may be unreliable."
             )
+        filter_parts: list = []
+        if lo is not None:
+            filter_parts.append("Limit to C1–Cn")
+        fl = getattr(self, "_filter_label", None)
+        if fl is not None and fl.isVisible():
+            raw = str(fl.text() or "").strip()
+            if raw.lower().startswith("filtered:"):
+                raw = raw.split(":", 1)[1].strip()
+            if raw:
+                filter_parts.append(raw)
+        filters_txt = "; ".join(filter_parts) if filter_parts else "None"
         scope_html = html_scope_identity_card(
             filename=trace_name,
             scope_type=scope_type,
@@ -12698,11 +13056,16 @@ class _StatsPanel(QWidget):
             end=end_s,
             duration=span_str,
             cores=len(trace.core_names or []),
-            filters="Limit to C1–Cn" if lo is not None else "None",
+            filters=filters_txt,
             timestamp_mode="Trace capture origin (not wall-clock)",
             task_count=task_count,
             sample_note=sample_note,
         )
+        evidence_refs = evidence_refs_from_findings(
+            analysis_findings,
+            format_ns=lambda ns: _format_time(int(ns), trace.time_scale),
+        )
+        evidence_refs_html = html_evidence_refs_card(evidence_refs)
         meta_html = html_trace_metadata_card(
             span=span_str,
             tasks=task_count,
@@ -12722,6 +13085,7 @@ class _StatsPanel(QWidget):
         {html_diagnostic_kpi_grid(kpis)}
         <!--TOC-->
         {scope_html}
+        {evidence_refs_html}
         {analysis_html}
         {meta_html}
     {core_util_html}
@@ -13222,7 +13586,7 @@ class _StatsPanel(QWidget):
             writer.writerow([f"Dispatch / Scheduling Latency{scope_suffix}"])
             writer.writerow([
                 "Task", "Activations", "Min", "Avg", "Max", "Jitter",
-                "StdDev (population)", "p95", "p99",
+                "StdDev (population)", "p50", "p95", "p99",
             ])
             _disp_by = _dispatch_latency_by_mk(trace, lo, hi)
             _disp_any = False
@@ -13239,14 +13603,14 @@ class _StatsPanel(QWidget):
                 if summary is None:
                     continue
                 _disp_any = True
-                mn, avg, mx, jitter, stddev, p95, p99 = summary
+                mn, avg, mx, jitter, stddev, p50, p95, p99 = summary
                 writer.writerow([
                     _task_display_name(raw), len(data["samples"]),
                     _us(mn), _us(avg), _us(mx), _us(jitter), _us(stddev),
-                    _us(p95), _us(p99),
+                    _us(p50), _us(p95), _us(p99),
                 ])
             if not _disp_any:
-                writer.writerow(["No data"] + [""] * 7)
+                writer.writerow(["No data"] + [""] * 8)
 
             writer.writerow([])
             writer.writerow([f"Inter-Arrival Time{scope_suffix}"])
@@ -13559,6 +13923,11 @@ class _StatsPanel(QWidget):
         defer_heavy = trace_needs_deferred_stats_load(trace)
         self._btn_export_csv.setEnabled(True)
         self._btn_export_html.setEnabled(True)
+        if self._preserve_scroll and hasattr(self, "_scroll") and self._scroll is not None:
+            try:
+                self._saved_scroll_y = int(self._scroll.verticalScrollBar().value())
+            except RuntimeError:
+                self._saved_scroll_y = 0
         self._clear()
         self._defer_heavy_sections = defer_heavy
         # Do not rewrite collapse flags here. Defaults already start most
@@ -13567,6 +13936,7 @@ class _StatsPanel(QWidget):
         if defer_heavy:
             self._defer_heavy_collapse_done = True
         self._update_scope_header()
+        self._refresh_section_meta_chips()
 
         rng = self._stats_range()
         lo = hi = None
@@ -14003,6 +14373,51 @@ class _StatsPanel(QWidget):
             self._open_plot(trace, mk, "mig_dwell")
 
         def _populate_mig(blay: QVBoxLayout) -> None:
+            summary = _migration_summary(trace, lo, hi)
+            if summary.get("has_data"):
+                strip = QWidget()
+                strip_lay = QHBoxLayout(strip)
+                strip_lay.setContentsMargins(0, 2, 0, 4)
+                strip_lay.setSpacing(8)
+                bits = [
+                    f"Total {summary.get('total', 0)}",
+                    f"Rate {summary.get('rate_label') or '—'}",
+                    f"Median dwell {summary.get('median_dwell') or '—'}",
+                ]
+                top = summary.get("top_task") or {}
+                if top:
+                    bits.append(f"Most migrated {top.get('name')} ({top.get('count')})")
+                pair = summary.get("top_pair") or {}
+                if pair:
+                    bits.append(
+                        f"Hottest {pair.get('from')}→{pair.get('to')} ({pair.get('count')})")
+                hint = str(summary.get("thrash_hint") or "").strip()
+                if hint:
+                    bits.append(hint)
+                lab = self._lbl(" · ".join(bits), color="#9a9a9a", ui_fs=_fs)
+                lab.setWordWrap(True)
+                strip_lay.addWidget(lab, 1)
+                if top.get("mk"):
+                    btn_tc = QPushButton("Task × Core")
+                    btn_tc.setCursor(Qt.CursorShape.PointingHandCursor)
+                    btn_tc.setToolTip("Open Task × Core for the most migrated task")
+                    btn_tc.clicked.connect(
+                        lambda _=False, mk=str(top["mk"]): (
+                            self.task_clicked.emit(mk),
+                            self.scroll_to_section("task_core"),
+                        ))
+                    strip_lay.addWidget(btn_tc, 0)
+                if pair.get("from") and pair.get("to"):
+                    btn_pair = QPushButton("Core pair")
+                    btn_pair.setCursor(Qt.CursorShape.PointingHandCursor)
+                    btn_pair.setToolTip("Open Core-Pair Migration Summary / heatmap")
+                    btn_pair.clicked.connect(
+                        lambda _=False, f=str(pair["from"]), t=str(pair["to"]): (
+                            self.scroll_to_section("core_pairs"),
+                            self.open_pair_heatmap.emit(f, t, False),
+                        ))
+                    strip_lay.addWidget(btn_pair, 0)
+                blay.addWidget(strip)
             _mig_rows = _migration_rows(trace, lo, hi)
             blay.addWidget(self._build_stats_table(
                 _mig_rows, _fs, empty_mig,
@@ -14023,6 +14438,87 @@ class _StatsPanel(QWidget):
                 blay.addWidget(self._lbl("No migrations in scope", color="#888888", ui_fs=_fs))
                 return
             ts = trace.time_scale
+            detail = QWidget()
+            detail_lay = QHBoxLayout(detail)
+            detail_lay.setContentsMargins(0, 0, 0, 2)
+            detail_lay.setSpacing(6)
+            sel_lab = self._lbl(
+                "Select a core pair for investigation actions",
+                color="#888888", ui_fs=_fs)
+            detail_lay.addWidget(sel_lab, 1)
+            btn_events = QPushButton("Show Events")
+            btn_filter = QPushButton("Filter Timeline")
+            btn_stats = QPushButton("Open Statistics")
+            for b in (btn_events, btn_filter, btn_stats):
+                b.setCursor(Qt.CursorShape.PointingHandCursor)
+                b.setEnabled(False)
+                detail_lay.addWidget(b, 0)
+            blay.addWidget(detail)
+            selected: Dict[str, Any] = {}
+
+            def _set_pair(fc: str, tc: str, cnt: int, bnc: int, avg_gap: int) -> None:
+                selected.clear()
+                selected.update({
+                    "from": fc, "to": tc, "count": cnt,
+                    "bounces": bnc, "avg_gap": avg_gap,
+                })
+                pct = 100.0 * bnc / cnt if cnt else 0.0
+                sel_lab.setText(
+                    f"{fc} → {tc}  ·  count {cnt}  ·  bounce {bnc}"
+                    f" ({pct:.1f}%)  ·  avg gap {_format_time(avg_gap, ts)}")
+                for b in (btn_events, btn_filter, btn_stats):
+                    b.setEnabled(True)
+
+            def _on_show_events() -> None:
+                fc = str(selected.get("from") or "")
+                tc = str(selected.get("to") or "")
+                if not fc or not tc:
+                    return
+                migs = _pair_migrations(trace, fc, tc, lo, hi)
+                if not migs:
+                    return
+                first = migs[0]
+                mk = str(getattr(first, "merge_key", "") or "")
+                target = resolve_timestamp_evidence(
+                    first.ns, task="", mk=mk,
+                    note=f"Core-pair {fc} → {tc}",
+                    time_min=trace.time_min, time_max=trace.time_max)
+                if not target.get("ok"):
+                    return
+                self.segment_jump.emit(int(target["ns"]))
+                if mk:
+                    self.task_clicked.emit(mk)
+
+            def _on_filter_pair() -> None:
+                fc = str(selected.get("from") or "")
+                tc = str(selected.get("to") or "")
+                if not fc or not tc:
+                    return
+                migs = _pair_migrations(trace, fc, tc, lo, hi)
+                mks = []
+                seen = set()
+                for m in migs:
+                    mk = str(getattr(m, "merge_key", "") or "")
+                    if mk and mk not in seen:
+                        seen.add(mk)
+                        mks.append(mk)
+                if not mks:
+                    return
+                label = f"{fc} → {tc}"
+                self.filter_timeline_requested.emit(mks, label)
+
+            def _on_open_stats() -> None:
+                fc = str(selected.get("from") or "")
+                tc = str(selected.get("to") or "")
+                if not fc or not tc:
+                    return
+                self.scroll_to_section("core_pairs")
+                self._open_pair_plot(trace, fc, tc)
+
+            btn_events.clicked.connect(_on_show_events)
+            btn_filter.clicked.connect(_on_filter_pair)
+            btn_stats.clicked.connect(_on_open_stats)
+
             headers = ["From", "To", "Count", "Bounces", "Bounce %", "Avg Gap"]
             tbl = QTableWidget(len(_pair_rows), len(headers))
             tbl.setHorizontalHeaderLabels(headers)
@@ -14040,7 +14536,8 @@ class _StatsPanel(QWidget):
             tbl.horizontalHeader().setSectionsClickable(True)
             tbl.horizontalHeader().setSortIndicatorShown(True)
             tbl.setToolTip(
-                "Click a row to view Gap/Rate distribution for that core pair")
+                "Click a row to inspect this core pair "
+                "(Show Events / Filter Timeline / Open Statistics)")
             _item_bg = self._apply_stats_table_theme(tbl, _fs)
             for r, (fc, tc, cnt, bnc, avg_gap) in enumerate(_pair_rows):
                 pct = 100.0 * bnc / cnt if cnt else 0.0
@@ -14058,7 +14555,8 @@ class _StatsPanel(QWidget):
                         | Qt.AlignmentFlag.AlignVCenter)
                     item.setBackground(_item_bg)
                     if c == 0:
-                        item.setData(Qt.ItemDataRole.UserRole, (fc, tc))
+                        item.setData(
+                            Qt.ItemDataRole.UserRole, (fc, tc, cnt, bnc, avg_gap))
                     tbl.setItem(r, c, item)
             tbl.setSortingEnabled(True)
 
@@ -14067,8 +14565,12 @@ class _StatsPanel(QWidget):
                 if item is None:
                     return
                 pair = item.data(Qt.ItemDataRole.UserRole)
-                if isinstance(pair, tuple) and len(pair) == 2:
-                    self._open_pair_plot(trace, pair[0], pair[1])
+                if isinstance(pair, tuple) and len(pair) >= 2:
+                    fc, tc = pair[0], pair[1]
+                    cnt = int(pair[2]) if len(pair) > 2 else 0
+                    bnc = int(pair[3]) if len(pair) > 3 else 0
+                    avg_gap = int(pair[4]) if len(pair) > 4 else 0
+                    _set_pair(fc, tc, cnt, bnc, avg_gap)
 
             tbl.cellClicked.connect(_on_pair_row)
             self._wire_stats_table_row_hover(tbl)
@@ -14216,6 +14718,8 @@ class _StatsPanel(QWidget):
                 on_row_click=lambda mk: self._open_plot(trace, mk, "exec"),
                 on_min_click=lambda mk: self._on_bcet_click(trace, mk, lo, hi),
                 on_max_click=lambda mk: self._on_wcet_click(trace, mk, lo, hi),
+                on_p50_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "exec", lo, hi, 0.50),
                 on_p95_click=lambda mk: self._on_percentile_click(
                     trace, mk, "exec", lo, hi, 0.95),
                 on_p99_click=lambda mk: self._on_percentile_click(
@@ -14247,6 +14751,8 @@ class _StatsPanel(QWidget):
                     trace, mk, lo, hi, False),
                 on_max_click=lambda mk: self._on_blocking_extreme_click(
                     trace, mk, lo, hi, True),
+                on_p50_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "block", lo, hi, 0.50),
                 on_p95_click=lambda mk: self._on_percentile_click(
                     trace, mk, "block", lo, hi, 0.95),
                 on_p99_click=lambda mk: self._on_percentile_click(
@@ -14272,8 +14778,8 @@ class _StatsPanel(QWidget):
         def _populate_dispatch(blay: QVBoxLayout) -> None:
             _disp_rows_raw = self._dispatch_latency_rows(trace, lo, hi)
             _disp_rows = [
-                (mk, label, n, mn, avg, mx, jitter, stddev, p95, p99)
-                for (mk, label, n, mn, avg, mx, jitter, stddev, p95, p99,
+                (mk, label, n, mn, avg, mx, jitter, stddev, p50, p95, p99)
+                for (mk, label, n, mn, avg, mx, jitter, stddev, p50, p95, p99,
                      _min_seg, _max_seg) in _disp_rows_raw
             ]
             blay.addWidget(self._build_stats_table(
@@ -14288,6 +14794,12 @@ class _StatsPanel(QWidget):
                     trace, mk, lo, hi, False),
                 on_max_click=lambda mk: self._on_dispatch_extreme_click(
                     trace, mk, lo, hi, True),
+                on_p50_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "dispatch", lo, hi, 0.50),
+                on_p95_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "dispatch", lo, hi, 0.95),
+                on_p99_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "dispatch", lo, hi, 0.99),
             ))
 
         self._add_collapsible_section(
@@ -14311,6 +14823,8 @@ class _StatsPanel(QWidget):
                     trace, mk, lo, hi, False),
                 on_max_click=lambda mk: self._on_inter_extreme_click(
                     trace, mk, lo, hi, True),
+                on_p50_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "inter", lo, hi, 0.50),
                 on_p95_click=lambda mk: self._on_percentile_click(
                     trace, mk, "inter", lo, hi, 0.95),
                 on_p99_click=lambda mk: self._on_percentile_click(
@@ -15516,6 +16030,9 @@ class _StatsPanel(QWidget):
             lbl.set_column_width(self._util_label_col_w)
         QTimer.singleShot(0, self.sync_util_layout)
         self._schedule_deferred_section_populate()
+        if self._preserve_scroll:
+            y = int(self._saved_scroll_y or 0)
+            QTimer.singleShot(0, lambda y=y: self._restore_scroll_y(y))
 
     def _add_stats_table_cap_note(self, blay: QVBoxLayout, note: Optional[str],
                                   ui_fs: str) -> None:

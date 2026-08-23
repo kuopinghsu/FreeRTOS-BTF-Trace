@@ -1,12 +1,10 @@
 <template>
-  <div
-    class="dialog-overlay"
-    @click.self="emit('close')"
-  >
+  <!-- Floating tool window (Desktop Tool parity): Timeline stays clickable. -->
+  <div class="analysis-tool-host">
     <div
       class="analysis-dialog"
       role="dialog"
-      aria-modal="true"
+      aria-modal="false"
       aria-label="Analysis Findings"
     >
       <div class="analysis-header">
@@ -73,8 +71,9 @@
         <button
           type="button"
           class="analysis-btn"
-          disabled
-          title="Reserved for Step 2 — cross-surface Evidence Navigation"
+          :disabled="!selectedFinding"
+          title="Jump to Timeline Evidence for the selected finding (does not change Scope or Filters)"
+          @click="showEvidence"
         >
           Show Evidence
         </button>
@@ -233,7 +232,10 @@ const props = defineProps({
   qualityWarnings: { type: Array, default: () => [] },
 })
 
-const emit = defineEmits(['close', 'query-ai', 'apply-scope', 'investigate', 'save-recipe', 'save-story'])
+const emit = defineEmits([
+  'close', 'query-ai', 'apply-scope', 'investigate', 'show-evidence',
+  'save-recipe', 'save-story',
+])
 
 const selectedId = ref('')
 const dashboard = computed(() =>
@@ -275,6 +277,11 @@ const scopeHint = computed(() => {
 function applyScope() {
   const f = selectedFinding.value
   if (f) emit('apply-scope', f)
+}
+
+function showEvidence() {
+  const f = selectedFinding.value
+  if (f) emit('show-evidence', f)
 }
 
 const investigateSectionId = computed(() => {
@@ -373,20 +380,23 @@ function saveAsText() {
 </script>
 
 <style scoped>
-.dialog-overlay {
+/* Non-modal floating tool window — Timeline remains clickable (Desktop Tool parity). */
+.analysis-tool-host {
   position: fixed;
   inset: 0;
   z-index: 1200;
-  background: rgba(0, 0, 0, 0.45);
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
+  pointer-events: none;
 }
 
 .analysis-dialog {
-  width: min(980px, calc(100vw - 24px));
-  max-height: min(84vh, 680px);
+  pointer-events: auto;
+  width: min(960px, calc(100vw - 24px));
+  max-height: min(84vh, 600px);
   display: flex;
   flex-direction: column;
   background: var(--panel-bg);
@@ -404,6 +414,7 @@ function saveAsText() {
   gap: 8px;
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
 }
 
 .analysis-title {
@@ -504,14 +515,16 @@ function saveAsText() {
 
 .analysis-scope {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 8px 14px;
   border-top: 1px solid var(--border);
+  flex: 0 0 auto;
 }
 
 .analysis-scope-text {
-  flex: 1;
+  flex: 1 1 100%;
   font-size: 12px;
   color: var(--fg-dim);
   line-height: 1.4;
@@ -534,8 +547,8 @@ function saveAsText() {
 
 .analysis-footer-left {
   display: flex;
-  flex-wrap: nowrap;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
   overflow-x: auto;
 }
 

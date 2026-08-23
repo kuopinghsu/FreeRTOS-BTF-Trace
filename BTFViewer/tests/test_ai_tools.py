@@ -659,6 +659,13 @@ class AiToolsTests(unittest.TestCase):
         self.assertIn("Rejected evidence", html)
         self.assertIn("In scope", html)
         self.assertIn("Excluded", html)
+        self.assertIn('class="report-toc"', html)
+        self.assertIn('data-toc="expand"', html)
+        self.assertIn('data-toc="collapse"', html)
+        self.assertIn("Expand all", html)
+        self.assertIn("Collapse all", html)
+        self.assertIn("<details class=\"report-card\"", html)
+        self.assertIn('details.report-appendix', html)
         from btf_viewer_pkg.ai_tools import filter_entries_for_ai_report
         kept = filter_entries_for_ai_report([
             {"role": "assistant", "text": "ok",

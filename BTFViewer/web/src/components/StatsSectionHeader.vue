@@ -35,49 +35,66 @@
     <span class="stats-section-label"><slot /></span>
     <span class="stats-header-meta">
       <span
+        v-if="effectiveScopeLabel"
+        class="stats-meta-chip scope"
+        :title="`Scope limited to ${effectiveScopeLabel}`"
+      >{{ effectiveScopeLabel }}</span>
+      <span
+        v-if="effectiveFilterLabel"
+        class="stats-meta-chip filtered"
+        :title="`Statistics reflect Filter: ${effectiveFilterLabel}`"
+      >Filtered</span>
+      <span
         v-if="category"
         class="stats-category-badge"
         :class="categoryClass"
-        :title="`${category} — investigation category`"
+        :title="categoryBadgeTitle"
       >{{ category }}</span>
-      <button
-        type="button"
-        class="stats-pin-btn"
-        :class="{ active: pinned }"
-        :title="pinned ? 'Pinned — stays open with Collapse All' : 'Pin open'"
-        :aria-label="pinned ? 'Unpin' : 'Pin open'"
-        :aria-pressed="pinned ? 'true' : 'false'"
-        @click.stop="$emit('togglePin')"
+      <slot name="actions" />
+      <span
+        class="stats-pin-slot"
+        :style="{ width: `${STATS_PIN_SLOT_W}px`, height: `${STATS_PIN_SLOT_H}px` }"
       >
-        <!-- outline thumbtack when unpinned -->
-        <svg
-          v-if="!pinned"
-          class="pin-icon"
-          viewBox="0 0 16 16"
-          width="14"
-          height="14"
-          aria-hidden="true"
+        <button
+          type="button"
+          class="stats-pin-btn"
+          :class="{ active: pinned }"
+          :style="{ width: `${STATS_PIN_SLOT_W}px`, height: `${STATS_PIN_SLOT_H}px` }"
+          :title="pinned ? 'Pinned — stays open with Collapse All' : 'Pin open'"
+          :aria-label="pinned ? 'Unpin' : 'Pin open'"
+          :aria-pressed="pinned ? 'true' : 'false'"
+          @click.stop="$emit('togglePin')"
         >
-          <path
-            fill="currentColor"
-            d="M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5V6.27A2.75 2.75 0 0 1 5.25 4 2.75 2.75 0 0 1 8 1.25zm0 1.5A1.25 1.25 0 0 0 6.75 4c0 .5.28.93.7 1.15l.3.14v6.1l.25-.27.25.27V5.29l.3-.14c.42-.22.7-.65.7-1.15A1.25 1.25 0 0 0 8 2.75z"
-          />
-        </svg>
-        <!-- filled thumbtack when pinned -->
-        <svg
-          v-else
-          class="pin-icon"
-          viewBox="0 0 16 16"
-          width="14"
-          height="14"
-          aria-hidden="true"
-        >
-          <path
-            fill="currentColor"
-            d="M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5V6.27A2.75 2.75 0 0 1 5.25 4 2.75 2.75 0 0 1 8 1.25z"
-          />
-        </svg>
-      </button>
+          <!-- outline thumbtack when unpinned -->
+          <svg
+            v-if="!pinned"
+            class="pin-icon"
+            viewBox="0 0 16 16"
+            :width="STATS_PIN_ICON_PX"
+            :height="STATS_PIN_ICON_PX"
+            aria-hidden="true"
+          >
+            <path
+              fill="currentColor"
+              d="M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5V6.27A2.75 2.75 0 0 1 5.25 4 2.75 2.75 0 0 1 8 1.25zm0 1.5A1.25 1.25 0 0 0 6.75 4c0 .5.28.93.7 1.15l.3.14v6.1l.25-.27.25.27V5.29l.3-.14c.42-.22.7-.65.7-1.15A1.25 1.25 0 0 0 8 2.75z"
+            />
+          </svg>
+          <!-- filled thumbtack when pinned -->
+          <svg
+            v-else
+            class="pin-icon"
+            viewBox="0 0 16 16"
+            :width="STATS_PIN_ICON_PX"
+            :height="STATS_PIN_ICON_PX"
+            aria-hidden="true"
+          >
+            <path
+              fill="currentColor"
+              d="M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5V6.27A2.75 2.75 0 0 1 5.25 4 2.75 2.75 0 0 1 8 1.25z"
+            />
+          </svg>
+        </button>
+      </span>
     </span>
   </div>
   <div
@@ -88,8 +105,8 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
-import { STATS_SECTION_HELP } from '../config.js'
+import { computed, inject, unref } from 'vue'
+import { STATS_PIN_ICON_PX, STATS_PIN_SLOT_H, STATS_PIN_SLOT_W, STATS_SECTION_HELP } from '../config.js'
 import { statsSectionCategory } from '../utils/statsPins.js'
 
 const MIME = 'application/x-btf-stats-section'
@@ -99,13 +116,40 @@ const props = defineProps({
   pinned: { type: Boolean, default: false },
   sectionId: { type: String, default: '' },
   demoTarget: { type: String, default: '' },
+  /** Compact chip when Scope is limited, e.g. "C1–C2". */
+  scopeLabel: { type: String, default: null },
+  /** Active Filter label; chip shows "Filtered" when set. */
+  filterLabel: { type: String, default: null },
 })
+
+const injectedScope = inject('statsHeaderScopeLabel', null)
+const injectedFilter = inject('statsHeaderFilterLabel', null)
 
 const helpText = computed(() => STATS_SECTION_HELP[props.sectionId] || '')
 const category = computed(() => statsSectionCategory(props.sectionId) || '')
 const categoryClass = computed(() => {
   const cat = category.value
   return cat ? `cat-${cat.toLowerCase()}` : ''
+})
+/** Help belongs on the badge (Desktop has no separate ``?`` control). */
+const categoryBadgeTitle = computed(() => {
+  const cat = category.value
+  if (!cat) return ''
+  const base = `${cat} — investigation category`
+  const help = helpText.value
+  return help ? `${base}\n\n${help}` : base
+})
+
+const effectiveScopeLabel = computed(() => {
+  if (props.scopeLabel != null && props.scopeLabel !== '') return props.scopeLabel
+  const inj = injectedScope != null ? unref(injectedScope) : ''
+  return inj || ''
+})
+
+const effectiveFilterLabel = computed(() => {
+  if (props.filterLabel != null && props.filterLabel !== '') return props.filterLabel
+  const inj = injectedFilter != null ? unref(injectedFilter) : ''
+  return inj || ''
 })
 
 const emit = defineEmits(['toggle', 'togglePin', 'dragStart', 'dragEnd'])
@@ -207,20 +251,53 @@ function onDragEnd() {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   min-height: 22px;
+}
+
+.stats-meta-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: none;
+  border-radius: 8px;
+  padding: 2px 6px;
+  min-height: 14px;
+  line-height: 1.2;
+  max-width: 7.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-meta-chip.scope {
+  color: var(--badge-sched-fg, #9ec5e8);
+  background: rgba(52, 152, 219, 0.18);
+  border: 1px solid rgba(52, 152, 219, 0.45);
+}
+
+.stats-meta-chip.filtered {
+  color: var(--badge-timing-fg, #e0c070);
+  background: rgba(230, 180, 60, 0.16);
+  border: 1px solid rgba(212, 172, 13, 0.45);
 }
 
 .stats-category-badge {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.4px;
   text-transform: uppercase;
-  border-radius: 999px;
-  padding: 0 5px;
-  line-height: 1.5;
-  /* Soft tinted pill — quieter than section title and Warning/Error. */
+  border-radius: 8px;
+  padding: 2px 6px;
+  min-height: 14px;
+  line-height: 1.2;
+  /* Soft tinted round-rect — lockstep with Desktop category badges. */
   color: var(--badge-detail-fg, #c0c4c9);
   background: var(--badge-detail-bg, #303337);
   border: 1px solid var(--badge-detail-border, #565b61);
@@ -272,14 +349,27 @@ function onDragEnd() {
   transform: rotate(-90deg);
 }
 
-.stats-pin-btn {
-  flex: 0 0 22px;
+/* Narrow vertical bar (Desktop ``stats_section_pin_slot`` parity: 14×22). */
+.stats-pin-slot {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  overflow: hidden;
+}
+
+.stats-pin-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 0;
+  min-height: 0;
   padding: 0;
+  margin: 0;
   border: none;
   border-radius: 3px;
   background: transparent;
@@ -287,14 +377,16 @@ function onDragEnd() {
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
+  overflow: hidden;
 }
 
-/* Hover devices: reveal outline pin on row hover / keyboard focus. */
+/* Hover devices: row hover reveals icon only — no fill until pointer is on pin. */
 @media (hover: hover) {
   .stats-section-title:hover .stats-pin-btn:not(.active),
   .stats-section-title:focus-within .stats-pin-btn:not(.active) {
     opacity: 0.75;
     pointer-events: auto;
+    background: transparent;
   }
 }
 
@@ -328,5 +420,6 @@ function onDragEnd() {
 
 .pin-icon {
   display: block;
+  flex: 0 0 auto;
 }
 </style>

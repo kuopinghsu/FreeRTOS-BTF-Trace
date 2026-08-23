@@ -108,16 +108,41 @@ Review these Statistics sections before narrowing the scope:
 
 Use distributions, not only averages. Compare **Avg**, **p95**, **p99**, and **Max** when available. A high maximum with a normal average often indicates a short incident that should be scoped separately.
 
+<a id="investigation-context" name="investigation-context">&#x200B;</a>
+
+## Investigation context (what is preserved)
+
+BTFViewer keeps investigation context across surface switches whenever practical:
+
+* **Statistics** expand/collapse, pin, section order, and scroll position survive Scope/Filter rebuilds.
+* **AI conversation** stays mounted when switching right-panel tabs (Statistics / Marks / Find / Legend / AI).
+* **Selection** and **Highlight** stay when opening Findings, Corridor, Compare, or the Command Palette.
+* **Findings** is a non-modal inbox — Show Evidence / Investigate / Ask AI keep it open so Timeline Evidence stays visible.
+
+### Intentional exceptions (navigation may change context)
+
+| Action | What may change | What stays |
+|---|---|---|
+| **Show Evidence** / Core-Pair **Show Events** | Timeline viewport centers on Evidence | Scope, Filters, Findings open, Selection/Highlight |
+| **Investigate** / AI **Open Statistics** | Statistics scroll + expand target section | Scope, Filters |
+| **Filter Timeline** (Task × Core / Core-Pair) | Active Filter chips | Scope / cursors |
+| **Apply cursors** / **Limit to C1–Cn** | Scope (by design) | Filters unless you change them |
+| **Investigate on Baseline / Candidate** (Compare) | Active tab + Statistics scroll/expand (optional task highlight) | Per-tab Scope/Filters |
+| **Fit Trace** / **Zoom fit** | Viewport | Scope model (Full Trace vs C1–Cn) unless Limit is on |
+
+Evidence Navigation never silently rewrites Scope or Filters. If a control must change Scope, the UI labels it (**Apply cursors**, **Limit to C1–Cn**).
+
 ## 4. Run deterministic triage
 
-Click **Analysis** to open **Analysis Findings** for the current Statistics **Scope**.
+Click **Analysis** to open the non-modal **Analysis Findings** inbox for the current Statistics **Scope**. The Timeline stays usable while Findings remain open.
 
 For each relevant finding:
 
 1. Note its severity, title, supporting metric, and the separate **Evidence** line.
 2. Treat the finding as a hypothesis, not a confirmed root cause.
-3. Select **Investigate** to open the named Statistics section (Scope and Filters stay as they are). **Show Evidence** remains reserved for later Evidence Navigation.
-4. Reproduce the reported value in Statistics; use **Apply cursors** when the finding recommends a useful time window.
+3. Select **Show Evidence** to center the Timeline on that Evidence without changing Scope or Filters (Findings stays open).
+4. Select **Investigate** to open the named Statistics section (Scope and Filters stay as they are; Findings stays open).
+5. Reproduce the reported value in Statistics; use **Apply cursors** when the finding recommends a useful time window.
 
 If no finding stands out, begin with the TRIAGE Statistics sections (**Timeline Anomalies**, **Worst Events**, **Recurring Patterns**, **Response Time**, **Task Health**) and the symptom table below.
 
@@ -263,7 +288,7 @@ flowchart LR
 
 Reject an AI statement when it cannot be reproduced in Statistics, cites a time outside the cursor range, presents an estimate as a measurement, or assumes events that the trace did not capture.
 
-**Start Investigation** (empty log) runs **Auto investigate**. Restart restores a **Current Issue** card only when the log still has a user or assistant turn. **Ctrl+K** opens Analysis, AI, Compare, workspace presets, and Inspect task. Toolbar **Compare** can **Save as baseline** / **Score vs baseline**; the **Trends** page lists every open tab.
+**Start Investigation** (empty log) runs **Auto investigate**. Restart restores a **Current Issue** card only when the log still has a user or assistant turn. **Ctrl+K** opens Analysis, AI, Compare, workspace presets, and Inspect task. Toolbar **Compare** can **Save as baseline** / **Score vs baseline**; the decision strip adds a **Next** investigation hint when the result is mixed, ambiguous, or mostly similar, and lists engineering-significant deltas only. The **Trends** page lists every open tab.
 
 ## 10. Test one measurable change
 

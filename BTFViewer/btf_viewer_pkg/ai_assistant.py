@@ -58,6 +58,7 @@ from .ai_tools import (
     parse_btf_highlight_href,
     parse_btf_jump_href,
     parse_btf_range_href,
+    parse_btf_stats_href,
     parse_tool_calls_from_text,
     strip_parsed_tool_markup,
     summarise_tool_call,
@@ -643,22 +644,35 @@ def ai_template_primary_rows(
 # Overflow menu groups for the remaining templates (ids must cover every
 # AI_TEMPLATE_QUESTIONS entry that is not in AI_TEMPLATE_PRIMARY_IDS).
 AI_TEMPLATE_MENU_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Diagnose", ("triage", "verify", "root_cause", "explain_finding", "diagnostic_report")),
-    ("Compare", (AI_COMPARE_TEMPLATE_ID,)),
+    ("Start", ("triage",)),
     (
-        "Metrics",
+        "Investigate",
         (
             "task_profile",
             "latency",
             "wcet",
-            "migrations",
-            "balance",
+            "root_cause",
             "tick",
             "priority",
             "deadlines",
         ),
     ),
+    ("SMP", ("migrations", "balance")),
+    ("Verify", ("verify", "explain_finding")),
+    ("Compare", (AI_COMPARE_TEMPLATE_ID, "diagnostic_report")),
     ("What-if / Optimize", ("what_if", "optimize")),
+)
+
+# Intent landing groups for the AI empty state (includes primary chips).
+AI_TEMPLATE_INTENT_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("Start", ("findings", "triage")),
+    (
+        "Investigate",
+        ("investigate", "explain_region", "latency", "wcet", "task_profile"),
+    ),
+    ("SMP", ("migrations", "balance")),
+    ("Verify", ("verify", "explain_finding", "auto_investigate")),
+    ("Compare", (AI_COMPARE_TEMPLATE_ID, "diagnostic_report")),
 )
 
 
@@ -1658,6 +1672,11 @@ def normalize_ai_context(ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         cursors = []
     elif not isinstance(cursors, (list, tuple)):
         cursors = [cursors]
+    filters = c.get("filters")
+    if filters is None:
+        filters = []
+    elif not isinstance(filters, (list, tuple)):
+        filters = [filters]
     return {
         "findings_text": findings or "",
         "span": c.get("span", "") or "",
@@ -1666,6 +1685,7 @@ def normalize_ai_context(ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         "metrics": c.get("metrics"),
         "cursors": list(cursors),
         "findings": list(c.get("findings") or []),
+        "filters": [str(f) for f in filters if f],
     }
 
 
@@ -3531,25 +3551,42 @@ class _FlowLayout(QLayout):
         self._do_layout(rect, False)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return self.minimumSize()
-
-    def minimumSize(self) -> QSize:  # noqa: N802
-        """Include wrapping height so QVBoxLayout does not clip extra rows."""
-        m = self.contentsMargins()
-        mh = m.top() + m.bottom()
-        mw = m.left() + m.right()
-        if not self._items:
-            return QSize(mw, mh)
-        row_h = 0
-        row_w = mw
+        """Prefer parent width so wrap height matches the AI dock, not chip width."""
+        parent = self.parentWidget()
+        width = parent.width() if parent is not None else 0
+        if width <= 1:
+            width = 240
         min_w = 0
         for item in self._items:
-            hint = item.sizeHint()
-            row_h = max(row_h, hint.height())
-            row_w += hint.width() + self.spacing()
-            min_w = max(min_w, item.minimumSize().width())
-        wrap_h = self.heightForWidth(max(240, min_w + mw))
-        return QSize(min_w + mw, max(row_h, wrap_h) + mh)
+            min_w = max(
+                min_w,
+                item.minimumSize().width(),
+                item.sizeHint().width(),
+            )
+        m = self.contentsMargins()
+        return QSize(
+            max(width, min_w + m.left() + m.right()),
+            self.heightForWidth(width),
+        )
+
+    def minimumSize(self) -> QSize:  # noqa: N802
+        """Widest chip × wrapped height so QVBoxLayout does not clip extra rows."""
+        m = self.contentsMargins()
+        mw = m.left() + m.right()
+        if not self._items:
+            return QSize(mw, m.top() + m.bottom())
+        min_w = 0
+        for item in self._items:
+            min_w = max(
+                min_w,
+                item.minimumSize().width(),
+                item.sizeHint().width(),
+            )
+        parent = self.parentWidget()
+        width = parent.width() if parent is not None else 0
+        if width <= 1:
+            width = max(240, min_w + mw)
+        return QSize(min_w + mw, self.heightForWidth(width))
 
     def _do_layout(self, rect, test_only: bool) -> int:
         left, top, right, bottom = self.getContentsMargins()
@@ -3560,7 +3597,14 @@ class _FlowLayout(QLayout):
         space = self.spacing()
         for idx, item in enumerate(self._items):
             hint = item.sizeHint()
-            next_x = x + hint.width() + space
+            mins = item.minimumSize()
+            # App/theme QSS can report sizeHint width 0 right after show/polish;
+            # never lay out chips thinner than their minimum (or they vanish).
+            size = QSize(
+                max(hint.width(), mins.width(), 1),
+                max(hint.height(), mins.height(), 1),
+            )
+            next_x = x + size.width() + space
             wrap = line_height > 0 and (
                 idx in self._break_before
                 or next_x - space > effective.right() + 1
@@ -3568,13 +3612,112 @@ class _FlowLayout(QLayout):
             if wrap:
                 x = effective.x()
                 y = y + line_height + space
-                next_x = x + hint.width() + space
+                next_x = x + size.width() + space
                 line_height = 0
             if not test_only:
-                item.setGeometry(QRect(QPoint(x, y), hint))
+                item.setGeometry(QRect(QPoint(x, y), size))
             x = next_x
-            line_height = max(line_height, hint.height())
+            line_height = max(line_height, size.height())
         return y + line_height - rect.y() + bottom
+
+
+class _FlowChips(QWidget):
+    """Chip row with height-for-width so wraps are not clipped in the AI dock."""
+
+    def __init__(self, parent: Optional[QWidget] = None, spacing: int = 4) -> None:
+        super().__init__(parent)
+        self._flow = _FlowLayout(self, spacing=spacing)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        return self._flow.heightForWidth(int(width))
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        w = self.width() if self.width() > 1 else 240
+        return QSize(w, self.heightForWidth(w))
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        # Widest chip only — do not pin dock width to current wrap width.
+        m = self._flow.minimumSize()
+        return QSize(max(64, m.width()), max(_AI_CHIP_MIN_HEIGHT, m.height()))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self.updateGeometry()
+
+
+class _FlowHost(QWidget):
+    """Host for ``_FlowLayout`` that grows height when the dock narrows (wrap)."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        lay = self.layout()
+        if isinstance(lay, _FlowLayout):
+            return max(_AI_CHIP_MIN_HEIGHT, lay.heightForWidth(int(width)))
+        return _AI_CHIP_MIN_HEIGHT
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        w = self.width() if self.width() > 1 else 240
+        return QSize(w, self.heightForWidth(w))
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        lay = self.layout()
+        if isinstance(lay, _FlowLayout):
+            m = lay.minimumSize()
+            return QSize(max(64, m.width()), max(_AI_CHIP_MIN_HEIGHT, m.height()))
+        return QSize(64, _AI_CHIP_MIN_HEIGHT)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self.updateGeometry()
+
+
+def _intent_chip_pixel_width(btn: QPushButton, label: str = "") -> int:
+    """Stable chip width — do not trust QPushButton.sizeHint after theme polish."""
+    text = label or btn.text() or ""
+    cached = btn.property("aiChipWidth")
+    if cached is not None:
+        try:
+            w = int(cached)
+            if w >= 32:
+                return w
+        except (TypeError, ValueError):
+            pass
+    fm = btn.fontMetrics()
+    # padding 3px 8px + border (web `.ai-chip`)
+    return max(48, int(fm.horizontalAdvance(text)) + 20)
+
+
+def _make_intent_chip_button(
+    label: str,
+    prompt: str,
+    on_click,
+) -> QPushButton:
+    """Intent chip with fixed pixel size (stable through dock resize / QSS polish)."""
+    btn = QPushButton(label)
+    btn.setObjectName("aiIntentChip")
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setToolTip(qt_wrap_tooltip(prompt))
+    btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    btn.setAutoDefault(False)
+    btn.setDefault(False)
+    btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    w = _intent_chip_pixel_width(btn, label)
+    btn.setProperty("aiChipWidth", w)
+    btn.setFixedSize(w, _AI_INTENT_CHIP_HEIGHT)
+    btn.clicked.connect(on_click)
+    return btn
 
 
 def _ai_more_heading(label: str) -> QLabel:
@@ -3660,6 +3803,8 @@ def _clear_layout(layout) -> None:
 # Chip / More-menu colors match web `.ai-tpl-btn` / `.ai-more-item` (enabled vs disabled).
 _AI_TPL_DISABLED_COLOR = "#8a96a8"
 _AI_CHIP_MIN_HEIGHT = 28  # match web `.ai-tpl-btn { min-height: 28px }`
+# Intent empty-state chips match web `.ai-chip` (compact, transparent).
+_AI_INTENT_CHIP_HEIGHT = 24
 
 
 def _ai_chrome_colors(is_dark: bool) -> dict:
@@ -3708,6 +3853,57 @@ def _ai_tpl_btn_style(is_dark: bool = True) -> str:
         "}"
         "QPushButton:hover:!disabled {"
         f"  border-color: {c['accent']};"
+        "}"
+    )
+
+
+def _ai_intent_chip_style(is_dark: bool = True) -> str:
+    """Match web ``.ai-chip`` (transparent, compact) for empty-state intent chips."""
+    c = _ai_chrome_colors(is_dark)
+    muted = c["muted"]
+    return (
+        "QPushButton {"
+        f"  color: {c['text']};"
+        "  background: transparent;"
+        f"  border: 1px solid {c['border']};"
+        "  border-radius: 4px;"
+        "  padding: 3px 8px;"
+        "  font-size: 11px;"
+        "}"
+        "QPushButton:disabled {"
+        f"  color: {muted};"
+        "  background: transparent;"
+        f"  border-color: {c['border']};"
+        "}"
+        "QPushButton:hover:!disabled {"
+        f"  border-color: {c['accent']};"
+        "}"
+    )
+
+
+def _ai_log_frame_style(is_dark: bool = True) -> str:
+    """Match web ``.ai-log`` — bordered inset box for conversation + empty intent."""
+    c = _ai_chrome_colors(is_dark)
+    return (
+        "QFrame#aiLogFrame {"
+        f"  background-color: {c['panel']};"
+        f"  border: 1px solid {c['border']};"
+        "  border-radius: 8px;"
+        "}"
+        "QScrollArea#aiIntentScroll {"
+        f"  background-color: {c['panel']};"
+        "  border: none;"
+        "}"
+        "QScrollArea#aiIntentScroll > QWidget > QWidget {"
+        f"  background-color: {c['panel']};"
+        "}"
+        "QTextBrowser#aiLog {"
+        f"  background-color: {c['panel']};"
+        f"  color: {c['text']};"
+        "  border: none;"
+        "}"
+        "QWidget#aiIntentEmpty {"
+        f"  background-color: {c['panel']};"
         "}"
     )
 
@@ -3767,6 +3963,7 @@ def create_ai_assistant_panel(
     on_jump: Optional[Callable[[float], None]] = None,
     on_range: Optional[Callable[[float, float], None]] = None,
     on_highlight: Optional[Callable[[str], None]] = None,
+    on_open_stats: Optional[Callable[[str], None]] = None,
     on_execute_tools: Optional[Callable[[List[Dict[str, Any]]], List[Dict[str, Any]]]] = None,
     on_undo_tools: Optional[Callable[[], None]] = None,
     on_gui_state: Optional[Callable[[], Dict[str, Any]]] = None,
@@ -4037,23 +4234,93 @@ def create_ai_assistant_panel(
             self._active_template_id = ""
 
             self._log = QTextBrowser()
+            self._log.setObjectName("aiLog")
             self._log.setReadOnly(True)
             self._log.setOpenExternalLinks(False)
             self._log.setOpenLinks(False)
-            self._log.setPlaceholderText(
-                "Conversation appears here\u2026\n"
-                "Uses Analysis Findings for the current Statistics scope "
-                "(Limit to C1\u2013Cn when cursors are set). "
+            # Empty-state intent landing lives *inside* the response area
+            # (Web ``.ai-log > .ai-empty`` parity), not above it.
+            self._intent_host = QWidget()
+            self._intent_host.setObjectName("aiIntentEmpty")
+            self._intent_host.setAttribute(
+                Qt.WidgetAttribute.WA_StyledBackground, True)
+            self._intent_host.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+            intent_lay = QVBoxLayout(self._intent_host)
+            intent_lay.setContentsMargins(8, 8, 8, 8)
+            intent_lay.setSpacing(6)
+            self._intent_context = QLabel("")
+            self._intent_context.setTextFormat(Qt.TextFormat.RichText)
+            self._intent_context.setWordWrap(True)
+            self._intent_context.setStyleSheet(
+                "QLabel { color:#8a96a8; font-size:11px; padding:2px 0; }")
+            self._intent_prompt = QLabel("What do you want to investigate?")
+            self._intent_prompt.setStyleSheet(
+                "QLabel { color:#dbe2ea; font-size:12px; font-weight:600; padding:2px 0; }")
+            # Intent chip groups live inside the empty log (Web `.ai-log > .ai-empty`).
+            self._intent_groups = QWidget()
+            self._intent_groups.setObjectName("aiIntentGroups")
+            self._intent_groups.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+            self._intent_groups.setStyleSheet(_ai_intent_chip_style(True))
+            self._intent_groups_lay = QVBoxLayout(self._intent_groups)
+            self._intent_groups_lay.setContentsMargins(0, 0, 0, 0)
+            self._intent_groups_lay.setSpacing(8)  # web `.ai-intent-group` margin
+            self._rebuild_intent_landing()
+            self._intent_hint = QLabel(
+                "Conversation appears here\u2026 Uses Analysis Findings for the "
+                "current Statistics scope (Limit to C1\u2013Cn when cursors are set). "
                 "Configure the endpoint in Settings \u2192 AI."
             )
+            self._intent_hint.setWordWrap(True)
+            self._intent_hint.setStyleSheet(
+                "QLabel { color:#8a96a8; font-size:11px; padding:6px 0 0; }")
+            intent_lay.addWidget(self._intent_context)
+            intent_lay.addWidget(self._intent_prompt)
+            intent_lay.addWidget(self._intent_groups)
+            intent_lay.addWidget(self._intent_hint)
+            intent_lay.addStretch(1)
+            self._log.setPlaceholderText("")
             self._log.setMinimumHeight(80)
             self._log.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            self._log.setFrameShape(QFrame.Shape.NoFrame)
             self._log.document().setDefaultStyleSheet(_AI_LOG_STYLE)
             self._log.anchorClicked.connect(self._on_jump_link)
             self._log.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             self._log.customContextMenuRequested.connect(self._show_log_menu)
             self._log.viewport().installEventFilter(self)
+            self._log_stack = QStackedWidget()
+            self._log_stack.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            intent_scroll = QScrollArea()
+            intent_scroll.setObjectName("aiIntentScroll")
+            intent_scroll.setWidgetResizable(True)
+            intent_scroll.setFrameShape(QFrame.Shape.NoFrame)
+            intent_scroll.setHorizontalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            intent_scroll.setWidget(self._intent_host)
+            self._intent_scroll = intent_scroll
+            self._log_stack.addWidget(intent_scroll)  # index 0 = empty intent
+            self._log_stack.addWidget(self._log)      # index 1 = conversation
+            self._log_stack.setCurrentIndex(0)
+            intent_scroll.viewport().installEventFilter(self)
+            # Shared bordered box for empty intent + conversation (Web `.ai-log`).
+            self._log_frame = QFrame()
+            self._log_frame.setObjectName("aiLogFrame")
+            self._log_frame.setFrameShape(QFrame.Shape.NoFrame)
+            self._log_frame.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            self._log_frame.setAttribute(
+                Qt.WidgetAttribute.WA_StyledBackground, True)
+            self._log_frame.setAutoFillBackground(True)
+            log_frame_lay = QVBoxLayout(self._log_frame)
+            # Web `.ai-log { padding: 8px }` — keep a thin inset so the radius
+            # clips cleanly; intent host / log supply the inner 8px padding.
+            log_frame_lay.setContentsMargins(0, 0, 0, 0)
+            log_frame_lay.setSpacing(0)
+            log_frame_lay.addWidget(self._log_stack, 1)
+            self._log_frame.setStyleSheet(_ai_log_frame_style(True))
 
             self._guide_host = QWidget()
             self._guide_host.setObjectName("aiGuide")
@@ -4116,7 +4383,7 @@ def create_ai_assistant_panel(
             self._estimate_banner.hide()
             g_lay.addWidget(self._estimate_banner)
             top_lay.addWidget(self._guide_host)
-            top_lay.addWidget(self._log, 1)
+            top_lay.addWidget(self._log_frame, 1)
 
             self._plan_host = QWidget()
             plan_row = QHBoxLayout(self._plan_host)
@@ -4135,11 +4402,9 @@ def create_ai_assistant_panel(
             self._plan_host.hide()
             top_lay.addWidget(self._plan_host)
 
-            mode_host = QWidget()
+            mode_host = _FlowHost()
             self._mode_host = mode_host
             mode_host.setObjectName("aiModes")
-            mode_host.setSizePolicy(
-                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             mode_host.setStyleSheet(_AI_TPL_BTN_STYLE)
             mode_row = _FlowLayout(mode_host, spacing=4)
             self._mode_btns: List[QPushButton] = []
@@ -4156,11 +4421,9 @@ def create_ai_assistant_panel(
                 self._mode_btns.append(btn)
             top_lay.addWidget(mode_host)
 
-            tpl_host = QWidget()
+            tpl_host = _FlowHost()
             self._tpl_host = tpl_host
             tpl_host.setObjectName("aiTemplates")
-            tpl_host.setSizePolicy(
-                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             tpl_host.setStyleSheet(_AI_TPL_BTN_STYLE)
             _lead_ids, _last_ids = ai_template_primary_rows()
             tpl_row = _FlowLayout(
@@ -4254,6 +4517,7 @@ def create_ai_assistant_panel(
             top_lay.addWidget(tpl_host)
 
             self.refresh_template_availability()
+            self._refresh_intent_landing()
 
             self._tool_bar = QWidget()
             tool_row = QHBoxLayout(self._tool_bar)
@@ -4386,6 +4650,10 @@ def create_ai_assistant_panel(
             self._is_dark = is_dark
             self.apply_theme(is_dark)
             QTimer.singleShot(0, self._restore_investigation_session)
+            # After first show/layout, force chip wrap heights (width is often 0
+            # during __init__).
+            QTimer.singleShot(0, self._sync_intent_scroll_size)
+            QTimer.singleShot(100, self._sync_intent_scroll_size)
 
         def apply_theme(self, is_dark: bool) -> None:
             """Match AI chrome (More menu, chips, composer, log) to the app theme."""
@@ -4464,6 +4732,16 @@ def create_ai_assistant_panel(
                 log.document().setDefaultStyleSheet(_ai_log_style(self._is_dark))
                 if getattr(self, "_entries", None):
                     self._refresh_log()
+            log_frame = getattr(self, "_log_frame", None)
+            if log_frame is not None:
+                log_frame.setStyleSheet(_ai_log_frame_style(self._is_dark))
+            intent_groups = getattr(self, "_intent_groups", None)
+            if intent_groups is not None:
+                intent_groups.setStyleSheet(_ai_intent_chip_style(self._is_dark))
+                # Restyle host only — full rebuild / per-button QSS during
+                # apply_theme left chips invisible or zero-width.
+            if not getattr(self, "_entries", None):
+                self._refresh_intent_landing()
             self._refresh_guide_ui()
 
         def _paint_more_menu(self) -> None:
@@ -4558,6 +4836,13 @@ def create_ai_assistant_panel(
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
                 if self._try_mermaid_node_click(pos):
                     return True
+            scroll = getattr(self, "_intent_scroll", None)
+            if (
+                scroll is not None
+                and obj is scroll.viewport()
+                and event.type() == QEvent.Type.Resize
+            ):
+                self._schedule_intent_reflow()
             return QWidget.eventFilter(self, obj, event)
 
         def _try_mermaid_node_click(self, view_pos) -> bool:
@@ -4833,6 +5118,11 @@ def create_ai_assistant_panel(
                 if action:
                     self._on_tool_why(action, name)
                 return
+            if scheme == "btfstats":
+                sid = parse_btf_stats_href(url.toString())
+                if on_open_stats and sid:
+                    on_open_stats(sid)
+                return
             if scheme == "btfhighlight":
                 raw = url.toString()
                 name = parse_btf_highlight_href(raw)
@@ -4938,6 +5228,7 @@ def create_ai_assistant_panel(
                 self._entries.append((role, text))
             self._refresh_log()
             self._persist_investigation_session()
+            self._refresh_intent_landing()
 
         def clear_conversation(self) -> None:
             """Clear chat replies, accumulated cost, and current investigation issues."""
@@ -4956,6 +5247,181 @@ def create_ai_assistant_panel(
             self._set_status("")
             self._refresh_tool_bar()
             self._persist_investigation_session()
+            self._refresh_intent_landing()
+
+        def _rebuild_intent_landing(self) -> None:
+            """Build Start/Investigate/SMP/Verify/Compare chips for empty state."""
+            lay = getattr(self, "_intent_groups_lay", None)
+            if lay is None:
+                return
+            while lay.count():
+                item = lay.takeAt(0)
+                w = item.widget()
+                if w is not None:
+                    # Immediate reparent so deleteLater cannot leave a 0-height
+                    # ghost row that collapses the chip stack.
+                    w.setParent(None)
+                    w.deleteLater()
+            dark = bool(getattr(self, "_is_dark", True))
+            c = _ai_chrome_colors(dark)
+            chip_ss = _ai_intent_chip_style(dark)
+            by_id = {tid: (lab, prompt) for tid, lab, prompt in AI_TEMPLATE_QUESTIONS}
+            for group_label, ids in AI_TEMPLATE_INTENT_GROUPS:
+                title = QLabel(group_label)
+                title.setStyleSheet(
+                    f"QLabel {{ color:{c['muted']}; font-size:11px; "
+                    f"padding:0 0 4px; }}")  # web `.ai-intent-group-label`
+                lay.addWidget(title)
+                # Same wrap + 4px gap as mode/template rows (web ``gap: 4px``).
+                row = _FlowChips(spacing=4)
+                row.setObjectName("aiIntentChipRow")
+                row.setStyleSheet(chip_ss)
+                any_btn = False
+                for tid in ids:
+                    info = by_id.get(tid)
+                    if not info:
+                        continue
+                    lab, prompt = info
+                    btn = _make_intent_chip_button(
+                        lab,
+                        prompt,
+                        lambda _=False, t=tid: self.query_template(t),
+                    )
+                    row._flow.addWidget(btn)
+                    any_btn = True
+                if any_btn:
+                    lay.addWidget(row)
+                else:
+                    row.setParent(None)
+                    row.deleteLater()
+            self._sync_intent_scroll_size()
+
+        def _schedule_intent_reflow(self) -> None:
+            """Debounce geometry updates during dock / splitter resize drags."""
+            if bool(getattr(self, "_entries", None)):
+                return
+            timer = getattr(self, "_intent_reflow_timer", None)
+            if timer is None:
+                timer = QTimer(self)
+                timer.setSingleShot(True)
+                timer.timeout.connect(self._sync_intent_scroll_size)
+                self._intent_reflow_timer = timer
+            timer.start(50)
+
+        def _sync_intent_scroll_size(self) -> None:
+            """Re-pin chip sizes and refresh wrap heights without vertical mins.
+
+            Pinning ``host.minimumHeight`` crushed the composer when the right
+            dock narrowed; destructive HBox reflow also produced uneven gaps.
+            """
+            groups = getattr(self, "_intent_groups", None)
+            host = getattr(self, "_intent_host", None)
+            scroll = getattr(self, "_intent_scroll", None)
+            if groups is not None:
+                for btn in groups.findChildren(QPushButton):
+                    if btn.objectName() != "aiIntentChip":
+                        continue
+                    bw = _intent_chip_pixel_width(btn)
+                    btn.setProperty("aiChipWidth", bw)
+                    btn.setSizePolicy(
+                        QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+                    btn.setFixedSize(bw, _AI_INTENT_CHIP_HEIGHT)
+                    btn.show()
+                for row in groups.findChildren(_FlowChips):
+                    row.setMinimumHeight(0)
+                    row.setMaximumHeight(16777215)
+                    row.updateGeometry()
+                groups.setMinimumHeight(0)
+                groups.updateGeometry()
+            for host_name in ("_mode_host", "_tpl_host"):
+                h = getattr(self, host_name, None)
+                if h is not None:
+                    h.updateGeometry()
+            if host is not None:
+                host.setMinimumSize(0, 0)
+                host.setMaximumHeight(16777215)
+                host.updateGeometry()
+            if scroll is not None:
+                bar = scroll.verticalScrollBar()
+                if bar is not None and bar.value() > bar.maximum():
+                    bar.setValue(bar.maximum())
+
+        def _debug_dump_intent_landing(self) -> None:
+            """Late empty-state layout pass (kept name for existing timers)."""
+            if not bool(getattr(self, "_entries", None)):
+                self._refresh_intent_landing()
+                self._sync_intent_scroll_size()
+
+        def _on_ai_panel_shown(self) -> None:
+            """Called when the AI tab becomes current (chips need a late layout pass)."""
+            if not bool(getattr(self, "_entries", None)):
+                QTimer.singleShot(0, self._sync_intent_scroll_size)
+
+        def _refresh_intent_landing(self) -> None:
+            """Show Trace/Scope/Filters + intent chips when the conversation is empty."""
+            empty = not bool(getattr(self, "_entries", None))
+            stack = getattr(self, "_log_stack", None)
+            if stack is not None:
+                stack.setCurrentIndex(0 if empty else 1)
+                # Soft floor only — large mins crush the composer on narrow docks.
+                stack.setMinimumHeight(80)
+            # Groups live inside the empty-state host (Web `.ai-log > .ai-empty`);
+            # visibility follows the stack page — no separate show/hide.
+            if not empty:
+                return
+            gui = {}
+            ctx = {}
+            if on_gui_state:
+                try:
+                    gui = dict(on_gui_state() or {})
+                except Exception:
+                    gui = {}
+            if get_context:
+                try:
+                    ctx = normalize_ai_context(dict(get_context() or {}))
+                except Exception:
+                    ctx = {}
+            filters = ctx.get("filters") or []
+            if not isinstance(filters, list):
+                filters = []
+            filters = [str(f) for f in filters if f]
+            lab = getattr(self, "_intent_context", None)
+            if lab is not None:
+                # Web ``.ai-intent-context`` uses Trace / Scope / Filters labels.
+                lab.setText(
+                    f"<b>Trace:</b> {html.escape(str(gui.get('file') or gui.get('name') or '—'))}<br/>"
+                    f"<b>Scope:</b> {html.escape(str(ctx.get('scope') or gui.get('scope') or 'Full Trace'))}<br/>"
+                    f"<b>Filters:</b> {html.escape(' · '.join(filters) if filters else 'None')}"
+                )
+            dark = bool(getattr(self, "_is_dark", True))
+            c = _ai_chrome_colors(dark)
+            prompt = getattr(self, "_intent_prompt", None)
+            if prompt is not None:
+                prompt.setStyleSheet(
+                    f"QLabel {{ color:{c['text']}; font-size:12px; "
+                    f"font-weight:600; padding:4px 0 8px; }}")
+            if lab is not None:
+                lab.setStyleSheet(
+                    f"QLabel {{ color:{c['muted']}; font-size:11px; "
+                    f"padding:0 0 8px; line-height:1.45; }}")
+            hint = getattr(self, "_intent_hint", None)
+            if hint is not None:
+                hint.setStyleSheet(
+                    f"QLabel {{ color:{c['muted']}; font-size:11px; "
+                    f"padding:8px 0 0; }}")
+            groups = getattr(self, "_intent_groups", None)
+            if groups is not None:
+                groups.setStyleSheet(_ai_intent_chip_style(dark))
+                # Style via host only; re-pin fixed chip sizes after QSS polish.
+                for btn in groups.findChildren(QPushButton):
+                    if btn.objectName() != "aiIntentChip":
+                        continue
+                    bw = _intent_chip_pixel_width(btn)
+                    btn.setProperty("aiChipWidth", bw)
+                    btn.setFixedSize(bw, _AI_INTENT_CHIP_HEIGHT)
+            # Do not force AI splitter sizes here — that hid the composer when
+            # the right dock was narrowed and intent chips reflowed taller.
+            self._sync_intent_scroll_size()
 
         def _show_log_menu(self, pos) -> None:
             menu = self._log.createStandardContextMenu(pos)
@@ -5320,6 +5786,9 @@ def create_ai_assistant_panel(
         def showEvent(self, event) -> None:  # noqa: N802
             super().showEvent(event)
             self.refresh_enabled_state()
+            self._refresh_intent_landing()
+            if not bool(getattr(self, "_entries", None)):
+                QTimer.singleShot(0, self._sync_intent_scroll_size)
 
         def query_template(
             self, template_id: str, *, finding_id: str = "", extra: str = "",
@@ -5861,6 +6330,7 @@ def create_ai_assistant_panel(
                 if self._entries:
                     self._refresh_log()
             self._refresh_guide_ui()
+            self._refresh_intent_landing()
 
         def _refresh_guide_ui(self) -> None:
             if not getattr(self, "_guide_step_btns", None):
@@ -6347,7 +6817,13 @@ def create_ai_assistant_panel(
 
         def _on_err(self, msg: str) -> None:
             self._append("assistant", f"(Error) {msg}")
-            self._set_status((msg or "").split("\n", 1)[0][:200], error=True)
+            tip = (msg or "").split("\n", 1)[0][:160]
+            last_q = str(getattr(self, "_last_failed_query", "") or "").strip()
+            if last_q and not self._input.toPlainText().strip():
+                self._input.setPlainText(last_q)
+            if tip:
+                tip = f"{tip} — prompt restored; edit and Send to retry."
+            self._set_status(tip or "Request failed — prompt restored; Send to retry.", error=True)
             low = (msg or "").lower()
             if "http 401" in low or "http 403" in low or "api key required" in low:
                 self._auth_forced = True
@@ -6434,6 +6910,7 @@ def create_ai_assistant_panel(
                 return
             ctx["findings_text"] = privacy.get("findings_text") or ctx.get("findings_text", "")
             query = str(privacy.get("query") or query)
+            self._last_failed_query = query
             self._append("user", query)
             self._tool_round = 0
             mode = self._context_mode()

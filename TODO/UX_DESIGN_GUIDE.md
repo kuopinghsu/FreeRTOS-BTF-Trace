@@ -1724,24 +1724,12 @@ Focus (shipped):
 
 ## Step 2 — Evidence-Driven Analysis and Guided Investigation
 
-See:
+**Complete.** Behavior is documented in `BTFViewer/README.md`, `WORKFLOWS.md`,
+`STATISTICS.md`, and `AI.md` (Evidence Navigation, Findings inbox, Migration
+corridor detail, Compare → Decision, AI Evidence / Confidence / Privacy,
+exported context, Command Palette, context preservation exceptions).
 
-```text
-TODO-step2.md
-```
-
-Focus:
-
-* Universal Evidence Navigation;
-* Investigation Context preservation;
-* Statistics drill-down;
-* Migration workflow;
-* AI workflow;
-* AI Evidence and Confidence;
-* Trace Compare;
-* Compare → Decision;
-* exported context;
-* expert navigation.
+Deferred polish items live in Step 3.
 
 ---
 

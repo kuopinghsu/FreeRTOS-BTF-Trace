@@ -40,13 +40,14 @@ class TestStatsVariability(unittest.TestCase):
     def test_live_summary_jitter_and_population_stddev(self) -> None:
         summary = _StatsPanel._summarize_samples(None, [10, 20, 30], "ns")
         self.assertIsNotNone(summary)
-        mn, avg, mx, jitter, stddev, p95, p99 = summary
+        mn, avg, mx, jitter, stddev, p50, p95, p99 = summary
 
         self.assertEqual(mn, _format_time(10, "ns"))
         self.assertEqual(avg, _format_time(20, "ns"))
         self.assertEqual(mx, _format_time(30, "ns"))
         self.assertEqual(jitter, _format_time(20, "ns"))
         self.assertEqual(stddev, _format_time(8, "ns"))
+        self.assertEqual(p50, _format_time(20, "ns"))
         self.assertEqual(p95, _format_time(30, "ns"))
         self.assertEqual(p99, _format_time(30, "ns"))
 
@@ -68,7 +69,7 @@ class TestStatsVariability(unittest.TestCase):
     def test_single_sample_jitter_and_stddev_are_zero(self) -> None:
         summary = _StatsPanel._summarize_samples(None, [42], "ns")
         self.assertIsNotNone(summary)
-        _mn, _avg, _mx, jitter, stddev, _p95, _p99 = summary
+        _mn, _avg, _mx, jitter, stddev, _p50, _p95, _p99 = summary
         zero = _format_time(0, "ns")
         self.assertEqual(jitter, zero)
         self.assertEqual(stddev, zero)

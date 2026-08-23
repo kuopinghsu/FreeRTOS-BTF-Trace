@@ -136,7 +136,7 @@ BTFViewer **不會**進行原始碼分析，也**不會**模擬 RTOS 排程器�
 
 桌面版與網頁版的右側面板都提供 **Statistics** 分頁。
 
-面板頂端會顯示目前 **Scope**（**Full Trace** 或 **C1–Cn · duration**，與狀態列一致）。當 Task、Core 或 Migration **Filter** 生效時，會顯示 **Filtered:** 指示，列出與狀態列相同的晶片，避免分析範圍被隱藏。
+面板頂端會顯示目前 **Scope**（**Full Trace** 或 **C1–Cn · duration**，與狀態列一致）。當 Task、Core 或 Migration **Filter** 生效時，會顯示 **Filtered:** 指示，列出與狀態列相同的晶片，避免分析範圍被隱藏。各區段標題在適用時也會顯示精簡的 **Scope**（`C1–Cn`）與 **Filtered** 晶片。因 Scope／Filter 變更而重建 Statistics 時會保留面板捲動位置；Evidence／Investigate 的 **scroll to section** 仍會刻意跳轉。
 
 ### 將統計範圍限制在指定時間
 
@@ -155,7 +155,7 @@ BTFViewer **不會**進行原始碼分析，也**不會**模擬 RTOS 排程器�
 | **⠿** grip | 拖曳控制點以調整區段位置 |
 | Pin | 使用 **Collapse all** 時仍保持該區段展開（懸停／焦點顯示外框 Pin；已固定為實心）。手動收合已 Pin 的區段會同時清除 Pin |
 
-區段順序、Pin 狀態、展開／收合狀態與表格高度都會保留至下次啟動。**Settings → Reset to Defaults** 會依目前 Trace 恢復內建版面：若有超過一個核心出現有意義的執行活動（SMP-active），**Core utilisation** 會預設展開並 Pin；否則所有區段預設收合且未 Pin。每個區段右側會顯示分類徽章（**OVERVIEW**、**TRIAGE**、**TIMING**、**SCHED**、**SYNC**、**DETAIL**）。徽章會依分類使用低飽和度底色與邊框（視覺權重低於 Warning／Error）；類別名稱文字仍是主要識別方式。重新排序不會改變分類。Pin 圖示維持單色，且與徽章顏色獨立。Desktop 與 Web 皆保留固定 22px 的 Pin 欄位，因此懸停顯示外框 Pin 時分類徽章不會左右移動。
+區段順序、Pin 狀態、展開／收合狀態與表格高度都會保留至下次啟動。**Settings → Reset to Defaults** 會依目前 Trace 恢復內建版面：若有超過一個核心出現有意義的執行活動（SMP-active），**Core utilisation** 會預設展開並 Pin；否則所有區段預設收合且未 Pin。每個區段右側會顯示分類徽章（**OVERVIEW**、**TRIAGE**、**TIMING**、**SCHED**、**SYNC**、**DETAIL**）。徽章會依分類使用低飽和度底色與邊框（視覺權重低於 Warning／Error）；類別名稱文字仍是主要識別方式。重新排序不會改變分類。Pin 圖示維持單色，且與徽章顏色獨立。
 
 預設順序在該目錄內以 Triage 為先：固定的 Summary／Scheduling summary 之後，TRIAGE 區段（**Timeline Anomalies**、**Worst Events**、**Recurring Patterns**、**Response Time**、**Task Health** 等）會先呈現可疑行為，再進入較細的 Timing／Sched／Sync／Detail 表格。
 
@@ -164,8 +164,8 @@ BTFViewer **不會**進行原始碼分析，也**不會**模擬 RTOS 排程器�
 **Export CSV** 與 **Export HTML** 都會套用目前的游標範圍。
 
 - **CSV**：匯出 **Statistics** 各區段的摘要表格與相關計算值。
-- **HTML**：除相同的摘要資料外，報告開頭會呈現診斷概觀，包括 **Analysis Scope**（檔名、完整追蹤資料或 C1–Cn、起迄時間、持續時間、核心數、篩選條件及時間戳基準）、診斷 KPI（狀態、負載平衡、使用率範圍、最差的啟發式 Response P99、核心遷移、Tick、同步及 Deadline），以及 **Analysis Findings** 證據卡片。工作數、執行區段數與 STI 事件數列在 **Trace Metadata**；**Core Utilisation** 區段則提供 SVG **Load Balance Score** 儀表。目錄將內容分成五個診斷類別，並提供 **Expand all** / **Collapse all**。大型表格預設顯示約 20 筆資料，並支援搜尋、排序、**Problems only**、**Show all** 及 CSV 匯出。文末的 **Statistics Notes** 提供詞彙說明。
-- **Trace Compare…**：比較兩份已開啟追蹤資料中的支援指標。Trace A 為**基準（baseline）**，Trace B 為**候選版本（candidate）**。**Δ** 為 Baseline A − Candidate B。若兩份追蹤資料要使用不同的分析時間範圍，可啟用 **Limit to each tab's cursor range**。**Export CSV** / **Export HTML** 會輸出所有比較表格，不限於對話框中的前 N 筆預覽。HTML 報告會加入目錄及 **Expand all** / **Collapse all**；**Overview** 與 **Summary** 預設展開。**Overview** 會顯示比較對象、結論與 **Notable Changes** 摘要（超過門檻的 **Improved** / **Regressed** 項目）。**Summary**、**Core Util**、**Response** 與 **Core Migrations** 會附上圖表；**Core Migrations** 預設顯示遷移次數變化最大的資料列。
+- **HTML**：除相同的摘要資料外，報告開頭會呈現診斷概觀，包括 **Analysis Scope**（檔名、完整追蹤資料或 C1–Cn、起迄時間、持續時間、核心數、篩選條件〔含啟用中的 Timeline Filter〕及時間戳基準）、可選的 **Evidence Refs**（Findings 標籤與證據文字／時間戳）、診斷 KPI（狀態、負載平衡、使用率範圍、最差的啟發式 Response P99、核心遷移、Tick、同步及 Deadline），以及 **Analysis Findings** 證據卡片。工作數、執行區段數與 STI 事件數列在 **Trace Metadata**；**Core Utilisation** 區段則提供 SVG **Load Balance Score** 儀表。目錄將內容分成五個診斷類別，並提供 **Expand all** / **Collapse all**。大型表格預設顯示約 20 筆資料，並支援搜尋、排序、**Problems only**、**Show all** 及 CSV 匯出。文末的 **Statistics Notes** 提供詞彙說明。
+- **Trace Compare…**：比較兩份已開啟追蹤資料中的支援指標。Trace A 為**基準（baseline）**，Trace B 為**候選版本（candidate）**。**Δ** 為 Baseline A − Candidate B。對話框頂端的**決策摘要列**含識別資訊、回歸／改善計數、最大回歸、Why?，以及 **Investigate on Baseline**／**Investigate on Candidate**。這兩個按鈕會關閉 Compare、切換到對應分頁，並開啟 Statistics 中與最大回歸對應的區段（若可解析則醒目提示相關任務）。點擊最大回歸文字等同對 Candidate 執行相同動作。若兩份追蹤資料要使用不同的分析時間範圍，可啟用 **Limit to each tab's cursor range**。**Export CSV** / **Export HTML** 會輸出所有比較表格，不限於對話框中的前 N 筆預覽。HTML 報告會加入目錄及 **Expand all** / **Collapse all**；**Overview** 與 **Summary** 預設展開。**Overview** 會顯示比較對象、結論與 **Notable Changes** 摘要（超過門檻的 **Improved** / **Regressed** 項目）。**Summary**、**Core Util**、**Response** 與 **Core Migrations** 會附上圖表；**Core Migrations** 預設顯示遷移次數變化最大的資料列。
 
 各區段實際匯出的欄位與詳細行為，請參閱下方的指標說明。
 
@@ -179,7 +179,8 @@ BTFViewer **不會**進行原始碼分析，也**不會**模擬 RTOS 排程器�
 **Export HTML** 開頭依序呈現：
 
 - 診斷 KPI，包括整體狀態、負載平衡、使用率範圍、最差的 Response P99（啟發式）、核心遷移、Tick、同步及 Deadline；
-- **Analysis Scope** 卡片，包括追蹤檔名、完整追蹤資料或游標範圍、起迄時間、持續時間、核心數、篩選條件及時間戳基準；
+- **Analysis Scope** 卡片，包括追蹤檔名、完整追蹤資料或游標範圍、起迄時間、持續時間、核心數、篩選條件（含啟用中的 Timeline Filter）及時間戳基準；
+- 可選的 **Evidence Refs** 卡片，列出 Findings 標籤與證據文字或時間戳（若 Analysis Findings 有提供）；
 - **Analysis Findings** 證據卡片，使用與工具列 **Analysis** 相同的啟發式分析，涵蓋負載平衡、CPU 使用量偏高的工作、執行時間最大值偏高、離開 CPU 的間隔過長、核心頻繁遷移（thrashing）、Deadline、Tick 健康狀態及同步問題。
 
 每則分析結果都會顯示嚴重程度、影響、證據、可信度及 **Inspect** 連結。**Inspect** 只會開啟報告內的相關區段，不會跳回 BTFViewer。**Core Utilisation** 區段另提供 SVG **Load Balance Score** 儀表。
@@ -216,9 +217,9 @@ Priority Inheritance、Mutex / Semaphore 與 Interval Analysis 也會提供詳�
 <a id="analysis-findings" name="analysis-findings">&#x200B;</a>
 ### 分析結果（Analysis Findings） ![](../images/readme/h4.svg)
 
-工具列的 **Analysis** 在桌面版與網頁版使用相同的啟發式分析卡片；它不是 **Statistics** 面板中的獨立區段。相關按鈕與時間軸疊圖的操作方式，請參閱 [README → Analysis Findings](README.md#analysis-findings)。
+工具列的 **Analysis** 在桌面版與網頁版使用相同的啟發式分析卡片；它不是 **Statistics** 面板中的獨立區段。Findings 以**非強制 inbox** 開啟，時間軸仍可點選。相關按鈕與時間軸疊圖的操作方式，請參閱 [README → Analysis Findings](README.md#analysis-findings)。
 
-每項 Finding 會顯示嚴重程度、問題導向標題、主要支持指標，以及分開的 **Evidence** 列（量測觀察，與詮釋文字分離）。**Investigate** 會開啟對應 Statistics 區段並保留 Scope 與 Filters。**Show Evidence** 保留給跨介面 Evidence Navigation，在該流程完成前為停用。若已設定 AI，仍可使用選配的 AI 動作。
+每項 Finding 會顯示嚴重程度、問題導向標題、主要支持指標，以及分開的 **Evidence** 列（量測觀察，與詮釋文字分離）。**Investigate** 會開啟對應 Statistics 區段並保留 Scope 與 Filters（Findings 保持開啟）。**Show Evidence** 會將時間軸置中到 Finding 的 Evidence（一個 Evidence 游標；可選 Task Highlight），且不變更 Scope 或 Filters、不關閉 Findings。若已設定 AI，仍可使用選配的 AI 動作。
 
 負載平衡相關的分析使用與 **Core utilisation** 相同的 Score / σ / Gini。只有在系統具有 **至少 2 個核心**，且總使用率 **> 0** 時才會產生相關結果。
 
@@ -599,7 +600,13 @@ R_m = \frac{N_{\mathrm{migrations},i}}{T_{\mathrm{exec},i}}
 | **Bounce %** | `100 × Bounces / Count` |
 | **Avg Gap** | 此 corridor 中 migration 後平均 off-CPU gap |
 
-點選資料列會開啟包含兩個分頁的 Distribution Chart：
+點選資料列會選取該 corridor，並顯示細節列：
+
+- **Show Events** — 跳至該 pair 的第一次 migration 時間戳（Evidence Navigation；不變更 Scope 或 Filters）。
+- **Filter Timeline** — 過濾到在此 corridor 遷移的工作。
+- **Open Statistics** — 保持區段展開並開啟該 pair 的 **Gap / Rate** 分布圖。
+
+Distribution Chart 包含兩個分頁：
 
 - **Gap**（預設）— 每次 directed migration 若有正值 gap，就顯示一個資料點。x = migration time；y = post-migration gap，也就是 **Avg Gap** 的原始 sample。Lock-bounce event 以**橘色**顯示，其餘使用來源核心的顏色。
 - **Rate** — 同一 directed pair 上，每次連續 migration 顯示一個資料點。x = migration time；y = 此 corridor 與前一次 hop 的時間差。緊密的垂直帶狀分布表示 corridor traffic 具有明顯 burst。

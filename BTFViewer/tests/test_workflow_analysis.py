@@ -387,6 +387,46 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         self.assertEqual(validated, [(True, 0, 1)])
         self.assertEqual(called, [])
 
+    def test_compare_dialog_investigate_side_opens_stats(self):
+        from types import SimpleNamespace
+
+        from PySide6.QtWidgets import QApplication, QPushButton
+        from btf_viewer_pkg.stats import _TraceCompareDialog
+
+        if QApplication.instance() is None:
+            QApplication([])
+        calls = []
+
+        def investigate_compare_side(idx, **kwargs):
+            calls.append((idx, kwargs))
+
+        win = SimpleNamespace(
+            _tabs=[
+                SimpleNamespace(path="/tmp/a.btf", trace=None),
+                SimpleNamespace(path="/tmp/b.btf", trace=None),
+            ],
+            _tab_widget=SimpleNamespace(setCurrentIndex=lambda _i: None),
+            _investigate_compare_side=investigate_compare_side,
+        )
+        dlg = _TraceCompareDialog(win, ai_enabled=False)
+        dlg._investigate_target = {
+            "section_id": "response",
+            "section": "response",
+            "task": "T1",
+            "section_label": "Response Time",
+            "label": "T1 response p99",
+        }
+        btn = next(
+            b for b in dlg.findChildren(QPushButton)
+            if b.text().replace("&", "") == "Investigate on Candidate"
+        )
+        btn.click()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], 1)
+        self.assertEqual(calls[0][1]["section_id"], "response")
+        self.assertEqual(calls[0][1]["task"], "T1")
+        self.assertEqual(calls[0][1]["tab_name"], "b.btf")
+
 
 if __name__ == "__main__":
     unittest.main()

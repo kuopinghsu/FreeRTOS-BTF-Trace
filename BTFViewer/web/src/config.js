@@ -70,6 +70,10 @@ export const STATS_TABLE_HSCROLL_H = 14
 export const STATS_TABLE_WRAP_BORDER = 2
 export const STATS_TABLE_MIN_H = 80
 export const STATS_TABLE_MAX_H = 480
+/** Section-header pin slot (Desktop/Web lockstep): narrow vertical bar. */
+export const STATS_PIN_SLOT_W = 14
+export const STATS_PIN_SLOT_H = 22
+export const STATS_PIN_ICON_PX = 14
 
 // ---- Large-trace statistics load ------------------------------------------
 export const STATS_LOAD_DEFER_TASKS = 256
@@ -106,6 +110,101 @@ export const COMMAND_PALETTE_ACTIONS = [
   ['preset-smp', 'Workspace: SMP'],
   ['preset-compare', 'Workspace: Compare'],
 ]
+/** Per-action palette chrome. Keep ACTIONS as [id, label] for compatibility.
+ *  requires: none | trace | two_traces | cursors2 */
+export const COMMAND_PALETTE_META = Object.freeze({
+  analysis: {
+    shortcut: '',
+    synonyms: ['findings', 'inbox', 'triage'],
+    requires: 'trace',
+    disabled: 'Open a trace first',
+  },
+  statistics: {
+    shortcut: '',
+    synonyms: ['stats', 'metrics'],
+    requires: 'trace',
+    disabled: 'Open a trace first',
+  },
+  find: {
+    shortcut: 'Ctrl+F',
+    synonyms: ['search', 'locate'],
+    requires: 'trace',
+    disabled: 'Open a trace first',
+  },
+  marks: {
+    shortcut: '',
+    synonyms: ['bookmarks', 'annotations', 'notes'],
+    requires: 'trace',
+    disabled: 'Open a trace first',
+  },
+  ai: {
+    shortcut: '',
+    synonyms: ['assistant', 'chat', 'llm'],
+    requires: 'trace',
+    disabled: 'Open a trace first',
+  },
+  compare: {
+    shortcut: '',
+    synonyms: ['diff', 'regression'],
+    requires: 'two_traces',
+    disabled: 'Open at least two traces',
+  },
+  heatmap: {
+    shortcut: '',
+    synonyms: ['migration', 'corridor'],
+    requires: 'trace',
+    disabled: 'Open a trace first',
+  },
+  settings: {
+    shortcut: 'Ctrl+,',
+    synonyms: ['preferences', 'options', 'config'],
+    requires: 'none',
+    disabled: '',
+  },
+  'limit-scope': {
+    shortcut: '',
+    synonyms: ['scope', 'c1', 'c2'],
+    requires: 'cursors2',
+    disabled: 'Place at least two cursors (C1–Cn)',
+  },
+  fit: {
+    shortcut: 'Ctrl+0',
+    synonyms: ['zoom', 'reset', 'overview'],
+    requires: 'trace',
+    disabled: 'Open a trace first',
+  },
+  'inspect-task': {
+    shortcut: '',
+    synonyms: ['inspector', 'task info', 'quality'],
+    requires: 'trace',
+    disabled: 'Open a trace first',
+  },
+  'preset-triage': {
+    shortcut: '',
+    synonyms: ['workspace', 'health'],
+    requires: 'trace',
+    disabled: 'Open a trace first',
+  },
+  'preset-latency': {
+    shortcut: '',
+    synonyms: ['workspace', 'timing', 'response'],
+    requires: 'trace',
+    disabled: 'Open a trace first',
+  },
+  'preset-smp': {
+    shortcut: '',
+    synonyms: ['workspace', 'multicore', 'cores'],
+    requires: 'trace',
+    disabled: 'Open a trace first',
+  },
+  'preset-compare': {
+    shortcut: '',
+    synonyms: ['workspace', 'diff'],
+    requires: 'two_traces',
+    disabled: 'Open at least two traces',
+  },
+})
+export const COMMAND_PALETTE_RECENT_MAX = 8
 export const WORKSPACE_PRESETS = {
   'preset-triage': ['health', 'anomalies', 'worst', 'task_health'],
   'preset-latency': ['exec', 'response', 'jitter', 'period', 'dispatch'],
@@ -119,6 +218,133 @@ export function workspacePresetCollapsed(presetId, defaults) {
     if (sid in flags) flags[sid] = false
   }
   return flags
+}
+
+function commandPaletteNorm(text) {
+  return String(text || '').toLowerCase().replace(/[^\w]+/g, '')
+}
+
+/** True when query matches id, label, or meta synonyms (empty query = all). */
+export function commandPaletteMatch(query, actionId, label, meta) {
+  const q = String(query || '').trim().toLowerCase()
+  if (!q) return true
+  const m = meta && typeof meta === 'object' ? meta : {}
+  const parts = [String(actionId || ''), String(label || '')]
+  for (const s of m.synonyms || []) parts.push(String(s))
+  for (const part of parts) {
+    if (part.toLowerCase().includes(q)) return true
+  }
+  const qn = commandPaletteNorm(q)
+  if (!qn) return true
+  return parts.some(part => commandPaletteNorm(part).includes(qn))
+}
+
+function commandPaletteMatchScore(query, actionId, label, meta) {
+  const q = String(query || '').trim().toLowerCase()
+  if (!q) return 0
+  const m = meta && typeof meta === 'object' ? meta : {}
+  const aid = String(actionId || '').toLowerCase()
+  const lab = String(label || '').toLowerCase()
+  const syns = (m.synonyms || []).map(s => String(s).toLowerCase())
+  if (aid === q || lab === q) return 100
+  if (syns.some(s => s === q)) return 90
+  if (aid.startsWith(q) || lab.startsWith(q)) return 80
+  if (syns.some(s => s.startsWith(q))) return 70
+  if (aid.includes(q) || lab.includes(q)) return 50
+  if (syns.some(s => s.includes(q))) return 40
+  const qn = commandPaletteNorm(q)
+  if (qn && commandPaletteNorm(lab).includes(qn)) return 30
+  return 10
+}
+
+/**
+ * Rank palette rows: recent/frequent when idle; scored matches when filtering.
+ * Each row: { id, label, shortcut, available, reason }.
+ * availabilityFn(aid) -> { available, reason } or [available, reason].
+ */
+export function commandPaletteRank(
+  actions,
+  query = '',
+  recentIds = [],
+  frequentCounts = {},
+  availabilityFn = null,
+) {
+  const recent = (recentIds || []).map(String).filter(Boolean)
+  const recentRank = new Map(recent.map((aid, i) => [aid, i]))
+  const freqMap = {}
+  for (const [k, v] of Object.entries(frequentCounts || {})) {
+    const n = Number(v)
+    if (Number.isFinite(n)) freqMap[String(k)] = n
+  }
+  const defaultOrder = new Map(
+    (actions || []).map(([aid], i) => [String(aid), i]),
+  )
+  const q = String(query || '').trim()
+  const rows = []
+  for (const [aid, label] of actions || []) {
+    const aidS = String(aid)
+    const labelS = String(label)
+    const meta = COMMAND_PALETTE_META[aidS] || {}
+    if (q && !commandPaletteMatch(q, aidS, labelS, meta)) continue
+    let available = true
+    let reason = ''
+    if (typeof availabilityFn === 'function') {
+      try {
+        const res = availabilityFn(aidS)
+        if (Array.isArray(res)) {
+          available = !!res[0]
+          reason = String(res[1] || '')
+        } else if (res && typeof res === 'object') {
+          available = res.available !== false
+          reason = String(res.reason || '')
+        }
+      } catch {
+        available = true
+        reason = ''
+      }
+    }
+    if (!available && !reason) {
+      reason = String(meta.disabled || 'Unavailable')
+    }
+    rows.push({
+      id: aidS,
+      label: labelS,
+      shortcut: String(meta.shortcut || ''),
+      available,
+      reason: available ? '' : reason,
+      _score: q ? commandPaletteMatchScore(q, aidS, labelS, meta) : 0,
+    })
+  }
+  rows.sort((a, b) => {
+    const aDef = defaultOrder.get(a.id) ?? 10000
+    const bDef = defaultOrder.get(b.id) ?? 10000
+    if (!q) {
+      const aR = recentRank.has(a.id)
+      const bR = recentRank.has(b.id)
+      if (aR || bR) {
+        if (aR && bR) return recentRank.get(a.id) - recentRank.get(b.id)
+        return aR ? -1 : 1
+      }
+      const aF = freqMap[a.id] || 0
+      const bF = freqMap[b.id] || 0
+      if (aF > 0 || bF > 0) {
+        if (aF !== bF) return bF - aF
+        return aDef - bDef
+      }
+      return aDef - bDef
+    }
+    if (b._score !== a._score) return b._score - a._score
+    const aR = recentRank.has(a.id)
+    const bR = recentRank.has(b.id)
+    if (aR !== bR) return aR ? -1 : 1
+    if (aR && bR) return recentRank.get(a.id) - recentRank.get(b.id)
+    const aF = freqMap[a.id] || 0
+    const bF = freqMap[b.id] || 0
+    if (aF !== bF) return bF - aF
+    return aDef - bDef
+  })
+  for (const row of rows) delete row._score
+  return rows
 }
 
 /** Help under each Statistics section title. Keep lockstep with config.py STATS_SECTION_HELP. */

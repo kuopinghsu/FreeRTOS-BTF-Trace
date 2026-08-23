@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import {
+  evidenceRefsFromFindings,
+  htmlEvidenceRefsCard,
   htmlFindingCards,
   htmlGlossary,
   htmlInvestigateAnomalies,
@@ -62,5 +64,19 @@ describe('stats HTML helpers', () => {
     assert.match(html, /Investigate Anomalies/)
     assert.match(html, /data-tab="crit"/)
     assert.match(html, /can overlap/)
+  })
+
+  it('evidence refs card from findings', () => {
+    const refs = evidenceRefsFromFindings([{
+      title: 'Excessive core migration',
+      evidence_text: '564 migrations',
+      evidence: [{ label: 'burst', time: 1487000 }],
+    }], { formatNs: ns => `${(ns / 1e6).toFixed(3)} ms` })
+    assert.equal(refs[0].label, 'Excessive core migration')
+    assert.match(refs[0].time_text, /ms/)
+    const html = htmlEvidenceRefsCard(refs)
+    assert.match(html, /Evidence Refs/)
+    assert.match(html, /Excessive core migration/)
+    assert.equal(htmlEvidenceRefsCard([]), '')
   })
 })

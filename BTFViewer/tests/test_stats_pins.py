@@ -160,5 +160,69 @@ class StatsCategoryBadgeColorTest(unittest.TestCase):
             self.assertEqual(STATS_CATEGORY_BADGE_COLORS[cat]["dark"], dark, cat)
 
 
+class StatsMetaChipStyleTest(unittest.TestCase):
+    def test_meta_chip_stylesheet_uses_hex_not_css_rgba(self) -> None:
+        from btf_viewer_pkg.config import (
+            stats_meta_chip_colors,
+            stats_meta_chip_stylesheet,
+        )
+
+        for kind in ("scope", "filter"):
+            for dark in (True, False):
+                fg, bg, border = stats_meta_chip_colors(kind, dark=dark)
+                for c in (fg, bg, border):
+                    self.assertTrue(c.startswith("#") and len(c) == 7, c)
+                css = stats_meta_chip_stylesheet(kind, dark=dark)
+                self.assertIn(fg, css)
+                self.assertIn(bg, css)
+                self.assertIn(border, css)
+                self.assertIn("border-radius:8px", css)
+                self.assertIn("min-height:14px", css)
+                self.assertIn("padding:2px 6px", css)
+                self.assertNotIn("rgba(", css)
+                self.assertNotIn("letter-spacing", css)
+
+    def test_section_header_meta_order_matches_web(self) -> None:
+        """Desktop header chips: Scope → Filtered → category → pin (Web order)."""
+        from pathlib import Path
+
+        stats = (Path(__file__).resolve().parents[1] / "btf_viewer_pkg/stats.py").read_text(
+            encoding="utf-8")
+        web = (
+            Path(__file__).resolve().parents[1]
+            / "web/src/components/StatsSectionHeader.vue"
+        ).read_text(encoding="utf-8")
+        web_cfg = (
+            Path(__file__).resolve().parents[1] / "web/src/config.js"
+        ).read_text(encoding="utf-8")
+        stats_cfg = (
+            Path(__file__).resolve().parents[1] / "btf_viewer_pkg/config.py"
+        ).read_text(encoding="utf-8")
+        # Desktop: scope chip before category badge in section header mount.
+        add = stats.split("def _mount_collapsible_section", 1)[1].split(
+            "\n    def ", 1)[0]
+        scope_i = add.find('kind="scope"')
+        filter_i = add.find('kind="filter"')
+        cat_i = add.find('setObjectName("stats_section_category")')
+        pin_i = add.find("row_lay.addWidget(\n            pin_slot")
+        self.assertGreater(scope_i, 0)
+        self.assertGreater(filter_i, scope_i)
+        self.assertGreater(cat_i, filter_i)
+        self.assertGreater(pin_i, cat_i)
+        # Web template order.
+        scope_w = web.find('class="stats-meta-chip scope"')
+        filt_w = web.find('class="stats-meta-chip filtered"')
+        cat_w = web.find('class="stats-category-badge"')
+        pin_w = web.find('class="stats-pin-btn"')
+        self.assertGreater(filt_w, scope_w)
+        self.assertGreater(cat_w, filt_w)
+        self.assertGreater(pin_w, cat_w)
+        self.assertIn("border-radius: 8px", web)
+        self.assertIn("stats-pin-slot", web)
+        self.assertIn("STATS_PIN_SLOT_W", web_cfg)
+        self.assertIn("STATS_PIN_SLOT_W = 14", stats_cfg)
+        self.assertNotIn("border-radius: 999px", web)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -281,8 +281,8 @@ def enrich_findings_with_ids(findings: Sequence[dict]) -> List[dict]:
 
 
 def format_findings_evidence_chain(findings: Sequence[dict]) -> str:
-    """Markdown evidence-chain block for AI context / UI."""
-    lines = ["### Evidence chain", ""]
+    """Markdown evidence block for AI context / UI."""
+    lines = ["## Evidence", ""]
     if not findings:
         lines.append("_No findings in scope._")
         return "\n".join(lines)
@@ -3207,6 +3207,31 @@ _REPORT_TYPES = frozenset({
 })
 
 
+def _open_statistics_next_check(finding: Optional[dict]) -> str:
+    """Concise clickable 'Open Statistics → …' line when inspect/task is known."""
+    if not isinstance(finding, dict):
+        return ""
+    from .config import FINDING_SECTION_MAP  # late: avoid import cycles
+    inspect = str(finding.get("inspect") or "").strip()
+    task = str(finding.get("task") or "").strip()
+    fid = str(finding.get("id") or "").strip()
+    sid = str(FINDING_SECTION_MAP.get(fid) or "").strip()
+    label = ""
+    if inspect and task:
+        section = inspect.split(" (", 1)[0].strip() or inspect
+        label = f"Open {section} → {task}"
+    elif inspect:
+        section = inspect.split(" (", 1)[0].strip() or inspect
+        label = f"Open {section}"
+    elif task:
+        label = f"Open Statistics → {task}"
+    else:
+        return ""
+    if sid:
+        return f"[{label}](btfstats:section/{sid})"
+    return label
+
+
 def generate_structured_report(
     findings: Sequence[dict],
     *,
@@ -3243,7 +3268,7 @@ def generate_structured_report(
         ])
     else:
         lines.extend(["## Summary", "No single focus finding; ranked anomalies below.", ""])
-    lines.append("## Key findings")
+    lines.append("## Evidence")
     for a in (anomalies.get("anomalies") or [])[:6]:
         lines.append(
             f"{a.get('rank')}. [{a.get('band')}] {a.get('title')} — {a.get('id')}"
@@ -3266,13 +3291,18 @@ def generate_structured_report(
             )
             lines.append("")
     lines.extend([
-        "## Recommended actions",
-        "1. Place cursors / zoom on the worst episode (`set_cursors`, `zoom_to_range`).",
-        "2. Highlight the focus task and verify on the timeline.",
-        "3. Re-run Trace Compare or `compare_performance` after a fix.",
-        "",
         "## Confidence",
         "Medium — structured from Analysis Findings; confirm with tool evidence.",
+        "",
+        "## Next check",
+    ])
+    open_line = _open_statistics_next_check(focus)
+    if open_line:
+        lines.append(f"- {open_line}")
+    lines.extend([
+        "- Place cursors / zoom on the worst episode (`set_cursors`, `zoom_to_range`).",
+        "- Highlight the focus task and verify on the timeline.",
+        "- Re-run Trace Compare or `compare_performance` after a fix.",
         "",
     ])
     md = "\n".join(lines)

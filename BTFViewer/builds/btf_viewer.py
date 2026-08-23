@@ -378,6 +378,101 @@ COMMAND_PALETTE_ACTIONS = (
     ("preset-smp", "Workspace: SMP"),
     ("preset-compare", "Workspace: Compare"),
 )
+# Per-action palette chrome. Keep (id, label) tuples above for compatibility.
+# requires: none | trace | two_traces | cursors2
+COMMAND_PALETTE_META: Dict[str, Dict[str, Any]] = {
+    "analysis": {
+        "shortcut": "",
+        "synonyms": ("findings", "inbox", "triage"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "statistics": {
+        "shortcut": "",
+        "synonyms": ("stats", "metrics"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "find": {
+        "shortcut": "Ctrl+F",
+        "synonyms": ("search", "locate"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "marks": {
+        "shortcut": "",
+        "synonyms": ("bookmarks", "annotations", "notes"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "ai": {
+        "shortcut": "",
+        "synonyms": ("assistant", "chat", "llm"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "compare": {
+        "shortcut": "",
+        "synonyms": ("diff", "regression"),
+        "requires": "two_traces",
+        "disabled": "Open at least two traces",
+    },
+    "heatmap": {
+        "shortcut": "",
+        "synonyms": ("migration", "corridor"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "settings": {
+        "shortcut": "Ctrl+,",
+        "synonyms": ("preferences", "options", "config"),
+        "requires": "none",
+        "disabled": "",
+    },
+    "limit-scope": {
+        "shortcut": "",
+        "synonyms": ("scope", "c1", "c2"),
+        "requires": "cursors2",
+        "disabled": "Place at least two cursors (C1–Cn)",
+    },
+    "fit": {
+        "shortcut": "Ctrl+0",
+        "synonyms": ("zoom", "reset", "overview"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "inspect-task": {
+        "shortcut": "",
+        "synonyms": ("inspector", "task info", "quality"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "preset-triage": {
+        "shortcut": "",
+        "synonyms": ("workspace", "health"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "preset-latency": {
+        "shortcut": "",
+        "synonyms": ("workspace", "timing", "response"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "preset-smp": {
+        "shortcut": "",
+        "synonyms": ("workspace", "multicore", "cores"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "preset-compare": {
+        "shortcut": "",
+        "synonyms": ("workspace", "diff"),
+        "requires": "two_traces",
+        "disabled": "Open at least two traces",
+    },
+}
+COMMAND_PALETTE_RECENT_MAX = 8
 WORKSPACE_PRESETS = {
     "preset-triage": ("health", "anomalies", "worst", "task_health"),
     "preset-latency": ("exec", "response", "jitter", "period", "dispatch"),
@@ -393,6 +488,144 @@ def workspace_preset_collapsed(preset_id: str) -> Dict[str, bool]:
         if sid in flags:
             flags[sid] = False
     return flags
+
+
+def _command_palette_norm(text: str) -> str:
+    return re.sub(r"[^\w]+", "", str(text or "").lower())
+
+
+def command_palette_match(
+    query: str,
+    action_id: str,
+    label: str,
+    meta: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """True when *query* matches id, label, or meta synonyms (empty query = all)."""
+    q = str(query or "").strip().lower()
+    if not q:
+        return True
+    meta = meta if isinstance(meta, dict) else {}
+    parts = [str(action_id or ""), str(label or "")]
+    syns = meta.get("synonyms") or ()
+    parts.extend(str(s) for s in syns)
+    for part in parts:
+        if q in part.lower():
+            return True
+    qn = _command_palette_norm(q)
+    if not qn:
+        return True
+    return any(qn in _command_palette_norm(part) for part in parts)
+
+
+def _command_palette_match_score(
+    query: str,
+    action_id: str,
+    label: str,
+    meta: Optional[Dict[str, Any]] = None,
+) -> int:
+    """Higher is a better match; 0 means no match (caller filters first)."""
+    q = str(query or "").strip().lower()
+    if not q:
+        return 0
+    meta = meta if isinstance(meta, dict) else {}
+    aid = str(action_id or "").lower()
+    lab = str(label or "").lower()
+    syns = [str(s).lower() for s in (meta.get("synonyms") or ())]
+    if aid == q or lab == q:
+        return 100
+    if any(s == q for s in syns):
+        return 90
+    if aid.startswith(q) or lab.startswith(q):
+        return 80
+    if any(s.startswith(q) for s in syns):
+        return 70
+    if q in aid or q in lab:
+        return 50
+    if any(q in s for s in syns):
+        return 40
+    qn = _command_palette_norm(q)
+    if qn and qn in _command_palette_norm(lab):
+        return 30
+    return 10
+
+
+def command_palette_rank(
+    actions,
+    query: str = "",
+    recent_ids=None,
+    frequent_counts=None,
+    availability_fn: Optional[Callable] = None,
+) -> List[Dict[str, Any]]:
+    """Rank palette rows: recent/frequent when idle; scored matches when filtering.
+
+    Each row: ``{id, label, shortcut, available, reason}``.
+    *availability_fn(aid) -> (bool, reason)*.
+    """
+    recent = [str(x) for x in (recent_ids or []) if x]
+    recent_rank = {aid: i for i, aid in enumerate(recent)}
+    freq_map: Dict[str, int] = {}
+    for k, v in dict(frequent_counts or {}).items():
+        try:
+            freq_map[str(k)] = int(v)
+        except (TypeError, ValueError):
+            continue
+    default_order = {
+        str(aid): i for i, (aid, _label) in enumerate(actions or ())
+    }
+    q = str(query or "").strip()
+    rows: List[Dict[str, Any]] = []
+    for aid, label in actions or ():
+        aid_s = str(aid)
+        label_s = str(label)
+        meta = COMMAND_PALETTE_META.get(aid_s) or {}
+        if q and not command_palette_match(q, aid_s, label_s, meta):
+            continue
+        available = True
+        reason = ""
+        if availability_fn is not None:
+            try:
+                ok, why = availability_fn(aid_s)
+                available = bool(ok)
+                reason = str(why or "")
+            except Exception:
+                available = True
+                reason = ""
+        if not available and not reason:
+            reason = str(meta.get("disabled") or "Unavailable")
+        rows.append({
+            "id": aid_s,
+            "label": label_s,
+            "shortcut": str(meta.get("shortcut") or ""),
+            "available": available,
+            "reason": reason if not available else "",
+            "_score": (
+                _command_palette_match_score(q, aid_s, label_s, meta) if q else 0
+            ),
+        })
+
+    def _sort_key(row: Dict[str, Any]):
+        aid = row["id"]
+        default_i = default_order.get(aid, 10_000)
+        if not q:
+            if aid in recent_rank:
+                return (0, recent_rank[aid], 0, 0)
+            count = freq_map.get(aid, 0)
+            if count > 0:
+                return (1, -count, default_i, 0)
+            return (2, default_i, 0, 0)
+        in_recent = 0 if aid in recent_rank else 1
+        return (
+            -int(row.get("_score") or 0),
+            in_recent,
+            recent_rank.get(aid, 10_000),
+            -freq_map.get(aid, 0),
+            default_i,
+        )
+
+    rows.sort(key=_sort_key)
+    for row in rows:
+        row.pop("_score", None)
+    return rows
 
 def _trace_segment_count(trace: "BtfTrace") -> int:
     segs = getattr(trace, "segments", None)
@@ -672,13 +905,49 @@ def stats_category_badge_colors(
     return palette[key]
 
 
+# Statistics section-header pin (Desktop/Web lockstep): narrow vertical bar.
+STATS_PIN_SLOT_W = 14
+STATS_PIN_SLOT_H = 22
+STATS_PIN_ICON_PX = 14
+
+_STATS_HEADER_CHIP_FRAME = (
+    " border-radius:8px; padding:2px 6px; min-height:14px;"
+    " font-size:7pt; font-weight:700;"
+)
+
+
 def stats_category_badge_stylesheet(category: str, *, dark: bool = True) -> str:
     """Qt stylesheet for a tinted category badge (secondary to the section title)."""
     bg, fg, border = stats_category_badge_colors(category, dark=dark)
     return (
-        f"color:{fg}; background:{bg}; border:1px solid {border};"
-        " border-radius:8px; padding:0 5px;"
-        " font-size:7pt; font-weight:700; letter-spacing:0.4px;"
+        f"color:{fg}; background-color:{bg}; border:1px solid {border};"
+        f"{_STATS_HEADER_CHIP_FRAME} letter-spacing:0.4px;"
+    )
+
+
+def stats_meta_chip_colors(kind: str, *, dark: bool = True) -> Tuple[str, str, str]:
+    """Return (fg, bg, border) for Scope / Filtered header chips.
+
+    Uses solid hex colours (not CSS ``rgba(..., 0.x)``) so Qt Style Sheets
+    parse reliably under the app-wide ``QLabel`` theme.
+    """
+    k = str(kind or "").strip().lower()
+    if k in ("scope", "scoped"):
+        if dark:
+            return ("#9EC5E8", "#283A47", "#3A6A8A")
+        return ("#1A5276", "#D6EAF8", "#85C1E9")
+    # Filtered (and unknown kinds)
+    if dark:
+        return ("#E0C070", "#3A3420", "#8A7040")
+    return ("#7D6608", "#F9E79F", "#D4AC0D")
+
+
+def stats_meta_chip_stylesheet(kind: str, *, dark: bool = True) -> str:
+    """Qt stylesheet for Scope / Filtered section-header chips (Web parity)."""
+    fg, bg, border = stats_meta_chip_colors(kind, dark=dark)
+    return (
+        f"color:{fg}; background-color:{bg}; border:1px solid {border};"
+        f"{_STATS_HEADER_CHIP_FRAME}"
     )
 
 
@@ -2041,7 +2310,9 @@ HTML_REPORT_TOC_SCRIPT = """
     }
   }
   function setAllOpen(open) {
-    document.querySelectorAll('details.report-card').forEach(function (el) {
+    document.querySelectorAll(
+      'details.report-card, details.report-appendix'
+    ).forEach(function (el) {
       el.open = open;
     });
   }
@@ -2315,7 +2586,7 @@ def html_apply_collapsible_toc(
 
 STATS_TOC_GROUPS = (
     ("Overview and Findings", (
-        "Analysis Scope", "Analysis Findings", "Trace Metadata",
+        "Analysis Scope", "Evidence Refs", "Analysis Findings", "Trace Metadata",
     )),
     ("CPU and Scheduling", (
         "Core Utilisation", "Trace Health (TICK)", "Core Time Breakdown",
@@ -2495,6 +2766,75 @@ def html_scope_identity_card(
         "<h2>Analysis Scope</h2>"
         f'<table class="meta-table scope-table"><tbody>{body}</tbody></table>'
         f"{note}</section>"
+    )
+
+
+def evidence_refs_from_findings(
+    findings: Sequence[dict],
+    *,
+    format_ns=None,
+    limit: int = 12,
+) -> list:
+    """Build ``{label, time_text}`` refs from Analysis Findings for HTML export."""
+    out: list = []
+    for f in findings or []:
+        if not isinstance(f, dict):
+            continue
+        label = str(f.get("title") or "Finding").strip() or "Finding"
+        times: list = []
+        for ev in f.get("evidence") or []:
+            if not isinstance(ev, dict):
+                continue
+            for key in ("time", "start", "stop", "ns"):
+                raw = ev.get(key)
+                if raw is None:
+                    continue
+                try:
+                    times.append(int(float(raw)))
+                except (TypeError, ValueError):
+                    continue
+                break
+        time_text = ""
+        if times and callable(format_ns):
+            try:
+                time_text = ", ".join(str(format_ns(t)) for t in times[:3])
+            except Exception:
+                time_text = ", ".join(str(t) for t in times[:3])
+        elif times:
+            time_text = ", ".join(str(t) for t in times[:3])
+        if not time_text:
+            et = str(f.get("evidence_text") or "").strip()
+            if et:
+                time_text = et[:160]
+        if not time_text:
+            continue
+        out.append({"label": label, "time_text": time_text})
+        if len(out) >= max(1, int(limit or 12)):
+            break
+    return out
+
+
+def html_evidence_refs_card(refs: Sequence[dict]) -> str:
+    """Compact Evidence refs card (label + time) for investigation exports."""
+    items = [r for r in (refs or []) if isinstance(r, dict) and (
+        str(r.get("label") or "").strip() or str(r.get("time_text") or "").strip()
+    )]
+    if not items:
+        return ""
+    body = "".join(
+        "<tr>"
+        f"<td>{_esc(r.get('label') or 'Finding')}</td>"
+        f"<td>{_esc(r.get('time_text') or '—')}</td>"
+        "</tr>"
+        for r in items
+    )
+    return (
+        '<section class="report-card" id="sec-evidence-refs">'
+        "<h2>Evidence Refs</h2>"
+        '<p class="detail-note">Timestamps and measured evidence from Analysis Findings '
+        "(export context; does not jump back into BTFViewer).</p>"
+        '<table class="meta-table"><thead><tr><th>Finding</th><th>Evidence / Time</th>'
+        f"</tr></thead><tbody>{body}</tbody></table></section>"
     )
 
 
@@ -4030,6 +4370,85 @@ def _core_pair_rows(
         avg_gap = d["gap_sum"] // max(1, d["count"])
         rows.append((fc, tc, d["count"], d["bounces"], avg_gap))
     return rows
+
+
+def _migration_summary(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> dict:
+    """Compact Migration Summary for progressive drill-down (Step 2).
+
+    Returns totals, rate, top task/pair, median dwell, and a thrash hint.
+    Does not change Scope or Filters — callers link into existing sections.
+    """
+    _format_time = globals().get("_format_time")
+    _to_ns = globals().get("_to_ns")
+
+    migs = list(_migrations_in_range(trace, lo, hi))
+    total = len(migs)
+    rows = _migration_rows(trace, lo, hi)
+    pairs = _core_pair_rows(trace, lo, hi)
+    if lo is not None and hi is not None:
+        span = max(0, int(hi) - int(lo))
+    else:
+        span = max(0, int(trace.time_max) - int(trace.time_min))
+    span_s = (_to_ns(span, trace.time_scale) / 1_000_000_000.0) if span > 0 else 0.0
+    rate = (total / span_s) if span_s > 0 else 0.0
+    rate_label = f"{rate:.2f}/s" if span_s > 0 and total else "—"
+
+    top_task = None
+    if rows:
+        mk, name, n_mig = rows[0][0], rows[0][1], rows[0][2]
+        top_task = {"mk": mk, "name": name, "count": int(n_mig)}
+
+    top_pair = None
+    if pairs:
+        fc, tc, cnt, bnc, _gap = pairs[0]
+        top_pair = {
+            "from": fc, "to": tc, "count": int(cnt), "bounces": int(bnc),
+        }
+
+    dwell: List[int] = []
+    for row in rows:
+        mk = row[0]
+        segs = (
+            _task_segs_in_range(trace, mk, lo, hi)
+            if lo is not None and hi is not None
+            else trace.seg_map_by_merge_key.get(mk, [])
+        )
+        dwell.extend(_core_dwell_samples(segs, lo, hi))
+    median_dwell_ns = 0
+    if dwell:
+        ordered = sorted(dwell)
+        median_dwell_ns = ordered[len(ordered) // 2]
+    median_dwell = (
+        _format_time(median_dwell_ns, trace.time_scale) if median_dwell_ns else "—"
+    )
+
+    ping_total = sum(int(r[7] or 0) for r in rows)
+    thrash_hint = ""
+    if ping_total > 0:
+        thrash_hint = f"{ping_total} ping-pong migration(s) in scope"
+    elif top_pair and top_pair["count"] > 0:
+        bounce_pct = 100.0 * top_pair["bounces"] / top_pair["count"]
+        if bounce_pct >= 30.0:
+            thrash_hint = (
+                f"Hot pair {top_pair['from']}→{top_pair['to']} "
+                f"bounce {bounce_pct:.0f}%"
+            )
+
+    return {
+        "total": total,
+        "rate": rate,
+        "rate_label": rate_label,
+        "top_task": top_task,
+        "top_pair": top_pair,
+        "median_dwell_ns": median_dwell_ns,
+        "median_dwell": median_dwell,
+        "thrash_hint": thrash_hint,
+        "has_data": total > 0 or bool(rows),
+    }
 
 
 # ---- Per-core time budget breakdown ---------------------------------------
@@ -8110,6 +8529,15 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
     lines.append("")
     lines.append("Overview")
     lines.append(f"Verdict,{_compare_csv_cell(notable.get('verdict') or '')}")
+    nxt = str(notable.get("next_investigation") or "").strip()
+    if nxt:
+        lines.append(f"Next investigation,{_compare_csv_cell(nxt)}")
+    omitted = int(notable.get("small_omitted_count") or 0)
+    if omitted or int((notable.get("cards") or {}).get("significant") or 0):
+        lines.append(
+            "Significance note,"
+            "Showing engineering-significant deltas only (small changes omitted)"
+        )
     cards = notable.get("cards") or {}
     lines.append(
         "Status cards,"
@@ -8126,6 +8554,28 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
             row.get("status"), row.get("label"), row.get("a"),
             row.get("b"), row.get("change"),
         )))
+    # Minimal Evidence refs when shared-pattern reasons carry time tokens.
+    ev_refs = []
+    for row in (tables.get("shared_patterns") or []):
+        if isinstance(row, dict):
+            reason = str(row.get("reason") or "")
+            task = str(row.get("task") or row.get("name") or "pattern")
+        elif isinstance(row, (list, tuple)) and len(row) >= 5:
+            task, reason = str(row[0] or "pattern"), str(row[4] or "")
+        else:
+            continue
+        if any(u in reason.lower() for u in (" ms", " µs", " us", " ns", "jump:")):
+            ev_refs.append((task, reason[:120]))
+        if len(ev_refs) >= 4:
+            break
+    if ev_refs:
+        lines.append("")
+        lines.append("Evidence refs")
+        lines.append("Finding,Evidence / Time")
+        for lab, ttxt in ev_refs:
+            lines.append(
+                f"{_compare_csv_cell(lab)},{_compare_csv_cell(ttxt)}"
+            )
     lines.append("")
 
     def _section(title: str, header: str, rows: List[List], ncols: int) -> None:
@@ -8315,6 +8765,16 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
         parts = ['<section class="report-card"><h2>Overview</h2>']
         if verdict:
             parts.append(f'<p class="overview-why">{_esc(verdict)}</p>')
+        nxt = str(notable.get("next_investigation") or "").strip()
+        if nxt:
+            parts.append(f'<p class="overview-why">{_esc(nxt)}</p>')
+        omitted = int(notable.get("small_omitted_count") or 0)
+        if omitted or int(cards.get("significant") or 0):
+            parts.append(
+                '<p class="overview-formula">'
+                "Showing engineering-significant deltas only "
+                "(small changes omitted)</p>"
+            )
         parts.append(f'<p class="overview-formula">{_esc(formula)}</p>')
         parts.append(
             '<div class="status-cards">'
@@ -8338,6 +8798,29 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
             f'{_rows_html(ident_rows, 3, "No identity")}'
             "</tbody></table></div>"
         )
+        # Minimal Evidence refs when shared-pattern reasons carry time tokens.
+        ev_rows = []
+        for row in (tables.get("shared_patterns") or []):
+            if isinstance(row, dict):
+                reason = str(row.get("reason") or "")
+                task = str(row.get("task") or row.get("name") or "pattern")
+            elif isinstance(row, (list, tuple)) and len(row) >= 5:
+                task, reason = str(row[0] or "pattern"), str(row[4] or "")
+            else:
+                continue
+            low = reason.lower()
+            if any(u in low for u in (" ms", " µs", " us", " ns", "jump:")):
+                ev_rows.append([task, reason[:120]])
+            if len(ev_rows) >= 4:
+                break
+        if ev_rows:
+            parts.append('<h3 class="overview-sub">Evidence refs</h3>')
+            parts.append(
+                '<div class="table-scroll"><table><thead><tr>'
+                "<th>Finding</th><th>Evidence / Time</th></tr></thead><tbody>"
+                f'{_rows_html(ev_rows, 2, "No evidence refs")}'
+                "</tbody></table></div>"
+            )
         parts.append('<h3 class="overview-sub">Notable Changes</h3>')
         parts.append(
             '<div class="table-scroll"><table><thead><tr>'
@@ -15219,14 +15702,17 @@ def _in_ai_actions_bar(w: QWidget) -> bool:
     """True when *w* is in an AI chip bar that must keep its natural width.
 
     Ignored + a stretching row collapses Quick/Diagnose mode chips,
-    wrapping template buttons, and the header engine/privacy chips to
-    zero width (web ``flex-wrap`` / ``.ai-header`` parity).
+    wrapping template buttons, empty-state intent chips, and the header
+    engine/privacy chips to zero width (web ``flex-wrap`` / ``.ai-header``
+    / ``.ai-intent-chips`` parity).
     """
     p: Optional[QWidget] = w
     while p is not None:
         if p.objectName() in (
                 "aiActions", "aiTemplates", "aiModes", "aiHeader", "aiMoreMenu",
-                "aiComposer", "aiGuide", "aiGuideStepper"):
+                "aiComposer", "aiGuide", "aiGuideStepper",
+                "aiIntentGroups", "aiIntentEmpty", "aiLogFrame",
+                "aiIntentChipRow", "aiIntentChip"):
             return True
         p = p.parentWidget()
     return False
@@ -15239,10 +15725,15 @@ def _relax_widget_tree(root: QWidget) -> None:
         if w.objectName() in ("stats_scope_action", "panel_seam_resizer",
                               "cursors_clear_all_btn"):
             continue
-        # AI header actions: Ignored + row stretch collapses them to 0 width.
+        # AI chip bars: only clear min width — never Forced Ignored (that
+        # zeroed intent / mode chips when the right dock was resized).
         if _in_ai_actions_bar(w):
             w.setMinimumWidth(0)
             continue
+        # Keep explicitly fixed chips (intent landing) at their pixel width.
+        if isinstance(w, (QPushButton, QToolButton)):
+            if w.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Fixed:
+                continue
         w.setMinimumWidth(0)
         # Only relax push/tool buttons — QLabel and other controls need real width.
         if isinstance(w, (QPushButton, QToolButton)):
@@ -15472,7 +15963,8 @@ class _PanelSeamResizer(QWidget):
         self._start_global_x = global_x
         self._start_width = self._win._current_right_dock_width()
         _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
-        self.grabMouse()
+        # App event filter only — grabMouse() logs
+        # "supports grabbing the mouse only for popup windows" on WSL/Wayland.
         app = QApplication.instance()
         if app:
             app.installEventFilter(self)
@@ -15490,8 +15982,6 @@ class _PanelSeamResizer(QWidget):
             return
         self._dragging = False
         self._win._right_dock_custom_drag = False
-        if QWidget.mouseGrabber() is self:
-            self.releaseMouse()
         app = QApplication.instance()
         if app:
             app.removeEventFilter(self)
@@ -24254,8 +24744,8 @@ def enrich_findings_with_ids(findings: Sequence[dict]) -> List[dict]:
 
 
 def format_findings_evidence_chain(findings: Sequence[dict]) -> str:
-    """Markdown evidence-chain block for AI context / UI."""
-    lines = ["### Evidence chain", ""]
+    """Markdown evidence block for AI context / UI."""
+    lines = ["## Evidence", ""]
     if not findings:
         lines.append("_No findings in scope._")
         return "\n".join(lines)
@@ -27180,6 +27670,31 @@ _REPORT_TYPES = frozenset({
 })
 
 
+def _open_statistics_next_check(finding: Optional[dict]) -> str:
+    """Concise clickable 'Open Statistics → …' line when inspect/task is known."""
+    if not isinstance(finding, dict):
+        return ""
+    FINDING_SECTION_MAP # late: avoid import cycles = globals().get("FINDING_SECTION_MAP # late: avoid import cycles")
+    inspect = str(finding.get("inspect") or "").strip()
+    task = str(finding.get("task") or "").strip()
+    fid = str(finding.get("id") or "").strip()
+    sid = str(FINDING_SECTION_MAP.get(fid) or "").strip()
+    label = ""
+    if inspect and task:
+        section = inspect.split(" (", 1)[0].strip() or inspect
+        label = f"Open {section} → {task}"
+    elif inspect:
+        section = inspect.split(" (", 1)[0].strip() or inspect
+        label = f"Open {section}"
+    elif task:
+        label = f"Open Statistics → {task}"
+    else:
+        return ""
+    if sid:
+        return f"[{label}](btfstats:section/{sid})"
+    return label
+
+
 def generate_structured_report(
     findings: Sequence[dict],
     *,
@@ -27216,7 +27731,7 @@ def generate_structured_report(
         ])
     else:
         lines.extend(["## Summary", "No single focus finding; ranked anomalies below.", ""])
-    lines.append("## Key findings")
+    lines.append("## Evidence")
     for a in (anomalies.get("anomalies") or [])[:6]:
         lines.append(
             f"{a.get('rank')}. [{a.get('band')}] {a.get('title')} — {a.get('id')}"
@@ -27239,13 +27754,18 @@ def generate_structured_report(
             )
             lines.append("")
     lines.extend([
-        "## Recommended actions",
-        "1. Place cursors / zoom on the worst episode (`set_cursors`, `zoom_to_range`).",
-        "2. Highlight the focus task and verify on the timeline.",
-        "3. Re-run Trace Compare or `compare_performance` after a fix.",
-        "",
         "## Confidence",
         "Medium — structured from Analysis Findings; confirm with tool evidence.",
+        "",
+        "## Next check",
+    ])
+    open_line = _open_statistics_next_check(focus)
+    if open_line:
+        lines.append(f"- {open_line}")
+    lines.extend([
+        "- Place cursors / zoom on the worst episode (`set_cursors`, `zoom_to_range`).",
+        "- Highlight the focus task and verify on the timeline.",
+        "- Re-run Trace Compare or `compare_performance` after a fix.",
         "",
     ])
     md = "\n".join(lines)
@@ -30728,6 +31248,28 @@ def parse_btf_highlight_href(href: Any) -> str:
     if not m:
         return ""
     return urllib.parse.unquote(m.group(1).strip().lstrip("/"))
+
+
+_BTF_STATS_HREF_RE = re.compile(
+    r"^btfstats:(?:section/)?([A-Za-z0-9_\-]+)$", re.IGNORECASE)
+
+
+def btf_stats_href(section_id: str) -> str:
+    """Chat href that opens a Statistics section (Evidence Navigation)."""
+    sid = str(section_id or "").strip()
+    return f"btfstats:section/{sid}" if sid else "btfstats:section/"
+
+
+def parse_btf_stats_href(href: Any) -> str:
+    """Parse ``btfstats:section/SID`` or ``btfstats:SID``."""
+    raw = str(href or "").strip()
+    m = _BTF_STATS_HREF_RE.match(raw)
+    if m:
+        return str(m.group(1) or "").strip()
+    low = raw.lower()
+    if low.startswith("btfstats:"):
+        return raw.split(":", 1)[1].strip().lstrip("/").removeprefix("section/").strip()
+    return ""
 
 # Appended to the base system prompt. Keep in sync with web aiTools.js.
 AI_TOOL_SYSTEM_ADDENDUM = (
@@ -34251,6 +34793,7 @@ def build_ai_report_html(
     )
 
     body = (
+        "<!--TOC-->\n"
         f'<section class="report-card">\n'
         f"<h2>Executive summary</h2>\n"
         f"{''.join(exec_lines)}\n"
@@ -34280,12 +34823,19 @@ def build_ai_report_html(
         f"{appendix}\n"
         f"{note}\n"
         f"</section>\n"
+        f"{HTML_REPORT_TOC_SCRIPT}\n"
     )
-    return btf_html_report_document(
+    report = btf_html_report_document(
         "AI Diagnostic Report",
         body,
         subtitle=f"Saved {stamp} · mode={mode}",
+        extra_css=HTML_REPORT_TOC_CSS,
         doc_title="BTFViewer — AI Report",
+    )
+    # Same Expand all / Collapse all TOC chrome as Statistics HTML reports.
+    return html_apply_collapsible_toc(
+        report,
+        default_expanded=("Executive summary",),
     )
 
 
@@ -37054,22 +37604,35 @@ def ai_template_primary_rows(
 # Overflow menu groups for the remaining templates (ids must cover every
 # AI_TEMPLATE_QUESTIONS entry that is not in AI_TEMPLATE_PRIMARY_IDS).
 AI_TEMPLATE_MENU_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Diagnose", ("triage", "verify", "root_cause", "explain_finding", "diagnostic_report")),
-    ("Compare", (AI_COMPARE_TEMPLATE_ID,)),
+    ("Start", ("triage",)),
     (
-        "Metrics",
+        "Investigate",
         (
             "task_profile",
             "latency",
             "wcet",
-            "migrations",
-            "balance",
+            "root_cause",
             "tick",
             "priority",
             "deadlines",
         ),
     ),
+    ("SMP", ("migrations", "balance")),
+    ("Verify", ("verify", "explain_finding")),
+    ("Compare", (AI_COMPARE_TEMPLATE_ID, "diagnostic_report")),
     ("What-if / Optimize", ("what_if", "optimize")),
+)
+
+# Intent landing groups for the AI empty state (includes primary chips).
+AI_TEMPLATE_INTENT_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("Start", ("findings", "triage")),
+    (
+        "Investigate",
+        ("investigate", "explain_region", "latency", "wcet", "task_profile"),
+    ),
+    ("SMP", ("migrations", "balance")),
+    ("Verify", ("verify", "explain_finding", "auto_investigate")),
+    ("Compare", (AI_COMPARE_TEMPLATE_ID, "diagnostic_report")),
 )
 
 
@@ -38069,6 +38632,11 @@ def normalize_ai_context(ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         cursors = []
     elif not isinstance(cursors, (list, tuple)):
         cursors = [cursors]
+    filters = c.get("filters")
+    if filters is None:
+        filters = []
+    elif not isinstance(filters, (list, tuple)):
+        filters = [filters]
     return {
         "findings_text": findings or "",
         "span": c.get("span", "") or "",
@@ -38077,6 +38645,7 @@ def normalize_ai_context(ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         "metrics": c.get("metrics"),
         "cursors": list(cursors),
         "findings": list(c.get("findings") or []),
+        "filters": [str(f) for f in filters if f],
     }
 
 
@@ -39942,25 +40511,42 @@ class _FlowLayout(QLayout):
         self._do_layout(rect, False)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return self.minimumSize()
-
-    def minimumSize(self) -> QSize:  # noqa: N802
-        """Include wrapping height so QVBoxLayout does not clip extra rows."""
-        m = self.contentsMargins()
-        mh = m.top() + m.bottom()
-        mw = m.left() + m.right()
-        if not self._items:
-            return QSize(mw, mh)
-        row_h = 0
-        row_w = mw
+        """Prefer parent width so wrap height matches the AI dock, not chip width."""
+        parent = self.parentWidget()
+        width = parent.width() if parent is not None else 0
+        if width <= 1:
+            width = 240
         min_w = 0
         for item in self._items:
-            hint = item.sizeHint()
-            row_h = max(row_h, hint.height())
-            row_w += hint.width() + self.spacing()
-            min_w = max(min_w, item.minimumSize().width())
-        wrap_h = self.heightForWidth(max(240, min_w + mw))
-        return QSize(min_w + mw, max(row_h, wrap_h) + mh)
+            min_w = max(
+                min_w,
+                item.minimumSize().width(),
+                item.sizeHint().width(),
+            )
+        m = self.contentsMargins()
+        return QSize(
+            max(width, min_w + m.left() + m.right()),
+            self.heightForWidth(width),
+        )
+
+    def minimumSize(self) -> QSize:  # noqa: N802
+        """Widest chip × wrapped height so QVBoxLayout does not clip extra rows."""
+        m = self.contentsMargins()
+        mw = m.left() + m.right()
+        if not self._items:
+            return QSize(mw, m.top() + m.bottom())
+        min_w = 0
+        for item in self._items:
+            min_w = max(
+                min_w,
+                item.minimumSize().width(),
+                item.sizeHint().width(),
+            )
+        parent = self.parentWidget()
+        width = parent.width() if parent is not None else 0
+        if width <= 1:
+            width = max(240, min_w + mw)
+        return QSize(min_w + mw, self.heightForWidth(width))
 
     def _do_layout(self, rect, test_only: bool) -> int:
         left, top, right, bottom = self.getContentsMargins()
@@ -39971,7 +40557,14 @@ class _FlowLayout(QLayout):
         space = self.spacing()
         for idx, item in enumerate(self._items):
             hint = item.sizeHint()
-            next_x = x + hint.width() + space
+            mins = item.minimumSize()
+            # App/theme QSS can report sizeHint width 0 right after show/polish;
+            # never lay out chips thinner than their minimum (or they vanish).
+            size = QSize(
+                max(hint.width(), mins.width(), 1),
+                max(hint.height(), mins.height(), 1),
+            )
+            next_x = x + size.width() + space
             wrap = line_height > 0 and (
                 idx in self._break_before
                 or next_x - space > effective.right() + 1
@@ -39979,13 +40572,112 @@ class _FlowLayout(QLayout):
             if wrap:
                 x = effective.x()
                 y = y + line_height + space
-                next_x = x + hint.width() + space
+                next_x = x + size.width() + space
                 line_height = 0
             if not test_only:
-                item.setGeometry(QRect(QPoint(x, y), hint))
+                item.setGeometry(QRect(QPoint(x, y), size))
             x = next_x
-            line_height = max(line_height, hint.height())
+            line_height = max(line_height, size.height())
         return y + line_height - rect.y() + bottom
+
+
+class _FlowChips(QWidget):
+    """Chip row with height-for-width so wraps are not clipped in the AI dock."""
+
+    def __init__(self, parent: Optional[QWidget] = None, spacing: int = 4) -> None:
+        super().__init__(parent)
+        self._flow = _FlowLayout(self, spacing=spacing)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        return self._flow.heightForWidth(int(width))
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        w = self.width() if self.width() > 1 else 240
+        return QSize(w, self.heightForWidth(w))
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        # Widest chip only — do not pin dock width to current wrap width.
+        m = self._flow.minimumSize()
+        return QSize(max(64, m.width()), max(_AI_CHIP_MIN_HEIGHT, m.height()))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self.updateGeometry()
+
+
+class _FlowHost(QWidget):
+    """Host for ``_FlowLayout`` that grows height when the dock narrows (wrap)."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        lay = self.layout()
+        if isinstance(lay, _FlowLayout):
+            return max(_AI_CHIP_MIN_HEIGHT, lay.heightForWidth(int(width)))
+        return _AI_CHIP_MIN_HEIGHT
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        w = self.width() if self.width() > 1 else 240
+        return QSize(w, self.heightForWidth(w))
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        lay = self.layout()
+        if isinstance(lay, _FlowLayout):
+            m = lay.minimumSize()
+            return QSize(max(64, m.width()), max(_AI_CHIP_MIN_HEIGHT, m.height()))
+        return QSize(64, _AI_CHIP_MIN_HEIGHT)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self.updateGeometry()
+
+
+def _intent_chip_pixel_width(btn: QPushButton, label: str = "") -> int:
+    """Stable chip width — do not trust QPushButton.sizeHint after theme polish."""
+    text = label or btn.text() or ""
+    cached = btn.property("aiChipWidth")
+    if cached is not None:
+        try:
+            w = int(cached)
+            if w >= 32:
+                return w
+        except (TypeError, ValueError):
+            pass
+    fm = btn.fontMetrics()
+    # padding 3px 8px + border (web `.ai-chip`)
+    return max(48, int(fm.horizontalAdvance(text)) + 20)
+
+
+def _make_intent_chip_button(
+    label: str,
+    prompt: str,
+    on_click,
+) -> QPushButton:
+    """Intent chip with fixed pixel size (stable through dock resize / QSS polish)."""
+    btn = QPushButton(label)
+    btn.setObjectName("aiIntentChip")
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setToolTip(qt_wrap_tooltip(prompt))
+    btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    btn.setAutoDefault(False)
+    btn.setDefault(False)
+    btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    w = _intent_chip_pixel_width(btn, label)
+    btn.setProperty("aiChipWidth", w)
+    btn.setFixedSize(w, _AI_INTENT_CHIP_HEIGHT)
+    btn.clicked.connect(on_click)
+    return btn
 
 
 def _ai_more_heading(label: str) -> QLabel:
@@ -40071,6 +40763,8 @@ def _clear_layout(layout) -> None:
 # Chip / More-menu colors match web `.ai-tpl-btn` / `.ai-more-item` (enabled vs disabled).
 _AI_TPL_DISABLED_COLOR = "#8a96a8"
 _AI_CHIP_MIN_HEIGHT = 28  # match web `.ai-tpl-btn { min-height: 28px }`
+# Intent empty-state chips match web `.ai-chip` (compact, transparent).
+_AI_INTENT_CHIP_HEIGHT = 24
 
 
 def _ai_chrome_colors(is_dark: bool) -> dict:
@@ -40119,6 +40813,57 @@ def _ai_tpl_btn_style(is_dark: bool = True) -> str:
         "}"
         "QPushButton:hover:!disabled {"
         f"  border-color: {c['accent']};"
+        "}"
+    )
+
+
+def _ai_intent_chip_style(is_dark: bool = True) -> str:
+    """Match web ``.ai-chip`` (transparent, compact) for empty-state intent chips."""
+    c = _ai_chrome_colors(is_dark)
+    muted = c["muted"]
+    return (
+        "QPushButton {"
+        f"  color: {c['text']};"
+        "  background: transparent;"
+        f"  border: 1px solid {c['border']};"
+        "  border-radius: 4px;"
+        "  padding: 3px 8px;"
+        "  font-size: 11px;"
+        "}"
+        "QPushButton:disabled {"
+        f"  color: {muted};"
+        "  background: transparent;"
+        f"  border-color: {c['border']};"
+        "}"
+        "QPushButton:hover:!disabled {"
+        f"  border-color: {c['accent']};"
+        "}"
+    )
+
+
+def _ai_log_frame_style(is_dark: bool = True) -> str:
+    """Match web ``.ai-log`` — bordered inset box for conversation + empty intent."""
+    c = _ai_chrome_colors(is_dark)
+    return (
+        "QFrame#aiLogFrame {"
+        f"  background-color: {c['panel']};"
+        f"  border: 1px solid {c['border']};"
+        "  border-radius: 8px;"
+        "}"
+        "QScrollArea#aiIntentScroll {"
+        f"  background-color: {c['panel']};"
+        "  border: none;"
+        "}"
+        "QScrollArea#aiIntentScroll > QWidget > QWidget {"
+        f"  background-color: {c['panel']};"
+        "}"
+        "QTextBrowser#aiLog {"
+        f"  background-color: {c['panel']};"
+        f"  color: {c['text']};"
+        "  border: none;"
+        "}"
+        "QWidget#aiIntentEmpty {"
+        f"  background-color: {c['panel']};"
         "}"
     )
 
@@ -40178,6 +40923,7 @@ def create_ai_assistant_panel(
     on_jump: Optional[Callable[[float], None]] = None,
     on_range: Optional[Callable[[float, float], None]] = None,
     on_highlight: Optional[Callable[[str], None]] = None,
+    on_open_stats: Optional[Callable[[str], None]] = None,
     on_execute_tools: Optional[Callable[[List[Dict[str, Any]]], List[Dict[str, Any]]]] = None,
     on_undo_tools: Optional[Callable[[], None]] = None,
     on_gui_state: Optional[Callable[[], Dict[str, Any]]] = None,
@@ -40448,23 +41194,93 @@ def create_ai_assistant_panel(
             self._active_template_id = ""
 
             self._log = QTextBrowser()
+            self._log.setObjectName("aiLog")
             self._log.setReadOnly(True)
             self._log.setOpenExternalLinks(False)
             self._log.setOpenLinks(False)
-            self._log.setPlaceholderText(
-                "Conversation appears here\u2026\n"
-                "Uses Analysis Findings for the current Statistics scope "
-                "(Limit to C1\u2013Cn when cursors are set). "
+            # Empty-state intent landing lives *inside* the response area
+            # (Web ``.ai-log > .ai-empty`` parity), not above it.
+            self._intent_host = QWidget()
+            self._intent_host.setObjectName("aiIntentEmpty")
+            self._intent_host.setAttribute(
+                Qt.WidgetAttribute.WA_StyledBackground, True)
+            self._intent_host.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+            intent_lay = QVBoxLayout(self._intent_host)
+            intent_lay.setContentsMargins(8, 8, 8, 8)
+            intent_lay.setSpacing(6)
+            self._intent_context = QLabel("")
+            self._intent_context.setTextFormat(Qt.TextFormat.RichText)
+            self._intent_context.setWordWrap(True)
+            self._intent_context.setStyleSheet(
+                "QLabel { color:#8a96a8; font-size:11px; padding:2px 0; }")
+            self._intent_prompt = QLabel("What do you want to investigate?")
+            self._intent_prompt.setStyleSheet(
+                "QLabel { color:#dbe2ea; font-size:12px; font-weight:600; padding:2px 0; }")
+            # Intent chip groups live inside the empty log (Web `.ai-log > .ai-empty`).
+            self._intent_groups = QWidget()
+            self._intent_groups.setObjectName("aiIntentGroups")
+            self._intent_groups.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+            self._intent_groups.setStyleSheet(_ai_intent_chip_style(True))
+            self._intent_groups_lay = QVBoxLayout(self._intent_groups)
+            self._intent_groups_lay.setContentsMargins(0, 0, 0, 0)
+            self._intent_groups_lay.setSpacing(8)  # web `.ai-intent-group` margin
+            self._rebuild_intent_landing()
+            self._intent_hint = QLabel(
+                "Conversation appears here\u2026 Uses Analysis Findings for the "
+                "current Statistics scope (Limit to C1\u2013Cn when cursors are set). "
                 "Configure the endpoint in Settings \u2192 AI."
             )
+            self._intent_hint.setWordWrap(True)
+            self._intent_hint.setStyleSheet(
+                "QLabel { color:#8a96a8; font-size:11px; padding:6px 0 0; }")
+            intent_lay.addWidget(self._intent_context)
+            intent_lay.addWidget(self._intent_prompt)
+            intent_lay.addWidget(self._intent_groups)
+            intent_lay.addWidget(self._intent_hint)
+            intent_lay.addStretch(1)
+            self._log.setPlaceholderText("")
             self._log.setMinimumHeight(80)
             self._log.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            self._log.setFrameShape(QFrame.Shape.NoFrame)
             self._log.document().setDefaultStyleSheet(_AI_LOG_STYLE)
             self._log.anchorClicked.connect(self._on_jump_link)
             self._log.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             self._log.customContextMenuRequested.connect(self._show_log_menu)
             self._log.viewport().installEventFilter(self)
+            self._log_stack = QStackedWidget()
+            self._log_stack.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            intent_scroll = QScrollArea()
+            intent_scroll.setObjectName("aiIntentScroll")
+            intent_scroll.setWidgetResizable(True)
+            intent_scroll.setFrameShape(QFrame.Shape.NoFrame)
+            intent_scroll.setHorizontalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            intent_scroll.setWidget(self._intent_host)
+            self._intent_scroll = intent_scroll
+            self._log_stack.addWidget(intent_scroll)  # index 0 = empty intent
+            self._log_stack.addWidget(self._log)      # index 1 = conversation
+            self._log_stack.setCurrentIndex(0)
+            intent_scroll.viewport().installEventFilter(self)
+            # Shared bordered box for empty intent + conversation (Web `.ai-log`).
+            self._log_frame = QFrame()
+            self._log_frame.setObjectName("aiLogFrame")
+            self._log_frame.setFrameShape(QFrame.Shape.NoFrame)
+            self._log_frame.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            self._log_frame.setAttribute(
+                Qt.WidgetAttribute.WA_StyledBackground, True)
+            self._log_frame.setAutoFillBackground(True)
+            log_frame_lay = QVBoxLayout(self._log_frame)
+            # Web `.ai-log { padding: 8px }` — keep a thin inset so the radius
+            # clips cleanly; intent host / log supply the inner 8px padding.
+            log_frame_lay.setContentsMargins(0, 0, 0, 0)
+            log_frame_lay.setSpacing(0)
+            log_frame_lay.addWidget(self._log_stack, 1)
+            self._log_frame.setStyleSheet(_ai_log_frame_style(True))
 
             self._guide_host = QWidget()
             self._guide_host.setObjectName("aiGuide")
@@ -40527,7 +41343,7 @@ def create_ai_assistant_panel(
             self._estimate_banner.hide()
             g_lay.addWidget(self._estimate_banner)
             top_lay.addWidget(self._guide_host)
-            top_lay.addWidget(self._log, 1)
+            top_lay.addWidget(self._log_frame, 1)
 
             self._plan_host = QWidget()
             plan_row = QHBoxLayout(self._plan_host)
@@ -40546,11 +41362,9 @@ def create_ai_assistant_panel(
             self._plan_host.hide()
             top_lay.addWidget(self._plan_host)
 
-            mode_host = QWidget()
+            mode_host = _FlowHost()
             self._mode_host = mode_host
             mode_host.setObjectName("aiModes")
-            mode_host.setSizePolicy(
-                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             mode_host.setStyleSheet(_AI_TPL_BTN_STYLE)
             mode_row = _FlowLayout(mode_host, spacing=4)
             self._mode_btns: List[QPushButton] = []
@@ -40567,11 +41381,9 @@ def create_ai_assistant_panel(
                 self._mode_btns.append(btn)
             top_lay.addWidget(mode_host)
 
-            tpl_host = QWidget()
+            tpl_host = _FlowHost()
             self._tpl_host = tpl_host
             tpl_host.setObjectName("aiTemplates")
-            tpl_host.setSizePolicy(
-                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             tpl_host.setStyleSheet(_AI_TPL_BTN_STYLE)
             _lead_ids, _last_ids = ai_template_primary_rows()
             tpl_row = _FlowLayout(
@@ -40665,6 +41477,7 @@ def create_ai_assistant_panel(
             top_lay.addWidget(tpl_host)
 
             self.refresh_template_availability()
+            self._refresh_intent_landing()
 
             self._tool_bar = QWidget()
             tool_row = QHBoxLayout(self._tool_bar)
@@ -40797,6 +41610,10 @@ def create_ai_assistant_panel(
             self._is_dark = is_dark
             self.apply_theme(is_dark)
             QTimer.singleShot(0, self._restore_investigation_session)
+            # After first show/layout, force chip wrap heights (width is often 0
+            # during __init__).
+            QTimer.singleShot(0, self._sync_intent_scroll_size)
+            QTimer.singleShot(100, self._sync_intent_scroll_size)
 
         def apply_theme(self, is_dark: bool) -> None:
             """Match AI chrome (More menu, chips, composer, log) to the app theme."""
@@ -40875,6 +41692,16 @@ def create_ai_assistant_panel(
                 log.document().setDefaultStyleSheet(_ai_log_style(self._is_dark))
                 if getattr(self, "_entries", None):
                     self._refresh_log()
+            log_frame = getattr(self, "_log_frame", None)
+            if log_frame is not None:
+                log_frame.setStyleSheet(_ai_log_frame_style(self._is_dark))
+            intent_groups = getattr(self, "_intent_groups", None)
+            if intent_groups is not None:
+                intent_groups.setStyleSheet(_ai_intent_chip_style(self._is_dark))
+                # Restyle host only — full rebuild / per-button QSS during
+                # apply_theme left chips invisible or zero-width.
+            if not getattr(self, "_entries", None):
+                self._refresh_intent_landing()
             self._refresh_guide_ui()
 
         def _paint_more_menu(self) -> None:
@@ -40969,6 +41796,13 @@ def create_ai_assistant_panel(
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
                 if self._try_mermaid_node_click(pos):
                     return True
+            scroll = getattr(self, "_intent_scroll", None)
+            if (
+                scroll is not None
+                and obj is scroll.viewport()
+                and event.type() == QEvent.Type.Resize
+            ):
+                self._schedule_intent_reflow()
             return QWidget.eventFilter(self, obj, event)
 
         def _try_mermaid_node_click(self, view_pos) -> bool:
@@ -41244,6 +42078,11 @@ def create_ai_assistant_panel(
                 if action:
                     self._on_tool_why(action, name)
                 return
+            if scheme == "btfstats":
+                sid = parse_btf_stats_href(url.toString())
+                if on_open_stats and sid:
+                    on_open_stats(sid)
+                return
             if scheme == "btfhighlight":
                 raw = url.toString()
                 name = parse_btf_highlight_href(raw)
@@ -41349,6 +42188,7 @@ def create_ai_assistant_panel(
                 self._entries.append((role, text))
             self._refresh_log()
             self._persist_investigation_session()
+            self._refresh_intent_landing()
 
         def clear_conversation(self) -> None:
             """Clear chat replies, accumulated cost, and current investigation issues."""
@@ -41367,6 +42207,181 @@ def create_ai_assistant_panel(
             self._set_status("")
             self._refresh_tool_bar()
             self._persist_investigation_session()
+            self._refresh_intent_landing()
+
+        def _rebuild_intent_landing(self) -> None:
+            """Build Start/Investigate/SMP/Verify/Compare chips for empty state."""
+            lay = getattr(self, "_intent_groups_lay", None)
+            if lay is None:
+                return
+            while lay.count():
+                item = lay.takeAt(0)
+                w = item.widget()
+                if w is not None:
+                    # Immediate reparent so deleteLater cannot leave a 0-height
+                    # ghost row that collapses the chip stack.
+                    w.setParent(None)
+                    w.deleteLater()
+            dark = bool(getattr(self, "_is_dark", True))
+            c = _ai_chrome_colors(dark)
+            chip_ss = _ai_intent_chip_style(dark)
+            by_id = {tid: (lab, prompt) for tid, lab, prompt in AI_TEMPLATE_QUESTIONS}
+            for group_label, ids in AI_TEMPLATE_INTENT_GROUPS:
+                title = QLabel(group_label)
+                title.setStyleSheet(
+                    f"QLabel {{ color:{c['muted']}; font-size:11px; "
+                    f"padding:0 0 4px; }}")  # web `.ai-intent-group-label`
+                lay.addWidget(title)
+                # Same wrap + 4px gap as mode/template rows (web ``gap: 4px``).
+                row = _FlowChips(spacing=4)
+                row.setObjectName("aiIntentChipRow")
+                row.setStyleSheet(chip_ss)
+                any_btn = False
+                for tid in ids:
+                    info = by_id.get(tid)
+                    if not info:
+                        continue
+                    lab, prompt = info
+                    btn = _make_intent_chip_button(
+                        lab,
+                        prompt,
+                        lambda _=False, t=tid: self.query_template(t),
+                    )
+                    row._flow.addWidget(btn)
+                    any_btn = True
+                if any_btn:
+                    lay.addWidget(row)
+                else:
+                    row.setParent(None)
+                    row.deleteLater()
+            self._sync_intent_scroll_size()
+
+        def _schedule_intent_reflow(self) -> None:
+            """Debounce geometry updates during dock / splitter resize drags."""
+            if bool(getattr(self, "_entries", None)):
+                return
+            timer = getattr(self, "_intent_reflow_timer", None)
+            if timer is None:
+                timer = QTimer(self)
+                timer.setSingleShot(True)
+                timer.timeout.connect(self._sync_intent_scroll_size)
+                self._intent_reflow_timer = timer
+            timer.start(50)
+
+        def _sync_intent_scroll_size(self) -> None:
+            """Re-pin chip sizes and refresh wrap heights without vertical mins.
+
+            Pinning ``host.minimumHeight`` crushed the composer when the right
+            dock narrowed; destructive HBox reflow also produced uneven gaps.
+            """
+            groups = getattr(self, "_intent_groups", None)
+            host = getattr(self, "_intent_host", None)
+            scroll = getattr(self, "_intent_scroll", None)
+            if groups is not None:
+                for btn in groups.findChildren(QPushButton):
+                    if btn.objectName() != "aiIntentChip":
+                        continue
+                    bw = _intent_chip_pixel_width(btn)
+                    btn.setProperty("aiChipWidth", bw)
+                    btn.setSizePolicy(
+                        QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+                    btn.setFixedSize(bw, _AI_INTENT_CHIP_HEIGHT)
+                    btn.show()
+                for row in groups.findChildren(_FlowChips):
+                    row.setMinimumHeight(0)
+                    row.setMaximumHeight(16777215)
+                    row.updateGeometry()
+                groups.setMinimumHeight(0)
+                groups.updateGeometry()
+            for host_name in ("_mode_host", "_tpl_host"):
+                h = getattr(self, host_name, None)
+                if h is not None:
+                    h.updateGeometry()
+            if host is not None:
+                host.setMinimumSize(0, 0)
+                host.setMaximumHeight(16777215)
+                host.updateGeometry()
+            if scroll is not None:
+                bar = scroll.verticalScrollBar()
+                if bar is not None and bar.value() > bar.maximum():
+                    bar.setValue(bar.maximum())
+
+        def _debug_dump_intent_landing(self) -> None:
+            """Late empty-state layout pass (kept name for existing timers)."""
+            if not bool(getattr(self, "_entries", None)):
+                self._refresh_intent_landing()
+                self._sync_intent_scroll_size()
+
+        def _on_ai_panel_shown(self) -> None:
+            """Called when the AI tab becomes current (chips need a late layout pass)."""
+            if not bool(getattr(self, "_entries", None)):
+                QTimer.singleShot(0, self._sync_intent_scroll_size)
+
+        def _refresh_intent_landing(self) -> None:
+            """Show Trace/Scope/Filters + intent chips when the conversation is empty."""
+            empty = not bool(getattr(self, "_entries", None))
+            stack = getattr(self, "_log_stack", None)
+            if stack is not None:
+                stack.setCurrentIndex(0 if empty else 1)
+                # Soft floor only — large mins crush the composer on narrow docks.
+                stack.setMinimumHeight(80)
+            # Groups live inside the empty-state host (Web `.ai-log > .ai-empty`);
+            # visibility follows the stack page — no separate show/hide.
+            if not empty:
+                return
+            gui = {}
+            ctx = {}
+            if on_gui_state:
+                try:
+                    gui = dict(on_gui_state() or {})
+                except Exception:
+                    gui = {}
+            if get_context:
+                try:
+                    ctx = normalize_ai_context(dict(get_context() or {}))
+                except Exception:
+                    ctx = {}
+            filters = ctx.get("filters") or []
+            if not isinstance(filters, list):
+                filters = []
+            filters = [str(f) for f in filters if f]
+            lab = getattr(self, "_intent_context", None)
+            if lab is not None:
+                # Web ``.ai-intent-context`` uses Trace / Scope / Filters labels.
+                lab.setText(
+                    f"<b>Trace:</b> {html.escape(str(gui.get('file') or gui.get('name') or '—'))}<br/>"
+                    f"<b>Scope:</b> {html.escape(str(ctx.get('scope') or gui.get('scope') or 'Full Trace'))}<br/>"
+                    f"<b>Filters:</b> {html.escape(' · '.join(filters) if filters else 'None')}"
+                )
+            dark = bool(getattr(self, "_is_dark", True))
+            c = _ai_chrome_colors(dark)
+            prompt = getattr(self, "_intent_prompt", None)
+            if prompt is not None:
+                prompt.setStyleSheet(
+                    f"QLabel {{ color:{c['text']}; font-size:12px; "
+                    f"font-weight:600; padding:4px 0 8px; }}")
+            if lab is not None:
+                lab.setStyleSheet(
+                    f"QLabel {{ color:{c['muted']}; font-size:11px; "
+                    f"padding:0 0 8px; line-height:1.45; }}")
+            hint = getattr(self, "_intent_hint", None)
+            if hint is not None:
+                hint.setStyleSheet(
+                    f"QLabel {{ color:{c['muted']}; font-size:11px; "
+                    f"padding:8px 0 0; }}")
+            groups = getattr(self, "_intent_groups", None)
+            if groups is not None:
+                groups.setStyleSheet(_ai_intent_chip_style(dark))
+                # Style via host only; re-pin fixed chip sizes after QSS polish.
+                for btn in groups.findChildren(QPushButton):
+                    if btn.objectName() != "aiIntentChip":
+                        continue
+                    bw = _intent_chip_pixel_width(btn)
+                    btn.setProperty("aiChipWidth", bw)
+                    btn.setFixedSize(bw, _AI_INTENT_CHIP_HEIGHT)
+            # Do not force AI splitter sizes here — that hid the composer when
+            # the right dock was narrowed and intent chips reflowed taller.
+            self._sync_intent_scroll_size()
 
         def _show_log_menu(self, pos) -> None:
             menu = self._log.createStandardContextMenu(pos)
@@ -41731,6 +42746,9 @@ def create_ai_assistant_panel(
         def showEvent(self, event) -> None:  # noqa: N802
             super().showEvent(event)
             self.refresh_enabled_state()
+            self._refresh_intent_landing()
+            if not bool(getattr(self, "_entries", None)):
+                QTimer.singleShot(0, self._sync_intent_scroll_size)
 
         def query_template(
             self, template_id: str, *, finding_id: str = "", extra: str = "",
@@ -42272,6 +43290,7 @@ def create_ai_assistant_panel(
                 if self._entries:
                     self._refresh_log()
             self._refresh_guide_ui()
+            self._refresh_intent_landing()
 
         def _refresh_guide_ui(self) -> None:
             if not getattr(self, "_guide_step_btns", None):
@@ -42758,7 +43777,13 @@ def create_ai_assistant_panel(
 
         def _on_err(self, msg: str) -> None:
             self._append("assistant", f"(Error) {msg}")
-            self._set_status((msg or "").split("\n", 1)[0][:200], error=True)
+            tip = (msg or "").split("\n", 1)[0][:160]
+            last_q = str(getattr(self, "_last_failed_query", "") or "").strip()
+            if last_q and not self._input.toPlainText().strip():
+                self._input.setPlainText(last_q)
+            if tip:
+                tip = f"{tip} — prompt restored; edit and Send to retry."
+            self._set_status(tip or "Request failed — prompt restored; Send to retry.", error=True)
             low = (msg or "").lower()
             if "http 401" in low or "http 403" in low or "api key required" in low:
                 self._auth_forced = True
@@ -42845,6 +43870,7 @@ def create_ai_assistant_panel(
                 return
             ctx["findings_text"] = privacy.get("findings_text") or ctx.get("findings_text", "")
             query = str(privacy.get("query") or query)
+            self._last_failed_query = query
             self._append("user", query)
             self._tool_round = 0
             mode = self._context_mode()
@@ -43031,7 +44057,7 @@ def decrypt_secret(stored: Optional[str]) -> str:
     except Exception:
         return ""
 # ===========================================================================
-# ux_explore
+# UX explore helpers
 # ===========================================================================
 
 KIND_SECTION = {
@@ -43739,6 +44765,128 @@ def _task_from_cell(text: Any) -> str:
     return m.group(1).strip() if m else ""
 
 
+# Compare metric / label → Statistics section id (Desktop + Web lockstep).
+COMPARE_INVESTIGATE_FALLBACK_SECTION = "response"
+COMPARE_SECTION_LABELS: Dict[str, str] = {
+    "response": "Response Time",
+    "exec": "Execution Time",
+    "block": "Blocking Time",
+    "inter": "Inter-Arrival Time",
+    "mutex_block": "Mutex Blocking",
+    "deadline": "Deadlines / CPU budget",
+    "migrations": "Core Migrations",
+    "cores": "Core utilisation",
+    "health": "Trace Health (TICK)",
+    "preempt_matrix": "Preemption Chain",
+    "switch_overhead": "Switch Overhead",
+    "sync": "Sync",
+}
+
+_COMPARE_METRIC_SECTION: Dict[str, str] = {
+    "response p99": "response",
+    "exec max": "exec",
+    "block avg": "block",
+    "inter avg": "inter",
+    "mutex block": "mutex_block",
+    "deadline misses": "deadline",
+    "summary": "",  # resolved from label keywords
+}
+
+
+def compare_section_for_metric(label: str = "", metric: str = "") -> str:
+    """Map a Compare row label/metric to a Statistics section id."""
+    met = str(metric or "").strip().lower()
+    if met in _COMPARE_METRIC_SECTION and _COMPARE_METRIC_SECTION[met]:
+        return _COMPARE_METRIC_SECTION[met]
+    blob = f"{label} {metric}".lower()
+    if "response" in blob:
+        return "response"
+    if "exec" in blob:
+        return "exec"
+    if "mutex" in blob:
+        return "mutex_block"
+    if "deadline" in blob or "budget" in blob:
+        return "deadline"
+    if "block" in blob:
+        return "block"
+    if "inter" in blob:
+        return "inter"
+    if "migrat" in blob or "ping" in blob or "dwell" in blob:
+        return "migrations"
+    if "load balance" in blob or "core util" in blob or "utilisation" in blob or "utilization" in blob:
+        return "cores"
+    if "tick" in blob or "missed" in blob:
+        return "health"
+    if "preempt" in blob:
+        return "preempt_matrix"
+    if "context switch" in blob or "switch" in blob:
+        return "switch_overhead"
+    if "sync" in blob or "bounce" in blob:
+        return "sync"
+    return COMPARE_INVESTIGATE_FALLBACK_SECTION
+
+
+def compare_task_for_row(
+    label: str = "",
+    metric: str = "",
+    a: Any = None,
+    b: Any = None,
+) -> str:
+    """Best-effort task name from a Compare notable/candidate row."""
+    for cell in (a, b):
+        t = _task_from_cell(cell)
+        if t:
+            return t
+    lab = str(label or "").strip()
+    met = str(metric or "").strip()
+    if lab and met and met.lower() != "summary":
+        # Labels are ``"{name} {metric}"`` for per-task Compare tables.
+        suffix = f" {met}"
+        if lab.lower().endswith(suffix.lower()):
+            name = lab[: -len(suffix)].strip()
+            if name:
+                return name
+    # ``Response P99 (TaskName)`` style in the label itself
+    return _task_from_cell(lab)
+
+
+def compare_investigate_target(notable: Optional[dict] = None) -> dict:
+    """Pick Statistics section (+ optional task) for Compare Investigate buttons.
+
+    Prefer largest Regressed row, else largest Improved, else Response Time.
+    """
+    data = notable if isinstance(notable, dict) else {}
+    rows = [r for r in (data.get("rows") or []) if isinstance(r, dict)]
+    regs = [r for r in rows if r.get("status") == "Regressed"]
+    imps = [r for r in rows if r.get("status") == "Improved"]
+    pick = regs[0] if regs else (imps[0] if imps else None)
+    if pick is None:
+        sid = COMPARE_INVESTIGATE_FALLBACK_SECTION
+        return {
+            "section_id": sid,
+            "section": sid,
+            "task": "",
+            "label": "",
+            "section_label": COMPARE_SECTION_LABELS.get(sid, sid),
+        }
+    sid = str(pick.get("section") or "").strip() or compare_section_for_metric(
+        str(pick.get("label") or ""), str(pick.get("metric") or ""))
+    task = str(pick.get("task") or "").strip() or compare_task_for_row(
+        str(pick.get("label") or ""),
+        str(pick.get("metric") or ""),
+        pick.get("a"),
+        pick.get("b"),
+    )
+    label = str(pick.get("label") or "")
+    return {
+        "section_id": sid,
+        "section": sid,
+        "task": task,
+        "label": label,
+        "section_label": COMPARE_SECTION_LABELS.get(sid, sid),
+    }
+
+
 def _extra_summary_candidates(tables: dict) -> List[dict]:
     extra: List[dict] = []
     for row in (tables or {}).get("summary") or []:
@@ -43773,11 +44921,13 @@ def compare_notable_changes(
     """Verdict, status cards, and thresholded Improved/Regressed rows.
 
     Status is Candidate B vs Baseline A. Table Δ stays ``A − B``.
-    Changes below the absolute+relative threshold are omitted.
+    Changes below the absolute+relative threshold are omitted (small);
+    returned rows are marked ``significance: engineering``.
     """
     lim = max(1, min(16, int(limit or 8)))
     cands = list(compare_candidates_from_tables(tables)) + _extra_summary_candidates(tables)
     classified: List[dict] = []
+    small_omitted = 0
     for cand in cands:
         if not isinstance(cand, dict):
             continue
@@ -43785,7 +44935,10 @@ def compare_notable_changes(
         kind = str(cand.get("kind") or "count")
         a_mag = _cell_magnitude(cand.get("a"))
         b_mag = _cell_magnitude(cand.get("b"))
+        if abs(signed) <= 0:
+            continue
         if not _compare_change_is_significant(signed, kind, a_mag, b_mag):
+            small_omitted += 1
             continue
         polarity = _compare_metric_polarity(
             str(cand.get("label") or ""), str(cand.get("metric") or ""))
@@ -43798,15 +44951,21 @@ def compare_notable_changes(
             change = f"{_flip_delta_text(delta_txt)} / {rel_signed:+.1f}%"
         else:
             change = _flip_delta_text(delta_txt)
+        label = str(cand.get("label") or "")
+        metric = str(cand.get("metric") or "")
         classified.append({
             "status": status,
-            "label": str(cand.get("label") or ""),
+            "label": label,
+            "metric": metric,
             "a": a_txt,
             "b": b_txt,
             "delta": delta_txt,
             "change": change,
             "signed": signed,
             "kind": kind,
+            "significance": "engineering",
+            "section": compare_section_for_metric(label, metric),
+            "task": compare_task_for_row(label, metric, a_txt, b_txt),
         })
     classified.sort(key=lambda r: -abs(float(r.get("signed") or 0)))
     warnings = compare_tick_mode_warnings(
@@ -43834,10 +44993,15 @@ def compare_notable_changes(
         " Tick-mode detection requires verification."
         if any("tick" in w.lower() for w in warnings) else ""
     )
+    next_investigation = ""
     if n_reg and n_imp:
         verdict = (
             f"Overall: Mixed — Candidate B has {n_reg} regression(s) and "
             f"{n_imp} improvement(s) above threshold.{tick_note}"
+        )
+        next_investigation = (
+            "Next: Investigate on Candidate for the largest regression, "
+            "then verify on Timeline Evidence"
         )
     elif n_reg:
         top = regs[0]
@@ -43845,18 +45009,36 @@ def compare_notable_changes(
             f"Overall: Candidate B regressed on {top['label']} "
             f"({top['change']}).{tick_note}"
         )
+        if warnings:
+            next_investigation = (
+                "Next: Investigate on Candidate for the largest regression, "
+                "then verify on Timeline Evidence"
+            )
     elif n_imp:
         top = imps[0]
         verdict = (
             f"Overall: Candidate B improved on {top['label']} "
             f"({top['change']}).{tick_note}"
         )
+        if warnings:
+            next_investigation = (
+                "Next: Spot-check Response P99 and Migration rate "
+                "if you still expect a change"
+            )
     elif warnings:
         verdict = f"Overall: Mostly similar. {warnings[0]}"
+        next_investigation = (
+            "Next: Spot-check Response P99 and Migration rate "
+            "if you still expect a change"
+        )
     else:
         verdict = (
             "Overall: Mostly similar; no significant improvements or "
             "regressions above the compare threshold."
+        )
+        next_investigation = (
+            "Next: Spot-check Response P99 and Migration rate "
+            "if you still expect a change"
         )
     span_a, span_b = _compare_summary_pair(tables, "Span")
     mode_a, mode_b = _compare_summary_pair(tables, "Tick mode")
@@ -43870,6 +45052,9 @@ def compare_notable_changes(
         "cards": cards,
         "rows": rows,
         "warnings": warnings,
+        "next_investigation": next_investigation,
+        "small_omitted_count": small_omitted,
+        "investigate": compare_investigate_target({"rows": rows}),
     }
 
 
@@ -46020,6 +47205,186 @@ def compare_why(strip: Optional[dict]) -> str:
             reason = str(top) or "anomaly"
         why += f" Shared pattern: {reason}."
     return why
+# ===========================================================================
+# Universal Evidence Navigation
+# ===========================================================================
+
+# Visible affordance glyph used next to actionable Evidence timestamps.
+EVIDENCE_GLYPH = "\u2197"  # ↗
+
+# Tooltip for Evidence-affordance cells (Statistics / Findings / Compare).
+EVIDENCE_TOOLTIP = "Jump to Evidence (does not change Scope)"
+
+_TIME_TOKEN_RE = re.compile(
+    r"(?:jump:)?(\d+(?:\.\d+)?)\s*(ns|us|µs|μs|ms|s)?",
+    re.IGNORECASE,
+)
+
+_UNIT_NS = {
+    "": 1.0,
+    "ns": 1.0,
+    "us": 1_000.0,
+    "µs": 1_000.0,
+    "μs": 1_000.0,
+    "ms": 1_000_000.0,
+    "s": 1_000_000_000.0,
+}
+
+
+def parse_evidence_timestamps(*texts: str) -> List[int]:
+    """Extract candidate timestamps (ns) from free-form Evidence strings."""
+    out: List[int] = []
+    seen = set()
+    for text in texts:
+        blob = str(text or "")
+        for m in _TIME_TOKEN_RE.finditer(blob):
+            try:
+                value = float(m.group(1))
+            except (TypeError, ValueError):
+                continue
+            unit = (m.group(2) or "").lower()
+            # Bare integers in evidence_text are often counts, not times —
+            # only accept unitless values when tagged with jump: or clearly large.
+            raw = m.group(0)
+            if not unit and "jump:" not in raw.lower():
+                if value < 1_000_000:  # smaller than 1 ms as bare ns is ambiguous
+                    continue
+                scale = 1.0
+            else:
+                scale = _UNIT_NS.get(unit, 1.0)
+            ns = int(value * scale)
+            if ns in seen or ns < 0:
+                continue
+            seen.add(ns)
+            out.append(ns)
+    return out
+
+
+def resolve_finding_evidence(
+    finding: Optional[dict],
+    events: Sequence[dict],
+    time_min: float,
+    time_max: float,
+) -> Dict[str, Any]:
+    """Resolve Timeline Evidence for an Analysis Finding without changing Scope.
+
+    Returns a dict:
+      ok, ns, task, mk, note, multi, reason
+    """
+    if not isinstance(finding, dict):
+        return {
+            "ok": False,
+            "ns": None,
+            "task": "",
+            "mk": "",
+            "note": "",
+            "multi": False,
+            "reason": "No finding selected",
+        }
+
+    times: List[float] = []
+    for ev in finding.get("evidence") or []:
+        if not isinstance(ev, dict):
+            continue
+        for key in ("time", "start", "stop", "ns"):
+            try:
+                if ev.get(key) is not None:
+                    times.append(float(ev[key]))
+            except (TypeError, ValueError):
+                continue
+    times.extend(
+        float(t)
+        for t in parse_evidence_timestamps(
+            str(finding.get("evidence_text") or ""),
+            str(finding.get("title") or ""),
+            str(finding.get("text") or ""),
+        )
+    )
+
+    scope = best_finding_scope(finding, events, time_min, time_max)
+    task = str((scope or {}).get("task") or finding.get("task") or "").strip()
+    mk = str((scope or {}).get("mk") or "").strip()
+    multi = len(set(int(t) for t in times)) > 1
+
+    ns: Optional[int] = None
+    note = ""
+    if times:
+        # Prefer the latest evidence sample when several exist (tail / worst).
+        ns = int(max(times))
+        note = "Evidence timestamp from finding"
+        if multi:
+            note = "Representative (latest) Evidence among multiple samples"
+    elif scope is not None:
+        # Fall back to mid-point of recommended episode — still no Scope change.
+        lo = int(scope.get("lo") or 0)
+        hi = int(scope.get("hi") or lo)
+        ns = (lo + hi) // 2
+        note = str(scope.get("reason") or "Representative moment in finding episode")
+        task = task or str(scope.get("task") or "")
+        mk = mk or str(scope.get("mk") or "")
+
+    if ns is None:
+        return {
+            "ok": False,
+            "ns": None,
+            "task": task,
+            "mk": mk,
+            "note": "",
+            "multi": False,
+            "reason": "No locatable Timeline Evidence for this finding",
+        }
+
+    tmin = int(time_min)
+    tmax = int(time_max)
+    if tmax > tmin:
+        ns = max(tmin, min(tmax, ns))
+
+    return {
+        "ok": True,
+        "ns": int(ns),
+        "task": task,
+        "mk": mk,
+        "note": note,
+        "multi": multi,
+        "reason": "",
+    }
+
+
+def resolve_timestamp_evidence(
+    ns: Any,
+    *,
+    task: str = "",
+    mk: str = "",
+    note: str = "",
+    time_min: float = 0,
+    time_max: float = 0,
+) -> Dict[str, Any]:
+    """Wrap a concrete timestamp (Statistics cell / AI jump / Compare delta)."""
+    try:
+        value = int(ns)
+    except (TypeError, ValueError):
+        return {
+            "ok": False,
+            "ns": None,
+            "task": task or "",
+            "mk": mk or "",
+            "note": "",
+            "multi": False,
+            "reason": "Evidence timestamp is missing or invalid",
+        }
+    tmin = int(time_min or 0)
+    tmax = int(time_max or 0)
+    if tmax > tmin:
+        value = max(tmin, min(tmax, value))
+    return {
+        "ok": True,
+        "ns": value,
+        "task": str(task or ""),
+        "mk": str(mk or ""),
+        "note": note or "Evidence timestamp",
+        "multi": False,
+        "reason": "",
+    }
 # ===========================================================================
 # Main Window
 # ===========================================================================
@@ -48393,9 +49758,9 @@ class _StatsPinButton(QLabel):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("stats_section_pin")
-        # Always reserve a 22×22 slot (Web parity) so the category badge does
+        # Always reserve a narrow vertical bar (14×22) so the category badge does
         # not shift when the outline pin fades in on hover.
-        self.setFixedSize(22, 22)
+        self.setFixedSize(STATS_PIN_SLOT_W, STATS_PIN_SLOT_H)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
@@ -48429,13 +49794,13 @@ class _StatsPinButton(QLabel):
 
     def _refresh_icon(self) -> None:
         # Always paint the icon; hide with opacity (Web ``opacity: 0``) so the
-        # fixed 22×22 layout slot never collapses and the badge stays put.
+        # fixed narrow bar layout slot never collapses and the badge stays put.
         visible = self._pin_visible()
         fg = self.palette().color(QPalette.ColorRole.WindowText)
         if not fg.isValid() or fg.alpha() == 0:
             fg = QColor("#D0D0D0" if self._dark else "#555555")
         path = _IC_PIN_FILLED if self._pinned else _IC_PIN
-        self.setPixmap(_svg_pixmap(path, fg.name(), 14))
+        self.setPixmap(_svg_pixmap(path, fg.name(), STATS_PIN_ICON_PX))
         if self._opacity_fx is None:
             self._opacity_fx = QGraphicsOpacityEffect(self)
             self.setGraphicsEffect(self._opacity_fx)
@@ -49005,15 +50370,67 @@ class _TraceCompareDialog(QDialog):
             "QLabel { color: #8a8a8a; padding: 0 8px; font-size: 11px; }")
         lay.addWidget(self._formula)
 
-        self._strip = QLabel("")
-        self._strip.setWordWrap(True)
-        self._strip.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._strip.setStyleSheet(
-            "QLabel { color: #9a9a9a; padding: 6px 8px; border-radius: 6px;"
-            " background: rgba(52, 152, 219, 0.10); }")
-        self._strip.hide()
-        lay.addWidget(self._strip)
+        self._decision = QWidget()
+        self._decision.setObjectName("compareDecision")
+        dec = QVBoxLayout(self._decision)
+        dec.setContentsMargins(8, 6, 8, 6)
+        dec.setSpacing(4)
+        self._decision.setStyleSheet(
+            "QWidget#compareDecision {"
+            " background: rgba(52, 152, 219, 0.10); border-radius: 6px; }"
+        )
+        self._dec_identity = QLabel("")
+        self._dec_identity.setWordWrap(True)
+        self._dec_identity.setStyleSheet("QLabel { color: #9a9a9a; font-size: 11px; }")
+        dec.addWidget(self._dec_identity)
+        self._dec_counts = QLabel("")
+        self._dec_counts.setStyleSheet(
+            "QLabel { color: #cfd8dc; font-weight: 600; font-size: 12px; }")
+        dec.addWidget(self._dec_counts)
+        self._dec_largest = QLabel("")
+        self._dec_largest.setWordWrap(True)
+        self._dec_largest.setStyleSheet("QLabel { color: #e0e0e0; font-size: 12px; }")
+        self._dec_largest_clickable = False
+        self._dec_largest.mousePressEvent = (  # type: ignore[method-assign]
+            lambda ev: self._on_largest_clicked(ev))
+        dec.addWidget(self._dec_largest)
+        self._dec_why = QLabel("")
+        self._dec_why.setWordWrap(True)
+        self._dec_why.setStyleSheet("QLabel { color: #9a9a9a; font-size: 11px; }")
+        dec.addWidget(self._dec_why)
+        self._dec_next = QLabel("")
+        self._dec_next.setWordWrap(True)
+        self._dec_next.setStyleSheet("QLabel { color: #b0bec5; font-size: 11px; }")
+        self._dec_next.hide()
+        dec.addWidget(self._dec_next)
+        self._dec_sig_note = QLabel("")
+        self._dec_sig_note.setWordWrap(True)
+        self._dec_sig_note.setStyleSheet("QLabel { color: #7a8690; font-size: 10px; }")
+        self._dec_sig_note.hide()
+        dec.addWidget(self._dec_sig_note)
+        insp = QHBoxLayout()
+        insp.setContentsMargins(0, 2, 0, 0)
+        insp.setSpacing(8)
+        tip = (
+            "Open Statistics for the largest regression on this tab "
+            "(preserves Scope/Filters)"
+        )
+        self._btn_inspect_a = QPushButton("Investigate on Baseline")
+        self._btn_inspect_a.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_inspect_a.setToolTip(tip)
+        self._btn_inspect_a.clicked.connect(lambda: self._investigate_side("a"))
+        insp.addWidget(self._btn_inspect_a)
+        self._btn_inspect_b = QPushButton("Investigate on Candidate")
+        self._btn_inspect_b.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_inspect_b.setToolTip(tip)
+        self._btn_inspect_b.clicked.connect(lambda: self._investigate_side("b"))
+        insp.addWidget(self._btn_inspect_b)
+        insp.addStretch(1)
+        dec.addLayout(insp)
+        self._decision.hide()
+        lay.addWidget(self._decision)
+        # Back-compat alias for tests that look for _strip
+        self._strip = self._dec_largest
 
         self._pages = QTabWidget()
         self._summary_table = QTableWidget(0, 4)
@@ -49502,9 +50919,46 @@ class _TraceCompareDialog(QDialog):
         QMessageBox.information(
             self, "Baseline score", str(result.get("message") or ""))
 
+    def _on_largest_clicked(self, _ev) -> None:
+        if getattr(self, "_dec_largest_clickable", False):
+            self._investigate_side("b")
+
+    def _investigate_side(self, side: str) -> None:
+        """Close Compare, activate tab, open Statistics for the largest regression."""
+        combo = self._combo_a if side == "a" else self._combo_b
+        idx = combo.currentData()
+        tab_name = self._tab_name(combo)
+        target = getattr(self, "_investigate_target", None) or compare_investigate_target(
+            getattr(self, "_last_notable", None))
+        self.done(int(QDialog.DialogCode.Accepted))
+        win = getattr(self, "_win", None)
+        if win is None or idx is None:
+            return
+        try:
+            idx = int(idx)
+        except (TypeError, ValueError):
+            return
+        tabs = getattr(win, "_tabs", None) or []
+        if not (0 <= idx < len(tabs)):
+            return
+        handler = getattr(win, "_investigate_compare_side", None)
+        if callable(handler):
+            handler(
+                idx,
+                section_id=str(target.get("section_id") or target.get("section") or "response"),
+                task=str(target.get("task") or ""),
+                section_label=str(target.get("section_label") or ""),
+                tab_name=tab_name,
+            )
+            return
+        # Fallback: tab switch only (older hosts).
+        tab_widget = getattr(win, "_tab_widget", None)
+        if tab_widget is not None and hasattr(tab_widget, "setCurrentIndex"):
+            tab_widget.setCurrentIndex(idx)
+
     def _update_compare_strip(self, tables: dict) -> None:
-        strip = getattr(self, "_strip", None)
-        if strip is None:
+        decision = getattr(self, "_decision", None)
+        if decision is None:
             return
         data = compare_summary_strip(
             tables or {}, 4,
@@ -49512,20 +50966,71 @@ class _TraceCompareDialog(QDialog):
             name_b=self._tab_name(self._combo_b),
         )
         notable = data.get("notable") or {}
-        parts = []
-        verdict = str(notable.get("verdict") or data.get("why") or "").strip()
-        if verdict:
-            parts.append(verdict)
-        for row in (notable.get("rows") or [])[:4]:
-            parts.append(f"{row.get('status')}: {row.get('label')} {row.get('change')}")
-        for warn in (data.get("warnings") or [])[:2]:
-            parts.append(f"Warning: {warn}")
-        text = "  ·  ".join(parts)
-        if text:
-            strip.setText(text)
-            strip.show()
+        self._last_notable = notable if isinstance(notable, dict) else {}
+        self._investigate_target = (
+            (notable.get("investigate") if isinstance(notable, dict) else None)
+            or compare_investigate_target(self._last_notable)
+        )
+        identity = (notable.get("identity") or {}) if isinstance(notable, dict) else {}
+        id_a = identity.get("a") or {}
+        id_b = identity.get("b") or {}
+        name_a = self._tab_name(self._combo_a)
+        name_b = self._tab_name(self._combo_b)
+        scope_a = str(id_a.get("span") or "Full Trace")
+        scope_b = str(id_b.get("span") or "Full Trace")
+        self._dec_identity.setText(
+            f"Baseline: {name_a} · Scope {scope_a}    |    "
+            f"Candidate: {name_b} · Scope {scope_b}"
+        )
+        cards = notable.get("cards") or {}
+        n_reg = int(cards.get("regressions") or len(data.get("regressions") or []))
+        n_imp = int(cards.get("improvements") or len(data.get("improvements") or []))
+        n_warn = int(cards.get("warnings") or len(data.get("warnings") or []))
+        self._dec_counts.setText(
+            f"{n_reg} REGRESSIONS    {n_imp} IMPROVEMENTS"
+            + (f"    {n_warn} WARNING{'S' if n_warn != 1 else ''}" if n_warn else "")
+        )
+        regs = list(data.get("regressions") or [])
+        if regs:
+            top = regs[0]
+            self._dec_largest.setText(
+                f"Largest regression — {top.get('label')}: {top.get('change')}"
+            )
+            self._dec_largest_clickable = True
+            self._dec_largest.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._dec_largest.setToolTip(
+                "Open Statistics for this regression on the Candidate tab")
         else:
-            strip.hide()
+            verdict = str(notable.get("verdict") or "").strip()
+            self._dec_largest.setText(verdict or "No significant regressions")
+            self._dec_largest_clickable = False
+            self._dec_largest.setCursor(Qt.CursorShape.ArrowCursor)
+            self._dec_largest.setToolTip("")
+        why = str(data.get("why") or "").strip()
+        if why:
+            self._dec_why.setText(f"Why? {why}")
+            self._dec_why.show()
+        else:
+            self._dec_why.hide()
+        nxt = str(notable.get("next_investigation") or "").strip()
+        if nxt:
+            self._dec_next.setText(nxt)
+            self._dec_next.show()
+        else:
+            self._dec_next.hide()
+        omitted = int(notable.get("small_omitted_count") or 0)
+        if int(cards.get("significant") or 0) or omitted:
+            self._dec_sig_note.setText(
+                "Showing engineering-significant deltas only (small changes omitted)"
+            )
+            self._dec_sig_note.show()
+        else:
+            self._dec_sig_note.hide()
+        has = bool(
+            n_reg or n_imp or n_warn or regs or why or nxt
+            or notable.get("verdict")
+        )
+        decision.setVisible(has)
 
     def _tab_name(self, combo: QComboBox) -> str:
         return combo.currentText() or "Trace"
@@ -53802,12 +55307,15 @@ class _AnalysisFindingsDialog(QDialog):
                  ux_events: Optional[List[dict]] = None,
                  time_min: int = 0, time_max: int = 0,
                  quality_warnings: Optional[List[str]] = None,
-                 is_dark: bool = True, on_investigate=None):
+                 is_dark: bool = True, on_investigate=None,
+                 on_show_evidence=None, on_ai_query=None):
         super().__init__(parent)
         self._findings = findings or []
         self._scope_title = scope_title or ""
         self._on_apply_scope = on_apply_scope
         self._on_investigate = on_investigate
+        self._on_show_evidence = on_show_evidence
+        self._on_ai_query = on_ai_query
         self._scope_hint = scope_hint or ""
         self._ux_events = ux_events or []
         self._time_min = int(time_min or 0)
@@ -53837,8 +55345,16 @@ class _AnalysisFindingsDialog(QDialog):
         self._ai_needs_settings = False
         self.wants_ai_finding_id = ""
         self.wants_ai_template = "findings"
+        self.wants_ai_level = ""
         self.setWindowTitle(f"Analysis Findings{self._scope_title}")
-        self.setModal(True)
+        # Non-modal inbox: Timeline Evidence stays clickable while Findings is open.
+        self.setModal(False)
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowCloseButtonHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
         # Match menus/toolbar (Settings → Display → UI / menus), not a fixed 11pt.
         ui_pt = max(6, min(int(ui_font_size), 24))
         ui_font = _application_ui_font(ui_pt)
@@ -54122,12 +55638,17 @@ class _AnalysisFindingsDialog(QDialog):
 
         show_evidence_btn = QPushButton("Show Evidence")
         show_evidence_btn.setFont(ui_font)
-        show_evidence_btn.setEnabled(False)
-        show_evidence_btn.setToolTip("Reserved for Step 2 — cross-surface Evidence Navigation")
+        show_evidence_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        show_evidence_btn.setToolTip(
+            "Jump to Timeline Evidence for the selected finding "
+            "(does not change Scope or Filters)")
         show_evidence_btn.setStyleSheet(
             f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
             f" font-size: {ui_fs}; }}"
         )
+        show_evidence_btn.clicked.connect(self._show_evidence_selected)
+        show_evidence_btn.setEnabled(self._on_show_evidence is not None)
+        self._show_evidence_btn = show_evidence_btn
         scope_row.addWidget(show_evidence_btn, 0)
 
         self._investigate_btn = QPushButton("Investigate")
@@ -54185,6 +55706,10 @@ class _AnalysisFindingsDialog(QDialog):
                 "Scope the investigation and jump to the relevant Statistics section"
                 if sid else "No specific Statistics section is associated with this finding"
             )
+        ev_btn = getattr(self, "_show_evidence_btn", None)
+        if ev_btn is not None:
+            ev_btn.setEnabled(
+                self._on_show_evidence is not None and finding is not None)
         if finding is None:
             lbl.setText("Select a finding to recommend a cursor window.")
             return
@@ -54207,6 +55732,14 @@ class _AnalysisFindingsDialog(QDialog):
             return
         self._on_apply_scope(finding)
 
+    def _show_evidence_selected(self) -> None:
+        if self._on_show_evidence is None:
+            return
+        finding = self._selected_finding()
+        if finding is None:
+            return
+        self._on_show_evidence(finding)
+
     def _investigate_selected(self) -> None:
         if self._on_investigate is None:
             return
@@ -54216,8 +55749,8 @@ class _AnalysisFindingsDialog(QDialog):
         sid = FINDING_SECTION_MAP.get(str(finding.get("id") or ""))
         if not sid:
             return
+        # Keep the inbox open so Timeline Evidence remains visible.
         self._on_investigate(finding, sid)
-        self.accept()
 
     def _query_with_ai(
         self, ai_enabled: bool, template_id: str = "findings",
@@ -54233,7 +55766,14 @@ class _AnalysisFindingsDialog(QDialog):
                 self.wants_ai_finding_id = str(
                     item.data(Qt.ItemDataRole.UserRole) or "")
         self._ai_needs_settings = not ai_enabled
-        self.accept()
+        # Fire immediately; do not close the non-modal Findings inbox.
+        if callable(self._on_ai_query):
+            self._on_ai_query(
+                self.wants_ai_template,
+                self.wants_ai_finding_id,
+                self.wants_ai_level,
+                self._ai_needs_settings,
+            )
 
     def _save_as_text(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -54331,6 +55871,8 @@ class _StatsPanel(QWidget):
     # Core-Pair chart footer → open heatmap/chord focused on (from, to, bounce_only)
     open_pair_heatmap = Signal(str, str, bool)
     open_pair_chord = Signal(str, str, bool)
+    # Task × Core → Filter Timeline (merge keys + Context Bar label)
+    filter_timeline_requested = Signal(list, str)
     # Open Settings dialog on a named sidebar page (e.g. "Display")
     open_settings_requested = Signal(str)
     # Pinned section IDs (stay expanded); persist to btf_viewer.rc
@@ -54393,6 +55935,13 @@ class _StatsPanel(QWidget):
         self._defer_populate_timer = QTimer(self)
         self._defer_populate_timer.setSingleShot(True)
         self._defer_populate_timer.timeout.connect(self._populate_next_deferred_section)
+        # Preserve Statistics scroll across rebuilds (scope/filter). Evidence
+        # scroll_to_section intentionally jumps — see _restore_scroll_y.
+        self._preserve_scroll: bool = True
+        self._saved_scroll_y: int = 0
+        self._scroll_to_section_requested: bool = False
+        self._section_scope_chip: str = ""
+        self._section_filter_chip: str = ""
         self._ux_events_key: Optional[Tuple[int, Optional[int], Optional[int]]] = None
         self._ux_events_cached: Optional[List[dict]] = None
         self._cpu_budget_pct: float = 0.0
@@ -54623,6 +56172,47 @@ class _StatsPanel(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
+    def _meta_chip_label(self, text: str, *, kind: str, tip: str) -> QLabel:
+        """Compact Scope / Filtered chip for section headers (Web parity)."""
+        chip = QLabel(text)
+        chip.setObjectName(f"stats_meta_chip_{kind}")
+        chip.setToolTip(tip)
+        chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        chip.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        chip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        chip.setStyleSheet(
+            stats_meta_chip_stylesheet(kind, dark=self._is_dark))
+        return chip
+
+    def _refresh_section_meta_chips(self) -> None:
+        """Cache compact Scope / Filtered labels for section headers."""
+        rng = self._stats_range() if self._trace is not None else None
+        if rng is not None:
+            _lo, _hi, n_cur = rng
+            self._section_scope_chip = f"C1–C{n_cur}"
+        else:
+            self._section_scope_chip = ""
+        filt = ""
+        lbl = getattr(self, "_filter_label", None)
+        if lbl is not None and lbl.isVisible():
+            raw = (lbl.text() or "").strip()
+            if raw.startswith("Filtered:"):
+                filt = raw.split(":", 1)[1].strip() or "Filtered"
+            elif raw:
+                filt = raw
+        self._section_filter_chip = filt
+
+    def _restore_scroll_y(self, y: int) -> None:
+        """Restore saved scroll unless Evidence/Investigate requested a jump."""
+        if self._scroll_to_section_requested:
+            self._scroll_to_section_requested = False
+            return
+        if not hasattr(self, "_scroll") or self._scroll is None:
+            return
+        try:
+            self._scroll.verticalScrollBar().setValue(int(y))
+        except RuntimeError:
+            pass
     def apply_section_table_heights(self, heights: Dict[str, int]) -> None:
         """Apply persisted max heights for collapsible stats tables."""
         for key, val in heights.items():
@@ -56006,10 +57596,9 @@ class _StatsPanel(QWidget):
     def _update_scroll_tail_height(self, *, for_pin: bool = False) -> None:
         """Keep no blank under the last section (web parity), unless pinning.
 
-        Web leaves ``.stats-scroll-tail`` at height 0 during normal browsing and
-        only grows it for demo/AI ``scroll section into view``. Desktop used to
-        keep a near-viewport pad always, which showed as empty space under Tag
-        Analysis.
+        Both Desktop and Web leave ``stats_scroll_tail`` / ``.stats-scroll-tail``
+        at height 0 during normal browsing and only grow it for demo/AI
+        ``scroll section into view`` (``for_pin=True`` / ``forPin``).
         """
         if not hasattr(self, "_scroll"):
             return
@@ -56200,7 +57789,7 @@ class _StatsPanel(QWidget):
         # fades in/out — the 22px column is always present.
         pin_slot = QWidget()
         pin_slot.setObjectName("stats_section_pin_slot")
-        pin_slot.setFixedSize(22, 22)
+        pin_slot.setFixedSize(STATS_PIN_SLOT_W, STATS_PIN_SLOT_H)
         pin_slot.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         pin_slot_lay = QHBoxLayout(pin_slot)
         pin_slot_lay.setContentsMargins(0, 0, 0, 0)
@@ -56208,11 +57797,34 @@ class _StatsPanel(QWidget):
         pin_slot_lay.addWidget(pin)
         row_lay.addWidget(grip, 0)
         row_lay.addWidget(hdr, 1)
+        # Meta order matches Web: Scope → Filtered → category → pin.
+        if self._section_scope_chip:
+            row_lay.addWidget(
+                self._meta_chip_label(
+                    self._section_scope_chip, kind="scope",
+                    tip=f"Scope limited to {self._section_scope_chip}"),
+                0,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        if self._section_filter_chip:
+            row_lay.addWidget(
+                self._meta_chip_label(
+                    "Filtered", kind="filter",
+                    tip=f"Statistics reflect Filter: {self._section_filter_chip}"),
+                0,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         category = STATS_SECTION_CATEGORY.get(section_id)
         if category:
             cat_badge = QLabel(category)
             cat_badge.setObjectName("stats_section_category")
-            cat_badge.setToolTip(f"{category} \u2014 investigation category")
+            cat_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            cat_badge.setSizePolicy(
+                QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            cat_badge.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            # Prefer the real section help (Web badge title). A bare
+            # "Category — investigation category" tip is not useful.
+            help_tip = (STATS_SECTION_HELP.get(section_id) or "").strip()
+            cat_badge.setToolTip(
+                qt_wrap_tooltip(help_tip) if help_tip else category)
             cat_badge.setStyleSheet(
                 stats_category_badge_stylesheet(category, dark=self._is_dark))
             row_lay.addWidget(
@@ -56408,11 +58020,12 @@ class _StatsPanel(QWidget):
 
     def _summarize_samples(
         self, samples: List[int], scale: str
-    ) -> Optional[Tuple[str, str, str, str, str, str]]:
+    ) -> Optional[Tuple[str, str, str, str, str, str, str, str]]:
         if not samples:
             return None
         vals = sorted(samples)
         n = len(vals)
+        p50_idx = min(n - 1, math.ceil(n * 0.50) - 1)
         p95_idx = min(n - 1, math.ceil(n * 0.95) - 1)
         p99_idx = min(n - 1, math.ceil(n * 0.99) - 1)
         mean = sum(vals) / n
@@ -56425,6 +58038,7 @@ class _StatsPanel(QWidget):
             _format_time(vals[-1], scale),
             _format_time(jitter, scale),
             _format_time(stddev, scale),
+            _format_time(vals[p50_idx], scale),
             _format_time(vals[p95_idx], scale),
             _format_time(vals[p99_idx], scale),
         )
@@ -56497,11 +58111,11 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, jitter, stddev, p95, p99 = summary
+            mn, avg, mx, jitter, stddev, p50, p95, p99 = summary
             cpu_pct = 100.0 * sum(samples) / total_ns
             rows.append((
                 mk, _task_display_name(raw), len(samples), cpu_pct,
-                mn, avg, mx, jitter, stddev, p95, p99,
+                mn, avg, mx, jitter, stddev, p50, p95, p99,
             ))
         rows.sort(key=lambda r: (-r[3], -r[2], r[1].lower()))
         return rows
@@ -56521,14 +58135,14 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, jitter, stddev, p95, p99 = summary
+            mn, avg, mx, jitter, stddev, p50, p95, p99 = summary
             if lo is not None and hi is not None:
                 n_runs = sum(1 for s in segs if lo <= s.start <= hi)
             else:
                 n_runs = len(segs)
             rows.append((
                 mk, _task_display_name(raw), n_runs,
-                mn, avg, mx, jitter, stddev, p95, p99,
+                mn, avg, mx, jitter, stddev, p50, p95, p99,
             ))
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
         return rows
@@ -56548,10 +58162,10 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, jitter, stddev, p95, p99 = summary
+            mn, avg, mx, jitter, stddev, p50, p95, p99 = summary
             rows.append((
                 mk, _task_display_name(raw), len(samples),
-                mn, avg, mx, jitter, stddev, p95, p99,
+                mn, avg, mx, jitter, stddev, p50, p95, p99,
             ))
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
         return rows
@@ -56570,10 +58184,10 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(data["samples"], trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, jitter, stddev, p95, p99 = summary
+            mn, avg, mx, jitter, stddev, p50, p95, p99 = summary
             rows.append((
                 mk, _task_display_name(raw), len(data["samples"]),
-                mn, avg, mx, jitter, stddev, p95, p99,
+                mn, avg, mx, jitter, stddev, p50, p95, p99,
                 data.get("min_seg"), data.get("max_seg"),
             ))
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
@@ -56761,8 +58375,8 @@ class _StatsPanel(QWidget):
                            include_variability: bool = False,
                            migrations: bool = False,
                            on_row_click=None, on_min_click=None,
-                           on_max_click=None, on_p95_click=None,
-                           on_p99_click=None) -> QWidget:
+                           on_max_click=None, on_p50_click=None,
+                           on_p95_click=None, on_p99_click=None) -> QWidget:
         host = QWidget()
         lay = QVBoxLayout(host)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -56779,10 +58393,10 @@ class _StatsPanel(QWidget):
         elif include_variability:
             headers = (
                 ["Task", count_header, "CPU%", "Min", "Avg", "Max",
-                 "Jitter", "σ", "p95", "p99"]
+                 "Jitter", "σ", "p50", "p95", "p99"]
                 if include_cpu
                 else ["Task", count_header, "Min", "Avg", "Max",
-                      "Jitter", "σ", "p95", "p99"]
+                      "Jitter", "σ", "p50", "p95", "p99"]
             )
             cols = len(headers)
         else:
@@ -56842,16 +58456,20 @@ class _StatsPanel(QWidget):
 
         _min_col = 3 if include_cpu else 2
         _max_col = 5 if include_cpu else 4
+        _p50_col = (cols - 3) if include_variability else None
         _p95_col = (cols - 2) if include_variability else (cols - 1)
         _p99_col = (cols - 1) if include_variability else None
         _link_color = QBrush(QColor("#88AAFF"))
         _hovered_row = [-1]
         _interactive = bool(
             on_row_click or on_min_click or on_max_click
-            or on_p95_click or on_p99_click)
+            or on_p50_click or on_p95_click or on_p99_click)
         _row_tip = "Click to view distribution chart"
         _metric_key = (_tag_value_sort_key if section_id == "tags"
                        else _time_label_sort_key)
+
+        def _evidence_text(label: str) -> str:
+            return f"{label} {EVIDENCE_GLYPH}"
 
         def _clear_row_hover() -> None:
             row = _hovered_row[0]
@@ -56891,17 +58509,17 @@ class _StatsPanel(QWidget):
                     _time_label_sort_key(g_after), _time_label_sort_key(g_other),
                 ]
             elif include_cpu and include_variability:
-                mk_r, name, runs, cpu, mn, avg, mx, jitter, stddev, p95, p99 = row
+                mk_r, name, runs, cpu, mn, avg, mx, jitter, stddev, p50, p95, p99 = row
                 vals = [
                     name, runs, f"{cpu:.1f}%", mn, avg, mx,
-                    jitter, stddev, p95, p99,
+                    jitter, stddev, p50, p95, p99,
                 ]
                 sort_keys = [
                     name.lower(), runs, cpu,
                     _time_label_sort_key(mn), _time_label_sort_key(avg),
                     _time_label_sort_key(mx), _time_label_sort_key(jitter),
-                    _time_label_sort_key(stddev), _time_label_sort_key(p95),
-                    _time_label_sort_key(p99),
+                    _time_label_sort_key(stddev), _time_label_sort_key(p50),
+                    _time_label_sort_key(p95), _time_label_sort_key(p99),
                 ]
             elif include_cpu:
                 mk_r, name, runs, cpu, mn, avg, mx, p95 = row
@@ -56917,13 +58535,13 @@ class _StatsPanel(QWidget):
                 vals = [name, runs, mn, avg, mx, p95]
                 sort_keys = [name.lower(), runs, mn_raw, avg_raw, mx_raw, p95_raw]
             elif include_variability:
-                mk_r, name, runs, mn, avg, mx, jitter, stddev, p95, p99 = row
-                vals = [name, runs, mn, avg, mx, jitter, stddev, p95, p99]
+                mk_r, name, runs, mn, avg, mx, jitter, stddev, p50, p95, p99 = row
+                vals = [name, runs, mn, avg, mx, jitter, stddev, p50, p95, p99]
                 sort_keys = [
                     name.lower(), runs,
                     _metric_key(mn), _metric_key(avg), _metric_key(mx),
-                    _metric_key(jitter), _metric_key(stddev), _metric_key(p95),
-                    _metric_key(p99),
+                    _metric_key(jitter), _metric_key(stddev), _metric_key(p50),
+                    _metric_key(p95), _metric_key(p99),
                 ]
             else:
                 mk_r, name, runs, mn, avg, mx, p95 = row
@@ -56935,7 +58553,20 @@ class _StatsPanel(QWidget):
                 ]
 
             for c, v in enumerate(vals):
-                item = _StatsSortItem(v, sort_keys[c])
+                display = v
+                evidence_cell = (
+                    not migrations and include_variability
+                    and c in (_max_col, _p50_col, _p95_col, _p99_col)
+                    and (
+                        (c == _max_col and on_max_click is not None)
+                        or (c == _p50_col and on_p50_click is not None)
+                        or (c == _p95_col and on_p95_click is not None)
+                        or (c == _p99_col and on_p99_click is not None)
+                    )
+                )
+                if evidence_cell and isinstance(v, str) and v:
+                    display = _evidence_text(v)
+                item = _StatsSortItem(display, sort_keys[c])
                 item.setBackground(_default_bg)
                 if migrations:
                     if c == 0:
@@ -56962,27 +58593,18 @@ class _StatsPanel(QWidget):
                             f"Click to jump to shortest {tip_kind} for {name}")
                         item.setForeground(_link_color)
                     elif c == _max_col and on_max_click is not None:
-                        if include_cpu:
-                            item.setToolTip(
-                                f"Click to jump to longest slice (WCET) for {name}")
-                        elif section_id == "block":
-                            item.setToolTip(
-                                f"Click to jump to longest off-CPU gap for {name}")
-                        elif section_id == "inter":
-                            item.setToolTip(
-                                f"Click to jump to longest inter-arrival for {name}")
-                        else:
-                            item.setToolTip(
-                                f"Click to jump to longest sample for {name}")
+                        item.setToolTip(EVIDENCE_TOOLTIP)
+                        item.setForeground(_link_color)
+                    elif (_p50_col is not None and c == _p50_col
+                          and on_p50_click is not None):
+                        item.setToolTip(EVIDENCE_TOOLTIP)
                         item.setForeground(_link_color)
                     elif c == _p95_col and on_p95_click is not None:
-                        item.setToolTip(
-                            f"Click to jump to the p95 sample for {name}")
+                        item.setToolTip(EVIDENCE_TOOLTIP)
                         item.setForeground(_link_color)
                     elif (_p99_col is not None and c == _p99_col
                           and on_p99_click is not None):
-                        item.setToolTip(
-                            f"Click to jump to the p99 sample for {name}")
+                        item.setToolTip(EVIDENCE_TOOLTIP)
                         item.setForeground(_link_color)
                     elif on_row_click is not None:
                         item.setToolTip(f"{_row_tip} for {name}")
@@ -56993,6 +58615,9 @@ class _StatsPanel(QWidget):
             table.horizontalHeader().setStretchLastSection(False)
             p95_col = _p95_col
             table.setColumnWidth(p95_col, min(table.columnWidth(p95_col), 76))
+            if _p50_col is not None:
+                table.setColumnWidth(
+                    _p50_col, min(table.columnWidth(_p50_col), 76))
             if _p99_col is not None:
                 table.setColumnWidth(
                     _p99_col, min(table.columnWidth(_p99_col), 76))
@@ -57032,6 +58657,9 @@ class _StatsPanel(QWidget):
                         on_min_click(mk)
                     elif on_max_click is not None and c == _max_col:
                         on_max_click(mk)
+                    elif (on_p50_click is not None and _p50_col is not None
+                          and c == _p50_col):
+                        on_p50_click(mk)
                     elif on_p95_click is not None and c == _p95_col:
                         on_p95_click(mk)
                     elif (on_p99_click is not None and _p99_col is not None
@@ -57336,6 +58964,64 @@ class _StatsPanel(QWidget):
         if not rows or not cores:
             lay.addWidget(self._lbl(empty_hint, color="#888888", ui_fs=ui_fs))
             return host
+
+        action_row = QWidget()
+        action_lay = QHBoxLayout(action_row)
+        action_lay.setContentsMargins(0, 0, 0, 2)
+        action_lay.setSpacing(6)
+        sel_lab = self._lbl("Select a cell for investigation actions", color="#888888", ui_fs=ui_fs)
+        action_lay.addWidget(sel_lab, 1)
+        btn_hl = QPushButton("Highlight Task")
+        btn_ft = QPushButton("Filter Timeline")
+        btn_mig = QPushButton("Show Migrations")
+        for b in (btn_hl, btn_ft, btn_mig):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setEnabled(False)
+            action_lay.addWidget(b, 0)
+        lay.addWidget(action_row)
+        selected: Dict[str, Any] = {}
+
+        def _set_selection(payload: dict) -> None:
+            selected.clear()
+            selected.update(payload or {})
+            mk = str(selected.get("mk") or "")
+            task = str(selected.get("task") or mk)
+            core = str(selected.get("core") or "")
+            if mk and core:
+                sel_lab.setText(f"Selected: {task} @ {core}")
+            elif mk:
+                sel_lab.setText(f"Selected: {task}")
+            else:
+                sel_lab.setText("Select a cell for investigation actions")
+            enabled = bool(mk)
+            btn_hl.setEnabled(enabled)
+            btn_ft.setEnabled(enabled)
+            btn_mig.setEnabled(enabled)
+
+        def _on_highlight() -> None:
+            mk = str(selected.get("mk") or "")
+            if mk:
+                self.task_clicked.emit(mk)
+
+        def _on_filter() -> None:
+            mk = str(selected.get("mk") or "")
+            if not mk:
+                return
+            task = str(selected.get("task") or mk)
+            core = str(selected.get("core") or "")
+            label = f"{task} @ {core}" if core else task
+            self.filter_timeline_requested.emit([mk], label)
+
+        def _on_migrations() -> None:
+            mk = str(selected.get("mk") or "")
+            if mk:
+                self.task_clicked.emit(mk)
+            self.scroll_to_section("migrations")
+
+        btn_hl.clicked.connect(_on_highlight)
+        btn_ft.clicked.connect(_on_filter)
+        btn_mig.clicked.connect(_on_migrations)
+
         headers = ["Task"] + cores
         table = self._make_plain_stats_table(headers, ui_fs)
         table.setRowCount(len(rows))
@@ -57344,9 +59030,11 @@ class _StatsPanel(QWidget):
         for r, row in enumerate(rows):
             task_item = self._stats_sort_item(
                 str(row.get("task") or ""), str(row.get("task") or "").lower(), bg)
-            task_item.setData(Qt.ItemDataRole.UserRole, {"mk": row.get("mk")})
+            task_item.setData(Qt.ItemDataRole.UserRole, {
+                "mk": row.get("mk"), "task": row.get("task"),
+            })
             task_item.setForeground(link)
-            task_item.setToolTip("Click to highlight this task")
+            task_item.setToolTip("Click to select / highlight this task")
             table.setItem(r, 0, task_item)
             cells = row.get("cells") or {}
             for c, core in enumerate(cores, start=1):
@@ -57361,6 +59049,7 @@ class _StatsPanel(QWidget):
                     item.setData(Qt.ItemDataRole.UserRole, {
                         "mk": row.get("mk"),
                         "task": row.get("task"),
+                        "core": core,
                         "start": cell.get("start"),
                         "stop": cell.get("stop"),
                         "jump_ns": cell.get("jump_ns"),
@@ -57377,11 +59066,18 @@ class _StatsPanel(QWidget):
             data = item.data(Qt.ItemDataRole.UserRole) if item else None
             if not isinstance(data, dict):
                 return
+            mk = str(data.get("mk") or "")
             if col == 0:
-                mk = str(data.get("mk") or "")
                 if mk:
+                    _set_selection({"mk": mk, "task": data.get("task"), "core": ""})
                     self.task_clicked.emit(mk)
                 return
+            if mk:
+                _set_selection({
+                    "mk": mk,
+                    "task": data.get("task"),
+                    "core": data.get("core") or "",
+                })
             self._emit_explore_event(trace, data, "task_core")
 
         table.cellClicked.connect(_cell_clicked)
@@ -57510,6 +59206,8 @@ class _StatsPanel(QWidget):
         sid = str(section_id or "").strip()
         if not sid:
             return
+        # Intentional Evidence/Investigate jump — skip scroll restore after rebuild.
+        self._scroll_to_section_requested = True
         self._section_collapsed[sid] = False
         self._ensure_section_body(sid)
         self._update_section_header_icon(sid)
@@ -57528,6 +59226,7 @@ class _StatsPanel(QWidget):
         else:
             lbl.setText("")
             lbl.setVisible(False)
+        self._refresh_section_meta_chips()
 
     def _build_preemption_table(self, rows: List[tuple], ui_fs: str,
                                 empty_hint: str, on_row_click=None) -> QWidget:
@@ -58104,18 +59803,18 @@ class _StatsPanel(QWidget):
             f"<tr><td>{_esc(label)}</td><td>{n}</td>"
             f"<td>{_esc(mn)}</td><td>{_esc(avg)}</td><td>{_esc(mx)}</td>"
             f"<td>{_esc(jitter)}</td><td>{_esc(stddev)}</td>"
-            f"<td>{_esc(p95)}</td><td>{_esc(p99)}</td></tr>"
-            for (_mk, label, n, mn, avg, mx, jitter, stddev, p95, p99,
+            f"<td>{_esc(p50)}</td><td>{_esc(p95)}</td><td>{_esc(p99)}</td></tr>"
+            for (_mk, label, n, mn, avg, mx, jitter, stddev, p50, p95, p99,
                  _a, _b) in disp_rows_html
         ) or (
-            '<tr><td colspan="9" class="empty">No dispatch samples '
+            '<tr><td colspan="10" class="empty">No dispatch samples '
             '(needs STI resume Name[id] or create→first-run)</td></tr>'
         )
         dispatch_html = (
             f'<section class="report-card"><h2>Dispatch / Scheduling Latency{_esc(scope_title)}</h2>'
             '<p class="detail-note">Ready from STI resume / create; sync wakes not attributed.</p>'
             '<table><thead><tr><th>Task</th><th>Activations</th><th>Min</th><th>Avg</th>'
-            '<th>Max</th><th>Jitter</th><th>σ</th><th>p95</th><th>p99</th></tr></thead>'
+            '<th>Max</th><th>Jitter</th><th>σ</th><th>p50</th><th>p95</th><th>p99</th></tr></thead>'
             f'<tbody>{disp_body}</tbody></table></section>'
         )
 
@@ -58530,6 +60229,17 @@ class _StatsPanel(QWidget):
                 "Few execution samples in this scope; percentiles and comparisons "
                 "may be unreliable."
             )
+        filter_parts: list = []
+        if lo is not None:
+            filter_parts.append("Limit to C1–Cn")
+        fl = getattr(self, "_filter_label", None)
+        if fl is not None and fl.isVisible():
+            raw = str(fl.text() or "").strip()
+            if raw.lower().startswith("filtered:"):
+                raw = raw.split(":", 1)[1].strip()
+            if raw:
+                filter_parts.append(raw)
+        filters_txt = "; ".join(filter_parts) if filter_parts else "None"
         scope_html = html_scope_identity_card(
             filename=trace_name,
             scope_type=scope_type,
@@ -58537,11 +60247,16 @@ class _StatsPanel(QWidget):
             end=end_s,
             duration=span_str,
             cores=len(trace.core_names or []),
-            filters="Limit to C1–Cn" if lo is not None else "None",
+            filters=filters_txt,
             timestamp_mode="Trace capture origin (not wall-clock)",
             task_count=task_count,
             sample_note=sample_note,
         )
+        evidence_refs = evidence_refs_from_findings(
+            analysis_findings,
+            format_ns=lambda ns: _format_time(int(ns), trace.time_scale),
+        )
+        evidence_refs_html = html_evidence_refs_card(evidence_refs)
         meta_html = html_trace_metadata_card(
             span=span_str,
             tasks=task_count,
@@ -58561,6 +60276,7 @@ class _StatsPanel(QWidget):
         {html_diagnostic_kpi_grid(kpis)}
         <!--TOC-->
         {scope_html}
+        {evidence_refs_html}
         {analysis_html}
         {meta_html}
     {core_util_html}
@@ -59061,7 +60777,7 @@ class _StatsPanel(QWidget):
             writer.writerow([f"Dispatch / Scheduling Latency{scope_suffix}"])
             writer.writerow([
                 "Task", "Activations", "Min", "Avg", "Max", "Jitter",
-                "StdDev (population)", "p95", "p99",
+                "StdDev (population)", "p50", "p95", "p99",
             ])
             _disp_by = _dispatch_latency_by_mk(trace, lo, hi)
             _disp_any = False
@@ -59078,14 +60794,14 @@ class _StatsPanel(QWidget):
                 if summary is None:
                     continue
                 _disp_any = True
-                mn, avg, mx, jitter, stddev, p95, p99 = summary
+                mn, avg, mx, jitter, stddev, p50, p95, p99 = summary
                 writer.writerow([
                     _task_display_name(raw), len(data["samples"]),
                     _us(mn), _us(avg), _us(mx), _us(jitter), _us(stddev),
-                    _us(p95), _us(p99),
+                    _us(p50), _us(p95), _us(p99),
                 ])
             if not _disp_any:
-                writer.writerow(["No data"] + [""] * 7)
+                writer.writerow(["No data"] + [""] * 8)
 
             writer.writerow([])
             writer.writerow([f"Inter-Arrival Time{scope_suffix}"])
@@ -59398,6 +61114,11 @@ class _StatsPanel(QWidget):
         defer_heavy = trace_needs_deferred_stats_load(trace)
         self._btn_export_csv.setEnabled(True)
         self._btn_export_html.setEnabled(True)
+        if self._preserve_scroll and hasattr(self, "_scroll") and self._scroll is not None:
+            try:
+                self._saved_scroll_y = int(self._scroll.verticalScrollBar().value())
+            except RuntimeError:
+                self._saved_scroll_y = 0
         self._clear()
         self._defer_heavy_sections = defer_heavy
         # Do not rewrite collapse flags here. Defaults already start most
@@ -59406,6 +61127,7 @@ class _StatsPanel(QWidget):
         if defer_heavy:
             self._defer_heavy_collapse_done = True
         self._update_scope_header()
+        self._refresh_section_meta_chips()
 
         rng = self._stats_range()
         lo = hi = None
@@ -59842,6 +61564,51 @@ class _StatsPanel(QWidget):
             self._open_plot(trace, mk, "mig_dwell")
 
         def _populate_mig(blay: QVBoxLayout) -> None:
+            summary = _migration_summary(trace, lo, hi)
+            if summary.get("has_data"):
+                strip = QWidget()
+                strip_lay = QHBoxLayout(strip)
+                strip_lay.setContentsMargins(0, 2, 0, 4)
+                strip_lay.setSpacing(8)
+                bits = [
+                    f"Total {summary.get('total', 0)}",
+                    f"Rate {summary.get('rate_label') or '—'}",
+                    f"Median dwell {summary.get('median_dwell') or '—'}",
+                ]
+                top = summary.get("top_task") or {}
+                if top:
+                    bits.append(f"Most migrated {top.get('name')} ({top.get('count')})")
+                pair = summary.get("top_pair") or {}
+                if pair:
+                    bits.append(
+                        f"Hottest {pair.get('from')}→{pair.get('to')} ({pair.get('count')})")
+                hint = str(summary.get("thrash_hint") or "").strip()
+                if hint:
+                    bits.append(hint)
+                lab = self._lbl(" · ".join(bits), color="#9a9a9a", ui_fs=_fs)
+                lab.setWordWrap(True)
+                strip_lay.addWidget(lab, 1)
+                if top.get("mk"):
+                    btn_tc = QPushButton("Task × Core")
+                    btn_tc.setCursor(Qt.CursorShape.PointingHandCursor)
+                    btn_tc.setToolTip("Open Task × Core for the most migrated task")
+                    btn_tc.clicked.connect(
+                        lambda _=False, mk=str(top["mk"]): (
+                            self.task_clicked.emit(mk),
+                            self.scroll_to_section("task_core"),
+                        ))
+                    strip_lay.addWidget(btn_tc, 0)
+                if pair.get("from") and pair.get("to"):
+                    btn_pair = QPushButton("Core pair")
+                    btn_pair.setCursor(Qt.CursorShape.PointingHandCursor)
+                    btn_pair.setToolTip("Open Core-Pair Migration Summary / heatmap")
+                    btn_pair.clicked.connect(
+                        lambda _=False, f=str(pair["from"]), t=str(pair["to"]): (
+                            self.scroll_to_section("core_pairs"),
+                            self.open_pair_heatmap.emit(f, t, False),
+                        ))
+                    strip_lay.addWidget(btn_pair, 0)
+                blay.addWidget(strip)
             _mig_rows = _migration_rows(trace, lo, hi)
             blay.addWidget(self._build_stats_table(
                 _mig_rows, _fs, empty_mig,
@@ -59862,6 +61629,87 @@ class _StatsPanel(QWidget):
                 blay.addWidget(self._lbl("No migrations in scope", color="#888888", ui_fs=_fs))
                 return
             ts = trace.time_scale
+            detail = QWidget()
+            detail_lay = QHBoxLayout(detail)
+            detail_lay.setContentsMargins(0, 0, 0, 2)
+            detail_lay.setSpacing(6)
+            sel_lab = self._lbl(
+                "Select a core pair for investigation actions",
+                color="#888888", ui_fs=_fs)
+            detail_lay.addWidget(sel_lab, 1)
+            btn_events = QPushButton("Show Events")
+            btn_filter = QPushButton("Filter Timeline")
+            btn_stats = QPushButton("Open Statistics")
+            for b in (btn_events, btn_filter, btn_stats):
+                b.setCursor(Qt.CursorShape.PointingHandCursor)
+                b.setEnabled(False)
+                detail_lay.addWidget(b, 0)
+            blay.addWidget(detail)
+            selected: Dict[str, Any] = {}
+
+            def _set_pair(fc: str, tc: str, cnt: int, bnc: int, avg_gap: int) -> None:
+                selected.clear()
+                selected.update({
+                    "from": fc, "to": tc, "count": cnt,
+                    "bounces": bnc, "avg_gap": avg_gap,
+                })
+                pct = 100.0 * bnc / cnt if cnt else 0.0
+                sel_lab.setText(
+                    f"{fc} → {tc}  ·  count {cnt}  ·  bounce {bnc}"
+                    f" ({pct:.1f}%)  ·  avg gap {_format_time(avg_gap, ts)}")
+                for b in (btn_events, btn_filter, btn_stats):
+                    b.setEnabled(True)
+
+            def _on_show_events() -> None:
+                fc = str(selected.get("from") or "")
+                tc = str(selected.get("to") or "")
+                if not fc or not tc:
+                    return
+                migs = _pair_migrations(trace, fc, tc, lo, hi)
+                if not migs:
+                    return
+                first = migs[0]
+                mk = str(getattr(first, "merge_key", "") or "")
+                target = resolve_timestamp_evidence(
+                    first.ns, task="", mk=mk,
+                    note=f"Core-pair {fc} → {tc}",
+                    time_min=trace.time_min, time_max=trace.time_max)
+                if not target.get("ok"):
+                    return
+                self.segment_jump.emit(int(target["ns"]))
+                if mk:
+                    self.task_clicked.emit(mk)
+
+            def _on_filter_pair() -> None:
+                fc = str(selected.get("from") or "")
+                tc = str(selected.get("to") or "")
+                if not fc or not tc:
+                    return
+                migs = _pair_migrations(trace, fc, tc, lo, hi)
+                mks = []
+                seen = set()
+                for m in migs:
+                    mk = str(getattr(m, "merge_key", "") or "")
+                    if mk and mk not in seen:
+                        seen.add(mk)
+                        mks.append(mk)
+                if not mks:
+                    return
+                label = f"{fc} → {tc}"
+                self.filter_timeline_requested.emit(mks, label)
+
+            def _on_open_stats() -> None:
+                fc = str(selected.get("from") or "")
+                tc = str(selected.get("to") or "")
+                if not fc or not tc:
+                    return
+                self.scroll_to_section("core_pairs")
+                self._open_pair_plot(trace, fc, tc)
+
+            btn_events.clicked.connect(_on_show_events)
+            btn_filter.clicked.connect(_on_filter_pair)
+            btn_stats.clicked.connect(_on_open_stats)
+
             headers = ["From", "To", "Count", "Bounces", "Bounce %", "Avg Gap"]
             tbl = QTableWidget(len(_pair_rows), len(headers))
             tbl.setHorizontalHeaderLabels(headers)
@@ -59879,7 +61727,8 @@ class _StatsPanel(QWidget):
             tbl.horizontalHeader().setSectionsClickable(True)
             tbl.horizontalHeader().setSortIndicatorShown(True)
             tbl.setToolTip(
-                "Click a row to view Gap/Rate distribution for that core pair")
+                "Click a row to inspect this core pair "
+                "(Show Events / Filter Timeline / Open Statistics)")
             _item_bg = self._apply_stats_table_theme(tbl, _fs)
             for r, (fc, tc, cnt, bnc, avg_gap) in enumerate(_pair_rows):
                 pct = 100.0 * bnc / cnt if cnt else 0.0
@@ -59897,7 +61746,8 @@ class _StatsPanel(QWidget):
                         | Qt.AlignmentFlag.AlignVCenter)
                     item.setBackground(_item_bg)
                     if c == 0:
-                        item.setData(Qt.ItemDataRole.UserRole, (fc, tc))
+                        item.setData(
+                            Qt.ItemDataRole.UserRole, (fc, tc, cnt, bnc, avg_gap))
                     tbl.setItem(r, c, item)
             tbl.setSortingEnabled(True)
 
@@ -59906,8 +61756,12 @@ class _StatsPanel(QWidget):
                 if item is None:
                     return
                 pair = item.data(Qt.ItemDataRole.UserRole)
-                if isinstance(pair, tuple) and len(pair) == 2:
-                    self._open_pair_plot(trace, pair[0], pair[1])
+                if isinstance(pair, tuple) and len(pair) >= 2:
+                    fc, tc = pair[0], pair[1]
+                    cnt = int(pair[2]) if len(pair) > 2 else 0
+                    bnc = int(pair[3]) if len(pair) > 3 else 0
+                    avg_gap = int(pair[4]) if len(pair) > 4 else 0
+                    _set_pair(fc, tc, cnt, bnc, avg_gap)
 
             tbl.cellClicked.connect(_on_pair_row)
             self._wire_stats_table_row_hover(tbl)
@@ -60055,6 +61909,8 @@ class _StatsPanel(QWidget):
                 on_row_click=lambda mk: self._open_plot(trace, mk, "exec"),
                 on_min_click=lambda mk: self._on_bcet_click(trace, mk, lo, hi),
                 on_max_click=lambda mk: self._on_wcet_click(trace, mk, lo, hi),
+                on_p50_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "exec", lo, hi, 0.50),
                 on_p95_click=lambda mk: self._on_percentile_click(
                     trace, mk, "exec", lo, hi, 0.95),
                 on_p99_click=lambda mk: self._on_percentile_click(
@@ -60086,6 +61942,8 @@ class _StatsPanel(QWidget):
                     trace, mk, lo, hi, False),
                 on_max_click=lambda mk: self._on_blocking_extreme_click(
                     trace, mk, lo, hi, True),
+                on_p50_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "block", lo, hi, 0.50),
                 on_p95_click=lambda mk: self._on_percentile_click(
                     trace, mk, "block", lo, hi, 0.95),
                 on_p99_click=lambda mk: self._on_percentile_click(
@@ -60111,8 +61969,8 @@ class _StatsPanel(QWidget):
         def _populate_dispatch(blay: QVBoxLayout) -> None:
             _disp_rows_raw = self._dispatch_latency_rows(trace, lo, hi)
             _disp_rows = [
-                (mk, label, n, mn, avg, mx, jitter, stddev, p95, p99)
-                for (mk, label, n, mn, avg, mx, jitter, stddev, p95, p99,
+                (mk, label, n, mn, avg, mx, jitter, stddev, p50, p95, p99)
+                for (mk, label, n, mn, avg, mx, jitter, stddev, p50, p95, p99,
                      _min_seg, _max_seg) in _disp_rows_raw
             ]
             blay.addWidget(self._build_stats_table(
@@ -60127,6 +61985,12 @@ class _StatsPanel(QWidget):
                     trace, mk, lo, hi, False),
                 on_max_click=lambda mk: self._on_dispatch_extreme_click(
                     trace, mk, lo, hi, True),
+                on_p50_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "dispatch", lo, hi, 0.50),
+                on_p95_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "dispatch", lo, hi, 0.95),
+                on_p99_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "dispatch", lo, hi, 0.99),
             ))
 
         self._add_collapsible_section(
@@ -60150,6 +62014,8 @@ class _StatsPanel(QWidget):
                     trace, mk, lo, hi, False),
                 on_max_click=lambda mk: self._on_inter_extreme_click(
                     trace, mk, lo, hi, True),
+                on_p50_click=lambda mk: self._on_percentile_click(
+                    trace, mk, "inter", lo, hi, 0.50),
                 on_p95_click=lambda mk: self._on_percentile_click(
                     trace, mk, "inter", lo, hi, 0.95),
                 on_p99_click=lambda mk: self._on_percentile_click(
@@ -61355,6 +63221,9 @@ class _StatsPanel(QWidget):
             lbl.set_column_width(self._util_label_col_w)
         QTimer.singleShot(0, self.sync_util_layout)
         self._schedule_deferred_section_populate()
+        if self._preserve_scroll:
+            y = int(self._saved_scroll_y or 0)
+            QTimer.singleShot(0, lambda y=y: self._restore_scroll_y(y))
 
     def _add_stats_table_cap_note(self, blay: QVBoxLayout, note: Optional[str],
                                   ui_fs: str) -> None:
@@ -69846,11 +71715,26 @@ class _TraceTab:
 class _CommandPaletteDialog(QDialog):
     """Ctrl+K jump list for existing surfaces (no extra toolbar buttons)."""
 
-    def __init__(self, parent=None) -> None:
+    def __init__(
+        self,
+        parent=None,
+        *,
+        recent=None,
+        frequent=None,
+        is_available=None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Command palette")
         self.setModal(True)
         self.chosen = ""
+        self._recent = [str(x) for x in (recent or []) if x]
+        self._frequent = {}
+        for k, v in dict(frequent or {}).items():
+            try:
+                self._frequent[str(k)] = int(v)
+            except (TypeError, ValueError):
+                continue
+        self._is_available = is_available
         lay = QVBoxLayout(self)
         self._edit = QLineEdit()
         self._edit.setPlaceholderText("Jump to Analysis, Statistics, AI…")
@@ -69861,26 +71745,70 @@ class _CommandPaletteDialog(QDialog):
         hint = QLabel("Ctrl/Cmd+K · Enter to run · Esc to close")
         hint.setStyleSheet("color:#8a96a8;font-size:11px;")
         lay.addWidget(hint)
-        self.resize(420, 360)
+        self.resize(440, 380)
         self._edit.textChanged.connect(self._filter)
         self._list.itemActivated.connect(self._accept_item)
+        self._list.itemClicked.connect(self._accept_item)
         self._filter("")
 
+    def _availability(self, aid: str) -> Tuple[bool, str]:
+        if self._is_available is None:
+            return True, ""
+        try:
+            ok, reason = self._is_available(aid)
+            return bool(ok), str(reason or "")
+        except Exception:
+            return True, ""
+
     def _filter(self, text: str) -> None:
-        q = str(text or "").strip().lower()
         self._list.clear()
-        for aid, label in COMMAND_PALETTE_ACTIONS:
-            blob = str(label).lower()
-            if q and q not in blob:
-                continue
-            item = QListWidgetItem(label)
+        rows = command_palette_rank(
+            COMMAND_PALETTE_ACTIONS,
+            text,
+            recent_ids=self._recent,
+            frequent_counts=self._frequent,
+            availability_fn=self._availability,
+        )
+        for row in rows:
+            aid = str(row.get("id") or "")
+            label = str(row.get("label") or "")
+            shortcut = str(row.get("shortcut") or "")
+            available = bool(row.get("available", True))
+            reason = str(row.get("reason") or "")
+            item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, aid)
+            item.setData(Qt.ItemDataRole.UserRole + 1, available)
+            tip = reason if not available else (
+                f"{label}  ({shortcut})" if shortcut else label
+            )
+            item.setToolTip(tip)
+            if not available:
+                item.setForeground(QBrush(QColor("#8a96a8")))
+            row_w = QWidget()
+            row_w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            hl = QHBoxLayout(row_w)
+            hl.setContentsMargins(10, 4, 10, 4)
+            hl.setSpacing(8)
+            lab = QLabel(label)
+            if not available:
+                lab.setStyleSheet("color:#8a96a8;")
+            hl.addWidget(lab, 1)
+            if shortcut:
+                sc = QLabel(shortcut)
+                sc.setStyleSheet("color:#8a96a8;font-size:11px;")
+                hl.addWidget(sc, 0, Qt.AlignmentFlag.AlignRight)
+            item.setSizeHint(QSize(0, 30))
             self._list.addItem(item)
+            self._list.setItemWidget(item, row_w)
         if self._list.count():
             self._list.setCurrentRow(0)
 
     def _accept_item(self, item: QListWidgetItem) -> None:
         if item is None:
+            return
+        if item.data(Qt.ItemDataRole.UserRole + 1) is False:
+            tip = item.toolTip() or "Unavailable"
+            QToolTip.showText(self._list.mapToGlobal(self._list.visualItemRect(item).center()), tip, self._list)
             return
         self.chosen = str(item.data(Qt.ItemDataRole.UserRole) or "")
         self.accept()
@@ -70827,6 +72755,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._panel_dock.raise_()
         if self._panel_tabs.isTabVisible(tab_index):
             self._panel_tabs.setCurrentIndex(tab_index)
+
+    def _on_panel_tab_changed(self, index: int) -> None:
+        """When the AI tab becomes current, re-sync empty-state intent chips."""
+        if index != _PANEL_TAB_AI:
+            return
+        panel = getattr(self, "_ai_panel", None)
+        if panel is not None and hasattr(panel, "_on_ai_panel_shown"):
+            panel._on_ai_panel_shown()
 
     def _sync_panel_tab_visibility(self) -> None:
         """Apply show_stats / show_marks / show_find / show_ai to panel tab visibility."""
@@ -72797,6 +74733,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             on_jump=self._ai_jump_time_unit,
             on_range=self._ai_zoom_range_unit,
             on_highlight=self._ai_highlight_task,
+            on_open_stats=self._ai_open_stats_section,
             on_execute_tools=self._ai_execute_tools,
             on_undo_tools=self._ai_undo_tools,
             on_gui_state=self._ai_gui_state_for_report,
@@ -72813,6 +74750,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._panel_tabs.addTab(find_host, "Find")
         self._panel_tabs.addTab(self._legend_host, "Legend")
         self._panel_tabs.addTab(self._ai_panel, "AI")
+        self._panel_tabs.currentChanged.connect(self._on_panel_tab_changed)
 
         panel_dock = QDockWidget("", self)
         panel_dock.setObjectName("dock_panel")
@@ -72927,6 +74865,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel.core_clicked.connect(self._on_stats_core_clicked)
         self._stats_panel.open_pair_heatmap.connect(self._on_open_pair_heatmap)
         self._stats_panel.open_pair_chord.connect(self._on_open_pair_chord)
+        self._stats_panel.filter_timeline_requested.connect(
+            self._on_stats_filter_timeline)
         self._stats_panel.open_settings_requested.connect(self._open_settings)
         self._stats_panel.section_pins_changed.connect(self._on_section_pins_changed)
         self._stats_panel.section_order_changed.connect(self._on_section_order_changed)
@@ -74256,6 +76196,21 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if cpu is not None and hasattr(cpu, "set_core_expanded"):
             cpu.set_core_expanded(core, True)
         self._scroll_view_to_task(core)
+
+    def _ai_open_stats_section(self, section_id: str) -> None:
+        """AI Evidence link ``btfstats:section/…`` → Statistics section (no Scope change)."""
+        sid = str(section_id or "").strip()
+        if not sid:
+            return
+        tabs = getattr(self, "_panel_tabs", None)
+        if tabs is not None:
+            for i in range(tabs.count()):
+                if tabs.tabText(i).lower().startswith("stat"):
+                    tabs.setCurrentIndex(i)
+                    break
+        panel = getattr(self, "_stats_panel", None)
+        if panel is not None and hasattr(panel, "scroll_to_section"):
+            QTimer.singleShot(0, lambda s=sid: panel.scroll_to_section(s))
 
     # ------------------------------------------------------------------
     # Demo HTTP API (opt-in via BTFVIEWER_DEMO_API=1)
@@ -76170,14 +78125,171 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if panel is not None and hasattr(panel, "scroll_to_section"):
             QTimer.singleShot(0, lambda: panel.scroll_to_section(section_id))
 
+    def _investigate_compare_side(
+        self,
+        tab_index: int,
+        *,
+        section_id: str = "response",
+        task: str = "",
+        section_label: str = "",
+        tab_name: str = "",
+    ) -> None:
+        """Compare Investigate: switch tab, open Statistics section, optional highlight."""
+        tabs = getattr(self, "_tabs", None) or []
+        if not (0 <= int(tab_index) < len(tabs)):
+            return
+        tab_widget = getattr(self, "_tab_widget", None)
+        if tab_widget is not None and hasattr(tab_widget, "setCurrentIndex"):
+            tab_widget.setCurrentIndex(int(tab_index))
+        sid = str(section_id or "response").strip() or "response"
+        self._focus_statistics_panel(force=True)
+        panel = getattr(self, "_stats_panel", None)
+        if panel is not None and hasattr(panel, "scroll_to_section"):
+            QTimer.singleShot(0, lambda s=sid: panel.scroll_to_section(s))
+        task_name = str(task or "").strip()
+        if task_name:
+            QTimer.singleShot(0, lambda t=task_name: self._ai_highlight_task(t))
+        label = str(section_label or "").strip() or sid
+        name = str(tab_name or "").strip() or "trace"
+        self.statusBar().showMessage(f"Opened {label} on {name}", 4000)
+
+    def _show_finding_evidence(self, finding: dict) -> None:
+        """Step-2 Show Evidence — Timeline jump without changing Scope/Filters."""
+        if self._trace is None or not isinstance(finding, dict):
+            return
+        lo = hi = None
+        panel = getattr(self, "_stats_panel", None)
+        if panel is not None and getattr(panel, "_scope_to_cursors", False):
+            times = list(getattr(panel, "_cursor_times", None) or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+        evs = harvest_ux_events(self._trace, lo, hi)
+        target = resolve_finding_evidence(
+            finding, evs, self._trace.time_min, self._trace.time_max)
+        if not target.get("ok"):
+            self.statusBar().showMessage(
+                target.get("reason") or "No Timeline Evidence for this finding",
+                5000)
+            return
+        ns = int(target["ns"])
+        # Preserve Scope/Filters: do not call _apply_finding_scope / explore-range.
+        view = getattr(self, "_view", None)
+        if view is not None:
+            scene = getattr(view, "_scene", None)
+            if scene is not None and hasattr(scene, "add_cursor"):
+                existing = list(scene.cursor_times()) if hasattr(scene, "cursor_times") else []
+                near = any(abs(int(t) - ns) <= 1 for t in existing)
+                if not near:
+                    # Place one Evidence marker without clearing existing Scope cursors.
+                    max_c = max(2, int(getattr(self, "_max_cursors_val", 4) or 4))
+                    if len(existing) >= max_c and hasattr(scene, "clear_cursors"):
+                        # Prefer keeping Scope cursors: drop nothing; just jump.
+                        pass
+                    else:
+                        try:
+                            scene.add_cursor(ns)
+                            if hasattr(view, "cursors_changed"):
+                                view.cursors_changed.emit(scene.cursor_times())
+                        except Exception:
+                            pass
+            self._jump_to_ns(ns)
+        task = str(target.get("task") or finding.get("task") or "").strip()
+        mk = str(target.get("mk") or "").strip()
+        if mk or task:
+            self._ai_highlight_task(mk or task)
+        note = str(target.get("note") or "Evidence")
+        multi = " (one of several)" if target.get("multi") else ""
+        self.statusBar().showMessage(
+            f"Evidence{multi}: {note} @ {ns} ns — Scope/Filters unchanged",
+            6000)
+
+    def _palette_load_recent(self) -> List[str]:
+        raw = self._settings.get("palette", "recent_json", "[]")
+        try:
+            data = json.loads(raw or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        if not isinstance(data, list):
+            return []
+        out: List[str] = []
+        for x in data:
+            s = str(x or "")
+            if s and s not in out:
+                out.append(s)
+            if len(out) >= COMMAND_PALETTE_RECENT_MAX:
+                break
+        return out
+
+    def _palette_load_frequent(self) -> Dict[str, int]:
+        raw = self._settings.get("palette", "frequent_json", "{}")
+        try:
+            data = json.loads(raw or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        out: Dict[str, int] = {}
+        for k, v in data.items():
+            try:
+                out[str(k)] = int(v)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def _palette_bump_usage(self, action_id: str) -> None:
+        aid = str(action_id or "")
+        if not aid:
+            return
+        recent = [aid] + [x for x in self._palette_load_recent() if x != aid]
+        recent = recent[:COMMAND_PALETTE_RECENT_MAX]
+        freq = self._palette_load_frequent()
+        freq[aid] = int(freq.get(aid, 0) or 0) + 1
+        self._settings.set_many("palette", {
+            "recent_json": json.dumps(recent, ensure_ascii=True),
+            "frequent_json": json.dumps(freq, ensure_ascii=True),
+        })
+
+    def _palette_is_available(self, action_id: str) -> Tuple[bool, str]:
+        aid = str(action_id or "")
+        meta = COMMAND_PALETTE_META.get(aid) or {}
+        req = str(meta.get("requires") or "none")
+        disabled = str(meta.get("disabled") or "Unavailable")
+        if req in ("", "none"):
+            return True, ""
+        if req == "trace":
+            if self._trace is None:
+                return False, disabled or "Open a trace first"
+            return True, ""
+        if req == "two_traces":
+            if len(self._tabs) < 2:
+                return False, disabled or "Open at least two traces"
+            return True, ""
+        if req == "cursors2":
+            if not self._has_cursor_range():
+                return False, disabled or "Place at least two cursors (C1–Cn)"
+            return True, ""
+        return True, ""
+
     def _open_command_palette(self) -> None:
-        dlg = _CommandPaletteDialog(self)
+        dlg = _CommandPaletteDialog(
+            self,
+            recent=self._palette_load_recent(),
+            frequent=self._palette_load_frequent(),
+            is_available=self._palette_is_available,
+        )
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         self._run_command_palette_action(dlg.chosen)
 
     def _run_command_palette_action(self, action_id: str) -> None:
         aid = str(action_id or "")
+        if not aid:
+            return
+        ok, reason = self._palette_is_available(aid)
+        if not ok:
+            self.statusBar().showMessage(reason or "Unavailable", 4000)
+            return
+        self._palette_bump_usage(aid)
         if aid == "analysis":
             self._open_analysis_findings()
         elif aid == "statistics":
@@ -76262,12 +78374,32 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if len(times) >= 2:
                 lo, hi = min(times), max(times)
         evs = harvest_ux_events(self._trace, lo, hi)
+        def _on_ai_query(
+            template_id: str, finding_id: str, level: str, needs_settings: bool,
+        ) -> None:
+            """Ask AI while Findings stays open (Web non-modal inbox parity)."""
+            if needs_settings:
+                self._open_settings("AI")
+                return
+            self._focus_ai_panel()
+            panel = getattr(self, "_ai_panel", None)
+            tid = template_id or "findings"
+            extra = f"level={level}" if level else ""
+            if panel is not None and hasattr(panel, "query_template"):
+                QTimer.singleShot(
+                    0,
+                    lambda t=tid, fid=finding_id, ex=extra: panel.query_template(
+                        t, finding_id=fid, extra=ex),
+                )
+
         dlg = _AnalysisFindingsDialog(
             findings, scope_title, parent=self,
             ai_enabled=self._ai_feature_enabled(),
             ui_font_size=getattr(self, "_ui_font_size_val", UI_FONT_SIZE),
             on_apply_scope=self._apply_finding_scope,
             on_investigate=self._investigate_finding,
+            on_show_evidence=self._show_finding_evidence,
+            on_ai_query=_on_ai_query,
             ux_events=evs,
             time_min=self._trace.time_min,
             time_max=self._trace.time_max,
@@ -76275,26 +78407,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             is_dark=self._is_dark,
         )
         self._analysis_findings_dlg = dlg
-        dlg.exec()
-        if getattr(self, "_analysis_findings_dlg", None) is dlg:
-            self._analysis_findings_dlg = None
-        if not getattr(dlg, "wants_ai_query", False):
-            return
-        if getattr(dlg, "_ai_needs_settings", False):
-            self._open_settings("AI")
-            return
-        self._focus_ai_panel()
-        panel = getattr(self, "_ai_panel", None)
-        tid = getattr(dlg, "wants_ai_template", "findings") or "findings"
-        finding_id = getattr(dlg, "wants_ai_finding_id", "") or ""
-        level = getattr(dlg, "wants_ai_level", "") or ""
-        extra = f"level={level}" if level else ""
-        if panel is not None and hasattr(panel, "query_template"):
-            QTimer.singleShot(
-                0,
-                lambda t=tid, fid=finding_id, ex=extra: panel.query_template(
-                    t, finding_id=fid, extra=ex),
-            )
+
+        def _on_closed(*_args) -> None:
+            if getattr(self, "_analysis_findings_dlg", None) is dlg:
+                self._analysis_findings_dlg = None
+
+        dlg.finished.connect(_on_closed)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def _on_explain_region_with_ai(self) -> None:
         """Timeline context menu → Explain this region with AI."""
@@ -78750,6 +80871,22 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         else:
             sc.set_highlighted_task(task, locked=True)
             self._scroll_view_to_task(task)
+
+    def _on_stats_filter_timeline(self, merge_keys: list, label: str) -> None:
+        """Task × Core Filter Timeline — reuse heatmap task-filter APIs."""
+        keys = [str(k) for k in (merge_keys or []) if k]
+        if not keys:
+            return
+        tab = self._active_tab
+        if tab is None:
+            return
+        self._set_view_mode("task")
+        self._legend.set_migrated_only_checked(False)
+        lab = str(label or keys[0])
+        tab.view._scene.set_heatmap_task_filter(set(keys), label=lab)
+        self._legend.set_heatmap_filter(lab, keys)
+        self._sync_show_all_tasks_btn()
+        self._sync_active_filter_label()
 
     def _on_legend_task_hovered(self, task: Optional[str]) -> None:
         """Transient Legend hover -> timeline Highlight; never changes Selection."""

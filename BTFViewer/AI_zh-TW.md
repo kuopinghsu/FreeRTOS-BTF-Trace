@@ -308,6 +308,17 @@ AI 的輸出是對量測證據的解讀。接受結論前，應先確認證據�
 - 證據品質（Evidence Quality）：**Directly observed、Strong correlation、Possible explanation 或 Insufficient evidence**。
 - 其他可能的解釋，以及哪些證據可以推翻目前的結論。
 
+結構化調查回覆優先使用這些頂層標題：**Summary**、**Evidence**、**Confidence**、**Next check**（若 Finding 對應到 Statistics 區段，可附可點的 **Open Statistics → …**，使用 `btfstats:section/…`）。
+
+可操作的 Evidence 連結重用一般導航模型：
+
+* `btfjump:` — 跳到時間戳
+* `btfrange:`／Zoom C1–Cn — 放置游標並縮放範圍
+* `btfhighlight:` — 醒目提示工作
+* `btfstats:` — 開啟指定 Statistics 區段
+
+請求進行中時可用 **Stop** 取消；時間軸保持可回應，對話仍可見。失敗時會還原提示文字以便編輯後再次 **Send**。隱私晶片顯示 **Local**／**Cloud**；雲端傳送前可套用工作名稱遮罩與敏感追蹤封鎖。
+
 **Evidence & Validation** 面板會顯示結論狀態、可點擊的 **Direct evidence** 表、**Interpretation**、**Checks**、替代解釋、**Missing evidence** 及 **Next action**。品質等級、成本、工具理由與調查樹則放在 **Investigation details**。Evidence Quality 是用於診斷的啟發式指標，**不是機率值**。AI 完成最後回覆後，主程式驗證器會標示不存在的工作名稱，以及落在游標範圍之外的時間戳記。
 
 建議優先使用內建範本。這些範本已選好相關指標與 **Statistics** 頁面。必要時也可以使用自然語言，例如「find STI wait around TaskA」；主程式會將這類問題導向 `search_timeline`。

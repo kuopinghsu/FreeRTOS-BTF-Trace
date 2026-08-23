@@ -38,7 +38,12 @@ from .ai_investigation import (
     simulate_what_if,
     snapshot_from_summary,
 )
-from .html_report import btf_html_report_document
+from .html_report import (
+    HTML_REPORT_TOC_CSS,
+    HTML_REPORT_TOC_SCRIPT,
+    btf_html_report_document,
+    html_apply_collapsible_toc,
+)
 from .ai_planner import (
     assess_evidence_sufficiency,
     build_causal_chain,
@@ -319,6 +324,28 @@ def parse_btf_highlight_href(href: Any) -> str:
     if not m:
         return ""
     return urllib.parse.unquote(m.group(1).strip().lstrip("/"))
+
+
+_BTF_STATS_HREF_RE = re.compile(
+    r"^btfstats:(?:section/)?([A-Za-z0-9_\-]+)$", re.IGNORECASE)
+
+
+def btf_stats_href(section_id: str) -> str:
+    """Chat href that opens a Statistics section (Evidence Navigation)."""
+    sid = str(section_id or "").strip()
+    return f"btfstats:section/{sid}" if sid else "btfstats:section/"
+
+
+def parse_btf_stats_href(href: Any) -> str:
+    """Parse ``btfstats:section/SID`` or ``btfstats:SID``."""
+    raw = str(href or "").strip()
+    m = _BTF_STATS_HREF_RE.match(raw)
+    if m:
+        return str(m.group(1) or "").strip()
+    low = raw.lower()
+    if low.startswith("btfstats:"):
+        return raw.split(":", 1)[1].strip().lstrip("/").removeprefix("section/").strip()
+    return ""
 
 # Appended to the base system prompt. Keep in sync with web aiTools.js.
 AI_TOOL_SYSTEM_ADDENDUM = (
@@ -3842,6 +3869,7 @@ def build_ai_report_html(
     )
 
     body = (
+        "<!--TOC-->\n"
         f'<section class="report-card">\n'
         f"<h2>Executive summary</h2>\n"
         f"{''.join(exec_lines)}\n"
@@ -3871,12 +3899,19 @@ def build_ai_report_html(
         f"{appendix}\n"
         f"{note}\n"
         f"</section>\n"
+        f"{HTML_REPORT_TOC_SCRIPT}\n"
     )
-    return btf_html_report_document(
+    report = btf_html_report_document(
         "AI Diagnostic Report",
         body,
         subtitle=f"Saved {stamp} · mode={mode}",
+        extra_css=HTML_REPORT_TOC_CSS,
         doc_title="BTFViewer — AI Report",
+    )
+    # Same Expand all / Collapse all TOC chrome as Statistics HTML reports.
+    return html_apply_collapsible_toc(
+        report,
+        default_expanded=("Executive summary",),
     )
 
 

@@ -8,7 +8,7 @@ from .html_report import html_section_slug
 
 STATS_TOC_GROUPS = (
     ("Overview and Findings", (
-        "Analysis Scope", "Analysis Findings", "Trace Metadata",
+        "Analysis Scope", "Evidence Refs", "Analysis Findings", "Trace Metadata",
     )),
     ("CPU and Scheduling", (
         "Core Utilisation", "Trace Health (TICK)", "Core Time Breakdown",
@@ -188,6 +188,75 @@ def html_scope_identity_card(
         "<h2>Analysis Scope</h2>"
         f'<table class="meta-table scope-table"><tbody>{body}</tbody></table>'
         f"{note}</section>"
+    )
+
+
+def evidence_refs_from_findings(
+    findings: Sequence[dict],
+    *,
+    format_ns=None,
+    limit: int = 12,
+) -> list:
+    """Build ``{label, time_text}`` refs from Analysis Findings for HTML export."""
+    out: list = []
+    for f in findings or []:
+        if not isinstance(f, dict):
+            continue
+        label = str(f.get("title") or "Finding").strip() or "Finding"
+        times: list = []
+        for ev in f.get("evidence") or []:
+            if not isinstance(ev, dict):
+                continue
+            for key in ("time", "start", "stop", "ns"):
+                raw = ev.get(key)
+                if raw is None:
+                    continue
+                try:
+                    times.append(int(float(raw)))
+                except (TypeError, ValueError):
+                    continue
+                break
+        time_text = ""
+        if times and callable(format_ns):
+            try:
+                time_text = ", ".join(str(format_ns(t)) for t in times[:3])
+            except Exception:
+                time_text = ", ".join(str(t) for t in times[:3])
+        elif times:
+            time_text = ", ".join(str(t) for t in times[:3])
+        if not time_text:
+            et = str(f.get("evidence_text") or "").strip()
+            if et:
+                time_text = et[:160]
+        if not time_text:
+            continue
+        out.append({"label": label, "time_text": time_text})
+        if len(out) >= max(1, int(limit or 12)):
+            break
+    return out
+
+
+def html_evidence_refs_card(refs: Sequence[dict]) -> str:
+    """Compact Evidence refs card (label + time) for investigation exports."""
+    items = [r for r in (refs or []) if isinstance(r, dict) and (
+        str(r.get("label") or "").strip() or str(r.get("time_text") or "").strip()
+    )]
+    if not items:
+        return ""
+    body = "".join(
+        "<tr>"
+        f"<td>{_esc(r.get('label') or 'Finding')}</td>"
+        f"<td>{_esc(r.get('time_text') or '—')}</td>"
+        "</tr>"
+        for r in items
+    )
+    return (
+        '<section class="report-card" id="sec-evidence-refs">'
+        "<h2>Evidence Refs</h2>"
+        '<p class="detail-note">Timestamps and measured evidence from Analysis Findings '
+        "(export context; does not jump back into BTFViewer).</p>"
+        '<table class="meta-table"><thead><tr><th>Finding</th><th>Evidence / Time</th>'
+        f"</tr></thead><tbody>{body}</tbody></table></section>"
     )
 
 

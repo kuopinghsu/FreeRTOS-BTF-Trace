@@ -247,6 +247,13 @@ describe('aiTools', () => {
     assert.match(html, /Conversation export/)
     assert.match(html, /Rejected evidence/)
     assert.match(html, /In scope/)
+    assert.match(html, /class="report-toc"/)
+    assert.match(html, /data-toc="expand"/)
+    assert.match(html, /data-toc="collapse"/)
+    assert.match(html, /Expand all/)
+    assert.match(html, /Collapse all/)
+    assert.match(html, /<details class="report-card"/)
+    assert.match(html, /details\.report-appendix/)
     assert.match(html, /Excluded/)
   })
 

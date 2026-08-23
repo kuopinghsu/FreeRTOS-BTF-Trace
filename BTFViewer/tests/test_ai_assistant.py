@@ -1698,6 +1698,13 @@ class AiAssistantHelpersTests(unittest.TestCase):
         snake = normalize_ai_context({"findings_text": "x"})
         self.assertEqual(snake["findings_text"], "x")
         self.assertEqual(snake["cursors"], [])
+        with_filters = normalize_ai_context({
+            "scope": "C1–C2",
+            "filters": ["Task: Foo", "Migration: bar"],
+        })
+        self.assertEqual(
+            with_filters["filters"], ["Task: Foo", "Migration: bar"])
+        self.assertEqual(normalize_ai_context({}).get("filters"), [])
 
     def test_conversation_export_formats(self) -> None:
         entries = [

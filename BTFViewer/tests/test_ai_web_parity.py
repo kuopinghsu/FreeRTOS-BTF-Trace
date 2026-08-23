@@ -194,6 +194,9 @@ class AiWebParityTests(unittest.TestCase):
             ("def task_inspector_line", "export function taskInspectorLine"),
             ("def compare_summary_strip", "export function compareSummaryStrip"),
             ("def compare_notable_changes", "export function compareNotableChanges"),
+            ("def compare_investigate_target", "export function compareInvestigateTarget"),
+            ("def compare_section_for_metric", "export function compareSectionForMetric"),
+            ("def compare_task_for_row", "export function compareTaskForRow"),
             ("def compare_core_util_chart_svg", "export function compareCoreUtilChartSvg"),
             ("def compare_p99_delta_chart_svg", "export function compareP99DeltaChartSvg"),
             ("def compare_summary_change_bars_svg", "export function compareSummaryChangeBarsSvg"),
@@ -1611,14 +1614,25 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("user_investigation_templates", mw)
         app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
         self.assertIn("level=${level}", app)
-        self.assertIn("wants_ai_level", mw)
+        self.assertIn('extra = f"level={level}" if level else ""', mw)
         stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
+        self.assertIn("wants_ai_level", stats)
         dlg = (BTF_ROOT / "web/src/components/AnalysisFindingsDialog.vue").read_text(
             encoding="utf-8")
         self.assertIn("Explain…", stats)
         self.assertIn("Explain…", dlg)
         self.assertIn('"explain_finding"', stats)
         self.assertIn("'explain_finding'", dlg)
+        # Desktop Tool window ↔ Web floating tool host (not modal overlay / right dock).
+        self.assertIn("self.setModal(False)", stats)
+        self.assertIn("Qt.WindowType.Tool", stats)
+        self.assertIn('aria-modal="false"', dlg)
+        self.assertIn("analysis-tool-host", dlg)
+        self.assertIn("pointer-events: none", dlg)
+        self.assertNotIn("analysis-dock", dlg)
+        self.assertNotIn("dialog-overlay", dlg)
+        self.assertNotIn("dockRightPx", dlg)
+        self.assertNotIn("dock-right-px", app)
         for level in ("Quick", "Technical", "Deep"):
             self.assertIn(level, stats, level)
             self.assertIn(level, dlg, level)
@@ -1787,7 +1801,8 @@ class AiWebParityTests(unittest.TestCase):
         menu_ids = [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids]
         self.assertEqual(
             [g[0] for g in AI_TEMPLATE_MENU_GROUPS],
-            ["Diagnose", "Compare", "Metrics", "What-if / Optimize"],
+            ["Start", "Investigate", "SMP", "Verify", "Compare",
+             "What-if / Optimize"],
         )
         self.assertIn("v-for=\"group in templateMenuGroups\"", panel)
         self.assertIn("class=\"ai-more-col\"", panel)
@@ -1901,6 +1916,8 @@ class AiWebParityTests(unittest.TestCase):
             ("def html_finding_cards", "export function htmlFindingCards"),
             ("def html_investigate_anomalies", "export function htmlInvestigateAnomalies"),
             ("def html_scope_identity_card", "export function htmlScopeIdentityCard"),
+            ("def html_evidence_refs_card", "export function htmlEvidenceRefsCard"),
+            ("def evidence_refs_from_findings", "export function evidenceRefsFromFindings"),
             ("def html_matrix_heatmap", "export function htmlMatrixHeatmap"),
             ("def html_percentile_bars", "export function htmlPercentileBars"),
             ("def html_health_bars", "export function htmlHealthBars"),

@@ -50,10 +50,57 @@
       <div class="compare-formula">{{ compareFormula }}</div>
 
       <div
-        v-if="compareStripText"
-        class="compare-strip"
+        v-if="compareDecision.visible"
+        class="compare-decision"
       >
-        {{ compareStripText }}
+        <div class="compare-decision-identity">{{ compareDecision.identity }}</div>
+        <div class="compare-decision-counts">{{ compareDecision.counts }}</div>
+        <div
+          class="compare-decision-largest"
+          :class="{ clickable: compareDecision.largestClickable }"
+          :title="compareDecision.largestClickable
+            ? 'Open Statistics for this regression on the Candidate tab'
+            : undefined"
+          @click="compareDecision.largestClickable && investigateSide('b')"
+        >
+          {{ compareDecision.largest }}
+        </div>
+        <div
+          v-if="compareDecision.why"
+          class="compare-decision-why"
+        >
+          Why? {{ compareDecision.why }}
+        </div>
+        <div
+          v-if="compareDecision.next"
+          class="compare-decision-next"
+        >
+          {{ compareDecision.next }}
+        </div>
+        <div
+          v-if="compareDecision.sigNote"
+          class="compare-decision-sig"
+        >
+          {{ compareDecision.sigNote }}
+        </div>
+        <div class="compare-decision-actions">
+          <button
+            type="button"
+            class="compare-inspect-btn"
+            title="Open Statistics for the largest regression on this tab (preserves Scope/Filters)"
+            @click="investigateSide('a')"
+          >
+            Investigate on Baseline
+          </button>
+          <button
+            type="button"
+            class="compare-inspect-btn"
+            title="Open Statistics for the largest regression on this tab (preserves Scope/Filters)"
+            @click="investigateSide('b')"
+          >
+            Investigate on Candidate
+          </button>
+        </div>
       </div>
 
       <div class="compare-tabs" role="tablist">
@@ -742,6 +789,7 @@ import {
 } from '../utils/traceCompare.js'
 import {
   compareSummaryStrip,
+  compareInvestigateTarget,
   COMPARE_DELTA_FORMULA,
   compareCoreUtilChartRows,
   compareP99DeltaChartRows,
@@ -760,7 +808,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits([
-  'close', 'query-ai', 'validate-experiment', 'compared',
+  'close', 'query-ai', 'validate-experiment', 'compared', 'investigate',
   'save-baseline', 'score-baseline',
 ])
 
@@ -929,7 +977,7 @@ const sharedPatternRows = computed(() =>
 
 const compareFormula = COMPARE_DELTA_FORMULA
 
-const compareStripText = computed(() => {
+const compareDecision = computed(() => {
   const data = compareSummaryStrip({
     summary: summaryRows.value,
     execution: executionRows.value,
@@ -940,17 +988,60 @@ const compareStripText = computed(() => {
     shared_patterns: sharedPatternRows.value,
   }, 4, tabA.value?.name ?? '', tabB.value?.name ?? '')
   const notable = data.notable || {}
-  const parts = []
-  const verdict = String(notable.verdict || data.why || '').trim()
-  if (verdict) parts.push(verdict)
-  for (const row of (notable.rows || []).slice(0, 4)) {
-    parts.push(`${row.status}: ${row.label} ${row.change}`)
+  const identity = notable.identity || {}
+  const idA = identity.a || {}
+  const idB = identity.b || {}
+  const nameA = tabA.value?.name || 'Baseline'
+  const nameB = tabB.value?.name || 'Candidate'
+  const cards = notable.cards || {}
+  const regs = data.regressions || []
+  const nReg = Number(cards.regressions ?? regs.length) || 0
+  const nImp = Number(cards.improvements ?? (data.improvements || []).length) || 0
+  const nWarn = Number(cards.warnings ?? (data.warnings || []).length) || 0
+  const top = regs[0]
+  const largest = top
+    ? `Largest regression — ${top.label}: ${top.change}`
+    : (String(notable.verdict || '').trim() || 'No significant regressions')
+  const why = String(data.why || '').trim()
+  const next = String(notable.next_investigation || '').trim()
+  const omitted = Number(notable.small_omitted_count || 0) || 0
+  const sigNote = (Number(cards.significant || 0) || omitted)
+    ? 'Showing engineering-significant deltas only (small changes omitted)'
+    : ''
+  const visible = !!(nReg || nImp || nWarn || top || why || next || notable.verdict)
+  const investigate = notable.investigate || compareInvestigateTarget(notable)
+  return {
+    visible,
+    identity:
+      `Baseline: ${nameA} · Scope ${idA.span || 'Full Trace'}    |    ` +
+      `Candidate: ${nameB} · Scope ${idB.span || 'Full Trace'}`,
+    counts:
+      `${nReg} REGRESSIONS    ${nImp} IMPROVEMENTS` +
+      (nWarn ? `    ${nWarn} WARNING${nWarn === 1 ? '' : 'S'}` : ''),
+    largest,
+    largestClickable: !!top,
+    why,
+    next,
+    sigNote,
+    investigate,
   }
-  for (const warn of (data.warnings || []).slice(0, 2)) {
-    parts.push(`Warning: ${warn}`)
-  }
-  return parts.join('  ·  ')
 })
+
+function investigateSide(side) {
+  const id = side === 'a' ? tabAId.value : tabBId.value
+  const tab = side === 'a' ? tabA.value : tabB.value
+  const target = compareDecision.value.investigate || compareInvestigateTarget()
+  emit('close')
+  if (id == null) return
+  emit('compared', { idA: tabAId.value, idB: tabBId.value })
+  emit('investigate', {
+    activateId: id,
+    sectionId: target.section_id || target.section || 'response',
+    task: target.task || '',
+    sectionLabel: target.section_label || '',
+    tabName: tab?.name || '',
+  })
+}
 
 function exportTables() {
   const tables = buildAllCompareTables(
@@ -1238,6 +1329,68 @@ function onScoreBaseline() {
   color: var(--fg-dim);
 }
 
+.compare-decision {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(52, 152, 219, 0.10);
+  color: var(--fg-dim, #9a9a9a);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.compare-decision-identity {
+  color: var(--fg-dim, #9a9a9a);
+  font-size: 11px;
+}
+.compare-decision-counts {
+  margin-top: 4px;
+  color: var(--fg, #cfd8dc);
+  font-weight: 600;
+}
+.compare-decision-largest {
+  margin-top: 4px;
+  color: var(--fg, #e0e0e0);
+}
+.compare-decision-largest.clickable {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--fg, #e0e0e0) 35%, transparent);
+}
+.compare-decision-largest.clickable:hover {
+  color: var(--accent, #0e639c);
+}
+.compare-decision-why {
+  margin-top: 2px;
+  color: var(--fg-dim, #9a9a9a);
+  font-size: 11px;
+}
+.compare-decision-next {
+  margin-top: 2px;
+  color: var(--fg-dim, #b0bec5);
+  font-size: 11px;
+}
+.compare-decision-sig {
+  margin-top: 2px;
+  color: var(--fg-dim, #7a8690);
+  font-size: 10px;
+}
+.compare-decision-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+.compare-inspect-btn {
+  cursor: pointer;
+  border: 1px solid var(--border, #444);
+  background: var(--bg-elevated, #2a2a2a);
+  color: var(--fg, #eee);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+}
+.compare-inspect-btn:hover {
+  border-color: #5dade2;
+}
 .compare-strip {
   margin: 8px 14px 0;
   padding: 8px 10px;

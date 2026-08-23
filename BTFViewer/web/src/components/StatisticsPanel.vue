@@ -64,6 +64,7 @@
     <div
       ref="statsBodyRef"
       class="stats-body"
+      @scroll.passive="onStatsBodyScroll"
     >
     <!-- Summary and sections (require loaded trace) -->
     <template v-if="trace">
@@ -583,6 +584,30 @@
           class="stats-table-block"
         >
           <div
+            v-if="migrationSummary.hasData"
+            class="migration-summary-strip"
+          >
+            <span class="migration-summary-text">{{ migrationSummaryText }}</span>
+            <button
+              v-if="migrationSummary.topTask"
+              type="button"
+              class="migration-summary-btn"
+              title="Open Task × Core for the most migrated task"
+              @click="onMigrationSummaryTask"
+            >
+              Task × Core
+            </button>
+            <button
+              v-if="migrationSummary.topPair"
+              type="button"
+              class="migration-summary-btn"
+              title="Open Core-Pair heatmap"
+              @click="onMigrationSummaryPair"
+            >
+              Core pair
+            </button>
+          </div>
+          <div
             class="stats-table-wrap"
             :style="{ maxHeight: tableHeight('migrations') + 'px' }"
           >
@@ -715,6 +740,36 @@
           v-else
           class="stats-table-block"
         >
+          <div class="task-core-actions">
+            <span class="task-core-sel">{{ corePairSelectionLabel }}</span>
+            <button
+              type="button"
+              class="migration-summary-btn"
+              :disabled="!corePairSelection"
+              title="Jump to the first migration on this corridor"
+              @click="onCorePairShowEvents"
+            >
+              Show Events
+            </button>
+            <button
+              type="button"
+              class="migration-summary-btn"
+              :disabled="!corePairSelection"
+              title="Filter Timeline to tasks that migrate on this corridor"
+              @click="onCorePairFilterTimeline"
+            >
+              Filter Timeline
+            </button>
+            <button
+              type="button"
+              class="migration-summary-btn"
+              :disabled="!corePairSelection"
+              title="Expand this section and open the Gap/Rate distribution"
+              @click="onCorePairOpenStatistics"
+            >
+              Open Statistics
+            </button>
+          </div>
           <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('core_pairs') + 'px' }">
             <table class="stats-table">
               <thead>
@@ -732,11 +787,12 @@
                   v-for="row in sortedCorePairRows"
                   :key="`${row.fromCore}-${row.toCore}`"
                   class="stats-table-row clickable"
-                  :title="`Click to view Gap/Rate distribution for ${row.fromCore} → ${row.toCore}`"
+                  :class="{ selected: corePairSelection?.fromCore === row.fromCore && corePairSelection?.toCore === row.toCore }"
+                  :title="`Click to inspect ${row.fromCore} → ${row.toCore}`"
                   tabindex="0"
-                  @click="openPairPlot(row.fromCore, row.toCore)"
-                  @keydown.enter.prevent="openPairPlot(row.fromCore, row.toCore)"
-                  @keydown.space.prevent="openPairPlot(row.fromCore, row.toCore)"
+                  @click="selectCorePair(row)"
+                  @keydown.enter.prevent="selectCorePair(row)"
+                  @keydown.space.prevent="selectCorePair(row)"
                 >
                   <td class="task-col">{{ row.fromCore }}</td>
                   <td class="task-col">{{ row.toCore }}</td>
@@ -1128,6 +1184,12 @@
                   σ
                 </th>
                 <th
+                  :class="thSortClass('exec', 'p50')"
+                  @click="toggleTableSort('exec', 'p50')"
+                >
+                  p50
+                </th>
+                <th
                   :class="thSortClass('exec', 'p95')"
                   @click="toggleTableSort('exec', 'p95')"
                 >
@@ -1165,26 +1227,33 @@
                 <td>{{ row.avg }}</td>
                 <td
                   class="extreme-col"
-                  :title="`Jump to longest slice for ${row.name}`"
+                  :title="EVIDENCE_TOOLTIP"
                   @click.stop="jumpToSegment(row.mk, 'exec', true)"
                 >
-                  {{ row.max }}
+                  {{ row.max }} {{ EVIDENCE_GLYPH }}
                 </td>
                 <td>{{ row.jitter }}</td>
                 <td>{{ row.stddev }}</td>
                 <td
                   class="extreme-col"
-                  :title="`Jump to the p95 slice for ${row.name}`"
-                  @click.stop="jumpToPercentile(row.mk, 'exec', 0.95)"
+                  :title="EVIDENCE_TOOLTIP"
+                  @click.stop="jumpToPercentile(row.mk, 'exec', 0.50)"
                 >
-                  {{ row.p95 }}
+                  {{ row.p50 }} {{ EVIDENCE_GLYPH }}
                 </td>
                 <td
                   class="extreme-col"
-                  :title="`Jump to the p99 slice for ${row.name}`"
+                  :title="EVIDENCE_TOOLTIP"
+                  @click.stop="jumpToPercentile(row.mk, 'exec', 0.95)"
+                >
+                  {{ row.p95 }} {{ EVIDENCE_GLYPH }}
+                </td>
+                <td
+                  class="extreme-col"
+                  :title="EVIDENCE_TOOLTIP"
                   @click.stop="jumpToPercentile(row.mk, 'exec', 0.99)"
                 >
-                  {{ row.p99 }}
+                  {{ row.p99 }} {{ EVIDENCE_GLYPH }}
                 </td>
               </tr>
             </tbody>
@@ -1279,6 +1348,12 @@
                   σ
                 </th>
                 <th
+                  :class="thSortClass('block', 'p50')"
+                  @click="toggleTableSort('block', 'p50')"
+                >
+                  p50
+                </th>
+                <th
                   :class="thSortClass('block', 'p95')"
                   @click="toggleTableSort('block', 'p95')"
                 >
@@ -1315,26 +1390,33 @@
                 <td>{{ row.avg }}</td>
                 <td
                   class="extreme-col"
-                  :title="`Jump to longest blocking gap for ${row.name}`"
+                  :title="EVIDENCE_TOOLTIP"
                   @click.stop="jumpToSegment(row.mk, 'block', true)"
                 >
-                  {{ row.max }}
+                  {{ row.max }} {{ EVIDENCE_GLYPH }}
                 </td>
                 <td>{{ row.jitter }}</td>
                 <td>{{ row.stddev }}</td>
                 <td
                   class="extreme-col"
-                  :title="`Jump to the p95 blocking gap for ${row.name}`"
-                  @click.stop="jumpToPercentile(row.mk, 'block', 0.95)"
+                  :title="EVIDENCE_TOOLTIP"
+                  @click.stop="jumpToPercentile(row.mk, 'block', 0.50)"
                 >
-                  {{ row.p95 }}
+                  {{ row.p50 }} {{ EVIDENCE_GLYPH }}
                 </td>
                 <td
                   class="extreme-col"
-                  :title="`Jump to the p99 blocking gap for ${row.name}`"
+                  :title="EVIDENCE_TOOLTIP"
+                  @click.stop="jumpToPercentile(row.mk, 'block', 0.95)"
+                >
+                  {{ row.p95 }} {{ EVIDENCE_GLYPH }}
+                </td>
+                <td
+                  class="extreme-col"
+                  :title="EVIDENCE_TOOLTIP"
                   @click.stop="jumpToPercentile(row.mk, 'block', 0.99)"
                 >
-                  {{ row.p99 }}
+                  {{ row.p99 }} {{ EVIDENCE_GLYPH }}
                 </td>
               </tr>
             </tbody>
@@ -1431,6 +1513,12 @@
                     σ
                   </th>
                   <th
+                    :class="thSortClass('dispatch', 'p50')"
+                    @click="toggleTableSort('dispatch', 'p50')"
+                  >
+                    p50
+                  </th>
+                  <th
                     :class="thSortClass('dispatch', 'p95')"
                     @click="toggleTableSort('dispatch', 'p95')"
                   >
@@ -1467,15 +1555,34 @@
                   <td>{{ row.avg }}</td>
                   <td
                     class="extreme-col"
-                    :title="`Jump to longest dispatch latency for ${row.label}`"
+                    :title="EVIDENCE_TOOLTIP"
                     @click.stop="jumpToDispatchExtreme(row, true)"
                   >
-                    {{ row.max }}
+                    {{ row.max }} {{ EVIDENCE_GLYPH }}
                   </td>
                   <td>{{ row.jitter }}</td>
                   <td>{{ row.stddev }}</td>
-                  <td>{{ row.p95 }}</td>
-                  <td>{{ row.p99 }}</td>
+                  <td
+                    class="extreme-col"
+                    :title="EVIDENCE_TOOLTIP"
+                    @click.stop="jumpToPercentile(row.mk, 'dispatch', 0.50)"
+                  >
+                    {{ row.p50 }} {{ EVIDENCE_GLYPH }}
+                  </td>
+                  <td
+                    class="extreme-col"
+                    :title="EVIDENCE_TOOLTIP"
+                    @click.stop="jumpToPercentile(row.mk, 'dispatch', 0.95)"
+                  >
+                    {{ row.p95 }} {{ EVIDENCE_GLYPH }}
+                  </td>
+                  <td
+                    class="extreme-col"
+                    :title="EVIDENCE_TOOLTIP"
+                    @click.stop="jumpToPercentile(row.mk, 'dispatch', 0.99)"
+                  >
+                    {{ row.p99 }} {{ EVIDENCE_GLYPH }}
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -1569,6 +1676,12 @@
                   σ
                 </th>
                 <th
+                  :class="thSortClass('inter', 'p50')"
+                  @click="toggleTableSort('inter', 'p50')"
+                >
+                  p50
+                </th>
+                <th
                   :class="thSortClass('inter', 'p95')"
                   @click="toggleTableSort('inter', 'p95')"
                 >
@@ -1605,26 +1718,33 @@
                 <td>{{ row.avg }}</td>
                 <td
                   class="extreme-col"
-                  :title="`Jump to longest inter-arrival for ${row.name}`"
+                  :title="EVIDENCE_TOOLTIP"
                   @click.stop="jumpToSegment(row.mk, 'inter', true)"
                 >
-                  {{ row.max }}
+                  {{ row.max }} {{ EVIDENCE_GLYPH }}
                 </td>
                 <td>{{ row.jitter }}</td>
                 <td>{{ row.stddev }}</td>
                 <td
                   class="extreme-col"
-                  :title="`Jump to the p95 inter-arrival for ${row.name}`"
-                  @click.stop="jumpToPercentile(row.mk, 'inter', 0.95)"
+                  :title="EVIDENCE_TOOLTIP"
+                  @click.stop="jumpToPercentile(row.mk, 'inter', 0.50)"
                 >
-                  {{ row.p95 }}
+                  {{ row.p50 }} {{ EVIDENCE_GLYPH }}
                 </td>
                 <td
                   class="extreme-col"
-                  :title="`Jump to the p99 inter-arrival for ${row.name}`"
+                  :title="EVIDENCE_TOOLTIP"
+                  @click.stop="jumpToPercentile(row.mk, 'inter', 0.95)"
+                >
+                  {{ row.p95 }} {{ EVIDENCE_GLYPH }}
+                </td>
+                <td
+                  class="extreme-col"
+                  :title="EVIDENCE_TOOLTIP"
                   @click.stop="jumpToPercentile(row.mk, 'inter', 0.99)"
                 >
-                  {{ row.p99 }}
+                  {{ row.p99 }} {{ EVIDENCE_GLYPH }}
                 </td>
               </tr>
             </tbody>
@@ -1787,11 +1907,11 @@
                   <td>{{ row.n }}</td>
                   <td class="extreme-col" @click="onResponseCellClick(row, 'min_ev')">{{ formatTime(row.min_ns, timeScale) }}</td>
                   <td>{{ formatTime(row.avg_ns, timeScale) }}</td>
-                  <td class="extreme-col" @click="onResponseCellClick(row, 'max_ev')">{{ formatTime(row.max_ns, timeScale) }}</td>
-                  <td class="extreme-col" @click="onResponseCellClick(row, 'p50_ev')">{{ formatTime(row.p50_ns, timeScale) }}</td>
+                  <td class="extreme-col" :title="EVIDENCE_TOOLTIP" @click="onResponseCellClick(row, 'max_ev')">{{ formatTime(row.max_ns, timeScale) }} {{ EVIDENCE_GLYPH }}</td>
+                  <td class="extreme-col" :title="EVIDENCE_TOOLTIP" @click="onResponseCellClick(row, 'p50_ev')">{{ formatTime(row.p50_ns, timeScale) }} {{ EVIDENCE_GLYPH }}</td>
                   <td class="extreme-col" @click="onResponseCellClick(row, 'p90_ev')">{{ formatTime(row.p90_ns, timeScale) }}</td>
-                  <td class="extreme-col" @click="onResponseCellClick(row, 'p95_ev')">{{ formatTime(row.p95_ns, timeScale) }}</td>
-                  <td class="extreme-col" @click="onResponseCellClick(row, 'p99_ev')">{{ formatTime(row.p99_ns, timeScale) }}</td>
+                  <td class="extreme-col" :title="EVIDENCE_TOOLTIP" @click="onResponseCellClick(row, 'p95_ev')">{{ formatTime(row.p95_ns, timeScale) }} {{ EVIDENCE_GLYPH }}</td>
+                  <td class="extreme-col" :title="EVIDENCE_TOOLTIP" @click="onResponseCellClick(row, 'p99_ev')">{{ formatTime(row.p99_ns, timeScale) }} {{ EVIDENCE_GLYPH }}</td>
                   <td class="extreme-col" @click="onResponseCellClick(row, 'p999_ev')">{{ formatTime(row.p999_ns, timeScale) }}</td>
                   <td class="extreme-col" @click="onResponseCellClick(row, 'worst_ev')">{{ formatTime(row.jitter_ns, timeScale) }}</td>
                   <td>{{ ((row.cv || 0) * 100).toFixed(1) }}%</td>
@@ -2985,6 +3105,33 @@
           v-else
           class="stats-table-block"
         >
+          <div class="task-core-actions">
+            <span class="task-core-sel">{{ taskCoreSelectionLabel }}</span>
+            <button
+              type="button"
+              class="migration-summary-btn"
+              :disabled="!taskCoreSelection?.mk"
+              @click="onTaskCoreHighlight"
+            >
+              Highlight Task
+            </button>
+            <button
+              type="button"
+              class="migration-summary-btn"
+              :disabled="!taskCoreSelection?.mk"
+              @click="onTaskCoreFilter"
+            >
+              Filter Timeline
+            </button>
+            <button
+              type="button"
+              class="migration-summary-btn"
+              :disabled="!taskCoreSelection?.mk"
+              @click="onTaskCoreShowMigrations"
+            >
+              Show Migrations
+            </button>
+          </div>
           <div
             class="stats-table-wrap"
             :style="{ maxHeight: tableHeight('task_core') + 'px' }"
@@ -4063,7 +4210,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, watch, onBeforeUnmount, nextTick, provide } from 'vue'
 import DomSelect from './DomSelect.vue'
 import { toBlob as domToBlob, toSvg as domToSvg } from 'html-to-image'
 import { formatTime, isStiTagChannel } from '../renderer/TimelineRenderer.js'
@@ -4125,7 +4272,8 @@ import { buildCoreAffinityRows } from '../utils/coreAffinityAnalysis.js'
 import { formatMigrationGapTime } from '../utils/timeFormat.js'
 import { computeDeadlineViolations, deadlineSliceAnnotationNote } from '../utils/deadlineAnalysis.js'
 import { intervalInstanceDetailRows } from '../utils/intervalAnalysis.js'
-import { migrationRows, buildCorePairRows, buildCoreTimeBreakdown, migrationDwellPlotPoints, migrationRatePlotPoints, migrationGapPlotPoints, pairGapPlotPoints, pairRatePlotPoints, pairPlotKey, pairMigrations, pairBouncePrefer, buildLockBounceNsSet } from '../utils/migrationAnalysis.js'
+import { EVIDENCE_GLYPH, EVIDENCE_TOOLTIP, resolveTimestampEvidence } from '../utils/evidenceNav.js'
+import { migrationRows, buildCorePairRows, summarizeMigrations, buildCoreTimeBreakdown, migrationDwellPlotPoints, migrationRatePlotPoints, migrationGapPlotPoints, pairGapPlotPoints, pairRatePlotPoints, pairPlotKey, pairMigrations, pairBouncePrefer, buildLockBounceNsSet } from '../utils/migrationAnalysis.js'
 import { dispatchLatencyRows, switchOverheadRows, concurrentCoreActiveRows, dispatchLatencyPlotPoints, switchOverheadPlotPoints, concurrencyLevelPlotPoints, collectDispatchLatencyByMk } from '../utils/schedulerSmpMetrics.js'
 import { coreUtilPctRows } from '../utils/traceCompare.js'
 import { renderWorkflowAnalysisHtml, collectTraceAnalysisFindings } from '../utils/workflowAnalysis.js'
@@ -4197,6 +4345,7 @@ import {
   STATS_HTML_EXTRA_CSS,
   STATS_TOC_GROUPS,
   htmlDiagnosticKpiGrid,
+  htmlEvidenceRefsCard,
   htmlGlossary,
   htmlHealthBars,
   htmlInvestigateAnomalies,
@@ -4205,6 +4354,7 @@ import {
   htmlScopeIdentityCard,
   htmlTagOverview,
   htmlTraceMetadataCard,
+  evidenceRefsFromFindings,
 } from '../utils/statsHtmlReport.js'
 import {
   HEALTH_BAND_SECTION,
@@ -4253,7 +4403,7 @@ const emit = defineEmits([
   'update:scopeToCursors', 'update:sectionCollapsedState', 'update:sectionPins',
   'update:sectionOrder',
   'openPairHeatmap', 'openPairChord', 'openSettings',
-  'exploreRange', 'query-ai',
+  'exploreRange', 'query-ai', 'filterTimeline',
 ])
 
 const aiFeatureEnabled = computed(() => props.analysisSettings?.aiEnabled !== false)
@@ -4413,6 +4563,7 @@ function toggleSectionCollapse(id) {
 
 function expandAllSections() {
   for (const flag of STATS_SECTION_FLAGS) flag.value = false
+  clearScrollTailPin()
   emitCollapsedState()
 }
 
@@ -4421,28 +4572,42 @@ function collapseAllSections() {
     if (pinnedSet.value.has(id)) continue
     flag.value = true
   }
+  clearScrollTailPin()
   emitCollapsedState()
 }
 
 const statsBodyRef = ref(null)
 const statsTailRef = ref(null)
+const savedScrollTop = ref(0)
+const skipScrollRestore = ref(false)
+let scrollTailPinActive = false
+
+function onStatsBodyScroll() {
+  const body = statsBodyRef.value
+  if (!body) return
+  savedScrollTop.value = body.scrollTop
+}
 
 function sleepMs(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-function updateScrollTailHeight() {
-  // Web parity with desktop: keep the tail at 0 during normal browsing so the
-  // last section (Tag Analysis) has no blank below it. Grow only while a
-  // demo/AI scroll pins a section header near the top of the viewport.
+function updateScrollTailHeight(forPin = false) {
+  // Desktop lockstep: height 0 at rest; grow only while demo/AI pin-scroll is active.
   const body = statsBodyRef.value
   const tail = statsTailRef.value
   if (!body || !tail) return
+  if (forPin) scrollTailPinActive = true
+  if (!scrollTailPinActive) {
+    tail.style.height = '0px'
+    return
+  }
   const vh = body.clientHeight
-  tail.style.height = `${Math.max(0, vh - 48)}px`
+  tail.style.height = `${Math.max(0, vh - 24)}px`
 }
 
 function clearScrollTailPin() {
+  scrollTailPinActive = false
   const tail = statsTailRef.value
   if (tail) tail.style.height = '0px'
 }
@@ -4455,6 +4620,7 @@ function parseDemoSectionIds(raw) {
 async function scrollDemoSectionIntoView(scroll, ids, expand) {
   const body = statsBodyRef.value
   if (!body) return
+  skipScrollRestore.value = true
   const key = String(scroll || '').trim().toLowerCase()
   if (['top', '0', 'start'].includes(key)) {
     clearScrollTailPin()
@@ -4466,7 +4632,7 @@ async function scrollDemoSectionIntoView(scroll, ids, expand) {
   if (key && !['section', 'focus', '1', 'true', 'yes', ''].includes(key)) {
     if (SECTION_COLLAPSE_REFS[key] || ids.includes(key)) focus = key
   }
-  updateScrollTailHeight()
+  updateScrollTailHeight(true)
   let elapsed = 0
   for (const mark of [0, 50, 150, 280]) {
     if (mark > elapsed) await sleepMs(mark - elapsed)
@@ -4500,7 +4666,7 @@ async function applyDemoSections(payload = {}) {
     if (flag && !pinnedSet.value.has(id)) flag.value = !expand
   }
   await nextTick()
-  updateScrollTailHeight()
+  // Do not grow the tail here — scrollDemoSectionIntoView pins with forPin=true.
   await scrollDemoSectionIntoView(scroll, ids, expand)
   return { ids, expand, collapse_others: collapseOthers, scroll }
 }
@@ -4553,6 +4719,7 @@ function formatStatsRow(row, scale) {
     maxNs: row.max,
     jitterNs: row.jitter,
     stddevNs: row.stddev,
+    p50Ns: row.p50,
     p95Ns: row.p95,
     p99Ns: row.p99,
     min: formatTime(row.min, scale),
@@ -4560,6 +4727,7 @@ function formatStatsRow(row, scale) {
     max: formatTime(row.max, scale),
     jitter: formatTime(row.jitter, scale),
     stddev: formatTime(row.stddev, scale),
+    p50: formatTime(row.p50, scale),
     p95: formatTime(row.p95, scale),
     p99: formatTime(row.p99, scale),
   }
@@ -4879,6 +5047,35 @@ const placedCursorCount = computed(() => getPlacedCursors(props.cursors).length)
 const statsRange = computed(() => getStatsRange(props.cursors, scopeToCursorsModel.value))
 
 const scopeSuffixStr = computed(() => scopeSuffix(statsRange.value))
+
+/** Rebuild key: scope / filter / trace changes wipe content — restore scroll. */
+const statsRebuildKey = computed(() => {
+  const r = statsRange.value
+  const scopeKey = r ? `${r.lo}:${r.hi}:${r.nCursors}` : 'full'
+  const tr = props.trace
+  const traceKey = tr ? `${tr.timeMin}:${tr.timeMax}:${tr.tasks?.length || 0}` : 'none'
+  return `${traceKey}|${scopeKey}|${props.activeFilterLabel || ''}|${props.scopeToCursors ? 1 : 0}`
+})
+
+watch(statsRebuildKey, async () => {
+  const y = savedScrollTop.value
+  await nextTick()
+  if (skipScrollRestore.value) {
+    skipScrollRestore.value = false
+    return
+  }
+  const body = statsBodyRef.value
+  if (body) body.scrollTop = y
+})
+
+const scopeChipLabel = computed(() => {
+  const r = statsRange.value
+  return r ? `C1–C${r.nCursors}` : ''
+})
+const filterChipLabel = computed(() => props.activeFilterLabel || '')
+provide('statsHeaderScopeLabel', scopeChipLabel)
+provide('statsHeaderFilterLabel', filterChipLabel)
+
 const timeScale = computed(() => props.trace?.timeScale || 'ns')
 const uxEvents = computed(() => {
   const tr = props.trace
@@ -5052,11 +5249,13 @@ function onJitterCellClick(row, kind) {
 function onTaskCoreCellClick(row, core) {
   if (!row) return
   if (!core) {
+    taskCoreSelection.value = { mk: row.mk, task: row.task, core: '' }
     emit('highlightTask', row.mk)
     return
   }
   const cell = row.cells?.[core]
   if (!cell?.ns) return
+  taskCoreSelection.value = { mk: row.mk, task: row.task, core }
   onUxEventClick({
     kind: 'exec',
     task: row.task,
@@ -5067,6 +5266,32 @@ function onTaskCoreCellClick(row, core) {
     jump_ns: cell.jump_ns,
     section: 'task_core',
   })
+}
+
+const taskCoreSelection = ref(null)
+const taskCoreSelectionLabel = computed(() => {
+  const s = taskCoreSelection.value
+  if (!s?.mk) return 'Select a cell for investigation actions'
+  if (s.core) return `Selected: ${s.task || s.mk} @ ${s.core}`
+  return `Selected: ${s.task || s.mk}`
+})
+
+function onTaskCoreHighlight() {
+  const mk = taskCoreSelection.value?.mk
+  if (mk) emit('highlightTask', mk)
+}
+
+function onTaskCoreFilter() {
+  const s = taskCoreSelection.value
+  if (!s?.mk) return
+  const label = s.core ? `${s.task || s.mk} @ ${s.core}` : (s.task || s.mk)
+  emit('filterTimeline', { mergeKeys: [s.mk], pairLabel: label })
+}
+
+function onTaskCoreShowMigrations() {
+  const mk = taskCoreSelection.value?.mk
+  if (mk) emit('highlightTask', mk)
+  applyDemoSections({ id: 'migrations', expand: true, scroll: 'migrations', collapse_others: false })
 }
 
 function onWaitOwnerCellClick(cell) {
@@ -5386,6 +5611,41 @@ const migrationStats = computed(() => {
   return migrationRows(tr, lo, hi)
 })
 
+const migrationSummary = computed(() => {
+  const tr = props.trace
+  if (!tr) return { hasData: false }
+  const r = statsRange.value
+  return summarizeMigrations(tr, r?.lo ?? null, r?.hi ?? null)
+})
+
+const migrationSummaryText = computed(() => {
+  const s = migrationSummary.value || {}
+  if (!s.hasData) return ''
+  const bits = [
+    `Total ${s.total || 0}`,
+    `Rate ${s.rateLabel || '—'}`,
+    `Median dwell ${s.medianDwell || '—'}`,
+  ]
+  if (s.topTask) bits.push(`Most migrated ${s.topTask.name} (${s.topTask.count})`)
+  if (s.topPair) bits.push(`Hottest ${s.topPair.from}→${s.topPair.to} (${s.topPair.count})`)
+  if (s.thrashHint) bits.push(s.thrashHint)
+  return bits.join(' · ')
+})
+
+function onMigrationSummaryTask() {
+  const top = migrationSummary.value?.topTask
+  if (!top?.mk) return
+  emit('highlightTask', top.mk)
+  applyDemoSections({ id: 'task_core', expand: true, scroll: 'task_core', collapse_others: false })
+}
+
+function onMigrationSummaryPair() {
+  const pair = migrationSummary.value?.topPair
+  if (!pair?.from || !pair?.to) return
+  applyDemoSections({ id: 'core_pairs', expand: true, scroll: 'core_pairs', collapse_others: false })
+  emit('openPairHeatmap', { fromCore: pair.from, toCore: pair.to })
+}
+
 const sortedMigrationStats = computed(() =>
   sortStatsRows(migrationStats.value, tableSort.value.migrations, MIGRATION_SORT_ACCESSORS))
 
@@ -5500,6 +5760,66 @@ const corePairRows = computed(() => {
 
 const sortedCorePairRows = computed(() =>
   sortStatsRows(corePairRows.value, tableSort.value.core_pairs, CORE_PAIR_SORT_ACCESSORS))
+
+const corePairSelection = ref(null)
+watch(corePairRows, () => { corePairSelection.value = null })
+const corePairSelectionLabel = computed(() => {
+  const s = corePairSelection.value
+  if (!s) return 'Select a core pair for investigation actions'
+  const pct = s.count ? (100 * s.bounces / s.count) : 0
+  return `${s.fromCore} → ${s.toCore}  ·  count ${s.count}  ·  bounce ${s.bounces} (${pct.toFixed(1)}%)  ·  avg gap ${formatMigGapNs(s.avgGapNs)}`
+})
+
+function selectCorePair(row) {
+  if (!row) return
+  corePairSelection.value = row
+}
+
+function onCorePairShowEvents() {
+  const s = corePairSelection.value
+  const tr = props.trace
+  if (!s || !tr) return
+  const r = statsRange.value
+  const migs = pairMigrations(tr, s.fromCore, s.toCore, r?.lo ?? null, r?.hi ?? null)
+  if (!migs.length) return
+  const first = migs[0]
+  const mk = first.mergeKey || ''
+  const target = resolveTimestampEvidence(first.ns, {
+    mk,
+    note: `Core-pair ${s.fromCore} → ${s.toCore}`,
+    timeMin: tr.timeMin,
+    timeMax: tr.timeMax,
+  })
+  if (!target.ok) return
+  emit('segmentJump', target.ns)
+  if (mk) emit('highlightTask', mk)
+}
+
+function onCorePairFilterTimeline() {
+  const s = corePairSelection.value
+  const tr = props.trace
+  if (!s || !tr) return
+  const r = statsRange.value
+  const migs = pairMigrations(tr, s.fromCore, s.toCore, r?.lo ?? null, r?.hi ?? null)
+  const mks = []
+  const seen = new Set()
+  for (const m of migs) {
+    const mk = m.mergeKey || ''
+    if (!mk || seen.has(mk)) continue
+    seen.add(mk)
+    mks.push(mk)
+  }
+  if (!mks.length) return
+  emit('filterTimeline', { mergeKeys: mks, pairLabel: `${s.fromCore} → ${s.toCore}` })
+}
+
+function onCorePairOpenStatistics() {
+  const s = corePairSelection.value
+  if (!s) return
+  skipScrollRestore.value = true
+  applyDemoSections({ id: 'core_pairs', expand: true, scroll: 'core_pairs', collapse_others: false })
+  openPairPlot(s.fromCore, s.toCore)
+}
 
 const coreTimeBreakdown = computed(() => {
   const tr = props.trace
@@ -7933,6 +8253,9 @@ function exportHtml() {
     ? 'Few execution samples in this scope; percentiles and comparisons may be unreliable.'
     : ''
   const tab = (props.tabs || []).find(t => t.trace === tr)
+  const filterParts = []
+  if (r) filterParts.push('Limit to C1–Cn')
+  if (props.activeFilterLabel) filterParts.push(String(props.activeFilterLabel))
   const scopeHtml = htmlScopeIdentityCard({
     filename: tab?.name || 'trace',
     scopeType: r ? `Cursor range C1–C${r.nCursors}` : 'Full trace',
@@ -7940,11 +8263,14 @@ function exportHtml() {
     end: endS,
     duration: spanStr.value,
     cores: (tr.coreNames || []).length,
-    filters: r ? 'Limit to C1–Cn' : 'None',
+    filters: filterParts.length ? filterParts.join('; ') : 'None',
     timestampMode: 'Trace capture origin (not wall-clock)',
     taskCount: summaryTaskCount.value,
     sampleNote,
   })
+  const evidenceRefsHtml = htmlEvidenceRefsCard(evidenceRefsFromFindings(findings, {
+    formatNs: ns => formatTime(ns, tr.timeScale),
+  }))
   const metaHtml = htmlTraceMetadataCard({
     span: spanStr.value,
     tasks: summaryTaskCount.value,
@@ -7971,6 +8297,7 @@ function exportHtml() {
     ${htmlDiagnosticKpiGrid(kpis)}
     <!--TOC-->
     ${scopeHtml}
+    ${evidenceRefsHtml}
     ${analysisHtml}
     ${metaHtml}
     ${coreHtml}
@@ -8459,6 +8786,7 @@ watch(() => props.cursors, (cursors) => {
 }, { deep: true })
 
 watch(() => props.trace, () => {
+  clearScrollTailPin()
   scheduleStatsRefresh()
 }, { immediate: true })
 
@@ -8679,6 +9007,35 @@ defineExpose({
   overflow-wrap: anywhere;
   word-break: break-word;
   min-width: 0;
+}
+
+.migration-summary-strip,
+.task-core-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.migration-summary-text,
+.task-core-sel {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.migration-summary-btn {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.migration-summary-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .deadline-settings-hint {
@@ -9029,6 +9386,9 @@ defineExpose({
 .stats-table-row.clickable,
 .stats-table tbody tr.clickable-row {
   cursor: pointer;
+}
+.stats-table-row.clickable.selected td {
+  background: rgba(52, 152, 219, 0.16);
 }
 
 .stats-table-row.clickable:focus-visible td,

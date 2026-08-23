@@ -752,7 +752,11 @@ class AiPanelUiTests(unittest.TestCase):
         idx = lay.indexOf(panel._split)
         self.assertGreaterEqual(idx, 0)
         self.assertEqual(lay.stretch(idx), 1)
-        self.assertIs(panel._log.parentWidget(), panel._split_top)
+        # Empty intent + conversation share a stacked frame under split-top
+        # (Web `.ai-log > .ai-empty` parity).
+        self.assertIs(panel._log.parentWidget(), panel._log_stack)
+        self.assertIs(panel._log_stack.parentWidget(), panel._log_frame)
+        self.assertIs(panel._log_frame.parentWidget(), panel._split_top)
         self.assertIs(panel._composer.parentWidget(), panel._split_bottom)
         self.assertFalse(isinstance(panel._log.parentWidget(), QScrollArea))
         self.assertTrue(panel._plan_host.isHidden())
@@ -1015,8 +1019,8 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertGreater(tpl_h_narrow, tpl_h_wide)
 
         headings = [
-            "Diagnose", "Compare", "Metrics", "What-if / Optimize",
-            "Investigations", "Knowledge",
+            "Start", "Investigate", "SMP", "Verify", "Compare",
+            "What-if / Optimize", "Investigations", "Knowledge",
         ]
         labels = [
             w.text() for w in panel._more_menu.findChildren(QLabel)

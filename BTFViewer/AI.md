@@ -337,6 +337,17 @@ Important conclusions should include:
 - evidence quality: **Directly observed**, **Strong correlation**, **Possible explanation**, or **Insufficient evidence**;
 - alternative explanations and what would disprove the conclusion.
 
+Primary structured investigation replies prefer these top-level headings: **Summary**, **Evidence**, **Confidence**, and **Next check** (with optional clickable **Open Statistics → …** links using `btfstats:section/…` when a Finding maps to a Statistics section).
+
+Actionable Evidence links reuse the normal navigation model:
+
+* `btfjump:` — Jump to a timestamp
+* `btfrange:` / Zoom C1–Cn — place cursors and zoom the range
+* `btfhighlight:` — Highlight a task
+* `btfstats:` — Open the named Statistics section
+
+While a request is in flight, **Stop** cancels it; Timeline stays responsive and the conversation remains visible. On failure, the prompt is restored so you can edit and **Send** again. The privacy chip shows **Local** vs **Cloud**; optional task-name redaction and sensitive-trace blocking apply before cloud send.
+
 The Evidence & Validation panel shows:
 
 - conclusion **Status** (Confirmed / Correlated / Suspected / Not observed / Insufficient data);

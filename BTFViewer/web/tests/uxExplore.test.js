@@ -8,6 +8,9 @@ import {
   collectWorstEvents,
   compareSummaryStrip,
   compareNotableChanges,
+  compareInvestigateTarget,
+  compareSectionForMetric,
+  compareTaskForRow,
   compareCoreUtilChartRows,
   compareCoreUtilChartSvg,
   compareP99DeltaChartRows,
@@ -310,6 +313,15 @@ describe('uxExplore', () => {
     assert.ok(notable.cards.regressions > 0)
     assert.ok(notable.cards.improvements > 0)
     assert.match(notable.verdict, /Candidate B/)
+    assert.ok(notable.rows.every(r => r.significance === 'engineering'))
+    assert.ok(String(notable.next_investigation || '').startsWith('Next:'))
+    assert.ok('small_omitted_count' in notable)
+    assert.ok(notable.investigate)
+    assert.equal(notable.investigate.section_id || notable.investigate.section, 'response')
+    assert.ok(notable.rows.every(r => r.section))
+    assert.equal(compareSectionForMetric('T1 exec max', 'exec max'), 'exec')
+    assert.equal(compareTaskForRow('QP[198] response p99', 'response p99'), 'QP[198]')
+    assert.equal(compareInvestigateTarget({ rows: [] }).section_id, 'response')
   })
 
   it('compare charts and migration views', () => {

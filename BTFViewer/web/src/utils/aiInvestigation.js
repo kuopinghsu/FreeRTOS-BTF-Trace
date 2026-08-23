@@ -240,7 +240,7 @@ export function enrichFindingsWithIds(findings) {
 }
 
 export function formatFindingsEvidenceChain(findings) {
-  const lines = ['### Evidence chain', '']
+  const lines = ['## Evidence', '']
   if (!findings?.length) {
     lines.push('_No findings in scope._')
     return lines.join('\n')
@@ -2425,6 +2425,48 @@ const REPORT_TYPES = new Set([
   'optimization', 'bug', 'ci',
 ])
 
+function openStatisticsNextCheck(finding) {
+  if (!finding || typeof finding !== 'object') return ''
+  const inspect = String(finding.inspect || '').trim()
+  const task = String(finding.task || '').trim()
+  const fid = String(finding.id || '').trim()
+  // Lockstep with workflowAnalysis FINDING_SECTION_MAP / config FINDING_SECTION_MAP
+  // (inline to avoid circular import with workflowAnalysis.js).
+  const SECTION_MAP = {
+    load_imbalance: 'cores',
+    load_balance_ok: 'cores',
+    load_balance_moderate: 'cores',
+    top_cpu: 'tasks',
+    exec_max: 'exec',
+    blocking: 'block',
+    priority_inversion: 'priority',
+    thrashing: 'migrations',
+    hot_pairs: 'core_pairs',
+    deadlines: 'deadline',
+    tick_health: 'health',
+    missed_ticks: 'health',
+    sync_bounce: 'sync',
+    sync_issues: 'sync',
+    migration_burst_anomaly: 'migrations',
+    wcet_anomaly: 'exec',
+  }
+  const sid = String(SECTION_MAP[fid] || '').trim()
+  let label = ''
+  if (inspect && task) {
+    const section = inspect.split(' (', 2)[0].trim() || inspect
+    label = `Open ${section} → ${task}`
+  } else if (inspect) {
+    const section = inspect.split(' (', 2)[0].trim() || inspect
+    label = `Open ${section}`
+  } else if (task) {
+    label = `Open Statistics → ${task}`
+  } else {
+    return ''
+  }
+  if (sid) return `[${label}](btfstats:section/${sid})`
+  return label
+}
+
 export function generateStructuredReport(findings, {
   reportType = 'performance', focusId = '', compare = null,
 } = {}) {
@@ -2456,7 +2498,7 @@ export function generateStructuredReport(findings, {
   } else {
     lines.push('## Summary', 'No single focus finding; ranked anomalies below.', '')
   }
-  lines.push('## Key findings')
+  lines.push('## Evidence')
   for (const a of (anomalies.anomalies || []).slice(0, 6)) {
     lines.push(`${a.rank}. [${a.band}] ${a.title} — ${a.id}`)
   }
@@ -2482,13 +2524,17 @@ export function generateStructuredReport(findings, {
     }
   }
   lines.push(
-    '## Recommended actions',
-    '1. Place cursors / zoom on the worst episode (`set_cursors`, `zoom_to_range`).',
-    '2. Highlight the focus task and verify on the timeline.',
-    '3. Re-run Trace Compare or `compare_performance` after a fix.',
-    '',
     '## Confidence',
     'Medium — structured from Analysis Findings; confirm with tool evidence.',
+    '',
+    '## Next check',
+  )
+  const openLine = openStatisticsNextCheck(focus)
+  if (openLine) lines.push(`- ${openLine}`)
+  lines.push(
+    '- Place cursors / zoom on the worst episode (`set_cursors`, `zoom_to_range`).',
+    '- Highlight the focus task and verify on the timeline.',
+    '- Re-run Trace Compare or `compare_performance` after a fix.',
     '',
   )
   const md = lines.join('\n')

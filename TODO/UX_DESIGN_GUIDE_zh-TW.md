@@ -1726,24 +1726,12 @@ UX Design Guide 負責定義 Interaction Model 與 Design Rules。
 
 ## Step 2 — Evidence-Driven Analysis and Guided Investigation
 
-參考：
+**完成。** 行為記載於 `BTFViewer/README.md`、`WORKFLOWS.md`、`STATISTICS.md`、
+`AI.md`（Evidence Navigation、Findings inbox、Migration corridor 細節、
+Compare → Decision、AI Evidence／Confidence／Privacy、匯出脈絡、Command Palette、
+調查脈絡例外）。
 
-```text
-TODO-step2.md
-```
-
-重點：
-
-* Universal Evidence Navigation
-* Investigation Context Preservation
-* Statistics Drill-down
-* Migration Workflow
-* AI Workflow
-* AI Evidence / Confidence
-* Trace Compare
-* Compare → Decision
-* Exported Context
-* Expert Navigation
+後續 polish 項目見 Step 3。
 
 ---
 

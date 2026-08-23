@@ -175,6 +175,7 @@ from .mvvm.tab_viewport import apply_viewport, viewport_from_json, viewport_to_j
 from .trace_quality import trace_quality_summary
 from .perfetto_export import export_perfetto
 from .ux_explore import best_finding_scope, harvest_ux_events, finding_overlay_times, task_inspector_line
+from .evidence_nav import resolve_finding_evidence
 
 class _CpuLoadScrollArea(QScrollArea):
     """Scroll host for the CPU load graph — pane height comes from the splitter, not row count."""
@@ -1695,11 +1696,26 @@ class _TraceTab:
 class _CommandPaletteDialog(QDialog):
     """Ctrl+K jump list for existing surfaces (no extra toolbar buttons)."""
 
-    def __init__(self, parent=None) -> None:
+    def __init__(
+        self,
+        parent=None,
+        *,
+        recent=None,
+        frequent=None,
+        is_available=None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Command palette")
         self.setModal(True)
         self.chosen = ""
+        self._recent = [str(x) for x in (recent or []) if x]
+        self._frequent = {}
+        for k, v in dict(frequent or {}).items():
+            try:
+                self._frequent[str(k)] = int(v)
+            except (TypeError, ValueError):
+                continue
+        self._is_available = is_available
         lay = QVBoxLayout(self)
         self._edit = QLineEdit()
         self._edit.setPlaceholderText("Jump to Analysis, Statistics, AI…")
@@ -1710,26 +1726,70 @@ class _CommandPaletteDialog(QDialog):
         hint = QLabel("Ctrl/Cmd+K · Enter to run · Esc to close")
         hint.setStyleSheet("color:#8a96a8;font-size:11px;")
         lay.addWidget(hint)
-        self.resize(420, 360)
+        self.resize(440, 380)
         self._edit.textChanged.connect(self._filter)
         self._list.itemActivated.connect(self._accept_item)
+        self._list.itemClicked.connect(self._accept_item)
         self._filter("")
 
+    def _availability(self, aid: str) -> Tuple[bool, str]:
+        if self._is_available is None:
+            return True, ""
+        try:
+            ok, reason = self._is_available(aid)
+            return bool(ok), str(reason or "")
+        except Exception:
+            return True, ""
+
     def _filter(self, text: str) -> None:
-        q = str(text or "").strip().lower()
         self._list.clear()
-        for aid, label in COMMAND_PALETTE_ACTIONS:
-            blob = str(label).lower()
-            if q and q not in blob:
-                continue
-            item = QListWidgetItem(label)
+        rows = command_palette_rank(
+            COMMAND_PALETTE_ACTIONS,
+            text,
+            recent_ids=self._recent,
+            frequent_counts=self._frequent,
+            availability_fn=self._availability,
+        )
+        for row in rows:
+            aid = str(row.get("id") or "")
+            label = str(row.get("label") or "")
+            shortcut = str(row.get("shortcut") or "")
+            available = bool(row.get("available", True))
+            reason = str(row.get("reason") or "")
+            item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, aid)
+            item.setData(Qt.ItemDataRole.UserRole + 1, available)
+            tip = reason if not available else (
+                f"{label}  ({shortcut})" if shortcut else label
+            )
+            item.setToolTip(tip)
+            if not available:
+                item.setForeground(QBrush(QColor("#8a96a8")))
+            row_w = QWidget()
+            row_w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            hl = QHBoxLayout(row_w)
+            hl.setContentsMargins(10, 4, 10, 4)
+            hl.setSpacing(8)
+            lab = QLabel(label)
+            if not available:
+                lab.setStyleSheet("color:#8a96a8;")
+            hl.addWidget(lab, 1)
+            if shortcut:
+                sc = QLabel(shortcut)
+                sc.setStyleSheet("color:#8a96a8;font-size:11px;")
+                hl.addWidget(sc, 0, Qt.AlignmentFlag.AlignRight)
+            item.setSizeHint(QSize(0, 30))
             self._list.addItem(item)
+            self._list.setItemWidget(item, row_w)
         if self._list.count():
             self._list.setCurrentRow(0)
 
     def _accept_item(self, item: QListWidgetItem) -> None:
         if item is None:
+            return
+        if item.data(Qt.ItemDataRole.UserRole + 1) is False:
+            tip = item.toolTip() or "Unavailable"
+            QToolTip.showText(self._list.mapToGlobal(self._list.visualItemRect(item).center()), tip, self._list)
             return
         self.chosen = str(item.data(Qt.ItemDataRole.UserRole) or "")
         self.accept()
@@ -2676,6 +2736,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._panel_dock.raise_()
         if self._panel_tabs.isTabVisible(tab_index):
             self._panel_tabs.setCurrentIndex(tab_index)
+
+    def _on_panel_tab_changed(self, index: int) -> None:
+        """When the AI tab becomes current, re-sync empty-state intent chips."""
+        if index != _PANEL_TAB_AI:
+            return
+        panel = getattr(self, "_ai_panel", None)
+        if panel is not None and hasattr(panel, "_on_ai_panel_shown"):
+            panel._on_ai_panel_shown()
 
     def _sync_panel_tab_visibility(self) -> None:
         """Apply show_stats / show_marks / show_find / show_ai to panel tab visibility."""
@@ -4646,6 +4714,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             on_jump=self._ai_jump_time_unit,
             on_range=self._ai_zoom_range_unit,
             on_highlight=self._ai_highlight_task,
+            on_open_stats=self._ai_open_stats_section,
             on_execute_tools=self._ai_execute_tools,
             on_undo_tools=self._ai_undo_tools,
             on_gui_state=self._ai_gui_state_for_report,
@@ -4662,6 +4731,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._panel_tabs.addTab(find_host, "Find")
         self._panel_tabs.addTab(self._legend_host, "Legend")
         self._panel_tabs.addTab(self._ai_panel, "AI")
+        self._panel_tabs.currentChanged.connect(self._on_panel_tab_changed)
 
         panel_dock = QDockWidget("", self)
         panel_dock.setObjectName("dock_panel")
@@ -4776,6 +4846,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel.core_clicked.connect(self._on_stats_core_clicked)
         self._stats_panel.open_pair_heatmap.connect(self._on_open_pair_heatmap)
         self._stats_panel.open_pair_chord.connect(self._on_open_pair_chord)
+        self._stats_panel.filter_timeline_requested.connect(
+            self._on_stats_filter_timeline)
         self._stats_panel.open_settings_requested.connect(self._open_settings)
         self._stats_panel.section_pins_changed.connect(self._on_section_pins_changed)
         self._stats_panel.section_order_changed.connect(self._on_section_order_changed)
@@ -6105,6 +6177,21 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if cpu is not None and hasattr(cpu, "set_core_expanded"):
             cpu.set_core_expanded(core, True)
         self._scroll_view_to_task(core)
+
+    def _ai_open_stats_section(self, section_id: str) -> None:
+        """AI Evidence link ``btfstats:section/…`` → Statistics section (no Scope change)."""
+        sid = str(section_id or "").strip()
+        if not sid:
+            return
+        tabs = getattr(self, "_panel_tabs", None)
+        if tabs is not None:
+            for i in range(tabs.count()):
+                if tabs.tabText(i).lower().startswith("stat"):
+                    tabs.setCurrentIndex(i)
+                    break
+        panel = getattr(self, "_stats_panel", None)
+        if panel is not None and hasattr(panel, "scroll_to_section"):
+            QTimer.singleShot(0, lambda s=sid: panel.scroll_to_section(s))
 
     # ------------------------------------------------------------------
     # Demo HTTP API (opt-in via BTFVIEWER_DEMO_API=1)
@@ -8016,14 +8103,171 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if panel is not None and hasattr(panel, "scroll_to_section"):
             QTimer.singleShot(0, lambda: panel.scroll_to_section(section_id))
 
+    def _investigate_compare_side(
+        self,
+        tab_index: int,
+        *,
+        section_id: str = "response",
+        task: str = "",
+        section_label: str = "",
+        tab_name: str = "",
+    ) -> None:
+        """Compare Investigate: switch tab, open Statistics section, optional highlight."""
+        tabs = getattr(self, "_tabs", None) or []
+        if not (0 <= int(tab_index) < len(tabs)):
+            return
+        tab_widget = getattr(self, "_tab_widget", None)
+        if tab_widget is not None and hasattr(tab_widget, "setCurrentIndex"):
+            tab_widget.setCurrentIndex(int(tab_index))
+        sid = str(section_id or "response").strip() or "response"
+        self._focus_statistics_panel(force=True)
+        panel = getattr(self, "_stats_panel", None)
+        if panel is not None and hasattr(panel, "scroll_to_section"):
+            QTimer.singleShot(0, lambda s=sid: panel.scroll_to_section(s))
+        task_name = str(task or "").strip()
+        if task_name:
+            QTimer.singleShot(0, lambda t=task_name: self._ai_highlight_task(t))
+        label = str(section_label or "").strip() or sid
+        name = str(tab_name or "").strip() or "trace"
+        self.statusBar().showMessage(f"Opened {label} on {name}", 4000)
+
+    def _show_finding_evidence(self, finding: dict) -> None:
+        """Step-2 Show Evidence — Timeline jump without changing Scope/Filters."""
+        if self._trace is None or not isinstance(finding, dict):
+            return
+        lo = hi = None
+        panel = getattr(self, "_stats_panel", None)
+        if panel is not None and getattr(panel, "_scope_to_cursors", False):
+            times = list(getattr(panel, "_cursor_times", None) or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+        evs = harvest_ux_events(self._trace, lo, hi)
+        target = resolve_finding_evidence(
+            finding, evs, self._trace.time_min, self._trace.time_max)
+        if not target.get("ok"):
+            self.statusBar().showMessage(
+                target.get("reason") or "No Timeline Evidence for this finding",
+                5000)
+            return
+        ns = int(target["ns"])
+        # Preserve Scope/Filters: do not call _apply_finding_scope / explore-range.
+        view = getattr(self, "_view", None)
+        if view is not None:
+            scene = getattr(view, "_scene", None)
+            if scene is not None and hasattr(scene, "add_cursor"):
+                existing = list(scene.cursor_times()) if hasattr(scene, "cursor_times") else []
+                near = any(abs(int(t) - ns) <= 1 for t in existing)
+                if not near:
+                    # Place one Evidence marker without clearing existing Scope cursors.
+                    max_c = max(2, int(getattr(self, "_max_cursors_val", 4) or 4))
+                    if len(existing) >= max_c and hasattr(scene, "clear_cursors"):
+                        # Prefer keeping Scope cursors: drop nothing; just jump.
+                        pass
+                    else:
+                        try:
+                            scene.add_cursor(ns)
+                            if hasattr(view, "cursors_changed"):
+                                view.cursors_changed.emit(scene.cursor_times())
+                        except Exception:
+                            pass
+            self._jump_to_ns(ns)
+        task = str(target.get("task") or finding.get("task") or "").strip()
+        mk = str(target.get("mk") or "").strip()
+        if mk or task:
+            self._ai_highlight_task(mk or task)
+        note = str(target.get("note") or "Evidence")
+        multi = " (one of several)" if target.get("multi") else ""
+        self.statusBar().showMessage(
+            f"Evidence{multi}: {note} @ {ns} ns — Scope/Filters unchanged",
+            6000)
+
+    def _palette_load_recent(self) -> List[str]:
+        raw = self._settings.get("palette", "recent_json", "[]")
+        try:
+            data = json.loads(raw or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        if not isinstance(data, list):
+            return []
+        out: List[str] = []
+        for x in data:
+            s = str(x or "")
+            if s and s not in out:
+                out.append(s)
+            if len(out) >= COMMAND_PALETTE_RECENT_MAX:
+                break
+        return out
+
+    def _palette_load_frequent(self) -> Dict[str, int]:
+        raw = self._settings.get("palette", "frequent_json", "{}")
+        try:
+            data = json.loads(raw or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        out: Dict[str, int] = {}
+        for k, v in data.items():
+            try:
+                out[str(k)] = int(v)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def _palette_bump_usage(self, action_id: str) -> None:
+        aid = str(action_id or "")
+        if not aid:
+            return
+        recent = [aid] + [x for x in self._palette_load_recent() if x != aid]
+        recent = recent[:COMMAND_PALETTE_RECENT_MAX]
+        freq = self._palette_load_frequent()
+        freq[aid] = int(freq.get(aid, 0) or 0) + 1
+        self._settings.set_many("palette", {
+            "recent_json": json.dumps(recent, ensure_ascii=True),
+            "frequent_json": json.dumps(freq, ensure_ascii=True),
+        })
+
+    def _palette_is_available(self, action_id: str) -> Tuple[bool, str]:
+        aid = str(action_id or "")
+        meta = COMMAND_PALETTE_META.get(aid) or {}
+        req = str(meta.get("requires") or "none")
+        disabled = str(meta.get("disabled") or "Unavailable")
+        if req in ("", "none"):
+            return True, ""
+        if req == "trace":
+            if self._trace is None:
+                return False, disabled or "Open a trace first"
+            return True, ""
+        if req == "two_traces":
+            if len(self._tabs) < 2:
+                return False, disabled or "Open at least two traces"
+            return True, ""
+        if req == "cursors2":
+            if not self._has_cursor_range():
+                return False, disabled or "Place at least two cursors (C1–Cn)"
+            return True, ""
+        return True, ""
+
     def _open_command_palette(self) -> None:
-        dlg = _CommandPaletteDialog(self)
+        dlg = _CommandPaletteDialog(
+            self,
+            recent=self._palette_load_recent(),
+            frequent=self._palette_load_frequent(),
+            is_available=self._palette_is_available,
+        )
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         self._run_command_palette_action(dlg.chosen)
 
     def _run_command_palette_action(self, action_id: str) -> None:
         aid = str(action_id or "")
+        if not aid:
+            return
+        ok, reason = self._palette_is_available(aid)
+        if not ok:
+            self.statusBar().showMessage(reason or "Unavailable", 4000)
+            return
+        self._palette_bump_usage(aid)
         if aid == "analysis":
             self._open_analysis_findings()
         elif aid == "statistics":
@@ -8108,12 +8352,32 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if len(times) >= 2:
                 lo, hi = min(times), max(times)
         evs = harvest_ux_events(self._trace, lo, hi)
+        def _on_ai_query(
+            template_id: str, finding_id: str, level: str, needs_settings: bool,
+        ) -> None:
+            """Ask AI while Findings stays open (Web non-modal inbox parity)."""
+            if needs_settings:
+                self._open_settings("AI")
+                return
+            self._focus_ai_panel()
+            panel = getattr(self, "_ai_panel", None)
+            tid = template_id or "findings"
+            extra = f"level={level}" if level else ""
+            if panel is not None and hasattr(panel, "query_template"):
+                QTimer.singleShot(
+                    0,
+                    lambda t=tid, fid=finding_id, ex=extra: panel.query_template(
+                        t, finding_id=fid, extra=ex),
+                )
+
         dlg = _AnalysisFindingsDialog(
             findings, scope_title, parent=self,
             ai_enabled=self._ai_feature_enabled(),
             ui_font_size=getattr(self, "_ui_font_size_val", UI_FONT_SIZE),
             on_apply_scope=self._apply_finding_scope,
             on_investigate=self._investigate_finding,
+            on_show_evidence=self._show_finding_evidence,
+            on_ai_query=_on_ai_query,
             ux_events=evs,
             time_min=self._trace.time_min,
             time_max=self._trace.time_max,
@@ -8121,26 +8385,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             is_dark=self._is_dark,
         )
         self._analysis_findings_dlg = dlg
-        dlg.exec()
-        if getattr(self, "_analysis_findings_dlg", None) is dlg:
-            self._analysis_findings_dlg = None
-        if not getattr(dlg, "wants_ai_query", False):
-            return
-        if getattr(dlg, "_ai_needs_settings", False):
-            self._open_settings("AI")
-            return
-        self._focus_ai_panel()
-        panel = getattr(self, "_ai_panel", None)
-        tid = getattr(dlg, "wants_ai_template", "findings") or "findings"
-        finding_id = getattr(dlg, "wants_ai_finding_id", "") or ""
-        level = getattr(dlg, "wants_ai_level", "") or ""
-        extra = f"level={level}" if level else ""
-        if panel is not None and hasattr(panel, "query_template"):
-            QTimer.singleShot(
-                0,
-                lambda t=tid, fid=finding_id, ex=extra: panel.query_template(
-                    t, finding_id=fid, extra=ex),
-            )
+
+        def _on_closed(*_args) -> None:
+            if getattr(self, "_analysis_findings_dlg", None) is dlg:
+                self._analysis_findings_dlg = None
+
+        dlg.finished.connect(_on_closed)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def _on_explain_region_with_ai(self) -> None:
         """Timeline context menu → Explain this region with AI."""
@@ -10596,6 +10849,22 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         else:
             sc.set_highlighted_task(task, locked=True)
             self._scroll_view_to_task(task)
+
+    def _on_stats_filter_timeline(self, merge_keys: list, label: str) -> None:
+        """Task × Core Filter Timeline — reuse heatmap task-filter APIs."""
+        keys = [str(k) for k in (merge_keys or []) if k]
+        if not keys:
+            return
+        tab = self._active_tab
+        if tab is None:
+            return
+        self._set_view_mode("task")
+        self._legend.set_migrated_only_checked(False)
+        lab = str(label or keys[0])
+        tab.view._scene.set_heatmap_task_filter(set(keys), label=lab)
+        self._legend.set_heatmap_filter(lab, keys)
+        self._sync_show_all_tasks_btn()
+        self._sync_active_filter_label()
 
     def _on_legend_task_hovered(self, task: Optional[str]) -> None:
         """Transient Legend hover -> timeline Highlight; never changes Selection."""

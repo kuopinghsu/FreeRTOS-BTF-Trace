@@ -108,6 +108,7 @@ function inlineToHtml(text) {
         || low.startsWith('btfscope:')
         || low.startsWith('btfexp:')
         || low.startsWith('btftool:')
+        || low.startsWith('btfstats:')
         || low.startsWith('mailto:')
       ) {
         buf.push(stash(`<a href="${escapeAttr(href)}">${label}</a>`))

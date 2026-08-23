@@ -158,6 +158,101 @@ COMMAND_PALETTE_ACTIONS = (
     ("preset-smp", "Workspace: SMP"),
     ("preset-compare", "Workspace: Compare"),
 )
+# Per-action palette chrome. Keep (id, label) tuples above for compatibility.
+# requires: none | trace | two_traces | cursors2
+COMMAND_PALETTE_META: Dict[str, Dict[str, Any]] = {
+    "analysis": {
+        "shortcut": "",
+        "synonyms": ("findings", "inbox", "triage"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "statistics": {
+        "shortcut": "",
+        "synonyms": ("stats", "metrics"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "find": {
+        "shortcut": "Ctrl+F",
+        "synonyms": ("search", "locate"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "marks": {
+        "shortcut": "",
+        "synonyms": ("bookmarks", "annotations", "notes"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "ai": {
+        "shortcut": "",
+        "synonyms": ("assistant", "chat", "llm"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "compare": {
+        "shortcut": "",
+        "synonyms": ("diff", "regression"),
+        "requires": "two_traces",
+        "disabled": "Open at least two traces",
+    },
+    "heatmap": {
+        "shortcut": "",
+        "synonyms": ("migration", "corridor"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "settings": {
+        "shortcut": "Ctrl+,",
+        "synonyms": ("preferences", "options", "config"),
+        "requires": "none",
+        "disabled": "",
+    },
+    "limit-scope": {
+        "shortcut": "",
+        "synonyms": ("scope", "c1", "c2"),
+        "requires": "cursors2",
+        "disabled": "Place at least two cursors (C1–Cn)",
+    },
+    "fit": {
+        "shortcut": "Ctrl+0",
+        "synonyms": ("zoom", "reset", "overview"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "inspect-task": {
+        "shortcut": "",
+        "synonyms": ("inspector", "task info", "quality"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "preset-triage": {
+        "shortcut": "",
+        "synonyms": ("workspace", "health"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "preset-latency": {
+        "shortcut": "",
+        "synonyms": ("workspace", "timing", "response"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "preset-smp": {
+        "shortcut": "",
+        "synonyms": ("workspace", "multicore", "cores"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "preset-compare": {
+        "shortcut": "",
+        "synonyms": ("workspace", "diff"),
+        "requires": "two_traces",
+        "disabled": "Open at least two traces",
+    },
+}
+COMMAND_PALETTE_RECENT_MAX = 8
 WORKSPACE_PRESETS = {
     "preset-triage": ("health", "anomalies", "worst", "task_health"),
     "preset-latency": ("exec", "response", "jitter", "period", "dispatch"),
@@ -173,6 +268,144 @@ def workspace_preset_collapsed(preset_id: str) -> Dict[str, bool]:
         if sid in flags:
             flags[sid] = False
     return flags
+
+
+def _command_palette_norm(text: str) -> str:
+    return re.sub(r"[^\w]+", "", str(text or "").lower())
+
+
+def command_palette_match(
+    query: str,
+    action_id: str,
+    label: str,
+    meta: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """True when *query* matches id, label, or meta synonyms (empty query = all)."""
+    q = str(query or "").strip().lower()
+    if not q:
+        return True
+    meta = meta if isinstance(meta, dict) else {}
+    parts = [str(action_id or ""), str(label or "")]
+    syns = meta.get("synonyms") or ()
+    parts.extend(str(s) for s in syns)
+    for part in parts:
+        if q in part.lower():
+            return True
+    qn = _command_palette_norm(q)
+    if not qn:
+        return True
+    return any(qn in _command_palette_norm(part) for part in parts)
+
+
+def _command_palette_match_score(
+    query: str,
+    action_id: str,
+    label: str,
+    meta: Optional[Dict[str, Any]] = None,
+) -> int:
+    """Higher is a better match; 0 means no match (caller filters first)."""
+    q = str(query or "").strip().lower()
+    if not q:
+        return 0
+    meta = meta if isinstance(meta, dict) else {}
+    aid = str(action_id or "").lower()
+    lab = str(label or "").lower()
+    syns = [str(s).lower() for s in (meta.get("synonyms") or ())]
+    if aid == q or lab == q:
+        return 100
+    if any(s == q for s in syns):
+        return 90
+    if aid.startswith(q) or lab.startswith(q):
+        return 80
+    if any(s.startswith(q) for s in syns):
+        return 70
+    if q in aid or q in lab:
+        return 50
+    if any(q in s for s in syns):
+        return 40
+    qn = _command_palette_norm(q)
+    if qn and qn in _command_palette_norm(lab):
+        return 30
+    return 10
+
+
+def command_palette_rank(
+    actions,
+    query: str = "",
+    recent_ids=None,
+    frequent_counts=None,
+    availability_fn: Optional[Callable] = None,
+) -> List[Dict[str, Any]]:
+    """Rank palette rows: recent/frequent when idle; scored matches when filtering.
+
+    Each row: ``{id, label, shortcut, available, reason}``.
+    *availability_fn(aid) -> (bool, reason)*.
+    """
+    recent = [str(x) for x in (recent_ids or []) if x]
+    recent_rank = {aid: i for i, aid in enumerate(recent)}
+    freq_map: Dict[str, int] = {}
+    for k, v in dict(frequent_counts or {}).items():
+        try:
+            freq_map[str(k)] = int(v)
+        except (TypeError, ValueError):
+            continue
+    default_order = {
+        str(aid): i for i, (aid, _label) in enumerate(actions or ())
+    }
+    q = str(query or "").strip()
+    rows: List[Dict[str, Any]] = []
+    for aid, label in actions or ():
+        aid_s = str(aid)
+        label_s = str(label)
+        meta = COMMAND_PALETTE_META.get(aid_s) or {}
+        if q and not command_palette_match(q, aid_s, label_s, meta):
+            continue
+        available = True
+        reason = ""
+        if availability_fn is not None:
+            try:
+                ok, why = availability_fn(aid_s)
+                available = bool(ok)
+                reason = str(why or "")
+            except Exception:
+                available = True
+                reason = ""
+        if not available and not reason:
+            reason = str(meta.get("disabled") or "Unavailable")
+        rows.append({
+            "id": aid_s,
+            "label": label_s,
+            "shortcut": str(meta.get("shortcut") or ""),
+            "available": available,
+            "reason": reason if not available else "",
+            "_score": (
+                _command_palette_match_score(q, aid_s, label_s, meta) if q else 0
+            ),
+        })
+
+    def _sort_key(row: Dict[str, Any]):
+        aid = row["id"]
+        default_i = default_order.get(aid, 10_000)
+        if not q:
+            if aid in recent_rank:
+                return (0, recent_rank[aid], 0, 0)
+            count = freq_map.get(aid, 0)
+            if count > 0:
+                return (1, -count, default_i, 0)
+            return (2, default_i, 0, 0)
+        in_recent = 0 if aid in recent_rank else 1
+        return (
+            -int(row.get("_score") or 0),
+            in_recent,
+            recent_rank.get(aid, 10_000),
+            -freq_map.get(aid, 0),
+            default_i,
+        )
+
+    rows.sort(key=_sort_key)
+    for row in rows:
+        row.pop("_score", None)
+    return rows
 
 def _trace_segment_count(trace: "BtfTrace") -> int:
     segs = getattr(trace, "segments", None)
@@ -452,13 +685,49 @@ def stats_category_badge_colors(
     return palette[key]
 
 
+# Statistics section-header pin (Desktop/Web lockstep): narrow vertical bar.
+STATS_PIN_SLOT_W = 14
+STATS_PIN_SLOT_H = 22
+STATS_PIN_ICON_PX = 14
+
+_STATS_HEADER_CHIP_FRAME = (
+    " border-radius:8px; padding:2px 6px; min-height:14px;"
+    " font-size:7pt; font-weight:700;"
+)
+
+
 def stats_category_badge_stylesheet(category: str, *, dark: bool = True) -> str:
     """Qt stylesheet for a tinted category badge (secondary to the section title)."""
     bg, fg, border = stats_category_badge_colors(category, dark=dark)
     return (
-        f"color:{fg}; background:{bg}; border:1px solid {border};"
-        " border-radius:8px; padding:0 5px;"
-        " font-size:7pt; font-weight:700; letter-spacing:0.4px;"
+        f"color:{fg}; background-color:{bg}; border:1px solid {border};"
+        f"{_STATS_HEADER_CHIP_FRAME} letter-spacing:0.4px;"
+    )
+
+
+def stats_meta_chip_colors(kind: str, *, dark: bool = True) -> Tuple[str, str, str]:
+    """Return (fg, bg, border) for Scope / Filtered header chips.
+
+    Uses solid hex colours (not CSS ``rgba(..., 0.x)``) so Qt Style Sheets
+    parse reliably under the app-wide ``QLabel`` theme.
+    """
+    k = str(kind or "").strip().lower()
+    if k in ("scope", "scoped"):
+        if dark:
+            return ("#9EC5E8", "#283A47", "#3A6A8A")
+        return ("#1A5276", "#D6EAF8", "#85C1E9")
+    # Filtered (and unknown kinds)
+    if dark:
+        return ("#E0C070", "#3A3420", "#8A7040")
+    return ("#7D6608", "#F9E79F", "#D4AC0D")
+
+
+def stats_meta_chip_stylesheet(kind: str, *, dark: bool = True) -> str:
+    """Qt stylesheet for Scope / Filtered section-header chips (Web parity)."""
+    fg, bg, border = stats_meta_chip_colors(kind, dark=dark)
+    return (
+        f"color:{fg}; background-color:{bg}; border:1px solid {border};"
+        f"{_STATS_HEADER_CHIP_FRAME}"
     )
 
 

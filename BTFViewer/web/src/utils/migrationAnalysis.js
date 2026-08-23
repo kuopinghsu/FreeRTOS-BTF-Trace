@@ -788,6 +788,79 @@ export function buildCorePairRows(trace, lo = null, hi = null) {
     }))
 }
 
+/**
+ * Compact Migration Summary for progressive drill-down (Step 2).
+ * Lockstep with btf_viewer_pkg.parser._migration_summary.
+ */
+export function summarizeMigrations(trace, lo = null, hi = null) {
+  const migs = migrationsInRange(trace, lo, hi)
+  const total = migs.length
+  const rows = migrationRows(trace, lo, hi)
+  const pairs = buildCorePairRows(trace, lo, hi)
+  const tMin = Number(trace?.timeMin ?? 0)
+  const tMax = Number(trace?.timeMax ?? 0)
+  const span = (lo != null && hi != null) ? Math.max(0, hi - lo) : Math.max(0, tMax - tMin)
+  const scale = trace?.timeScale || 'us'
+  const perS = NS_PER_SCALE[scale] || 1e6
+  const spanS = span > 0 ? span / perS : 0
+  const rate = spanS > 0 ? total / spanS : 0
+  const rateLabel = (spanS > 0 && total) ? `${rate.toFixed(2)}/s` : '—'
+
+  let topTask = null
+  if (rows.length) {
+    const r = rows[0]
+    topTask = { mk: r.mk, name: r.name, count: r.migrations }
+  }
+
+  let topPair = null
+  if (pairs.length) {
+    const p = pairs[0]
+    topPair = {
+      from: p.fromCore,
+      to: p.toCore,
+      count: p.count,
+      bounces: p.bounces,
+    }
+  }
+
+  const dwell = []
+  for (const r of rows) {
+    const segs = trace.segByMergeKey?.get(r.mk) || []
+    dwell.push(...coreDwellSamples(segs, lo, hi))
+  }
+  let medianDwellNs = 0
+  if (dwell.length) {
+    const ordered = dwell.slice().sort((a, b) => a - b)
+    medianDwellNs = ordered[Math.floor(ordered.length / 2)]
+  }
+  const medianDwell = medianDwellNs
+    ? formatTime(medianDwellNs, scale)
+    : '—'
+
+  const pingTotal = rows.reduce((a, r) => a + (r.pingPong || 0), 0)
+  let thrashHint = ''
+  if (pingTotal > 0) {
+    thrashHint = `${pingTotal} ping-pong migration(s) in scope`
+  } else if (topPair && topPair.count > 0) {
+    const bouncePct = 100 * topPair.bounces / topPair.count
+    if (bouncePct >= 30) {
+      thrashHint = `Hot pair ${topPair.from}→${topPair.to} bounce ${bouncePct.toFixed(0)}%`
+    }
+  }
+
+  return {
+    total,
+    rate,
+    rateLabel,
+    topTask,
+    topPair,
+    medianDwellNs,
+    medianDwell,
+    thrashHint,
+    hasData: total > 0 || rows.length > 0,
+  }
+}
+
 /** True if any sync-object hold crossed cores (cache-line "lock bounce"). */
 export function traceHasCoreBounceHolds(trace) {
   if (!trace?.hasSyncObjectInstrumentation) return false

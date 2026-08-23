@@ -225,10 +225,35 @@
         v-if="!messages.length"
         class="ai-empty"
       >
-        Conversation appears here…
+        <div class="ai-intent-context">
+          <div><strong>Trace:</strong> {{ intentContext.trace }}</div>
+          <div><strong>Scope:</strong> {{ intentContext.scope }}</div>
+          <div><strong>Filters:</strong> {{ intentContext.filters }}</div>
+        </div>
+        <div class="ai-intent-prompt">What do you want to investigate?</div>
+        <div
+          v-for="group in intentTemplateGroups"
+          :key="group.label"
+          class="ai-intent-group"
+        >
+          <div class="ai-intent-group-label">{{ group.label }}</div>
+          <div class="ai-intent-chips">
+            <button
+              v-for="t in group.templates"
+              :key="t.id"
+              type="button"
+              class="ai-chip"
+              :disabled="busy || !aiEnabled || templateDisabled(t)"
+              :title="templateTitle(t)"
+              @click="onTemplate(t)"
+            >
+              {{ t.label }}
+            </button>
+          </div>
+        </div>
         <span class="ai-empty-hint">
-          Uses Analysis Findings for the current Statistics scope
-          (Limit to C1–Cn when cursors are set).
+          Conversation appears here… Uses Analysis Findings for the current
+          Statistics scope (Limit to C1–Cn when cursors are set).
           Configure the endpoint in Settings → AI.
         </span>
       </div>
@@ -602,6 +627,7 @@ import {
   AI_RESPONSE_LANGUAGES,
   AI_SMP_ONLY_TEMPLATE_IDS,
   AI_TEMPLATE_MENU_GROUPS,
+  AI_TEMPLATE_INTENT_GROUPS,
   AI_TEMPLATE_PRIMARY_IDS,
   AI_TEMPLATE_QUESTIONS,
   aiTemplatePrimaryRows,
@@ -634,6 +660,7 @@ import {
   parseBtfHighlightHref,
   parseBtfJumpHref,
   parseBtfRangeHref,
+  parseBtfStatsHref,
   summariseToolCall,
   toolBatchAutoRuns,
   toolResultMessage,
@@ -752,7 +779,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits([
-  'openSettings', 'jump', 'range', 'highlight', 'update:responseLanguage', 'statusMessage',
+  'openSettings', 'jump', 'range', 'highlight', 'open-stats', 'update:responseLanguage', 'statusMessage',
   'sessionChange',
 ])
 
@@ -773,6 +800,28 @@ const templateMenuGroups = computed(() =>
     items: g.ids.map(id => templates.find(t => t.id === id)).filter(Boolean),
   })),
 )
+const intentTemplateGroups = computed(() =>
+  AI_TEMPLATE_INTENT_GROUPS.map(g => ({
+    label: g.label,
+    templates: g.ids.map(id => templates.find(t => t.id === id)).filter(Boolean),
+  })),
+)
+const intentContext = computed(() => {
+  let gui = {}
+  let ctx = {}
+  try {
+    if (typeof props.getGuiState === 'function') gui = props.getGuiState() || {}
+  } catch { /* ignore */ }
+  try {
+    if (typeof props.getContext === 'function') ctx = normalizeAiContext(props.getContext() || {})
+  } catch { /* ignore */ }
+  const filters = Array.isArray(ctx.filters) ? ctx.filters.filter(Boolean) : []
+  return {
+    trace: String(gui.file || gui.name || '—'),
+    scope: String(ctx.scope || gui.scope || 'Full Trace'),
+    filters: filters.length ? filters.join(' · ') : 'None',
+  }
+})
 const investigationModes = INVESTIGATION_MODES
 const userInvestigationTemplates = ref(loadAiUserInvestigationTemplates())
 const investigationTemplates = computed(() => [
@@ -1288,7 +1337,14 @@ function onMsgClick(ev) {
     if (parsed.action) onToolWhy(parsed.action, parsed.name)
     return
   }
-  const a = from.closest('a[data-jump], a[href^="btfjump:"], a[href^="btfrange:"], a[href^="btfhyp:"], a[href^="btfscope:"], a[href^="btfexp:"], a[href^="btftool:"], a[data-highlight], a[href^="btfhighlight:"]')
+  const statsA = from.closest('a[href^="btfstats:"]')
+  if (statsA) {
+    ev.preventDefault()
+    const sid = parseBtfStatsHref(statsA.getAttribute('href') || '')
+    if (sid) emit('open-stats', sid)
+    return
+  }
+  const a = from.closest('a[data-jump], a[href^="btfjump:"], a[href^="btfrange:"], a[href^="btfhyp:"], a[href^="btfscope:"], a[href^="btfexp:"], a[href^="btftool:"], a[href^="btfstats:"], a[data-highlight], a[href^="btfhighlight:"]')
   if (a && !a.classList.contains('ai-mermaid-zoom')) {
     ev.preventDefault()
     const href = a.getAttribute('href') || ''
@@ -1305,6 +1361,11 @@ function onMsgClick(ev) {
     const range = parseBtfRangeHref(href)
     if (range) {
       emit('range', range)
+      return
+    }
+    const sid = parseBtfStatsHref(href)
+    if (sid) {
+      emit('open-stats', sid)
       return
     }
     const v = parseBtfJumpHref(href, a.getAttribute('data-jump'))
@@ -2198,7 +2259,8 @@ async function send(overrideQuery = null, overrideCtx = null) {
     } else {
       const msg = err?.message || String(err)
       messages.value.push({ role: 'assistant', content: `(Error) ${msg}` })
-      setErrorStatus(msg)
+      draft.value = query
+      setErrorStatus(`${msg} — prompt restored; Send to retry.`)
       noteAuthError(msg)
     }
   } finally {
@@ -2656,6 +2718,42 @@ defineExpose({
   margin: 4px 2px;
 }
 .ai-empty { color: var(--muted, #8a96a8); }
+.ai-intent-context {
+  margin-bottom: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted, #8a96a8);
+}
+.ai-intent-prompt {
+  margin: 4px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg, #dbe2ea);
+}
+.ai-intent-group { margin-bottom: 8px; }
+.ai-intent-group-label {
+  font-size: 11px;
+  color: var(--muted, #8a96a8);
+  margin-bottom: 4px;
+}
+.ai-intent-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ai-chip {
+  cursor: pointer;
+  border: 1px solid var(--border, #3a4658);
+  background: transparent;
+  color: var(--fg, #dbe2ea);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+}
+.ai-chip:hover:not(:disabled) {
+  border-color: var(--accent, #2a6fb2);
+}
+.ai-chip:disabled { opacity: 0.45; cursor: default; }
 .ai-msg { margin: 0 0 12px; }
 .ai-msg.ai-msg-flash {
   outline: 2px solid var(--accent, #5b9bd5);

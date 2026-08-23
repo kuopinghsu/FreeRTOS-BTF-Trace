@@ -723,6 +723,128 @@ def _task_from_cell(text: Any) -> str:
     return m.group(1).strip() if m else ""
 
 
+# Compare metric / label → Statistics section id (Desktop + Web lockstep).
+COMPARE_INVESTIGATE_FALLBACK_SECTION = "response"
+COMPARE_SECTION_LABELS: Dict[str, str] = {
+    "response": "Response Time",
+    "exec": "Execution Time",
+    "block": "Blocking Time",
+    "inter": "Inter-Arrival Time",
+    "mutex_block": "Mutex Blocking",
+    "deadline": "Deadlines / CPU budget",
+    "migrations": "Core Migrations",
+    "cores": "Core utilisation",
+    "health": "Trace Health (TICK)",
+    "preempt_matrix": "Preemption Chain",
+    "switch_overhead": "Switch Overhead",
+    "sync": "Sync",
+}
+
+_COMPARE_METRIC_SECTION: Dict[str, str] = {
+    "response p99": "response",
+    "exec max": "exec",
+    "block avg": "block",
+    "inter avg": "inter",
+    "mutex block": "mutex_block",
+    "deadline misses": "deadline",
+    "summary": "",  # resolved from label keywords
+}
+
+
+def compare_section_for_metric(label: str = "", metric: str = "") -> str:
+    """Map a Compare row label/metric to a Statistics section id."""
+    met = str(metric or "").strip().lower()
+    if met in _COMPARE_METRIC_SECTION and _COMPARE_METRIC_SECTION[met]:
+        return _COMPARE_METRIC_SECTION[met]
+    blob = f"{label} {metric}".lower()
+    if "response" in blob:
+        return "response"
+    if "exec" in blob:
+        return "exec"
+    if "mutex" in blob:
+        return "mutex_block"
+    if "deadline" in blob or "budget" in blob:
+        return "deadline"
+    if "block" in blob:
+        return "block"
+    if "inter" in blob:
+        return "inter"
+    if "migrat" in blob or "ping" in blob or "dwell" in blob:
+        return "migrations"
+    if "load balance" in blob or "core util" in blob or "utilisation" in blob or "utilization" in blob:
+        return "cores"
+    if "tick" in blob or "missed" in blob:
+        return "health"
+    if "preempt" in blob:
+        return "preempt_matrix"
+    if "context switch" in blob or "switch" in blob:
+        return "switch_overhead"
+    if "sync" in blob or "bounce" in blob:
+        return "sync"
+    return COMPARE_INVESTIGATE_FALLBACK_SECTION
+
+
+def compare_task_for_row(
+    label: str = "",
+    metric: str = "",
+    a: Any = None,
+    b: Any = None,
+) -> str:
+    """Best-effort task name from a Compare notable/candidate row."""
+    for cell in (a, b):
+        t = _task_from_cell(cell)
+        if t:
+            return t
+    lab = str(label or "").strip()
+    met = str(metric or "").strip()
+    if lab and met and met.lower() != "summary":
+        # Labels are ``"{name} {metric}"`` for per-task Compare tables.
+        suffix = f" {met}"
+        if lab.lower().endswith(suffix.lower()):
+            name = lab[: -len(suffix)].strip()
+            if name:
+                return name
+    # ``Response P99 (TaskName)`` style in the label itself
+    return _task_from_cell(lab)
+
+
+def compare_investigate_target(notable: Optional[dict] = None) -> dict:
+    """Pick Statistics section (+ optional task) for Compare Investigate buttons.
+
+    Prefer largest Regressed row, else largest Improved, else Response Time.
+    """
+    data = notable if isinstance(notable, dict) else {}
+    rows = [r for r in (data.get("rows") or []) if isinstance(r, dict)]
+    regs = [r for r in rows if r.get("status") == "Regressed"]
+    imps = [r for r in rows if r.get("status") == "Improved"]
+    pick = regs[0] if regs else (imps[0] if imps else None)
+    if pick is None:
+        sid = COMPARE_INVESTIGATE_FALLBACK_SECTION
+        return {
+            "section_id": sid,
+            "section": sid,
+            "task": "",
+            "label": "",
+            "section_label": COMPARE_SECTION_LABELS.get(sid, sid),
+        }
+    sid = str(pick.get("section") or "").strip() or compare_section_for_metric(
+        str(pick.get("label") or ""), str(pick.get("metric") or ""))
+    task = str(pick.get("task") or "").strip() or compare_task_for_row(
+        str(pick.get("label") or ""),
+        str(pick.get("metric") or ""),
+        pick.get("a"),
+        pick.get("b"),
+    )
+    label = str(pick.get("label") or "")
+    return {
+        "section_id": sid,
+        "section": sid,
+        "task": task,
+        "label": label,
+        "section_label": COMPARE_SECTION_LABELS.get(sid, sid),
+    }
+
+
 def _extra_summary_candidates(tables: dict) -> List[dict]:
     extra: List[dict] = []
     for row in (tables or {}).get("summary") or []:
@@ -757,11 +879,13 @@ def compare_notable_changes(
     """Verdict, status cards, and thresholded Improved/Regressed rows.
 
     Status is Candidate B vs Baseline A. Table Δ stays ``A − B``.
-    Changes below the absolute+relative threshold are omitted.
+    Changes below the absolute+relative threshold are omitted (small);
+    returned rows are marked ``significance: engineering``.
     """
     lim = max(1, min(16, int(limit or 8)))
     cands = list(compare_candidates_from_tables(tables)) + _extra_summary_candidates(tables)
     classified: List[dict] = []
+    small_omitted = 0
     for cand in cands:
         if not isinstance(cand, dict):
             continue
@@ -769,7 +893,10 @@ def compare_notable_changes(
         kind = str(cand.get("kind") or "count")
         a_mag = _cell_magnitude(cand.get("a"))
         b_mag = _cell_magnitude(cand.get("b"))
+        if abs(signed) <= 0:
+            continue
         if not _compare_change_is_significant(signed, kind, a_mag, b_mag):
+            small_omitted += 1
             continue
         polarity = _compare_metric_polarity(
             str(cand.get("label") or ""), str(cand.get("metric") or ""))
@@ -782,15 +909,21 @@ def compare_notable_changes(
             change = f"{_flip_delta_text(delta_txt)} / {rel_signed:+.1f}%"
         else:
             change = _flip_delta_text(delta_txt)
+        label = str(cand.get("label") or "")
+        metric = str(cand.get("metric") or "")
         classified.append({
             "status": status,
-            "label": str(cand.get("label") or ""),
+            "label": label,
+            "metric": metric,
             "a": a_txt,
             "b": b_txt,
             "delta": delta_txt,
             "change": change,
             "signed": signed,
             "kind": kind,
+            "significance": "engineering",
+            "section": compare_section_for_metric(label, metric),
+            "task": compare_task_for_row(label, metric, a_txt, b_txt),
         })
     classified.sort(key=lambda r: -abs(float(r.get("signed") or 0)))
     warnings = compare_tick_mode_warnings(
@@ -818,10 +951,15 @@ def compare_notable_changes(
         " Tick-mode detection requires verification."
         if any("tick" in w.lower() for w in warnings) else ""
     )
+    next_investigation = ""
     if n_reg and n_imp:
         verdict = (
             f"Overall: Mixed — Candidate B has {n_reg} regression(s) and "
             f"{n_imp} improvement(s) above threshold.{tick_note}"
+        )
+        next_investigation = (
+            "Next: Investigate on Candidate for the largest regression, "
+            "then verify on Timeline Evidence"
         )
     elif n_reg:
         top = regs[0]
@@ -829,18 +967,36 @@ def compare_notable_changes(
             f"Overall: Candidate B regressed on {top['label']} "
             f"({top['change']}).{tick_note}"
         )
+        if warnings:
+            next_investigation = (
+                "Next: Investigate on Candidate for the largest regression, "
+                "then verify on Timeline Evidence"
+            )
     elif n_imp:
         top = imps[0]
         verdict = (
             f"Overall: Candidate B improved on {top['label']} "
             f"({top['change']}).{tick_note}"
         )
+        if warnings:
+            next_investigation = (
+                "Next: Spot-check Response P99 and Migration rate "
+                "if you still expect a change"
+            )
     elif warnings:
         verdict = f"Overall: Mostly similar. {warnings[0]}"
+        next_investigation = (
+            "Next: Spot-check Response P99 and Migration rate "
+            "if you still expect a change"
+        )
     else:
         verdict = (
             "Overall: Mostly similar; no significant improvements or "
             "regressions above the compare threshold."
+        )
+        next_investigation = (
+            "Next: Spot-check Response P99 and Migration rate "
+            "if you still expect a change"
         )
     span_a, span_b = _compare_summary_pair(tables, "Span")
     mode_a, mode_b = _compare_summary_pair(tables, "Tick mode")
@@ -854,6 +1010,9 @@ def compare_notable_changes(
         "cards": cards,
         "rows": rows,
         "warnings": warnings,
+        "next_investigation": next_investigation,
+        "small_omitted_count": small_omitted,
+        "investigate": compare_investigate_target({"rows": rows}),
     }
 
 

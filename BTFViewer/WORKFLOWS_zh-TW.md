@@ -108,16 +108,41 @@ BTFViewer 不會分析原始碼，也不會模擬 RTOS 排程器；它只能量�
 
 不要只看平均值。若有資料，請同時比較 **Avg**、**p95**、**p99** 與 **Max**。若最大值很高、平均值卻正常，通常代表問題只出現在短暫時段，應另行限定範圍分析。
 
+<a id="investigation-context" name="investigation-context">&#x200B;</a>
+
+## 調查脈絡（會保留什麼）
+
+BTFViewer 在切換介面時盡可能保留調查脈絡：
+
+* **Statistics** 展開／摺疊、釘選、區段順序與捲動位置，在 Scope／Filter 重建後仍會保留。
+* **AI 對話** 在切換右側分頁（Statistics／Marks／Find／Legend／AI）時維持掛載。
+* 開啟 Findings、Corridor、Compare 或 Command Palette 時，**Selection** 與 **Highlight** 會保留。
+* **Findings** 為非強制 inbox — Show Evidence／Investigate／Ask AI 會保持開啟，時間軸 Evidence 仍可見。
+
+### 刻意例外（導航可能改變脈絡）
+
+| 動作 | 可能改變 | 會保留 |
+|---|---|---|
+| **Show Evidence**／Core-Pair **Show Events** | 時間軸視窗置中到 Evidence | Scope、Filters、Findings 開啟、Selection／Highlight |
+| **Investigate**／AI **Open Statistics** | Statistics 捲動並展開目標區段 | Scope、Filters |
+| **Filter Timeline**（Task × Core／Core-Pair） | 作用中的 Filter 晶片 | Scope／游標 |
+| **Apply cursors**／**Limit to C1–Cn** | Scope（刻意為之） | Filters（除非你另行變更） |
+| **Investigate on Baseline／Candidate**（Compare） | 作用中的分頁 + Statistics 捲動／展開（可選任務醒目提示） | 各分頁自己的 Scope／Filters |
+| **Fit Trace**／**Zoom fit** | 視窗 | Scope 模型（Full Trace 對 C1–Cn），除非已開啟 Limit |
+
+Evidence Navigation 不會靜默改寫 Scope 或 Filters。若控制項必須變更 Scope，UI 會標明（**Apply cursors**、**Limit to C1–Cn**）。
+
 ## 4. 執行確定性初步分析
 
-按一下 **Analysis**，開啟目前 **Statistics Scope** 的 **Analysis Findings**。
+按一下 **Analysis**，以非強制 **Analysis Findings** inbox 開啟目前 **Statistics Scope**；Findings 開啟期間時間軸仍可操作。
 
 針對每項相關分析結果：
 
 1. 記下嚴重程度、標題、支持指標，以及分開顯示的 **Evidence** 列。
 2. 將分析結果視為待驗證的假設，不要直接當成根本原因。
-3. 選 **Investigate** 開啟指定的 **Statistics** 區段（Scope 與 Filters 維持不變）。**Show Evidence** 保留給後續 Evidence Navigation。
-4. 在 Statistics 中重現報告數值；若分析結果建議有用的時間窗，使用 **Apply cursors**。
+3. 選 **Show Evidence** 將時間軸置中到該 Evidence（不變更 Scope 或 Filters；Findings 保持開啟）。
+4. 選 **Investigate** 開啟指定的 **Statistics** 區段（Scope 與 Filters 維持不變；Findings 保持開啟）。
+5. 在 Statistics 中重現報告數值；若分析結果建議有用的時間窗，使用 **Apply cursors**。
 
 若沒有明顯的分析結果，請先查看 TRIAGE 區段（**Timeline Anomalies**、**Worst Events**、**Recurring Patterns**、**Response Time**、**Task Health**），再依下表選擇分析路徑。
 
@@ -263,7 +288,7 @@ flowchart LR
 
 若 AI 的說法無法在 **Statistics** 重現、引用游標範圍外的時間、把估算結果當成量測值，或假設追蹤檔未記錄的事件，就不應採用該說法。
 
-**Start Investigation**（紀錄為空時）會執行 **Auto investigate**。重新啟動後，只有當紀錄中仍有使用者或助理回合時，才會還原 **Current Issue** 卡片。**Ctrl+K** 可開啟 Analysis、AI、Compare、Workspace Preset 與 Inspect task。工具列 **Compare** 提供 **Save as baseline** / **Score vs baseline**；**Trends** 頁面會列出所有已開啟的分頁。
+**Start Investigation**（紀錄為空時）會執行 **Auto investigate**。重新啟動後，只有當紀錄中仍有使用者或助理回合時，才會還原 **Current Issue** 卡片。**Ctrl+K** 可開啟 Analysis、AI、Compare、Workspace Preset 與 Inspect task。工具列 **Compare** 提供 **Save as baseline** / **Score vs baseline**；決策條在結果混雜、模糊或大致相似時會加上 **Next** 調查提示，且只列出工程上有意義的差異。**Trends** 頁面會列出所有已開啟的分頁。
 
 ## 10. 測試一項可量測的修改
 

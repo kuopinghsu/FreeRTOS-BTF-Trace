@@ -15,4 +15,15 @@ describe('mutex/queue export parity with desktop', () => {
     assert.match(stats, /<th>Bounces<\/th><th>Avg hold<\/th><th>Status<\/th>/)
     assert.match(stats, /<th>Issues<\/th><th>Bounces<\/th><th>Avg hold<\/th><th>Status<\/th>/)
   })
+
+  it('scroll tail stays 0 at rest unless pin-scroll (desktop lockstep)', () => {
+    assert.match(stats, /let scrollTailPinActive = false/)
+    assert.match(stats, /function updateScrollTailHeight\(forPin = false\)/)
+    assert.match(stats, /updateScrollTailHeight\(true\)/)
+    assert.match(stats, /clearScrollTailPin\(\)/)
+    assert.doesNotMatch(
+      stats,
+      /await nextTick\(\)\s*\n\s*updateScrollTailHeight\(\)\s*\n\s*await scrollDemoSectionIntoView/,
+    )
+  })
 })

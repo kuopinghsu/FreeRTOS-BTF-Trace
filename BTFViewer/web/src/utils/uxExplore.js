@@ -627,6 +627,106 @@ function taskFromCell(text) {
   return m ? m[1].trim() : ''
 }
 
+export const COMPARE_INVESTIGATE_FALLBACK_SECTION = 'response'
+export const COMPARE_SECTION_LABELS = Object.freeze({
+  response: 'Response Time',
+  exec: 'Execution Time',
+  block: 'Blocking Time',
+  inter: 'Inter-Arrival Time',
+  mutex_block: 'Mutex Blocking',
+  deadline: 'Deadlines / CPU budget',
+  migrations: 'Core Migrations',
+  cores: 'Core utilisation',
+  health: 'Trace Health (TICK)',
+  preempt_matrix: 'Preemption Chain',
+  switch_overhead: 'Switch Overhead',
+  sync: 'Sync',
+})
+
+const COMPARE_METRIC_SECTION = Object.freeze({
+  'response p99': 'response',
+  'exec max': 'exec',
+  'block avg': 'block',
+  'inter avg': 'inter',
+  'mutex block': 'mutex_block',
+  'deadline misses': 'deadline',
+  summary: '',
+})
+
+/** Map a Compare row label/metric to a Statistics section id. */
+export function compareSectionForMetric(label = '', metric = '') {
+  const met = String(metric || '').trim().toLowerCase()
+  if (met in COMPARE_METRIC_SECTION && COMPARE_METRIC_SECTION[met]) {
+    return COMPARE_METRIC_SECTION[met]
+  }
+  const blob = `${label} ${metric}`.toLowerCase()
+  if (blob.includes('response')) return 'response'
+  if (blob.includes('exec')) return 'exec'
+  if (blob.includes('mutex')) return 'mutex_block'
+  if (blob.includes('deadline') || blob.includes('budget')) return 'deadline'
+  if (blob.includes('block')) return 'block'
+  if (blob.includes('inter')) return 'inter'
+  if (blob.includes('migrat') || blob.includes('ping') || blob.includes('dwell')) return 'migrations'
+  if (blob.includes('load balance') || blob.includes('core util')
+    || blob.includes('utilisation') || blob.includes('utilization')) {
+    return 'cores'
+  }
+  if (blob.includes('tick') || blob.includes('missed')) return 'health'
+  if (blob.includes('preempt')) return 'preempt_matrix'
+  if (blob.includes('context switch') || blob.includes('switch')) return 'switch_overhead'
+  if (blob.includes('sync') || blob.includes('bounce')) return 'sync'
+  return COMPARE_INVESTIGATE_FALLBACK_SECTION
+}
+
+/** Best-effort task name from a Compare notable/candidate row. */
+export function compareTaskForRow(label = '', metric = '', a = null, b = null) {
+  for (const cell of [a, b]) {
+    const t = taskFromCell(cell)
+    if (t) return t
+  }
+  const lab = String(label || '').trim()
+  const met = String(metric || '').trim()
+  if (lab && met && met.toLowerCase() !== 'summary') {
+    const suffix = ` ${met}`
+    if (lab.toLowerCase().endsWith(suffix.toLowerCase())) {
+      const name = lab.slice(0, -suffix.length).trim()
+      if (name) return name
+    }
+  }
+  return taskFromCell(lab)
+}
+
+/** Pick Statistics section (+ optional task) for Compare Investigate buttons. */
+export function compareInvestigateTarget(notable = null) {
+  const data = notable && typeof notable === 'object' ? notable : {}
+  const rows = (data.rows || []).filter(r => r && typeof r === 'object')
+  const regs = rows.filter(r => r.status === 'Regressed')
+  const imps = rows.filter(r => r.status === 'Improved')
+  const pick = regs[0] || imps[0] || null
+  if (!pick) {
+    const sid = COMPARE_INVESTIGATE_FALLBACK_SECTION
+    return {
+      section_id: sid,
+      section: sid,
+      task: '',
+      label: '',
+      section_label: COMPARE_SECTION_LABELS[sid] || sid,
+    }
+  }
+  const sid = String(pick.section || '').trim()
+    || compareSectionForMetric(String(pick.label || ''), String(pick.metric || ''))
+  const task = String(pick.task || '').trim()
+    || compareTaskForRow(String(pick.label || ''), String(pick.metric || ''), pick.a, pick.b)
+  const label = String(pick.label || '')
+  return {
+    section_id: sid,
+    section: sid,
+    task,
+    label,
+    section_label: COMPARE_SECTION_LABELS[sid] || sid,
+  }
+}
+
 function extraSummaryCandidates(tables) {
   const extra = []
   for (const row of tables?.summary || []) {
@@ -649,13 +749,18 @@ export function compareNotableChanges(tables, limit = 8, nameA = '', nameB = '')
   const lim = Math.max(1, Math.min(16, Number(limit) || 8))
   const cands = [...compareCandidatesFromTables(tables), ...extraSummaryCandidates(tables)]
   const classified = []
+  let smallOmitted = 0
   for (const cand of cands) {
     if (!cand || typeof cand !== 'object') continue
     const signed = Number(cand.signed || 0)
     const kind = String(cand.kind || 'count')
     const aMag = cellMagnitude(cand.a)
     const bMag = cellMagnitude(cand.b)
-    if (!compareChangeIsSignificant(signed, kind, aMag, bMag)) continue
+    if (Math.abs(signed) <= 0) continue
+    if (!compareChangeIsSignificant(signed, kind, aMag, bMag)) {
+      smallOmitted += 1
+      continue
+    }
     const polarity = compareMetricPolarity(String(cand.label || ''), String(cand.metric || ''))
     const status = compareStatus(polarity, signed)
     const aTxt = cand.a == null ? '—' : String(cand.a)
@@ -671,12 +776,16 @@ export function compareNotableChanges(tables, limit = 8, nameA = '', nameB = '')
     classified.push({
       status,
       label: String(cand.label || ''),
+      metric: String(cand.metric || ''),
       a: aTxt,
       b: bTxt,
       delta: deltaTxt,
       change,
       signed,
       kind,
+      significance: 'engineering',
+      section: compareSectionForMetric(String(cand.label || ''), String(cand.metric || '')),
+      task: compareTaskForRow(String(cand.label || ''), String(cand.metric || ''), aTxt, bTxt),
     })
   }
   classified.sort((a, b) => Math.abs(b.signed) - Math.abs(a.signed))
@@ -705,18 +814,28 @@ export function compareNotableChanges(tables, limit = 8, nameA = '', nameB = '')
     ? ' Tick-mode detection requires verification.'
     : ''
   let verdict
+  let nextInvestigation = ''
   if (nReg && nImp) {
     verdict = `Overall: Mixed — Candidate B has ${nReg} regression(s) and ${nImp} improvement(s) above threshold.${tickNote}`
+    nextInvestigation = 'Next: Investigate on Candidate for the largest regression, then verify on Timeline Evidence'
   } else if (nReg) {
     const top = regs[0]
     verdict = `Overall: Candidate B regressed on ${top.label} (${top.change}).${tickNote}`
+    if (warnings.length) {
+      nextInvestigation = 'Next: Investigate on Candidate for the largest regression, then verify on Timeline Evidence'
+    }
   } else if (nImp) {
     const top = imps[0]
     verdict = `Overall: Candidate B improved on ${top.label} (${top.change}).${tickNote}`
+    if (warnings.length) {
+      nextInvestigation = 'Next: Spot-check Response P99 and Migration rate if you still expect a change'
+    }
   } else if (warnings.length) {
     verdict = `Overall: Mostly similar. ${warnings[0]}`
+    nextInvestigation = 'Next: Spot-check Response P99 and Migration rate if you still expect a change'
   } else {
     verdict = 'Overall: Mostly similar; no significant improvements or regressions above the compare threshold.'
+    nextInvestigation = 'Next: Spot-check Response P99 and Migration rate if you still expect a change'
   }
   const [spanA, spanB] = compareSummaryPair(tables, 'Span')
   return {
@@ -729,6 +848,9 @@ export function compareNotableChanges(tables, limit = 8, nameA = '', nameB = '')
     cards,
     rows,
     warnings,
+    next_investigation: nextInvestigation,
+    small_omitted_count: smallOmitted,
+    investigate: compareInvestigateTarget({ rows }),
   }
 }
 

@@ -591,6 +591,7 @@
                 @segment-jump="onStatsSegmentJump"
                 @open-pair-heatmap="onOpenPairHeatmap"
                 @open-pair-chord="onOpenPairChord"
+                @filter-timeline="onStatsFilterTimeline"
                 @open-settings="openSettingsDialog"
                 @query-ai="queryAnalysisWithAi"
               />
@@ -628,6 +629,7 @@
                 @jump="onAiJump"
                 @range="onAiRange"
                 @highlight="onAiHighlight"
+                @open-stats="onAiOpenStats"
                 @status-message="onAiStatusMessage"
                 @session-change="scheduleSessionSave"
               />
@@ -1013,11 +1015,16 @@
         <ul class="palette-list">
           <li
             v-for="(a, i) in paletteHits"
-            :key="a[0]"
-            :class="{ on: i === paletteIndex }"
-            @mousedown.prevent="runPaletteAction(a[0])"
+            :key="a.id"
+            :class="{ on: i === paletteIndex, disabled: !a.available }"
+            :title="a.available ? (a.shortcut || undefined) : a.reason"
+            @mousedown.prevent="runPaletteAction(a.id)"
           >
-            {{ a[1] }}
+            <span class="palette-label">{{ a.label }}</span>
+            <span
+              v-if="a.shortcut"
+              class="palette-shortcut"
+            >{{ a.shortcut }}</span>
           </li>
         </ul>
         <p class="palette-hint">Ctrl/Cmd+K · Esc to close</p>
@@ -1037,6 +1044,7 @@
       @query-ai="queryAnalysisWithAi"
       @apply-scope="onApplyFindingScope"
       @investigate="onInvestigateFinding"
+      @show-evidence="onShowFindingEvidence"
       @save-recipe="onSaveAnalysisRecipe"
       @save-story="onSaveAnalysisStory"
     />
@@ -1052,6 +1060,7 @@
       @query-ai="queryCompareWithAi"
       @validate-experiment="queryValidateExperimentWithAi"
       @compared="onTraceCompared"
+      @investigate="onCompareInvestigate"
       @save-baseline="onCompareSaveBaseline"
       @score-baseline="onCompareScoreBaseline"
     />
@@ -1338,6 +1347,7 @@ import {
 import { detectAnomalies, parseWhatIfChange, snapshotFromSummary, updateBaselineProfile, scoreAgainstBaseline } from './utils/aiInvestigation.js'
 import { formatAnalysisStory } from './utils/aiPlanner.js'
 import { bestFindingScope, harvestUxEvents, findingOverlayTimes, taskInspectorLine } from './utils/uxExplore.js'
+import { resolveFindingEvidence } from './utils/evidenceNav.js'
 import { experimentPercentsFromCompare, newUserInvestigationTemplate } from './utils/aiCase.js'
 import { filterBtfTextToRange, reconstructBtfSlice } from './utils/btfSlice.js'
 import {
@@ -1353,6 +1363,9 @@ import {
   STI_LOG_SCALE,
   VIEW_MODE,
   COMMAND_PALETTE_ACTIONS,
+  COMMAND_PALETTE_META,
+  COMMAND_PALETTE_RECENT_MAX,
+  commandPaletteRank,
   workspacePresetCollapsed,
 } from './config.js'
 import { loadSettings, saveSettings, applySettingsToRuntime, resizeTabCursors, normalizeSettings,
@@ -1457,6 +1470,77 @@ const analysisOpen = ref(false)
 const paletteOpen = ref(false)
 const paletteQuery = ref('')
 const paletteIndex = ref(0)
+const PALETTE_RECENT_KEY = 'btf-palette-recent'
+const PALETTE_FREQUENT_KEY = 'btf-palette-frequent'
+const paletteRecent = ref(loadPaletteRecent())
+const paletteFrequent = ref(loadPaletteFrequent())
+
+function loadPaletteRecent() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PALETTE_RECENT_KEY) || '[]')
+    if (!Array.isArray(raw)) return []
+    const out = []
+    for (const x of raw) {
+      const s = String(x || '')
+      if (s && !out.includes(s)) out.push(s)
+      if (out.length >= COMMAND_PALETTE_RECENT_MAX) break
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+function loadPaletteFrequent() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PALETTE_FREQUENT_KEY) || '{}')
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+    const out = {}
+    for (const [k, v] of Object.entries(raw)) {
+      const n = Number(v)
+      if (Number.isFinite(n)) out[String(k)] = n
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function bumpPaletteUsage(id) {
+  const aid = String(id || '')
+  if (!aid) return
+  const recent = [aid, ...paletteRecent.value.filter(x => x !== aid)]
+    .slice(0, COMMAND_PALETTE_RECENT_MAX)
+  const frequent = { ...paletteFrequent.value }
+  frequent[aid] = (Number(frequent[aid]) || 0) + 1
+  paletteRecent.value = recent
+  paletteFrequent.value = frequent
+  try {
+    localStorage.setItem(PALETTE_RECENT_KEY, JSON.stringify(recent))
+    localStorage.setItem(PALETTE_FREQUENT_KEY, JSON.stringify(frequent))
+  } catch { /* ignore */ }
+}
+
+function paletteIsAvailable(aid) {
+  const meta = COMMAND_PALETTE_META[aid] || {}
+  const req = String(meta.requires || 'none')
+  const disabled = String(meta.disabled || 'Unavailable')
+  if (req === '' || req === 'none') return [true, '']
+  if (req === 'trace') {
+    return trace.value ? [true, ''] : [false, disabled || 'Open a trace first']
+  }
+  if (req === 'two_traces') {
+    return compareTabs.value.length >= 2
+      ? [true, '']
+      : [false, disabled || 'Open at least two traces']
+  }
+  if (req === 'cursors2') {
+    return getPlacedCursors(cursors.value).length >= 2
+      ? [true, '']
+      : [false, disabled || 'Place at least two cursors (C1–Cn)']
+  }
+  return [true, '']
+}
 const paletteInput = ref(null)
 const compareOpen = ref(false)
 const compareInitialA = ref(null)
@@ -2631,13 +2715,13 @@ const taskInspectorText = computed(() => taskInspectorLine(
   }) || '',
   analysisQuality.value,
 ))
-const paletteHits = computed(() => {
-  const q = String(paletteQuery.value || '').trim().toLowerCase()
-  const rows = COMMAND_PALETTE_ACTIONS
-  if (!q) return rows
-  return rows.filter(([, label]) => String(label).toLowerCase().includes(q)
-    || String(label).toLowerCase().replace(/[^\w]+/g, '').includes(q.replace(/[^\w]+/g, '')))
-})
+const paletteHits = computed(() => commandPaletteRank(
+  COMMAND_PALETTE_ACTIONS,
+  paletteQuery.value,
+  paletteRecent.value,
+  paletteFrequent.value,
+  paletteIsAvailable,
+))
 watch(paletteQuery, () => { paletteIndex.value = 0 })
 
 const cursorRangeStats = computed(() =>
@@ -2985,21 +3069,28 @@ async function openPalette() {
 }
 
 function runPaletteAction(id) {
+  const aid = String(id || '')
+  const [ok, reason] = paletteIsAvailable(aid)
+  if (!ok) {
+    showToast(reason || 'Unavailable', 'info')
+    return
+  }
   closePalette()
-  if (id === 'analysis') analysisOpen.value = true
-  else if (id === 'statistics') rightPanelTab.value = 'stats'
-  else if (id === 'find') rightPanelTab.value = 'find'
-  else if (id === 'marks') rightPanelTab.value = 'marks'
-  else if (id === 'ai') rightPanelTab.value = 'ai'
-  else if (id === 'compare') compareOpen.value = true
-  else if (id === 'heatmap') onOpenHeatmap()
-  else if (id === 'settings') openSettingsDialog()
-  else if (id === 'limit-scope') onStatsScopeChange(true)
-  else if (id === 'fit') onFit()
-  else if (id === 'inspect-task') {
+  bumpPaletteUsage(aid)
+  if (aid === 'analysis') analysisOpen.value = true
+  else if (aid === 'statistics') rightPanelTab.value = 'stats'
+  else if (aid === 'find') rightPanelTab.value = 'find'
+  else if (aid === 'marks') rightPanelTab.value = 'marks'
+  else if (aid === 'ai') rightPanelTab.value = 'ai'
+  else if (aid === 'compare') compareOpen.value = true
+  else if (aid === 'heatmap') onOpenHeatmap()
+  else if (aid === 'settings') openSettingsDialog()
+  else if (aid === 'limit-scope') onStatsScopeChange(true)
+  else if (aid === 'fit') onFit()
+  else if (aid === 'inspect-task') {
     showToast(taskInspectorText.value, 'info')
-  } else if (String(id).startsWith('preset-')) {
-    applyWorkspacePreset(id)
+  } else if (String(aid).startsWith('preset-')) {
+    applyWorkspacePreset(aid)
   }
 }
 
@@ -3034,7 +3125,7 @@ function onPaletteKeydown(e) {
   if (e.key === 'Enter') {
     e.preventDefault()
     const row = hits[paletteIndex.value]
-    if (row) runPaletteAction(row[0])
+    if (row) runPaletteAction(row.id)
   }
 }
 
@@ -3334,10 +3425,44 @@ function onApplyFindingScope(finding) {
 async function onInvestigateFinding({ finding, sectionId } = {}) {
   if (!finding || !sectionId) return
   onApplyFindingScope(finding)
-  analysisOpen.value = false
+  // Keep Findings inbox open so Timeline Evidence stays visible (Step 2 #5/#16).
   rightPanelTab.value = 'stats'
   await nextTick()
   statsPanelRef.value?.applyDemoSections?.({ id: sectionId, expand: true, scroll: 'section' })
+}
+
+/** Step-2 Show Evidence — Timeline jump without changing Scope or Filters. */
+function onShowFindingEvidence(finding) {
+  const tr = trace.value
+  if (!tr || !finding) return
+  const target = resolveFindingEvidence(
+    finding, analysisUxEvents.value, tr.timeMin, tr.timeMax)
+  if (!target.ok) {
+    showToast(target.reason || 'No Timeline Evidence for this finding', 'info')
+    return
+  }
+  const ns = Number(target.ns)
+  // Place an Evidence marker in a free cursor slot when possible; never
+  // clear existing Scope cursors and never force Limit-to-cursors.
+  const max = appSettings.maxCursors || 4
+  const next = Array.from({ length: max }, (_, i) => cursors.value[i] ?? null)
+  const near = next.some(t => t != null && Math.abs(Number(t) - ns) <= 1)
+  if (!near) {
+    const slot = next.findIndex(t => t == null)
+    if (slot >= 0) {
+      next[slot] = ns
+      cursors.value = next
+    }
+  }
+  timelinePanelRef.value?.jumpToNs(ns)
+  syncTimelineViewport()
+  const highlightKey = String(target.mk || target.task || '').trim()
+  if (highlightKey) onHighlightClick(highlightKey)
+  const multi = target.multi ? ' (one of several)' : ''
+  showToast(
+    `Evidence${multi}: ${target.note || 'located'} — Scope/Filters unchanged`,
+    'info',
+  )
 }
 
 function onSaveAnalysisRecipe() {
@@ -3365,7 +3490,7 @@ function onSaveAnalysisStory() {
 }
 
 async function queryAnalysisWithAi(payload = 'findings') {
-  analysisOpen.value = false
+  // Keep Findings open while AI runs (non-modal tool window).
   await focusAiAndAsk(payload)
 }
 
@@ -3522,6 +3647,15 @@ function onAiJump(t) {
   if (!trace.value) return
   addAnnotationAtNs(ns, aiJumpAnnotationNote(ns))
   scheduleSessionSave()
+}
+
+function onAiOpenStats(sectionId) {
+  const sid = String(sectionId || '').trim()
+  if (!sid) return
+  rightPanelTab.value = 'stats'
+  nextTick(() => {
+    statsPanelRef.value?.applyDemoSections?.({ id: sid, expand: true, scroll: sid })
+  })
 }
 
 function onAiRange({ lo, hi } = {}) {
@@ -4333,7 +4467,7 @@ function analyzeAiTraces() {
   return analyzeTracesSnapshots(snaps)
 }
 
-function onTraceCompared({ idA, idB, scopeToCursors = true }) {
+function onTraceCompared({ idA, idB, scopeToCursors = true, activateId = null }) {
   try {
     lastAiCompare = compareAiPerformance(idA, idB, {
       scopeToCursors: scopeToCursors !== false,
@@ -4341,6 +4475,35 @@ function onTraceCompared({ idA, idB, scopeToCursors = true }) {
   } catch {
     /* tabs not ready */
   }
+  if (activateId != null && tabs.value.some(t => t.id === activateId)) {
+    activeTabId.value = activateId
+  }
+}
+
+async function onCompareInvestigate({
+  activateId = null,
+  sectionId = 'response',
+  task = '',
+  sectionLabel = '',
+  tabName = '',
+} = {}) {
+  if (activateId != null && tabs.value.some(t => t.id === activateId)) {
+    activeTabId.value = activateId
+  }
+  rightPanelTab.value = 'stats'
+  const sid = String(sectionId || 'response').trim() || 'response'
+  await nextTick()
+  statsPanelRef.value?.applyDemoSections?.({ id: sid, expand: true, scroll: sid })
+  const taskName = String(task || '').trim()
+  if (taskName) {
+    await nextTick()
+    onAiHighlight(taskName)
+  }
+  const label = String(sectionLabel || '').trim() || sid
+  const name = String(tabName || '').trim()
+    || tabs.value.find(t => t.id === activateId)?.name
+    || 'trace'
+  showToast(`Opened ${label} on ${name}`, 'info')
 }
 
 function onCompareSaveBaseline(idA) {
@@ -5008,6 +5171,17 @@ function onCorridorSpotlight(payload) {
   )
 }
 
+/** Task × Core Filter Timeline — set filter without changing Scope/cursors. */
+function onStatsFilterTimeline(payload) {
+  timelineOptions.viewMode = 'task'
+  timelineOptions.migratedOnlyFilter = false
+  timelineOptions.taskFilterKeys = payload.mergeKeys || null
+  timelineOptions.heatmapFilterLabel = payload.pairLabel || null
+  saveFiltersToActiveTab()
+  const lockKey = payload.mergeKeys?.length === 1 ? payload.mergeKeys[0] : null
+  if (lockKey) onHighlightClick(lockKey)
+}
+
 function onHighlightClick(key) {
   // Task-name clicks act at task scope, so clear any segment lock first.
   const segmentKey = highlightSegment.value?.task ? taskMergeKey(highlightSegment.value.task) : null
@@ -5191,7 +5365,7 @@ function onGlobalKeydown(e) {
     return
   }
 
-  if (helpOpen.value || aboutOpen.value || analysisOpen.value || settingsOpen.value
+  if (helpOpen.value || aboutOpen.value || settingsOpen.value
       || jumpDialogOpen.value || snapshotEditorOpen.value || demoFolderPrompt.value) return
 
   if (mod && e.key === ',') {
@@ -6922,13 +7096,34 @@ body.col-resizing * {
   overflow: auto;
 }
 .palette-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 8px 10px;
   border-radius: 6px;
   cursor: pointer;
 }
+.palette-list li.disabled {
+  color: var(--muted, #8a96a8);
+  cursor: default;
+  opacity: 0.72;
+}
 .palette-list li.on,
 .palette-list li:hover {
   background: rgba(79, 139, 255, 0.2);
+}
+.palette-list li.disabled.on,
+.palette-list li.disabled:hover {
+  background: rgba(79, 139, 255, 0.1);
+}
+.palette-label {
+  flex: 1;
+  min-width: 0;
+}
+.palette-shortcut {
+  flex: 0 0 auto;
+  color: var(--muted, #8a96a8);
+  font-size: 11px;
 }
 .palette-hint {
   margin: 8px 2px 0;

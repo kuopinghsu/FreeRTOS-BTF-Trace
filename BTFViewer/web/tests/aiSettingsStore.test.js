@@ -176,7 +176,9 @@ describe('AI settings storage', () => {
     const app = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
     assert.match(app, /meta\.resetLayout \|\| next\?\.resetLayout/)
     assert.match(app, /statsSectionHeights\.value = \{\}/)
-    assert.match(app, /appSettings\.statsSectionCollapsed = defaultSectionCollapsed\(\)/)
+    // Step 1.1: Reset applies SMP-aware presentation (not a blanket collapse map).
+    assert.match(app, /defaultStatsPresentation\(/)
+    assert.match(app, /appSettings\.statsSectionCollapsed = collapsed/)
     const panel = readFileSync(new URL('../src/components/StatisticsPanel.vue', import.meta.url), 'utf8')
     assert.match(panel, /mergeSectionCollapsed\(state\)/)
     assert.match(panel, /deep: true, immediate: true/)

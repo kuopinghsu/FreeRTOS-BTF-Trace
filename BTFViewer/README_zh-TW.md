@@ -280,7 +280,7 @@ Desktop 會從原始路徑還原檔案。Web 最多可從瀏覽器儲存空間�
 2. 選取 **Load**，確認所有核心是否分擔合理的工作量。
 3. 開啟 **Analysis**，先查看嚴重程度最高的分析結果（Triage）。
 4. 在結果上選 **Investigate**，開啟對應 Statistics 區段（保留 Scope 與 Filters）。
-5. 選取偏高數值或離群值，跳至時間軸上的對應事件。
+5. 選 **Show Evidence** 將時間軸置中到該 Finding 的 Evidence（不變更 Scope 或 Filters）。
 6. 在問題區段前後放置游標，確認狀態列 **Scope: C1–Cn**，並啟用 **Limit to C1–Cn**。
 7. 檢查工作、核心、搶佔、阻塞、同步或核心遷移的詳細資料。
 8. 必要時，請 AI Assistant 說明或驗證量測證據。
@@ -312,16 +312,16 @@ BTFViewer 的所有結果都由已記錄的 BTF 事件計算而來。它不會�
 
 ### 分析結果（Analysis Findings）
 
-選取 **Analysis**，查看目前 **Scope**（**Full Trace** 或 **C1–Cn**）內的可能問題。分析結果可能包括負載不均、執行時間熱點、阻塞、優先權反轉、頻繁的核心遷移、錯過截止期限、Tick 健康狀態問題，以及同步物件在核心間移動等情形。
+選取 **Analysis**，以非強制對話框（Desktop／Web 皆為浮動工具視窗）開啟目前 **Scope**（**Full Trace** 或 **C1–Cn**）的 **Findings inbox**；開啟期間時間軸仍可操作。分析結果可能包括負載不均、執行時間熱點、阻塞、優先權反轉、頻繁的核心遷移、錯過截止期限、Tick 健康狀態問題，以及同步物件在核心間移動等情形。
 
 每項結果包含：
 
 - 清楚的 **Severity** 與問題導向標題。
 - 最相關的支持指標。
 - 由量測 `evidence_text` 產生的 **Evidence** 列（觀察結果，與詮釋文字分開）。
-- **Investigate** — 界定 Finding 並開啟對應 Statistics 區段，不需 AI。
-- **Show Evidence** — 保留給跨介面 Evidence Navigation（該流程完成前為停用）。
-- 若已設定 AI，可使用 **Investigate…** / **Auto investigate…** 等選項。
+- **Investigate** — 界定 Finding 並開啟對應 Statistics 區段，不需 AI（Findings 保持開啟）。
+- **Show Evidence** — 跳至時間軸 Evidence（置中、放置／重用一個 Evidence 游標；可選 Task Highlight）。**不**變更 Scope 或 Filters，也**不**關閉 Findings。
+- 若已設定 AI，可使用 **Investigate…** / **Auto investigate…** 等選項（Ask AI 時 Findings 保持開啟）。
 
 請將 Finding 視為線索，而非已確認的根因。若 Finding 建議有用的時間窗，請套用游標後再於該 Scope 內重查 Statistics。
 
@@ -348,6 +348,8 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 開啟兩份以上的 trace 時，可以使用 **Compare** 查看使用率、核心遷移、執行時間、阻塞時間、回應時間（Response Time）、同步活動及錯過截止期限（Deadline Miss）等差異。
 
 這是選用的比較工具，不是基本分析流程的必要步驟。使用時，應比較相同的工作負載階段與量測範圍。
+
+決策條會顯示 Baseline／Candidate 身分、回歸與改善計數、精簡結論與 Why?，以及在結果混雜、模糊或大致相似時的 **Next** 調查提示。僅列出工程上有意義的差異（小變化會省略）。
 
 <a id="ai-assistant" name="ai-assistant">&#x200B;</a>
 
@@ -444,7 +446,7 @@ Desktop 將設定儲存在 BTFViewer 旁的 `btf_viewer.rc`；Web 則儲存在�
 | `Ctrl+R` | Fit Cursors（最早–最晚游標區間） |
 | `Ctrl+F` / `F3` / `Shift+F3` | 搜尋、下一個結果或上一個結果 |
 | `Ctrl+G` | 跳至指定時間點 |
-| `Ctrl+K` | 開啟指令選單（command palette） |
+| `Ctrl+K` | 開啟指令選單（快捷鍵、同義詞、最近／常用；停用項目會說明原因） |
 | `C` / `Shift+C` | 放置游標或清除所有游標 |
 | `Ctrl+B` | 新增書籤 |
 | `A` | 新增註解 |

@@ -6,7 +6,7 @@ import { htmlSectionSlug } from './htmlReport.js'
 
 export const STATS_TOC_GROUPS = [
   ['Overview and Findings', [
-    'Analysis Scope', 'Analysis Findings', 'Trace Metadata',
+    'Analysis Scope', 'Evidence Refs', 'Analysis Findings', 'Trace Metadata',
   ]],
   ['CPU and Scheduling', [
     'Core Utilisation', 'Trace Health (TICK)', 'Core Time Breakdown',
@@ -169,6 +169,62 @@ export function htmlScopeIdentityCard({
   const note = sampleNote ? `<p class="detail-note">${esc(sampleNote)}</p>` : ''
   return `<section class="report-card" id="sec-analysis-scope"><h2>Analysis Scope</h2>`
     + `<table class="meta-table scope-table"><tbody>${body}</tbody></table>${note}</section>`
+}
+
+/** Build `{label, time_text}` refs from Analysis Findings for HTML export. */
+export function evidenceRefsFromFindings(findings, { formatNs = null, limit = 12 } = {}) {
+  const out = []
+  const lim = Math.max(1, Number(limit) || 12)
+  for (const f of findings || []) {
+    if (!f || typeof f !== 'object') continue
+    const label = String(f.title || 'Finding').trim() || 'Finding'
+    const times = []
+    for (const ev of f.evidence || []) {
+      if (!ev || typeof ev !== 'object') continue
+      for (const key of ['time', 'start', 'stop', 'ns']) {
+        if (ev[key] == null) continue
+        const v = Number(ev[key])
+        if (Number.isFinite(v)) {
+          times.push(Math.trunc(v))
+          break
+        }
+      }
+    }
+    let timeText = ''
+    if (times.length && typeof formatNs === 'function') {
+      try {
+        timeText = times.slice(0, 3).map(t => String(formatNs(t))).join(', ')
+      } catch {
+        timeText = times.slice(0, 3).map(String).join(', ')
+      }
+    } else if (times.length) {
+      timeText = times.slice(0, 3).map(String).join(', ')
+    }
+    if (!timeText) {
+      const et = String(f.evidence_text || f.evidenceText || '').trim()
+      if (et) timeText = et.slice(0, 160)
+    }
+    if (!timeText) continue
+    out.push({ label, time_text: timeText })
+    if (out.length >= lim) break
+  }
+  return out
+}
+
+export function htmlEvidenceRefsCard(refs) {
+  const items = (refs || []).filter(r => r && typeof r === 'object' && (
+    String(r.label || '').trim() || String(r.time_text || r.timeText || '').trim()
+  ))
+  if (!items.length) return ''
+  const body = items.map(r => (
+    `<tr><td>${esc(r.label || 'Finding')}</td>`
+    + `<td>${esc(r.time_text || r.timeText || '—')}</td></tr>`
+  )).join('')
+  return `<section class="report-card" id="sec-evidence-refs"><h2>Evidence Refs</h2>`
+    + '<p class="detail-note">Timestamps and measured evidence from Analysis Findings '
+    + '(export context; does not jump back into BTFViewer).</p>'
+    + '<table class="meta-table"><thead><tr><th>Finding</th><th>Evidence / Time</th>'
+    + `</tr></thead><tbody>${body}</tbody></table></section>`
 }
 
 export function htmlTraceMetadataCard({

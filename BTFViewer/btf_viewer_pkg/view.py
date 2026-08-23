@@ -219,14 +219,17 @@ def _in_ai_actions_bar(w: QWidget) -> bool:
     """True when *w* is in an AI chip bar that must keep its natural width.
 
     Ignored + a stretching row collapses Quick/Diagnose mode chips,
-    wrapping template buttons, and the header engine/privacy chips to
-    zero width (web ``flex-wrap`` / ``.ai-header`` parity).
+    wrapping template buttons, empty-state intent chips, and the header
+    engine/privacy chips to zero width (web ``flex-wrap`` / ``.ai-header``
+    / ``.ai-intent-chips`` parity).
     """
     p: Optional[QWidget] = w
     while p is not None:
         if p.objectName() in (
                 "aiActions", "aiTemplates", "aiModes", "aiHeader", "aiMoreMenu",
-                "aiComposer", "aiGuide", "aiGuideStepper"):
+                "aiComposer", "aiGuide", "aiGuideStepper",
+                "aiIntentGroups", "aiIntentEmpty", "aiLogFrame",
+                "aiIntentChipRow", "aiIntentChip"):
             return True
         p = p.parentWidget()
     return False
@@ -239,10 +242,15 @@ def _relax_widget_tree(root: QWidget) -> None:
         if w.objectName() in ("stats_scope_action", "panel_seam_resizer",
                               "cursors_clear_all_btn"):
             continue
-        # AI header actions: Ignored + row stretch collapses them to 0 width.
+        # AI chip bars: only clear min width — never Forced Ignored (that
+        # zeroed intent / mode chips when the right dock was resized).
         if _in_ai_actions_bar(w):
             w.setMinimumWidth(0)
             continue
+        # Keep explicitly fixed chips (intent landing) at their pixel width.
+        if isinstance(w, (QPushButton, QToolButton)):
+            if w.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Fixed:
+                continue
         w.setMinimumWidth(0)
         # Only relax push/tool buttons — QLabel and other controls need real width.
         if isinstance(w, (QPushButton, QToolButton)):
@@ -472,7 +480,8 @@ class _PanelSeamResizer(QWidget):
         self._start_global_x = global_x
         self._start_width = self._win._current_right_dock_width()
         _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
-        self.grabMouse()
+        # App event filter only — grabMouse() logs
+        # "supports grabbing the mouse only for popup windows" on WSL/Wayland.
         app = QApplication.instance()
         if app:
             app.installEventFilter(self)
@@ -490,8 +499,6 @@ class _PanelSeamResizer(QWidget):
             return
         self._dragging = False
         self._win._right_dock_custom_drag = False
-        if QWidget.mouseGrabber() is self:
-            self.releaseMouse()
         app = QApplication.instance()
         if app:
             app.removeEventFilter(self)

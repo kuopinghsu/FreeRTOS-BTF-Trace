@@ -1142,6 +1142,84 @@ def _core_pair_rows(
     return rows
 
 
+def _migration_summary(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> dict:
+    """Compact Migration Summary for progressive drill-down (Step 2).
+
+    Returns totals, rate, top task/pair, median dwell, and a thrash hint.
+    Does not change Scope or Filters — callers link into existing sections.
+    """
+    from .timeline_util import _format_time, _to_ns
+
+    migs = list(_migrations_in_range(trace, lo, hi))
+    total = len(migs)
+    rows = _migration_rows(trace, lo, hi)
+    pairs = _core_pair_rows(trace, lo, hi)
+    if lo is not None and hi is not None:
+        span = max(0, int(hi) - int(lo))
+    else:
+        span = max(0, int(trace.time_max) - int(trace.time_min))
+    span_s = (_to_ns(span, trace.time_scale) / 1_000_000_000.0) if span > 0 else 0.0
+    rate = (total / span_s) if span_s > 0 else 0.0
+    rate_label = f"{rate:.2f}/s" if span_s > 0 and total else "—"
+
+    top_task = None
+    if rows:
+        mk, name, n_mig = rows[0][0], rows[0][1], rows[0][2]
+        top_task = {"mk": mk, "name": name, "count": int(n_mig)}
+
+    top_pair = None
+    if pairs:
+        fc, tc, cnt, bnc, _gap = pairs[0]
+        top_pair = {
+            "from": fc, "to": tc, "count": int(cnt), "bounces": int(bnc),
+        }
+
+    dwell: List[int] = []
+    for row in rows:
+        mk = row[0]
+        segs = (
+            _task_segs_in_range(trace, mk, lo, hi)
+            if lo is not None and hi is not None
+            else trace.seg_map_by_merge_key.get(mk, [])
+        )
+        dwell.extend(_core_dwell_samples(segs, lo, hi))
+    median_dwell_ns = 0
+    if dwell:
+        ordered = sorted(dwell)
+        median_dwell_ns = ordered[len(ordered) // 2]
+    median_dwell = (
+        _format_time(median_dwell_ns, trace.time_scale) if median_dwell_ns else "—"
+    )
+
+    ping_total = sum(int(r[7] or 0) for r in rows)
+    thrash_hint = ""
+    if ping_total > 0:
+        thrash_hint = f"{ping_total} ping-pong migration(s) in scope"
+    elif top_pair and top_pair["count"] > 0:
+        bounce_pct = 100.0 * top_pair["bounces"] / top_pair["count"]
+        if bounce_pct >= 30.0:
+            thrash_hint = (
+                f"Hot pair {top_pair['from']}→{top_pair['to']} "
+                f"bounce {bounce_pct:.0f}%"
+            )
+
+    return {
+        "total": total,
+        "rate": rate,
+        "rate_label": rate_label,
+        "top_task": top_task,
+        "top_pair": top_pair,
+        "median_dwell_ns": median_dwell_ns,
+        "median_dwell": median_dwell,
+        "thrash_hint": thrash_hint,
+        "has_data": total > 0 or bool(rows),
+    }
+
+
 # ---- Per-core time budget breakdown ---------------------------------------
 def _core_time_breakdown(
     trace: "BtfTrace",
@@ -5220,6 +5298,15 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
     lines.append("")
     lines.append("Overview")
     lines.append(f"Verdict,{_compare_csv_cell(notable.get('verdict') or '')}")
+    nxt = str(notable.get("next_investigation") or "").strip()
+    if nxt:
+        lines.append(f"Next investigation,{_compare_csv_cell(nxt)}")
+    omitted = int(notable.get("small_omitted_count") or 0)
+    if omitted or int((notable.get("cards") or {}).get("significant") or 0):
+        lines.append(
+            "Significance note,"
+            "Showing engineering-significant deltas only (small changes omitted)"
+        )
     cards = notable.get("cards") or {}
     lines.append(
         "Status cards,"
@@ -5236,6 +5323,28 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
             row.get("status"), row.get("label"), row.get("a"),
             row.get("b"), row.get("change"),
         )))
+    # Minimal Evidence refs when shared-pattern reasons carry time tokens.
+    ev_refs = []
+    for row in (tables.get("shared_patterns") or []):
+        if isinstance(row, dict):
+            reason = str(row.get("reason") or "")
+            task = str(row.get("task") or row.get("name") or "pattern")
+        elif isinstance(row, (list, tuple)) and len(row) >= 5:
+            task, reason = str(row[0] or "pattern"), str(row[4] or "")
+        else:
+            continue
+        if any(u in reason.lower() for u in (" ms", " µs", " us", " ns", "jump:")):
+            ev_refs.append((task, reason[:120]))
+        if len(ev_refs) >= 4:
+            break
+    if ev_refs:
+        lines.append("")
+        lines.append("Evidence refs")
+        lines.append("Finding,Evidence / Time")
+        for lab, ttxt in ev_refs:
+            lines.append(
+                f"{_compare_csv_cell(lab)},{_compare_csv_cell(ttxt)}"
+            )
     lines.append("")
 
     def _section(title: str, header: str, rows: List[List], ncols: int) -> None:
@@ -5425,6 +5534,16 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
         parts = ['<section class="report-card"><h2>Overview</h2>']
         if verdict:
             parts.append(f'<p class="overview-why">{_esc(verdict)}</p>')
+        nxt = str(notable.get("next_investigation") or "").strip()
+        if nxt:
+            parts.append(f'<p class="overview-why">{_esc(nxt)}</p>')
+        omitted = int(notable.get("small_omitted_count") or 0)
+        if omitted or int(cards.get("significant") or 0):
+            parts.append(
+                '<p class="overview-formula">'
+                "Showing engineering-significant deltas only "
+                "(small changes omitted)</p>"
+            )
         parts.append(f'<p class="overview-formula">{_esc(formula)}</p>')
         parts.append(
             '<div class="status-cards">'
@@ -5448,6 +5567,29 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
             f'{_rows_html(ident_rows, 3, "No identity")}'
             "</tbody></table></div>"
         )
+        # Minimal Evidence refs when shared-pattern reasons carry time tokens.
+        ev_rows = []
+        for row in (tables.get("shared_patterns") or []):
+            if isinstance(row, dict):
+                reason = str(row.get("reason") or "")
+                task = str(row.get("task") or row.get("name") or "pattern")
+            elif isinstance(row, (list, tuple)) and len(row) >= 5:
+                task, reason = str(row[0] or "pattern"), str(row[4] or "")
+            else:
+                continue
+            low = reason.lower()
+            if any(u in low for u in (" ms", " µs", " us", " ns", "jump:")):
+                ev_rows.append([task, reason[:120]])
+            if len(ev_rows) >= 4:
+                break
+        if ev_rows:
+            parts.append('<h3 class="overview-sub">Evidence refs</h3>')
+            parts.append(
+                '<div class="table-scroll"><table><thead><tr>'
+                "<th>Finding</th><th>Evidence / Time</th></tr></thead><tbody>"
+                f'{_rows_html(ev_rows, 2, "No evidence refs")}'
+                "</tbody></table></div>"
+            )
         parts.append('<h3 class="overview-sub">Notable Changes</h3>')
         parts.append(
             '<div class="table-scroll"><table><thead><tr>'

@@ -14,6 +14,7 @@ function summarizeNs(samples, scale) {
   const n = vals.length
   const mean = vals.reduce((a, b) => a + b, 0) / n
   const avg = Math.round(mean)
+  const p50Idx = Math.min(n - 1, Math.max(0, Math.ceil(n * 0.50) - 1))
   const p95Idx = Math.min(n - 1, Math.max(0, Math.ceil(n * 0.95) - 1))
   const p99Idx = Math.min(n - 1, Math.max(0, Math.ceil(n * 0.99) - 1))
   const jitter = vals[n - 1] - vals[0]
@@ -27,6 +28,7 @@ function summarizeNs(samples, scale) {
     maxNs: vals[n - 1],
     jitterNs: jitter,
     stddevNs: stddev,
+    p50Ns: vals[p50Idx],
     p95Ns: vals[p95Idx],
     p99Ns: vals[p99Idx],
     min: formatTime(vals[0], scale),
@@ -34,6 +36,7 @@ function summarizeNs(samples, scale) {
     max: formatTime(vals[n - 1], scale),
     jitter: formatTime(jitter, scale),
     stddev: formatTime(stddev, scale),
+    p50: formatTime(vals[p50Idx], scale),
     p95: formatTime(vals[p95Idx], scale),
     p99: formatTime(vals[p99Idx], scale),
   }
