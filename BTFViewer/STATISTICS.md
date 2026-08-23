@@ -150,12 +150,12 @@ Clear the cursors to return to full-trace statistics.
 |---|---|
 | **+** | Expand all sections |
 | **−** | Collapse all sections; pinned sections remain open |
-| Reset-order | Restore the default section order |
+| Reset-order | Restore the default section order (Overview → Triage → Timing → Sched → Sync → Detail) |
 | Section title / chevron | Expand or collapse one section |
 | **⠿** grip | Drag a section to a new position |
-| Pin | Keep a section open when **Collapse all** is used |
+| Pin | Keep a section open when **Collapse all** is used (outline pin on hover/focus; filled when pinned). Manually collapsing a pinned section clears the pin |
 
-Section order, pinned sections, expanded/collapsed state, and table heights are saved across launches. **Settings → Reset to Defaults** restores the built-in layout.
+Section order, pinned sections, expanded/collapsed state, and table heights are saved across launches. **Settings → Reset to Defaults** restores the built-in layout for the current Trace: when meaningful work appears on more than one core (SMP-active), **Core utilisation** starts expanded and pinned; otherwise every section starts collapsed and unpinned. Each section shows a category badge on the right (**OVERVIEW**, **TRIAGE**, **TIMING**, **SCHED**, **SYNC**, **DETAIL**). Badges use a soft tinted background and border per category (quieter than Warning/Error); the label text remains the primary identifier. Reordering does not change a section's category. The pin control stays monochrome and independent of badge colour.
 
 ### Export and compare
 
@@ -196,7 +196,7 @@ Use toolbar **Analysis** for interactive triage. Use **Save as Text…** when yo
 
 1. Open a trace (for example, `tracedata/example-4cores.btf.gz` for a 4-core SMP workload, or `tracedata/example-2cores.btf.gz` for a smaller 2-core demo).
 2. Optionally click toolbar **Analysis** for a severity-tagged triage of the current scope.
-3. **Core utilisation** and **Trace Health** start expanded. Other sections start collapsed. Open only the sections you need, or use **+** / **−** at the top. BTFViewer saves this layout for the next launch. Pin sections that you want to keep open.
+3. **Core utilisation** starts expanded and pinned only when the loaded Trace is SMP-active (meaningful execution on more than one core). Otherwise all sections start collapsed. Open the sections you need, or use **+** / **−** at the top. BTFViewer saves this layout for the next launch. Pin sections that you want to keep open through **Collapse all**.
 4. Optionally drag **⠿** grips to reorder sections for your workflow; use the reset-order icon when you want the built-in sequence back.
 5. Optionally place **2+ cursors** and enable **Limit to C1–Cn** to restrict every metric (and Analysis Findings) to a time window.
 6. Use table actions to move from statistics back to the timeline:
@@ -235,7 +235,7 @@ Use these metrics to understand overall CPU load, core utilisation, tick health,
 <a id="summary-scheduling-and-core-utilisation" name="summary-scheduling-and-core-utilisation">&#x200B;</a>
 ### Summary, scheduling, and core utilisation ![](../images/readme/h4.svg)
 
-These sections follow the **default** Statistics order. Summary and Scheduling summary are always first. **Core utilisation** is the first section that can be pinned.
+These sections follow the **default** Statistics order (Overview → Triage → Timing → Sched → Sync → Detail). Summary and Scheduling summary are always first. **Core utilisation** is the first OVERVIEW section and the first that can be pinned.
 
 This guide follows the same order: system load → migrations / affinity / lifecycle / deadlines → slice timing → preemption / synchronization / tags. You can drag sections to a different order in the UI.
 

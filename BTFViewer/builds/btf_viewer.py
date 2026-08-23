@@ -352,7 +352,15 @@ STATS_HEAVY_SECTIONS         = frozenset({
     "task_core", "core_time", "wait_owner", "mutex_block",
     "task_health",
 })
-STATS_DEFAULT_EXPANDED_SECTIONS = frozenset({"cores", "health"})
+# Factory default: every Statistics section starts collapsed. SMP-active traces
+# expand+pin Core Utilisation via ``default_stats_presentation`` (Step 1.1).
+STATS_DEFAULT_EXPANDED_SECTIONS = frozenset()
+
+# Investigation categories (Step 1.1). Category is a property of the section —
+# reordering must not change it. Keep lockstep with web statsPins.js.
+STATS_SECTION_CATEGORIES: Tuple[str, ...] = (
+    "OVERVIEW", "TRIAGE", "TIMING", "SCHED", "SYNC", "DETAIL",
+)
 COMMAND_PALETTE_ACTIONS = (
     ("analysis", "Analysis Findings"),
     ("statistics", "Statistics"),
@@ -415,48 +423,62 @@ def cap_stats_table_rows(rows: list, cap: int = STATS_TABLE_DISPLAY_ROW_CAP) -> 
     )
 
 def default_section_collapsed() -> Dict[str, bool]:
-    """Default collapsed flags for statistics panel sections (shared with MVVM).
+    """Factory collapsed flags for statistics panel sections (shared with MVVM).
 
-    Core utilisation and Trace Health start open; every other section starts
-    collapsed. Keep keys in lockstep with web ``SECTION_COLLAPSE_REFS``.
+    All sections start collapsed. SMP-active traces expand+pin Core Utilisation
+    via ``default_stats_presentation``. Keep keys in lockstep with web
+    ``SECTION_COLLAPSE_REFS`` / ``STATS_PINNABLE_SECTIONS``.
     """
-    return {
-        "cores": False,
-        "tasks": True,
-        "migrations": True,
-        "exec": True,
-        "block": True,
-        "inter": True,
-        "health": False,
-        "preemption": True,
-        "priority": True,
-        "sync": True,
-        "queue": True,
-        "intervals": True,
-        "lifecycle": True,
-        "core_pairs": True,
-        "core_breakdown": True,
-        "affinity": True,
-        "deadline": True,
-        "tags": True,
-        "dispatch": True,
-        "anomalies": True,
-        "worst": True,
-        "switch_overhead": True,
-        "concurrency": True,
-        "period": True,
-        "task_core": True,
-        "wait_owner": True,
-        "task_health": True,
-        "response": True,
-        "crit_path": True,
-        "preempt_matrix": True,
-        "mutex_block": True,
-        "core_time": True,
-        "jitter": True,
-        "distrib": True,
-        "patterns": True,
-    }
+    return {sid: True for sid in STATS_PINNABLE_SECTIONS}
+
+
+# Per-core util above this counts as meaningful activity for SMP-active
+# presentation (Step 1.1). Declared core count alone is not enough.
+STATS_SMP_ACTIVE_MIN_UTIL_PCT = 0.01
+
+
+def stats_trace_is_smp_active(trace, *, min_util_pct: float = STATS_SMP_ACTIVE_MIN_UTIL_PCT) -> bool:
+    """True when meaningful non-IDLE/TICK work is observed on more than one core.
+
+    Uses cached ``trace.core_util_pct`` when present (full-trace util). This
+    drives initial Statistics presentation only — not topology or feature gates.
+    """
+    if trace is None:
+        return False
+    names = list(getattr(trace, "core_names", None) or [])
+    pct_map = getattr(trace, "core_util_pct", None) or {}
+    if not names and pct_map:
+        names = list(pct_map.keys())
+    active = 0
+    threshold = float(min_util_pct)
+    for core in names:
+        try:
+            pct = float(pct_map.get(core, 0.0))
+        except (TypeError, ValueError):
+            pct = 0.0
+        if pct > threshold:
+            active += 1
+            if active > 1:
+                return True
+    return False
+
+
+def default_stats_presentation(trace=None) -> Tuple[List[str], Dict[str, bool]]:
+    """Initial pins + collapsed map for a newly opened trace (or Reset to Defaults).
+
+    SMP-active → pin+expand ``cores`` only. Otherwise all collapsed, none pinned.
+    """
+    collapsed = default_section_collapsed()
+    pins: List[str] = []
+    if stats_trace_is_smp_active(trace):
+        pins = ["cores"]
+        collapsed["cores"] = False
+    return pins, collapsed
+
+
+def stats_section_category(section_id: str) -> Optional[str]:
+    """Return the category badge for *section_id*, or None if unknown."""
+    return STATS_SECTION_CATEGORY.get(str(section_id or "").strip())
 
 
 def sanitize_section_collapsed(src) -> Optional[Dict[str, bool]]:
@@ -517,33 +539,27 @@ def section_collapsed_from_rc(raw) -> Dict[str, bool]:
 
 # Statistics sections that can be pinned open (stay expanded) and the default
 # display order. Keep in sync with web/src/utils/statsPins.js.
-# Triage-first order (Step-1 item 6): surface "what deserves attention"
-# before detailed/overview metrics, then Timing, then SMP/Scheduling, then
-# Synchronization/Detail.
+# OVERVIEW → TRIAGE → TIMING → SCHED → SYNC → DETAIL (Step 1.1).
+# Category badges stay with the section after user reordering.
 STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
-    # Triage
+    # OVERVIEW — is the system generally healthy?
+    "cores",
+    "health",
+    "task_health",
+    # TRIAGE — what deserves attention?
     "anomalies",
     "worst",
     "patterns",
+    # TIMING — what timing behavior explains it?
     "response",
-    "task_health",
-    # Overview
-    "cores",
-    "core_breakdown",
-    "concurrency",
-    "switch_overhead",
-    "tasks",
-    "health",
-    # Timing Investigation
     "exec",
-    "block",
     "dispatch",
+    "block",
     "crit_path",
-    "inter",
     "period",
     "jitter",
-    "distrib",
-    # SMP / Scheduling
+    "inter",
+    # SCHED — scheduling / CPU / SMP
     "task_core",
     "core_time",
     "migrations",
@@ -552,27 +568,119 @@ STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
     "preempt_matrix",
     "preemption",
     "priority",
-    # Synchronization / Detail
-    "sync",
-    "wait_owner",
+    "concurrency",
+    # SYNC — blocking and synchronization
     "mutex_block",
+    "wait_owner",
+    "sync",
     "queue",
+    # DETAIL — supporting / lower-level measurements
+    "core_breakdown",
+    "switch_overhead",
+    "tasks",
+    "distrib",
     "intervals",
     "tags",
     "lifecycle",
     "deadline",
 )
 
-# Triage sections (Step-1 item 6): visually distinguished from Overview/
-# Timing/SMP/Sync "detailed analysis" sections. Keep in sync with
-# web/src/utils/statsPins.js STATS_TRIAGE_SECTIONS.
-STATS_TRIAGE_SECTIONS: Tuple[str, ...] = (
-    "anomalies",
-    "worst",
-    "patterns",
-    "response",
-    "task_health",
+# Section id → category label (exactly one primary category each).
+STATS_SECTION_CATEGORY: Dict[str, str] = {
+    "cores": "OVERVIEW",
+    "health": "OVERVIEW",
+    "task_health": "OVERVIEW",
+    "anomalies": "TRIAGE",
+    "worst": "TRIAGE",
+    "patterns": "TRIAGE",
+    "response": "TIMING",
+    "exec": "TIMING",
+    "dispatch": "TIMING",
+    "block": "TIMING",
+    "crit_path": "TIMING",
+    "period": "TIMING",
+    "jitter": "TIMING",
+    "inter": "TIMING",
+    "task_core": "SCHED",
+    "core_time": "SCHED",
+    "migrations": "SCHED",
+    "core_pairs": "SCHED",
+    "affinity": "SCHED",
+    "preempt_matrix": "SCHED",
+    "preemption": "SCHED",
+    "priority": "SCHED",
+    "concurrency": "SCHED",
+    "mutex_block": "SYNC",
+    "wait_owner": "SYNC",
+    "sync": "SYNC",
+    "queue": "SYNC",
+    "core_breakdown": "DETAIL",
+    "switch_overhead": "DETAIL",
+    "tasks": "DETAIL",
+    "distrib": "DETAIL",
+    "intervals": "DETAIL",
+    "tags": "DETAIL",
+    "lifecycle": "DETAIL",
+    "deadline": "DETAIL",
+}
+
+# Backward-compatible alias: TRIAGE category members.
+STATS_TRIAGE_SECTIONS: Tuple[str, ...] = tuple(
+    sid for sid, cat in STATS_SECTION_CATEGORY.items() if cat == "TRIAGE"
 )
+
+# Low-saturation category badge colours (Step 1.1-color). Values are
+# (background, foreground, border). Text remains the primary identifier;
+# colour is a secondary cue only. Keep lockstep with web CSS variables /
+# statsPins.js STATS_CATEGORY_BADGE_COLORS.
+STATS_CATEGORY_BADGE_COLORS: Dict[str, Dict[str, Tuple[str, str, str]]] = {
+    "OVERVIEW": {
+        "light": ("#E8EDF2", "#536475", "#B8C4CF"),
+        "dark":  ("#26313B", "#C3CED8", "#4A5966"),
+    },
+    "TRIAGE": {
+        "light": ("#F7EDD7", "#8A641F", "#DFC68E"),
+        "dark":  ("#3A3020", "#E2C27C", "#675630"),
+    },
+    "TIMING": {
+        "light": ("#E3EDF9", "#426A9E", "#AFC7E5"),
+        "dark":  ("#243449", "#A9C5E8", "#47658A"),
+    },
+    "SCHED": {
+        "light": ("#ECE8F7", "#665A98", "#C5BCE0"),
+        "dark":  ("#302C44", "#C1B7E3", "#5D557B"),
+    },
+    "SYNC": {
+        "light": ("#E2F1EF", "#39746F", "#ADD2CD"),
+        "dark":  ("#203A38", "#9DD0CA", "#426C68"),
+    },
+    "DETAIL": {
+        "light": ("#ECEDEF", "#656B72", "#C8CBD0"),
+        "dark":  ("#303337", "#C0C4C9", "#565B61"),
+    },
+}
+
+
+def stats_category_badge_colors(
+    category: str, *, dark: bool = True,
+) -> Tuple[str, str, str]:
+    """Return (bg, fg, border) for a Statistics category badge."""
+    key = "dark" if dark else "light"
+    palette = STATS_CATEGORY_BADGE_COLORS.get(str(category or "").strip().upper())
+    if not palette:
+        return STATS_CATEGORY_BADGE_COLORS["DETAIL"][key]
+    return palette[key]
+
+
+def stats_category_badge_stylesheet(category: str, *, dark: bool = True) -> str:
+    """Qt stylesheet for a tinted category badge (secondary to the section title)."""
+    bg, fg, border = stats_category_badge_colors(category, dark=dark)
+    return (
+        f"color:{fg}; background:{bg}; border:1px solid {border};"
+        " border-radius:8px; padding:0 5px;"
+        " font-size:7pt; font-weight:700; letter-spacing:0.4px;"
+    )
+
 
 # Analysis Finding id -> Statistics section id (Step-1 item 7: non-AI
 # "Investigate" routes straight to the relevant Statistics section instead of
@@ -48274,7 +48382,7 @@ class _IconTextButton(QWidget):
 
 
 class _StatsPinButton(QLabel):
-    """Section pin toggle.
+    """Section pin toggle (outline on hover/focus; filled when pinned).
 
     Uses a QLabel pixmap instead of QToolButton/QPushButton.setIcon — macOS
     application stylesheets routinely suppress tool-button icons.
@@ -48289,34 +48397,65 @@ class _StatsPinButton(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._pinned = False
         self._hovered = False
+        self._row_active = False
+        self._dark = True
+
+    def set_row_active(self, active: bool) -> None:
+        """Show outline pin while the section header row is hovered."""
+        self._row_active = bool(active)
+        self._refresh_icon()
 
     def set_pinned(self, pinned: bool, *, dark: bool = True) -> None:
         self._pinned = bool(pinned)
-        muted = "#D0D0D0" if dark else "#555555"
-        accent = "#7EC8E3" if dark else "#2A6FB2"
-        path = _IC_PIN_FILLED if self._pinned else _IC_PIN
-        color = accent if self._pinned else muted
-        self.setPixmap(_svg_pixmap(path, color, 14))
+        self._dark = bool(dark)
         self.setToolTip(
-            "Unpin — allow this section to collapse"
+            "Pinned — stays open with Collapse All"
             if self._pinned else
-            "Pin — keep this section expanded")
+            "Pin open")
+        self.setAccessibleName(
+            "Unpin" if self._pinned else "Pin open")
+        self._refresh_icon()
+
+    def _pin_visible(self) -> bool:
+        return bool(
+            self._pinned or self._row_active or self._hovered or self.hasFocus())
+
+    def _refresh_icon(self) -> None:
+        if not self._pin_visible():
+            self.clear()
+            self.update()
+            return
+        # Monochrome from theme palette; filled vs outline conveys state.
+        fg = self.palette().color(QPalette.ColorRole.WindowText)
+        if not fg.isValid() or fg.alpha() == 0:
+            fg = QColor("#D0D0D0" if self._dark else "#555555")
+        path = _IC_PIN_FILLED if self._pinned else _IC_PIN
+        self.setPixmap(_svg_pixmap(path, fg.name(), 14))
         self.update()
 
     def enterEvent(self, event) -> None:  # noqa: N802
         self._hovered = True
-        self.update()
+        self._refresh_icon()
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:  # noqa: N802
         self._hovered = False
-        self.update()
+        self._refresh_icon()
         super().leaveEvent(event)
 
+    def focusInEvent(self, event) -> None:  # noqa: N802
+        self._refresh_icon()
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802
+        self._refresh_icon()
+        super().focusOutEvent(event)
+
     def paintEvent(self, event) -> None:  # noqa: N802
-        if self._hovered:
+        if self._pin_visible() and (self._hovered or self.hasFocus()):
             p = QPainter(self)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             p.setPen(Qt.PenStyle.NoPen)
@@ -48331,6 +48470,22 @@ class _StatsPinButton(QLabel):
             event.accept()
             return
         super().mousePressEvent(event)
+
+
+class _StatsHeaderHoverFilter(QObject):
+    """Reveal the outline pin while the header row is hovered."""
+
+    def __init__(self, pin: _StatsPinButton) -> None:
+        super().__init__(pin)
+        self._pin = pin
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        et = event.type()
+        if et in (QEvent.Type.Enter, QEvent.Type.HoverEnter):
+            self._pin.set_row_active(True)
+        elif et in (QEvent.Type.Leave, QEvent.Type.HoverLeave):
+            self._pin.set_row_active(False)
+        return False
 
 
 _STATS_SECTION_MIME = "application/x-btf-stats-section"
@@ -54195,6 +54350,8 @@ class _StatsPanel(QWidget):
         self._scope_to_cursors: bool = True
         self._section_collapsed: Dict[str, bool] = default_section_collapsed()
         self._section_pins: List[str] = []
+        # Apply SMP-aware presentation once on the next rebuild when pins are empty.
+        self._needs_presentation_defaults = True
         self._section_order: List[str] = normalize_stats_section_order(None)
         self._pending_sections: List[Tuple[str, str, str, object]] = []
         self._drop_target_sid: Optional[str] = None
@@ -54204,6 +54361,7 @@ class _StatsPanel(QWidget):
         self._section_header_rows: Dict[str, QWidget] = {}
         self._section_seps: Dict[str, QWidget] = {}
         self._section_pin_btns: Dict[str, _StatsPinButton] = {}
+        self._section_category_badges: Dict[str, QLabel] = {}
         self._section_bodies: Dict[str, QWidget] = {}
         self._section_populate: Dict[str, object] = {}
         self._section_drag_filters: List[_StatsSectionDragFilter] = []
@@ -54430,6 +54588,7 @@ class _StatsPanel(QWidget):
         self._section_header_rows.clear()
         self._section_seps.clear()
         self._section_pin_btns.clear()
+        self._section_category_badges.clear()
         self._section_bodies.clear()
         self._section_populate.clear()
         self._section_drag_filters.clear()
@@ -54514,6 +54673,14 @@ class _StatsPanel(QWidget):
         pinned = set(self._section_pins)
         for sid, btn in self._section_pin_btns.items():
             btn.set_pinned(sid in pinned, dark=self._is_dark)
+        self._sync_category_badges()
+
+    def _sync_category_badges(self) -> None:
+        """Apply theme-aware low-saturation colours to category badges."""
+        for sid, badge in getattr(self, "_section_category_badges", {}).items():
+            cat = STATS_SECTION_CATEGORY.get(sid) or badge.text()
+            badge.setStyleSheet(
+                stats_category_badge_stylesheet(cat, dark=self._is_dark))
 
 
     def capture_layout_state(self) -> dict:
@@ -55162,6 +55329,8 @@ class _StatsPanel(QWidget):
         self._update_scope_action_icons()
         for sid in self._section_headers:
             self._update_section_header_icon(sid)
+        self._sync_category_badges()
+        self._sync_pin_buttons()
         for grip in self._table_grips:
             grip.set_dark(is_dark)
         for btn in (
@@ -55904,10 +56073,15 @@ class _StatsPanel(QWidget):
         bar.setValue(bar.minimum())
 
     def _toggle_section(self, section_id: str) -> None:
-        if section_id in self._section_pins:
-            return
-        self._set_section_collapsed(
-            section_id, not self._section_collapsed.get(section_id, False))
+        # Pin protects Collapse All only — manual collapse clears the pin.
+        currently_collapsed = bool(self._section_collapsed.get(section_id, False))
+        will_collapse = not currently_collapsed
+        if will_collapse and section_id in self._section_pins:
+            self._section_pins = normalize_stats_pins(
+                [p for p in self._section_pins if p != section_id])
+            self._sync_pin_buttons()
+            self.section_pins_changed.emit(list(self._section_pins))
+        self._set_section_collapsed(section_id, will_collapse)
         self._notify_section_collapsed()
 
     def _toggle_section_pin(self, section_id: str) -> None:
@@ -55997,6 +56171,8 @@ class _StatsPanel(QWidget):
         hdr.setCursor(Qt.CursorShape.PointingHandCursor)
         hdr.setIcon(_stats_chevron_icon(collapsed, self._is_dark))
         hdr.setIconSize(QSize(10, 10))
+        hdr.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         hdr.setStyleSheet(
             f"text-align:left; padding:2px 0 2px 2px; border:none; background:transparent;"
             f" font-weight:bold; font-size:{ui_fs};"
@@ -56008,16 +56184,19 @@ class _StatsPanel(QWidget):
             lambda sid=section_id: self._toggle_section_pin(sid))
         row_lay.addWidget(grip, 0)
         row_lay.addWidget(hdr, 1)
-        if section_id in STATS_TRIAGE_SECTIONS:
-            triage_badge = QLabel("TRIAGE")
-            triage_badge.setToolTip("Triage \u2014 check this before detailed analysis")
-            triage_badge.setStyleSheet(
-                "color:#5B9BD5; font-size:7pt; font-weight:700; letter-spacing:0.4px;"
-                " border:1px solid #5B9BD5; border-radius:8px; padding:0 5px;"
-                " background:transparent;"
-            )
-            row_lay.addWidget(triage_badge, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        row_lay.addWidget(pin, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        category = STATS_SECTION_CATEGORY.get(section_id)
+        if category:
+            cat_badge = QLabel(category)
+            cat_badge.setObjectName("stats_section_category")
+            cat_badge.setToolTip(f"{category} \u2014 investigation category")
+            cat_badge.setStyleSheet(
+                stats_category_badge_stylesheet(category, dark=self._is_dark))
+            row_lay.addWidget(
+                cat_badge, 0,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self._section_category_badges[section_id] = cat_badge
+        row_lay.addWidget(
+            pin, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._ilay.addWidget(row)
         self._section_headers[section_id] = hdr
         self._section_header_rows[section_id] = row
@@ -56026,6 +56205,9 @@ class _StatsPanel(QWidget):
         filt = _StatsSectionDragFilter(self, section_id, grip)
         self._section_drag_filters.append(filt)
         self._section_drag_filter_by_id[section_id] = filt
+        hover = _StatsHeaderHoverFilter(pin)
+        row.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        row.installEventFilter(hover)
         for w in (row, grip, hdr, pin):
             w.setAcceptDrops(True)
             w.installEventFilter(filt)
@@ -59151,6 +59333,7 @@ class _StatsPanel(QWidget):
         self.clear_plot_session()
         self._defer_heavy_collapse_done = False
         self._trace = None
+        self._needs_presentation_defaults = True
         self._cursor_times = []
         self._btn_export_csv.setEnabled(False)
         self._btn_export_html.setEnabled(False)
@@ -59165,11 +59348,28 @@ class _StatsPanel(QWidget):
         self._stats_summary = empty
         self._ilay.addWidget(empty)
 
+    def apply_presentation_defaults(self, trace: Optional["BtfTrace"] = None,
+                                    *, emit: bool = False) -> None:
+        """Apply SMP-aware pin/collapse defaults for *trace* (Reset to Defaults)."""
+        pins, collapsed = default_stats_presentation(
+            trace if trace is not None else self._trace)
+        self.set_section_pins(pins, emit=emit)
+        self.set_section_collapsed_map(collapsed, emit=emit)
+        self._needs_presentation_defaults = False
+
     def rebuild(self, trace: Optional["BtfTrace"]) -> None:
         if trace is None:
             self.clear_trace()
             return
         self._trace = trace
+        # Fresh open / empty pins: SMP-active → expand+pin Core Utilisation once.
+        # Persisted pins and later rebuilds (scope/filter) keep user state.
+        if getattr(self, "_needs_presentation_defaults", False):
+            self._needs_presentation_defaults = False
+            if not self._section_pins:
+                pins, collapsed = default_stats_presentation(trace)
+                self._section_pins = normalize_stats_pins(pins)
+                self._section_collapsed = dict(collapsed)
         defer_heavy = trace_needs_deferred_stats_load(trace)
         self._btn_export_csv.setEnabled(True)
         self._btn_export_html.setEnabled(True)
@@ -77937,9 +78137,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Restore Statistics layout defaults; persist to .rc only when requested."""
         panel = getattr(self, "_stats_panel", None)
         if panel is not None:
-            panel.set_section_pins([], emit=False)
             panel.set_section_order("", emit=False)
-            panel.set_section_collapsed_map(default_section_collapsed(), emit=False)
+            if hasattr(panel, "apply_presentation_defaults"):
+                panel.apply_presentation_defaults(emit=False)
+            else:
+                pins, collapsed = default_stats_presentation(
+                    getattr(panel, "_trace", None))
+                panel.set_section_pins(pins, emit=False)
+                panel.set_section_collapsed_map(collapsed, emit=False)
             panel.apply_section_table_heights(default_section_table_heights())
         if not persist:
             return

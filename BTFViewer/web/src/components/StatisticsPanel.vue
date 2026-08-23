@@ -4400,9 +4400,14 @@ function resetSectionOrder() {
 }
 
 function toggleSectionCollapse(id) {
-  if (isSectionPinned(id)) return
+  // Pin protects Collapse All only — manual collapse clears the pin.
   const flag = SECTION_COLLAPSE_REFS[id]
-  if (flag) flag.value = !flag.value
+  if (!flag) return
+  const willCollapse = !flag.value
+  if (willCollapse && isSectionPinned(id)) {
+    emit('update:sectionPins', toggleStatsPin(props.sectionPins, id))
+  }
+  flag.value = willCollapse
   emitCollapsedState()
 }
 

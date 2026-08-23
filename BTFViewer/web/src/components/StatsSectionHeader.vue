@@ -2,7 +2,7 @@
   <div class="stats-section-header-wrap">
   <div
     class="stats-section-title collapsible"
-    :class="{ pinned, triage: isTriage }"
+    :class="{ pinned }"
     :data-demo-target="demoTarget || undefined"
     @click="$emit('toggle')"
   >
@@ -32,49 +32,53 @@
         stroke-linejoin="round"
       />
     </svg>
-    <span
-      v-if="isTriage"
-      class="stats-triage-badge"
-      title="Triage — check this before detailed analysis"
-    >Triage</span>
     <span class="stats-section-label"><slot /></span>
-    <button
-      type="button"
-      class="stats-pin-btn"
-      :class="{ active: pinned }"
-      :title="pinned ? 'Unpin — allow this section to collapse' : 'Pin — keep this section expanded'"
-      :aria-pressed="pinned ? 'true' : 'false'"
-      @click.stop="$emit('togglePin')"
-    >
-      <!-- outline thumbtack when unpinned -->
-      <svg
-        v-if="!pinned"
-        class="pin-icon"
-        viewBox="0 0 16 16"
-        width="14"
-        height="14"
-        aria-hidden="true"
+    <span class="stats-header-meta">
+      <span
+        v-if="category"
+        class="stats-category-badge"
+        :class="categoryClass"
+        :title="`${category} — investigation category`"
+      >{{ category }}</span>
+      <button
+        type="button"
+        class="stats-pin-btn"
+        :class="{ active: pinned }"
+        :title="pinned ? 'Pinned — stays open with Collapse All' : 'Pin open'"
+        :aria-label="pinned ? 'Unpin' : 'Pin open'"
+        :aria-pressed="pinned ? 'true' : 'false'"
+        @click.stop="$emit('togglePin')"
       >
-        <path
-          fill="currentColor"
-          d="M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5V6.27A2.75 2.75 0 0 1 5.25 4 2.75 2.75 0 0 1 8 1.25zm0 1.5A1.25 1.25 0 0 0 6.75 4c0 .5.28.93.7 1.15l.3.14v6.1l.25-.27.25.27V5.29l.3-.14c.42-.22.7-.65.7-1.15A1.25 1.25 0 0 0 8 2.75z"
-        />
-      </svg>
-      <!-- filled thumbtack when pinned -->
-      <svg
-        v-else
-        class="pin-icon"
-        viewBox="0 0 16 16"
-        width="14"
-        height="14"
-        aria-hidden="true"
-      >
-        <path
-          fill="currentColor"
-          d="M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5V6.27A2.75 2.75 0 0 1 5.25 4 2.75 2.75 0 0 1 8 1.25z"
-        />
-      </svg>
-    </button>
+        <!-- outline thumbtack when unpinned -->
+        <svg
+          v-if="!pinned"
+          class="pin-icon"
+          viewBox="0 0 16 16"
+          width="14"
+          height="14"
+          aria-hidden="true"
+        >
+          <path
+            fill="currentColor"
+            d="M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5V6.27A2.75 2.75 0 0 1 5.25 4 2.75 2.75 0 0 1 8 1.25zm0 1.5A1.25 1.25 0 0 0 6.75 4c0 .5.28.93.7 1.15l.3.14v6.1l.25-.27.25.27V5.29l.3-.14c.42-.22.7-.65.7-1.15A1.25 1.25 0 0 0 8 2.75z"
+          />
+        </svg>
+        <!-- filled thumbtack when pinned -->
+        <svg
+          v-else
+          class="pin-icon"
+          viewBox="0 0 16 16"
+          width="14"
+          height="14"
+          aria-hidden="true"
+        >
+          <path
+            fill="currentColor"
+            d="M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5V6.27A2.75 2.75 0 0 1 5.25 4 2.75 2.75 0 0 1 8 1.25z"
+          />
+        </svg>
+      </button>
+    </span>
   </div>
   <div
     v-if="!collapsed && helpText"
@@ -86,7 +90,7 @@
 <script setup>
 import { computed } from 'vue'
 import { STATS_SECTION_HELP } from '../config.js'
-import { STATS_TRIAGE_SECTIONS } from '../utils/statsPins.js'
+import { statsSectionCategory } from '../utils/statsPins.js'
 
 const MIME = 'application/x-btf-stats-section'
 
@@ -98,7 +102,11 @@ const props = defineProps({
 })
 
 const helpText = computed(() => STATS_SECTION_HELP[props.sectionId] || '')
-const isTriage = computed(() => STATS_TRIAGE_SECTIONS.includes(props.sectionId))
+const category = computed(() => statsSectionCategory(props.sectionId) || '')
+const categoryClass = computed(() => {
+  const cat = category.value
+  return cat ? `cat-${cat.toLowerCase()}` : ''
+})
 
 const emit = defineEmits(['toggle', 'togglePin', 'dragStart', 'dragEnd'])
 
@@ -186,25 +194,72 @@ function onDragEnd() {
   cursor: grabbing;
 }
 
-.stats-triage-badge {
-  flex: 0 0 auto;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-  color: var(--accent, #5B9BD5);
-  border: 1px solid var(--accent, #5B9BD5);
-  border-radius: 999px;
-  padding: 0 5px;
-  line-height: 1.5;
-}
-
 .stats-section-label {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.stats-header-meta {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+}
+
+.stats-category-badge {
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 0 5px;
+  line-height: 1.5;
+  /* Soft tinted pill — quieter than section title and Warning/Error. */
+  color: var(--badge-detail-fg, #c0c4c9);
+  background: var(--badge-detail-bg, #303337);
+  border: 1px solid var(--badge-detail-border, #565b61);
+}
+
+.stats-category-badge.cat-overview {
+  color: var(--badge-overview-fg);
+  background: var(--badge-overview-bg);
+  border-color: var(--badge-overview-border);
+}
+
+.stats-category-badge.cat-triage {
+  color: var(--badge-triage-fg);
+  background: var(--badge-triage-bg);
+  border-color: var(--badge-triage-border);
+}
+
+.stats-category-badge.cat-timing {
+  color: var(--badge-timing-fg);
+  background: var(--badge-timing-bg);
+  border-color: var(--badge-timing-border);
+}
+
+.stats-category-badge.cat-sched {
+  color: var(--badge-sched-fg);
+  background: var(--badge-sched-bg);
+  border-color: var(--badge-sched-border);
+}
+
+.stats-category-badge.cat-sync {
+  color: var(--badge-sync-fg);
+  background: var(--badge-sync-bg);
+  border-color: var(--badge-sync-border);
+}
+
+.stats-category-badge.cat-detail {
+  color: var(--badge-detail-fg);
+  background: var(--badge-detail-bg);
+  border-color: var(--badge-detail-border);
 }
 
 .chevron {
@@ -219,7 +274,6 @@ function onDragEnd() {
 
 .stats-pin-btn {
   flex: 0 0 22px;
-  margin-left: auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -231,18 +285,40 @@ function onDragEnd() {
   background: transparent;
   color: var(--fg-dim, #9e9e9e);
   cursor: pointer;
-  opacity: 0.75;
+  opacity: 0;
+  pointer-events: none;
 }
 
-.stats-pin-btn:hover {
+/* Hover devices: reveal outline pin on row hover / keyboard focus. */
+@media (hover: hover) {
+  .stats-section-title:hover .stats-pin-btn:not(.active),
+  .stats-section-title:focus-within .stats-pin-btn:not(.active) {
+    opacity: 0.75;
+    pointer-events: auto;
+  }
+}
+
+/* Touch / no-hover: keep outline pin discoverable without hover. */
+@media (hover: none) {
+  .stats-pin-btn:not(.active) {
+    opacity: 0.55;
+    pointer-events: auto;
+  }
+}
+
+.stats-pin-btn:hover,
+.stats-pin-btn:focus-visible {
   opacity: 1;
+  pointer-events: auto;
   color: var(--fg, #e0e0e0);
   background: rgba(128, 128, 128, 0.28);
+  outline: none;
 }
 
 .stats-pin-btn.active {
   opacity: 1;
-  color: var(--accent, #7ec8e3);
+  pointer-events: auto;
+  color: var(--fg, #e0e0e0);
   background: transparent;
 }
 

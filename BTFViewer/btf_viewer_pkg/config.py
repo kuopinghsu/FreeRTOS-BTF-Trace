@@ -132,7 +132,15 @@ STATS_HEAVY_SECTIONS         = frozenset({
     "task_core", "core_time", "wait_owner", "mutex_block",
     "task_health",
 })
-STATS_DEFAULT_EXPANDED_SECTIONS = frozenset({"cores", "health"})
+# Factory default: every Statistics section starts collapsed. SMP-active traces
+# expand+pin Core Utilisation via ``default_stats_presentation`` (Step 1.1).
+STATS_DEFAULT_EXPANDED_SECTIONS = frozenset()
+
+# Investigation categories (Step 1.1). Category is a property of the section —
+# reordering must not change it. Keep lockstep with web statsPins.js.
+STATS_SECTION_CATEGORIES: Tuple[str, ...] = (
+    "OVERVIEW", "TRIAGE", "TIMING", "SCHED", "SYNC", "DETAIL",
+)
 COMMAND_PALETTE_ACTIONS = (
     ("analysis", "Analysis Findings"),
     ("statistics", "Statistics"),
@@ -195,48 +203,62 @@ def cap_stats_table_rows(rows: list, cap: int = STATS_TABLE_DISPLAY_ROW_CAP) -> 
     )
 
 def default_section_collapsed() -> Dict[str, bool]:
-    """Default collapsed flags for statistics panel sections (shared with MVVM).
+    """Factory collapsed flags for statistics panel sections (shared with MVVM).
 
-    Core utilisation and Trace Health start open; every other section starts
-    collapsed. Keep keys in lockstep with web ``SECTION_COLLAPSE_REFS``.
+    All sections start collapsed. SMP-active traces expand+pin Core Utilisation
+    via ``default_stats_presentation``. Keep keys in lockstep with web
+    ``SECTION_COLLAPSE_REFS`` / ``STATS_PINNABLE_SECTIONS``.
     """
-    return {
-        "cores": False,
-        "tasks": True,
-        "migrations": True,
-        "exec": True,
-        "block": True,
-        "inter": True,
-        "health": False,
-        "preemption": True,
-        "priority": True,
-        "sync": True,
-        "queue": True,
-        "intervals": True,
-        "lifecycle": True,
-        "core_pairs": True,
-        "core_breakdown": True,
-        "affinity": True,
-        "deadline": True,
-        "tags": True,
-        "dispatch": True,
-        "anomalies": True,
-        "worst": True,
-        "switch_overhead": True,
-        "concurrency": True,
-        "period": True,
-        "task_core": True,
-        "wait_owner": True,
-        "task_health": True,
-        "response": True,
-        "crit_path": True,
-        "preempt_matrix": True,
-        "mutex_block": True,
-        "core_time": True,
-        "jitter": True,
-        "distrib": True,
-        "patterns": True,
-    }
+    return {sid: True for sid in STATS_PINNABLE_SECTIONS}
+
+
+# Per-core util above this counts as meaningful activity for SMP-active
+# presentation (Step 1.1). Declared core count alone is not enough.
+STATS_SMP_ACTIVE_MIN_UTIL_PCT = 0.01
+
+
+def stats_trace_is_smp_active(trace, *, min_util_pct: float = STATS_SMP_ACTIVE_MIN_UTIL_PCT) -> bool:
+    """True when meaningful non-IDLE/TICK work is observed on more than one core.
+
+    Uses cached ``trace.core_util_pct`` when present (full-trace util). This
+    drives initial Statistics presentation only — not topology or feature gates.
+    """
+    if trace is None:
+        return False
+    names = list(getattr(trace, "core_names", None) or [])
+    pct_map = getattr(trace, "core_util_pct", None) or {}
+    if not names and pct_map:
+        names = list(pct_map.keys())
+    active = 0
+    threshold = float(min_util_pct)
+    for core in names:
+        try:
+            pct = float(pct_map.get(core, 0.0))
+        except (TypeError, ValueError):
+            pct = 0.0
+        if pct > threshold:
+            active += 1
+            if active > 1:
+                return True
+    return False
+
+
+def default_stats_presentation(trace=None) -> Tuple[List[str], Dict[str, bool]]:
+    """Initial pins + collapsed map for a newly opened trace (or Reset to Defaults).
+
+    SMP-active → pin+expand ``cores`` only. Otherwise all collapsed, none pinned.
+    """
+    collapsed = default_section_collapsed()
+    pins: List[str] = []
+    if stats_trace_is_smp_active(trace):
+        pins = ["cores"]
+        collapsed["cores"] = False
+    return pins, collapsed
+
+
+def stats_section_category(section_id: str) -> Optional[str]:
+    """Return the category badge for *section_id*, or None if unknown."""
+    return STATS_SECTION_CATEGORY.get(str(section_id or "").strip())
 
 
 def sanitize_section_collapsed(src) -> Optional[Dict[str, bool]]:
@@ -297,33 +319,27 @@ def section_collapsed_from_rc(raw) -> Dict[str, bool]:
 
 # Statistics sections that can be pinned open (stay expanded) and the default
 # display order. Keep in sync with web/src/utils/statsPins.js.
-# Triage-first order (Step-1 item 6): surface "what deserves attention"
-# before detailed/overview metrics, then Timing, then SMP/Scheduling, then
-# Synchronization/Detail.
+# OVERVIEW → TRIAGE → TIMING → SCHED → SYNC → DETAIL (Step 1.1).
+# Category badges stay with the section after user reordering.
 STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
-    # Triage
+    # OVERVIEW — is the system generally healthy?
+    "cores",
+    "health",
+    "task_health",
+    # TRIAGE — what deserves attention?
     "anomalies",
     "worst",
     "patterns",
+    # TIMING — what timing behavior explains it?
     "response",
-    "task_health",
-    # Overview
-    "cores",
-    "core_breakdown",
-    "concurrency",
-    "switch_overhead",
-    "tasks",
-    "health",
-    # Timing Investigation
     "exec",
-    "block",
     "dispatch",
+    "block",
     "crit_path",
-    "inter",
     "period",
     "jitter",
-    "distrib",
-    # SMP / Scheduling
+    "inter",
+    # SCHED — scheduling / CPU / SMP
     "task_core",
     "core_time",
     "migrations",
@@ -332,27 +348,119 @@ STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
     "preempt_matrix",
     "preemption",
     "priority",
-    # Synchronization / Detail
-    "sync",
-    "wait_owner",
+    "concurrency",
+    # SYNC — blocking and synchronization
     "mutex_block",
+    "wait_owner",
+    "sync",
     "queue",
+    # DETAIL — supporting / lower-level measurements
+    "core_breakdown",
+    "switch_overhead",
+    "tasks",
+    "distrib",
     "intervals",
     "tags",
     "lifecycle",
     "deadline",
 )
 
-# Triage sections (Step-1 item 6): visually distinguished from Overview/
-# Timing/SMP/Sync "detailed analysis" sections. Keep in sync with
-# web/src/utils/statsPins.js STATS_TRIAGE_SECTIONS.
-STATS_TRIAGE_SECTIONS: Tuple[str, ...] = (
-    "anomalies",
-    "worst",
-    "patterns",
-    "response",
-    "task_health",
+# Section id → category label (exactly one primary category each).
+STATS_SECTION_CATEGORY: Dict[str, str] = {
+    "cores": "OVERVIEW",
+    "health": "OVERVIEW",
+    "task_health": "OVERVIEW",
+    "anomalies": "TRIAGE",
+    "worst": "TRIAGE",
+    "patterns": "TRIAGE",
+    "response": "TIMING",
+    "exec": "TIMING",
+    "dispatch": "TIMING",
+    "block": "TIMING",
+    "crit_path": "TIMING",
+    "period": "TIMING",
+    "jitter": "TIMING",
+    "inter": "TIMING",
+    "task_core": "SCHED",
+    "core_time": "SCHED",
+    "migrations": "SCHED",
+    "core_pairs": "SCHED",
+    "affinity": "SCHED",
+    "preempt_matrix": "SCHED",
+    "preemption": "SCHED",
+    "priority": "SCHED",
+    "concurrency": "SCHED",
+    "mutex_block": "SYNC",
+    "wait_owner": "SYNC",
+    "sync": "SYNC",
+    "queue": "SYNC",
+    "core_breakdown": "DETAIL",
+    "switch_overhead": "DETAIL",
+    "tasks": "DETAIL",
+    "distrib": "DETAIL",
+    "intervals": "DETAIL",
+    "tags": "DETAIL",
+    "lifecycle": "DETAIL",
+    "deadline": "DETAIL",
+}
+
+# Backward-compatible alias: TRIAGE category members.
+STATS_TRIAGE_SECTIONS: Tuple[str, ...] = tuple(
+    sid for sid, cat in STATS_SECTION_CATEGORY.items() if cat == "TRIAGE"
 )
+
+# Low-saturation category badge colours (Step 1.1-color). Values are
+# (background, foreground, border). Text remains the primary identifier;
+# colour is a secondary cue only. Keep lockstep with web CSS variables /
+# statsPins.js STATS_CATEGORY_BADGE_COLORS.
+STATS_CATEGORY_BADGE_COLORS: Dict[str, Dict[str, Tuple[str, str, str]]] = {
+    "OVERVIEW": {
+        "light": ("#E8EDF2", "#536475", "#B8C4CF"),
+        "dark":  ("#26313B", "#C3CED8", "#4A5966"),
+    },
+    "TRIAGE": {
+        "light": ("#F7EDD7", "#8A641F", "#DFC68E"),
+        "dark":  ("#3A3020", "#E2C27C", "#675630"),
+    },
+    "TIMING": {
+        "light": ("#E3EDF9", "#426A9E", "#AFC7E5"),
+        "dark":  ("#243449", "#A9C5E8", "#47658A"),
+    },
+    "SCHED": {
+        "light": ("#ECE8F7", "#665A98", "#C5BCE0"),
+        "dark":  ("#302C44", "#C1B7E3", "#5D557B"),
+    },
+    "SYNC": {
+        "light": ("#E2F1EF", "#39746F", "#ADD2CD"),
+        "dark":  ("#203A38", "#9DD0CA", "#426C68"),
+    },
+    "DETAIL": {
+        "light": ("#ECEDEF", "#656B72", "#C8CBD0"),
+        "dark":  ("#303337", "#C0C4C9", "#565B61"),
+    },
+}
+
+
+def stats_category_badge_colors(
+    category: str, *, dark: bool = True,
+) -> Tuple[str, str, str]:
+    """Return (bg, fg, border) for a Statistics category badge."""
+    key = "dark" if dark else "light"
+    palette = STATS_CATEGORY_BADGE_COLORS.get(str(category or "").strip().upper())
+    if not palette:
+        return STATS_CATEGORY_BADGE_COLORS["DETAIL"][key]
+    return palette[key]
+
+
+def stats_category_badge_stylesheet(category: str, *, dark: bool = True) -> str:
+    """Qt stylesheet for a tinted category badge (secondary to the section title)."""
+    bg, fg, border = stats_category_badge_colors(category, dark=dark)
+    return (
+        f"color:{fg}; background:{bg}; border:1px solid {border};"
+        " border-radius:8px; padding:0 5px;"
+        " font-size:7pt; font-weight:700; letter-spacing:0.4px;"
+    )
+
 
 # Analysis Finding id -> Statistics section id (Step-1 item 7: non-AI
 # "Investigate" routes straight to the relevant Statistics section instead of

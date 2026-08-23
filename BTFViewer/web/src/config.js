@@ -86,7 +86,9 @@ export const STATS_HEAVY_SECTIONS = [
   'task_core', 'core_time', 'wait_owner', 'mutex_block',
   'task_health',
 ]
-export const STATS_DEFAULT_EXPANDED_SECTIONS = ['cores', 'health']
+// Factory default: every section starts collapsed. SMP-active traces expand+pin
+// Core Utilisation via defaultStatsPresentation() (Step 1.1).
+export const STATS_DEFAULT_EXPANDED_SECTIONS = []
 export const COMMAND_PALETTE_ACTIONS = [
   ['analysis', 'Analysis Findings'],
   ['statistics', 'Statistics'],

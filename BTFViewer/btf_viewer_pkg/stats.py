@@ -2543,7 +2543,7 @@ class _IconTextButton(QWidget):
 
 
 class _StatsPinButton(QLabel):
-    """Section pin toggle.
+    """Section pin toggle (outline on hover/focus; filled when pinned).
 
     Uses a QLabel pixmap instead of QToolButton/QPushButton.setIcon — macOS
     application stylesheets routinely suppress tool-button icons.
@@ -2558,34 +2558,65 @@ class _StatsPinButton(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._pinned = False
         self._hovered = False
+        self._row_active = False
+        self._dark = True
+
+    def set_row_active(self, active: bool) -> None:
+        """Show outline pin while the section header row is hovered."""
+        self._row_active = bool(active)
+        self._refresh_icon()
 
     def set_pinned(self, pinned: bool, *, dark: bool = True) -> None:
         self._pinned = bool(pinned)
-        muted = "#D0D0D0" if dark else "#555555"
-        accent = "#7EC8E3" if dark else "#2A6FB2"
-        path = _IC_PIN_FILLED if self._pinned else _IC_PIN
-        color = accent if self._pinned else muted
-        self.setPixmap(_svg_pixmap(path, color, 14))
+        self._dark = bool(dark)
         self.setToolTip(
-            "Unpin — allow this section to collapse"
+            "Pinned — stays open with Collapse All"
             if self._pinned else
-            "Pin — keep this section expanded")
+            "Pin open")
+        self.setAccessibleName(
+            "Unpin" if self._pinned else "Pin open")
+        self._refresh_icon()
+
+    def _pin_visible(self) -> bool:
+        return bool(
+            self._pinned or self._row_active or self._hovered or self.hasFocus())
+
+    def _refresh_icon(self) -> None:
+        if not self._pin_visible():
+            self.clear()
+            self.update()
+            return
+        # Monochrome from theme palette; filled vs outline conveys state.
+        fg = self.palette().color(QPalette.ColorRole.WindowText)
+        if not fg.isValid() or fg.alpha() == 0:
+            fg = QColor("#D0D0D0" if self._dark else "#555555")
+        path = _IC_PIN_FILLED if self._pinned else _IC_PIN
+        self.setPixmap(_svg_pixmap(path, fg.name(), 14))
         self.update()
 
     def enterEvent(self, event) -> None:  # noqa: N802
         self._hovered = True
-        self.update()
+        self._refresh_icon()
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:  # noqa: N802
         self._hovered = False
-        self.update()
+        self._refresh_icon()
         super().leaveEvent(event)
 
+    def focusInEvent(self, event) -> None:  # noqa: N802
+        self._refresh_icon()
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802
+        self._refresh_icon()
+        super().focusOutEvent(event)
+
     def paintEvent(self, event) -> None:  # noqa: N802
-        if self._hovered:
+        if self._pin_visible() and (self._hovered or self.hasFocus()):
             p = QPainter(self)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             p.setPen(Qt.PenStyle.NoPen)
@@ -2600,6 +2631,22 @@ class _StatsPinButton(QLabel):
             event.accept()
             return
         super().mousePressEvent(event)
+
+
+class _StatsHeaderHoverFilter(QObject):
+    """Reveal the outline pin while the header row is hovered."""
+
+    def __init__(self, pin: _StatsPinButton) -> None:
+        super().__init__(pin)
+        self._pin = pin
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        et = event.type()
+        if et in (QEvent.Type.Enter, QEvent.Type.HoverEnter):
+            self._pin.set_row_active(True)
+        elif et in (QEvent.Type.Leave, QEvent.Type.HoverLeave):
+            self._pin.set_row_active(False)
+        return False
 
 
 _STATS_SECTION_MIME = "application/x-btf-stats-section"
@@ -8464,6 +8511,8 @@ class _StatsPanel(QWidget):
         self._scope_to_cursors: bool = True
         self._section_collapsed: Dict[str, bool] = default_section_collapsed()
         self._section_pins: List[str] = []
+        # Apply SMP-aware presentation once on the next rebuild when pins are empty.
+        self._needs_presentation_defaults = True
         self._section_order: List[str] = normalize_stats_section_order(None)
         self._pending_sections: List[Tuple[str, str, str, object]] = []
         self._drop_target_sid: Optional[str] = None
@@ -8473,6 +8522,7 @@ class _StatsPanel(QWidget):
         self._section_header_rows: Dict[str, QWidget] = {}
         self._section_seps: Dict[str, QWidget] = {}
         self._section_pin_btns: Dict[str, _StatsPinButton] = {}
+        self._section_category_badges: Dict[str, QLabel] = {}
         self._section_bodies: Dict[str, QWidget] = {}
         self._section_populate: Dict[str, object] = {}
         self._section_drag_filters: List[_StatsSectionDragFilter] = []
@@ -8699,6 +8749,7 @@ class _StatsPanel(QWidget):
         self._section_header_rows.clear()
         self._section_seps.clear()
         self._section_pin_btns.clear()
+        self._section_category_badges.clear()
         self._section_bodies.clear()
         self._section_populate.clear()
         self._section_drag_filters.clear()
@@ -8783,6 +8834,14 @@ class _StatsPanel(QWidget):
         pinned = set(self._section_pins)
         for sid, btn in self._section_pin_btns.items():
             btn.set_pinned(sid in pinned, dark=self._is_dark)
+        self._sync_category_badges()
+
+    def _sync_category_badges(self) -> None:
+        """Apply theme-aware low-saturation colours to category badges."""
+        for sid, badge in getattr(self, "_section_category_badges", {}).items():
+            cat = STATS_SECTION_CATEGORY.get(sid) or badge.text()
+            badge.setStyleSheet(
+                stats_category_badge_stylesheet(cat, dark=self._is_dark))
 
 
     def capture_layout_state(self) -> dict:
@@ -9431,6 +9490,8 @@ class _StatsPanel(QWidget):
         self._update_scope_action_icons()
         for sid in self._section_headers:
             self._update_section_header_icon(sid)
+        self._sync_category_badges()
+        self._sync_pin_buttons()
         for grip in self._table_grips:
             grip.set_dark(is_dark)
         for btn in (
@@ -10173,10 +10234,15 @@ class _StatsPanel(QWidget):
         bar.setValue(bar.minimum())
 
     def _toggle_section(self, section_id: str) -> None:
-        if section_id in self._section_pins:
-            return
-        self._set_section_collapsed(
-            section_id, not self._section_collapsed.get(section_id, False))
+        # Pin protects Collapse All only — manual collapse clears the pin.
+        currently_collapsed = bool(self._section_collapsed.get(section_id, False))
+        will_collapse = not currently_collapsed
+        if will_collapse and section_id in self._section_pins:
+            self._section_pins = normalize_stats_pins(
+                [p for p in self._section_pins if p != section_id])
+            self._sync_pin_buttons()
+            self.section_pins_changed.emit(list(self._section_pins))
+        self._set_section_collapsed(section_id, will_collapse)
         self._notify_section_collapsed()
 
     def _toggle_section_pin(self, section_id: str) -> None:
@@ -10266,6 +10332,8 @@ class _StatsPanel(QWidget):
         hdr.setCursor(Qt.CursorShape.PointingHandCursor)
         hdr.setIcon(_stats_chevron_icon(collapsed, self._is_dark))
         hdr.setIconSize(QSize(10, 10))
+        hdr.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         hdr.setStyleSheet(
             f"text-align:left; padding:2px 0 2px 2px; border:none; background:transparent;"
             f" font-weight:bold; font-size:{ui_fs};"
@@ -10277,16 +10345,19 @@ class _StatsPanel(QWidget):
             lambda sid=section_id: self._toggle_section_pin(sid))
         row_lay.addWidget(grip, 0)
         row_lay.addWidget(hdr, 1)
-        if section_id in STATS_TRIAGE_SECTIONS:
-            triage_badge = QLabel("TRIAGE")
-            triage_badge.setToolTip("Triage \u2014 check this before detailed analysis")
-            triage_badge.setStyleSheet(
-                "color:#5B9BD5; font-size:7pt; font-weight:700; letter-spacing:0.4px;"
-                " border:1px solid #5B9BD5; border-radius:8px; padding:0 5px;"
-                " background:transparent;"
-            )
-            row_lay.addWidget(triage_badge, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        row_lay.addWidget(pin, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        category = STATS_SECTION_CATEGORY.get(section_id)
+        if category:
+            cat_badge = QLabel(category)
+            cat_badge.setObjectName("stats_section_category")
+            cat_badge.setToolTip(f"{category} \u2014 investigation category")
+            cat_badge.setStyleSheet(
+                stats_category_badge_stylesheet(category, dark=self._is_dark))
+            row_lay.addWidget(
+                cat_badge, 0,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self._section_category_badges[section_id] = cat_badge
+        row_lay.addWidget(
+            pin, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._ilay.addWidget(row)
         self._section_headers[section_id] = hdr
         self._section_header_rows[section_id] = row
@@ -10295,6 +10366,9 @@ class _StatsPanel(QWidget):
         filt = _StatsSectionDragFilter(self, section_id, grip)
         self._section_drag_filters.append(filt)
         self._section_drag_filter_by_id[section_id] = filt
+        hover = _StatsHeaderHoverFilter(pin)
+        row.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        row.installEventFilter(hover)
         for w in (row, grip, hdr, pin):
             w.setAcceptDrops(True)
             w.installEventFilter(filt)
@@ -13420,6 +13494,7 @@ class _StatsPanel(QWidget):
         self.clear_plot_session()
         self._defer_heavy_collapse_done = False
         self._trace = None
+        self._needs_presentation_defaults = True
         self._cursor_times = []
         self._btn_export_csv.setEnabled(False)
         self._btn_export_html.setEnabled(False)
@@ -13434,11 +13509,28 @@ class _StatsPanel(QWidget):
         self._stats_summary = empty
         self._ilay.addWidget(empty)
 
+    def apply_presentation_defaults(self, trace: Optional["BtfTrace"] = None,
+                                    *, emit: bool = False) -> None:
+        """Apply SMP-aware pin/collapse defaults for *trace* (Reset to Defaults)."""
+        pins, collapsed = default_stats_presentation(
+            trace if trace is not None else self._trace)
+        self.set_section_pins(pins, emit=emit)
+        self.set_section_collapsed_map(collapsed, emit=emit)
+        self._needs_presentation_defaults = False
+
     def rebuild(self, trace: Optional["BtfTrace"]) -> None:
         if trace is None:
             self.clear_trace()
             return
         self._trace = trace
+        # Fresh open / empty pins: SMP-active → expand+pin Core Utilisation once.
+        # Persisted pins and later rebuilds (scope/filter) keep user state.
+        if getattr(self, "_needs_presentation_defaults", False):
+            self._needs_presentation_defaults = False
+            if not self._section_pins:
+                pins, collapsed = default_stats_presentation(trace)
+                self._section_pins = normalize_stats_pins(pins)
+                self._section_collapsed = dict(collapsed)
         defer_heavy = trace_needs_deferred_stats_load(trace)
         self._btn_export_csv.setEnabled(True)
         self._btn_export_html.setEnabled(True)

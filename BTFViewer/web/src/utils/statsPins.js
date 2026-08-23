@@ -1,48 +1,128 @@
 /**
- * Statistics section pin helpers and default display order.
+ * Statistics section pin helpers, categories, and default display order.
  * Keep section IDs in sync with btf_viewer_pkg/config.py STATS_PINNABLE_SECTIONS.
  */
 
 import { STATS_DEFAULT_EXPANDED_SECTIONS } from '../config.js'
 
-// Triage sections (Step-1 item 6): visually distinguished in the section
-// header from Overview/Timing/SMP/Sync "detailed analysis" sections. Keep in
-// sync with btf_viewer_pkg/config.py STATS_TRIAGE_SECTIONS.
-export const STATS_TRIAGE_SECTIONS = Object.freeze([
-  'anomalies',
-  'worst',
-  'patterns',
-  'response',
-  'task_health',
+/** Investigation categories (Step 1.1). Category is a property of the section. */
+export const STATS_SECTION_CATEGORIES = Object.freeze([
+  'OVERVIEW', 'TRIAGE', 'TIMING', 'SCHED', 'SYNC', 'DETAIL',
 ])
 
-// Triage-first default order (Step-1 item 6): surface "what deserves
-// attention" before detailed/overview metrics, then Timing, then
-// SMP/Scheduling, then Synchronization/Detail.
+/**
+ * Section id → category label (exactly one primary category each).
+ * Keep lockstep with btf_viewer_pkg/config.py STATS_SECTION_CATEGORY.
+ */
+export const STATS_SECTION_CATEGORY = Object.freeze({
+  cores: 'OVERVIEW',
+  health: 'OVERVIEW',
+  task_health: 'OVERVIEW',
+  anomalies: 'TRIAGE',
+  worst: 'TRIAGE',
+  patterns: 'TRIAGE',
+  response: 'TIMING',
+  exec: 'TIMING',
+  dispatch: 'TIMING',
+  block: 'TIMING',
+  crit_path: 'TIMING',
+  period: 'TIMING',
+  jitter: 'TIMING',
+  inter: 'TIMING',
+  task_core: 'SCHED',
+  core_time: 'SCHED',
+  migrations: 'SCHED',
+  core_pairs: 'SCHED',
+  affinity: 'SCHED',
+  preempt_matrix: 'SCHED',
+  preemption: 'SCHED',
+  priority: 'SCHED',
+  concurrency: 'SCHED',
+  mutex_block: 'SYNC',
+  wait_owner: 'SYNC',
+  sync: 'SYNC',
+  queue: 'SYNC',
+  core_breakdown: 'DETAIL',
+  switch_overhead: 'DETAIL',
+  tasks: 'DETAIL',
+  distrib: 'DETAIL',
+  intervals: 'DETAIL',
+  tags: 'DETAIL',
+  lifecycle: 'DETAIL',
+  deadline: 'DETAIL',
+})
+
+/** Backward-compatible alias: TRIAGE category members. */
+export const STATS_TRIAGE_SECTIONS = Object.freeze(
+  Object.entries(STATS_SECTION_CATEGORY)
+    .filter(([, cat]) => cat === 'TRIAGE')
+    .map(([sid]) => sid),
+)
+
+/**
+ * Low-saturation category badge colours (Step 1.1-color).
+ * Values are { light|dark: { bg, fg, border } }. Text remains the primary
+ * identifier; colour is a secondary cue. Keep lockstep with
+ * btf_viewer_pkg/config.py STATS_CATEGORY_BADGE_COLORS and App.vue CSS vars.
+ */
+export const STATS_CATEGORY_BADGE_COLORS = Object.freeze({
+  OVERVIEW: {
+    light: { bg: '#E8EDF2', fg: '#536475', border: '#B8C4CF' },
+    dark:  { bg: '#26313B', fg: '#C3CED8', border: '#4A5966' },
+  },
+  TRIAGE: {
+    light: { bg: '#F7EDD7', fg: '#8A641F', border: '#DFC68E' },
+    dark:  { bg: '#3A3020', fg: '#E2C27C', border: '#675630' },
+  },
+  TIMING: {
+    light: { bg: '#E3EDF9', fg: '#426A9E', border: '#AFC7E5' },
+    dark:  { bg: '#243449', fg: '#A9C5E8', border: '#47658A' },
+  },
+  SCHED: {
+    light: { bg: '#ECE8F7', fg: '#665A98', border: '#C5BCE0' },
+    dark:  { bg: '#302C44', fg: '#C1B7E3', border: '#5D557B' },
+  },
+  SYNC: {
+    light: { bg: '#E2F1EF', fg: '#39746F', border: '#ADD2CD' },
+    dark:  { bg: '#203A38', fg: '#9DD0CA', border: '#426C68' },
+  },
+  DETAIL: {
+    light: { bg: '#ECEDEF', fg: '#656B72', border: '#C8CBD0' },
+    dark:  { bg: '#303337', fg: '#C0C4C9', border: '#565B61' },
+  },
+})
+
+/** @param {string} category @param {boolean} [dark=true]
+ *  @returns {{ bg: string, fg: string, border: string }} */
+export function statsCategoryBadgeColors(category, dark = true) {
+  const key = dark ? 'dark' : 'light'
+  const palette = STATS_CATEGORY_BADGE_COLORS[String(category || '').trim().toUpperCase()]
+  return palette ? palette[key] : STATS_CATEGORY_BADGE_COLORS.DETAIL[key]
+}
+
+/**
+ * OVERVIEW → TRIAGE → TIMING → SCHED → SYNC → DETAIL (Step 1.1).
+ * Category badges stay with the section after user reordering.
+ */
 export const STATS_PINNABLE_SECTIONS = Object.freeze([
-  // Triage
+  // OVERVIEW — is the system generally healthy?
+  'cores',
+  'health',
+  'task_health',
+  // TRIAGE — what deserves attention?
   'anomalies',
   'worst',
   'patterns',
+  // TIMING — what timing behavior explains it?
   'response',
-  'task_health',
-  // Overview
-  'cores',
-  'core_breakdown',
-  'concurrency',
-  'switch_overhead',
-  'tasks',
-  'health',
-  // Timing Investigation
   'exec',
-  'block',
   'dispatch',
+  'block',
   'crit_path',
-  'inter',
   'period',
   'jitter',
-  'distrib',
-  // SMP / Scheduling
+  'inter',
+  // SCHED — scheduling / CPU / SMP
   'task_core',
   'core_time',
   'migrations',
@@ -51,16 +131,75 @@ export const STATS_PINNABLE_SECTIONS = Object.freeze([
   'preempt_matrix',
   'preemption',
   'priority',
-  // Synchronization / Detail
-  'sync',
-  'wait_owner',
+  'concurrency',
+  // SYNC — blocking and synchronization
   'mutex_block',
+  'wait_owner',
+  'sync',
   'queue',
+  // DETAIL — supporting / lower-level measurements
+  'core_breakdown',
+  'switch_overhead',
+  'tasks',
+  'distrib',
   'intervals',
   'tags',
   'lifecycle',
   'deadline',
 ])
+
+/** Per-core util above this counts as meaningful SMP-active activity. */
+export const STATS_SMP_ACTIVE_MIN_UTIL_PCT = 0.01
+
+/**
+ * True when meaningful non-IDLE/TICK work is observed on more than one core.
+ * Uses cached ``trace.coreUtilPct`` when present. Presentation only.
+ * @param {object|null|undefined} trace
+ * @param {number} [minUtilPct]
+ * @returns {boolean}
+ */
+export function statsTraceIsSmpActive(trace, minUtilPct = STATS_SMP_ACTIVE_MIN_UTIL_PCT) {
+  if (!trace) return false
+  const names = Array.isArray(trace.coreNames) ? [...trace.coreNames] : []
+  const pctMap = trace.coreUtilPct && typeof trace.coreUtilPct === 'object'
+    ? trace.coreUtilPct
+    : {}
+  if (!names.length) {
+    for (const k of Object.keys(pctMap)) names.push(k)
+  }
+  const threshold = Number(minUtilPct)
+  let active = 0
+  for (const core of names) {
+    const pct = Number(pctMap[core] ?? 0)
+    if (Number.isFinite(pct) && pct > threshold) {
+      active += 1
+      if (active > 1) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Initial pins + collapsed map for a newly opened trace (or Reset to Defaults).
+ * SMP-active → pin+expand ``cores`` only. Otherwise all collapsed, none pinned.
+ * @param {object|null|undefined} trace
+ * @returns {{ pins: string[], collapsed: Record<string, boolean> }}
+ */
+export function defaultStatsPresentation(trace = null) {
+  const collapsed = defaultSectionCollapsed()
+  /** @type {string[]} */
+  const pins = []
+  if (statsTraceIsSmpActive(trace)) {
+    pins.push('cores')
+    collapsed.cores = false
+  }
+  return { pins, collapsed }
+}
+
+/** @param {string} sectionId @returns {string|undefined} */
+export function statsSectionCategory(sectionId) {
+  return STATS_SECTION_CATEGORY[String(sectionId || '').trim()]
+}
 
 /** @param {unknown} raw @returns {string[]} */
 export function normalizeStatsPins(raw) {

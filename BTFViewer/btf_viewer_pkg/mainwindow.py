@@ -10008,9 +10008,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Restore Statistics layout defaults; persist to .rc only when requested."""
         panel = getattr(self, "_stats_panel", None)
         if panel is not None:
-            panel.set_section_pins([], emit=False)
             panel.set_section_order("", emit=False)
-            panel.set_section_collapsed_map(default_section_collapsed(), emit=False)
+            if hasattr(panel, "apply_presentation_defaults"):
+                panel.apply_presentation_defaults(emit=False)
+            else:
+                pins, collapsed = default_stats_presentation(
+                    getattr(panel, "_trace", None))
+                panel.set_section_pins(pins, emit=False)
+                panel.set_section_collapsed_map(collapsed, emit=False)
             panel.apply_section_table_heights(default_section_table_heights())
         if not persist:
             return

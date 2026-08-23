@@ -1383,6 +1383,7 @@ import { downloadPerfetto } from './utils/perfettoExport.js'
 import { appIconSvgMarkup } from './utils/htmlReport.js'
 import {
   defaultSectionCollapsed,
+  defaultStatsPresentation,
   defaultStatsSectionOrder,
   mergeSectionCollapsed,
   normalizeStatsPins,
@@ -2277,9 +2278,10 @@ function onSettingsSave(next, meta = {}) {
   const resetLayout = !!(meta.resetLayout || next?.resetLayout)
   applyAppSettings(next, { silent: false, persist: true })
   if (resetLayout) {
-    appSettings.statsPinnedSections = []
+    const { pins, collapsed } = defaultStatsPresentation(trace.value)
+    appSettings.statsPinnedSections = pins
     appSettings.statsSectionOrder = defaultStatsSectionOrder()
-    appSettings.statsSectionCollapsed = defaultSectionCollapsed()
+    appSettings.statsSectionCollapsed = collapsed
     statsSectionHeights.value = {}
     saveSettings(appSettings)
     scheduleSessionSave()
@@ -2764,6 +2766,14 @@ async function attachParsedTrace(name, packedOrTrace, {
     tab.trace = markRaw(trace)
     if (typeof sourceText === 'string' && sourceText) {
       tab.sourceText = sourceText
+    }
+    // Fresh open with no saved pins: SMP-aware Core Utilisation presentation.
+    // Session restore and user pins from localStorage keep their layout.
+    if (!fromSession && !(appSettings.statsPinnedSections || []).length) {
+      const { pins, collapsed } = defaultStatsPresentation(trace)
+      appSettings.statsPinnedSections = pins
+      appSettings.statsSectionCollapsed = collapsed
+      saveSettings(appSettings)
     }
     if (trace.meta?._versionWarning) {
       showToast(trace.meta._versionWarning, 'info')
@@ -5791,6 +5801,25 @@ watch(
   --analysis-ok:   #7dcea0;
   --analysis-warn: #e67e22;
   --analysis-err:  #e74c3c;
+  /* Statistics category badges (dark) — lockstep with config.py palette */
+  --badge-overview-bg: #26313B;
+  --badge-overview-fg: #C3CED8;
+  --badge-overview-border: #4A5966;
+  --badge-triage-bg: #3A3020;
+  --badge-triage-fg: #E2C27C;
+  --badge-triage-border: #675630;
+  --badge-timing-bg: #243449;
+  --badge-timing-fg: #A9C5E8;
+  --badge-timing-border: #47658A;
+  --badge-sched-bg: #302C44;
+  --badge-sched-fg: #C1B7E3;
+  --badge-sched-border: #5D557B;
+  --badge-sync-bg: #203A38;
+  --badge-sync-fg: #9DD0CA;
+  --badge-sync-border: #426C68;
+  --badge-detail-bg: #303337;
+  --badge-detail-fg: #C0C4C9;
+  --badge-detail-border: #565B61;
 }
 
 .app:not(.dark),
@@ -5837,6 +5866,25 @@ body:has(.app:not(.dark)) {
   --analysis-ok:   #166534;
   --analysis-warn: #9a4d00;
   --analysis-err:  #c0392b;
+  /* Statistics category badges (light) — lockstep with config.py palette */
+  --badge-overview-bg: #E8EDF2;
+  --badge-overview-fg: #536475;
+  --badge-overview-border: #B8C4CF;
+  --badge-triage-bg: #F7EDD7;
+  --badge-triage-fg: #8A641F;
+  --badge-triage-border: #DFC68E;
+  --badge-timing-bg: #E3EDF9;
+  --badge-timing-fg: #426A9E;
+  --badge-timing-border: #AFC7E5;
+  --badge-sched-bg: #ECE8F7;
+  --badge-sched-fg: #665A98;
+  --badge-sched-border: #C5BCE0;
+  --badge-sync-bg: #E2F1EF;
+  --badge-sync-fg: #39746F;
+  --badge-sync-border: #ADD2CD;
+  --badge-detail-bg: #ECEDEF;
+  --badge-detail-fg: #656B72;
+  --badge-detail-border: #C8CBD0;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }

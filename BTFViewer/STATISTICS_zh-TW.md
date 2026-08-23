@@ -148,12 +148,12 @@ BTFViewer **不會**進行原始碼分析，也**不會**模擬 RTOS 排程器�
 |---|---|
 | **+** | 展開所有區段 |
 | **−** | 收合所有區段；已 Pin 的區段仍會保持展開 |
-| Reset-order | 恢復預設的區段順序 |
+| Reset-order | 恢復預設區段順序（Overview → Triage → Timing → Sched → Sync → Detail） |
 | Section title / chevron | 點選區段標題或箭頭，展開或收合單一區段 |
 | **⠿** grip | 拖曳控制點以調整區段位置 |
-| Pin | 使用 **Collapse all** 時仍保持該區段展開 |
+| Pin | 使用 **Collapse all** 時仍保持該區段展開（懸停／焦點顯示外框 Pin；已固定為實心）。手動收合已 Pin 的區段會同時清除 Pin |
 
-區段順序、Pin 狀態、展開／收合狀態與表格高度都會保留至下次啟動。使用 **Settings → Reset to Defaults** 可恢復內建版面配置。
+區段順序、Pin 狀態、展開／收合狀態與表格高度都會保留至下次啟動。**Settings → Reset to Defaults** 會依目前 Trace 恢復內建版面：若有超過一個核心出現有意義的執行活動（SMP-active），**Core utilisation** 會預設展開並 Pin；否則所有區段預設收合且未 Pin。每個區段右側會顯示分類徽章（**OVERVIEW**、**TRIAGE**、**TIMING**、**SCHED**、**SYNC**、**DETAIL**）。徽章會依分類使用低飽和度底色與邊框（視覺權重低於 Warning／Error）；類別名稱文字仍是主要識別方式。重新排序不會改變分類。Pin 圖示維持單色，且與徽章顏色獨立。
 
 ### 匯出與比較（Export and Compare）
 
@@ -192,8 +192,8 @@ Priority Inheritance、Mutex / Semaphore 與 Interval Analysis 也會提供詳�
 
 1. 開啟一份追蹤檔，例如 `tracedata/example-4cores.btf.gz` 可用來觀察 4 核心 SMP 工作負載；`tracedata/example-2cores.btf.gz` 則適合較小型的雙核心範例。
 2. 可先點選工具列的 **Analysis**，快速查看目前範圍內依嚴重程度分類的分析結果。
-3. 預設會展開 **Core utilisation** 與 **Trace Health**，其他區段則保持收合。依需要展開區段，或使用面板上方的 **+** / **−**。展開／收合狀態會保留，下一次啟動時自動恢復。常用區段可使用 Pin 固定展開。
-4. 可拖曳 **⠿** 調整區段順序；需要恢復內建順序時，使用 reset-order 圖示。
+3. 僅在載入的 Trace 為 SMP-active（超過一個核心有有意義的執行活動）時，**Core utilisation** 會預設展開並 Pin；否則所有區段預設收合。依需要展開區段，或使用面板上方的 **+** / **−**。展開／收合與 Pin 狀態會保留，下一次啟動時自動恢復。手動收合已 Pin 的區段會清除 Pin。
+4. 可拖曳 **⠿** 調整區段順序；需要恢復內建順序（Overview → Triage → Timing → Sched → Sync → Detail）時，使用 reset-order 圖示。
 5. 放置至少 **2 個游標**並啟用 **Limit to C1–Cn**，可將所有指標與 Analysis Findings 限制在指定時間範圍內。
 6. 可從 Statistics 直接回到 Timeline：
    - 點選支援圖表的資料列，可開啟分布圖。
@@ -229,7 +229,7 @@ Priority Inheritance、Mutex / Semaphore 與 Interval Analysis 也會提供詳�
 <a id="summary-scheduling-and-core-utilisation" name="summary-scheduling-and-core-utilisation">&#x200B;</a>
 ### 摘要、排程與核心使用率（Summary, Scheduling, and Core Utilisation） ![](../images/readme/h4.svg)
 
-這些區段依 **Statistics** 面板的預設順序排列。**Summary** 與 **Scheduling summary** 固定在最前方，**Core utilisation** 則是第一個可以 Pin 的區段。以下說明依照「系統負載 → 遷移／親和性／生命週期／Deadline → 執行區段時間 → 搶佔／同步／Tag」的順序整理；使用者仍可透過拖曳自行調整面板順序。
+這些區段依 **Statistics** 面板的預設順序排列（Overview → Triage → Timing → Sched → Sync → Detail）。**Summary** 與 **Scheduling summary** 固定在最前方，**Core utilisation** 是第一個 OVERVIEW 區段，也是第一個可以 Pin 的區段。以下說明依照「系統負載 → 遷移／親和性／生命週期／Deadline → 執行區段時間 → 搶佔／同步／Tag」的順序整理；使用者仍可透過拖曳自行調整面板順序。重新排序不會改變區段的分類徽章。
 
 **Summary（摘要）** — 顯示目前範圍的整體計數，包括追蹤時間長度、工作、執行區段與 STI 事件數量。Span 為目前作用範圍內的 *t*<sub>max</sub> − *t*<sub>min</sub>，範圍可以是完整追蹤資料或游標區間。
 

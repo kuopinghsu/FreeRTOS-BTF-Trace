@@ -78,15 +78,15 @@ class ConfigDefaultsTests(unittest.TestCase):
         collapsed = default_section_collapsed()
         self.assertIn("cores", collapsed)
         self.assertIn("intervals", collapsed)
-        self.assertFalse(collapsed["cores"])
-        self.assertFalse(collapsed["health"])
+        self.assertTrue(collapsed["cores"])
+        self.assertTrue(collapsed["health"])
         self.assertEqual(
             {sid for sid, flag in collapsed.items() if not flag},
             set(STATS_DEFAULT_EXPANDED_SECTIONS),
         )
         self.assertTrue(set(STATS_HEAVY_SECTIONS) <= set(collapsed))
         self.assertEqual(set(collapsed), set(STATS_PINNABLE_SECTIONS))
-        self.assertTrue(any(collapsed.values()))
+        self.assertTrue(all(collapsed.values()))
 
     def test_sanitize_section_collapsed(self) -> None:
         self.assertIsNone(sanitize_section_collapsed(None))
@@ -107,7 +107,7 @@ class ConfigDefaultsTests(unittest.TestCase):
         restored = section_collapsed_from_rc(section_collapsed_to_rc(flags))
         self.assertFalse(restored["exec"])
         self.assertTrue(restored["cores"])
-        self.assertFalse(restored["health"])
+        self.assertTrue(restored["health"])
         self.assertEqual(section_collapsed_from_rc(""), default_section_collapsed())
 
     def test_expand_all_roundtrip_keeps_every_section_open(self) -> None:
