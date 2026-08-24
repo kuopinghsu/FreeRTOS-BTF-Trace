@@ -133,12 +133,12 @@ Statistics 位於右側面板。標題會顯示 **Full Trace** 或目前的 **C1
 
 ### 匯出的統計報告
 
-**Export HTML** 使用目前的分析範圍，並產生可獨立閱讀的檢查報告。報告中的每個統計表格都可個別下載 CSV，因此只需儲存後續分析需要的資料。報告包含：
+**Export HTML** 使用目前的分析範圍，並產生可獨立閱讀的檢查報告；各統計表格支援搜尋、排序、Problems only 與 Show all。報告包含：
 
 - 分析範圍、追蹤資料資訊、篩選條件與時間戳記起點；
 - 診斷重點指標與 Analysis Findings；
 - 與 Statistics 相同的表格、分組目錄及區段說明；
-- 各統計表格的搜尋、排序、Problems only、Show all 與 CSV 下載；
+- 各統計表格的搜尋、排序、Problems only 與 Show all；
 - Core Utilisation 下方的 SVG 負載平衡量表。
 
 HTML 報告可指出應調查的位置，但無法保留所有時間軸互動。若其他人需要驗證事件，仍應保留原始追蹤資料。

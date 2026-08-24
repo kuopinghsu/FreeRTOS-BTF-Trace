@@ -698,6 +698,34 @@ export function emptyInvestigationCase({
   }
 }
 
+/** Append *finding* to ``suspected_findings`` (dedupe by id). Lockstep Python. */
+export function addFindingToCase(caseObj, finding) {
+  const out = (caseObj && typeof caseObj === 'object')
+    ? { ...caseObj }
+    : emptyInvestigationCase()
+  if (!finding || typeof finding !== 'object') return out
+  const fid = String(finding.id || '').trim()
+  let items = (out.suspected_findings || [])
+    .filter(x => x && typeof x === 'object')
+    .map(x => ({ ...x }))
+  if (fid) items = items.filter(x => String(x.id || '').trim() !== fid)
+  items.push({ ...finding })
+  out.suspected_findings = items
+  const title = String(finding.title || finding.observation || fid).trim()
+  if (title && !String(out.goal || '').trim()) out.goal = title
+  if (title && !String(out.conclusion || '').trim()) out.conclusion = title
+  if (title && !String(out.question || '').trim()) out.question = title
+  const task = String(finding.task || '').trim()
+  if (task) {
+    const scope = { ...(out.scope || {}) }
+    const tasks = (scope.tasks || []).map(t => String(t).trim()).filter(Boolean)
+    if (!tasks.includes(task)) tasks.push(task)
+    scope.tasks = tasks
+    out.scope = scope
+  }
+  return out
+}
+
 function findingBlob(finding) {
   if (!finding || typeof finding !== 'object') return ''
   return `${finding.title || ''} ${finding.text || ''}`

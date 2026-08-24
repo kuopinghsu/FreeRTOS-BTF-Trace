@@ -271,7 +271,7 @@ describe('new compare builders', () => {
     assert.match(html, /detail-note/)
     assert.match(html, /Search table/)
     assert.match(html, /Show all/)
-    assert.match(html, /data-csv/)
+    assert.doesNotMatch(html, /data-csv/)
     assert.match(html, /toc-count/)
     assert.match(html, /report-toc-lead/)
     assert.match(html, /CPU and Migrations/)

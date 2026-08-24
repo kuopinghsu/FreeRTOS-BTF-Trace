@@ -48,9 +48,11 @@ _EDGE_RE = re.compile(
 _JUMP_RE = re.compile(r"jump:([0-9]+(?:\.[0-9]+)?)")
 # Graph node ids (F, E0, C3, H1, S0) — not timeline targets.
 _GRAPH_NODE_ID_RE = re.compile(r"^[A-Za-z]\d{0,3}$")
-_TASK_ID_RE = re.compile(r"\[[0-9]+\]|\[[0-9a-fA-FxX]+\]")
+# Unique names: the Desktop bundle flattens modules; a shared ``_TASK_ID_RE``
+# from ai_tools (with a capture group) must not be overwritten by this pattern.
+_MERMAID_TASK_ID_RE = re.compile(r"\[[0-9]+\]|\[[0-9a-fA-FxX]+\]")
 _CORE_LABEL_RE = re.compile(r"^Core[_\s]?\d+$", re.IGNORECASE)
-_TASK_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-]{0,47}$")
+_MERMAID_TASK_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-]{0,47}$")
 
 
 def actionable_diagram_highlight(label: str) -> Optional[str]:
@@ -64,13 +66,13 @@ def actionable_diagram_highlight(label: str) -> Optional[str]:
     text = re.sub(r"\s+", " ", text).strip(" ·,-")
     if not text or _GRAPH_NODE_ID_RE.fullmatch(text):
         return None
-    if _TASK_ID_RE.search(text):
+    if _MERMAID_TASK_ID_RE.search(text):
         return text
     if _CORE_LABEL_RE.fullmatch(text):
         return text
     if " " in text or len(text) > 48:
         return None
-    if _TASK_TOKEN_RE.fullmatch(text):
+    if _MERMAID_TASK_TOKEN_RE.fullmatch(text):
         return text
     return None
 

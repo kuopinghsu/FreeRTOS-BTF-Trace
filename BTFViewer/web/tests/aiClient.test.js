@@ -484,7 +484,7 @@ describe('AI endpoint helpers', () => {
     assert.match(panel, /flex-wrap: wrap/)
     assert.doesNotMatch(dlg, /analysis-btn primary/)
     const findings = [
-      'Query with AI…', 'Investigate…', 'Verify with AI…', 'Explain…',
+      'Query findings…', 'Investigate…', 'Verify…', 'Explain',
       'Root cause…', 'Auto investigate…',
     ]
     let pos = 0
@@ -496,8 +496,10 @@ describe('AI endpoint helpers', () => {
     assert.deepEqual([...EXPLAIN_LEVELS], ['quick', 'technical', 'deep'])
     assert.match(dlg, /EXPLAIN_LEVELS/)
     assert.match(dlg, /<Teleport to="body">/)
-    assert.match(dlg, /toggleExplain/)
-    assert.match(dlg, /placeExplainMenu/)
+    assert.match(dlg, /Ask AI/)
+    assert.match(dlg, /toggleAskAi/)
+    assert.match(dlg, /Add to case/)
+    assert.match(dlg, /analysis-queue/)
     assert.match(panel, /Open at least two BTF tabs to use Trace Compare/)
     assert.match(panel, /This trace has a single core — not applicable/)
     assert.equal(AI_TEMPLATE_QUESTIONS.at(-1).id, 'auto_investigate')

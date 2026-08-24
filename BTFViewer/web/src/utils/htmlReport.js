@@ -521,7 +521,6 @@ export const HTML_REPORT_INTERACTIVE_SCRIPT = `
     bar.innerHTML = '<input type="search" class="table-search" placeholder="Search table…">'
       + (hasProblems ? '<label class="table-check"><input type="checkbox" data-problems> Problems only</label>' : '')
       + '<label class="table-check"><input type="checkbox" data-all> Show all</label>'
-      + '<button type="button" class="toc-btn" data-csv>CSV</button>'
       + '<span class="table-count"></span>'
     wrap.insertBefore(bar, scroll)
     var q = '', problems = false, showAll = rows.length <= PAGE, sortCol = -1, sortDir = 1, page = 0
@@ -566,12 +565,6 @@ export const HTML_REPORT_INTERACTIVE_SCRIPT = `
       showAll = e.target.checked; page = 0; apply()
     })
     if (rows.length <= PAGE) bar.querySelector('[data-all]').checked = true
-    bar.querySelector('[data-csv]').addEventListener('click', function () {
-      var head = Array.prototype.map.call(table.tHead.rows[0].cells, textOf)
-      var body = rows.filter(function (tr) { return tr.style.display !== 'none' })
-        .map(function (tr) { return Array.prototype.map.call(tr.cells, textOf) })
-      downloadCsv('report-table-' + (idx + 1) + '.csv', [head].concat(body))
-    })
     apply()
   }
   document.querySelectorAll('details.report-card table').forEach(enhanceTable)

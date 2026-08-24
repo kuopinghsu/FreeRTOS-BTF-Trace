@@ -13,7 +13,15 @@ from .stats import (
     _RcSettings, _parse_task_deadlines_text, _AnalysisFindingsDialog,
     _format_analysis_findings_text,
 )
-from .trace_quality import collect_trace_quality_warnings
+from .trace_quality import collect_trace_quality_warnings, trace_quality_report
+from .evidence_history import (
+    empty_evidence_history,
+    evidence_nav_state,
+    format_evidence_inspector,
+    push_evidence_entry,
+    step_evidence_history,
+    SHOW_ON_TIMELINE_LABEL,
+)
 from .error_format import format_parse_error
 from .ai_assistant import (
     create_ai_assistant_panel,
@@ -3003,6 +3011,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._capture_legend_filters_to_scene(prev_tab.view._scene)
             self._stash_tab_state(prev_tab)
             self._stats_panel.clear_plot_session()
+            self._findings_triage_state = {}
+            dlg = getattr(self, "_analysis_findings_dlg", None)
+            if dlg is not None:
+                try:
+                    dlg.close()
+                except RuntimeError:
+                    pass
+                self._analysis_findings_dlg = None
         if 0 <= index < len(self._tabs):
             tab = self._tabs[index]
             self._vm.set_active_index(index)
@@ -3016,6 +3032,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._update_tab_actions()
         self._previous_tab_index = index
         self._update_trace_quality_banner()
+        self._update_cursor_scope_banner()
         self._sync_ai_compare_template()
 
     def _close_trace_tab(self, index: int) -> None:
@@ -3997,9 +4014,63 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QStatusBar QLabel#zoomScaleLabel {{ font-size:{_ui_fs}; color:{c['status_text']}; }}
             QStatusBar QCheckBox {{ font-size:{_ui_fs}; color:{c['sub_text']}; padding: 0 4px; }}
             QLabel      {{ font-size:{_ui_fs}; }}
-            QLabel#trace_quality_banner {{
-                background:#5c3d00; color:#ffe8a3; padding:6px 12px; font-size:12px;
+            QWidget#trace_quality_banner {{
+                background:#5c3d00; color:#ffe8a3;
                 border-bottom:1px solid #8a6200;
+            }}
+            QWidget#trace_quality_banner QLabel#trace_quality_summary {{
+                color:#ffe8a3; font-size:12px;
+            }}
+            QWidget#trace_quality_details {{
+                background:rgba(92,61,0,0.35); color:#ffe8a3;
+                border-bottom:1px solid #8a6200;
+            }}
+            QWidget#trace_quality_details QLabel {{
+                color:#ffe8a3; font-size:11px;
+            }}
+            QWidget#cursor_scope_banner {{
+                background:#1a3348; color:#cdefff;
+                border-bottom:1px solid #2a5a70;
+            }}
+            QWidget#cursor_scope_banner QLabel#cursor_scope_prompt {{
+                color:#cdefff; font-size:12px;
+            }}
+            QWidget#cursor_scope_banner QLabel#cursor_scope_warn {{
+                color:#cdefff; font-size:11px;
+            }}
+            QWidget#cursor_scope_banner QToolButton#cursor_scope_close {{
+                background:transparent; border:none; border-radius:3px;
+                padding:0;
+            }}
+            QWidget#cursor_scope_banner QToolButton#cursor_scope_close:hover {{
+                background:rgba(255,255,255,0.14);
+            }}
+            QWidget#evidence_inspector_bar {{
+                background:#1a3348; color:#cdefff;
+                border-bottom:1px solid #2a5a70;
+            }}
+            QWidget#evidence_inspector_bar QLabel#evidence_inspector_text {{
+                color:#cdefff; font-size:11px;
+                font-family:Menlo,Consolas,Monaco,"Courier New",monospace;
+            }}
+            QPushButton#helper_banner_btn {{
+                background:rgba(255,255,255,0.08); color:inherit;
+                border:1px solid rgba(255,255,255,0.28); border-radius:4px;
+                padding:2px 8px; font-size:11px; min-height:0;
+            }}
+            QPushButton#helper_banner_btn:hover {{
+                background:rgba(255,255,255,0.16);
+            }}
+            QPushButton#helper_banner_btn:disabled {{
+                color:rgba(255,255,255,0.35);
+            }}
+            QPushButton#helper_banner_btn_primary {{
+                background:rgba(42,111,178,0.22); color:#cdefff;
+                border:1px solid #2a6fb2; border-radius:4px;
+                padding:2px 8px; font-size:11px; min-height:0;
+            }}
+            QPushButton#helper_banner_btn_primary:hover {{
+                background:rgba(42,111,178,0.35);
             }}
             QWidget#demo_status_banner {{
                 background:#1b3a4a; color:#cdefff; padding:0px;
@@ -4267,13 +4338,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 _pal = self._cur_hint.palette()
                 _pal.setColor(QPalette.WindowText, QColor(c['muted_text']))
                 self._cur_hint.setPalette(_pal)
-            if hasattr(self, '_welcome_label'):
-                self._welcome_label.setText(
-                    f"<h2 style='color:{c['welcome_h2']};'>RTOS BTF Viewer</h2>"
-                    f"<p style='color:{c['welcome_p']}; font-size:11pt;'>"
-                    "Drop a <b>.btf</b> / <b>.btf.gz</b>, a demo <b>.xtf</b>, a demo <b>.xml</b>, or a pack folder<br>"
-                    "or press <b>Ctrl+O</b> to open</p>"
-                )
             if hasattr(self, '_view'):
                 defer_rebuilds = any(
                     v._scene._trace is not None for v in self._iter_tab_views())
@@ -4437,17 +4501,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         self._welcome_page = QWidget()
         _wl = QVBoxLayout(self._welcome_page)
-        _wl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        _wlbl = QLabel(
-            "<h2 style='color:#888;'>RTOS BTF Viewer</h2>"
-            "<p style='color:#666; font-size:11pt;'>"
-            "Drop a <b>.btf</b> / <b>.btf.gz</b>, a demo <b>.xtf</b>, a demo <b>.xml</b>, or a pack folder<br>"
-            "or press <b>Ctrl+O</b> to open</p>"
-        )
-        _wlbl.setTextFormat(Qt.TextFormat.RichText)
-        _wlbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        _wl.addWidget(_wlbl)
-        self._welcome_label = _wlbl
+        _wl.setContentsMargins(0, 0, 0, 0)
+        _wl.addStretch(1)
 
         self._tab_widget = _StretchTabWidget()
         self._tab_widget.setTabBar(_LeftAlignedTabBar(self._tab_widget))
@@ -4465,10 +4520,124 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._central_stack.addWidget(self._tab_widget)
         self._central_stack.setCurrentIndex(0)
 
-        self._trace_quality_banner = QLabel()
+        def _helper_btn(text: str, *, primary: bool = False) -> QPushButton:
+            btn = QPushButton(text)
+            btn.setObjectName(
+                "helper_banner_btn_primary" if primary else "helper_banner_btn")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFlat(False)
+            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            return btn
+
+        # Trace quality banner (Web parity: summary + action buttons + details).
+        self._trace_quality_banner = QWidget()
         self._trace_quality_banner.setObjectName("trace_quality_banner")
-        self._trace_quality_banner.setWordWrap(True)
         self._trace_quality_banner.setVisible(False)
+        _tq_lay = QHBoxLayout(self._trace_quality_banner)
+        _tq_lay.setContentsMargins(12, 6, 12, 6)
+        _tq_lay.setSpacing(8)
+        self._trace_quality_summary = QLabel("")
+        self._trace_quality_summary.setObjectName("trace_quality_summary")
+        self._trace_quality_summary.setWordWrap(True)
+        _tq_lay.addWidget(self._trace_quality_summary, 1)
+        self._trace_quality_details_btn = _helper_btn("Review details")
+        self._trace_quality_details_btn.clicked.connect(
+            self._toggle_trace_quality_details)
+        _tq_lay.addWidget(self._trace_quality_details_btn, 0)
+        self._trace_quality_continue_btn = _helper_btn("Continue with limitations")
+        self._trace_quality_continue_btn.clicked.connect(
+            self._on_trace_quality_continue)
+        _tq_lay.addWidget(self._trace_quality_continue_btn, 0)
+        self._trace_quality_guide_btn = _helper_btn("Open capture guidance")
+        self._trace_quality_guide_btn.clicked.connect(
+            self._open_trace_quality_guidance)
+        _tq_lay.addWidget(self._trace_quality_guide_btn, 0)
+        self._trace_quality_details_open = False
+        self._trace_quality_details = QLabel("")
+        self._trace_quality_details.setObjectName("trace_quality_details")
+        self._trace_quality_details.setWordWrap(True)
+        self._trace_quality_details.setTextFormat(Qt.TextFormat.RichText)
+        self._trace_quality_details.setContentsMargins(12, 8, 12, 10)
+        self._trace_quality_details.setVisible(False)
+
+        # UX-107: Evidence inspector bar (Web parity).
+        self._evidence_history = empty_evidence_history()
+        self._evidence_inspector_bar = QWidget()
+        self._evidence_inspector_bar.setObjectName("evidence_inspector_bar")
+        self._evidence_inspector_bar.setVisible(False)
+        _ei_lay = QHBoxLayout(self._evidence_inspector_bar)
+        _ei_lay.setContentsMargins(12, 6, 12, 6)
+        _ei_lay.setSpacing(8)
+        self._evidence_back_btn = _helper_btn("Back")
+        self._evidence_back_btn.setToolTip("Previous evidence jump")
+        self._evidence_back_btn.clicked.connect(self._step_evidence_back)
+        _ei_lay.addWidget(self._evidence_back_btn, 0)
+        self._evidence_fwd_btn = _helper_btn("Forward")
+        self._evidence_fwd_btn.setToolTip("Next evidence jump")
+        self._evidence_fwd_btn.clicked.connect(self._step_evidence_forward)
+        _ei_lay.addWidget(self._evidence_fwd_btn, 0)
+        self._evidence_inspector_text = QLabel("")
+        self._evidence_inspector_text.setObjectName("evidence_inspector_text")
+        self._evidence_inspector_text.setWordWrap(True)
+        _ei_lay.addWidget(self._evidence_inspector_text, 1)
+
+        # UX-106: offer Enable Limit to C1–Cn when ≥2 cursors and scope is off.
+        # Web parity: left-packed flex row (justify-content: flex-start).
+        self._cursor_scope_banner = QWidget()
+        self._cursor_scope_banner.setObjectName("cursor_scope_banner")
+        self._cursor_scope_banner.setVisible(False)
+        _cs_lay = QHBoxLayout(self._cursor_scope_banner)
+        _cs_lay.setContentsMargins(12, 6, 12, 6)
+        _cs_lay.setSpacing(8)
+        _cs_lay.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._cursor_scope_prompt = QLabel("")
+        self._cursor_scope_prompt.setObjectName("cursor_scope_prompt")
+        self._cursor_scope_prompt.setWordWrap(False)
+        self._cursor_scope_prompt.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._cursor_scope_prompt.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        _cs_lay.addWidget(self._cursor_scope_prompt, 0)
+        self._cursor_scope_enable_btn = _helper_btn(
+            "Enable Limit to C1–Cn", primary=True)
+        self._cursor_scope_enable_btn.clicked.connect(self._apply_cursors_as_scope)
+        _cs_lay.addWidget(self._cursor_scope_enable_btn, 0)
+        self._cursor_scope_warn = QLabel("")
+        self._cursor_scope_warn.setObjectName("cursor_scope_warn")
+        self._cursor_scope_warn.setWordWrap(False)
+        self._cursor_scope_warn.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._cursor_scope_warn.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._cursor_scope_warn.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self._cursor_scope_warn.setVisible(False)
+        _cs_lay.addWidget(self._cursor_scope_warn, 0)
+        _cs_lay.addStretch(1)
+        self._cursor_scope_close_btn = QToolButton()
+        self._cursor_scope_close_btn.setObjectName("cursor_scope_close")
+        # Match Desktop QTabBar close affordance (style icon, not a text glyph).
+        _tab_close = self.style().standardIcon(
+            QStyle.StandardPixmap.SP_TitleBarCloseButton)
+        if _tab_close.isNull():
+            _tab_close = self.style().standardIcon(
+                QStyle.StandardPixmap.SP_DockWidgetCloseButton)
+        if not _tab_close.isNull():
+            self._cursor_scope_close_btn.setIcon(_tab_close)
+            self._cursor_scope_close_btn.setIconSize(QSize(12, 12))
+            self._cursor_scope_close_btn.setText("")
+        else:
+            self._cursor_scope_close_btn.setText("×")
+        self._cursor_scope_close_btn.setAutoRaise(True)
+        self._cursor_scope_close_btn.setToolTip("Dismiss")
+        self._cursor_scope_close_btn.setAccessibleName("Dismiss cursor scope helper")
+        self._cursor_scope_close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cursor_scope_close_btn.setFixedSize(18, 18)
+        self._cursor_scope_close_btn.clicked.connect(self._dismiss_cursor_scope_banner)
+        _cs_lay.addWidget(self._cursor_scope_close_btn, 0)
+        # None = not dismissed; int = cursor count when the helper was dismissed.
+        self._cursor_scope_dismissed_count: Optional[int] = None
 
         self._demo_status_banner = DemoStatusBanner()
         self._demo_status_banner.prevClicked.connect(self._on_demo_prev)
@@ -4482,6 +4651,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _central_lay.setSpacing(0)
         _central_lay.addWidget(self._demo_status_banner)
         _central_lay.addWidget(self._trace_quality_banner)
+        _central_lay.addWidget(self._trace_quality_details)
+        _central_lay.addWidget(self._evidence_inspector_bar)
+        _central_lay.addWidget(self._cursor_scope_banner)
         _central_lay.addWidget(self._central_stack, 1)
         self.setCentralWidget(self._central_host)
 
@@ -4792,6 +4964,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if hasattr(self, "_tb_analysis_btn"):
             self._tb_analysis_btn.setEnabled(False)
         self._sync_trace_compare_btn()
+        self._evidence_history = empty_evidence_history()
+        self._update_evidence_inspector_bar()
+        self._update_cursor_scope_banner()
 
     def _on_close_all_tabs_action(self) -> None:
         for _ in range(len(self._tabs)):
@@ -4856,6 +5031,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._on_section_collapsed_changed)
         self._stats_panel.query_ai_requested.connect(self._on_stats_query_ai)
         self._stats_panel.set_ai_enabled(self._ai_feature_enabled())
+        self._stats_panel._scope_cb.toggled.connect(
+            lambda _checked=False: self._update_cursor_scope_banner())
         self.setAcceptDrops(True)
 
     def _on_stats_query_ai(self, template_id: str, extra: str = "") -> None:
@@ -5212,17 +5389,201 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _update_trace_quality_banner(self, trace: Optional[BtfTrace] = None) -> None:
         """Show BTF quality / version warnings above the timeline (web parity)."""
         banner = getattr(self, "_trace_quality_banner", None)
-        if banner is None:
+        summary_lbl = getattr(self, "_trace_quality_summary", None)
+        details_lbl = getattr(self, "_trace_quality_details", None)
+        if banner is None or summary_lbl is None:
             return
         if trace is None:
             trace = self._trace
-        text = trace_quality_summary(trace)
-        if text:
-            banner.setText(text)
+        rep = trace_quality_report(trace)
+        if not rep.get("ok"):
+            summary = str(rep.get("summary") or "").strip()
+            groups = rep.get("groups") or []
+            parts: List[str] = []
+            for grp in groups:
+                title = str(grp.get("title") or "").strip()
+                lines = [str(x) for x in (grp.get("lines") or []) if str(x).strip()]
+                affected = [str(x) for x in (grp.get("affected") or []) if str(x).strip()]
+                body = "<br>".join(f"• {ln}" for ln in lines)
+                block = f"<b>{title}</b><br>{body}" if title else body
+                if affected:
+                    block += f"<br>Affects: {', '.join(affected)}"
+                if block:
+                    parts.append(block)
+            if details_lbl is not None:
+                details_lbl.setText("<br><br>".join(parts) if parts else summary)
+            summary_lbl.setText(summary)
             banner.setVisible(True)
+            open_ = bool(getattr(self, "_trace_quality_details_open", False))
+            if details_lbl is not None:
+                details_lbl.setVisible(open_ and bool(parts))
+            btn = getattr(self, "_trace_quality_details_btn", None)
+            if btn is not None:
+                btn.setText("Hide details" if open_ else "Review details")
+                btn.setEnabled(bool(parts))
         else:
-            banner.clear()
+            summary_lbl.clear()
             banner.setVisible(False)
+            self._trace_quality_details_open = False
+            if details_lbl is not None:
+                details_lbl.clear()
+                details_lbl.setVisible(False)
+            btn = getattr(self, "_trace_quality_details_btn", None)
+            if btn is not None:
+                btn.setText("Review details")
+
+    def _toggle_trace_quality_details(self) -> None:
+        self._trace_quality_details_open = not bool(
+            getattr(self, "_trace_quality_details_open", False))
+        self._update_trace_quality_banner()
+
+    def _on_trace_quality_continue(self) -> None:
+        """Dismiss expanded details (Web Continue with limitations)."""
+        self._trace_quality_details_open = False
+        details = getattr(self, "_trace_quality_details", None)
+        if details is not None:
+            details.setVisible(False)
+        btn = getattr(self, "_trace_quality_details_btn", None)
+        if btn is not None:
+            btn.setText("Review details")
+
+    def _open_trace_quality_guidance(self) -> None:
+        """Open WORKFLOWS.md#trace-quality (Web Open capture guidance)."""
+        path = Path(__file__).resolve().parents[1] / "WORKFLOWS.md"
+        if path.is_file():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+            return
+        self.statusBar().showMessage(
+            "Open Help → WORKFLOWS for capture guidance", 5000)
+
+    def _update_cursor_scope_banner(self) -> None:
+        """Offer Enable Limit to C1–Cn when ≥2 cursors exist and scope is off (Web parity)."""
+        from .cursor_scope import (
+            format_use_as_scope_prompt,
+            multi_cursor_span_warning,
+            should_offer_use_as_scope,
+        )
+        banner = getattr(self, "_cursor_scope_banner", None)
+        prompt_lbl = getattr(self, "_cursor_scope_prompt", None)
+        warn_lbl = getattr(self, "_cursor_scope_warn", None)
+        if banner is None or prompt_lbl is None:
+            return
+        times: List[int] = []
+        if self._trace is not None and hasattr(self, "_view") and self._view is not None:
+            try:
+                times = list(self._view._scene.cursor_times())
+            except Exception:
+                times = []
+        panel = getattr(self, "_stats_panel", None)
+        limited = bool(getattr(panel, "_scope_to_cursors", False)) if panel else False
+        offer = (
+            self._trace is not None
+            and should_offer_use_as_scope(times, limit_to_cursors=limited)
+        )
+        if not offer:
+            # Allow the helper again the next time C1–Cn qualify with Limit off.
+            self._cursor_scope_dismissed_count = None
+            banner.setVisible(False)
+            prompt_lbl.clear()
+            if warn_lbl is not None:
+                warn_lbl.clear()
+                warn_lbl.setToolTip("")
+                warn_lbl.setVisible(False)
+            return
+        dismissed_n = getattr(self, "_cursor_scope_dismissed_count", None)
+        if dismissed_n is not None:
+            if len(times) == int(dismissed_n):
+                banner.setVisible(False)
+                return
+            # Cursor count changed (e.g. C1–C2 dismissed, then C3 added) — show again.
+            self._cursor_scope_dismissed_count = None
+        prompt_lbl.setText(format_use_as_scope_prompt(times))
+        warn = multi_cursor_span_warning(times)
+        if warn_lbl is not None:
+            if warn:
+                warn_lbl.setText(warn)
+                warn_lbl.setToolTip(warn)
+                warn_lbl.setVisible(True)
+            else:
+                warn_lbl.clear()
+                warn_lbl.setToolTip("")
+                warn_lbl.setVisible(False)
+        banner.setVisible(True)
+
+    def _dismiss_cursor_scope_banner(self) -> None:
+        """Close the helper without enabling Limit to C1–Cn (no confirmation)."""
+        times: List[int] = []
+        if hasattr(self, "_view") and self._view is not None:
+            try:
+                times = list(self._view._scene.cursor_times())
+            except Exception:
+                times = []
+        self._cursor_scope_dismissed_count = len(times)
+        banner = getattr(self, "_cursor_scope_banner", None)
+        if banner is not None:
+            banner.setVisible(False)
+
+    def _apply_cursors_as_scope(self) -> None:
+        """Enable Limit to C1–Cn from the cursor-scope banner (Web applyCursorsAsScope)."""
+        self._demo_set_limit(True)
+        self._update_cursor_scope_banner()
+
+    def _record_evidence_jump(self, entry: dict) -> None:
+        """Push an evidence jump into history and refresh the inspector bar."""
+        if not isinstance(entry, dict) or entry.get("time") is None:
+            return
+        self._evidence_history = push_evidence_entry(
+            getattr(self, "_evidence_history", None), entry)
+        self._update_evidence_inspector_bar()
+
+    def _update_evidence_inspector_bar(self) -> None:
+        bar = getattr(self, "_evidence_inspector_bar", None)
+        text_lbl = getattr(self, "_evidence_inspector_text", None)
+        if bar is None or text_lbl is None:
+            return
+        nav = evidence_nav_state(getattr(self, "_evidence_history", None))
+        text = format_evidence_inspector(nav.get("current"))
+        if not text:
+            bar.setVisible(False)
+            text_lbl.clear()
+            return
+        text_lbl.setText(text)
+        back = getattr(self, "_evidence_back_btn", None)
+        fwd = getattr(self, "_evidence_fwd_btn", None)
+        if back is not None:
+            back.setEnabled(bool(nav.get("can_back")))
+        if fwd is not None:
+            fwd.setEnabled(bool(nav.get("can_forward")))
+        bar.setVisible(True)
+
+    def _restore_evidence_jump(self, entry: Optional[dict]) -> None:
+        if not isinstance(entry, dict) or entry.get("time") is None:
+            return
+        ns = int(entry["time"])
+        view = getattr(self, "_view", None)
+        if view is not None:
+            view.scroll_to_ns(ns)
+        task = str(entry.get("task") or "").strip()
+        if task:
+            self._ai_highlight_task(task)
+        section = str(entry.get("stats_section") or "").strip()
+        if section and hasattr(self, "_stats_panel"):
+            self._focus_panel_tab(_PANEL_TAB_STATS)
+            self._stats_panel.scroll_to_section(section)
+
+    def _step_evidence_back(self) -> None:
+        self._evidence_history = step_evidence_history(
+            getattr(self, "_evidence_history", None), -1)
+        nav = evidence_nav_state(self._evidence_history)
+        self._restore_evidence_jump(nav.get("current"))
+        self._update_evidence_inspector_bar()
+
+    def _step_evidence_forward(self) -> None:
+        self._evidence_history = step_evidence_history(
+            getattr(self, "_evidence_history", None), 1)
+        nav = evidence_nav_state(self._evidence_history)
+        self._restore_evidence_jump(nav.get("current"))
+        self._update_evidence_inspector_bar()
 
     def _build_status_bar(self) -> None:
         sb = self.statusBar()
@@ -6122,6 +6483,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._ai_stop_zoom_anim()
         ns = int(float(value))
         note = ai_jump_annotation_note(value)
+        self._record_evidence_jump({
+            "time": ns,
+            "source_metric": "AI evidence",
+        })
         self._jump_to_ns(ns)
         for ann in self._annotations:
             if int(ann.ns) == ns and ann.note == note:
@@ -8181,6 +8546,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self.statusBar().showMessage(
             f"Evidence{multi}: {note} @ {ns} ns — Scope/Filters unchanged",
             6000)
+        self._record_evidence_jump({
+            "time": ns,
+            "task": mk or task,
+            "source_metric": str(finding.get("title") or "Finding"),
+        })
 
     def _palette_load_recent(self) -> List[str]:
         raw = self._settings.get("palette", "recent_json", "[]")
@@ -8371,14 +8741,109 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                         t, finding_id=fid, extra=ex),
                 )
 
+        def _on_triage_change(state: dict) -> None:
+            self._findings_triage_state = dict(state or {})
+
+        def _on_add_to_case(finding: dict) -> None:
+            panel = getattr(self, "_ai_panel", None)
+            if panel is not None and hasattr(panel, "add_finding_to_investigation_case"):
+                ok = panel.add_finding_to_investigation_case(finding)
+                if ok:
+                    self.statusBar().showMessage("Finding added to AI Case", 3000)
+                else:
+                    self.statusBar().showMessage("Could not add finding to Case", 4000)
+            else:
+                self.statusBar().showMessage("AI Assistant unavailable for Case", 4000)
+
+        def _on_undo_investigate() -> None:
+            snap = getattr(self, "_findings_investigate_undo", None)
+            if not isinstance(snap, dict):
+                return
+            times = [int(t) for t in (snap.get("cursor_times") or [])]
+            view = getattr(self, "_view", None)
+            if view is not None and hasattr(view, "_scene"):
+                view.begin_programmatic_viewport()
+                try:
+                    view._scene.clear_cursors()
+                    for t in times:
+                        view._scene.add_cursor(t)
+                    view.cursors_changed.emit(view._scene.cursor_times())
+                finally:
+                    view.end_programmatic_viewport()
+            panel = self._stats_panel
+            want_scope = bool(snap.get("scope_to_cursors")) and len(times) >= 2
+            if panel is not None:
+                panel._scope_to_cursors = want_scope
+                cb = getattr(panel, "_scope_cb", None)
+                if cb is not None:
+                    cb.blockSignals(True)
+                    cb.setChecked(want_scope)
+                    cb.blockSignals(False)
+                panel.set_cursor_times(times, refresh_stats=True)
+            vp_raw = snap.get("viewport")
+            if isinstance(vp_raw, str) and view is not None:
+                vp = viewport_from_json(vp_raw)
+                if vp is not None:
+                    sc = view._scene
+                    if vp.fit_mode:
+                        view.zoom_fit()
+                    elif vp.zoom_tpp > 0:
+                        sc._timescale_per_px = max(
+                            sc._timescale_per_px_default, float(vp.zoom_tpp))
+                        view._fit_mode = False
+                        sc.rebuild()
+                        view.zoom_changed.emit(sc.timescale_per_px)
+            self._findings_investigate_undo = None
+            self.statusBar().showMessage("Restored Scope from before Investigate", 3000)
+
+        def _wrap_investigate(finding: dict, section_id: str) -> None:
+            panel = self._stats_panel
+            view = getattr(self, "_view", None)
+            times = []
+            if view is not None and hasattr(view, "_scene"):
+                times = list(view._scene.cursor_times())
+            elif panel is not None:
+                times = list(getattr(panel, "_cursor_times", None) or [])
+            vp_json = None
+            tab = getattr(self, "_active_tab", None)
+            if tab is not None and hasattr(tab, "vm") and view is not None:
+                try:
+                    tab.vm.capture_viewport_from_view(view)
+                    vp_json = viewport_to_json(tab.vm.viewport)
+                except Exception:
+                    vp_json = None
+            self._findings_investigate_undo = {
+                "cursor_times": times,
+                "scope_to_cursors": bool(
+                    getattr(panel, "_scope_to_cursors", False) if panel else False),
+                "viewport": vp_json,
+            }
+            self._investigate_finding(finding, section_id)
+
+        triage = getattr(self, "_findings_triage_state", None) or {}
+        cur_lo = cur_hi = None
+        cur_limit = False
+        panel = self._stats_panel
+        if panel is not None and getattr(panel, "_scope_to_cursors", False):
+            times = list(getattr(panel, "_cursor_times", None) or [])
+            if len(times) >= 2:
+                cur_limit = True
+                cur_lo, cur_hi = min(times), max(times)
         dlg = _AnalysisFindingsDialog(
             findings, scope_title, parent=self,
             ai_enabled=self._ai_feature_enabled(),
             ui_font_size=getattr(self, "_ui_font_size_val", UI_FONT_SIZE),
             on_apply_scope=self._apply_finding_scope,
-            on_investigate=self._investigate_finding,
+            on_investigate=_wrap_investigate,
             on_show_evidence=self._show_finding_evidence,
             on_ai_query=_on_ai_query,
+            triage_state=triage,
+            on_triage_change=_on_triage_change,
+            on_add_to_case=_on_add_to_case,
+            on_undo_investigate=_on_undo_investigate,
+            current_limit=cur_limit,
+            current_cursor_lo=cur_lo,
+            current_cursor_hi=cur_hi,
             ux_events=evs,
             time_min=self._trace.time_min,
             time_max=self._trace.time_max,
@@ -8390,6 +8855,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         def _on_closed(*_args) -> None:
             if getattr(self, "_analysis_findings_dlg", None) is dlg:
                 self._analysis_findings_dlg = None
+            try:
+                self._findings_triage_state = dlg.triage_state()
+            except RuntimeError:
+                pass
 
         dlg.finished.connect(_on_closed)
         dlg.show()
@@ -9242,6 +9711,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Scroll the timeline to *ns* (non-annotation stats jumps, e.g. TICK gaps)."""
         if self._trace is None:
             return
+        self._record_evidence_jump({
+            "time": int(ns),
+            "source_metric": SHOW_ON_TIMELINE_LABEL,
+        })
         self._view.scroll_to_ns(ns)
 
     def _on_stats_core_clicked(self, core: str) -> None:
@@ -10637,6 +11110,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._status_range.setToolTip("Scope: Full Trace")
             self._status_range.setVisible(True)
             self._rebuild_cursor_table()
+            self._update_cursor_scope_banner()
             return
         t_sorted = sorted(times)
         lo = t_sorted[0]
@@ -10681,6 +11155,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._status_range.setToolTip(range_text)
         self._status_range.setVisible(True)
         self._rebuild_cursor_table()
+        self._update_cursor_scope_banner()
 
     def _on_mark_dragging(self, kind: str, mark_id: int, new_ns: int) -> None:
         """Live-update the bookmark/annotation panel while dragging on the timeline."""

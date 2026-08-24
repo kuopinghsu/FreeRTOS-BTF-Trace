@@ -2446,7 +2446,6 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
     bar.innerHTML = '<input type="search" class="table-search" placeholder="Search table…">'
       + (hasProblems ? '<label class="table-check"><input type="checkbox" data-problems> Problems only</label>' : '')
       + '<label class="table-check"><input type="checkbox" data-all> Show all</label>'
-      + '<button type="button" class="toc-btn" data-csv>CSV</button>'
       + '<span class="table-count"></span>';
     wrap.insertBefore(bar, scroll);
     var q = '', problems = false, showAll = rows.length <= PAGE, sortCol = -1, sortDir = 1, page = 0;
@@ -2490,12 +2489,6 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
       showAll = e.target.checked; page = 0; apply();
     });
     if (rows.length <= PAGE) bar.querySelector('[data-all]').checked = true;
-    bar.querySelector('[data-csv]').addEventListener('click', function () {
-      var head = Array.prototype.map.call(table.tHead.rows[0].cells, textOf);
-      var body = rows.filter(function (tr) { return tr.style.display !== 'none'; })
-        .map(function (tr) { return Array.prototype.map.call(tr.cells, textOf); });
-      downloadCsv('report-table-' + (idx + 1) + '.csv', [head].concat(body));
-    });
     apply();
   }
   document.querySelectorAll('details.report-card table').forEach(enhanceTable);
@@ -21066,6 +21059,41 @@ def empty_investigation_case(
     }
 
 
+def add_finding_to_case(
+    case: Optional[Dict[str, Any]],
+    finding: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Append *finding* to ``suspected_findings`` (dedupe by id). Lockstep JS."""
+    out = dict(case) if isinstance(case, dict) else empty_investigation_case()
+    if not isinstance(finding, dict):
+        return out
+    fid = str(finding.get("id") or "").strip()
+    items = [
+        dict(x) for x in (out.get("suspected_findings") or [])
+        if isinstance(x, dict)
+    ]
+    if fid:
+        items = [x for x in items if str(x.get("id") or "").strip() != fid]
+    items.append(dict(finding))
+    out["suspected_findings"] = items
+    title = str(finding.get("title") or finding.get("observation") or fid).strip()
+    if title and not str(out.get("goal") or "").strip():
+        out["goal"] = title
+    if title and not str(out.get("conclusion") or "").strip():
+        out["conclusion"] = title
+    if title and not str(out.get("question") or "").strip():
+        out["question"] = title
+    task = str(finding.get("task") or "").strip()
+    if task:
+        scope = dict(out.get("scope") or {})
+        tasks = [str(t) for t in (scope.get("tasks") or []) if str(t).strip()]
+        if task not in tasks:
+            tasks.append(task)
+        scope["tasks"] = tasks
+        out["scope"] = scope
+    return out
+
+
 def _finding_blob(finding: Optional[dict]) -> str:
     if not isinstance(finding, dict):
         return ""
@@ -24700,6 +24728,7 @@ EVIDENCE_PANEL_TOOLS: Tuple[str, ...] = (
     "investigate",
     "correlate_events",
     "find_critical_path",
+    "detect_priority_inversion",
     "compare_performance",
     "explain_finding",
     "interpret_query",
@@ -25128,7 +25157,7 @@ def _suggested_tools_for_finding(
     return tools[: max(3, depth * 2)]
 
 
-_TASK_TOKEN_RE = re.compile(
+_INV_TASK_TOKEN_RE = re.compile(
     r"\b([A-Za-z_][\w]*(?:\[[0-9]+\])?)\b"
 )
 
@@ -25142,7 +25171,7 @@ def _guess_task_name(text: str) -> str:
         if low.startswith("core") or low in ("tick",):
             continue
         return tok
-    for m in _TASK_TOKEN_RE.finditer(text or ""):
+    for m in _INV_TASK_TOKEN_RE.finditer(text or ""):
         tok = m.group(1)
         low = tok.lower()
         if low in ("max", "min", "rate", "dwell", "ping", "load", "balance",
@@ -25855,6 +25884,53 @@ def extract_evidence_panel_payload(
         payload["confidence"] = (
             f"Correlation {corr}" if corr is not None else "Medium"
         )
+    elif name == "detect_priority_inversion" or data.get("inversions") is not None:
+        inversions = [
+            inv for inv in (data.get("inversions") or []) if isinstance(inv, dict)
+        ]
+        task = str(data.get("task") or "")
+        payload["conclusion"] = str(
+            result.get("message")
+            or data.get("message")
+            or (
+                f"{len(inversions)} priority inversion(s)"
+                if inversions else "No priority inversion suspects"
+            )
+        )
+        payload["evidence"] = [
+            {
+                "label": (
+                    "priority: "
+                    + (
+                        str(inv.get("pattern") or "").strip()
+                        or "L/M/H inversion"
+                    )
+                    + (
+                        f" low={inv.get('low')}" if inv.get("low") else ""
+                    )
+                    + (
+                        f" med={inv.get('medium')}" if inv.get("medium") else ""
+                    )
+                    + (
+                        f" high={inv.get('high')}" if inv.get("high") else ""
+                    )
+                ),
+                "time": inv.get("time"),
+                "start": inv.get("time"),
+                "stop": (
+                    (inv.get("time") or 0) + (inv.get("duration") or 0)
+                    if inv.get("time") is not None and inv.get("duration") is not None
+                    else inv.get("time")
+                ),
+            }
+            for inv in inversions[:15]
+        ]
+        if inversions:
+            payload["evidence_chain"] = (
+                f"{len(inversions)} priority-inversion episode(s)"
+                + (f" involving {task}" if task else "")
+            )
+        payload["confidence"] = str(data.get("confidence") or "Medium")
     elif name == "compare_performance" or data.get("checks"):
         primary = data.get("primary")
         if isinstance(primary, dict):
@@ -33413,17 +33489,51 @@ def _as_float_list(value: Any) -> List[float]:
         return []
     out: List[float] = []
     for item in value:
-        try:
-            out.append(float(item))
-        except (TypeError, ValueError):
-            continue
+        n = _as_scalar_float(item)
+        if n is not None:
+            out.append(n)
     return out
 
 
+def _as_scalar_float(value: Any) -> Optional[float]:
+    """Coerce a tool arg to float, matching JS ``Number(x)`` for common LLM shapes.
+
+    Accepts ints/floats, numeric strings, and single-element arrays
+    (``[3087194]`` → ``3087194.0``). Rejects bools, multi-element arrays,
+    objects, and non-numeric strings. Keep in sync with
+    ``web/src/utils/aiTools.js`` ``asScalarNumber``.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            n = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if n != n:  # NaN
+            return None
+        return n
+    if isinstance(value, (list, tuple)):
+        if len(value) != 1:
+            return None
+        return _as_scalar_float(value[0])
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            n = float(s)
+        except (TypeError, ValueError):
+            return None
+        if n != n:
+            return None
+        return n
+    return None
+
+
 def _fmt_trace_num(value: Any) -> str:
-    try:
-        n = float(value)
-    except (TypeError, ValueError):
+    n = _as_scalar_float(value)
+    if n is None:
         return str(value)
     if n.is_integer():
         return str(int(n))
@@ -33527,10 +33637,9 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
         times = times[:_MAX_CURSORS_TOOL]
         return {"timestamps": times}, ""
     if name == AI_TOOL_ZOOM_TO_RANGE:
-        try:
-            lo = float(a.get("start_time"))
-            hi = float(a.get("end_time"))
-        except (TypeError, ValueError):
+        lo = _as_scalar_float(a.get("start_time"))
+        hi = _as_scalar_float(a.get("end_time"))
+        if lo is None or hi is None:
             return None, "start_time and end_time must be numbers"
         if hi == lo:
             return None, "start_time and end_time must differ"
@@ -33563,9 +33672,8 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
         dst = str(a.get("core_to") or "").strip()
         return {"core_from": src, "core_to": dst}, ""
     if name == AI_TOOL_ADD_ANNOTATION:
-        try:
-            t = float(a.get("time"))
-        except (TypeError, ValueError):
+        t = _as_scalar_float(a.get("time"))
+        if t is None:
             return None, "time must be a number"
         note = str(a.get("note") or "").strip()
         if not note:
@@ -33653,15 +33761,15 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
             return None, "task must be a non-empty string"
         out: Dict[str, Any] = {"task": task, "around_time": None, "window": 0.0}
         if a.get("around_time") is not None and str(a.get("around_time")).strip() != "":
-            try:
-                out["around_time"] = float(a.get("around_time"))
-            except (TypeError, ValueError):
+            t = _as_scalar_float(a.get("around_time"))
+            if t is None:
                 return None, "around_time must be a number"
+            out["around_time"] = t
         if a.get("window") is not None and str(a.get("window")).strip() != "":
-            try:
-                out["window"] = max(0.0, float(a.get("window")))
-            except (TypeError, ValueError):
+            w = _as_scalar_float(a.get("window"))
+            if w is None:
                 return None, "window must be a number"
+            out["window"] = max(0.0, w)
         return out, ""
     if name == AI_TOOL_FIND_CRITICAL_PATH:
         task = str(a.get("task") or "").strip()
@@ -33669,15 +33777,15 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
             return None, "task must be a non-empty string"
         out: Dict[str, Any] = {"task": task, "timestamp": None, "window": 2000.0}
         if a.get("timestamp") is not None and str(a.get("timestamp")).strip() != "":
-            try:
-                out["timestamp"] = float(a.get("timestamp"))
-            except (TypeError, ValueError):
+            t = _as_scalar_float(a.get("timestamp"))
+            if t is None:
                 return None, "timestamp must be a number"
+            out["timestamp"] = t
         if a.get("window") is not None and str(a.get("window")).strip() != "":
-            try:
-                out["window"] = max(0.0, float(a.get("window")))
-            except (TypeError, ValueError):
+            w = _as_scalar_float(a.get("window"))
+            if w is None:
                 return None, "window must be a number"
+            out["window"] = max(0.0, w)
         return out, ""
     if name == AI_TOOL_COMPARE_PERFORMANCE:
         return {
@@ -33716,9 +33824,8 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
             "tab_b": str(a.get("tab_b") if a.get("tab_b") is not None else "").strip(),
         }, ""
     if name == AI_TOOL_BOOKMARK_FINDING:
-        try:
-            t = float(a.get("time"))
-        except (TypeError, ValueError):
+        t = _as_scalar_float(a.get("time"))
+        if t is None:
             return None, "time must be a number"
         kind = str(a.get("kind") or "").strip().lower().replace("-", "_").replace(" ", "_")
         if kind in ("root", "cause", "rca"):
@@ -34390,7 +34497,7 @@ def max_tool_rounds(template_id: str = "") -> int:
     return max_tool_rounds_for_template(template_id, _MAX_TOOL_ROUNDS)
 
 
-_TASK_ID_RE = re.compile(r"\[(\d+)\]\s*$")
+_TASK_ID_SUFFIX_RE = re.compile(r"\[(\d+)\]\s*$")
 _TASK_EMBEDDED_RE = re.compile(r"([A-Za-z_][\w]*\[\d+\])")
 _CORE_SUFFIX_RE = re.compile(r"\s*\((?:core\s*)?\d+\)\s*$", re.IGNORECASE)
 _CORE_NUM_RE = re.compile(r"^(?:core[\s_-]*)?(\d+)$", re.IGNORECASE)
@@ -34437,9 +34544,13 @@ def _task_match_aliases(raw: str) -> List[str]:
             elif name:
                 aliases.append(name)
         return [a for a in aliases if a]
-    m = _TASK_ID_RE.search(text)
+    m = _TASK_ID_SUFFIX_RE.search(text)
     if m:
-        aliases.append(m.group(1))
+        # Prefer the capture; fall back to the bracket body if a bundle
+        # name-collision ever clobbers this pattern (no groups).
+        tid = m.group(1) if m.lastindex else m.group(0).strip("[]")
+        if tid:
+            aliases.append(tid)
         prefix = text[: m.start()].strip()
         if prefix:
             aliases.append(prefix)
@@ -35081,10 +35192,9 @@ def search_timeline_hits(
     annotations: Optional[Sequence[Any]] = None,
 ) -> Dict[str, Any]:
     """Find-panel search for the AI ``search_timeline`` tool."""
-    # Bundle-safe: the monolith flattens mvvm/find_logic into module globals and
-    # rewrites in-function relative imports. Prefer globals first so a rewritten
-    # import cannot leave the name unbound.
-    recompute = globals().get("recompute_find_hits") or globals().get("FIND_RECOMPUTE")
+    # Prefer FIND_RECOMPUTE: the monolith may also define methods named
+    # recompute_find_hits; FIND_RECOMPUTE is the free-function alias.
+    recompute = globals().get("FIND_RECOMPUTE") or globals().get("recompute_find_hits")
     if recompute is None:
         try:
             recompute = globals().get("recompute_find_hits")
@@ -35102,7 +35212,10 @@ def search_timeline_hits(
     anns: List[Any] = []
     for a in annotations or []:
         anns.append(a)
-    hits, status = recompute(trace, q, find_mode, anns)
+    try:
+        hits, status = recompute(trace, q, find_mode, anns)
+    except Exception as exc:
+        return tool_result_payload(False, f"Find engine error: {exc}")
     status_s = str(status or "")
     if status_s in ("Regex error", "Regex too long"):
         return tool_result_payload(False, status_s)
@@ -36114,7 +36227,12 @@ def correlate_task_events(
         )
         if payload.get("ok"):
             events.extend(_events_from_metric_payload(payload, metric, task))
-    search = search_timeline_hits(trace, task, "contains", annotations=annotations)
+    # Search is optional enrichment — never fail correlate/critical-path when
+    # metrics already produced events (Find can throw on odd annotations).
+    try:
+        search = search_timeline_hits(trace, task, "contains", annotations=annotations)
+    except Exception:
+        search = {"ok": False}
     if search.get("ok"):
         data = search.get("data") or {}
         for t in data.get("times") or []:
@@ -36625,9 +36743,11 @@ _EDGE_RE = re.compile(
 _JUMP_RE = re.compile(r"jump:([0-9]+(?:\.[0-9]+)?)")
 # Graph node ids (F, E0, C3, H1, S0) — not timeline targets.
 _GRAPH_NODE_ID_RE = re.compile(r"^[A-Za-z]\d{0,3}$")
-_TASK_ID_RE = re.compile(r"\[[0-9]+\]|\[[0-9a-fA-FxX]+\]")
+# Unique names: the Desktop bundle flattens modules; a shared ``_TASK_ID_RE``
+# from ai_tools (with a capture group) must not be overwritten by this pattern.
+_MERMAID_TASK_ID_RE = re.compile(r"\[[0-9]+\]|\[[0-9a-fA-FxX]+\]")
 _CORE_LABEL_RE = re.compile(r"^Core[_\s]?\d+$", re.IGNORECASE)
-_TASK_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-]{0,47}$")
+_MERMAID_TASK_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-]{0,47}$")
 
 
 def actionable_diagram_highlight(label: str) -> Optional[str]:
@@ -36641,13 +36761,13 @@ def actionable_diagram_highlight(label: str) -> Optional[str]:
     text = re.sub(r"\s+", " ", text).strip(" ·,-")
     if not text or _GRAPH_NODE_ID_RE.fullmatch(text):
         return None
-    if _TASK_ID_RE.search(text):
+    if _MERMAID_TASK_ID_RE.search(text):
         return text
     if _CORE_LABEL_RE.fullmatch(text):
         return text
     if " " in text or len(text) > 48:
         return None
-    if _TASK_TOKEN_RE.fullmatch(text):
+    if _MERMAID_TASK_TOKEN_RE.fullmatch(text):
         return text
     return None
 
@@ -43673,6 +43793,25 @@ def create_ai_assistant_panel(
             self._sync_evidence_log_entry(self._evidence_payload)
             self._refresh_guide_ui()
 
+        def add_finding_to_investigation_case(self, finding: Optional[dict] = None) -> bool:
+            """Append an Analysis finding to the Investigation Case (UX-104)."""
+            if not isinstance(finding, dict):
+                return False
+            payload = dict(self._evidence_payload or {})
+            prev_case = payload.get("investigation_case")
+            case = add_finding_to_case(
+                prev_case if isinstance(prev_case, dict) else empty_investigation_case(),
+                finding,
+            )
+            payload["investigation_case"] = case
+            if not isinstance(payload.get("finding"), dict):
+                payload["finding"] = dict(finding)
+            self._evidence_payload = payload
+            self._sync_evidence_log_entry(self._evidence_payload)
+            self._refresh_guide_ui()
+            self._persist_investigation_session()
+            return True
+
         def _clear_evidence_log_entry(self) -> None:
             self._evidence_payload = None
             kept = [e for e in self._entries if ai_entry_role(e) != "evidence"]
@@ -48086,6 +48225,959 @@ def format_semantic_delta(text: str, status: str, colorblind: bool = False) -> s
         return semantic_label(text, "warning", colorblind)
     return text
 # ===========================================================================
+# Analysis Context strip (UX-001/002)
+# ===========================================================================
+
+PANEL_FILTER_LABELS = {
+    "statistics": "Statistics filter",
+    "ai": "AI context filter",
+    "compare": "Compare filter",
+    "findings": "Findings filter",
+}
+
+
+def build_analysis_context(
+    *,
+    trace_name: str = "",
+    scope_label: str = "Full Trace",
+    scope_duration: str = "",
+    filter_labels: Optional[Sequence[str]] = None,
+    sample_count: Optional[int] = None,
+    cursor_count: int = 0,
+    limit_to_cursors: bool = False,
+    panel_filter: str = "",
+    panel: str = "",
+) -> Dict[str, Any]:
+    """Normalized context for Findings / Statistics / AI / Compare."""
+    filters = [str(x).strip() for x in (filter_labels or []) if str(x).strip()]
+    return {
+        "trace_name": str(trace_name or "").strip(),
+        "scope_label": str(scope_label or "Full Trace").strip() or "Full Trace",
+        "scope_duration": str(scope_duration or "").strip(),
+        "filter_labels": filters,
+        "sample_count": int(sample_count) if sample_count is not None else None,
+        "cursor_count": max(0, int(cursor_count or 0)),
+        "limit_to_cursors": bool(limit_to_cursors),
+        "panel_filter": str(panel_filter or "").strip(),
+        "panel": str(panel or "").strip(),
+    }
+
+
+def context_fingerprint(ctx: Optional[Dict[str, Any]]) -> str:
+    """Stable key for stale detection (ignores panel-only labels)."""
+    if not isinstance(ctx, dict):
+        return ""
+    parts = [
+        ctx.get("trace_name") or "",
+        ctx.get("scope_label") or "",
+        ctx.get("scope_duration") or "",
+        "|".join(ctx.get("filter_labels") or []),
+        str(ctx.get("sample_count") if ctx.get("sample_count") is not None else ""),
+        str(ctx.get("cursor_count") or 0),
+        "1" if ctx.get("limit_to_cursors") else "0",
+    ]
+    return "\x1f".join(parts)
+
+
+def is_context_stale(
+    snapshot: Optional[Dict[str, Any]],
+    current: Optional[Dict[str, Any]],
+) -> bool:
+    if not isinstance(snapshot, dict) or not snapshot:
+        return False
+    if not isinstance(current, dict):
+        return True
+    return context_fingerprint(snapshot) != context_fingerprint(current)
+
+
+# Short note when cursors exist but Limit to C1–Cn is off (Statistics / plot parity).
+CURSORS_NOT_LIMITING_NOTE = "Not limited to cursors"
+
+
+def format_analysis_context_lines(
+    ctx: Optional[Dict[str, Any]],
+    *,
+    include_panel_filter: bool = True,
+    compact: bool = False,
+) -> List[str]:
+    """Human-readable lines for a context strip or export meta.
+
+    ``compact=True`` (Statistics panel): only the cursor-limit note when needed.
+    Scope and Filters are already shown in the Statistics header.
+    """
+    if not isinstance(ctx, dict):
+        return [] if compact else ["Scope: Full Trace"]
+    lines: List[str] = []
+    cursors_note = (
+        int(ctx.get("cursor_count") or 0) >= 2 and not ctx.get("limit_to_cursors")
+    )
+    if compact:
+        if cursors_note:
+            lines.append(CURSORS_NOT_LIMITING_NOTE)
+        return lines
+    trace = str(ctx.get("trace_name") or "").strip()
+    if trace:
+        lines.append(trace)
+    scope = str(ctx.get("scope_label") or "Full Trace")
+    dur = str(ctx.get("scope_duration") or "").strip()
+    if dur and scope.lower() != "full trace":
+        lines.append(f"Scope: {scope} · {dur}")
+    else:
+        lines.append(f"Scope: {scope}")
+    filters = list(ctx.get("filter_labels") or [])
+    if filters:
+        lines.append("Filters: " + ", ".join(filters))
+    n = ctx.get("sample_count")
+    if n is not None:
+        lines.append(f"Samples: {int(n):,}")
+    if cursors_note:
+        lines.append(CURSORS_NOT_LIMITING_NOTE)
+    if include_panel_filter:
+        pf = str(ctx.get("panel_filter") or "").strip()
+        panel = str(ctx.get("panel") or "").strip()
+        if pf:
+            label = PANEL_FILTER_LABELS.get(panel, panel or "Panel filter")
+            lines.append(f"{label}: {pf}")
+    return lines
+
+
+def format_analysis_context_strip(
+    ctx: Optional[Dict[str, Any]],
+    *,
+    compact: bool = False,
+) -> str:
+    return " · ".join(format_analysis_context_lines(ctx, compact=compact))
+
+
+def format_analysis_context_html(
+    ctx: Optional[Dict[str, Any]],
+    *,
+    compact: bool = False,
+) -> str:
+    import html as _html
+
+    parts = [
+        f'<span class="ctx-line">{_html.escape(line)}</span>'
+        for line in format_analysis_context_lines(ctx, compact=compact)
+    ]
+    return "".join(parts)
+
+
+def stale_result_banner(*, stale: bool = False) -> Dict[str, str]:
+    if not stale:
+        return {}
+    return {
+        "title": "Results may be outdated",
+        "message": "Scope or Filters changed since these results were calculated.",
+        "action": "Recalculate with current context",
+        "live": "polite",
+    }
+# ===========================================================================
+# Cursor Scope banner (UX-106)
+# ===========================================================================
+
+def should_offer_use_as_scope(
+    cursor_times: Sequence[int],
+    *,
+    limit_to_cursors: bool = False,
+) -> bool:
+    return len([t for t in (cursor_times or []) if t is not None]) >= 2 and not limit_to_cursors
+
+
+def format_use_as_scope_prompt(cursor_times: Sequence[int]) -> str:
+    placed = sorted(t for t in (cursor_times or []) if t is not None)
+    if len(placed) < 2:
+        return ""
+    return f"Use C1–C{len(placed)} as analysis Scope"
+
+
+def multi_cursor_span_warning(cursor_times: Sequence[int]) -> Optional[str]:
+    placed = sorted(t for t in (cursor_times or []) if t is not None)
+    if len(placed) <= 2:
+        return None
+    return (
+        f"{len(placed)} cursors define C1–C{len(placed)} as earliest-to-latest span; "
+        "verify this includes the intended incident only."
+    )
+
+
+def cursor_range_actions() -> List[Dict[str, str]]:
+    return [
+        {"id": "fit", "label": "Fit range"},
+        {"id": "analyze", "label": "Analyze range"},
+        {"id": "save_btf", "label": "Save range as BTF"},
+        {"id": "clear", "label": "Clear range"},
+    ]
+# ===========================================================================
+# Evidence inspector history (UX-107)
+# ===========================================================================
+
+def empty_evidence_history() -> Dict[str, Any]:
+    return {"entries": [], "index": -1}
+
+
+def push_evidence_entry(
+    history: Optional[Dict[str, Any]],
+    entry: Dict[str, Any],
+) -> Dict[str, Any]:
+    out = dict(history or empty_evidence_history())
+    entries = list(out.get("entries") or [])
+    idx = int(out.get("index") or -1)
+    if idx >= 0 and idx < len(entries) - 1:
+        entries = entries[: idx + 1]
+    entries.append(dict(entry))
+    out["entries"] = entries
+    out["index"] = len(entries) - 1
+    return out
+
+
+def evidence_nav_state(history: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    out = dict(history or empty_evidence_history())
+    entries = list(out.get("entries") or [])
+    idx = int(out.get("index") or -1)
+    return {
+        "can_back": idx > 0,
+        "can_forward": 0 <= idx < len(entries) - 1,
+        "current": entries[idx] if 0 <= idx < len(entries) else None,
+        "count": len(entries),
+    }
+
+
+def step_evidence_history(
+    history: Optional[Dict[str, Any]],
+    direction: int,
+) -> Dict[str, Any]:
+    out = dict(history or empty_evidence_history())
+    entries = list(out.get("entries") or [])
+    idx = int(out.get("index") or -1)
+    step = -1 if int(direction) < 0 else 1
+    nxt = max(-1, min(len(entries) - 1, idx + step))
+    out["index"] = nxt
+    out["entries"] = entries
+    return out
+
+
+def format_evidence_inspector(entry: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(entry, dict):
+        return ""
+    parts = []
+    for key, label in (
+        ("task", "Task"),
+        ("core", "Core"),
+        ("event_type", "Event"),
+        ("start", "Start"),
+        ("end", "End"),
+        ("duration", "Duration"),
+        ("source_metric", "Source"),
+        ("time", "Time"),
+    ):
+        val = entry.get(key)
+        if val is not None and str(val).strip():
+            parts.append(f"{label}: {val}")
+    return " · ".join(parts)
+
+
+SHOW_ON_TIMELINE_LABEL = "Show on timeline"
+# ===========================================================================
+# Evidence-strength labels (UX-003)
+# ===========================================================================
+
+EVIDENCE_STRENGTHS = ("direct", "derived", "estimated", "configured")
+
+EVIDENCE_STRENGTH_LABELS: Dict[str, str] = {
+    "direct": "Direct",
+    "derived": "Derived",
+    "estimated": "Estimated / heuristic",
+    "configured": "Configured comparison",
+}
+
+EVIDENCE_STRENGTH_TOOLTIPS: Dict[str, str] = {
+    "direct": "Recorded in the trace (slice start/end, core ID, STI tag value).",
+    "derived": "Deterministic calculation from recorded evidence.",
+    "estimated": "Useful screening evidence with stated assumptions.",
+    "configured": "Valid only when the configured threshold matches the application requirement.",
+}
+
+# Default strength by Statistics section id (extend as sections ship).
+METRIC_EVIDENCE_STRENGTH: Dict[str, str] = {
+    "response_time": "estimated",
+    "critical_path": "estimated",
+    "task_health": "estimated",
+    "waiter_owner": "estimated",
+    "mutex_blocking": "derived",
+    "core_util": "derived",
+    "migrations": "derived",
+    "load_balance": "derived",
+    "deadline": "configured",
+    "cpu_budget": "configured",
+    "anomalies": "derived",
+    "worst_events": "derived",
+    "execution": "derived",
+    "blocking": "derived",
+    "dispatch": "derived",
+    "period_jitter": "derived",
+    "preemption": "derived",
+}
+
+ESTIMATED_VERIFY_HINTS: Dict[str, Dict[str, str]] = {
+    "response_time": {
+        "missing": "End-to-end response markers or explicit release→complete pairs.",
+        "verify": "Correlate Execution, Dispatch, Blocking, and Preemption on the timeline.",
+    },
+    "critical_path": {
+        "missing": "Full causal chain with blocking and preemption evidence.",
+        "verify": "Walk Critical Path steps and jump to each blocking/preemption event.",
+    },
+    "task_health": {
+        "missing": "Configured health thresholds and complete slice coverage.",
+        "verify": "Compare Task Health with Execution and Blocking tables.",
+    },
+    "waiter_owner": {
+        "missing": "Mutex/semaphore STI pairing for waiter and owner tasks.",
+        "verify": "Open Waiter × Owner and Mutex Blocking for the same window.",
+    },
+    "default": {
+        "missing": "Direct trace events that confirm this interpretation.",
+        "verify": "Inspect Timeline Evidence and supporting Statistics sections.",
+    },
+}
+
+
+def normalize_evidence_strength(value: Any) -> str:
+    want = str(value or "").strip().lower()
+    if want in EVIDENCE_STRENGTHS:
+        return want
+    if want in ("heuristic", "estimate"):
+        return "estimated"
+    if want in ("config", "configured comparison", "budget", "deadline"):
+        return "configured"
+    return "derived"
+
+
+def evidence_strength_for_metric(metric_id: str) -> str:
+    key = str(metric_id or "").strip().lower().replace("-", "_")
+    return METRIC_EVIDENCE_STRENGTH.get(key, "derived")
+
+
+def evidence_strength_badge(strength: str) -> Dict[str, str]:
+    key = normalize_evidence_strength(strength)
+    return {
+        "strength": key,
+        "label": EVIDENCE_STRENGTH_LABELS[key],
+        "tooltip": EVIDENCE_STRENGTH_TOOLTIPS[key],
+    }
+
+
+def estimated_verify_hints(metric_id: str = "") -> Dict[str, str]:
+    key = str(metric_id or "").strip().lower().replace("-", "_")
+    return dict(ESTIMATED_VERIFY_HINTS.get(key) or ESTIMATED_VERIFY_HINTS["default"])
+
+
+def format_evidence_strength_note(
+    strength: str,
+    *,
+    metric_id: str = "",
+    verified: bool = False,
+) -> str:
+    badge = evidence_strength_badge(strength)
+    label = badge["label"]
+    if normalize_evidence_strength(strength) == "estimated":
+        hints = estimated_verify_hints(metric_id)
+        headline = "Cause" if verified else "Possible explanation"
+        return (
+            f"{label} — {headline}. "
+            f"What is missing? {hints['missing']} "
+            f"How to verify: {hints['verify']}"
+        )
+    if verified:
+        return f"{label} — verified conclusion."
+    return f"{label} — {badge['tooltip']}"
+# ===========================================================================
+# Findings triage queue (UX-104)
+# ===========================================================================
+
+SEVERITY_ORDER = {"error": 0, "warning": 1, "info": 2, "ask": 3}
+
+FINDING_CATEGORIES = (
+    "migration", "blocking", "deadline", "load", "jitter",
+    "execution", "dispatch", "general",
+)
+
+# Sort keys for the Analysis Findings Sort control (default = severity).
+SORT_SEVERITY = "severity"
+SORT_EVIDENCE = "evidence"
+SORT_TITLE = "title"
+SORT_CATEGORY = "category"
+SORT_KEYS = (SORT_SEVERITY, SORT_EVIDENCE, SORT_TITLE, SORT_CATEGORY)
+SORT_LABELS = {
+    SORT_SEVERITY: "Severity",
+    SORT_EVIDENCE: "Evidence strength",
+    SORT_TITLE: "Title",
+    SORT_CATEGORY: "Category",
+}
+
+
+def finding_category(finding: Dict[str, Any]) -> str:
+    blob = f"{finding.get('title') or ''} {finding.get('text') or ''}".lower()
+    if "migrat" in blob or "thrash" in blob or "bounce" in blob:
+        return "migration"
+    if "block" in blob or "mutex" in blob or "wait" in blob:
+        return "blocking"
+    if "deadline" in blob or "budget" in blob:
+        return "deadline"
+    if "load" in blob or "balance" in blob or "gini" in blob:
+        return "load"
+    if "jitter" in blob or "period" in blob:
+        return "jitter"
+    if "wcet" in blob or "execution" in blob or "cpu" in blob:
+        return "execution"
+    if "dispatch" in blob or "latency" in blob:
+        return "dispatch"
+    return "general"
+
+
+def finding_evidence_strength(finding: Dict[str, Any]) -> str:
+    ev = finding.get("evidence") or []
+    if any(isinstance(e, dict) and e.get("time") is not None for e in ev):
+        return "direct"
+    if ev:
+        return "derived"
+    return "estimated"
+
+
+def enrich_finding_card(finding: Dict[str, Any]) -> Dict[str, Any]:
+    """Observation / Evidence / Why / Check next card structure."""
+    title = str(finding.get("title") or "Finding")
+    text = str(finding.get("text") or "")
+    strength = finding_evidence_strength(finding)
+    badge = evidence_strength_badge(strength)
+    ev_lines: List[str] = []
+    for ev in finding.get("evidence") or []:
+        if not isinstance(ev, dict):
+            continue
+        label = str(ev.get("label") or ev.get("text") or "evidence")
+        t = ev.get("time")
+        ev_lines.append(f"{label}: jump:{t}" if t is not None else label)
+    return {
+        **finding,
+        "category": finding_category(finding),
+        "evidence_strength": strength,
+        "evidence_strength_label": badge["label"],
+        "observation": title,
+        "evidence_text": "; ".join(ev_lines) if ev_lines else "No timed evidence yet.",
+        "why_it_matters": text or "May indicate a timing or scheduling problem in the current Scope.",
+        "check_next": finding.get("check_next") or _default_check_next(finding),
+    }
+
+
+def _default_check_next(finding: Dict[str, Any]) -> str:
+    cat = finding_category(finding)
+    mapping = {
+        "migration": "Open Core Migrations and check load balance first.",
+        "blocking": "Inspect Blocking Time and Mutex Blocking around the cited time.",
+        "deadline": "Open Deadline / CPU Budget and Response Time.",
+        "load": "Open Load Balance and Task × Core.",
+        "jitter": "Open Period / Jitter and Recurring Patterns.",
+        "execution": "Open Execution and Worst Events for Max/outliers.",
+        "dispatch": "Open Dispatch latency and Execution.",
+    }
+    return mapping.get(cat, "Open Statistics for the related metric and verify on the timeline.")
+
+
+def sort_findings_triage(
+    items: Sequence[Dict[str, Any]],
+    *,
+    sort_by: str = SORT_SEVERITY,
+) -> List[Dict[str, Any]]:
+    mode = str(sort_by or SORT_SEVERITY).strip().lower()
+    if mode not in SORT_KEYS:
+        mode = SORT_SEVERITY
+    strength_rank = {"direct": 0, "derived": 1, "estimated": 2, "configured": 1}
+
+    def key(f: Dict[str, Any]) -> tuple:
+        sev = SEVERITY_ORDER.get(str(f.get("severity") or "info").lower(), 9)
+        strength = normalize_evidence_strength(
+            f.get("evidence_strength") or finding_evidence_strength(f))
+        erank = strength_rank.get(strength, 3)
+        title = str(f.get("title") or "")
+        cat = str(f.get("category") or finding_category(f))
+        if mode == SORT_EVIDENCE:
+            return (erank, sev, title)
+        if mode == SORT_TITLE:
+            return (title.lower(), sev, erank)
+        if mode == SORT_CATEGORY:
+            return (cat.lower(), sev, erank, title)
+        return (sev, erank, title)
+
+    return sorted(
+        [enrich_finding_card(dict(f)) for f in items if isinstance(f, dict)],
+        key=key,
+    )
+
+
+def filter_findings_triage(
+    items: Sequence[Dict[str, Any]],
+    *,
+    severity: str = "",
+    category: str = "",
+    task: str = "",
+    core: str = "",
+    evidence_strength: str = "",
+    sort_by: str = SORT_SEVERITY,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    sev_w = str(severity or "").strip().lower()
+    cat_w = str(category or "").strip().lower()
+    task_w = str(task or "").strip().lower()
+    core_w = str(core or "").strip().lower()
+    ev_w = str(evidence_strength or "").strip().lower()
+    for f in sort_findings_triage(items, sort_by=sort_by):
+        if sev_w and str(f.get("severity") or "").lower() != sev_w:
+            continue
+        if cat_w and str(f.get("category") or "").lower() != cat_w:
+            continue
+        blob = (
+            f"{f.get('title') or ''} {f.get('text') or ''} "
+            f"{f.get('task') or ''} {f.get('core') or ''}"
+        ).lower()
+        if task_w and task_w not in blob:
+            continue
+        if core_w and core_w not in blob:
+            continue
+        if ev_w and normalize_evidence_strength(f.get("evidence_strength")) != ev_w:
+            continue
+        out.append(f)
+    return out
+
+
+def finding_filter_facets(items: Sequence[Dict[str, Any]]) -> Dict[str, List[str]]:
+    """Distinct category / task / core values for filter controls."""
+    cats: set = set()
+    tasks: set = set()
+    cores: set = set()
+    for f in sort_findings_triage(items or []):
+        cats.add(str(f.get("category") or "general"))
+        task = str(f.get("task") or "").strip()
+        if task:
+            tasks.add(task)
+        core = str(f.get("core") or "").strip()
+        if core:
+            cores.add(core)
+        # Also scrape Core_N from text when no explicit field.
+        blob = f"{f.get('title') or ''} {f.get('text') or ''}"
+        for m in re.finditer(r"\bCore[_ ]?\d+\b", blob, re.I):
+            cores.add(m.group(0).replace(" ", "_"))
+    return {
+        "categories": sorted(cats),
+        "tasks": sorted(tasks, key=str.lower),
+        "cores": sorted(cores, key=str.lower),
+    }
+
+
+def group_findings_by_incident(
+    items: Sequence[Dict[str, Any]],
+    clusters: Optional[Sequence[Dict[str, Any]]] = None,
+    *,
+    group: bool = True,
+) -> List[Dict[str, Any]]:
+    """Flat list of display rows: header rows + finding rows.
+
+    Each row is ``{"kind": "header"|"finding", ...}``. Findings keep their
+    fields; headers carry ``incident_id``, ``label``, ``count``.
+    """
+    findings = [f for f in (items or []) if isinstance(f, dict)]
+    if not group or not findings:
+        return [{"kind": "finding", **f} for f in findings]
+    incs = [c for c in (clusters or []) if isinstance(c, dict)]
+    id_to_inc: Dict[str, Dict[str, Any]] = {}
+    title_to_inc: Dict[str, Dict[str, Any]] = {}
+    for inc in incs:
+        for fid in inc.get("finding_ids") or []:
+            if fid:
+                id_to_inc[str(fid)] = inc
+        for title in inc.get("findings") or []:
+            if title:
+                title_to_inc[str(title)] = inc
+    buckets: Dict[str, List[Dict[str, Any]]] = {}
+    order: List[str] = []
+    ungrouped: List[Dict[str, Any]] = []
+    for f in findings:
+        fid = str(f.get("id") or "")
+        title = str(f.get("title") or f.get("observation") or "")
+        inc = id_to_inc.get(fid) or title_to_inc.get(title)
+        if not inc or int(inc.get("count") or 0) < 2:
+            ungrouped.append(f)
+            continue
+        cid = str(inc.get("id") or "")
+        if cid not in buckets:
+            buckets[cid] = []
+            order.append(cid)
+        buckets[cid].append(f)
+    rows: List[Dict[str, Any]] = []
+    for cid in order:
+        members = buckets.get(cid) or []
+        if len(members) < 2:
+            rows.extend({"kind": "finding", **m} for m in members)
+            continue
+        inc = id_to_inc.get(str(members[0].get("id") or "")) or {}
+        root = str(inc.get("root_suspect") or "mixed")
+        rows.append({
+            "kind": "header",
+            "incident_id": cid,
+            "label": f"{cid} · {root}",
+            "count": len(members),
+            "finding_ids": [str(m.get("id") or "") for m in members],
+        })
+        for m in members:
+            rows.append({"kind": "finding", "incident_id": cid, **m})
+    rows.extend({"kind": "finding", **f} for f in ungrouped)
+    return rows
+
+
+def format_investigate_preview(
+    finding: Optional[Dict[str, Any]] = None,
+    *,
+    scope: Optional[Dict[str, Any]] = None,
+    section_id: str = "",
+    section_label: str = "",
+    current_limit: bool = False,
+    current_lo: Optional[float] = None,
+    current_hi: Optional[float] = None,
+) -> str:
+    """Human-readable preview of what Investigate will change."""
+    if not isinstance(finding, dict):
+        return "Select a finding to preview Investigate."
+    lines = ["Investigate will:"]
+    sid = str(section_id or "").strip()
+    slabel = str(section_label or sid or "related Statistics").strip()
+    lines.append(f"  • Open Statistics → {slabel}")
+    if isinstance(scope, dict) and scope.get("lo") is not None and scope.get("hi") is not None:
+        lo = int(scope["lo"])
+        hi = int(scope["hi"])
+        reason = str(scope.get("reason") or "recommended evidence window").strip()
+        lines.append(f"  • Place C1–C2 at {lo}–{hi} ({reason})")
+        lines.append("  • Enable Limit to C1–Cn for Statistics / Findings")
+        if current_limit and current_lo is not None and current_hi is not None:
+            lines.append(
+                f"  • Replaces current Scope {int(current_lo)}–{int(current_hi)}"
+            )
+        elif current_limit:
+            lines.append("  • Replaces the current cursor Scope")
+        else:
+            lines.append("  • Scope is currently Full Trace (Limit off)")
+    else:
+        lines.append("  • Keep the current cursor Scope (no recommended window)")
+    lines.append("You can Undo the Scope change after Confirm.")
+    return "\n".join(lines)
+
+
+# Queue labels shown in the Analysis Findings strip (Done = reviewed).
+QUEUE_OPEN = "open"
+QUEUE_DONE = "done"
+QUEUE_CASE = "case"
+QUEUE_DISMISSED = "dismissed"
+QUEUE_IDS = (QUEUE_OPEN, QUEUE_DONE, QUEUE_CASE, QUEUE_DISMISSED)
+
+
+def default_triage_state() -> Dict[str, Any]:
+    return {"reviewed": [], "dismissed": {}, "case": []}
+
+
+def normalize_triage_state(state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    base = default_triage_state()
+    if not isinstance(state, dict):
+        return base
+    reviewed = [str(x).strip() for x in (state.get("reviewed") or []) if str(x).strip()]
+    case = [str(x).strip() for x in (state.get("case") or []) if str(x).strip()]
+    dismissed_raw = state.get("dismissed") or {}
+    dismissed: Dict[str, str] = {}
+    if isinstance(dismissed_raw, dict):
+        for k, v in dismissed_raw.items():
+            kid = str(k).strip()
+            if kid:
+                dismissed[kid] = str(v or "Dismissed")
+    return {"reviewed": reviewed, "dismissed": dismissed, "case": case}
+
+
+def finding_queue_status(
+    finding_id: str,
+    state: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Primary queue for a finding: dismissed > case > done > open."""
+    st = normalize_triage_state(state)
+    fid = str(finding_id or "").strip()
+    if not fid:
+        return QUEUE_OPEN
+    if fid in (st.get("dismissed") or {}):
+        return QUEUE_DISMISSED
+    if fid in (st.get("case") or []):
+        return QUEUE_CASE
+    if fid in (st.get("reviewed") or []):
+        return QUEUE_DONE
+    return QUEUE_OPEN
+
+
+def filter_by_queue(
+    items: Sequence[Dict[str, Any]],
+    state: Optional[Dict[str, Any]] = None,
+    *,
+    queue: str = QUEUE_OPEN,
+) -> List[Dict[str, Any]]:
+    q = str(queue or QUEUE_OPEN).strip().lower() or QUEUE_OPEN
+    if q not in QUEUE_IDS:
+        q = QUEUE_OPEN
+    st = normalize_triage_state(state)
+    out: List[Dict[str, Any]] = []
+    for f in items:
+        if not isinstance(f, dict):
+            continue
+        if finding_queue_status(str(f.get("id") or ""), st) == q:
+            out.append(f)
+    return out
+
+
+def queue_counts(
+    items: Sequence[Dict[str, Any]],
+    state: Optional[Dict[str, Any]] = None,
+) -> Dict[str, int]:
+    st = normalize_triage_state(state)
+    counts = {qid: 0 for qid in QUEUE_IDS}
+    for f in items:
+        if not isinstance(f, dict):
+            continue
+        fid = str(f.get("id") or "").strip()
+        if not fid:
+            # Findings without ids stay in Open so they remain reachable.
+            counts[QUEUE_OPEN] += 1
+            continue
+        counts[finding_queue_status(fid, st)] += 1
+    return counts
+
+
+def apply_triage_action(
+    state: Optional[Dict[str, Any]],
+    finding_id: str,
+    action: str,
+    *,
+    reason: str = "",
+) -> Dict[str, Any]:
+    out = normalize_triage_state(state)
+    fid = str(finding_id or "").strip()
+    act = str(action or "").strip().lower()
+    if not fid:
+        return out
+    if act in ("reviewed", "done"):
+        reviewed = list(out.get("reviewed") or [])
+        if fid not in reviewed:
+            reviewed.append(fid)
+        out["reviewed"] = reviewed
+        # Leaving dismissed when marking Done keeps the queue unambiguous.
+        dismissed = dict(out.get("dismissed") or {})
+        dismissed.pop(fid, None)
+        out["dismissed"] = dismissed
+    elif act in ("unreviewed", "undo_done"):
+        out["reviewed"] = [x for x in (out.get("reviewed") or []) if x != fid]
+    elif act == "dismiss":
+        dismissed = dict(out.get("dismissed") or {})
+        dismissed[fid] = str(reason or "Dismissed")
+        out["dismissed"] = dismissed
+        out["reviewed"] = [x for x in (out.get("reviewed") or []) if x != fid]
+        out["case"] = [x for x in (out.get("case") or []) if x != fid]
+    elif act in ("undismiss", "restore"):
+        dismissed = dict(out.get("dismissed") or {})
+        dismissed.pop(fid, None)
+        out["dismissed"] = dismissed
+    elif act == "case":
+        case = list(out.get("case") or [])
+        if fid not in case:
+            case.append(fid)
+        out["case"] = case
+        dismissed = dict(out.get("dismissed") or {})
+        dismissed.pop(fid, None)
+        out["dismissed"] = dismissed
+    elif act == "uncase":
+        out["case"] = [x for x in (out.get("case") or []) if x != fid]
+    return out
+
+
+def format_triage_audit_text(
+    findings: Sequence[Dict[str, Any]],
+    state: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Append Done / Case / Dismissed sections for Save as text."""
+    st = normalize_triage_state(state)
+    by_id = {
+        str(f.get("id") or "").strip(): f
+        for f in findings
+        if isinstance(f, dict) and str(f.get("id") or "").strip()
+    }
+    lines: List[str] = []
+
+    def _title(fid: str) -> str:
+        f = by_id.get(fid) or {}
+        return str(f.get("title") or fid)
+
+    done = list(st.get("reviewed") or [])
+    case = list(st.get("case") or [])
+    dismissed = dict(st.get("dismissed") or {})
+    if done:
+        lines.append("Done:")
+        for fid in done:
+            lines.append(f"  - {_title(fid)} (id={fid})")
+        lines.append("")
+    if case:
+        lines.append("In case:")
+        for fid in case:
+            lines.append(f"  - {_title(fid)} (id={fid})")
+        lines.append("")
+    if dismissed:
+        lines.append("Dismissed:")
+        for fid, reason in dismissed.items():
+            lines.append(f"  - {_title(fid)} (id={fid}): {reason}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+# ===========================================================================
+# Statistics symptom shortcuts (UX-102)
+# ===========================================================================
+
+SYMPTOM_CARDS: List[Dict[str, Any]] = [
+    {
+        "id": "unknown",
+        "title": "Unknown issue",
+        "first_section": "overview",
+        "path": ["Analysis Findings", "Timeline Anomalies"],
+    },
+    {
+        "id": "late",
+        "title": "Task is sometimes late",
+        "first_section": "response_time",
+        "path": ["Response Time", "Execution", "Dispatch", "Blocking", "Preemption"],
+    },
+    {
+        "id": "spike",
+        "title": "Execution spike / long slice",
+        "first_section": "execution",
+        "path": ["Execution", "Worst Events", "Preemption Matrix"],
+    },
+    {
+        "id": "dispatch",
+        "title": "Dispatch delay",
+        "first_section": "dispatch",
+        "path": ["Dispatch latency", "Execution", "Core Utilization"],
+    },
+    {
+        "id": "blocking",
+        "title": "Blocking / off-CPU wait",
+        "first_section": "blocking",
+        "path": ["Blocking Time", "Mutex Blocking", "Waiter × Owner"],
+    },
+    {
+        "id": "jitter",
+        "title": "Period / jitter",
+        "first_section": "period_jitter",
+        "path": ["Period / Jitter", "Unified Jitter", "Recurring Patterns"],
+    },
+    {
+        "id": "load",
+        "title": "Load imbalance",
+        "first_section": "load_balance",
+        "path": ["Load Balance", "Task × Core", "Core Utilization"],
+    },
+    {
+        "id": "migration",
+        "title": "Migration / thrash",
+        "first_section": "migrations",
+        "path": ["Core Migrations", "Load Balance", "Task × Core"],
+    },
+    {
+        "id": "sync",
+        "title": "Synchronization",
+        "first_section": "mutex_blocking",
+        "path": ["Mutex Blocking", "Waiter × Owner", "Sync Issues"],
+        "requires_sti": True,
+    },
+    {
+        "id": "deadline",
+        "title": "Deadline miss",
+        "first_section": "deadline",
+        "path": ["Deadline / CPU Budget", "Response Time", "Execution"],
+    },
+]
+
+
+def symptom_card(card_id: str) -> Optional[Dict[str, Any]]:
+    want = str(card_id or "").strip().lower()
+    for card in SYMPTOM_CARDS:
+        if card.get("id") == want:
+            return dict(card)
+    return None
+
+
+def recommend_symptom_from_finding(finding: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(finding, dict):
+        return None
+    blob = f"{finding.get('title') or ''} {finding.get('text') or ''}".lower()
+    if any(k in blob for k in ("deadline", "budget", "miss")):
+        return "deadline"
+    if any(k in blob for k in ("migrat", "thrash", "bounce", "affinity")):
+        return "migration"
+    if any(k in blob for k in ("block", "mutex", "semaphore", "wait")):
+        return "blocking"
+    if any(k in blob for k in ("jitter", "period", "interval")):
+        return "jitter"
+    if any(k in blob for k in ("dispatch", "latency", "ready")):
+        return "dispatch"
+    if any(k in blob for k in ("wcet", "execution", "cpu", "slice")):
+        return "spike"
+    if any(k in blob for k in ("load", "balance", "gini")):
+        return "load"
+    if any(k in blob for k in ("response", "late", "slow")):
+        return "late"
+    return "unknown"
+
+
+def available_symptom_cards(
+    *,
+    has_sti: bool = True,
+    single_core: bool = False,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for card in SYMPTOM_CARDS:
+        item = dict(card)
+        reasons: List[str] = []
+        if card.get("requires_sti") and not has_sti:
+            item["disabled"] = True
+            reasons.append("STI instrumentation unavailable")
+        if card.get("id") == "migration" and single_core:
+            item["disabled"] = True
+            reasons.append("Single-core trace")
+        if reasons:
+            item["disabled_reason"] = "; ".join(reasons)
+        out.append(item)
+    return out
+
+
+# Desktop/Web section ids used by StatisticsPanel.scroll_to_section / data-section-id.
+SYMPTOM_SECTION_MAP: Dict[str, str] = {
+    "overview": "anomalies",
+    "response_time": "response",
+    "execution": "exec",
+    "dispatch": "dispatch",
+    "blocking": "block",
+    "period_jitter": "period",
+    "load_balance": "cores",
+    "migrations": "migrations",
+    "mutex_blocking": "mutex_block",
+    "deadline": "deadline",
+}
+
+
+def symptom_section_id(card: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(card, dict):
+        return "anomalies"
+    first = str(card.get("first_section") or "").strip()
+    return SYMPTOM_SECTION_MAP.get(first, "anomalies")
+# ===========================================================================
 # Main Window
 # ===========================================================================
 
@@ -51275,7 +52367,7 @@ class _TraceCompareDialog(QDialog):
             f'stroke="{_ic}" stroke-width="1.2" stroke-linecap="round"/>',
         ))
         self._btn_export_html.setToolTip(
-            "Export compare report as HTML (tables include Search / Show all / CSV)")
+            "Export compare report as HTML (tables include Search / Show all)")
         self._btn_export_html.clicked.connect(self._export_html)
         exp_row.addWidget(self._btn_export_html)
         self._btn_save_baseline = QPushButton("Save as baseline")
@@ -55933,6 +57025,8 @@ def _build_workflow_analysis_findings(
 
 def _format_analysis_findings_text(
     findings: List[dict], scope_title: str = "",
+    *,
+    triage_state: Optional[dict] = None,
 ) -> str:
     """Plain-text export of Analysis Findings."""
     lines = [f"Analysis Findings{scope_title}".rstrip(), ""]
@@ -55960,6 +57054,12 @@ def _format_analysis_findings_text(
                 elif ev:
                     lines.append(f"   evidence: {ev}")
             lines.append("")
+    if triage_state:
+        format_triage_audit_text = globals().get("format_triage_audit_text")
+        audit = format_triage_audit_text(findings, triage_state)
+        if audit:
+            lines.append("")
+            lines.append(audit)
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -55972,7 +57072,7 @@ def _render_workflow_analysis_html(
 
 
 class _AnalysisFindingsDialog(QDialog):
-    """Toolbar Analysis dialog — lists heuristic findings for the current scope."""
+    """Toolbar Analysis dialog — triage queue for current-scope findings."""
 
     def __init__(self, findings: List[dict], scope_title: str = "", parent=None,
                  ai_enabled: bool = True, ui_font_size: int = UI_FONT_SIZE,
@@ -55981,20 +57081,75 @@ class _AnalysisFindingsDialog(QDialog):
                  time_min: int = 0, time_max: int = 0,
                  quality_warnings: Optional[List[str]] = None,
                  is_dark: bool = True, on_investigate=None,
-                 on_show_evidence=None, on_ai_query=None):
+                 on_show_evidence=None, on_ai_query=None,
+                 triage_state: Optional[dict] = None,
+                 on_triage_change=None, on_add_to_case=None,
+                 on_undo_investigate=None,
+                 current_limit: bool = False,
+                 current_cursor_lo: Optional[float] = None,
+                 current_cursor_hi: Optional[float] = None):
         super().__init__(parent)
+        QUEUE_CASE = globals().get("QUEUE_CASE")
+        QUEUE_DISMISSED = globals().get("QUEUE_DISMISSED")
+        QUEUE_DONE = globals().get("QUEUE_DONE")
+        QUEUE_OPEN = globals().get("QUEUE_OPEN")
+        SORT_KEYS = globals().get("SORT_KEYS")
+        SORT_LABELS = globals().get("SORT_LABELS")
+        SORT_SEVERITY = globals().get("SORT_SEVERITY")
+        apply_triage_action = globals().get("apply_triage_action")
+        filter_by_queue = globals().get("filter_by_queue")
+        filter_findings_triage = globals().get("filter_findings_triage")
+        finding_filter_facets = globals().get("finding_filter_facets")
+        format_investigate_preview = globals().get("format_investigate_preview")
+        group_findings_by_incident = globals().get("group_findings_by_incident")
+        normalize_triage_state = globals().get("normalize_triage_state")
+        queue_counts = globals().get("queue_counts")
+        sort_findings_triage = globals().get("sort_findings_triage")
+        self._QUEUE_OPEN = QUEUE_OPEN
+        self._QUEUE_DONE = QUEUE_DONE
+        self._QUEUE_CASE = QUEUE_CASE
+        self._QUEUE_DISMISSED = QUEUE_DISMISSED
+        self._SORT_SEVERITY = SORT_SEVERITY
+        self._SORT_KEYS = SORT_KEYS
+        self._SORT_LABELS = SORT_LABELS
+        self._apply_triage_action = apply_triage_action
+        self._filter_by_queue = filter_by_queue
+        self._filter_findings_triage = filter_findings_triage
+        self._finding_filter_facets = finding_filter_facets
+        self._format_investigate_preview = format_investigate_preview
+        self._group_findings_by_incident = group_findings_by_incident
+        self._normalize_triage_state = normalize_triage_state
+        self._queue_counts = queue_counts
+        self._sort_findings_triage = sort_findings_triage
+
         self._findings = findings or []
         self._scope_title = scope_title or ""
         self._on_apply_scope = on_apply_scope
         self._on_investigate = on_investigate
         self._on_show_evidence = on_show_evidence
         self._on_ai_query = on_ai_query
+        self._on_triage_change = on_triage_change
+        self._on_add_to_case = on_add_to_case
+        self._on_undo_investigate = on_undo_investigate
+        self._current_limit = bool(current_limit)
+        self._current_cursor_lo = current_cursor_lo
+        self._current_cursor_hi = current_cursor_hi
+        self._triage_state = normalize_triage_state(triage_state)
+        self._active_queue = QUEUE_OPEN
+        self._filter_severity = ""
+        self._filter_evidence = ""
+        self._filter_category = ""
+        self._sort_by = SORT_SEVERITY
+        self._group_incidents = True
+        self._collapsed_incidents = set()
+        self._investigate_pending = False
         self._scope_hint = scope_hint or ""
         self._ux_events = ux_events or []
         self._time_min = int(time_min or 0)
         self._time_max = int(time_max or 0)
         self._quality_warnings = list(quality_warnings or [])
         self._is_dark = bool(is_dark)
+        self._ai_enabled = bool(ai_enabled)
         if self._is_dark:
             muted, ink, border = "#9a9a9a", "#c5d0dc", "#3a4658"
             ask, err, warn = "#8a8a8a", "#e74c3c", "#e67e22"
@@ -56003,6 +57158,9 @@ class _AnalysisFindingsDialog(QDialog):
             muted, ink, border = "#555555", "#1E1E1E", "#C0C0C0"
             ask, err, warn = "#555555", "#c0392b", "#9a4d00"
             ok_ink = "#166534"
+        self._palette = dict(
+            muted=muted, ink=ink, border=border, ask=ask, err=err,
+            warn=warn, ok_ink=ok_ink)
         self._dashboard = analysis_dashboard(
             self._findings, quality_warnings=self._quality_warnings)
         title_cluster = {}
@@ -56014,13 +57172,14 @@ class _AnalysisFindingsDialog(QDialog):
             for fid in inc.get("finding_ids") or []:
                 if fid:
                     id_cluster.setdefault(str(fid), cid)
+        self._title_cluster = title_cluster
+        self._id_cluster = id_cluster
         self.wants_ai_query = False
         self._ai_needs_settings = False
         self.wants_ai_finding_id = ""
         self.wants_ai_template = "findings"
         self.wants_ai_level = ""
         self.setWindowTitle(f"Analysis Findings{self._scope_title}")
-        # Non-modal inbox: Timeline Evidence stays clickable while Findings is open.
         self.setModal(False)
         self.setWindowFlags(
             Qt.WindowType.Tool
@@ -56028,24 +57187,143 @@ class _AnalysisFindingsDialog(QDialog):
             | Qt.WindowType.WindowCloseButtonHint
             | Qt.WindowType.WindowStaysOnTopHint
         )
-        # Match menus/toolbar (Settings → Display → UI / menus), not a fixed 11pt.
         ui_pt = max(6, min(int(ui_font_size), 24))
         ui_font = _application_ui_font(ui_pt)
         ui_fs = _ui_font_stylesheet_size(ui_pt)
+        self._ui_font = ui_font
+        self._ui_fs = ui_fs
+        self._ui_pt = ui_pt
         self.setFont(ui_font)
-        # Wide enough for Ask-AI button labels (esp. "Auto investigate…") in one row.
         self.setMinimumSize(900, 480)
         self.resize(960, 600)
 
         note = QLabel(
             "Heuristic summary of load balance, WCET, blocking, thrashing, "
             "deadlines, tick health, and sync.\n"
-            "Select a finding before Verify, Explain, or Auto investigate."
+            "Select a finding, then triage or Investigate."
         )
         note.setWordWrap(True)
         note.setObjectName("analysisNote")
         note.setStyleSheet(
             f"color: {muted}; font-size: {ui_fs}; padding-bottom: 2px;")
+
+        queue_row = QHBoxLayout()
+        queue_row.setContentsMargins(0, 0, 0, 0)
+        queue_row.setSpacing(6)
+        self._queue_btns = {}
+        for qid, label in (
+            (QUEUE_OPEN, "Open"),
+            (QUEUE_DONE, "Done"),
+            (QUEUE_CASE, "Case"),
+            (QUEUE_DISMISSED, "Dismissed"),
+        ):
+            btn = QPushButton(label)
+            btn.setFont(ui_font)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(
+                f"QPushButton {{ padding: 4px 10px; border-radius: 12px;"
+                f" border: 1px solid {border}; color: {muted};"
+                f" background: transparent; font-size: {ui_fs}; }}"
+                "QPushButton:checked {"
+                f"  border: 1px solid #3498db; color: {ink};"
+                "  background: rgba(52, 152, 219, 0.18);"
+                "}"
+                f"QPushButton:hover:!checked {{ color: {ink}; }}"
+            )
+            btn.clicked.connect(lambda _=False, q=qid: self._set_queue(q))
+            self._queue_btns[qid] = btn
+            queue_row.addWidget(btn)
+        queue_row.addStretch(1)
+        self._queue_btns[QUEUE_OPEN].setChecked(True)
+
+        filt_row = QHBoxLayout()
+        filt_row.setContentsMargins(0, 0, 0, 0)
+        filt_row.setSpacing(8)
+        # Compact chrome (~24px) matching Web DomSelect / toolbar presets.
+        # Task/Core filters omitted: findings rarely set those fields, so the
+        # menus only offered All and were not useful.
+        combo_h = max(22, min(24, int(round(ui_pt * 2.0))))
+        item_h = max(20, min(22, int(round(ui_pt * 1.8))))
+        sev_lbl = QLabel("Severity")
+        sev_lbl.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+        self._sev_combo = QComboBox()
+        self._sev_combo.setFont(ui_font)
+        self._sev_combo.addItem("All", "")
+        self._sev_combo.addItem("Critical", "error")
+        self._sev_combo.addItem("Warning", "warning")
+        self._sev_combo.addItem("Info", "info")
+        self._sev_combo.currentIndexChanged.connect(self._on_filters_changed)
+        ev_lbl = QLabel("Evidence")
+        ev_lbl.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+        self._ev_combo = QComboBox()
+        self._ev_combo.setFont(ui_font)
+        self._ev_combo.addItem("All", "")
+        self._ev_combo.addItem("Direct", "direct")
+        self._ev_combo.addItem("Derived", "derived")
+        self._ev_combo.addItem("Estimated", "estimated")
+        self._ev_combo.currentIndexChanged.connect(self._on_filters_changed)
+        # Theme-aware popup (match Web DomSelect: panel bg + fg).
+        if self._is_dark:
+            combo_bg, combo_fg, combo_border = "#2D2D2D", "#D4D4D4", "#3C3C3C"
+            combo_sel = "rgba(52, 152, 219, 0.35)"
+        else:
+            combo_bg, combo_fg, combo_border = "#FFFFFF", "#1E1E1E", "#C0C0C0"
+            combo_sel = "rgba(42, 111, 178, 0.22)"
+        combo_ss = (
+            f"QComboBox {{ min-height: {combo_h}px; max-height: {combo_h}px;"
+            f" padding: 1px 16px 1px 6px; border-radius: 3px;"
+            f" border: 1px solid {combo_border}; background: {combo_bg};"
+            f" color: {combo_fg}; font-size: {ui_fs}; }}"
+            "QComboBox::drop-down {"
+            "  subcontrol-origin: padding; subcontrol-position: center right;"
+            "  width: 14px; border: none; }"
+            f"QComboBox QAbstractItemView {{ outline: none; padding: 1px;"
+            f" background: {combo_bg}; color: {combo_fg};"
+            f" border: 1px solid {combo_border}; selection-background-color: {combo_sel};"
+            f" selection-color: {combo_fg}; }}"
+            "QComboBox QAbstractItemView::item {"
+            f"  min-height: {item_h}px; padding: 1px 6px; }}"
+        )
+        self._sev_combo.setStyleSheet(combo_ss)
+        self._sev_combo.setFixedHeight(combo_h)
+        self._ev_combo.setStyleSheet(combo_ss)
+        self._ev_combo.setFixedHeight(combo_h)
+        facets = finding_filter_facets(self._findings)
+        cat_lbl = QLabel("Category")
+        cat_lbl.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+        self._cat_combo = QComboBox()
+        self._cat_combo.setFont(ui_font)
+        self._cat_combo.addItem("All", "")
+        for c in facets.get("categories") or []:
+            self._cat_combo.addItem(str(c).title(), str(c))
+        self._cat_combo.setStyleSheet(combo_ss)
+        self._cat_combo.setFixedHeight(combo_h)
+        self._cat_combo.currentIndexChanged.connect(self._on_filters_changed)
+        sort_lbl = QLabel("Sort")
+        sort_lbl.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+        self._sort_combo = QComboBox()
+        self._sort_combo.setFont(ui_font)
+        for key in SORT_KEYS:
+            self._sort_combo.addItem(SORT_LABELS.get(key, key), key)
+        self._sort_combo.setStyleSheet(combo_ss)
+        self._sort_combo.setFixedHeight(combo_h)
+        self._sort_combo.currentIndexChanged.connect(self._on_filters_changed)
+        self._group_chk = QCheckBox("Group incidents")
+        self._group_chk.setFont(ui_font)
+        self._group_chk.setChecked(True)
+        self._group_chk.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+        self._group_chk.toggled.connect(self._on_group_toggled)
+        filt_row.addWidget(sev_lbl)
+        filt_row.addWidget(self._sev_combo)
+        filt_row.addWidget(ev_lbl)
+        filt_row.addWidget(self._ev_combo)
+        filt_row.addWidget(cat_lbl)
+        filt_row.addWidget(self._cat_combo)
+        filt_row.addWidget(sort_lbl)
+        filt_row.addWidget(self._sort_combo)
+        filt_row.addWidget(self._group_chk)
+        filt_row.addStretch(1)
 
         list_w = QListWidget()
         list_w.setFont(ui_font)
@@ -56070,193 +57348,56 @@ class _AnalysisFindingsDialog(QDialog):
             "}"
         )
         self._list_w = list_w
-        min_h = max(40, int(round(ui_pt * 5.0)))
-        if self._findings:
-            for f in self._findings:
-                sev = f.get("severity", "info")
-                title = str(f.get("title", "Finding")).strip() or "Finding"
-                text = str(f.get("text", "")).strip()
-                fid = str(f.get("id") or "")
-                cid = id_cluster.get(fid) or title_cluster.get(title, "")
-                prefix = f"[{cid}] " if cid else ""
-                if sev == "error":
-                    badge = SEMANTIC_GLYPHS["error"]
-                    color = err
-                elif sev == "warning":
-                    badge = SEMANTIC_GLYPHS["warning"]
-                    color = warn
-                elif fid == "load_balance_ok":
-                    badge = SEMANTIC_GLYPHS["improved"]
-                    color = ok_ink
-                else:
-                    badge = "○"
-                    color = ink
-                row = QWidget()
-                row.setObjectName("analysisFindingRow")
-                vbox = QVBoxLayout(row)
-                vbox.setContentsMargins(4, 2, 4, 2)
-                vbox.setSpacing(4)
-                title_l = QLabel(f"{badge}  {prefix}{title}")
-                title_l.setObjectName("analysisFindingTitle")
-                title_l.setWordWrap(True)
-                title_l.setFont(ui_font)
-                title_l.setStyleSheet(
-                    f"color: {color}; font-weight: 700; font-size: {ui_fs};")
-                vbox.addWidget(title_l)
-                if text:
-                    text_l = QLabel(text)
-                    text_l.setObjectName("analysisFindingText")
-                    text_l.setWordWrap(True)
-                    text_l.setFont(ui_font)
-                    text_l.setStyleSheet(
-                        f"color: {color}; font-size: {ui_fs};")
-                    vbox.addWidget(text_l)
-                evidence_text = str(f.get("evidence_text") or "").strip()
-                if evidence_text:
-                    ev_l = QLabel(f"EVIDENCE  {evidence_text}")
-                    ev_l.setObjectName("analysisFindingEvidence")
-                    ev_l.setWordWrap(True)
-                    ev_l.setFont(ui_font)
-                    ev_l.setStyleSheet(
-                        f"color: {muted}; font-size: {ui_fs}; font-family: monospace;")
-                    vbox.addWidget(ev_l)
-                item = QListWidgetItem()
-                item.setData(Qt.ItemDataRole.UserRole, fid)
-                item.setFont(ui_font)
-                item.setForeground(QBrush(QColor(color)))
-                list_w.addItem(item)
-                list_w.setItemWidget(item, row)
-                row.adjustSize()
-                hint = row.sizeHint()
-                item.setSizeHint(QSize(max(hint.width(), 200), max(hint.height(), min_h)))
-            list_w.setCurrentRow(0)
-            list_w.currentItemChanged.connect(lambda *_: self._refresh_scope_hint())
-        else:
-            empty = QListWidgetItem("No findings for the current scope")
-            empty.setFlags(Qt.ItemFlag.NoItemFlags)
-            empty.setFont(ui_font)
-            list_w.addItem(empty)
+        list_w.currentItemChanged.connect(lambda *_: self._on_selection_changed())
+        list_w.itemClicked.connect(self._on_list_item_clicked)
 
-        def _make_ai_btn(label: str, tip_on: str, tip_off: str, template: str) -> QPushButton:
-            btn = QPushButton(label)
+        def _menu_btn(label: str, tip: str) -> QToolButton:
+            btn = QToolButton()
+            btn.setText(label)
             btn.setFont(ui_font)
+            btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setMinimumHeight(max(28, int(round(ui_pt * 3.2))))
-            # Prefer natural text width — avoid MinimumExpanding which clips labels.
-            btn.setSizePolicy(
-                QSizePolicy.Policy.Preferred,
-                QSizePolicy.Policy.Fixed,
-            )
-            fm = btn.fontMetrics()
-            btn.setMinimumWidth(fm.horizontalAdvance(label) + 36)
-            btn.setToolTip(tip_on if ai_enabled else tip_off)
+            btn.setToolTip(tip)
             btn.setStyleSheet(
-                f"QPushButton {{ padding: 7px 16px; border-radius: 6px;"
+                f"QToolButton {{ padding: 7px 16px; border-radius: 6px;"
                 f" font-size: {ui_fs}; }}"
             )
-            btn.clicked.connect(
-                lambda _checked=False, t=template: self._query_with_ai(
-                    ai_enabled, t))
             return btn
 
-        def _make_explain_btn() -> QPushButton:
-            btn = QPushButton("Explain…")
-            btn.setFont(ui_font)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setMinimumHeight(max(28, int(round(ui_pt * 3.2))))
-            btn.setSizePolicy(
-                QSizePolicy.Policy.Preferred,
-                QSizePolicy.Policy.Fixed,
-            )
-            fm = btn.fontMetrics()
-            btn.setMinimumWidth(fm.horizontalAdvance("Explain…") + 36)
-            btn.setToolTip(
-                "Quick / Technical / Deep explanation of the selected finding"
-                if ai_enabled else "Enable AI Assistant in Settings → AI"
-            )
-            btn.setStyleSheet(
-                f"QPushButton {{ padding: 7px 16px; border-radius: 6px;"
-                f" font-size: {ui_fs}; }}"
-            )
-            menu = QMenu(btn)
-            for level in EXPLAIN_LEVELS:
-                act = menu.addAction(str(level).title())
-                act.triggered.connect(
-                    lambda _=False, lv=level: self._query_with_ai(
-                        ai_enabled, "explain_finding", level=lv)
-                )
-            btn.clicked.connect(
-                lambda: menu.exec(btn.mapToGlobal(btn.rect().bottomLeft())))
-            btn._explain_menu = menu
-            return btn
-
-        ai_label = QLabel("Ask AI")
-        ai_label.setStyleSheet(
-            f"color: {ask}; font-size: {ui_fs}; font-weight: 600;"
-            " letter-spacing: 0.4px; padding-top: 2px;"
+        ask_btn = _menu_btn(
+            "Ask AI ▾",
+            "Ask AI about findings" if ai_enabled
+            else "Enable AI Assistant in Settings → AI",
         )
+        ask_menu = QMenu(ask_btn)
+        ask_menu.addAction("Query findings…").triggered.connect(
+            lambda: self._query_with_ai(ai_enabled, "findings"))
+        ask_menu.addAction("Investigate…").triggered.connect(
+            lambda: self._query_with_ai(ai_enabled, "investigate"))
+        ask_menu.addAction("Verify…").triggered.connect(
+            lambda: self._query_with_ai(ai_enabled, "verify"))
+        explain_menu = ask_menu.addMenu("Explain")
+        for level in EXPLAIN_LEVELS:
+            act = explain_menu.addAction(str(level).title())
+            act.triggered.connect(
+                lambda _=False, lv=level: self._query_with_ai(
+                    ai_enabled, "explain_finding", level=lv)
+            )
+        ask_menu.addAction("Root cause…").triggered.connect(
+            lambda: self._query_with_ai(ai_enabled, "root_cause"))
+        ask_menu.addAction("Auto investigate…").triggered.connect(
+            lambda: self._query_with_ai(ai_enabled, "auto_investigate"))
+        ask_btn.setMenu(ask_menu)
 
-        ai_row = QHBoxLayout()
-        ai_row.setContentsMargins(0, 0, 0, 0)
-        ai_row.setSpacing(10)
-        ai_btns = [
-            _make_ai_btn(
-                "Query with AI…",
-                "Open the AI Assistant and walk through these Analysis Findings",
-                "Enable AI Assistant in Settings → AI",
-                "findings",
-            ),
-            _make_ai_btn(
-                "Investigate…",
-                "Open the AI Assistant and investigate the top findings with tools",
-                "Enable AI Assistant in Settings → AI",
-                "investigate",
-            ),
-            _make_ai_btn(
-                "Verify with AI…",
-                "Open the AI Assistant and verify the selected finding with evidence",
-                "Enable AI Assistant in Settings → AI",
-                "verify",
-            ),
-            _make_explain_btn(),
-            _make_ai_btn(
-                "Root cause…",
-                "Open the AI Assistant for evidence-driven root-cause analysis",
-                "Enable AI Assistant in Settings → AI",
-                "root_cause",
-            ),
-            _make_ai_btn(
-                "Auto investigate…",
-                "Run the automatic investigate → correlate → critical-path → "
-                "what-if/optimize workflow",
-                "Enable AI Assistant in Settings → AI",
-                "auto_investigate",
-            ),
-        ]
-        for btn in ai_btns:
-            ai_row.addWidget(btn)
-        recipe_btn = QPushButton("Save recipe…")
-        recipe_btn.setToolTip("Save this finding set as a user investigation template")
-        recipe_btn.clicked.connect(self._save_recipe)
-        story_btn = QPushButton("Story…")
-        story_btn.setToolTip("Export an analysis story from the overview and findings")
-        story_btn.clicked.connect(self._save_story)
-        ai_row.addWidget(recipe_btn)
-        ai_row.addWidget(story_btn)
-        ai_row.addStretch(1)
+        more_btn = _menu_btn("More ▾", "Save recipe, story, or text export")
+        more_menu = QMenu(more_btn)
+        more_menu.addAction("Save recipe…").triggered.connect(self._save_recipe)
+        more_menu.addAction("Story…").triggered.connect(self._save_story)
+        more_menu.addAction("Save as text…").triggered.connect(self._save_as_text)
+        more_btn.setMenu(more_menu)
 
         btn_h = max(28, int(round(ui_pt * 3.2)))
-        save_btn = QPushButton("Save as Text…")
-        save_btn.setFont(ui_font)
-        save_btn.setMinimumHeight(btn_h)
-        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        save_btn.setToolTip("Download findings as a plain-text file")
-        save_btn.setStyleSheet(
-            f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
-            f" font-size: {ui_fs}; }}"
-        )
-        save_btn.clicked.connect(self._save_as_text)
-
         close_btn = QPushButton("Close")
         close_btn.setFont(ui_font)
         close_btn.setMinimumHeight(btn_h)
@@ -56268,33 +57409,39 @@ class _AnalysisFindingsDialog(QDialog):
         )
         close_btn.clicked.connect(self.reject)
 
-        util_row = QHBoxLayout()
-        util_row.setContentsMargins(0, 0, 0, 0)
-        util_row.setSpacing(10)
-        util_row.addWidget(save_btn)
-        util_row.addStretch(1)
-        util_row.addWidget(close_btn)
-
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setFrameShadow(QFrame.Shadow.Sunken)
-        sep.setStyleSheet("margin-top: 2px; margin-bottom: 2px;")
-
-        footer = QVBoxLayout()
+        footer = QHBoxLayout()
         footer.setContentsMargins(0, 4, 0, 0)
         footer.setSpacing(8)
-        footer.addWidget(ai_label)
-        footer.addLayout(ai_row)
-        footer.addWidget(sep)
-        footer.addLayout(util_row)
+        footer.addWidget(ask_btn)
+        footer.addWidget(more_btn)
+        footer.addStretch(1)
+        footer.addWidget(close_btn)
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(16, 14, 16, 14)
-        lay.setSpacing(12)
+        triage_row = QHBoxLayout()
+        triage_row.setContentsMargins(0, 0, 0, 0)
+        triage_row.setSpacing(8)
+        self._done_btn = QPushButton("Done")
+        self._dismiss_btn = QPushButton("Dismiss…")
+        self._case_btn = QPushButton("Add to case")
+        for b in (self._done_btn, self._dismiss_btn, self._case_btn):
+            b.setFont(ui_font)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setMinimumHeight(btn_h)
+            b.setStyleSheet(
+                f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
+                f" font-size: {ui_fs}; }}"
+            )
+            triage_row.addWidget(b)
+        triage_row.addStretch(1)
+        self._done_btn.clicked.connect(self._toggle_done)
+        self._dismiss_btn.clicked.connect(self._toggle_dismiss)
+        self._case_btn.clicked.connect(self._add_to_case)
+
         scope_row = QHBoxLayout()
         scope_row.setContentsMargins(0, 0, 0, 0)
         scope_row.setSpacing(8)
-        self._scope_lbl = QLabel(self._scope_hint or "Select a finding to recommend a cursor window.")
+        self._scope_lbl = QLabel(
+            self._scope_hint or "Select a finding to recommend a cursor window.")
         self._scope_lbl.setWordWrap(True)
         self._scope_lbl.setStyleSheet(
             f"color: {muted}; font-size: {ui_fs};")
@@ -56312,7 +57459,7 @@ class _AnalysisFindingsDialog(QDialog):
         scope_row.addWidget(self._scope_lbl, 1)
         scope_row.addWidget(apply_scope, 0)
 
-        show_evidence_btn = QPushButton("Show Evidence")
+        show_evidence_btn = QPushButton("Show on timeline")
         show_evidence_btn.setFont(ui_font)
         show_evidence_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         show_evidence_btn.setToolTip(
@@ -56327,7 +57474,7 @@ class _AnalysisFindingsDialog(QDialog):
         self._show_evidence_btn = show_evidence_btn
         scope_row.addWidget(show_evidence_btn, 0)
 
-        self._investigate_btn = QPushButton("Investigate")
+        self._investigate_btn = QPushButton("Investigate…")
         self._investigate_btn.setFont(ui_font)
         self._investigate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._investigate_btn.setStyleSheet(
@@ -56336,8 +57483,27 @@ class _AnalysisFindingsDialog(QDialog):
         )
         self._investigate_btn.clicked.connect(self._investigate_selected)
         scope_row.addWidget(self._investigate_btn, 0)
+        self._undo_scope_btn = QPushButton("Undo Scope")
+        self._undo_scope_btn.setFont(ui_font)
+        self._undo_scope_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._undo_scope_btn.setStyleSheet(
+            f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
+            f" font-size: {ui_fs}; }}"
+        )
+        self._undo_scope_btn.clicked.connect(self._undo_investigate_scope)
+        self._undo_scope_btn.setEnabled(False)
+        self._undo_scope_btn.setVisible(callable(self._on_undo_investigate))
+        scope_row.addWidget(self._undo_scope_btn, 0)
 
-        lay.addWidget(note)
+        self._investigate_preview = QLabel("")
+        self._investigate_preview.setWordWrap(True)
+        self._investigate_preview.setVisible(False)
+        self._investigate_preview.setStyleSheet(
+            f"color: {ink}; font-size: {ui_fs}; padding: 8px 10px;"
+            f"border: 1px solid {border}; border-radius: 6px;"
+            "background: rgba(52, 152, 219, 0.08);"
+        )
+
         overview = QLabel(str(self._dashboard.get("summary") or ""))
         overview.setWordWrap(True)
         overview.setObjectName("analysisOverview")
@@ -56346,28 +57512,275 @@ class _AnalysisFindingsDialog(QDialog):
             f"border: 1px solid {border}; border-radius: 6px;"
             "background: rgba(52, 152, 219, 0.08);"
         )
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(10)
+        lay.addWidget(note)
+        lay.addLayout(queue_row)
+        lay.addLayout(filt_row)
         lay.addWidget(overview)
         lay.addWidget(list_w, 1)
+        lay.addLayout(triage_row)
+        lay.addWidget(self._investigate_preview)
         lay.addLayout(scope_row)
         lay.addLayout(footer)
+        self._rebuild_list()
         self._refresh_scope_hint()
+        self._refresh_triage_buttons()
 
-        # Ensure the dialog is at least as wide as the Ask-AI button row.
-        footer_w = sum(b.minimumWidth() for b in ai_btns) + 10 * (len(ai_btns) - 1) + 48
-        if self.minimumWidth() < footer_w:
-            self.setMinimumWidth(footer_w)
-        if self.width() < footer_w:
-            self.resize(footer_w, self.height())
+    def triage_state(self) -> dict:
+        return dict(self._triage_state)
+
+    def _commit_triage(self, state: dict) -> None:
+        self._triage_state = self._normalize_triage_state(state)
+        if callable(self._on_triage_change):
+            self._on_triage_change(self._triage_state)
+        self._rebuild_list()
+        self._refresh_triage_buttons()
+
+    def _filtered_base(self) -> List[dict]:
+        return self._filter_findings_triage(
+            self._findings,
+            severity=self._filter_severity,
+            evidence_strength=self._filter_evidence,
+            category=self._filter_category,
+            sort_by=self._sort_by,
+        )
+
+    def _on_filters_changed(self, *_args) -> None:
+        self._filter_severity = str(self._sev_combo.currentData() or "")
+        self._filter_evidence = str(self._ev_combo.currentData() or "")
+        self._filter_category = str(self._cat_combo.currentData() or "")
+        self._sort_by = str(self._sort_combo.currentData() or self._SORT_SEVERITY)
+        self._rebuild_list()
+
+    def _on_group_toggled(self, checked: bool = False) -> None:
+        self._group_incidents = bool(checked)
+        self._rebuild_list()
+
+    def _set_queue(self, queue: str) -> None:
+        self._active_queue = queue
+        for qid, btn in self._queue_btns.items():
+            btn.setChecked(qid == queue)
+        self._rebuild_list()
+
+    def _rebuild_list(self) -> None:
+        muted = self._palette["muted"]
+        ink = self._palette["ink"]
+        ask = self._palette["ask"]
+        err = self._palette["err"]
+        warn = self._palette["warn"]
+        ok_ink = self._palette["ok_ink"]
+        ui_font = self._ui_font
+        ui_fs = self._ui_fs
+        ui_pt = self._ui_pt
+        min_h = max(40, int(round(ui_pt * 5.0)))
+        base = self._filtered_base()
+        counts = self._queue_counts(base, self._triage_state)
+        for qid, btn in self._queue_btns.items():
+            label = {
+                self._QUEUE_OPEN: "Open",
+                self._QUEUE_DONE: "Done",
+                self._QUEUE_CASE: "Case",
+                self._QUEUE_DISMISSED: "Dismissed",
+            }[qid]
+            btn.setText(f"{label} ({counts.get(qid, 0)})")
+        items = self._filter_by_queue(
+            base, self._triage_state, queue=self._active_queue)
+        rows = self._group_findings_by_incident(
+            items, self._dashboard.get("clusters") or [],
+            group=self._group_incidents)
+        prev = ""
+        cur = self._list_w.currentItem()
+        if cur is not None:
+            prev = str(cur.data(Qt.ItemDataRole.UserRole) or "")
+        self._list_w.clear()
+        if not rows:
+            empty = QListWidgetItem("No findings in this queue")
+            empty.setFlags(Qt.ItemFlag.NoItemFlags)
+            empty.setFont(ui_font)
+            self._list_w.addItem(empty)
+            self._on_selection_changed()
+            return
+        select_row = 0
+        for i, row in enumerate(rows):
+            if row.get("kind") == "header":
+                cid = str(row.get("incident_id") or "")
+                collapsed = cid in self._collapsed_incidents
+                mark = "▸" if collapsed else "▾"
+                label = f"{mark}  {row.get('label')}  ({row.get('count')} related)"
+                item = QListWidgetItem(label)
+                item.setData(Qt.ItemDataRole.UserRole, f"__incident__:{cid}")
+                item.setFont(ui_font)
+                item.setForeground(QBrush(QColor(ink)))
+                self._list_w.addItem(item)
+                continue
+            if row.get("incident_id") and str(row.get("incident_id")) in self._collapsed_incidents:
+                continue
+            f = row
+            sev = f.get("severity", "info")
+            title = str(f.get("observation") or f.get("title", "Finding")).strip() or "Finding"
+            text_body = str(f.get("why_it_matters") or f.get("text", "")).strip()
+            strength = str(f.get("evidence_strength_label") or "").strip()
+            check_next = str(f.get("check_next") or "").strip()
+            fid = str(f.get("id") or "")
+            cid = self._id_cluster.get(fid) or self._title_cluster.get(title, "")
+            prefix = f"[{cid}] " if cid else ""
+            if sev == "error":
+                badge = SEMANTIC_GLYPHS["error"]
+                color = err
+            elif sev == "warning":
+                badge = SEMANTIC_GLYPHS["warning"]
+                color = warn
+            elif fid == "load_balance_ok":
+                badge = SEMANTIC_GLYPHS["improved"]
+                color = ok_ink
+            else:
+                badge = "○"
+                color = ink
+            row_w = QWidget()
+            vbox = QVBoxLayout(row_w)
+            vbox.setContentsMargins(4, 2, 4, 2)
+            vbox.setSpacing(4)
+            title_l = QLabel(f"{badge}  {prefix}{title}")
+            title_l.setObjectName("analysisFindingTitle")
+            title_l.setWordWrap(True)
+            title_l.setFont(ui_font)
+            title_l.setStyleSheet(
+                f"color: {color}; font-weight: 700; font-size: {ui_fs};")
+            vbox.addWidget(title_l)
+            if text_body:
+                text_l = QLabel(text_body)
+                text_l.setObjectName("analysisFindingText")
+                text_l.setWordWrap(True)
+                text_l.setFont(ui_font)
+                text_l.setStyleSheet(f"color: {color}; font-size: {ui_fs};")
+                vbox.addWidget(text_l)
+            if strength:
+                s_l = QLabel(f"EVIDENCE STRENGTH  {strength}")
+                s_l.setWordWrap(True)
+                s_l.setFont(ui_font)
+                s_l.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+                vbox.addWidget(s_l)
+            evidence_text = str(f.get("evidence_text") or "").strip()
+            if evidence_text:
+                ev_l = QLabel(f"EVIDENCE  {evidence_text}")
+                ev_l.setWordWrap(True)
+                ev_l.setFont(ui_font)
+                ev_l.setStyleSheet(
+                    f"color: {muted}; font-size: {ui_fs}; font-family: monospace;")
+                vbox.addWidget(ev_l)
+            if check_next:
+                cn_l = QLabel(f"CHECK NEXT  {check_next}")
+                cn_l.setWordWrap(True)
+                cn_l.setFont(ui_font)
+                cn_l.setStyleSheet(f"color: {ask}; font-size: {ui_fs};")
+                vbox.addWidget(cn_l)
+            reason = (self._triage_state.get("dismissed") or {}).get(fid)
+            if reason:
+                dr = QLabel(f"Dismissed: {reason}")
+                dr.setWordWrap(True)
+                dr.setFont(ui_font)
+                dr.setStyleSheet(
+                    f"color: {muted}; font-size: {ui_fs}; font-style: italic;")
+                vbox.addWidget(dr)
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, fid)
+            item.setFont(ui_font)
+            item.setForeground(QBrush(QColor(color)))
+            self._list_w.addItem(item)
+            self._list_w.setItemWidget(item, row_w)
+            row_w.adjustSize()
+            hint = row_w.sizeHint()
+            item.setSizeHint(QSize(max(hint.width(), 200), max(hint.height(), min_h)))
+            if fid and fid == prev:
+                select_row = self._list_w.count() - 1
+        self._list_w.setCurrentRow(select_row)
+        self._on_selection_changed()
+
+    def _on_list_item_clicked(self, item) -> None:
+        if item is None:
+            return
+        role = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        if not role.startswith("__incident__:"):
+            return
+        cid = role.split(":", 1)[1]
+        if cid in self._collapsed_incidents:
+            self._collapsed_incidents.discard(cid)
+        else:
+            self._collapsed_incidents.add(cid)
+        self._rebuild_list()
+
+    def _on_selection_changed(self) -> None:
+        self._refresh_scope_hint()
+        self._refresh_triage_buttons()
 
     def _selected_finding(self) -> Optional[dict]:
         item = self._list_w.currentItem()
         if item is None:
             return None
         fid = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        for f in self._sort_findings_triage(self._findings):
+            if str(f.get("id") or "") == fid:
+                return f
         for f in self._findings:
             if str(f.get("id") or "") == fid:
                 return f
-        return self._findings[0] if self._findings else None
+        return None
+
+    def _refresh_triage_buttons(self) -> None:
+        finding = self._selected_finding()
+        fid = str((finding or {}).get("id") or "")
+        enabled = bool(fid)
+        reviewed = fid in (self._triage_state.get("reviewed") or [])
+        dismissed = fid in (self._triage_state.get("dismissed") or {})
+        in_case = fid in (self._triage_state.get("case") or [])
+        self._done_btn.setEnabled(enabled)
+        self._dismiss_btn.setEnabled(enabled)
+        self._case_btn.setEnabled(enabled and not in_case)
+        self._done_btn.setText("Undo" if reviewed else "Done")
+        self._dismiss_btn.setText("Restore" if dismissed else "Dismiss…")
+        self._case_btn.setText("In case" if in_case else "Add to case")
+
+    def _toggle_done(self) -> None:
+        finding = self._selected_finding()
+        fid = str((finding or {}).get("id") or "")
+        if not fid:
+            return
+        reviewed = fid in (self._triage_state.get("reviewed") or [])
+        act = "unreviewed" if reviewed else "done"
+        self._commit_triage(self._apply_triage_action(self._triage_state, fid, act))
+
+    def _toggle_dismiss(self) -> None:
+        finding = self._selected_finding()
+        fid = str((finding or {}).get("id") or "")
+        if not fid:
+            return
+        if fid in (self._triage_state.get("dismissed") or {}):
+            self._commit_triage(
+                self._apply_triage_action(self._triage_state, fid, "restore"))
+            return
+        reason, ok = QInputDialog.getText(
+            self, "Dismiss finding", "Dismiss reason (short):",
+            text="Not relevant")
+        if not ok:
+            return
+        self._commit_triage(self._apply_triage_action(
+            self._triage_state, fid, "dismiss",
+            reason=str(reason or "").strip() or "Dismissed"))
+
+    def _add_to_case(self) -> None:
+        finding = self._selected_finding()
+        fid = str((finding or {}).get("id") or "")
+        if not fid:
+            return
+        if fid in (self._triage_state.get("case") or []):
+            return
+        self._commit_triage(
+            self._apply_triage_action(self._triage_state, fid, "case"))
+        if callable(self._on_add_to_case):
+            self._on_add_to_case(finding)
 
     def _refresh_scope_hint(self) -> None:
         lbl = getattr(self, "_scope_lbl", None)
@@ -56380,7 +57793,8 @@ class _AnalysisFindingsDialog(QDialog):
             btn.setEnabled(self._on_investigate is not None and bool(sid))
             btn.setToolTip(
                 "Scope the investigation and jump to the relevant Statistics section"
-                if sid else "No specific Statistics section is associated with this finding"
+                if sid else
+                "No specific Statistics section is associated with this finding"
             )
         ev_btn = getattr(self, "_show_evidence_btn", None)
         if ev_btn is not None:
@@ -56425,8 +57839,37 @@ class _AnalysisFindingsDialog(QDialog):
         sid = FINDING_SECTION_MAP.get(str(finding.get("id") or ""))
         if not sid:
             return
-        # Keep the inbox open so Timeline Evidence remains visible.
+        scope = None
+        events = getattr(self, "_ux_events", None) or []
+        tmin = int(getattr(self, "_time_min", 0) or 0)
+        tmax = int(getattr(self, "_time_max", 0) or 0)
+        if events:
+            scope = best_finding_scope(finding, events, tmin, tmax)
+        preview = self._format_investigate_preview(
+            finding, scope=scope, section_id=sid, section_label=sid,
+            current_limit=self._current_limit,
+            current_lo=self._current_cursor_lo,
+            current_hi=self._current_cursor_hi,
+        )
+        self._investigate_preview.setText(preview)
+        self._investigate_preview.setVisible(True)
+        reply = QMessageBox.question(
+            self, "Confirm Investigate",
+            preview + "\n\nContinue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        self._investigate_preview.setVisible(False)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
         self._on_investigate(finding, sid)
+        if callable(self._on_undo_investigate):
+            self._undo_scope_btn.setEnabled(True)
+
+    def _undo_investigate_scope(self) -> None:
+        if callable(self._on_undo_investigate):
+            self._on_undo_investigate()
+        self._undo_scope_btn.setEnabled(False)
 
     def _query_with_ai(
         self, ai_enabled: bool, template_id: str = "findings",
@@ -56442,7 +57885,6 @@ class _AnalysisFindingsDialog(QDialog):
                 self.wants_ai_finding_id = str(
                     item.data(Qt.ItemDataRole.UserRole) or "")
         self._ai_needs_settings = not ai_enabled
-        # Fire immediately; do not close the non-modal Findings inbox.
         if callable(self._on_ai_query):
             self._on_ai_query(
                 self.wants_ai_template,
@@ -56465,7 +57907,8 @@ class _AnalysisFindingsDialog(QDialog):
         try:
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(_format_analysis_findings_text(
-                    self._findings, self._scope_title))
+                    self._findings, self._scope_title,
+                    triage_state=self._triage_state))
         except OSError as exc:
             QMessageBox.warning(
                 self, "Save failed", f"Could not write file:\n{exc}")
@@ -56514,6 +57957,7 @@ class _AnalysisFindingsDialog(QDialog):
         rebuild = getattr(panel, "_rebuild_investigation_menu", None)
         if callable(rebuild):
             rebuild()
+
 
 
 def _parse_task_deadlines_text(text: str) -> Dict[str, int]:
@@ -56639,10 +58083,21 @@ class _StatsPanel(QWidget):
             "Limit statistics to the time window from C1 through the last cursor")
         self._scope_cb.toggled.connect(self._on_scope_toggled)
         _scope_pol = self._scope_cb.sizePolicy()
-        _scope_pol.setHorizontalPolicy(QSizePolicy.Policy.MinimumExpanding)
+        _scope_pol.setHorizontalPolicy(QSizePolicy.Policy.Fixed)
         self._scope_cb.setSizePolicy(_scope_pol)
-        self._scope_cb.setMinimumWidth(0)
-        scope_top.addWidget(self._scope_cb, 1)
+        scope_top.addWidget(self._scope_cb, 0)
+        self._btn_stats_guide = QPushButton("Where should I start?  ▾")
+        self._btn_stats_guide.setObjectName("stats_symptom_guide")
+        self._btn_stats_guide.setToolTip(
+            "Open a symptom shortcut to the first Statistics section")
+        self._btn_stats_guide.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_stats_guide.setFlat(True)
+        _guide_pol = self._btn_stats_guide.sizePolicy()
+        _guide_pol.setHorizontalPolicy(QSizePolicy.Policy.Fixed)
+        self._btn_stats_guide.setSizePolicy(_guide_pol)
+        self._btn_stats_guide.clicked.connect(self._toggle_symptom_guide_panel)
+        scope_top.addWidget(self._btn_stats_guide, 0)
+        scope_top.addStretch(1)
         self._btn_stats_expand = self._make_scope_action_button(
             _IC_SECTIONS_EXPAND, "Expand all statistics sections", self._expand_all_sections)
         scope_top.addWidget(self._btn_stats_expand, 0)
@@ -56657,6 +58112,19 @@ class _StatsPanel(QWidget):
         scope_top.addWidget(self._btn_stats_reset_order, 0)
         self._update_reset_order_button()
         scope_block.addLayout(scope_top)
+        self._symptom_guide_panel = QWidget()
+        self._symptom_guide_panel.setObjectName("stats_symptom_panel")
+        self._symptom_guide_panel.setVisible(False)
+        _sg_lay = QVBoxLayout(self._symptom_guide_panel)
+        _sg_lay.setContentsMargins(0, 4, 0, 6)
+        _sg_lay.setSpacing(6)
+        self._symptom_guide_grid_host = QWidget()
+        self._symptom_guide_grid = QGridLayout(self._symptom_guide_grid_host)
+        self._symptom_guide_grid.setContentsMargins(0, 0, 0, 0)
+        self._symptom_guide_grid.setHorizontalSpacing(8)
+        self._symptom_guide_grid.setVerticalSpacing(8)
+        _sg_lay.addWidget(self._symptom_guide_grid_host)
+        scope_block.addWidget(self._symptom_guide_panel)
         self._scope_label = QLabel("")
         self._scope_label.setStyleSheet("color:#888888;")
         self._scope_label.setWordWrap(True)
@@ -56712,7 +58180,7 @@ class _StatsPanel(QWidget):
         self._btn_export_html.clicked.connect(self._export_html)
         self._btn_export_html.setEnabled(False)
         self._btn_export_html.setToolTip(
-            "Export statistics as HTML (tables include Search / Show all / CSV)")
+            "Export statistics as HTML (tables include Search / Show all)")
         exp_row.addWidget(self._btn_export_html)
         self._btn_export_html.setMinimumWidth(0)
         self._btn_export_html.setSizePolicy(
@@ -56730,7 +58198,36 @@ class _StatsPanel(QWidget):
         font = _application_ui_font(self._ui_font_size)
         self._scope_cb.setFont(font)
         self._scope_label.setStyleSheet(f"color:#888888; font-size:{ui_fs};")
+        guide = getattr(self, "_btn_stats_guide", None)
+        if guide is not None:
+            guide.setFont(font)
+            accent = "#5B9BD5" if self._is_dark else "#2a6fb2"
+            border = "#3a4658" if self._is_dark else "#C0C0C0"
+            guide.setStyleSheet(
+                f"QPushButton#stats_symptom_guide {{"
+                f" color:{accent}; border:1px solid {border}; border-radius:4px;"
+                f" padding:2px 8px; font-size:{ui_fs}; text-align:left; }}"
+                f"QPushButton#stats_symptom_guide:hover {{"
+                f" border-color:{accent}; }}"
+            )
+        panel = getattr(self, "_symptom_guide_panel", None)
+        if panel is not None:
+            panel.setStyleSheet(
+                f"QWidget#stats_symptom_panel {{"
+                f" background:{'#1a1a1a' if self._is_dark else '#f0f0f0'};"
+                f" border-bottom:1px solid {'#3a4658' if self._is_dark else '#C0C0C0'};"
+                f" padding:4px 0; }}"
+                f"QPushButton#stats_symptom_card {{"
+                f" text-align:left; padding:8px; border-radius:6px;"
+                f" border:1px solid {'#3a4658' if self._is_dark else '#C0C0C0'};"
+                f" font-size:{ui_fs}; }}"
+                f"QPushButton#stats_symptom_card:hover:enabled {{"
+                f" border-color:#5B9BD5; }}"
+                f"QPushButton#stats_symptom_card:disabled {{"
+                f" color:#666; }}"
+            )
         for btn in (
+            self._btn_stats_guide,
             self._btn_stats_expand, self._btn_stats_collapse,
             self._btn_stats_reset_order,
             self._btn_export_html,
@@ -57676,14 +59173,81 @@ class _StatsPanel(QWidget):
             return
         rng = self._stats_range()
         if rng is None:
-            self._scope_label.setText(
-                "Place 2+ cursors to measure a time window" if len(self._cursor_times) < 2 else "")
+            base = "Place 2+ cursors to measure a time window" if len(self._cursor_times) < 2 else ""
+            note = self._cursor_limit_note_text()
+            self._scope_label.setText(f"{base}\n{note}" if base and note else (base or note))
             return
         lo, hi, n_cur = rng
         unit = self._trace.time_scale
-        self._scope_label.setText(
+        base = (
             f"C1–C{n_cur}: {_format_time(lo, unit)} … {_format_time(hi, unit)}  "
-            f"({_format_time(hi - lo, unit)})")
+            f"({_format_time(hi - lo, unit)})"
+        )
+        note = self._cursor_limit_note_text()
+        self._scope_label.setText(f"{base}\n{note}" if note else base)
+
+    def _cursor_limit_note_text(self) -> str:
+        """Secondary scope-line note when cursors are present but scope is full-trace."""
+        CURSORS_NOT_LIMITING_NOTE = globals().get("CURSORS_NOT_LIMITING_NOTE")
+        show = len(self._cursor_times or []) >= 2 and not self._scope_to_cursors
+        return CURSORS_NOT_LIMITING_NOTE if show else ""
+
+    def _symptom_guide_open(self) -> bool:
+        panel = getattr(self, "_symptom_guide_panel", None)
+        return bool(panel is not None and panel.isVisible())
+
+    def _set_symptom_guide_open(self, open_: bool) -> None:
+        panel = getattr(self, "_symptom_guide_panel", None)
+        btn = getattr(self, "_btn_stats_guide", None)
+        if panel is None:
+            return
+        if open_ and not panel.isVisible():
+            self._rebuild_symptom_guide_panel()
+        panel.setVisible(bool(open_))
+        if btn is not None:
+            btn.setText(
+                "Where should I start?  ▴" if open_ else "Where should I start?  ▾")
+
+    def _toggle_symptom_guide_panel(self) -> None:
+        self._set_symptom_guide_open(not self._symptom_guide_open())
+
+    def _rebuild_symptom_guide_panel(self) -> None:
+        available_symptom_cards = globals().get("available_symptom_cards")
+        symptom_section_id = globals().get("symptom_section_id")
+        grid = getattr(self, "_symptom_guide_grid", None)
+        if grid is None:
+            return
+        while grid.count():
+            item = grid.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        tr = self._trace
+        has_sti = bool(getattr(tr, "sti_events", None)) if tr is not None else False
+        cores = list(getattr(tr, "core_names", None) or []) if tr is not None else []
+        cards = available_symptom_cards(has_sti=has_sti, single_core=len(cores) <= 1)
+        ui_fs = self._ui_fs()
+        font = _application_ui_font(self._ui_font_size)
+        cols = 2
+        for i, card in enumerate(cards):
+            title = str(card.get("title") or "Symptom")
+            path = card.get("path") or []
+            tip = str(card.get("disabled_reason") or " → ".join(path))
+            btn = QPushButton(f"{title}\n{' → '.join(path[:2])}")
+            btn.setObjectName("stats_symptom_card")
+            btn.setFont(font)
+            btn.setToolTip(tip)
+            btn.setEnabled(not card.get("disabled"))
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            sid = symptom_section_id(card)
+
+            def _pick(_checked: bool = False, section_id: str = sid) -> None:
+                self._set_symptom_guide_open(False)
+                self.scroll_to_section(section_id)
+
+            btn.clicked.connect(_pick)
+            r, c = divmod(i, cols)
+            grid.addWidget(btn, r, c)
 
     def _scope_suffix(self) -> str:
         return " (cursor range)" if self._stats_range() is not None else ""
@@ -61736,6 +63300,7 @@ class _StatsPanel(QWidget):
     def clear_trace(self) -> None:
         """Empty Statistics when no trace tab is open (welcome / close-all)."""
         self.clear_plot_session()
+        self._set_symptom_guide_open(False)
         self._defer_heavy_collapse_done = False
         self._trace = None
         self._needs_presentation_defaults = True
@@ -67936,8 +69501,20 @@ def recompute_find_hits(
             hits.extend(s.start for s in segs)
 
     for ann in annotations:
-        if _haystack_matches(q, mode_key, ann.note, regex_obj):
-            hits.append(ann.ns)
+        if isinstance(ann, dict):
+            note = str(ann.get("note") or ann.get("label") or "")
+            try:
+                ns = int(ann.get("ns", ann.get("time")))
+            except (TypeError, ValueError):
+                continue
+        else:
+            note = str(getattr(ann, "note", None) or getattr(ann, "label", None) or "")
+            try:
+                ns = int(getattr(ann, "ns", None))
+            except (TypeError, ValueError):
+                continue
+        if _haystack_matches(q, mode_key, note, regex_obj):
+            hits.append(ns)
 
     unique = sorted(set(hits))
     label = f"{len(unique)} matches"
@@ -68632,6 +70209,70 @@ def trace_quality_summary(trace: Optional["BtfTrace"]) -> Optional[str]:
     if not warnings:
         return None
     return " · ".join(warnings)
+
+
+_QUALITY_GROUPS = {
+    "incomplete_capture": (
+        "ringOverflow",
+        "taskTableOverflow",
+        "truncated",
+        "overflow",
+        "truncat",
+    ),
+    "missing_event_type": ("sti", "instrument", "missing event"),
+    "invalid_pairing": ("pair", "unmatched", "interval"),
+    "timestamp_order": ("order", "timestamp", "version"),
+    "unsupported_measurement": ("unsupported", "not instrumented"),
+}
+
+_AFFECTED_BY_GROUP = {
+    "incomplete_capture": [
+        "Timeline Anomalies", "Worst Events", "Response Time", "AI conclusions",
+    ],
+    "missing_event_type": [
+        "Blocking Time", "Mutex Blocking", "Waiter × Owner", "Dispatch latency",
+    ],
+    "invalid_pairing": ["Period / Jitter", "Recurring Patterns", "Intervals"],
+    "timestamp_order": ["All time-ordered statistics", "Critical Path"],
+    "unsupported_measurement": [
+        "Response Time", "Task Health", "Priority Inheritance",
+    ],
+}
+
+
+def _classify_warning(line: str) -> str:
+    low = str(line or "").lower()
+    for group, needles in _QUALITY_GROUPS.items():
+        if any(n in low for n in needles):
+            return group
+    return "incomplete_capture"
+
+
+def trace_quality_report(trace: Optional["BtfTrace"]) -> Dict[str, Any]:
+    """Grouped trace-quality details for Review details (UX-006)."""
+    warnings = collect_trace_quality_warnings(trace)
+    if not warnings:
+        return {"ok": True, "summary": "", "groups": [], "actions": []}
+    grouped: Dict[str, List[str]] = {}
+    for line in warnings:
+        grouped.setdefault(_classify_warning(line), []).append(line)
+    groups = []
+    for gid, lines in grouped.items():
+        groups.append({
+            "id": gid,
+            "title": gid.replace("_", " ").title(),
+            "lines": lines,
+            "affected": list(_AFFECTED_BY_GROUP.get(gid, [])),
+        })
+    return {
+        "ok": False,
+        "summary": trace_quality_summary(trace) or "",
+        "groups": groups,
+        "actions": [
+            {"id": "continue", "label": "Continue with limitations"},
+            {"id": "guidance", "label": "Open capture guidance"},
+        ],
+    }
 # ===========================================================================
 # Perfetto export
 # ===========================================================================
@@ -73683,6 +75324,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._capture_legend_filters_to_scene(prev_tab.view._scene)
             self._stash_tab_state(prev_tab)
             self._stats_panel.clear_plot_session()
+            self._findings_triage_state = {}
+            dlg = getattr(self, "_analysis_findings_dlg", None)
+            if dlg is not None:
+                try:
+                    dlg.close()
+                except RuntimeError:
+                    pass
+                self._analysis_findings_dlg = None
         if 0 <= index < len(self._tabs):
             tab = self._tabs[index]
             self._vm.set_active_index(index)
@@ -73696,6 +75345,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._update_tab_actions()
         self._previous_tab_index = index
         self._update_trace_quality_banner()
+        self._update_cursor_scope_banner()
         self._sync_ai_compare_template()
 
     def _close_trace_tab(self, index: int) -> None:
@@ -74677,9 +76327,63 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QStatusBar QLabel#zoomScaleLabel {{ font-size:{_ui_fs}; color:{c['status_text']}; }}
             QStatusBar QCheckBox {{ font-size:{_ui_fs}; color:{c['sub_text']}; padding: 0 4px; }}
             QLabel      {{ font-size:{_ui_fs}; }}
-            QLabel#trace_quality_banner {{
-                background:#5c3d00; color:#ffe8a3; padding:6px 12px; font-size:12px;
+            QWidget#trace_quality_banner {{
+                background:#5c3d00; color:#ffe8a3;
                 border-bottom:1px solid #8a6200;
+            }}
+            QWidget#trace_quality_banner QLabel#trace_quality_summary {{
+                color:#ffe8a3; font-size:12px;
+            }}
+            QWidget#trace_quality_details {{
+                background:rgba(92,61,0,0.35); color:#ffe8a3;
+                border-bottom:1px solid #8a6200;
+            }}
+            QWidget#trace_quality_details QLabel {{
+                color:#ffe8a3; font-size:11px;
+            }}
+            QWidget#cursor_scope_banner {{
+                background:#1a3348; color:#cdefff;
+                border-bottom:1px solid #2a5a70;
+            }}
+            QWidget#cursor_scope_banner QLabel#cursor_scope_prompt {{
+                color:#cdefff; font-size:12px;
+            }}
+            QWidget#cursor_scope_banner QLabel#cursor_scope_warn {{
+                color:#cdefff; font-size:11px;
+            }}
+            QWidget#cursor_scope_banner QToolButton#cursor_scope_close {{
+                background:transparent; border:none; border-radius:3px;
+                padding:0;
+            }}
+            QWidget#cursor_scope_banner QToolButton#cursor_scope_close:hover {{
+                background:rgba(255,255,255,0.14);
+            }}
+            QWidget#evidence_inspector_bar {{
+                background:#1a3348; color:#cdefff;
+                border-bottom:1px solid #2a5a70;
+            }}
+            QWidget#evidence_inspector_bar QLabel#evidence_inspector_text {{
+                color:#cdefff; font-size:11px;
+                font-family:Menlo,Consolas,Monaco,"Courier New",monospace;
+            }}
+            QPushButton#helper_banner_btn {{
+                background:rgba(255,255,255,0.08); color:inherit;
+                border:1px solid rgba(255,255,255,0.28); border-radius:4px;
+                padding:2px 8px; font-size:11px; min-height:0;
+            }}
+            QPushButton#helper_banner_btn:hover {{
+                background:rgba(255,255,255,0.16);
+            }}
+            QPushButton#helper_banner_btn:disabled {{
+                color:rgba(255,255,255,0.35);
+            }}
+            QPushButton#helper_banner_btn_primary {{
+                background:rgba(42,111,178,0.22); color:#cdefff;
+                border:1px solid #2a6fb2; border-radius:4px;
+                padding:2px 8px; font-size:11px; min-height:0;
+            }}
+            QPushButton#helper_banner_btn_primary:hover {{
+                background:rgba(42,111,178,0.35);
             }}
             QWidget#demo_status_banner {{
                 background:#1b3a4a; color:#cdefff; padding:0px;
@@ -74947,13 +76651,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 _pal = self._cur_hint.palette()
                 _pal.setColor(QPalette.WindowText, QColor(c['muted_text']))
                 self._cur_hint.setPalette(_pal)
-            if hasattr(self, '_welcome_label'):
-                self._welcome_label.setText(
-                    f"<h2 style='color:{c['welcome_h2']};'>RTOS BTF Viewer</h2>"
-                    f"<p style='color:{c['welcome_p']}; font-size:11pt;'>"
-                    "Drop a <b>.btf</b> / <b>.btf.gz</b>, a demo <b>.xtf</b>, a demo <b>.xml</b>, or a pack folder<br>"
-                    "or press <b>Ctrl+O</b> to open</p>"
-                )
             if hasattr(self, '_view'):
                 defer_rebuilds = any(
                     v._scene._trace is not None for v in self._iter_tab_views())
@@ -75117,17 +76814,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         self._welcome_page = QWidget()
         _wl = QVBoxLayout(self._welcome_page)
-        _wl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        _wlbl = QLabel(
-            "<h2 style='color:#888;'>RTOS BTF Viewer</h2>"
-            "<p style='color:#666; font-size:11pt;'>"
-            "Drop a <b>.btf</b> / <b>.btf.gz</b>, a demo <b>.xtf</b>, a demo <b>.xml</b>, or a pack folder<br>"
-            "or press <b>Ctrl+O</b> to open</p>"
-        )
-        _wlbl.setTextFormat(Qt.TextFormat.RichText)
-        _wlbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        _wl.addWidget(_wlbl)
-        self._welcome_label = _wlbl
+        _wl.setContentsMargins(0, 0, 0, 0)
+        _wl.addStretch(1)
 
         self._tab_widget = _StretchTabWidget()
         self._tab_widget.setTabBar(_LeftAlignedTabBar(self._tab_widget))
@@ -75145,10 +76833,124 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._central_stack.addWidget(self._tab_widget)
         self._central_stack.setCurrentIndex(0)
 
-        self._trace_quality_banner = QLabel()
+        def _helper_btn(text: str, *, primary: bool = False) -> QPushButton:
+            btn = QPushButton(text)
+            btn.setObjectName(
+                "helper_banner_btn_primary" if primary else "helper_banner_btn")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFlat(False)
+            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            return btn
+
+        # Trace quality banner (Web parity: summary + action buttons + details).
+        self._trace_quality_banner = QWidget()
         self._trace_quality_banner.setObjectName("trace_quality_banner")
-        self._trace_quality_banner.setWordWrap(True)
         self._trace_quality_banner.setVisible(False)
+        _tq_lay = QHBoxLayout(self._trace_quality_banner)
+        _tq_lay.setContentsMargins(12, 6, 12, 6)
+        _tq_lay.setSpacing(8)
+        self._trace_quality_summary = QLabel("")
+        self._trace_quality_summary.setObjectName("trace_quality_summary")
+        self._trace_quality_summary.setWordWrap(True)
+        _tq_lay.addWidget(self._trace_quality_summary, 1)
+        self._trace_quality_details_btn = _helper_btn("Review details")
+        self._trace_quality_details_btn.clicked.connect(
+            self._toggle_trace_quality_details)
+        _tq_lay.addWidget(self._trace_quality_details_btn, 0)
+        self._trace_quality_continue_btn = _helper_btn("Continue with limitations")
+        self._trace_quality_continue_btn.clicked.connect(
+            self._on_trace_quality_continue)
+        _tq_lay.addWidget(self._trace_quality_continue_btn, 0)
+        self._trace_quality_guide_btn = _helper_btn("Open capture guidance")
+        self._trace_quality_guide_btn.clicked.connect(
+            self._open_trace_quality_guidance)
+        _tq_lay.addWidget(self._trace_quality_guide_btn, 0)
+        self._trace_quality_details_open = False
+        self._trace_quality_details = QLabel("")
+        self._trace_quality_details.setObjectName("trace_quality_details")
+        self._trace_quality_details.setWordWrap(True)
+        self._trace_quality_details.setTextFormat(Qt.TextFormat.RichText)
+        self._trace_quality_details.setContentsMargins(12, 8, 12, 10)
+        self._trace_quality_details.setVisible(False)
+
+        # UX-107: Evidence inspector bar (Web parity).
+        self._evidence_history = empty_evidence_history()
+        self._evidence_inspector_bar = QWidget()
+        self._evidence_inspector_bar.setObjectName("evidence_inspector_bar")
+        self._evidence_inspector_bar.setVisible(False)
+        _ei_lay = QHBoxLayout(self._evidence_inspector_bar)
+        _ei_lay.setContentsMargins(12, 6, 12, 6)
+        _ei_lay.setSpacing(8)
+        self._evidence_back_btn = _helper_btn("Back")
+        self._evidence_back_btn.setToolTip("Previous evidence jump")
+        self._evidence_back_btn.clicked.connect(self._step_evidence_back)
+        _ei_lay.addWidget(self._evidence_back_btn, 0)
+        self._evidence_fwd_btn = _helper_btn("Forward")
+        self._evidence_fwd_btn.setToolTip("Next evidence jump")
+        self._evidence_fwd_btn.clicked.connect(self._step_evidence_forward)
+        _ei_lay.addWidget(self._evidence_fwd_btn, 0)
+        self._evidence_inspector_text = QLabel("")
+        self._evidence_inspector_text.setObjectName("evidence_inspector_text")
+        self._evidence_inspector_text.setWordWrap(True)
+        _ei_lay.addWidget(self._evidence_inspector_text, 1)
+
+        # UX-106: offer Enable Limit to C1–Cn when ≥2 cursors and scope is off.
+        # Web parity: left-packed flex row (justify-content: flex-start).
+        self._cursor_scope_banner = QWidget()
+        self._cursor_scope_banner.setObjectName("cursor_scope_banner")
+        self._cursor_scope_banner.setVisible(False)
+        _cs_lay = QHBoxLayout(self._cursor_scope_banner)
+        _cs_lay.setContentsMargins(12, 6, 12, 6)
+        _cs_lay.setSpacing(8)
+        _cs_lay.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._cursor_scope_prompt = QLabel("")
+        self._cursor_scope_prompt.setObjectName("cursor_scope_prompt")
+        self._cursor_scope_prompt.setWordWrap(False)
+        self._cursor_scope_prompt.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._cursor_scope_prompt.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        _cs_lay.addWidget(self._cursor_scope_prompt, 0)
+        self._cursor_scope_enable_btn = _helper_btn(
+            "Enable Limit to C1–Cn", primary=True)
+        self._cursor_scope_enable_btn.clicked.connect(self._apply_cursors_as_scope)
+        _cs_lay.addWidget(self._cursor_scope_enable_btn, 0)
+        self._cursor_scope_warn = QLabel("")
+        self._cursor_scope_warn.setObjectName("cursor_scope_warn")
+        self._cursor_scope_warn.setWordWrap(False)
+        self._cursor_scope_warn.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._cursor_scope_warn.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._cursor_scope_warn.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self._cursor_scope_warn.setVisible(False)
+        _cs_lay.addWidget(self._cursor_scope_warn, 0)
+        _cs_lay.addStretch(1)
+        self._cursor_scope_close_btn = QToolButton()
+        self._cursor_scope_close_btn.setObjectName("cursor_scope_close")
+        # Match Desktop QTabBar close affordance (style icon, not a text glyph).
+        _tab_close = self.style().standardIcon(
+            QStyle.StandardPixmap.SP_TitleBarCloseButton)
+        if _tab_close.isNull():
+            _tab_close = self.style().standardIcon(
+                QStyle.StandardPixmap.SP_DockWidgetCloseButton)
+        if not _tab_close.isNull():
+            self._cursor_scope_close_btn.setIcon(_tab_close)
+            self._cursor_scope_close_btn.setIconSize(QSize(12, 12))
+            self._cursor_scope_close_btn.setText("")
+        else:
+            self._cursor_scope_close_btn.setText("×")
+        self._cursor_scope_close_btn.setAutoRaise(True)
+        self._cursor_scope_close_btn.setToolTip("Dismiss")
+        self._cursor_scope_close_btn.setAccessibleName("Dismiss cursor scope helper")
+        self._cursor_scope_close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cursor_scope_close_btn.setFixedSize(18, 18)
+        self._cursor_scope_close_btn.clicked.connect(self._dismiss_cursor_scope_banner)
+        _cs_lay.addWidget(self._cursor_scope_close_btn, 0)
+        # None = not dismissed; int = cursor count when the helper was dismissed.
+        self._cursor_scope_dismissed_count: Optional[int] = None
 
         self._demo_status_banner = DemoStatusBanner()
         self._demo_status_banner.prevClicked.connect(self._on_demo_prev)
@@ -75162,6 +76964,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _central_lay.setSpacing(0)
         _central_lay.addWidget(self._demo_status_banner)
         _central_lay.addWidget(self._trace_quality_banner)
+        _central_lay.addWidget(self._trace_quality_details)
+        _central_lay.addWidget(self._evidence_inspector_bar)
+        _central_lay.addWidget(self._cursor_scope_banner)
         _central_lay.addWidget(self._central_stack, 1)
         self.setCentralWidget(self._central_host)
 
@@ -75472,6 +77277,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if hasattr(self, "_tb_analysis_btn"):
             self._tb_analysis_btn.setEnabled(False)
         self._sync_trace_compare_btn()
+        self._evidence_history = empty_evidence_history()
+        self._update_evidence_inspector_bar()
+        self._update_cursor_scope_banner()
 
     def _on_close_all_tabs_action(self) -> None:
         for _ in range(len(self._tabs)):
@@ -75536,6 +77344,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._on_section_collapsed_changed)
         self._stats_panel.query_ai_requested.connect(self._on_stats_query_ai)
         self._stats_panel.set_ai_enabled(self._ai_feature_enabled())
+        self._stats_panel._scope_cb.toggled.connect(
+            lambda _checked=False: self._update_cursor_scope_banner())
         self.setAcceptDrops(True)
 
     def _on_stats_query_ai(self, template_id: str, extra: str = "") -> None:
@@ -75892,17 +77702,199 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _update_trace_quality_banner(self, trace: Optional[BtfTrace] = None) -> None:
         """Show BTF quality / version warnings above the timeline (web parity)."""
         banner = getattr(self, "_trace_quality_banner", None)
-        if banner is None:
+        summary_lbl = getattr(self, "_trace_quality_summary", None)
+        details_lbl = getattr(self, "_trace_quality_details", None)
+        if banner is None or summary_lbl is None:
             return
         if trace is None:
             trace = self._trace
-        text = trace_quality_summary(trace)
-        if text:
-            banner.setText(text)
+        rep = trace_quality_report(trace)
+        if not rep.get("ok"):
+            summary = str(rep.get("summary") or "").strip()
+            groups = rep.get("groups") or []
+            parts: List[str] = []
+            for grp in groups:
+                title = str(grp.get("title") or "").strip()
+                lines = [str(x) for x in (grp.get("lines") or []) if str(x).strip()]
+                affected = [str(x) for x in (grp.get("affected") or []) if str(x).strip()]
+                body = "<br>".join(f"• {ln}" for ln in lines)
+                block = f"<b>{title}</b><br>{body}" if title else body
+                if affected:
+                    block += f"<br>Affects: {', '.join(affected)}"
+                if block:
+                    parts.append(block)
+            if details_lbl is not None:
+                details_lbl.setText("<br><br>".join(parts) if parts else summary)
+            summary_lbl.setText(summary)
             banner.setVisible(True)
+            open_ = bool(getattr(self, "_trace_quality_details_open", False))
+            if details_lbl is not None:
+                details_lbl.setVisible(open_ and bool(parts))
+            btn = getattr(self, "_trace_quality_details_btn", None)
+            if btn is not None:
+                btn.setText("Hide details" if open_ else "Review details")
+                btn.setEnabled(bool(parts))
         else:
-            banner.clear()
+            summary_lbl.clear()
             banner.setVisible(False)
+            self._trace_quality_details_open = False
+            if details_lbl is not None:
+                details_lbl.clear()
+                details_lbl.setVisible(False)
+            btn = getattr(self, "_trace_quality_details_btn", None)
+            if btn is not None:
+                btn.setText("Review details")
+
+    def _toggle_trace_quality_details(self) -> None:
+        self._trace_quality_details_open = not bool(
+            getattr(self, "_trace_quality_details_open", False))
+        self._update_trace_quality_banner()
+
+    def _on_trace_quality_continue(self) -> None:
+        """Dismiss expanded details (Web Continue with limitations)."""
+        self._trace_quality_details_open = False
+        details = getattr(self, "_trace_quality_details", None)
+        if details is not None:
+            details.setVisible(False)
+        btn = getattr(self, "_trace_quality_details_btn", None)
+        if btn is not None:
+            btn.setText("Review details")
+
+    def _open_trace_quality_guidance(self) -> None:
+        """Open WORKFLOWS.md#trace-quality (Web Open capture guidance)."""
+        path = Path(__file__).resolve().parents[1] / "WORKFLOWS.md"
+        if path.is_file():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+            return
+        self.statusBar().showMessage(
+            "Open Help → WORKFLOWS for capture guidance", 5000)
+
+    def _update_cursor_scope_banner(self) -> None:
+        """Offer Enable Limit to C1–Cn when ≥2 cursors exist and scope is off (Web parity)."""
+        format_use_as_scope_prompt = globals().get("format_use_as_scope_prompt")
+        multi_cursor_span_warning = globals().get("multi_cursor_span_warning")
+        should_offer_use_as_scope = globals().get("should_offer_use_as_scope")
+        banner = getattr(self, "_cursor_scope_banner", None)
+        prompt_lbl = getattr(self, "_cursor_scope_prompt", None)
+        warn_lbl = getattr(self, "_cursor_scope_warn", None)
+        if banner is None or prompt_lbl is None:
+            return
+        times: List[int] = []
+        if self._trace is not None and hasattr(self, "_view") and self._view is not None:
+            try:
+                times = list(self._view._scene.cursor_times())
+            except Exception:
+                times = []
+        panel = getattr(self, "_stats_panel", None)
+        limited = bool(getattr(panel, "_scope_to_cursors", False)) if panel else False
+        offer = (
+            self._trace is not None
+            and should_offer_use_as_scope(times, limit_to_cursors=limited)
+        )
+        if not offer:
+            # Allow the helper again the next time C1–Cn qualify with Limit off.
+            self._cursor_scope_dismissed_count = None
+            banner.setVisible(False)
+            prompt_lbl.clear()
+            if warn_lbl is not None:
+                warn_lbl.clear()
+                warn_lbl.setToolTip("")
+                warn_lbl.setVisible(False)
+            return
+        dismissed_n = getattr(self, "_cursor_scope_dismissed_count", None)
+        if dismissed_n is not None:
+            if len(times) == int(dismissed_n):
+                banner.setVisible(False)
+                return
+            # Cursor count changed (e.g. C1–C2 dismissed, then C3 added) — show again.
+            self._cursor_scope_dismissed_count = None
+        prompt_lbl.setText(format_use_as_scope_prompt(times))
+        warn = multi_cursor_span_warning(times)
+        if warn_lbl is not None:
+            if warn:
+                warn_lbl.setText(warn)
+                warn_lbl.setToolTip(warn)
+                warn_lbl.setVisible(True)
+            else:
+                warn_lbl.clear()
+                warn_lbl.setToolTip("")
+                warn_lbl.setVisible(False)
+        banner.setVisible(True)
+
+    def _dismiss_cursor_scope_banner(self) -> None:
+        """Close the helper without enabling Limit to C1–Cn (no confirmation)."""
+        times: List[int] = []
+        if hasattr(self, "_view") and self._view is not None:
+            try:
+                times = list(self._view._scene.cursor_times())
+            except Exception:
+                times = []
+        self._cursor_scope_dismissed_count = len(times)
+        banner = getattr(self, "_cursor_scope_banner", None)
+        if banner is not None:
+            banner.setVisible(False)
+
+    def _apply_cursors_as_scope(self) -> None:
+        """Enable Limit to C1–Cn from the cursor-scope banner (Web applyCursorsAsScope)."""
+        self._demo_set_limit(True)
+        self._update_cursor_scope_banner()
+
+    def _record_evidence_jump(self, entry: dict) -> None:
+        """Push an evidence jump into history and refresh the inspector bar."""
+        if not isinstance(entry, dict) or entry.get("time") is None:
+            return
+        self._evidence_history = push_evidence_entry(
+            getattr(self, "_evidence_history", None), entry)
+        self._update_evidence_inspector_bar()
+
+    def _update_evidence_inspector_bar(self) -> None:
+        bar = getattr(self, "_evidence_inspector_bar", None)
+        text_lbl = getattr(self, "_evidence_inspector_text", None)
+        if bar is None or text_lbl is None:
+            return
+        nav = evidence_nav_state(getattr(self, "_evidence_history", None))
+        text = format_evidence_inspector(nav.get("current"))
+        if not text:
+            bar.setVisible(False)
+            text_lbl.clear()
+            return
+        text_lbl.setText(text)
+        back = getattr(self, "_evidence_back_btn", None)
+        fwd = getattr(self, "_evidence_fwd_btn", None)
+        if back is not None:
+            back.setEnabled(bool(nav.get("can_back")))
+        if fwd is not None:
+            fwd.setEnabled(bool(nav.get("can_forward")))
+        bar.setVisible(True)
+
+    def _restore_evidence_jump(self, entry: Optional[dict]) -> None:
+        if not isinstance(entry, dict) or entry.get("time") is None:
+            return
+        ns = int(entry["time"])
+        view = getattr(self, "_view", None)
+        if view is not None:
+            view.scroll_to_ns(ns)
+        task = str(entry.get("task") or "").strip()
+        if task:
+            self._ai_highlight_task(task)
+        section = str(entry.get("stats_section") or "").strip()
+        if section and hasattr(self, "_stats_panel"):
+            self._focus_panel_tab(_PANEL_TAB_STATS)
+            self._stats_panel.scroll_to_section(section)
+
+    def _step_evidence_back(self) -> None:
+        self._evidence_history = step_evidence_history(
+            getattr(self, "_evidence_history", None), -1)
+        nav = evidence_nav_state(self._evidence_history)
+        self._restore_evidence_jump(nav.get("current"))
+        self._update_evidence_inspector_bar()
+
+    def _step_evidence_forward(self) -> None:
+        self._evidence_history = step_evidence_history(
+            getattr(self, "_evidence_history", None), 1)
+        nav = evidence_nav_state(self._evidence_history)
+        self._restore_evidence_jump(nav.get("current"))
+        self._update_evidence_inspector_bar()
 
     def _build_status_bar(self) -> None:
         sb = self.statusBar()
@@ -76802,6 +78794,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._ai_stop_zoom_anim()
         ns = int(float(value))
         note = ai_jump_annotation_note(value)
+        self._record_evidence_jump({
+            "time": ns,
+            "source_metric": "AI evidence",
+        })
         self._jump_to_ns(ns)
         for ann in self._annotations:
             if int(ann.ns) == ns and ann.note == note:
@@ -78864,6 +80860,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self.statusBar().showMessage(
             f"Evidence{multi}: {note} @ {ns} ns — Scope/Filters unchanged",
             6000)
+        self._record_evidence_jump({
+            "time": ns,
+            "task": mk or task,
+            "source_metric": str(finding.get("title") or "Finding"),
+        })
 
     def _palette_load_recent(self) -> List[str]:
         raw = self._settings.get("palette", "recent_json", "[]")
@@ -79054,14 +81055,109 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                         t, finding_id=fid, extra=ex),
                 )
 
+        def _on_triage_change(state: dict) -> None:
+            self._findings_triage_state = dict(state or {})
+
+        def _on_add_to_case(finding: dict) -> None:
+            panel = getattr(self, "_ai_panel", None)
+            if panel is not None and hasattr(panel, "add_finding_to_investigation_case"):
+                ok = panel.add_finding_to_investigation_case(finding)
+                if ok:
+                    self.statusBar().showMessage("Finding added to AI Case", 3000)
+                else:
+                    self.statusBar().showMessage("Could not add finding to Case", 4000)
+            else:
+                self.statusBar().showMessage("AI Assistant unavailable for Case", 4000)
+
+        def _on_undo_investigate() -> None:
+            snap = getattr(self, "_findings_investigate_undo", None)
+            if not isinstance(snap, dict):
+                return
+            times = [int(t) for t in (snap.get("cursor_times") or [])]
+            view = getattr(self, "_view", None)
+            if view is not None and hasattr(view, "_scene"):
+                view.begin_programmatic_viewport()
+                try:
+                    view._scene.clear_cursors()
+                    for t in times:
+                        view._scene.add_cursor(t)
+                    view.cursors_changed.emit(view._scene.cursor_times())
+                finally:
+                    view.end_programmatic_viewport()
+            panel = self._stats_panel
+            want_scope = bool(snap.get("scope_to_cursors")) and len(times) >= 2
+            if panel is not None:
+                panel._scope_to_cursors = want_scope
+                cb = getattr(panel, "_scope_cb", None)
+                if cb is not None:
+                    cb.blockSignals(True)
+                    cb.setChecked(want_scope)
+                    cb.blockSignals(False)
+                panel.set_cursor_times(times, refresh_stats=True)
+            vp_raw = snap.get("viewport")
+            if isinstance(vp_raw, str) and view is not None:
+                vp = viewport_from_json(vp_raw)
+                if vp is not None:
+                    sc = view._scene
+                    if vp.fit_mode:
+                        view.zoom_fit()
+                    elif vp.zoom_tpp > 0:
+                        sc._timescale_per_px = max(
+                            sc._timescale_per_px_default, float(vp.zoom_tpp))
+                        view._fit_mode = False
+                        sc.rebuild()
+                        view.zoom_changed.emit(sc.timescale_per_px)
+            self._findings_investigate_undo = None
+            self.statusBar().showMessage("Restored Scope from before Investigate", 3000)
+
+        def _wrap_investigate(finding: dict, section_id: str) -> None:
+            panel = self._stats_panel
+            view = getattr(self, "_view", None)
+            times = []
+            if view is not None and hasattr(view, "_scene"):
+                times = list(view._scene.cursor_times())
+            elif panel is not None:
+                times = list(getattr(panel, "_cursor_times", None) or [])
+            vp_json = None
+            tab = getattr(self, "_active_tab", None)
+            if tab is not None and hasattr(tab, "vm") and view is not None:
+                try:
+                    tab.vm.capture_viewport_from_view(view)
+                    vp_json = viewport_to_json(tab.vm.viewport)
+                except Exception:
+                    vp_json = None
+            self._findings_investigate_undo = {
+                "cursor_times": times,
+                "scope_to_cursors": bool(
+                    getattr(panel, "_scope_to_cursors", False) if panel else False),
+                "viewport": vp_json,
+            }
+            self._investigate_finding(finding, section_id)
+
+        triage = getattr(self, "_findings_triage_state", None) or {}
+        cur_lo = cur_hi = None
+        cur_limit = False
+        panel = self._stats_panel
+        if panel is not None and getattr(panel, "_scope_to_cursors", False):
+            times = list(getattr(panel, "_cursor_times", None) or [])
+            if len(times) >= 2:
+                cur_limit = True
+                cur_lo, cur_hi = min(times), max(times)
         dlg = _AnalysisFindingsDialog(
             findings, scope_title, parent=self,
             ai_enabled=self._ai_feature_enabled(),
             ui_font_size=getattr(self, "_ui_font_size_val", UI_FONT_SIZE),
             on_apply_scope=self._apply_finding_scope,
-            on_investigate=self._investigate_finding,
+            on_investigate=_wrap_investigate,
             on_show_evidence=self._show_finding_evidence,
             on_ai_query=_on_ai_query,
+            triage_state=triage,
+            on_triage_change=_on_triage_change,
+            on_add_to_case=_on_add_to_case,
+            on_undo_investigate=_on_undo_investigate,
+            current_limit=cur_limit,
+            current_cursor_lo=cur_lo,
+            current_cursor_hi=cur_hi,
             ux_events=evs,
             time_min=self._trace.time_min,
             time_max=self._trace.time_max,
@@ -79073,6 +81169,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         def _on_closed(*_args) -> None:
             if getattr(self, "_analysis_findings_dlg", None) is dlg:
                 self._analysis_findings_dlg = None
+            try:
+                self._findings_triage_state = dlg.triage_state()
+            except RuntimeError:
+                pass
 
         dlg.finished.connect(_on_closed)
         dlg.show()
@@ -79925,6 +82025,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Scroll the timeline to *ns* (non-annotation stats jumps, e.g. TICK gaps)."""
         if self._trace is None:
             return
+        self._record_evidence_jump({
+            "time": int(ns),
+            "source_metric": SHOW_ON_TIMELINE_LABEL,
+        })
         self._view.scroll_to_ns(ns)
 
     def _on_stats_core_clicked(self, core: str) -> None:
@@ -81320,6 +83424,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._status_range.setToolTip("Scope: Full Trace")
             self._status_range.setVisible(True)
             self._rebuild_cursor_table()
+            self._update_cursor_scope_banner()
             return
         t_sorted = sorted(times)
         lo = t_sorted[0]
@@ -81364,6 +83469,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._status_range.setToolTip(range_text)
         self._status_range.setVisible(True)
         self._rebuild_cursor_table()
+        self._update_cursor_scope_banner()
 
     def _on_mark_dragging(self, kind: str, mark_id: int, new_ns: int) -> None:
         """Live-update the bookmark/annotation panel while dragging on the timeline."""

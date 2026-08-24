@@ -836,6 +836,41 @@ def empty_investigation_case(
     }
 
 
+def add_finding_to_case(
+    case: Optional[Dict[str, Any]],
+    finding: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Append *finding* to ``suspected_findings`` (dedupe by id). Lockstep JS."""
+    out = dict(case) if isinstance(case, dict) else empty_investigation_case()
+    if not isinstance(finding, dict):
+        return out
+    fid = str(finding.get("id") or "").strip()
+    items = [
+        dict(x) for x in (out.get("suspected_findings") or [])
+        if isinstance(x, dict)
+    ]
+    if fid:
+        items = [x for x in items if str(x.get("id") or "").strip() != fid]
+    items.append(dict(finding))
+    out["suspected_findings"] = items
+    title = str(finding.get("title") or finding.get("observation") or fid).strip()
+    if title and not str(out.get("goal") or "").strip():
+        out["goal"] = title
+    if title and not str(out.get("conclusion") or "").strip():
+        out["conclusion"] = title
+    if title and not str(out.get("question") or "").strip():
+        out["question"] = title
+    task = str(finding.get("task") or "").strip()
+    if task:
+        scope = dict(out.get("scope") or {})
+        tasks = [str(t) for t in (scope.get("tasks") or []) if str(t).strip()]
+        if task not in tasks:
+            tasks.append(task)
+        scope["tasks"] = tasks
+        out["scope"] = scope
+    return out
+
+
 def _finding_blob(finding: Optional[dict]) -> str:
     if not isinstance(finding, dict):
         return ""

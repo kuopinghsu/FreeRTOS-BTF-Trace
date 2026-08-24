@@ -904,6 +904,7 @@ class AiInvestigationTests(unittest.TestCase):
                 "investigate",
                 "correlate_events",
                 "find_critical_path",
+                "detect_priority_inversion",
                 "compare_performance",
                 "explain_finding",
                 "interpret_query",
@@ -1012,6 +1013,46 @@ class AiInvestigationTests(unittest.TestCase):
         self.assertEqual(merged["conclusion"], late["conclusion"])
         self.assertTrue(
             any(e.get("time") is not None for e in (merged.get("evidence") or []))
+        )
+
+    def test_detect_priority_inversion_feeds_evidence_panel(self) -> None:
+        from btf_viewer_pkg.ai_investigation import EVIDENCE_PANEL_TOOLS
+
+        self.assertIn("detect_priority_inversion", EVIDENCE_PANEL_TOOLS)
+        payload = extract_evidence_panel_payload("detect_priority_inversion", {
+            "ok": True,
+            "message": "4 priority inversion(s) detected",
+            "data": {
+                "task": "",
+                "confidence": "Medium",
+                "inversions": [
+                    {
+                        "low": "Low[266]",
+                        "medium": "Med[267]",
+                        "high": "High[268]",
+                        "time": 3087194,
+                        "duration": 120,
+                        "pattern": "Mutex inherit L/M/H",
+                    },
+                    {
+                        "low": "Low[266]",
+                        "medium": "Med[267]",
+                        "high": "",
+                        "time": 3090000,
+                        "duration": 50,
+                        "pattern": "",
+                    },
+                ],
+            },
+        })
+        self.assertIsNotNone(payload)
+        self.assertGreaterEqual(payload["evidence_score"], 40 + 25)
+        self.assertIn(
+            payload["evidence_quality"]["band"],
+            ("medium", "medium-high", "strong"),
+        )
+        self.assertTrue(
+            any(e.get("time") == 3087194 for e in (payload.get("evidence") or []))
         )
 
 

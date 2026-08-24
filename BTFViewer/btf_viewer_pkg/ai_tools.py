@@ -2274,17 +2274,51 @@ def _as_float_list(value: Any) -> List[float]:
         return []
     out: List[float] = []
     for item in value:
-        try:
-            out.append(float(item))
-        except (TypeError, ValueError):
-            continue
+        n = _as_scalar_float(item)
+        if n is not None:
+            out.append(n)
     return out
 
 
+def _as_scalar_float(value: Any) -> Optional[float]:
+    """Coerce a tool arg to float, matching JS ``Number(x)`` for common LLM shapes.
+
+    Accepts ints/floats, numeric strings, and single-element arrays
+    (``[3087194]`` → ``3087194.0``). Rejects bools, multi-element arrays,
+    objects, and non-numeric strings. Keep in sync with
+    ``web/src/utils/aiTools.js`` ``asScalarNumber``.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            n = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if n != n:  # NaN
+            return None
+        return n
+    if isinstance(value, (list, tuple)):
+        if len(value) != 1:
+            return None
+        return _as_scalar_float(value[0])
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            n = float(s)
+        except (TypeError, ValueError):
+            return None
+        if n != n:
+            return None
+        return n
+    return None
+
+
 def _fmt_trace_num(value: Any) -> str:
-    try:
-        n = float(value)
-    except (TypeError, ValueError):
+    n = _as_scalar_float(value)
+    if n is None:
         return str(value)
     if n.is_integer():
         return str(int(n))
@@ -2388,10 +2422,9 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
         times = times[:_MAX_CURSORS_TOOL]
         return {"timestamps": times}, ""
     if name == AI_TOOL_ZOOM_TO_RANGE:
-        try:
-            lo = float(a.get("start_time"))
-            hi = float(a.get("end_time"))
-        except (TypeError, ValueError):
+        lo = _as_scalar_float(a.get("start_time"))
+        hi = _as_scalar_float(a.get("end_time"))
+        if lo is None or hi is None:
             return None, "start_time and end_time must be numbers"
         if hi == lo:
             return None, "start_time and end_time must differ"
@@ -2424,9 +2457,8 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
         dst = str(a.get("core_to") or "").strip()
         return {"core_from": src, "core_to": dst}, ""
     if name == AI_TOOL_ADD_ANNOTATION:
-        try:
-            t = float(a.get("time"))
-        except (TypeError, ValueError):
+        t = _as_scalar_float(a.get("time"))
+        if t is None:
             return None, "time must be a number"
         note = str(a.get("note") or "").strip()
         if not note:
@@ -2514,15 +2546,15 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
             return None, "task must be a non-empty string"
         out: Dict[str, Any] = {"task": task, "around_time": None, "window": 0.0}
         if a.get("around_time") is not None and str(a.get("around_time")).strip() != "":
-            try:
-                out["around_time"] = float(a.get("around_time"))
-            except (TypeError, ValueError):
+            t = _as_scalar_float(a.get("around_time"))
+            if t is None:
                 return None, "around_time must be a number"
+            out["around_time"] = t
         if a.get("window") is not None and str(a.get("window")).strip() != "":
-            try:
-                out["window"] = max(0.0, float(a.get("window")))
-            except (TypeError, ValueError):
+            w = _as_scalar_float(a.get("window"))
+            if w is None:
                 return None, "window must be a number"
+            out["window"] = max(0.0, w)
         return out, ""
     if name == AI_TOOL_FIND_CRITICAL_PATH:
         task = str(a.get("task") or "").strip()
@@ -2530,15 +2562,15 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
             return None, "task must be a non-empty string"
         out: Dict[str, Any] = {"task": task, "timestamp": None, "window": 2000.0}
         if a.get("timestamp") is not None and str(a.get("timestamp")).strip() != "":
-            try:
-                out["timestamp"] = float(a.get("timestamp"))
-            except (TypeError, ValueError):
+            t = _as_scalar_float(a.get("timestamp"))
+            if t is None:
                 return None, "timestamp must be a number"
+            out["timestamp"] = t
         if a.get("window") is not None and str(a.get("window")).strip() != "":
-            try:
-                out["window"] = max(0.0, float(a.get("window")))
-            except (TypeError, ValueError):
+            w = _as_scalar_float(a.get("window"))
+            if w is None:
                 return None, "window must be a number"
+            out["window"] = max(0.0, w)
         return out, ""
     if name == AI_TOOL_COMPARE_PERFORMANCE:
         return {
@@ -2577,9 +2609,8 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
             "tab_b": str(a.get("tab_b") if a.get("tab_b") is not None else "").strip(),
         }, ""
     if name == AI_TOOL_BOOKMARK_FINDING:
-        try:
-            t = float(a.get("time"))
-        except (TypeError, ValueError):
+        t = _as_scalar_float(a.get("time"))
+        if t is None:
             return None, "time must be a number"
         kind = str(a.get("kind") or "").strip().lower().replace("-", "_").replace(" ", "_")
         if kind in ("root", "cause", "rca"):
@@ -3251,7 +3282,7 @@ def max_tool_rounds(template_id: str = "") -> int:
     return max_tool_rounds_for_template(template_id, _MAX_TOOL_ROUNDS)
 
 
-_TASK_ID_RE = re.compile(r"\[(\d+)\]\s*$")
+_TASK_ID_SUFFIX_RE = re.compile(r"\[(\d+)\]\s*$")
 _TASK_EMBEDDED_RE = re.compile(r"([A-Za-z_][\w]*\[\d+\])")
 _CORE_SUFFIX_RE = re.compile(r"\s*\((?:core\s*)?\d+\)\s*$", re.IGNORECASE)
 _CORE_NUM_RE = re.compile(r"^(?:core[\s_-]*)?(\d+)$", re.IGNORECASE)
@@ -3298,9 +3329,13 @@ def _task_match_aliases(raw: str) -> List[str]:
             elif name:
                 aliases.append(name)
         return [a for a in aliases if a]
-    m = _TASK_ID_RE.search(text)
+    m = _TASK_ID_SUFFIX_RE.search(text)
     if m:
-        aliases.append(m.group(1))
+        # Prefer the capture; fall back to the bracket body if a bundle
+        # name-collision ever clobbers this pattern (no groups).
+        tid = m.group(1) if m.lastindex else m.group(0).strip("[]")
+        if tid:
+            aliases.append(tid)
         prefix = text[: m.start()].strip()
         if prefix:
             aliases.append(prefix)
@@ -3942,10 +3977,9 @@ def search_timeline_hits(
     annotations: Optional[Sequence[Any]] = None,
 ) -> Dict[str, Any]:
     """Find-panel search for the AI ``search_timeline`` tool."""
-    # Bundle-safe: the monolith flattens mvvm/find_logic into module globals and
-    # rewrites in-function relative imports. Prefer globals first so a rewritten
-    # import cannot leave the name unbound.
-    recompute = globals().get("recompute_find_hits") or globals().get("FIND_RECOMPUTE")
+    # Prefer FIND_RECOMPUTE: the monolith may also define methods named
+    # recompute_find_hits; FIND_RECOMPUTE is the free-function alias.
+    recompute = globals().get("FIND_RECOMPUTE") or globals().get("recompute_find_hits")
     if recompute is None:
         try:
             from .mvvm.find_logic import recompute_find_hits as recompute
@@ -3963,7 +3997,10 @@ def search_timeline_hits(
     anns: List[Any] = []
     for a in annotations or []:
         anns.append(a)
-    hits, status = recompute(trace, q, find_mode, anns)
+    try:
+        hits, status = recompute(trace, q, find_mode, anns)
+    except Exception as exc:
+        return tool_result_payload(False, f"Find engine error: {exc}")
     status_s = str(status or "")
     if status_s in ("Regex error", "Regex too long"):
         return tool_result_payload(False, status_s)
@@ -4973,7 +5010,12 @@ def correlate_task_events(
         )
         if payload.get("ok"):
             events.extend(_events_from_metric_payload(payload, metric, task))
-    search = search_timeline_hits(trace, task, "contains", annotations=annotations)
+    # Search is optional enrichment — never fail correlate/critical-path when
+    # metrics already produced events (Find can throw on odd annotations).
+    try:
+        search = search_timeline_hits(trace, task, "contains", annotations=annotations)
+    except Exception:
+        search = {"ok": False}
     if search.get("ok"):
         data = search.get("data") or {}
         for t in data.get("times") or []:

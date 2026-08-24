@@ -98,6 +98,7 @@ EVIDENCE_PANEL_TOOLS: Tuple[str, ...] = (
     "investigate",
     "correlate_events",
     "find_critical_path",
+    "detect_priority_inversion",
     "compare_performance",
     "explain_finding",
     "interpret_query",
@@ -526,7 +527,7 @@ def _suggested_tools_for_finding(
     return tools[: max(3, depth * 2)]
 
 
-_TASK_TOKEN_RE = re.compile(
+_INV_TASK_TOKEN_RE = re.compile(
     r"\b([A-Za-z_][\w]*(?:\[[0-9]+\])?)\b"
 )
 
@@ -540,7 +541,7 @@ def _guess_task_name(text: str) -> str:
         if low.startswith("core") or low in ("tick",):
             continue
         return tok
-    for m in _TASK_TOKEN_RE.finditer(text or ""):
+    for m in _INV_TASK_TOKEN_RE.finditer(text or ""):
         tok = m.group(1)
         low = tok.lower()
         if low in ("max", "min", "rate", "dwell", "ping", "load", "balance",
@@ -1253,6 +1254,53 @@ def extract_evidence_panel_payload(
         payload["confidence"] = (
             f"Correlation {corr}" if corr is not None else "Medium"
         )
+    elif name == "detect_priority_inversion" or data.get("inversions") is not None:
+        inversions = [
+            inv for inv in (data.get("inversions") or []) if isinstance(inv, dict)
+        ]
+        task = str(data.get("task") or "")
+        payload["conclusion"] = str(
+            result.get("message")
+            or data.get("message")
+            or (
+                f"{len(inversions)} priority inversion(s)"
+                if inversions else "No priority inversion suspects"
+            )
+        )
+        payload["evidence"] = [
+            {
+                "label": (
+                    "priority: "
+                    + (
+                        str(inv.get("pattern") or "").strip()
+                        or "L/M/H inversion"
+                    )
+                    + (
+                        f" low={inv.get('low')}" if inv.get("low") else ""
+                    )
+                    + (
+                        f" med={inv.get('medium')}" if inv.get("medium") else ""
+                    )
+                    + (
+                        f" high={inv.get('high')}" if inv.get("high") else ""
+                    )
+                ),
+                "time": inv.get("time"),
+                "start": inv.get("time"),
+                "stop": (
+                    (inv.get("time") or 0) + (inv.get("duration") or 0)
+                    if inv.get("time") is not None and inv.get("duration") is not None
+                    else inv.get("time")
+                ),
+            }
+            for inv in inversions[:15]
+        ]
+        if inversions:
+            payload["evidence_chain"] = (
+                f"{len(inversions)} priority-inversion episode(s)"
+                + (f" involving {task}" if task else "")
+            )
+        payload["confidence"] = str(data.get("confidence") or "Medium")
     elif name == "compare_performance" or data.get("checks"):
         primary = data.get("primary")
         if isinstance(primary, dict):

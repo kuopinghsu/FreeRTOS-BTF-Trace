@@ -133,12 +133,12 @@ A navigation action does not make the selected event a root cause. It only conne
 
 ### Exported statistics reports
 
-**Export HTML** uses the current Scope and creates a self-contained review report. Each statistics table in the report provides its own CSV download, so you can save only the data needed for further analysis. The report includes:
+**Export HTML** uses the current Scope and creates a self-contained review report with search, sorting, Problems only, and Show all on each statistics table. The report includes:
 
 - Analysis Scope, trace metadata, filters, and timestamp origin;
 - diagnostic KPIs and Analysis Findings;
 - the same Statistics tables, grouped table of contents, and section notes;
-- search, sorting, Problems only, Show all, and a CSV download for each statistics table; and
+- search, sorting, Problems only, and Show all for each statistics table; and
 - an SVG load-balance gauge under Core Utilisation.
 
 The HTML report can identify where to investigate, but it cannot preserve every interactive timeline action. Keep the source trace when another reviewer may need to verify an event.
@@ -171,10 +171,19 @@ The flow is intentionally iterative. If supporting data does not confirm the fir
 Toolbar **Analysis** provides a heuristic inbox for the current Scope. It stays open while the timeline remains interactive. Each finding separates the measured **Evidence** from the interpretation:
 
 - **Investigate** opens the related Statistics section without changing Scope or filters.
-- **Show Evidence** centers the timeline on the supporting timestamp and can highlight the related task.
+- **Show on timeline** centers the timeline on the supporting timestamp and can highlight the related task. It never changes Scope or Filters.
 - Severity ranks attention; it does not assign failure probability.
+- Each finding shows an **evidence-strength** label (Direct / Derived / Estimated / Configured) with tooltips where applicable.
 
-Findings cover load balance, high CPU consumers, observed execution maxima, off-CPU gaps, migration thrashing, deadlines, TICK health, and synchronization issues. Balanced or moderate load cases can still appear as information so that the Load Balance Score, population standard deviation, and Gini coefficient remain visible.
+### Analysis Context strip
+
+Findings, AI, and Compare show the full **Analysis Context** strip (trace name, **Scope**, **Filters**, sample count). The Statistics panel keeps Scope and Filters in its header; when cursors are placed but **Limit to C1–Cn** is off, it shows only a short note: **Not limited to cursors**. **Clear filters** remains available. Selection and Highlight are never listed as analysis constraints.
+
+When Scope or Filters change after results were calculated, Findings and AI may mark content **stale** and offer **Recalculate with current context**. The Statistics panel recalculates automatically when Scope or Filters change (same as Desktop).
+
+### Symptom shortcuts
+
+**Where should I start?** is an optional guide on the Statistics toolbar (Desktop and Web). It stays closed by default so familiar users see tables immediately. Open it to pick a symptom card (unknown issue, late task, spike, dispatch delay, blocking, jitter, load imbalance, migration, sync, deadline); each jumps to the first recommended metric. **Recommended from Findings** appears when a finding maps to a symptom.
 
 Use a finding to select the next measurement, not as the conclusion. Confirm the sample count, related distribution, and timeline event order before recording a root cause.
 

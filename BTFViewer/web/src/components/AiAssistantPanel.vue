@@ -47,6 +47,13 @@
       </button>
     </div>
 
+    <AnalysisContextStrip
+      v-if="analysisContext"
+      :context="analysisContext"
+      :show-clear-filters="showClearFilters"
+      :on-clear-filters="onClearFilters"
+    />
+
     <div
       v-if="langOpen"
       class="ai-lang-backdrop"
@@ -622,6 +629,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import DomSelect from './DomSelect.vue'
+import AnalysisContextStrip from './AnalysisContextStrip.vue'
 import {
   AI_COMPARE_TEMPLATE_ID,
   AI_RESPONSE_LANGUAGES,
@@ -706,6 +714,8 @@ import {
   toggleInterpretedScope,
   setHypothesisStatus,
   updateCaseFromTool,
+  addFindingToCase,
+  emptyInvestigationCase,
   validateAiResponse,
   VALIDATE_EXPERIMENT_PROMPT,
   GUIDED_STAGES,
@@ -756,6 +766,9 @@ import {
 import { templateRefEl } from '../utils/templateRefEl.js'
 
 const props = defineProps({
+  analysisContext: { type: Object, default: null },
+  showClearFilters: { type: Boolean, default: false },
+  onClearFilters: { type: Function, default: null },
   aiEnabled: { type: Boolean, default: true },
   aiPreset: { type: String, default: DEFAULT_AI_PRESET },
   /** { [presetId]: { baseUrl, model, apiKey } } */
@@ -991,6 +1004,25 @@ function updateEvidenceFromToolResult(name, res) {
 
 function pinEvidenceLogEntry() {
   if (evidencePayload) syncEvidenceLogEntry(evidencePayload)
+}
+
+/** Append an Analysis finding to the Investigation Case (UX-104). */
+function addFindingToInvestigationCase(finding) {
+  if (!finding || typeof finding !== 'object') return false
+  const prev = evidencePayload || {}
+  const prevCase = prev.investigation_case
+  const caseObj = addFindingToCase(
+    prevCase && typeof prevCase === 'object' ? prevCase : emptyInvestigationCase(),
+    finding,
+  )
+  evidencePayload = {
+    ...prev,
+    investigation_case: caseObj,
+    finding: (prev.finding && typeof prev.finding === 'object') ? prev.finding : { ...finding },
+  }
+  syncEvidenceLogEntry(evidencePayload)
+  emit('sessionChange')
+  return true
 }
 
 function attachResponseValidation(text) {
@@ -2331,6 +2363,7 @@ defineExpose({
   scrollLog,
   investigationSnapshot,
   restoreInvestigation,
+  addFindingToInvestigationCase,
 })
 </script>
 

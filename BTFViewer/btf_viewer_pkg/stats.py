@@ -3387,7 +3387,7 @@ class _TraceCompareDialog(QDialog):
             f'stroke="{_ic}" stroke-width="1.2" stroke-linecap="round"/>',
         ))
         self._btn_export_html.setToolTip(
-            "Export compare report as HTML (tables include Search / Show all / CSV)")
+            "Export compare report as HTML (tables include Search / Show all)")
         self._btn_export_html.clicked.connect(self._export_html)
         exp_row.addWidget(self._btn_export_html)
         self._btn_save_baseline = QPushButton("Save as baseline")
@@ -8045,6 +8045,8 @@ def _build_workflow_analysis_findings(
 
 def _format_analysis_findings_text(
     findings: List[dict], scope_title: str = "",
+    *,
+    triage_state: Optional[dict] = None,
 ) -> str:
     """Plain-text export of Analysis Findings."""
     lines = [f"Analysis Findings{scope_title}".rstrip(), ""]
@@ -8072,6 +8074,12 @@ def _format_analysis_findings_text(
                 elif ev:
                     lines.append(f"   evidence: {ev}")
             lines.append("")
+    if triage_state:
+        from .findings_triage import format_triage_audit_text
+        audit = format_triage_audit_text(findings, triage_state)
+        if audit:
+            lines.append("")
+            lines.append(audit)
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -8084,7 +8092,7 @@ def _render_workflow_analysis_html(
 
 
 class _AnalysisFindingsDialog(QDialog):
-    """Toolbar Analysis dialog — lists heuristic findings for the current scope."""
+    """Toolbar Analysis dialog — triage queue for current-scope findings."""
 
     def __init__(self, findings: List[dict], scope_title: str = "", parent=None,
                  ai_enabled: bool = True, ui_font_size: int = UI_FONT_SIZE,
@@ -8093,20 +8101,67 @@ class _AnalysisFindingsDialog(QDialog):
                  time_min: int = 0, time_max: int = 0,
                  quality_warnings: Optional[List[str]] = None,
                  is_dark: bool = True, on_investigate=None,
-                 on_show_evidence=None, on_ai_query=None):
+                 on_show_evidence=None, on_ai_query=None,
+                 triage_state: Optional[dict] = None,
+                 on_triage_change=None, on_add_to_case=None,
+                 on_undo_investigate=None,
+                 current_limit: bool = False,
+                 current_cursor_lo: Optional[float] = None,
+                 current_cursor_hi: Optional[float] = None):
         super().__init__(parent)
+        from .findings_triage import (
+            QUEUE_CASE, QUEUE_DISMISSED, QUEUE_DONE, QUEUE_OPEN,
+            SORT_KEYS, SORT_LABELS, SORT_SEVERITY,
+            apply_triage_action, filter_by_queue, filter_findings_triage,
+            finding_filter_facets, format_investigate_preview,
+            group_findings_by_incident, normalize_triage_state,
+            queue_counts, sort_findings_triage,
+        )
+        self._QUEUE_OPEN = QUEUE_OPEN
+        self._QUEUE_DONE = QUEUE_DONE
+        self._QUEUE_CASE = QUEUE_CASE
+        self._QUEUE_DISMISSED = QUEUE_DISMISSED
+        self._SORT_SEVERITY = SORT_SEVERITY
+        self._SORT_KEYS = SORT_KEYS
+        self._SORT_LABELS = SORT_LABELS
+        self._apply_triage_action = apply_triage_action
+        self._filter_by_queue = filter_by_queue
+        self._filter_findings_triage = filter_findings_triage
+        self._finding_filter_facets = finding_filter_facets
+        self._format_investigate_preview = format_investigate_preview
+        self._group_findings_by_incident = group_findings_by_incident
+        self._normalize_triage_state = normalize_triage_state
+        self._queue_counts = queue_counts
+        self._sort_findings_triage = sort_findings_triage
+
         self._findings = findings or []
         self._scope_title = scope_title or ""
         self._on_apply_scope = on_apply_scope
         self._on_investigate = on_investigate
         self._on_show_evidence = on_show_evidence
         self._on_ai_query = on_ai_query
+        self._on_triage_change = on_triage_change
+        self._on_add_to_case = on_add_to_case
+        self._on_undo_investigate = on_undo_investigate
+        self._current_limit = bool(current_limit)
+        self._current_cursor_lo = current_cursor_lo
+        self._current_cursor_hi = current_cursor_hi
+        self._triage_state = normalize_triage_state(triage_state)
+        self._active_queue = QUEUE_OPEN
+        self._filter_severity = ""
+        self._filter_evidence = ""
+        self._filter_category = ""
+        self._sort_by = SORT_SEVERITY
+        self._group_incidents = True
+        self._collapsed_incidents = set()
+        self._investigate_pending = False
         self._scope_hint = scope_hint or ""
         self._ux_events = ux_events or []
         self._time_min = int(time_min or 0)
         self._time_max = int(time_max or 0)
         self._quality_warnings = list(quality_warnings or [])
         self._is_dark = bool(is_dark)
+        self._ai_enabled = bool(ai_enabled)
         if self._is_dark:
             muted, ink, border = "#9a9a9a", "#c5d0dc", "#3a4658"
             ask, err, warn = "#8a8a8a", "#e74c3c", "#e67e22"
@@ -8115,6 +8170,9 @@ class _AnalysisFindingsDialog(QDialog):
             muted, ink, border = "#555555", "#1E1E1E", "#C0C0C0"
             ask, err, warn = "#555555", "#c0392b", "#9a4d00"
             ok_ink = "#166534"
+        self._palette = dict(
+            muted=muted, ink=ink, border=border, ask=ask, err=err,
+            warn=warn, ok_ink=ok_ink)
         self._dashboard = analysis_dashboard(
             self._findings, quality_warnings=self._quality_warnings)
         title_cluster = {}
@@ -8126,13 +8184,14 @@ class _AnalysisFindingsDialog(QDialog):
             for fid in inc.get("finding_ids") or []:
                 if fid:
                     id_cluster.setdefault(str(fid), cid)
+        self._title_cluster = title_cluster
+        self._id_cluster = id_cluster
         self.wants_ai_query = False
         self._ai_needs_settings = False
         self.wants_ai_finding_id = ""
         self.wants_ai_template = "findings"
         self.wants_ai_level = ""
         self.setWindowTitle(f"Analysis Findings{self._scope_title}")
-        # Non-modal inbox: Timeline Evidence stays clickable while Findings is open.
         self.setModal(False)
         self.setWindowFlags(
             Qt.WindowType.Tool
@@ -8140,24 +8199,143 @@ class _AnalysisFindingsDialog(QDialog):
             | Qt.WindowType.WindowCloseButtonHint
             | Qt.WindowType.WindowStaysOnTopHint
         )
-        # Match menus/toolbar (Settings → Display → UI / menus), not a fixed 11pt.
         ui_pt = max(6, min(int(ui_font_size), 24))
         ui_font = _application_ui_font(ui_pt)
         ui_fs = _ui_font_stylesheet_size(ui_pt)
+        self._ui_font = ui_font
+        self._ui_fs = ui_fs
+        self._ui_pt = ui_pt
         self.setFont(ui_font)
-        # Wide enough for Ask-AI button labels (esp. "Auto investigate…") in one row.
         self.setMinimumSize(900, 480)
         self.resize(960, 600)
 
         note = QLabel(
             "Heuristic summary of load balance, WCET, blocking, thrashing, "
             "deadlines, tick health, and sync.\n"
-            "Select a finding before Verify, Explain, or Auto investigate."
+            "Select a finding, then triage or Investigate."
         )
         note.setWordWrap(True)
         note.setObjectName("analysisNote")
         note.setStyleSheet(
             f"color: {muted}; font-size: {ui_fs}; padding-bottom: 2px;")
+
+        queue_row = QHBoxLayout()
+        queue_row.setContentsMargins(0, 0, 0, 0)
+        queue_row.setSpacing(6)
+        self._queue_btns = {}
+        for qid, label in (
+            (QUEUE_OPEN, "Open"),
+            (QUEUE_DONE, "Done"),
+            (QUEUE_CASE, "Case"),
+            (QUEUE_DISMISSED, "Dismissed"),
+        ):
+            btn = QPushButton(label)
+            btn.setFont(ui_font)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(
+                f"QPushButton {{ padding: 4px 10px; border-radius: 12px;"
+                f" border: 1px solid {border}; color: {muted};"
+                f" background: transparent; font-size: {ui_fs}; }}"
+                "QPushButton:checked {"
+                f"  border: 1px solid #3498db; color: {ink};"
+                "  background: rgba(52, 152, 219, 0.18);"
+                "}"
+                f"QPushButton:hover:!checked {{ color: {ink}; }}"
+            )
+            btn.clicked.connect(lambda _=False, q=qid: self._set_queue(q))
+            self._queue_btns[qid] = btn
+            queue_row.addWidget(btn)
+        queue_row.addStretch(1)
+        self._queue_btns[QUEUE_OPEN].setChecked(True)
+
+        filt_row = QHBoxLayout()
+        filt_row.setContentsMargins(0, 0, 0, 0)
+        filt_row.setSpacing(8)
+        # Compact chrome (~24px) matching Web DomSelect / toolbar presets.
+        # Task/Core filters omitted: findings rarely set those fields, so the
+        # menus only offered All and were not useful.
+        combo_h = max(22, min(24, int(round(ui_pt * 2.0))))
+        item_h = max(20, min(22, int(round(ui_pt * 1.8))))
+        sev_lbl = QLabel("Severity")
+        sev_lbl.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+        self._sev_combo = QComboBox()
+        self._sev_combo.setFont(ui_font)
+        self._sev_combo.addItem("All", "")
+        self._sev_combo.addItem("Critical", "error")
+        self._sev_combo.addItem("Warning", "warning")
+        self._sev_combo.addItem("Info", "info")
+        self._sev_combo.currentIndexChanged.connect(self._on_filters_changed)
+        ev_lbl = QLabel("Evidence")
+        ev_lbl.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+        self._ev_combo = QComboBox()
+        self._ev_combo.setFont(ui_font)
+        self._ev_combo.addItem("All", "")
+        self._ev_combo.addItem("Direct", "direct")
+        self._ev_combo.addItem("Derived", "derived")
+        self._ev_combo.addItem("Estimated", "estimated")
+        self._ev_combo.currentIndexChanged.connect(self._on_filters_changed)
+        # Theme-aware popup (match Web DomSelect: panel bg + fg).
+        if self._is_dark:
+            combo_bg, combo_fg, combo_border = "#2D2D2D", "#D4D4D4", "#3C3C3C"
+            combo_sel = "rgba(52, 152, 219, 0.35)"
+        else:
+            combo_bg, combo_fg, combo_border = "#FFFFFF", "#1E1E1E", "#C0C0C0"
+            combo_sel = "rgba(42, 111, 178, 0.22)"
+        combo_ss = (
+            f"QComboBox {{ min-height: {combo_h}px; max-height: {combo_h}px;"
+            f" padding: 1px 16px 1px 6px; border-radius: 3px;"
+            f" border: 1px solid {combo_border}; background: {combo_bg};"
+            f" color: {combo_fg}; font-size: {ui_fs}; }}"
+            "QComboBox::drop-down {"
+            "  subcontrol-origin: padding; subcontrol-position: center right;"
+            "  width: 14px; border: none; }"
+            f"QComboBox QAbstractItemView {{ outline: none; padding: 1px;"
+            f" background: {combo_bg}; color: {combo_fg};"
+            f" border: 1px solid {combo_border}; selection-background-color: {combo_sel};"
+            f" selection-color: {combo_fg}; }}"
+            "QComboBox QAbstractItemView::item {"
+            f"  min-height: {item_h}px; padding: 1px 6px; }}"
+        )
+        self._sev_combo.setStyleSheet(combo_ss)
+        self._sev_combo.setFixedHeight(combo_h)
+        self._ev_combo.setStyleSheet(combo_ss)
+        self._ev_combo.setFixedHeight(combo_h)
+        facets = finding_filter_facets(self._findings)
+        cat_lbl = QLabel("Category")
+        cat_lbl.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+        self._cat_combo = QComboBox()
+        self._cat_combo.setFont(ui_font)
+        self._cat_combo.addItem("All", "")
+        for c in facets.get("categories") or []:
+            self._cat_combo.addItem(str(c).title(), str(c))
+        self._cat_combo.setStyleSheet(combo_ss)
+        self._cat_combo.setFixedHeight(combo_h)
+        self._cat_combo.currentIndexChanged.connect(self._on_filters_changed)
+        sort_lbl = QLabel("Sort")
+        sort_lbl.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+        self._sort_combo = QComboBox()
+        self._sort_combo.setFont(ui_font)
+        for key in SORT_KEYS:
+            self._sort_combo.addItem(SORT_LABELS.get(key, key), key)
+        self._sort_combo.setStyleSheet(combo_ss)
+        self._sort_combo.setFixedHeight(combo_h)
+        self._sort_combo.currentIndexChanged.connect(self._on_filters_changed)
+        self._group_chk = QCheckBox("Group incidents")
+        self._group_chk.setFont(ui_font)
+        self._group_chk.setChecked(True)
+        self._group_chk.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+        self._group_chk.toggled.connect(self._on_group_toggled)
+        filt_row.addWidget(sev_lbl)
+        filt_row.addWidget(self._sev_combo)
+        filt_row.addWidget(ev_lbl)
+        filt_row.addWidget(self._ev_combo)
+        filt_row.addWidget(cat_lbl)
+        filt_row.addWidget(self._cat_combo)
+        filt_row.addWidget(sort_lbl)
+        filt_row.addWidget(self._sort_combo)
+        filt_row.addWidget(self._group_chk)
+        filt_row.addStretch(1)
 
         list_w = QListWidget()
         list_w.setFont(ui_font)
@@ -8182,193 +8360,56 @@ class _AnalysisFindingsDialog(QDialog):
             "}"
         )
         self._list_w = list_w
-        min_h = max(40, int(round(ui_pt * 5.0)))
-        if self._findings:
-            for f in self._findings:
-                sev = f.get("severity", "info")
-                title = str(f.get("title", "Finding")).strip() or "Finding"
-                text = str(f.get("text", "")).strip()
-                fid = str(f.get("id") or "")
-                cid = id_cluster.get(fid) or title_cluster.get(title, "")
-                prefix = f"[{cid}] " if cid else ""
-                if sev == "error":
-                    badge = SEMANTIC_GLYPHS["error"]
-                    color = err
-                elif sev == "warning":
-                    badge = SEMANTIC_GLYPHS["warning"]
-                    color = warn
-                elif fid == "load_balance_ok":
-                    badge = SEMANTIC_GLYPHS["improved"]
-                    color = ok_ink
-                else:
-                    badge = "○"
-                    color = ink
-                row = QWidget()
-                row.setObjectName("analysisFindingRow")
-                vbox = QVBoxLayout(row)
-                vbox.setContentsMargins(4, 2, 4, 2)
-                vbox.setSpacing(4)
-                title_l = QLabel(f"{badge}  {prefix}{title}")
-                title_l.setObjectName("analysisFindingTitle")
-                title_l.setWordWrap(True)
-                title_l.setFont(ui_font)
-                title_l.setStyleSheet(
-                    f"color: {color}; font-weight: 700; font-size: {ui_fs};")
-                vbox.addWidget(title_l)
-                if text:
-                    text_l = QLabel(text)
-                    text_l.setObjectName("analysisFindingText")
-                    text_l.setWordWrap(True)
-                    text_l.setFont(ui_font)
-                    text_l.setStyleSheet(
-                        f"color: {color}; font-size: {ui_fs};")
-                    vbox.addWidget(text_l)
-                evidence_text = str(f.get("evidence_text") or "").strip()
-                if evidence_text:
-                    ev_l = QLabel(f"EVIDENCE  {evidence_text}")
-                    ev_l.setObjectName("analysisFindingEvidence")
-                    ev_l.setWordWrap(True)
-                    ev_l.setFont(ui_font)
-                    ev_l.setStyleSheet(
-                        f"color: {muted}; font-size: {ui_fs}; font-family: monospace;")
-                    vbox.addWidget(ev_l)
-                item = QListWidgetItem()
-                item.setData(Qt.ItemDataRole.UserRole, fid)
-                item.setFont(ui_font)
-                item.setForeground(QBrush(QColor(color)))
-                list_w.addItem(item)
-                list_w.setItemWidget(item, row)
-                row.adjustSize()
-                hint = row.sizeHint()
-                item.setSizeHint(QSize(max(hint.width(), 200), max(hint.height(), min_h)))
-            list_w.setCurrentRow(0)
-            list_w.currentItemChanged.connect(lambda *_: self._refresh_scope_hint())
-        else:
-            empty = QListWidgetItem("No findings for the current scope")
-            empty.setFlags(Qt.ItemFlag.NoItemFlags)
-            empty.setFont(ui_font)
-            list_w.addItem(empty)
+        list_w.currentItemChanged.connect(lambda *_: self._on_selection_changed())
+        list_w.itemClicked.connect(self._on_list_item_clicked)
 
-        def _make_ai_btn(label: str, tip_on: str, tip_off: str, template: str) -> QPushButton:
-            btn = QPushButton(label)
+        def _menu_btn(label: str, tip: str) -> QToolButton:
+            btn = QToolButton()
+            btn.setText(label)
             btn.setFont(ui_font)
+            btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setMinimumHeight(max(28, int(round(ui_pt * 3.2))))
-            # Prefer natural text width — avoid MinimumExpanding which clips labels.
-            btn.setSizePolicy(
-                QSizePolicy.Policy.Preferred,
-                QSizePolicy.Policy.Fixed,
-            )
-            fm = btn.fontMetrics()
-            btn.setMinimumWidth(fm.horizontalAdvance(label) + 36)
-            btn.setToolTip(tip_on if ai_enabled else tip_off)
+            btn.setToolTip(tip)
             btn.setStyleSheet(
-                f"QPushButton {{ padding: 7px 16px; border-radius: 6px;"
+                f"QToolButton {{ padding: 7px 16px; border-radius: 6px;"
                 f" font-size: {ui_fs}; }}"
             )
-            btn.clicked.connect(
-                lambda _checked=False, t=template: self._query_with_ai(
-                    ai_enabled, t))
             return btn
 
-        def _make_explain_btn() -> QPushButton:
-            btn = QPushButton("Explain…")
-            btn.setFont(ui_font)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setMinimumHeight(max(28, int(round(ui_pt * 3.2))))
-            btn.setSizePolicy(
-                QSizePolicy.Policy.Preferred,
-                QSizePolicy.Policy.Fixed,
-            )
-            fm = btn.fontMetrics()
-            btn.setMinimumWidth(fm.horizontalAdvance("Explain…") + 36)
-            btn.setToolTip(
-                "Quick / Technical / Deep explanation of the selected finding"
-                if ai_enabled else "Enable AI Assistant in Settings → AI"
-            )
-            btn.setStyleSheet(
-                f"QPushButton {{ padding: 7px 16px; border-radius: 6px;"
-                f" font-size: {ui_fs}; }}"
-            )
-            menu = QMenu(btn)
-            for level in EXPLAIN_LEVELS:
-                act = menu.addAction(str(level).title())
-                act.triggered.connect(
-                    lambda _=False, lv=level: self._query_with_ai(
-                        ai_enabled, "explain_finding", level=lv)
-                )
-            btn.clicked.connect(
-                lambda: menu.exec(btn.mapToGlobal(btn.rect().bottomLeft())))
-            btn._explain_menu = menu
-            return btn
-
-        ai_label = QLabel("Ask AI")
-        ai_label.setStyleSheet(
-            f"color: {ask}; font-size: {ui_fs}; font-weight: 600;"
-            " letter-spacing: 0.4px; padding-top: 2px;"
+        ask_btn = _menu_btn(
+            "Ask AI ▾",
+            "Ask AI about findings" if ai_enabled
+            else "Enable AI Assistant in Settings → AI",
         )
+        ask_menu = QMenu(ask_btn)
+        ask_menu.addAction("Query findings…").triggered.connect(
+            lambda: self._query_with_ai(ai_enabled, "findings"))
+        ask_menu.addAction("Investigate…").triggered.connect(
+            lambda: self._query_with_ai(ai_enabled, "investigate"))
+        ask_menu.addAction("Verify…").triggered.connect(
+            lambda: self._query_with_ai(ai_enabled, "verify"))
+        explain_menu = ask_menu.addMenu("Explain")
+        for level in EXPLAIN_LEVELS:
+            act = explain_menu.addAction(str(level).title())
+            act.triggered.connect(
+                lambda _=False, lv=level: self._query_with_ai(
+                    ai_enabled, "explain_finding", level=lv)
+            )
+        ask_menu.addAction("Root cause…").triggered.connect(
+            lambda: self._query_with_ai(ai_enabled, "root_cause"))
+        ask_menu.addAction("Auto investigate…").triggered.connect(
+            lambda: self._query_with_ai(ai_enabled, "auto_investigate"))
+        ask_btn.setMenu(ask_menu)
 
-        ai_row = QHBoxLayout()
-        ai_row.setContentsMargins(0, 0, 0, 0)
-        ai_row.setSpacing(10)
-        ai_btns = [
-            _make_ai_btn(
-                "Query with AI…",
-                "Open the AI Assistant and walk through these Analysis Findings",
-                "Enable AI Assistant in Settings → AI",
-                "findings",
-            ),
-            _make_ai_btn(
-                "Investigate…",
-                "Open the AI Assistant and investigate the top findings with tools",
-                "Enable AI Assistant in Settings → AI",
-                "investigate",
-            ),
-            _make_ai_btn(
-                "Verify with AI…",
-                "Open the AI Assistant and verify the selected finding with evidence",
-                "Enable AI Assistant in Settings → AI",
-                "verify",
-            ),
-            _make_explain_btn(),
-            _make_ai_btn(
-                "Root cause…",
-                "Open the AI Assistant for evidence-driven root-cause analysis",
-                "Enable AI Assistant in Settings → AI",
-                "root_cause",
-            ),
-            _make_ai_btn(
-                "Auto investigate…",
-                "Run the automatic investigate → correlate → critical-path → "
-                "what-if/optimize workflow",
-                "Enable AI Assistant in Settings → AI",
-                "auto_investigate",
-            ),
-        ]
-        for btn in ai_btns:
-            ai_row.addWidget(btn)
-        recipe_btn = QPushButton("Save recipe…")
-        recipe_btn.setToolTip("Save this finding set as a user investigation template")
-        recipe_btn.clicked.connect(self._save_recipe)
-        story_btn = QPushButton("Story…")
-        story_btn.setToolTip("Export an analysis story from the overview and findings")
-        story_btn.clicked.connect(self._save_story)
-        ai_row.addWidget(recipe_btn)
-        ai_row.addWidget(story_btn)
-        ai_row.addStretch(1)
+        more_btn = _menu_btn("More ▾", "Save recipe, story, or text export")
+        more_menu = QMenu(more_btn)
+        more_menu.addAction("Save recipe…").triggered.connect(self._save_recipe)
+        more_menu.addAction("Story…").triggered.connect(self._save_story)
+        more_menu.addAction("Save as text…").triggered.connect(self._save_as_text)
+        more_btn.setMenu(more_menu)
 
         btn_h = max(28, int(round(ui_pt * 3.2)))
-        save_btn = QPushButton("Save as Text…")
-        save_btn.setFont(ui_font)
-        save_btn.setMinimumHeight(btn_h)
-        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        save_btn.setToolTip("Download findings as a plain-text file")
-        save_btn.setStyleSheet(
-            f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
-            f" font-size: {ui_fs}; }}"
-        )
-        save_btn.clicked.connect(self._save_as_text)
-
         close_btn = QPushButton("Close")
         close_btn.setFont(ui_font)
         close_btn.setMinimumHeight(btn_h)
@@ -8380,33 +8421,39 @@ class _AnalysisFindingsDialog(QDialog):
         )
         close_btn.clicked.connect(self.reject)
 
-        util_row = QHBoxLayout()
-        util_row.setContentsMargins(0, 0, 0, 0)
-        util_row.setSpacing(10)
-        util_row.addWidget(save_btn)
-        util_row.addStretch(1)
-        util_row.addWidget(close_btn)
-
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setFrameShadow(QFrame.Shadow.Sunken)
-        sep.setStyleSheet("margin-top: 2px; margin-bottom: 2px;")
-
-        footer = QVBoxLayout()
+        footer = QHBoxLayout()
         footer.setContentsMargins(0, 4, 0, 0)
         footer.setSpacing(8)
-        footer.addWidget(ai_label)
-        footer.addLayout(ai_row)
-        footer.addWidget(sep)
-        footer.addLayout(util_row)
+        footer.addWidget(ask_btn)
+        footer.addWidget(more_btn)
+        footer.addStretch(1)
+        footer.addWidget(close_btn)
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(16, 14, 16, 14)
-        lay.setSpacing(12)
+        triage_row = QHBoxLayout()
+        triage_row.setContentsMargins(0, 0, 0, 0)
+        triage_row.setSpacing(8)
+        self._done_btn = QPushButton("Done")
+        self._dismiss_btn = QPushButton("Dismiss…")
+        self._case_btn = QPushButton("Add to case")
+        for b in (self._done_btn, self._dismiss_btn, self._case_btn):
+            b.setFont(ui_font)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setMinimumHeight(btn_h)
+            b.setStyleSheet(
+                f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
+                f" font-size: {ui_fs}; }}"
+            )
+            triage_row.addWidget(b)
+        triage_row.addStretch(1)
+        self._done_btn.clicked.connect(self._toggle_done)
+        self._dismiss_btn.clicked.connect(self._toggle_dismiss)
+        self._case_btn.clicked.connect(self._add_to_case)
+
         scope_row = QHBoxLayout()
         scope_row.setContentsMargins(0, 0, 0, 0)
         scope_row.setSpacing(8)
-        self._scope_lbl = QLabel(self._scope_hint or "Select a finding to recommend a cursor window.")
+        self._scope_lbl = QLabel(
+            self._scope_hint or "Select a finding to recommend a cursor window.")
         self._scope_lbl.setWordWrap(True)
         self._scope_lbl.setStyleSheet(
             f"color: {muted}; font-size: {ui_fs};")
@@ -8424,7 +8471,7 @@ class _AnalysisFindingsDialog(QDialog):
         scope_row.addWidget(self._scope_lbl, 1)
         scope_row.addWidget(apply_scope, 0)
 
-        show_evidence_btn = QPushButton("Show Evidence")
+        show_evidence_btn = QPushButton("Show on timeline")
         show_evidence_btn.setFont(ui_font)
         show_evidence_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         show_evidence_btn.setToolTip(
@@ -8439,7 +8486,7 @@ class _AnalysisFindingsDialog(QDialog):
         self._show_evidence_btn = show_evidence_btn
         scope_row.addWidget(show_evidence_btn, 0)
 
-        self._investigate_btn = QPushButton("Investigate")
+        self._investigate_btn = QPushButton("Investigate…")
         self._investigate_btn.setFont(ui_font)
         self._investigate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._investigate_btn.setStyleSheet(
@@ -8448,8 +8495,27 @@ class _AnalysisFindingsDialog(QDialog):
         )
         self._investigate_btn.clicked.connect(self._investigate_selected)
         scope_row.addWidget(self._investigate_btn, 0)
+        self._undo_scope_btn = QPushButton("Undo Scope")
+        self._undo_scope_btn.setFont(ui_font)
+        self._undo_scope_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._undo_scope_btn.setStyleSheet(
+            f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
+            f" font-size: {ui_fs}; }}"
+        )
+        self._undo_scope_btn.clicked.connect(self._undo_investigate_scope)
+        self._undo_scope_btn.setEnabled(False)
+        self._undo_scope_btn.setVisible(callable(self._on_undo_investigate))
+        scope_row.addWidget(self._undo_scope_btn, 0)
 
-        lay.addWidget(note)
+        self._investigate_preview = QLabel("")
+        self._investigate_preview.setWordWrap(True)
+        self._investigate_preview.setVisible(False)
+        self._investigate_preview.setStyleSheet(
+            f"color: {ink}; font-size: {ui_fs}; padding: 8px 10px;"
+            f"border: 1px solid {border}; border-radius: 6px;"
+            "background: rgba(52, 152, 219, 0.08);"
+        )
+
         overview = QLabel(str(self._dashboard.get("summary") or ""))
         overview.setWordWrap(True)
         overview.setObjectName("analysisOverview")
@@ -8458,28 +8524,275 @@ class _AnalysisFindingsDialog(QDialog):
             f"border: 1px solid {border}; border-radius: 6px;"
             "background: rgba(52, 152, 219, 0.08);"
         )
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(10)
+        lay.addWidget(note)
+        lay.addLayout(queue_row)
+        lay.addLayout(filt_row)
         lay.addWidget(overview)
         lay.addWidget(list_w, 1)
+        lay.addLayout(triage_row)
+        lay.addWidget(self._investigate_preview)
         lay.addLayout(scope_row)
         lay.addLayout(footer)
+        self._rebuild_list()
         self._refresh_scope_hint()
+        self._refresh_triage_buttons()
 
-        # Ensure the dialog is at least as wide as the Ask-AI button row.
-        footer_w = sum(b.minimumWidth() for b in ai_btns) + 10 * (len(ai_btns) - 1) + 48
-        if self.minimumWidth() < footer_w:
-            self.setMinimumWidth(footer_w)
-        if self.width() < footer_w:
-            self.resize(footer_w, self.height())
+    def triage_state(self) -> dict:
+        return dict(self._triage_state)
+
+    def _commit_triage(self, state: dict) -> None:
+        self._triage_state = self._normalize_triage_state(state)
+        if callable(self._on_triage_change):
+            self._on_triage_change(self._triage_state)
+        self._rebuild_list()
+        self._refresh_triage_buttons()
+
+    def _filtered_base(self) -> List[dict]:
+        return self._filter_findings_triage(
+            self._findings,
+            severity=self._filter_severity,
+            evidence_strength=self._filter_evidence,
+            category=self._filter_category,
+            sort_by=self._sort_by,
+        )
+
+    def _on_filters_changed(self, *_args) -> None:
+        self._filter_severity = str(self._sev_combo.currentData() or "")
+        self._filter_evidence = str(self._ev_combo.currentData() or "")
+        self._filter_category = str(self._cat_combo.currentData() or "")
+        self._sort_by = str(self._sort_combo.currentData() or self._SORT_SEVERITY)
+        self._rebuild_list()
+
+    def _on_group_toggled(self, checked: bool = False) -> None:
+        self._group_incidents = bool(checked)
+        self._rebuild_list()
+
+    def _set_queue(self, queue: str) -> None:
+        self._active_queue = queue
+        for qid, btn in self._queue_btns.items():
+            btn.setChecked(qid == queue)
+        self._rebuild_list()
+
+    def _rebuild_list(self) -> None:
+        muted = self._palette["muted"]
+        ink = self._palette["ink"]
+        ask = self._palette["ask"]
+        err = self._palette["err"]
+        warn = self._palette["warn"]
+        ok_ink = self._palette["ok_ink"]
+        ui_font = self._ui_font
+        ui_fs = self._ui_fs
+        ui_pt = self._ui_pt
+        min_h = max(40, int(round(ui_pt * 5.0)))
+        base = self._filtered_base()
+        counts = self._queue_counts(base, self._triage_state)
+        for qid, btn in self._queue_btns.items():
+            label = {
+                self._QUEUE_OPEN: "Open",
+                self._QUEUE_DONE: "Done",
+                self._QUEUE_CASE: "Case",
+                self._QUEUE_DISMISSED: "Dismissed",
+            }[qid]
+            btn.setText(f"{label} ({counts.get(qid, 0)})")
+        items = self._filter_by_queue(
+            base, self._triage_state, queue=self._active_queue)
+        rows = self._group_findings_by_incident(
+            items, self._dashboard.get("clusters") or [],
+            group=self._group_incidents)
+        prev = ""
+        cur = self._list_w.currentItem()
+        if cur is not None:
+            prev = str(cur.data(Qt.ItemDataRole.UserRole) or "")
+        self._list_w.clear()
+        if not rows:
+            empty = QListWidgetItem("No findings in this queue")
+            empty.setFlags(Qt.ItemFlag.NoItemFlags)
+            empty.setFont(ui_font)
+            self._list_w.addItem(empty)
+            self._on_selection_changed()
+            return
+        select_row = 0
+        for i, row in enumerate(rows):
+            if row.get("kind") == "header":
+                cid = str(row.get("incident_id") or "")
+                collapsed = cid in self._collapsed_incidents
+                mark = "▸" if collapsed else "▾"
+                label = f"{mark}  {row.get('label')}  ({row.get('count')} related)"
+                item = QListWidgetItem(label)
+                item.setData(Qt.ItemDataRole.UserRole, f"__incident__:{cid}")
+                item.setFont(ui_font)
+                item.setForeground(QBrush(QColor(ink)))
+                self._list_w.addItem(item)
+                continue
+            if row.get("incident_id") and str(row.get("incident_id")) in self._collapsed_incidents:
+                continue
+            f = row
+            sev = f.get("severity", "info")
+            title = str(f.get("observation") or f.get("title", "Finding")).strip() or "Finding"
+            text_body = str(f.get("why_it_matters") or f.get("text", "")).strip()
+            strength = str(f.get("evidence_strength_label") or "").strip()
+            check_next = str(f.get("check_next") or "").strip()
+            fid = str(f.get("id") or "")
+            cid = self._id_cluster.get(fid) or self._title_cluster.get(title, "")
+            prefix = f"[{cid}] " if cid else ""
+            if sev == "error":
+                badge = SEMANTIC_GLYPHS["error"]
+                color = err
+            elif sev == "warning":
+                badge = SEMANTIC_GLYPHS["warning"]
+                color = warn
+            elif fid == "load_balance_ok":
+                badge = SEMANTIC_GLYPHS["improved"]
+                color = ok_ink
+            else:
+                badge = "○"
+                color = ink
+            row_w = QWidget()
+            vbox = QVBoxLayout(row_w)
+            vbox.setContentsMargins(4, 2, 4, 2)
+            vbox.setSpacing(4)
+            title_l = QLabel(f"{badge}  {prefix}{title}")
+            title_l.setObjectName("analysisFindingTitle")
+            title_l.setWordWrap(True)
+            title_l.setFont(ui_font)
+            title_l.setStyleSheet(
+                f"color: {color}; font-weight: 700; font-size: {ui_fs};")
+            vbox.addWidget(title_l)
+            if text_body:
+                text_l = QLabel(text_body)
+                text_l.setObjectName("analysisFindingText")
+                text_l.setWordWrap(True)
+                text_l.setFont(ui_font)
+                text_l.setStyleSheet(f"color: {color}; font-size: {ui_fs};")
+                vbox.addWidget(text_l)
+            if strength:
+                s_l = QLabel(f"EVIDENCE STRENGTH  {strength}")
+                s_l.setWordWrap(True)
+                s_l.setFont(ui_font)
+                s_l.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+                vbox.addWidget(s_l)
+            evidence_text = str(f.get("evidence_text") or "").strip()
+            if evidence_text:
+                ev_l = QLabel(f"EVIDENCE  {evidence_text}")
+                ev_l.setWordWrap(True)
+                ev_l.setFont(ui_font)
+                ev_l.setStyleSheet(
+                    f"color: {muted}; font-size: {ui_fs}; font-family: monospace;")
+                vbox.addWidget(ev_l)
+            if check_next:
+                cn_l = QLabel(f"CHECK NEXT  {check_next}")
+                cn_l.setWordWrap(True)
+                cn_l.setFont(ui_font)
+                cn_l.setStyleSheet(f"color: {ask}; font-size: {ui_fs};")
+                vbox.addWidget(cn_l)
+            reason = (self._triage_state.get("dismissed") or {}).get(fid)
+            if reason:
+                dr = QLabel(f"Dismissed: {reason}")
+                dr.setWordWrap(True)
+                dr.setFont(ui_font)
+                dr.setStyleSheet(
+                    f"color: {muted}; font-size: {ui_fs}; font-style: italic;")
+                vbox.addWidget(dr)
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, fid)
+            item.setFont(ui_font)
+            item.setForeground(QBrush(QColor(color)))
+            self._list_w.addItem(item)
+            self._list_w.setItemWidget(item, row_w)
+            row_w.adjustSize()
+            hint = row_w.sizeHint()
+            item.setSizeHint(QSize(max(hint.width(), 200), max(hint.height(), min_h)))
+            if fid and fid == prev:
+                select_row = self._list_w.count() - 1
+        self._list_w.setCurrentRow(select_row)
+        self._on_selection_changed()
+
+    def _on_list_item_clicked(self, item) -> None:
+        if item is None:
+            return
+        role = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        if not role.startswith("__incident__:"):
+            return
+        cid = role.split(":", 1)[1]
+        if cid in self._collapsed_incidents:
+            self._collapsed_incidents.discard(cid)
+        else:
+            self._collapsed_incidents.add(cid)
+        self._rebuild_list()
+
+    def _on_selection_changed(self) -> None:
+        self._refresh_scope_hint()
+        self._refresh_triage_buttons()
 
     def _selected_finding(self) -> Optional[dict]:
         item = self._list_w.currentItem()
         if item is None:
             return None
         fid = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        for f in self._sort_findings_triage(self._findings):
+            if str(f.get("id") or "") == fid:
+                return f
         for f in self._findings:
             if str(f.get("id") or "") == fid:
                 return f
-        return self._findings[0] if self._findings else None
+        return None
+
+    def _refresh_triage_buttons(self) -> None:
+        finding = self._selected_finding()
+        fid = str((finding or {}).get("id") or "")
+        enabled = bool(fid)
+        reviewed = fid in (self._triage_state.get("reviewed") or [])
+        dismissed = fid in (self._triage_state.get("dismissed") or {})
+        in_case = fid in (self._triage_state.get("case") or [])
+        self._done_btn.setEnabled(enabled)
+        self._dismiss_btn.setEnabled(enabled)
+        self._case_btn.setEnabled(enabled and not in_case)
+        self._done_btn.setText("Undo" if reviewed else "Done")
+        self._dismiss_btn.setText("Restore" if dismissed else "Dismiss…")
+        self._case_btn.setText("In case" if in_case else "Add to case")
+
+    def _toggle_done(self) -> None:
+        finding = self._selected_finding()
+        fid = str((finding or {}).get("id") or "")
+        if not fid:
+            return
+        reviewed = fid in (self._triage_state.get("reviewed") or [])
+        act = "unreviewed" if reviewed else "done"
+        self._commit_triage(self._apply_triage_action(self._triage_state, fid, act))
+
+    def _toggle_dismiss(self) -> None:
+        finding = self._selected_finding()
+        fid = str((finding or {}).get("id") or "")
+        if not fid:
+            return
+        if fid in (self._triage_state.get("dismissed") or {}):
+            self._commit_triage(
+                self._apply_triage_action(self._triage_state, fid, "restore"))
+            return
+        reason, ok = QInputDialog.getText(
+            self, "Dismiss finding", "Dismiss reason (short):",
+            text="Not relevant")
+        if not ok:
+            return
+        self._commit_triage(self._apply_triage_action(
+            self._triage_state, fid, "dismiss",
+            reason=str(reason or "").strip() or "Dismissed"))
+
+    def _add_to_case(self) -> None:
+        finding = self._selected_finding()
+        fid = str((finding or {}).get("id") or "")
+        if not fid:
+            return
+        if fid in (self._triage_state.get("case") or []):
+            return
+        self._commit_triage(
+            self._apply_triage_action(self._triage_state, fid, "case"))
+        if callable(self._on_add_to_case):
+            self._on_add_to_case(finding)
 
     def _refresh_scope_hint(self) -> None:
         lbl = getattr(self, "_scope_lbl", None)
@@ -8492,7 +8805,8 @@ class _AnalysisFindingsDialog(QDialog):
             btn.setEnabled(self._on_investigate is not None and bool(sid))
             btn.setToolTip(
                 "Scope the investigation and jump to the relevant Statistics section"
-                if sid else "No specific Statistics section is associated with this finding"
+                if sid else
+                "No specific Statistics section is associated with this finding"
             )
         ev_btn = getattr(self, "_show_evidence_btn", None)
         if ev_btn is not None:
@@ -8537,8 +8851,37 @@ class _AnalysisFindingsDialog(QDialog):
         sid = FINDING_SECTION_MAP.get(str(finding.get("id") or ""))
         if not sid:
             return
-        # Keep the inbox open so Timeline Evidence remains visible.
+        scope = None
+        events = getattr(self, "_ux_events", None) or []
+        tmin = int(getattr(self, "_time_min", 0) or 0)
+        tmax = int(getattr(self, "_time_max", 0) or 0)
+        if events:
+            scope = best_finding_scope(finding, events, tmin, tmax)
+        preview = self._format_investigate_preview(
+            finding, scope=scope, section_id=sid, section_label=sid,
+            current_limit=self._current_limit,
+            current_lo=self._current_cursor_lo,
+            current_hi=self._current_cursor_hi,
+        )
+        self._investigate_preview.setText(preview)
+        self._investigate_preview.setVisible(True)
+        reply = QMessageBox.question(
+            self, "Confirm Investigate",
+            preview + "\n\nContinue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        self._investigate_preview.setVisible(False)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
         self._on_investigate(finding, sid)
+        if callable(self._on_undo_investigate):
+            self._undo_scope_btn.setEnabled(True)
+
+    def _undo_investigate_scope(self) -> None:
+        if callable(self._on_undo_investigate):
+            self._on_undo_investigate()
+        self._undo_scope_btn.setEnabled(False)
 
     def _query_with_ai(
         self, ai_enabled: bool, template_id: str = "findings",
@@ -8554,7 +8897,6 @@ class _AnalysisFindingsDialog(QDialog):
                 self.wants_ai_finding_id = str(
                     item.data(Qt.ItemDataRole.UserRole) or "")
         self._ai_needs_settings = not ai_enabled
-        # Fire immediately; do not close the non-modal Findings inbox.
         if callable(self._on_ai_query):
             self._on_ai_query(
                 self.wants_ai_template,
@@ -8577,7 +8919,8 @@ class _AnalysisFindingsDialog(QDialog):
         try:
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(_format_analysis_findings_text(
-                    self._findings, self._scope_title))
+                    self._findings, self._scope_title,
+                    triage_state=self._triage_state))
         except OSError as exc:
             QMessageBox.warning(
                 self, "Save failed", f"Could not write file:\n{exc}")
@@ -8626,6 +8969,7 @@ class _AnalysisFindingsDialog(QDialog):
         rebuild = getattr(panel, "_rebuild_investigation_menu", None)
         if callable(rebuild):
             rebuild()
+
 
 
 def _parse_task_deadlines_text(text: str) -> Dict[str, int]:
@@ -8751,10 +9095,21 @@ class _StatsPanel(QWidget):
             "Limit statistics to the time window from C1 through the last cursor")
         self._scope_cb.toggled.connect(self._on_scope_toggled)
         _scope_pol = self._scope_cb.sizePolicy()
-        _scope_pol.setHorizontalPolicy(QSizePolicy.Policy.MinimumExpanding)
+        _scope_pol.setHorizontalPolicy(QSizePolicy.Policy.Fixed)
         self._scope_cb.setSizePolicy(_scope_pol)
-        self._scope_cb.setMinimumWidth(0)
-        scope_top.addWidget(self._scope_cb, 1)
+        scope_top.addWidget(self._scope_cb, 0)
+        self._btn_stats_guide = QPushButton("Where should I start?  ▾")
+        self._btn_stats_guide.setObjectName("stats_symptom_guide")
+        self._btn_stats_guide.setToolTip(
+            "Open a symptom shortcut to the first Statistics section")
+        self._btn_stats_guide.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_stats_guide.setFlat(True)
+        _guide_pol = self._btn_stats_guide.sizePolicy()
+        _guide_pol.setHorizontalPolicy(QSizePolicy.Policy.Fixed)
+        self._btn_stats_guide.setSizePolicy(_guide_pol)
+        self._btn_stats_guide.clicked.connect(self._toggle_symptom_guide_panel)
+        scope_top.addWidget(self._btn_stats_guide, 0)
+        scope_top.addStretch(1)
         self._btn_stats_expand = self._make_scope_action_button(
             _IC_SECTIONS_EXPAND, "Expand all statistics sections", self._expand_all_sections)
         scope_top.addWidget(self._btn_stats_expand, 0)
@@ -8769,6 +9124,19 @@ class _StatsPanel(QWidget):
         scope_top.addWidget(self._btn_stats_reset_order, 0)
         self._update_reset_order_button()
         scope_block.addLayout(scope_top)
+        self._symptom_guide_panel = QWidget()
+        self._symptom_guide_panel.setObjectName("stats_symptom_panel")
+        self._symptom_guide_panel.setVisible(False)
+        _sg_lay = QVBoxLayout(self._symptom_guide_panel)
+        _sg_lay.setContentsMargins(0, 4, 0, 6)
+        _sg_lay.setSpacing(6)
+        self._symptom_guide_grid_host = QWidget()
+        self._symptom_guide_grid = QGridLayout(self._symptom_guide_grid_host)
+        self._symptom_guide_grid.setContentsMargins(0, 0, 0, 0)
+        self._symptom_guide_grid.setHorizontalSpacing(8)
+        self._symptom_guide_grid.setVerticalSpacing(8)
+        _sg_lay.addWidget(self._symptom_guide_grid_host)
+        scope_block.addWidget(self._symptom_guide_panel)
         self._scope_label = QLabel("")
         self._scope_label.setStyleSheet("color:#888888;")
         self._scope_label.setWordWrap(True)
@@ -8824,7 +9192,7 @@ class _StatsPanel(QWidget):
         self._btn_export_html.clicked.connect(self._export_html)
         self._btn_export_html.setEnabled(False)
         self._btn_export_html.setToolTip(
-            "Export statistics as HTML (tables include Search / Show all / CSV)")
+            "Export statistics as HTML (tables include Search / Show all)")
         exp_row.addWidget(self._btn_export_html)
         self._btn_export_html.setMinimumWidth(0)
         self._btn_export_html.setSizePolicy(
@@ -8842,7 +9210,36 @@ class _StatsPanel(QWidget):
         font = _application_ui_font(self._ui_font_size)
         self._scope_cb.setFont(font)
         self._scope_label.setStyleSheet(f"color:#888888; font-size:{ui_fs};")
+        guide = getattr(self, "_btn_stats_guide", None)
+        if guide is not None:
+            guide.setFont(font)
+            accent = "#5B9BD5" if self._is_dark else "#2a6fb2"
+            border = "#3a4658" if self._is_dark else "#C0C0C0"
+            guide.setStyleSheet(
+                f"QPushButton#stats_symptom_guide {{"
+                f" color:{accent}; border:1px solid {border}; border-radius:4px;"
+                f" padding:2px 8px; font-size:{ui_fs}; text-align:left; }}"
+                f"QPushButton#stats_symptom_guide:hover {{"
+                f" border-color:{accent}; }}"
+            )
+        panel = getattr(self, "_symptom_guide_panel", None)
+        if panel is not None:
+            panel.setStyleSheet(
+                f"QWidget#stats_symptom_panel {{"
+                f" background:{'#1a1a1a' if self._is_dark else '#f0f0f0'};"
+                f" border-bottom:1px solid {'#3a4658' if self._is_dark else '#C0C0C0'};"
+                f" padding:4px 0; }}"
+                f"QPushButton#stats_symptom_card {{"
+                f" text-align:left; padding:8px; border-radius:6px;"
+                f" border:1px solid {'#3a4658' if self._is_dark else '#C0C0C0'};"
+                f" font-size:{ui_fs}; }}"
+                f"QPushButton#stats_symptom_card:hover:enabled {{"
+                f" border-color:#5B9BD5; }}"
+                f"QPushButton#stats_symptom_card:disabled {{"
+                f" color:#666; }}"
+            )
         for btn in (
+            self._btn_stats_guide,
             self._btn_stats_expand, self._btn_stats_collapse,
             self._btn_stats_reset_order,
             self._btn_export_html,
@@ -9788,14 +10185,83 @@ class _StatsPanel(QWidget):
             return
         rng = self._stats_range()
         if rng is None:
-            self._scope_label.setText(
-                "Place 2+ cursors to measure a time window" if len(self._cursor_times) < 2 else "")
+            base = "Place 2+ cursors to measure a time window" if len(self._cursor_times) < 2 else ""
+            note = self._cursor_limit_note_text()
+            self._scope_label.setText(f"{base}\n{note}" if base and note else (base or note))
             return
         lo, hi, n_cur = rng
         unit = self._trace.time_scale
-        self._scope_label.setText(
+        base = (
             f"C1–C{n_cur}: {_format_time(lo, unit)} … {_format_time(hi, unit)}  "
-            f"({_format_time(hi - lo, unit)})")
+            f"({_format_time(hi - lo, unit)})"
+        )
+        note = self._cursor_limit_note_text()
+        self._scope_label.setText(f"{base}\n{note}" if note else base)
+
+    def _cursor_limit_note_text(self) -> str:
+        """Secondary scope-line note when cursors are present but scope is full-trace."""
+        from .analysis_context import CURSORS_NOT_LIMITING_NOTE
+        show = len(self._cursor_times or []) >= 2 and not self._scope_to_cursors
+        return CURSORS_NOT_LIMITING_NOTE if show else ""
+
+    def _symptom_guide_open(self) -> bool:
+        panel = getattr(self, "_symptom_guide_panel", None)
+        return bool(panel is not None and panel.isVisible())
+
+    def _set_symptom_guide_open(self, open_: bool) -> None:
+        panel = getattr(self, "_symptom_guide_panel", None)
+        btn = getattr(self, "_btn_stats_guide", None)
+        if panel is None:
+            return
+        if open_ and not panel.isVisible():
+            self._rebuild_symptom_guide_panel()
+        panel.setVisible(bool(open_))
+        if btn is not None:
+            btn.setText(
+                "Where should I start?  ▴" if open_ else "Where should I start?  ▾")
+
+    def _toggle_symptom_guide_panel(self) -> None:
+        self._set_symptom_guide_open(not self._symptom_guide_open())
+
+    def _rebuild_symptom_guide_panel(self) -> None:
+        from .stats_symptom_landing import (
+            available_symptom_cards,
+            symptom_section_id,
+        )
+        grid = getattr(self, "_symptom_guide_grid", None)
+        if grid is None:
+            return
+        while grid.count():
+            item = grid.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        tr = self._trace
+        has_sti = bool(getattr(tr, "sti_events", None)) if tr is not None else False
+        cores = list(getattr(tr, "core_names", None) or []) if tr is not None else []
+        cards = available_symptom_cards(has_sti=has_sti, single_core=len(cores) <= 1)
+        ui_fs = self._ui_fs()
+        font = _application_ui_font(self._ui_font_size)
+        cols = 2
+        for i, card in enumerate(cards):
+            title = str(card.get("title") or "Symptom")
+            path = card.get("path") or []
+            tip = str(card.get("disabled_reason") or " → ".join(path))
+            btn = QPushButton(f"{title}\n{' → '.join(path[:2])}")
+            btn.setObjectName("stats_symptom_card")
+            btn.setFont(font)
+            btn.setToolTip(tip)
+            btn.setEnabled(not card.get("disabled"))
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            sid = symptom_section_id(card)
+
+            def _pick(_checked: bool = False, section_id: str = sid) -> None:
+                self._set_symptom_guide_open(False)
+                self.scroll_to_section(section_id)
+
+            btn.clicked.connect(_pick)
+            r, c = divmod(i, cols)
+            grid.addWidget(btn, r, c)
 
     def _scope_suffix(self) -> str:
         return " (cursor range)" if self._stats_range() is not None else ""
@@ -13848,6 +14314,7 @@ class _StatsPanel(QWidget):
     def clear_trace(self) -> None:
         """Empty Statistics when no trace tab is open (welcome / close-all)."""
         self.clear_plot_session()
+        self._set_symptom_guide_open(False)
         self._defer_heavy_collapse_done = False
         self._trace = None
         self._needs_presentation_defaults = True

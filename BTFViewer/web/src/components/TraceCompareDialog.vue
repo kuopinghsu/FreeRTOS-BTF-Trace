@@ -14,11 +14,16 @@
         <button
           type="button"
           class="compare-close-btn"
+          title="Close"
+          aria-label="Close"
           @click="emit('close')"
-        >
-          Close
-        </button>
+        >×</button>
       </div>
+
+      <AnalysisContextStrip
+        v-if="analysisContext"
+        :context="analysisContext"
+      />
 
       <div class="compare-select-row">
         <label class="compare-select-label compare-label-baseline">
@@ -749,6 +754,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import DomSelect from './DomSelect.vue'
+import AnalysisContextStrip from './AnalysisContextStrip.vue'
 import {
   buildSummaryCompareRows,
   buildTopTasksCompareRows,
@@ -785,6 +791,7 @@ const props = defineProps({
   tabs: { type: Array, required: true },
   initialA: { type: [Number, String], default: null },
   initialB: { type: [Number, String], default: null },
+  analysisContext: { type: Object, default: null },
   aiEnabled: { type: Boolean, default: true },
   analysisSettings: { type: Object, default: () => ({}) },
 })
@@ -1110,19 +1117,28 @@ function onScoreBaseline() {
 }
 
 .compare-close-btn {
+  /* Match .trace-tab-close */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   appearance: none;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: none;
   background: transparent;
-  color: var(--fg-dim);
-  font-size: 11px;
-  padding: 4px 10px;
+  color: var(--fg);
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
   cursor: pointer;
+  opacity: 0.65;
+  flex: 0 0 auto;
 }
 
 .compare-close-btn:hover {
-  background: var(--tb-btn-hover);
-  color: var(--fg);
+  opacity: 1;
+  background: rgba(127, 127, 127, 0.2);
 }
 
 .compare-scope {

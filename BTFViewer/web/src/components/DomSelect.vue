@@ -228,12 +228,13 @@ function onTriggerKeydown(ev) {
   padding: 4px 0;
   list-style: none;
   overflow: auto;
-  background: var(--tb-bg, var(--input-bg, #2a2a2a));
+  background: var(--panel-bg, var(--tb-bg, var(--input-bg, #2a2a2a)));
   color: var(--fg, #ddd);
   border: 1px solid var(--border, #555);
   border-radius: 4px;
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
   font-size: var(--ui-font-size, 13px);
+  z-index: 12050;
 }
 .dom-select-list li {
   padding: 5px 10px;

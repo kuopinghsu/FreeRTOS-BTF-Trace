@@ -34,7 +34,7 @@ BTFViewer helps you move from a timing symptom to evidence that others can revie
 | **Statistics and diagnostics** | Utilisation, execution, blocking, dispatch latency, jitter, preemption, migration, mutex, semaphore, queue, deadline, and anomaly analysis |
 | **Trace comparison** | Multi-tab sessions, before-and-after deltas, distribution comparisons, saved baselines, and experiment validation |
 | **AI Assistant** | Finding triage, focused investigation, evidence verification, what-if analysis, and comparison explanations |
-| **Export and automation** | PNG, SVG, HTML reports with per-table CSV downloads, Perfetto, selected BTF ranges, and Desktop CLI support for scripts and CI |
+| **Export and automation** | PNG, SVG, HTML reports, Perfetto, selected BTF ranges, and Desktop CLI support for scripts and CI |
 | **Learning and sharing** | Standalone Web application and an 8-core guided demo with English or Traditional Chinese narration |
 
 <a id="documentation" name="documentation">&#x200B;</a>
@@ -257,11 +257,12 @@ For an initial review, use the following sequence:
 2. Select **Load** and check whether all cores carry a reasonable share of the work.
 3. Open **Analysis** and review the highest-severity findings (Triage).
 4. Select **Investigate** on a finding to open the relevant Statistics section and apply the finding’s recommended Scope (C1–C2). Filters are preserved.
-5. Select **Show Evidence** to center the timeline on the relevant event. This action does not change the Scope or Filters.
-6. Select a high value or outlier to jump to the corresponding timeline event.
-7. Place cursors around the affected period, confirm **Scope: C1–Cn** in the status bar, and enable **Limit to C1–Cn**.
-8. Inspect the task, core, preemption, blocking, synchronization, or migration details.
-9. If needed, ask the AI Assistant to explain or verify the measured evidence.
+5. Select **Show on timeline** to center the timeline on the relevant event. This action does not change the Scope or Filters.
+6. Use **Back** / **Forward** in the evidence inspector to revisit prior timeline jumps without changing Scope or Filters.
+7. Select a high value or outlier to jump to the corresponding timeline event.
+8. Place cursors around the affected period, confirm **Scope: C1–Cn** in the status bar, and enable **Limit to C1–Cn**.
+9. Inspect the task, core, preemption, blocking, synchronization, or migration details.
+10. If needed, ask the AI Assistant to explain or verify the measured evidence.
 
 Start with measured evidence instead of an assumed cause. Confirm the behavior in the timeline and Statistics before drawing a conclusion. See [WORKFLOWS.md](WORKFLOWS.md) for detailed procedures.
 

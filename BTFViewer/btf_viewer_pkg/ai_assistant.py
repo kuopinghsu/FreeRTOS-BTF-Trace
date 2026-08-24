@@ -147,6 +147,8 @@ from .ai_case import (
     toggle_interpreted_scope,
     set_hypothesis_status,
     update_case_from_tool,
+    add_finding_to_case,
+    empty_investigation_case,
     validate_ai_response,
     VALIDATE_EXPERIMENT_PROMPT,
 )
@@ -6498,6 +6500,25 @@ def create_ai_assistant_panel(
             self._evidence_payload = dict(payload)
             self._sync_evidence_log_entry(self._evidence_payload)
             self._refresh_guide_ui()
+
+        def add_finding_to_investigation_case(self, finding: Optional[dict] = None) -> bool:
+            """Append an Analysis finding to the Investigation Case (UX-104)."""
+            if not isinstance(finding, dict):
+                return False
+            payload = dict(self._evidence_payload or {})
+            prev_case = payload.get("investigation_case")
+            case = add_finding_to_case(
+                prev_case if isinstance(prev_case, dict) else empty_investigation_case(),
+                finding,
+            )
+            payload["investigation_case"] = case
+            if not isinstance(payload.get("finding"), dict):
+                payload["finding"] = dict(finding)
+            self._evidence_payload = payload
+            self._sync_evidence_log_entry(self._evidence_payload)
+            self._refresh_guide_ui()
+            self._persist_investigation_session()
+            return True
 
         def _clear_evidence_log_entry(self) -> None:
             self._evidence_payload = None

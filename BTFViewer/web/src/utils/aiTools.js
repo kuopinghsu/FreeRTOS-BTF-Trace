@@ -2158,10 +2158,36 @@ function asFloatList(value) {
   if (!Array.isArray(value)) return []
   const out = []
   for (const item of value) {
-    const n = Number(item)
-    if (Number.isFinite(n)) out.push(n)
+    const n = asScalarNumber(item)
+    if (n != null) out.push(n)
   }
   return out
+}
+
+/** Coerce a tool arg to a finite number (JS Number + single-element arrays).
+ *  Lockstep with btf_viewer_pkg/ai_tools.py ``_as_scalar_float``. */
+export function asScalarNumber(value) {
+  if (value == null || typeof value === 'boolean') return null
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (Array.isArray(value)) {
+    if (value.length !== 1) return null
+    return asScalarNumber(value[0])
+  }
+  if (typeof value === 'string') {
+    const s = value.trim()
+    if (!s) return null
+    const n = Number(s)
+    return Number.isFinite(n) ? n : null
+  }
+  // Match JS Number([x]) for other ToPrimitive cases only via Number()
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+function fmtTraceNum(n) {
+  const v = asScalarNumber(n)
+  if (v == null) return String(n ?? '')
+  return Number.isInteger(v) ? String(v) : String(v)
 }
 
 export function validateToolCall(name, args) {
@@ -2172,9 +2198,9 @@ export function validateToolCall(name, args) {
     return { args: { timestamps: times }, error: '' }
   }
   if (name === AI_TOOL_ZOOM_TO_RANGE) {
-    const lo = Number(a.start_time)
-    const hi = Number(a.end_time)
-    if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+    const lo = asScalarNumber(a.start_time)
+    const hi = asScalarNumber(a.end_time)
+    if (lo == null || hi == null) {
       return { args: null, error: 'start_time and end_time must be numbers' }
     }
     if (hi === lo) return { args: null, error: 'start_time and end_time must differ' }
@@ -2216,8 +2242,8 @@ export function validateToolCall(name, args) {
     }
   }
   if (name === AI_TOOL_ADD_ANNOTATION) {
-    const t = Number(a.time)
-    if (!Number.isFinite(t)) return { args: null, error: 'time must be a number' }
+    const t = asScalarNumber(a.time)
+    if (t == null) return { args: null, error: 'time must be a number' }
     let note = String(a.note || '').trim()
     if (!note) return { args: null, error: 'note must be a non-empty string' }
     if (note.length > MAX_ANNOTATION_NOTE) note = note.slice(0, MAX_ANNOTATION_NOTE).trimEnd()
@@ -2306,13 +2332,13 @@ export function validateToolCall(name, args) {
     if (!task) return { args: null, error: 'task must be a non-empty string' }
     const out = { task, around_time: null, window: 0 }
     if (a.around_time != null && String(a.around_time).trim() !== '') {
-      const t = Number(a.around_time)
-      if (!Number.isFinite(t)) return { args: null, error: 'around_time must be a number' }
+      const t = asScalarNumber(a.around_time)
+      if (t == null) return { args: null, error: 'around_time must be a number' }
       out.around_time = t
     }
     if (a.window != null && String(a.window).trim() !== '') {
-      const w = Number(a.window)
-      if (!Number.isFinite(w)) return { args: null, error: 'window must be a number' }
+      const w = asScalarNumber(a.window)
+      if (w == null) return { args: null, error: 'window must be a number' }
       out.window = Math.max(0, w)
     }
     return { args: out, error: '' }
@@ -2322,13 +2348,13 @@ export function validateToolCall(name, args) {
     if (!task) return { args: null, error: 'task must be a non-empty string' }
     const out = { task, timestamp: null, window: 2000 }
     if (a.timestamp != null && String(a.timestamp).trim() !== '') {
-      const t = Number(a.timestamp)
-      if (!Number.isFinite(t)) return { args: null, error: 'timestamp must be a number' }
+      const t = asScalarNumber(a.timestamp)
+      if (t == null) return { args: null, error: 'timestamp must be a number' }
       out.timestamp = t
     }
     if (a.window != null && String(a.window).trim() !== '') {
-      const w = Number(a.window)
-      if (!Number.isFinite(w)) return { args: null, error: 'window must be a number' }
+      const w = asScalarNumber(a.window)
+      if (w == null) return { args: null, error: 'window must be a number' }
       out.window = Math.max(0, w)
     }
     return { args: out, error: '' }
@@ -2382,8 +2408,8 @@ export function validateToolCall(name, args) {
     }
   }
   if (name === AI_TOOL_BOOKMARK_FINDING) {
-    const t = Number(a.time)
-    if (!Number.isFinite(t)) return { args: null, error: 'time must be a number' }
+    const t = asScalarNumber(a.time)
+    if (t == null) return { args: null, error: 'time must be a number' }
     let kind = String(a.kind || '').trim().toLowerCase().replace(/-/g, '_').replace(/ /g, '_')
     if (['root', 'cause', 'rca'].includes(kind)) kind = 'root_cause'
     if (['corr', 'related'].includes(kind)) kind = 'correlated'
@@ -2766,13 +2792,6 @@ export function validateToolCall(name, args) {
     }
   }
   return { args: null, error: `unknown tool ${JSON.stringify(name)}` }
-}
-
-function fmtTraceNum(n) {
-  const x = Number(n)
-  if (!Number.isFinite(x)) return String(n)
-  if (Number.isInteger(x)) return String(x)
-  return String(x)
 }
 
 export function summariseToolCall(name, args) {

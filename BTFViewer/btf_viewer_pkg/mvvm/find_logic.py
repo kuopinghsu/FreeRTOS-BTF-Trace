@@ -148,8 +148,20 @@ def recompute_find_hits(
             hits.extend(s.start for s in segs)
 
     for ann in annotations:
-        if _haystack_matches(q, mode_key, ann.note, regex_obj):
-            hits.append(ann.ns)
+        if isinstance(ann, dict):
+            note = str(ann.get("note") or ann.get("label") or "")
+            try:
+                ns = int(ann.get("ns", ann.get("time")))
+            except (TypeError, ValueError):
+                continue
+        else:
+            note = str(getattr(ann, "note", None) or getattr(ann, "label", None) or "")
+            try:
+                ns = int(getattr(ann, "ns", None))
+            except (TypeError, ValueError):
+                continue
+        if _haystack_matches(q, mode_key, note, regex_obj):
+            hits.append(ns)
 
     unique = sorted(set(hits))
     label = f"{len(unique)} matches"

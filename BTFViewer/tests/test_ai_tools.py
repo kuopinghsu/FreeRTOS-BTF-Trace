@@ -22,6 +22,7 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_TOOL_ADD_ANNOTATION,
     AI_TOOL_CLEAR_MARKS,
     AI_TOOL_EXPORT_REPORT,
+    AI_TOOL_FIND_CRITICAL_PATH,
     AI_TOOL_GENERATE_REPORT,
     AI_TOOL_HIGHLIGHT_TASK,
     AI_TOOL_OPEN_CORRIDOR,
@@ -278,6 +279,63 @@ class AiToolsTests(unittest.TestCase):
         # Must not surface the monolith UnboundLocalError message.
         self.assertNotIn("_recompute_find_hits", str(out.get("message") or ""))
         self.assertNotIn("not associated with a value", str(out.get("message") or ""))
+
+    def test_find_critical_path_accepts_singleton_timestamp_array(self) -> None:
+        """JS Number([3087194]) works; Desktop must coerce the same LLM shape."""
+        args, err = validate_tool_call(
+            AI_TOOL_FIND_CRITICAL_PATH,
+            {"task": "Med[267]", "timestamp": [3087194]},
+        )
+        self.assertEqual(err, "")
+        self.assertEqual(args["task"], "Med[267]")
+        self.assertEqual(args["timestamp"], 3087194.0)
+        label = summarise_tool_call(
+            AI_TOOL_FIND_CRITICAL_PATH,
+            {"task": "Med[267]", "timestamp": [3087194]},
+        )
+        self.assertIn("3087194", label)
+        self.assertNotIn("[3087194]", label)
+
+    def test_task_match_aliases_med267_bracket_id(self) -> None:
+        """Name[id] must yield id/prefix aliases even if _TASK_ID_* patterns collide."""
+        from btf_viewer_pkg.ai_tools import _task_match_aliases, task_lookup_keys
+
+        aliases = _task_match_aliases("Med[267]")
+        self.assertIn("Med[267]", aliases)
+        self.assertIn("267", aliases)
+        self.assertIn("Med", aliases)
+        self.assertIn("267", task_lookup_keys("Med[267]"))
+
+    def test_correlate_survives_bad_annotations(self) -> None:
+        """Odd annotation objects must not abort correlate / critical path."""
+        from btf_viewer_pkg.ai_tools import find_critical_path_task  # noqa: WPS433
+        from btf_viewer_pkg.parser import BtfTrace  # noqa: WPS433
+
+        trace = BtfTrace(
+            time_scale="us",
+            tasks=["Med[267]"],
+            segments=[],
+            sti_events=[],
+            sti_channels=[],
+            sti_events_by_target={},
+            time_min=0,
+            time_max=1000,
+        )
+        out = find_critical_path_task(
+            trace,
+            "Med[267]",
+            timestamp=3087194,
+            annotations=[object()],  # no .note — previously raised AttributeError
+        )
+        self.assertIsInstance(out, dict)
+        self.assertIn("ok", out)
+        self.assertNotIn("AttributeError", str(out.get("message") or ""))
+        self.assertNotIn("has no attribute", str(out.get("message") or ""))
+        # Search failure must not poison the tool result shape.
+        corr = correlate_task_events(
+            trace, "Med[267]", annotations=[object()],
+        )
+        self.assertTrue(corr.get("ok"), corr.get("message"))
 
     def test_resolve_core_key(self) -> None:
         cores = ["Core_0", "Core_1", "Core_10"]

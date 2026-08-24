@@ -251,7 +251,8 @@ export function computeFindHits(trace, query, mode, annotations = []) {
     if (modeKey === 'exact') matched = qLower === hay.toLowerCase()
     else if (modeKey === 'contains') matched = hay.toLowerCase().includes(qLower)
     else if (regexObj) matched = regexObj.test(hay)
-    if (matched) hits.push(ann.ns)
+    const ns = Number(ann.ns ?? ann.time)
+    if (matched && Number.isFinite(ns)) hits.push(ns)
   }
   return { hits: [...new Set(hits)].sort((a, b) => a - b), error: null }
 }

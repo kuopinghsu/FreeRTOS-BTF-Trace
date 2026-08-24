@@ -244,9 +244,10 @@ flowchart TD
 
 1. 讀取嚴重程度、標題、量測值與 **Evidence** 說明。
 2. 嚴重程度代表檢查優先順序，不代表故障機率。
-3. 選取 **Show Evidence**，在不改變分析範圍與篩選條件的情況下，將時間軸移到證據位置。
+3. 選取 **Show on timeline**，在不改變分析範圍與篩選條件的情況下，將時間軸移到證據位置。
 4. 選取 **Investigate**，開啟支持該結果的 Statistics 區段；若提供建議游標範圍，也可一併套用。
 5. 確認 Statistics 數值、工作名稱與時間點都和分析結果一致。
+6. 已檢視可標 **Done**；不適用可 **Dismiss…** 並寫簡短原因；要納入調查可 **Add to case**。
 
 如果沒有相關分析結果，仍可從已選定的 Statistics 樣本繼續。沒有 Finding 不代表工作沒有問題；症狀可能不符合內建啟發式規則。
 
@@ -274,7 +275,7 @@ flowchart TD
 2. 在可能引發延遲的活動之前放置 **C1**。
 3. 在 `ControlTask` 完成或恢復之後放置 **C2**。其他游標可用來標示中間證據。
 4. 選取 **Fit Cursors**（`Ctrl+R`），顯示最早至最晚游標之間的範圍。
-5. 在 Statistics 啟用 **Limit to C1–Cn**。
+5. 在 Statistics 啟用 **Limit to C1–Cn**（Desktop 與 Web 也會顯示橫幅：**Use C1–Cn as analysis Scope** → **Enable Limit to C1–Cn**）。
 6. 確認狀態列與 Statistics 標頭顯示 **Scope: C1–Cn · duration**。
 7. 再次檢查 **Filtered:** 指示，清除非預期的工作、核心或遷移篩選條件。
 8. 重新開啟 **Analysis**，讓 Findings 使用相同分析範圍。
@@ -531,7 +532,7 @@ Baseline 與 Candidate 代表等效條件，目標指標已重新量測，而且
 - 使用 Bookmark 與 Annotation 標示重要時間點；
 - 產生含註解的 Snapshot 或時間軸 SVG；
 - 使用 **Save cursor range as BTF** 儲存所選事件；
-- 使用 Statistics **Export HTML**；匯出後的各統計表格可個別下載 CSV；
+- 使用 Statistics **Export HTML**（含可搜尋表格的自包含報告）；
 - 使用 Trace Compare **Export HTML**；以及
 - 使用 AI 時產生診斷報告或 Investigation Case。
 

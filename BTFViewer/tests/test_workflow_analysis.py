@@ -192,27 +192,42 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         self.assertEqual(dlg.font().pixelSize(), expected.pixelSize())
 
     def test_analysis_dialog_query_with_ai_button(self):
-        from PySide6.QtWidgets import QApplication, QPushButton, QLabel
+        from PySide6.QtWidgets import QApplication, QToolButton, QLabel
         from btf_viewer_pkg.stats import _AnalysisFindingsDialog
 
         if QApplication.instance() is None:
             QApplication([])
         findings = [{"severity": "warning", "title": "Load imbalance", "text": "σ high"}]
         dlg = _AnalysisFindingsDialog(findings, " (scoped)", ai_enabled=True)
-        labels = [b.text().replace("&", "") for b in dlg.findChildren(QPushButton)]
-        self.assertIn("Query with AI…", labels)
+        tool_labels = [b.text().replace("&", "") for b in dlg.findChildren(QToolButton)]
+        self.assertIn("Ask AI ▾", tool_labels)
+        self.assertIn("More ▾", tool_labels)
         overview = dlg.findChild(QLabel, "analysisOverview")
         self.assertIsNotNone(overview)
         self.assertIn("Top issues:", overview.text())
-        self.assertIn("Save as Text…", labels)
-        self.assertFalse(dlg.wants_ai_query)
-        ai_btn = next(
-            b for b in dlg.findChildren(QPushButton)
-            if "Query with AI" in b.text().replace("&", "")
+        ask_btn = next(
+            b for b in dlg.findChildren(QToolButton)
+            if "Ask AI" in b.text().replace("&", "")
         )
-        ai_btn.click()
+        acts = {
+            a.text().replace("&", ""): a
+            for a in ask_btn.menu().actions()
+            if not a.isSeparator() and a.menu() is None
+        }
+        self.assertIn("Query findings…", acts)
+        self.assertFalse(dlg.wants_ai_query)
+        acts["Query findings…"].trigger()
         self.assertTrue(dlg.wants_ai_query)
+        self.assertEqual(dlg.wants_ai_template, "findings")
         self.assertFalse(dlg._ai_needs_settings)
+        more_btn = next(
+            b for b in dlg.findChildren(QToolButton)
+            if "More" in b.text().replace("&", "")
+        )
+        more_acts = {
+            a.text().replace("&", ""): a for a in more_btn.menu().actions()
+        }
+        self.assertIn("Save as text…", more_acts)
 
     def test_analysis_dialog_light_theme_overview_ink(self):
         from PySide6.QtWidgets import QApplication, QLabel
@@ -262,27 +277,31 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         self.assertNotIn("#d68910", body.styleSheet())
 
     def test_analysis_dialog_auto_investigate_button(self):
-        from PySide6.QtWidgets import QApplication, QPushButton
+        from PySide6.QtWidgets import QApplication, QToolButton
         from btf_viewer_pkg.stats import _AnalysisFindingsDialog
 
         if QApplication.instance() is None:
             QApplication([])
         findings = [{"id": "f1", "severity": "warning", "title": "Load imbalance", "text": "σ high"}]
         dlg = _AnalysisFindingsDialog(findings, " (scoped)", ai_enabled=True)
-        labels = [b.text().replace("&", "") for b in dlg.findChildren(QPushButton)]
-        self.assertIn("Auto investigate…", labels)
         dlg._list_w.setCurrentRow(0)
-        auto_btn = next(
-            b for b in dlg.findChildren(QPushButton)
-            if "Auto investigate" in b.text().replace("&", "")
+        ask_btn = next(
+            b for b in dlg.findChildren(QToolButton)
+            if "Ask AI" in b.text().replace("&", "")
         )
-        auto_btn.click()
+        acts = {
+            a.text().replace("&", ""): a
+            for a in ask_btn.menu().actions()
+            if a.menu() is None
+        }
+        self.assertIn("Auto investigate…", acts)
+        acts["Auto investigate…"].trigger()
         self.assertTrue(dlg.wants_ai_query)
         self.assertEqual(dlg.wants_ai_template, "auto_investigate")
         self.assertEqual(dlg.wants_ai_finding_id, "f1")
 
     def test_analysis_dialog_explain_levels(self):
-        from PySide6.QtWidgets import QApplication, QPushButton
+        from PySide6.QtWidgets import QApplication, QToolButton
         from btf_viewer_pkg.stats import _AnalysisFindingsDialog
 
         if QApplication.instance() is None:
@@ -290,15 +309,15 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         findings = [{"id": "f1", "severity": "warning", "title": "Load imbalance", "text": "σ high"}]
         dlg = _AnalysisFindingsDialog(findings, " (scoped)", ai_enabled=True)
         dlg._list_w.setCurrentRow(0)
-        btn = next(
-            b for b in dlg.findChildren(QPushButton)
-            if "Explain" in b.text().replace("&", "")
+        ask_btn = next(
+            b for b in dlg.findChildren(QToolButton)
+            if "Ask AI" in b.text().replace("&", "")
         )
-        self.assertEqual(btn.styleSheet(), next(
-            b for b in dlg.findChildren(QPushButton)
-            if "Investigate…" in b.text().replace("&", "")
-        ).styleSheet())
-        acts = {a.text().replace("&", ""): a for a in btn._explain_menu.actions()}
+        explain = next(
+            a for a in ask_btn.menu().actions()
+            if a.menu() is not None and "Explain" in a.text().replace("&", "")
+        )
+        acts = {a.text().replace("&", ""): a for a in explain.menu().actions()}
         self.assertIn("Quick", acts)
         self.assertIn("Technical", acts)
         self.assertIn("Deep", acts)
@@ -309,17 +328,22 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         self.assertEqual(dlg.wants_ai_finding_id, "f1")
 
     def test_analysis_dialog_query_ai_opens_settings_when_disabled(self):
-        from PySide6.QtWidgets import QApplication, QPushButton
+        from PySide6.QtWidgets import QApplication, QToolButton
         from btf_viewer_pkg.stats import _AnalysisFindingsDialog
 
         if QApplication.instance() is None:
             QApplication([])
         dlg = _AnalysisFindingsDialog([], "", ai_enabled=False)
-        ai_btn = next(
-            b for b in dlg.findChildren(QPushButton)
-            if "Query with AI" in b.text().replace("&", "")
+        ask_btn = next(
+            b for b in dlg.findChildren(QToolButton)
+            if "Ask AI" in b.text().replace("&", "")
         )
-        ai_btn.click()
+        acts = {
+            a.text().replace("&", ""): a
+            for a in ask_btn.menu().actions()
+            if a.menu() is None
+        }
+        acts["Query findings…"].trigger()
         self.assertTrue(dlg.wants_ai_query)
         self.assertTrue(dlg._ai_needs_settings)
 

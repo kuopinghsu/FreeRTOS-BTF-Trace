@@ -19,6 +19,17 @@
         <div class="stats-scope-actions">
           <button
             type="button"
+            class="stats-guide-btn"
+            :class="{ open: symptomGuideOpen }"
+            title="Open a symptom shortcut to the first Statistics section"
+            :aria-expanded="symptomGuideOpen"
+            @click="symptomGuideOpen = !symptomGuideOpen"
+          >
+            Where should I start?
+            <span class="stats-guide-caret" aria-hidden="true">{{ symptomGuideOpen ? '▴' : '▾' }}</span>
+          </button>
+          <button
+            type="button"
             class="stats-icon-btn"
             title="Expand all statistics sections"
             aria-label="Expand all statistics sections"
@@ -53,12 +64,43 @@
           </button>
         </div>
       </div>
-      <span class="stats-scope-label">{{ scopeRangeLabel }}</span>
+      <span
+        class="stats-scope-label"
+        :title="showCursorsNotLimitingNote ? 'Cursors are placed, but Limit to C1–Cn is off — Statistics still use the full trace' : ''"
+      >{{ scopeRangeDetail }}</span>
       <span
         v-if="activeFilterLabel"
         class="stats-scope-filtered"
         :title="`Statistics reflect the active Filter: ${activeFilterLabel}`"
       >Filtered: {{ activeFilterLabel }}</span>
+    </div>
+
+    <div
+      v-if="trace && symptomGuideOpen"
+      class="stats-symptom-dropdown"
+      role="region"
+      aria-label="Where should I start"
+    >
+      <p
+        v-if="recommendedSymptomId"
+        class="stats-symptom-rec"
+      >
+        Recommended from Findings: {{ symptomCard(recommendedSymptomId)?.title }}
+      </p>
+      <div class="stats-symptom-grid">
+        <button
+          v-for="card in symptomCards"
+          :key="card.id"
+          type="button"
+          class="stats-symptom-card"
+          :disabled="card.disabled"
+          :title="card.disabled_reason || (card.path || []).join(' → ')"
+          @click="openSymptom(card)"
+        >
+          <strong>{{ card.title }}</strong>
+          <span>{{ (card.path || []).slice(0, 2).join(' → ') }}</span>
+        </button>
+      </div>
     </div>
 
     <div
@@ -3647,7 +3689,7 @@
         class="action-btn"
         data-demo-target="stats_export_html"
         :disabled="!trace"
-        title="Export statistics as HTML report (tables include Search / Show all / CSV)"
+        title="Export statistics as HTML report (tables include Search / Show all)"
         @click="exportHtml"
       >
         <svg
@@ -4364,6 +4406,15 @@ import {
   unifiedJitter,
   waiterOwnerMatrix,
 } from '../utils/uxExplore.js'
+import {
+  CURSORS_NOT_LIMITING_NOTE,
+} from '../utils/analysisContext.js'
+import {
+  availableSymptomCards,
+  recommendSymptomFromFinding,
+  symptomCard,
+  symptomSectionId,
+} from '../utils/statsSymptomLanding.js'
 
 const props = defineProps({
   trace:   { type: Object, default: null },
@@ -4378,6 +4429,9 @@ const props = defineProps({
   sectionPins: { type: Array, default: () => [] },
   sectionOrder: { type: Array, default: () => [] },
   activeFilterLabel: { type: String, default: null },
+  traceFileName: { type: String, default: '' },
+  topFinding: { type: Object, default: null },
+  onClearFilters: { type: Function, default: null },
 })
 
 const emit = defineEmits([
@@ -5027,6 +5081,53 @@ onBeforeUnmount(() => {
 const placedCursorCount = computed(() => getPlacedCursors(props.cursors).length)
 
 const statsRange = computed(() => getStatsRange(props.cursors, scopeToCursorsModel.value))
+
+const symptomGuideOpen = ref(false)
+
+const showCursorsNotLimitingNote = computed(() =>
+  placedCursorCount.value >= 2 && !scopeToCursorsModel.value)
+
+const scopeRangeDetail = computed(() =>
+  showCursorsNotLimitingNote.value
+    ? `${scopeRangeLabel.value}\n${CURSORS_NOT_LIMITING_NOTE}`
+    : scopeRangeLabel.value)
+
+const symptomCards = computed(() => availableSymptomCards({
+  hasSti: (props.trace?.stiEvents?.length || 0) > 0,
+  singleCore: (props.trace?.coreNames?.length || 0) <= 1,
+}))
+
+const recommendedSymptomId = computed(() =>
+  recommendSymptomFromFinding(props.topFinding))
+
+function openSymptom(card) {
+  if (!card || card.disabled) return
+  symptomGuideOpen.value = false
+  const section = symptomSectionId(card)
+  const collapsedRef = {
+    cores: coresCollapsed,
+    exec: execSliceCollapsed,
+    block: blockingCollapsed,
+    migrations: migrationCollapsed,
+    period: periodCollapsed,
+    dispatch: dispatchCollapsed,
+    mutex_block: mutexBlockCollapsed,
+    deadline: deadlineCollapsed,
+    anomalies: anomaliesCollapsed,
+    response: responseCollapsed,
+  }[section]
+  if (collapsedRef) collapsedRef.value = false
+  nextTick(() => {
+    const el = statsBodyRef.value?.querySelector(`[data-section-id="${section}"]`)
+    el?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })
+  })
+}
+
+watch(() => props.trace, (tr) => {
+  if (tr) {
+    symptomGuideOpen.value = false
+  }
+}, { immediate: true })
 
 const scopeSuffixStr = computed(() => scopeSuffix(statsRange.value))
 
@@ -9046,6 +9147,80 @@ defineExpose({
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   letter-spacing: -0.05em;
   white-space: nowrap;
+}
+
+.stats-stale-banner {
+  padding: 6px 10px;
+  font-size: 11px;
+  color: #e6a23c;
+  background: rgba(230, 162, 60, 0.12);
+  border-bottom: 1px solid rgba(230, 162, 60, 0.35);
+}
+
+.stats-guide-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border, #3a4658);
+  background: transparent;
+  color: var(--text-muted, #9aabb8);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.stats-guide-btn.open,
+.stats-guide-btn:hover {
+  color: var(--accent, #5b9bd5);
+  border-color: var(--accent, #2a6fb2);
+}
+.stats-guide-caret {
+  font-size: 9px;
+  opacity: 0.8;
+}
+
+.stats-symptom-dropdown {
+  padding: 8px;
+  border-bottom: 1px solid var(--border, #3a4658);
+  background: var(--panel-alt, rgba(0, 0, 0, 0.08));
+}
+
+.stats-symptom-rec {
+  margin: 0 0 8px;
+  font-size: 11px;
+  opacity: 0.9;
+}
+
+.stats-symptom-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.stats-symptom-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #3a4658);
+  background: var(--panel, transparent);
+  font-size: 11px;
+  cursor: pointer;
+  color: inherit;
+}
+.stats-symptom-card:hover:not(:disabled) {
+  border-color: var(--accent, #2a6fb2);
+}
+.stats-symptom-card:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.stats-symptom-card span {
+  opacity: 0.75;
+  font-size: 10px;
 }
 
 @media (max-width: 720px) {

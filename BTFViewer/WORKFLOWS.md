@@ -235,6 +235,16 @@ Interpret common patterns cautiously:
 
 You have selected one measured sample or recurring pattern that deserves timeline inspection.
 
+<a id="trace-quality" name="trace-quality"></a>
+## Trace quality banner
+
+When capture metadata reports overflow, truncation, or missing instrumentation, a **trace-quality banner** appears with **Review details**, **Continue with limitations**, and **Open capture guidance** (WORKFLOWS). Grouped details list affected Statistics and AI conclusions.
+
+<a id="guided-first-review" name="guided-first-review"></a>
+## Guided first review
+
+The guided demo (toolbar or Help) walks a sample trace end-to-end.
+
 <a id="workflow-step-6" name="workflow-step-6"></a>
 ## Step 6 — Use Analysis Findings for triage
 
@@ -244,9 +254,10 @@ For each relevant finding:
 
 1. Read its severity, title, measured value, and **Evidence** line.
 2. Treat severity as attention priority, not failure probability.
-3. Select **Show Evidence** to center the timeline on the cited event without changing Scope or Filters.
+3. Select **Show on timeline** to center the timeline on the cited event without changing Scope or Filters.
 4. Select **Investigate** to open the supporting Statistics section and apply a recommended cursor range when offered.
 5. Confirm that the Statistics value, task name, and timestamp match the finding.
+6. Mark **Done** when reviewed, **Dismiss…** with a short reason when not applicable, or **Add to case** to pin the finding on the AI Case.
 
 If no relevant finding exists, continue from the measured Statistics sample. A missing finding does not mean the task has no problem; the symptom may not match a built-in heuristic.
 
@@ -274,7 +285,7 @@ Full-trace Statistics can mix startup, steady-state, overload, recovery, and shu
 2. Place **C1** before the activity that may have triggered the delay.
 3. Place **C2** after `ControlTask` completes or recovers. Additional cursors may mark intermediate evidence.
 4. Select **Fit Cursors** (`Ctrl+R`) to display the earliest–latest cursor span.
-5. Enable **Limit to C1–Cn** in Statistics.
+5. Enable **Limit to C1–Cn** in Statistics (Desktop and Web also show a banner: **Use C1–Cn as analysis Scope** → **Enable Limit to C1–Cn**).
 6. Confirm the status bar and Statistics header show **Scope: C1–Cn · duration**.
 7. Recheck the **Filtered:** indicator. Clear unintended task, core, or migration Filters.
 8. Reopen **Analysis** so findings use the same Scope.
@@ -531,7 +542,7 @@ Useful outputs include:
 - Bookmarks and Annotations for important timestamps;
 - an annotated Snapshot or Timeline SVG;
 - **Save cursor range as BTF** for the selected incident;
-- Statistics **Export HTML**, whose individual tables provide their own CSV downloads;
+- Statistics **Export HTML** (self-contained report with searchable tables);
 - Trace Compare **Export HTML**; and
 - AI diagnostic report or Investigation Case when AI was used.
 

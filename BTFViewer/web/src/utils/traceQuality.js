@@ -52,3 +52,55 @@ export function traceQualitySummary(trace) {
   if (!warnings.length) return null
   return warnings.join(' · ')
 }
+
+const QUALITY_GROUPS = {
+  incomplete_capture: ['ringOverflow', 'taskTableOverflow', 'truncated', 'overflow', 'truncat'],
+  missing_event_type: ['sti', 'instrument', 'missing event'],
+  invalid_pairing: ['pair', 'unmatched', 'interval'],
+  timestamp_order: ['order', 'timestamp', 'version'],
+  unsupported_measurement: ['unsupported', 'not instrumented'],
+}
+
+const AFFECTED_BY_GROUP = {
+  incomplete_capture: ['Timeline Anomalies', 'Worst Events', 'Response Time', 'AI conclusions'],
+  missing_event_type: ['Blocking Time', 'Mutex Blocking', 'Waiter × Owner', 'Dispatch latency'],
+  invalid_pairing: ['Period / Jitter', 'Recurring Patterns', 'Intervals'],
+  timestamp_order: ['All time-ordered statistics', 'Critical Path'],
+  unsupported_measurement: ['Response Time', 'Task Health', 'Priority Inheritance'],
+}
+
+function classifyWarning(line) {
+  const low = String(line || '').toLowerCase()
+  for (const [group, needles] of Object.entries(QUALITY_GROUPS)) {
+    if (needles.some(n => low.includes(n))) return group
+  }
+  return 'incomplete_capture'
+}
+
+export function traceQualityReport(trace) {
+  const warnings = collectTraceQualityWarnings(trace)
+  if (!warnings.length) {
+    return { ok: true, summary: '', groups: [], actions: [] }
+  }
+  const grouped = {}
+  for (const line of warnings) {
+    const gid = classifyWarning(line)
+    if (!grouped[gid]) grouped[gid] = []
+    grouped[gid].push(line)
+  }
+  const groups = Object.entries(grouped).map(([gid, lines]) => ({
+    id: gid,
+    title: gid.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+    lines,
+    affected: [...(AFFECTED_BY_GROUP[gid] || [])],
+  }))
+  return {
+    ok: false,
+    summary: traceQualitySummary(trace) || '',
+    groups,
+    actions: [
+      { id: 'continue', label: 'Continue with limitations' },
+      { id: 'guidance', label: 'Open capture guidance' },
+    ],
+  }
+}

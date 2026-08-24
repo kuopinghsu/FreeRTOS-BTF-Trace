@@ -57,28 +57,6 @@
     />
 
     <div
-      v-if="showFirstRunGuide"
-      class="first-run-banner"
-      role="status"
-    >
-      <span class="first-run-text">New to BTFViewer? Start with Statistics → Analysis Findings.</span>
-      <button
-        type="button"
-        class="first-run-btn primary"
-        @click="onFirstRunShowMe"
-      >
-        Show Me
-      </button>
-      <button
-        type="button"
-        class="first-run-btn"
-        @click="dismissFirstRunGuide"
-      >
-        Dismiss
-      </button>
-    </div>
-
-    <div
       v-if="demoRunning"
       class="demo-status-banner"
       role="status"
@@ -220,11 +198,112 @@
     </div>
 
     <div
-      v-if="traceQualityText"
+      v-if="traceQualityReportData && !traceQualityReportData.ok"
       class="trace-quality-banner"
       role="status"
     >
-      {{ traceQualityText }}
+      <span>{{ traceQualityReportData.summary }}</span>
+      <button
+        type="button"
+        class="first-run-btn"
+        @click="traceQualityDetailsOpen = !traceQualityDetailsOpen"
+      >
+        Review details
+      </button>
+      <button
+        type="button"
+        class="first-run-btn"
+        @click="onTraceQualityContinue"
+      >
+        Continue with limitations
+      </button>
+      <a
+        class="first-run-btn"
+        href="WORKFLOWS.md#trace-quality"
+        target="_blank"
+        rel="noopener"
+      >Open capture guidance</a>
+    </div>
+    <div
+      v-if="traceQualityDetailsOpen && traceQualityReportData?.groups?.length"
+      class="trace-quality-details"
+      role="region"
+      aria-label="Trace quality details"
+    >
+      <div
+        v-for="grp in traceQualityReportData.groups"
+        :key="grp.id"
+        class="trace-quality-group"
+      >
+        <strong>{{ grp.title }}</strong>
+        <ul>
+          <li
+            v-for="(line, i) in grp.lines"
+            :key="i"
+          >{{ line }}</li>
+        </ul>
+        <div
+          v-if="grp.affected?.length"
+          class="trace-quality-affected"
+        >
+          Affects: {{ grp.affected.join(', ') }}
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-if="evidenceInspectorText"
+      class="evidence-inspector-bar"
+      role="status"
+      aria-label="Timeline evidence inspector"
+    >
+      <button
+        type="button"
+        class="first-run-btn"
+        :disabled="!evidenceNav.can_back"
+        title="Previous evidence jump"
+        @click="stepEvidenceBack"
+      >
+        Back
+      </button>
+      <button
+        type="button"
+        class="first-run-btn"
+        :disabled="!evidenceNav.can_forward"
+        title="Next evidence jump"
+        @click="stepEvidenceForward"
+      >
+        Forward
+      </button>
+      <span class="evidence-inspector-text">{{ evidenceInspectorText }}</span>
+    </div>
+
+    <div
+      v-if="showCursorScopeBanner"
+      class="cursor-scope-banner"
+      role="status"
+    >
+      <span>{{ useAsScopePrompt }}</span>
+      <button
+        type="button"
+        class="first-run-btn primary"
+        @click="applyCursorsAsScope"
+      >
+        Enable Limit to C1–Cn
+      </button>
+      <span
+        v-if="multiCursorWarning"
+        class="cursor-scope-warn"
+      >{{ multiCursorWarning }}</span>
+      <button
+        type="button"
+        class="cursor-scope-close"
+        title="Dismiss"
+        aria-label="Dismiss cursor scope helper"
+        @click="dismissCursorScopeBanner"
+      >
+        ×
+      </button>
     </div>
 
     <!-- Trace tabs -->
@@ -612,6 +691,8 @@
                 :section-pins="appSettings.statsPinnedSections || []"
                 :section-order="appSettings.statsSectionOrder || []"
                 :active-filter-label="activeFilterSummaryLabel"
+                :trace-file-name="activeTab?.name || ''"
+                :on-clear-filters="clearAllActiveFilters"
                 @update:open-plot="onOpenPlotChange"
                 @update:section-heights="onSectionHeightsChange"
                 @update:scope-to-cursors="onStatsScopeChange"
@@ -642,6 +723,9 @@
             <div class="panel-section flex-fill">
               <AiAssistantPanel
                 ref="aiPanelRef"
+                :analysis-context="aiAnalysisContext"
+                :show-clear-filters="!!activeFilterSummaryLabel"
+                :on-clear-filters="clearAllActiveFilters"
                 :ai-enabled="appSettings.aiEnabled !== false"
                 :ai-preset="appSettings.aiPreset"
                 :ai-presets="appSettings.aiPresets"
@@ -1068,16 +1152,29 @@
       v-if="analysisOpen && trace"
       :findings="analysisFindings"
       :scope-label="analysisScopeLabel"
+      :analysis-context="findingsAnalysisContext"
+      :context-stale="findingsContextStale"
+      :show-clear-filters="!!activeFilterSummaryLabel"
+      :on-clear-filters="clearAllActiveFilters"
       :ai-enabled="appSettings.aiEnabled !== false"
       :ux-events="analysisUxEvents"
       :time-min="trace.timeMin"
       :time-max="trace.timeMax"
       :quality-warnings="analysisQuality"
+      :triage-state="findingsTriageState"
+      :current-limit="!!(activeTab?.scopeToCursors !== false && placedCursorTimes.length >= 2)"
+      :current-cursor-lo="placedCursorTimes.length >= 2 ? Math.min(...placedCursorTimes) : null"
+      :current-cursor-hi="placedCursorTimes.length >= 2 ? Math.max(...placedCursorTimes) : null"
+      :can-undo-investigate="!!findingsInvestigateUndo"
+      @update:triage-state="onFindingsTriageUpdate"
       @close="analysisOpen = false"
       @query-ai="queryAnalysisWithAi"
       @apply-scope="onApplyFindingScope"
       @investigate="onInvestigateFinding"
+      @undo-investigate="onUndoInvestigateFinding"
       @show-evidence="onShowFindingEvidence"
+      @add-to-case="onAddFindingToCase"
+      @recalculate-context="findingsContextSnapshot = { ...findingsAnalysisContext }"
       @save-recipe="onSaveAnalysisRecipe"
       @save-story="onSaveAnalysisStory"
     />
@@ -1087,6 +1184,7 @@
       :tabs="compareTabs"
       :initial-a="compareInitialA"
       :initial-b="compareInitialB"
+      :analysis-context="compareAnalysisContext"
       :ai-enabled="appSettings.aiEnabled !== false"
       :analysis-settings="appSettings"
       @close="compareOpen = false"
@@ -1415,7 +1513,7 @@ import { loadSettings, saveSettings, applySettingsToRuntime, resizeTabCursors, n
 } from './utils/settingsStore.js'
 import { setTimelineLayout } from './utils/timelineLayout.js'
 import { traceIsMultiCore } from './utils/migrationAnalysis.js'
-import { collectTraceAnalysisFindings, formatAnalysisFindingsText } from './utils/workflowAnalysis.js'
+import { collectTraceAnalysisFindings, formatAnalysisFindingsText, FINDING_SECTION_MAP } from './utils/workflowAnalysis.js'
 import { getPlacedCursors, getStatsRange, scopeSuffix } from './utils/statsRange.js'
 import { buildAllCompareTables, buildCompareCsv, cursorRangeForCursors, traceSummarySnapshot } from './utils/traceCompare.js'
 import {
@@ -1425,6 +1523,7 @@ import {
 import { selectedTaskFromHighlight } from './utils/highlightLock.js'
 import { useTraceTabs } from './composables/useTraceTabs.js'
 import { loadSession, saveSession, buildSessionSnapshot, isRestorableViewport, applySavedLayout, applyTabState, mergeLegacyTabFilters } from './utils/sessionStore.js'
+import { defaultTriageState, normalizeTriageState } from './utils/findingsTriage.js'
 import { putTrace, getTrace, pruneTraces } from './utils/traceCache.js'
 import { computeCursorRangeStats, formatStatusRangeLine } from './utils/rangeStats.js'
 import { cursorSortedPlaced } from './utils/cursorAnalysis.js'
@@ -1450,7 +1549,23 @@ import {
   appendExplainRegionBounds,
   composeAskEventPrompt,
 } from './utils/aiClient.js'
-import { traceQualitySummary, collectTraceQualityWarnings } from './utils/traceQuality.js'
+import { traceQualityReport, collectTraceQualityWarnings } from './utils/traceQuality.js'
+import {
+  shouldOfferUseAsScope,
+  formatUseAsScopePrompt,
+  multiCursorSpanWarning,
+} from './utils/cursorScope.js'
+import {
+  evidenceNavState,
+  pushEvidenceEntry,
+  stepEvidenceHistory,
+  formatEvidenceInspector,
+  SHOW_ON_TIMELINE_LABEL,
+} from './utils/evidenceHistory.js'
+import {
+  buildAnalysisContext,
+  isContextStale,
+} from './utils/analysisContext.js'
 import { isBtfOpenName, loadBtfEntriesFromFile } from './utils/btfLoad.js'
 import {
   classifyOpenFiles,
@@ -1511,6 +1626,8 @@ const inspectorMode = ref('heatmap') // 'heatmap' | 'chord'
 const inspectorFocusPair = ref(null)
 const inspectorVpProgrammatic = ref(false)
 const analysisOpen = ref(false)
+const findingsTriageState = ref(defaultTriageState())
+const findingsInvestigateUndo = ref(null)
 const paletteOpen = ref(false)
 const paletteQuery = ref('')
 const paletteIndex = ref(0)
@@ -1684,19 +1801,132 @@ function showParseError(err, fileName = '') {
   showToast(formatParseError(err, fileName), 'error')
 }
 
-function dismissFirstRunGuide() {
-  appSettings.firstRunDismissed = true
-  saveSettings(appSettings)
+const traceQualityDetailsOpen = ref(false)
+const evidenceHistory = ref({ entries: [], index: -1 })
+const evidenceNav = computed(() => evidenceNavState(evidenceHistory.value))
+const evidenceInspectorText = computed(() =>
+  formatEvidenceInspector(evidenceNavState(evidenceHistory.value).current))
+
+function panelAnalysisContext(panel, panelFilter = '') {
+  const tr = trace.value
+  if (!tr) return buildAnalysisContext({ panel })
+  const scopeOn = activeTab.value?.scopeToCursors !== false
+  const range = getStatsRange(cursors.value, scopeOn)
+  const scopeLabel = range ? `C1–C${range.nCursors}` : 'Full Trace'
+  let scopeDuration = ''
+  if (range) {
+    scopeDuration = formatTime(
+      range.hi - range.lo, tr.timeScale, appSettings.timeDecimals ?? 3)
+  }
+  const filters = activeFilterSummaryLabel.value ? [activeFilterSummaryLabel.value] : []
+  return buildAnalysisContext({
+    traceName: activeTab.value?.name || '',
+    scopeLabel,
+    scopeDuration,
+    filterLabels: filters,
+    sampleCount: tr.segments?.length ?? 0,
+    cursorCount: getPlacedCursors(cursors.value).length,
+    limitToCursors: scopeOn && getPlacedCursors(cursors.value).length >= 2,
+    panel,
+    panelFilter: panelFilter || '',
+  })
 }
 
-function onFirstRunShowMe() {
-  dismissFirstRunGuide()
-  if (!trace.value) {
-    toolbarRef.value?.openFile?.()
-    return
+const findingsAnalysisContext = computed(() => panelAnalysisContext('findings'))
+const aiAnalysisContext = computed(() =>
+  panelAnalysisContext('ai', appSettings.aiContextMode || ''))
+const compareAnalysisContext = computed(() => panelAnalysisContext('compare'))
+
+const findingsContextSnapshot = ref(null)
+watch(analysisOpen, (open) => {
+  if (open) findingsContextSnapshot.value = { ...findingsAnalysisContext.value }
+})
+const findingsContextStale = computed(() =>
+  isContextStale(findingsContextSnapshot.value, findingsAnalysisContext.value))
+
+function recordEvidenceJump(entry) {
+  evidenceHistory.value = pushEvidenceEntry(evidenceHistory.value, entry)
+}
+
+function stepEvidenceBack() {
+  evidenceHistory.value = stepEvidenceHistory(evidenceHistory.value, -1)
+  restoreEvidenceJump(evidenceNavState(evidenceHistory.value).current)
+}
+
+function stepEvidenceForward() {
+  evidenceHistory.value = stepEvidenceHistory(evidenceHistory.value, 1)
+  restoreEvidenceJump(evidenceNavState(evidenceHistory.value).current)
+}
+
+function restoreEvidenceJump(entry) {
+  if (!entry || entry.time == null) return
+  timelinePanelRef.value?.jumpToNs(Number(entry.time))
+  syncTimelineViewport()
+  if (entry.task) onHighlightClick(String(entry.task))
+  if (entry.stats_section) {
+    rightPanelTab.value = 'stats'
+    nextTick(() => {
+      statsPanelRef.value?.applyDemoSections?.({
+        id: entry.stats_section, expand: true, scroll: entry.stats_section,
+      })
+    })
   }
-  focusStatisticsPanel(true)
-  analysisOpen.value = true
+}
+
+const traceQualityReportData = computed(() => traceQualityReport(trace.value))
+
+function onTraceQualityContinue() {
+  traceQualityDetailsOpen.value = false
+}
+
+const placedCursorTimes = computed(() =>
+  (cursors.value || []).filter(c => c != null))
+
+const cursorScopeDismissedCount = ref(null)
+
+const useAsScopePrompt = computed(() => {
+  if (!trace.value) return ''
+  const limited = activeTab.value?.scopeToCursors !== false
+  return shouldOfferUseAsScope(placedCursorTimes.value, { limitToCursors: limited })
+    ? formatUseAsScopePrompt(placedCursorTimes.value)
+    : ''
+})
+
+const showCursorScopeBanner = computed(() => {
+  if (!useAsScopePrompt.value) return false
+  const n = placedCursorTimes.value.length
+  const dismissed = cursorScopeDismissedCount.value
+  if (dismissed != null && n === dismissed) return false
+  return true
+})
+
+const multiCursorWarning = computed(() =>
+  multiCursorSpanWarning(placedCursorTimes.value))
+
+watch(
+  () => placedCursorTimes.value.length,
+  (n) => {
+    // Cursor count changed after dismiss (e.g. C1–C2 → C3) — allow helper again.
+    if (cursorScopeDismissedCount.value != null && n !== cursorScopeDismissedCount.value) {
+      cursorScopeDismissedCount.value = null
+    }
+  },
+)
+
+watch(useAsScopePrompt, (prompt) => {
+  if (!prompt) cursorScopeDismissedCount.value = null
+})
+
+function applyCursorsAsScope() {
+  if (activeTab.value) activeTab.value.scopeToCursors = true
+}
+
+function dismissCursorScopeBanner() {
+  cursorScopeDismissedCount.value = placedCursorTimes.value.length
+}
+
+function clearAllActiveFilters() {
+  for (const chip of activeFilterChips.value) chip.clear()
 }
 
 function onAiStatusMessage(payload) {
@@ -1713,9 +1943,6 @@ function onAiStatusMessage(payload) {
 }
 
 const demoRunning = ref(false)
-const showFirstRunGuide = computed(
-  () => !appSettings.firstRunDismissed && !trace.value && !demoRunning.value && !loading.value,
-)
 const demoPaused = ref(false)
 const demoRecording = ref(false)
 const demoStatusText = ref('')
@@ -2668,6 +2895,8 @@ watch(activeTabId, (newId, oldId) => {
     inspectorOpen.value = false
     inspectorFocusPair.value = null
     analysisOpen.value = false
+    findingsTriageState.value = defaultTriageState()
+    findingsInvestigateUndo.value = null
     const leaving = tabs.value.find(t => t.id === oldId)
     if (leaving) saveFiltersToActiveTab(leaving)
   }
@@ -3328,10 +3557,16 @@ function onStatsPlotPointActivate({ ns, note, segment, interval, priorityRange, 
   scheduleSessionSave()
 }
 
-function onStatsSegmentJump(ns) {
+function onStatsSegmentJump(ns, meta = {}) {
   // Matches desktop's _on_segment_jump: scroll the timeline to ns without
   // zooming or adding an annotation (e.g. Task Lifecycle / Core-Pair rows).
   if (ns == null) return
+  recordEvidenceJump({
+    time: Number(ns),
+    task: meta.task || meta.mk || '',
+    source_metric: meta.source || SHOW_ON_TIMELINE_LABEL,
+    stats_section: meta.section || '',
+  })
   timelinePanelRef.value?.jumpToNs(ns)
   syncTimelineViewport()
   scheduleRender()
@@ -3492,11 +3727,44 @@ function onApplyFindingScope(finding) {
 /** Step-1 item 7: plain, non-AI Investigate — scope the finding then jump to its Statistics section. */
 async function onInvestigateFinding({ finding, sectionId } = {}) {
   if (!finding || !sectionId) return
+  findingsInvestigateUndo.value = {
+    cursors: [...(cursors.value || [])],
+    scopeToCursors: activeTab.value?.scopeToCursors !== false,
+    viewport: timelinePanelRef.value?.getViewport?.() || null,
+  }
   onApplyFindingScope(finding)
   // Keep Findings inbox open so Timeline Evidence stays visible (Step 2 #5/#16).
   rightPanelTab.value = 'stats'
   await nextTick()
   statsPanelRef.value?.applyDemoSections?.({ id: sectionId, expand: true, scroll: 'section' })
+}
+
+function onUndoInvestigateFinding() {
+  const snap = findingsInvestigateUndo.value
+  if (!snap) return
+  cursors.value = Array.isArray(snap.cursors) ? [...snap.cursors] : cursors.value
+  if (activeTab.value) activeTab.value.scopeToCursors = !!snap.scopeToCursors
+  onStatsScopeChange(!!snap.scopeToCursors)
+  if (snap.viewport) timelinePanelRef.value?.applyViewport?.(snap.viewport)
+  findingsInvestigateUndo.value = null
+  showToast('Restored Scope from before Investigate', 'info')
+  scheduleSessionSave()
+}
+
+function onFindingsTriageUpdate(state) {
+  findingsTriageState.value = normalizeTriageState(state)
+  scheduleSessionSave()
+}
+
+function onAddFindingToCase(finding) {
+  if (!finding) return
+  const ok = aiPanelRef.value?.addFindingToInvestigationCase?.(finding)
+  if (ok) {
+    showToast('Finding added to AI Case', 'info')
+    scheduleSessionSave()
+  } else {
+    showToast('Could not add finding to Case', 'error')
+  }
 }
 
 /** Step-2 Show Evidence — Timeline jump without changing Scope or Filters. */
@@ -3526,6 +3794,12 @@ function onShowFindingEvidence(finding) {
   syncTimelineViewport()
   const highlightKey = String(target.mk || target.task || '').trim()
   if (highlightKey) onHighlightClick(highlightKey)
+  recordEvidenceJump({
+    time: ns,
+    task: highlightKey,
+    source_metric: String(finding.title || 'Finding'),
+    stats_section: (finding.id && FINDING_SECTION_MAP?.[finding.id]) || '',
+  })
   const multi = target.multi ? ' (one of several)' : ''
   showToast(
     `Evidence${multi}: ${target.note || 'located'} — Scope/Filters unchanged`,
@@ -3710,6 +3984,10 @@ watch(rightPanelTab, (tab) => {
 function onAiJump(t) {
   if (t == null || !Number.isFinite(Number(t))) return
   const ns = Number(t)
+  recordEvidenceJump({
+    time: ns,
+    source_metric: 'AI evidence',
+  })
   timelinePanelRef.value?.jumpToNs(ns)
   syncTimelineViewport()
   if (!trace.value) return
@@ -5730,6 +6008,9 @@ onMounted(async () => {
     await nextTick()
     aiPanelRef.value?.restoreInvestigation?.(saved.aiCase)
   }
+  if (saved?.findingsTriage) {
+    findingsTriageState.value = normalizeTriageState(saved.findingsTriage)
+  }
   // Auto-load the demo trace only when explicitly requested via ?demo in the URL.
   if (new URLSearchParams(window.location.search).has('demo')) {
     onLoadDemo()
@@ -5880,6 +6161,7 @@ function scheduleSessionSave() {
       tabs: tabs.value,
       activeTabId: activeTabId.value,
       aiCase: aiPanelRef.value?.investigationSnapshot?.() || null,
+      findingsTriage: findingsTriageState.value,
     })
     _savedTabStateByTraceName = snapshot.tabStateByTraceName ?? {}
     saveSession(snapshot)
@@ -6208,11 +6490,83 @@ body {
 
 .trace-quality-banner {
   flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   padding: 6px 12px;
   font-size: 12px;
   background: #5c3d00;
   color: #ffe8a3;
   border-bottom: 1px solid #8a6200;
+}
+
+.trace-quality-details {
+  padding: 8px 12px 10px;
+  font-size: 11px;
+  background: rgba(92, 61, 0, 0.25);
+  border-bottom: 1px solid #8a6200;
+}
+
+.trace-quality-group + .trace-quality-group {
+  margin-top: 8px;
+}
+
+.trace-quality-affected {
+  margin-top: 4px;
+  opacity: 0.85;
+}
+
+.cursor-scope-banner,
+.evidence-inspector-bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  background: #1a3348;
+  color: #cdefff;
+  border-bottom: 1px solid #2a5a70;
+}
+
+.cursor-scope-close {
+  /* Match .trace-tab-close (Web tab close affordance). */
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #cdefff;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.65;
+}
+
+.cursor-scope-close:hover {
+  opacity: 1;
+  background: rgba(127, 127, 127, 0.2);
+}
+
+.evidence-inspector-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: monospace;
+  font-size: 11px;
+  opacity: 0.95;
+}
+
+.cursor-scope-warn {
+  font-size: 11px;
+  opacity: 0.9;
 }
 
 .demo-status-banner {
@@ -6764,10 +7118,6 @@ body.row-resizing * {
     grid-template-columns: 1fr;
   }
 
-  .first-run-banner {
-    padding: 6px 8px;
-  }
-
   .right-panel {
     min-width: 220px;
   }
@@ -6810,22 +7160,6 @@ body.row-resizing * {
 
 .loading-cancel-btn:hover {
   background: var(--tb-btn-hover);
-}
-
-.first-run-banner {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding: 8px 12px;
-  background: color-mix(in srgb, var(--accent) 12%, var(--panel-bg));
-  border-bottom: 1px solid var(--border);
-  font-size: var(--type-body);
-}
-
-.first-run-text {
-  flex: 1 1 200px;
-  color: var(--fg);
 }
 
 .first-run-btn {

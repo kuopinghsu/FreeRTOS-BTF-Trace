@@ -298,8 +298,8 @@ BTFViewer 的所有結果都由已記錄的 BTF 事件計算而來。它不會�
 - 最相關的支持指標。
 - **Evidence** 列，將量測到的現象與後續解讀分開顯示。
 - **Investigate** — 套用建議的 Scope，並在不使用 AI 的情況下開啟相關 Statistics 區段。
-- **Show Evidence** — 將時間軸移至支持此結果的事件，不會變更 Scope 或 Filters。
-- 設定 AI Assistant 後，可使用選用的 AI 操作。
+- **Show on timeline** — 將時間軸移至支持此結果的事件，不會變更 Scope 或 Filters。
+- 設定 AI Assistant 後，可透過 **Ask AI** 選單使用查詢、驗證、說明、根因與自動調查等操作。
 
 請將 Finding 視為線索，而非已確認的根因。若 Finding 建議有用的時間窗，請套用游標後再於該 Scope 內重查 Statistics。
 

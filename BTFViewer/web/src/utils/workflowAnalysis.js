@@ -19,6 +19,7 @@ import {
   enrichFindingsWithIds,
 } from './aiInvestigation.js'
 import { htmlFindingCards } from './statsHtmlReport.js'
+import { formatTriageAuditText } from './findingsTriage.js'
 
 const FINDING_CAP = 5
 const LOAD_SIGMA_WARN = 30.0
@@ -355,7 +356,9 @@ function escHtml(v) {
 }
 
 /** @param {{severity: string, title: string, text: string}[]} findings */
-export function formatAnalysisFindingsText(findings, scopeSuffix = '') {
+export function formatAnalysisFindingsText(findings, scopeSuffix = '', {
+  triageState = null,
+} = {}) {
   const lines = [`Analysis Findings${scopeSuffix || ''}`.trimEnd(), '']
   lines.push(
     'Heuristic summary of load balance, WCET, blocking, thrashing, deadlines, tick health, and sync.',
@@ -379,6 +382,13 @@ export function formatAnalysisFindingsText(findings, scopeSuffix = '') {
       }
       lines.push('')
     })
+  }
+  if (triageState) {
+    const audit = formatTriageAuditText(findings, triageState)
+    if (audit) {
+      lines.push('')
+      lines.push(audit)
+    }
   }
   return `${lines.join('\n').replace(/\n+$/, '')}\n`
 }

@@ -90,6 +90,7 @@ export const EVIDENCE_PANEL_TOOLS = [
   'investigate',
   'correlate_events',
   'find_critical_path',
+  'detect_priority_inversion',
   'compare_performance',
   'explain_finding',
   'interpret_query',
@@ -659,6 +660,33 @@ export function extractEvidencePanelPayload(toolName, result) {
     payload.confidence = data.correlation != null
       ? `Correlation ${data.correlation}`
       : 'Medium'
+  } else if (name === 'detect_priority_inversion' || data.inversions != null) {
+    const inversions = (data.inversions || []).filter(inv => inv && typeof inv === 'object')
+    const task = String(data.task || '')
+    payload.conclusion = String(
+      result.message
+      || data.message
+      || (inversions.length
+        ? `${inversions.length} priority inversion(s)`
+        : 'No priority inversion suspects'),
+    )
+    payload.evidence = inversions.slice(0, 15).map((inv) => {
+      const pattern = String(inv.pattern || '').trim() || 'L/M/H inversion'
+      let label = `priority: ${pattern}`
+      if (inv.low) label += ` low=${inv.low}`
+      if (inv.medium) label += ` med=${inv.medium}`
+      if (inv.high) label += ` high=${inv.high}`
+      const start = inv.time
+      const stop = (start != null && inv.duration != null)
+        ? Number(start) + Number(inv.duration)
+        : start
+      return { label, time: start, start, stop }
+    })
+    if (inversions.length) {
+      payload.evidence_chain = `${inversions.length} priority-inversion episode(s)`
+        + (task ? ` involving ${task}` : '')
+    }
+    payload.confidence = String(data.confidence || 'Medium')
   } else if (name === 'compare_performance' || data.checks) {
     const primary = data.primary
     payload.conclusion = primary && typeof primary === 'object'

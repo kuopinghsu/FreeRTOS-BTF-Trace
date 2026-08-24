@@ -50,6 +50,7 @@ class BundleRelativeImportRewriteTests(unittest.TestCase):
         if not bundle.is_file():
             self.skipTest("builds/btf_viewer.py missing")
         text = bundle.read_text(encoding="utf-8")
+        self.assertIn('globals().get("FIND_RECOMPUTE")', text)
         self.assertIn('globals().get("recompute_find_hits")', text)
         # Old broken pattern: try/pass then only assign in except.
         self.assertNotRegex(
@@ -57,6 +58,49 @@ class BundleRelativeImportRewriteTests(unittest.TestCase):
             r"try:\n\s+pass\n\s+except ImportError:\n"
             r"\s+_recompute_find_hits = globals\(\)\.get",
         )
+
+    def test_bundled_correlate_med267_no_such_group(self) -> None:
+        """Desktop monolith: ai_mermaid must not clobber ai_tools task-id RE.
+
+        A shared ``_TASK_ID_RE`` name made ``_task_match_aliases('Med[267]')``
+        call ``m.group(1)`` on a pattern with no groups → IndexError
+        ``no such group``, failing correlate/critical-path in the GUI only.
+        """
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        bundle = BTF_ROOT / "builds" / "btf_viewer.py"
+        if not bundle.is_file():
+            self.skipTest("builds/btf_viewer.py missing")
+        text = bundle.read_text(encoding="utf-8")
+        self.assertIn("_TASK_ID_SUFFIX_RE", text)
+        self.assertIn("_MERMAID_TASK_ID_RE", text)
+        # Capturing suffix pattern must remain the binding used by aliases.
+        self.assertIn(r'_TASK_ID_SUFFIX_RE = re.compile(r"\[(\d+)\]\s*$")', text)
+
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "btf_viewer_bundle_med267", bundle)
+        mod = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        sys.modules["btf_viewer_bundle_med267"] = mod
+        spec.loader.exec_module(mod)
+
+        aliases = mod._task_match_aliases("Med[267]")
+        self.assertIn("267", aliases)
+        self.assertIn("Med", aliases)
+
+        trace_path = BTF_ROOT.parent / "tracedata" / "example-8cores.btf.gz"
+        if not trace_path.is_file():
+            self.skipTest("missing example-8cores.btf.gz")
+        tr = mod._parse_btf(str(trace_path))
+        corr = mod.correlate_task_events(
+            tr, "Med[267]", around_time=3087000.0, window=2000.0)
+        self.assertTrue(corr.get("ok"), corr.get("message"))
+        self.assertNotIn("no such group", str(corr.get("message") or "").lower())
+        cp = mod.find_critical_path_task(tr, "Med[267]", timestamp=3087000.0)
+        self.assertTrue(cp.get("ok"), cp.get("message"))
 
 
 if __name__ == "__main__":

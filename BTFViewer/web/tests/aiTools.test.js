@@ -137,6 +137,22 @@ describe('aiTools', () => {
     assert.equal(summariseToolCall('reset_view', {}), 'Reset view')
   })
 
+  it('find_critical_path accepts singleton timestamp arrays', () => {
+    const v = validateToolCall('find_critical_path', {
+      task: 'Med[267]',
+      timestamp: [3087194],
+    })
+    assert.equal(v.error, '')
+    assert.equal(v.args.task, 'Med[267]')
+    assert.equal(v.args.timestamp, 3087194)
+    const label = summariseToolCall('find_critical_path', {
+      task: 'Med[267]',
+      timestamp: [3087194],
+    })
+    assert.match(label, /3087194/)
+    assert.equal(label.includes('[3087194]'), false)
+  })
+
   it('searchTimelineHits wraps Find', () => {
     const out = searchTimelineHits(
       { segByMergeKey: new Map(), taskRepr: new Map(), migrations: [] },

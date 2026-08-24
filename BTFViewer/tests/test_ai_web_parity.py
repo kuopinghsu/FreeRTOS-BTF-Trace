@@ -253,15 +253,9 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("Apply cursors", stats)
         self.assertIn("best_finding_scope,", stats)
         self.assertNotRegex(stats, r"(?m)^\s+from \.ux_explore import")
-        self.assertIn("emit('query-ai', 'investigate')", dlg)
-        # Desktop wires templates via _make_ai_btn(..., template) → _query_with_ai.
-        self.assertRegex(
-            stats,
-            re.compile(
-                r'_make_ai_btn\(\s*"Investigate…".*?"investigate"',
-                re.DOTALL,
-            ),
-        )
+        # Web Ask AI menu → emit('query-ai', payload); Desktop Ask AI menu → _query_with_ai.
+        self.assertIn("askAi('investigate')", dlg)
+        self.assertIn('ask_menu.addAction("Investigate…")', stats)
         self.assertIn("self._query_with_ai(", stats)
         self.assertIn("wants_ai_template", stats)
         self._assert_stats_export_titles_match()
@@ -1484,6 +1478,16 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("EVIDENCE_PANEL_TOOLS", inv_js)
         self.assertIn("def merge_evidence_panel_payload", inv_py)
         self.assertIn("export function mergeEvidencePanelPayload", inv_js)
+        ctx_py = (BTF_ROOT / "btf_viewer_pkg/analysis_context.py").read_text(encoding="utf-8")
+        ctx_js = (BTF_ROOT / "web/src/utils/analysisContext.js").read_text(encoding="utf-8")
+        self.assertIn("def build_analysis_context", ctx_py)
+        self.assertIn("export function buildAnalysisContext", ctx_js)
+        self.assertIn("def is_context_stale", ctx_py)
+        self.assertIn("export function isContextStale", ctx_js)
+        tq_py = (BTF_ROOT / "btf_viewer_pkg/trace_quality.py").read_text(encoding="utf-8")
+        tq_js = (BTF_ROOT / "web/src/utils/traceQuality.js").read_text(encoding="utf-8")
+        self.assertIn("def trace_quality_report", tq_py)
+        self.assertIn("export function traceQualityReport", tq_js)
         planner_py = (BTF_ROOT / "btf_viewer_pkg/ai_planner.py").read_text(
             encoding="utf-8")
         planner_js = (BTF_ROOT / "web/src/utils/aiPlanner.js").read_text(
@@ -1644,8 +1648,9 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("wants_ai_level", stats)
         dlg = (BTF_ROOT / "web/src/components/AnalysisFindingsDialog.vue").read_text(
             encoding="utf-8")
-        self.assertIn("Explain…", stats)
-        self.assertIn("Explain…", dlg)
+        # Explain is an Ask AI submenu (not a standalone "Explain…" button).
+        self.assertIn('ask_menu.addMenu("Explain")', stats)
+        self.assertIn(">Explain</div>", dlg)
         self.assertIn('"explain_finding"', stats)
         self.assertIn("'explain_finding'", dlg)
         # Desktop Tool window ↔ Web floating tool host (not modal overlay / right dock).
@@ -1658,9 +1663,11 @@ class AiWebParityTests(unittest.TestCase):
         self.assertNotIn("dialog-overlay", dlg)
         self.assertNotIn("dockRightPx", dlg)
         self.assertNotIn("dock-right-px", app)
-        for level in ("Quick", "Technical", "Deep"):
-            self.assertIn(level, stats, level)
-            self.assertIn(level, dlg, level)
+        # Explain levels are built at runtime (Desktop .title() / Web capitalize).
+        self.assertIn("EXPLAIN_LEVELS", stats)
+        self.assertIn("str(level).title()", stats)
+        self.assertIn("EXPLAIN_LEVELS", dlg)
+        self.assertIn("explainLevels", dlg)
         self.assertIn("onHypothesisAction", panel)
         self.assertIn("_on_hypothesis_action", assist)
 
@@ -1867,21 +1874,19 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn('v-for="tpl in investigationTemplates"', panel)
 
         findings = [
-            "Query with AI…", "Investigate…", "Verify with AI…", "Explain…",
+            "Query findings…", "Investigate…", "Verify…", "Explain",
             "Root cause…", "Auto investigate…", "Save recipe…", "Story…",
         ]
-        pos = 0
         for label in findings:
-            nxt = dlg.find(label, pos)
-            self.assertGreaterEqual(nxt, 0, f"web findings: {label}")
-            pos = nxt
+            self.assertIn(label, dlg, f"web findings: {label}")
         desk_row = [
-            r'_make_ai_btn\(\s*"Query with AI…"',
-            r'_make_ai_btn\(\s*"Investigate…"',
-            r'_make_ai_btn\(\s*"Verify with AI…"',
-            r'_make_explain_btn\(\)',
-            r'_make_ai_btn\(\s*"Root cause…"',
-            r'_make_ai_btn\(\s*"Auto investigate…"',
+            r'Ask AI',
+            r'addAction\("Query findings…"',
+            r'addAction\("Investigate…"',
+            r'addAction\("Verify…"',
+            r'addMenu\("Explain"\)',
+            r'addAction\("Root cause…"',
+            r'addAction\("Auto investigate…"',
             r'Save recipe…',
             r'Story…',
         ]
@@ -1893,9 +1898,9 @@ class AiWebParityTests(unittest.TestCase):
         self.assertEqual(list(EXPLAIN_LEVELS), ["quick", "technical", "deep"])
         self.assertIn("for level in EXPLAIN_LEVELS", stats)
         self.assertIn("EXPLAIN_LEVELS.map", dlg)
-        self.assertIn('<Teleport to="body">', dlg)
-        self.assertIn("function placeExplainMenu", dlg)
-        self.assertIn("function toggleExplain", dlg)
+        # Web Explain submenu is inline under Ask AI (no separate Explain popup).
+        self.assertIn("askAiOpen", dlg)
+        self.assertIn("toggleAskAi", dlg)
         self.assertIn("query_template", assist)
         self.assertIn("extra=ex", (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(
             encoding="utf-8"))
@@ -2245,6 +2250,125 @@ console.log(JSON.stringify({
         self.assertIn("if (!aiFeatureEnabled.value) return", tl)
         self.assertIn(':ai-enabled="appSettings.aiEnabled !== false"', app)
         self.assertIn("view.set_ai_enabled(self._ai_feature_enabled())", mw)
+
+    def test_ai_prompts_identical_desktop_and_web(self) -> None:
+        """System / template / case prompts and tool schemas must match byte-for-byte."""
+        from btf_viewer_pkg.ai_assistant import (
+            AI_RESPONSE_LANGUAGES,
+            AI_SMP_ONLY_TEMPLATE_IDS,
+            AI_TEMPLATE_INTENT_GROUPS,
+            AI_TEMPLATE_MENU_GROUPS,
+            AI_TEMPLATE_PRIMARY_IDS,
+            AI_TEMPLATE_QUESTIONS,
+            DEFAULT_AI_RESPONSE_LANGUAGE,
+            build_ai_system_prompt,
+            compose_ask_event_prompt,
+        )
+        from btf_viewer_pkg.ai_case import (
+            AI_CONTEXT_MODES,
+            INVESTIGATION_MODES,
+            VALIDATE_EXPERIMENT_PROMPT,
+            context_mode_system_addendum,
+            interpreted_run_prompt,
+            investigation_mode_prompt,
+            investigation_template_prompt,
+        )
+
+        web = self._node_json(
+            "import {\n"
+            "  AI_SYSTEM_PROMPT, AI_TEMPLATE_QUESTIONS, buildAiSystemPrompt,\n"
+            "  AI_TEMPLATE_PRIMARY_IDS, AI_TEMPLATE_MENU_GROUPS,\n"
+            "  AI_TEMPLATE_INTENT_GROUPS, AI_SMP_ONLY_TEMPLATE_IDS,\n"
+            "  AI_RESPONSE_LANGUAGES, DEFAULT_AI_RESPONSE_LANGUAGE,\n"
+            "  ASK_EVENT_PROMPT, composeAskEventPrompt,\n"
+            "} from './src/utils/aiClient.js'\n"
+            "import { AI_TOOL_SYSTEM_ADDENDUM, aiViewerTools } from './src/utils/aiTools.js'\n"
+            "import {\n"
+            "  VALIDATE_EXPERIMENT_PROMPT, interpretedRunPrompt,\n"
+            "  investigationModePrompt, investigationTemplatePrompt,\n"
+            "  contextModeSystemAddendum, AI_CONTEXT_MODES, INVESTIGATION_MODES,\n"
+            "} from './src/utils/aiCase.js'\n"
+            "const event = { task: 'Med[267]', core: 'Core_0', ns: 3087194,\n"
+            "  start: 3087000, end: 3087200 }\n"
+            "console.log(JSON.stringify({\n"
+            "  system: AI_SYSTEM_PROMPT,\n"
+            "  addendum: AI_TOOL_SYSTEM_ADDENDUM,\n"
+            "  compose_en: buildAiSystemPrompt('English'),\n"
+            "  templates: AI_TEMPLATE_QUESTIONS.map(t => (\n"
+            "    { id: t.id, label: t.label, prompt: t.prompt })),\n"
+            "  primary: AI_TEMPLATE_PRIMARY_IDS,\n"
+            "  menu: AI_TEMPLATE_MENU_GROUPS,\n"
+            "  intent: AI_TEMPLATE_INTENT_GROUPS,\n"
+            "  smp: [...AI_SMP_ONLY_TEMPLATE_IDS].sort(),\n"
+            "  langs: AI_RESPONSE_LANGUAGES,\n"
+            "  defLang: DEFAULT_AI_RESPONSE_LANGUAGE,\n"
+            "  ask: ASK_EVENT_PROMPT,\n"
+            "  ask_compose: composeAskEventPrompt(event),\n"
+            "  validate: VALIDATE_EXPERIMENT_PROMPT,\n"
+            "  irp: interpretedRunPrompt('test question'),\n"
+            "  itp: investigationTemplatePrompt('investigate'),\n"
+            "  modes: [...AI_CONTEXT_MODES],\n"
+            "  invModes: [...INVESTIGATION_MODES],\n"
+            "  addenda: Object.fromEntries(\n"
+            "    [...AI_CONTEXT_MODES].map(m => [m, contextModeSystemAddendum(m)])),\n"
+            "  imps: Object.fromEntries(\n"
+            "    [...INVESTIGATION_MODES].map(m => [m, investigationModePrompt(m)])),\n"
+            "  tools: aiViewerTools(),\n"
+            "}))\n"
+        )
+        self.assertIsInstance(web, dict)
+
+        self.assertEqual(web["system"], AI_SYSTEM_PROMPT)
+        self.assertEqual(web["addendum"], AI_TOOL_SYSTEM_ADDENDUM)
+        self.assertEqual(web["compose_en"], build_ai_system_prompt("English"))
+        self.assertEqual(web["ask"], ASK_EVENT_PROMPT)
+        self.assertEqual(
+            web["ask_compose"],
+            compose_ask_event_prompt({
+                "task": "Med[267]", "core": "Core_0", "ns": 3087194,
+                "start": 3087000, "end": 3087200,
+            }),
+        )
+        self.assertEqual(web["validate"], VALIDATE_EXPERIMENT_PROMPT)
+        self.assertEqual(web["irp"], interpreted_run_prompt("test question"))
+        self.assertEqual(web["itp"], investigation_template_prompt("investigate"))
+        self.assertEqual(web["defLang"], DEFAULT_AI_RESPONSE_LANGUAGE)
+        self.assertEqual(tuple(web["langs"]), AI_RESPONSE_LANGUAGES)
+        self.assertEqual(list(web["primary"]), list(AI_TEMPLATE_PRIMARY_IDS))
+        self.assertEqual(sorted(web["smp"]), sorted(AI_SMP_ONLY_TEMPLATE_IDS))
+        self.assertEqual(list(web["modes"]), list(AI_CONTEXT_MODES))
+        self.assertEqual(list(web["invModes"]), list(INVESTIGATION_MODES))
+
+        py_menu = [{"label": g, "ids": list(ids)} for g, ids in AI_TEMPLATE_MENU_GROUPS]
+        self.assertEqual(web["menu"], py_menu)
+        py_intent = [
+            {"label": g, "ids": list(ids)} for g, ids in AI_TEMPLATE_INTENT_GROUPS
+        ]
+        self.assertEqual(web["intent"], py_intent)
+
+        py_templates = [
+            {"id": tid, "label": lab, "prompt": prompt}
+            for tid, lab, prompt in AI_TEMPLATE_QUESTIONS
+        ]
+        self.assertEqual(web["templates"], py_templates)
+
+        for mode in AI_CONTEXT_MODES:
+            self.assertEqual(
+                web["addenda"][mode],
+                context_mode_system_addendum(mode),
+                mode,
+            )
+        for mode in INVESTIGATION_MODES:
+            self.assertEqual(
+                web["imps"][mode],
+                investigation_mode_prompt(mode),
+                mode,
+            )
+
+        py_tools = ai_viewer_tools()
+        self.assertEqual(len(web["tools"]), len(py_tools))
+        for js_t, py_t in zip(web["tools"], py_tools):
+            self.assertEqual(js_t, py_t, (js_t.get("function") or {}).get("name"))
 
 
 if __name__ == "__main__":

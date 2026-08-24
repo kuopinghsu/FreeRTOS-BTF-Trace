@@ -160,7 +160,7 @@ class TraceCompareTests(unittest.TestCase):
         self.assertIn("detail-note", html)
         self.assertIn("Search table", html)
         self.assertIn("Show all", html)
-        self.assertIn("data-csv", html)
+        self.assertNotIn("data-csv", html)
         self.assertIn("toc-count", html)
         self.assertIn("report-toc-lead", html)
         self.assertIn("CPU and Migrations", html)

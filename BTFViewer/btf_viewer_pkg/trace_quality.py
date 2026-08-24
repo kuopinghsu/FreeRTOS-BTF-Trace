@@ -1,7 +1,7 @@
 """Trace quality / integrity warnings from BTF metadata (parity with web traceQuality.js)."""
 from __future__ import annotations
 
-from typing import Any, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .parser import BtfTrace
@@ -75,3 +75,67 @@ def trace_quality_summary(trace: Optional["BtfTrace"]) -> Optional[str]:
     if not warnings:
         return None
     return " · ".join(warnings)
+
+
+_QUALITY_GROUPS = {
+    "incomplete_capture": (
+        "ringOverflow",
+        "taskTableOverflow",
+        "truncated",
+        "overflow",
+        "truncat",
+    ),
+    "missing_event_type": ("sti", "instrument", "missing event"),
+    "invalid_pairing": ("pair", "unmatched", "interval"),
+    "timestamp_order": ("order", "timestamp", "version"),
+    "unsupported_measurement": ("unsupported", "not instrumented"),
+}
+
+_AFFECTED_BY_GROUP = {
+    "incomplete_capture": [
+        "Timeline Anomalies", "Worst Events", "Response Time", "AI conclusions",
+    ],
+    "missing_event_type": [
+        "Blocking Time", "Mutex Blocking", "Waiter × Owner", "Dispatch latency",
+    ],
+    "invalid_pairing": ["Period / Jitter", "Recurring Patterns", "Intervals"],
+    "timestamp_order": ["All time-ordered statistics", "Critical Path"],
+    "unsupported_measurement": [
+        "Response Time", "Task Health", "Priority Inheritance",
+    ],
+}
+
+
+def _classify_warning(line: str) -> str:
+    low = str(line or "").lower()
+    for group, needles in _QUALITY_GROUPS.items():
+        if any(n in low for n in needles):
+            return group
+    return "incomplete_capture"
+
+
+def trace_quality_report(trace: Optional["BtfTrace"]) -> Dict[str, Any]:
+    """Grouped trace-quality details for Review details (UX-006)."""
+    warnings = collect_trace_quality_warnings(trace)
+    if not warnings:
+        return {"ok": True, "summary": "", "groups": [], "actions": []}
+    grouped: Dict[str, List[str]] = {}
+    for line in warnings:
+        grouped.setdefault(_classify_warning(line), []).append(line)
+    groups = []
+    for gid, lines in grouped.items():
+        groups.append({
+            "id": gid,
+            "title": gid.replace("_", " ").title(),
+            "lines": lines,
+            "affected": list(_AFFECTED_BY_GROUP.get(gid, [])),
+        })
+    return {
+        "ok": False,
+        "summary": trace_quality_summary(trace) or "",
+        "groups": groups,
+        "actions": [
+            {"id": "continue", "label": "Continue with limitations"},
+            {"id": "guidance", "label": "Open capture guidance"},
+        ],
+    }

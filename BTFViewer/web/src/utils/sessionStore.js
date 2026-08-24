@@ -187,7 +187,7 @@ export function mergeLegacyTabFilters(tabStateByTraceName, tabFiltersByTraceName
   return out
 }
 
-export function buildSessionSnapshot({ timelineOptions, layout, tabs, activeTabId, aiCase = null }) {
+export function buildSessionSnapshot({ timelineOptions, layout, tabs, activeTabId, aiCase = null, findingsTriage = null }) {
   const loaded = (tabs || []).filter(t => t?.trace)
   const activeTab = loaded.find(t => t.id === activeTabId) ?? loaded[0] ?? null
   const tabStateByTraceName = buildTabStateByTraceName(loaded)
@@ -207,6 +207,7 @@ export function buildSessionSnapshot({ timelineOptions, layout, tabs, activeTabI
     tabStateByTraceName,
     tabFiltersByTraceName: buildTabFiltersByTraceName(loaded),
     aiCase: aiCase || null,
+    findingsTriage: findingsTriage || null,
   }
 }
 
