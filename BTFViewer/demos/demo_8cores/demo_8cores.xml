@@ -59,8 +59,7 @@
     <point name="toolbar_heatmap" x="0.48" y="0.055"/>
     <point name="toolbar_find" x="0.52" y="0.055"/>
     <point name="limit_checkbox" x="0.82" y="0.16"/>
-    <point name="stats_export_csv" x="0.88" y="0.92"/>
-    <point name="stats_export_html" x="0.88" y="0.96"/>
+    <point name="stats_export_html" x="0.88" y="0.94"/>
     <point name="stats_health" x="0.84" y="0.32"/>
     <point name="stats_tick_dist" x="0.90" y="0.40"/>
   </targets>
@@ -349,9 +348,9 @@
       <move_view time="0"/>
       <panel name="stats"/>
       <wait seconds="0.25"/>
-      <move target="stats_export_csv"/>
+      <move target="stats_export_html"/>
       <wait seconds="0.4"/>
-      <confirm prompt="Point at Export CSV / HTML — then continue"/>
+      <confirm prompt="Point at Export HTML — then continue"/>
       <audio file="${XML_DIR}/voice/17_export.mp3"/>
     </step>
 

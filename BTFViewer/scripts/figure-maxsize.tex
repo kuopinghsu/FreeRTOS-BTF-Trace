@@ -1,0 +1,17 @@
+% Ensure \includegraphics is available for Mermaid RawBlock figures
+% (mermaid-filter.lua bypasses \pandocbounded and emits includegraphics directly).
+\usepackage{graphicx}
+% Optional: keep other Pandoc figures from filling the page.
+\makeatletter
+\@ifundefined{pandocbounded}{}{%
+  \renewcommand*\pandocbounded[1]{%
+    \sbox\pandoc@box{#1}%
+    \Gscale@div\@tempa{0.45\textheight}{\dimexpr\ht\pandoc@box+\dp\pandoc@box\relax}%
+    \Gscale@div\@tempb{0.92\linewidth}{\wd\pandoc@box}%
+    \ifdim\@tempb\p@<\@tempa\p@\let\@tempa\@tempb\fi
+    \ifdim\@tempa\p@<\p@\scalebox{\@tempa}{\usebox\pandoc@box}%
+    \else\usebox{\pandoc@box}%
+    \fi
+  }%
+}
+\makeatother

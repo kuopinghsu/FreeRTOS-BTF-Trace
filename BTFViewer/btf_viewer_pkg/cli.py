@@ -220,7 +220,7 @@ _CLI_HELP = """\
 Headless analysis commands (desktop only — no GUI, no Qt window):
 
   info         Quick trace summary on stdout (--json for scripts).
-  report       Full statistics export (Statistics panel → Export CSV/HTML).
+  report       Full statistics export (Statistics panel → Export HTML).
   compare      Two-trace diff (Trace Compare dialog → Export).
   analyze      CI regression gate vs a baseline .btf or metrics JSON
                (--fail-on-regression; optional --ai narrative).
@@ -466,10 +466,11 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
 
     report = sub.add_parser(
         "report",
-        help="export full statistics report (Statistics → Export CSV/HTML)",
+        help="export full statistics report (Statistics → Export HTML)",
         description=(
             "Export a complete statistics report for one trace.\n\n"
-            "Matches Statistics → Export CSV / Export HTML in the GUI."
+            "Matches Statistics → Export HTML in the GUI "
+            "(per-table CSV is available inside the HTML report)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_CLI_EPILOG_REPORT,
@@ -504,7 +505,8 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
             "core migration tables with A/B deltas.\n\n"
             "Pass two .btf paths, or one .zip / .btf.zip that contains two "
             ".btf members (same multi-BTF zip the GUI opens as two tabs).\n\n"
-            "Matches Trace Compare → Export CSV / Export HTML in the GUI."
+            "Matches Trace Compare → Export HTML in the GUI "
+            "(per-table CSV is available inside the HTML report)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_CLI_EPILOG_COMPARE,
@@ -971,6 +973,8 @@ def _cli_report_run(args: argparse.Namespace) -> int:
     panel._cursor_times = []
     panel._cpu_budget_pct = 0.0
     panel._task_deadlines_ns = {}
+    panel._ux_events_key = None
+    panel._ux_events_cached = None
     if args.lo is not None and args.hi is not None:
         panel._export_scope_override = (args.lo, args.hi)
 
@@ -1689,6 +1693,8 @@ def _cli_snapshot_plot(trace: "BtfTrace",
     panel._cursor_times = []
     panel._cpu_budget_pct = 0.0
     panel._task_deadlines_ns = {}
+    panel._ux_events_key = None
+    panel._ux_events_cached = None
     panel._is_dark = (args.theme != "light")
     panel._plot_preemptor = None
     panel._plot_interval_id = None

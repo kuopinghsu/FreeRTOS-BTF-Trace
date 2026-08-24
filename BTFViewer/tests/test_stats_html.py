@@ -112,6 +112,9 @@ class StatsHtmlHelpersTest(unittest.TestCase):
         self.assertIn("html_investigate_anomalies", stats)
         self.assertIn("html_evidence_refs_card", stats)
         self.assertIn("Off-CPU Time (Blocking Time)", stats)
+        self.assertIn("HTML_REPORT_TOC_CSS", stats)
+        self.assertIn("HTML_REPORT_TOC_CSS", export_js)
+        self.assertIn("HTML_REPORT_TOC_CSS", vue)
         for py_name, js_name in (
             ("def html_glossary", "export function htmlGlossary"),
             ("def html_finding_cards", "export function htmlFindingCards"),

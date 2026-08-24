@@ -198,7 +198,7 @@ Toolbar buttons, tabs, Analysis, and Find use API events instead of fixed screen
 | `stats_summary` / `stats_panel` | Statistics summary |
 | `stats_health` | Health section header |
 | `stats_tick_dist` | Tick distribution button |
-| `stats_export_csv` / `stats_export_html` | Statistics export |
+| `stats_export_html` | Statistics Export HTML |
 
 `toolbar_heatmap` only **points** at the Heatmap button; it does not open the
 inspector. The 8-core pack also has XML-only fractions (`timeline`,

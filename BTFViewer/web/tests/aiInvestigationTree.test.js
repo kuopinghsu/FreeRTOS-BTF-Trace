@@ -8,6 +8,7 @@ import {
   evidenceScoreBar,
   extractEvidencePanelPayload,
   investigationTreeMermaid,
+  mergeEvidencePanelPayload,
 } from '../src/utils/aiInvestigation.js'
 
 // Phase 4: investigation tree mermaid — mirrors
@@ -217,5 +218,32 @@ describe('computeEvidenceScore', () => {
     })
     assert.ok(planned)
     assert.match(planned.conclusion, /Plan with/)
+  })
+})
+
+describe('mergeEvidencePanelPayload', () => {
+  it('keeps timed evidence when late planner tools score 0', () => {
+    const strong = extractEvidencePanelPayload('correlate_events', {
+      ok: true,
+      data: {
+        task: 'CS[22]',
+        events: [
+          { kind: 'migration', detail: 'c0->c1', time: 1487000 },
+          { kind: 'ready', detail: 'wake', time: 1487100 },
+        ],
+        correlation: 0.9,
+      },
+    })
+    assert.ok(strong.evidence_score >= 40 + 25)
+    const late = extractEvidencePanelPayload('challenge_conclusion', {
+      ok: true,
+      message: 'Challenge: conclusion holds',
+      data: { verdict: 'Confirmed', confidence: 'High' },
+    })
+    assert.equal(late.evidence_score, 0)
+    const merged = mergeEvidencePanelPayload(strong, late)
+    assert.ok(merged.evidence_score >= 40 + 25)
+    assert.equal(merged.conclusion, late.conclusion)
+    assert.ok((merged.evidence || []).some(e => e.time != null))
   })
 })

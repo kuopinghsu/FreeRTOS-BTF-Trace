@@ -4,7 +4,6 @@ from __future__ import annotations
 from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
 from .config import (  # private symbols are not pulled in by import *
-    _IC_EXPORT_CSV,
     _IC_PIN,
     _IC_PIN_FILLED,
     _IC_REFRESH,
@@ -24,8 +23,12 @@ from .config import (  # private symbols are not pulled in by import *
     normalize_stats_pins,
     normalize_stats_section_order,
 )
+from .loading_state import format_loading_message
+from .semantic_colors import format_semantic_delta, SEMANTIC_GLYPHS
+from .config import _RENDER_RUNTIME
 from .html_report import (
     HTML_REPORT_INTERACTIVE_SCRIPT,
+    HTML_REPORT_TOC_CSS,
     HTML_REPORT_TOC_SCRIPT,
     btf_html_report_document,
     html_apply_collapsible_toc,
@@ -293,6 +296,8 @@ class _LoadProgressDialog(QWidget):
     which bypasses the macOS sheet mechanism entirely and paints immediately.
     """
 
+    cancel_requested = Signal()
+
     def __init__(self, title: str, parent=None):
         # The frameless Qt.WindowType.Tool variant is primarily needed on macOS to avoid
         # delayed first paint at startup. On Windows it may leave a tiny black
@@ -323,6 +328,10 @@ class _LoadProgressDialog(QWidget):
 
         self._msg_lbl = QLabel("", self)
         layout.addWidget(self._msg_lbl)
+
+        self._cancel_btn = QPushButton("Cancel", self)
+        self._cancel_btn.clicked.connect(self.cancel_requested.emit)
+        layout.addWidget(self._cancel_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
         # Draw a subtle border via the stylesheet.
         # Use the object name so the QWidget selector matches only this dialog.
@@ -368,7 +377,7 @@ class _LoadProgressDialog(QWidget):
 
     def update_progress(self, pct: int, msg: str) -> None:
         self._bar.setValue(pct)
-        self._msg_lbl.setText(msg)
+        self._msg_lbl.setText(format_loading_message(msg))
         _process_ui_events_safely()
 
     def _centre_on_parent(self) -> None:
@@ -3370,11 +3379,6 @@ class _TraceCompareDialog(QDialog):
         exp_row.setContentsMargins(8, 6, 8, 8)
         exp_row.setSpacing(8)
         _ic = "#9E9E9E"
-        self._btn_export_csv = QPushButton("Export CSV")
-        self._btn_export_csv.setIcon(_svg_icon(_IC_EXPORT_CSV, _ic))
-        self._btn_export_csv.setToolTip("Export compare tables as CSV")
-        self._btn_export_csv.clicked.connect(self._export_csv)
-        exp_row.addWidget(self._btn_export_csv)
         self._btn_export_html = QPushButton("Export HTML")
         self._btn_export_html.setIcon(_svg_icon_markup(
             '<rect x="2.5" y="2" width="11" height="12" rx="1" fill="none" '
@@ -3382,7 +3386,8 @@ class _TraceCompareDialog(QDialog):
             '<path d="M5.5 6.5 3.5 8.5l2 2M10.5 6.5l2 2-2 2" fill="none" '
             f'stroke="{_ic}" stroke-width="1.2" stroke-linecap="round"/>',
         ))
-        self._btn_export_html.setToolTip("Export compare report as HTML")
+        self._btn_export_html.setToolTip(
+            "Export compare report as HTML (tables include Search / Show all / CSV)")
         self._btn_export_html.clicked.connect(self._export_html)
         exp_row.addWidget(self._btn_export_html)
         self._btn_save_baseline = QPushButton("Save as baseline")
@@ -3548,6 +3553,7 @@ class _TraceCompareDialog(QDialog):
         table.setRowCount(len(rows))
         improved = QColor("#3cb371")
         regressed = QColor("#e07070")
+        colorblind = bool(getattr(_RENDER_RUNTIME, "colorblind_active", False))
         for ri, vals in enumerate(rows):
             label = str(vals[0]) if vals else ""
             status = None
@@ -3555,7 +3561,10 @@ class _TraceCompareDialog(QDialog):
                 status = compare_row_delta_status(
                     label, vals[delta_col], status_metric)
             for ci, val in enumerate(vals):
-                item = QTableWidgetItem(str(val))
+                text = str(val)
+                if status and ci == delta_col:
+                    text = format_semantic_delta(text, status, colorblind)
+                item = QTableWidgetItem(text)
                 if ci < left_cols:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
                 else:
@@ -3843,39 +3852,6 @@ class _TraceCompareDialog(QDialog):
 
     def _tab_name(self, combo: QComboBox) -> str:
         return combo.currentText() or "Trace"
-
-    def _export_csv(self) -> None:
-        tables = self._tables_for_export()
-        if tables is None:
-            QMessageBox.warning(self, "Export CSV", "Select two loaded traces to export.")
-            return
-
-        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export Trace Compare CSV",
-            f"trace-compare-{stamp}.csv",
-            "CSV files (*.csv);;All files (*)",
-        )
-        if not path:
-            return
-
-        text = _build_compare_csv(
-            self._tab_name(self._combo_a),
-            self._tab_name(self._combo_b),
-            self._scope_cb.isChecked(),
-            tables,
-        )
-        try:
-            with open(path, "w", newline="", encoding="utf-8-sig") as fh:
-                fh.write(text)
-        except OSError as exc:
-            QMessageBox.critical(self, "Export Error", f"Could not export CSV:\n{exc}")
-            return
-
-        wnd = self.window()
-        if isinstance(wnd, QMainWindow):
-            wnd.statusBar().showMessage(f"Exported trace compare: {path}", 4000)
 
     def _export_html(self) -> None:
         tables = self._tables_for_export()
@@ -8215,14 +8191,17 @@ class _AnalysisFindingsDialog(QDialog):
                 fid = str(f.get("id") or "")
                 cid = id_cluster.get(fid) or title_cluster.get(title, "")
                 prefix = f"[{cid}] " if cid else ""
-                badge = {"error": "●", "warning": "●"}.get(str(sev), "○")
                 if sev == "error":
+                    badge = SEMANTIC_GLYPHS["error"]
                     color = err
                 elif sev == "warning":
+                    badge = SEMANTIC_GLYPHS["warning"]
                     color = warn
                 elif fid == "load_balance_ok":
+                    badge = SEMANTIC_GLYPHS["improved"]
                     color = ok_ink
                 else:
+                    badge = "○"
                     color = ink
                 row = QWidget()
                 row.setObjectName("analysisFindingRow")
@@ -8841,17 +8820,15 @@ class _StatsPanel(QWidget):
         exp_row = QVBoxLayout()
         exp_row.setContentsMargins(8, 6, 8, 8)
         exp_row.setSpacing(4)
-        self._btn_export_csv = QPushButton("Export CSV")
-        self._btn_export_csv.clicked.connect(self._export_csv)
-        self._btn_export_csv.setEnabled(False)
-        exp_row.addWidget(self._btn_export_csv)
         self._btn_export_html = QPushButton("Export HTML")
         self._btn_export_html.clicked.connect(self._export_html)
         self._btn_export_html.setEnabled(False)
+        self._btn_export_html.setToolTip(
+            "Export statistics as HTML (tables include Search / Show all / CSV)")
         exp_row.addWidget(self._btn_export_html)
-        for btn in (self._btn_export_csv, self._btn_export_html):
-            btn.setMinimumWidth(0)
-            btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self._btn_export_html.setMinimumWidth(0)
+        self._btn_export_html.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         outer.addLayout(exp_row)
         self._sync_stats_panel_chrome_font()
 
@@ -8868,7 +8845,7 @@ class _StatsPanel(QWidget):
         for btn in (
             self._btn_stats_expand, self._btn_stats_collapse,
             self._btn_stats_reset_order,
-            self._btn_export_csv, self._btn_export_html,
+            self._btn_export_html,
         ):
             btn.setFont(font)
 
@@ -10345,8 +10322,10 @@ class _StatsPanel(QWidget):
         blay.setContentsMargins(0, 0, 0, 0)
         blay.setSpacing(2)
         help_text = STATS_SECTION_HELP.get(section_id)
+        # Step 3: keep long help on the category badge tooltip only (see
+        # ``_refresh_section_drag_chrome``), not as always-visible prose.
         if help_text:
-            blay.addWidget(self._lbl(help_text, color="#888888", ui_fs=self._ui_fs()))
+            body.setToolTip(str(help_text))
         populate(blay)
         idx = self._ilay.indexOf(hdr_row)
         self._ilay.insertWidget(idx + 1, body)
@@ -12228,13 +12207,13 @@ class _StatsPanel(QWidget):
             lo, hi, n_cur = rng
             total_ns = hi - lo
             span_str = _format_time(total_ns, trace.time_scale)
-            scope_title = f" (cursor range C1–C{n_cur})"
-            scope_type = f"Cursor range C1–C{n_cur}"
+            scope_title = f" (C1–C{n_cur})"
+            scope_type = f"C1–C{n_cur} · {span_str}"
         else:
             total_ns = trace.time_max - trace.time_min
             span_str = _format_time(total_ns, trace.time_scale)
             scope_title = ""
-            scope_type = "Full trace"
+            scope_type = "Full Trace"
             n_cur = 0
 
         wnd = self.window()
@@ -13039,8 +13018,6 @@ class _StatsPanel(QWidget):
                 "may be unreliable."
             )
         filter_parts: list = []
-        if lo is not None:
-            filter_parts.append("Limit to C1–Cn")
         fl = getattr(self, "_filter_label", None)
         if fl is not None and fl.isVisible():
             raw = str(fl.text() or "").strip()
@@ -13079,7 +13056,10 @@ class _StatsPanel(QWidget):
         glossary_html = html_glossary(range_note=range_note)
 
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        stats_extra_css = f"{STATS_HTML_EXTRA_CSS}\n{self._html_export_util_css()}".strip()
+        stats_extra_css = (
+            f"{STATS_HTML_EXTRA_CSS}\n{HTML_REPORT_TOC_CSS}\n"
+            f"{self._html_export_util_css()}"
+        ).strip()
 
         body = f"""
         {html_diagnostic_kpi_grid(kpis)}
@@ -13234,6 +13214,17 @@ class _StatsPanel(QWidget):
 
             writer.writerow(["Summary"])
             writer.writerow(["Metric", "Value"])
+            writer.writerow(["Trace file", trace_name])
+            writer.writerow(["Scope", scope_type])
+            fl = getattr(self, "_filter_label", None)
+            filters_csv = "None"
+            if fl is not None and fl.isVisible():
+                raw = str(fl.text() or "").strip()
+                if raw.lower().startswith("filtered:"):
+                    raw = raw.split(":", 1)[1].strip()
+                if raw:
+                    filters_csv = raw
+            writer.writerow(["Filters", filters_csv])
             writer.writerow([f"Span{scope_suffix}", _us(span_str)])
             if scope_suffix:
                 writer.writerow(["Cursor range", scope_suffix.strip(" ()")])
@@ -13854,30 +13845,6 @@ class _StatsPanel(QWidget):
             else:
                 writer.writerow(["No tag data", "", "", "", "", "", ""])
 
-    def _export_csv(self) -> None:
-        if self._trace is None:
-            return
-
-        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export Statistics CSV",
-            f"statistics-{stamp}.csv",
-            "CSV files (*.csv);;All files (*)",
-        )
-        if not path:
-            return
-
-        try:
-            self.write_statistics_csv_report(path)
-        except OSError as exc:
-            QMessageBox.critical(self, "Export Error", f"Could not export CSV:\n{exc}")
-            return
-
-        wnd = self.window()
-        if isinstance(wnd, QMainWindow):
-            wnd.statusBar().showMessage(f"Exported statistics: {path}", 4000)
-
     def clear_trace(self) -> None:
         """Empty Statistics when no trace tab is open (welcome / close-all)."""
         self.clear_plot_session()
@@ -13885,7 +13852,6 @@ class _StatsPanel(QWidget):
         self._trace = None
         self._needs_presentation_defaults = True
         self._cursor_times = []
-        self._btn_export_csv.setEnabled(False)
         self._btn_export_html.setEnabled(False)
         self._scope_cb.setEnabled(False)
         self._clear()
@@ -13921,7 +13887,6 @@ class _StatsPanel(QWidget):
                 self._section_pins = normalize_stats_pins(pins)
                 self._section_collapsed = dict(collapsed)
         defer_heavy = trace_needs_deferred_stats_load(trace)
-        self._btn_export_csv.setEnabled(True)
         self._btn_export_html.setEnabled(True)
         if self._preserve_scroll and hasattr(self, "_scroll") and self._scroll is not None:
             try:

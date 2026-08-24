@@ -94,7 +94,7 @@ export function formatFindStatus({
   const modeKey = normalizeFindMode(mode)
   if (n === 0) {
     const label = modeKey === 'migrations' ? '0 migration matches' : '0 matches'
-    return `${label} for "${q}" — try a different Match Mode`
+    return `${label} for "${q}"`
   }
   if (modeKey === 'migrations') {
     return `${n} migration matches`

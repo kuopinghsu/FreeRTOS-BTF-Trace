@@ -106,6 +106,8 @@ export const DEFAULT_SETTINGS = {
   aiTraceSensitive: false,
   aiContextMode: DEFAULT_AI_CONTEXT_MODE,
   aiExtraPresets: [],
+  /** Step 3: dismissible first-run guidance banner. */
+  firstRunDismissed: false,
 }
 
 /** Per-preset AI fields, migrating any pre-preset settings on the way. */
@@ -231,6 +233,9 @@ export function applySettingsToRuntime(settings) {
   syncTimelineLayoutFromSettings(s)
   if (typeof document !== 'undefined') {
     document.documentElement.style.setProperty('--ui-font-size', `${s.uiFontSize}px`)
+    document.documentElement.style.setProperty('--type-section', `${Math.round(s.uiFontSize * 1.05)}px`)
+    document.documentElement.style.setProperty('--type-body', `${s.uiFontSize}px`)
+    document.documentElement.style.setProperty('--type-meta', `${Math.max(11, Math.round(s.uiFontSize * 0.92))}px`)
   }
   return s
 }

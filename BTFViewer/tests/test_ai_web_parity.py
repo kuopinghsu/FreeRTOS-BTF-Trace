@@ -270,7 +270,12 @@ class AiWebParityTests(unittest.TestCase):
         self._assert_investigation_ui_match()
 
     def _assert_stats_export_titles_match(self) -> None:
-        """CSV/HTML export section titles stay Desktop / Web aligned."""
+        """UI + HTML export section titles stay Desktop / Web aligned.
+
+        Standalone **Export CSV** was removed from both GUIs; HTML reports
+        provide per-table CSV downloads. Desktop CLI still writes a full CSV
+        via ``write_statistics_csv_report`` (third title site in stats.py).
+        """
         titles = (
             "Task × Core",
             "Task Health",
@@ -295,10 +300,20 @@ class AiWebParityTests(unittest.TestCase):
             encoding="utf-8")
         web_html = (BTF_ROOT / "web/src/utils/statsHtmlReport.js").read_text(
             encoding="utf-8")
+        # GUI: HTML-only export button (CSV is inside the HTML report).
+        self.assertIn("Export HTML", stats)
+        self.assertIn("Export HTML", web)
+        self.assertNotIn("_btn_export_csv", stats)
+        self.assertNotIn("exportCsv", web)
+        self.assertIn("write_statistics_csv_report", stats)
         for title in titles:
             self.assertIn(f'<h2>{title}', stats.replace("{_esc(scope_title)}", ""), title)
+            self.assertIn(f'<h2>{title}', web, title)
+            # Desktop: UI section + HTML h2 + CLI CSV section header.
             self.assertGreaterEqual(stats.count(title), 3, title)
-            self.assertGreaterEqual(web.count(title), 3, title)
+            # Web: UI section + HTML h2 (no standalone CSV report builder).
+            self.assertGreaterEqual(web.count(title), 2, title)
+            self.assertIn(f'"{title}{{scope_suffix}}"', stats, title)
         self.assertIn("<h2>Investigate Anomalies", stats_html)
         self.assertIn("<h2>Investigate Anomalies", web_html)
         self.assertIn("html_investigate_anomalies", stats)
@@ -308,13 +323,16 @@ class AiWebParityTests(unittest.TestCase):
         for title in investigate:
             self.assertIn(title, stats_html, title)
             self.assertIn(title, web_html, title)
+            # Desktop: UI section + CLI CSV; Web: UI in panel, HTML copy in statsHtmlReport.
             self.assertGreaterEqual(stats.count(title), 2, title)
-            self.assertGreaterEqual(web.count(title), 2, title)
+            self.assertIn(title, web, title)
+            self.assertIn(f'"{title}{{scope_suffix}}"', stats, title)
         self.assertIn("Dispatch / Scheduling Latency", stats)
         self.assertIn("<th>p99</th>", stats)
         self.assertIn("toggleTableSort('period', 'p99')", web)
         self.assertIn("toggleTableSort('response', 'p99')", web)
-        self.assertIn("p95,p99", web)
+        # Period / Response percentile columns in HTML export (CSV was removed).
+        self.assertIn("<th>p95</th><th>p99</th>", web)
         self.assertIn('"p95", "p99"', stats)
         self.assertIn("hdr.setSectionsClickable(True)", stats)
         self.assertIn("thSortClass('anomalies'", web)
@@ -351,8 +369,13 @@ class AiWebParityTests(unittest.TestCase):
         self.assertNotIn('v-if="corePairRows.length"', web)
         self.assertIn("No core segments", web)
         self.assertIn("No migrations in scope", web)
-        self.assertIn("Core Util Std Dev (σ)", web)
+        self.assertIn("Load Balance Score", web)
+        self.assertIn("Load Balance Score", stats)
+        # Desktop CLI CSV still labels σ; Web gauge module matches that wording.
         self.assertIn("Core Util Std Dev (σ)", stats)
+        lb_js = (BTF_ROOT / "web/src/utils/loadBalanceGauge.js").read_text(
+            encoding="utf-8")
+        self.assertIn("population stddev of core utilisation", lb_js)
         self.assertIn("def _open(_checked: bool = False)", stats)
         self.assertIn("openPreemptPlot(mk, label)", web)
         self.assertIn("Open histogram", stats)
@@ -1459,6 +1482,8 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("validation.flags", inv_js)
         self.assertIn("EVIDENCE_PANEL_TOOLS", inv_py)
         self.assertIn("EVIDENCE_PANEL_TOOLS", inv_js)
+        self.assertIn("def merge_evidence_panel_payload", inv_py)
+        self.assertIn("export function mergeEvidencePanelPayload", inv_js)
         planner_py = (BTF_ROOT / "btf_viewer_pkg/ai_planner.py").read_text(
             encoding="utf-8")
         planner_js = (BTF_ROOT / "web/src/utils/aiPlanner.js").read_text(
@@ -1893,6 +1918,10 @@ class AiWebParityTests(unittest.TestCase):
         cmp_js = (BTF_ROOT / "web/src/utils/traceCompare.js").read_text(encoding="utf-8")
         self.assertIn("def cross_trace_trends", parser_py)
         self.assertIn("export function crossTraceTrends", cmp_js)
+        self.assertIn("HTML_REPORT_INTERACTIVE_SCRIPT", parser_py)
+        self.assertIn("HTML_REPORT_INTERACTIVE_SCRIPT", cmp_js)
+        self.assertIn("COMPARE_TOC_GROUPS", parser_py)
+        self.assertIn("export const COMPARE_TOC_GROUPS", cmp_js)
         self.assertIn("def html_make_collapsible_sections", (
             BTF_ROOT / "btf_viewer_pkg/html_report.py").read_text(encoding="utf-8"))
         self.assertIn("export function htmlMakeCollapsibleSections", (

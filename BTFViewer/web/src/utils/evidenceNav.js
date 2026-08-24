@@ -10,7 +10,7 @@ import { bestFindingScope } from './uxExplore.js'
 export const EVIDENCE_GLYPH = '\u2197' // ↗
 
 /** Tooltip for Evidence-affordance cells (Statistics / Findings / Compare). */
-export const EVIDENCE_TOOLTIP = 'Jump to Evidence (does not change Scope)'
+export const EVIDENCE_TOOLTIP = 'Jump to Evidence (does not change Scope or Filters)'
 
 const TIME_TOKEN_RE = /(?:jump:)?(\d+(?:\.\d+)?)\s*(ns|us|µs|μs|ms|s)?/gi
 

@@ -70,7 +70,7 @@
         v-else
         class="mark-empty"
       >
-        Right-click timeline to add
+        Right-click timeline to add · Double-click or press B / A
       </div>
     </div>
 

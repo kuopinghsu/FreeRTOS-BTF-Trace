@@ -57,6 +57,28 @@
     />
 
     <div
+      v-if="showFirstRunGuide"
+      class="first-run-banner"
+      role="status"
+    >
+      <span class="first-run-text">New to BTFViewer? Start with Statistics → Analysis Findings.</span>
+      <button
+        type="button"
+        class="first-run-btn primary"
+        @click="onFirstRunShowMe"
+      >
+        Show Me
+      </button>
+      <button
+        type="button"
+        class="first-run-btn"
+        @click="dismissFirstRunGuide"
+      >
+        Dismiss
+      </button>
+    </div>
+
+    <div
       v-if="demoRunning"
       class="demo-status-banner"
       role="status"
@@ -253,9 +275,20 @@
               :style="{ width: loadingPct + '%' }"
             />
           </div>
-          <div class="loading-pct">
-            {{ loadingPct }}%
+          <div
+            v-if="loadingPctLabel"
+            class="loading-pct"
+          >
+            {{ loadingPctLabel }}%
           </div>
+          <button
+            v-if="loadingCancellable"
+            type="button"
+            class="loading-cancel-btn"
+            @click="cancelLoading"
+          >
+            Cancel
+          </button>
         </div>
       </div>
       <div
@@ -1192,7 +1225,7 @@
         v-else
         class="status-hint"
       >
-        Open a .btf trace or demo .xml, or click Demo to begin · Press ? for shortcuts/help
+        Open a BTF trace to begin · Press ? for shortcuts
       </span>
     </div>
   </div>
@@ -1348,6 +1381,14 @@ import { detectAnomalies, parseWhatIfChange, snapshotFromSummary, updateBaseline
 import { formatAnalysisStory } from './utils/aiPlanner.js'
 import { bestFindingScope, harvestUxEvents, findingOverlayTimes, taskInspectorLine } from './utils/uxExplore.js'
 import { resolveFindingEvidence } from './utils/evidenceNav.js'
+import {
+  formatLoadingMessage,
+  formatLoadingPct,
+  isLoadingCancellable,
+  LOADING_STAGES,
+} from './utils/loadingState.js'
+import { formatErrorToast, formatParseError } from './utils/errorFormat.js'
+import { checkPrerequisite, buildPrerequisiteContext } from './utils/disabledReason.js'
 import { experimentPercentsFromCompare, newUserInvestigationTemplate } from './utils/aiCase.js'
 import { filterBtfTextToRange, reconstructBtfSlice } from './utils/btfSlice.js'
 import {
@@ -1458,6 +1499,9 @@ const loading    = ref(false)
 const loadingPct = ref(0)
 const loadingMsg = ref('')
 const loadingFileName = ref('')
+const loadingPhase = ref('parse')
+const loadingPctLabel = computed(() => formatLoadingPct(loadingPct.value))
+const loadingCancellable = computed(() => loading.value && isLoadingCancellable(loadingPhase.value))
 const helpOpen   = ref(false)
 const aboutOpen  = ref(false)
 const aboutIconSvg = appIconSvgMarkup(72)
@@ -1523,23 +1567,13 @@ function bumpPaletteUsage(id) {
 
 function paletteIsAvailable(aid) {
   const meta = COMMAND_PALETTE_META[aid] || {}
-  const req = String(meta.requires || 'none')
-  const disabled = String(meta.disabled || 'Unavailable')
-  if (req === '' || req === 'none') return [true, '']
-  if (req === 'trace') {
-    return trace.value ? [true, ''] : [false, disabled || 'Open a trace first']
-  }
-  if (req === 'two_traces') {
-    return compareTabs.value.length >= 2
-      ? [true, '']
-      : [false, disabled || 'Open at least two traces']
-  }
-  if (req === 'cursors2') {
-    return getPlacedCursors(cursors.value).length >= 2
-      ? [true, '']
-      : [false, disabled || 'Place at least two cursors (C1–Cn)']
-  }
-  return [true, '']
+  const ctx = buildPrerequisiteContext({
+    trace: trace.value,
+    compareTabCount: compareTabs.value.length,
+    cursorCount: getPlacedCursors(cursors.value).length,
+    aiConfigured: appSettings.aiEnabled !== false,
+  })
+  return checkPrerequisite(meta.requires, ctx, meta.disabled)
 }
 const paletteInput = ref(null)
 const compareOpen = ref(false)
@@ -1637,11 +1671,32 @@ const statusBarFlashError = ref(false)
 let   _statusBarFlashTimer = 0
 
 function showToast(msg, type = 'info') {
-  toastMsg.value     = msg
+  const text = typeof msg === 'object' && msg !== null ? formatErrorToast(msg) : String(msg || '')
+  toastMsg.value     = text
   toastType.value    = type
   toastVisible.value = true
   clearTimeout(_toastTimer)
   _toastTimer = setTimeout(() => { toastVisible.value = false }, type === 'error' ? 5000 : 3000)
+}
+
+function showParseError(err, fileName = '') {
+  console.error('BTF parse error:', err)
+  showToast(formatParseError(err, fileName), 'error')
+}
+
+function dismissFirstRunGuide() {
+  appSettings.firstRunDismissed = true
+  saveSettings(appSettings)
+}
+
+function onFirstRunShowMe() {
+  dismissFirstRunGuide()
+  if (!trace.value) {
+    toolbarRef.value?.openFile?.()
+    return
+  }
+  focusStatisticsPanel(true)
+  analysisOpen.value = true
 }
 
 function onAiStatusMessage(payload) {
@@ -1658,6 +1713,9 @@ function onAiStatusMessage(payload) {
 }
 
 const demoRunning = ref(false)
+const showFirstRunGuide = computed(
+  () => !appSettings.firstRunDismissed && !trace.value && !demoRunning.value && !loading.value,
+)
 const demoPaused = ref(false)
 const demoRecording = ref(false)
 const demoStatusText = ref('')
@@ -2787,8 +2845,9 @@ function onTraceReading({ name }) {
   // Show the loading overlay immediately while FileReader is still reading the file
   if (_parseWorker) { _parseWorker.terminate(); _parseWorker = null }
   loading.value         = true
+  loadingPhase.value    = 'read'
   loadingPct.value      = 1
-  loadingMsg.value      = 'Reading file…'
+  loadingMsg.value      = LOADING_STAGES.reading
   loadingFileName.value = name || 'trace.btf'
 }
 
@@ -2796,8 +2855,19 @@ function onTraceReading({ name }) {
 function dismissLoadingOverlay() {
   if (_parseWorker) { _parseWorker.terminate(); _parseWorker = null }
   loading.value    = false
+  loadingPhase.value = 'parse'
   loadingPct.value = 0
   loadingMsg.value = ''
+}
+
+function cancelLoading() {
+  if (_parseWorker) {
+    _parseWorker.terminate()
+    _parseWorker = null
+  }
+  _pendingTraceLoads.length = 0
+  dismissLoadingOverlay()
+  showToast('Load cancelled', 'info')
 }
 
 function onFileError(message) {
@@ -2817,8 +2887,9 @@ function finishTraceLoadTab(tab) {
 }
 
 function paintLoadingProgress(pct, msg) {
+  loadingPhase.value = 'parse'
   loadingPct.value = pct
-  loadingMsg.value = msg || ''
+  loadingMsg.value = formatLoadingMessage(msg)
 }
 
 async function flushLoadingProgress(pct, msg) {
@@ -2829,7 +2900,8 @@ async function flushLoadingProgress(pct, msg) {
 async function attachParsedTrace(name, packedOrTrace, {
   savedState = null, fromSession = false, sourceText = null,
 } = {}) {
-  paintLoadingProgress(100, 'Opening trace…')
+  paintLoadingProgress(100, LOADING_STAGES.opening)
+  loadingPhase.value = 'open'
   try {
     const { unpackTrace } = await import('./parser/tracePack.js')
     const trace = packedOrTrace?.segStore ? packedOrTrace : unpackTrace(packedOrTrace)
@@ -2957,8 +3029,9 @@ async function loadOneTrace({ text, name }) {
   if (_parseWorker) { _parseWorker.terminate(); _parseWorker = null }
 
   loading.value         = true
+  loadingPhase.value    = 'parse'
   loadingPct.value      = 1
-  loadingMsg.value      = 'Parsing trace…'
+  loadingMsg.value      = LOADING_STAGES.parsing
   loadingFileName.value = name || 'trace.btf'
 
   // Yield one animation frame so the browser can paint the loading overlay
@@ -2984,8 +3057,7 @@ async function loadOneTrace({ text, name }) {
     try {
       await parseTraceOnMainThread(text, name)
     } catch (err) {
-      console.error('BTF parse error:', err)
-      showToast('Failed to parse the trace file — check that it is a valid .btf/.xml trace and try again.', 'error')
+      showParseError(err, name)
       loading.value = false
     }
     return
@@ -2998,41 +3070,37 @@ async function loadOneTrace({ text, name }) {
   await new Promise((resolve) => {
     worker.onmessage = ({ data }) => {
       if (data.type === 'progress') {
+        loadingPhase.value = 'parse'
         loadingPct.value = data.pct
-        loadingMsg.value = data.msg || ''
+        loadingMsg.value = formatLoadingMessage(data.msg || '')
       } else if (data.type === 'done') {
         _parseWorker = null
         worker.terminate()
         attachParsedTrace(name, data.packed, { sourceText: text }).then(() => resolve()).catch((err) => {
-          console.error('Failed to open trace:', err)
-          showToast('Failed to open trace: ' + (err?.message || String(err)), 'error')
+          showParseError(err, name)
           loading.value = false
           resolve()
         })
       } else if (data.type === 'error') {
-        console.error('BTF parse error:', data.message)
         _parseWorker = null
         worker.terminate()
         loadingPct.value = 1
-        loadingMsg.value = 'Parsing on main thread…'
+        loadingMsg.value = LOADING_STAGES.parsing
         parseTraceOnMainThread(text, name).then(() => resolve()).catch((err) => {
-          console.error('BTF main-thread fallback failed:', err)
-          showToast('Failed to parse the trace file — check that it is a valid .btf/.xml trace and try again.', 'error')
+          showParseError(err, name)
           loading.value = false
           resolve()
         })
       }
     }
 
-    worker.onerror = (e) => {
-      console.error('Worker error:', e)
+    worker.onerror = () => {
       _parseWorker = null
       worker.terminate()
       loadingPct.value = 1
-      loadingMsg.value = 'Parsing on main thread…'
+      loadingMsg.value = LOADING_STAGES.parsing
       parseTraceOnMainThread(text, name).then(() => resolve()).catch((err) => {
-        console.error('BTF main-thread fallback failed:', err)
-        showToast('Failed to parse the trace file — check that it is a valid .btf/.xml trace and try again.', 'error')
+        showParseError(err, name)
         loading.value = false
         resolve()
       })
@@ -5582,8 +5650,9 @@ async function loadExampleBtf() {
   }
 
   loading.value = true
+  loadingPhase.value = 'read'
   loadingPct.value = 1
-  loadingMsg.value = 'Loading demo trace…'
+  loadingMsg.value = LOADING_STAGES.demo
   loadingFileName.value = 'example-2cores.btf.gz'
   await new Promise(r => requestAnimationFrame(r))
 
@@ -5612,7 +5681,8 @@ async function restoreSessionTabs(saved) {
   if (!Array.isArray(names) || !names.length) return
 
   loading.value = true
-  loadingMsg.value = 'Restoring session…'
+  loadingPhase.value = 'open'
+  loadingMsg.value = LOADING_STAGES.restoring
   try {
     for (const name of names) {
       const packed = await getTrace(name)
@@ -5975,6 +6045,16 @@ watch(
   --analysis-ok:   #7dcea0;
   --analysis-warn: #e67e22;
   --analysis-err:  #e74c3c;
+  /* Step 3 typography + semantic roles (dark defaults on :root) */
+  --type-section: calc(var(--ui-font-size, 13px) * 1.05);
+  --type-body: var(--ui-font-size, 13px);
+  --type-meta: max(11px, calc(var(--ui-font-size, 13px) * 0.92));
+  --type-min: 11px;
+  --semantic-error: var(--analysis-err);
+  --semantic-warning: var(--analysis-warn);
+  --semantic-improvement: var(--analysis-ok);
+  --semantic-focus: var(--accent);
+  --semantic-selection: color-mix(in srgb, var(--accent) 35%, transparent);
   /* Statistics category badges (dark) — lockstep with config.py palette */
   --badge-overview-bg: #26313B;
   --badge-overview-fg: #C3CED8;
@@ -6059,9 +6139,33 @@ body:has(.app:not(.dark)) {
   --badge-detail-bg: #ECEDEF;
   --badge-detail-fg: #656B72;
   --badge-detail-border: #C8CBD0;
+  /* Step 3 typography + semantic roles */
+  --type-section: calc(var(--ui-font-size, 13px) * 1.05);
+  --type-body: var(--ui-font-size, 13px);
+  --type-meta: max(11px, calc(var(--ui-font-size, 13px) * 0.92));
+  --type-min: 11px;
+  --semantic-error: var(--analysis-err);
+  --semantic-warning: var(--analysis-warn);
+  --semantic-improvement: var(--analysis-ok);
+  --semantic-focus: var(--accent);
+  --semantic-selection: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* Keyboard focus — keep investigation controls accessible without pointer */
+:focus-visible {
+  outline: 2px solid var(--semantic-focus, var(--accent));
+  outline-offset: 2px;
+}
+
+button:focus:not(:focus-visible),
+a:focus:not(:focus-visible),
+input:focus:not(:focus-visible),
+select:focus:not(:focus-visible),
+textarea:focus:not(:focus-visible) {
+  outline: none;
+}
 
 /* ---- Native scrollbar theming (all panels) ---- */
 * {
@@ -6639,6 +6743,18 @@ body.row-resizing * {
   justify-self: start;
 }
 
+@media (max-width: 960px) {
+  .right-panel {
+    min-width: 280px;
+  }
+
+  .panel-page,
+  .stats-scroll,
+  .ai-panel {
+    overflow-x: auto;
+  }
+}
+
 @media (max-width: 760px) {
   .help-body {
     grid-template-columns: 1fr;
@@ -6646,6 +6762,22 @@ body.row-resizing * {
 
   .about-grid {
     grid-template-columns: 1fr;
+  }
+
+  .first-run-banner {
+    padding: 6px 8px;
+  }
+
+  .right-panel {
+    min-width: 220px;
+  }
+
+  .main-area {
+    min-width: 0;
+  }
+
+  .stats-table {
+    font-size: var(--type-meta, 11px);
   }
 }
 
@@ -6659,10 +6791,66 @@ body.row-resizing * {
 }
 
 .loading-msg {
-  font-size: 11px;
+  font-size: var(--type-meta);
   color: var(--fg-dim);
-  font-family: monospace;
   min-height: 1.4em;
+}
+
+.loading-cancel-btn {
+  align-self: flex-end;
+  margin-top: 4px;
+  font-size: var(--type-meta);
+  padding: 4px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--panel-btn-bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.loading-cancel-btn:hover {
+  background: var(--tb-btn-hover);
+}
+
+.first-run-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel-bg));
+  border-bottom: 1px solid var(--border);
+  font-size: var(--type-body);
+}
+
+.first-run-text {
+  flex: 1 1 200px;
+  color: var(--fg);
+}
+
+.first-run-btn {
+  font-size: var(--type-meta);
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--panel-btn-bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.first-run-btn.primary {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.num-cell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.empty {
+  color: var(--muted);
+  font-size: var(--type-meta);
 }
 
 .loading-bar-track {

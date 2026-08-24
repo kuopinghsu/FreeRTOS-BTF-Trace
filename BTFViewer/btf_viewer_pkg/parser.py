@@ -4,6 +4,7 @@ from __future__ import annotations
 from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
 from .html_report import (
+    HTML_REPORT_INTERACTIVE_SCRIPT,
     HTML_REPORT_TOC_CSS,
     HTML_REPORT_TOC_SCRIPT,
     btf_html_report_document,
@@ -5372,7 +5373,7 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
         "Task,Gaps A,Gaps B,Avg A,Avg B,Max A,Max B,Δ avg",
         tables.get("blocking", []), 8)
     _section(
-        "Inter-Arrival",
+        "Inter-Arrival Time",
         "Task,Runs A,Runs B,Avg A,Avg B,Max A,Max B,Δ avg",
         tables.get("inter_arrival", []), 8)
     _section(
@@ -5424,6 +5425,7 @@ tbody td:first-child {{ background: #fff; }}
 tbody tr:nth-child(even) td {{ background: #f7f9fc; }}
 tbody tr:nth-child(even) td:first-child {{ background: #f7f9fc; }}
 .empty {{ text-align: center; color: var(--muted); white-space: normal; }}
+.detail-note {{ margin: 6px 0 10px; font-size: 12px; color: var(--muted); line-height: 1.45; }}
 .overview-why {{ color: var(--muted); margin: 0 0 10px; }}
 .overview-sub {{ margin: 12px 0 6px; font-size: 13px; color: #123355; }}
 .overview-formula {{ color: var(--muted); font-size: 12px; margin: 0 0 10px; }}
@@ -5443,9 +5445,37 @@ tbody tr:nth-child(even) td:first-child {{ background: #f7f9fc; }}
 .badge-changed {{ background: #e8eef7; color: #123355; }}
 .compare-chart {{ margin: 0 0 12px; overflow-x: auto; }}
 .compare-chart svg {{ max-width: 100%; height: auto; display: block; }}
+.table-tools {{ margin: 8px 0 12px; }}
+.table-toolbar {{
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px;
+}}
+.table-search {{
+  font: inherit; font-size: 12px; padding: 4px 8px; border: 1px solid var(--line);
+  border-radius: 6px; min-width: 160px;
+}}
+.table-check {{ font-size: 12px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }}
+.table-count {{ font-size: 12px; color: var(--muted); margin-left: auto; }}
+.table-scroll table {{ min-width: 100%; }}
+.sortable {{ cursor: pointer; }}
+.sortable:hover {{ color: var(--accent); }}
 {HTML_REPORT_TOC_CSS}
 """.strip()
 
+COMPARE_TOC_GROUPS = (
+    ("Overview", (
+        "Overview", "Summary", "Top Tasks",
+    )),
+    ("CPU and Migrations", (
+        "Core Utilisation", "Core Migrations",
+    )),
+    ("Timing and Latency", (
+        "Execution Time", "Blocking Time", "Inter-Arrival", "Response P99",
+    )),
+    ("Scheduling and Sync", (
+        "Preemption Chains", "Sync Objects", "Mutex Blocking",
+        "Shared Patterns", "Trends",
+    )),
+)
 
 def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
                         tables: Dict[str, List[List]]) -> str:
@@ -5466,16 +5496,18 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
         return "".join(parts)
 
     def _card(title: str, headers: List[str], rows: List[List], empty: str,
-              lead_html: str = "") -> str:
+              lead_html: str = "", note: str = "") -> str:
         cols = len(headers)
         th = "".join(f"<th>{_esc(h)}</th>" for h in headers)
+        note_html = (
+            f'<p class="detail-note">{_esc(note)}</p>' if note else ""
+        )
         return (
             f'<section class="report-card"><h2>{_esc(title)}</h2>'
-            f"{lead_html}"
-            f'<div class="table-scroll">'
+            f"{note_html}{lead_html}"
             f'<table><thead><tr>{th}</tr></thead>'
             f'<tbody>{_rows_html(rows, cols, empty)}</tbody></table>'
-            f'</div></section>'
+            f"</section>"
         )
 
     def _overview_card() -> str:
@@ -5531,7 +5563,9 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
                 )
             return "".join(parts)
 
-        parts = ['<section class="report-card"><h2>Overview</h2>']
+        parts = ['<section class="report-card"><h2>Overview</h2>'
+                 '<p class="detail-note">Verdict, identity, and engineering-significant '
+                 "deltas between Baseline A and Candidate B.</p>"]
         if verdict:
             parts.append(f'<p class="overview-why">{_esc(verdict)}</p>')
         nxt = str(notable.get("next_investigation") or "").strip()
@@ -5663,59 +5697,84 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
         _card("Summary",
               ["Metric", "Baseline A", "Candidate B", "Δ"],
               tables.get("summary", []), "No data",
-              lead_html=sum_lead),
+              lead_html=sum_lead,
+              note="KPI-style totals and rates. Δ = Baseline A − Candidate B "
+                   "(positive means A is numerically larger)."),
         _card("Top Tasks",
               ["Task", "CPU A (%)", "CPU B (%)", "Δ (pp)"],
-              tables.get("top", []), "No user tasks in either trace"),
+              tables.get("top", []), "No user tasks in either trace",
+              note="Highest CPU consumers excluding IDLE/TICK. "
+                   "Δ is percentage points (pp)."),
         _card("Core Utilisation",
               ["Core", "Util A (%)", "Util B (%)", "Δ (pp)"],
               tables.get("core_util", []), "No core util data",
-              lead_html=util_lead),
+              lead_html=util_lead,
+              note="Per-core active util % excluding IDLE/TICK over each side's "
+                   "scoped wall-clock span."),
         _card("Core Migrations",
               ["Task", "Migr A", "Migr B", "Δ", "Rate A", "Rate B", "Rate Δ",
                "Dwell A", "Dwell B", "Dwell Δ", "Ping A", "Ping B",
                "Cores A", "Cores B", "Primary A", "Primary B"],
               tables.get("migrations", []), "No migrated tasks in either trace",
-              lead_html=mig_lead),
+              lead_html=mig_lead,
+              note="Migration count, rate, dwell, ping-pong, and primary-core "
+                   "affinity for tasks that ran on more than one core."),
         _card("Execution Time",
               ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B", "Δ max"],
-              tables.get("execution", []), "No execution samples in either trace"),
+              tables.get("execution", []), "No execution samples in either trace",
+              note="Per-slice run durations between consecutive context switches."),
         _card("Blocking Time",
               ["Task", "Gaps A", "Gaps B", "Avg A", "Avg B", "Max A", "Max B", "Δ avg"],
-              tables.get("blocking", []), "No blocking samples in either trace"),
-        _card("Inter-Arrival",
+              tables.get("blocking", []), "No blocking samples in either trace",
+              note="Off-CPU gaps between consecutive slices of the same task "
+                   "(preemption, wait, or scheduling delay)."),
+        _card("Inter-Arrival Time",
               ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B", "Δ avg"],
-              tables.get("inter_arrival", []), "No inter-arrival samples in either trace"),
+              tables.get("inter_arrival", []), "No inter-arrival samples in either trace",
+              note="Time between consecutive activations of the same task "
+                   "(slice start to next slice start)."),
         _card("Preemption Chains",
               ["Victim", "Count A", "Count B", "Δ", "Total A", "Total B"],
-              tables.get("preemption", []), "No preemption chains in either trace"),
+              tables.get("preemption", []), "No preemption chains in either trace",
+              note="Victim/preemptor pairs for off-CPU gaps on the same core."),
         _card("Sync Objects",
               ["Metric", "Baseline A", "Candidate B", "Δ"],
-              tables.get("sync", []), "No sync instrumentation in either trace"),
+              tables.get("sync", []), "No sync instrumentation in either trace",
+              note="Mutex, semaphore, and queue STI instrumentation totals."),
         _card("Response P99",
               ["Task", "P99 A", "P99 B", "Δ"],
               tables.get("response", []), "No response samples in either trace",
-              lead_html=p99_lead),
+              lead_html=p99_lead,
+              note="Heuristic ready→completion P99 from adjacent slices "
+                   "(not an explicit BTF release/completion pair)."),
         _card("Mutex Blocking",
               ["Task", "Total A", "Total B", "Δ"],
-              tables.get("mutex_block", []), "No mutex blocking in either trace"),
+              tables.get("mutex_block", []), "No mutex blocking in either trace",
+              note="Total mutex-attributed blocking time per task."),
         _card("Shared Patterns",
               ["Task", "Kind", "Count A", "Count B", "Description"],
-              shared_rows, "No shared anomaly patterns"),
+              shared_rows, "No shared anomaly patterns",
+              note="Anomaly kinds present on both sides with counts and a short reason."),
         _card("Trends",
               ["Trace", "Tasks", "Migrations", "Load balance", "Tick health", "Span"],
-              trend_rows, "Open 2+ traces to trend summaries"),
+              trend_rows, "Open 2+ traces to trend summaries",
+              note="Multi-trace summary when two or more traces are open."),
     ]
 
     report = btf_html_report_document(
         "Trace Compare",
-        "<!--TOC-->\n" + "\n".join(sections) + "\n" + HTML_REPORT_TOC_SCRIPT,
+        "<!--TOC-->\n" + "\n".join(sections) + "\n"
+        + HTML_REPORT_TOC_SCRIPT + "\n" + HTML_REPORT_INTERACTIVE_SCRIPT,
         subtitle=f"Baseline A: {name_a} vs Candidate B: {name_b} · {scope_note}",
         extra_css=_COMPARE_HTML_EXTRA_CSS,
         doc_title="BTFViewer — Trace Compare",
         report_class="report-compare",
     )
-    return html_apply_collapsible_toc(report, default_expanded=("Overview", "Summary"))
+    return html_apply_collapsible_toc(
+        report,
+        default_expanded=("Overview", "Summary"),
+        toc_groups=COMPARE_TOC_GROUPS,
+    )
 
 def _core_sort_key_tuple(c: str) -> tuple:
     if c.startswith("Core_"):

@@ -314,6 +314,7 @@
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { emptyStateMessage } from '../utils/emptyState.js'
 import { toBlob as domToBlob } from 'html-to-image'
 import LabelColumn from './LabelColumn.vue'
 import ColumnHeaderRow from './ColumnHeaderRow.vue'
@@ -792,7 +793,7 @@ function paint() {
     ctx.fillStyle = props.options.darkMode ? '#555' : '#AAA'
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    ctx.fillText('Open a .btf file to begin', w / 2, h / 2)
+    ctx.fillText(emptyStateMessage('noTimeline'), w / 2, h / 2)
     return
   }
 

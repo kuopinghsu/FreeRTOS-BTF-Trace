@@ -3632,7 +3632,7 @@
       class="range-hint stats-empty-hint"
       data-demo-target="stats_summary"
     >
-      Open a trace file to view statistics.
+      {{ emptyStateMessage('noStats') }}
     </div>
     <div
       ref="statsTailRef"
@@ -3645,28 +3645,9 @@
     <div class="stats-export-row">
       <button
         class="action-btn"
-        data-demo-target="stats_export_csv"
-        :disabled="!trace"
-        title="Export statistics as CSV"
-        @click="exportCsv"
-      >
-        <svg
-          class="export-icon"
-          viewBox="0 0 16 16"
-          width="14"
-          height="14"
-          fill="currentColor"
-          aria-hidden="true"
-        >
-          <path d="M2 1h12a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zm0 1v12h12V2H2zm2 2h8v1H4V4zm0 2h8v1H4V6zm0 2h5v1H4V8z" />
-        </svg>
-        Export CSV
-      </button>
-      <button
-        class="action-btn"
         data-demo-target="stats_export_html"
         :disabled="!trace"
-        title="Export statistics as HTML report"
+        title="Export statistics as HTML report (tables include Search / Show all / CSV)"
         @click="exportHtml"
       >
         <svg
@@ -4215,6 +4196,7 @@ import DomSelect from './DomSelect.vue'
 import { toBlob as domToBlob, toSvg as domToSvg } from 'html-to-image'
 import { formatTime, isStiTagChannel } from '../renderer/TimelineRenderer.js'
 import { formatTimeFixed } from '../utils/timeFormat.js'
+import { emptyStateMessage } from '../utils/emptyState.js'
 import { taskDisplayName, parseTaskName, taskMergeKey, isIdleTaskName, taskColor, taskReprGet, taskLabelForMergeKey, coreColor } from '../utils/colors.js'
 import {
   getPlacedCursors,
@@ -4339,7 +4321,7 @@ import { normalizeStatsPins, normalizeStatsSectionOrder, moveStatsSection, toggl
 import { buildHistogramModel, histogramBarTooltip } from '../utils/histogramModel.js'
 import { plotTabsForKind, resolvePlotTabSwitch } from '../utils/plotTabs.js'
 import { classifyLoadBalance, loadBalanceGaugeImgHtml, loadBalanceMetrics } from '../utils/loadBalanceGauge.js'
-import { btfHtmlReportDocument, htmlApplyCollapsibleToc, htmlMakeCollapsibleSections, HTML_REPORT_TOC_SCRIPT, HTML_REPORT_INTERACTIVE_SCRIPT } from '../utils/htmlReport.js'
+import { btfHtmlReportDocument, htmlApplyCollapsibleToc, htmlMakeCollapsibleSections, HTML_REPORT_TOC_CSS, HTML_REPORT_TOC_SCRIPT, HTML_REPORT_INTERACTIVE_SCRIPT } from '../utils/htmlReport.js'
 import {
   STATS_DEFAULT_EXPANDED,
   STATS_HTML_EXTRA_CSS,
@@ -7045,12 +7027,6 @@ function _htmlUtilSection(title, rows, kind) {
   return `<section class="report-card"><h2>${_htmlCell(title)}</h2>${body}</section>`
 }
 
-function _csvCell(v) {
-  const s = String(v ?? '').replace(/[µμ]s/g, 'us')
-  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`
-  return s
-}
-
 function _downloadText(filename, text, mime) {
   const blob = new Blob([text], { type: mime })
   const url = URL.createObjectURL(blob)
@@ -7065,761 +7041,6 @@ function _stamp() {
   const d = new Date()
   const pad = n => String(n).padStart(2, '0')
   return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
-}
-
-function exportCsv() {
-  const tr = props.trace
-  const r = statsRange.value
-  const suffix = scopeSuffixStr.value
-  const execReportRows = _execSliceRowsForReport(tr, r)
-  const interReportRows = _interArrivalRowsForReport(tr, r)
-  const blockReportRows = _blockingRowsForReport(tr, r)
-  const coreRows = _coreUtilRows(tr, r)
-  const taskRows = _taskCpuRows(tr, r)
-  const lo = r?.lo ?? null
-  const hi = r?.hi ?? null
-  const { rows: preemptReportRows } = preemptionChainRows(tr, lo, hi)
-  const { contextSwitches, coreGaps } = schedulingStats(tr, lo, hi)
-  const lines = []
-
-  lines.push('Summary')
-  lines.push('Metric,Value')
-  lines.push(`Span${suffix},${_csvCell(spanStr.value)}`)
-  if (suffix) {
-    lines.push(`Cursor range,${_csvCell(scopeRangeLabel.value)}`)
-  }
-  lines.push(`Tasks,${_csvCell(summaryTaskCount.value)}`)
-  lines.push(`Segments,${_csvCell(summarySegCount.value)}`)
-  lines.push(`STI Events,${_csvCell(summaryStiCount.value)}`)
-  lines.push(`Context switches${suffix},${_csvCell(contextSwitches)}`)
-  if (coreGaps.length > 0) {
-    const gapAvg = Math.round(coreGaps.reduce((a, b) => a + b, 0) / coreGaps.length)
-    lines.push(`Core gap avg${suffix},${_csvCell(formatTime(gapAvg, tr.timeScale))}`)
-    lines.push(`Core gap max${suffix},${_csvCell(formatTime(maxNs(coreGaps), tr.timeScale))}`)
-  }
-
-  if (rangeStats.value && !r) {
-    lines.push('')
-    lines.push('Cursor Range')
-    lines.push('Metric,Value')
-    lines.push(`Span,${_csvCell(rangeStats.value.span)}`)
-    lines.push(`Slices,${_csvCell(rangeStats.value.switches)}`)
-    if (rangeStats.value.topTask) lines.push(`Top task,${_csvCell(`${rangeStats.value.topTask} (${rangeStats.value.topPct}%)`)}`)
-    if (rangeStats.value.dMin) lines.push(`Seg min,${_csvCell(rangeStats.value.dMin)}`)
-    if (rangeStats.value.dAvg) lines.push(`Seg avg,${_csvCell(rangeStats.value.dAvg)}`)
-    if (rangeStats.value.dMax) lines.push(`Seg max,${_csvCell(rangeStats.value.dMax)}`)
-  }
-
-  lines.push('')
-  lines.push(`Core Utilisation (excl. IDLE/TICK)${suffix}`)
-  const lbCsv = loadBalanceScore.value
-  if (lbCsv) {
-    lines.push(`Load Balance Score,${_csvCell(`${lbCsv.score.toFixed(0)}%`)}`)
-    lines.push(`Core Util Std Dev (σ),${_csvCell(`${lbCsv.stddev.toFixed(1)}%`)}`)
-    lines.push(`Gini Coefficient (G),${_csvCell(lbCsv.gini.toFixed(4))}`)
-  }
-  lines.push('Core,CPU %')
-  if (coreRows.length > 0) {
-    for (const r of coreRows) {
-      lines.push(`${_csvCell(r.core)},${_csvCell(`${r.pct}%`)}`)
-    }
-  } else {
-    lines.push('No data,')
-  }
-
-  const tick = tickHealthReport(tr, lo, hi)
-  lines.push('')
-  lines.push(`Trace Health (TICK)${suffix}`)
-  if (tick.tickCount) {
-    lines.push(`Status,${_csvCell(tick.health.toUpperCase())}`)
-    lines.push(`Mode,${_csvCell(tick.isTickless ? 'TICKLESS' : 'TICK')}`)
-    lines.push(`Interval CV,${_csvCell((tick.tickCv * 100).toFixed(2) + '%')}`)
-    lines.push(`Ticks,${_csvCell(tick.tickCount)}`)
-    lines.push(`Avg period,${_csvCell(formatTime(tick.avgPeriod, tr.timeScale))}`)
-    lines.push(`Max gap,${_csvCell(formatTime(tick.maxGap, tr.timeScale))}`)
-    lines.push(`Missed ticks (est.),${_csvCell(tick.missedTicksEstimate)}`)
-    lines.push('')
-    lines.push('Large TICK gaps')
-    lines.push('Start,End,Gap,Missed')
-    if (tick.largeGaps.length) {
-      for (const g of tick.largeGaps) {
-        lines.push([
-          _csvCell(formatTime(g.start, tr.timeScale)),
-          _csvCell(formatTime(g.end, tr.timeScale)),
-          _csvCell(formatTime(g.duration, tr.timeScale)),
-          _csvCell(g.missedTicks),
-        ].join(','))
-      }
-    } else {
-      lines.push('No large gaps,,,')
-    }
-  } else {
-    lines.push('No STI TICK events,')
-  }
-
-  const bdRows = buildCoreTimeBreakdown(tr, lo, hi)
-  lines.push('')
-  lines.push(`Core Time Breakdown${suffix}`)
-  lines.push('Core,Active %,Idle %,Tick %,Gap %')
-  if (bdRows.length) {
-    for (const r of bdRows) {
-      const s = Math.max(r.spanNs, 1)
-      lines.push([
-        _csvCell(r.core),
-        _csvCell(`${(100 * r.activeNs / s).toFixed(1)}%`),
-        _csvCell(`${(100 * r.idleNs / s).toFixed(1)}%`),
-        _csvCell(`${(100 * r.tickNs / s).toFixed(1)}%`),
-        _csvCell(`${(100 * r.gapNs / s).toFixed(1)}%`),
-      ].join(','))
-    }
-  } else {
-    lines.push('No core data,,,,')
-  }
-  lines.push('')
-  lines.push(`Concurrent Core Active Distribution${suffix}`)
-  lines.push('Active Cores,Duration,% of Span')
-  const ccCsvRows = concurrentCoreActiveRows(tr, lo, hi)
-  if (ccCsvRows.length) {
-    for (const r of ccCsvRows) {
-      lines.push([
-        _csvCell(r.activeCores),
-        _csvCell(r.duration),
-        _csvCell(`${r.pctOfSpan.toFixed(1)}%`),
-      ].join(','))
-    }
-  } else {
-    lines.push('No data,,')
-  }
-
-  lines.push('')
-  lines.push(`Kernel Switch Overhead${suffix}`)
-  lines.push('Core,Switches,Min,Avg,Max,Total Overhead,% of Core')
-  const swCsvRows = switchOverheadRows(tr, lo, hi)
-  if (swCsvRows.length) {
-    for (const r of swCsvRows) {
-      lines.push([
-        _csvCell(r.core),
-        _csvCell(r.switches),
-        _csvCell(r.min),
-        _csvCell(r.avg),
-        _csvCell(r.max),
-        _csvCell(r.total),
-        _csvCell(`${r.pctOfCore.toFixed(2)}%`),
-      ].join(','))
-    }
-  } else {
-    lines.push('No data,,,,,,')
-  }
-
-  lines.push('')
-  lines.push(`Top Tasks by CPU (excl. IDLE/TICK)${suffix}`)
-  lines.push('Task,CPU %')
-  if (taskRows.length > 0) {
-    for (const r of taskRows) {
-      lines.push(`${_csvCell(r.name)},${_csvCell(`${r.pct}%`)}`)
-    }
-  } else {
-    lines.push('No data,')
-  }
-
-  lines.push('')
-  lines.push(`Core Migrations${suffix}`)
-  lines.push('Task,Migrations,Migr rate,Avg dwell,Core count,Primary core,Primary %,Ping-pong,STI near,Avg gap after,Avg gap other')
-  const migReportRows = migrationRows(tr, lo, hi)
-  for (const r of migReportRows) {
-    lines.push([
-      _csvCell(r.name),
-      _csvCell(r.migrations),
-      _csvCell(r.migrRate),
-      _csvCell(r.avgDwell),
-      _csvCell(r.coreCount),
-      _csvCell(r.primary),
-      _csvCell(`${r.primaryPct.toFixed(1)}%`),
-      _csvCell(r.pingPong),
-      _csvCell(r.stiNear),
-      _csvCell(r.gapAfter),
-      _csvCell(r.gapOther),
-    ].join(','))
-  }
-
-  const scale = tr.timeScale
-  const pairRows = buildCorePairRows(tr, lo, hi)
-  lines.push('')
-  lines.push(`Core-Pair Migration Summary${suffix}`)
-  lines.push('From,To,Count,Bounces,Bounce %,Avg Gap')
-  if (pairRows.length) {
-    for (const r of pairRows) {
-      lines.push([
-        _csvCell(r.fromCore),
-        _csvCell(r.toCore),
-        _csvCell(r.count),
-        _csvCell(r.bounces),
-        _csvCell(`${r.bouncePct.toFixed(1)}%`),
-        _csvCell(formatMigrationGapTime(r.avgGapNs, scale)),
-      ].join(','))
-    }
-  } else {
-    lines.push('No migrations in scope,,,,,')
-  }
-
-  const affRows = coreAffinityRows.value
-  lines.push('')
-  lines.push(`Core Affinity${suffix}`)
-  lines.push('Task,Mask,Observed Cores,Violations')
-  if (affRows.length) {
-    for (const r of affRows) {
-      lines.push([_csvCell(r.label), _csvCell(r.maskHex), _csvCell(r.observedCores), _csvCell(r.violations)].join(','))
-    }
-  } else {
-    lines.push('No affinity_set events,,,')
-  }
-
-  const tcCsv = taskCoreModel.value
-  const tcCores = tcCsv.cores || []
-  lines.push('')
-  lines.push(`Task × Core${suffix}`)
-  lines.push(['Task', ...tcCores].join(','))
-  if ((tcCsv.rows || []).length) {
-    for (const row of tcCsv.rows) {
-      lines.push([
-        _csvCell(row.task),
-        ...tcCores.map(c => {
-          const cell = row.cells?.[c]
-          return cell?.ns ? _csvCell(`${cell.pct_span.toFixed(1)}%`) : ''
-        }),
-      ].join(','))
-    }
-  } else {
-    lines.push(['No on-CPU slices', ...tcCores.map(() => '')].join(','))
-  }
-
-  const ctCsv = coreTimeModel.value
-  const ctCores = ctCsv.cores || []
-  lines.push('')
-  lines.push(`Core Utilization Over Time${suffix}`)
-  lines.push(['Time', ...ctCores].join(','))
-  if ((ctCsv.bins || []).length) {
-    for (const row of ctCsv.bins) {
-      lines.push([
-        _csvCell(formatTime(row.start, scale)),
-        ...ctCores.map(c => {
-          const cell = row.cells?.[c]
-          return cell ? _csvCell(`${cell.pct.toFixed(1)}%`) : ''
-        }),
-      ].join(','))
-    }
-  } else {
-    lines.push(['No on-CPU slices', ...ctCores.map(() => '')].join(','))
-  }
-
-  const lcRows = buildTaskLifecycleRows(tr.stiEvents ?? [], tr.taskRepr, lo, hi, tr.taskCreateTimes, tr.segByMergeKey)
-  lines.push('')
-  lines.push(`Task Lifecycle${suffix}`)
-  lines.push('Task,Created,Deleted,Susp/Res,Alive span,Events,Runs')
-  if (lcRows.length) {
-    for (const r of lcRows) {
-      lines.push([
-        _csvCell(r.label),
-        r.createNs != null ? _csvCell(formatTime(r.createNs, scale)) : '',
-        r.deleteNs != null ? _csvCell(formatTime(r.deleteNs, scale)) : '',
-        _csvCell(`${r.suspendCount}/${r.resumeCount}`),
-        r.aliveSpanNs ? _csvCell(formatLifecycleSpan(r.aliveSpanNs, scale)) : '',
-        _csvCell(r.eventCount),
-        _csvCell(r.runCount),
-      ].join(','))
-    }
-  } else {
-    lines.push('No lifecycle events,,,,,,')
-  }
-
-  if (hasDeadlineConfig.value) {
-    const { sliceViolations, cpuViolations } = deadlineViolations.value
-    lines.push('')
-    lines.push(`Deadlines / CPU budget${suffix}`)
-    lines.push('Slice Violations')
-    lines.push('Task,Duration,Limit,Over by')
-    if (sliceViolations.length) {
-      for (const v of sliceViolations) {
-        lines.push([
-          _csvCell(v.label),
-          _csvCell(v.duration),
-          _csvCell(v.limit),
-          _csvCell(v.overBy),
-        ].join(','))
-      }
-    } else {
-      lines.push('No slice violations,,,')
-    }
-    lines.push('')
-    lines.push('CPU Budget Violations')
-    lines.push('Task,CPU %,Budget')
-    if (cpuViolations.length) {
-      for (const v of cpuViolations) {
-        lines.push([
-          _csvCell(v.label),
-          _csvCell(`${v.pct}%`),
-          _csvCell(`${v.budgetPct}%`),
-        ].join(','))
-      }
-    } else {
-      lines.push('No CPU budget violations,,')
-    }
-  }
-
-  const thCsv = taskHealthRows.value
-  lines.push('')
-  lines.push(`Task Health${suffix}`)
-  lines.push('Task,Score,Exec,Block,Period,Mig,Deadline,CPU')
-  if (thCsv.length) {
-    for (const r of thCsv) {
-      lines.push([
-        _csvCell(r.task),
-        _csvCell(r.score),
-        _csvCell(r.marks.execution || ''),
-        _csvCell(r.marks.blocking || ''),
-        _csvCell(r.marks.period || ''),
-        _csvCell(r.marks.migration || ''),
-        _csvCell(r.marks.deadline || ''),
-        _csvCell(r.marks.cpu || ''),
-      ].join(','))
-    }
-  } else {
-    lines.push('No task slices,,,,,,,')
-  }
-
-  lines.push('')
-  lines.push(`Timeline Anomalies${suffix}`)
-  lines.push('Time,Kind,Task,Duration,Why')
-  if (anomalyRows.value.length) {
-    for (const r of anomalyRows.value) {
-      lines.push([
-        _csvCell(formatTime(r.start, scale)),
-        _csvCell(uxKindLabel(r.kind)),
-        _csvCell(r.task),
-        _csvCell(formatTime(r.duration, scale)),
-        _csvCell(r.reason || ''),
-      ].join(','))
-    }
-  } else {
-    lines.push('No timeline anomalies in this scope,,,,')
-  }
-
-  lines.push('')
-  lines.push(`Worst Events${suffix}`)
-  lines.push('Time,Kind,Task,Duration,Why')
-  if (worstRows.value.length) {
-    for (const r of worstRows.value) {
-      lines.push([
-        _csvCell(formatTime(r.start, scale)),
-        _csvCell(uxKindLabel(r.kind)),
-        _csvCell(r.task),
-        _csvCell(formatTime(r.duration, scale)),
-        _csvCell(r.reason || uxKindLabel(r.kind)),
-      ].join(','))
-    }
-  } else {
-    lines.push('No episodes in this scope,,,,')
-  }
-
-  lines.push('')
-  lines.push(`Critical Path${suffix}`)
-  lines.push('Task,Duration,Exec,Preempt,Wait,Mig,Other')
-  if (critPathRows.value.length) {
-    for (const r of critPathRows.value) {
-      lines.push([
-        _csvCell(r.task),
-        _csvCell(formatTime(r.duration, scale)),
-        _csvCell(formatTime(r.exec_ns, scale)),
-        _csvCell(formatTime(r.preempt_ns, scale)),
-        _csvCell(formatTime(r.wait_ns, scale)),
-        _csvCell(formatTime(r.migration_ns, scale)),
-        _csvCell(formatTime(r.other_ns, scale)),
-      ].join(','))
-    }
-  } else {
-    lines.push('Need at least one on-CPU slice,,,,,')
-  }
-
-  lines.push('')
-  lines.push(`Recurring Patterns${suffix}`)
-  lines.push('Task,Kind,Count,Worst,Why')
-  if (patternRows.value.length) {
-    for (const r of patternRows.value) {
-      lines.push([
-        _csvCell(r.task),
-        _csvCell(uxKindLabel(r.kind)),
-        _csvCell(r.count),
-        _csvCell(formatTime(r.duration, scale)),
-        _csvCell(r.reason || ''),
-      ].join(','))
-    }
-  } else {
-    lines.push('No repeating anomaly kinds in this scope,,,,')
-  }
-
-  lines.push('')
-  lines.push(`Execution Time Per Slice${suffix}`)
-  lines.push('Task,Runs,CPU%,Min,Avg,TrimMean(5%),Max,Jitter,StdDev (population),p50,p95')
-  for (const r of execReportRows) {
-    lines.push([
-      _csvCell(r.name),
-      _csvCell(r.runs),
-      _csvCell(`${r.cpuPct.toFixed(1)}%`),
-      _csvCell(r.min),
-      _csvCell(r.avg),
-      _csvCell(r.trimMean),
-      _csvCell(r.max),
-      _csvCell(r.jitter),
-      _csvCell(r.stddev),
-      _csvCell(r.p50),
-      _csvCell(r.p95),
-    ].join(','))
-  }
-
-  lines.push('')
-  lines.push(`Blocking Time (off-CPU gap)${suffix}`)
-  lines.push('Task,Gaps,Min,Avg,TrimMean(5%),Max,Jitter,StdDev (population),p50,p95')
-  for (const r of blockReportRows) {
-    lines.push([
-      _csvCell(r.name),
-      _csvCell(r.runs),
-      _csvCell(r.min),
-      _csvCell(r.avg),
-      _csvCell(r.trimMean),
-      _csvCell(r.max),
-      _csvCell(r.jitter),
-      _csvCell(r.stddev),
-      _csvCell(r.p50),
-      _csvCell(r.p95),
-    ].join(','))
-  }
-
-  lines.push('')
-  lines.push(`Dispatch / Scheduling Latency${suffix}`)
-  lines.push('Task,Activations,Min,Avg,Max,Jitter,StdDev (population),p95,p99')
-  const dispCsvRows = dispatchLatencyRows(tr, lo, hi)
-  if (dispCsvRows.length) {
-    for (const r of dispCsvRows) {
-      lines.push([
-        _csvCell(r.label),
-        _csvCell(r.activations),
-        _csvCell(r.min),
-        _csvCell(r.avg),
-        _csvCell(r.max),
-        _csvCell(r.jitter),
-        _csvCell(r.stddev),
-        _csvCell(r.p95),
-        _csvCell(r.p99),
-      ].join(','))
-    }
-  } else {
-    lines.push('No data,,,,,,,,')
-  }
-
-  lines.push('')
-  lines.push(`Inter-Arrival Time${suffix}`)
-  lines.push('Task,Runs,Min,Avg,TrimMean(5%),Max,Jitter,StdDev (population),p50,p95')
-  for (const r of interReportRows) {
-    lines.push([
-      _csvCell(r.name),
-      _csvCell(r.runs),
-      _csvCell(r.min),
-      _csvCell(r.avg),
-      _csvCell(r.trimMean),
-      _csvCell(r.max),
-      _csvCell(r.jitter),
-      _csvCell(r.stddev),
-      _csvCell(r.p50),
-      _csvCell(r.p95),
-    ].join(','))
-  }
-
-  const perCsv = periodRows.value
-  lines.push('')
-  lines.push(`Period / Jitter${suffix}`)
-  lines.push('Task,N,Expected,Min,Avg,Max,p95,p99,RMS,CV,Missed,Extra,Burst,Spark')
-  if (perCsv.length) {
-    for (const r of perCsv) {
-      lines.push([
-        _csvCell(r.task),
-        _csvCell(r.n),
-        _csvCell(formatTime(r.expected_ns, tr.timeScale)),
-        _csvCell(formatTime(r.min_ns, tr.timeScale)),
-        _csvCell(formatTime(r.avg_ns, tr.timeScale)),
-        _csvCell(formatTime(r.max_ns, tr.timeScale)),
-        _csvCell(formatTime(r.p95_ns, tr.timeScale)),
-        _csvCell(formatTime(r.p99_ns, tr.timeScale)),
-        _csvCell(formatTime(r.rms_ns, tr.timeScale)),
-        _csvCell(`${(r.cv * 100).toFixed(1)}%`),
-        _csvCell(r.missed),
-        _csvCell(r.extra),
-        _csvCell(r.burst || 0),
-        _csvCell(r.spark || ''),
-      ].join(','))
-    }
-  } else {
-    lines.push('Need at least 3 inter-arrival gaps per task,,,,,,,,,,,,')
-  }
-
-  lines.push('')
-  lines.push(`Response Time${suffix}`)
-  lines.push('Task,N,Min,Avg,Max,p50,p90,p95,p99,p99.9,Jitter,CV')
-  if (responseRows.value.length) {
-    for (const r of responseRows.value) {
-      lines.push([
-        _csvCell(r.task),
-        _csvCell(r.n),
-        _csvCell(formatTime(r.min_ns, scale)),
-        _csvCell(formatTime(r.avg_ns, scale)),
-        _csvCell(formatTime(r.max_ns, scale)),
-        _csvCell(formatTime(r.p50_ns, scale)),
-        _csvCell(formatTime(r.p90_ns, scale)),
-        _csvCell(formatTime(r.p95_ns, scale)),
-        _csvCell(formatTime(r.p99_ns, scale)),
-        _csvCell(formatTime(r.p999_ns, scale)),
-        _csvCell(formatTime(r.jitter_ns, scale)),
-        _csvCell(`${((r.cv || 0) * 100).toFixed(1)}%`),
-      ].join(','))
-    }
-  } else {
-    lines.push('Need at least one on-CPU slice,,,,,,,,,,,')
-  }
-
-  lines.push('')
-  lines.push(`Unified Jitter${suffix}`)
-  lines.push('Task,Exec,Exec CV,Block,Block CV,Inter,Inter CV,Response,Resp CV,Dispatch,Disp CV,Wake,Wake CV')
-  if (jitterRows.value.length) {
-    for (const r of jitterRows.value) {
-      lines.push([
-        _csvCell(r.task),
-        _csvCell(formatTime(r.exec_jitter_ns, scale)),
-        _csvCell(`${((r.exec_cv || 0) * 100).toFixed(1)}%`),
-        _csvCell(formatTime(r.block_jitter_ns, scale)),
-        _csvCell(`${((r.block_cv || 0) * 100).toFixed(1)}%`),
-        _csvCell(formatTime(r.inter_jitter_ns, scale)),
-        _csvCell(`${((r.inter_cv || 0) * 100).toFixed(1)}%`),
-        _csvCell(formatTime(r.response_jitter_ns, scale)),
-        _csvCell(`${((r.response_cv || 0) * 100).toFixed(1)}%`),
-        _csvCell(formatTime(r.dispatch_jitter_ns, scale)),
-        _csvCell(`${((r.dispatch_cv || 0) * 100).toFixed(1)}%`),
-        _csvCell(formatTime(r.wakeup_jitter_ns, scale)),
-        _csvCell(`${((r.wakeup_cv || 0) * 100).toFixed(1)}%`),
-      ].join(','))
-    }
-  } else {
-    lines.push('No timing samples in this scope,,,,,,,,,,,,')
-  }
-
-  lines.push('')
-  lines.push(`Preemption Chain Analysis${suffix}`)
-  lines.push('Victim,Preemptor,Count,Total,Avg,Max')
-  if (preemptReportRows.length) {
-    for (const row of preemptReportRows) {
-      lines.push([
-        _csvCell(row.victim),
-        _csvCell(row.preemptor),
-        _csvCell(row.count),
-        _csvCell(row.total),
-        _csvCell(row.avg),
-        _csvCell(row.max),
-      ].join(','))
-    }
-  } else {
-    lines.push('No preemption events found,,,,,')
-  }
-
-  lines.push('')
-  lines.push(`Preemption Matrix${suffix}`)
-  lines.push('Victim,Count,Total,Max,Top preemptors,Story')
-  if (preemptRankRows.value.length) {
-    for (const r of preemptRankRows.value) {
-      lines.push([
-        _csvCell(r.task),
-        _csvCell(r.count),
-        _csvCell(formatTime(r.total_ns, scale)),
-        _csvCell(formatTime(r.max_ns, scale)),
-        _csvCell(r.top_label || ''),
-        _csvCell(r.story || ''),
-      ].join(','))
-    }
-  } else {
-    lines.push('No preemption overlaps in this scope,,,,')
-  }
-
-  lines.push('')
-  lines.push(`Priority Inheritance${suffix}`)
-  lines.push('Task,Base,Peak,Boosts,Boosted,Pattern')
-  const priorityReportRows = priorityStatsRows(tr, lo, hi)
-  if (priorityReportRows.length) {
-    for (const row of priorityReportRows) {
-      lines.push([
-        _csvCell(row.label),
-        _csvCell(row.basePri),
-        _csvCell(row.peakPri),
-        _csvCell(row.episodeCount),
-        _csvCell(row.total),
-        _csvCell(row.pattern),
-      ].join(','))
-    }
-  } else if (tr?.hasPriorityInstrumentation) {
-    lines.push('No priority boosts in scope,,,,,')
-  }
-
-  lines.push('')
-  lines.push(`Mutex / Semaphore${suffix}`)
-  lines.push('Object,Kind,Holds,Issues,Bounces,Avg hold,Status')
-  const syncReportRows = syncObjectStatsRows(tr, lo, hi)
-  if (syncReportRows.length) {
-    for (const row of syncReportRows) {
-      lines.push([
-        _csvCell(row.label),
-        _csvCell(row.kind),
-        _csvCell(row.holdCount),
-        _csvCell(row.issueCount),
-        _csvCell(row.bounceCount ?? 0),
-        _csvCell(row.avgHold),
-        _csvCell(row.statusLabel),
-      ].join(','))
-    }
-    const bounced = syncReportRows.filter(r => (r.bounceCount || 0) > 0)
-    if (bounced.length) {
-      lines.push('')
-      lines.push(`Core Affinity Violations (lock bounce)${suffix}`)
-      lines.push('Object,Bounces,Description')
-      for (const row of bounced) {
-        const n = row.bounceCount
-        lines.push([
-          _csvCell(row.label),
-          _csvCell(n),
-          _csvCell(`${n} hold(s) crossed core boundaries`),
-        ].join(','))
-      }
-    }
-  } else if (tr?.hasSyncObjectInstrumentation) {
-    lines.push('No mutex/sem activity in scope,,,,,,')
-  }
-
-  if (tr?.hasSyncObjectInstrumentation) {
-    lines.push('')
-    lines.push(`Pairing Issues${suffix}`)
-    lines.push('Object,Time,Detail,Issue,Task,Core')
-    const issueReportRows = syncObjectIssueRows(tr, lo, hi)
-    if (issueReportRows.length) {
-      for (const iss of issueReportRows) {
-        lines.push([
-          _csvCell(iss.objKey || ''),
-          _csvCell(formatTime(iss.timeNs, tr.timeScale)),
-          _csvCell(iss.detail),
-          _csvCell(iss.kind),
-          _csvCell(iss.taskLabel || ''),
-          _csvCell(iss.core || ''),
-        ].join(','))
-      }
-    } else {
-      lines.push('No pairing issues in scope,,,,,')
-    }
-  }
-
-  const woCsv = waitOwnerModel.value
-  const woTasks = woCsv.tasks || []
-  lines.push('')
-  lines.push(`Waiter × Owner${suffix}`)
-  lines.push(['Waiter \\ Owner', ...woTasks.map(t => t.task)].join(','))
-  if (woTasks.length) {
-    for (const w of woTasks) {
-      lines.push([
-        _csvCell(w.task),
-        ...woTasks.map(o => {
-          if (w.mk === o.mk) return ''
-          const cell = woCsv.cells[`${w.mk}|${o.mk}`]
-          return cell?.ns ? _csvCell(formatTime(cell.ns, tr.timeScale)) : ''
-        }),
-      ].join(','))
-    }
-  } else {
-    lines.push('No mutex handoffs in this scope')
-  }
-
-  lines.push('')
-  lines.push(`Mutex Blocking${suffix}`)
-  lines.push('Task,Object,Owner,Count,Total,Max')
-  if (mutexBlockRows.value.length) {
-    for (const r of mutexBlockRows.value) {
-      lines.push([
-        _csvCell(r.task),
-        _csvCell(r.object),
-        _csvCell(r.owner),
-        _csvCell(r.count),
-        _csvCell(formatTime(r.total_ns, scale)),
-        _csvCell(formatTime(r.max_ns, scale)),
-      ].join(','))
-    }
-  } else {
-    lines.push('No mutex waits in this scope,,,,,')
-  }
-
-  const queueReportRows = syncObjectStatsRows(tr, lo, hi, { kindFilter: 'queue' })
-  lines.push('')
-  lines.push(`Queue${suffix}`)
-  lines.push('Object,Kind,Holds,Issues,Bounces,Avg hold,Status')
-  if (queueReportRows.length) {
-    for (const row of queueReportRows) {
-      lines.push([
-        _csvCell(row.label),
-        _csvCell(row.kind),
-        _csvCell(row.holdCount),
-        _csvCell(row.issueCount),
-        _csvCell(row.bounceCount ?? 0),
-        _csvCell(row.avgHold),
-        _csvCell(row.statusLabel),
-      ].join(','))
-    }
-  } else if (tr?.hasSyncObjectInstrumentation) {
-    lines.push('No queue activity in scope,,,,,,')
-  }
-
-  const intervalReportRows = intervalStatsRows(tr, lo, hi)
-  lines.push('')
-  lines.push(`Interval Analysis${suffix}`)
-  lines.push('ID,Label,Count,Min,Avg,Max,p95')
-  if (intervalReportRows.length) {
-    for (const row of intervalReportRows) {
-      lines.push([
-        _csvCell(row.id),
-        _csvCell(row.label),
-        _csvCell(row.count),
-        _csvCell(row.min),
-        _csvCell(row.avg),
-        _csvCell(row.max),
-        _csvCell(row.p95),
-      ].join(','))
-    }
-  } else {
-    lines.push('No interval data,,,,,,')
-  }
-
-  const tagReportRows = tagStatsRows(tr, lo, hi)
-  lines.push('')
-  lines.push(`Tag Analysis${suffix}`)
-  lines.push('Channel,Label,Count,Min,Avg,Max,p95')
-  if (tagReportRows.length) {
-    for (const row of tagReportRows) {
-      lines.push([
-        _csvCell(row.channel),
-        _csvCell(row.label),
-        _csvCell(row.count),
-        _csvCell(row.min),
-        _csvCell(row.avg),
-        _csvCell(row.max),
-        _csvCell(row.p95),
-      ].join(','))
-    }
-  } else {
-    lines.push('No tag data,,,,,,')
-  }
-
-
-  _downloadText(`statistics-${_stamp()}.csv`, `\uFEFF${lines.join('\n')}`, 'text/csv;charset=utf-8')
 }
 
 function _summarizeSamplesReport(samples, scale) {
@@ -8254,11 +7475,10 @@ function exportHtml() {
     : ''
   const tab = (props.tabs || []).find(t => t.trace === tr)
   const filterParts = []
-  if (r) filterParts.push('Limit to C1–Cn')
   if (props.activeFilterLabel) filterParts.push(String(props.activeFilterLabel))
   const scopeHtml = htmlScopeIdentityCard({
     filename: tab?.name || 'trace',
-    scopeType: r ? `Cursor range C1–C${r.nCursors}` : 'Full trace',
+    scopeType: r ? `C1–C${r.nCursors} · ${spanStr.value}` : 'Full Trace',
     start: startS,
     end: endS,
     duration: spanStr.value,
@@ -8291,7 +7511,7 @@ function exportHtml() {
   const now = new Date()
   const pad = n => String(n).padStart(2, '0')
   const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
-  const statsExtraCss = `${STATS_HTML_EXTRA_CSS}\n${_HTML_EXPORT_UTIL_CSS}`.trim()
+  const statsExtraCss = `${STATS_HTML_EXTRA_CSS}\n${HTML_REPORT_TOC_CSS}\n${_HTML_EXPORT_UTIL_CSS}`.trim()
 
   const body = `
     ${htmlDiagnosticKpiGrid(kpis)}
@@ -8913,7 +8133,7 @@ defineExpose({
   align-items: center;
   gap: 6px;
   color: var(--fg);
-  font-size: 10px;
+  font-size: var(--type-meta, 11px);
   cursor: pointer;
   user-select: none;
 }
@@ -8925,7 +8145,7 @@ defineExpose({
 
 .stats-scope-label {
   color: var(--fg-dim);
-  font-size: 10px;
+  font-size: var(--type-meta, 11px);
   line-height: 1.35;
   word-break: break-word;
 }
@@ -8937,7 +8157,7 @@ defineExpose({
   border-radius: 999px;
   border: 1px solid var(--accent);
   color: var(--fg);
-  font-size: 10px;
+  font-size: var(--type-meta, 11px);
   line-height: 1.5;
 }
 
@@ -8946,7 +8166,7 @@ defineExpose({
   flex-direction: column;
   gap: 1px;
   color: var(--fg-dim);
-  font-size: 10px;
+  font-size: var(--type-meta, 11px);
   line-height: 1.25;
 }
 
@@ -8971,7 +8191,7 @@ defineExpose({
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 10px;
+  font-size: var(--type-meta, 11px);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -9001,7 +8221,7 @@ defineExpose({
 .range-hint {
   color: var(--fg-dim);
   opacity: 0.6;
-  font-size: 10px;
+  font-size: var(--type-meta, 11px);
   font-style: italic;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -9040,7 +8260,7 @@ defineExpose({
 
 .deadline-settings-hint {
   color: var(--fg-dim);
-  font-size: 10px;
+  font-size: var(--type-meta, 11px);
   font-style: italic;
   line-height: 1.4;
   margin: 0 0 4px;
@@ -9055,7 +8275,7 @@ defineExpose({
   color: #5B9BD5;
   font: inherit;
   font-style: italic;
-  font-size: 10px;
+  font-size: var(--type-meta, 11px);
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -9070,11 +8290,11 @@ defineExpose({
 }
 
 .priority-hint code {
-  font-size: 10px;
+  font-size: var(--type-meta, 11px);
 }
 
 .priority-pattern {
-  font-size: 10px;
+  font-size: var(--type-meta, 11px);
   color: var(--fg-dim);
 }
 
@@ -9127,7 +8347,7 @@ defineExpose({
 
 .tick-mode-badge {
   display: inline-block;
-  font-size: 10px;
+  font-size: var(--type-meta, 11px);
   font-weight: 700;
   padding: 1px 4px;
   border-radius: 3px;
@@ -9308,17 +8528,25 @@ defineExpose({
 }
 
 .stats-table-migration {
-  min-width: 520px;
+  min-width: min(520px, 100%);
+}
+@media (max-width: 760px) {
+  .stats-table-migration {
+    min-width: 0;
+  }
+  .stats-table-preemption {
+    min-width: 0;
+  }
 }
 
 .stats-table-preemption {
-  min-width: 380px;
+  min-width: min(380px, 100%);
 }
 
 .stats-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 10px;
+  font-size: var(--type-meta, 11px);
 }
 
 .stats-table th,
@@ -9600,7 +8828,7 @@ defineExpose({
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  font-size: 10px;
+  font-size: var(--type-meta, 11px);
   padding: 3px 8px;
   border-radius: 4px;
 }
@@ -9695,7 +8923,7 @@ defineExpose({
 .plot-histogram-caption {
   flex: 1 1 auto;
   min-width: 180px;
-  font-size: 10px;
+  font-size: var(--type-meta, 11px);
   color: var(--fg-dim);
 }
 
@@ -9737,7 +8965,7 @@ defineExpose({
 }
 
 .plot-crosshair-tip-sub {
-  font-size: 10px;
+  font-size: var(--type-meta, 11px);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   fill: var(--fg-dim);
 }

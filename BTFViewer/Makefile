@@ -48,7 +48,7 @@ help:
 	@echo "  make web          Web viewer only → builds/btf_viewer.html"
 	@echo "  make bundle       Desktop bundle only → builds/btf_viewer.py"
 	@echo "  make check-bundle Regenerate bundle; fail if it drifts from sources (CI)"
-	@echo "  make doc          Convert README/STATISTICS/AI/WORKFLOWS (Pandoc+Mermaid) → builds/*.pdf"
+	@echo "  make doc          Convert README/STATISTICS/AI/WORKFLOWS (+ zh-TW) → docs/*.pdf"
 	@echo "  make update-images  Regenerate ../images/stats/*.svg via the desktop CLI"
 	@echo "  make demo         Run guided demo via builds/btf_viewer.py (DEMO_XML, DEMO_LANG)"
 	@echo "  make demo-voice   Voice pack status (DEMO_XML). See scripts/demo_voice.py"
@@ -134,7 +134,12 @@ ai-test-context:
 
 ci: test-all check-bundle
 
-doc: $(DOCS)/README.pdf $(DOCS)/STATISTICS.pdf $(DOCS)/AI.pdf $(DOCS)/WORKFLOWS.pdf
+DOC_PDFS := \
+	$(DOCS)/README.pdf $(DOCS)/STATISTICS.pdf $(DOCS)/AI.pdf $(DOCS)/WORKFLOWS.pdf \
+	$(DOCS)/README_zh-TW.pdf $(DOCS)/STATISTICS_zh-TW.pdf \
+	$(DOCS)/AI_zh-TW.pdf $(DOCS)/WORKFLOWS_zh-TW.pdf
+
+doc: $(DOC_PDFS)
 
 # Use the vendored Eisvogel template (scripts/eisvogel.latex). Do not pass
 # `--template=eisvogel`: pandoc prefers ~/.local/share/pandoc/templates/eisvogel.latex,
@@ -153,7 +158,8 @@ doc: $(DOCS)/README.pdf $(DOCS)/STATISTICS.pdf $(DOCS)/AI.pdf $(DOCS)/WORKFLOWS.
 # \hypertarget so in-document links match GitHub slugs (Keyboard & mouse, etc.).
 #
 # Sibling manuals: scripts/md-pdf-links.lua turns STATISTICS.md#… into
-# STATISTICS.pdf#… so PDF cross-links land on those hypertargets.
+# STATISTICS.pdf#… (and *_zh-TW.md → *_zh-TW.pdf) so PDF cross-links land
+# on those hypertargets.
 #
 # Emoji: DejaVu has no ❌/🟢/🟡/🔴; scripts/emoji-fallback.lua substitutes
 # for LaTeX only (GitHub keeps the UI glyphs).
@@ -164,7 +170,7 @@ doc: $(DOCS)/README.pdf $(DOCS)/STATISTICS.pdf $(DOCS)/AI.pdf $(DOCS)/WORKFLOWS.
 # CJK: DejaVu has no 中/文. If xeCJK.sty is installed, Eisvogel uses it
 # (override font with CJK_MAINFONT=…). Otherwise fontspec + ucharclasses
 # (scripts/cjk-fallback.tex) — this machine often has Droid Sans Fallback
-# without texlive-xecjk.
+# without texlive-xecjk. Required for *_zh-TW.md PDFs.
 CJK_MAINFONT ?= $(shell fc-list :lang=zh family 2>/dev/null | head -1 | cut -d',' -f1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$$//')
 HAS_XECJK := $(shell kpsewhich xeCJK.sty 2>/dev/null)
 CJK_HEADER := $(if $(and $(CJK_MAINFONT),$(if $(HAS_XECJK),,1)),$(BUILDS)/cjk-fallback.tex,)
@@ -176,7 +182,9 @@ PANDOC_PDF_FLAGS := --pdf-engine=xelatex \
 	--lua-filter scripts/md-pdf-links.lua \
 	--lua-filter scripts/emoji-fallback.lua \
 	--lua-filter scripts/table-widths.lua \
+	--lua-filter scripts/cjk-image-alt.lua \
 	--include-in-header=scripts/table-layout.tex \
+	--include-in-header=scripts/figure-maxsize.tex \
 	--resource-path=..:. \
 	-f markdown-blank_before_header \
 	-V mainfont="DejaVu Sans" \
@@ -187,10 +195,40 @@ PANDOC_PDF_FLAGS := --pdf-engine=xelatex \
 
 DOC_LUA := scripts/mermaid-filter.lua scripts/math-codeblock.lua \
 	scripts/html-anchor-filter.lua scripts/md-pdf-links.lua \
-	scripts/emoji-fallback.lua scripts/table-widths.lua
+	scripts/emoji-fallback.lua scripts/table-widths.lua \
+	scripts/cjk-image-alt.lua
+DOC_TEX := scripts/table-layout.tex scripts/figure-maxsize.tex
+
+# Noto Sans CJK TC for Traditional Chinese manuals (Latin + CJK in one face).
+CJK_FONT_DIR := scripts/fonts
+CJK_FONT_REG := $(CJK_FONT_DIR)/NotoSansCJKtc-Regular.otf
+CJK_FONT_BOLD := $(CJK_FONT_DIR)/NotoSansCJKtc-Bold.otf
+CJK_FONT_URL_BASE := https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/TraditionalChinese
+PANDOC_PDF_FLAGS_ZHTW := --pdf-engine=xelatex \
+    --template=scripts/eisvogel.latex \
+	--lua-filter scripts/math-codeblock.lua \
+	--lua-filter scripts/mermaid-filter.lua \
+	--lua-filter scripts/html-anchor-filter.lua \
+	--lua-filter scripts/md-pdf-links.lua \
+	--lua-filter scripts/emoji-fallback.lua \
+	--lua-filter scripts/table-widths.lua \
+	--lua-filter scripts/cjk-image-alt.lua \
+	--include-in-header=scripts/table-layout.tex \
+	--include-in-header=scripts/cjk-zh-tw.tex \
+	--include-in-header=scripts/figure-maxsize.tex \
+	--resource-path=..:. \
+	-f markdown-blank_before_header \
+	-V mainfont="NotoSansCJKtc-Regular.otf" \
+	-V mainfontoptions="Path=$(CJK_FONT_DIR)/,BoldFont=NotoSansCJKtc-Bold.otf,ItalicFont=NotoSansCJKtc-Regular.otf,BoldItalicFont=NotoSansCJKtc-Bold.otf" \
+	-V sansfont="NotoSansCJKtc-Regular.otf" \
+	-V sansfontoptions="Path=$(CJK_FONT_DIR)/,BoldFont=NotoSansCJKtc-Bold.otf,ItalicFont=NotoSansCJKtc-Regular.otf,BoldItalicFont=NotoSansCJKtc-Bold.otf" \
+	-V monofont="NotoSansCJKtc-Regular.otf" \
+	-V monofontoptions="Path=$(CJK_FONT_DIR)/,BoldFont=NotoSansCJKtc-Bold.otf,ItalicFont=NotoSansCJKtc-Regular.otf,BoldItalicFont=NotoSansCJKtc-Bold.otf" \
+	-V geometry:margin=2.5cm \
+	-V colorlinks=true
 
 # Ensure mermaid PNG cache exists before pandoc runs.
-$(DOCS)/README.pdf $(DOCS)/STATISTICS.pdf $(DOCS)/AI.pdf $(DOCS)/WORKFLOWS.pdf: | $(DOCS)/.mermaid-cache-stamp
+$(DOC_PDFS): | $(DOCS)/.mermaid-cache-stamp
 
 $(DOCS)/.mermaid-cache-stamp:
 	mkdir -p $(BUILDS)/mermaid-cache
@@ -200,21 +238,45 @@ $(BUILDS)/cjk-fallback.tex: scripts/cjk-fallback.tex
 	mkdir -p $(BUILDS)
 	sed 's/CJKFONT/$(CJK_MAINFONT)/g' $< > $@
 
-$(DOCS)/README.pdf: README.md $(DOC_LUA) scripts/table-layout.tex $(CJK_HEADER)
+$(CJK_FONT_REG):
+	mkdir -p $(CJK_FONT_DIR)
+	curl -L --fail -o $@ $(CJK_FONT_URL_BASE)/NotoSansCJKtc-Regular.otf
+
+$(CJK_FONT_BOLD):
+	mkdir -p $(CJK_FONT_DIR)
+	curl -L --fail -o $@ $(CJK_FONT_URL_BASE)/NotoSansCJKtc-Bold.otf
+
+$(DOCS)/README.pdf: README.md $(DOC_LUA) $(DOC_TEX) $(CJK_HEADER)
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF Trace Viewer" $< -o $@
 
-$(DOCS)/STATISTICS.pdf: STATISTICS.md $(DOC_LUA) scripts/table-layout.tex $(CJK_HEADER)
+$(DOCS)/STATISTICS.pdf: STATISTICS.md $(DOC_LUA) $(DOC_TEX) $(CJK_HEADER)
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF Viewer — Statistics" $< -o $@
 
-$(DOCS)/AI.pdf: AI.md $(DOC_LUA) scripts/table-layout.tex $(CJK_HEADER)
+$(DOCS)/AI.pdf: AI.md $(DOC_LUA) $(DOC_TEX) $(CJK_HEADER)
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF AI Assistant" $< -o $@
 
-$(DOCS)/WORKFLOWS.pdf: WORKFLOWS.md $(DOC_LUA) scripts/table-layout.tex $(CJK_HEADER)
+$(DOCS)/WORKFLOWS.pdf: WORKFLOWS.md $(DOC_LUA) $(DOC_TEX) $(CJK_HEADER)
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF Viewer — Analysis Workflows" $< -o $@
+
+$(DOCS)/README_zh-TW.pdf: README_zh-TW.md $(DOC_LUA) $(DOC_TEX) scripts/cjk-zh-tw.tex $(CJK_FONT_REG) $(CJK_FONT_BOLD)
+	mkdir -p $(DOCS)
+	$(PANDOC) $(PANDOC_PDF_FLAGS_ZHTW) -M title="BTF Trace Viewer（繁體中文）" $< -o $@
+
+$(DOCS)/STATISTICS_zh-TW.pdf: STATISTICS_zh-TW.md $(DOC_LUA) $(DOC_TEX) scripts/cjk-zh-tw.tex $(CJK_FONT_REG) $(CJK_FONT_BOLD)
+	mkdir -p $(DOCS)
+	$(PANDOC) $(PANDOC_PDF_FLAGS_ZHTW) -M title="BTF Viewer — Statistics（繁體中文）" $< -o $@
+
+$(DOCS)/AI_zh-TW.pdf: AI_zh-TW.md $(DOC_LUA) $(DOC_TEX) scripts/cjk-zh-tw.tex $(CJK_FONT_REG) $(CJK_FONT_BOLD)
+	mkdir -p $(DOCS)
+	$(PANDOC) $(PANDOC_PDF_FLAGS_ZHTW) -M title="BTF AI Assistant（繁體中文）" $< -o $@
+
+$(DOCS)/WORKFLOWS_zh-TW.pdf: WORKFLOWS_zh-TW.md $(DOC_LUA) $(DOC_TEX) scripts/cjk-zh-tw.tex $(CJK_FONT_REG) $(CJK_FONT_BOLD)
+	mkdir -p $(DOCS)
+	$(PANDOC) $(PANDOC_PDF_FLAGS_ZHTW) -M title="BTF Viewer — Analysis Workflows（繁體中文）" $< -o $@
 
 # Fail if builds/btf_viewer.py drifts from package sources (CI / pre-commit).
 check-bundle: bundle

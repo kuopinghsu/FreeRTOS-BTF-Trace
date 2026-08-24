@@ -1393,6 +1393,82 @@ def extract_evidence_panel_payload(
     return payload
 
 
+def _evidence_items_have_times(evidence: Any) -> bool:
+    """True when any evidence dict carries a concrete ``time`` (jump:TIME)."""
+    if not isinstance(evidence, (list, tuple)):
+        return False
+    return any(
+        isinstance(e, dict) and e.get("time") is not None
+        for e in evidence
+    )
+
+
+def refresh_evidence_panel_scores(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Recompute heuristic score / quality fields on an Evidence panel payload."""
+    out = dict(payload or {})
+    score_data = compute_evidence_score(
+        out.get("evidence"),
+        alternatives=out.get("alternatives"),
+        evidence_chain=str(out.get("evidence_chain") or ""),
+        checks=out.get("checks"),
+    )
+    out["evidence_score"] = score_data["score"]
+    out["evidence_score_breakdown"] = score_data["breakdown"]
+    out["evidence_score_bar"] = score_data["bar"]
+    quality = compute_evidence_quality(
+        score=score_data["score"],
+        breakdown=score_data.get("breakdown"),
+        evidence=out.get("evidence"),
+        alternatives=out.get("alternatives"),
+        checks=out.get("checks"),
+        evidence_chain=str(out.get("evidence_chain") or ""),
+    )
+    out["evidence_quality"] = quality
+    out["evidence_quality_bar"] = quality.get("bar")
+    return out
+
+
+def merge_evidence_panel_payload(
+    prev: Optional[Dict[str, Any]],
+    new: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Carry forward timed evidence when a later tool omits it.
+
+    ``auto_investigate`` ends with planner tools (``rank_root_causes``,
+    ``challenge_conclusion``, ``score_investigation``, …) that publish a
+    conclusion but no ``jump:TIME`` rows. Without a merge, replacing the
+    Evidence panel collapses the heuristic score to 0% even though earlier
+    ``investigate`` / ``correlate_events`` / ``find_critical_path`` results
+    were strong.
+    """
+    if not isinstance(new, dict) or not new:
+        return dict(prev) if isinstance(prev, dict) and prev else new
+    if not isinstance(prev, dict) or not prev:
+        return dict(new)
+    out = dict(new)
+    if not _evidence_items_have_times(out.get("evidence")) and _evidence_items_have_times(
+        prev.get("evidence")
+    ):
+        out["evidence"] = list(prev.get("evidence") or [])
+    if not str(out.get("evidence_chain") or "").strip() and str(
+        prev.get("evidence_chain") or ""
+    ).strip():
+        out["evidence_chain"] = prev.get("evidence_chain")
+    if not out.get("checks") and prev.get("checks"):
+        out["checks"] = list(prev.get("checks") or [])
+    for key in (
+        "alternatives",
+        "hypotheses",
+        "hypotheses_managed",
+        "root_cause_chain",
+        "finding",
+        "subtitle",
+    ):
+        if not out.get(key) and prev.get(key):
+            out[key] = prev[key]
+    return refresh_evidence_panel_scores(out)
+
+
 def _evidence_jump_token(value: Any) -> str:
     try:
         tn = float(value)

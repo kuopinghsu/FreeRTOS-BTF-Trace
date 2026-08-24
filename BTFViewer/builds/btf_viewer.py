@@ -371,7 +371,7 @@ COMMAND_PALETTE_ACTIONS = (
     ("heatmap", "Migration heatmap"),
     ("settings", "Settings"),
     ("limit-scope", "Limit to C1–Cn"),
-    ("fit", "Zoom fit"),
+    ("fit", "Fit Trace"),
     ("inspect-task", "Inspect task"),
     ("preset-triage", "Workspace: Triage"),
     ("preset-latency", "Workspace: Latency"),
@@ -400,7 +400,7 @@ COMMAND_PALETTE_META: Dict[str, Dict[str, Any]] = {
         "disabled": "Open a trace first",
     },
     "marks": {
-        "shortcut": "",
+        "shortcut": "Ctrl+B",
         "synonyms": ("bookmarks", "annotations", "notes"),
         "requires": "trace",
         "disabled": "Open a trace first",
@@ -437,12 +437,12 @@ COMMAND_PALETTE_META: Dict[str, Dict[str, Any]] = {
     },
     "fit": {
         "shortcut": "Ctrl+0",
-        "synonyms": ("zoom", "reset", "overview"),
+        "synonyms": ("zoom", "reset", "overview", "fit trace"),
         "requires": "trace",
         "disabled": "Open a trace first",
     },
     "inspect-task": {
-        "shortcut": "",
+        "shortcut": "I",
         "synonyms": ("inspector", "task info", "quality"),
         "requires": "trace",
         "disabled": "Open a trace first",
@@ -2238,12 +2238,13 @@ def btf_html_report_document(
 
 HTML_REPORT_TOC_CSS = """
 .report-toc {
-  background: var(--paper);
+  background: linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 12px 14px;
+  border-radius: 14px;
+  padding: 16px 18px 18px;
   margin: 14px 0;
-  box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
+  box-shadow: 0 4px 16px rgba(30, 60, 90, 0.07);
+  counter-reset: toc-item;
 }
 .report-toc-head {
   display: flex;
@@ -2251,37 +2252,107 @@ HTML_REPORT_TOC_CSS = """
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
-  margin: 0 0 8px 0;
+  margin: 0 0 6px 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
 }
-.report-toc h2 { margin: 0; }
+.report-toc-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.report-toc h2 {
+  margin: 0;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+.toc-count {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--muted);
+  background: #eef3f9;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.report-toc-lead {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+}
 .report-toc-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .toc-btn {
   font: inherit;
   font-size: 12px;
-  padding: 4px 10px;
+  padding: 5px 11px;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #f1f5fb;
+  border-radius: 7px;
+  background: #fff;
   color: var(--accent);
   cursor: pointer;
+  box-shadow: 0 1px 2px rgba(30, 60, 90, 0.04);
 }
-.toc-btn:hover { background: #e4edf8; }
-.report-toc ul { margin: 0; padding: 0 0 0 18px; columns: 2; column-gap: 24px; }
-.report-toc li { margin: 4px 0; }
-.report-toc a { color: var(--accent); text-decoration: none; }
-.report-toc a:hover { text-decoration: underline; }
-.toc-groups { display: grid; gap: 10px; }
-.toc-group h3 {
-  margin: 8px 0 4px;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+.toc-btn:hover { background: #eef4fb; border-color: #c5d4e6; }
+.report-toc ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  columns: 2;
+  column-gap: 28px;
+}
+.report-toc li {
+  margin: 0;
+  padding: 4px 0;
+  break-inside: avoid;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.report-toc li::before {
+  content: counter(toc-item, decimal-leading-zero);
+  counter-increment: toc-item;
+  flex: 0 0 auto;
+  min-width: 1.6em;
+  font-size: 11px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
   color: var(--muted);
 }
-.toc-group ul { columns: 1; padding-left: 16px; }
+.report-toc a {
+  color: #1a4f80;
+  text-decoration: none;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.report-toc a:hover { color: var(--accent); text-decoration: underline; }
+.toc-groups { display: grid; gap: 12px; }
+.toc-group {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px 12px;
+  box-shadow: 0 1px 3px rgba(30, 60, 90, 0.04);
+}
+.toc-group h3 {
+  margin: 0 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #e8eef5;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #5f6f82;
+}
+.toc-group ul { columns: 1; }
 @media (min-width: 720px) {
   .toc-groups { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 640px) {
+  .report-toc ul { columns: 1; }
 }
 details.report-card { scroll-margin-top: 12px; }
 details.report-card > summary { cursor: pointer; list-style: none; }
@@ -2423,7 +2494,7 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
       var head = Array.prototype.map.call(table.tHead.rows[0].cells, textOf);
       var body = rows.filter(function (tr) { return tr.style.display !== 'none'; })
         .map(function (tr) { return Array.prototype.map.call(tr.cells, textOf); });
-      downloadCsv('statistics-table-' + (idx + 1) + '.csv', [head].concat(body));
+      downloadCsv('report-table-' + (idx + 1) + '.csv', [head].concat(body));
     });
     apply();
   }
@@ -2466,9 +2537,12 @@ def html_toc_nav(entries, groups=None) -> str:
 
     *groups* is an optional sequence of ``(group_title, title_prefixes)``.
     """
+    items = list(entries or [])
+    n = len(items)
+    count_label = f"{n} section" if n == 1 else f"{n} sections"
     grouped_items = ""
     if groups:
-        remaining = list(entries or [])
+        remaining = items
         blocks = []
         for group_title, prefixes in groups:
             pref = tuple(prefixes or ())
@@ -2500,15 +2574,21 @@ def html_toc_nav(entries, groups=None) -> str:
     else:
         grouped_items = "<ul>" + "".join(
             f'<li><a href="#{sec_id}">{html.escape(str(title))}</a></li>'
-            for sec_id, title in (entries or [])
+            for sec_id, title in items
         ) + "</ul>"
     return (
-        '<nav class="report-toc"><div class="report-toc-head">'
+        '<nav class="report-toc" aria-label="Table of Contents">'
+        '<div class="report-toc-head">'
+        '<div class="report-toc-title">'
         "<h2>Table of Contents</h2>"
+        f'<span class="toc-count">{html.escape(count_label)}</span>'
+        "</div>"
         '<div class="report-toc-actions">'
         '<button type="button" class="toc-btn" data-toc="expand">Expand all</button>'
         '<button type="button" class="toc-btn" data-toc="collapse">Collapse all</button>'
         "</div></div>"
+        '<p class="report-toc-lead">Jump to a section below. Expand all opens every card; '
+        "Collapse all closes them.</p>"
         f"{grouped_items}</nav>"
     )
 
@@ -8603,7 +8683,7 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
         "Task,Gaps A,Gaps B,Avg A,Avg B,Max A,Max B,Δ avg",
         tables.get("blocking", []), 8)
     _section(
-        "Inter-Arrival",
+        "Inter-Arrival Time",
         "Task,Runs A,Runs B,Avg A,Avg B,Max A,Max B,Δ avg",
         tables.get("inter_arrival", []), 8)
     _section(
@@ -8655,6 +8735,7 @@ tbody td:first-child {{ background: #fff; }}
 tbody tr:nth-child(even) td {{ background: #f7f9fc; }}
 tbody tr:nth-child(even) td:first-child {{ background: #f7f9fc; }}
 .empty {{ text-align: center; color: var(--muted); white-space: normal; }}
+.detail-note {{ margin: 6px 0 10px; font-size: 12px; color: var(--muted); line-height: 1.45; }}
 .overview-why {{ color: var(--muted); margin: 0 0 10px; }}
 .overview-sub {{ margin: 12px 0 6px; font-size: 13px; color: #123355; }}
 .overview-formula {{ color: var(--muted); font-size: 12px; margin: 0 0 10px; }}
@@ -8674,9 +8755,37 @@ tbody tr:nth-child(even) td:first-child {{ background: #f7f9fc; }}
 .badge-changed {{ background: #e8eef7; color: #123355; }}
 .compare-chart {{ margin: 0 0 12px; overflow-x: auto; }}
 .compare-chart svg {{ max-width: 100%; height: auto; display: block; }}
+.table-tools {{ margin: 8px 0 12px; }}
+.table-toolbar {{
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px;
+}}
+.table-search {{
+  font: inherit; font-size: 12px; padding: 4px 8px; border: 1px solid var(--line);
+  border-radius: 6px; min-width: 160px;
+}}
+.table-check {{ font-size: 12px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }}
+.table-count {{ font-size: 12px; color: var(--muted); margin-left: auto; }}
+.table-scroll table {{ min-width: 100%; }}
+.sortable {{ cursor: pointer; }}
+.sortable:hover {{ color: var(--accent); }}
 {HTML_REPORT_TOC_CSS}
 """.strip()
 
+COMPARE_TOC_GROUPS = (
+    ("Overview", (
+        "Overview", "Summary", "Top Tasks",
+    )),
+    ("CPU and Migrations", (
+        "Core Utilisation", "Core Migrations",
+    )),
+    ("Timing and Latency", (
+        "Execution Time", "Blocking Time", "Inter-Arrival", "Response P99",
+    )),
+    ("Scheduling and Sync", (
+        "Preemption Chains", "Sync Objects", "Mutex Blocking",
+        "Shared Patterns", "Trends",
+    )),
+)
 
 def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
                         tables: Dict[str, List[List]]) -> str:
@@ -8697,16 +8806,18 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
         return "".join(parts)
 
     def _card(title: str, headers: List[str], rows: List[List], empty: str,
-              lead_html: str = "") -> str:
+              lead_html: str = "", note: str = "") -> str:
         cols = len(headers)
         th = "".join(f"<th>{_esc(h)}</th>" for h in headers)
+        note_html = (
+            f'<p class="detail-note">{_esc(note)}</p>' if note else ""
+        )
         return (
             f'<section class="report-card"><h2>{_esc(title)}</h2>'
-            f"{lead_html}"
-            f'<div class="table-scroll">'
+            f"{note_html}{lead_html}"
             f'<table><thead><tr>{th}</tr></thead>'
             f'<tbody>{_rows_html(rows, cols, empty)}</tbody></table>'
-            f'</div></section>'
+            f"</section>"
         )
 
     def _overview_card() -> str:
@@ -8762,7 +8873,9 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
                 )
             return "".join(parts)
 
-        parts = ['<section class="report-card"><h2>Overview</h2>']
+        parts = ['<section class="report-card"><h2>Overview</h2>'
+                 '<p class="detail-note">Verdict, identity, and engineering-significant '
+                 "deltas between Baseline A and Candidate B.</p>"]
         if verdict:
             parts.append(f'<p class="overview-why">{_esc(verdict)}</p>')
         nxt = str(notable.get("next_investigation") or "").strip()
@@ -8892,59 +9005,84 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
         _card("Summary",
               ["Metric", "Baseline A", "Candidate B", "Δ"],
               tables.get("summary", []), "No data",
-              lead_html=sum_lead),
+              lead_html=sum_lead,
+              note="KPI-style totals and rates. Δ = Baseline A − Candidate B "
+                   "(positive means A is numerically larger)."),
         _card("Top Tasks",
               ["Task", "CPU A (%)", "CPU B (%)", "Δ (pp)"],
-              tables.get("top", []), "No user tasks in either trace"),
+              tables.get("top", []), "No user tasks in either trace",
+              note="Highest CPU consumers excluding IDLE/TICK. "
+                   "Δ is percentage points (pp)."),
         _card("Core Utilisation",
               ["Core", "Util A (%)", "Util B (%)", "Δ (pp)"],
               tables.get("core_util", []), "No core util data",
-              lead_html=util_lead),
+              lead_html=util_lead,
+              note="Per-core active util % excluding IDLE/TICK over each side's "
+                   "scoped wall-clock span."),
         _card("Core Migrations",
               ["Task", "Migr A", "Migr B", "Δ", "Rate A", "Rate B", "Rate Δ",
                "Dwell A", "Dwell B", "Dwell Δ", "Ping A", "Ping B",
                "Cores A", "Cores B", "Primary A", "Primary B"],
               tables.get("migrations", []), "No migrated tasks in either trace",
-              lead_html=mig_lead),
+              lead_html=mig_lead,
+              note="Migration count, rate, dwell, ping-pong, and primary-core "
+                   "affinity for tasks that ran on more than one core."),
         _card("Execution Time",
               ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B", "Δ max"],
-              tables.get("execution", []), "No execution samples in either trace"),
+              tables.get("execution", []), "No execution samples in either trace",
+              note="Per-slice run durations between consecutive context switches."),
         _card("Blocking Time",
               ["Task", "Gaps A", "Gaps B", "Avg A", "Avg B", "Max A", "Max B", "Δ avg"],
-              tables.get("blocking", []), "No blocking samples in either trace"),
-        _card("Inter-Arrival",
+              tables.get("blocking", []), "No blocking samples in either trace",
+              note="Off-CPU gaps between consecutive slices of the same task "
+                   "(preemption, wait, or scheduling delay)."),
+        _card("Inter-Arrival Time",
               ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B", "Δ avg"],
-              tables.get("inter_arrival", []), "No inter-arrival samples in either trace"),
+              tables.get("inter_arrival", []), "No inter-arrival samples in either trace",
+              note="Time between consecutive activations of the same task "
+                   "(slice start to next slice start)."),
         _card("Preemption Chains",
               ["Victim", "Count A", "Count B", "Δ", "Total A", "Total B"],
-              tables.get("preemption", []), "No preemption chains in either trace"),
+              tables.get("preemption", []), "No preemption chains in either trace",
+              note="Victim/preemptor pairs for off-CPU gaps on the same core."),
         _card("Sync Objects",
               ["Metric", "Baseline A", "Candidate B", "Δ"],
-              tables.get("sync", []), "No sync instrumentation in either trace"),
+              tables.get("sync", []), "No sync instrumentation in either trace",
+              note="Mutex, semaphore, and queue STI instrumentation totals."),
         _card("Response P99",
               ["Task", "P99 A", "P99 B", "Δ"],
               tables.get("response", []), "No response samples in either trace",
-              lead_html=p99_lead),
+              lead_html=p99_lead,
+              note="Heuristic ready→completion P99 from adjacent slices "
+                   "(not an explicit BTF release/completion pair)."),
         _card("Mutex Blocking",
               ["Task", "Total A", "Total B", "Δ"],
-              tables.get("mutex_block", []), "No mutex blocking in either trace"),
+              tables.get("mutex_block", []), "No mutex blocking in either trace",
+              note="Total mutex-attributed blocking time per task."),
         _card("Shared Patterns",
               ["Task", "Kind", "Count A", "Count B", "Description"],
-              shared_rows, "No shared anomaly patterns"),
+              shared_rows, "No shared anomaly patterns",
+              note="Anomaly kinds present on both sides with counts and a short reason."),
         _card("Trends",
               ["Trace", "Tasks", "Migrations", "Load balance", "Tick health", "Span"],
-              trend_rows, "Open 2+ traces to trend summaries"),
+              trend_rows, "Open 2+ traces to trend summaries",
+              note="Multi-trace summary when two or more traces are open."),
     ]
 
     report = btf_html_report_document(
         "Trace Compare",
-        "<!--TOC-->\n" + "\n".join(sections) + "\n" + HTML_REPORT_TOC_SCRIPT,
+        "<!--TOC-->\n" + "\n".join(sections) + "\n"
+        + HTML_REPORT_TOC_SCRIPT + "\n" + HTML_REPORT_INTERACTIVE_SCRIPT,
         subtitle=f"Baseline A: {name_a} vs Candidate B: {name_b} · {scope_note}",
         extra_css=_COMPARE_HTML_EXTRA_CSS,
         doc_title="BTFViewer — Trace Compare",
         report_class="report-compare",
     )
-    return html_apply_collapsible_toc(report, default_expanded=("Overview", "Summary"))
+    return html_apply_collapsible_toc(
+        report,
+        default_expanded=("Overview", "Summary"),
+        toc_groups=COMPARE_TOC_GROUPS,
+    )
 
 def _core_sort_key_tuple(c: str) -> tuple:
     if c.startswith("Core_"):
@@ -21908,7 +22046,8 @@ def new_user_investigation_template(
 VALIDATE_EXPERIMENT_PROMPT = (
     "Did this before/after capture validate the experiment? "
     "Call validate_experiment. Omit actual — the host fills percents from "
-    "the last Trace Compare (Scope to cursors honored). If expected deltas "
+    "the last Trace Compare (Limit to C1–Cn honored when each tab has 2+ cursors). "
+    "If expected deltas "
     "are known from what_if or optimize_experiment, pass them as expected; "
     "otherwise omit expected. Then report VALIDATED, PARTIALLY VALIDATED, "
     "or DISPROVED with supporting evidence and one next check."
@@ -25854,6 +25993,82 @@ def extract_evidence_panel_payload(
     if hk:
         payload["historical_knowledge"] = hk
     return payload
+
+
+def _evidence_items_have_times(evidence: Any) -> bool:
+    """True when any evidence dict carries a concrete ``time`` (jump:TIME)."""
+    if not isinstance(evidence, (list, tuple)):
+        return False
+    return any(
+        isinstance(e, dict) and e.get("time") is not None
+        for e in evidence
+    )
+
+
+def refresh_evidence_panel_scores(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Recompute heuristic score / quality fields on an Evidence panel payload."""
+    out = dict(payload or {})
+    score_data = compute_evidence_score(
+        out.get("evidence"),
+        alternatives=out.get("alternatives"),
+        evidence_chain=str(out.get("evidence_chain") or ""),
+        checks=out.get("checks"),
+    )
+    out["evidence_score"] = score_data["score"]
+    out["evidence_score_breakdown"] = score_data["breakdown"]
+    out["evidence_score_bar"] = score_data["bar"]
+    quality = compute_evidence_quality(
+        score=score_data["score"],
+        breakdown=score_data.get("breakdown"),
+        evidence=out.get("evidence"),
+        alternatives=out.get("alternatives"),
+        checks=out.get("checks"),
+        evidence_chain=str(out.get("evidence_chain") or ""),
+    )
+    out["evidence_quality"] = quality
+    out["evidence_quality_bar"] = quality.get("bar")
+    return out
+
+
+def merge_evidence_panel_payload(
+    prev: Optional[Dict[str, Any]],
+    new: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Carry forward timed evidence when a later tool omits it.
+
+    ``auto_investigate`` ends with planner tools (``rank_root_causes``,
+    ``challenge_conclusion``, ``score_investigation``, …) that publish a
+    conclusion but no ``jump:TIME`` rows. Without a merge, replacing the
+    Evidence panel collapses the heuristic score to 0% even though earlier
+    ``investigate`` / ``correlate_events`` / ``find_critical_path`` results
+    were strong.
+    """
+    if not isinstance(new, dict) or not new:
+        return dict(prev) if isinstance(prev, dict) and prev else new
+    if not isinstance(prev, dict) or not prev:
+        return dict(new)
+    out = dict(new)
+    if not _evidence_items_have_times(out.get("evidence")) and _evidence_items_have_times(
+        prev.get("evidence")
+    ):
+        out["evidence"] = list(prev.get("evidence") or [])
+    if not str(out.get("evidence_chain") or "").strip() and str(
+        prev.get("evidence_chain") or ""
+    ).strip():
+        out["evidence_chain"] = prev.get("evidence_chain")
+    if not out.get("checks") and prev.get("checks"):
+        out["checks"] = list(prev.get("checks") or [])
+    for key in (
+        "alternatives",
+        "hypotheses",
+        "hypotheses_managed",
+        "root_cause_chain",
+        "finding",
+        "subtitle",
+    ):
+        if not out.get(key) and prev.get(key):
+            out[key] = prev[key]
+    return refresh_evidence_panel_scores(out)
 
 
 def _evidence_jump_token(value: Any) -> str:
@@ -43417,6 +43632,9 @@ def create_ai_assistant_panel(
             if not payload:
                 return
             prev = dict(self._evidence_payload or {})
+            # Keep timed evidence from earlier tools when planner/verdict tools
+            # omit jump:TIME (otherwise Evidence Score collapses to 0%).
+            payload = merge_evidence_panel_payload(prev, payload) or payload
             prev_case = prev.get("investigation_case")
             if prev_case:
                 case = update_case_from_tool(prev_case, name, res)
@@ -47213,7 +47431,7 @@ def compare_why(strip: Optional[dict]) -> str:
 EVIDENCE_GLYPH = "\u2197"  # ↗
 
 # Tooltip for Evidence-affordance cells (Statistics / Findings / Compare).
-EVIDENCE_TOOLTIP = "Jump to Evidence (does not change Scope)"
+EVIDENCE_TOOLTIP = "Jump to Evidence (does not change Scope or Filters)"
 
 _TIME_TOKEN_RE = re.compile(
     r"(?:jump:)?(\d+(?:\.\d+)?)\s*(ns|us|µs|μs|ms|s)?",
@@ -47386,6 +47604,488 @@ def resolve_timestamp_evidence(
         "reason": "",
     }
 # ===========================================================================
+# Loading-state UX (Step 3)
+# ===========================================================================
+
+LOADING_STAGES: Dict[str, str] = {
+    "reading": "Reading trace…",
+    "parsing": "Parsing events…",
+    "building": "Building Timeline…",
+    "computing": "Computing Statistics…",
+    "opening": "Opening trace…",
+    "restoring": "Restoring session…",
+    "demo": "Loading demo trace…",
+}
+
+_INTERNAL_STAGE_RULES: Tuple[Tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"reading file", re.I), "reading"),
+    (re.compile(r"restoring session", re.I), "restoring"),
+    (re.compile(r"demo trace", re.I), "demo"),
+    (re.compile(r"packing trace|opening trace", re.I), "opening"),
+    (re.compile(r"preparing statistics|computing statistics", re.I), "computing"),
+    (
+        re.compile(
+            r"building scene|building legend|building task lod|building core lod|"
+            r"per-task core lod|finalising segment|building sti",
+            re.I,
+        ),
+        "building",
+    ),
+    (
+        re.compile(
+            r"reconstruct|lookup|index|sort|pair|tag channel|finalis|cul|analys|"
+            r"sti channel|tick health",
+            re.I,
+        ),
+        "parsing",
+    ),
+)
+
+
+def resolve_loading_stage(internal_msg: str = "") -> str:
+    msg = str(internal_msg or "").strip()
+    if not msg:
+        return "reading"
+    for pattern, stage in _INTERNAL_STAGE_RULES:
+        if pattern.search(msg):
+            return stage
+    return "parsing"
+
+
+def format_loading_message(internal_msg: str = "") -> str:
+    stage = resolve_loading_stage(internal_msg)
+    return LOADING_STAGES.get(stage, LOADING_STAGES["parsing"])
+
+
+def format_loading_pct(pct: float) -> str:
+    try:
+        n = float(pct)
+    except (TypeError, ValueError):
+        return ""
+    if not n or n <= 0:
+        return ""
+    if n >= 100:
+        return "100"
+    rounded = round(n / 5) * 5
+    return str(max(5, min(99, int(rounded))))
+
+
+def is_loading_cancellable(phase: str = "parse") -> bool:
+    return phase in ("parse", "read")
+
+
+def normalize_loading_progress(
+    pct: float, internal_msg: str = "", phase: str = "parse"
+) -> dict:
+    return {
+        "pct": float(pct or 0),
+        "msg": format_loading_message(internal_msg),
+        "pct_label": format_loading_pct(pct),
+        "cancellable": is_loading_cancellable(phase),
+    }
+# ===========================================================================
+# Empty-state messages (Step 3)
+# ===========================================================================
+
+EMPTY_STATES: Dict[str, Dict[str, Any]] = {
+    "no_trace": {
+        "message": "Open a BTF trace to begin.",
+        "action": "open",
+    },
+    "no_stats": {
+        "message": "Open a trace file to view statistics.",
+        "action": "open",
+    },
+    "no_cursors": {
+        "message": "Place two cursors to measure a range.",
+        "action": None,
+    },
+    "no_compare": {
+        "message": "Open at least two traces to compare.",
+        "action": "open",
+    },
+    "no_find_query": {
+        "message": "Enter a task name, annotation, or migration to search.",
+        "action": None,
+    },
+    "no_find_hits": {
+        "message": "No matches in the current Scope.",
+        "action": None,
+    },
+    "no_marks": {
+        "message": "No bookmarks or annotations yet.",
+        "hint": "Double-click the Timeline or press B / A to add one.",
+        "action": None,
+    },
+    "no_ai": {
+        "message": "Ask about evidence already found in Statistics or the Timeline.",
+        "action": None,
+    },
+    "no_ai_config": {
+        "message": "Configure an AI provider in Settings to enable investigation.",
+        "action": "settings",
+    },
+    "no_migration": {
+        "message": "No migrations in the current Scope.",
+        "hint": "Switch to Core View or widen Scope with cursors.",
+        "action": None,
+    },
+    "no_heatmap": {
+        "message": "No on-CPU slices in the current Scope.",
+        "action": None,
+    },
+    "no_timeline": {
+        "message": "Open a .btf file to begin.",
+        "action": "open",
+    },
+}
+
+
+def empty_state_message(key: str) -> str:
+    spec = EMPTY_STATES.get(key) or {}
+    msg = str(spec.get("message") or "")
+    hint = spec.get("hint")
+    if hint:
+        return f"{msg} {hint}"
+    return msg
+
+
+def empty_state_action(key: str) -> Optional[str]:
+    spec = EMPTY_STATES.get(key) or {}
+    action = spec.get("action")
+    return str(action) if action else None
+# ===========================================================================
+# Disabled-state prerequisites (Step 3)
+# ===========================================================================
+
+DISABLED_REASONS: Dict[str, str] = {
+    "no_trace": "Open a trace first",
+    "two_traces": "Open at least two traces",
+    "cursors2": "Place at least two cursors (C1–Cn)",
+    "ai_config": "Configure an AI provider in Settings",
+    "smp_only": "Requires a multi-core trace",
+    "no_evidence": "No Timeline Evidence for this finding",
+    "unavailable": "Unavailable",
+}
+
+
+def check_prerequisite(
+    requires: str,
+    ctx: Dict[str, Any],
+    fallback: str = "",
+) -> Tuple[bool, str]:
+    req = str(requires or "none")
+    if not req or req == "none":
+        return True, ""
+    if req == "trace":
+        if ctx.get("has_trace"):
+            return True, ""
+        return False, fallback or DISABLED_REASONS["no_trace"]
+    if req == "two_traces":
+        if int(ctx.get("trace_count") or 0) >= 2:
+            return True, ""
+        return False, fallback or DISABLED_REASONS["two_traces"]
+    if req == "cursors2":
+        if int(ctx.get("cursor_count") or 0) >= 2:
+            return True, ""
+        return False, fallback or DISABLED_REASONS["cursors2"]
+    if req == "ai_config":
+        if ctx.get("ai_configured"):
+            return True, ""
+        return False, fallback or DISABLED_REASONS["ai_config"]
+    if req == "smp":
+        if ctx.get("is_multi_core"):
+            return True, ""
+        return False, fallback or DISABLED_REASONS["smp_only"]
+    return True, ""
+
+
+def build_prerequisite_context(
+    *,
+    trace: Any = None,
+    compare_tab_count: int = 0,
+    cursor_count: int = 0,
+    ai_configured: bool = True,
+) -> Dict[str, Any]:
+    cores = 0
+    if trace is not None:
+        meta = getattr(trace, "meta", None) or {}
+        if isinstance(meta, dict):
+            cores = len(meta.get("cores") or [])
+        elif hasattr(trace, "cores"):
+            cores = len(getattr(trace, "cores") or [])
+    return {
+        "has_trace": trace is not None,
+        "trace_count": compare_tab_count,
+        "cursor_count": cursor_count,
+        "is_multi_core": cores > 1,
+        "ai_configured": ai_configured,
+    }
+# ===========================================================================
+# User-facing error formatting (Step 3)
+# ===========================================================================
+
+_PARSE_HINTS = (
+    (re.compile(r"invalid timestamp", re.I), "Check for malformed timestamps near the reported line."),
+    (
+        re.compile(r"unexpected token|parse error|syntax", re.I),
+        "Verify the file is a valid BTF/XML trace.",
+    ),
+    (re.compile(r"encoding|utf-8|unicode", re.I), "Save the trace as UTF-8 and try again."),
+    (re.compile(r"empty|no events", re.I), "The file appears to contain no trace events."),
+)
+
+
+def format_error(
+    *,
+    operation: str,
+    subject: str = "",
+    reason: str = "",
+    suggestion: str = "",
+    detail: str = "",
+) -> Dict[str, str]:
+    op = str(operation or "Operation").strip()
+    title = f"{op}: {subject}" if subject else op
+    parts = []
+    if reason:
+        parts.append(str(reason).strip())
+    if suggestion:
+        parts.append(str(suggestion).strip())
+    return {
+        "title": title,
+        "message": " ".join(parts) if parts else f"{op} failed.",
+        "suggestion": suggestion or "",
+        "detail": detail or "",
+    }
+
+
+def format_error_toast(err: Any) -> str:
+    if not err:
+        return "An error occurred."
+    if isinstance(err, str):
+        return err
+    if isinstance(err, dict):
+        title = str(err.get("title") or "")
+        msg = str(err.get("message") or "")
+        if title and msg and not msg.startswith(title):
+            return f"{title}\n{msg}"
+        return msg or title or "An error occurred."
+    return str(err)
+
+
+def _guess_parse_suggestion(text: str) -> str:
+    blob = str(text or "")
+    for pattern, hint in _PARSE_HINTS:
+        if pattern.search(blob):
+            return hint
+    return "Check that the file is a valid .btf/.xml trace and try again."
+
+
+def _err_raw(err: Any) -> tuple[str, str]:
+    if isinstance(err, BaseException):
+        raw = str(err)
+        detail = getattr(err, "__traceback__", None) and str(err) or raw
+        return raw, detail
+    raw = str(err)
+    return raw, raw
+
+
+def format_parse_error(err: Any, file_name: str = "") -> Dict[str, str]:
+    raw, detail = _err_raw(err)
+    subject = file_name or "trace file"
+    reason = re.sub(r"^Error:\s*", "", raw, flags=re.I).strip() or "The trace could not be parsed."
+    return format_error(
+        operation="Could not open trace",
+        subject=subject,
+        reason=reason,
+        suggestion=_guess_parse_suggestion(raw),
+        detail=detail,
+    )
+
+
+def format_io_error(err: Any, file_name: str = "") -> Dict[str, str]:
+    raw, detail = _err_raw(err)
+    subject = file_name or "file"
+    suggestion = "Check that the file exists and is readable."
+    if re.search(r"permission|denied", raw, re.I):
+        suggestion = "Check file permissions and try again."
+    elif re.search(r"not found|enoent", raw, re.I):
+        suggestion = "Verify the path and try opening the file again."
+    reason = re.sub(r"^Error:\s*", "", raw, flags=re.I).strip() or "The file could not be read."
+    return format_error(
+        operation="Could not read file",
+        subject=subject,
+        reason=reason,
+        suggestion=suggestion,
+        detail=detail,
+    )
+
+
+def format_ai_error(err: Any, provider: str = "") -> Dict[str, str]:
+    raw, detail = _err_raw(err)
+    subject = f"AI provider ({provider})" if provider else "AI provider"
+    suggestion = "Check Settings → AI for provider URL, model, and authentication."
+    if re.search(r"timeout|timed out", raw, re.I):
+        suggestion = "The provider did not respond in time — check network connectivity."
+    elif re.search(r"401|403|unauthorized|forbidden", raw, re.I):
+        suggestion = "Verify API key or authentication settings."
+    reason = re.sub(r"^Error:\s*", "", raw, flags=re.I).strip()
+    return format_error(
+        operation="AI request failed",
+        subject=subject,
+        reason=reason,
+        suggestion=suggestion,
+        detail=detail,
+    )
+
+
+def format_export_error(err: Any, kind: str = "export") -> Dict[str, str]:
+    raw, detail = _err_raw(err)
+    labels = {
+        "export": "Could not export",
+        "report": "Could not generate report",
+        "session": "Could not save session",
+    }
+    reason = re.sub(r"^Error:\s*", "", raw, flags=re.I).strip()
+    return format_error(
+        operation=labels.get(kind, labels["export"]),
+        reason=reason,
+        suggestion="Try again or choose a different destination.",
+        detail=detail,
+    )
+# ===========================================================================
+# Numeric presentation (Step 3)
+# ===========================================================================
+
+PERCENTILE_DECIMALS = 3
+NUMERIC_CELL_CLASS = "num-cell"
+
+
+def _format_time_trim(value: float, scale: str) -> str:
+    """Minimal parity with web formatTimeTrim — defers to timeline util when available."""
+    try:
+        format_time_trim # noqa: WPS433 = globals().get("format_time_trim # noqa: WPS433")
+
+        return format_time_trim(value, scale)
+    except Exception:
+        v = float(value)
+        return f"{v:g} {scale}"
+
+
+def format_percentile(value: Optional[float], scale: str, kind: str = "") -> str:
+    if value is None:
+        return "—"
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if not v and v != 0:
+        return "—"
+    return _format_time_trim(v, scale)
+
+
+def format_ratio_pct(ratio: Optional[float]) -> str:
+    if ratio is None:
+        return "—"
+    try:
+        v = float(ratio)
+    except (TypeError, ValueError):
+        return "—"
+    return f"{v * 100:.1f}%"
+
+
+def format_cpu_pct(pct: Optional[float]) -> str:
+    if pct is None:
+        return "—"
+    try:
+        v = float(pct)
+    except (TypeError, ValueError):
+        return "—"
+    if v >= 99.95:
+        return "100%"
+    if 0 < v < 0.05:
+        return "<0.1%"
+    return f"{v:.1f}%"
+
+
+def numeric_cell_html(text: str, title: str = "") -> str:
+    t = f' title="{title.replace(chr(34), "&quot;")}"' if title else ""
+    return f'<td class="{NUMERIC_CELL_CLASS}"{t}>{text}</td>'
+
+
+def format_signed_delta(delta: Optional[float], scale: str) -> str:
+    if delta is None:
+        return "—"
+    try:
+        v = float(delta)
+    except (TypeError, ValueError):
+        return "—"
+    if v == 0:
+        return "—"
+    sign = "+" if v > 0 else "−"
+    return f"{sign}{_format_time_trim(abs(v), scale)}"
+# ===========================================================================
+# Semantic vs data colors (Step 3)
+# ===========================================================================
+
+SEMANTIC_ROLES: Dict[str, str] = {
+    "error": "error",
+    "warning": "warning",
+    "improvement": "improvement",
+    "focus": "focus",
+    "selection": "selection",
+}
+
+SEMANTIC_CSS_VARS: Dict[str, str] = {
+    "error": "--semantic-error",
+    "warning": "--semantic-warning",
+    "improvement": "--semantic-improvement",
+    "focus": "--semantic-focus",
+    "selection": "--semantic-selection",
+}
+
+COMPARE_SEMANTIC: Dict[str, str] = {
+    "regressed": "#e74c3c",
+    "improved": "#27ae60",
+    "neutral": "#95a5a6",
+    "focus": "#4F8BFF",
+}
+
+SEMANTIC_GLYPHS: Dict[str, str] = {
+    "error": "✕",
+    "warning": "⚠",
+    "improvement": "↓",
+    "improved": "↓",
+    "regressed": "↑",
+}
+
+
+def semantic_css_var(role: str) -> str:
+    if role == "improved":
+        return SEMANTIC_CSS_VARS["improvement"]
+    if role == "regressed":
+        return SEMANTIC_CSS_VARS["error"]
+    return SEMANTIC_CSS_VARS.get(role, SEMANTIC_CSS_VARS["focus"])
+
+
+def semantic_label(text: str, role: str, colorblind: bool = False) -> str:
+    glyph = SEMANTIC_GLYPHS.get(role, "")
+    if colorblind and glyph:
+        return f"{glyph} {text}"
+    return text
+
+
+def format_semantic_delta(text: str, status: str, colorblind: bool = False) -> str:
+    """Prefix a signed delta / status cell for colorblind-safe Compare tables."""
+    s = str(status or "").lower()
+    if s in ("improved", "improvement"):
+        return semantic_label(text, "improved", colorblind)
+    if s in ("regressed", "error"):
+        return semantic_label(text, "regressed", colorblind)
+    if s in ("warning", "warn"):
+        return semantic_label(text, "warning", colorblind)
+    return text
+# ===========================================================================
 # Main Window
 # ===========================================================================
 
@@ -47484,6 +48184,8 @@ class _LoadProgressDialog(QWidget):
     which bypasses the macOS sheet mechanism entirely and paints immediately.
     """
 
+    cancel_requested = Signal()
+
     def __init__(self, title: str, parent=None):
         # The frameless Qt.WindowType.Tool variant is primarily needed on macOS to avoid
         # delayed first paint at startup. On Windows it may leave a tiny black
@@ -47514,6 +48216,10 @@ class _LoadProgressDialog(QWidget):
 
         self._msg_lbl = QLabel("", self)
         layout.addWidget(self._msg_lbl)
+
+        self._cancel_btn = QPushButton("Cancel", self)
+        self._cancel_btn.clicked.connect(self.cancel_requested.emit)
+        layout.addWidget(self._cancel_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
         # Draw a subtle border via the stylesheet.
         # Use the object name so the QWidget selector matches only this dialog.
@@ -47559,7 +48265,7 @@ class _LoadProgressDialog(QWidget):
 
     def update_progress(self, pct: int, msg: str) -> None:
         self._bar.setValue(pct)
-        self._msg_lbl.setText(msg)
+        self._msg_lbl.setText(format_loading_message(msg))
         _process_ui_events_safely()
 
     def _centre_on_parent(self) -> None:
@@ -50561,11 +51267,6 @@ class _TraceCompareDialog(QDialog):
         exp_row.setContentsMargins(8, 6, 8, 8)
         exp_row.setSpacing(8)
         _ic = "#9E9E9E"
-        self._btn_export_csv = QPushButton("Export CSV")
-        self._btn_export_csv.setIcon(_svg_icon(_IC_EXPORT_CSV, _ic))
-        self._btn_export_csv.setToolTip("Export compare tables as CSV")
-        self._btn_export_csv.clicked.connect(self._export_csv)
-        exp_row.addWidget(self._btn_export_csv)
         self._btn_export_html = QPushButton("Export HTML")
         self._btn_export_html.setIcon(_svg_icon_markup(
             '<rect x="2.5" y="2" width="11" height="12" rx="1" fill="none" '
@@ -50573,7 +51274,8 @@ class _TraceCompareDialog(QDialog):
             '<path d="M5.5 6.5 3.5 8.5l2 2M10.5 6.5l2 2-2 2" fill="none" '
             f'stroke="{_ic}" stroke-width="1.2" stroke-linecap="round"/>',
         ))
-        self._btn_export_html.setToolTip("Export compare report as HTML")
+        self._btn_export_html.setToolTip(
+            "Export compare report as HTML (tables include Search / Show all / CSV)")
         self._btn_export_html.clicked.connect(self._export_html)
         exp_row.addWidget(self._btn_export_html)
         self._btn_save_baseline = QPushButton("Save as baseline")
@@ -50739,6 +51441,7 @@ class _TraceCompareDialog(QDialog):
         table.setRowCount(len(rows))
         improved = QColor("#3cb371")
         regressed = QColor("#e07070")
+        colorblind = bool(getattr(_RENDER_RUNTIME, "colorblind_active", False))
         for ri, vals in enumerate(rows):
             label = str(vals[0]) if vals else ""
             status = None
@@ -50746,7 +51449,10 @@ class _TraceCompareDialog(QDialog):
                 status = compare_row_delta_status(
                     label, vals[delta_col], status_metric)
             for ci, val in enumerate(vals):
-                item = QTableWidgetItem(str(val))
+                text = str(val)
+                if status and ci == delta_col:
+                    text = format_semantic_delta(text, status, colorblind)
+                item = QTableWidgetItem(text)
                 if ci < left_cols:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
                 else:
@@ -51034,39 +51740,6 @@ class _TraceCompareDialog(QDialog):
 
     def _tab_name(self, combo: QComboBox) -> str:
         return combo.currentText() or "Trace"
-
-    def _export_csv(self) -> None:
-        tables = self._tables_for_export()
-        if tables is None:
-            QMessageBox.warning(self, "Export CSV", "Select two loaded traces to export.")
-            return
-
-        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export Trace Compare CSV",
-            f"trace-compare-{stamp}.csv",
-            "CSV files (*.csv);;All files (*)",
-        )
-        if not path:
-            return
-
-        text = _build_compare_csv(
-            self._tab_name(self._combo_a),
-            self._tab_name(self._combo_b),
-            self._scope_cb.isChecked(),
-            tables,
-        )
-        try:
-            with open(path, "w", newline="", encoding="utf-8-sig") as fh:
-                fh.write(text)
-        except OSError as exc:
-            QMessageBox.critical(self, "Export Error", f"Could not export CSV:\n{exc}")
-            return
-
-        wnd = self.window()
-        if isinstance(wnd, QMainWindow):
-            wnd.statusBar().showMessage(f"Exported trace compare: {path}", 4000)
 
     def _export_html(self) -> None:
         tables = self._tables_for_export()
@@ -55406,14 +56079,17 @@ class _AnalysisFindingsDialog(QDialog):
                 fid = str(f.get("id") or "")
                 cid = id_cluster.get(fid) or title_cluster.get(title, "")
                 prefix = f"[{cid}] " if cid else ""
-                badge = {"error": "●", "warning": "●"}.get(str(sev), "○")
                 if sev == "error":
+                    badge = SEMANTIC_GLYPHS["error"]
                     color = err
                 elif sev == "warning":
+                    badge = SEMANTIC_GLYPHS["warning"]
                     color = warn
                 elif fid == "load_balance_ok":
+                    badge = SEMANTIC_GLYPHS["improved"]
                     color = ok_ink
                 else:
+                    badge = "○"
                     color = ink
                 row = QWidget()
                 row.setObjectName("analysisFindingRow")
@@ -56032,17 +56708,15 @@ class _StatsPanel(QWidget):
         exp_row = QVBoxLayout()
         exp_row.setContentsMargins(8, 6, 8, 8)
         exp_row.setSpacing(4)
-        self._btn_export_csv = QPushButton("Export CSV")
-        self._btn_export_csv.clicked.connect(self._export_csv)
-        self._btn_export_csv.setEnabled(False)
-        exp_row.addWidget(self._btn_export_csv)
         self._btn_export_html = QPushButton("Export HTML")
         self._btn_export_html.clicked.connect(self._export_html)
         self._btn_export_html.setEnabled(False)
+        self._btn_export_html.setToolTip(
+            "Export statistics as HTML (tables include Search / Show all / CSV)")
         exp_row.addWidget(self._btn_export_html)
-        for btn in (self._btn_export_csv, self._btn_export_html):
-            btn.setMinimumWidth(0)
-            btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self._btn_export_html.setMinimumWidth(0)
+        self._btn_export_html.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         outer.addLayout(exp_row)
         self._sync_stats_panel_chrome_font()
 
@@ -56059,7 +56733,7 @@ class _StatsPanel(QWidget):
         for btn in (
             self._btn_stats_expand, self._btn_stats_collapse,
             self._btn_stats_reset_order,
-            self._btn_export_csv, self._btn_export_html,
+            self._btn_export_html,
         ):
             btn.setFont(font)
 
@@ -57536,8 +58210,10 @@ class _StatsPanel(QWidget):
         blay.setContentsMargins(0, 0, 0, 0)
         blay.setSpacing(2)
         help_text = STATS_SECTION_HELP.get(section_id)
+        # Step 3: keep long help on the category badge tooltip only (see
+        # ``_refresh_section_drag_chrome``), not as always-visible prose.
         if help_text:
-            blay.addWidget(self._lbl(help_text, color="#888888", ui_fs=self._ui_fs()))
+            body.setToolTip(str(help_text))
         populate(blay)
         idx = self._ilay.indexOf(hdr_row)
         self._ilay.insertWidget(idx + 1, body)
@@ -59419,13 +60095,13 @@ class _StatsPanel(QWidget):
             lo, hi, n_cur = rng
             total_ns = hi - lo
             span_str = _format_time(total_ns, trace.time_scale)
-            scope_title = f" (cursor range C1–C{n_cur})"
-            scope_type = f"Cursor range C1–C{n_cur}"
+            scope_title = f" (C1–C{n_cur})"
+            scope_type = f"C1–C{n_cur} · {span_str}"
         else:
             total_ns = trace.time_max - trace.time_min
             span_str = _format_time(total_ns, trace.time_scale)
             scope_title = ""
-            scope_type = "Full trace"
+            scope_type = "Full Trace"
             n_cur = 0
 
         wnd = self.window()
@@ -60230,8 +60906,6 @@ class _StatsPanel(QWidget):
                 "may be unreliable."
             )
         filter_parts: list = []
-        if lo is not None:
-            filter_parts.append("Limit to C1–Cn")
         fl = getattr(self, "_filter_label", None)
         if fl is not None and fl.isVisible():
             raw = str(fl.text() or "").strip()
@@ -60270,7 +60944,10 @@ class _StatsPanel(QWidget):
         glossary_html = html_glossary(range_note=range_note)
 
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        stats_extra_css = f"{STATS_HTML_EXTRA_CSS}\n{self._html_export_util_css()}".strip()
+        stats_extra_css = (
+            f"{STATS_HTML_EXTRA_CSS}\n{HTML_REPORT_TOC_CSS}\n"
+            f"{self._html_export_util_css()}"
+        ).strip()
 
         body = f"""
         {html_diagnostic_kpi_grid(kpis)}
@@ -60425,6 +61102,17 @@ class _StatsPanel(QWidget):
 
             writer.writerow(["Summary"])
             writer.writerow(["Metric", "Value"])
+            writer.writerow(["Trace file", trace_name])
+            writer.writerow(["Scope", scope_type])
+            fl = getattr(self, "_filter_label", None)
+            filters_csv = "None"
+            if fl is not None and fl.isVisible():
+                raw = str(fl.text() or "").strip()
+                if raw.lower().startswith("filtered:"):
+                    raw = raw.split(":", 1)[1].strip()
+                if raw:
+                    filters_csv = raw
+            writer.writerow(["Filters", filters_csv])
             writer.writerow([f"Span{scope_suffix}", _us(span_str)])
             if scope_suffix:
                 writer.writerow(["Cursor range", scope_suffix.strip(" ()")])
@@ -61045,30 +61733,6 @@ class _StatsPanel(QWidget):
             else:
                 writer.writerow(["No tag data", "", "", "", "", "", ""])
 
-    def _export_csv(self) -> None:
-        if self._trace is None:
-            return
-
-        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export Statistics CSV",
-            f"statistics-{stamp}.csv",
-            "CSV files (*.csv);;All files (*)",
-        )
-        if not path:
-            return
-
-        try:
-            self.write_statistics_csv_report(path)
-        except OSError as exc:
-            QMessageBox.critical(self, "Export Error", f"Could not export CSV:\n{exc}")
-            return
-
-        wnd = self.window()
-        if isinstance(wnd, QMainWindow):
-            wnd.statusBar().showMessage(f"Exported statistics: {path}", 4000)
-
     def clear_trace(self) -> None:
         """Empty Statistics when no trace tab is open (welcome / close-all)."""
         self.clear_plot_session()
@@ -61076,7 +61740,6 @@ class _StatsPanel(QWidget):
         self._trace = None
         self._needs_presentation_defaults = True
         self._cursor_times = []
-        self._btn_export_csv.setEnabled(False)
         self._btn_export_html.setEnabled(False)
         self._scope_cb.setEnabled(False)
         self._clear()
@@ -61112,7 +61775,6 @@ class _StatsPanel(QWidget):
                 self._section_pins = normalize_stats_pins(pins)
                 self._section_collapsed = dict(collapsed)
         defer_heavy = trace_needs_deferred_stats_load(trace)
-        self._btn_export_csv.setEnabled(True)
         self._btn_export_html.setEnabled(True)
         if self._preserve_scroll and hasattr(self, "_scroll") and self._scroll is not None:
             try:
@@ -76550,8 +77212,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 or getattr(panel, "_scope_label", None)
                 or panel
             ),
-            "stats_export_csv": getattr(panel, "_btn_export_csv", None),
             "stats_export_html": getattr(panel, "_btn_export_html", None),
+            "stats_export_csv": getattr(panel, "_btn_export_html", None),  # alias: CSV is in HTML
             "stats_health": headers.get("health") if isinstance(headers, dict) else None,
             "stats_tick_dist": getattr(panel, "_btn_tick_dist", None),
         }
@@ -79842,6 +80504,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         progress_dialog.show_centered(self.geometry())
         self._progress_dialog = progress_dialog
 
+        def _request_load_cancel() -> None:
+            thread = getattr(self, "_parse_thread", None)
+            if thread is not None:
+                thread.requestInterruption()
+
+        progress_dialog.cancel_requested.connect(_request_load_cancel)
+
         def _teardown_loading_dialog(*, clear_load_flag: bool = True) -> None:
             try:
                 progress_dialog.close()
@@ -79878,11 +80547,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         def _on_error(msg):
             try:
                 self._status_file.setText("  No file loaded")
+                err = format_parse_error(msg, load_label)
                 _critical_with_detail(
-                    self, "Parse Error",
-                    f"Failed to parse:\n{path}\n\n"
-                    "Check that the file is a valid BTF/XML trace, then try again.",
-                    str(msg))
+                    self, err["title"],
+                    err["message"],
+                    err.get("detail") or str(msg))
             finally:
                 _teardown_loading_dialog()
                 self._finish_parse_thread()
@@ -81940,7 +82609,7 @@ _CLI_HELP = """\
 Headless analysis commands (desktop only — no GUI, no Qt window):
 
   info         Quick trace summary on stdout (--json for scripts).
-  report       Full statistics export (Statistics panel → Export CSV/HTML).
+  report       Full statistics export (Statistics panel → Export HTML).
   compare      Two-trace diff (Trace Compare dialog → Export).
   analyze      CI regression gate vs a baseline .btf or metrics JSON
                (--fail-on-regression; optional --ai narrative).
@@ -82186,10 +82855,11 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
 
     report = sub.add_parser(
         "report",
-        help="export full statistics report (Statistics → Export CSV/HTML)",
+        help="export full statistics report (Statistics → Export HTML)",
         description=(
             "Export a complete statistics report for one trace.\n\n"
-            "Matches Statistics → Export CSV / Export HTML in the GUI."
+            "Matches Statistics → Export HTML in the GUI "
+            "(per-table CSV is available inside the HTML report)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_CLI_EPILOG_REPORT,
@@ -82224,7 +82894,8 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
             "core migration tables with A/B deltas.\n\n"
             "Pass two .btf paths, or one .zip / .btf.zip that contains two "
             ".btf members (same multi-BTF zip the GUI opens as two tabs).\n\n"
-            "Matches Trace Compare → Export CSV / Export HTML in the GUI."
+            "Matches Trace Compare → Export HTML in the GUI "
+            "(per-table CSV is available inside the HTML report)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_CLI_EPILOG_COMPARE,
@@ -82691,6 +83362,8 @@ def _cli_report_run(args: argparse.Namespace) -> int:
     panel._cursor_times = []
     panel._cpu_budget_pct = 0.0
     panel._task_deadlines_ns = {}
+    panel._ux_events_key = None
+    panel._ux_events_cached = None
     if args.lo is not None and args.hi is not None:
         panel._export_scope_override = (args.lo, args.hi)
 
@@ -83409,6 +84082,8 @@ def _cli_snapshot_plot(trace: "BtfTrace",
     panel._cursor_times = []
     panel._cpu_budget_pct = 0.0
     panel._task_deadlines_ns = {}
+    panel._ux_events_key = None
+    panel._ux_events_cached = None
     panel._is_dark = (args.theme != "light")
     panel._plot_preemptor = None
     panel._plot_interval_id = None

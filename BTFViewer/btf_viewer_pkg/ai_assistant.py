@@ -75,6 +75,7 @@ from .ai_investigation import (
     evidence_panel_labels,
     extract_evidence_panel_payload,
     format_evidence_panel_markdown,
+    merge_evidence_panel_payload,
     format_investigation_plan_status,
     investigation_tree_mermaid,
     is_agent_template,
@@ -6457,6 +6458,9 @@ def create_ai_assistant_panel(
             if not payload:
                 return
             prev = dict(self._evidence_payload or {})
+            # Keep timed evidence from earlier tools when planner/verdict tools
+            # omit jump:TIME (otherwise Evidence Score collapses to 0%).
+            payload = merge_evidence_panel_payload(prev, payload) or payload
             prev_case = prev.get("investigation_case")
             if prev_case:
                 case = update_case_from_tool(prev_case, name, res)

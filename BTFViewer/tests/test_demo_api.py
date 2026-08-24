@@ -179,7 +179,7 @@ class DemoXmlUsesApiTests(unittest.TestCase):
         body = step16.group(0)
         self.assertLess(body.index('target="find_tab"'), body.index("<find "))
 
-    def test_export_step_moves_to_csv_button(self) -> None:
+    def test_export_step_moves_to_html_button(self) -> None:
         xml = DEMO_XML.read_text(encoding="utf-8")
         step17 = re.search(r'<step id="17".*?</step>', xml, re.S)
         self.assertIsNotNone(step17)
@@ -187,7 +187,7 @@ class DemoXmlUsesApiTests(unittest.TestCase):
         self.assertIn('<panel name="stats"/>', body)
         self.assertLess(
             body.index('<panel name="stats"/>'),
-            body.index('target="stats_export_csv"'),
+            body.index('target="stats_export_html"'),
         )
 
     def test_ai_setup_step_moves_to_ai_tab(self) -> None:

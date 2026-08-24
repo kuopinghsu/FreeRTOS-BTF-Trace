@@ -26,7 +26,7 @@ from .ux_explore import best_finding_scope  # noqa: F401 — re-exported for cal
 EVIDENCE_GLYPH = "\u2197"  # ↗
 
 # Tooltip for Evidence-affordance cells (Statistics / Findings / Compare).
-EVIDENCE_TOOLTIP = "Jump to Evidence (does not change Scope)"
+EVIDENCE_TOOLTIP = "Jump to Evidence (does not change Scope or Filters)"
 
 _TIME_TOKEN_RE = re.compile(
     r"(?:jump:)?(\d+(?:\.\d+)?)\s*(ns|us|µs|μs|ms|s)?",

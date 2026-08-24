@@ -1,0 +1,38 @@
+% Traditional Chinese layout for XeLaTeX (no xeCJK required).
+%
+% 1) Allow breaks between CJK characters (otherwise long runs overflow).
+% 2) Never hyphenate Latin identifiers (avoid BTFViewer → BT-FViewer).
+% 3) Keep filenames with underscores on one line (override table-layout allowbreak).
+% 4) Preserve hanging indents on wrapped list items.
+%
+% Do NOT use document-wide \raggedright with \XeTeXlinebreaklocale: every
+% CJK/Latin boundary becomes an equally cheap break, so lines end early
+% (e.g. "…使用 BTFViewer" / "的讀者…" with half a line empty).
+% Do NOT load geometry here — Eisvogel already sets it.
+
+\XeTeXlinebreaklocale "zh"
+% Prefer filling the line; only stretch a little at CJK break points.
+\XeTeXlinebreakskip = 0pt plus 0.1pt minus 0.01pt
+\XeTeXlinebreakpenalty = 200
+\hyphenpenalty=10000
+\exhyphenpenalty=10000
+\uchyph=0
+\emergencystretch = 3em
+\tolerance = 2000
+\hbadness = 2000
+
+\usepackage{enumitem}
+\setlist{nosep, leftmargin=*, itemsep=0.35em, topsep=0.4em, parsep=0pt}
+\setlist[itemize]{label=\textbullet}
+\setlist[enumerate]{leftmargin=*}
+
+% table-layout.tex adds allowbreak after \_; undo that for zh-TW filenames.
+% Keep cells justified so CJK fills the column width.
+\AddToHook{env/longtable/begin}{%
+  \hyphenpenalty=10000
+  \exhyphenpenalty=10000
+  \XeTeXlinebreaklocale "zh"%
+  \XeTeXlinebreakskip = 0pt plus 0.1pt minus 0.01pt
+  \XeTeXlinebreakpenalty = 200
+  \renewcommand{\_}{\textunderscore}%
+}

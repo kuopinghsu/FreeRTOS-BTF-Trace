@@ -132,8 +132,8 @@
               <span class="compare-chart-legend">Candidate B − Baseline A</span>
             </div>
             <div class="p99-axis">
-              <span class="p99-improved">Improved</span>
-              <span class="p99-regressed">Regressed</span>
+              <span class="p99-improved">{{ statusLegend('improved') }}</span>
+              <span class="p99-regressed">{{ statusLegend('regressed') }}</span>
             </div>
             <div
               v-for="row in summaryChartModel"
@@ -172,7 +172,7 @@
                 <td class="task-col">{{ row.label }}</td>
                 <td>{{ row.a }}</td>
                 <td>{{ row.b }}</td>
-                <td :class="deltaClass(row.label, row.delta)">{{ row.delta }}</td>
+                <td :class="deltaClass(row.label, row.delta)">{{ deltaText(row.label, row.delta) }}</td>
               </tr>
             </tbody>
           </table>
@@ -198,7 +198,7 @@
               <td class="task-col">{{ row.name }}</td>
               <td>{{ row.cpuA }}</td>
               <td>{{ row.cpuB }}</td>
-              <td :class="deltaClass(row.name, row.delta, 'cpu')">{{ row.delta }}</td>
+              <td :class="deltaClass(row.name, row.delta, 'cpu')">{{ deltaText(row.name, row.delta, 'cpu') }}</td>
             </tr>
             <tr v-if="topTaskRows.length === 0">
               <td
@@ -269,7 +269,7 @@
                 <td class="task-col">{{ row.core }}</td>
                 <td>{{ row.utilA }}</td>
                 <td>{{ row.utilB }}</td>
-                <td :class="deltaClass(row.core, row.delta, 'util')">{{ row.delta }}</td>
+                <td :class="deltaClass(row.core, row.delta, 'util')">{{ deltaText(row.core, row.delta, 'util') }}</td>
               </tr>
               <tr v-if="coreUtilRows.length === 0">
                 <td colspan="4" class="compare-empty">No core utilisation data</td>
@@ -319,8 +319,8 @@
               <span class="compare-chart-legend">Δ = A − B</span>
             </div>
             <div class="p99-axis">
-              <span class="p99-improved">Improved</span>
-              <span class="p99-regressed">Regressed</span>
+              <span class="p99-improved">{{ statusLegend('improved') }}</span>
+              <span class="p99-regressed">{{ statusLegend('regressed') }}</span>
             </div>
             <div
               v-for="row in migHeatmapModel"
@@ -406,7 +406,7 @@
               <td>{{ row.avgB }}</td>
               <td>{{ row.maxA }}</td>
               <td>{{ row.maxB }}</td>
-              <td :class="deltaClass(row.name, row.deltaMax, 'exec max')">{{ row.deltaMax }}</td>
+              <td :class="deltaClass(row.name, row.deltaMax, 'exec max')">{{ deltaText(row.name, row.deltaMax, 'exec max') }}</td>
             </tr>
             <tr v-if="executionRows.length === 0">
               <td colspan="8" class="compare-empty">No execution samples in either trace</td>
@@ -442,7 +442,7 @@
               <td>{{ row.avgB }}</td>
               <td>{{ row.maxA }}</td>
               <td>{{ row.maxB }}</td>
-              <td :class="deltaClass(row.name, row.delta, 'block')">{{ row.delta }}</td>
+              <td :class="deltaClass(row.name, row.delta, 'block')">{{ deltaText(row.name, row.delta, 'block') }}</td>
             </tr>
             <tr v-if="blockingRows.length === 0">
               <td colspan="8" class="compare-empty">No blocking samples in either trace</td>
@@ -478,7 +478,7 @@
               <td>{{ row.avgB }}</td>
               <td>{{ row.maxA }}</td>
               <td>{{ row.maxB }}</td>
-              <td :class="deltaClass(row.name, row.delta, 'inter')">{{ row.delta }}</td>
+              <td :class="deltaClass(row.name, row.delta, 'inter')">{{ deltaText(row.name, row.delta, 'inter') }}</td>
             </tr>
             <tr v-if="interArrivalRows.length === 0">
               <td colspan="8" class="compare-empty">No inter-arrival samples in either trace</td>
@@ -508,7 +508,7 @@
               <td class="task-col">{{ row.name }}</td>
               <td>{{ row.countA }}</td>
               <td>{{ row.countB }}</td>
-              <td :class="deltaClass(row.name, row.delta, 'preempt')">{{ row.delta }}</td>
+              <td :class="deltaClass(row.name, row.delta, 'preempt')">{{ deltaText(row.name, row.delta, 'preempt') }}</td>
               <td>{{ row.totalA }}</td>
               <td>{{ row.totalB }}</td>
             </tr>
@@ -538,7 +538,7 @@
               <td class="task-col">{{ row.label }}</td>
               <td>{{ row.a }}</td>
               <td>{{ row.b }}</td>
-              <td :class="deltaClass(row.label, row.delta)">{{ row.delta }}</td>
+              <td :class="deltaClass(row.label, row.delta)">{{ deltaText(row.label, row.delta) }}</td>
             </tr>
             <tr v-if="syncCompareRows.length === 0">
               <td colspan="4" class="compare-empty">No sync instrumentation in either trace</td>
@@ -559,8 +559,8 @@
               <span class="compare-chart-legend">Candidate B − Baseline A</span>
             </div>
             <div class="p99-axis">
-              <span class="p99-improved">Improved</span>
-              <span class="p99-regressed">Regressed</span>
+              <span class="p99-improved">{{ statusLegend('improved') }}</span>
+              <span class="p99-regressed">{{ statusLegend('regressed') }}</span>
             </div>
             <div
               v-for="row in p99ChartModel"
@@ -599,7 +599,7 @@
                 <td class="task-col">{{ row.name }}</td>
                 <td>{{ row.a }}</td>
                 <td>{{ row.b }}</td>
-                <td :class="deltaClass(row.name, row.delta, 'response')">{{ row.delta }}</td>
+                <td :class="deltaClass(row.name, row.delta, 'response')">{{ deltaText(row.name, row.delta, 'response') }}</td>
               </tr>
               <tr v-if="responseCompareRows.length === 0">
                 <td colspan="4" class="compare-empty">No response samples in either trace</td>
@@ -628,7 +628,7 @@
               <td class="task-col">{{ row.name }}</td>
               <td>{{ row.a }}</td>
               <td>{{ row.b }}</td>
-              <td :class="deltaClass(row.name, row.delta, 'mutex')">{{ row.delta }}</td>
+              <td :class="deltaClass(row.name, row.delta, 'mutex')">{{ deltaText(row.name, row.delta, 'mutex') }}</td>
             </tr>
             <tr v-if="mutexBlockCompareRows.length === 0">
               <td colspan="4" class="compare-empty">No mutex blocking in either trace</td>
@@ -712,25 +712,7 @@
         <button
           type="button"
           class="compare-export-btn"
-          title="Export compare tables as CSV"
-          @click="onExportCsv"
-        >
-          <svg
-            class="export-icon"
-            viewBox="0 0 16 16"
-            width="14"
-            height="14"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path d="M2 1h12a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zm0 1v12h12V2H2zm2 2h8v1H4V4zm0 2h8v1H4V6zm0 2h5v1H4V8z" />
-          </svg>
-          Export CSV
-        </button>
-        <button
-          type="button"
-          class="compare-export-btn"
-          title="Export compare report as HTML"
+          title="Export compare report as HTML (tables include Search / Show all / CSV)"
           @click="onExportHtml"
         >
           <svg
@@ -781,7 +763,6 @@ import {
   buildMutexBlockCompareRows,
   buildSharedPatternCompareRows,
   buildAllCompareTables,
-  downloadCompareCsv,
   downloadCompareHtml,
   crossTraceTrends,
   traceSummarySnapshot,
@@ -798,6 +779,7 @@ import {
   compareRowDeltaStatus,
   filterCompareMigrationRows,
 } from '../utils/uxExplore.js'
+import { formatSemanticDelta, semanticLabel } from '../utils/semanticColors.js'
 
 const props = defineProps({
   tabs: { type: Array, required: true },
@@ -934,6 +916,16 @@ function deltaClass(label, delta, metric = '') {
   if (status === 'Regressed') return 'delta-regressed'
   return ''
 }
+function deltaText(label, delta, metric = '') {
+  const status = compareRowDeltaStatus(label, delta, metric)
+  const colorblind = !!props.analysisSettings?.colorblindSafe
+  return formatSemanticDelta(String(delta ?? ''), status || '', colorblind)
+}
+function statusLegend(role) {
+  const colorblind = !!props.analysisSettings?.colorblindSafe
+  if (role === 'improved') return semanticLabel('Improved', 'improved', colorblind)
+  return semanticLabel('Regressed', 'regressed', colorblind)
+}
 function migCellClass(ci, row) {
   const classes = []
   if (ci === 0) classes.push('task-col')
@@ -1050,15 +1042,6 @@ function exportTables() {
   )
   tables.trends = trendRows.value
   return tables
-}
-
-function onExportCsv() {
-  downloadCompareCsv(
-    tabA.value?.name ?? 'Trace A',
-    tabB.value?.name ?? 'Trace B',
-    scopeToCursors.value,
-    exportTables(),
-  )
 }
 
 function onExportHtml() {
@@ -1270,8 +1253,8 @@ function onScoreBaseline() {
   margin: 0 96px 2px 96px;
 }
 
-.p99-improved { color: #3cb371; }
-.p99-regressed { color: #e07070; }
+.p99-improved { color: var(--semantic-improvement, #3cb371); }
+.p99-regressed { color: var(--semantic-error, #e07070); }
 
 .p99-track {
   position: relative;
@@ -1297,15 +1280,15 @@ function onScoreBaseline() {
   min-width: 2px;
 }
 
-.p99-bar.improved { background: #3cb371; }
-.p99-bar.regressed { background: #e07070; }
+.p99-bar.improved { background: var(--semantic-improvement, #3cb371); }
+.p99-bar.regressed { background: var(--semantic-error, #e07070); }
 
 .p99-change {
   font-size: 10px;
 }
 
-.p99-change.improved { color: #3cb371; }
-.p99-change.regressed { color: #e07070; }
+.p99-change.improved { color: var(--semantic-improvement, #3cb371); }
+.p99-change.regressed { color: var(--semantic-error, #e07070); }
 
 .compare-mig-controls {
   display: flex;
@@ -1501,11 +1484,11 @@ function onScoreBaseline() {
 }
 
 .delta-improved {
-  color: #3cb371;
+  color: var(--semantic-improvement, #3cb371);
 }
 
 .delta-regressed {
-  color: #e07070;
+  color: var(--semantic-error, #e07070);
 }
 
 .compare-empty {

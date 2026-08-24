@@ -157,8 +157,11 @@
           </div>
 
           <div class="ci-grid-pane">
-            <div class="ci-axis-caption">
-              Y = directed corridor (source → dest) · X = time bins in scope · color = migration count · hatch = lock bounce
+            <div
+              class="ci-axis-caption"
+              title="Y = directed corridor (source → dest). X = time bins in scope. Color intensity = migration count. Diagonal hatch = lock-bounce share ≥ 15%."
+            >
+              Y = corridor · X = time · color = count · hatch = bounce
             </div>
             <div class="ci-grid-wrap">
               <div
@@ -844,10 +847,29 @@ function drawGrid() {
         const bounceRatio = bv > 0 ? bv / v : 0
         if (bounceRatio >= 0.15) {
           ctx.fillStyle = `rgba(232,120,32,${0.2 + 0.55 * intensity})`
+          ctx.fillRect(x + 0.5, y + 2, cellW - 1, rowH - 4)
+          // Diagonal hatch reinforces bounce vs normal (colorblind-safe).
+          ctx.save()
+          ctx.beginPath()
+          ctx.rect(x + 0.5, y + 2, cellW - 1, rowH - 4)
+          ctx.clip()
+          ctx.strokeStyle = `rgba(20,20,20,${0.35 + 0.35 * intensity})`
+          ctx.lineWidth = 1
+          const x0 = x + 0.5
+          const y0 = y + 2
+          const x1 = x0 + cellW - 1
+          const y1 = y0 + rowH - 4
+          for (let s = -rowH; s < cellW + rowH; s += 3) {
+            ctx.beginPath()
+            ctx.moveTo(x0 + s, y1)
+            ctx.lineTo(x0 + s + (y1 - y0), y0)
+            ctx.stroke()
+          }
+          ctx.restore()
         } else {
           ctx.fillStyle = `rgba(70,130,220,${0.15 + 0.75 * intensity})`
+          ctx.fillRect(x + 0.5, y + 2, cellW - 1, rowH - 4)
         }
-        ctx.fillRect(x + 0.5, y + 2, cellW - 1, rowH - 4)
       } else {
         ctx.fillStyle = 'rgba(127,127,127,0.06)'
         ctx.fillRect(x + 0.5, y + 2, cellW - 1, rowH - 4)

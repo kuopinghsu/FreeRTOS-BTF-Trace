@@ -29,6 +29,8 @@ describe('htmlReport TOC', () => {
     assert.match(html, /data-toc="expand"/)
     assert.match(html, /data-toc="collapse"/)
     assert.match(html, /setAllOpen/)
+    assert.match(html, /toc-count/)
+    assert.match(html, /report-toc-lead/)
     assert.match(html, new RegExp(`id="sec-${htmlSectionSlug('Analysis Findings')}" open`))
     assert.match(html, /Core Migrations/)
     assert.doesNotMatch(html, new RegExp(`id="sec-${htmlSectionSlug('Core Migrations')}" open`))

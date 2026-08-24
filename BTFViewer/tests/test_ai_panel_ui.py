@@ -858,6 +858,33 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertEqual(len(panel._entries), 1)
         self.assertIn("jump:3300000", ai_entry_text(panel._entries[0]))
 
+    def test_evidence_score_survives_late_planner_tool(self) -> None:
+        """Start Investigation ends with challenge/rank tools that omit times."""
+        panel = self._panel()
+        panel._update_evidence_from_tool_result("correlate_events", {
+            "ok": True,
+            "data": {
+                "task": "CS[22]",
+                "events": [
+                    {"kind": "migration", "detail": "c0->c1", "time": 1487000.0},
+                    {"kind": "ready", "detail": "wake", "time": 1487100.0},
+                ],
+                "correlation": 0.9,
+            },
+        })
+        self.assertGreaterEqual(
+            int((panel._evidence_payload or {}).get("evidence_score") or 0),
+            65,
+        )
+        panel._update_evidence_from_tool_result("challenge_conclusion", {
+            "ok": True,
+            "message": "Challenge: conclusion holds",
+            "data": {"verdict": "Confirmed", "confidence": "High"},
+        })
+        payload = panel._evidence_payload or {}
+        self.assertGreaterEqual(int(payload.get("evidence_score") or 0), 65)
+        self.assertIn("jump:1487000", ai_entry_text(panel._entries[0]))
+
     def test_evidence_language_switch_chinese_to_english(self) -> None:
         settings = {
             "enabled": "true",

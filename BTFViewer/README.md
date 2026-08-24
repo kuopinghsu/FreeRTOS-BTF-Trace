@@ -4,9 +4,9 @@
 
 ![BTFViewer AI-assisted analysis](../images/btfviewer-ai.png)
 
-**BTFViewer turns BTF traces into verifiable multicore scheduling evidence—with deterministic statistics, before-and-after comparison, CI-ready reports, and optional AI-assisted investigation.**
+**BTFViewer turns BTF traces into verifiable evidence about multicore scheduling. It provides trace-based statistics, before-and-after comparison, reports for continuous integration (CI), and optional AI-assisted investigation.**
 
-BTFViewer analyzes recorded context-switch activity from real-time operating systems (RTOSs) in **Best Trace Format** (`.btf`). It is designed for post-capture analysis on Desktop or Web and complements low-level debuggers and target-side trace recorders. It does not read source code or ELF files, or simulate an RTOS scheduler; its conclusions remain tied to events recorded in the trace.
+BTFViewer analyzes context-switch events recorded by a real-time operating system (RTOS) in **Best Trace Format** (`.btf`). You can use the Desktop or Web application after a trace has been captured. BTFViewer complements low-level debuggers and target-side trace recorders. It does not read source code or ELF files, and it does not simulate the scheduler. All results come from events in the trace.
 
 ![BTFViewer](../images/btfviewer.png)
 
@@ -16,12 +16,12 @@ BTFViewer analyzes recorded context-switch activity from real-time operating sys
 
 ## Why BTFViewer?
 
-BTFViewer is designed to shorten the path from a timing symptom to evidence that can be reviewed and reproduced.
+BTFViewer helps you move from a timing symptom to evidence that others can review and reproduce.
 
-- **Evidence you can verify:** Statistics and Analysis Findings are calculated from recorded BTF/STI events. Metric definitions, limitations, and timeline locations remain visible, so every conclusion can be checked against the trace.
+- **Evidence you can verify:** Statistics and Analysis Findings are calculated from recorded BTF/STI events. Metric definitions, limitations, and timeline locations help you check each result against the trace.
 - **Multicore behavior made explicit:** Dedicated diagnostics reveal load imbalance, concurrent core activity, task affinity, migration frequency, ping-pong movement, and hot core-to-core migration paths—not just which task ran when.
 - **Comparison built into the workflow:** Open multiple traces, measure before-and-after deltas and distribution changes, save baselines, and use the Desktop CLI as a regression gate in automated tests or CI.
-- **AI grounded in measured data:** The optional AI Assistant can triage, investigate, verify, evaluate heuristic experiments, and explain trace comparisons. Statistics and the timeline remain the source of truth; a local OpenAI-compatible endpoint can keep extracted evidence on the local machine.
+- **AI based on measured data:** The optional AI Assistant can explain findings, investigate possible causes, verify evidence, and summarize trace comparisons. Statistics and the timeline remain the source of truth. A local OpenAI-compatible service can keep the extracted evidence on your machine.
 - **Easy to run and share:** Desktop and Web use the same analysis workflow. The standalone Web build and bilingual guided demo make it easy to review or demonstrate a trace without a specialized analysis installation.
 
 <a id="features" name="features">&#x200B;</a>
@@ -33,8 +33,8 @@ BTFViewer is designed to shorten the path from a timing symptom to evidence that
 | **Timeline and measurement** | Task or CPU-core views, horizontal or vertical layouts, zoom, pan, search, cursors, bookmarks, and annotations |
 | **Statistics and diagnostics** | Utilisation, execution, blocking, dispatch latency, jitter, preemption, migration, mutex, semaphore, queue, deadline, and anomaly analysis |
 | **Trace comparison** | Multi-tab sessions, before-and-after deltas, distribution comparisons, saved baselines, and experiment validation |
-| **AI Assistant** | Finding triage, scoped investigation, evidence verification, heuristic what-if analysis, and comparison explanations |
-| **Export and automation** | PNG, SVG, CSV, HTML, Perfetto, selected BTF ranges, and Desktop CLI support for scripts and CI |
+| **AI Assistant** | Finding triage, focused investigation, evidence verification, what-if analysis, and comparison explanations |
+| **Export and automation** | PNG, SVG, HTML reports with per-table CSV downloads, Perfetto, selected BTF ranges, and Desktop CLI support for scripts and CI |
 | **Learning and sharing** | Standalone Web application and an 8-core guided demo with English or Traditional Chinese narration |
 
 <a id="documentation" name="documentation">&#x200B;</a>
@@ -43,7 +43,7 @@ BTFViewer is designed to shorten the path from a timing symptom to evidence that
 
 | Document | Purpose |
 |---|---|
-| `README.md` | Install BTFViewer and learn its main functions |
+| `README.md` | Install BTFViewer and learn its main features |
 | [WORKFLOWS.md](WORKFLOWS.md) | Follow step-by-step investigation procedures |
 | [STATISTICS.md](STATISTICS.md) | Understand metric definitions, formulas, and interpretation |
 | [AI.md](AI.md) | Configure and use AI-assisted investigation |
@@ -136,39 +136,25 @@ English is the default narration language. Select another language from the demo
 ```bash
 make demo-pack
 make demo-pack DEMO_LANGS=en,zh-tw
-make demo-pack DEMO_LANGS=all
-python3 scripts/demo_pack.py demos/demo_8cores --list-voices
 ```
 
-The generated `builds/demo_8cores.xtf` contains the script, trace, and selected voice files. Open it in either the Desktop or Web application.
-
-The Web **Record** function uses browser display capture. Select the current tab and enable tab audio to include narration.
-
-See [demos/README.md](demos/README.md) for package layout, voice generation, recording, XML actions, and the demo API.
+The generated `builds/demo_8cores.xtf` contains the script, trace, and selected voice files. Open it in either application. See [demos/README.md](demos/README.md) for instructions on creating, recording, and maintaining demos.
 
 <a id="viewer-controls" name="viewer-controls">&#x200B;</a>
 
 ## Viewer controls
 
-The Desktop and Web applications use the same main workflow. Platform-specific differences are noted below.
-
-Target investigation path:
-
-```text
-SEE → TRIAGE → SCOPE → INVESTIGATE
-```
-
-At every step you should be able to see or clearly determine: active Trace, **Scope**, **Filters**, View Mode, **Selection**, and **Highlight**.
+The viewer uses one interface, one set of controls, and one analysis workflow. During an investigation, check the active trace, **Scope**, **Filters**, View Mode, **Selection**, and **Highlight** before interpreting a result.
 
 ### Investigation terminology
 
 | Term | Meaning |
 |---|---|
 | **Full Trace** | No cursor-defined time window; analysis uses the whole capture |
-| **Scope** | The analyzed time region (**Full Trace** or **C1–Cn · duration**) |
+| **Scope** | The time range used for analysis (**Full Trace** or **C1–Cn · duration**) |
 | **Filter** | A data subset inside the Scope (Task, Core, or Migration). Clears with **×** or **Clear All** |
-| **Selection** | The object locked for inspection (persistent). Does not change analytical input by itself |
-| **Highlight** | Transient visual emphasis (for example Legend hover). Does not change analytical input |
+| **Selection** | The task or object kept active for inspection. It does not change the analyzed data by itself |
+| **Highlight** | Temporary visual emphasis, such as hovering over a Legend item. It does not change the analyzed data |
 | **Fit Trace** | Zoom the viewport to the complete capture (`Ctrl+0` / `F`) |
 | **Fit Cursors** | Zoom the viewport to the earliest–latest cursor span (`Ctrl+R`) |
 | **Baseline / Candidate** | Trace A and Trace B in Trace Compare |
@@ -176,34 +162,25 @@ At every step you should be able to see or clearly determine: active Trace, **Sc
 
 Selection and Highlight never silently become a Filter. View Mode (**Task** / **Core**) is independent of Selection, Highlight, and Filter.
 
-### Investigation context
-
-The status bar keeps investigation state visible without opening another panel:
-
-- **Scope:** `Full Trace`, or `C1–Cn · span` when a cursor range is active.
-- **Filter chips:** Task Filter, Core Filter (`Core: N of M`), and Migration Filter (`Migration: X→Y`), each with **×**. **Clear All** removes every Filter.
-- **Zoom:** relative zoom (and physical scale when shown).
-
-Statistics shows a matching **Filtered:** indicator when any Filter narrows the analytical subset. Filters persist per Analysis Tab.
+The status bar shows the current Scope, active Filters, and Zoom. Statistics also shows **Filtered:** when a Filter limits the analyzed data. Filters are stored separately for each analysis tab.
 
 ### Main controls
 
-Toolbar groups follow the common path: **Open** → Zoom / Fit → View Mode → investigation entry points (**Find**, Heatmap, **Analysis**, **Compare**). Low-frequency actions stay in the menu (Desktop) or overflow (Web).
+The toolbar groups related controls. Hover over an icon to see its name and shortcut.
 
-| Control | Purpose |
-|---|---|
-| **Open** | Open a BTF trace or demo package |
-| **Task / Core** | Show one row per task or group activity by CPU core |
-| **Horizontal / Vertical** | Change the direction of the time axis |
-| **Zoom in / Zoom out / 1:1 / Fit Trace / Fit Cursors** | Adjust the visible time range |
-| **Load** | Show or hide the CPU-load chart |
-| **Heatmap** | Inspect task migration and core movement |
-| **Analysis** | Open automatically generated findings for the current Scope |
-| **Compare** | Compare two or more open traces |
-| **Find** | Search for tasks, events, migrations, intervals, or synchronization objects |
-| **Settings** | Configure display, layout, cursors, and AI options |
+| Group | Controls | Purpose |
+|---|---|---|
+| Open | **Open** | Open one or more BTF traces, a demo XML file, or an `.xtf` demo package |
+| Capture and export | **Snapshot editor**, **Save SVG**, **Export Perfetto**, **Save cursor range as BTF** | Capture the current view or export trace data. Saving a BTF range requires at least two cursors |
+| Layout | **Horizontal / Vertical** | Run the time axis from left to right or from top to bottom |
+| Zoom | **Zoom in / Zoom out**, **1:1**, **Fit Trace**, **Fit Cursors**, zoom preset | Change the visible time range or select a fixed time-per-pixel scale |
+| View | **Task / Core**, expand or collapse all cores, **Load** | Choose the timeline grouping and show or hide the CPU-load graph |
+| Investigation | **Find**, **Migration & Corridor Inspector**, **Analysis**, **Compare** | Locate evidence, inspect multicore movement, open findings, or compare a Baseline and Candidate |
+| Conditional controls | **All tasks**, **Log₂** | Clear an active Migration Filter, or change an expanded STI waveform between linear and logarithmic scaling |
+| Display | Light/dark theme | Switch the viewer theme without opening Settings |
+| Support | **Demo**, **Record**, **Settings**, **Help** | Load the bundled demo, record the current tab as WebM, configure the viewer, or open shortcuts and help |
 
-The Web toolbar also provides **Demo**, **Record**, and **About**. Some controls move into **More** when the window is narrow.
+Select the application icon to open **About**. When the window is too narrow for every group, the toolbar moves groups into **More (⋯)** without changing their functions.
 
 ### Task and core views
 
@@ -222,7 +199,7 @@ In **Core View**, the Legend **Cores** checklist is the **Core Filter**: uncheck
 - Hold **Shift** while scrolling to change the pan axis.
 - Use a trackpad pinch gesture to zoom on macOS.
 - Middle-drag across the timeline to zoom into a selected time range.
-- Select **Fit Trace** or press `Ctrl+0` / `F` to show the complete capture. **Fit Cursors** / `Ctrl+R` fits the time between the earliest and latest cursor (C1–Cn). In a demo script, `<zoom_view/>` uses Fit Trace, while `<fit_view/>` uses Fit Cursors when cursors are present. **Zoom out** stops at Fit Trace and is unavailable while the complete trace is visible.
+- Select **Fit Trace** or press `Ctrl+0` / `F` to show the complete capture. **Fit Cursors** / `Ctrl+R` fits the time between the earliest and latest cursor (C1–Cn).
 - Select **1:1** to return to the configured zoom density.
 - **Hover** a Legend entry or timeline segment for **Highlight** (transient). **Click** a task label or Legend entry for **Selection** (persistent). These do not apply a Filter.
 - Hover over a timeline segment to view task, core, start/end time, and duration.
@@ -235,7 +212,7 @@ When a task is the current **Selection**, Task View can show its utilization on 
 
 ### Cursors and Scope
 
-Cursors mark timestamps and define measurement and **Scope**. BTFViewer supports four cursors by default; the maximum can be changed in **Settings**. Markers use a theme-aware contrast halo so they stay visible over nearby segment colours. Overlapping labels stack by cursor slot so they do not cover each other.
+Cursors mark timestamps and can define a measurement Scope. BTFViewer supports four cursors by default; you can change the limit in **Settings**.
 
 | Action | Method |
 |---|---|
@@ -245,7 +222,7 @@ Cursors mark timestamps and define measurement and **Scope**. BTFViewer supports
 | Clear all cursors | Press `Shift+C` or Shift-right-click |
 | Snap to an event boundary | Shift-click |
 
-Place at least two cursors around the period you want to inspect. Enable **Limit to C1–Cn** in Statistics so calculations use the earliest–latest span. The status-bar Scope line updates immediately. **Fit Cursors** (`Ctrl+R`) displays only this period. **Save selection as BTF** exports it as a smaller trace.
+Place at least two cursors around the period you want to inspect. Enable **Limit to C1–Cn** in Statistics so calculations use the earliest–latest span. The status-bar Scope line updates immediately. **Fit Cursors** (`Ctrl+R`) displays only this period. **Save cursor range as BTF** exports it as a smaller trace.
 
 ### Marks, bookmarks, annotations, and Find
 
@@ -256,7 +233,7 @@ Place at least two cursors around the period you want to inspect. Enable **Limit
 | **Annotation** | Human-written note tied to a Trace timestamp |
 | **Find** | Locate tasks, migrations, STI events, intervals, lifecycle events, and synchronization objects |
 
-The Marks panel lists **Cursors**, **Cursor Range**, then **Marks** (bookmarks and annotations). Use **Export Marks** / **Import Marks** and **Export Session** / **Import Session** for portable notes. Avoid calling a known type a generic “marker”.
+The Marks panel lists cursors, the cursor range, bookmarks, and annotations. Use **Export Marks** / **Import Marks** or **Export Session** / **Import Session** to share them.
 
 Use `Ctrl+F` to open Find. Status shows **`k of N matches`**. Use Previous/Next, `F3`, and `Shift+F3` to move between results without changing Scope or Filters. Match Mode details live in tooltips. Right-click the timeline for cursor and mark actions.
 
@@ -268,7 +245,7 @@ Each trace opens in a separate tab and keeps its own zoom, cursors, marks, and F
 - `Ctrl+Shift+Tab`: previous tab
 - `Ctrl+W`: close the current tab
 
-Desktop restores files from their original paths. Web can restore up to eight packed traces from browser storage. Private browsing, storage limits, or cleared site data can prevent restoration.
+Desktop can reopen files from their original paths. Web restoration depends on browser storage and may be unavailable in private browsing mode or after site data is cleared.
 
 <a id="basic-analysis-workflow" name="basic-analysis-workflow">&#x200B;</a>
 
@@ -279,8 +256,8 @@ For an initial review, use the following sequence:
 1. Open the trace and select **Fit Trace** to view its complete duration.
 2. Select **Load** and check whether all cores carry a reasonable share of the work.
 3. Open **Analysis** and review the highest-severity findings (Triage).
-4. Select **Investigate** on a finding to open the relevant Statistics section (Scope and Filters are preserved).
-5. Select **Show Evidence** to center the Timeline on the finding’s Evidence timestamp (places/reuses one Evidence cursor and may Highlight the related Task). **Show Evidence does not change Scope or Filters.**
+4. Select **Investigate** on a finding to open the relevant Statistics section and apply the finding’s recommended Scope (C1–C2). Filters are preserved.
+5. Select **Show Evidence** to center the timeline on the relevant event. This action does not change the Scope or Filters.
 6. Select a high value or outlier to jump to the corresponding timeline event.
 7. Place cursors around the affected period, confirm **Scope: C1–Cn** in the status bar, and enable **Limit to C1–Cn**.
 8. Inspect the task, core, preemption, blocking, synchronization, or migration details.
@@ -306,24 +283,23 @@ BTFViewer calculates all results from recorded BTF events. It does not inspect s
 | Long wait time | **Blocking Time** | Mutex owner and preemption activity |
 | Ready-to-run delay | **Dispatch Latency** | Blocking and preemption |
 | Priority inversion | **Priority Inheritance** | Mutex pairing and blocking |
-| Frequent core movement | **Core Migrations** | Load balance, migration heatmap, and mutex bounces |
+| Frequent core movement | **Core Migrations** | Load balance, Migration & Corridor Inspector, and mutex bounces |
 | Lock or queue issue | **Mutex / Semaphore / Queue** | Blocking and migrations |
 
 Detailed metric definitions and formulas are in [STATISTICS.md](STATISTICS.md).
 
 ### Analysis Findings
 
-Select **Analysis** to open a non-modal **Findings inbox** (floating tool window on Desktop and Web) for the current **Scope** (**Full Trace** or **C1–Cn**). The Timeline stays usable while Findings remain open. Findings can include load imbalance, execution-time hotspots, blocking, priority inversion, frequent core migration, deadline misses, tick-health problems, and synchronization movement between cores.
+Select **Analysis** to open findings for the current **Scope** (**Full Trace** or **C1–Cn**). The timeline remains available while the Findings window is open. Findings may include load imbalance, long execution or blocking time, priority inversion, frequent core migration, missed deadlines, tick problems, and synchronization objects that move between cores.
 
 Each finding includes:
 
 - A clear **Severity** and problem-oriented title.
 - The most relevant supporting metric.
-- An **Evidence** line from measured `evidence_text` (observation, separate from interpretive text).
-- **Investigate** — scopes the finding and opens the relevant Statistics section without requiring AI (Findings stays open).
-- **Show Evidence** — jump to Timeline Evidence for the selected finding (centers the view, places/reuses one Evidence cursor, optional Task Highlight). Does **not** change Scope or Filters, and does **not** close Findings. When several samples exist, the latest/representative Evidence is used; if none can be located, a status message is shown instead of inventing a jump.
-- Timing table cells for **Max / p50 / p95 / p99** (where those percentiles are shown) use the **↗** Evidence affordance with the same Scope-preserving jump behavior.
-- Optional AI actions such as **Investigate…** / **Auto investigate…** when AI is configured (Ask AI runs while Findings stays open).
+- An **Evidence** line that separates the measured observation from its interpretation.
+- **Investigate** — apply the suggested Scope and open the relevant Statistics section without using AI.
+- **Show Evidence** — move the timeline to the supporting event without changing the Scope or Filters.
+- Optional AI actions when the AI Assistant is configured.
 
 Treat findings as leads, not confirmed root causes. Apply cursors when a finding recommends a useful window, then recheck Statistics inside that Scope.
 
@@ -341,15 +317,15 @@ p95 is important because an average alone does not describe real-time performanc
 
 Check load balance before interpreting migration counts. An SMP scheduler may move tasks to idle cores to distribute the workload, so some migration is expected.
 
-After confirming load balance, check whether a task moves between cores more often than needed. Frequent migration can increase L1 cache misses. On Xtensa processors, migration can also reduce the benefit of lazy context switching: coprocessor registers may need to be saved when a task moves to another core, increasing context-switch overhead.
+After confirming load balance, check whether a task moves between cores more often than needed. Frequent migration can increase L1 cache misses because a task may not find its recent data in the new core's cache. On Xtensa processors, migration can also reduce the benefit of lazy context switching. The system may need to save coprocessor registers when a task moves to another core, which increases context-switch overhead.
 
-Review Task View, per-core load, **Core Migrations**, and the migration heatmap together. A high migration count is significant when it coincides with poor cache behavior, greater context-switch overhead, higher latency, or unstable load distribution.
+Review Task View, per-core load, **Core Migrations**, and the **Migration & Corridor Inspector** together. A high migration count is significant when it coincides with poor cache behavior, greater context-switch overhead, higher latency, or unstable load distribution.
 
 ### Comparing open traces
 
 **Compare** is available when two or more traces are open. It summarizes differences in utilization, migrations, execution, blocking, response time, synchronization activity, and deadline misses.
 
-The decision strip shows Baseline/Candidate identity, regression and improvement counts, a concise verdict with Why?, and a **Next** investigation hint when the result is mixed, ambiguous, or mostly similar. Only engineering-significant deltas are listed (small changes are omitted).
+The summary identifies the **Baseline** (reference trace) and **Candidate** (new trace), counts regressions and improvements, and explains the overall result. Small changes without practical engineering significance are omitted.
 
 This is an optional comparison tool. It is not required by the basic investigation workflow. When you use it, compare equivalent workload phases and measurement ranges.
 
@@ -367,7 +343,7 @@ Recommended use:
 4. Use **Verify with AI** to challenge the proposed cause.
 5. If you make a change, capture a new trace and repeat the same scoped measurements.
 
-Available context levels are **Compact**, **Balanced**, and **Full evidence**. Compact uses fewer tokens, and Balanced is the default. Configure the model, endpoint, authentication, context, privacy, and reply language in **Settings → AI**.
+Available context levels are **Compact**, **Balanced**, and **Full evidence**. Compact sends less information and uses fewer tokens; Balanced is the default. Configure the model, service endpoint, authentication, context, privacy, and reply language in **Settings → AI**.
 
 Import `examples/ai/presets.json` for example Ollama, OpenAI, Gemini, DeepSeek, and Grok configurations. Local Ollama does not require an API key. Cloud services may send trace evidence to an external provider; use the anonymization and sensitive-trace settings when appropriate.
 
@@ -377,15 +353,19 @@ See [AI.md](AI.md) for setup, privacy, model options, tools, troubleshooting, CL
 
 ## Export
 
-| Output | Desktop | Web |
-|---|---|---|
-| Annotated PNG | Snapshot editor | Snapshot editor |
-| Viewport image | Copy to clipboard | Copy to clipboard |
-| SVG | **Save SVG** | **Save SVG** |
-| Perfetto JSON | **Export Perfetto** | **Perfetto** |
-| Selected BTF range | **Save selection as BTF** | Download selected range |
-| Statistics report | CSV or HTML | CSV or HTML |
-| Trace comparison | CSV or HTML | CSV or HTML |
+BTFViewer provides the following export actions.
+
+| Output | Action |
+|---|---|
+| Annotated PNG or clipboard image | Open the **Snapshot editor**, add annotations if needed, then select **Save PNG** or **Copy** |
+| Timeline SVG | **Save SVG** |
+| Perfetto JSON | **Export Perfetto** |
+| Selected BTF range | Place at least two cursors, then select **Save cursor range as BTF** |
+| Statistics report | Open Statistics and select **Export HTML** |
+| Trace comparison report | Open Compare and select **Export HTML** |
+| Demonstration recording | Select **Record**, share the current tab, and stop recording to download a WebM file |
+
+Statistics and Trace Compare use a single **Export HTML** action. In the saved report, each statistics table has a **CSV** button for downloading that table's currently visible rows. To download the complete table, clear **Search** and **Problems only**, then enable **Show all** before selecting **CSV**.
 
 <a id="desktop-command-line" name="desktop-command-line">&#x200B;</a>
 
@@ -461,8 +441,8 @@ Desktop stores settings in `btf_viewer.rc` next to the viewer. Web stores them i
 
 | Action | Result |
 |---|---|
-| Mouse wheel | Pan |
-| Ctrl+wheel | Zoom |
+| Mouse wheel | Pan the timeline (vertical or horizontal depending on orientation) |
+| Ctrl+wheel / pinch | Zoom the timeline |
 | Left-drag the background | Pan |
 | Middle-drag | Zoom to a selected range |
 | Ctrl+left-drag | Measure the time between two points |
@@ -487,8 +467,6 @@ Most users can ignore this section.
 | Run all tests | `make -C BTFViewer test-all` |
 | Build documentation PDFs | `make -C BTFViewer doc` |
 | Run from source | `python -m btf_viewer_pkg trace.btf` from `BTFViewer/` |
-
-Edit Desktop sources in `btf_viewer_pkg/` and Web sources in `web/`. Commit regenerated files under `builds/` with the source changes. Shared parser and Statistics results are checked with fixtures under `tests/fixtures/`.
 
 See `TRACE_FORMAT.md` in the parent directory for the BTF field reference.
 

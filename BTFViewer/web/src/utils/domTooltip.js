@@ -84,12 +84,12 @@ function ensureStyle() {
   max-width: min(28rem, calc(100vw - 16px));
   margin: 0; padding: 0.35em 0.6em;
   border-radius: 4px;
-  background: #f7f7f7;
-  color: #1a1a1a;
-  border: 1px solid rgba(0,0,0,0.14);
+  background: var(--panel-bg, #f7f7f7);
+  color: var(--fg, #1a1a1a);
+  border: 1px solid var(--border, rgba(0,0,0,0.14));
   box-shadow: 0 2px 8px rgba(0,0,0,0.12);
   font: normal 0.92em/1.35 system-ui, sans-serif;
-  font-size: var(--ui-font-size, 13px);
+  font-size: var(--type-meta, var(--ui-font-size, 13px));
   pointer-events: none;
   z-index: 2147483646;
   white-space: pre-wrap;
@@ -102,11 +102,11 @@ function ensureStyle() {
   opacity: 1;
   transform: translateY(0);
 }
-/* Tip is mounted on <html>; theme class lives on the Vue root. */
-body:has(.dark) .${TIP_CLASS} {
-  background: #2a2a2a;
-  color: #f2f2f2;
-  border-color: rgba(255,255,255,0.12);
+body:has(.dark) .${TIP_CLASS},
+.app.dark ~ * .${TIP_CLASS} {
+  background: var(--panel-bg, #2a2a2a);
+  color: var(--fg, #f2f2f2);
+  border-color: var(--border, rgba(255,255,255,0.12));
   box-shadow: 0 2px 8px rgba(0,0,0,0.35);
 }
 `

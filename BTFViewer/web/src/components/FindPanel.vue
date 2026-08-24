@@ -12,7 +12,7 @@
       class="find-input"
       type="search"
       placeholder="Find task, annotation, or migration…"
-      title="Search the active tab. Enter = next match; Shift+Enter / F3 / Shift+F3 step hits on the timeline."
+      title="Search the active tab. Enter = next match; Shift+Enter / F3 / Shift+F3 step hits. Try a different Match Mode if there are no hits."
       @input="onQueryChange"
       @keydown.enter.prevent="emit('next')"
       @keydown.shift.enter.prevent="emit('prev')"
@@ -114,7 +114,7 @@ defineExpose({ focusInput })
   line-height: 1.35;
 }
 .find-status.error {
-  color: #e07070;
+  color: var(--analysis-err, #e07070);
 }
 .find-input {
   width: 100%;
@@ -123,7 +123,7 @@ defineExpose({ focusInput })
   border-radius: 4px;
   background: var(--bg);
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--type-body, 12px);
 }
 .find-mode {
   width: 100%;
@@ -132,7 +132,7 @@ defineExpose({ focusInput })
   border-radius: 4px;
   background: var(--bg);
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--type-body, 12px);
 }
 .find-btns {
   display: flex;

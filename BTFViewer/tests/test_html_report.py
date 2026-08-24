@@ -48,6 +48,8 @@ class HtmlReportTocTests(unittest.TestCase):
         self.assertIn('data-toc="expand"', html)
         self.assertIn('data-toc="collapse"', html)
         self.assertIn("setAllOpen", html)
+        self.assertIn("toc-count", html)
+        self.assertIn("report-toc-lead", html)
         self.assertIn(f'id="sec-{html_section_slug("Analysis Findings")}" open', html)
         self.assertIn("Core Migrations", html)
         self.assertNotIn(f'id="sec-{html_section_slug("Core Migrations")}" open', html)

@@ -782,6 +782,63 @@ export function extractEvidencePanelPayload(toolName, result) {
   return payload
 }
 
+function evidenceItemsHaveTimes(evidence) {
+  if (!Array.isArray(evidence)) return false
+  return evidence.some(e => e && typeof e === 'object' && e.time != null)
+}
+
+/** Recompute heuristic score / quality fields on an Evidence panel payload. */
+export function refreshEvidencePanelScores(payload) {
+  const out = { ...(payload || {}) }
+  const scoreData = computeEvidenceScore(out.evidence || [], {
+    alternatives: out.alternatives || [],
+    evidenceChain: String(out.evidence_chain || ''),
+    checks: out.checks || [],
+  })
+  out.evidence_score = scoreData.score
+  out.evidence_score_breakdown = scoreData.breakdown
+  out.evidence_score_bar = scoreData.bar
+  const quality = computeEvidenceQuality({
+    score: scoreData.score,
+    breakdown: scoreData.breakdown,
+    evidence: out.evidence,
+    alternatives: out.alternatives,
+    checks: out.checks,
+    evidenceChain: String(out.evidence_chain || ''),
+  })
+  out.evidence_quality = quality
+  out.evidence_quality_bar = quality.bar
+  return out
+}
+
+/**
+ * Carry forward timed evidence when a later tool omits it.
+ * Keep in sync with btf_viewer_pkg/ai_investigation.py merge_evidence_panel_payload.
+ */
+export function mergeEvidencePanelPayload(prev, next) {
+  if (!next || typeof next !== 'object') {
+    return prev && typeof prev === 'object' ? { ...prev } : next
+  }
+  if (!prev || typeof prev !== 'object') return { ...next }
+  const out = { ...next }
+  if (!evidenceItemsHaveTimes(out.evidence) && evidenceItemsHaveTimes(prev.evidence)) {
+    out.evidence = [...(prev.evidence || [])]
+  }
+  if (!String(out.evidence_chain || '').trim() && String(prev.evidence_chain || '').trim()) {
+    out.evidence_chain = prev.evidence_chain
+  }
+  if (!(out.checks && out.checks.length) && prev.checks?.length) {
+    out.checks = [...prev.checks]
+  }
+  for (const key of [
+    'alternatives', 'hypotheses', 'hypotheses_managed', 'root_cause_chain',
+    'finding', 'subtitle',
+  ]) {
+    if (!out[key] && prev[key]) out[key] = prev[key]
+  }
+  return refreshEvidencePanelScores(out)
+}
+
 function evidenceJumpToken(value) {
   const n = Number(value)
   if (!Number.isFinite(n)) return String(value ?? '')

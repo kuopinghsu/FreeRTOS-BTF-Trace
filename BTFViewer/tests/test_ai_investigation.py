@@ -985,6 +985,35 @@ class AiInvestigationTests(unittest.TestCase):
         self.assertIsNotNone(planned)
         self.assertIn("Plan with", planned["conclusion"])
 
+    def test_merge_evidence_panel_payload_keeps_timed_evidence(self) -> None:
+        from btf_viewer_pkg.ai_investigation import merge_evidence_panel_payload
+
+        strong = extract_evidence_panel_payload("correlate_events", {
+            "ok": True,
+            "data": {
+                "task": "CS[22]",
+                "events": [
+                    {"kind": "migration", "detail": "c0->c1", "time": 1487000},
+                    {"kind": "ready", "detail": "wake", "time": 1487100},
+                ],
+                "correlation": 0.9,
+            },
+        })
+        self.assertGreaterEqual(strong["evidence_score"], 40 + 25)
+        late = extract_evidence_panel_payload("challenge_conclusion", {
+            "ok": True,
+            "message": "Challenge: conclusion holds",
+            "data": {"verdict": "Confirmed", "confidence": "High"},
+        })
+        self.assertEqual(late["evidence_score"], 0)
+        merged = merge_evidence_panel_payload(strong, late)
+        self.assertIsNotNone(merged)
+        self.assertGreaterEqual(merged["evidence_score"], 40 + 25)
+        self.assertEqual(merged["conclusion"], late["conclusion"])
+        self.assertTrue(
+            any(e.get("time") is not None for e in (merged.get("evidence") or []))
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

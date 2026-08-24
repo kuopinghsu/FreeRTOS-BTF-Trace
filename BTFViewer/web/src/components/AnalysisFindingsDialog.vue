@@ -43,7 +43,7 @@
             ]"
             @click="selectedId = f.id || ''"
           >
-            <div class="finding-title">{{ clusterPrefix(f) }}{{ f.title }}</div>
+            <div class="finding-title">{{ severityGlyph(f) }}{{ clusterPrefix(f) }}{{ f.title }}</div>
             <div class="finding-text">{{ f.text }}</div>
             <div
               v-if="f.evidence_text"
@@ -220,6 +220,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { EXPLAIN_LEVELS } from '../utils/aiCase.js'
 import { analysisDashboard } from '../utils/aiPlanner.js'
 import { bestFindingScope } from '../utils/uxExplore.js'
+import { SEMANTIC_GLYPHS } from '../utils/semanticColors.js'
 import { formatAnalysisFindingsText, FINDING_SECTION_MAP } from '../utils/workflowAnalysis.js'
 
 const props = defineProps({
@@ -248,6 +249,14 @@ function clusterPrefix(f) {
     if ((inc.finding_ids || []).includes(id) && id) return `[${inc.id}] `
     if ((inc.findings || []).includes(title) && title) return `[${inc.id}] `
   }
+  return ''
+}
+
+function severityGlyph(f) {
+  const sev = String(f?.severity || '').toLowerCase()
+  if (sev === 'error') return `${SEMANTIC_GLYPHS.error} `
+  if (sev === 'warning' || sev === 'warn') return `${SEMANTIC_GLYPHS.warning} `
+  if (f?.id === 'load_balance_ok') return `${SEMANTIC_GLYPHS.improved} `
   return ''
 }
 const explainOpen = ref(false)
@@ -497,7 +506,7 @@ function saveAsText() {
 .finding-evidence-label {
   font-weight: 700;
   text-transform: uppercase;
-  font-size: 9px;
+  font-size: var(--type-min, 11px);
   letter-spacing: 0.4px;
   margin-right: 4px;
 }

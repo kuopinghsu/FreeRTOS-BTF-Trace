@@ -151,7 +151,7 @@ COMMAND_PALETTE_ACTIONS = (
     ("heatmap", "Migration heatmap"),
     ("settings", "Settings"),
     ("limit-scope", "Limit to C1–Cn"),
-    ("fit", "Zoom fit"),
+    ("fit", "Fit Trace"),
     ("inspect-task", "Inspect task"),
     ("preset-triage", "Workspace: Triage"),
     ("preset-latency", "Workspace: Latency"),
@@ -180,7 +180,7 @@ COMMAND_PALETTE_META: Dict[str, Dict[str, Any]] = {
         "disabled": "Open a trace first",
     },
     "marks": {
-        "shortcut": "",
+        "shortcut": "Ctrl+B",
         "synonyms": ("bookmarks", "annotations", "notes"),
         "requires": "trace",
         "disabled": "Open a trace first",
@@ -217,12 +217,12 @@ COMMAND_PALETTE_META: Dict[str, Dict[str, Any]] = {
     },
     "fit": {
         "shortcut": "Ctrl+0",
-        "synonyms": ("zoom", "reset", "overview"),
+        "synonyms": ("zoom", "reset", "overview", "fit trace"),
         "requires": "trace",
         "disabled": "Open a trace first",
     },
     "inspect-task": {
-        "shortcut": "",
+        "shortcut": "I",
         "synonyms": ("inspector", "task info", "quality"),
         "requires": "trace",
         "disabled": "Open a trace first",

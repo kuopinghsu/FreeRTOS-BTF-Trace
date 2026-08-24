@@ -6,8 +6,26 @@
 -- from cell text instead (LaTeX writer only).
 
 local MIN_COL = 0.08
-local MIN_FIRST = 0.10
-local MAX_FIRST = 0.42
+local MIN_FIRST = 0.14
+local MAX_FIRST = 0.48
+
+local function visual_len(s)
+  -- CJK / fullwidth glyphs are ~2× Latin advance; count them heavier so
+  -- zh-TW tables get wider columns and wrap instead of overflowing.
+  local n = 0
+  for _, c in utf8.codes(s) do
+    if (c >= 0x1100 and c <= 0x11FF)
+      or (c >= 0x2E80 and c <= 0x9FFF)
+      or (c >= 0xF900 and c <= 0xFAFF)
+      or (c >= 0xFF00 and c <= 0xFFEF)
+      or (c >= 0x20000 and c <= 0x2FA1F) then
+      n = n + 1.85
+    else
+      n = n + 1
+    end
+  end
+  return n
+end
 
 local function scan_rows(rows, j, maxlen)
   if not rows then
@@ -16,7 +34,7 @@ local function scan_rows(rows, j, maxlen)
   for _, row in ipairs(rows) do
     local cell = row.cells and row.cells[j]
     if cell then
-      local n = utf8.len(pandoc.utils.stringify(cell)) or 0
+      local n = visual_len(pandoc.utils.stringify(cell))
       if n > maxlen then
         maxlen = n
       end

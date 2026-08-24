@@ -1,561 +1,773 @@
-# BTF Viewer Statistics ![](../images/readme/h1.svg)
+# BTFViewer Statistics Reference ![](../images/readme/h1.svg)
 
-This guide explains the **deterministic statistics and analysis** in BTFViewer Desktop and Web.
+This document is both a statistics reference and an analysis tutorial. It explains what BTFViewer measures, how each value is calculated, when to use it, which other statistics are required for confirmation, and what the result cannot prove. It focuses on analysis rather than implementation.
 
-Use this document when you need to answer questions such as:
+Use [README.md](README.md) for product operation, [WORKFLOWS.md](WORKFLOWS.md) for step-by-step investigations, and [AI.md](AI.md) for AI-assisted analysis.
 
-- What does this metric measure?
-- How is it calculated?
-- What does a high or low value mean?
-- What are the limitations of the metric?
-- Which related metrics should I check next?
+## How to use this reference
 
-For product usage and navigation, see [`README.md`](README.md). For step-by-step investigations, see [`WORKFLOWS.md`](WORKFLOWS.md). For AI-assisted analysis, see [`AI.md`](AI.md).
+BTFViewer calculates statistics from the BTF/STI events present in a trace. A result describes the selected **Scope** and active filters, not necessarily the complete system run.
 
-> **Important:** BTFViewer reports evidence captured in the BTF/STI trace.
->
-> A maximum value is an observed value, not a guarantee. Correlation does not prove causation. If an event is missing from the trace, it does not prove that the event never happened.
+Before interpreting a value:
 
-## Quick start
+1. Confirm whether the Scope is **Full Trace** or a cursor range.
+2. Check active task, core, and migration filters.
+3. Compare **Avg** with tail values such as **p95**, **p99**, and **Max**.
+4. Return to the timeline to inspect the events behind an unusual value.
+5. Compare equivalent workload phases when using two traces.
 
-A typical investigation follows this path:
+Some values are measured directly from recorded events. Others are marked as **estimated** or **heuristic**, meaning they are inferred from observable events because the trace does not contain an explicit kernel event. An estimate is useful evidence, but it is not a guarantee.
 
-```mermaid
-flowchart LR
-  symptom[Symptom] --> workflow[Choose workflow]
-  workflow --> metric[Inspect metrics]
-  metric --> timeline[Verify on timeline]
-  timeline --> compare[Compare traces]
-```
+The Statistics panel is most useful when it is treated as a path back to evidence. A table can identify a task, core, object, or time range that deserves attention. The timeline then shows what actually happened around that sample.
 
-1. Start from a symptom or an **Analysis Finding**.
-2. Open the related Statistics section.
-3. Check **Min / Avg / p50 / p95 / p99 / Max** and the distribution, when available.
-4. Jump from an unusual value or chart point to the timeline.
-5. Place at least two cursors around the relevant period and enable **Limit to C1–Cn**.
-6. Check related metrics before deciding on the cause.
-7. Use **Trace Compare** to measure before/after changes.
+### Basic terms
 
-## What BTFViewer measures
+| Term | Meaning |
+|---|---|
+| **Task** | A schedulable unit of work. Some RTOSes use the term *thread*. |
+| **Core** | A processor core that can run one task at a time. |
+| **Slice** | One continuous period during which a task runs on a core. |
+| **Off-CPU** | Time when a task is not running. It may be ready, blocked, suspended, or waiting for its next activation. |
+| **STI event** | Optional software trace instrumentation that records events such as task resume, mutex access, queue access, intervals, or tags. |
+| **p95 / p99** | The value at or below which 95% / 99% of samples fall. These values describe the tail more reliably than the average alone. |
+| **Jitter** | Variation in timing. BTFViewer commonly reports the observed range, `Max − Min`. |
+| **CV** | Coefficient of variation, `standard deviation ÷ average`. It compares variation across metrics with different scales. |
 
-BTFViewer statistics are based on **captured BTF/STI events and deterministic calculations derived from them**.
+### Measurement model
 
-```mermaid
-flowchart LR
-  trace[BTF / STI trace] --> derived[Parsed and derived events]
-  derived --> stats[Statistics]
-  stats --> charts[Charts and distributions]
-  charts --> findings[Analysis Findings]
-  findings --> verify[Timeline verification]
-```
+BTFViewer first reconstructs continuous task execution slices from the scheduling events in the trace. Most statistics are then derived from the start and end times of these slices, optional STI events, or both.
 
-BTFViewer does **not** perform source-code analysis and does **not** simulate an RTOS scheduler.
+For a task with slices `S1 ... Sn`, slice `Sk` has a start time `s_k`, end time `e_k`, duration `d_k = e_k - s_k`, and core `c_k`. These values form several related sample sets:
 
-Some values cannot be measured exactly because the trace does not contain enough information. BTFViewer marks these values as **heuristic** or **limited**.
-
-For example, true task response time needs explicit release and completion events. Context-switch data alone cannot link these events reliably.
-
-## Documentation map
-
-| Document | Main question | Use it for |
+| Sample set | Calculation | Main use |
 |---|---|---|
-| [`README.md`](README.md) | How do I use BTFViewer? | Installation, navigation, and normal viewer usage |
-| [`WORKFLOWS.md`](WORKFLOWS.md) | How do I diagnose a problem? | Step-by-step investigation workflows |
-| [`STATISTICS.md`](STATISTICS.md) | What does this measurement mean? | Metric definitions, formulas, interpretation, and limitations |
-| [`AI.md`](AI.md) | How does AI-assisted investigation work? | AI setup, tools, planner, evaluation, and implementation |
+| Execution | `d_k = e_k - s_k` | On-CPU work per scheduling slice |
+| Off-CPU gap | `g_k = s_(k+1) - e_k` | Time between consecutive slices |
+| Inter-arrival | `a_k = s_(k+1) - s_k` | Activation spacing and periodicity |
+| Migration | `c_(k+1) != c_k` | Core movement between slices |
+| Switch gap | Next slice start on a core minus the previous slice end | Unaccounted time around a switch |
+| Dispatch latency | Next switch-in minus a recorded ready event | Ready-to-run delay when a ready point exists |
+| Interval duration | `interval_stop - interval_start` | Instrumented application operation |
 
-## Statistics at a glance
+These sets are related but not interchangeable. For example, an off-CPU gap can contain preemption, blocking, suspension, or a normal wait until the next periodic activation. It should not automatically be called mutex blocking or scheduling latency.
 
-The Statistics panel is shared by Desktop and Web. Most sections are collapsible. Some sections appear only when the trace contains the required STI events.
+### Scope, filters, and sample boundaries
 
-### System and CPU load
+Every statistic is calculated from the current **Scope** and active filters.
 
-| Metric | What it answers |
-|---|---|
-| [Summary](#summary-scheduling-and-core-utilisation) | What is in the current trace or cursor scope? |
-| [Scheduling summary](#summary-scheduling-and-core-utilisation) | How often does each core switch tasks, and how large are the gaps? |
-| [Core utilisation](#summary-scheduling-and-core-utilisation) | How busy is each core, and how balanced is the workload? |
-| [Trace Health (TICK)](#trace-health-tick) | Is the scheduler tick regular, tickless, or showing unusual gaps? |
-| [Core Time Breakdown](#core-time-breakdown) | Where does each core spend its time: Active, Idle, Tick, or Gap? |
-| [Concurrent Core Active Distribution](#concurrent-core-active-distribution) | How many cores are doing useful work at the same time? |
-| [Kernel Switch Overhead](#kernel-switch-overhead) | How much time is spent between consecutive task slices? |
-| [Top tasks by CPU](#top-tasks-by-cpu) | Which tasks consume the most CPU time? |
+- **Full Trace** uses the complete captured time span.
+- **C1–Cn** uses the selected cursor range. Slices crossing a boundary may be clipped to the range for time accounting.
+- A task filter limits the tasks included in the calculation.
+- A core or migration filter limits the visible scheduling evidence.
 
-### Task placement and migration
+Always record the Scope when comparing results. A 10 ms start-up phase and a 10 s steady-state phase describe different workloads even if they come from the same trace.
 
-| Metric | What it answers |
-|---|---|
-| [Core Migrations](#core-migration-analysis) | How often does a task move between cores? |
-| [Core-Pair Migration Summary](#core-pair-migration-summary) | Which core-to-core migration paths are most active? |
-| [Migration & Corridor Inspector](#migration--corridor-inspector) | Where are migration corridors and hot core pairs? |
-| [Core Affinity](#core-affinity) | Did a task run outside its configured affinity mask? |
-| [Task × Core](#task--core) | How is each task's execution distributed across cores? |
-| [Core Utilization Over Time](#core-utilization-over-time) | How does core load change over time? |
+Boundary effects are especially important for gaps, intervals, mutex holds, queues, and lifecycle events. A start event may be outside the Scope while its matching end event is inside it. An unmatched event near a boundary may therefore indicate partial capture rather than an application error.
 
-### Task timing and health
+### Common summary values
 
-| Metric | What it answers |
-|---|---|
-| [Task Lifecycle](#task-lifecycle) | When was a task created, deleted, suspended, resumed, or dispatched? |
-| [Deadlines / CPU budget](#deadlines--cpu-budget) | Which slices exceed configured deadlines or CPU budgets? |
-| [Task Health](#task-health) | Which tasks show unusual behavior across several metrics? |
-| [Execution Time Per Slice](#execution-time-per-slice) | How long does each on-CPU slice run? |
-| [Blocking Time](#blocking-time) | How long is a task off-CPU before it runs again? |
-| [Dispatch / Scheduling Latency](#dispatch--scheduling-latency) | How long does a recorded ready/create event wait before execution? |
-| [Inter-Arrival Time](#inter-arrival-time) | How much time passes between consecutive task starts? |
-| [Period / Jitter](#period--jitter) | How stable is a task's observed activation period? |
-| [Response Time](#response-time) | What heuristic ready-to-completion delay is observed? |
-| [Unified Jitter](#unified-jitter) | Which timing metric has the largest variation? |
+For samples `x_1 ... x_n`, BTFViewer uses the following concepts throughout the Statistics panel:
 
-### Preemption and synchronization
+| Value | Calculation or meaning | How to use it |
+|---|---|---|
+| **Count / Runs** | Number of valid samples | Check whether the result has enough evidence |
+| **Total** | `sum(x_i)` | Understand accumulated cost in the Scope |
+| **Min / Max** | Smallest / largest observed sample | Locate extremes; not proven BCET or WCET |
+| **Avg** | `sum(x_i) / n` | Describe the centre when the distribution is not strongly skewed |
+| **Median / p50** | Middle ordered sample | Describe a typical sample with less sensitivity to outliers |
+| **p95 / p99 / p99.9** | Ordered nearest-rank sample at index `ceil(n × p) − 1` | Describe increasingly rare tail delays |
+| **Jitter / Spread** | `Max - Min` | Show the absolute observed range |
+| **Standard deviation (σ)** | Population standard deviation, dividing the squared-distance sum by `n` | Measure absolute dispersion around the average |
+| **CV** | `σ / Avg` | Compare relative variation across different scales |
+| **Rate** | Count divided by a time or event base | Compare traces of different lengths |
 
-| Metric | What it answers |
-|---|---|
-| [Preemption Chain Analysis](#preemption-chain-analysis) | Which task ran while another task was waiting? |
-| [Preemption Matrix](#preemption-matrix) | Which victim/preemptor pairs dominate the trace? |
-| [Priority Inheritance](#priority-inheritance) | When and how was task priority boosted? |
-| [Mutex / Semaphore pairing](#mutex--semaphore-pairing) | Are synchronization events correctly paired, and where are issues? |
-| [Waiter × Owner](#waiter--owner) | Which task-to-task mutex handoffs are observed? |
-| [Mutex Blocking](#mutex-blocking) | Which tasks spend the most time waiting around mutex handoffs? |
-| [Queue](#queue) | Are queue send/receive events paired correctly? |
+Samples are sorted before percentiles are selected. For example, p95 uses the sample at `ceil(n × 0.95) − 1`, with the index limited to the valid range. Percentiles require enough samples. With 10 samples, p99 is effectively the maximum and does not describe a stable one-percent tail. Always read the sample count before treating a high percentile as representative.
 
-### Instrumentation, anomalies, and comparison
+In task tables, **CPU%** normally means `task on-CPU time ÷ Scope wall-clock duration × 100`. IDLE and TICK tasks are omitted from user-task rankings, but they are not subtracted from the denominator. On a multicore system, CPU% values across tasks can therefore add to more than 100%.
 
-| Metric | What it answers |
-|---|---|
-| [Timeline Anomalies](#timeline-anomalies) | Which unusual events should I inspect first? |
-| [Worst Events](#worst-events) | What are the longest timing events in the scope? |
-| [Critical Path](#critical-path) | Where is time spent inside the longest heuristic ready-to-completion windows? |
-| [Recurring Patterns](#recurring-patterns) | Which anomaly types repeat for the same task? |
-| [Interval Analysis](#interval-analysis) | How long do paired application-defined intervals take? |
-| [Tag Analysis](#tag-analysis) | What values are recorded by tag STI channels? |
-| [Trace Compare…](#trace-compare-1) | What changed between two traces? |
-| [Metrics Distribution Charts](#metrics-distribution-charts) | How are samples distributed over time and by value? |
+### Direct, derived, estimated, and configured results
 
-## Panel scope and controls
+The confidence of a result depends on its source:
 
-The **Statistics** tab appears in the right-side panel on both Desktop and Web.
+| Type | Examples | Interpretation |
+|---|---|---|
+| **Direct** | Slice start/end, core ID, STI tag value | Recorded evidence |
+| **Derived** | Execution time, CPU share, inter-arrival, migration count | Deterministic calculation from recorded evidence |
+| **Estimated / heuristic** | Response time, mutex waiter–owner handoff, task-health score | Useful screening evidence with stated assumptions |
+| **Configured comparison** | Deadline and CPU budget violations | Valid only when the configured threshold matches the application requirement |
 
-The panel header shows the current **Scope** (**Full Trace** or **C1–Cn · duration**, matching the status bar). When a Task, Core, or Migration **Filter** is active, a **Filtered:** indicator lists the same chips shown in the status bar so analytical narrowing is never hidden. Each section title also shows compact **Scope** (`C1–Cn`) and **Filtered** chips when those apply. Rebuilding Statistics for a new Scope or Filter preserves the panel scroll position; Evidence / Investigate jumps that call **scroll to section** still move intentionally.
+Do not combine metrics with different confidence levels as if they were equally exact. Use a heuristic to locate an episode, then confirm it with direct or instrumented evidence when possible.
 
-### Limit statistics to a time range
+## Analysis workflows
 
-Place at least two cursors, then enable **Limit to C1–Cn**.
-All Statistics metrics and **Analysis Findings** are recalculated for the selected range.
-Section titles show **(cursor range)** while this scope is active.
+The following workflows show how statistics should be combined. They are not rigid checklists; begin with the question you need to answer and follow the evidence.
 
-Clear the cursors to return to **Full Trace** statistics. The status-bar Scope line updates immediately when the cursor-defined range changes.
+### Statistics panel scope and controls
 
-### Panel controls
+The Statistics tab is available in the right-side panel. Its header shows **Full Trace** or the active **C1–Cn** cursor range. When a task, core, or migration filter is active, the panel shows a **Filtered** indicator. Scope and filters apply to the calculated samples, so they must be checked before any value is interpreted.
+
+Place at least two cursors and enable **Limit to C1–Cn** to recalculate Statistics and Analysis Findings for that time range. Clear the cursor range to return to Full Trace. Restricting the range is useful for separating start-up, steady-state, overload, and recovery phases.
 
 | Control | Action |
 |---|---|
 | **+** | Expand all sections |
 | **−** | Collapse all sections; pinned sections remain open |
-| Reset-order | Restore the default section order (Overview → Triage → Timing → Sched → Sync → Detail) |
+| Reset order | Restore `OVERVIEW → TRIAGE → TIMING → SCHED → SYNC → DETAIL` |
 | Section title / chevron | Expand or collapse one section |
-| **⠿** grip | Drag a section to a new position |
-| Pin | Keep a section open when **Collapse all** is used (outline pin on hover/focus; filled when pinned). Manually collapsing a pinned section clears the pin |
+| **⠿** grip | Drag a section to another position |
+| Pin | Keep a section open when Collapse All is used |
 
-Section order, pinned sections, expanded/collapsed state, and table heights are saved across launches. **Settings → Reset to Defaults** restores the built-in layout for the current Trace: when meaningful work appears on more than one core (SMP-active), **Core utilisation** starts expanded and pinned; otherwise every section starts collapsed and unpinned. Each section shows a category badge on the right (**OVERVIEW**, **TRIAGE**, **TIMING**, **SCHED**, **SYNC**, **DETAIL**). Badges use a soft tinted background and border per category (quieter than Warning/Error); the label text remains the primary identifier. Reordering does not change a section's category. The pin control stays monochrome and independent of badge colour.
+Section order, pins, expanded state, and table heights are retained across launches. Reordering changes presentation only; it does not change a section's category or calculation.
 
-Default order is triage-first within that catalogue: after fixed Summary / Scheduling summary, TRIAGE sections (**Timeline Anomalies**, **Worst Events**, **Recurring Patterns**, **Response Time**, **Task Health**, and related) surface suspicious behavior before low-level Timing / Sched / Sync / Detail tables.
+### From a statistic back to evidence
 
-### Export and compare
+Supported tables and charts provide direct navigation:
 
-**Export CSV** and **Export HTML** use the current cursor scope.
+- Click a row or task name to highlight the related task or open its distribution.
+- Click Min, Max, p50, p95, or p99 to jump to the corresponding captured sample.
+- Click an anomaly, worst event, or critical-path episode to zoom and place evidence cursors.
+- Click a synchronization issue to jump to the related STI event.
+- Click a core-time bin, migration pair, or matrix cell to inspect the matching time range.
 
-- **CSV** exports the Statistics summary tables and related calculated values.
-- **HTML** exports the same summaries and begins with a diagnostic overview: **Analysis Scope** (filename, full trace or C1–Cn, start/end, duration, cores, filters including the active Timeline Filter when set, and timestamp origin), optional **Evidence Refs** (finding labels with evidence text / timestamps), diagnostic KPIs (status, load balance, utilisation range, worst Response P99 (heuristic), migrations, tick, synchronization, and deadlines), and **Analysis Findings** evidence cards. Trace-size counts (tasks, segments, and STI events) appear under **Trace Metadata**, while an SVG **Load Balance Score** gauge appears under Core Utilisation. The table of contents groups sections into five diagnostic areas and provides **Expand all** / **Collapse all**. Large tables initially show about 20 rows and support search, sorting, **Problems only**, **Show all**, and CSV export. **Statistics Notes** provides a glossary at the end.
-- **Trace Compare…** compares supported metrics between two open traces. Trace A is the **baseline** and Trace B is the **candidate**. **Δ** is Baseline A − Candidate B. The dialog opens with a **decision strip** (identity, regression/improvement counts, largest regression, Why?, **Investigate on Baseline** / **Investigate on Candidate**). Those buttons close Compare, switch to that tab, open Statistics on the largest regression section (and highlight the related task when known). Click the largest-regression line for the same action on Candidate. Enable **Limit to each tab's cursor range** when the two traces should use different time windows. **Export CSV** / **Export HTML** write every Compare table (not only the dialog top-N preview). HTML adds a table of contents with **Expand all** / **Collapse all**; Overview and Summary start expanded. Overview is a comparison identity, verdict, and Notable Changes summary (Improved / Regressed above threshold). Summary, Core Util, Response, and Core Migrations include charts; Core Migrations defaults to the largest count changes.
+A navigation action does not make the selected event a root cause. It only connects the summary value to the evidence that produced it.
 
-For exact exported fields and section-specific behavior, see the detailed metric descriptions below.
+### Exported statistics reports
 
-<a id="statistics-metric-tables" name="statistics-metric-tables">&#x200B;</a>
-## Detailed metric reference ![](../images/readme/h3.svg)
+**Export HTML** uses the current Scope and creates a self-contained review report. Each statistics table in the report provides its own CSV download, so you can save only the data needed for further analysis. The report includes:
 
-The Statistics panel is available on both Desktop and Web. Metrics are grouped into collapsible sections. Click a table column header to sort it.
+- Analysis Scope, trace metadata, filters, and timestamp origin;
+- diagnostic KPIs and Analysis Findings;
+- the same Statistics tables, grouped table of contents, and section notes;
+- search, sorting, Problems only, Show all, and a CSV download for each statistics table; and
+- an SVG load-balance gauge under Core Utilisation.
 
-**Export CSV** and **Export HTML** use the current cursor scope. Both exports include the summary table from each section.
+The HTML report can identify where to investigate, but it cannot preserve every interactive timeline action. Keep the source trace when another reviewer may need to verify an event.
 
-**Export HTML** begins with:
+### Analysis flow
 
-- diagnostic KPIs for overall status, load balance, utilisation range, worst Response P99 (heuristic), migrations, tick, synchronization, and deadlines;
-- an **Analysis Scope** card showing the trace file, full-trace or cursor scope, start/end, duration, cores, filters (including the active Timeline Filter when set), and timestamp origin;
-- an optional **Evidence Refs** card listing finding labels with evidence text or timestamps when Analysis Findings provide them; and
-- **Analysis Findings** evidence cards based on the same heuristics as toolbar **Analysis**, including load balance, high CPU consumers, tasks with the largest observed execution-time maxima, off-CPU gaps, migration thrashing, deadlines, tick health, and synchronization.
+Use this flow to move from the full trace to a testable explanation. The categories narrow the problem; the timeline confirms the event order.
 
-Each finding shows its severity, impact, evidence, confidence, and an **Inspect** link. The link opens the relevant report section; it does not return to BTFViewer. Under Core Utilisation, the report includes an SVG **Load Balance Score** gauge.
-
-The **Table of Contents** groups sections into Overview, CPU and Scheduling, Migrations, Timing, and Synchronization. **Expand all** / **Collapse all** apply to every section card. Analysis Scope, Analysis Findings, Core Utilisation, Trace Health, and Investigate Anomalies start expanded; **Statistics Notes** remains collapsed as a glossary at the end.
-
-Large tables initially show about 20 rows. They support search, sortable headers, a sticky header and first column, horizontal scrolling, **Show all**, and CSV export. **Problems only** appears when the table contains severity cells.
-
-Timeline Anomalies, Worst Events, Recurring Patterns, and Critical Path appear as tabs under **Investigate Anomalies**. Tag Analysis condenses repeated samples into a time series instead of listing hundreds of identical rows.
-
-Priority Inheritance, Mutex / Semaphore, and Interval Analysis also include detail tables. Boost episodes are ordered by start time; interval instances and hold episodes list the longest entries first. Depending on the section, a detail table contains up to about 150–200 rows.
-
-Use toolbar **Analysis** for interactive triage. Use **Save as Text…** when you need a text copy.
-
-**Recommended workflow**
-
-1. Open a trace (for example, `tracedata/example-4cores.btf.gz` for a 4-core SMP workload, or `tracedata/example-2cores.btf.gz` for a smaller 2-core demo).
-2. Optionally click toolbar **Analysis** for a severity-tagged triage of the current scope.
-3. **Core utilisation** starts expanded and pinned only when the loaded Trace is SMP-active (meaningful execution on more than one core). Otherwise all sections start collapsed. Open the sections you need, or use **+** / **−** at the top. BTFViewer saves this layout for the next launch. Pin sections that you want to keep open through **Collapse all**.
-4. Optionally drag **⠿** grips to reorder sections for your workflow; use the reset-order icon when you want the built-in sequence back.
-5. Optionally place **2+ cursors** and enable **Limit to C1–Cn** to restrict every metric (and Analysis Findings) to a time window.
-6. Use table actions to move from statistics back to the timeline:
-   - Click a **table row** to open a distribution chart, when supported.
-   - Click **Max** / **p50** / **p95** / **p99** (↗ Evidence affordance) to jump to that slice or gap without changing Scope. **Min** still jumps to the shortest sample.
-   - Click a **Timeline Anomalies** or **Worst Events** row to zoom and place C1–C2.
-   - Click a **Mutex / Semaphore** issue row to jump to that STI event and add an annotation.
-   - In **Deadlines / CPU budget**, click a slice row to annotate it or a CPU-budget row to highlight the task. Use **Settings → Display** to edit thresholds.
-7. Use toolbar **Compare** when two traces are open to diff summary and migration stats.
-
-Example plots below use **`tracedata/example-8cores.btf.gz`**. Worked diagnosis steps for that sample: [WORKFLOWS.md §3](WORKFLOWS.md#3-worked-example--example-8cores).
-
-## Analysis overview
-
-Start with **Analysis Findings** for a quick summary of the current scope. Use the detailed metrics below when you need supporting evidence.
-
-<a id="analysis-findings" name="analysis-findings">&#x200B;</a>
-### Analysis Findings ![](../images/readme/h4.svg)
-
-Toolbar **Analysis** is the same heuristic card on Desktop and Web (not a Statistics panel section). It opens as a **non-modal inbox** so the Timeline stays clickable. Product buttons and overlays: [README → Analysis Findings](README.md#analysis-findings).
-
-Each finding shows severity, a problem-oriented title, the main supporting metric, and a distinct **Evidence** line (measured observation, separate from interpretive text). **Investigate** opens the relevant Statistics section while preserving Scope and Filters (Findings stays open). **Show Evidence** centers the Timeline on the finding’s Evidence (one Evidence cursor; optional Task Highlight) without changing Scope or Filters and without closing Findings. Optional AI actions remain available when configured.
-
-Load-balance findings use the same Score, σ, and Gini values as **Core utilisation**. BTFViewer creates these findings only when there are **at least 2 cores** and total utilisation is **greater than 0**.
-
-Balanced and moderate cases still show:
-
-`Load Balance Score …% (σ=…%, G=…)`
-
-The text “reasonably balanced” is used only when Score ≥ 85 % and σ ≤ 30 %.
-
-The dialog uses theme-aware colours. This keeps Info and OK findings readable in both **dark** and **light** themes.
-
-## 1. System and CPU load
-
-Use these metrics to understand overall CPU load, core utilisation, tick health, and scheduling overhead.
-
-<a id="summary-scheduling-and-core-utilisation" name="summary-scheduling-and-core-utilisation">&#x200B;</a>
-### Summary, scheduling, and core utilisation ![](../images/readme/h4.svg)
-
-These sections follow the **default** Statistics order (Overview → Triage → Timing → Sched → Sync → Detail). Summary and Scheduling summary are always first. **Core utilisation** is the first OVERVIEW section and the first that can be pinned.
-
-This guide follows the same order: system load → migrations / affinity / lifecycle / deadlines → slice timing → preemption / synchronization / tags. You can drag sections to a different order in the UI.
-
-**Summary** — scope-wide counts: trace span, tasks, segments, STI events. Span is *t*<sub>max</sub> − *t*<sub>min</sub> in the active scope (full trace or cursor range).
-
-**Scheduling summary** — per core, **context switches** count slice boundaries and **core gap** is idle time between consecutive slices on that core:
-
-```math
-g_{\mathrm{core}} = t_{\mathrm{start},k+1} - t_{\mathrm{end},k}
+```mermaid
+flowchart TD
+    A[Set Scope and filters] --> B[Check trace quality and overall load]
+    B --> C[Use triage to select an incident]
+    C --> D{"What evidence dominates?"}
+    D -->|Own CPU time or timing variation| E[TIMING analysis]
+    D -->|Preemption, placement, or migration| F[SCHED analysis]
+    D -->|Mutex, semaphore, or queue wait| G[SYNC analysis]
+    E --> H[Use DETAIL for supporting measurements]
+    F --> H
+    G --> H
+    H --> I[Confirm the event order on the timeline]
+    I --> J{"Enough evidence?"}
+    J -->|No| C
+    J -->|Yes| K[Record the finding and compare the change]
 ```
 
-Large **max core gap** on a core that should be busy suggests starvation, tickless idle, or a single long-running task blocking others.
+The flow is intentionally iterative. If supporting data does not confirm the first explanation, return to triage and test the next plausible cause.
 
-**Core utilisation** — per core, share of non-IDLE, non-TICK active time in scope:
+### Using Analysis Findings
+
+Toolbar **Analysis** provides a heuristic inbox for the current Scope. It stays open while the timeline remains interactive. Each finding separates the measured **Evidence** from the interpretation:
+
+- **Investigate** opens the related Statistics section without changing Scope or filters.
+- **Show Evidence** centers the timeline on the supporting timestamp and can highlight the related task.
+- Severity ranks attention; it does not assign failure probability.
+
+Findings cover load balance, high CPU consumers, observed execution maxima, off-CPU gaps, migration thrashing, deadlines, TICK health, and synchronization issues. Balanced or moderate load cases can still appear as information so that the Load Balance Score, population standard deviation, and Gini coefficient remain visible.
+
+Use a finding to select the next measurement, not as the conclusion. Confirm the sample count, related distribution, and timeline event order before recording a root cause.
+
+### Workflow A — first review of an unfamiliar trace
+
+1. Set the Scope to a meaningful workload phase.
+2. Open **Trace Health** and confirm that the captured TICK pattern and gaps are plausible.
+3. Check **Core Utilisation**, **Core Time Breakdown**, and **Concurrent Core Active Distribution** for overall load and missing time.
+4. Use **Timeline Anomalies**, **Worst Events**, and **Task Health** to choose a task or time range.
+5. Inspect the relevant **Execution**, **Blocking**, **Response**, or **Period** distribution.
+6. Return to the timeline and place cursors around the selected sample.
+7. Use scheduling or synchronization statistics to explain what happened inside that range.
+
+### Workflow B — investigate a latency spike
+
+1. Find the task in **Response Time**, **Worst Events**, or **Timeline Anomalies**.
+2. Compare Avg, p95, p99, and Max. A large gap between p95 and Max suggests a rare episode; a high p95 suggests a recurring tail.
+3. Split the episode into own execution and off-CPU time with **Execution Time**, **Blocking Time**, and **Critical Path**.
+4. If own execution grew, inspect **Distribution Explorer**, **Intervals**, and relevant Tags.
+5. If off-CPU time grew, inspect **Dispatch Latency**, **Preemption Matrix**, **Mutex Blocking**, and **Core Migrations**.
+6. Confirm the event order on the timeline. Use an instrumented Interval when an exact end-to-end boundary is required.
+
+### Workflow C — investigate an unstable periodic task
+
+1. Use **Period / Jitter** to find missed, extra, or burst activations.
+2. Open **Inter-Arrival Time** and compare the median, p95, and Max.
+3. Check **Unified Jitter** to determine whether variation comes mainly from execution, off-CPU gaps, response, or dispatch.
+4. Check **Core Utilization Over Time** for load bursts at the same time.
+5. Check **Preemption**, **Mutex Blocking**, and **Migrations** for interference.
+6. If the application defines an explicit period or deadline, compare against that requirement rather than only the observed median.
+
+### Workflow D — investigate multicore load balance or migration
+
+1. Confirm that load balancing and task migration are enabled by the RTOS design. Migration is not expected for pinned tasks.
+2. Use **Core Utilisation** and **Core Utilization Over Time** to distinguish a persistent imbalance from a short phase.
+3. Use **Task × Core** to identify which tasks contribute to each core.
+4. Use **Core Migrations** and **Core-Pair Migration Summary** to find frequent moves and bounce paths.
+5. Validate the allowed placement with **Core Affinity**.
+6. Correlate migration with **Execution**, **Response**, **Switch Overhead**, and **Preemption**. A migration count alone does not measure its cost.
+
+### Workflow E — investigate synchronization delay
+
+1. Confirm that the trace contains the required STI take/give or send/receive events.
+2. Use **Mutex / Semaphore** or **Queue** to check pairing quality before using derived wait values.
+3. Use **Mutex Blocking** to rank likely contention by task and object.
+4. Use **Waiter × Owner** to identify the task pairs involved in repeated handoffs.
+5. Use **Priority Inheritance** to look for priority boosts and possible inversion patterns.
+6. Verify the exact take/give order on the timeline. Heuristic handoffs are not a kernel wait queue.
+
+### Workflow F — validate a change with Trace Compare
+
+1. Select equivalent workload phases in Baseline A and Candidate B.
+2. Confirm compatible instrumentation, task naming, time units, and core configuration.
+3. Compare normalized values such as CPU%, events/s, and migrations/s before totals.
+4. Compare tail values, not only averages.
+5. Return to each trace and inspect the samples responsible for the change.
+6. Treat a difference as a regression only when it exceeds normal run-to-run variation and matters to a requirement.
+
+## Statistic dependency map
+
+The table below identifies the strongest dependencies. “Requires” describes the evidence needed to calculate a statistic. “Confirm with” lists related statistics that usually help explain it.
+
+| Statistic | Requires | Confirm with |
+|---|---|---|
+| Core Utilisation | Per-core slices and Scope duration | Core Time Breakdown, Task × Core, Core Time |
+| Trace Health | TICK events | Core Breakdown, Timeline |
+| Task Health | Several timing and scheduling statistics | The component section selected by the score |
+| Anomalies / Worst / Patterns | Derived sample sets | Timeline and the named source statistic |
+| Response Time | Consecutive task slices | Execution, Blocking, Dispatch, Interval |
+| Execution Time | Slice start/end | Distribution, Interval, Tags |
+| Dispatch Latency | Ready STI/create plus switch-in | Preemption, Core Time, Timeline |
+| Blocking Time | Consecutive task slices | Preemption, Mutex Blocking, Period |
+| Critical Path | Response windows and overlapping evidence | Execution, Blocking, Preemption, Migration |
+| Period / Inter-arrival | Consecutive activation starts | Unified Jitter, Deadline, Core Time |
+| Migration statistics | Consecutive slices and core IDs | Affinity, Task × Core, Switch Overhead |
+| Preemption statistics | Off-CPU gaps plus same-core overlap | Priority, Core Time, Timeline |
+| Mutex statistics | STI synchronization events | Waiter × Owner, Priority, Timeline |
+| Queue statistics | STI queue events | Tags, Intervals, Timeline |
+| Intervals / Tags | Application STI events | Execution, Response, Timeline |
+| Deadline / CPU Budget | Configured thresholds plus slices | Execution, CPU share, Period |
+
+## Advanced analysis tutorials
+
+The following tutorials restore the worked explanations from the earlier guide. They complement the per-section reference below.
+
+### Migration investigation
+
+Before treating migration as a problem, confirm that the RTOS configuration permits load balancing. A task pinned to one core should not migrate; an unpinned task may legitimately move when the scheduler balances ready work.
+
+Use this sequence:
+
+1. Open **Task × Core** to see whether the task is concentrated or spread across cores.
+2. Open **Core Migrations** and compare Count, Rate, Dwell, Ping, and Primary.
+3. Open **Core-Pair Migration Summary** to identify the dominant directed paths.
+4. Use **Core Affinity** to verify that every observed core was allowed at that time.
+5. Use **Core Utilization Over Time** to determine whether a move followed a load imbalance.
+6. Inspect the migration on the timeline, then compare response, execution, and switch gaps around it.
+
+The **Migration & Corridor Inspector** combines topology and time. It is useful for finding a hot pair, repeated bounce-back, and tasks that cross the same corridor. A corridor is evidence of repeated placement, not proof of cache cost. Cache misses, lazy coprocessor context invalidation, and additional register saves require processor-specific evidence.
+
+### Priority inheritance and the L/M/H pattern
+
+Priority Inheritance appears when the trace contains a create priority and later priority events. Supported event meanings are:
+
+| Event | Meaning |
+|---|---|
+| `priority_inherit Name[id] pri:N` | A mutex holder inherited priority `N` |
+| `priority_disinherit Name[id] pri:N` | The holder returned toward its base priority |
+| `set_priority Name[id] pri:N` | The application or RTOS explicitly changed priority |
+
+A boost episode is a continuous interval during which effective priority is above the create priority:
 
 ```math
-U_{\mathrm{core}} = \frac{T_{\mathrm{active,core}}}{T_{\mathrm{scope}}} \times 100
+T_{boosted} = \sum_j (t_{end,j} - t_{start,j})
 ```
 
-When two or more cores are present, two gauges are shown side by side at the top of the section. **Load Balance Score** and **Std Deviation (σ)**:
+**Boosts** is the number of episodes, **Peak** is the highest observed priority, and **Boosted** is their total duration.
+
+The classic **L/M/H** pattern contains:
+
+- **L:** a low-priority task holding a mutex;
+- **H:** a high-priority task waiting for that mutex; and
+- **M:** runnable work with priority strictly between L and H.
+
+Without inheritance, M can delay L while H waits. With inheritance, the RTOS raises L toward H so L can release the mutex. In BTFViewer, an orange band means a boost without the L/M/H pattern; a red band means mutex inheritance or an L/M/H-related pattern.
+
+```mermaid
+flowchart TD
+    H["High-priority task waits for the mutex"] --> I["Priority inversion risk"]
+    M["Medium-priority task can preempt the holder"] --> I
+    L["Low-priority task holds the mutex"] --> I
+    I --> B["RTOS boosts the holder"]
+    B --> R["Holder releases the mutex"]
+```
+
+The viewer finds a possible medium blocker by looking for a known base priority strictly between Base and Peak. This is supporting geometry, not proof that the medium task ran during every boost. Confirm the mutex object, task activity, and switch order on the timeline.
+
+### Mutex, semaphore, and queue pairing
+
+Synchronization events are grouped by object pointer so that different objects on the same STI channel remain separate.
+
+| Object pattern | Pairing direction | Typical meaning |
+|---|---|---|
+| Mutex | `take → give` | Ownership / hold duration |
+| Semaphore used as a resource | `take → give` | Resource residency |
+| Semaphore used as a signal | `give → take` | Posted signal consumed later |
+| Queue | `send → receive` | Recorded producer-to-consumer interval |
+
+For completed hold spans `τ_h`, average hold time is:
 
 ```math
-\mathrm{Score} = 100\,\% \times (1 - G)
+AvgHold = \frac{1}{N} \sum_h \tau_h
 ```
 
-where *G* is the Gini coefficient of {*U*<sub>core</sub>}.
+Review pairing quality before using hold or blocking results. Important issues include orphan give, cross-task give, unmatched take, unmatched signal, deletion while held, and an object still held at the end of the capture. A mutex taken on one core and given on another is reported as a core-boundary bounce. It may imply cache-line movement, but the trace does not measure the hardware cost.
 
-σ is the population standard deviation of `{U_core}`.
+**Waiter × Owner** and **Mutex Blocking** are derived from successful handoffs. They do not reconstruct blocked attempts or the RTOS wait queue. Use them to rank likely contention, then verify the take/give order and task states on the timeline.
 
-The Score gauge uses a 0–100 % scale. **100 = evenly distributed utilisation**; **0 = highly uneven utilisation** (load concentrated on one or a few cores). The score describes balance, not overall load: a system can be evenly overloaded or evenly idle, and a low score does not necessarily mean overload.
+### Interval and Tag instrumentation
 
-The σ gauge uses a 0–60 % scale. Its warning threshold is at the middle of the scale. The zones match toolbar **Analysis**:
+Use an **Interval** when one task can record a clear start and stop for an operation. Current interval notes include the interval ID and task ID, allowing different tasks to reuse the same numeric ID without cross-pairing. Legacy notes without a task ID can be ambiguous when concurrent tasks use the same ID.
 
-| Zone | Condition | UI |
-|------|-----------|-----|
-| **Red** | Score &lt; 70 % | **Unbalanced** chip + alert (red zone); Score gauge red |
-| **Amber** | Score ≥ 70 % and σ &gt; 30 % | **σ &gt; 30%** chip; σ gauge amber (red if σ &gt; 50 %) |
-| **OK** (green) | Score ≥ 70 % and σ ≤ 30 % | Green needles |
+| Trace pattern | Suitable for |
+|---|---|
+| `interval_start` / `interval_stop` on the same task | Loop iteration, handler, critical region, or complete job |
+| Consecutive values on one Tag channel | Timing across tasks or ISRs |
+| Tag value samples | Queue depth, free memory, sensor value, application state |
 
-Toolbar **Analysis** warns when Score &lt; 70 % or σ &gt; 30 %. It uses “reasonably balanced” only when Score ≥ 85 % and σ ≤ 30 %.
+Completed intervals provide Count, Min, Avg, Max, and p95. Unmatched events near the Scope boundary are excluded and may reflect partial capture. Recursive or overlapping use of the same interval ID should be avoided unless the instrumentation contract defines the nesting order.
 
-When at least 2 cores have total utilisation &gt; 0, the dialog always lists **Core utilisation balance**. This includes OK and moderate cases. The line uses the same values as the gauges:
+Tag values have application-defined units. The viewer can summarize and plot the numeric payload, but it cannot infer whether `10` means bytes, messages, degrees, or a state code. Document each channel and correlate value changes with timeline events.
 
-`Load Balance Score …% (σ=…%, G=…)`
+### Reading scatter plots, histograms, and CDFs
 
-**Export HTML** includes the gauges and the Analysis Findings card. **Export CSV** includes Score, σ, and G.
+All three views use the same selected sample set:
 
-**What it tells you:** Imbalanced utilisation across cores may indicate poor affinity, lock pinning, or workload placement issues. Cross-check with **Core Migrations**, the Migration & Corridor Inspector, and toolbar **Analysis**.
+| View | Preserves time order? | Main question |
+|---|---:|---|
+| Scatter | Yes | When did a spike, trend, or mode change occur? |
+| Histogram | No | Which value ranges contain most samples? |
+| CDF | No | What percentage of samples is at or below a value? |
 
-<a id="trace-health-tick" name="trace-health-tick">&#x200B;</a>
-#### Trace Health (TICK) ![](../images/readme/h4.svg)
+On a CDF, the horizontal axis is the metric value and the vertical axis is cumulative percentage. The curve begins near 0% and rises toward 100%. A steep rise indicates a tight cluster; a gradual rise indicates a wider distribution or long tail.
 
-Uses STI **TICK** timestamps to estimate scheduler tick regularity and detect whether the trace uses a periodic tick or **tickless idle**. For FreeRTOS traces, `configUSE_TICKLESS_IDLE` is one way to identify the configured mode.
+| Reference | CDF interpretation |
+|---|---|
+| p5 | 5% of observed samples are at or below this value |
+| p50 | Half of the samples are at or below the median |
+| p95 | 95% are at or below this value; 5% are above it |
+| Avg | A mean reference line; it does not correspond to a fixed cumulative percentage |
 
-**Formula** — for consecutive TICK events at times *t*<sub>n</sub>:
+Use Linear scale for compact distributions, p5–p95 to focus on the main population while retaining edge buckets, and Log duration when short and long samples differ by orders of magnitude. The scale changes only the horizontal mapping; it does not change the samples or percentiles.
 
-```math
-\Delta_n = t_n - t_{n-1}, \quad
-\mu = \mathrm{mean}(\Delta_n), \quad
-\sigma = \mathrm{stdev}(\Delta_n), \quad
-\mathrm{CV} = \frac{\sigma}{\mu}
+For a deadline `D`, read the CDF height at `D` to estimate the observed completion percentage. This is a result for the selected Scope, not a future guarantee or a proof of worst-case timing.
+
+### Trace Compare reading order
+
+Trace Compare is most reliable when read in this order:
+
+1. Confirm file identity, Scope, tick mode, task matching, core count, and validation warnings.
+2. Use span-normalized Summary rows when capture lengths differ.
+3. Review Notable Changes for differences that exceed both absolute and relative thresholds.
+4. Open the related detail table and compare tail values.
+5. Return to both timelines and verify the events behind the difference.
+
+Task rows are matched by display name (`Name[id]`). A changed ID can prevent a logical match. A dash means unavailable, not zero. CPU and utilisation differences use percentage points (`pp`).
+
+Useful comparison groups include Summary, Top Tasks, Core Util, Core Migrations, Execution, Blocking, Inter-Arrival, Preemption, Sync, Response, Mutex, Shared Patterns, and Trends. Exported reports include the full tables rather than only the dialog preview.
+
+#### Example: fixed tick compared with tickless idle ![](../images/readme/h5.svg)
+
+Capture the same workload once with a fixed tick and once with tickless idle. Keep TICK instrumentation, workload duration, and build options otherwise equivalent.
+
+| Compare item | What to check |
+|---|---|
+| Context switches and `/s` | Whether suppressed idle ticks reduce scheduler activity |
+| Tick mode, count, gaps, and CV | Whether the two policies were actually observed |
+| Core gap, utilisation, and load balance | Whether idle and busy phases are comparable |
+| Migrations and core pairs | Whether wake-up policy changes task placement |
+| Execution, Blocking, Response tails | Whether power savings affect latency budgets |
+| Preemption and Top Tasks | Which work absorbs tick or wake-up overhead |
+
+Tickless behavior is easiest to see in an idle-heavy cursor range. In a fully busy phase, context-switch and tick counts can remain similar. If a supposed tickless capture still shows regular TICK events, investigate kernel eligibility and ready-list behavior before blaming the trace or viewer.
+
+## Stable Help links
+
+Each Statistics section has a stable anchor in this form:
+
+```text
+STATISTICS.md#statistics-<section-id>
 ```
 
-**Missed ticks (est.)** counts large gaps where Δ<sub>n</sub> ≫ μ (about ⌊Δ<sub>n</sub> / μ⌋ − 1).
+The `<section-id>` is the same identifier used by the Statistics panel. English and Traditional Chinese documents use identical anchors, so the application can select the appropriate file without changing the fragment.
 
-**What it tells you:** In **TICK** mode (CV ≤ 5 %), intervals stay close to one nominal period. This means the scheduler clock is steady.
+| Category | Section IDs in default order |
+|---|---|
+| **OVERVIEW** | `cores`, `health`, `task_health` |
+| **TRIAGE** | `anomalies`, `worst`, `patterns` |
+| **TIMING** | `response`, `exec`, `dispatch`, `block`, `crit_path`, `period`, `jitter`, `inter` |
+| **SCHED** | `task_core`, `core_time`, `migrations`, `core_pairs`, `affinity`, `preempt_matrix`, `preemption`, `priority`, `concurrency` |
+| **SYNC** | `mutex_block`, `wait_owner`, `sync`, `queue` |
+| **DETAIL** | `core_breakdown`, `switch_overhead`, `tasks`, `distrib`, `intervals`, `tags`, `lifecycle`, `deadline` |
 
-In **TICKLESS** mode (CV > 5 %), idle periods suppress the tick interrupt. The distribution becomes wider. Tall scatter-plot spikes can be multi-tick sleeps, not CPU overload.
+The categories describe an investigation purpose:
 
-A large **Max gap** is still worth checking even when Status is **good**. It may come from a long critical section or missing trace data.
+- **OVERVIEW** summarizes overall condition.
+- **TRIAGE** identifies where to investigate first.
+- **TIMING** explains task latency, execution, and variation.
+- **SCHED** explains multicore placement and scheduling behavior.
+- **SYNC** explains waits and synchronization objects.
+- **DETAIL** provides supporting measurements and instrumented data.
 
-| Field | Meaning |
-|-------|---------|
-| **Status** | `good` / `warning` / `critical` based on gap threshold |
-| **Mode badge** | `TICK` (blue) or `TICKLESS` (amber) — detected automatically from the coefficient of variation (CV = σ/μ) of consecutive tick intervals. CV > 5 % is classified as tickless. Hover the badge to see the exact CV value |
-| **Ticks** | TICK event count in scope |
-| **Avg period / Max gap** | Observed tick spacing |
-| **Missed ticks (est.)** | Rough count of skipped ticks from large gaps |
+## 1. OVERVIEW — overall condition ![](../images/readme/h3.svg)
 
-In **tick mode** the timer interrupt fires at a constant rate and tick intervals form a tight cluster.
-In **tickless mode** the scheduler suppresses the tick interrupt during idle periods to save power, so consecutive intervals span one or many nominal tick periods. The distribution becomes much wider.
+Start here to understand system load, trace quality, and which tasks may need attention.
 
-When tick intervals can be charted, a **Tick Distribution…** button (bar-chart icon, theme-aware amber/orange styling) appears beside the **TICK** / **TICKLESS** mode badge when **≥ 2 ticks** are in scope (Desktop + Web).
-Clicking it opens the standard scatter + histogram popup showing:
-- **Scatter plot** — each tick interval over trace time; long idle periods appear as tall spikes.
-- **Histogram** — interval distribution with adaptive scaling and a CDF overlay (auto may choose p5–p95 or log duration when tickless idle stretches the range); clearly multi-modal in tickless mode (one sharp peak at 1 × period, another at 2×, 3×, etc.). The CDF helps measure what fraction of tick intervals are a single period compared with two or more.
+<a id="statistics-cores" name="statistics-cores"></a>
+### Core Utilisation (excl. IDLE/TICK) ![](../images/readme/h4.svg)
 
-Click any scatter point to jump to that tick time, add an **annotation**, and open the **Marks** tab with the annotation selected (same behaviour as other metric distribution charts).
+**What it tells you**
 
-**Tick Distribution** in `example-8cores.btf.gz` (~2496 TICK events, CV ≈ 35.9 % → **TICKLESS**):
+Shows the percentage of the current Scope during which each core runs a user task. IDLE and TICK activity are excluded from the busy percentage.
+
+The **Load Balance Score** summarizes how evenly work is distributed across active cores. A high score means similar utilisation; a low score means work is concentrated on fewer cores. The score does not indicate whether the system is overloaded—a system can be evenly busy or evenly idle.
+
+Use this section to find heavily loaded cores and uneven placement. Confirm the cause with **Task × Core**, **Core Migrations**, and **Core Affinity**.
+
+**Calculation.** For each core, BTFViewer sums the overlap between user-task slices and the Scope, then divides by the scoped duration. IDLE and TICK slices are excluded from the busy numerator. The load-balance score is `100 × (1 − Gini coefficient)` for the per-core utilisation values. A score near 100 means a more even distribution; it is not an available-capacity score.
+
+**How to use it.** Compare the busiest and least busy cores, then open **Core Utilization Over Time** to see whether the difference persists. Use **Task × Core** to identify the tasks behind the load. A low score can be correct when affinity intentionally reserves a core or the workload contains a serial stage.
+
+<a id="statistics-health" name="statistics-health"></a>
+### Trace Health (TICK) ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Uses the time between consecutive TICK events to assess tick regularity and identify a periodic or tickless pattern.
+
+| Value | Meaning |
+|---|---|
+| **Mode** | `TICK` for regular intervals or `TICKLESS` for wider variation associated with suppressed idle ticks |
+| **Avg period / Max gap** | Typical and longest observed TICK interval |
+| **CV** | Relative variation of TICK intervals |
+| **Missed ticks (est.)** | Approximate number of nominal periods covered by unusually large gaps |
+
+A large gap can come from tickless idle, a long critical section, CPU pressure, or missing trace data. A `GOOD` status describes the observed TICK pattern; it is not a complete performance verdict.
+
+**Calculation.** Consecutive TICK timestamps form the interval samples. The average, maximum, CV, and typical interval are calculated from that set. The missed-tick estimate compares unusually large intervals with the nominal period; it does not prove that the hardware tick failed.
+
+**How to use it.** Establish whether the trace is periodic or tickless before treating a large gap as an error. Correlate the gap with **Core Time Breakdown**, CPU load, and the timeline. If all event types disappear in the same range, suspect capture loss; if tasks continue but TICK events disappear, investigate tick suppression, interrupt masking, or instrumentation.
 
 ![Tick interval distribution chart — scatter and histogram of consecutive TICK gaps in example-8cores.btf.gz](../images/stats/stats-tick.svg)
 
-The histogram's multiple peaks (1×, 2×, 3× the nominal period) confirm tickless idle: most gaps are a single tick, but idle stretches skip several nominal periods before the next TICK fires.
+<a id="statistics-task_health" name="statistics-task_health"></a>
+### Task Health ![](../images/readme/h4.svg)
 
-Large gaps may indicate CPU overload, long critical sections, tickless idle, or tracing gaps. This does not always mean the RTOS configuration is wrong.
+**What it tells you**
 
-<a id="core-time-breakdown" name="core-time-breakdown">&#x200B;</a>
-### Core Time Breakdown ![](../images/readme/h4.svg)
+Combines measured execution variation, blocking tails, period behavior, migration, deadline results, and CPU share into a 0–100 screening score.
 
-Per-core time budget for the scoped window, split into four mutually exclusive buckets (percentages of the core span):
+Use the score to prioritize tasks for inspection. It is not an AI probability, a failure probability, or proof of a root cause. Open the related Statistics section before drawing a conclusion.
 
-| Bucket | Meaning |
-|--------|---------|
-| **Active** | Non-IDLE, non-TICK task time |
-| **Idle** | IDLE task time |
-| **Tick** | TICK handler time |
-| **Gap** | Unaccounted span between consecutive `core_segs` (scheduler latency / ISR overhead / tracing gaps) |
+**Calculation.** The score starts at 100 and subtracts the following heuristic penalties. A component uses the more severe of its applicable checks.
 
-**What it tells you:** High **Gap %** on a busy core often correlates with elevated **Kernel Switch Overhead** or long ISR/critical sections.
-High **Idle %** with low **Active %** on some cores and overload on others points to affinity or placement imbalance. Cross-check **Core utilisation** and **Core Migrations**.
-Click a core row (Desktop) to focus that core in **Core View**.
+| Component | Warning | Fail | Penalty (warning / fail) |
+|---|---|---|---|
+| Execution | CV `≥ 0.5` or `Max / Avg ≥ 3` | CV `≥ 1.0` or `Max / Avg ≥ 8` | 10 / 20 |
+| Blocking | CV `≥ 0.6` or `Max / Avg ≥ 4` | CV `≥ 1.2` or `Max / Avg ≥ 10` | 10 / 20 |
+| Period | CV `≥ 0.15` or at least one estimated miss | CV `≥ 0.4` or at least three estimated misses | 8 / 16 |
+| Migration | `migration count / execution-slice count ≥ 0.3` | Ratio `≥ 0.7` | 8 / 16 |
+| Deadline | — | At least one configured violation | 30 |
+| CPU share | CPU% `≥ 80` | CPU% `≥ 95` | 8 / 16 |
 
-<a id="concurrent-core-active-distribution" name="concurrent-core-active-distribution">&#x200B;</a>
-### Concurrent Core Active Distribution ![](../images/readme/h4.svg)
+The final score is limited to 0–100. The thresholds are screening rules chosen by BTFViewer, not RTOS requirements. Missing components are not treated as confirmed failures.
 
-Temporal parallelism: how much of the scoped window is spent with exactly *N* cores concurrently running non-IDLE/non-TICK work (*N* = 0…number of cores).
+**How to use it.** Open the score band or contributing metric with the strongest warning. Check its sample count and distribution, then inspect the corresponding event. A lower score can also result from richer instrumentation or a larger sample set, so compare tasks in context.
 
-**Formula** — let isActive(c,t) be 1 when core *c* runs a non-IDLE/non-TICK task at time *t*:
+## 2. TRIAGE — where to investigate first ![](../images/readme/h3.svg)
+
+These sections reduce a long trace to a short list of events and recurring problems.
+
+<a id="statistics-anomalies" name="statistics-anomalies"></a>
+### Timeline Anomalies ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Lists unusual long tails, bursts, CPU spikes, idle gaps, mutex waits, and deadline misses in the current Scope. Each row identifies the event type, affected task, time, and reason it was selected.
+
+Click a row to inspect the evidence on the timeline. An anomaly means “worth checking”; it does not prove a defect.
+
+**Selection logic.** The section searches available sample sets for long tails, bursts, spikes, gaps, repeated migration or preemption, mutex-wait estimates, and configured deadline violations. Each row retains the source statistic and a timestamp.
+
+**How to use it.** Start with severe or repeated rows, but remember that one physical episode may create several related anomalies. Place C1–C2 around the episode and analyse the related timing, scheduling, and synchronization rows together.
+
+<a id="statistics-worst" name="statistics-worst"></a>
+### Worst Events ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Collects the longest execution, blocking, inter-arrival, and estimated response episodes in one table.
+
+Use it when the first question is “Where is the largest observed delay?” A maximum is only the worst sample captured in this Scope; it is not a guaranteed worst-case bound.
+
+**Calculation.** BTFViewer takes the largest valid samples from execution, off-CPU gap, inter-arrival, and heuristic-response sets, retaining the task and time boundary for each sample.
+
+**How to use it.** Compare Max with p95 and p99. A Max far above p99 suggests a rare episode; high p95, p99, and Max suggest a persistent tail. Longer traces have more opportunities to contain an extreme, so do not compare Max alone across runs.
+
+<a id="statistics-patterns" name="statistics-patterns"></a>
+### Recurring Patterns ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Groups repeated anomaly types by task and points to the worst instance of each group.
+
+Repeated events are more likely to represent a systematic condition than a single isolated sample. Their cause still needs confirmation from timing, scheduling, or synchronization evidence.
+
+**Calculation.** Anomalies with the same task and type are grouped. The table reports recurrence and retains the worst representative instance.
+
+**How to use it.** Prefer patterns that recur across several workload cycles. Inspect the worst instance and at least one other instance to verify a consistent event order. Pair this section with **Period / Jitter** for periodic recurrence and **Core Utilization Over Time** for phase-related recurrence.
+
+![Recurring Patterns table for example-8cores.btf.gz](../images/stats/stats-patterns.svg)
+
+## 3. TIMING — task latency and variation ![](../images/readme/h3.svg)
+
+These sections describe when a task runs, how long it runs, and how long it waits. The metrics observe different boundaries and should not be treated as interchangeable.
+
+![Execution Time, Block Time, and Inter-Arrival Time on consecutive task slices](../images/slice-timing-metrics.png)
+
+<a id="statistics-response" name="statistics-response"></a>
+### Response Time ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Estimates a ready-to-completion window from adjacent task slices. For later slices, the window starts when the previous slice ends and finishes when the current slice ends; the first slice uses its execution duration.
+
+This is a **heuristic response time**, not an explicit release/completion pair recorded by the kernel. Use an instrumented interval when an exact application response boundary is required.
+
+Tail percentiles are usually more useful than the average for latency-sensitive work. Click a percentile or extreme value to inspect the corresponding episode.
+
+For later slices, the calculation can be written as:
 
 ```math
-N_{\mathrm{active}}(t) = \sum_{c} \mathrm{isActive}(c,t)
+R_k = s_k - e_{k-1} + d_k = e_k - e_{k-1}
 ```
 
-The table aggregates dwell time at each level *N*.
+It includes the off-CPU gap before the current slice and the current execution duration. Compare it with **Execution Time** and **Blocking Time** to see which part dominates. Use **Dispatch Latency** when an STI ready point exists, and an instrumented **Interval** for an exact request-to-response boundary.
 
-| Column | Meaning |
-|--------|---------|
-| **Active Cores** | Concurrency level *N* |
-| **Duration** | Total time spent with N<sub>active</sub> = N |
-| **% of Span** | Share of the scoped window |
+![Response Time table for example-8cores.btf.gz](../images/stats/stats-response.svg)
 
-**Distribution chart** — click any row: scatter of interval start compared with dwell duration while that many cores were active; histogram of those dwells.
-Complements **Load Balance Score** (which is utilisation balance, not simultaneous activity).
+The following distribution for `CS[11]` illustrates how to read the metric beyond the table. A steep CDF at short durations means most estimated responses are short; the sparse points to the right form the latency tail. Compare p95 and p99 with the application requirement, then jump to the corresponding samples to determine whether execution or the preceding off-CPU gap dominates.
 
-**Headless snapshot** (`example-8cores.btf.gz`, *N* = 4 active cores):
+![Response time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-response-cs11.svg)
 
-```bash
-python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
-    -o stats-concurrency-4.svg --view plot --metric concurrency --active-cores 4
-```
+<a id="statistics-exec" name="statistics-exec"></a>
+### Execution Time Per Slice ![](../images/readme/h4.svg)
 
-![Concurrent core active interval-duration distribution for N=4 in example-8cores.btf.gz](../images/stats/stats-concurrency-4.svg)
+**What it tells you**
 
-<a id="kernel-switch-overhead" name="kernel-switch-overhead">&#x200B;</a>
-### Kernel Switch Overhead ![](../images/readme/h4.svg)
-
-Per-core cost of consecutive context switches from `core_segs` gaps. It measures the time from the previous slice's preempt/end to the next slice's resume/start on the same core:
+Measures each continuous on-CPU slice:
 
 ```math
-O_{\mathrm{switch}} = t_{\mathrm{resume},B} - t_{\mathrm{preempt},A}
+d_k = t_{end,k} - t_{start,k}
 ```
 
-| Column | Meaning |
-|--------|---------|
-| **Core** | Core name (`Core_N`) |
-| **Switches** | Number of consecutive-slice gaps in scope |
-| **Min / Avg / Max** | Switch-gap duration statistics |
-| **Total Overhead** | Sum of gaps in scope |
-| **% of Core** | Total overhead as a percentage of the core / scope span |
+**Runs** is the number of slices. **CPU%** is the task's on-CPU time divided by the Scope wall-clock duration. **Jitter** is the observed `Max − Min` range.
 
-**Distribution chart** — click any row: scatter of switch time compared with gap duration; histogram with variability overlay (avg ± σ).
-Zero or near-zero gaps mean back-to-back slices with negligible scheduler overhead in the trace resolution.
+Long slices may coincide with computation, critical sections, lock ownership, or disabled interrupts, but timing alone cannot identify the cause. **Max** is an observed maximum, not a proven WCET; **Min** is not a proven BCET.
 
-**Headless snapshot** (`example-8cores.btf.gz`, Core_0):
+**Calculation.** A complete slice inside the selected range forms an execution-duration sample. CPU time accounting clips slice overlap to the Scope before calculating CPU%. A preempted application operation may appear as several Runs, so a Run is not necessarily one job or request.
 
-```bash
-python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
-    -o stats-switch-core0.svg --view plot --metric switch_overhead --core Core_0
+**How to use it.** Use Avg or p50 for typical cost, p95/p99 for recurring tails, and Max to locate the largest captured slice. If preemption can divide one operation, use **Interval Analysis** to measure the whole operation. Correlate long slices with Tags, mutex holds, and timeline activity.
+
+In this example, the scatter reveals when longer slices occur, while the histogram and CDF show whether they are common or limited to a small tail. A log-scaled duration axis may be selected when short and long samples span a wide range.
+
+![Execution time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-exec-cs11.svg)
+
+<a id="statistics-dispatch" name="statistics-dispatch"></a>
+### Dispatch / Scheduling Latency ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Measures the delay from a recorded ready point to the next switch-in:
+
+```math
+L_{dispatch} = t_{switch-in} - t_{ready}
 ```
 
-![Kernel switch overhead distribution for Core_0 in example-8cores.btf.gz](../images/stats/stats-switch-core0.svg)
+The ready point comes from a task create or STI resume event. Synchronization-object wakeups cannot be assigned to a task when the trace does not record the woken task ID. Therefore, this section covers only activations with a known ready point.
 
-<a id="top-tasks-by-cpu" name="top-tasks-by-cpu">&#x200B;</a>
-### Top tasks by CPU ![](../images/readme/h4.svg)
+**Pairing.** A ready event is paired with the next switch-in of the same task. An event without a later switch-in in the Scope does not form a completed sample. Multiple ready events before one switch-in can make attribution ambiguous.
 
-This table ranks worker tasks by total on-CPU time. It does not include IDLE or TICK.
+**How to use it.** A high tail means the task was known to be ready but did not run promptly. Check **Preemption Matrix**, task priorities, and **Core Utilization Over Time**. Wakes without a task ID require application instrumentation or direct timeline inspection.
 
-The calculation uses the same *T*<sub>exec,i</sub> value as **CPU%** in Execution Time Per Slice.
-Click a row to highlight the task on the timeline.
+The distribution for `SR0[271]` demonstrates a lifecycle task with create, suspend, and resume samples. Use it to distinguish a consistently slow dispatch path from a few isolated scheduling delays.
 
-Migration tables, highlight / inspect steps, the corridor inspector, and **Trace Compare…** are under [Core migration analysis](#core-migration-analysis).
+![Dispatch latency distribution for SR0[271] in example-8cores.btf.gz](../images/stats/stats-dispatch-sr0.svg)
 
-## 2. Task placement and migration
+<a id="statistics-block" name="statistics-block"></a>
+### Blocking Time (off-CPU gap) ![](../images/readme/h4.svg)
 
-Use these metrics to see where tasks run and whether migration, core preference, or load placement may be a problem.
+**What it tells you**
 
-<a id="core-affinity" name="core-affinity">&#x200B;</a>
-### Core Affinity ![](../images/readme/h4.svg)
+Measures the positive gap from one slice ending to the task's next slice starting:
 
-Per-task affinity mask history from `affinity_set` STI (`vTaskCoreAffinitySet`) compared with observed execution cores.
-**Violations** lists cores used while outside the mask then in effect (slices before the first set are unrestricted; mask changes are shown as `0x1 → 0x8`).
+```math
+g_k = t_{start,k+1} - t_{end,k}
+```
 
-Always visible. Empty hint when the trace has no `affinity_set` events.
+The task may be ready, blocked, suspended, preempted, or waiting for its next period during this gap. The metric therefore shows **off-CPU time**, not the exact RTOS state and not end-to-end response time.
 
-<a id="task--core" name="task--core">&#x200B;</a>
+**Calculation.** Each pair of consecutive slices produces one positive gap. Scope boundaries can remove either side of a pair, so the sample count may change when the Scope changes.
+
+**How to use it.** Compare the gap with **Inter-Arrival Time** and the expected period. A long gap can be normal when a task sleeps between activations. If the task should remain ready, inspect **Preemption**, **Dispatch Latency**, and CPU load. If synchronization events overlap, inspect **Mutex Blocking** and **Waiter × Owner**.
+
+In this example, large gaps cluster in particular time regions. That pattern is a prompt to inspect concurrent high-priority work or synchronization evidence; it is not, by itself, proof of lock contention.
+
+![Blocking time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-block-cs11.svg)
+
+<a id="statistics-crit_path" name="statistics-crit_path"></a>
+### Critical Path ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Shows the longest estimated ready-to-completion windows and how much time overlaps task execution, off-CPU waiting, preemption, and migration.
+
+**Preempt**, **Wait**, and **Migration** can overlap. Do not add them as if they were separate parts of **Duration**. This is an investigation view, not a kernel-recorded dependency graph.
+
+**Calculation.** BTFViewer selects long heuristic response windows, sums the task's own on-CPU overlap as Exec, and treats the remainder as Off-CPU. It then attaches preemption, wait, and migration evidence that overlaps the window. The annotations can describe the same time simultaneously.
+
+**How to use it.** Follow the dominant evidence: execution distribution for high Exec, preemption and load for Off-CPU, synchronization views for waits, or migration views for core changes. Confirm the event order on the timeline.
+
+![Critical Path table for example-8cores.btf.gz](../images/stats/stats-crit-path.svg)
+
+<a id="statistics-period" name="statistics-period"></a>
+### Period / Jitter ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Uses inter-arrival samples to estimate periodic behavior. The median interval is the **Expected** period.
+
+| Value | Meaning |
+|---|---|
+| **Missed** | Interval greater than `1.5 × Expected` |
+| **Extra** | Interval less than `0.5 × Expected` |
+| **Burst** | Interval less than `0.25 × Expected` |
+| **RMS** | Root-mean-square variation from the expected period |
+
+These thresholds describe observed scheduling behavior. They are not application deadlines unless the expected period matches the application's timing contract.
+
+**Calculation.** Expected is the median inter-arrival because it is less sensitive than Avg to a few large gaps. Each sample is classified relative to Expected, while RMS summarizes the overall distance from it.
+
+**How to use it.** Limit the Scope to one operating mode. Start-up, shutdown, or a deliberately variable rate can create misleading classifications. Confirm missed periods with **Inter-Arrival Time**, **Core Utilization Over Time**, and the timeline. Use the application's configured requirement when it differs from the observed median.
+
+<a id="statistics-jitter" name="statistics-jitter"></a>
+### Unified Jitter ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Places execution, blocking, inter-arrival, estimated response, dispatch, and wake-to-run variation in one table.
+
+The spread (`Max − Min`) shows the absolute range. **CV** shows variation relative to the average, which helps compare metrics with different time scales. High CV with very small absolute times may be less important than moderate CV on a large latency.
+
+**Calculation.** Each row reuses the samples of its source metric. Wake-to-run is a stand-in derived from available response-wait evidence; dispatch includes only explicit ready events.
+
+**How to use it.** Compare both duration and CV. A very small metric can have a high CV without practical impact, while moderate variation on a large delay can break a deadline. Open the source distribution before drawing a conclusion.
+
+![Unified Jitter table for example-8cores.btf.gz](../images/stats/stats-jitter.svg)
+
+<a id="statistics-inter" name="statistics-inter"></a>
+### Inter-Arrival Time ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Measures the time between consecutive starts of the same task:
+
+```math
+\Delta t_k = t_{start,k+1} - t_{start,k}
+```
+
+For the same pair of slices, inter-arrival time is approximately the previous execution time plus the following off-CPU gap. Use it to study activation frequency, drift, missed periods, and burst behavior.
+
+**Calculation.** Every pair of consecutive slice starts forms a sample, even after a migration. If one logical activation is split by preemption, the additional slice starts also enter the set. It is therefore a scheduling-slice interval unless instrumentation defines a cleaner release point.
+
+**How to use it.** Use the median and distribution to find the dominant cadence. Compare with **Period / Jitter** for classification and **Blocking Time** for long intervals. For exact application arrivals, record an STI Tag or Interval event at the release point.
+
+The example spans very short and much longer activation gaps, so the duration axis is logarithmic. Compare it with **Blocking Time** carefully: inter-arrival includes the previous execution slice as well as the following off-CPU gap.
+
+![Inter-arrival time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-inter-cs11.svg)
+
+## 4. SCHED — multicore scheduling and placement ![](../images/readme/h3.svg)
+
+These sections explain where tasks run, how they move, and which tasks interfere with one another.
+
+<a id="statistics-task_core" name="statistics-task_core"></a>
 ### Task × Core ![](../images/readme/h4.svg)
 
-Per-task execution time on each core as a percent of the scoped span.
-Complements Core Time Breakdown (which is per-core totals) and Core Affinity (which is mask compared with observed cores).
-Click a cell to jump to the first on-CPU slice of that task on that core.
+**What it tells you**
 
-<a id="core-utilization-over-time" name="core-utilization-over-time">&#x200B;</a>
+Shows how much of the current Scope each task spends on each core. A task concentrated on one core may be pinned or naturally stable; a task spread across many cores may be load-balanced or frequently migrated.
+
+Use this table with **Core Affinity** and **Core Migrations**. Click a cell to inspect the first matching slice.
+
+**Calculation.** Each cell is the sum of the task's slice overlap on that core within the Scope. Read a row to see a task's placement; read a column to see which tasks consume one core.
+
+**How to use it.** A spread row is not automatically harmful. Check whether the task is allowed to migrate, then use **Core Migrations** to distinguish occasional placement from frequent movement. Compare columns with **Core Utilisation** when investigating imbalance.
+
+<a id="statistics-core_time" name="statistics-core_time"></a>
 ### Core Utilization Over Time ![](../images/readme/h4.svg)
 
-Equal time bins of the current Statistics scope, with each core's busy percent in that bin. Complements Core Time Breakdown (span totals) and Task × Core (per-task share). Click a bin to zoom that window.
+**What it tells you**
+
+Divides the current Scope into equal time bins and reports each core's user-task busy percentage in every bin.
+
+The overall utilisation summary can hide short bursts. This section reveals when an imbalance, overload, or idle phase occurred. Click a bin to zoom to that time range.
+
+**Calculation.** The Scope is divided into equal-width bins. For each core and bin, user-task slice overlap is divided by the bin duration. A slice crossing bins contributes only its overlap to each bin.
+
+**How to use it.** Look for bins near saturation, persistent differences between cores, and load changes aligned with a latency spike. Increase the selected Scope for phase analysis or narrow it with cursors for an incident. Use **Task × Core** and the timeline to identify the work inside a hot bin.
 
 ![Core utilization over time bins in example-8cores.btf.gz](../images/stats/stats-core-time.svg)
 
-<a id="core-migration-analysis" name="core-migration-analysis">&#x200B;</a>
-### Core migration and affinity ![](../images/readme/h3.svg)
+<a id="statistics-migrations" name="statistics-migrations"></a>
+### Core Migrations ![](../images/readme/h4.svg)
 
-A **migration** is recorded when consecutive slices of the same task (merge-key) run on different cores.
-Migrations are detected at parse time from the segment timeline. There are no separate markers drawn on the timeline; use the **Core Migrations** table, the **Migration & Corridor Inspector** (toolbar **Heatmap**), **Trace Compare…**, or Find **Migrations** mode to inspect them.
+**What it tells you**
 
-Affinity, lifecycle, and deadline meanings are earlier in this chapter. This section is the deep dive for the migration tables, highlight / inspect steps, the corridor inspector, and **Trace Compare…**.
+A migration occurs when consecutive slices of the same task run on different cores.
 
-<a id="highlight-a-migrating-task-on-the-timeline" name="highlight-a-migrating-task-on-the-timeline">&#x200B;</a>
-### Highlight a migrating task on the timeline ![](../images/readme/h4.svg)
+| Value | Meaning |
+|---|---|
+| **Count** | Number of observed core changes |
+| **Rate** | Migrations relative to the task's active time; `/tick` is shown when TICK evidence is available |
+| **Dwell** | Average time a task remains on a core before its next scheduling episode |
+| **Ping** | Rapid return or bounce between cores |
+| **Primary** | Core with the largest share of the task's on-CPU time |
 
-To *see* a hot migrating task in context (not only read rates in a table):
+High Count alone is not enough to diagnose a problem. Short Dwell together with high Rate and Ping is stronger evidence of repeated migration. Frequent migration can increase scheduling and cache costs, but the effect depends on the processor and workload.
 
-1. Stay in **Task View** (toolbar **Task**).
-2. Click the task label (for example, `CS[22]`) to **lock-highlight** it. Other tasks stay on the timeline but gray out; do **not** use the legend filter.
-3. Enable **Load** to see that task’s CPU usage **per core** under the timeline (see [CPU Load](README.md#cpu-load)).
-4. Optionally place cursors around the burst and enable **Limit to C1–Cn** so **Statistics → Core Migrations** recomputes for that window. The inspector grid follows the **visible timeline viewport** independently.
+**Calculation.** Consecutive slices of the same task are compared in time order. A core change creates a migration sample. Count is the number of changes; Primary comes from accumulated on-CPU time. Rate normalizes Count to an available time or TICK base. Dwell and Ping describe how long placement remains stable and how quickly a task returns.
+
+**How to use it.** First confirm that RTOS load balancing permits migration. Rank by Rate and short Dwell rather than Count alone, then inspect **Core-Pair Migration Summary** and **Core Affinity**. Compare the migration timestamps with response, execution, and switch-gap tails. The trace cannot directly measure cache refill or coprocessor save cost.
+
+![Migration & Corridor Inspector](../images/migration.svg)
+
+To inspect a migrating task in context, lock-highlight it in Task View and enable per-core CPU Load. If the problem is limited to a time window, place the cursors around that window and enable **Limit to C1–Cn** before reopening this statistic. The table then describes the selected incident instead of the entire trace.
 
 ![CS[22] highlighted in Task View with per-core CPU Load](../images/stats/tasks-cpu-load-cs22.svg)
 
-*`CS[22]` lock-highlighted in Task View; CPU Load shows that task’s share on each core (`example-8cores.btf.gz`).*
+The migration plot has three complementary views:
 
-**Headless example** (full-span Task View + CPU Load for the same highlight):
-
-```bash
-python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
-    -o /tmp/cs22-cpu-load.svg \
-    --view timeline --view-mode task --task "CS[22]" --cpu-load
-```
-
-Zoomed burst without the load strip:
-
-```bash
-python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
-    -o /tmp/cs22-burst.svg \
-    --view timeline --view-mode task --task "CS[22]" \
-    --lo 1805000 --hi 1865000
-```
-
-<a id="inspect-migrations-involving-a-specific-core" name="inspect-migrations-involving-a-specific-core">&#x200B;</a>
-### Inspect migrations involving a specific core ![](../images/readme/h4.svg)
-
-After highlighting a hot task:
-
-1. **Statistics → Core Migrations** — note **Primary** core, **Rate**, **Dwell**, **Ping** for that task.  Click the row → **Dwell** / **Rate** / **Gap** charts.
-2. **Core-Pair Migration Summary** — sort or scan pairs where that core is **From** or **To** (for example, `Core_5→Core_7`) to see which neighbour absorbs the traffic and whether **Bounce %** is elevated. Click the row for Gap / Rate charts; use **Open Heatmap** / **Open Chord** from the dialog footer to open the unified inspector focused on that pair.
-3. Toolbar **Heatmap** — corridor tree + time-bin grid: click a hot cell or expand a corridor to see contributing tasks, then **Inspect in Timeline** / double-click for Spotlight.
-4. **Show topology** in the inspector (or pair-chart **Open Chord**). The same window with the topology sidebar expanded; hover outer (egress) / inner (ingress) rings or a ribbon to isolate flows.
-5. **Core Time Breakdown** — click a core row to jump Core View focused on that core.
-6. Headless CSV for a scoped window:
-
-```bash
-python builds/btf_viewer.py migrations ../tracedata/example-8cores.btf.gz \
-    --lo 1805000 --hi 1865000 -o - | head
-```
-
-**Legend panel:** check **Migrated tasks only** to hide tasks that never left their first core.
-
-**Statistics → Core Migrations** (collapsible section) lists tasks that ran on two or more cores. A compact **Migration Summary** strip above the table shows total migrations, rate, most migrated task, hottest core pair, median dwell, and a thrash hint, with click-through to **Task × Core** / core-pair detail.
-
-**Migration rate** — normalizes raw migration count against task active time and (when TICK STIs exist) scheduler ticks, so a task that migrates often relative to how much it runs stands out:
-
-```math
-R_m = \frac{N_{\mathrm{migrations},i}}{T_{\mathrm{exec},i}}
-```
-
-The **Rate** column shows *R*<sub>m</sub> as migrations per second of on-CPU time (for example, `1.23/s`).
-When the trace includes TICK events, it also shows migrations per **on-CPU** scheduler tick for that task (for example, `2.785/tick`). TICK STIs that fall inside one of the task's slices in scope, not trace-wide tick count.
-
-**What it tells you:** A high rate means the task is **bouncing** between cores (thrashing). For high-priority real-time tasks you ideally want this close to zero.
-
-**Average core dwell time** — mean duration of each on-CPU stay before the task blocks, yields, or migrates:
-
-```math
-\bar{T}_d = \frac{1}{N_{\mathrm{slices}}} \sum_k d_k
-= \frac{T_{\mathrm{exec},i}}{N_{\mathrm{slices},i}}
-```
-
-Each slice *d*<sub>k</sub> is one switch-in episode (equivalent to averaging per-core dwell, *T*<sub>on</sub> / *N*<sub>slices</sub>, on each core the task visited).
-
-**What it tells you:** If **Dwell** is extremely short (for example, less than a few milliseconds or close to your system tick period), the scheduler is spending too much effort moving the task between cores instead of letting it compute.
-
-| Column | Meaning |
-|--------|---------|
-| **Task** | Display name (`Name[id]`) |
-| **Migr** | Migration count in the current scope (full trace, or cursor range when **Limit to C1–Cn** is on) |
-| **Rate** | Migration rate — `/s` of task active time; `/tick` = migrations per on-CPU TICK for this task in scope |
-| **Dwell** | Average on-CPU slice duration (core dwell time) in scope |
-| **Cores** | Distinct cores with on-CPU time or migrations in the current scope |
-| **Primary** | Core with the most active time in scope, with its share (%) |
-| **Ping** | Ping-pong migrations — three consecutive migrations A→B→A within 1 µs |
-| **STI±** | Number of migrations that have an STI event within ±500 ns. |
-| **Gap after** | Average off-CPU gap immediately after a migration |
-| **Gap other** | Average blocking gap elsewhere for the same task |
-
-Click a row to open a **distribution chart** with three in-dialog tabs (switches the chart in place, no need to close and reopen):
-
-- **Dwell** (default tab) — one point per on-core run: x = run start time, y = run duration *d*<sub>k</sub> (same definition as **Average core dwell time** above, but per-sample instead of averaged).
-- **Rate** — one point per migration after the first: x = migration time, y = time since the task's *previous* migration. Clusters of short gaps mean bursts of rapid bouncing; a flat, evenly spaced scatter means migrations are rare and spread out.
-- **Gap** — one point per migration with a positive **Gap after** value: x = migration time, y = off-CPU gap immediately following that migration (the same samples averaged into the **Gap after** column; **Gap other** is not plotted here — open the **Blocking Time** chart for the same task instead, since it covers all off-CPU gaps).
-
-Each tab's scatter + histogram uses the same **adaptive scaling** as other metrics charts (see [Metrics Distribution Charts](#metrics-distribution-charts)).
-
-**CS[22]** in `example-8cores.btf.gz` (a context-switch stress task that migrates often):
+- **Dwell** plots the duration of each on-core run. A concentration of short samples suggests unstable placement.
+- **Rate** plots the time since the previous migration. Clusters of short gaps reveal bursts of rapid movement.
+- **Gap** plots the positive off-CPU gap immediately after a migration. Compare it with **Blocking Time**, which includes all off-CPU gaps rather than only post-migration samples.
 
 ![On-core dwell time distribution for CS[22] in example-8cores.btf.gz](../images/stats/stats-mig-dwell-cs22.svg)
 
@@ -563,1215 +775,325 @@ Each tab's scatter + histogram uses the same **adaptive scaling** as other metri
 
 ![Post-migration gap distribution for CS[22] in example-8cores.btf.gz](../images/stats/stats-mig-gap-cs22.svg)
 
-Drag the resize handle below the table to show more or fewer rows.
-
-<a id="core-pair-migration-summary" name="core-pair-migration-summary">&#x200B;</a>
+<a id="statistics-core_pairs" name="statistics-core_pairs"></a>
 ### Core-Pair Migration Summary ![](../images/readme/h4.svg)
 
-Shows directed migration paths (`From → To`) across all tasks.
+**What it tells you**
 
-Use **Core Migrations** to find which task is moving too often.
+Aggregates directed migrations such as `Core_2 → Core_5`. It identifies busy migration corridors, return traffic, and the average gap around a move.
 
-Use this table to find:
-- which core pair has the most migration traffic;
-- how much of that traffic is caused by lock bounce.
+Use it to determine whether migrations are distributed broadly or concentrated between a few cores. A high bounce percentage suggests repeated movement in both directions.
 
-| Column | Meaning |
-|--------|---------|
-| **From / To** | Source and destination cores |
-| **Count** | Directed migrations in scope |
-| **Bounces** | Subset that occurred while a mutex was held across cores |
-| **Bounce %** | Percentage of migrations on this path that are lock bounces: `100 × Bounces / Count`. |
-| **Avg Gap** | Mean post-migration off-CPU gap for that corridor |
+**Calculation.** Each directed migration increments its `from → to` pair. Reverse moves are kept separately; bounce statistics relate traffic in both directions and short returns. Average gap describes observed time around migrations, not a hardware transfer duration.
 
-Click a row to select that corridor and show a detail strip:
-
-- **Show Events** — jump to the first migration timestamp on that pair (Evidence Navigation; does not change Scope or Filters).
-- **Filter Timeline** — filter to tasks that migrate on that corridor.
-- **Open Statistics** — keep the section expanded and open the **Gap / Rate** distribution for the pair.
-
-The distribution chart has two tabs:
-
-- **Gap** (default) — one point per directed migration with a positive gap: x = migration time, y = post-migration gap (the samples behind **Avg Gap**). Lock-bounce events are drawn in **orange**; others use the source-core colour.
-- **Rate** — one point per consecutive migration on the *same* directed pair: x = migration time, y = time since the previous hop on this corridor. Tight vertical bands mean bursty corridor traffic.
-
-Dialog footer:
-
-- **Open Heatmap** — open the Migration & Corridor Inspector focused on that pair (prefers **Lock Bounces Only** when Bounce % is elevated).
-- **Open Chord** — same inspector with topology expanded and the pair highlighted.
-
-**`Core_5 → Core_7`** in `example-8cores.btf.gz` (hottest corridor by Count):
+**How to use it.** A concentrated corridor can point to affinity layout, asymmetric load, or two cores repeatedly exchanging a task. Open the pair plot and correlate it with per-core utilisation. Broad low-rate movement may be normal load balancing.
 
 ![Post-migration gap for Core_5→Core_7](../images/stats/stats-pair-gap-c5-c7.svg)
 
 ![Time between pair migrations for Core_5→Core_7](../images/stats/stats-pair-rate-c5-c7.svg)
 
-<a id="migration--corridor-inspector" name="migration--corridor-inspector">&#x200B;</a>
-### Migration & Corridor Inspector ![](../images/readme/h4.svg)
+<a id="statistics-affinity" name="statistics-affinity"></a>
+### Core Affinity ![](../images/readme/h4.svg)
 
-Toolbar **Heatmap** opens the inspector (Desktop + Web): corridor/task tree, time-bin grid, and mini-chord topology.
-**Open Chord** (core-pair charts) and **Show topology** inside the inspector expand the same window’s topology sidebar.
+**What it tells you**
 
-| | |
-|--|--|
-| **Open** | Toolbar **Heatmap** (2+ cores). Pair-chart **Open Chord** / inspector **Show topology** for the chord-first layout. Desktop: non-modal. Web: overlay keeps the timeline interactive. Tab switch closes the inspector. |
-| **Scope** | Visible timeline viewport. Independent of Statistics **Limit to C1–Cn**. A **Full view** / **Viewport view** banner (same colors as the distribution chart) shows the current time range — Fit to window compared with zoomed. Empty tree/grid shows *No migrations in scope*; topology stays available. |
-| **Filter** | **Top corridors**, **Direction**, **Task filter**. **Lock Bounces Only** when the trace has cross-core mutex holds. |
-| **Select** | Click a tree row, grid cell, or chord ribbon. Double-click or **Inspect in Timeline** spotlights that bin (or task) with C1–C2. Toolbar **All** / **Show all tasks** clears the filter. |
-| **Query with AI…** | Runs the **Migration thrash** template in the **AI** tab (same findings context as Statistics). If AI is disabled, opens **Settings → AI**. |
-| **> 16 cores** | Tree groups by source; topology offers Circle ↔ Matrix. Dock topology **Bottom** or **Right**. |
+Compares the latest recorded affinity mask with the cores on which a task actually ran. **Violations** are slices observed outside the active mask.
 
-**Example** (`example-8cores.btf.gz`):
+Slices before the first recorded affinity setting are treated as unrestricted. Absence of an `affinity_set` event means the viewer cannot verify the configured mask.
 
-![Migration & Corridor Inspector](../images/migration.svg)
+**Calculation.** Affinity events update the active mask over time. Each later task slice is checked against the most recent known mask. A slice on a core whose bit is not set is counted as a violation.
 
-Hover a ribbon for `cN→cM: count` in the footer. Per-task ping-pong / STI / gap-after aggregates are in Statistics **Core Migrations**.
+**How to use it.** Inspect violations first because they can indicate configuration, instrumentation, ID mapping, or scheduling problems. When there are no violations, use the allowed-core count with **Task × Core** to determine whether the task actually uses the available placement. No event means “unknown,” not “unrestricted by design.”
 
-```bash
-make -C BTFViewer update-images
-```
-
-```bash
-python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
-  -o /tmp/migration.svg --view chord --width 1000 --height 720 --drill-row 0
-```
-
-## 3. Task timing and health
-
-Use these metrics to inspect task lifecycle, deadlines, execution time, blocking, period, jitter, and response time.
-
-<a id="task-lifecycle" name="task-lifecycle">&#x200B;</a>
-### Task Lifecycle ![](../images/readme/h4.svg)
-
-This section shows task lifecycle events from the `task` STI channel.
-
-It includes `create`, `delete`, `suspend`, and `resume` events.
-
-The section shows:
-- create and delete timestamps;
-- suspend and resume counts;
-- alive span (create → delete);
-- total lifecycle event count;
-- **Runs**, the number of times the scheduler dispatched the task to a core.
-
-**Runs** counts context-switch-in events or segments.
-It is normally much larger than Susp/Res.
-Susp/Res counts only explicit `vTaskSuspend()` and `vTaskResume()` calls.
-A task can run, be preempted, and run again many times without being explicitly suspended.
-
-In `example-8cores.btf.gz`, test 9 creates **SR0–SR3** (pinned across cores) with overlapping suspend-while-blocked and suspend-while-running rounds. Use this section to confirm Susp/Res counts match the STI pairs.
-
-Always visible. Empty hint when the trace has no task create/delete/suspend/resume STI events.
-
-<a id="deadlines--cpu-budget" name="deadlines--cpu-budget">&#x200B;</a>
-### Deadlines / CPU budget ![](../images/readme/h4.svg)
-
-Lets you set a per-task execution deadline and a global CPU budget threshold.
-
-Task deadlines are entered in **nanoseconds**. BTFViewer converts them to the trace `#timeScale` before comparison.
-
-The section shows:
-- **Slice over deadline** — the 20 longest slices over the deadline. Click a row to jump to it and add an annotation.
-- **CPU budget exceeded** — tasks over the CPU budget. Click a row to highlight the task.
-
-Click a column header to sort. Use **Settings → Display** in this section to edit Analysis thresholds (`Ctrl+,`).
-
-This section is always visible. If no thresholds are set, it shows a setup prompt.
-
-<a id="task-health" name="task-health">&#x200B;</a>
-### Task Health ![](../images/readme/h4.svg)
-
-This is a **heuristic** score from 0 to 100.
-
-The score uses measured data from the trace. It considers execution spread, blocking tail, period CV, missed activations, migration ratio, deadline misses, and CPU share.
-
-Status marks are ✓ / ⚠ / ❌. This score is **not** an AI probability.
-
-Click a band to open the related Statistics section.
-
-<a id="execution-blocking-and-inter-arrival" name="execution-blocking-and-inter-arrival">&#x200B;</a>
-### Task timing ![](../images/readme/h3.svg)
-
-These three task metrics are measured from consecutive on-CPU slices of the same task. The figure below shows how they relate on the timeline (UI label **Block Time** = Statistics **Blocking Time**):
-
-![Execution Time, Block Time, and Inter-Arrival Time on consecutive task slices](../images/slice-timing-metrics.png)
-
-| Metric | Spans |
-|--------|--------|
-| **Execution Time** | Start → end of one on-CPU slice |
-| **Blocking Time** | End of one slice → start of the next (off-CPU gap) |
-| **Inter-Arrival Time** | Start of one slice → start of the next (period between activations) |
-
-Inter-arrival ≈ execution + blocking for the same pair of activations (when the gap is positive).
-
-<a id="execution-time-per-slice" name="execution-time-per-slice">&#x200B;</a>
-### Execution Time Per Slice ![](../images/readme/h4.svg)
-
-Measures how long each **on-CPU slice** lasts for a task. It starts at switch-in until the task blocks, yields, or is preempted.
-
-**Formula** — for task *i*, each on-CPU slice *k* in scope:
-
-```math
-d_k = t_{\mathrm{end},k} - t_{\mathrm{start},k}
-```
-
-Table statistics are computed over all slice durations *d*<sub>k</sub> in scope.
-**Jitter** is the observed range, `Max − Min`; **σ** is the population standard deviation (the observed slices are treated as the complete population in scope).
-**CPU%** is the task's share of total **non-IDLE/TICK active CPU time** in scope (not wall-clock span, and not total multicore capacity):
-
-```math
-\mathrm{CPU}_i = \frac{T_{\mathrm{exec},i}}{\sum_j T_{\mathrm{exec},j}} \times 100
-```
-
-**What it tells you:** Short, uniform slices suggest periodic or tick-driven scheduling.
-A long **Max** or heavy **p95** tail identifies the longest **observed** slices, not a proven WCET. Long slices may coincide with critical sections, lock holds, or interrupt-disabled regions, but timing data alone does not establish the cause.
-**Min** is the shortest observed sample; it is not a proven BCET under zero load.
-Percentiles such as **P95** are useful when tied to a deadline or acceptance criterion, but P95 is not a universal real-time acceptance threshold.
-Compare **Min** and **Max** to judge jitter; a wide spread on a real-time task may violate deadline assumptions even when **Avg** looks acceptable.
-
-| Column | Meaning |
-|--------|---------|
-| **Task** | Display name (`Name[id]`) |
-| **Runs** | Number of slices in scope |
-| **CPU%** | Share of total non-IDLE/TICK active CPU time in scope (not wall-clock span) |
-| **Min / Avg / Max / p95** | Slice duration statistics |
-| **Jitter** | Observed duration range (`Max − Min`) |
-| **σ** | Population standard deviation of slice durations |
-| **Min / Max** links | Jump to and annotate the shortest / longest observed slice |
-
-**Distribution chart** — click any row:
-
-- **Scatter:** x = slice start time, y = slice duration.
-- **Histogram:** distribution of slice durations (auto log scale when the tail is wide; the blue CDF curve shows the cumulative fraction of samples).
-- **Variability overlay:** the translucent purple band is average ± one population σ. Jitter (`Max − Min`) is the full extent of the plotted data, so it needs no marker lines.
-
-In `example-8cores.btf.gz`, task **CS[11]** has 730 slices with a long tail of longer runs (context-switch stress tasks):
-
-![Execution time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-exec-cs11.svg)
-
-The scatter shows periodic bursts of short slices; the histogram uses a **log-scaled duration axis** so short and long slices are both visible.
-The **CDF** rises steeply on the left (most slices are short) then levels toward 100% as longer runs are included; **p5**, **p50**, and **p95** vertical markers align with the 5%, 50%, and 95% ticks on the right axis.
-
-<a id="blocking-time" name="blocking-time">&#x200B;</a>
-### Blocking Time ![](../images/readme/h4.svg)
-
-Also called **Off-CPU Time** in exported HTML. Measures the **off-CPU gap** between the end of one slice and the start of the next for the same task. This wait may include preemption, suspension, periodic waiting, or scheduling delay — not necessarily resource blocking.
-
-> **Not end-to-end response time:** BTFViewer's **Blocking Time** / **Off-CPU Time** is only the off-CPU gap until the task next resumes.
-True response time is normally measured from an explicit release event to completion and cannot be derived reliably from context-switch slices alone.
-It requires matching release/completion instrumentation (for example, paired interval events).
-
-**Formula** — for consecutive activations *k* and *k+1* of task *i*:
-
-```math
-g_k = t_{\mathrm{start},k+1} - t_{\mathrm{end},k}
-```
-
-Only positive gaps are counted. Min / Avg / Max / p95 are taken over all gaps *g*<sub>k</sub> in scope.
-
-**What it tells you:** Blocking Time measures when the task is **not executing on a CPU**; it does not identify the exact task state. The task may be runnable, blocked, suspended, or waiting for its next periodic activation.
-High **Avg** or **Max** gaps often point to lock contention, priority inversion, or a higher-priority task monopolizing the core.
-Spikes clustered at specific times in the scatter plot usually correlate with a particular preemptor or synchronization object; use **Preemption Chain Analysis** or **Mutex / Semaphore** pairing to find the cause.
-
-| Column | Meaning |
-|--------|---------|
-| **Task** | Display name |
-| **Gaps** | Number of positive off-CPU gaps |
-| **Min / Avg / Max / p95** | Gap duration statistics |
-| **Jitter** | Observed gap range (`Max − Min`) |
-| **σ** | Population standard deviation of off-CPU gaps |
-| **Min / Max** links | Jump and annotate resume slice at shortest / longest gap |
-
-**Distribution chart** — click any row:
-
-- **Scatter:** x = resume time, y = off-CPU gap.
-- **Histogram:** distribution of blocking gaps.
-
-**CS[11]** in `example-8cores.btf.gz` (729 gaps):
-
-![Blocking time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-block-cs11.svg)
-
-High blocking gaps clustered at certain times often correlate with lock contention or a higher-priority task dominating the core.
-
-<a id="dispatch--scheduling-latency" name="dispatch--scheduling-latency">&#x200B;</a>
-### Dispatch / Scheduling Latency ![](../images/readme/h4.svg)
-
-Ready→run delay for a task: t<sub>ready</sub> from STI `resume Name[id]` (`vTaskResume`) or task **create** time, and t<sub>resume</sub> from the next switch-in (segment start):
-
-```math
-L_{\mathrm{dispatch},k} = t_{\mathrm{resume},k} - t_{\mathrm{ready},k}
-```
-
-Sync-object wakes (`give`/`send`) are **not** attributed yet. BTF notes carry the object pointer, not the woken task id.
-
-| Column | Meaning |
-|--------|---------|
-| **Task** | Display name (`Name[id]`) |
-| **Activations** | Number of dispatch samples in scope |
-| **Min / Avg / Max / p95 / p99** | Dispatch latency duration statistics |
-| **Jitter / σ** | Observed range (`Max − Min`) and population standard deviation |
-| **Min / Max** links | Jump and annotate the fastest / slowest dispatch |
-
-**Distribution chart** — click any row: scatter of dispatch time compared with latency; histogram with variability overlay. Click a point to jump to the switch-in segment.
-
-**Headless snapshot** (`example-8cores.btf.gz`, lifecycle test task **SR0[271]** — create / suspend / resume samples):
-
-```bash
-python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
-    -o stats-dispatch-sr0.svg --view plot --metric dispatch --task "SR0[271]"
-```
-
-![Dispatch latency distribution for SR0[271] in example-8cores.btf.gz](../images/stats/stats-dispatch-sr0.svg)
-
-<a id="inter-arrival-time" name="inter-arrival-time">&#x200B;</a>
-### Inter-Arrival Time ![](../images/readme/h4.svg)
-
-Measures the gap between **successive activation start times** of the same task (time between slice starts, not off-CPU gap).
-
-**Formula** — for consecutive activations *k* and *k+1*:
-
-```math
-\Delta t_k = t_{\mathrm{start},k+1} - t_{\mathrm{start},k}
-```
-
-Min / Avg / Max / p95 are taken over all inter-arrival samples Δ*t*<sub>k</sub> in scope.
-
-**What it tells you:** Inter-arrival time reflects how often the task is **scheduled to run**, including time it spent on-CPU.
-For periodic tasks it should cluster near the expected period; drift or bimodality hints at missed deadlines, timer jitter, or workload-dependent release patterns.
-Because Δ*t*<sub>k</sub> = *d*<sub>k</sub> + *g*<sub>k</sub> (slice duration plus blocking gap), inter-arrival is always **≥** blocking time for the same activations. Compare both tables to see whether jitter comes from short runs or long waits.
-
-| Column | Meaning |
-|--------|---------|
-| **Task** | Display name |
-| **Runs** | Number of inter-arrival samples |
-| **Min / Avg / Max / p95** | Gap between activation starts |
-| **Jitter** | Observed inter-arrival range (`Max − Min`) |
-| **σ** | Population standard deviation of inter-arrival times |
-| **Min / Max** links | Jump and annotate activation at shortest / longest inter-arrival |
-
-**Distribution chart** — click any row:
-
-- **Scatter:** x = activation time, y = gap since previous activation.
-- **Histogram:** distribution of inter-arrival gaps.
-
-**CS[11]** in `example-8cores.btf.gz`:
-
-![Inter-arrival time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-inter-cs11.svg)
-
-Compare with Blocking Time: inter-arrival includes time the task was **running**, so values are typically larger than off-CPU gaps alone.
-The histogram auto-selects **log duration** for CS[11] because activation gaps span microseconds to milliseconds.
-
-<a id="period--jitter" name="period--jitter">&#x200B;</a>
-### Period / Jitter ![](../images/readme/h4.svg)
-
-Uses the same inter-arrival gaps as the Inter-Arrival table.
-**Expected** is the median gap.
-**Missed** counts gaps &gt; 1.5× expected; **extra** counts gaps &lt; 0.5× expected; **burst** counts gaps &lt; 0.25× expected.
-**RMS** is jitter versus that expected period.
-**Spark** is the chronological gap series.
-Click a time column to jump to that gap; click the task name to open the existing Inter-arrival distribution plot (this page does not add a second histogram).
-
-<a id="response-time" name="response-time">&#x200B;</a>
-### Response Time ![](../images/readme/h4.svg)
-
-Heuristic ready→completion: previous slice end → this slice end (the first slice uses its own exec duration).
-BTF does not record an explicit release/completion pair, so this is **not** kernel response time.
-Percentiles include p50 / p90 / p95 / p99 / p99.9.
-Click the task to open the existing Response plot; click **Min** / **Max** / **p50** / **p90** / **p95** / **p99** / **p99.9** to jump to that event.
-
-**CS[11]** in `example-8cores.btf.gz`:
-
-![Response time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-response-cs11.svg)
-
-![Response Time table for example-8cores.btf.gz](../images/stats/stats-response.svg)
-
-<a id="unified-jitter" name="unified-jitter">&#x200B;</a>
-### Unified Jitter ![](../images/readme/h4.svg)
-
-Max−Min spread and CV for execution, blocking, inter-arrival, heuristic response, STI **dispatch** latency (resume/create → switch-in), and **wake** (heuristic response wait, used as a stand-in when BTF does not name the woken task).
-Click a column to open the matching plot.
-This page does not add a second histogram.
-
-![Unified Jitter table for example-8cores.btf.gz](../images/stats/stats-jitter.svg)
-
-## 4. Preemption and synchronization
-
-Use these metrics to inspect preemption, priority inheritance, mutex / semaphore behavior, and queues.
-
-<a id="preemption-chain-analysis" name="preemption-chain-analysis">&#x200B;</a>
-### Preemption Chain Analysis ![](../images/readme/h4.svg)
-
-For each **victim** task's off-CPU gap, the analyser finds which **preemptor** tasks ran on the **same core** as the victim during that gap and aggregates overlap duration.
-
-**Formula** — for victim *v* and preemptor *p* on the same core during gap *g*:
-
-```math
-\mathrm{overlap}(v,p,g) = \sum_{p \in g}
-\left[ \min(t_{\mathrm{end}}, g_{\mathrm{end}}) - \max(t_{\mathrm{start}}, g_{\mathrm{start}}) \right]
-```
-
-**Count** is the number of overlap events.
-
-**Total**, **Avg**, and **Max** show how long the preemptor ran during the victim's gaps.
-
-**What it tells you:** Answers *who ran while this task waited*.
-A single pair with high **Count** and **Total** means one preemptor dominates the victim's blocking; many pairs with moderate counts suggest fair sharing or frequent context switches.
-Large **Max** overlap points to long stretches where the victim was ready but could not run. This can be a sign of priority misconfiguration or a CPU hog.
-
-| Column | Meaning |
-|--------|---------|
-| **Victim** | Task that was off-CPU |
-| **Preemptor** | Task that ran during the victim's gap |
-| **Count** | Number of preemption overlap events |
-| **Total / Avg / Max** | Overlap duration (how long the preemptor held the CPU during victim gaps) |
-
-**Distribution chart** — click any row (victim ← preemptor pair):
-
-- **Scatter:** x = when the preemption overlap started, y = overlap duration.
-- **Histogram:** how long that preemptor typically held the CPU during gaps.
-- **Click a point** to jump to the **preemptor's segment** and add an annotation with duration/time notes.
-
-**CS[24] ← CS[25]** in `example-8cores.btf.gz` (55 overlap events, 14.936 ms total overlap) — two context-switch stress tasks repeatedly preempting each other:
-
-![Preemption chain distribution CS[24] preempted by CS[25] in example-8cores.btf.gz](../images/stats/stats-preempt-cs24-cs25.svg)
-
-High **Count** with moderate **Avg** overlap suggests frequent short preemptions; a few points with large **y** values are long stretches where CS[25] ran while CS[24] waited.
-Use this table to answer *who preempted whom* and whether a victim's blocking is dominated by one preemptor or many.
-
-<a id="preemption-matrix" name="preemption-matrix">&#x200B;</a>
+<a id="statistics-preempt_matrix" name="statistics-preempt_matrix"></a>
 ### Preemption Matrix ![](../images/readme/h4.svg)
 
-Same-core victim × preemptor overlap plus a ranking of who preempts each victim most, including an A → B → resumed story.
-Complements Preemption Chain Analysis (pair totals with a plot).
-Click a ranking row or matrix cell to jump to the longest overlap.
+**What it tells you**
+
+Summarizes overlap between an off-CPU **victim** and tasks that ran on the same core during that gap. Rows and cells help identify the main sources of interference for each victim.
+
+This is evidence of temporal overlap, not proof that one task directly caused another task to block.
+
+**Calculation.** During each victim off-CPU gap, BTFViewer finds task slices that run on the victim's previous core and sums their overlap. The matrix aggregates victim rows and possible preemptor columns.
+
+**How to use it.** Large row totals identify tasks that lose substantial time; large cells identify recurring same-core interference pairs. Check priorities and the switch sequence on the timeline. A victim may have blocked voluntarily while another task happened to run, so the matrix alone does not prove preemption.
 
 ![Preemption Matrix ranking for example-8cores.btf.gz](../images/stats/stats-preempt-matrix.svg)
 
-<a id="priority-inheritance" name="priority-inheritance">&#x200B;</a>
+<a id="statistics-preemption" name="statistics-preemption"></a>
+### Preemption Chain Analysis ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Lists victim–preemptor pairs with count, total overlap, average overlap, and maximum overlap.
+
+High total overlap indicates a persistent source of interference; a large maximum indicates a severe single episode. Check task priorities and the timeline before attributing causality.
+
+**Calculation.** This section uses the same overlap evidence as the matrix but presents pair statistics: occurrence count, total, average, and maximum overlap. One off-CPU gap can overlap more than one task.
+
+**How to use it.** Use Total to find sustained interference and Max to locate a severe episode. Compare with **Blocking Time**, **Dispatch Latency**, and **Core Time**. Confirm that the possible preemptor actually switched in as the victim left before calling it causal.
+
+![Preemption chain distribution CS[24] preempted by CS[25] in example-8cores.btf.gz](../images/stats/stats-preempt-cs24-cs25.svg)
+
+<a id="statistics-priority" name="statistics-priority"></a>
 ### Priority Inheritance ![](../images/readme/h4.svg)
 
-Shown when the trace has **`create pri:N`** on task-create `T` rows **and** at least one priority STI on the `task` channel:
+**What it tells you**
 
-| STI note prefix | Hook | Meaning |
-|-----------------|------|---------|
-| `priority_inherit Name[id] pri:N` | `traceTASK_PRIORITY_INHERIT` | Mutex holder inherited priority *N* |
-| `priority_disinherit Name[id] pri:N` | `traceTASK_PRIORITY_DISINHERIT` | Mutex holder returned to base priority *N* |
-| `set_priority Name[id] pri:N` | `traceTASK_PRIORITY_SET` | Explicit `vTaskPrioritySet()` |
+Shows tasks whose observed priority rises above their create priority. Priority inheritance commonly occurs when a high-priority task waits for a mutex held by a lower-priority task, temporarily boosting the holder.
 
-**Formula** — a **boost episode** is a contiguous interval where the task's effective priority is above its **Base** (from `create pri:N`):
+Orange ranges show boosts. A red L/M/H pattern indicates that a medium-priority task ran at a priority between the holder's base and boosted priority. This is supporting evidence; confirm it with mutex and timeline events.
 
-```math
-T_{\mathrm{boosted}} = \sum_{\mathrm{episodes}} (t_{\mathrm{end}} - t_{\mathrm{start}})
-```
+**Calculation.** The create priority is the baseline. Later `set_priority` STI events define changes over time. A value above the baseline is shown as a boost. The L/M/H pattern combines low/base, medium, and high/boosted priority activity observed in the same episode.
 
-where *t*<sub>start</sub> is the inherit / set-up STI and *t*<sub>end</sub> is the disinherit / set-back STI for each episode.
+**How to use it.** Pair a boost with **Mutex / Semaphore**, **Waiter × Owner**, and task scheduling. A priority change can have an application-specific cause; it is not automatically priority inheritance. A boost usually shows that mitigation occurred, while the associated wait duration shows whether latency remains important.
 
-**Boosts** is the number of boost episodes.
+![Timeline view: Low[266] with three red priority-inheritance stripes](../images/stats/tasks-priority-low.svg)
 
-**Peak** is the highest priority seen during those episodes.
+![Priority boost distribution chart for Low[266]](../images/stats/stats-priority-low.svg)
 
-**What it tells you:** Priority inheritance prevents priority inversion when a low-priority mutex holder blocks a high-priority waiter.
-Long **Boosted** time or many **Boosts** on a task that is not the mutex owner under test may indicate lock contention or chained inheritance.
-**Mutex inherit** confirms the kernel raised priority via `priority_inherit`; **L/M/H pattern** flags the classic three-level inversion geometry (see below); **Boost only** means manual `vTaskPrioritySet()` without mutex hooks.
+<a id="statistics-concurrency" name="statistics-concurrency"></a>
+### Concurrent Core Active Distribution ![](../images/readme/h4.svg)
 
-| Column | Meaning |
-|--------|---------|
-| **Task** | Mutex holder or subject whose priority was raised |
-| **Base** | Priority at task create (`create pri:N`) |
-| **Peak** | Highest `set_priority` level observed while boosted |
-| **Boosts** | Number of boost episodes (base → above base → back to base) |
-| **Boosted** | Total time above base priority in scope |
-| **Pattern** | Summary label — see [L/M/H pattern](#lmh-pattern-priority-inversion-geometry) and table below |
+**What it tells you**
 
-| **Pattern** (summary) | When it appears |
-|-------------------------|-----------------|
-| **Mutex inherit** | At least one boost episode used `priority_inherit` / `priority_disinherit`, and no extra inversion episodes beyond inherits |
-| **Mutex inherit + L/M/H** | Mutex inheritance **and** additional boost episodes where medium-priority tasks sit between base and peak |
-| **L/M/H pattern** | Boost above base (usually `set_priority`) with medium-priority tasks between **Base** and **Peak**, but no `priority_inherit` on that task |
-| **Boost only** | Raised above base with no medium tasks in range and no mutex inherit |
+Reports how much of the current Scope had exactly 0, 1, 2, … cores running user tasks at the same time.
 
-Per-episode detail (distribution chart tooltips, **Export HTML → Boost episodes**) can be more specific, for example, `Mutex inherit L/M/H (CS[11], CS[12] +126)`. It lists up to two medium-task names plus a count of any other tasks.
+This measures **temporal parallelism**. It differs from load balance: cores can have similar total utilisation without running tasks concurrently. Low concurrency may be expected for a serial workload.
 
-<a id="lmh-pattern-priority-inversion-geometry" name="lmh-pattern-priority-inversion-geometry">&#x200B;</a>
-##### L/M/H pattern (priority inversion geometry) ![](../images/readme/h5.svg)
+**Calculation.** BTFViewer sweeps the Scope boundaries of user-task slices and measures how long the number of simultaneously active cores equals `0 ... N`. The durations should account for the scoped time, subject to trace gaps and clipping.
 
-**L/M/H** names the textbook **priority-inversion** layout on three priority levels.
-In the demo firmware (`Demo/examples/freertos_test/main.c` test 8) the tasks are named **Low**, **Med**, and **High**, pinned to **Core_0** on SMP, and the scenario is repeated **`T8_ROUNDS` (3) times** so the timeline shows multiple red boost stripes and the Priority Inheritance chart has several inherit points:
+**How to use it.** Compare the observed distribution with the workload's expected parallelism. High time at one active core in an SMP workload can indicate serialization, affinity restrictions, or insufficient ready work. Use **Core Utilisation**, **Task × Core**, and synchronization statistics to explain it.
 
-| Role | Meaning | In `example-8cores.btf.gz` test 8 |
-|------|---------|--------------------------------|
-| **L** (Low) | Mutex holder at the lowest priority of the three | **Low[266]** — `create pri:2`, holds the test mutex |
-| **M** (Medium) | Runnable work at a priority **between** L and H; can preempt L while H waits | **Med[267]** — `create pri:3`, CPU work after Low takes the mutex |
-| **H** (High) | Blocked on the mutex L holds; triggers inheritance | **High[268]** — `create pri:4`, blocks on the same mutex |
+![Concurrent core active interval-duration distribution for N=4 in example-8cores.btf.gz](../images/stats/stats-concurrency-4.svg)
 
-Without mutex priority inheritance, **M** would run while **H** waited on **L**. This creates unbounded inversion.
-FreeRTOS boosts **L** to **H**'s priority (for example, first `priority_inherit Low[266] pri:4` near ~3099 ms) so **L** finishes its critical section before **M** can starve **H**.
+## 5. SYNC — synchronization and waiting ![](../images/readme/h3.svg)
 
-```mermaid
-flowchart TD
-  high["pri 4 — High blocks on mutex"]
-  med["pri 3 — Med runs while Low held lock"]
-  low["pri 2 — Low holds mutex"]
-  high --> invert[classic inversion]
-  med --> invert
-  low --> invert
-  invert --> boost["kernel boosts Low → pri 4<br/>(priority_inherit ×3 rounds in example-8cores)"]
-```
+These sections use STI synchronization events. They appear only when the trace contains the required events.
 
-**How the viewer detects L/M/H:** at the end of each boost episode, it scans every task with a known `create pri:N`.
-Any task whose **base priority** satisfies **Base** &lt; *p* &lt; **Peak** (strictly between the boosted task's base and peak) is a **medium blocker**.
-If at least one exists, the episode is an **inversion suspect** and contributes to the **L/M/H** pattern.
-
-- **Episode** level: `inversionSuspect` when the episode was mutex-inherited **or** medium blockers exist; episode **Pattern** may list medium task names.
-- **Summary** level (table **Pattern** column): aggregates episodes — `Mutex inherit`, `L/M/H pattern`, `Mutex inherit + L/M/H`, or `Boost only`.
-
-**Important:** medium-blocker detection uses **all** tasks in the trace with recorded create priorities, not only tasks active in that instant.
-On a busy SMP trace (many workers at `pri:3` from earlier tests), the episode label may show several medium names (for example, `Mutex inherit L/M/H (CS[11], CS[12] +126)`).
-For test 8, **Med[267]** is the semantically relevant **M**; cross-check with the timeline around test 8 (~3042–3359 ms absolute, `--lo 3042000 --hi 3359000`) and `Demo/examples/freertos_test/main.c` test 8 (`vInvLow` / `vInvMed` / `vInvHigh`).
-
-**Example — test 8 in `example-8cores.btf.gz` (`Low[266]`):**
-
-| Field | Value |
-|-------|--------|
-| **Base / Peak** | 2 → 4 |
-| **Boosts / Boosted** | **3** mutex-inherit episodes, ~34.4 ms each (~103 ms total) |
-| **Summary Pattern** | **Mutex inherit** |
-| **Episode Pattern** | **Mutex inherit L/M/H** (medium tasks include **Med[267]** at pri 3) |
-| **STI windows** | `3099448→3133873`, `3187403→3221850`, `3275380→3309826` µs |
-
-Zoom the timeline to that window (or click a **Low[266]** scatter point) to see the **three red** boost stripes on the Low row and **High** blocking on the mutex between them.
-
-**Contrast — test 7 (`PS[228]`, manual boost):** the runner calls `vTaskPrioritySet(subject, BOOST_PRIORITY)` — trace shows `set_priority` STI events, not `priority_inherit`.
-**PS[228]** has the same numeric geometry (base 2, peak 4, medium fillers at pri 3) so the summary **Pattern** is **L/M/H pattern** (not **Mutex inherit**).
-Boost duration is much shorter (~119 µs) because no mutex hold loop is involved.
-Use **PS[228]** compared with **Low[266]** to separate kernel inheritance from application-driven priority changes.
-
-**Timeline UX** — boosted periods appear as a **bottom stripe** on the task row (horizontal) or a **right-edge stripe** (vertical): **orange** = boost only (`Boost only` / manual `set_priority` without L/M/H geometry); **red** = mutex inherit or any L/M/H-related pattern.
-Task labels show **`· pri N`** when create priority is known.
-
-**Low[266]** on the timeline in `example-8cores.btf.gz` (zoomed to test 8, `--lo 3042000 --hi 3359000`).
-Three **red bottom stripes** on the Low row mark the `priority_inherit` → `priority_disinherit` windows (~34.4 ms each).
-**Med[267]** runs on the same core before each inherit; during each boost window Med stays off-CPU:
-
-![Timeline view: Low[266] with three red priority-inheritance stripes (example-8cores.btf.gz)](../images/stats/tasks-priority-low.svg)
-
-Export a timeline SVG from the viewer (**File → Save SVG** or toolbar) after zooming to the episode, or regenerate it headlessly via `make -C BTFViewer update-images` (desktop CLI `snapshot --view timeline --task ... --lo ... --hi ...`).
-
-**Distribution chart** — click any Priority Inheritance table row:
-
-- **Scatter:** x = boost episode end time, y = boosted duration. Orange points = boost only; red = L/M/H / mutex inherit. Test 8 contributes **three** clustered red points near ~34 ms.
-- **Histogram:** distribution of boost durations.
-- **Click a point** to zoom to that episode, scroll to the task row, highlight it, and add an annotation (re-click skips duplicate annotations).
-
-**Export HTML** includes a **Boost episodes** detail sub-table (up to 200 rows by start time).
-
-**Low[266]** distribution (test 8: three mutex inherit episodes, base pri 2 → peak 4, ~34.4 ms each):
-
-![Priority boost distribution chart for Low[266] in example-8cores.btf.gz](../images/stats/stats-priority-low.svg)
-
-**PS[228]** (test 7: manual `vTaskPrioritySet`, **L/M/H pattern**, ~119 µs boosted) contrasts with **Low[266]** above. It has the same base/peak numbers, different mechanism and duration.
-
-**Note:** `traceTASK_PRIORITY_INHERIT` / `traceTASK_PRIORITY_DISINHERIT` are invoked by the FreeRTOS kernel inside `xTaskPriorityInherit()` / `xTaskPriorityDisinherit()` when `configUSE_MUTEXES` is enabled.
-
-<a id="mutex--semaphore-pairing" name="mutex--semaphore-pairing">&#x200B;</a>
-### Mutex / Semaphore pairing ![](../images/readme/h4.svg)
-
-When queue trace hooks are enabled (`configINCLUDE_QUEUE_EVENTS`), mutex and semaphore STI lines include the **FreeRTOS object pointer** in the note:
-
-```text
-703266,Core_0,0,STI,mutex,0,trigger,take 0x80018700
-707222,Core_3,0,STI,mutex,0,trigger,give 0x80018700
-```
-
-The viewer pairs **`take`/`give`** (and **`create`/`delete`**) **per pointer**, not per STI channel alone — so two mutexes of the same type stay distinct.
-The kernel **`give`** immediately after **`create`** (mutex / binary sem available) is ignored when it falls within **1 ms** of the create event.
-
-**Semaphores** use two pairing directions automatically:
-
-| Pattern | Example | Pairing |
-|---------|---------|---------|
-| **Hold** (take → give) | Area slot sem, worker acquires then releases | `take` opens, matching `give` closes (FIFO) |
-| **Signal** (give → take) | `*_done` / `*_go` coordination sems | `give` posts, matching `take` consumes (FIFO) |
-
-**Mutexes** always use hold pairing (LIFO — owner must `give`).
-
-**Formula** — for each paired hold span *h* of duration τ<sub>h</sub>:
-
-```math
-\bar{\tau}_{\mathrm{hold}} = \frac{1}{N_{\mathrm{holds}}} \sum_h \tau_h
-```
-
-**What it tells you:** **Avg hold** shows typical lock or semaphore residency time. Very long holds inflate blocking for waiters.
-**Issues** > 0 (orphan give, cross-task give, unmatched take, delete while held) mean the trace does not form clean take/give pairs and hold statistics may be incomplete.
-**Deadlock risk** at trace end flags multiple mutexes still held by different tasks. Verify whether that is expected teardown or a real stall.
-
-| Column | Meaning |
-|--------|---------|
-| **Object** | Kind + pointer (`mutex 0x80018700`) |
-| **Kind** | `mutex` or `sem` |
-| **Holds** | Number of paired take→give spans in scope |
-| **Issues** | Pairing problems in scope |
-| **Avg hold** | Mean hold duration across paired spans |
-| **Status** | **OK**, **Warning**, or **Error** |
-
-| Check | Severity | Meaning |
-|-------|----------|---------|
-| **Orphan give** | Error | Mutex `give` with no matching open `take` on that pointer |
-| **Cross-task give** | Warning | Mutex `give` by a different task than the one that `take` |
-| **Unmatched take** | Warning | `take` still open at trace end |
-| **Unmatched give** | Warning | Semaphore `give` still unmatched at trace end |
-| **Delete while held** | Warning | `delete` while resource `take`s are still open (common during teardown) |
-| **`CORE_MIGRATION_WHILE_HELD`** | Warning | Mutex `take` on one core, `give` on a different core — the lock crossed a core boundary while held; indicates a **cache-line bounce** where the hardware cache line containing the lock data is transferred between cores. Shown in the Pairing Issues sub-table with the exact from/to cores (for example, `Lock bounced from Core_0 to Core_1`) |
-| **Deadlock risk** | Warning | ≥2 mutexes still held by ≥2 different tasks at trace end |
-
-The running task for each event is inferred from the **core timeline** at that timestamp (same approach as interval `tid` pairing).
-
-Below the summary table, a **Pairing issues** sub-table lists every problem in scope (time, object, issue kind, detail).
-**Click any issue row** to zoom to the running task segment on that core (when found), jump to the issue timestamp, highlight the segment, and add an annotation with a descriptive note (Desktop + Web).
-Re-clicking the same point skips duplicate annotations.
-
-**Export HTML** adds two detail sub-tables under this section: all **Pairing issues** in scope (including `CORE_MIGRATION_WHILE_HELD` warnings), and **Hold episodes** (longest first, up to 150 rows) with **Take core** and **Give core** columns.
-
-**Export CSV** includes a **Core Affinity Violations** sub-section listing each mutex that had at least one bounced hold, with the bounce count and a description.
-
-`example-4cores.btf.gz` (tests 1–3) exercises `0x80018700` (mutex) and `0x80018650` (counting sem) with clean hold pairing.
-The full trace shows `CORE_MIGRATION_WHILE_HELD` warnings on `0x80018700` (3 bounces) and `0x80018650` (1 bounce). The Statistics **Mutex / Semaphore** summary table will show **Warning** for these mutexes and non-zero values in the **Bounces** column.
-Coordination sems pair in **signal** direction.
-
-<a id="waiter--owner" name="waiter--owner">&#x200B;</a>
-### Waiter × Owner ![](../images/readme/h4.svg)
-
-Heuristic matrix from consecutive mutex holds on the same object: the next distinct acquirer is treated as the waiter, and the previous holder as the owner.
-Cell values are the summed hold time of those handoffs.
-This is **not** a kernel wait-queue reconstruction. BTF records successful take/give, not blocked attempts.
-Click a cell to zoom the longest handoff.
-
-<a id="mutex-blocking" name="mutex-blocking">&#x200B;</a>
+<a id="statistics-mutex_block" name="statistics-mutex_block"></a>
 ### Mutex Blocking ![](../images/readme/h4.svg)
 
-Per-task totals of those heuristic mutex waits (object, last owner, count, total, max), plus a **Top blocking contributors** ranking across mutex waits, preemption overlap, and leftover idle gaps.
-Click a row to jump to the longest wait.
+**What it tells you**
+
+Summarizes estimated mutex wait time by task, object, and previous owner. The estimate uses handoff order between distinct acquirers.
+
+Because the trace does not expose the kernel wait queue, this is not an exact record of which task was blocked on the mutex. Use it to locate likely contention and confirm the episode on the timeline.
+
+**Calculation.** Completed holds are ordered by object. When a different task acquires the object after the previous holder, BTFViewer treats the transition as a possible handoff and estimates the waiting interval from the observable hold/acquire sequence. Results are aggregated by possible waiter, object, and previous owner.
+
+**How to use it.** Rank by Total to find accumulated contention and by Max or tail values to find a severe episode. Check **Mutex / Semaphore** pairing quality first. Then use **Waiter × Owner**, **Priority Inheritance**, and the timeline. Treat a value as an upper-level contention estimate, not an exact kernel block time.
 
 ![Mutex Blocking table for example-8cores.btf.gz](../images/stats/stats-mutex-block.svg)
 
-<a id="queue" name="queue">&#x200B;</a>
+<a id="statistics-wait_owner" name="statistics-wait_owner"></a>
+### Waiter × Owner ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Shows an estimated handoff matrix. The next distinct task to acquire a mutex is treated as the waiter following the previous owner.
+
+Large or frequent cells identify task pairs worth investigating. They do not prove a direct waiter–owner relationship when other unrecorded events occur between acquisitions.
+
+**Calculation.** Rows are possible waiters and columns are previous owners. The next distinct acquirer after a completed hold contributes to the corresponding cell. Re-acquisition by the same task does not establish a cross-task handoff.
+
+**How to use it.** A large cell shows a repeated relationship around one object or set of objects. Open the longest handoff, confirm that the tasks access the same object, and check whether priority and timing support the waiter–owner interpretation.
+
+<a id="statistics-sync" name="statistics-sync"></a>
+### Mutex / Semaphore ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Pairs take/give events by synchronization-object pointer and reports hold counts, hold durations, core bounce, and pairing issues.
+
+Common issues include an unmatched take, an orphan give, deletion while held, or an object still held at the end of the trace. These may indicate incomplete capture, missing instrumentation, or a real synchronization problem.
+
+**Calculation.** Events are grouped by object pointer and processed in timestamp order. A matching take/give pair forms a hold-duration sample. The current owner and held-object state support orphan, unmatched, delete-while-held, and end-of-trace checks. Nested or recursive behavior is only as accurate as the recorded events allow.
+
+**How to use it.** Resolve pairing problems before trusting hold or blocking estimates. Long holds identify objects that can delay other tasks, but a long uncontended hold may be harmless. Combine hold time with **Mutex Blocking**, **Waiter × Owner**, task priorities, and the timeline.
+
+<a id="statistics-queue" name="statistics-queue"></a>
 ### Queue ![](../images/readme/h4.svg)
 
-When `queue` STI events are present (`configINCLUDE_QUEUE_EVENTS`), the **Queue** section pairs `send`/`recv` (and `create`/`delete`) **per object pointer**, the same way Mutex / Semaphore pairing works for `take`/`give`.
+**What it tells you**
 
-| Column | Meaning |
-|--------|---------|
-| **Object** | Kind + pointer (`queue 0x……`) |
-| **Holds** | Number of paired send→recv (or equivalent) spans in scope |
-| **Issues** | Pairing problems in scope |
-| **Avg hold** | Mean hold duration across paired spans |
-| **Status** | **OK**, **Warning**, or **Error** |
+Pairs send/receive events by queue pointer and summarizes completed holds and pairing issues.
 
-Shown only when the trace contains `queue` STI events. For mutex/semaphore bounce and issue detail, see **Mutex / Semaphore pairing** above.
+The table describes recorded queue activity; it does not reconstruct queue contents or application semantics. Missing or unmatched events may come from a partial Scope or incomplete instrumentation.
 
-## 5. Anomalies, instrumentation, and advanced analysis
+**Calculation.** Send and receive events are grouped by queue pointer and paired in recorded order to form completed activity intervals. Without message IDs or queue-content snapshots, the viewer cannot prove which receive consumed which application message in complex producer/consumer patterns.
 
-Use these tools to find unusual events, inspect critical paths and recurring patterns, and analyze interval or tag instrumentation.
+**How to use it.** Check pairing quality and event rates, then correlate queue activity with **Inter-Arrival**, **Dispatch Latency**, Tags such as queue depth, and end-to-end Intervals. A long send-to-receive interval can include normal batching or consumer scheduling delay.
 
-<a id="timeline-anomalies" name="timeline-anomalies">&#x200B;</a>
-### Timeline Anomalies ![](../images/readme/h4.svg)
+## 6. DETAIL — supporting measurements ![](../images/readme/h3.svg)
 
-Scans the current Statistics scope for unusually long execution, blocking, or heuristic response tails (mean+3σ or ≥ p99), tight migration / preemption / ISR / wakeup bursts, CPU utilization spikes, idle gaps, mutex-wait spikes, and configured deadline misses.
-Click a row to zoom, place C1–C2, highlight the task, and scroll to the matching table.
-**Investigate…** opens the AI tab on the selected (or top) anomaly.
+Use these sections when the earlier categories identify an area that needs more evidence.
 
-<a id="worst-events" name="worst-events">&#x200B;</a>
-### Worst Events ![](../images/readme/h4.svg)
+<a id="statistics-core_breakdown" name="statistics-core_breakdown"></a>
+### Core Time Breakdown ![](../images/readme/h4.svg)
 
-One list of the longest execution, blocking, inter-arrival, and heuristic response episodes across tasks. Click a row to jump and set cursors on that episode.
+**What it tells you**
 
-<a id="critical-path" name="critical-path">&#x200B;</a>
-### Critical Path ![](../images/readme/h4.svg)
+Splits each core's current Scope into:
 
-Takes the longest heuristic ready→completion windows. **Duration** is the complete window, **Exec** is the task's own on-CPU time, and **Off-CPU** is `Duration − Exec`.
-**Preempt**, **Wait**, and **Migration** overlap—**Wait** includes preemption gaps—so they must not be stacked as a breakdown of Duration. The Statistics table retains these components so you can jump to each episode.
-This is **not** a release/completion pair explicitly recorded by the kernel.
-Click a component to jump to that episode.
+| Value | Meaning |
+|---|---|
+| **Active** | User-task execution time |
+| **Idle** | IDLE task time |
+| **Tick** | TICK handler time |
+| **Gap** | Time not represented by consecutive core slices |
 
-![Critical Path table for example-8cores.btf.gz](../images/stats/stats-crit-path.svg)
+Gap can include scheduling overhead, interrupts, critical sections, trace loss, or resolution limits. It is not automatically kernel overhead.
 
-<a id="recurring-patterns" name="recurring-patterns">&#x200B;</a>
-### Recurring Patterns ![](../images/readme/h4.svg)
+**Calculation.** Each recorded core slice is clipped to the Scope and classified as Active, Idle, or Tick. Gap is the remaining scoped core time not covered by those categories. Small overlaps or rounding can affect totals at trace resolution.
 
-Groups Timeline Anomalies by task and kind and keeps kinds that repeat. Click a row to jump to the worst instance.
+**How to use it.** Active explains workload, Idle explains unused capacity, and Tick explains recorded tick service. Investigate a large Gap with **Kernel Switch Overhead**, Trace Health, and the timeline. If all cores show a gap at the same time, capture loss or a global event is more plausible than ordinary per-core scheduling.
 
-![Recurring Patterns table for example-8cores.btf.gz](../images/stats/stats-patterns.svg)
+<a id="statistics-switch_overhead" name="statistics-switch_overhead"></a>
+### Kernel Switch Overhead ![](../images/readme/h4.svg)
 
-<a id="interval-analysis" name="interval-analysis">&#x200B;</a>
-### Interval Analysis ![](../images/readme/h4.svg)
+**What it tells you**
 
-Pairs **`interval_start` / `interval_stop`** STI events into measurable code regions.
-Each interval **id** gets an **Interval N** row on the timeline (horizontal task view) with colored span bars; the statistics table aggregates duration across all paired spans for that id.
-
-**Formula** — for each paired instance *j* with start *t*<sub>s</sub> and stop *t*<sub>e</sub>:
+Measures the gap from one task leaving a core to the next task starting on that core:
 
 ```math
-\tau_j = t_e - t_s
+O_{switch} = t_{next\ start} - t_{previous\ end}
 ```
 
-**Count** is the number of paired spans in scope.
+The gap is an observed interval around a switch. It can include scheduler work, interrupt activity, trace overhead, or unrecorded time, so treat it as an upper-level switch-gap measurement rather than a pure kernel instruction cost.
 
-**Min / Avg / Max / p95** are calculated from all interval durations τ<sub>j</sub>.
+**Calculation.** Consecutive slices on the same core form a sample when the next start follows the previous end. The value is associated with that transition. Overlapping or invalid pairs are excluded.
 
-**What it tells you:** Interval metrics measure **how long instrumented code regions take**, such as loop iterations, critical sections, or end-to-end handlers.
-Tight clusters in the distribution chart mean stable iteration time; outliers or a high **Max** often mark contention, preemption inside the region, or pairing artefacts (see **Limitations** under Interval Analysis below).
-Compare interval ids to separate workloads (for example, mutex stress compared with lighter loops in the same trace).
+**How to use it.** Compare cores and tail percentiles, then inspect the largest transition. Correlate with migration, interrupts, TICK, and trace gaps. A larger value after a change can signal more scheduling work, but it cannot isolate the scheduler's instruction cycles without lower-level instrumentation.
 
-> **Cross-task timing tip:** `interval_start` / `interval_stop` pairing is scoped **per task id** (see [Pairing algorithm](#pairing-algorithm) below). It measures elapsed time **within the same task**.
-To measure elapsed time **between two different tasks or ISRs** (for example, a producer marks a tag on one task/core and a consumer picks it up on another), pairing by task id does not apply.
-Use a **tag channel** (`btf_traceTAG(id, value)`) instead: tag samples carry no task/id pairing, so consecutive samples on the same channel measure the cross-task interval directly.
-See [Tag Analysis → Interval tab](#tag-analysis).
+![Kernel switch overhead distribution for Core_0 in example-8cores.btf.gz](../images/stats/stats-switch-core0.svg)
 
-**BTF note field** (last CSV column on each interval line):
+<a id="statistics-tasks" name="statistics-tasks"></a>
+### Top Tasks by CPU (excl. IDLE/TICK) ![](../images/readme/h4.svg)
 
-| Format | Example | Viewer pairing |
-|--------|---------|----------------|
-| Current firmware | `1 tid:7` or `0 tid:0x8` | Interval id + task id (decimal or `0x` hex); same numeric id on different tasks does not cross-pair |
-| Legacy | `1` | Full note string `1` only |
+**What it tells you**
 
-Recorded by `traceINTERVAL_START(id)` / `traceINTERVAL_STOP(id)` in firmware. The task id is captured automatically in `param2` and emitted in the note as `tid:…`.
-See [Binary → BTF dump mapping](../TRACE_FORMAT.md#binary--btf-dump-mapping).
+Ranks user tasks by `task on-CPU time ÷ Scope wall-clock duration`. IDLE and TICK tasks are not listed.
 
-| Column | Meaning |
-|--------|---------|
-| **ID** | Interval id from `traceINTERVAL_START(id)` / `traceINTERVAL_STOP(id)` |
-| **Label** | Display name (`Interval N`) |
-| **Count** | Number of paired start→stop spans in scope |
-| **Min / Avg / Max / p95** | Interval duration statistics |
+This ranking shows where processor time is spent. A high share is not necessarily a problem if it matches the workload design.
 
-**Distribution chart** — click any row:
+**Calculation.** A task's clipped slice durations are summed and divided by the Scope wall-clock duration. On multicore traces, the sum across tasks can exceed 100% because several cores can run at the same time. This value is different from per-core utilisation and from a task's percentage of only user-task CPU time.
 
-- **Scatter:** x = interval stop time, y = interval duration.
-- **Histogram:** distribution of interval durations.
-- **Click a point** to jump to the **interval start** and add an annotation with duration/time notes.
+**How to use it.** Use this as a starting point for CPU optimisation and workload validation. Compare with per-core utilisation and Execution distributions. A low-share task can still be latency-critical, and a high-share task can be healthy when it performs the intended work.
 
-**Export HTML** includes an **Interval instances** detail sub-table (longest first, up to 200 rows).
+<a id="statistics-distrib" name="statistics-distrib"></a>
+### Distribution Explorer ![](../images/readme/h4.svg)
 
-**Interval 1** in `example-8cores.btf.gz` (1728 spans from eighteen `vCtxSwitchWorker` tasks. CS[11]–CS[28] — sharing id `1` — each worker pairs via its own `tid` in the note):
+**What it tells you**
+
+Selects a task and timing metric, then shows sample count, percentiles, variation, a trend summary, and the related histogram/CDF.
+
+- A **scatter plot** reveals trends, bursts, and isolated outliers over time.
+- A **histogram** shows how many samples fall in each value range.
+- A **CDF** shows the percentage of samples at or below a value.
+
+For example, the CDF crosses p95 at 95%. If a deadline is drawn at that value, about 95% of the observed samples meet it. This is an observation from the current Scope, not a future guarantee.
+
+**How plots relate.** The scatter plot preserves sample order and time; the histogram groups values into bins; the CDF sorts values and shows cumulative probability. The three views use the same selected sample set but answer different questions.
+
+**How to use it.** Start with the CDF to assess tail probability, use the histogram to see whether there are multiple operating modes, and use the scatter plot to locate when the mode or outlier occurred. Confirm the selected metric's definition—especially heuristic response, wake, and blocking—before applying a requirement line.
+
+<a id="statistics-intervals" name="statistics-intervals"></a>
+### Interval Analysis ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Pairs `interval_start` and `interval_stop` STI events and measures each completed interval:
+
+```math
+\tau_j = t_{stop,j} - t_{start,j}
+```
+
+Current traces pair by interval ID and task ID, allowing parallel tasks to reuse an interval ID. Unmatched events are excluded. Legacy traces without a task ID can pair concurrent intervals incorrectly.
+
+Use intervals for code regions with explicit boundaries, such as one loop iteration or an end-to-end handler. For timing across different tasks or ISRs, use consecutive samples on a tag channel.
+
+**Pairing and nesting.** The same interval ID can be used by different tasks because task ID participates in current pairing. Completed start/stop pairs become samples; unmatched starts or stops are reported or excluded. Avoid ambiguous recursive use of the same ID unless the instrumentation contract defines how nesting is paired.
+
+**How to use it.** Intervals are preferable to slice-based response estimates when the application can mark the real operation boundaries. Compare interval tails with Execution and Blocking to determine whether the operation spends time on-CPU or waiting. Keep instrumentation overhead and partial-Scope pairing in mind.
 
 ![Interval duration distribution for interval id 1 in example-8cores.btf.gz](../images/stats/stats-interval-1.svg)
 
-Most spans cluster at short durations (tight yield loops); occasional high **y** points mark iterations that waited longer on the shared mutex or area semaphore.
-Compare ids **4–6** (shorter per-iteration work) compared with **1–3** (heavier stress tests) in the same table.
-
-<a id="pairing-algorithm" name="pairing-algorithm">&#x200B;</a>
-##### Pairing algorithm ![](../images/readme/h5.svg)
-
-At parse time, the viewer collects all `interval_start` / `interval_stop` STI events, sorts them by time (start before stop at the same timestamp), and pairs them with a **per-key stack** (LIFO).
-
-**Note parsing** (last BTF CSV field):
-
-| Note format | Pairing key | Timeline / stats row id |
-|-------------|-------------|-------------------------|
-| `{id} tid:{task_id}` (current firmware) | interval `id` + `task_id` | `id` only (`Interval N`) |
-| `{id}` or other legacy text | full note string | same as note |
-
-When `tid:` is present, concurrent workers can share the same interval **id** without cross-pairing: task 7's `START(1)` only pairs with task 7's `STOP(1)`, even if task 8 uses id `1` at the same time.
-Legacy traces without `tid` keep the original behaviour (pair by note / id string only).
-
-1. **`interval_start`** — push the event onto that key's stack.
-2. **`interval_stop`** — pop the most recent unmatched start for that key and form one instance `[start_time, stop_time]`.
-3. **`interval_stop` with an empty stack** — ignored (orphan stop).
-4. **Unmatched starts after the trace ends** — counted internally but not shown in statistics or on the timeline.
-
-An **Interval N** row appears only when at least one **start→stop** pair exists for that id.
-If firmware emits `interval_start` without matching `interval_stop` events (same id and `tid` when present), that id is omitted entirely.
-
-**Example — interval id with no paired spans:**
-
-| Interval id | `interval_start` | `interval_stop` | Viewer |
-|-------------|------------------|-------------------|--------|
-| 0 | 50 | 50 | **Interval 0** |
-| 1 | 100 | **0** | *(no row — nothing to pair)* |
-| 2 | 50 | 50 | **Interval 2** |
-
-If firmware emits `interval_start` for an id but never records matching `interval_stop` events (same id and `tid` when present), that id is omitted from the timeline and statistics.
-Ensure every `traceINTERVAL_START(id)` has a corresponding `traceINTERVAL_STOP(id)` with the same task id in the note when `tid:` is used.
-
-This is **LIFO (last-in, first-out) nesting** within each pairing key.
-
-```text
-# Nested on one task (same pairing key)
-START(id=2)           stack: [A]
-  START(id=2)         stack: [A, B]
-  STOP(id=2)    →     pairs B→B  (inner span)
-STOP(id=2)      →     pairs A→A  (outer span)
-
-# Two tasks, same interval id, with tid in note
-Task 7: START  note=1 tid:7
-Task 8: START  note=1 tid:8
-Task 7: STOP   note=1 tid:7   → pairs with task 7 start only
-Task 8: STOP   note=1 tid:8   → pairs with task 8 start only
-```
-
-Result: **two** instances — one for the inner region, one for the outer region — each with the correct duration.
-**Min / Avg / Max / p95** in the statistics table are computed over **all** paired instances whose time range overlaps the active scope (full trace or cursor range).
-Timeline display uses a separate rule (see below).
-
-<a id="limitations" name="limitations">&#x200B;</a>
-##### Limitations ![](../images/readme/h5.svg)
-
-**1. Concurrent overlap with the same id (cross-pairing)**. *legacy traces without `tid`*
-
-When the BTF note has **no** `tid:{task_id}` suffix, pairing uses the note string only.
-The stack algorithm then assumes stops arrive in the **reverse order** of starts.
-That holds for true call-stack nesting on one thread, but **not** when several tasks use the **same interval id** at the same time.
-
-```text
-Task on Core_1: START(2) ─────────────────────── STOP(2)
-Task on Core_2:      START(2) ───────── STOP(2)
-Event order:       S1          S2         S1      S2
-                   └─ stack pairs S2 with S1's STOP (wrong)
-```
-
-When starts and stops interleave across cores, the viewer can pair one task's **start** with another task's **stop**. That produces:
-
-- **Count** — still the number of stop events that found a start on the stack (often equals the number of loop iterations).
-- **Min / Avg / Max / p95** — can be **wrong**: bogus **very long** spans inflate max and avg; the distribution chart shows outlier points far above the real iteration time.
-
-`example-4cores.btf.gz` is recorded **with** `tid` in each interval note, so ids **1–4** pair correctly across parallel workers.
-**Legacy** traces that omit `tid` may still cross-pair when several tasks share one id:
-
-| Interval id | Test (see `Demo/examples/freertos_test/main.c`) | Without `tid` — typical symptom |
-|-------------|--------------------------------------------------|--------------------------------|
-| 1 | Context-switch / mutex stress (`vCtxSwitchWorker`) | Inflated **Max** / outlier scatter points |
-| 2 | Mutex workers (`vMutexWorker`) | Same |
-| 3 | Area-semaphore workers | Same |
-| 4 | Nested interval stress | Same |
-
-For legacy traces, treat **short-duration clusters** in the scatter/histogram as the meaningful iteration times; treat isolated **very large** points and the table **Max** as pairing artefacts unless you have verified LIFO ordering for that id.
-
-**2. SMP task migration — why pairing is not done by core**
-
-The viewer pairs by **interval id** (and **task id** when `tid` is present), not by the **core** field on each STI event.
-A core-based matcher might seem attractive when several tasks share one id, but on **SMP** it is **not reliable**:
-
-- A task can **migrate** between cores while an interval is open (`START` on Core_0, body runs, `STOP` on Core_2 after migration).
-- Preemption and scheduling can also make the "running core" at `START`/`STOP` differ from the core where most of the work ran.
-- Matching `START` and `STOP` by core would then **fail to pair** valid spans or would **split one logical interval** into orphan events.
-
-```text
-Task A (may migrate):
-  START(2) on Core_0  … runs on Core_0, then Core_1 …  STOP(2) on Core_1
-  Core-based match: no single core owns both ends → broken or missed pair
-  Id + tid stack: pairs correctly if no other task uses id 2 concurrently
-```
-
-So the viewer does **not** use core as a pairing key.
-With **`tid` in the note**, several tasks may share the same interval id safely; without `tid`, prefer **one interval id per logical scope** or accept LIFO-only pairing.
-Core columns on paired instances (`start_core` / `stop_core` in the parsed data) are informational only.
-
-**3. True time nesting compared with concurrent overlap**
-
-| Situation | Pairing correct? | Statistics meaningful? |
-|-----------|------------------|-------------------------|
-| Nested `START`/`STOP` on **one thread** (LIFO order) | Yes | Yes — each nesting level is a separate instance |
-| **Concurrent** tasks, **different** ids | Yes | Yes — ids are independent |
-| **Concurrent** tasks, **same** id, **with `tid` in note** | Yes | Yes — per-task pairing keys |
-| **Concurrent** tasks, **same** id, **no `tid`** (legacy) | Often **no** | **Count** ok; min/avg/max may be skewed |
-| Start without matching stop (crash / trace cut-off) | Partial | Unmatched starts excluded from stats |
-
-**4. Timeline bars compared with statistics count**
-
-The statistics table and distribution charts use **every** paired instance in scope.
-The timeline draws **top-level spans only**: if instance B's `[start, stop]` lies entirely inside instance A's range (same id), only A is drawn.
-This is a **display** rule only; it does not change **Count** or min/avg/max.
-
-| View | What you see |
-|------|----------------|
-| **Statistics → Count** | All paired spans (including nested and cross-paired) |
-| **Distribution chart** | One point per paired span (same set as Count) |
-| **Timeline → Interval N row** | Non-nested spans only (fully contained children hidden) |
-
-Typical timeline bar counts for the full `example-4cores.btf.gz` trace:
-
-| Interval id | Statistics **Count** | Timeline bars (top-level) |
-|-------------|----------------------|---------------------------|
-| 1 | 480 | 5 |
-| 2 | 480 | 7 |
-| 3 | 240 | 1 |
-| 4 | 480 | 1 |
-
-**Interval 2** on the timeline: **7** bars (one long outer span plus six shorter top-level spans), while the table still reports **Count = 480**.
-Use the distribution chart (click a scatter point) or a narrow cursor range to jump to one specific paired instance.
-
-**5. Instrumentation guidance**
-
-To get reliable per-task interval statistics:
-
-- **Preferred (firmware in this repo):** use `traceINTERVAL_START(id)` / `traceINTERVAL_STOP(id)` — the logger records **`tid:{task_id}`** in the BTF note so parallel workers can share the same numeric `id`.
-- **Legacy traces** without `tid`: use a **distinct interval id per task** (or per logical scope), not one shared id across parallel workers.
-- For nested regions on a single thread, reuse the same id — LIFO pairing matches `START`/`STOP` nesting within each pairing key.
-- Do **not** rely on **core** to disambiguate pairs on SMP: tasks can **migrate** between `START` and `STOP` (see limitation 2 above).
-- Orphan stops (stop without start) are dropped; orphan starts at end of trace are not counted in the table.
-
-<a id="timeline-rendering" name="timeline-rendering">&#x200B;</a>
-##### Timeline rendering ![](../images/readme/h5.svg)
-
-Interval bars are drawn as **solid** spans in the interval’s colour. **Start** and **stop** events are marked with vertical tick lines (solid at start, dashed at stop) on the interval row.
-
-<a id="tag-analysis" name="tag-analysis">&#x200B;</a>
+<a id="statistics-tags" name="statistics-tags"></a>
 ### Tag Analysis ![](../images/readme/h4.svg)
 
-Aggregates numeric samples from the 8 general-purpose STI **tag** channels (`tag0_event` … `tag7_event`, plus the unindexed `tag_event`). These are free-form values emitted by firmware via `btf_traceTAG(id, value)` for any application-defined metric that does not fit an existing STI channel (queue depth, ADC reading, free heap, sensor reading, etc.).
-One row appears per channel that has at least one sample.
+**What it tells you**
 
-**Formula** — over all sample values *v*<sub>k</sub> on a channel in scope: **Count** is the number of samples; **Min / Avg / Max** are the usual statistics; **p95** is the 95th-percentile value.
+Summarizes numeric values recorded on `tag0_event` … `tag7_event` or `tag_event`. A tag can represent any application-defined value, such as queue depth, free memory, or a sensor reading.
 
-**What it tells you:** Unlike the other metric tables, the tag y-axis is the **raw application value**, not a duration. Its meaning depends entirely on what firmware puts in the channel.
-A widening spread or a rising trend in the scatter plot can flag a slow memory leak (free heap), growing backlog (queue depth), or drifting sensor reading; a tight cluster around **Avg** with occasional **p95**/**Max** outliers is normal sampling noise.
+The value axis is not a duration unless the application records a duration. The **Interval** view measures time between consecutive samples on the same channel and can measure a handoff across tasks or ISRs.
 
-| Column | Meaning |
-|--------|---------|
-| **Channel** | Display name (`Tag 0` … `Tag 7`, or `Tag` for the unindexed `tag_event`) |
-| **Count** | Number of samples in scope |
-| **Min / Avg / Max / p95** | Sample value statistics (not a time duration) |
+**Calculation.** Samples are grouped by tag channel and kept in timestamp order. Value statistics operate on the recorded numeric payload. Inter-sample timing uses consecutive timestamps on the same channel, independent of which task or ISR emitted them.
 
-**Distribution chart** — click any row:
-
-- **Scatter:** x = sample time, y = tag value.
-- **Histogram:** distribution of tag values.
-
-<a id="interval-tab-time-between-samples" name="interval-tab-time-between-samples">&#x200B;</a>
-##### Interval tab (time between samples) ![](../images/readme/h5.svg)
-
-The distribution popup has two in-dialog tabs — **Value** (above) and **Interval** — mirroring the **Core Migrations** Dwell/Rate/Gap tabs.
-Click **Interval** to switch the same scatter + histogram widgets to show the **elapsed time between consecutive samples** on that channel, regardless of which task or core emitted them.
-
-**Formula** — for consecutive samples (sorted by time) *k* and *k−1* on one channel:
-
-```math
-\delta_k = t_k - t_{k-1}
-```
-
-**Scatter:** x = the later sample's time, y = δ<sub>k</sub> (rendered as a duration, using the same adaptive time units as other metric charts).
-**Histogram:** distribution of δ<sub>k</sub> with the usual min/avg/max/p95 reference lines and [CDF overlay](#cdf-overlay).
-Clicking a scatter point jumps to and annotates the later sample's time.
-
-This is the **recommended way to measure elapsed time across two different tasks or ISRs**: emit `btf_traceTAG(id, marker)` from each side of the cross-task event (for example, once when a producer task hands off, once when the consumer task/ISR observes it) and read the interval distribution's min/avg/max/p95 as the cross-task latency. No `tid` pairing is needed since tag samples are unpaired, timestamp-ordered markers.
-
-**tag0_event** in `example-8cores.btf.gz` (2330 samples, min 8,144, avg ≈ 36,845, max 71,904, p95 41,936):
+**How to use it.** Document each channel's unit and meaning. Use values for state variables such as queue depth or free memory, and inter-sample time for cross-context handoff or event cadence. Correlate a value change with the timeline; the viewer cannot infer application semantics from the number alone.
 
 ![Tag value distribution chart for tag0_event in example-8cores.btf.gz](../images/stats/stats-tag0.svg)
 
-Shown only when the trace contains `tag0_event` … `tag7_event` (or `tag_event`) STI samples.
+<a id="statistics-lifecycle" name="statistics-lifecycle"></a>
+### Task Lifecycle ![](../images/readme/h4.svg)
 
-## 6. Charts and trace comparison
+**What it tells you**
 
-Use these tools to inspect metric distributions or compare statistics from two traces.
+Summarizes recorded task create, delete, suspend, and resume events, together with alive span and run count.
 
-<a id="distribution-explorer" name="distribution-explorer">&#x200B;</a>
-### Distribution Explorer ![](../images/readme/h4.svg)
+Only recorded STI lifecycle events are shown. An absent event may mean the event did not occur, was outside the Scope, or was not instrumented.
 
-Choose a metric (execution, blocking, inter-arrival, response, dispatch, wake, preemption) and a task.
-The section shows n / p50 / p99 / CV, a sparkline, and the **histogram/CDF at the bottom** of the section (same adaptive scale as other metric plots).
-**Open histogram** still opens the full scatter + histogram window.
-Wake is heuristic response wait, not a kernel wakeup event.
+**Calculation.** Lifecycle records are grouped by task ID. Alive span uses available create and delete boundaries; run count comes from scheduling slices. Suspend and resume counts use their STI events.
 
-<a id="metrics-distribution-charts" name="metrics-distribution-charts">&#x200B;</a>
-### Metrics distribution charts ![](../images/readme/h3.svg)
+**How to use it.** Check for unexpected creation, deletion, or repeated suspend/resume behavior. Use lifecycle boundaries to avoid interpreting start-up or shutdown as steady state. Missing create events are common when capture begins after tasks already exist.
 
-In the **Statistics** panel, click any row in **Concurrent Core Active**, **Kernel Switch Overhead**, **Execution Time**, **Blocking Time**, **Dispatch / Scheduling Latency**, **Inter-Arrival**, **Core Migrations**, **Preemption Chain**, **Priority Inheritance**, **Interval Analysis**, or **Tag Analysis** to open a floating chart popup.
-In **Trace Health (TICK)**, use the **Tick Distribution…** button (bar-chart icon beside the mode badge when ≥ 2 ticks are in scope).
-**Core Migrations** popups additionally show in-dialog tabs (**Dwell** / **Rate** / **Gap**) and **Tag Analysis** popups show tabs (**Value** / **Interval**) to switch metrics without closing the chart.
+<a id="statistics-deadline" name="statistics-deadline"></a>
+### Deadlines / CPU Budget ![](../images/readme/h4.svg)
 
-- **Scatter plot** — each event plotted in trace time order so you can spot trends, bursts, or outliers.
-- **Histogram** — adaptive bar chart of the value distribution:
-  - **Auto scale** (default) picks **linear**, **p5–p95**, or **log duration** from the data spread so bars are not squeezed when min/max or outliers span a wide range.
-  - **Histogram scale** dropdown (Desktop toolbar above histogram; Web above the chart): **Auto**, **Linear**, **p5–p95**, **Log duration**.
-  - **Adaptive bin count** (Freedman–Diaconis, 12–80 bins) instead of a fixed 50-bin linear split.
-  - **Overflow buckets** in p5–p95 mode — separate dimmed bars for values below p5 and above p95, with counts in the caption.
-  - **Log-scaled counts** when one bin dominates (tall spike compared with many small bars).
-  - **Hover a bar** to see the bin range (or `< p5` / `> p95`) and how many samples fall in that bucket.
-  - **CDF overlay** — cumulative distribution curve on the histogram (see [CDF overlay](#cdf-overlay) below).
-  - Dashed reference lines for **avg**, **p5**, **p50**, and **p95**; caption shows the active scale and full min–max range.
-- **Export PNG / SVG** — buttons in the chart footer save the current scatter + histogram.
+**What it tells you**
 
-The popup can be dragged, resized, and closed independently of the main window.
-If the chart is open, it **updates live** when you move cursors or toggle cursor-range scope.
-Each open trace tab remembers its own chart when you switch tabs.
+Compares observed slice durations and CPU shares with per-task thresholds configured in **Settings → Display**.
 
-<a id="cdf-overlay" name="cdf-overlay">&#x200B;</a>
-### CDF overlay ![](../images/readme/h4.svg)
+- A **deadline violation** means an observed slice exceeded its configured duration threshold.
+- A **CPU budget violation** means the task's CPU share exceeded its configured limit in the current Scope.
 
-Every metrics histogram includes a **cumulative distribution function (CDF)** drawn as a **blue line** over the bars. It answers a different question than the histogram alone:
+If no threshold is configured, BTFViewer cannot evaluate compliance. A result of zero violations is meaningful only for configured tasks and the selected Scope.
 
-| View | Question it answers |
-|------|---------------------|
-| **Histogram bars** | *How many* samples fall in each duration bucket? |
-| **CDF curve** | *What fraction* of samples are **at or below** a given duration? |
+**Calculation.** Each execution slice is compared with the configured duration threshold. CPU budget compares the task's scoped CPU share with its configured percentage. These checks use the viewer's slice and CPU-share definitions; they do not automatically represent a complete application job or scheduling-server budget.
 
-The CDF is an **empirical** CDF (ECDF): for each sample in the active scope (full trace or cursor range), sorted by duration from shortest to longest, the curve plots **(duration → cumulative %)**.
-There is one step per sample; when several samples share the same duration, the curve rises vertically at that x position.
+**How to use it.** Set thresholds from an engineering requirement, not from the same trace being tested. Inspect every violation on the timeline and compare with p95/p99. Use **Interval Analysis** when the deadline applies to a multi-slice operation, and **Period / Jitter** when it applies to activation timing.
 
-**How to read the chart**
+## Trace comparison
 
-```
- 100% ┤                              ╭── CDF (blue)
-      │                         ╭────╯
-  50% ┤              ╭──────────╯
-      │         ╭────╯
-   0% ┤─────────╯
-      └────────────────────────────────── duration →
-        short                              long
-```
+<a id="statistics-trace-compare" name="statistics-trace-compare"></a>
+### Trace Compare ![](../images/readme/h4.svg)
 
-- **Horizontal axis (bottom)** — duration (same scale as the histogram bars: linear, p5–p95, or log, depending on **Histogram scale**).
-- **Left vertical axis** — sample **count** per bin (bar height).
-- **Right vertical axis** — cumulative **percent** (0%, 50%, 100% labels on a dashed guide line).
-- **Curve direction** — starts at the **bottom-left** (0% of samples below the shortest value) and rises toward the **top-right** (100% of samples included). A **steep** rise means many samples cluster at similar short durations; a **gradual** rise means values are spread out.
+**What it tells you**
 
-**Relating the CDF to table columns and reference lines**
+Compares two runs of the same workload. Use Trace A as the baseline and Trace B as the candidate. Keep workload, instrumentation, core count, and capture phase as similar as possible.
 
-The dashed vertical markers on the histogram are single-number summaries; the CDF shows the **full** cumulative picture:
+When trace lengths differ, prefer normalized values such as `/s`, `%`, and percentage points (`pp`) over raw totals. Task rows are matched by display name (`Name[id]`), so changed task IDs can prevent a logical match.
 
-| Marker / table column | On the CDF |
-|-----------------------|------------|
-| **p5** (cyan) | Curve crosses **5%** on the right axis — 5% of samples are shorter than this duration. |
-| **p50** (green) | Curve crosses **50%** on the right axis at the median duration. |
-| **p95** (orange) | Curve crosses **95%** — 95% of samples are shorter than this duration. |
-| **avg** (purple) | Shown as a vertical line; the CDF does **not** pass through a fixed “avg %” because the mean is not a percentile. |
+The comparison uses two delta conventions:
 
-**Example readings** (Execution Time for a task with 100 slices):
-
-- At duration *D* where the CDF is at **30%**, about **30 slices** (30%) finished in *D* or less — useful for “how often does this task complete within my deadline?”
-- If the curve is already above **90%** while still on the **left half** of the chart, most runs are short and the tail is light.
-- If the curve stays below **50%** until far right, the distribution is **wide or skewed** — the histogram bars alone may look crowded; switch **Histogram scale** to **Log duration** or **p5–p95** and use the CDF to see where the bulk of the mass sits.
-
-**Histogram scale and the CDF**
-
-The CDF always reflects the **same samples** as the bars; only the **x mapping** changes with the scale mode:
-
-| **Histogram scale** | Effect on CDF |
-|---------------------|---------------|
-| **Auto** / **Linear** | Duration mapped linearly from min to max. |
-| **p5–p95** | Main curve spans the p5–p95 window; outliers appear in dimmed underflow / overflow buckets at the edges, and the CDF steps into those buckets at the corresponding percentiles. |
-| **Log duration** | Short and long durations are spread across the axis; the CDF is easier to read when bars would otherwise pile up on the left. |
-
-The caption above the histogram (for example, `log-scaled duration axis · full range 17 µs–975 µs`) always shows the **true** min–max range even when the axis is compressed or clipped.
-
-**When to use the CDF**
-
-- **Deadline / budget checks** — estimate what % of activations meet a time limit without reading individual scatter points.
-- **Compare spread** — two tasks with similar **p50** can have very different CDF shapes (tight cluster compared with long tail).
-- **Skewed data** — after switching away from a crowded linear histogram, use the CDF with **p5** / **p50** / **p95** lines to see how much of the population sits below each marker.
-- **Cursor-scoped analysis** — with **Limit to C1–Cn** enabled, the CDF recalculates for only the slices inside that window, same as the table and scatter plot.
-
-The CDF is included in **Export PNG / SVG** from the plot dialog. It is not interactive (no click-to-jump); use the **scatter plot** above the histogram to jump to individual events.
-
-**Jump links:** in Execution Time, Blocking Time, Dispatch, and Inter-Arrival tables, click **Max** / **p50** / **p95** / **p99** (↗) to jump to Evidence without changing Scope. **Min** jumps to the shortest sample.
-In **Dispatch / Scheduling Latency**, click **Min** or **Max**.
-Click any **distribution-chart** point to jump to that event and add an annotation without switching right-panel tabs (segment start for task metrics; tick timestamp for **Tick Distribution**; switch/concurrency timestamp for those plots; zoom + highlight for **Priority Inheritance** episodes; interval start for **Interval Analysis**).
-In Preemption Chain, the annotation is placed at the **preemptor segment** start.
-In **Mutex / Semaphore**, click any **Pairing issues** row to zoom to the running task segment on that core, jump to the issue time, and add an annotation.
-**Timeline Anomalies** / **Worst Events** rows zoom and place C1–C2 on that episode.
-
-Example plots from `tracedata/example-4cores.btf.gz` (4-core SMP trace, 67 tasks) are in [Statistics metric tables](#statistics-metric-tables).
-
----
-
-<a id="trace-compare-1" name="trace-compare-1">&#x200B;</a>
-### Trace Compare… ![](../images/readme/h4.svg)
-
-Use **Trace Compare…** to compare two runs of the same workload, such as a baseline build and a candidate build. For a meaningful comparison, keep the workload, instrumentation, core count, and capture phase as similar as possible. If the trace lengths differ, prefer the normalized `/s`, `%`, and `pp` metrics over raw totals.
-
-**Before you compare**
-
-- Use **Trace A** for the baseline and **Trace B** for the candidate.
-- Compare equivalent phases. When full traces include different setup or teardown periods, place cursors around the matching workload in each tab.
-- Check the Overview identity and validation warnings before interpreting a delta. A different span, task set, tick mode, or worst-P99 task can make a numerical difference misleading.
-- Task rows are matched by display name (`Name[id]`). If task IDs change between runs, logically identical tasks may appear as separate rows.
-
-**Open a comparison**
-
-1. Open at least **two** `.btf` files (Desktop: **File → Open** adds a tab; Web: **Open** adds a tab in the bar under the toolbar).
-2. Click toolbar **Compare** (right after **Analysis**; enabled when two or more tabs are loaded).
-3. Choose **Trace A (Baseline)** and **Trace B (Candidate)** from the dropdowns.
-4. Optionally check **Limit to each tab's cursor range** to compare metrics within C1–Cn on each trace (requires 2+ cursors per tab).
-5. Switch between **Summary**, **Top Tasks**, **Core Util**, **Core Migrations**, **Execution**, **Blocking**, **Inter-Arrival**, **Preemption**, **Sync**, **Response**, **Mutex**, and **Trends** tabs.
-6. Optionally click **Validate experiment…** to compare the expected and actual deltas and score the experiment in the **AI** tab. The host fills the actual percentages from the current comparison, including **Scope to cursors**. Use **Query with AI…** to send the current Trace A / B tables to the AI tab; if AI is disabled, BTFViewer opens **Settings → AI**.
-
-By default, Compare uses the **full trace** on both sides. With the cursor-range option enabled, each side uses its own tab's cursor window independently; the two windows do not need the same absolute timestamps, but they should represent equivalent workload phases.
-
-**Export CSV** and **Export HTML** include every Compare table the dialog reports — **Summary**, **Top Tasks**, **Core Util**, **Core Migrations**, **Execution**, **Blocking**, **Inter-Arrival**, **Preemption**, **Sync**, **Response**, **Mutex**, **Shared Patterns**, and **Trends** — with every task row, not only the top-N preview in the dialog. **Export HTML** adds a table of contents with **Expand all** / **Collapse all**. **Overview** and **Summary** start expanded; the remaining tables collapse, matching Statistics HTML export. Summary includes compact change bars; Core Util and Response include charts; Core Migrations starts with a **migration Δ heatmap** and a **Largest changes (count & rate)** preview, then the full 16-column table.
-
-**Overview** — comparison identity (file, range, tick mode), the delta convention, a short verdict, four status cards (regressions, improvements, significant changes, validation warnings), and a **Notable Changes** table. Status always describes **Candidate B relative to Baseline A**: **Improved**, **Regressed**, or **Changed**. A change is listed only when it clears both an absolute and a relative threshold, so small differences are not automatically labelled as regressions. Tick-mode detection is checked against filenames containing `tickful` or `tickless`. Worst response P99 names the task on each side; a warning appears when the two sides refer to different tasks. The formula line also explains that **—** means unavailable, not zero; **pp** means percentage points; and STI, σ, Dwell, Ping, P99, and `/tick` are expanded.
-
-#### Read the delta direction correctly
-
-The report uses two numerical directions for different purposes:
-
-| Location | Formula | How to read it |
+| Location | Formula | Meaning |
 |---|---|---|
-| Compare data tables | **Δ = Baseline A − Candidate B** | Positive means A is numerically larger; negative means B is numerically larger |
-| Notable Changes and change-bar charts | **Change = Candidate B − Baseline A** | Positive means the candidate increased; negative means it decreased |
-| Status and colour | Candidate B relative to Baseline A | **Improved** / **Regressed** is based on metric meaning, not on the sign alone |
+| Data tables | `Δ = Baseline A − Candidate B` | Positive means A is numerically larger |
+| Change charts | `Change = Candidate B − Baseline A` | Positive means the candidate increased |
 
-For a lower-is-better metric such as response time, blocking time, issue count, or migration count, a positive table Δ usually means Candidate B improved. For a higher-is-better metric such as Load Balance Score, a negative table Δ may mean Candidate B improved. Metrics without a clear preferred direction are labelled **Changed**. Always use the status/colour and metric meaning instead of assuming that `+` is good or bad.
+Always use the metric meaning and the **Improved / Regressed / Changed** status. A positive sign is not automatically good or bad.
 
-Percentage-point deltas (CPU, utilisation, and load balance) use a **pp** suffix. Times omit trailing zeros (`19 µs`, not `19.000 µs`).
+### Comparison workflow and dependencies
 
-**Recommended reading order**
+Start with capture compatibility and workload duration, then compare overall load, top-task CPU share, timing tails, migration rates, and synchronization evidence. A difference in one metric often explains another: higher CPU load can increase dispatch and blocking tails; changed affinity can increase migration; changed instrumentation can alter event counts without changing runtime behavior.
 
-1. Confirm the files, scopes, tick modes, and validation warnings in **Overview**.
-2. Use normalized rows in **Summary** when spans differ.
-3. Review **Notable Changes** to find changes large enough to investigate.
-4. Open the related detail tab, then return to each timeline to verify the events behind the numbers.
-
-**Summary** — high-level diff:
-
-| Metric | Notes |
-|--------|--------|
-| Span | Total trace duration (or cursor-range width when scoped) |
-| Tasks / Segments / STI events | Counts |
-| Context switches | Total across all cores |
-| Context switches /s | Span-normalized rate (comparable across unequal lengths) |
-| Core gap avg / max | Idle time between consecutive slices on each core |
-| Migrations (total) / Migrated tasks | Core-migration counts |
-| Migrations /s | Span-normalized migration rate |
-| Blocking time /s | Accumulated off-CPU blocking-gap time per second of trace span |
-| Mutex blocking (total) / Mutex blocking /s | Mutex-wait total and span-normalized rate |
-| Load Balance Score / σ | Same Gini-based score and util stddev as Statistics Core Utilisation (one decimal; Δ in **pp**) |
-| Tick health / mode / count / missed | Same Trace Health (TICK) summary as Statistics |
-
-Each row shows Baseline A, Candidate B, and **Δ** (signed difference A − B). A compact change-bar chart highlights the largest Summary shifts (Candidate B − Baseline A).
-
-**Top Tasks** — top 10 user tasks by CPU% from each trace, unioned by display name (`Name[id]`). After the union, CPU% is looked up from the **full** dataset on each side. Headers are **CPU A (%)** / **CPU B (%)** / **Δ (pp)**. **—** means the task is absent from that trace, not that it fell outside the top 10.
-
-**Core Util** — per-core utilisation % (IDLE/TICK excluded), A compared with B with Δ (**Util A (%)** / **Util B (%)** / **Δ (pp)**). A paired bar chart shows Baseline A (blue) above Candidate B (purple) for each core.
-
-**Execution** / **Blocking** / **Inter-Arrival** — top tasks by sample count with Runs/Gaps, Avg, Max, and Δ (aligned with the Statistics metric tables).
-
-**Core Migrations** — same columns as the Statistics panel, compared side-by-side. The dialog defaults to the **ten largest count changes** and three views (**Count & rate**, **Dwell & ping**, **Cores**), plus **Changed only**, **Regressions only** (Candidate B has more migrations), **Show all**, a task-family filter (`QP`, `CS`, …), and **Sort |Δ|** / **Sort relative**. A migration Δ heatmap (and HTML export) shows the largest count changes. HTML export still includes every column.
-
-| Column | Meaning |
-|--------|---------|
-| **Task** | Display name (`Name[id]`) |
-| **Migr A** / **B** | Migration count in scope for that trace |
-| **Δ** | Difference (Baseline A − Candidate B) |
-| **Rate A** / **B** | Migration rate label (`/s` and `/tick`) per trace |
-| **Rate Δ** | Signed difference of migrations per second of on-CPU time (A − B) |
-| **Dwell A** / **B** | Average on-CPU slice duration per trace |
-| **Dwell Δ** | Signed difference of average dwell time (A − B) |
-| **Ping A** / **B** | Ping-pong count in each trace |
-| **Cores A** / **B** | Distinct cores used in scope |
-| **Primary A** / **B** | Primary core and % of on-CPU time |
-
-**Preemption** / **Sync** — victim totals and sync-object aggregates (holds, issues, lock-bounce / affinity violations, mutex/sem/queue counts).
-
-**Response** — per-task heuristic response P99 (ready→completion from adjacent slices) with A / B / Δ. A diverging chart shows Candidate B − Baseline A: improvements to the left, regressions to the right. Summary **Response P99 (worst task)** names the task responsible on each side.
-**Mutex** — per-task mutex-wait totals.
-**Shared Patterns** — compares recurring anomaly patterns reported for both traces.
-**Trends** — one row per open tab (tasks, migrations, load balance, tick health, span).
-**Deadline misses** on Summary use the same **Settings → Display** task-deadline map as Statistics. When no deadlines are configured, `0` means that no configured deadline was evaluated; it is not proof that the workload met an unspecified deadline.
-
-Use this to compare builds, configurations, or runs of the same workload without merging traces manually.
-
-<a id="use-case-tickful-vs-tickless-performance-and-context-switches" name="use-case-tickful-vs-tickless-performance-and-context-switches">&#x200B;</a>
-#### Use case: tickful compared with tickless (performance and context switches) ![](../images/readme/h5.svg)
-
-Capture the **same workload** twice — once with a fixed tick (`configUSE_TICKLESS_IDLE = 0`) and once with FreeRTOS **tickless idle** (`= 1`) — then use **Trace Compare…** to measure scheduler cost and application latency.
-
-**Sample pair:** [`tracedata/tickless-8cores.zip`](../tracedata/tickless-8cores.zip) (8-core demo; members `tickful-8cores.btf` + `tickless-8cores.btf`).
-Opening the zip in the GUI loads both as tabs; the headless CLI accepts the zip as a single compare input.
-
-**Capture (demo firmware)**
-
-```bash
-# Fixed tick
-make CORES=8 TICKLESS=0 run
-cp tracedata/trace.btf tracedata/tickful-8cores.btf
-
-# Tickless idle
-make CORES=8 TICKLESS=1 run
-cp tracedata/trace.btf tracedata/tickless-8cores.btf
-
-# Optional: pack for GUI multi-tab open / CLI compare
-zip -j tracedata/tickless-8cores.zip \
-    tracedata/tickful-8cores.btf tracedata/tickless-8cores.btf
-```
-
-Keep STI **TICK** enabled on both builds and use the same suite / duration so Δ is meaningful.
-
-**Compare in the UI**
-
-1. Open the pair: `python builds/btf_viewer.py ../tracedata/tickless-8cores.zip` (two tabs), or open the two `.btf` files separately.
-2. Optionally place matching cursor windows on the same busy (or idle) phase in each tab and enable **Limit to each tab's cursor range**.
-3. Toolbar **Compare** → set Trace A / B labels (for example, Tickful / Tickless).
-
-**What to read for performance and context switches**
-
-| Compare tab / row | Why it matters |
-|-------------------|----------------|
-| Summary → **Context switches** | Primary scheduler-activity cost between tick policies |
-| Summary → **Tick mode** / **Tick count** / **Tick health** | Confirms config; tickful should favour lower CV when idle stretches dominate |
-| Summary → **Core gap avg/max**, **Load Balance Score** / **σ** | Idle/busy structure and SMP balance |
-| Summary → **Migrations** | Whether tick wake pattern changes cross-core bouncing |
-| **Execution** (Max / p95) | Longest observed slices and CPU-share shifts |
-| **Blocking** (Max / p95) | Response-time impact under each policy |
-| **Preemption** | Peer interference / tick-driven preemption differences |
-| **Top Tasks** / **Core Util** | Who absorbs tick or wake-up overhead |
-
-**CLI**
-
-```bash
-# Zip with two .btf members (archive-root order → Trace A, Trace B)
-python builds/btf_viewer.py compare ../tracedata/tickless-8cores.zip \
-    -o /tmp/tick-policy.html --format html \
-    --name-a Tickful --name-b Tickless
-
-# Or two paths; optional shared busy/idle window (# timeScale units)
-python builds/btf_viewer.py compare \
-    ../tracedata/tickful-8cores.btf ../tracedata/tickless-8cores.btf \
-    -o /tmp/tick-policy-busy.html \
-    --name-a Tickful --name-b Tickless \
-    --lo 1464000 --hi 1764000
-```
-
-**Example Summary** (`tickless-8cores.zip`, full-trace scope, Baseline A = Tickful, Candidate B = Tickless, Δ = A − B):
-
-| Metric | Tickful | Tickless | Δ |
-|--------|--------:|---------:|--:|
-| Context switches | 31,414 | 31,620 | −206 |
-| Migrations (total) | 19,018 | 18,440 | +578 |
-| Tick count | 2,561 | 2,611 | −50 |
-| Load Balance Score | 95 % | 95 % | ≈0 |
-| Span | 2.421 s | 2.444 s | −23 ms |
-
-On a **full** stress-suite capture (high core util), context-switch and tick counts can stay close. Tick policy matters most in **idle-heavy** windows.
-Scope cursors (or `--lo`/`--hi`) around an idle phase (for example, demo test 11) when measuring power-oriented tickless gains; keep a busy CS window when checking that latency budgets still hold.
-
-> **Known limitation of the bundled SMP sample:** in `tickless-8cores.zip`, test 11's TICK STI still fires about every 1 ms in both captures, so the tickless trace does not show the expected wider gaps.
-In the FreeRTOS kernel revision used by this sample, `prvGetExpectedIdleTime()` returns zero when more than one task is ready at idle priority. Under this SMP configuration, the per-core IDLE tasks remain in the ready list while running, so tickless idle does not engage as expected. This is a limitation of the sample's kernel/configuration combination, not evidence of a BTF capture or BTFViewer error. Do not generalize this result to every FreeRTOS SMP version or configuration.
-
-**Interpretation**
-
-| Observation | Typical reading |
-|-------------|-----------------|
-| Tickless: **TICKLESS** mode / higher CV; tickful: **TICK**, CV ≪ 5 % (often clearer in idle-scoped windows) | Configurations captured correctly |
-| Context switches ↓ on tickless in idle-heavy windows | Expected — suppressed idle ticks reduce scheduler wake-ups |
-| Context switches similar on a fully busy CS phase | Tick policy has little effect when cores never idle |
-| Blocking / Execution Max worse on one side | Prefer that policy only if the Δ fits latency budgets |
-| Migrations ↑ with one policy | Re-check affinity; tick wake pattern can change placement |
-
-Choose **tickless** when idle power matters and the matched busy- and idle-window comparisons remain within the required latency and scheduling budgets.
-Choose **tickful** only when the measured candidate results better satisfy those requirements; a `GOOD` Trace Health label alone is not a performance verdict.
-Longer walkthrough: [WORKFLOWS.md §5.2](WORKFLOWS.md#52-compare-two-builds).
-
-**Find → Migrations**: lists migration boundary times; `F3` / `Shift+F3` jump between them (Desktop + Web).
-
----
+Use at least several comparable runs when normal run-to-run variation is unknown. Trace Compare shows an observed difference between two captures; it does not by itself perform a statistical significance test or prove that a code change caused the difference.
 
 ## Documentation navigation
 
-| Document | Question answered |
+| Document | Purpose |
 |---|---|
-| [README.md](README.md) | How do I use BTFViewer? |
-| [WORKFLOWS.md](WORKFLOWS.md) | How do I diagnose a problem? |
-| [STATISTICS.md](STATISTICS.md) | What does this measurement mean? |
-| [AI.md](AI.md) | How does AI-assisted investigation work? |
+| [README.md](README.md) | Installation, interface, and general operation |
+| [WORKFLOWS.md](WORKFLOWS.md) | Step-by-step investigation workflows |
+| [STATISTICS_zh-TW.md](STATISTICS_zh-TW.md) | Traditional Chinese version of this reference |
+| [AI.md](AI.md) | AI-assisted investigation |

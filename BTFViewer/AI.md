@@ -28,6 +28,23 @@ flowchart TD
 
 The key rule is simple: **do not jump from a finding directly to a mitigation**. Scope the incident, investigate the cause, verify the evidence, then experiment and compare.
 
+### Beginner essentials
+
+The AI Assistant does not replace trace analysis. It helps you move through it in a consistent order. These terms are used throughout the panel and this guide:
+
+| Term | Meaning |
+| --- | --- |
+| **Analysis Finding** | A deterministic rule or statistic that points to something worth checking. It is a clue, not a confirmed root cause. |
+| **Scope** | The trace region used for Statistics, Findings, and AI evidence. It may be the full trace or the C1–Cn cursor range. |
+| **Filter** | A task, core, or migration restriction applied inside the current Scope. A visual highlight alone is not a Filter. |
+| **Evidence** | A measured value, trace event, timestamp, comparison row, or tool result that can be checked in BTFViewer. |
+| **Hypothesis** | A possible explanation. It remains unconfirmed until supporting evidence is checked and reasonable alternatives are tested. |
+| **Tool action** | A request from the AI to query evidence or operate the viewer. Read-only queries run immediately; viewer-changing actions wait for **Apply** by default. |
+| **Baseline / Candidate** | Comparable traces captured before and after a change. Trace Compare measures their differences. |
+| **What-if / Optimize** | Heuristic estimates used to choose an experiment. They are not measured results. |
+
+For a first trace, open **Analysis**, select the highest-priority relevant finding, confirm it in the named Statistics section, and set C1–Cn around the incident when possible. Then open **AI Assistant** and choose **Start Investigation** or **Investigate**. Follow its evidence links, use **Verify finding**, and only then try **What-if** or **Optimize**. After changing the system, capture a new trace and use **Compare**.
+
 ## Contents
 
 ### User guide
@@ -39,7 +56,7 @@ The key rule is simple: **do not jump from a finding directly to a mitigation**.
 5. [Understanding AI results](#understanding-ai-results)
 6. [Configuration, models, and privacy](#configuration-models-and-privacy)
 7. [AI tools reference](#ai-tools-reference)
-8. [Desktop and web behavior](#desktop-and-web-behavior)
+8. [Viewer behavior](#viewer-behavior)
 9. [Troubleshooting](#troubleshooting)
 10. [Opening the web app from `file://`](#opening-the-web-app-from-file)
 
@@ -53,8 +70,11 @@ The key rule is simple: **do not jump from a finding directly to a mitigation**.
 16. [Implementation notes](#implementation-notes)
 17. [Diagrams](#diagrams)
 
+Context-sensitive Help can use the same fragments in both language versions: `#ai-topic-<topic-id>` for a major topic and `#ai-action-<action-id>` for a user action. Existing legacy anchors remain available for older links.
+
 ---
 
+<a id="ai-topic-overview" name="ai-topic-overview">&#x200B;</a>
 <a id="overview" name="overview">&#x200B;</a>
 
 ## Overview
@@ -92,28 +112,35 @@ AI can explain evidence, find correlations, rank possible causes, challenge assu
 
 ### What the panel does
 
-- **Start Investigation** runs **Auto investigate** when the log is empty.
+- Open the **AI Assistant** panel from the panel tabs or **Ctrl+K**. If it is hidden, enable **Settings → Panels → AI Assistant panel**.
+- An empty panel shows the current **Trace**, **Scope**, and **Filters**, a question box, and actions grouped by purpose. **Start Investigation** begins a guided investigation from the available findings.
 - The stepper tracks **Triage → Scope → Investigate → Verify → Experiment → Compare**. Select a completed stage to return to its output.
-- **Investigate**, **Root cause**, **Verify finding**, **Auto investigate**, **What-if**, **Optimize**, and **Diagnostic report** display an Investigation plan.
-- **Clear** removes the conversation, resets usage, and clears the current investigation.
+- Common actions include **Analysis Findings**, **Triage findings**, **Investigate**, **Explain region**, **Verify finding**, **Auto investigate**, **Task profile**, **What-if**, **Optimize**, and **Diagnostic report**. Specialist actions cover latency, CPU usage, migration, load balance, TICK health, priority inversion, and deadline budgets.
+- The header provides **Clear**, **Language…**, and **Settings…**. **Clear** removes the conversation, usage summary, and current investigation state.
 - The usage bar shows **Context: Compact · 4.6k tok · 3 tools · 12s** (mode, tokens, tools, and model time). **Settings → AI → Context** chooses Compact, Balanced (default), or Full evidence.
-- A non-empty `investigation_session` restores after restart only when the log still has a user or assistant turn. An empty or cleared log does not restore a Current Issue card.
-- Read-only tools and `export_report` / `export_investigation` run immediately. GUI-changing actions wait for **Apply** unless **Auto-apply GUI actions** is enabled. Desktop exports open a save dialog; the web app downloads the file.
+- A non-empty investigation can be restored by the viewer. Clearing the conversation also clears the saved investigation state.
+- Read-only tools and report exports run immediately. Viewer-changing actions appear as tool cards and wait for **Apply** or **Skip** unless **Auto-apply GUI actions** is enabled. Applied viewer actions can be undone.
 
 Toolbar **Compare** becomes available when at least two traces are open. **Query with AI…** sends the Trace Compare tables rather than the current Findings. **Save as baseline** and **Score vs baseline** use the same stored profile as `baseline_score`. **Ctrl+K** provides quick access to Analysis, AI, Compare, workspace presets, and Inspect task.
+
+<a id="ai-topic-scope" name="ai-topic-scope">&#x200B;</a>
 
 ### Scoping an event or region
 
 | Entry point | Scope |
 | --- | --- |
+| **Analysis Findings → Investigate / Explain / Verify / Auto investigate** | The selected finding and its recorded evidence |
 | Timeline segment → **Ask AI about this event** | The selected task, core, and segment around `jump:TIME` |
 | Timeline → **Explain this region with AI** | Available with at least two cursors; uses C1–Cn |
 | AI panel → **Explain region** | Uses C1–Cn when available; otherwise uses full-trace Findings |
+| Statistics distribution → **Query with AI…** | The selected task, metric, and samples displayed by the plot |
+| Trace Compare → **Query with AI…** | The comparison tables for the two selected traces |
 
 Enable **Limit to C1–Cn** when diagnosing a phase-specific issue. The prompt then includes `Cursor region window: jump:lo … jump:hi`, and every cited `jump:TIME` should remain inside that interval.
 
-AI context also carries the same **Filter** and **Selection** representation shown in the status bar and Legend (Task Filter, Core Filter, Migration Filter, and current Selection). Highlight remains visual-only and is not treated as a Filter. Cross-surface Evidence Navigation and Ask-AI-from-Findings expansion remain later workflows; use toolbar **Analysis → Investigate** for the non-AI Statistics jump.
+AI context also carries the same **Filter** and **Selection** representation shown in the status bar and Legend (Task Filter, Core Filter, Migration Filter, and current Selection). Highlight remains visual-only and is not treated as a Filter. Use **Analysis → Investigate** when you want to open the supporting Statistics section without asking the AI.
 
+<a id="ai-topic-workflow" name="ai-topic-workflow">&#x200B;</a>
 <a id="getting-started" name="getting-started">&#x200B;</a>
 
 ## Getting started
@@ -167,6 +194,41 @@ Do not ask for a fix before the timeline supports the finding.
 Empty Statistics or the wrong scope can produce an answer that sounds confident but has weak evidence.
 
 Prefer built-in templates. They already use the expected metrics and units.
+
+<a id="ai-topic-actions" name="ai-topic-actions">&#x200B;</a>
+
+### Built-in actions
+
+Choose an action by the question you need to answer. The link in the first column is stable and can be used by context-sensitive Help.
+
+| Action | Use it when | What it provides |
+| --- | --- | --- |
+| <a id="ai-action-findings" name="ai-action-findings"></a>**Analysis Findings** | You need a measured starting point | The current deterministic findings and their supporting Statistics sections |
+| <a id="ai-action-triage" name="ai-action-triage"></a>**Triage findings** | Several findings compete for attention | A priority order and the first evidence to inspect |
+| <a id="ai-action-investigate" name="ai-action-investigate"></a>**Investigate** | A finding or symptom is selected | Hypotheses, related evidence, missing checks, and a next step |
+| <a id="ai-action-explain_region" name="ai-action-explain_region"></a>**Explain region** | C1–Cn surrounds an incident | An explanation limited to that region, its tasks, events, and Statistics |
+| <a id="ai-action-verify" name="ai-action-verify"></a>**Verify finding** | A possible cause needs testing | Supporting and contradictory evidence, alternatives, and a verdict |
+| <a id="ai-action-root_cause" name="ai-action-root_cause"></a>**Root cause** | A likely cause or affected task is already known | A causal, correlated, or temporal chain only as far as evidence supports it |
+| <a id="ai-action-explain_finding" name="ai-action-explain_finding"></a>**Explain finding** | A finding's wording or significance is unclear | A quick, technical, or deep explanation tied to that finding |
+| <a id="ai-action-auto_investigate" name="ai-action-auto_investigate"></a>**Auto investigate** | You want the guided workflow to select the next checks | A staged investigation that gathers evidence and stops when more data is needed |
+| <a id="ai-action-task_profile" name="ai-action-task_profile"></a>**Task profile** | One task is the focus | CPU, execution tail, blocking, period, migration, synchronization, and priority context |
+| <a id="ai-action-latency" name="ai-action-latency"></a>**Highest latency** | Long response, blocking, dispatch, or execution episodes matter | The largest relevant tails and links to their evidence |
+| <a id="ai-action-wcet" name="ai-action-wcet"></a>**WCET / hot CPU** | Maximum observed execution or high CPU use is suspected | Observed maxima and CPU concentration; not a proof of theoretical WCET |
+| <a id="ai-action-migrations" name="ai-action-migrations"></a>**Migration thrash** | A task moves repeatedly between cores | Migration count, rate, dwell, ping-pong, placement, and affinity evidence |
+| <a id="ai-action-balance" name="ai-action-balance"></a>**Core balance** | Core loading appears uneven | Per-core utilization, Task × Core placement, and load over time |
+| <a id="ai-action-tick" name="ai-action-tick"></a>**Tick health** | TICK timing or large gaps look suspicious | Regularity, tickless behavior, gap evidence, and the missed-tick estimate |
+| <a id="ai-action-priority" name="ai-action-priority"></a>**Priority inversion** | Blocking and priority behavior may interact | Priority boosts, L/M/H patterns, mutex evidence, and preemption checks |
+| <a id="ai-action-deadlines" name="ai-action-deadlines"></a>**Deadline / budget** | Tasks have timing or CPU budgets | Measured values against configured or supplied thresholds |
+| <a id="ai-action-compare" name="ai-action-compare"></a>**Trace Compare** | Two comparable traces are open | Measured A/B deltas and the primary regression classification |
+| <a id="ai-action-what_if" name="ai-action-what_if"></a>**What-if** | One concrete change is worth estimating | A heuristic before/after estimate that must be verified with a new trace |
+| <a id="ai-action-optimize" name="ai-action-optimize"></a>**Optimize** | A likely cause is known and several experiments are possible | Ranked mitigation experiments with evidence, expected effect, and risk |
+| <a id="ai-action-diagnostic_report" name="ai-action-diagnostic_report"></a>**Diagnostic report** | The investigation is ready to share | A structured summary of scope, findings, evidence, conclusion, alternatives, and next action |
+
+Other stable entry-point links are `#ai-action-ask_event`, `#ai-action-query_distribution`, and `#ai-action-query_compare`:
+
+- <a id="ai-action-ask_event" name="ai-action-ask_event"></a>**Ask AI about this event** uses one selected timeline segment.
+- <a id="ai-action-query_distribution" name="ai-action-query_distribution"></a>**Query with AI…** from a distribution plot uses the displayed samples.
+- <a id="ai-action-query_compare" name="ai-action-query_compare"></a>**Query with AI…** from Trace Compare uses the selected comparison tables.
 
 <a id="investigation-workflows" name="investigation-workflows">&#x200B;</a>
 
@@ -267,7 +329,7 @@ These examples show how to apply the workflow to common RTOS trace problems.
 | Drift vs saved baseline       | Baseline profile stored (rc / localStorage)    | `baseline_score`                                                                                            | Flags `|z|>2`; re-capture if needed                                                                    |
 | Rank all open traces          | ≥2 loaded tabs                                 | `analyze_traces`                                                                                            | Best tab vs Migrations / LB / missed ticks                                                             |
 | Write-up for a review         | Cause already confirmed                        | **Diagnostic report** → `generate_report` → `export_report` / `export_investigation`                        | Saved HTML/CSV/JSON; evidence times bookmarked                                                         |
-| CI gate vs baseline           | Desktop CLI                                    | [`analyze`](#cli-regression-gate) with `--fail-on-regression` (optional `--ai`)                             | Exit code + Markdown narrative                                                                         |
+| CI gate vs baseline           | Headless CLI                                   | [`analyze`](#cli-regression-gate) with `--fail-on-regression` (optional `--ai`)                             | Exit code + Markdown narrative                                                                         |
 
 
 ### Worked examples
@@ -322,6 +384,7 @@ Phrase changes as **pin / affinity / priority / mutex / migration** so the simul
 ---
 
 
+<a id="ai-topic-results" name="ai-topic-results">&#x200B;</a>
 <a id="understanding-ai-results" name="understanding-ai-results">&#x200B;</a>
 
 ## Understanding AI results
@@ -355,7 +418,7 @@ The Evidence & Validation panel shows:
 - **Checks**, alternative explanations, **Missing evidence**, and one **Next action**;
 - **Investigation details** for quality band, cost, tool reasons, and trees.
 
-The Evidence Quality band (under Investigation details) is a diagnostic heuristic. It is **not a probability**.
+The Evidence Quality band (under Investigation details) is a diagnostic heuristic. It is **not a probability**. Timed `jump:TIME` rows gathered by earlier tools (`investigate`, `correlate_events`, `find_critical_path`) are kept when later planner tools (`rank_root_causes`, `challenge_conclusion`, …) publish only a verdict — otherwise Start Investigation would show Evidence Score **0%** after a strong mid-run score.
 
 After the final reply, the host validator checks task names and timestamps. It flags unknown task names and timestamps outside the cursor window.
 
@@ -367,6 +430,7 @@ Named Statistics pages the templates cite: Timeline Anomalies, Worst Events, Per
 
 <a id="workflows-and-use-cases" name="workflows-and-use-cases">&#x200B;</a>
 
+<a id="ai-topic-configuration" name="ai-topic-configuration">&#x200B;</a>
 <a id="configuration-models-and-privacy" name="configuration-models-and-privacy">&#x200B;</a>
 
 ## Configuration, models, and privacy
@@ -397,9 +461,9 @@ Importing a preset fills **Settings → AI**, including any checkbox flags defin
 | --- | --- |
 | Authentication | none / API key / Sign in, per preset |
 | Model picker | Refresh the served id list, then pick a model |
-| Self-signed TLS | Desktop **Allow self-signed TLS** skips certificate checks for that preset |
+| Self-signed TLS | **Allow self-signed TLS** is intended only for a trusted private endpoint; normal certificate verification is safer |
 
-API keys use the same precedence on Desktop and Web: Settings → AI first, then `OPENAI_API_KEY`, then `GEMINI_API_KEY`, then `OLLAMA_API_KEY`.
+When the viewer host exposes environment variables, API keys use this precedence:
 
 1. Key entered in **Settings → AI**
 2. `OPENAI_API_KEY`
@@ -407,6 +471,8 @@ API keys use the same precedence on Desktop and Web: Settings → AI first, then
 4. `OLLAMA_API_KEY`
 
 A local Ollama endpoint normally needs no key. For a custom endpoint, enter its key in the corresponding preset. Live `ai-test` XML may use `<api-key env="VAR">`. See [README → API keys](README.md#ai-api-keys) for complete examples.
+
+<a id="ai-topic-models" name="ai-topic-models">&#x200B;</a>
 
 ### Choose a model
 
@@ -437,15 +503,13 @@ The recommendations below are based on the 17-case run recorded on 2026-08-19. S
 
 Small local models may skip native tool calls and emit a fenced `btftool` block instead. The viewer renders the same GUI cards either way, but investigation-heavy templates need a tool-capable model such as `qwen3.5:9b` to chain calls reliably.
 
+<a id="ai-topic-privacy" name="ai-topic-privacy">&#x200B;</a>
+
 ### Credential storage
 
+The HTML viewer saves AI settings in local browser storage for convenience. Treat a saved API key as locally stored application data, not as a password vault. Do not save a long-lived key on a shared or untrusted machine. Prefer a short-lived, least-privilege key when the provider supports one; local Ollama normally requires no key.
 
-|                   | Desktop                                                                                         | Web                                                       |
-| ----------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| Where keys live   | `[ai] *_api_key` in `btf_viewer.rc` next to the viewer                                          | Browser `localStorage` (`btf-viewer-settings-v1`)         |
-| At rest           | Encrypted as `enc1:…` (machine-bound; not portable to another host)                             | **Plaintext** in localStorage — treat as convenience only |
-| Sent to the model | Never as a chat field; only as the HTTP `Authorization` / API header to the configured endpoint | Same                                                      |
-| Clear             | Settings → AI → clear key, or delete `btf_viewer.rc` AI keys                                    | Settings → Reset / clear site data                        |
+The key is not inserted into the chat prompt. It is used only in the authentication header sent to the configured endpoint. Clear the key in **Settings → AI**, or use **Settings → Reset** / clear the viewer's site data when the machine changes owner or purpose.
 
 
 ### What leaves the machine
@@ -469,6 +533,7 @@ Small local models may skip native tool calls and emit a fenced `btftool` block 
 
 Prefer local Ollama for confidential traces. Redact sensitive task names in annotations before using a cloud preset.
 
+<a id="ai-topic-context" name="ai-topic-context">&#x200B;</a>
 <a id="context-mode-token-usage" name="context-mode-token-usage">&#x200B;</a>
 
 ### Context mode (token usage)
@@ -493,11 +558,12 @@ Live `ai-test` defaults to Full evidence. Use **`--compare-context`** to measure
 ---
 
 
+<a id="ai-topic-tools" name="ai-topic-tools">&#x200B;</a>
 <a id="ai-tools-reference" name="ai-tools-reference">&#x200B;</a>
 
 ## AI tools reference
 
-Read-only evidence tools and export tools (`export_report`, `export_investigation`) run immediately; GUI-changing tools wait for **Apply** unless **Auto-apply GUI actions** is on. Names and parameters are in [Complete GUI tool reference](#complete-gui-tool-reference) below.
+The current implementation exposes 60 tools. Evidence queries, investigation-state tools, and exports run immediately. The nine viewer-changing tools wait for **Apply** unless **Auto-apply GUI actions** is on: `set_cursors`, `zoom_to_range`, `highlight_task`, `set_view_mode`, `open_corridor_inspector`, `add_annotation`, `bookmark_finding`, `clear_marks`, and `reset_view`. Names and parameters are in [Complete tool reference](#complete-gui-tool-reference) below.
 
 It is easier to understand the AI tools by **purpose** than by function name.
 
@@ -522,16 +588,17 @@ flowchart TD
 
 ### Apply, Skip, and Undo
 
-Tools fall into two behavioral classes:
+Tools fall into three behavioral classes:
 
 
-| Class                        | Behavior                                                                                | Examples                                                                                                       |
-| ---------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **Read-only evidence tools** | Run immediately; they do not change the viewer                                          | `query_raw_metric`, `search_timeline`, `investigate`, `correlate_events`, `find_critical_path`, `verify_claim` |
-| **GUI-changing tools**       | With **Auto-apply GUI actions** off (default), the batch waits for **Apply** / **Skip** | `set_cursors`, `zoom_to_range`, `highlight_task`, `set_view_mode`, `add_annotation`, `bookmark_finding`        |
+| Class | Behavior | Examples |
+| --- | --- | --- |
+| **Evidence queries** | Run immediately and return measured or derived evidence without changing the timeline view | `query_raw_metric`, `search_timeline`, `investigate`, `correlate_events`, `find_critical_path`, `verify_claim` |
+| **Investigation state and export** | Run immediately; may update hypotheses, memory, experiment records, or save a file, but do not wait for an Apply card | `manage_hypotheses`, `record_experiment_outcome`, `investigation_memory`, `close_investigation`, `export_report`, `export_investigation` |
+| **Viewer-changing tools** | With **Auto-apply GUI actions** off (default), the batch waits for **Apply** or **Skip** | `set_cursors`, `zoom_to_range`, `highlight_task`, `set_view_mode`, `open_corridor_inspector`, `add_annotation`, `bookmark_finding`, `clear_marks`, `reset_view` |
 
 
-Several tool calls may arrive in one model turn and are applied as one batch. **Undo last actions** restores zoom / view / highlight / inspector / marks; `Ctrl/Cmd+Z` also reverts cursors and marks. Export tools still open a save dialog.
+Several viewer-changing calls may arrive in one model turn and are applied as one batch. **Undo last actions** restores zoom, view mode, highlight, inspector state, cursors, and marks. Export tools use the normal file-saving behavior and do not require **Apply**.
 
 ### 1. Scope & navigate — “Where should I look?”
 
@@ -683,7 +750,7 @@ HTML `export_report` builds a **diagnostic report**: executive summary (status +
 
 <a id="complete-gui-tool-reference" name="complete-gui-tool-reference">&#x200B;</a>
 
-### Complete GUI tool reference
+### Complete tool reference
 
 The table below is the exhaustive schema reference. Use it when implementing, debugging, or explicitly steering tool calls.
 
@@ -725,7 +792,7 @@ The table below is the exhaustive schema reference. Use it when implementing, de
 | `explain_finding` | optional `finding_id`, `level` (`quick` / `technical` / `deep`)                                                                    | Read-only: explain one Analysis Finding at the chosen depth (host-side; uses finding text plus hypotheses)                                                                                                                                                                                                                           |
 | `interpret_query` | `question`                                                                                                                         | Read-only: turn a free-form question into an explicit investigation mode/scope before other tools run                                                                                                                                                                                                                                |
 | `validate_experiment` | optional `expected`, `actual` (metric → signed percent)                                                                            | Read-only: compare expected experiment deltas with actual A vs B / what-if results (`VALIDATED` / `PARTIALLY VALIDATED` / `DISPROVED`)                                                                                                                                                                                               |
-| `manage_hypotheses` | `hypothesis_id`, `status` (`supported` / `possible` / `rejected` / `need_evidence`); optional `reason`, `finding_id`               | Read-only: mark one investigation hypothesis status                                                                                                                                                                                                                                                                                  |
+| `manage_hypotheses` | `hypothesis_id`, `status` (`supported` / `possible` / `rejected` / `need_evidence`); optional `reason`, `finding_id`               | Immediate: update one hypothesis in the current Investigation Case                                                                                                                                                                                                                                                                   |
 | `plan_investigation` | optional `question`, `finding_id`                                                                                                  | Read-only: rank hypotheses and the cheapest tool sequence                                                                                                                                                                                                                                                                            |
 | `suggest_scope` | optional `question`                                                                                                                | Read-only: recommend task / related tasks / time window                                                                                                                                                                                                                                                                              |
 | `detect_contradictions` | optional `hypothesis`, `metrics`                                                                                                   | Read-only: verdict SUPPORTED / CONTRADICTED / INSUFFICIENT                                                                                                                                                                                                                                                                           |
@@ -736,7 +803,7 @@ The table below is the exhaustive schema reference. Use it when implementing, de
 | `regression_localize` | optional `label_a`, `label_b`                                                                                                      | Read-only: localize A vs B inflation to a task and region                                                                                                                                                                                                                                                                            |
 | `build_causal_chain` | (none)                                                                                                                             | Read-only: causal / correlated / temporal edges (never silent causation)                                                                                                                                                                                                                                                             |
 | `generate_experiment_plan` | optional `task`, `limit`                                                                                                           | Read-only: ranked firmware / what-if experiments                                                                                                                                                                                                                                                                                     |
-| `record_experiment_outcome` | optional `change`, `predicted`, `actual`, `quality`                                                                                | Read-only: store outcome for later similar-case matching                                                                                                                                                                                                                                                                             |
+| `record_experiment_outcome` | optional `change`, `predicted`, `actual`, `quality`                                                                                | Immediate: store an experiment outcome for later similar-case matching                                                                                                                                                                                                                                                               |
 | `score_investigation` | optional `tools_run`, `conclusion`, `confidence`, `elapsed_s`                                                                      | Read-only: evidence efficiency, cost, false-confidence, falsification, scope, stop                                                                                                                                                                                                                                                   |
 | `analyze_temporal_causality` | optional `task`                                                                                                                    | Read-only: happens-before chain from Findings times                                                                                                                                                                                                                                                                                  |
 | `build_task_dependency_graph` | optional `task`                                                                                                                    | Read-only: BTF wait/preempt/migrate/PI graph; 2-hop neighborhood + upstream tasks                                                                                                                                                                                                                                                    |
@@ -744,9 +811,9 @@ The table below is the exhaustive schema reference. Use it when implementing, de
 | `rank_root_causes` | (none)                                                                                                                             | Read-only: rank causes from findings/hypotheses                                                                                                                                                                                                                                                                                      |
 | `verify_claim` | `claim`; optional `claim_type`, `subject`, `object`, `evidence`                                                                    | Read-only: SUPPORTED / PARTIAL / UNSUPPORTED                                                                                                                                                                                                                                                                                         |
 | `challenge_conclusion` | optional `conclusion`                                                                                                              | Read-only: alternatives and missing evidence                                                                                                                                                                                                                                                                                         |
-| `investigation_memory` | optional `action` (`recall` / `store`), `record`, `limit`                                                                          | Read-only: persist/recall similar cases                                                                                                                                                                                                                                                                                              |
+| `investigation_memory` | optional `action` (`recall` / `store`), `record`, `limit`                                                                          | Immediate: store or recall similar investigation cases                                                                                                                                                                                                                                                                               |
 | `cluster_incidents` | optional `window_ns`                                                                                                               | Read-only: time-proximity incident clusters                                                                                                                                                                                                                                                                                          |
-| `close_investigation` | optional `conclusion`, `confidence`                                                                                                | Read-only: close the case envelope                                                                                                                                                                                                                                                                                                   |
+| `close_investigation` | optional `conclusion`, `confidence`                                                                                                | Immediate: close the current Investigation Case with its conclusion and confidence                                                                                                                                                                                                                                                   |
 | `analyze_distribution` | optional `values`, `metric` (`auto` / `execution` / `blocking` / `priority_inheritance` / `tick`), `task`                          | Read-only: p50/p90/p95/p99/p99.9, stddev, CV, 3-sigma outlier rate. Statistics **Query with AI…** on a distribution chart harvests the open plot’s samples.                                                                                                                                                                          |
 | `analyze_periodicity` | optional `times`, `expected`, `source` (`auto` / `tick` / `sti` / `isr` / `timer` / `release`), `task`, `durations`                | Read-only: expected vs p50/p99/max, RMS and peak-to-peak jitter, kind                                                                                                                                                                                                                                                                |
 | `summarize_investigation_context` | optional `conclusion`, `tools_run`                                                                                                 | Read-only: compact investigation snapshot                                                                                                                                                                                                                                                                                            |
@@ -756,35 +823,28 @@ Models without native tool calling can emit a fenced `btftool` JSON block; the v
 
 <a id="desktop-vs-web" name="desktop-vs-web">&#x200B;</a>
 
-## Desktop and web behavior
+<a id="desktop-and-web-behavior" name="desktop-and-web-behavior">&#x200B;</a>
 
-BTFViewer Desktop and Web are intended to provide the **same AI investigation workflow, tool behavior, evidence model, and validation rules**. For normal use, there is no separate “Desktop workflow” or “Web workflow” to learn.
+<a id="viewer-behavior" name="viewer-behavior">&#x200B;</a>
 
-Use whichever frontend fits your environment:
+<a id="ai-topic-viewer" name="ai-topic-viewer">&#x200B;</a>
 
-- **Desktop** — convenient for local files, native save dialogs, and local/private AI endpoints.
-- **Web** — convenient when you want a browser-only viewer or a hosted/development deployment.
+## Viewer behavior
 
-The differences are mostly platform integration details rather than AI capabilities.
+BTFViewer uses one AI workflow and one set of controls. The user-facing behavior is:
 
+- the same six investigation stages, action templates, tools, Evidence & Validation view, and verification rules;
+- endpoint, model, authentication, Context mode, privacy, and auto-apply settings under **Settings → AI**;
+- report and investigation exports saved through the environment's normal download or save mechanism;
+- diagrams displayed inside the conversation;
+- networking and certificate rules enforced by the environment that opens the viewer.
 
-| Platform detail                                         | Desktop                                         | Web                                                                                  |
-| ------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------ |
-| AI tools, Investigation Case, Evidence panel, validator | Same behavior                                   | Same behavior                                                                        |
-| Task/event/region AI actions                            | Same behavior                                   | Same behavior                                                                        |
-| Model picker and endpoint configuration                 | Supported                                       | Supported                                                                            |
-| Reports / investigation export                          | Native save dialog                              | Browser download                                                                     |
-| In-chat diagrams                                        | Rendered in the desktop UI                      | Rendered as inline browser content                                                   |
-| Self-signed HTTPS endpoint                              | Can optionally allow self-signed TLS per preset | Browser/OS certificate policy still applies                                          |
-| Local `file://` launch                                  | Not applicable                                  | Cross-origin requests may be blocked; use the development/preview server when needed |
-
-
-> **User takeaway:** AI analysis should produce the same investigation and evidence on Desktop and Web. Platform-specific differences matter mainly when configuring endpoints, certificates, downloads, or browser networking.
-
-Detailed platform-specific setup problems are documented in **Troubleshooting** below rather than treated as separate AI features.
+If a local `file://` launch blocks an AI endpoint, use the development or preview server described below. This is a connection restriction, not a different AI workflow.
 
 ---
 
+
+<a id="ai-topic-troubleshooting" name="ai-topic-troubleshooting">&#x200B;</a>
 
 ## Troubleshooting
 
@@ -793,7 +853,7 @@ Detailed platform-specific setup problems are documented in **Troubleshooting** 
 | ----------------------------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Web: Failed to fetch / CORS                           | Browser blocked a cross-origin call (`file://` sends `Origin: null`) | Prefer `npm run dev` / `make preview` (both proxy Ollama), or see [Opening the web app from](#opening-the-web-app-from-file) `file://`                                                                                                                                                                           |
 | 401 / 403                                             | Missing or rejected key / origin                                     | Settings → AI → Sign in or API key (`OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`; local Ollama needs none)                                                                                                                                                                                             |
-| `CERTIFICATE_VERIFY_FAILED` / self-signed TLS         | Private CA or self-signed HTTPS gateway                              | Desktop: Settings → AI → **Allow self-signed TLS**. Web: trust the cert in the OS/browser, use `http://` on a private LAN, or use the Desktop app                                                                                                                                                                |
+| `CERTIFICATE_VERIFY_FAILED` / self-signed TLS         | Private CA or self-signed HTTPS gateway                              | Trust the certificate in the operating system/browser. For a trusted private endpoint only, use **Settings → AI → Allow self-signed TLS** when the host supports it, or use `http://` on a protected private network. |
 | Chat probe timed out / `The read operation timed out` | `GET /models` lists ids only; inference is slow or hung              | **Test connection** POSTs `/chat/completions` (non-streaming, 120s). Warm the model (`ollama run MODEL`) and retry. Debug with the curl probe below; if curl hangs too, the gateway's chat upstream is stuck. Try `"stream": true` if non-stream never returns. Lower context length on a VRAM-tight local host. |
 | Model not found                                       | Typed id is not served                                               | Refresh the Model list (or Test connection) and pick a served id from the dropdown, or `ollama pull` it                                                                                                                                                                                                          |
 | Gemini HTTP 400 `thought_signature`                   | Gemini 3 requires a thought blob on tool follow-ups                  | Retry the question — the viewer echoes Gemini thought signatures                                                                                                                                                                                                                                                 |
@@ -801,7 +861,7 @@ Detailed platform-specific setup problems are documented in **Troubleshooting** 
 | Raw `btftool` JSON instead of native tool calls       | Model lacks or skips function calling                               | The viewer renders the same cards. Select **Apply** or enable **Auto-apply GUI actions**. For reliable native calls, use a tool-capable model such as `qwen3.5:9b` or a supported cloud model.                                                                                                                |
 | Ask times out (over 120s) or stays on Waiting…        | Cold start, CPU offload, or VRAM spill                               | **Stop** (composer icon), warm with `ollama run MODEL`, retry. Use **Clear** between long threads. Smaller model or shorter Statistics scope if the Findings card is huge                                                                                                                                        |
 | Later turns ignore earlier facts                      | Chat history exceeded the context window                             | **Clear** on the AI bar, or **Analysis → Query with AI…** / toolbar **Compare → Query with AI…** for a fresh scoped prompt                                                                                                                                                                                       |
-| Need raw AI request/response dumps (Desktop)          | Debugging tool rounds / provider quirks                              | Settings → AI → **Log MCP messages to file** (off by default). Appends to `./ai_mcp_messages.log`; delete when finished                                                                                                                                                                                          |
+| Need raw AI request/response dumps                    | Debugging tool rounds / provider quirks                              | If the host provides **Settings → AI → Log MCP messages to file**, enable it only while debugging and delete `./ai_mcp_messages.log` when finished. |
 
 
 ### Test connection curl
@@ -824,7 +884,7 @@ curl -vk --max-time 180 \
 A page opened straight from disk sends `Origin: null`, which Ollama rejects with
 `403` — the browser then reports only `Failed to fetch`. Serving the app over
 http avoids this entirely (`npm run dev` / `make preview` proxy Ollama for you),
-and the Desktop app is not affected at all.
+This restriction applies to a browser page opened directly from the local filesystem.
 
 To keep using `file://`, allow every origin on the Ollama side:
 
@@ -853,7 +913,7 @@ local models; undo it with `launchctl unsetenv OLLAMA_ORIGINS` when done.
 
 ## CLI regression gate
 
-Desktop headless CI can compare a candidate trace to a baseline and optionally ask the configured AI for a short narrative:
+The headless CI mode can compare a candidate trace to a baseline and optionally ask the configured AI for a short narrative:
 
 Headless `analyze` with `--fail-on-regression`:
 
@@ -975,7 +1035,7 @@ Do not hard-code the model list into the runner. Copy [examples/ai/benchmark.xml
 </endpoint>
 ```
 
-`<api-key env="VAR">` reads the environment first, then any text inside the element. Omit the text (and do not commit secrets). `tls-verify` false, or `ai-test --insecure`, skips certificate checks on Desktop. `--models id1,id2` (or `make ai-test-context AI_MODELS=id1,id2`) selects a subset of `<model>` entries. A custom suite may mark models `optional="true"` so they are skipped when their API key is missing unless you name them in `--models` / `AI_MODELS`. For Ollama, list the ids you actually have pulled. Record the exact model identifier and runtime configuration.
+`<api-key env="VAR">` reads the environment first, then any text inside the element. Omit the text (and do not commit secrets). `tls-verify` false, or `ai-test --insecure`, skips certificate checks in the headless test client. `--models id1,id2` (or `make ai-test-context AI_MODELS=id1,id2`) selects a subset of `<model>` entries. A custom suite may mark models `optional="true"` so they are skipped when their API key is missing unless you name them in `--models` / `AI_MODELS`. For Ollama, list the ids you actually have pulled. Record the exact model identifier and runtime configuration.
 
 `--only-cases id1,id2` (or `make ai-test-context AI_CASES=id1,id2`) restricts scoring to specific `tests/ai` dataset case ids — handy for re-testing a few cases that returned `ERROR` (transient HTTP 429/503) without rerunning the whole suite.
 
@@ -1159,7 +1219,7 @@ flowchart TD
 
 ## Investigation Case
 
-Desktop and Web share one **Investigation Case** model (`btf-investigation-case`): question, scope (trace / C1–Cn / tasks / cores), hypotheses with status (**supported** / **possible** / **need evidence** / **rejected**), evidence graph, coverage, falsification checks, conclusion, and validation. Lockstep notes: [Implementation notes](#implementation-notes).
+BTFViewer uses one **Investigation Case** model (`btf-investigation-case`): question, scope (trace / C1–Cn / tasks / cores), hypotheses with status (**supported** / **possible** / **need evidence** / **rejected**), evidence graph, coverage, falsification checks, conclusion, and validation. See [Implementation notes](#implementation-notes).
 
 After each final assistant reply a host-side **validator** extracts `jump:TIME` and `Task[id]` claims and flags invented names or timestamps outside the cursor window. **Test connection** appends a **model capability** card (live chat / structured output / tool calling overlay on a 3B vs 7B+ heuristic). Headless eval:
 
@@ -1203,7 +1263,7 @@ flowchart TD
 | `regression_localize`         | A vs B deltas → task / region / likely mechanism                                                                                                                                                                |
 | `build_causal_chain`          | Edges tagged causal / correlated / temporal; disclaimer required                                                                                                                                                |
 | `generate_experiment_plan`    | Ranked pin / contention / priority experiments                                                                                                                                                                  |
-| `record_experiment_outcome`   | Persist outcome (Desktop `[ai] experiment_outcomes`, Web `localStorage`)                                                                                                                                        |
+| `record_experiment_outcome`   | Persist an outcome in the viewer's investigation storage                                                                                                                                                         |
 | `score_investigation`         | Phase 3 extras: `evidence_efficiency`, `investigation_cost`, `false_confidence`, `falsification_quality`, `scope_accuracy`, `stop_efficiency` (also spread into `score_benchmark_case`, with adversarial rates) |
 
 
@@ -1241,7 +1301,7 @@ flowchart TD
 | `rank_root_causes`                | Rank hypotheses or finding buckets                                                                           |
 | `verify_claim`                    | `SUPPORTED` / `PARTIAL` / `UNSUPPORTED` vs findings and cursors                                              |
 | `challenge_conclusion`            | Alternatives and missing evidence                                                                            |
-| `investigation_memory`            | Store/recall (Desktop `[ai] investigation_memory`, Web `localStorage`)                                       |
+| `investigation_memory`            | Store or recall cases from the viewer's investigation storage                                               |
 | `cluster_incidents`               | Group findings by time proximity                                                                             |
 | `close_investigation`             | Record conclusion and close the case                                                                         |
 | `analyze_distribution`            | p50 / p90 / p95 / p99 / p99.9, stddev, CV, 3-sigma outlier rate; BTF execution/blocking/PI/tick harvest      |
@@ -1278,7 +1338,7 @@ Do **not** add chat templates after `auto_investigate`. Next gains come from dee
 
 ## Implementation notes
 
-Technical notes for keeping Desktop and Web in lockstep. For user-facing Case and Evidence behavior, see [README → Investigation Case](README.md#investigation-case). For live-suite XML, see [Benchmark and evaluation suite](#benchmark-suite). Recorded scores are in [AI_BENCHMARK.md](AI_BENCHMARK.md).
+Technical notes for the shared viewer AI implementation. For user-facing Case and Evidence behavior, see [README → Investigation Case](README.md#investigation-case). For live-suite XML, see [Benchmark and evaluation suite](#benchmark-suite). Recorded scores are in [AI_BENCHMARK.md](AI_BENCHMARK.md).
 
 <a id="analysis-vs-ai-tools" name="analysis-vs-ai-tools">&#x200B;</a>
 
@@ -1298,11 +1358,11 @@ The shipped loop stays **Triage → Investigate → Verify → Correlate → Cri
 
 ### Shared Case / Evidence engines
 
-Desktop and Web share one Case, Evidence, planner, causal, tool, and mermaid implementation. After AI UI changes: `make -C BTFViewer bundle` and `make -C BTFViewer web`.
+The viewer uses one Case, Evidence, planner, causal, tool, and Mermaid implementation. After AI UI changes, rebuild the distributed viewer artifacts with the project build targets.
 
 **UI lockstep:** mode chips wrap. Primary templates are two rows: **Analysis Findings** / **Explain region** / **Investigate**, then **Auto investigate** + **More templates…**. Chip min-height 28px, disabled chips/menu items `#8a96a8`. Findings **Investigate…** uses the same outline style as the other Analysis footer buttons (not accent/primary). **More** templates use the same groups in a 2-column overlay. Findings **Save recipe…** and **Story…** stay on that dialog. Trace Compare opens from toolbar **Compare**, not the Statistics footer.
 
-The Desktop `ai-test` CLI and the Web offline benchmark share `tests/ai` fixtures (tracked `.btf` stubs + `dataset.json`). Live runs accept `--context-mode` and `--compare-context` (see [Context mode benchmarking](#context-mode-benchmarking)).
+The `ai-test` CLI and offline benchmark use the same `tests/ai` fixtures (tracked `.btf` stubs + `dataset.json`). Live runs accept `--context-mode` and `--compare-context` (see [Context mode benchmarking](#context-mode-benchmarking)).
 
 ### Validator
 
@@ -1323,7 +1383,7 @@ The host validator runs after the final reply. Prompting still forbids inventing
 
 ### Experiment close-out
 
-`validate_experiment` compares expected vs actual signed percents (`VALIDATED` / `PARTIALLY VALIDATED` / `DISPROVED`), updates open hypotheses, and offers **Save to knowledge** (`btfexp:save`). Empty `actual` is filled from the last Trace Compare refresh (including **Scope to cursors**) or `compare_performance` via `experiment_percents_from_compare`. Toolbar **Compare → Validate experiment…** closes the dialog and asks the model to call the tool with actuals omitted. Firmware-change capture remains a user step (new trace + toolbar **Compare**).
+`validate_experiment` compares expected vs actual signed percents (`VALIDATED` / `PARTIALLY VALIDATED` / `DISPROVED`), updates open hypotheses, and offers **Save to knowledge** (`btfexp:save`). Empty `actual` is filled from the last Trace Compare refresh (including **Limit to C1–Cn** when each tab has 2+ cursors) or `compare_performance` via `experiment_percents_from_compare`. Toolbar **Compare → Validate experiment…** closes the dialog and asks the model to call the tool with actuals omitted. Firmware-change capture remains a user step (new trace + toolbar **Compare**).
 
 ### Capability, cost, privacy, knowledge
 

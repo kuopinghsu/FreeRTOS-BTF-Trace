@@ -11,7 +11,7 @@ import {
 describe('evidenceNav', () => {
   it('exports glyph and Scope-preserving tooltip', () => {
     assert.equal(EVIDENCE_GLYPH, '\u2197')
-    assert.match(EVIDENCE_TOOLTIP, /Scope/)
+    assert.match(EVIDENCE_TOOLTIP, /Scope or Filters/)
   })
 
   it('parseEvidenceTimestamps handles units and jump:', () => {

@@ -474,7 +474,9 @@
           data-demo-target="toolbar_heatmap"
           :class="{ disabled: !heatmapEnabled }"
           :disabled="!heatmapEnabled"
-          title="Migration & Corridor Inspector — topology + timeline (multi-core traces only)"
+          :title="heatmapEnabled
+            ? 'Migration & Corridor Inspector — topology + timeline (multi-core traces only)'
+            : 'Open a multi-core trace first'"
           @click="heatmapEnabled && emit('showHeatmap')"
         >
           <svg
@@ -535,7 +537,9 @@
           data-demo-target="toolbar_analysis"
           :class="{ disabled: !analysisEnabled }"
           :disabled="!analysisEnabled"
-          title="Analysis Findings — heuristic load balance, WCET, blocking, thrashing, deadlines, tick, sync"
+          :title="analysisEnabled
+            ? 'Analysis Findings — heuristic load balance, WCET, blocking, thrashing, deadlines, tick, sync'
+            : 'Open a trace first'"
           @click="analysisEnabled && emit('showAnalysis')"
         >
           <svg
@@ -1011,7 +1015,6 @@ watch(
 .tb-btn:disabled {
   opacity: 0.38;
   cursor: not-allowed;
-  pointer-events: none;
 }
 .tb-btn-text {
   font-weight: 600;

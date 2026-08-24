@@ -268,6 +268,13 @@ describe('new compare builders', () => {
     assert.match(html, /Expand all/)
     assert.match(html, /Collapse all/)
     assert.match(html, /data-toc="expand"/)
+    assert.match(html, /detail-note/)
+    assert.match(html, /Search table/)
+    assert.match(html, /Show all/)
+    assert.match(html, /data-csv/)
+    assert.match(html, /toc-count/)
+    assert.match(html, /report-toc-lead/)
+    assert.match(html, /CPU and Migrations/)
   })
 
   it('exports summary change bars and migration heatmap in HTML', () => {

@@ -4,9 +4,9 @@
 
 ![BTFViewer AI 輔助分析](../images/btfviewer-ai.png)
 
-**BTFViewer 將 BTF trace 轉換成可查證的多核心排程證據，整合直接由 trace 計算的統計、修改前後比較、CI 迴歸檢查，以及選配的 AI 輔助調查。**
+**BTFViewer 將 BTF 追蹤資料轉換成可查證的多核心排程證據，提供直接由 trace 計算的統計、修改前後比較、持續整合（CI）報告，以及選用的 AI 輔助調查。**
 
-BTFViewer 用於分析即時作業系統（RTOS）以 **Best Trace Format**（`.btf`）記錄的 context switch（上下文切換）活動。Desktop 與 Web 版本皆適合在追蹤資料擷取完成後進行分析，並可搭配低階除錯器或目標端 trace recorder（追蹤記錄器）使用。BTFViewer 不會讀取原始碼或 ELF 檔，也不會模擬 RTOS 排程器；所有判讀都以 trace 中實際記錄的事件為依據。
+BTFViewer 用於分析即時作業系統（RTOS）以 **Best Trace Format**（`.btf`）記錄的 context switch（內容切換）事件。擷取 trace 後，可使用 Desktop 或 Web 應用程式進行分析。BTFViewer 可搭配低階除錯器與目標端 trace recorder（追蹤記錄器）使用，但不會讀取原始碼或 ELF 檔，也不會模擬排程器。所有結果都來自 trace 中實際記錄的事件。
 
 ![BTFViewer](../images/btfviewer.png)
 
@@ -16,12 +16,12 @@ BTFViewer 用於分析即時作業系統（RTOS）以 **Best Trace Format**（`.
 
 ## BTFViewer 的優勢
 
-BTFViewer 的設計重點，是縮短從發現時序異常到取得可查證、可重現證據所需的時間。
+BTFViewer 可協助使用者從時序異常快速找到可查證、可重現的證據。
 
-- **每項結論都能回到 trace 查證：** 所有統計資料與 Analysis Findings 均由實際記錄的 BTF/STI 事件計算，並保留指標定義、限制及對應的時間軸位置，不需直接接受無法檢查的分析結果。
+- **結果可回到 trace 查證：** 所有統計資料與 Analysis Findings 均由實際記錄的 BTF/STI 事件計算。指標定義、限制及對應的時間軸位置，可協助使用者逐項確認結果。
 - **直接呈現多核心行為：** 專用檢視與統計不只顯示工作在何時執行，還能找出負載不均、同時運作的核心數、工作核心親和性、核心遷移頻率、核心往返（ping-pong）遷移，以及頻繁使用的核心間路徑。
 - **比較是分析流程的一部分：** 可同時開啟多份 trace、量測修改前後的差異與分布變化、儲存基準，並透過 Desktop CLI 在自動測試或 CI 中執行迴歸檢查。
-- **AI 以量測資料為依據：** 選配的 AI Assistant 可協助初步分類、深入調查、驗證原因、評估啟發式實驗，以及說明 trace 比較結果。Statistics 面板與時間軸仍是判斷依據。若 AI Assistant 連接本機模型（例如 Ollama），提供給 AI 的分析證據只會在本機處理，不會傳送到外部雲端服務。
+- **AI 以量測資料為依據：** 選用的 AI Assistant 可協助說明分析結果、調查可能原因、驗證證據及整理 trace 比較結果。Statistics 面板與時間軸仍是主要判斷依據。若連接本機模型（例如 Ollama），提供給 AI 的證據可留在本機處理。
 - **容易執行與分享：** Desktop 與 Web 採用相同的分析流程。單一檔案 Web 版本與雙語導覽示範，讓使用者不需安裝專用分析工具，也能檢視或展示 trace。
 
 <a id="features" name="features">&#x200B;</a>
@@ -33,8 +33,8 @@ BTFViewer 的設計重點，是縮短從發現時序異常到取得可查證、�
 | **時間軸與測量** | 依工作或 CPU 核心檢視、水平或垂直版面、縮放、平移、搜尋、游標、書籤及註解 |
 | **統計與問題診斷** | 使用率、執行時間、阻塞時間、派送延遲、抖動、搶佔、核心遷移、互斥鎖（mutex）、號誌（semaphore）、佇列（queue）、截止期限（Deadline）及異常分析 |
 | **Trace 比較** | 多分頁工作階段、修改前後差異、分布比較、儲存基準及實驗驗證 |
-| **AI Assistant** | 分析結果分類、指定範圍調查、證據驗證、啟發式 **What-if** 分析及比較結果說明 |
-| **匯出與自動化** | PNG、SVG、CSV、HTML、Perfetto、選取的 BTF 範圍，以及可用於指令稿與 CI 的 Desktop CLI |
+| **AI Assistant** | 分析結果分類、指定範圍調查、證據驗證、What-if（假設情境）分析及比較結果說明 |
+| **匯出與自動化** | PNG、SVG、可個別下載表格 CSV 的 HTML 報告、Perfetto、選取的 BTF 範圍，以及可用於指令稿與 CI 的 Desktop CLI |
 | **學習與分享** | 單一檔案 Web 應用程式，以及提供英文或繁體中文語音的 8 核心導覽示範 |
 
 <a id="documentation" name="documentation">&#x200B;</a>
@@ -43,7 +43,7 @@ BTFViewer 的設計重點，是縮短從發現時序異常到取得可查證、�
 
 | 文件 | 用途 |
 |---|---|
-| `README.md` | 安裝 BTFViewer 並了解主要功能 |
+| `README_zh-TW.md` | 安裝 BTFViewer 並了解主要功能 |
 | [WORKFLOWS_zh-TW.md](WORKFLOWS_zh-TW.md) | 依照步驟進行問題調查 |
 | [STATISTICS_zh-TW.md](STATISTICS_zh-TW.md) | 了解統計指標的定義、公式與判讀方式 |
 | [AI_zh-TW.md](AI_zh-TW.md) | 設定及使用 AI 輔助調查 |
@@ -136,39 +136,25 @@ Web：
 ```bash
 make demo-pack
 make demo-pack DEMO_LANGS=en,zh-tw
-make demo-pack DEMO_LANGS=all
-python3 scripts/demo_pack.py demos/demo_8cores --list-voices
 ```
 
-產生的 `builds/demo_8cores.xtf` 包含指令稿、追蹤資料及選取的語音檔，可在 Desktop 或 Web 應用程式中開啟。
-
-Web 的 **Record** 功能使用瀏覽器畫面擷取。若要錄下語音，請選取目前的分頁，並啟用分頁音訊。
-
-套件結構、語音產生、錄影、XML 動作及示範 API 的詳細說明，請參閱 [demos/README.md](demos/README.md)。
+產生的 `builds/demo_8cores.xtf` 包含指令稿、追蹤資料及選取的語音檔，可在 Desktop 或 Web 應用程式中開啟。建立、錄製及維護示範的說明，請參閱 [demos/README.md](demos/README.md)。
 
 <a id="viewer-controls" name="viewer-controls">&#x200B;</a>
 
 ## BTFViewer 操作
 
-Desktop 與 Web 應用程式採用相同的主要操作流程。平台差異會在相關段落中說明。
-
-目標調查路徑：
-
-```text
-SEE → TRIAGE → SCOPE → INVESTIGATE
-```
-
-每一步都應能清楚知道：目前 Trace、**Scope**、**Filters**、檢視模式（View Mode）、**Selection** 與 **Highlight**。
+BTFViewer 使用一致的檢視介面、控制項目及分析流程。判讀結果前，請先確認目前的 trace、**Scope**、**Filters**、View Mode、**Selection** 與 **Highlight**。
 
 ### 調查用語（Investigation terminology）
 
 | 用語 | 意義 |
 |---|---|
 | **Full Trace** | 未以游標定義時間窗；分析使用整段擷取 |
-| **Scope** | 目前分析的時間範圍（**Full Trace** 或 **C1–Cn · duration**） |
+| **Scope** | 用於分析的時間範圍（**Full Trace** 或 **C1–Cn · duration**） |
 | **Filter** | Scope 內的資料子集（Task、Core 或 Migration）。以 **×** 或 **Clear All** 清除 |
-| **Selection** | 鎖定以供檢查的物件（持續）。本身不會改變分析輸入 |
-| **Highlight** | 暫時視覺強調（例如圖例懸停）。不會改變分析輸入 |
+| **Selection** | 持續選取以供檢查的工作或物件；本身不會改變分析資料 |
+| **Highlight** | 暫時以視覺方式強調物件，例如將滑鼠移到圖例項目；不會改變分析資料 |
 | **Fit Trace** | 將視窗縮放至完整擷取（`Ctrl+0` / `F`） |
 | **Fit Cursors** | 將視窗縮放至最早–最晚游標區間（`Ctrl+R`） |
 | **Baseline / Candidate** | Trace Compare 中的 Trace A 與 Trace B |
@@ -176,34 +162,25 @@ SEE → TRIAGE → SCOPE → INVESTIGATE
 
 **Selection** 與 **Highlight** 不會默默變成 **Filter**。檢視模式（**Task** / **Core**）與 Selection、Highlight、Filter 彼此獨立。
 
-### 調查狀態（Investigation context）
-
-狀態列會持續顯示調查狀態，不必再開其他面板：
-
-- **Scope：** `Full Trace`，或游標範圍啟用時的 `C1–Cn · span`。
-- **Filter 晶片：** Task Filter、Core Filter（`Core: N of M`）、Migration Filter（`Migration: X→Y`），各自可按 **×**。**Clear All** 清除全部 Filter。
-- **Zoom：** 相對縮放（以及有顯示時的物理刻度）。
-
-當任何 Filter 縮小分析子集時，Statistics 會顯示對應的 **Filtered:** 指示。Filter 會依 Analysis 分頁保留。
+狀態列會顯示目前的 Scope、已套用的 Filters 及 Zoom。Filter 限制分析資料時，Statistics 也會顯示 **Filtered:**。每個分析分頁會分別保留自己的 Filters。
 
 ### 主要控制項目
 
-工具列分組對應常見路徑：**Open** → Zoom / Fit → 檢視模式 → 調查入口（**Find**、Heatmap、**Analysis**、**Compare**）。較少用的動作放在功能表（Desktop）或溢位選單（Web）。
+工具列會將相關控制項目分組。將游標停在圖示上，可查看名稱與快捷鍵。
 
-| 控制項目 | 用途 |
-|---|---|
-| **Open** | 開啟 BTF trace 或示範套件 |
-| **Task / Core** | 每個工作顯示一列，或依 CPU 核心分組顯示活動 |
-| **Horizontal / Vertical** | 切換時間軸方向 |
-| **Zoom in / Zoom out / 1:1 / Fit Trace / Fit Cursors** | 調整可見的時間範圍 |
-| **Load** | 顯示或隱藏 CPU 負載圖 |
-| **Heatmap** | 檢視工作遷移及核心移動情形 |
-| **Analysis** | 開啟目前 **Scope** 內自動產生的分析結果 |
-| **Compare** | 比較兩份以上已開啟的 trace |
-| **Find** | 搜尋工作、事件、核心遷移、時間區段或同步物件 |
-| **Settings** | 設定顯示方式、版面、游標及 AI 選項 |
+| 群組 | 控制項目 | 用途 |
+|---|---|---|
+| 開啟 | **Open** | 開啟一或多份 BTF trace、示範 XML 檔案或 `.xtf` 示範套件 |
+| 擷取與匯出 | **Snapshot editor**、**Save SVG**、**Export Perfetto**、**Save cursor range as BTF** | 擷取目前畫面或匯出追蹤資料；儲存 BTF 範圍前至少需要兩個游標 |
+| 版面 | **Horizontal / Vertical** | 讓時間軸由左至右或由上至下顯示 |
+| 縮放 | **Zoom in / Zoom out**、**1:1**、**Fit Trace**、**Fit Cursors**、縮放預設值 | 調整可見時間範圍，或選擇固定的每像素時間尺度 |
+| 檢視 | **Task / Core**、展開或收合所有核心、**Load** | 選擇時間軸分組方式，並顯示或隱藏 CPU 負載圖 |
+| 調查 | **Find**、**Migration & Corridor Inspector**、**Analysis**、**Compare** | 尋找證據、檢查多核心移動、開啟分析結果，或比較 Baseline 與 Candidate |
+| 條件式控制 | **All tasks**、**Log₂** | 清除已套用的 Migration Filter，或切換已展開 STI 波形的線性／對數刻度 |
+| 顯示 | 明亮／深色佈景主題 | 不需開啟 Settings 即可切換介面佈景主題 |
+| 支援 | **Demo**、**Record**、**Settings**、**Help** | 載入內建示範、將目前分頁錄製為 WebM、設定檢視器，或開啟快捷鍵與說明 |
 
-Web 工具列另外提供 **Demo**、**Record** 及 **About**。視窗較窄時，部分控制項目會移至 **More**。
+點選應用程式圖示可開啟 **About**。視窗寬度不足以顯示所有群組時，工具列會將部分群組移入 **More（⋯）**，功能不會改變。
 
 ### Task View 與 Core View
 
@@ -222,7 +199,7 @@ Web 工具列另外提供 **Demo**、**Record** 及 **About**。視窗較窄時�
 - 按住 **Shift** 再捲動可切換平移軸向。
 - 在 macOS 上可使用觸控板的雙指開合手勢縮放。
 - 在時間軸上按住滑鼠中鍵拖曳，可放大選取的時間範圍。
-- 選取 **Fit Trace** 或按 `Ctrl+0` / `F` 可顯示完整擷取。**Fit Cursors** / `Ctrl+R` 會縮放至最早與最晚游標（C1–Cn）之間。在示範指令中，`<zoom_view/>` 使用 Fit Trace；若已有游標，`<fit_view/>` 則使用 Fit Cursors。顯示完整 trace 時，**Zoom out** 會停在 Fit Trace，且無法繼續縮小。
+- 選取 **Fit Trace** 或按 `Ctrl+0` / `F` 可顯示完整擷取。**Fit Cursors** / `Ctrl+R` 會縮放至最早與最晚游標（C1–Cn）之間。
 - 選取 **1:1** 可回到設定的縮放密度。
 - **懸停**圖例或時間軸區段為 **Highlight**（暫時）；**點選**工作標籤或圖例為 **Selection**（持續）。兩者都不會套用 Filter。
 - 將游標停在時間軸區段上，可查看工作、核心、起迄時間與持續時間。
@@ -235,7 +212,7 @@ Web 工具列另外提供 **Demo**、**Record** 及 **About**。視窗較窄時�
 
 ### 游標與 Scope
 
-游標標記時間點，並定義量測與 **Scope**。BTFViewer 預設支援四個游標；可在 **Settings** 中調整數量上限。游標線帶有依主題調整的對比光暈，避免與鄰近區段顏色混淆；重疊標籤依游標槽位堆疊，不會互相覆蓋。
+游標可標記時間點，也可定義量測的 **Scope**。BTFViewer 預設支援四個游標，可在 **Settings** 中調整數量上限。
 
 | 操作 | 方法 |
 |---|---|
@@ -245,7 +222,7 @@ Web 工具列另外提供 **Demo**、**Record** 及 **About**。視窗較窄時�
 | 清除所有游標 | 按 `Shift+C`，或按住 Shift 再按滑鼠右鍵 |
 | 對齊事件邊界 | 按住 Shift 再點選 |
 
-請在需要檢查的區段前後至少放置兩個游標。啟用 Statistics 的 **Limit to C1–Cn**，計算會使用最早–最晚區間；狀態列 Scope 會立即更新。**Fit Cursors**（`Ctrl+R`）只顯示此區段；**Save selection as BTF** 可將該區段匯出為較小的 trace。
+請在需要檢查的區段前後至少放置兩個游標。啟用 Statistics 的 **Limit to C1–Cn**，計算會使用最早–最晚區間；狀態列 Scope 會立即更新。**Fit Cursors**（`Ctrl+R`）只顯示此區段；**Save cursor range as BTF** 可將該區段匯出為較小的 trace。
 
 ### Marks、書籤、註解與 Find
 
@@ -256,7 +233,7 @@ Web 工具列另外提供 **Demo**、**Record** 及 **About**。視窗較窄時�
 | **Annotation** | 綁定 Trace 時間點的人工註解 |
 | **Find** | 尋找工作、核心遷移、STI 事件、時間區段、生命週期事件及同步物件 |
 
-Marks 面板依序為 **Cursors**、**Cursor Range**，再是 **Marks**（書籤與註解）。使用 **Export Marks** / **Import Marks** 與 **Export Session** / **Import Session**。已知類型時避免泛稱「Marker」。
+Marks 面板會列出游標、游標範圍、書籤及註解。可使用 **Export Marks** / **Import Marks** 或 **Export Session** / **Import Session** 分享這些內容。
 
 按 `Ctrl+F` 開啟 Find。狀態顯示 **`k of N matches`**。使用 Previous/Next、`F3`、`Shift+F3` 在結果間移動時不會改變 Scope 或 Filters。Match Mode 說明放在工具提示中。在時間軸上按滑鼠右鍵可操作游標與標記。
 
@@ -268,7 +245,7 @@ Marks 面板依序為 **Cursors**、**Cursor Range**，再是 **Marks**（書籤
 - `Ctrl+Shift+Tab`：上一個分頁
 - `Ctrl+W`：關閉目前分頁
 
-Desktop 會從原始路徑還原檔案。Web 最多可從瀏覽器儲存空間還原八份已封裝的 trace。無痕瀏覽、儲存空間限制或清除網站資料，都可能使還原功能無法使用。
+Desktop 可從原始路徑重新開啟檔案。Web 的還原功能依賴瀏覽器儲存空間；使用無痕模式或清除網站資料後，可能無法還原。
 
 <a id="basic-analysis-workflow" name="basic-analysis-workflow">&#x200B;</a>
 
@@ -279,11 +256,12 @@ Desktop 會從原始路徑還原檔案。Web 最多可從瀏覽器儲存空間�
 1. 開啟 trace，並選取 **Fit Trace** 查看完整時間範圍。
 2. 選取 **Load**，確認所有核心是否分擔合理的工作量。
 3. 開啟 **Analysis**，先查看嚴重程度最高的分析結果（Triage）。
-4. 在結果上選 **Investigate**，開啟對應 Statistics 區段（保留 Scope 與 Filters）。
-5. 選 **Show Evidence** 將時間軸置中到該 Finding 的 Evidence（不變更 Scope 或 Filters）。
-6. 在問題區段前後放置游標，確認狀態列 **Scope: C1–Cn**，並啟用 **Limit to C1–Cn**。
-7. 檢查工作、核心、搶佔、阻塞、同步或核心遷移的詳細資料。
-8. 必要時，請 AI Assistant 說明或驗證量測證據。
+4. 在結果上選 **Investigate**，開啟對應 Statistics 區段並套用建議的 Scope（C1–C2）；Filters 會保留。
+5. 選 **Show Evidence**，將時間軸移至相關事件。此操作不會變更 Scope 或 Filters。
+6. 選取偏高的數值或離群值，跳至對應的時間軸事件。
+7. 在問題區段前後放置游標，確認狀態列 **Scope: C1–Cn**，並啟用 **Limit to C1–Cn**。
+8. 檢查工作、核心、搶佔、阻塞、同步或核心遷移的詳細資料。
+9. 必要時，請 AI Assistant 說明或驗證量測證據。
 
 請從量測證據開始，不要先假設原因。確認時間軸與 Statistics 中的行為後，再下結論。詳細流程請參閱 [WORKFLOWS_zh-TW.md](WORKFLOWS_zh-TW.md)。
 
@@ -305,23 +283,23 @@ BTFViewer 的所有結果都由已記錄的 BTF 事件計算而來。它不會�
 | 等待時間過長 | **Blocking Time** | 互斥鎖擁有者及搶佔活動 |
 | 就緒後仍延遲執行 | **Dispatch Latency** | 阻塞及搶佔 |
 | 優先權反轉 | **Priority Inheritance** | 互斥鎖配對及阻塞 |
-| 頻繁在核心間移動 | **Core Migrations** | 負載平衡、核心遷移熱圖及互斥鎖跨核心移動（mutex bounce） |
+| 頻繁在核心間移動 | **Core Migrations** | 負載平衡、Migration & Corridor Inspector 及互斥鎖跨核心移動（mutex bounce） |
 | 鎖或佇列問題 | **Mutex / Semaphore / Queue** | 阻塞及核心遷移 |
 
 統計指標的詳細定義與公式請參閱 [STATISTICS_zh-TW.md](STATISTICS_zh-TW.md)。
 
 ### 分析結果（Analysis Findings）
 
-選取 **Analysis**，以非強制對話框（Desktop／Web 皆為浮動工具視窗）開啟目前 **Scope**（**Full Trace** 或 **C1–Cn**）的 **Findings inbox**；開啟期間時間軸仍可操作。分析結果可能包括負載不均、執行時間熱點、阻塞、優先權反轉、頻繁的核心遷移、錯過截止期限、Tick 健康狀態問題，以及同步物件在核心間移動等情形。
+選取 **Analysis**，查看目前 **Scope**（**Full Trace** 或 **C1–Cn**）內的分析結果。Findings 視窗開啟時，仍可操作時間軸。分析結果可能包括負載不均、執行或阻塞時間過長、優先權反轉、頻繁的核心遷移、錯過截止期限、Tick 問題，以及同步物件在核心間移動等情形。
 
 每項結果包含：
 
 - 清楚的 **Severity** 與問題導向標題。
 - 最相關的支持指標。
-- 由量測 `evidence_text` 產生的 **Evidence** 列（觀察結果，與詮釋文字分開）。
-- **Investigate** — 界定 Finding 並開啟對應 Statistics 區段，不需 AI（Findings 保持開啟）。
-- **Show Evidence** — 跳至時間軸 Evidence（置中、放置／重用一個 Evidence 游標；可選 Task Highlight）。**不**變更 Scope 或 Filters，也**不**關閉 Findings。
-- 若已設定 AI，可使用 **Investigate…** / **Auto investigate…** 等選項（Ask AI 時 Findings 保持開啟）。
+- **Evidence** 列，將量測到的現象與後續解讀分開顯示。
+- **Investigate** — 套用建議的 Scope，並在不使用 AI 的情況下開啟相關 Statistics 區段。
+- **Show Evidence** — 將時間軸移至支持此結果的事件，不會變更 Scope 或 Filters。
+- 設定 AI Assistant 後，可使用選用的 AI 操作。
 
 請將 Finding 視為線索，而非已確認的根因。若 Finding 建議有用的時間窗，請套用游標後再於該 Scope 內重查 Statistics。
 
@@ -339,17 +317,17 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 
 判讀核心遷移次數前，請先檢查負載平衡。SMP 排程器可能會將工作移至閒置核心以分配負載，因此出現一定程度的核心遷移是正常現象。
 
-確認負載平衡後，再檢查工作是否過度頻繁地在核心間移動。頻繁的核心遷移可能增加 L1 快取未命中（cache miss）。在 Xtensa 處理器上，核心遷移也可能降低延遲上下文切換（lazy context switching）的效益：工作移至另一個核心時，可能必須儲存協同處理器暫存器（coprocessor registers），因而增加上下文切換開銷。
+確認負載平衡後，再檢查工作是否過度頻繁地在核心間移動。工作移至新核心後，可能無法從該核心的 L1 快取找到最近使用的資料，因而增加快取未命中（cache miss）。在 Xtensa 處理器上，核心遷移也可能降低延遲式內容切換（lazy context switching）的效益。工作移至另一個核心時，系統可能必須儲存協同處理器暫存器（coprocessor registers），因而增加內容切換的額外成本。
 
-請一併檢查 **Task View**、各核心負載、**Core Migrations** 及核心遷移熱圖。若偏高的核心遷移次數同時伴隨快取行為變差、上下文切換開銷增加、延遲升高或負載分配不穩，才具有較明確的分析意義。
+請一併檢查 **Task View**、各核心負載、**Core Migrations** 及 **Migration & Corridor Inspector**。若偏高的核心遷移次數同時伴隨快取行為變差、內容切換成本增加、延遲升高或負載分配不穩，才具有較明確的分析意義。
 
 ### 比較已開啟的 trace（Comparing open traces）
 
 開啟兩份以上的 trace 時，可以使用 **Compare** 查看使用率、核心遷移、執行時間、阻塞時間、回應時間（Response Time）、同步活動及錯過截止期限（Deadline Miss）等差異。
 
-這是選用的比較工具，不是基本分析流程的必要步驟。使用時，應比較相同的工作負載階段與量測範圍。
+摘要會標示 **Baseline**（參考 trace）與 **Candidate**（新 trace），統計變差與改善的項目，並說明整體結果。沒有實際工程影響的小幅變化會省略。
 
-決策條會顯示 Baseline／Candidate 身分、回歸與改善計數、精簡結論與 Why?，以及在結果混雜、模糊或大致相似時的 **Next** 調查提示。僅列出工程上有意義的差異（小變化會省略）。
+這是選用的比較工具，不是基本分析流程的必要步驟。使用時，應比較相同的工作負載階段與量測範圍。
 
 <a id="ai-assistant" name="ai-assistant">&#x200B;</a>
 
@@ -365,7 +343,7 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 4. 使用 **Verify with AI** 檢查提出的原因是否成立。
 5. 若實際修改系統，請擷取新的 trace，並重複相同範圍的量測。
 
-可用的內容層級包括 **Compact**、**Balanced** 及 **Full evidence**。Compact 可減少 token 使用量，預設值為 Balanced。可在 **Settings → AI** 中設定模型、服務端點（endpoint）、驗證方式、內容層級、隱私選項及回覆語言。
+可用的內容層級包括 **Compact**、**Balanced** 及 **Full evidence**。Compact 傳送的資訊較少，也可減少 token 使用量；預設值為 Balanced。可在 **Settings → AI** 中設定模型、服務端點（endpoint）、驗證方式、內容層級、隱私選項及回覆語言。
 
 匯入 `examples/ai/presets.json`，可取得 Ollama、OpenAI、Gemini、DeepSeek 及 Grok 的範例設定。使用本機 Ollama 不需要 API 金鑰（API key）。若使用雲端模型，BTFViewer 會將分析所需的統計摘要與證據傳送給對應的服務供應商；處理敏感資料時，請視需要啟用匿名化及敏感資料選項。
 
@@ -375,15 +353,19 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 
 ## 匯出
 
-| 輸出格式 | Desktop | Web |
-|---|---|---|
-| 含註記的 PNG | Snapshot editor（快照編輯器） | Snapshot editor（快照編輯器） |
-| 目前畫面圖片 | 複製到剪貼簿 | 複製到剪貼簿 |
-| SVG | **Save SVG** | **Save SVG** |
-| Perfetto JSON | **Export Perfetto** | **Perfetto** |
-| 選取的 BTF 範圍 | **Save selection as BTF** | 下載選取範圍 |
-| 統計報告 | CSV 或 HTML | CSV 或 HTML |
-| Trace 比較結果 | CSV 或 HTML | CSV 或 HTML |
+BTFViewer 提供以下匯出功能。
+
+| 輸出內容 | 操作方式 |
+|---|---|
+| 含註記的 PNG 或剪貼簿圖片 | 開啟 **Snapshot editor**，視需要加入註記，再選取 **Save PNG** 或 **Copy** |
+| 時間軸 SVG | **Save SVG** |
+| Perfetto JSON | **Export Perfetto** |
+| 選取的 BTF 範圍 | 至少放置兩個游標，再選取 **Save cursor range as BTF** |
+| 統計報告 | 開啟 Statistics，再選取 **Export HTML** |
+| Trace 比較報告 | 開啟 Compare，再選取 **Export HTML** |
+| 示範錄影 | 選取 **Record** 並分享目前分頁；停止錄影後會下載 WebM 檔案 |
+
+Statistics 與 Trace Compare 都使用單一的 **Export HTML** 功能。儲存後的報告會在每個統計表格提供 **CSV** 按鈕，用來下載該表格目前顯示的資料列。若要下載完整表格，請先清除 **Search** 內容並取消 **Problems only**，再啟用 **Show all** 後點選 **CSV**。
 
 <a id="desktop-command-line" name="desktop-command-line">&#x200B;</a>
 
@@ -485,8 +467,6 @@ Desktop 將設定儲存在 BTFViewer 旁的 `btf_viewer.rc`；Web 則儲存在�
 | 執行所有測試 | `make -C BTFViewer test-all` |
 | 建置 PDF 文件 | `make -C BTFViewer doc` |
 | 從原始碼執行 | 在 `BTFViewer/` 中執行 `python -m btf_viewer_pkg trace.btf` |
-
-Desktop 原始碼位於 `btf_viewer_pkg/`，Web 原始碼位於 `web/`。修改原始碼時，請一併提交 `builds/` 下重新產生的檔案。共用解析器與統計結果會使用 `tests/fixtures/` 下的測試資料進行檢查。
 
 BTF 欄位定義請參閱上層目錄中的 `TRACE_FORMAT.md`。
 

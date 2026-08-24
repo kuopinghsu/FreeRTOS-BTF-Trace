@@ -727,6 +727,7 @@ import {
   EVIDENCE_PANEL_TOOLS,
   extractEvidencePanelPayload,
   formatEvidencePanelMarkdown,
+  mergeEvidencePanelPayload,
   formatInvestigationPlanStatus,
   isAgentTemplate,
   markPlanStepsFromTools,
@@ -955,34 +956,37 @@ function updateEvidenceFromToolResult(name, res) {
   const payload = extractEvidencePanelPayload(name, res)
   if (!payload) return
   const prev = evidencePayload || {}
+  // Keep timed evidence from earlier tools when planner/verdict tools omit
+  // jump:TIME (otherwise Evidence Score collapses to 0%).
+  const merged = mergeEvidencePanelPayload(prev, payload) || payload
   const prevCase = prev.investigation_case
   if (prevCase) {
     const caseObj = updateCaseFromTool(prevCase, name, res)
-    payload.investigation_case = caseObj
-    payload.tool_reasons = caseObj.tool_reasons || []
-    payload.confidence_evolution = formatConfidenceEvolution(caseObj.confidence_history)
+    merged.investigation_case = caseObj
+    merged.tool_reasons = caseObj.tool_reasons || []
+    merged.confidence_evolution = formatConfidenceEvolution(caseObj.confidence_history)
   }
-  if (prev.validation && !payload.validation) payload.validation = prev.validation
-  if (prev.cost && !payload.cost) payload.cost = prev.cost
-  if (payload.interpreted) interpretedQuery = payload.interpreted
-  else if (prev.interpreted && !payload.interpreted) payload.interpreted = prev.interpreted
-  if (payload.experiment) {
-    const hyps = payload.hypotheses_managed || payload.hypotheses
+  if (prev.validation && !merged.validation) merged.validation = prev.validation
+  if (prev.cost && !merged.cost) merged.cost = prev.cost
+  if (merged.interpreted) interpretedQuery = merged.interpreted
+  else if (prev.interpreted && !merged.interpreted) merged.interpreted = prev.interpreted
+  if (merged.experiment) {
+    const hyps = merged.hypotheses_managed || merged.hypotheses
       || prev.hypotheses_managed || prev.hypotheses || []
-    const updated = applyExperimentToHypotheses(hyps, payload.experiment)
+    const updated = applyExperimentToHypotheses(hyps, merged.experiment)
     if (updated.length) {
-      payload.hypotheses_managed = updated
-      payload.hypotheses = updated
+      merged.hypotheses_managed = updated
+      merged.hypotheses = updated
     }
   }
-  if (payload.finding && typeof payload.finding === 'object') {
-    payload.historical_knowledge = historicalKnowledgeForFinding(payload.finding, {
-      current: payload.finding,
+  if (merged.finding && typeof merged.finding === 'object') {
+    merged.historical_knowledge = historicalKnowledgeForFinding(merged.finding, {
+      current: merged.finding,
       userCatalog: loadAiUserHistoricalKnowledge(),
     })
   }
-  evidencePayload = payload
-  syncEvidenceLogEntry(payload)
+  evidencePayload = merged
+  syncEvidenceLogEntry(merged)
 }
 
 function pinEvidenceLogEntry() {

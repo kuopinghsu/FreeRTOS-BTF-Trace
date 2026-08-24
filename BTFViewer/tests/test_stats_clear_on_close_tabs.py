@@ -87,5 +87,5 @@ class StatsClearOnCloseTabsTest(unittest.TestCase):
         texts = _stats_texts(win._stats_panel)
         self.assertTrue(any("Open a trace file" in t for t in texts))
         self.assertFalse(any("Segments:" in t for t in texts))
-        self.assertFalse(win._stats_panel._btn_export_csv.isEnabled())
+        self.assertFalse(win._stats_panel._btn_export_html.isEnabled())
         self.assertEqual(win._legend._task_list.count(), 0)

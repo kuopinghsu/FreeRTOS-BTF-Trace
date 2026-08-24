@@ -28,6 +28,23 @@ flowchart TD
 
 最重要的原則很簡單：**不要看到分析結果（Finding）就直接採取改善方案。** 應先界定問題範圍、調查原因、以證據驗證，再進行實驗並比較結果。
 
+### 初學者必讀
+
+AI 助理不會取代追蹤分析，而是協助你按照一致的順序完成分析。閱讀本文件與使用面板前，先了解以下名詞：
+
+| 名詞 | 說明 |
+| --- | --- |
+| **分析結果（Analysis Finding）** | 由固定規則或統計值找出的可疑現象，代表「值得檢查」，不等於已確認根本原因。 |
+| **分析範圍（Scope）** | Statistics、分析結果與 AI 證據使用的追蹤區段，可以是完整追蹤資料，也可以是 C1–Cn 游標範圍。 |
+| **篩選條件（Filter）** | 在目前分析範圍內限制工作、核心或遷移資料。單純反白不算篩選條件。 |
+| **證據（Evidence）** | 可在 BTFViewer 中核對的量測值、追蹤事件、時間點、比較資料列或工具結果。 |
+| **假設（Hypothesis）** | 對問題原因的可能解釋。確認支持證據並排除合理的其他解釋前，都不能視為結論。 |
+| **工具動作（Tool action）** | AI 用來查詢證據或操作檢視器的請求。唯讀查詢會立即執行；會改變介面的動作預設需按 **Apply**。 |
+| **基準／候選追蹤資料（Baseline / Candidate）** | 修改前後在相同條件下擷取的兩份追蹤資料，可使用 Trace Compare 量測差異。 |
+| **What-if / Optimize** | 用來選擇實驗方向的啟發式估算，不是實際量測結果。 |
+
+第一次分析時，先開啟 **Analysis**，選擇優先程度最高且與問題相關的分析結果，再到指定的 Statistics 區段確認。若能鎖定事件，請以 C1–Cn 設定範圍。接著開啟 **AI Assistant**，選擇 **Start Investigation** 或 **Investigate**，逐一檢查證據連結，再使用 **Verify finding**。只有完成驗證後才使用 **What-if** 或 **Optimize**。修改系統後，重新擷取追蹤資料並使用 **Compare** 量測結果。
+
 ## 目錄（Contents）
 
 ### 使用指南（User guide）
@@ -39,7 +56,7 @@ flowchart TD
 5. [如何解讀 AI 結果（Understanding AI results）](#understanding-ai-results)
 6. [設定、模型與隱私（Configuration, models, and privacy）](#configuration-models-and-privacy)
 7. [AI 工具參考（AI tools reference）](#ai-tools-reference)
-8. [桌面版與網頁版行為](#desktop-and-web-behavior)
+8. [檢視器行為](#viewer-behavior)
 9. [疑難排解](#troubleshooting)
 10. [從 `file://` 開啟網頁版](#opening-the-web-app-from-file)
 
@@ -53,9 +70,12 @@ flowchart TD
 16. [Implementation Notes](#implementation-notes)
 17. [Diagrams](#diagrams)
 
+程式產生內容相關說明連結時，中英文可共用相同片段：主要主題使用 `#ai-topic-<topic-id>`，使用者操作使用 `#ai-action-<action-id>`。舊版錨點仍會保留，以免既有連結失效。
+
 ---
 
 <a id="how-the-ai-assistant-works" name="how-the-ai-assistant-works">&#x200B;</a>
+<a id="ai-topic-overview" name="ai-topic-overview">&#x200B;</a>
 <a id="overview" name="overview">&#x200B;</a>
 
 ## 概觀（Overview）
@@ -83,28 +103,35 @@ AI 可以解釋證據、找出關聯、排序可能原因、檢查假設，也�
 
 ### AI 面板的功能（What the panel does）
 
-- 當紀錄為空時，**Start Investigation** 會執行 **Auto investigate**。
+- 可從面板分頁或 **Ctrl+K** 開啟 **AI Assistant**。若面板未顯示，請到 **Settings → Panels** 啟用 **AI Assistant panel**。
+- 面板沒有對話內容時，會顯示目前的 **Trace、Scope、Filters**、問題輸入框與依用途分組的操作。**Start Investigation** 會從現有分析結果開始引導式調查。
 - 流程指示器會追蹤 **Triage → Scope → Investigate → Verify → Experiment → Compare**。選擇已完成的階段，可回到該階段的輸出結果。
-- **Investigate**、**Root cause**、**Verify finding**、**Auto investigate**、**What-if**、**Optimize** 與 **Diagnostic report** 都會顯示 Investigation plan。
-- **Clear** 會清除對話、重設使用量資訊，並清除目前的調查內容。
+- 常用操作包括 **Analysis Findings、Triage findings、Investigate、Explain region、Verify finding、Auto investigate、Task profile、What-if、Optimize** 與 **Diagnostic report**。另有延遲、CPU 使用量、核心遷移、負載平衡、TICK 健康度、優先權反轉與期限預算等專項操作。
+- 面板標頭提供 **Clear、Language…** 與 **Settings…**。**Clear** 會清除對話、使用量摘要與目前的調查狀態。
 - 使用量列會顯示例如 **Context: Compact · 4.6k tok · 3 tools · 12s**，依序代表內容模式、Token 數、工具數量與模型執行時間。可在 **Settings → AI → Context** 選擇 **Compact、Balanced（預設）或 Full evidence**。
-- 非空白的調查內容會在重新啟動後還原。若紀錄為空或已執行 **Clear**，則不會還原 **Current Issue** 卡片。
-- 唯讀工具與 `export_report` / `export_investigation` 會立即執行。會修改介面的動作則會等待使用者按下 **Apply**；若啟用 **Auto-apply GUI actions**，則會自動套用。桌面版匯出時會開啟儲存對話框；網頁版則會直接下載檔案。
+- 檢視器可還原未清除的調查內容；清除對話時，也會清除已儲存的調查狀態。
+- 唯讀工具與報告匯出會立即執行。會改變檢視器的動作會顯示為工具卡片，預設等待使用者選擇 **Apply** 或 **Skip**；啟用 **Auto-apply GUI actions** 後才會自動套用。已套用的檢視器動作可以復原。
 
 至少開啟兩份追蹤資料後，工具列上的 **Compare** 才會啟用。**Query with AI…** 傳送的是 **Trace Compare** 表格，而不是目前的 Findings。**Save as baseline** 與 **Score vs baseline** 使用與 `baseline_score` 相同的已儲存設定檔。按下 **Ctrl+K** 可快速存取 Analysis、AI、Compare、Workspace Preset 與 Inspect task。
+
+<a id="ai-topic-scope" name="ai-topic-scope">&#x200B;</a>
 
 ### 界定事件或區段（Scoping an event or region）
 
 | 進入方式 | 分析範圍 |
 | --- | --- |
+| **Analysis Findings → Investigate / Explain / Verify / Auto investigate** | 所選分析結果及其已記錄的證據 |
 | 時間軸執行區段 → **Ask AI about this event** | 所選工作、核心，以及 `jump:TIME` 附近的執行區段 |
 | 時間軸 → **Explain this region with AI** | 至少有兩個游標時可使用；範圍為 C1–Cn |
 | AI 面板 → **Explain region** | 有 C1–Cn 時使用該範圍；否則使用完整追蹤資料的 Findings |
+| Statistics 分布圖 → **Query with AI…** | 圖表目前顯示的工作、指標與樣本 |
+| Trace Compare → **Query with AI…** | 兩份所選追蹤資料的比較表格 |
 
 診斷特定階段的問題時，請啟用 **Limit to C1–Cn**。提示內容會包含 `Cursor region window: jump:lo … jump:hi`，回覆中引用的每個 `jump:TIME` 都應位於這個區間內。
 
-AI 內容也會帶入與狀態列／圖例相同的 **Filter** 與 **Selection** 表示（Task Filter、Core Filter、Migration Filter，以及目前 Selection）。Highlight 僅為視覺強調，不會被當成 Filter。跨介面 Evidence Navigation 與 Findings 內擴充的 Ask AI 屬後續流程；非 AI 的 Statistics 跳轉請使用工具列 **Analysis → Investigate**。
+AI 內容也會帶入與狀態列及圖例相同的 **Filter** 與 **Selection**（Task Filter、Core Filter、Migration Filter，以及目前選取項目）。反白僅用於視覺強調，不會被當成篩選條件。若只想開啟支持該結果的 Statistics 區段，不需要詢問 AI，請使用 **Analysis → Investigate**。
 
+<a id="ai-topic-workflow" name="ai-topic-workflow">&#x200B;</a>
 <a id="getting-started" name="getting-started">&#x200B;</a>
 
 ## 開始使用（Getting started）
@@ -157,6 +184,41 @@ flowchart TD
 如果 **Statistics** 沒有資料，或分析範圍設定錯誤，AI 可能產生看似有信心、但缺乏證據支持的答案。
 
 建議優先使用內建範本（Template）。範本已指定適合的指標與單位。
+
+<a id="ai-topic-actions" name="ai-topic-actions">&#x200B;</a>
+
+### 內建操作
+
+請依照想回答的問題選擇操作。第一欄使用固定錨點，可供程式產生內容相關說明連結。
+
+| 操作 | 適用情況 | 可獲得的資訊 |
+| --- | --- | --- |
+| <a id="ai-action-findings" name="ai-action-findings"></a>**Analysis Findings** | 需要以量測結果作為分析起點 | 目前由固定規則產生的分析結果，以及支持各項結果的 Statistics 區段 |
+| <a id="ai-action-triage" name="ai-action-triage"></a>**Triage findings** | 同時有多個問題，不確定先看哪一項 | 問題優先順序與第一個應檢查的證據 |
+| <a id="ai-action-investigate" name="ai-action-investigate"></a>**Investigate** | 已選定分析結果或症狀 | 可能原因、相關證據、尚缺的檢查與下一步 |
+| <a id="ai-action-explain_region" name="ai-action-explain_region"></a>**Explain region** | C1–Cn 已包住問題事件 | 僅針對該區段的工作、事件與統計結果進行說明 |
+| <a id="ai-action-verify" name="ai-action-verify"></a>**Verify finding** | 需要檢驗某個可能原因 | 支持與矛盾證據、替代解釋及驗證結論 |
+| <a id="ai-action-root_cause" name="ai-action-root_cause"></a>**Root cause** | 已有可疑原因或受影響工作 | 依證據建立因果、相關或時間先後鏈，不會超出證據強度 |
+| <a id="ai-action-explain_finding" name="ai-action-explain_finding"></a>**Explain finding** | 不清楚某項分析結果的文字或重要性 | 與該結果相連的快速、技術或深入說明 |
+| <a id="ai-action-auto_investigate" name="ai-action-auto_investigate"></a>**Auto investigate** | 希望由引導流程選擇下一項檢查 | 分階段收集證據的調查；資料不足時會指出需要補充的內容 |
+| <a id="ai-action-task_profile" name="ai-action-task_profile"></a>**Task profile** | 分析焦點是一項工作 | CPU、執行時間尾端、阻塞、週期、核心遷移、同步與優先權資訊 |
+| <a id="ai-action-latency" name="ai-action-latency"></a>**Highest latency** | 關注回應、阻塞、派送或執行時間過長 | 最長的相關事件與其證據連結 |
+| <a id="ai-action-wcet" name="ai-action-wcet"></a>**WCET / hot CPU** | 懷疑最大觀測執行時間或 CPU 使用量過高 | 觀測到的最大值與 CPU 集中情形；不能證明理論上的 WCET |
+| <a id="ai-action-migrations" name="ai-action-migrations"></a>**Migration thrash** | 工作反覆在核心之間移動 | 遷移次數、頻率、停留時間、往返遷移、配置與親和性證據 |
+| <a id="ai-action-balance" name="ai-action-balance"></a>**Core balance** | 核心負載看起來不平均 | 各核心使用率、Task × Core 配置與負載隨時間變化 |
+| <a id="ai-action-tick" name="ai-action-tick"></a>**Tick health** | TICK 時序或大間隔看起來異常 | 規律性、無週期滴答行為、間隔證據與遺漏 TICK 估計 |
+| <a id="ai-action-priority" name="ai-action-priority"></a>**Priority inversion** | 阻塞可能與優先權行為互相影響 | 優先權提升、L/M/H 型態、互斥鎖證據與搶占檢查 |
+| <a id="ai-action-deadlines" name="ai-action-deadlines"></a>**Deadline / budget** | 工作有時限或 CPU 預算 | 量測值與設定或提供門檻的比較結果 |
+| <a id="ai-action-compare" name="ai-action-compare"></a>**Trace Compare** | 已開啟兩份可比較的追蹤資料 | 實際量測的 A/B 差異與主要退步類型 |
+| <a id="ai-action-what_if" name="ai-action-what_if"></a>**What-if** | 想先估算一項具體修改 | 啟發式的修改前後估算，仍需用新追蹤資料驗證 |
+| <a id="ai-action-optimize" name="ai-action-optimize"></a>**Optimize** | 已有可能原因，且有多個實驗方向 | 依證據、預期影響與風險排列的改善實驗 |
+| <a id="ai-action-diagnostic_report" name="ai-action-diagnostic_report"></a>**Diagnostic report** | 調查結果已可分享 | 包含範圍、分析結果、證據、結論、替代解釋與下一步的結構化摘要 |
+
+其他進入方式也提供固定連結：
+
+- <a id="ai-action-ask_event" name="ai-action-ask_event"></a>**Ask AI about this event** 使用所選的單一時間軸執行區段。
+- <a id="ai-action-query_distribution" name="ai-action-query_distribution"></a>從分布圖執行 **Query with AI…** 時，使用圖表目前顯示的樣本。
+- <a id="ai-action-query_compare" name="ai-action-query_compare"></a>從 Trace Compare 執行 **Query with AI…** 時，使用所選的比較表格。
 
 <a id="investigation-workflows" name="investigation-workflows">&#x200B;</a>
 
@@ -245,7 +307,7 @@ flowchart TD
 | 與已儲存 Baseline 的偏移 | 已儲存 Baseline Profile（rc / localStorage） | `baseline_score` | 標示 `|z|>2`；必要時重新擷取 |
 | 排序所有已開啟 Trace | ≥2 個分頁 | `analyze_traces` | Best tab 與 Migrations / LB / Missed Ticks |
 | 撰寫 Review 報告 | 原因已確認 | **Diagnostic report** → `generate_report` → `export_report` / `export_investigation` | 已儲存 HTML/CSV/JSON；Evidence Time 已 Bookmark |
-| CI 與 Baseline 比較 | 桌面版 CLI | [`analyze`](#cli-regression-gate) + `--fail-on-regression`，可選 `--ai` | 結束代碼與 Markdown 說明 |
+| CI 與 Baseline 比較 | 無介面 CLI | [`analyze`](#cli-regression-gate) + `--fail-on-regression`，可選 `--ai` | 結束代碼與 Markdown 說明 |
 
 ### 實際範例（Worked examples）
 
@@ -293,6 +355,7 @@ flowchart TD
 | 明確將每個結果標示為 Estimate / Not measured | 取代 Timeline 驗證或重新擷取 Trace |
 
 若要讓 Simulator 正確辨識修改內容，請使用 **pin / affinity / priority / mutex / migration** 等明確描述。過於模糊的文字會退回定性估算（`simulator: none`）。
+<a id="ai-topic-results" name="ai-topic-results">&#x200B;</a>
 <a id="understanding-ai-results" name="understanding-ai-results">&#x200B;</a>
 
 ## 如何解讀 AI 結果（Understanding AI results）
@@ -319,7 +382,7 @@ AI 的輸出是對量測證據的解讀。接受結論前，應先確認證據�
 
 請求進行中時可用 **Stop** 取消；時間軸保持可回應，對話仍可見。失敗時會還原提示文字以便編輯後再次 **Send**。隱私晶片顯示 **Local**／**Cloud**；雲端傳送前可套用工作名稱遮罩與敏感追蹤封鎖。
 
-**Evidence & Validation** 面板會顯示結論狀態、可點擊的 **Direct evidence** 表、**Interpretation**、**Checks**、替代解釋、**Missing evidence** 及 **Next action**。品質等級、成本、工具理由與調查樹則放在 **Investigation details**。Evidence Quality 是用於診斷的啟發式指標，**不是機率值**。AI 完成最後回覆後，主程式驗證器會標示不存在的工作名稱，以及落在游標範圍之外的時間戳記。
+**Evidence & Validation** 面板會顯示結論狀態、可點擊的 **Direct evidence** 表、**Interpretation**、**Checks**、替代解釋、**Missing evidence** 及 **Next action**。品質等級、成本、工具理由與調查樹則放在 **Investigation details**。Evidence Quality 是用於診斷的啟發式指標，**不是機率值**。先前工具（`investigate`、`correlate_events`、`find_critical_path`）收集到的 `jump:TIME` 列，在後續規劃工具（`rank_root_causes`、`challenge_conclusion` 等）只回傳判決時仍會保留——否則 **Start Investigation** 會在中段高分之後顯示 Evidence Score **0%**。AI 完成最後回覆後，主程式驗證器會標示不存在的工作名稱，以及落在游標範圍之外的時間戳記。
 
 建議優先使用內建範本。這些範本已選好相關指標與 **Statistics** 頁面。必要時也可以使用自然語言，例如「find STI wait around TaskA」；主程式會將這類問題導向 `search_timeline`。
 
@@ -327,6 +390,7 @@ AI 的輸出是對量測證據的解讀。接受結論前，應先確認證據�
 
 <a id="workflows-and-use-cases" name="workflows-and-use-cases">&#x200B;</a>
 
+<a id="ai-topic-configuration" name="ai-topic-configuration">&#x200B;</a>
 <a id="configuration-models-and-privacy" name="configuration-models-and-privacy">&#x200B;</a>
 
 ## 設定、模型與隱私（Configuration, models, and privacy）
@@ -370,9 +434,9 @@ ollama pull qwen3.5:9b
 | --- | --- |
 | Authentication | 依預設集使用 none / API key / Sign in |
 | Model picker | 重新整理服務端點提供的模型 ID，再選擇模型 |
-| Self-signed TLS | 桌面版的 **Allow self-signed TLS** 會略過該預設集的憑證檢查 |
+| Self-signed TLS | **Allow self-signed TLS** 僅適合受信任的私人端點；一般情況應保留憑證驗證 |
 
-桌面版與網頁版的 API 金鑰使用相同的優先順序：
+若開啟檢視器的環境有提供環境變數，API 金鑰的讀取順序如下：
 
 1. 在 **Settings → AI** 輸入的金鑰
 2. `OPENAI_API_KEY`
@@ -382,6 +446,8 @@ ollama pull qwen3.5:9b
 本機 Ollama 通常不需要 API 金鑰。自訂服務端點則應在對應的預設集中輸入金鑰。
 
 Live `ai-test` XML 可以使用 `<api-key env="VAR">`。完整範例請參閱 [README → API keys](README_zh-TW.md#ai-api-keys)。
+
+<a id="ai-topic-models" name="ai-topic-models">&#x200B;</a>
 
 ### 選擇模型（Choose a model）
 
@@ -411,14 +477,13 @@ Live `ai-test` XML 可以使用 `<api-key env="VAR">`。完整範例請參閱 [R
 
 需要進行大量調查的範本，建議使用 `qwen3.5:9b` 這類具備穩定工具呼叫能力的模型，才能可靠串接多個工具呼叫。
 
+<a id="ai-topic-privacy" name="ai-topic-privacy">&#x200B;</a>
+
 ### 認證資訊儲存（Credential storage）
 
-| | Desktop | Web |
-| --- | --- | --- |
-| 金鑰儲存位置 | BTFViewer 旁的 `btf_viewer.rc`：`[ai] *_api_key` | 瀏覽器 `localStorage`：`btf-viewer-settings-v1` |
-| 靜態儲存方式（At rest） | 以 `enc1:…` 加密；與本機綁定，無法直接移到其他主機使用 | 以**明文（Plaintext）**存於 localStorage；僅適合作為便利性功能 |
-| 傳送給模型 | 不會放入聊天內容；只會作為 HTTP `Authorization`／API 標頭傳送至設定的服務端點 | 相同 |
-| 清除方式 | 在 **Settings → AI** 清除金鑰，或刪除 `btf_viewer.rc` 中的 AI 金鑰 | 使用 **Settings → Reset** 或清除網站資料 |
+HTML 檢視器會將 AI 設定保存在瀏覽器的本機儲存空間，方便下次使用。請把已儲存的 API 金鑰視為一般本機應用程式資料，不要當成密碼保管庫。共用或不受信任的電腦不應保存長期金鑰；服務供應商若支援，應使用短期且權限最小的金鑰。本機 Ollama 通常不需要金鑰。
+
+API 金鑰不會放入聊天提示內容，只會透過認證標頭送到設定的服務端點。需要清除時，可在 **Settings → AI** 移除金鑰，或使用 **Settings → Reset**／清除檢視器的網站資料。
 
 <a id="what-leaves-the-machine" name="what-leaves-the-machine">&#x200B;</a>
 ### 哪些資料會離開本機（What leaves the machine）
@@ -440,6 +505,7 @@ Live `ai-test` XML 可以使用 `<api-key env="VAR">`。完整範例請參閱 [R
 
 處理機密追蹤資料時，建議使用**本機 Ollama**。若要使用雲端預設集，請先將註解中可能包含敏感資訊的工作名稱匿名化或移除。
 
+<a id="ai-topic-context" name="ai-topic-context">&#x200B;</a>
 <a id="context-mode-token-usage" name="context-mode-token-usage">&#x200B;</a>
 
 ### 內容模式（Context Mode）與 Token 使用量
@@ -473,13 +539,14 @@ Live `ai-test` 預設使用 **Full evidence**。使用 **`--compare-context`** �
 
 ---
 
+<a id="ai-topic-tools" name="ai-topic-tools">&#x200B;</a>
 <a id="ai-tools-reference" name="ai-tools-reference">&#x200B;</a>
 
 ## AI 工具參考（AI tools reference）
 
-唯讀證據工具與匯出工具（`export_report`、`export_investigation`）會立即執行；會修改介面的工具則會等待使用者按下 **Apply**，除非已啟用 **Auto-apply GUI actions**。
+目前實作提供 60 個工具。證據查詢、調查狀態與匯出工具會立即執行。以下九個會改變檢視器的工具，除非已啟用 **Auto-apply GUI actions**，否則會等待使用者按下 **Apply**：`set_cursors`、`zoom_to_range`、`highlight_task`、`set_view_mode`、`open_corridor_inspector`、`add_annotation`、`bookmark_finding`、`clear_marks`、`reset_view`。
 
-完整工具名稱與參數請參閱下方的 [Complete GUI tool reference](#complete-gui-tool-reference)。
+完整工具名稱與參數請參閱下方的[完整工具參考](#complete-gui-tool-reference)。
 
 理解 AI 工具組時，按照**用途**分類會比直接記函式名稱更容易。一般使用者應從內建範本與調查計畫開始；個別工具結構主要提供給進階使用與除錯。
 
@@ -499,16 +566,15 @@ flowchart TD
 
 ### Apply、Skip 與 Undo
 
-工具依行為分為兩類：
+工具依行為分為三類：
 
 | 類別 | 行為 | 範例 |
 | --- | --- | --- |
-| **唯讀證據工具** | 立即執行，不會修改 BTFViewer | `query_raw_metric`、`search_timeline`、`investigate`、`correlate_events`、`find_critical_path`、`verify_claim` |
-| **GUI-changing tools** | **Auto-apply GUI actions** 關閉時（預設），整批動作會等待 **Apply** / **Skip** | `set_cursors`、`zoom_to_range`、`highlight_task`、`set_view_mode`、`add_annotation`、`bookmark_finding` |
+| **證據查詢工具** | 立即執行並傳回量測或推導證據，不會改變時間軸檢視狀態 | `query_raw_metric`、`search_timeline`、`investigate`、`correlate_events`、`find_critical_path`、`verify_claim` |
+| **調查狀態與匯出工具** | 立即執行；可能更新假設、記憶或實驗紀錄，或儲存檔案，但不會等待 Apply 卡片 | `manage_hypotheses`、`record_experiment_outcome`、`investigation_memory`、`close_investigation`、`export_report`、`export_investigation` |
+| **會改變檢視器的工具** | **Auto-apply GUI actions** 關閉時（預設），整批動作會等待 **Apply** 或 **Skip** | `set_cursors`、`zoom_to_range`、`highlight_task`、`set_view_mode`、`open_corridor_inspector`、`add_annotation`、`bookmark_finding`、`clear_marks`、`reset_view` |
 
-模型可能在同一輪中產生多個工具呼叫，這些操作會以一個批次套用。
-
-**Undo last actions** 可以還原縮放、檢視模式、反白、檢視器與標記；`Ctrl/Cmd+Z` 也可以還原游標與標記。匯出工具仍會開啟儲存對話框。
+模型可能在同一輪中產生多個會改變檢視器的工具呼叫，這些操作會以一個批次套用。**Undo last actions** 可以還原縮放、檢視模式、反白、檢查器狀態、游標與標記。匯出工具使用一般檔案儲存方式，不需要按 **Apply**。
 
 ### 1. 界定範圍與導覽（Scope & Navigate）—「應該從哪裡看？」
 
@@ -645,7 +711,7 @@ flowchart TD
 HTML `export_report` 會產生**診斷報告**：Executive summary（狀態與完成度）、Coverage、Ranked findings、Observation vs Interpretation、範圍內 Evidence 表、Next action。Conversation、GUI state、超出 Cursor 的證據與 metadata 放在可展開的 **Appendix**。Query／export 批次會立即執行（不必按 Apply）；若回合仍在進行，HTML 會標示 **Analysis incomplete**。可選 `mode`：`summary`（預設）、`technical`、`full`。
 
 <a id="complete-gui-tool-reference" name="complete-gui-tool-reference">&#x200B;</a>
-### 完整 GUI 工具參考（Complete GUI tool reference）
+### 完整工具參考（Complete tool reference）
 
 下表列出完整的工具結構。進行實作、除錯，或需要明確控制工具呼叫時，可使用這份參考。
 
@@ -686,7 +752,7 @@ HTML `export_report` 會產生**診斷報告**：Executive summary（狀態與�
 | `explain_finding` | 可選 `finding_id`, `level`（`quick` / `technical` / `deep`） | Read-only：以指定深度解釋單一 Analysis Finding；由 Host 端根據 Finding Text 與 Hypotheses 產生 |
 | `interpret_query` | `question` | Read-only：在其他 Tool 執行前，將 Free-form Question 轉換成明確的 Investigation Mode / Scope |
 | `validate_experiment` | 可選 `expected`, `actual`（Metric → Signed Percent） | Read-only：比較 Experiment 預期 Delta 與實際 A vs B / What-if 結果，判定 `VALIDATED` / `PARTIALLY VALIDATED` / `DISPROVED` |
-| `manage_hypotheses` | `hypothesis_id`, `status`（`supported` / `possible` / `rejected` / `need_evidence`）；可選 `reason`, `finding_id` | Read-only：標記 Investigation 中某個 Hypothesis 的狀態 |
+| `manage_hypotheses` | `hypothesis_id`, `status`（`supported` / `possible` / `rejected` / `need_evidence`）；可選 `reason`, `finding_id` | 立即執行：更新目前調查案例中的一項假設狀態 |
 | `plan_investigation` | 可選 `question`, `finding_id` | Read-only：排序 Hypotheses 與成本最低的 Tool Sequence |
 | `suggest_scope` | 可選 `question` | Read-only：建議 Task / Related Tasks / Time Window |
 | `detect_contradictions` | 可選 `hypothesis`, `metrics` | Read-only：判定 `SUPPORTED` / `CONTRADICTED` / `INSUFFICIENT` |
@@ -697,7 +763,7 @@ HTML `export_report` 會產生**診斷報告**：Executive summary（狀態與�
 | `regression_localize` | 可選 `label_a`, `label_b` | Read-only：將 A vs B Inflation 定位至特定 Task 與 Region |
 | `build_causal_chain` | 無 | Read-only：建立 Causal / Correlated / Temporal Edge；不會在沒有證據時直接宣稱因果 |
 | `generate_experiment_plan` | 可選 `task`, `limit` | Read-only：排序 Firmware / What-if Experiment |
-| `record_experiment_outcome` | 可選 `change`, `predicted`, `actual`, `quality` | Read-only：儲存 Outcome，供之後比對相似案例 |
+| `record_experiment_outcome` | 可選 `change`, `predicted`, `actual`, `quality` | 立即執行：儲存實驗結果，供之後比對相似案例 |
 | `score_investigation` | 可選 `tools_run`, `conclusion`, `confidence`, `elapsed_s` | Read-only：評估 Evidence Efficiency、Cost、False-confidence、Falsification、Scope 與 Stop |
 | `analyze_temporal_causality` | 可選 `task` | Read-only：根據 Findings Time 建立 Happens-before Chain |
 | `build_task_dependency_graph` | 可選 `task` | Read-only：建立 BTF Wait / Preempt / Migrate / PI Graph，包括 2-hop Neighborhood 與 Upstream Tasks |
@@ -705,9 +771,9 @@ HTML `export_report` 會產生**診斷報告**：Executive summary（狀態與�
 | `rank_root_causes` | 無 | Read-only：根據 Findings / Hypotheses 排序可能原因 |
 | `verify_claim` | `claim`；可選 `claim_type`, `subject`, `object`, `evidence` | Read-only：判定 `SUPPORTED` / `PARTIAL` / `UNSUPPORTED` |
 | `challenge_conclusion` | 可選 `conclusion` | Read-only：提出 Alternatives 與 Missing Evidence |
-| `investigation_memory` | 可選 `action`（`recall` / `store`）, `record`, `limit` | Read-only：保存／回想相似案例 |
+| `investigation_memory` | 可選 `action`（`recall` / `store`）, `record`, `limit` | 立即執行：儲存或取回相似的調查案例 |
 | `cluster_incidents` | 可選 `window_ns` | Read-only：依時間接近程度建立 Incident Cluster |
-| `close_investigation` | 可選 `conclusion`, `confidence` | Read-only：關閉目前 Case Envelope |
+| `close_investigation` | 可選 `conclusion`, `confidence` | 立即執行：以目前結論與信心程度結束調查案例 |
 | `analyze_distribution` | 可選 `values`, `metric`（`auto` / `execution` / `blocking` / `priority_inheritance` / `tick`）, `task` | Read-only：計算 p50/p90/p95/p99/p99.9、Stddev、CV、3-sigma Outlier Rate。Statistics Distribution Chart 的 **Query with AI…** 會取得目前開啟 Plot 的 Samples |
 | `analyze_periodicity` | 可選 `times`, `expected`, `source`（`auto` / `tick` / `sti` / `isr` / `timer` / `release`）, `task`, `durations` | Read-only：比較 Expected 與 p50/p99/max，並計算 RMS / Peak-to-peak Jitter 與 Kind |
 | `summarize_investigation_context` | 可選 `conclusion`, `tools_run` | Read-only：產生精簡的 Investigation Snapshot |
@@ -718,36 +784,27 @@ HTML `export_report` 會產生**診斷報告**：Executive summary（狀態與�
 
 <a id="desktop-and-web-behavior" name="desktop-and-web-behavior">&#x200B;</a>
 
-## 桌面版與網頁版行為（Desktop and web behavior）
+<a id="viewer-behavior" name="viewer-behavior">&#x200B;</a>
 
-BTFViewer 桌面版與網頁版的設計目標，是提供**相同的 AI 調查流程、工具行為、證據模型與驗證規則**。
+<a id="ai-topic-viewer" name="ai-topic-viewer">&#x200B;</a>
 
-一般使用時，不需要另外學習兩套操作流程。
+## 檢視器行為
 
-請依使用環境選擇適合的前端：
+BTFViewer 使用同一套 AI 分析流程與控制方式，使用者看到的行為如下：
 
-- **Desktop** — 適合開啟本機檔案、使用原生儲存對話框，以及連接本機／私人 AI 服務端點。
-- **Web** — 適合只使用瀏覽器的 BTFViewer，或託管／開發環境部署。
+- 使用相同的六個分析階段、操作範本、工具、證據與驗證畫面，以及驗證規則。
+- 服務端點、模型、認證、內容模式、隱私與自動套用設定都位於 **Settings → AI**。
+- 報告與完整調查資料會透過目前環境的一般下載或儲存方式保存。
+- 圖表直接顯示在對話內容中。
+- 網路連線與憑證規則由開啟檢視器的環境執行。
 
-兩者的差異主要來自平台整合方式，而不是 AI 能力。
-
-| 平台差異 | Desktop | Web |
-| --- | --- | --- |
-| AI Tools、Investigation Case、Evidence Panel、Validator | 相同行為 | 相同行為 |
-| Task / Event / Region AI Actions | 相同行為 | 相同行為 |
-| 模型選擇器與服務端點設定 | 支援 | 支援 |
-| 報告／調查匯出 | 原生儲存對話框 | 瀏覽器下載 |
-| 對話中的圖表 | 在桌面版介面中顯示 | 直接顯示於瀏覽器內容中 |
-| 自簽章 HTTPS 服務端點 | 每個預設集可選擇允許 Self-signed TLS | 仍受瀏覽器／作業系統憑證政策限制 |
-| 從本機 `file://` 啟動 | 不適用 | 跨來源請求可能被封鎖；需要時使用開發／預覽伺服器 |
-
-> **使用者應記住的重點：** 桌面版與網頁版的 AI 分析應產生相同的調查結果與證據。平台差異主要只會影響服務端點、憑證、下載與瀏覽器網路設定。
-
-各平台的詳細設定問題統一整理於下方的**疑難排解**，不視為不同的 AI 功能。
+若從本機 `file://` 開啟時無法連接 AI 端點，請改用下節說明的開發或預覽伺服器。這是連線限制，不是另一套 AI 操作流程。
 
 ---
 
 <a id="troubleshooting" name="troubleshooting">&#x200B;</a>
+
+<a id="ai-topic-troubleshooting" name="ai-topic-troubleshooting">&#x200B;</a>
 
 ## 疑難排解（Troubleshooting）
 
@@ -755,14 +812,14 @@ BTFViewer 桌面版與網頁版的設計目標，是提供**相同的 AI 調查�
 | --- | --- | --- |
 | 網頁版：Failed to fetch / CORS | 瀏覽器阻擋跨來源呼叫；`file://` 會送出 `Origin: null` | 優先使用 `npm run dev` / `make preview`，兩者都會代理 Ollama；或參閱 [`file://` 開啟方式](#opening-the-web-app-from-file) |
 | 401 / 403 | 金鑰遺漏、遭拒絕，或不允許該來源 | **Settings → AI → Sign in or API key**；可使用 `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`，本機 Ollama 不需要金鑰 |
-| `CERTIFICATE_VERIFY_FAILED` / Self-signed TLS | 私人 CA 或自簽章 HTTPS 閘道 | 桌面版：**Settings → AI → Allow self-signed TLS**。網頁版：在作業系統／瀏覽器中信任憑證、私人區域網路使用 `http://`，或改用桌面版 |
+| `CERTIFICATE_VERIFY_FAILED` / Self-signed TLS | 私人 CA 或自簽章 HTTPS 閘道 | 在作業系統或瀏覽器中信任憑證。只有受信任的私人端點，才在環境支援時使用 **Settings → AI → Allow self-signed TLS**，或在受保護的私人網路使用 `http://`。 |
 | Chat Probe Timeout / `The read operation timed out` | `GET /models` 只列出 ID；推論本身過慢或卡住 | **Test connection** 會以非串流 POST 呼叫 `/chat/completions`，逾時時間為 120 秒。先執行 `ollama run MODEL` 預熱，再重試。可使用下方 curl 測試除錯；若 curl 也卡住，代表閘道上游的聊天服務卡住。非串流沒有回應時可嘗試 `"stream": true`。本機顯示記憶體不足時，請降低內容長度 |
 | Model not found | 輸入的模型 ID 並非目前服務端點所提供 | 重新整理模型清單或執行 **Test connection**，再從下拉選單選擇可用 ID；Ollama 可先執行 `ollama pull` |
 | Gemini HTTP 400 `thought_signature` | Gemini 3 的後續工具呼叫需要 Thought Blob | 重新送出問題；BTFViewer 會回傳 Gemini Thought Signature |
 | 顯示原始 `btftool` JSON，而不是原生工具呼叫 | 模型不支援或略過函式呼叫 | BTFViewer 仍會顯示相同卡片。選擇 **Apply**，或啟用 **Auto-apply GUI actions**。需要穩定的原生呼叫時，使用 `qwen3.5:9b` 或支援工具呼叫的雲端模型 |
 | Ask 超過 120 秒逾時，或一直停在 Waiting… | 冷啟動、CPU 卸載或顯示記憶體溢出 | 按 **Stop**，使用 `ollama run MODEL` 預熱後重試。長對話之間可使用 **Clear**。Findings 卡片太大時，改用較小模型或縮小 **Statistics** 範圍 |
 | 後續對話忽略前面已知資訊 | 對話記錄超出內容長度 | 在 AI 列按 **Clear**；或使用 **Analysis → Query with AI…** / **Compare → Query with AI…** 建立新的限定範圍提示 |
-| 需要桌面版的原始 AI 請求／回覆記錄 | 除錯工具回合或服務供應商相容性問題 | **Settings → AI → Log MCP messages to file**；預設關閉。資料會附加至 `./ai_mcp_messages.log`，完成除錯後請刪除 |
+| 需要原始 AI 請求／回覆記錄 | 除錯工具回合或服務供應商相容性問題 | 若環境提供 **Settings → AI → Log MCP messages to file**，只在除錯期間啟用，完成後刪除 `./ai_mcp_messages.log`。 |
 
 ### 使用 curl 測試連線（Test connection）
 
@@ -789,7 +846,7 @@ curl -vk --max-time 180 \
 - `npm run dev`
 - `make preview`
 
-兩者都會自動代理 Ollama。桌面版完全不受這項問題影響。
+兩者都會自動代理 Ollama。這項限制只影響直接從本機檔案系統開啟的瀏覽器頁面。
 
 若仍要使用 `file://`，需要在 Ollama 端允許所有 Origin：
 
@@ -826,7 +883,7 @@ launchctl unsetenv OLLAMA_ORIGINS
 <a id="cli-regression-gate" name="cli-regression-gate">&#x200B;</a>
 ## CLI 退步檢查（Regression Gate）
 
-桌面版的無介面 CI 模式可以將候選追蹤資料與基準資料比較，並選擇是否要求已設定的 AI 產生簡短說明。
+無介面 CI 模式可以將候選追蹤資料與基準資料比較，並選擇是否要求已設定的 AI 產生簡短說明。
 
 Headless `analyze` 搭配 `--fail-on-regression`：
 
@@ -990,7 +1047,7 @@ Self-signed 或 Private CA Gateway 可保留 `<tls-verify>false</tls-verify>`。
 
 `<api-key env="VAR">` 會先讀取環境變數，再讀取元素中的文字。建議省略元素文字，**不要將 API 金鑰等機密資訊提交到程式碼儲存庫**。
 
-`tls-verify=false` 或 `ai-test --insecure` 會在 Desktop 跳過 Certificate Check。
+`tls-verify=false` 或 `ai-test --insecure` 會讓無介面測試用戶端略過憑證檢查。
 
 `--models id1,id2`（或 `make ai-test-context AI_MODELS=id1,id2`）可選擇部分 `<model>`。Custom Suite 也可以將 Model 設為 `optional="true"`。如果缺少 API Key，這些 Model 會被略過；除非透過 `--models` / `AI_MODELS` 明確指定。
 
@@ -1190,7 +1247,7 @@ flowchart TD
 <a id="investigation-case" name="investigation-case">&#x200B;</a>
 ## 調查案例（Investigation Case）
 
-桌面版與網頁版共用同一個 **Investigation Case** 模型（`btf-investigation-case`），內容包括：
+BTFViewer 使用同一個 **Investigation Case** 模型（`btf-investigation-case`），內容包括：
 
 - Question
 - Scope：Trace / C1–Cn / Tasks / Cores
@@ -1201,7 +1258,7 @@ flowchart TD
 - Conclusion
 - Validation
 
-Desktop / Web Lockstep 注意事項請參閱 [Implementation Notes](#implementation-notes)。
+相關技術注意事項請參閱 [Implementation Notes](#implementation-notes)。
 
 每次 AI 最終回覆後，Host-side **Validator** 會擷取 `jump:TIME` 與 `Task[id]` Claim，並標示虛構的名稱或 Cursor Window 之外的 Timestamp。
 
@@ -1252,7 +1309,7 @@ flowchart TD
 | `regression_localize`         | 將 A vs B Delta 定位至 Task / Region / Likely Mechanism                                                                                                                                           |
 | `build_causal_chain`          | Edge 標示為 Causal / Correlated / Temporal；必須附 Disclaimer                                                                                                                                      |
 | `generate_experiment_plan`    | 排序 Pin / Contention / Priority Experiment                                                                                                                                                       |
-| `record_experiment_outcome`   | 保存 Outcome；Desktop 使用 `[ai] experiment_outcomes`，Web 使用 `localStorage`                                                                                                                      |
+| `record_experiment_outcome`   | 將實驗結果保存到檢視器的調查資料儲存區                                                                                                                                                               |
 | `score_investigation`         | Phase 3 額外指標：`evidence_efficiency`、`investigation_cost`、`false_confidence`、`falsification_quality`、`scope_accuracy`、`stop_efficiency`；同時整合到 `score_benchmark_case`，包括 Adversarial Rate |
 
 **不要在 `auto_investigate` 之後再增加 Chat Template。**
@@ -1292,7 +1349,7 @@ flowchart TD
 | `rank_root_causes`                | 排序 Hypothesis 或 Finding Bucket                                                                             |
 | `verify_claim`                    | 依 Findings 與 Cursor 判定 `SUPPORTED` / `PARTIAL` / `UNSUPPORTED`                                            |
 | `challenge_conclusion`            | 提出 Alternatives 與 Missing Evidence                                                                         |
-| `investigation_memory`            | 儲存／回想；Desktop 使用 `[ai] investigation_memory`，Web 使用 `localStorage`                                    |
+| `investigation_memory`            | 從檢視器的調查資料儲存區保存或取回案例                                                         |
 | `cluster_incidents`               | 依時間接近程度將 Findings 分組                                                                                |
 | `close_investigation`             | 記錄 Conclusion 並關閉 Case                                                                                   |
 | `analyze_distribution`            | p50 / p90 / p95 / p99 / p99.9、Stddev、CV、3-sigma Outlier Rate；取得 BTF Execution / Blocking / PI / Tick Sample |
@@ -1334,7 +1391,7 @@ flowchart TD
 
 ## 實作注意事項（Implementation notes）
 
-本節記錄桌面版與網頁版保持同步的技術注意事項。
+本節記錄共用檢視器 AI 實作的技術注意事項。
 
 使用者可見的 Case / Evidence 行為請參閱 [README → Investigation Case](README_zh-TW.md#investigation-case)。Live-suite XML 請參閱 [Benchmark and Evaluation Suite](#benchmark-suite)。已記錄的 Score 位於 [AI_BENCHMARK.md](AI_BENCHMARK.md)。
 
@@ -1373,7 +1430,7 @@ flowchart TD
 
 ### 共用案例／證據引擎（Shared Case / Evidence engines）
 
-桌面版與網頁版共用同一套案例、證據、規劃器、因果分析、工具與 Mermaid 實作。
+BTFViewer 使用同一套案例、證據、規劃器、因果分析、工具與 Mermaid 實作。
 
 AI UI 修改後執行：
 
@@ -1394,7 +1451,7 @@ make -C BTFViewer web
 - **More** Template 在 2-column Overlay 中使用相同 Group。
 - Trace Compare 從工具列 **Compare** 開啟，而不是 Statistics Footer。
 
-Desktop `ai-test` CLI 與 Web Offline Benchmark 共用 `tests/ai` Fixture，包括被追蹤的 `.btf` Stub + `dataset.json`。
+`ai-test` CLI 與離線基準測試共用 `tests/ai` 測試資料，包括納入版本控制的 `.btf` stub 與 `dataset.json`。
 
 Live Run 支援 `--context-mode` 與 `--compare-context`，請參閱 [Context mode benchmarking](#context-mode-benchmarking)。
 
@@ -1424,7 +1481,7 @@ Host Validator 會在最終回覆後執行。Prompt 本身仍會禁止虛構 Num
 
 接著更新尚未關閉的 Hypothesis，並提供 **Save to knowledge**（`btfexp:save`）。
 
-如果 `actual` 為空，會從最近一次 Trace Compare Refresh 自動取得，包括 **Scope to cursors**；也可以從 `compare_performance` 透過 `experiment_percents_from_compare` 取得。
+如果 `actual` 為空，會從最近一次 Trace Compare Refresh 自動取得，包括各分頁已啟用 **Limit to C1–Cn** 時的範圍；也可以從 `compare_performance` 透過 `experiment_percents_from_compare` 取得。
 
 工具列 **Compare → Validate experiment…** 會關閉 Dialog，並要求模型呼叫 Tool，此時省略 Actual。
 

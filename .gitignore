@@ -88,3 +88,6 @@ BTFViewer/docs/.mermaid-cache-stamp
 BTFViewer/builds/.mermaid-cache-stamp
 BTFViewer/builds/cjk-fallback.tex
 BTFViewer/builds/mermaid-cache/
+# Noto CJK OTF fetched on demand for *_zh-TW.pdf (see scripts/fonts/README.md)
+BTFViewer/scripts/fonts/*.otf
+

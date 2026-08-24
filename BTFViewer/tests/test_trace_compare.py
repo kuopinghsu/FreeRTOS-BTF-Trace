@@ -142,7 +142,7 @@ class TraceCompareTests(unittest.TestCase):
         self.assertIn("Δ = Baseline A", html)
         for section in (
             "Core Utilisation", "Execution Time", "Blocking Time",
-            "Inter-Arrival", "Sync Objects", "Response P99", "Mutex Blocking",
+            "Inter-Arrival Time", "Sync Objects", "Response P99", "Mutex Blocking",
             "Shared Patterns", "Trends",
         ):
             self.assertIn(section, csv)
@@ -157,6 +157,13 @@ class TraceCompareTests(unittest.TestCase):
         self.assertIn("CPU A (%)", html)
         self.assertIn("Util A (%)", html)
         self.assertIn("Δ (pp)", html)
+        self.assertIn("detail-note", html)
+        self.assertIn("Search table", html)
+        self.assertIn("Show all", html)
+        self.assertIn("data-csv", html)
+        self.assertIn("toc-count", html)
+        self.assertIn("report-toc-lead", html)
+        self.assertIn("CPU and Migrations", html)
         self.assertIn("Expand all", html)
         self.assertIn("Collapse all", html)
         self.assertIn('data-toc="expand"', html)

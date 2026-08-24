@@ -99,8 +99,15 @@
   </div>
   <div
     v-if="!collapsed && helpText"
-    class="range-hint"
-  >{{ helpText }}</div>
+    class="range-hint stats-section-help"
+    :title="helpText"
+  >
+    <span
+      class="stats-section-help-icon"
+      :title="helpText"
+      aria-label="Section help"
+    >ⓘ</span>
+  </div>
   </div>
 </template>
 
@@ -177,18 +184,34 @@ function onDragEnd() {
 
 .range-hint {
   color: var(--fg-dim, #9e9e9e);
-  opacity: 0.6;
-  font-size: 10px;
-  font-style: italic;
+  opacity: 0.85;
+  font-size: var(--type-meta, 11px);
+  font-style: normal;
   font-weight: 400;
   text-transform: none;
   letter-spacing: 0;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  white-space: nowrap;
   min-width: 0;
-  margin: 0 0 6px;
+  margin: 0 0 4px;
   line-height: 1.35;
+}
+
+.stats-section-help {
+  display: flex;
+  align-items: center;
+}
+
+.stats-section-help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1em;
+  height: 1.1em;
+  font-size: var(--type-meta, 11px);
+  font-style: normal;
+  cursor: help;
+  color: var(--fg-dim);
+  opacity: 0.9;
 }
 
 .stats-section-title {
@@ -197,7 +220,7 @@ function onDragEnd() {
   gap: 6px;
   width: 100%;
   box-sizing: border-box;
-  font-size: 10px;
+  font-size: var(--type-meta, 11px);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;

@@ -1072,7 +1072,7 @@ describe('demo_8cores.xml', () => {
     const exportStep = demo.steps.find(s => s.id === '17')
     const exportKids = exportStep.children
     const statsIdx = exportKids.findIndex(c => c.tag === 'panel' && c.attrib.name === 'stats')
-    const exportMove = exportKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'stats_export_csv')
+    const exportMove = exportKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'stats_export_html')
     assert.ok(statsIdx >= 0 && exportMove > statsIdx)
     const wcet = demo.steps.find(s => s.title === 'Top Tasks WCET')
     const section = wcet.children.find(c => c.tag === 'stats_section')

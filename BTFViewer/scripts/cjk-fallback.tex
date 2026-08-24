@@ -1,10 +1,15 @@
 % CJK glyph fallback when texlive-xecjk (xeCJK.sty) is not installed.
 % Eisvogel's CJKmainfont path requires xeCJK; this uses fontspec + ucharclasses
 % instead. Makefile substitutes CJKFONT before including this file.
+%
+% Avoid \begingroup/\endgroup transitions: they break optional arguments
+% such as \includegraphics[...,alt={…}] when alt text contains CJK.
 \usepackage{ucharclasses}
 \newfontfamily\btfCJKfont{CJKFONT}[
   ItalicFont={CJKFONT},
   BoldFont={CJKFONT},
   BoldItalicFont={CJKFONT},
+  AutoFakeBold=2.5,
+  AutoFakeSlant=0.15,
 ]
-\setTransitionsForCJK{\begingroup\btfCJKfont}{\endgroup}
+\setTransitionsForCJK{\btfCJKfont}{\normalfont}

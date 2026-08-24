@@ -12,7 +12,7 @@ import { syncObjectStatsRows } from './syncObjectAnalysis.js'
 import { getPlacedCursors, segFullyInRange, segOverlapNs } from './statsRange.js'
 import { tickHealthReport } from './tickHealth.js'
 import loadBalanceMetrics from './loadBalanceGauge.js'
-import { btfHtmlReportDocument, HTML_REPORT_TOC_CSS, HTML_REPORT_TOC_SCRIPT, htmlApplyCollapsibleToc } from './htmlReport.js'
+import { btfHtmlReportDocument, HTML_REPORT_INTERACTIVE_SCRIPT, HTML_REPORT_TOC_CSS, HTML_REPORT_TOC_SCRIPT, htmlApplyCollapsibleToc } from './htmlReport.js'
 import {
   compareAnalysisTables,
   compareNotableChanges,
@@ -1173,6 +1173,7 @@ tbody td:first-child { background: #fff; }
 tbody tr:nth-child(even) td { background: #f7f9fc; }
 tbody tr:nth-child(even) td:first-child { background: #f7f9fc; }
 .empty { text-align: center; color: var(--muted); white-space: normal; }
+.detail-note { margin: 6px 0 10px; font-size: 12px; color: var(--muted); line-height: 1.45; }
 .overview-why { color: var(--muted); margin: 0 0 10px; }
 .overview-sub { margin: 12px 0 6px; font-size: 13px; color: #123355; }
 .overview-formula { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
@@ -1192,19 +1193,43 @@ tbody tr:nth-child(even) td:first-child { background: #f7f9fc; }
 .badge-changed { background: #e8eef7; color: #123355; }
 .compare-chart { margin: 0 0 12px; overflow-x: auto; }
 .compare-chart svg { max-width: 100%; height: auto; display: block; }
+.table-tools { margin: 8px 0 12px; }
+.table-toolbar {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px;
+}
+.table-search {
+  font: inherit; font-size: 12px; padding: 4px 8px; border: 1px solid var(--line);
+  border-radius: 6px; min-width: 160px;
+}
+.table-check { font-size: 12px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }
+.table-count { font-size: 12px; color: var(--muted); margin-left: auto; }
+.table-scroll table { min-width: 100%; }
+.sortable { cursor: pointer; }
+.sortable:hover { color: var(--accent); }
 ${HTML_REPORT_TOC_CSS}
 `.trim()
+
+export const COMPARE_TOC_GROUPS = [
+  ['Overview', ['Overview', 'Summary', 'Top Tasks']],
+  ['CPU and Migrations', ['Core Utilisation', 'Core Migrations']],
+  ['Timing and Latency', ['Execution Time', 'Blocking Time', 'Inter-Arrival', 'Response P99']],
+  ['Scheduling and Sync', [
+    'Preemption Chains', 'Sync Objects', 'Mutex Blocking', 'Shared Patterns', 'Trends',
+  ]],
+]
 
 function _rowsOrEmpty(rows, cols, mapFn, empty) {
   if (!rows.length) return `<tr><td colspan="${cols}" class="empty">${htmlCell(empty)}</td></tr>`
   return rows.map(mapFn).join('')
 }
 
-function _cardHtml(title, thead, tbody, leadHtml = '') {
+function _cardHtml(title, thead, tbody, leadHtml = '', note = '') {
+  const noteHtml = note ? `<p class="detail-note">${htmlCell(note)}</p>` : ''
   return `<section class="report-card"><h2>${htmlCell(title)}</h2>`
+    + noteHtml
     + (leadHtml || '')
-    + `<div class="table-scroll"><table><thead><tr>${thead}</tr></thead>`
-    + `<tbody>${tbody}</tbody></table></div></section>`
+    + `<table><thead><tr>${thead}</tr></thead>`
+    + `<tbody>${tbody}</tbody></table></section>`
 }
 
 /** Build standalone HTML report for trace compare. */
@@ -1264,6 +1289,8 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
       + '</tbody></table></div>'
     : ''
   const overviewHtml = `<section class="report-card"><h2>Overview</h2>`
+    + '<p class="detail-note">Verdict, identity, and engineering-significant '
+    + 'deltas between Baseline A and Candidate B.</p>'
     + (verdict ? `<p class="overview-why">${htmlCell(verdict)}</p>` : '')
     + (nextInv ? `<p class="overview-why">${htmlCell(nextInv)}</p>` : '')
     + ((omitted || Number(cards.significant || 0))
@@ -1370,41 +1397,55 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
   const report = btfHtmlReportDocument('Trace Compare', [
     '<!--TOC-->',
     overviewHtml,
-    _cardHtml('Summary', '<th>Metric</th><th>Baseline A</th><th>Candidate B</th><th>Δ</th>', summaryHtml, sumLead),
-    _cardHtml('Top Tasks', '<th>Task</th><th>CPU A (%)</th><th>CPU B (%)</th><th>Δ (pp)</th>', topHtml),
-    _cardHtml('Core Utilisation', '<th>Core</th><th>Util A (%)</th><th>Util B (%)</th><th>Δ (pp)</th>', coreHtml, utilLead),
+    _cardHtml('Summary', '<th>Metric</th><th>Baseline A</th><th>Candidate B</th><th>Δ</th>', summaryHtml, sumLead,
+      'KPI-style totals and rates. Δ = Baseline A − Candidate B (positive means A is numerically larger).'),
+    _cardHtml('Top Tasks', '<th>Task</th><th>CPU A (%)</th><th>CPU B (%)</th><th>Δ (pp)</th>', topHtml, '',
+      'Highest CPU consumers excluding IDLE/TICK. Δ is percentage points (pp).'),
+    _cardHtml('Core Utilisation', '<th>Core</th><th>Util A (%)</th><th>Util B (%)</th><th>Δ (pp)</th>', coreHtml, utilLead,
+      'Per-core active util % excluding IDLE/TICK over each side\'s scoped wall-clock span.'),
     _cardHtml('Core Migrations',
       '<th>Task</th><th>Migr A</th><th>Migr B</th><th>Δ</th><th>Rate A</th><th>Rate B</th><th>Rate Δ</th><th>Dwell A</th><th>Dwell B</th><th>Dwell Δ</th><th>Ping A</th><th>Ping B</th><th>Cores A</th><th>Cores B</th><th>Primary A</th><th>Primary B</th>',
-      migHtml, migLead),
+      migHtml, migLead,
+      'Migration count, rate, dwell, ping-pong, and primary-core affinity for tasks that ran on more than one core.'),
     _cardHtml('Execution Time',
       '<th>Task</th><th>Runs A</th><th>Runs B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ max</th>',
-      execHtml),
+      execHtml, '',
+      'Per-slice run durations between consecutive context switches.'),
     _cardHtml('Blocking Time',
       '<th>Task</th><th>Gaps A</th><th>Gaps B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ avg</th>',
-      blockHtml),
+      blockHtml, '',
+      'Off-CPU gaps between consecutive slices of the same task (preemption, wait, or scheduling delay).'),
     _cardHtml('Inter-Arrival Time',
       '<th>Task</th><th>Runs A</th><th>Runs B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ avg</th>',
-      interHtml),
+      interHtml, '',
+      'Time between consecutive activations of the same task (slice start to next slice start).'),
     _cardHtml('Preemption Chains',
       '<th>Victim</th><th>Count A</th><th>Count B</th><th>Δ</th><th>Total A</th><th>Total B</th>',
-      preHtml),
-    _cardHtml('Sync Objects', '<th>Metric</th><th>Baseline A</th><th>Candidate B</th><th>Δ</th>', syncHtml),
-    _cardHtml('Response P99', '<th>Task</th><th>P99 A</th><th>P99 B</th><th>Δ</th>', responseHtml, p99Lead),
-    _cardHtml('Mutex Blocking', '<th>Task</th><th>Total A</th><th>Total B</th><th>Δ</th>', mutexHtml),
+      preHtml, '',
+      'Victim/preemptor pairs for off-CPU gaps on the same core.'),
+    _cardHtml('Sync Objects', '<th>Metric</th><th>Baseline A</th><th>Candidate B</th><th>Δ</th>', syncHtml, '',
+      'Mutex, semaphore, and queue STI instrumentation totals.'),
+    _cardHtml('Response P99', '<th>Task</th><th>P99 A</th><th>P99 B</th><th>Δ</th>', responseHtml, p99Lead,
+      'Heuristic ready→completion P99 from adjacent slices (not an explicit BTF release/completion pair).'),
+    _cardHtml('Mutex Blocking', '<th>Task</th><th>Total A</th><th>Total B</th><th>Δ</th>', mutexHtml, '',
+      'Total mutex-attributed blocking time per task.'),
     _cardHtml('Shared Patterns',
       '<th>Task</th><th>Kind</th><th>Count A</th><th>Count B</th><th>Description</th>',
-      sharedHtml),
+      sharedHtml, '',
+      'Anomaly kinds present on both sides with counts and a short reason.'),
     _cardHtml('Trends',
       '<th>Trace</th><th>Tasks</th><th>Migrations</th><th>Load balance</th><th>Tick health</th><th>Span</th>',
-      trendHtml),
+      trendHtml, '',
+      'Multi-trace summary when two or more traces are open.'),
     HTML_REPORT_TOC_SCRIPT,
+    HTML_REPORT_INTERACTIVE_SCRIPT,
   ].join('\n'), {
     subtitle: `Baseline A: ${nameA} vs Candidate B: ${nameB} · ${scopeNote}`,
     extraCss: _COMPARE_HTML_EXTRA_CSS,
     docTitle: 'BTFViewer — Trace Compare',
     reportClass: 'report-compare',
   })
-  return htmlApplyCollapsibleToc(report, ['Overview', 'Summary'])
+  return htmlApplyCollapsibleToc(report, ['Overview', 'Summary'], COMPARE_TOC_GROUPS)
 }
 
 export function downloadCompareCsv(nameA, nameB, scopeEnabled, tables = {}) {

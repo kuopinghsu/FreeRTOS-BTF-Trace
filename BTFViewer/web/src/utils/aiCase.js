@@ -1512,7 +1512,7 @@ export function newUserInvestigationTemplate(label, steps = []) {
 }
 
 export const VALIDATE_EXPERIMENT_PROMPT =
-  'Did this before/after capture validate the experiment? Call validate_experiment. Omit actual — the host fills percents from the last Trace Compare (Scope to cursors honored). If expected deltas are known from what_if or optimize_experiment, pass them as expected; otherwise omit expected. Then report VALIDATED, PARTIALLY VALIDATED, or DISPROVED with supporting evidence and one next check.'
+  'Did this before/after capture validate the experiment? Call validate_experiment. Omit actual — the host fills percents from the last Trace Compare (Limit to C1–Cn honored when each tab has 2+ cursors). If expected deltas are known from what_if or optimize_experiment, pass them as expected; otherwise omit expected. Then report VALIDATED, PARTIALLY VALIDATED, or DISPROVED with supporting evidence and one next check.'
 
 export function validateExperiment(expected = {}, actual = {}) {
   const exp = expected && typeof expected === 'object' ? expected : {}

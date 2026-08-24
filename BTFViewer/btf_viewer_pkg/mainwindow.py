@@ -14,6 +14,7 @@ from .stats import (
     _format_analysis_findings_text,
 )
 from .trace_quality import collect_trace_quality_warnings
+from .error_format import format_parse_error
 from .ai_assistant import (
     create_ai_assistant_panel,
     AI_PRESET_FIELDS,
@@ -6531,8 +6532,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 or getattr(panel, "_scope_label", None)
                 or panel
             ),
-            "stats_export_csv": getattr(panel, "_btn_export_csv", None),
             "stats_export_html": getattr(panel, "_btn_export_html", None),
+            "stats_export_csv": getattr(panel, "_btn_export_html", None),  # alias: CSV is in HTML
             "stats_health": headers.get("health") if isinstance(headers, dict) else None,
             "stats_tick_dist": getattr(panel, "_btn_tick_dist", None),
         }
@@ -9820,6 +9821,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         progress_dialog.show_centered(self.geometry())
         self._progress_dialog = progress_dialog
 
+        def _request_load_cancel() -> None:
+            thread = getattr(self, "_parse_thread", None)
+            if thread is not None:
+                thread.requestInterruption()
+
+        progress_dialog.cancel_requested.connect(_request_load_cancel)
+
         def _teardown_loading_dialog(*, clear_load_flag: bool = True) -> None:
             try:
                 progress_dialog.close()
@@ -9856,11 +9864,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         def _on_error(msg):
             try:
                 self._status_file.setText("  No file loaded")
+                err = format_parse_error(msg, load_label)
                 _critical_with_detail(
-                    self, "Parse Error",
-                    f"Failed to parse:\n{path}\n\n"
-                    "Check that the file is a valid BTF/XML trace, then try again.",
-                    str(msg))
+                    self, err["title"],
+                    err["message"],
+                    err.get("detail") or str(msg))
             finally:
                 _teardown_loading_dialog()
                 self._finish_parse_thread()

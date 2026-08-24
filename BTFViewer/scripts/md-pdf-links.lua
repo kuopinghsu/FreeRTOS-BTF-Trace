@@ -10,6 +10,10 @@ local known = {
   ["STATISTICS.md"] = true,
   ["AI.md"] = true,
   ["WORKFLOWS.md"] = true,
+  ["README_zh-TW.md"] = true,
+  ["STATISTICS_zh-TW.md"] = true,
+  ["AI_zh-TW.md"] = true,
+  ["WORKFLOWS_zh-TW.md"] = true,
 }
 
 local function rewrite(target)
