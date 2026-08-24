@@ -252,7 +252,21 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertIn("detect_anomalies", compact_tools)
         self.assertIn("search_timeline", compact_tools)
         self.assertNotIn("what_if", compact_tools)
-        self.assertIsNone(tool_names_for_context_mode("full", "triage"))
+        # Start investigation / auto_investigate must expose investigate tools
+        # even when the guided UI is still on idle/triage (Balanced default).
+        auto_tools = tool_names_for_context_mode("balanced", "auto_investigate")
+        self.assertIn("investigate", auto_tools)
+        self.assertIn("correlate_events", auto_tools)
+        self.assertNotIn(
+            "investigate",
+            tool_names_for_context_mode("balanced", "idle"),
+        )
+        full_tools = tool_names_for_context_mode("full", "triage")
+        self.assertIsNotNone(full_tools)
+        self.assertIn("detect_anomalies", full_tools)
+        self.assertIn("verify_claim", full_tools)
+        self.assertNotIn("what_if", full_tools)
+        self.assertLess(len(full_tools), 40)
         report_tools = tool_names_for_context_mode("compact", "report")
         self.assertIn("generate_report", report_tools)
         self.assertIn("export_report", report_tools)
@@ -288,14 +302,14 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertIn("Critical stall", compact)
         self.assertIn("jump:100", compact)
         self.assertIn("Thrash", compact)
-        self.assertIn("2 more finding", compact)
+        self.assertIn("4 more finding", compact)
         self.assertNotIn("id=i4 Extra", compact)
         payload = compact_tool_result_payload(
             {"ok": True, "message": "rows", "rows": list(range(25)),
              "experiments": [{"change": f"c{i}"} for i in range(8)]},
             "compact",
         )
-        self.assertEqual(len(payload["rows"]), 10)
+        self.assertEqual(len(payload["rows"]), 8)
         self.assertEqual(len(payload["experiments"]), 3)
         self.assertTrue(payload["truncated"])
         hist = compact_chat_history(
@@ -387,8 +401,15 @@ class InvestigationCaseTests(unittest.TestCase):
         prompt = investigation_mode_prompt("diagnose")
         self.assertIn("investigate", prompt)
         self.assertIn("correlate_events", prompt)
-        self.assertIn("rank_root_causes", prompt)
+        self.assertIn("verify_claim", prompt)
         self.assertIn("challenge_conclusion", prompt)
+        self.assertNotIn("Call these tools in order", prompt)
+        self.assertIn("challenge_conclusion", prompt)
+        report = investigation_mode_prompt("report")
+        self.assertIn("generate_report", report)
+        self.assertIn("export_report", report)
+        self.assertIn("Call generate_report, then", report)
+        self.assertNotIn("only when the user asks", report)
         tpl = new_user_investigation_template(
             "CPU Latency", ["detect_anomalies", "investigate"])
         dumped = dump_user_investigation_templates([tpl])
@@ -492,7 +513,9 @@ class InvestigationCaseTests(unittest.TestCase):
             }],
         })
         self.assertEqual(percents["migrations"], -72.0)
-        self.assertIn("Call validate_experiment. Omit actual", VALIDATE_EXPERIMENT_PROMPT)
+        self.assertIn("Use validate_experiment", VALIDATE_EXPERIMENT_PROMPT)
+        self.assertIn("VALIDATED", VALIDATE_EXPERIMENT_PROMPT)
+        self.assertIn("candidate", VALIDATE_EXPERIMENT_PROMPT)
         from btf_viewer_pkg.ai_investigation import compare_performance_metrics
         from btf_viewer_pkg.ai_tools import compare_performance_tabs
         tabs = compare_performance_tabs(

@@ -84,7 +84,11 @@ class AiToolsTests(unittest.TestCase):
             t["function"]["name"]
             for t in ai_viewer_tools_for_mode("full", "triage")
         ]
-        self.assertEqual(tuple(full), AI_VIEWER_TOOL_NAMES)
+        self.assertIsNotNone(full)
+        self.assertIn("detect_anomalies", full)
+        self.assertIn("verify_claim", full)
+        self.assertNotEqual(tuple(full), AI_VIEWER_TOOL_NAMES)
+        self.assertLess(len(full), len(AI_VIEWER_TOOL_NAMES))
 
     def test_validate_set_cursors_and_zoom(self) -> None:
         args, err = validate_tool_call(
@@ -409,7 +413,8 @@ class AiToolsTests(unittest.TestCase):
             calls,
         )
         self.assertEqual(len(merged), 4)
-        self.assertIn("```btftool", AI_TOOL_SYSTEM_ADDENDUM)
+        self.assertIn("Use native tools only", AI_TOOL_SYSTEM_ADDENDUM)
+        self.assertIn("Mermaid", AI_TOOL_SYSTEM_ADDENDUM)
 
     def test_parse_btftool_ndjson_fence(self) -> None:
         """Models often emit several tool objects in one fence (not a JSON array)."""
@@ -736,8 +741,9 @@ class AiToolsTests(unittest.TestCase):
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
         for name in AI_VIEWER_TOOL_NAMES:
             self.assertRegex(js, re.compile(rf"['\"]{re.escape(name)}['\"]"))
-        self.assertIn("mermaid sequenceDiagram", AI_TOOL_SYSTEM_ADDENDUM)
-        self.assertIn("mermaid sequenceDiagram", js)
+        self.assertIn("Mermaid", AI_TOOL_SYSTEM_ADDENDUM)
+        self.assertIn("AI_TOOL_PROMPT", js)
+        self.assertIn("Use native tools only", js)
 
 
 if __name__ == "__main__":

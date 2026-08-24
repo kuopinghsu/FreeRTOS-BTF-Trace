@@ -100,9 +100,8 @@ class AiWebParityTests(unittest.TestCase):
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
         ai_client_js = (BTF_ROOT / "web/src/utils/aiClient.js").read_text(
             encoding="utf-8")
-        clause = "one object, a JSON array, or several objects"
-        self.assertIn(clause, AI_TOOL_SYSTEM_ADDENDUM)
-        self.assertIn(clause, js)
+        self.assertIn("Use native tools only", AI_TOOL_SYSTEM_ADDENDUM)
+        self.assertIn("AI_TOOL_PROMPT", js)
         self.assertIn("function loadsJsonValues", js)
         self.assertIn("def _loads_json_values", (
             BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8"))
@@ -110,7 +109,8 @@ class AiWebParityTests(unittest.TestCase):
             "if (textCalls.length) content = stripParsedToolMarkup", ai_client_js)
         self.assertIn("ASK_EVENT_PROMPT", ai_client_js)
         self.assertIn(ASK_EVENT_PROMPT.split("{task}")[0], ai_client_js)
-        self.assertIn("Call correlate_events and query_raw_metric", ai_client_js)
+        self.assertIn("{time}", ai_client_js)
+        self.assertIn("Viewer action: explicit_only", ai_client_js)
         # NDJSON fence (same shape that previously leaked raw JSON in chat)
         text = (
             "Focusing the segment.\n"
@@ -149,10 +149,9 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn(AI_TOOL_OPTIMIZE_EXPERIMENT, AI_VIEWER_TOOL_NAMES)
         self.assertTrue(is_query_tool(AI_TOOL_WHAT_IF))
         self.assertTrue(is_query_tool(AI_TOOL_OPTIMIZE_EXPERIMENT))
-        self.assertIn("optimize_experiment", AI_TOOL_SYSTEM_ADDENDUM)
-        self.assertIn("slice-replay", AI_TOOL_SYSTEM_ADDENDUM)
+        self.assertIn("simulation or optimization only when requested", AI_TOOL_SYSTEM_ADDENDUM)
         self.assertIn("optimize_experiment", js)
-        self.assertIn("slice-replay", js)
+        self.assertIn("AI_TOOL_OPTIMIZE_EXPERIMENT", js)
         # isQueryTool list on web includes the same query tools
         qm = re.search(r"export function isQueryTool\(name\) \{([\s\S]*?)\n\}", js)
         self.assertIsNotNone(qm)
@@ -588,29 +587,17 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("MAX_ANNOTATION_NOTE = 240", js)
         self.assertIn("_MAX_ANNOTATION_NOTE = 240", (
             BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8"))
-        self.assertIn("add_annotation", AI_TOOL_SYSTEM_ADDENDUM)
-        self.assertIn("query_raw_metric", AI_TOOL_SYSTEM_ADDENDUM)
-        self.assertIn("export_report", AI_TOOL_SYSTEM_ADDENDUM)
-        self.assertIn("Valid tools: set_cursors, zoom_to_range, highlight_task,", js)
-        self.assertIn("Valid tools: set_cursors, zoom_to_range, highlight_task,", AI_TOOL_SYSTEM_ADDENDUM)
-        self.assertIn("investigate, explain", AI_TOOL_SYSTEM_ADDENDUM)
-        self.assertIn("investigate, explain", js)
+        self.assertIn("explicit viewer action", AI_TOOL_SYSTEM_ADDENDUM)
+        self.assertIn("Use native tools only", AI_TOOL_SYSTEM_ADDENDUM)
+        self.assertIn("AI_TOOL_PROMPT", js)
         ai_client_js = (BTF_ROOT / "web/src/utils/aiClient.js").read_text(encoding="utf-8")
         self.assertIn("High, Medium, or Low", AI_SYSTEM_PROMPT)
         self.assertIn("High, Medium, or Low", ai_client_js)
-        for title in (
-            "Timeline Anomalies", "Worst Events", "Period / Jitter",
-            "Task Health", "Task × Core", "Waiter × Owner",
-            "Response Time", "Critical Path", "Unified Jitter",
-            "Recurring Patterns", "Preemption Matrix", "Mutex Blocking",
-            "Core Utilization Over Time",
-        ):
-            self.assertIn(title, AI_SYSTEM_PROMPT, title)
-            self.assertIn(title, ai_client_js, title)
-            self.assertIn(title, AI_TOOL_SYSTEM_ADDENDUM, title)
-            self.assertIn(title, js, title)
-        self.assertIn("do not invent a detect_timeline_anomalies tool", AI_TOOL_SYSTEM_ADDENDUM)
-        self.assertIn("do not invent a detect_timeline_anomalies tool", js)
+        self.assertIn("AI_CORE_PROMPT", ai_client_js)
+        self.assertNotIn(
+            "Timeline Anomalies, Worst Events, Response Time, Critical Path",
+            AI_SYSTEM_PROMPT,
+        )
         self.assertNotIn("detect_timeline_anomalies", AI_VIEWER_TOOL_NAMES)
 
     def test_planner_tools_match_apps(self) -> None:
@@ -766,42 +753,27 @@ class AiWebParityTests(unittest.TestCase):
         self.assertEqual(leftover, [], leftover)
 
     def test_ai_templates_name_ux_pages(self) -> None:
-        """Existing templates name the Statistics UX pages; no new template IDs."""
-        from btf_viewer_pkg.ai_assistant import AI_TEMPLATE_QUESTIONS
+        """Shortened templates keep ids; system prompt has no page catalog."""
+        from btf_viewer_pkg.ai_assistant import AI_CORE_PROMPT, AI_TEMPLATE_QUESTIONS
 
         by_id = {tid: prompt for tid, _label, prompt in AI_TEMPLATE_QUESTIONS}
         self.assertEqual(len(AI_TEMPLATE_QUESTIONS), 20)
         self.assertNotIn("detect_timeline_anomalies", by_id)
-
-        pages = (
-            "Timeline Anomalies", "Worst Events", "Period / Jitter",
-            "Task Health", "Task × Core", "Waiter × Owner",
-            "Response Time", "Critical Path", "Unified Jitter",
-            "Recurring Patterns", "Preemption Matrix", "Mutex Blocking",
-            "Core Utilization Over Time",
-        )
-        for tid in ("findings", "investigate", "triage", "diagnostic_report"):
-            for title in pages:
-                self.assertIn(title, by_id[tid], f"{tid}: {title}")
-        self.assertIn("Period / Jitter", by_id["task_profile"])
-        self.assertIn("Task Health", by_id["task_profile"])
-        self.assertIn("Task × Core", by_id["task_profile"])
-        self.assertIn("Timeline Anomalies", by_id["wcet"])
-        self.assertIn("Worst Events", by_id["wcet"])
-        self.assertIn("Period / Jitter", by_id["wcet"])
-        self.assertIn("Task Health", by_id["wcet"])
-
-        self.assertIn("Worst Events", by_id["latency"])
-        self.assertIn("Waiter × Owner", by_id["latency"])
-        self.assertIn("Waiter × Owner", by_id["priority"])
+        self.assertIn("Timeline Anomalies", by_id["findings"])
+        self.assertIn("Preferred tools", by_id["investigate"])
+        self.assertIn("verify_claim", by_id["verify"])
         self.assertIn("Task × Core", by_id["migrations"])
         self.assertIn("Task × Core", by_id["balance"])
-        self.assertIn("Task Health", by_id["deadlines"])
-        self.assertIn("Do not conflate this with Period / Jitter", by_id["tick"])
-        self.assertIn("Compare summary strip", by_id["compare"])
-        self.assertIn("Apply cursors", by_id["auto_investigate"])
-        self.assertIn("btfrange:LO/HI", by_id["auto_investigate"])
-        self.assertIn("p95/p99 cells are clickable", AI_SYSTEM_PROMPT)
+        self.assertIn("Period / Jitter", by_id["tick"])
+        self.assertIn("detect_priority_inversion", by_id["priority"])
+        self.assertIn("check_budget", by_id["deadlines"])
+        self.assertIn("candidate", by_id["compare"])
+        self.assertIn("Stop after verification", by_id["auto_investigate"])
+        self.assertIn("Do not run what_if", by_id["auto_investigate"])
+        self.assertIn("Statistics page", AI_CORE_PROMPT)
+        self.assertNotIn("p95/p99 cells are clickable", AI_CORE_PROMPT)
+        self.assertNotIn("Timeline Anomalies, Worst Events, Response Time, Critical Path",
+                         AI_CORE_PROMPT)
 
     def test_new_tool_dispatch_sites_match(self) -> None:
         mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
@@ -1023,7 +995,7 @@ class AiWebParityTests(unittest.TestCase):
             BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8"))
         self.assertIn("0-based tab index", tools_js)
         self.assertIn("AI_TOOL_INVESTIGATE", tools_js)
-        self.assertIn("investigate", AI_TOOL_SYSTEM_ADDENDUM)
+        self.assertIn("minimum sufficient evidence tool", AI_TOOL_SYSTEM_ADDENDUM)
         # Desktop: tab-bar index first; web must match that order.
         self.assertIn(
             "0-based tab-bar index first",
@@ -1642,7 +1614,7 @@ class AiWebParityTests(unittest.TestCase):
         mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
         self.assertIn("user_investigation_templates", mw)
         app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
-        self.assertIn("level=${level}", app)
+        self.assertIn("formatAiTemplatePrompt", app)
         self.assertIn('extra = f"level={level}" if level else ""', mw)
         stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
         self.assertIn("wants_ai_level", stats)
@@ -1904,10 +1876,11 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("query_template", assist)
         self.assertIn("extra=ex", (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(
             encoding="utf-8"))
-        self.assertIn("level=${level}", app)
-        self.assertIn("finding_id=${findingId}", app)
+        self.assertIn("formatAiTemplatePrompt", app)
+        self.assertIn("formatAiTemplatePrompt", app)
         from btf_viewer_pkg.ai_case import VALIDATE_EXPERIMENT_PROMPT
-        self.assertIn("Call validate_experiment. Omit actual", VALIDATE_EXPERIMENT_PROMPT)
+        self.assertIn("Use validate_experiment", VALIDATE_EXPERIMENT_PROMPT)
+        self.assertIn("VALIDATED", VALIDATE_EXPERIMENT_PROMPT)
         self.assertIn(VALIDATE_EXPERIMENT_PROMPT, case_js)
         self.assertIn("Validate experiment…", stats)
         compare_dlg = (BTF_ROOT / "web/src/components/TraceCompareDialog.vue").read_text(

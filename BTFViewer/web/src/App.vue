@@ -1548,6 +1548,7 @@ import {
   aiJumpAnnotationNote,
   appendExplainRegionBounds,
   composeAskEventPrompt,
+  formatAiTemplatePrompt,
 } from './utils/aiClient.js'
 import { traceQualityReport, collectTraceQualityWarnings } from './utils/traceQuality.js'
 import {
@@ -3686,11 +3687,11 @@ async function focusAiAndAsk(templateIdOrPayload) {
   templateId = templateId || 'findings'
   if (!prompt) {
     prompt = AI_TEMPLATE_QUESTIONS.find(t => t.id === templateId)?.prompt
-    if (findingId && prompt) {
-      prompt = `${prompt}\n\nfinding_id=${findingId}`
-    }
-    if (level && prompt) {
-      prompt = `${prompt}\n\nlevel=${level}`
+    if (prompt) {
+      prompt = formatAiTemplatePrompt(prompt, {
+        findingId: findingId || 'ID',
+        level: level || 'technical',
+      })
     }
     if (extra && prompt) {
       prompt = `${prompt}\n\n${extra}`

@@ -384,8 +384,9 @@ class AiPanelUiTests(unittest.TestCase):
             panel.query_migration_thrash()
         send.assert_called_once()
         prompt = panel._input.toPlainText()
-        self.assertIn("core thrashing", prompt)
-        self.assertIn("lock-bounce", prompt)
+        self.assertIn("migration", prompt.lower())
+        self.assertIn("ping-pong", prompt)
+        self.assertIn("ownership bounce", prompt)
 
     def test_apply_gui_actions_button_runs_pending_tools(self) -> None:
         executed = []
@@ -970,7 +971,9 @@ class AiPanelUiTests(unittest.TestCase):
         interp.assert_not_called()
         self.assertFalse(panel._skip_interpret)
         query = send.call_args[0][0]
-        self.assertIn("Call these tools in order", query)
+        self.assertIn("Preferred tools", query)
+        self.assertIn("detect_anomalies", query)
+        self.assertNotIn("Call these tools in order", query)
         self.assertIn("detect_anomalies", query)
 
     def test_investigation_template_sends_without_interpret_gate(self) -> None:
