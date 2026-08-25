@@ -4055,6 +4055,16 @@ function captureAiGuiSnapshot() {
     inspectorOpen: inspectorOpen.value,
     marks: (marks.value || []).map(m => ({ ...m })),
     markNextId: activeTab.value?.markNextId,
+    scopeToCursors: activeTab.value?.scopeToCursors !== false,
+    taskFilterKeys: timelineOptions.taskFilterKeys
+      ? [...timelineOptions.taskFilterKeys]
+      : null,
+    taskFilterText: timelineOptions.taskFilterText || '',
+    coreFilterKeys: timelineOptions.coreFilterKeys
+      ? [...timelineOptions.coreFilterKeys]
+      : null,
+    migratedOnlyFilter: !!timelineOptions.migratedOnlyFilter,
+    heatmapFilterLabel: timelineOptions.heatmapFilterLabel || null,
   }
 }
 
@@ -4072,6 +4082,28 @@ function restoreAiGuiSnapshot(snap) {
     marks.value = snap.marks.map(m => ({ ...m }))
     if (activeTab.value && snap.markNextId != null) {
       activeTab.value.markNextId = snap.markNextId
+    }
+  }
+  if ('scopeToCursors' in snap) {
+    if (activeTab.value) activeTab.value.scopeToCursors = !!snap.scopeToCursors
+    onStatsScopeChange?.(!!snap.scopeToCursors)
+  }
+  if ('taskFilterKeys' in snap || 'taskFilterText' in snap
+    || 'coreFilterKeys' in snap || 'migratedOnlyFilter' in snap) {
+    timelineOptions.taskFilterKeys = Array.isArray(snap.taskFilterKeys)
+      ? [...snap.taskFilterKeys]
+      : (snap.taskFilterKeys ?? null)
+    timelineOptions.taskFilterText = String(snap.taskFilterText || '')
+    timelineOptions.coreFilterKeys = Array.isArray(snap.coreFilterKeys)
+      ? [...snap.coreFilterKeys]
+      : (snap.coreFilterKeys ?? null)
+    timelineOptions.migratedOnlyFilter = !!snap.migratedOnlyFilter
+    timelineOptions.heatmapFilterLabel = snap.heatmapFilterLabel || null
+    if (activeTab.value) {
+      activeTab.value.taskFilterKeys = timelineOptions.taskFilterKeys
+      activeTab.value.taskFilterText = timelineOptions.taskFilterText
+      activeTab.value.coreFilterKeys = timelineOptions.coreFilterKeys
+      activeTab.value.migratedOnlyFilter = timelineOptions.migratedOnlyFilter
     }
   }
   persistTimelineViewPrefs()

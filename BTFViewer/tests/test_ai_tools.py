@@ -38,6 +38,8 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_VIEWER_TOOL_NAMES,
     ai_viewer_tools,
     ai_viewer_tools_for_mode,
+    classify_viewer_tool,
+    format_tool_action_label,
     build_ai_report_csv,
     build_ai_report_html,
     GEMINI_SKIP_THOUGHT_SIGNATURE,
@@ -149,6 +151,17 @@ class AiToolsTests(unittest.TestCase):
             "Open corridor inspector",
         )
 
+    def test_classify_viewer_tool_action_labels(self) -> None:
+        self.assertEqual(classify_viewer_tool(AI_TOOL_SET_CURSORS), "Navigation")
+        self.assertEqual(classify_viewer_tool(AI_TOOL_ADD_ANNOTATION), "Annotation")
+        self.assertEqual(classify_viewer_tool(AI_TOOL_EXPORT_REPORT), "Export")
+        self.assertEqual(classify_viewer_tool(AI_TOOL_QUERY_RAW_METRIC), "Calculation")
+        self.assertTrue(
+            format_tool_action_label(
+                AI_TOOL_SET_CURSORS, {"timestamps": [10, 20]}
+            ).startswith("[Navigation]")
+        )
+
     def test_validate_annotation_query_and_export(self) -> None:
         args, err = validate_tool_call(
             AI_TOOL_ADD_ANNOTATION, {"time": 1805120, "note": "  spike  "})
@@ -186,6 +199,14 @@ class AiToolsTests(unittest.TestCase):
         self.assertTrue(tool_batch_auto_runs([
             {"name": AI_TOOL_GENERATE_REPORT},
             {"name": AI_TOOL_EXPORT_REPORT},
+        ]))
+        self.assertTrue(tool_batch_auto_runs([
+            {"name": AI_TOOL_SET_CURSORS},
+        ]))
+        self.assertTrue(tool_batch_auto_runs([
+            {"name": AI_TOOL_SET_CURSORS},
+            {"name": AI_TOOL_ZOOM_TO_RANGE},
+            {"name": AI_TOOL_HIGHLIGHT_TASK},
         ]))
         self.assertFalse(tool_batch_auto_runs([
             {"name": AI_TOOL_QUERY_RAW_METRIC},

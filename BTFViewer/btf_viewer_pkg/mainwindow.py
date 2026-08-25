@@ -7251,6 +7251,28 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         view = getattr(self, "_view", None)
         scene = view._scene if view is not None else None
         dlg = self._heatmap_dlg or self._chord_dlg
+        panel = getattr(self, "_stats_panel", None)
+        legend = getattr(self, "_legend", None)
+        if legend is not None and scene is not None:
+            self._capture_legend_filters_to_scene(scene)
+        scope_on = True
+        if panel is not None:
+            scope_on = bool(getattr(panel, "_scope_to_cursors", True))
+        task_q = ""
+        migrated = False
+        core_keys = None
+        heat_label = None
+        heat_mks = None
+        if scene is not None:
+            task_q = str(getattr(scene, "_task_filter_q", "") or "")
+            migrated = bool(getattr(scene, "_migrated_only_filter", False))
+            cores = getattr(scene, "_core_filter_keys", None)
+            if cores:
+                core_keys = list(cores)
+            heat_mks = getattr(scene, "_heatmap_filter_mks", None)
+            if heat_mks is not None:
+                heat_mks = list(heat_mks)
+            heat_label = getattr(scene, "_heatmap_filter_label", None)
         return {
             "cursors": list(scene.cursor_times()) if scene is not None else [],
             "view_mode": getattr(self, "_view_mode", "task"),
@@ -7268,6 +7290,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 (b.id, b.ns, b.label) for b in self._bookmarks
             ],
             "mark_next_id": int(getattr(self, "_mark_next_id", 1) or 1),
+            "scope_to_cursors": scope_on,
+            "task_filter_q": task_q,
+            "migrated_only_filter": migrated,
+            "core_filter_keys": core_keys,
+            "heatmap_filter_label": heat_label,
+            "heatmap_filter_mks": heat_mks,
         }
 
     def _ai_gui_state_for_report(self) -> dict:
@@ -7349,6 +7377,25 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._save_current_trace_state()
             if scene is not None:
                 scene.set_marks(self._bookmarks, self._annotations)
+        if "scope_to_cursors" in snap:
+            self._demo_set_limit(bool(snap.get("scope_to_cursors")))
+        if scene is not None and (
+            "task_filter_q" in snap
+            or "core_filter_keys" in snap
+            or "heatmap_filter_mks" in snap
+            or "migrated_only_filter" in snap
+        ):
+            heat_mks = snap.get("heatmap_filter_mks")
+            scene.apply_tab_filters({
+                "taskFilterText": str(snap.get("task_filter_q") or ""),
+                "taskFilterKeys": list(heat_mks) if heat_mks else None,
+                "heatmapFilterLabel": snap.get("heatmap_filter_label"),
+                "migratedOnlyFilter": bool(snap.get("migrated_only_filter")),
+                "coreFilterKeys": snap.get("core_filter_keys"),
+            }, rebuild=True)
+            self._sync_legend_filters_from_scene(scene)
+            self._sync_core_filter_chip()
+            self._sync_show_all_tasks_btn()
         if hasattr(self, "_stats_panel"):
             self._stats_panel.set_cursor_times(scene.cursor_times(), refresh_stats=True)
 

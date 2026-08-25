@@ -3171,9 +3171,69 @@ export function toolMutatesGui(name) {
   ].includes(String(name || ''))
 }
 
+/** True for focus/zoom/highlight tools (UX-113 navigation-only). */
+export function isNavigationTool(name) {
+  return [
+    AI_TOOL_SET_CURSORS,
+    AI_TOOL_ZOOM_TO_RANGE,
+    AI_TOOL_HIGHLIGHT_TASK,
+  ].includes(String(name || ''))
+}
+
+/** Apply-card action classes (UX-113). Keep labels stable for Desktop/Web lockstep. */
+export const VIEWER_TOOL_ACTION_NAVIGATION = 'Navigation'
+export const VIEWER_TOOL_ACTION_SCOPE = 'Scope'
+export const VIEWER_TOOL_ACTION_FILTER = 'Filter'
+export const VIEWER_TOOL_ACTION_ANNOTATION = 'Annotation'
+export const VIEWER_TOOL_ACTION_EXPORT = 'Export'
+export const VIEWER_TOOL_ACTION_CALCULATION = 'Calculation'
+
+export const VIEWER_TOOL_ACTION_CLASSES = [
+  VIEWER_TOOL_ACTION_NAVIGATION,
+  VIEWER_TOOL_ACTION_SCOPE,
+  VIEWER_TOOL_ACTION_FILTER,
+  VIEWER_TOOL_ACTION_ANNOTATION,
+  VIEWER_TOOL_ACTION_EXPORT,
+  VIEWER_TOOL_ACTION_CALCULATION,
+]
+
+/** Classify a tool for Apply-card labels (UX-113). */
+export function classifyViewerTool(name) {
+  const n = String(name || '')
+  if (
+    isNavigationTool(n)
+    || [
+      AI_TOOL_SET_VIEW_MODE,
+      AI_TOOL_OPEN_CORRIDOR,
+      AI_TOOL_RESET_VIEW,
+      AI_TOOL_SEARCH_TIMELINE,
+      AI_TOOL_TRIGGER_COMPARE,
+    ].includes(n)
+  ) {
+    return VIEWER_TOOL_ACTION_NAVIGATION
+  }
+  if (n === AI_TOOL_SUGGEST_SCOPE) return VIEWER_TOOL_ACTION_SCOPE
+  if ([
+    AI_TOOL_ADD_ANNOTATION,
+    AI_TOOL_BOOKMARK_FINDING,
+    AI_TOOL_CLEAR_MARKS,
+  ].includes(n)) {
+    return VIEWER_TOOL_ACTION_ANNOTATION
+  }
+  if (isExportTool(n)) return VIEWER_TOOL_ACTION_EXPORT
+  return VIEWER_TOOL_ACTION_CALCULATION
+}
+
+/** `[Navigation] Set cursors at […]` for Apply cards and history. */
+export function formatToolActionLabel(name, args) {
+  return `[${classifyViewerTool(name)}] ${summariseToolCall(name, args)}`
+}
+
 export function toolBatchAutoRuns(tools) {
   const names = (tools || []).map(t => String(t?.name || ''))
-  return names.length > 0 && names.every(n => isQueryTool(n) || isExportTool(n))
+  return names.length > 0 && names.every(
+    n => isQueryTool(n) || isExportTool(n) || isNavigationTool(n),
+  )
 }
 
 function csvEscape(value) {
@@ -3439,15 +3499,35 @@ export function buildAiReportHtml({
     const label = String(ev.label || 'event')
     const taskM = TASK_FINDING_RE.exec(label)
     const task = String(ev.task || (taskM ? taskM[1] : '—'))
+    let core = String(ev.core || '').trim()
+    if (!core) {
+      const coreM = /\b(?:Core[_\s-]?(\d+)|C(\d+))\b/i.exec(label)
+      core = coreM ? `Core ${coreM[1] || coreM[2]}` : '—'
+    }
     const t = ev.time ?? ev.start ?? ''
     let dur = '—'
+    const fmtDelta = (delta) => {
+      if (!(delta > 0) || !Number.isFinite(delta)) return ''
+      if (delta < 1) return `${Math.round(delta * 1_000_000)} µs`
+      if (delta < 1000) return `${delta} s`
+      return `${Math.round(delta)}`
+    }
     if (ev.start != null && ev.stop != null) {
-      const delta = Number(ev.stop) - Number(ev.start)
-      if (Number.isFinite(delta)) {
-        dur = delta < 1 ? `${Math.round(delta * 1_000_000)} µs` : `${delta} s`
+      const formatted = fmtDelta(Number(ev.stop) - Number(ev.start))
+      if (formatted) dur = formatted
+    }
+    if (dur === '—') {
+      const formatted = fmtDelta(Number(ev.duration ?? ev.gap))
+      if (formatted) dur = formatted
+    }
+    if (dur === '—') {
+      const durM = /\bdur(?:ation)?\s*=\s*([0-9]+(?:\.[0-9]+)?)/i.exec(label)
+      if (durM) {
+        const formatted = fmtDelta(Number(durM[1]))
+        if (formatted) dur = formatted
       }
     }
-    evRows.push([fmtReportTime(t), label, task, String(ev.core || '—'), dur, 'In scope'])
+    evRows.push([fmtReportTime(t), label, task, core || '—', dur, 'In scope'])
   }
   const evidenceHtml = evRows.length
     ? htmlTable(['Time', 'Event', 'Task', 'Core', 'Duration', 'Scope'], evRows)
@@ -4225,18 +4305,36 @@ function eventsFromMetricPayload(payload, metric, task) {
       if (t == null) continue
       let detail = `PI base=${ep.base_pri} peak=${ep.peak_pri}`
       if (ep.inversion_suspect) detail += ' inversion_suspect'
-      out.push({ time: t, kind: 'priority', detail, task })
+      let stop = ep.stop
+      const dur = ep.duration
+      if (stop == null && t != null && dur != null) {
+        const n = Number(t) + Number(dur)
+        if (Number.isFinite(n)) stop = n
+      }
+      out.push({
+        time: t, kind: 'priority', detail, task,
+        start: t, stop, duration: dur,
+      })
     }
   } else if (metric === AI_RAW_METRIC_EXECUTION) {
     for (const sl of data.slices || []) {
       const t = sl.start
       if (t == null) continue
+      let stop = sl.stop
+      const dur = sl.duration
+      if (stop == null && t != null && dur != null) {
+        const n = Number(t) + Number(dur)
+        if (Number.isFinite(n)) stop = n
+      }
       out.push({
         time: t,
         kind: 'execution',
         detail: `dur=${sl.duration} core=${sl.core}`,
         task,
         core: sl.core || '',
+        start: t,
+        stop,
+        duration: dur,
       })
     }
   } else if (metric === AI_RAW_METRIC_MIGRATIONS) {
@@ -4248,17 +4346,27 @@ function eventsFromMetricPayload(payload, metric, task) {
         kind: 'migration',
         detail: `${row.from}→${row.to}`,
         task,
+        core: row.to || '',
       })
     }
   } else if (metric === AI_RAW_METRIC_BLOCKING) {
     for (const row of data.gaps || []) {
       const t = row.start ?? row.time
       if (t == null) continue
+      const gap = row.duration ?? row.gap
+      let stop = null
+      if (t != null && gap != null) {
+        const n = Number(t) + Number(gap)
+        if (Number.isFinite(n)) stop = n
+      }
       out.push({
         time: t,
         kind: 'blocking',
-        detail: String(row.duration ?? row.gap ?? 'block'),
+        detail: String(gap ?? 'block'),
         task,
+        start: t,
+        stop,
+        duration: gap,
       })
     }
   } else if (metric === AI_RAW_METRIC_SYNC) {

@@ -2439,11 +2439,69 @@ def tool_mutates_gui(name: str) -> bool:
     )
 
 
+def is_navigation_tool(name: str) -> bool:
+    """True for focus/zoom/highlight tools (UX-113 navigation-only)."""
+    return str(name or "") in (
+        AI_TOOL_SET_CURSORS,
+        AI_TOOL_ZOOM_TO_RANGE,
+        AI_TOOL_HIGHLIGHT_TASK,
+    )
+
+
+# Apply-card action classes (UX-113). Keep labels stable for Desktop/Web lockstep.
+VIEWER_TOOL_ACTION_NAVIGATION = "Navigation"
+VIEWER_TOOL_ACTION_SCOPE = "Scope"
+VIEWER_TOOL_ACTION_FILTER = "Filter"
+VIEWER_TOOL_ACTION_ANNOTATION = "Annotation"
+VIEWER_TOOL_ACTION_EXPORT = "Export"
+VIEWER_TOOL_ACTION_CALCULATION = "Calculation"
+
+VIEWER_TOOL_ACTION_CLASSES: Tuple[str, ...] = (
+    VIEWER_TOOL_ACTION_NAVIGATION,
+    VIEWER_TOOL_ACTION_SCOPE,
+    VIEWER_TOOL_ACTION_FILTER,
+    VIEWER_TOOL_ACTION_ANNOTATION,
+    VIEWER_TOOL_ACTION_EXPORT,
+    VIEWER_TOOL_ACTION_CALCULATION,
+)
+
+
+def classify_viewer_tool(name: str) -> str:
+    """Classify a tool for Apply-card labels (UX-113)."""
+    n = str(name or "")
+    if is_navigation_tool(n) or n in (
+        AI_TOOL_SET_VIEW_MODE,
+        AI_TOOL_OPEN_CORRIDOR,
+        AI_TOOL_RESET_VIEW,
+        AI_TOOL_SEARCH_TIMELINE,
+        AI_TOOL_TRIGGER_COMPARE,
+    ):
+        return VIEWER_TOOL_ACTION_NAVIGATION
+    if n == AI_TOOL_SUGGEST_SCOPE:
+        return VIEWER_TOOL_ACTION_SCOPE
+    if n in (
+        AI_TOOL_ADD_ANNOTATION,
+        AI_TOOL_BOOKMARK_FINDING,
+        AI_TOOL_CLEAR_MARKS,
+    ):
+        return VIEWER_TOOL_ACTION_ANNOTATION
+    if is_export_tool(n):
+        return VIEWER_TOOL_ACTION_EXPORT
+    return VIEWER_TOOL_ACTION_CALCULATION
+
+
+def format_tool_action_label(name: str, args: Optional[Dict[str, Any]] = None) -> str:
+    """``[Navigation] Set cursors at […]`` for Apply cards and history."""
+    kind = classify_viewer_tool(name)
+    return f"[{kind}] {summarise_tool_call(name, args)}"
+
+
 def tool_batch_auto_runs(tools: Optional[Sequence[Any]]) -> bool:
-    """Query/export-only batches run immediately (no Apply card)."""
+    """Query/export/navigation-only batches run immediately (no Apply card)."""
     names = [str((t or {}).get("name") or "") for t in (tools or [])]
     return bool(names) and all(
-        is_query_tool(n) or is_export_tool(n) for n in names
+        is_query_tool(n) or is_export_tool(n) or is_navigation_tool(n)
+        for n in names
     )
 
 
@@ -3542,10 +3600,20 @@ def _html_escape(text: Any) -> str:
 
 
 _TASK_FINDING_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9_.-]*\[\d+\])")
+_CORE_FINDING_RE = re.compile(r"\b(?:Core[_\s-]?(\d+)|C(\d+))\b", re.IGNORECASE)
+_DUR_FINDING_RE = re.compile(r"\bdur(?:ation)?\s*=\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
 _SEVERITY_RE = re.compile(
     r"\[?\s*(CRITICAL|WARNING|WARN|ERROR|INFO|HIGH|MEDIUM|LOW)\s*\]?",
     re.IGNORECASE,
 )
+
+
+def _fmt_evidence_delta(delta: float) -> str:
+    if delta < 1:
+        return f"{delta * 1_000_000:.0f} µs"
+    if delta < 1000:
+        return f"{delta:.6g} s"
+    return f"{delta:.0f}"
 
 
 def filter_entries_for_ai_report(entries: Optional[Sequence[Any]] = None) -> List[Any]:
@@ -3824,17 +3892,38 @@ def build_ai_report_html(
         label = str(ev.get("label") or "event")
         task_m = _TASK_FINDING_RE.search(label)
         task = str(ev.get("task") or (task_m.group(1) if task_m else "—"))
+        core = str(ev.get("core") or "").strip()
+        if not core:
+            core_m = _CORE_FINDING_RE.search(label)
+            core = f"Core {core_m.group(1) or core_m.group(2)}" if core_m else "—"
         t = ev.get("time", ev.get("start", ""))
         dur = ""
         if ev.get("start") is not None and ev.get("stop") is not None:
             try:
                 delta = float(ev["stop"]) - float(ev["start"])
-                dur = f"{delta * 1_000_000:.0f} µs" if delta < 1 else f"{delta:.6g} s"
+                if delta > 0:
+                    dur = _fmt_evidence_delta(delta)
             except (TypeError, ValueError):
-                dur = "—"
+                dur = ""
+        if not dur:
+            try:
+                delta = float(ev.get("duration", ev.get("gap")))
+                if delta > 0:
+                    dur = _fmt_evidence_delta(delta)
+            except (TypeError, ValueError):
+                dur = ""
+        if not dur:
+            dur_m = _DUR_FINDING_RE.search(label)
+            if dur_m:
+                try:
+                    delta = float(dur_m.group(1))
+                    if delta > 0:
+                        dur = _fmt_evidence_delta(delta)
+                except (TypeError, ValueError):
+                    pass
         ev_rows.append([
             _fmt_report_time(t), label, task,
-            str(ev.get("core") or "—"), dur or "—", "In scope",
+            core or "—", dur or "—", "In scope",
         ])
     evidence_html = (
         _html_table(
@@ -4971,36 +5060,63 @@ def _events_from_metric_payload(payload: Dict[str, Any], metric: str, task: str)
             detail = f"PI base={ep.get('base_pri')} peak={ep.get('peak_pri')}"
             if ep.get("inversion_suspect"):
                 detail += " inversion_suspect"
-            out.append({"time": t, "kind": "priority", "detail": detail, "task": task})
+            stop = ep.get("stop")
+            dur = ep.get("duration")
+            if stop is None and t is not None and dur is not None:
+                try:
+                    stop = float(t) + float(dur)
+                except (TypeError, ValueError):
+                    stop = None
+            out.append({
+                "time": t, "kind": "priority", "detail": detail, "task": task,
+                "start": t, "stop": stop, "duration": dur,
+            })
     elif metric == AI_RAW_METRIC_EXECUTION:
         for sl in data.get("slices") or []:
             t = sl.get("start")
             if t is None:
                 continue
+            stop = sl.get("stop")
+            dur = sl.get("duration")
+            if stop is None and t is not None and dur is not None:
+                try:
+                    stop = float(t) + float(dur)
+                except (TypeError, ValueError):
+                    stop = None
             out.append({
                 "time": t, "kind": "execution",
                 "detail": f"dur={sl.get('duration')} core={sl.get('core')}",
                 "task": task, "core": sl.get("core") or "",
+                "start": t, "stop": stop, "duration": dur,
             })
     elif metric == AI_RAW_METRIC_MIGRATIONS:
         for row in data.get("events") or data.get("migrations") or []:
             t = row.get("time")
             if t is None:
                 continue
+            to_core = row.get("to") or ""
             out.append({
                 "time": t, "kind": "migration",
                 "detail": f"{row.get('from')}→{row.get('to')}",
-                "task": task,
+                "task": task, "core": to_core,
             })
     elif metric == AI_RAW_METRIC_BLOCKING:
         for row in data.get("gaps") or []:
             t = row.get("start") or row.get("time")
             if t is None:
                 continue
+            gap = row.get("duration", row.get("gap"))
+            stop = None
+            if t is not None and gap is not None:
+                try:
+                    stop = float(t) + float(gap)
+                except (TypeError, ValueError):
+                    stop = None
             out.append({
                 "time": t, "kind": "blocking",
-                "detail": str(row.get("duration") or "block"),
+                "detail": str(gap if gap is not None else "block"),
                 "task": task,
+                "start": t, "stop": stop, "duration": gap,
             })
     elif metric == AI_RAW_METRIC_SYNC:
         for row in data.get("events") or []:

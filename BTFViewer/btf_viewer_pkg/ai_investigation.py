@@ -1051,7 +1051,15 @@ def build_correlation_timeline(
             "detail": str(ev.get("detail") or ev.get("note") or ev.get("event") or ""),
             "task": str(ev.get("task") or task or ""),
             "core": ev.get("core") or "",
+            "start": ev.get("start", t),
+            "stop": ev.get("stop"),
+            "duration": ev.get("duration", ev.get("gap")),
         })
+        if rows[-1]["stop"] is None and rows[-1]["duration"] is not None:
+            try:
+                rows[-1]["stop"] = float(t) + float(rows[-1]["duration"])
+            except (TypeError, ValueError):
+                pass
     rows.sort(key=lambda r: r["time"])
     if around_time is not None and window and window > 0:
         lo = float(around_time) - float(window)
@@ -1133,7 +1141,16 @@ def build_critical_path(
             "kind": str(ev.get("kind") or "event"),
             "detail": str(ev.get("detail") or ev.get("note") or ""),
             "task": str(ev.get("task") or task or ""),
+            "core": str(ev.get("core") or ""),
+            "start": ev.get("start", t),
+            "stop": ev.get("stop"),
+            "duration": ev.get("duration", ev.get("gap")),
         })
+        if rows[-1]["stop"] is None and rows[-1]["duration"] is not None:
+            try:
+                rows[-1]["stop"] = float(t) + float(rows[-1]["duration"])
+            except (TypeError, ValueError):
+                pass
     if not rows:
         return {
             "ok": False,
@@ -1175,11 +1192,20 @@ def build_critical_path(
     for i, ev in enumerate(rows, start=1):
         label = kind_labels.get(ev["kind"], ev["kind"])
         detail = ev["detail"]
-        start = ev["time"]
-        if i < len(rows) and rows[i]["time"] > start:
-            stop = rows[i]["time"]
-        else:
-            stop = start
+        start = ev.get("start")
+        stop = ev.get("stop")
+        try:
+            has_interval = (
+                start is not None and stop is not None and float(stop) > float(start)
+            )
+        except (TypeError, ValueError):
+            has_interval = False
+        if not has_interval:
+            start = ev["time"]
+            if i < len(rows) and rows[i]["time"] > start:
+                stop = rows[i]["time"]
+            else:
+                stop = start
         path.append({
             "step": i,
             "time": ev["time"],
@@ -1187,6 +1213,8 @@ def build_critical_path(
             "stop": stop,
             "detail": f"{label}: {detail}" if detail else label,
             "kind": ev["kind"],
+            "task": str(ev.get("task") or task or ""),
+            "core": str(ev.get("core") or ""),
         })
     kinds = {r["kind"] for r in rows}
     if len(kinds) >= 3 and len(rows) >= 4:
@@ -1248,13 +1276,12 @@ def extract_evidence_panel_payload(
         finding = data.get("finding") if isinstance(data.get("finding"), dict) else {}
         payload["conclusion"] = str(finding.get("title") or data.get("conclusion") or "")
         payload["subtitle"] = str(finding.get("text") or "")
+        focus_task = str(finding.get("task") or data.get("task") or "").strip()
         ev_items: List[Dict[str, Any]] = []
         for ev in finding.get("evidence") or []:
-            if isinstance(ev, dict):
-                ev_items.append({
-                    "label": str(ev.get("label") or ev.get("text") or "evidence"),
-                    "time": ev.get("time"),
-                })
+            item = _normalize_evidence_item(ev, default_task=focus_task)
+            if item:
+                ev_items.append(item)
         if ev_items:
             payload["evidence"] = ev_items
         if data.get("evidence_chain"):
@@ -1278,26 +1305,32 @@ def extract_evidence_panel_payload(
         task = str(data.get("task") or "")
         payload["conclusion"] = f"Critical path: {task}" if task else "Critical path"
         payload["evidence"] = [
-            {
-                "label": str(p.get("detail") or ""),
-                "time": p.get("time"),
-                "start": p.get("start"),
-                "stop": p.get("stop"),
-            }
-            for p in (data.get("path") or [])
-            if isinstance(p, dict)
+            item for item in (
+                _normalize_evidence_item(
+                    p,
+                    default_task=task,
+                    label=str(p.get("detail") or ""),
+                )
+                for p in (data.get("path") or [])
+                if isinstance(p, dict)
+            )
+            if item
         ]
         payload["confidence"] = str(data.get("confidence") or "Medium")
     elif name == "correlate_events" or data.get("events"):
         task = str(data.get("task") or "")
         payload["conclusion"] = f"Correlated events: {task}" if task else "Correlated events"
         payload["evidence"] = [
-            {
-                "label": f"{e.get('kind')}: {e.get('detail')}",
-                "time": e.get("time"),
-            }
-            for e in (data.get("events") or [])[:15]
-            if isinstance(e, dict)
+            item for item in (
+                _normalize_evidence_item(
+                    e,
+                    default_task=task,
+                    label=f"{e.get('kind')}: {e.get('detail')}",
+                )
+                for e in (data.get("events") or [])[:15]
+                if isinstance(e, dict)
+            )
+            if item
         ]
         corr = data.get("correlation")
         payload["confidence"] = (
@@ -1316,10 +1349,12 @@ def extract_evidence_panel_payload(
             or data.get("message")
             or (f"{len(times)} timeline hit(s)" if times else "No timeline hits")
         )
+        focus_task = str(data.get("task") or "").strip()
         payload["evidence"] = [
             {
                 "label": f"timeline: {query}" if query else "timeline hit",
                 "time": t if t != int(t) else int(t),
+                **({"task": focus_task} if focus_task else {}),
             }
             for t in times[:20]
         ]
@@ -1337,34 +1372,35 @@ def extract_evidence_panel_payload(
                 if inversions else "No priority inversion suspects"
             )
         )
-        payload["evidence"] = [
-            {
-                "label": (
-                    "priority: "
-                    + (
-                        str(inv.get("pattern") or "").strip()
-                        or "L/M/H inversion"
-                    )
-                    + (
-                        f" low={inv.get('low')}" if inv.get("low") else ""
-                    )
-                    + (
-                        f" med={inv.get('medium')}" if inv.get("medium") else ""
-                    )
-                    + (
-                        f" high={inv.get('high')}" if inv.get("high") else ""
-                    )
-                ),
-                "time": inv.get("time"),
-                "start": inv.get("time"),
-                "stop": (
-                    (inv.get("time") or 0) + (inv.get("duration") or 0)
-                    if inv.get("time") is not None and inv.get("duration") is not None
-                    else inv.get("time")
-                ),
-            }
-            for inv in inversions[:15]
-        ]
+        payload["evidence"] = []
+        for inv in inversions[:15]:
+            pattern = str(inv.get("pattern") or "").strip() or "L/M/H inversion"
+            label = "priority: " + pattern
+            if inv.get("low"):
+                label += f" low={inv.get('low')}"
+            if inv.get("medium"):
+                label += f" med={inv.get('medium')}"
+            if inv.get("high"):
+                label += f" high={inv.get('high')}"
+            item = _normalize_evidence_item(
+                {
+                    "label": label,
+                    "time": inv.get("time"),
+                    "start": inv.get("time"),
+                    "stop": (
+                        (inv.get("time") or 0) + (inv.get("duration") or 0)
+                        if inv.get("time") is not None
+                        and inv.get("duration") is not None
+                        else inv.get("time")
+                    ),
+                    "duration": inv.get("duration"),
+                    "task": inv.get("task") or task,
+                    "core": inv.get("core") or "",
+                },
+                default_task=task,
+            )
+            if item:
+                payload["evidence"].append(item)
         if inversions:
             payload["evidence_chain"] = (
                 f"{len(inversions)} priority-inversion episode(s)"
@@ -2432,6 +2468,47 @@ def _localize_evidence_token(text: str, labels: Dict[str, str]) -> str:
 
 _TASK_IN_LABEL_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9_.-]*\[\d+\])")
 _CORE_IN_LABEL_RE = re.compile(r"\b(?:Core[_\s-]?(\d+)|C(\d+))\b", re.IGNORECASE)
+_DUR_IN_LABEL_RE = re.compile(r"\bdur(?:ation)?\s*=\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+
+
+def _normalize_evidence_item(
+    ev: Any,
+    *,
+    default_task: str = "",
+    default_core: str = "",
+    label: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Copy evidence fields the Evidence table needs (task / core / duration)."""
+    if not isinstance(ev, dict):
+        return None
+    out_label = str(
+        label if label is not None else (ev.get("label") or ev.get("text") or "evidence")
+    ).strip() or "evidence"
+    task = str(ev.get("task") or default_task or "").strip()
+    core = str(ev.get("core") or default_core or "").strip()
+    time = ev.get("time")
+    start = ev.get("start")
+    stop = ev.get("stop")
+    duration = ev.get("duration", ev.get("gap"))
+    if start is None and time is not None:
+        start = time
+    if stop is None and start is not None and duration is not None:
+        try:
+            stop = float(start) + float(duration)
+        except (TypeError, ValueError):
+            stop = None
+    item: Dict[str, Any] = {"label": out_label, "time": time}
+    if task:
+        item["task"] = task
+    if core:
+        item["core"] = core
+    if start is not None:
+        item["start"] = start
+    if stop is not None:
+        item["stop"] = stop
+    if duration is not None:
+        item["duration"] = duration
+    return item
 
 CONCLUSION_STATUSES: Tuple[str, ...] = (
     "confirmed", "correlated", "suspected", "not_observed", "insufficient",
@@ -2493,6 +2570,16 @@ def _format_evidence_duration(start: Any, stop: Any) -> str:
     return f"{delta:.0f}"
 
 
+def _format_evidence_duration_delta(delta: Any) -> str:
+    try:
+        d = float(delta)
+    except (TypeError, ValueError):
+        return ""
+    if not (d > 0):
+        return ""
+    return _format_evidence_duration(0, d)
+
+
 def _evidence_row_fields(ev: dict) -> Tuple[str, str, str, str, str]:
     label = str(ev.get("label") or "").strip() or "item"
     task = str(ev.get("task") or "").strip()
@@ -2507,6 +2594,12 @@ def _evidence_row_fields(ev: dict) -> Tuple[str, str, str, str, str]:
             core = f"Core {m.group(1) or m.group(2)}"
     start, stop, t = ev.get("start"), ev.get("stop"), ev.get("time")
     dur = _format_evidence_duration(start, stop)
+    if not dur:
+        dur = _format_evidence_duration_delta(ev.get("duration", ev.get("gap")))
+    if not dur:
+        m = _DUR_IN_LABEL_RE.search(label)
+        if m:
+            dur = _format_evidence_duration_delta(m.group(1))
     try:
         s_lo = float(start) if start is not None else None
         s_hi = float(stop) if stop is not None else None
@@ -2539,6 +2632,17 @@ def _format_direct_evidence_table(
     ]
     for ev in rows[:20]:
         time_cell, label, task, core, dur = _evidence_row_fields(ev)
+        origin = str(
+            ev.get("origin") or ev.get("source") or ev.get("result_kind") or ""
+        ).strip().lower()
+        if origin in ("measured", "observed", "direct"):
+            label = f"[measured] {label}"
+        elif origin in ("derived", "computed"):
+            label = f"[derived] {label}"
+        elif origin in ("heuristic", "estimate"):
+            label = f"[heuristic] {label}"
+        elif origin in ("simulated", "simulation", "what_if"):
+            label = f"[simulated] {label}"
         lines.append(f"| {time_cell} | {label} | {task} | {core} | {dur} |")
     return lines
 
@@ -2616,13 +2720,57 @@ def format_evidence_panel_markdown(
         "not_observed": labels.get("status_not_observed", "Not observed"),
         "insufficient": labels.get("status_insufficient", "Insufficient data"),
     }.get(status_key, labels.get("status_suspected", "Suspected"))
-    lines.append(f"**{labels.get('status', 'Status')}:** {status_label}")
+
+    coverage = data.get("coverage") if isinstance(data.get("coverage"), dict) else {}
+    quality = data.get("evidence_quality") if isinstance(
+        data.get("evidence_quality"), dict) else {}
+    conf_raw = str(data.get("confidence") or "").strip()
+    conf_label = _localize_evidence_token(conf_raw, labels) if conf_raw else ""
+    if status_key == "insufficient" and conf_label.lower() == str(
+            labels.get("high", "High")).lower():
+        conf_label = labels.get("low", "Low")
+    cov_pct = 0
+    try:
+        cov_pct = int(coverage.get("percent") or 0)
+    except (TypeError, ValueError):
+        cov_pct = 0
+    if cov_pct >= 80:
+        cov_label = labels.get("coverage_complete", "Complete")
+    elif cov_pct >= 40:
+        cov_label = labels.get("coverage_partial", "Partial")
+    elif coverage or quality:
+        cov_label = labels.get("coverage_missing", "Missing")
+    else:
+        cov_label = "—"
+    band = str(quality.get("band") or "").strip().lower()
+    evidence_label = {
+        "strong": labels.get("quality_direct", "Direct"),
+        "medium-high": labels.get("status_correlated", "Correlated"),
+        "medium": labels.get("status_correlated", "Correlated"),
+        "weak": labels.get("quality_possible", "Possible"),
+        "insufficient": labels.get("status_insufficient", "Insufficient"),
+    }.get(band, labels.get("quality_possible", "Possible") if quality else "—")
+    lines.append(
+        f"**{labels.get('verdict', 'Verdict')}:** {status_label}"
+        f" · **{labels.get('coverage_short', 'Coverage')}:** {cov_label}"
+        f" · **{labels.get('evidence_short', 'Evidence')}:** {evidence_label}"
+        f" · **{labels.get('confidence', 'Confidence')}:** "
+        f"{conf_label or '—'}"
+    )
 
     conclusion = _localize_evidence_token(
         str(data.get("conclusion") or "").strip(), labels)
     if conclusion:
         lines.append("")
-        lines.append(f"**{labels.get('finding', 'Finding')}**")
+        # Gate Root cause vs Leading explanation on confirmation strength.
+        finding_hdr = labels.get("finding", "Finding")
+        if status_key == "confirmed" and str(
+                data.get("confidence") or "").strip().lower() in ("high",):
+            finding_hdr = labels.get("root_cause", "Root cause")
+        elif status_key in ("confirmed", "correlated", "suspected"):
+            finding_hdr = labels.get(
+                "leading_explanation", "Leading explanation")
+        lines.append(f"**{finding_hdr}**")
         lines.append(conclusion)
     subtitle = str(data.get("subtitle") or "").strip()
     # Subtitle that is only a mode/scope tag stays under Finding as a short line.
@@ -2670,7 +2818,6 @@ def format_evidence_panel_markdown(
         pass
 
     checks = [c for c in (data.get("checks") or []) if isinstance(c, dict)]
-    coverage = data.get("coverage") if isinstance(data.get("coverage"), dict) else {}
     check_rows = _coverage_check_rows(coverage, checks, labels)
     if not check_rows:
         quality = data.get("evidence_quality") if isinstance(
@@ -2746,6 +2893,25 @@ def format_evidence_panel_markdown(
         s for s in (falsify.get("disprove") or falsify.get("would_disprove") or [])
         if s
     ]
+    contradicting = [
+        s for s in (
+            falsify.get("contradicting")
+            or falsify.get("contradictions")
+            or data.get("contradictions")
+            or []
+        )
+        if s
+    ]
+    if supporting:
+        lines.append("")
+        lines.append(f"**{labels.get('supporting', 'Supporting')}**")
+        for s in supporting[:8]:
+            lines.append(f"- {s}")
+    if contradicting:
+        lines.append("")
+        lines.append(f"**{labels.get('contradicting', 'Contradicting')}**")
+        for s in contradicting[:8]:
+            lines.append(f"- {s}")
     if disprove:
         lines.append("")
         lines.append(f"**{labels.get('missing_evidence', 'Missing evidence')}**")
@@ -2755,15 +2921,12 @@ def format_evidence_panel_markdown(
     if nxt:
         lines.append("")
         lines.append(
-            f"**{labels.get('next_action', labels.get('next_check', 'Next action'))}:** "
+            f"**▶ {labels.get('next_check', labels.get('next_action', 'Next check'))}:** "
             f"{nxt}"
         )
 
     # --- Investigation details (secondary / debug chrome) -----------------
-    if supporting:
-        details.append(f"**{labels.get('supporting', 'Supporting evidence')}**")
-        for s in supporting:
-            details.append(f"- {s}")
+    # Supporting / Missing / next check are promoted above when present.
     conf = data.get("confidence")
     if conf:
         # Do not promote High confidence when status is Insufficient.

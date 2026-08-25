@@ -39,7 +39,7 @@ AI 助理不會取代追蹤分析，而是協助你按照一致的順序完成�
 | **篩選條件（Filter）** | 在目前分析範圍內限制工作、核心或遷移資料。單純反白不算篩選條件。 |
 | **證據（Evidence）** | 可在 BTFViewer 中核對的量測值、追蹤事件、時間點、比較資料列或工具結果。 |
 | **假設（Hypothesis）** | 對問題原因的可能解釋。確認支持證據並排除合理的其他解釋前，都不能視為結論。 |
-| **工具動作（Tool action）** | AI 用來查詢證據或操作檢視器的請求。唯讀查詢會立即執行；會改變介面的動作預設需按 **Apply**。 |
+| **工具動作（Tool action）** | AI 用來查詢證據或操作檢視器的請求。唯讀查詢與導覽動作會立即執行；其他會改變介面的動作預設需按 **Apply**。 |
 | **基準／候選追蹤資料（Baseline / Candidate）** | 修改前後在相同條件下擷取的兩份追蹤資料，可使用 Trace Compare 量測差異。 |
 | **What-if / Optimize** | 用來選擇實驗方向的啟發式估算，不是實際量測結果。 |
 
@@ -106,11 +106,14 @@ AI 可以解釋證據、找出關聯、排序可能原因、檢查假設，也�
 - 可從面板分頁或 **Ctrl+K** 開啟 **AI Assistant**。若面板未顯示，請到 **Settings → Panels** 啟用 **AI Assistant panel**。
 - 面板沒有對話內容時，會顯示目前的 **Trace、Scope、Filters**、問題輸入框與依用途分組的操作。**Start Investigation** 會從現有分析結果開始引導式調查。
 - 流程指示器會追蹤 **Triage → Scope → Investigate → Verify → Experiment → Compare**。選擇已完成的階段，可回到該階段的輸出結果。
-- 常用操作包括 **Analysis Findings、Triage findings、Investigate、Explain region、Verify finding、Auto investigate、Task profile、What-if、Optimize** 與 **Diagnostic report**。另有延遲、CPU 使用量、核心遷移、負載平衡、TICK 健康度、優先權反轉與期限預算等專項操作。
+- 主要操作為 **Investigate**、**Explain evidence** 與 **Verify finding**。系統會依目前 Finding、游標、選取的工作與引導階段，以外框標示建議的主要操作。Compare／SMP 未滿足的先決條件會以行內提示顯示在晶片下方（不只在工具提示中）。**More templates…** 包含 Analysis Findings、Explain region、Auto investigate、Compare、Report、What-if、Optimize，以及延遲、WCET、核心遷移等專項檢查。
+- 輸入區上方有可收合的 **Context** 列（模式、Finding 數量、語言、隱私）。展開後可看到 Trace、Scope、Filters、端點與使用量。Web 版每則助理回覆可開啟 **View request context**。
 - 面板標頭提供 **Clear、Language…** 與 **Settings…**。**Clear** 會清除對話、使用量摘要與目前的調查狀態。
-- 使用量列會顯示例如 **Context: Compact · 4.6k tok · 3 tools · 12s**，依序代表內容模式、Token 數、工具數量與模型執行時間。可在 **Settings → AI → Context** 選擇 **Compact、Balanced（預設）或 Full evidence**。
+- 使用量列會顯示例如 **Context: Compact · 4.6k tok · 3 tools · 12s**，依序代表內容模式、Token 數、工具數量與模型執行時間。可在 **Settings → AI → Context** 選擇 **Compact、Balanced（預設）或 Full Evidence**。信心程度來自證據，不是來自模式。
 - 檢視器可還原未清除的調查內容；清除對話時，也會清除已儲存的調查狀態。
-- 唯讀工具與報告匯出會立即執行。會改變檢視器的動作會顯示為工具卡片，預設等待使用者選擇 **Apply** 或 **Skip**；啟用 **Auto-apply GUI actions** 後才會自動套用。已套用的檢視器動作可以復原。
+- Evidence & Validation 開頭會顯示精簡的 **Verdict · Coverage · Evidence · Confidence** 列。Supporting／Contradicting／Missing 區段僅在有內容時出現。
+- 唯讀工具、報告匯出，以及僅導覽的動作（`set_cursors`、`zoom_to_range`、`highlight_task`）會立即執行。其他會改變檢視器的動作會顯示為工具卡片，並標示 **Navigation／Scope／Filter／Annotation／Export／Calculation**；除非啟用 **Auto-apply GUI actions**，否則等待 **Apply** 或 **Skip**。**Undo** 會還原游標、視窗、反白、註解、**Scope（Limit to C1–Cn）** 與 **Filters**。
+- What-if／Optimize 結果會顯示：`Simulation / estimate — not measured RTOS behavior.`
 
 至少開啟兩份追蹤資料後，工具列上的 **Compare** 才會啟用。**Query with AI…** 傳送的是 **Trace Compare** 表格，而不是目前的 Findings。**Save as baseline** 與 **Score vs baseline** 使用與 `baseline_score` 相同的已儲存設定檔。按下 **Ctrl+K** 可快速存取 Analysis、AI、Compare、Workspace Preset 與 Inspect task。
 
@@ -199,7 +202,7 @@ flowchart TD
 | <a id="ai-action-explain_region" name="ai-action-explain_region"></a>**Explain region** | C1–Cn 已包住問題事件 | 僅針對該區段的工作、事件與統計結果進行說明 |
 | <a id="ai-action-verify" name="ai-action-verify"></a>**Verify finding** | 需要檢驗某個可能原因 | 支持與矛盾證據、替代解釋及驗證結論 |
 | <a id="ai-action-root_cause" name="ai-action-root_cause"></a>**Root cause** | 已有可疑原因或受影響工作 | 依證據建立因果、相關或時間先後鏈，不會超出證據強度 |
-| <a id="ai-action-explain_finding" name="ai-action-explain_finding"></a>**Explain finding** | 不清楚某項分析結果的文字或重要性 | 與該結果相連的快速、技術或深入說明 |
+| <a id="ai-action-explain_finding" name="ai-action-explain_finding"></a>**Explain evidence** | 不清楚某項分析結果的文字或重要性 | 與該結果相連的快速、技術或深入說明 |
 | <a id="ai-action-auto_investigate" name="ai-action-auto_investigate"></a>**Auto investigate** | 希望由引導流程選擇下一項檢查 | 分階段收集證據的調查；資料不足時會指出需要補充的內容 |
 | <a id="ai-action-task_profile" name="ai-action-task_profile"></a>**Task profile** | 分析焦點是一項工作 | CPU、執行時間尾端、阻塞、週期、核心遷移、同步與優先權資訊 |
 | <a id="ai-action-latency" name="ai-action-latency"></a>**Highest latency** | 關注回應、阻塞、派送或執行時間過長 | 最長的相關事件與其證據連結 |
@@ -239,7 +242,7 @@ flowchart TD
 | 7 | `rank_root_causes` / `challenge_conclusion` | 在執行 `what_if` 前先排序原因並檢查替代解釋 |
 | 8 | `find_related_findings` / `compare_tasks` | 尋找相關 Finding，或並排比較工作差異 |
 | 9 | `set_cursors` / `zoom_to_range` / `highlight_task` / `bookmark_finding` | 縮小 Timeline 範圍；未啟用 Auto-apply 時需 Apply Cursor。可點選 Critical Path 證據中的 `range:LO/HI` / `btfrange:` |
-| 10 | Evidence & Validation panel | Status、直接證據表、Checks、Missing evidence、Next action；詳細區放 quality/cost/trees |
+| 10 | Evidence & Validation panel | Verdict · Coverage · Evidence · Confidence、直接證據表、Checks、Supporting／Contradicting／Missing、▶ Next check；詳細區放 quality/cost/trees |
 | 11 | `investigation_replay` / `generate_report` / `export_investigation` | 結構化完成分析；可選擇使用 `export_report` |
 
 **Root cause** 會針對排名最高的 Finding，依序檢查 **Deadline/WCET → Preemption → Blocking → Mutex → Inheritance → Migration**。如果 Triage 已經指出可疑工作，適合直接使用這個功能。
@@ -382,7 +385,7 @@ AI 的輸出是對量測證據的解讀。接受結論前，應先確認證據�
 
 請求進行中時可用 **Stop** 取消；時間軸保持可回應，對話仍可見。失敗時會還原提示文字以便編輯後再次 **Send**。隱私晶片顯示 **Local**／**Cloud**；雲端傳送前可套用工作名稱遮罩與敏感追蹤封鎖。
 
-**Evidence & Validation** 面板會顯示結論狀態、可點擊的 **Direct evidence** 表、**Interpretation**、**Checks**、替代解釋、**Missing evidence** 及 **Next action**。品質等級、成本、工具理由與調查樹則放在 **Investigation details**。Evidence Quality 是用於診斷的啟發式指標，**不是機率值**。先前工具（`investigate`、`correlate_events`、`find_critical_path`）收集到的 `jump:TIME` 列，在後續規劃工具（`rank_root_causes`、`challenge_conclusion` 等）只回傳判決時仍會保留——否則 **Start Investigation** 會在中段高分之後顯示 Evidence Score **0%**。AI 完成最後回覆後，主程式驗證器會標示不存在的工作名稱，以及落在游標範圍之外的時間戳記。
+**Evidence & Validation** 面板開頭會顯示精簡的 **Verdict · Coverage · Evidence · Confidence** 列，接著是可點擊的 **Direct evidence** 表、**Interpretation**、**Checks**、替代解釋，以及僅在有內容時出現的 **Supporting／Contradicting／Missing evidence**，並以 **▶ Next check** 標示建議下一步。確認強度足夠時，標題會使用 **Root cause**；否則使用 **Leading explanation**。證據列可加上 `[measured]`／`[derived]`／`[heuristic]`／`[simulated]` 標籤。品質等級、成本、工具理由與調查樹則放在 **Investigation details**。Evidence Quality 是用於診斷的啟發式指標，**不是機率值**。先前工具（`investigate`、`correlate_events`、`find_critical_path`）收集到的 `jump:TIME` 列，在後續規劃工具（`rank_root_causes`、`challenge_conclusion` 等）只回傳判決時仍會保留——否則 **Start Investigation** 會在中段高分之後顯示 Evidence Score **0%**。AI 完成最後回覆後，主程式驗證器會標示不存在的工作名稱，以及落在游標範圍之外的時間戳記。
 
 建議優先使用內建範本。這些範本已選好相關指標與 **Statistics** 頁面。必要時也可以使用自然語言，例如「find STI wait around TaskA」；主程式會將這類問題導向 `search_timeline`。
 
@@ -512,7 +515,7 @@ API 金鑰不會放入聊天提示內容，只會透過認證標頭送到設定�
 
 **Settings → AI → Context** 控制每次請求傳送多少證據。這項設定主要用來降低輸入 Token；其中 **Compact** 也會將回覆限制在約 300–500 Tokens。
 
-| | Compact | Balanced（預設） | Full evidence |
+| | Compact | Balanced（預設） | Full Evidence |
 | --- | --- | --- | --- |
 | Findings | 嚴重程度最高的前 5 項 | 前 12 項 | 範圍內全部 |
 | 工具結構 | 目前階段 + 搜尋／原始指標 | 目前階段加相鄰階段 | 完整目錄 |
@@ -531,9 +534,9 @@ API 金鑰不會放入聊天提示內容，只會透過認證標頭送到設定�
 - What-if Disclaimer。
 - 至少一個替代解釋或反證方式。
 
-遇到複雜案例時可切換至 **Full evidence**。如果 Compact 省略了某個 Finding，也可以直接要求模型分析特定 Finding ID。
+遇到複雜案例時可切換至 **Full Evidence**。如果 Compact 省略了某個 Finding，也可以直接要求模型分析特定 Finding ID。
 
-Live `ai-test` 預設使用 **Full evidence**。使用 **`--compare-context`** 可量測三種 Context Mode；若只測單一模式，可使用 **`--context-mode compact`** 或 `balanced`。
+Live `ai-test` 預設使用 **Full Evidence**。使用 **`--compare-context`** 可量測三種 Context Mode；若只測單一模式，可使用 **`--context-mode compact`** 或 `balanced`。
 
 **Settings → Context 不會套用到 CLI Scorer。**
 
@@ -544,7 +547,7 @@ Live `ai-test` 預設使用 **Full evidence**。使用 **`--compare-context`** �
 
 ## AI 工具參考（AI tools reference）
 
-目前實作提供 60 個工具。證據查詢、調查狀態與匯出工具會立即執行。以下九個會改變檢視器的工具，除非已啟用 **Auto-apply GUI actions**，否則會等待使用者按下 **Apply**：`set_cursors`、`zoom_to_range`、`highlight_task`、`set_view_mode`、`open_corridor_inspector`、`add_annotation`、`bookmark_finding`、`clear_marks`、`reset_view`。
+目前實作提供 60 個工具。證據查詢、調查狀態與匯出工具會立即執行。僅導覽的批次（`set_cursors`、`zoom_to_range`、`highlight_task`）也會立即套用。其餘會改變檢視器的工具，除非已啟用 **Auto-apply GUI actions**，否則會等待使用者按下 **Apply**：`set_view_mode`、`open_corridor_inspector`、`add_annotation`、`bookmark_finding`、`clear_marks`、`reset_view`。
 
 完整工具名稱與參數請參閱下方的[完整工具參考](#complete-gui-tool-reference)。
 
@@ -566,15 +569,16 @@ flowchart TD
 
 ### Apply、Skip 與 Undo
 
-工具依行為分為三類：
+待處理的檢視器動作會顯示在 Apply 卡片上。每一行會加上類別前綴：**Navigation**、**Scope**、**Filter**、**Annotation**、**Export** 或 **Calculation**。
 
 | 類別 | 行為 | 範例 |
 | --- | --- | --- |
-| **證據查詢工具** | 立即執行並傳回量測或推導證據，不會改變時間軸檢視狀態 | `query_raw_metric`、`search_timeline`、`investigate`、`correlate_events`、`find_critical_path`、`verify_claim` |
-| **調查狀態與匯出工具** | 立即執行；可能更新假設、記憶或實驗紀錄，或儲存檔案，但不會等待 Apply 卡片 | `manage_hypotheses`、`record_experiment_outcome`、`investigation_memory`、`close_investigation`、`export_report`、`export_investigation` |
-| **會改變檢視器的工具** | **Auto-apply GUI actions** 關閉時（預設），整批動作會等待 **Apply** 或 **Skip** | `set_cursors`、`zoom_to_range`、`highlight_task`、`set_view_mode`、`open_corridor_inspector`、`add_annotation`、`bookmark_finding`、`clear_marks`、`reset_view` |
+| **證據查詢／Calculation** | 立即執行並傳回量測或推導證據，不會改變時間軸檢視狀態 | `query_raw_metric`、`search_timeline`、`investigate`、`correlate_events`、`find_critical_path`、`verify_claim` |
+| **調查狀態與匯出** | 立即執行；可能更新假設、記憶或實驗紀錄，或儲存檔案 | `manage_hypotheses`、`record_experiment_outcome`、`investigation_memory`、`close_investigation`、`export_report`、`export_investigation` |
+| **Navigation** | 當整批僅含導覽動作時自動套用 | `set_cursors`、`zoom_to_range`、`highlight_task` |
+| **其他會改變檢視器的工具** | **Auto-apply GUI actions** 關閉時（預設），等待 **Apply** 或 **Skip** | `set_view_mode`、`open_corridor_inspector`、`add_annotation`、`bookmark_finding`、`clear_marks`、`reset_view` |
 
-模型可能在同一輪中產生多個會改變檢視器的工具呼叫，這些操作會以一個批次套用。**Undo last actions** 可以還原縮放、檢視模式、反白、檢查器狀態、游標與標記。匯出工具使用一般檔案儲存方式，不需要按 **Apply**。
+模型可能在同一輪中產生多個會改變檢視器的工具呼叫，這些操作會以一個批次套用。**Undo last actions** 會還原縮放、檢視模式、反白、檢查器狀態、游標、標記、**Scope（Limit to C1–Cn）** 與 **工作／核心 Filters**。匯出工具使用一般檔案儲存方式，不需要按 **Apply**。
 
 ### 1. 界定範圍與導覽（Scope & Navigate）—「應該從哪裡看？」
 
@@ -648,7 +652,7 @@ flowchart TD
 | 檢查 Priority Inversion 證據 | `detect_priority_inversion` |
 | 評估 Investigation 品質 | `score_investigation` |
 
-Evidence & Validation 面板會補充顯示 Status、直接證據表、Checks、Missing evidence、Next action，以及 Investigation details（quality、成本、調查樹）。
+Evidence & Validation 面板會補充顯示 **Verdict · Coverage · Evidence · Confidence**、直接證據表、Checks、Supporting／Contradicting／Missing evidence、▶ Next check，以及 Investigation details（quality、成本、調查樹）。
 
 ### 5. 比較（Compare）—「改變了什麼？」
 
@@ -1443,13 +1447,15 @@ make -C BTFViewer web
 
 - Mode Chip 可以換行。
 - Primary Template 使用兩列：
-  - 第一列：Analysis Findings / Explain region / Investigate
-  - 第二列：**Auto investigate** + **More templates…**
+  - 第一列：**Investigate** / **Explain evidence**
+  - 第二列：**Verify finding** + **More templates…**
+- 建議的主要操作以外框標示；Compare／SMP 先決條件以行內提示顯示。
 - Chip 最小高度為 28px。
 - Disabled Chip / Menu Item 使用 `#8a96a8`。
 - Findings 的 **Investigate…** 使用與其他 Analysis Footer Button 相同的 Outline Style，不使用 Accent / Primary Style。
 - **More** Template 在 2-column Overlay 中使用相同 Group。
 - Trace Compare 從工具列 **Compare** 開啟，而不是 Statistics Footer。
+- Composer 上方有可收合的 **Context** 列；Apply 卡片標示 Navigation／Scope／Filter／Annotation／Export／Calculation；**Undo** 還原 Scope 與 Filters。
 
 `ai-test` CLI 與離線基準測試共用 `tests/ai` 測試資料，包括納入版本控制的 `.btf` stub 與 `dataset.json`。
 

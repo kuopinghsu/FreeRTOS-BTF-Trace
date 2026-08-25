@@ -7,6 +7,7 @@ import {
   enrichFindingsWithIds,
   evidenceScoreBar,
   extractEvidencePanelPayload,
+  formatEvidencePanelMarkdown,
   investigationTreeMermaid,
   mergeEvidencePanelPayload,
 } from '../src/utils/aiInvestigation.js'
@@ -217,6 +218,47 @@ describe('computeEvidenceScore', () => {
       },
     })
     assert.equal(interpreted.investigation_case?.conclusion, 'Why is TaskA slow?')
+  })
+
+  it('preserves task, core, and duration on evidence rows', () => {
+    const corr = extractEvidencePanelPayload('correlate_events', {
+      ok: true,
+      data: {
+        task: 'Worker[3]',
+        events: [
+          {
+            time: 1000, kind: 'execution', detail: 'dur=500 core=Core_2',
+            task: 'Worker[3]', core: 'Core_2',
+            start: 1000, stop: 1500, duration: 500,
+          },
+          { time: 2000, kind: 'blocking', detail: '800', duration: 800 },
+        ],
+      },
+    })
+    assert.equal(corr.evidence[0].task, 'Worker[3]')
+    assert.equal(corr.evidence[0].core, 'Core_2')
+    assert.equal(corr.evidence[0].start, 1000)
+    assert.equal(corr.evidence[0].stop, 1500)
+    assert.equal(corr.evidence[1].task, 'Worker[3]')
+    assert.equal(corr.evidence[1].start, 2000)
+    assert.equal(corr.evidence[1].stop, 2800)
+    const md = formatEvidencePanelMarkdown(corr, 'English')
+    assert.match(md, /Worker\[3\]/)
+    assert.match(md, /Core_2/)
+    assert.doesNotMatch(md, /\| Worker\[3\] \| — \| — \|/)
+
+    const inv = extractEvidencePanelPayload('investigate', {
+      ok: true,
+      data: {
+        finding: {
+          title: 'Stall',
+          text: 'Worker[3] stalled',
+          task: 'Worker[3]',
+          evidence: [{ label: 'finding text', time: 42 }],
+        },
+      },
+    })
+    assert.equal(inv.evidence[0].task, 'Worker[3]')
   })
 
   it('extracts explain_finding / interpret_query / validate_experiment / manage_hypotheses', () => {

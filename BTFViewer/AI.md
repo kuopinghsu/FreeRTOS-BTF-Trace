@@ -115,11 +115,14 @@ AI can explain evidence, find correlations, rank possible causes, challenge assu
 - Open the **AI Assistant** panel from the panel tabs or **Ctrl+K**. If it is hidden, enable **Settings → Panels → AI Assistant panel**.
 - An empty panel shows the current **Trace**, **Scope**, and **Filters**, a question box, and actions grouped by purpose. **Start Investigation** begins a guided investigation from the available findings.
 - The stepper tracks **Triage → Scope → Investigate → Verify → Experiment → Compare**. Select a completed stage to return to its output.
-- Common actions include **Analysis Findings**, **Triage findings**, **Investigate**, **Explain region**, **Verify finding**, **Auto investigate**, **Task profile**, **What-if**, **Optimize**, and **Diagnostic report**. Specialist actions cover latency, CPU usage, migration, load balance, TICK health, priority inversion, and deadline budgets.
+- Primary actions are **Investigate**, **Explain evidence**, and **Verify finding**. A suggested primary is outlined from the current finding, cursors, selected task, and guide stage. Unmet Compare / SMP prerequisites show as an inline line under the chips. **More templates…** holds Analysis Findings, Explain region, Auto investigate, Compare, Report, What-if, Optimize, and specialist checks (latency, WCET, migrations, and so on).
+- The composer shows a collapsed **Context** row (mode, finding count, language, privacy). Expand it for Trace, Scope, Filters, endpoint, and usage. Each Web assistant reply can open **View request context**.
 - The header provides **Clear**, **Language…**, and **Settings…**. **Clear** removes the conversation, usage summary, and current investigation state.
-- The usage bar shows **Context: Compact · 4.6k tok · 3 tools · 12s** (mode, tokens, tools, and model time). **Settings → AI → Context** chooses Compact, Balanced (default), or Full evidence.
+- The usage bar shows **Context: Compact · 4.6k tok · 3 tools · 12s** (mode, tokens, tools, and model time). **Settings → AI → Context** chooses Compact, Balanced (default), or Full Evidence. Confidence comes from evidence, not from the mode.
 - A non-empty investigation can be restored by the viewer. Clearing the conversation also clears the saved investigation state.
-- Read-only tools and report exports run immediately. Viewer-changing actions appear as tool cards and wait for **Apply** or **Skip** unless **Auto-apply GUI actions** is enabled. Applied viewer actions can be undone.
+- Evidence & Validation opens with a compact **Verdict · Coverage · Evidence · Confidence** line. Supporting / Contradicting / Missing sections appear only when present.
+- Read-only tools, report exports, and navigation-only actions (`set_cursors`, `zoom_to_range`, `highlight_task`) run immediately. Other viewer-changing actions appear as tool cards labelled **Navigation / Scope / Filter / Annotation / Export / Calculation** and wait for **Apply** or **Skip** unless **Auto-apply GUI actions** is enabled. **Undo** restores cursors, viewport, highlight, annotations, **Scope (Limit to C1–Cn)**, and **Filters**.
+- What-if / Optimize results show: `Simulation / estimate — not measured RTOS behavior.`
 
 Toolbar **Compare** becomes available when at least two traces are open. **Query with AI…** sends the Trace Compare tables rather than the current Findings. **Save as baseline** and **Score vs baseline** use the same stored profile as `baseline_score`. **Ctrl+K** provides quick access to Analysis, AI, Compare, workspace presets, and Inspect task.
 
@@ -588,17 +591,16 @@ flowchart TD
 
 ### Apply, Skip, and Undo
 
-Tools fall into three behavioral classes:
-
+Pending viewer actions appear on an Apply card. Each line is prefixed with its class: **Navigation**, **Scope**, **Filter**, **Annotation**, **Export**, or **Calculation**.
 
 | Class | Behavior | Examples |
 | --- | --- | --- |
-| **Evidence queries** | Run immediately and return measured or derived evidence without changing the timeline view | `query_raw_metric`, `search_timeline`, `investigate`, `correlate_events`, `find_critical_path`, `verify_claim` |
-| **Investigation state and export** | Run immediately; may update hypotheses, memory, experiment records, or save a file, but do not wait for an Apply card | `manage_hypotheses`, `record_experiment_outcome`, `investigation_memory`, `close_investigation`, `export_report`, `export_investigation` |
-| **Viewer-changing tools** | With **Auto-apply GUI actions** off (default), the batch waits for **Apply** or **Skip** | `set_cursors`, `zoom_to_range`, `highlight_task`, `set_view_mode`, `open_corridor_inspector`, `add_annotation`, `bookmark_finding`, `clear_marks`, `reset_view` |
+| **Evidence queries / Calculation** | Run immediately and return measured or derived evidence without changing the timeline view | `query_raw_metric`, `search_timeline`, `investigate`, `correlate_events`, `find_critical_path`, `verify_claim` |
+| **Investigation state and export** | Run immediately; may update hypotheses, memory, experiment records, or save a file | `manage_hypotheses`, `record_experiment_outcome`, `investigation_memory`, `close_investigation`, `export_report`, `export_investigation` |
+| **Navigation** | Auto-apply when the batch is navigation-only | `set_cursors`, `zoom_to_range`, `highlight_task` |
+| **Viewer-changing (other)** | With **Auto-apply GUI actions** off (default), wait for **Apply** or **Skip** | `set_view_mode`, `open_corridor_inspector`, `add_annotation`, `bookmark_finding`, `clear_marks`, `reset_view` |
 
-
-Several viewer-changing calls may arrive in one model turn and are applied as one batch. **Undo last actions** restores zoom, view mode, highlight, inspector state, cursors, and marks. Export tools use the normal file-saving behavior and do not require **Apply**.
+Several viewer-changing calls may arrive in one model turn and are applied as one batch. **Undo last actions** restores zoom, view mode, highlight, inspector state, cursors, marks, **Scope (Limit to C1–Cn)**, and **task/core Filters**. Export tools use the normal file-saving behavior and do not require **Apply**.
 
 ### 1. Scope & navigate — “Where should I look?”
 
@@ -1360,7 +1362,7 @@ The shipped loop stays **Triage → Investigate → Verify → Correlate → Cri
 
 The viewer uses one Case, Evidence, planner, causal, tool, and Mermaid implementation. After AI UI changes, rebuild the distributed viewer artifacts with the project build targets.
 
-**UI lockstep:** mode chips wrap. Primary templates are two rows: **Analysis Findings** / **Explain region** / **Investigate**, then **Auto investigate** + **More templates…**. Chip min-height 28px, disabled chips/menu items `#8a96a8`. Findings **Investigate…** uses the same outline style as the other Analysis footer buttons (not accent/primary). **More** templates use the same groups in a 2-column overlay. Findings **Save recipe…** and **Story…** stay on that dialog. Trace Compare opens from toolbar **Compare**, not the Statistics footer.
+**UI lockstep:** mode chips wrap. Primary templates are two rows: **Investigate** / **Explain evidence**, then **Verify finding** + **More templates…**. Suggested primary is outlined; Compare/SMP prerequisites show inline. Chip min-height 28px, disabled chips/menu items `#8a96a8`. Findings **Investigate…** uses the same outline style as the other Analysis footer buttons (not accent/primary). **More** templates use the same groups in a 2-column overlay. Findings **Save recipe…** and **Story…** stay on that dialog. Trace Compare opens from toolbar **Compare**, not the Statistics footer. Composer **Context** row is collapsed by default; Apply cards label Navigation/Scope/Filter/Annotation/Export/Calculation; **Undo** restores Scope and Filters.
 
 The `ai-test` CLI and offline benchmark use the same `tests/ai` fixtures (tracked `.btf` stubs + `dataset.json`). Live runs accept `--context-mode` and `--compare-context` (see [Context mode benchmarking](#context-mode-benchmarking)).
 

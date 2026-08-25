@@ -338,12 +338,12 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 建議操作方式：
 
 1. 選取一項分析結果，或使用游標定義時間範圍。
-2. 請 AI Assistant 調查或說明該項結果。
-3. 查看 AI 引用的統計資料與時間軸證據。
-4. 使用 **Verify with AI** 檢查提出的原因是否成立。
+2. 請 AI Assistant 使用 **Investigate**／**Explain evidence** 調查或說明該項結果。
+3. 查看 AI 引用的統計資料與時間軸證據（Verdict／Coverage／Evidence／Confidence）。
+4. 使用 **Verify finding** 檢查提出的原因是否成立。
 5. 若實際修改系統，請擷取新的 trace，並重複相同範圍的量測。
 
-可用的內容層級包括 **Compact**、**Balanced** 及 **Full evidence**。Compact 傳送的資訊較少，也可減少 token 使用量；預設值為 Balanced。可在 **Settings → AI** 中設定模型、服務端點（endpoint）、驗證方式、內容層級、隱私選項及回覆語言。
+可用的內容層級包括 **Compact**、**Balanced** 及 **Full Evidence**。Compact 用於快速分類；Balanced 是預設調查深度；Full Evidence 會加入相關 Findings 與調查歷程。信心程度來自證據，不是來自模式。可在 **Settings → AI** 中設定模型、服務端點（endpoint）、驗證方式、內容層級、隱私選項及回覆語言。
 
 匯入 `examples/ai/presets.json`，可取得 Ollama、OpenAI、Gemini、DeepSeek 及 Grok 的範例設定。使用本機 Ollama 不需要 API 金鑰（API key）。若使用雲端模型，BTFViewer 會將分析所需的統計摘要與證據傳送給對應的服務供應商；處理敏感資料時，請視需要啟用匿名化及敏感資料選項。
 

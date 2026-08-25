@@ -539,12 +539,22 @@ export function buildCriticalPath(events, {
     if (!ev || typeof ev !== 'object') continue
     const t = Number(ev.time)
     if (!Number.isFinite(t)) continue
-    rows.push({
+    const row = {
       time: t,
       kind: String(ev.kind || 'event'),
       detail: String(ev.detail || ev.note || ''),
       task: String(ev.task || task || ''),
-    })
+      core: String(ev.core || ''),
+      start: ev.start,
+      stop: ev.stop,
+      duration: ev.duration ?? ev.gap,
+    }
+    if (row.stop == null && row.start != null && row.duration != null) {
+      const s = Number(row.start)
+      const d = Number(row.duration)
+      if (Number.isFinite(s) && Number.isFinite(d)) row.stop = s + d
+    }
+    rows.push(row)
   }
   if (!rows.length) {
     return {
@@ -589,9 +599,15 @@ export function buildCriticalPath(events, {
   const path = rows.map((ev, i) => {
     const label = kindLabels[ev.kind] || ev.kind
     const detail = ev.detail
-    const start = ev.time
-    const nxt = rows[i + 1]
-    const stop = nxt && nxt.time > start ? nxt.time : start
+    let start = ev.start
+    let stop = ev.stop
+    const hasInterval = Number.isFinite(Number(start)) && Number.isFinite(Number(stop))
+      && Number(stop) > Number(start)
+    if (!hasInterval) {
+      start = ev.time
+      const nxt = rows[i + 1]
+      stop = nxt && nxt.time > start ? nxt.time : start
+    }
     return {
       step: i + 1,
       time: ev.time,
@@ -599,6 +615,8 @@ export function buildCriticalPath(events, {
       stop,
       detail: detail ? `${label}: ${detail}` : label,
       kind: ev.kind,
+      task: String(ev.task || task || ''),
+      core: String(ev.core || ''),
     }
   })
   const kinds = new Set(rows.map(r => r.kind))
@@ -655,13 +673,11 @@ export function extractEvidencePanelPayload(toolName, result) {
     const finding = data.finding && typeof data.finding === 'object' ? data.finding : {}
     payload.conclusion = String(finding.title || data.conclusion || '')
     payload.subtitle = String(finding.text || '')
+    const focusTask = String(finding.task || data.task || '').trim()
     const evItems = []
     for (const ev of finding.evidence || []) {
-      if (!ev || typeof ev !== 'object') continue
-      evItems.push({
-        label: String(ev.label || ev.text || 'evidence'),
-        time: ev.time,
-      })
+      const item = normalizeEvidenceItem(ev, { defaultTask: focusTask })
+      if (item) evItems.push(item)
     }
     if (evItems.length) payload.evidence = evItems
     if (data.evidence_chain) payload.evidence_chain = String(data.evidence_chain)
@@ -682,12 +698,11 @@ export function extractEvidencePanelPayload(toolName, result) {
     payload.conclusion = task ? `Critical path: ${task}` : 'Critical path'
     payload.evidence = (data.path || [])
       .filter(p => p && typeof p === 'object')
-      .map(p => ({
+      .map(p => normalizeEvidenceItem(p, {
+        defaultTask: task,
         label: String(p.detail || ''),
-        time: p.time,
-        start: p.start,
-        stop: p.stop,
       }))
+      .filter(Boolean)
     payload.confidence = String(data.confidence || 'Medium')
   } else if (name === 'correlate_events' || data.events) {
     const task = String(data.task || '')
@@ -695,10 +710,11 @@ export function extractEvidencePanelPayload(toolName, result) {
     payload.evidence = (data.events || [])
       .slice(0, 15)
       .filter(e => e && typeof e === 'object')
-      .map(e => ({
+      .map(e => normalizeEvidenceItem(e, {
+        defaultTask: task,
         label: `${e.kind}: ${e.detail}`,
-        time: e.time,
       }))
+      .filter(Boolean)
     payload.confidence = data.correlation != null
       ? `Correlation ${data.correlation}`
       : 'Medium'
@@ -715,9 +731,11 @@ export function extractEvidencePanelPayload(toolName, result) {
       || data.message
       || (times.length ? `${times.length} timeline hit(s)` : 'No timeline hits'),
     )
+    const focusTask = String(data.task || '').trim()
     payload.evidence = times.slice(0, 20).map((t) => ({
       label: query ? `timeline: ${query}` : 'timeline hit',
       time: Number.isInteger(t) ? Math.trunc(t) : t,
+      ...(focusTask ? { task: focusTask } : {}),
     }))
     payload.confidence = String(data.confidence || 'Medium')
   } else if (name === 'detect_priority_inversion' || data.inversions != null) {
@@ -740,8 +758,11 @@ export function extractEvidencePanelPayload(toolName, result) {
       const stop = (start != null && inv.duration != null)
         ? Number(start) + Number(inv.duration)
         : start
-      return { label, time: start, start, stop }
-    })
+      return normalizeEvidenceItem({
+        label, time: start, start, stop, duration: inv.duration,
+        task: inv.task || task, core: inv.core || '',
+      }, { defaultTask: task })
+    }).filter(Boolean)
     if (inversions.length) {
       payload.evidence_chain = `${inversions.length} priority-inversion episode(s)`
         + (task ? ` involving ${task}` : '')
@@ -1411,6 +1432,35 @@ function localizeEvidenceToken(text, labels) {
 
 const TASK_IN_LABEL_RE = /\b([A-Za-z][A-Za-z0-9_.-]*\[\d+\])/
 const CORE_IN_LABEL_RE = /\b(?:Core[_\s-]?(\d+)|C(\d+))\b/i
+const DUR_IN_LABEL_RE = /\bdur(?:ation)?\s*=\s*([0-9]+(?:\.[0-9]+)?)/i
+
+function normalizeEvidenceItem(ev, {
+  defaultTask = '', defaultCore = '', label = null,
+} = {}) {
+  if (!ev || typeof ev !== 'object') return null
+  const outLabel = String(
+    label != null ? label : (ev.label || ev.text || 'evidence'),
+  ).trim() || 'evidence'
+  const task = String(ev.task || defaultTask || '').trim()
+  const core = String(ev.core || defaultCore || '').trim()
+  const time = ev.time
+  let start = ev.start
+  let stop = ev.stop
+  const duration = ev.duration ?? ev.gap
+  if (start == null && time != null) start = time
+  if (stop == null && start != null && duration != null) {
+    const s = Number(start)
+    const d = Number(duration)
+    if (Number.isFinite(s) && Number.isFinite(d)) stop = s + d
+  }
+  const item = { label: outLabel, time }
+  if (task) item.task = task
+  if (core) item.core = core
+  if (start != null) item.start = start
+  if (stop != null) item.stop = stop
+  if (duration != null) item.duration = duration
+  return item
+}
 
 export const CONCLUSION_STATUSES = [
   'confirmed', 'correlated', 'suspected', 'not_observed', 'insufficient',
@@ -1456,6 +1506,12 @@ function formatEvidenceDuration(start, stop) {
   return `${Math.round(delta)}`
 }
 
+function formatEvidenceDurationDelta(delta) {
+  const d = Number(delta)
+  if (!Number.isFinite(d) || !(d > 0)) return ''
+  return formatEvidenceDuration(0, d)
+}
+
 function evidenceRowFields(ev) {
   const label = String(ev.label || '').trim() || 'item'
   let task = String(ev.task || '').trim()
@@ -1472,6 +1528,11 @@ function evidenceRowFields(ev) {
   const shi = Number(ev.stop)
   let timeCell = '—'
   let dur = formatEvidenceDuration(ev.start, ev.stop)
+  if (!dur) dur = formatEvidenceDurationDelta(ev.duration ?? ev.gap)
+  if (!dur) {
+    const m = DUR_IN_LABEL_RE.exec(label)
+    if (m) dur = formatEvidenceDurationDelta(m[1])
+  }
   if (Number.isFinite(slo) && Number.isFinite(shi) && shi > slo) {
     timeCell = `jump:${evidenceJumpToken(slo)}–jump:${evidenceJumpToken(shi)}`
   } else if (ev.time != null && Number.isFinite(Number(ev.time))) {
@@ -1488,7 +1549,12 @@ function formatDirectEvidenceTable(evidence, labels) {
     '| --- | --- | --- | --- | ---: |',
   ]
   for (const ev of rows.slice(0, 20)) {
-    const [timeCell, label, task, core, dur] = evidenceRowFields(ev)
+    let [timeCell, label, task, core, dur] = evidenceRowFields(ev)
+    const origin = String(ev.origin || ev.source || ev.result_kind || '').trim().toLowerCase()
+    if (['measured', 'observed', 'direct'].includes(origin)) label = `[measured] ${label}`
+    else if (['derived', 'computed'].includes(origin)) label = `[derived] ${label}`
+    else if (['heuristic', 'estimate'].includes(origin)) label = `[heuristic] ${label}`
+    else if (['simulated', 'simulation', 'what_if'].includes(origin)) label = `[simulated] ${label}`
     lines.push(`| ${timeCell} | ${label} | ${task} | ${core} | ${dur} |`)
   }
   return lines
@@ -1544,11 +1610,52 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
     not_observed: labels.status_not_observed || 'Not observed',
     insufficient: labels.status_insufficient || 'Insufficient data',
   }[statusKey] || (labels.status_suspected || 'Suspected')
-  lines.push(`**${labels.status || 'Status'}:** ${statusLabel}`)
+
+  const coverage = data.coverage && typeof data.coverage === 'object' ? data.coverage : {}
+  const quality = data.evidence_quality && typeof data.evidence_quality === 'object'
+    ? data.evidence_quality : {}
+  let confLabel = localizeEvidenceToken(String(data.confidence || '').trim(), labels)
+  if (
+    statusKey === 'insufficient'
+    && confLabel.toLowerCase() === String(labels.high || 'High').toLowerCase()
+  ) {
+    confLabel = labels.low || 'Low'
+  }
+  let covPct = 0
+  try { covPct = Number(coverage.percent) || 0 } catch { covPct = 0 }
+  const covLabel = covPct >= 80
+    ? (labels.coverage_complete || 'Complete')
+    : (covPct >= 40
+      ? (labels.coverage_partial || 'Partial')
+      : ((coverage && Object.keys(coverage).length) || Object.keys(quality).length
+        ? (labels.coverage_missing || 'Missing')
+        : '—'))
+  const band = String(quality.band || '').trim().toLowerCase()
+  const evidenceLabel = ({
+    strong: labels.quality_direct || 'Direct',
+    'medium-high': labels.status_correlated || 'Correlated',
+    medium: labels.status_correlated || 'Correlated',
+    weak: labels.quality_possible || 'Possible',
+    insufficient: labels.status_insufficient || 'Insufficient',
+  })[band] || ((Object.keys(quality).length)
+    ? (labels.quality_possible || 'Possible')
+    : '—')
+  lines.push(
+    `**${labels.verdict || 'Verdict'}:** ${statusLabel}`
+    + ` · **${labels.coverage_short || 'Coverage'}:** ${covLabel}`
+    + ` · **${labels.evidence_short || 'Evidence'}:** ${evidenceLabel}`
+    + ` · **${labels.confidence || 'Confidence'}:** ${confLabel || '—'}`,
+  )
 
   const conclusion = localizeEvidenceToken(String(data.conclusion || '').trim(), labels)
   if (conclusion) {
-    lines.push('', `**${labels.finding || 'Finding'}**`, conclusion)
+    let findingHdr = labels.finding || 'Finding'
+    if (statusKey === 'confirmed' && String(data.confidence || '').trim().toLowerCase() === 'high') {
+      findingHdr = labels.root_cause || 'Root cause'
+    } else if (['confirmed', 'correlated', 'suspected'].includes(statusKey)) {
+      findingHdr = labels.leading_explanation || 'Leading explanation'
+    }
+    lines.push('', `**${findingHdr}**`, conclusion)
   }
   const subtitle = String(data.subtitle || '').trim()
   if (subtitle && !data.evidence_chain) lines.push(subtitle.slice(0, 320))
@@ -1579,11 +1686,8 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
   }
 
   const checks = (data.checks || []).filter(c => c && typeof c === 'object')
-  const coverage = data.coverage && typeof data.coverage === 'object' ? data.coverage : {}
   let checkRows = coverageCheckRows(coverage, checks, labels)
   if (!checkRows.length) {
-    const quality = data.evidence_quality && typeof data.evidence_quality === 'object'
-      ? data.evidence_quality : {}
     const qflags = quality.flags && typeof quality.flags === 'object' ? quality.flags : {}
     const yes = labels.observed || 'Observed'
     const no = labels.not_observed || 'Not observed'
@@ -1635,19 +1739,29 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
   const falsify = data.falsify && typeof data.falsify === 'object' ? data.falsify : {}
   const supporting = (falsify.supporting || []).filter(Boolean)
   const disprove = (falsify.disprove || falsify.would_disprove || []).filter(Boolean)
+  const contradicting = (
+    falsify.contradicting || falsify.contradictions || data.contradictions || []
+  ).filter(Boolean)
+  if (supporting.length) {
+    lines.push('', `**${labels.supporting || 'Supporting'}**`)
+    supporting.slice(0, 8).forEach(s => lines.push(`- ${s}`))
+  }
+  if (contradicting.length) {
+    lines.push('', `**${labels.contradicting || 'Contradicting'}**`)
+    contradicting.slice(0, 8).forEach(s => lines.push(`- ${s}`))
+  }
   if (disprove.length) {
     lines.push('', `**${labels.missing_evidence || 'Missing evidence'}**`)
     disprove.forEach(s => lines.push(`- ${s}`))
   }
   const nxt = String(falsify.next_check || '').trim()
   if (nxt) {
-    lines.push('', `**${labels.next_action || labels.next_check || 'Next action'}:** ${nxt}`)
+    lines.push(
+      '',
+      `**▶ ${labels.next_check || labels.next_action || 'Next check'}:** ${nxt}`,
+    )
   }
 
-  if (supporting.length) {
-    details.push(`**${labels.supporting || 'Supporting evidence'}**`)
-    supporting.forEach(s => details.push(`- ${s}`))
-  }
   if (data.confidence) {
     const conf = String(data.confidence)
     const showConf = !(
@@ -2426,13 +2540,21 @@ export function buildCorrelationTimeline(events, {
     if (!ev || typeof ev !== 'object') continue
     const t = Number(ev.time)
     if (!Number.isFinite(t)) continue
-    rows.push({
+    const row = {
       time: t,
       kind: String(ev.kind || ev.metric || 'event'),
       detail: String(ev.detail || ev.note || ev.event || ''),
       task: String(ev.task || task || ''),
       core: ev.core || '',
-    })
+      start: ev.start != null ? ev.start : t,
+      stop: ev.stop,
+      duration: ev.duration ?? ev.gap,
+    }
+    if (row.stop == null && row.duration != null) {
+      const d = Number(row.duration)
+      if (Number.isFinite(d)) row.stop = t + d
+    }
+    rows.push(row)
   }
   rows.sort((a, b) => a.time - b.time)
   if (aroundTime != null && window && window > 0) {

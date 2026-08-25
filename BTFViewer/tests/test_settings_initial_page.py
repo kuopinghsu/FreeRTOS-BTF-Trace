@@ -107,7 +107,7 @@ class SettingsInitialPageTests(unittest.TestCase):
         self.assertEqual(help_x, ctx_x)
         self.assertIn("Compact", dlg._ai_context_help.text())
         self.assertIn("Balanced (default)", dlg._ai_context_help.text())
-        self.assertIn("Full evidence", dlg._ai_context_help.text())
+        self.assertIn("Full Evidence", dlg._ai_context_help.text())
         self.assertIn("\n", dlg._ai_context_help.text())
         self.assertGreaterEqual(dlg._ai_context_help.minimumWidth(), 280)
         self.assertLess(dlg._ai_context_help.heightForWidth(360), 80)

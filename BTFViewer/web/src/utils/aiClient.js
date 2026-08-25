@@ -79,10 +79,9 @@ export const AI_SMP_ONLY_TEMPLATE_IDS = new Set(['migrations', 'balance'])
 
 /** Always-visible wrapping chips. Keep in sync with btf_viewer_pkg/ai_assistant.py. */
 export const AI_TEMPLATE_PRIMARY_IDS = [
-  'findings',
-  'explain_region',
   'investigate',
-  'auto_investigate',
+  'explain_finding',
+  'verify',
 ]
 
 /** Last primary id shares a row with More templates… (`.ai-tpl-row`). */
@@ -92,9 +91,32 @@ export function aiTemplatePrimaryRows(ids = AI_TEMPLATE_PRIMARY_IDS) {
   return [seq.slice(0, -1), seq.slice(-1)]
 }
 
+/**
+ * Suggest which primary template fits the current viewer state (UX-110).
+ * Returns an id from AI_TEMPLATE_PRIMARY_IDS.
+ */
+export function suggestPrimaryAiTemplate({
+  findingId = '',
+  cursorCount = 0,
+  selectedTask = '',
+  openTraceCount = 1,
+  guideStage = '',
+} = {}) {
+  const stage = String(guideStage || '').trim().toLowerCase()
+  const hasFinding = Boolean(String(findingId || '').trim())
+  if (stage === 'verify' || (hasFinding && stage === '')) return 'verify'
+  if (hasFinding && (stage === 'investigate' || stage === 'triage')) {
+    return stage === 'triage' ? 'investigate' : 'explain_finding'
+  }
+  if (hasFinding) return 'explain_finding'
+  if (Number(cursorCount) >= 2 || String(selectedTask || '').trim()) return 'investigate'
+  if (Number(openTraceCount) >= 2 && stage === 'compare') return 'investigate'
+  return 'investigate'
+}
+
 /** Overflow menu groups for templates not in AI_TEMPLATE_PRIMARY_IDS. */
 export const AI_TEMPLATE_MENU_GROUPS = [
-  { label: 'Start', ids: ['triage'] },
+  { label: 'Start', ids: ['findings', 'triage', 'explain_region', 'auto_investigate'] },
   {
     label: 'Investigate',
     ids: [
@@ -103,20 +125,19 @@ export const AI_TEMPLATE_MENU_GROUPS = [
     ],
   },
   { label: 'SMP', ids: ['migrations', 'balance'] },
-  { label: 'Verify', ids: ['verify', 'explain_finding'] },
   { label: 'Compare', ids: ['compare', 'diagnostic_report'] },
   { label: 'What-if / Optimize', ids: ['what_if', 'optimize'] },
 ]
 
 /** Intent landing groups for the AI empty state (includes primary chips). */
 export const AI_TEMPLATE_INTENT_GROUPS = [
-  { label: 'Start', ids: ['findings', 'triage'] },
+  { label: 'Start', ids: ['findings', 'triage', 'explain_region', 'auto_investigate'] },
   {
     label: 'Investigate',
-    ids: ['investigate', 'explain_region', 'latency', 'wcet', 'task_profile'],
+    ids: ['investigate', 'latency', 'wcet', 'task_profile', 'root_cause'],
   },
   { label: 'SMP', ids: ['migrations', 'balance'] },
-  { label: 'Verify', ids: ['verify', 'explain_finding', 'auto_investigate'] },
+  { label: 'Verify', ids: ['verify', 'explain_finding'] },
   { label: 'Compare', ids: ['compare', 'diagnostic_report'] },
 ]
 
@@ -174,7 +195,8 @@ export const AI_TEMPLATE_QUESTIONS = [
       'to open next. ' +
       'Finish with a verdict: Confirmed, Rejected, or Inconclusive; list ' +
       'Evidence as jump:TIME bullets; Confidence (High/Medium/Low); ' +
-      'Alternatives considered; and one next check.',
+      'Alternatives considered; and one next check. Viewer action: ' +
+      'focus_evidence.',
   },
   {
     id: 'root_cause',
@@ -337,7 +359,7 @@ export const AI_TEMPLATE_QUESTIONS = [
   },
   {
     id: 'explain_finding',
-    label: 'Explain finding',
+    label: 'Explain evidence',
     prompt:
       'Explain the selected Analysis Finding. Call explain_finding(' +
       'finding_id=ID, level=LEVEL) first (use finding_id and level= from ' +

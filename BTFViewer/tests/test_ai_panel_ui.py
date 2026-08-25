@@ -403,13 +403,13 @@ class AiPanelUiTests(unittest.TestCase):
         )
         self.assertTrue(panel._tool_bar.isHidden())
         panel._on_ok(json.dumps({
-            "content": "Placing cursors.",
+            "content": "Placing annotation.",
             "tool_calls": [{
                 "id": "c1",
-                "name": "set_cursors",
-                "arguments": {"timestamps": [10.0, 20.0]},
+                "name": "add_annotation",
+                "arguments": {"time": 10.0, "note": "spike"},
             }],
-            "message": {"role": "assistant", "content": "Placing cursors."},
+            "message": {"role": "assistant", "content": "Placing annotation."},
         }))
         # In-log Apply/Skip cards are the primary chrome; the under-log bar
         # stays hidden when those cards exist.
@@ -417,7 +417,7 @@ class AiPanelUiTests(unittest.TestCase):
         with patch.object(panel, "_continue_with_messages"):
             panel._on_jump_link(QUrl("btfaction:apply/b1"))
         self.assertEqual(len(executed), 1)
-        self.assertEqual(executed[0][0]["name"], "set_cursors")
+        self.assertEqual(executed[0][0]["name"], "add_annotation")
         self.assertTrue(panel._tool_bar.isHidden())
 
         panel2 = create_ai_assistant_panel(
@@ -430,14 +430,14 @@ class AiPanelUiTests(unittest.TestCase):
             "content": "Again.",
             "tool_calls": [{
                 "id": "c2",
-                "name": "highlight_task",
-                "arguments": {"task_name_or_id": "Low[266]"},
+                "name": "set_view_mode",
+                "arguments": {"mode": "core"},
             }],
         }))
         # Legacy colon hrefs must still Apply (QTextBrowser used to truncate them).
         with patch.object(panel2, "_continue_with_messages"):
             panel2._on_jump_link(QUrl("btfaction:apply:b1"))
-        self.assertEqual(executed[-1][0]["name"], "highlight_task")
+        self.assertEqual(executed[-1][0]["name"], "set_view_mode")
 
     def test_apply_runs_each_viewer_tool(self) -> None:
         executed = []
@@ -792,7 +792,7 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertEqual(len(more), 1)
         self.assertEqual(
             panel._template_btns[-1].text().replace("&", ""),
-            "Auto investigate",
+            "Verify finding",
         )
         self.assertEqual(panel._more_btn.text().replace("&", ""), "More templates…")
         menu_ids = [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids]
@@ -1049,7 +1049,7 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertGreater(tpl_h_narrow, tpl_h_wide)
 
         headings = [
-            "Start", "Investigate", "SMP", "Verify", "Compare",
+            "Start", "Investigate", "SMP", "Compare",
             "What-if / Optimize", "Investigations", "Knowledge",
         ]
         labels = [
@@ -1162,9 +1162,14 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertEqual(panel._usage.text(), "Context: Balanced")
 
     def test_log_composer_splitter_exists(self) -> None:
+        from btf_viewer_pkg.ai_assistant import _AiSplitHandle
+
         panel = self._panel()
         self.assertEqual(panel._split.objectName(), "aiSplit")
         self.assertEqual(panel._split_bottom.objectName(), "aiSplitBottom")
+        self.assertEqual(panel._split.handleWidth(), 8)
+        handle = panel._split.handle(1)
+        self.assertIsInstance(handle, _AiSplitHandle)
         self.assertEqual(panel._usage.objectName(), "aiUsageBar")
         self.assertEqual(panel._usage.text(), "Context: Balanced")
 

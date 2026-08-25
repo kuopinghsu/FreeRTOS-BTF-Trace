@@ -30,6 +30,8 @@ import {
   searchTimelineHits,
   stripParsedToolMarkup,
   summariseToolCall,
+  classifyViewerTool,
+  formatToolActionLabel,
   toolBatchAutoRuns,
   toolMutatesGui,
   toolResultMessage,
@@ -105,6 +107,18 @@ describe('aiTools', () => {
     assert.equal(toolBatchAutoRuns([{ name: 'export_report' }]), true)
     assert.equal(toolBatchAutoRuns([
       { name: 'generate_report' }, { name: 'export_report' },
+    ]), true)
+    assert.equal(toolBatchAutoRuns([{ name: 'set_cursors' }]), true)
+    assert.equal(classifyViewerTool('set_cursors'), 'Navigation')
+    assert.equal(classifyViewerTool('add_annotation'), 'Annotation')
+    assert.equal(classifyViewerTool('export_report'), 'Export')
+    assert.equal(classifyViewerTool('query_raw_metric'), 'Calculation')
+    assert.match(
+      formatToolActionLabel('set_cursors', { timestamps: [10, 20] }),
+      /^\[Navigation\]/,
+    )
+    assert.equal(toolBatchAutoRuns([
+      { name: 'set_cursors' }, { name: 'zoom_to_range' }, { name: 'highlight_task' },
     ]), true)
     assert.equal(toolBatchAutoRuns([
       { name: 'query_raw_metric' }, { name: 'add_annotation' },

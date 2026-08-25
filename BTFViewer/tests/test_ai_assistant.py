@@ -125,7 +125,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
         menu_ids = [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids]
         self.assertEqual(
             list(AI_TEMPLATE_PRIMARY_IDS),
-            ["findings", "explain_region", "investigate", "auto_investigate"],
+            ["investigate", "explain_finding", "verify"],
         )
         self.assertEqual(sorted(list(AI_TEMPLATE_PRIMARY_IDS) + menu_ids), sorted(all_ids))
         self.assertFalse(set(AI_TEMPLATE_PRIMARY_IDS) & set(menu_ids))
@@ -139,9 +139,18 @@ class AiAssistantHelpersTests(unittest.TestCase):
 
         from btf_viewer_pkg.ai_assistant import ai_template_primary_rows
         lead, last = ai_template_primary_rows()
-        self.assertEqual(list(lead), ["findings", "explain_region", "investigate"])
-        self.assertEqual(list(last), ["auto_investigate"])
+        self.assertEqual(list(lead), ["investigate", "explain_finding"])
+        self.assertEqual(list(last), ["verify"])
         self.assertIn("export function aiTemplatePrimaryRows", js)
+
+        from btf_viewer_pkg.ai_assistant import suggest_primary_ai_template
+        self.assertEqual(suggest_primary_ai_template(finding_id="F1"), "verify")
+        self.assertEqual(
+            suggest_primary_ai_template(
+                finding_id="F1", guide_stage="investigate"),
+            "explain_finding",
+        )
+        self.assertEqual(suggest_primary_ai_template(cursor_count=2), "investigate")
 
         groups = re.search(
             r"export const AI_TEMPLATE_MENU_GROUPS = \[([\s\S]*?)\]\s*\n\n", js)

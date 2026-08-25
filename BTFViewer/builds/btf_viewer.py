@@ -140,7 +140,7 @@ from PySide6.QtWidgets import (
     QProxyStyle, QStyledItemDelegate, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QToolTip,
     QPlainTextEdit, QTextBrowser,
     QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget, QSizePolicy, QSplitter, QLayout,
+    QVBoxLayout, QWidget, QSizePolicy, QSplitter, QSplitterHandle, QLayout,
 )
 
 # ---------------------------------------------------------------------------
@@ -20509,20 +20509,23 @@ DEFAULT_AI_CONTEXT_MODE = AI_CONTEXT_MODE_BALANCED
 AI_CONTEXT_MODE_LABELS: Dict[str, str] = {
     AI_CONTEXT_MODE_COMPACT: "Compact",
     AI_CONTEXT_MODE_BALANCED: "Balanced",
-    AI_CONTEXT_MODE_FULL: "Full evidence",
+    AI_CONTEXT_MODE_FULL: "Full Evidence",
 }
 AI_CONTEXT_MODE_SETTINGS_TOOLTIP = (
-    "How much Findings, tools, and chat history are sent to the model."
+    "How much Findings, tools, and chat history are sent to the model. "
+    "Confidence comes from evidence, not from the mode."
 )
 AI_CONTEXT_MODE_SETTINGS_LINES: Dict[str, str] = {
     AI_CONTEXT_MODE_COMPACT: (
-        "Compact — fewer Findings and tools; best for small local models."
+        "Compact — Fast triage; up to 3 findings and minimal tools."
     ),
     AI_CONTEXT_MODE_BALANCED: (
-        "Balanced (default) — moderate Findings, tools, and history."
+        "Balanced (default) — Default investigation with evidence and one "
+        "alternative."
     ),
     AI_CONTEXT_MODE_FULL: (
-        "Full evidence — complete Findings, tools, and history."
+        "Full Evidence — Deep verification with relevant evidence and "
+        "investigation history."
     ),
 }
 
@@ -21220,8 +21223,7 @@ GUIDE_STAGE_NEEDLES: Dict[str, Tuple[str, ...]] = {
     "compare": ("compare", "validate_experiment", "recapture"),
 }
 ESTIMATE_BANNER = (
-    "Heuristic estimate (What-if / Optimize) — recapture a trace and Compare "
-    "to measure."
+    "Simulation / estimate — not measured RTOS behavior."
 )
 VERIFY_HINT = (
     "Verify alternatives and contradictions before treating What-if as measured."
@@ -26047,7 +26049,15 @@ def build_correlation_timeline(
             "detail": str(ev.get("detail") or ev.get("note") or ev.get("event") or ""),
             "task": str(ev.get("task") or task or ""),
             "core": ev.get("core") or "",
+            "start": ev.get("start", t),
+            "stop": ev.get("stop"),
+            "duration": ev.get("duration", ev.get("gap")),
         })
+        if rows[-1]["stop"] is None and rows[-1]["duration"] is not None:
+            try:
+                rows[-1]["stop"] = float(t) + float(rows[-1]["duration"])
+            except (TypeError, ValueError):
+                pass
     rows.sort(key=lambda r: r["time"])
     if around_time is not None and window and window > 0:
         lo = float(around_time) - float(window)
@@ -26129,7 +26139,16 @@ def build_critical_path(
             "kind": str(ev.get("kind") or "event"),
             "detail": str(ev.get("detail") or ev.get("note") or ""),
             "task": str(ev.get("task") or task or ""),
+            "core": str(ev.get("core") or ""),
+            "start": ev.get("start", t),
+            "stop": ev.get("stop"),
+            "duration": ev.get("duration", ev.get("gap")),
         })
+        if rows[-1]["stop"] is None and rows[-1]["duration"] is not None:
+            try:
+                rows[-1]["stop"] = float(t) + float(rows[-1]["duration"])
+            except (TypeError, ValueError):
+                pass
     if not rows:
         return {
             "ok": False,
@@ -26171,11 +26190,20 @@ def build_critical_path(
     for i, ev in enumerate(rows, start=1):
         label = kind_labels.get(ev["kind"], ev["kind"])
         detail = ev["detail"]
-        start = ev["time"]
-        if i < len(rows) and rows[i]["time"] > start:
-            stop = rows[i]["time"]
-        else:
-            stop = start
+        start = ev.get("start")
+        stop = ev.get("stop")
+        try:
+            has_interval = (
+                start is not None and stop is not None and float(stop) > float(start)
+            )
+        except (TypeError, ValueError):
+            has_interval = False
+        if not has_interval:
+            start = ev["time"]
+            if i < len(rows) and rows[i]["time"] > start:
+                stop = rows[i]["time"]
+            else:
+                stop = start
         path.append({
             "step": i,
             "time": ev["time"],
@@ -26183,6 +26211,8 @@ def build_critical_path(
             "stop": stop,
             "detail": f"{label}: {detail}" if detail else label,
             "kind": ev["kind"],
+            "task": str(ev.get("task") or task or ""),
+            "core": str(ev.get("core") or ""),
         })
     kinds = {r["kind"] for r in rows}
     if len(kinds) >= 3 and len(rows) >= 4:
@@ -26244,13 +26274,12 @@ def extract_evidence_panel_payload(
         finding = data.get("finding") if isinstance(data.get("finding"), dict) else {}
         payload["conclusion"] = str(finding.get("title") or data.get("conclusion") or "")
         payload["subtitle"] = str(finding.get("text") or "")
+        focus_task = str(finding.get("task") or data.get("task") or "").strip()
         ev_items: List[Dict[str, Any]] = []
         for ev in finding.get("evidence") or []:
-            if isinstance(ev, dict):
-                ev_items.append({
-                    "label": str(ev.get("label") or ev.get("text") or "evidence"),
-                    "time": ev.get("time"),
-                })
+            item = _normalize_evidence_item(ev, default_task=focus_task)
+            if item:
+                ev_items.append(item)
         if ev_items:
             payload["evidence"] = ev_items
         if data.get("evidence_chain"):
@@ -26274,26 +26303,32 @@ def extract_evidence_panel_payload(
         task = str(data.get("task") or "")
         payload["conclusion"] = f"Critical path: {task}" if task else "Critical path"
         payload["evidence"] = [
-            {
-                "label": str(p.get("detail") or ""),
-                "time": p.get("time"),
-                "start": p.get("start"),
-                "stop": p.get("stop"),
-            }
-            for p in (data.get("path") or [])
-            if isinstance(p, dict)
+            item for item in (
+                _normalize_evidence_item(
+                    p,
+                    default_task=task,
+                    label=str(p.get("detail") or ""),
+                )
+                for p in (data.get("path") or [])
+                if isinstance(p, dict)
+            )
+            if item
         ]
         payload["confidence"] = str(data.get("confidence") or "Medium")
     elif name == "correlate_events" or data.get("events"):
         task = str(data.get("task") or "")
         payload["conclusion"] = f"Correlated events: {task}" if task else "Correlated events"
         payload["evidence"] = [
-            {
-                "label": f"{e.get('kind')}: {e.get('detail')}",
-                "time": e.get("time"),
-            }
-            for e in (data.get("events") or [])[:15]
-            if isinstance(e, dict)
+            item for item in (
+                _normalize_evidence_item(
+                    e,
+                    default_task=task,
+                    label=f"{e.get('kind')}: {e.get('detail')}",
+                )
+                for e in (data.get("events") or [])[:15]
+                if isinstance(e, dict)
+            )
+            if item
         ]
         corr = data.get("correlation")
         payload["confidence"] = (
@@ -26312,10 +26347,12 @@ def extract_evidence_panel_payload(
             or data.get("message")
             or (f"{len(times)} timeline hit(s)" if times else "No timeline hits")
         )
+        focus_task = str(data.get("task") or "").strip()
         payload["evidence"] = [
             {
                 "label": f"timeline: {query}" if query else "timeline hit",
                 "time": t if t != int(t) else int(t),
+                **({"task": focus_task} if focus_task else {}),
             }
             for t in times[:20]
         ]
@@ -26333,34 +26370,35 @@ def extract_evidence_panel_payload(
                 if inversions else "No priority inversion suspects"
             )
         )
-        payload["evidence"] = [
-            {
-                "label": (
-                    "priority: "
-                    + (
-                        str(inv.get("pattern") or "").strip()
-                        or "L/M/H inversion"
-                    )
-                    + (
-                        f" low={inv.get('low')}" if inv.get("low") else ""
-                    )
-                    + (
-                        f" med={inv.get('medium')}" if inv.get("medium") else ""
-                    )
-                    + (
-                        f" high={inv.get('high')}" if inv.get("high") else ""
-                    )
-                ),
-                "time": inv.get("time"),
-                "start": inv.get("time"),
-                "stop": (
-                    (inv.get("time") or 0) + (inv.get("duration") or 0)
-                    if inv.get("time") is not None and inv.get("duration") is not None
-                    else inv.get("time")
-                ),
-            }
-            for inv in inversions[:15]
-        ]
+        payload["evidence"] = []
+        for inv in inversions[:15]:
+            pattern = str(inv.get("pattern") or "").strip() or "L/M/H inversion"
+            label = "priority: " + pattern
+            if inv.get("low"):
+                label += f" low={inv.get('low')}"
+            if inv.get("medium"):
+                label += f" med={inv.get('medium')}"
+            if inv.get("high"):
+                label += f" high={inv.get('high')}"
+            item = _normalize_evidence_item(
+                {
+                    "label": label,
+                    "time": inv.get("time"),
+                    "start": inv.get("time"),
+                    "stop": (
+                        (inv.get("time") or 0) + (inv.get("duration") or 0)
+                        if inv.get("time") is not None
+                        and inv.get("duration") is not None
+                        else inv.get("time")
+                    ),
+                    "duration": inv.get("duration"),
+                    "task": inv.get("task") or task,
+                    "core": inv.get("core") or "",
+                },
+                default_task=task,
+            )
+            if item:
+                payload["evidence"].append(item)
         if inversions:
             payload["evidence_chain"] = (
                 f"{len(inversions)} priority-inversion episode(s)"
@@ -27428,6 +27466,47 @@ def _localize_evidence_token(text: str, labels: Dict[str, str]) -> str:
 
 _TASK_IN_LABEL_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9_.-]*\[\d+\])")
 _CORE_IN_LABEL_RE = re.compile(r"\b(?:Core[_\s-]?(\d+)|C(\d+))\b", re.IGNORECASE)
+_DUR_IN_LABEL_RE = re.compile(r"\bdur(?:ation)?\s*=\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+
+
+def _normalize_evidence_item(
+    ev: Any,
+    *,
+    default_task: str = "",
+    default_core: str = "",
+    label: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Copy evidence fields the Evidence table needs (task / core / duration)."""
+    if not isinstance(ev, dict):
+        return None
+    out_label = str(
+        label if label is not None else (ev.get("label") or ev.get("text") or "evidence")
+    ).strip() or "evidence"
+    task = str(ev.get("task") or default_task or "").strip()
+    core = str(ev.get("core") or default_core or "").strip()
+    time = ev.get("time")
+    start = ev.get("start")
+    stop = ev.get("stop")
+    duration = ev.get("duration", ev.get("gap"))
+    if start is None and time is not None:
+        start = time
+    if stop is None and start is not None and duration is not None:
+        try:
+            stop = float(start) + float(duration)
+        except (TypeError, ValueError):
+            stop = None
+    item: Dict[str, Any] = {"label": out_label, "time": time}
+    if task:
+        item["task"] = task
+    if core:
+        item["core"] = core
+    if start is not None:
+        item["start"] = start
+    if stop is not None:
+        item["stop"] = stop
+    if duration is not None:
+        item["duration"] = duration
+    return item
 
 CONCLUSION_STATUSES: Tuple[str, ...] = (
     "confirmed", "correlated", "suspected", "not_observed", "insufficient",
@@ -27489,6 +27568,16 @@ def _format_evidence_duration(start: Any, stop: Any) -> str:
     return f"{delta:.0f}"
 
 
+def _format_evidence_duration_delta(delta: Any) -> str:
+    try:
+        d = float(delta)
+    except (TypeError, ValueError):
+        return ""
+    if not (d > 0):
+        return ""
+    return _format_evidence_duration(0, d)
+
+
 def _evidence_row_fields(ev: dict) -> Tuple[str, str, str, str, str]:
     label = str(ev.get("label") or "").strip() or "item"
     task = str(ev.get("task") or "").strip()
@@ -27503,6 +27592,12 @@ def _evidence_row_fields(ev: dict) -> Tuple[str, str, str, str, str]:
             core = f"Core {m.group(1) or m.group(2)}"
     start, stop, t = ev.get("start"), ev.get("stop"), ev.get("time")
     dur = _format_evidence_duration(start, stop)
+    if not dur:
+        dur = _format_evidence_duration_delta(ev.get("duration", ev.get("gap")))
+    if not dur:
+        m = _DUR_IN_LABEL_RE.search(label)
+        if m:
+            dur = _format_evidence_duration_delta(m.group(1))
     try:
         s_lo = float(start) if start is not None else None
         s_hi = float(stop) if stop is not None else None
@@ -27535,6 +27630,17 @@ def _format_direct_evidence_table(
     ]
     for ev in rows[:20]:
         time_cell, label, task, core, dur = _evidence_row_fields(ev)
+        origin = str(
+            ev.get("origin") or ev.get("source") or ev.get("result_kind") or ""
+        ).strip().lower()
+        if origin in ("measured", "observed", "direct"):
+            label = f"[measured] {label}"
+        elif origin in ("derived", "computed"):
+            label = f"[derived] {label}"
+        elif origin in ("heuristic", "estimate"):
+            label = f"[heuristic] {label}"
+        elif origin in ("simulated", "simulation", "what_if"):
+            label = f"[simulated] {label}"
         lines.append(f"| {time_cell} | {label} | {task} | {core} | {dur} |")
     return lines
 
@@ -27612,13 +27718,57 @@ def format_evidence_panel_markdown(
         "not_observed": labels.get("status_not_observed", "Not observed"),
         "insufficient": labels.get("status_insufficient", "Insufficient data"),
     }.get(status_key, labels.get("status_suspected", "Suspected"))
-    lines.append(f"**{labels.get('status', 'Status')}:** {status_label}")
+
+    coverage = data.get("coverage") if isinstance(data.get("coverage"), dict) else {}
+    quality = data.get("evidence_quality") if isinstance(
+        data.get("evidence_quality"), dict) else {}
+    conf_raw = str(data.get("confidence") or "").strip()
+    conf_label = _localize_evidence_token(conf_raw, labels) if conf_raw else ""
+    if status_key == "insufficient" and conf_label.lower() == str(
+            labels.get("high", "High")).lower():
+        conf_label = labels.get("low", "Low")
+    cov_pct = 0
+    try:
+        cov_pct = int(coverage.get("percent") or 0)
+    except (TypeError, ValueError):
+        cov_pct = 0
+    if cov_pct >= 80:
+        cov_label = labels.get("coverage_complete", "Complete")
+    elif cov_pct >= 40:
+        cov_label = labels.get("coverage_partial", "Partial")
+    elif coverage or quality:
+        cov_label = labels.get("coverage_missing", "Missing")
+    else:
+        cov_label = "—"
+    band = str(quality.get("band") or "").strip().lower()
+    evidence_label = {
+        "strong": labels.get("quality_direct", "Direct"),
+        "medium-high": labels.get("status_correlated", "Correlated"),
+        "medium": labels.get("status_correlated", "Correlated"),
+        "weak": labels.get("quality_possible", "Possible"),
+        "insufficient": labels.get("status_insufficient", "Insufficient"),
+    }.get(band, labels.get("quality_possible", "Possible") if quality else "—")
+    lines.append(
+        f"**{labels.get('verdict', 'Verdict')}:** {status_label}"
+        f" · **{labels.get('coverage_short', 'Coverage')}:** {cov_label}"
+        f" · **{labels.get('evidence_short', 'Evidence')}:** {evidence_label}"
+        f" · **{labels.get('confidence', 'Confidence')}:** "
+        f"{conf_label or '—'}"
+    )
 
     conclusion = _localize_evidence_token(
         str(data.get("conclusion") or "").strip(), labels)
     if conclusion:
         lines.append("")
-        lines.append(f"**{labels.get('finding', 'Finding')}**")
+        # Gate Root cause vs Leading explanation on confirmation strength.
+        finding_hdr = labels.get("finding", "Finding")
+        if status_key == "confirmed" and str(
+                data.get("confidence") or "").strip().lower() in ("high",):
+            finding_hdr = labels.get("root_cause", "Root cause")
+        elif status_key in ("confirmed", "correlated", "suspected"):
+            finding_hdr = labels.get(
+                "leading_explanation", "Leading explanation")
+        lines.append(f"**{finding_hdr}**")
         lines.append(conclusion)
     subtitle = str(data.get("subtitle") or "").strip()
     # Subtitle that is only a mode/scope tag stays under Finding as a short line.
@@ -27666,7 +27816,6 @@ def format_evidence_panel_markdown(
         pass
 
     checks = [c for c in (data.get("checks") or []) if isinstance(c, dict)]
-    coverage = data.get("coverage") if isinstance(data.get("coverage"), dict) else {}
     check_rows = _coverage_check_rows(coverage, checks, labels)
     if not check_rows:
         quality = data.get("evidence_quality") if isinstance(
@@ -27742,6 +27891,25 @@ def format_evidence_panel_markdown(
         s for s in (falsify.get("disprove") or falsify.get("would_disprove") or [])
         if s
     ]
+    contradicting = [
+        s for s in (
+            falsify.get("contradicting")
+            or falsify.get("contradictions")
+            or data.get("contradictions")
+            or []
+        )
+        if s
+    ]
+    if supporting:
+        lines.append("")
+        lines.append(f"**{labels.get('supporting', 'Supporting')}**")
+        for s in supporting[:8]:
+            lines.append(f"- {s}")
+    if contradicting:
+        lines.append("")
+        lines.append(f"**{labels.get('contradicting', 'Contradicting')}**")
+        for s in contradicting[:8]:
+            lines.append(f"- {s}")
     if disprove:
         lines.append("")
         lines.append(f"**{labels.get('missing_evidence', 'Missing evidence')}**")
@@ -27751,15 +27919,12 @@ def format_evidence_panel_markdown(
     if nxt:
         lines.append("")
         lines.append(
-            f"**{labels.get('next_action', labels.get('next_check', 'Next action'))}:** "
+            f"**▶ {labels.get('next_check', labels.get('next_action', 'Next check'))}:** "
             f"{nxt}"
         )
 
     # --- Investigation details (secondary / debug chrome) -----------------
-    if supporting:
-        details.append(f"**{labels.get('supporting', 'Supporting evidence')}**")
-        for s in supporting:
-            details.append(f"- {s}")
+    # Supporting / Missing / next check are promoted above when present.
     conf = data.get("confidence")
     if conf:
         # Do not promote High confidence when status is Insufficient.
@@ -34090,11 +34255,69 @@ def tool_mutates_gui(name: str) -> bool:
     )
 
 
+def is_navigation_tool(name: str) -> bool:
+    """True for focus/zoom/highlight tools (UX-113 navigation-only)."""
+    return str(name or "") in (
+        AI_TOOL_SET_CURSORS,
+        AI_TOOL_ZOOM_TO_RANGE,
+        AI_TOOL_HIGHLIGHT_TASK,
+    )
+
+
+# Apply-card action classes (UX-113). Keep labels stable for Desktop/Web lockstep.
+VIEWER_TOOL_ACTION_NAVIGATION = "Navigation"
+VIEWER_TOOL_ACTION_SCOPE = "Scope"
+VIEWER_TOOL_ACTION_FILTER = "Filter"
+VIEWER_TOOL_ACTION_ANNOTATION = "Annotation"
+VIEWER_TOOL_ACTION_EXPORT = "Export"
+VIEWER_TOOL_ACTION_CALCULATION = "Calculation"
+
+VIEWER_TOOL_ACTION_CLASSES: Tuple[str, ...] = (
+    VIEWER_TOOL_ACTION_NAVIGATION,
+    VIEWER_TOOL_ACTION_SCOPE,
+    VIEWER_TOOL_ACTION_FILTER,
+    VIEWER_TOOL_ACTION_ANNOTATION,
+    VIEWER_TOOL_ACTION_EXPORT,
+    VIEWER_TOOL_ACTION_CALCULATION,
+)
+
+
+def classify_viewer_tool(name: str) -> str:
+    """Classify a tool for Apply-card labels (UX-113)."""
+    n = str(name or "")
+    if is_navigation_tool(n) or n in (
+        AI_TOOL_SET_VIEW_MODE,
+        AI_TOOL_OPEN_CORRIDOR,
+        AI_TOOL_RESET_VIEW,
+        AI_TOOL_SEARCH_TIMELINE,
+        AI_TOOL_TRIGGER_COMPARE,
+    ):
+        return VIEWER_TOOL_ACTION_NAVIGATION
+    if n == AI_TOOL_SUGGEST_SCOPE:
+        return VIEWER_TOOL_ACTION_SCOPE
+    if n in (
+        AI_TOOL_ADD_ANNOTATION,
+        AI_TOOL_BOOKMARK_FINDING,
+        AI_TOOL_CLEAR_MARKS,
+    ):
+        return VIEWER_TOOL_ACTION_ANNOTATION
+    if is_export_tool(n):
+        return VIEWER_TOOL_ACTION_EXPORT
+    return VIEWER_TOOL_ACTION_CALCULATION
+
+
+def format_tool_action_label(name: str, args: Optional[Dict[str, Any]] = None) -> str:
+    """``[Navigation] Set cursors at […]`` for Apply cards and history."""
+    kind = classify_viewer_tool(name)
+    return f"[{kind}] {summarise_tool_call(name, args)}"
+
+
 def tool_batch_auto_runs(tools: Optional[Sequence[Any]]) -> bool:
-    """Query/export-only batches run immediately (no Apply card)."""
+    """Query/export/navigation-only batches run immediately (no Apply card)."""
     names = [str((t or {}).get("name") or "") for t in (tools or [])]
     return bool(names) and all(
-        is_query_tool(n) or is_export_tool(n) for n in names
+        is_query_tool(n) or is_export_tool(n) or is_navigation_tool(n)
+        for n in names
     )
 
 
@@ -35193,10 +35416,20 @@ def _html_escape(text: Any) -> str:
 
 
 _TASK_FINDING_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9_.-]*\[\d+\])")
+_CORE_FINDING_RE = re.compile(r"\b(?:Core[_\s-]?(\d+)|C(\d+))\b", re.IGNORECASE)
+_DUR_FINDING_RE = re.compile(r"\bdur(?:ation)?\s*=\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
 _SEVERITY_RE = re.compile(
     r"\[?\s*(CRITICAL|WARNING|WARN|ERROR|INFO|HIGH|MEDIUM|LOW)\s*\]?",
     re.IGNORECASE,
 )
+
+
+def _fmt_evidence_delta(delta: float) -> str:
+    if delta < 1:
+        return f"{delta * 1_000_000:.0f} µs"
+    if delta < 1000:
+        return f"{delta:.6g} s"
+    return f"{delta:.0f}"
 
 
 def filter_entries_for_ai_report(entries: Optional[Sequence[Any]] = None) -> List[Any]:
@@ -35475,17 +35708,38 @@ def build_ai_report_html(
         label = str(ev.get("label") or "event")
         task_m = _TASK_FINDING_RE.search(label)
         task = str(ev.get("task") or (task_m.group(1) if task_m else "—"))
+        core = str(ev.get("core") or "").strip()
+        if not core:
+            core_m = _CORE_FINDING_RE.search(label)
+            core = f"Core {core_m.group(1) or core_m.group(2)}" if core_m else "—"
         t = ev.get("time", ev.get("start", ""))
         dur = ""
         if ev.get("start") is not None and ev.get("stop") is not None:
             try:
                 delta = float(ev["stop"]) - float(ev["start"])
-                dur = f"{delta * 1_000_000:.0f} µs" if delta < 1 else f"{delta:.6g} s"
+                if delta > 0:
+                    dur = _fmt_evidence_delta(delta)
             except (TypeError, ValueError):
-                dur = "—"
+                dur = ""
+        if not dur:
+            try:
+                delta = float(ev.get("duration", ev.get("gap")))
+                if delta > 0:
+                    dur = _fmt_evidence_delta(delta)
+            except (TypeError, ValueError):
+                dur = ""
+        if not dur:
+            dur_m = _DUR_FINDING_RE.search(label)
+            if dur_m:
+                try:
+                    delta = float(dur_m.group(1))
+                    if delta > 0:
+                        dur = _fmt_evidence_delta(delta)
+                except (TypeError, ValueError):
+                    pass
         ev_rows.append([
             _fmt_report_time(t), label, task,
-            str(ev.get("core") or "—"), dur or "—", "In scope",
+            core or "—", dur or "—", "In scope",
         ])
     evidence_html = (
         _html_table(
@@ -36624,36 +36878,63 @@ def _events_from_metric_payload(payload: Dict[str, Any], metric: str, task: str)
             detail = f"PI base={ep.get('base_pri')} peak={ep.get('peak_pri')}"
             if ep.get("inversion_suspect"):
                 detail += " inversion_suspect"
-            out.append({"time": t, "kind": "priority", "detail": detail, "task": task})
+            stop = ep.get("stop")
+            dur = ep.get("duration")
+            if stop is None and t is not None and dur is not None:
+                try:
+                    stop = float(t) + float(dur)
+                except (TypeError, ValueError):
+                    stop = None
+            out.append({
+                "time": t, "kind": "priority", "detail": detail, "task": task,
+                "start": t, "stop": stop, "duration": dur,
+            })
     elif metric == AI_RAW_METRIC_EXECUTION:
         for sl in data.get("slices") or []:
             t = sl.get("start")
             if t is None:
                 continue
+            stop = sl.get("stop")
+            dur = sl.get("duration")
+            if stop is None and t is not None and dur is not None:
+                try:
+                    stop = float(t) + float(dur)
+                except (TypeError, ValueError):
+                    stop = None
             out.append({
                 "time": t, "kind": "execution",
                 "detail": f"dur={sl.get('duration')} core={sl.get('core')}",
                 "task": task, "core": sl.get("core") or "",
+                "start": t, "stop": stop, "duration": dur,
             })
     elif metric == AI_RAW_METRIC_MIGRATIONS:
         for row in data.get("events") or data.get("migrations") or []:
             t = row.get("time")
             if t is None:
                 continue
+            to_core = row.get("to") or ""
             out.append({
                 "time": t, "kind": "migration",
                 "detail": f"{row.get('from')}→{row.get('to')}",
-                "task": task,
+                "task": task, "core": to_core,
             })
     elif metric == AI_RAW_METRIC_BLOCKING:
         for row in data.get("gaps") or []:
             t = row.get("start") or row.get("time")
             if t is None:
                 continue
+            gap = row.get("duration", row.get("gap"))
+            stop = None
+            if t is not None and gap is not None:
+                try:
+                    stop = float(t) + float(gap)
+                except (TypeError, ValueError):
+                    stop = None
             out.append({
                 "time": t, "kind": "blocking",
-                "detail": str(row.get("duration") or "block"),
+                "detail": str(gap if gap is not None else "block"),
                 "task": task,
+                "start": t, "stop": stop, "duration": gap,
             })
     elif metric == AI_RAW_METRIC_SYNC:
         for row in data.get("events") or []:
@@ -38177,7 +38458,8 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "to open next. "
         "Finish with a verdict: Confirmed, Rejected, or Inconclusive; list "
         "Evidence as jump:TIME bullets; Confidence (High/Medium/Low); "
-        "Alternatives considered; and one next check.",
+        "Alternatives considered; and one next check. Viewer action: "
+        "focus_evidence.",
     ),
     (
         "root_cause",
@@ -38326,7 +38608,7 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
     ),
     (
         "explain_finding",
-        "Explain finding",
+        "Explain evidence",
         "Explain the selected Analysis Finding. Call explain_finding("
         "finding_id=ID, level=LEVEL) first (use finding_id and level= from "
         "the user message; levels: quick, technical, deep; default "
@@ -38360,29 +38642,55 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
 )
 
 # Always-visible wrapping chips. Keep in sync with web/src/utils/aiClient.js.
-# Newbie left-to-right: Triage → Scope → Investigate. Last id shares a row
+# UX-110 primary: Investigate → Explain evidence → Verify. Last id shares a row
 # with More templates… (web `.ai-tpl-row`).
 AI_TEMPLATE_PRIMARY_IDS: Tuple[str, ...] = (
-    "findings",
-    "explain_region",
     "investigate",
-    "auto_investigate",
+    "explain_finding",
+    "verify",
 )
 
 
 def ai_template_primary_rows(
     ids: Optional[Tuple[str, ...]] = None,
 ) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
-    """Split primary chips so Auto investigate + More sit on the last row."""
+    """Split primary chips so Verify + More sit on the last row."""
     seq = tuple(ids if ids is not None else AI_TEMPLATE_PRIMARY_IDS)
     if len(seq) <= 1:
         return seq, ()
     return seq[:-1], seq[-1:]
 
+
+def suggest_primary_ai_template(
+    *,
+    finding_id: Any = "",
+    cursor_count: Any = 0,
+    selected_task: Any = "",
+    open_trace_count: Any = 1,
+    guide_stage: Any = "",
+) -> str:
+    """Suggest which primary template fits the current viewer state (UX-110)."""
+    stage = str(guide_stage or "").strip().lower()
+    has_finding = bool(str(finding_id or "").strip())
+    if stage == "verify" or (has_finding and stage == ""):
+        return "verify"
+    if has_finding and stage in ("investigate", "triage"):
+        return "investigate" if stage == "triage" else "explain_finding"
+    if has_finding:
+        return "explain_finding"
+    try:
+        cursors = int(cursor_count or 0)
+    except (TypeError, ValueError):
+        cursors = 0
+    if cursors >= 2 or str(selected_task or "").strip():
+        return "investigate"
+    return "investigate"
+
+
 # Overflow menu groups for the remaining templates (ids must cover every
 # AI_TEMPLATE_QUESTIONS entry that is not in AI_TEMPLATE_PRIMARY_IDS).
 AI_TEMPLATE_MENU_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Start", ("triage",)),
+    ("Start", ("findings", "triage", "explain_region", "auto_investigate")),
     (
         "Investigate",
         (
@@ -38396,20 +38704,19 @@ AI_TEMPLATE_MENU_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         ),
     ),
     ("SMP", ("migrations", "balance")),
-    ("Verify", ("verify", "explain_finding")),
     ("Compare", (AI_COMPARE_TEMPLATE_ID, "diagnostic_report")),
     ("What-if / Optimize", ("what_if", "optimize")),
 )
 
 # Intent landing groups for the AI empty state (includes primary chips).
 AI_TEMPLATE_INTENT_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Start", ("findings", "triage")),
+    ("Start", ("findings", "triage", "explain_region", "auto_investigate")),
     (
         "Investigate",
-        ("investigate", "explain_region", "latency", "wcet", "task_profile"),
+        ("investigate", "latency", "wcet", "task_profile", "root_cause"),
     ),
     ("SMP", ("migrations", "balance")),
-    ("Verify", ("verify", "explain_finding", "auto_investigate")),
+    ("Verify", ("verify", "explain_finding")),
     ("Compare", (AI_COMPARE_TEMPLATE_ID, "diagnostic_report")),
 )
 
@@ -40160,7 +40467,7 @@ def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str,
             continue
         name = str(t.get("name") or "")
         args = t.get("arguments") if isinstance(t.get("arguments"), dict) else {}
-        label = html.escape(summarise_tool_call(name, args))
+        label = html.escape(format_tool_action_label(name, args))
         st = html.escape(str(t.get("status") or status))
         rows.append(
             f"<p>⚡ {label} <span style=\"color:{st_color}\">({st})</span></p>"
@@ -40290,7 +40597,7 @@ def _tool_transcript_lines(entry: Any) -> List[str]:
         name = str(t.get("name") or "")
         args = t.get("arguments") if isinstance(t.get("arguments"), dict) else {}
         st = str(t.get("status") or "pending")
-        lines.append(f"- ⚡ {summarise_tool_call(name, args)} ({st})")
+        lines.append(f"- ⚡ {format_tool_action_label(name, args)} ({st})")
     return lines
 
 
@@ -41632,6 +41939,41 @@ _AI_CHIP_MIN_HEIGHT = 28  # match web `.ai-tpl-btn { min-height: 28px }`
 _AI_INTENT_CHIP_HEIGHT = 24
 
 
+class _AiSplitHandle(QSplitterHandle):
+    """Hairline grip matching Statistics ``_StatsSectionGrip`` / web resizer."""
+
+    def __init__(self, orientation, parent: QSplitter) -> None:
+        super().__init__(orientation, parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setMouseTracking(True)
+
+    def _is_dark(self) -> bool:
+        panel = self.parentWidget()
+        while panel is not None and not hasattr(panel, "_is_dark"):
+            panel = panel.parentWidget()
+        return bool(getattr(panel, "_is_dark", True)) if panel else True
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        # Transparent hit area; draw the same 1px mid-line as Statistics grips.
+        if self.underMouse():
+            color = QColor("#6688CC")
+        else:
+            color = QColor("#3C3C3C" if self._is_dark() else "#DDDDDD")
+        y = self.height() // 2
+        p.setPen(QPen(color, 1))
+        p.drawLine(0, y, self.width(), y)
+        p.end()
+
+
+class _AiSplitter(QSplitter):
+    """Vertical AI log/composer splitter with Statistics-matching handle paint."""
+
+    def createHandle(self) -> QSplitterHandle:  # noqa: N802
+        return _AiSplitHandle(self.orientation(), self)
+
+
 def _ai_chrome_colors(is_dark: bool) -> dict:
     if is_dark:
         return dict(
@@ -41663,6 +42005,7 @@ def _ai_chrome_colors(is_dark: bool) -> dict:
 def _ai_tpl_btn_style(is_dark: bool = True) -> str:
     c = _ai_chrome_colors(is_dark)
     muted = c["muted"]
+    accent = c["accent"]
     return (
         "QPushButton {"
         f"  color: {c['text']};"
@@ -41677,7 +42020,11 @@ def _ai_tpl_btn_style(is_dark: bool = True) -> str:
         f"  border-color: {c['border']};"
         "}"
         "QPushButton:hover:!disabled {"
-        f"  border-color: {c['accent']};"
+        f"  border-color: {accent};"
+        "}"
+        "QPushButton#aiTplSuggested:!disabled {"
+        f"  border: 2px solid {accent};"
+        "  padding: 3px 7px;"
         "}"
     )
 
@@ -42049,8 +42396,36 @@ def create_ai_assistant_panel(
             split_bottom.setMinimumHeight(64)
             bottom_lay = QVBoxLayout(split_bottom)
             bottom_lay.setContentsMargins(0, 0, 0, 0)
-            bottom_lay.setSpacing(0)
+            bottom_lay.setSpacing(4)
             self._split_bottom = split_bottom
+
+            self._context_toggle = QToolButton()
+            self._context_toggle.setObjectName("aiContextToggle")
+            self._context_toggle.setCheckable(True)
+            self._context_toggle.setToolButtonStyle(
+                Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            self._context_toggle.setArrowType(Qt.ArrowType.RightArrow)
+            self._context_toggle.setText("Context")
+            self._context_toggle.setStyleSheet(
+                "QToolButton#aiContextToggle {"
+                "  color:#8a96a8; font-size:11px; border:none; padding:2px 0;"
+                "}"
+            )
+            self._context_toggle.toggled.connect(self._on_context_row_toggled)
+            self._context_body = QLabel("")
+            self._context_body.setObjectName("aiContextBody")
+            self._context_body.setWordWrap(True)
+            self._context_body.setTextFormat(Qt.TextFormat.RichText)
+            self._context_body.setStyleSheet(
+                "QLabel#aiContextBody {"
+                "  color:#8a96a8; font-size:11px;"
+                "  border:1px solid #3a4658; border-radius:6px;"
+                "  padding:6px 8px; background:#1a2230;"
+                "}"
+            )
+            self._context_body.hide()
+            bottom_lay.addWidget(self._context_toggle)
+            bottom_lay.addWidget(self._context_body)
 
             self._investigation_plan: Optional[Dict[str, Any]] = None
             self._evidence_payload: Optional[Dict[str, Any]] = None
@@ -42256,6 +42631,7 @@ def create_ai_assistant_panel(
                 tpl_host, spacing=4, break_before=(len(_lead_ids),))
 
             self._template_btns: List[QPushButton] = []
+            self._template_btn_ids: List[str] = []
             self._template_actions: Dict[str, Any] = {}
             self._compare_btn: Optional[QWidget] = None
             self._smp_only_btns: Dict[str, QWidget] = {}
@@ -42272,6 +42648,7 @@ def create_ai_assistant_panel(
                     continue
                 _tid, label, prompt = item
                 btn = QPushButton(label)
+                btn.setProperty("aiTemplateId", _tid)
                 btn.setToolTip(qt_wrap_tooltip(prompt))
                 btn.setSizePolicy(
                     QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
@@ -42281,6 +42658,7 @@ def create_ai_assistant_panel(
                 )
                 tpl_row.addWidget(btn)
                 self._template_btns.append(btn)
+                self._template_btn_ids.append(_tid)
                 _bind_template_ctrl(_tid, btn)
 
             more_btn = QPushButton("More templates\u2026")
@@ -42341,6 +42719,15 @@ def create_ai_assistant_panel(
             more_menu.installEventFilter(self)
             tpl_row.addWidget(more_btn)
             top_lay.addWidget(tpl_host)
+
+            self._tpl_prereq = QLabel("")
+            self._tpl_prereq.setObjectName("aiTplPrereq")
+            self._tpl_prereq.setWordWrap(True)
+            self._tpl_prereq.setStyleSheet(
+                "QLabel#aiTplPrereq { color:#b08900; font-size:11px; padding:0 2px; }"
+            )
+            self._tpl_prereq.hide()
+            top_lay.addWidget(self._tpl_prereq)
 
             self.refresh_template_availability()
             self._refresh_intent_landing()
@@ -42421,10 +42808,10 @@ def create_ai_assistant_panel(
             bottom_lay.addWidget(composer, 1)
             QTimer.singleShot(0, self._place_composer_icons)
 
-            split = QSplitter(Qt.Orientation.Vertical)
+            split = _AiSplitter(Qt.Orientation.Vertical)
             split.setObjectName("aiSplit")
             split.setChildrenCollapsible(False)
-            split.setHandleWidth(6)
+            split.setHandleWidth(8)
             split.addWidget(split_top)
             split.addWidget(split_bottom)
             split.setStretchFactor(0, 1)
@@ -42529,12 +42916,12 @@ def create_ai_assistant_panel(
                     f"border-top:1px solid {c['border']};"
                 )
             if getattr(self, "_split", None) is not None:
-                self._split.setStyleSheet(
-                    "QSplitter::handle { background: %s; }"
-                    "QSplitter::handle:hover { background: %s; }"
-                    "QSplitter::handle:vertical { height: 6px; }"
-                    % (c["border"], c["accent"])
-                )
+                # Hairline grip paints itself (Statistics ``_StatsSectionGrip`` lockstep).
+                self._split.setStyleSheet("")
+                for i in range(1, self._split.count()):
+                    handle = self._split.handle(i)
+                    if handle is not None:
+                        handle.update()
             inp = getattr(self, "_input", None)
             if inp is not None:
                 pal = inp.palette()
@@ -42807,6 +43194,69 @@ def create_ai_assistant_panel(
             bar.setText(format_context_usage_status(
                 self._cost_meter, self._context_mode()))
             bar.setToolTip(qt_wrap_tooltip(format_cost_meter(self._cost_meter)))
+            self._refresh_context_row()
+
+        def _on_context_row_toggled(self, checked: bool) -> None:
+            btn = getattr(self, "_context_toggle", None)
+            body = getattr(self, "_context_body", None)
+            if btn is not None:
+                btn.setArrowType(
+                    Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
+            if body is not None:
+                body.setVisible(bool(checked))
+            if checked:
+                self._refresh_context_row()
+
+        def _refresh_context_row(self) -> None:
+            toggle = getattr(self, "_context_toggle", None)
+            body = getattr(self, "_context_body", None)
+            if toggle is None:
+                return
+            gui: Dict[str, Any] = {}
+            ctx: Dict[str, Any] = {}
+            if on_gui_state:
+                try:
+                    gui = dict(on_gui_state() or {})
+                except Exception:
+                    gui = {}
+            if get_context:
+                try:
+                    ctx = normalize_ai_context(dict(get_context() or {}))
+                except Exception:
+                    ctx = {}
+            findings = ctx.get("findings") or []
+            n_find = len(findings) if isinstance(findings, list) else 0
+            filters = ctx.get("filters") or []
+            if not isinstance(filters, list):
+                filters = []
+            filters = [str(f) for f in filters if f]
+            mode = ai_context_mode_label(self._context_mode())
+            lang = self._reply_language()
+            priv = ""
+            try:
+                priv = str(self._privacy_chip.text() or "").strip()
+            except Exception:
+                priv = ""
+            toggle.setText(
+                f"Context · {mode} · {n_find} findings · {lang}"
+                + (f" · {priv}" if priv else "")
+            )
+            if body is None or not body.isVisible():
+                return
+            endpoint = ""
+            try:
+                endpoint = str(self._auth_chip.text() or "").strip()
+            except Exception:
+                endpoint = ""
+            usage = format_context_usage_status(
+                self._cost_meter, self._context_mode())
+            body.setText(
+                f"<b>Trace:</b> {html.escape(str(gui.get('file') or gui.get('name') or '—'))}<br/>"
+                f"<b>Scope:</b> {html.escape(str(ctx.get('scope') or gui.get('scope') or 'Full Trace'))}<br/>"
+                f"<b>Filters:</b> {html.escape(' · '.join(filters) if filters else 'None')}<br/>"
+                f"<b>Endpoint:</b> {html.escape(endpoint or '—')}<br/>"
+                f"<b>Usage:</b> {html.escape(usage)}"
+            )
 
         def _restore_ai_split(self) -> None:
             split = getattr(self, "_split", None)
@@ -43562,8 +44012,10 @@ def create_ai_assistant_panel(
         def refresh_template_availability(self) -> None:
             """Enable Trace Compare only when 2+ loaded tabs exist; gray out
             SMP-only templates (Migration thrash, Core balance) for a
-            single-core trace."""
+            single-core trace; highlight suggested primary; show inline
+            prerequisites (UX-110)."""
             disabled_base = self._busy or not self._ai_is_enabled()
+            prereq_msgs: List[str] = []
 
             for _tid, btn in self._smp_only_btns.items():
                 if disabled_base:
@@ -43577,28 +44029,106 @@ def create_ai_assistant_panel(
                     btn.setToolTip(qt_wrap_tooltip(prompt))
                 else:
                     btn.setEnabled(False)
-                    btn.setToolTip(qt_wrap_tooltip(
-                        "This trace has a single core — not applicable."
-                    ))
+                    msg = "This trace has a single core — not applicable."
+                    btn.setToolTip(qt_wrap_tooltip(msg))
+                    if msg not in prereq_msgs:
+                        prereq_msgs.append(msg)
 
-            if self._compare_btn is None:
-                return
-            n = len(self._loaded_tabs())
-            prompt = next(
-                (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS if tid == AI_COMPARE_TEMPLATE_ID),
-                "Trace Compare",
+            if self._compare_btn is not None:
+                n = len(self._loaded_tabs())
+                prompt = next(
+                    (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS
+                     if tid == AI_COMPARE_TEMPLATE_ID),
+                    "Trace Compare",
+                )
+                if disabled_base:
+                    self._compare_btn.setEnabled(False)
+                elif n < 2:
+                    self._compare_btn.setEnabled(False)
+                    msg = "Open at least two BTF tabs to use Trace Compare."
+                    self._compare_btn.setToolTip(qt_wrap_tooltip(msg))
+                    if msg not in prereq_msgs:
+                        prereq_msgs.append(msg)
+                else:
+                    self._compare_btn.setEnabled(True)
+                    self._compare_btn.setToolTip(qt_wrap_tooltip(prompt))
+
+            suggested = self._suggested_primary_template_id()
+            ids = list(getattr(self, "_template_btn_ids", []) or [])
+            for i, btn in enumerate(self._template_btns):
+                tid = ids[i] if i < len(ids) else ""
+                if (
+                    tid
+                    and tid == suggested
+                    and btn.isEnabled()
+                    and not disabled_base
+                ):
+                    btn.setObjectName("aiTplSuggested")
+                else:
+                    btn.setObjectName("")
+                # Force stylesheet re-resolve after objectName change.
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
+                btn.update()
+
+            label = getattr(self, "_tpl_prereq", None)
+            if label is not None:
+                if prereq_msgs and not disabled_base:
+                    label.setText(" · ".join(prereq_msgs))
+                    label.show()
+                else:
+                    label.clear()
+                    label.hide()
+
+        def _suggested_primary_template_id(self) -> str:
+            finding_id = ""
+            payload = getattr(self, "_evidence_payload", None) or {}
+            if isinstance(payload, dict):
+                finding = payload.get("finding")
+                if isinstance(finding, dict):
+                    finding_id = str(finding.get("id") or "").strip()
+            ctx: Dict[str, Any] = {}
+            if get_context:
+                try:
+                    ctx = dict(get_context() or {})
+                except Exception:
+                    ctx = {}
+            if not finding_id:
+                findings = ctx.get("findings") or []
+                if isinstance(findings, list) and findings:
+                    first = findings[0]
+                    if isinstance(first, dict):
+                        finding_id = str(first.get("id") or "").strip()
+            cursors = 0
+            selected = ""
+            if on_gui_state:
+                try:
+                    gui = on_gui_state() or {}
+                    cursors = len(placed_cursor_times(gui.get("cursors")))
+                    selected = str(
+                        gui.get("selected_task") or gui.get("highlight") or ""
+                    ).strip()
+                except Exception:
+                    cursors = 0
+            if not selected:
+                selected = str(ctx.get("selected_task") or "").strip()
+            stage = ""
+            try:
+                stage = investigation_guide_stage(
+                    self._evidence_payload,
+                    plan=getattr(self, "_investigation_plan", None),
+                    has_cursors=cursors >= 2,
+                    has_two_traces=len(self._loaded_tabs()) >= 2,
+                )
+            except Exception:
+                stage = ""
+            return suggest_primary_ai_template(
+                finding_id=finding_id,
+                cursor_count=cursors,
+                selected_task=selected,
+                open_trace_count=len(self._loaded_tabs()) or 1,
+                guide_stage=stage,
             )
-            if disabled_base:
-                self._compare_btn.setEnabled(False)
-                return
-            if n < 2:
-                self._compare_btn.setEnabled(False)
-                self._compare_btn.setToolTip(qt_wrap_tooltip(
-                    "Open at least two BTF tabs to use Trace Compare."
-                ))
-            else:
-                self._compare_btn.setEnabled(True)
-                self._compare_btn.setToolTip(qt_wrap_tooltip(prompt))
 
         def _trace_is_multi_core(self) -> bool:
             if not get_context:
@@ -44224,6 +44754,7 @@ def create_ai_assistant_panel(
             if banner is not None:
                 banner.setText(ESTIMATE_BANNER)
                 banner.setVisible(stage == "experiment")
+            self.refresh_template_availability()
 
         def _sync_evidence_log_entry(
             self, data: dict, language: Optional[str] = None,
@@ -80099,6 +80630,28 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         view = getattr(self, "_view", None)
         scene = view._scene if view is not None else None
         dlg = self._heatmap_dlg or self._chord_dlg
+        panel = getattr(self, "_stats_panel", None)
+        legend = getattr(self, "_legend", None)
+        if legend is not None and scene is not None:
+            self._capture_legend_filters_to_scene(scene)
+        scope_on = True
+        if panel is not None:
+            scope_on = bool(getattr(panel, "_scope_to_cursors", True))
+        task_q = ""
+        migrated = False
+        core_keys = None
+        heat_label = None
+        heat_mks = None
+        if scene is not None:
+            task_q = str(getattr(scene, "_task_filter_q", "") or "")
+            migrated = bool(getattr(scene, "_migrated_only_filter", False))
+            cores = getattr(scene, "_core_filter_keys", None)
+            if cores:
+                core_keys = list(cores)
+            heat_mks = getattr(scene, "_heatmap_filter_mks", None)
+            if heat_mks is not None:
+                heat_mks = list(heat_mks)
+            heat_label = getattr(scene, "_heatmap_filter_label", None)
         return {
             "cursors": list(scene.cursor_times()) if scene is not None else [],
             "view_mode": getattr(self, "_view_mode", "task"),
@@ -80116,6 +80669,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 (b.id, b.ns, b.label) for b in self._bookmarks
             ],
             "mark_next_id": int(getattr(self, "_mark_next_id", 1) or 1),
+            "scope_to_cursors": scope_on,
+            "task_filter_q": task_q,
+            "migrated_only_filter": migrated,
+            "core_filter_keys": core_keys,
+            "heatmap_filter_label": heat_label,
+            "heatmap_filter_mks": heat_mks,
         }
 
     def _ai_gui_state_for_report(self) -> dict:
@@ -80197,6 +80756,25 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._save_current_trace_state()
             if scene is not None:
                 scene.set_marks(self._bookmarks, self._annotations)
+        if "scope_to_cursors" in snap:
+            self._demo_set_limit(bool(snap.get("scope_to_cursors")))
+        if scene is not None and (
+            "task_filter_q" in snap
+            or "core_filter_keys" in snap
+            or "heatmap_filter_mks" in snap
+            or "migrated_only_filter" in snap
+        ):
+            heat_mks = snap.get("heatmap_filter_mks")
+            scene.apply_tab_filters({
+                "taskFilterText": str(snap.get("task_filter_q") or ""),
+                "taskFilterKeys": list(heat_mks) if heat_mks else None,
+                "heatmapFilterLabel": snap.get("heatmap_filter_label"),
+                "migratedOnlyFilter": bool(snap.get("migrated_only_filter")),
+                "coreFilterKeys": snap.get("core_filter_keys"),
+            }, rebuild=True)
+            self._sync_legend_filters_from_scene(scene)
+            self._sync_core_filter_chip()
+            self._sync_show_all_tasks_btn()
         if hasattr(self, "_stats_panel"):
             self._stats_panel.set_cursor_times(scene.cursor_times(), refresh_stats=True)
 

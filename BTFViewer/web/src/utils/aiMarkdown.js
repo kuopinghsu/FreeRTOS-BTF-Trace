@@ -4,7 +4,7 @@
  */
 
 import { mermaidBlockHtml } from './aiMermaid.js'
-import { btfHighlightHref, btfJumpHref, btfRangeHref, parseBtfHighlightHref, summariseToolCall } from './aiTools.js'
+import { btfHighlightHref, btfJumpHref, btfRangeHref, parseBtfHighlightHref, formatToolActionLabel, summariseToolCall } from './aiTools.js'
 import { btfHtmlReportDocument } from './htmlReport.js'
 
 import { evidencePanelLabels } from './aiInvestigation.js'
@@ -450,7 +450,7 @@ export function formatAiConversationMarkdown(entries, date = new Date(), respons
     }
     for (const t of entry.tools || []) {
       const st = t.status || 'pending'
-      const label = summariseToolCall(t.name || '', t.arguments || {})
+      const label = formatToolActionLabel(t.name || '', t.arguments || {})
       out.push(`- ⚡ ${label} (${st})`)
     }
     if (entry.tools?.length) out.push('')
@@ -466,7 +466,7 @@ export function formatAiConversationText(entries, date = new Date(), responseLan
     out.push(`${aiRoleLabel(entry.role, responseLanguage)}:`)
     if (text) out.push(text)
     for (const t of entry.tools || []) {
-      const label = summariseToolCall(t.name || '', t.arguments || {})
+      const label = formatToolActionLabel(t.name || '', t.arguments || {})
       out.push(`- ⚡ ${label} (${t.status || 'pending'})`)
     }
     out.push('')
@@ -477,7 +477,7 @@ export function formatAiConversationText(entries, date = new Date(), responseLan
 function toolCardsHtml(tools) {
   if (!tools?.length) return ''
   const rows = tools.map((t) => {
-    const label = escapeHtml(summariseToolCall(t.name || '', t.arguments || {}))
+    const label = escapeHtml(formatToolActionLabel(t.name || '', t.arguments || {}))
     const st = escapeHtml(t.status || 'pending')
     let html = `<p>⚡ ${label} <span style="color:#6b7280">(${st})</span></p>`
     if (String(t.status || '') === 'failed') {

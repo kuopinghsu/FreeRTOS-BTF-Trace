@@ -65,7 +65,7 @@ from PySide6.QtWidgets import (
     QProxyStyle, QStyledItemDelegate, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QToolTip,
     QPlainTextEdit, QTextBrowser, QTextEdit,
     QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget, QSizePolicy, QSplitter, QLayout,
+    QVBoxLayout, QWidget, QSizePolicy, QSplitter, QSplitterHandle, QLayout,
 )
 
 __all__ = [k for k in globals().keys() if not k.startswith("__")]

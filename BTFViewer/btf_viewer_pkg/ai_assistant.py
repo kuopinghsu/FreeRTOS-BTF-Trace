@@ -62,6 +62,7 @@ from .ai_tools import (
     parse_btf_stats_href,
     parse_tool_calls_from_text,
     strip_parsed_tool_markup,
+    format_tool_action_label,
     summarise_tool_call,
     tool_batch_auto_runs,
     tool_result_message,
@@ -92,6 +93,7 @@ from .ai_case import (
     INVESTIGATION_MODES,
     accumulate_cost,
     ai_context_limits,
+    ai_context_mode_label,
     build_validation_catalog,
     builtin_investigation_templates,
     chat_usage_from_response,
@@ -423,7 +425,8 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "to open next. "
         "Finish with a verdict: Confirmed, Rejected, or Inconclusive; list "
         "Evidence as jump:TIME bullets; Confidence (High/Medium/Low); "
-        "Alternatives considered; and one next check.",
+        "Alternatives considered; and one next check. Viewer action: "
+        "focus_evidence.",
     ),
     (
         "root_cause",
@@ -572,7 +575,7 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
     ),
     (
         "explain_finding",
-        "Explain finding",
+        "Explain evidence",
         "Explain the selected Analysis Finding. Call explain_finding("
         "finding_id=ID, level=LEVEL) first (use finding_id and level= from "
         "the user message; levels: quick, technical, deep; default "
@@ -606,29 +609,55 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
 )
 
 # Always-visible wrapping chips. Keep in sync with web/src/utils/aiClient.js.
-# Newbie left-to-right: Triage → Scope → Investigate. Last id shares a row
+# UX-110 primary: Investigate → Explain evidence → Verify. Last id shares a row
 # with More templates… (web `.ai-tpl-row`).
 AI_TEMPLATE_PRIMARY_IDS: Tuple[str, ...] = (
-    "findings",
-    "explain_region",
     "investigate",
-    "auto_investigate",
+    "explain_finding",
+    "verify",
 )
 
 
 def ai_template_primary_rows(
     ids: Optional[Tuple[str, ...]] = None,
 ) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
-    """Split primary chips so Auto investigate + More sit on the last row."""
+    """Split primary chips so Verify + More sit on the last row."""
     seq = tuple(ids if ids is not None else AI_TEMPLATE_PRIMARY_IDS)
     if len(seq) <= 1:
         return seq, ()
     return seq[:-1], seq[-1:]
 
+
+def suggest_primary_ai_template(
+    *,
+    finding_id: Any = "",
+    cursor_count: Any = 0,
+    selected_task: Any = "",
+    open_trace_count: Any = 1,
+    guide_stage: Any = "",
+) -> str:
+    """Suggest which primary template fits the current viewer state (UX-110)."""
+    stage = str(guide_stage or "").strip().lower()
+    has_finding = bool(str(finding_id or "").strip())
+    if stage == "verify" or (has_finding and stage == ""):
+        return "verify"
+    if has_finding and stage in ("investigate", "triage"):
+        return "investigate" if stage == "triage" else "explain_finding"
+    if has_finding:
+        return "explain_finding"
+    try:
+        cursors = int(cursor_count or 0)
+    except (TypeError, ValueError):
+        cursors = 0
+    if cursors >= 2 or str(selected_task or "").strip():
+        return "investigate"
+    return "investigate"
+
+
 # Overflow menu groups for the remaining templates (ids must cover every
 # AI_TEMPLATE_QUESTIONS entry that is not in AI_TEMPLATE_PRIMARY_IDS).
 AI_TEMPLATE_MENU_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Start", ("triage",)),
+    ("Start", ("findings", "triage", "explain_region", "auto_investigate")),
     (
         "Investigate",
         (
@@ -642,20 +671,19 @@ AI_TEMPLATE_MENU_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         ),
     ),
     ("SMP", ("migrations", "balance")),
-    ("Verify", ("verify", "explain_finding")),
     ("Compare", (AI_COMPARE_TEMPLATE_ID, "diagnostic_report")),
     ("What-if / Optimize", ("what_if", "optimize")),
 )
 
 # Intent landing groups for the AI empty state (includes primary chips).
 AI_TEMPLATE_INTENT_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Start", ("findings", "triage")),
+    ("Start", ("findings", "triage", "explain_region", "auto_investigate")),
     (
         "Investigate",
-        ("investigate", "explain_region", "latency", "wcet", "task_profile"),
+        ("investigate", "latency", "wcet", "task_profile", "root_cause"),
     ),
     ("SMP", ("migrations", "balance")),
-    ("Verify", ("verify", "explain_finding", "auto_investigate")),
+    ("Verify", ("verify", "explain_finding")),
     ("Compare", (AI_COMPARE_TEMPLATE_ID, "diagnostic_report")),
 )
 
@@ -2406,7 +2434,7 @@ def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str,
             continue
         name = str(t.get("name") or "")
         args = t.get("arguments") if isinstance(t.get("arguments"), dict) else {}
-        label = html.escape(summarise_tool_call(name, args))
+        label = html.escape(format_tool_action_label(name, args))
         st = html.escape(str(t.get("status") or status))
         rows.append(
             f"<p>⚡ {label} <span style=\"color:{st_color}\">({st})</span></p>"
@@ -2536,7 +2564,7 @@ def _tool_transcript_lines(entry: Any) -> List[str]:
         name = str(t.get("name") or "")
         args = t.get("arguments") if isinstance(t.get("arguments"), dict) else {}
         st = str(t.get("status") or "pending")
-        lines.append(f"- ⚡ {summarise_tool_call(name, args)} ({st})")
+        lines.append(f"- ⚡ {format_tool_action_label(name, args)} ({st})")
     return lines
 
 
@@ -3878,6 +3906,41 @@ _AI_CHIP_MIN_HEIGHT = 28  # match web `.ai-tpl-btn { min-height: 28px }`
 _AI_INTENT_CHIP_HEIGHT = 24
 
 
+class _AiSplitHandle(QSplitterHandle):
+    """Hairline grip matching Statistics ``_StatsSectionGrip`` / web resizer."""
+
+    def __init__(self, orientation, parent: QSplitter) -> None:
+        super().__init__(orientation, parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setMouseTracking(True)
+
+    def _is_dark(self) -> bool:
+        panel = self.parentWidget()
+        while panel is not None and not hasattr(panel, "_is_dark"):
+            panel = panel.parentWidget()
+        return bool(getattr(panel, "_is_dark", True)) if panel else True
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        # Transparent hit area; draw the same 1px mid-line as Statistics grips.
+        if self.underMouse():
+            color = QColor("#6688CC")
+        else:
+            color = QColor("#3C3C3C" if self._is_dark() else "#DDDDDD")
+        y = self.height() // 2
+        p.setPen(QPen(color, 1))
+        p.drawLine(0, y, self.width(), y)
+        p.end()
+
+
+class _AiSplitter(QSplitter):
+    """Vertical AI log/composer splitter with Statistics-matching handle paint."""
+
+    def createHandle(self) -> QSplitterHandle:  # noqa: N802
+        return _AiSplitHandle(self.orientation(), self)
+
+
 def _ai_chrome_colors(is_dark: bool) -> dict:
     if is_dark:
         return dict(
@@ -3909,6 +3972,7 @@ def _ai_chrome_colors(is_dark: bool) -> dict:
 def _ai_tpl_btn_style(is_dark: bool = True) -> str:
     c = _ai_chrome_colors(is_dark)
     muted = c["muted"]
+    accent = c["accent"]
     return (
         "QPushButton {"
         f"  color: {c['text']};"
@@ -3923,7 +3987,11 @@ def _ai_tpl_btn_style(is_dark: bool = True) -> str:
         f"  border-color: {c['border']};"
         "}"
         "QPushButton:hover:!disabled {"
-        f"  border-color: {c['accent']};"
+        f"  border-color: {accent};"
+        "}"
+        "QPushButton#aiTplSuggested:!disabled {"
+        f"  border: 2px solid {accent};"
+        "  padding: 3px 7px;"
         "}"
     )
 
@@ -4295,8 +4363,36 @@ def create_ai_assistant_panel(
             split_bottom.setMinimumHeight(64)
             bottom_lay = QVBoxLayout(split_bottom)
             bottom_lay.setContentsMargins(0, 0, 0, 0)
-            bottom_lay.setSpacing(0)
+            bottom_lay.setSpacing(4)
             self._split_bottom = split_bottom
+
+            self._context_toggle = QToolButton()
+            self._context_toggle.setObjectName("aiContextToggle")
+            self._context_toggle.setCheckable(True)
+            self._context_toggle.setToolButtonStyle(
+                Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            self._context_toggle.setArrowType(Qt.ArrowType.RightArrow)
+            self._context_toggle.setText("Context")
+            self._context_toggle.setStyleSheet(
+                "QToolButton#aiContextToggle {"
+                "  color:#8a96a8; font-size:11px; border:none; padding:2px 0;"
+                "}"
+            )
+            self._context_toggle.toggled.connect(self._on_context_row_toggled)
+            self._context_body = QLabel("")
+            self._context_body.setObjectName("aiContextBody")
+            self._context_body.setWordWrap(True)
+            self._context_body.setTextFormat(Qt.TextFormat.RichText)
+            self._context_body.setStyleSheet(
+                "QLabel#aiContextBody {"
+                "  color:#8a96a8; font-size:11px;"
+                "  border:1px solid #3a4658; border-radius:6px;"
+                "  padding:6px 8px; background:#1a2230;"
+                "}"
+            )
+            self._context_body.hide()
+            bottom_lay.addWidget(self._context_toggle)
+            bottom_lay.addWidget(self._context_body)
 
             self._investigation_plan: Optional[Dict[str, Any]] = None
             self._evidence_payload: Optional[Dict[str, Any]] = None
@@ -4502,6 +4598,7 @@ def create_ai_assistant_panel(
                 tpl_host, spacing=4, break_before=(len(_lead_ids),))
 
             self._template_btns: List[QPushButton] = []
+            self._template_btn_ids: List[str] = []
             self._template_actions: Dict[str, Any] = {}
             self._compare_btn: Optional[QWidget] = None
             self._smp_only_btns: Dict[str, QWidget] = {}
@@ -4518,6 +4615,7 @@ def create_ai_assistant_panel(
                     continue
                 _tid, label, prompt = item
                 btn = QPushButton(label)
+                btn.setProperty("aiTemplateId", _tid)
                 btn.setToolTip(qt_wrap_tooltip(prompt))
                 btn.setSizePolicy(
                     QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
@@ -4527,6 +4625,7 @@ def create_ai_assistant_panel(
                 )
                 tpl_row.addWidget(btn)
                 self._template_btns.append(btn)
+                self._template_btn_ids.append(_tid)
                 _bind_template_ctrl(_tid, btn)
 
             more_btn = QPushButton("More templates\u2026")
@@ -4587,6 +4686,15 @@ def create_ai_assistant_panel(
             more_menu.installEventFilter(self)
             tpl_row.addWidget(more_btn)
             top_lay.addWidget(tpl_host)
+
+            self._tpl_prereq = QLabel("")
+            self._tpl_prereq.setObjectName("aiTplPrereq")
+            self._tpl_prereq.setWordWrap(True)
+            self._tpl_prereq.setStyleSheet(
+                "QLabel#aiTplPrereq { color:#b08900; font-size:11px; padding:0 2px; }"
+            )
+            self._tpl_prereq.hide()
+            top_lay.addWidget(self._tpl_prereq)
 
             self.refresh_template_availability()
             self._refresh_intent_landing()
@@ -4667,10 +4775,10 @@ def create_ai_assistant_panel(
             bottom_lay.addWidget(composer, 1)
             QTimer.singleShot(0, self._place_composer_icons)
 
-            split = QSplitter(Qt.Orientation.Vertical)
+            split = _AiSplitter(Qt.Orientation.Vertical)
             split.setObjectName("aiSplit")
             split.setChildrenCollapsible(False)
-            split.setHandleWidth(6)
+            split.setHandleWidth(8)
             split.addWidget(split_top)
             split.addWidget(split_bottom)
             split.setStretchFactor(0, 1)
@@ -4775,12 +4883,12 @@ def create_ai_assistant_panel(
                     f"border-top:1px solid {c['border']};"
                 )
             if getattr(self, "_split", None) is not None:
-                self._split.setStyleSheet(
-                    "QSplitter::handle { background: %s; }"
-                    "QSplitter::handle:hover { background: %s; }"
-                    "QSplitter::handle:vertical { height: 6px; }"
-                    % (c["border"], c["accent"])
-                )
+                # Hairline grip paints itself (Statistics ``_StatsSectionGrip`` lockstep).
+                self._split.setStyleSheet("")
+                for i in range(1, self._split.count()):
+                    handle = self._split.handle(i)
+                    if handle is not None:
+                        handle.update()
             inp = getattr(self, "_input", None)
             if inp is not None:
                 pal = inp.palette()
@@ -5053,6 +5161,69 @@ def create_ai_assistant_panel(
             bar.setText(format_context_usage_status(
                 self._cost_meter, self._context_mode()))
             bar.setToolTip(qt_wrap_tooltip(format_cost_meter(self._cost_meter)))
+            self._refresh_context_row()
+
+        def _on_context_row_toggled(self, checked: bool) -> None:
+            btn = getattr(self, "_context_toggle", None)
+            body = getattr(self, "_context_body", None)
+            if btn is not None:
+                btn.setArrowType(
+                    Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
+            if body is not None:
+                body.setVisible(bool(checked))
+            if checked:
+                self._refresh_context_row()
+
+        def _refresh_context_row(self) -> None:
+            toggle = getattr(self, "_context_toggle", None)
+            body = getattr(self, "_context_body", None)
+            if toggle is None:
+                return
+            gui: Dict[str, Any] = {}
+            ctx: Dict[str, Any] = {}
+            if on_gui_state:
+                try:
+                    gui = dict(on_gui_state() or {})
+                except Exception:
+                    gui = {}
+            if get_context:
+                try:
+                    ctx = normalize_ai_context(dict(get_context() or {}))
+                except Exception:
+                    ctx = {}
+            findings = ctx.get("findings") or []
+            n_find = len(findings) if isinstance(findings, list) else 0
+            filters = ctx.get("filters") or []
+            if not isinstance(filters, list):
+                filters = []
+            filters = [str(f) for f in filters if f]
+            mode = ai_context_mode_label(self._context_mode())
+            lang = self._reply_language()
+            priv = ""
+            try:
+                priv = str(self._privacy_chip.text() or "").strip()
+            except Exception:
+                priv = ""
+            toggle.setText(
+                f"Context · {mode} · {n_find} findings · {lang}"
+                + (f" · {priv}" if priv else "")
+            )
+            if body is None or not body.isVisible():
+                return
+            endpoint = ""
+            try:
+                endpoint = str(self._auth_chip.text() or "").strip()
+            except Exception:
+                endpoint = ""
+            usage = format_context_usage_status(
+                self._cost_meter, self._context_mode())
+            body.setText(
+                f"<b>Trace:</b> {html.escape(str(gui.get('file') or gui.get('name') or '—'))}<br/>"
+                f"<b>Scope:</b> {html.escape(str(ctx.get('scope') or gui.get('scope') or 'Full Trace'))}<br/>"
+                f"<b>Filters:</b> {html.escape(' · '.join(filters) if filters else 'None')}<br/>"
+                f"<b>Endpoint:</b> {html.escape(endpoint or '—')}<br/>"
+                f"<b>Usage:</b> {html.escape(usage)}"
+            )
 
         def _restore_ai_split(self) -> None:
             split = getattr(self, "_split", None)
@@ -5808,8 +5979,10 @@ def create_ai_assistant_panel(
         def refresh_template_availability(self) -> None:
             """Enable Trace Compare only when 2+ loaded tabs exist; gray out
             SMP-only templates (Migration thrash, Core balance) for a
-            single-core trace."""
+            single-core trace; highlight suggested primary; show inline
+            prerequisites (UX-110)."""
             disabled_base = self._busy or not self._ai_is_enabled()
+            prereq_msgs: List[str] = []
 
             for _tid, btn in self._smp_only_btns.items():
                 if disabled_base:
@@ -5823,28 +5996,106 @@ def create_ai_assistant_panel(
                     btn.setToolTip(qt_wrap_tooltip(prompt))
                 else:
                     btn.setEnabled(False)
-                    btn.setToolTip(qt_wrap_tooltip(
-                        "This trace has a single core — not applicable."
-                    ))
+                    msg = "This trace has a single core — not applicable."
+                    btn.setToolTip(qt_wrap_tooltip(msg))
+                    if msg not in prereq_msgs:
+                        prereq_msgs.append(msg)
 
-            if self._compare_btn is None:
-                return
-            n = len(self._loaded_tabs())
-            prompt = next(
-                (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS if tid == AI_COMPARE_TEMPLATE_ID),
-                "Trace Compare",
+            if self._compare_btn is not None:
+                n = len(self._loaded_tabs())
+                prompt = next(
+                    (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS
+                     if tid == AI_COMPARE_TEMPLATE_ID),
+                    "Trace Compare",
+                )
+                if disabled_base:
+                    self._compare_btn.setEnabled(False)
+                elif n < 2:
+                    self._compare_btn.setEnabled(False)
+                    msg = "Open at least two BTF tabs to use Trace Compare."
+                    self._compare_btn.setToolTip(qt_wrap_tooltip(msg))
+                    if msg not in prereq_msgs:
+                        prereq_msgs.append(msg)
+                else:
+                    self._compare_btn.setEnabled(True)
+                    self._compare_btn.setToolTip(qt_wrap_tooltip(prompt))
+
+            suggested = self._suggested_primary_template_id()
+            ids = list(getattr(self, "_template_btn_ids", []) or [])
+            for i, btn in enumerate(self._template_btns):
+                tid = ids[i] if i < len(ids) else ""
+                if (
+                    tid
+                    and tid == suggested
+                    and btn.isEnabled()
+                    and not disabled_base
+                ):
+                    btn.setObjectName("aiTplSuggested")
+                else:
+                    btn.setObjectName("")
+                # Force stylesheet re-resolve after objectName change.
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
+                btn.update()
+
+            label = getattr(self, "_tpl_prereq", None)
+            if label is not None:
+                if prereq_msgs and not disabled_base:
+                    label.setText(" · ".join(prereq_msgs))
+                    label.show()
+                else:
+                    label.clear()
+                    label.hide()
+
+        def _suggested_primary_template_id(self) -> str:
+            finding_id = ""
+            payload = getattr(self, "_evidence_payload", None) or {}
+            if isinstance(payload, dict):
+                finding = payload.get("finding")
+                if isinstance(finding, dict):
+                    finding_id = str(finding.get("id") or "").strip()
+            ctx: Dict[str, Any] = {}
+            if get_context:
+                try:
+                    ctx = dict(get_context() or {})
+                except Exception:
+                    ctx = {}
+            if not finding_id:
+                findings = ctx.get("findings") or []
+                if isinstance(findings, list) and findings:
+                    first = findings[0]
+                    if isinstance(first, dict):
+                        finding_id = str(first.get("id") or "").strip()
+            cursors = 0
+            selected = ""
+            if on_gui_state:
+                try:
+                    gui = on_gui_state() or {}
+                    cursors = len(placed_cursor_times(gui.get("cursors")))
+                    selected = str(
+                        gui.get("selected_task") or gui.get("highlight") or ""
+                    ).strip()
+                except Exception:
+                    cursors = 0
+            if not selected:
+                selected = str(ctx.get("selected_task") or "").strip()
+            stage = ""
+            try:
+                stage = investigation_guide_stage(
+                    self._evidence_payload,
+                    plan=getattr(self, "_investigation_plan", None),
+                    has_cursors=cursors >= 2,
+                    has_two_traces=len(self._loaded_tabs()) >= 2,
+                )
+            except Exception:
+                stage = ""
+            return suggest_primary_ai_template(
+                finding_id=finding_id,
+                cursor_count=cursors,
+                selected_task=selected,
+                open_trace_count=len(self._loaded_tabs()) or 1,
+                guide_stage=stage,
             )
-            if disabled_base:
-                self._compare_btn.setEnabled(False)
-                return
-            if n < 2:
-                self._compare_btn.setEnabled(False)
-                self._compare_btn.setToolTip(qt_wrap_tooltip(
-                    "Open at least two BTF tabs to use Trace Compare."
-                ))
-            else:
-                self._compare_btn.setEnabled(True)
-                self._compare_btn.setToolTip(qt_wrap_tooltip(prompt))
 
         def _trace_is_multi_core(self) -> bool:
             if not get_context:
@@ -6470,6 +6721,7 @@ def create_ai_assistant_panel(
             if banner is not None:
                 banner.setText(ESTIMATE_BANNER)
                 banner.setVisible(stage == "experiment")
+            self.refresh_template_availability()
 
         def _sync_evidence_log_entry(
             self, data: dict, language: Optional[str] = None,

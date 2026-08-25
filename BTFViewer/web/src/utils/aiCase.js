@@ -120,20 +120,21 @@ export const DEFAULT_AI_CONTEXT_MODE = AI_CONTEXT_MODE_BALANCED
 export const AI_CONTEXT_MODE_LABELS = {
   [AI_CONTEXT_MODE_COMPACT]: 'Compact',
   [AI_CONTEXT_MODE_BALANCED]: 'Balanced',
-  [AI_CONTEXT_MODE_FULL]: 'Full evidence',
+  [AI_CONTEXT_MODE_FULL]: 'Full Evidence',
 }
 export const AI_CONTEXT_MODE_SETTINGS_TOOLTIP = (
-  'How much Findings, tools, and chat history are sent to the model.'
+  'How much Findings, tools, and chat history are sent to the model. '
+  + 'Confidence comes from evidence, not from the mode.'
 )
 export const AI_CONTEXT_MODE_SETTINGS_LINES = {
   [AI_CONTEXT_MODE_COMPACT]: (
-    'Compact — fewer Findings and tools; best for small local models.'
+    'Compact — Fast triage; up to 3 findings and minimal tools.'
   ),
   [AI_CONTEXT_MODE_BALANCED]: (
-    'Balanced (default) — moderate Findings, tools, and history.'
+    'Balanced (default) — Default investigation with evidence and one alternative.'
   ),
   [AI_CONTEXT_MODE_FULL]: (
-    'Full evidence — complete Findings, tools, and history.'
+    'Full Evidence — Deep verification with relevant evidence and investigation history.'
   ),
 }
 export const AI_CONTEXT_PROMPTS = {
@@ -663,7 +664,7 @@ export const GUIDE_STAGE_NEEDLES = {
   compare: ['compare', 'validate_experiment', 'recapture'],
 }
 export const ESTIMATE_BANNER = (
-  'Heuristic estimate (What-if / Optimize) — recapture a trace and Compare to measure.'
+  'Simulation / estimate — not measured RTOS behavior.'
 )
 export const VERIFY_HINT = (
   'Verify alternatives and contradictions before treating What-if as measured.'

@@ -10,6 +10,7 @@ import {
   AI_TEMPLATE_PRIMARY_IDS,
   AI_TEMPLATE_MENU_GROUPS,
   aiTemplatePrimaryRows,
+  suggestPrimaryAiTemplate,
   DEFAULT_AI_BASE_URL,
   DEFAULT_AI_PRESET,
   aiJumpAnnotationNote,
@@ -427,12 +428,21 @@ describe('AI endpoint helpers', () => {
     )
     assert.equal(new Set(all).size, all.length)
     assert.deepEqual(AI_TEMPLATE_PRIMARY_IDS, [
-      'findings', 'explain_region', 'investigate', 'auto_investigate',
+      'investigate', 'explain_finding', 'verify',
     ])
     assert.deepEqual(aiTemplatePrimaryRows(), [
-      ['findings', 'explain_region', 'investigate'],
-      ['auto_investigate'],
+      ['investigate', 'explain_finding'],
+      ['verify'],
     ])
+  })
+
+  it('suggestPrimaryAiTemplate prefers verify / explain / investigate', () => {
+    assert.equal(suggestPrimaryAiTemplate({ findingId: 'F1' }), 'verify')
+    assert.equal(suggestPrimaryAiTemplate({
+      findingId: 'F1', guideStage: 'investigate',
+    }), 'explain_finding')
+    assert.equal(suggestPrimaryAiTemplate({ cursorCount: 2 }), 'investigate')
+    assert.equal(suggestPrimaryAiTemplate({}), 'investigate')
   })
 
   it('AI template UX order matches the panel and Findings dialog', async () => {

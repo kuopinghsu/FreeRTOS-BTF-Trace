@@ -279,6 +279,14 @@
           v-html="formatMessage(m.role, m.content)"
           @click="onMsgClick"
         />
+        <button
+          v-if="m.role === 'assistant' && m.requestContext"
+          type="button"
+          class="ai-link-btn ai-view-context"
+          @click="showRequestContext(m)"
+        >
+          View request context
+        </button>
         <div
           v-if="m.tools && m.tools.length"
           class="ai-tool-card"
@@ -362,7 +370,10 @@
           :key="t.id"
           type="button"
           class="ai-tpl-btn"
-          :class="{ gray: templateDisabled(t) }"
+          :class="{
+            gray: templateDisabled(t),
+            suggested: t.id === suggestedPrimaryId && !templateDisabled(t),
+          }"
           :title="templateTitle(t)"
           :disabled="busy || !aiEnabled || templateDisabled(t)"
           @click="onTemplate(t)"
@@ -384,6 +395,12 @@
           </button>
         </div>
       </div>
+      <p
+        v-if="inlinePrerequisite"
+        class="ai-tpl-prereq"
+      >
+        {{ inlinePrerequisite }}
+      </p>
     </div>
     <Teleport to="body">
           <div
@@ -495,6 +512,24 @@
       class="ai-split-bottom"
       :style="{ height: `${splitBottom}px` }"
     >
+    <details class="ai-context-row">
+      <summary
+        class="ai-context-summary"
+        :title="contextRowSummary.usage"
+      >
+        Context · {{ contextRowSummary.mode }} ·
+        {{ contextRowSummary.findings }} findings ·
+        {{ contextRowSummary.language }} ·
+        {{ contextRowSummary.privacy }}
+      </summary>
+      <div class="ai-context-body">
+        <div><strong>Trace:</strong> {{ contextRowSummary.trace }}</div>
+        <div><strong>Scope:</strong> {{ contextRowSummary.scope }}</div>
+        <div><strong>Filters:</strong> {{ contextRowSummary.filters }}</div>
+        <div><strong>Endpoint:</strong> {{ contextRowSummary.endpoint }}</div>
+        <div><strong>Usage:</strong> {{ contextRowSummary.usage }}</div>
+      </div>
+    </details>
     <div class="ai-composer">
       <textarea
         v-model="draft"
@@ -639,6 +674,7 @@ import {
   AI_TEMPLATE_PRIMARY_IDS,
   AI_TEMPLATE_QUESTIONS,
   aiTemplatePrimaryRows,
+  suggestPrimaryAiTemplate,
   DEFAULT_AI_PRESET,
   DEFAULT_AI_RESPONSE_LANGUAGE,
   aiAuthStatus,
@@ -670,6 +706,7 @@ import {
   parseBtfRangeHref,
   parseBtfStatsHref,
   summariseToolCall,
+  formatToolActionLabel,
   toolBatchAutoRuns,
   toolResultMessage,
   validateToolCall,
@@ -697,6 +734,7 @@ import {
   focusTitlesFromSummary,
   compactToolResultPayload,
   aiContextLimits,
+  aiContextModeLabel,
   investigationContextSummary,
   normalizeAiContextMode,
   formatConfidenceEvolution,
@@ -857,6 +895,8 @@ const compareTabOptions = computed(() =>
   loadedTabs.value.map(t => ({ value: t.id, label: t.name })))
 const draft = ref('')
 const messages = ref([])
+/** Snapshot of context sent with the active turn (UX-111 View request context). */
+let lastRequestContext = null
 const busy = ref(false)
 const error = ref('')
 const status = ref('')
@@ -1067,7 +1107,7 @@ function finishInvestigationPlan() {
 }
 
 function toolLabel(t) {
-  return summariseToolCall(t.name, t.arguments || {})
+  return formatToolActionLabel(t.name, t.arguments || {})
 }
 
 function batchPending(m) {
@@ -1203,14 +1243,73 @@ function toggleMore() {
 }
 
 function templateTitle(t) {
+  return templatePrerequisite(t) || t.prompt
+}
+
+function templatePrerequisite(t) {
   if (t.id === AI_COMPARE_TEMPLATE_ID && !compareEnabled.value) {
     return 'Open at least two BTF tabs to use Trace Compare.'
   }
   if (AI_SMP_ONLY_TEMPLATE_IDS.has(t.id) && !smpEnabled.value) {
     return 'This trace has a single core — not applicable.'
   }
-  return t.prompt
+  return ''
 }
+
+const inlinePrerequisite = computed(() => {
+  const msgs = []
+  const seen = new Set()
+  for (const t of AI_TEMPLATE_QUESTIONS) {
+    const msg = templatePrerequisite(t)
+    if (msg && !seen.has(msg)) {
+      seen.add(msg)
+      msgs.push(msg)
+    }
+  }
+  return msgs.join(' · ')
+})
+
+const suggestedPrimaryId = computed(() => {
+  let ctx = {}
+  let gui = {}
+  try {
+    if (typeof props.getContext === 'function') ctx = normalizeAiContext(props.getContext() || {})
+  } catch { /* ignore */ }
+  try {
+    if (typeof props.getGuiState === 'function') gui = props.getGuiState() || {}
+  } catch { /* ignore */ }
+  const findingId = String(
+    evidencePayload?.finding?.id
+    || ctx.findings?.[0]?.id
+    || '',
+  ).trim()
+  return suggestPrimaryAiTemplate({
+    findingId,
+    cursorCount: Array.isArray(ctx.cursors) ? ctx.cursors.length : 0,
+    selectedTask: String(gui.selected_task || ctx.selected_task || '').trim(),
+    openTraceCount: loadedTabs.value.length || 1,
+    guideStage: guideStage.value || '',
+  })
+})
+
+const contextRowSummary = computed(() => {
+  let ctx = {}
+  try {
+    if (typeof props.getContext === 'function') ctx = normalizeAiContext(props.getContext() || {})
+  } catch { /* ignore */ }
+  const findings = Array.isArray(ctx.findings) ? ctx.findings.length : 0
+  return {
+    mode: aiContextModeLabel(props.aiContextMode),
+    language: String(props.responseLanguage || 'English'),
+    findings,
+    privacy: privacyChipLabel.value || 'Local',
+    endpoint: authChipLabel.value,
+    trace: intentContext.value.trace,
+    scope: intentContext.value.scope,
+    filters: intentContext.value.filters,
+    usage: usageText.value,
+  }
+})
 
 function applyLanguage() {
   const lang = String(langDraft.value || DEFAULT_AI_RESPONSE_LANGUAGE).trim()
@@ -1235,6 +1334,30 @@ const statusText = computed(() => {
 const usageText = computed(() => formatContextUsageStatus(
   costMeter.value, props.aiContextMode))
 const usageTip = computed(() => formatCostMeter(costMeter.value))
+
+function showRequestContext(m) {
+  const ctx = m?.requestContext
+  if (!ctx || typeof ctx !== 'object') {
+    status.value = 'No request context recorded for this reply.'
+    return
+  }
+  const filters = Array.isArray(ctx.filters) && ctx.filters.length
+    ? ctx.filters.join(' · ')
+    : 'None'
+  const lines = [
+    `Mode: ${ctx.mode || '—'}`,
+    `Language: ${ctx.language || '—'}`,
+    `Scope: ${ctx.scope || '—'}`,
+    `Filters: ${filters}`,
+    `Findings: ${ctx.findingCount ?? '—'}`,
+    `Trace unit: ${ctx.traceTimeUnit || '—'}`,
+    `Privacy: ${ctx.privacy || '—'}`,
+    `Endpoint: ${ctx.endpoint || '—'}`,
+    `Template: ${ctx.template || '—'}`,
+  ]
+  if (ctx.summary) lines.push(`Investigation summary:\n${ctx.summary}`)
+  window.alert(lines.join('\n'))
+}
 
 function onSplitPointerMove(ev) {
   if (!splitDrag) return
@@ -2068,11 +2191,18 @@ function ingestTurn(turn) {
       content: text,
       tools: toolsNorm,
       batchId,
+      requestContext: lastRequestContext,
     })
     const auto = parseAiAutoApply(props.aiAutoApply) || toolBatchAutoRuns(toolsNorm)
     return { batchId, text, auto }
   }
-  if (text) messages.value.push({ role: 'assistant', content: text })
+  if (text) {
+    messages.value.push({
+      role: 'assistant',
+      content: text,
+      requestContext: lastRequestContext,
+    })
+  }
   finishInvestigationPlan()
   attachResponseValidation(text)
   pinEvidenceLogEntry()
@@ -2266,6 +2396,18 @@ async function send(overrideQuery = null, overrideCtx = null) {
     if (overrideCtx == null) refreshLoadedTabs()
     const mode = normalizeAiContextMode(props.aiContextMode)
     const invSummary = investigationContextSummary(evidencePayload)
+    lastRequestContext = {
+      mode: aiContextModeLabel(mode),
+      language: String(props.responseLanguage || 'English'),
+      scope: String(ctx.scope || 'Full Trace'),
+      filters: Array.isArray(ctx.filters) ? ctx.filters.filter(Boolean) : [],
+      findingCount: Array.isArray(ctx.findings) ? ctx.findings.length : 0,
+      traceTimeUnit: String(ctx.traceTimeUnit || ''),
+      privacy: privacyChipLabel.value,
+      endpoint: authChipLabel.value,
+      template: activeTemplateId || '',
+      summary: invSummary || '',
+    }
     const prior = chatMessages
     chatMessages = compactChatHistory([
       { role: 'system', content: buildAiSystemPrompt(props.responseLanguage, mode) },
@@ -2680,6 +2822,40 @@ defineExpose({
 .ai-tpl-btn.gray:disabled {
   color: var(--muted, #8a96a8);
 }
+.ai-tpl-btn.suggested:not(:disabled) {
+  outline: 1px solid var(--accent, #2a6fb2);
+  outline-offset: 1px;
+}
+.ai-tpl-prereq {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: #b08900;
+  line-height: 1.35;
+}
+.ai-context-row {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--muted, #8a96a8);
+}
+.ai-context-summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.ai-context-summary::-webkit-details-marker { display: none; }
+.ai-context-body {
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--border, #3a4658);
+  border-radius: 6px;
+  background: var(--panel-inset, #1a2230);
+  display: grid;
+  gap: 2px;
+}
+.ai-view-context {
+  margin-top: 4px;
+  font-size: 11px;
+}
 .ai-tpl-btn:hover:not(:disabled), .ai-btn:hover:not(:disabled) {
   border-color: var(--accent, #2a6fb2);
 }
@@ -2719,14 +2895,25 @@ defineExpose({
   gap: 8px;
 }
 .ai-split-handle {
+  height: 6px;
   flex: 0 0 6px;
-  margin: 2px 0;
-  cursor: ns-resize;
-  background: var(--border, #3a4658);
-  border-radius: 3px;
+  margin-top: 2px;
+  cursor: row-resize;
+  position: relative;
+  background: transparent;
 }
-.ai-split-handle:hover {
-  background: var(--accent, #5b9bd5);
+.ai-split-handle::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 2px;
+  height: 2px;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.ai-split-handle:hover::before {
+  background: color-mix(in srgb, var(--accent) 50%, var(--border));
 }
 .ai-split-bottom {
   flex: 0 0 auto;

@@ -706,6 +706,62 @@ class AiInvestigationTests(unittest.TestCase):
             "Why is TaskA slow?",
         )
 
+    def test_extract_evidence_preserves_task_core_duration(self) -> None:
+        from btf_viewer_pkg.ai_investigation import (
+            format_evidence_panel_markdown,
+            _evidence_row_fields,
+        )
+
+        corr = extract_evidence_panel_payload("correlate_events", {
+            "ok": True,
+            "data": {
+                "task": "Worker[3]",
+                "events": [
+                    {
+                        "time": 1000, "kind": "execution",
+                        "detail": "dur=500 core=Core_2",
+                        "task": "Worker[3]", "core": "Core_2",
+                        "start": 1000, "stop": 1500, "duration": 500,
+                    },
+                    {
+                        "time": 2000, "kind": "blocking", "detail": "800",
+                        "duration": 800,
+                    },
+                ],
+            },
+        })
+        self.assertIsNotNone(corr)
+        ev0 = (corr.get("evidence") or [])[0]
+        self.assertEqual(ev0.get("task"), "Worker[3]")
+        self.assertEqual(ev0.get("core"), "Core_2")
+        self.assertEqual(ev0.get("start"), 1000)
+        self.assertEqual(ev0.get("stop"), 1500)
+        # Default task stamped when the event omits it.
+        ev1 = (corr.get("evidence") or [])[1]
+        self.assertEqual(ev1.get("task"), "Worker[3]")
+        self.assertEqual(ev1.get("start"), 2000)
+        self.assertEqual(ev1.get("stop"), 2800)
+        row = _evidence_row_fields(ev0)
+        self.assertEqual(row[2], "Worker[3]")
+        self.assertEqual(row[3], "Core_2")
+        self.assertNotEqual(row[4], "—")
+        md = format_evidence_panel_markdown(corr, "English")
+        self.assertIn("Worker[3]", md)
+        self.assertIn("Core_2", md)
+
+        inv = extract_evidence_panel_payload("investigate", {
+            "ok": True,
+            "data": {
+                "finding": {
+                    "title": "Stall",
+                    "text": "Worker[3] stalled",
+                    "task": "Worker[3]",
+                    "evidence": [{"label": "finding text", "time": 42}],
+                },
+            },
+        })
+        self.assertEqual((inv.get("evidence") or [])[0].get("task"), "Worker[3]")
+
     def test_format_evidence_panel_markdown_includes_jumps(self) -> None:
         from btf_viewer_pkg.ai_assistant import format_ai_conversation_markdown
         from btf_viewer_pkg.ai_investigation import format_evidence_panel_markdown

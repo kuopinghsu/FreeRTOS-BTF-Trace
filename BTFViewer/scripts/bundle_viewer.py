@@ -192,7 +192,7 @@ from PySide6.QtWidgets import (
     QProxyStyle, QStyledItemDelegate, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QToolTip,
     QPlainTextEdit, QTextBrowser,
     QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget, QSizePolicy, QSplitter, QLayout,
+    QVBoxLayout, QWidget, QSizePolicy, QSplitter, QSplitterHandle, QLayout,
 )
 """
 

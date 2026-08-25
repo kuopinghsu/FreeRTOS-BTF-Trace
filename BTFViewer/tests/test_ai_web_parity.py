@@ -1734,8 +1734,7 @@ class AiWebParityTests(unittest.TestCase):
             ai_template_by_id(tid)[1] for tid in AI_TEMPLATE_PRIMARY_IDS]
         self.assertEqual(
             primary,
-            ["Analysis Findings", "Explain region", "Investigate",
-             "Auto investigate"],
+            ["Investigate", "Explain evidence", "Verify finding"],
         )
         self.assertIn("v-for=\"(row, ri) in primaryTemplateRows\"", panel)
         self.assertIn("AI_TEMPLATE_PRIMARY_IDS", assist)
@@ -1803,6 +1802,10 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("class=\"ai-split\"", panel)
         self.assertIn("class=\"ai-split-top\"", panel)
         self.assertIn("class=\"ai-split-handle\"", panel)
+        self.assertIn(".ai-split-handle::before", panel)
+        self.assertIn("stats-section-resizer",
+                      (BTF_ROOT / "web/src/components/StatisticsPanel.vue").read_text(encoding="utf-8"))
+        self.assertIn("class _AiSplitHandle", assist)
         self.assertIn("def _flash_main_status", assist)
         self.assertIn('getattr(wnd, "statusBar", None)', assist)
         self.assertIn('showMessage(f"AI: {short}", 6000)', assist)
@@ -1842,7 +1845,7 @@ class AiWebParityTests(unittest.TestCase):
         menu_ids = [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids]
         self.assertEqual(
             [g[0] for g in AI_TEMPLATE_MENU_GROUPS],
-            ["Start", "Investigate", "SMP", "Verify", "Compare",
+            ["Start", "Investigate", "SMP", "Compare",
              "What-if / Optimize"],
         )
         self.assertIn("v-for=\"group in templateMenuGroups\"", panel)

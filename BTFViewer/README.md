@@ -344,7 +344,7 @@ Recommended use:
 4. Use **Verify with AI** to challenge the proposed cause.
 5. If you make a change, capture a new trace and repeat the same scoped measurements.
 
-Available context levels are **Compact**, **Balanced**, and **Full evidence**. Compact sends less information and uses fewer tokens; Balanced is the default. Configure the model, service endpoint, authentication, context, privacy, and reply language in **Settings → AI**.
+Available context levels are **Compact**, **Balanced**, and **Full Evidence**. Compact is fast triage; Balanced is the default investigation depth; Full Evidence adds relevant findings and investigation history. Confidence comes from evidence, not from the mode. Configure the model, service endpoint, authentication, context, privacy, and reply language in **Settings → AI**.
 
 Import `examples/ai/presets.json` for example Ollama, OpenAI, Gemini, DeepSeek, and Grok configurations. Local Ollama does not require an API key. Cloud services may send trace evidence to an external provider; use the anonymization and sensitive-trace settings when appropriate.
 

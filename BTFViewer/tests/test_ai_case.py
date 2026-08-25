@@ -265,9 +265,9 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertEqual(normalize_ai_context_mode(""), "balanced")
         self.assertEqual(normalize_ai_context_mode("Full evidence"), "full")
         overview = ai_context_mode_settings_overview()
-        self.assertIn("Compact — fewer", overview)
+        self.assertIn("Compact — Fast triage", overview)
         self.assertIn("Balanced (default)", overview)
-        self.assertIn("Full evidence — complete", overview)
+        self.assertIn("Full Evidence — Deep verification", overview)
         compact_tools = tool_names_for_context_mode("compact", "triage")
         self.assertIsNotNone(compact_tools)
         self.assertIn("detect_anomalies", compact_tools)
@@ -489,8 +489,8 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertIn("Historical knowledge", md)
         self.assertIn("btfhyp:supported", md)
         self.assertIn("btfhyp:compare/all", md)
-        self.assertIn("Supporting evidence", md)
-        self.assertIn("**Status:**", md)
+        self.assertIn("Supporting", md)
+        self.assertIn("**Verdict:**", md)
         self.assertIn("Investigation details", md)
 
     def test_scope_privacy_experiment_and_knowledge(self) -> None:
@@ -1090,7 +1090,7 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertIn("## Offline fixture scorer", merged_md)
 
         # model-b (untouched) keeps every one of its original blocks verbatim.
-        for mode_label in ("Compact", "Full evidence"):
+        for mode_label in ("Compact", "Full Evidence"):
             marker = f"### `model-b` — {mode_label}"
             self.assertIn(marker, original_md)
             self.assertIn(marker, merged_md)
@@ -1103,8 +1103,8 @@ class InvestigationCaseTests(unittest.TestCase):
         a_compact_new = merged_md.split("### `model-a` — Compact")[1].split("### `")[0]
         self.assertEqual(a_compact_old, a_compact_new)
 
-        # model-a Full evidence (rerun) reflects the new response.
-        a_full_new = merged_md.split("### `model-a` — Full evidence")[1].split("### `")[0]
+        # model-a Full Evidence (rerun) reflects the new response.
+        a_full_new = merged_md.split("### `model-a` — Full Evidence")[1].split("### `")[0]
         self.assertIn("Mean latency: **9.9s**", a_full_new)
         self.assertNotIn("Mean latency: **1.0s**", a_full_new)
 
