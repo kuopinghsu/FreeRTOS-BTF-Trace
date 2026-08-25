@@ -662,11 +662,11 @@ def verify_claim(
         _add("contradiction", False, "Findings emphasise migration, not mutex")
     oks = [c["ok"] for c in checks] or [False]
     if contradicted or not any(oks):
-        verdict = "UNSUPPORTED"
+        verdict = "rejected"
     elif all(oks):
-        verdict = "SUPPORTED"
+        verdict = "confirmed"
     else:
-        verdict = "PARTIAL"
+        verdict = "inconclusive"
     return {
         "ok": True,
         "message": verdict,

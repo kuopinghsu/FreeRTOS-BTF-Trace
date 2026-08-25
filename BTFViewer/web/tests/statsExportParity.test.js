@@ -5,15 +5,17 @@ import { describe, it } from 'node:test'
 const stats = readFileSync(new URL('../src/components/StatisticsPanel.vue', import.meta.url), 'utf8')
 
 describe('mutex/queue export parity with desktop', () => {
-  it('CSV summary includes Bounces and lock-bounce subsection', () => {
-    assert.match(stats, /Object,Kind,Holds,Issues,Bounces,Avg hold,Status/)
-    assert.match(stats, /Core Affinity Violations \(lock bounce\)/)
-    assert.match(stats, /hold\(s\) crossed core boundaries/)
+  it('exports HTML only (CSV is per-table inside the HTML report)', () => {
+    assert.match(stats, /Export HTML/)
+    assert.match(stats, /@click="exportHtml"/)
+    assert.doesNotMatch(stats, /Export CSV/)
+    assert.doesNotMatch(stats, /function exportCsv\b/)
   })
 
   it('HTML mutex and queue summaries include a Bounces column', () => {
     assert.match(stats, /<th>Bounces<\/th><th>Avg hold<\/th><th>Status<\/th>/)
     assert.match(stats, /<th>Issues<\/th><th>Bounces<\/th><th>Avg hold<\/th><th>Status<\/th>/)
+    assert.match(stats, /row\.bounceCount/)
   })
 
   it('scroll tail stays 0 at rest unless pin-scroll (desktop lockstep)', () => {

@@ -75,7 +75,7 @@ class CausalTests(unittest.TestCase):
             subject="CS[22]",
             findings=self.findings,
         )
-        self.assertIn(hit["verdict"], ("SUPPORTED", "PARTIAL", "UNSUPPORTED"))
+        self.assertIn(hit["verdict"], ("confirmed", "rejected", "inconclusive"))
         alt = challenge_conclusion("mutex blocking", findings=self.findings)
         self.assertTrue(alt["ok"])
 

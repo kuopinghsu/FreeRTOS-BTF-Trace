@@ -20721,6 +20721,24 @@ def filter_tools_for_context_mode(
     return out
 
 
+def _finding_evidence_jump_tokens(finding: Optional[dict], *, limit: int = 4) -> List[str]:
+    """Collect jump:TIME tokens from a finding's evidence list."""
+    out: List[str] = []
+    if not isinstance(finding, dict):
+        return out
+    for ev in finding.get("evidence") or []:
+        if not isinstance(ev, dict) or ev.get("time") is None:
+            continue
+        token = str(ev.get("time")).strip()
+        if not token:
+            continue
+        label = str(ev.get("label") or "event").strip() or "event"
+        out.append(f"{label} jump:{token}")
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
 def investigation_context_summary(payload: Optional[dict] = None) -> str:
     """Short investigation recap used instead of older chat turns."""
     if not isinstance(payload, dict) or not payload:
@@ -20737,6 +20755,23 @@ def investigation_context_summary(payload: Optional[dict] = None) -> str:
     ).strip()
     if title:
         parts.append(f"Focus: {title}")
+    jumps = _finding_evidence_jump_tokens(finding)
+    if not jumps:
+        for ev in payload.get("evidence") or []:
+            if not isinstance(ev, dict) or ev.get("time") is None:
+                continue
+            token = str(ev.get("time")).strip()
+            if not token:
+                continue
+            label = str(ev.get("label") or "event").strip() or "event"
+            jumps.append(f"{label} jump:{token}")
+            if len(jumps) >= 4:
+                break
+    if jumps:
+        parts.append("Evidence: " + "; ".join(jumps))
+    chain = str(payload.get("evidence_chain") or "").strip()
+    if chain:
+        parts.append("Chain: " + chain[:180])
     quality = payload.get("evidence_quality")
     if isinstance(quality, dict):
         band = str(quality.get("band") or "").strip()
@@ -20751,7 +20786,7 @@ def investigation_context_summary(payload: Optional[dict] = None) -> str:
             continue
         status = str(hyp.get("status") or "").strip()
         parts.append(f"- {status + ': ' if status else ''}{text}")
-        if len(parts) >= 8:
+        if len(parts) >= 10:
             break
     tools = case.get("tools_executed") or payload.get("tools_executed") or []
     labels = [str(t).strip() for t in tools if str(t).strip()]
@@ -20789,6 +20824,21 @@ def focus_titles_from_summary(summary: Any = "") -> List[str]:
     return out
 
 
+def _text_has_timed_evidence(text: Any) -> bool:
+    """True when prose already carries a jump:TIME citation."""
+    return bool(re.search(r"\bjump:\s*\S+", str(text or ""), flags=re.IGNORECASE))
+
+
+def _finding_dict_has_timed_evidence(finding: Any) -> bool:
+    if not isinstance(finding, dict):
+        return False
+    if _text_has_timed_evidence(finding.get("text")):
+        return True
+    if _finding_evidence_jump_tokens(finding, limit=1):
+        return True
+    return False
+
+
 def compact_findings_text(
     text: Any,
     mode: Any = None,
@@ -20798,8 +20848,9 @@ def compact_findings_text(
 ) -> str:
     """Keep the most important Findings for the selected context mode.
 
-    *exclude_titles*: drop findings already named in an investigation summary
-    (``Focus: …``) so the same issue is not resent twice (§9 light dedupe).
+    *exclude_titles*: drop title-only duplicates already named in an
+    investigation summary (``Focus: …``). Never drop a finding that still
+    carries jump:TIME evidence — Focus alone is not a substitute.
     """
     limits = ai_context_limits(mode)
     cap = limits.get("findings")
@@ -20825,7 +20876,11 @@ def compact_findings_text(
                     title = m.group(1).strip()
                 fid_m = re.search(r"\bid=(\S+)", head)
                 fid = fid_m.group(1) if fid_m else ""
-                if title.lower() in exclude or fid.lower() in exclude:
+                title_hit = title.lower() in exclude or (
+                    fid.lower() in exclude if fid else False
+                )
+                # Keep timed evidence even when Focus names the same title.
+                if title_hit and not _text_has_timed_evidence(block):
                     continue
                 filtered.append(it)
             items = filtered or items
@@ -20854,9 +20909,10 @@ def compact_findings_text(
                 continue
             title = str(finding.get("title") or "").strip()
             fid = str(finding.get("id") or "").strip()
-            if exclude and (
-                title.lower() in exclude or fid.lower() in exclude
-            ):
+            title_hit = exclude and (
+                title.lower() in exclude or (fid.lower() in exclude if fid else False)
+            )
+            if title_hit and not _finding_dict_has_timed_evidence(finding):
                 continue
             sev = str(finding.get("severity") or "info").lower()
             ranked.append((_SEV_CONTEXT_RANK.get(sev, 3), i, finding))
@@ -20920,8 +20976,17 @@ def _truncate_tool_lists(obj: Any, row_cap: int, what_if_cap: int) -> Any:
     return out
 
 
-def compact_tool_result_payload(result: Any, mode: Any = None) -> Any:
-    """Shrink list-heavy tool payloads before they go back to the model."""
+def compact_tool_result_payload(
+    result: Any,
+    mode: Any = None,
+    *,
+    exclude_titles: Optional[Sequence[str]] = None,
+) -> Any:
+    """Shrink list-heavy tool payloads before they go back to the model.
+
+    *exclude_titles*: drop finding-shaped rows already named in Findings /
+    investigation Focus lines so the same issue is not resent in tool history.
+    """
     limits = ai_context_limits(mode)
     row_cap = int(limits.get("tool_rows") or 40)
     what_if_cap = int(limits.get("what_if") or 12)
@@ -20937,6 +21002,13 @@ def compact_tool_result_payload(result: Any, mode: Any = None) -> Any:
                 payload = result
     if not isinstance(payload, (dict, list)):
         return result
+    exclude = {
+        str(x or "").strip().lower()
+        for x in (exclude_titles or ())
+        if str(x or "").strip()
+    }
+    if exclude:
+        payload = _strip_excluded_finding_titles(payload, exclude)
     compacted = _truncate_tool_lists(payload, row_cap, what_if_cap)
     if isinstance(compacted, dict) and compacted.get("omitted"):
         msg = str(compacted.get("message") or "").rstrip()
@@ -20948,6 +21020,42 @@ def compact_tool_result_payload(result: Any, mode: Any = None) -> Any:
     if parsed_json:
         return json.dumps(compacted, default=str)
     return compacted
+
+
+def _strip_excluded_finding_titles(payload: Any, exclude: set) -> Any:
+    """Drop title-only finding duplicates already named in *exclude*.
+
+    Never drop the primary ``finding`` object or any finding that still
+    carries jump:TIME evidence — Start Investigation depends on those
+    times surviving into later tool rounds.
+    """
+    if isinstance(payload, list):
+        out = []
+        for item in payload:
+            if isinstance(item, dict):
+                title = str(item.get("title") or "").strip().lower()
+                fid = str(item.get("id") or "").strip().lower()
+                title_hit = (title in exclude) or (fid in exclude if fid else False)
+                if title_hit and not _finding_dict_has_timed_evidence(item):
+                    continue
+                out.append(_strip_excluded_finding_titles(item, exclude))
+            else:
+                out.append(_strip_excluded_finding_titles(item, exclude))
+        return out
+    if isinstance(payload, dict):
+        out = {}
+        for key, val in payload.items():
+            if key in (
+                "findings", "anomalies", "ranked_anomalies", "related_findings",
+            ) and isinstance(val, list):
+                out[key] = _strip_excluded_finding_titles(val, exclude)
+            elif key == "finding" and isinstance(val, dict):
+                # Always keep the primary finding payload (timed evidence + text).
+                out[key] = _strip_excluded_finding_titles(val, exclude)
+            else:
+                out[key] = _strip_excluded_finding_titles(val, exclude)
+        return out
+    return payload
 
 
 def compact_chat_history(
@@ -20999,11 +21107,12 @@ def compact_chat_history(
             "content": "Understood. Continue from the recent turns.",
         })
     compacted: List[Dict[str, Any]] = []
+    exclude = focus_titles_from_summary(investigation_summary)
     for msg in rest:
         copied = dict(msg)
         if str(copied.get("role") or "") == "tool":
             copied["content"] = compact_tool_result_payload(
-                copied.get("content"), mode)
+                copied.get("content"), mode, exclude_titles=exclude)
         compacted.append(copied)
     return system + extra + compacted
 
@@ -23449,6 +23558,21 @@ _NEGATION_RE = re.compile(r"\b(not|no|never|isn't|is not|without|reject)\b")
 _METRIC_SEP_RE = re.compile(r"[\s/_-]+")
 
 # Official Statistics page titles plus wording a model may use instead of × / slashes.
+AVAILABLE_STATISTICS_PAGES: Tuple[str, ...] = (
+    "Timeline Anomalies",
+    "Worst Events",
+    "Period / Jitter",
+    "Task Health",
+    "Task × Core",
+    "Waiter × Owner",
+    "Response Time",
+    "Critical Path",
+    "Unified Jitter",
+    "Recurring Patterns",
+    "Preemption Matrix",
+    "Mutex Blocking",
+    "Core Utilization Over Time",
+)
 STATS_UX_PAGE_ALIASES: Dict[str, Tuple[str, ...]] = {
     "timeline anomalies": ("timeline anomalies", "timeline anomaly"),
     "worst events": ("worst events", "worst event"),
@@ -31087,11 +31211,11 @@ def verify_claim(
         _add("contradiction", False, "Findings emphasise migration, not mutex")
     oks = [c["ok"] for c in checks] or [False]
     if contradicted or not any(oks):
-        verdict = "UNSUPPORTED"
+        verdict = "rejected"
     elif all(oks):
-        verdict = "SUPPORTED"
+        verdict = "confirmed"
     else:
-        verdict = "PARTIAL"
+        verdict = "inconclusive"
     return {
         "ok": True,
         "message": verdict,
@@ -31991,7 +32115,7 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                             "type": "array",
                             "items": {"type": "number"},
                             "description": (
-                                "Trace time-unit timestamps (same unit as jump:TIME), "
+                                "trace_time_unit timestamps (same unit as jump:TIME), "
                                 "earliest to latest. 1–8 values."
                             ),
                         },
@@ -32010,11 +32134,11 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                     "properties": {
                         "start_time": {
                             "type": "number",
-                            "description": "Range start in trace time units.",
+                            "description": "Range start in trace_time_unit (same as jump:TIME).",
                         },
                         "end_time": {
                             "type": "number",
-                            "description": "Range end in trace time units.",
+                            "description": "Range end in trace_time_unit (same as jump:TIME).",
                         },
                     },
                     "required": ["start_time", "end_time"],
@@ -32430,14 +32554,16 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                         "budgets": {
                             "type": "object",
                             "description": (
-                                "Map of task → {wcet_us, response_us, deadline_us}."
+                                "Map of task → {wcet_us, response_us, deadline_us} "
+                                "(values in microseconds)."
                             ),
                         },
                         "tasks": {
                             "type": "array",
                             "description": (
                                 "Optional metric rows: {task, wcet_us?, response_us?, "
-                                "deadline_us?, exec_max_us?, blocking_max_us?}."
+                                "deadline_us?, exec_max_us?, blocking_max_us?} "
+                                "(*_us fields in microseconds)."
                             ),
                         },
                     },
@@ -32640,8 +32766,8 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                             "description": (
                                 "Optional {tasks: {task: {wcet_us, "
                                 "blocking_us, migrations, response_us}}} "
-                                "snapshot (defaults to the host's current "
-                                "trace metrics)."
+                                "snapshot (*_us in microseconds; defaults to "
+                                "the host's current trace metrics)."
                             ),
                         },
                     },
@@ -32899,6 +33025,9 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                         "status": {
                             "type": "string",
                             "enum": ["supported", "possible", "rejected", "need_evidence"],
+                            "description": (
+                                "supported | possible | rejected | need_evidence."
+                            ),
                         },
                         "reason": {
                             "type": "string",
@@ -33085,7 +33214,11 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                             "items": {"type": "string"},
                         },
                         "conclusion": {"type": "string"},
-                        "confidence": {"type": "string"},
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["high", "medium", "low"],
+                            "description": "Confidence band: high | medium | low.",
+                        },
                         "elapsed_s": {"type": "number"},
                     },
                 },
@@ -33149,7 +33282,7 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 "name": AI_TOOL_VERIFY_CLAIM,
                 "description": (
                     "Check a causal claim against findings and optional cursor "
-                    "scope (SUPPORTED / PARTIAL / UNSUPPORTED)."
+                    "scope. Verdict: confirmed | rejected | inconclusive."
                 ),
                 "parameters": {
                     "type": "object",
@@ -33161,6 +33294,9 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                         "evidence": {
                             "type": "array",
                             "items": {"type": ["string", "number"]},
+                            "description": (
+                                "Optional jump:TIME values in trace_time_unit."
+                            ),
                         },
                     },
                     "required": ["claim"],
@@ -33209,7 +33345,14 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 "description": "Cluster findings into incidents by time proximity.",
                 "parameters": {
                     "type": "object",
-                    "properties": {"window_ns": {"type": "number"}},
+                    "properties": {
+                        "window_ns": {
+                            "type": "number",
+                            "description": (
+                                "Clustering half-window in nanoseconds (_ns)."
+                            ),
+                        },
+                    },
                 },
             },
         },
@@ -33222,7 +33365,11 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                     "type": "object",
                     "properties": {
                         "conclusion": {"type": "string"},
-                        "confidence": {"type": "string"},
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["high", "medium", "low"],
+                            "description": "Confidence band: high | medium | low.",
+                        },
                     },
                 },
             },
@@ -33834,6 +33981,27 @@ def _as_scalar_float(value: Any) -> Optional[float]:
     return None
 
 
+def _normalize_confidence_band(value: Any) -> str:
+    """Map confidence args to ``high|medium|low`` (empty if omitted/unknown)."""
+    raw = str(value or "").strip().lower().replace("-", " ").replace("_", " ")
+    if not raw:
+        return ""
+    if raw in ("high", "h"):
+        return "high"
+    if raw in ("medium", "med", "m", "mid"):
+        return "medium"
+    if raw in ("low", "l"):
+        return "low"
+    # Title-case prose from the model
+    if "high" in raw:
+        return "high"
+    if "medium" in raw or "med" in raw:
+        return "medium"
+    if "low" in raw:
+        return "low"
+    return ""
+
+
 def _fmt_trace_num(value: Any) -> str:
     n = _as_scalar_float(value)
     if n is None:
@@ -34363,7 +34531,7 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
         return {
             "tools_run": [str(t) for t in (tools or [])],
             "conclusion": str(a.get("conclusion") or "").strip(),
-            "confidence": str(a.get("confidence") or "").strip(),
+            "confidence": _normalize_confidence_band(a.get("confidence")),
             "elapsed_s": elapsed,
         }, ""
     if name == AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY:
@@ -34412,7 +34580,7 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
     if name == AI_TOOL_CLOSE_INVESTIGATION:
         return {
             "conclusion": str(a.get("conclusion") or "").strip(),
-            "confidence": str(a.get("confidence") or "").strip(),
+            "confidence": _normalize_confidence_band(a.get("confidence")),
         }, ""
     if name == AI_TOOL_ANALYZE_DISTRIBUTION:
         vals = a.get("values")
@@ -38068,17 +38236,13 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
     (
         "diagnostic_report",
         "Diagnostic report",
-        "Write a structured engineering diagnostic report for this scope: "
-        "Executive summary, Key findings, CPU / scheduling, WCET / "
-        "deadlines, Blocking / sync, Migrations, Task × Core, Timeline "
-        "Anomalies / Worst Events, Response Time, Critical Path, Period / "
-        "Jitter, Unified Jitter, Recurring Patterns, Task Health, Waiter × "
-        "Owner, Mutex Blocking, Preemption Matrix, Core Utilization Over Time, "
-        "Root cause, "
-        "Recommendations (only when evidence supports them), and Evidence "
-        "timeline with jump:TIME links. Call generate_report, then "
-        "export_report (format html unless the user asked for csv). Saving "
-        "the file is required.",
+        "Write a structured engineering diagnostic report for this scope. "
+        "Include only supported sections from available_statistics_pages in "
+        "runtime metadata (plus Executive summary, Key findings, Root cause, "
+        "Recommendations when evidence supports them, and Evidence timeline "
+        "with jump:TIME). Mark unavailable requested evidence as Not evaluated. "
+        "Call generate_report, then export_report (format html unless the user "
+        "asked for csv). Saving the file is required.",
     ),
     (
         "what_if",
@@ -39283,6 +39447,7 @@ def build_ai_runtime_metadata(
     scope: Any = "",
     context_mode: Any = "",
     reply_language: Any = "",
+    available_statistics_pages: Optional[Sequence[Any]] = None,
 ) -> Dict[str, Any]:
     """Lean runtime metadata for the user turn (omit empty fields)."""
     meta: Dict[str, Any] = {}
@@ -39314,6 +39479,12 @@ def build_ai_runtime_metadata(
     lang = str(reply_language or "").strip()
     if lang:
         meta["reply_language"] = lang
+    pages = available_statistics_pages
+    if pages is None:
+        pages = AVAILABLE_STATISTICS_PAGES
+    page_list = [str(p).strip() for p in (pages or []) if str(p).strip()]
+    if page_list:
+        meta["available_statistics_pages"] = page_list
     return meta
 
 

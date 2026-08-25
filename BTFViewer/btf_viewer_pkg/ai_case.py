@@ -347,6 +347,24 @@ def filter_tools_for_context_mode(
     return out
 
 
+def _finding_evidence_jump_tokens(finding: Optional[dict], *, limit: int = 4) -> List[str]:
+    """Collect jump:TIME tokens from a finding's evidence list."""
+    out: List[str] = []
+    if not isinstance(finding, dict):
+        return out
+    for ev in finding.get("evidence") or []:
+        if not isinstance(ev, dict) or ev.get("time") is None:
+            continue
+        token = str(ev.get("time")).strip()
+        if not token:
+            continue
+        label = str(ev.get("label") or "event").strip() or "event"
+        out.append(f"{label} jump:{token}")
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
 def investigation_context_summary(payload: Optional[dict] = None) -> str:
     """Short investigation recap used instead of older chat turns."""
     if not isinstance(payload, dict) or not payload:
@@ -363,6 +381,23 @@ def investigation_context_summary(payload: Optional[dict] = None) -> str:
     ).strip()
     if title:
         parts.append(f"Focus: {title}")
+    jumps = _finding_evidence_jump_tokens(finding)
+    if not jumps:
+        for ev in payload.get("evidence") or []:
+            if not isinstance(ev, dict) or ev.get("time") is None:
+                continue
+            token = str(ev.get("time")).strip()
+            if not token:
+                continue
+            label = str(ev.get("label") or "event").strip() or "event"
+            jumps.append(f"{label} jump:{token}")
+            if len(jumps) >= 4:
+                break
+    if jumps:
+        parts.append("Evidence: " + "; ".join(jumps))
+    chain = str(payload.get("evidence_chain") or "").strip()
+    if chain:
+        parts.append("Chain: " + chain[:180])
     quality = payload.get("evidence_quality")
     if isinstance(quality, dict):
         band = str(quality.get("band") or "").strip()
@@ -377,7 +412,7 @@ def investigation_context_summary(payload: Optional[dict] = None) -> str:
             continue
         status = str(hyp.get("status") or "").strip()
         parts.append(f"- {status + ': ' if status else ''}{text}")
-        if len(parts) >= 8:
+        if len(parts) >= 10:
             break
     tools = case.get("tools_executed") or payload.get("tools_executed") or []
     labels = [str(t).strip() for t in tools if str(t).strip()]
@@ -415,6 +450,21 @@ def focus_titles_from_summary(summary: Any = "") -> List[str]:
     return out
 
 
+def _text_has_timed_evidence(text: Any) -> bool:
+    """True when prose already carries a jump:TIME citation."""
+    return bool(re.search(r"\bjump:\s*\S+", str(text or ""), flags=re.IGNORECASE))
+
+
+def _finding_dict_has_timed_evidence(finding: Any) -> bool:
+    if not isinstance(finding, dict):
+        return False
+    if _text_has_timed_evidence(finding.get("text")):
+        return True
+    if _finding_evidence_jump_tokens(finding, limit=1):
+        return True
+    return False
+
+
 def compact_findings_text(
     text: Any,
     mode: Any = None,
@@ -424,8 +474,9 @@ def compact_findings_text(
 ) -> str:
     """Keep the most important Findings for the selected context mode.
 
-    *exclude_titles*: drop findings already named in an investigation summary
-    (``Focus: …``) so the same issue is not resent twice (§9 light dedupe).
+    *exclude_titles*: drop title-only duplicates already named in an
+    investigation summary (``Focus: …``). Never drop a finding that still
+    carries jump:TIME evidence — Focus alone is not a substitute.
     """
     limits = ai_context_limits(mode)
     cap = limits.get("findings")
@@ -451,7 +502,11 @@ def compact_findings_text(
                     title = m.group(1).strip()
                 fid_m = re.search(r"\bid=(\S+)", head)
                 fid = fid_m.group(1) if fid_m else ""
-                if title.lower() in exclude or fid.lower() in exclude:
+                title_hit = title.lower() in exclude or (
+                    fid.lower() in exclude if fid else False
+                )
+                # Keep timed evidence even when Focus names the same title.
+                if title_hit and not _text_has_timed_evidence(block):
                     continue
                 filtered.append(it)
             items = filtered or items
@@ -480,9 +535,10 @@ def compact_findings_text(
                 continue
             title = str(finding.get("title") or "").strip()
             fid = str(finding.get("id") or "").strip()
-            if exclude and (
-                title.lower() in exclude or fid.lower() in exclude
-            ):
+            title_hit = exclude and (
+                title.lower() in exclude or (fid.lower() in exclude if fid else False)
+            )
+            if title_hit and not _finding_dict_has_timed_evidence(finding):
                 continue
             sev = str(finding.get("severity") or "info").lower()
             ranked.append((_SEV_CONTEXT_RANK.get(sev, 3), i, finding))
@@ -546,8 +602,17 @@ def _truncate_tool_lists(obj: Any, row_cap: int, what_if_cap: int) -> Any:
     return out
 
 
-def compact_tool_result_payload(result: Any, mode: Any = None) -> Any:
-    """Shrink list-heavy tool payloads before they go back to the model."""
+def compact_tool_result_payload(
+    result: Any,
+    mode: Any = None,
+    *,
+    exclude_titles: Optional[Sequence[str]] = None,
+) -> Any:
+    """Shrink list-heavy tool payloads before they go back to the model.
+
+    *exclude_titles*: drop finding-shaped rows already named in Findings /
+    investigation Focus lines so the same issue is not resent in tool history.
+    """
     limits = ai_context_limits(mode)
     row_cap = int(limits.get("tool_rows") or 40)
     what_if_cap = int(limits.get("what_if") or 12)
@@ -563,6 +628,13 @@ def compact_tool_result_payload(result: Any, mode: Any = None) -> Any:
                 payload = result
     if not isinstance(payload, (dict, list)):
         return result
+    exclude = {
+        str(x or "").strip().lower()
+        for x in (exclude_titles or ())
+        if str(x or "").strip()
+    }
+    if exclude:
+        payload = _strip_excluded_finding_titles(payload, exclude)
     compacted = _truncate_tool_lists(payload, row_cap, what_if_cap)
     if isinstance(compacted, dict) and compacted.get("omitted"):
         msg = str(compacted.get("message") or "").rstrip()
@@ -574,6 +646,42 @@ def compact_tool_result_payload(result: Any, mode: Any = None) -> Any:
     if parsed_json:
         return json.dumps(compacted, default=str)
     return compacted
+
+
+def _strip_excluded_finding_titles(payload: Any, exclude: set) -> Any:
+    """Drop title-only finding duplicates already named in *exclude*.
+
+    Never drop the primary ``finding`` object or any finding that still
+    carries jump:TIME evidence — Start Investigation depends on those
+    times surviving into later tool rounds.
+    """
+    if isinstance(payload, list):
+        out = []
+        for item in payload:
+            if isinstance(item, dict):
+                title = str(item.get("title") or "").strip().lower()
+                fid = str(item.get("id") or "").strip().lower()
+                title_hit = (title in exclude) or (fid in exclude if fid else False)
+                if title_hit and not _finding_dict_has_timed_evidence(item):
+                    continue
+                out.append(_strip_excluded_finding_titles(item, exclude))
+            else:
+                out.append(_strip_excluded_finding_titles(item, exclude))
+        return out
+    if isinstance(payload, dict):
+        out = {}
+        for key, val in payload.items():
+            if key in (
+                "findings", "anomalies", "ranked_anomalies", "related_findings",
+            ) and isinstance(val, list):
+                out[key] = _strip_excluded_finding_titles(val, exclude)
+            elif key == "finding" and isinstance(val, dict):
+                # Always keep the primary finding payload (timed evidence + text).
+                out[key] = _strip_excluded_finding_titles(val, exclude)
+            else:
+                out[key] = _strip_excluded_finding_titles(val, exclude)
+        return out
+    return payload
 
 
 def compact_chat_history(
@@ -625,11 +733,12 @@ def compact_chat_history(
             "content": "Understood. Continue from the recent turns.",
         })
     compacted: List[Dict[str, Any]] = []
+    exclude = focus_titles_from_summary(investigation_summary)
     for msg in rest:
         copied = dict(msg)
         if str(copied.get("role") or "") == "tool":
             copied["content"] = compact_tool_result_payload(
-                copied.get("content"), mode)
+                copied.get("content"), mode, exclude_titles=exclude)
         compacted.append(copied)
     return system + extra + compacted
 
@@ -3075,6 +3184,21 @@ _NEGATION_RE = re.compile(r"\b(not|no|never|isn't|is not|without|reject)\b")
 _METRIC_SEP_RE = re.compile(r"[\s/_-]+")
 
 # Official Statistics page titles plus wording a model may use instead of × / slashes.
+AVAILABLE_STATISTICS_PAGES: Tuple[str, ...] = (
+    "Timeline Anomalies",
+    "Worst Events",
+    "Period / Jitter",
+    "Task Health",
+    "Task × Core",
+    "Waiter × Owner",
+    "Response Time",
+    "Critical Path",
+    "Unified Jitter",
+    "Recurring Patterns",
+    "Preemption Matrix",
+    "Mutex Blocking",
+    "Core Utilization Over Time",
+)
 STATS_UX_PAGE_ALIASES: Dict[str, Tuple[str, ...]] = {
     "timeline anomalies": ("timeline anomalies", "timeline anomaly"),
     "worst events": ("worst events", "worst event"),

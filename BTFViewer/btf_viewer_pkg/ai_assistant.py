@@ -114,6 +114,7 @@ from .ai_case import (
     empty_cost_meter,
     filter_tools_for_context_mode,
     AI_CONTEXT_MODE_FULL,
+    AVAILABLE_STATISTICS_PAGES,
     DEFAULT_AI_CONTEXT_MODE,
     dump_user_historical_knowledge,
     dump_user_investigation_templates,
@@ -481,17 +482,13 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
     (
         "diagnostic_report",
         "Diagnostic report",
-        "Write a structured engineering diagnostic report for this scope: "
-        "Executive summary, Key findings, CPU / scheduling, WCET / "
-        "deadlines, Blocking / sync, Migrations, Task × Core, Timeline "
-        "Anomalies / Worst Events, Response Time, Critical Path, Period / "
-        "Jitter, Unified Jitter, Recurring Patterns, Task Health, Waiter × "
-        "Owner, Mutex Blocking, Preemption Matrix, Core Utilization Over Time, "
-        "Root cause, "
-        "Recommendations (only when evidence supports them), and Evidence "
-        "timeline with jump:TIME links. Call generate_report, then "
-        "export_report (format html unless the user asked for csv). Saving "
-        "the file is required.",
+        "Write a structured engineering diagnostic report for this scope. "
+        "Include only supported sections from available_statistics_pages in "
+        "runtime metadata (plus Executive summary, Key findings, Root cause, "
+        "Recommendations when evidence supports them, and Evidence timeline "
+        "with jump:TIME). Mark unavailable requested evidence as Not evaluated. "
+        "Call generate_report, then export_report (format html unless the user "
+        "asked for csv). Saving the file is required.",
     ),
     (
         "what_if",
@@ -1696,6 +1693,7 @@ def build_ai_runtime_metadata(
     scope: Any = "",
     context_mode: Any = "",
     reply_language: Any = "",
+    available_statistics_pages: Optional[Sequence[Any]] = None,
 ) -> Dict[str, Any]:
     """Lean runtime metadata for the user turn (omit empty fields)."""
     meta: Dict[str, Any] = {}
@@ -1727,6 +1725,12 @@ def build_ai_runtime_metadata(
     lang = str(reply_language or "").strip()
     if lang:
         meta["reply_language"] = lang
+    pages = available_statistics_pages
+    if pages is None:
+        pages = AVAILABLE_STATISTICS_PAGES
+    page_list = [str(p).strip() for p in (pages or []) if str(p).strip()]
+    if page_list:
+        meta["available_statistics_pages"] = page_list
     return meta
 
 

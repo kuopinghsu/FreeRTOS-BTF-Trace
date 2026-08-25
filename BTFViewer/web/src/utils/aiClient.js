@@ -22,6 +22,7 @@ import {
   canonicalAssistantToolMessage,
 } from './aiTools.js'
 import {
+  AVAILABLE_STATISTICS_PAGES,
   CAPABILITY_CHAT_PROBE,
   capabilityProbeBody,
   AI_CONTEXT_PROMPTS,
@@ -237,17 +238,13 @@ export const AI_TEMPLATE_QUESTIONS = [
     id: 'diagnostic_report',
     label: 'Diagnostic report',
     prompt:
-      'Write a structured engineering diagnostic report for this scope: ' +
-      'Executive summary, Key findings, CPU / scheduling, WCET / ' +
-      'deadlines, Blocking / sync, Migrations, Task × Core, Timeline ' +
-      'Anomalies / Worst Events, Response Time, Critical Path, Period / ' +
-      'Jitter, Unified Jitter, Recurring Patterns, Task Health, Waiter × ' +
-      'Owner, Mutex Blocking, Preemption Matrix, Core Utilization Over Time, ' +
-      'Root cause, ' +
-      'Recommendations (only when evidence supports them), and Evidence ' +
-      'timeline with jump:TIME links. Call generate_report, then ' +
-      'export_report (format html unless the user asked for csv). Saving ' +
-      'the file is required.',
+      'Write a structured engineering diagnostic report for this scope. ' +
+      'Include only supported sections from available_statistics_pages in ' +
+      'runtime metadata (plus Executive summary, Key findings, Root cause, ' +
+      'Recommendations when evidence supports them, and Evidence timeline ' +
+      'with jump:TIME). Mark unavailable requested evidence as Not evaluated. ' +
+      'Call generate_report, then export_report (format html unless the user ' +
+      'asked for csv). Saving the file is required.',
   },
   {
     id: 'what_if',
@@ -1012,6 +1009,7 @@ export function buildAiRuntimeMetadata({
   scope = '',
   contextMode = '',
   replyLanguage = '',
+  availableStatisticsPages = null,
 } = {}) {
   const meta = {}
   const unit = String(traceTimeUnit || '').trim()
@@ -1029,6 +1027,11 @@ export function buildAiRuntimeMetadata({
   if (mode) meta.context_mode = normalizeAiContextMode(mode)
   const lang = String(replyLanguage || '').trim()
   if (lang) meta.reply_language = lang
+  const pages = availableStatisticsPages == null
+    ? AVAILABLE_STATISTICS_PAGES
+    : availableStatisticsPages
+  const pageList = (pages || []).map(p => String(p || '').trim()).filter(Boolean)
+  if (pageList.length) meta.available_statistics_pages = pageList
   return meta
 }
 

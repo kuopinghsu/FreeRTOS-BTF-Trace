@@ -311,6 +311,20 @@ export function investigationContextSummary(payload = null) {
   const parts = []
   const title = String(cse.goal || finding.title || finding.id || '').trim()
   if (title) parts.push(`Focus: ${title}`)
+  let jumps = findingEvidenceJumpTokens(finding)
+  if (!jumps.length) {
+    for (const ev of (payload.evidence || [])) {
+      if (!ev || typeof ev !== 'object' || ev.time == null) continue
+      const token = String(ev.time).trim()
+      if (!token) continue
+      const label = String(ev.label || 'event').trim() || 'event'
+      jumps.push(`${label} jump:${token}`)
+      if (jumps.length >= 4) break
+    }
+  }
+  if (jumps.length) parts.push(`Evidence: ${jumps.join('; ')}`)
+  const chain = String(payload.evidence_chain || '').trim()
+  if (chain) parts.push(`Chain: ${chain.slice(0, 180)}`)
   const quality = payload.evidence_quality
   if (quality && typeof quality === 'object') {
     const band = String(quality.band || '').trim()
@@ -323,12 +337,36 @@ export function investigationContextSummary(payload = null) {
     if (!text) continue
     const status = String(hyp.status || '').trim()
     parts.push(`- ${status ? `${status}: ` : ''}${text}`)
-    if (parts.length >= 8) break
+    if (parts.length >= 10) break
   }
   const tools = cse.tools_executed || payload.tools_executed || []
   const labels = tools.map(t => String(t || '').trim()).filter(Boolean)
   if (labels.length) parts.push(`Tools: ${labels.slice(0, 12).join(', ')}`)
   return parts.join('\n').trim()
+}
+
+function findingEvidenceJumpTokens(finding, limit = 4) {
+  const out = []
+  if (!finding || typeof finding !== 'object') return out
+  for (const ev of (finding.evidence || [])) {
+    if (!ev || typeof ev !== 'object' || ev.time == null) continue
+    const token = String(ev.time).trim()
+    if (!token) continue
+    const label = String(ev.label || 'event').trim() || 'event'
+    out.push(`${label} jump:${token}`)
+    if (out.length >= Math.max(1, Number(limit) || 4)) break
+  }
+  return out
+}
+
+function textHasTimedEvidence(text) {
+  return /\bjump:\s*\S+/i.test(String(text || ''))
+}
+
+function findingDictHasTimedEvidence(finding) {
+  if (!finding || typeof finding !== 'object') return false
+  if (textHasTimedEvidence(finding.text)) return true
+  return findingEvidenceJumpTokens(finding, 1).length > 0
 }
 
 function findingBlocks(text) {
@@ -379,7 +417,11 @@ export function compactFindingsText(text, mode = null, findings = null, {
       const title = (m ? m[1] : head).trim()
       const fidM = head.match(/\bid=(\S+)/)
       const fid = fidM ? fidM[1] : ''
-      return !(exclude.has(title.toLowerCase()) || (fid && exclude.has(fid.toLowerCase())))
+      const titleHit = exclude.has(title.toLowerCase())
+        || (fid && exclude.has(fid.toLowerCase()))
+      // Keep timed evidence even when Focus names the same title.
+      if (titleHit && !textHasTimedEvidence(it.block)) return false
+      return true
     })
     working = filtered.length ? filtered : items
   }
@@ -408,10 +450,10 @@ export function compactFindingsText(text, mode = null, findings = null, {
         if (!exclude.size) return true
         const title = String(row.finding.title || '').trim()
         const fid = String(row.finding.id || '').trim()
-        return !(
-          (title && exclude.has(title.toLowerCase()))
+        const titleHit = (title && exclude.has(title.toLowerCase()))
           || (fid && exclude.has(fid.toLowerCase()))
-        )
+        if (titleHit && !findingDictHasTimedEvidence(row.finding)) return false
+        return true
       })
       .sort((a, b) => (
         (SEV_CONTEXT_RANK[String(a.finding.severity || 'info').toLowerCase()] ?? 3)
@@ -482,7 +524,9 @@ function truncateToolLists(obj, rowCap, whatIfCap) {
   return out
 }
 
-export function compactToolResultPayload(result, mode = null) {
+export function compactToolResultPayload(result, mode = null, {
+  excludeTitles = null,
+} = {}) {
   const limits = aiContextLimits(mode)
   const rowCap = Number(limits.tool_rows || 40)
   const whatIfCap = Number(limits.what_if || 12)
@@ -500,6 +544,12 @@ export function compactToolResultPayload(result, mode = null) {
     }
   }
   if (!payload || (typeof payload !== 'object')) return result
+  const exclude = new Set(
+    (excludeTitles || [])
+      .map(x => String(x || '').trim().toLowerCase())
+      .filter(Boolean),
+  )
+  if (exclude.size) payload = stripExcludedFindingTitles(payload, exclude)
   const compacted = truncateToolLists(payload, rowCap, whatIfCap)
   if (compacted && typeof compacted === 'object' && !Array.isArray(compacted) && compacted.omitted) {
     const msg = String(compacted.message || '').trim()
@@ -507,6 +557,39 @@ export function compactToolResultPayload(result, mode = null) {
     compacted.message = msg ? `${msg} ${extra}` : extra
   }
   return parsedJson ? JSON.stringify(compacted) : compacted
+}
+
+function stripExcludedFindingTitles(payload, exclude) {
+  if (Array.isArray(payload)) {
+    return payload
+      .map(item => stripExcludedFindingTitles(item, exclude))
+      .filter((item) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return true
+        const title = String(item.title || '').trim().toLowerCase()
+        const fid = String(item.id || '').trim().toLowerCase()
+        const titleHit = (title && exclude.has(title)) || (fid && exclude.has(fid))
+        if (titleHit && !findingDictHasTimedEvidence(item)) return false
+        return true
+      })
+  }
+  if (payload && typeof payload === 'object') {
+    const out = {}
+    for (const [key, val] of Object.entries(payload)) {
+      if (
+        ['findings', 'anomalies', 'ranked_anomalies', 'related_findings'].includes(key)
+        && Array.isArray(val)
+      ) {
+        out[key] = stripExcludedFindingTitles(val, exclude)
+      } else if (key === 'finding' && val && typeof val === 'object') {
+        // Always keep the primary finding payload (timed evidence + text).
+        out[key] = stripExcludedFindingTitles(val, exclude)
+      } else {
+        out[key] = stripExcludedFindingTitles(val, exclude)
+      }
+    }
+    return out
+  }
+  return payload
 }
 
 export function compactChatHistory(messages, mode = null, investigationSummary = '') {
@@ -549,7 +632,9 @@ export function compactChatHistory(messages, mode = null, investigationSummary =
   const compacted = kept.map((msg) => {
     const copied = { ...msg }
     if (String(copied.role || '') === 'tool') {
-      copied.content = compactToolResultPayload(copied.content, mode)
+      copied.content = compactToolResultPayload(copied.content, mode, {
+        excludeTitles: focusTitlesFromSummary(investigationSummary),
+      })
     }
     return copied
   })
@@ -2530,6 +2615,22 @@ const NEGATION_RE = /\b(not|no|never|isn't|is not|without|reject)\b/
 const METRIC_SEP_RE = /[\s/_-]+/g
 
 /** Official Statistics page titles plus wording a model may use instead of × / slashes. */
+export const AVAILABLE_STATISTICS_PAGES = [
+  'Timeline Anomalies',
+  'Worst Events',
+  'Period / Jitter',
+  'Task Health',
+  'Task × Core',
+  'Waiter × Owner',
+  'Response Time',
+  'Critical Path',
+  'Unified Jitter',
+  'Recurring Patterns',
+  'Preemption Matrix',
+  'Mutex Blocking',
+  'Core Utilization Over Time',
+]
+
 export const STATS_UX_PAGE_ALIASES = {
   'timeline anomalies': ['timeline anomalies', 'timeline anomaly'],
   'worst events': ['worst events', 'worst event'],

@@ -567,9 +567,9 @@ export function verifyClaim(claim = '', {
     add('contradiction', false, 'Findings emphasise migration, not mutex')
   }
   const oks = checks.length ? checks.map((c) => c.ok) : [false]
-  let verdict = 'PARTIAL'
-  if (contradicted || !oks.some(Boolean)) verdict = 'UNSUPPORTED'
-  else if (oks.every(Boolean)) verdict = 'SUPPORTED'
+  let verdict = 'inconclusive'
+  if (contradicted || !oks.some(Boolean)) verdict = 'rejected'
+  else if (oks.every(Boolean)) verdict = 'confirmed'
   return {
     ok: true,
     message: verdict,

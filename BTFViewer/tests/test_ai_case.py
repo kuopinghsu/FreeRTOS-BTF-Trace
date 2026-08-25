@@ -345,10 +345,47 @@ class InvestigationCaseTests(unittest.TestCase):
             focus_titles_from_summary("Focus: CS[22] stall\nTools: investigate"),
             ["CS[22] stall"],
         )
+        # Title-only duplicate (no jump:TIME) may be dropped; timed Focus findings stay.
+        title_only = "\n".join([
+            "Analysis Findings",
+            "",
+            "1. [INFO] id=dup Critical stall",
+            "   duplicate title without time",
+            "",
+            "2. [WARNING] id=w1 Thrash",
+            "   CS[22] migrates jump:200",
+            "",
+        ])
+        deduped_title = compact_findings_text(
+            title_only, "balanced", exclude_titles=["Critical stall"])
+        self.assertNotIn("Critical stall", deduped_title)
+        self.assertIn("Thrash", deduped_title)
         deduped = compact_findings_text(
             findings, "balanced", exclude_titles=["Critical stall"])
-        self.assertNotIn("Critical stall", deduped)
+        self.assertIn("Critical stall", deduped)
+        self.assertIn("jump:100", deduped)
         self.assertIn("Thrash", deduped)
+        kept_finding = compact_tool_result_payload(
+            {
+                "ok": True,
+                "finding": {
+                    "title": "Critical stall",
+                    "text": "blocked",
+                    "evidence": [{"label": "stall", "time": 100}],
+                },
+                "findings": [
+                    {"title": "Critical stall", "text": "no time"},
+                    {"title": "Thrash", "text": "mig jump:200"},
+                ],
+            },
+            "balanced",
+            exclude_titles=["Critical stall"],
+        )
+        self.assertIn("finding", kept_finding)
+        self.assertEqual(kept_finding["finding"]["title"], "Critical stall")
+        titles = [f["title"] for f in kept_finding["findings"]]
+        self.assertNotIn("Critical stall", titles)
+        self.assertIn("Thrash", titles)
 
     def test_falsify_migration(self) -> None:
         f = falsification_checks({

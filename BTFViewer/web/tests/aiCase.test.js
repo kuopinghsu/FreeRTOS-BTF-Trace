@@ -31,6 +31,8 @@ import {
   compactFindingsText,
   focusTitlesFromSummary,
   compactChatHistory,
+  compactToolResultPayload,
+  investigationContextSummary,
   normalizeAiContextMode,
   aiContextModeSettingsOverview,
   toolNamesForContextMode,
@@ -323,11 +325,37 @@ describe('aiCase investigation lifecycle', () => {
       focusTitlesFromSummary('Focus: CS[22] stall\nTools: investigate'),
       ['CS[22] stall'],
     )
+    // Title-only duplicate (no jump:TIME) may be dropped; timed Focus findings stay.
+    const titleOnly = [
+      'Analysis Findings', '',
+      '1. [INFO] id=dup Critical stall', '   duplicate title without time', '',
+      '2. [WARNING] id=w1 Thrash', '   CS[22] migrates jump:200', '',
+    ].join('\n')
+    const dedupedTitle = compactFindingsText(titleOnly, 'balanced', null, {
+      excludeTitles: ['Critical stall'],
+    })
+    assert.doesNotMatch(dedupedTitle, /Critical stall/)
+    assert.match(dedupedTitle, /Thrash/)
     const deduped = compactFindingsText(findings, 'balanced', null, {
       excludeTitles: ['Critical stall'],
     })
-    assert.doesNotMatch(deduped, /Critical stall/)
+    assert.match(deduped, /Critical stall/)
+    assert.match(deduped, /jump:100/)
     assert.match(deduped, /Thrash/)
+    const keptFinding = compactToolResultPayload({
+      ok: true,
+      finding: {
+        title: 'Critical stall',
+        text: 'blocked',
+        evidence: [{ label: 'stall', time: 100 }],
+      },
+      findings: [
+        { title: 'Critical stall', text: 'no time' },
+        { title: 'Thrash', text: 'mig jump:200' },
+      ],
+    }, 'balanced', { excludeTitles: ['Critical stall'] })
+    assert.equal(keptFinding.finding.title, 'Critical stall')
+    assert.deepEqual(keptFinding.findings.map(f => f.title), ['Thrash'])
   })
 
   it('penalizes adversarial trap confirmations', () => {

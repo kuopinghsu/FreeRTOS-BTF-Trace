@@ -782,8 +782,11 @@ class AiWebParityTests(unittest.TestCase):
             "Recurring Patterns", "Preemption Matrix", "Mutex Blocking",
             "Core Utilization Over Time",
         )
-        for title in pages:
-            self.assertIn(title, by_id["diagnostic_report"], title)
+        self.assertIn("available_statistics_pages", by_id["diagnostic_report"])
+        self.assertIn("generate_report", by_id["diagnostic_report"])
+        self.assertIn("export_report", by_id["diagnostic_report"])
+        from btf_viewer_pkg.ai_case import AVAILABLE_STATISTICS_PAGES
+        self.assertEqual(tuple(AVAILABLE_STATISTICS_PAGES), pages)
         self.assertIn("Period / Jitter", by_id["task_profile"])
         self.assertIn("Task Health", by_id["task_profile"])
         self.assertIn("Task × Core", by_id["task_profile"])

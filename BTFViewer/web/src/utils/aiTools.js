@@ -431,7 +431,7 @@ export function aiViewerTools() {
               type: 'array',
               items: { type: 'number' },
               description:
-                'Trace time-unit timestamps (same unit as jump:TIME), '
+                'trace_time_unit timestamps (same unit as jump:TIME), '
                 + 'earliest to latest. 1–8 values.',
             },
           },
@@ -449,11 +449,11 @@ export function aiViewerTools() {
           properties: {
             start_time: {
               type: 'number',
-              description: 'Range start in trace time units.',
+              description: 'Range start in trace_time_unit (same as jump:TIME).',
             },
             end_time: {
               type: 'number',
-              description: 'Range end in trace time units.',
+              description: 'Range end in trace_time_unit (same as jump:TIME).',
             },
           },
           required: ['start_time', 'end_time'],
@@ -843,13 +843,14 @@ export function aiViewerTools() {
           properties: {
             budgets: {
               type: 'object',
-              description: 'Map of task → {wcet_us, response_us, deadline_us}.',
+              description: 'Map of task → {wcet_us, response_us, deadline_us} (values in microseconds).',
             },
             tasks: {
               type: 'array',
               description:
                 'Optional metric rows: {task, wcet_us?, response_us?, '
-                + 'deadline_us?, exec_max_us?, blocking_max_us?}.',
+                + 'deadline_us?, exec_max_us?, blocking_max_us?} '
+                + '(*_us fields in microseconds).',
             },
           },
         },
@@ -1037,7 +1038,8 @@ export function aiViewerTools() {
               type: 'object',
               description:
                 'Optional {tasks: {task: {wcet_us, blocking_us, migrations, response_us}}} '
-                + "snapshot (defaults to the host's current trace metrics).",
+                + 'snapshot (*_us in microseconds; defaults to the host\'s current '
+                + 'trace metrics).',
             },
           },
         },
@@ -1275,6 +1277,7 @@ export function aiViewerTools() {
             status: {
               type: 'string',
               enum: ['supported', 'possible', 'rejected', 'need_evidence'],
+              description: 'supported | possible | rejected | need_evidence.',
             },
             reason: {
               type: 'string',
@@ -1434,7 +1437,11 @@ export function aiViewerTools() {
           properties: {
             tools_run: { type: 'array', items: { type: 'string' } },
             conclusion: { type: 'string' },
-            confidence: { type: 'string' },
+            confidence: {
+              type: 'string',
+              enum: ['high', 'medium', 'low'],
+              description: 'Confidence band: high | medium | low.',
+            },
             elapsed_s: { type: 'number' },
           },
         },
@@ -1480,7 +1487,8 @@ export function aiViewerTools() {
       function: {
         name: AI_TOOL_VERIFY_CLAIM,
         description:
-          'Check a causal claim against findings and optional cursor scope (SUPPORTED / PARTIAL / UNSUPPORTED).',
+          'Check a causal claim against findings and optional cursor scope. '
+          + 'Verdict: confirmed | rejected | inconclusive.',
         parameters: {
           type: 'object',
           properties: {
@@ -1488,7 +1496,11 @@ export function aiViewerTools() {
             claim_type: { type: 'string' },
             subject: { type: 'string' },
             object: { type: 'string' },
-            evidence: { type: 'array', items: { type: ['string', 'number'] } },
+            evidence: {
+              type: 'array',
+              items: { type: ['string', 'number'] },
+              description: 'Optional jump:TIME values in trace_time_unit.',
+            },
           },
           required: ['claim'],
         },
@@ -1528,7 +1540,12 @@ export function aiViewerTools() {
         description: 'Cluster findings into incidents by time proximity.',
         parameters: {
           type: 'object',
-          properties: { window_ns: { type: 'number' } },
+          properties: {
+            window_ns: {
+              type: 'number',
+              description: 'Clustering half-window in nanoseconds (_ns).',
+            },
+          },
         },
       },
     },
@@ -1541,7 +1558,11 @@ export function aiViewerTools() {
           type: 'object',
           properties: {
             conclusion: { type: 'string' },
-            confidence: { type: 'string' },
+            confidence: {
+              type: 'string',
+              enum: ['high', 'medium', 'low'],
+              description: 'Confidence band: high | medium | low.',
+            },
           },
         },
       },
@@ -2164,6 +2185,19 @@ export function asScalarNumber(value) {
   return Number.isFinite(n) ? n : null
 }
 
+/** Map confidence args to high|medium|low (empty if omitted/unknown). */
+export function normalizeConfidenceBand(value) {
+  let raw = String(value || '').trim().toLowerCase().replace(/[-_]/g, ' ')
+  if (!raw) return ''
+  if (raw === 'high' || raw === 'h') return 'high'
+  if (raw === 'medium' || raw === 'med' || raw === 'm' || raw === 'mid') return 'medium'
+  if (raw === 'low' || raw === 'l') return 'low'
+  if (raw.includes('high')) return 'high'
+  if (raw.includes('medium') || raw.includes('med')) return 'medium'
+  if (raw.includes('low')) return 'low'
+  return ''
+}
+
 function fmtTraceNum(n) {
   const v = asScalarNumber(n)
   if (v == null) return String(n ?? '')
@@ -2656,7 +2690,7 @@ export function validateToolCall(name, args) {
       args: {
         tools_run: (a.tools_run || []).map((t) => String(t)),
         conclusion: String(a.conclusion || '').trim(),
-        confidence: String(a.confidence || '').trim(),
+        confidence: normalizeConfidenceBand(a.confidence),
         elapsed_s: elapsed,
       },
       error: '',
@@ -2714,7 +2748,7 @@ export function validateToolCall(name, args) {
     return {
       args: {
         conclusion: String(a.conclusion || '').trim(),
-        confidence: String(a.confidence || '').trim(),
+        confidence: normalizeConfidenceBand(a.confidence),
       },
       error: '',
     }

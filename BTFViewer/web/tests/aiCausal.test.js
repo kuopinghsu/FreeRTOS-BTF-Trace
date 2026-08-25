@@ -93,7 +93,7 @@ describe('aiCausal engines', () => {
       subject: 'CS[22]',
       findings,
     })
-    assert.ok(['SUPPORTED', 'PARTIAL', 'UNSUPPORTED'].includes(hit.verdict))
+    assert.ok(['confirmed', 'rejected', 'inconclusive'].includes(hit.verdict))
     assert.equal(challengeConclusion('mutex blocking', { findings }).ok, true)
   })
 

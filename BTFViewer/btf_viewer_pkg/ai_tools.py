@@ -464,7 +464,7 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                             "type": "array",
                             "items": {"type": "number"},
                             "description": (
-                                "Trace time-unit timestamps (same unit as jump:TIME), "
+                                "trace_time_unit timestamps (same unit as jump:TIME), "
                                 "earliest to latest. 1–8 values."
                             ),
                         },
@@ -483,11 +483,11 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                     "properties": {
                         "start_time": {
                             "type": "number",
-                            "description": "Range start in trace time units.",
+                            "description": "Range start in trace_time_unit (same as jump:TIME).",
                         },
                         "end_time": {
                             "type": "number",
-                            "description": "Range end in trace time units.",
+                            "description": "Range end in trace_time_unit (same as jump:TIME).",
                         },
                     },
                     "required": ["start_time", "end_time"],
@@ -903,14 +903,16 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                         "budgets": {
                             "type": "object",
                             "description": (
-                                "Map of task → {wcet_us, response_us, deadline_us}."
+                                "Map of task → {wcet_us, response_us, deadline_us} "
+                                "(values in microseconds)."
                             ),
                         },
                         "tasks": {
                             "type": "array",
                             "description": (
                                 "Optional metric rows: {task, wcet_us?, response_us?, "
-                                "deadline_us?, exec_max_us?, blocking_max_us?}."
+                                "deadline_us?, exec_max_us?, blocking_max_us?} "
+                                "(*_us fields in microseconds)."
                             ),
                         },
                     },
@@ -1113,8 +1115,8 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                             "description": (
                                 "Optional {tasks: {task: {wcet_us, "
                                 "blocking_us, migrations, response_us}}} "
-                                "snapshot (defaults to the host's current "
-                                "trace metrics)."
+                                "snapshot (*_us in microseconds; defaults to "
+                                "the host's current trace metrics)."
                             ),
                         },
                     },
@@ -1372,6 +1374,9 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                         "status": {
                             "type": "string",
                             "enum": ["supported", "possible", "rejected", "need_evidence"],
+                            "description": (
+                                "supported | possible | rejected | need_evidence."
+                            ),
                         },
                         "reason": {
                             "type": "string",
@@ -1558,7 +1563,11 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                             "items": {"type": "string"},
                         },
                         "conclusion": {"type": "string"},
-                        "confidence": {"type": "string"},
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["high", "medium", "low"],
+                            "description": "Confidence band: high | medium | low.",
+                        },
                         "elapsed_s": {"type": "number"},
                     },
                 },
@@ -1622,7 +1631,7 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 "name": AI_TOOL_VERIFY_CLAIM,
                 "description": (
                     "Check a causal claim against findings and optional cursor "
-                    "scope (SUPPORTED / PARTIAL / UNSUPPORTED)."
+                    "scope. Verdict: confirmed | rejected | inconclusive."
                 ),
                 "parameters": {
                     "type": "object",
@@ -1634,6 +1643,9 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                         "evidence": {
                             "type": "array",
                             "items": {"type": ["string", "number"]},
+                            "description": (
+                                "Optional jump:TIME values in trace_time_unit."
+                            ),
                         },
                     },
                     "required": ["claim"],
@@ -1682,7 +1694,14 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 "description": "Cluster findings into incidents by time proximity.",
                 "parameters": {
                     "type": "object",
-                    "properties": {"window_ns": {"type": "number"}},
+                    "properties": {
+                        "window_ns": {
+                            "type": "number",
+                            "description": (
+                                "Clustering half-window in nanoseconds (_ns)."
+                            ),
+                        },
+                    },
                 },
             },
         },
@@ -1695,7 +1714,11 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                     "type": "object",
                     "properties": {
                         "conclusion": {"type": "string"},
-                        "confidence": {"type": "string"},
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["high", "medium", "low"],
+                            "description": "Confidence band: high | medium | low.",
+                        },
                     },
                 },
             },
@@ -2307,6 +2330,27 @@ def _as_scalar_float(value: Any) -> Optional[float]:
     return None
 
 
+def _normalize_confidence_band(value: Any) -> str:
+    """Map confidence args to ``high|medium|low`` (empty if omitted/unknown)."""
+    raw = str(value or "").strip().lower().replace("-", " ").replace("_", " ")
+    if not raw:
+        return ""
+    if raw in ("high", "h"):
+        return "high"
+    if raw in ("medium", "med", "m", "mid"):
+        return "medium"
+    if raw in ("low", "l"):
+        return "low"
+    # Title-case prose from the model
+    if "high" in raw:
+        return "high"
+    if "medium" in raw or "med" in raw:
+        return "medium"
+    if "low" in raw:
+        return "low"
+    return ""
+
+
 def _fmt_trace_num(value: Any) -> str:
     n = _as_scalar_float(value)
     if n is None:
@@ -2836,7 +2880,7 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
         return {
             "tools_run": [str(t) for t in (tools or [])],
             "conclusion": str(a.get("conclusion") or "").strip(),
-            "confidence": str(a.get("confidence") or "").strip(),
+            "confidence": _normalize_confidence_band(a.get("confidence")),
             "elapsed_s": elapsed,
         }, ""
     if name == AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY:
@@ -2885,7 +2929,7 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
     if name == AI_TOOL_CLOSE_INVESTIGATION:
         return {
             "conclusion": str(a.get("conclusion") or "").strip(),
-            "confidence": str(a.get("confidence") or "").strip(),
+            "confidence": _normalize_confidence_band(a.get("confidence")),
         }, ""
     if name == AI_TOOL_ANALYZE_DISTRIBUTION:
         vals = a.get("values")
