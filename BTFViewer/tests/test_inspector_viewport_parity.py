@@ -1,4 +1,4 @@
-"""Desktop ↔ Web lockstep for the Migration heatmap Full view / Viewport view banner.
+"""Desktop ↔ Web lockstep for Migration Inspector analysis scope.
 
 Source-string and extracted-helper checks only (no Qt import) so this stays
 runnable when the rest of the desktop stack cannot start.
@@ -17,10 +17,14 @@ MIG_JS = (BTF_ROOT / "web" / "src" / "utils" / "migrationAnalysis.js").read_text
     encoding="utf-8")
 CI_VUE = (BTF_ROOT / "web" / "src" / "components" / "CorridorInspectorDialog.vue"
           ).read_text(encoding="utf-8")
+APP_VUE = (BTF_ROOT / "web" / "src" / "App.vue").read_text(encoding="utf-8")
+CHORD_VUE = (BTF_ROOT / "web" / "src" / "components" / "MiniChordPanel.vue"
+             ).read_text(encoding="utf-8")
 PLOT_VUE = (BTF_ROOT / "web" / "src" / "components" / "StatisticsPanel.vue"
             ).read_text(encoding="utf-8")
 TIMELINE_VUE = (BTF_ROOT / "web" / "src" / "components" / "TimelinePanel.vue"
                 ).read_text(encoding="utf-8")
+PARSER_PY = (BTF_ROOT / "btf_viewer_pkg" / "parser.py").read_text(encoding="utf-8")
 
 
 def _load_desktop_helpers() -> dict:
@@ -68,29 +72,175 @@ class InspectorViewportParityTests(unittest.TestCase):
             "return (Number(hi) - Number(lo)) / span >= INSPECTOR_FULL_VIEW_RATIO",
             MIG_JS)
 
-    def test_badge_labels_match_web(self) -> None:
-        for src in (STATS_PY, MIG_JS):
-            self.assertIn("Full view", src)
-            self.assertIn("Viewport view", src)
-        self.assertIn('"Full view"', STATS_PY)
-        self.assertIn('"Viewport view"', STATS_PY)
-        self.assertIn("'Full view'", MIG_JS)
-        self.assertIn("'Viewport view'", MIG_JS)
-        self.assertIn("scopeBanner.badge", CI_VUE)
+    def test_analysis_scope_labels_match_web(self) -> None:
+        for src in (STATS_PY, MIG_JS, PARSER_PY, CI_VUE):
+            self.assertIn("Full Trace", src)
+        self.assertIn("Cursor C1–Cn", STATS_PY)
+        self.assertIn("Viewport", STATS_PY)
+        self.assertIn('addItem("Follow zoom", "auto")', STATS_PY)
+        self.assertIn('addItem("Viewport", "viewport")', STATS_PY)
+        self.assertIn("value: 'auto', label: 'Follow zoom'", CI_VUE)
+        self.assertIn("value: 'viewport', label: 'Viewport'", CI_VUE)
+        self.assertIn("analysisMode = ref('auto')", CI_VUE)
+        self.assertIn('_analysis_mode = "auto"', STATS_PY)
+        self.assertIn("Place at least two cursors", STATS_PY)
+        self.assertIn("Place at least two cursors", CI_VUE)
+        self.assertIn("inspectorAnalysisScope(", CI_VUE)
+        self.assertIn("export function inspectorAnalysisScope", MIG_JS)
+        self.assertIn("def _inspector_analysis_scope", PARSER_PY)
+        self.assertIn("analysisScope.label", CI_VUE)
 
-    def test_dialog_wires_the_banner_on_both_apps(self) -> None:
+    def test_dialog_wires_explicit_analysis_scope(self) -> None:
         self.assertIn('setObjectName("ciScopeBanner")', STATS_PY)
         self.assertIn("_refresh_scope_banner", STATS_PY)
-        self.assertIn("_inspector_viewport_banner(", STATS_PY)
+        self.assertIn("_inspector_analysis_scope(", STATS_PY)
         self.assertIn("class=\"ci-scope-banner\"", CI_VUE)
         self.assertIn("ci-scope-viewport", CI_VUE)
         self.assertIn("ci-scope-full", CI_VUE)
-        self.assertIn("inspectorViewportBanner(", CI_VUE)
-        self.assertIn("export function inspectorViewportBanner", MIG_JS)
-        self.assertIn("export function inspectorViewportIsFull", MIG_JS)
+        self.assertIn(':viewport="timelineViewport"', APP_VUE)
+        self.assertIn("Analysis Scope", CI_VUE)
+        self.assertIn("Analysis Scope", STATS_PY)
+        self.assertIn("Investigate with AI", CI_VUE)
+        self.assertIn("Investigate with AI", STATS_PY)
+        self.assertIn("Handoff suspects only", CI_VUE)
+        self.assertIn("Handoff suspects only", STATS_PY)
+        self.assertIn("Filter paths by task name or ID", CI_VUE)
+        self.assertIn("Filter paths by task name or ID", STATS_PY)
+        self.assertIn("Filter Inspector", CI_VUE)
+        self.assertIn("Filter Inspector", STATS_PY)
+        self.assertIn("rightPane = 'topology'", CI_VUE)
+        self.assertIn("rightPane = 'info'", CI_VUE)
+        self.assertIn("Path info", CI_VUE)
+        self.assertIn("Path info", STATS_PY)
+        self.assertIn('"Topology"', STATS_PY)
+        self.assertNotIn("mainTab = 'activity'", CI_VUE)
+        ci_cls = STATS_PY[
+            STATS_PY.find("class _CorridorInspectorDialog"):
+            STATS_PY.find("class _ChordDiagramDialog")]
+        self.assertNotIn('QPushButton("Activity")', ci_cls)
+        self.assertIn('QPushButton("Path info")', ci_cls)
         self.assertNotIn("ci-scope-note", CI_VUE)
         self.assertNotIn("ciScopeNote", STATS_PY)
-        self.assertNotIn("(viewport:", CI_VUE)
+        self.assertNotIn("inspectorViewportBanner(", CI_VUE)
+
+    def test_show_events_jump_payload_lockstep(self) -> None:
+        mw = (BTF_ROOT / "btf_viewer_pkg" / "mainwindow.py").read_text(
+            encoding="utf-8")
+        self.assertIn('"binLo": bin_lo', STATS_PY)
+        self.assertIn('"binHi": bin_hi', STATS_PY)
+        self.assertIn('"lockTaskKey":', STATS_PY)
+        self.assertIn('payload.get("binLo")', mw)
+        self.assertIn('payload.get("binHi")', mw)
+        self.assertIn("function onCorridorJump(payload)", APP_VUE)
+        self.assertIn("payload.binLo", APP_VUE)
+        self.assertIn("payload.binHi", APP_VUE)
+        self.assertNotIn(
+            "def _on_corridor_jump(self, bin_lo: int, bin_hi: int", mw)
+
+    def test_inspector_layout_matches_web(self) -> None:
+        """Desktop and Web share the same Inspector chrome order and labels."""
+        vue_order = (
+            "ci-overview",
+            "ci-toolbar",
+            "ci-scope-banner",
+            "ci-filter-status",
+            "ci-workspace",
+            "ci-tree-pane",
+            "ci-grid-pane",
+            "ci-right-pane",
+            "ci-footer",
+        )
+        vue_idx = []
+        for name in vue_order:
+            token = f'class="{name}"'
+            i = CI_VUE.find(token)
+            if i < 0:
+                i = CI_VUE.find(name)
+            vue_idx.append(i)
+        self.assertTrue(all(i >= 0 for i in vue_idx), vue_idx)
+        self.assertEqual(vue_idx, sorted(vue_idx))
+        ci_py = STATS_PY[STATS_PY.find("class _CorridorInspectorDialog"):]
+        desk_order = (
+            "lay.addWidget(ov_wrap)",
+            "lay.addWidget(bar)",
+            "lay.addWidget(self._scope_banner)",
+            "lay.addWidget(self._filter_bar)",
+            "lay.addWidget(self._workspace, 1)",
+        )
+        desk_idx = [ci_py.find(s) for s in desk_order]
+        self.assertTrue(all(i >= 0 for i in desk_idx), desk_idx)
+        self.assertEqual(desk_idx, sorted(desk_idx))
+        self.assertIn("self._workspace = QStackedWidget()", STATS_PY)
+        self.assertIn("self._right_stack = QStackedWidget()", STATS_PY)
+        self.assertIn("split.addWidget(self._right_wrap)", STATS_PY)
+        self.assertIn("Path info", STATS_PY)
+        self.assertIn("Path info", CI_VUE)
+        self.assertIn('self._set_right_pane("info")', STATS_PY)
+        self.assertIn("rightPane.value = 'info'", CI_VUE)
+        self.assertIn("Select a core path to inspect ping-pong", STATS_PY)
+        self.assertIn("Select a core path to inspect ping-pong", CI_VUE)
+        self.assertIn("Show on timeline", STATS_PY)
+        self.assertIn("Show on timeline", CI_VUE)
+        self.assertIn("Migration activity over time", STATS_PY)
+        self.assertIn("Migration activity over time", CI_VUE)
+        self.assertIn("Color: migration count", STATS_PY)
+        self.assertIn("Color: migration count", CI_VUE)
+        self.assertIn("ci-heatmap-meta", CI_VUE)
+        self.assertIn("Empty bins: no migrations in that interval", STATS_PY)
+        self.assertIn("Empty bins: no migrations in that interval", CI_VUE)
+        self.assertNotIn(
+            "suspects ≥ {_CORRIDOR_HANDOFF_HATCH_PCT}% "
+            "· Empty bins:",
+            STATS_PY)
+        self.assertIn("flex-wrap: nowrap", CI_VUE)
+        self.assertIn("evidenceLinesText", CI_VUE)
+        self.assertIn("${l.key}:  ${l.value}", CI_VUE)
+        self.assertIn("_FlowLayout(btn_row", STATS_PY)
+        self.assertIn('setObjectName("ciActionsRow")', STATS_PY)
+        self.assertIn("ci-actions-row", CI_VUE)
+        self.assertIn("ci-card-actions", CI_VUE)
+        self.assertIn("flex-direction: column", CI_VUE)
+        self.assertIn('QPushButton("Show events")', STATS_PY)
+        self.assertIn('QPushButton("Filter timeline")', STATS_PY)
+        self.assertIn('QPushButton("Inspect task")', STATS_PY)
+        self.assertIn('QPushButton("Ask AI")', STATS_PY)
+        self.assertIn("Filter timeline", STATS_PY)
+        self.assertIn("Filter timeline", CI_VUE)
+        self.assertIn("def _build_corridor_evidence", PARSER_PY)
+        self.assertIn("export function buildCorridorEvidence", MIG_JS)
+        self.assertNotIn('QPushButton("Jump To")', STATS_PY)
+        self.assertNotIn('QLabel("Dock")', STATS_PY)
+        self.assertNotIn("Inspect in Timeline", STATS_PY)
+        self.assertNotIn("corridorInspectorSidebar", STATS_PY)
+        self.assertNotIn("Click a corridor or chord ribbon to inspect.", STATS_PY)
+        self.assertNotIn("Click a corridor or chord ribbon to inspect.", CI_VUE)
+        self.assertNotIn("hatch: lock bounce", STATS_PY)
+        self.assertNotIn("double-click to apply as Migration Filter", STATS_PY)
+        self.assertIn("double-click to show events", STATS_PY)
+        self.assertIn("double-click to show events", CI_VUE)
+        self.assertIn("handoff suspect", STATS_PY)
+        self.assertIn("handoff suspect", CI_VUE)
+        self.assertIn("_HEAD_H = 28", STATS_PY)
+        self.assertIn("GRID_HEAD_H = 28", CI_VUE)
+        self.assertIn("onGridKeydown", CI_VUE)
+        self.assertIn("def _handle_nav_key", STATS_PY)
+        self.assertNotIn("viewportProgrammatic", CI_VUE)
+        self.assertNotIn("_HINT_DEFAULT", STATS_PY)
+        canvas_py = STATS_PY[
+            STATS_PY.find("class _CorridorTimelineCanvas"):
+            STATS_PY.find("class _CorridorTimelineGrid")]
+        self.assertNotIn("lock bounce", canvas_py)
+        ci_cls = STATS_PY[
+            STATS_PY.find("class _CorridorInspectorDialog"):
+            STATS_PY.find("class _ChordDiagramDialog")]
+        tree_dbl = ci_cls[ci_cls.find("def _on_tree_dbl"):]
+        tree_dbl = tree_dbl[:tree_dbl.find("\n    def ", 1)]
+        self.assertIn("self._on_show_events()", tree_dbl)
+        self.assertNotIn("_spotlight_corridor", tree_dbl)
+        chord_dbl = ci_cls[ci_cls.find("def _on_chord_corridor_dbl"):]
+        chord_dbl = chord_dbl[:chord_dbl.find("\n    def ", 1)]
+        self.assertIn("self._on_show_events()", chord_dbl)
+        self.assertNotIn("_spotlight_corridor", chord_dbl)
 
     def test_heatmap_banner_colors_match_distribution_chart(self) -> None:
         for token in ("#FF9800", "#1A1200", "#4E342E", "#FFF3E0"):
@@ -111,6 +261,61 @@ class InspectorViewportParityTests(unittest.TestCase):
         self.assertIn("color-mix(in srgb, #ff9800 18%, var(--panel-bg))", CI_VUE)
         self.assertIn("text-transform: uppercase", PLOT_VUE)
         self.assertIn("text-transform: uppercase", CI_VUE)
+        self.assertIn("def _hex_mix", STATS_PY)
+        self.assertIn('"panel": "#252526"', STATS_PY)
+        self.assertIn('"panel": "#F5F5F5"', STATS_PY)
+        self.assertIn("IC.heatmap", CHORD_VUE)
+        self.assertIn("IC.chord", CHORD_VUE)
+        self.assertNotIn(">Circle<", CHORD_VUE)
+        self.assertIn("AlignRight", STATS_PY)
+        self.assertIn("_IC_HEATMAP", STATS_PY)
+        self.assertIn("_IC_CHORD", STATS_PY)
+        self.assertIn("ciCircleToggle", STATS_PY)
+        self.assertIn("_matrix_pad_t", STATS_PY)
+        self.assertIn("MATRIX_PAD_T = 64", CHORD_VUE)
+
+    def test_inspector_hover_combo_and_web_drag_lockstep(self) -> None:
+        self.assertIn("def _ci_button_qss", STATS_PY)
+        self.assertIn("def _ci_toolbar_qss", STATS_PY)
+        self.assertIn("QPushButton:hover", STATS_PY)
+        self.assertIn("#ciFooter", STATS_PY)
+        self.assertIn("#ciEvidence", STATS_PY)
+        self.assertIn("combo_view", STATS_PY)
+        self.assertIn("def _ci_combo_widget_qss", STATS_PY)
+        self.assertIn("QAbstractItemView::item:hover", STATS_PY)
+        self.assertIn("onHeaderPointerDown", CI_VUE)
+        self.assertIn("dialogPos", CI_VUE)
+        self.assertIn("ci-overlay-free", CI_VUE)
+        self.assertIn("rgba(91, 155, 213, 0.18)", CI_VUE)
+        self.assertIn("rgba(91, 155, 213, 0.22)", STATS_PY)
+        self.assertIn("QPushButton:hover:!disabled", STATS_PY)
+        self.assertIn(".ci-jump:hover:not(:disabled)", CI_VUE)
+        self.assertIn(".ci-show-all:hover:not(:disabled)", CI_VUE)
+        self.assertIn(".ci-show-all:disabled", CI_VUE)
+        self.assertIn(".ci-jump:disabled", CI_VUE)
+        self.assertIn("#ciFilterBar", STATS_PY)
+        self.assertIn("ci-field-sort", CI_VUE)
+        self.assertIn("min-width: 148px", CI_VUE)
+        self.assertIn("setMinimumWidth(148)", STATS_PY)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", CI_VUE)
+        self.assertIn("grid.addWidget(self._ov_mig, 0, 2)", STATS_PY)
+        self.assertIn("self._ov_headline.setWordWrap(False)", STATS_PY)
+        self.assertNotIn("ci-overview-concern", CI_VUE)
+        self.assertNotIn("_ov_concern_detail", STATS_PY)
+        self.assertIn('hover": "#E0E8F0"', STATS_PY)
+        self.assertIn("combo_sel_fg", STATS_PY)
+        self.assertIn("def _apply_ci_chrome", STATS_PY)
+        self.assertIn("QApplication.instance()", STATS_PY)
+        self.assertIn("plotBottom - 0.5", CI_VUE)
+        self.assertIn("rgba(91, 155, 213, 0.35)", CI_VUE)
+        self.assertIn("plot_bottom - 0.01", STATS_PY)
+        self.assertIn("grid.setColumnStretch(0, 1)", STATS_PY)
+        self.assertIn("self._ov_scope.setWordWrap(False)", STATS_PY)
+        self.assertIn("#ciOverview {", STATS_PY)
+        self.assertIn(
+            'f" border-radius: 6px; padding: 8px 10px; }}"', STATS_PY)
+        self.assertIn(".ci-toolbar .ci-field :deep(.dom-select)", CI_VUE)
+        self.assertIn("border: 1px solid var(--border)", CI_VUE)
 
     def test_full_vs_viewport_rules_match(self) -> None:
         self.assertTrue(_inspector_viewport_is_full(None, None, 0, 1000, False))

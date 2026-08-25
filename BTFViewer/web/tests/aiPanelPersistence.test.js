@@ -137,12 +137,12 @@ describe('AI conversation turn layout', () => {
   })
 })
 
-describe('Migration inspector Query with AI', () => {
+describe('Migration inspector Investigate with AI', () => {
   it('footer emits query-ai and App wires the migrations template', () => {
-    assert.match(corridorDlg, /Query with AI/)
-    assert.match(corridorDlg, /emit\('query-ai'\)/)
+    assert.match(corridorDlg, /Investigate with AI/)
+    assert.match(corridorDlg, /queryAi\('path'\)/)
     assert.match(app, /@query-ai="queryCorridorWithAi"/)
-    assert.match(app, /focusAiAndAsk\('migrations'\)/)
+    assert.match(app, /template: 'migrations'/)
   })
 })
 

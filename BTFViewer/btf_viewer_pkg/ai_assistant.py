@@ -536,10 +536,10 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
     (
         "migrations",
         "Migration thrash",
-        "Is there core thrashing or lock-bounce? Cite migration rate, ping-pong, "
-        "dwell, and any hot mutex/queue ownership bounce. Suggest affinity or "
-        "ownership fixes. Open Task × Core, Core Utilization Over Time, and "
-        "Timeline Anomalies migration bursts.",
+        "Is there core thrashing, ping-pong, or short dwell? Cite migration rate, ping-pong, "
+        "dwell, and any synchronization handoff heuristic (not a measured cache-line transfer). "
+        "Do not automatically filter the timeline or change cursors unless the user selects a viewer action. "
+        "Open Task × Core, Core Utilization Over Time, and Timeline Anomalies migration bursts.",
     ),
     (
         "balance",
@@ -6152,9 +6152,9 @@ def create_ai_assistant_panel(
             """Run the Analysis Findings template (toolbar Analysis → Query with AI)."""
             self.query_template("findings")
 
-        def query_migration_thrash(self) -> None:
-            """Run the Migration thrash template (inspector → Query with AI)."""
-            self.query_template("migrations")
+        def query_migration_thrash(self, extra: str = "") -> None:
+            """Run the Migration thrash template (inspector → Investigate with AI)."""
+            self.query_template("migrations", extra=extra)
 
         def query_trace_compare(self, idx_a: int, idx_b: int) -> None:
             """Run the Trace Compare template for two already-chosen tabs."""

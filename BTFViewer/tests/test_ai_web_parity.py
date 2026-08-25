@@ -1668,6 +1668,8 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn('aria-modal="false"', dlg)
         self.assertIn("analysis-tool-host", dlg)
         self.assertIn("pointer-events: none", dlg)
+        self.assertIn("onHeaderPointerDown", dlg)
+        self.assertIn("analysis-tool-host-free", dlg)
         self.assertNotIn("analysis-dock", dlg)
         self.assertNotIn("dialog-overlay", dlg)
         self.assertNotIn("dockRightPx", dlg)

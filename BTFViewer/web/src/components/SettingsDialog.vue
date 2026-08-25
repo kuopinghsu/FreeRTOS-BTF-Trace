@@ -1,24 +1,30 @@
 <template>
   <div
     class="settings-overlay"
-    @click.self="emit('close')"
+    :class="{ 'settings-overlay-free': dialogPos }"
+    @click.self="onOverlayBackdropClick"
   >
     <div
+      ref="dialogEl"
       class="settings-dialog"
       role="dialog"
       aria-modal="true"
       aria-label="Settings"
+      :style="dialogStyle"
     >
-      <div class="settings-header">
+      <div
+        class="settings-header"
+        @pointerdown="onHeaderPointerDown"
+      >
         <span class="settings-title">Settings</span>
         <button
           type="button"
-          class="settings-close"
+          class="app-close-x"
+          title="Close"
           aria-label="Close settings"
+          @pointerdown.stop
           @click="emit('close')"
-        >
-          ✕
-        </button>
+        >×</button>
       </div>
 
       <div class="settings-body">
@@ -754,6 +760,68 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'save', 'preview'])
 let resetLayout = false
+const dialogEl = ref(null)
+const dialogPos = ref(null)
+let _drag = null
+let _ignoreOverlayClick = false
+
+function clampDialogPos(x, y) {
+  const el = dialogEl.value
+  const w = el?.offsetWidth || 0
+  const h = el?.offsetHeight || 0
+  const pad = 8
+  const maxX = Math.max(pad, window.innerWidth - w - pad)
+  const maxY = Math.max(pad, window.innerHeight - h - pad)
+  return {
+    x: Math.min(Math.max(pad, x), maxX),
+    y: Math.min(Math.max(pad, y), maxY),
+  }
+}
+
+const dialogStyle = computed(() => {
+  if (!dialogPos.value) return {}
+  return {
+    position: 'fixed',
+    left: `${dialogPos.value.x}px`,
+    top: `${dialogPos.value.y}px`,
+    margin: '0',
+  }
+})
+
+function onHeaderPointerDown(ev) {
+  if (ev.pointerType === 'mouse' && ev.button !== 0) return
+  if (ev.target.closest('button')) return
+  const el = dialogEl.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  _drag = { dx: ev.clientX - rect.left, dy: ev.clientY - rect.top, moved: false }
+  dialogPos.value = { x: rect.left, y: rect.top }
+  window.addEventListener('pointermove', onDialogPointerMove)
+  window.addEventListener('pointerup', onDialogPointerUp)
+  ev.preventDefault()
+}
+
+function onDialogPointerMove(ev) {
+  if (!_drag) return
+  _drag.moved = true
+  dialogPos.value = clampDialogPos(ev.clientX - _drag.dx, ev.clientY - _drag.dy)
+}
+
+function onDialogPointerUp() {
+  const moved = !!_drag?.moved
+  _drag = null
+  window.removeEventListener('pointermove', onDialogPointerMove)
+  window.removeEventListener('pointerup', onDialogPointerUp)
+  if (moved) {
+    _ignoreOverlayClick = true
+    requestAnimationFrame(() => { _ignoreOverlayClick = false })
+  }
+}
+
+function onOverlayBackdropClick() {
+  if (_ignoreOverlayClick) return
+  emit('close')
+}
 
 const tabs = [
   { id: 'appearance', label: 'Appearance' },
@@ -1077,6 +1145,7 @@ onMounted(() => {
 onUnmounted(() => {
   aiModelMenuOpen.value = false
   bindAiModelMenuChrome(false)
+  onDialogPointerUp()
 })
 
 watch(draft, () => {
@@ -1229,6 +1298,10 @@ async function onTestAi() {
   justify-content: center;
   padding: 24px;
 }
+.settings-overlay-free {
+  display: block;
+  padding: 0;
+}
 .settings-dialog {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -1248,23 +1321,15 @@ async function onTestAi() {
   justify-content: space-between;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
+  cursor: grab;
+  user-select: none;
+}
+.settings-header:active {
+  cursor: grabbing;
 }
 .settings-title {
   font-weight: 600;
   font-size: 15px;
-}
-.settings-close {
-  border: none;
-  background: transparent;
-  color: var(--fg-dim);
-  cursor: pointer;
-  font-size: 16px;
-  padding: 2px 6px;
-  border-radius: 4px;
-}
-.settings-close:hover {
-  background: var(--tb-btn-hover);
-  color: var(--fg);
 }
 .settings-body {
   display: flex;

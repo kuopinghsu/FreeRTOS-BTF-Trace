@@ -121,6 +121,78 @@ class TestBuildChordLayout(unittest.TestCase):
         self.assertEqual(_default_corridor_top_pct(4), 100)
         self.assertEqual(_default_corridor_top_pct(16), 25)
 
+    def test_default_corridor_top_n(self) -> None:
+        from btf_viewer_pkg.parser import (
+            _default_corridor_top_n, _filter_corridors_by_top_n, _sort_corridors,
+        )
+        self.assertEqual(_default_corridor_top_n(4), 0)
+        self.assertEqual(_default_corridor_top_n(8), 0)
+        self.assertEqual(_default_corridor_top_n(9), 10)
+        rows = [
+            {"count": 100, "label": "a", "rate_per_s": 1.0},
+            {"count": 50, "label": "b", "rate_per_s": 9.0},
+            {"count": 1, "label": "c", "rate_per_s": 0.1},
+        ]
+        self.assertEqual(len(_filter_corridors_by_top_n(rows, 0)), 3)
+        self.assertEqual(
+            [c["count"] for c in _filter_corridors_by_top_n(rows, 2)],
+            [100, 50],
+        )
+        sorted_rows = _sort_corridors(rows, "rate")
+        self.assertEqual(sorted_rows[0]["label"], "b")
+
+    def test_inspector_analysis_scope(self) -> None:
+        from btf_viewer_pkg.parser import _inspector_analysis_scope
+        full = _inspector_analysis_scope("full", [100, 200], 0, 1000, "ns")
+        self.assertEqual(full["label"], "Full Trace")
+        self.assertIsNone(full["lo"])
+        self.assertIn("trace unit: ns", full["detail"])
+        cur = _inspector_analysis_scope("cursor", [100, 200], 0, 1000, "ns")
+        self.assertEqual(cur["label"], "Cursor C1–C2")
+        self.assertEqual(cur["lo"], 100)
+        self.assertEqual(cur["hi"], 200)
+        none = _inspector_analysis_scope("cursor", [50], 0, 1000, "ns")
+        self.assertEqual(none["mode"], "full")
+        self.assertFalse(none["can_cursor"])
+        self.assertIn("Place at least two cursors", none["cursor_disabled_reason"])
+        vp = _inspector_analysis_scope(
+            "viewport", [], 0, 1000, "ns", viewport=(100, 400))
+        self.assertEqual(vp["mode"], "viewport")
+        self.assertEqual(vp["label"], "Viewport")
+        self.assertEqual(vp["lo"], 100)
+        self.assertEqual(vp["hi"], 400)
+        self.assertTrue(vp["scoped"])
+        auto_zoom = _inspector_analysis_scope(
+            "auto", [], 0, 1000, "ns", viewport=(100, 400))
+        self.assertEqual(auto_zoom["mode"], "viewport")
+        self.assertEqual(auto_zoom["lo"], 100)
+        auto_fit = _inspector_analysis_scope(
+            "auto", [], 0, 1000, "ns", viewport=(0, 1000))
+        self.assertEqual(auto_fit["mode"], "full")
+        self.assertIsNone(auto_fit["lo"])
+        auto_fit_mode = _inspector_analysis_scope(
+            "auto", [], 0, 1000, "ns", viewport=(10, 20), fit_mode=True)
+        self.assertEqual(auto_fit_mode["mode"], "full")
+        defaulted = _inspector_analysis_scope(
+            None, [], 0, 1000, "ns", viewport=(100, 200))
+        self.assertEqual(defaulted["mode"], "viewport")
+
+    def test_build_corridor_evidence(self) -> None:
+        from btf_viewer_pkg.parser import _build_corridor_evidence
+        ev = _build_corridor_evidence({
+            "from_core": "Core_0", "to_core": "Core_1",
+            "count": 12, "rate_per_s": 3.5, "ping_pong_pct": 40,
+            "median_dwell_ns": 0, "short_dwell_share": 25,
+            "bounces": 2, "handoff_pct": 15,
+            "primary_task": {"label": "CS[1]", "share_pct": 80},
+        })
+        self.assertEqual(ev["title"], "Core_0 → Core_1")
+        keys = [k for k, _v in ev["lines"]]
+        self.assertEqual(keys[0], "Migration volume")
+        self.assertEqual(keys[6], "Top migrating task")
+        self.assertIn("heuristic", ev["evidence_quality"]["limitation"])
+        self.assertIsNone(_build_corridor_evidence(None))
+
     def test_filter_corridors_by_direction(self) -> None:
         from btf_viewer_pkg.parser import _filter_corridors_by_direction
         rows = [

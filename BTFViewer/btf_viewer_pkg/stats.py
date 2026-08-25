@@ -4,6 +4,8 @@ from __future__ import annotations
 from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
 from .config import (  # private symbols are not pulled in by import *
+    _IC_CHORD,
+    _IC_HEATMAP,
     _IC_PIN,
     _IC_PIN_FILLED,
     _IC_REFRESH,
@@ -107,10 +109,18 @@ from .parser import (  # private symbols are not pulled in by import *
     _switch_overhead_plot_points,
     _switch_overhead_rows,
     _build_corridor_inspector_model,
+    _default_corridor_top_n,
     _default_corridor_top_pct,
     _trace_has_core_bounce_holds,
     _filter_corridors_by_direction,
     _filter_corridors_by_task_query,
+    _filter_corridors_by_top_n,
+    _sort_corridors,
+    _inspector_analysis_scope,
+    _build_corridor_overview,
+    _build_corridor_evidence,
+    _build_corridor_ai_context,
+    _CORRIDOR_HANDOFF_HATCH_PCT,
     _corridor_groups_by_source,
     _core_short_name,
     _build_chord_layout,
@@ -193,6 +203,7 @@ from .ai_assistant import (  # noqa: F401
     qt_wrap_tooltip,
     sanitize_ai_preset_id,
 )
+from .ai_assistant import _FlowLayout
 from .rc_secrets import (
     decrypt_secret,
     encrypt_secret,
@@ -2300,7 +2311,7 @@ class _MetricsPlotDialog(QDialog):
     def _set_scope_banner(self, scoped: bool, badge: str, detail: str) -> None:
         """Show a high-contrast banner indicating cursor-range vs full-trace scope."""
         _apply_scope_banner(
-            self._scope_banner, scoped, badge, detail, self._is_dark)
+            self._scope_banner, scoped, badge, detail, self)
 
     def update_data(self, title: str, points: list,
                     *, scope_scoped: bool, scope_badge: str,
@@ -4870,6 +4881,9 @@ class _ChordDiagramWidget(QWidget):
         self._ribbon_alpha = 0.72 if self._compact else 0.75
         self._label_gap = 12.0 if self._compact else 14.0
         self._matrix_pad = 36.0 if self._compact else 40.0
+        # Compact Inspector: extra top pad so the 22px icon row does not cover
+        # matrix cells or rotated column labels (web MiniChordPanel MATRIX_PAD_T).
+        self._matrix_pad_t = 64.0 if self._compact else 40.0
         self._cores: List[str] = []
         self._grid: list = [[]]
         self._layout: Optional[ChordLayout] = None
@@ -4888,17 +4902,52 @@ class _ChordDiagramWidget(QWidget):
             self.setMinimumSize(160, 160)
         else:
             self.setMinimumSize(200, 200)
-        self._circle_btn = QPushButton("Circle", self)
-        self._matrix_btn = QPushButton("Matrix", self)
-        fs = 10 if self._compact else 11
-        for _b in (self._circle_btn, self._matrix_btn):
-            _b.setCheckable(True)
-            _b.setVisible(False)
-            _b.setFixedHeight(20 if self._compact else 22)
-            _b.setStyleSheet(
-                f"QPushButton {{ font-size:{fs}px; padding:2px 6px; }}")
+        self._circle_btn = self._make_view_btn(
+            "ciCircleToggle", "Circular topology", _IC_CHORD)
+        self._matrix_btn = self._make_view_btn(
+            "ciMatrixToggle", "Core-to-core matrix", _IC_HEATMAP)
         self._circle_btn.clicked.connect(lambda: self.set_view_mode("circle"))
         self._matrix_btn.clicked.connect(lambda: self.set_view_mode("matrix"))
+        if self._compact:
+            overlay = QHBoxLayout(self)
+            overlay.setContentsMargins(4, 4, 4, 4)
+            overlay.setSpacing(4)
+            overlay.setAlignment(Qt.AlignmentFlag.AlignTop)
+            overlay.addStretch(1)
+            overlay.addWidget(
+                self._circle_btn, 0,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+            overlay.addWidget(
+                self._matrix_btn, 0,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        else:
+            self._circle_btn.hide()
+            self._matrix_btn.hide()
+
+    def _make_view_btn(self, name: str, tooltip: str, icon_path: str) -> QToolButton:
+        btn = QToolButton(self)
+        btn.setObjectName(name)
+        btn.setAutoRaise(True)
+        btn.setCheckable(True)
+        btn.setToolTip(tooltip)
+        btn.setFixedSize(22, 22)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        chrome = _ci_chrome_colors(self)
+        btn.setIcon(_svg_icon(icon_path, chrome["text"], 14))
+        btn.setStyleSheet(self._view_btn_qss(chrome))
+        return btn
+
+    def _view_btn_qss(self, chrome: Optional[dict] = None) -> str:
+        c = chrome or _ci_chrome_colors(self)
+        return (
+            "QToolButton { padding: 2px; border: 1px solid %s; border-radius: 3px;"
+            " background: %s; }"
+            "QToolButton:checked { border-color: %s; }"
+            "QToolButton:disabled { color: #888888; }"
+            % (c["border"], c["btn_bg"], c["accent"]))
+
+    def _matrix_pads(self) -> Tuple[float, float]:
+        return self._matrix_pad, getattr(self, "_matrix_pad_t", self._matrix_pad)
 
     def set_data(self, cores: List[str], grid: list) -> None:
         cores_l = list(cores or [])
@@ -4925,13 +4974,9 @@ class _ChordDiagramWidget(QWidget):
             self.hover_changed.emit(None)
             self._emit_hover_info(None)
         self._pinned_hover = False
-        prev_n = getattr(self, "_last_core_n", 0)
-        n = len(self._cores)
-        if n > 16 and prev_n <= 16:
+        self._last_core_n = len(self._cores)
+        if self._compact and len(self._cores) > 16:
             self._view_mode = "matrix"
-        elif n <= 16:
-            self._view_mode = "circle"
-        self._last_core_n = n
         self._sync_view_toggle()
         self.update()
 
@@ -4959,34 +5004,33 @@ class _ChordDiagramWidget(QWidget):
 
     def set_view_mode(self, mode: str) -> None:
         m = "matrix" if mode == "matrix" else "circle"
+        if self._compact and m == "circle" and len(self._cores) > 16:
+            m = "matrix"
         self._view_mode = m
         self._sync_view_toggle()
         self.update()
 
     def _sync_view_toggle(self) -> None:
-        show = len(self._cores) > 16
-        self._circle_btn.setVisible(show)
-        self._matrix_btn.setVisible(show)
-        self._circle_btn.setChecked(self._view_mode == "circle")
-        self._matrix_btn.setChecked(self._view_mode == "matrix")
-        self._layout_view_toggle()
-
-    def _layout_view_toggle(self) -> None:
-        if not self._circle_btn.isVisible():
+        circle = getattr(self, "_circle_btn", None)
+        matrix = getattr(self, "_matrix_btn", None)
+        if circle is None or matrix is None:
             return
-        self._circle_btn.adjustSize()
-        self._matrix_btn.adjustSize()
-        # Web MiniChordPanel: top-right, 4px inset.
-        gap, inset = 4, 4
-        mw = self._matrix_btn.width()
-        cw = self._circle_btn.width()
-        self._matrix_btn.move(max(inset, self.width() - inset - mw), inset)
-        self._circle_btn.move(
-            max(inset, self._matrix_btn.x() - gap - cw), inset)
-
-    def resizeEvent(self, event) -> None:
-        self._layout_view_toggle()
-        return super().resizeEvent(event)
+        show = bool(self._compact)
+        circle.setVisible(show)
+        matrix.setVisible(show)
+        if not show:
+            return
+        is_matrix = self._view_mode == "matrix"
+        n = len(self._cores)
+        circle.setEnabled(n <= 16)
+        circle.setChecked(not is_matrix)
+        matrix.setChecked(is_matrix)
+        chrome = _ci_chrome_colors(self)
+        qss = self._view_btn_qss(chrome)
+        circle.setIcon(_svg_icon(_IC_CHORD, chrome["text"], 14))
+        matrix.setIcon(_svg_icon(_IC_HEATMAP, chrome["text"], 14))
+        circle.setStyleSheet(qss)
+        matrix.setStyleSheet(qss)
 
     def set_hover_index(self, index: Optional[int], *, pinned: bool = False) -> None:
         """Programmatically highlight a core arc (and its chords)."""
@@ -5067,7 +5111,7 @@ class _ChordDiagramWidget(QWidget):
         if not n:
             return None
         w, h = self.width(), self.height()
-        pad_l = pad_t = self._matrix_pad
+        pad_l, pad_t = self._matrix_pads()
         cell = max(4.0, min((w - pad_l - 8) / n, (h - pad_t - 8) / n))
         j = int((mx - pad_l) / cell)
         i = int((my - pad_t) / cell)
@@ -5265,7 +5309,7 @@ class _ChordDiagramWidget(QWidget):
         n = len(cores)
         if not n:
             return
-        pad_l = pad_t = self._matrix_pad
+        pad_l, pad_t = self._matrix_pads()
         cell = max(4.0, min((w - pad_l - 8) / n, (h - pad_t - 8) / n))
         max_c = float(self._max_count or 1)
         label_color = self.palette().color(QPalette.ColorRole.WindowText)
@@ -5634,10 +5678,11 @@ class _CorridorTimelineCanvas(QWidget):
 
     corridor_clicked = Signal(object, int)  # corridor dict, bin index
     corridor_dbl = Signal(object, int)
+    corridor_toggled = Signal(object)
 
     _ROW_H = 22
     _LABEL_W = 78
-    _HEAD_H = 40
+    _HEAD_H = 28
     _FOOT_H = 16
 
     def __init__(self, host: "QScrollArea", parent=None):
@@ -5655,6 +5700,7 @@ class _CorridorTimelineCanvas(QWidget):
         self._hover_ri = -1
         self._hover_bi = -1
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAutoFillBackground(True)
         self._tip = QLabel(self)
         self._tip.setObjectName("corridorGridTip")
@@ -5735,22 +5781,33 @@ class _CorridorTimelineCanvas(QWidget):
             p.drawText(QRectF(2, y, label_w - 6, row_h),
                        int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight),
                        c.get("label", ""))
+            hatch_min = _CORRIDOR_HANDOFF_HATCH_PCT / 100.0
             for b in range(bins):
                 v = c["bins"][b] if b < len(c["bins"]) else 0
                 bv = c["bounce_bins"][b] if b < len(c["bounce_bins"]) else 0
                 x = label_w + b * cell_w
+                cell = QRectF(x + 0.5, y + 2, cell_w - 1, row_h - 4)
                 if v > 0:
                     intensity = min(1.0, v / self._max_bin)
-                    p.fillRect(QRectF(x + 0.5, y + 2, cell_w - 1, row_h - 4),
-                               QColor(70, 130, 220, int(40 + 190 * intensity)))
+                    bounce_ratio = bv / v if v else 0
+                    if bounce_ratio >= hatch_min:
+                        p.fillRect(cell, QColor(
+                            232, 120, 32, int(51 + 140 * intensity)))
+                        p.save()
+                        p.setClipRect(cell)
+                        p.setPen(QPen(QColor(
+                            20, 20, 20, int(89 + 89 * intensity)), 1))
+                        ch = row_h - 4
+                        for s in range(int(-ch), int(cell_w + ch), 3):
+                            p.drawLine(
+                                QPointF(x + 0.5 + s, y + 2 + ch),
+                                QPointF(x + 0.5 + s + ch, y + 2))
+                        p.restore()
+                    else:
+                        p.fillRect(cell, QColor(
+                            70, 130, 220, int(38 + 191 * intensity)))
                 else:
-                    p.fillRect(QRectF(x + 0.5, y + 2, cell_w - 1, row_h - 4),
-                               QColor(127, 127, 127, 16))
-                if bv > 0 and v > 0 and bv / v >= 0.15:
-                    p.setPen(QPen(QColor(232, 120, 32, 160), 1))
-                    for s in range(int(-row_h), int(cell_w + row_h), 4):
-                        p.drawLine(QPointF(x + s, y + row_h),
-                                   QPointF(x + s + row_h, y))
+                    p.fillRect(cell, QColor(127, 127, 127, 15))
                 if selected and self._highlight_bin == b:
                     p.setPen(QPen(QColor(255, 220, 80, 220), 1))
                     p.drawRect(QRectF(x + 0.5, y + 1, cell_w - 1, row_h - 2))
@@ -5762,9 +5819,7 @@ class _CorridorTimelineCanvas(QWidget):
         p.fillRect(QRectF(0, 0, w, head_h), bg)
         p.setPen(fg)
         p.setFont(_monospace_font(8))
-        p.drawText(4, 12,
-                   "Y: corridor (src→dst)   X: time   color: mig count   hatch: lock bounce")
-        p.drawText(4, 26, "src→dst")
+        p.drawText(4, 12, "src→dst")
         tick_n = min(bins, 6)
         fm = QFontMetrics(p.font())
         for t in range(tick_n + 1):
@@ -5772,7 +5827,7 @@ class _CorridorTimelineCanvas(QWidget):
             ns = int(self._t_min + frac * (self._t_max - self._t_min))
             x = label_w + frac * plot_w
             label = _format_time(ns, self._time_scale)
-            ty = 26
+            ty = 12
             if frac < 0.05:
                 p.drawText(int(x), ty, label)
             elif frac > 0.95:
@@ -5781,6 +5836,10 @@ class _CorridorTimelineCanvas(QWidget):
                 p.drawText(int(x) - fm.horizontalAdvance(label) // 2, ty, label)
         foot_y = vp_h - foot_h
         p.fillRect(QRectF(0, foot_y, w, foot_h), bg)
+        if self._hover_bi >= 0:
+            hx = label_w + self._hover_bi * cell_w
+            p.fillRect(QRectF(hx, foot_y, cell_w, foot_h),
+                       QColor(91, 155, 213, 90))
         p.setPen(fg)
         p.drawText(QRectF(label_w, foot_y, plot_w, foot_h),
                    int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
@@ -5788,8 +5847,11 @@ class _CorridorTimelineCanvas(QWidget):
 
     def _hit(self, pos):
         x, y = pos.x(), pos.y()
-        if y < self._HEAD_H or y > self.height() - self._FOOT_H:
+        if y < self._HEAD_H:
             return None
+        plot_bottom = self.height() - self._FOOT_H
+        if y > plot_bottom:
+            y = plot_bottom - 0.01
         ri = int((y + self._scroll_y() - self._HEAD_H) / self._ROW_H)
         plot_w = max(1.0, self.width() - self._LABEL_W)
         cell_w = plot_w / max(self._time_bins, 1)
@@ -5810,11 +5872,16 @@ class _CorridorTimelineCanvas(QWidget):
             f"{n} migration{'s' if n != 1 else ''}",
         ]
         if bv:
-            lines.append(f"{bv} lock bounce{'s' if bv != 1 else ''}")
+            lines.append(
+                f"{bv} handoff suspect{'s' if bv != 1 else ''}")
         tasks = c.get("tasks") or []
         if n and tasks:
             lines.append(f"top task: {tasks[0].get('label', '')}")
-        lines.append("click to select bin · double-click to apply as Migration Filter")
+        if n:
+            lines.append(
+                "click to select bin · double-click to show events")
+        else:
+            lines.append("empty bin — no migrations in this interval")
         return "\n".join(lines)
 
     def _hide_tip(self) -> None:
@@ -5857,6 +5924,7 @@ class _CorridorTimelineCanvas(QWidget):
         return super().leaveEvent(event)
 
     def mousePressEvent(self, event):
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
         hit = self._hit(event.position() if hasattr(event, "position") else event.pos())
         if hit:
             self.corridor_clicked.emit(hit[0], hit[2])
@@ -5867,6 +5935,55 @@ class _CorridorTimelineCanvas(QWidget):
         if hit and hit[0]["bins"][hit[2]] > 0:
             self.corridor_dbl.emit(hit[0], hit[2])
         return super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if self._handle_nav_key(event):
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _handle_nav_key(self, event) -> bool:
+        """Arrow/Enter/Space match web onGridKeydown."""
+        corridors = self._corridors
+        if not corridors:
+            return False
+        key = event.key()
+        nav = (
+            Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down,
+            Qt.Key.Key_Enter, Qt.Key.Key_Return, Qt.Key.Key_Space,
+        )
+        if key not in nav:
+            return False
+        sel = self._selected
+        ri = 0
+        if sel:
+            for i, c in enumerate(corridors):
+                if (c.get("from_core") == sel.get("from_core")
+                        and c.get("to_core") == sel.get("to_core")):
+                    ri = i
+                    break
+        bins = max(self._time_bins, 1)
+        bi = self._highlight_bin
+        if not (isinstance(bi, int) and bi >= 0):
+            bi = corridors[ri].get("peak_bin") or 0
+        bi = max(0, min(bins - 1, int(bi)))
+        if key == Qt.Key.Key_Left:
+            bi = max(0, bi - 1)
+            self.corridor_clicked.emit(corridors[ri], bi)
+        elif key == Qt.Key.Key_Right:
+            bi = min(bins - 1, bi + 1)
+            self.corridor_clicked.emit(corridors[ri], bi)
+        elif key == Qt.Key.Key_Up:
+            ri = max(0, ri - 1)
+            self.corridor_clicked.emit(corridors[ri], bi)
+        elif key == Qt.Key.Key_Down:
+            ri = min(len(corridors) - 1, ri + 1)
+            self.corridor_clicked.emit(corridors[ri], bi)
+        elif key in (Qt.Key.Key_Enter, Qt.Key.Key_Return):
+            self.corridor_clicked.emit(corridors[ri], bi)
+        else:
+            self.corridor_toggled.emit(corridors[ri])
+        return True
 
     def wheelEvent(self, event) -> None:  # noqa: N802
         bar = self._host.verticalScrollBar()
@@ -5879,11 +5996,13 @@ class _CorridorTimelineGrid(QScrollArea):
 
     corridor_clicked = Signal(object, int)
     corridor_dbl = Signal(object, int)
+    corridor_toggled = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWidgetResizable(False)
         self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.horizontalScrollBar().hide()
@@ -5897,9 +6016,16 @@ class _CorridorTimelineGrid(QScrollArea):
         self._canvas = _CorridorTimelineCanvas(self, self.viewport())
         self._canvas.corridor_clicked.connect(self.corridor_clicked.emit)
         self._canvas.corridor_dbl.connect(self.corridor_dbl.emit)
+        self._canvas.corridor_toggled.connect(self.corridor_toggled.emit)
         self.verticalScrollBar().valueChanged.connect(
             lambda _v: self._canvas.update())
         self.viewport().setMouseTracking(True)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if self._canvas._handle_nav_key(event):
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def sizeHint(self) -> QSize:  # noqa: N802
         return QSize(480, 240)
@@ -5964,23 +6090,38 @@ _CI_FIELD_H = 22
 _CI_SIDEBAR_H = 248
 
 
+def _hex_mix(fg: str, bg: str, t: float) -> str:
+    """Blend hex *fg* into *bg* by *t* (0=bg, 1=fg)."""
+    def _rgb(h: str) -> Tuple[int, int, int]:
+        h = h.lstrip("#")
+        if len(h) != 6:
+            return 0, 0, 0
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    ar, ag, ab = _rgb(fg)
+    br, bgc, bb = _rgb(bg)
+    r = int(br + (ar - br) * t)
+    g = int(bgc + (ag - bgc) * t)
+    b = int(bb + (ab - bb) * t)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
 def _apply_scope_banner(label: "QLabel", scoped: bool, badge: str, detail: str,
-                        is_dark: bool) -> None:
-    """High-contrast Full-view vs scoped banner (distribution plots + heatmap)."""
+                        widget: "QWidget" = None) -> None:
+    """Full Trace follows the app theme; Viewport and Cursor C1–Cn use the scoped banner."""
+    c = _ci_chrome_colors(widget)
     if scoped:
-        if is_dark:
+        if _ci_is_dark(widget):
             bg, border, badge_bg, badge_fg, detail_fg = (
                 "#4E342E", "#FF9800", "#FF9800", "#1A1200", "#FFE0B2")
         else:
             bg, border, badge_bg, badge_fg, detail_fg = (
                 "#FFF3E0", "#F57C00", "#FF9800", "#1A1200", "#5D4037")
     else:
-        if is_dark:
-            bg, border, badge_bg, badge_fg, detail_fg = (
-                "#263238", "#78909C", "#546E7A", "#ECEFF1", "#B0BEC5")
-        else:
-            bg, border, badge_bg, badge_fg, detail_fg = (
-                "#ECEFF1", "#90A4AE", "#CFD8DC", "#37474F", "#546E7A")
+        bg = _hex_mix(c["dim"], c["panel"], 0.10)
+        border = c["dim"]
+        badge_bg = c["border"]
+        badge_fg = c["text"]
+        detail_fg = c["dim"]
     label.setText(
         f'<span style="background:{badge_bg}; color:{badge_fg}; font-weight:700; '
         f'padding:2px 8px; border-radius:3px; letter-spacing:0.5px;">'
@@ -6004,7 +6145,7 @@ def _inspector_viewport_is_full(lo, hi, t_min, t_max, fit_mode: bool = False) ->
 
 def _inspector_viewport_banner(trace, lo, hi, fit_mode: bool = False
                                ) -> Tuple[bool, str, str]:
-    """Return (is_viewport, badge, detail) for the heatmap scope banner."""
+    """Return (is_viewport, badge, detail) for the visible timeline window."""
     t_min = int(trace.time_min)
     t_max = int(trace.time_max)
     unit = trace.time_scale
@@ -6029,6 +6170,151 @@ def _dim_css_color(widget: QWidget) -> str:
     g = int(bg.green() * 0.55 + fg.green() * 0.45)
     b = int(bg.blue() * 0.55 + fg.blue() * 0.45)
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _ci_is_dark(widget: QWidget = None) -> bool:
+    """Use the application palette so inspector chrome follows Settings theme."""
+    app = QApplication.instance()
+    pal = app.palette() if app is not None else (
+        widget.palette() if widget is not None else None)
+    if pal is None:
+        return True
+    return pal.color(QPalette.ColorRole.Window).lightness() < 128
+
+
+def _ci_chrome_colors(widget: QWidget = None) -> dict:
+    """Inspector chrome: main-window combo colors + theme-specific hover."""
+    if _ci_is_dark(widget):
+        return {
+            "btn_bg": "#2D2D2D",
+            "text": "#D4D4D4",
+            "border": "#555555",
+            "hover": "rgba(91, 155, 213, 0.22)",
+            "combo_bg": "#2D2D2D",
+            "combo_view": "#252526",
+            "combo_sel": "#0E4D80",
+            "combo_sel_fg": "#FFFFFF",
+            "accent": "#2a6fb2",
+            "accent_hover": "#1a5a9a",
+            "dim": "#858585",
+            "panel": "#252526",
+        }
+    return {
+        "btn_bg": "#F0F0F0",
+        "text": "#1E1E1E",
+        "border": "#AAAAAA",
+        "hover": "#E0E8F0",
+        "combo_bg": "#FFFFFF",
+        "combo_view": "#FFFFFF",
+        "combo_sel": "#005A9E",
+        "combo_sel_fg": "#FFFFFF",
+        "accent": "#0066CC",
+        "accent_hover": "#1472B5",
+        "dim": "#666666",
+        "panel": "#F5F5F5",
+    }
+
+
+def _ci_button_qss(widget: QWidget, extra: str = "") -> str:
+    """Compact inspector buttons; hover matches AI tpl / more-item highlight."""
+    c = _ci_chrome_colors(widget)
+    return (
+        f"{extra}QPushButton {{"
+        f"  height: {_CI_FIELD_H}px; min-height: {_CI_FIELD_H}px;"
+        f"  max-height: {_CI_FIELD_H}px;"
+        f"  padding: 0px 10px; border-radius: 4px; font-size: 12px;"
+        f"  background: {c['btn_bg']}; color: {c['text']};"
+        f"  border: 1px solid {c['border']};"
+        "}"
+        f"{extra}QPushButton:hover:!disabled {{"
+        f"  border-color: {c['accent']}; background: {c['hover']};"
+        "}"
+        f"{extra}QPushButton:pressed {{ background: {c['accent']}; color: #FFFFFF; }}"
+        f"{extra}QPushButton:disabled {{ color: #888888; }}"
+        f"{extra}QPushButton:checked {{ background: {c['hover']}; font-weight: 600; }}"
+    )
+
+
+def _ci_toolbar_qss(widget: QWidget) -> str:
+    """Toolbar combos: bordered field + popup that is not the dialog fill."""
+    c = _ci_chrome_colors(widget)
+    return (
+        "#ciToolbar QComboBox, #ciToolbar QLineEdit, #ciToolbar QPushButton {"
+        f"  height: {_CI_FIELD_H}px; min-height: {_CI_FIELD_H}px;"
+        f"  max-height: {_CI_FIELD_H}px;"
+        "  padding: 0px 6px; border-radius: 4px; font-size: 12px;"
+        f"  background: {c['combo_bg']}; color: {c['text']};"
+        f"  border: 1px solid {c['border']};"
+        "}"
+        "#ciToolbar QComboBox { padding-right: 20px; }"
+        "#ciToolbar QComboBox::drop-down {"
+        "  subcontrol-origin: padding; subcontrol-position: center right;"
+        "  width: 16px; border: none;"
+        f"  border-left: 1px solid {c['border']};"
+        "}"
+        "#ciToolbar QComboBox QAbstractItemView {"
+        "  outline: none; padding: 2px; font-size: 12px;"
+        f"  background: {c['combo_view']}; color: {c['text']};"
+        f"  border: 1px solid {c['border']};"
+        f"  selection-background-color: {c['combo_sel']};"
+        f"  selection-color: {c['combo_sel_fg']};"
+        "}"
+        "#ciToolbar QComboBox QAbstractItemView::item {"
+        f"  min-height: {_CI_FIELD_H}px; padding: 2px 6px;"
+        "}"
+        "#ciToolbar QComboBox QAbstractItemView::item:hover {"
+        f"  background: {c['hover']};"
+        "}"
+        "#ciToolbar QPushButton:hover:!disabled {"
+        f"  border-color: {c['accent']}; background: {c['hover']};"
+        "}"
+        "#ciToolbar QPushButton:checked {"
+        "  border-color: #e8a020; color: #e8a020;"
+        "  background: rgba(232, 160, 32, 0.12); font-weight: 600;"
+        "}"
+    )
+
+
+def _ci_combo_widget_qss(widget: QWidget) -> str:
+    """Per-combo sheet so the detached popup uses Settings-style fill + hover."""
+    c = _ci_chrome_colors(widget)
+    return (
+        f"QComboBox {{ min-height: {_CI_FIELD_H}px; max-height: {_CI_FIELD_H}px;"
+        f" padding: 0px 20px 0px 6px; border-radius: 4px;"
+        f" border: 1px solid {c['border']}; background: {c['combo_bg']};"
+        f" color: {c['text']}; font-size: 12px; }}"
+        "QComboBox::drop-down {"
+        "  subcontrol-origin: padding; subcontrol-position: center right;"
+        "  width: 16px; border: none;"
+        f"  border-left: 1px solid {c['border']}; }}"
+        "QComboBox QAbstractItemView {"
+        "  outline: none; padding: 2px; font-size: 12px;"
+        f"  background: {c['combo_view']}; color: {c['text']};"
+        f"  border: 1px solid {c['border']};"
+        f"  selection-background-color: {c['combo_sel']};"
+        f"  selection-color: {c['combo_sel_fg']}; }}"
+        "QComboBox QAbstractItemView::item {"
+        f"  min-height: {_CI_FIELD_H}px; padding: 2px 6px; }}"
+        f"QComboBox QAbstractItemView::item:hover {{ background: {c['hover']}; }}"
+    )
+
+
+def _ci_style_combo_popup(combo: QComboBox) -> None:
+    """Force popup list colors from the app theme (detached views skip parent QSS)."""
+    c = _ci_chrome_colors(combo)
+    combo.setStyleSheet(_ci_combo_widget_qss(combo))
+    view = combo.view()
+    if view is None:
+        return
+    pal = QPalette(view.palette())
+    pal.setColor(QPalette.ColorRole.Base, QColor(c["combo_view"]))
+    pal.setColor(QPalette.ColorRole.Window, QColor(c["combo_view"]))
+    pal.setColor(QPalette.ColorRole.Text, QColor(c["text"]))
+    pal.setColor(QPalette.ColorRole.WindowText, QColor(c["text"]))
+    pal.setColor(QPalette.ColorRole.Highlight, QColor(c["combo_sel"]))
+    pal.setColor(QPalette.ColorRole.HighlightedText, QColor(c["combo_sel_fg"]))
+    view.setPalette(pal)
+    view.setAutoFillBackground(True)
 
 
 class _CiRef:
@@ -6064,8 +6350,8 @@ class _CorridorInspectorDialog(QDialog):
                  on_query_ai: Optional[Callable] = None):
         super().__init__(parent)
         self.setWindowTitle("Migration & Corridor Inspector")
-        self.setMinimumSize(720, 520)
-        self.resize(980, 680)
+        self.setMinimumSize(960, 560)
+        self.resize(1280, 720)
         self.setModal(False)
         self._trace = trace
         self._on_spotlight = on_spotlight
@@ -6074,7 +6360,10 @@ class _CorridorInspectorDialog(QDialog):
         self._ai_enabled = ai_enabled
         self._on_query_ai = on_query_ai
         self._bounce_only = False
-        self._top_pct = _default_corridor_top_pct(len(trace.core_names))
+        self._top_n = _default_corridor_top_n(len(trace.core_names))
+        self._top_pct = 100
+        self._sort_by = "rate"
+        self._analysis_mode = "auto"
         self._scope_lo = self._scope_hi = None
         self._scope_suffix = ""
         self._scope_fit = False
@@ -6089,12 +6378,8 @@ class _CorridorInspectorDialog(QDialog):
         self._locked_cores: list = []
         self._expanded_groups: set = set()
         self._expanded_corridors: set = set()
-        self._sidebar_dock = "bottom"
         self._initial_mode = initial_mode
         self._scope_follow = True
-        self._HINT_DEFAULT = (
-            "Click a time cell to select that bin · double-click to apply as "
-            "Migration Filter · outer ring = egress · inner ring = ingress")
 
         lay = QVBoxLayout(self)
 
@@ -6103,39 +6388,48 @@ class _CorridorInspectorDialog(QDialog):
         # Keep this row fixed so an empty-state / long subtitle cannot push it down.
         bar = QWidget()
         bar.setObjectName("ciToolbar")
+        self._ci_toolbar = bar
         bar.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        bar.setStyleSheet(
-            "#ciToolbar QComboBox, #ciToolbar QLineEdit, #ciToolbar QPushButton {"
-            f"  height: {_CI_FIELD_H}px; min-height: {_CI_FIELD_H}px;"
-            f"  max-height: {_CI_FIELD_H}px;"
-            "  padding: 0px 6px; border-radius: 4px; font-size: 12px;"
-            "}"
-            "#ciToolbar QComboBox { padding-right: 20px; }"
-            "#ciToolbar QComboBox::drop-down {"
-            "  subcontrol-origin: padding; subcontrol-position: center right;"
-            "  width: 16px; border: none;"
-            "}"
-            "#ciToolbar QComboBox QAbstractItemView {"
-            "  outline: none; padding: 2px; font-size: 12px;"
-            "}"
-            "#ciToolbar QComboBox QAbstractItemView::item {"
-            f"  min-height: {_CI_FIELD_H}px; padding: 2px 6px;"
-            "}"
-        )
+        bar.setStyleSheet(_ci_toolbar_qss(self))
         toolbar = QHBoxLayout(bar)
         toolbar.setContentsMargins(0, 0, 0, 0)
         toolbar.setSpacing(8)
         toolbar.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        top_lbl = QLabel("Top corridors")
+        scope_lbl = QLabel("Analysis Scope")
+        toolbar.addWidget(scope_lbl)
+        self._scope_combo = QComboBox()
+        self._scope_combo.addItem("Follow zoom", "auto")
+        self._scope_combo.addItem("Full Trace", "full")
+        self._scope_combo.addItem("Viewport", "viewport")
+        self._scope_combo.addItem("Cursor C1–Cn", "cursor")
+        self._scope_combo.currentIndexChanged.connect(self._on_scope_mode_changed)
+        toolbar.addWidget(self._scope_combo)
+        self._scope_hint = QLabel("Place at least two cursors.")
+        self._scope_hint.setStyleSheet(f"color:{_dim_css_color(self)}; font-size:11px;")
+        toolbar.addWidget(self._scope_hint)
+        top_lbl = QLabel("Show")
         toolbar.addWidget(top_lbl)
         self._top_combo = QComboBox()
-        for pct, label in ((10, "Top 10%"), (25, "Top 25%"), (50, "Top 50%"), (100, "All")):
-            self._top_combo.addItem(label, pct)
-        idx = self._top_combo.findData(self._top_pct)
+        for n, label in ((5, "Top 5"), (10, "Top 10"), (25, "Top 25"), (0, "All paths")):
+            self._top_combo.addItem(label, n)
+        idx = self._top_combo.findData(self._top_n)
         if idx >= 0:
             self._top_combo.setCurrentIndex(idx)
         self._top_combo.currentIndexChanged.connect(self._on_top_changed)
         toolbar.addWidget(self._top_combo)
+        sort_lbl = QLabel("Sort by")
+        toolbar.addWidget(sort_lbl)
+        self._sort_combo = QComboBox()
+        for key, label in (
+            ("rate", "Migration rate"),
+            ("pingpong", "Ping-pong"),
+            ("dwell", "Short dwell"),
+            ("handoff", "Handoff"),
+            ("share", "Task share"),
+        ):
+            self._sort_combo.addItem(label, key)
+        self._sort_combo.currentIndexChanged.connect(self._on_sort_changed)
+        toolbar.addWidget(self._sort_combo)
         self._bounce_btn = QPushButton("All Migrations")
         self._bounce_btn.setCheckable(True)
         self._bounce_btn.clicked.connect(self._on_bounce_toggled)
@@ -6152,48 +6446,124 @@ class _CorridorInspectorDialog(QDialog):
         task_lbl = QLabel("Task filter")
         toolbar.addWidget(task_lbl)
         self._task_edit = QLineEdit()
-        self._task_edit.setPlaceholderText("name or exact id")
+        self._task_edit.setPlaceholderText("Filter paths by task name or ID")
         self._task_edit.setClearButtonEnabled(True)
         self._task_edit.setFixedWidth(140)
         self._task_edit.textChanged.connect(self._on_task_filter_changed)
         toolbar.addWidget(self._task_edit)
         toolbar.addStretch(1)
-        for _w in (self._top_combo, self._dir_combo, self._task_edit, self._bounce_btn):
+        for _w in (self._scope_combo, self._top_combo, self._sort_combo,
+                   self._dir_combo, self._task_edit, self._bounce_btn):
             self._style_inspector_field(_w)
+        self._sort_combo.setMinimumWidth(148)
+        self._scope_combo.setMinimumWidth(128)
+
+        # Web order: overview → toolbar → scope banner → filter status →
+        # three-column workspace (path | heatmap | Topology/Path info) → AI.
+        ov_wrap = QWidget()
+        ov_wrap.setObjectName("ciOverview")
+        chrome = _ci_chrome_colors(self)
+        ov_wrap.setStyleSheet(
+            f"#ciOverview {{ border: 1px solid {chrome['border']};"
+            f" border-radius: 6px; padding: 8px 10px; }}"
+        )
+        ov_lay = QVBoxLayout(ov_wrap)
+        ov_lay.setContentsMargins(8, 8, 8, 8)
+        ov_lay.setSpacing(4)
+        self._ov_headline = QLabel()
+        self._ov_headline.setStyleSheet("font-size:12px; font-weight:600;")
+        self._ov_headline.setWordWrap(False)
+        ov_lay.addWidget(self._ov_headline)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(4)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(2, 1)
+        dim = (
+            f"font-size:12px; color:{_dim_css_color(self)};"
+            " background: transparent;"
+        )
+        self._ov_scope = QLabel()
+        self._ov_scope.setStyleSheet(dim)
+        self._ov_scope.setWordWrap(False)
+        lb_cell = QWidget()
+        lb_row = QHBoxLayout(lb_cell)
+        lb_row.setContentsMargins(0, 0, 0, 0)
+        lb_row.setSpacing(6)
+        self._ov_lb = QLabel()
+        self._ov_lb.setStyleSheet(dim)
+        self._ov_lb.setWordWrap(False)
+        self._lb_btn = QPushButton("Open load-balance details")
+        self._lb_btn.clicked.connect(self._open_load_balance)
+        self._lb_btn.setVisible(False)
+        self._lb_btn.setStyleSheet(_ci_button_qss(self))
+        lb_row.addWidget(self._ov_lb, 1)
+        lb_row.addWidget(self._lb_btn, 0)
+        self._ov_mig = QLabel()
+        self._ov_mig.setStyleSheet(dim)
+        self._ov_mig.setWordWrap(False)
+        self._ov_task = QLabel()
+        self._ov_task.setStyleSheet(dim)
+        self._ov_task.setWordWrap(False)
+        self._ov_path = QLabel()
+        self._ov_path.setStyleSheet(dim)
+        self._ov_path.setWordWrap(False)
+        self._ov_concern = QLabel()
+        self._ov_concern.setStyleSheet(dim)
+        self._ov_concern.setWordWrap(False)
+        for _ov in (self._ov_scope, self._ov_lb, self._ov_mig, self._ov_task,
+                    self._ov_path, self._ov_concern):
+            _ov.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse)
+            _ov.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        grid.addWidget(self._ov_scope, 0, 0)
+        grid.addWidget(lb_cell, 0, 1)
+        grid.addWidget(self._ov_mig, 0, 2)
+        grid.addWidget(self._ov_task, 1, 0)
+        grid.addWidget(self._ov_path, 1, 1)
+        grid.addWidget(self._ov_concern, 1, 2)
+        ov_lay.addLayout(grid)
+        self._overview = self._ov_headline
+        self._ci_overview = ov_wrap
+        lay.addWidget(ov_wrap)
         lay.addWidget(bar)
-        self._sub = QLabel()
-        self._sub.setObjectName("ciSub")
-        self._sub.setWordWrap(False)
-        self._sub.setSizePolicy(
-            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        self._sub.setStyleSheet(f"color:{_dim_css_color(self)}; font-size:11px;")
-        lay.addWidget(self._sub)
+
         self._scope_banner = QLabel()
         self._scope_banner.setObjectName("ciScopeBanner")
         self._scope_banner.setWordWrap(True)
         self._scope_banner.setMinimumWidth(0)
         lay.addWidget(self._scope_banner)
-        self._refresh_scope_banner()
 
-        self._triage = QLabel()
-        self._triage.setStyleSheet(
-            "background:rgba(232,160,32,0.10);border:1px solid rgba(232,160,32,0.35);"
-            "border-radius:4px;padding:6px;")
-        self._triage_btn = QPushButton("Jump To")
-        self._triage_btn.clicked.connect(self._jump_hotspot)
-        triage_row = QHBoxLayout()
-        triage_row.addWidget(self._triage, 1)
-        triage_row.addWidget(self._triage_btn)
-        self._triage_wrap = QWidget()
-        self._triage_wrap.setLayout(triage_row)
-        self._triage_wrap.setVisible(False)
-        lay.addWidget(self._triage_wrap)
+        self._filter_bar = QWidget()
+        self._filter_bar.setObjectName("ciFilterBar")
+        fb = QHBoxLayout(self._filter_bar)
+        fb.setContentsMargins(0, 4, 0, 0)
+        fb.setSpacing(8)
+        self._filter_lbl = QLabel("Inspector filters: None")
+        self._tl_filter_lbl = QLabel("Timeline filter: None")
+        fb.addWidget(self._filter_lbl)
+        fb.addWidget(self._tl_filter_lbl)
+        self._filter_insp_btn = QPushButton("Filter Inspector")
+        self._filter_insp_btn.clicked.connect(self._filter_inspector_from_selection)
+        fb.addWidget(self._filter_insp_btn)
+        self._filter_tl_status_btn = QPushButton("Filter Timeline")
+        self._filter_tl_status_btn.clicked.connect(self._on_inspect_in_timeline)
+        fb.addWidget(self._filter_tl_status_btn)
+        self._clear_insp_btn = QPushButton("Clear Inspector filters")
+        self._clear_insp_btn.clicked.connect(self._clear_inspector_filters)
+        fb.addWidget(self._clear_insp_btn)
+        self._clear_tl_btn = QPushButton("Return timeline to all tasks")
+        self._clear_tl_btn.clicked.connect(self._clear_filter)
+        self._clear_tl_btn.setEnabled(False)
+        fb.addWidget(self._clear_tl_btn)
+        fb.addStretch(1)
+        lay.addWidget(self._filter_bar)
 
-        split = QSplitter(Qt.Orientation.Horizontal)
-        self._split = split
         self._tree = QTreeWidget()
         self._tree.setObjectName("corridorInspectorTree")
-        self._tree.setHeaderLabels(["Corridor / Task", "Vol", "Bounce", "Net"])
+        self._tree.setHeaderLabels(["Core path / Task", "Migrations", "Handoff", "Net flow"])
         self._tree.setIndentation(12)
         self._tree.setUniformRowHeights(True)
         self._tree.setAllColumnsShowFocus(True)
@@ -6226,160 +6596,520 @@ class _CorridorInspectorDialog(QDialog):
         self._tree.setColumnWidth(1, 52)
         self._tree.setColumnWidth(2, 60)
         self._tree.setColumnWidth(3, 56)
-        self._tree.setMinimumWidth(280)
+        self._tree.setMinimumWidth(220)
         self._tree.itemClicked.connect(self._on_tree_click)
         self._tree.itemDoubleClicked.connect(self._on_tree_dbl)
         self._tree.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self._tree.setMinimumHeight(80)
-        split.addWidget(self._tree)
+
         self._grid = _CorridorTimelineGrid()
         self._grid.setMinimumWidth(280)
         self._grid.corridor_clicked.connect(self._on_grid_clicked)
-        self._grid.corridor_dbl.connect(self._spotlight_corridor_bin)
-        split.addWidget(self._grid)
-        split.setStretchFactor(0, 0)
-        split.setStretchFactor(1, 1)
-        split.setSizes([340, 640])
+        self._grid.corridor_dbl.connect(self._on_show_events_bin)
+        self._grid.corridor_toggled.connect(self._toggle_corridor_expand)
+        grid_pane = QWidget()
+        gp = QVBoxLayout(grid_pane)
+        gp.setContentsMargins(0, 0, 0, 0)
+        gp.setSpacing(1)
+        meta_css = (
+            f"font-size:10px; color:{_dim_css_color(self)};"
+            " padding: 0px 8px;")
+        self._heatmap_title = QLabel()
+        self._heatmap_title.setWordWrap(False)
+        self._heatmap_title.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self._heatmap_title.setStyleSheet(meta_css)
+        self._heatmap_legend = QLabel(
+            "Color: migration count · Hatching: synchronization handoff "
+            f"suspects ≥ {_CORRIDOR_HANDOFF_HATCH_PCT}%")
+        self._heatmap_legend.setWordWrap(False)
+        self._heatmap_legend.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self._heatmap_legend.setStyleSheet(meta_css)
+        self._bin_summary = QLabel(
+            "Empty bins: no migrations in that interval")
+        self._bin_summary.setWordWrap(False)
+        self._bin_summary.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self._bin_summary.setStyleSheet(
+            "font-size:10px; padding: 0px 8px 2px;")
+        gp.addWidget(self._heatmap_title)
+        gp.addWidget(self._heatmap_legend)
+        gp.addWidget(self._bin_summary)
+        gp.addWidget(self._grid, 1)
 
         self._chord = _ChordDiagramWidget(compact=True)
         self._chord.setMinimumHeight(180)
         self._chord.setMinimumWidth(200)
+        self._chord.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._chord.core_clicked.connect(self._on_chord_core)
         self._chord.pair_clicked.connect(self._on_chord_pair)
         self._chord.corridor_clicked.connect(self._on_chord_corridor)
         self._chord.corridor_dbl.connect(self._on_chord_corridor_dbl)
         self._chord.hover_info.connect(self._on_chord_hover_info)
 
+        self._actions_wrap = QWidget()
+        self._actions_wrap.setObjectName("ciActions")
+        self._actions_wrap.setStyleSheet(_ci_button_qss(self, "#ciActions "))
+        actions_col = QVBoxLayout(self._actions_wrap)
+        actions_col.setContentsMargins(8, 8, 8, 0)
+        actions_col.setSpacing(6)
+        self._actions_label = QLabel()
+        self._actions_label.setStyleSheet("font-weight:600; font-size:12px;")
+        self._show_events_btn = QPushButton("Show events")
+        self._show_events_btn.clicked.connect(self._on_show_events)
+        self._filter_tl_btn = QPushButton("Filter timeline")
+        self._filter_tl_btn.clicked.connect(self._on_inspect_in_timeline)
+        self._inspect_task_btn = QPushButton("Inspect task")
+        self._inspect_task_btn.clicked.connect(self._on_inspect_task)
+        self._ask_ai_btn = QPushButton("Ask AI")
+        self._ask_ai_btn.clicked.connect(lambda: self._query_with_ai("path"))
+        actions_col.addWidget(self._actions_label)
+        btn_row = QWidget()
+        btn_row.setObjectName("ciActionsRow")
+        btn_flow = _FlowLayout(btn_row, spacing=6)
+        for b in (self._show_events_btn, self._filter_tl_btn, self._inspect_task_btn,
+                  self._ask_ai_btn):
+            btn_flow.addWidget(b)
+        actions_col.addWidget(btn_row)
+        self._actions_wrap.setVisible(False)
+
         self._card_title = QLabel()
-        self._card_title.setStyleSheet("font-weight:600;")
+        self._card_title.setStyleSheet("font-weight:600; font-size:12px;")
         self._card_title.setWordWrap(True)
-        self._card = QLabel("Click a corridor or chord ribbon to inspect.")
+        self._card = QLabel()
         self._card.setWordWrap(True)
-        self._card.setStyleSheet(f"color:{_dim_css_color(self)};")
-        self._inspect_btn = QPushButton("Inspect in Timeline")
-        self._inspect_btn.setVisible(False)
-        self._inspect_btn.clicked.connect(self._on_inspect_in_timeline)
+        self._card.setAlignment(
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self._card.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._card.setStyleSheet("font-size:12px;")
+        self._card.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._card_assessment = QLabel()
+        self._card_assessment.setWordWrap(True)
+        self._card_quality = QLabel()
+        self._card_quality.setWordWrap(True)
+        self._card_empty = QLabel(
+            "Select a core path to inspect ping-pong, dwell, and handoff suspects.")
+        self._card_empty.setWordWrap(True)
+        self._card_empty.setStyleSheet(f"color:{_dim_css_color(self)};")
+        ev_btns = QHBoxLayout()
+        ev_btns.setContentsMargins(0, 4, 0, 0)
+        self._show_tl_btn = QPushButton("Show on timeline")
+        self._show_tl_btn.clicked.connect(self._on_show_events)
+        self._inspect_ev_btn = QPushButton("Inspect task")
+        self._inspect_ev_btn.clicked.connect(self._on_inspect_task)
+        self._ask_ai_ev_btn = QPushButton("Ask AI")
+        self._ask_ai_ev_btn.clicked.connect(lambda: self._query_with_ai("path"))
+        ev_btns.addWidget(self._show_tl_btn)
+        ev_btns.addWidget(self._inspect_ev_btn)
+        ev_btns.addWidget(self._ask_ai_ev_btn)
+        ev_btns.addStretch(1)
+        self._evidence_btns = QWidget()
+        self._evidence_btns.setLayout(ev_btns)
+        card_body = QWidget()
+        body_lay = QVBoxLayout(card_body)
+        body_lay.setContentsMargins(0, 0, 0, 0)
+        body_lay.setSpacing(4)
+        body_lay.addWidget(self._card_title)
+        body_lay.addWidget(self._card, 1)
+        body_lay.addWidget(self._card_assessment)
+        body_lay.addWidget(self._card_quality)
+        body_lay.addWidget(self._card_empty)
         card_lay = QVBoxLayout()
-        card_lay.setContentsMargins(10, 4, 4, 4)
-        card_lay.addWidget(self._card_title)
-        card_lay.addWidget(self._card, 1)
-        card_lay.addWidget(self._inspect_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        card_lay.setContentsMargins(10, 8, 10, 8)
+        card_lay.setSpacing(8)
+        card_lay.addWidget(card_body, 1)
+        card_lay.addWidget(self._evidence_btns, 0)
         self._card_panel = QWidget()
+        self._card_panel.setObjectName("ciEvidence")
         self._card_panel.setLayout(card_lay)
-        self._card_panel.setMinimumWidth(180)
+        self._card_panel.setStyleSheet(_ci_button_qss(self, "#ciEvidence "))
+        self._card_panel.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-        self._side_body = QSplitter(Qt.Orientation.Horizontal)
-        self._side_body.addWidget(self._chord)
-        self._side_body.addWidget(self._card_panel)
-        # Web .ci-sidebar-body: 1fr : 0.7fr, height 220px.
-        self._side_body.setStretchFactor(0, 10)
-        self._side_body.setStretchFactor(1, 7)
-        self._side_body.setSizes([320, 224])
-        self._side_body.setChildrenCollapsible(False)
+        self._info_page = QWidget()
+        info_lay = QVBoxLayout(self._info_page)
+        info_lay.setContentsMargins(0, 0, 0, 0)
+        info_lay.setSpacing(4)
+        info_lay.addWidget(self._actions_wrap)
+        info_lay.addWidget(self._card_panel, 1)
 
-        self._side_toggle = QPushButton(
-            "Hide topology" if initial_mode == "chord" else "Show topology")
-        self._side_toggle.setFlat(True)
-        self._side_toggle.clicked.connect(self._toggle_side)
-        self._dock_combo = QComboBox()
-        self._dock_combo.addItem("Bottom", "bottom")
-        self._dock_combo.addItem("Right", "right")
-        self._dock_combo.currentIndexChanged.connect(self._on_dock_changed)
-        self._style_inspector_field(self._dock_combo)
-        self._dock_combo.setStyleSheet(
-            f"QComboBox {{ min-height: {_CI_FIELD_H}px; max-height: {_CI_FIELD_H}px;"
-            "  padding: 2px 20px 2px 6px; border-radius: 4px; font-size: 12px; }"
-            "QComboBox::drop-down {"
-            "  subcontrol-origin: padding; subcontrol-position: center right;"
-            "  width: 16px; border: none; }"
-            "QComboBox QAbstractItemView { outline: none; padding: 2px; font-size: 12px; }"
-            "QComboBox QAbstractItemView::item {"
-            f"  min-height: {_CI_FIELD_H}px; padding: 2px 6px; }}")
-        chrome = QHBoxLayout()
-        chrome.setContentsMargins(4, 2, 4, 2)
-        chrome.addWidget(self._side_toggle)
-        chrome.addStretch(1)
-        self._dock_lbl = QLabel("Dock")
-        chrome.addWidget(self._dock_lbl)
-        chrome.addWidget(self._dock_combo)
+        self._right_wrap = QWidget()
+        self._right_wrap.setObjectName("ciRightPane")
+        self._right_wrap.setStyleSheet(_ci_button_qss(self, "#ciRightPane "))
+        rv = QVBoxLayout(self._right_wrap)
+        rv.setContentsMargins(0, 0, 0, 0)
+        rv.setSpacing(2)
+        right_tabs = QHBoxLayout()
+        right_tabs.setContentsMargins(4, 4, 4, 0)
+        right_tabs.setSpacing(4)
+        self._topology_btn = QPushButton("Topology")
+        self._info_btn = QPushButton("Path info")
+        self._topology_btn.setCheckable(True)
+        self._info_btn.setCheckable(True)
+        self._right_pane = "info" if initial_mode == "info" else "topology"
+        self._topology_btn.setChecked(self._right_pane == "topology")
+        self._info_btn.setChecked(self._right_pane == "info")
+        self._topology_btn.clicked.connect(lambda: self._set_right_pane("topology"))
+        self._info_btn.clicked.connect(lambda: self._set_right_pane("info"))
+        right_tabs.addWidget(self._topology_btn)
+        right_tabs.addWidget(self._info_btn)
+        right_tabs.addStretch(1)
+        rv.addLayout(right_tabs)
+        self._right_stack = QStackedWidget()
+        self._right_stack.addWidget(self._chord)
+        self._right_stack.addWidget(self._info_page)
+        rv.addWidget(self._right_stack, 1)
+        self._right_wrap.setMinimumWidth(240)
 
-        side_lay = QVBoxLayout()
-        side_lay.setContentsMargins(6, 4, 6, 6)
-        side_lay.setSpacing(4)
-        side_lay.addLayout(chrome)
-        side_lay.addWidget(self._side_body, 1)
-        self._side_wrap = QWidget()
-        self._side_wrap.setObjectName("corridorInspectorSidebar")
-        self._side_wrap.setStyleSheet(
-            "#corridorInspectorSidebar {"
-            "  border: 1px solid rgba(127,127,127,0.35);"
-            "  border-radius: 4px;"
-            "}"
-        )
-        self._side_wrap.setLayout(side_lay)
+        split = QSplitter(Qt.Orientation.Horizontal)
+        self._split = split
+        split.addWidget(self._tree)
+        split.addWidget(grid_pane)
+        split.addWidget(self._right_wrap)
+        split.setStretchFactor(0, 0)
+        split.setStretchFactor(1, 1)
+        split.setStretchFactor(2, 0)
+        split.setSizes([280, 560, 340])
+        self._activity_page = split
 
         self._empty = QLabel("No migrations in scope.")
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty.setStyleSheet(f"color:{_dim_css_color(self)};")
-        self._empty.hide()
-        self._work = QWidget()
-        work_stack = QGridLayout(self._work)
-        work_stack.setContentsMargins(0, 0, 0, 0)
-        work_stack.setSpacing(0)
-        work_stack.addWidget(split, 0, 0)
-        work_stack.addWidget(self._empty, 0, 0)
-        self._empty.raise_()
+        self._workspace = QStackedWidget()
+        self._workspace.addWidget(self._empty)
+        self._workspace.addWidget(self._activity_page)
+        lay.addWidget(self._workspace, 1)
 
-        self._outer = QSplitter(Qt.Orientation.Vertical)
-        self._outer.addWidget(self._work)
-        self._outer.addWidget(self._side_wrap)
-        self._outer.setStretchFactor(0, 1)
-        self._outer.setStretchFactor(1, 0)
-        self._outer.setSizes([440, _CI_SIDEBAR_H])
-        lay.addWidget(self._outer, 1)
-
-        self._hint = QLabel(self._HINT_DEFAULT)
-        self._hint.setStyleSheet(f"color:{_dim_css_color(self)};")
-        lay.addWidget(self._hint)
-
-        self._show_topology(initial_mode == "chord", apply_layout=False)
-        self._apply_sidebar_layout()
-
-        self._filter_bar = QWidget()
-        fb = QHBoxLayout(self._filter_bar)
-        fb.setContentsMargins(0, 0, 0, 0)
-        self._filter_lbl = QLabel()
-        fb.addWidget(self._filter_lbl, 1)
-        clear_btn = QPushButton("Show all tasks")
-        clear_btn.clicked.connect(self._clear_filter)
-        fb.addWidget(clear_btn)
-        self._filter_bar.setVisible(False)
-        lay.addWidget(self._filter_bar)
-
-        btns = QDialogButtonBox(QDialogButtonBox.Close)
-        self._ai_btn = btns.addButton(
-            "Query with AI…", QDialogButtonBox.ButtonRole.ActionRole)
-        self._ai_btn.clicked.connect(self._query_with_ai)
+        foot_wrap = QWidget()
+        foot_wrap.setObjectName("ciFooter")
+        self._ci_footer = foot_wrap
+        foot_wrap.setStyleSheet(_ci_button_qss(self, "#ciFooter "))
+        foot = QHBoxLayout(foot_wrap)
+        foot.setContentsMargins(0, 4, 0, 0)
+        self._ai_btn = QPushButton("Investigate with AI")
+        chrome = _ci_chrome_colors(self)
+        self._ai_btn.setStyleSheet(
+            "QPushButton {"
+            f"  background: {chrome['accent']}; color: #FFFFFF; font-weight: 600;"
+            f"  border: 1px solid {chrome['accent']}; border-radius: 6px;"
+            "  padding: 4px 14px; font-size: 12px;"
+            "}"
+            f"QPushButton:hover {{ background: {chrome['accent_hover']}; }}"
+        )
+        self._ai_btn.clicked.connect(lambda: self._query_with_ai("path"))
+        foot.addWidget(self._ai_btn)
+        for action, label in (
+            ("path", "Investigate this path"),
+            ("burst", "Explain this migration burst"),
+            ("pingpong", "Verify possible ping-pong"),
+            ("compare", "Compare with another trace"),
+        ):
+            btn = QPushButton(label)
+            btn.clicked.connect(lambda _=False, a=action: self._query_with_ai(a))
+            foot.addWidget(btn)
+        foot.addStretch(1)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.reject)
+        foot.addWidget(close_btn)
+        lay.addWidget(foot_wrap)
         self.set_ai_enabled(ai_enabled)
-        btns.rejected.connect(self.reject)
-        lay.addWidget(btns)
+        self._refresh_scope_banner()
+        self._set_card()
+        self._sync_filter_buttons()
+        self._set_right_pane(self._right_pane)
 
         self.refresh_scope()
+        self._apply_ci_chrome()
         QTimer.singleShot(0, self._fit_tree_pane)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        et = event.type()
+        if et in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange,
+                  QEvent.Type.StyleChange):
+            self._apply_ci_chrome()
+
+    def _apply_ci_chrome(self) -> None:
+        """Restyle inspector combos/footer when the app theme changes."""
+        c = _ci_chrome_colors(self)
+        bar = getattr(self, "_ci_toolbar", None)
+        if bar is not None:
+            bar.setStyleSheet(_ci_toolbar_qss(self))
+        ov = getattr(self, "_ci_overview", None)
+        if ov is not None:
+            ov.setStyleSheet(
+                f"#ciOverview {{ border: 1px solid {c['border']};"
+                f" border-radius: 6px; padding: 8px 10px; }}"
+            )
+        dim = f"font-size:12px; color:{c['dim']}; background: transparent;"
+        for name in ("_ov_scope", "_ov_lb", "_ov_mig", "_ov_task",
+                     "_ov_path", "_ov_concern"):
+            w = getattr(self, name, None)
+            if w is not None:
+                w.setStyleSheet(dim)
+        if getattr(self, "_lb_btn", None) is not None:
+            self._lb_btn.setStyleSheet(_ci_button_qss(self))
+        named = (
+            ("_actions_wrap", "#ciActions "),
+            ("_card_panel", "#ciEvidence "),
+            ("_right_wrap", "#ciRightPane "),
+            ("_ci_footer", "#ciFooter "),
+            ("_filter_bar", "#ciFilterBar "),
+        )
+        for name, extra in named:
+            w = getattr(self, name, None)
+            if w is not None:
+                w.setStyleSheet(_ci_button_qss(self, extra))
+        if getattr(self, "_ai_btn", None) is not None:
+            self._ai_btn.setStyleSheet(
+                "QPushButton {"
+                f"  background: {c['accent']}; color: #FFFFFF; font-weight: 600;"
+                f"  border: 1px solid {c['accent']}; border-radius: 6px;"
+                "  padding: 4px 14px; font-size: 12px;"
+                "}"
+                f"QPushButton:hover {{ background: {c['accent_hover']}; }}"
+            )
+        for combo in (getattr(self, "_scope_combo", None),
+                      getattr(self, "_top_combo", None),
+                      getattr(self, "_sort_combo", None),
+                      getattr(self, "_dir_combo", None)):
+            if combo is not None:
+                _ci_style_combo_popup(combo)
+        chord = getattr(self, "_chord", None)
+        if chord is not None and hasattr(chord, "_sync_view_toggle"):
+            chord._sync_view_toggle()
+        self._refresh_scope_banner()
 
     def set_ai_enabled(self, enabled: bool) -> None:
         self._ai_enabled = bool(enabled)
         if getattr(self, "_ai_btn", None) is None:
             return
         self._ai_btn.setToolTip(
-            "Open the AI Assistant and walk through migration / corridor findings"
+            "Open the AI Assistant with structured migration context"
             if self._ai_enabled else
             "Enable AI Assistant in Settings → AI")
 
-    def _query_with_ai(self) -> None:
+    def _query_with_ai(self, action: str = "path") -> None:
+        extra = ""
+        try:
+            scope = self._current_inspector_scope()
+            extra = _build_corridor_ai_context(
+                scope=scope,
+                corridor=self._selected,
+                task=self._selected_task or (self._selected or {}).get("primary_task"),
+                overview=_build_corridor_overview(self._trace, self._model or {}, scope),
+                inspector_filters=self._inspector_filter_label(),
+                time_scale=self._trace.time_scale,
+            )
+        except Exception:
+            extra = ""
+        hints = {
+            "path": (
+                "Investigate this path. Do not filter the timeline or "
+                "change cursors unless asked."),
+            "burst": (
+                "Explain this migration burst. Use the selected time bin "
+                "if one is selected."),
+            "pingpong": (
+                "Verify possible ping-pong. Cite bidirectional movement "
+                "and dwell; do not declare a root cause."),
+            "compare": (
+                "Compare with another trace if two traces are open; "
+                "otherwise say another trace is required."),
+        }
+        extra = (extra + "\n\n" + hints.get(action, hints["path"])).strip()
+        if action == "compare":
+            wnd = self.parent()
+            listed = []
+            if wnd is not None and hasattr(wnd, "_ai_list_loaded_tabs"):
+                try:
+                    listed = wnd._ai_list_loaded_tabs() or []
+                except Exception:
+                    listed = []
+            if (len(listed) >= 2 and wnd is not None
+                    and hasattr(wnd, "_query_compare_with_ai")):
+                wnd._query_compare_with_ai(
+                    self._ai_enabled, listed[0]["index"], listed[1]["index"])
+                return
         if self._on_query_ai is not None:
-            self._on_query_ai(self._ai_enabled)
+            try:
+                self._on_query_ai(self._ai_enabled, extra)
+            except TypeError:
+                self._on_query_ai(self._ai_enabled)
+
+    def _filter_inspector_from_selection(self) -> None:
+        task = self._selected_task or (self._selected or {}).get("primary_task")
+        label = (task or {}).get("label") if isinstance(task, dict) else None
+        if label and getattr(self, "_task_edit", None) is not None:
+            self._task_edit.setText(str(label))
+
+    def _inspector_filter_label(self) -> str:
+        parts = []
+        if (self._task_query or "").strip():
+            parts.append(f"Task {self._task_query.strip()}")
+        if self._direction_mode == "egress":
+            parts.append("Egress only")
+        elif self._direction_mode == "ingress":
+            parts.append("Ingress only")
+        if self._bounce_only:
+            parts.append("Handoff suspects only")
+        return " · ".join(parts) if parts else "None"
+
+    def _refresh_overview(self, scope: Optional[dict] = None) -> None:
+        if getattr(self, "_ov_headline", None) is None:
+            return
+        if scope is None:
+            scope = self._current_inspector_scope()
+        ov = _build_corridor_overview(self._trace, self._model or {}, scope or {})
+        self._ov_headline.setText(ov.get("headline") or "")
+        self._ov_scope.setText(f"<b>Scope</b> {ov.get('scope_label') or 'Full Trace'}")
+        self._ov_lb.setText(f"<b>Load balance</b> {ov.get('load_balance') or '—'}")
+        rate = ov.get("migration_rate_label") or "—"
+        mig = int(ov.get("migrations") or 0)
+        self._ov_mig.setText(f"<b>Migrations</b> {mig:,} ({rate})")
+        task = ov.get("most_affected_task")
+        share = float(ov.get("most_affected_share") or 0)
+        task_s = (
+            f"{task.get('label')} ({share:.0f}%)" if task else "—"
+        )
+        self._ov_task.setText(f"<b>Most affected task</b> {task_s}")
+        self._ov_path.setText(f"<b>Hottest path</b> {ov.get('hottest_path') or '—'}")
+        self._ov_concern.setText(f"<b>Main concern</b> {ov.get('main_concern') or 'None'}")
+        self._ov_concern.setToolTip(ov.get("main_concern_detail") or "")
+        if getattr(self, "_lb_btn", None) is not None:
+            self._lb_btn.setVisible(not ov.get("evaluated", True))
+        if getattr(self, "_filter_lbl", None) is not None:
+            self._filter_lbl.setText(
+                f"Inspector filters: {self._inspector_filter_label()}")
+        if getattr(self, "_heatmap_title", None) is not None:
+            self._heatmap_title.setText(
+                "Migration activity over time — "
+                f"{ov.get('scope_label') or 'Full Trace'}, "
+                f"trace unit: {scope.get('unit') or self._trace.time_scale}")
+        self._sync_filter_buttons()
+
+    def _set_main_tab(self, tab: str) -> None:
+        if tab == "info":
+            self._set_right_pane("info")
+        else:
+            self._set_right_pane("topology")
+
+    def _set_right_pane(self, pane: str) -> None:
+        self._right_pane = "info" if pane == "info" else "topology"
+        if getattr(self, "_topology_btn", None) is not None:
+            self._topology_btn.setChecked(self._right_pane == "topology")
+            self._info_btn.setChecked(self._right_pane == "info")
+        stack = getattr(self, "_right_stack", None)
+        if stack is None:
+            return
+        if self._right_pane == "info":
+            stack.setCurrentWidget(self._info_page)
+        else:
+            stack.setCurrentWidget(self._chord)
+
+    def _sync_workspace_page(self) -> None:
+        ws = getattr(self, "_workspace", None)
+        if ws is None:
+            return
+        has = any(c.get("count", 0) > 0 for c in (self._display_corridors or []))
+        if not has:
+            ws.setCurrentWidget(self._empty)
+            return
+        ws.setCurrentWidget(self._activity_page)
+        self._set_right_pane(getattr(self, "_right_pane", "topology"))
+
+    def _sync_filter_buttons(self) -> None:
+        selected = bool(self._selected)
+        if getattr(self, "_filter_insp_btn", None) is not None:
+            self._filter_insp_btn.setEnabled(selected)
+            self._filter_tl_status_btn.setEnabled(selected)
+        if getattr(self, "_clear_insp_btn", None) is not None:
+            self._clear_insp_btn.setEnabled(self._inspector_filter_label() != "None")
+        if getattr(self, "_actions_wrap", None) is not None:
+            self._actions_wrap.setVisible(selected)
+            if selected:
+                c = self._selected
+                self._actions_label.setText(
+                    f"{c.get('from_core')} → {c.get('to_core')} selected")
+            task = self._selected_task or (self._selected or {}).get("primary_task")
+            if getattr(self, "_inspect_task_btn", None) is not None:
+                self._inspect_task_btn.setEnabled(bool(task))
+
+    def _clear_inspector_filters(self) -> None:
+        self._task_query = ""
+        self._direction_mode = "all"
+        self._bounce_only = False
+        if getattr(self, "_task_edit", None) is not None:
+            self._task_edit.blockSignals(True)
+            self._task_edit.setText("")
+            self._task_edit.blockSignals(False)
+        if getattr(self, "_dir_combo", None) is not None:
+            self._dir_combo.blockSignals(True)
+            self._dir_combo.setCurrentIndex(0)
+            self._dir_combo.blockSignals(False)
+        if getattr(self, "_bounce_btn", None) is not None:
+            self._bounce_btn.setChecked(False)
+            self._bounce_btn.setText("All Migrations")
+        self._refresh_filtered_view()
+
+    def _on_show_events(self) -> None:
+        c = self._selected
+        if not c:
+            return
+        bi = self._selected_bin()
+        if not (isinstance(bi, int) and bi >= 0):
+            bi = c.get("peak_bin", -1)
+        self._jump_corridor_bin(c, bi if isinstance(bi, int) and bi >= 0 else None)
+
+    def _on_show_events_bin(self, c: dict, bi: int) -> None:
+        self._select_corridor(c, bi)
+        self._set_right_pane("info")
+        self._on_show_events()
+
+    def _selected_bin(self) -> int:
+        canvas = getattr(self._grid, "_canvas", None)
+        bi = getattr(canvas, "_highlight_bin", -1) if canvas is not None else -1
+        return bi if isinstance(bi, int) else -1
+
+    def _jump_corridor_bin(self, c: dict, bin_index: Optional[int] = None) -> None:
+        t_min = self._model.get("t_min", 0)
+        t_max = self._model.get("t_max", 1)
+        bin_w = self._model.get("bin_w", 1)
+        time_bins = self._model.get("time_bins", 32)
+        if isinstance(bin_index, int) and bin_index >= 0:
+            bin_lo, bin_hi = _heatmap_bin_range(t_min, bin_w, time_bins, t_max, bin_index)
+        else:
+            bin_lo, bin_hi = t_min, t_max
+        if self._on_jump is not None:
+            self._on_jump({
+                "binLo": bin_lo, "binHi": bin_hi,
+                "lockTaskKey": (self._selected_task or c.get("primary_task") or {}).get("mk"),
+                "pairLabel": c.get("label"),
+            })
+
+    def _on_inspect_task(self) -> None:
+        task = self._selected_task or (self._selected or {}).get("primary_task")
+        mk = (task or {}).get("mk")
+        wnd = self.parent()
+        if mk and wnd is not None and hasattr(wnd, "_ai_highlight_task"):
+            wnd._ai_highlight_task(mk)
+
+    def _open_load_balance(self) -> None:
+        wnd = self.parent()
+        if wnd is not None and hasattr(wnd, "_open_stats_section"):
+            wnd._open_stats_section("cores")
+        elif wnd is not None and hasattr(wnd, "_stats_panel"):
+            try:
+                wnd._stats_panel.apply_demo_sections(
+                    {"id": "cores", "expand": True, "scroll": "section"})
+            except Exception:
+                pass
+
 
     @staticmethod
     def _style_inspector_field(widget) -> None:
@@ -6396,72 +7126,31 @@ class _CorridorInspectorDialog(QDialog):
             if view is not None:
                 view.setMinimumWidth(hint_w)
                 view.setUniformItemSizes(True)
-
-    def _toggle_side(self) -> None:
-        self._show_topology(not self._side_body.isVisible())
+            # Widget-level sheet so the popup list is not the dialog fill
+            # (parent #ciToolbar rules can miss the detached item view).
+            widget.setStyleSheet(_ci_combo_widget_qss(widget))
+            _ci_style_combo_popup(widget)
 
     def _show_topology(self, vis: bool, apply_layout: bool = True) -> None:
-        self._side_wrap.setVisible(True)
-        self._side_body.setVisible(bool(vis))
-        self._dock_lbl.setVisible(bool(vis))
-        self._dock_combo.setVisible(bool(vis))
-        self._side_toggle.setText("Hide topology" if vis else "Show topology")
-        if apply_layout:
-            self._apply_sidebar_layout()
-
-    def _on_dock_changed(self, _idx: int = 0) -> None:
-        self._sidebar_dock = str(self._dock_combo.currentData() or "bottom")
-        self._apply_sidebar_layout()
-
-    def _apply_sidebar_layout(self) -> None:
-        expanded = self._side_body.isVisible()
-        dock = self._sidebar_dock
-        self._side_wrap.setMaximumWidth(16777215)
-        self._side_wrap.setMaximumHeight(16777215)
-        if dock == "right":
-            self._outer.setOrientation(Qt.Orientation.Horizontal)
-            self._side_body.setOrientation(Qt.Orientation.Vertical)
-            self._card_panel.setStyleSheet(
-                "border-top: 1px solid rgba(127,127,127,0.35);")
-            if expanded:
-                self._side_wrap.setMinimumWidth(240)
-                self._side_wrap.setMinimumHeight(0)
-                self._outer.setSizes([680, 340])
-                self._side_body.setSizes([220, 160])
-            else:
-                self._side_wrap.setMinimumWidth(120)
-                self._side_wrap.setMaximumWidth(168)
-                self._side_wrap.setMinimumHeight(0)
-                self._outer.setSizes([800, 140])
-        else:
-            self._outer.setOrientation(Qt.Orientation.Vertical)
-            self._side_body.setOrientation(Qt.Orientation.Horizontal)
-            self._card_panel.setStyleSheet(
-                "border-left: 1px solid rgba(127,127,127,0.35);")
-            self._side_wrap.setMinimumWidth(0)
-            if expanded:
-                # Lock height so the heatmap splitter cannot overlap topology.
-                self._side_wrap.setMinimumHeight(_CI_SIDEBAR_H)
-                self._side_wrap.setMaximumHeight(_CI_SIDEBAR_H)
-                main_h = max(120, self._outer.height() - _CI_SIDEBAR_H)
-                self._outer.setSizes([main_h, _CI_SIDEBAR_H])
-                self._side_body.setSizes([320, 224])
-            else:
-                self._side_wrap.setMinimumHeight(0)
-                self._outer.setSizes([640, 36])
-        self._side_body.setStretchFactor(0, 10)
-        self._side_body.setStretchFactor(1, 7)
-        self._outer.setStretchFactor(0, 1)
-        self._outer.setStretchFactor(1, 0)
+        if vis:
+            self._set_right_pane("topology")
 
     def _on_top_changed(self, _idx: int = 0) -> None:
-        self._top_pct = int(self._top_combo.currentData())
+        self._top_n = int(self._top_combo.currentData())
         self._rebuild()
+
+    def _on_sort_changed(self, _idx: int = 0) -> None:
+        self._sort_by = str(self._sort_combo.currentData() or "rate")
+        self._refresh_filtered_view()
+
+    def _on_scope_mode_changed(self, _idx: int = 0) -> None:
+        self._analysis_mode = str(self._scope_combo.currentData() or "auto")
+        self.refresh_scope()
 
     def _on_bounce_toggled(self, checked: bool) -> None:
         self._bounce_only = checked
         self._bounce_btn.setText(
-            "Lock Bounces Only" if checked else "All Migrations")
+            "Handoff suspects only" if checked else "All Migrations")
         self._rebuild()
 
     def _on_dir_changed(self, _idx: int = 0) -> None:
@@ -6475,13 +7164,7 @@ class _CorridorInspectorDialog(QDialog):
     def _rebuild(self) -> None:
         self._model = _build_corridor_inspector_model(
             self._trace, self._scope_lo, self._scope_hi,
-            bounce_only=self._bounce_only, top_pct=self._top_pct)
-        hotspot = self._model.get("hotspot")
-        if hotspot:
-            self._triage.setText(hotspot["summary"])
-            self._triage_wrap.setVisible(True)
-        else:
-            self._triage_wrap.setVisible(False)
+            bounce_only=self._bounce_only, top_pct=100)
         self._refresh_filtered_view()
 
     def _refresh_filtered_view(self) -> None:
@@ -6491,8 +7174,11 @@ class _CorridorInspectorDialog(QDialog):
         src = (self._model.get("all_corridors") or self._model.get("corridors")
                or []) if q else (self._model.get("corridors") or [])
         vis = _filter_corridors_by_task_query(src, q)
+        if not q:
+            vis = _filter_corridors_by_top_n(vis, self._top_n)
         vis = _filter_corridors_by_direction(
             vis, self._direction_mode, self._selected)
+        vis = _sort_corridors(vis, getattr(self, "_sort_by", "rate"))
         self._display_corridors = vis
         group_by = bool(self._model.get("group_by_source"))
         self._display_groups = (
@@ -6502,13 +7188,6 @@ class _CorridorInspectorDialog(QDialog):
             self._empty.setText(
                 "No corridors match this task filter." if q
                 else "No migrations in scope.")
-        self._empty.setVisible(not has)
-        n = len(self._model.get("cores") or [])
-        n_corr = len(vis)
-        qnote = f" · filter “{self._task_query.strip()}”" if self._task_query.strip() else ""
-        self._sub.setText(
-            f"{n} cores · {n_corr} corridors · Top {self._top_pct}%"
-            f"{qnote}")
         cores = self._model.get("cores") or []
         pair_count = {(c["from_core"], c["to_core"]): c["count"] for c in vis}
         filtered_grid = []
@@ -6552,6 +7231,11 @@ class _CorridorInspectorDialog(QDialog):
         )
         if sel:
             self._restore_tree_selection()
+            self._fill_evidence(sel, self._selected_bin(), task=self._selected_task)
+        else:
+            self._set_card()
+        self._refresh_overview()
+        self._sync_workspace_page()
 
     def _fit_tree_pane(self) -> None:
         """Keep Corridor/Task readable without stealing the heatmap."""
@@ -6562,22 +7246,23 @@ class _CorridorInspectorDialog(QDialog):
         else:
             name_w = 168
         tree.setColumnWidth(0, name_w)
-        tree.setColumnWidth(1, 52)
-        tree.setColumnWidth(2, 60)
-        tree.setColumnWidth(3, 56)
+        tree.setColumnWidth(1, 72)
+        tree.setColumnWidth(2, 64)
+        tree.setColumnWidth(3, 64)
         sb = tree.verticalScrollBar()
         sb_w = sb.sizeHint().width() if sb and sb.isVisible() else 16
         need = name_w + 52 + 60 + 56 + sb_w + tree.frameWidth() * 2 + 12
-        need = max(300, min(need, 380))
+        need = max(240, min(need, 320))
         total = self._split.width()
         if total < 200:
-            total = max(self.width() - 40, 900)
-        self._split.setSizes([need, max(280, total - need)])
+            total = max(self.width() - 40, 1100)
+        right = 320
+        heat = max(280, total - need - right)
+        self._split.setSizes([need, heat, right])
         self._grid._sync_overlay()
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
-        self._apply_sidebar_layout()
         self._fit_tree_pane()
 
     def _make_corridor_item(self, c: dict) -> QTreeWidgetItem:
@@ -6586,7 +7271,7 @@ class _CorridorInspectorDialog(QDialog):
         net_s = f"+{net} ▲" if net > 0 else (f"{net} ▼" if net < 0 else "0")
         item = QTreeWidgetItem([
             c["label"], str(c["count"]),
-            f"{c['bounce_pct']:.0f}%", net_s,
+            f"{c.get('handoff_pct', c.get('bounce_pct', 0)):.0f}%", net_s,
         ])
         item.setData(0, Qt.ItemDataRole.UserRole, _CiRef(c))
         for col in (1, 2, 3):
@@ -6594,7 +7279,7 @@ class _CorridorInspectorDialog(QDialog):
         for t in c.get("tasks") or []:
             child = QTreeWidgetItem([
                 f"└── {t['label']}", str(t["count"]),
-                f"{t['bounce_pct']:.0f}%", f"{t['share_pct']:.0f}%",
+                f"{t.get('handoff_pct', t.get('bounce_pct', 0)):.0f}%", f"{t['share_pct']:.0f}%",
             ])
             child.setData(0, Qt.ItemDataRole.UserRole, _CiRef({"corridor": c, "task": t}))
             for col in (1, 2, 3):
@@ -6721,43 +7406,81 @@ class _CorridorInspectorDialog(QDialog):
 
     def _on_grid_clicked(self, c: dict, bi: int) -> None:
         self._select_corridor(c, bi)
+        self._set_right_pane("info")
+
+    def _toggle_corridor_expand(self, c: dict) -> None:
+        if not c:
+            return
+        key = self._corridor_key(c)
+        if key in self._expanded_corridors:
+            self._expanded_corridors.discard(key)
+        else:
+            self._expanded_corridors.add(key)
+        item = self._find_corridor_item(c)
+        if item is not None:
+            item.setExpanded(key in self._expanded_corridors)
+        bi = self._selected_bin()
+        self._select_corridor(c, bi if bi >= 0 else None)
 
     def _set_card(self, title: str = "", lines: Optional[list] = None,
-                  *, can_spotlight: bool = False) -> None:
-        title = title or ""
+                  *, can_spotlight: bool = False,
+                  assessment: str = "", quality: Optional[dict] = None,
+                  task: Optional[dict] = None) -> None:
+        filled = bool(title) or bool(lines)
+        self._card_empty.setVisible(not filled)
+        self._card_title.setVisible(filled)
+        self._card.setVisible(filled)
+        self._card_assessment.setVisible(filled)
+        self._card_quality.setVisible(filled)
+        self._evidence_btns.setVisible(filled)
+        if not filled:
+            self._card_title.setText("")
+            self._card.setText("")
+            self._card_assessment.setText("")
+            self._card_quality.setText("")
+            self._bin_summary.setText(
+                "Empty bins: no migrations in that interval")
+            self._sync_filter_buttons()
+            return
         self._card_title.setText(title)
-        self._card_title.setVisible(bool(title))
         if lines:
-            self._card.setText("\n".join(str(x) for x in lines if x is not None))
+            if lines and isinstance(lines[0], tuple):
+                self._card.setText(
+                    "\n".join(f"{k}:  {v}" for k, v in lines))
+            else:
+                self._card.setText("\n".join(str(x) for x in lines if x is not None))
         else:
-            self._card.setText("Click a corridor or chord ribbon to inspect.")
-        self._inspect_btn.setVisible(bool(can_spotlight))
+            self._card.setText("")
+        if assessment:
+            self._card_assessment.setText(f"<b>Assessment</b> {assessment}")
+        else:
+            self._card_assessment.setText("")
+        if quality:
+            self._card_quality.setText(
+                "<b>Evidence quality</b> "
+                f"Direct: {quality.get('direct')}. "
+                f"Correlated: {quality.get('correlated')}. "
+                f"{quality.get('limitation') or ''}")
+        else:
+            self._card_quality.setText("")
+        if getattr(self, "_inspect_ev_btn", None) is not None:
+            label = (task or {}).get("label") if task else None
+            self._inspect_ev_btn.setVisible(bool(label))
+            if label:
+                self._inspect_ev_btn.setText(f"Inspect {label}")
+        self._sync_filter_buttons()
 
     def _on_inspect_in_timeline(self) -> None:
         c = self._selected
         if not c:
             return
-        bi = getattr(self._grid, "_highlight_bin", -1)
+        bi = self._selected_bin()
         if not (isinstance(bi, int) and bi >= 0):
             bi = c.get("peak_bin", -1)
         self._spotlight_corridor(c, bi if isinstance(bi, int) and bi >= 0 else None)
 
     def _show_core_card(self, core_index: int) -> None:
-        stats = self._model.get("core_stats") or []
-        if not (0 <= core_index < len(stats)):
-            self._set_card()
-            return
-        st = stats[core_index]
-        net = st.get("net", 0)
-        net_s = f"+{net} net gain" if net > 0 else (
-            f"{net} net loss" if net < 0 else "balanced")
-        lines = [
-            f"Outgoing {st.get('out', 0)} / Incoming {st.get('in', 0)}",
-            f"Net: {net_s}",
-        ]
-        for t in (st.get("top_tasks") or [])[:3]:
-            lines.append(f"{t.get('label')}: {t.get('count')}")
-        self._set_card(_core_short_name(st.get("core") or ""), lines)
+        self._set_card()
 
     def _select_corridor(self, c: dict, bin_index: Optional[int] = None,
                          *, reveal_tree: bool = True,
@@ -6771,42 +7494,51 @@ class _CorridorInspectorDialog(QDialog):
         self._grid.set_selection(c, bi if bi is not None else -1)
         self._chord.set_focus_pair(c.get("from_core"), c.get("to_core"))
         self._chord.set_focus_cores([])
-        offender = c.get("primary_task")
-        lines = [
-            f"Directed Vol: {c['count']:,} migrations ({c['rate_per_s']:.1f}/s)",
-            f"Lock Bounces: {c['bounces']} ({c['bounce_pct']:.0f}% cache-line bounces)",
-        ]
-        if task:
-            lines.append(
-                f"Selected task: {task.get('label')} "
-                f"({task.get('count', 0)} mig, "
-                f"{task.get('share_pct', 0):.0f}% share)")
-        elif offender:
-            lines.append(
-                f"Primary Offender: {offender['label']} "
-                f"({offender['share_pct']:.0f}% share)")
-        else:
-            lines.append("No task attribution")
+        self._fill_evidence(c, bi, task=task)
+        if reveal_tree:
+            self._restore_tree_selection()
+
+    def _fill_evidence(self, c: dict, bin_index: Optional[int] = None,
+                       task: Optional[dict] = None) -> None:
+        bin_lo = bin_hi = None
+        bi = bin_index
         if isinstance(bi, int) and bi >= 0:
             t_min = self._model.get("t_min", 0)
             t_max = self._model.get("t_max", 1)
             bin_w = self._model.get("bin_w", 1)
             time_bins = self._model.get("time_bins", 32)
-            bin_lo, bin_hi = _heatmap_bin_range(
-                t_min, bin_w, time_bins, t_max, bi)
-            n = c["bins"][bi] if bi < len(c["bins"]) else 0
+            rng = _heatmap_bin_range(t_min, bin_w, time_bins, t_max, bi)
+            bin_lo, bin_hi = rng[0], rng[1]
+            n = c["bins"][bi] if bi < len(c.get("bins") or []) else 0
             bv = (c["bounce_bins"][bi]
                   if bi < len(c.get("bounce_bins") or []) else 0)
-            extra = f"{n} mig"
+            extra = f"{n} migration" + ("" if n == 1 else "s")
             if bv:
-                extra += f", {bv} bounce"
-            lines.append(
-                f"Selected bin {bi + 1}/{time_bins}: "
+                extra += f", {bv} handoff"
+            self._bin_summary.setText(
+                f"Selected: jump:{bin_lo}–jump:{bin_hi} · "
                 f"{_format_time(bin_lo, self._trace.time_scale)}–"
                 f"{_format_time(bin_hi, self._trace.time_scale)} · {extra}")
-        self._set_card(f"Corridor: {c['label']}", lines, can_spotlight=True)
-        if reveal_tree:
-            self._restore_tree_selection()
+        else:
+            self._bin_summary.setText(
+                "Empty bins: no migrations in that interval")
+        scope = self._current_inspector_scope()
+        ev = _build_corridor_evidence(c, {
+            "selected_task": task,
+            "time_scale": self._trace.time_scale,
+            "bin_lo": bin_lo,
+            "bin_hi": bin_hi,
+            "scope_label": scope.get("label"),
+        })
+        if not ev:
+            self._set_card()
+            return
+        self._set_card(
+            ev["title"], ev["lines"],
+            assessment=ev.get("assessment") or "",
+            quality=ev.get("evidence_quality"),
+            task=ev.get("task"),
+        )
 
     def _on_chord_core(self, payload) -> None:
         if not isinstance(payload, dict) or payload.get("clear"):
@@ -6882,7 +7614,8 @@ class _CorridorInspectorDialog(QDialog):
     def _on_chord_corridor_dbl(self, from_core: str, to_core: str) -> None:
         for c in self._model.get("all_corridors") or []:
             if c.get("from_core") == from_core and c.get("to_core") == to_core:
-                self._spotlight_corridor(c)
+                self._select_corridor(c)
+                self._on_show_events()
                 return
 
     def _on_tree_click(self, item, _col) -> None:
@@ -6900,36 +7633,10 @@ class _CorridorInspectorDialog(QDialog):
 
     def _on_tree_dbl(self, item, _col) -> None:
         data = _ci_item_data(item)
-        if isinstance(data, dict) and "task" in data:
-            self._spotlight_task(data["corridor"], data["task"])
-        elif isinstance(data, dict) and "from_core" in data:
-            self._spotlight_corridor(data)
-
-    def _jump_hotspot(self) -> None:
-        h = self._model.get("hotspot")
-        if not h:
+        if isinstance(data, dict) and "group" in data:
             return
-        found = None
-        for c in self._model.get("all_corridors") or []:
-            if c["from_core"] == h["from_core"] and c["to_core"] == h["to_core"]:
-                found = c
-                break
-        if not found:
-            return
-        if self._display_groups:
-            self._expanded_groups.add(found["from_core"])
-        self._select_corridor(found, found.get("peak_bin"))
-        if not self._on_jump:
-            return
-        t_min = self._model.get("t_min", 0)
-        t_max = self._model.get("t_max", 1)
-        bin_w = self._model.get("bin_w", 1)
-        time_bins = self._model.get("time_bins", 32)
-        bi = found.get("peak_bin", 0) or 0
-        bin_lo, bin_hi = _heatmap_bin_range(t_min, bin_w, time_bins, t_max, bi)
-        primary = (found.get("primary_task") or {}).get("mk")
-        self._freeze_scope()
-        self._on_jump(bin_lo, bin_hi, primary)
+        self._on_tree_click(item, _col)
+        self._on_show_events()
 
     def _spotlight_corridor_bin(self, c: dict, bi: int) -> None:
         self._spotlight_corridor(c, bi)
@@ -6973,11 +7680,17 @@ class _CorridorInspectorDialog(QDialog):
         return False
 
     def set_filter_banner(self, label: Optional[str], count: int) -> None:
-        if label and count:
-            self._filter_lbl.setText(f"Showing {count} task(s): {label}")
-            self._filter_bar.setVisible(True)
+        if getattr(self, "_tl_filter_lbl", None) is None:
+            return
+        active = bool(label and count)
+        if active:
+            self._tl_filter_lbl.setText(
+                f"Timeline filter: {count} task(s): {label}")
         else:
-            self._filter_bar.setVisible(False)
+            self._tl_filter_lbl.setText("Timeline filter: None")
+        if getattr(self, "_clear_tl_btn", None) is not None:
+            self._clear_tl_btn.setEnabled(active)
+        self._filter_bar.setVisible(True)
 
     def _clear_filter(self) -> None:
         if self._on_clear:
@@ -6991,46 +7704,84 @@ class _CorridorInspectorDialog(QDialog):
         self._scope_follow = False
 
     def _on_chord_hover_info(self, info) -> None:
-        if isinstance(info, dict) and info.get("type") == "corridor":
-            self._hint.setText(
-                f"{_core_short_name(info.get('from'))}→"
-                f"{_core_short_name(info.get('to'))}: {info.get('count', 0)}")
-            return
-        self._hint.setText(self._HINT_DEFAULT)
+        return
 
-    def _refresh_scope_banner(self) -> None:
-        scoped, badge, detail = _inspector_viewport_banner(
-            self._trace, self._scope_lo, self._scope_hi, self._scope_fit)
-        is_dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
-        _apply_scope_banner(self._scope_banner, scoped, badge, detail, is_dark)
+    def _visible_viewport_range(self):
+        """Visible timeline window as (lo, hi, fit_mode)."""
+        wnd = self.parent()
+        tab = getattr(wnd, "_active_tab", None) if wnd is not None else None
+        view = getattr(tab, "view", None) if tab is not None else None
+        if view is not None and hasattr(view, "_visible_time_ns_range"):
+            try:
+                lo, hi = view._visible_time_ns_range()
+                at_fit = getattr(view, "_at_fit_zoom", None)
+                fit = bool(at_fit()) if callable(at_fit) else bool(
+                    getattr(view, "_fit_mode", False))
+                return int(lo), int(hi), fit
+            except Exception:
+                pass
+        return None, None, False
+
+    def _current_inspector_scope(self, mode: Optional[str] = None) -> dict:
+        mode = mode or getattr(self, "_analysis_mode", "auto")
+        vlo, vhi, fit = self._visible_viewport_range()
+        vp = (vlo, vhi) if vlo is not None and vhi is not None else None
+        return _inspector_analysis_scope(
+            mode, self._placed_cursors(),
+            self._trace.time_min, self._trace.time_max,
+            self._trace.time_scale, vp, fit_mode=fit)
+
+    def _refresh_scope_banner(self, scope: Optional[dict] = None) -> None:
+        if getattr(self, "_scope_banner", None) is None:
+            return
+        if scope is None:
+            scope = self._current_inspector_scope()
+        scoped = bool(scope.get("scoped"))
+        badge = scope.get("label") or "Full Trace"
+        detail = scope.get("detail") or ""
+        _apply_scope_banner(self._scope_banner, scoped, badge, detail, self)
+        self._refresh_overview(scope)
+
+    def _placed_cursors(self) -> list:
+        wnd = self.parent()
+        tab = getattr(wnd, "_active_tab", None) if wnd is not None else None
+        view = getattr(tab, "view", None) if tab is not None else None
+        scene = getattr(view, "_scene", None) if view is not None else None
+        if scene is not None and hasattr(scene, "cursor_times"):
+            try:
+                return [t for t in scene.cursor_times() if t is not None]
+            except Exception:
+                return []
+        return []
 
     def refresh_scope(self) -> None:
-        if not getattr(self, "_scope_follow", True) and self._model:
-            self._refresh_scope_banner()
-            return
-        lo = hi = None
-        fit_mode = False
-        wnd = self.parent()
-        if isinstance(wnd, QMainWindow):
-            tab = getattr(wnd, "_active_tab", None)
-            view = getattr(tab, "view", None) if tab is not None else None
-            if view is not None and hasattr(view, "_visible_time_ns_range"):
-                try:
-                    vlo, vhi = view._visible_time_ns_range()
-                except Exception:
-                    vlo = vhi = None
-                if vlo is not None and vhi is not None and vhi > vlo:
-                    lo, hi = int(vlo), int(vhi)
-                fit_mode = bool(getattr(view, "_fit_mode", False))
-        if (lo == self._scope_lo and hi == self._scope_hi
-                and fit_mode == self._scope_fit and self._model):
-            self._scope_fit = fit_mode
-            self._refresh_scope_banner()
+        mode = getattr(self, "_analysis_mode", "auto")
+        scope = self._current_inspector_scope(mode)
+        hint = getattr(self, "_scope_hint", None)
+        if hint is not None:
+            hint.setVisible(not scope.get("can_cursor"))
+        combo = getattr(self, "_scope_combo", None)
+        if combo is not None:
+            idx = combo.findData("cursor")
+            if idx >= 0 and combo.model() is not None:
+                item = combo.model().item(idx)
+                if item is not None:
+                    item.setEnabled(bool(scope.get("can_cursor")))
+        if not scope.get("can_cursor") and mode == "cursor":
+            self._analysis_mode = "auto"
+            if combo is not None:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(max(0, combo.findData("auto")))
+                combo.blockSignals(False)
+            scope = self._current_inspector_scope("auto")
+        lo, hi = scope.get("lo"), scope.get("hi")
+        if lo == self._scope_lo and hi == self._scope_hi and self._model:
+            self._refresh_scope_banner(scope)
             return
         self._scope_lo, self._scope_hi = lo, hi
-        self._scope_fit = fit_mode
+        self._scope_fit = False
         self._scope_suffix = ""
-        self._refresh_scope_banner()
+        self._refresh_scope_banner(scope)
         self._rebuild()
 
 

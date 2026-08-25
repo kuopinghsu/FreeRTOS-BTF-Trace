@@ -228,7 +228,7 @@ function onTriggerKeydown(ev) {
   padding: 4px 0;
   list-style: none;
   overflow: auto;
-  background: var(--panel-bg, var(--tb-bg, var(--input-bg, #2a2a2a)));
+  background: var(--tb-bg, var(--panel-bg, var(--input-bg, #2a2a2a)));
   color: var(--fg, #ddd);
   border: 1px solid var(--border, #555);
   border-radius: 4px;

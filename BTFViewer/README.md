@@ -284,7 +284,7 @@ BTFViewer calculates all results from recorded BTF events. It does not inspect s
 | Long wait time | **Blocking Time** | Mutex owner and preemption activity |
 | Ready-to-run delay | **Dispatch Latency** | Blocking and preemption |
 | Priority inversion | **Priority Inheritance** | Mutex pairing and blocking |
-| Frequent core movement | **Core Migrations** | Load balance, Migration & Corridor Inspector, and mutex bounces |
+| Frequent core movement | **Core Migrations** | Load balance, Migration & Corridor Inspector, and synchronization handoff suspects |
 | Lock or queue issue | **Mutex / Semaphore / Queue** | Blocking and migrations |
 
 Detailed metric definitions and formulas are in [STATISTICS.md](STATISTICS.md).
@@ -320,7 +320,7 @@ Check load balance before interpreting migration counts. An SMP scheduler may mo
 
 After confirming load balance, check whether a task moves between cores more often than needed. Frequent migration can increase L1 cache misses because a task may not find its recent data in the new core's cache. On Xtensa processors, migration can also reduce the benefit of lazy context switching. The system may need to save coprocessor registers when a task moves to another core, which increases context-switch overhead.
 
-Review Task View, per-core load, **Core Migrations**, and the **Migration & Corridor Inspector** together. A high migration count is significant when it coincides with poor cache behavior, greater context-switch overhead, higher latency, or unstable load distribution.
+Review Task View, per-core load, **Core Migrations**, and the **Migration & Corridor Inspector** together. The Inspector shows **Core path**, **migration heatmap**, and **Topology** side by side. Click the heatmap to open **Path info** in the right column. **Analysis Scope** defaults to **Follow zoom** (Fit is Full Trace; a zoomed-in window is Viewport). You can lock Full Trace or Viewport, or choose Cursor C1–Cn. A high migration count is significant when it coincides with poor cache behavior, greater context-switch overhead, higher latency, or unstable load distribution. Handoff correlation is a heuristic, not a measured cache-line transfer.
 
 ### Comparing open traces
 

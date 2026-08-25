@@ -9089,15 +9089,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             len(mks) if mks else 0)
         dlg.show()
 
-    def _query_corridor_with_ai(self, ai_enabled: bool = True) -> None:
-        """Inspector Query with AI… → Migration thrash template."""
+    def _query_corridor_with_ai(self, ai_enabled: bool = True, extra: str = "") -> None:
+        """Inspector Investigate with AI → Migration thrash template."""
         if not ai_enabled:
             self._open_settings("AI")
             return
         self._focus_ai_panel()
         panel = getattr(self, "_ai_panel", None)
         if panel is not None and hasattr(panel, "query_migration_thrash"):
-            QTimer.singleShot(0, panel.query_migration_thrash)
+            QTimer.singleShot(0, lambda: panel.query_migration_thrash(extra))
 
     def _query_compare_with_ai(
         self,
@@ -9164,9 +9164,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                                merge_keys, lock_task_key=lock_task_key,
                                enable_cpu_load=True)
 
-    def _on_corridor_jump(self, bin_lo: int, bin_hi: int,
-                          lock_task_key: Optional[str] = None) -> None:
-        """Triage Jump To: place C1–C2 and scroll the main timeline to the peak bin."""
+    def _on_corridor_jump(self, payload) -> None:
+        """Show events: place C1–C2 and zoom to the selected bin (web onCorridorJump)."""
+        if not isinstance(payload, dict):
+            return
+        try:
+            bin_lo = int(payload.get("binLo"))
+            bin_hi = int(payload.get("binHi"))
+        except (TypeError, ValueError):
+            return
+        lock_task_key = payload.get("lockTaskKey")
         tab = self._active_tab
         if tab is None or self._trace is None:
             return

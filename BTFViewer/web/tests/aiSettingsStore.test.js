@@ -120,6 +120,13 @@ describe('AI settings storage', () => {
     assert.ok(overlays >= 0 && analysis > overlays)
   })
 
+  it('header can drag the dialog', () => {
+    const src = readFileSync(new URL('../src/components/SettingsDialog.vue', import.meta.url), 'utf8')
+    assert.match(src, /onHeaderPointerDown/)
+    assert.match(src, /cursor: grab/)
+    assert.match(src, /settings-overlay-free/)
+  })
+
   it('AI model field has a refresh control', () => {
     const src = readFileSync(new URL('../src/components/SettingsDialog.vue', import.meta.url), 'utf8')
     assert.match(src, /onRefreshModels/)

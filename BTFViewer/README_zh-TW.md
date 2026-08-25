@@ -283,7 +283,7 @@ BTFViewer 的所有結果都由已記錄的 BTF 事件計算而來。它不會�
 | 等待時間過長 | **Blocking Time** | 互斥鎖擁有者及搶佔活動 |
 | 就緒後仍延遲執行 | **Dispatch Latency** | 阻塞及搶佔 |
 | 優先權反轉 | **Priority Inheritance** | 互斥鎖配對及阻塞 |
-| 頻繁在核心間移動 | **Core Migrations** | 負載平衡、Migration & Corridor Inspector 及互斥鎖跨核心移動（mutex bounce） |
+| 頻繁在核心間移動 | **Core Migrations** | 負載平衡、Migration & Corridor Inspector 及同步擁有權啟發式（handoff suspects） |
 | 鎖或佇列問題 | **Mutex / Semaphore / Queue** | 阻塞及核心遷移 |
 
 統計指標的詳細定義與公式請參閱 [STATISTICS_zh-TW.md](STATISTICS_zh-TW.md)。
@@ -319,7 +319,7 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 
 確認負載平衡後，再檢查工作是否過度頻繁地在核心間移動。工作移至新核心後，可能無法從該核心的 L1 快取找到最近使用的資料，因而增加快取未命中（cache miss）。在 Xtensa 處理器上，核心遷移也可能降低延遲式內容切換（lazy context switching）的效益。工作移至另一個核心時，系統可能必須儲存協同處理器暫存器（coprocessor registers），因而增加內容切換的額外成本。
 
-請一併檢查 **Task View**、各核心負載、**Core Migrations** 及 **Migration & Corridor Inspector**。若偏高的核心遷移次數同時伴隨快取行為變差、內容切換成本增加、延遲升高或負載分配不穩，才具有較明確的分析意義。
+請一併檢查 **Task View**、各核心負載、**Core Migrations** 及 **Migration & Corridor Inspector**。Inspector 以三欄顯示核心路徑、遷移熱圖與 **Topology**；點選熱圖會在右欄開啟 **Path info**。**Analysis Scope** 預設為 **Follow zoom**（Fit 視為 Full Trace；放大後的視窗視為 Viewport）。可鎖定 Full Trace 或 Viewport，或選擇 Cursor C1–Cn。若偏高的核心遷移次數同時伴隨快取行為變差、內容切換成本增加、延遲升高或負載分配不穩，才具有較明確的分析意義。Handoff 關聯是啟發式結果，不是量測到的快取行搬移。
 
 ### 比較已開啟的 trace（Comparing open traces）
 

@@ -3686,6 +3686,58 @@ def _default_corridor_top_pct(core_count: int) -> int:
         return 25
     return 100
 
+
+_CORRIDOR_SHORT_DWELL_MS = 1
+_CORRIDOR_HANDOFF_HATCH_PCT = 15
+_CORRIDOR_TOP_N_OPTIONS = (5, 10, 25, 0)
+_CORRIDOR_SORT_KEYS = ("rate", "pingpong", "dwell", "handoff", "share")
+
+
+def _corridor_short_dwell_threshold(time_scale: str) -> int:
+    ns_per = {"ns": 1e9, "us": 1e6, "ms": 1e3, "s": 1.0}.get(time_scale or "ns", 1e9)
+    return max(1, int(round((ns_per / 1000.0) * _CORRIDOR_SHORT_DWELL_MS)))
+
+
+def _default_corridor_top_n(core_count: int) -> int:
+    if (core_count or 0) > 8:
+        return 10
+    return 0
+
+
+def _filter_corridors_by_top_n(corridors: list, n: int = 0) -> list:
+    rows = list(corridors or [])
+    try:
+        limit = int(n)
+    except (TypeError, ValueError):
+        return rows
+    if not rows or limit <= 0 or limit >= len(rows):
+        return rows
+    return sorted(
+        rows,
+        key=lambda c: (-int(c.get("count") or 0), str(c.get("label") or "")),
+    )[:limit]
+
+
+def _sort_corridors(corridors: list, sort_by: str = "rate") -> list:
+    key = sort_by if sort_by in _CORRIDOR_SORT_KEYS else "rate"
+
+    def metric(c):
+        if key == "pingpong":
+            return float(c.get("ping_pong_pct") or 0)
+        if key == "dwell":
+            return float(c.get("short_dwell_share") or 0)
+        if key == "handoff":
+            return float(c.get("handoff_pct") or c.get("bounce_pct") or 0)
+        if key == "share":
+            task = c.get("primary_task") or {}
+            return float(task.get("share_pct") or 0)
+        return float(c.get("rate_per_s") or 0)
+
+    return sorted(
+        list(corridors or []),
+        key=lambda c: (-metric(c), -int(c.get("count") or 0), str(c.get("label") or "")),
+    )
+
 def _filter_corridors_by_top_pct(corridors: list, top_pct: int = 100) -> list:
     if not corridors or top_pct >= 100:
         return list(corridors or [])
@@ -4039,6 +4091,334 @@ def _build_chord_layout(cores: List[str], grid: List[List[float]]) -> ChordLayou
         arcs=arcs, tick_angles=tick_angles,
         egress_ticks=egress_ticks, ingress_ticks=ingress_ticks, grid=grid)
 
+
+def _attach_corridor_path_metrics(by_key: dict, migrations: list, time_scale: str) -> None:
+    window = _MIGRATION_PING_PONG_WINDOW
+    short_th = _corridor_short_dwell_threshold(time_scale)
+    by_mk: Dict[str, list] = {}
+    for m in migrations or []:
+        mk = getattr(m, "merge_key", None)
+        if not mk:
+            continue
+        by_mk.setdefault(mk, []).append(m)
+    ping: Dict[Tuple[str, str], int] = {}
+    dwells: Dict[Tuple[str, str], list] = {}
+    for lst in by_mk.values():
+        ordered = sorted(lst, key=lambda x: x.ns)
+        for i, m in enumerate(ordered):
+            key = (m.from_core, m.to_core)
+            if i + 1 < len(ordered):
+                dwells.setdefault(key, []).append(max(0, ordered[i + 1].ns - m.ns))
+        for i in range(1, len(ordered)):
+            a, b = ordered[i - 1], ordered[i]
+            if b.ns - a.ns > window:
+                continue
+            if a.to_core == b.from_core and a.from_core == b.to_core:
+                key = (a.from_core, a.to_core)
+                ping[key] = ping.get(key, 0) + 1
+    for key, row in by_key.items():
+        p = ping.get(key, 0)
+        samples = dwells.get(key) or []
+        row["ping_pong"] = p
+        row["ping_pong_pct"] = (100.0 * p / row["count"]) if row.get("count") else 0.0
+        ordered = sorted(samples)
+        row["median_dwell_ns"] = ordered[len(ordered) // 2] if ordered else 0
+        row["short_dwell_share"] = (
+            100.0 * sum(1 for d in samples if d < short_th) / len(samples)
+            if samples else 0.0
+        )
+
+
+_INSPECTOR_FULL_VIEW_RATIO = 0.92
+
+
+def _inspector_viewport_is_full(lo, hi, t_min, t_max, fit_mode: bool = False) -> bool:
+    if fit_mode or lo is None or hi is None:
+        return True
+    span = max(int(t_max) - int(t_min), 1)
+    return (int(hi) - int(lo)) / span >= _INSPECTOR_FULL_VIEW_RATIO
+
+
+def _inspector_viewport_tuple(viewport):
+    if isinstance(viewport, dict):
+        try:
+            return int(viewport.get("timeStart")), int(viewport.get("timeEnd"))
+        except (TypeError, ValueError):
+            return None, None
+    if isinstance(viewport, (tuple, list)) and len(viewport) >= 2:
+        try:
+            return int(viewport[0]), int(viewport[1])
+        except (TypeError, ValueError):
+            return None, None
+    return None, None
+
+
+def _inspector_analysis_scope(mode: str, cursors, time_min, time_max, time_scale: str,
+                              viewport=None, fit_mode: bool = False):
+    """Inspector Analysis Scope: Follow zoom, Full Trace, Viewport, or Cursor.
+
+    *viewport* is ``(lo, hi)`` or ``{timeStart, timeEnd}``. Default *mode*
+    ``auto`` follows Fit vs zoom (Full Trace vs Viewport).
+    """
+    placed = [int(c) for c in (cursors or []) if c is not None]
+    can_cursor = len(placed) >= 2
+    tlo = int(time_min or 0)
+    thi = int(time_max or 0)
+    lo = hi = None
+    resolved = "full"
+    want = mode or "auto"
+    if isinstance(viewport, dict) and viewport.get("fitMode"):
+        fit_mode = True
+    if want == "cursor" and can_cursor:
+        ordered = sorted(placed)
+        lo, hi = ordered[0], ordered[-1]
+        if hi > lo:
+            resolved = "cursor"
+        else:
+            lo = hi = None
+    elif want == "viewport":
+        vlo, vhi = _inspector_viewport_tuple(viewport)
+        if vlo is not None and vhi is not None and vhi > vlo:
+            lo, hi = vlo, vhi
+        else:
+            lo, hi = tlo, thi
+        resolved = "viewport"
+    elif want == "full":
+        resolved = "full"
+    else:
+        vlo, vhi = _inspector_viewport_tuple(viewport)
+        if vlo is None or vhi is None or not (vhi > vlo):
+            vlo, vhi = tlo, thi
+        if _inspector_viewport_is_full(vlo, vhi, tlo, thi, fit_mode):
+            resolved = "full"
+        else:
+            lo, hi = vlo, vhi
+            resolved = "viewport"
+    scoped = resolved != "full"
+    a = lo if lo is not None else tlo
+    b = hi if hi is not None else thi
+    n = len(placed) if resolved == "cursor" else 0
+    if resolved == "cursor":
+        label = f"Cursor C1–C{n}"
+    elif resolved == "viewport":
+        label = "Viewport"
+    else:
+        label = "Full Trace"
+    unit = time_scale or "ns"
+    detail = (
+        f"{_format_time(a, unit)} … {_format_time(b, unit)} "
+        f"({_format_time(max(0, b - a), unit)}) · trace unit: {unit}"
+    )
+    return {
+        "mode": resolved,
+        "lo": lo if scoped else None,
+        "hi": hi if scoped else None,
+        "n_cursors": n,
+        "can_cursor": can_cursor,
+        "cursor_disabled_reason": "" if can_cursor else "Place at least two cursors.",
+        "label": label,
+        "detail": detail,
+        "unit": unit,
+        "scoped": scoped,
+    }
+
+
+def _classify_corridor_concern(corridor: Optional[dict]) -> dict:
+    if not corridor:
+        return {"id": "none", "label": "None", "detail": ""}
+    ping = float(corridor.get("ping_pong_pct") or 0)
+    short = float(corridor.get("short_dwell_share") or 0)
+    handoff = float(corridor.get("handoff_pct") or corridor.get("bounce_pct") or 0)
+    count = int(corridor.get("count") or 0)
+    burst = (100.0 * int(corridor.get("peak_count") or 0) / count) if count else 0.0
+    candidates = [
+        ("pingpong", "Ping-pong", ping, 40, corridor.get("ping_pong") is not None),
+        ("dwell", "Short dwell", short, 50, corridor.get("short_dwell_share") is not None),
+        ("burst", "Burst", burst, 40, corridor.get("peak_count") is not None),
+        ("handoff", "Handoff suspect", handoff, _CORRIDOR_HANDOFF_HATCH_PCT,
+         corridor.get("bounces") is not None),
+    ]
+    candidates = [c for c in candidates if c[4]]
+    candidates.sort(key=lambda c: -c[2])
+    best = next((c for c in candidates if c[2] >= c[3]), None)
+    if not best:
+        return {"id": "none", "label": "None", "detail": ""}
+    task = corridor.get("primary_task") or {}
+    cid, label = best[0], best[1]
+    if cid == "pingpong" and task.get("label"):
+        detail = (
+            f"{task['label']} repeatedly moves between "
+            f"{corridor.get('from_core')} and {corridor.get('to_core')}"
+        )
+    elif cid == "burst":
+        detail = f"{corridor.get('label')} concentrates migrations in a short window"
+    elif cid == "dwell" and task.get("label"):
+        detail = f"{task['label']} leaves {corridor.get('to_core')} after a short dwell"
+    elif cid == "handoff":
+        detail = (
+            "Repeated synchronization ownership changes associated with "
+            f"{corridor.get('label')}"
+        )
+    else:
+        detail = (
+            f"{task.get('label')} on {corridor.get('label')}"
+            if task.get("label") else corridor.get("label") or ""
+        )
+    return {"id": cid, "label": label, "detail": detail}
+
+
+def _corridor_load_balance_status(trace, lo, hi) -> dict:
+    rows = _core_util_pct_rows(trace, lo, hi) if trace is not None else []
+    pcts = [p for _c, p in rows]
+    if len(pcts) < 2 or sum(pcts) <= 0:
+        return {"label": "Not evaluated", "zone": None, "score": None}
+    gini = _gini_coefficient(pcts)
+    sigma = _core_util_stddev(pcts)
+    score = max(0.0, 100.0 * (1.0 - gini))
+    zone = "red" if score < 70.0 else ("amber" if sigma > 30.0 else "ok")
+    return {
+        "label": "Balanced" if zone == "ok" else "Imbalanced",
+        "zone": zone,
+        "score": score,
+    }
+
+
+def _build_corridor_overview(trace, model: dict, scope: Optional[dict] = None) -> dict:
+    scope = scope or {}
+    corridors = model.get("all_corridors") or model.get("corridors") or []
+    total = sum(int(c.get("count") or 0) for c in corridors)
+    rate = sum(float(c.get("rate_per_s") or 0) for c in corridors)
+    lb = _corridor_load_balance_status(trace, scope.get("lo"), scope.get("hi"))
+    hottest = sorted(corridors, key=lambda c: -int(c.get("count") or 0))
+    hottest = hottest[0] if hottest else None
+    task_totals: Dict[str, dict] = {}
+    for c in corridors:
+        for t in c.get("tasks") or []:
+            mk = t.get("mk")
+            if not mk:
+                continue
+            cur = task_totals.setdefault(
+                mk, {"mk": mk, "label": t.get("label"), "count": 0})
+            cur["count"] += int(t.get("count") or 0)
+    top_task = sorted(task_totals.values(), key=lambda t: -t["count"])
+    top_task = top_task[0] if top_task else None
+    share = (100.0 * top_task["count"] / total) if top_task and total else 0.0
+    concern = _classify_corridor_concern(hottest)
+    hottest_label = (
+        f"{hottest.get('from_core')} → {hottest.get('to_core')}" if hottest else "—"
+    )
+    scope_label = scope.get("label") or "Full Trace"
+    return {
+        "scope_label": scope_label,
+        "load_balance": lb["label"],
+        "migrations": total,
+        "migration_rate_label": f"{rate:.1f}/s" if total else "—",
+        "most_affected_task": top_task,
+        "most_affected_share": share,
+        "hottest_path": hottest_label,
+        "main_concern": concern["label"],
+        "main_concern_detail": concern["detail"],
+        "headline": (
+            f"Scope: {scope_label} · Load balance: {lb['label']} · "
+            f"{total:,} migrations"
+        ),
+        "evaluated": lb["label"] != "Not evaluated",
+    }
+
+
+def _build_corridor_evidence(corridor, opts=None) -> Optional[dict]:
+    """Selected-path evidence card (Web ``buildCorridorEvidence`` lockstep)."""
+    if not corridor:
+        return None
+    opts = opts or {}
+    scale = opts.get("time_scale") or "ns"
+    task = opts.get("selected_task") or corridor.get("primary_task")
+    concern = _classify_corridor_concern(corridor)
+    median_ns = corridor.get("median_dwell_ns")
+    median = _format_time(int(median_ns), scale) if median_ns else "—"
+    bin_lo, bin_hi = opts.get("bin_lo"), opts.get("bin_hi")
+    if bin_lo is not None and bin_hi is not None:
+        window = f"range:{bin_lo}/{bin_hi}"
+    else:
+        window = opts.get("scope_label") or "full trace"
+    ping = corridor.get("ping_pong_pct")
+    short = corridor.get("short_dwell_share")
+    handoff = corridor.get("handoff_pct")
+    if handoff is None:
+        handoff = corridor.get("bounce_pct")
+    bounces = corridor.get("bounces")
+    lines = [
+        ("Migration volume", str(corridor.get("count") or 0)),
+        ("Rate", f"{float(corridor.get('rate_per_s') or 0):.1f}/s"),
+        ("Ping-pong", f"{float(ping):.0f}%" if ping is not None else "—"),
+        ("Median dwell", median),
+        ("Short-dwell share",
+         f"{float(short):.0f}%" if short is not None else "—"),
+        ("Handoff suspects",
+         f"{bounces} ({float(handoff or 0):.0f}%)" if bounces is not None else "—"),
+        ("Top migrating task",
+         f"{task.get('label')} · {float(task.get('share_pct') or 0):.0f}%"
+         if task else "—"),
+        ("Evidence window", window),
+    ]
+    return {
+        "title": f"{corridor.get('from_core')} → {corridor.get('to_core')}",
+        "lines": lines,
+        "assessment": concern.get("detail")
+        or "No dominant migration condition on this path.",
+        "evidence_quality": {
+            "direct": "migration events",
+            "correlated": "synchronization handoffs",
+            "limitation": (
+                "Handoff association is a heuristic, not a measured "
+                "cache-line transfer."),
+        },
+        "task": task,
+        "concern": concern,
+    }
+
+
+def _build_corridor_ai_context(
+        scope=None, corridor=None, task=None, bin_label=None,
+        overview=None, inspector_filters=None, time_scale=None) -> str:
+    scale = time_scale or (scope or {}).get("unit") or "ns"
+    lines = [
+        f"Analysis scope: {(scope or {}).get('label') or 'Full Trace'}",
+        f"Trace unit: {scale}",
+    ]
+    if scope and scope.get("detail"):
+        lines.append(f"Scope range: {scope['detail']}")
+    if corridor:
+        lines.append(
+            f"Selected core path: {corridor.get('from_core')} → {corridor.get('to_core')}")
+    else:
+        lines.append("Selected core path: none")
+    lines.append(
+        f"Selected task: {task.get('label')}" if task else "Selected task: none")
+    lines.append(
+        f"Selected time bin: {bin_label}" if bin_label else "Selected time bin: none")
+    if corridor:
+        lines.append(
+            f"Migrations: {corridor.get('count', 0)} "
+            f"({float(corridor.get('rate_per_s') or 0):.1f}/s)")
+        if corridor.get("ping_pong_pct") is not None:
+            lines.append(f"Ping-pong: {float(corridor.get('ping_pong_pct') or 0):.0f}%")
+        if corridor.get("median_dwell_ns"):
+            lines.append(
+                f"Median dwell: {_format_time(int(corridor['median_dwell_ns']), scale)}")
+        lines.append(
+            f"Handoff suspects: {corridor.get('bounces') or 0} "
+            f"({float(corridor.get('handoff_pct') or corridor.get('bounce_pct') or 0):.0f}%). "
+            "Heuristic synchronization association, not a measured cache-line transfer.")
+    if overview:
+        lines.append(f"Load balance: {overview.get('load_balance')}")
+    lines.append(f"Inspector filters: {inspector_filters or 'none'}")
+    lines.append(
+        "Do not automatically filter the timeline or change cursors unless the "
+        "user explicitly selects a viewer action.")
+    return "\n".join(lines)
+
+
 def _build_corridor_inspector_model(
         trace: "BtfTrace",
         lo: Optional[int] = None,
@@ -4063,11 +4443,13 @@ def _build_corridor_inspector_model(
     n_cores_m = len(cores)
     core_idx = {c: i for i, c in enumerate(cores)}
     full_grid = [[0] * n_cores_m for _ in range(n_cores_m)]
+    scoped_migs = []
     for m in _migrations_in_range(trace, lo, hi):
         if bounce_only and m.ns not in bounce_ns:
             continue
         if m.from_core == m.to_core:
             continue
+        scoped_migs.append(m)
         fi = core_idx.get(m.from_core)
         ti = core_idx.get(m.to_core)
         if fi is not None and ti is not None:
@@ -4112,6 +4494,8 @@ def _build_corridor_inspector_model(
                 t["bounce_bins"][bi] += 1
             t["bins"][bi] += 1
 
+    _attach_corridor_path_metrics(by_key, scoped_migs, trace.time_scale)
+
     all_corridors = []
     for row in by_key.values():
         rev = by_key.get((row["to_core"], row["from_core"]))
@@ -4137,13 +4521,20 @@ def _build_corridor_inspector_model(
             })
         peak_bin = max(range(time_bins), key=lambda b: row["bins"][b]) if time_bins else 0
         peak_val = row["bins"][peak_bin] if time_bins else 0
+        bounce_pct = (100.0 * row["bounces"] / row["count"]) if row["count"] else 0.0
         all_corridors.append({
             "from_core": row["from_core"],
             "to_core": row["to_core"],
             "label": row["label"],
             "count": row["count"],
             "bounces": row["bounces"],
-            "bounce_pct": (100.0 * row["bounces"] / row["count"]) if row["count"] else 0.0,
+            "bounce_pct": bounce_pct,
+            "handoff_count": row["bounces"],
+            "handoff_pct": bounce_pct,
+            "ping_pong": int(row.get("ping_pong") or 0),
+            "ping_pong_pct": float(row.get("ping_pong_pct") or 0),
+            "median_dwell_ns": int(row.get("median_dwell_ns") or 0),
+            "short_dwell_share": float(row.get("short_dwell_share") or 0),
             "avg_gap_ns": (row["gap_sum"] // row["count"]) if row["count"] else 0,
             "rate_per_s": (row["count"] / scope_sec) if scope_sec > 0 else 0.0,
             "net": _net_migration_balance(rev_count, row["count"]),
@@ -4228,7 +4619,7 @@ def _build_corridor_inspector_model(
                 "task": offender,
                 "summary": (
                     f"Hotspot: {offender['label']} on {c['label']} "
-                    f"({c['count']} mig, {c['bounce_pct']:.0f}% bounce)"
+                    f"({c['count']} mig, {c.get('ping_pong_pct', 0):.0f}% ping-pong)"
                     if offender else
                     f"Hotspot: {c['label']} ({c['count']} migrations)"
                 ),

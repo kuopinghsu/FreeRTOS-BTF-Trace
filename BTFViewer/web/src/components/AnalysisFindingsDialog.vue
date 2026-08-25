@@ -1,21 +1,30 @@
 <template>
   <!-- Floating tool window (Desktop Tool parity): Timeline stays clickable. -->
-  <div class="analysis-tool-host">
+  <div
+    class="analysis-tool-host"
+    :class="{ 'analysis-tool-host-free': dialogPos }"
+  >
     <div
+      ref="dialogEl"
       class="analysis-dialog"
       role="dialog"
       aria-modal="false"
       aria-label="Analysis Findings"
+      :style="dialogStyle"
     >
-      <div class="analysis-header">
+      <div
+        class="analysis-header"
+        @pointerdown="onHeaderPointerDown"
+      >
         <div class="analysis-title">
           Analysis Findings{{ scopeLabel }}
         </div>
         <button
-          class="analysis-close"
+          class="app-close-x"
           type="button"
           title="Close"
           aria-label="Close"
+          @pointerdown.stop
           @click="emit('close')"
         >×</button>
       </div>
@@ -427,6 +436,56 @@ const displayRows = computed(() =>
   }))
 
 const selectedId = ref('')
+const dialogEl = ref(null)
+const dialogPos = ref(null)
+let _drag = null
+
+function clampDialogPos(x, y) {
+  const el = dialogEl.value
+  const w = el?.offsetWidth || 0
+  const h = el?.offsetHeight || 0
+  const pad = 8
+  const maxX = Math.max(pad, window.innerWidth - w - pad)
+  const maxY = Math.max(pad, window.innerHeight - h - pad)
+  return {
+    x: Math.min(Math.max(pad, x), maxX),
+    y: Math.min(Math.max(pad, y), maxY),
+  }
+}
+
+const dialogStyle = computed(() => {
+  if (!dialogPos.value) return {}
+  return {
+    position: 'fixed',
+    left: `${dialogPos.value.x}px`,
+    top: `${dialogPos.value.y}px`,
+    margin: '0',
+  }
+})
+
+function onHeaderPointerDown(ev) {
+  if (ev.pointerType === 'mouse' && ev.button !== 0) return
+  if (ev.target.closest('button')) return
+  const el = dialogEl.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  _drag = { dx: ev.clientX - rect.left, dy: ev.clientY - rect.top }
+  dialogPos.value = { x: rect.left, y: rect.top }
+  window.addEventListener('pointermove', onDialogPointerMove)
+  window.addEventListener('pointerup', onDialogPointerUp)
+  ev.preventDefault()
+}
+
+function onDialogPointerMove(ev) {
+  if (!_drag) return
+  dialogPos.value = clampDialogPos(ev.clientX - _drag.dx, ev.clientY - _drag.dy)
+}
+
+function onDialogPointerUp() {
+  _drag = null
+  window.removeEventListener('pointermove', onDialogPointerMove)
+  window.removeEventListener('pointerup', onDialogPointerUp)
+}
 
 function clusterPrefix(f) {
   const id = String(f?.id || '')
@@ -647,6 +706,7 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('mousedown', onDocMouseDown)
   document.removeEventListener('keydown', onDocKeyDown)
+  onDialogPointerUp()
 })
 
 function askAi(payload) {
@@ -703,6 +763,10 @@ function moreAction(kind) {
   padding: 24px;
   pointer-events: none;
 }
+.analysis-tool-host-free {
+  display: block;
+  padding: 0;
+}
 
 .analysis-dialog {
   pointer-events: auto;
@@ -726,6 +790,11 @@ function moreAction(kind) {
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
+  cursor: grab;
+  user-select: none;
+}
+.analysis-header:active {
+  cursor: grabbing;
 }
 
 .analysis-dialog :deep(.analysis-context-strip) {
@@ -735,30 +804,6 @@ function moreAction(kind) {
 .analysis-title {
   font-size: 15px;
   font-weight: 700;
-}
-
-.analysis-close {
-  /* Match .trace-tab-close */
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  appearance: none;
-  border: none;
-  background: transparent;
-  color: var(--fg);
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
-  font-size: 14px;
-  line-height: 1;
-  padding: 0;
-  cursor: pointer;
-  opacity: 0.65;
-  flex: 0 0 auto;
-}
-.analysis-close:hover {
-  opacity: 1;
-  background: rgba(127, 127, 127, 0.2);
 }
 
 .analysis-queue {

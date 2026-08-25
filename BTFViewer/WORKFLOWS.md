@@ -116,7 +116,7 @@ You do not need every toolbar function for a first investigation. Learn these co
 | **Cursor** | Mark an evidence time or define C1–Cn | Becomes Scope only when **Limit to C1–Cn** is enabled |
 | **Statistics** | Calculate and display measurements | Uses the current Scope and active Filters |
 | **Analysis** | Rank findings for the current Scope | Provides leads and navigation |
-| **Migration & Corridor Inspector** | Inspect repeated core-to-core movement | Uses visible migration evidence |
+| **Migration & Corridor Inspector** | Inspect repeated core-to-core movement | Three columns: core path, heatmap, Topology. Click the heatmap for Path info. **Analysis Scope** defaults to Follow zoom (Fit = Full Trace, zoomed-in = Viewport). Lock Full Trace or Viewport, or choose Cursor C1–Cn |
 | **Compare** | Compare Baseline and Candidate traces | Requires at least two open traces |
 | **AI Assistant** | Explain, investigate, and verify supplied evidence | May request read-only or viewer-changing tools |
 
@@ -446,6 +446,7 @@ AI is optional. Use it after selecting a finding, task, event, distribution, or 
 | C1–Cn incident | **Explain this region with AI** or **Explain region** | Cursor range and scoped findings |
 | One timeline segment | **Ask AI about this event** | Selected task, core, segment, and nearby evidence |
 | Open distribution | **Query with AI…** | Selected metric, task, and displayed samples |
+| Migration & Corridor Inspector | **Investigate with AI** | Analysis scope, selected path, ping-pong/dwell, handoff heuristic, load balance, Inspector filters |
 | Two comparable traces | Trace Compare **Query with AI…** | Selected comparison tables |
 
 ### Follow the six AI stages

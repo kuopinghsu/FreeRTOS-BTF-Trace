@@ -386,7 +386,7 @@ class AiPanelUiTests(unittest.TestCase):
         prompt = panel._input.toPlainText()
         self.assertIn("migration", prompt.lower())
         self.assertIn("ping-pong", prompt)
-        self.assertIn("ownership bounce", prompt)
+        self.assertIn("handoff heuristic", prompt)
 
     def test_apply_gui_actions_button_runs_pending_tools(self) -> None:
         executed = []

@@ -266,14 +266,18 @@ flowchart TD
 
 建議依下列順序檢查：
 
-1. 使用**工作 × 核心**確認工作集中或分散在哪些核心。
-2. 使用**核心遷移**比較 Count、Rate、Dwell、Ping 與 Primary。
-3. 使用**核心對遷移摘要**找出主要的有向遷移路徑。
-4. 使用**核心親和性**確認當時觀察到的核心都在允許範圍內。
-5. 使用**核心使用率隨時間變化**，判斷遷移前是否存在負載不均。
-6. 回到時間軸檢查遷移，再比較前後的回應、執行與切換空檔。
+1. 先確認負載平衡。SMP 排程器可能把工作移到閒置核心，因此部分遷移是預期行為。
+2. 開啟**核心遷移**，優先比較 Rate、Dwell 與 Ping，不要只看 Count。
+3. 開啟 **Migration & Corridor Inspector**。工作區為三欄：**核心路徑**、**遷移熱圖**、**Topology**。Topology 可用 Circle 與 Matrix 檢視（圖示固定在右上）。超過 16 個核心時會改開 Matrix。點選熱圖儲存格時，右側改顯示 **Path info**。Topology 與 Path info 共用右欄，且互斥。
+4. 檢查所選路徑的 ping-pong、中位停留時間與短停留比例。
+5. **Handoff** 是同步擁有權啟發式關聯，不是量測到的快取行搬移。
+6. 使用 **Show events** 檢查相關時間軸視窗。**Filter Timeline** 是持續的工作篩選；Inspector 篩選只作用於對話框內。
 
-**Migration & Corridor Inspector** 將核心拓樸與時間結合，適合找出活動頻繁的核心對、反覆返回及共同使用同一遷移路徑的工作。遷移路徑只能證明工作配置反覆改變，不能直接證明快取成本。快取遺失、Lazy coprocessor context 失效或額外暫存器儲存，仍需要處理器專屬證據。
+**Analysis Scope** 預設為 **Follow zoom**：Fit（或可見範圍 ≥ 追蹤資料的 92%）視為 **Full Trace**；放大後的視窗視為 **Viewport** 並跟隨平移／縮放。可從選單鎖定 **Full Trace** 或 **Viewport**，或在已放置至少兩個游標時選擇 **Cursor C1–Cn**。若未放置至少兩個游標，Cursor C1–Cn 會停用並顯示「Place at least two cursors.」。
+
+總覽列顯示分析範圍、負載平衡狀態、遷移次數與速率、最受影響的工作、最熱路徑，以及主要關注點（None / Burst / Ping-pong / Short dwell / Handoff suspect）。請使用 **Show Top 5 / 10 / 25 / All paths**，不要用百分比截斷。**Investigate with AI** 會把這些結構化內容送到 `migrations` 範本；除非你另外選擇檢視器動作，否則不會篩選時間軸或移動游標。
+
+遷移路徑只能證明工作配置反覆改變，不能直接證明快取成本。快取遺失、Lazy coprocessor context 失效或額外暫存器儲存，仍需要處理器專屬證據。
 
 ### 優先權繼承與 L/M/H 型態
 
@@ -755,11 +759,11 @@ g_k = t_{start,k+1} - t_{end,k}
 
 **計算方式：**依時間順序比較同一工作的相鄰區段；核心不同時形成一筆遷移。Count 為變更次數，Primary 依累積執行時間決定，Rate 以可用的時間或 TICK 基準正規化；Dwell 與 Ping 則描述配置維持多久及多快返回原核心。
 
-**使用方式：**先確認 RTOS 負載平衡允許遷移，再依 Rate、短 Dwell 與 Ping 排序。搭配**核心對遷移摘要**及**核心親和性**，並將遷移時間與回應、執行及切換空檔的尾端互相比對。追蹤資料無法直接量測快取重新載入或協同處理器暫存器儲存成本。
+**使用方式：**先確認 RTOS 負載平衡允許遷移，再依 Rate、短 Dwell 與 Ping 排序。搭配**核心對遷移摘要**、**核心親和性**與 **Migration & Corridor Inspector**，並將遷移時間與回應、執行及切換空檔的尾端互相比對。追蹤資料無法直接量測快取重新載入或協同處理器暫存器儲存成本。
 
 ![核心遷移與路徑檢視器](../images/migration.svg)
 
-若要在時間軸中觀察遷移工作的前後關係，可在 Task View 鎖定反白該工作，並開啟各核心的 CPU Load。若問題只發生在特定時間，先用游標框住範圍並啟用 **Limit to C1–Cn**，再重新開啟這項統計，表格便會描述該事件範圍，而不是整份追蹤資料。
+若要在時間軸中觀察遷移工作的前後關係，可在 Task View 鎖定反白該工作，並開啟各核心的 CPU Load。若問題只發生在特定時間，可放大時間軸（**Follow zoom** 會改為 Viewport）、鎖定 Inspector 的 **Analysis Scope** 為 **Viewport**，或放置至少兩個游標並選擇 **Cursor C1–Cn**。Statistics 的 **Limit to C1–Cn** 是獨立設定：它改變 Statistics 計算，不會自動改變 Inspector 結果。
 
 ![在 Task View 鎖定反白 CS[22] 並顯示各核心 CPU Load](../images/stats/tasks-cpu-load-cs22.svg)
 

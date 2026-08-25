@@ -413,10 +413,11 @@ describe('AI endpoint helpers', () => {
     assert.match(findings.prompt, /Response Time/)
   })
 
-  it('Migration thrash template is available for inspector Query with AI', () => {
+  it('Migration thrash template is available for inspector Investigate with AI', () => {
     const migrations = AI_TEMPLATE_QUESTIONS.find(t => t.id === 'migrations')
     assert.ok(migrations)
-    assert.match(migrations.prompt, /thrashing|lock-bounce/i)
+    assert.match(migrations.prompt, /thrashing|ping-pong|handoff/i)
+    assert.match(migrations.prompt, /cache-line transfer/)
   })
 
   it('primary chips plus More groups cover every template id', () => {

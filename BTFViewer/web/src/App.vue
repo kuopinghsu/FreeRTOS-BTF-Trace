@@ -1097,8 +1097,8 @@
     <CorridorInspectorDialog
       v-if="inspectorOpen && trace"
       :trace="trace"
+      :cursors="cursors"
       :viewport="timelineViewport"
-      :viewport-programmatic="inspectorVpProgrammatic"
       :task-filter-active="!!timelineOptions.taskFilterKeys?.length"
       :task-filter-label="timelineOptions.heatmapFilterLabel"
       :task-filter-count="timelineOptions.taskFilterKeys?.length ?? 0"
@@ -1110,6 +1110,8 @@
       @jump="onCorridorJump"
       @clear-filter="clearHeatmapTaskFilter"
       @query-ai="queryCorridorWithAi"
+      @inspect-task="onInspectorInspectTask"
+      @open-load-balance="onInspectorOpenLoadBalance"
     />
 
     <div
@@ -1624,7 +1626,6 @@ const settingsOpen = ref(false)
 const inspectorOpen = ref(false)
 const inspectorMode = ref('heatmap') // 'heatmap' | 'chord'
 const inspectorFocusPair = ref(null)
-const inspectorVpProgrammatic = ref(false)
 const analysisOpen = ref(false)
 const findingsTriageState = ref(defaultTriageState())
 const findingsInvestigateUndo = ref(null)
@@ -3844,8 +3845,31 @@ async function queryAskAiEvent(event) {
   await focusAiAndAsk({ template: 'ask_event', prompt: composeAskEventPrompt(event) })
 }
 
-async function queryCorridorWithAi() {
-  await focusAiAndAsk('migrations')
+async function queryCorridorWithAi(payload) {
+  const extra = String(payload?.extra || '').trim()
+  if (payload?.action === 'compare') {
+    const tabsOpen = (tabs.value || []).filter(t => t?.trace)
+    if (tabsOpen.length >= 2) {
+      await queryCompareWithAi({ idA: tabsOpen[0].id, idB: tabsOpen[1].id })
+      return
+    }
+  }
+  await focusAiAndAsk({
+    template: 'migrations',
+    extra,
+  })
+}
+
+function onInspectorInspectTask(mk) {
+  if (mk) onHighlightClick(mk)
+}
+
+async function onInspectorOpenLoadBalance() {
+  rightPanelTab.value = 'stats'
+  await nextTick()
+  statsPanelRef.value?.applyDemoSections?.({
+    id: 'cores', expand: true, scroll: 'section', collapse_others: false,
+  })
 }
 
 async function queryCompareWithAi(payload) {
@@ -5251,8 +5275,7 @@ function onCpuLoadToggleExpandAll() {
 
 function onTimelineViewportChange(vp) {
   if (!vp) return
-  const { programmatic, ...rest } = vp
-  inspectorVpProgrammatic.value = !!programmatic
+  const { programmatic: _programmatic, ...rest } = vp
   if (activeTab.value) Object.assign(activeTab.value.timelineViewport, rest)
   refreshZoomPresetUi()
 }
@@ -6798,19 +6821,31 @@ body {
   white-space: nowrap;
 }
 
-.trace-tab-close {
+.trace-tab-close,
+.app-close-x {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  appearance: none;
+  box-sizing: border-box;
+  border: none;
+  background: transparent;
+  color: inherit;
   width: 16px;
   height: 16px;
   border-radius: 3px;
+  font-family: inherit;
   font-size: 14px;
+  font-weight: 400;
   line-height: 1;
+  padding: 0;
+  cursor: pointer;
   opacity: 0.65;
+  flex: 0 0 auto;
 }
 
-.trace-tab-close:hover {
+.trace-tab-close:hover,
+.app-close-x:hover {
   opacity: 1;
   background: rgba(127, 127, 127, 0.2);
 }

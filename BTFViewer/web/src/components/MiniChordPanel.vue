@@ -4,23 +4,47 @@
     class="mini-chord"
     :class="{ matrix: viewMode === 'matrix' }"
   >
-    <div
-      v-if="cores.length > 16"
-      class="mini-chord-view-toggle"
-    >
+    <div class="mini-chord-view-toggle">
       <button
         type="button"
         :class="{ active: viewMode === 'circle' }"
-        @click="viewMode = 'circle'"
+        title="Circular topology"
+        :aria-pressed="viewMode === 'circle'"
+        :disabled="cores.length > MATRIX_CORE_LIMIT"
+        @click="setViewMode('circle')"
       >
-        Circle
+        <svg
+          viewBox="0 0 16 16"
+          width="14"
+          height="14"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path
+            fill-rule="evenodd"
+            :d="IC.chord"
+          />
+        </svg>
       </button>
       <button
         type="button"
         :class="{ active: viewMode === 'matrix' }"
-        @click="viewMode = 'matrix'"
+        title="Core-to-core matrix"
+        :aria-pressed="viewMode === 'matrix'"
+        @click="setViewMode('matrix')"
       >
-        Matrix
+        <svg
+          viewBox="0 0 16 16"
+          width="14"
+          height="14"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path
+            fill-rule="evenodd"
+            :d="IC.heatmap"
+          />
+        </svg>
       </button>
     </div>
     <canvas
@@ -37,6 +61,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { coreColor } from '../utils/colors.js'
+import { IC } from '../utils/toolbarIcons.js'
 import {
   buildChordLayout,
   buildTaperedRibbonPath,
@@ -53,6 +78,9 @@ import {
 } from '../utils/migrationAnalysis.js'
 
 const OUTER_PAD = 36
+const MATRIX_CORE_LIMIT = 16
+const MATRIX_PAD_L = 36
+const MATRIX_PAD_T = 64
 
 const props = defineProps({
   cores: { type: Array, default: () => [] },
@@ -75,7 +103,7 @@ const emit = defineEmits([
 
 const wrapRef = ref(null)
 const canvasRef = ref(null)
-const viewMode = ref(props.cores.length > 16 ? 'matrix' : 'circle')
+const viewMode = ref('circle')
 const hoverCore = ref(null)
 const hoverSide = ref(null) // 'egress' | 'ingress' | null
 const hoverCorridor = ref(null) // { i, j }
@@ -230,8 +258,8 @@ function paintMatrix(ctx, w, h, labelColor) {
   const { cores, grid } = props
   const n = cores.length
   if (!n) return
-  const padL = 36
-  const padT = 36
+  const padL = MATRIX_PAD_L
+  const padT = MATRIX_PAD_T
   const cell = Math.max(4, Math.min((w - padL - 8) / n, (h - padT - 8) / n))
   const maxC = maxCount.value
   ctx.font = '9px monospace'
@@ -327,8 +355,8 @@ function matrixHit(mx, my) {
   if (!n) return null
   const w = wrap.clientWidth
   const h = wrap.clientHeight
-  const padL = 36
-  const padT = 36
+  const padL = MATRIX_PAD_L
+  const padT = MATRIX_PAD_T
   const cell = Math.max(4, Math.min((w - padL - 8) / n, (h - padT - 8) / n))
   const j = Math.floor((mx - padL) / cell)
   const i = Math.floor((my - padT) / cell)
@@ -444,9 +472,17 @@ function onDblClick(ev) {
   }
 }
 
+function setViewMode(mode) {
+  if (mode === 'circle' && props.cores.length > MATRIX_CORE_LIMIT) {
+    viewMode.value = 'matrix'
+    return
+  }
+  viewMode.value = mode === 'matrix' ? 'matrix' : 'circle'
+}
+
 watch(() => props.cores.length, (n) => {
-  if (n > 16 && viewMode.value === 'circle') viewMode.value = 'matrix'
-})
+  if (n > MATRIX_CORE_LIMIT) viewMode.value = 'matrix'
+}, { immediate: true })
 
 watch(() => [props.cores, props.grid, props.focusCorridor, props.focusCores, props.directionMode, viewMode.value, hoverCore.value, hoverCorridor.value],
   () => scheduleDraw(), { deep: true })
@@ -491,13 +527,21 @@ defineExpose({ scheduleDraw })
   gap: 4px;
 }
 .mini-chord-view-toggle button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
   border: 1px solid var(--border);
   background: var(--tb-bg);
-  color: var(--fg-dim);
+  color: var(--fg);
   border-radius: 3px;
-  padding: 2px 6px;
-  font-size: 10px;
+  padding: 2px;
   cursor: pointer;
+}
+.mini-chord-view-toggle button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 .mini-chord-view-toggle button.active {
   color: var(--fg);

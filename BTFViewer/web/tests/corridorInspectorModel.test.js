@@ -14,6 +14,13 @@ import {
   defaultCorridorTopPct,
   filterCorridorsByTaskQuery,
   filterCorridorsByTopPct,
+  applyCorridorTopNFilter,
+  applyCorridorSort,
+  buildCorridorOverview,
+  buildCorridorAiContext,
+  defaultCorridorTopN,
+  filterCorridorsByTopN,
+  inspectorAnalysisScope,
   inspectorViewportBanner,
   inspectorViewportIsFull,
   INSPECTOR_FULL_VIEW_RATIO,
@@ -25,6 +32,8 @@ import {
 const webRoot = dirname(fileURLToPath(import.meta.url))
 const statsPy = readFileSync(join(webRoot, '../../btf_viewer_pkg/stats.py'), 'utf8')
 const ciVue = readFileSync(join(webRoot, '../src/components/CorridorInspectorDialog.vue'), 'utf8')
+const appVue = readFileSync(join(webRoot, '../src/App.vue'), 'utf8')
+const chordVue = readFileSync(join(webRoot, '../src/components/MiniChordPanel.vue'), 'utf8')
 const plotVue = readFileSync(join(webRoot, '../src/components/StatisticsPanel.vue'), 'utf8')
 const timelineVue = readFileSync(join(webRoot, '../src/components/TimelinePanel.vue'), 'utf8')
 
@@ -37,6 +46,74 @@ describe('defaultCorridorTopPct', () => {
     assert.equal(defaultCorridorTopPct(9), 25)
     assert.equal(defaultCorridorTopPct(16), 25)
     assert.equal(defaultCorridorTopPct(32), 25)
+  })
+})
+
+describe('filterCorridorsByTopN', () => {
+  const rows = [
+    { count: 100, label: 'a' }, { count: 50, label: 'b' },
+    { count: 20, label: 'c' }, { count: 5, label: 'd' },
+  ]
+  it('keeps all when n is 0', () => {
+    assert.equal(filterCorridorsByTopN(rows, 0).length, 4)
+  })
+  it('keeps the N busiest paths by count', () => {
+    const kept = filterCorridorsByTopN(rows, 2)
+    assert.deepEqual(kept.map(r => r.count), [100, 50])
+  })
+})
+
+describe('defaultCorridorTopN', () => {
+  it('returns all paths for small core counts and Top 10 for many cores', () => {
+    assert.equal(defaultCorridorTopN(2), 0)
+    assert.equal(defaultCorridorTopN(8), 0)
+    assert.equal(defaultCorridorTopN(9), 10)
+  })
+})
+
+describe('inspectorAnalysisScope', () => {
+  const fmt = (ns) => `${ns}ns`
+  it('defaults to Full Trace and does not use the viewport', () => {
+    const full = inspectorAnalysisScope('full', [100, 200], 0, 1000, 'ns', fmt, { timeStart: 10, timeEnd: 20 })
+    assert.equal(full.mode, 'full')
+    assert.equal(full.lo, null)
+    assert.equal(full.label, 'Full Trace')
+    assert.match(full.detail, /trace unit: ns/)
+  })
+  it('follows zoom in auto mode', () => {
+    const zoomed = inspectorAnalysisScope('auto', [], 0, 1000, 'ns', fmt, { timeStart: 100, timeEnd: 400 })
+    assert.equal(zoomed.mode, 'viewport')
+    assert.equal(zoomed.lo, 100)
+    assert.equal(zoomed.hi, 400)
+    const fit = inspectorAnalysisScope('auto', [], 0, 1000, 'ns', fmt, { timeStart: 0, timeEnd: 1000 })
+    assert.equal(fit.mode, 'full')
+    assert.equal(fit.lo, null)
+    const fitMode = inspectorAnalysisScope('auto', [], 0, 1000, 'ns', fmt, { timeStart: 10, timeEnd: 20, fitMode: true })
+    assert.equal(fitMode.mode, 'full')
+    const defaulted = inspectorAnalysisScope(null, [], 0, 1000, 'ns', fmt, { timeStart: 100, timeEnd: 200 })
+    assert.equal(defaulted.mode, 'viewport')
+  })
+  it('uses Cursor C1–Cn when two cursors exist', () => {
+    const cur = inspectorAnalysisScope('cursor', [100, 200], 0, 1000, 'ns', fmt)
+    assert.equal(cur.mode, 'cursor')
+    assert.equal(cur.lo, 100)
+    assert.equal(cur.hi, 200)
+    assert.equal(cur.label, 'Cursor C1–C2')
+    assert.equal(cur.canCursor, true)
+  })
+  it('disables cursor scope with a placement hint', () => {
+    const none = inspectorAnalysisScope('cursor', [50], 0, 1000, 'ns', fmt)
+    assert.equal(none.mode, 'full')
+    assert.equal(none.canCursor, false)
+    assert.match(none.cursorDisabledReason, /Place at least two cursors/)
+  })
+  it('uses the visible timeline window in Viewport mode', () => {
+    const vp = inspectorAnalysisScope('viewport', [], 0, 1000, 'ns', fmt, { timeStart: 100, timeEnd: 400 })
+    assert.equal(vp.mode, 'viewport')
+    assert.equal(vp.label, 'Viewport')
+    assert.equal(vp.lo, 100)
+    assert.equal(vp.hi, 400)
+    assert.equal(vp.scoped, true)
   })
 })
 
@@ -130,9 +207,31 @@ describe('buildCorridorInspectorModel', () => {
     assert.equal(c01.net, 1 - 3)
     assert.equal(c01.tasks.length, 2)
     assert.equal(c01.primaryTask.mk, 't1')
+    assert.ok(c01.pingPongPct >= 0)
+    assert.ok('shortDwellShare' in c01)
     assert.ok(model.hotspot)
     assert.equal(model.hotspot.fromCore, 'Core_0')
+    assert.match(model.hotspot.summary, /ping-pong|migrations/)
+    const overview = buildCorridorOverview(trace, model, { label: 'Full Trace' })
+    assert.match(overview.headline, /Full Trace/)
+    assert.equal(overview.migrations, 4)
+    assert.ok(overview.hottestPath.includes('Core_0'))
+    const extra = buildCorridorAiContext({
+      scope: { label: 'Full Trace', unit: 'ns', detail: '0 … 1000' },
+      corridor: c01,
+      overview,
+      inspectorFilters: 'None',
+      timeScale: 'ns',
+    })
+    assert.match(extra, /Analysis scope: Full Trace/)
+    assert.match(extra, /Handoff suspects/)
+    assert.match(extra, /not a measured cache-line transfer/)
     assert.equal(CHORD_GRAD_SOURCE_STOP, 0.7)
+    const half = applyCorridorTopNFilter(model, 1)
+    assert.ok(half.corridors.length >= 1)
+    assert.ok(half.corridors.length <= model.allCorridors.length)
+    const sorted = applyCorridorSort(model, 'rate')
+    assert.ok(sorted.corridors[0].count >= sorted.corridors[sorted.corridors.length - 1].count)
   })
 
   it('applies topPct filtering', () => {
@@ -298,17 +397,67 @@ describe('inspectorViewportBanner', () => {
     assert.match(vp.detail, /100ns … 200ns/)
   })
 
-  it('stays lockstep with Desktop stats.py and the distribution-chart colors', () => {
+  it('stays lockstep with Desktop stats.py for explicit analysis scope', () => {
     assert.equal(INSPECTOR_FULL_VIEW_RATIO, 0.92)
     assert.match(statsPy, /_INSPECTOR_FULL_VIEW_RATIO = 0\.92/)
     assert.match(timelineVue, /return ratio >= 0\.92/)
-    assert.match(statsPy, /"Full view"/)
-    assert.match(statsPy, /"Viewport view"/)
-    assert.match(statsPy, /setObjectName\("ciScopeBanner"\)/)
-    assert.match(statsPy, /if fit_mode or lo is None or hi is None:/)
-    assert.match(ciVue, /class="ci-scope-banner"/)
-    assert.match(ciVue, /inspectorViewportBanner\(/)
-    assert.match(ciVue, /text-transform: uppercase/)
+    assert.match(statsPy, /"Full Trace"/)
+    assert.match(statsPy, /"Viewport"/)
+    assert.match(statsPy, /"Cursor C1/)
+    assert.match(statsPy, /Place at least two cursors/)
+    assert.match(statsPy, /Investigate with AI/)
+    assert.match(statsPy, /Handoff suspects only/)
+    assert.match(statsPy, /"Topology"/)
+    assert.match(statsPy, /Path info/)
+    assert.doesNotMatch(statsPy, /QPushButton\("Activity"\)/)
+    assert.match(ciVue, /value: 'auto', label: 'Follow zoom'/)
+    assert.match(ciVue, /value: 'viewport', label: 'Viewport'/)
+    assert.match(ciVue, /analysisMode = ref\('auto'\)/)
+    assert.match(statsPy, /_analysis_mode = "auto"/)
+    assert.match(statsPy, /addItem\("Follow zoom", "auto"\)/)
+    assert.match(appVue, /function onCorridorJump\(payload\)/)
+    assert.match(appVue, /payload\.binLo/)
+    assert.match(statsPy, /"binLo": bin_lo/)
+    assert.match(statsPy, /"binHi": bin_hi/)
+    assert.match(chordVue, /IC\.heatmap/)
+    assert.match(chordVue, /IC\.chord/)
+    assert.doesNotMatch(chordVue, />Circle</)
+    assert.match(statsPy, /_IC_CHORD/)
+    assert.match(statsPy, /ciCircleToggle/)
+    assert.match(statsPy, /_matrix_pad_t/)
+    assert.match(ciVue, /inspectorAnalysisScope\(/)
+    assert.match(ciVue, /Analysis Scope/)
+    assert.match(ciVue, /Place at least two cursors/)
+    assert.match(ciVue, /Investigate with AI/)
+    assert.match(ciVue, /Handoff suspects only/)
+    assert.match(ciVue, /Filter paths by task name or ID/)
+    assert.match(ciVue, /Filter Inspector/)
+    assert.match(ciVue, /Investigate this path/)
+    assert.ok(ciVue.indexOf('ci-overview') < ciVue.indexOf('ci-toolbar'))
+    assert.ok(ciVue.indexOf('ci-toolbar') < ciVue.indexOf('ci-scope-banner'))
+    assert.ok(ciVue.indexOf('ci-filter-status') < ciVue.indexOf('ci-workspace'))
+    assert.ok(ciVue.indexOf('ci-tree-pane') < ciVue.indexOf('ci-grid-pane'))
+    assert.ok(ciVue.indexOf('ci-grid-pane') < ciVue.indexOf('ci-right-pane'))
+    assert.match(ciVue, /class="app-close-x"/)
+    assert.match(appVue, /\.trace-tab-close,\s*\n\.app-close-x \{/)
+    assert.match(ciVue, /flex-wrap: nowrap/)
+    assert.match(ciVue, /evidenceLinesText/)
+    assert.match(statsPy, /_FlowLayout\(btn_row/)
+    assert.match(ciVue, /ci-actions-row/)
+    assert.match(ciVue, /ci-card-actions/)
+    assert.match(statsPy, /Empty bins: no migrations in that interval/)
+    assert.match(ciVue, /Empty bins: no migrations in that interval/)
+    assert.doesNotMatch(statsPy, /QPushButton\("Jump To"\)/)
+    assert.doesNotMatch(statsPy, /corridorInspectorSidebar/)
+    assert.doesNotMatch(statsPy, /hatch: lock bounce/)
+    assert.doesNotMatch(statsPy, /double-click to apply as Migration Filter/)
+    assert.match(statsPy, /double-click to show events/)
+    assert.match(ciVue, /double-click to show events/)
+    assert.match(statsPy, /_HEAD_H = 28/)
+    assert.match(ciVue, /GRID_HEAD_H = 28/)
+    assert.match(statsPy, /def _handle_nav_key/)
+    assert.match(ciVue, /onGridKeydown/)
+    assert.doesNotMatch(ciVue, /viewportProgrammatic/)
     assert.equal(inspectorViewportIsFull(null, null, 0, 1000), true)
     assert.equal(inspectorViewportIsFull(100, 200, 0, 1000), false)
     assert.equal(inspectorViewportIsFull(100, 200, 0, 1000, true), true)
@@ -322,5 +471,40 @@ describe('inspectorViewportBanner', () => {
     assert.match(ciVue, /color: #1a1200/)
     assert.match(plotVue, /color-mix\(in srgb, #ff9800 18%, var\(--panel-bg\)\)/)
     assert.match(ciVue, /color-mix\(in srgb, #ff9800 18%, var\(--panel-bg\)\)/)
+    assert.match(ciVue, /onHeaderPointerDown/)
+    assert.match(ciVue, /dialogPos/)
+    assert.match(ciVue, /ci-overlay-free/)
+    assert.match(ciVue, /rgba\(91, 155, 213, 0\.18\)/)
+    assert.match(ciVue, /\.ci-jump:hover:not\(:disabled\)/)
+    assert.match(ciVue, /\.ci-show-all:hover:not\(:disabled\)/)
+    assert.match(ciVue, /\.ci-show-all:disabled/)
+    assert.match(ciVue, /\.ci-jump:disabled/)
+    assert.match(statsPy, /#ciFilterBar/)
+    assert.match(ciVue, /ci-field-sort/)
+    assert.match(ciVue, /min-width: 148px/)
+    assert.match(ciVue, /grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/)
+    assert.doesNotMatch(ciVue, /ci-overview-concern/)
+    assert.match(statsPy, /grid.addWidget\(self\._ov_mig, 0, 2\)/)
+    assert.match(statsPy, /self\._ov_headline.setWordWrap\(False\)/)
+    assert.doesNotMatch(statsPy, /_ov_concern_detail/)
+    assert.match(statsPy, /hover": "#E0E8F0"/)
+    assert.match(statsPy, /combo_sel_fg/)
+    assert.match(statsPy, /def _apply_ci_chrome/)
+    assert.match(ciVue, /plotBottom - 0\.5/)
+    assert.match(ciVue, /rgba\(91, 155, 213, 0\.35\)/)
+    assert.match(statsPy, /plot_bottom - 0\.01/)
+    assert.match(statsPy, /rgba\(91, 155, 213, 0\.22\)/)
+    assert.match(statsPy, /def _ci_button_qss/)
+    assert.match(statsPy, /def _ci_toolbar_qss/)
+    assert.match(statsPy, /QPushButton:hover:!disabled/)
+    assert.match(statsPy, /#ciFooter/)
+    assert.match(statsPy, /combo_view/)
+    assert.match(statsPy, /def _ci_combo_widget_qss/)
+    assert.match(statsPy, /QAbstractItemView::item:hover/)
+    assert.match(statsPy, /setMinimumWidth\(148\)/)
+    assert.match(statsPy, /grid.setColumnStretch\(0, 1\)/)
+    assert.match(statsPy, /self\._ov_scope.setWordWrap\(False\)/)
+    assert.match(statsPy, /#ciOverview \{/)
+    assert.match(statsPy, /f" border-radius: 6px; padding: 8px 10px; \}\}"/)
   })
 })

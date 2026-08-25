@@ -116,7 +116,7 @@ flowchart TD
 | **Cursor** | 標記事件時間，或定義 C1–Cn | 只有啟用 **Limit to C1–Cn** 後才會成為分析範圍 |
 | **Statistics** | 計算並顯示統計結果 | 使用目前分析範圍與篩選條件 |
 | **Analysis** | 排列目前分析範圍內的分析結果 | 提供線索與導覽 |
-| **Migration & Corridor Inspector** | 檢查重複的核心間移動 | 使用目前可見的遷移證據 |
+| **Migration & Corridor Inspector** | 檢查重複的核心間移動 | 三欄：核心路徑、熱圖、Topology。點選熱圖可開啟 Path info。**Analysis Scope** 預設為 Follow zoom（Fit 視為 Full Trace，放大後視為 Viewport）。可鎖定 Full Trace 或 Viewport，或選擇 Cursor C1–Cn |
 | **Compare** | 比較 Baseline 與 Candidate 追蹤資料 | 至少需要開啟兩份追蹤資料 |
 | **AI Assistant** | 解釋、調查與驗證已提供的證據 | 可能要求唯讀查詢或改變檢視器的工具動作 |
 
@@ -436,6 +436,7 @@ AI 是選用工具。選定分析結果、工作、事件、分布圖或 C1–Cn
 | C1–Cn 事件 | **Explain this region with AI** 或 **Explain region** | 游標範圍與限定範圍的 Findings |
 | 一個時間軸執行片段 | **Ask AI about this event** | 所選工作、核心、片段與附近證據 |
 | 已開啟的分布圖 | **Query with AI…** | 所選指標、工作與圖表顯示的樣本 |
+| Migration & Corridor Inspector | **Investigate with AI** | 分析範圍、所選路徑、ping-pong／停留時間、handoff 啟發式、負載平衡、Inspector 篩選 |
 | 兩份可比較追蹤資料 | Trace Compare **Query with AI…** | 所選比較表格 |
 
 ### 依六個 AI 階段進行

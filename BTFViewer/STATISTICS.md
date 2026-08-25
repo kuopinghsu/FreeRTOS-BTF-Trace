@@ -275,14 +275,18 @@ Before treating migration as a problem, confirm that the RTOS configuration perm
 
 Use this sequence:
 
-1. Open **Task × Core** to see whether the task is concentrated or spread across cores.
-2. Open **Core Migrations** and compare Count, Rate, Dwell, Ping, and Primary.
-3. Open **Core-Pair Migration Summary** to identify the dominant directed paths.
-4. Use **Core Affinity** to verify that every observed core was allowed at that time.
-5. Use **Core Utilization Over Time** to determine whether a move followed a load imbalance.
-6. Inspect the migration on the timeline, then compare response, execution, and switch gaps around it.
+1. Confirm load balance. An SMP scheduler may move tasks to idle cores, so some migration is expected.
+2. Open **Core Migrations** and rank by Rate, Dwell, and Ping rather than Count alone.
+3. Open the **Migration & Corridor Inspector**. The workspace has three columns: **Core path**, **migration heatmap**, and **Topology**. Topology has Circle and Matrix views (icons stay at the top right). Traces with more than 16 cores open in Matrix. Click a heatmap cell to show **Path info** in the right column. Topology and Path info share that column and are exclusive.
+4. Check ping-pong, median dwell, and short-dwell share on the selected path.
+5. Treat **Handoff** as a synchronization-ownership heuristic, not a measured cache-line transfer.
+6. Inspect the relevant timeline window with **Show events**. **Filter Timeline** is a persistent task filter; Inspector filters stay local.
 
-The **Migration & Corridor Inspector** combines topology and time. It is useful for finding a hot pair, repeated bounce-back, and tasks that cross the same corridor. A corridor is evidence of repeated placement, not proof of cache cost. Cache misses, lazy coprocessor context invalidation, and additional register saves require processor-specific evidence.
+**Analysis Scope** defaults to **Follow zoom**: Fit (or ≥ 92% of the trace) is **Full Trace**; a zoomed-in window is **Viewport** and follows pan/zoom. Lock **Full Trace** or **Viewport** from the menu, or choose **Cursor C1–Cn** when at least two cursors are placed. If fewer than two cursors are placed, Cursor C1–Cn is disabled with “Place at least two cursors.”
+
+The Inspector overview shows scope, load-balance status, migration count and rate, the most affected task, the hottest path, and the main concern (None / Burst / Ping-pong / Short dwell / Handoff suspect). Use **Show Top 5 / 10 / 25 / All paths** rather than a percentage cutoff. **Investigate with AI** sends that structured context on the `migrations` template; it does not filter the timeline or move cursors unless you choose a viewer action.
+
+A corridor is evidence of repeated placement, not proof of cache cost. Cache misses, lazy coprocessor context invalidation, and additional register saves require processor-specific evidence.
 
 ### Priority inheritance and the L/M/H pattern
 
@@ -764,11 +768,11 @@ High Count alone is not enough to diagnose a problem. Short Dwell together with 
 
 **Calculation.** Consecutive slices of the same task are compared in time order. A core change creates a migration sample. Count is the number of changes; Primary comes from accumulated on-CPU time. Rate normalizes Count to an available time or TICK base. Dwell and Ping describe how long placement remains stable and how quickly a task returns.
 
-**How to use it.** First confirm that RTOS load balancing permits migration. Rank by Rate and short Dwell rather than Count alone, then inspect **Core-Pair Migration Summary** and **Core Affinity**. Compare the migration timestamps with response, execution, and switch-gap tails. The trace cannot directly measure cache refill or coprocessor save cost.
+**How to use it.** First confirm that RTOS load balancing permits migration. Rank by Rate and short Dwell rather than Count alone, then inspect **Core-Pair Migration Summary**, **Core Affinity**, and the **Migration & Corridor Inspector**. Compare the migration timestamps with response, execution, and switch-gap tails. The trace cannot directly measure cache refill or coprocessor save cost.
 
 ![Migration & Corridor Inspector](../images/migration.svg)
 
-To inspect a migrating task in context, lock-highlight it in Task View and enable per-core CPU Load. If the problem is limited to a time window, place the cursors around that window and enable **Limit to C1–Cn** before reopening this statistic. The table then describes the selected incident instead of the entire trace.
+To inspect a migrating task in context, lock-highlight it in Task View and enable per-core CPU Load. If the problem is limited to a time window, zoom the timeline (**Follow zoom** becomes Viewport) or lock Inspector **Analysis Scope** to **Viewport**, or place at least two cursors and select **Cursor C1–Cn**. Statistics **Limit to C1–Cn** is independent: it changes Statistics calculations, not Inspector results, unless you also select Cursor C1–Cn in the Inspector.
 
 ![CS[22] highlighted in Task View with per-core CPU Load](../images/stats/tasks-cpu-load-cs22.svg)
 

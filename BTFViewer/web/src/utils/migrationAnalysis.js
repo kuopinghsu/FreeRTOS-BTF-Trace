@@ -9,6 +9,7 @@ import { blockingTimeSamples, schedulingStats } from './statsAnalysis.js'
 import { segFullyInRange, segOverlapsRange } from './statsRange.js'
 import { formatMigrationGapTime, formatTime } from './timeFormat.js'
 import { prepareUxEvents } from './uxExplore.js'
+import { classifyLoadBalance, loadBalanceMetrics } from './loadBalanceGauge.js'
 
 const NS_PER_SCALE = { ns: 1e9, us: 1e6, ms: 1e3, s: 1 }
 
@@ -139,6 +140,18 @@ export function formatMigrationRate(nMig, taskActive, tickCount, timeScale) {
 
 export const MIGRATION_PING_PONG_WINDOW = 1000
 export const MIGRATION_STI_WINDOW = 500
+/** Short-dwell threshold: 1 ms in the trace time unit. */
+export const CORRIDOR_SHORT_DWELL_MS = 1
+export const CORRIDOR_HANDOFF_HATCH_PCT = 15
+export const CORRIDOR_TOP_N_OPTIONS = Object.freeze([5, 10, 25, 0])
+export const CORRIDOR_SORT_KEYS = Object.freeze([
+  'rate', 'pingpong', 'dwell', 'handoff', 'share',
+])
+
+export function corridorShortDwellThreshold(timeScale) {
+  const nsPer = NS_PER_SCALE[timeScale] || 1e9
+  return Math.max(1, Math.round((nsPer / 1000) * CORRIDOR_SHORT_DWELL_MS))
+}
 
 function isIdleOrTick(raw) {
   const { name } = parseTaskName(raw)
@@ -924,6 +937,131 @@ export function filterCorridorsByTopPct(corridors, topPct = 100) {
   return list.filter(c => (c.count || 0) >= threshold)
 }
 
+/**
+ * Default Top-N path count from core count.
+ * @returns {number} 5|10|25|0 (0 = all paths)
+ */
+export function defaultCorridorTopN(coreCount) {
+  const n = coreCount || 0
+  if (n > 8) return 10
+  return 0
+}
+
+/** Keep the N busiest corridors by count. `n <= 0` keeps all. */
+export function filterCorridorsByTopN(corridors, n = 0) {
+  const list = Array.isArray(corridors) ? [...corridors] : []
+  const limit = Number(n)
+  if (!list.length || !Number.isFinite(limit) || limit <= 0 || limit >= list.length) {
+    return list
+  }
+  return [...list]
+    .sort((a, b) => (b.count || 0) - (a.count || 0) || String(a.label || '').localeCompare(String(b.label || '')))
+    .slice(0, Math.floor(limit))
+}
+
+export function sortCorridors(corridors, sortBy = 'rate') {
+  const list = Array.isArray(corridors) ? [...corridors] : []
+  const key = CORRIDOR_SORT_KEYS.includes(sortBy) ? sortBy : 'rate'
+  const metric = (c) => {
+    if (key === 'pingpong') return c.pingPongPct || 0
+    if (key === 'dwell') return c.shortDwellShare || 0
+    if (key === 'handoff') return c.handoffPct ?? c.bouncePct ?? 0
+    if (key === 'share') return c.primaryTask?.sharePct || 0
+    return c.ratePerS || 0
+  }
+  return list.sort((a, b) => {
+    const d = metric(b) - metric(a)
+    if (d) return d
+    const dc = (b.count || 0) - (a.count || 0)
+    if (dc) return dc
+    return String(a.label || '').localeCompare(String(b.label || ''))
+  })
+}
+
+/**
+ * Inspector Analysis Scope: Full Trace, Viewport (visible window), or Cursor C1–Cn.
+ * @param {'full'|'viewport'|'cursor'} mode
+ * @param {number[]} [cursors]
+ * @param {object} [viewport] `{ timeStart, timeEnd }` from the timeline
+ */
+function viewportWindow(viewport, tlo, thi) {
+  let vlo = Number(viewport?.timeStart ?? viewport?.[0])
+  let vhi = Number(viewport?.timeEnd ?? viewport?.[1])
+  if (!Number.isFinite(vlo) || !Number.isFinite(vhi) || !(vhi > vlo)) {
+    vlo = tlo
+    vhi = thi
+  }
+  return [vlo, vhi]
+}
+
+export function inspectorAnalysisScope(
+  mode,
+  cursors,
+  timeMin,
+  timeMax,
+  timeScale,
+  formatTimeFn,
+  viewport,
+) {
+  const fmt = formatTimeFn || formatTime
+  const tlo = Number.isFinite(Number(timeMin)) ? Number(timeMin) : 0
+  const thi = Number.isFinite(Number(timeMax)) ? Number(timeMax) : 0
+  const placed = (cursors || []).filter(c => c != null && Number.isFinite(Number(c)))
+  const canCursor = placed.length >= 2
+  let lo = null
+  let hi = null
+  let resolved = 'full'
+  const want = mode || 'auto'
+  if (want === 'cursor' && canCursor) {
+    const sorted = placed.map(Number).sort((a, b) => a - b)
+    lo = sorted[0]
+    hi = sorted[sorted.length - 1]
+    if (hi > lo) resolved = 'cursor'
+    else {
+      lo = null
+      hi = null
+    }
+  } else if (want === 'viewport') {
+    const [vlo, vhi] = viewportWindow(viewport, tlo, thi)
+    lo = vlo
+    hi = vhi
+    resolved = 'viewport'
+  } else if (want === 'full') {
+    resolved = 'full'
+  } else {
+    const [vlo, vhi] = viewportWindow(viewport, tlo, thi)
+    const fit = Boolean(viewport?.fitMode)
+    if (inspectorViewportIsFull(vlo, vhi, tlo, thi, fit)) {
+      resolved = 'full'
+    } else {
+      lo = vlo
+      hi = vhi
+      resolved = 'viewport'
+    }
+  }
+  const scoped = resolved !== 'full'
+  const a = scoped ? lo : tlo
+  const b = scoped ? hi : thi
+  const n = resolved === 'cursor' ? placed.length : 0
+  const label = resolved === 'cursor'
+    ? `Cursor C1–C${n}`
+    : resolved === 'viewport' ? 'Viewport' : 'Full Trace'
+  const unit = timeScale || 'ns'
+  const detail = `${fmt(a, unit)} … ${fmt(b, unit)} (${fmt(Math.max(0, b - a), unit)}) · trace unit: ${unit}`
+  return {
+    mode: resolved,
+    lo: scoped ? lo : null,
+    hi: scoped ? hi : null,
+    nCursors: n,
+    canCursor,
+    cursorDisabledReason: canCursor ? '' : 'Place at least two cursors.',
+    label,
+    detail,
+    unit,
+    scoped,
+  }
+}
+
 /** Net migration balance: positive = net gain (sink), negative = net loss (spillway). */
 export function netMigrationBalance(incoming, outgoing) {
   return (incoming || 0) - (outgoing || 0)
@@ -1147,9 +1285,11 @@ export function buildCorridorInspectorModel(trace, lo = null, hi = null, opts = 
   const nCores = cores.length
   const coreIndex = new Map(cores.map((c, i) => [c, i]))
   const fullGrid = Array.from({ length: nCores }, () => Array(nCores).fill(0))
+  const scopedMigs = []
   for (const m of migrationsInRange(trace, lo, hi)) {
     if (bounceOnly && !bounceNs.has(m.ns)) continue
     if (m.fromCore === m.toCore) continue
+    scopedMigs.push(m)
     const fi = coreIndex.get(m.fromCore)
     const ti = coreIndex.get(m.toCore)
     if (fi != null && ti != null) fullGrid[fi][ti]++
@@ -1195,6 +1335,7 @@ export function buildCorridorInspectorModel(trace, lo = null, hi = null, opts = 
       t.bins[bi]++
     }
   }
+  attachCorridorPathMetrics(byKey, scopedMigs, trace.timeScale)
 
   const allCorridors = [...byKey.values()].map((row) => {
     const rev = byKey.get(`${row.toCore}\0${row.fromCore}`)
@@ -1225,13 +1366,24 @@ export function buildCorridorInspectorModel(trace, lo = null, hi = null, opts = 
         peakBin = b
       }
     }
+    const bouncePct = row.count > 0 ? 100 * row.bounces / row.count : 0
+    const pingPong = row.pingPong || 0
+    const pingPongPct = row.pingPongPct || 0
+    const medianDwellNs = row.medianDwellNs || 0
+    const shortDwellShare = row.shortDwellShare || 0
     return {
       fromCore: row.fromCore,
       toCore: row.toCore,
       label: row.label,
       count: row.count,
       bounces: row.bounces,
-      bouncePct: row.count > 0 ? 100 * row.bounces / row.count : 0,
+      bouncePct,
+      handoffCount: row.bounces,
+      handoffPct: bouncePct,
+      pingPong,
+      pingPongPct,
+      medianDwellNs,
+      shortDwellShare,
       avgGapNs: row.count > 0 ? Math.floor(row.gapSum / row.count) : 0,
       ratePerS: scopeSec > 0 ? row.count / scopeSec : 0,
       net,
@@ -1295,7 +1447,7 @@ export function buildCorridorInspectorModel(trace, lo = null, hi = null, opts = 
         peakBin: c.peakBin,
         task: offender,
         summary: offender
-          ? `Hotspot: ${offender.label} on ${c.label} (${c.count} mig, ${c.bouncePct.toFixed(0)}% bounce)`
+          ? `Hotspot: ${offender.label} on ${c.label} (${c.count} mig, ${(c.pingPongPct || 0).toFixed(0)}% ping-pong)`
           : `Hotspot: ${c.label} (${c.count} migrations)`,
       }
     }
@@ -1366,6 +1518,19 @@ export function applyCorridorTopFilter(model, topPct = 100) {
   if (!model) return emptyCorridorModel()
   const corridors = filterCorridorsByTopPct(model.allCorridors || [], topPct)
   return { ...reindexCorridorView(model, corridors), topPct }
+}
+
+/** Re-apply Top-N path count. `topN <= 0` keeps all. */
+export function applyCorridorTopNFilter(model, topN = 0) {
+  if (!model) return emptyCorridorModel()
+  const corridors = filterCorridorsByTopN(model.allCorridors || [], topN)
+  return { ...reindexCorridorView(model, corridors), topN, topPct: model.topPct }
+}
+
+export function applyCorridorSort(model, sortBy = 'rate') {
+  if (!model) return emptyCorridorModel()
+  const corridors = sortCorridors(model.corridors || [], sortBy)
+  return { ...reindexCorridorView(model, corridors), sortBy }
 }
 
 /**
@@ -1492,12 +1657,18 @@ function corridorRestrictedToTasks(c, tasks) {
     }
   }
   const oldCount = c.count || 0
+  const bouncePct = count ? 100 * bounces / count : 0
+  const scale = oldCount ? count / oldCount : 1
   return {
     ...c,
     count,
     bounces,
-    bouncePct: count ? 100 * bounces / count : 0,
-    ratePerS: oldCount ? (c.ratePerS || 0) * count / oldCount : 0,
+    bouncePct,
+    handoffCount: bounces,
+    handoffPct: bouncePct,
+    pingPong: Math.round((c.pingPong || 0) * scale),
+    pingPongPct: c.pingPongPct || 0,
+    ratePerS: oldCount ? (c.ratePerS || 0) * scale : 0,
     bins,
     bounceBins,
     tasks: newTasks,
@@ -1555,6 +1726,222 @@ export function applyCorridorTaskFilter(model, query) {
   return reindexCorridorView(model, corridors)
 }
 
+function attachCorridorPathMetrics(byKey, migrations, timeScale) {
+  const window = MIGRATION_PING_PONG_WINDOW
+  const shortTh = corridorShortDwellThreshold(timeScale)
+  const byMk = new Map()
+  for (const m of migrations || []) {
+    if (!m?.mergeKey) continue
+    if (!byMk.has(m.mergeKey)) byMk.set(m.mergeKey, [])
+    byMk.get(m.mergeKey).push(m)
+  }
+  const ping = new Map()
+  const dwells = new Map()
+  for (const list of byMk.values()) {
+    const ordered = [...list].sort((a, b) => a.ns - b.ns)
+    for (let i = 0; i < ordered.length; i++) {
+      const m = ordered[i]
+      const key = `${m.fromCore}\0${m.toCore}`
+      const next = ordered[i + 1]
+      if (next) {
+        const dwell = Math.max(0, next.ns - m.ns)
+        if (!dwells.has(key)) dwells.set(key, [])
+        dwells.get(key).push(dwell)
+      }
+    }
+    for (let i = 1; i < ordered.length; i++) {
+      const a = ordered[i - 1]
+      const b = ordered[i]
+      if (b.ns - a.ns > window) continue
+      if (a.toCore === b.fromCore && a.fromCore === b.toCore) {
+        const key = `${a.fromCore}\0${a.toCore}`
+        ping.set(key, (ping.get(key) || 0) + 1)
+      }
+    }
+  }
+  for (const [key, row] of byKey) {
+    const p = ping.get(key) || 0
+    const samples = dwells.get(key) || []
+    row.pingPong = p
+    row.pingPongPct = row.count ? 100 * p / row.count : 0
+    const sorted = [...samples].sort((a, b) => a - b)
+    row.medianDwellNs = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0
+    row.shortDwellShare = samples.length
+      ? 100 * samples.filter(d => d < shortTh).length / samples.length
+      : 0
+  }
+}
+
+function loadBalanceStatus(trace, lo, hi) {
+  if (!trace) return { label: 'Not evaluated', zone: null, score: null, sigma: null }
+  const rows = buildCoreTimeBreakdown(trace, lo, hi)
+  const pcts = rows.map(r => (r.spanNs > 0 ? 100 * r.activeNs / r.spanNs : 0))
+  const lb = loadBalanceMetrics(pcts)
+  if (!lb) return { label: 'Not evaluated', zone: null, score: null, sigma: null }
+  const zone = classifyLoadBalance(lb.score, lb.stddev)
+  return {
+    label: zone === 'ok' ? 'Balanced' : 'Imbalanced',
+    zone,
+    score: lb.score,
+    sigma: lb.stddev,
+  }
+}
+
+export function classifyCorridorConcern(corridor) {
+  if (!corridor) return { id: 'none', label: 'None', detail: '' }
+  const ping = Number(corridor.pingPongPct) || 0
+  const short = Number(corridor.shortDwellShare) || 0
+  const handoff = Number(corridor.handoffPct ?? corridor.bouncePct) || 0
+  const burst = corridor.count > 0
+    ? 100 * (corridor.peakCount || 0) / corridor.count
+    : 0
+  const candidates = [
+    { id: 'pingpong', label: 'Ping-pong', score: ping, min: 40, need: corridor.pingPong != null },
+    { id: 'dwell', label: 'Short dwell', score: short, min: 50, need: corridor.shortDwellShare != null },
+    { id: 'burst', label: 'Burst', score: burst, min: 40, need: corridor.peakCount != null },
+    { id: 'handoff', label: 'Handoff suspect', score: handoff, min: CORRIDOR_HANDOFF_HATCH_PCT, need: corridor.bounces != null },
+  ].filter(c => c.need)
+  candidates.sort((a, b) => b.score - a.score)
+  const best = candidates.find(c => c.score >= c.min)
+  if (!best) return { id: 'none', label: 'None', detail: '' }
+  const task = corridor.primaryTask
+  let detail = ''
+  if (best.id === 'pingpong' && task) {
+    detail = `${task.label} repeatedly moves between ${corridor.fromCore} and ${corridor.toCore}`
+  } else if (best.id === 'burst') {
+    detail = `${corridor.label} concentrates migrations in a short window`
+  } else if (best.id === 'dwell' && task) {
+    detail = `${task.label} leaves ${corridor.toCore} after a short dwell`
+  } else if (best.id === 'handoff') {
+    detail = `Repeated synchronization ownership changes associated with ${corridor.label}`
+  } else if (task) {
+    detail = `${task.label} on ${corridor.label}`
+  } else {
+    detail = corridor.label
+  }
+  return { id: best.id, label: best.label, detail }
+}
+
+export function buildCorridorOverview(trace, model, scope = {}) {
+  const corridors = model?.allCorridors || model?.corridors || []
+  const lo = scope.lo ?? null
+  const hi = scope.hi ?? null
+  const total = corridors.reduce((s, c) => s + (c.count || 0), 0)
+  const rate = corridors.reduce((s, c) => s + (c.ratePerS || 0), 0)
+  const lb = loadBalanceStatus(trace, lo, hi)
+  const hottest = [...corridors].sort((a, b) => (b.count || 0) - (a.count || 0))[0] || null
+  const taskTotals = new Map()
+  for (const c of corridors) {
+    for (const t of c.tasks || []) {
+      const cur = taskTotals.get(t.mk) || { mk: t.mk, label: t.label, count: 0 }
+      cur.count += t.count || 0
+      taskTotals.set(t.mk, cur)
+    }
+  }
+  const topTask = [...taskTotals.values()].sort((a, b) => b.count - a.count)[0] || null
+  const share = topTask && total ? 100 * topTask.count / total : 0
+  const concern = classifyCorridorConcern(hottest)
+  const hottestLabel = hottest
+    ? `${hottest.fromCore} → ${hottest.toCore}`
+    : '—'
+  const rateLabel = total ? `${rate.toFixed(1)}/s` : '—'
+  const scopeLabel = scope.label || 'Full Trace'
+  const headline = `Scope: ${scopeLabel} · Load balance: ${lb.label} · ${total.toLocaleString()} migrations`
+  return {
+    scopeLabel,
+    scopeDetail: scope.detail || '',
+    loadBalance: lb.label,
+    loadBalanceZone: lb.zone,
+    loadBalanceScore: lb.score,
+    migrations: total,
+    migrationRate: rate,
+    migrationRateLabel: rateLabel,
+    mostAffectedTask: topTask,
+    mostAffectedShare: share,
+    hottestPath: hottestLabel,
+    hottestCorridor: hottest,
+    mainConcern: concern.label,
+    mainConcernId: concern.id,
+    mainConcernDetail: concern.detail,
+    headline,
+    evaluated: lb.label !== 'Not evaluated',
+  }
+}
+
+export function buildCorridorEvidence(corridor, opts = {}) {
+  if (!corridor) return null
+  const scale = opts.timeScale || 'ns'
+  const fmt = opts.formatTimeFn || formatTime
+  const task = opts.selectedTask || corridor.primaryTask
+  const concern = classifyCorridorConcern(corridor)
+  const median = corridor.medianDwellNs
+    ? fmt(corridor.medianDwellNs, scale)
+    : '—'
+  const window = opts.binLo != null && opts.binHi != null
+    ? `range:${opts.binLo}/${opts.binHi}`
+    : (opts.scopeLabel || 'full trace')
+  const lines = [
+    { key: 'Migration volume', value: String(corridor.count ?? 0) },
+    { key: 'Rate', value: `${(corridor.ratePerS || 0).toFixed(1)}/s` },
+    { key: 'Ping-pong', value: corridor.pingPongPct != null ? `${corridor.pingPongPct.toFixed(0)}%` : '—' },
+    { key: 'Median dwell', value: median },
+    { key: 'Short-dwell share', value: corridor.shortDwellShare != null ? `${corridor.shortDwellShare.toFixed(0)}%` : '—' },
+    { key: 'Handoff suspects', value: corridor.bounces != null ? `${corridor.bounces} (${(corridor.handoffPct ?? corridor.bouncePct ?? 0).toFixed(0)}%)` : '—' },
+    { key: 'Top migrating task', value: task ? `${task.label} · ${(task.sharePct || 0).toFixed(0)}%` : '—' },
+    { key: 'Evidence window', value: window },
+  ]
+  return {
+    title: `${corridor.fromCore} → ${corridor.toCore}`,
+    label: corridor.label,
+    fromCore: corridor.fromCore,
+    toCore: corridor.toCore,
+    lines,
+    assessment: concern.detail || 'No dominant migration condition on this path.',
+    concern,
+    evidenceQuality: {
+      direct: 'migration events',
+      correlated: 'synchronization handoffs',
+      limitation: 'Handoff association is a heuristic, not a measured cache-line transfer.',
+    },
+    task,
+  }
+}
+
+export function buildCorridorAiContext({
+  scope,
+  corridor,
+  task,
+  bin,
+  overview,
+  inspectorFilters,
+  timeScale,
+} = {}) {
+  const scale = timeScale || scope?.unit || 'ns'
+  const lines = [
+    `Analysis scope: ${scope?.label || 'Full Trace'}`,
+    `Trace unit: ${scale}`,
+    scope?.detail ? `Scope range: ${scope.detail}` : null,
+    corridor ? `Selected core path: ${corridor.fromCore} → ${corridor.toCore}` : 'Selected core path: none',
+    task ? `Selected task: ${task.label}` : 'Selected task: none',
+    bin?.label ? `Selected time bin: ${bin.label}` : 'Selected time bin: none',
+    corridor ? `Migrations: ${corridor.count} (${(corridor.ratePerS || 0).toFixed(1)}/s)` : null,
+    corridor && corridor.pingPongPct != null ? `Ping-pong: ${corridor.pingPongPct.toFixed(0)}%` : null,
+    corridor && corridor.medianDwellNs != null
+      ? `Median dwell: ${formatTime(corridor.medianDwellNs, scale)}`
+      : null,
+    corridor && corridor.shortDwellShare != null
+      ? `Short-dwell share: ${corridor.shortDwellShare.toFixed(0)}%`
+      : null,
+    corridor
+      ? `Handoff suspects: ${corridor.bounces || 0} (${(corridor.handoffPct ?? corridor.bouncePct ?? 0).toFixed(0)}%). Heuristic synchronization association, not a measured cache-line transfer.`
+      : null,
+    overview ? `Load balance: ${overview.loadBalance}` : null,
+    inspectorFilters ? `Inspector filters: ${inspectorFilters}` : 'Inspector filters: none',
+    'Do not automatically filter the timeline or change cursors unless the user explicitly selects a viewer action.',
+  ]
+  return lines.filter(Boolean).join('\n')
+}
+
 function emptyCorridorModel(timeBins = 32) {
   return {
     cores: [],
@@ -1573,6 +1960,8 @@ function emptyCorridorModel(timeBins = 32) {
     coreStats: [],
     hotspot: null,
     hasData: false,
+    topN: 0,
+    sortBy: 'rate',
   }
 }
 

@@ -22,10 +22,10 @@
         <button
           type="button"
           class="heatmap-close"
+          title="Close"
+          aria-label="Close"
           @click="emit('close')"
-        >
-          Close
-        </button>
+        >×</button>
       </div>
       <p class="heatmap-sub">
         {{ subtitle }}
@@ -1052,14 +1052,27 @@ onBeforeUnmount(() => {
   flex: 1;
 }
 .heatmap-close {
-  border: 1px solid var(--border);
-  background: var(--tb-bg);
+  /* Match .app-close-x / .trace-tab-close */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  appearance: none;
+  border: none;
+  background: transparent;
   color: var(--fg);
-  border-radius: 4px;
-  padding: 4px 10px;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
   cursor: pointer;
-  font-size: 12px;
-  flex-shrink: 0;
+  opacity: 0.65;
+  flex: 0 0 auto;
+}
+.heatmap-close:hover {
+  opacity: 1;
+  background: rgba(127, 127, 127, 0.2);
 }
 .heatmap-sub {
   margin: 8px 0 6px;

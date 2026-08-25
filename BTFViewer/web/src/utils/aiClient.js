@@ -316,10 +316,10 @@ export const AI_TEMPLATE_QUESTIONS = [
     id: 'migrations',
     label: 'Migration thrash',
     prompt:
-      'Is there core thrashing or lock-bounce? Cite migration rate, ping-pong, ' +
-      'dwell, and any hot mutex/queue ownership bounce. Suggest affinity or ' +
-      'ownership fixes. Open Task × Core, Core Utilization Over Time, and ' +
-      'Timeline Anomalies migration bursts.',
+      'Is there core thrashing, ping-pong, or short dwell? Cite migration rate, ping-pong, ' +
+      'dwell, and any synchronization handoff heuristic (not a measured cache-line transfer). ' +
+      'Do not automatically filter the timeline or change cursors unless the user selects a viewer action. ' +
+      'Open Task × Core, Core Utilization Over Time, and Timeline Anomalies migration bursts.',
   },
   {
     id: 'balance',

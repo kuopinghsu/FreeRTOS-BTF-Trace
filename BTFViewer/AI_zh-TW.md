@@ -128,6 +128,7 @@ AI 可以解釋證據、找出關聯、排序可能原因、檢查假設，也�
 | 時間軸 → **Explain this region with AI** | 至少有兩個游標時可使用；範圍為 C1–Cn |
 | AI 面板 → **Explain region** | 有 C1–Cn 時使用該範圍；否則使用完整追蹤資料的 Findings |
 | Statistics 分布圖 → **Query with AI…** | 圖表目前顯示的工作、指標與樣本 |
+| Migration & Corridor Inspector → **Investigate with AI** | 分析範圍、所選路徑、ping-pong／停留時間、handoff 啟發式、負載平衡與 Inspector 篩選 |
 | Trace Compare → **Query with AI…** | 兩份所選追蹤資料的比較表格 |
 
 診斷特定階段的問題時，請啟用 **Limit to C1–Cn**。提示內容會包含 `Cursor region window: jump:lo … jump:hi`，回覆中引用的每個 `jump:TIME` 都應位於這個區間內。
@@ -207,7 +208,7 @@ flowchart TD
 | <a id="ai-action-task_profile" name="ai-action-task_profile"></a>**Task profile** | 分析焦點是一項工作 | CPU、執行時間尾端、阻塞、週期、核心遷移、同步與優先權資訊 |
 | <a id="ai-action-latency" name="ai-action-latency"></a>**Highest latency** | 關注回應、阻塞、派送或執行時間過長 | 最長的相關事件與其證據連結 |
 | <a id="ai-action-wcet" name="ai-action-wcet"></a>**WCET / hot CPU** | 懷疑最大觀測執行時間或 CPU 使用量過高 | 觀測到的最大值與 CPU 集中情形；不能證明理論上的 WCET |
-| <a id="ai-action-migrations" name="ai-action-migrations"></a>**Migration thrash** | 工作反覆在核心之間移動 | 遷移次數、頻率、停留時間、往返遷移、配置與親和性證據 |
+| <a id="ai-action-migrations" name="ai-action-migrations"></a>**Migration thrash** | 工作反覆在核心之間移動 | 遷移次數、頻率、停留時間、往返遷移、handoff 啟發式（不是快取行搬移）、配置與親和性證據 |
 | <a id="ai-action-balance" name="ai-action-balance"></a>**Core balance** | 核心負載看起來不平均 | 各核心使用率、Task × Core 配置與負載隨時間變化 |
 | <a id="ai-action-tick" name="ai-action-tick"></a>**Tick health** | TICK 時序或大間隔看起來異常 | 規律性、無週期滴答行為、間隔證據與遺漏 TICK 估計 |
 | <a id="ai-action-priority" name="ai-action-priority"></a>**Priority inversion** | 阻塞可能與優先權行為互相影響 | 優先權提升、L/M/H 型態、互斥鎖證據與搶占檢查 |
@@ -222,6 +223,7 @@ flowchart TD
 - <a id="ai-action-ask_event" name="ai-action-ask_event"></a>**Ask AI about this event** 使用所選的單一時間軸執行區段。
 - <a id="ai-action-query_distribution" name="ai-action-query_distribution"></a>從分布圖執行 **Query with AI…** 時，使用圖表目前顯示的樣本。
 - <a id="ai-action-query_compare" name="ai-action-query_compare"></a>從 Trace Compare 執行 **Query with AI…** 時，使用所選的比較表格。
+- <a id="ai-action-query_corridor" name="ai-action-query_corridor"></a>從 Migration & Corridor Inspector 執行 **Investigate with AI** 時，使用 `migrations` 範本，並帶入路徑、ping-pong、停留時間與 handoff 結構化內容。除非你另外選擇檢視器動作，否則不會篩選時間軸或移動游標。
 
 <a id="investigation-workflows" name="investigation-workflows">&#x200B;</a>
 
@@ -316,11 +318,11 @@ flowchart TD
 
 #### 核心頻繁遷移 → 固定核心親和性（Migration Thrash → Core Affinity）
 
-1. 將 Cursor 放在 Thrash Window，啟用 **Limit to C1–Cn**，再重新開啟 Analysis。
-2. 執行 **Migration thrash** 或 **Investigate**，直到找到的高 Migration 工作（例如 `CS[22]`）與 Core 和 Heatmap 相符。
+1. 在 Thrash Window 放置至少兩個 Cursor。若要限定 Statistics／Findings，請啟用 **Limit to C1–Cn**。若要限定 Inspector，**Follow zoom** 會依 Fit 或目前可見範圍切換；可鎖定 **Viewport**，或將 **Analysis Scope** 設為 **Cursor C1–Cn**。
+2. 開啟 **Migration & Corridor Inspector**，在熱圖上點選與高 Migration 工作（例如 `CS[22]`）相符的路徑，再執行 **Investigate with AI** 或 **Migration thrash**。
 3. 使用 **What-if**：*pin CS[22] to its dominant core*；也可以執行 **Optimize**，取得依優先順序排列的候選方案。
 4. 查看 Δmigrations / Δload_balance_score。若 Migration 降低，但 Load Balance 明顯惡化，可透過 `optimize_experiment` 嘗試 Pin 到最空閒的 Core，再比較排名。
-5. 在韌體中設定核心親和性或減少跨核心移動，重新擷取 `.btf`，再使用工具列 **Compare** 比較修改前後的追蹤資料。
+5. 在韌體中設定核心親和性，重新擷取 `.btf`，再使用工具列 **Compare** 比較修改前後的追蹤資料。
 
 #### Mutex 競爭 → 縮短臨界區段（Critical Section）
 

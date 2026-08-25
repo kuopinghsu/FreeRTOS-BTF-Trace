@@ -137,6 +137,7 @@ Toolbar **Compare** becomes available when at least two traces are open. **Query
 | Timeline → **Explain this region with AI** | Available with at least two cursors; uses C1–Cn |
 | AI panel → **Explain region** | Uses C1–Cn when available; otherwise uses full-trace Findings |
 | Statistics distribution → **Query with AI…** | The selected task, metric, and samples displayed by the plot |
+| Migration & Corridor Inspector → **Investigate with AI** | Analysis scope, selected path, ping-pong/dwell, handoff heuristic, load balance, and Inspector filters |
 | Trace Compare → **Query with AI…** | The comparison tables for the two selected traces |
 
 Enable **Limit to C1–Cn** when diagnosing a phase-specific issue. The prompt then includes `Cursor region window: jump:lo … jump:hi`, and every cited `jump:TIME` should remain inside that interval.
@@ -217,7 +218,7 @@ Choose an action by the question you need to answer. The link in the first colum
 | <a id="ai-action-task_profile" name="ai-action-task_profile"></a>**Task profile** | One task is the focus | CPU, execution tail, blocking, period, migration, synchronization, and priority context |
 | <a id="ai-action-latency" name="ai-action-latency"></a>**Highest latency** | Long response, blocking, dispatch, or execution episodes matter | The largest relevant tails and links to their evidence |
 | <a id="ai-action-wcet" name="ai-action-wcet"></a>**WCET / hot CPU** | Maximum observed execution or high CPU use is suspected | Observed maxima and CPU concentration; not a proof of theoretical WCET |
-| <a id="ai-action-migrations" name="ai-action-migrations"></a>**Migration thrash** | A task moves repeatedly between cores | Migration count, rate, dwell, ping-pong, placement, and affinity evidence |
+| <a id="ai-action-migrations" name="ai-action-migrations"></a>**Migration thrash** | A task moves repeatedly between cores | Migration count, rate, dwell, ping-pong, handoff heuristic (not a cache-line transfer), placement, and affinity evidence |
 | <a id="ai-action-balance" name="ai-action-balance"></a>**Core balance** | Core loading appears uneven | Per-core utilization, Task × Core placement, and load over time |
 | <a id="ai-action-tick" name="ai-action-tick"></a>**Tick health** | TICK timing or large gaps look suspicious | Regularity, tickless behavior, gap evidence, and the missed-tick estimate |
 | <a id="ai-action-priority" name="ai-action-priority"></a>**Priority inversion** | Blocking and priority behavior may interact | Priority boosts, L/M/H patterns, mutex evidence, and preemption checks |
@@ -227,11 +228,12 @@ Choose an action by the question you need to answer. The link in the first colum
 | <a id="ai-action-optimize" name="ai-action-optimize"></a>**Optimize** | A likely cause is known and several experiments are possible | Ranked mitigation experiments with evidence, expected effect, and risk |
 | <a id="ai-action-diagnostic_report" name="ai-action-diagnostic_report"></a>**Diagnostic report** | The investigation is ready to share | A structured summary of scope, findings, evidence, conclusion, alternatives, and next action |
 
-Other stable entry-point links are `#ai-action-ask_event`, `#ai-action-query_distribution`, and `#ai-action-query_compare`:
+Other stable entry-point links are `#ai-action-ask_event`, `#ai-action-query_distribution`, `#ai-action-query_compare`, and `#ai-action-query_corridor`:
 
 - <a id="ai-action-ask_event" name="ai-action-ask_event"></a>**Ask AI about this event** uses one selected timeline segment.
 - <a id="ai-action-query_distribution" name="ai-action-query_distribution"></a>**Query with AI…** from a distribution plot uses the displayed samples.
 - <a id="ai-action-query_compare" name="ai-action-query_compare"></a>**Query with AI…** from Trace Compare uses the selected comparison tables.
+- <a id="ai-action-query_corridor" name="ai-action-query_corridor"></a>**Investigate with AI** from the Migration & Corridor Inspector uses the `migrations` template with structured path, ping-pong, dwell, and handoff context. It does not filter the timeline or change cursors unless you select a viewer action.
 
 <a id="investigation-workflows" name="investigation-workflows">&#x200B;</a>
 
@@ -339,11 +341,11 @@ These examples show how to apply the workflow to common RTOS trace problems.
 
 #### Migration thrash → pin affinity
 
-1. Place cursors on the thrash window; enable **Limit to C1–Cn**; re-open Analysis.
-2. Run **Migration thrash** or **Investigate** until the hot task (e.g. `CS[22]`) and cores match the heatmap.
+1. Place at least two cursors on the thrash window. For Statistics/Findings, enable **Limit to C1–Cn**. For the Inspector, **Follow zoom** tracks Fit vs the visible window; lock **Viewport**, or set **Analysis Scope** to **Cursor C1–Cn**.
+2. Open the **Migration & Corridor Inspector**, click the heatmap path that matches the hot task (e.g. `CS[22]`), then run **Investigate with AI** or **Migration thrash**.
 3. Ask **What-if**: *pin CS[22] to its dominant core* (or run **Optimize** for ranked candidates).
 4. Read Δmigrations / Δload_balance_score. If migrations drop but LB worsens sharply, try pin-to-quietest via `optimize_experiment` and compare ranks.
-5. On firmware: set affinity / reduce bounce; re-capture a `.btf` and toolbar **Compare** the before/after tabs.
+5. On firmware: set affinity; re-capture a `.btf` and toolbar **Compare** the before/after tabs.
 
 #### Mutex contention → shorter critical section
 

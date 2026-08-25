@@ -1,28 +1,85 @@
 <template>
-  <div class="ci-overlay">
+  <div
+    class="ci-overlay"
+    :class="{ 'ci-overlay-free': dialogPos }"
+  >
     <div
+      ref="dialogEl"
       class="ci-dialog"
       role="dialog"
       aria-modal="false"
       aria-label="Migration corridor inspector"
+      :style="dialogStyle"
+      @keydown="onDialogKeydown"
     >
-      <div class="ci-header">
+      <div
+        class="ci-header"
+        @pointerdown="onHeaderPointerDown"
+      >
         <span class="ci-title">Migration &amp; Corridor Inspector</span>
         <button
           type="button"
-          class="ci-close"
+          class="app-close-x"
+          title="Close"
+          aria-label="Close"
+          @pointerdown.stop
           @click="emit('close')"
-        >
-          Close
-        </button>
+        >×</button>
+      </div>
+
+      <div class="ci-overview">
+        <div class="ci-overview-headline">{{ overview.headline }}</div>
+        <div class="ci-overview-grid">
+          <span><strong>Scope</strong> {{ overview.scopeLabel }}</span>
+          <span>
+            <strong>Load balance</strong> {{ overview.loadBalance }}
+            <button
+              v-if="!overview.evaluated"
+              type="button"
+              class="ci-link-btn"
+              @click="emit('open-load-balance')"
+            >
+              Open load-balance details
+            </button>
+          </span>
+          <span><strong>Migrations</strong> {{ overview.migrations.toLocaleString() }} ({{ overview.migrationRateLabel }})</span>
+          <span>
+            <strong>Most affected task</strong>
+            {{ overview.mostAffectedTask
+              ? `${overview.mostAffectedTask.label} (${overview.mostAffectedShare.toFixed(0)}%)`
+              : '—' }}
+          </span>
+          <span><strong>Hottest path</strong> {{ overview.hottestPath }}</span>
+          <span :title="overview.mainConcernDetail || undefined">
+            <strong>Main concern</strong> {{ overview.mainConcern }}
+          </span>
+        </div>
       </div>
 
       <div class="ci-toolbar">
-        <label class="ci-field">
-          Top corridors
+        <label class="ci-field ci-field-scope">
+          Analysis Scope
           <DomSelect
-            v-model="topPct"
-            :options="topPctOptions"
+            v-model="analysisMode"
+            :options="analysisModeOptions"
+          />
+        </label>
+        <span
+          v-if="!analysisScope.canCursor"
+          class="ci-scope-hint"
+        >Place at least two cursors.</span>
+        <label class="ci-field">
+          Show
+          <DomSelect
+            v-model="topN"
+            :options="topNOptions"
+          />
+        </label>
+        <label class="ci-field ci-field-sort">
+          Sort by
+          <DomSelect
+            v-model="sortBy"
+            :options="sortByOptions"
           />
         </label>
         <button
@@ -32,7 +89,7 @@
           :class="{ active: bounceOnly }"
           @click="bounceOnly = !bounceOnly"
         >
-          {{ bounceOnly ? 'Lock Bounces Only' : 'All Migrations' }}
+          {{ bounceOnly ? 'Handoff suspects only' : 'All Migrations' }}
         </button>
         <label class="ci-field">
           Direction
@@ -47,37 +104,57 @@
             v-model.trim="taskQuery"
             type="search"
             class="ci-task-filter"
-            placeholder="name or exact id"
+            placeholder="Filter paths by task name or ID"
           >
         </label>
       </div>
-      <div class="ci-sub">{{ subtitle }}</div>
-      <div
-        class="ci-scope-banner"
-        :class="scopeBanner.scoped ? 'ci-scope-viewport' : 'ci-scope-full'"
-      >
-        <span class="ci-scope-badge">{{ scopeBanner.badge }}</span>
-        <span class="ci-scope-detail">{{ scopeBanner.detail }}</span>
-      </div>
 
       <div
-        v-if="model.hotspot"
-        class="ci-triage"
+        class="ci-scope-banner"
+        :class="analysisScope.scoped ? 'ci-scope-viewport' : 'ci-scope-full'"
       >
-        <span class="ci-triage-text">{{ model.hotspot.summary }}</span>
+        <span class="ci-scope-badge">{{ analysisScope.label }}</span>
+        <span class="ci-scope-detail">{{ analysisScope.detail }}</span>
+      </div>
+
+      <div class="ci-filter-status">
+        <span>Inspector filters: {{ inspectorFilterLabel }}</span>
+        <span>Timeline filter: {{ timelineFilterLabel }}</span>
         <button
           type="button"
-          class="ci-jump"
-          @click="jumpHotspot"
+          class="ci-show-all"
+          :disabled="!selectedCorridor"
+          @click="filterInspectorFromSelection"
         >
-          Jump To
+          Filter Inspector
+        </button>
+        <button
+          type="button"
+          class="ci-show-all"
+          :disabled="!selectedCorridor"
+          @click="filterTimelineFromSelection"
+        >
+          Filter Timeline
+        </button>
+        <button
+          type="button"
+          class="ci-show-all"
+          :disabled="!hasInspectorFilters"
+          @click="clearInspectorFilters"
+        >
+          Clear Inspector filters
+        </button>
+        <button
+          type="button"
+          class="ci-show-all"
+          :disabled="!taskFilterActive"
+          @click="emit('clearFilter')"
+        >
+          Return timeline to all tasks
         </button>
       </div>
 
-      <div
-        class="ci-workspace"
-        :class="'dock-' + sidebarDock"
-      >
+      <div class="ci-workspace">
         <div
           v-if="!model.hasData"
           class="ci-empty ci-empty-main"
@@ -90,10 +167,10 @@
         >
           <div class="ci-tree-pane">
             <div class="ci-tree-head">
-              <span class="ci-col-name">Corridor / Task</span>
-              <span class="ci-col-num">Vol</span>
-              <span class="ci-col-num">Bounce</span>
-              <span class="ci-col-num">Net</span>
+              <span class="ci-col-name">Core path / Task</span>
+              <span class="ci-col-num">Migrations</span>
+              <span class="ci-col-num">Handoff</span>
+              <span class="ci-col-num">Net flow</span>
             </div>
             <div
               ref="treeScrollRef"
@@ -128,8 +205,7 @@
                         @toggle="toggleCorridor(c)"
                         @select="selectCorridor(c)"
                         @pick-task="(t) => selectTask(c, t)"
-                        @spotlight="spotlightCorridor(c)"
-                        @select-task="(t) => spotlightTask(c, t)"
+                        @show-events="showEvents(c)"
                       />
                     </div>
                   </template>
@@ -148,8 +224,7 @@
                     @toggle="toggleCorridor(c)"
                     @select="selectCorridor(c)"
                     @pick-task="(t) => selectTask(c, t)"
-                    @spotlight="spotlightCorridor(c)"
-                    @select-task="(t) => spotlightTask(c, t)"
+                    @show-events="showEvents(c)"
                   />
                 </div>
               </template>
@@ -157,17 +232,24 @@
           </div>
 
           <div class="ci-grid-pane">
-            <div
-              class="ci-axis-caption"
-              title="Y = directed corridor (source → dest). X = time bins in scope. Color intensity = migration count. Diagonal hatch = lock-bounce share ≥ 15%."
-            >
-              Y = corridor · X = time · color = count · hatch = bounce
+            <div class="ci-heatmap-meta">
+              <div class="ci-axis-caption">
+                {{ heatmapTitle }}
+              </div>
+              <div class="ci-heatmap-legend">
+                Color: migration count · Hatching: synchronization handoff suspects ≥ {{ handoffHatchPct }}%
+              </div>
+              <div class="ci-bin-summary">
+                {{ selectedBinSummary || 'Empty bins: no migrations in that interval' }}
+              </div>
             </div>
             <div class="ci-grid-wrap">
               <div
                 ref="gridScrollRef"
                 class="ci-grid-body"
+                tabindex="0"
                 @scroll="onGridScroll"
+                @keydown="onGridKeydown"
               >
                 <canvas
                   ref="gridCanvasRef"
@@ -192,36 +274,29 @@
               </div>
             </div>
           </div>
-        </div>
-
-        <div
-          class="ci-sidebar"
-          :class="{ collapsed: sidebarCollapsed }"
-        >
-          <div class="ci-sidebar-chrome">
-            <button
-              type="button"
-              class="ci-sidebar-toggle"
-              @click="sidebarCollapsed = !sidebarCollapsed"
+          <div class="ci-right-pane">
+            <div class="ci-right-tabs">
+              <button
+                type="button"
+                class="ci-tab"
+                :class="{ active: rightPane === 'topology' }"
+                @click="rightPane = 'topology'"
+              >
+                Topology
+              </button>
+              <button
+                type="button"
+                class="ci-tab"
+                :class="{ active: rightPane === 'info' }"
+                @click="rightPane = 'info'"
+              >
+                Path info
+              </button>
+            </div>
+            <div
+              v-if="rightPane === 'topology'"
+              class="ci-topology"
             >
-              {{ sidebarCollapsed ? 'Show topology' : 'Hide topology' }}
-            </button>
-            <label
-              v-if="!sidebarCollapsed"
-              class="ci-field ci-dock-field"
-            >
-              Dock
-              <DomSelect
-                v-model="sidebarDock"
-                :options="sidebarDockOptions"
-              />
-            </label>
-          </div>
-          <div
-            v-if="!sidebarCollapsed"
-            class="ci-sidebar-body"
-          >
-            <div class="ci-chord-wrap">
               <MiniChordPanel
                 :cores="model.filteredMatrix.cores"
                 :grid="model.filteredMatrix.grid"
@@ -231,59 +306,102 @@
                 @select-core="onChordSelectCore"
                 @select-pair="onChordSelectPair"
                 @select-corridor="onChordSelectCorridor"
-                @spotlight-corridor="onChordSpotlight"
+                @spotlight-corridor="onChordShowEvents"
                 @hover-info="chordHover = $event"
               />
             </div>
-            <div class="ci-card">
-              <template v-if="selectionCard">
-                <div class="ci-card-title">
-                  {{ selectionCard.title }}
+            <div
+              v-else
+              class="ci-info-pane"
+            >
+              <div
+                v-if="selectedCorridor"
+                class="ci-actions"
+              >
+                <span class="ci-actions-label">{{ selectedPathLabel }} selected</span>
+                <div class="ci-actions-row">
+                  <button
+                    type="button"
+                    class="ci-jump"
+                    @click="showEventsFromSelection"
+                  >
+                    Show events
+                  </button>
+                  <button
+                    type="button"
+                    class="ci-jump"
+                    @click="filterTimelineFromSelection"
+                  >
+                    Filter timeline
+                  </button>
+                  <button
+                    type="button"
+                    class="ci-jump"
+                    :disabled="!selectedTaskOrPrimary"
+                    @click="inspectSelectedTask"
+                  >
+                    Inspect task
+                  </button>
+                  <button
+                    type="button"
+                    class="ci-jump"
+                    @click="queryAi('path')"
+                  >
+                    Ask AI
+                  </button>
                 </div>
+              </div>
+              <div class="ci-card ci-evidence">
+                <template v-if="evidenceCard">
+                  <div class="ci-card-body">
+                    <div class="ci-card-title">{{ evidenceCard.title }}</div>
+                    <div class="ci-card-text">{{ evidenceLinesText }}</div>
+                    <div class="ci-card-block">
+                      <strong>Assessment</strong>
+                      {{ evidenceCard.assessment }}
+                    </div>
+                    <div class="ci-card-block">
+                      <strong>Evidence quality</strong>
+                      Direct: {{ evidenceCard.evidenceQuality.direct }}.
+                      Correlated: {{ evidenceCard.evidenceQuality.correlated }}.
+                      {{ evidenceCard.evidenceQuality.limitation }}
+                    </div>
+                  </div>
+                  <div class="ci-actions-row ci-card-actions">
+                    <button
+                      type="button"
+                      class="ci-jump"
+                      @click="showEventsFromSelection"
+                    >
+                      Show on timeline
+                    </button>
+                    <button
+                      v-if="evidenceCard.task"
+                      type="button"
+                      class="ci-jump"
+                      @click="inspectSelectedTask"
+                    >
+                      Inspect {{ evidenceCard.task.label }}
+                    </button>
+                    <button
+                      type="button"
+                      class="ci-jump"
+                      @click="queryAi('path')"
+                    >
+                      Ask AI
+                    </button>
+                  </div>
+                </template>
                 <div
-                  v-for="(line, i) in selectionCard.lines"
-                  :key="i"
+                  v-else
                   class="ci-card-line"
                 >
-                  {{ line }}
+                  Select a core path to inspect ping-pong, dwell, and handoff suspects.
                 </div>
-                <button
-                  v-if="selectionCard.canSpotlight"
-                  type="button"
-                  class="ci-jump"
-                  @click="selectionCard.onSpotlight()"
-                >
-                  Inspect in Timeline
-                </button>
-              </template>
-              <template v-else>
-                <div class="ci-card-line">
-                  Click a corridor or chord ribbon to inspect.
-                </div>
-              </template>
+              </div>
             </div>
           </div>
         </div>
-        </div>
-
-        <p class="ci-tip">
-          {{ tipText }}
-        </p>
-
-      <div
-        v-if="taskFilterActive"
-        class="ci-filter-bar"
-      >
-        <span>
-          Showing {{ taskFilterCount }} task{{ taskFilterCount === 1 ? '' : 's' }}: {{ taskFilterLabel || 'filtered' }}
-        </span>
-        <button
-          type="button"
-          class="ci-show-all"
-          @click="emit('clearFilter')"
-        >
-          Show all tasks
-        </button>
       </div>
 
       <div class="ci-footer">
@@ -291,12 +409,42 @@
           type="button"
           class="ci-ai-btn"
           :title="aiEnabled
-            ? 'Open the AI Assistant and walk through migration / corridor findings'
+            ? 'Open the AI Assistant with structured migration context'
             : 'Enable AI Assistant in Settings → AI'"
-          @click="emit('query-ai')"
+          @click="queryAi('path')"
         >
-          Query with AI…
+          Investigate with AI
         </button>
+        <div class="ci-ai-choices">
+          <button
+            type="button"
+            class="ci-show-all"
+            @click="queryAi('path')"
+          >
+            Investigate this path
+          </button>
+          <button
+            type="button"
+            class="ci-show-all"
+            @click="queryAi('burst')"
+          >
+            Explain this migration burst
+          </button>
+          <button
+            type="button"
+            class="ci-show-all"
+            @click="queryAi('pingpong')"
+          >
+            Verify possible ping-pong
+          </button>
+          <button
+            type="button"
+            class="ci-show-all"
+            @click="queryAi('compare')"
+          >
+            Compare with another trace
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -308,13 +456,17 @@ import DomSelect from './DomSelect.vue'
 import { formatTime } from '../renderer/TimelineRenderer.js'
 import {
   applyCorridorDirectionFilter,
+  applyCorridorSort,
   applyCorridorTaskFilter,
-  applyCorridorTopFilter,
+  applyCorridorTopNFilter,
+  buildCorridorAiContext,
+  buildCorridorEvidence,
   buildCorridorInspectorModel,
-  coreShortName,
-  defaultCorridorTopPct,
+  buildCorridorOverview,
+  CORRIDOR_HANDOFF_HATCH_PCT,
+  defaultCorridorTopN,
   heatmapBinRange,
-  inspectorViewportBanner,
+  inspectorAnalysisScope,
   traceHasCoreBounceHolds,
 } from '../utils/migrationAnalysis.js'
 import MiniChordPanel from './MiniChordPanel.vue'
@@ -327,17 +479,22 @@ const CorridorRow = defineComponent({
     selectedTaskMk: { type: String, default: null },
     expanded: Boolean,
   },
-  emits: ['toggle', 'select', 'pick-task', 'spotlight', 'select-task'],
+  emits: ['toggle', 'select', 'pick-task', 'show-events'],
   setup(props, { emit }) {
     return () => {
       const c = props.corridor
       const netStr = c.net > 0 ? `+${c.net} ▲` : c.net < 0 ? `${c.net} ▼` : '0'
+      const handoff = `${(c.handoffPct ?? c.bouncePct ?? 0).toFixed(0)}%`
       const rows = [
         h('button', {
           type: 'button',
           class: ['ci-row', props.selected && !props.selectedTaskMk ? 'selected' : ''],
           onClick: () => emit('select'),
-          onDblclick: () => emit('spotlight'),
+          onDblclick: () => emit('show-events'),
+          onKeydown: (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); emit('select') }
+            if (e.key === ' ') { e.preventDefault(); emit('toggle') }
+          },
         }, [
           h('span', { class: 'ci-col-name' }, [
             h('span', {
@@ -347,7 +504,7 @@ const CorridorRow = defineComponent({
             ` ${c.label}`,
           ]),
           h('span', { class: 'ci-col-num' }, fmtVol(c.count)),
-          h('span', { class: 'ci-col-num' }, `${c.bouncePct.toFixed(0)}%`),
+          h('span', { class: 'ci-col-num' }, handoff),
           h('span', { class: 'ci-col-num' }, netStr),
         ]),
       ]
@@ -356,12 +513,15 @@ const CorridorRow = defineComponent({
           rows.push(h('button', {
             type: 'button',
             class: ['ci-row', 'ci-task-row', props.selectedTaskMk === t.mk ? 'selected' : ''],
-            onDblclick: () => emit('select-task', t),
+            onDblclick: () => emit('show-events'),
             onClick: () => emit('pick-task', t),
+            onKeydown: (e) => {
+              if (e.key === 'Enter') { e.preventDefault(); emit('pick-task', t) }
+            },
           }, [
             h('span', { class: 'ci-col-name' }, `    └── ${t.label}`),
             h('span', { class: 'ci-col-num' }, fmtVol(t.count)),
-            h('span', { class: 'ci-col-num' }, `${t.bouncePct.toFixed(0)}%`),
+            h('span', { class: 'ci-col-num' }, `${(t.handoffPct ?? t.bouncePct ?? 0).toFixed(0)}%`),
             h('span', { class: 'ci-col-num' }, `${t.sharePct.toFixed(0)}%`),
           ]))
         }
@@ -378,18 +538,21 @@ function fmtVol(n) {
 
 const props = defineProps({
   trace: { type: Object, required: true },
+  cursors: { type: Array, default: () => [] },
   viewport: { type: Object, default: null },
-  viewportProgrammatic: { type: Boolean, default: false },
   taskFilterActive: { type: Boolean, default: false },
   taskFilterLabel: { type: String, default: null },
   taskFilterCount: { type: Number, default: 0 },
   focusPair: { type: Object, default: null },
-  /** 'heatmap' focuses tree/grid; 'chord' expands topology sidebar */
+  /** 'chord'/'topology' selects the Topology pane; heatmap click selects Path info */
   initialMode: { type: String, default: 'heatmap' },
   aiEnabled: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['close', 'spotlight', 'clearFilter', 'jump', 'query-ai'])
+const emit = defineEmits([
+  'close', 'spotlight', 'clearFilter', 'jump', 'query-ai',
+  'inspect-task', 'open-load-balance',
+])
 
 const GRID_ROW_H = 22
 const GRID_LABEL_W = 78
@@ -397,13 +560,28 @@ const GRID_HEAD_H = 28
 const GRID_FOOT_H = 16
 
 const bounceOnly = ref(false)
-const topPct = ref(100)
-const topPctOptions = [
-  { value: 10, label: 'Top 10%' },
-  { value: 25, label: 'Top 25%' },
-  { value: 50, label: 'Top 50%' },
-  { value: 100, label: 'All' },
+const topN = ref(0)
+const topNOptions = [
+  { value: 5, label: 'Top 5' },
+  { value: 10, label: 'Top 10' },
+  { value: 25, label: 'Top 25' },
+  { value: 0, label: 'All paths' },
 ]
+const sortBy = ref('rate')
+const sortByOptions = [
+  { value: 'rate', label: 'Migration rate' },
+  { value: 'pingpong', label: 'Ping-pong' },
+  { value: 'dwell', label: 'Short dwell' },
+  { value: 'handoff', label: 'Handoff' },
+  { value: 'share', label: 'Task share' },
+]
+const analysisMode = ref('auto')
+const analysisModeOptions = computed(() => [
+  { value: 'auto', label: 'Follow zoom' },
+  { value: 'full', label: 'Full Trace' },
+  { value: 'viewport', label: 'Viewport' },
+  { value: 'cursor', label: 'Cursor C1–Cn', disabled: !analysisScope.value.canCursor },
+])
 const directionMode = ref('all')
 const directionModeOptions = [
   { value: 'all', label: 'All' },
@@ -411,12 +589,7 @@ const directionModeOptions = [
   { value: 'ingress', label: 'Ingress Only' },
 ]
 const taskQuery = ref('')
-const sidebarCollapsed = ref(false)
-const sidebarDock = ref('bottom')
-const sidebarDockOptions = [
-  { value: 'bottom', label: 'Bottom' },
-  { value: 'right', label: 'Right' },
-]
+const rightPane = ref('topology')
 const expandedCorridors = reactive(new Set())
 const expandedGroups = reactive(new Set())
 const selectedCorridor = ref(null)
@@ -431,10 +604,13 @@ const chordHover = ref(null)
 const treeScrollRef = ref(null)
 const gridScrollRef = ref(null)
 const gridCanvasRef = ref(null)
+const dialogEl = ref(null)
+const dialogPos = ref(null)
 const gridViewH = ref(200)
 const gridScrollTop = ref(0)
 let _drawRaf = 0
 let _ro = null
+let _drag = null
 
 watch(() => props.trace, (t) => {
   bounceOnly.value = false
@@ -443,66 +619,29 @@ watch(() => props.trace, (t) => {
   focusCoreIndices.value = []
   if (t) {
     t._lockBounceNs = undefined
-    topPct.value = defaultCorridorTopPct(t.coreNames?.length || 0)
+    topN.value = defaultCorridorTopN(t.coreNames?.length || 0)
   }
 }, { immediate: true })
 
-const viewportLoHi = computed(() => {
-  const vp = props.viewport
-  const lo = Math.floor(Number(vp?.timeStart))
-  const hi = Math.ceil(Number(vp?.timeEnd))
-  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) {
-    return { lo: null, hi: null }
-  }
-  // Uninitialized tab viewport placeholder {0, 1} — treat as full trace.
-  if (lo === 0 && hi === 1) return { lo: null, hi: null }
-  return { lo, hi }
-})
-
-const scopeLoHi = ref({ lo: null, hi: null })
-const scopeFrozen = ref(false)
-let _scopeTimer = 0
-let _frozenAt = 0
-
-function freezeInspectorScope() {
-  scopeFrozen.value = true
-  _frozenAt = (typeof performance !== 'undefined' ? performance.now() : Date.now())
-}
-
-watch([viewportLoHi, () => props.viewportProgrammatic], ([next, programmatic]) => {
-  if (programmatic) {
-    scopeFrozen.value = true
-    return
-  }
-  if (scopeFrozen.value) {
-    const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
-    if (now - _frozenAt < 400) return
-    scopeFrozen.value = false
-  }
-  if (_scopeTimer) clearTimeout(_scopeTimer)
-  const apply = () => {
-    if (scopeLoHi.value.lo === next.lo && scopeLoHi.value.hi === next.hi) return
-    scopeLoHi.value = { lo: next.lo, hi: next.hi }
-  }
-  if (scopeLoHi.value.lo == null && scopeLoHi.value.hi == null) apply()
-  else _scopeTimer = window.setTimeout(apply, 80)
-}, { immediate: true })
-
-const scopeBanner = computed(() => inspectorViewportBanner(
-  scopeLoHi.value.lo,
-  scopeLoHi.value.hi,
+const analysisScope = computed(() => inspectorAnalysisScope(
+  analysisMode.value,
+  props.cursors,
   props.trace?.timeMin,
   props.trace?.timeMax,
   props.trace?.timeScale,
   formatTime,
+  props.viewport,
 ))
 
+watch(() => analysisScope.value.canCursor, (ok) => {
+  if (!ok && analysisMode.value === 'cursor') analysisMode.value = 'auto'
+})
+
 const traceHasBounces = computed(() => traceHasCoreBounceHolds(props.trace))
+const handoffHatchPct = CORRIDOR_HANDOFF_HATCH_PCT
 
 const baseModel = computed(() => {
-  const q = String(taskQuery.value || '').trim()
-  // A task-id search must not be limited to the current zoom window.
-  const { lo, hi } = q ? { lo: null, hi: null } : scopeLoHi.value
+  const { lo, hi } = analysisScope.value
   return buildCorridorInspectorModel(props.trace, lo, hi, {
     bounceOnly: bounceOnly.value,
     topPct: 100,
@@ -512,15 +651,15 @@ const baseModel = computed(() => {
 
 const model = computed(() => {
   const q = String(taskQuery.value || '').trim()
-  // Name/id search uses every in-scope corridor; Top-N applies only when idle.
   const scoped = q
     ? applyCorridorTaskFilter(baseModel.value, q)
-    : applyCorridorTopFilter(baseModel.value, topPct.value)
-  return applyCorridorDirectionFilter(
+    : applyCorridorTopNFilter(baseModel.value, topN.value)
+  const directed = applyCorridorDirectionFilter(
     scoped,
     directionMode.value,
     selectedCorridor.value,
   )
+  return applyCorridorSort(directed, sortBy.value)
 })
 
 watch(
@@ -540,79 +679,94 @@ const gridContentH = computed(() => {
   return GRID_HEAD_H + n * GRID_ROW_H + GRID_FOOT_H
 })
 
-const subtitle = computed(() => {
-  const n = model.value.cores.length
-  const focus = selectedCorridor.value
-    ? ` · ${coreShortName(selectedCorridor.value.fromCore)}→${coreShortName(selectedCorridor.value.toCore)}`
-    : ''
-  const nCorr = model.value.corridors?.length || 0
-  const q = taskQuery.value ? ` · filter “${taskQuery.value}”` : ''
-  return `${n} cores · ${nCorr} corridors · Top ${topPct.value}%${q}${focus}`
-})
+const overview = computed(() => buildCorridorOverview(
+  props.trace,
+  model.value,
+  analysisScope.value,
+))
 
-const tipText = computed(() => {
-  if (chordHover.value?.type === 'corridor') {
-    return `${coreShortName(chordHover.value.fromCore)}→${coreShortName(chordHover.value.toCore)}: ${chordHover.value.count}`
-  }
-  return 'Click a time cell to select that bin · double-click to apply as Migration Filter · outer ring = egress · inner ring = ingress'
-})
-
-const selectionCard = computed(() => {
+const resolvedCorridor = computed(() => {
   const sel = selectedCorridor.value
-  if (!sel) {
-    if (focusCoreIndices.value.length === 1) {
-      const i = focusCoreIndices.value[0]
-      const st = model.value.coreStats?.[i]
-      if (!st) return null
-      const net = st.net > 0 ? `+${st.net} net gain` : st.net < 0 ? `${st.net} net loss` : 'balanced'
-      return {
-        title: coreShortName(st.core),
-        lines: [
-          `Outgoing ${st.out} / Incoming ${st.in}`,
-          `Net: ${net}`,
-          ...(st.topTasks || []).slice(0, 3).map(t => `${t.label}: ${t.count}`),
-        ],
-        canSpotlight: false,
-        onSpotlight: () => {},
-      }
-    }
-    return null
-  }
-  const c = model.value.corridors.find(
+  if (!sel) return null
+  return model.value.corridors.find(
     x => x.fromCore === sel.fromCore && x.toCore === sel.toCore,
   ) || model.value.allCorridors.find(
     x => x.fromCore === sel.fromCore && x.toCore === sel.toCore,
-  )
-  if (!c) return null
-  const offender = c.primaryTask
-  const picked = selectedTaskMk.value
-    ? c.tasks.find(t => t.mk === selectedTaskMk.value)
-    : null
-  const lines = [
-    `Directed Vol: ${c.count.toLocaleString()} migrations (${c.ratePerS.toFixed(1)}/s)`,
-    `Lock Bounces: ${c.bounces} (${c.bouncePct.toFixed(0)}% cache-line bounces)`,
-    picked
-      ? `Selected task: ${picked.label} (${picked.count} mig, ${picked.sharePct.toFixed(0)}% share)`
-      : offender
-        ? `Primary Offender: ${offender.label} (${offender.sharePct.toFixed(0)}% share)`
-        : 'No task attribution',
-  ]
+  ) || null
+})
+
+const selectedTask = computed(() => {
+  const c = resolvedCorridor.value
+  if (!c || !selectedTaskMk.value) return null
+  return c.tasks.find(t => t.mk === selectedTaskMk.value) || null
+})
+
+const selectedTaskOrPrimary = computed(() => selectedTask.value || resolvedCorridor.value?.primaryTask || null)
+
+const selectedPathLabel = computed(() => {
+  const c = resolvedCorridor.value
+  if (!c) return ''
+  return `${c.fromCore} → ${c.toCore}`
+})
+
+const selectedBinRange = computed(() => {
+  const c = resolvedCorridor.value
   const bi = highlightBin.value
-  if (bi != null && bi >= 0 && c.bins) {
-    const { tMin, binW, timeBins, tMax } = model.value
-    const { binLo, binHi } = heatmapBinRange(tMin, binW, timeBins, tMax, bi)
-    const n = c.bins[bi] || 0
-    const b = c.bounceBins?.[bi] || 0
-    lines.push(
-      `Selected bin ${bi + 1}/${timeBins}: ${formatTime(binLo, props.trace.timeScale)}–${formatTime(binHi, props.trace.timeScale)} · ${n} mig${b ? `, ${b} bounce` : ''}`,
-    )
-  }
-  return {
-    title: `Corridor: ${c.label}`,
-    lines,
-    canSpotlight: true,
-    onSpotlight: () => spotlightCorridor(c, highlightBin.value >= 0 ? highlightBin.value : null),
-  }
+  if (!c || bi == null || bi < 0) return null
+  const { tMin, binW, timeBins, tMax } = model.value
+  return { bi, ...heatmapBinRange(tMin, binW, timeBins, tMax, bi), timeBins }
+})
+
+const selectedBinSummary = computed(() => {
+  const c = resolvedCorridor.value
+  const r = selectedBinRange.value
+  if (!c || !r) return ''
+  const n = c.bins?.[r.bi] || 0
+  const b = c.bounceBins?.[r.bi] || 0
+  const lo = formatTime(r.binLo, props.trace.timeScale)
+  const hi = formatTime(r.binHi, props.trace.timeScale)
+  return `Selected: jump:${r.binLo}–jump:${r.binHi} · ${lo}–${hi} · ${n} migration${n === 1 ? '' : 's'}${b ? `, ${b} handoff` : ''}`
+})
+
+const heatmapTitle = computed(() => (
+  `Migration activity over time — ${analysisScope.value.label}, trace unit: ${analysisScope.value.unit}`
+))
+
+const inspectorFilterParts = computed(() => {
+  const parts = []
+  if (taskQuery.value) parts.push(`Task ${taskQuery.value}`)
+  if (directionMode.value === 'egress') parts.push('Egress only')
+  if (directionMode.value === 'ingress') parts.push('Ingress only')
+  if (bounceOnly.value) parts.push('Handoff suspects only')
+  return parts
+})
+
+const inspectorFilterLabel = computed(() => inspectorFilterParts.value.join(' · ') || 'None')
+const hasInspectorFilters = computed(() => inspectorFilterParts.value.length > 0)
+const timelineFilterLabel = computed(() => (
+  props.taskFilterActive
+    ? (props.taskFilterLabel || `${props.taskFilterCount} tasks`)
+    : 'None'
+))
+
+const evidenceCard = computed(() => {
+  const c = resolvedCorridor.value
+  if (!c) return null
+  const r = selectedBinRange.value
+  return buildCorridorEvidence(c, {
+    selectedTask: selectedTask.value,
+    timeScale: props.trace.timeScale,
+    formatTimeFn: formatTime,
+    binLo: r?.binLo,
+    binHi: r?.binHi,
+    scopeLabel: analysisScope.value.label,
+  })
+})
+
+const evidenceLinesText = computed(() => {
+  const ev = evidenceCard.value
+  if (!ev) return ''
+  return (ev.lines || []).map(l => `${l.key}:  ${l.value}`).join('\n')
 })
 
 function isCorridorSelected(c) {
@@ -661,19 +815,35 @@ function jumpHotspot() {
   if (model.value.groupBySource) expandedGroups.add(c.fromCore)
   expandedCorridors.add(c.label)
   selectCorridor(c, c.peakBin ?? null)
+  showEvents(c, c.peakBin ?? null)
+}
+
+function showEvents(c, binIndex = null) {
+  if (!c) return
   const { tMin, binW, timeBins, tMax } = model.value
-  const bi = c.peakBin ?? 0
-  const { binLo, binHi } = heatmapBinRange(tMin, binW, timeBins, tMax, bi)
-  freezeInspectorScope()
+  let binLo = tMin
+  let binHi = tMax
+  const bi = binIndex != null && binIndex >= 0 ? binIndex : highlightBin.value
+  if (bi != null && bi >= 0) {
+    const r = heatmapBinRange(tMin, binW, timeBins, tMax, bi)
+    binLo = r.binLo
+    binHi = r.binHi
+  } else if (c.peakBin != null) {
+    const r = heatmapBinRange(tMin, binW, timeBins, tMax, c.peakBin)
+    binLo = r.binLo
+    binHi = r.binHi
+  }
   emit('jump', {
     binLo,
     binHi,
-    lockTaskKey: c.primaryTask?.mk || null,
+    lockTaskKey: selectedTaskMk.value || c.primaryTask?.mk || null,
     pairLabel: c.label,
+    enableCpuLoad: true,
   })
 }
 
 function spotlightCorridor(c, binIndex = null) {
+  if (!c) return
   const { tMin, binW, timeBins, tMax } = model.value
   let binLo = tMin
   let binHi = tMax
@@ -686,33 +856,121 @@ function spotlightCorridor(c, binIndex = null) {
     binLo = r.binLo
     binHi = r.binHi
   }
-  const mergeKeys = c.tasks.map(t => t.mk)
-  freezeInspectorScope()
+  const picked = selectedTask.value
+  const mergeKeys = picked ? [picked.mk] : c.tasks.map(t => t.mk)
   emit('spotlight', {
     fromCore: c.fromCore,
     toCore: c.toCore,
-    pairLabel: c.label,
+    pairLabel: picked ? `${c.label} · ${picked.label}` : c.label,
     binLo,
     binHi,
     mergeKeys,
-    lockTaskKey: c.primaryTask?.mk || null,
+    lockTaskKey: picked?.mk || c.primaryTask?.mk || null,
     enableCpuLoad: true,
   })
 }
 
-function spotlightTask(c, t) {
-  const { tMin, tMax } = model.value
-  freezeInspectorScope()
-  emit('spotlight', {
-    fromCore: c.fromCore,
-    toCore: c.toCore,
-    pairLabel: `${c.label} · ${t.label}`,
-    binLo: tMin,
-    binHi: tMax,
-    mergeKeys: [t.mk],
-    lockTaskKey: t.mk,
-    enableCpuLoad: true,
+function showEventsFromSelection() {
+  const c = resolvedCorridor.value
+  if (c) showEvents(c, highlightBin.value >= 0 ? highlightBin.value : null)
+}
+
+function filterTimelineFromSelection() {
+  const c = resolvedCorridor.value
+  if (c) spotlightCorridor(c, highlightBin.value >= 0 ? highlightBin.value : null)
+}
+
+function filterInspectorFromSelection() {
+  const t = selectedTaskOrPrimary.value
+  if (t?.label) taskQuery.value = t.label
+}
+
+function clearInspectorFilters() {
+  taskQuery.value = ''
+  directionMode.value = 'all'
+  bounceOnly.value = false
+}
+
+function inspectSelectedTask() {
+  const t = selectedTaskOrPrimary.value
+  if (t?.mk) emit('inspect-task', t.mk)
+}
+
+function queryAi(action = 'path') {
+  const extra = buildCorridorAiContext({
+    scope: analysisScope.value,
+    corridor: resolvedCorridor.value,
+    task: selectedTaskOrPrimary.value,
+    bin: selectedBinSummary.value ? { label: selectedBinSummary.value } : null,
+    overview: overview.value,
+    inspectorFilters: inspectorFilterLabel.value,
+    timeScale: props.trace?.timeScale,
   })
+  const hints = {
+    path: 'Investigate this path. Do not filter the timeline or change cursors unless asked.',
+    burst: 'Explain this migration burst. Use the selected time bin if one is selected.',
+    pingpong: 'Verify possible ping-pong. Cite bidirectional movement and dwell; do not declare a root cause.',
+    compare: 'Compare with another trace if two traces are open; otherwise say another trace is required.',
+  }
+  emit('query-ai', {
+    template: 'migrations',
+    extra: `${extra}\n\n${hints[action] || hints.path}`,
+    action,
+  })
+}
+
+function onDialogKeydown(ev) {
+  if (ev.key === 'Enter' && resolvedCorridor.value && ev.target === ev.currentTarget) {
+    ev.preventDefault()
+    selectCorridor(resolvedCorridor.value, highlightBin.value)
+  }
+}
+
+function clampDialogPos(x, y) {
+  const el = dialogEl.value
+  const w = el?.offsetWidth || 0
+  const h = el?.offsetHeight || 0
+  const pad = 8
+  const maxX = Math.max(pad, window.innerWidth - w - pad)
+  const maxY = Math.max(pad, window.innerHeight - h - pad)
+  return {
+    x: Math.min(Math.max(pad, x), maxX),
+    y: Math.min(Math.max(pad, y), maxY),
+  }
+}
+
+const dialogStyle = computed(() => {
+  if (!dialogPos.value) return {}
+  return {
+    position: 'fixed',
+    left: `${dialogPos.value.x}px`,
+    top: `${dialogPos.value.y}px`,
+    margin: '0',
+  }
+})
+
+function onHeaderPointerDown(ev) {
+  if (ev.pointerType === 'mouse' && ev.button !== 0) return
+  if (ev.target.closest('button')) return
+  const el = dialogEl.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  _drag = { dx: ev.clientX - rect.left, dy: ev.clientY - rect.top }
+  dialogPos.value = { x: rect.left, y: rect.top }
+  window.addEventListener('pointermove', onDialogPointerMove)
+  window.addEventListener('pointerup', onDialogPointerUp)
+  ev.preventDefault()
+}
+
+function onDialogPointerMove(ev) {
+  if (!_drag) return
+  dialogPos.value = clampDialogPos(ev.clientX - _drag.dx, ev.clientY - _drag.dy)
+}
+
+function onDialogPointerUp() {
+  _drag = null
+  window.removeEventListener('pointermove', onDialogPointerMove)
+  window.removeEventListener('pointerup', onDialogPointerUp)
 }
 
 function onChordSelectCore(payload) {
@@ -754,11 +1012,11 @@ function onChordSelectCorridor(payload) {
   }
 }
 
-function onChordSpotlight(payload) {
+function onChordShowEvents(payload) {
   const c = model.value.allCorridors.find(
     x => x.fromCore === payload.fromCore && x.toCore === payload.toCore,
   )
-  if (c) spotlightCorridor(c)
+  if (c) showEvents(c)
 }
 
 function visibleCorridors() {
@@ -845,7 +1103,7 @@ function drawGrid() {
       if (v > 0) {
         const intensity = Math.min(1, v / (maxBin || 1))
         const bounceRatio = bv > 0 ? bv / v : 0
-        if (bounceRatio >= 0.15) {
+        if (bounceRatio >= CORRIDOR_HANDOFF_HATCH_PCT / 100) {
           ctx.fillStyle = `rgba(232,120,32,${0.2 + 0.55 * intensity})`
           ctx.fillRect(x + 0.5, y + 2, cellW - 1, rowH - 4)
           // Diagonal hatch reinforces bounce vs normal (colorblind-safe).
@@ -886,6 +1144,11 @@ function drawGrid() {
 
   ctx.fillStyle = getComputedStyle(scroll).getPropertyValue('--bg').trim() || '#1e1e1e'
   ctx.fillRect(0, h - footH, w, footH)
+  if (hoverBin.value >= 0) {
+    const hx = labelW + hoverBin.value * cellW
+    ctx.fillStyle = 'rgba(91, 155, 213, 0.35)'
+    ctx.fillRect(hx, h - footH, cellW, footH)
+  }
   ctx.fillStyle = fg
   ctx.font = '10px monospace'
   ctx.textAlign = 'center'
@@ -904,11 +1167,13 @@ function gridHit(ev) {
   const { timeBins, tMin, binW, tMax } = model.value
   const plotW = Math.max(1, rect.width - GRID_LABEL_W)
   const cellW = plotW / timeBins
-  const contentY = scroll.scrollTop + my
+  const plotBottom = rect.height - GRID_FOOT_H
+  if (my < GRID_HEAD_H) return null
+  const plotMy = my > plotBottom ? plotBottom - 0.5 : my
+  const contentY = scroll.scrollTop + plotMy
   const ri = Math.floor((contentY - GRID_HEAD_H) / GRID_ROW_H)
   const bi = Math.floor((mx - GRID_LABEL_W) / cellW)
   if (ri < 0 || ri >= corridors.length || bi < 0 || bi >= timeBins) return null
-  if (my < GRID_HEAD_H || my > rect.height - GRID_FOOT_H) return null
   const c = corridors[ri]
   const { binLo, binHi } = heatmapBinRange(tMin, binW, timeBins, tMax, bi)
   return {
@@ -947,9 +1212,9 @@ function onGridMove(ev) {
     `${hit.c.label}`,
     `${formatTime(hit.binLo, props.trace.timeScale)} – ${formatTime(hit.binHi, props.trace.timeScale)}`,
     `${hit.count} migration${hit.count === 1 ? '' : 's'}`,
-    hit.bounces ? `${hit.bounces} lock bounce${hit.bounces === 1 ? '' : 's'}` : null,
+    hit.bounces ? `${hit.bounces} handoff suspect${hit.bounces === 1 ? '' : 's'}` : null,
     top && hit.count ? `top task: ${top.label}` : null,
-    'click to select bin · double-click to spotlight',
+    hit.count ? 'click to select bin · double-click to show events' : 'empty bin — no migrations in this interval',
   ].filter(Boolean).join('\n')
   gridHover.value = { text }
   const pad = 12
@@ -969,12 +1234,53 @@ function onGridLeave() {
 
 function onGridClick(ev) {
   const hit = gridHit(ev)
-  if (hit) selectCorridor(hit.c, hit.bi)
+  if (hit) {
+    selectCorridor(hit.c, hit.bi)
+    rightPane.value = 'info'
+  }
 }
 
 function onGridDblClick(ev) {
   const hit = gridHit(ev)
-  if (hit && hit.count > 0) spotlightCorridor(hit.c, hit.bi)
+  if (hit) showEvents(hit.c, hit.bi)
+}
+
+function onGridKeydown(ev) {
+  const corridors = visibleCorridors()
+  if (!corridors.length) return
+  const selected = resolvedCorridor.value
+  let ri = selected ? corridors.findIndex(c => c.fromCore === selected.fromCore && c.toCore === selected.toCore) : 0
+  if (ri < 0) ri = 0
+  let bi = highlightBin.value >= 0 ? highlightBin.value : (corridors[ri]?.peakBin ?? 0)
+  const bins = model.value.timeBins || 32
+  if (ev.key === 'ArrowLeft') {
+    ev.preventDefault()
+    bi = Math.max(0, bi - 1)
+    selectCorridor(corridors[ri], bi)
+    rightPane.value = 'info'
+  } else if (ev.key === 'ArrowRight') {
+    ev.preventDefault()
+    bi = Math.min(bins - 1, bi + 1)
+    selectCorridor(corridors[ri], bi)
+    rightPane.value = 'info'
+  } else if (ev.key === 'ArrowUp') {
+    ev.preventDefault()
+    ri = Math.max(0, ri - 1)
+    selectCorridor(corridors[ri], bi)
+    rightPane.value = 'info'
+  } else if (ev.key === 'ArrowDown') {
+    ev.preventDefault()
+    ri = Math.min(corridors.length - 1, ri + 1)
+    selectCorridor(corridors[ri], bi)
+    rightPane.value = 'info'
+  } else if (ev.key === 'Enter') {
+    ev.preventDefault()
+    selectCorridor(corridors[ri], bi)
+    rightPane.value = 'info'
+  } else if (ev.key === ' ') {
+    ev.preventDefault()
+    toggleCorridor(corridors[ri])
+  }
 }
 
 function applyFocusPair(focus) {
@@ -994,9 +1300,13 @@ function applyFocusPair(focus) {
 
 watch(model, () => scheduleGridDraw())
 watch([selectedCorridor, highlightBin], () => scheduleGridDraw())
+watch(rightPane, (pane) => {
+  if (pane === 'topology') nextTick(() => scheduleGridDraw())
+})
 
 onMounted(() => {
-  sidebarCollapsed.value = props.initialMode !== 'chord'
+  if (props.initialMode === 'info') rightPane.value = 'info'
+  else rightPane.value = 'topology'
   if (props.focusPair) applyFocusPair(props.focusPair)
   nextTick(() => {
     scheduleGridDraw()
@@ -1009,11 +1319,15 @@ onMounted(() => {
 })
 
 watch(() => props.focusPair, (f) => { if (f) applyFocusPair(f) })
+watch(() => props.initialMode, (m) => {
+  if (m === 'chord' || m === 'topology') rightPane.value = 'topology'
+  else if (m === 'info') rightPane.value = 'info'
+})
 
 onBeforeUnmount(() => {
   if (_drawRaf) cancelAnimationFrame(_drawRaf)
-  if (_scopeTimer) clearTimeout(_scopeTimer)
   _ro?.disconnect()
+  onDialogPointerUp()
 })
 </script>
 
@@ -1029,14 +1343,18 @@ onBeforeUnmount(() => {
   padding: 16px;
   pointer-events: none;
 }
+.ci-overlay-free {
+  display: block;
+  padding: 0;
+}
 .ci-dialog {
   pointer-events: auto;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
-  width: clamp(720px, 92vw, 1100px);
-  height: min(680px, 78vh);
-  max-height: 78vh;
+  width: clamp(960px, 96vw, 1440px);
+  height: min(840px, 92vh);
+  max-height: 92vh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1047,26 +1365,64 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
+  cursor: grab;
+  user-select: none;
+}
+.ci-header:active {
+  cursor: grabbing;
 }
 .ci-title {
   font-weight: 600;
   font-size: 14px;
 }
-.ci-close {
-  border: 1px solid var(--border);
-  background: var(--tb-bg);
-  color: var(--fg);
-  border-radius: 4px;
-  padding: 4px 10px;
-  cursor: pointer;
-  font-size: 12px;
-}
 .ci-toolbar {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   margin-top: 8px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  min-height: 22px;
+}
+.ci-toolbar .ci-field :deep(.dom-select) {
+  height: 22px;
+  min-height: 22px;
+  min-width: 90px;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--tb-bg);
+  color: var(--fg);
+  padding: 0 6px;
+  transition: background 0.1s;
+}
+.ci-toolbar .ci-field :deep(.dom-select):hover:not(.disabled) {
+  border-color: var(--accent, #2a6fb2);
+  background: rgba(91, 155, 213, 0.18);
+}
+.ci-toolbar .ci-field-sort :deep(.dom-select) {
+  min-width: 148px;
+}
+.ci-toolbar .ci-field-scope :deep(.dom-select) {
+  min-width: 128px;
+}
+.ci-toolbar .ci-field :deep(.dom-select.open) {
+  border-color: var(--accent);
+}
+.ci-toolbar .ci-field :deep(.dom-select-trigger) {
+  height: 22px;
+  min-height: 22px;
+  font-size: 12px;
+}
+.ci-task-filter {
+  height: 22px;
+  box-sizing: border-box;
+}
+.ci-scope-hint {
+  font-size: 11px;
+  color: var(--fg-dim);
+  white-space: nowrap;
   flex-shrink: 0;
 }
 .ci-field {
@@ -1098,6 +1454,11 @@ onBeforeUnmount(() => {
   padding: 3px 10px;
   cursor: pointer;
   font-size: 12px;
+  transition: background 0.1s;
+}
+.ci-bounce-toggle:hover:not(.active) {
+  border-color: var(--accent, #2a6fb2);
+  background: rgba(91, 155, 213, 0.18);
 }
 .ci-bounce-toggle.active {
   border-color: #e8a020;
@@ -1181,6 +1542,11 @@ onBeforeUnmount(() => {
   cursor: pointer;
   font-size: 12px;
   flex-shrink: 0;
+  transition: background 0.1s;
+}
+.ci-jump:hover:not(:disabled) {
+  border-color: var(--accent, #2a6fb2);
+  background: rgba(91, 155, 213, 0.18);
 }
 .ci-empty {
   padding: 32px;
@@ -1205,7 +1571,210 @@ onBeforeUnmount(() => {
   border-radius: 4px;
   padding: 2px 6px;
   font-size: 12px;
-  width: 120px;
+  width: 140px;
+}
+.ci-overview {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.ci-overview-headline {
+  font-weight: 600;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ci-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px 16px;
+  color: var(--fg-dim);
+}
+.ci-overview-grid > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ci-link-btn {
+  margin-left: 6px;
+  border: 1px solid var(--border);
+  background: var(--tb-bg);
+  color: var(--fg);
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.ci-link-btn:hover {
+  border-color: var(--accent, #2a6fb2);
+  background: rgba(91, 155, 213, 0.18);
+}
+.ci-filter-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  flex-shrink: 0;
+}
+.ci-tabs,
+.ci-right-tabs {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.ci-right-tabs {
+  padding: 4px 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.ci-tab {
+  border: 1px solid var(--border);
+  background: var(--tb-bg);
+  color: var(--fg-dim);
+  border-radius: 4px 4px 0 0;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.ci-tab:hover:not(.active) {
+  border-color: var(--accent, #2a6fb2);
+  background: rgba(91, 155, 213, 0.18);
+}
+.ci-tab.active {
+  color: var(--fg);
+  font-weight: 600;
+  border-bottom-color: var(--bg);
+}
+.ci-heatmap-meta {
+  flex-shrink: 0;
+  padding: 4px 8px 2px;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--fg-dim);
+}
+.ci-heatmap-meta .ci-axis-caption,
+.ci-heatmap-meta .ci-heatmap-legend,
+.ci-heatmap-meta .ci-bin-summary {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0;
+}
+.ci-heatmap-legend,
+.ci-bin-summary {
+  font-size: 10px;
+  line-height: 1.35;
+  flex-shrink: 0;
+}
+.ci-bin-summary {
+  color: var(--fg);
+}
+.ci-topology {
+  flex: 1 1 0;
+  min-height: 0;
+  border: none;
+  border-radius: 0;
+  margin-top: 0;
+}
+.ci-info-pane {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ci-info-pane .ci-evidence {
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: none;
+}
+.ci-card-text {
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg);
+  margin-bottom: 6px;
+}
+.ci-right-pane {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.ci-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  margin-top: 0;
+  flex-shrink: 0;
+}
+.ci-actions-label {
+  font-size: 12px;
+  font-weight: 600;
+  margin-right: 0;
+}
+.ci-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.ci-evidence {
+  margin-top: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.ci-card-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+}
+.ci-card-actions {
+  flex-shrink: 0;
+  margin-top: auto;
+  padding-top: 8px;
+}
+.ci-card-metric {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  margin-bottom: 2px;
+}
+.ci-card-block {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.ci-ai-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .ci-workspace {
   flex: 1 1 0;
@@ -1238,7 +1807,7 @@ onBeforeUnmount(() => {
   flex: 1 1 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(280px, 38%) 1fr;
+  grid-template-columns: minmax(220px, 24%) minmax(280px, 1fr) minmax(260px, 30%);
   gap: 8px;
   margin-top: 8px;
 }
@@ -1436,6 +2005,22 @@ onBeforeUnmount(() => {
   padding: 3px 8px;
   cursor: pointer;
   font-size: 12px;
+  transition: background 0.1s;
+}
+.ci-show-all:hover:not(:disabled) {
+  border-color: var(--accent, #2a6fb2);
+  background: rgba(91, 155, 213, 0.28);
+}
+.ci-show-all:disabled,
+.ci-jump:disabled {
+  color: #888888;
+  opacity: 0.45;
+  cursor: default;
+}
+.ci-footer .ci-show-all:hover:not(:disabled),
+.ci-card-actions .ci-jump:hover:not(:disabled) {
+  border-color: var(--accent, #2a6fb2);
+  background: rgba(91, 155, 213, 0.35);
 }
 .ci-footer {
   display: flex;
@@ -1458,7 +2043,10 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 .ci-ai-btn:hover {
-  filter: brightness(1.08);
+  background: #1a5a9a;
+  border-color: #1a5a9a;
+  color: #fff;
+  filter: none;
 }
 .ci-group-row {
   font-weight: 600;
