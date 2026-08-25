@@ -20,7 +20,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from btf_viewer_pkg.ai_assistant import (  # noqa: E402
-    AI_CORE_PROMPT,
     AI_SYSTEM_PROMPT,
     AI_TEMPLATE_QUESTIONS,
     AI_TEMPLATE_PRIMARY_IDS,
@@ -34,16 +33,14 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     compose_ask_event_prompt,
 )
 from btf_viewer_pkg.ai_tools import (  # noqa: E402
-    AI_TOOL_PROMPT,
     AI_TOOL_SYSTEM_ADDENDUM,
     ai_viewer_tools,
 )
 from btf_viewer_pkg.ai_case import (  # noqa: E402
     VALIDATE_EXPERIMENT_PROMPT,
     AI_CONTEXT_MODES,
-    AI_CONTEXT_PROMPTS,
     INVESTIGATION_MODES,
-    ai_language_prompt,
+    context_mode_system_addendum,
     investigation_mode_prompt,
     investigation_mode_plan,
     builtin_investigation_templates,
@@ -76,42 +73,26 @@ def build_export_text() -> str:
     lines.append(f"Template count: {len(AI_TEMPLATE_QUESTIONS)}")
     lines.append(f"Tool count: {len(ai_viewer_tools())}")
 
-    _section(lines, "1. AI_CORE_PROMPT")
-    lines.append(AI_CORE_PROMPT)
-
-    _section(lines, "2. AI_TOOL_PROMPT (= AI_TOOL_SYSTEM_ADDENDUM)")
-    lines.append(AI_TOOL_PROMPT)
-    if AI_TOOL_SYSTEM_ADDENDUM != AI_TOOL_PROMPT:
-        lines.append("(WARNING: AI_TOOL_SYSTEM_ADDENDUM differs from AI_TOOL_PROMPT)")
-
-    _section(lines, "3. AI_SYSTEM_PROMPT (CORE + TOOL prefix for caching)")
+    _section(lines, "1. AI_SYSTEM_PROMPT (includes tool addendum)")
     lines.append(AI_SYSTEM_PROMPT)
 
-    _section(lines, "4. AI_CONTEXT_PROMPTS")
-    for mode in AI_CONTEXT_MODES:
-        lines.append(f"--- mode: {mode} ---")
-        lines.append(AI_CONTEXT_PROMPTS[mode])
-        lines.append("")
-
-    _section(lines, "5. Language prompts")
-    lines.append("--- English ---")
-    lines.append(ai_language_prompt("English"))
-    lines.append("")
-    lines.append("--- Traditional Chinese (繁體中文) ---")
-    lines.append(ai_language_prompt("Traditional Chinese (繁體中文)"))
-    lines.append("")
+    _section(lines, "2. AI_TOOL_SYSTEM_ADDENDUM (standalone)")
+    lines.append(AI_TOOL_SYSTEM_ADDENDUM)
 
     _section(
         lines,
-        '6. build_ai_system_prompt("English", "balanced") — full system message',
+        '3. build_ai_system_prompt("English") — full system message sent to the model',
     )
-    lines.append(build_ai_system_prompt("English", "balanced"))
-    for mode in AI_CONTEXT_MODES:
-        lines.append("")
-        lines.append(f"--- build_ai_system_prompt(English, {mode}) length ---")
-        lines.append(str(len(build_ai_system_prompt("English", mode))))
+    lines.append(build_ai_system_prompt("English"))
 
-    _section(lines, "7. Template layout")
+    _section(lines, "4. Context-mode system addenda")
+    for mode in AI_CONTEXT_MODES:
+        lines.append(f"--- mode: {mode} ---")
+        add = context_mode_system_addendum(mode)
+        lines.append(add if add else "(empty)")
+        lines.append("")
+
+    _section(lines, "5. Template layout")
     lines.append("PRIMARY chips: " + ", ".join(AI_TEMPLATE_PRIMARY_IDS))
     lines.append("")
     lines.append("MENU groups:")
@@ -122,13 +103,13 @@ def build_export_text() -> str:
     for label, ids in AI_TEMPLATE_INTENT_GROUPS:
         lines.append(f"  {label}: {', '.join(ids)}")
 
-    _section(lines, "8. AI_TEMPLATE_QUESTIONS (user prompts)")
+    _section(lines, "6. AI_TEMPLATE_QUESTIONS (user prompts)")
     for tid, lab, prompt in AI_TEMPLATE_QUESTIONS:
         lines.append(f"--- id={tid}  label={lab} ---")
         lines.append(prompt)
         lines.append("")
 
-    _section(lines, "9. ASK_EVENT_PROMPT")
+    _section(lines, "7. ASK_EVENT_PROMPT")
     lines.append(ASK_EVENT_PROMPT)
     lines.append("")
     lines.append("--- compose_ask_event_prompt(sample) ---")
@@ -140,10 +121,10 @@ def build_export_text() -> str:
         "stop": 1806000,
     }))
 
-    _section(lines, "10. VALIDATE_EXPERIMENT_PROMPT")
+    _section(lines, "8. VALIDATE_EXPERIMENT_PROMPT")
     lines.append(VALIDATE_EXPERIMENT_PROMPT)
 
-    _section(lines, "11. Investigation-mode plans + prompts")
+    _section(lines, "9. Investigation-mode plans + prompts")
     for mode in INVESTIGATION_MODES:
         plan = investigation_mode_plan(mode)
         lines.append(f"--- mode: {mode} ---")
@@ -155,7 +136,7 @@ def build_export_text() -> str:
         lines.append(investigation_mode_prompt(mode))
         lines.append("")
 
-    _section(lines, "12. Builtin investigation templates (My Investigation)")
+    _section(lines, "10. Builtin investigation templates (My Investigation)")
     for tpl in builtin_investigation_templates():
         tid = tpl.get("id")
         label = tpl.get("label")
@@ -166,7 +147,7 @@ def build_export_text() -> str:
         lines.append(investigation_template_prompt(tpl))
         lines.append("")
 
-    _section(lines, "13. interpreted_run_prompt (sample)")
+    _section(lines, "11. interpreted_run_prompt (sample)")
     lines.append(interpreted_run_prompt({
         "interpreted_question": "Find why ControlTask misses deadlines",
         "mode": "diagnose",
@@ -174,7 +155,7 @@ def build_export_text() -> str:
         "finding_id": "deadline_miss",
     }))
 
-    _section(lines, "14. Tool schemas (name + description + parameters)")
+    _section(lines, "12. Tool schemas (name + description + parameters)")
     for t in ai_viewer_tools():
         fn = t.get("function") or {}
         name = fn.get("name") or "?"

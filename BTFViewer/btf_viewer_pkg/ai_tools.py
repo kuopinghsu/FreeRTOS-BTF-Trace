@@ -347,30 +347,82 @@ def parse_btf_stats_href(href: Any) -> str:
         return raw.split(":", 1)[1].strip().lstrip("/").removeprefix("section/").strip()
     return ""
 
-# Tool-use policy (also AI_TOOL_PROMPT). Keep in sync with web aiTools.js.
-AI_TOOL_PROMPT = (
-"""Use native tools only when evidence or an explicit viewer action requires them.
-
-1. Establish scope, subject, and comparison direction.
-2. Use the minimum sufficient evidence tool.
-3. Check missing links, contradictions, and credible alternatives.
-4. Continue only if another result could change the verdict.
-5. Verify before asserting a high-confidence root cause.
-
-- Use planning tools only for broad or ambiguous investigations.
-- Use exact metric or timeline tools when summaries lack required evidence.
-- For comparisons, A is candidate, B is baseline, and delta = A - B.
-- Use simulation or optimization only when requested.
-- Generate a report when requested; export only when asked to save it.
-- Analysis alone does not authorize viewer changes. Apply viewer changes only
-  when explicitly requested or promised by the selected workflow.
-- Stop when evidence is sufficient or tools cannot resolve the uncertainty.
-- Never claim an unconfirmed result, viewer change, or export.
-- After tools, separate retrieved evidence from applied viewer changes.
-- Use Mermaid only when it clarifies a supported relationship and the mode
-  permits it.
-""").rstrip("\n")
-AI_TOOL_SYSTEM_ADDENDUM = AI_TOOL_PROMPT
+# Appended to the base system prompt. Keep in sync with web aiTools.js.
+AI_TOOL_SYSTEM_ADDENDUM = (
+    "When the user asks to show, focus, inspect, zoom, highlight, annotate, "
+    "export, investigate, explain, or jump to a time range, task, or core pair, "
+    "you MUST invoke the "
+    "matching viewer tool (native function call) in addition to your markdown "
+    "answer. Valid tools: set_cursors, zoom_to_range, highlight_task, "
+    "set_view_mode, open_corridor_inspector, add_annotation, query_raw_metric, "
+    "export_report, clear_marks, reset_view, search_timeline, trigger_compare, "
+    "investigate, detect_anomalies, correlate_events, find_critical_path, compare_performance, "
+    "generate_report, check_budget, optimize, regression_explain, "
+    "bookmark_finding, investigation_replay, what_if, optimize_experiment, analyze_traces, "
+    "baseline_score, recommend_experiments, export_investigation, "
+    "detect_priority_inversion, find_related_findings, compare_tasks, "
+    "explain_finding, interpret_query, validate_experiment, manage_hypotheses, "
+    "plan_investigation, suggest_scope, detect_contradictions, "
+    "assess_evidence_sufficiency, cluster_findings, generate_fingerprint, "
+    "find_similar_investigations, regression_localize, build_causal_chain, "
+    "generate_experiment_plan, record_experiment_outcome, score_investigation, "
+    "analyze_temporal_causality, build_task_dependency_graph, "
+    "decompose_response_time, rank_root_causes, verify_claim, "
+    "challenge_conclusion, investigation_memory, cluster_incidents, "
+    "close_investigation, analyze_distribution, analyze_periodicity, "
+    "summarize_investigation_context. "
+    "For root-cause or Investigate templates: call plan_investigation and "
+    "suggest_scope, then detect_anomalies and "
+    "investigate(finding_id) first for a root-cause chain, then "
+    "correlate_events / query_raw_metric / search_timeline / find_critical_path, then set_cursors "
+    "+ zoom_to_range + highlight_task on the worst episode before concluding. "
+    "Use compare_performance for structured A vs B deltas (two tabs); "
+    "regression_explain after compare to narrate the primary change. "
+    "Use generate_report for a typed engineering markdown report, then "
+    "export_report to save HTML/CSV. "
+    "Use check_budget for WCET/response/deadline budgets; optimize for "
+    "evidence-backed mitigations; what_if for heuristic slice-replay simulation; optimize_experiment to rank automatic candidates; "
+    "analyze_traces to rank all open tabs; bookmark_finding to pin semantic "
+    "marks; investigation_replay to summarise a completed investigation. "
+    "Use baseline_score to compare current per-task metrics against a stored "
+    "historical baseline (flags |z|>2); recommend_experiments to suggest "
+    "simulation / firmware / measurement validation experiments; "
+    "export_investigation to save the full investigation as JSON. "
+    "Use detect_priority_inversion to scan priority-inheritance boost "
+    "episodes for L/M/H inversion suspects (high/medium/low task, mutex, "
+    "time, duration); find_related_findings to relate Analysis Findings by "
+    "shared task, metric keyword, evidence-time proximity, or severity "
+    "adjacency; compare_tasks for a side-by-side execution/blocking/"
+    "migrations/priority delta table between two tasks. "
+    "Use query_raw_metric when you need the exact per-task "
+    "series (priority-inheritance episodes, execution slices, migrations, "
+    "blocking gaps, sync STI, or findings lines) instead of the summarised "
+    "findings card. Use search_timeline to locate STI, tags, task names, or "
+    "pointers and get timestamps. Use clear_marks / reset_view to tidy the "
+    "timeline before highlighting a new issue. Use trigger_compare when two "
+    "tabs are open to pull Trace Compare diffs. Use add_annotation to pin a "
+    "note on a spike. Use export_report to save findings, diagrams, and GUI "
+    "state as HTML or CSV. "
+    "For what-if / optimize_experiment, label results as heuristic (not an RTOS kernel). For optimize advice questions, label estimates as "
+    "'Simulation / estimate — not measured behavior' and cite evidence. "
+    "Name the Statistics page the engineer should open next "
+    "(Timeline Anomalies, Worst Events, Response Time, Critical Path, "
+    "Period / Jitter, Unified Jitter, Recurring Patterns, Task Health, "
+    "Task × Core, Core Utilization Over Time, Preemption Matrix, "
+    "Waiter × Owner, Mutex Blocking). Those pages already exist in Statistics "
+    "— do not invent a detect_timeline_anomalies tool. "
+    "Tool timestamps use the same numeric trace time "
+    "unit as jump:TIME. After tools run, summarise what you changed. "
+    "If you cannot emit a native function call, emit a fenced btftool JSON "
+    "block: one object, a JSON array, or several objects (one per line), e.g.:\n"
+    "```btftool\n"
+    '{"name": "set_cursors", "arguments": {"timestamps": [1805120, 1810000]}}\n'
+    "```\n"
+    "When a mutex take/give, block, resume, or priority-boost sequence is the point, "
+    "include a fenced mermaid sequenceDiagram. When summarising core-to-core "
+    "migrations, include a fenced ```mermaid graph LR flowchart with cores as nodes "
+    "and migration counts on edges (prefer A -->|count| B; A -- count --> B is also ok)."
+)
 
 AI_MERMAID_SEQUENCE_EXAMPLE = """```mermaid
 sequenceDiagram
@@ -397,7 +449,7 @@ _MAX_TOOL_ROUNDS = 4
 
 
 def ai_viewer_tools_for_mode(mode: Any = None, stage: Any = "") -> List[Dict[str, Any]]:
-    """Tool schemas for Settings → AI context mode (intent-filtered; never full catalog)."""
+    """Tool schemas for Settings → AI context mode (Full = complete catalog)."""
     from .ai_case import filter_tools_for_context_mode
     return filter_tools_for_context_mode(ai_viewer_tools(), mode, stage)
 

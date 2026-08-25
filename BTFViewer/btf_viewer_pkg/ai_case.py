@@ -151,128 +151,23 @@ AI_CONTEXT_MODE_SETTINGS_LINES: Dict[str, str] = {
         "Full evidence — complete Findings, tools, and history."
     ),
 }
-# Intent tool groups for Compact / Balanced / Full (never the full catalog).
-AI_CONTEXT_INTENT_TOOLS: Dict[str, Tuple[str, ...]] = {
+# Stage-only tool names for Compact; Balanced adds neighbours + extras.
+AI_CONTEXT_STAGE_TOOLS: Dict[str, Tuple[str, ...]] = {
     "triage": ("detect_anomalies", "cluster_findings", "suggest_scope"),
     "scope": ("set_cursors", "zoom_to_range", "highlight_task"),
-    "investigate": (
-        "investigate", "correlate_events", "find_critical_path", "rank_root_causes",
-    ),
-    "verify": (
-        "verify_claim", "detect_contradictions", "challenge_conclusion",
-        "assess_evidence_sufficiency",
-    ),
-    "priority": (
-        "detect_priority_inversion", "correlate_events", "verify_claim",
-    ),
-    "compare": (
-        "compare_performance", "regression_explain", "regression_localize",
-        "validate_experiment",
-    ),
+    "investigate": ("investigate", "correlate_events", "find_critical_path"),
+    "verify": ("verify_claim", "detect_contradictions", "challenge_conclusion"),
     "experiment": ("what_if", "optimize_experiment", "recommend_experiments"),
+    "compare": ("compare_performance", "validate_experiment"),
     "report": ("generate_report", "export_report"),
 }
-# Back-compat alias used by older tests / callers.
-AI_CONTEXT_STAGE_TOOLS = AI_CONTEXT_INTENT_TOOLS
 AI_CONTEXT_ALWAYS_TOOLS: Tuple[str, ...] = (
     "search_timeline", "query_raw_metric", "summarize_investigation_context",
 )
-# Deprecated: Balanced no longer auto-adds these.
-AI_CONTEXT_BALANCED_EXTRA_TOOLS: Tuple[str, ...] = ()
-
-AI_TEMPLATE_TO_INTENT: Dict[str, str] = {
-    "findings": "triage",
-    "triage": "triage",
-    "explain_region": "investigate",
-    "investigate": "investigate",
-    "root_cause": "investigate",
-    "auto_investigate": "investigate",
-    "task_profile": "investigate",
-    "latency": "investigate",
-    "wcet": "investigate",
-    "migrations": "investigate",
-    "tick": "investigate",
-    "deadlines": "investigate",
-    "balance": "triage",
-    "verify": "verify",
-    "explain_finding": "verify",
-    "compare": "compare",
-    "what_if": "experiment",
-    "optimize": "experiment",
-    "diagnostic_report": "report",
-    "priority": "priority",
-    "quick": "triage",
-    "diagnose": "investigate",
-    "report": "report",
-    "experiment": "experiment",
-    "scope": "scope",
-}
-AI_CONTEXT_RELATED_INTENT: Dict[str, str] = {
-    "triage": "investigate",
-    "scope": "investigate",
-    "investigate": "verify",
-    "verify": "investigate",
-    "priority": "verify",
-    "compare": "verify",
-    "experiment": "verify",
-    "report": "investigate",
-}
-AI_CONTEXT_SCOPE_TOOLS: Tuple[str, ...] = AI_CONTEXT_INTENT_TOOLS["scope"]
-
-AI_CONTEXT_PROMPTS: Dict[str, str] = {
-    AI_CONTEXT_MODE_COMPACT: """MODE: COMPACT
-- Fast triage; target 200–350 answer tokens.
-- Use the scope summary and up to three actionable findings.
-- Use at most two evidence calls unless the user requests more work.
-- Do not run planning, graphs, simulation, optimization, memory, clustering, or
-  reports unless requested.
-- Preserve viewer state. Do not create diagrams unless requested.
-- If evidence is insufficient, return Inconclusive and name what is missing.
-- Output: Assessment; Evidence; Confidence/quality; Next check.
-""".rstrip("\n"),
-    AI_CONTEXT_MODE_BALANCED: """MODE: BALANCED
-- Default mode; target 400–750 answer tokens.
-- Use relevant scoped findings and tables; fetch exact evidence when needed.
-- Test the leading explanation and one credible alternative.
-- Prefer at most four evidence calls. Exceed this only if the result could change
-  the verdict. Verify before a High-confidence causal conclusion.
-- Change viewer state only for an explicit action or a workflow that promises to
-  focus evidence.
-- Use one small diagram only when it materially improves understanding.
-- Output: Verdict; Evidence; Interpretation; Alternative/falsification;
-  Confidence/quality/coverage; Next action.
-""".rstrip("\n"),
-    AI_CONTEXT_MODE_FULL: """MODE: FULL EVIDENCE
-- Use all relevant scoped evidence and compact investigation history.
-- Rank hypotheses for broad questions; skip planning for an explicit finding,
-  task, and window.
-- Build causal or dependency chains only as far as evidence supports.
-- Examine contradictions and credible alternatives. Assess sufficiency before
-  opening another branch; stop when more tools will not change the verdict.
-- Verify and challenge before a High-confidence root-cause conclusion.
-- Distinguish observed, derived, heuristic, and simulated results.
-- Preserve unrelated viewer marks. Use diagrams only for supported relationships.
-- State each material fact once. Return Inconclusive when evidence remains
-  incomplete or contradictory.
-- Output: Scope; Verdict; Evidence chain; Contradictions/alternatives; Root cause
-  or leading explanation; Confidence/quality/coverage; Requested mitigation;
-  Next verification; Viewer changes.
-""".rstrip("\n"),
-}
-
-AI_LANGUAGE_PROMPT_TEMPLATE = """Always write your entire reply in {language}.
-Write the complete user-facing reply in {language}. Preserve task names, core
-names, UI labels, tool names, metric identifiers, jump:TIME, range:LO/HI, code,
-and file formats. Do not translate trace identifiers.
-""".rstrip("\n")
-AI_LANGUAGE_TRADITIONAL_CHINESE_NOTE = """Use natural Traditional Chinese and terminology customary in Taiwan.
-Do not switch to English or Simplified Chinese for the prose answer.
-""".rstrip("\n")
-AI_LANGUAGE_SIMPLIFIED_CHINESE_NOTE = (
-    "Use natural Simplified Chinese. Do not switch to English or Traditional "
-    "Chinese for the prose answer."
+AI_CONTEXT_BALANCED_EXTRA_TOOLS: Tuple[str, ...] = (
+    "detect_anomalies", "investigate", "set_cursors", "zoom_to_range",
+    "highlight_task", "challenge_conclusion", "what_if",
 )
-
 _CONTEXT_TOOL_ROW_KEYS: Tuple[str, ...] = (
     "rows", "episodes", "slices", "events", "gaps", "hits", "times",
     "experiments", "anomalies", "candidates", "samples", "values",
@@ -308,147 +203,114 @@ def ai_context_mode_settings_help(mode: Any = None) -> str:
         key, AI_CONTEXT_MODE_SETTINGS_LINES[DEFAULT_AI_CONTEXT_MODE])
 
 
-def ai_language_prompt(language: Any = None) -> str:
-    """Reply-language instruction for every Settings language.
-
-    Chinese variants get script-specific notes; other non-English languages get
-    an explicit do-not-answer-in-English rule.
-    """
-    lang = str(language or "English").strip() or "English"
-    text = AI_LANGUAGE_PROMPT_TEMPLATE.replace("{language}", lang).rstrip()
-    low = lang.lower()
-    if "traditional chinese" in low or "繁體" in lang or "繁体" in lang:
-        text = text + "\n" + AI_LANGUAGE_TRADITIONAL_CHINESE_NOTE.rstrip()
-    elif "simplified chinese" in low or "简体" in lang or "簡體" in lang:
-        text = text + "\n" + AI_LANGUAGE_SIMPLIFIED_CHINESE_NOTE.rstrip()
-    elif low not in ("english",):
-        text = (
-            text
-            + f"\nDo not answer in English unless the user explicitly asks for English. "
-            f"All headings, bullets, and explanations must be in {lang}."
-        )
-    return text
-
-
 def ai_context_limits(mode: Any = None) -> Dict[str, Any]:
     """Token-budget knobs for Compact / Balanced / Full evidence."""
     key = normalize_ai_context_mode(mode)
     if key == AI_CONTEXT_MODE_COMPACT:
         return {
-            "findings": 3,
-            "tool_rows": 8,
+            "findings": 5,
+            "tool_rows": 10,
             "history_user_turns": 2,
-            "max_tokens": 350,
+            "max_tokens": 500,
             "what_if": 3,
             "diagrams": "asked",
         }
     if key == AI_CONTEXT_MODE_FULL:
         return {
             "findings": None,
-            "tool_rows": 32,
-            "history_user_turns": 10,
-            "max_tokens": 1600,
+            "tool_rows": 40,
+            "history_user_turns": 20,
+            "max_tokens": None,
             "what_if": 12,
             "diagrams": "useful",
         }
     return {
-        "findings": 8,
-        "tool_rows": 16,
-        "history_user_turns": 4,
-        "max_tokens": 800,
+        "findings": 12,
+        "tool_rows": 20,
+        "history_user_turns": 6,
+        "max_tokens": None,
         "what_if": 5,
         "diagrams": "useful",
     }
 
 
 def context_mode_system_addendum(mode: Any = None) -> str:
-    """Context-mode system prompt block (AI_CONTEXT_PROMPTS)."""
+    """Extra system-prompt rules for the selected context mode."""
     key = normalize_ai_context_mode(mode)
-    return AI_CONTEXT_PROMPTS.get(key, AI_CONTEXT_PROMPTS[DEFAULT_AI_CONTEXT_MODE])
-
-
-def normalize_ai_intent(stage: Any = "") -> str:
-    """Map guided stage / template id / investigation mode → intent key."""
-    raw = str(stage or "").strip().lower()
-    if raw in ("", "idle", "start"):
-        return "triage"
-    if raw in AI_CONTEXT_INTENT_TOOLS:
-        return raw
-    mapped = AI_TEMPLATE_TO_INTENT.get(raw)
-    if mapped:
-        return mapped
-    return "triage"
+    keep = (
+        "Never omit jump:TIME, range:LO/HI, real task names, measurements "
+        "with units, confidence, evidence quality, what-if disclaimers, or "
+        "at least one alternative / falsification."
+    )
+    if key == AI_CONTEXT_MODE_COMPACT:
+        return (
+            " Context mode is Compact: keep the reply around 300–500 tokens. "
+            "Generate mermaid diagrams only if the user asks. " + keep
+        )
+    if key == AI_CONTEXT_MODE_FULL:
+        return (
+            " Context mode is Full evidence: you may use the complete Findings, "
+            "tools, and history. Include mermaid when it clarifies a sequence "
+            "or migration. " + keep
+        )
+    return (
+        " Context mode is Balanced: prefer concise evidence-backed answers. "
+        "Include mermaid when it clarifies a sequence or migration. " + keep
+    )
 
 
 def _stage_tool_names(stage: Any) -> Tuple[str, ...]:
-    return AI_CONTEXT_INTENT_TOOLS.get(
-        normalize_ai_intent(stage), AI_CONTEXT_INTENT_TOOLS["triage"])
-
-
-def _viewer_action_requested(stage: Any = "", viewer_action: bool = False) -> bool:
-    if viewer_action:
-        return True
     sid = str(stage or "").strip().lower()
-    return sid in ("scope",) or normalize_ai_intent(sid) == "scope"
+    if sid in ("", "idle", "start"):
+        sid = "triage"
+    return AI_CONTEXT_STAGE_TOOLS.get(sid, AI_CONTEXT_STAGE_TOOLS["triage"])
 
 
 def tool_names_for_context_mode(
     mode: Any = None,
     stage: Any = "",
-    *,
-    related_intent: Any = "",
-    viewer_action: bool = False,
-) -> List[str]:
-    """Intent-filtered tool names (never the full catalog)."""
+) -> Optional[List[str]]:
+    """Tool names to send, or None to send the full catalog."""
     key = normalize_ai_context_mode(mode)
-    intent = normalize_ai_intent(stage)
+    if key == AI_CONTEXT_MODE_FULL:
+        return None
     names: List[str] = []
     seen = set()
 
-    def _add(seq) -> None:
-        for name in seq or ():
+    def _add(seq: Sequence[str]) -> None:
+        for name in seq:
             n = str(name or "").strip()
             if n and n not in seen:
                 seen.add(n)
                 names.append(n)
 
+    sid = str(stage or "").strip().lower()
+    if sid in ("", "idle", "start"):
+        sid = "triage"
+    _add(_stage_tool_names(sid))
     _add(AI_CONTEXT_ALWAYS_TOOLS)
-    _add(AI_CONTEXT_INTENT_TOOLS.get(intent, ()))
-
-    want_scope = _viewer_action_requested(stage, viewer_action) or intent == "scope"
-    if key == AI_CONTEXT_MODE_COMPACT:
-        if not want_scope:
-            scope_set = set(AI_CONTEXT_SCOPE_TOOLS)
-            names[:] = [n for n in names if n not in scope_set]
-        return names
-
-    # Balanced + Full: always include verify
-    _add(AI_CONTEXT_INTENT_TOOLS["verify"])
-    if want_scope:
-        _add(AI_CONTEXT_INTENT_TOOLS["scope"])
-
-    if key == AI_CONTEXT_MODE_FULL:
-        related = normalize_ai_intent(related_intent) if related_intent else (
-            AI_CONTEXT_RELATED_INTENT.get(intent, "investigate")
-        )
-        if related != intent:
-            _add(AI_CONTEXT_INTENT_TOOLS.get(related, ()))
+    if key == AI_CONTEXT_MODE_BALANCED:
+        if sid in GUIDED_STAGES:
+            idx = list(GUIDED_STAGES).index(sid)
+            if idx > 0:
+                _add(_stage_tool_names(GUIDED_STAGES[idx - 1]))
+            if idx + 1 < len(GUIDED_STAGES):
+                _add(_stage_tool_names(GUIDED_STAGES[idx + 1]))
+        _add(AI_CONTEXT_BALANCED_EXTRA_TOOLS)
+        _add(AI_CONTEXT_STAGE_TOOLS["report"])
     return names
-
 
 
 def filter_tools_for_context_mode(
     tools: Optional[Sequence[Dict[str, Any]]],
     mode: Any = None,
     stage: Any = "",
-    *,
-    related_intent: Any = "",
-    viewer_action: bool = False,
 ) -> List[Dict[str, Any]]:
     """Subset of OpenAI tool schemas for the selected context mode."""
     catalog = [t for t in (tools or []) if isinstance(t, dict)]
-    names = tool_names_for_context_mode(
-        mode, stage, related_intent=related_intent, viewer_action=viewer_action)
+    names = tool_names_for_context_mode(mode, stage)
+    if names is None:
+        return list(catalog)
     want = set(names)
     out: List[Dict[str, Any]] = []
     for tool in catalog:
@@ -457,86 +319,6 @@ def filter_tools_for_context_mode(
         if name in want:
             out.append(tool)
     return out
-
-def build_ai_runtime_metadata(
-    *,
-    context_mode: Any = None,
-    reply_language: Any = None,
-    cursors: Any = None,
-    scope: Any = None,
-    trace_time_unit: Any = None,
-    time_scale_to_ns: Any = None,
-    smp_enabled: Any = None,
-    available_statistics_pages: Any = None,
-    clickable_metric_cells: Any = None,
-    compare_candidate: Any = None,
-    compare_baseline: Any = None,
-) -> Dict[str, Any]:
-    """Compact runtime metadata JSON (omit empty/null). Injected once per turn."""
-    meta: Dict[str, Any] = {}
-    unit = str(trace_time_unit or "").strip()
-    if unit:
-        meta["trace_time_unit"] = unit
-    if time_scale_to_ns is not None:
-        try:
-            meta["time_scale_to_ns"] = float(time_scale_to_ns)
-        except (TypeError, ValueError):
-            pass
-
-    placed: List[Any] = []
-    if isinstance(cursors, (list, tuple)):
-        for c in cursors:
-            if isinstance(c, dict):
-                t = c.get("time", c.get("t", c.get("ns")))
-            else:
-                t = c
-            try:
-                placed.append(float(t))
-            except (TypeError, ValueError):
-                continue
-    active: Dict[str, Any] = {}
-    if len(placed) >= 2:
-        active = {
-            "kind": "cursor",
-            "start": min(placed),
-            "end": max(placed),
-        }
-    else:
-        kind = "cursor" if "cursor" in str(scope or "").lower() else "full"
-        active = {"kind": kind, "start": None, "end": None}
-        if kind == "full" and not str(scope or "").strip():
-            active = {"kind": "full", "start": None, "end": None}
-    if active.get("start") is not None or active.get("end") is not None or active.get("kind"):
-        # Drop null start/end for full scope cleanliness
-        if active.get("start") is None and active.get("end") is None:
-            meta["active_scope"] = {"kind": active.get("kind") or "full"}
-        else:
-            meta["active_scope"] = active
-
-    cand = str(compare_candidate or "").strip() or None
-    base = str(compare_baseline or "").strip() or None
-    if cand or base:
-        meta["trace_compare"] = {
-            "candidate": cand,
-            "baseline": base,
-            "delta_definition": "candidate_minus_baseline",
-        }
-
-    pages = [str(p).strip() for p in (available_statistics_pages or []) if str(p).strip()]
-    if pages:
-        meta["available_statistics_pages"] = pages
-    cells = [str(c).strip() for c in (clickable_metric_cells or []) if str(c).strip()]
-    if cells:
-        meta["clickable_metric_cells"] = cells
-    if smp_enabled is not None:
-        meta["smp_enabled"] = bool(smp_enabled)
-    meta["context_mode"] = normalize_ai_context_mode(context_mode)
-    lang = str(reply_language or "").strip()
-    if lang:
-        meta["reply_language"] = lang
-    return meta
-
-
 
 
 def investigation_context_summary(payload: Optional[dict] = None) -> str:
@@ -1945,41 +1727,40 @@ def explain_finding_payload(
 
 
 def investigation_mode_plan(mode: str = "diagnose") -> Dict[str, Any]:
-    """User-facing investigation mode → goal + preferred tools."""
+    """User-facing investigation mode → goal + tool sequence."""
     want = str(mode or "diagnose").strip().lower()
     if want not in INVESTIGATION_MODES:
         want = "diagnose"
     plans = {
         "quick": {
-            "goal": "Find the most likely actionable problem",
+            "goal": "Find the most likely problem",
             "tools": ["detect_anomalies", "investigate"],
             "template": "triage",
         },
         "diagnose": {
-            "goal": "Find and verify the leading cause",
+            "goal": "Find cause → gather evidence → verify",
             "tools": [
                 "investigate", "correlate_events", "find_critical_path",
-                "verify_claim", "challenge_conclusion",
+                "build_task_dependency_graph", "analyze_temporal_causality",
+                "rank_root_causes", "challenge_conclusion",
             ],
             "template": "investigate",
         },
         "compare": {
-            "goal": "Explain candidate A versus baseline B",
-            "tools": [
-                "compare_performance", "regression_explain", "regression_localize",
-            ],
+            "goal": "Explain why A differs from B",
+            "tools": ["compare_performance", "regression_explain"],
             "template": "compare",
         },
         "optimize": {
-            "goal": "Propose and rank requested mitigation experiments",
+            "goal": "Find cause → propose experiments → rank them",
             "tools": [
-                "investigate", "optimize_experiment", "recommend_experiments",
-                "what_if",
+                "investigate", "what_if", "optimize_experiment",
+                "recommend_experiments",
             ],
             "template": "optimize",
         },
         "report": {
-            "goal": "Create and save the requested report",
+            "goal": "Turn confirmed findings into an engineering report",
             "tools": ["generate_report", "export_report"],
             "template": "diagnostic_report",
         },
@@ -1998,40 +1779,18 @@ INVESTIGATION_MODE_LABELS: Dict[str, str] = {
     "report": "Report",
 }
 
-INVESTIGATION_MODE_PROMPTS: Dict[str, str] = {
-    "quick": """Find the most likely actionable problem. Preferred tools: detect_anomalies;
-investigate for the selected finding. Continue only if the second call could
-change the assessment. Output: Verdict; Evidence; Falsification; Confidence;
-Next check.
-""".rstrip("\n"),
-    "diagnose": """Find and verify the leading cause. Preferred tools: investigate; correlate_events
-or find_critical_path for a missing link; verify_claim; challenge_conclusion.
-Use dependency or temporal tools only when the simpler evidence cannot resolve
-the chain. Output: Verdict; Evidence chain; Alternative; Confidence; Next check.
-""".rstrip("\n"),
-    "compare": """Explain candidate A versus baseline B. Preferred tools: compare_performance;
-regression_explain for a material delta; regression_localize when location is
-unknown. Output: Verdict; Material deltas; Explanation; Falsification;
-Confidence; Next check.
-""".rstrip("\n"),
-    "optimize": """Propose and rank requested mitigation experiments. Preferred tools: investigate
-only when the problem is unclear; optimize_experiment; recommend_experiments.
-Use what_if only for a concrete selected change. Label all estimates. Output:
-Ranked experiments; Evidence; Risk; Validation plan.
-""".rstrip("\n"),
-    "report": """Create and save the requested report. Call generate_report, then
-export_report (format html unless the user asked for csv). Include only supported
-sections and mark missing requested evidence as Not evaluated.
-""".rstrip("\n"),
-}
-
 
 def investigation_mode_prompt(mode: str = "diagnose") -> str:
-    """User prompt for an Investigation Mode chip (goal + preferred tools)."""
+    """User prompt for an Investigation Mode chip (maps onto existing tools)."""
     plan = investigation_mode_plan(mode)
-    want = plan["mode"]
-    return INVESTIGATION_MODE_PROMPTS.get(
-        want, INVESTIGATION_MODE_PROMPTS["diagnose"]).rstrip()
+    listed = " → ".join(str(t) for t in (plan.get("tools") or []) if t)
+    label = INVESTIGATION_MODE_LABELS.get(plan["mode"], plan["mode"])
+    return (
+        f"{plan.get('goal') or label}. Call these tools in order: {listed}. "
+        "After each tool, update hypotheses with manage_hypotheses when the "
+        "status changes. Finish with a verdict, jump:TIME evidence, "
+        "what would disprove this, confidence, and one next check."
+    )
 
 
 def parse_user_investigation_templates(raw: Any) -> List[Dict[str, Any]]:
@@ -2090,12 +1849,14 @@ def new_user_investigation_template(
 
 
 VALIDATE_EXPERIMENT_PROMPT = (
-"""Validate the before/after capture. A is candidate, B is baseline, and delta =
-A - B. Use validate_experiment. Use host-provided actual deltas. Include expected
-deltas only when they come from a recorded experiment. Output: VALIDATED,
-PARTIALLY VALIDATED, or DISPROVED; Supporting deltas; Mismatches; Confidence;
-One next check.
-""").rstrip("\n")
+    "Did this before/after capture validate the experiment? "
+    "Call validate_experiment. Omit actual — the host fills percents from "
+    "the last Trace Compare (Limit to C1–Cn honored when each tab has 2+ cursors). "
+    "If expected deltas "
+    "are known from what_if or optimize_experiment, pass them as expected; "
+    "otherwise omit expected. Then report VALIDATED, PARTIALLY VALIDATED, "
+    "or DISPROVED with supporting evidence and one next check."
+)
 
 
 def validate_experiment(

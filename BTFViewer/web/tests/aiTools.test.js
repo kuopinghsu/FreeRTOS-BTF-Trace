@@ -369,8 +369,7 @@ describe('aiTools', () => {
       calls,
     )
     assert.equal(merged.length, 4)
-    assert.match(AI_TOOL_SYSTEM_ADDENDUM, /Use native tools only/)
-    assert.match(AI_TOOL_SYSTEM_ADDENDUM, /Mermaid/)
+    assert.match(AI_TOOL_SYSTEM_ADDENDUM, /```btftool/)
   })
 
   it('parses NDJSON ```btftool fences (several objects in one fence)', () => {
@@ -393,7 +392,7 @@ describe('aiTools', () => {
     assert.doesNotMatch(stripped, /btftool/)
     assert.doesNotMatch(stripped, /set_cursors/)
     assert.match(stripped, /Focusing the segment/)
-    assert.match(AI_TOOL_SYSTEM_ADDENDUM, /minimum sufficient evidence tool/)
+    assert.match(AI_TOOL_SYSTEM_ADDENDUM, /one object, a JSON array, or several objects/)
   })
 
   it('resolves task keys and auto-apply default', () => {
@@ -411,7 +410,7 @@ describe('aiTools', () => {
     assert.equal(resolveTaskKey('Core_0', ['Idle[1]', 'Low[266]']), null)
     assert.equal(parseAiAutoApply(undefined), false)
     assert.equal(parseAiAutoApply(true), true)
-    assert.match(AI_TOOL_SYSTEM_ADDENDUM, /Mermaid/)
+    assert.match(AI_TOOL_SYSTEM_ADDENDUM, /mermaid sequenceDiagram/)
     assert.equal(parseBtfJumpHref(btfJumpHref(1805120)), 1805120)
     assert.equal(parseBtfJumpHref('btfjump:1805120'), 1805120)
     assert.equal(btfRangeHref(1000, 2000), 'btfrange:1000/2000')

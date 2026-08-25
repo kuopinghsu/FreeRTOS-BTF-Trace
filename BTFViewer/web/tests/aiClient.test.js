@@ -19,7 +19,6 @@ import {
   aiAuthStatus,
   aiPresetSignInUrl,
   buildAiSystemPrompt,
-  buildAiUserMessage,
   defaultAiAuthMode,
   formatAiHttpError,
   summarizeAiHttpErrorDetail,
@@ -153,62 +152,9 @@ describe('AI endpoint helpers', () => {
 
   it('buildAiSystemPrompt includes reply language', () => {
     assert.match(buildAiSystemPrompt('English'), /Always write your entire reply in English/)
-    assert.match(buildAiSystemPrompt('English'), /MODE: BALANCED/)
-    assert.doesNotMatch(
-      buildAiSystemPrompt('English'),
-      /Do not answer in English unless the user explicitly asks/,
-    )
-    for (const lang of [
-      'Japanese (日本語)',
-      'Korean (한국어)',
-      'German',
-      'French',
-      'Spanish',
-    ]) {
-      const prompt = buildAiSystemPrompt(lang)
-      assert.match(
-        prompt,
-        new RegExp(`Always write your entire reply in ${lang.replace(/[()]/g, '\\$&')}`),
-        lang,
-      )
-      assert.match(prompt, /Do not answer in English unless the user explicitly asks/, lang)
-      assert.match(
-        prompt,
-        new RegExp(`All headings, bullets, and explanations must be in ${lang.replace(/[()]/g, '\\$&')}`),
-        lang,
-      )
-      const user = buildAiUserMessage('Why?', {
-        findingsText: 'none',
-        responseLanguage: lang,
-      })
-      assert.match(user, /### Reply language/, lang)
-      assert.match(user, new RegExp(lang.replace(/[()]/g, '\\$&')), lang)
-    }
     assert.match(
-      buildAiSystemPrompt('Traditional Chinese (繁體中文)'),
-      /Always write your entire reply in Traditional Chinese/,
-    )
-    assert.match(
-      buildAiSystemPrompt('Traditional Chinese (繁體中文)'),
-      /Taiwan/,
-    )
-    assert.match(
-      buildAiSystemPrompt('Simplified Chinese (简体中文)'),
-      /Simplified Chinese/,
-    )
-    assert.match(
-      buildAiSystemPrompt('Simplified Chinese (简体中文)'),
-      /Do not switch to English or Traditional/,
-    )
-    const userZh = buildAiUserMessage('Why?', {
-      findingsText: 'none',
-      responseLanguage: 'Traditional Chinese (繁體中文)',
-    })
-    assert.match(userZh, /### Reply language/)
-    assert.match(userZh, /Traditional Chinese/)
-    assert.doesNotMatch(
-      buildAiUserMessage('Why?', { findingsText: 'none', responseLanguage: 'English' }),
-      /### Reply language/,
+      buildAiSystemPrompt('Japanese (日本語)'),
+      /Always write your entire reply in Japanese \(日本語\)/,
     )
   })
 
@@ -462,13 +408,13 @@ describe('AI endpoint helpers', () => {
     assert.match(findings.prompt, /Analysis Findings/)
     assert.match(findings.prompt, /Timeline Anomalies/)
     assert.match(findings.prompt, /Worst Events/)
-    assert.match(findings.prompt, /Response Time/)
+    assert.match(findings.prompt, /Task Health/)
   })
 
   it('Migration thrash template is available for inspector Query with AI', () => {
     const migrations = AI_TEMPLATE_QUESTIONS.find(t => t.id === 'migrations')
     assert.ok(migrations)
-    assert.match(migrations.prompt, /migration|ping-pong|ownership bounce/i)
+    assert.match(migrations.prompt, /thrashing|lock-bounce/i)
   })
 
   it('primary chips plus More groups cover every template id', () => {

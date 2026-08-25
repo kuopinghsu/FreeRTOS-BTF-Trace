@@ -696,7 +696,6 @@ import {
   compactFindingsText,
   compactToolResultPayload,
   aiContextLimits,
-  buildAiRuntimeMetadata,
   investigationContextSummary,
   normalizeAiContextMode,
   formatConfidenceEvolution,
@@ -2024,10 +2023,7 @@ async function runCompletion(active, finalRound = false) {
   costStarted = Date.now()
   return aiChatCompletion({
     messages,
-    tools: finalRound ? [] : aiViewerToolsForMode(
-      props.aiContextMode,
-      activeTemplateId || guideStage.value,
-    ),
+    tools: finalRound ? [] : aiViewerToolsForMode(props.aiContextMode, guideStage.value),
     baseUrl: active.baseUrl,
     model: active.model,
     apiKey: active.apiKey,
@@ -2265,23 +2261,8 @@ async function send(overrideQuery = null, overrideCtx = null) {
     if (overrideCtx == null) refreshLoadedTabs()
     const mode = normalizeAiContextMode(props.aiContextMode)
     const prior = chatMessages
-    const runtimeMeta = buildAiRuntimeMetadata({
-      contextMode: mode,
-      replyLanguage: props.responseLanguage,
-      cursors: ctx.cursors || [],
-      scope: ctx.scope || '',
-      smpEnabled: smpEnabled.value,
-    })
-    const packed = [
+    chatMessages = compactChatHistory([
       { role: 'system', content: buildAiSystemPrompt(props.responseLanguage, mode) },
-    ]
-    if (runtimeMeta && Object.keys(runtimeMeta).length) {
-      packed.push({
-        role: 'system',
-        content: `Runtime metadata:\n${JSON.stringify(runtimeMeta)}`,
-      })
-    }
-    packed.push(
       ...prior.filter(m => String(m.role || '') !== 'system'),
       {
         role: 'user',
@@ -2293,12 +2274,9 @@ async function send(overrideQuery = null, overrideCtx = null) {
           cores: ctx.cores ?? '',
           scope: ctx.scope || '',
           cursors: ctx.cursors || [],
-          responseLanguage: props.responseLanguage,
         }),
       },
-    )
-    chatMessages = compactChatHistory(
-      packed, mode, investigationContextSummary(evidencePayload))
+    ], mode, investigationContextSummary(evidencePayload))
     const turn = await runCompletion(active)
     authForced.value = false
     const pending = ingestTurn(turn)

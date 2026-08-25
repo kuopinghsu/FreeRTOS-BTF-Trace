@@ -136,109 +136,22 @@ export const AI_CONTEXT_MODE_SETTINGS_LINES = {
     'Full evidence — complete Findings, tools, and history.'
   ),
 }
-export const AI_CONTEXT_INTENT_TOOLS = {
+export const AI_CONTEXT_STAGE_TOOLS = {
   triage: ['detect_anomalies', 'cluster_findings', 'suggest_scope'],
   scope: ['set_cursors', 'zoom_to_range', 'highlight_task'],
-  investigate: ['investigate', 'correlate_events', 'find_critical_path', 'rank_root_causes'],
-  verify: ['verify_claim', 'detect_contradictions', 'challenge_conclusion', 'assess_evidence_sufficiency'],
-  priority: ['detect_priority_inversion', 'correlate_events', 'verify_claim'],
-  compare: ['compare_performance', 'regression_explain', 'regression_localize', 'validate_experiment'],
+  investigate: ['investigate', 'correlate_events', 'find_critical_path'],
+  verify: ['verify_claim', 'detect_contradictions', 'challenge_conclusion'],
   experiment: ['what_if', 'optimize_experiment', 'recommend_experiments'],
+  compare: ['compare_performance', 'validate_experiment'],
   report: ['generate_report', 'export_report'],
 }
-/** Back-compat alias. */
-export const AI_CONTEXT_STAGE_TOOLS = AI_CONTEXT_INTENT_TOOLS
-export const AI_CONTEXT_ALWAYS_TOOLS = ['search_timeline', 'query_raw_metric', 'summarize_investigation_context']
-/** Deprecated: Balanced no longer auto-adds these. */
-export const AI_CONTEXT_BALANCED_EXTRA_TOOLS = []
-export const AI_TEMPLATE_TO_INTENT = {
-  findings: 'triage',
-  triage: 'triage',
-  explain_region: 'investigate',
-  investigate: 'investigate',
-  root_cause: 'investigate',
-  auto_investigate: 'investigate',
-  task_profile: 'investigate',
-  latency: 'investigate',
-  wcet: 'investigate',
-  migrations: 'investigate',
-  tick: 'investigate',
-  deadlines: 'investigate',
-  balance: 'triage',
-  verify: 'verify',
-  explain_finding: 'verify',
-  compare: 'compare',
-  what_if: 'experiment',
-  optimize: 'experiment',
-  diagnostic_report: 'report',
-  priority: 'priority',
-  quick: 'triage',
-  diagnose: 'investigate',
-  report: 'report',
-  experiment: 'experiment',
-  scope: 'scope',
-}
-export const AI_CONTEXT_RELATED_INTENT = {
-  triage: 'investigate',
-  scope: 'investigate',
-  investigate: 'verify',
-  verify: 'investigate',
-  priority: 'verify',
-  compare: 'verify',
-  experiment: 'verify',
-  report: 'investigate',
-}
-export const AI_CONTEXT_SCOPE_TOOLS = AI_CONTEXT_INTENT_TOOLS.scope
-
-export const AI_CONTEXT_PROMPTS = {
-  [AI_CONTEXT_MODE_COMPACT]: `MODE: COMPACT
-- Fast triage; target 200–350 answer tokens.
-- Use the scope summary and up to three actionable findings.
-- Use at most two evidence calls unless the user requests more work.
-- Do not run planning, graphs, simulation, optimization, memory, clustering, or
-  reports unless requested.
-- Preserve viewer state. Do not create diagrams unless requested.
-- If evidence is insufficient, return Inconclusive and name what is missing.
-- Output: Assessment; Evidence; Confidence/quality; Next check.`,
-  [AI_CONTEXT_MODE_BALANCED]: `MODE: BALANCED
-- Default mode; target 400–750 answer tokens.
-- Use relevant scoped findings and tables; fetch exact evidence when needed.
-- Test the leading explanation and one credible alternative.
-- Prefer at most four evidence calls. Exceed this only if the result could change
-  the verdict. Verify before a High-confidence causal conclusion.
-- Change viewer state only for an explicit action or a workflow that promises to
-  focus evidence.
-- Use one small diagram only when it materially improves understanding.
-- Output: Verdict; Evidence; Interpretation; Alternative/falsification;
-  Confidence/quality/coverage; Next action.`,
-  [AI_CONTEXT_MODE_FULL]: `MODE: FULL EVIDENCE
-- Use all relevant scoped evidence and compact investigation history.
-- Rank hypotheses for broad questions; skip planning for an explicit finding,
-  task, and window.
-- Build causal or dependency chains only as far as evidence supports.
-- Examine contradictions and credible alternatives. Assess sufficiency before
-  opening another branch; stop when more tools will not change the verdict.
-- Verify and challenge before a High-confidence root-cause conclusion.
-- Distinguish observed, derived, heuristic, and simulated results.
-- Preserve unrelated viewer marks. Use diagrams only for supported relationships.
-- State each material fact once. Return Inconclusive when evidence remains
-  incomplete or contradictory.
-- Output: Scope; Verdict; Evidence chain; Contradictions/alternatives; Root cause
-  or leading explanation; Confidence/quality/coverage; Requested mitigation;
-  Next verification; Viewer changes.`,
-}
-
-export const AI_LANGUAGE_PROMPT_TEMPLATE = `Always write your entire reply in {language}.
-Write the complete user-facing reply in {language}. Preserve task names, core
-names, UI labels, tool names, metric identifiers, jump:TIME, range:LO/HI, code,
-and file formats. Do not translate trace identifiers.`
-export const AI_LANGUAGE_TRADITIONAL_CHINESE_NOTE = `Use natural Traditional Chinese and terminology customary in Taiwan.
-Do not switch to English or Simplified Chinese for the prose answer.`
-export const AI_LANGUAGE_SIMPLIFIED_CHINESE_NOTE = (
-  'Use natural Simplified Chinese. Do not switch to English or Traditional '
-  + 'Chinese for the prose answer.'
-)
-
+export const AI_CONTEXT_ALWAYS_TOOLS = [
+  'search_timeline', 'query_raw_metric', 'summarize_investigation_context',
+]
+export const AI_CONTEXT_BALANCED_EXTRA_TOOLS = [
+  'detect_anomalies', 'investigate', 'set_cursors', 'zoom_to_range',
+  'highlight_task', 'challenge_conclusion', 'what_if',
+]
 const CONTEXT_TOOL_ROW_KEYS = new Set([
   'rows', 'episodes', 'slices', 'events', 'gaps', 'hits', 'times',
   'experiments', 'anomalies', 'candidates', 'samples', 'values',
@@ -273,73 +186,53 @@ export function aiContextModeSettingsHelp(mode = null) {
     || AI_CONTEXT_MODE_SETTINGS_LINES[DEFAULT_AI_CONTEXT_MODE]
 }
 
-export function aiLanguagePrompt(language = null) {
-  const lang = String(language || 'English').trim() || 'English'
-  let text = AI_LANGUAGE_PROMPT_TEMPLATE.replaceAll('{language}', lang).replace(/\s+$/, '')
-  const low = lang.toLowerCase()
-  if (low.includes('traditional chinese') || lang.includes('繁體') || lang.includes('繁体')) {
-    text = `${text}\n${AI_LANGUAGE_TRADITIONAL_CHINESE_NOTE.replace(/\s+$/, '')}`
-  } else if (
-    low.includes('simplified chinese') || lang.includes('简体') || lang.includes('簡體')
-  ) {
-    text = `${text}\n${AI_LANGUAGE_SIMPLIFIED_CHINESE_NOTE.replace(/\s+$/, '')}`
-  } else if (low !== 'english') {
-    text = `${text}\nDo not answer in English unless the user explicitly asks for English. `
-      + `All headings, bullets, and explanations must be in ${lang}.`
-  }
-  return text
-}
-
 export function aiContextLimits(mode = null) {
   const key = normalizeAiContextMode(mode)
   if (key === AI_CONTEXT_MODE_COMPACT) {
     return {
-      findings: 3, tool_rows: 8, history_user_turns: 2,
-      max_tokens: 350, what_if: 3, diagrams: 'asked',
+      findings: 5, tool_rows: 10, history_user_turns: 2,
+      max_tokens: 500, what_if: 3, diagrams: 'asked',
     }
   }
   if (key === AI_CONTEXT_MODE_FULL) {
     return {
-      findings: null, tool_rows: 32, history_user_turns: 10,
-      max_tokens: 1600, what_if: 12, diagrams: 'useful',
+      findings: null, tool_rows: 40, history_user_turns: 20,
+      max_tokens: null, what_if: 12, diagrams: 'useful',
     }
   }
   return {
-    findings: 8, tool_rows: 16, history_user_turns: 4,
-    max_tokens: 800, what_if: 5, diagrams: 'useful',
+    findings: 12, tool_rows: 20, history_user_turns: 6,
+    max_tokens: null, what_if: 5, diagrams: 'useful',
   }
 }
 
 export function contextModeSystemAddendum(mode = null) {
   const key = normalizeAiContextMode(mode)
-  return AI_CONTEXT_PROMPTS[key] || AI_CONTEXT_PROMPTS[DEFAULT_AI_CONTEXT_MODE]
-}
-
-export function normalizeAiIntent(stage = '') {
-  const raw = String(stage || '').trim().toLowerCase()
-  if (!raw || raw === 'idle' || raw === 'start') return 'triage'
-  if (Object.prototype.hasOwnProperty.call(AI_CONTEXT_INTENT_TOOLS, raw)) return raw
-  if (AI_TEMPLATE_TO_INTENT[raw]) return AI_TEMPLATE_TO_INTENT[raw]
-  return 'triage'
+  const keep = 'Never omit jump:TIME, range:LO/HI, real task names, measurements '
+    + 'with units, confidence, evidence quality, what-if disclaimers, or '
+    + 'at least one alternative / falsification.'
+  if (key === AI_CONTEXT_MODE_COMPACT) {
+    return ' Context mode is Compact: keep the reply around 300–500 tokens. '
+      + 'Generate mermaid diagrams only if the user asks. ' + keep
+  }
+  if (key === AI_CONTEXT_MODE_FULL) {
+    return ' Context mode is Full evidence: you may use the complete Findings, '
+      + 'tools, and history. Include mermaid when it clarifies a sequence '
+      + 'or migration. ' + keep
+  }
+  return ' Context mode is Balanced: prefer concise evidence-backed answers. '
+    + 'Include mermaid when it clarifies a sequence or migration. ' + keep
 }
 
 function stageToolNames(stage) {
-  return AI_CONTEXT_INTENT_TOOLS[normalizeAiIntent(stage)] || AI_CONTEXT_INTENT_TOOLS.triage
+  let sid = String(stage || '').trim().toLowerCase()
+  if (!sid || sid === 'idle' || sid === 'start') sid = 'triage'
+  return AI_CONTEXT_STAGE_TOOLS[sid] || AI_CONTEXT_STAGE_TOOLS.triage
 }
 
-function viewerActionRequested(stage = '', viewerAction = false) {
-  if (viewerAction) return true
-  const sid = String(stage || '').trim().toLowerCase()
-  return sid === 'scope' || normalizeAiIntent(sid) === 'scope'
-}
-
-export function toolNamesForContextMode(
-  mode = null,
-  stage = '',
-  { relatedIntent = '', viewerAction = false } = {},
-) {
+export function toolNamesForContextMode(mode = null, stage = '') {
   const key = normalizeAiContextMode(mode)
-  const intent = normalizeAiIntent(stage)
+  if (key === AI_CONTEXT_MODE_FULL) return null
   const names = []
   const seen = new Set()
   const add = (seq) => {
@@ -351,99 +244,29 @@ export function toolNamesForContextMode(
       }
     }
   }
+  let sid = String(stage || '').trim().toLowerCase()
+  if (!sid || sid === 'idle' || sid === 'start') sid = 'triage'
+  add(stageToolNames(sid))
   add(AI_CONTEXT_ALWAYS_TOOLS)
-  add(AI_CONTEXT_INTENT_TOOLS[intent] || [])
-
-  const wantScope = viewerActionRequested(stage, viewerAction) || intent === 'scope'
-  if (key === AI_CONTEXT_MODE_COMPACT) {
-    if (!wantScope) {
-      const scopeSet = new Set(AI_CONTEXT_SCOPE_TOOLS)
-      return names.filter(n => !scopeSet.has(n))
+  if (key === AI_CONTEXT_MODE_BALANCED) {
+    const idx = GUIDED_STAGES.indexOf(sid)
+    if (idx > 0) add(stageToolNames(GUIDED_STAGES[idx - 1]))
+    if (idx >= 0 && idx + 1 < GUIDED_STAGES.length) {
+      add(stageToolNames(GUIDED_STAGES[idx + 1]))
     }
-    return names
-  }
-
-  add(AI_CONTEXT_INTENT_TOOLS.verify)
-  if (wantScope) add(AI_CONTEXT_INTENT_TOOLS.scope)
-
-  if (key === AI_CONTEXT_MODE_FULL) {
-    const related = relatedIntent
-      ? normalizeAiIntent(relatedIntent)
-      : (AI_CONTEXT_RELATED_INTENT[intent] || 'investigate')
-    if (related !== intent) add(AI_CONTEXT_INTENT_TOOLS[related] || [])
+    add(AI_CONTEXT_BALANCED_EXTRA_TOOLS)
+    add(AI_CONTEXT_STAGE_TOOLS.report)
   }
   return names
 }
 
-export function filterToolsForContextMode(
-  tools,
-  mode = null,
-  stage = '',
-  { relatedIntent = '', viewerAction = false } = {},
-) {
+export function filterToolsForContextMode(tools, mode = null, stage = '') {
   const catalog = Array.isArray(tools) ? tools.filter(t => t && typeof t === 'object') : []
-  const names = toolNamesForContextMode(mode, stage, { relatedIntent, viewerAction })
+  const names = toolNamesForContextMode(mode, stage)
+  if (names == null) return [...catalog]
   const want = new Set(names)
   return catalog.filter((tool) => want.has(String(tool?.function?.name || '').trim()))
 }
-
-export function buildAiRuntimeMetadata({
-  contextMode = null,
-  replyLanguage = null,
-  cursors = null,
-  scope = null,
-  traceTimeUnit = null,
-  timeScaleToNs = null,
-  smpEnabled = null,
-  availableStatisticsPages = null,
-  clickableMetricCells = null,
-  compareCandidate = null,
-  compareBaseline = null,
-} = {}) {
-  const meta = {}
-  const unit = String(traceTimeUnit || '').trim()
-  if (unit) meta.trace_time_unit = unit
-  if (timeScaleToNs != null && Number.isFinite(Number(timeScaleToNs))) {
-    meta.time_scale_to_ns = Number(timeScaleToNs)
-  }
-  const placed = []
-  if (Array.isArray(cursors)) {
-    for (const c of cursors) {
-      const t = (c && typeof c === 'object') ? (c.time ?? c.t ?? c.ns) : c
-      const n = Number(t)
-      if (Number.isFinite(n)) placed.push(n)
-    }
-  }
-  if (placed.length >= 2) {
-    meta.active_scope = {
-      kind: 'cursor',
-      start: Math.min(...placed),
-      end: Math.max(...placed),
-    }
-  } else {
-    const kind = String(scope || '').toLowerCase().includes('cursor') ? 'cursor' : 'full'
-    meta.active_scope = { kind }
-  }
-  const cand = String(compareCandidate || '').trim() || null
-  const base = String(compareBaseline || '').trim() || null
-  if (cand || base) {
-    meta.trace_compare = {
-      candidate: cand,
-      baseline: base,
-      delta_definition: 'candidate_minus_baseline',
-    }
-  }
-  const pages = (availableStatisticsPages || []).map(p => String(p || '').trim()).filter(Boolean)
-  if (pages.length) meta.available_statistics_pages = pages
-  const cells = (clickableMetricCells || []).map(c => String(c || '').trim()).filter(Boolean)
-  if (cells.length) meta.clickable_metric_cells = cells
-  if (smpEnabled != null) meta.smp_enabled = Boolean(smpEnabled)
-  meta.context_mode = normalizeAiContextMode(contextMode)
-  const lang = String(replyLanguage || '').trim()
-  if (lang) meta.reply_language = lang
-  return meta
-}
-
 
 export function investigationContextSummary(payload = null) {
   if (!payload || typeof payload !== 'object') return ''
@@ -1617,43 +1440,36 @@ export function investigationModePlan(mode = 'diagnose') {
   if (!INVESTIGATION_MODES.includes(want)) want = 'diagnose'
   const plans = {
     quick: {
-      goal: 'Find the most likely actionable problem',
+      goal: 'Find the most likely problem',
       tools: ['detect_anomalies', 'investigate'],
       template: 'triage',
     },
     diagnose: {
-      goal: 'Find and verify the leading cause',
+      goal: 'Find cause → gather evidence → verify',
       tools: [
         'investigate', 'correlate_events', 'find_critical_path',
-        'verify_claim', 'challenge_conclusion',
+        'build_task_dependency_graph', 'analyze_temporal_causality',
+        'rank_root_causes', 'challenge_conclusion',
       ],
       template: 'investigate',
     },
     compare: {
-      goal: 'Explain candidate A versus baseline B',
-      tools: [
-        'compare_performance', 'regression_explain', 'regression_localize',
-      ],
+      goal: 'Explain why A differs from B',
+      tools: ['compare_performance', 'regression_explain'],
       template: 'compare',
     },
     optimize: {
-      goal: 'Propose and rank requested mitigation experiments',
-      tools: [
-        'investigate', 'optimize_experiment', 'recommend_experiments',
-        'what_if',
-      ],
+      goal: 'Find cause → propose experiments → rank them',
+      tools: ['investigate', 'what_if', 'optimize_experiment', 'recommend_experiments'],
       template: 'optimize',
     },
     report: {
-      goal: 'Create and save the requested report',
+      goal: 'Turn confirmed findings into an engineering report',
       tools: ['generate_report', 'export_report'],
       template: 'diagnostic_report',
     },
   }
-  const plan = { ...plans[want] }
-  plan.mode = want
-  plan.ok = true
-  return plan
+  return { ...plans[want], mode: want, ok: true }
 }
 
 export const INVESTIGATION_MODE_LABELS = {
@@ -1664,34 +1480,16 @@ export const INVESTIGATION_MODE_LABELS = {
   report: 'Report',
 }
 
-export const INVESTIGATION_MODE_PROMPTS = {
-  quick: `Find the most likely actionable problem. Preferred tools: detect_anomalies;
-investigate for the selected finding. Continue only if the second call could
-change the assessment. Output: Verdict; Evidence; Falsification; Confidence;
-Next check.`,
-  diagnose: `Find and verify the leading cause. Preferred tools: investigate; correlate_events
-or find_critical_path for a missing link; verify_claim; challenge_conclusion.
-Use dependency or temporal tools only when the simpler evidence cannot resolve
-the chain. Output: Verdict; Evidence chain; Alternative; Confidence; Next check.`,
-  compare: `Explain candidate A versus baseline B. Preferred tools: compare_performance;
-regression_explain for a material delta; regression_localize when location is
-unknown. Output: Verdict; Material deltas; Explanation; Falsification;
-Confidence; Next check.`,
-  optimize: `Propose and rank requested mitigation experiments. Preferred tools: investigate
-only when the problem is unclear; optimize_experiment; recommend_experiments.
-Use what_if only for a concrete selected change. Label all estimates. Output:
-Ranked experiments; Evidence; Risk; Validation plan.`,
-  report: `Create and save the requested report. Call generate_report, then
-export_report (format html unless the user asked for csv). Include only supported
-sections and mark missing requested evidence as Not evaluated.`,
-}
-
 export function investigationModePrompt(mode = 'diagnose') {
   const plan = investigationModePlan(mode)
-  const want = plan.mode
-  return String(
-    INVESTIGATION_MODE_PROMPTS[want] || INVESTIGATION_MODE_PROMPTS.diagnose,
-  ).replace(/\s+$/, '')
+  const listed = (plan.tools || []).filter(Boolean).join(' → ')
+  const label = INVESTIGATION_MODE_LABELS[plan.mode] || plan.mode
+  return (
+    `${plan.goal || label}. Call these tools in order: ${listed}. `
+    + 'After each tool, update hypotheses with manage_hypotheses when the '
+    + 'status changes. Finish with a verdict, jump:TIME evidence, '
+    + 'what would disprove this, confidence, and one next check.'
+  )
 }
 
 export function parseUserInvestigationTemplates(raw) {
@@ -1741,12 +1539,8 @@ export function newUserInvestigationTemplate(label, steps = []) {
   return { id: tid, label: name, steps: seq, user: true }
 }
 
-export const VALIDATE_EXPERIMENT_PROMPT = `Validate the before/after capture. A is candidate, B is baseline, and delta =
-A - B. Use validate_experiment. Use host-provided actual deltas. Include expected
-deltas only when they come from a recorded experiment. Output: VALIDATED,
-PARTIALLY VALIDATED, or DISPROVED; Supporting deltas; Mismatches; Confidence;
-One next check.`
-
+export const VALIDATE_EXPERIMENT_PROMPT =
+  'Did this before/after capture validate the experiment? Call validate_experiment. Omit actual — the host fills percents from the last Trace Compare (Limit to C1–Cn honored when each tab has 2+ cursors). If expected deltas are known from what_if or optimize_experiment, pass them as expected; otherwise omit expected. Then report VALIDATED, PARTIALLY VALIDATED, or DISPROVED with supporting evidence and one next check.'
 
 export function validateExperiment(expected = {}, actual = {}) {
   const exp = expected && typeof expected === 'object' ? expected : {}
