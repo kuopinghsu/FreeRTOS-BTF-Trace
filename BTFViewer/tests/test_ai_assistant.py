@@ -1389,7 +1389,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
                 tools=full_catalog,
                 context_mode="compact",
             )
-        self.assertIn("Context mode is Compact", seen["system"])
+        self.assertIn("MODE: COMPACT", seen["system"])
         self.assertEqual(seen["max_tokens"], 500)
         self.assertLess(seen["tools"], len(full_catalog))
         self.assertEqual(turn["usage"]["total_tokens"], 480)
@@ -1420,7 +1420,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
             )
         self.assertEqual(n["n"], 1)
         self.assertIn("TASK_A[1]", turn["content"])
-        self.assertIn("Context mode is Full evidence", seen["system"])
+        self.assertIn("MODE: FULL EVIDENCE", seen["system"])
         self.assertIn(seen["max_tokens"], (None, "missing"))
 
     def test_live_benchmark_chat_follows_planning_text_plus_tools(self) -> None:

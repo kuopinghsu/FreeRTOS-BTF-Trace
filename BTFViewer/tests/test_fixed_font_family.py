@@ -46,6 +46,30 @@ class FixedFontFamilyTests(unittest.TestCase):
         self.assertFalse(_is_generic_font_family(fam))
         self.assertIn(fam, set(QFontDatabase.families()))
 
+    def test_ui_font_covers_hangul_when_cjk_available(self) -> None:
+        """WSL/Linux: register host CJK fonts so Korean AI text is not tofu."""
+        from PySide6.QtGui import QRawFont
+        from btf_viewer_pkg.config import (
+            _application_ui_font,
+            _cjk_capable_ui_family,
+            _ensure_cjk_application_fonts,
+        )
+
+        _ensure_cjk_application_fonts()
+        cjk = _cjk_capable_ui_family()
+        if cjk is None and not os.path.isfile("/mnt/c/Windows/Fonts/malgun.ttf"):
+            self.skipTest("no Hangul-capable font available")
+        self.assertIsNotNone(cjk)
+        font = _application_ui_font(10)
+        gids = QRawFont.fromFont(font).glyphIndexesForString("한국어")
+        self.assertTrue(gids)
+        self.assertTrue(all(int(g) > 0 for g in gids), gids)
+        sans = _get_sans_font_family()
+        self.assertTrue(
+            all(int(g) > 0 for g in QRawFont.fromFont(QFont(sans)).glyphIndexesForString("한")),
+            sans,
+        )
+
     def test_monospace_font_resolves_to_real_face(self) -> None:
         font = _monospace_font(8)
         self.assertEqual(font.family(), _get_fixed_font_family())

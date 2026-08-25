@@ -22,12 +22,14 @@ import {
   inferModelCapability,
   interpretQuestion,
   investigationModePrompt,
+  investigationGuideStage,
   newUserInvestigationTemplate,
   parseUserInvestigationTemplates,
   statusWithCost,
   formatCostStatus,
   formatContextUsageStatus,
   compactFindingsText,
+  focusTitlesFromSummary,
   compactChatHistory,
   normalizeAiContextMode,
   aiContextModeSettingsOverview,
@@ -145,7 +147,7 @@ describe('aiCase investigation lifecycle', () => {
     const { fileURLToPath } = await import('node:url')
     const { runOfflineBenchmark, investigationTemplatePrompt, builtinInvestigationTemplates } = await import('../src/utils/aiCase.js')
     const tpls = builtinInvestigationTemplates()
-    assert.match(investigationTemplatePrompt(tpls[0]), /Call these tools/)
+    assert.match(investigationTemplatePrompt(tpls[0]), /Preferred tools/)
     const datasetPath = join(dirname(fileURLToPath(import.meta.url)), '../../tests/ai/dataset.json')
     const dataset = JSON.parse(readFileSync(datasetPath, 'utf8'))
     const result = runOfflineBenchmark(dataset, { failUnder: 50 })
@@ -178,10 +180,32 @@ describe('aiCase investigation lifecycle', () => {
     })
     assert.equal(hit.previous_issue, 'Migration thrashing')
     const prompt = investigationModePrompt('diagnose')
+    assert.match(prompt, /Preferred tools/)
     assert.match(prompt, /investigate/)
     assert.match(prompt, /correlate_events/)
     assert.match(prompt, /rank_root_causes/)
     assert.match(prompt, /challenge_conclusion/)
+    assert.equal(prompt.includes('Call these tools in order'), false)
+    assert.match(prompt, /manage_hypotheses only when a hypothesis status changes/)
+    const reportPrompt = investigationModePrompt('report')
+    assert.match(reportPrompt, /generate_report/)
+    assert.match(reportPrompt, /export_report/)
+    assert.match(reportPrompt, /Saving the file is required/)
+    assert.equal(
+      investigationGuideStage(null, {
+        plan: {
+          goal: 'Report',
+          steps: [
+            { id: 'generate_report', status: 'pending' },
+            { id: 'export_report', status: 'pending' },
+          ],
+        },
+      }),
+      'report',
+    )
+    const balancedReport = toolNamesForContextMode('balanced', 'report')
+    assert.ok(balancedReport.includes('generate_report'))
+    assert.ok(balancedReport.includes('export_report'))
     const tpl = newUserInvestigationTemplate('CPU Latency', ['detect_anomalies', 'investigate'])
     const parsed = parseUserInvestigationTemplates(dumpUserInvestigationTemplates([tpl]))
     assert.equal(parsed.length, 1)
@@ -257,6 +281,10 @@ describe('aiCase investigation lifecycle', () => {
     assert.ok(compactTools.includes('detect_anomalies'))
     assert.ok(compactTools.includes('search_timeline'))
     assert.equal(compactTools.includes('what_if'), false)
+    const balancedTriage = toolNamesForContextMode('balanced', 'triage')
+    assert.equal(balancedTriage.includes('what_if'), false)
+    assert.equal(balancedTriage.includes('export_report'), false)
+    assert.ok(balancedTriage.includes('challenge_conclusion'))
     assert.equal(toolNamesForContextMode('full', 'triage'), null)
     const reportTools = toolNamesForContextMode('compact', 'report')
     assert.ok(reportTools.includes('generate_report'))
@@ -291,6 +319,15 @@ describe('aiCase investigation lifecycle', () => {
     assert.ok(users.includes('q2'))
     assert.ok(users.includes('q3'))
     assert.equal(users.includes('q1'), false)
+    assert.deepEqual(
+      focusTitlesFromSummary('Focus: CS[22] stall\nTools: investigate'),
+      ['CS[22] stall'],
+    )
+    const deduped = compactFindingsText(findings, 'balanced', null, {
+      excludeTitles: ['Critical stall'],
+    })
+    assert.doesNotMatch(deduped, /Critical stall/)
+    assert.match(deduped, /Thrash/)
   })
 
   it('penalizes adversarial trap confirmations', () => {

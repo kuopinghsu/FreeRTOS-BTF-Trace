@@ -31,6 +31,7 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_TOOL_SEARCH_TIMELINE,
     AI_TOOL_SET_CURSORS,
     AI_TOOL_SET_VIEW_MODE,
+    AI_TOOL_PROMPT,
     AI_TOOL_SYSTEM_ADDENDUM,
     AI_TOOL_TRIGGER_COMPARE,
     AI_TOOL_ZOOM_TO_RANGE,
@@ -409,7 +410,7 @@ class AiToolsTests(unittest.TestCase):
             calls,
         )
         self.assertEqual(len(merged), 4)
-        self.assertIn("```btftool", AI_TOOL_SYSTEM_ADDENDUM)
+        self.assertIn("Use Mermaid", AI_TOOL_SYSTEM_ADDENDUM)
 
     def test_parse_btftool_ndjson_fence(self) -> None:
         """Models often emit several tool objects in one fence (not a JSON array)."""
@@ -736,8 +737,9 @@ class AiToolsTests(unittest.TestCase):
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
         for name in AI_VIEWER_TOOL_NAMES:
             self.assertRegex(js, re.compile(rf"['\"]{re.escape(name)}['\"]"))
-        self.assertIn("mermaid sequenceDiagram", AI_TOOL_SYSTEM_ADDENDUM)
-        self.assertIn("mermaid sequenceDiagram", js)
+        self.assertIn("Mermaid", AI_TOOL_SYSTEM_ADDENDUM)
+        self.assertIn("sequenceDiagram", js)
+        self.assertIn("AI_MERMAID_SEQUENCE_EXAMPLE", js)
 
 
 if __name__ == "__main__":

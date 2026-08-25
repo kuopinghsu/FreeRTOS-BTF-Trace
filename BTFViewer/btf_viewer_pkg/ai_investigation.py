@@ -100,6 +100,7 @@ EVIDENCE_PANEL_TOOLS: Tuple[str, ...] = (
     "find_critical_path",
     "detect_priority_inversion",
     "compare_performance",
+    "search_timeline",
     "explain_finding",
     "interpret_query",
     "validate_experiment",
@@ -129,6 +130,11 @@ EVIDENCE_PANEL_TOOLS: Tuple[str, ...] = (
     "analyze_periodicity",
     "summarize_investigation_context",
 )
+
+# Agent templates that need investigate-stage tools from the first turn.
+_EVIDENCE_STAGE_TEMPLATES = frozenset({
+    "auto_investigate", "investigate", "root_cause", "verify",
+})
 
 _AGENT_TEMPLATE_IDS = frozenset({
     "investigate", "root_cause", "verify", "what_if", "optimize",
@@ -173,6 +179,22 @@ DEFAULT_REGRESSION_RULES: Tuple[Dict[str, Any], ...] = (
 
 def is_agent_template(template_id: str) -> bool:
     return str(template_id or "").strip() in _AGENT_TEMPLATE_IDS
+
+
+def elevate_guide_stage_for_template(stage: str, template_id: str = "") -> str:
+    """Promote triage/scope to investigate for Start Investigation-style templates.
+
+    Balanced tool catalogs gate Preferred evidence tools behind the guide stage.
+    Without this, auto_investigate starts in triage and never offers
+    correlate_events / find_critical_path on the first turn.
+    """
+    sid = str(stage or "").strip().lower()
+    if not sid or sid in ("idle", "start"):
+        sid = "triage"
+    tid = str(template_id or "").strip()
+    if tid in _EVIDENCE_STAGE_TEMPLATES and sid in ("triage", "scope"):
+        return "investigate"
+    return sid
 
 
 def max_tool_rounds_for_template(template_id: str = "", default: int = 4) -> int:
@@ -263,6 +285,32 @@ def slug_finding_id(title: str, used: Optional[set] = None) -> str:
     return cand
 
 
+_JUMP_IN_TEXT_RE = re.compile(r"jump:([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+
+
+def _promote_jump_times_from_text(item: Dict[str, Any]) -> None:
+    """If a finding text cites jump:TIME but evidence has no times, add one."""
+    evidence = [
+        dict(e) for e in (item.get("evidence") or []) if isinstance(e, dict)
+    ]
+    if any(e.get("time") is not None for e in evidence):
+        item["evidence"] = evidence
+        return
+    blob = f"{item.get('title') or ''} {item.get('text') or ''}"
+    m = _JUMP_IN_TEXT_RE.search(blob)
+    if not m:
+        item["evidence"] = evidence
+        return
+    try:
+        raw = float(m.group(1))
+        t: Any = int(raw) if raw.is_integer() else raw
+    except (TypeError, ValueError):
+        item["evidence"] = evidence
+        return
+    evidence.append({"label": "finding text", "time": t})
+    item["evidence"] = evidence
+
+
 def enrich_findings_with_ids(findings: Sequence[dict]) -> List[dict]:
     """Copy findings and ensure each has a unique ``id`` field."""
     used: set = set()
@@ -275,8 +323,7 @@ def enrich_findings_with_ids(findings: Sequence[dict]) -> List[dict]:
         else:
             used.add(fid)
         item["id"] = fid
-        if "evidence" not in item:
-            item["evidence"] = list(item.get("evidence") or [])
+        _promote_jump_times_from_text(item)
         out.append(item)
     return out
 
@@ -915,7 +962,9 @@ def compute_evidence_score(
 
     untested = [
         a for a in alts
-        if str(a.get("status") or "").lower() in ("untested", "needs_evidence")
+        if str(a.get("status") or "").lower() in (
+            "untested", "need_evidence", "needs_evidence", "",
+        )
     ]
     if untested:
         penalty = min(15, 5 * len(untested))
@@ -1208,7 +1257,7 @@ def extract_evidence_panel_payload(
                 })
         if ev_items:
             payload["evidence"] = ev_items
-        elif data.get("evidence_chain"):
+        if data.get("evidence_chain"):
             payload["evidence_chain"] = str(data.get("evidence_chain") or "")
         payload["alternatives"] = list(data.get("alternatives") or [])
         payload["confidence"] = str(data.get("confidence") or "Medium")
@@ -1254,6 +1303,27 @@ def extract_evidence_panel_payload(
         payload["confidence"] = (
             f"Correlation {corr}" if corr is not None else "Medium"
         )
+    elif name == "search_timeline" or data.get("times") is not None:
+        times = []
+        for t in (data.get("times") or result.get("times") or []):
+            try:
+                times.append(float(t))
+            except (TypeError, ValueError):
+                continue
+        query = str(data.get("query") or result.get("query") or "").strip()
+        payload["conclusion"] = str(
+            result.get("message")
+            or data.get("message")
+            or (f"{len(times)} timeline hit(s)" if times else "No timeline hits")
+        )
+        payload["evidence"] = [
+            {
+                "label": f"timeline: {query}" if query else "timeline hit",
+                "time": t if t != int(t) else int(t),
+            }
+            for t in times[:20]
+        ]
+        payload["confidence"] = str(data.get("confidence") or "Medium")
     elif name == "detect_priority_inversion" or data.get("inversions") is not None:
         inversions = [
             inv for inv in (data.get("inversions") or []) if isinstance(inv, dict)

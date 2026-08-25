@@ -122,6 +122,57 @@ describe('computeEvidenceScore', () => {
     assert.equal(result.score, 35)
   })
 
+  it('treats need_evidence aliases as untested and keeps chain +25', () => {
+    for (const status of ['need_evidence', 'needs_evidence', '']) {
+      const result = computeEvidenceScore(
+        [{ label: 'blocking: wait', time: 100 }],
+        { alternatives: [{ status }], evidenceChain: 'Finding → blocking' },
+      )
+      assert.equal(result.score, 60, status)
+    }
+  })
+
+  it('keeps evidence_chain when timed evidence rows exist', () => {
+    const payload = extractEvidencePanelPayload('investigate', {
+      ok: true,
+      finding: {
+        title: 'Stall',
+        text: 'blocked',
+        evidence: [{ label: 'blocking: wait', time: 100 }],
+      },
+      evidence_chain: 'Finding → blocking',
+      alternatives: [],
+    })
+    assert.equal((payload.evidence || []).length, 1)
+    assert.match(String(payload.evidence_chain || ''), /Finding → blocking/)
+  })
+
+  it('promotes jump:TIME from finding text into investigate evidence', () => {
+    const findings = enrichFindingsWithIds([{
+      id: 'thrash',
+      severity: 'warning',
+      title: 'Excessive bouncing / core thrashing',
+      text: 'CS[22] migrates heavily jump:2500',
+    }])
+    const ctx = buildInvestigateContext(findings, 'thrash')
+    assert.ok((ctx.evidence_score || 0) >= 60)
+    assert.ok(['medium', 'medium-high', 'strong'].includes(ctx.evidence_quality?.band))
+    assert.ok((ctx.finding?.evidence || []).some(e => e.time === 2500))
+  })
+
+  it('feeds search_timeline hits into the evidence panel', () => {
+    const payload = extractEvidencePanelPayload('search_timeline', {
+      ok: true,
+      message: '3 match(es)',
+      times: [100, 200, 300],
+      count: 3,
+      mode: 'contains',
+      query: 'CS[22]',
+    })
+    assert.equal((payload.evidence || []).length, 3)
+    assert.ok((payload.evidence_score || 0) >= 40)
+  })
+
   it('is wired into buildInvestigateContext', () => {
     const findings = enrichFindingsWithIds([
       {
@@ -245,5 +296,25 @@ describe('mergeEvidencePanelPayload', () => {
     assert.ok(merged.evidence_score >= 40 + 25)
     assert.equal(merged.conclusion, late.conclusion)
     assert.ok((merged.evidence || []).some(e => e.time != null))
+  })
+
+  it('keeps prior alternatives when late tool sends empty list', () => {
+    const prev = extractEvidencePanelPayload('investigate', {
+      ok: true,
+      data: {
+        finding: {
+          title: 'Stall',
+          evidence: [{ label: 'blocking: wait', time: 100 }],
+        },
+        alternatives: [{ status: 'need_evidence', hypothesis: 'alt' }],
+      },
+    })
+    const late = extractEvidencePanelPayload('challenge_conclusion', {
+      ok: true,
+      message: 'Challenge: conclusion holds',
+      data: { verdict: 'Confirmed', confidence: 'High', alternatives: [] },
+    })
+    const merged = mergeEvidencePanelPayload(prev, late)
+    assert.equal((merged.alternatives || []).length, 1)
   })
 })

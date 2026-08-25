@@ -694,6 +694,7 @@ import {
   clampAiSplitBottom,
   compactChatHistory,
   compactFindingsText,
+  focusTitlesFromSummary,
   compactToolResultPayload,
   aiContextLimits,
   investigationContextSummary,
@@ -739,6 +740,7 @@ import {
   formatEvidencePanelMarkdown,
   mergeEvidencePanelPayload,
   formatInvestigationPlanStatus,
+  elevateGuideStageForTemplate,
   isAgentTemplate,
   markPlanStepsFromTools,
   parseBtfExpHref,
@@ -2023,7 +2025,10 @@ async function runCompletion(active, finalRound = false) {
   costStarted = Date.now()
   return aiChatCompletion({
     messages,
-    tools: finalRound ? [] : aiViewerToolsForMode(props.aiContextMode, guideStage.value),
+    tools: finalRound ? [] : aiViewerToolsForMode(
+      props.aiContextMode,
+      elevateGuideStageForTemplate(guideStage.value, activeTemplateId),
+    ),
     baseUrl: active.baseUrl,
     model: active.model,
     apiKey: active.apiKey,
@@ -2260,6 +2265,7 @@ async function send(overrideQuery = null, overrideCtx = null) {
     }
     if (overrideCtx == null) refreshLoadedTabs()
     const mode = normalizeAiContextMode(props.aiContextMode)
+    const invSummary = investigationContextSummary(evidencePayload)
     const prior = chatMessages
     chatMessages = compactChatHistory([
       { role: 'system', content: buildAiSystemPrompt(props.responseLanguage, mode) },
@@ -2268,15 +2274,20 @@ async function send(overrideQuery = null, overrideCtx = null) {
         role: 'user',
         content: buildAiUserMessage(sendQuery, {
           findingsText: compactFindingsText(
-            ctx.findingsText || '', mode, ctx.findings || null),
+            ctx.findingsText || '', mode, ctx.findings || null, {
+              excludeTitles: focusTitlesFromSummary(invSummary),
+            }),
           metrics: ctx.metrics || null,
           span: ctx.span || '',
           cores: ctx.cores ?? '',
           scope: ctx.scope || '',
           cursors: ctx.cursors || [],
+          traceTimeUnit: ctx.traceTimeUnit || '',
+          contextMode: mode,
+          replyLanguage: props.responseLanguage || '',
         }),
       },
-    ], mode, investigationContextSummary(evidencePayload))
+    ], mode, invSummary)
     const turn = await runCompletion(active)
     authForced.value = false
     const pending = ingestTurn(turn)

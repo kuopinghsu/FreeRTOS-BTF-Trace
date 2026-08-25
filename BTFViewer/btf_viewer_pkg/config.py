@@ -40,12 +40,124 @@ def _scaled_font_pixel_size(point_size: int,
         return max(6, int(round(px_base * scale)))
     return None
 
+# Hangul probe — system Latin faces (DejaVu/Segoe) often lack these glyphs on
+# Linux/WSL, so AI language labels like "Korean (한국어)" render as tofu.
+_CJK_PROBE = "한"
+_CJK_FONTS_ENSURED = False
+# Prefer faces that cover Hangul (and usually other CJK) for UI/AI text.
+_CJK_FAMILY_PREFERENCE: tuple[str, ...] = (
+    "Malgun Gothic",
+    "Apple SD Gothic Neo",
+    "Noto Sans CJK KR",
+    "Noto Sans KR",
+    "NanumGothic",
+    "Nanum Gothic",
+    "Noto Sans CJK JP",
+    "Yu Gothic UI",
+    "Yu Gothic",
+    "Hiragino Sans",
+    "Noto Sans CJK SC",
+    "Microsoft YaHei UI",
+    "Microsoft YaHei",
+    "Noto Sans CJK TC",
+    "PingFang SC",
+    "PingFang TC",
+    "Noto Sans TC",
+)
+# Register host/OS fonts when fontconfig does not expose them (common on WSL).
+_CJK_FONT_FILE_CANDIDATES: tuple[str, ...] = (
+    "/mnt/c/Windows/Fonts/malgun.ttf",
+    "/mnt/c/Windows/Fonts/malgunbd.ttf",
+    "/mnt/c/Windows/Fonts/msyh.ttc",
+    "/mnt/c/Windows/Fonts/msyhbd.ttc",
+    "/mnt/c/Windows/Fonts/YuGothR.ttc",
+    "/mnt/c/Windows/Fonts/YuGothM.ttc",
+    "/mnt/c/Windows/Fonts/msgothic.ttc",
+    "/mnt/c/Windows/Fonts/NotoSansTC-VF.ttf",
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+    "/usr/share/fonts/truetype/nanum/NanumBarunGothic.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJKkr-Regular.otf",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+)
+
+
+def _ensure_cjk_application_fonts() -> None:
+    """Load CJK faces into Qt when the OS font list omits Hangul coverage."""
+    global _CJK_FONTS_ENSURED
+    if _CJK_FONTS_ENSURED:
+        return
+    if QApplication.instance() is None:
+        return
+    _CJK_FONTS_ENSURED = True
+    available = set(QFontDatabase.families())
+    # Already have a Hangul-capable face — nothing to register.
+    for cand in _CJK_FAMILY_PREFERENCE:
+        if cand in available and _font_family_covers(cand, _CJK_PROBE):
+            return
+    for path in _CJK_FONT_FILE_CANDIDATES:
+        try:
+            if not os.path.isfile(path):
+                continue
+        except OSError:
+            continue
+        QFontDatabase.addApplicationFont(path)
+
+
+def _font_family_covers(family: str, sample: str) -> bool:
+    """True when *family* has real glyphs for every char in *sample*."""
+    fam = (family or "").strip()
+    if not fam or fam.lower() in {
+        "monospace", "monospaced", "fixed", "fixedsys",
+        "sans serif", "sans-serif", "serif", "cursive", "fantasy",
+        "system-ui", "ui-monospace", "ui-sans-serif", "ui-serif",
+    }:
+        return False
+    # Local import: monolith header must also list QRawFont (bundle_viewer.py).
+    from PySide6.QtGui import QRawFont as _QRawFont
+    rf = _QRawFont.fromFont(QFont(fam))
+    if not rf.isValid():
+        return False
+    gids = rf.glyphIndexesForString(sample)
+    return bool(gids) and all(int(g) > 0 for g in gids)
+
+
+def _cjk_capable_ui_family() -> str | None:
+    """Installed family that can render Hangul, or None."""
+    _ensure_cjk_application_fonts()
+    if QApplication.instance() is None:
+        return None
+    available = set(QFontDatabase.families())
+    for cand in _CJK_FAMILY_PREFERENCE:
+        if cand in available and _font_family_covers(cand, _CJK_PROBE):
+            return cand
+    for name in QFontDatabase.families():
+        low = (name or "").strip().lower()
+        if low in {
+            "monospace", "monospaced", "fixed", "fixedsys",
+            "sans serif", "sans-serif", "serif", "cursive", "fantasy",
+            "system-ui", "ui-monospace", "ui-sans-serif", "ui-serif",
+        }:
+            continue
+        if _font_family_covers(name, _CJK_PROBE):
+            return name
+    return None
+
+
 def _application_ui_font(point_size: int = UI_FONT_SIZE) -> QFont:
     """Application UI font with platform-appropriate sizing (Qt6 HiDPI-safe)."""
     base = max(6, min(int(point_size), 24))
     # Use the real system UI font — a fresh QApplication defaults to the generic
     # "Sans Serif" alias, which triggers qt.qpa.fonts warnings on macOS/Qt 6.
+    _ensure_cjk_application_fonts()
     font = QFont(QFontDatabase.systemFont(QFontDatabase.GeneralFont))
+    # Linux/WSL Latin faces often lack Hangul; Qt font-merging is unreliable
+    # there, so switch the primary face when a CJK font is available.
+    if not _font_family_covers(font.family(), _CJK_PROBE):
+        cjk = _cjk_capable_ui_family()
+        if cjk:
+            font = QFont(cjk)
     px = _scaled_font_pixel_size(base)
     if px is not None:
         font.setPixelSize(px)

@@ -134,6 +134,70 @@ AI_TOOL_ANALYZE_DISTRIBUTION = "analyze_distribution"
 AI_TOOL_ANALYZE_PERIODICITY = "analyze_periodicity"
 AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT = "summarize_investigation_context"
 
+# Plan §8: capability class for each tool (description suffix; API-safe).
+AI_TOOL_CAPABILITY_VIEWER_MUTATION = "viewer_mutation"
+AI_TOOL_CAPABILITY_EXPORT = "export"
+AI_TOOL_CAPABILITY_STORAGE = "storage"
+AI_TOOL_CAPABILITY_HEURISTIC = "heuristic"
+AI_TOOL_CAPABILITY_READ_ONLY = "read_only"
+
+_AI_TOOL_CAPABILITY_BY_NAME: Dict[str, str] = {
+    AI_TOOL_SET_CURSORS: AI_TOOL_CAPABILITY_VIEWER_MUTATION,
+    AI_TOOL_ZOOM_TO_RANGE: AI_TOOL_CAPABILITY_VIEWER_MUTATION,
+    AI_TOOL_HIGHLIGHT_TASK: AI_TOOL_CAPABILITY_VIEWER_MUTATION,
+    AI_TOOL_SET_VIEW_MODE: AI_TOOL_CAPABILITY_VIEWER_MUTATION,
+    AI_TOOL_OPEN_CORRIDOR: AI_TOOL_CAPABILITY_VIEWER_MUTATION,
+    AI_TOOL_ADD_ANNOTATION: AI_TOOL_CAPABILITY_VIEWER_MUTATION,
+    AI_TOOL_CLEAR_MARKS: AI_TOOL_CAPABILITY_VIEWER_MUTATION,
+    AI_TOOL_RESET_VIEW: AI_TOOL_CAPABILITY_VIEWER_MUTATION,
+    AI_TOOL_TRIGGER_COMPARE: AI_TOOL_CAPABILITY_VIEWER_MUTATION,
+    AI_TOOL_BOOKMARK_FINDING: AI_TOOL_CAPABILITY_VIEWER_MUTATION,
+    AI_TOOL_EXPORT_REPORT: AI_TOOL_CAPABILITY_EXPORT,
+    AI_TOOL_EXPORT_INVESTIGATION: AI_TOOL_CAPABILITY_EXPORT,
+    AI_TOOL_MANAGE_HYPOTHESES: AI_TOOL_CAPABILITY_STORAGE,
+    AI_TOOL_INVESTIGATION_MEMORY: AI_TOOL_CAPABILITY_STORAGE,
+    AI_TOOL_RECORD_EXPERIMENT_OUTCOME: AI_TOOL_CAPABILITY_STORAGE,
+    AI_TOOL_CLOSE_INVESTIGATION: AI_TOOL_CAPABILITY_STORAGE,
+    AI_TOOL_WHAT_IF: AI_TOOL_CAPABILITY_HEURISTIC,
+    AI_TOOL_OPTIMIZE_EXPERIMENT: AI_TOOL_CAPABILITY_HEURISTIC,
+    AI_TOOL_OPTIMIZE: AI_TOOL_CAPABILITY_HEURISTIC,
+    AI_TOOL_RECOMMEND_EXPERIMENTS: AI_TOOL_CAPABILITY_HEURISTIC,
+    AI_TOOL_GENERATE_EXPERIMENT_PLAN: AI_TOOL_CAPABILITY_HEURISTIC,
+    AI_TOOL_BASELINE_SCORE: AI_TOOL_CAPABILITY_HEURISTIC,
+}
+
+
+def ai_tool_capability(name: Any) -> str:
+    """Capability class for a viewer tool name."""
+    key = str(name or "").strip()
+    return _AI_TOOL_CAPABILITY_BY_NAME.get(key, AI_TOOL_CAPABILITY_READ_ONLY)
+
+
+def annotate_tool_capabilities(
+    tools: Optional[Sequence[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """Append ``[capability: …]`` to each tool description (Desktop/Web parity)."""
+    out: List[Dict[str, Any]] = []
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            continue
+        copied = dict(tool)
+        fn = copied.get("function")
+        if not isinstance(fn, dict):
+            out.append(copied)
+            continue
+        fn = dict(fn)
+        name = str(fn.get("name") or "").strip()
+        cap = ai_tool_capability(name)
+        desc = str(fn.get("description") or "").rstrip()
+        tag = f"[capability: {cap}]"
+        if tag not in desc:
+            fn["description"] = f"{desc} {tag}".strip() if desc else tag
+        copied["function"] = fn
+        out.append(copied)
+    return out
+
+
 AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_SET_CURSORS,
     AI_TOOL_ZOOM_TO_RANGE,
@@ -347,82 +411,9 @@ def parse_btf_stats_href(href: Any) -> str:
         return raw.split(":", 1)[1].strip().lstrip("/").removeprefix("section/").strip()
     return ""
 
-# Appended to the base system prompt. Keep in sync with web aiTools.js.
-AI_TOOL_SYSTEM_ADDENDUM = (
-    "When the user asks to show, focus, inspect, zoom, highlight, annotate, "
-    "export, investigate, explain, or jump to a time range, task, or core pair, "
-    "you MUST invoke the "
-    "matching viewer tool (native function call) in addition to your markdown "
-    "answer. Valid tools: set_cursors, zoom_to_range, highlight_task, "
-    "set_view_mode, open_corridor_inspector, add_annotation, query_raw_metric, "
-    "export_report, clear_marks, reset_view, search_timeline, trigger_compare, "
-    "investigate, detect_anomalies, correlate_events, find_critical_path, compare_performance, "
-    "generate_report, check_budget, optimize, regression_explain, "
-    "bookmark_finding, investigation_replay, what_if, optimize_experiment, analyze_traces, "
-    "baseline_score, recommend_experiments, export_investigation, "
-    "detect_priority_inversion, find_related_findings, compare_tasks, "
-    "explain_finding, interpret_query, validate_experiment, manage_hypotheses, "
-    "plan_investigation, suggest_scope, detect_contradictions, "
-    "assess_evidence_sufficiency, cluster_findings, generate_fingerprint, "
-    "find_similar_investigations, regression_localize, build_causal_chain, "
-    "generate_experiment_plan, record_experiment_outcome, score_investigation, "
-    "analyze_temporal_causality, build_task_dependency_graph, "
-    "decompose_response_time, rank_root_causes, verify_claim, "
-    "challenge_conclusion, investigation_memory, cluster_incidents, "
-    "close_investigation, analyze_distribution, analyze_periodicity, "
-    "summarize_investigation_context. "
-    "For root-cause or Investigate templates: call plan_investigation and "
-    "suggest_scope, then detect_anomalies and "
-    "investigate(finding_id) first for a root-cause chain, then "
-    "correlate_events / query_raw_metric / search_timeline / find_critical_path, then set_cursors "
-    "+ zoom_to_range + highlight_task on the worst episode before concluding. "
-    "Use compare_performance for structured A vs B deltas (two tabs); "
-    "regression_explain after compare to narrate the primary change. "
-    "Use generate_report for a typed engineering markdown report, then "
-    "export_report to save HTML/CSV. "
-    "Use check_budget for WCET/response/deadline budgets; optimize for "
-    "evidence-backed mitigations; what_if for heuristic slice-replay simulation; optimize_experiment to rank automatic candidates; "
-    "analyze_traces to rank all open tabs; bookmark_finding to pin semantic "
-    "marks; investigation_replay to summarise a completed investigation. "
-    "Use baseline_score to compare current per-task metrics against a stored "
-    "historical baseline (flags |z|>2); recommend_experiments to suggest "
-    "simulation / firmware / measurement validation experiments; "
-    "export_investigation to save the full investigation as JSON. "
-    "Use detect_priority_inversion to scan priority-inheritance boost "
-    "episodes for L/M/H inversion suspects (high/medium/low task, mutex, "
-    "time, duration); find_related_findings to relate Analysis Findings by "
-    "shared task, metric keyword, evidence-time proximity, or severity "
-    "adjacency; compare_tasks for a side-by-side execution/blocking/"
-    "migrations/priority delta table between two tasks. "
-    "Use query_raw_metric when you need the exact per-task "
-    "series (priority-inheritance episodes, execution slices, migrations, "
-    "blocking gaps, sync STI, or findings lines) instead of the summarised "
-    "findings card. Use search_timeline to locate STI, tags, task names, or "
-    "pointers and get timestamps. Use clear_marks / reset_view to tidy the "
-    "timeline before highlighting a new issue. Use trigger_compare when two "
-    "tabs are open to pull Trace Compare diffs. Use add_annotation to pin a "
-    "note on a spike. Use export_report to save findings, diagrams, and GUI "
-    "state as HTML or CSV. "
-    "For what-if / optimize_experiment, label results as heuristic (not an RTOS kernel). For optimize advice questions, label estimates as "
-    "'Simulation / estimate — not measured behavior' and cite evidence. "
-    "Name the Statistics page the engineer should open next "
-    "(Timeline Anomalies, Worst Events, Response Time, Critical Path, "
-    "Period / Jitter, Unified Jitter, Recurring Patterns, Task Health, "
-    "Task × Core, Core Utilization Over Time, Preemption Matrix, "
-    "Waiter × Owner, Mutex Blocking). Those pages already exist in Statistics "
-    "— do not invent a detect_timeline_anomalies tool. "
-    "Tool timestamps use the same numeric trace time "
-    "unit as jump:TIME. After tools run, summarise what you changed. "
-    "If you cannot emit a native function call, emit a fenced btftool JSON "
-    "block: one object, a JSON array, or several objects (one per line), e.g.:\n"
-    "```btftool\n"
-    '{"name": "set_cursors", "arguments": {"timestamps": [1805120, 1810000]}}\n'
-    "```\n"
-    "When a mutex take/give, block, resume, or priority-boost sequence is the point, "
-    "include a fenced mermaid sequenceDiagram. When summarising core-to-core "
-    "migrations, include a fenced ```mermaid graph LR flowchart with cores as nodes "
-    "and migration counts on edges (prefer A -->|count| B; A -- count --> B is also ok)."
-)
+# Tool-use policy (also AI_TOOL_PROMPT). Keep in sync with web aiTools.js.
+AI_TOOL_PROMPT = ("Use native tools only when evidence or an explicit viewer action requires them.\n\n1. Establish scope, subject, and comparison direction.\n2. Use the minimum sufficient evidence tool.\n3. Check missing links, contradictions, and credible alternatives.\n4. Continue only if another result could change the verdict.\n5. Verify before asserting a high-confidence root cause.\n\n- Use planning tools only for broad or ambiguous investigations.\n- Use exact metric or timeline tools when summaries lack required evidence.\n- For comparisons, A is candidate, B is baseline, and delta = A - B.\n- Use simulation or optimization only when requested.\n- Generate a report when requested. For Report mode or an explicit save/download,\n  call export_report after generate_report; otherwise export only when asked.\n- Analysis alone does not authorize viewer changes. Apply viewer changes only\n  when explicitly requested or promised by the selected workflow.\n- Stop when evidence is sufficient or tools cannot resolve the uncertainty.\n- Empty tool results mean no matching data in scope; say so and do not invent\n  values. Failed tools are failures \u2014 never claim the action or export succeeded.\n- Never claim an unconfirmed result, viewer change, or export.\n- After tools, separate retrieved evidence from applied viewer changes.\n- Use Mermaid only when it clarifies a supported relationship and the mode\n  permits it.").rstrip("\n")
+AI_TOOL_SYSTEM_ADDENDUM = AI_TOOL_PROMPT
 
 AI_MERMAID_SEQUENCE_EXAMPLE = """```mermaid
 sequenceDiagram
@@ -456,7 +447,7 @@ def ai_viewer_tools_for_mode(mode: Any = None, stage: Any = "") -> List[Dict[str
 
 def ai_viewer_tools() -> List[Dict[str, Any]]:
     """OpenAI-compatible ``tools`` array."""
-    return [
+    return annotate_tool_capabilities([
         {
             "type": "function",
             "function": {
@@ -1789,7 +1780,7 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 },
             },
         },
-    ]
+    ])
 
 
 def parse_tool_arguments(raw: Any) -> Dict[str, Any]:

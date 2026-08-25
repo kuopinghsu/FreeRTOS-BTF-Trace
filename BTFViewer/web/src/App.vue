@@ -3921,6 +3921,7 @@ function buildAiContext() {
     // representation shown in the status bar and Legend.
     filters: activeFilterChips.value.map(c => c.label),
     selection: pinnedHighlightKey.value || null,
+    timeScale: tr.timeScale || '',
   }
 }
 

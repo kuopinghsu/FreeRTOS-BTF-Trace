@@ -173,15 +173,20 @@ export function buildPriorityData(stiEvents, createPriByRaw, timeMax, rawToMk = 
     let totalBoostNs = 0
     let inversionCount = 0
     let inheritCount = 0
+    let lmhCount = 0
     for (const ep of episodes) {
       if (ep.peakPri > peakPri) peakPri = ep.peakPri
       totalBoostNs += ep.durationNs
       if (ep.inversionSuspect) inversionCount++
       if (ep.inherited) inheritCount++
+      // Inherit + medium interveners still count as L/M/H (not plain inherit).
+      if ((ep.mediumTasks && ep.mediumTasks.length) || String(ep.pattern || '').includes('L/M/H')) {
+        lmhCount++
+      }
     }
     let pattern = 'Boost only'
-    if (inheritCount > 0) pattern = inversionCount > inheritCount ? 'Mutex inherit + L/M/H' : 'Mutex inherit'
-    else if (inversionCount > 0) pattern = 'L/M/H pattern'
+    if (inheritCount > 0) pattern = lmhCount ? 'Mutex inherit + L/M/H' : 'Mutex inherit'
+    else if (lmhCount || inversionCount > 0) pattern = 'L/M/H pattern'
     prioritySummaryByMk.set(mk, {
       mk,
       label: episodes[0]?.taskLabel || taskLabelForMergeKey({ taskRepr }, mk),
@@ -223,6 +228,7 @@ export function priorityStatsRows(trace, lo, hi) {
     let totalBoostNs = 0
     let inversionCount = 0
     let inheritCount = 0
+    let lmhCount = 0
     for (const ep of episodes) {
       if (ep.peakPri > peakPri) peakPri = ep.peakPri
       const clipLo = lo != null ? Math.max(lo, ep.startNs) : ep.startNs
@@ -230,11 +236,14 @@ export function priorityStatsRows(trace, lo, hi) {
       if (clipHi > clipLo) totalBoostNs += clipHi - clipLo
       if (ep.inversionSuspect) inversionCount++
       if (ep.inherited) inheritCount++
+      if ((ep.mediumTasks && ep.mediumTasks.length) || String(ep.pattern || '').includes('L/M/H')) {
+        lmhCount++
+      }
     }
     const scale = trace.timeScale
     let pattern = 'Boost only'
-    if (inheritCount > 0) pattern = inversionCount > inheritCount ? 'Mutex inherit + L/M/H' : 'Mutex inherit'
-    else if (inversionCount > 0) pattern = 'L/M/H pattern'
+    if (inheritCount > 0) pattern = lmhCount ? 'Mutex inherit + L/M/H' : 'Mutex inherit'
+    else if (lmhCount || inversionCount > 0) pattern = 'L/M/H pattern'
     rows.push({
       mk: summary.mk,
       label: summary.label,

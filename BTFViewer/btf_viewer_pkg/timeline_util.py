@@ -668,13 +668,33 @@ def _get_sans_font_family() -> str:
 
     Qt SVG looks up ``sans-serif`` as the face ``Sans-serif`` and emits
     ``qt.qpa.fonts`` missing-family warnings. Prefer a real installed face.
+    When the usual Latin UI faces lack Hangul (common on Linux/WSL), prefer a
+    CJK-capable face so AI Korean replies and mermaid labels are not tofu.
     """
     global _SANS_FONT_FAMILY
-    if _SANS_FONT_FAMILY is not None:
-        return _SANS_FONT_FAMILY
     if QApplication.instance() is None:
-        return "Arial"
+        return _SANS_FONT_FAMILY or "Arial"
+    _ensure_cjk_application_fonts()
+    cjk = _cjk_capable_ui_family()
+    if _SANS_FONT_FAMILY is not None:
+        if _font_family_covers(_SANS_FONT_FAMILY, _CJK_PROBE) or cjk is None:
+            return _SANS_FONT_FAMILY
+        # Cached Latin-only face before CJK fonts were registered — upgrade.
+        _SANS_FONT_FAMILY = cjk
+        return _SANS_FONT_FAMILY
     available = set(QFontDatabase.families())
+    for cand in (
+        "Helvetica Neue", "Helvetica", "Arial", "Segoe UI",
+        "Lucida Grande", "Verdana", "Tahoma",
+        "DejaVu Sans", "Liberation Sans", "Noto Sans", "Ubuntu",
+        "FreeSans", "Cantarell",
+    ):
+        if cand in available and _font_family_covers(cand, _CJK_PROBE):
+            _SANS_FONT_FAMILY = cand
+            return _SANS_FONT_FAMILY
+    if cjk:
+        _SANS_FONT_FAMILY = cjk
+        return _SANS_FONT_FAMILY
     for cand in (
         "Helvetica Neue", "Helvetica", "Arial", "Segoe UI",
         "Lucida Grande", "Verdana", "Tahoma",

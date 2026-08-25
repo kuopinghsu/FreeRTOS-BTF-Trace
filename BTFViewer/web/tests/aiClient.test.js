@@ -152,6 +152,7 @@ describe('AI endpoint helpers', () => {
 
   it('buildAiSystemPrompt includes reply language', () => {
     assert.match(buildAiSystemPrompt('English'), /Always write your entire reply in English/)
+    assert.match(buildAiSystemPrompt('English'), /MODE: BALANCED/)
     assert.match(
       buildAiSystemPrompt('Japanese (日本語)'),
       /Always write your entire reply in Japanese \(日本語\)/,
@@ -408,7 +409,7 @@ describe('AI endpoint helpers', () => {
     assert.match(findings.prompt, /Analysis Findings/)
     assert.match(findings.prompt, /Timeline Anomalies/)
     assert.match(findings.prompt, /Worst Events/)
-    assert.match(findings.prompt, /Task Health/)
+    assert.match(findings.prompt, /Response Time/)
   })
 
   it('Migration thrash template is available for inspector Query with AI', () => {

@@ -6378,6 +6378,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "cursors": cursors,
             "filters": filters,
             "selection": selection,
+            "time_scale": getattr(tr, "time_scale", "") or "",
         }
 
     def _ai_list_loaded_tabs(self) -> list:

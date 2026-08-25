@@ -136,6 +136,19 @@ export const AI_CONTEXT_MODE_SETTINGS_LINES = {
     'Full evidence — complete Findings, tools, and history.'
   ),
 }
+export const AI_CONTEXT_PROMPTS = {
+  [AI_CONTEXT_MODE_COMPACT]: "MODE: COMPACT\n- Fast triage; target 250\u2013500 answer tokens.\n- Use the scope summary and up to three actionable findings.\n- Use at most two evidence calls unless the user requests more work.\n- Do not run planning, graphs, simulation, optimization, memory, clustering, or\n  reports unless requested.\n- Preserve viewer state. Do not create diagrams unless requested.\n- If evidence is insufficient, return Inconclusive and name what is missing.\n- Still include concrete Evidence (names, values with units, jump:TIME when\n  known). Do not answer with a one-line summary only.\n- Output: Assessment; Evidence; Confidence/quality; Next check.",
+  [AI_CONTEXT_MODE_BALANCED]: "MODE: BALANCED\n- Default mode; target 600\u20131200 answer tokens.\n- Use relevant scoped findings and tables; fetch exact evidence when needed.\n- Test the leading explanation and one credible alternative.\n- Prefer at most four evidence calls for ad-hoc questions. Follow Preferred tools\n  on Start Investigation / template workflows even when that needs more calls.\n  Exceed the preference whenever another result could change the verdict.\n  Verify before a High-confidence causal conclusion.\n- Change viewer state only for an explicit action or a workflow that promises to\n  focus evidence.\n- Use one small diagram only when it materially improves understanding.\n- Write a full engineering answer: Verdict; Evidence with jump:TIME / values;\n  Interpretation; Alternative/falsification; Confidence/quality/coverage;\n  Next action. Do not over-compress into a stub.",
+  [AI_CONTEXT_MODE_FULL]: "MODE: FULL EVIDENCE\n- Use all relevant scoped evidence and compact investigation history.\n- Rank hypotheses for broad questions; skip planning for an explicit finding,\n  task, and window.\n- Build causal or dependency chains only as far as evidence supports.\n- Examine contradictions and credible alternatives. Assess sufficiency before\n  opening another branch; stop when more tools will not change the verdict.\n- Verify and challenge before a High-confidence root-cause conclusion.\n- Distinguish observed, derived, heuristic, and simulated results.\n- Preserve unrelated viewer marks. Use diagrams only for supported relationships.\n- State each material fact once. Return Inconclusive when evidence remains\n  incomplete or contradictory.\n- Target a thorough write-up (about 1000\u20132000 answer tokens) when evidence\n  supports it. Output: Scope; Verdict; Evidence chain with times/values;\n  Contradictions/alternatives; Root cause or leading explanation;\n  Confidence/quality/coverage; Requested mitigation; Next verification;\n  Viewer changes.",
+}
+
+export const AI_LANGUAGE_PROMPT_TEMPLATE = "Always write your entire reply in {language}.\nWrite the complete user-facing reply in {language}. Preserve task names, core\nnames, UI labels, tool names, metric identifiers, jump:TIME, range:LO/HI, code,\nand file formats. Do not translate trace identifiers."
+export const AI_LANGUAGE_TRADITIONAL_CHINESE_NOTE = "Use natural Traditional Chinese and terminology customary in Taiwan.\nDo not switch to English or Simplified Chinese for the prose answer."
+export const AI_LANGUAGE_SIMPLIFIED_CHINESE_NOTE = "Use natural Simplified Chinese. Do not switch to English or Traditional Chinese for the prose answer."
+export const AI_LANGUAGE_KOREAN_NOTE =
+  'Use natural Korean Hangul (한국어). Do not switch to English or Chinese '
+  + 'for the prose answer.'
+
 export const AI_CONTEXT_STAGE_TOOLS = {
   triage: ['detect_anomalies', 'cluster_findings', 'suggest_scope'],
   scope: ['set_cursors', 'zoom_to_range', 'highlight_task'],
@@ -150,7 +163,7 @@ export const AI_CONTEXT_ALWAYS_TOOLS = [
 ]
 export const AI_CONTEXT_BALANCED_EXTRA_TOOLS = [
   'detect_anomalies', 'investigate', 'set_cursors', 'zoom_to_range',
-  'highlight_task', 'challenge_conclusion', 'what_if',
+  'highlight_task', 'challenge_conclusion',
 ]
 const CONTEXT_TOOL_ROW_KEYS = new Set([
   'rows', 'episodes', 'slices', 'events', 'gaps', 'hits', 'times',
@@ -163,6 +176,9 @@ export function normalizeAiContextMode(value) {
   const raw = String(value || '').trim().toLowerCase().replace(/[-_]/g, ' ')
   if (raw === 'compact' || raw === 'reduced' || raw === 'reduce' || raw === 'low') {
     return AI_CONTEXT_MODE_COMPACT
+  }
+  if (raw === 'balanced' || raw === 'balance' || raw === 'medium' || raw === 'default balanced') {
+    return AI_CONTEXT_MODE_BALANCED
   }
   if (raw === 'full' || raw === 'full evidence' || raw === 'fullevidence'
       || raw === 'complete' || raw === 'max') {
@@ -208,20 +224,26 @@ export function aiContextLimits(mode = null) {
 
 export function contextModeSystemAddendum(mode = null) {
   const key = normalizeAiContextMode(mode)
-  const keep = 'Never omit jump:TIME, range:LO/HI, real task names, measurements '
-    + 'with units, confidence, evidence quality, what-if disclaimers, or '
-    + 'at least one alternative / falsification.'
-  if (key === AI_CONTEXT_MODE_COMPACT) {
-    return ' Context mode is Compact: keep the reply around 300–500 tokens. '
-      + 'Generate mermaid diagrams only if the user asks. ' + keep
+  return AI_CONTEXT_PROMPTS[key] || AI_CONTEXT_PROMPTS[DEFAULT_AI_CONTEXT_MODE]
+}
+
+export function aiLanguagePrompt(language = null) {
+  const lang = String(language || 'English').trim() || 'English'
+  let text = AI_LANGUAGE_PROMPT_TEMPLATE.replaceAll('{language}', lang).replace(/\s+$/, '')
+  const low = lang.toLowerCase()
+  if (low.includes('traditional chinese') || lang.includes('繁體') || lang.includes('繁体')) {
+    text = `${text}\n${AI_LANGUAGE_TRADITIONAL_CHINESE_NOTE.replace(/\s+$/, '')}`
+  } else if (
+    low.includes('simplified chinese') || lang.includes('简体') || lang.includes('簡體')
+  ) {
+    text = `${text}\n${AI_LANGUAGE_SIMPLIFIED_CHINESE_NOTE.replace(/\s+$/, '')}`
+  } else if (lang.includes('한국') || low.includes('korean')) {
+    text = `${text}\n${AI_LANGUAGE_KOREAN_NOTE.replace(/\s+$/, '')}`
+  } else if (low !== 'english') {
+    text = `${text}\nDo not answer in English unless the user explicitly asks for English. `
+      + `All headings, bullets, and explanations must be in ${lang}.`
   }
-  if (key === AI_CONTEXT_MODE_FULL) {
-    return ' Context mode is Full evidence: you may use the complete Findings, '
-      + 'tools, and history. Include mermaid when it clarifies a sequence '
-      + 'or migration. ' + keep
-  }
-  return ' Context mode is Balanced: prefer concise evidence-backed answers. '
-    + 'Include mermaid when it clarifies a sequence or migration. ' + keep
+  return text
 }
 
 function stageToolNames(stage) {
@@ -255,7 +277,17 @@ export function toolNamesForContextMode(mode = null, stage = '') {
       add(stageToolNames(GUIDED_STAGES[idx + 1]))
     }
     add(AI_CONTEXT_BALANCED_EXTRA_TOOLS)
-    add(AI_CONTEXT_STAGE_TOOLS.report)
+    // Report/export only for report stage (or when a neighbour is report).
+    if (sid === 'report') {
+      add(AI_CONTEXT_STAGE_TOOLS.report)
+    } else if (idx >= 0) {
+      for (const j of [idx - 1, idx + 1]) {
+        if (j >= 0 && j < GUIDED_STAGES.length && GUIDED_STAGES[j] === 'report') {
+          add(AI_CONTEXT_STAGE_TOOLS.report)
+          break
+        }
+      }
+    }
   }
   return names
 }
@@ -316,18 +348,47 @@ function findingBlocks(text) {
   return { header, items }
 }
 
-export function compactFindingsText(text, mode = null, findings = null) {
+export function focusTitlesFromSummary(summary = '') {
+  const out = []
+  for (const line of String(summary || '').split(/\r?\n/)) {
+    const raw = line.trim()
+    if (raw.toLowerCase().startsWith('focus:')) {
+      const title = raw.slice(raw.indexOf(':') + 1).trim()
+      if (title) out.push(title)
+    }
+  }
+  return out
+}
+
+export function compactFindingsText(text, mode = null, findings = null, {
+  excludeTitles = null,
+} = {}) {
   const limits = aiContextLimits(mode)
   const cap = limits.findings
   const raw = String(text || '').replace(/\s+$/, '')
   if (cap == null || !raw) return raw
+  const exclude = new Set(
+    (excludeTitles || []).map(x => String(x || '').trim().toLowerCase()).filter(Boolean),
+  )
   const { header, items } = findingBlocks(raw)
-  if (items.length) {
-    const ranked = items.map((item, i) => ({ i, item }))
+  let working = items
+  if (items.length && exclude.size) {
+    const filtered = items.filter((it) => {
+      const head = String(it.block || '').split('\n')[0] || ''
+      const m = head.match(/^\d+\. \[[A-Z]+\](?: id=\S+)?\s*(.*)$/)
+      const title = (m ? m[1] : head).trim()
+      const fidM = head.match(/\bid=(\S+)/)
+      const fid = fidM ? fidM[1] : ''
+      return !(exclude.has(title.toLowerCase()) || (fid && exclude.has(fid.toLowerCase())))
+    })
+    working = filtered.length ? filtered : items
+  }
+  if (working.length) {
+    const ranked = working.map((item, i) => ({ i, item }))
       .sort((a, b) => (SEV_CONTEXT_RANK[a.item.sev] ?? 3) - (SEV_CONTEXT_RANK[b.item.sev] ?? 3)
         || a.i - b.i)
     const kept = ranked.slice(0, Number(cap)).map(row => row.item.block)
-    const omitted = Math.max(0, items.length - kept.length)
+    const omitted = Math.max(0, working.length - kept.length)
     const lines = header ? [header, ''] : []
     lines.push(...kept)
     if (omitted) {
@@ -343,6 +404,15 @@ export function compactFindingsText(text, mode = null, findings = null) {
     const ranked = findings
       .map((finding, i) => ({ i, finding }))
       .filter(row => row.finding && typeof row.finding === 'object')
+      .filter((row) => {
+        if (!exclude.size) return true
+        const title = String(row.finding.title || '').trim()
+        const fid = String(row.finding.id || '').trim()
+        return !(
+          (title && exclude.has(title.toLowerCase()))
+          || (fid && exclude.has(fid.toLowerCase()))
+        )
+      })
       .sort((a, b) => (
         (SEV_CONTEXT_RANK[String(a.finding.severity || 'info').toLowerCase()] ?? 3)
         - (SEV_CONTEXT_RANK[String(b.finding.severity || 'info').toLowerCase()] ?? 3)
@@ -544,6 +614,12 @@ export function investigationGuideStage(payload, {
   const hasPayload = !!(payload && typeof payload === 'object' && Object.keys(payload).length)
   const hasPlan = !!(plan && (plan.steps?.length || plan.goal))
   if (!hasPayload && !hasPlan) return 'idle'
+  // Report mode plans list generate_report / export_report. Map those onto the
+  // report tool stage so Balanced/Compact include export_report (GUIDED_STAGES
+  // has no "report" chip, but stage selection still drives the tool catalog).
+  if (tools.includes('generate_report') || tools.includes('export_report')) {
+    return 'report'
+  }
   let quality = ''
   if (hasPayload && payload.evidence_quality && typeof payload.evidence_quality === 'object') {
     quality = String(payload.evidence_quality.band || '').toLowerCase()
@@ -955,7 +1031,12 @@ export function computeEvidenceQuality({
   const hasMetric = chks.length > 0
   const untested = alts.filter(a => {
     const s = String(a.status || '').toLowerCase()
-    return s === 'untested' || s === 'need_evidence' || s === ''
+    return (
+      s === 'untested'
+      || s === 'need_evidence'
+      || s === 'needs_evidence'
+      || s === ''
+    )
   })
   const altMark = alts.length && !untested.length ? 'yes' : (alts.length ? 'partial' : 'no')
   const band = evidenceQualityBand(score)
@@ -1482,12 +1563,23 @@ export const INVESTIGATION_MODE_LABELS = {
 
 export function investigationModePrompt(mode = 'diagnose') {
   const plan = investigationModePlan(mode)
-  const listed = (plan.tools || []).filter(Boolean).join(' → ')
+  const listed = (plan.tools || []).filter(Boolean).join('; ')
   const label = INVESTIGATION_MODE_LABELS[plan.mode] || plan.mode
+  if (plan.mode === 'report') {
+    return (
+      `${plan.goal || label}. Call generate_report, then `
+      + 'export_report (format html unless the user asked for csv). '
+      + 'Include only supported sections and mark missing requested '
+      + 'evidence as Not evaluated. Saving the file is required — do not '
+      + 'stop after generate_report alone.'
+    )
+  }
   return (
-    `${plan.goal || label}. Call these tools in order: ${listed}. `
-    + 'After each tool, update hypotheses with manage_hypotheses when the '
-    + 'status changes. Finish with a verdict, jump:TIME evidence, '
+    `${plan.goal || label}. Preferred tools: ${listed}. `
+    + 'Start with the first applicable tool, then continue only if another '
+    + 'result could change the verdict. Do not call unavailable or irrelevant '
+    + 'tools. Call manage_hypotheses only when a hypothesis status changes. '
+    + 'Finish with a verdict, jump:TIME evidence, '
     + 'what would disprove this, confidence, and one next check.'
   )
 }
@@ -1747,10 +1839,12 @@ export function investigationTemplatePrompt(template = null) {
   const tpl = template && typeof template === 'object' ? template : {}
   const label = String(tpl.label || 'Investigation')
   const steps = (tpl.steps || []).map(s => String(s)).filter(Boolean)
-  const listed = steps.length ? steps.join(' → ') : 'investigate'
-  return `Run the ${label}. Call these tools in order: ${listed}. `
-    + 'After each tool, update hypotheses with manage_hypotheses when the '
-    + 'status changes. Finish with a verdict, jump:TIME evidence, '
+  const listed = steps.length ? steps.join('; ') : 'investigate'
+  return `Run the ${label}. Preferred tools: ${listed}. `
+    + 'Start with the first applicable tool, then continue only if another '
+    + 'result could change the verdict. Do not call unavailable or irrelevant '
+    + 'tools. Call manage_hypotheses only when a hypothesis status changes. '
+    + 'Finish with a verdict, jump:TIME evidence, '
     + 'what would disprove this, confidence, and one next check.'
 }
 

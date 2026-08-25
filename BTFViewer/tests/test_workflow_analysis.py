@@ -134,6 +134,27 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         self.assertEqual(len(inv), 1)
         self.assertIn("LowTask", inv[0]["text"])
 
+    def test_priority_inherit_lmh_counts_as_inversion_finding(self):
+        """Mutex inherit + L/M/H aggregate must feed the PI finding (not only plain L/M/H)."""
+        findings = _build_workflow_analysis_findings(
+            core_rows=[("Core_0", 50.0), ("Core_1", 50.0)],
+            exec_rows=[],
+            block_rows=[],
+            mig_rows=[],
+            pair_rows=[],
+            priority_rows=[
+                ("mk_low", "Low[266]", 2, 4, 3, "100ms", "Mutex inherit + L/M/H", 100),
+                ("mk_ps", "PS[228]", 2, 4, 1, "120us", "L/M/H pattern", 120),
+            ],
+            sync_rows=[],
+            sync_issues=[],
+            tick={"tick_count": 0},
+        )
+        inv = [f for f in findings if "Priority inversion" in f["title"]]
+        self.assertEqual(len(inv), 1)
+        self.assertIn("Low[266]", inv[0]["text"])
+        self.assertIn("PS[228]", inv[0]["text"])
+
     def test_render_html_contains_section(self):
         findings = [
             {

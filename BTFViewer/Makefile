@@ -7,6 +7,7 @@
 #   make -C BTFViewer check-bundle # desktop parity check (CI)
 #   make -C BTFViewer ai-test      # offline AI benchmark (tests/ai)
 #   make -C BTFViewer ai-test-live # live suite XML → AI_BENCHMARK.md (AI_CONFIG)
+#   make -C BTFViewer ai-prompts   # on-demand AI prompt dump → builds/ai_prompts_review.txt
 
 PYTHON ?= python3
 TRACE ?= ../tracedata/example-2cores.btf.gz
@@ -39,7 +40,7 @@ AI_CASES ?=
 AI_CONTEXT ?=
 AI_REPLACE ?=
 
-.PHONY: all help web bundle check-bundle test test-web test-all ai-test ai-test-live ai-test-context ci doc update-images demo demo-voice demo-pack
+.PHONY: all help web bundle check-bundle test test-web test-all ai-test ai-test-live ai-test-context ai-prompts ci doc update-images demo demo-voice demo-pack
 
 help:
 	@echo "BTF Viewer — make targets"
@@ -64,6 +65,7 @@ help:
 	@echo "                      ai-test-live single context mode: AI_CONTEXT=compact|balanced|full"
 	@echo "                      A run restricted this way merges into an existing AI_BENCHMARK.md"
 	@echo "                      instead of overwriting it; AI_REPLACE=1 forces a full overwrite"
+	@echo "  make ai-prompts   Export AI prompts for review → builds/ai_prompts_review.txt (on demand)"
 	@echo "  make ci           test-all + check-bundle (local CI parity)"
 	@echo "  make help         Show this help"
 	@echo ""
@@ -131,6 +133,11 @@ ai-test-context:
 		$(if $(AI_CASES),--only-cases $(AI_CASES),) \
 		$(if $(AI_REPLACE),--replace-report,) \
 		--compare-context --fail-under 0 -o AI_BENCHMARK.md
+
+# On-demand AI prompt dump for debugging (not part of all/web/bundle).
+ai-prompts:
+	mkdir -p $(BUILDS)
+	PYTHONPATH=. $(PYTHON) scripts/export_ai_prompts.py -o $(BUILDS)/ai_prompts_review.txt
 
 ci: test-all check-bundle
 

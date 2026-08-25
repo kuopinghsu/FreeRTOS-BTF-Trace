@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
+# Star-import skips leading-underscore names; STI helpers are used by name below.
+from .config import _is_tag_sti_channel, _sti_channel_sort_key  # noqa: F401
 from .html_report import (
     HTML_REPORT_INTERACTIVE_SCRIPT,
     HTML_REPORT_TOC_CSS,
@@ -1703,6 +1705,7 @@ def _priority_stats_rows(
         total_ns = 0
         inv_count = 0
         inherit_count = 0
+        lmh_count = 0
         for ep in eps:
             clip_lo = lo if lo is not None else ep.start_ns
             clip_hi = hi if hi is not None else ep.stop_ns
@@ -1714,9 +1717,14 @@ def _priority_stats_rows(
                 inv_count += 1
             if ep.inherited:
                 inherit_count += 1
+            # Inherit episodes with medium-priority interveners still carry
+            # L/M/H geometry (episode.pattern contains "L/M/H"); do not hide
+            # that behind a plain "Mutex inherit" aggregate label.
+            if ep.medium_tasks or "L/M/H" in (ep.pattern or ""):
+                lmh_count += 1
         if inherit_count:
-            pattern = "Mutex inherit + L/M/H" if inv_count > inherit_count else "Mutex inherit"
-        elif inv_count:
+            pattern = "Mutex inherit + L/M/H" if lmh_count else "Mutex inherit"
+        elif lmh_count or inv_count:
             pattern = "L/M/H pattern"
         else:
             pattern = "Boost only"

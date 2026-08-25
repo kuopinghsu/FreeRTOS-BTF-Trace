@@ -92,6 +92,7 @@ export const EVIDENCE_PANEL_TOOLS = [
   'find_critical_path',
   'detect_priority_inversion',
   'compare_performance',
+  'search_timeline',
   'explain_finding',
   'interpret_query',
   'validate_experiment',
@@ -125,6 +126,10 @@ export const EVIDENCE_PANEL_TOOLS = [
 const AGENT_TEMPLATE_IDS = new Set([
   'investigate', 'root_cause', 'verify', 'what_if', 'optimize',
   'diagnostic_report', 'auto_investigate', 'explain_finding',
+])
+
+const EVIDENCE_STAGE_TEMPLATES = new Set([
+  'auto_investigate', 'investigate', 'root_cause', 'verify',
 ])
 
 const FINDING_ID_RE = /^[a-z][a-z0-9_]{0,47}$/
@@ -162,6 +167,17 @@ export const DEFAULT_REGRESSION_RULES = [
 
 export function isAgentTemplate(templateId) {
   return AGENT_TEMPLATE_IDS.has(String(templateId || '').trim())
+}
+
+/** Promote triage/scope to investigate for Start Investigation-style templates. */
+export function elevateGuideStageForTemplate(stage, templateId = '') {
+  let sid = String(stage || '').trim().toLowerCase()
+  if (!sid || sid === 'idle' || sid === 'start') sid = 'triage'
+  const tid = String(templateId || '').trim()
+  if (EVIDENCE_STAGE_TEMPLATES.has(tid) && (sid === 'triage' || sid === 'scope')) {
+    return 'investigate'
+  }
+  return sid
 }
 
 export function maxToolRoundsForTemplate(templateId = '', defaultRounds = 4) {
@@ -224,6 +240,32 @@ export function slugFindingId(title, used = new Set()) {
   return cand
 }
 
+const JUMP_IN_TEXT_RE = /jump:([0-9]+(?:\.[0-9]+)?)/i
+
+function promoteJumpTimesFromText(item) {
+  const evidence = (item.evidence || [])
+    .filter(e => e && typeof e === 'object')
+    .map(e => ({ ...e }))
+  if (evidence.some(e => e.time != null)) {
+    item.evidence = evidence
+    return
+  }
+  const blob = `${item.title || ''} ${item.text || ''}`
+  const m = JUMP_IN_TEXT_RE.exec(blob)
+  if (!m) {
+    item.evidence = evidence
+    return
+  }
+  const raw = Number(m[1])
+  if (!Number.isFinite(raw)) {
+    item.evidence = evidence
+    return
+  }
+  const t = Number.isInteger(raw) ? Math.trunc(raw) : raw
+  evidence.push({ label: 'finding text', time: t })
+  item.evidence = evidence
+}
+
 export function enrichFindingsWithIds(findings) {
   const used = new Set()
   return (findings || []).map((f) => {
@@ -235,7 +277,7 @@ export function enrichFindingsWithIds(findings) {
       used.add(fid)
     }
     item.id = fid
-    if (!item.evidence) item.evidence = []
+    promoteJumpTimesFromText(item)
     return item
   })
 }
@@ -622,7 +664,7 @@ export function extractEvidencePanelPayload(toolName, result) {
       })
     }
     if (evItems.length) payload.evidence = evItems
-    else if (data.evidence_chain) payload.evidence_chain = String(data.evidence_chain)
+    if (data.evidence_chain) payload.evidence_chain = String(data.evidence_chain)
     payload.alternatives = [...(data.alternatives || [])]
     payload.confidence = String(data.confidence || 'Medium')
     if (data.hypotheses?.length) payload.hypotheses = [...data.hypotheses]
@@ -660,6 +702,24 @@ export function extractEvidencePanelPayload(toolName, result) {
     payload.confidence = data.correlation != null
       ? `Correlation ${data.correlation}`
       : 'Medium'
+  } else if (name === 'search_timeline' || data.times != null || result.times != null) {
+    const rawTimes = data.times || result.times || []
+    const times = []
+    for (const t of rawTimes) {
+      const n = Number(t)
+      if (Number.isFinite(n)) times.push(n)
+    }
+    const query = String(data.query || result.query || '').trim()
+    payload.conclusion = String(
+      result.message
+      || data.message
+      || (times.length ? `${times.length} timeline hit(s)` : 'No timeline hits'),
+    )
+    payload.evidence = times.slice(0, 20).map((t) => ({
+      label: query ? `timeline: ${query}` : 'timeline hit',
+      time: Number.isInteger(t) ? Math.trunc(t) : t,
+    }))
+    payload.confidence = String(data.confidence || 'Medium')
   } else if (name === 'detect_priority_inversion' || data.inversions != null) {
     const inversions = (data.inversions || []).filter(inv => inv && typeof inv === 'object')
     const task = String(data.task || '')
@@ -862,7 +922,12 @@ export function mergeEvidencePanelPayload(prev, next) {
     'alternatives', 'hypotheses', 'hypotheses_managed', 'root_cause_chain',
     'finding', 'subtitle',
   ]) {
-    if (!out[key] && prev[key]) out[key] = prev[key]
+    // Match Python falsy lists/strings: empty [] must not wipe prior alts.
+    const cur = out[key]
+    const missing = cur == null
+      || (Array.isArray(cur) && cur.length === 0)
+      || (typeof cur === 'string' && !String(cur).trim())
+    if (missing && prev[key]) out[key] = prev[key]
   }
   return refreshEvidencePanelScores(out)
 }
@@ -2282,7 +2347,12 @@ export function computeEvidenceScore(evidence = [], {
 
   const untested = alts.filter(a => {
     const s = String(a.status || '').toLowerCase()
-    return s === 'untested' || s === 'needs_evidence' || s === 'need_evidence'
+    return (
+      s === 'untested'
+      || s === 'need_evidence'
+      || s === 'needs_evidence'
+      || s === ''
+    )
   })
   if (untested.length) {
     const penalty = Math.min(15, 5 * untested.length)

@@ -805,16 +805,16 @@ class AiPanelUiTests(unittest.TestCase):
         from btf_viewer_pkg.ai_assistant import qt_wrap_tooltip
 
         long_tip = (
-            "Walk through the Analysis Findings in the context. For each finding, "
-            "state its severity, what it means for this RTOS/SMP system, and which "
-            "Statistics section or timeline check to open next."
+            "Summarize up to three actionable Analysis Findings in severity order. "
+            "For each, state the observed issue, strongest evidence, and one "
+            "relevant Statistics page or timeline check."
         )
         wrapped = qt_wrap_tooltip(long_tip)
         self.assertTrue(wrapped.startswith("<html>"))
         self.assertIn('width="320"', wrapped)
         # One paragraph: no forced <br/> (Qt wraps on words inside the cell).
         self.assertNotIn("<br/>", wrapped)
-        self.assertIn("finding,", wrapped)
+        self.assertIn("Findings", wrapped)
         two = qt_wrap_tooltip("First sentence.\nSecond sentence.")
         self.assertIn("First sentence.<br/>Second sentence.", two)
 

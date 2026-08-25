@@ -19,6 +19,7 @@ from btf_viewer_pkg.ai_case import (  # noqa: E402
     clamp_ai_split_bottom,
     compact_chat_history,
     compact_findings_text,
+    focus_titles_from_summary,
     compact_tool_result_payload,
     compute_evidence_quality,
     dump_user_investigation_templates,
@@ -124,6 +125,26 @@ class InvestigationCaseTests(unittest.TestCase):
             ),
             "compare",
         )
+        self.assertEqual(
+            investigation_guide_stage(
+                None,
+                plan={
+                    "goal": "Report",
+                    "steps": [
+                        {"id": "generate_report", "status": "pending"},
+                        {"id": "export_report", "status": "pending"},
+                    ],
+                },
+            ),
+            "report",
+        )
+        balanced_report = tool_names_for_context_mode("balanced", "report")
+        self.assertIn("generate_report", balanced_report)
+        self.assertIn("export_report", balanced_report)
+        report_prompt = investigation_mode_prompt("report")
+        self.assertIn("generate_report", report_prompt)
+        self.assertIn("export_report", report_prompt)
+        self.assertIn("Saving the file is required", report_prompt)
         card = investigation_issue_card({
             "finding": {"title": "Queue bounce", "task": "CS[1]"},
             "evidence_quality": {"band": "medium-high"},
@@ -253,6 +274,10 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertIn("search_timeline", compact_tools)
         self.assertNotIn("what_if", compact_tools)
         self.assertIsNone(tool_names_for_context_mode("full", "triage"))
+        balanced_triage = tool_names_for_context_mode("balanced", "triage")
+        self.assertNotIn("what_if", balanced_triage)
+        self.assertNotIn("export_report", balanced_triage)
+        self.assertIn("challenge_conclusion", balanced_triage)
         report_tools = tool_names_for_context_mode("compact", "report")
         self.assertIn("generate_report", report_tools)
         self.assertIn("export_report", report_tools)
@@ -316,6 +341,14 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertIn("q2", users)
         self.assertIn("q3", users)
         self.assertNotIn("q1", users)
+        self.assertEqual(
+            focus_titles_from_summary("Focus: CS[22] stall\nTools: investigate"),
+            ["CS[22] stall"],
+        )
+        deduped = compact_findings_text(
+            findings, "balanced", exclude_titles=["Critical stall"])
+        self.assertNotIn("Critical stall", deduped)
+        self.assertIn("Thrash", deduped)
 
     def test_falsify_migration(self) -> None:
         f = falsification_checks({
@@ -389,6 +422,9 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertIn("correlate_events", prompt)
         self.assertIn("rank_root_causes", prompt)
         self.assertIn("challenge_conclusion", prompt)
+        self.assertIn("Preferred tools:", prompt)
+        self.assertNotIn("Call these tools in order", prompt)
+        self.assertIn("manage_hypotheses only when a hypothesis status changes", prompt)
         tpl = new_user_investigation_template(
             "CPU Latency", ["detect_anomalies", "investigate"])
         dumped = dump_user_investigation_templates([tpl])

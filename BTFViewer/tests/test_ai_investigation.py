@@ -412,6 +412,15 @@ class AiInvestigationTests(unittest.TestCase):
         self.assertTrue(any("untested" in l for l in labels))
         self.assertTrue(any("Missing direct evidence" in l for l in labels))
 
+    def test_compute_evidence_score_need_evidence_aliases(self) -> None:
+        for status in ("need_evidence", "needs_evidence", ""):
+            result = compute_evidence_score(
+                [{"label": "blocking: wait", "time": 100}],
+                alternatives=[{"status": status}],
+                evidence_chain="Finding → blocking",
+            )
+            self.assertEqual(result["score"], 60, status)
+
     def test_compute_evidence_score_partial_evidence(self) -> None:
         result = compute_evidence_score(
             [{"label": "evidence", "time": 500}],
@@ -906,6 +915,7 @@ class AiInvestigationTests(unittest.TestCase):
                 "find_critical_path",
                 "detect_priority_inversion",
                 "compare_performance",
+                "search_timeline",
                 "explain_finding",
                 "interpret_query",
                 "validate_experiment",
@@ -1014,6 +1024,43 @@ class AiInvestigationTests(unittest.TestCase):
         self.assertTrue(
             any(e.get("time") is not None for e in (merged.get("evidence") or []))
         )
+
+    def test_merge_evidence_panel_payload_keeps_empty_alts_from_prev(self) -> None:
+        from btf_viewer_pkg.ai_investigation import merge_evidence_panel_payload
+
+        prev = extract_evidence_panel_payload("investigate", {
+            "ok": True,
+            "data": {
+                "finding": {
+                    "title": "Stall",
+                    "evidence": [{"label": "blocking: wait", "time": 100}],
+                },
+                "alternatives": [{"status": "need_evidence", "hypothesis": "alt"}],
+            },
+        })
+        late = extract_evidence_panel_payload("challenge_conclusion", {
+            "ok": True,
+            "message": "Challenge: conclusion holds",
+            "data": {"verdict": "Confirmed", "confidence": "High", "alternatives": []},
+        })
+        merged = merge_evidence_panel_payload(prev, late)
+        self.assertEqual(len(merged.get("alternatives") or []), 1)
+
+    def test_elevate_guide_stage_for_auto_investigate(self) -> None:
+        from btf_viewer_pkg.ai_investigation import elevate_guide_stage_for_template
+        from btf_viewer_pkg.ai_case import tool_names_for_context_mode
+
+        self.assertEqual(
+            elevate_guide_stage_for_template("triage", "auto_investigate"),
+            "investigate",
+        )
+        names = tool_names_for_context_mode(
+            "balanced",
+            elevate_guide_stage_for_template("triage", "auto_investigate"),
+        )
+        self.assertIn("correlate_events", names)
+        self.assertIn("find_critical_path", names)
+        self.assertIn("verify_claim", names)
 
     def test_detect_priority_inversion_feeds_evidence_panel(self) -> None:
         from btf_viewer_pkg.ai_investigation import EVIDENCE_PANEL_TOOLS

@@ -17,7 +17,7 @@
       "peakPri": 4,
       "episodeCount": 3,
       "totalBoostNs": 102404,
-      "pattern": "Mutex inherit"
+      "pattern": "Mutex inherit + L/M/H"
     }
   ],
   "lifecycle": [

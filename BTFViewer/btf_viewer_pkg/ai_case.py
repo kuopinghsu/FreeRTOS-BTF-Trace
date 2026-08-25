@@ -151,6 +151,21 @@ AI_CONTEXT_MODE_SETTINGS_LINES: Dict[str, str] = {
         "Full evidence — complete Findings, tools, and history."
     ),
 }
+
+AI_CONTEXT_PROMPTS: Dict[str, str] = {
+    AI_CONTEXT_MODE_COMPACT: "MODE: COMPACT\n- Fast triage; target 250\u2013500 answer tokens.\n- Use the scope summary and up to three actionable findings.\n- Use at most two evidence calls unless the user requests more work.\n- Do not run planning, graphs, simulation, optimization, memory, clustering, or\n  reports unless requested.\n- Preserve viewer state. Do not create diagrams unless requested.\n- If evidence is insufficient, return Inconclusive and name what is missing.\n- Still include concrete Evidence (names, values with units, jump:TIME when\n  known). Do not answer with a one-line summary only.\n- Output: Assessment; Evidence; Confidence/quality; Next check.",
+    AI_CONTEXT_MODE_BALANCED: "MODE: BALANCED\n- Default mode; target 600\u20131200 answer tokens.\n- Use relevant scoped findings and tables; fetch exact evidence when needed.\n- Test the leading explanation and one credible alternative.\n- Prefer at most four evidence calls for ad-hoc questions. Follow Preferred tools\n  on Start Investigation / template workflows even when that needs more calls.\n  Exceed the preference whenever another result could change the verdict.\n  Verify before a High-confidence causal conclusion.\n- Change viewer state only for an explicit action or a workflow that promises to\n  focus evidence.\n- Use one small diagram only when it materially improves understanding.\n- Write a full engineering answer: Verdict; Evidence with jump:TIME / values;\n  Interpretation; Alternative/falsification; Confidence/quality/coverage;\n  Next action. Do not over-compress into a stub.",
+    AI_CONTEXT_MODE_FULL: "MODE: FULL EVIDENCE\n- Use all relevant scoped evidence and compact investigation history.\n- Rank hypotheses for broad questions; skip planning for an explicit finding,\n  task, and window.\n- Build causal or dependency chains only as far as evidence supports.\n- Examine contradictions and credible alternatives. Assess sufficiency before\n  opening another branch; stop when more tools will not change the verdict.\n- Verify and challenge before a High-confidence root-cause conclusion.\n- Distinguish observed, derived, heuristic, and simulated results.\n- Preserve unrelated viewer marks. Use diagrams only for supported relationships.\n- State each material fact once. Return Inconclusive when evidence remains\n  incomplete or contradictory.\n- Target a thorough write-up (about 1000\u20132000 answer tokens) when evidence\n  supports it. Output: Scope; Verdict; Evidence chain with times/values;\n  Contradictions/alternatives; Root cause or leading explanation;\n  Confidence/quality/coverage; Requested mitigation; Next verification;\n  Viewer changes.",
+}
+
+AI_LANGUAGE_PROMPT_TEMPLATE = "Always write your entire reply in {language}.\nWrite the complete user-facing reply in {language}. Preserve task names, core\nnames, UI labels, tool names, metric identifiers, jump:TIME, range:LO/HI, code,\nand file formats. Do not translate trace identifiers."
+AI_LANGUAGE_TRADITIONAL_CHINESE_NOTE = "Use natural Traditional Chinese and terminology customary in Taiwan.\nDo not switch to English or Simplified Chinese for the prose answer."
+AI_LANGUAGE_SIMPLIFIED_CHINESE_NOTE = "Use natural Simplified Chinese. Do not switch to English or Traditional Chinese for the prose answer."
+AI_LANGUAGE_KOREAN_NOTE = (
+    "Use natural Korean Hangul (한국어). Do not switch to English or Chinese "
+    "for the prose answer."
+)
+
 # Stage-only tool names for Compact; Balanced adds neighbours + extras.
 AI_CONTEXT_STAGE_TOOLS: Dict[str, Tuple[str, ...]] = {
     "triage": ("detect_anomalies", "cluster_findings", "suggest_scope"),
@@ -166,7 +181,7 @@ AI_CONTEXT_ALWAYS_TOOLS: Tuple[str, ...] = (
 )
 AI_CONTEXT_BALANCED_EXTRA_TOOLS: Tuple[str, ...] = (
     "detect_anomalies", "investigate", "set_cursors", "zoom_to_range",
-    "highlight_task", "challenge_conclusion", "what_if",
+    "highlight_task", "challenge_conclusion",
 )
 _CONTEXT_TOOL_ROW_KEYS: Tuple[str, ...] = (
     "rows", "episodes", "slices", "events", "gaps", "hits", "times",
@@ -181,6 +196,8 @@ def normalize_ai_context_mode(value: Any) -> str:
     raw = str(value or "").strip().lower().replace("-", " ").replace("_", " ")
     if raw in ("compact", "reduced", "reduce", "low"):
         return AI_CONTEXT_MODE_COMPACT
+    if raw in ("balanced", "balance", "medium", "default balanced"):
+        return AI_CONTEXT_MODE_BALANCED
     if raw in ("full", "full evidence", "fullevidence", "complete", "max"):
         return AI_CONTEXT_MODE_FULL
     return DEFAULT_AI_CONTEXT_MODE
@@ -235,28 +252,29 @@ def ai_context_limits(mode: Any = None) -> Dict[str, Any]:
 
 
 def context_mode_system_addendum(mode: Any = None) -> str:
-    """Extra system-prompt rules for the selected context mode."""
+    """Context-mode system prompt block (AI_CONTEXT_PROMPTS)."""
     key = normalize_ai_context_mode(mode)
-    keep = (
-        "Never omit jump:TIME, range:LO/HI, real task names, measurements "
-        "with units, confidence, evidence quality, what-if disclaimers, or "
-        "at least one alternative / falsification."
-    )
-    if key == AI_CONTEXT_MODE_COMPACT:
-        return (
-            " Context mode is Compact: keep the reply around 300–500 tokens. "
-            "Generate mermaid diagrams only if the user asks. " + keep
+    return AI_CONTEXT_PROMPTS.get(key, AI_CONTEXT_PROMPTS[DEFAULT_AI_CONTEXT_MODE])
+
+
+def ai_language_prompt(language: Any = None) -> str:
+    """Reply-language instruction for every Settings language."""
+    lang = str(language or "English").strip() or "English"
+    text = AI_LANGUAGE_PROMPT_TEMPLATE.replace("{language}", lang).rstrip()
+    low = lang.lower()
+    if "traditional chinese" in low or "繁體" in lang or "繁体" in lang:
+        text = text + "\n" + AI_LANGUAGE_TRADITIONAL_CHINESE_NOTE.rstrip()
+    elif "simplified chinese" in low or "简体" in lang or "簡體" in lang:
+        text = text + "\n" + AI_LANGUAGE_SIMPLIFIED_CHINESE_NOTE.rstrip()
+    elif "한국" in lang or "korean" in low:
+        text = text + "\n" + AI_LANGUAGE_KOREAN_NOTE.rstrip()
+    elif low not in ("english",):
+        text = (
+            text
+            + f"\nDo not answer in English unless the user explicitly asks for English. "
+            + f"All headings, bullets, and explanations must be in {lang}."
         )
-    if key == AI_CONTEXT_MODE_FULL:
-        return (
-            " Context mode is Full evidence: you may use the complete Findings, "
-            "tools, and history. Include mermaid when it clarifies a sequence "
-            "or migration. " + keep
-        )
-    return (
-        " Context mode is Balanced: prefer concise evidence-backed answers. "
-        "Include mermaid when it clarifies a sequence or migration. " + keep
-    )
+    return text
 
 
 def _stage_tool_names(stage: Any) -> Tuple[str, ...]:
@@ -297,7 +315,15 @@ def tool_names_for_context_mode(
             if idx + 1 < len(GUIDED_STAGES):
                 _add(_stage_tool_names(GUIDED_STAGES[idx + 1]))
         _add(AI_CONTEXT_BALANCED_EXTRA_TOOLS)
-        _add(AI_CONTEXT_STAGE_TOOLS["report"])
+        # Report/export only for report stage (or when a neighbour is report).
+        if sid == "report":
+            _add(AI_CONTEXT_STAGE_TOOLS["report"])
+        elif sid in GUIDED_STAGES:
+            idx = list(GUIDED_STAGES).index(sid)
+            for j in (idx - 1, idx + 1):
+                if 0 <= j < len(GUIDED_STAGES) and GUIDED_STAGES[j] == "report":
+                    _add(AI_CONTEXT_STAGE_TOOLS["report"])
+                    break
     return names
 
 
@@ -376,19 +402,59 @@ def _finding_blocks(text: str) -> Tuple[str, List[Dict[str, str]]]:
     return header, items
 
 
+
+def focus_titles_from_summary(summary: Any = "") -> List[str]:
+    """Titles from ``Focus: …`` lines in an investigation summary (for dedupe)."""
+    out: List[str] = []
+    for line in str(summary or "").splitlines():
+        raw = line.strip()
+        if raw.lower().startswith("focus:"):
+            title = raw.split(":", 1)[1].strip()
+            if title:
+                out.append(title)
+    return out
+
+
 def compact_findings_text(
     text: Any,
     mode: Any = None,
     findings: Optional[Sequence[dict]] = None,
+    *,
+    exclude_titles: Optional[Sequence[str]] = None,
 ) -> str:
-    """Keep the most important Findings for the selected context mode."""
+    """Keep the most important Findings for the selected context mode.
+
+    *exclude_titles*: drop findings already named in an investigation summary
+    (``Focus: …``) so the same issue is not resent twice (§9 light dedupe).
+    """
     limits = ai_context_limits(mode)
     cap = limits.get("findings")
     raw = str(text or "").rstrip()
+    exclude = {
+        str(x or "").strip().lower()
+        for x in (exclude_titles or ())
+        if str(x or "").strip()
+    }
     if cap is None or not raw:
         return raw
     header, items = _finding_blocks(raw)
     if items:
+        if exclude:
+            filtered = []
+            for it in items:
+                block = it["block"]
+                head = block.splitlines()[0] if block else ""
+                # "1. [WARNING] id=x Title" or "1. [WARNING] Title"
+                title = head
+                m = re.match(r"^\d+\. \[[A-Z]+\](?: id=\S+)?\s*(.*)$", head)
+                if m:
+                    title = m.group(1).strip()
+                fid_m = re.search(r"\bid=(\S+)", head)
+                fid = fid_m.group(1) if fid_m else ""
+                if title.lower() in exclude or fid.lower() in exclude:
+                    continue
+                filtered.append(it)
+            items = filtered or items
         ranked = sorted(
             enumerate(items),
             key=lambda row: (_SEV_CONTEXT_RANK.get(row[1]["sev"], 3), row[0]),
@@ -411,6 +477,12 @@ def compact_findings_text(
         ranked: List[Tuple[Any, ...]] = []
         for i, finding in enumerate(findings):
             if not isinstance(finding, dict):
+                continue
+            title = str(finding.get("title") or "").strip()
+            fid = str(finding.get("id") or "").strip()
+            if exclude and (
+                title.lower() in exclude or fid.lower() in exclude
+            ):
                 continue
             sev = str(finding.get("severity") or "info").lower()
             ranked.append((_SEV_CONTEXT_RANK.get(sev, 3), i, finding))
@@ -623,6 +695,11 @@ def investigation_guide_stage(
     has_plan = isinstance(plan, dict) and bool(plan.get("steps") or plan.get("goal"))
     if not has_payload and not has_plan:
         return "idle"
+    # Report mode plans list generate_report / export_report. Map those onto the
+    # report tool stage so Balanced/Compact include export_report (GUIDED_STAGES
+    # has no "report" chip, but stage selection still drives the tool catalog).
+    if "generate_report" in tools or "export_report" in tools:
+        return "report"
     quality = ""
     if has_payload:
         q = payload.get("evidence_quality") or {}
@@ -1148,7 +1225,9 @@ def compute_evidence_quality(
     has_metric = bool(chks)
     untested = [
         a for a in alts
-        if str(a.get("status") or "").lower() in ("untested", "need_evidence", "")
+        if str(a.get("status") or "").lower() in (
+            "untested", "need_evidence", "needs_evidence", "",
+        )
     ]
     alt_mark = "yes" if alts and not untested else ("partial" if alts else "no")
     band = evidence_quality_band(score)
@@ -1783,13 +1862,23 @@ INVESTIGATION_MODE_LABELS: Dict[str, str] = {
 def investigation_mode_prompt(mode: str = "diagnose") -> str:
     """User prompt for an Investigation Mode chip (maps onto existing tools)."""
     plan = investigation_mode_plan(mode)
-    listed = " → ".join(str(t) for t in (plan.get("tools") or []) if t)
+    listed = "; ".join(str(t) for t in (plan.get("tools") or []) if t)
     label = INVESTIGATION_MODE_LABELS.get(plan["mode"], plan["mode"])
+    if plan["mode"] == "report":
+        return (
+            f"{plan.get('goal') or label}. Call generate_report, then "
+            "export_report (format html unless the user asked for csv). "
+            "Include only supported sections and mark missing requested "
+            "evidence as Not evaluated. Saving the file is required — do not "
+            "stop after generate_report alone."
+        )
     return (
-        f"{plan.get('goal') or label}. Call these tools in order: {listed}. "
-        "After each tool, update hypotheses with manage_hypotheses when the "
-        "status changes. Finish with a verdict, jump:TIME evidence, "
-        "what would disprove this, confidence, and one next check."
+        f"{plan.get('goal') or label}. Preferred tools: {listed}. "
+        "Start with the first applicable tool, then continue only if another "
+        "result could change the verdict. Do not call unavailable or irrelevant "
+        "tools. Call manage_hypotheses only when a hypothesis status changes. "
+        "Finish with a verdict, jump:TIME evidence, what would disprove this, "
+        "confidence, and one next check."
     )
 
 
@@ -2163,12 +2252,14 @@ def investigation_template_prompt(template: Optional[dict] = None) -> str:
     tpl = template if isinstance(template, dict) else {}
     label = str(tpl.get("label") or "Investigation")
     steps = [str(s) for s in (tpl.get("steps") or []) if s]
-    listed = " → ".join(steps) if steps else "investigate"
+    listed = "; ".join(steps) if steps else "investigate"
     return (
-        f"Run the {label}. Call these tools in order: {listed}. "
-        "After each tool, update hypotheses with manage_hypotheses when the "
-        "status changes. Finish with a verdict, jump:TIME evidence, "
-        "what would disprove this, confidence, and one next check."
+        f"Run the {label}. Preferred tools: {listed}. "
+        "Start with the first applicable tool, then continue only if another "
+        "result could change the verdict. Do not call unavailable or irrelevant "
+        "tools. Call manage_hypotheses only when a hypothesis status changes. "
+        "Finish with a verdict, jump:TIME evidence, what would disprove this, "
+        "confidence, and one next check."
     )
 
 
