@@ -44,6 +44,12 @@ import {
   aiPresetDisplayLabel,
 } from './aiClient.js'
 import {
+  CI_SPLIT_RATIO,
+  CI_TREE_COL_MIN,
+  CI_TREE_NUM_W,
+  corridorTreeColDefaults,
+} from './migrationAnalysis.js'
+import {
   dumpUserHistoricalKnowledge,
   dumpUserInvestigationTemplates,
   parseUserHistoricalKnowledge,
@@ -108,6 +114,8 @@ export const DEFAULT_SETTINGS = {
   aiExtraPresets: [],
   /** Step 3: dismissible first-run guidance banner. */
   firstRunDismissed: false,
+  inspectorSplit: [...CI_SPLIT_RATIO],
+  inspectorTreeCols: corridorTreeColDefaults(),
 }
 
 /** Per-preset AI fields, migrating any pre-preset settings on the way. */
@@ -208,7 +216,26 @@ export function normalizeSettings(raw) {
     aiRedactTaskNames: !!s.aiRedactTaskNames,
     aiTraceSensitive: !!s.aiTraceSensitive,
     aiContextMode: normalizeAiContextMode(s.aiContextMode),
+    inspectorSplit: normalizeInspectorSplit(s.inspectorSplit),
+    inspectorTreeCols: normalizeInspectorTreeCols(s.inspectorTreeCols),
   }
+}
+
+/** Pane flex/pixel weights. Drag produces fractions; parseInt would reset to 1:2:1. */
+export function normalizeInspectorSplit(v) {
+  const fb = [...CI_SPLIT_RATIO]
+  if (!Array.isArray(v) || v.length !== 3) return fb
+  const out = v.map((n) => {
+    const x = Number(n)
+    return Number.isFinite(x) && x > 0 ? Math.min(8000, x) : 0
+  })
+  return out.every((n) => n > 0) ? out : fb
+}
+
+function normalizeInspectorTreeCols(v) {
+  const fb = corridorTreeColDefaults()
+  if (!Array.isArray(v) || v.length !== fb.length) return fb
+  return v.map((n, i) => clampInt(n, CI_TREE_COL_MIN, 800, fb[i] || CI_TREE_NUM_W))
 }
 
 export function loadSettings() {

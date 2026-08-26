@@ -56,6 +56,16 @@ describe('config.js is the single source of web defaults', () => {
     assert.equal(LOAD_ROW_CAP, STATS_TABLE_DISPLAY_ROW_CAP)
   })
 
+  it('keeps inspector pane split ratios including fractional flex', () => {
+    assert.deepEqual(DEFAULT_SETTINGS.inspectorSplit, [1, 2, 1])
+    const frac = normalizeSettings({ inspectorSplit: [0.8, 2.4, 0.8] })
+    assert.deepEqual(frac.inspectorSplit, [0.8, 2.4, 0.8])
+    const px = normalizeSettings({ inspectorSplit: [240, 480, 240] })
+    assert.deepEqual(px.inspectorSplit, [240, 480, 240])
+    const bad = normalizeSettings({ inspectorSplit: [1, 2] })
+    assert.deepEqual(bad.inspectorSplit, [1, 2, 1])
+  })
+
   it('persists statistics collapse with pins and section order', () => {
     // Step 1.1: factory default is all collapsed; SMP expand+pin is applied
     // via defaultStatsPresentation(trace) on open / Reset, not in DEFAULT_SETTINGS.

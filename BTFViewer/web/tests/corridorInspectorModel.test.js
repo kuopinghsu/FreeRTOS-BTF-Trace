@@ -25,6 +25,11 @@ import {
   inspectorViewportIsFull,
   INSPECTOR_FULL_VIEW_RATIO,
   netMigrationBalance,
+  CORRIDOR_TREE_COLS,
+  corridorTreeCell,
+  corridorTreeColDefaults,
+  CI_SPLIT_RATIO,
+  scaleSplitSizes,
   CHORD_TAPER_DEST_RATIO,
   CHORD_GRAD_SOURCE_STOP,
 } from '../src/utils/migrationAnalysis.js'
@@ -68,6 +73,38 @@ describe('defaultCorridorTopN', () => {
     assert.equal(defaultCorridorTopN(2), 0)
     assert.equal(defaultCorridorTopN(8), 0)
     assert.equal(defaultCorridorTopN(9), 10)
+  })
+})
+
+describe('corridorTreeCell', () => {
+  it('formats Sort by metrics for path, task, and group rows', () => {
+    assert.deepEqual(CORRIDOR_TREE_COLS.map((c) => c.key), [
+      'label', 'rate', 'count', 'pingpong', 'dwell', 'handoff', 'net', 'share',
+    ])
+    assert.deepEqual(CORRIDOR_TREE_COLS.map((c) => c.label), [
+      'Core path', 'Rate', 'Count', 'Ping',
+      'Dwell', 'Handoff', 'Net', 'Share',
+    ])
+    assert.deepEqual(CI_SPLIT_RATIO, [1, 2, 1])
+    assert.equal(corridorTreeColDefaults()[0], 140)
+    const sizes = scaleSplitSizes([1, 2, 1], 800, [100, 100, 100])
+    assert.equal(sizes.length, 3)
+    assert.equal(sizes.reduce((a, b) => a + b, 0), 800)
+    assert.ok(sizes[1] > sizes[0])
+    assert.equal(sizes[0], sizes[2])
+    const row = {
+      label: 'c0→c1', count: 12, ratePerS: 3.5,
+      pingPongPct: 40, shortDwellShare: 25,
+      handoffPct: 15, net: -3,
+      primaryTask: { sharePct: 80 },
+    }
+    assert.equal(corridorTreeCell(row, 'rate'), '3.5/s')
+    assert.equal(corridorTreeCell(row, 'pingpong'), '40%')
+    assert.equal(corridorTreeCell(row, 'dwell'), '25%')
+    assert.equal(corridorTreeCell(row, 'net'), '-3 ▼')
+    assert.equal(corridorTreeCell(row, 'share'), '80%')
+    assert.equal(corridorTreeCell({ count: 4, sharePct: 50 }, 'share', 'task'), '50%')
+    assert.equal(corridorTreeCell({ label: 'from c0', count: 9 }, 'rate', 'group'), '—')
   })
 })
 
@@ -232,6 +269,16 @@ describe('buildCorridorInspectorModel', () => {
     assert.ok(half.corridors.length <= model.allCorridors.length)
     const sorted = applyCorridorSort(model, 'rate')
     assert.ok(sorted.corridors[0].count >= sorted.corridors[sorted.corridors.length - 1].count)
+    const byCount = applyCorridorSort(model, 'count')
+    assert.ok(byCount.corridors[0].count >= byCount.corridors[byCount.corridors.length - 1].count)
+    const byCountAsc = applyCorridorSort(model, 'count', false)
+    assert.ok(byCountAsc.corridors[0].count <= byCountAsc.corridors[byCountAsc.corridors.length - 1].count)
+    const byNet = applyCorridorSort(model, 'net')
+    assert.ok((byNet.corridors[0].net || 0) >= (byNet.corridors[byNet.corridors.length - 1].net || 0))
+    const byLabel = applyCorridorSort(model, 'label', false)
+    const labels = byLabel.corridors.map(c => c.label)
+    const sortedLabels = [...labels].sort((a, b) => String(a).localeCompare(String(b)))
+    assert.deepEqual(labels, sortedLabels)
   })
 
   it('applies topPct filtering', () => {
@@ -404,7 +451,6 @@ describe('inspectorViewportBanner', () => {
     assert.match(statsPy, /"Full Trace"/)
     assert.match(statsPy, /"Viewport"/)
     assert.match(statsPy, /"Cursor C1/)
-    assert.match(statsPy, /Place at least two cursors/)
     assert.match(statsPy, /Investigate with AI/)
     assert.match(statsPy, /Handoff suspects only/)
     assert.match(statsPy, /"Topology"/)
@@ -427,7 +473,28 @@ describe('inspectorViewportBanner', () => {
     assert.match(statsPy, /_matrix_pad_t/)
     assert.match(ciVue, /inspectorAnalysisScope\(/)
     assert.match(ciVue, /Analysis Scope/)
-    assert.match(ciVue, /Place at least two cursors/)
+    assert.doesNotMatch(ciVue, /ci-scope-hint/)
+    assert.doesNotMatch(ciVue, /Place at least two cursors/)
+    assert.doesNotMatch(statsPy, /_sync_scope_hint/)
+    assert.doesNotMatch(statsPy, /_CI_SCOPE_HINT_MIN_DLG_W/)
+    assert.match(statsPy, /class _CiComboBox/)
+    assert.match(statsPy, /def _ci_combo_menu_qss/)
+    assert.match(statsPy, /def _ci_make_popup_menu/)
+    assert.match(statsPy, /_sev_combo = _CiComboBox\(\)/)
+    assert.match(statsPy, /_style_inspector_field\(combo\)/)
+    assert.match(statsPy, /def showPopup/)
+    assert.match(statsPy, /menu\.popup\(/)
+    assert.match(statsPy, /_pin_inspector_bounce/)
+    assert.match(ciVue, /persistInspectorLayout\(true\)/)
+    assert.match(ciVue, /ci-field-dir/)
+    assert.match(ciVue, /min-width: 108px/)
+    assert.match(statsPy, /_pin_inspector_combo\(self\._dir_combo, 108\)/)
+    assert.match(ciVue, /overflow-x: auto/)
+    assert.match(statsPy, /_pin_inspector_label/)
+    assert.match(statsPy, /ciToolbarScroll/)
+    assert.match(statsPy, /_CI_TOOLBAR_H = _CI_FIELD_H \+ 2 \* _CI_TOOLBAR_PAD/)
+    assert.match(ciVue, /min-height: 26px/)
+    assert.match(ciVue, /padding: 2px 0/)
     assert.match(ciVue, /Investigate with AI/)
     assert.match(ciVue, /Handoff suspects only/)
     assert.match(ciVue, /Filter paths by task name or ID/)
@@ -438,7 +505,15 @@ describe('inspectorViewportBanner', () => {
     assert.ok(ciVue.indexOf('ci-filter-status') < ciVue.indexOf('ci-workspace'))
     assert.ok(ciVue.indexOf('ci-tree-pane') < ciVue.indexOf('ci-grid-pane'))
     assert.ok(ciVue.indexOf('ci-grid-pane') < ciVue.indexOf('ci-right-pane'))
-    assert.match(ciVue, /class="app-close-x"/)
+    assert.match(ciVue, /onHeadClick\(col.key\)/)
+    assert.match(ciVue, /toggleTreeSort\(key\)/)
+    assert.match(ciVue, /corridorTreeCell/)
+    assert.match(statsPy, /_on_tree_header_clicked/)
+    assert.match(statsPy, /_TREE_SORT_COLS = tuple\(k for k, _lab in _CORRIDOR_TREE_COLS\)/)
+    assert.match(statsPy, /sectionClicked.connect\(self._on_tree_header_clicked\)/)
+    assert.match(ciVue, /ci-col-resizer/)
+    assert.match(ciVue, /ci-split-handle/)
+    assert.match(statsPy, /ResizeMode.Interactive/)
     assert.match(appVue, /\.trace-tab-close,\s*\n\.app-close-x \{/)
     assert.match(ciVue, /flex-wrap: nowrap/)
     assert.match(ciVue, /evidenceLinesText/)
@@ -480,9 +555,13 @@ describe('inspectorViewportBanner', () => {
     assert.match(ciVue, /\.ci-show-all:disabled/)
     assert.match(ciVue, /\.ci-jump:disabled/)
     assert.match(statsPy, /#ciFilterBar/)
-    assert.match(ciVue, /ci-field-sort/)
-    assert.match(ciVue, /min-width: 148px/)
+    assert.doesNotMatch(ciVue, /ci-field-sort/)
+    assert.match(ciVue, /ci-split-handle/)
     assert.match(ciVue, /grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/)
+    assert.match(ciVue, /const nLab = Math.max\(2, Math.min\(7/)
+    assert.match(statsPy, /n_lab = max\(2, min\(7/)
+    assert.match(statsPy, /setStretchFactor\(1, 2\)/)
+    assert.match(statsPy, /_apply_split_layout/)
     assert.doesNotMatch(ciVue, /ci-overview-concern/)
     assert.match(statsPy, /grid.addWidget\(self\._ov_mig, 0, 2\)/)
     assert.match(statsPy, /self\._ov_headline.setWordWrap\(False\)/)
@@ -501,7 +580,7 @@ describe('inspectorViewportBanner', () => {
     assert.match(statsPy, /combo_view/)
     assert.match(statsPy, /def _ci_combo_widget_qss/)
     assert.match(statsPy, /QAbstractItemView::item:hover/)
-    assert.match(statsPy, /setMinimumWidth\(148\)/)
+    assert.match(statsPy, /setStretchFactor\(0, 1\)/)
     assert.match(statsPy, /grid.setColumnStretch\(0, 1\)/)
     assert.match(statsPy, /self\._ov_scope.setWordWrap\(False\)/)
     assert.match(statsPy, /#ciOverview \{/)

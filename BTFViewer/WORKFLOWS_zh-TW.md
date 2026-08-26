@@ -275,7 +275,7 @@ flowchart TD
 2. 在可能引發延遲的活動之前放置 **C1**。
 3. 在 `ControlTask` 完成或恢復之後放置 **C2**。其他游標可用來標示中間證據。
 4. 選取 **Fit Cursors**（`Ctrl+R`），顯示最早至最晚游標之間的範圍。
-5. 在 Statistics 啟用 **Limit to C1–Cn**（Desktop 與 Web 也會顯示橫幅：**Use C1–Cn as analysis Scope** → **Enable Limit to C1–Cn**）。
+5. 在 Statistics 啟用 **Limit to C1–Cn**、點選工具列 **C1–Cn** 狀態晶片，或使用橫幅：**Use C1–Cn as analysis Scope** → **Enable Limit to C1–Cn**。核取後晶片改為 Scope 色彩。
 6. 確認狀態列與 Statistics 標頭顯示 **Scope: C1–Cn · duration**。
 7. 再次檢查 **Filtered:** 指示，清除非預期的工作、核心或遷移篩選條件。
 8. 重新開啟 **Analysis**，讓 Findings 使用相同分析範圍。

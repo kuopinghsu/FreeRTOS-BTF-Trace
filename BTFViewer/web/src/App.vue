@@ -25,7 +25,9 @@
       :recording="demoRecording"
       :zoom-preset-value="zoomPresetValue"
       :zoom-preset-options="zoomPresetOptions"
+      :limit-on="limitOn"
       @update:model-value="onToolbarOptionsUpdate"
+      @toggle-limit="onToggleLimit"
       @file-error="onFileError"
       @trace-reading="onTraceReading"
       @trace-loaded="onTraceLoaded"
@@ -2973,6 +2975,8 @@ const traceInfo = computed(() => {
 
 const heatmapEnabled = computed(() => traceIsMultiCore(trace.value))
 const rangeEnabled = computed(() => getPlacedCursors(cursors.value).length >= 2)
+const limitOn = computed(() =>
+  !!(activeTab.value?.scopeToCursors && rangeEnabled.value))
 const zoomOutEnabled = computed(() => !!trace.value && zoomPresetValue.value !== 'fit')
 
 const analysisFindings = computed(() => {
@@ -3586,6 +3590,11 @@ function onSectionHeightsChange(v) {
 function onStatsScopeChange(v) {
   if (activeTab.value) activeTab.value.scopeToCursors = !!v
   scheduleSessionSave()
+}
+
+function onToggleLimit() {
+  if (!rangeEnabled.value) return
+  onStatsScopeChange(!limitOn.value)
 }
 
 function onStatsSectionCollapsedChange(v) {
@@ -6412,6 +6421,10 @@ watch(
   --badge-detail-bg: #303337;
   --badge-detail-fg: #C0C4C9;
   --badge-detail-border: #565B61;
+  /* Statistics Scope chip (dark) — lockstep with config.py stats_meta_chip_colors */
+  --badge-scope-fg: #9EC5E8;
+  --badge-scope-bg: #283A47;
+  --badge-scope-border: #3A6A8A;
 }
 
 .app:not(.dark),
@@ -6477,6 +6490,10 @@ body:has(.app:not(.dark)) {
   --badge-detail-bg: #ECEDEF;
   --badge-detail-fg: #656B72;
   --badge-detail-border: #C8CBD0;
+  /* Statistics Scope chip (light) — lockstep with config.py stats_meta_chip_colors */
+  --badge-scope-fg: #1A5276;
+  --badge-scope-bg: #D6EAF8;
+  --badge-scope-border: #85C1E9;
   /* Step 3 typography + semantic roles */
   --type-section: calc(var(--ui-font-size, 13px) * 1.05);
   --type-body: var(--ui-font-size, 13px);

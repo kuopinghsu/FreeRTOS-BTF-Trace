@@ -178,7 +178,7 @@ The toolbar groups related controls. Hover over an icon to see its name and shor
 | Investigation | **Find**, **Migration & Corridor Inspector**, **Analysis**, **Compare** | Locate evidence, inspect multicore movement, open findings, or compare a Baseline and Candidate |
 | Conditional controls | **All tasks**, **Log₂** | Clear an active Migration Filter, or change an expanded STI waveform between linear and logarithmic scaling |
 | Display | Light/dark theme | Switch the viewer theme without opening Settings |
-| Support | **Demo**, **Record**, **Settings**, **Help** | Load the bundled demo, record the current tab as WebM, configure the viewer, or open shortcuts and help |
+| Support | **C1–Cn**, **Demo**, **Record**, **Settings**, **Help** | Show whether Statistics is limited to C1–Cn (colour on vs off), load the bundled demo, record the current tab as WebM, configure the viewer, or open shortcuts and help |
 
 Select the application icon to open **About**. When the window is too narrow for every group, the toolbar moves groups into **More (⋯)** without changing their functions.
 
@@ -222,7 +222,7 @@ Cursors mark timestamps and can define a measurement Scope. BTFViewer supports f
 | Clear all cursors | Press `Shift+C` or Shift-right-click |
 | Snap to an event boundary | Shift-click |
 
-Place at least two cursors around the period you want to inspect. Enable **Limit to C1–Cn** in Statistics so calculations use the earliest–latest span. The status-bar Scope line updates immediately. **Fit Cursors** (`Ctrl+R`) displays only this period. **Save cursor range as BTF** exports it as a smaller trace.
+Place at least two cursors around the period you want to inspect. Enable **Limit to C1–Cn** in Statistics, from the toolbar **C1–Cn** chip, or from the command palette so calculations use the earliest–latest span. The chip uses the Scope colour when Limit is on and a muted colour when it is off. The status-bar Scope line updates immediately. **Fit Cursors** (`Ctrl+R`) displays only this period. **Save cursor range as BTF** exports it as a smaller trace.
 
 ### Marks, bookmarks, annotations, and Find
 

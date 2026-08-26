@@ -37,8 +37,10 @@ describe('domSelect', () => {
     const style = placeDomSelectList({ left: 40, top: 20, width: 160, bottom: 44 })
     assert.equal(style.position, 'fixed')
     assert.ok(Number(style.top.replace('px', '')) >= 44)
+    assert.equal(style.zIndex, '12050')
     assert.match(style.left, /^40px$/)
-    assert.match(style.width, /^160px$/)
+    assert.equal(style.minWidth, '160px')
+    assert.equal(style.width, 'max-content')
   })
 
   it('wires DomSelect into AI panel and documents tab-capture gap', () => {

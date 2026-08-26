@@ -9,7 +9,7 @@
 export function placeDomSelectList(rect, opts = {}) {
   const maxH = Number(opts.maxHeight) || 280
   const gap = Number(opts.gap) || 2
-  const zIndex = Number(opts.zIndex) || 2600
+  const zIndex = Number(opts.zIndex) || 12050
   const vw = typeof window !== 'undefined' ? window.innerWidth : 1024
   const vh = typeof window !== 'undefined' ? window.innerHeight : 768
   const left = Math.max(8, Math.min(Math.round(rect.left), vw - 8))
@@ -22,7 +22,8 @@ export function placeDomSelectList(rect, opts = {}) {
     return {
       position: 'fixed',
       left: `${left}px`,
-      width: `${width}px`,
+      minWidth: `${width}px`,
+      width: 'max-content',
       bottom: `${Math.round(vh - rect.top + gap)}px`,
       maxHeight: `${Math.round(height)}px`,
       zIndex: String(zIndex),
@@ -31,7 +32,8 @@ export function placeDomSelectList(rect, opts = {}) {
   return {
     position: 'fixed',
     left: `${left}px`,
-    width: `${width}px`,
+    minWidth: `${width}px`,
+    width: 'max-content',
     top: `${Math.round(rect.bottom + gap)}px`,
     maxHeight: `${Math.round(height)}px`,
     zIndex: String(zIndex),

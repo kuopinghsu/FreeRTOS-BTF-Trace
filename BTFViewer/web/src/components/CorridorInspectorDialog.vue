@@ -64,22 +64,11 @@
             :options="analysisModeOptions"
           />
         </label>
-        <span
-          v-if="!analysisScope.canCursor"
-          class="ci-scope-hint"
-        >Place at least two cursors.</span>
         <label class="ci-field">
           Show
           <DomSelect
             v-model="topN"
             :options="topNOptions"
-          />
-        </label>
-        <label class="ci-field ci-field-sort">
-          Sort by
-          <DomSelect
-            v-model="sortBy"
-            :options="sortByOptions"
           />
         </label>
         <button
@@ -91,7 +80,7 @@
         >
           {{ bounceOnly ? 'Handoff suspects only' : 'All Migrations' }}
         </button>
-        <label class="ci-field">
+        <label class="ci-field ci-field-dir">
           Direction
           <DomSelect
             v-model="directionMode"
@@ -163,14 +152,35 @@
         </div>
         <div
           v-else
+          ref="mainRef"
           class="ci-main"
         >
-          <div class="ci-tree-pane">
-            <div class="ci-tree-head">
-              <span class="ci-col-name">Core path / Task</span>
-              <span class="ci-col-num">Migrations</span>
-              <span class="ci-col-num">Handoff</span>
-              <span class="ci-col-num">Net flow</span>
+          <div
+            class="ci-tree-pane"
+            :style="treePaneStyle"
+          >
+            <div
+              class="ci-tree-head"
+              :style="{ gridTemplateColumns: treeGridCols }"
+            >
+              <div
+                v-for="(col, i) in treeCols"
+                :key="col.key"
+                class="ci-head-cell"
+                :class="col.key === 'label' ? 'ci-col-name' : 'ci-col-num'"
+              >
+                <button
+                  type="button"
+                  :class="treeSortClass(col.key)"
+                  :title="col.tip || ('Sort by ' + col.label)"
+                  @click="onHeadClick(col.key)"
+                >{{ col.label }}</button>
+                <span
+                  class="ci-col-resizer"
+                  title="Resize column"
+                  @pointerdown.stop.prevent="startColResize($event, i)"
+                />
+              </div>
             </div>
             <div
               ref="treeScrollRef"
@@ -188,9 +198,11 @@
                     @click="toggleGroup(g.source)"
                   >
                     <span class="ci-col-name">{{ expandedGroups.has(g.source) ? '▼' : '▶' }} {{ g.label }}</span>
-                    <span class="ci-col-num">{{ fmtVol(g.count) }}</span>
-                    <span class="ci-col-num">—</span>
-                    <span class="ci-col-num">—</span>
+                    <span
+                      v-for="col in treeNumCols"
+                      :key="col.key"
+                      class="ci-col-num"
+                    >{{ corridorTreeCell(g, col.key, 'group') }}</span>
                   </button>
                   <template v-if="expandedGroups.has(g.source)">
                     <div
@@ -231,7 +243,16 @@
             </div>
           </div>
 
-          <div class="ci-grid-pane">
+          <div
+            class="ci-split-handle"
+            title="Resize panes"
+            @pointerdown.prevent="startPaneResize($event, 0)"
+          />
+
+          <div
+            class="ci-grid-pane"
+            :style="paneFlex(1)"
+          >
             <div class="ci-heatmap-meta">
               <div class="ci-axis-caption">
                 {{ heatmapTitle }}
@@ -274,7 +295,15 @@
               </div>
             </div>
           </div>
-          <div class="ci-right-pane">
+          <div
+            class="ci-split-handle"
+            title="Resize panes"
+            @pointerdown.prevent="startPaneResize($event, 1)"
+          />
+          <div
+            class="ci-right-pane"
+            :style="paneFlex(2)"
+          >
             <div class="ci-right-tabs">
               <button
                 type="button"
@@ -464,12 +493,20 @@ import {
   buildCorridorInspectorModel,
   buildCorridorOverview,
   CORRIDOR_HANDOFF_HATCH_PCT,
+  CORRIDOR_TREE_COLS,
+  CI_SPLIT_RATIO,
+  CI_SPLIT_PANE_MIN,
+  CI_TREE_COL_MIN,
+  corridorTreeCell,
+  corridorTreeColDefaults,
   defaultCorridorTopN,
   heatmapBinRange,
   inspectorAnalysisScope,
   traceHasCoreBounceHolds,
 } from '../utils/migrationAnalysis.js'
+import { sortHeaderClass } from '../utils/statsTableSort.js'
 import MiniChordPanel from './MiniChordPanel.vue'
+import { loadSettings, saveSettings } from '../utils/settingsStore.js'
 
 const CorridorRow = defineComponent({
   name: 'CorridorRow',
@@ -481,10 +518,9 @@ const CorridorRow = defineComponent({
   },
   emits: ['toggle', 'select', 'pick-task', 'show-events'],
   setup(props, { emit }) {
+    const numCols = CORRIDOR_TREE_COLS.filter((c) => c.key !== 'label')
     return () => {
       const c = props.corridor
-      const netStr = c.net > 0 ? `+${c.net} ▲` : c.net < 0 ? `${c.net} ▼` : '0'
-      const handoff = `${(c.handoffPct ?? c.bouncePct ?? 0).toFixed(0)}%`
       const rows = [
         h('button', {
           type: 'button',
@@ -503,9 +539,9 @@ const CorridorRow = defineComponent({
             }, props.expanded ? '▼' : '▶'),
             ` ${c.label}`,
           ]),
-          h('span', { class: 'ci-col-num' }, fmtVol(c.count)),
-          h('span', { class: 'ci-col-num' }, handoff),
-          h('span', { class: 'ci-col-num' }, netStr),
+          ...numCols.map((col) => h(
+            'span', { class: 'ci-col-num' }, corridorTreeCell(c, col.key),
+          )),
         ]),
       ]
       if (props.expanded) {
@@ -520,9 +556,11 @@ const CorridorRow = defineComponent({
             },
           }, [
             h('span', { class: 'ci-col-name' }, `    └── ${t.label}`),
-            h('span', { class: 'ci-col-num' }, fmtVol(t.count)),
-            h('span', { class: 'ci-col-num' }, `${(t.handoffPct ?? t.bouncePct ?? 0).toFixed(0)}%`),
-            h('span', { class: 'ci-col-num' }, `${t.sharePct.toFixed(0)}%`),
+            ...numCols.map((col) => h(
+              'span',
+              { class: 'ci-col-num' },
+              corridorTreeCell(t, col.key, 'task'),
+            )),
           ]))
         }
       }
@@ -530,11 +568,6 @@ const CorridorRow = defineComponent({
     }
   },
 })
-
-function fmtVol(n) {
-  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`
-  return String(n)
-}
 
 const props = defineProps({
   trace: { type: Object, required: true },
@@ -568,13 +601,149 @@ const topNOptions = [
   { value: 0, label: 'All paths' },
 ]
 const sortBy = ref('rate')
-const sortByOptions = [
-  { value: 'rate', label: 'Migration rate' },
-  { value: 'pingpong', label: 'Ping-pong' },
-  { value: 'dwell', label: 'Short dwell' },
-  { value: 'handoff', label: 'Handoff' },
-  { value: 'share', label: 'Task share' },
-]
+const sortDesc = ref(true)
+const treeCols = CORRIDOR_TREE_COLS
+const treeNumCols = CORRIDOR_TREE_COLS.filter((c) => c.key !== 'label')
+const TREE_SORT_COLS = CORRIDOR_TREE_COLS.map((c) => c.key)
+const paneFr = ref([...CI_SPLIT_RATIO])
+const treeColW = ref(corridorTreeColDefaults())
+const treeGridCols = computed(() => treeColW.value.map((w) => `${w}px`).join(' '))
+const treeMinWidth = computed(() => treeColW.value.reduce((a, b) => a + b, 0))
+const mainRef = ref(null)
+let _layoutSaveTimer = 0
+let _colDrag = null
+let _paneDrag = null
+let _ignoreHeadClick = false
+
+function paneFlex(i) {
+  return {
+    flexGrow: paneFr.value[i],
+    flexShrink: 1,
+    flexBasis: '0px',
+    minWidth: `${CI_SPLIT_PANE_MIN}px`,
+  }
+}
+
+const treePaneStyle = computed(() => ({
+  ...paneFlex(0),
+  '--ci-tree-cols': treeGridCols.value,
+  '--ci-tree-min': `${treeMinWidth.value}px`,
+}))
+
+function persistInspectorLayout(immediate = false) {
+  const write = () => {
+    const s = loadSettings()
+    s.inspectorSplit = [...paneFr.value]
+    s.inspectorTreeCols = [...treeColW.value]
+    saveSettings(s)
+  }
+  clearTimeout(_layoutSaveTimer)
+  if (immediate) {
+    write()
+    return
+  }
+  _layoutSaveTimer = window.setTimeout(write, 250)
+}
+
+function loadInspectorLayout() {
+  const s = loadSettings()
+  if (Array.isArray(s.inspectorSplit) && s.inspectorSplit.length === 3) {
+    paneFr.value = s.inspectorSplit.map((n) => Math.max(0.25, Number(n) || 1))
+  }
+  if (Array.isArray(s.inspectorTreeCols) && s.inspectorTreeCols.length === treeCols.length) {
+    treeColW.value = s.inspectorTreeCols.map((n) => (
+      Math.max(CI_TREE_COL_MIN, Math.min(800, Number(n) || CI_TREE_COL_MIN))
+    ))
+  }
+}
+
+function toggleTreeSort(key) {
+  if (sortBy.value === key) sortDesc.value = !sortDesc.value
+  else {
+    sortBy.value = key
+    sortDesc.value = key !== 'label'
+  }
+}
+
+function onHeadClick(key) {
+  if (_ignoreHeadClick) {
+    _ignoreHeadClick = false
+    return
+  }
+  toggleTreeSort(key)
+}
+
+function startColResize(ev, index) {
+  const startX = ev.clientX
+  const startW = treeColW.value[index]
+  let moved = false
+  _colDrag = {
+    move(e) {
+      const w = Math.max(CI_TREE_COL_MIN, startW + (e.clientX - startX))
+      if (Math.abs(e.clientX - startX) > 2) moved = true
+      const next = [...treeColW.value]
+      next[index] = w
+      treeColW.value = next
+    },
+    up() {
+      if (moved) _ignoreHeadClick = true
+      persistInspectorLayout(true)
+    },
+  }
+  window.addEventListener('pointermove', onLayoutPointerMove)
+  window.addEventListener('pointerup', onLayoutPointerUp)
+}
+
+function startPaneResize(ev, handle) {
+  const main = mainRef.value
+  if (!main) return
+  const startX = ev.clientX
+  const start = [...paneFr.value]
+  const total = start[0] + start[1] + start[2]
+  const width = Math.max(1, main.clientWidth)
+  _paneDrag = {
+    move(e) {
+      const dFr = ((e.clientX - startX) / width) * total
+      const left = Math.max(0.25, start[handle] + dFr)
+      const right = Math.max(0.25, start[handle + 1] - dFr)
+      const next = [...start]
+      next[handle] = left
+      next[handle + 1] = right
+      paneFr.value = next
+    },
+    up() {
+      persistInspectorLayout(true)
+    },
+  }
+  window.addEventListener('pointermove', onLayoutPointerMove)
+  window.addEventListener('pointerup', onLayoutPointerUp)
+}
+
+function onLayoutPointerMove(e) {
+  _colDrag?.move(e)
+  _paneDrag?.move(e)
+}
+
+function onLayoutPointerUp() {
+  window.removeEventListener('pointermove', onLayoutPointerMove)
+  window.removeEventListener('pointerup', onLayoutPointerUp)
+  _colDrag?.up()
+  _paneDrag?.up()
+  _colDrag = null
+  _paneDrag = null
+}
+
+function treeSortClass(col) {
+  return sortHeaderClass(
+    { col: TREE_SORT_COLS.includes(sortBy.value) ? sortBy.value : null,
+      dir: sortDesc.value ? -1 : 1 },
+    col,
+  )
+}
+
+watch(sortBy, (key, prev) => {
+  if (key !== prev) sortDesc.value = key !== 'label'
+})
 const analysisMode = ref('auto')
 const analysisModeOptions = computed(() => [
   { value: 'auto', label: 'Follow zoom' },
@@ -659,7 +828,7 @@ const model = computed(() => {
     directionMode.value,
     selectedCorridor.value,
   )
-  return applyCorridorSort(directed, sortBy.value)
+  return applyCorridorSort(directed, sortBy.value, sortDesc.value)
 })
 
 watch(
@@ -1067,14 +1236,22 @@ function drawGrid() {
   ctx.fillStyle = fg
   ctx.font = '10px monospace'
   ctx.fillText('src→dst', 4, 12)
-  const tickCount = Math.min(timeBins, 6)
-  for (let t = 0; t <= tickCount; t++) {
-    const frac = t / tickCount
+  const sample = formatTime(tMax, props.trace.timeScale)
+  const slot = Math.max(36, ctx.measureText(sample).width + 10)
+  const axisW = Math.max(1, plotW - 8)
+  const nLab = Math.max(2, Math.min(7, Math.floor(axisW / slot)))
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(labelW, 0, plotW, headH)
+  ctx.clip()
+  for (let t = 0; t < nLab; t++) {
+    const frac = nLab > 1 ? t / (nLab - 1) : 0
     const ns = Math.round(tMin + frac * (tMax - tMin))
-    const x = labelW + frac * plotW
+    const x = labelW + frac * axisW
     ctx.textAlign = frac < 0.05 ? 'left' : frac > 0.95 ? 'right' : 'center'
     ctx.fillText(formatTime(ns, props.trace.timeScale), x, 12)
   }
+  ctx.restore()
   ctx.textAlign = 'left'
 
   const firstRow = Math.max(0, Math.floor((scrollTop - headH) / rowH))
@@ -1305,6 +1482,7 @@ watch(rightPane, (pane) => {
 })
 
 onMounted(() => {
+  loadInspectorLayout()
   if (props.initialMode === 'info') rightPane.value = 'info'
   else rightPane.value = 'topology'
   if (props.focusPair) applyFocusPair(props.focusPair)
@@ -1327,6 +1505,8 @@ watch(() => props.initialMode, (m) => {
 onBeforeUnmount(() => {
   if (_drawRaf) cancelAnimationFrame(_drawRaf)
   _ro?.disconnect()
+  onLayoutPointerUp()
+  persistInspectorLayout(true)
   onDialogPointerUp()
 })
 </script>
@@ -1359,6 +1539,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   padding: 10px 12px;
+  container-type: inline-size;
 }
 .ci-header {
   display: flex;
@@ -1381,9 +1562,10 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   margin-top: 8px;
+  padding: 2px 0;
   flex-shrink: 0;
   overflow-x: auto;
-  min-height: 22px;
+  min-height: 26px;
 }
 .ci-toolbar .ci-field :deep(.dom-select) {
   height: 22px;
@@ -1401,11 +1583,12 @@ onBeforeUnmount(() => {
   border-color: var(--accent, #2a6fb2);
   background: rgba(91, 155, 213, 0.18);
 }
-.ci-toolbar .ci-field-sort :deep(.dom-select) {
-  min-width: 148px;
-}
 .ci-toolbar .ci-field-scope :deep(.dom-select) {
   min-width: 128px;
+}
+.ci-toolbar .ci-field-dir :deep(.dom-select) {
+  min-width: 108px;
+  width: max-content;
 }
 .ci-toolbar .ci-field :deep(.dom-select.open) {
   border-color: var(--accent);
@@ -1417,12 +1600,9 @@ onBeforeUnmount(() => {
 }
 .ci-task-filter {
   height: 22px;
+  width: 140px;
+  min-width: 140px;
   box-sizing: border-box;
-}
-.ci-scope-hint {
-  font-size: 11px;
-  color: var(--fg-dim);
-  white-space: nowrap;
   flex-shrink: 0;
 }
 .ci-field {
@@ -1454,6 +1634,9 @@ onBeforeUnmount(() => {
   padding: 3px 10px;
   cursor: pointer;
   font-size: 12px;
+  flex-shrink: 0;
+  min-width: 11.6em;
+  box-sizing: border-box;
   transition: background 0.1s;
 }
 .ci-bounce-toggle:hover:not(.active) {
@@ -1479,7 +1662,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 4px;
+  margin-top: 2px;
   padding: 8px 12px;
   font-size: 11px;
   line-height: 1.35;
@@ -1806,38 +1989,119 @@ onBeforeUnmount(() => {
 .ci-main {
   flex: 1 1 0;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(220px, 24%) minmax(280px, 1fr) minmax(260px, 30%);
-  gap: 8px;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 0;
   margin-top: 8px;
+}
+.ci-split-handle {
+  flex: 0 0 6px;
+  width: 6px;
+  cursor: col-resize;
+  position: relative;
+  background: transparent;
+  z-index: 2;
+}
+.ci-split-handle::before {
+  content: '';
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 2px;
+  width: 2px;
+  background: var(--border);
+  border-radius: 1px;
+}
+.ci-split-handle:hover::before {
+  background: color-mix(in srgb, var(--accent) 60%, var(--border));
 }
 .ci-tree-pane, .ci-grid-pane {
   border: 1px solid var(--border);
   border-radius: 4px;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   background: var(--bg);
 }
+.ci-tree-pane {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
 .ci-tree-head,
 :deep(.ci-row) {
   display: grid;
-  grid-template-columns: 1fr 48px 56px 56px;
-  gap: 4px;
+  grid-template-columns: var(--ci-tree-cols);
+  gap: 0;
   align-items: center;
   font-size: 11px;
   font-family: monospace;
+  min-width: var(--ci-tree-min);
 }
 .ci-tree-head {
-  padding: 4px 6px;
+  padding: 0;
   color: var(--fg-dim);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
+.ci-head-cell {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 4px 8px 4px 6px;
+  border-right: 1px solid var(--border);
+  box-sizing: border-box;
+}
+.ci-head-cell:last-child {
+  border-right: none;
+}
+.ci-tree-head button {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  user-select: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+  text-align: inherit;
+}
+.ci-col-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 7px;
+  bottom: 0;
+  cursor: col-resize;
+  z-index: 2;
+}
+.ci-tree-head button:hover {
+  color: var(--fg);
+}
+.ci-tree-head .sort-asc::after,
+.ci-tree-head .sort-desc::after {
+  font-size: 8px;
+  opacity: 0.85;
+}
+.ci-tree-head .sort-asc::after {
+  content: ' ▲';
+}
+.ci-tree-head .sort-desc::after {
+  content: ' ▼';
+}
 .ci-tree-scroll {
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   flex: 1;
+  min-width: var(--ci-tree-min);
 }
 :deep(.ci-row) {
   width: 100%;
@@ -1845,7 +2109,7 @@ onBeforeUnmount(() => {
   border: none;
   background: transparent;
   color: var(--fg);
-  padding: 3px 6px;
+  padding: 3px 0;
   cursor: pointer;
 }
 :deep(.ci-row:hover) {
@@ -1863,6 +2127,11 @@ onBeforeUnmount(() => {
 .ci-col-num,
 :deep(.ci-col-num) {
   text-align: right;
+  padding: 0 6px;
+  box-sizing: border-box;
+}
+.ci-head-cell.ci-col-num button {
+  text-align: right;
 }
 :deep(.ci-exp) {
   cursor: pointer;
@@ -1872,6 +2141,8 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  padding: 0 6px;
+  box-sizing: border-box;
 }
 .ci-grid-pane {
   position: relative;

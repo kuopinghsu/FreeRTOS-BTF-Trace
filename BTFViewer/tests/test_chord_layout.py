@@ -124,6 +124,7 @@ class TestBuildChordLayout(unittest.TestCase):
     def test_default_corridor_top_n(self) -> None:
         from btf_viewer_pkg.parser import (
             _default_corridor_top_n, _filter_corridors_by_top_n, _sort_corridors,
+            _CORRIDOR_TREE_COLS, _corridor_tree_cell,
         )
         self.assertEqual(_default_corridor_top_n(4), 0)
         self.assertEqual(_default_corridor_top_n(8), 0)
@@ -140,6 +141,55 @@ class TestBuildChordLayout(unittest.TestCase):
         )
         sorted_rows = _sort_corridors(rows, "rate")
         self.assertEqual(sorted_rows[0]["label"], "b")
+        by_count = _sort_corridors(rows, "count")
+        self.assertEqual([c["label"] for c in by_count], ["a", "b", "c"])
+        by_count_asc = _sort_corridors(rows, "count", descending=False)
+        self.assertEqual([c["label"] for c in by_count_asc], ["c", "b", "a"])
+        net_rows = [
+            {"count": 2, "label": "x", "net": -3, "rate_per_s": 1.0},
+            {"count": 2, "label": "y", "net": 8, "rate_per_s": 1.0},
+        ]
+        self.assertEqual(_sort_corridors(net_rows, "net")[0]["label"], "y")
+        self.assertEqual(_sort_corridors(net_rows, "label")[0]["label"], "x")
+        self.assertEqual(
+            [k for k, _ in _CORRIDOR_TREE_COLS],
+            ["label", "rate", "count", "pingpong", "dwell", "handoff", "net", "share"],
+        )
+        self.assertEqual(
+            [lab for _k, lab in _CORRIDOR_TREE_COLS],
+            ["Core path", "Rate", "Count", "Ping",
+             "Dwell", "Handoff", "Net", "Share"],
+        )
+        row = {
+            "label": "c0→c1", "count": 12, "rate_per_s": 3.5,
+            "ping_pong_pct": 40, "short_dwell_share": 25,
+            "handoff_pct": 15, "net": -3,
+            "primary_task": {"share_pct": 80},
+        }
+        self.assertEqual(_corridor_tree_cell(row, "rate"), "3.5/s")
+        self.assertEqual(_corridor_tree_cell(row, "pingpong"), "40%")
+        self.assertEqual(_corridor_tree_cell(row, "dwell"), "25%")
+        self.assertEqual(_corridor_tree_cell(row, "net"), "-3 ▼")
+        self.assertEqual(_corridor_tree_cell(row, "share"), "80%")
+        self.assertEqual(
+            _corridor_tree_cell({"count": 4, "share_pct": 50}, "share", kind="task"),
+            "50%")
+        self.assertEqual(
+            _corridor_tree_cell({"label": "from c0", "count": 9}, "rate", kind="group"),
+            "—")
+        from btf_viewer_pkg.parser import (
+            _CI_SPLIT_RATIO, _corridor_tree_col_defaults, _parse_int_csv,
+            _scale_split_sizes,
+        )
+        self.assertEqual(_CI_SPLIT_RATIO, (1, 2, 1))
+        self.assertEqual(_corridor_tree_col_defaults()[0], 140)
+        self.assertEqual(_corridor_tree_col_defaults()[1], 56)
+        self.assertEqual(_parse_int_csv("1,2,1", 3, (9, 9, 9)), (1, 2, 1))
+        sizes = _scale_split_sizes((1, 2, 1), 800, (100, 100, 100))
+        self.assertEqual(len(sizes), 3)
+        self.assertEqual(sum(sizes), 800)
+        self.assertGreater(sizes[1], sizes[0])
+        self.assertEqual(sizes[0], sizes[2])
 
     def test_inspector_analysis_scope(self) -> None:
         from btf_viewer_pkg.parser import _inspector_analysis_scope

@@ -390,12 +390,12 @@ Views (--view):
              (no filter).  --cpu-load appends the synchronised CPU Load strip;
              with a locked --task it shows that task's usage on each core.
              Without --lo/--hi the timeline fits the full trace (Fit Trace).
-  heatmap    Migration & Corridor Inspector (tree + time-bin grid; topology
-             sidebar collapsed). --task is not supported; --lo/--hi scope
-             the inspector. --drill-row selects that corridor (0 = top) and
+  heatmap    Migration & Corridor Inspector (tree + time-bin grid; Path info
+             on the right). --task is not supported; --lo/--hi scope the
+             inspector. --drill-row selects that corridor (0 = top) and
              expands its tasks; --drill-bin highlights that time bin
              (default: peak bin). Requires 2+ cores.
-  chord      Same inspector with the topology sidebar expanded (mini-chord).
+  chord      Same inspector with the Topology tab (mini-chord) on the right.
              --drill-row/--drill-bin select a corridor as for heatmap;
              --lo/--hi scope the diagram. Requires 2+ cores.
   plot       A statistics metric scatter+histogram popup, selected with
@@ -1549,6 +1549,32 @@ def _cli_apply_theme_chrome(app: "QApplication", is_dark: bool) -> None:
     """)
 
 
+# Core path / Rate / Count stay in the snapshot pane. Ping…Share remain in the
+# live inspector behind a horizontal scrollbar; QSvgGenerator does not clip
+# QTreeWidget overflow, so those extra columns would paint over the heatmap.
+_CLI_SNAPSHOT_TREE_COLS = 3
+
+
+def _cli_snapshot_fit_inspector_tree(dlg: "_CorridorInspectorDialog") -> None:
+    """Keep the Core path table inside the left pane for static export."""
+    tree = dlg._tree
+    n_keep = min(_CLI_SNAPSHOT_TREE_COLS, tree.columnCount())
+    tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    for col in range(tree.columnCount()):
+        tree.setColumnHidden(col, col >= n_keep)
+    cols_w = sum(tree.columnWidth(i) for i in range(n_keep))
+    vbar_w = tree.verticalScrollBar().sizeHint().width()
+    need = cols_w + vbar_w + tree.frameWidth() * 2 + 8
+    sizes = list(dlg._split.sizes())
+    if len(sizes) == 3 and sizes[0] < need:
+        steal = min(need - sizes[0], max(0, sizes[1] - _CI_SPLIT_PANE_MIN))
+        if steal > 0:
+            sizes[0] += steal
+            sizes[1] -= steal
+            dlg._split.setSizes(sizes)
+    _process_ui_events_safely()
+
+
 def _cli_snapshot_inspector(
     trace: "BtfTrace", args: argparse.Namespace, *, initial_mode: str,
 ) -> Tuple[Optional["_CorridorInspectorDialog"], Optional[str]]:
@@ -1590,8 +1616,11 @@ def _cli_snapshot_inspector(
         dlg._select_corridor(c, int(bi) if bi is not None else None)
     dlg.show()
     _process_ui_events_safely()
-    dlg._apply_sidebar_layout()
-    dlg._fit_tree_pane()
+    # Three-column inspector (tree | heatmap | Topology/Path info). Chord
+    # snapshots keep the mini-chord visible; heatmap snapshots show Path info.
+    dlg._set_right_pane("topology" if initial_mode == "chord" else "info")
+    dlg._apply_split_layout()
+    _cli_snapshot_fit_inspector_tree(dlg)
     dlg._grid._sync_overlay()
     _process_ui_events_safely()
     dlg._grid._sync_overlay()

@@ -106,7 +106,7 @@ The following workflows show how statistics should be combined. They are not rig
 
 The Statistics tab is available in the right-side panel. Its header shows **Full Trace** or the active **C1–Cn** cursor range. When a task, core, or migration filter is active, the panel shows a **Filtered** indicator. Scope and filters apply to the calculated samples, so they must be checked before any value is interpreted.
 
-Place at least two cursors and enable **Limit to C1–Cn** to recalculate Statistics and Analysis Findings for that time range. Clear the cursor range to return to Full Trace. Restricting the range is useful for separating start-up, steady-state, overload, and recovery phases.
+Place at least two cursors and enable **Limit to C1–Cn** to recalculate Statistics and Analysis Findings for that time range. The toolbar **C1–Cn** chip (before the right-hand icons) uses the Statistics Scope colour when Limit is on and the muted Detail colour when it is off. Click it to toggle. Clear the cursor range to return to Full Trace. Restricting the range is useful for separating start-up, steady-state, overload, and recovery phases.
 
 | Control | Action |
 |---|---|
@@ -277,14 +277,14 @@ Use this sequence:
 
 1. Confirm load balance. An SMP scheduler may move tasks to idle cores, so some migration is expected.
 2. Open **Core Migrations** and rank by Rate, Dwell, and Ping rather than Count alone.
-3. Open the **Migration & Corridor Inspector**. The workspace has three columns: **Core path**, **migration heatmap**, and **Topology**. Topology has Circle and Matrix views (icons stay at the top right). Traces with more than 16 cores open in Matrix. Click a heatmap cell to show **Path info** in the right column. Topology and Path info share that column and are exclusive.
+3. Open the **Migration & Corridor Inspector**. The workspace has three columns: **Core path**, **migration heatmap**, and **Topology**, sized **1 : 2 : 1** by default. Drag the pane dividers to resize; Desktop stores the layout in `btf_viewer.rc` and Web stores it in localStorage. Path-table columns are resizable (drag the header dividers); widths stay fixed when you click a header to sort. Topology has Circle and Matrix views (icons stay at the top right). Traces with more than 16 cores open in Matrix. Click a heatmap cell to show **Path info** in the right column. Topology and Path info share that column and are exclusive.
 4. Check ping-pong, median dwell, and short-dwell share on the selected path.
 5. Treat **Handoff** as a synchronization-ownership heuristic, not a measured cache-line transfer.
 6. Inspect the relevant timeline window with **Show events**. **Filter Timeline** is a persistent task filter; Inspector filters stay local.
 
-**Analysis Scope** defaults to **Follow zoom**: Fit (or ≥ 92% of the trace) is **Full Trace**; a zoomed-in window is **Viewport** and follows pan/zoom. Lock **Full Trace** or **Viewport** from the menu, or choose **Cursor C1–Cn** when at least two cursors are placed. If fewer than two cursors are placed, Cursor C1–Cn is disabled with “Place at least two cursors.”
+**Analysis Scope** defaults to **Follow zoom**: Fit (or ≥ 92% of the trace) is **Full Trace**; a zoomed-in window is **Viewport** and follows pan/zoom. Lock **Full Trace** or **Viewport** from the menu, or choose **Cursor C1–Cn** when at least two cursors are placed. If fewer than two cursors are placed, Cursor C1–Cn is disabled.
 
-The Inspector overview shows scope, load-balance status, migration count and rate, the most affected task, the hottest path, and the main concern (None / Burst / Ping-pong / Short dwell / Handoff suspect). Use **Show Top 5 / 10 / 25 / All paths** rather than a percentage cutoff. **Investigate with AI** sends that structured context on the `migrations` template; it does not filter the timeline or move cursors unless you choose a viewer action.
+The Inspector overview shows scope, load-balance status, migration count and rate, the most affected task, the hottest path, and the main concern (None / Burst / Ping-pong / Short dwell / Handoff suspect). Use **Show Top 5 / 10 / 25 / All paths** rather than a percentage cutoff. The Core path table lists Rate, Count, Ping, Dwell, Handoff, Net, and Share (hover a header for the full name). Click a column header to sort the path list and heatmap together; click again to reverse. **Investigate with AI** sends that structured context on the `migrations` template; it does not filter the timeline or move cursors unless you choose a viewer action.
 
 A corridor is evidence of repeated placement, not proof of cache cost. Cache misses, lazy coprocessor context invalidation, and additional register saves require processor-specific evidence.
 

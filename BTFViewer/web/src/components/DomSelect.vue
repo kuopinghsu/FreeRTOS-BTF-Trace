@@ -109,7 +109,7 @@ function placeMenu() {
   if (!el) return
   listStyle.value = placeDomSelectList(el.getBoundingClientRect(), {
     maxHeight: props.maxHeight,
-    zIndex: 2600,
+    zIndex: 12050,
   })
 }
 

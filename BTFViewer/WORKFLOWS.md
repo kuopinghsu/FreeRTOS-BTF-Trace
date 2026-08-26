@@ -285,7 +285,7 @@ Full-trace Statistics can mix startup, steady-state, overload, recovery, and shu
 2. Place **C1** before the activity that may have triggered the delay.
 3. Place **C2** after `ControlTask` completes or recovers. Additional cursors may mark intermediate evidence.
 4. Select **Fit Cursors** (`Ctrl+R`) to display the earliest–latest cursor span.
-5. Enable **Limit to C1–Cn** in Statistics (Desktop and Web also show a banner: **Use C1–Cn as analysis Scope** → **Enable Limit to C1–Cn**).
+5. Enable **Limit to C1–Cn** in Statistics, from the toolbar **C1–Cn** chip, or from the banner: **Use C1–Cn as analysis Scope** → **Enable Limit to C1–Cn**. The chip uses the Scope colour when Limit is on.
 6. Confirm the status bar and Statistics header show **Scope: C1–Cn · duration**.
 7. Recheck the **Filtered:** indicator. Clear unintended task, core, or migration Filters.
 8. Reopen **Analysis** so findings use the same Scope.

@@ -673,6 +673,20 @@
 
     <div class="spacer" />
 
+    <button
+      type="button"
+      class="tb-limit-badge"
+      :class="{ on: limitOn }"
+      :disabled="!rangeEnabled"
+      :title="limitBadgeTitle"
+      :aria-pressed="limitOn"
+      :aria-label="limitBadgeTitle"
+      data-demo-target="toolbar_limit"
+      @click="emit('toggleLimit')"
+    >
+      C1–Cn
+    </button>
+
     <span
       v-if="loading"
       class="loading-badge"
@@ -801,6 +815,7 @@ const props = defineProps({
   recording:   { type: Boolean, default: false },
   zoomPresetValue: { type: String, default: 'fit' },
   zoomPresetOptions: { type: Array, default: () => [{ value: 'fit', label: 'Fit' }] },
+  limitOn: { type: Boolean, default: false },
 })
 
 const emit = defineEmits([
@@ -812,8 +827,17 @@ const emit = defineEmits([
   'exportSlice',
   'showHelp', 'showAbout', 'showSettings', 'showHeatmap', 'showAnalysis',
   'showCompare',
-  'clearTaskFilter', 'file-error',
+  'clearTaskFilter', 'file-error', 'toggleLimit',
 ])
+
+const limitBadgeTitle = computed(() => {
+  if (!props.rangeEnabled) {
+    return 'Limit to C1–Cn is Off — place at least two cursors to enable'
+  }
+  return props.limitOn
+    ? 'Limit to C1–Cn is On — Statistics use the cursor range. Click to turn off.'
+    : 'Limit to C1–Cn is Off — Statistics use the full trace. Click to turn on.'
+})
 
 const useFsaOpen = supportsFileHandles()
 const coresExpanded = ref(true)
@@ -1197,5 +1221,40 @@ watch(
 }
 .app-name-btn:hover {
   background: var(--tb-btn-hover);
+}
+
+.tb-limit-badge {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 2px 7px;
+  margin: 0 2px;
+  border-radius: 8px;
+  border: 1px solid var(--badge-detail-border, #565B61);
+  background: var(--badge-detail-bg, #303337);
+  color: var(--badge-detail-fg, #C0C4C9);
+  font: inherit;
+  font-size: inherit;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.tb-limit-badge.on {
+  color: var(--badge-scope-fg, #9EC5E8);
+  background: var(--badge-scope-bg, #283A47);
+  border-color: var(--badge-scope-border, #3A6A8A);
+}
+.tb-limit-badge:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+.tb-limit-badge:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  filter: none;
 }
 </style>

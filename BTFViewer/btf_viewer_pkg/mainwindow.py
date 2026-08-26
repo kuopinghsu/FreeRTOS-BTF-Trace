@@ -3970,6 +3970,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             combo = getattr(self, '_zoom_preset_combo', None)
             if combo is not None:
                 combo.setFont(base_font)
+            badge = getattr(self, '_tb_limit_badge', None)
+            if badge is not None:
+                badge.setFont(base_font)
+                self._update_limit_badge()
 
             c = self._theme_tokens(is_dark)
 
@@ -4451,6 +4455,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         tb.setPalette(pal)
         tb.setAutoFillBackground(True)
         for btn in tb.findChildren(QToolButton):
+            if btn.objectName() == "tbLimitBadge":
+                continue
             bp = btn.palette()
             bp.setColor(QPalette.ColorRole.ButtonText, fg)
             bp.setColor(QPalette.ColorRole.WindowText, fg)
@@ -5377,14 +5383,29 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "Switch to light theme" if self._is_dark else "Switch to dark theme"
         )
 
-        # Push Settings / Help to the right (web toolbar parity).
+        # Push C1–Cn status, then Settings / Help, to the right (web toolbar parity).
         spacer = QWidget()
         spacer.setObjectName("toolbar_right_spacer")
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         tb.addWidget(spacer)
+        self._tb_limit_badge = QToolButton()
+        self._tb_limit_badge.setObjectName("tbLimitBadge")
+        self._tb_limit_badge.setText("C1–Cn")
+        self._tb_limit_badge.setCheckable(False)
+        self._tb_limit_badge.setAutoRaise(True)
+        self._tb_limit_badge.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self._tb_limit_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._tb_limit_badge.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self._tb_limit_badge.setFont(_application_ui_font(
+            getattr(self, "_ui_font_size_val", UI_FONT_SIZE)))
+        self._tb_limit_badge.clicked.connect(self._on_limit_badge_clicked)
+        tb.addWidget(self._tb_limit_badge)
         _ia("Settings", self._open_settings, _IC_SETTINGS, "Open Settings  (Ctrl+,)")
         _ia("Help", self._on_keyboard_shortcuts, _IC_HELP,
             "Help & keyboard shortcuts")
+        self._update_limit_badge()
 
     def _update_trace_quality_banner(self, trace: Optional[BtfTrace] = None) -> None:
         """Show BTF quality / version warnings above the timeline (web parity)."""
@@ -5463,6 +5484,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             multi_cursor_span_warning,
             should_offer_use_as_scope,
         )
+        self._update_limit_badge()
         banner = getattr(self, "_cursor_scope_banner", None)
         prompt_lbl = getattr(self, "_cursor_scope_prompt", None)
         warn_lbl = getattr(self, "_cursor_scope_warn", None)
@@ -5527,6 +5549,68 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Enable Limit to C1–Cn from the cursor-scope banner (Web applyCursorsAsScope)."""
         self._demo_set_limit(True)
         self._update_cursor_scope_banner()
+
+    def _limit_scope_is_on(self) -> bool:
+        """True when Limit to C1–Cn is checked and at least two cursors are placed."""
+        panel = getattr(self, "_stats_panel", None)
+        if panel is None or not getattr(panel, "_scope_to_cursors", False):
+            return False
+        return int(getattr(self, "_placed_cursor_count", 0) or 0) >= 2
+
+    def _update_limit_badge(self) -> None:
+        """Sync the toolbar C1–Cn chip colour with the Statistics checkbox."""
+        btn = getattr(self, "_tb_limit_badge", None)
+        if btn is None:
+            return
+        can = (
+            self._trace is not None
+            and int(getattr(self, "_placed_cursor_count", 0) or 0) >= 2
+        )
+        on = bool(can and self._limit_scope_is_on())
+        btn.blockSignals(True)
+        btn.setEnabled(can)
+        btn.setText("C1–Cn")
+        btn.blockSignals(False)
+        dark = bool(getattr(self, "_is_dark", True))
+        if on:
+            fg, bg, border = stats_meta_chip_colors("scope", dark=dark)
+        else:
+            bg, fg, border = stats_category_badge_colors("DETAIL", dark=dark)
+        # Same face/size/weight as toolbar Compare (not bold header chips).
+        ui_pt = int(getattr(self, "_ui_font_size_val", UI_FONT_SIZE) or UI_FONT_SIZE)
+        ui_fs = _ui_font_stylesheet_size(ui_pt)
+        chip = (
+            f"color:{fg}; background-color:{bg}; border:1px solid {border};"
+            f" border-radius:6px; padding:1px 6px; min-width:0; min-height:0;"
+            f" font-size:{ui_fs}; font-weight:400;"
+        )
+        btn.setStyleSheet(
+            "QToolButton#tbLimitBadge {"
+            f" {chip} "
+            "}"
+            "QToolButton#tbLimitBadge:hover,"
+            "QToolButton#tbLimitBadge:pressed,"
+            "QToolButton#tbLimitBadge:disabled {"
+            f" {chip} "
+            "}")
+        if not can:
+            btn.setToolTip(
+                "Limit to C1–Cn is Off — place at least two cursors to enable")
+        elif on:
+            btn.setToolTip(
+                "Limit to C1–Cn is On — Statistics use the cursor range. "
+                "Click to turn off.")
+        else:
+            btn.setToolTip(
+                "Limit to C1–Cn is Off — Statistics use the full trace. "
+                "Click to turn on.")
+
+    def _on_limit_badge_clicked(self, _checked: bool = False) -> None:
+        """Toggle Limit to C1–Cn from the toolbar status chip (web parity)."""
+        if int(getattr(self, "_placed_cursor_count", 0) or 0) < 2:
+            self._update_limit_badge()
+            return
+        self._demo_set_limit(not self._limit_scope_is_on())
 
     def _record_evidence_jump(self, entry: dict) -> None:
         """Push an evidence jump into history and refresh the inspector bar."""
@@ -6902,6 +6986,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "stats_export_csv": getattr(panel, "_btn_export_html", None),  # alias: CSV is in HTML
             "stats_health": headers.get("health") if isinstance(headers, dict) else None,
             "stats_tick_dist": getattr(panel, "_btn_tick_dist", None),
+            "toolbar_limit": getattr(self, "_tb_limit_badge", None),
         }
         if key in widgets:
             return self._demo_widget_screen_center(widgets[key])
@@ -7048,15 +7133,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _demo_set_limit(self, on: bool) -> None:
         panel = getattr(self, "_stats_panel", None)
         if panel is None or not hasattr(panel, "_scope_cb"):
+            self._update_limit_badge()
             return
         cb = panel._scope_cb
         want = bool(on)
         if cb.isChecked() == want and bool(panel._scope_to_cursors) == want:
+            self._update_limit_badge()
             return
         cb.blockSignals(True)
         cb.setChecked(want)
         cb.blockSignals(False)
         panel._on_scope_toggled(want)
+        self._update_cursor_scope_banner()
 
     def _demo_settle_ms(self, ms: int) -> None:
         """Pump the GUI event loop for *ms* (used by demo scroll settle)."""
@@ -11732,6 +11820,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._stats_panel._scope_cb.setChecked(bool(data.get("scopeToCursors", True)))
             self._stats_panel._scope_cb.blockSignals(False)
             self._stats_panel._on_scope_toggled(bool(data.get("scopeToCursors", True)))
+            self._update_cursor_scope_banner()
 
         plot = data.get("openPlot")
         if isinstance(plot, dict) and self._trace is not None:

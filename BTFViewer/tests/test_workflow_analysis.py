@@ -212,6 +212,39 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         self.assertEqual(dlg.font().pointSize(), expected.pointSize())
         self.assertEqual(dlg.font().pixelSize(), expected.pixelSize())
 
+    def test_analysis_dialog_combos_use_inspector_popup(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication
+        from btf_viewer_pkg.stats import (
+            _AnalysisFindingsDialog, _CiComboBox, _CI_FIELD_H,
+            _ci_combo_widget_qss,
+        )
+
+        if QApplication.instance() is None:
+            QApplication([])
+        dlg = _AnalysisFindingsDialog([], "", ai_enabled=False)
+        dlg.show()
+        QApplication.processEvents()
+        for combo in (dlg._sev_combo, dlg._ev_combo, dlg._cat_combo, dlg._sort_combo):
+            self.assertIsInstance(combo, _CiComboBox)
+            self.assertEqual(combo.styleSheet(), _ci_combo_widget_qss(combo))
+            self.assertGreaterEqual(combo.minimumHeight(), _CI_FIELD_H)
+        combo = dlg._sev_combo
+        combo.showPopup()
+        QApplication.processEvents()
+        menu = combo._popup_menu
+        self.assertIsNotNone(menu)
+        self.assertTrue(bool(menu.windowFlags() & Qt.WindowType.Popup))
+        self.assertTrue(
+            bool(dlg.windowFlags() & Qt.WindowType.WindowStaysOnTopHint))
+        self.assertTrue(
+            bool(menu.windowFlags() & Qt.WindowType.WindowStaysOnTopHint),
+            "Analysis Tool window would cover a menu that is not stays-on-top")
+        self.assertGreaterEqual(menu.width(), combo.width())
+        combo.hidePopup()
+        dlg.close()
+        QApplication.processEvents()
+
     def test_analysis_dialog_query_with_ai_button(self):
         from PySide6.QtWidgets import QApplication, QToolButton, QLabel
         from btf_viewer_pkg.stats import _AnalysisFindingsDialog

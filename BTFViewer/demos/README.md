@@ -194,6 +194,7 @@ Toolbar buttons, tabs, Analysis, and Find use API events instead of fixed screen
 | `toolbar_load` | CPU Load |
 | `toolbar_heatmap` | Migration Heatmap |
 | `toolbar_analysis` | Analysis |
+| `toolbar_limit` | C1–Cn status chip |
 | `stats_tab` / `find_tab` / `ai_tab` | Right-panel tabs |
 | `stats_summary` / `stats_panel` | Statistics summary |
 | `stats_health` | Health section header |

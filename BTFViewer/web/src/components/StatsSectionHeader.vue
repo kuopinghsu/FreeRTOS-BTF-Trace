@@ -297,9 +297,9 @@ function onDragEnd() {
 }
 
 .stats-meta-chip.scope {
-  color: var(--badge-sched-fg, #9ec5e8);
-  background: rgba(52, 152, 219, 0.18);
-  border: 1px solid rgba(52, 152, 219, 0.45);
+  color: var(--badge-scope-fg, #9EC5E8);
+  background: var(--badge-scope-bg, #283A47);
+  border: 1px solid var(--badge-scope-border, #3A6A8A);
 }
 
 .stats-meta-chip.filtered {

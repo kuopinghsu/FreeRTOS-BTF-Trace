@@ -113,14 +113,29 @@ class TestSnapshotInspector(unittest.TestCase):
         self.assertGreater(sizes[1], sizes[0])
         self.assertGreater(sizes[1], sizes[2])
         self.assertAlmostEqual(sizes[0] / max(sizes[2], 1), 1.0, delta=0.35)
-        self.assertEqual(dlg._ci_toolbar_scroll.height(), 22)
+        self.assertEqual(dlg._ci_toolbar_scroll.height(), 26)
+        scroll = dlg._ci_toolbar_scroll
+        for field in (dlg._scope_combo, dlg._top_combo, dlg._dir_combo,
+                      dlg._task_edit, dlg._bounce_btn):
+            if not field.isVisible():
+                continue
+            name = field.objectName() or field.__class__.__name__
+            tl = field.mapTo(scroll, field.rect().topLeft())
+            br = field.mapTo(scroll, field.rect().bottomRight())
+            self.assertGreaterEqual(
+                tl.y(), 2, f"{name} top is cropped by the inspector toolbar")
+            self.assertLessEqual(
+                br.y(), scroll.height() - 2,
+                f"{name} is cropped by the inspector toolbar scroll")
         combo = dlg._scope_combo
         combo.showPopup()
         self._app.processEvents()
         menu = combo._popup_menu
         self.assertIsNotNone(menu)
         self.assertTrue(bool(menu.windowFlags() & Qt.WindowType.Popup))
+        self.assertIs(menu.parentWidget(), dlg)
         self.assertGreater(menu.height(), 44)
+        self.assertGreater(menu.height(), scroll.height())
         combo.hidePopup()
         dlg.close()
         self._app.processEvents()

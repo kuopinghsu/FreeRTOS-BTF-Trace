@@ -3690,7 +3690,123 @@ def _default_corridor_top_pct(core_count: int) -> int:
 _CORRIDOR_SHORT_DWELL_MS = 1
 _CORRIDOR_HANDOFF_HATCH_PCT = 15
 _CORRIDOR_TOP_N_OPTIONS = (5, 10, 25, 0)
-_CORRIDOR_SORT_KEYS = ("rate", "pingpong", "dwell", "handoff", "share")
+_CORRIDOR_SORT_KEYS = (
+    "rate", "pingpong", "dwell", "handoff", "share",
+    "count", "net", "label",
+)
+# Path table: Core path first, then Sort by metrics (compact headers).
+_CORRIDOR_TREE_COLS = (
+    ("label", "Core path"),
+    ("rate", "Rate"),
+    ("count", "Count"),
+    ("pingpong", "Ping"),
+    ("dwell", "Dwell"),
+    ("handoff", "Handoff"),
+    ("net", "Net"),
+    ("share", "Share"),
+)
+_CORRIDOR_TREE_TIPS = {
+    "label": "Sort by Core path",
+    "rate": "Sort by Migration rate",
+    "count": "Sort by Migrations",
+    "pingpong": "Sort by Ping-pong",
+    "dwell": "Sort by Short dwell",
+    "handoff": "Sort by Handoff",
+    "net": "Sort by Net flow",
+    "share": "Sort by Task share",
+}
+# Inspector workspace panes: Core path | heatmap | Topology (1:2:1).
+_CI_SPLIT_RATIO = (1, 2, 1)
+_CI_SPLIT_PANE_MIN = 160
+_CI_TREE_COL_MIN = 40
+_CI_TREE_NAME_W = 140
+_CI_TREE_NUM_W = 56
+
+
+def _corridor_tree_col_defaults() -> tuple:
+    return tuple(
+        _CI_TREE_NAME_W if key == "label" else _CI_TREE_NUM_W
+        for key, _lab in _CORRIDOR_TREE_COLS
+    )
+
+
+def _parse_int_csv(text, n: int, fallback, lo: int = 1, hi: int = 8000):
+    """Parse ``n`` comma-separated ints; return *fallback* on mismatch."""
+    fb = tuple(fallback)
+    if text is None or str(text).strip() == "":
+        return fb
+    parts = [p.strip() for p in str(text).split(",") if p.strip()]
+    if len(parts) != int(n):
+        return fb
+    try:
+        vals = [max(int(lo), min(int(hi), int(p))) for p in parts]
+    except (TypeError, ValueError):
+        return fb
+    return tuple(vals)
+
+
+def _format_int_csv(vals) -> str:
+    return ",".join(str(int(v)) for v in vals)
+
+
+def _scale_split_sizes(sizes, total: int, mins=None):
+    """Scale three pane sizes to *total* px, keeping their ratio."""
+    n = 3
+    if mins is None:
+        mins = (_CI_SPLIT_PANE_MIN,) * n
+    mins = tuple(int(m) for m in mins)[:n]
+    raw = list(sizes) if sizes is not None and len(list(sizes)) == n else list(_CI_SPLIT_RATIO)
+    raw = [max(1, int(v)) for v in raw]
+    total = max(int(total), sum(mins))
+    ssum = sum(raw) or 1
+    out = [max(mins[i], int(total * raw[i] / ssum)) for i in range(n)]
+    extra = total - sum(out)
+    heat = 1 if n > 1 else 0
+    out[heat] = max(mins[heat], out[heat] + extra)
+    return tuple(out)
+
+
+def _corridor_tree_cell(row: dict, key: str, kind: str = "corridor") -> str:
+    """Format one Inspector path-table cell. *kind* is corridor, task, or group."""
+    if key == "label":
+        return str(row.get("label") or "")
+    if kind == "group":
+        if key == "count":
+            return str(int(row.get("count") or 0))
+        return "—"
+    if kind == "task":
+        if key == "count":
+            return str(int(row.get("count") or 0))
+        if key == "handoff":
+            pct = row.get("handoff_pct", row.get("bounce_pct", 0))
+            return f"{float(pct or 0):.0f}%"
+        if key == "share":
+            return f"{float(row.get('share_pct') or 0):.0f}%"
+        return "—"
+    if key == "rate":
+        return f"{float(row.get('rate_per_s') or 0):.1f}/s"
+    if key == "count":
+        return str(int(row.get("count") or 0))
+    if key == "pingpong":
+        return f"{float(row.get('ping_pong_pct') or 0):.0f}%"
+    if key == "dwell":
+        return f"{float(row.get('short_dwell_share') or 0):.0f}%"
+    if key == "handoff":
+        pct = row.get("handoff_pct", row.get("bounce_pct", 0))
+        return f"{float(pct or 0):.0f}%"
+    if key == "net":
+        net = int(row.get("net") or 0)
+        if net > 0:
+            return f"+{net} ▲"
+        if net < 0:
+            return f"{net} ▼"
+        return "0"
+    if key == "share":
+        task = row.get("primary_task") or {}
+        if not task:
+            return "—"
+        return f"{float(task.get('share_pct') or 0):.0f}%"
+    return "—"
 
 
 def _corridor_short_dwell_threshold(time_scale: str) -> int:
@@ -3718,8 +3834,10 @@ def _filter_corridors_by_top_n(corridors: list, n: int = 0) -> list:
     )[:limit]
 
 
-def _sort_corridors(corridors: list, sort_by: str = "rate") -> list:
+def _sort_corridors(corridors: list, sort_by: str = "rate",
+                    descending: Optional[bool] = None) -> list:
     key = sort_by if sort_by in _CORRIDOR_SORT_KEYS else "rate"
+    desc = (key != "label") if descending is None else bool(descending)
 
     def metric(c):
         if key == "pingpong":
@@ -3731,12 +3849,24 @@ def _sort_corridors(corridors: list, sort_by: str = "rate") -> list:
         if key == "share":
             task = c.get("primary_task") or {}
             return float(task.get("share_pct") or 0)
+        if key == "count":
+            return float(c.get("count") or 0)
+        if key == "net":
+            return float(c.get("net") or 0)
         return float(c.get("rate_per_s") or 0)
 
-    return sorted(
-        list(corridors or []),
-        key=lambda c: (-metric(c), -int(c.get("count") or 0), str(c.get("label") or "")),
-    )
+    rows = list(corridors or [])
+    if key == "label":
+        rows.sort(key=lambda c: -int(c.get("count") or 0))
+        rows.sort(
+            key=lambda c: str(c.get("label") or "").lower(), reverse=desc)
+        return rows
+    rows.sort(key=lambda c: (
+        -metric(c) if desc else metric(c),
+        -int(c.get("count") or 0),
+        str(c.get("label") or ""),
+    ))
+    return rows
 
 def _filter_corridors_by_top_pct(corridors: list, top_pct: int = 100) -> list:
     if not corridors or top_pct >= 100:

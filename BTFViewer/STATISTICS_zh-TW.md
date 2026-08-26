@@ -106,7 +106,7 @@ BTFViewer 先依追蹤資料中的排程事件，重建工作連續執行的區�
 
 Statistics 位於右側面板。標題會顯示 **Full Trace** 或目前的 **C1–Cn** 游標範圍；套用工作、核心或遷移篩選時，也會顯示 **Filtered**。分析範圍與篩選條件會直接改變納入計算的樣本，判讀任何數值前都應先確認。
 
-放置至少兩個游標並啟用 **Limit to C1–Cn**，即可針對該範圍重新計算 Statistics 與 Analysis Findings。清除游標範圍後會返回 Full Trace。此功能適合分離啟動、穩定運作、過載與恢復等不同階段。
+放置至少兩個游標並啟用 **Limit to C1–Cn**，即可針對該範圍重新計算 Statistics 與 Analysis Findings。工具列右側圖示前方的 **C1–Cn** 狀態晶片在限定開啟時使用 Statistics Scope 色彩，關閉時使用較淡的 Detail 色彩，可點選切換。清除游標範圍後會返回 Full Trace。此功能適合分離啟動、穩定運作、過載與恢復等不同階段。
 
 | 控制項 | 功能 |
 |---|---|
@@ -268,14 +268,14 @@ flowchart TD
 
 1. 先確認負載平衡。SMP 排程器可能把工作移到閒置核心，因此部分遷移是預期行為。
 2. 開啟**核心遷移**，優先比較 Rate、Dwell 與 Ping，不要只看 Count。
-3. 開啟 **Migration & Corridor Inspector**。工作區為三欄：**核心路徑**、**遷移熱圖**、**Topology**。Topology 可用 Circle 與 Matrix 檢視（圖示固定在右上）。超過 16 個核心時會改開 Matrix。點選熱圖儲存格時，右側改顯示 **Path info**。Topology 與 Path info 共用右欄，且互斥。
+3. 開啟 **Migration & Corridor Inspector**。工作區為三欄：**核心路徑**、**遷移熱圖**、**Topology**，預設寬度比為 **1 : 2 : 1**。可拖曳分隔線調整欄寬；Desktop 存在 `btf_viewer.rc`，Web 存在 localStorage。路徑表格欄位可拖曳標題分隔線調整寬度；點選標題排序時寬度維持不變。Topology 可用 Circle 與 Matrix 檢視（圖示固定在右上）。超過 16 個核心時會改開 Matrix。點選熱圖儲存格時，右側改顯示 **Path info**。Topology 與 Path info 共用右欄，且互斥。
 4. 檢查所選路徑的 ping-pong、中位停留時間與短停留比例。
 5. **Handoff** 是同步擁有權啟發式關聯，不是量測到的快取行搬移。
 6. 使用 **Show events** 檢查相關時間軸視窗。**Filter Timeline** 是持續的工作篩選；Inspector 篩選只作用於對話框內。
 
-**Analysis Scope** 預設為 **Follow zoom**：Fit（或可見範圍 ≥ 追蹤資料的 92%）視為 **Full Trace**；放大後的視窗視為 **Viewport** 並跟隨平移／縮放。可從選單鎖定 **Full Trace** 或 **Viewport**，或在已放置至少兩個游標時選擇 **Cursor C1–Cn**。若未放置至少兩個游標，Cursor C1–Cn 會停用並顯示「Place at least two cursors.」。
+**Analysis Scope** 預設為 **Follow zoom**：Fit（或可見範圍 ≥ 追蹤資料的 92%）視為 **Full Trace**；放大後的視窗視為 **Viewport** 並跟隨平移／縮放。可從選單鎖定 **Full Trace** 或 **Viewport**，或在已放置至少兩個游標時選擇 **Cursor C1–Cn**。若未放置至少兩個游標，Cursor C1–Cn 會停用。
 
-總覽列顯示分析範圍、負載平衡狀態、遷移次數與速率、最受影響的工作、最熱路徑，以及主要關注點（None / Burst / Ping-pong / Short dwell / Handoff suspect）。請使用 **Show Top 5 / 10 / 25 / All paths**，不要用百分比截斷。**Investigate with AI** 會把這些結構化內容送到 `migrations` 範本；除非你另外選擇檢視器動作，否則不會篩選時間軸或移動游標。
+總覽列顯示分析範圍、負載平衡狀態、遷移次數與速率、最受影響的工作、最熱路徑，以及主要關注點（None / Burst / Ping-pong / Short dwell / Handoff suspect）。請使用 **Show Top 5 / 10 / 25 / All paths**，不要用百分比截斷。Core path 表格列出 Rate、Count、Ping、Dwell、Handoff、Net、Share（游標停在標題上可看到完整名稱）。點選欄位標題可一併排序路徑列表與熱圖；再點一次可反向排序。**Investigate with AI** 會把這些結構化內容送到 `migrations` 範本；除非你另外選擇檢視器動作，否則不會篩選時間軸或移動游標。
 
 遷移路徑只能證明工作配置反覆改變，不能直接證明快取成本。快取遺失、Lazy coprocessor context 失效或額外暫存器儲存，仍需要處理器專屬證據。
 

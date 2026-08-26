@@ -178,7 +178,7 @@ BTFViewer 使用一致的檢視介面、控制項目及分析流程。判讀結�
 | 調查 | **Find**、**Migration & Corridor Inspector**、**Analysis**、**Compare** | 尋找證據、檢查多核心移動、開啟分析結果，或比較 Baseline 與 Candidate |
 | 條件式控制 | **All tasks**、**Log₂** | 清除已套用的 Migration Filter，或切換已展開 STI 波形的線性／對數刻度 |
 | 顯示 | 明亮／深色佈景主題 | 不需開啟 Settings 即可切換介面佈景主題 |
-| 支援 | **Demo**、**Record**、**Settings**、**Help** | 載入內建示範、將目前分頁錄製為 WebM、設定檢視器，或開啟快捷鍵與說明 |
+| 支援 | **C1–Cn**、**Demo**、**Record**、**Settings**、**Help** | 以色彩顯示 Statistics 是否限定於 C1–Cn、載入內建示範、將目前分頁錄製為 WebM、設定檢視器，或開啟快捷鍵與說明 |
 
 點選應用程式圖示可開啟 **About**。視窗寬度不足以顯示所有群組時，工具列會將部分群組移入 **More（⋯）**，功能不會改變。
 
@@ -222,7 +222,7 @@ BTFViewer 使用一致的檢視介面、控制項目及分析流程。判讀結�
 | 清除所有游標 | 按 `Shift+C`，或按住 Shift 再按滑鼠右鍵 |
 | 對齊事件邊界 | 按住 Shift 再點選 |
 
-請在需要檢查的區段前後至少放置兩個游標。啟用 Statistics 的 **Limit to C1–Cn**，計算會使用最早–最晚區間；狀態列 Scope 會立即更新。**Fit Cursors**（`Ctrl+R`）只顯示此區段；**Save cursor range as BTF** 可將該區段匯出為較小的 trace。
+請在需要檢查的區段前後至少放置兩個游標。啟用 Statistics 的 **Limit to C1–Cn**、工具列上的 **C1–Cn** 狀態晶片，或命令面板，計算會使用最早–最晚區間。晶片在限定開啟時使用 Scope 色彩，關閉時使用較淡色彩。狀態列 Scope 會立即更新。**Fit Cursors**（`Ctrl+R`）只顯示此區段；**Save cursor range as BTF** 可將該區段匯出為較小的 trace。
 
 ### Marks、書籤、註解與 Find
 

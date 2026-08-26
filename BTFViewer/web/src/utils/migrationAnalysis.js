@@ -146,7 +146,98 @@ export const CORRIDOR_HANDOFF_HATCH_PCT = 15
 export const CORRIDOR_TOP_N_OPTIONS = Object.freeze([5, 10, 25, 0])
 export const CORRIDOR_SORT_KEYS = Object.freeze([
   'rate', 'pingpong', 'dwell', 'handoff', 'share',
+  'count', 'net', 'label',
 ])
+/** Path table: Core path first, then Sort by metrics (compact headers). */
+export const CORRIDOR_TREE_COLS = Object.freeze([
+  { key: 'label', label: 'Core path', tip: 'Sort by Core path' },
+  { key: 'rate', label: 'Rate', tip: 'Sort by Migration rate' },
+  { key: 'count', label: 'Count', tip: 'Sort by Migrations' },
+  { key: 'pingpong', label: 'Ping', tip: 'Sort by Ping-pong' },
+  { key: 'dwell', label: 'Dwell', tip: 'Sort by Short dwell' },
+  { key: 'handoff', label: 'Handoff', tip: 'Sort by Handoff' },
+  { key: 'net', label: 'Net', tip: 'Sort by Net flow' },
+  { key: 'share', label: 'Share', tip: 'Sort by Task share' },
+])
+/** Inspector workspace panes: Core path | heatmap | Topology (1:2:1). */
+export const CI_SPLIT_RATIO = Object.freeze([1, 2, 1])
+export const CI_SPLIT_PANE_MIN = 160
+export const CI_TREE_COL_MIN = 40
+export const CI_TREE_NAME_W = 140
+export const CI_TREE_NUM_W = 56
+
+export function corridorTreeColDefaults() {
+  return CORRIDOR_TREE_COLS.map((c) => (
+    c.key === 'label' ? CI_TREE_NAME_W : CI_TREE_NUM_W
+  ))
+}
+
+export function parseIntCsv(text, n, fallback, lo = 1, hi = 8000) {
+  const fb = Array.from(fallback || [])
+  if (text == null || String(text).trim() === '') return fb
+  const parts = String(text).split(',').map((p) => p.trim()).filter(Boolean)
+  if (parts.length !== Number(n)) return fb
+  const vals = parts.map((p) => {
+    const v = Number.parseInt(p, 10)
+    if (!Number.isFinite(v)) return null
+    return Math.max(lo, Math.min(hi, v))
+  })
+  if (vals.some((v) => v == null)) return fb
+  return vals
+}
+
+export function formatIntCsv(vals) {
+  return (vals || []).map((v) => String(Math.trunc(Number(v) || 0))).join(',')
+}
+
+export function scaleSplitSizes(sizes, total, mins) {
+  const n = 3
+  const floor = (mins && mins.length === n)
+    ? mins.map((m) => Math.trunc(Number(m) || CI_SPLIT_PANE_MIN))
+    : [CI_SPLIT_PANE_MIN, CI_SPLIT_PANE_MIN, CI_SPLIT_PANE_MIN]
+  const src = (sizes && sizes.length === n) ? sizes : CI_SPLIT_RATIO
+  const raw = src.map((v) => Math.max(1, Math.trunc(Number(v) || 1)))
+  const width = Math.max(Math.trunc(Number(total) || 0), floor.reduce((a, b) => a + b, 0))
+  const ssum = raw.reduce((a, b) => a + b, 0) || 1
+  const out = raw.map((v, i) => Math.max(floor[i], Math.trunc(width * v / ssum)))
+  out[1] = Math.max(floor[1], out[1] + (width - out.reduce((a, b) => a + b, 0)))
+  return out
+}
+
+export function corridorTreeCell(row, key, kind = 'corridor') {
+  if (key === 'label') return String(row?.label || '')
+  if (kind === 'group') {
+    if (key === 'count') return String(row?.count || 0)
+    return '—'
+  }
+  if (kind === 'task') {
+    if (key === 'count') return String(row?.count || 0)
+    if (key === 'handoff') {
+      return `${Number(row?.handoffPct ?? row?.bouncePct ?? 0).toFixed(0)}%`
+    }
+    if (key === 'share') return `${Number(row?.sharePct || 0).toFixed(0)}%`
+    return '—'
+  }
+  if (key === 'rate') return `${Number(row?.ratePerS || 0).toFixed(1)}/s`
+  if (key === 'count') return String(row?.count || 0)
+  if (key === 'pingpong') return `${Number(row?.pingPongPct || 0).toFixed(0)}%`
+  if (key === 'dwell') return `${Number(row?.shortDwellShare || 0).toFixed(0)}%`
+  if (key === 'handoff') {
+    return `${Number(row?.handoffPct ?? row?.bouncePct ?? 0).toFixed(0)}%`
+  }
+  if (key === 'net') {
+    const net = Number(row?.net || 0)
+    if (net > 0) return `+${net} ▲`
+    if (net < 0) return `${net} ▼`
+    return '0'
+  }
+  if (key === 'share') {
+    const task = row?.primaryTask
+    if (!task) return '—'
+    return `${Number(task.sharePct || 0).toFixed(0)}%`
+  }
+  return '—'
+}
 
 export function corridorShortDwellThreshold(timeScale) {
   const nsPer = NS_PER_SCALE[timeScale] || 1e9
@@ -959,19 +1050,27 @@ export function filterCorridorsByTopN(corridors, n = 0) {
     .slice(0, Math.floor(limit))
 }
 
-export function sortCorridors(corridors, sortBy = 'rate') {
+export function sortCorridors(corridors, sortBy = 'rate', descending = null) {
   const list = Array.isArray(corridors) ? [...corridors] : []
   const key = CORRIDOR_SORT_KEYS.includes(sortBy) ? sortBy : 'rate'
+  const desc = descending == null ? key !== 'label' : !!descending
   const metric = (c) => {
     if (key === 'pingpong') return c.pingPongPct || 0
     if (key === 'dwell') return c.shortDwellShare || 0
     if (key === 'handoff') return c.handoffPct ?? c.bouncePct ?? 0
     if (key === 'share') return c.primaryTask?.sharePct || 0
+    if (key === 'count') return c.count || 0
+    if (key === 'net') return c.net || 0
     return c.ratePerS || 0
   }
   return list.sort((a, b) => {
-    const d = metric(b) - metric(a)
-    if (d) return d
+    let d
+    if (key === 'label') {
+      d = String(a.label || '').localeCompare(String(b.label || ''))
+    } else {
+      d = metric(a) - metric(b)
+    }
+    if (d) return desc ? -d : d
     const dc = (b.count || 0) - (a.count || 0)
     if (dc) return dc
     return String(a.label || '').localeCompare(String(b.label || ''))
@@ -1527,10 +1626,10 @@ export function applyCorridorTopNFilter(model, topN = 0) {
   return { ...reindexCorridorView(model, corridors), topN, topPct: model.topPct }
 }
 
-export function applyCorridorSort(model, sortBy = 'rate') {
+export function applyCorridorSort(model, sortBy = 'rate', descending = null) {
   if (!model) return emptyCorridorModel()
-  const corridors = sortCorridors(model.corridors || [], sortBy)
-  return { ...reindexCorridorView(model, corridors), sortBy }
+  const corridors = sortCorridors(model.corridors || [], sortBy, descending)
+  return { ...reindexCorridorView(model, corridors), sortBy, sortDesc: descending }
 }
 
 /**
