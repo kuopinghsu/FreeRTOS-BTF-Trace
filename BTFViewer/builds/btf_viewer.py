@@ -9467,6 +9467,15 @@ tbody tr:nth-child(even) td:first-child {{ background: #f7f9fc; }}
 .status-warn {{ border-left: 4px solid #c87a12; }}
 .badge-regressed {{ background: #fde8e6; color: #9b2c2c; }}
 .badge-changed {{ background: #e8eef7; color: #123355; }}
+.compare-decision {{
+  margin: 0 0 12px; padding: 8px 10px; border-radius: 6px;
+  background: rgba(52, 152, 219, 0.10); font-size: 12px; line-height: 1.45; color: #3d4f63;
+}}
+.compare-decision-identity {{ font-size: 11px; color: #5f6f82; }}
+.compare-decision-counts {{ margin-top: 4px; font-weight: 600; color: #123355; }}
+.compare-decision-largest {{ margin-top: 4px; color: #182230; }}
+.compare-decision-why, .compare-decision-next {{ margin-top: 2px; font-size: 11px; color: #5f6f82; }}
+.compare-decision-sig {{ margin-top: 2px; font-size: 10px; color: #7a8690; }}
 .compare-chart {{ margin: 0 0 12px; overflow-x: auto; }}
 .compare-chart svg {{ max-width: 100%; height: auto; display: block; }}
 .table-tools {{ margin: 8px 0 12px; }}
@@ -9674,6 +9683,7 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
     heat_svg_fn = globals().get("compare_migration_heatmap_svg")
     heat_rows_fn = globals().get("compare_migration_heatmap_rows")
     mig_filt_fn = globals().get("filter_compare_migration_rows")
+    decision_fn = globals().get("compare_summary_decision_html")
     if any(fn is None for fn in (
         util_svg_fn, util_rows_fn, p99_svg_fn, p99_rows_fn,
         sum_svg_fn, sum_rows_fn, heat_svg_fn, heat_rows_fn, mig_filt_fn,
@@ -9687,13 +9697,17 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
         heat_rows_fn = globals().get("compare_migration_heatmap_rows")
         heat_svg_fn = globals().get("compare_migration_heatmap_svg")
         mig_filt_fn = globals().get("filter_compare_migration_rows")
+        decision_fn = globals().get("compare_summary_decision_html")
+    elif decision_fn is None:
+        decision_fn = globals().get("compare_summary_decision_html")
     util_svg = util_svg_fn(util_rows_fn(tables or {}))
     p99_svg = p99_svg_fn(p99_rows_fn(tables or {}, 12))
     sum_svg = sum_svg_fn(sum_rows_fn(tables or {}, 8)) if sum_svg_fn and sum_rows_fn else ""
     heat_svg = heat_svg_fn(heat_rows_fn(tables.get("migrations") or [], 12)) if heat_svg_fn and heat_rows_fn else ""
+    decision_html = decision_fn(tables or {}, name_a, name_b) if decision_fn else ""
     util_lead = f'<div class="compare-chart">{util_svg}</div>' if util_svg else ""
     p99_lead = f'<div class="compare-chart">{p99_svg}</div>' if p99_svg else ""
-    sum_lead = f'<div class="compare-chart">{sum_svg}</div>' if sum_svg else ""
+    sum_lead = (decision_html or "") + (f'<div class="compare-chart">{sum_svg}</div>' if sum_svg else "")
     heat_lead = f'<div class="compare-chart">{heat_svg}</div>' if heat_svg else ""
     mig_top = mig_filt_fn(tables.get("migrations") or [], "count", "top", "", 10)
     mig_lead = heat_lead
@@ -39298,7 +39312,7 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Neutral (CPU, migrations, latency, tick health, sync). State which "
         "side is worse for each concern, the likely cause with confidence, "
         "and which Statistics section or Trace Compare page to open next. "
-        "Mention the Compare summary strip under the scope checkbox when "
+        "Mention the regression result on the Compare Summary tab when "
         "A vs B deltas are already summarised there, including the Why? "
         "line computed from those deltas. "
         "Use jump:TIME when a concrete timestamp is available.",
@@ -47740,6 +47754,23 @@ def parse_signed_delta(text: Any) -> Optional[Tuple[float, str]]:
     return sign * val, "count"
 
 
+def compare_cell_sort_key(value: Any) -> Any:
+    """Numeric/time-aware sort key for Trace Compare cells (Web parity)."""
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            return float("-inf")
+        return float(value)
+    parsed = parse_signed_delta(value)
+    if parsed is not None:
+        return parsed[0]
+    s = str(value or "").strip()
+    if not s or s in ("—", "–", "-"):
+        return float("-inf")
+    return s.lower()
+
+
 def compare_candidates_from_tables(tables: dict) -> List[dict]:
     """Normalize Desktop list-rows and Web object-rows into regression candidates."""
     if not isinstance(tables, dict):
@@ -47847,6 +47878,72 @@ def compare_summary_strip(
         "why": why or hint,
         "formula": COMPARE_DELTA_FORMULA,
     }
+
+
+def compare_summary_decision_html(
+    tables: dict,
+    name_a: str = "",
+    name_b: str = "",
+) -> str:
+    """Dialog-matching regression result for the Trace Compare HTML Summary card."""
+    data = compare_summary_strip(tables, 4, name_a, name_b)
+    notable = data.get("notable") or {}
+    identity = notable.get("identity") or {}
+    id_a = identity.get("a") or {}
+    id_b = identity.get("b") or {}
+    cards = notable.get("cards") or {}
+    regs = list(data.get("regressions") or [])
+    n_reg = int(cards.get("regressions") or len(regs) or 0)
+    n_imp = int(cards.get("improvements") or len(data.get("improvements") or []) or 0)
+    n_warn = int(cards.get("warnings") or len(data.get("warnings") or []) or 0)
+    top = regs[0] if regs else None
+    if top:
+        largest = (
+            f"Largest regression — {top.get('label')}: {top.get('change')}"
+        )
+    else:
+        largest = str(notable.get("verdict") or "").strip() or "No significant regressions"
+    why = str(data.get("why") or "").strip()
+    nxt = str(notable.get("next_investigation") or "").strip()
+    omitted = int(notable.get("small_omitted_count") or 0)
+    sig_note = (
+        "Showing engineering-significant deltas only (small changes omitted)"
+        if (int(cards.get("significant") or 0) or omitted) else ""
+    )
+    visible = bool(
+        n_reg or n_imp or n_warn or top or why or nxt or notable.get("verdict")
+    )
+    if not visible:
+        return ""
+    ident = (
+        f"Baseline: {name_a or 'Baseline'} · Scope {id_a.get('span') or 'Full Trace'}"
+        f"    |    Candidate: {name_b or 'Candidate'} · Scope "
+        f"{id_b.get('span') or 'Full Trace'}"
+    )
+    counts = (
+        f"{n_reg} REGRESSIONS    {n_imp} IMPROVEMENTS"
+        + (f"    {n_warn} WARNING{'S' if n_warn != 1 else ''}" if n_warn else "")
+    )
+    parts = [
+        '<div class="compare-decision">',
+        f'<div class="compare-decision-identity">{html.escape(ident)}</div>',
+        f'<div class="compare-decision-counts">{html.escape(counts)}</div>',
+        f'<div class="compare-decision-largest">{html.escape(largest)}</div>',
+    ]
+    if why:
+        parts.append(
+            f'<div class="compare-decision-why">Why? {html.escape(why)}</div>'
+        )
+    if nxt:
+        parts.append(
+            f'<div class="compare-decision-next">{html.escape(nxt)}</div>'
+        )
+    if sig_note:
+        parts.append(
+            f'<div class="compare-decision-sig">{html.escape(sig_note)}</div>'
+        )
+    parts.append("</div>")
+    return "".join(parts)
 
 
 def _compare_summary_pair(tables: dict, prefix: str) -> Tuple[str, str]:
@@ -48395,13 +48492,14 @@ def compare_p99_delta_chart_svg(rows: Sequence[dict], width: int = 640) -> str:
     label_w = 96
     pad = 12
     row_h = 22
-    header = 28
+    header = 44
     change_w = 88
     h = header + len(items) * row_h + 16
     max_v = max((abs(float(r.get("cand") or 0)) for r in items), default=1.0) or 1.0
     plot_w = max(80.0, w - label_w - pad - change_w)
     mid = label_w + plot_w / 2.0
     half = plot_w / 2.0
+    axis_y = 34
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" '
         f'width="{w}" height="{h}" role="img" '
@@ -48410,12 +48508,12 @@ def compare_p99_delta_chart_svg(rows: Sequence[dict], width: int = 640) -> str:
         "Response P99 change</text>",
         f'<text x="{w - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">'
         "Candidate B − Baseline A</text>",
-        f'<line x1="{mid:.1f}" y1="{header - 4}" x2="{mid:.1f}" y2="{h - 10}" '
-        'stroke="#d9e0ea" stroke-width="1"/>',
-        f'<text x="{label_w:.1f}" y="{header - 6}" font-size="9" fill="{COMPARE_CHART_IMPROVED}">'
+        f'<text x="{label_w:.1f}" y="{axis_y}" font-size="9" fill="{COMPARE_CHART_IMPROVED}">'
         "Improved</text>",
-        f'<text x="{mid + half:.1f}" y="{header - 6}" text-anchor="end" font-size="9" '
+        f'<text x="{label_w + plot_w:.1f}" y="{axis_y}" text-anchor="end" font-size="9" '
         f'fill="{COMPARE_CHART_REGRESSED}">Regressed</text>',
+        f'<line x1="{mid:.1f}" y1="{header - 2}" x2="{mid:.1f}" y2="{h - 10}" '
+        'stroke="#d9e0ea" stroke-width="1"/>',
     ]
     for i, row in enumerate(items):
         y = header + i * row_h
@@ -48599,11 +48697,7 @@ def compare_summary_change_bars_svg(rows: Sequence[dict], width: int = 640) -> s
         {**r, "label": str(r.get("label") or "")[:22]}
         for r in (rows or []) if isinstance(r, dict)
     ], width=width).replace(
-        "Response P99 change", "Summary changes", 1,
-    ).replace(
-        'aria-label="Response P99 change Candidate B minus Baseline A"',
-        'aria-label="Summary changes Candidate B minus Baseline A"',
-        1,
+        "Response P99 change", "Summary changes",
     )
 
 
@@ -54848,7 +54942,8 @@ class _CompareBarChart(QWidget):
             self.update()
             return
         row_h = 32 if self._kind == "util" else 22
-        self.setFixedHeight(26 + n * row_h + 8)
+        header = 26 if self._kind == "util" else 44
+        self.setFixedHeight(header + n * row_h + 8)
         self.show()
         self.update()
 
@@ -54869,7 +54964,7 @@ class _CompareBarChart(QWidget):
         right_w = 52 if self._kind == "util" else 88
         plot_x = pad + label_w
         plot_w = max(40.0, w - plot_x - right_w - pad)
-        header_h = 22
+        header_h = 22 if self._kind == "util" else 40
         p.setPen(ink)
         p.setFont(self.font())
         if self._kind == "util":
@@ -54917,16 +55012,16 @@ class _CompareBarChart(QWidget):
             max_v = max((abs(float(r.get("cand") or r.get("delta") or 0)) for r in rows), default=1.0) or 1.0
             mid = plot_x + plot_w / 2.0
             half = plot_w / 2.0
-            p.setPen(QPen(QColor("#888888"), 1))
-            p.drawLine(int(mid), header_h, int(mid), self.height() - 6)
             p.setPen(QColor("#3cb371"))
-            p.drawText(QRectF(plot_x, 2, 70, 16),
+            p.drawText(QRectF(plot_x, 22, plot_w / 2.0, 14),
                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
                        "Improved")
             p.setPen(QColor("#e07070"))
-            p.drawText(QRectF(plot_x + plot_w - 70, 2, 70, 16),
+            p.drawText(QRectF(plot_x + plot_w / 2.0, 22, plot_w / 2.0, 14),
                        int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
                        "Regressed")
+            p.setPen(QPen(QColor("#888888"), 1))
+            p.drawLine(int(mid), header_h, int(mid), self.height() - 6)
             for i, row in enumerate(rows):
                 y = header_h + 4 + i * 22
                 p.setPen(ink)
@@ -55038,27 +55133,7 @@ class _TraceCompareDialog(QDialog):
         self._dec_sig_note.setStyleSheet("QLabel { color: #7a8690; font-size: 10px; }")
         self._dec_sig_note.hide()
         dec.addWidget(self._dec_sig_note)
-        insp = QHBoxLayout()
-        insp.setContentsMargins(0, 2, 0, 0)
-        insp.setSpacing(8)
-        tip = (
-            "Open Statistics for the largest regression on this tab "
-            "(preserves Scope/Filters)"
-        )
-        self._btn_inspect_a = QPushButton("Investigate on Baseline")
-        self._btn_inspect_a.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_inspect_a.setToolTip(tip)
-        self._btn_inspect_a.clicked.connect(lambda: self._investigate_side("a"))
-        insp.addWidget(self._btn_inspect_a)
-        self._btn_inspect_b = QPushButton("Investigate on Candidate")
-        self._btn_inspect_b.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_inspect_b.setToolTip(tip)
-        self._btn_inspect_b.clicked.connect(lambda: self._investigate_side("b"))
-        insp.addWidget(self._btn_inspect_b)
-        insp.addStretch(1)
-        dec.addLayout(insp)
         self._decision.hide()
-        lay.addWidget(self._decision)
         # Back-compat alias for tests that look for _strip
         self._strip = self._dec_largest
 
@@ -55115,7 +55190,9 @@ class _TraceCompareDialog(QDialog):
                 "QHeaderView::section { position: sticky; }"
             )
             hdr = tbl.horizontalHeader()
-            hdr.setSectionsClickable(False)
+            hdr.setSectionsClickable(True)
+            hdr.setSortIndicatorShown(True)
+            tbl.setSortingEnabled(True)
             tbl.setWordWrap(False)
 
         self._chart_tables = (
@@ -55165,7 +55242,7 @@ class _TraceCompareDialog(QDialog):
 
         # Chart + table pages share one scroll viewport (Web compare-table-wrap parity).
         summary_page = self._make_compare_scroll_page(
-            self._summary_chart, self._summary_table)
+            self._decision, self._summary_chart, self._summary_table)
         core_page = self._make_compare_scroll_page(
             self._core_util_chart, self._core_util_table)
         resp_page = self._make_compare_scroll_page(
@@ -55362,6 +55439,8 @@ class _TraceCompareDialog(QDialog):
         delta_col: int = -1,
         fit_embedded: bool = False,
     ) -> None:
+        sorting = table.isSortingEnabled()
+        table.setSortingEnabled(False)
         table.setRowCount(len(rows))
         improved = QColor("#3cb371")
         regressed = QColor("#e07070")
@@ -55376,7 +55455,7 @@ class _TraceCompareDialog(QDialog):
                 text = str(val)
                 if status and ci == delta_col:
                     text = format_semantic_delta(text, status, colorblind)
-                item = QTableWidgetItem(text)
+                item = _StatsSortItem(text, compare_cell_sort_key(val))
                 if ci < left_cols:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
                 else:
@@ -55389,6 +55468,7 @@ class _TraceCompareDialog(QDialog):
                         item.setForeground(QBrush(regressed))
                         item.setToolTip("Regressed (Candidate B worse)")
                 table.setItem(ri, ci, item)
+        table.setSortingEnabled(sorting)
         if fit_embedded:
             _TraceCompareDialog._fit_compare_embedded_table(table)
 
@@ -55409,6 +55489,8 @@ class _TraceCompareDialog(QDialog):
         )
         headers = list(result.get("headers") or [])
         rows = list(result.get("rows") or [])
+        sorting = self._mig_table.isSortingEnabled()
+        self._mig_table.setSortingEnabled(False)
         self._mig_table.setColumnCount(len(headers))
         self._mig_table.setHorizontalHeaderLabels(headers)
         delta_col = 3 if str(view or "count") == "count" else (
@@ -55416,6 +55498,7 @@ class _TraceCompareDialog(QDialog):
         self._fill_table(
             self._mig_table, rows, status_metric="migrations", delta_col=delta_col,
             fit_embedded=True)
+        self._mig_table.setSortingEnabled(sorting)
         shown = int(result.get("shown") or 0)
         total = int(result.get("total") or 0)
         if hasattr(self, "_mig_hint"):
@@ -55444,6 +55527,8 @@ class _TraceCompareDialog(QDialog):
         if args is None:
             for tbl in self._all_tables:
                 tbl.setRowCount(0)
+            if getattr(self, "_decision", None) is not None:
+                self._decision.hide()
             if getattr(self, "_strip", None) is not None:
                 self._strip.hide()
             self._mig_all_rows = []

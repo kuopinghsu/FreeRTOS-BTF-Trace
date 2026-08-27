@@ -389,8 +389,8 @@ Trace Compare is most reliable when read in this order:
 
 1. Confirm file identity, Scope, tick mode, task matching, core count, and validation warnings.
 2. Use span-normalized Summary rows when capture lengths differ.
-3. Review Notable Changes for differences that exceed both absolute and relative thresholds.
-4. Open the related detail table and compare tail values.
+3. Review the regression result on the **Summary** tab for differences that exceed both absolute and relative thresholds.
+4. Open the related detail table and compare tail values. Click a column header to sort; click again to reverse.
 5. Return to both timelines and verify the events behind the difference.
 
 Task rows are matched by display name (`Name[id]`). A changed ID can prevent a logical match. A dash means unavailable, not zero. CPU and utilisation differences use percentage points (`pp`).
@@ -1082,6 +1082,8 @@ If no threshold is configured, BTFViewer cannot evaluate compliance. A result of
 ### Trace Compare ![](../images/readme/h4.svg)
 
 **What it tells you**
+
+The **Summary** tab shows the regression result (Baseline and Candidate identity, regression and improvement counts, and the largest regression) and the summary metric table. Click a column header to sort any compare table; click again to reverse.
 
 Compares two runs of the same workload. Use Trace A as the baseline and Trace B as the candidate. Keep workload, instrumentation, core count, and capture phase as similar as possible.
 

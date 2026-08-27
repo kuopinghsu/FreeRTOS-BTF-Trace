@@ -494,11 +494,13 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
             "section_label": "Response Time",
             "label": "T1 response p99",
         }
-        btn = next(
-            b for b in dlg.findChildren(QPushButton)
-            if b.text().replace("&", "") == "Investigate on Candidate"
-        )
-        btn.click()
+        labels = {b.text().replace("&", "") for b in dlg.findChildren(QPushButton)}
+        self.assertNotIn("Investigate on Baseline", labels)
+        self.assertNotIn("Investigate on Candidate", labels)
+        self.assertIs(dlg._decision.parent(), dlg._pages.widget(0).widget())
+        self.assertTrue(dlg._summary_table.isSortingEnabled())
+        self.assertTrue(dlg._summary_table.horizontalHeader().sectionsClickable())
+        dlg._investigate_side("b")
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][0], 1)
         self.assertEqual(calls[0][1]["section_id"], "response")

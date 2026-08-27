@@ -19,6 +19,7 @@ from btf_viewer_pkg.ux_explore import (  # noqa: E402
     best_finding_scope,
     collect_worst_events,
     compare_summary_strip,
+    compare_summary_decision_html,
     compare_notable_changes,
     compare_investigate_target,
     compare_section_for_metric,
@@ -46,6 +47,7 @@ from btf_viewer_pkg.ux_explore import (  # noqa: E402
     mutex_blocking_table,
     pair_mutex_waits,
     parse_signed_delta,
+    compare_cell_sort_key,
     percentile_index,
     preemption_pairs,
     preemption_story,
@@ -148,6 +150,11 @@ class UxExploreTest(unittest.TestCase):
     def test_parse_signed_delta_and_regressions(self) -> None:
         self.assertEqual(parse_signed_delta("+12.3 µs")[0], 12300.0)
         self.assertEqual(parse_signed_delta("−2")[0], -2.0)
+        self.assertEqual(compare_cell_sort_key("+12.3 µs"), 12300.0)
+        self.assertEqual(compare_cell_sort_key("−2"), -2.0)
+        self.assertEqual(compare_cell_sort_key(15), 15.0)
+        self.assertEqual(compare_cell_sort_key("—"), float("-inf"))
+        self.assertEqual(compare_cell_sort_key("Worker[1]"), "worker[1]")
         tables = {
             "summary": [
                 ["Span", "1 ms", "900 µs", "+100 µs"],
@@ -462,6 +469,20 @@ class UxExploreTest(unittest.TestCase):
         })
         self.assertTrue(any(r["label"] == "Migrations (total)" for r in bars))
         self.assertIn("Summary changes", compare_summary_change_bars_svg(bars))
+        svg = compare_summary_change_bars_svg(bars)
+        self.assertRegex(svg, r'y="16"[^>]*>Summary changes<')
+        self.assertRegex(svg, r'y="34"[^>]*>Improved<')
+        self.assertRegex(svg, r'y="34"[^>]*>Regressed<')
+        self.assertLess(svg.index("Summary changes"), svg.index(">Improved<"))
+        decision = compare_summary_decision_html({
+            "summary": [
+                ["Migrations (total)", 10, 25, "−15"],
+                ["Blocking time /s", "1 ms", "4 ms", "−3 ms"],
+            ],
+        }, "A.btf", "B.btf")
+        self.assertIn('class="compare-decision"', decision)
+        self.assertIn("REGRESSIONS", decision)
+        self.assertIn("Largest regression", decision)
         self.assertEqual(
             compare_row_delta_status("Migrations (total)", "−100"), "Regressed")
         self.assertEqual(

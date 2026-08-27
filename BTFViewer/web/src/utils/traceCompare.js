@@ -16,6 +16,7 @@ import { btfHtmlReportDocument, HTML_REPORT_INTERACTIVE_SCRIPT, HTML_REPORT_TOC_
 import {
   compareAnalysisTables,
   compareNotableChanges,
+  compareSummaryDecisionHtml,
   COMPARE_DELTA_FORMULA,
   compareCoreUtilChartRows,
   compareCoreUtilChartSvg,
@@ -1191,6 +1192,15 @@ tbody tr:nth-child(even) td:first-child { background: #f7f9fc; }
 .status-warn { border-left: 4px solid #c87a12; }
 .badge-regressed { background: #fde8e6; color: #9b2c2c; }
 .badge-changed { background: #e8eef7; color: #123355; }
+.compare-decision {
+  margin: 0 0 12px; padding: 8px 10px; border-radius: 6px;
+  background: rgba(52, 152, 219, 0.10); font-size: 12px; line-height: 1.45; color: #3d4f63;
+}
+.compare-decision-identity { font-size: 11px; color: #5f6f82; }
+.compare-decision-counts { margin-top: 4px; font-weight: 600; color: #123355; }
+.compare-decision-largest { margin-top: 4px; color: #182230; }
+.compare-decision-why, .compare-decision-next { margin-top: 2px; font-size: 11px; color: #5f6f82; }
+.compare-decision-sig { margin-top: 2px; font-size: 10px; color: #7a8690; }
 .compare-chart { margin: 0 0 12px; overflow-x: auto; }
 .compare-chart svg { max-width: 100%; height: auto; display: block; }
 .table-tools { margin: 8px 0 12px; }
@@ -1377,9 +1387,10 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
   const p99Svg = compareP99DeltaChartSvg(compareP99DeltaChartRows(t, 12))
   const sumSvg = compareSummaryChangeBarsSvg(compareSummaryChangeBarRows(t, 8))
   const heatSvg = compareMigrationHeatmapSvg(compareMigrationHeatmapRows(t.migrations, 12))
+  const decisionHtml = compareSummaryDecisionHtml(t, nameA, nameB)
   const utilLead = utilSvg ? `<div class="compare-chart">${utilSvg}</div>` : ''
   const p99Lead = p99Svg ? `<div class="compare-chart">${p99Svg}</div>` : ''
-  const sumLead = sumSvg ? `<div class="compare-chart">${sumSvg}</div>` : ''
+  const sumLead = (decisionHtml || '') + (sumSvg ? `<div class="compare-chart">${sumSvg}</div>` : '')
   const heatLead = heatSvg ? `<div class="compare-chart">${heatSvg}</div>` : ''
   const migTop = filterCompareMigrationRows(t.migrations, 'count', 'top', '', 10)
   let migLead = heatLead

@@ -308,7 +308,7 @@ flowchart TD
 | 比較兩個工作 | 已知兩個工作名稱 | `compare_tasks` | 並排比較 Execution / Blocking / Migrations |
 | 尋找相關 Findings | 已選擇一個 Finding | `find_related_findings` | 共用工作／指標／相近時間 |
 | 核心間負載不平衡 | Findings 中有 Multi-core Util | **Core balance** → `analyze_traces`（multi-tab）或 **What-if** Pin 到較空閒核心 | Task × Core；Load Balance Score；Concurrent Active；Core Time Breakdown |
-| A/B Build Regression | 已開啟兩個分頁 | **Trace Compare**（工具列 **Compare → Query with AI…**）/ `compare_performance` / `regression_explain` | Compare Summary Strip；Trace Compare Pages；兩個 Build 使用相同 Scope |
+| A/B Build Regression | 已開啟兩個分頁 | **Trace Compare**（工具列 **Compare → Query with AI…**）/ `compare_performance` / `regression_explain` | Compare Summary 分頁；Trace Compare Pages；兩個 Build 使用相同 Scope |
 | 與已儲存 Baseline 的偏移 | 已儲存 Baseline Profile（rc / localStorage） | `baseline_score` | 標示 `|z|>2`；必要時重新擷取 |
 | 排序所有已開啟 Trace | ≥2 個分頁 | `analyze_traces` | Best tab 與 Migrations / LB / Missed Ticks |
 | 撰寫 Review 報告 | 原因已確認 | **Diagnostic report** → `generate_report` → `export_report` / `export_investigation` | 已儲存 HTML/CSV/JSON；Evidence Time 已 Bookmark |

@@ -509,6 +509,23 @@ def parse_signed_delta(text: Any) -> Optional[Tuple[float, str]]:
     return sign * val, "count"
 
 
+def compare_cell_sort_key(value: Any) -> Any:
+    """Numeric/time-aware sort key for Trace Compare cells (Web parity)."""
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            return float("-inf")
+        return float(value)
+    parsed = parse_signed_delta(value)
+    if parsed is not None:
+        return parsed[0]
+    s = str(value or "").strip()
+    if not s or s in ("—", "–", "-"):
+        return float("-inf")
+    return s.lower()
+
+
 def compare_candidates_from_tables(tables: dict) -> List[dict]:
     """Normalize Desktop list-rows and Web object-rows into regression candidates."""
     if not isinstance(tables, dict):
@@ -616,6 +633,72 @@ def compare_summary_strip(
         "why": why or hint,
         "formula": COMPARE_DELTA_FORMULA,
     }
+
+
+def compare_summary_decision_html(
+    tables: dict,
+    name_a: str = "",
+    name_b: str = "",
+) -> str:
+    """Dialog-matching regression result for the Trace Compare HTML Summary card."""
+    data = compare_summary_strip(tables, 4, name_a, name_b)
+    notable = data.get("notable") or {}
+    identity = notable.get("identity") or {}
+    id_a = identity.get("a") or {}
+    id_b = identity.get("b") or {}
+    cards = notable.get("cards") or {}
+    regs = list(data.get("regressions") or [])
+    n_reg = int(cards.get("regressions") or len(regs) or 0)
+    n_imp = int(cards.get("improvements") or len(data.get("improvements") or []) or 0)
+    n_warn = int(cards.get("warnings") or len(data.get("warnings") or []) or 0)
+    top = regs[0] if regs else None
+    if top:
+        largest = (
+            f"Largest regression — {top.get('label')}: {top.get('change')}"
+        )
+    else:
+        largest = str(notable.get("verdict") or "").strip() or "No significant regressions"
+    why = str(data.get("why") or "").strip()
+    nxt = str(notable.get("next_investigation") or "").strip()
+    omitted = int(notable.get("small_omitted_count") or 0)
+    sig_note = (
+        "Showing engineering-significant deltas only (small changes omitted)"
+        if (int(cards.get("significant") or 0) or omitted) else ""
+    )
+    visible = bool(
+        n_reg or n_imp or n_warn or top or why or nxt or notable.get("verdict")
+    )
+    if not visible:
+        return ""
+    ident = (
+        f"Baseline: {name_a or 'Baseline'} · Scope {id_a.get('span') or 'Full Trace'}"
+        f"    |    Candidate: {name_b or 'Candidate'} · Scope "
+        f"{id_b.get('span') or 'Full Trace'}"
+    )
+    counts = (
+        f"{n_reg} REGRESSIONS    {n_imp} IMPROVEMENTS"
+        + (f"    {n_warn} WARNING{'S' if n_warn != 1 else ''}" if n_warn else "")
+    )
+    parts = [
+        '<div class="compare-decision">',
+        f'<div class="compare-decision-identity">{html.escape(ident)}</div>',
+        f'<div class="compare-decision-counts">{html.escape(counts)}</div>',
+        f'<div class="compare-decision-largest">{html.escape(largest)}</div>',
+    ]
+    if why:
+        parts.append(
+            f'<div class="compare-decision-why">Why? {html.escape(why)}</div>'
+        )
+    if nxt:
+        parts.append(
+            f'<div class="compare-decision-next">{html.escape(nxt)}</div>'
+        )
+    if sig_note:
+        parts.append(
+            f'<div class="compare-decision-sig">{html.escape(sig_note)}</div>'
+        )
+    parts.append("</div>")
+    return "".join(parts)
 
 
 def _compare_summary_pair(tables: dict, prefix: str) -> Tuple[str, str]:
@@ -1164,13 +1247,14 @@ def compare_p99_delta_chart_svg(rows: Sequence[dict], width: int = 640) -> str:
     label_w = 96
     pad = 12
     row_h = 22
-    header = 28
+    header = 44
     change_w = 88
     h = header + len(items) * row_h + 16
     max_v = max((abs(float(r.get("cand") or 0)) for r in items), default=1.0) or 1.0
     plot_w = max(80.0, w - label_w - pad - change_w)
     mid = label_w + plot_w / 2.0
     half = plot_w / 2.0
+    axis_y = 34
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" '
         f'width="{w}" height="{h}" role="img" '
@@ -1179,12 +1263,12 @@ def compare_p99_delta_chart_svg(rows: Sequence[dict], width: int = 640) -> str:
         "Response P99 change</text>",
         f'<text x="{w - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">'
         "Candidate B − Baseline A</text>",
-        f'<line x1="{mid:.1f}" y1="{header - 4}" x2="{mid:.1f}" y2="{h - 10}" '
-        'stroke="#d9e0ea" stroke-width="1"/>',
-        f'<text x="{label_w:.1f}" y="{header - 6}" font-size="9" fill="{COMPARE_CHART_IMPROVED}">'
+        f'<text x="{label_w:.1f}" y="{axis_y}" font-size="9" fill="{COMPARE_CHART_IMPROVED}">'
         "Improved</text>",
-        f'<text x="{mid + half:.1f}" y="{header - 6}" text-anchor="end" font-size="9" '
+        f'<text x="{label_w + plot_w:.1f}" y="{axis_y}" text-anchor="end" font-size="9" '
         f'fill="{COMPARE_CHART_REGRESSED}">Regressed</text>',
+        f'<line x1="{mid:.1f}" y1="{header - 2}" x2="{mid:.1f}" y2="{h - 10}" '
+        'stroke="#d9e0ea" stroke-width="1"/>',
     ]
     for i, row in enumerate(items):
         y = header + i * row_h
@@ -1368,11 +1452,7 @@ def compare_summary_change_bars_svg(rows: Sequence[dict], width: int = 640) -> s
         {**r, "label": str(r.get("label") or "")[:22]}
         for r in (rows or []) if isinstance(r, dict)
     ], width=width).replace(
-        "Response P99 change", "Summary changes", 1,
-    ).replace(
-        'aria-label="Response P99 change Candidate B minus Baseline A"',
-        'aria-label="Summary changes Candidate B minus Baseline A"',
-        1,
+        "Response P99 change", "Summary changes",
     )
 
 

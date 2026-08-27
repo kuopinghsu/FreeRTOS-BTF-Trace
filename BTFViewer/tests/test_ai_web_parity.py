@@ -194,8 +194,10 @@ class AiWebParityTests(unittest.TestCase):
             ("def finding_overlay_times", "export function findingOverlayTimes"),
             ("def task_inspector_line", "export function taskInspectorLine"),
             ("def compare_summary_strip", "export function compareSummaryStrip"),
+            ("def compare_summary_decision_html", "export function compareSummaryDecisionHtml"),
             ("def compare_notable_changes", "export function compareNotableChanges"),
             ("def compare_investigate_target", "export function compareInvestigateTarget"),
+            ("def compare_cell_sort_key", "export function compareCellSortKey"),
             ("def compare_section_for_metric", "export function compareSectionForMetric"),
             ("def compare_task_for_row", "export function compareTaskForRow"),
             ("def compare_core_util_chart_svg", "export function compareCoreUtilChartSvg"),
@@ -520,6 +522,13 @@ class AiWebParityTests(unittest.TestCase):
         for needle in ("Save as baseline", "Score vs baseline"):
             self.assertIn(needle, stats, needle)
             self.assertIn(needle, compare, needle)
+        self.assertNotIn("Investigate on Baseline", stats)
+        self.assertNotIn("Investigate on Baseline", compare)
+        self.assertNotIn("Investigate on Candidate", stats)
+        self.assertNotIn("Investigate on Candidate", compare)
+        self.assertIn("self._decision, self._summary_chart, self._summary_table", stats)
+        self.assertIn("toggleTableSort('summary', 'delta')", compare)
+        self.assertIn("compare_cell_sort_key(val)", stats)
         self.assertIn('addTab(self._trends_table, "Trends")', stats)
         self.assertIn("{ id: 'trends', label: 'Trends' }", compare)
         self.assertIn("Start Investigation", assist)
@@ -802,7 +811,7 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("Task × Core", by_id["balance"])
         self.assertIn("Task Health", by_id["deadlines"])
         self.assertIn("Do not conflate this with Period / Jitter", by_id["tick"])
-        self.assertIn("Compare summary strip", by_id["compare"])
+        self.assertIn("Compare Summary tab", by_id["compare"])
         self.assertIn("set_cursors", by_id["auto_investigate"])
         self.assertIn("Remaining findings", by_id["auto_investigate"])
         self.assertIn("focus_evidence", by_id["auto_investigate"])

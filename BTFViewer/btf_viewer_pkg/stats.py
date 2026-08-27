@@ -69,6 +69,7 @@ from .ux_explore import (
     collect_worst_events,
     compare_summary_strip,
     compare_investigate_target,
+    compare_cell_sort_key,
     compare_core_util_chart_rows,
     compare_p99_delta_chart_rows,
     compare_summary_change_bar_rows,
@@ -3058,7 +3059,8 @@ class _CompareBarChart(QWidget):
             self.update()
             return
         row_h = 32 if self._kind == "util" else 22
-        self.setFixedHeight(26 + n * row_h + 8)
+        header = 26 if self._kind == "util" else 44
+        self.setFixedHeight(header + n * row_h + 8)
         self.show()
         self.update()
 
@@ -3079,7 +3081,7 @@ class _CompareBarChart(QWidget):
         right_w = 52 if self._kind == "util" else 88
         plot_x = pad + label_w
         plot_w = max(40.0, w - plot_x - right_w - pad)
-        header_h = 22
+        header_h = 22 if self._kind == "util" else 40
         p.setPen(ink)
         p.setFont(self.font())
         if self._kind == "util":
@@ -3127,16 +3129,16 @@ class _CompareBarChart(QWidget):
             max_v = max((abs(float(r.get("cand") or r.get("delta") or 0)) for r in rows), default=1.0) or 1.0
             mid = plot_x + plot_w / 2.0
             half = plot_w / 2.0
-            p.setPen(QPen(QColor("#888888"), 1))
-            p.drawLine(int(mid), header_h, int(mid), self.height() - 6)
             p.setPen(QColor("#3cb371"))
-            p.drawText(QRectF(plot_x, 2, 70, 16),
+            p.drawText(QRectF(plot_x, 22, plot_w / 2.0, 14),
                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
                        "Improved")
             p.setPen(QColor("#e07070"))
-            p.drawText(QRectF(plot_x + plot_w - 70, 2, 70, 16),
+            p.drawText(QRectF(plot_x + plot_w / 2.0, 22, plot_w / 2.0, 14),
                        int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
                        "Regressed")
+            p.setPen(QPen(QColor("#888888"), 1))
+            p.drawLine(int(mid), header_h, int(mid), self.height() - 6)
             for i, row in enumerate(rows):
                 y = header_h + 4 + i * 22
                 p.setPen(ink)
@@ -3248,27 +3250,7 @@ class _TraceCompareDialog(QDialog):
         self._dec_sig_note.setStyleSheet("QLabel { color: #7a8690; font-size: 10px; }")
         self._dec_sig_note.hide()
         dec.addWidget(self._dec_sig_note)
-        insp = QHBoxLayout()
-        insp.setContentsMargins(0, 2, 0, 0)
-        insp.setSpacing(8)
-        tip = (
-            "Open Statistics for the largest regression on this tab "
-            "(preserves Scope/Filters)"
-        )
-        self._btn_inspect_a = QPushButton("Investigate on Baseline")
-        self._btn_inspect_a.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_inspect_a.setToolTip(tip)
-        self._btn_inspect_a.clicked.connect(lambda: self._investigate_side("a"))
-        insp.addWidget(self._btn_inspect_a)
-        self._btn_inspect_b = QPushButton("Investigate on Candidate")
-        self._btn_inspect_b.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_inspect_b.setToolTip(tip)
-        self._btn_inspect_b.clicked.connect(lambda: self._investigate_side("b"))
-        insp.addWidget(self._btn_inspect_b)
-        insp.addStretch(1)
-        dec.addLayout(insp)
         self._decision.hide()
-        lay.addWidget(self._decision)
         # Back-compat alias for tests that look for _strip
         self._strip = self._dec_largest
 
@@ -3325,7 +3307,9 @@ class _TraceCompareDialog(QDialog):
                 "QHeaderView::section { position: sticky; }"
             )
             hdr = tbl.horizontalHeader()
-            hdr.setSectionsClickable(False)
+            hdr.setSectionsClickable(True)
+            hdr.setSortIndicatorShown(True)
+            tbl.setSortingEnabled(True)
             tbl.setWordWrap(False)
 
         self._chart_tables = (
@@ -3375,7 +3359,7 @@ class _TraceCompareDialog(QDialog):
 
         # Chart + table pages share one scroll viewport (Web compare-table-wrap parity).
         summary_page = self._make_compare_scroll_page(
-            self._summary_chart, self._summary_table)
+            self._decision, self._summary_chart, self._summary_table)
         core_page = self._make_compare_scroll_page(
             self._core_util_chart, self._core_util_table)
         resp_page = self._make_compare_scroll_page(
@@ -3572,6 +3556,8 @@ class _TraceCompareDialog(QDialog):
         delta_col: int = -1,
         fit_embedded: bool = False,
     ) -> None:
+        sorting = table.isSortingEnabled()
+        table.setSortingEnabled(False)
         table.setRowCount(len(rows))
         improved = QColor("#3cb371")
         regressed = QColor("#e07070")
@@ -3586,7 +3572,7 @@ class _TraceCompareDialog(QDialog):
                 text = str(val)
                 if status and ci == delta_col:
                     text = format_semantic_delta(text, status, colorblind)
-                item = QTableWidgetItem(text)
+                item = _StatsSortItem(text, compare_cell_sort_key(val))
                 if ci < left_cols:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
                 else:
@@ -3599,6 +3585,7 @@ class _TraceCompareDialog(QDialog):
                         item.setForeground(QBrush(regressed))
                         item.setToolTip("Regressed (Candidate B worse)")
                 table.setItem(ri, ci, item)
+        table.setSortingEnabled(sorting)
         if fit_embedded:
             _TraceCompareDialog._fit_compare_embedded_table(table)
 
@@ -3619,6 +3606,8 @@ class _TraceCompareDialog(QDialog):
         )
         headers = list(result.get("headers") or [])
         rows = list(result.get("rows") or [])
+        sorting = self._mig_table.isSortingEnabled()
+        self._mig_table.setSortingEnabled(False)
         self._mig_table.setColumnCount(len(headers))
         self._mig_table.setHorizontalHeaderLabels(headers)
         delta_col = 3 if str(view or "count") == "count" else (
@@ -3626,6 +3615,7 @@ class _TraceCompareDialog(QDialog):
         self._fill_table(
             self._mig_table, rows, status_metric="migrations", delta_col=delta_col,
             fit_embedded=True)
+        self._mig_table.setSortingEnabled(sorting)
         shown = int(result.get("shown") or 0)
         total = int(result.get("total") or 0)
         if hasattr(self, "_mig_hint"):
@@ -3654,6 +3644,8 @@ class _TraceCompareDialog(QDialog):
         if args is None:
             for tbl in self._all_tables:
                 tbl.setRowCount(0)
+            if getattr(self, "_decision", None) is not None:
+                self._decision.hide()
             if getattr(self, "_strip", None) is not None:
                 self._strip.hide()
             self._mig_all_rows = []

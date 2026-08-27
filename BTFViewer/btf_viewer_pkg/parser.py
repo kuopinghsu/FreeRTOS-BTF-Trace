@@ -5972,6 +5972,15 @@ tbody tr:nth-child(even) td:first-child {{ background: #f7f9fc; }}
 .status-warn {{ border-left: 4px solid #c87a12; }}
 .badge-regressed {{ background: #fde8e6; color: #9b2c2c; }}
 .badge-changed {{ background: #e8eef7; color: #123355; }}
+.compare-decision {{
+  margin: 0 0 12px; padding: 8px 10px; border-radius: 6px;
+  background: rgba(52, 152, 219, 0.10); font-size: 12px; line-height: 1.45; color: #3d4f63;
+}}
+.compare-decision-identity {{ font-size: 11px; color: #5f6f82; }}
+.compare-decision-counts {{ margin-top: 4px; font-weight: 600; color: #123355; }}
+.compare-decision-largest {{ margin-top: 4px; color: #182230; }}
+.compare-decision-why, .compare-decision-next {{ margin-top: 2px; font-size: 11px; color: #5f6f82; }}
+.compare-decision-sig {{ margin-top: 2px; font-size: 10px; color: #7a8690; }}
 .compare-chart {{ margin: 0 0 12px; overflow-x: auto; }}
 .compare-chart svg {{ max-width: 100%; height: auto; display: block; }}
 .table-tools {{ margin: 8px 0 12px; }}
@@ -6179,6 +6188,7 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
     heat_svg_fn = globals().get("compare_migration_heatmap_svg")
     heat_rows_fn = globals().get("compare_migration_heatmap_rows")
     mig_filt_fn = globals().get("filter_compare_migration_rows")
+    decision_fn = globals().get("compare_summary_decision_html")
     if any(fn is None for fn in (
         util_svg_fn, util_rows_fn, p99_svg_fn, p99_rows_fn,
         sum_svg_fn, sum_rows_fn, heat_svg_fn, heat_rows_fn, mig_filt_fn,
@@ -6193,14 +6203,18 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
             compare_migration_heatmap_rows as heat_rows_fn,
             compare_migration_heatmap_svg as heat_svg_fn,
             filter_compare_migration_rows as mig_filt_fn,
+            compare_summary_decision_html as decision_fn,
         )
+    elif decision_fn is None:
+        from .ux_explore import compare_summary_decision_html as decision_fn
     util_svg = util_svg_fn(util_rows_fn(tables or {}))
     p99_svg = p99_svg_fn(p99_rows_fn(tables or {}, 12))
     sum_svg = sum_svg_fn(sum_rows_fn(tables or {}, 8)) if sum_svg_fn and sum_rows_fn else ""
     heat_svg = heat_svg_fn(heat_rows_fn(tables.get("migrations") or [], 12)) if heat_svg_fn and heat_rows_fn else ""
+    decision_html = decision_fn(tables or {}, name_a, name_b) if decision_fn else ""
     util_lead = f'<div class="compare-chart">{util_svg}</div>' if util_svg else ""
     p99_lead = f'<div class="compare-chart">{p99_svg}</div>' if p99_svg else ""
-    sum_lead = f'<div class="compare-chart">{sum_svg}</div>' if sum_svg else ""
+    sum_lead = (decision_html or "") + (f'<div class="compare-chart">{sum_svg}</div>' if sum_svg else "")
     heat_lead = f'<div class="compare-chart">{heat_svg}</div>' if heat_svg else ""
     mig_top = mig_filt_fn(tables.get("migrations") or [], "count", "top", "", 10)
     mig_lead = heat_lead

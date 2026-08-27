@@ -349,7 +349,7 @@ export const AI_TEMPLATE_QUESTIONS = [
       'Neutral (CPU, migrations, latency, tick health, sync). State which ' +
       'side is worse for each concern, the likely cause with confidence, ' +
       'and which Statistics section or Trace Compare page to open next. ' +
-      'Mention the Compare summary strip under the scope checkbox when ' +
+      'Mention the regression result on the Compare Summary tab when ' +
       'A vs B deltas are already summarised there, including the Why? ' +
       'line computed from those deltas. ' +
       'Use jump:TIME when a concrete timestamp is available.',

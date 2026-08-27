@@ -454,6 +454,30 @@ export function parseSignedDelta(text) {
   return { signed: sign * val, kind: 'count' }
 }
 
+/** Numeric/time-aware sort key for Trace Compare cells (desktop `_StatsSortItem` parity). */
+export function compareCellSortKey(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  const parsed = parseSignedDelta(value)
+  if (parsed && Number.isFinite(parsed.signed)) return parsed.signed
+  const s = String(value ?? '').trim()
+  if (!s || s === '—' || s === '–' || s === '-') return Number.NEGATIVE_INFINITY
+  return s.toLowerCase()
+}
+
+export function compareFieldSortAccessors(keys) {
+  const acc = {}
+  for (const key of keys) {
+    acc[key] = (row) => {
+      if (Array.isArray(row)) {
+        const idx = Number(key)
+        return compareCellSortKey(Number.isInteger(idx) ? row[idx] : undefined)
+      }
+      return compareCellSortKey(row?.[key])
+    }
+  }
+  return acc
+}
+
 export function compareCandidatesFromTables(tables) {
   if (!tables || typeof tables !== 'object') return []
   const out = []
@@ -538,6 +562,49 @@ export function compareSummaryStrip(tables, limit = 4, nameA = '', nameB = '') {
     why: why || hint,
     formula: COMPARE_DELTA_FORMULA,
   }
+}
+
+/** Dialog-matching regression result for the Trace Compare HTML Summary card. */
+export function compareSummaryDecisionHtml(tables, nameA = '', nameB = '') {
+  const data = compareSummaryStrip(tables, 4, nameA, nameB)
+  const notable = data.notable || {}
+  const identity = notable.identity || {}
+  const idA = identity.a || {}
+  const idB = identity.b || {}
+  const cards = notable.cards || {}
+  const regs = data.regressions || []
+  const nReg = Number(cards.regressions ?? regs.length) || 0
+  const nImp = Number(cards.improvements ?? (data.improvements || []).length) || 0
+  const nWarn = Number(cards.warnings ?? (data.warnings || []).length) || 0
+  const top = regs[0]
+  const largest = top
+    ? `Largest regression — ${top.label}: ${top.change}`
+    : (String(notable.verdict || '').trim() || 'No significant regressions')
+  const why = String(data.why || '').trim()
+  const next = String(notable.next_investigation || '').trim()
+  const omitted = Number(notable.small_omitted_count || 0) || 0
+  const sigNote = (Number(cards.significant || 0) || omitted)
+    ? 'Showing engineering-significant deltas only (small changes omitted)'
+    : ''
+  const visible = !!(nReg || nImp || nWarn || top || why || next || notable.verdict)
+  if (!visible) return ''
+  const ident =
+    `Baseline: ${nameA || 'Baseline'} · Scope ${idA.span || 'Full Trace'}    |    ` +
+    `Candidate: ${nameB || 'Candidate'} · Scope ${idB.span || 'Full Trace'}`
+  const counts =
+    `${nReg} REGRESSIONS    ${nImp} IMPROVEMENTS` +
+    (nWarn ? `    ${nWarn} WARNING${nWarn === 1 ? '' : 'S'}` : '')
+  const parts = [
+    '<div class="compare-decision">',
+    `<div class="compare-decision-identity">${svgEscape(ident)}</div>`,
+    `<div class="compare-decision-counts">${svgEscape(counts)}</div>`,
+    `<div class="compare-decision-largest">${svgEscape(largest)}</div>`,
+  ]
+  if (why) parts.push(`<div class="compare-decision-why">Why? ${svgEscape(why)}</div>`)
+  if (next) parts.push(`<div class="compare-decision-next">${svgEscape(next)}</div>`)
+  if (sigNote) parts.push(`<div class="compare-decision-sig">${svgEscape(sigNote)}</div>`)
+  parts.push('</div>')
+  return parts.join('')
 }
 
 function compareSummaryPair(tables, prefix) {
@@ -986,7 +1053,7 @@ export function compareP99DeltaChartSvg(rows, width = 640) {
   const labelW = 96
   const pad = 12
   const rowH = 22
-  const header = 28
+  const header = 44
   const changeW = 88
   const h = header + items.length * rowH + 16
   let maxV = 1
@@ -994,13 +1061,14 @@ export function compareP99DeltaChartSvg(rows, width = 640) {
   const plotW = Math.max(80, w - labelW - pad - changeW)
   const mid = labelW + plotW / 2
   const half = plotW / 2
+  const axisY = 34
   const parts = [
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="Response P99 change Candidate B minus Baseline A">`,
     `<text x="${pad}" y="16" font-size="12" fill="#123355" font-weight="600">Response P99 change</text>`,
     `<text x="${w - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">Candidate B − Baseline A</text>`,
-    `<line x1="${mid.toFixed(1)}" y1="${header - 4}" x2="${mid.toFixed(1)}" y2="${h - 10}" stroke="#d9e0ea" stroke-width="1"/>`,
-    `<text x="${labelW.toFixed(1)}" y="${header - 6}" font-size="9" fill="${COMPARE_CHART_IMPROVED}">Improved</text>`,
-    `<text x="${(mid + half).toFixed(1)}" y="${header - 6}" text-anchor="end" font-size="9" fill="${COMPARE_CHART_REGRESSED}">Regressed</text>`,
+    `<text x="${labelW.toFixed(1)}" y="${axisY}" font-size="9" fill="${COMPARE_CHART_IMPROVED}">Improved</text>`,
+    `<text x="${(labelW + plotW).toFixed(1)}" y="${axisY}" text-anchor="end" font-size="9" fill="${COMPARE_CHART_REGRESSED}">Regressed</text>`,
+    `<line x1="${mid.toFixed(1)}" y1="${header - 2}" x2="${mid.toFixed(1)}" y2="${h - 10}" stroke="#d9e0ea" stroke-width="1"/>`,
   ]
   items.forEach((row, i) => {
     const y = header + i * rowH
@@ -1150,11 +1218,7 @@ export function compareSummaryChangeBarsSvg(rows, width = 640) {
     })),
     width,
   )
-    .replace('Response P99 change', 'Summary changes')
-    .replace(
-      'aria-label="Response P99 change Candidate B minus Baseline A"',
-      'aria-label="Summary changes Candidate B minus Baseline A"',
-    )
+    .replace(/Response P99 change/g, 'Summary changes')
 }
 
 export function compareMigrationHeatmapRows(rows, limit = 16) {

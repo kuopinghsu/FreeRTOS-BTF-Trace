@@ -18,6 +18,7 @@ import {
   compareRowDeltaStatus,
   compareSummaryChangeBarRows,
   compareSummaryChangeBarsSvg,
+  compareSummaryDecisionHtml,
   compareMigrationHeatmapRows,
   compareMigrationHeatmapSvg,
   filterCompareMigrationRows,
@@ -31,6 +32,8 @@ import {
   mutexBlockingTable,
   pairMutexWaits,
   parseSignedDelta,
+  compareCellSortKey,
+  compareFieldSortAccessors,
   percentileIndex,
   preemptionPairs,
   preemptionStory,
@@ -113,6 +116,14 @@ describe('uxExplore', () => {
   it('parses compare deltas and ranks regressions', () => {
     assert.equal(parseSignedDelta('+12.3 µs').signed, 12300)
     assert.equal(parseSignedDelta('−2').signed, -2)
+    assert.equal(compareCellSortKey('+12.3 µs'), 12300)
+    assert.equal(compareCellSortKey('−2'), -2)
+    assert.equal(compareCellSortKey(15), 15)
+    assert.equal(compareCellSortKey('—'), Number.NEGATIVE_INFINITY)
+    assert.equal(compareCellSortKey('Worker[1]'), 'worker[1]')
+    const acc = compareFieldSortAccessors(['delta', '0'])
+    assert.equal(acc.delta({ delta: '+60 µs' }), 60000)
+    assert.equal(acc['0'](['+2']), 2)
     const strip = compareSummaryStrip({
       summary: [
         { label: 'Span', a: '1 ms', b: '900 µs', delta: '+100 µs' },
@@ -397,6 +408,19 @@ describe('uxExplore', () => {
     assert.ok(bars.every(r => r.cand !== 0))
     const barSvg = compareSummaryChangeBarsSvg(bars)
     assert.match(barSvg, /Summary changes/)
+    assert.match(barSvg, /y="16"[^>]*>Summary changes</)
+    assert.match(barSvg, /y="34"[^>]*>Improved</)
+    assert.match(barSvg, /y="34"[^>]*>Regressed</)
+    assert.ok(barSvg.indexOf('Summary changes') < barSvg.indexOf('>Improved<'))
+    const decision = compareSummaryDecisionHtml({
+      summary: [
+        { label: 'Migrations (total)', a: '10', b: '25', delta: '−15' },
+        { label: 'Blocking time /s', a: '1 ms', b: '4 ms', delta: '−3 ms' },
+      ],
+    }, 'A.btf', 'B.btf')
+    assert.match(decision, /class="compare-decision"/)
+    assert.match(decision, /REGRESSIONS/)
+    assert.match(decision, /Largest regression/)
 
     const heat = compareMigrationHeatmapRows(mig, 5)
     assert.equal(heat.length, 5)

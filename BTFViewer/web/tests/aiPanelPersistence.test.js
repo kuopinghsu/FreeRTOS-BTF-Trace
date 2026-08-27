@@ -160,6 +160,15 @@ describe('Trace Compare Query with AI', () => {
     assert.match(app, /function compareAiPerformance\(tabARef, tabBRef, \{ scopeToCursors = true \} = \{\}\)/)
     assert.match(app, /askCompare\?\.\(idA, idB\)/)
     assert.match(aiPanel, /async function askCompare/)
+    assert.doesNotMatch(compareDlg, /Investigate on Baseline/)
+    assert.doesNotMatch(compareDlg, /Investigate on Candidate/)
+    assert.match(compareDlg, /activePage === 'summary'/)
+    assert.match(compareDlg, /class="compare-decision"/)
+    assert.match(compareDlg, /toggleTableSort\('summary', 'delta'\)/)
+    assert.match(compareDlg, /sortedSummaryRows/)
+    assert.match(compareDlg, /onHeaderPointerDown/)
+    assert.match(compareDlg, /cursor: grab/)
+    assert.match(compareDlg, /compare-dialog-overlay-free/)
   })
 
   it('footer emits validate-experiment and App asks validate_experiment', () => {

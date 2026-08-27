@@ -265,6 +265,9 @@ describe('new compare builders', () => {
     assert.match(html, /<details class="report-card" id="sec-overview" open>/)
     assert.match(html, /compare-chart/)
     assert.match(html, /Core utilisation/)
+    assert.match(html, /class="compare-decision"/)
+    assert.match(html, /REGRESSIONS/)
+    assert.match(html, /<h2>Summary<\/h2>[\s\S]*class="compare-decision"/)
     assert.match(html, /Expand all/)
     assert.match(html, /Collapse all/)
     assert.match(html, /data-toc="expand"/)
@@ -299,6 +302,8 @@ describe('new compare builders', () => {
     ]
     const html = buildCompareHtml('A.btf', 'B.btf', false, { summary, migrations })
     assert.match(html, /Summary changes/)
+    assert.match(html, /class="compare-decision"/)
+    assert.match(html, /REGRESSIONS/)
     assert.match(html, /Migration Δ heatmap/)
     assert.match(html, /QP\[1\]/)
   })

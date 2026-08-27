@@ -1,21 +1,28 @@
 <template>
   <div
     class="compare-dialog-overlay"
-    @click.self="emit('close')"
+    :class="{ 'compare-dialog-overlay-free': dialogPos }"
+    @click.self="onOverlayBackdropClick"
   >
     <div
+      ref="dialogEl"
       class="compare-dialog"
       role="dialog"
       aria-modal="true"
       aria-label="Trace compare"
+      :style="dialogStyle"
     >
-      <div class="compare-dialog-header">
+      <div
+        class="compare-dialog-header"
+        @pointerdown="onHeaderPointerDown"
+      >
         <div class="compare-dialog-title">Trace Compare</div>
         <button
           type="button"
           class="compare-close-btn"
           title="Close"
           aria-label="Close"
+          @pointerdown.stop
           @click="emit('close')"
         >×</button>
       </div>
@@ -54,60 +61,6 @@
 
       <div class="compare-formula">{{ compareFormula }}</div>
 
-      <div
-        v-if="compareDecision.visible"
-        class="compare-decision"
-      >
-        <div class="compare-decision-identity">{{ compareDecision.identity }}</div>
-        <div class="compare-decision-counts">{{ compareDecision.counts }}</div>
-        <div
-          class="compare-decision-largest"
-          :class="{ clickable: compareDecision.largestClickable }"
-          :title="compareDecision.largestClickable
-            ? 'Open Statistics for this regression on the Candidate tab'
-            : undefined"
-          @click="compareDecision.largestClickable && investigateSide('b')"
-        >
-          {{ compareDecision.largest }}
-        </div>
-        <div
-          v-if="compareDecision.why"
-          class="compare-decision-why"
-        >
-          Why? {{ compareDecision.why }}
-        </div>
-        <div
-          v-if="compareDecision.next"
-          class="compare-decision-next"
-        >
-          {{ compareDecision.next }}
-        </div>
-        <div
-          v-if="compareDecision.sigNote"
-          class="compare-decision-sig"
-        >
-          {{ compareDecision.sigNote }}
-        </div>
-        <div class="compare-decision-actions">
-          <button
-            type="button"
-            class="compare-inspect-btn"
-            title="Open Statistics for the largest regression on this tab (preserves Scope/Filters)"
-            @click="investigateSide('a')"
-          >
-            Investigate on Baseline
-          </button>
-          <button
-            type="button"
-            class="compare-inspect-btn"
-            title="Open Statistics for the largest regression on this tab (preserves Scope/Filters)"
-            @click="investigateSide('b')"
-          >
-            Investigate on Candidate
-          </button>
-        </div>
-      </div>
-
       <div class="compare-tabs" role="tablist">
         <button
           v-for="tab in pageTabs"
@@ -128,6 +81,41 @@
           v-if="activePage === 'summary'"
           class="compare-page"
         >
+          <div
+            v-if="compareDecision.visible"
+            class="compare-decision"
+          >
+            <div class="compare-decision-identity">{{ compareDecision.identity }}</div>
+            <div class="compare-decision-counts">{{ compareDecision.counts }}</div>
+            <div
+              class="compare-decision-largest"
+              :class="{ clickable: compareDecision.largestClickable }"
+              :title="compareDecision.largestClickable
+                ? 'Open Statistics for this regression on the Candidate tab'
+                : undefined"
+              @click="compareDecision.largestClickable && investigateSide('b')"
+            >
+              {{ compareDecision.largest }}
+            </div>
+            <div
+              v-if="compareDecision.why"
+              class="compare-decision-why"
+            >
+              Why? {{ compareDecision.why }}
+            </div>
+            <div
+              v-if="compareDecision.next"
+              class="compare-decision-next"
+            >
+              {{ compareDecision.next }}
+            </div>
+            <div
+              v-if="compareDecision.sigNote"
+              class="compare-decision-sig"
+            >
+              {{ compareDecision.sigNote }}
+            </div>
+          </div>
           <div
             v-if="summaryChartModel.length"
             class="compare-chart"
@@ -163,15 +151,15 @@
           <table class="compare-table">
             <thead>
               <tr>
-                <th>Metric</th>
-                <th>Baseline A</th>
-                <th>Candidate B</th>
-                <th>Δ</th>
+                <th :class="thSortClass('summary', 'label')" @click="toggleTableSort('summary', 'label')">Metric</th>
+                <th :class="thSortClass('summary', 'a')" @click="toggleTableSort('summary', 'a')">Baseline A</th>
+                <th :class="thSortClass('summary', 'b')" @click="toggleTableSort('summary', 'b')">Candidate B</th>
+                <th :class="thSortClass('summary', 'delta')" @click="toggleTableSort('summary', 'delta')">Δ</th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="row in summaryRows"
+                v-for="row in sortedSummaryRows"
                 :key="row.label"
               >
                 <td class="task-col">{{ row.label }}</td>
@@ -189,15 +177,15 @@
         >
           <thead>
             <tr>
-              <th>Task</th>
-              <th>CPU A (%)</th>
-              <th>CPU B (%)</th>
-              <th>Δ (pp)</th>
+              <th :class="thSortClass('top', 'name')" @click="toggleTableSort('top', 'name')">Task</th>
+              <th :class="thSortClass('top', 'cpuA')" @click="toggleTableSort('top', 'cpuA')">CPU A (%)</th>
+              <th :class="thSortClass('top', 'cpuB')" @click="toggleTableSort('top', 'cpuB')">CPU B (%)</th>
+              <th :class="thSortClass('top', 'delta')" @click="toggleTableSort('top', 'delta')">Δ (pp)</th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="row in topTaskRows"
+              v-for="row in sortedTopTaskRows"
               :key="row.name"
             >
               <td class="task-col">{{ row.name }}</td>
@@ -260,15 +248,15 @@
           <table class="compare-table">
             <thead>
               <tr>
-                <th>Core</th>
-                <th>Util A (%)</th>
-                <th>Util B (%)</th>
-                <th>Δ (pp)</th>
+                <th :class="thSortClass('coreUtil', 'core')" @click="toggleTableSort('coreUtil', 'core')">Core</th>
+                <th :class="thSortClass('coreUtil', 'utilA')" @click="toggleTableSort('coreUtil', 'utilA')">Util A (%)</th>
+                <th :class="thSortClass('coreUtil', 'utilB')" @click="toggleTableSort('coreUtil', 'utilB')">Util B (%)</th>
+                <th :class="thSortClass('coreUtil', 'delta')" @click="toggleTableSort('coreUtil', 'delta')">Δ (pp)</th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="row in coreUtilRows"
+                v-for="row in sortedCoreUtilRows"
                 :key="row.core"
               >
                 <td class="task-col">{{ row.core }}</td>
@@ -351,8 +339,10 @@
             <thead>
               <tr>
                 <th
-                  v-for="h in migHeaders"
+                  v-for="(h, hi) in migHeaders"
                   :key="h"
+                  :class="thSortClass('migrations', String(hi))"
+                  @click="toggleTableSort('migrations', String(hi))"
                 >
                   {{ h }}
                 </th>
@@ -360,7 +350,7 @@
             </thead>
             <tbody>
               <tr
-                v-for="(row, ri) in migViewRows"
+                v-for="(row, ri) in sortedMigViewRows"
                 :key="ri"
               >
                 <td
@@ -389,19 +379,19 @@
         >
           <thead>
             <tr>
-              <th>Task</th>
-              <th>Runs A</th>
-              <th>Runs B</th>
-              <th>Avg A</th>
-              <th>Avg B</th>
-              <th>Max A</th>
-              <th>Max B</th>
-              <th>Δ max</th>
+              <th :class="thSortClass('execution', 'name')" @click="toggleTableSort('execution', 'name')">Task</th>
+              <th :class="thSortClass('execution', 'runsA')" @click="toggleTableSort('execution', 'runsA')">Runs A</th>
+              <th :class="thSortClass('execution', 'runsB')" @click="toggleTableSort('execution', 'runsB')">Runs B</th>
+              <th :class="thSortClass('execution', 'avgA')" @click="toggleTableSort('execution', 'avgA')">Avg A</th>
+              <th :class="thSortClass('execution', 'avgB')" @click="toggleTableSort('execution', 'avgB')">Avg B</th>
+              <th :class="thSortClass('execution', 'maxA')" @click="toggleTableSort('execution', 'maxA')">Max A</th>
+              <th :class="thSortClass('execution', 'maxB')" @click="toggleTableSort('execution', 'maxB')">Max B</th>
+              <th :class="thSortClass('execution', 'deltaMax')" @click="toggleTableSort('execution', 'deltaMax')">Δ max</th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="row in executionRows"
+              v-for="row in sortedExecutionRows"
               :key="row.name"
             >
               <td class="task-col">{{ row.name }}</td>
@@ -425,19 +415,19 @@
         >
           <thead>
             <tr>
-              <th>Task</th>
-              <th>Gaps A</th>
-              <th>Gaps B</th>
-              <th>Avg A</th>
-              <th>Avg B</th>
-              <th>Max A</th>
-              <th>Max B</th>
-              <th>Δ avg</th>
+              <th :class="thSortClass('blocking', 'name')" @click="toggleTableSort('blocking', 'name')">Task</th>
+              <th :class="thSortClass('blocking', 'gapsA')" @click="toggleTableSort('blocking', 'gapsA')">Gaps A</th>
+              <th :class="thSortClass('blocking', 'gapsB')" @click="toggleTableSort('blocking', 'gapsB')">Gaps B</th>
+              <th :class="thSortClass('blocking', 'avgA')" @click="toggleTableSort('blocking', 'avgA')">Avg A</th>
+              <th :class="thSortClass('blocking', 'avgB')" @click="toggleTableSort('blocking', 'avgB')">Avg B</th>
+              <th :class="thSortClass('blocking', 'maxA')" @click="toggleTableSort('blocking', 'maxA')">Max A</th>
+              <th :class="thSortClass('blocking', 'maxB')" @click="toggleTableSort('blocking', 'maxB')">Max B</th>
+              <th :class="thSortClass('blocking', 'delta')" @click="toggleTableSort('blocking', 'delta')">Δ avg</th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="row in blockingRows"
+              v-for="row in sortedBlockingRows"
               :key="row.name"
             >
               <td class="task-col">{{ row.name }}</td>
@@ -461,19 +451,19 @@
         >
           <thead>
             <tr>
-              <th>Task</th>
-              <th>Runs A</th>
-              <th>Runs B</th>
-              <th>Avg A</th>
-              <th>Avg B</th>
-              <th>Max A</th>
-              <th>Max B</th>
-              <th>Δ avg</th>
+              <th :class="thSortClass('interArrival', 'name')" @click="toggleTableSort('interArrival', 'name')">Task</th>
+              <th :class="thSortClass('interArrival', 'runsA')" @click="toggleTableSort('interArrival', 'runsA')">Runs A</th>
+              <th :class="thSortClass('interArrival', 'runsB')" @click="toggleTableSort('interArrival', 'runsB')">Runs B</th>
+              <th :class="thSortClass('interArrival', 'avgA')" @click="toggleTableSort('interArrival', 'avgA')">Avg A</th>
+              <th :class="thSortClass('interArrival', 'avgB')" @click="toggleTableSort('interArrival', 'avgB')">Avg B</th>
+              <th :class="thSortClass('interArrival', 'maxA')" @click="toggleTableSort('interArrival', 'maxA')">Max A</th>
+              <th :class="thSortClass('interArrival', 'maxB')" @click="toggleTableSort('interArrival', 'maxB')">Max B</th>
+              <th :class="thSortClass('interArrival', 'delta')" @click="toggleTableSort('interArrival', 'delta')">Δ avg</th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="row in interArrivalRows"
+              v-for="row in sortedInterArrivalRows"
               :key="row.name"
             >
               <td class="task-col">{{ row.name }}</td>
@@ -497,17 +487,17 @@
         >
           <thead>
             <tr>
-              <th>Victim</th>
-              <th>Count A</th>
-              <th>Count B</th>
-              <th>Δ</th>
-              <th>Total A</th>
-              <th>Total B</th>
+              <th :class="thSortClass('preemption', 'name')" @click="toggleTableSort('preemption', 'name')">Victim</th>
+              <th :class="thSortClass('preemption', 'countA')" @click="toggleTableSort('preemption', 'countA')">Count A</th>
+              <th :class="thSortClass('preemption', 'countB')" @click="toggleTableSort('preemption', 'countB')">Count B</th>
+              <th :class="thSortClass('preemption', 'delta')" @click="toggleTableSort('preemption', 'delta')">Δ</th>
+              <th :class="thSortClass('preemption', 'totalA')" @click="toggleTableSort('preemption', 'totalA')">Total A</th>
+              <th :class="thSortClass('preemption', 'totalB')" @click="toggleTableSort('preemption', 'totalB')">Total B</th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="row in preemptionCompareRows"
+              v-for="row in sortedPreemptionCompareRows"
               :key="row.name"
             >
               <td class="task-col">{{ row.name }}</td>
@@ -529,15 +519,15 @@
         >
           <thead>
             <tr>
-              <th>Metric</th>
-              <th>Baseline A</th>
-              <th>Candidate B</th>
-              <th>Δ</th>
+              <th :class="thSortClass('sync', 'label')" @click="toggleTableSort('sync', 'label')">Metric</th>
+              <th :class="thSortClass('sync', 'a')" @click="toggleTableSort('sync', 'a')">Baseline A</th>
+              <th :class="thSortClass('sync', 'b')" @click="toggleTableSort('sync', 'b')">Candidate B</th>
+              <th :class="thSortClass('sync', 'delta')" @click="toggleTableSort('sync', 'delta')">Δ</th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="row in syncCompareRows"
+              v-for="row in sortedSyncCompareRows"
               :key="row.label"
             >
               <td class="task-col">{{ row.label }}</td>
@@ -590,15 +580,15 @@
           <table class="compare-table">
             <thead>
               <tr>
-                <th>Task</th>
-                <th>P99 A</th>
-                <th>P99 B</th>
-                <th>Δ</th>
+                <th :class="thSortClass('response', 'name')" @click="toggleTableSort('response', 'name')">Task</th>
+                <th :class="thSortClass('response', 'a')" @click="toggleTableSort('response', 'a')">P99 A</th>
+                <th :class="thSortClass('response', 'b')" @click="toggleTableSort('response', 'b')">P99 B</th>
+                <th :class="thSortClass('response', 'delta')" @click="toggleTableSort('response', 'delta')">Δ</th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="row in responseCompareRows"
+                v-for="row in sortedResponseCompareRows"
                 :key="row.name"
               >
                 <td class="task-col">{{ row.name }}</td>
@@ -619,15 +609,15 @@
         >
           <thead>
             <tr>
-              <th>Task</th>
-              <th>Total A</th>
-              <th>Total B</th>
-              <th>Δ</th>
+              <th :class="thSortClass('mutex', 'name')" @click="toggleTableSort('mutex', 'name')">Task</th>
+              <th :class="thSortClass('mutex', 'a')" @click="toggleTableSort('mutex', 'a')">Total A</th>
+              <th :class="thSortClass('mutex', 'b')" @click="toggleTableSort('mutex', 'b')">Total B</th>
+              <th :class="thSortClass('mutex', 'delta')" @click="toggleTableSort('mutex', 'delta')">Δ</th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="row in mutexBlockCompareRows"
+              v-for="row in sortedMutexBlockCompareRows"
               :key="row.name"
             >
               <td class="task-col">{{ row.name }}</td>
@@ -647,17 +637,17 @@
         >
           <thead>
             <tr>
-              <th>Trace</th>
-              <th>Tasks</th>
-              <th>Migrations</th>
-              <th>Load balance</th>
-              <th>Tick health</th>
-              <th>Span</th>
+              <th :class="thSortClass('trends', 'name')" @click="toggleTableSort('trends', 'name')">Trace</th>
+              <th :class="thSortClass('trends', 'tasks')" @click="toggleTableSort('trends', 'tasks')">Tasks</th>
+              <th :class="thSortClass('trends', 'migrations')" @click="toggleTableSort('trends', 'migrations')">Migrations</th>
+              <th :class="thSortClass('trends', 'loadBalance')" @click="toggleTableSort('trends', 'loadBalance')">Load balance</th>
+              <th :class="thSortClass('trends', 'tickHealth')" @click="toggleTableSort('trends', 'tickHealth')">Tick health</th>
+              <th :class="thSortClass('trends', 'spanNs')" @click="toggleTableSort('trends', 'spanNs')">Span</th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="row in trendRows"
+              v-for="row in sortedTrendRows"
               :key="row.name"
             >
               <td class="task-col">{{ row.name }}</td>
@@ -784,7 +774,14 @@ import {
   compareMigrationHeatmapRows,
   compareRowDeltaStatus,
   filterCompareMigrationRows,
+  compareFieldSortAccessors,
 } from '../utils/uxExplore.js'
+import {
+  defaultStatsTableSort,
+  nextSortState,
+  sortHeaderClass,
+  sortStatsRows,
+} from '../utils/statsTableSort.js'
 import { formatSemanticDelta, semanticLabel } from '../utils/semanticColors.js'
 
 const props = defineProps({
@@ -800,6 +797,69 @@ const emit = defineEmits([
   'close', 'query-ai', 'validate-experiment', 'compared', 'investigate',
   'save-baseline', 'score-baseline',
 ])
+
+const dialogEl = ref(null)
+const dialogPos = ref(null)
+let _drag = null
+let _ignoreOverlayClick = false
+
+function clampDialogPos(x, y) {
+  const el = dialogEl.value
+  const w = el?.offsetWidth || 0
+  const h = el?.offsetHeight || 0
+  const pad = 8
+  const maxX = Math.max(pad, window.innerWidth - w - pad)
+  const maxY = Math.max(pad, window.innerHeight - h - pad)
+  return {
+    x: Math.min(Math.max(pad, x), maxX),
+    y: Math.min(Math.max(pad, y), maxY),
+  }
+}
+
+const dialogStyle = computed(() => {
+  if (!dialogPos.value) return {}
+  return {
+    position: 'fixed',
+    left: `${dialogPos.value.x}px`,
+    top: `${dialogPos.value.y}px`,
+    margin: '0',
+  }
+})
+
+function onHeaderPointerDown(ev) {
+  if (ev.pointerType === 'mouse' && ev.button !== 0) return
+  if (ev.target.closest('button')) return
+  const el = dialogEl.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  _drag = { dx: ev.clientX - rect.left, dy: ev.clientY - rect.top, moved: false }
+  dialogPos.value = { x: rect.left, y: rect.top }
+  window.addEventListener('pointermove', onDialogPointerMove)
+  window.addEventListener('pointerup', onDialogPointerUp)
+  ev.preventDefault()
+}
+
+function onDialogPointerMove(ev) {
+  if (!_drag) return
+  _drag.moved = true
+  dialogPos.value = clampDialogPos(ev.clientX - _drag.dx, ev.clientY - _drag.dy)
+}
+
+function onDialogPointerUp() {
+  const moved = !!_drag?.moved
+  _drag = null
+  window.removeEventListener('pointermove', onDialogPointerMove)
+  window.removeEventListener('pointerup', onDialogPointerUp)
+  if (moved) {
+    _ignoreOverlayClick = true
+    requestAnimationFrame(() => { _ignoreOverlayClick = false })
+  }
+}
+
+function onOverlayBackdropClick() {
+  if (_ignoreOverlayClick) return
+  emit('close')
+}
 
 const compareTabOptions = computed(() =>
   (props.tabs || []).map(tab => ({ value: tab.id, label: tab.name })))
@@ -883,6 +943,59 @@ const migHint = computed(() => `${migFiltered.value.shown || 0} of ${migFiltered
 watch(migFamilies, (fams) => {
   if (migFamily.value && !fams.includes(migFamily.value)) migFamily.value = ''
 })
+
+const tableSort = ref({
+  summary: defaultStatsTableSort(),
+  top: defaultStatsTableSort(),
+  coreUtil: defaultStatsTableSort(),
+  migrations: defaultStatsTableSort(),
+  execution: defaultStatsTableSort(),
+  blocking: defaultStatsTableSort(),
+  interArrival: defaultStatsTableSort(),
+  preemption: defaultStatsTableSort(),
+  sync: defaultStatsTableSort(),
+  response: defaultStatsTableSort(),
+  mutex: defaultStatsTableSort(),
+  trends: defaultStatsTableSort(),
+})
+function toggleTableSort(tableId, col) {
+  tableSort.value[tableId] = nextSortState(tableSort.value[tableId], col)
+}
+function thSortClass(tableId, col) {
+  return sortHeaderClass(tableSort.value[tableId], col)
+}
+const SUMMARY_SORT_ACCESSORS = compareFieldSortAccessors(['label', 'a', 'b', 'delta'])
+const TOP_SORT_ACCESSORS = compareFieldSortAccessors(['name', 'cpuA', 'cpuB', 'delta'])
+const CORE_UTIL_SORT_ACCESSORS = compareFieldSortAccessors(['core', 'utilA', 'utilB', 'delta'])
+const EXEC_SORT_ACCESSORS = compareFieldSortAccessors(
+  ['name', 'runsA', 'runsB', 'avgA', 'avgB', 'maxA', 'maxB', 'deltaMax'])
+const BLOCK_SORT_ACCESSORS = compareFieldSortAccessors(
+  ['name', 'gapsA', 'gapsB', 'avgA', 'avgB', 'maxA', 'maxB', 'delta'])
+const INTER_SORT_ACCESSORS = compareFieldSortAccessors(
+  ['name', 'runsA', 'runsB', 'avgA', 'avgB', 'maxA', 'maxB', 'delta'])
+const PREEMPT_SORT_ACCESSORS = compareFieldSortAccessors(
+  ['name', 'countA', 'countB', 'delta', 'totalA', 'totalB'])
+const SYNC_SORT_ACCESSORS = compareFieldSortAccessors(['label', 'a', 'b', 'delta'])
+const RESPONSE_SORT_ACCESSORS = compareFieldSortAccessors(['name', 'a', 'b', 'delta'])
+const MUTEX_SORT_ACCESSORS = compareFieldSortAccessors(['name', 'a', 'b', 'delta'])
+const TREND_SORT_ACCESSORS = compareFieldSortAccessors(
+  ['name', 'tasks', 'migrations', 'loadBalance', 'tickHealth', 'spanNs'])
+const migSortAccessors = computed(() =>
+  compareFieldSortAccessors((migHeaders.value || []).map((_, i) => String(i))))
+watch(migHeaders, (headers) => {
+  const col = tableSort.value.migrations.col
+  if (col != null && Number(col) >= (headers || []).length) {
+    tableSort.value.migrations = defaultStatsTableSort()
+  }
+})
+const sortedSummaryRows = computed(() =>
+  sortStatsRows(summaryRows.value, tableSort.value.summary, SUMMARY_SORT_ACCESSORS))
+const sortedTopTaskRows = computed(() =>
+  sortStatsRows(topTaskRows.value, tableSort.value.top, TOP_SORT_ACCESSORS))
+const sortedCoreUtilRows = computed(() =>
+  sortStatsRows(coreUtilRows.value, tableSort.value.coreUtil, CORE_UTIL_SORT_ACCESSORS))
+const sortedMigViewRows = computed(() =>
+  sortStatsRows(migViewRows.value, tableSort.value.migrations, migSortAccessors.value))
 const coreUtilChartModel = computed(() => {
   const rows = compareCoreUtilChartRows({ coreUtil: coreUtilRows.value })
   const maxV = Math.max(1, ...rows.map(r => Math.max(Number(r.a) || 0, Number(r.b) || 0)))
@@ -971,6 +1084,22 @@ const trendRows = computed(() => {
   }
   return crossTraceTrends(rows)
 })
+const sortedExecutionRows = computed(() =>
+  sortStatsRows(executionRows.value, tableSort.value.execution, EXEC_SORT_ACCESSORS))
+const sortedBlockingRows = computed(() =>
+  sortStatsRows(blockingRows.value, tableSort.value.blocking, BLOCK_SORT_ACCESSORS))
+const sortedInterArrivalRows = computed(() =>
+  sortStatsRows(interArrivalRows.value, tableSort.value.interArrival, INTER_SORT_ACCESSORS))
+const sortedPreemptionCompareRows = computed(() =>
+  sortStatsRows(preemptionCompareRows.value, tableSort.value.preemption, PREEMPT_SORT_ACCESSORS))
+const sortedSyncCompareRows = computed(() =>
+  sortStatsRows(syncCompareRows.value, tableSort.value.sync, SYNC_SORT_ACCESSORS))
+const sortedResponseCompareRows = computed(() =>
+  sortStatsRows(responseCompareRows.value, tableSort.value.response, RESPONSE_SORT_ACCESSORS))
+const sortedMutexBlockCompareRows = computed(() =>
+  sortStatsRows(mutexBlockCompareRows.value, tableSort.value.mutex, MUTEX_SORT_ACCESSORS))
+const sortedTrendRows = computed(() =>
+  sortStatsRows(trendRows.value, tableSort.value.trends, TREND_SORT_ACCESSORS))
 const sharedPatternRows = computed(() =>
   buildSharedPatternCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value, deadlines.value))
 
@@ -1088,6 +1217,10 @@ function onScoreBaseline() {
   background: rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(2px);
 }
+.compare-dialog-overlay-free {
+  display: block;
+  padding: 0;
+}
 
 .compare-dialog {
   width: min(1080px, 98vw);
@@ -1109,6 +1242,11 @@ function onScoreBaseline() {
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  cursor: grab;
+  user-select: none;
+}
+.compare-dialog-header:active {
+  cursor: grabbing;
 }
 
 .compare-dialog-title {
@@ -1329,7 +1467,7 @@ function onScoreBaseline() {
 }
 
 .compare-decision {
-  margin: 0 0 8px;
+  margin: 8px 0;
   padding: 8px 10px;
   border-radius: 6px;
   background: rgba(52, 152, 219, 0.10);
@@ -1372,23 +1510,6 @@ function onScoreBaseline() {
   margin-top: 2px;
   color: var(--fg-dim, #7a8690);
   font-size: 10px;
-}
-.compare-decision-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 6px;
-}
-.compare-inspect-btn {
-  cursor: pointer;
-  border: 1px solid var(--border, #444);
-  background: var(--bg-elevated, #2a2a2a);
-  color: var(--fg, #eee);
-  border-radius: 4px;
-  padding: 3px 8px;
-  font-size: 11px;
-}
-.compare-inspect-btn:hover {
-  border-color: #5dade2;
 }
 .compare-strip {
   margin: 8px 14px 0;
@@ -1497,6 +1618,29 @@ function onScoreBaseline() {
   color: var(--fg-dim);
   font-weight: 600;
   z-index: 1;
+}
+
+.compare-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.compare-table th.sortable:hover {
+  color: var(--fg);
+}
+
+.compare-table th.sort-asc::after,
+.compare-table th.sort-desc::after {
+  font-size: 8px;
+  opacity: 0.85;
+}
+
+.compare-table th.sort-asc::after {
+  content: ' ▲';
+}
+
+.compare-table th.sort-desc::after {
+  content: ' ▼';
 }
 
 .delta-improved {

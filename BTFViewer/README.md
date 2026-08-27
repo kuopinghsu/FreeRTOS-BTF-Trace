@@ -326,7 +326,7 @@ Review Task View, per-core load, **Core Migrations**, and the **Migration & Corr
 
 **Compare** is available when two or more traces are open. It summarizes differences in utilization, migrations, execution, blocking, response time, synchronization activity, and deadline misses.
 
-The summary identifies the **Baseline** (reference trace) and **Candidate** (new trace), counts regressions and improvements, and explains the overall result. Small changes without practical engineering significance are omitted.
+The **Summary** tab identifies the **Baseline** (reference trace) and **Candidate** (new trace), counts regressions and improvements, and explains the overall result. Small changes without practical engineering significance are omitted. Click a column header to sort any compare table; click again to reverse the order.
 
 This is an optional comparison tool. It is not required by the basic investigation workflow. When you use it, compare equivalent workload phases and measurement ranges.
 
