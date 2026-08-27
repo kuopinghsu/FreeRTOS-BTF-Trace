@@ -196,6 +196,24 @@
         v-if="guideStage === 'idle' && !messages.length"
         class="ai-start-inv"
       >
+        <div class="ai-start-workflow">
+          Triage → Scope → Investigate → Verify → Experiment → Compare
+        </div>
+        <p class="ai-start-blurb">
+          BTFViewer will start from the current Findings, selection,
+          or cursor region and guide the investigation step by step.
+        </p>
+        <div
+          v-if="startInvContextLines.length"
+          class="ai-start-context"
+        >
+          <div
+            v-for="(line, li) in startInvContextLines"
+            :key="li"
+          >
+            {{ line }}
+          </div>
+        </div>
         <button
           type="button"
           class="ai-btn primary"
@@ -270,15 +288,42 @@
         class="ai-msg"
         :class="m.role"
       >
-        <div class="ai-msg-role">
-          {{ aiRoleLabel(m.role, responseLanguage) }}
-        </div>
         <div
-          class="ai-msg-body"
-          :class="{ markdown: m.role === 'assistant' || m.role === 'evidence' }"
-          v-html="formatMessage(m.role, m.content)"
-          @click="onMsgClick"
-        />
+          v-if="m.role === 'evidence'"
+          class="ai-msg evidence ai-ev-panel"
+        >
+          <div class="ai-ev-panel-head">
+            <div class="ai-msg-role">
+              {{ aiRoleLabel(m.role, responseLanguage) }}
+            </div>
+            <button
+              type="button"
+              class="ai-ev-panel-toggle"
+              :title="evidenceSubfoldsExpanded ? evidenceCollapseAllLabel : evidenceExpandAllLabel"
+              :aria-label="evidenceSubfoldsExpanded ? evidenceCollapseAllLabel : evidenceExpandAllLabel"
+              :aria-expanded="evidenceSubfoldsExpanded"
+              @click="toggleEvidenceSubfolds"
+            >
+              {{ evidenceSubfoldsExpanded ? '⊟' : '⊞' }}
+            </button>
+          </div>
+          <div
+            class="ai-msg-body markdown ai-ev-panel-body"
+            v-html="formatMessage(m.role, m.content)"
+            @click="onMsgClick"
+          />
+        </div>
+        <template v-else>
+          <div class="ai-msg-role">
+            {{ aiRoleLabel(m.role, responseLanguage) }}
+          </div>
+          <div
+            class="ai-msg-body"
+            :class="{ markdown: m.role === 'assistant' }"
+            v-html="formatMessage(m.role, m.content)"
+            @click="onMsgClick"
+          />
+        </template>
         <button
           v-if="m.role === 'assistant' && m.requestContext"
           type="button"
@@ -291,48 +336,73 @@
           v-if="m.tools && m.tools.length"
           class="ai-tool-card"
         >
-          <template
-            v-for="t in m.tools"
-            :key="t.id"
+          <details
+            v-if="toolsCollapsible(m)"
+            class="ai-tool-fold"
           >
-            <p>
-              ⚡ {{ toolLabel(t) }}
-              <span class="ai-tool-st">({{ t.status || 'pending' }})</span>
-            </p>
-            <p
-              v-if="t.status === 'failed' && (t.result || t.error)"
-              class="ai-tool-fail"
+            <summary>
+              Evidence queries · {{ completedToolCount(m) }} completed
+            </summary>
+            <template
+              v-for="t in m.tools"
+              :key="t.id"
             >
-              {{ t.result || t.error }}
-            </p>
-          </template>
-          <div
-            v-if="batchPending(m)"
-            class="ai-tool-actions"
-          >
-            <button
-              type="button"
-              class="ai-btn primary"
-              @click="applyBatch(m.batchId)"
+              <p>
+                ⚡ {{ toolLabel(t) }}
+                <span class="ai-tool-st">({{ t.status || 'pending' }})</span>
+              </p>
+              <p
+                v-if="t.status === 'failed' && (t.result || t.error)"
+                class="ai-tool-fail"
+              >
+                {{ t.result || t.error }}
+              </p>
+            </template>
+          </details>
+          <template v-else>
+            <template
+              v-for="t in m.tools"
+              :key="t.id"
             >
-              Apply
-            </button>
+              <p>
+                ⚡ {{ toolLabel(t) }}
+                <span class="ai-tool-st">({{ t.status || 'pending' }})</span>
+              </p>
+              <p
+                v-if="t.status === 'failed' && (t.result || t.error)"
+                class="ai-tool-fail"
+              >
+                {{ t.result || t.error }}
+              </p>
+            </template>
+            <div
+              v-if="batchPending(m)"
+              class="ai-tool-actions"
+            >
+              <button
+                type="button"
+                class="ai-btn primary"
+                @click="applyBatch(m.batchId)"
+              >
+                Apply
+              </button>
+              <button
+                type="button"
+                class="ai-link-btn"
+                @click="skipBatch(m.batchId)"
+              >
+                Skip
+              </button>
+            </div>
             <button
+              v-else-if="batchApplied(m)"
               type="button"
               class="ai-link-btn"
-              @click="skipBatch(m.batchId)"
+              @click="undoBatch(m.batchId)"
             >
-              Skip
+              Undo
             </button>
-          </div>
-          <button
-            v-else-if="batchApplied(m)"
-            type="button"
-            class="ai-link-btn"
-            @click="undoBatch(m.batchId)"
-          >
-            Undo
-          </button>
+          </template>
         </div>
       </div>
     </div>
@@ -517,15 +587,14 @@
         class="ai-context-summary"
         :title="contextRowSummary.usage"
       >
-        Context · {{ contextRowSummary.mode }} ·
-        {{ contextRowSummary.findings }} findings ·
-        {{ contextRowSummary.language }} ·
-        {{ contextRowSummary.privacy }}
+        {{ contextRowCollapsed }}
       </summary>
       <div class="ai-context-body">
         <div><strong>Trace:</strong> {{ contextRowSummary.trace }}</div>
         <div><strong>Scope:</strong> {{ contextRowSummary.scope }}</div>
         <div><strong>Filters:</strong> {{ contextRowSummary.filters }}</div>
+        <div><strong>Findings:</strong> {{ contextRowSummary.findings }}</div>
+        <div><strong>Language:</strong> {{ contextRowSummary.language }}</div>
         <div><strong>Endpoint:</strong> {{ contextRowSummary.endpoint }}</div>
         <div><strong>Usage:</strong> {{ contextRowSummary.usage }}</div>
       </div>
@@ -697,6 +766,7 @@ import {
   buildAiReportHtml,
   canonicalAssistantToolMessage,
   filterEntriesForAiReport,
+  toolBatchAutoRuns,
   isExportTool,
   isQueryTool,
   maxToolRounds,
@@ -707,7 +777,6 @@ import {
   parseBtfStatsHref,
   summariseToolCall,
   formatToolActionLabel,
-  toolBatchAutoRuns,
   toolResultMessage,
   validateToolCall,
   btfJumpHref,
@@ -776,6 +845,9 @@ import {
   EVIDENCE_PANEL_TOOLS,
   extractEvidencePanelPayload,
   formatEvidencePanelMarkdown,
+  evidencePanelSummaryLine,
+  evidencePanelToggleLabel,
+  syncEvidenceSubfolds,
   mergeEvidencePanelPayload,
   formatInvestigationPlanStatus,
   elevateGuideStageForTemplate,
@@ -784,7 +856,6 @@ import {
   parseBtfExpHref,
   parseBtfHypHref,
   parseBtfScopeHref,
-  parseBtfToolHref,
 } from '../utils/aiInvestigation.js'
 import {
   aiFileStamp,
@@ -924,6 +995,7 @@ const investigationPlan = ref(null)
 let evidencePayload = null
 let interpretedQuery = null
 const evidenceRev = ref(0)
+const evidenceSubfoldsExpanded = ref(false)
 
 function bumpEvidence() {
   evidenceRev.value += 1
@@ -996,8 +1068,15 @@ function syncEvidenceLogEntry(data, language = props.responseLanguage) {
   if (!text) return
   messages.value = messages.value.filter(m => m.role !== 'evidence')
   messages.value.push({ role: 'evidence', content: text })
+  evidenceSubfoldsExpanded.value = false
   bumpEvidence()
   scrollLog()
+  nextTick(() => syncEvidenceSubfolds(logRef.value, false))
+}
+
+function toggleEvidenceSubfolds() {
+  evidenceSubfoldsExpanded.value = !evidenceSubfoldsExpanded.value
+  nextTick(() => syncEvidenceSubfolds(logRef.value, evidenceSubfoldsExpanded.value))
 }
 
 function removeEvidenceLogEntry() {
@@ -1116,6 +1195,26 @@ function batchPending(m) {
 
 function batchApplied(m) {
   return m.batchId && (m.tools || []).some(t => t.status === 'applied')
+}
+
+function completedToolCount(m) {
+  return (m.tools || []).filter(t => {
+    const st = String(t.status || '')
+    return st === 'applied' || st === 'skipped' || st === 'done'
+  }).length
+}
+
+/** Collapse finished read-only query/export/nav batches; keep Apply/fail visible. */
+function toolsCollapsible(m) {
+  const tools = m.tools || []
+  if (tools.length < 2) return false
+  if (batchPending(m)) return false
+  if (tools.some(t => t.status === 'failed')) return false
+  if (!toolBatchAutoRuns(tools)) return false
+  return tools.every((t) => {
+    const st = String(t.status || '')
+    return st === 'applied' || st === 'skipped' || st === 'done'
+  })
 }
 
 watch(() => props.responseLanguage, (v) => {
@@ -1294,14 +1393,23 @@ const suggestedPrimaryId = computed(() => {
 
 const contextRowSummary = computed(() => {
   let ctx = {}
+  let gui = {}
   try {
     if (typeof props.getContext === 'function') ctx = normalizeAiContext(props.getContext() || {})
   } catch { /* ignore */ }
+  try {
+    if (typeof props.getGuiState === 'function') gui = props.getGuiState() || {}
+  } catch { /* ignore */ }
   const findings = Array.isArray(ctx.findings) ? ctx.findings.length : 0
+  const focus = String(
+    gui.selected_task || ctx.selected_task || pinnedFocusTask(ctx) || '',
+  ).trim()
   return {
+    stage: guidedStageLabel(guideStage.value) || 'Ready',
     mode: aiContextModeLabel(props.aiContextMode),
     language: String(props.responseLanguage || 'English'),
     findings,
+    focus,
     privacy: privacyChipLabel.value || 'Local',
     endpoint: authChipLabel.value,
     trace: intentContext.value.trace,
@@ -1310,6 +1418,61 @@ const contextRowSummary = computed(() => {
     usage: usageText.value,
   }
 })
+
+const contextRowCollapsed = computed(() => {
+  const s = contextRowSummary.value
+  const bits = [s.stage || 'Ready']
+  const scope = String(s.scope || '').trim()
+  if (scope) bits.push(scope)
+  const focus = String(s.focus || '').trim()
+  if (focus) bits.push(shortFocusLabel(focus))
+  if (s.mode) bits.push(s.mode)
+  if (s.privacy) bits.push(s.privacy)
+  return bits.join(' · ')
+})
+
+const evidenceExpandAllLabel = computed(() => (
+  evidencePanelToggleLabel(false, props.responseLanguage)
+))
+const evidenceCollapseAllLabel = computed(() => (
+  evidencePanelToggleLabel(true, props.responseLanguage)
+))
+
+const startInvContextLines = computed(() => {
+  const s = contextRowSummary.value
+  let findings = []
+  try {
+    const ctx = typeof props.getContext === 'function'
+      ? normalizeAiContext(props.getContext() || {})
+      : {}
+    findings = Array.isArray(ctx.findings) ? ctx.findings : []
+  } catch { findings = [] }
+  const lines = []
+  const top = findings[0]
+  if (top && (top.title || top.id)) {
+    lines.push(`Finding: ${String(top.title || top.id).trim()}`)
+    const task = String(top.task || '').trim()
+    if (task) lines.push(`Task: ${task}`)
+  } else if (s.focus) {
+    lines.push(`Task: ${s.focus}`)
+  }
+  lines.push(`Scope: ${s.scope || 'Full Trace'}`)
+  if (!top && s.findings > 0) {
+    lines.push(`${s.findings} Analysis Findings available.`)
+  }
+  return lines
+})
+
+function shortFocusLabel(name) {
+  const s = String(name || '').trim()
+  if (!s) return ''
+  return s.length > 28 ? `${s.slice(0, 26)}…` : s
+}
+
+function pinnedFocusTask(ctx) {
+  const f = Array.isArray(ctx?.findings) ? ctx.findings[0] : null
+  return f && f.task ? String(f.task) : ''
+}
 
 function applyLanguage() {
   const lang = String(langDraft.value || DEFAULT_AI_RESPONSE_LANGUAGE).trim()
@@ -1433,6 +1596,10 @@ function onSignInCta() {
   emit('openSettings')
 }
 
+function evidencePanelSummary(content) {
+  return evidencePanelSummaryLine(content)
+}
+
 function formatMessage(role, text) {
   return formatAiMessageHtml(role, text, { dark: props.darkMode !== false })
 }
@@ -1489,13 +1656,6 @@ function onMsgClick(ev) {
     ev.preventDefault()
     const parsed = parseBtfExpHref(expA.getAttribute('href') || '')
     if (parsed.action) onExperimentAction(parsed.action, parsed.key)
-    return
-  }
-  const toolA = from.closest('a[href^="btftool:"]')
-  if (toolA) {
-    ev.preventDefault()
-    const parsed = parseBtfToolHref(toolA.getAttribute('href') || '')
-    if (parsed.action) onToolWhy(parsed.action, parsed.name)
     return
   }
   const statsA = from.closest('a[href^="btfstats:"]')
@@ -1940,15 +2100,6 @@ function onScopeAction(action, key) {
 function onExperimentAction(action) {
   if (String(action || '').trim().toLowerCase() !== 'save') return
   onSaveUserKnowledge()
-}
-
-function onToolWhy(action, name) {
-  if (String(action || '').trim().toLowerCase() !== 'why') return
-  const want = String(name || '').trim()
-  const reasons = evidencePayload?.tool_reasons || []
-  const hit = reasons.find(r => r && typeof r === 'object' && String(r.tool || '') === want)
-  const why = hit ? String(hit.reason || '') : ''
-  status.value = why ? `${want}: ${why}` : `${want}: no recorded reason`
 }
 
 function onSaveUserKnowledge() {
@@ -2785,6 +2936,27 @@ defineExpose({
   align-items: flex-start;
   gap: 6px;
 }
+.ai-start-workflow {
+  font-size: 11px;
+  color: var(--fg-dim, #8a96a8);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.ai-start-blurb {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted, #8a96a8);
+}
+.ai-start-context {
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--fg, #dbe2ea);
+  line-height: 1.35;
+}
 .ai-issue-card {
   font-size: 12px;
   padding: 4px 6px;
@@ -2841,6 +3013,9 @@ defineExpose({
   cursor: pointer;
   list-style: none;
   user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .ai-context-summary::-webkit-details-marker { display: none; }
 .ai-context-body {
@@ -3007,6 +3182,43 @@ defineExpose({
 .ai-msg.user .ai-msg-role { color: #6ea8e0; }
 .ai-msg.assistant .ai-msg-role { color: #6fbf9a; }
 .ai-msg.evidence .ai-msg-role { color: #8a96a8; }
+.ai-ev-panel {
+  margin: 0;
+}
+.ai-ev-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.ai-ev-panel-head .ai-msg-role {
+  margin-bottom: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.ai-ev-panel-toggle {
+  flex: 0 0 auto;
+  border: 1px solid #3a4658;
+  border-radius: 4px;
+  background: #1a2230;
+  color: #8a96a8;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  min-width: 26px;
+  padding: 3px 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ai-ev-panel-toggle:hover {
+  color: #c5d0dc;
+  border-color: #5b9bd5;
+}
+.ai-ev-panel .ai-msg-body {
+  margin-top: 0;
+}
 .ai-msg-body {
   border-radius: 0 8px 8px 0;
   padding: 8px 10px;
@@ -3105,6 +3317,62 @@ defineExpose({
   text-decoration: underline;
   cursor: pointer;
 }
+.ai-ev-panel-body.markdown :deep(p > strong:only-child) {
+  font-size: 13px;
+  font-weight: 600;
+  color: #dce4ee;
+}
+.ai-msg-body.markdown :deep(details.ai-ev-fold) {
+  border-radius: 6px;
+  padding: 2px 8px 4px;
+  border: 1px solid var(--border, #3a4658);
+}
+.ai-msg-body.markdown :deep(details.ai-ev-fold-l1),
+.ai-msg-body.markdown :deep(details.ai-ev-fold:not(.ai-ev-fold-l2)) {
+  margin: 8px 0 4px;
+}
+.ai-msg-body.markdown :deep(details.ai-ev-fold-l1 > summary),
+.ai-msg-body.markdown :deep(details.ai-ev-fold:not(.ai-ev-fold-l2) > summary) {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12px;
+  color: #c5d0dc;
+  padding: 5px 0;
+  list-style: none;
+}
+.ai-msg-body.markdown :deep(details.ai-ev-fold-l2) {
+  margin: 4px 0 4px 10px;
+  border-color: #2f3848;
+  border-radius: 4px;
+  padding: 1px 6px 3px;
+  background: rgba(0, 0, 0, 0.06);
+}
+.ai-msg-body.markdown :deep(details.ai-ev-fold-l2 > summary) {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 11px;
+  color: #a8b4c4;
+  padding: 3px 0;
+  list-style: none;
+}
+.ai-msg-body.markdown :deep(details.ai-ev-fold > summary::-webkit-details-marker) {
+  display: none;
+}
+.ai-msg-body.markdown :deep(details.ai-ev-fold > summary::before) {
+  content: '▸ ';
+  display: inline-block;
+}
+.ai-msg-body.markdown :deep(details.ai-ev-fold[open] > summary::before) {
+  content: '▾ ';
+}
+.ai-msg-body.markdown :deep(.ai-ev-fold-body) {
+  padding: 2px 0 6px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.ai-msg-body.markdown :deep(.ai-ev-fold-body details.ai-ev-fold-l2 .ai-ev-fold-body) {
+  font-size: 11px;
+}
 .ai-tool-card {
   margin-top: 8px;
   padding: 8px 10px;
@@ -3114,6 +3382,15 @@ defineExpose({
   border-radius: 0 6px 6px 0;
   font-size: 12px;
 }
+.ai-tool-fold {
+  margin: 0;
+}
+.ai-tool-fold > summary {
+  cursor: pointer;
+  font-weight: 600;
+  list-style: none;
+}
+.ai-tool-fold > summary::-webkit-details-marker { display: none; }
 .ai-tool-card p { margin: 2px 0; }
 .ai-tool-st { color: #8b98a8; }
 .ai-tool-fail {

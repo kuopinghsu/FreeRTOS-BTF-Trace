@@ -59,8 +59,11 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     normalize_ai_context,
     normalize_ai_preset,
     parse_ai_settings_json,
+    parse_btf_fold_href,
     strip_ai_settings_jsonc,
     resolve_ai_settings,
+    _btf_fold_href,
+    _ev_fold_id,
 )
 from btf_viewer_pkg.ai_tools import (  # noqa: E402
     GEMINI_SKIP_THOUGHT_SIGNATURE,
@@ -697,6 +700,69 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(doc.count('class="ai-turn-sep"'), 2)
         self.assertIn("Prompt two", doc)
         self.assertLess(doc.index("Reply one"), doc.index("Prompt two"))
+
+    def test_format_ai_log_html_evidence_panel_collapse(self) -> None:
+        from btf_viewer_pkg.ai_investigation import (
+            EVIDENCE_SUBFOLDS_ALL,
+            evidence_panel_inner_fold_ids,
+        )
+
+        md = (
+            "**Verdict:** Correlated · **Coverage:** Partial\n\n"
+            "**Leading explanation**\nHit near cursor\n\n"
+            '<details class="ai-ev-fold">\n'
+            "<summary>Checks · 2</summary>\n\n"
+            "| Check | Status |\n| --- | --- |\n| Timeline | Observed |\n\n"
+            "</details>\n"
+        )
+        inner = evidence_panel_inner_fold_ids(md)
+        self.assertEqual(len(inner), 1)
+        collapsed = _format_ai_log_html(
+            "evidence", md, open_folds=set(), closed_folds=set(inner))
+        # Live chat embeds Expand/Collapse as a viewport-fixed button, not HTML.
+        self.assertNotIn("⊞", collapsed)
+        self.assertNotIn("ai-ev-panel-toggle", collapsed)
+        self.assertIn("padding-right:40px", collapsed)
+        self.assertIn("Evidence", collapsed)
+        self.assertIn("color:#8a96a8", collapsed)
+        self.assertIn("table-layout:fixed", collapsed)
+        self.assertIn("Verdict:", collapsed)
+        self.assertIn("Leading explanation", collapsed)
+        self.assertIn("ai-bubble", collapsed)
+        self.assertIn("ai-ev-fold-box", collapsed)
+        self.assertNotIn("Timeline", collapsed)
+        embedded = _format_ai_log_html(
+            "evidence", md, open_folds=set(), closed_folds=set(inner),
+            embed_ev_toggle=True)
+        self.assertIn('title="Expand all"', embedded)
+        self.assertIn("⊞", embedded)
+        self.assertIn("ai-ev-panel-toggle", embedded)
+        opened = _format_ai_log_html(
+            "evidence",
+            md,
+            open_folds={EVIDENCE_SUBFOLDS_ALL},
+            closed_folds=set(),
+            embed_ev_toggle=True,
+        )
+        self.assertIn('title="Collapse all"', opened)
+        self.assertIn("⊟", opened)
+        self.assertIn("Timeline", opened)
+        self.assertIn(
+            f"btffold:close/{EVIDENCE_SUBFOLDS_ALL}", opened)
+        light = _format_ai_log_html(
+            "evidence", md, is_dark=False,
+            open_folds=set(), closed_folds=set(inner))
+        self.assertIn("color:#5a6a7c", light)
+        zh = _format_ai_log_html(
+            "evidence",
+            md,
+            response_language="Traditional Chinese (繁體中文)",
+            open_folds=set(),
+            closed_folds=set(inner),
+            embed_ev_toggle=True,
+        )
+        self.assertIn("證據與驗證", zh)
+        self.assertIn('title="全部展開"', zh)
 
     def test_tool_card_apply_href_avoids_extra_colon(self) -> None:
         html_out = _format_ai_log_html(
@@ -1692,6 +1758,50 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertNotIn("onclick", html_table)
         self.assertNotIn("alert(1)", html_table)
 
+        fold_md = (
+            '<details class="ai-ev-fold">\n'
+            "<summary>Investigation details</summary>\n"
+            "\n"
+            "**Confidence:** High\n"
+            "\n"
+            "</details>\n"
+        )
+        chat_fold = markdown_to_safe_html(fold_md, as_img=True)
+        self.assertIn("▸ Investigation details", chat_fold)
+        self.assertIn("btffold:open/", chat_fold)
+        self.assertIn('class="ai-fold-toggle ai-fold-toggle-l1"', chat_fold)
+        self.assertNotIn(">Show</a>", chat_fold)
+        self.assertNotIn(">Hide</a>", chat_fold)
+        self.assertNotIn("Confidence", chat_fold)
+        fold_id = _ev_fold_id(
+            "Investigation details", "**Confidence:** High")
+        chat_open = markdown_to_safe_html(
+            fold_md, as_img=True, open_folds={fold_id})
+        self.assertIn("Confidence", chat_open)
+        self.assertIn("btffold:close/", chat_open)
+        self.assertIn("▾ Investigation details", chat_open)
+        self.assertNotIn(">Hide</a>", chat_open)
+        export_fold = markdown_to_safe_html(fold_md, as_img=False)
+        self.assertIn('ai-ev-fold-l1', export_fold)
+        self.assertIn("<summary>Investigation details</summary>", export_fold)
+        self.assertIn("Confidence", export_fold)
+        open_fold = markdown_to_safe_html(
+            '<details class="ai-ev-fold" open>\n'
+            "<summary>Checks · 1</summary>\n"
+            "\n"
+            "| Check | Status |\n"
+            "| --- | --- |\n"
+            "| Timeline | Observed |\n"
+            "\n"
+            "</details>\n",
+            as_img=True,
+        )
+        self.assertIn("Timeline", open_fold)
+        self.assertIn("▾ Checks · 1", open_fold)
+        action, fid = parse_btf_fold_href(_btf_fold_href("open", fold_id))
+        self.assertEqual(action, "open")
+        self.assertEqual(fid, fold_id)
+
     def test_normalize_ai_context_accepts_camel_case(self) -> None:
         ctx = normalize_ai_context({
             "findingsText": "hello",
@@ -1751,6 +1861,31 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertIn('href="btfjump:time/1805000"', doc)
         # No duplicated role prefix from the log formatter.
         self.assertNotIn("<b>Assistant:</b>", doc)
+
+    def test_conversation_export_html_evidence_fold_hierarchy(self) -> None:
+        """Save As HTML keeps fold level CSS and a working Expand all control."""
+        md = (
+            "**Verdict:** Suspected\n\n"
+            '<details class="ai-ev-fold ai-ev-fold-l1">\n'
+            "<summary>Investigation details</summary>\n\n"
+            '<details class="ai-ev-fold ai-ev-fold-l2">\n'
+            "<summary>Tools used · 1</summary>\n\n"
+            "- search_timeline: locate\n\n"
+            "</details>\n\n"
+            "</details>\n"
+        )
+        doc = format_ai_conversation_html([{"role": "evidence", "text": md}])
+        self.assertIn("ai-ev-fold-l1", doc)
+        self.assertIn("ai-ev-fold-l2", doc)
+        self.assertIn("details.ai-ev-fold-l1 > summary", doc)
+        self.assertIn("font-size: 12px", doc)
+        self.assertIn("details.ai-ev-fold-l2 > summary", doc)
+        self.assertIn("font-size: 11px", doc)
+        self.assertIn('<button type="button" class="ai-ev-panel-toggle"', doc)
+        self.assertIn('data-expand="Expand all"', doc)
+        self.assertIn('data-collapse="Collapse all"', doc)
+        self.assertIn(
+            "querySelectorAll('.msg.evidence .ai-ev-panel-toggle')", doc)
 
     def test_is_local_ai_host(self) -> None:
         for url in (

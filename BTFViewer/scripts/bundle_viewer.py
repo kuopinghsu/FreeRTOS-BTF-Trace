@@ -166,7 +166,7 @@ from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from operator import attrgetter as _attrgetter
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Set, Tuple, Union
 import xml.etree.ElementTree as ET
 
 from PySide6.QtCore import (

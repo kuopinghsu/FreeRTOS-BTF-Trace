@@ -6,6 +6,7 @@ endpoint — never the raw BTF event stream.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import html
 import json
 import os
@@ -17,7 +18,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from ._imports import *  # noqa: F403,F401
 from .config import UI_FONT_SIZE, _application_ui_font, _svg_icon, rasterize_svg_pixmap
@@ -75,7 +76,11 @@ from .ai_investigation import (
     complete_investigation_plan,
     default_investigation_plan,
     elevate_guide_stage_for_template,
+    EVIDENCE_SUBFOLDS_ALL,
+    evidence_panel_inner_fold_ids,
     evidence_panel_labels,
+    evidence_panel_summary_line,
+    evidence_panel_toggle_label,
     extract_evidence_panel_payload,
     format_evidence_panel_markdown,
     merge_evidence_panel_payload,
@@ -86,7 +91,6 @@ from .ai_investigation import (
     parse_btf_exp_href,
     parse_btf_hyp_href,
     parse_btf_scope_href,
-    parse_btf_tool_href,
 )
 from .ai_case import (
     INVESTIGATION_MODE_LABELS,
@@ -1958,10 +1962,12 @@ def _ai_md_th_style(is_dark: bool = True) -> str:
         return (
             "border:1px solid #3a4658;padding:4px 8px;"
             "background:#243044;color:#e8eef6;font-weight:600;"
+            "word-wrap:break-word;"
         )
     return (
         "border:1px solid #DDDDDD;padding:4px 8px;"
         "background:#E8EEF4;color:#1E1E1E;font-weight:600;"
+        "word-wrap:break-word;"
     )
 
 
@@ -1970,17 +1976,20 @@ def _ai_md_td_style(is_dark: bool = True) -> str:
         return (
             "border:1px solid #3a4658;padding:4px 8px;"
             "background:#1a2230;color:#dbe2ea;"
+            "word-wrap:break-word;"
         )
     return (
         "border:1px solid #DDDDDD;padding:4px 8px;"
         "background:#FFFFFF;color:#1E1E1E;"
+        "word-wrap:break-word;"
     )
 
 
 _AI_MD_TH_STYLE = _ai_md_th_style(True)
 _AI_MD_TD_STYLE = _ai_md_td_style(True)
 _AI_MD_TABLE_OPEN = (
-    '<table class="ai-md-table" width="100%" cellspacing="0" cellpadding="4">'
+    '<table class="ai-md-table" width="100%" cellspacing="0" cellpadding="4" '
+    'style="table-layout:fixed;">'
 )
 
 
@@ -2149,12 +2158,129 @@ def _sanitize_html_table_block(block: str, *, is_dark: bool = True) -> str:
     return html_out
 
 
-def markdown_to_safe_html(text: str, *, as_img: bool = True, is_dark: bool = True) -> str:
+def _ev_fold_id(title: str, body: str) -> str:
+    """Stable id for QTextBrowser disclosure folds (▸/▾ headers; not interactive <details>)."""
+    raw = f"{str(title or '').strip()}\n{str(body or '').strip()[:160]}"
+    return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def _btf_fold_href(action: str, fold_id: str) -> str:
+    act = "open" if str(action or "").lower() == "open" else "close"
+    return f"btffold:{act}/{urllib.parse.quote(str(fold_id or ''), safe='')}"
+
+
+# Evidence panel Expand/Collapse icons (Web lockstep with AiAssistantPanel.vue).
+AI_EV_EXPAND_ICON = "⊞"
+AI_EV_COLLAPSE_ICON = "⊟"
+
+
+def _ai_fold_box_wrap(
+    inner_html: str,
+    *,
+    depth: int = 1,
+    is_dark: bool = True,
+) -> str:
+    """Bordered box around a fold header (+ body when expanded). QTextBrowser-friendly."""
+    level = 2 if depth >= 2 else 1
+    if is_dark:
+        border = "#3a4658" if level == 1 else "#2f3848"
+        bg = "#1a2230" if level == 1 else "#161c28"
+    else:
+        border = "#c5ced9" if level == 1 else "#d9e0ea"
+        bg = "#ffffff" if level == 1 else "#f4f6f9"
+    margin = "6px 0 4px 0" if level == 1 else "4px 0 4px 10px"
+    return (
+        f'<table class="ai-ev-fold-box ai-ev-fold-box-l{level}" width="100%" '
+        f'cellspacing="0" cellpadding="0" '
+        f'style="margin:{margin};table-layout:fixed;">'
+        f'<tr><td bgcolor="{bg}" style="border:1px solid {border};'
+        f'padding:4px 8px;">{inner_html}</td></tr></table>'
+    )
+
+
+def _ai_fold_toggle_html(
+    title_html: str,
+    fold_id: str,
+    *,
+    expanded: bool,
+    is_dark: bool = True,
+    depth: int = 1,
+) -> str:
+    """Disclosure-triangle header (▸/▾ + title); whole row toggles — no Show/Hide text."""
+    action = "close" if expanded else "open"
+    mark = "▾" if expanded else "▸"
+    level = 2 if depth >= 2 else 1
+    if level <= 1:
+        color = "#c5d0dc" if is_dark else "#333333"
+        size = "12px"
+    else:
+        color = "#a8b4c4" if is_dark else "#555555"
+        size = "11px"
+    return (
+        f'<p style="margin:2px 0;">'
+        f'<a class="ai-fold-toggle ai-fold-toggle-l{level}" href="{_btf_fold_href(action, fold_id)}" '
+        f'style="color:{color};text-decoration:none;font-weight:600;font-size:{size};">'
+        f"{mark} {title_html}</a></p>"
+    )
+
+
+def _ai_ev_panel_action_html(
+    expanded: bool,
+    labels: Dict[str, str],
+    *,
+    is_dark: bool = True,
+) -> str:
+    """Right-side Expand/Collapse icon for the Evidence & Validation header."""
+    action = "close" if expanded else "open"
+    text = html.escape(
+        labels.get("collapse_all" if expanded else "expand_all")
+        or ("Collapse all" if expanded else "Expand all")
+    )
+    icon = AI_EV_COLLAPSE_ICON if expanded else AI_EV_EXPAND_ICON
+    if is_dark:
+        color, border, bg = "#8a96a8", "#3a4658", "#1a2230"
+    else:
+        color, border, bg = "#555555", "#c5ced9", "#ffffff"
+    return (
+        f'<a class="ai-ev-panel-toggle" href="{_btf_fold_href(action, EVIDENCE_SUBFOLDS_ALL)}" '
+        f'title="{text}" '
+        f'style="color:{color};text-decoration:none;font-size:14px;font-weight:700;'
+        f'line-height:1;border:1px solid {border};background:{bg};'
+        f'padding:2px 7px;white-space:nowrap;">{icon}</a>'
+    )
+
+
+def parse_btf_fold_href(href: str) -> Tuple[str, str]:
+    """Return ``(open|close, fold_id)`` from a ``btffold:`` link, else ``("", "")``."""
+    raw = str(href or "").strip()
+    m = re.search(
+        r"btffold:(?://)?(open|close)[/:]([^?\s#]+)",
+        raw,
+        re.IGNORECASE,
+    )
+    if not m:
+        return "", ""
+    return m.group(1).lower(), urllib.parse.unquote(m.group(2) or "")
+
+
+def markdown_to_safe_html(
+    text: str,
+    *,
+    as_img: bool = True,
+    is_dark: bool = True,
+    open_folds: Optional[Set[str]] = None,
+    closed_folds: Optional[Set[str]] = None,
+    fold_depth: int = 0,
+) -> str:
     """Convert a subset of Markdown to safe HTML (AI reply preview).
 
     ``as_img=True`` (QTextBrowser chat) embeds mermaid as a PNG-compatible
     data-URI ``<img>``. ``as_img=False`` (HTML export / browser) keeps an
     inline SVG so diagram nodes stay clickable.
+
+    QTextBrowser cannot expand ``<details>``. Closed chat folds use a
+    disclosure header (▸/▾ + title) with a ``btffold:`` toggle; ``open_folds``
+    lists expanded ids.
     """
     raw = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not raw:
@@ -2163,6 +2289,8 @@ def markdown_to_safe_html(text: str, *, as_img: bool = True, is_dark: bool = Tru
     out: List[str] = []
     i = 0
     n = len(lines)
+    opened = open_folds if isinstance(open_folds, set) else set()
+    closed = closed_folds if isinstance(closed_folds, set) else set()
 
     def _flush_para(buf: List[str]) -> None:
         if not buf:
@@ -2218,6 +2346,94 @@ def markdown_to_safe_html(text: str, *, as_img: bool = True, is_dark: bool = Tru
         if not stripped:
             _flush_para(para)
             i += 1
+            continue
+
+        # Collapsible Evidence folds: <details class="ai-ev-fold">…</details>
+        if re.match(r"^<details\b", stripped, re.I):
+            _flush_para(para)
+            is_open_attr = bool(re.search(r"\bopen\b", stripped, re.I))
+            i += 1
+            summary = ""
+            body_lines: List[str] = []
+            depth = 1
+            while i < n and depth > 0:
+                s = lines[i].strip()
+                if re.match(r"^<details\b", s, re.I):
+                    depth += 1
+                    body_lines.append(lines[i])
+                    i += 1
+                    continue
+                if re.match(r"^</details>\s*$", s, re.I):
+                    depth -= 1
+                    if depth > 0:
+                        body_lines.append(lines[i])
+                    i += 1
+                    continue
+                if not summary and re.match(r"^<summary>", s, re.I):
+                    summary = re.sub(
+                        r"^<summary>", "", s, count=1, flags=re.I
+                    )
+                    summary = re.sub(
+                        r"</summary>\s*$", "", summary, count=1, flags=re.I
+                    ).strip()
+                    i += 1
+                    continue
+                body_lines.append(lines[i])
+                i += 1
+            title = summary or "Details"
+            body_text = "\n".join(body_lines).strip()
+            fold_id = _ev_fold_id(title, body_text)
+            if EVIDENCE_SUBFOLDS_ALL in opened:
+                expanded = True
+            elif fold_id in closed:
+                expanded = False
+            elif fold_id in opened:
+                expanded = True
+            else:
+                expanded = is_open_attr
+            level_cls = "ai-ev-fold-l1"
+            if re.search(r"\bai-ev-fold-l2\b", stripped, re.I):
+                level_cls = "ai-ev-fold-l2"
+            elif re.search(r"\bai-ev-fold-l1\b", stripped, re.I):
+                level_cls = "ai-ev-fold-l1"
+            elif fold_depth >= 1:
+                level_cls = "ai-ev-fold-l2"
+            toggle_depth = 2 if level_cls == "ai-ev-fold-l2" else 1
+            title_html = _md_inline_to_html_escaped(title)
+            if as_img:
+                # QTextBrowser: clickable ▸/▾ header in a bordered box.
+                header = _ai_fold_toggle_html(
+                    title_html, fold_id, expanded=expanded, is_dark=is_dark,
+                    depth=toggle_depth)
+                if expanded:
+                    inner = markdown_to_safe_html(
+                        body_text,
+                        as_img=as_img,
+                        is_dark=is_dark,
+                        open_folds=opened,
+                        closed_folds=closed,
+                        fold_depth=fold_depth + 1,
+                    )
+                    chunk = f"{header}{inner}"
+                else:
+                    chunk = header
+                out.append(_ai_fold_box_wrap(
+                    chunk, depth=toggle_depth, is_dark=is_dark))
+            else:
+                inner = markdown_to_safe_html(
+                    body_text,
+                    as_img=as_img,
+                    is_dark=is_dark,
+                    open_folds=opened,
+                    closed_folds=closed,
+                    fold_depth=fold_depth + 1,
+                )
+                open_attr = " open" if expanded else ""
+                out.append(
+                    f'<details class="ai-ev-fold {level_cls}"{open_attr}>'
+                    f"<summary>{title_html}</summary>"
+                    f'<div class="ai-ev-fold-body">{inner}</div></details>'
+                )
             continue
 
         if re.fullmatch(r"(-{3,}|\*{3,}|_{3,})", stripped):
@@ -2334,13 +2550,25 @@ def markdown_to_safe_html(text: str, *, as_img: bool = True, is_dark: bool = Tru
     return "".join(out)
 
 
-def _ai_message_body_html(role: str, text: str, *, as_img: bool = True,
-                          is_dark: bool = True) -> str:
+def _ai_message_body_html(
+    role: str,
+    text: str,
+    *,
+    as_img: bool = True,
+    is_dark: bool = True,
+    open_folds: Optional[Set[str]] = None,
+    closed_folds: Optional[Set[str]] = None,
+) -> str:
     """Message body without the role prefix; assistant replies render as Markdown."""
     body_text = (text or "").strip()
     if role in ("assistant", "evidence"):
         return markdown_to_safe_html(
-            body_text, as_img=as_img, is_dark=is_dark) or "<p></p>"
+            body_text,
+            as_img=as_img,
+            is_dark=is_dark,
+            open_folds=open_folds,
+            closed_folds=closed_folds,
+        ) or "<p></p>"
     esc = html.escape(body_text)
     linked = _JUMP_RE.sub(
         lambda m: (
@@ -2358,10 +2586,12 @@ def _ai_log_style(is_dark: bool = True) -> str:
         pre_bg, pre_bd, quote, hr, link = (
             "#1a2230", "#3a4658", "#a8b4c4", "#3a4658", "#5b9bd5")
         user, asst, tool = "#6ea8e0", "#6fbf9a", "#e6d48a"
+        evidence = "#8a96a8"
     else:
         pre_bg, pre_bd, quote, hr, link = (
             "#FFFFFF", "#DDDDDD", "#555555", "#DDDDDD", "#0066CC")
         user, asst, tool = "#0066CC", "#2e7d57", "#6b5508"
+        evidence = "#5a6a7c"
     # Prefer a Hangul-capable face so Korean replies are not tofu (Linux/WSL).
     try:
         from .timeline_util import _get_sans_font_family
@@ -2383,8 +2613,14 @@ def _ai_log_style(is_dark: bool = True) -> str:
         f"color:{quote};}}"
         f"hr{{border:none;border-top:1px solid {hr};margin:8px 0;}}"
         f"a{{color:{link};}}"
-        "table.ai-md-table{margin:8px 0;}"
+        "a.ai-fold-toggle{text-decoration:none;font-weight:600;}"
+        "a.ai-fold-toggle-l1{font-size:12px;}"
+        "a.ai-fold-toggle-l2{font-size:11px;}"
+        "table.ai-md-table{margin:8px 0;table-layout:fixed;}"
+        "table.ai-turn{table-layout:fixed;}"
+        "table.ai-ev-fold-box{table-layout:fixed;}"
         ".ai-role{font-size:11px;font-weight:600;}"
+        f".ai-role-evidence{{font-size:12px;font-weight:700;color:{evidence};}}"
         f".ai-role-user{{color:{user};}}"
         f".ai-role-assistant{{color:{asst};}}"
         f".ai-tool-card{{color:{tool};}}"
@@ -2418,8 +2654,43 @@ def ai_entry_tools(entry: Any) -> List[Dict[str, Any]]:
     return []
 
 
-def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str,
-                     *, light: bool = False) -> str:
+def _short_focus_label(name: Any) -> str:
+    """Shorten focus-task names for the Context collapsed one-liner (Web lockstep)."""
+    s = str(name or "").strip()
+    if not s:
+        return ""
+    return f"{s[:26]}…" if len(s) > 28 else s
+
+
+def _tools_batch_collapsible(
+    tools: Sequence[Dict[str, Any]],
+    batch_id: str = "",
+) -> bool:
+    """Collapse finished read-only query/export/nav batches; keep Apply/fail visible."""
+    tools_list = [t for t in tools if isinstance(t, dict)]
+    if len(tools_list) < 2:
+        return False
+    if batch_id and any(
+        str(t.get("status") or "pending") == "pending" for t in tools_list
+    ):
+        return False
+    if any(str(t.get("status") or "") == "failed" for t in tools_list):
+        return False
+    if not tool_batch_auto_runs(tools_list):
+        return False
+    return all(
+        str(t.get("status") or "") in ("applied", "skipped", "done")
+        for t in tools_list
+    )
+
+
+def _tool_cards_html(
+    tools: Sequence[Dict[str, Any]],
+    batch_id: str,
+    *,
+    light: bool = False,
+    open_folds: Optional[Set[str]] = None,
+) -> str:
     if not tools:
         return ""
     rows: List[str] = []
@@ -2429,18 +2700,22 @@ def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str,
             status = str(t.get("status") or status)
             break
     st_color = "#6b7280" if light else "#8b98a8"
+    completed_n = 0
     for t in tools:
         if not isinstance(t, dict):
             continue
         name = str(t.get("name") or "")
         args = t.get("arguments") if isinstance(t.get("arguments"), dict) else {}
         label = html.escape(format_tool_action_label(name, args))
-        st = html.escape(str(t.get("status") or status))
+        st_raw = str(t.get("status") or status)
+        st = html.escape(st_raw)
+        if st_raw in ("applied", "skipped", "done"):
+            completed_n += 1
         rows.append(
             f"<p>⚡ {label} <span style=\"color:{st_color}\">({st})</span></p>"
         )
         detail = ""
-        if str(t.get("status") or status) == "failed":
+        if st_raw == "failed":
             detail = str(t.get("result") or t.get("error") or "").strip()
         if detail:
             rows.append(
@@ -2457,17 +2732,39 @@ def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str,
         actions = (
             f'<p><a href="btfaction:undo/{html.escape(batch_id)}">Undo</a></p>'
         )
+    body = "".join(rows) + actions
+    if _tools_batch_collapsible(tools, batch_id):
+        summary = f"Evidence queries · {completed_n} completed"
+        fold_id = _ev_fold_id(summary, batch_id or summary)
+        opened = open_folds if isinstance(open_folds, set) else set()
+        if light:
+            body = (
+                f'<details class="ai-tool-fold">'
+                f"<summary>{html.escape(summary)}</summary>"
+                f"{''.join(rows)}</details>"
+            )
+        elif fold_id in opened:
+            body = (
+                _ai_fold_toggle_html(
+                    html.escape(summary), fold_id,
+                    expanded=True, is_dark=not light)
+                + "".join(rows)
+            )
+        else:
+            body = _ai_fold_toggle_html(
+                html.escape(summary), fold_id,
+                expanded=False, is_dark=not light)
     if light:
         return (
             '<div class="ai-tool-card" style="margin-top:8px;padding:8px 10px;'
             'border-left:3px solid #c9a227;background:#fff8e8;color:#6b5508;">'
-            f"{''.join(rows)}{actions}</div>"
+            f"{body}</div>"
         )
     return (
         '<table width="100%" cellspacing="0" cellpadding="0">'
         '<tr><td bgcolor="#2a2418" class="ai-tool-card" '
         'style="border-left:3px solid #c9a227;padding:8px 10px;">'
-        f"{''.join(rows)}{actions}</td></tr></table>"
+        f"{body}</td></tr></table>"
     )
 
 
@@ -2497,10 +2794,17 @@ def _format_ai_log_html(
     response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
     *,
     is_dark: bool = True,
+    open_folds: Optional[Set[str]] = None,
+    closed_folds: Optional[Set[str]] = None,
+    embed_ev_toggle: bool = False,
 ) -> str:
-    """One conversation turn as a self-contained table (Qt will not merge these)."""
+    """One conversation turn as a self-contained table (Qt will not merge these).
+
+    ``embed_ev_toggle`` is False for the live chat log: Expand/Collapse is a
+    viewport-fixed QToolButton so wide Expand-all tables cannot push it aside.
+    """
     is_user = role == "user"
-    label = html.escape(ai_role_label(role, response_language))
+    role_label = ai_role_label(role, response_language)
     role_cls = "ai-role-user" if is_user else (
         "ai-role-evidence" if role == "evidence" else "ai-role-assistant")
     # bgcolor is more reliable in QTextBrowser than CSS background on divs.
@@ -2515,15 +2819,60 @@ def _format_ai_log_html(
         fg = "#1E1E1E"
     bar = "#5b9bd5" if is_user else (
         "#8a96a8" if role == "evidence" else "#3d9a72")
-    body = _ai_message_body_html(role, text, is_dark=is_dark) if (text or "").strip() else ""
-    cards = _tool_cards_html(tools or [], batch_id, light=not is_dark)
+    opened = open_folds if isinstance(open_folds, set) else set()
+    if role == "evidence":
+        # Explicit color: QTextBrowser often ignores color:inherit on nested <td>.
+        ev_color = "#8a96a8" if is_dark else "#5a6a7c"
+        # Leave room on the right for the viewport-fixed Expand/Collapse button.
+        pad_right = "40px" if not embed_ev_toggle else "0"
+        title_html = (
+            f'<span style="font-weight:700;font-size:12px;color:{ev_color};">'
+            f"{html.escape(role_label)}</span>"
+        )
+        if embed_ev_toggle:
+            ev_labels = evidence_panel_labels(response_language)
+            subfolds_open = EVIDENCE_SUBFOLDS_ALL in opened
+            label = (
+                f'<table width="100%" cellspacing="0" cellpadding="0" '
+                f'style="table-layout:fixed;"><tr>'
+                f'<td style="font-weight:700;font-size:12px;color:{ev_color};">'
+                f"{html.escape(role_label)}</td>"
+                f'<td align="right" valign="middle" width="36" style="width:36px;">'
+                f"{_ai_ev_panel_action_html(subfolds_open, ev_labels, is_dark=is_dark)}"
+                f"</td></tr></table>"
+            )
+        else:
+            label = (
+                f'<div style="padding-right:{pad_right};">{title_html}</div>'
+            )
+    else:
+        label = html.escape(role_label)
+    body = ""
+    cards = ""
+    body = (
+        _ai_message_body_html(
+            role, text, is_dark=is_dark,
+            open_folds=open_folds, closed_folds=closed_folds)
+        if (text or "").strip() else ""
+    )
+    cards = _tool_cards_html(
+        tools or [], batch_id, light=not is_dark, open_folds=open_folds)
     if not body and not cards:
         body = "<p></p>"
+    rows = (
+        f'<tr><td class="ai-role {role_cls}" style="padding:10px 0 3px 0;">'
+        f"{label}</td></tr>"
+    )
+    if body or cards:
+        rows += (
+            f'<tr><td class="ai-bubble" bgcolor="{bg}" '
+            f'style="border-left:3px solid {bar};padding:8px 10px;color:{fg};">'
+            f"{body}{cards}</td></tr>"
+        )
     return (
-        f'<table class="ai-turn" width="100%" cellspacing="0" cellpadding="0">'
-        f'<tr><td class="ai-role {role_cls}" style="padding:10px 0 3px 0;">{label}</td></tr>'
-        f'<tr><td class="ai-bubble" bgcolor="{bg}" '
-        f'style="border-left:3px solid {bar};padding:8px 10px;color:{fg};">{body}{cards}</td></tr>'
+        f'<table class="ai-turn" width="100%" cellspacing="0" cellpadding="0" '
+        f'style="table-layout:fixed;">'
+        f"{rows}"
         f"</table>"
     )
 
@@ -2533,6 +2882,8 @@ def _ai_log_document_html(
     response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
     *,
     is_dark: bool = True,
+    open_folds: Optional[Set[str]] = None,
+    closed_folds: Optional[Set[str]] = None,
 ) -> str:
     """Full conversation document for QTextBrowser.setHtml (avoids append merge)."""
     if not entries:
@@ -2548,6 +2899,8 @@ def _ai_log_document_html(
             str((entry.get("batch_id") if isinstance(entry, dict) else "") or ""),
             response_language=response_language,
             is_dark=is_dark,
+            open_folds=open_folds,
+            closed_folds=closed_folds,
         ))
     return f"<html><body>{''.join(parts)}</body></html>"
 
@@ -2612,6 +2965,34 @@ def format_ai_conversation_text(
 
 _AI_HTML_STYLE = ""  # legacy; conversation HTML uses html_report chrome
 
+# Expand all / Collapse all for Evidence folds in standalone HTML export.
+# Keep in sync with aiMarkdown.js::AI_EVIDENCE_PANEL_EXPORT_SCRIPT.
+AI_EVIDENCE_PANEL_EXPORT_SCRIPT = """
+<script>
+(function () {
+  document.querySelectorAll('.msg.evidence .ai-ev-panel-toggle').forEach(function (btn) {
+    if (btn.getAttribute('data-bound') === '1') return;
+    btn.setAttribute('data-bound', '1');
+    btn.addEventListener('click', function () {
+      var root = btn.closest('.msg.evidence');
+      if (!root) return;
+      var folds = root.querySelectorAll('details.ai-ev-fold');
+      var open = btn.getAttribute('data-open') === '1';
+      folds.forEach(function (d) {
+        if (open) d.removeAttribute('open');
+        else d.setAttribute('open', '');
+      });
+      var next = !open;
+      btn.setAttribute('data-open', next ? '1' : '0');
+      btn.textContent = next
+        ? (btn.getAttribute('data-collapse') || 'Collapse all')
+        : (btn.getAttribute('data-expand') || 'Expand all');
+    });
+  });
+})();
+</script>
+""".strip()
+
 
 def format_ai_conversation_html_body(
     entries: Sequence[Any],
@@ -2619,6 +3000,7 @@ def format_ai_conversation_html_body(
 ) -> str:
     """Conversation turn markup only (no document chrome). For report embedding."""
     parts = []
+    has_evidence = False
     for entry in entries:
         role = ai_entry_role(entry)
         text = ai_entry_text(entry)
@@ -2626,13 +3008,32 @@ def format_ai_conversation_html_body(
             "evidence" if role == "evidence" else "assistant")
         body = _ai_message_body_html(role, text, as_img=False, is_dark=False) if (text or "").strip() else ""
         cards = _tool_cards_html(ai_entry_tools(entry), "", light=True)
-        head = f"<h3>{html.escape(ai_role_label(role, response_language))}</h3>"
+        label = ai_role_label(role, response_language)
+        if role == "evidence":
+            has_evidence = True
+            expand = evidence_panel_toggle_label(False, response_language)
+            collapse = evidence_panel_toggle_label(True, response_language)
+            parts.append(
+                f'<section class="msg {cls} ai-ev-panel">'
+                f'<h3>{html.escape(label)} · '
+                f'<button type="button" class="ai-ev-panel-toggle" data-open="0" '
+                f'data-expand="{html.escape(expand, quote=True)}" '
+                f'data-collapse="{html.escape(collapse, quote=True)}">'
+                f'{html.escape(expand)}</button></h3>'
+                f'<div class="body">{body}{cards}</div>'
+                f"</section>"
+            )
+            continue
+        head = f"<h3>{html.escape(label)}</h3>"
         parts.append(
             f'<section class="msg {cls}">{head}'
             f'<div class="body">{body}{cards}</div>'
             "</section>"
         )
-    return "\n".join(parts)
+    out = "\n".join(parts)
+    if has_evidence:
+        out = f"{out}\n{AI_EVIDENCE_PANEL_EXPORT_SCRIPT}"
+    return out
 
 
 def format_ai_conversation_html(
@@ -4252,6 +4653,8 @@ def create_ai_assistant_panel(
             self._busy = False
             self._worker: Optional[_OllamaWorker] = None
             self._entries: List[Any] = []
+            self._open_ev_folds: Set[str] = set()
+            self._closed_ev_folds: Set[str] = set()
             self._chat_messages: List[Dict[str, Any]] = []
             self._tool_round = 0
             self._pending_batches: Dict[str, Dict[str, Any]] = {}
@@ -4458,6 +4861,20 @@ def create_ai_assistant_panel(
             self._log.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             self._log.customContextMenuRequested.connect(self._show_log_menu)
             self._log.viewport().installEventFilter(self)
+            # Viewport-fixed Expand/Collapse so wide Expand-all tables cannot
+            # push the control off-screen (Web header stays outside body scroll).
+            self._ev_expand_btn = QToolButton(self._log.viewport())
+            self._ev_expand_btn.setObjectName("aiEvExpandBtn")
+            self._ev_expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._ev_expand_btn.setAutoRaise(True)
+            self._ev_expand_btn.setText(AI_EV_EXPAND_ICON)
+            self._ev_expand_btn.setToolTip("Expand all")
+            self._ev_expand_btn.hide()
+            self._ev_expand_btn.clicked.connect(self._toggle_evidence_subfolds)
+            self._log.verticalScrollBar().valueChanged.connect(
+                lambda _v: self._sync_evidence_expand_btn())
+            self._log.horizontalScrollBar().valueChanged.connect(
+                lambda _v: self._sync_evidence_expand_btn())
             self._log_stack = QStackedWidget()
             self._log_stack.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -4523,12 +4940,40 @@ def create_ai_assistant_panel(
                 self._guide_step_btns[sid] = btn
             self._guide_step_row.addStretch(1)
             g_lay.addWidget(self._guide_stepper)
+            self._start_inv_host = QWidget()
+            self._start_inv_host.setObjectName("aiStartInv")
+            start_lay = QVBoxLayout(self._start_inv_host)
+            start_lay.setContentsMargins(0, 0, 0, 0)
+            start_lay.setSpacing(6)
+            self._start_inv_workflow = QLabel(
+                "Triage → Scope → Investigate → Verify → Experiment → Compare")
+            self._start_inv_workflow.setObjectName("aiStartWorkflow")
+            self._start_inv_workflow.setWordWrap(False)
+            self._start_inv_workflow.setTextInteractionFlags(
+                Qt.TextInteractionFlag.NoTextInteraction)
+            start_lay.addWidget(self._start_inv_workflow)
+            self._start_inv_blurb = QLabel(
+                "BTFViewer will start from the current Findings, selection, "
+                "or cursor region and guide the investigation step by step.")
+            self._start_inv_blurb.setObjectName("aiStartBlurb")
+            self._start_inv_blurb.setWordWrap(True)
+            self._start_inv_blurb.setTextInteractionFlags(
+                Qt.TextInteractionFlag.NoTextInteraction)
+            start_lay.addWidget(self._start_inv_blurb)
+            self._start_inv_context = QLabel("")
+            self._start_inv_context.setObjectName("aiStartContext")
+            self._start_inv_context.setWordWrap(True)
+            self._start_inv_context.setTextInteractionFlags(
+                Qt.TextInteractionFlag.NoTextInteraction)
+            self._start_inv_context.hide()
+            start_lay.addWidget(self._start_inv_context)
             self._start_inv_btn = QPushButton("Start Investigation")
             self._start_inv_btn.setToolTip(qt_wrap_tooltip(
                 "Triage findings, scope the top issue, gather evidence, "
                 "and verify the cause."))
             self._start_inv_btn.clicked.connect(self._start_investigation)
-            g_lay.addWidget(self._start_inv_btn)
+            start_lay.addWidget(self._start_inv_btn)
+            g_lay.addWidget(self._start_inv_host)
             self._issue_view = QLabel("")
             self._issue_view.setWordWrap(True)
             self._issue_view.setStyleSheet(
@@ -4875,6 +5320,19 @@ def create_ai_assistant_panel(
                 self._verify_hint.setStyleSheet(
                     f"color:{c['muted']};font-size:11px;"
                 )
+            if getattr(self, "_start_inv_workflow", None) is not None:
+                self._start_inv_workflow.setStyleSheet(
+                    f"color:{c['muted']};font-size:11px;"
+                )
+            if getattr(self, "_start_inv_blurb", None) is not None:
+                self._start_inv_blurb.setStyleSheet(
+                    f"color:{c['muted']};font-size:11px;"
+                )
+            if getattr(self, "_start_inv_context", None) is not None:
+                self._start_inv_context.setStyleSheet(
+                    f"color:{c['text']};font-size:11px;"
+                    f"font-family:monospace;"
+                )
             if getattr(self, "_status", None) is not None:
                 self._status.setStyleSheet(f"color:{c['muted']};font-size:11px;")
             if getattr(self, "_usage", None) is not None:
@@ -5016,6 +5474,13 @@ def create_ai_assistant_panel(
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
                 if self._try_mermaid_node_click(pos):
                     return True
+            if (
+                log is not None
+                and obj is log.viewport()
+                and event.type() == QEvent.Type.Resize
+            ):
+                self._constrain_log_text_width()
+                self._sync_evidence_expand_btn()
             scroll = getattr(self, "_intent_scroll", None)
             if (
                 scroll is not None
@@ -5192,7 +5657,9 @@ def create_ai_assistant_panel(
                 except Exception:
                     ctx = {}
             findings = ctx.get("findings") or []
-            n_find = len(findings) if isinstance(findings, list) else 0
+            if not isinstance(findings, list):
+                findings = []
+            n_find = len(findings)
             filters = ctx.get("filters") or []
             if not isinstance(filters, list):
                 filters = []
@@ -5204,10 +5671,34 @@ def create_ai_assistant_panel(
                 priv = str(self._privacy_chip.text() or "").strip()
             except Exception:
                 priv = ""
-            toggle.setText(
-                f"Context · {mode} · {n_find} findings · {lang}"
-                + (f" · {priv}" if priv else "")
-            )
+            stage_id = self._current_guide_stage()
+            stage = GUIDED_STAGE_LABELS.get(stage_id, stage_id) or "Ready"
+            scope = str(ctx.get("scope") or gui.get("scope") or "Full Trace").strip()
+            focus = str(
+                gui.get("selected_task")
+                or gui.get("highlight")
+                or ctx.get("selected_task")
+                or ctx.get("selection")
+                or ""
+            ).strip()
+            if not focus and findings:
+                top = findings[0] if isinstance(findings[0], dict) else None
+                if top and top.get("task"):
+                    focus = str(top.get("task") or "").strip()
+            # Stage · Scope · FocusTask · Mode · Privacy (no findings/language)
+            bits = [stage]
+            if scope:
+                bits.append(scope)
+            if focus:
+                bits.append(_short_focus_label(focus))
+            if mode:
+                bits.append(mode)
+            if priv:
+                bits.append(priv)
+            toggle.setText(" · ".join(bits))
+            start_host = getattr(self, "_start_inv_host", None)
+            if start_host is not None and start_host.isVisible():
+                self._refresh_start_inv_context(ctx=ctx, gui=gui)
             if body is None or not body.isVisible():
                 return
             endpoint = ""
@@ -5219,8 +5710,10 @@ def create_ai_assistant_panel(
                 self._cost_meter, self._context_mode())
             body.setText(
                 f"<b>Trace:</b> {html.escape(str(gui.get('file') or gui.get('name') or '—'))}<br/>"
-                f"<b>Scope:</b> {html.escape(str(ctx.get('scope') or gui.get('scope') or 'Full Trace'))}<br/>"
+                f"<b>Scope:</b> {html.escape(scope or 'Full Trace')}<br/>"
                 f"<b>Filters:</b> {html.escape(' · '.join(filters) if filters else 'None')}<br/>"
+                f"<b>Findings:</b> {n_find}<br/>"
+                f"<b>Language:</b> {html.escape(lang)}<br/>"
                 f"<b>Endpoint:</b> {html.escape(endpoint or '—')}<br/>"
                 f"<b>Usage:</b> {html.escape(usage)}"
             )
@@ -5331,6 +5824,38 @@ def create_ai_assistant_panel(
                 if src:
                     self._open_mermaid_zoom(src)
                 return
+            if scheme == "btffold":
+                action, fold_id = parse_btf_fold_href(url.toString())
+                if action and fold_id:
+                    folds = getattr(self, "_open_ev_folds", None)
+                    if not isinstance(folds, set):
+                        folds = set()
+                        self._open_ev_folds = folds
+                    closed = getattr(self, "_closed_ev_folds", None)
+                    if not isinstance(closed, set):
+                        closed = set()
+                        self._closed_ev_folds = closed
+                    if fold_id == EVIDENCE_SUBFOLDS_ALL:
+                        inner = evidence_panel_inner_fold_ids(
+                            self._evidence_log_text())
+                        if action == "open":
+                            folds.add(EVIDENCE_SUBFOLDS_ALL)
+                            for fid in inner:
+                                closed.discard(fid)
+                        else:
+                            folds.discard(EVIDENCE_SUBFOLDS_ALL)
+                            for fid in inner:
+                                closed.add(fid)
+                    elif action == "open":
+                        folds.add(fold_id)
+                        closed.discard(fold_id)
+                        folds.discard(EVIDENCE_SUBFOLDS_ALL)
+                    else:
+                        folds.discard(fold_id)
+                        closed.add(fold_id)
+                        folds.discard(EVIDENCE_SUBFOLDS_ALL)
+                    self._refresh_log(stick_bottom=False)
+                return
             if scheme == "btfaction":
                 raw = url.toString()
                 m = re.search(
@@ -5355,11 +5880,6 @@ def create_ai_assistant_panel(
                 action, key = parse_btf_exp_href(url.toString())
                 if action:
                     self._on_experiment_action(action, key)
-                return
-            if scheme == "btftool":
-                action, name = parse_btf_tool_href(url.toString())
-                if action:
-                    self._on_tool_why(action, name)
                 return
             if scheme == "btfstats":
                 sid = parse_btf_stats_href(url.toString())
@@ -5445,21 +5965,127 @@ def create_ai_assistant_panel(
             return str(self._settings_dict().get(
                 "response_language", DEFAULT_AI_RESPONSE_LANGUAGE))
 
-        def _refresh_log(self) -> None:
+        def _constrain_log_text_width(self) -> None:
+            """Keep QTextBrowser layout at the viewport width.
+
+            Wide evidence tables otherwise stretch the document; Expand/Collapse
+            stays viewport-fixed via ``_ev_expand_btn``.
+            """
+            log = getattr(self, "_log", None)
+            if log is None:
+                return
+            w = max(1, int(log.viewport().width()) - 4)
+            log.document().setTextWidth(float(w))
+
+        def _evidence_subfolds_expanded(self) -> bool:
+            folds = getattr(self, "_open_ev_folds", None)
+            return isinstance(folds, set) and EVIDENCE_SUBFOLDS_ALL in folds
+
+        def _toggle_evidence_subfolds(self) -> None:
+            """Expand or collapse every Evidence nested fold (viewport button)."""
+            folds = getattr(self, "_open_ev_folds", None)
+            if not isinstance(folds, set):
+                folds = set()
+                self._open_ev_folds = folds
+            closed = getattr(self, "_closed_ev_folds", None)
+            if not isinstance(closed, set):
+                closed = set()
+                self._closed_ev_folds = closed
+            inner = evidence_panel_inner_fold_ids(self._evidence_log_text())
+            if self._evidence_subfolds_expanded():
+                folds.discard(EVIDENCE_SUBFOLDS_ALL)
+                for fid in inner:
+                    closed.add(fid)
+            else:
+                folds.add(EVIDENCE_SUBFOLDS_ALL)
+                for fid in inner:
+                    closed.discard(fid)
+            self._refresh_log(stick_bottom=False)
+
+        def _sync_evidence_expand_btn(self) -> None:
+            """Pin Expand/Collapse to the viewport’s right edge beside the Evidence title."""
+            btn = getattr(self, "_ev_expand_btn", None)
+            log = getattr(self, "_log", None)
+            if btn is None or log is None:
+                return
+            has_ev = any(ai_entry_role(e) == "evidence" for e in (self._entries or []))
+            if not has_ev or self._log_stack.currentIndex() != 1:
+                btn.hide()
+                return
+            lang = self._reply_language()
+            labels = evidence_panel_labels(lang)
+            expanded = self._evidence_subfolds_expanded()
+            btn.setText(AI_EV_COLLAPSE_ICON if expanded else AI_EV_EXPAND_ICON)
+            tip = labels.get(
+                "collapse_all" if expanded else "expand_all"
+            ) or ("Collapse all" if expanded else "Expand all")
+            btn.setToolTip(tip)
+            is_dark = bool(getattr(self, "_is_dark", True))
+            if is_dark:
+                btn.setStyleSheet(
+                    "QToolButton#aiEvExpandBtn {"
+                    "  color:#8a96a8; background:#1a2230; border:1px solid #3a4658;"
+                    "  border-radius:4px; padding:2px 6px; font-size:13px; font-weight:700;"
+                    "}"
+                    "QToolButton#aiEvExpandBtn:hover { color:#c5d0dc; border-color:#5b9bd5; }"
+                )
+            else:
+                btn.setStyleSheet(
+                    "QToolButton#aiEvExpandBtn {"
+                    "  color:#5a6a7c; background:#ffffff; border:1px solid #c5ced9;"
+                    "  border-radius:4px; padding:2px 6px; font-size:13px; font-weight:700;"
+                    "}"
+                    "QToolButton#aiEvExpandBtn:hover { color:#2a6fb2; border-color:#2a6fb2; }"
+                )
+            btn.adjustSize()
+            label = ai_role_label("evidence", lang)
+            found = log.document().find(label)
+            if found.isNull():
+                btn.hide()
+                return
+            rect = log.cursorRect(found)
+            vh = log.viewport().height()
+            bw = max(btn.width(), btn.sizeHint().width())
+            bh = max(btn.height(), btn.sizeHint().height())
+            y = int(rect.y()) - 2
+            if y + bh < 0 or y > vh:
+                btn.hide()
+                return
+            x = max(0, int(log.viewport().width()) - bw - 6)
+            btn.move(x, max(0, y))
+            btn.show()
+            btn.raise_()
+
+        def _refresh_log(self, *, stick_bottom: bool = True) -> None:
             """Rebuild the log from entries. QTextBrowser.append() merges HTML blocks."""
             if not self._entries:
                 self._log.clear()
+                self._sync_evidence_expand_btn()
                 self._refresh_tool_bar()
                 return
+            bar = self._log.verticalScrollBar()
+            prev = bar.value()
             self._log.document().setDefaultStyleSheet(_ai_log_style(
                 bool(getattr(self, "_is_dark", True))))
             lang = self._reply_language()
+            folds = getattr(self, "_open_ev_folds", None)
+            if not isinstance(folds, set):
+                folds = set()
+            closed = getattr(self, "_closed_ev_folds", None)
+            if not isinstance(closed, set):
+                closed = set()
             self._log.setHtml(_ai_log_document_html(
                 self._entries, lang,
                 is_dark=bool(getattr(self, "_is_dark", True)),
+                open_folds=folds,
+                closed_folds=closed,
             ))
-            bar = self._log.verticalScrollBar()
-            bar.setValue(bar.maximum())
+            self._constrain_log_text_width()
+            if stick_bottom:
+                bar.setValue(bar.maximum())
+            else:
+                bar.setValue(min(prev, bar.maximum()))
+            self._sync_evidence_expand_btn()
             self._refresh_tool_bar()
 
         def _append(self, role: str, text: str, **extra: Any) -> None:
@@ -5478,6 +6104,8 @@ def create_ai_assistant_panel(
             if self._busy:
                 self.stop_query()
             self._entries.clear()
+            self._open_ev_folds = set()
+            self._closed_ev_folds = set()
             self._chat_messages = []
             self._pending_batches.clear()
             self._tool_round = 0
@@ -5608,6 +6236,7 @@ def create_ai_assistant_panel(
                 stack.setCurrentIndex(0 if empty else 1)
                 # Soft floor only — large mins crush the composer on narrow docks.
                 stack.setMinimumHeight(80)
+            self._sync_evidence_expand_btn()
             # Groups live inside the empty-state host (Web `.ai-log > .ai-empty`);
             # visibility follows the stack page — no separate show/hide.
             if not empty:
@@ -6461,20 +7090,6 @@ def create_ai_assistant_panel(
                 return
             self._save_user_knowledge()
 
-        def _on_tool_why(self, action: str, name: str) -> None:
-            if str(action or "").strip().lower() != "why":
-                return
-            want = str(name or "").strip()
-            reasons = list((self._evidence_payload or {}).get("tool_reasons") or [])
-            why = ""
-            for r in reasons:
-                if isinstance(r, dict) and str(r.get("tool") or "") == want:
-                    why = str(r.get("reason") or "")
-                    break
-            self._set_status(
-                f"{want}: {why}" if why else f"{want}: no recorded reason"
-            )
-
         def _user_historical_knowledge(self) -> List[Dict[str, Any]]:
             raw = ""
             if get_settings:
@@ -6701,9 +7316,15 @@ def create_ai_assistant_panel(
                     % (color, weight)
                 )
             idle = stage == "idle"
+            show_start = idle and not self._entries
+            start_host = getattr(self, "_start_inv_host", None)
+            if start_host is not None:
+                start_host.setVisible(show_start)
+                if show_start:
+                    self._refresh_start_inv_context()
             start_btn = getattr(self, "_start_inv_btn", None)
             if start_btn is not None:
-                start_btn.setVisible(idle and not self._entries)
+                start_btn.setVisible(show_start)
             issue = getattr(self, "_issue_view", None)
             if issue is not None:
                 text = format_investigation_issue_card(
@@ -6723,6 +7344,66 @@ def create_ai_assistant_panel(
                 banner.setVisible(stage == "experiment")
             self.refresh_template_availability()
 
+        def _refresh_start_inv_context(
+            self,
+            ctx: Optional[Dict[str, Any]] = None,
+            gui: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            """Finding/Task/Scope lines above Start Investigation (Web lockstep)."""
+            lab = getattr(self, "_start_inv_context", None)
+            if lab is None:
+                return
+            if gui is None:
+                gui = {}
+                if on_gui_state:
+                    try:
+                        gui = dict(on_gui_state() or {})
+                    except Exception:
+                        gui = {}
+            if ctx is None:
+                ctx = {}
+                if get_context:
+                    try:
+                        ctx = normalize_ai_context(dict(get_context() or {}))
+                    except Exception:
+                        ctx = {}
+            findings = ctx.get("findings") or []
+            if not isinstance(findings, list):
+                findings = []
+            scope = str(ctx.get("scope") or gui.get("scope") or "Full Trace").strip()
+            focus = str(
+                gui.get("selected_task")
+                or gui.get("highlight")
+                or ctx.get("selected_task")
+                or ctx.get("selection")
+                or ""
+            ).strip()
+            lines: List[str] = []
+            top = findings[0] if findings and isinstance(findings[0], dict) else None
+            if top and (top.get("title") or top.get("id")):
+                lines.append(
+                    f"Finding: {str(top.get('title') or top.get('id') or '').strip()}")
+                task = str(top.get("task") or "").strip()
+                if task:
+                    lines.append(f"Task: {task}")
+            elif focus:
+                lines.append(f"Task: {focus}")
+            lines.append(f"Scope: {scope or 'Full Trace'}")
+            if not top and len(findings) > 0:
+                lines.append(f"{len(findings)} Analysis Findings available.")
+            if lines:
+                lab.setText("\n".join(lines))
+                lab.show()
+            else:
+                lab.clear()
+                lab.hide()
+
+        def _evidence_log_text(self) -> str:
+            for entry in self._entries:
+                if ai_entry_role(entry) == "evidence":
+                    return str(ai_entry_text(entry) or "")
+            return ""
+
         def _sync_evidence_log_entry(
             self, data: dict, language: Optional[str] = None,
         ) -> None:
@@ -6734,6 +7415,18 @@ def create_ai_assistant_panel(
             text = format_evidence_panel_markdown(data, lang)
             if not text:
                 return
+            folds = getattr(self, "_open_ev_folds", None)
+            if not isinstance(folds, set):
+                folds = set()
+                self._open_ev_folds = folds
+            closed = getattr(self, "_closed_ev_folds", None)
+            if not isinstance(closed, set):
+                closed = set()
+                self._closed_ev_folds = closed
+            inner = evidence_panel_inner_fold_ids(text)
+            folds.discard(EVIDENCE_SUBFOLDS_ALL)
+            for fid in inner:
+                closed.add(fid)
             self._entries = [
                 e for e in self._entries if ai_entry_role(e) != "evidence"
             ]

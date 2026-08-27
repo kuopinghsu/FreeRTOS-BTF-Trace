@@ -8,6 +8,8 @@ import {
   evidenceScoreBar,
   extractEvidencePanelPayload,
   formatEvidencePanelMarkdown,
+  evidencePanelSummaryLine,
+  evidencePanelToggleLabel,
   investigationTreeMermaid,
   mergeEvidencePanelPayload,
 } from '../src/utils/aiInvestigation.js'
@@ -259,6 +261,70 @@ describe('computeEvidenceScore', () => {
       },
     })
     assert.equal(inv.evidence[0].task, 'Worker[3]')
+  })
+
+  it('collapses Investigation details and timeline-only evidence tables', () => {
+    const timeline = formatEvidencePanelMarkdown({
+      conclusion: 'Hits near CS[20]',
+      confidence: 'medium',
+      coverage: { percent: 20, bar: '██░░░░ 20%' },
+      evidence_quality: { band: 'weak', bar: 'weak' },
+      evidence: [
+        { label: 'timeline hit', time: 1017439 },
+        { label: 'timeline hit', time: 1018601 },
+        { label: 'timeline hit', time: 1020000 },
+      ],
+      falsify: {
+        next_check: 'Inspect Mutex Blocking for CS[20].',
+        would_disprove: ['No mutex waiters in scope'],
+      },
+      confidence_evolution: 'Start → medium',
+      tool_reasons: [{ tool: 'search_timeline', reason: 'locate hits' }],
+    }, 'English')
+    assert.match(timeline, /ai-ev-fold/)
+    assert.match(timeline, /<summary>Timeline evidence · 3<\/summary>/)
+    assert.match(timeline, /<summary>Investigation details<\/summary>/)
+    assert.match(timeline, /\*\*▶ Recommended next check:\*\*/)
+    assert.match(timeline, /\*\*Missing evidence\*\*/)
+    assert.doesNotMatch(timeline, /\| Task \|/)
+    assert.doesNotMatch(timeline, /\| Core \|/)
+    assert.doesNotMatch(timeline, /\*\*▸ Investigation details\*\*/)
+  })
+
+  it('localizes Investigation details for Traditional Chinese', () => {
+    const md = formatEvidencePanelMarkdown({
+      conclusion: '相關事件',
+      confidence: 'medium',
+      evidence_quality: { band: 'weak', bar: 'weak' },
+      confidence_evolution: 'Start → medium',
+      tool_reasons: [{ tool: 'search_timeline', reason: 'locate hits' }],
+    }, 'Traditional Chinese (繁體中文)')
+    assert.match(md, /<summary>調查詳情<\/summary>/)
+    assert.doesNotMatch(md, /Investigation details/)
+    assert.match(md, /search_timeline: locate hits/)
+    assert.doesNotMatch(md, /Why\?/)
+    assert.doesNotMatch(md, /btftool:why/)
+  })
+
+  it('summarizes Evidence & Validation verdict line for panel header', () => {
+    const md = formatEvidencePanelMarkdown({
+      conclusion: '相關事件',
+      confidence: 'medium',
+    }, 'Traditional Chinese (繁體中文)')
+    const summary = evidencePanelSummaryLine(md)
+    assert.match(summary, /Verdict:/)
+    assert.doesNotMatch(summary, /\*\*/)
+  })
+
+  it('localizes expand/collapse all labels', () => {
+    assert.equal(
+      evidencePanelToggleLabel(false, 'Traditional Chinese (繁體中文)'),
+      '全部展開',
+    )
+    assert.equal(
+      evidencePanelToggleLabel(true, 'Traditional Chinese (繁體中文)'),
+      '全部摺疊',
+    )
   })
 
   it('extracts explain_finding / interpret_query / validate_experiment / manage_hypotheses', () => {

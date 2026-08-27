@@ -104,15 +104,15 @@ AI 可以解釋證據、找出關聯、排序可能原因、檢查假設，也�
 ### AI 面板的功能（What the panel does）
 
 - 可從面板分頁或 **Ctrl+K** 開啟 **AI Assistant**。若面板未顯示，請到 **Settings → Panels** 啟用 **AI Assistant panel**。
-- 面板沒有對話內容時，會顯示目前的 **Trace、Scope、Filters**、問題輸入框與依用途分組的操作。**Start Investigation** 會從現有分析結果開始引導式調查。
+- 面板沒有對話內容時，會顯示目前的 **Trace、Scope、Filters**、問題輸入框與依用途分組的操作。**Start Investigation** 會顯示調查流程列、簡短說明與目前 Finding／Scope 摘要，並從現有分析結果開始引導式調查。
 - 流程指示器會追蹤 **Triage → Scope → Investigate → Verify → Experiment → Compare**。選擇已完成的階段，可回到該階段的輸出結果。
 - 主要操作為 **Investigate**、**Explain evidence** 與 **Verify finding**。系統會依目前 Finding、游標、選取的工作與引導階段，以外框標示建議的主要操作。Compare／SMP 未滿足的先決條件會以行內提示顯示在晶片下方（不只在工具提示中）。**More templates…** 包含 Analysis Findings、Explain region、Auto investigate、Compare、Report、What-if、Optimize，以及延遲、WCET、核心遷移等專項檢查。
-- 輸入區上方有可收合的 **Context** 列（模式、Finding 數量、語言、隱私）。展開後可看到 Trace、Scope、Filters、端點與使用量。Web 版每則助理回覆可開啟 **View request context**。
+- 輸入區上方有可收合的 **Context** 一列摘要（`Stage · Scope · Focus · Mode · Privacy`）。展開後可看到 Trace、Scope、Filters、Finding 數量、語言、端點與使用量。Web 版每則助理回覆可開啟 **View request context**。
 - 面板標頭提供 **Clear、Language…** 與 **Settings…**。**Clear** 會清除對話、使用量摘要與目前的調查狀態。
 - 使用量列會顯示例如 **Context: Compact · 4.6k tok · 3 tools · 12s**，依序代表內容模式、Token 數、工具數量與模型執行時間。可在 **Settings → AI → Context** 選擇 **Compact、Balanced（預設）或 Full Evidence**。信心程度來自證據，不是來自模式。
 - 檢視器可還原未清除的調查內容；清除對話時，也會清除已儲存的調查狀態。
-- Evidence & Validation 開頭會顯示精簡的 **Verdict · Coverage · Evidence · Confidence** 列。Supporting／Contradicting／Missing 區段僅在有內容時出現。
-- 唯讀工具、報告匯出，以及僅導覽的動作（`set_cursors`、`zoom_to_range`、`highlight_task`）會立即執行。其他會改變檢視器的動作會顯示為工具卡片，並標示 **Navigation／Scope／Filter／Annotation／Export／Calculation**；除非啟用 **Auto-apply GUI actions**，否則等待 **Apply** 或 **Skip**。**Undo** 會還原游標、視窗、反白、註解、**Scope（Limit to C1–Cn）** 與 **Filters**。
+- **Evidence & Validation** 一律顯示第一層摘要（Verdict、Leading explanation、Missing evidence、Next check）。巢狀區塊（Direct/Timeline evidence、Checks、Alternatives、Investigation details，以及其內 Confidence evolution、Tools used 等）預設**摺疊**。標題右側 **⊞**／**⊟** 可一次全部展開／全部摺疊（Desktop 將該控制固定在日誌視窗右側，避免「全部展開」後寬表格把圖示推離可視範圍）；每次證據更新後子層恢復為摺疊。標籤字級分層：面板標題 12px、Checks／Investigation details 等第一層摺疊 12px（帶邊框盒）、Investigation details 內的 Confidence evolution／Tools used 等第二層 11px 並略為縮排（較淡邊框盒）。**另存為 HTML** 同樣保留字級分層與可用的「全部展開」控制。
+- 已完成的唯讀證據查詢工具批次會摺疊為 **Evidence queries · N completed**；待 **Apply**、失敗與會變更檢視器的卡片維持展開。其他會改變檢視器的動作會顯示為工具卡片，並標示 **Navigation／Scope／Filter／Annotation／Export／Calculation**；除非啟用 **Auto-apply GUI actions**，否則等待 **Apply** 或 **Skip**。**Undo** 會還原游標、視窗、反白、註解、**Scope（Limit to C1–Cn）** 與 **Filters**。
 - What-if／Optimize 結果會顯示：`Simulation / estimate — not measured RTOS behavior.`
 
 至少開啟兩份追蹤資料後，工具列上的 **Compare** 才會啟用。**Query with AI…** 傳送的是 **Trace Compare** 表格，而不是目前的 Findings。**Save as baseline** 與 **Score vs baseline** 使用與 `baseline_score` 相同的已儲存設定檔。按下 **Ctrl+K** 可快速存取 Analysis、AI、Compare、Workspace Preset 與 Inspect task。
@@ -1506,7 +1506,7 @@ Firmware 修改與重新擷取仍然由使用者完成：
 | Privacy | Chip：🟢 Local / 🟡 Cloud / 🔴 Sensitive。Sensitive 時會阻擋 Cloud Send；其他情況會清理 Annotation，並可選擇套用 Task-name Alias（`apply_cloud_privacy`） |
 | Knowledge | `investigate` 先比對使用者保存的 Entry（More → **Save current finding…**），再比對 Baseline，最後使用 Built-in Catalog。有 Typical 與 Current Rate 時會同時顯示 |
 | Interpret | Free-form Ask 會先由 Host 執行 `interpret_query`、顯示範圍卡，然後**自動執行**（等同 **Run investigation**）。Template / Mode / 既有助理回覆 / 簡短追問會跳過 Host 解讀步驟；仍可用範圍開關後再跑一次 |
-| Tool Why? | Evidence **Investigation** 會列出每個 Tool 及 Host-side Reason（`btftool:why/name`） |
+| Tools used | Evidence **Investigation details** 會直接列出每個 Tool 與 Host-side Reason（不再另設 Why? 連結） |
 
 ---
 

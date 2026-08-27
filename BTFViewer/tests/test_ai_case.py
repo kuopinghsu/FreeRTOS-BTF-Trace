@@ -492,6 +492,9 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertIn("Supporting", md)
         self.assertIn("**Verdict:**", md)
         self.assertIn("Investigation details", md)
+        self.assertIn('ai-ev-fold-l1', md)
+        self.assertIn("<summary>Investigation details</summary>", md)
+        self.assertNotIn("**▸ Investigation details**", md)
 
     def test_scope_privacy_experiment_and_knowledge(self) -> None:
         from btf_viewer_pkg.ai_case import (

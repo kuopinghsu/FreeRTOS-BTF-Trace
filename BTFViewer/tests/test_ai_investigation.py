@@ -748,6 +748,9 @@ class AiInvestigationTests(unittest.TestCase):
         md = format_evidence_panel_markdown(corr, "English")
         self.assertIn("Worker[3]", md)
         self.assertIn("Core_2", md)
+        self.assertIn("Direct evidence", md)
+        self.assertIn("| Task |", md)
+        self.assertIn("| Core |", md)
 
         inv = extract_evidence_panel_payload("investigate", {
             "ok": True,
@@ -762,6 +765,59 @@ class AiInvestigationTests(unittest.TestCase):
         })
         self.assertEqual((inv.get("evidence") or [])[0].get("task"), "Worker[3]")
 
+    def test_format_evidence_panel_markdown_timeline_only_table(self) -> None:
+        from btf_viewer_pkg.ai_investigation import format_evidence_panel_markdown
+
+        md = format_evidence_panel_markdown({
+            "conclusion": "Burst near cursor",
+            "evidence": [
+                {"label": "hit A", "time": 100},
+                {"label": "hit B", "time": 200},
+            ],
+            "confidence": "Medium",
+        }, "English")
+        self.assertIn("Timeline evidence", md)
+        self.assertIn("| Time |", md)
+        self.assertIn("jump:100", md)
+        self.assertIn("jump:200", md)
+        self.assertNotIn("| Task |", md)
+        self.assertNotIn("| Core |", md)
+        self.assertNotIn("| Duration |", md)
+        self.assertNotIn("Observed event", md)
+        self.assertIn('ai-ev-fold-l1', md)
+        self.assertIn("<summary>Timeline evidence · 2</summary>", md)
+
+    def test_format_evidence_panel_markdown_localizes_investigation_details(self) -> None:
+        from btf_viewer_pkg.ai_investigation import format_evidence_panel_markdown
+
+        md = format_evidence_panel_markdown({
+            "conclusion": "相關事件",
+            "confidence": "Medium",
+            "evidence_quality": {"band": "weak", "bar": "weak"},
+            "confidence_evolution": "Start → medium",
+            "tool_reasons": [{"tool": "search_timeline", "reason": "locate hits"}],
+        }, "Traditional Chinese (繁體中文)")
+        self.assertIn("<summary>調查詳情</summary>", md)
+        self.assertNotIn("Investigation details", md)
+        self.assertIn("search_timeline: locate hits", md)
+        self.assertNotIn("Why?", md)
+        self.assertNotIn("btftool:why", md)
+
+    def test_evidence_panel_inner_fold_ids_nested(self) -> None:
+        from btf_viewer_pkg.ai_investigation import evidence_panel_inner_fold_ids
+
+        md = (
+            '<details class="ai-ev-fold">\n'
+            "<summary>Investigation details</summary>\n\n"
+            '<details class="ai-ev-fold">\n'
+            "<summary>Tools used · 1</summary>\n\n"
+            "- search_timeline: locate\n\n"
+            "</details>\n\n"
+            "</details>\n"
+        )
+        ids = evidence_panel_inner_fold_ids(md)
+        self.assertEqual(len(ids), 2)
+
     def test_format_evidence_panel_markdown_includes_jumps(self) -> None:
         from btf_viewer_pkg.ai_assistant import format_ai_conversation_markdown
         from btf_viewer_pkg.ai_investigation import format_evidence_panel_markdown
@@ -775,6 +831,8 @@ class AiInvestigationTests(unittest.TestCase):
         }, "Simplified Chinese (简体中文)")
         self.assertIn("Core thrashing", md)
         self.assertIn("jump:1100000", md)
+        self.assertIn("Timeline evidence", md)
+        self.assertNotIn("| Task |", md)
         ranged = format_evidence_panel_markdown({
             "conclusion": "Critical path slice",
             "evidence": [{"label": "Blocked / off-CPU", "time": 1000,
@@ -782,9 +840,19 @@ class AiInvestigationTests(unittest.TestCase):
             "confidence": "Medium",
         }, "English")
         self.assertIn("jump:1000", ranged)
-        self.assertIn("**证据**", md)  # may appear in details via localized role export only
-        # Chinese labels for Finding / Direct evidence sections
-        self.assertTrue("证据" in md or "Finding" in md or "Direct evidence" in md or "直接" in md)
+        # start/stop yield a Duration column (not timeline-only).
+        self.assertIn("Direct evidence", ranged)
+        self.assertIn("| Duration |", ranged)
+        self.assertNotIn("Timeline evidence", ranged)
+        # Chinese labels for Finding / Direct evidence / Timeline sections
+        self.assertTrue(
+            "证据" in md
+            or "Finding" in md
+            or "Direct evidence" in md
+            or "直接" in md
+            or "Timeline evidence" in md
+            or "Leading explanation" in md
+        )
         self.assertIn("证据与验证", format_ai_conversation_markdown([
             ("evidence", md),
         ], response_language="Simplified Chinese (简体中文)"))

@@ -169,6 +169,10 @@ class AiPanelUiTests(unittest.TestCase):
         panel = self._panel()
         self.assertEqual(panel._start_inv_btn.text(), "Start Investigation")
         self.assertFalse(panel._start_inv_btn.isHidden())
+        self.assertFalse(panel._start_inv_host.isHidden())
+        self.assertIn("Triage → Scope → Investigate", panel._start_inv_workflow.text())
+        self.assertIn("guide the investigation", panel._start_inv_blurb.text())
+        self.assertIn("Scope:", panel._start_inv_context.text())
         self.assertFalse(panel._guide_host.isHidden())
         self.assertFalse(panel._guide_stepper.isHidden())
         for sid in GUIDED_STAGES:
@@ -186,9 +190,64 @@ class AiPanelUiTests(unittest.TestCase):
         }
         panel._refresh_guide_ui()
         self.assertTrue(panel._start_inv_btn.isHidden())
+        self.assertTrue(panel._start_inv_host.isHidden())
         self.assertIn("Investigate", panel._guide_step_btns["investigate"].text())
         self.assertIn("#1E1E1E", panel._guide_step_btns["investigate"].styleSheet())
         self.assertIn("Queue bounce", panel._issue_view.text())
+
+    def test_context_row_collapsed_one_liner(self) -> None:
+        """Collapsed Context: Stage · Scope · Focus · Mode · Privacy (Web lockstep)."""
+        panel = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {
+                "findings_text": "findings",
+                "scope": "C1–C2",
+                "findings": [
+                    {"id": "f1", "title": "Late", "task": "CS[20]"},
+                ],
+            },
+            get_settings=lambda: {"enabled": "true", "context_mode": "balanced"},
+            on_gui_state=lambda: {"highlight": "CS[20]", "scope": "C1–C2"},
+        )
+        panel._privacy_chip.setText("🟢 Local")
+        panel._refresh_context_row()
+        text = panel._context_toggle.text()
+        self.assertIn("Start", text)  # idle stage label
+        self.assertIn("C1–C2", text)
+        self.assertIn("CS[20]", text)
+        self.assertIn("Balanced", text)
+        self.assertIn("Local", text)
+        self.assertNotIn("findings", text.lower())
+        self.assertNotIn("English", text)
+        self.assertNotIn("Context ·", text)
+
+    def test_tool_cards_collapse_completed_auto_batch(self) -> None:
+        from btf_viewer_pkg.ai_assistant import _ev_fold_id, _tool_cards_html
+        from btf_viewer_pkg.ai_tools import AI_TOOL_SEARCH_TIMELINE
+
+        done = [
+            {"name": AI_TOOL_SEARCH_TIMELINE, "arguments": {}, "status": "done"},
+            {"name": AI_TOOL_SEARCH_TIMELINE, "arguments": {}, "status": "done"},
+        ]
+        html_out = _tool_cards_html(done, "b1")
+        self.assertIn("Evidence queries · 2 completed", html_out)
+        self.assertIn("btffold:open/", html_out)
+        self.assertIn('class="ai-fold-toggle ai-fold-toggle-l1"', html_out)
+        self.assertIn("▸ Evidence queries · 2 completed", html_out)
+        self.assertNotIn(">Show</a>", html_out)
+        self.assertNotIn("Search timeline", html_out)
+        fold_id = _ev_fold_id("Evidence queries · 2 completed", "b1")
+        opened = _tool_cards_html(done, "b1", open_folds={fold_id})
+        self.assertIn("btffold:close/", opened)
+        self.assertIn("▾ Evidence queries · 2 completed", opened)
+        self.assertIn("Search timeline", opened)
+        pending = [
+            {"name": "set_cursors", "arguments": {}, "status": "pending"},
+            {"name": "set_cursors", "arguments": {}, "status": "pending"},
+        ]
+        pending_html = _tool_cards_html(pending, "b2")
+        self.assertNotIn("Evidence queries", pending_html)
+        self.assertIn("Apply", pending_html)
 
     def test_restore_without_chat_keeps_start_investigation(self) -> None:
         from btf_viewer_pkg.ai_case import dump_investigation_session
@@ -208,6 +267,7 @@ class AiPanelUiTests(unittest.TestCase):
         )
         panel._restore_investigation_session()
         self.assertFalse(panel._start_inv_btn.isHidden())
+        self.assertFalse(panel._start_inv_host.isHidden())
         self.assertTrue(panel._issue_view.isHidden())
         self.assertFalse((panel._issue_view.text() or "").strip())
 
@@ -227,6 +287,7 @@ class AiPanelUiTests(unittest.TestCase):
         )
         panel2._restore_investigation_session()
         self.assertTrue(panel2._start_inv_btn.isHidden())
+        self.assertTrue(panel2._start_inv_host.isHidden())
         self.assertIn("Queue bounce", panel2._issue_view.text())
 
     def test_auth_forced_keeps_cta_after_401(self) -> None:

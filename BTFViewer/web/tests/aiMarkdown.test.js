@@ -86,6 +86,7 @@ describe('aiMarkdown', () => {
     assert.match(html, /Idle/)
     assert.match(html, /href="btfjump:time\/1000"/)
     assert.match(html, /align="right"/)
+    assert.match(html, /background:#243044/)
     assert.equal(html.includes('| Task |'), false)
   })
 
@@ -145,6 +146,47 @@ describe('ai conversation export', () => {
     assert.match(html, /href="btfjump:time\/1805000"/)
     assert.match(html, /<section class="msg user"><h3>Your prompt<\/h3>/)
     assert.match(html, /<section class="msg assistant"><h3>AI Assistant<\/h3>/)
+  })
+
+  it('export html uses light table cell styles', () => {
+    const html = formatAiConversationHtml([{
+      role: 'assistant',
+      content: '| Check | Status |\n| --- | --- |\n| Timeline | Observed |\n',
+    }], when)
+    assert.match(html, /class="ai-md-table"/)
+    assert.match(html, /background:#E8EEF4/)
+    assert.match(html, /background:#FFFFFF/)
+    assert.doesNotMatch(html, /background:#243044/)
+    assert.doesNotMatch(html, /background:#1a2230/)
+  })
+
+  it('evidence html export has fold hierarchy css and expand-all button', () => {
+    const md = [
+      '**Verdict:** Suspected',
+      '',
+      '<details class="ai-ev-fold ai-ev-fold-l1">',
+      '<summary>Investigation details</summary>',
+      '',
+      '<details class="ai-ev-fold ai-ev-fold-l2">',
+      '<summary>Tools used · 1</summary>',
+      '',
+      '- search_timeline: locate',
+      '',
+      '</details>',
+      '',
+      '</details>',
+    ].join('\n')
+    const html = formatAiConversationHtml([{ role: 'evidence', content: md }], when)
+    assert.match(html, /ai-ev-fold-l1/)
+    assert.match(html, /ai-ev-fold-l2/)
+    assert.match(html, /details\.ai-ev-fold-l1 > summary/)
+    assert.match(html, /font-size: 12px/)
+    assert.match(html, /details\.ai-ev-fold-l2 > summary/)
+    assert.match(html, /font-size: 11px/)
+    assert.match(html, /<button type="button" class="ai-ev-panel-toggle"/)
+    assert.match(html, /data-expand="Expand all"/)
+    assert.match(html, /data-collapse="Collapse all"/)
+    assert.match(html, /querySelectorAll\('\.msg\.evidence \.ai-ev-panel-toggle'\)/)
   })
 
   it('html export keeps mermaid SVG without the chat zoom wrapper', () => {

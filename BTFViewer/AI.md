@@ -113,15 +113,15 @@ AI can explain evidence, find correlations, rank possible causes, challenge assu
 ### What the panel does
 
 - Open the **AI Assistant** panel from the panel tabs or **Ctrl+K**. If it is hidden, enable **Settings → Panels → AI Assistant panel**.
-- An empty panel shows the current **Trace**, **Scope**, and **Filters**, a question box, and actions grouped by purpose. **Start Investigation** begins a guided investigation from the available findings.
+- An empty panel shows the current **Trace**, **Scope**, and **Filters**, a question box, and actions grouped by purpose. **Start Investigation** shows the workflow line, a short blurb, and the current Finding/Scope summary, then begins a guided investigation from the available findings.
 - The stepper tracks **Triage → Scope → Investigate → Verify → Experiment → Compare**. Select a completed stage to return to its output.
 - Primary actions are **Investigate**, **Explain evidence**, and **Verify finding**. A suggested primary is outlined from the current finding, cursors, selected task, and guide stage. Unmet Compare / SMP prerequisites show as an inline line under the chips. **More templates…** holds Analysis Findings, Explain region, Auto investigate, Compare, Report, What-if, Optimize, and specialist checks (latency, WCET, migrations, and so on).
-- The composer shows a collapsed **Context** row (mode, finding count, language, privacy). Expand it for Trace, Scope, Filters, endpoint, and usage. Each Web assistant reply can open **View request context**.
+- The composer shows a collapsed **Context** one-liner (`Stage · Scope · Focus · Mode · Privacy`). Expand it for Trace, Scope, Filters, findings, language, endpoint, and usage. Each Web assistant reply can open **View request context**.
 - The header provides **Clear**, **Language…**, and **Settings…**. **Clear** removes the conversation, usage summary, and current investigation state.
 - The usage bar shows **Context: Compact · 4.6k tok · 3 tools · 12s** (mode, tokens, tools, and model time). **Settings → AI → Context** chooses Compact, Balanced (default), or Full Evidence. Confidence comes from evidence, not from the mode.
 - A non-empty investigation can be restored by the viewer. Clearing the conversation also clears the saved investigation state.
-- Evidence & Validation opens with a compact **Verdict · Coverage · Evidence · Confidence** line. Supporting / Contradicting / Missing sections appear only when present.
-- Read-only tools, report exports, and navigation-only actions (`set_cursors`, `zoom_to_range`, `highlight_task`) run immediately. Other viewer-changing actions appear as tool cards labelled **Navigation / Scope / Filter / Annotation / Export / Calculation** and wait for **Apply** or **Skip** unless **Auto-apply GUI actions** is enabled. **Undo** restores cursors, viewport, highlight, annotations, **Scope (Limit to C1–Cn)**, and **Filters**.
+- **Evidence & Validation** always shows the top-level summary (Verdict, Leading explanation, Missing evidence, Next check). Nested sections (Direct/Timeline evidence, Checks, Alternatives, Investigation details, and folds inside Investigation details) start **collapsed**. A right-side **⊞** / **⊟** control toggles Expand all / Collapse all for every nested section together (Desktop pins that control to the log viewport so wide Expand-all tables cannot push it aside); each evidence refresh resets sub-sections to collapsed. Section labels use a clear size hierarchy: panel title (12px), first-level folds such as Checks and Investigation details (12px, bordered boxes), and nested folds inside Investigation details such as Confidence evolution and Tools used (11px, indented boxes). **Save As HTML** keeps the same hierarchy CSS and a working Expand all control.
+- Completed read-only evidence-query tool batches collapse to **Evidence queries · N completed**; pending Apply, failures, and viewer-mutating cards stay expanded. Other viewer-changing actions appear as tool cards labelled **Navigation / Scope / Filter / Annotation / Export / Calculation** and wait for **Apply** or **Skip** unless **Auto-apply GUI actions** is enabled. **Undo** restores cursors, viewport, highlight, annotations, **Scope (Limit to C1–Cn)**, and **Filters**.
 - What-if / Optimize results show: `Simulation / estimate — not measured RTOS behavior.`
 
 Toolbar **Compare** becomes available when at least two traces are open. **Query with AI…** sends the Trace Compare tables rather than the current Findings. **Save as baseline** and **Score vs baseline** use the same stored profile as `baseline_score`. **Ctrl+K** provides quick access to Analysis, AI, Compare, workspace presets, and Inspect task.
@@ -419,9 +419,9 @@ While a request is in flight, **Stop** cancels it; Timeline stays responsive and
 The Evidence & Validation panel shows:
 
 - conclusion **Status** (Confirmed / Correlated / Suspected / Not observed / Insufficient data);
-- **Finding**, a clickable **Direct evidence** table, and **Interpretation**;
-- **Checks**, alternative explanations, **Missing evidence**, and one **Next action**;
-- **Investigation details** for quality band, cost, tool reasons, and trees.
+- **Finding**, a collapsible **Direct evidence** or **Timeline evidence** table, and **Interpretation**;
+- collapsible **Checks** and alternative explanations; expanded **Missing evidence** and one **Next action**;
+- collapsed **Investigation details** for quality band, cost, tool reasons, and trees.
 
 The Evidence Quality band (under Investigation details) is a diagnostic heuristic. It is **not a probability**. Timed `jump:TIME` rows gathered by earlier tools (`investigate`, `correlate_events`, `find_critical_path`) are kept when later planner tools (`rank_root_causes`, `challenge_conclusion`, …) publish only a verdict — otherwise Start Investigation would show Evidence Score **0%** after a strong mid-run score.
 
@@ -1399,7 +1399,7 @@ The host validator runs after the final reply. Prompting still forbids inventing
 | Privacy          | Chip 🟢 Local / 🟡 Cloud / 🔴 Sensitive. Cloud send is blocked when sensitive; otherwise annotations are sanitized and optional task-name aliases apply (`apply_cloud_privacy`).                                                                            |
 | Knowledge        | `investigate` matches user-saved entries (More → **Save current finding…**), then baseline, then the builtin catalog. Typical vs current rates show when both exist.                                                                                        |
 | Interpret        | Free-form Ask host-interprets (`interpret_query`), shows the scope card, then **auto-runs** (same as **Run investigation**). Templates / modes / prior assistant replies / short follow-ups skip the host interpret step. Scope toggles still allow re-run. |
-| Tool Why?        | Evidence **Investigation** lists each tool with a host-side reason (`btftool:why/name`).                                                                                                                                                                    |
+| Tools used       | Evidence **Investigation details** lists each tool with its host-side reason inline (no separate Why? action).                                                                                                                                              |
 
 
 ---

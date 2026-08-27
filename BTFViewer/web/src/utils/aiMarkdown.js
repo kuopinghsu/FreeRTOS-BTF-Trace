@@ -7,7 +7,7 @@ import { mermaidBlockHtml } from './aiMermaid.js'
 import { btfHighlightHref, btfJumpHref, btfRangeHref, parseBtfHighlightHref, formatToolActionLabel, summariseToolCall } from './aiTools.js'
 import { btfHtmlReportDocument } from './htmlReport.js'
 
-import { evidencePanelLabels } from './aiInvestigation.js'
+import { evidencePanelLabels, evidencePanelSummaryLine, evidencePanelToggleLabel } from './aiInvestigation.js'
 import { DEFAULT_AI_RESPONSE_LANGUAGE } from './aiClient.js'
 
 /** Visible role labels (panel + Save As). Keep in sync with ai_assistant.py. */
@@ -140,9 +140,40 @@ function inlineToHtml(text) {
 const MD_TABLE_ALIGN_RE = /^:?-{1,}:?$/
 const HTML_TABLE_START_RE = /^<table\b/i
 const HTML_TABLE_END_RE = /<\/table\s*>/i
-const AI_MD_TH_STYLE = 'border:1px solid var(--border, #3a4658);padding:4px 8px;background:var(--ai-md-th-bg, #243044);color:var(--ai-md-th-fg, #e8eef6);font-weight:600;'
-const AI_MD_TD_STYLE = 'border:1px solid var(--border, #3a4658);padding:4px 8px;background:var(--ai-md-td-bg, #1a2230);color:var(--ai-md-td-fg, #dbe2ea);'
-const AI_MD_TABLE_OPEN = '<table class="ai-md-table" width="100%" cellspacing="0" cellpadding="4">'
+const AI_MD_TABLE_OPEN = (
+  '<table class="ai-md-table" width="100%" cellspacing="0" cellpadding="4" '
+  + 'style="table-layout:fixed;">'
+)
+
+function aiMdThStyle(dark = true) {
+  if (dark) {
+    return (
+      'border:1px solid #3a4658;padding:4px 8px;'
+      + 'background:#243044;color:#e8eef6;font-weight:600;'
+      + 'word-wrap:break-word;'
+    )
+  }
+  return (
+    'border:1px solid #DDDDDD;padding:4px 8px;'
+    + 'background:#E8EEF4;color:#1E1E1E;font-weight:600;'
+    + 'word-wrap:break-word;'
+  )
+}
+
+function aiMdTdStyle(dark = true) {
+  if (dark) {
+    return (
+      'border:1px solid #3a4658;padding:4px 8px;'
+      + 'background:#1a2230;color:#dbe2ea;'
+      + 'word-wrap:break-word;'
+    )
+  }
+  return (
+    'border:1px solid #DDDDDD;padding:4px 8px;'
+    + 'background:#FFFFFF;color:#1E1E1E;'
+    + 'word-wrap:break-word;'
+  )
+}
 
 function splitMdTableRow(line) {
   let s = String(line || '').trim()
@@ -175,13 +206,13 @@ function mdTableAligns(sepLine, ncols) {
   return out
 }
 
-function mdTableCellHtml(tag, text, align) {
-  const style = tag === 'th' ? AI_MD_TH_STYLE : AI_MD_TD_STYLE
+function mdTableCellHtml(tag, text, align, dark = true) {
+  const style = tag === 'th' ? aiMdThStyle(dark) : aiMdTdStyle(dark)
   const al = (align === 'left' || align === 'right' || align === 'center') ? align : 'left'
   return `<${tag} align="${al}" style="${style}">${inlineToHtml(text)}</${tag}>`
 }
 
-function mdTableHtml(header, aligns, rows) {
+function mdTableHtml(header, aligns, rows, dark = true) {
   const ncols = Math.max(1, header.length)
   const pad = (cells) => {
     const next = cells.slice(0, ncols)
@@ -189,10 +220,10 @@ function mdTableHtml(header, aligns, rows) {
     return next
   }
   const heads = pad(header)
-  const thead = `<tr>${heads.map((c, i) => mdTableCellHtml('th', c, aligns[i] || 'left')).join('')}</tr>`
+  const thead = `<tr>${heads.map((c, i) => mdTableCellHtml('th', c, aligns[i] || 'left', dark)).join('')}</tr>`
   const tbody = rows.map((row) => {
     const cells = pad(row)
-    return `<tr>${cells.map((c, i) => mdTableCellHtml('td', c, aligns[i] || 'left')).join('')}</tr>`
+    return `<tr>${cells.map((c, i) => mdTableCellHtml('td', c, aligns[i] || 'left', dark)).join('')}</tr>`
   }).join('')
   return `${AI_MD_TABLE_OPEN}<thead>${thead}</thead><tbody>${tbody}</tbody></table>`
 }
@@ -200,7 +231,7 @@ function mdTableHtml(header, aligns, rows) {
 const TABLE_KEEP = new Set(['table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption', 'br'])
 const TABLE_SKIP = new Set(['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'svg'])
 
-function sanitizeHtmlTableBlock(block) {
+function sanitizeHtmlTableBlock(block, dark = true) {
   let skip = 0
   let sawTable = false
   const parts = []
@@ -247,7 +278,7 @@ function sanitizeHtmlTableBlock(block) {
     }
     if (tag === 'th' || tag === 'td') {
       if (alignM) extra.push(`align="${alignM[1].toLowerCase()}"`)
-      extra.push(`style="${tag === 'th' ? AI_MD_TH_STYLE : AI_MD_TD_STYLE}"`)
+      extra.push(`style="${tag === 'th' ? aiMdThStyle(dark) : aiMdTdStyle(dark)}"`)
     }
     const attr = extra.length ? ` ${extra.join(' ')}` : ''
     parts.push(`<${tag}${attr}>`)
@@ -259,7 +290,7 @@ function sanitizeHtmlTableBlock(block) {
 }
 
 /** @param {string} text @param {{ inlineSvg?: boolean, zoomable?: boolean, dark?: boolean }} [opts] */
-export function markdownToSafeHtml(text, { inlineSvg = true, zoomable = true, dark = true } = {}) {
+export function markdownToSafeHtml(text, { inlineSvg = true, zoomable = true, dark = true, foldDepth = 0 } = {}) {
   const raw = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim()
   if (!raw) return ''
   const lines = raw.split('\n')
@@ -315,6 +346,56 @@ export function markdownToSafeHtml(text, { inlineSvg = true, zoomable = true, da
     if (!stripped) {
       flushPara()
       i += 1
+      continue
+    }
+
+    // Collapsible Evidence folds: <details class="ai-ev-fold">…</details>
+    if (/^<details\b/i.test(stripped)) {
+      flushPara()
+      const open = /\bopen\b/i.test(stripped)
+      i += 1
+      let summary = ''
+      const bodyLines = []
+      let depth = 1
+      while (i < lines.length && depth > 0) {
+        const s = lines[i].trim()
+        if (/^<details\b/i.test(s)) {
+          depth += 1
+          bodyLines.push(lines[i])
+          i += 1
+          continue
+        }
+        if (/^<\/details>\s*$/i.test(s)) {
+          depth -= 1
+          if (depth > 0) bodyLines.push(lines[i])
+          i += 1
+          continue
+        }
+        if (!summary && /^<summary>/i.test(s)) {
+          summary = s.replace(/^<summary>/i, '').replace(/<\/summary>\s*$/i, '').trim()
+          i += 1
+          continue
+        }
+        bodyLines.push(lines[i])
+        i += 1
+      }
+      const title = summary || 'Details'
+      let levelClass = 'ai-ev-fold-l1'
+      const classMatch = stripped.match(/\bclass="([^"]*)"/i)
+      if (classMatch) {
+        if (/\bai-ev-fold-l2\b/.test(classMatch[1])) levelClass = 'ai-ev-fold-l2'
+        else if (/\bai-ev-fold-l1\b/.test(classMatch[1])) levelClass = 'ai-ev-fold-l1'
+      } else if (foldDepth >= 1) {
+        levelClass = 'ai-ev-fold-l2'
+      }
+      const inner = markdownToSafeHtml(bodyLines.join('\n').trim(), {
+        inlineSvg, zoomable, dark, foldDepth: foldDepth + 1,
+      })
+      out.push(
+        `<details class="ai-ev-fold ${levelClass}"${open ? ' open' : ''}>`
+        + `<summary>${inlineToHtml(title)}</summary>`
+        + `<div class="ai-ev-fold-body">${inner}</div></details>`,
+      )
       continue
     }
 
@@ -385,7 +466,7 @@ export function markdownToSafeHtml(text, { inlineSvg = true, zoomable = true, da
         i += 1
       }
       const block = buf.join('\n')
-      const safe = sanitizeHtmlTableBlock(block)
+      const safe = sanitizeHtmlTableBlock(block, dark)
       out.push(safe || `<p>${inlineToHtml(block)}</p>`)
       continue
     }
@@ -411,7 +492,7 @@ export function markdownToSafeHtml(text, { inlineSvg = true, zoomable = true, da
         bodyRows.push(splitMdTableRow(s))
         i += 1
       }
-      out.push(mdTableHtml(headerCells, aligns, bodyRows))
+      out.push(mdTableHtml(headerCells, aligns, bodyRows, dark))
       continue
     }
 
@@ -493,20 +574,67 @@ function toolCardsHtml(tools) {
     + `border-left:3px solid #c9a227;background:#fff8e8;color:#6b5508;">${rows}</div>`
 }
 
+/** Expand all / Collapse all for Evidence folds in standalone HTML export. */
+export const AI_EVIDENCE_PANEL_EXPORT_SCRIPT = `
+<script>
+(function () {
+  document.querySelectorAll('.msg.evidence .ai-ev-panel-toggle').forEach(function (btn) {
+    if (btn.getAttribute('data-bound') === '1') return;
+    btn.setAttribute('data-bound', '1');
+    btn.addEventListener('click', function () {
+      var root = btn.closest('.msg.evidence');
+      if (!root) return;
+      var folds = root.querySelectorAll('details.ai-ev-fold');
+      var open = btn.getAttribute('data-open') === '1';
+      folds.forEach(function (d) {
+        if (open) d.removeAttribute('open');
+        else d.setAttribute('open', '');
+      });
+      var next = !open;
+      btn.setAttribute('data-open', next ? '1' : '0');
+      btn.textContent = next
+        ? (btn.getAttribute('data-collapse') || 'Collapse all')
+        : (btn.getAttribute('data-expand') || 'Expand all');
+    });
+  });
+})();
+</script>
+`.trim()
+
 /** Conversation turn markup only (no document chrome). For report embedding. */
 export function formatAiConversationHtmlBody(entries, responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE) {
-  return (entries || []).map((entry) => {
+  let hasEvidence = false
+  const turns = (entries || []).map((entry) => {
     const role = entry.role
     const content = entry.content || entry.text || ''
-    const head = `<h3>${escapeHtml(aiRoleLabel(role, responseLanguage))}</h3>`
     const cls = role === 'user' ? 'user' : (role === 'evidence' ? 'evidence' : 'assistant')
+    const label = aiRoleLabel(role, responseLanguage)
+    const bodyHtml = formatAiMessageHtml(role, content, { zoomable: false, dark: false })
+    const cards = toolCardsHtml(entry.tools)
+    if (role === 'evidence') {
+      hasEvidence = true
+      const expand = evidencePanelToggleLabel(false, responseLanguage)
+      const collapse = evidencePanelToggleLabel(true, responseLanguage)
+      return (
+        `<section class="msg ${cls} ai-ev-panel">`
+        + `<h3>${escapeHtml(label)} · `
+        + `<button type="button" class="ai-ev-panel-toggle" data-open="0" `
+        + `data-expand="${escapeAttr(expand)}" data-collapse="${escapeAttr(collapse)}">`
+        + `${escapeHtml(expand)}</button></h3>`
+        + `<div class="body">${bodyHtml}${cards}</div>`
+        + '</section>'
+      )
+    }
+    const head = `<h3>${escapeHtml(label)}</h3>`
     return (
       `<section class="msg ${cls}">`
       + head
-      + `<div class="body">${formatAiMessageHtml(role, content, { zoomable: false, dark: false })}${toolCardsHtml(entry.tools)}</div>`
+      + `<div class="body">${bodyHtml}${cards}</div>`
       + '</section>'
     )
   }).join('\n')
+  if (!hasEvidence) return turns
+  return `${turns}\n${AI_EVIDENCE_PANEL_EXPORT_SCRIPT}`
 }
 
 /** Standalone HTML transcript (Markdown rendered). Keep in sync with ai_assistant.py. */

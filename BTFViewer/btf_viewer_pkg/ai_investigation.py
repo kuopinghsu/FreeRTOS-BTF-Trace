@@ -5,8 +5,9 @@ Keep behaviour in sync with ``web/src/utils/aiInvestigation.js``.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from .ai_case import (
     INVESTIGATION_SCOPE_OPTIONS,
@@ -1997,11 +1998,17 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "unverified": "unverified claims",
         "next_check": "Recommended next check",
         "supporting": "Supporting evidence",
+        "contradicting": "Contradicting",
+        "timeline_evidence": "Timeline evidence",
+        "tools_used": "Tools used",
+        "rows_label": "rows",
         "cost": "Investigation cost",
         "claims": "Claims",
         "validation": "Validation",
         "evolution": "Confidence evolution",
         "privacy": "Privacy",
+        "expand_all": "Expand all",
+        "collapse_all": "Collapse all",
         "historical": "Historical knowledge",
         "previous_issue": "Previous issue",
         "known_fix": "Known fix",
@@ -2045,6 +2052,11 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "unverified": "未驗證的主張",
         "next_check": "建議下一步",
         "supporting": "支持證據",
+        "contradicting": "矛盾證據",
+        "timeline_evidence": "時間軸證據",
+        "tools_used": "已用工具",
+        "rows_label": "列",
+        "investigation_details": "調查詳情",
         "cost": "調查成本",
         "claims": "主張",
         "validation": "驗證",
@@ -2081,6 +2093,8 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "why_action": "為何？",
         "typical_rate": "典型速率",
         "current_rate": "目前",
+        "expand_all": "全部展開",
+        "collapse_all": "全部摺疊",
     },
     "Simplified Chinese (简体中文)": {
         "quality": "证据品质",
@@ -2093,6 +2107,7 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "unverified": "未验证的主张",
         "next_check": "建议下一步",
         "supporting": "支持证据",
+        "investigation_details": "调查详情",
         "cost": "调查成本",
         "claims": "主张",
         "validation": "验证",
@@ -2129,6 +2144,8 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "why_action": "为何？",
         "typical_rate": "典型速率",
         "current_rate": "当前",
+        "expand_all": "全部展开",
+        "collapse_all": "全部折叠",
     },
     "Japanese (日本語)": {
         "quality": "根拠の質",
@@ -2141,6 +2158,7 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "unverified": "未検証の主張",
         "next_check": "次の確認",
         "supporting": "支持する根拠",
+        "investigation_details": "調査詳細",
         "cost": "調査コスト",
         "claims": "主張",
         "validation": "検証",
@@ -2177,6 +2195,8 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "why_action": "理由",
         "typical_rate": "典型値",
         "current_rate": "現在",
+        "expand_all": "すべて展開",
+        "collapse_all": "すべて折りたたむ",
     },
     "Korean (한국어)": {
         "quality": "증거 품질",
@@ -2189,6 +2209,7 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "unverified": "미검증 주장",
         "next_check": "다음 확인",
         "supporting": "지지 증거",
+        "investigation_details": "조사 세부",
         "cost": "조사 비용",
         "claims": "주장",
         "validation": "검증",
@@ -2225,6 +2246,8 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "why_action": "이유",
         "typical_rate": "전형 비율",
         "current_rate": "현재",
+        "expand_all": "모두 펼치기",
+        "collapse_all": "모두 접기",
     },
     "German": {
         "quality": "Belegqualität",
@@ -2237,6 +2260,7 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "unverified": "unbestätigte Aussagen",
         "next_check": "Nächster Prüfpunkt",
         "supporting": "Stützende Belege",
+        "investigation_details": "Untersuchungsdetails",
         "cost": "Untersuchungskosten",
         "claims": "Aussagen",
         "validation": "Validierung",
@@ -2273,6 +2297,8 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "why_action": "Warum?",
         "typical_rate": "Typische Rate",
         "current_rate": "Aktuell",
+        "expand_all": "Alle aufklappen",
+        "collapse_all": "Alle einklappen",
     },
     "French": {
         "quality": "Qualité des preuves",
@@ -2285,6 +2311,7 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "unverified": "affirmations non vérifiées",
         "next_check": "Prochaine vérification",
         "supporting": "Preuves à l'appui",
+        "investigation_details": "Détails de l'investigation",
         "cost": "Coût d'investigation",
         "claims": "Affirmations",
         "validation": "Validation",
@@ -2321,6 +2348,8 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "why_action": "Pourquoi ?",
         "typical_rate": "Taux typique",
         "current_rate": "Actuel",
+        "expand_all": "Tout développer",
+        "collapse_all": "Tout réduire",
     },
     "Spanish": {
         "quality": "Calidad de evidencia",
@@ -2333,6 +2362,7 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "unverified": "afirmaciones no verificadas",
         "next_check": "Siguiente comprobación",
         "supporting": "Evidencia de apoyo",
+        "investigation_details": "Detalles de la investigación",
         "cost": "Coste de investigación",
         "claims": "Afirmaciones",
         "validation": "Validación",
@@ -2369,6 +2399,8 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "why_action": "¿Por qué?",
         "typical_rate": "Tasa típica",
         "current_rate": "Actual",
+        "expand_all": "Expandir todo",
+        "collapse_all": "Contraer todo",
     },
 }
 for _lang, _extra in _EVIDENCE_PANEL_EXTRA.items():
@@ -2616,20 +2648,52 @@ def _evidence_row_fields(ev: dict) -> Tuple[str, str, str, str, str]:
     return time_cell, label, task or "—", core or "—", dur or "—"
 
 
+def _wrap_evidence_fold(
+    summary: str,
+    body_lines: Any,
+    *,
+    open: bool = False,
+    nested: bool = False,
+) -> List[str]:
+    """Wrap markdown body in a collapsible ``<details class="ai-ev-fold">`` block."""
+    if isinstance(body_lines, (list, tuple)):
+        raw = [line for line in body_lines if line is not None and str(line)]
+    else:
+        raw = [body_lines] if body_lines is not None and str(body_lines) else []
+    body = "\n".join(str(line) for line in raw).strip()
+    if not body:
+        return []
+    title = str(summary or "").strip() or "Details"
+    open_attr = " open" if open else ""
+    level_cls = "ai-ev-fold-l2" if nested else "ai-ev-fold-l1"
+    return [
+        f'<details class="ai-ev-fold {level_cls}"{open_attr}>',
+        f"<summary>{title}</summary>",
+        "",
+        body,
+        "",
+        "</details>",
+    ]
+
+
+class _DirectEvidenceTable(NamedTuple):
+    lines: List[str]
+    timeline_only: bool
+    count: int
+
+
 def _format_direct_evidence_table(
     evidence: Sequence[Any], labels: Dict[str, str],
-) -> List[str]:
+) -> _DirectEvidenceTable:
+    """Format direct evidence as a markdown table.
+
+    Timeline-only hits (no task/core/duration) render as a Time list.
+    Empty columns are omitted when every row lacks that field.
+    """
     rows = [e for e in evidence if isinstance(e, dict)]
     if not rows:
-        return []
-    lines = [
-        f"| {labels.get('col_time', 'Time')} "
-        f"| {labels.get('col_event', 'Observed event')} "
-        f"| {labels.get('col_task', 'Task')} "
-        f"| {labels.get('col_core', 'Core')} "
-        f"| {labels.get('col_duration', 'Duration')} |",
-        "| --- | --- | --- | --- | ---: |",
-    ]
+        return _DirectEvidenceTable([], False, 0)
+    fields: List[Tuple[str, str, str, str, str]] = []
     for ev in rows[:20]:
         time_cell, label, task, core, dur = _evidence_row_fields(ev)
         origin = str(
@@ -2643,8 +2707,40 @@ def _format_direct_evidence_table(
             label = f"[heuristic] {label}"
         elif origin in ("simulated", "simulation", "what_if"):
             label = f"[simulated] {label}"
-        lines.append(f"| {time_cell} | {label} | {task} | {core} | {dur} |")
-    return lines
+        fields.append((time_cell, label, task, core, dur))
+    has_task = any(r[2] != "—" for r in fields)
+    has_core = any(r[3] != "—" for r in fields)
+    has_dur = any(r[4] != "—" for r in fields)
+    timeline_only = not has_task and not has_core and not has_dur
+    if timeline_only:
+        lines = [
+            f"| {labels.get('col_time', 'Time')} |",
+            "| --- |",
+        ]
+        for time_cell, *_rest in fields:
+            lines.append(f"| {time_cell} |")
+        return _DirectEvidenceTable(lines, True, len(fields))
+    headers = [labels.get("col_time", "Time")]
+    idxs = [0]
+    headers.append(labels.get("col_event", "Observed event"))
+    idxs.append(1)
+    if has_task:
+        headers.append(labels.get("col_task", "Task"))
+        idxs.append(2)
+    if has_core:
+        headers.append(labels.get("col_core", "Core"))
+        idxs.append(3)
+    if has_dur:
+        headers.append(labels.get("col_duration", "Duration"))
+        idxs.append(4)
+    sep = " | ".join("---:" if i == 4 else "---" for i in idxs)
+    lines = [
+        f"| {' | '.join(headers)} |",
+        f"| {sep} |",
+    ]
+    for row in fields:
+        lines.append(f"| {' | '.join(row[i] for i in idxs)} |")
+    return _DirectEvidenceTable(lines, False, len(fields))
 
 
 def _coverage_check_rows(
@@ -2699,6 +2795,91 @@ def _coverage_check_rows(
     qflags = flags
     # quality flags reused if coverage empty — caller may pass quality.flags
     return out
+
+
+# Master expand/collapse targets every ai-ev-fold (not the top-level panel body).
+# Keep in sync with web/src/utils/aiInvestigation.js EVIDENCE_SUBFOLDS_ALL.
+EVIDENCE_SUBFOLDS_ALL = "ev-subfolds-all"
+# Legacy id; do not use for new code.
+EVIDENCE_PANEL_MESSAGE_FOLD_ID = EVIDENCE_SUBFOLDS_ALL
+
+
+def evidence_panel_summary_line(text: str) -> str:
+    """First verdict line for the collapsed Evidence & Validation header."""
+    for line in str(text or "").replace("\r\n", "\n").split("\n"):
+        s = line.strip()
+        if s:
+            return re.sub(r"\*\*", "", s)
+    return ""
+
+
+def _evidence_fold_id(title: str, body: str) -> str:
+    """Stable id for an ai-ev-fold block. Keep in sync with ai_assistant._ev_fold_id."""
+    raw = f"{str(title or '').strip()}\n{str(body or '').strip()[:160]}"
+    return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def _parse_evidence_fold_blocks(text: str) -> List[Tuple[str, str]]:
+    """Return (summary, body) for each ``<details class=\"ai-ev-fold\">`` block, depth-first."""
+    lines = str(text or "").replace("\r\n", "\n").split("\n")
+    blocks: List[Tuple[str, str]] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        stripped = lines[i].strip()
+        if re.match(r"^<details\b", stripped, re.I) and "ai-ev-fold" in stripped:
+            i += 1
+            summary = ""
+            body_lines: List[str] = []
+            depth = 1
+            while i < n and depth > 0:
+                s = lines[i].strip()
+                if re.match(r"^<details\b", s, re.I):
+                    depth += 1
+                    body_lines.append(lines[i])
+                    i += 1
+                    continue
+                if re.match(r"^</details>\s*$", s, re.I):
+                    depth -= 1
+                    if depth > 0:
+                        body_lines.append(lines[i])
+                    i += 1
+                    continue
+                if not summary and re.match(r"^<summary>", s, re.I):
+                    summary = re.sub(
+                        r"^<summary>", "", s, count=1, flags=re.I)
+                    summary = re.sub(
+                        r"</summary>\s*$", "", summary, count=1, flags=re.I
+                    ).strip()
+                    i += 1
+                    continue
+                body_lines.append(lines[i])
+                i += 1
+            body_text = "\n".join(body_lines).strip()
+            title = summary or "Details"
+            blocks.append((title, body_text))
+            blocks.extend(_parse_evidence_fold_blocks(body_text))
+            continue
+        i += 1
+    return blocks
+
+
+def evidence_panel_inner_fold_ids(text: str) -> Tuple[str, ...]:
+    """Fold ids for every nested ai-ev-fold section in evidence markdown."""
+    return tuple(
+        _evidence_fold_id(title, body)
+        for title, body in _parse_evidence_fold_blocks(text)
+    )
+
+
+def evidence_panel_toggle_label(
+    expanded: bool,
+    response_language: str = "English",
+) -> str:
+    labels = evidence_panel_labels(response_language)
+    if expanded:
+        return str(labels.get("collapse_all") or "Collapse all")
+    return str(labels.get("expand_all") or "Expand all")
 
 
 def format_evidence_panel_markdown(
@@ -2802,11 +2983,22 @@ def format_evidence_panel_markdown(
         )
 
     evidence = data.get("evidence") or []
-    table = _format_direct_evidence_table(evidence, labels)
-    if table:
+    table_info = _format_direct_evidence_table(evidence, labels)
+    if table_info.lines:
+        if table_info.timeline_only:
+            title = (
+                f"{labels.get('timeline_evidence', 'Timeline evidence')} · "
+                f"{table_info.count}"
+            )
+        else:
+            title = (
+                f"{labels.get('direct_evidence', labels['evidence'])} · "
+                f"{table_info.count} {labels.get('rows_label', 'rows')}"
+            )
         lines.append("")
-        lines.append(f"**{labels.get('direct_evidence', labels['evidence'])}**")
-        lines.extend(table)
+        lines.extend(_wrap_evidence_fold(
+            title, table_info.lines, open=table_info.count <= 5,
+        ))
 
     chain = str(data.get("evidence_chain") or "").strip()
     if chain:
@@ -2849,22 +3041,26 @@ def format_evidence_panel_markdown(
                         _localize_evidence_token(str(val), labels),
                     ))
     if check_rows:
-        lines.append("")
-        lines.append(f"**{labels.get('checks', labels.get('checklist', 'Checks'))}**")
-        lines.append(
+        check_body = [
             f"| {labels.get('check_header', 'Check')} "
-            f"| {labels.get('status', 'Status')} |"
-        )
-        lines.append("| --- | --- |")
+            f"| {labels.get('status', 'Status')} |",
+            "| --- | --- |",
+        ]
         for name, cell in check_rows[:12]:
-            lines.append(f"| {name} | {cell} |")
+            check_body.append(f"| {name} | {cell} |")
+        lines.append("")
+        lines.extend(_wrap_evidence_fold(
+            f"{labels.get('checks', labels.get('checklist', 'Checks'))} · "
+            f"{len(check_rows)}",
+            check_body,
+            open=False,
+        ))
 
     hyps_m = [h for h in (data.get("hypotheses_managed") or []) if isinstance(h, dict)]
     alts = [a for a in (data.get("alternatives") or []) if isinstance(a, dict)]
     alt_src = hyps_m or alts
     if alt_src:
-        lines.append("")
-        lines.append(f"**{labels['alternatives']}**")
+        alt_lines: List[str] = []
         for h in alt_src[:8]:
             hyp = str(h.get("hypothesis") or "").strip()
             if not hyp:
@@ -2880,12 +3076,23 @@ def format_evidence_panel_markdown(
                 bit += f" — {why}"
             if actions:
                 bit += f" {actions}"
-            lines.append(bit)
+            alt_lines.append(bit)
         if hyps_m:
-            lines.append(
+            alt_lines.append(
                 f"[{labels.get('compare_action', 'Compare hypotheses')}]"
                 f"({btf_hyp_href('compare', 'all')})"
             )
+        keep_open = (
+            status_key == "insufficient"
+            or str(data.get("confidence") or "").lower() == "low"
+            or status_key == "not_observed"
+        )
+        lines.append("")
+        lines.extend(_wrap_evidence_fold(
+            f"{labels['alternatives']} · {len(alt_src)}",
+            alt_lines,
+            open=keep_open,
+        ))
 
     falsify = data.get("falsify") if isinstance(data.get("falsify"), dict) else {}
     supporting = [s for s in (falsify.get("supporting") or []) if s]
@@ -2903,10 +3110,13 @@ def format_evidence_panel_markdown(
         if s
     ]
     if supporting:
+        support_lines = [f"- {s}" for s in supporting[:8]]
         lines.append("")
-        lines.append(f"**{labels.get('supporting', 'Supporting')}**")
-        for s in supporting[:8]:
-            lines.append(f"- {s}")
+        lines.extend(_wrap_evidence_fold(
+            f"{labels.get('supporting', 'Supporting')} · {len(supporting)}",
+            support_lines,
+            open=len(supporting) <= 3,
+        ))
     if contradicting:
         lines.append("")
         lines.append(f"**{labels.get('contradicting', 'Contradicting')}**")
@@ -3008,46 +3218,59 @@ def format_evidence_panel_markdown(
         details.append(f"**{labels.get('cost', 'Investigation cost')}:** {cost}")
     evo = str(data.get("confidence_evolution") or "").strip()
     if evo:
-        details.append(f"**{labels.get('evolution', 'Confidence evolution')}**")
-        for line in evo.splitlines():
-            if line.strip():
-                details.append(f"- {line.strip()}")
+        evo_lines = [
+            f"- {line.strip()}" for line in evo.splitlines() if line.strip()
+        ]
+        details.extend(_wrap_evidence_fold(
+            labels.get("evolution", "Confidence evolution"),
+            evo_lines,
+            open=False,
+            nested=True,
+        ))
     reasons = data.get("tool_reasons") or []
     if reasons:
-        details.append(f"**{labels.get('investigation', 'Investigation')}**")
+        tool_lines: List[str] = []
         for r in reasons:
             if not isinstance(r, dict):
                 continue
             tool = str(r.get("tool") or "")
             why = str(r.get("reason") or "")
             if tool:
-                why_link = (
-                    f"[{labels.get('why_action', 'Why?')}]"
-                    f"({btf_tool_href('why', tool)})"
-                )
-                details.append(f"- {tool}: {why} {why_link}")
+                tool_lines.append(f"- {tool}: {why}")
+        details.extend(_wrap_evidence_fold(
+            f"{labels.get('tools_used', labels.get('investigation', 'Tools used'))} · "
+            f"{len(tool_lines)}",
+            tool_lines,
+            open=False,
+            nested=True,
+        ))
     root_chain = data.get("root_cause_chain") or []
     hyps = data.get("hypotheses") or []
     if root_chain or hyps:
         tree_src = investigation_tree_mermaid(root_chain, hyps)
         if tree_src:
-            details.append(f"**{labels['tree']}**")
-            details.append("```mermaid")
-            details.append(tree_src.rstrip())
-            details.append("```")
+            details.extend(_wrap_evidence_fold(
+                labels["tree"],
+                ["```mermaid", tree_src.rstrip(), "```"],
+                open=False,
+                nested=True,
+            ))
     graph_src = str(data.get("graph_mermaid") or "").strip()
     if graph_src:
-        details.append(f"**{labels.get('graph', 'Evidence graph')}**")
-        details.append("```mermaid")
-        details.append(graph_src)
-        details.append("```")
+        details.extend(_wrap_evidence_fold(
+            labels.get("graph", "Evidence graph"),
+            ["```mermaid", graph_src, "```"],
+            open=False,
+            nested=True,
+        ))
 
     if details:
         lines.append("")
-        lines.append(
-            f"**▸ {labels.get('investigation_details', 'Investigation details')}**"
-        )
-        lines.extend(details)
+        lines.extend(_wrap_evidence_fold(
+            labels.get("investigation_details", "Investigation details"),
+            details,
+            open=False,
+        ))
 
     return "\n".join(lines).strip()
 

@@ -1142,63 +1142,80 @@ const EVIDENCE_PANEL_EXTRA = {
     disprove: 'What would disprove this', graph: 'Evidence graph',
     supported: 'supported', possible: 'possible', needs_evidence: 'needs evidence',
     unverified: 'unverified claims', next_check: 'Recommended next check',
-    supporting: 'Supporting evidence', cost: 'Investigation cost',
+    supporting: 'Supporting evidence', contradicting: 'Contradicting',
+    timeline_evidence: 'Timeline evidence', tools_used: 'Tools used',
+    rows_label: 'rows',
+    cost: 'Investigation cost',
     claims: 'Claims', validation: 'Validation',
     evolution: 'Confidence evolution', privacy: 'Privacy',
+    expand_all: 'Expand all', collapse_all: 'Collapse all',
   },
   'Traditional Chinese (繁體中文)': {
     quality: '證據品質', coverage: '證據覆蓋', disprove: '如何推翻此結論', graph: '證據圖',
     supported: '已支持', possible: '可能', needs_evidence: '需要證據',
     unverified: '未驗證的主張', next_check: '建議下一步',     supporting: '支持證據',
+    contradicting: '矛盾證據', timeline_evidence: '時間軸證據', tools_used: '已用工具',
+    rows_label: '列', investigation_details: '調查詳情',
     cost: '調查成本', claims: '主張', validation: '驗證',
     evolution: '置信度演進', privacy: '隱私',
+    expand_all: '全部展開', collapse_all: '全部摺疊',
   },
   'Simplified Chinese (简体中文)': {
     quality: '证据品质', coverage: '证据覆盖', disprove: '如何推翻此结论', graph: '证据图',
     supported: '已支持', possible: '可能', needs_evidence: '需要证据',
     unverified: '未验证的主张', next_check: '建议下一步',     supporting: '支持证据',
+    investigation_details: '调查详情',
     cost: '调查成本', claims: '主张', validation: '验证',
     evolution: '置信度演进', privacy: '隐私',
+    expand_all: '全部展开', collapse_all: '全部折叠',
   },
   'Japanese (日本語)': {
     quality: '根拠の質', coverage: '根拠カバレッジ', disprove: '反証になるもの', graph: '根拠グラフ',
     supported: '支持', possible: '可能性あり', needs_evidence: '根拠不足',
     unverified: '未検証の主張', next_check: '次の確認',     supporting: '支持する根拠',
+    investigation_details: '調査詳細',
     cost: '調査コスト', claims: '主張', validation: '検証',
     evolution: '信頼度の推移', privacy: 'プライバシー',
+    expand_all: 'すべて展開', collapse_all: 'すべて折りたたむ',
   },
   'Korean (한국어)': {
     quality: '증거 품질', coverage: '증거 커버리지', disprove: '이 결론을 뒤집는 증거', graph: '증거 그래프',
     supported: '지지됨', possible: '가능', needs_evidence: '증거 필요',
     unverified: '미검증 주장', next_check: '다음 확인',     supporting: '지지 증거',
+    investigation_details: '조사 세부',
     cost: '조사 비용', claims: '주장', validation: '검증',
     evolution: '신뢰도 변화', privacy: '개인정보',
+    expand_all: '모두 펼치기', collapse_all: '모두 접기',
   },
   German: {
     quality: 'Belegqualität', coverage: 'Belegabdeckung', disprove: 'Was würde das widerlegen',
     graph: 'Beleggraph', supported: 'gestützt', possible: 'möglich',
     needs_evidence: 'Belege nötig', unverified: 'unbestätigte Aussagen',
     next_check: 'Nächster Prüfpunkt', supporting: 'Stützende Belege',
+    investigation_details: 'Untersuchungsdetails',
     cost: 'Untersuchungskosten', claims: 'Aussagen', validation: 'Validierung',
     evolution: 'Konfidenzverlauf', privacy: 'Datenschutz',
+    expand_all: 'Alle aufklappen', collapse_all: 'Alle einklappen',
   },
   French: {
     quality: 'Qualité des preuves', coverage: 'Couverture des preuves',
     disprove: 'Ce qui infirmerait ceci', graph: 'Graphe de preuves',
     supported: 'étayé', possible: 'possible', needs_evidence: 'preuves nécessaires',
     unverified: 'affirmations non vérifiées', next_check: 'Prochaine vérification',
-    supporting: 'Preuves à l\'appui', cost: 'Coût d\'investigation',
-    claims: 'Affirmations', validation: 'Validation',
+    supporting: 'Preuves à l\'appui', investigation_details: 'Détails de l\'investigation',
+    cost: 'Coût d\'investigation', claims: 'Affirmations', validation: 'Validation',
     evolution: 'Évolution de la confiance', privacy: 'Confidentialité',
+    expand_all: 'Tout développer', collapse_all: 'Tout réduire',
   },
   Spanish: {
     quality: 'Calidad de evidencia', coverage: 'Cobertura de evidencia',
     disprove: 'Qué refutaría esto', graph: 'Grafo de evidencia',
     supported: 'respaldado', possible: 'posible', needs_evidence: 'falta evidencia',
     unverified: 'afirmaciones no verificadas', next_check: 'Siguiente comprobación',
-    supporting: 'Evidencia de apoyo', cost: 'Coste de investigación',
-    claims: 'Afirmaciones', validation: 'Validación',
+    supporting: 'Evidencia de apoyo', investigation_details: 'Detalles de la investigación',
+    cost: 'Coste de investigación', claims: 'Afirmaciones', validation: 'Validación',
     evolution: 'Evolución de la confianza', privacy: 'Privacidad',
+    expand_all: 'Expandir todo', collapse_all: 'Contraer todo',
   },
 }
 const EVIDENCE_PANEL_ACTIONS = {
@@ -1541,23 +1558,86 @@ function evidenceRowFields(ev) {
   return [timeCell, label, task || '—', core || '—', dur || '—']
 }
 
+/** Wrap a markdown body in a collapsible <details> block (Web + Desktop export). */
+export function wrapEvidenceFold(summary, bodyLines, { open = false, nested = false } = {}) {
+  const body = (Array.isArray(bodyLines) ? bodyLines : [bodyLines])
+    .filter(line => line != null && String(line).length)
+    .join('\n')
+    .trim()
+  if (!body) return []
+  const title = String(summary || '').trim() || 'Details'
+  const levelClass = nested ? 'ai-ev-fold-l2' : 'ai-ev-fold-l1'
+  return [
+    `<details class="ai-ev-fold ${levelClass}"${open ? ' open' : ''}>`,
+    `<summary>${title}</summary>`,
+    '',
+    body,
+    '',
+    '</details>',
+  ]
+}
+
+function annotateEvidenceLabel(ev, label) {
+  let out = label
+  const origin = String(ev.origin || ev.source || ev.result_kind || '').trim().toLowerCase()
+  if (['measured', 'observed', 'direct'].includes(origin)) out = `[measured] ${out}`
+  else if (['derived', 'computed'].includes(origin)) out = `[derived] ${out}`
+  else if (['heuristic', 'estimate'].includes(origin)) out = `[heuristic] ${out}`
+  else if (['simulated', 'simulation', 'what_if'].includes(origin)) out = `[simulated] ${out}`
+  return out
+}
+
+/**
+ * Format direct evidence as a markdown table.
+ * Timeline-only hits (no task/core/duration) render as a Time list.
+ * Empty columns are omitted when every row lacks that field.
+ * @returns {{ lines: string[], timelineOnly: boolean, count: number }}
+ */
 function formatDirectEvidenceTable(evidence, labels) {
   const rows = (evidence || []).filter(e => e && typeof e === 'object')
-  if (!rows.length) return []
-  const lines = [
-    `| ${labels.col_time || 'Time'} | ${labels.col_event || 'Observed event'} | ${labels.col_task || 'Task'} | ${labels.col_core || 'Core'} | ${labels.col_duration || 'Duration'} |`,
-    '| --- | --- | --- | --- | ---: |',
-  ]
-  for (const ev of rows.slice(0, 20)) {
-    let [timeCell, label, task, core, dur] = evidenceRowFields(ev)
-    const origin = String(ev.origin || ev.source || ev.result_kind || '').trim().toLowerCase()
-    if (['measured', 'observed', 'direct'].includes(origin)) label = `[measured] ${label}`
-    else if (['derived', 'computed'].includes(origin)) label = `[derived] ${label}`
-    else if (['heuristic', 'estimate'].includes(origin)) label = `[heuristic] ${label}`
-    else if (['simulated', 'simulation', 'what_if'].includes(origin)) label = `[simulated] ${label}`
-    lines.push(`| ${timeCell} | ${label} | ${task} | ${core} | ${dur} |`)
+  if (!rows.length) return { lines: [], timelineOnly: false, count: 0 }
+  const sliced = rows.slice(0, 20)
+  const fields = sliced.map(ev => {
+    const [timeCell, label, task, core, dur] = evidenceRowFields(ev)
+    return [timeCell, annotateEvidenceLabel(ev, label), task, core, dur]
+  })
+  const hasTask = fields.some(r => r[2] !== '—')
+  const hasCore = fields.some(r => r[3] !== '—')
+  const hasDur = fields.some(r => r[4] !== '—')
+  const timelineOnly = !hasTask && !hasCore && !hasDur
+  if (timelineOnly) {
+    const lines = [
+      `| ${labels.col_time || 'Time'} |`,
+      '| --- |',
+    ]
+    for (const [timeCell] of fields) lines.push(`| ${timeCell} |`)
+    return { lines, timelineOnly: true, count: fields.length }
   }
-  return lines
+  const headers = [labels.col_time || 'Time']
+  const idxs = [0]
+  headers.push(labels.col_event || 'Observed event')
+  idxs.push(1)
+  if (hasTask) {
+    headers.push(labels.col_task || 'Task')
+    idxs.push(2)
+  }
+  if (hasCore) {
+    headers.push(labels.col_core || 'Core')
+    idxs.push(3)
+  }
+  if (hasDur) {
+    headers.push(labels.col_duration || 'Duration')
+    idxs.push(4)
+  }
+  const sep = idxs.map((i) => (i === 4 ? '---:' : '---')).join(' | ')
+  const lines = [
+    `| ${headers.join(' | ')} |`,
+    `| ${sep} |`,
+  ]
+  for (const row of fields) {
+    lines.push(`| ${idxs.map(i => row[i]).join(' | ')} |`)
+  }
+  return { lines, timelineOnly: false, count: fields.length }
 }
 
 function coverageCheckRows(coverage, checks, labels) {
@@ -1595,12 +1675,46 @@ function coverageCheckRows(coverage, checks, labels) {
   return out
 }
 
+/** Stable fold id for the whole Evidence & Validation log turn (Desktop btffold). */
+/** Master expand/collapse for nested ai-ev-fold sections (not the panel body). */
+export const EVIDENCE_SUBFOLDS_ALL = 'ev-subfolds-all'
+/** @deprecated use EVIDENCE_SUBFOLDS_ALL */
+export const EVIDENCE_PANEL_MESSAGE_FOLD_ID = EVIDENCE_SUBFOLDS_ALL
+
+/** Expand or collapse every nested ai-ev-fold under an Evidence panel. */
+export function syncEvidenceSubfolds(root, open) {
+  root?.querySelectorAll?.('.ai-ev-panel details.ai-ev-fold').forEach((el) => {
+    if (open) el.setAttribute('open', '')
+    else el.removeAttribute('open')
+  })
+}
+
+/** @deprecated use syncEvidenceSubfolds */
+export function syncEvidencePanelFolds(root, open) {
+  syncEvidenceSubfolds(root, open)
+}
+
+/** First verdict line for the collapsed Evidence & Validation header. */
+export function evidencePanelSummaryLine(content) {
+  for (const line of String(content || '').replace(/\r\n/g, '\n').split('\n')) {
+    const s = line.trim()
+    if (s) return s.replace(/\*\*/g, '')
+  }
+  return ''
+}
+
+export function evidencePanelToggleLabel(expanded, responseLanguage = 'English') {
+  const labels = evidencePanelLabels(responseLanguage)
+  return expanded
+    ? (labels.collapse_all || 'Collapse all')
+    : (labels.expand_all || 'Expand all')
+}
+
 /** Markdown for Evidence & Validation (panel + conversation log + export). */
 export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') {
   if (!data || typeof data !== 'object') return ''
   const labels = evidencePanelLabels(responseLanguage)
   const lines = []
-  const details = []
 
   const statusKey = conclusionStatusFromPayload(data)
   const statusLabel = {
@@ -1673,9 +1787,15 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
     lines.push(`[${labels.save_knowledge || 'Save to knowledge'}](${btfExpHref('save', 'all')})`)
   }
 
-  const table = formatDirectEvidenceTable(data.evidence || [], labels)
-  if (table.length) {
-    lines.push('', `**${labels.direct_evidence || labels.evidence}**`, ...table)
+  const tableInfo = formatDirectEvidenceTable(data.evidence || [], labels)
+  if (tableInfo.lines.length) {
+    const title = tableInfo.timelineOnly
+      ? `${labels.timeline_evidence || 'Timeline evidence'} · ${tableInfo.count}`
+      : `${labels.direct_evidence || labels.evidence} · ${tableInfo.count} ${labels.rows_label || 'rows'}`
+    lines.push(
+      '',
+      ...wrapEvidenceFold(title, tableInfo.lines, { open: tableInfo.count <= 5 }),
+    )
   }
   if (data.evidence_chain) {
     lines.push(
@@ -1703,22 +1823,26 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
     }
   }
   if (checkRows.length) {
-    lines.push(
-      '',
-      `**${labels.checks || labels.checklist || 'Checks'}**`,
+    const checkBody = [
       `| ${labels.check_header || 'Check'} | ${labels.status || 'Status'} |`,
       '| --- | --- |',
+      ...checkRows.slice(0, 12).map(([name, cell]) => `| ${name} | ${cell} |`),
+    ]
+    lines.push(
+      '',
+      ...wrapEvidenceFold(
+        `${labels.checks || labels.checklist || 'Checks'} · ${checkRows.length}`,
+        checkBody,
+        { open: false },
+      ),
     )
-    for (const [name, cell] of checkRows.slice(0, 12)) {
-      lines.push(`| ${name} | ${cell} |`)
-    }
   }
 
   const hypsM = (data.hypotheses_managed || []).filter(h => h && typeof h === 'object')
   const alts = (data.alternatives || []).filter(a => a && typeof a === 'object')
   const altSrc = hypsM.length ? hypsM : alts
   if (altSrc.length) {
-    lines.push('', `**${labels.alternatives}**`)
+    const altLines = []
     for (const h of altSrc.slice(0, 8)) {
       const hyp = String(h.hypothesis || '').trim()
       if (!hyp) continue
@@ -1729,11 +1853,22 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
       let bit = `- *${hyp}* (${status})`
       if (why) bit += ` — ${why}`
       if (actions) bit += ` ${actions}`
-      lines.push(bit)
+      altLines.push(bit)
     }
     if (hypsM.length) {
-      lines.push(`[${labels.compare_action || 'Compare hypotheses'}](${btfHypHref('compare', 'all')})`)
+      altLines.push(`[${labels.compare_action || 'Compare hypotheses'}](${btfHypHref('compare', 'all')})`)
     }
+    const keepOpen = statusKey === 'insufficient'
+      || String(data.confidence || '').toLowerCase() === 'low'
+      || statusKey === 'not_observed'
+    lines.push(
+      '',
+      ...wrapEvidenceFold(
+        `${labels.alternatives} · ${altSrc.length}`,
+        altLines,
+        { open: keepOpen },
+      ),
+    )
   }
 
   const falsify = data.falsify && typeof data.falsify === 'object' ? data.falsify : {}
@@ -1743,8 +1878,15 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
     falsify.contradicting || falsify.contradictions || data.contradictions || []
   ).filter(Boolean)
   if (supporting.length) {
-    lines.push('', `**${labels.supporting || 'Supporting'}**`)
-    supporting.slice(0, 8).forEach(s => lines.push(`- ${s}`))
+    const supportLines = supporting.slice(0, 8).map(s => `- ${s}`)
+    lines.push(
+      '',
+      ...wrapEvidenceFold(
+        `${labels.supporting || 'Supporting'} · ${supporting.length}`,
+        supportLines,
+        { open: supporting.length <= 3 },
+      ),
+    )
   }
   if (contradicting.length) {
     lines.push('', `**${labels.contradicting || 'Contradicting'}**`)
@@ -1762,6 +1904,7 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
     )
   }
 
+  const detailBlocks = []
   if (data.confidence) {
     const conf = String(data.confidence)
     const showConf = !(
@@ -1769,90 +1912,115 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
       && conf.trim().toLowerCase() === String(labels.high || 'High').toLowerCase()
     )
     if (showConf) {
-      details.push(`**${labels.confidence}:** ${localizeEvidenceToken(conf, labels)}`)
+      detailBlocks.push(`**${labels.confidence}:** ${localizeEvidenceToken(conf, labels)}`)
     }
   }
   if (data.evidence_quality?.bar) {
-    details.push(`**${labels.quality || labels.score}:** ${data.evidence_quality.bar}`)
-    details.push(...formatQualityFlagLines(data.evidence_quality, labels))
+    detailBlocks.push(`**${labels.quality || labels.score}:** ${data.evidence_quality.bar}`)
+    detailBlocks.push(...formatQualityFlagLines(data.evidence_quality, labels))
   } else if (data.evidence_score != null) {
-    details.push(`**${labels.score}:** ${String(data.evidence_score_bar || '')}`)
+    detailBlocks.push(`**${labels.score}:** ${String(data.evidence_score_bar || '')}`)
   }
   if (coverage?.bar) {
-    details.push(`**${labels.coverage || 'Evidence Coverage'}:** ${coverage.bar}`)
-    details.push(...formatCoverageCountLines(coverage, labels))
+    detailBlocks.push(`**${labels.coverage || 'Evidence Coverage'}:** ${coverage.bar}`)
+    detailBlocks.push(...formatCoverageCountLines(coverage, labels))
   }
   const hk = data.historical_knowledge
   if (hk && typeof hk === 'object' && (hk.previous_issue || hk.message || (hk.flags || []).length)) {
-    details.push(`**${labels.historical || 'Historical knowledge'}**`)
+    detailBlocks.push(`**${labels.historical || 'Historical knowledge'}**`)
     if (hk.previous_issue) {
-      details.push(`- ${labels.previous_issue || 'Previous issue'}: ${hk.previous_issue}`)
+      detailBlocks.push(`- ${labels.previous_issue || 'Previous issue'}: ${hk.previous_issue}`)
     }
-    if (hk.known_fix) details.push(`- ${labels.known_fix || 'Known fix'}: ${hk.known_fix}`)
+    if (hk.known_fix) detailBlocks.push(`- ${labels.known_fix || 'Known fix'}: ${hk.known_fix}`)
     if (hk.last_occurrence) {
-      details.push(`- ${labels.last_occurrence || 'Last occurrence'}: ${hk.last_occurrence}`)
+      detailBlocks.push(`- ${labels.last_occurrence || 'Last occurrence'}: ${hk.last_occurrence}`)
     }
-    for (const flag of (hk.flags || []).slice(0, 4)) details.push(`- ${flag}`)
+    for (const flag of (hk.flags || []).slice(0, 4)) detailBlocks.push(`- ${flag}`)
     const typical = hk.typical && typeof hk.typical === 'object' ? hk.typical : {}
     const current = hk.current && typeof hk.current === 'object' ? hk.current : {}
     for (const key of ['migrations', 'migration_rate', 'blocking', 'wcet']) {
       if (key in typical || key in current) {
         if (typical[key] != null) {
-          details.push(`- ${labels.typical_rate || 'Typical rate'} (${key}): ${typical[key]}`)
+          detailBlocks.push(`- ${labels.typical_rate || 'Typical rate'} (${key}): ${typical[key]}`)
         }
         if (current[key] != null) {
-          details.push(`- ${labels.current_rate || 'Current'} (${key}): ${current[key]}`)
+          detailBlocks.push(`- ${labels.current_rate || 'Current'} (${key}): ${current[key]}`)
         }
       }
     }
     const msg = String(hk.message || '').trim()
     if (msg && msg !== 'No historical match' && msg !== 'Within historical range') {
-      details.push(`- ${msg}`)
+      detailBlocks.push(`- ${msg}`)
     }
   }
   const validation = data.validation
   if (validation && typeof validation === 'object' && validation.ok === false) {
     const n = Number(validation.unverified || (validation.issues || []).length)
-    details.push(`**${labels.validation || 'Validation'}:** ${n} ${labels.unverified || 'unverified claims'}`)
+    detailBlocks.push(`**${labels.validation || 'Validation'}:** ${n} ${labels.unverified || 'unverified claims'}`)
     for (const issue of (validation.issues || []).slice(0, 6)) {
-      if (issue && typeof issue === 'object') details.push(`- ${issue.kind}: ${issue.detail}`)
+      if (issue && typeof issue === 'object') detailBlocks.push(`- ${issue.kind}: ${issue.detail}`)
     }
-    for (const flag of (validation.flags || []).slice(0, 6)) details.push(`- ${flag}`)
+    for (const flag of (validation.flags || []).slice(0, 6)) detailBlocks.push(`- ${flag}`)
   }
   const cost = String(data.cost || '').trim()
-  if (cost) details.push(`**${labels.cost || 'Investigation cost'}:** ${cost}`)
+  if (cost) detailBlocks.push(`**${labels.cost || 'Investigation cost'}:** ${cost}`)
   const evo = String(data.confidence_evolution || '').trim()
   if (evo) {
-    details.push(`**${labels.evolution || 'Confidence evolution'}**`)
-    evo.split('\n').forEach((line) => { if (line.trim()) details.push(`- ${line.trim()}`) })
+    const evoLines = evo.split('\n').filter(line => line.trim()).map(line => `- ${line.trim()}`)
+    detailBlocks.push(
+      ...wrapEvidenceFold(labels.evolution || 'Confidence evolution', evoLines, { open: false, nested: true }),
+    )
   }
   const reasons = data.tool_reasons || []
   if (reasons.length) {
-    details.push(`**${labels.investigation || 'Investigation'}**`)
+    const toolLines = []
     for (const r of reasons) {
       if (!r || typeof r !== 'object') continue
       const tool = String(r.tool || '')
-      if (tool) {
-        const whyLink = `[${labels.why_action || 'Why?'}](${btfToolHref('why', tool)})`
-        details.push(`- ${tool}: ${String(r.reason || '')} ${whyLink}`)
-      }
+      if (tool) toolLines.push(`- ${tool}: ${String(r.reason || '')}`)
     }
+    detailBlocks.push(
+      ...wrapEvidenceFold(
+        `${labels.tools_used || labels.investigation || 'Tools used'} · ${toolLines.length}`,
+        toolLines,
+        { open: false, nested: true },
+      ),
+    )
   }
   const chain = data.root_cause_chain || []
   const hyps = data.hypotheses || []
   if (chain.length || hyps.length) {
     const treeSrc = investigationTreeMermaid(chain, hyps)
     if (treeSrc) {
-      details.push(`**${labels.tree}**`, '```mermaid', treeSrc.trim(), '```')
+      detailBlocks.push(
+        ...wrapEvidenceFold(
+          labels.tree || 'Investigation tree',
+          ['```mermaid', treeSrc.trim(), '```'],
+          { open: false, nested: true },
+        ),
+      )
     }
   }
   const graphSrc = String(data.graph_mermaid || '').trim()
   if (graphSrc) {
-    details.push(`**${labels.graph || 'Evidence graph'}**`, '```mermaid', graphSrc, '```')
+    detailBlocks.push(
+      ...wrapEvidenceFold(
+        labels.graph || 'Evidence graph',
+        ['```mermaid', graphSrc, '```'],
+        { open: false, nested: true },
+      ),
+    )
   }
 
-  if (details.length) {
-    lines.push('', `**▸ ${labels.investigation_details || 'Investigation details'}**`, ...details)
+  if (detailBlocks.length) {
+    lines.push(
+      '',
+      ...wrapEvidenceFold(
+        labels.investigation_details || 'Investigation details',
+        detailBlocks,
+        { open: false },
+      ),
+    )
   }
   return lines.join('\n').trim()
 }
