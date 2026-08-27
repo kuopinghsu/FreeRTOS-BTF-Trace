@@ -1148,6 +1148,10 @@ class AiInvestigationTests(unittest.TestCase):
         self.assertTrue(
             any(e.get("time") is not None for e in (merged.get("evidence") or []))
         )
+        late_cov = int((late.get("coverage") or {}).get("percent") or 0)
+        self.assertEqual(late_cov, 0)
+        merged_cov = int((merged.get("coverage") or {}).get("percent") or 0)
+        self.assertGreater(merged_cov, 0)
 
     def test_merge_evidence_panel_payload_keeps_empty_alts_from_prev(self) -> None:
         from btf_viewer_pkg.ai_investigation import merge_evidence_panel_payload

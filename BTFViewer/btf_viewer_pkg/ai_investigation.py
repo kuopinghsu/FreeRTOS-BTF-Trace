@@ -1558,8 +1558,21 @@ def _evidence_items_have_times(evidence: Any) -> bool:
     )
 
 
+def _claims_for_coverage(payload: Dict[str, Any]) -> Optional[List[dict]]:
+    """Claims from the payload or its validation report, if present."""
+    raw = payload.get("claims")
+    if isinstance(raw, list) and raw:
+        return [c for c in raw if isinstance(c, dict)]
+    validation = payload.get("validation")
+    if isinstance(validation, dict):
+        raw = validation.get("claims")
+        if isinstance(raw, list) and raw:
+            return [c for c in raw if isinstance(c, dict)]
+    return None
+
+
 def refresh_evidence_panel_scores(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Recompute heuristic score / quality fields on an Evidence panel payload."""
+    """Recompute heuristic score / quality / coverage on an Evidence panel payload."""
     out = dict(payload or {})
     score_data = compute_evidence_score(
         out.get("evidence"),
@@ -1580,6 +1593,18 @@ def refresh_evidence_panel_scores(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     out["evidence_quality"] = quality
     out["evidence_quality_bar"] = quality.get("bar")
+    coverage = compute_evidence_coverage(
+        claims=_claims_for_coverage(out),
+        evidence=out.get("evidence"),
+    )
+    out["coverage"] = coverage
+    out["evidence_coverage"] = coverage
+    case = out.get("investigation_case")
+    if isinstance(case, dict):
+        case = dict(case)
+        case["evidence_coverage"] = coverage
+        case["coverage"] = coverage
+        out["investigation_case"] = case
     return out
 
 
@@ -1592,9 +1617,9 @@ def merge_evidence_panel_payload(
     ``auto_investigate`` ends with planner tools (``rank_root_causes``,
     ``challenge_conclusion``, ``score_investigation``, …) that publish a
     conclusion but no ``jump:TIME`` rows. Without a merge, replacing the
-    Evidence panel collapses the heuristic score to 0% even though earlier
-    ``investigate`` / ``correlate_events`` / ``find_critical_path`` results
-    were strong.
+    Evidence panel collapses the heuristic score and Evidence Coverage to 0
+    even though earlier ``investigate`` / ``correlate_events`` /
+    ``find_critical_path`` results were strong.
     """
     if not isinstance(new, dict) or not new:
         return dict(prev) if isinstance(prev, dict) and prev else new

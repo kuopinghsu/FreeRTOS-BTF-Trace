@@ -94,6 +94,25 @@ class SegmentHoverPopupTests(unittest.TestCase):
         self.assertFalse(bool(tip.windowFlags() & Qt.WindowType.ToolTip))
         tip.hide()
         self.assertFalse(tip.isVisible())
+        self.assertFalse(bool(tip.windowFlags() & Qt.WindowType.Tool))
+        self.assertIsNotNone(tip.parentWidget())
+        view.close()
+
+    def test_hide_does_not_use_tool_window(self) -> None:
+        """Windows flashes a tiny native window if hide() applies Qt.Tool flags."""
+        src = (BTF_ROOT / "btf_viewer_pkg" / "timeline_util.py").read_text(
+            encoding="utf-8")
+        self.assertIn("def _popup_holder_widget", src)
+        hide_body = src.split("def hide(self)")[1].split("def show_at")[0]
+        self.assertIn("self._park()", hide_body)
+        self.assertNotIn("setWindowFlags", hide_body)
+        view = TimelineView()
+        view.show()
+        tip = _get_popup()
+        tip.show_at(QPoint(20, 20), "<b>x</b>", host=view.viewport())
+        _hide_popup()
+        self.assertFalse(tip.isVisible())
+        self.assertFalse(bool(tip.windowFlags() & Qt.WindowType.Tool))
         view.close()
 
     def test_leave_event_hides_popup_in_source(self) -> None:
@@ -114,11 +133,15 @@ class SegmentHoverPopupTests(unittest.TestCase):
         view.close()
         view.deleteLater()
         self.app.processEvents()
+        view2 = TimelineView()
+        view2.show()
+        self.app.processEvents()
         tip2 = _get_popup()
-        tip2.show_at(QPoint(0, 0), "<b>y</b>")
+        tip2.show_at(QPoint(0, 0), "<b>y</b>", host=view2.viewport())
         self.assertTrue(tip2.isVisible())
         _hide_popup()
         self.assertFalse(tip2.isVisible())
+        view2.close()
 
 
 if __name__ == "__main__":

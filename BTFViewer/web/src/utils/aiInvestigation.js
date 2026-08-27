@@ -896,7 +896,19 @@ function evidenceItemsHaveTimes(evidence) {
   return evidence.some(e => e && typeof e === 'object' && e.time != null)
 }
 
-/** Recompute heuristic score / quality fields on an Evidence panel payload. */
+function claimsForCoverage(payload) {
+  const raw = payload?.claims
+  if (Array.isArray(raw) && raw.length) {
+    return raw.filter(c => c && typeof c === 'object')
+  }
+  const fromVal = payload?.validation?.claims
+  if (Array.isArray(fromVal) && fromVal.length) {
+    return fromVal.filter(c => c && typeof c === 'object')
+  }
+  return null
+}
+
+/** Recompute heuristic score / quality / coverage on an Evidence panel payload. */
 export function refreshEvidencePanelScores(payload) {
   const out = { ...(payload || {}) }
   const scoreData = computeEvidenceScore(out.evidence || [], {
@@ -917,12 +929,26 @@ export function refreshEvidencePanelScores(payload) {
   })
   out.evidence_quality = quality
   out.evidence_quality_bar = quality.bar
+  const coverage = computeEvidenceCoverage({
+    claims: claimsForCoverage(out) || [],
+    evidence: out.evidence || [],
+  })
+  out.coverage = coverage
+  out.evidence_coverage = coverage
+  if (out.investigation_case && typeof out.investigation_case === 'object') {
+    out.investigation_case = {
+      ...out.investigation_case,
+      evidence_coverage: coverage,
+      coverage,
+    }
+  }
   return out
 }
 
 /**
  * Carry forward timed evidence when a later tool omits it.
  * Keep in sync with btf_viewer_pkg/ai_investigation.py merge_evidence_panel_payload.
+ * Also recomputes Evidence Coverage so late planner tools do not leave 0%.
  */
 export function mergeEvidencePanelPayload(prev, next) {
   if (!next || typeof next !== 'object') {

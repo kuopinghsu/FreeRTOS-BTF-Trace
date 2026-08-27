@@ -84,6 +84,7 @@ from .ai_investigation import (
     extract_evidence_panel_payload,
     format_evidence_panel_markdown,
     merge_evidence_panel_payload,
+    refresh_evidence_panel_scores,
     format_investigation_plan_status,
     investigation_tree_mermaid,
     is_agent_template,
@@ -7727,7 +7728,9 @@ def create_ai_assistant_panel(
             )
             payload = dict(self._evidence_payload or {})
             payload["validation"] = report
+            payload["claims"] = report.get("claims") or []
             payload["cost"] = format_cost_meter(self._cost_meter)
+            payload = refresh_evidence_panel_scores(payload)
             if not payload.get("conclusion") and not payload.get("evidence"):
                 payload["conclusion"] = payload.get("conclusion") or ""
             self._evidence_payload = payload

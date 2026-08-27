@@ -827,6 +827,7 @@ import {
   evidencePanelToggleLabel,
   syncEvidenceSubfolds,
   mergeEvidencePanelPayload,
+  refreshEvidencePanelScores,
   formatInvestigationPlanStatus,
   elevateGuideStageForTemplate,
   isAgentTemplate,
@@ -1147,11 +1148,12 @@ function attachResponseValidation(text) {
     cursorHi: bounds ? bounds.hi : null,
   })
   const report = validateAiResponse(src, catalog)
-  evidencePayload = {
+  evidencePayload = refreshEvidencePanelScores({
     ...(evidencePayload || {}),
     validation: report,
+    claims: report.claims || [],
     cost: formatCostMeter(costMeter.value),
-  }
+  })
   bumpEvidence()
 }
 

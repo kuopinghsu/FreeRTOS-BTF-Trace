@@ -10690,6 +10690,30 @@ def _filter_btf_lines(src: Iterable[str], lo: int, hi: int) -> Tuple[List[str], 
 # Persistent hover-info popup  (replaces QToolTip which auto-hides on scroll)
 # ---------------------------------------------------------------------------
 
+# Off-screen parent so the singleton is never a top-level Qt.Tool window.
+# On Windows, setParent(None) + Tool flags flashes a tiny native window at
+# (0, 0) — visible while Start Investigation auto-zooms / rebuilds the scene.
+_popup_holder: Optional[QWidget] = None
+
+
+def _popup_holder_widget() -> QWidget:
+    """Never-shown parent used to park the hover popup between uses."""
+    global _popup_holder
+    if _popup_holder is not None:
+        try:
+            _popup_holder.isHidden()
+            return _popup_holder
+        except RuntimeError:
+            _popup_holder = None
+    holder = QWidget()
+    holder.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    holder.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+    holder.setProperty("_btf_popup_holder", True)
+    holder.hide()
+    _popup_holder = holder
+    return holder
+
+
 class _InfoPopup(QLabel):
     """Frameless hover-info box — shown over a segment, hidden when the pointer leaves.
 
@@ -10699,23 +10723,33 @@ class _InfoPopup(QLabel):
     """
 
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(_popup_holder_widget())
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setTextFormat(Qt.TextFormat.RichText)
         self.setMargin(7)
         self._ss_applied_dark: Optional[bool] = None   # None = never applied
         self._ss_applied_font: Optional[int] = None
         self._ui_font_size: int = UI_FONT_SIZE
-        self._adopt_host(None)
+
+    def _park(self) -> None:
+        """Detach from a viewport without becoming a top-level Tool window."""
+        holder = _popup_holder_widget()
+        if self.parentWidget() is holder:
+            super().hide()
+            return
+        html = self.text()
+        super().hide()
+        self.setParent(holder)
+        self.setWindowFlags(Qt.WindowType.Widget)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        super().hide()
+        if html:
+            self.setText(html)
 
     def _adopt_host(self, host: Optional[QWidget]) -> None:
         """Reparent onto *host* as an overlay widget (not a native tooltip)."""
         if host is None or host is self:
-            self.setWindowFlags(
-                Qt.WindowType.Tool
-                | Qt.WindowType.FramelessWindowHint
-                | Qt.WindowType.WindowDoesNotAcceptFocus
-            )
+            self._park()
             return
         if isinstance(host, QGraphicsView):
             host = host.viewport()
@@ -10768,14 +10802,9 @@ class _InfoPopup(QLabel):
             self.setText("")
             # Detach from ephemeral hosts (viewports) so destroying a
             # TimelineView does not delete this singleton's C++ object.
-            if self.parentWidget() is not None:
-                self.setParent(None)
-                self.setWindowFlags(
-                    Qt.WindowType.Tool
-                    | Qt.WindowType.FramelessWindowHint
-                    | Qt.WindowType.WindowDoesNotAcceptFocus
-                )
-            super().hide()
+            # Park on a hidden holder — do not use Qt.Tool (Windows flashes
+            # a tiny native window at (0, 0) when those flags are applied).
+            self._park()
         except RuntimeError:
             pass
 
@@ -10791,21 +10820,48 @@ class _InfoPopup(QLabel):
         self.setText(html)
         self.adjustSize()
         if host is None:
-            app = QApplication.instance()
-            if app is not None:
-                host = app.widgetAt(QPoint(int(screen_pos.x()), int(screen_pos.y())))
-                if host is self:
-                    host = self.parentWidget()
+            host = self._fallback_show_host(screen_pos)
+        if host is self:
+            host = None
         self._adopt_host(host)
-        overlay = self.parentWidget() or host
+        overlay = self.parentWidget()
+        if overlay is not None and bool(overlay.property("_btf_popup_holder")):
+            overlay = None
         sp = QPoint(int(screen_pos.x()), int(screen_pos.y()))
         if overlay is not None:
             local = overlay.mapFromGlobal(sp)
             self.move(local.x() + 16, local.y() + 8)
         else:
             self.move(sp.x() + 16, sp.y() + 8)
+        if overlay is None:
+            # No on-screen parent: stay parked. Showing a parentless / Tool
+            # window is what flashes a tiny box on Windows.
+            return
         self.show()
         self.raise_()
+
+    @staticmethod
+    def _fallback_show_host(screen_pos: QPoint) -> Optional[QWidget]:
+        app = QApplication.instance()
+        if app is None:
+            return None
+        host = app.widgetAt(QPoint(int(screen_pos.x()), int(screen_pos.y())))
+        if host is not None and not bool(host.property("_btf_popup_holder")):
+            return host
+        win = app.activeWindow()
+        if win is not None and not bool(win.property("_btf_popup_holder")):
+            return win
+        for w in app.topLevelWidgets():
+            try:
+                if (
+                    w is not None
+                    and w.isVisible()
+                    and not bool(w.property("_btf_popup_holder"))
+                ):
+                    return w
+            except RuntimeError:
+                continue
+        return None
 
 _info_popup: Optional[_InfoPopup] = None
 
@@ -27159,8 +27215,21 @@ def _evidence_items_have_times(evidence: Any) -> bool:
     )
 
 
+def _claims_for_coverage(payload: Dict[str, Any]) -> Optional[List[dict]]:
+    """Claims from the payload or its validation report, if present."""
+    raw = payload.get("claims")
+    if isinstance(raw, list) and raw:
+        return [c for c in raw if isinstance(c, dict)]
+    validation = payload.get("validation")
+    if isinstance(validation, dict):
+        raw = validation.get("claims")
+        if isinstance(raw, list) and raw:
+            return [c for c in raw if isinstance(c, dict)]
+    return None
+
+
 def refresh_evidence_panel_scores(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Recompute heuristic score / quality fields on an Evidence panel payload."""
+    """Recompute heuristic score / quality / coverage on an Evidence panel payload."""
     out = dict(payload or {})
     score_data = compute_evidence_score(
         out.get("evidence"),
@@ -27181,6 +27250,18 @@ def refresh_evidence_panel_scores(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     out["evidence_quality"] = quality
     out["evidence_quality_bar"] = quality.get("bar")
+    coverage = compute_evidence_coverage(
+        claims=_claims_for_coverage(out),
+        evidence=out.get("evidence"),
+    )
+    out["coverage"] = coverage
+    out["evidence_coverage"] = coverage
+    case = out.get("investigation_case")
+    if isinstance(case, dict):
+        case = dict(case)
+        case["evidence_coverage"] = coverage
+        case["coverage"] = coverage
+        out["investigation_case"] = case
     return out
 
 
@@ -27193,9 +27274,9 @@ def merge_evidence_panel_payload(
     ``auto_investigate`` ends with planner tools (``rank_root_causes``,
     ``challenge_conclusion``, ``score_investigation``, …) that publish a
     conclusion but no ``jump:TIME`` rows. Without a merge, replacing the
-    Evidence panel collapses the heuristic score to 0% even though earlier
-    ``investigate`` / ``correlate_events`` / ``find_critical_path`` results
-    were strong.
+    Evidence panel collapses the heuristic score and Evidence Coverage to 0
+    even though earlier ``investigate`` / ``correlate_events`` /
+    ``find_critical_path`` results were strong.
     """
     if not isinstance(new, dict) or not new:
         return dict(prev) if isinstance(prev, dict) and prev else new
@@ -46582,7 +46663,9 @@ def create_ai_assistant_panel(
             )
             payload = dict(self._evidence_payload or {})
             payload["validation"] = report
+            payload["claims"] = report.get("claims") or []
             payload["cost"] = format_cost_meter(self._cost_meter)
+            payload = refresh_evidence_panel_scores(payload)
             if not payload.get("conclusion") and not payload.get("evidence"):
                 payload["conclusion"] = payload.get("conclusion") or ""
             self._evidence_payload = payload

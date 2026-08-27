@@ -1496,6 +1496,16 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("EVIDENCE_PANEL_TOOLS", inv_js)
         self.assertIn("def merge_evidence_panel_payload", inv_py)
         self.assertIn("export function mergeEvidencePanelPayload", inv_js)
+        self.assertIn("def refresh_evidence_panel_scores", inv_py)
+        self.assertIn("export function refreshEvidencePanelScores", inv_js)
+        self.assertIn("compute_evidence_coverage", inv_py)
+        self.assertIn("computeEvidenceCoverage", inv_js)
+        assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
+            encoding="utf-8")
+        panel = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(
+            encoding="utf-8")
+        self.assertIn("refresh_evidence_panel_scores(payload)", assist)
+        self.assertIn("refreshEvidencePanelScores({", panel)
         ctx_py = (BTF_ROOT / "btf_viewer_pkg/analysis_context.py").read_text(encoding="utf-8")
         ctx_js = (BTF_ROOT / "web/src/utils/analysisContext.js").read_text(encoding="utf-8")
         self.assertIn("def build_analysis_context", ctx_py)

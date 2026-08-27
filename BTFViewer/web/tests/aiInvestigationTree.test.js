@@ -404,6 +404,8 @@ describe('mergeEvidencePanelPayload', () => {
     assert.ok(merged.evidence_score >= 40 + 25)
     assert.equal(merged.conclusion, late.conclusion)
     assert.ok((merged.evidence || []).some(e => e.time != null))
+    assert.equal(Number(late.coverage?.percent) || 0, 0)
+    assert.ok((Number(merged.coverage?.percent) || 0) > 0)
   })
 
   it('keeps prior alternatives when late tool sends empty list', () => {
