@@ -226,7 +226,7 @@ def _in_ai_actions_bar(w: QWidget) -> bool:
     p: Optional[QWidget] = w
     while p is not None:
         if p.objectName() in (
-                "aiActions", "aiTemplates", "aiModes", "aiHeader", "aiMoreMenu",
+                "aiActions", "aiTemplates", "aiHeader", "aiMoreMenu",
                 "aiComposer", "aiGuide", "aiGuideStepper",
                 "aiIntentGroups", "aiIntentEmpty", "aiLogFrame",
                 "aiIntentChipRow", "aiIntentChip"):

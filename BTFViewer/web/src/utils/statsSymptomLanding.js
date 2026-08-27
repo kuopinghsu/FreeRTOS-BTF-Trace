@@ -1,5 +1,5 @@
 /**
- * Statistics symptom landing cards (UX-102).
+ * Statistics symptom landing cards.
  * Keep in sync with btf_viewer_pkg/stats_symptom_landing.py.
  */
 

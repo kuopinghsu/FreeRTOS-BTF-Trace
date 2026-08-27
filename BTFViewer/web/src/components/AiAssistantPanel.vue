@@ -415,63 +415,40 @@
       {{ planStatusText }}
     </div>
 
-    <div class="ai-modes">
+    <div class="ai-templates">
       <button
-        v-for="mid in investigationModes"
-        :key="mid"
+        v-for="t in visibleTemplates"
+        :key="t.id"
         type="button"
         class="ai-tpl-btn"
-        :title="investigationModePrompt(mid)"
-        :disabled="busy || !aiEnabled"
-        @click="onInvestigationMode(mid)"
+        :class="{
+          gray: templateDisabled(t),
+          suggested: t.id === suggestedPrimaryId && !templateDisabled(t),
+        }"
+        :title="templateTitle(t)"
+        :disabled="busy || !aiEnabled || templateDisabled(t)"
+        @click="onTemplate(t)"
       >
-        {{ investigationModeLabel(mid) }}
+        {{ t.label }}
       </button>
-    </div>
-
-    <div class="ai-templates">
-      <div
-        v-for="(row, ri) in primaryTemplateRows"
-        :key="'tpl-row-' + ri"
-        class="ai-tpl-row"
-      >
+      <div class="ai-more-wrap">
         <button
-          v-for="t in row"
-          :key="t.id"
+          ref="moreBtnEl"
           type="button"
           class="ai-tpl-btn"
-          :class="{
-            gray: templateDisabled(t),
-            suggested: t.id === suggestedPrimaryId && !templateDisabled(t),
-          }"
-          :title="templateTitle(t)"
-          :disabled="busy || !aiEnabled || templateDisabled(t)"
-          @click="onTemplate(t)"
+          title="Uses Analysis Findings for the current Statistics scope. Configure the endpoint in Settings → AI."
+          @click="toggleMore"
         >
-          {{ t.label }}
+          More templates…
         </button>
-        <div
-          v-if="ri === primaryTemplateRows.length - 1"
-          class="ai-more-wrap"
-        >
-          <button
-            ref="moreBtnEl"
-            type="button"
-            class="ai-tpl-btn"
-            title="Uses Analysis Findings for the current Statistics scope. Configure the endpoint in Settings → AI."
-            @click="toggleMore"
-          >
-            More templates…
-          </button>
-        </div>
       </div>
-      <p
-        v-if="inlinePrerequisite"
-        class="ai-tpl-prereq"
-      >
-        {{ inlinePrerequisite }}
-      </p>
     </div>
+    <p
+      v-if="inlinePrerequisite"
+      class="ai-tpl-prereq"
+    >
+      {{ inlinePrerequisite }}
+    </p>
     <Teleport to="body">
           <div
             v-if="moreOpen"
@@ -738,11 +715,12 @@ import {
   AI_COMPARE_TEMPLATE_ID,
   AI_RESPONSE_LANGUAGES,
   AI_SMP_ONLY_TEMPLATE_IDS,
+  AI_START_INVESTIGATION_ID,
   AI_TEMPLATE_MENU_GROUPS,
   AI_TEMPLATE_INTENT_GROUPS,
-  AI_TEMPLATE_PRIMARY_IDS,
   AI_TEMPLATE_QUESTIONS,
-  aiTemplatePrimaryRows,
+  recordAiTemplateUse,
+  visibleAiTemplates,
   suggestPrimaryAiTemplate,
   DEFAULT_AI_PRESET,
   DEFAULT_AI_RESPONSE_LANGUAGE,
@@ -867,10 +845,14 @@ import {
   formatAiMessageHtml,
 } from '../utils/aiMarkdown.js'
 import {
+  loadAiRecentTemplates,
   loadAiSplitBottom,
+  loadAiTemplateUsage,
   loadAiUserHistoricalKnowledge,
   loadAiUserInvestigationTemplates,
+  saveAiRecentTemplates,
   saveAiSplitBottom,
+  saveAiTemplateUsage,
   saveAiUserHistoricalKnowledge,
   saveAiUserInvestigationTemplates,
 } from '../utils/settingsStore.js'
@@ -909,15 +891,18 @@ const emit = defineEmits([
 ])
 
 const templates = AI_TEMPLATE_QUESTIONS
-const primaryTemplates = computed(() =>
-  AI_TEMPLATE_PRIMARY_IDS
+const recentTemplateIds = ref(loadAiRecentTemplates())
+const templateUsage = ref(loadAiTemplateUsage())
+/** Dynamic chip row: ≤5 applicable ids, ranked recent → most used → defaults. */
+const visibleTemplates = computed(() =>
+  visibleAiTemplates({
+    recent: recentTemplateIds.value,
+    usage: templateUsage.value,
+    isApplicable: id => !templateDisabled(templates.find(t => t.id === id)),
+    promoteId: suggestedPrimaryId.value,
+  })
     .map(id => templates.find(t => t.id === id))
     .filter(Boolean),
-)
-const primaryTemplateRows = computed(() =>
-  aiTemplatePrimaryRows().map(ids =>
-    ids.map(id => templates.find(t => t.id === id)).filter(Boolean),
-  ),
 )
 const templateMenuGroups = computed(() =>
   AI_TEMPLATE_MENU_GROUPS.map(g => ({
@@ -947,7 +932,6 @@ const intentContext = computed(() => {
     filters: filters.length ? filters.join(' · ') : 'None',
   }
 })
-const investigationModes = INVESTIGATION_MODES
 const userInvestigationTemplates = ref(loadAiUserInvestigationTemplates())
 const investigationTemplates = computed(() => [
   ...builtinInvestigationTemplates(),
@@ -966,7 +950,7 @@ const compareTabOptions = computed(() =>
   loadedTabs.value.map(t => ({ value: t.id, label: t.name })))
 const draft = ref('')
 const messages = ref([])
-/** Snapshot of context sent with the active turn (UX-111 View request context). */
+/** Snapshot of context sent with the active turn (View request context). */
 let lastRequestContext = null
 const busy = ref(false)
 const error = ref('')
@@ -1059,7 +1043,7 @@ function jumpGuideStage(sid) {
 }
 
 async function startInvestigation() {
-  const t = templates.find(x => x.id === 'auto_investigate')
+  const t = templates.find(x => x.id === AI_START_INVESTIGATION_ID)
   if (t) await onTemplate(t)
 }
 
@@ -1127,7 +1111,7 @@ function pinEvidenceLogEntry() {
   if (evidencePayload) syncEvidenceLogEntry(evidencePayload)
 }
 
-/** Append an Analysis finding to the Investigation Case (UX-104). */
+/** Append an Analysis finding to the Investigation Case. */
 function addFindingToInvestigationCase(finding) {
   if (!finding || typeof finding !== 'object') return false
   const prev = evidencePayload || {}
@@ -2151,8 +2135,22 @@ async function onInvestigationTemplate(tpl) {
   await send()
 }
 
+/**
+ * MRU + usage for one explicit template launch. Start Investigation, free-form
+ * prompts, and automatic planner actions never reach here.
+ */
+function recordTemplateUse(templateId) {
+  const next = recordAiTemplateUse(
+    templateId, recentTemplateIds.value, templateUsage.value)
+  recentTemplateIds.value = next.recent
+  templateUsage.value = next.usage
+  saveAiRecentTemplates(next.recent)
+  saveAiTemplateUsage(next.usage)
+}
+
 async function onTemplate(t) {
   activeTemplateId = t.id || ''
+  recordTemplateUse(t.id)
   if (isAgentTemplate(t.id)) {
     setInvestigationPlan(defaultInvestigationPlan(String(t.prompt || '').slice(0, 80)))
   } else {
@@ -2234,6 +2232,7 @@ async function askTemplate(templateId, promptOverride = '') {
   const prompt = promptOverride || t?.prompt || ''
   if (!prompt) return
   activeTemplateId = templateId || ''
+  recordTemplateUse(templateId)
   if (isAgentTemplate(templateId)) {
     setInvestigationPlan(defaultInvestigationPlan(String(prompt).slice(0, 80)))
   } else {
@@ -2801,26 +2800,16 @@ defineExpose({
   font-weight: 600;
   font-size: inherit;
 }
-.ai-modes {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
+/* One dynamic chip row: wraps to at most two lines at narrow width. */
 .ai-templates {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex-shrink: 0;
-}
-.ai-tpl-row {
-  display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
+  flex-shrink: 0;
 }
 .ai-tpl-btn {
+  max-width: 100%;
   min-width: 0;
   min-height: 28px; /* Desktop `_AI_CHIP_MIN_HEIGHT` */
   padding: 4px 8px;

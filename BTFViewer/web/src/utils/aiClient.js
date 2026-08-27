@@ -77,23 +77,147 @@ export const AI_COMPARE_TEMPLATE_ID = 'compare'
 // with btf_viewer_pkg/ai_assistant.py AI_SMP_ONLY_TEMPLATE_IDS.
 export const AI_SMP_ONLY_TEMPLATE_IDS = new Set(['migrations', 'balance'])
 
-/** Always-visible wrapping chips. Keep in sync with btf_viewer_pkg/ai_assistant.py. */
-export const AI_TEMPLATE_PRIMARY_IDS = [
+/** Dynamic template chips shown next to More templates… (Start Investigation is separate). */
+export const AI_TEMPLATE_MRU_MAX = 5
+
+/** Start Investigation runs this template; it never enters MRU/usage ranking. */
+export const AI_START_INVESTIGATION_ID = 'auto_investigate'
+
+/**
+ * Workflow-aware fallback used when MRU and usage counts are both empty.
+ * Keep in sync with btf_viewer_pkg/ai_assistant.py AI_DEFAULT_TEMPLATE_ORDER.
+ */
+export const AI_DEFAULT_TEMPLATE_ORDER = [
   'investigate',
-  'explain_finding',
   'verify',
+  'explain_finding',
+  'triage',
+  'explain_region',
+  'task_profile',
+  'latency',
+  'migrations',
+  'balance',
+  'priority',
+  'wcet',
+  'tick',
+  'deadlines',
+  'what_if',
+  'optimize',
+  'compare',
+  'diagnostic_report',
+  'findings',
+  'root_cause',
 ]
 
-/** Last primary id shares a row with More templates… (`.ai-tpl-row`). */
-export function aiTemplatePrimaryRows(ids = AI_TEMPLATE_PRIMARY_IDS) {
-  const seq = [...ids]
-  if (seq.length <= 1) return [seq, []]
-  return [seq.slice(0, -1), seq.slice(-1)]
+/** Resolve an id against the template registry; '' when unknown. */
+function knownAiTemplateId(id) {
+  const want = String(id || '').trim()
+  if (!want) return ''
+  return AI_TEMPLATE_QUESTIONS.some(t => t.id === want) ? want : ''
+}
+
+/** Recent template ids: unique, known, newest first, Start Investigation excluded. */
+export function sanitizeRecentAiTemplates(items) {
+  const out = []
+  const seen = new Set()
+  for (const raw of Array.isArray(items) ? items : []) {
+    if (out.length >= AI_TEMPLATE_MRU_MAX) break
+    const id = knownAiTemplateId(raw)
+    if (!id || id === AI_START_INVESTIGATION_ID || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
+/** Per-template launch counts: known ids with a positive integer count. */
+export function sanitizeAiTemplateUsage(counts) {
+  const out = {}
+  if (!counts || typeof counts !== 'object') return out
+  for (const [key, val] of Object.entries(counts)) {
+    const id = knownAiTemplateId(key)
+    if (!id) continue
+    const n = Math.trunc(Number(val))
+    if (!Number.isFinite(n) || n <= 0) continue
+    out[id] = n
+  }
+  return out
 }
 
 /**
- * Suggest which primary template fits the current viewer state (UX-110).
- * Returns an id from AI_TEMPLATE_PRIMARY_IDS.
+ * Record one explicit template launch. Returns the new `{ recent, usage }`;
+ * Start Investigation and unknown ids leave both unchanged.
+ */
+export function recordAiTemplateUse(templateId, recent = [], usage = {}) {
+  const cleanRecent = sanitizeRecentAiTemplates(recent)
+  const cleanUsage = sanitizeAiTemplateUsage(usage)
+  const id = knownAiTemplateId(templateId)
+  if (!id || id === AI_START_INVESTIGATION_ID) {
+    return { recent: cleanRecent, usage: cleanUsage }
+  }
+  return {
+    recent: [id, ...cleanRecent.filter(x => x !== id)].slice(0, AI_TEMPLATE_MRU_MAX),
+    usage: { ...cleanUsage, [id]: (cleanUsage[id] || 0) + 1 },
+  }
+}
+
+/** Template ids by descending launch count, ties broken by recency then id. */
+export function mostUsedTemplateIds(usage = {}, recent = []) {
+  const counts = sanitizeAiTemplateUsage(usage)
+  const order = sanitizeRecentAiTemplates(recent)
+  const rank = (id) => {
+    const i = order.indexOf(id)
+    return i < 0 ? Number.MAX_SAFE_INTEGER : i
+  }
+  return Object.keys(counts).sort((a, b) => {
+    if (counts[b] !== counts[a]) return counts[b] - counts[a]
+    if (rank(a) !== rank(b)) return rank(a) - rank(b)
+    return a < b ? -1 : (a > b ? 1 : 0)
+  })
+}
+
+/**
+ * The dynamic template row: up to AI_TEMPLATE_MRU_MAX applicable ids ranked
+ * recent → most used → AI_DEFAULT_TEMPLATE_ORDER. `promoteId` may pull one
+ * strongly context-relevant template to the front when it is otherwise absent.
+ */
+export function visibleAiTemplates({
+  recent = [],
+  usage = {},
+  isApplicable = null,
+  promoteId = '',
+} = {}) {
+  const usable = (id) => {
+    if (!id || id === AI_START_INVESTIGATION_ID) return false
+    if (typeof isApplicable !== 'function') return true
+    try {
+      return !!isApplicable(id)
+    } catch {
+      return false
+    }
+  }
+  const out = []
+  const seen = new Set()
+  const append = (ids) => {
+    for (const raw of ids) {
+      if (out.length >= AI_TEMPLATE_MRU_MAX) return
+      const id = knownAiTemplateId(raw)
+      if (!id || seen.has(id) || !usable(id)) continue
+      seen.add(id)
+      out.push(id)
+    }
+  }
+  append(sanitizeRecentAiTemplates(recent))
+  append(mostUsedTemplateIds(usage, recent))
+  append(AI_DEFAULT_TEMPLATE_ORDER)
+  const promote = knownAiTemplateId(promoteId)
+  if (promote && !seen.has(promote) && usable(promote)) out.unshift(promote)
+  return out.slice(0, AI_TEMPLATE_MRU_MAX)
+}
+
+/**
+ * Suggest which template fits the current viewer state. Used for the
+ * suggested outline and as the single `promoteId` for visibleAiTemplates.
  */
 export function suggestPrimaryAiTemplate({
   findingId = '',
@@ -114,14 +238,14 @@ export function suggestPrimaryAiTemplate({
   return 'investigate'
 }
 
-/** Overflow menu groups for templates not in AI_TEMPLATE_PRIMARY_IDS. */
+/** More templates… groups — must cover every AI_TEMPLATE_QUESTIONS id. */
 export const AI_TEMPLATE_MENU_GROUPS = [
   { label: 'Start', ids: ['findings', 'triage', 'explain_region', 'auto_investigate'] },
   {
     label: 'Investigate',
     ids: [
-      'task_profile', 'latency', 'wcet', 'root_cause',
-      'tick', 'priority', 'deadlines',
+      'investigate', 'explain_finding', 'verify', 'root_cause',
+      'task_profile', 'latency', 'wcet', 'tick', 'priority', 'deadlines',
     ],
   },
   { label: 'SMP', ids: ['migrations', 'balance'] },

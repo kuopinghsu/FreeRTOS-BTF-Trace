@@ -4566,7 +4566,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._trace_quality_details.setContentsMargins(12, 8, 12, 10)
         self._trace_quality_details.setVisible(False)
 
-        # UX-107: Evidence inspector bar (Web parity).
+        # Evidence inspector bar (Web parity).
         self._evidence_history = empty_evidence_history()
         self._evidence_inspector_bar = QWidget()
         self._evidence_inspector_bar.setObjectName("evidence_inspector_bar")
@@ -4587,7 +4587,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._evidence_inspector_text.setWordWrap(True)
         _ei_lay.addWidget(self._evidence_inspector_text, 1)
 
-        # UX-106: offer Enable Limit to C1–Cn when ≥2 cursors and scope is off.
+        # Offer Enable Limit to C1–Cn when ≥2 cursors and scope is off.
         # Web parity: left-packed flex row (justify-content: flex-start).
         self._cursor_scope_banner = QWidget()
         self._cursor_scope_banner.setObjectName("cursor_scope_banner")
@@ -6365,7 +6365,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         keys = ["enabled", "preset", "response_language", "auto_apply", "mcp_log",
                 "user_investigation_templates", "user_historical_knowledge",
                 "redact_task_names", "trace_sensitive", "extra_presets",
-                "split_bottom", "investigation_session", "context_mode"]
+                "split_bottom", "investigation_session", "context_mode",
+                "recent_templates", "template_usage"]
         pids = [pid for pid, _label, _base, _model in AI_PRESETS]
         for pid in extra_ids:
             if pid and pid not in pids:

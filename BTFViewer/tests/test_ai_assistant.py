@@ -32,7 +32,9 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     ai_error_is_retryable,
     call_ai_with_retries,
     AI_TEMPLATE_MENU_GROUPS,
-    AI_TEMPLATE_PRIMARY_IDS,
+    AI_DEFAULT_TEMPLATE_ORDER,
+    AI_START_INVESTIGATION_ID,
+    AI_TEMPLATE_MRU_MAX,
     AI_TEMPLATE_QUESTIONS,
     DEFAULT_AI_BASE_URL,
     DEFAULT_AI_PRESET,
@@ -48,6 +50,15 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     ai_jump_annotation_note,
     cursor_region_bounds,
     extract_jump_times,
+    dump_ai_template_usage,
+    dump_recent_ai_templates,
+    parse_ai_template_usage,
+    parse_recent_ai_templates,
+    record_ai_template_use,
+    sanitize_ai_template_usage,
+    sanitize_recent_ai_templates,
+    suggest_primary_ai_template,
+    visible_ai_templates,
     format_ai_conversation_html,
     format_ai_conversation_markdown,
     format_ai_conversation_text,
@@ -120,33 +131,68 @@ class AiAssistantHelpersTests(unittest.TestCase):
                 break
         self.assertEqual(list(AI_TEMPLATE_QUESTIONS), web)
 
-    def test_template_primary_ids_match_web_and_cover_all(self) -> None:
-        """Primary chips + More groups stay in sync with aiClient.js."""
+    def test_template_mru_and_more_groups_cover_all(self) -> None:
+        """More groups cover every template; MRU helpers match aiClient.js."""
         import re
 
         all_ids = [t[0] for t in AI_TEMPLATE_QUESTIONS]
         menu_ids = [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids]
+        self.assertEqual(sorted(menu_ids), sorted(all_ids))
+        self.assertEqual(len(menu_ids), len(set(menu_ids)))
+        self.assertEqual(AI_TEMPLATE_MRU_MAX, 5)
+        self.assertEqual(AI_START_INVESTIGATION_ID, "auto_investigate")
+        self.assertIn("investigate", AI_DEFAULT_TEMPLATE_ORDER)
+
+        recent, usage = record_ai_template_use(
+            AI_START_INVESTIGATION_ID, [], {})
+        self.assertEqual(recent, [])
+        self.assertEqual(usage, {})
+        recent, usage = record_ai_template_use(
+            "migrations", ["investigate"], {"investigate": 2})
+        self.assertEqual(recent, ["migrations", "investigate"])
+        self.assertEqual(usage["migrations"], 1)
+        self.assertEqual(usage["investigate"], 2)
         self.assertEqual(
-            list(AI_TEMPLATE_PRIMARY_IDS),
-            ["investigate", "explain_finding", "verify"],
+            sanitize_recent_ai_templates(
+                ["migrations", "auto_investigate", "bogus", "migrations"]),
+            ["migrations"],
         )
-        self.assertEqual(sorted(list(AI_TEMPLATE_PRIMARY_IDS) + menu_ids), sorted(all_ids))
-        self.assertFalse(set(AI_TEMPLATE_PRIMARY_IDS) & set(menu_ids))
+        self.assertEqual(
+            sanitize_ai_template_usage(
+                {"investigate": 3, "bogus": 9, "migrations": 0}),
+            {"investigate": 3},
+        )
+        self.assertEqual(
+            parse_recent_ai_templates(dump_recent_ai_templates(recent)),
+            recent,
+        )
+        self.assertEqual(
+            parse_ai_template_usage(dump_ai_template_usage(usage)),
+            usage,
+        )
+        self.assertEqual(
+            visible_ai_templates(recent=[], usage={}),
+            [
+                tid for tid in AI_DEFAULT_TEMPLATE_ORDER[:AI_TEMPLATE_MRU_MAX]
+                if tid != AI_START_INVESTIGATION_ID
+            ],
+        )
+        self.assertEqual(
+            visible_ai_templates(
+                recent=["migrations", "compare"],
+                usage={"verify": 9},
+                is_applicable=lambda tid: tid != "compare",
+            ),
+            ["migrations", "verify", "investigate", "explain_finding", "triage"],
+        )
 
         js = (BTF_ROOT / "web/src/utils/aiClient.js").read_text(encoding="utf-8")
-        prim = re.search(
-            r"export const AI_TEMPLATE_PRIMARY_IDS = \[([^\]]+)\]", js, re.S)
-        self.assertIsNotNone(prim)
-        web_primary = re.findall(r"'([^']+)'", prim.group(1))
-        self.assertEqual(list(AI_TEMPLATE_PRIMARY_IDS), web_primary)
+        self.assertIn("export function visibleAiTemplates", js)
+        self.assertIn("export function recordAiTemplateUse", js)
+        self.assertIn("export const AI_DEFAULT_TEMPLATE_ORDER", js)
+        self.assertNotIn("AI_TEMPLATE_PRIMARY_IDS", js)
+        self.assertNotIn("aiTemplatePrimaryRows", js)
 
-        from btf_viewer_pkg.ai_assistant import ai_template_primary_rows
-        lead, last = ai_template_primary_rows()
-        self.assertEqual(list(lead), ["investigate", "explain_finding"])
-        self.assertEqual(list(last), ["verify"])
-        self.assertIn("export function aiTemplatePrimaryRows", js)
-
-        from btf_viewer_pkg.ai_assistant import suggest_primary_ai_template
         self.assertEqual(suggest_primary_ai_template(finding_id="F1"), "verify")
         self.assertEqual(
             suggest_primary_ai_template(

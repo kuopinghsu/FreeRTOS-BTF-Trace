@@ -1,4 +1,4 @@
-"""Cursor scoping workflow helpers (UX-106).
+"""Cursor scoping workflow helpers.
 
 Lockstep with ``web/src/utils/cursorScope.js``.
 """

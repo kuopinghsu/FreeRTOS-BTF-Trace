@@ -1,4 +1,4 @@
-"""Statistics symptom landing cards (UX-102).
+"""Statistics symptom landing cards.
 
 Lockstep with ``web/src/utils/statsSymptomLanding.js``.
 """

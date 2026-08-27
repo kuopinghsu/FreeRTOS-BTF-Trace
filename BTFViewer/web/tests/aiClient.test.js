@@ -7,10 +7,15 @@ import {
   AI_PRESET_OLLAMA,
   AI_PRESET_OPENAI,
   AI_TEMPLATE_QUESTIONS,
-  AI_TEMPLATE_PRIMARY_IDS,
   AI_TEMPLATE_MENU_GROUPS,
-  aiTemplatePrimaryRows,
+  AI_DEFAULT_TEMPLATE_ORDER,
+  AI_START_INVESTIGATION_ID,
+  AI_TEMPLATE_MRU_MAX,
+  recordAiTemplateUse,
+  sanitizeRecentAiTemplates,
+  sanitizeAiTemplateUsage,
   suggestPrimaryAiTemplate,
+  visibleAiTemplates,
   DEFAULT_AI_BASE_URL,
   DEFAULT_AI_PRESET,
   aiJumpAnnotationNote,
@@ -420,21 +425,44 @@ describe('AI endpoint helpers', () => {
     assert.match(migrations.prompt, /cache-line transfer/)
   })
 
-  it('primary chips plus More groups cover every template id', () => {
+  it('More groups cover every template id; Start Investigation stays out of MRU', () => {
     const menu = AI_TEMPLATE_MENU_GROUPS.flatMap(g => g.ids)
-    const all = [...AI_TEMPLATE_PRIMARY_IDS, ...menu]
     assert.deepEqual(
-      [...all].sort(),
+      [...menu].sort(),
       AI_TEMPLATE_QUESTIONS.map(t => t.id).sort(),
     )
-    assert.equal(new Set(all).size, all.length)
-    assert.deepEqual(AI_TEMPLATE_PRIMARY_IDS, [
-      'investigate', 'explain_finding', 'verify',
-    ])
-    assert.deepEqual(aiTemplatePrimaryRows(), [
-      ['investigate', 'explain_finding'],
-      ['verify'],
-    ])
+    assert.equal(new Set(menu).size, menu.length)
+    assert.equal(AI_TEMPLATE_MRU_MAX, 5)
+    assert.equal(AI_START_INVESTIGATION_ID, 'auto_investigate')
+    assert.ok(AI_DEFAULT_TEMPLATE_ORDER.includes('investigate'))
+    const recorded = recordAiTemplateUse(AI_START_INVESTIGATION_ID, [], {})
+    assert.deepEqual(recorded.recent, [])
+    assert.deepEqual(recorded.usage, {})
+    const after = recordAiTemplateUse('migrations', ['investigate'], { investigate: 2 })
+    assert.deepEqual(after.recent, ['migrations', 'investigate'])
+    assert.equal(after.usage.migrations, 1)
+    assert.equal(after.usage.investigate, 2)
+    assert.deepEqual(
+      sanitizeRecentAiTemplates(['migrations', 'auto_investigate', 'bogus', 'migrations']),
+      ['migrations'],
+    )
+    assert.deepEqual(sanitizeAiTemplateUsage({ investigate: 3, bogus: 9, migrations: 0 }), {
+      investigate: 3,
+    })
+    assert.deepEqual(
+      visibleAiTemplates({ recent: [], usage: {} }),
+      AI_DEFAULT_TEMPLATE_ORDER.slice(0, AI_TEMPLATE_MRU_MAX).filter(
+        id => id !== AI_START_INVESTIGATION_ID,
+      ),
+    )
+    assert.deepEqual(
+      visibleAiTemplates({
+        recent: ['migrations', 'compare'],
+        usage: { verify: 9 },
+        isApplicable: id => id !== 'compare',
+      }),
+      ['migrations', 'verify', 'investigate', 'explain_finding', 'triage'],
+    )
   })
 
   it('suggestPrimaryAiTemplate prefers verify / explain / investigate', () => {
@@ -458,9 +486,13 @@ describe('AI endpoint helpers', () => {
     const dlg = readFileSync(
       new URL('../src/components/AnalysisFindingsDialog.vue', import.meta.url), 'utf8')
     const plan = panel.indexOf('class="ai-plan-status"')
-    const modes = panel.indexOf('class="ai-modes"')
     const tpls = panel.indexOf('class="ai-templates"')
-    assert.ok(plan >= 0 && modes > plan && tpls > modes)
+    assert.ok(plan >= 0 && tpls > plan)
+    assert.doesNotMatch(panel, /class="ai-modes"/)
+    assert.doesNotMatch(panel, /investigationModes/)
+    assert.doesNotMatch(panel, /primaryTemplateRows/)
+    assert.match(panel, /visibleTemplates/)
+    assert.match(panel, /recordAiTemplateUse|recordTemplateUse/)
     assert.match(panel, /More templates…/)
     assert.match(panel, /Investigations/)
     assert.ok(panel.indexOf('Save as template…') > panel.indexOf('Investigations'))
@@ -468,9 +500,7 @@ describe('AI endpoint helpers', () => {
       INVESTIGATION_MODES.map(m => INVESTIGATION_MODE_LABELS[m]),
       ['Quick', 'Diagnose', 'Compare', 'Optimize', 'Report'],
     )
-    assert.match(panel, /v-for="mid in investigationModes"/)
-    assert.match(panel, /v-for="\(row, ri\) in primaryTemplateRows"/)
-    assert.match(panel, /v-for="t in row"/)
+    assert.match(panel, /v-for="t in visibleTemplates"/)
     assert.match(panel, /v-for="group in templateMenuGroups"/)
     assert.match(panel, /class="ai-more-col"/)
     assert.match(panel, /<Teleport to="body">/)

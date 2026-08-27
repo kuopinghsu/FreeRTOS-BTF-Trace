@@ -2440,7 +2440,7 @@ def tool_mutates_gui(name: str) -> bool:
 
 
 def is_navigation_tool(name: str) -> bool:
-    """True for focus/zoom/highlight tools (UX-113 navigation-only)."""
+    """True for focus/zoom/highlight tools (navigation-only)."""
     return str(name or "") in (
         AI_TOOL_SET_CURSORS,
         AI_TOOL_ZOOM_TO_RANGE,
@@ -2448,7 +2448,7 @@ def is_navigation_tool(name: str) -> bool:
     )
 
 
-# Apply-card action classes (UX-113). Keep labels stable for Desktop/Web lockstep.
+# Apply-card action classes. Keep labels stable for Desktop/Web lockstep.
 VIEWER_TOOL_ACTION_NAVIGATION = "Navigation"
 VIEWER_TOOL_ACTION_SCOPE = "Scope"
 VIEWER_TOOL_ACTION_FILTER = "Filter"
@@ -2467,7 +2467,7 @@ VIEWER_TOOL_ACTION_CLASSES: Tuple[str, ...] = (
 
 
 def classify_viewer_tool(name: str) -> str:
-    """Classify a tool for Apply-card labels (UX-113)."""
+    """Classify a tool for Apply-card labels."""
     n = str(name or "")
     if is_navigation_tool(n) or n in (
         AI_TOOL_SET_VIEW_MODE,

@@ -1,4 +1,4 @@
-"""Analysis Context strip + stale-result helpers (UX-001 / UX-002).
+"""Analysis Context strip + stale-result helpers.
 
 Lockstep with ``web/src/utils/analysisContext.js``.
 """

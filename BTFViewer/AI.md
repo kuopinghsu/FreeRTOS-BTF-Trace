@@ -115,7 +115,7 @@ AI can explain evidence, find correlations, rank possible causes, challenge assu
 - Open the **AI Assistant** panel from the panel tabs or **Ctrl+K**. If it is hidden, enable **Settings → Panels → AI Assistant panel**.
 - An empty panel shows the current **Trace**, **Scope**, and **Filters**, a question box, and actions grouped by purpose. **Start Investigation** shows the workflow line, a short blurb, and the current Finding/Scope summary, then begins a guided investigation from the available findings.
 - The stepper tracks **Triage → Scope → Investigate → Verify → Experiment → Compare**. Select a completed stage to return to its output.
-- Primary actions are **Investigate**, **Explain evidence**, and **Verify finding**. A suggested primary is outlined from the current finding, cursors, selected task, and guide stage. Unmet Compare / SMP prerequisites show as an inline line under the chips. **More templates…** holds Analysis Findings, Explain region, Auto investigate, Compare, Report, What-if, Optimize, and specialist checks (latency, WCET, migrations, and so on).
+- **Start Investigation** stays separate from the template row. Up to five dynamic shortcuts rank recent applicable templates, then most-used, then a workflow default order (Investigate, Verify finding, Explain evidence, …). A suggested template may be outlined from the current finding, cursors, selected task, and guide stage. Unmet Compare / SMP prerequisites show as an inline line under the chips. **More templates…** always lists every template (Analysis Findings, Explain region, Auto investigate, Compare, Report, What-if, Optimize, specialist checks, and so on). Recent/usage history is local only (Web `localStorage`, Desktop `.rc`) and is not synced across hosts; **Clear** does not erase it.
 - The composer shows a collapsed **Context** one-liner (`Stage · Scope · Focus · Mode · Privacy`). Expand it for Trace, Scope, Filters, findings, language, endpoint, and usage. Each Web assistant reply can open **View request context**.
 - The header provides **Clear**, **Language…**, and **Settings…**. **Clear** removes the conversation, usage summary, and current investigation state.
 - The usage bar shows **Context: Compact · 4.6k tok · 3 tools · 12s** (mode, tokens, tools, and model time). **Settings → AI → Context** chooses Compact, Balanced (default), or Full Evidence. Confidence comes from evidence, not from the mode.
@@ -1232,7 +1232,7 @@ make -C BTFViewer ai-test
 # or: python builds/btf_viewer.py ai-test --dataset tests/ai --fail-under 70
 ```
 
-Modes (Quick / Diagnose / Compare / Optimize / Report) map onto existing templates; they do not add new tools. Always confirm on the timeline.
+Host investigation modes (quick / diagnose / compare / optimize / report) still map onto existing templates internally; they are not a permanent chip row. Reach the same workflows via the dynamic shortcuts or **More templates…**. Always confirm on the timeline.
 
 ---
 
@@ -1364,7 +1364,7 @@ The shipped loop stays **Triage → Investigate → Verify → Correlate → Cri
 
 The viewer uses one Case, Evidence, planner, causal, tool, and Mermaid implementation. After AI UI changes, rebuild the distributed viewer artifacts with the project build targets.
 
-**UI lockstep:** mode chips wrap. Primary templates are two rows: **Investigate** / **Explain evidence**, then **Verify finding** + **More templates…**. Suggested primary is outlined; Compare/SMP prerequisites show inline. Chip min-height 28px, disabled chips/menu items `#8a96a8`. Findings **Investigate…** uses the same outline style as the other Analysis footer buttons (not accent/primary). **More** templates use the same groups in a 2-column overlay. Findings **Save recipe…** and **Story…** stay on that dialog. Trace Compare opens from toolbar **Compare**, not the Statistics footer. Composer **Context** row is collapsed by default; Apply cards label Navigation/Scope/Filter/Annotation/Export/Calculation; **Undo** restores Scope and Filters.
+**UI lockstep:** **Start Investigation** is separate. The template row shows up to five ranked shortcuts plus **More templates…** (flex-wrap, at most two lines). Suggested primary is outlined; Compare/SMP prerequisites show inline. Chip min-height 28px, disabled chips/menu items `#8a96a8`. Findings **Investigate…** uses the same outline style as the other Analysis footer buttons (not accent/primary). **More** templates use the same groups in a 2-column overlay. Findings **Save recipe…** and **Story…** stay on that dialog. Trace Compare opens from toolbar **Compare**, not the Statistics footer. Composer **Context** row is collapsed by default; Apply cards label Navigation/Scope/Filter/Annotation/Export/Calculation; **Undo** restores Scope and Filters.
 
 The `ai-test` CLI and offline benchmark use the same `tests/ai` fixtures (tracked `.btf` stubs + `dataset.json`). Live runs accept `--context-mode` and `--compare-context` (see [Context mode benchmarking](#context-mode-benchmarking)).
 

@@ -28,14 +28,16 @@ from PySide6.QtWidgets import (  # noqa: E402
 )
 
 from btf_viewer_pkg.ai_assistant import (  # noqa: E402
+    AI_DEFAULT_TEMPLATE_ORDER,
     AI_TEMPLATE_MENU_GROUPS,
-    AI_TEMPLATE_PRIMARY_IDS,
+    AI_TEMPLATE_MRU_MAX,
     AI_TEMPLATE_QUESTIONS,
     ai_entry_role,
     ai_entry_text,
     _MermaidZoomDialog,
     _qtextline_cursor_x,
     create_ai_assistant_panel,
+    visible_ai_templates,
 )
 from btf_viewer_pkg.ai_mermaid import mermaid_zoom_token  # noqa: E402
 from btf_viewer_pkg.ai_tools import (  # noqa: E402
@@ -835,14 +837,14 @@ class AiPanelUiTests(unittest.TestCase):
         })
         self.assertEqual(panel._plan_view.text(), "Investigation  0/1  Investigate")
 
-    def test_primary_chips_and_more_menu_cover_all_templates(self) -> None:
+    def test_dynamic_chips_and_more_menu_cover_all_templates(self) -> None:
         panel = self._panel()
-        primary_labels = [b.text() for b in panel._template_btns]
-        expected_primary = [
+        expected = [
             next(lab for tid, lab, _p in AI_TEMPLATE_QUESTIONS if tid == pid)
-            for pid in AI_TEMPLATE_PRIMARY_IDS
+            for pid in visible_ai_templates(recent=[], usage={})
         ]
-        self.assertEqual(primary_labels, expected_primary)
+        self.assertEqual([b.text() for b in panel._template_btns], expected)
+        self.assertLessEqual(len(panel._template_btns), AI_TEMPLATE_MRU_MAX)
         from PySide6.QtWidgets import QWidget
         tpl = panel.findChild(QWidget, "aiTemplates")
         self.assertIsNotNone(tpl)
@@ -851,16 +853,17 @@ class AiPanelUiTests(unittest.TestCase):
             if b.text().startswith("More templates")
         ]
         self.assertEqual(len(more), 1)
-        self.assertEqual(
-            panel._template_btns[-1].text().replace("&", ""),
-            "Verify finding",
-        )
         self.assertEqual(panel._more_btn.text().replace("&", ""), "More templates…")
         menu_ids = [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids]
         self.assertEqual(set(panel._template_actions), set(menu_ids))
-        reachable = set(AI_TEMPLATE_PRIMARY_IDS) | set(panel._template_actions)
-        self.assertEqual(reachable, {t[0] for t in AI_TEMPLATE_QUESTIONS})
-        self.assertEqual(len(reachable), 20)
+        self.assertEqual(set(menu_ids), {t[0] for t in AI_TEMPLATE_QUESTIONS})
+        self.assertEqual(len(menu_ids), 20)
+        self.assertIsNone(panel.findChild(QWidget, "aiModes"))
+        self.assertEqual(panel._mode_btns, [])
+        self.assertEqual(
+            panel._template_btn_ids,
+            list(AI_DEFAULT_TEMPLATE_ORDER[:AI_TEMPLATE_MRU_MAX]),
+        )
 
     def test_template_tooltips_wrap_for_qt(self) -> None:
         from btf_viewer_pkg.ai_assistant import qt_wrap_tooltip
@@ -990,17 +993,12 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertEqual(ai_entry_role(panel._entries[-2]), "assistant")
         self.assertIn("Final English summary", ai_entry_text(panel._entries[-2]))
 
-    def test_investigation_mode_chips_and_hypothesis_links(self) -> None:
+    def test_investigation_mode_helpers_and_hypothesis_links(self) -> None:
         from btf_viewer_pkg.ai_case import enrich_hypotheses
 
         panel = self._panel()
-        host = panel.findChild(QWidget, "aiModes")
-        self.assertIsNotNone(host)
-        labels = [b.text().replace("&", "") for b in host.findChildren(QPushButton)]
-        self.assertEqual(
-            labels[:5],
-            ["Quick", "Diagnose", "Compare", "Optimize", "Report"],
-        )
+        self.assertIsNone(panel.findChild(QWidget, "aiModes"))
+        self.assertEqual(panel._mode_btns, [])
         save_act = getattr(panel, "_save_investigation_template_action", None)
         self.assertIsNotNone(save_act)
         self.assertIn("Save as template", save_act.text().replace("&", ""))
@@ -1049,20 +1047,12 @@ class AiPanelUiTests(unittest.TestCase):
         send.assert_called_once()
         interp.assert_not_called()
 
-    def test_template_ux_busy_disables_modes_and_investigations(self) -> None:
-        from btf_viewer_pkg.ai_assistant import (
-            AI_TEMPLATE_MENU_GROUPS, AI_TEMPLATE_PRIMARY_IDS,
-        )
-        from btf_viewer_pkg.ai_case import (
-            INVESTIGATION_MODE_LABELS, INVESTIGATION_MODES,
-            builtin_investigation_templates,
-        )
+    def test_template_ux_busy_disables_chips_and_investigations(self) -> None:
+        from btf_viewer_pkg.ai_assistant import AI_TEMPLATE_MENU_GROUPS
+        from btf_viewer_pkg.ai_case import builtin_investigation_templates
 
         panel = self._panel()
-        self.assertEqual(
-            [b.text().replace("&", "") for b in panel._mode_btns],
-            [INVESTIGATION_MODE_LABELS[m] for m in INVESTIGATION_MODES],
-        )
+        self.assertEqual(panel._mode_btns, [])
         self.assertEqual(
             list(panel._template_actions),
             [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids],
@@ -1075,39 +1065,33 @@ class AiPanelUiTests(unittest.TestCase):
             [b.text().replace("&", "") for b in panel._template_btns],
             [
                 next(lab for tid, lab, _p in AI_TEMPLATE_QUESTIONS if tid == pid)
-                for pid in AI_TEMPLATE_PRIMARY_IDS
+                for pid in visible_ai_templates(recent=[], usage={})
             ],
         )
         panel._set_busy(True)
-        self.assertFalse(panel._mode_btns[0].isEnabled())
         self.assertFalse(panel._template_btns[0].isEnabled())
         inv_act = next(iter(panel._investigation_template_actions.values()))
         self.assertFalse(inv_act.isEnabled())
         self.assertFalse(panel._save_investigation_template_action.isEnabled())
         panel._set_busy(False)
-        self.assertTrue(panel._mode_btns[0].isEnabled())
         self.assertTrue(panel._template_btns[0].isEnabled())
         self.assertTrue(inv_act.isEnabled())
         self.assertTrue(panel._save_investigation_template_action.isEnabled())
 
-    def test_mode_and_template_chips_wrap_like_web(self) -> None:
+    def test_template_chips_wrap_like_web(self) -> None:
         from PySide6.QtWidgets import QSizePolicy
 
         from btf_viewer_pkg.view import _in_ai_actions_bar, _relax_widget_tree
 
         panel = self._panel()
-        modes = panel.findChild(QWidget, "aiModes")
+        self.assertIsNone(panel.findChild(QWidget, "aiModes"))
         tpls = panel.findChild(QWidget, "aiTemplates")
-        self.assertTrue(modes.layout().hasHeightForWidth())
         self.assertTrue(tpls.layout().hasHeightForWidth())
-        mode_h_wide = modes.layout().heightForWidth(800)
-        mode_h_narrow = modes.layout().heightForWidth(180)
-        self.assertGreater(mode_h_narrow, mode_h_wide)
-        # Forced wrap: Auto investigate + More stay on the last row even when wide.
-        self.assertGreaterEqual(tpls.layout().heightForWidth(800), 56)
+        # One row at normal width; may wrap to two at narrow width.
         tpl_h_wide = tpls.layout().heightForWidth(800)
         tpl_h_narrow = tpls.layout().heightForWidth(180)
-        self.assertGreater(tpl_h_narrow, tpl_h_wide)
+        self.assertLessEqual(tpl_h_wide, 40)
+        self.assertGreaterEqual(tpl_h_narrow, tpl_h_wide)
 
         headings = [
             "Start", "Investigate", "SMP", "Compare",
@@ -1133,7 +1117,7 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertGreater(panel._more_menu.height(), 200)
 
         _relax_widget_tree(panel)
-        for btn in panel._mode_btns + panel._template_btns:
+        for btn in panel._template_btns:
             self.assertTrue(_in_ai_actions_bar(btn), btn.text())
             self.assertNotEqual(
                 btn.sizePolicy().horizontalPolicy(),
@@ -1268,12 +1252,11 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertIn("#e8f6ee", html)
         self.assertNotIn("#1a2620", html)
         panel.apply_theme(True)
-        modes = panel.findChild(QWidget, "aiModes")
+        self.assertIsNone(panel.findChild(QWidget, "aiModes"))
         tpls = panel.findChild(QWidget, "aiTemplates")
-        self.assertIn(_AI_TPL_DISABLED_COLOR, modes.styleSheet())
         self.assertIn(_AI_TPL_DISABLED_COLOR, tpls.styleSheet())
         self.assertIn(_AI_TPL_DISABLED_COLOR, panel._more_menu.styleSheet())
-        for btn in panel._mode_btns + panel._template_btns:
+        for btn in panel._template_btns:
             self.assertEqual(btn.minimumHeight(), 28, btn.text())
         more = next(
             b for b in panel.findChildren(QPushButton)

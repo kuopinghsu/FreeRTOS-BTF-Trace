@@ -1,5 +1,5 @@
 /**
- * Evidence round-trip navigation (UX-107).
+ * Evidence round-trip navigation.
  * Keep in sync with btf_viewer_pkg/evidence_history.py.
  */
 

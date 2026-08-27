@@ -1,5 +1,5 @@
 /**
- * Evidence-strength labels (UX-003).
+ * Evidence-strength labels.
  * Keep in sync with btf_viewer_pkg/evidence_strength.py.
  */
 

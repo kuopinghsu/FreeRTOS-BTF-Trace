@@ -1,4 +1,4 @@
-"""Evidence-strength labels (UX-003).
+"""Evidence-strength labels.
 
 Lockstep with ``web/src/utils/evidenceStrength.js``.
 Taxonomy from STATISTICS.md: Direct / Derived / Estimated / Configured.

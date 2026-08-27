@@ -1,4 +1,4 @@
-"""Guided first review checklist (UX-101).
+"""Guided first review checklist.
 
 Lockstep with ``web/src/utils/guidedInvestigation.js``.
 """

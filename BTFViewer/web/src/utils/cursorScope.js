@@ -1,5 +1,5 @@
 /**
- * Cursor scoping workflow helpers (UX-106).
+ * Cursor scoping workflow helpers.
  * Keep in sync with btf_viewer_pkg/cursor_scope.py.
  */
 

@@ -612,24 +612,218 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
     ),
 )
 
-# Always-visible wrapping chips. Keep in sync with web/src/utils/aiClient.js.
-# UX-110 primary: Investigate → Explain evidence → Verify. Last id shares a row
-# with More templates… (web `.ai-tpl-row`).
-AI_TEMPLATE_PRIMARY_IDS: Tuple[str, ...] = (
+# Dynamic template chips shown next to More templates… (Start Investigation is
+# separate). Keep in sync with web/src/utils/aiClient.js.
+AI_TEMPLATE_MRU_MAX = 5
+
+# Start Investigation runs this template; it never enters MRU/usage ranking.
+AI_START_INVESTIGATION_ID = "auto_investigate"
+
+# Workflow-aware fallback used when MRU and usage counts are both empty.
+AI_DEFAULT_TEMPLATE_ORDER: Tuple[str, ...] = (
     "investigate",
-    "explain_finding",
     "verify",
+    "explain_finding",
+    "triage",
+    "explain_region",
+    "task_profile",
+    "latency",
+    "migrations",
+    "balance",
+    "priority",
+    "wcet",
+    "tick",
+    "deadlines",
+    "what_if",
+    "optimize",
+    AI_COMPARE_TEMPLATE_ID,
+    "diagnostic_report",
+    "findings",
+    "root_cause",
 )
 
 
-def ai_template_primary_rows(
-    ids: Optional[Tuple[str, ...]] = None,
-) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
-    """Split primary chips so Verify + More sit on the last row."""
-    seq = tuple(ids if ids is not None else AI_TEMPLATE_PRIMARY_IDS)
-    if len(seq) <= 1:
-        return seq, ()
-    return seq[:-1], seq[-1:]
+def _known_ai_template_id(tid: Any) -> str:
+    """Resolve *tid* against the template registry; '' when unknown."""
+    want = str(tid or "").strip()
+    if not want:
+        return ""
+    return want if any(item[0] == want for item in AI_TEMPLATE_QUESTIONS) else ""
+
+
+def sanitize_recent_ai_templates(items: Any) -> List[str]:
+    """Recent ids: unique, known, newest first, Start Investigation excluded."""
+    out: List[str] = []
+    seen = set()
+    if not isinstance(items, (list, tuple)):
+        return out
+    for raw in items:
+        if len(out) >= AI_TEMPLATE_MRU_MAX:
+            break
+        tid = _known_ai_template_id(raw)
+        if not tid or tid == AI_START_INVESTIGATION_ID or tid in seen:
+            continue
+        seen.add(tid)
+        out.append(tid)
+    return out
+
+
+def sanitize_ai_template_usage(counts: Any) -> Dict[str, int]:
+    """Per-template launch counts: known ids with a positive integer count."""
+    out: Dict[str, int] = {}
+    if not isinstance(counts, dict):
+        return out
+    for key, val in counts.items():
+        tid = _known_ai_template_id(key)
+        if not tid:
+            continue
+        try:
+            n = int(val)
+        except (TypeError, ValueError):
+            continue
+        if n <= 0:
+            continue
+        out[tid] = n
+    return out
+
+
+def record_ai_template_use(
+    template_id: Any,
+    recent: Any = (),
+    usage: Any = None,
+) -> Tuple[List[str], Dict[str, int]]:
+    """Record one explicit template launch.
+
+    Returns the new ``(recent, usage)``; Start Investigation and unknown ids
+    leave both unchanged.
+    """
+    clean_recent = sanitize_recent_ai_templates(list(recent or []))
+    clean_usage = sanitize_ai_template_usage(usage or {})
+    tid = _known_ai_template_id(template_id)
+    if not tid or tid == AI_START_INVESTIGATION_ID:
+        return clean_recent, clean_usage
+    nxt = [tid] + [x for x in clean_recent if x != tid]
+    clean_usage[tid] = clean_usage.get(tid, 0) + 1
+    return nxt[:AI_TEMPLATE_MRU_MAX], clean_usage
+
+
+AI_TEMPLATE_HISTORY_VERSION = 1
+
+
+def dump_recent_ai_templates(items: Any = ()) -> str:
+    """Serialize recent template ids for ``[ai] recent_templates`` (.rc / LS)."""
+    return json.dumps(
+        {
+            "version": AI_TEMPLATE_HISTORY_VERSION,
+            "items": sanitize_recent_ai_templates(items),
+        },
+        separators=(",", ":"),
+    )
+
+
+def parse_recent_ai_templates(raw: Any) -> List[str]:
+    """Parse ``recent_templates`` JSON; corrupt/empty → ``[]``."""
+    if isinstance(raw, (list, tuple)):
+        return sanitize_recent_ai_templates(raw)
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if isinstance(data, list):
+        return sanitize_recent_ai_templates(data)
+    if isinstance(data, dict):
+        return sanitize_recent_ai_templates(data.get("items"))
+    return []
+
+
+def dump_ai_template_usage(counts: Any = None) -> str:
+    """Serialize usage counts for ``[ai] template_usage`` (.rc / LS)."""
+    return json.dumps(
+        {
+            "version": AI_TEMPLATE_HISTORY_VERSION,
+            "counts": sanitize_ai_template_usage(counts or {}),
+        },
+        separators=(",", ":"),
+    )
+
+
+def parse_ai_template_usage(raw: Any) -> Dict[str, int]:
+    """Parse ``template_usage`` JSON; corrupt/empty → ``{}``."""
+    if isinstance(raw, dict) and "counts" not in raw and "version" not in raw:
+        return sanitize_ai_template_usage(raw)
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    if isinstance(data, dict):
+        if "counts" in data:
+            return sanitize_ai_template_usage(data.get("counts"))
+        return sanitize_ai_template_usage(data)
+    return {}
+
+
+def most_used_template_ids(usage: Any = None, recent: Any = ()) -> List[str]:
+    """Template ids by descending launch count, ties broken by recency then id."""
+    counts = sanitize_ai_template_usage(usage or {})
+    order = sanitize_recent_ai_templates(list(recent or []))
+
+    def rank(tid: str) -> int:
+        try:
+            return order.index(tid)
+        except ValueError:
+            return len(order) + 1
+
+    return sorted(counts, key=lambda t: (-counts[t], rank(t), t))
+
+
+def visible_ai_templates(
+    *,
+    recent: Any = (),
+    usage: Any = None,
+    is_applicable: Optional[Callable[[str], bool]] = None,
+    promote_id: Any = "",
+) -> List[str]:
+    """The dynamic template row: up to ``AI_TEMPLATE_MRU_MAX`` applicable ids
+    ranked recent → most used → ``AI_DEFAULT_TEMPLATE_ORDER``. *promote_id* may
+    pull one strongly context-relevant template to the front when otherwise
+    absent."""
+
+    def usable(tid: str) -> bool:
+        if not tid or tid == AI_START_INVESTIGATION_ID:
+            return False
+        if is_applicable is None:
+            return True
+        try:
+            return bool(is_applicable(tid))
+        except Exception:
+            return False
+
+    out: List[str] = []
+    seen = set()
+
+    def append(ids) -> None:
+        for raw in ids:
+            if len(out) >= AI_TEMPLATE_MRU_MAX:
+                return
+            tid = _known_ai_template_id(raw)
+            if not tid or tid in seen or not usable(tid):
+                continue
+            seen.add(tid)
+            out.append(tid)
+
+    append(sanitize_recent_ai_templates(list(recent or [])))
+    append(most_used_template_ids(usage or {}, recent))
+    append(AI_DEFAULT_TEMPLATE_ORDER)
+    promote = _known_ai_template_id(promote_id)
+    if promote and promote not in seen and usable(promote):
+        out.insert(0, promote)
+    return out[:AI_TEMPLATE_MRU_MAX]
 
 
 def suggest_primary_ai_template(
@@ -640,7 +834,11 @@ def suggest_primary_ai_template(
     open_trace_count: Any = 1,
     guide_stage: Any = "",
 ) -> str:
-    """Suggest which primary template fits the current viewer state (UX-110)."""
+    """Suggest which template fits the current viewer state.
+
+    Used for the suggested outline and as the single ``promote_id`` for
+    :func:`visible_ai_templates`.
+    """
     stage = str(guide_stage or "").strip().lower()
     has_finding = bool(str(finding_id or "").strip())
     if stage == "verify" or (has_finding and stage == ""):
@@ -658,17 +856,19 @@ def suggest_primary_ai_template(
     return "investigate"
 
 
-# Overflow menu groups for the remaining templates (ids must cover every
-# AI_TEMPLATE_QUESTIONS entry that is not in AI_TEMPLATE_PRIMARY_IDS).
+# More templates… groups — ids must cover every AI_TEMPLATE_QUESTIONS entry.
 AI_TEMPLATE_MENU_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Start", ("findings", "triage", "explain_region", "auto_investigate")),
     (
         "Investigate",
         (
+            "investigate",
+            "explain_finding",
+            "verify",
+            "root_cause",
             "task_profile",
             "latency",
             "wcet",
-            "root_cause",
             "tick",
             "priority",
             "deadlines",
@@ -5015,63 +5215,31 @@ def create_ai_assistant_panel(
             self._plan_host.hide()
             top_lay.addWidget(self._plan_host)
 
-            mode_host = _FlowHost()
-            self._mode_host = mode_host
-            mode_host.setObjectName("aiModes")
-            mode_host.setStyleSheet(_AI_TPL_BTN_STYLE)
-            mode_row = _FlowLayout(mode_host, spacing=4)
+            # Modes stay as internal IDs (More / mapped templates); no mode row.
             self._mode_btns: List[QPushButton] = []
-            for mid in INVESTIGATION_MODES:
-                btn = QPushButton(INVESTIGATION_MODE_LABELS.get(mid, mid.title()))
-                btn.setToolTip(qt_wrap_tooltip(investigation_mode_prompt(mid)))
-                btn.setSizePolicy(
-                    QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-                btn.setMinimumHeight(_AI_CHIP_MIN_HEIGHT)
-                btn.clicked.connect(
-                    lambda _=False, m=mid: self._run_investigation_mode(m)
-                )
-                mode_row.addWidget(btn)
-                self._mode_btns.append(btn)
-            top_lay.addWidget(mode_host)
+            self._mode_host = None
 
             tpl_host = _FlowHost()
             self._tpl_host = tpl_host
             tpl_host.setObjectName("aiTemplates")
             tpl_host.setStyleSheet(_AI_TPL_BTN_STYLE)
-            _lead_ids, _last_ids = ai_template_primary_rows()
-            tpl_row = _FlowLayout(
-                tpl_host, spacing=4, break_before=(len(_lead_ids),))
+            # One dynamic row (≤5 chips + More); wraps at narrow width.
+            tpl_row = _FlowLayout(tpl_host, spacing=4)
+            self._tpl_flow = tpl_row
 
             self._template_btns: List[QPushButton] = []
             self._template_btn_ids: List[str] = []
             self._template_actions: Dict[str, Any] = {}
             self._compare_btn: Optional[QWidget] = None
             self._smp_only_btns: Dict[str, QWidget] = {}
+            self._recent_templates: List[str] = []
+            self._template_usage: Dict[str, int] = {}
 
             def _bind_template_ctrl(tid: str, ctrl) -> None:
                 if tid == AI_COMPARE_TEMPLATE_ID:
                     self._compare_btn = ctrl
                 if tid in AI_SMP_ONLY_TEMPLATE_IDS:
                     self._smp_only_btns[tid] = ctrl
-
-            for _tid in _lead_ids + _last_ids:
-                item = ai_template_by_id(_tid)
-                if item is None:
-                    continue
-                _tid, label, prompt = item
-                btn = QPushButton(label)
-                btn.setProperty("aiTemplateId", _tid)
-                btn.setToolTip(qt_wrap_tooltip(prompt))
-                btn.setSizePolicy(
-                    QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-                btn.setMinimumHeight(_AI_CHIP_MIN_HEIGHT)
-                btn.clicked.connect(
-                    lambda _=False, t=_tid, p=prompt: self._use_template(t, p)
-                )
-                tpl_row.addWidget(btn)
-                self._template_btns.append(btn)
-                self._template_btn_ids.append(_tid)
-                _bind_template_ctrl(_tid, btn)
 
             more_btn = QPushButton("More templates\u2026")
             more_btn.setToolTip(qt_wrap_tooltip(
@@ -5131,6 +5299,8 @@ def create_ai_assistant_panel(
             more_menu.installEventFilter(self)
             tpl_row.addWidget(more_btn)
             top_lay.addWidget(tpl_host)
+            self._load_template_history()
+            self._rebuild_dynamic_template_chips()
 
             self._tpl_prereq = QLabel("")
             self._tpl_prereq.setObjectName("aiTplPrereq")
@@ -6120,6 +6290,112 @@ def create_ai_assistant_panel(
             self._persist_investigation_session()
             self._refresh_intent_landing()
 
+        def _load_template_history(self) -> None:
+            """Load MRU + usage from ``[ai] recent_templates`` / ``template_usage``."""
+            recent: List[str] = []
+            usage: Dict[str, int] = {}
+            if get_settings:
+                try:
+                    cfg = get_settings() or {}
+                    recent = parse_recent_ai_templates(cfg.get("recent_templates"))
+                    usage = parse_ai_template_usage(cfg.get("template_usage"))
+                except Exception:
+                    recent, usage = [], {}
+            self._recent_templates = recent
+            self._template_usage = usage
+
+        def _persist_template_history(self) -> None:
+            if not on_save_settings:
+                return
+            try:
+                on_save_settings({
+                    "recent_templates": dump_recent_ai_templates(
+                        getattr(self, "_recent_templates", [])),
+                    "template_usage": dump_ai_template_usage(
+                        getattr(self, "_template_usage", {})),
+                })
+            except Exception:
+                pass
+
+        def _clear_template_history(self) -> None:
+            self._recent_templates = []
+            self._template_usage = {}
+            self._persist_template_history()
+            self._rebuild_dynamic_template_chips()
+
+        def _record_template_use(self, template_id: str) -> None:
+            recent, usage = record_ai_template_use(
+                template_id,
+                getattr(self, "_recent_templates", []),
+                getattr(self, "_template_usage", {}),
+            )
+            self._recent_templates = recent
+            self._template_usage = usage
+            self._persist_template_history()
+            self._rebuild_dynamic_template_chips()
+
+        def _template_is_applicable(self, tid: str) -> bool:
+            if tid == AI_COMPARE_TEMPLATE_ID and len(self._loaded_tabs()) < 2:
+                return False
+            if tid in AI_SMP_ONLY_TEMPLATE_IDS and not self._trace_is_multi_core():
+                return False
+            return True
+
+        def _rebuild_dynamic_template_chips(self) -> None:
+            """Rebuild ≤5 ranked chips + More (Start Investigation stays separate)."""
+            flow = getattr(self, "_tpl_flow", None)
+            more_btn = getattr(self, "_more_btn", None)
+            if flow is None or more_btn is None:
+                return
+            for btn in list(getattr(self, "_template_btns", []) or []):
+                flow.removeWidget(btn)
+                btn.setParent(None)
+                btn.deleteLater()
+            self._template_btns = []
+            self._template_btn_ids = []
+            flow.removeWidget(more_btn)
+            ids = visible_ai_templates(
+                recent=getattr(self, "_recent_templates", []),
+                usage=getattr(self, "_template_usage", {}),
+                is_applicable=self._template_is_applicable,
+                promote_id=self._suggested_primary_template_id(),
+            )
+            for tid in ids:
+                item = ai_template_by_id(tid)
+                if item is None:
+                    continue
+                _tid, label, prompt = item
+                btn = QPushButton(label)
+                btn.setProperty("aiTemplateId", _tid)
+                btn.setToolTip(qt_wrap_tooltip(prompt))
+                btn.setSizePolicy(
+                    QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+                btn.setMinimumHeight(_AI_CHIP_MIN_HEIGHT)
+                btn.clicked.connect(
+                    lambda _=False, t=_tid, p=prompt: self._use_template(
+                        t, p, record_usage=True)
+                )
+                flow.addWidget(btn)
+                self._template_btns.append(btn)
+                self._template_btn_ids.append(_tid)
+            flow.addWidget(more_btn)
+            # Re-apply busy / suggested outline without a second rebuild.
+            disabled_base = self._busy or not self._ai_is_enabled()
+            suggested = self._suggested_primary_template_id()
+            for i, btn in enumerate(self._template_btns):
+                btn.setEnabled(not disabled_base)
+                tid = self._template_btn_ids[i] if i < len(self._template_btn_ids) else ""
+                if tid and tid == suggested and not disabled_base:
+                    btn.setObjectName("aiTplSuggested")
+                else:
+                    btn.setObjectName("")
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
+                btn.update()
+            host = getattr(self, "_tpl_host", None)
+            if host is not None:
+                host.updateGeometry()
+
         def _rebuild_intent_landing(self) -> None:
             """Build Start/Investigate/SMP/Verify/Compare chips for empty state."""
             lay = getattr(self, "_intent_groups_lay", None)
@@ -6204,7 +6480,7 @@ def create_ai_assistant_panel(
                     row.updateGeometry()
                 groups.setMinimumHeight(0)
                 groups.updateGeometry()
-            for host_name in ("_mode_host", "_tpl_host"):
+            for host_name in ("_tpl_host",):
                 h = getattr(self, host_name, None)
                 if h is not None:
                     h.updateGeometry()
@@ -6606,10 +6882,8 @@ def create_ai_assistant_panel(
             return out
 
         def refresh_template_availability(self) -> None:
-            """Enable Trace Compare only when 2+ loaded tabs exist; gray out
-            SMP-only templates (Migration thrash, Core balance) for a
-            single-core trace; highlight suggested primary; show inline
-            prerequisites (UX-110)."""
+            """Enable Trace Compare / SMP in More; rebuild dynamic chips; show
+            prerequisites."""
             disabled_base = self._busy or not self._ai_is_enabled()
             prereq_msgs: List[str] = []
 
@@ -6649,23 +6923,8 @@ def create_ai_assistant_panel(
                     self._compare_btn.setEnabled(True)
                     self._compare_btn.setToolTip(qt_wrap_tooltip(prompt))
 
-            suggested = self._suggested_primary_template_id()
-            ids = list(getattr(self, "_template_btn_ids", []) or [])
-            for i, btn in enumerate(self._template_btns):
-                tid = ids[i] if i < len(ids) else ""
-                if (
-                    tid
-                    and tid == suggested
-                    and btn.isEnabled()
-                    and not disabled_base
-                ):
-                    btn.setObjectName("aiTplSuggested")
-                else:
-                    btn.setObjectName("")
-                # Force stylesheet re-resolve after objectName change.
-                btn.style().unpolish(btn)
-                btn.style().polish(btn)
-                btn.update()
+            # Ranked chips skip inapplicable ids; rebuild when context changes.
+            self._rebuild_dynamic_template_chips()
 
             label = getattr(self, "_tpl_prereq", None)
             if label is not None:
@@ -6763,7 +7022,7 @@ def create_ai_assistant_panel(
                     except Exception:
                         cursors = []
                     prompt = append_explain_region_bounds(prompt, cursors)
-                self._use_template(template_id, prompt)
+                self._use_template(template_id, prompt, record_usage=True)
 
         def ask_event(self, event: Dict[str, Any]) -> None:
             """Timeline context menu → Ask AI about this event."""
@@ -6802,9 +7061,13 @@ def create_ai_assistant_panel(
             self._run_compare_template(
                 VALIDATE_EXPERIMENT_PROMPT, idx_a=idx_a, idx_b=idx_b)
 
-        def _use_template(self, template_id: str, prompt: str) -> None:
+        def _use_template(
+            self, template_id: str, prompt: str, *, record_usage: bool = False,
+        ) -> None:
             if self._busy:
                 return
+            if record_usage:
+                self._record_template_use(template_id)
             self._skip_interpret = True
             self._active_template_id = str(template_id or "")
             if is_agent_template(template_id):
@@ -6880,7 +7143,7 @@ def create_ai_assistant_panel(
 
         def _on_more_template(self, template_id: str, prompt: str) -> None:
             self._hide_more_menu()
-            self._use_template(template_id, prompt)
+            self._use_template(template_id, prompt, record_usage=True)
 
         def _user_investigation_templates(self) -> List[Dict[str, Any]]:
             raw = ""
@@ -7518,7 +7781,7 @@ def create_ai_assistant_panel(
             self._refresh_guide_ui()
 
         def add_finding_to_investigation_case(self, finding: Optional[dict] = None) -> bool:
-            """Append an Analysis finding to the Investigation Case (UX-104)."""
+            """Append an Analysis finding to the Investigation Case."""
             if not isinstance(finding, dict):
                 return False
             payload = dict(self._evidence_payload or {})

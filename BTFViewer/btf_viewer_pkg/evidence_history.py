@@ -1,4 +1,4 @@
-"""Evidence round-trip navigation (UX-107).
+"""Evidence round-trip navigation.
 
 Lockstep with ``web/src/utils/evidenceHistory.js``.
 """

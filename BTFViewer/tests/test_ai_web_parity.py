@@ -1628,10 +1628,11 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("builtinInvestigationTemplates", panel)
         self.assertIn("_run_investigation_template", assist)
         self.assertIn("onInvestigationTemplate", panel)
-        self.assertIn("aiModes", assist)
-        self.assertIn("ai-modes", panel)
+        self.assertNotIn("aiModes", assist)
+        self.assertNotIn("ai-modes", panel)
         self.assertIn("_run_investigation_mode", assist)
         self.assertIn("onInvestigationMode", panel)
+        self.assertNotIn('v-for="mid in investigationModes"', panel)
         self.assertIn("self._skip_interpret = True", assist)
         self.assertIn("skipInterpretOnce = true", panel)
         self.assertIn('interpreted_run_prompt(interpreted)', assist)
@@ -1683,10 +1684,14 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("_on_hypothesis_action", assist)
 
     def test_ai_template_ux_layout_matches_web(self) -> None:
-        """Chip row, More menu, mode chips, and Findings Ask-AI stay lockstep."""
+        """Dynamic chip row, More menu, and Findings Ask-AI stay lockstep."""
         from btf_viewer_pkg.ai_assistant import (
-            AI_TEMPLATE_MENU_GROUPS, AI_TEMPLATE_PRIMARY_IDS,
-            AI_TEMPLATE_QUESTIONS, ai_template_by_id,
+            AI_DEFAULT_TEMPLATE_ORDER,
+            AI_TEMPLATE_MENU_GROUPS,
+            AI_TEMPLATE_MRU_MAX,
+            AI_TEMPLATE_QUESTIONS,
+            ai_template_by_id,
+            visible_ai_templates,
         )
         from btf_viewer_pkg.ai_case import (
             EXPLAIN_LEVELS, INVESTIGATION_MODE_LABELS, INVESTIGATION_MODES,
@@ -1701,12 +1706,12 @@ class AiWebParityTests(unittest.TestCase):
         dlg = (BTF_ROOT / "web/src/components/AnalysisFindingsDialog.vue").read_text(
             encoding="utf-8")
         app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
+        store = (BTF_ROOT / "web/src/utils/settingsStore.js").read_text(
+            encoding="utf-8")
 
-        self.assertLess(assist.find('setObjectName("aiModes")'),
-                        assist.find('setObjectName("aiTemplates")'))
+        self.assertNotIn('setObjectName("aiModes")', assist)
+        self.assertNotIn('class="ai-modes"', panel)
         self.assertLess(panel.find('class="ai-plan-status"'),
-                        panel.find('class="ai-modes"'))
-        self.assertLess(panel.find('class="ai-modes"'),
                         panel.find('class="ai-templates"'))
         self.assertIn("More templates", assist)
         self.assertIn("More templates…", panel)
@@ -1732,32 +1737,39 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn('"CURRENT ISSUE\\n"', case_py)
         self.assertIn("CURRENT ISSUE\\n", case_js_src)
 
-        primary = [
-            ai_template_by_id(tid)[1] for tid in AI_TEMPLATE_PRIMARY_IDS]
+        self.assertEqual(AI_TEMPLATE_MRU_MAX, 5)
         self.assertEqual(
-            primary,
-            ["Investigate", "Explain evidence", "Verify finding"],
+            visible_ai_templates(recent=[], usage={}),
+            list(AI_DEFAULT_TEMPLATE_ORDER[:AI_TEMPLATE_MRU_MAX]),
         )
-        self.assertIn("v-for=\"(row, ri) in primaryTemplateRows\"", panel)
-        self.assertIn("AI_TEMPLATE_PRIMARY_IDS", assist)
+        self.assertIn("visible_ai_templates", assist)
+        self.assertIn("visibleTemplates", panel)
+        self.assertIn("record_ai_template_use", assist)
+        self.assertIn("recordTemplateUse", panel)
+        self.assertIn("btf.ai.recentTemplates", store)
+        self.assertIn("recent_templates", assist)
+        self.assertIn("recent_templates", 
+                      (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8"))
+        self.assertNotIn("AI_TEMPLATE_PRIMARY_IDS", assist)
+        self.assertNotIn("primaryTemplateRows", panel)
 
         self.assertEqual(
             [INVESTIGATION_MODE_LABELS[m] for m in INVESTIGATION_MODES],
             ["Quick", "Diagnose", "Compare", "Optimize", "Report"],
         )
-        self.assertIn("v-for=\"mid in investigationModes\"", panel)
-        self.assertIn("for mid in INVESTIGATION_MODES", assist)
-        self.assertIn(":disabled=\"busy || !aiEnabled\"", panel)
+        self.assertNotIn("v-for=\"mid in investigationModes\"", panel)
+        self.assertNotIn("for mid in INVESTIGATION_MODES", assist)
+        self.assertIn("_run_investigation_mode", assist)
         self.assertIn("self._mode_btns", assist)
         self.assertIn("_investigation_template_actions", assist)
         self.assertIn("save_act.setEnabled(not busy)", assist)
         self.assertIn("class _FlowLayout", assist)
         self.assertIn("_FlowLayout(actions_host", assist)
-        self.assertIn("_FlowLayout(mode_host", assist)
-        self.assertIn("tpl_host, spacing=4, break_before=", assist)
-        self.assertIn("ai_template_primary_rows", assist)
-        self.assertIn("aiTemplatePrimaryRows", panel)
-        self.assertIn("class=\"ai-tpl-row\"", panel)
+        self.assertNotIn("_FlowLayout(mode_host", assist)
+        self.assertNotIn("break_before=", assist)
+        self.assertNotIn("ai_template_primary_rows", assist)
+        self.assertNotIn("aiTemplatePrimaryRows", panel)
+        self.assertNotIn("class=\"ai-tpl-row\"", panel)
         self.assertIn("_AI_CHIP_MIN_HEIGHT = 28", assist)
         self.assertIn("min-height: 28px", panel)
         self.assertIn("_ai_more_heading", assist)
@@ -1766,7 +1778,7 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("flex-wrap: wrap", panel)
         view = (BTF_ROOT / "btf_viewer_pkg/view.py").read_text(encoding="utf-8")
         in_bar = view[view.find("def _in_ai_actions_bar"):view.find("def _relax_widget_tree")]
-        self.assertIn('"aiModes"', in_bar)
+        self.assertNotIn('"aiModes"', in_bar)
         self.assertIn('"aiTemplates"', in_bar)
         self.assertIn('"aiActions"', in_bar)
         self.assertIn('"aiHeader"', in_bar)
@@ -1838,6 +1850,7 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("self._cost_meter = empty_cost_meter()", clear_fn)
         self.assertIn("_clear_evidence_log_entry", clear_fn)
         self.assertIn("_clear_investigation_plan", clear_fn)
+        self.assertNotIn("self._clear_template_history()", clear_fn)
         send_fn = assist[assist.find("def _send_query"):]
         self.assertNotIn("self._cost_meter = empty_cost_meter()", send_fn)
         self.assertIn("costMeter.value = emptyCostMeter()", panel)
@@ -1984,7 +1997,8 @@ class AiWebParityTests(unittest.TestCase):
         self.assertEqual(ids[-1], "auto_investigate")
         self.assertNotIn("diagnose", ids)
         self.assertNotIn("validate_experiment", ids)
-        self.assertEqual(len(menu_ids) + len(AI_TEMPLATE_PRIMARY_IDS), 20)
+        self.assertEqual(len(menu_ids), 20)
+        self.assertEqual(sorted(menu_ids), sorted(ids))
 
     def test_ai_panel_theme_and_mermaid_match_web(self) -> None:
         """AI log diagrams and Analysis finding ink stay Desktop/Web lockstep."""
@@ -2272,7 +2286,7 @@ console.log(JSON.stringify({
             AI_SMP_ONLY_TEMPLATE_IDS,
             AI_TEMPLATE_INTENT_GROUPS,
             AI_TEMPLATE_MENU_GROUPS,
-            AI_TEMPLATE_PRIMARY_IDS,
+            AI_DEFAULT_TEMPLATE_ORDER,
             AI_TEMPLATE_QUESTIONS,
             DEFAULT_AI_RESPONSE_LANGUAGE,
             build_ai_system_prompt,
@@ -2292,7 +2306,7 @@ console.log(JSON.stringify({
         web = self._node_json(
             "import {\n"
             "  AI_CORE_PROMPT, AI_SYSTEM_PROMPT, AI_TEMPLATE_QUESTIONS, buildAiSystemPrompt,\n"
-            "  AI_TEMPLATE_PRIMARY_IDS, AI_TEMPLATE_MENU_GROUPS,\n"
+            "  AI_DEFAULT_TEMPLATE_ORDER, AI_TEMPLATE_MENU_GROUPS,\n"
             "  AI_TEMPLATE_INTENT_GROUPS, AI_SMP_ONLY_TEMPLATE_IDS,\n"
             "  AI_RESPONSE_LANGUAGES, DEFAULT_AI_RESPONSE_LANGUAGE,\n"
             "  ASK_EVENT_PROMPT, composeAskEventPrompt,\n"
@@ -2315,7 +2329,7 @@ console.log(JSON.stringify({
             "  contextPrompts: AI_CONTEXT_PROMPTS,\n"
             "  templates: AI_TEMPLATE_QUESTIONS.map(t => (\n"
             "    { id: t.id, label: t.label, prompt: t.prompt })),\n"
-            "  primary: AI_TEMPLATE_PRIMARY_IDS,\n"
+            "  defaults: AI_DEFAULT_TEMPLATE_ORDER,\n"
             "  menu: AI_TEMPLATE_MENU_GROUPS,\n"
             "  intent: AI_TEMPLATE_INTENT_GROUPS,\n"
             "  smp: [...AI_SMP_ONLY_TEMPLATE_IDS].sort(),\n"
@@ -2357,7 +2371,7 @@ console.log(JSON.stringify({
         self.assertEqual(web["itp"], investigation_template_prompt("investigate"))
         self.assertEqual(web["defLang"], DEFAULT_AI_RESPONSE_LANGUAGE)
         self.assertEqual(tuple(web["langs"]), AI_RESPONSE_LANGUAGES)
-        self.assertEqual(list(web["primary"]), list(AI_TEMPLATE_PRIMARY_IDS))
+        self.assertEqual(list(web["defaults"]), list(AI_DEFAULT_TEMPLATE_ORDER))
         self.assertEqual(sorted(web["smp"]), sorted(AI_SMP_ONLY_TEMPLATE_IDS))
         self.assertEqual(list(web["modes"]), list(AI_CONTEXT_MODES))
         self.assertEqual(list(web["invModes"]), list(INVESTIGATION_MODES))

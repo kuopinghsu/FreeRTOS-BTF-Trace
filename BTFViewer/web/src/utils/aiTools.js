@@ -3171,7 +3171,7 @@ export function toolMutatesGui(name) {
   ].includes(String(name || ''))
 }
 
-/** True for focus/zoom/highlight tools (UX-113 navigation-only). */
+/** True for focus/zoom/highlight tools (navigation-only). */
 export function isNavigationTool(name) {
   return [
     AI_TOOL_SET_CURSORS,
@@ -3180,7 +3180,7 @@ export function isNavigationTool(name) {
   ].includes(String(name || ''))
 }
 
-/** Apply-card action classes (UX-113). Keep labels stable for Desktop/Web lockstep. */
+/** Apply-card action classes. Keep labels stable for Desktop/Web lockstep. */
 export const VIEWER_TOOL_ACTION_NAVIGATION = 'Navigation'
 export const VIEWER_TOOL_ACTION_SCOPE = 'Scope'
 export const VIEWER_TOOL_ACTION_FILTER = 'Filter'
@@ -3197,7 +3197,7 @@ export const VIEWER_TOOL_ACTION_CLASSES = [
   VIEWER_TOOL_ACTION_CALCULATION,
 ]
 
-/** Classify a tool for Apply-card labels (UX-113). */
+/** Classify a tool for Apply-card labels. */
 export function classifyViewerTool(name) {
   const n = String(name || '')
   if (

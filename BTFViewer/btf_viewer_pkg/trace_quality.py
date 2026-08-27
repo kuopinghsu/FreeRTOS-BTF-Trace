@@ -115,7 +115,7 @@ def _classify_warning(line: str) -> str:
 
 
 def trace_quality_report(trace: Optional["BtfTrace"]) -> Dict[str, Any]:
-    """Grouped trace-quality details for Review details (UX-006)."""
+    """Grouped trace-quality details for Review details."""
     warnings = collect_trace_quality_warnings(trace)
     if not warnings:
         return {"ok": True, "summary": "", "groups": [], "actions": []}

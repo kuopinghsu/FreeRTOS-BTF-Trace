@@ -1,5 +1,5 @@
 /**
- * Analysis Context strip + stale-result helpers (UX-001 / UX-002).
+ * Analysis Context strip + stale-result helpers.
  * Keep in sync with btf_viewer_pkg/analysis_context.py.
  */
 

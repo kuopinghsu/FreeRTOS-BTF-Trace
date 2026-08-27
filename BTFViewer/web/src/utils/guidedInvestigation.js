@@ -1,5 +1,5 @@
 /**
- * Guided first review checklist (UX-101).
+ * Guided first review checklist.
  * Keep in sync with btf_viewer_pkg/guided_investigation.py.
  */
 

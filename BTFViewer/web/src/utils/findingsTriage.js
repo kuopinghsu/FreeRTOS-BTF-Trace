@@ -1,5 +1,5 @@
 /**
- * Findings triage queue helpers (UX-104).
+ * Findings triage queue helpers.
  * Keep in sync with btf_viewer_pkg/findings_triage.py.
  */
 

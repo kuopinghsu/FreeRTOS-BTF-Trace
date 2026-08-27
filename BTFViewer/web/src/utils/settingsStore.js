@@ -42,6 +42,8 @@ import {
   parseExtraAiPresets,
   sanitizeAiPresetId,
   aiPresetDisplayLabel,
+  sanitizeAiTemplateUsage,
+  sanitizeRecentAiTemplates,
 } from './aiClient.js'
 import {
   CI_SPLIT_RATIO,
@@ -65,6 +67,11 @@ const AI_BASELINE_KEY = 'btf-viewer-ai-baseline-v1'
 const AI_USER_TEMPLATES_KEY = 'btf-viewer-ai-user-templates-v1'
 const AI_USER_KNOWLEDGE_KEY = 'btf-viewer-ai-user-knowledge-v1'
 const AI_SPLIT_BOTTOM_KEY = 'btf-viewer-ai-split-bottom-v1'
+// Dynamic AI template row history — ids/counts only, never prompts or trace data.
+// Desktop mirrors these under `[ai] recent_templates` / `[ai] template_usage`.
+const AI_RECENT_TEMPLATES_KEY = 'btf.ai.recentTemplates'
+const AI_TEMPLATE_USAGE_KEY = 'btf.ai.templateUsage'
+const AI_TEMPLATE_HISTORY_VERSION = 1
 
 export { MAX_CURSORS }
 
@@ -360,6 +367,60 @@ export function saveAiUserHistoricalKnowledge(items) {
       AI_USER_KNOWLEDGE_KEY,
       dumpUserHistoricalKnowledge(items),
     )
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+/** Recent AI template ids for the dynamic chip row (newest first, max 5). */
+export function loadAiRecentTemplates() {
+  try {
+    const raw = localStorage.getItem(AI_RECENT_TEMPLATES_KEY)
+    const data = raw ? JSON.parse(raw) : null
+    return sanitizeRecentAiTemplates(data?.items)
+  } catch {
+    return []
+  }
+}
+
+export function saveAiRecentTemplates(items) {
+  try {
+    localStorage.setItem(AI_RECENT_TEMPLATES_KEY, JSON.stringify({
+      version: AI_TEMPLATE_HISTORY_VERSION,
+      items: sanitizeRecentAiTemplates(items),
+    }))
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+/** Per-template launch counts used to rank the dynamic chip row. */
+export function loadAiTemplateUsage() {
+  try {
+    const raw = localStorage.getItem(AI_TEMPLATE_USAGE_KEY)
+    const data = raw ? JSON.parse(raw) : null
+    return sanitizeAiTemplateUsage(data?.counts)
+  } catch {
+    return {}
+  }
+}
+
+export function saveAiTemplateUsage(counts) {
+  try {
+    localStorage.setItem(AI_TEMPLATE_USAGE_KEY, JSON.stringify({
+      version: AI_TEMPLATE_HISTORY_VERSION,
+      counts: sanitizeAiTemplateUsage(counts),
+    }))
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+/** Drop the dynamic template row history (ids/counts only). Not used by Clear. */
+export function clearAiTemplateHistory() {
+  try {
+    localStorage.removeItem(AI_RECENT_TEMPLATES_KEY)
+    localStorage.removeItem(AI_TEMPLATE_USAGE_KEY)
   } catch {
     /* quota / private mode */
   }

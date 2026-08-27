@@ -1,4 +1,4 @@
-"""Findings triage queue helpers (UX-104).
+"""Findings triage queue helpers.
 
 Lockstep with ``web/src/utils/findingsTriage.js``.
 """

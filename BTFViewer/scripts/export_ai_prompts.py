@@ -24,7 +24,7 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     AI_CORE_PROMPT,
     AI_SYSTEM_PROMPT,
     AI_TEMPLATE_QUESTIONS,
-    AI_TEMPLATE_PRIMARY_IDS,
+    AI_DEFAULT_TEMPLATE_ORDER,
     AI_TEMPLATE_MENU_GROUPS,
     AI_TEMPLATE_INTENT_GROUPS,
     AI_SMP_ONLY_TEMPLATE_IDS,
@@ -96,7 +96,7 @@ def build_export_text() -> str:
     lines.append(build_ai_system_prompt("English", "balanced"))
 
     _section(lines, "6. Template layout")
-    lines.append("PRIMARY chips: " + ", ".join(AI_TEMPLATE_PRIMARY_IDS))
+    lines.append("DEFAULT order: " + ", ".join(AI_DEFAULT_TEMPLATE_ORDER))
     lines.append("")
     lines.append("MENU groups:")
     for label, ids in AI_TEMPLATE_MENU_GROUPS:

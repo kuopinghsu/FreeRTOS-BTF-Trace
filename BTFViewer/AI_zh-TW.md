@@ -106,7 +106,7 @@ AI 可以解釋證據、找出關聯、排序可能原因、檢查假設，也�
 - 可從面板分頁或 **Ctrl+K** 開啟 **AI Assistant**。若面板未顯示，請到 **Settings → Panels** 啟用 **AI Assistant panel**。
 - 面板沒有對話內容時，會顯示目前的 **Trace、Scope、Filters**、問題輸入框與依用途分組的操作。**Start Investigation** 會顯示調查流程列、簡短說明與目前 Finding／Scope 摘要，並從現有分析結果開始引導式調查。
 - 流程指示器會追蹤 **Triage → Scope → Investigate → Verify → Experiment → Compare**。選擇已完成的階段，可回到該階段的輸出結果。
-- 主要操作為 **Investigate**、**Explain evidence** 與 **Verify finding**。系統會依目前 Finding、游標、選取的工作與引導階段，以外框標示建議的主要操作。Compare／SMP 未滿足的先決條件會以行內提示顯示在晶片下方（不只在工具提示中）。**More templates…** 包含 Analysis Findings、Explain region、Auto investigate、Compare、Report、What-if、Optimize，以及延遲、WCET、核心遷移等專項檢查。
+- **Start Investigation** 與模板列分開。最多五個動態捷徑依「最近可用 → 最常用 → 工作流程預設順序」排列。系統可依目前 Finding、游標、選取的工作與引導階段以外框標示建議模板。Compare／SMP 未滿足的先決條件會以行內提示顯示在晶片下方。**More templates…** 永遠列出全部模板（Analysis Findings、Explain region、Auto investigate、Compare、Report、What-if、Optimize 與專項檢查等）。最近／使用次數僅本機保存（Web `localStorage`、Desktop `.rc`），不跨端同步；**Clear** 不會清除這些歷程。
 - 輸入區上方有可收合的 **Context** 一列摘要（`Stage · Scope · Focus · Mode · Privacy`）。展開後可看到 Trace、Scope、Filters、Finding 數量、語言、端點與使用量。Web 版每則助理回覆可開啟 **View request context**。
 - 面板標頭提供 **Clear、Language…** 與 **Settings…**。**Clear** 會清除對話、使用量摘要與目前的調查狀態。
 - 使用量列會顯示例如 **Context: Compact · 4.6k tok · 3 tools · 12s**，依序代表內容模式、Token 數、工具數量與模型執行時間。可在 **Settings → AI → Context** 選擇 **Compact、Balanced（預設）或 Full Evidence**。信心程度來自證據，不是來自模式。
@@ -1278,7 +1278,7 @@ make -C BTFViewer ai-test
 python builds/btf_viewer.py ai-test --dataset tests/ai --fail-under 70
 ```
 
-Quick / Diagnose / Compare / Optimize / Report 等 Mode 只是對應到現有 Template，**不會增加新的 Tool**。所有結果仍應回到 Timeline 確認。
+Host 調查模式（quick / diagnose / compare / optimize / report）仍對應到現有 Template，但不再是固定晶片列；請由動態捷徑或 **More templates…** 進入。所有結果仍應回到 Timeline 確認。
 
 ---
 
@@ -1447,10 +1447,8 @@ make -C BTFViewer web
 
 **UI Lockstep：**
 
-- Mode Chip 可以換行。
-- Primary Template 使用兩列：
-  - 第一列：**Investigate** / **Explain evidence**
-  - 第二列：**Verify finding** + **More templates…**
+- **Start Investigation** 與模板列分開。
+- 模板列最多五個依序排列的捷徑，加上 **More templates…**（可換行，最多兩列）。
 - 建議的主要操作以外框標示；Compare／SMP 先決條件以行內提示顯示。
 - Chip 最小高度為 28px。
 - Disabled Chip / Menu Item 使用 `#8a96a8`。
