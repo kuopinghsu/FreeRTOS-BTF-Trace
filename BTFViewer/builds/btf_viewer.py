@@ -22448,11 +22448,13 @@ def compute_evidence_coverage(
                 unverified += 1
     denom = total or 1
     pct = int(round(100.0 * observed / denom)) if total else (100 if ev else 0)
-    if not claim_items and ev:
+    # Timed evidence on the panel is coverage. Validation claims extracted
+    # from the final reply must not collapse the meter to 0%.
+    if ev and (not claim_items or observed == 0):
         observed = min(len(ev), 7)
         total = max(len(ev), 7)
         timeline = sum(1 for e in ev if e.get("time") is not None)
-        pct = int(round(100.0 * min(1.0, observed / max(total, 1))))
+        pct = int(round(100.0 * min(1.0, observed / float(max(total, 1)))))
     return {
         "percent": max(0, min(100, pct)),
         "bar": (

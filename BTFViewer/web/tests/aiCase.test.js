@@ -32,6 +32,7 @@ import {
   focusTitlesFromSummary,
   compactChatHistory,
   compactToolResultPayload,
+  computeEvidenceCoverage,
   investigationContextSummary,
   normalizeAiContextMode,
   aiContextModeSettingsOverview,
@@ -84,6 +85,18 @@ describe('aiCase investigation lifecycle', () => {
     )
     assert.equal(report.ok, false)
     assert.ok(report.unverified >= 1)
+  })
+
+  it('uses timed evidence when reply claims are unverified', () => {
+    const ev = [
+      { label: 'migrations: burst', time: 1487000 },
+      { label: 'ready: wake', time: 1487100 },
+    ]
+    const unverified = [{ kind: 'task', value: 'InventedTask', ok: false }]
+    const cov = computeEvidenceCoverage({ claims: unverified, evidence: ev })
+    assert.ok((Number(cov.percent) || 0) > 0)
+    const empty = computeEvidenceCoverage({ claims: unverified, evidence: [] })
+    assert.equal(Number(empty.percent) || 0, 0)
   })
 
   it('accepts in-scope claims', () => {

@@ -12,6 +12,7 @@ import {
   evidencePanelToggleLabel,
   investigationTreeMermaid,
   mergeEvidencePanelPayload,
+  refreshEvidencePanelScores,
 } from '../src/utils/aiInvestigation.js'
 
 // Phase 4: investigation tree mermaid — mirrors
@@ -406,6 +407,26 @@ describe('mergeEvidencePanelPayload', () => {
     assert.ok((merged.evidence || []).some(e => e.time != null))
     assert.equal(Number(late.coverage?.percent) || 0, 0)
     assert.ok((Number(merged.coverage?.percent) || 0) > 0)
+  })
+
+  it('keeps coverage after unverified final-reply claims', () => {
+    const strong = extractEvidencePanelPayload('correlate_events', {
+      ok: true,
+      data: {
+        task: 'CS[22]',
+        events: [
+          { kind: 'migration', detail: 'c0->c1', time: 1487000 },
+          { kind: 'ready', detail: 'wake', time: 1487100 },
+        ],
+        correlation: 0.9,
+      },
+    })
+    const refreshed = refreshEvidencePanelScores({
+      ...strong,
+      claims: [{ kind: 'task', value: 'InventedTask', ok: false }],
+      validation: { ok: false, claims: [{ kind: 'task', value: 'InventedTask', ok: false }] },
+    })
+    assert.ok((Number(refreshed.coverage?.percent) || 0) > 0)
   })
 
   it('keeps prior alternatives when late tool sends empty list', () => {

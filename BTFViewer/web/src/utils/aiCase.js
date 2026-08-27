@@ -1186,7 +1186,9 @@ export function computeEvidenceCoverage({
   }
   const denom = total || 1
   let pct = total ? Math.round(100.0 * observed / denom) : (ev.length ? 100 : 0)
-  if (!claimItems.length && ev.length) {
+  // Timed evidence on the panel is coverage. Validation claims extracted
+  // from the final reply must not collapse the meter to 0%.
+  if (ev.length && (!claimItems.length || observed === 0)) {
     observed = Math.min(ev.length, 7)
     total = Math.max(ev.length, 7)
     timeline = ev.filter(e => e.time != null).length

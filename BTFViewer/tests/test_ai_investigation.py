@@ -1153,6 +1153,29 @@ class AiInvestigationTests(unittest.TestCase):
         merged_cov = int((merged.get("coverage") or {}).get("percent") or 0)
         self.assertGreater(merged_cov, 0)
 
+    def test_refresh_scores_keeps_coverage_after_unverified_reply_claims(self) -> None:
+        from btf_viewer_pkg.ai_investigation import refresh_evidence_panel_scores
+
+        strong = extract_evidence_panel_payload("correlate_events", {
+            "ok": True,
+            "data": {
+                "task": "CS[22]",
+                "events": [
+                    {"kind": "migration", "detail": "c0->c1", "time": 1487000},
+                    {"kind": "ready", "detail": "wake", "time": 1487100},
+                ],
+                "correlation": 0.9,
+            },
+        })
+        refreshed = refresh_evidence_panel_scores({
+            **strong,
+            "claims": [{"kind": "task", "value": "InventedTask", "ok": False}],
+            "validation": {"ok": False, "claims": [
+                {"kind": "task", "value": "InventedTask", "ok": False},
+            ]},
+        })
+        self.assertGreater(int((refreshed.get("coverage") or {}).get("percent") or 0), 0)
+
     def test_merge_evidence_panel_payload_keeps_empty_alts_from_prev(self) -> None:
         from btf_viewer_pkg.ai_investigation import merge_evidence_panel_payload
 

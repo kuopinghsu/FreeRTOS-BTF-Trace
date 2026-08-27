@@ -21,6 +21,7 @@ from btf_viewer_pkg.ai_case import (  # noqa: E402
     compact_findings_text,
     focus_titles_from_summary,
     compact_tool_result_payload,
+    compute_evidence_coverage,
     compute_evidence_quality,
     dump_user_investigation_templates,
     dump_investigation_session,
@@ -227,6 +228,18 @@ class InvestigationCaseTests(unittest.TestCase):
         )
         self.assertEqual(q["band"], "strong")
         self.assertTrue(q["flags"]["direct_evidence"])
+
+    def test_coverage_uses_timed_evidence_when_reply_claims_are_unverified(self) -> None:
+        """Start Investigation ends with validate_ai_response claims that are often ok=False."""
+        ev = [
+            {"label": "migrations: burst", "time": 1487000},
+            {"label": "ready: wake", "time": 1487100},
+        ]
+        unverified = [{"kind": "task", "value": "InventedTask", "ok": False}]
+        cov = compute_evidence_coverage(claims=unverified, evidence=ev)
+        self.assertGreater(int(cov.get("percent") or 0), 0)
+        empty = compute_evidence_coverage(claims=unverified, evidence=[])
+        self.assertEqual(int(empty.get("percent") or 0), 0)
 
     def test_status_with_cost_accumulates_and_hides_when_empty(self) -> None:
         self.assertEqual(status_with_cost("Done.", empty_cost_meter()), "Done.")
