@@ -38,7 +38,7 @@ class UiTooltipFontTests(unittest.TestCase):
     def test_qtooltip_setfont_in_theme_path(self) -> None:
         mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
         self.assertIn("QToolTip.setFont(base_font)", mw)
-        self.assertIn("_apply_info_popup_ui_font(_ui_font_size)", mw)
+        self.assertIn("_apply_info_popup_ui_font(_ui_font_size", mw)
 
     def test_info_popup_follows_ui_font(self) -> None:
         popup = _InfoPopup()

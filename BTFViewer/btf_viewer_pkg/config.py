@@ -1350,26 +1350,19 @@ _CORE_PALETTE = [
 _SVG_RASTER_MAX_EDGE = 4096
 
 
-def rasterize_svg_pixmap(
+def _svg_raster_plan(
     svg,
     *,
     dest_w: Optional[int] = None,
     dest_h: Optional[int] = None,
     scale: float = 1.0,
     max_edge: int = _SVG_RASTER_MAX_EDGE,
-    fill: Optional["QColor"] = None,
-) -> Tuple["QPixmap", float]:
-    """Render *svg* into a pixmap with an explicit pixel size.
-
-    Returns ``(pixmap, user_scale)`` where *user_scale* maps SVG user units to
-    pixmap pixels (for hit-testing). Caps the long edge so Qt never allocates
-    a huge SVG raster buffer.
-    """
+) -> Tuple[Optional["QSvgRenderer"], int, int, float]:
+    """Return ``(renderer, out_w, out_h, user_scale)`` or a null renderer."""
     data = svg.encode("utf-8") if isinstance(svg, str) else bytes(svg or b"")
     renderer = QSvgRenderer(QByteArray(data))
-    empty = QPixmap()
     if not renderer.isValid():
-        return empty, 1.0
+        return None, 1, 1, 1.0
     nat = renderer.defaultSize()
     nw = max(1, int(nat.width()) if nat.width() > 0 else 1)
     nh = max(1, int(nat.height()) if nat.height() > 0 else 1)
@@ -1384,17 +1377,63 @@ def rasterize_svg_pixmap(
         shrink = cap / float(longest)
         out_w = max(1, int(round(out_w * shrink)))
         out_h = max(1, int(round(out_h * shrink)))
-    user_scale = out_w / float(nw)
-    pm = QPixmap(out_w, out_h)
+    return renderer, out_w, out_h, out_w / float(nw)
+
+
+def rasterize_svg_image(
+    svg,
+    *,
+    dest_w: Optional[int] = None,
+    dest_h: Optional[int] = None,
+    scale: float = 1.0,
+    max_edge: int = _SVG_RASTER_MAX_EDGE,
+    fill: Optional["QColor"] = None,
+) -> Tuple["QImage", float]:
+    """Render *svg* onto a ``QImage`` (no screen-compatible pixmap DC).
+
+    ``QPainter(QPixmap)`` on Windows allocates a dummy HWND for a screen DC,
+    which flashes a tiny window. AI log mermaid refresh hits this every round.
+    """
+    renderer, out_w, out_h, user_scale = _svg_raster_plan(
+        svg, dest_w=dest_w, dest_h=dest_h, scale=scale, max_edge=max_edge)
+    empty = QImage()
+    if renderer is None:
+        return empty, 1.0
+    img = QImage(out_w, out_h, QImage.Format.Format_ARGB32_Premultiplied)
+    if img.isNull():
+        return empty, user_scale
     if fill is None:
-        pm.fill(Qt.GlobalColor.transparent)
+        img.fill(Qt.GlobalColor.transparent)
     else:
-        pm.fill(fill)
-    painter = QPainter(pm)
+        img.fill(fill)
+    painter = QPainter(img)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     renderer.render(painter, QRectF(0, 0, float(out_w), float(out_h)))
     painter.end()
-    return pm, user_scale
+    return img, user_scale
+
+
+def rasterize_svg_pixmap(
+    svg,
+    *,
+    dest_w: Optional[int] = None,
+    dest_h: Optional[int] = None,
+    scale: float = 1.0,
+    max_edge: int = _SVG_RASTER_MAX_EDGE,
+    fill: Optional["QColor"] = None,
+) -> Tuple["QPixmap", float]:
+    """Render *svg* into a pixmap with an explicit pixel size.
+
+    Returns ``(pixmap, user_scale)`` where *user_scale* maps SVG user units to
+    pixmap pixels (for hit-testing). Caps the long edge so Qt never allocates
+    a huge SVG raster buffer. Paints on a ``QImage`` first so Windows does not
+    create a dummy window for a screen-compatible pixmap DC.
+    """
+    img, user_scale = rasterize_svg_image(
+        svg, dest_w=dest_w, dest_h=dest_h, scale=scale, max_edge=max_edge, fill=fill)
+    if img.isNull():
+        return QPixmap(), user_scale
+    return QPixmap.fromImage(img), user_scale
 
 
 def _svg_icon(path_data: str, color: str = "#9E9E9E", size: int = 16) -> "QIcon":
@@ -1702,9 +1741,10 @@ def _pixmap_from_embedded_app_icon(size: int) -> QPixmap:
         if not pm.isNull():
             return pm
     # Windows often lacks the Qt SVG plugin; QPainter path is always available.
-    pm = QPixmap(size, size)
-    pm.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pm)
+    # Paint on QImage: QPainter(QPixmap) flashes a dummy HWND on Windows.
+    img = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(Qt.GlobalColor.transparent)
+    p = QPainter(img)
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     s = size / 72.0
 
@@ -1749,7 +1789,7 @@ def _pixmap_from_embedded_app_icon(size: int) -> QPixmap:
         QPointF(cx + 3 * s, cy + 3 * s),
     ]))
     p.end()
-    return pm
+    return QPixmap.fromImage(img)
 
 def _embedded_app_icon() -> QIcon:
     """Default icon compiled into the app (vector fallback, no external file)."""

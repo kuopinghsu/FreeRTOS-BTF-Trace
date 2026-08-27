@@ -4497,7 +4497,8 @@ def _clear_layout(layout) -> None:
         item = layout.takeAt(0)
         w = item.widget()
         if w is not None:
-            w.setParent(None)
+            # Hide in place. setParent(None) makes a top-level HWND on Windows.
+            w.hide()
             w.deleteLater()
 
 
@@ -6350,7 +6351,7 @@ def create_ai_assistant_panel(
                 return
             for btn in list(getattr(self, "_template_btns", []) or []):
                 flow.removeWidget(btn)
-                btn.setParent(None)
+                btn.hide()
                 btn.deleteLater()
             self._template_btns = []
             self._template_btn_ids = []
@@ -6406,9 +6407,9 @@ def create_ai_assistant_panel(
                 item = lay.takeAt(0)
                 w = item.widget()
                 if w is not None:
-                    # Immediate reparent so deleteLater cannot leave a 0-height
-                    # ghost row that collapses the chip stack.
-                    w.setParent(None)
+                    # Hide before deleteLater so the row is gone from layout
+                    # immediately. setParent(None) flashes a HWND on Windows.
+                    w.hide()
                     w.deleteLater()
             dark = bool(getattr(self, "_is_dark", True))
             c = _ai_chrome_colors(dark)
@@ -6440,7 +6441,7 @@ def create_ai_assistant_panel(
                 if any_btn:
                     lay.addWidget(row)
                 else:
-                    row.setParent(None)
+                    row.hide()
                     row.deleteLater()
             self._sync_intent_scroll_size()
 

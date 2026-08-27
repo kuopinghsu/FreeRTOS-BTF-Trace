@@ -252,19 +252,19 @@ def _svg_to_png_bytes(svg: str, fill: str = "#12161d") -> Optional[Tuple[bytes, 
     """Rasterize SVG for QTextBrowser (avoids Qt's oversized SVG buffer warning)."""
     try:
         from ._imports import QBuffer, QByteArray, QColor, QIODevice
-        from .config import rasterize_svg_pixmap
+        from .config import rasterize_svg_image
     except Exception:
         return None
-    pm, _ = rasterize_svg_pixmap(svg, fill=QColor(fill or "#12161d"))
-    if pm.isNull():
+    img, _ = rasterize_svg_image(svg, fill=QColor(fill or "#12161d"))
+    if img.isNull():
         return None
     ba = QByteArray()
     buf = QBuffer(ba)
     if not buf.open(QIODevice.OpenModeFlag.WriteOnly):
         return None
-    if not pm.save(buf, "PNG"):
+    if not img.save(buf, "PNG"):
         return None
-    return bytes(ba.data()), int(pm.width()), int(pm.height())
+    return bytes(ba.data()), int(img.width()), int(img.height())
 
 
 def mermaid_to_svg(source: str, *, interactive: bool = True, is_dark: bool = True) -> str:

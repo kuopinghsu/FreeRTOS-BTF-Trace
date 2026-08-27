@@ -17,80 +17,73 @@ from .parser import *  # noqa: F403,F401
 # Persistent hover-info popup  (replaces QToolTip which auto-hides on scroll)
 # ---------------------------------------------------------------------------
 
-# Off-screen parent so the singleton is never a top-level Qt.Tool window.
-# On Windows, setParent(None) + Tool flags flashes a tiny native window at
-# (0, 0) — visible while Start Investigation auto-zooms / rebuilds the scene.
-_popup_holder: Optional[QWidget] = None
+def _stable_popup_parent(*skip: QWidget) -> Optional[QWidget]:
+    """Existing visible window to parent the hover box (never a new top-level).
 
-
-def _popup_holder_widget() -> QWidget:
-    """Never-shown parent used to park the hover popup between uses."""
-    global _popup_holder
-    if _popup_holder is not None:
+    On Windows a parentless QWidget is a real HWND. Creating one, or changing
+    Qt window flags, flashes a tiny box at (0, 0) while AI tools rebuild
+    the timeline. Always parent onto a window that already exists.
+    """
+    app = QApplication.instance()
+    if app is None:
+        return None
+    ignored = {s for s in skip if s is not None}
+    win = app.activeWindow()
+    if win is not None and win not in ignored:
+        return win
+    for w in app.topLevelWidgets():
         try:
-            _popup_holder.isHidden()
-            return _popup_holder
+            if w in ignored or not w.isWindow() or not w.isVisible():
+                continue
+            return w
         except RuntimeError:
-            _popup_holder = None
-    holder = QWidget()
-    holder.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
-    holder.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-    holder.setProperty("_btf_popup_holder", True)
-    holder.hide()
-    _popup_holder = holder
-    return holder
+            continue
+    return None
 
 
 class _InfoPopup(QLabel):
     """Frameless hover-info box — shown over a segment, hidden when the pointer leaves.
 
-    Implemented as a child of the active viewer window (not a top-level
-    ``Qt.ToolTip``). On Wayland/WSL those tooltip windows can ignore
-    ``hide()`` and stay on screen after the pointer has moved.
+    Child of the viewer (not a top-level ``Qt.ToolTip`` / ``Qt.Tool``). On
+    Windows those flags and parentless widgets flash a native window.
     """
 
-    def __init__(self) -> None:
-        super().__init__(_popup_holder_widget())
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent or _stable_popup_parent())
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setTextFormat(Qt.TextFormat.RichText)
         self.setMargin(7)
-        self._ss_applied_dark: Optional[bool] = None   # None = never applied
+        self._ss_applied_dark: Optional[bool] = None
         self._ss_applied_font: Optional[int] = None
         self._ui_font_size: int = UI_FONT_SIZE
 
-    def _park(self) -> None:
-        """Detach from a viewport without becoming a top-level Tool window."""
-        holder = _popup_holder_widget()
-        if self.parentWidget() is holder:
+    def _reparent(self, host: Optional[QWidget]) -> None:
+        """Move onto *host* without changing Qt window flags (Windows HWND flash).
+
+        *host* of None means hide in place. Unparenting would create a
+        top-level HWND on Windows.
+        """
+        if host is not None and isinstance(host, QGraphicsView):
+            host = host.viewport()
+        if host is self:
+            host = None
+        if host is None:
             super().hide()
             return
-        html = self.text()
-        super().hide()
-        self.setParent(holder)
-        self.setWindowFlags(Qt.WindowType.Widget)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        super().hide()
-        if html:
-            self.setText(html)
-
-    def _adopt_host(self, host: Optional[QWidget]) -> None:
-        """Reparent onto *host* as an overlay widget (not a native tooltip)."""
-        if host is None or host is self:
-            self._park()
-            return
-        if isinstance(host, QGraphicsView):
-            host = host.viewport()
         if self.parentWidget() is host:
             return
         html = self.text()
         super().hide()
         self.setParent(host)
-        # Child widget: hide()/show() is reliable. Keep mouse events passing
-        # through so the timeline still receives moves.
-        self.setWindowFlags(Qt.WindowType.Widget)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         if html:
             self.setText(html)
+
+    def _adopt_host(self, host: Optional[QWidget]) -> None:
+        if host is None or host is self:
+            super().hide()
+            return
+        self._reparent(host)
 
     def set_ui_font_size(self, ui_font_size: int) -> None:
         """Match Settings → Appearance → UI font (menus / status / tooltips)."""
@@ -98,7 +91,7 @@ class _InfoPopup(QLabel):
         if size == self._ui_font_size:
             return
         self._ui_font_size = size
-        self._ss_applied_dark = None  # force stylesheet rebuild on next show
+        self._ss_applied_dark = None
         self._ss_applied_font = None
 
     def _apply_stylesheet(self, is_dark: bool) -> None:
@@ -121,17 +114,13 @@ class _InfoPopup(QLabel):
                 f"border:1px solid #AAAAAA; border-radius:4px; "
                 f"font-size:{fs}; font-family:'{fam}'; }}"
             )
-        # Native tooltip chrome can ignore QSS font-size (macOS); set QFont too.
         self.setFont(_monospace_font(self._ui_font_size))
 
     def hide(self) -> None:
         try:
             self.setText("")
-            # Detach from ephemeral hosts (viewports) so destroying a
-            # TimelineView does not delete this singleton's C++ object.
-            # Park on a hidden holder — do not use Qt.Tool (Windows flashes
-            # a tiny native window at (0, 0) when those flags are applied).
-            self._park()
+            # Hide in place. Reparenting recreates an HWND on Windows.
+            super().hide()
         except RuntimeError:
             pass
 
@@ -152,8 +141,6 @@ class _InfoPopup(QLabel):
             host = None
         self._adopt_host(host)
         overlay = self.parentWidget()
-        if overlay is not None and bool(overlay.property("_btf_popup_holder")):
-            overlay = None
         sp = QPoint(int(screen_pos.x()), int(screen_pos.y()))
         if overlay is not None:
             local = overlay.mapFromGlobal(sp)
@@ -161,8 +148,6 @@ class _InfoPopup(QLabel):
         else:
             self.move(sp.x() + 16, sp.y() + 8)
         if overlay is None:
-            # No on-screen parent: stay parked. Showing a parentless / Tool
-            # window is what flashes a tiny box on Windows.
             return
         self.show()
         self.raise_()
@@ -173,24 +158,13 @@ class _InfoPopup(QLabel):
         if app is None:
             return None
         host = app.widgetAt(QPoint(int(screen_pos.x()), int(screen_pos.y())))
-        if host is not None and not bool(host.property("_btf_popup_holder")):
+        if host is not None:
             return host
-        win = app.activeWindow()
-        if win is not None and not bool(win.property("_btf_popup_holder")):
-            return win
-        for w in app.topLevelWidgets():
-            try:
-                if (
-                    w is not None
-                    and w.isVisible()
-                    and not bool(w.property("_btf_popup_holder"))
-                ):
-                    return w
-            except RuntimeError:
-                continue
-        return None
+        return _stable_popup_parent()
+
 
 _info_popup: Optional[_InfoPopup] = None
+
 
 def _popup_alive(popup: Optional[_InfoPopup]) -> bool:
     if popup is None:
@@ -202,10 +176,13 @@ def _popup_alive(popup: Optional[_InfoPopup]) -> bool:
         return False
 
 
-def _get_popup() -> _InfoPopup:
+def _get_popup(parent: Optional[QWidget] = None) -> _InfoPopup:
     global _info_popup
     if not _popup_alive(_info_popup):
-        _info_popup = _InfoPopup()
+        _info_popup = _InfoPopup(parent or _stable_popup_parent())
+        return _info_popup
+    if parent is not None and _info_popup.parentWidget() is None:
+        _info_popup.setParent(parent)
     return _info_popup
 
 
@@ -221,14 +198,9 @@ def _hide_popup() -> None:
         _info_popup = None
 
 
-def _apply_info_popup_ui_font(ui_font_size: int) -> None:
+def _apply_info_popup_ui_font(ui_font_size: int, parent: Optional[QWidget] = None) -> None:
     """Keep the timeline hover tip in sync with Settings → UI font."""
-    global _info_popup
-    if _popup_alive(_info_popup):
-        _info_popup.set_ui_font_size(ui_font_size)
-        return
-    _info_popup = None
-    _get_popup().set_ui_font_size(ui_font_size)
+    _get_popup(parent).set_ui_font_size(ui_font_size)
 
 _GRID_STEPS = [
     1, 2, 5, 10, 20, 50, 100, 200, 500,

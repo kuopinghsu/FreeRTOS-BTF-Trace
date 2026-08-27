@@ -3963,7 +3963,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             # macOS native QToolTip often ignores QSS font-size; setFont is required
             # for status-bar / toolbar tips to track Settings → UI font.
             QToolTip.setFont(base_font)
-            _apply_info_popup_ui_font(_ui_font_size)
+            _apply_info_popup_ui_font(_ui_font_size, parent=self)
 
             # macOS native combo widgets ignore inherited/stylesheet font-size;
             # force it directly on the toolbar combo if it exists already.

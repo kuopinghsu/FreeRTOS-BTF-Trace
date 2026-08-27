@@ -247,6 +247,29 @@ class AiMermaidTests(unittest.TestCase):
         self.assertLessEqual(max(pm.width(), pm.height()), _SVG_RASTER_MAX_EDGE)
         self.assertLess(user_scale, 2.0)
 
+    def test_mermaid_png_paints_on_qimage(self) -> None:
+        """QPainter(QPixmap) flashes a dummy HWND on Windows during AI log refresh."""
+        cfg = (BTF_ROOT / "btf_viewer_pkg" / "config.py").read_text(encoding="utf-8")
+        mermaid = (BTF_ROOT / "btf_viewer_pkg" / "ai_mermaid.py").read_text(
+            encoding="utf-8")
+        self.assertIn("def rasterize_svg_image", cfg)
+        raster = cfg.split("def rasterize_svg_image")[1].split(
+            "def rasterize_svg_pixmap")[0]
+        self.assertIn("QPainter(img)", raster)
+        self.assertNotIn("QPainter(pm)", raster)
+        self.assertIn("rasterize_svg_image", mermaid)
+        self.assertIn('img.save(buf, "PNG")', mermaid)
+        from btf_viewer_pkg.config import rasterize_svg_image
+
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" '
+            'viewBox="0 0 8 8"><rect width="8" height="8" fill="#224466"/></svg>'
+        )
+        img, _ = rasterize_svg_image(svg, dest_w=8, dest_h=8)
+        self.assertFalse(img.isNull())
+        self.assertEqual(img.width(), 8)
+        self.assertEqual(img.height(), 8)
+
     def test_hexagon_nodes_and_jump_clicks(self) -> None:
         src = (
             "graph TD\n"

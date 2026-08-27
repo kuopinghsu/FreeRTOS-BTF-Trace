@@ -102,9 +102,11 @@ class SegmentHoverPopupTests(unittest.TestCase):
         """Windows flashes a tiny native window if hide() applies Qt.Tool flags."""
         src = (BTF_ROOT / "btf_viewer_pkg" / "timeline_util.py").read_text(
             encoding="utf-8")
-        self.assertIn("def _popup_holder_widget", src)
+        self.assertNotIn("def _popup_holder_widget", src)
+        popup_cls = src.split("class _InfoPopup")[1].split("_GRID_STEPS")[0]
+        self.assertNotIn("setWindowFlags", popup_cls)
+        self.assertNotIn("self._park()", popup_cls)
         hide_body = src.split("def hide(self)")[1].split("def show_at")[0]
-        self.assertIn("self._park()", hide_body)
         self.assertNotIn("setWindowFlags", hide_body)
         view = TimelineView()
         view.show()
