@@ -43427,7 +43427,7 @@ def _ai_more_item(label: str, tooltip: str = "") -> QPushButton:
     return btn
 
 
-def _ai_more_col(title: str) -> QWidget:
+def _ai_more_col(title: str = "") -> QWidget:
     """One More-menu column matching web ``.ai-more-col``."""
     col = QWidget()
     col.setObjectName("aiMoreCol")
@@ -43437,7 +43437,8 @@ def _ai_more_col(title: str) -> QWidget:
     lay = QVBoxLayout(col)
     lay.setContentsMargins(0, 0, 0, 0)
     lay.setSpacing(0)
-    lay.addWidget(_ai_more_heading(title))
+    if title:
+        lay.addWidget(_ai_more_heading(title))
     return col
 
 
@@ -43447,7 +43448,9 @@ def _clear_layout(layout) -> None:
         w = item.widget()
         if w is not None:
             # Hide in place. setParent(None) makes a top-level HWND on Windows.
+            # Strip objectName so findChildren() does not see deleteLater ghosts.
             w.hide()
+            w.setObjectName("")
             w.deleteLater()
 
 
@@ -44233,7 +44236,8 @@ def create_ai_assistant_panel(
                 more_grid.addWidget(
                     col, i // 2, i % 2, Qt.AlignmentFlag.AlignTop)
             n_groups = len(AI_TEMPLATE_MENU_GROUPS)
-            self._investigation_col = _ai_more_col("Investigations")
+            # Heading is added in _rebuild_investigation_menu (with Knowledge).
+            self._investigation_col = _ai_more_col()
             more_grid.addWidget(
                 self._investigation_col,
                 n_groups // 2, n_groups % 2,
