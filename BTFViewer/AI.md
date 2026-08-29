@@ -592,7 +592,7 @@ Live `ai-test` defaults to Full evidence. Use **`--compare-context`** to measure
 
 ## AI tools reference
 
-The current implementation exposes 61 tools. Evidence queries, investigation-state tools, and exports run immediately. The nine viewer-changing tools wait for **Apply** unless **Auto-apply GUI actions** is on: `set_cursors`, `zoom_to_range`, `highlight_task`, `set_view_mode`, `open_corridor_inspector`, `add_annotation`, `bookmark_finding`, `clear_marks`, and `reset_view`. Names and parameters are in [Complete tool reference](#complete-gui-tool-reference) below.
+The current implementation exposes 60 tools. Evidence queries, investigation-state tools, and exports run immediately. The nine viewer-changing tools wait for **Apply** unless **Auto-apply GUI actions** is on: `set_cursors`, `zoom_to_range`, `highlight_task`, `set_view_mode`, `open_corridor_inspector`, `add_annotation`, `bookmark_finding`, `clear_marks`, and `reset_view`. Names and parameters are in [Complete tool reference](#complete-gui-tool-reference) below.
 
 It is easier to understand the AI tools by **purpose** than by function name.
 

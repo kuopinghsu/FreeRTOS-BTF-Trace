@@ -571,7 +571,7 @@ Live `ai-test` 預設使用 **Full Evidence**。使用 **`--compare-context`** �
 
 ## AI 工具參考（AI tools reference）
 
-目前實作提供 61 個工具。證據查詢、調查狀態與匯出工具會立即執行。僅導覽的批次（`set_cursors`、`zoom_to_range`、`highlight_task`）也會立即套用。其餘會改變檢視器的工具，除非已啟用 **Auto-apply GUI actions**，否則會等待使用者按下 **Apply**：`set_view_mode`、`open_corridor_inspector`、`add_annotation`、`bookmark_finding`、`clear_marks`、`reset_view`。
+目前實作提供 60 個工具。證據查詢、調查狀態與匯出工具會立即執行。九個會改變檢視器的工具，除非已啟用 **Auto-apply GUI actions**，否則會等待使用者按下 **Apply**：`set_cursors`、`zoom_to_range`、`highlight_task`、`set_view_mode`、`open_corridor_inspector`、`add_annotation`、`bookmark_finding`、`clear_marks`、`reset_view`。
 
 完整工具名稱與參數請參閱下方的[完整工具參考](#complete-gui-tool-reference)。
 
