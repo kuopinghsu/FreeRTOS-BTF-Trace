@@ -4,22 +4,6 @@
     <div class="marks-section">
       <div class="marks-section-header">
         <span>Marks ({{ marks.length }})</span>
-        <div class="mark-add-group">
-          <button
-            class="mark-add-btn"
-            title="Add bookmark at viewport centre"
-            @click="emit('addBookmark')"
-          >
-            +B
-          </button>
-          <button
-            class="mark-add-btn"
-            title="Add annotation at viewport centre"
-            @click="emit('addAnnotation')"
-          >
-            +A
-          </button>
-        </div>
       </div>
       <div
         v-if="marks.length > 0"
@@ -150,7 +134,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits([
-  'addBookmark', 'addAnnotation', 'deleteMark', 'jumpTo', 'updateLabel',
+  'deleteMark', 'jumpTo', 'updateLabel',
   'importMarks', 'clearBookmarks', 'clearAnnotations', 'selectMark',
   'exportSession', 'importSession',
 ])
@@ -321,7 +305,6 @@ defineExpose({ focusAnnotation })
 
 .marks-section-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
   padding: 4px 10px;
   font-size: 10px;
@@ -331,25 +314,6 @@ defineExpose({ focusAnnotation })
   color: var(--fg-dim);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-}
-
-.mark-add-group {
-  display: flex;
-  gap: 4px;
-}
-
-.mark-add-btn {
-  background: var(--tb-btn-active);
-  border: 1px solid var(--accent);
-  border-radius: 3px;
-  color: var(--accent);
-  cursor: pointer;
-  padding: 0 6px;
-  font-size: 14px;
-  line-height: 1.2;
-}
-.mark-add-btn:hover {
-  opacity: 0.8;
 }
 
 .mark-list {

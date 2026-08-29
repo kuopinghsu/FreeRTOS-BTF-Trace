@@ -610,8 +610,6 @@
                 :marks="marks"
                 :time-scale="trace.timeScale"
                 :time-decimals="appSettings.timeDecimals"
-                @add-bookmark="onAddMark"
-                @add-annotation="onAddAnnotationAtCenter"
                 @delete-mark="onDeleteMark"
                 @jump-to="onJumpToMark"
                 @update-label="onUpdateMarkLabel"

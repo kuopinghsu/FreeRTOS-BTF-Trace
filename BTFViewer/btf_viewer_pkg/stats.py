@@ -9717,7 +9717,8 @@ class _AnalysisFindingsDialog(QDialog):
                 ev_l.setWordWrap(True)
                 ev_l.setFont(ui_font)
                 ev_l.setStyleSheet(
-                    f"color: {muted}; font-size: {ui_fs}; font-family: monospace;")
+                    f"color: {muted}; font-size: {ui_fs};"
+                    f" font-family: '{_get_fixed_font_family()}';")
                 vbox.addWidget(ev_l)
             if check_next:
                 cn_l = QLabel(f"CHECK NEXT  {check_next}")

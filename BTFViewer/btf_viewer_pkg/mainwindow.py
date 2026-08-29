@@ -1174,12 +1174,6 @@ def _normalize_settings_page(page: str) -> str:
     return "Appearance"
 
 
-# Cap on the Cursors table's "Task at cursor" column width (px) — keeps a
-# timestamp with many simultaneous tasks from stretching the whole table;
-# matches the web app's `.task-cell { max-width: 120px }` ellipsis behavior.
-_CURSOR_TABLE_TASK_COL_MAX_W = 160
-
-
 def _critical_with_detail(parent, title: str, message: str, detail: str) -> None:
     """Step-1 item 13: show *message* as the primary text and the raw
     exception/technical detail behind a native "Show Details..." disclosure,
@@ -1213,9 +1207,10 @@ class _MarkRowWidget(QWidget):
         self.ns = ns
         color = self._KIND_COLOR.get(kind, "#FFD700")
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(4, 2, 4, 2)
-        lay.setSpacing(6)
+        lay.setContentsMargins(8, 2, 8, 2)   # web .mark-item padding: 2px 8px
+        lay.setSpacing(4)                     # web .mark-item gap: 4px
 
+        # Web `.mark-kind`: 16px circle, black bold glyph.
         badge = QLabel("A" if kind == "annotation" else "B")
         badge.setFixedSize(16, 16)
         badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1224,24 +1219,37 @@ class _MarkRowWidget(QWidget):
             f"background:{color}; color:#000; border-radius:8px; font-weight:700; font-size:8pt;")
         lay.addWidget(badge, 0)
 
+        _mono = _get_fixed_font_family()
         time_lbl = QLabel(time_str)
-        time_lbl.setStyleSheet(f"color:{color}; font-family:monospace; font-size:9pt;")
+        # No hard-coded font-size: inherit the (user-scalable) panel font so
+        # every Marks-panel section renders at one size.
+        time_lbl.setStyleSheet(f"color:{color}; font-family:'{_mono}';")
         time_lbl.setToolTip(tooltip)
-        time_lbl.setMinimumWidth(0)
+        time_lbl.setMinimumWidth(64)          # web .mark-time min-width: 70px
         lay.addWidget(time_lbl, 0)
 
+        # Web `.mark-label`: borderless input, border appears on hover / focus.
         edit = QLineEdit(text)
         edit.setPlaceholderText("label…")
         edit.setFrame(False)
+        edit.setStyleSheet(
+            "QLineEdit { background:transparent; border:1px solid transparent;"
+            f" border-radius:3px; font-family:'{_mono}'; padding:1px 4px; }}"
+            "QLineEdit:hover { border-color:rgba(127,127,127,0.5); }"
+            "QLineEdit:focus { border-color:#4A9EFF; background:palette(base); }")
         edit.editingFinished.connect(self._on_edit_finished)
         lay.addWidget(edit, 1)
         self._edit = edit
 
+        # Web `.mark-del`: plain "×", turns red on hover.
         del_btn = QToolButton()
         del_btn.setText("×")
         del_btn.setAutoRaise(True)
         del_btn.setToolTip("Delete mark")
         del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        del_btn.setStyleSheet(
+            "QToolButton { border:none; color:#999; padding:1px 4px; }"
+            "QToolButton:hover { color:#FF5555; }")
         del_btn.clicked.connect(lambda: self.deleteRequested.emit(self.kind, self.mark_id))
         lay.addWidget(del_btn, 0)
 
@@ -1256,6 +1264,125 @@ class _MarkRowWidget(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self.jumpRequested.emit(self.ns)
         super().mousePressEvent(event)
+
+
+class _CursorListWidget(QWidget):
+    """Vertical per-cursor list for the Marks panel.
+
+    Mirrors the web app's ``CursorPanel`` cursor list: one badge + clickable
+    timestamp + delete pill per placed cursor (in slot order), a separator,
+    then a ``Δn  value  (freq)`` row for every gap between time-sorted
+    neighbours.  Shows a hint line while no cursor is placed.
+    """
+
+    jumpRequested   = Signal(int)   # ns
+    deleteRequested = Signal(int)   # ns
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(2, 2, 2, 2)
+        self._lay.setSpacing(3)
+        # Web `.cursor-empty-msg` is muted monospace — NOT italic (unlike the
+        # Cursor-Range / Marks hints).
+        self._empty = QLabel("Click timeline to place cursors")
+        self._empty.setStyleSheet(
+            f"color:#999; font-family:'{_get_fixed_font_family()}';")
+        self._lay.addWidget(self._empty)
+        self._rows: list = []
+
+    def _clear_rows(self) -> None:
+        for w in self._rows:
+            w.setParent(None)
+            w.deleteLater()
+        self._rows.clear()
+
+    def rebuild(self, times: list, trace, *, decimals: int = 3,
+                is_dark: bool = True, ui_font_size: int | None = None) -> None:
+        self._clear_rows()
+        placed = [(i, t) for i, t in enumerate(times or []) if t is not None]
+        if not placed or trace is None:
+            self._empty.setVisible(True)
+            return
+        self._empty.setVisible(False)
+        ts = trace.time_scale
+        colors = _cursor_colors(is_dark)
+        _mono = _get_fixed_font_family()
+
+        # One row per cursor, slot order (web CursorPanel iterates `cursors`):
+        #   [Cn chip]  timestamp .......................................  [×]
+        # Same chip + delete idiom as the Marks rows (_MarkRowWidget).
+        for slot, t in placed:
+            color = colors[slot % len(colors)]
+            row = QWidget()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(4, 2, 4, 2)
+            rl.setSpacing(6)
+
+            badge = QLabel(f"C{slot + 1}")
+            badge.setFixedHeight(16)
+            badge.setMinimumWidth(24)
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge.setToolTip(f"C{slot + 1}")
+            # Web `.cursor-badge`: rounded rectangle (radius 3), not a pill.
+            badge.setStyleSheet(
+                f"background:{color}; color:#000; border-radius:3px;"
+                f" font-weight:700; padding:1px 6px;")
+            rl.addWidget(badge, 0)
+
+            time_btn = QPushButton(_format_time(t, ts, decimals=decimals))
+            time_btn.setFlat(True)
+            time_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            time_btn.setToolTip("Jump to cursor")
+            time_btn.setStyleSheet(
+                "QPushButton { border:none; background:transparent; text-align:left;"
+                f" font-family:'{_mono}'; text-decoration:underline; padding:0 2px; }}"
+                "QPushButton:hover { color:#4a9eff; }")
+            time_btn.clicked.connect(
+                lambda _checked=False, ns=t: self.jumpRequested.emit(ns))
+            rl.addWidget(time_btn, 1)
+
+            del_btn = QToolButton()
+            del_btn.setText("×")
+            del_btn.setAutoRaise(True)
+            del_btn.setToolTip("Remove cursor")
+            del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            del_btn.clicked.connect(
+                lambda _checked=False, ns=t: self.deleteRequested.emit(ns))
+            rl.addWidget(del_btn, 0)
+
+            self._lay.addWidget(row)
+            self._rows.append(row)
+
+        # Δ rows between consecutive time-sorted cursors (web delta rows).
+        sorted_t = sorted(t for _, t in placed)
+        if len(sorted_t) >= 2:
+            sep = QFrame()
+            sep.setFrameShape(QFrame.Shape.HLine)
+            sep.setFrameShadow(QFrame.Shadow.Plain)
+            sep.setStyleSheet("color:#555;")
+            self._lay.addWidget(sep)
+            self._rows.append(sep)
+            for i in range(1, len(sorted_t)):
+                d = sorted_t[i] - sorted_t[i - 1]
+                freq = f"{1e9 / d:.1f} Hz" if d > 0 else "∞ Hz"
+                row = QWidget()
+                rl = QHBoxLayout(row)
+                rl.setContentsMargins(0, 0, 0, 0)
+                rl.setSpacing(6)
+                lbl = QLabel(f"Δ{i}")
+                lbl.setStyleSheet("color:#999;")
+                lbl.setMinimumWidth(48)                       # web .delta-label
+                val = QLabel(_format_time(d, ts, decimals=decimals))
+                val.setStyleSheet("font-weight:500;")         # web .delta-value
+                frq = QLabel(f"({freq})")
+                frq.setStyleSheet("color:#999;")
+                rl.addWidget(lbl, 0)
+                rl.addWidget(val, 0)
+                rl.addWidget(frq, 0)
+                rl.addStretch(1)
+                self._lay.addWidget(row)
+                self._rows.append(row)
 
 
 def _dialog_guard(fn):
@@ -3170,9 +3297,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         legend = getattr(self, "_legend", None)
         if legend is not None:
             legend.restore_row_layout()
-        cursor_table = getattr(self, "_cursor_table", None)
-        if cursor_table is not None:
-            _StatsPanel._fix_stats_table_column_widths(cursor_table)
+        if getattr(self, "_cursor_table", None) is not None:
+            self._apply_cursor_table_columns()
 
     def _resize_right_dock_column(self, w: int) -> None:
         docks = list(self._right_docks())
@@ -4156,6 +4282,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                          border:none; padding:0px 3px; }}
             QHeaderView#stats_table_header::section {{ background:{c['mid']};
                          color:{c['muted_text']}; border:none; padding:0px 10px 0px 3px; }}
+            QLabel#marks_panel_hdr {{ color:{c['muted_text']}; font-weight:700;
+                         padding:3px 2px 2px; }}
+            QLabel#marks_sub_hdr  {{ color:{c['muted_text']}; font-weight:600;
+                         padding:4px 2px 3px; }}
+            QFrame#marks_divider {{ background-color:{c['sep']}; border:none;
+                         min-height:1px; max-height:1px; }}
             QTableWidget::item {{ font-size:{_ui_fs}; padding:2px 4px; }}
             QTableWidget::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
             QHeaderView::section {{ background:{c['mid']}; color:{c['text']};
@@ -4360,10 +4492,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 _pal = self._find_status.palette()
                 _pal.setColor(QPalette.WindowText, QColor(c['muted_text']))
                 self._find_status.setPalette(_pal)
-            if hasattr(self, '_cur_hint'):
-                _pal = self._cur_hint.palette()
-                _pal.setColor(QPalette.WindowText, QColor(c['muted_text']))
-                self._cur_hint.setPalette(_pal)
+            if hasattr(self, '_cursor_list'):
+                # Rebuild so the cursor badges/delete pills pick up the new theme.
+                self._rebuild_cursor_table()
             if hasattr(self, '_view'):
                 defer_rebuilds = any(
                     v._scene._trace is not None for v in self._iter_tab_views())
@@ -4704,54 +4835,114 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         marks_v.setSpacing(6)
         marks_v.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
 
-        def _section_header(text: str) -> QLabel:
+        def _marks_hline() -> QFrame:
+            # A real 1px separator widget — a QLabel `border-bottom` in a Qt
+            # stylesheet does not paint reliably, so use a filled 1px strip.
+            line = QFrame()
+            line.setObjectName("marks_divider")
+            line.setFixedHeight(1)
+            line.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            return line
+
+        def _section_header(text: str) -> QWidget:
+            # Web `.panel-header` / `.marks-section-header`: upper-case, muted
+            # caption closed off with a hairline rule.
+            box = QWidget()
+            v = QVBoxLayout(box)
+            v.setContentsMargins(0, 0, 0, 0)
+            v.setSpacing(3)
+            lbl = QLabel(text.upper())
+            lbl.setObjectName("marks_panel_hdr")
+            v.addWidget(lbl)
+            v.addWidget(_marks_hline())
+            return box
+
+        def _sub_header(text: str) -> QLabel:
+            # Web `.comparison-title`: lighter inline caption, no rule.
             lbl = QLabel(text)
-            lbl.setStyleSheet("font-weight:bold;")
+            lbl.setObjectName("marks_sub_hdr")
             return lbl
 
-        # ---- Cursors section ----
+        # ---- Cursors section (mirrors the web app's CursorPanel.vue) ----
         marks_v.addWidget(_section_header("Cursors"))
         cur_v = QVBoxLayout()
         cur_v.setContentsMargins(0, 0, 0, 0)
-        cur_v.setSpacing(2)
+        cur_v.setSpacing(4)
+
+        # Per-cursor list + Δ rows (web: <div class="cursor-list">).  The whole
+        # Cursors section is content-height (web sections are not fixed-size): it
+        # grows one row per cursor and the Marks list below takes the slack.
+        self._cursor_list = _CursorListWidget()
+        self._cursor_list.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self._cursor_list.jumpRequested.connect(self._jump_to_ns)
+        self._cursor_list.deleteRequested.connect(self._on_cursor_delete)
+        cur_v.addWidget(self._cursor_list)
+
+        # "Task at cursor" comparison table (web: <div class="comparison-block">
+        # with a light `.comparison-title`, not a bordered panel header).
+        self._cursor_task_header = _sub_header("Task at cursor")
+        cur_v.addWidget(self._cursor_task_header)
+        self._cursor_table = QTableWidget(0, 4)
+        # Borderless / no-grid / no-zebra look, matching the web comparison
+        # table and the Statistics tab tables (reuses the #stats_table QSS).
+        self._cursor_table.setObjectName("stats_table")
+        self._cursor_table.horizontalHeader().setObjectName("stats_table_header")
+        self._cursor_table.setHorizontalHeaderLabels(["#", "Time", "Task", "Δ C1"])
+        _dc1_hdr = self._cursor_table.horizontalHeaderItem(3)
+        if _dc1_hdr is not None:
+            _dc1_hdr.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._cursor_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self._cursor_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._cursor_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._cursor_table.verticalHeader().setVisible(False)
+        self._cursor_table.setShowGrid(False)
+        self._cursor_table.setAlternatingRowColors(False)
+        self._cursor_table.setFrameShape(QFrame.Shape.NoFrame)
+        self._cursor_table.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self._cursor_table.horizontalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        _cur_vh = self._cursor_table.verticalHeader()
+        _cur_vh.setMinimumSectionSize(STATS_TABLE_ROW_H)
+        _cur_vh.setDefaultSectionSize(STATS_TABLE_ROW_H)
+        self._cursor_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._cursor_table.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self._cursor_table.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cursor_table.cellClicked.connect(self._on_cursor_table_clicked)
+        self._apply_cursor_table_columns()
+        cur_v.addWidget(self._cursor_table)
+
+        # "Clear All" sits at the foot of the section (web: <div class="cursor-actions">).
         cur_clear_row = QHBoxLayout()
         cur_clear_row.setContentsMargins(0, 0, 0, 0)
-        cur_clear_row.addStretch(1)
         self._cursors_clear_all_btn = QPushButton("Clear All")
         self._cursors_clear_all_btn.setObjectName("cursors_clear_all_btn")
         self._cursors_clear_all_btn.setToolTip("Clear all cursors (Shift+C)")
         self._cursors_clear_all_btn.setEnabled(False)
         self._cursors_clear_all_btn.clicked.connect(lambda: self._view.clear_cursors())
-        cur_clear_row.addWidget(self._cursors_clear_all_btn, 0)
+        cur_clear_row.addWidget(self._cursors_clear_all_btn, 1)
         cur_v.addLayout(cur_clear_row)
-        cur_v.addWidget(_section_header("Task at cursor"))
-        self._cursor_table = QTableWidget(0, 4)
-        self._cursor_table.setHorizontalHeaderLabels(["#", "Time", "Task", "Δ C1"])
-        self._cursor_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self._cursor_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self._cursor_table.verticalHeader().setVisible(False)
-        self._cursor_table.setAlternatingRowColors(True)
-        self._cursor_table.setTextElideMode(Qt.TextElideMode.ElideRight)
-        self._cursor_table.cellClicked.connect(self._on_cursor_table_clicked)
-        _StatsPanel._fix_stats_table_column_widths(self._cursor_table)
-        cur_v.addWidget(self._cursor_table)
-        self._cur_hint = QLabel("Click a row to navigate to that cursor")
-        self._cur_hint.setStyleSheet("color:#999; font-size:9pt;")
-        cur_v.addWidget(self._cur_hint)
         marks_v.addLayout(cur_v)
 
         # ---- Cursor Range section ----
         marks_v.addWidget(_section_header("Cursor Range"))
 
+        _mono_fam = _get_fixed_font_family()
+
         def _range_row(key: str) -> tuple:
+            # Web `.cursor-range-body`: monospace; muted key on the left, value
+            # right-aligned.  Font-size is inherited (matches the other sections).
             row = QWidget()
             row_lay = QHBoxLayout(row)
-            row_lay.setContentsMargins(0, 0, 0, 0)
+            row_lay.setContentsMargins(2, 0, 2, 0)
             row_lay.setSpacing(6)
             key_lbl = QLabel(key)
-            key_lbl.setStyleSheet("color:#999; font-size:9pt;")
+            key_lbl.setStyleSheet(f"color:#999; font-family:'{_mono_fam}';")
             val_lbl = QLabel("")
-            val_lbl.setStyleSheet("font-size:9pt;")
+            val_lbl.setStyleSheet(f"font-family:'{_mono_fam}';")
             row_lay.addWidget(key_lbl, 0)
             row_lay.addStretch(1)
             row_lay.addWidget(val_lbl, 0)
@@ -4759,8 +4950,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         self._cursor_range_body = QWidget()
         cr_v = QVBoxLayout(self._cursor_range_body)
-        cr_v.setContentsMargins(0, 0, 0, 0)
-        cr_v.setSpacing(1)
+        cr_v.setContentsMargins(0, 6, 0, 6)   # web .cursor-range-body padding
+        cr_v.setSpacing(2)
         self._cr_span_row, self._cr_span_val = _range_row("Span")
         cr_v.addWidget(self._cr_span_row)
         self._cr_slices_row, self._cr_slices_val = _range_row("Slices")
@@ -4775,28 +4966,19 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         cr_v.addWidget(self._cr_max_row)
         marks_v.addWidget(self._cursor_range_body)
         self._cursor_range_hint = QLabel("Place 2+ cursors to measure range")
-        self._cursor_range_hint.setStyleSheet("color:#999;")
+        self._cursor_range_hint.setStyleSheet("color:#999; font-style:italic;")
         self._cursor_range_hint.setWordWrap(True)
         marks_v.addWidget(self._cursor_range_hint)
         self._cursor_range_body.setVisible(False)
 
         # ---- Marks section (flattened bookmarks + annotations, sorted by time) ----
-        marks_hdr_row = QHBoxLayout()
-        marks_hdr_row.setContentsMargins(0, 0, 0, 0)
-        marks_hdr_row.setSpacing(6)
-        self._marks_count_label = _section_header("Marks (0)")
-        marks_hdr_row.addWidget(self._marks_count_label, 1)
-        mark_add_b = QPushButton("+B")
-        mark_add_b.setToolTip("Add bookmark at viewport centre")
-        mark_add_b.setFixedWidth(32)
-        mark_add_b.clicked.connect(self._add_bookmark_at_center)
-        marks_hdr_row.addWidget(mark_add_b, 0)
-        mark_add_a = QPushButton("+A")
-        mark_add_a.setToolTip("Add annotation at viewport centre")
-        mark_add_a.setFixedWidth(32)
-        mark_add_a.clicked.connect(self._add_annotation_at_center)
-        marks_hdr_row.addWidget(mark_add_a, 0)
-        marks_v.addLayout(marks_hdr_row)
+        # Web has BOTH the outer panel header ("Marks") and the component's own
+        # count header ("Marks (N)"), the latter closed off with a divider rule
+        # (web `.marks-section-header { border-bottom }`).
+        marks_v.addWidget(_section_header("Marks"))
+        self._marks_count_label = _sub_header("MARKS (0)")
+        marks_v.addWidget(self._marks_count_label)
+        marks_v.addWidget(_marks_hline())
 
         self._marks_list = QListWidget()
         self._marks_list.setObjectName("marks_list")
@@ -4804,15 +4986,28 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._marks_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._marks_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._marks_list.setUniformItemSizes(True)
+        # The Marks list is the one flexible row: it absorbs the vertical slack
+        # so the content-height Cursors section above stays compact (web: the
+        # `.mark-list` is `flex: 1`).
+        self._marks_list.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         _mark_del_key = QShortcut(QKeySequence(Qt.Key.Key_Delete), self._marks_list)
         _mark_del_key.setContext(Qt.ShortcutContext.WidgetShortcut)
         _mark_del_key.activated.connect(self._delete_selected_mark)
-        marks_v.addWidget(self._marks_list)
+        marks_v.addWidget(self._marks_list, 1)
 
-        self._marks_empty_hint = QLabel("Right-click timeline to add")
-        self._marks_empty_hint.setStyleSheet("color:#999; font-size:9pt;")
+        self._marks_empty_hint = QLabel("Right-click timeline to add · Double-click or press B / A")
+        self._marks_empty_hint.setWordWrap(True)
+        self._marks_empty_hint.setStyleSheet("color:#999; font-style:italic;")
+        self._marks_empty_hint.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        # When the list is hidden (no marks) the hint takes the list's slack so
+        # the Export/Import row stays pinned at the foot — web keeps
+        # `.marks-section { flex: 1 }` whether or not there are marks.
+        self._marks_empty_hint.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self._marks_empty_hint.setVisible(False)
-        marks_v.addWidget(self._marks_empty_hint)
+        marks_v.addWidget(self._marks_empty_hint, 1)
 
 
         marks_io_row = QGridLayout()
@@ -4820,7 +5015,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         marks_io_row.setHorizontalSpacing(6)
         marks_io_row.setVerticalSpacing(4)
         marks_export_btn = QPushButton("Export Marks")
+        self._marks_export_btn = marks_export_btn
         marks_export_btn.setToolTip("Export Marks (bookmarks + annotations) to a CSV file")
+        marks_export_btn.setEnabled(False)
         marks_export_btn.clicked.connect(self._export_marks_csv)
         marks_io_row.addWidget(marks_export_btn, 0, 0)
         marks_import_btn = QPushButton("Import Marks")
@@ -10199,8 +10396,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._view._has_bookmarks = bool(self._bookmarks)
             self._view._has_annotations = bool(self._annotations)
         n = len(self._bookmarks) + len(self._annotations)
-        self._marks_count_label.setText(f"Marks ({n})")
+        self._marks_count_label.setText(f"MARKS ({n})")
+        # Web swaps the list out for the hint when there are no marks.
+        _has_marks = n > 0 and self._trace is not None
+        self._marks_list.setVisible(_has_marks)
         self._marks_empty_hint.setVisible(n == 0 and self._trace is not None)
+        if hasattr(self, "_marks_export_btn"):
+            self._marks_export_btn.setEnabled(_has_marks)
         if hasattr(self, "_marks_clear_b_btn"):
             self._marks_clear_b_btn.setEnabled(bool(self._bookmarks))
         if hasattr(self, "_marks_clear_a_btn"):
@@ -11312,7 +11514,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # Structured "Cursor Range" section in the Marks panel (matches web).
         self._cursor_range_hint.setVisible(False)
         self._cursor_range_body.setVisible(True)
-        self._cr_span_val.setText(_format_time(dt, unit, decimals=1))
+        # Web `rangeStats.js` formats every value with the app's timeDecimals
+        # (Seg avg is rounded to whole ns first, like `Math.round`).
+        _rd = self._time_decimals_val
+        self._cr_span_val.setText(_format_time(dt, unit, decimals=_rd))
         self._cr_slices_val.setText(str(switches))
         self._cr_top_row.setVisible(bool(task_acc))
         if task_acc:
@@ -11322,9 +11527,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._cr_avg_row.setVisible(has_durations)
         self._cr_max_row.setVisible(has_durations)
         if has_durations:
-            self._cr_min_val.setText(_format_time(min(durations), unit, decimals=1))
-            self._cr_avg_val.setText(_format_time(sum(durations) / len(durations), unit, decimals=1))
-            self._cr_max_val.setText(_format_time(max(durations), unit, decimals=1))
+            self._cr_min_val.setText(_format_time(min(durations), unit, decimals=_rd))
+            self._cr_avg_val.setText(_format_time(round(sum(durations) / len(durations)), unit, decimals=_rd))
+            self._cr_max_val.setText(_format_time(max(durations), unit, decimals=_rd))
         # Compact status-bar version: span + segment min/max/avg
         if durations:
             d_min = _format_time(min(durations), unit, decimals=1)
@@ -11385,12 +11590,42 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 found.append(_task_display_name(raw))
         return ", ".join(dict.fromkeys(found)) if found else "—"
 
+    def _apply_cursor_table_columns(self) -> None:
+        """Column sizing for the "Task at cursor" table.
+
+        ``#``, ``Time`` and ``Δ C1`` hug their content; ``Task`` takes the slack
+        so it grows/shrinks with the panel width (web: the table is ``width:100%``
+        and the task cell is the flexible one).  ``Δ C1`` stays pinned to the
+        right edge.
+        """
+        hdr = self._cursor_table.horizontalHeader()
+        hdr.setStretchLastSection(False)
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self._cursor_table.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._cursor_table.setMinimumWidth(0)
+
     def _rebuild_cursor_table(self) -> None:
-        """Populate the Cursors comparison tab with current cursor data."""
+        """Repopulate the Cursors section (per-cursor list + "Task at cursor" table)."""
         if not hasattr(self, "_cursor_table"):
             return
         times = self._view._scene.cursor_times()
-        if not times or self._trace is None:
+        if hasattr(self, "_cursor_list"):
+            self._cursor_list.rebuild(
+                times, self._trace,
+                decimals=self._time_decimals_val,
+                is_dark=self._is_dark,
+                ui_font_size=getattr(self, "_ui_font_size_val", None),
+            )
+        # Web shows the "Task at cursor" block only when a cursor is placed.
+        _has_cursor = bool(times) and self._trace is not None
+        if hasattr(self, "_cursor_task_header"):
+            self._cursor_task_header.setVisible(_has_cursor)
+        self._cursor_table.setVisible(_has_cursor)
+        if not _has_cursor:
             self._cursor_table.setRowCount(0)
             return
         unit = self._current_time_unit()
@@ -11414,16 +11649,23 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 dt = ns - c1
                 sign = "+" if dt >= 0 else ""
                 delta_item = QTableWidgetItem(f"{sign}{_format_time(abs(dt), unit, decimals=self._time_decimals_val)}")
+            delta_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             for it in (ci, ti, task_item, delta_item):
                 it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._cursor_table.setItem(row, 0, ci)
             self._cursor_table.setItem(row, 1, ti)
             self._cursor_table.setItem(row, 2, task_item)
             self._cursor_table.setItem(row, 3, delta_item)
-        self._cursor_table.resizeColumnsToContents()
-        _task_col_w = self._cursor_table.columnWidth(2)
-        if _task_col_w > _CURSOR_TABLE_TASK_COL_MAX_W:
-            self._cursor_table.setColumnWidth(2, _CURSOR_TABLE_TASK_COL_MAX_W)
+        # Column widths are governed by _apply_cursor_table_columns() (Task
+        # stretches, the rest hug content) — no manual sizing here.
+        # Fit the table's height to its rows so the Cursors section stays
+        # content-height (no fixed reserve) like the web layout.
+        _h = self._cursor_table.horizontalHeader().height()
+        for _r in range(self._cursor_table.rowCount()):
+            _h += self._cursor_table.rowHeight(_r)
+        _h += 2 * self._cursor_table.frameWidth()
+        self._cursor_table.setFixedHeight(_h)
 
     def _on_cursor_table_clicked(self, row: int, _col: int) -> None:
         """Jump the timeline to the cursor selected in the comparison table."""

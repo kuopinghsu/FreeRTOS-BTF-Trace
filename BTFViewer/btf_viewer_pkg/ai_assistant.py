@@ -5550,6 +5550,7 @@ def create_ai_assistant_panel(
 
         def apply_theme(self, is_dark: bool) -> None:
             """Match AI chrome (More menu, chips, composer, log) to the app theme."""
+            from .timeline_util import _get_fixed_font_family
             self._is_dark = bool(is_dark)
             c = _ai_chrome_colors(self._is_dark)
             if getattr(self, "_mode_host", None) is not None:
@@ -5599,7 +5600,7 @@ def create_ai_assistant_panel(
             if getattr(self, "_start_inv_context", None) is not None:
                 self._start_inv_context.setStyleSheet(
                     f"color:{c['text']};font-size:11px;"
-                    f"font-family:monospace;"
+                    f"font-family:'{_get_fixed_font_family()}';"
                 )
             if getattr(self, "_status", None) is not None:
                 self._status.setStyleSheet(f"color:{c['muted']};font-size:11px;")
