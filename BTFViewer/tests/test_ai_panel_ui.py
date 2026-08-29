@@ -14,6 +14,7 @@ if str(BTF_ROOT) not in sys.path:
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from tests import reap_qt_widgets  # noqa: E402
 from btf_viewer_pkg._bootstrap import install  # noqa: E402
 
 install()
@@ -97,6 +98,7 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_TOOL_VALIDATE_EXPERIMENT,
     AI_TOOL_WHAT_IF,
     AI_VIEWER_TOOL_NAMES,
+    max_tool_rounds,
 )
 
 
@@ -110,14 +112,22 @@ def _app() -> QApplication:
 class AiPanelUiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        _app()
+        app = _app()
+        app.setQuitOnLastWindowClosed(False)
 
-    def _panel(self):
-        return create_ai_assistant_panel(
-            None,
-            get_context=lambda: {"findings_text": "findings"},
-            get_settings=lambda: {"enabled": "true"},
-        )
+    @classmethod
+    def tearDownClass(cls) -> None:
+        reap_qt_widgets()
+
+    def _panel(self, parent=None, **kwargs):
+        kw = {
+            "get_context": lambda: {"findings_text": "findings"},
+            "get_settings": lambda: {"enabled": "true"},
+        }
+        kw.update(kwargs)
+        panel = create_ai_assistant_panel(parent, **kw)
+        self.addCleanup(panel.deleteLater)
+        return panel
 
     def test_ask_needs_a_question(self) -> None:
         """Send stays disabled until the box has text (web parity)."""
@@ -366,6 +376,25 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertIn("## AI Assistant", clip)
         self.assertIn("see jump:12.", clip)
         self.assertEqual(panel._status.text(), "Copied to clipboard.")
+
+    def test_log_menu_ask_ai_sends_selected_text(self) -> None:
+        panel = self._panel()
+        with patch.object(panel, "send_current") as send:
+            panel._ask_log_selection("  Why is Low[266] blocked?  ")
+        send.assert_called_once()
+        self.assertEqual(panel._input.toPlainText(), "Why is Low[266] blocked?")
+        with patch.object(panel, "send_current") as send:
+            panel._ask_log_selection("   ")
+        send.assert_not_called()
+        with patch.object(panel, "send_current") as send:
+            panel._ask_log_selection("Low[266]")
+        send.assert_not_called()
+
+        panel._append("assistant", "Critical path: Low[266]")
+        found = panel._log.document().find("Low[266]")
+        self.assertFalse(found.isNull())
+        panel._log.setTextCursor(found)
+        self.assertEqual(panel._log_selected_text(), "Low[266]")
 
     def test_signin_cta_opens_browser(self) -> None:
         panel = self._panel()
@@ -923,6 +952,50 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertEqual(len(panel._entries), 1)
         self.assertIn("jump:3300000", ai_entry_text(panel._entries[0]))
 
+    def test_evidence_fold_toggle_does_not_scroll_to_earlier_reply(self) -> None:
+        """Expanding Checks must keep Evidence in view (Web <details> lockstep)."""
+        from btf_viewer_pkg.ai_investigation import format_evidence_panel_markdown
+
+        panel = self._panel()
+        app = _app()
+        panel.resize(420, 360)
+        panel.show()
+        for i in range(10):
+            panel._append(
+                "assistant",
+                f"AI Assistant reply {i}. " + ("blocking latency " * 24),
+            )
+        md = format_evidence_panel_markdown({
+            "conclusion": "Mutex stall",
+            "confidence": "Medium",
+            "checks": [
+                {"label": "Migrations", "status": "fail"},
+                {"label": "Mutex blocking", "status": "fail"},
+            ],
+        }, "English")
+        panel._append("evidence", md)
+        panel._log_stack.setCurrentIndex(1)
+        panel._log.setFixedHeight(160)
+        app.processEvents()
+        bar = panel._log.verticalScrollBar()
+        bar.setValue(bar.maximum())
+        app.processEvents()
+        before = bar.value()
+        self.assertGreater(
+            before, 8,
+            "log must be scrollable so a jump-to-top is detectable",
+        )
+        html = panel._log.toHtml()
+        match = re.search(r'href="(btffold:open/[^"]+)"', html)
+        self.assertIsNotNone(match, "Checks fold should expose a btffold:open link")
+        href = match.group(1).replace("&amp;", "&")
+        panel._on_jump_link(QUrl(href))
+        for _ in range(4):
+            app.processEvents()
+        after = bar.value()
+        self.assertGreater(after, 8, "fold toggle must not jump to the earlier AI Assistant turn")
+        self.assertGreaterEqual(after, before - 24)
+
     def test_evidence_score_survives_late_planner_tool(self) -> None:
         """Start Investigation ends with challenge/rank tools that omit times."""
         panel = self._panel()
@@ -1019,6 +1092,278 @@ class AiPanelUiTests(unittest.TestCase):
             panel._on_jump_link(QUrl(f"btfhyp:test/{hid}"))
         send.assert_called_once()
         self.assertIn("Test hypothesis", panel._input.toPlainText())
+
+    def test_generated_next_step_does_not_record_template_use(self) -> None:
+        panel = self._panel()
+        panel._evidence_payload = {
+            "next_steps": [{
+                "label": "Verify mutex contention",
+                "prompt": "Verify mutex contention in the current scope.",
+                "reason": "missing mutex",
+                "kind": "verify",
+            }],
+        }
+        with patch.object(panel, "send_current") as send, patch.object(
+            panel, "_record_template_use",
+        ) as rec:
+            panel._on_jump_link(QUrl("btfnext:run/0"))
+        send.assert_called_once()
+        rec.assert_not_called()
+        self.assertIn("Verify mutex contention", panel._input.toPlainText())
+        self.assertTrue(panel._skip_interpret)
+
+    def test_nextstep_tag_run_sends_tagged_sentence(self) -> None:
+        zh_action = (
+            "建議將 CS[20] 任務固定 (pin) 至單一核心 (設定 CPU Affinity)，"
+            "以消除頻繁的上下文切換開銷與快取失效問題，隨後重新觀察系統整體"
+            "遷移負載是否下降。"
+        )
+        english_prompt = "Inspect Core Migrations in the current scope."
+        panel = self._panel()
+        panel._tool_round = 8
+        panel._active_template_id = "auto_investigate"
+        panel._evidence_payload = {
+            "conclusion": "Mutex stall",
+            "coverage": {"percent": 90},
+            "confidence": "high",
+            "next_steps": [{
+                "label": "Inspect core migrations",
+                "prompt": english_prompt,
+                "kind": "statistics",
+            }],
+        }
+        panel._on_ok(json.dumps({
+            "content": (
+                "下一步檢查 (Next check)\n"
+                f"nextstep:{{{zh_action}}}\n"
+            ),
+            "tool_calls": [],
+        }))
+        log = panel._log.toHtml()
+        self.assertIn("btfnext:text/0", log)
+        self.assertNotIn("btfnext:run/0", log)
+        self.assertIn(zh_action, panel._log.toPlainText())
+        self.assertNotIn("nextstep:", panel._log.toPlainText())
+        rows = (panel._evidence_payload or {}).get("prose_nextsteps") or []
+        self.assertEqual(rows[0], zh_action)
+        with patch.object(panel, "send_current") as send, patch.object(
+            panel, "_record_template_use",
+        ) as rec:
+            panel._on_jump_link(QUrl("btfnext:text/0"))
+        send.assert_called_once()
+        rec.assert_not_called()
+        self.assertEqual(panel._input.toPlainText(), zh_action)
+        self.assertNotEqual(panel._input.toPlainText(), english_prompt)
+        self.assertTrue(panel._skip_interpret)
+
+    def test_final_reply_without_tools_shows_verdict(self) -> None:
+        """A text-only final reply is shown immediately."""
+        executed = []
+
+        def _exec(calls):
+            executed.append([c.get("name") for c in calls])
+            return [{"ok": True, "message": "ok"}]
+
+        panel = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {"findings_text": "findings"},
+            get_settings=lambda: {"enabled": "true"},
+            on_execute_tools=_exec,
+        )
+        panel._evidence_payload = {
+            "conclusion": "Mutex stall",
+            "coverage": {"percent": 35},
+        }
+        with patch.object(panel, "_continue_with_messages") as cont:
+            panel._on_ok(json.dumps({
+                "content": "Verdict: mutex stall.",
+                "tool_calls": [],
+            }))
+        self.assertEqual(executed, [])
+        cont.assert_not_called()
+        self.assertIn("Verdict: mutex stall.", panel._log.toPlainText())
+
+    def test_empty_final_reply_after_tools_uses_evidence_fallback(self) -> None:
+        panel = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {"findings_text": "findings"},
+            get_settings=lambda: {"enabled": "true"},
+        )
+        panel._evidence_payload = {
+            "conclusion": "Critical path: Low[266]",
+            "next_steps": [{
+                "label": "Inspect core-pair migrations",
+                "prompt": "Inspect Core-Pair Migration Summary in the current scope.",
+                "kind": "statistics",
+            }],
+        }
+        panel._complete_final_assistant_reply("")
+        log = panel._log.toPlainText()
+        self.assertIn("Critical path: Low[266]", log)
+        self.assertIn("Inspect core-pair migrations", log)
+
+    def test_empty_final_reply_without_rich_evidence_still_shows_wrap_up(self) -> None:
+        """Tools + Evidence with a thin payload must not leave the AI log blank."""
+        panel = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {"findings_text": "findings"},
+            get_settings=lambda: {"enabled": "true"},
+        )
+        panel._evidence_payload = {"confidence": "Medium"}
+        panel._complete_final_assistant_reply("")
+        log = panel._log.toPlainText()
+        self.assertTrue(log.strip(), "expected a synthesized assistant wrap-up")
+        self.assertIn("Evidence", log)
+
+    def test_empty_model_reply_after_tools_skips_error_bubble(self) -> None:
+        panel = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {"findings_text": "findings"},
+            get_settings=lambda: {"enabled": "true"},
+        )
+        panel._evidence_payload = {
+            "conclusion": "Critical path: Low[266]",
+            "evidence": [{"label": "Blocked / off-CPU: wait", "time": 3100477}],
+        }
+        panel._on_err(
+            "The model returned an empty assistant message (finish reason=stop)."
+        )
+        log = panel._log.toPlainText()
+        self.assertIn("Critical path: Low[266]", log)
+        self.assertIn("Blocked / off-CPU: wait", log)
+        self.assertNotIn("(Error)", log)
+
+    def test_casual_reply_without_case_is_shown(self) -> None:
+        panel = self._panel()
+        panel._on_ok(json.dumps({
+            "content": "Hello.",
+            "tool_calls": [],
+        }))
+        self.assertIn("Hello.", panel._log.toPlainText())
+
+    def test_remaining_findings_next_check_gets_run_link(self) -> None:
+        findings = [
+            {"id": "priority_inversion", "title": "Priority inversion",
+             "severity": "warning", "task": "Low[266]"},
+            {"id": "thrashing", "title": "Excessive core migration",
+             "severity": "warning"},
+        ]
+        panel = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {"findings_text": "findings", "findings": findings},
+            get_settings=lambda: {"enabled": "true"},
+        )
+        panel._last_analysis_findings = findings
+        panel._active_template_id = "auto_investigate"
+        panel._tool_round = 8
+        panel._evidence_payload = {
+            "conclusion": "Mutex stall",
+            "coverage": {"percent": 90},
+            "confidence": "high",
+            "finding": {"id": "mutex", "title": "Mutex stall"},
+        }
+        panel._on_ok(json.dumps({
+            "content": (
+                "Remaining Findings (Title + Next Check)\n"
+                "**Priority inversion (id=priority_inversion)**\n"
+                "Title: Priority inversion (L/M/H) suspected for Low[266] and PS[228].\n"
+                "nextstep:{Inspect Priority Inheritance boost episodes.}\n"
+                "**Excessive core migration (id=thrashing)**\n"
+                "Title: Excessive core migration for CS[20].\n"
+                "Next check: Open Core Migrations.\n"
+            ),
+            "tool_calls": [],
+        }))
+        log = panel._log.toHtml()
+        self.assertIn("btfnext:text/0", log)
+        self.assertIn("btfstats:section/priority", log)
+        self.assertIn('href="btfstats:section/priority"', log)
+        self.assertIn("Open Core Migrations.", panel._log.toPlainText())
+        self.assertNotIn("nextstep:", panel._log.toPlainText())
+        steps = (panel._evidence_payload or {}).get("next_steps") or []
+        self.assertTrue(steps)
+        self.assertTrue(any("priority_inversion" in str(s.get("prompt") or "") for s in steps))
+
+    def test_remaining_findings_prose_without_tags_gets_host_nextsteps(self) -> None:
+        """Host appends nextstep tags when Remaining Findings lack them."""
+        findings = [
+            {"id": "blocking", "title": "Off-CPU / scheduling-delay candidates",
+             "severity": "warning", "task": "Med[267]"},
+            {"id": "thrashing", "title": "Excessive core migration",
+             "severity": "warning", "task": "CS[20]"},
+            {"id": "wcet_anomaly", "title": "Anomaly: WCET spike",
+             "severity": "warning"},
+        ]
+        panel = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {"findings_text": "findings", "findings": findings},
+            get_settings=lambda: {"enabled": "true"},
+        )
+        panel._last_analysis_findings = findings
+        panel._evidence_payload = {
+            "conclusion": "Mutex stall",
+            "coverage": {"percent": 90},
+            "confidence": "high",
+            "finding": {"id": "mutex", "title": "Mutex stall"},
+        }
+        panel._on_ok(json.dumps({
+            "content": (
+                "其他尚待處理的發現 (Remaining Findings)\n"
+                "[WARNING] Off-CPU (id=blocking)：建議調查 Med[267]。\n"
+                "[WARNING] Excessive core migration (id=thrashing)：建議調查。\n"
+                "[WARNING] Anomaly: WCET spike (id=wcet_anomaly)：建議調查。\n"
+            ),
+            "tool_calls": [],
+        }))
+        log = panel._log.toHtml()
+        self.assertIn("btfnext:text/0", log)
+        self.assertIn("btfnext:text/1", log)
+        self.assertIn("btfnext:text/2", log)
+        self.assertNotIn("nextstep:", panel._log.toPlainText())
+
+    def test_remaining_findings_two_nextsteps_get_run_links(self) -> None:
+        """Two nextstep:{action} lines each get a conversation [Run]."""
+        findings = [
+            {"id": "priority_inversion", "title": "Priority inversion",
+             "severity": "warning", "task": "Low[266]"},
+            {"id": "thrashing", "title": "Excessive core migration",
+             "severity": "warning"},
+        ]
+        panel = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {"findings_text": "findings", "findings": findings},
+            get_settings=lambda: {"enabled": "true"},
+        )
+        panel._last_analysis_findings = findings
+        panel._evidence_payload = {
+            "conclusion": "Mutex stall",
+            "coverage": {"percent": 90},
+            "confidence": "high",
+            "finding": {"id": "mutex", "title": "Mutex stall"},
+        }
+        remaining = (
+            "Remaining Findings\n"
+            "**Priority inversion (id=priority_inversion)**\n"
+            "Title: Priority inversion (L/M/H) suspected for Low[266] "
+            "and PS[228].\n"
+            "nextstep:{Inspect Priority Inheritance boost episodes "
+            "and holding mutexes in the Mutex Blocking statistics page.}\n"
+            "**Excessive core migration (id=thrashing)**\n"
+            "Title: Excessive core migration for tasks such as CS[20].\n"
+            "nextstep:{Inspect Core-Pair Migration Summary and Dwell Time "
+            "distribution.}\n"
+        )
+        panel._on_ok(json.dumps({
+            "content": remaining,
+            "tool_calls": [],
+        }))
+        log = panel._log.toHtml()
+        self.assertIn("btfnext:text/0", log)
+        self.assertIn("btfnext:text/1", log)
+        self.assertIn("btfstats:section/priority", log)
+        self.assertIn("btfstats:section/migrations", log)
+        self.assertIn('href="btfnext:text/0"', log)
+        self.assertIn("Run Open Statistics", panel._log.toPlainText())
 
     def test_quick_mode_sends_without_interpret_gate(self) -> None:
         panel = self._panel()

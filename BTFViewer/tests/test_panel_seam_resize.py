@@ -17,7 +17,7 @@ from btf_viewer_pkg._bootstrap import install  # noqa: E402
 
 install()
 
-from PySide6.QtCore import QElapsedTimer, QPoint  # noqa: E402
+from PySide6.QtCore import QElapsedTimer, QEvent, QPoint  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from btf_viewer_pkg.mainwindow import MainWindow  # noqa: E402
@@ -28,7 +28,7 @@ from btf_viewer_pkg.view import (  # noqa: E402
     _RIGHT_DOCK_MIN_W,
 )
 
-from tests import destroy_main_window  # noqa: E402
+from tests import destroy_main_window, reap_qt_widgets  # noqa: E402
 
 
 def _wait_ms(app: QApplication, ms: int) -> None:
@@ -45,6 +45,7 @@ class PanelSeamResizeTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls._app = QApplication.instance() or QApplication([])
         cls._app.setQuitOnLastWindowClosed(False)
+        reap_qt_widgets()
 
     def setUp(self) -> None:
         self._tmpdir = tempfile.mkdtemp(prefix="btf_seam_")
@@ -115,6 +116,47 @@ class PanelSeamResizeTest(unittest.TestCase):
         self.assertGreater(wider, start)
         self.assertLessEqual(wider, _RIGHT_DOCK_MAX_W)
         grip._end_drag()
+
+    def test_stylechange_eventfilter_does_not_recurse(self) -> None:
+        """App-wide filter must not re-enter during stylesheet polish."""
+        win = self._make_win()
+        old = sys.getrecursionlimit()
+        sys.setrecursionlimit(80)
+        try:
+            ev = QEvent(QEvent.Type.StyleChange)
+            self.assertFalse(win.eventFilter(win, ev))
+            self._app.setProperty("btf_applying_theme", True)
+            try:
+                self.assertFalse(win.eventFilter(win, ev))
+            finally:
+                self._app.setProperty("btf_applying_theme", False)
+        finally:
+            sys.setrecursionlimit(old)
+
+    def test_mainwindow_survives_orphaned_ai_panels(self) -> None:
+        """Leaked AI panels must not hang the next MainWindow theme apply."""
+        from btf_viewer_pkg.ai_assistant import create_ai_assistant_panel
+
+        panels = [
+            create_ai_assistant_panel(
+                None,
+                get_context=lambda: {"findings_text": "findings"},
+                get_settings=lambda: {"enabled": "true"},
+            )
+            for _ in range(6)
+        ]
+        try:
+            win = self._make_win()
+            start = win._current_right_dock_width()
+            self.assertGreaterEqual(start, _RIGHT_DOCK_MIN_W)
+        finally:
+            for panel in panels:
+                try:
+                    panel.close()
+                    panel.deleteLater()
+                except RuntimeError:
+                    pass
+            self._app.processEvents()
 
     def test_drag_clamps_to_min_and_max(self) -> None:
         win = self._make_win()

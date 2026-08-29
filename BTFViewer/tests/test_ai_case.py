@@ -1243,8 +1243,77 @@ class InvestigationCaseParitySurfaceTests(unittest.TestCase):
             "GUIDED_STAGES",
             "ESTIMATE_BANNER",
             "guideStageNeedles",
+            "computeNextSteps",
+            "normalizeNextSteps",
         ):
             self.assertIn(name, js, name)
+
+    def test_compute_next_steps_limit_stop_and_priority(self) -> None:
+        from btf_viewer_pkg.ai_case import (
+            NEXT_STEP_LIMIT_MAX,
+            normalize_next_steps,
+            compute_next_steps,
+        )
+
+        raw = [
+            {"label": f"s{i}", "prompt": f"Do check {i}", "kind": "follow_up"}
+            for i in range(5)
+        ]
+        self.assertEqual(len(normalize_next_steps(raw, limit=10)), NEXT_STEP_LIMIT_MAX)
+        self.assertEqual(len(normalize_next_steps(raw, limit=2)), 2)
+        done = compute_next_steps({
+            "coverage": {"percent": 90},
+            "confidence": "high",
+            "falsification": {"would_disprove": []},
+        })
+        self.assertEqual(done["steps"], [])
+        self.assertTrue(done["stop_reason"])
+        missing = compute_next_steps({
+            "coverage": {"percent": 50},
+            "confidence": "medium",
+            "conclusion": "Mutex stall",
+            "falsification": {
+                "would_disprove": ["No mutex waiters in scope"],
+                "next_check": "What-if pin TaskA",
+            },
+        })
+        kinds = [s["kind"] for s in missing["steps"]]
+        self.assertTrue(kinds)
+        self.assertEqual(kinds[0], "verify")
+        self.assertNotIn("experiment", kinds)
+        skipped = compute_next_steps({
+            "coverage": {"percent": 50},
+            "confidence": "medium",
+            "falsification": {"would_disprove": ["No mutex waiters"]},
+            "tools_executed": ["verify_claim"],
+        })
+        self.assertEqual(skipped["steps"][0]["kind"], "investigate")
+        one_tab = compute_next_steps({"coverage": {"percent": 20}}, loaded_tab_count=1)
+        self.assertFalse(any(s["kind"] == "compare" for s in one_tab["steps"]))
+        two_tab = compute_next_steps({"coverage": {"percent": 20}}, loaded_tab_count=2)
+        self.assertTrue(any(s["kind"] == "compare" for s in two_tab["steps"]))
+        self.assertLessEqual(len(two_tab["steps"]), NEXT_STEP_LIMIT_MAX)
+        leftover = compute_next_steps(
+            {
+                "coverage": {"percent": 90},
+                "confidence": "high",
+                "finding": {"id": "mutex", "title": "Mutex stall"},
+            },
+            findings=[
+                {"id": "priority_inversion", "title": "Priority inversion",
+                 "severity": "warning", "task": "Low[266]"},
+                {"id": "thrashing", "title": "Excessive core migration",
+                 "severity": "warning"},
+                {"id": "tick_health", "title": "Trace Health / TICK",
+                 "severity": "info"},
+            ],
+        )
+        ids = " ".join(s["prompt"] for s in leftover["steps"])
+        self.assertIn("priority_inversion", ids)
+        self.assertIn("thrashing", ids)
+        self.assertNotIn("tick_health", ids)
+        self.assertIsNone(leftover["stop_reason"])
+        self.assertLessEqual(len(leftover["steps"]), NEXT_STEP_LIMIT_MAX)
 
 
 if __name__ == "__main__":

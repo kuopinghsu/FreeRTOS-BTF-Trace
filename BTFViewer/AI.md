@@ -53,7 +53,7 @@ For a first trace, open **Analysis**, select the highest-priority relevant findi
 2. [Getting started](#getting-started)
 3. [Investigation workflows](#investigation-workflows)
 4. [Common use cases](#common-use-cases)
-5. [Understanding AI results](#understanding-ai-results)
+5. [Understanding AI results](#understanding-ai-results) — [Continue the investigation](#continue-the-investigation)
 6. [Configuration, models, and privacy](#configuration-models-and-privacy)
 7. [AI tools reference](#ai-tools-reference)
 8. [Viewer behavior](#viewer-behavior)
@@ -117,11 +117,13 @@ AI can explain evidence, find correlations, rank possible causes, challenge assu
 - The stepper tracks **Triage → Scope → Investigate → Verify → Experiment → Compare**. Select a completed stage to return to its output.
 - **Start Investigation** stays separate from the template row. Up to five dynamic shortcuts rank recent applicable templates, then most-used, then a workflow default order (Investigate, Verify finding, Explain evidence, …). A suggested template may be outlined from the current finding, cursors, selected task, and guide stage. Unmet Compare / SMP prerequisites show as an inline line under the chips. **More templates…** always lists every template (Analysis Findings, Explain region, Auto investigate, Compare, Report, What-if, Optimize, specialist checks, and so on). Recent/usage history is local only (Web `localStorage`, Desktop `.rc`) and is not synced across hosts; **Clear** does not erase it.
 - The composer shows a collapsed **Context** one-liner (`Stage · Scope · Focus · Mode · Privacy`). Expand it for Trace, Scope, Filters, findings, language, endpoint, and usage. Each Web assistant reply can open **View request context**.
-- The header provides **Clear**, **Language…**, and **Settings…**. **Clear** removes the conversation, usage summary, and current investigation state.
+- The header provides **Clear**, **Language…**, and **Settings…**. **Clear** removes the conversation, usage summary, and current investigation state. **Language…** sets the reply language in the system prompt and re-states it on every user turn and tool follow-up nudge (important for smaller local models). Host wrap-ups after empty model replies also localize common Evidence titles such as Critical path.
+- Select text in the conversation and right-click **Ask AI (preview…)** to send that snippet as the next question (not recorded as a template). Ask AI is enabled only when two or more words are selected. The same menu offers **Copy**, **Copy conversation**, and **Save As…**.
+- After a reply, continue the investigation with Evidence **[Run]** (host next steps) or conversation **[Run]** on a `nextstep:{action}` line. English **Next check:** prose in the reply is not a button.
 - The usage bar shows **Context: Compact · 4.6k tok · 3 tools · 12s** (mode, tokens, tools, and model time). **Settings → AI → Context** chooses Compact, Balanced (default), or Full Evidence. Confidence comes from evidence, not from the mode.
 - A non-empty investigation can be restored by the viewer. Clearing the conversation also clears the saved investigation state.
-- **Evidence & Validation** always shows the top-level summary (Verdict, Leading explanation, Missing evidence, Next check). Nested sections (Direct/Timeline evidence, Checks, Alternatives, Investigation details, and folds inside Investigation details) start **collapsed**. A right-side **⊞** / **⊟** control toggles Expand all / Collapse all for every nested section together (Desktop pins that control to the log viewport so wide Expand-all tables cannot push it aside); each evidence refresh resets sub-sections to collapsed. Section labels use a clear size hierarchy: panel title (12px), first-level folds such as Checks and Investigation details (12px, bordered boxes), and nested folds inside Investigation details such as Confidence evolution and Tools used (11px, indented boxes). **Save As HTML** keeps the same hierarchy CSS and a working Expand all control.
-- Completed read-only evidence-query tool batches collapse to **Evidence queries · N completed**; pending Apply, failures, and viewer-mutating cards stay expanded. Other viewer-changing actions appear as tool cards labelled **Navigation / Scope / Filter / Annotation / Export / Calculation** and wait for **Apply** or **Skip** unless **Auto-apply GUI actions** is enabled. **Undo** restores cursors, viewport, highlight, annotations, **Scope (Limit to C1–Cn)**, and **Filters**.
+- **Evidence & Validation** always shows the top-level summary (Verdict, Leading explanation, Missing evidence, Next check). Nested sections include Direct/Timeline evidence, Checks, Alternatives, Investigation details, and folds inside Investigation details. A right-side **⊞** / **⊟** control toggles Expand all / Collapse all for every nested section together (Desktop pins that control to the log viewport so wide Expand-all tables cannot push it aside). Section labels use a clear size hierarchy: panel title (12px), first-level folds such as Checks and Investigation details (12px, bordered boxes), and nested folds inside Investigation details such as Confidence evolution and Tools used (11px, indented boxes). **Save As HTML** (and Markdown/Text) keeps the same Evidence hierarchy CSS and omits tool-usage cards (Calculation / Evidence queries / Apply); Expand all still works in the saved HTML.
+- Completed read-only evidence-query tool batches collapse to **Evidence queries · N completed**; pending Apply, failures, and viewer-mutating cards stay expanded. Other viewer-changing actions appear as tool cards labelled **Navigation / Scope / Filter / Annotation / Export / Calculation** and wait for **Apply** or **Skip** unless **Auto-apply GUI actions** is enabled. Tool cards sit below the written reply (amber Calculation card), not as the last line of the assistant bubble. **Undo** restores cursors, viewport, highlight, annotations, **Scope (Limit to C1–Cn)**, and **Filters**.
 - What-if / Optimize results show: `Simulation / estimate — not measured RTOS behavior.`
 
 Toolbar **Compare** becomes available when at least two traces are open. **Query with AI…** sends the Trace Compare tables rather than the current Findings. **Save as baseline** and **Score vs baseline** use the same stored profile as `baseline_score`. **Ctrl+K** provides quick access to Analysis, AI, Compare, workspace presets, and Inspect task.
@@ -163,7 +165,7 @@ Start with the main user actions. Let **Investigate** select deeper evidence too
 | --- | --- | --- | --- |
 | **1. Triage** | **Triage findings** or toolbar **Analysis** | Ranked Critical, Warning, and Info issues | The named Statistics page shows the same issue |
 | **2. Scope** | Select a finding and place or apply C1–Cn | One task, incident, or time window | Enable **Limit to C1–Cn** for phase-specific questions |
-| **3. Investigate** | **Investigate**; use **Root cause** when a suspect is known | Hypotheses, correlations, dependencies, and critical paths | Open the cited `jump:TIME`, `range:LO/HI`, and Statistics pages |
+| **3. Investigate** | **Investigate**; use **Root cause** when a suspect is known | Hypotheses, correlations, dependencies, and critical paths | Open the cited `jump:TIME`, `range:LO/HI`, and Statistics pages. Continue with Evidence **[Run]** or a conversation `nextstep:{action}` **[Run]** |
 | **4. Verify** | **Verify with AI…** or continue the plan | Supported, rejected, or insufficient verdict | Confirm scope, task names, times, contradictions, and alternatives |
 | **5. Experiment** | **What-if**, **Optimize**, or an experiment plan | Ranked estimated changes | Treat results as estimates; change the system and capture a new trace |
 | **6. Compare** | Open before/after traces → **Compare** | Measured deltas and experiment verdict | Use equivalent workloads and comparable cursor scopes |
@@ -255,7 +257,7 @@ Use these workflows after you have selected the task, finding, or time window to
 | 7    | `rank_root_causes` / `challenge_conclusion`                             | Rank then alternatives before `what_if`                                                                                  |
 | 8    | `find_related_findings` / `compare_tasks`                               | Adjacent findings; side-by-side task deltas                                                                              |
 | 9    | `set_cursors` / `zoom_to_range` / `highlight_task` / `bookmark_finding` | Narrow the timeline (Apply cursors unless auto-apply is on); click `range:LO/HI` / `btfrange:` on critical-path evidence |
-| 10   | Evidence & Validation panel                                             | Status, direct-evidence table, checks, missing evidence, next action; details hold quality/cost/trees                    |
+| 10   | Evidence & Validation panel                                             | Status, direct-evidence table, checks, missing evidence; **[Run]** on ▶ Next check sends a host next-check prompt. Conversation **[Run]** requires `nextstep:{action}` |
 | 11   | `investigation_replay` / `generate_report` / `export_investigation`     | Structured close-out; optional `export_report`                                                                           |
 
 
@@ -401,6 +403,7 @@ AI output is an interpretation of measured evidence. Use this section to underst
 Important conclusions should include:
 
 - evidence links such as `jump:TIME`, `range:LO/HI`, and named metrics;
+- follow-up checks as a dedicated line `nextstep:{action}` (`nextstep:` stays English, like `jump:TIME`; the braced action uses the selected language);
 - confidence: **High**, **Medium**, or **Low**;
 - evidence quality: **Directly observed**, **Strong correlation**, **Possible explanation**, or **Insufficient evidence**;
 - alternative explanations and what would disprove the conclusion.
@@ -413,6 +416,8 @@ Actionable Evidence links reuse the normal navigation model:
 * `btfrange:` / Zoom C1–Cn — place cursors and zoom the range
 * `btfhighlight:` — Highlight a task
 * `btfstats:` — Open the named Statistics section
+* `btfnext:text/N` — Run the tagged `nextstep:{action}` sentence from the conversation
+* `btfnext:run/N` — Run a host-generated next investigation prompt from Evidence (not a template)
 
 While a request is in flight, **Stop** cancels it; Timeline stays responsive and the conversation remains visible. On failure, the prompt is restored so you can edit and **Send** again. The privacy chip shows **Local** vs **Cloud**; optional task-name redaction and sensitive-trace blocking apply before cloud send.
 
@@ -421,7 +426,26 @@ The Evidence & Validation panel shows:
 - conclusion **Status** (Confirmed / Correlated / Suspected / Not observed / Insufficient data);
 - **Finding**, a collapsible **Direct evidence** or **Timeline evidence** table, and **Interpretation**;
 - collapsible **Checks** and alternative explanations; expanded **Missing evidence** and one **Next action**;
-- collapsed **Investigation details** for quality band, cost, tool reasons, and trees.
+- **Investigation details** for quality band, cost, tool reasons, and trees.
+
+The primary **Next action** is a host-generated follow-up (at most three). If the model writes no prose after tools, the next round is text-only and the assistant bubble is filled from the current case when that round is empty. The same host wrap-up is used if a later evidence tool such as `find_critical_path` is the last applied action and the model returns no final answer (or the tool-round limit is reached); that empty reply is not shown as a hard error. `find_critical_path` publishes the path table and an **Evidence graph** diagram in Evidence & Validation. After Auto investigate (or any final reply), remaining warning/error findings also become Evidence next steps even when the primary case is already verified. Extra host steps stay behind **More next steps…**. When the case is complete and no remaining findings remain, the panel shows **Investigation complete** plus a stop reason instead of empty Next Steps chrome.
+
+<a id="continue-the-investigation" name="continue-the-investigation">&#x200B;</a>
+
+### Continue the investigation
+
+Use **[Run]** to keep investigating in the current Investigation Case, Context, and Scope. These prompts are not AI templates and are never recorded in template history.
+
+| Where | What **[Run]** sends | How the viewer finds it |
+| --- | --- | --- |
+| **Evidence & Validation** ▶ Next check (and **More next steps…**) | A host-generated next-check prompt (`btfnext:run/N`) | Stored on the Evidence panel (at most three) |
+| Conversation | The tagged follow-up sentence (`btfnext:text/N`) | A dedicated line `nextstep:{action}` (`nextstep:` stays English, like `jump:TIME`; the braced action uses the selected language) |
+
+1. Open cited `jump:TIME` / `range:LO/HI` links and the named Statistics page first.
+2. Click Evidence **[Run]** when you want the host follow-up (coverage, remaining findings, missing evidence).
+3. Click conversation **[Run]** only on a `nextstep:{action}` line (unbraced `nextstep: …` is also accepted). The viewer shows the action plus **[Run]**, and **Open Statistics** when a Statistics section is known.
+4. English **Next check:** prose in the reply is not turned into a conversation **[Run]**. Localized headings such as `下一步檢查` are not parsed either unless the model also emits `nextstep:{…}`.
+5. Confirm the follow-up on the timeline and Statistics before treating the new reply as done.
 
 The Evidence Quality band (under Investigation details) is a diagnostic heuristic. It is **not a probability**. Timed `jump:TIME` rows gathered by earlier tools (`investigate`, `correlate_events`, `find_critical_path`) are kept when later planner tools (`rank_root_causes`, `challenge_conclusion`, …) publish only a verdict — otherwise Start Investigation would show Evidence Score **0%** after a strong mid-run score.
 
@@ -568,7 +592,7 @@ Live `ai-test` defaults to Full evidence. Use **`--compare-context`** to measure
 
 ## AI tools reference
 
-The current implementation exposes 60 tools. Evidence queries, investigation-state tools, and exports run immediately. The nine viewer-changing tools wait for **Apply** unless **Auto-apply GUI actions** is on: `set_cursors`, `zoom_to_range`, `highlight_task`, `set_view_mode`, `open_corridor_inspector`, `add_annotation`, `bookmark_finding`, `clear_marks`, and `reset_view`. Names and parameters are in [Complete tool reference](#complete-gui-tool-reference) below.
+The current implementation exposes 61 tools. Evidence queries, investigation-state tools, and exports run immediately. The nine viewer-changing tools wait for **Apply** unless **Auto-apply GUI actions** is on: `set_cursors`, `zoom_to_range`, `highlight_task`, `set_view_mode`, `open_corridor_inspector`, `add_annotation`, `bookmark_finding`, `clear_marks`, and `reset_view`. Names and parameters are in [Complete tool reference](#complete-gui-tool-reference) below.
 
 It is easier to understand the AI tools by **purpose** than by function name.
 
@@ -768,7 +792,7 @@ The table below is the exhaustive schema reference. Use it when implementing, de
 | `open_corridor_inspector` | optional `core_from` / `core_to` (`Core_0`, `0`, `c0`, `Core 0`)                                                                   | Open Migration Inspector; aliases resolve the same way                                                                                                                                                                                                                                                                               |
 | `add_annotation` | `time`, `note` (≤240 chars)                                                                                                        | Pin an orange timeline note at a timestamp (stays on the current right-panel tab)                                                                                                                                                                                                                                                    |
 | `query_raw_metric` | `task`, `metric` (`priority_inheritance`, `execution`, `migrations`, `blocking`, `sync`, `findings`)                               | Read-only: return the per-task series for the current Statistics scope (up to 40 rows)                                                                                                                                                                                                                                               |
-| `export_report` | optional `format` (`html` / `csv` / `json`), optional `mode` (`summary` / `technical` / `full`) | HTML diagnostic report: executive summary, coverage, ranked findings, in-scope evidence, next action; conversation/GUI/rejected evidence in `<details>` appendix. Runs immediately (no Apply). Mid-flight exports still download and mark **Analysis incomplete** in the HTML. Strips `export_report` tool cards from the transcript. `json` saves a full investigation package (see `export_investigation`). |
+| `export_report` | optional `format` (`html` / `csv` / `json`), optional `mode` (`summary` / `technical` / `full`) | HTML diagnostic report: executive summary, coverage, ranked findings, in-scope evidence, next action; conversation/GUI/rejected evidence in `<details>` appendix. Runs immediately (no Apply). Mid-flight exports still download and mark **Analysis incomplete** in the HTML. Strips all tool-usage cards (Calculation / Evidence queries / Apply) from the transcript. `json` saves a full investigation package (see `export_investigation`). |
 | `clear_marks` | optional `what` (`annotations` / `cursors` / `bookmarks` / `all` / `everything`)                                                   | Clear AI clutter. `all` (default) drops annotations + cursors; `everything` also clears bookmarks                                                                                                                                                                                                                                    |
 | `reset_view` | (none)                                                                                                                             | Fit the timeline to the full span and clear the task highlight (marks stay)                                                                                                                                                                                                                                                          |
 | `search_timeline` | `query`; optional `mode` (`contains` / `exact` / `regex` / `sti` / `tags` / `intervals` / `lifecycle` / `pointers` / `migrations`) | Find-panel search; returns matching timestamps (up to 40)                                                                                                                                                                                                                                                                            |
@@ -862,9 +886,11 @@ If a local `file://` launch blocks an AI endpoint, use the development or previe
 | Model not found                                       | Typed id is not served                                               | Refresh the Model list (or Test connection) and pick a served id from the dropdown, or `ollama pull` it                                                                                                                                                                                                          |
 | Gemini HTTP 400 `thought_signature`                   | Gemini 3 requires a thought blob on tool follow-ups                  | Retry the question — the viewer echoes Gemini thought signatures                                                                                                                                                                                                                                                 |
 | Gemini HTTP 400 `function_response.name`              | OpenAI-compat follow-up with empty `tool_calls[].id`                 | The viewer fills ids and `role=tool` names before the next turn. Retry the case.                                                                                                                                                                                                                                  |
+| Empty assistant (`functioncallfilter` / `malformedfunctioncall`) | Gemini (especially Flash-Lite) emitted a tool call the API rejected | The viewer retries that turn without tools. If it still fails, switch to a fuller model (for example `gemini-2.5-flash`) or narrow Statistics scope.                                                                                                                                                              |
 | Raw `btftool` JSON instead of native tool calls       | Model lacks or skips function calling                               | The viewer renders the same cards. Select **Apply** or enable **Auto-apply GUI actions**. For reliable native calls, use a tool-capable model such as `qwen3.5:9b` or a supported cloud model.                                                                                                                |
 | Ask times out (over 120s) or stays on Waiting…        | Cold start, CPU offload, or VRAM spill                               | **Stop** (composer icon), warm with `ollama run MODEL`, retry. Use **Clear** between long threads. Smaller model or shorter Statistics scope if the Findings card is huge                                                                                                                                        |
 | Later turns ignore earlier facts                      | Chat history exceeded the context window                             | **Clear** on the AI bar, or **Analysis → Query with AI…** / toolbar **Compare → Query with AI…** for a fresh scoped prompt                                                                                                                                                                                       |
+| Conversation **Next check:** has no **[Run]** | The viewer only linkifies `nextstep:{action}` (or unbraced `nextstep: …`) | Click Evidence **[Run]**, or ask again so the reply includes a dedicated `nextstep:{…}` line |
 | Need raw AI request/response dumps                    | Debugging tool rounds / provider quirks                              | If the host provides **Settings → AI → Log MCP messages to file**, enable it only while debugging and delete `./ai_mcp_messages.log` when finished. |
 
 

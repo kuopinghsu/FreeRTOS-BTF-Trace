@@ -143,12 +143,41 @@ export const AI_CONTEXT_PROMPTS = {
   [AI_CONTEXT_MODE_FULL]: "MODE: FULL EVIDENCE\n- Use all relevant scoped evidence and compact investigation history.\n- Rank hypotheses for broad questions; skip planning for an explicit finding,\n  task, and window.\n- Build causal or dependency chains only as far as evidence supports.\n- Examine contradictions and credible alternatives. Assess sufficiency before\n  opening another branch; stop when more tools will not change the verdict.\n- Verify and challenge before a High-confidence root-cause conclusion.\n- Distinguish observed, derived, heuristic, and simulated results.\n- Preserve unrelated viewer marks. Use diagrams only for supported relationships.\n- State each material fact once. Return Inconclusive when evidence remains\n  incomplete or contradictory.\n- Target a thorough write-up (about 1000\u20132000 answer tokens) when evidence\n  supports it. Output: Scope; Verdict; Evidence chain with times/values;\n  Contradictions/alternatives; Root cause or leading explanation;\n  Confidence/quality/coverage; Requested mitigation; Next verification;\n  Viewer changes.",
 }
 
-export const AI_LANGUAGE_PROMPT_TEMPLATE = "Always write your entire reply in {language}.\nWrite the complete user-facing reply in {language}. Preserve task names, core\nnames, UI labels, tool names, metric identifiers, jump:TIME, range:LO/HI, code,\nand file formats. Do not translate trace identifiers."
-export const AI_LANGUAGE_TRADITIONAL_CHINESE_NOTE = "Use natural Traditional Chinese and terminology customary in Taiwan.\nDo not switch to English or Simplified Chinese for the prose answer."
-export const AI_LANGUAGE_SIMPLIFIED_CHINESE_NOTE = "Use natural Simplified Chinese. Do not switch to English or Traditional Chinese for the prose answer."
-export const AI_LANGUAGE_KOREAN_NOTE =
-  'Use natural Korean Hangul (한국어). Do not switch to English or Chinese '
-  + 'for the prose answer.'
+export const AI_LANGUAGE_PROMPT_TEMPLATE = (
+  'Always write your entire reply in {language}.\n'
+  + 'Write the complete user-facing reply in {language}, including section '
+  + 'headings and bullet labels.\n'
+  + 'Preserve task names, core names, UI labels, tool names, metric '
+  + 'identifiers, jump:TIME, range:LO/HI, code, and file formats. Do not '
+  + 'translate trace identifiers.'
+)
+export const AI_LANGUAGE_TRADITIONAL_CHINESE_NOTE = (
+  'Use natural Traditional Chinese and terminology customary in Taiwan.\n'
+  + 'Write section headings in Traditional Chinese too '
+  + '(for example 結論、證據、置信度), not English.\n'
+  + 'Do not switch to English or Simplified Chinese for the prose answer.'
+)
+export const AI_LANGUAGE_SIMPLIFIED_CHINESE_NOTE = (
+  'Use natural Simplified Chinese.\n'
+  + 'Write section headings in Simplified Chinese too '
+  + '(for example 结论、证据、置信度), not English.\n'
+  + 'Do not switch to English or Traditional Chinese for the prose answer.'
+)
+export const AI_LANGUAGE_KOREAN_NOTE = (
+  'Use natural Korean Hangul (한국어).\n'
+  + 'Write section headings in Korean too, not English.\n'
+  + 'Do not switch to English or Chinese for the prose answer.'
+)
+export const AI_LANGUAGE_REMINDER_MARKER = 'REPLY LANGUAGE (mandatory)'
+export const AI_TOOL_ROUND_LIMIT_PROMPT = (
+  'You have reached the tool-call limit for this turn. '
+  + 'Do not call any more tools — summarize your findings and '
+  + 'give your final answer now in plain text.'
+)
+export const AI_EMPTY_REPLY_NUDGE = (
+  'Your previous reply was empty (no text and no tool call). '
+  + 'Answer now with a short analysis, or call a tool.'
+)
 
 export const AI_CONTEXT_STAGE_TOOLS = {
   triage: ['detect_anomalies', 'cluster_findings', 'suggest_scope'],
@@ -245,6 +274,58 @@ export function aiLanguagePrompt(language = null) {
       + `All headings, bullets, and explanations must be in ${lang}.`
   }
   return text
+}
+
+/** Short sticky reminder for non-English turns (user + follow-up nudges). */
+export function aiLanguageReminder(language = null) {
+  const lang = String(language || 'English').trim() || 'English'
+  const low = lang.toLowerCase()
+  if (low === 'english') return ''
+  const marker = AI_LANGUAGE_REMINDER_MARKER
+  const keep = (
+    'Keep task/core names, jump:TIME, range:LO/HI, tool names, and UI '
+    + 'labels unchanged.'
+  )
+  if (low.includes('traditional chinese') || lang.includes('繁體') || lang.includes('繁体')) {
+    return (
+      `${marker}: Traditional Chinese (繁體中文) / 台灣用語. `
+      + 'Write all user-facing prose and section headings in 繁體中文. '
+      + 'Do not answer in English or Simplified Chinese. '
+      + keep
+    )
+  }
+  if (low.includes('simplified chinese') || lang.includes('简体') || lang.includes('簡體')) {
+    return (
+      `${marker}: Simplified Chinese (简体中文). `
+      + 'Write all user-facing prose and section headings in 简体中文. '
+      + 'Do not answer in English or Traditional Chinese. '
+      + keep
+    )
+  }
+  if (lang.includes('한국') || low.includes('korean')) {
+    return (
+      `${marker}: Korean (한국어). `
+      + 'Write all user-facing prose and section headings in 한국어. '
+      + 'Do not answer in English or Chinese. '
+      + keep
+    )
+  }
+  return (
+    `${marker}: ${lang}. `
+    + `Write all user-facing prose and section headings in ${lang}. `
+    + 'Do not answer in English unless the user explicitly asks for English. '
+    + keep
+  )
+}
+
+/** Append ``aiLanguageReminder`` when the selected language is not English. */
+export function withAiLanguageReminder(text = '', language = null) {
+  const body = String(text || '').trim()
+  const rem = aiLanguageReminder(language)
+  if (!rem) return body
+  if (!body) return rem
+  if (body.includes(rem)) return body
+  return `${body}\n\n${rem}`
 }
 
 function stageToolNames(stage) {
@@ -608,6 +689,7 @@ export function compactChatHistory(messages, mode = null, investigationSummary =
     if (String(msg.role || '') !== 'user') return
     const content = String(msg.content || '').toLowerCase()
     if (content.includes('tool-call limit')) return
+    if (content.includes('reply language (mandatory)')) return
     userIdxs.push(i)
   })
   let omitted = 0
@@ -1377,6 +1459,330 @@ export function falsificationChecks(finding = null) {
     supporting: [],
     next_check: nextCheck,
   }
+}
+
+export const NEXT_STEP_KINDS = [
+  'investigate', 'verify', 'scope', 'statistics', 'compare',
+  'experiment', 'follow_up',
+]
+export const NEXT_STEP_LIMIT_DEFAULT = 3
+export const NEXT_STEP_LIMIT_MAX = 3
+const STATS_NEXT_HINTS = [
+  'mutex', 'blocking', 'migration', 'heatmap', 'priority', 'inheritance',
+  'utilisation', 'utilization', 'load balance', 'tick', 'execution max',
+  'statistics', 'core util',
+]
+const EXPERIMENT_TOOLS = new Set([
+  'what_if', 'optimize', 'optimize_experiment', 'recommend_experiments',
+])
+
+function nextStepLimit(raw) {
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return NEXT_STEP_LIMIT_DEFAULT
+  return Math.max(0, Math.min(NEXT_STEP_LIMIT_MAX, Math.trunc(n)))
+}
+
+function completedToolNames(payload = null) {
+  const data = payload && typeof payload === 'object' ? payload : {}
+  const caseObj = data.investigation_case && typeof data.investigation_case === 'object'
+    ? data.investigation_case : {}
+  const names = []
+  for (const src of [
+    caseObj.tools_executed, data.tools_executed, data.tools_used, data.tools_run,
+  ]) {
+    if (!Array.isArray(src)) continue
+    for (const item of src) {
+      const name = item && typeof item === 'object'
+        ? String(item.name || item.tool || '').trim()
+        : String(item || '').trim()
+      if (name && !names.includes(name)) names.push(name)
+    }
+  }
+  return names
+}
+
+function coveragePercent(payload = null) {
+  const data = payload && typeof payload === 'object' ? payload : {}
+  const cov = (data.coverage && typeof data.coverage === 'object')
+    ? data.coverage
+    : (data.evidence_coverage && typeof data.evidence_coverage === 'object'
+      ? data.evidence_coverage : {})
+  const n = Number(cov.percent || 0)
+  if (!Number.isFinite(n)) return 0
+  return Math.max(0, Math.min(100, Math.trunc(n)))
+}
+
+function missingEvidenceItems(payload = null) {
+  const data = payload && typeof payload === 'object' ? payload : {}
+  const falsify = (data.falsification && typeof data.falsification === 'object')
+    ? data.falsification
+    : (data.falsify && typeof data.falsify === 'object' ? data.falsify : {})
+  const out = []
+  for (const src of [falsify.would_disprove, falsify.disprove, data.missing_evidence]) {
+    if (!Array.isArray(src)) continue
+    for (const item of src) {
+      const text = String(item || '').trim()
+      if (text && !out.includes(text)) out.push(text)
+    }
+  }
+  return out
+}
+
+function proseNextCheck(payload = null) {
+  const data = payload && typeof payload === 'object' ? payload : {}
+  const falsify = (data.falsification && typeof data.falsification === 'object')
+    ? data.falsification
+    : (data.falsify && typeof data.falsify === 'object' ? data.falsify : {})
+  return String(falsify.next_check || data.recommended_action || '').trim()
+}
+
+const MATERIAL_FINDING_SEV = new Set([
+  'warning', 'error', 'critical', 'high', 'warn',
+])
+
+function findingDicts(raw) {
+  const src = Array.isArray(raw) ? raw : []
+  return src.filter(f => f && typeof f === 'object' && (
+    String(f.id || '').trim() || String(f.title || '').trim()
+  ))
+}
+
+function primaryFindingKeys(payload = null) {
+  const data = payload && typeof payload === 'object' ? payload : {}
+  const keys = new Set()
+  const caseFinding = data.investigation_case && typeof data.investigation_case === 'object'
+    ? data.investigation_case.finding
+    : null
+  for (const src of [data.finding, caseFinding]) {
+    if (!src || typeof src !== 'object') continue
+    const fid = String(src.id || '').trim().toLowerCase()
+    const title = String(src.title || '').trim().toLowerCase()
+    if (fid) keys.add(fid)
+    if (title) keys.add(title)
+  }
+  return keys
+}
+
+export function remainingAnalysisFindings(payload = null, findings = null) {
+  const data = payload && typeof payload === 'object' ? payload : {}
+  let items = findingDicts(findings)
+  if (!items.length) items = findingDicts(data.analysis_findings)
+  if (!items.length) items = findingDicts(data.findings)
+  const skip = primaryFindingKeys(data)
+  const out = []
+  const seen = new Set()
+  for (const finding of items) {
+    const fid = String(finding.id || '').trim()
+    const title = String(finding.title || '').trim()
+    const key = (fid || title).toLowerCase()
+    if (!key || seen.has(key) || skip.has(key)) continue
+    if (skip.has(title.toLowerCase())) continue
+    const sev = String(finding.severity || '').trim().toLowerCase()
+    if (sev && !MATERIAL_FINDING_SEV.has(sev)) continue
+    seen.add(key)
+    out.push(finding)
+  }
+  return out
+}
+
+function findingFollowUpStep(finding) {
+  const fid = String(finding.id || '').trim()
+  const title = String(finding.title || fid || 'this finding').trim()
+  const task = String(finding.task || '').trim()
+  const nxt = String(falsificationChecks(finding).next_check || '').trim()
+  const focus = task ? ` for ${task}` : ''
+  const idBit = fid ? ` (id=${fid})` : ''
+  let prompt = `Investigate remaining finding ${title}${idBit}${focus}. `
+  if (nxt) prompt += `${nxt} `
+  if (fid) prompt += `Call investigate(finding_id=${fid}) if more evidence is needed. `
+  prompt += 'Preserve the current Investigation Case, Context, and Scope.'
+  const kind = looksLikeStatsCheck(nxt) ? 'statistics' : 'investigate'
+  return {
+    label: (title || shortNextLabel(nxt)).slice(0, 80),
+    prompt: prompt.trim(),
+    reason: nxt || `Remaining finding ${fid || title}`,
+    kind,
+  }
+}
+
+function shortNextLabel(text, fallback = 'Next check') {
+  let src = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!src) return fallback
+  src = src.replace(/^[.►▶\-\s]+/, '')
+  if (src.length <= 48) return src.replace(/\.+$/, '')
+  let cut = src.slice(0, 48)
+  const sp = cut.lastIndexOf(' ')
+  if (sp >= 20) cut = cut.slice(0, sp)
+  return `${cut.replace(/[.,;:]+$/, '')}…`
+}
+
+function looksLikeStatsCheck(text) {
+  const blob = String(text || '').toLowerCase()
+  return STATS_NEXT_HINTS.some(h => blob.includes(h))
+}
+
+export function normalizeNextSteps(raw = null, { limit = NEXT_STEP_LIMIT_DEFAULT } = {}) {
+  const cap = nextStepLimit(limit == null ? NEXT_STEP_LIMIT_DEFAULT : limit)
+  if (cap <= 0) return []
+  const src = Array.isArray(raw) ? raw : []
+  const out = []
+  const seen = new Set()
+  for (const item of src) {
+    if (out.length >= cap) break
+    if (!item || typeof item !== 'object') continue
+    const prompt = String(item.prompt || '').trim()
+    if (!prompt) continue
+    const key = prompt.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    let kind = String(item.kind || 'follow_up').trim().toLowerCase().replace(/-/g, '_')
+    if (!NEXT_STEP_KINDS.includes(kind)) kind = 'follow_up'
+    const label = String(item.label || '').trim() || shortNextLabel(prompt)
+    out.push({
+      label: label.slice(0, 80),
+      prompt,
+      reason: String(item.reason || '').trim(),
+      kind,
+    })
+  }
+  return out
+}
+
+export function computeNextSteps(payload = null, {
+  limit = NEXT_STEP_LIMIT_DEFAULT,
+  loadedTabCount = 1,
+  findings = null,
+} = {}) {
+  const cap = nextStepLimit(limit == null ? NEXT_STEP_LIMIT_DEFAULT : limit)
+  const data = payload && typeof payload === 'object' ? payload : {}
+  const tabs = Number.isFinite(Number(loadedTabCount)) ? Math.trunc(Number(loadedTabCount)) : 1
+  const completed = new Set(completedToolNames(data).map(n => n.toLowerCase()))
+  const cov = coveragePercent(data)
+  const missing = missingEvidenceItems(data)
+  const nxt = proseNextCheck(data)
+  const conf = String(data.confidence || '').trim().toLowerCase()
+  const finding = data.finding && typeof data.finding === 'object' ? data.finding : {}
+  const caseObj = data.investigation_case && typeof data.investigation_case === 'object'
+    ? data.investigation_case : {}
+  const title = String(data.conclusion || finding.title || caseObj.goal || '').trim()
+  const task = String(finding.task || data.task || caseObj.task || '').trim()
+  const focus = task ? ` for ${task}` : ''
+  const subject = title || 'the current finding'
+  const remaining = remainingAnalysisFindings(data, findings)
+
+  if (cap <= 0) return { steps: [], stop_reason: 'No further check requested.' }
+  const caseComplete = cov >= 80 && !missing.length && (conf === 'high' || conf === 'medium')
+  if (caseComplete && !remaining.length) {
+    return {
+      steps: [],
+      stop_reason: 'Evidence is sufficient; no further check is required.',
+    }
+  }
+
+  const steps = []
+  const add = (kind, label, prompt, reason) => {
+    if (steps.length >= cap) return
+    const blob = prompt.toLowerCase()
+    if (steps.some(s => String(s.prompt || '').toLowerCase() === blob)) return
+    steps.push({
+      label: String(label || '').slice(0, 80),
+      prompt,
+      reason: String(reason || ''),
+      kind: NEXT_STEP_KINDS.includes(kind) ? kind : 'follow_up',
+    })
+  }
+
+  if (!caseComplete && missing.length && !completed.has('verify_claim')) {
+    const gap = missing[0]
+    add(
+      'verify',
+      'Verify missing evidence',
+      `Verify the leading explanation${focus}. Missing evidence: ${gap}. `
+      + 'Stay in the current Investigation Case, Context, and Scope. '
+      + 'Call verify_claim and collect query_raw_metric / correlate_events '
+      + 'only if another result could change the verdict.',
+      gap,
+    )
+  } else if (missing.length) {
+    const gap = missing[0]
+    add(
+      'investigate',
+      'Collect missing evidence',
+      `Collect evidence for ${subject}${focus}. Missing: ${gap}. `
+      + 'Preserve the current Scope. Call correlate_events or '
+      + 'query_raw_metric for any missing jump:TIME values.',
+      gap,
+    )
+  }
+
+  if (!caseComplete && nxt) {
+    const kind = looksLikeStatsCheck(nxt) ? 'statistics' : 'follow_up'
+    add(
+      kind,
+      shortNextLabel(nxt),
+      `${nxt} Preserve the current Investigation Case, Context, and Scope.`,
+      'Recommended next check from the current case.',
+    )
+  }
+
+  if (!caseComplete && cov < 40 && !completed.has('investigate')) {
+    add(
+      'investigate',
+      'Collect scoped evidence',
+      `Investigate ${subject}${focus} in the current scope. `
+      + 'Call investigate, then correlate_events / query_raw_metric '
+      + 'for missing jump:TIME values. Do not change Scope.',
+      'Evidence coverage is still missing.',
+    )
+  }
+
+  if (!caseComplete && tabs >= 2 && !completed.has('compare_performance')) {
+    add(
+      'compare',
+      'Compare traces',
+      'Compare Trace A vs Trace B in the current compare scope. '
+      + 'Call compare_performance. Preserve direction A − B. '
+      + 'Do not switch to Full Trace unless the user asks.',
+      'A second trace is loaded and comparison has not been run.',
+    )
+  }
+
+  const experimentDone = [...completed].some(n => EXPERIMENT_TOOLS.has(n))
+  if (
+    !caseComplete
+    && cov >= 40 && (conf === 'high' || conf === 'medium')
+    && !experimentDone && !missing.length
+  ) {
+    add(
+      'experiment',
+      'Validate with a what-if',
+      'If the leading explanation is supported, call what_if or '
+      + 'recommend_experiments for one validation experiment. '
+      + 'Preserve the current Scope.',
+      'Evidence is sufficient to consider a validation experiment.',
+    )
+  }
+
+  for (const extra of remaining) {
+    const step = findingFollowUpStep(extra)
+    add(step.kind || 'investigate', step.label, step.prompt, step.reason)
+  }
+
+  if (!steps.length && nxt) add('follow_up', shortNextLabel(nxt), nxt, '')
+  if (!steps.length && title) {
+    add(
+      'follow_up',
+      'Inspect cited evidence',
+      'Inspect the strongest jump:TIME on the timeline in the current '
+      + 'scope and report whether it supports the leading explanation. '
+      + 'Preserve the current Investigation Case and Scope.',
+      'No unused structured check remained.',
+    )
+  }
+  if (!steps.length) {
+    return { steps: [], stop_reason: 'No unused follow-up check remains.' }
+  }
+  return { steps: normalizeNextSteps(steps, { limit: cap }), stop_reason: null }
 }
 
 export function extractClaims(text, {

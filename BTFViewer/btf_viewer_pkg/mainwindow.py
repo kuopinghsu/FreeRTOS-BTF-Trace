@@ -1918,12 +1918,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             _sc.activated.connect(
                 lambda k=_key: self._pan_timeline_arrow(k))
 
+        # Restore all persisted settings (geometry, zoom, orientation, ...).
+        # Install the demo key filter after restore: app.setStyleSheet during
+        # theme apply must not re-enter this QObject through the app filter.
+        self._restore_settings()
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
-
-        # Restore all persisted settings (geometry, zoom, orientation, ...).
-        self._restore_settings()
         self._vm.settings.settings_changed.connect(self._on_settings_changed)
         self._wired_tab_vm: Optional[TraceTabViewModel] = None
         self._vm.active_tab_changed.connect(self._wire_active_tab_vm_signals)
@@ -2015,18 +2016,32 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._dock_layout_settling = False
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
-        if (event.type() == QEvent.Type.KeyPress
-                and self._demo_runner is not None
-                and not getattr(event, "isAutoRepeat", lambda: False)()):
-            key = event.key()
-            if key == Qt.Key.Key_Escape:
-                self._on_demo_escape()
-                return True
-            if key == Qt.Key.Key_Space:
-                if self._demo_nav_armed:
-                    self._demo_runner.toggle_pause()
-                return True
-        return super().eventFilter(obj, event)
+        # App-wide filter (demo Esc/Space). Never call super().eventFilter here:
+        # QMainWindow's override can re-enter this method while Qt is polishing
+        # widgets during app.setStyleSheet, which hangs GUI tests.
+        if getattr(self, "_in_app_event_filter", False):
+            return False
+        if getattr(self, "_applying_theme", False) or getattr(
+                self, "_restoring_settings", False):
+            return False
+        self._in_app_event_filter = True
+        try:
+            if (event.type() == QEvent.Type.KeyPress
+                    and self._demo_runner is not None
+                    and not getattr(event, "isAutoRepeat", lambda: False)()):
+                key = event.key()
+                if key == Qt.Key.Key_Escape:
+                    self._on_demo_escape()
+                    return True
+                if key == Qt.Key.Key_Space:
+                    if self._demo_nav_armed:
+                        self._demo_runner.toggle_pause()
+                    return True
+            return False
+        except RuntimeError:
+            return False
+        finally:
+            self._in_app_event_filter = False
 
     def _on_app_about_to_quit(self) -> None:
         """Last-chance parse-thread join (closeEvent already did the heavy lifting)."""
@@ -3949,6 +3964,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         self._applying_theme = True
         app = QApplication.instance()
+        if app is not None:
+            app.setProperty("btf_applying_theme", True)
         _ok = False
         self.setUpdatesEnabled(False)
         try:
@@ -4233,6 +4250,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         finally:
             self.setUpdatesEnabled(True)
             self._applying_theme = False
+            if app is not None:
+                app.setProperty("btf_applying_theme", False)
             if not _ok and op is not None:
                 self._release_theme_change()
 
@@ -4323,6 +4342,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 QTimer.singleShot(20, lambda: self._apply_theme_widgets_if_current(op))
             return
         self._applying_theme = True
+        app = QApplication.instance()
+        if app is not None:
+            app.setProperty("btf_applying_theme", True)
         is_dark = self._is_dark
         c = self._theme_tokens(is_dark)
         _ui_font_size = getattr(self, '_ui_font_size_val', UI_FONT_SIZE)
@@ -4389,6 +4411,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         finally:
             self.setUpdatesEnabled(True)
             self._applying_theme = False
+            if app is not None:
+                app.setProperty("btf_applying_theme", False)
             if not _ok:
                 self._release_theme_change()
 
@@ -5757,8 +5781,25 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # Show interaction hint as a timed splash once the window is fully shown.
         # Delay avoids the overlap with _status_file that occurs when showMessage()
         # is called before Qt has finished laying out the status bar widgets.
-        QTimer.singleShot(500, lambda: self.statusBar().showMessage(
-            "Left-click: cursor  |  Ctrl+Wheel: zoom  |  Scroll: pan", 6000))
+        # Context-bound singleShot: cancelled if MainWindow is destroyed first
+        # (offscreen unit tests tear down before 500 ms).
+        QTimer.singleShot(500, self, self._show_interaction_status_hint)
+
+    def _show_interaction_status_hint(self) -> None:
+        """One-shot status splash; no-op if the window was already destroyed."""
+        try:
+            sb = self.statusBar()
+        except RuntimeError:
+            return
+        if sb is None:
+            return
+        try:
+            sb.showMessage(
+                "Left-click: cursor  |  Ctrl+Wheel: zoom  |  Scroll: pan",
+                6000,
+            )
+        except RuntimeError:
+            return
 
     # ------------------------------------------------------------------
     # Slots / callbacks

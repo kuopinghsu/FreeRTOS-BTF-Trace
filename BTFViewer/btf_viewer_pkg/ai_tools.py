@@ -1631,12 +1631,21 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 "name": AI_TOOL_VERIFY_CLAIM,
                 "description": (
                     "Check a causal claim against findings and optional cursor "
-                    "scope. Verdict: confirmed | rejected | inconclusive."
+                    "scope. Always pass claim as a non-empty string stating the "
+                    "hypothesis to verify. Verdict: confirmed | rejected | "
+                    "inconclusive."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "claim": {"type": "string"},
+                        "claim": {
+                            "type": "string",
+                            "description": (
+                                'Required. The hypothesis or causal statement '
+                                'to verify (for example "mutex hold blocks '
+                                'Low[266]").'
+                            ),
+                        },
                         "claim_type": {"type": "string"},
                         "subject": {"type": "string"},
                         "object": {"type": "string"},
@@ -1658,11 +1667,19 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 "name": AI_TOOL_CHALLENGE_CONCLUSION,
                 "description": (
                     "List alternative mechanisms and missing evidence for a "
-                    "conclusion."
+                    "conclusion. Pass conclusion as a non-empty string when "
+                    "possible."
                 ),
                 "parameters": {
                     "type": "object",
-                    "properties": {"conclusion": {"type": "string"}},
+                    "properties": {
+                        "conclusion": {
+                            "type": "string",
+                            "description": (
+                                "The conclusion or claim to challenge."
+                            ),
+                        },
+                    },
                 },
             },
         },
@@ -1868,6 +1885,27 @@ def _choice_finish_reason(choice: Any) -> str:
     return ""
 
 
+def _choice0_from_chat_body(body: Any) -> Dict[str, Any]:
+    if isinstance(body, dict):
+        choices = body.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            return choices[0]
+    return {}
+
+
+def is_malformed_function_call_finish(body: Any) -> bool:
+    """True when Gemini filtered a tool call and returned no usable message."""
+    reason = _choice_finish_reason(_choice0_from_chat_body(body))
+    compact = reason.replace("_", "").replace("-", "").replace(" ", "")
+    return "malformedfunction" in compact or "functioncallfilter" in compact
+
+
+AI_MALFORMED_FUNCTION_CALL_NUDGE = (
+    "Your last function call was rejected as malformed. "
+    "Answer in plain text now. Do not call tools."
+)
+
+
 def _usage_completion_tokens(body: Any) -> int:
     if not isinstance(body, dict):
         return -1
@@ -1890,11 +1928,7 @@ def empty_chat_completion_error(body: Any, *, had_tools: bool = False) -> str:
     Avoid snake_case tokens that Markdown italicizes (``finish_reason`` →
     ``finishreason``) when the AI log renders the message.
     """
-    choice0: Dict[str, Any] = {}
-    if isinstance(body, dict):
-        choices = body.get("choices")
-        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
-            choice0 = choices[0]
+    choice0 = _choice0_from_chat_body(body)
     reason = _choice_finish_reason(choice0) or "unknown"
     tokens = _usage_completion_tokens(body)
     model = ""
@@ -1922,6 +1956,11 @@ def empty_chat_completion_error(body: Any, *, had_tools: bool = False) -> str:
             "when a lite model stalls."
         )
     return " ".join(tips)
+
+
+def is_empty_assistant_message_error(msg: Any) -> bool:
+    """True when the chat client failed because the model wrote nothing."""
+    return "empty assistant message" in str(msg or "").lower()
 
 
 # Gemini 3 OpenAI-compat requires thought_signature on the first functionCall
@@ -2348,6 +2387,30 @@ def _normalize_confidence_band(value: Any) -> str:
         return "medium"
     if "low" in raw:
         return "low"
+    return ""
+
+
+def coerce_claim_text(args: Any = None) -> str:
+    """Coerce verify_claim / challenge_conclusion text from common model aliases.
+
+    Small local models often omit ``claim`` and send hypothesis/statement/etc.
+    """
+    a = args if isinstance(args, dict) else {}
+    for key in (
+        "claim", "statement", "hypothesis", "conclusion", "text", "assertion",
+        "finding", "summary", "message", "query", "description",
+    ):
+        v = str(a.get(key) or "").strip()
+        if v:
+            return v
+    subject = str(a.get("subject") or "").strip()
+    obj = str(a.get("object") or a.get("target") or "").strip()
+    if subject and obj:
+        return f"{subject} causes {obj}"
+    if subject:
+        return subject
+    if obj:
+        return obj
     return ""
 
 
@@ -2950,7 +3013,7 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
     if name == AI_TOOL_RANK_ROOT_CAUSES:
         return {}, ""
     if name == AI_TOOL_VERIFY_CLAIM:
-        claim = str(a.get("claim") or "").strip()
+        claim = coerce_claim_text(a)
         if not claim:
             return None, "claim must be a non-empty string"
         ev = a.get("evidence")
@@ -2964,7 +3027,9 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
             "evidence": list(ev or []),
         }, ""
     if name == AI_TOOL_CHALLENGE_CONCLUSION:
-        return {"conclusion": str(a.get("conclusion") or "").strip()}, ""
+        return {
+            "conclusion": coerce_claim_text(a) or str(a.get("conclusion") or "").strip(),
+        }, ""
     if name == AI_TOOL_INVESTIGATION_MEMORY:
         rec = a.get("record") if isinstance(a.get("record"), dict) else None
         limit = a.get("limit", 5)
@@ -3617,33 +3682,38 @@ def _fmt_evidence_delta(delta: float) -> str:
 
 
 def filter_entries_for_ai_report(entries: Optional[Sequence[Any]] = None) -> List[Any]:
-    """Drop export-tool cards and empty shells so the report is not self-referential."""
+    """Drop tool-usage cards from saved HTML/Markdown/Text (prose + Evidence only).
+
+    Keeps user / assistant / evidence turns. Omits tools-only assistant shells
+    (for example a Calculation card with no written reply) and strips ``tools``
+    from every remaining entry so export never shows Evidence queries / Apply.
+    """
     out: List[Any] = []
     for entry in entries or []:
-        tools = []
+        tools: List[Any] = []
         if isinstance(entry, dict):
             tools = list(entry.get("tools") or [])
-        kept_tools = [
-            t for t in tools
-            if isinstance(t, dict) and not is_export_tool(str(t.get("name") or ""))
-        ]
-        if tools and not kept_tools:
-            # Pure export batch — omit from the diagnostic report.
-            continue
-        if isinstance(entry, dict) and tools and kept_tools != tools:
-            entry = dict(entry)
-            entry["tools"] = kept_tools
         text = ""
+        role = ""
         if isinstance(entry, dict):
             text = str(entry.get("text") or entry.get("content") or "")
+            role = str(entry.get("role") or "")
         elif isinstance(entry, (list, tuple)) and len(entry) >= 2:
+            role = str(entry[0] or "")
             text = str(entry[1] or "")
+        # Tools-only assistant bubble (no prose) — omit entirely.
+        if tools and not text.strip() and role != "evidence":
+            continue
         low = text.lower()
-        if "export html report" in low or "export_report" in low and "pending" in low:
-            if not kept_tools and not (text.strip() and "export" not in low[:40]):
-                # Skip pending export status lines when they are the whole entry.
-                if "pending" in low and len(text.strip()) < 80:
-                    continue
+        if (
+            ("export html report" in low or "export_report" in low)
+            and "pending" in low
+            and len(text.strip()) < 80
+        ):
+            continue
+        if isinstance(entry, dict) and "tools" in entry:
+            entry = dict(entry)
+            entry.pop("tools", None)
         out.append(entry)
     return out
 

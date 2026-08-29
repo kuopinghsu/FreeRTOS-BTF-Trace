@@ -457,6 +457,9 @@ flowchart TD
 3. 確認引用的每個時間都位於 C1–Cn 內。
 4. 使用 **Verify finding**，要求列出支持證據、矛盾證據、其他解釋與缺失資訊。
 5. 若敘述無法在 Statistics 重現，或假設了未記錄的事件，就不應採用。
+6. 在 **Evidence & Validation** 點 **▶ Next check** 的 **[Run]**，在相同的 Investigation Case、Context 與 Scope 中繼續。額外的主程式後續檢查收在 **More next steps…**。
+7. 若回覆包含獨立一行 `nextstep:{action}`（`nextstep:` 維持英文，action 使用回覆語言），該列也有 **[Run]**，會送出那一句。沒有此標記的 **Next check:** 標題不是按鈕。
+8. 把後續回覆當成完成前，先在時間軸與指定 Statistics 頁面確認。
 
 ### 了解 AI 工具動作
 
@@ -475,7 +478,7 @@ flowchart TD
 - 支持與矛盾證據；
 - 其他可能解釋；
 - Supported、Rejected 或 Inconclusive 等結論；
-- 缺失證據與一項有用的下一步；以及
+- 缺失證據與一項以 `nextstep:{action}` 標記的後續檢查（`nextstep:` 維持英文，action 使用回覆語言）；以及
 - What-if 或 Optimize 的明確估算聲明。
 
 ### 繼續條件
@@ -554,7 +557,7 @@ Baseline 與 Candidate 代表等效條件，目標指標已重新量測，而且
 | 7 | 在觸發前放置 C1，完成後放置 C2，再啟用 Limit | Statistics 現在只描述一個事件 |
 | 8 | 依 Response → Execution/Blocking → Preemption/Mutex/Migration 分析 | 收集最短且足以支持判斷的相依資料 |
 | 9 | 在時間軸驗證工作／核心／事件順序 | 得出 Supported、Plausible、Inconclusive 或 Unsupported |
-| 10 | 要求 AI Investigate，再使用 Verify finding | 以相同證據核對 AI 解釋 |
+| 10 | 要求 AI Investigate，再使用 Verify finding；以 Evidence **[Run]** 或標記的 `nextstep:{…}` **[Run]** 繼續 | 以相同證據核對 AI 解釋 |
 | 11 | 定義一項預期指標變化、擷取 Candidate、使用 Compare | 修改結果經過實際量測 |
 | 12 | 儲存分析範圍、數值、證據時間、結論與報告 | 其他工程師可以重現調查 |
 
@@ -571,6 +574,7 @@ Baseline 與 Candidate 代表等效條件，目標指標已重新量測，而且
 - [ ] 我已在時間軸開啟精確樣本。
 - [ ] 我已檢查矛盾證據與其他可能解釋。
 - [ ] 我只在選定證據後使用 AI。
+- [ ] 我已用 Evidence **[Run]** 或對話中的 `nextstep:{…}` **[Run]** 繼續 AI 調查。
 - [ ] 我已驗證 AI 引用的每個量測與時間點。
 - [ ] 我把 What-if 與 Optimize 視為估算。
 - [ ] 我已擷取等效 Candidate，並重複相同量測。
@@ -590,6 +594,7 @@ Baseline 與 Candidate 代表等效條件，目標指標已重新量測，而且
 | 認為時間接近就能證明因果 | 檢查事件順序、其他可能性與矛盾證據 |
 | 比較不同工作負載階段 | 對齊工作負載、追蹤事件、分析範圍與篩選條件 |
 | 把 AI 解釋當成量測值 | 在 Statistics 與時間軸重現 |
+| 以為回覆裡的 **Next check:** 就是按鈕 | 改用 Evidence **[Run]**，或獨立一行 `nextstep:{action}` |
 | 把 What-if 當成已驗證改善 | 套用修改、重新擷取，再使用 Compare |
 
 ## 何時應停止並重新擷取

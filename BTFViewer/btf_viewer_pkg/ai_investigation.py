@@ -1236,7 +1236,11 @@ def build_critical_path(
     if len(graph_nodes) >= 2:
         lines = ["graph LR"]
         for node in graph_nodes:
-            safe = str(node["label"]).replace('"', "'")[:80]
+            safe = (
+                str(node["label"]).replace('"', "'").replace("[", "'")
+                .replace("]", "'").replace("{", "'").replace("}", "'")
+                .replace("(", "'").replace(")", "'")[:80]
+            )
             lines.append(f'  {node["id"]}["{safe}"]')
         for a, b in zip(graph_nodes, graph_nodes[1:]):
             lines.append(f'  {a["id"]} --> {b["id"]}')
@@ -1318,6 +1322,8 @@ def extract_evidence_panel_payload(
             if item
         ]
         payload["confidence"] = str(data.get("confidence") or "Medium")
+        if data.get("mermaid"):
+            payload["graph_mermaid"] = str(data.get("mermaid") or "")
     elif name == "correlate_events" or data.get("events"):
         task = str(data.get("task") or "")
         payload["conclusion"] = f"Correlated events: {task}" if task else "Correlated events"
@@ -1461,7 +1467,8 @@ def extract_evidence_panel_payload(
             else "Low" if result_label == "DISPROVED"
             else "Medium"
         )
-    elif name in (
+    elif (
+        name in (
         "plan_investigation", "suggest_scope", "detect_contradictions",
         "assess_evidence_sufficiency", "cluster_findings", "generate_fingerprint",
         "find_similar_investigations", "regression_localize", "build_causal_chain",
@@ -1472,11 +1479,26 @@ def extract_evidence_panel_payload(
         "challenge_conclusion", "investigation_memory", "cluster_incidents",
         "close_investigation", "analyze_distribution", "analyze_periodicity",
         "summarize_investigation_context",
-    ) or data.get("steps") or data.get("verdict") or data.get("pattern"):
+        ) or data.get("steps") or data.get("verdict") or data.get("pattern")
+    ):
         payload["conclusion"] = str(result.get("message") or data.get("message") or name)
         payload["confidence"] = str(data.get("confidence") or "Medium")
         if data.get("mermaid"):
             payload["evidence_chain"] = str(data.get("mermaid"))
+
+    if (
+        isinstance(data.get("steps"), list)
+        and data.get("steps")
+        and isinstance(data["steps"][0], dict)
+        and ("prompt" in data["steps"][0] or "kind" in data["steps"][0])
+    ):
+        from .ai_case import normalize_next_steps
+
+        payload["next_steps"] = normalize_next_steps(
+            data.get("steps"), limit=data.get("limit") or 3)
+        stop = str(data.get("stop_reason") or "").strip()
+        payload["stop_reason"] = stop or None
+        payload.pop("conclusion", None)
 
     if not (
         payload.get("conclusion")
@@ -1484,6 +1506,8 @@ def extract_evidence_panel_payload(
         or payload.get("evidence_chain")
         or payload.get("alternatives")
         or payload.get("checks")
+        or payload.get("next_steps") is not None
+        or payload.get("stop_reason")
     ):
         return None
     score_data = compute_evidence_score(
@@ -1535,7 +1559,8 @@ def extract_evidence_panel_payload(
     payload["falsify"] = case.get("falsification") or case.get("falsify")
     graph = case.get("evidence_graph") or {}
     payload["graph_mermaid"] = (
-        case.get("graph_mermaid")
+        payload.get("graph_mermaid")
+        or case.get("graph_mermaid")
         or evidence_graph_mermaid(graph.get("nodes"), graph.get("edges"))
     )
     payload["hypotheses_managed"] = case.get("hypotheses")
@@ -1608,6 +1633,156 @@ def refresh_evidence_panel_scores(payload: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _attach_next_steps(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Fill next_steps from the host case unless the tool already supplied them."""
+    if not isinstance(payload, dict):
+        return payload
+    if "next_steps" in payload:
+        return payload
+    return refresh_evidence_panel_next_steps(payload)
+
+
+def refresh_evidence_panel_next_steps(
+    payload: Optional[Dict[str, Any]],
+    *,
+    loaded_tab_count: Any = 1,
+    findings: Any = None,
+) -> Optional[Dict[str, Any]]:
+    """Recompute next_steps after Investigation Case tools_executed updates."""
+    if not isinstance(payload, dict):
+        return payload
+    from .ai_case import compute_next_steps
+
+    recomputed = compute_next_steps(
+        payload,
+        loaded_tab_count=loaded_tab_count,
+        findings=findings if findings is not None else payload.get("analysis_findings"),
+    )
+    payload["next_steps"] = recomputed.get("steps") or []
+    payload["stop_reason"] = recomputed.get("stop_reason")
+    return payload
+
+
+def format_sns_fallback_reply(
+    payload: Optional[Dict[str, Any]] = None,
+    language: str = "English",
+) -> str:
+    """Assistant wrap-up when the model wrote no text after tools."""
+    data = payload if isinstance(payload, dict) else {}
+    labels = evidence_panel_labels(language)
+    finding = data.get("finding") if isinstance(data.get("finding"), dict) else {}
+    conclusion = str(data.get("conclusion") or "").strip()
+    title = str(finding.get("title") or "").strip()
+    lines: List[str] = []
+    if conclusion:
+        lines.append(_localize_evidence_token(conclusion, labels))
+    elif title:
+        lines.append(_localize_evidence_token(title, labels))
+    evidence = data.get("evidence") if isinstance(data.get("evidence"), list) else []
+    if conclusion.lower().startswith("critical path") and evidence:
+        if lines:
+            lines.append("")
+        for item in evidence[:8]:
+            if not isinstance(item, dict):
+                continue
+            lab = str(item.get("label") or "").strip()
+            if not lab:
+                continue
+            t = item.get("time")
+            if t is not None:
+                lines.append(f"- {lab} (jump:{_evidence_jump_token(t)})")
+            else:
+                lines.append(f"- {lab}")
+    steps = data.get("next_steps") if isinstance(data.get("next_steps"), list) else []
+    step_labels: List[str] = []
+    for item in steps[:3]:
+        if not isinstance(item, dict):
+            continue
+        lab = str(item.get("label") or item.get("prompt") or "").strip()
+        if lab:
+            step_labels.append(lab)
+    if step_labels:
+        if lines:
+            lines.append("")
+        for lab in step_labels:
+            lines.append(f"nextstep:{{{lab}}}")
+    if not lines:
+        return _sns_fallback_empty_message(language)
+    return "\n".join(lines)
+
+
+def _sns_fallback_empty_message(language: str = "English") -> str:
+    key = normalize_response_language(language)
+    if key.startswith("Traditional Chinese") or "繁體" in key:
+        return "後續步驟請見「證據與驗證」。按 [Run] 繼續。"
+    if key.startswith("Simplified Chinese") or "简体" in key:
+        return "后续步骤请见「证据与验证」。点击 [Run] 继续。"
+    if key.startswith("Korean") or "한국" in key:
+        return "후속 단계는 Evidence & Validation에 있습니다. [Run]을 눌러 계속하세요."
+    if key.startswith("Japanese") or "日本" in key:
+        return "次の手順は Evidence & Validation にあります。[Run] で続行してください。"
+    return "Follow-ups are in Evidence & Validation. Click [Run] to continue."
+
+
+def ensure_nextstep_lines(
+    text: Any,
+    next_steps: Any = None,
+    *,
+    limit: Any = None,
+) -> str:
+    """Append missing nextstep:{action} lines from host next_steps (max 3).
+
+    When the model lists Remaining Findings as prose without tags, conversation
+    [Run] would otherwise be missing. Reuses Evidence next_steps prompts.
+    """
+    from .ai_case import NEXT_STEP_LIMIT_MAX, normalize_next_steps
+
+    src = str(text or "")
+    cap = NEXT_STEP_LIMIT_MAX
+    if limit is not None:
+        try:
+            cap = max(0, min(NEXT_STEP_LIMIT_MAX, int(limit)))
+        except (TypeError, ValueError):
+            cap = NEXT_STEP_LIMIT_MAX
+    steps = normalize_next_steps(next_steps, limit=cap)
+    if not steps or not src.strip():
+        return src
+    existing: List[str] = []
+    for line in src.splitlines():
+        m = _NEXTSTEP_LINE_RE.match(line)
+        if not m:
+            continue
+        body = str(m.group("braced") or m.group("plain") or "").strip()
+        if body:
+            existing.append(body)
+    if len(existing) >= len(steps):
+        return src
+    tagged_blob = "\n".join(existing).casefold()
+    added: List[str] = []
+    for step in steps:
+        if len(existing) + len(added) >= cap:
+            break
+        prompt = str(step.get("prompt") or "").strip()
+        label = str(step.get("label") or "").strip()
+        reason = str(step.get("reason") or "").strip()
+        action = prompt or reason or label
+        if not action:
+            continue
+        low = action.casefold()
+        if low in tagged_blob:
+            continue
+        if label and label.casefold() in tagged_blob:
+            continue
+        id_m = re.search(r"\(id=([A-Za-z][A-Za-z0-9_]{0,47})\)", prompt)
+        if id_m and id_m.group(1).casefold() in tagged_blob:
+            continue
+        added.append(f"nextstep:{{{action}}}")
+        tagged_blob += "\n" + low
+    if not added:
+        return src
+    return src.rstrip() + "\n\n" + "\n".join(added) + "\n"
+
+
 def merge_evidence_panel_payload(
     prev: Optional[Dict[str, Any]],
     new: Optional[Dict[str, Any]],
@@ -1624,7 +1799,7 @@ def merge_evidence_panel_payload(
     if not isinstance(new, dict) or not new:
         return dict(prev) if isinstance(prev, dict) and prev else new
     if not isinstance(prev, dict) or not prev:
-        return dict(new)
+        return _attach_next_steps(refresh_evidence_panel_scores(dict(new)))
     out = dict(new)
     if not _evidence_items_have_times(out.get("evidence")) and _evidence_items_have_times(
         prev.get("evidence")
@@ -1643,10 +1818,29 @@ def merge_evidence_panel_payload(
         "root_cause_chain",
         "finding",
         "subtitle",
+        "conclusion",
+        "confidence",
+        "coverage",
+        "evidence_coverage",
+        "evidence_quality",
+        "falsification",
+        "investigation_case",
+        "graph_mermaid",
     ):
         if not out.get(key) and prev.get(key):
             out[key] = prev[key]
-    return refresh_evidence_panel_scores(out)
+    if "next_steps" in new:
+        out["next_steps"] = new.get("next_steps")
+        if "stop_reason" in new:
+            out["stop_reason"] = new.get("stop_reason")
+    else:
+        from .ai_case import compute_next_steps
+
+        recomputed = compute_next_steps(
+            out, findings=out.get("analysis_findings"))
+        out["next_steps"] = recomputed.get("steps") or []
+        out["stop_reason"] = recomputed.get("stop_reason")
+    return _attach_next_steps(refresh_evidence_panel_scores(out))
 
 
 def _evidence_jump_token(value: Any) -> str:
@@ -1697,6 +1891,10 @@ _BTF_SCOPE_HREF_RE = re.compile(
 )
 _BTF_EXP_HREF_RE = re.compile(
     r"btfexp:(?://)?([a-z_]+)/([^?\s#]*)",
+    re.IGNORECASE,
+)
+_BTF_NEXT_HREF_RE = re.compile(
+    r"btfnext:(?://)?([a-z_]+)/([^?\s#]*)",
     re.IGNORECASE,
 )
 _BTF_TOOL_HREF_RE = re.compile(
@@ -1766,6 +1964,108 @@ def parse_btf_exp_href(href: Any) -> Tuple[str, str]:
     if not m:
         return "", ""
     return m.group(1).lower(), (m.group(2) or "all")
+
+
+def btf_next_href(action: str, key: str = "0") -> str:
+    act = re.sub(r"[^a-z_]", "", str(action or "").lower()) or "run"
+    kid = re.sub(r"[^A-Za-z0-9_.-]", "", str(key or "0")) or "0"
+    return f"btfnext:{act}/{kid}"
+
+
+def parse_btf_next_href(href: Any) -> Tuple[str, str]:
+    m = _BTF_NEXT_HREF_RE.search(str(href or ""))
+    if not m:
+        return "", ""
+    return m.group(1).lower(), (m.group(2) or "0")
+
+
+_NEXTSTEP_LINE_RE = re.compile(
+    r"^(?P<indent>[ \t]*)nextstep:\s*(?:\{(?P<braced>.*)\}|(?P<plain>.+?))\s*$",
+    re.IGNORECASE,
+)
+_FINDING_ID_HEADING_RE = re.compile(
+    r"\(id=([A-Za-z][A-Za-z0-9_]{0,47})\)",
+    re.IGNORECASE,
+)
+# Longer / more specific needles first. Keep lockstep with
+# web/src/utils/aiInvestigation.js PROSE_STATS_SECTION_HINTS.
+_PROSE_STATS_SECTION_HINTS: Tuple[Tuple[str, str], ...] = (
+    ("core-pair", "core_pairs"),
+    ("core pair", "core_pairs"),
+    ("priority inheritance", "priority"),
+    ("execution time", "exec"),
+    ("timeline anomal", "anomalies"),
+    ("tick health", "health"),
+    ("tick interval", "health"),
+    ("mutex block", "block"),
+    ("core migration", "migrations"),
+    ("dwell time", "migrations"),
+    ("load balance", "cores"),
+    ("wcet", "exec"),
+)
+
+
+def _finding_stats_section(fid: str) -> str:
+    from .config import FINDING_SECTION_MAP
+
+    return str(FINDING_SECTION_MAP.get(str(fid or "").strip()) or "").strip()
+
+
+def _prose_stats_section(text: str) -> str:
+    blob = str(text or "").lower().replace("–", "-").replace("—", "-")
+    for needle, sid in _PROSE_STATS_SECTION_HINTS:
+        if needle in blob:
+            return sid
+    return ""
+
+
+def linkify_next_check_lines(
+    text: Any,
+    next_steps: Any = None,
+    findings: Any = None,
+    prose_out: Any = None,
+) -> str:
+    """Replace nextstep:{action} lines with the action plus [Run] / Open Statistics."""
+    del next_steps  # Conversation [Run] uses tagged prose, not stored next_steps.
+    src = str(text or "")
+    if not src.strip():
+        return src
+    items = [f for f in (findings or []) if isinstance(f, dict)]
+    by_id = {
+        str(f.get("id") or "").strip().lower(): f
+        for f in items
+        if str(f.get("id") or "").strip()
+    }
+    tagged: List[str] = prose_out if isinstance(prose_out, list) else []
+
+    out: List[str] = []
+    pending_id = ""
+    for line in src.splitlines(keepends=True):
+        nl = "\n" if line.endswith("\n") else ""
+        raw = line[:-1] if nl else line
+        id_m = _FINDING_ID_HEADING_RE.search(raw)
+        if id_m:
+            pending_id = str(id_m.group(1) or "").strip()
+        ns = _NEXTSTEP_LINE_RE.match(raw)
+        if ns:
+            body = str(ns.group("braced") or ns.group("plain") or "").strip()
+            if not body or "btfnext:" in body or "btfstats:" in body:
+                out.append(line)
+                continue
+            tagged.append(body)
+            extras = [f"[Run]({btf_next_href('text', str(len(tagged) - 1))})"]
+            sid = _finding_stats_section(pending_id)
+            if not sid and pending_id.lower() in by_id:
+                sid = _finding_stats_section(
+                    str(by_id[pending_id.lower()].get("id") or ""))
+            if not sid:
+                sid = _prose_stats_section(body)
+            if sid:
+                extras.append(f"[Open Statistics](btfstats:section/{sid})")
+            out.append(f"{ns.group('indent')}{body} {' '.join(extras)}{nl}")
+            continue
+        out.append(line)
+    return "".join(out)
 
 
 def btf_tool_href(action: str, name: str = "") -> str:
@@ -2432,6 +2732,51 @@ for _lang, _extra in _EVIDENCE_PANEL_EXTRA.items():
     _extra.setdefault("need_evidence", _extra.get("needs_evidence", "needs evidence"))
     EVIDENCE_PANEL_LABELS[_lang].update(_extra)
 
+_NEXT_ACTION_LABELS: Dict[str, Dict[str, str]] = {
+    "English": {
+        "run_next": "Run",
+        "more_next_steps": "More next steps…",
+        "investigation_complete": "Investigation complete",
+    },
+    "Traditional Chinese (繁體中文)": {
+        "run_next": "執行",
+        "more_next_steps": "更多下一步…",
+        "investigation_complete": "調查完成",
+    },
+    "Simplified Chinese (简体中文)": {
+        "run_next": "执行",
+        "more_next_steps": "更多下一步…",
+        "investigation_complete": "调查完成",
+    },
+    "Japanese (日本語)": {
+        "run_next": "実行",
+        "more_next_steps": "次の手順…",
+        "investigation_complete": "調査完了",
+    },
+    "Korean (한국어)": {
+        "run_next": "실행",
+        "more_next_steps": "다음 단계 더 보기…",
+        "investigation_complete": "조사 완료",
+    },
+    "German": {
+        "run_next": "Ausführen",
+        "more_next_steps": "Weitere nächste Schritte…",
+        "investigation_complete": "Untersuchung abgeschlossen",
+    },
+    "French": {
+        "run_next": "Exécuter",
+        "more_next_steps": "Autres étapes suivantes…",
+        "investigation_complete": "Investigation terminée",
+    },
+    "Spanish": {
+        "run_next": "Ejecutar",
+        "more_next_steps": "Más pasos siguientes…",
+        "investigation_complete": "Investigación completa",
+    },
+}
+for _lang, _labs in _NEXT_ACTION_LABELS.items():
+    EVIDENCE_PANEL_LABELS[_lang].update(_labs)
+
 
 def normalize_response_language(lang: str) -> str:
     """Map a reply-language setting to an EVIDENCE_PANEL_LABELS key."""
@@ -2701,6 +3046,59 @@ def _wrap_evidence_fold(
     ]
 
 
+def _next_action_markdown_lines(
+    data: Dict[str, Any],
+    labels: Dict[str, str],
+) -> List[str]:
+    """Primary next action + optional More next steps… fold."""
+    from .ai_case import normalize_next_steps, compute_next_steps
+
+    structured = normalize_next_steps(data.get("next_steps"))
+    stop = str(data.get("stop_reason") or "").strip()
+    if not structured and data.get("next_steps") is None:
+        recomputed = compute_next_steps(data)
+        structured = list(recomputed.get("steps") or [])
+        if not stop:
+            stop = str(recomputed.get("stop_reason") or "").strip()
+    run_lab = labels.get("run_next", "Run")
+    lines: List[str] = []
+    if structured:
+        primary = structured[0]
+        lines.append("")
+        lines.append(
+            f"**▶ {labels.get('next_check', labels.get('next_action', 'Next check'))}:** "
+            f"{primary.get('label')} [{run_lab}]({btf_next_href('run', '0')})"
+        )
+        extra = structured[1:]
+        if extra:
+            body = [
+                f"- {step.get('label')} [{run_lab}]({btf_next_href('run', str(i))})"
+                for i, step in enumerate(extra, start=1)
+            ]
+            lines.extend(_wrap_evidence_fold(
+                labels.get("more_next_steps", "More next steps…"),
+                body,
+            ))
+        return lines
+    if stop:
+        lines.append("")
+        lines.append(
+            f"**{labels.get('investigation_complete', 'Investigation complete')}** · {stop}"
+        )
+        return lines
+    falsify = data.get("falsify") if isinstance(data.get("falsify"), dict) else {}
+    nxt = str(
+        falsify.get("next_check") or data.get("recommended_action") or ""
+    ).strip()
+    if nxt:
+        lines.append("")
+        lines.append(
+            f"**▶ {labels.get('next_check', labels.get('next_action', 'Next check'))}:** "
+            f"{nxt} [{run_lab}]({btf_next_href('run', '0')})"
+        )
+    return lines
+
+
 class _DirectEvidenceTable(NamedTuple):
     lines: List[str]
     timeline_only: bool
@@ -2844,15 +3242,16 @@ def _evidence_fold_id(title: str, body: str) -> str:
     return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:12]
 
 
-def _parse_evidence_fold_blocks(text: str) -> List[Tuple[str, str]]:
-    """Return (summary, body) for each ``<details class=\"ai-ev-fold\">`` block, depth-first."""
+def _parse_evidence_fold_blocks(text: str) -> List[Tuple[str, str, bool]]:
+    """Return (summary, body, default_open) for each ``ai-ev-fold``, depth-first."""
     lines = str(text or "").replace("\r\n", "\n").split("\n")
-    blocks: List[Tuple[str, str]] = []
+    blocks: List[Tuple[str, str, bool]] = []
     i = 0
     n = len(lines)
     while i < n:
         stripped = lines[i].strip()
         if re.match(r"^<details\b", stripped, re.I) and "ai-ev-fold" in stripped:
+            default_open = bool(re.search(r"\bopen\b", stripped, re.I))
             i += 1
             summary = ""
             body_lines: List[str] = []
@@ -2882,7 +3281,7 @@ def _parse_evidence_fold_blocks(text: str) -> List[Tuple[str, str]]:
                 i += 1
             body_text = "\n".join(body_lines).strip()
             title = summary or "Details"
-            blocks.append((title, body_text))
+            blocks.append((title, body_text, default_open))
             blocks.extend(_parse_evidence_fold_blocks(body_text))
             continue
         i += 1
@@ -2893,7 +3292,16 @@ def evidence_panel_inner_fold_ids(text: str) -> Tuple[str, ...]:
     """Fold ids for every nested ai-ev-fold section in evidence markdown."""
     return tuple(
         _evidence_fold_id(title, body)
-        for title, body in _parse_evidence_fold_blocks(text)
+        for title, body, _open in _parse_evidence_fold_blocks(text)
+    )
+
+
+def evidence_panel_default_closed_fold_ids(text: str) -> Tuple[str, ...]:
+    """Fold ids that start collapsed (source ``<details>`` has no ``open``)."""
+    return tuple(
+        _evidence_fold_id(title, body)
+        for title, body, default_open in _parse_evidence_fold_blocks(text)
+        if not default_open
     )
 
 
@@ -3008,6 +3416,7 @@ def format_evidence_panel_markdown(
         )
 
     evidence = data.get("evidence") or []
+    graph_src = str(data.get("graph_mermaid") or "").strip()
     table_info = _format_direct_evidence_table(evidence, labels)
     if table_info.lines:
         if table_info.timeline_only:
@@ -3022,7 +3431,15 @@ def format_evidence_panel_markdown(
             )
         lines.append("")
         lines.extend(_wrap_evidence_fold(
-            title, table_info.lines, open=table_info.count <= 5,
+            title, table_info.lines,
+            open=False,
+        ))
+    if graph_src:
+        lines.append("")
+        lines.extend(_wrap_evidence_fold(
+            labels.get("graph", "Evidence graph"),
+            ["```mermaid", graph_src, "```"],
+            open=False,
         ))
 
     chain = str(data.get("evidence_chain") or "").strip()
@@ -3107,16 +3524,11 @@ def format_evidence_panel_markdown(
                 f"[{labels.get('compare_action', 'Compare hypotheses')}]"
                 f"({btf_hyp_href('compare', 'all')})"
             )
-        keep_open = (
-            status_key == "insufficient"
-            or str(data.get("confidence") or "").lower() == "low"
-            or status_key == "not_observed"
-        )
         lines.append("")
         lines.extend(_wrap_evidence_fold(
             f"{labels['alternatives']} · {len(alt_src)}",
             alt_lines,
-            open=keep_open,
+            open=False,
         ))
 
     falsify = data.get("falsify") if isinstance(data.get("falsify"), dict) else {}
@@ -3140,7 +3552,7 @@ def format_evidence_panel_markdown(
         lines.extend(_wrap_evidence_fold(
             f"{labels.get('supporting', 'Supporting')} · {len(supporting)}",
             support_lines,
-            open=len(supporting) <= 3,
+            open=False,
         ))
     if contradicting:
         lines.append("")
@@ -3152,13 +3564,9 @@ def format_evidence_panel_markdown(
         lines.append(f"**{labels.get('missing_evidence', 'Missing evidence')}**")
         for s in disprove:
             lines.append(f"- {s}")
-    nxt = str(falsify.get("next_check") or "").strip()
-    if nxt:
-        lines.append("")
-        lines.append(
-            f"**▶ {labels.get('next_check', labels.get('next_action', 'Next check'))}:** "
-            f"{nxt}"
-        )
+    nxt_lines = _next_action_markdown_lines(data, labels)
+    if nxt_lines:
+        lines.extend(nxt_lines)
 
     # --- Investigation details (secondary / debug chrome) -----------------
     # Supporting / Missing / next check are promoted above when present.
@@ -3280,21 +3688,12 @@ def format_evidence_panel_markdown(
                 open=False,
                 nested=True,
             ))
-    graph_src = str(data.get("graph_mermaid") or "").strip()
-    if graph_src:
-        details.extend(_wrap_evidence_fold(
-            labels.get("graph", "Evidence graph"),
-            ["```mermaid", graph_src, "```"],
-            open=False,
-            nested=True,
-        ))
-
     if details:
         lines.append("")
         lines.extend(_wrap_evidence_fold(
             labels.get("investigation_details", "Investigation details"),
             details,
-            open=False,
+            open=True,
         ))
 
     return "\n".join(lines).strip()

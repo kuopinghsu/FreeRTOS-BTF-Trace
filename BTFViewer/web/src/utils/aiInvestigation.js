@@ -18,6 +18,9 @@ import {
   formatQualityFlagLines,
   historicalKnowledgeForFinding,
   mermaidLabelWithTime,
+  normalizeNextSteps,
+  computeNextSteps,
+  NEXT_STEP_LIMIT_MAX,
 } from './aiCase.js'
 
 export const INVESTIGATION_PLAN_STEPS = [
@@ -704,6 +707,7 @@ export function extractEvidencePanelPayload(toolName, result) {
       }))
       .filter(Boolean)
     payload.confidence = String(data.confidence || 'Medium')
+    if (data.mermaid) payload.graph_mermaid = String(data.mermaid)
   } else if (name === 'correlate_events' || data.events) {
     const task = String(data.task || '')
     payload.conclusion = task ? `Correlated events: ${task}` : 'Correlated events'
@@ -827,12 +831,24 @@ export function extractEvidencePanelPayload(toolName, result) {
     if (data.mermaid) payload.evidence_chain = String(data.mermaid)
   }
 
+  const step0 = Array.isArray(data.steps) && data.steps[0] && typeof data.steps[0] === 'object'
+    ? data.steps[0]
+    : null
+  if (step0 && ('prompt' in step0 || 'kind' in step0)) {
+    payload.next_steps = normalizeNextSteps(data.steps, { limit: data.limit || 3 })
+    const stop = String(data.stop_reason || '').trim()
+    payload.stop_reason = stop || null
+    delete payload.conclusion
+  }
+
   if (!(
     payload.conclusion
     || payload.evidence
     || payload.evidence_chain
     || payload.alternatives?.length
     || payload.checks?.length
+    || payload.next_steps != null
+    || payload.stop_reason
   )) return null
   const scoreData = computeEvidenceScore(payload.evidence || [], {
     alternatives: payload.alternatives || [],
@@ -882,7 +898,7 @@ export function extractEvidencePanelPayload(toolName, result) {
   payload.investigation_case = caseObj
   payload.coverage = caseObj.evidence_coverage || caseObj.coverage
   payload.falsify = caseObj.falsification || caseObj.falsify
-  payload.graph_mermaid = caseObj.graph_mermaid
+  payload.graph_mermaid = payload.graph_mermaid || caseObj.graph_mermaid
   payload.hypotheses_managed = caseObj.hypotheses
   payload.tool_reasons = caseObj.tool_reasons || []
   payload.confidence_evolution = formatConfidenceEvolution(caseObj.confidence_history)
@@ -954,7 +970,9 @@ export function mergeEvidencePanelPayload(prev, next) {
   if (!next || typeof next !== 'object') {
     return prev && typeof prev === 'object' ? { ...prev } : next
   }
-  if (!prev || typeof prev !== 'object') return { ...next }
+  if (!prev || typeof prev !== 'object') {
+    return attachNextSteps(refreshEvidencePanelScores({ ...next }))
+  }
   const out = { ...next }
   if (!evidenceItemsHaveTimes(out.evidence) && evidenceItemsHaveTimes(prev.evidence)) {
     out.evidence = [...(prev.evidence || [])]
@@ -967,7 +985,9 @@ export function mergeEvidencePanelPayload(prev, next) {
   }
   for (const key of [
     'alternatives', 'hypotheses', 'hypotheses_managed', 'root_cause_chain',
-    'finding', 'subtitle',
+    'finding', 'subtitle', 'conclusion', 'confidence', 'coverage',
+    'evidence_coverage', 'evidence_quality', 'falsification', 'investigation_case',
+    'graph_mermaid',
   ]) {
     // Match Python falsy lists/strings: empty [] must not wipe prior alts.
     const cur = out[key]
@@ -976,7 +996,126 @@ export function mergeEvidencePanelPayload(prev, next) {
       || (typeof cur === 'string' && !String(cur).trim())
     if (missing && prev[key]) out[key] = prev[key]
   }
-  return refreshEvidencePanelScores(out)
+  if ('next_steps' in next) {
+    out.next_steps = next.next_steps
+    if ('stop_reason' in next) out.stop_reason = next.stop_reason
+  } else {
+    const recomputed = computeNextSteps(out, { findings: out.analysis_findings })
+    out.next_steps = recomputed.steps || []
+    out.stop_reason = recomputed.stop_reason
+  }
+  return attachNextSteps(refreshEvidencePanelScores(out))
+}
+
+function attachNextSteps(payload) {
+  if (!payload || typeof payload !== 'object') return payload
+  if ('next_steps' in payload) return payload
+  return refreshEvidencePanelNextSteps(payload)
+}
+
+/** Recompute next_steps after Investigation Case tools_executed updates. */
+export function refreshEvidencePanelNextSteps(payload, { loadedTabCount = 1, findings = null } = {}) {
+  if (!payload || typeof payload !== 'object') return payload
+  const recomputed = computeNextSteps(payload, {
+    loadedTabCount,
+    findings: findings != null ? findings : payload.analysis_findings,
+  })
+  payload.next_steps = recomputed.steps || []
+  payload.stop_reason = recomputed.stop_reason
+  return payload
+}
+
+export function formatSnsFallbackReply(payload = null, language = 'English') {
+  const data = payload && typeof payload === 'object' ? payload : {}
+  const labels = evidencePanelLabels(language)
+  const finding = data.finding && typeof data.finding === 'object' ? data.finding : {}
+  const conclusion = String(data.conclusion || '').trim()
+  const title = String(finding.title || '').trim()
+  const lines = []
+  if (conclusion) lines.push(localizeEvidenceToken(conclusion, labels))
+  else if (title) lines.push(localizeEvidenceToken(title, labels))
+  const evidence = Array.isArray(data.evidence) ? data.evidence : []
+  if (conclusion.toLowerCase().startsWith('critical path') && evidence.length) {
+    if (lines.length) lines.push('')
+    for (const item of evidence.slice(0, 8)) {
+      if (!item || typeof item !== 'object') continue
+      const lab = String(item.label || '').trim()
+      if (!lab) continue
+      if (item.time != null) lines.push(`- ${lab} (jump:${evidenceJumpToken(item.time)})`)
+      else lines.push(`- ${lab}`)
+    }
+  }
+  const steps = Array.isArray(data.next_steps) ? data.next_steps : []
+  const stepLabels = []
+  for (const item of steps.slice(0, 3)) {
+    if (!item || typeof item !== 'object') continue
+    const lab = String(item.label || item.prompt || '').trim()
+    if (lab) stepLabels.push(lab)
+  }
+  if (stepLabels.length) {
+    if (lines.length) lines.push('')
+    for (const lab of stepLabels) lines.push(`nextstep:{${lab}}`)
+  }
+  if (!lines.length) {
+    return snsFallbackEmptyMessage(language)
+  }
+  return lines.join('\n')
+}
+
+function snsFallbackEmptyMessage(language = 'English') {
+  const key = normalizeResponseLanguage(language)
+  if (key.startsWith('Traditional Chinese') || key.includes('繁體')) {
+    return '後續步驟請見「證據與驗證」。按 [Run] 繼續。'
+  }
+  if (key.startsWith('Simplified Chinese') || key.includes('简体')) {
+    return '后续步骤请见「证据与验证」。点击 [Run] 继续。'
+  }
+  if (key.startsWith('Korean') || key.includes('한국')) {
+    return '후속 단계는 Evidence & Validation에 있습니다. [Run]을 눌러 계속하세요.'
+  }
+  if (key.startsWith('Japanese') || key.includes('日本')) {
+    return '次の手順は Evidence & Validation にあります。[Run] で続行してください。'
+  }
+  return 'Follow-ups are in Evidence & Validation. Click [Run] to continue.'
+}
+
+/** Append missing nextstep:{action} lines from host next_steps (max 3). */
+export function ensureNextstepLines(text, nextSteps = null, { limit = null } = {}) {
+  const src = String(text || '')
+  let cap = NEXT_STEP_LIMIT_MAX
+  if (limit != null) {
+    const n = Number(limit)
+    if (Number.isFinite(n)) cap = Math.max(0, Math.min(NEXT_STEP_LIMIT_MAX, Math.trunc(n)))
+  }
+  const steps = normalizeNextSteps(nextSteps, { limit: cap })
+  if (!steps.length || !src.trim()) return src
+  const existing = []
+  for (const line of src.split(/\r?\n/)) {
+    const m = NEXTSTEP_LINE_RE.exec(line)
+    if (!m) continue
+    const body = String(m[2] || m[3] || '').trim()
+    if (body) existing.push(body)
+  }
+  if (existing.length >= steps.length) return src
+  let taggedBlob = existing.join('\n').toLowerCase()
+  const added = []
+  for (const step of steps) {
+    if (existing.length + added.length >= cap) break
+    const prompt = String(step.prompt || '').trim()
+    const label = String(step.label || '').trim()
+    const reason = String(step.reason || '').trim()
+    const action = prompt || reason || label
+    if (!action) continue
+    const low = action.toLowerCase()
+    if (taggedBlob.includes(low)) continue
+    if (label && taggedBlob.includes(label.toLowerCase())) continue
+    const idM = /\(id=([A-Za-z][A-Za-z0-9_]{0,47})\)/.exec(prompt)
+    if (idM && taggedBlob.includes(idM[1].toLowerCase())) continue
+    added.push(`nextstep:{${action}}`)
+    taggedBlob += `\n${low}`
+  }
+  if (!added.length) return src
+  return `${src.replace(/\s+$/, '')}\n\n${added.join('\n')}\n`
 }
 
 function evidenceJumpToken(value) {
@@ -1012,6 +1151,7 @@ export function formatHypothesisActionLinks(hypId, labels = {}) {
 
 const BTF_SCOPE_HREF_RE = /btfscope:(?:\/\/)?([a-z_]+)\/([^?\s#]*)/i
 const BTF_EXP_HREF_RE = /btfexp:(?:\/\/)?([a-z_]+)\/([^?\s#]*)/i
+const BTF_NEXT_HREF_RE = /btfnext:(?:\/\/)?([a-z_]+)\/([^?\s#]*)/i
 const BTF_TOOL_HREF_RE = /btftool:(?:\/\/)?([a-z_]+)\/([^?\s#]*)/i
 
 export function btfScopeHref(action, key = '') {
@@ -1061,6 +1201,110 @@ export function parseBtfExpHref(href) {
   const m = BTF_EXP_HREF_RE.exec(String(href || ''))
   if (!m) return { action: '', key: '' }
   return { action: String(m[1] || '').toLowerCase(), key: m[2] || 'all' }
+}
+
+export function btfNextHref(action, key = '0') {
+  const act = String(action || '').toLowerCase().replace(/[^a-z_]/g, '') || 'run'
+  const kid = String(key || '0').replace(/[^A-Za-z0-9_.-]/g, '') || '0'
+  return `btfnext:${act}/${kid}`
+}
+
+export function parseBtfNextHref(href) {
+  const m = BTF_NEXT_HREF_RE.exec(String(href || ''))
+  if (!m) return { action: '', key: '' }
+  return { action: String(m[1] || '').toLowerCase(), key: m[2] || '0' }
+}
+
+const NEXTSTEP_LINE_RE = /^([ \t]*)nextstep:\s*(?:\{(.*)\}|(.+?))\s*$/i
+const FINDING_ID_HEADING_RE = /\(id=([A-Za-z][A-Za-z0-9_]{0,47})\)/i
+/** Longer / more specific needles first. Lockstep with ai_investigation.py. */
+const PROSE_STATS_SECTION_HINTS = [
+  ['core-pair', 'core_pairs'],
+  ['core pair', 'core_pairs'],
+  ['priority inheritance', 'priority'],
+  ['execution time', 'exec'],
+  ['timeline anomal', 'anomalies'],
+  ['tick health', 'health'],
+  ['tick interval', 'health'],
+  ['mutex block', 'block'],
+  ['core migration', 'migrations'],
+  ['dwell time', 'migrations'],
+  ['load balance', 'cores'],
+  ['wcet', 'exec'],
+]
+
+/** Lockstep with config.py / workflowAnalysis.js FINDING_SECTION_MAP. */
+const FINDING_STATS_SECTIONS = {
+  load_imbalance: 'cores',
+  load_balance_ok: 'cores',
+  load_balance_moderate: 'cores',
+  top_cpu: 'tasks',
+  exec_max: 'exec',
+  blocking: 'block',
+  priority_inversion: 'priority',
+  thrashing: 'migrations',
+  hot_pairs: 'core_pairs',
+  deadlines: 'deadline',
+  tick_health: 'health',
+  missed_ticks: 'health',
+  sync_bounce: 'sync',
+  sync_issues: 'sync',
+  migration_burst_anomaly: 'migrations',
+  wcet_anomaly: 'exec',
+}
+
+function findingStatsSection(fid) {
+  return String(FINDING_STATS_SECTIONS[String(fid || '').trim()] || '').trim()
+}
+
+function proseStatsSection(text) {
+  const blob = String(text || '').toLowerCase().replace(/[–—]/g, '-')
+  for (const [needle, sid] of PROSE_STATS_SECTION_HINTS) {
+    if (blob.includes(needle)) return sid
+  }
+  return ''
+}
+
+export function linkifyNextCheckLines(text, nextSteps = null, findings = null, proseOut = null) {
+  void nextSteps
+  const src = String(text || '')
+  if (!src.trim()) return src
+  const items = (Array.isArray(findings) ? findings : []).filter(f => f && typeof f === 'object')
+  const byId = {}
+  for (const f of items) {
+    const fid = String(f.id || '').trim().toLowerCase()
+    if (fid) byId[fid] = f
+  }
+  const tagged = Array.isArray(proseOut) ? proseOut : []
+  const lines = src.split(/(?<=\n)/)
+  const out = []
+  let pendingId = ''
+  for (const line of lines) {
+    const nl = line.endsWith('\n') ? '\n' : ''
+    const raw = nl ? line.slice(0, -1) : line
+    const idM = FINDING_ID_HEADING_RE.exec(raw)
+    if (idM) pendingId = String(idM[1] || '').trim()
+    const ns = NEXTSTEP_LINE_RE.exec(raw)
+    if (ns) {
+      const body = String(ns[2] != null && ns[2] !== '' ? ns[2] : (ns[3] || '')).trim()
+      if (!body || body.includes('btfnext:') || body.includes('btfstats:')) {
+        out.push(line)
+        continue
+      }
+      tagged.push(body)
+      const extras = [`[Run](${btfNextHref('text', String(tagged.length - 1))})`]
+      let sid = findingStatsSection(pendingId)
+      if (!sid && byId[String(pendingId || '').toLowerCase()]) {
+        sid = findingStatsSection(String(byId[String(pendingId).toLowerCase()].id || ''))
+      }
+      if (!sid) sid = proseStatsSection(body)
+      if (sid) extras.push(`[Open Statistics](btfstats:section/${sid})`)
+      out.push(`${ns[1]}${body} ${extras.join(' ')}${nl}`)
+      continue
+    }
+    out.push(line)
+  }
+  return out.join('')
 }
 
 export function btfToolHref(action, name = '') {
@@ -1392,6 +1636,52 @@ for (const [lang, extra] of Object.entries(EVIDENCE_PANEL_EXTRA)) {
   Object.assign(EVIDENCE_PANEL_LABELS[lang], extra, EVIDENCE_PANEL_ACTIONS[lang] || {})
 }
 
+const NEXT_ACTION_LABELS = {
+  English: {
+    run_next: 'Run',
+    more_next_steps: 'More next steps…',
+    investigation_complete: 'Investigation complete',
+  },
+  'Traditional Chinese (繁體中文)': {
+    run_next: '執行',
+    more_next_steps: '更多下一步…',
+    investigation_complete: '調查完成',
+  },
+  'Simplified Chinese (简体中文)': {
+    run_next: '执行',
+    more_next_steps: '更多下一步…',
+    investigation_complete: '调查完成',
+  },
+  'Japanese (日本語)': {
+    run_next: '実行',
+    more_next_steps: '次の手順…',
+    investigation_complete: '調査完了',
+  },
+  'Korean (한국어)': {
+    run_next: '실행',
+    more_next_steps: '다음 단계 더 보기…',
+    investigation_complete: '조사 완료',
+  },
+  German: {
+    run_next: 'Ausführen',
+    more_next_steps: 'Weitere nächste Schritte…',
+    investigation_complete: 'Untersuchung abgeschlossen',
+  },
+  French: {
+    run_next: 'Exécuter',
+    more_next_steps: 'Autres étapes suivantes…',
+    investigation_complete: 'Investigation terminée',
+  },
+  Spanish: {
+    run_next: 'Ejecutar',
+    more_next_steps: 'Más pasos siguientes…',
+    investigation_complete: 'Investigación completa',
+  },
+}
+for (const [lang, labs] of Object.entries(NEXT_ACTION_LABELS)) {
+  Object.assign(EVIDENCE_PANEL_LABELS[lang], labs)
+}
+
 export function normalizeResponseLanguage(lang) {
   const want = String(lang || '').trim()
   if (want in EVIDENCE_PANEL_LABELS) return want
@@ -1601,6 +1891,51 @@ export function wrapEvidenceFold(summary, bodyLines, { open = false, nested = fa
     '',
     '</details>',
   ]
+}
+
+function nextActionMarkdownLines(data, labels) {
+  let structured = normalizeNextSteps(data.next_steps)
+  let stop = String(data.stop_reason || '').trim()
+  if (!structured.length && data.next_steps == null) {
+    const recomputed = computeNextSteps(data)
+    structured = [...(recomputed.steps || [])]
+    if (!stop) stop = String(recomputed.stop_reason || '').trim()
+  }
+  const runLab = labels.run_next || 'Run'
+  const lines = []
+  if (structured.length) {
+    const primary = structured[0]
+    lines.push(
+      '',
+      `**▶ ${labels.next_check || labels.next_action || 'Next check'}:** `
+        + `${primary.label} [${runLab}](${btfNextHref('run', '0')})`,
+    )
+    const extra = structured.slice(1)
+    if (extra.length) {
+      const body = extra.map((step, i) => (
+        `- ${step.label} [${runLab}](${btfNextHref('run', String(i + 1))})`
+      ))
+      lines.push(...wrapEvidenceFold(labels.more_next_steps || 'More next steps…', body))
+    }
+    return lines
+  }
+  if (stop) {
+    lines.push(
+      '',
+      `**${labels.investigation_complete || 'Investigation complete'}** · ${stop}`,
+    )
+    return lines
+  }
+  const falsify = data.falsify && typeof data.falsify === 'object' ? data.falsify : {}
+  const nxt = String(falsify.next_check || data.recommended_action || '').trim()
+  if (nxt) {
+    lines.push(
+      '',
+      `**▶ ${labels.next_check || labels.next_action || 'Next check'}:** `
+        + `${nxt} [${runLab}](${btfNextHref('run', '0')})`,
+    )
+  }
+  return lines
 }
 
 function annotateEvidenceLabel(ev, label) {
@@ -1813,6 +2148,7 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
     lines.push(`[${labels.save_knowledge || 'Save to knowledge'}](${btfExpHref('save', 'all')})`)
   }
 
+  const graphSrc = String(data.graph_mermaid || '').trim()
   const tableInfo = formatDirectEvidenceTable(data.evidence || [], labels)
   if (tableInfo.lines.length) {
     const title = tableInfo.timelineOnly
@@ -1820,7 +2156,17 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
       : `${labels.direct_evidence || labels.evidence} · ${tableInfo.count} ${labels.rows_label || 'rows'}`
     lines.push(
       '',
-      ...wrapEvidenceFold(title, tableInfo.lines, { open: tableInfo.count <= 5 }),
+      ...wrapEvidenceFold(title, tableInfo.lines, { open: false }),
+    )
+  }
+  if (graphSrc) {
+    lines.push(
+      '',
+      ...wrapEvidenceFold(
+        labels.graph || 'Evidence graph',
+        ['```mermaid', graphSrc, '```'],
+        { open: false },
+      ),
     )
   }
   if (data.evidence_chain) {
@@ -1884,15 +2230,12 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
     if (hypsM.length) {
       altLines.push(`[${labels.compare_action || 'Compare hypotheses'}](${btfHypHref('compare', 'all')})`)
     }
-    const keepOpen = statusKey === 'insufficient'
-      || String(data.confidence || '').toLowerCase() === 'low'
-      || statusKey === 'not_observed'
     lines.push(
       '',
       ...wrapEvidenceFold(
         `${labels.alternatives} · ${altSrc.length}`,
         altLines,
-        { open: keepOpen },
+        { open: false },
       ),
     )
   }
@@ -1910,7 +2253,7 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
       ...wrapEvidenceFold(
         `${labels.supporting || 'Supporting'} · ${supporting.length}`,
         supportLines,
-        { open: supporting.length <= 3 },
+        { open: false },
       ),
     )
   }
@@ -1922,13 +2265,8 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
     lines.push('', `**${labels.missing_evidence || 'Missing evidence'}**`)
     disprove.forEach(s => lines.push(`- ${s}`))
   }
-  const nxt = String(falsify.next_check || '').trim()
-  if (nxt) {
-    lines.push(
-      '',
-      `**▶ ${labels.next_check || labels.next_action || 'Next check'}:** ${nxt}`,
-    )
-  }
+  const nxtLines = nextActionMarkdownLines(data, labels)
+  if (nxtLines.length) lines.push(...nxtLines)
 
   const detailBlocks = []
   if (data.confidence) {
@@ -2027,16 +2365,6 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
       )
     }
   }
-  const graphSrc = String(data.graph_mermaid || '').trim()
-  if (graphSrc) {
-    detailBlocks.push(
-      ...wrapEvidenceFold(
-        labels.graph || 'Evidence graph',
-        ['```mermaid', graphSrc, '```'],
-        { open: false, nested: true },
-      ),
-    )
-  }
 
   if (detailBlocks.length) {
     lines.push(
@@ -2044,7 +2372,7 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
       ...wrapEvidenceFold(
         labels.investigation_details || 'Investigation details',
         detailBlocks,
-        { open: false },
+        { open: true },
       ),
     )
   }
@@ -2901,27 +3229,7 @@ function openStatisticsNextCheck(finding) {
   const inspect = String(finding.inspect || '').trim()
   const task = String(finding.task || '').trim()
   const fid = String(finding.id || '').trim()
-  // Lockstep with workflowAnalysis FINDING_SECTION_MAP / config FINDING_SECTION_MAP
-  // (inline to avoid circular import with workflowAnalysis.js).
-  const SECTION_MAP = {
-    load_imbalance: 'cores',
-    load_balance_ok: 'cores',
-    load_balance_moderate: 'cores',
-    top_cpu: 'tasks',
-    exec_max: 'exec',
-    blocking: 'block',
-    priority_inversion: 'priority',
-    thrashing: 'migrations',
-    hot_pairs: 'core_pairs',
-    deadlines: 'deadline',
-    tick_health: 'health',
-    missed_ticks: 'health',
-    sync_bounce: 'sync',
-    sync_issues: 'sync',
-    migration_burst_anomaly: 'migrations',
-    wcet_anomaly: 'exec',
-  }
-  const sid = String(SECTION_MAP[fid] || '').trim()
+  const sid = findingStatsSection(fid)
   let label = ''
   if (inspect && task) {
     const section = inspect.split(' (', 2)[0].trim() || inspect

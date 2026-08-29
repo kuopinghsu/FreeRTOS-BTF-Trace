@@ -36,6 +36,7 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_TOOL_OPTIMIZE_EXPERIMENT,
     AI_TOOL_QUERY_RAW_METRIC,
     AI_TOOL_PROMPT,
+    AI_MALFORMED_FUNCTION_CALL_NUDGE,
     AI_TOOL_SYSTEM_ADDENDUM,
     AI_TOOL_WHAT_IF,
     AI_VIEWER_TOOL_NAMES,
@@ -78,6 +79,7 @@ class AiWebParityTests(unittest.TestCase):
             "interpreted", "scope", "run_investigation", "edit_scope",
             "experiment_result", "save_knowledge",
             "quality_direct", "coverage_observed", "why_action",
+            "run_next", "more_next_steps", "investigation_complete",
         ):
             for labels in EVIDENCE_PANEL_LABELS.values():
                 self.assertIn(key, labels)
@@ -814,6 +816,7 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("Compare Summary tab", by_id["compare"])
         self.assertIn("set_cursors", by_id["auto_investigate"])
         self.assertIn("Remaining findings", by_id["auto_investigate"])
+        self.assertIn("nextstep:{action}", by_id["auto_investigate"])
         self.assertIn("focus_evidence", by_id["auto_investigate"])
         self.assertIn("correlate_events", by_id["auto_investigate"])
         self.assertIn("jump:TIME", by_id["auto_investigate"])
@@ -1112,6 +1115,18 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("canonical_assistant_tool_message(raw_content, calls)", assist)
         self.assertIn(
             "canonicalAssistantToolMessage(msg?.content ?? content, calls)", client)
+        self.assertIn("def is_malformed_function_call_finish", py)
+        self.assertIn("export function isMalformedFunctionCallFinish", js)
+        self.assertIn("is_malformed_function_call_finish(body)", assist)
+        self.assertIn("isMalformedFunctionCallFinish(data)", client)
+        self.assertIn("AI_MALFORMED_FUNCTION_CALL_NUDGE", py)
+        self.assertIn("AI_MALFORMED_FUNCTION_CALL_NUDGE", js)
+        self.assertIn("AI_MALFORMED_FUNCTION_CALL_NUDGE", assist)
+        self.assertIn("AI_MALFORMED_FUNCTION_CALL_NUDGE", client)
+        self.assertIn("def is_empty_assistant_message_error", py)
+        self.assertIn("export function isEmptyAssistantMessageError", js)
+        self.assertIn("def coerce_claim_text", py)
+        self.assertIn("export function coerceClaimText", js)
         self.assertIn('"preset": active["preset"]', assist)
         self.assertIn("preset: active.preset", (
             BTF_ROOT / "web/src/components/AiAssistantPanel.vue"
@@ -1463,6 +1478,9 @@ class AiWebParityTests(unittest.TestCase):
             ("def historical_knowledge_for_finding", "export function historicalKnowledgeForFinding"),
             ("def update_case_from_tool", "export function updateCaseFromTool"),
             ("def investigation_guide_stage", "export function investigationGuideStage"),
+            ("def compute_next_steps", "export function computeNextSteps"),
+            ("def remaining_analysis_findings", "export function remainingAnalysisFindings"),
+            ("def normalize_next_steps", "export function normalizeNextSteps"),
             ("def investigation_issue_card", "export function investigationIssueCard"),
             ("def format_investigation_issue_card", "export function formatInvestigationIssueCard"),
             ("def dump_investigation_session", "export function dumpInvestigationSession"),
@@ -1498,12 +1516,35 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("export function mergeEvidencePanelPayload", inv_js)
         self.assertIn("def refresh_evidence_panel_scores", inv_py)
         self.assertIn("export function refreshEvidencePanelScores", inv_js)
+        self.assertIn("def refresh_evidence_panel_next_steps", inv_py)
+        self.assertIn("export function refreshEvidencePanelNextSteps", inv_js)
+        self.assertIn("def format_sns_fallback_reply", inv_py)
+        self.assertIn("export function formatSnsFallbackReply", inv_js)
+        self.assertIn("def ai_language_reminder", py)
+        self.assertIn("export function aiLanguageReminder", js)
+        self.assertIn("def with_ai_language_reminder", py)
+        self.assertIn("export function withAiLanguageReminder", js)
+        self.assertIn("AI_LANGUAGE_REMINDER_MARKER", py)
+        self.assertIn("AI_LANGUAGE_REMINDER_MARKER", js)
+        self.assertIn("AI_TOOL_ROUND_LIMIT_PROMPT", py)
+        self.assertIn("AI_TOOL_ROUND_LIMIT_PROMPT", js)
+        self.assertIn("AI_EMPTY_REPLY_NUDGE", py)
+        self.assertIn("AI_EMPTY_REPLY_NUDGE", js)
+        self.assertIn('startswith("critical path")', inv_py)
+        self.assertIn("startsWith('critical path')", inv_js)
+        self.assertIn("open=True", inv_py)
+        self.assertIn("{ open: true }", inv_js)
+        self.assertEqual(inv_py.count("open=True"), 1)
+        self.assertEqual(inv_js.count("{ open: true }"), 1)
+        self.assertIn("def evidence_panel_default_closed_fold_ids", inv_py)
         self.assertIn("compute_evidence_coverage", inv_py)
         self.assertIn("computeEvidenceCoverage", inv_js)
         assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
             encoding="utf-8")
         panel = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(
             encoding="utf-8")
+        self.assertIn("evidence_panel_default_closed_fold_ids(text)", assist)
+        self.assertNotIn("syncEvidenceSubfolds(logRef.value, false)", panel)
         self.assertIn("refresh_evidence_panel_scores(payload)", assist)
         self.assertIn("refreshEvidencePanelScores({", panel)
         ctx_py = (BTF_ROOT / "btf_viewer_pkg/analysis_context.py").read_text(encoding="utf-8")
@@ -1573,7 +1614,7 @@ class AiWebParityTests(unittest.TestCase):
             "analyze_temporal_causality", "build_task_dependency_graph",
             "decompose_response_time", "rank_root_causes", "verify_claim",
             "challenge_conclusion", "investigation_memory", "cluster_incidents",
-            "close_investigation", "analyze_distribution", "analyze_periodicity",
+            "close_investigation",             "analyze_distribution", "analyze_periodicity",
             "summarize_investigation_context",
         ):
             self.assertIn(f'"{name}"', inv_py, name)
@@ -1592,10 +1633,53 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("btfscope:", inv_js)
         self.assertIn("btfexp:", inv_py)
         self.assertIn("btfexp:", inv_js)
+        self.assertIn("btfnext:", inv_py)
+        self.assertIn("btfnext:", inv_js)
         self.assertIn("btftool:", inv_py)
         self.assertIn("btftool:", inv_js)
         self.assertIn("def parse_btf_hyp_href", inv_py)
         self.assertIn("export function parseBtfHypHref", inv_js)
+        self.assertIn("def btf_next_href", inv_py)
+        self.assertIn("export function btfNextHref", inv_js)
+        self.assertIn("def linkify_next_check_lines", inv_py)
+        self.assertIn("export function linkifyNextCheckLines", inv_js)
+        self.assertIn("def ensure_nextstep_lines", inv_py)
+        self.assertIn("export function ensureNextstepLines", inv_js)
+        self.assertIn("def _run_generated_next_step", assist)
+        self.assertIn("function runGeneratedNextStep", panel)
+        self.assertIn("def _run_prose_nextstep", assist)
+        self.assertIn("function runProseNextStep", panel)
+        self.assertIn("prose_nextsteps", assist)
+        self.assertIn("prose_nextsteps", panel)
+        self.assertIn("btf_next_href('text'", inv_py)
+        self.assertIn("btfNextHref('text'", inv_js)
+        self.assertIn("nextstep:", inv_py)
+        self.assertIn("nextstep:", inv_js)
+        self.assertIn("nextstep:{action}", AI_CORE_PROMPT)
+        self.assertIn("def _finalize_assistant_text", assist)
+        self.assertIn("function finalizeAssistantText", panel)
+        self.assertIn("def _maybe_linkify_assistant_text", assist)
+        self.assertIn("function maybeLinkifyAssistantText", panel)
+        self.assertIn("is_empty_assistant_message_error(msg)", assist)
+        self.assertIn("isEmptyAssistantMessageError(errMsg)", panel)
+        self.assertIn("isEmptyAssistantMessageError(msg)", panel)
+        self.assertIn("or self._sns_fallback_reply()", assist)
+        self.assertIn("|| snsFallbackReply()", panel)
+        self.assertIn("def _has_prose_assistant_reply", assist)
+        self.assertIn("function hasProseAssistantReply", panel)
+        self.assertIn('low.startswith("btfstats:")', assist)
+        self.assertIn('class="ai-tool-cards"', assist)
+        self.assertIn('class="ai-msg-body"', panel)
+        self.assertIn('class="ai-tool-card"', panel)
+        self.assertLess(
+            panel.find('class="ai-msg-body"'),
+            panel.find('class="ai-tool-card"'),
+        )
+        self.assertIn("getEvidencePayload", panel)
+        self.assertNotIn("recordTemplateUse", panel[
+            panel.find("function runGeneratedNextStep"):
+            panel.find("function onHypothesisAction")
+        ])
         self.assertIn("historical_knowledge", inv_py)
         self.assertIn("historical_knowledge", inv_js)
         self.assertIn('falsify["supporting"]', py)
@@ -1720,6 +1804,8 @@ class AiWebParityTests(unittest.TestCase):
         assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
             encoding="utf-8")
         panel = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(
+            encoding="utf-8")
+        md_js = (BTF_ROOT / "web/src/utils/aiMarkdown.js").read_text(
             encoding="utf-8")
         stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
         dlg = (BTF_ROOT / "web/src/components/AnalysisFindingsDialog.vue").read_text(
@@ -1875,6 +1961,37 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("costMeter.value = emptyCostMeter()", panel)
         self.assertIn("evidencePayload = null", panel)
         self.assertIn("investigationPlan.value = null", panel)
+        self.assertIn("def _log_selected_text", assist)
+        self.assertIn("function logSelectedText", panel)
+        self.assertIn("def _ask_log_selection", assist)
+        self.assertIn("function askSelection", panel)
+        log_menu = assist[assist.find("def _show_log_menu"):assist.find("def copy_conversation")]
+        self.assertIn("ask_ai_selection_menu_label(selected)", log_menu)
+        self.assertIn("ask_ai_selection_can_ask(selected)", log_menu)
+        self.assertIn("askAiSelectionMenuLabel(logMenu.selectedText)", panel)
+        self.assertIn("askAiSelectionCanAsk(selected)", panel)
+        self.assertIn('!logMenu.canAskAi', panel)
+        self.assertIn("def ask_ai_selection_menu_label", assist)
+        self.assertIn("def ask_ai_selection_can_ask", assist)
+        self.assertIn("export function askAiSelectionMenuLabel", md_js)
+        self.assertIn("export function askAiSelectionCanAsk", md_js)
+        self.assertIn("ASK_AI_SELECTION_PREVIEW_CHARS = 28", assist)
+        self.assertIn("ASK_AI_SELECTION_PREVIEW_CHARS = 28", md_js)
+        self.assertNotIn("createStandardContextMenu", log_menu)
+        self.assertLess(log_menu.find('menu.addAction("Copy")'),
+                        log_menu.find("Copy conversation"))
+        self.assertLess(log_menu.find("Copy conversation"),
+                        log_menu.find("Save As Markdown"))
+        self.assertLess(log_menu.find("Save As Markdown"),
+                        log_menu.find("Save As Text"))
+        self.assertLess(log_menu.find("Save As Text"),
+                        log_menu.find("Save As HTML"))
+        ctx = panel[panel.find('class="ai-ctx-menu"'):panel.find('class="ai-status"')]
+        self.assertLess(ctx.find("askAiSelectionMenuLabel"), ctx.find("copySelection"))
+        self.assertLess(ctx.find("copySelection"), ctx.find("copyConversation"))
+        self.assertLess(ctx.find("copyConversation"), ctx.find("Save As Markdown"))
+        self.assertLess(ctx.find("Save As Markdown"), ctx.find("Save As Text"))
+        self.assertLess(ctx.find("Save As Text"), ctx.find("Save As HTML"))
 
         menu_ids = [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids]
         self.assertEqual(
@@ -2330,7 +2447,7 @@ console.log(JSON.stringify({
             "  AI_RESPONSE_LANGUAGES, DEFAULT_AI_RESPONSE_LANGUAGE,\n"
             "  ASK_EVENT_PROMPT, composeAskEventPrompt,\n"
             "} from './src/utils/aiClient.js'\n"
-            "import { AI_TOOL_PROMPT, AI_TOOL_SYSTEM_ADDENDUM, aiViewerTools } from './src/utils/aiTools.js'\n"
+            "import { AI_TOOL_PROMPT, AI_TOOL_SYSTEM_ADDENDUM, AI_MALFORMED_FUNCTION_CALL_NUDGE, aiViewerTools } from './src/utils/aiTools.js'\n"
             "import {\n"
             "  VALIDATE_EXPERIMENT_PROMPT, interpretedRunPrompt,\n"
             "  investigationModePrompt, investigationTemplatePrompt,\n"
@@ -2343,6 +2460,7 @@ console.log(JSON.stringify({
             "  system: AI_SYSTEM_PROMPT,\n"
             "  addendum: AI_TOOL_SYSTEM_ADDENDUM,\n"
             "  toolPrompt: AI_TOOL_PROMPT,\n"
+            "  malformedFn: AI_MALFORMED_FUNCTION_CALL_NUDGE,\n"
             "  compose_en: buildAiSystemPrompt('English'),\n"
             "  compose_bal: buildAiSystemPrompt('English', 'balanced'),\n"
             "  contextPrompts: AI_CONTEXT_PROMPTS,\n"
@@ -2374,6 +2492,7 @@ console.log(JSON.stringify({
         self.assertEqual(web["system"], AI_SYSTEM_PROMPT)
         self.assertEqual(web["addendum"], AI_TOOL_SYSTEM_ADDENDUM)
         self.assertEqual(web["toolPrompt"], AI_TOOL_PROMPT)
+        self.assertEqual(web["malformedFn"], AI_MALFORMED_FUNCTION_CALL_NUDGE)
         self.assertEqual(web["compose_en"], build_ai_system_prompt("English"))
         self.assertEqual(web["compose_bal"], build_ai_system_prompt("English", "balanced"))
         self.assertEqual(web["contextPrompts"]["balanced"], AI_CONTEXT_PROMPTS["balanced"])

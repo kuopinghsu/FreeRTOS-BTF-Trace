@@ -156,12 +156,23 @@ describe('AI endpoint helpers', () => {
     assert.equal(aiSameOriginProxyBase(AI_PRESET_OLLAMA, 'http://localhost:11434/v1'), null)
   })
 
-  it('buildAiSystemPrompt includes reply language', () => {
+  it('buildAiSystemPrompt includes reply language', async () => {
     assert.match(buildAiSystemPrompt('English'), /Always write your entire reply in English/)
     assert.match(buildAiSystemPrompt('English'), /MODE: BALANCED/)
     assert.match(
       buildAiSystemPrompt('Japanese (日本語)'),
       /Always write your entire reply in Japanese \(日本語\)/,
+    )
+    const zh = buildAiSystemPrompt('Traditional Chinese (繁體中文)')
+    assert.match(zh, /Traditional Chinese \(繁體中文\)/)
+    assert.match(zh, /結論、證據、置信度/)
+    const { aiLanguageReminder, withAiLanguageReminder } = await import('../src/utils/aiCase.js')
+    const rem = aiLanguageReminder('Traditional Chinese (繁體中文)')
+    assert.match(rem, /REPLY LANGUAGE \(mandatory\)/)
+    assert.equal(aiLanguageReminder('English'), '')
+    assert.match(
+      withAiLanguageReminder('Summarize now.', 'Traditional Chinese (繁體中文)'),
+      /REPLY LANGUAGE \(mandatory\)/,
     )
   })
 
@@ -626,6 +637,54 @@ describe('AI endpoint helpers', () => {
       })
       assert.equal(n, 2)
       assert.equal(turn.content, 'Retry worked.')
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+
+  it('aiChatCompletion retries Gemini malformed function calls without tools', async () => {
+    const { aiChatCompletion } = await import('../src/utils/aiClient.js')
+    const { AI_MALFORMED_FUNCTION_CALL_NUDGE, aiViewerTools } = await import('../src/utils/aiTools.js')
+    const orig = globalThis.fetch
+    const sent = []
+    globalThis.fetch = async (_url, opts) => {
+      sent.push(JSON.parse(opts.body))
+      const body = sent.length === 1
+        ? {
+          choices: [{
+            finish_reason: 'functioncallfilter: malformedfunctioncall',
+            message: { role: 'assistant' },
+          }],
+          model: 'models/gemini-3.5-flash-lite',
+          usage: { completion_tokens: 47, prompt_tokens: 8000 },
+        }
+        : {
+          choices: [{
+            finish_reason: 'stop',
+            message: { role: 'assistant', content: 'Mutex stall.' },
+          }],
+        }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => 'application/json' },
+        json: async () => body,
+        text: async () => '',
+      }
+    }
+    try {
+      const turn = await aiChatCompletion({
+        query: 'investigate',
+        tools: aiViewerTools(),
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        model: 'gemini-3.5-flash-lite',
+        apiKey: 'test-key',
+      })
+      assert.equal(sent.length, 2)
+      assert.ok(Array.isArray(sent[0].tools) && sent[0].tools.length)
+      assert.equal(sent[1].tools, undefined)
+      assert.equal(sent[1].messages.at(-1).content, AI_MALFORMED_FUNCTION_CALL_NUDGE)
+      assert.equal(turn.content, 'Mutex stall.')
     } finally {
       globalThis.fetch = orig
     }

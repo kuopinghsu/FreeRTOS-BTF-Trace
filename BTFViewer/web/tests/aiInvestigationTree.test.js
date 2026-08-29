@@ -3,16 +3,21 @@ import { describe, it } from 'node:test'
 import {
   buildInvestigateContext,
   buildRootCauseChain,
+  buildCriticalPath,
   computeEvidenceScore,
   enrichFindingsWithIds,
   evidenceScoreBar,
   extractEvidencePanelPayload,
   formatEvidencePanelMarkdown,
+  formatSnsFallbackReply,
+  ensureNextstepLines,
   evidencePanelSummaryLine,
   evidencePanelToggleLabel,
   investigationTreeMermaid,
+  linkifyNextCheckLines,
   mergeEvidencePanelPayload,
   refreshEvidencePanelScores,
+  refreshEvidencePanelNextSteps,
 } from '../src/utils/aiInvestigation.js'
 
 // Phase 4: investigation tree mermaid — mirrors
@@ -223,6 +228,42 @@ describe('computeEvidenceScore', () => {
     assert.equal(interpreted.investigation_case?.conclusion, 'Why is TaskA slow?')
   })
 
+  it('keeps find_critical_path mermaid in the Evidence panel payload', () => {
+    const path = buildCriticalPath([
+      { time: 1000, kind: 'blocking', detail: 'Low[266] wait' },
+      { time: 1200, kind: 'execution', detail: 'on CPU' },
+      { time: 1400, kind: 'migration', detail: 'Core_0 -> Core_1' },
+    ], { task: 'Low[266]', timestamp: 1200 })
+    assert.equal(path.ok, true)
+    assert.match(path.mermaid, /^graph LR/)
+    assert.doesNotMatch(path.mermaid, /\[266\]/)
+    const payload = extractEvidencePanelPayload('find_critical_path', {
+      ok: true,
+      message: path.message,
+      data: path,
+    })
+    assert.ok(payload)
+    assert.match(String(payload.conclusion || ''), /^Critical path/)
+    assert.match(String(payload.graph_mermaid || ''), /graph LR/)
+    const md = formatEvidencePanelMarkdown(payload, 'English')
+    assert.match(md, /Critical path/)
+    assert.match(md, /```mermaid/)
+    const mermaidAt = md.indexOf('```mermaid')
+    const detailsAt = md.indexOf('Investigation details')
+    assert.ok(mermaidAt >= 0)
+    assert.ok(detailsAt < 0 || mermaidAt < detailsAt)
+    const wrap = formatSnsFallbackReply(payload)
+    assert.match(wrap, /Critical path/)
+    assert.match(wrap, /jump:/)
+    const zhWrap = formatSnsFallbackReply(payload, 'Traditional Chinese (繁體中文)')
+    assert.match(zhWrap, /關鍵路徑/)
+    assert.match(zhWrap, /Low\[266\]/)
+    assert.match(
+      formatSnsFallbackReply({}, 'Traditional Chinese (繁體中文)'),
+      /證據與驗證/,
+    )
+  })
+
   it('preserves task, core, and duration on evidence rows', () => {
     const corr = extractEvidencePanelPayload('correlate_events', {
       ok: true,
@@ -264,7 +305,7 @@ describe('computeEvidenceScore', () => {
     assert.equal(inv.evidence[0].task, 'Worker[3]')
   })
 
-  it('collapses Investigation details and timeline-only evidence tables', () => {
+  it('expands Investigation details and collapses one-level evidence folds', () => {
     const timeline = formatEvidencePanelMarkdown({
       conclusion: 'Hits near CS[20]',
       confidence: 'medium',
@@ -275,6 +316,7 @@ describe('computeEvidenceScore', () => {
         { label: 'timeline hit', time: 1018601 },
         { label: 'timeline hit', time: 1020000 },
       ],
+      graph_mermaid: 'graph LR\nA-->B',
       falsify: {
         next_check: 'Inspect Mutex Blocking for CS[20].',
         would_disprove: ['No mutex waiters in scope'],
@@ -284,7 +326,10 @@ describe('computeEvidenceScore', () => {
     }, 'English')
     assert.match(timeline, /ai-ev-fold/)
     assert.match(timeline, /<summary>Timeline evidence · 3<\/summary>/)
-    assert.match(timeline, /<summary>Investigation details<\/summary>/)
+    assert.match(timeline, /<details class="ai-ev-fold ai-ev-fold-l1" open>\s*<summary>Investigation details<\/summary>/)
+    assert.match(timeline, /<details class="ai-ev-fold ai-ev-fold-l1">\s*<summary>Timeline evidence · 3<\/summary>/)
+    assert.match(timeline, /<details class="ai-ev-fold ai-ev-fold-l1">\s*<summary>Evidence graph<\/summary>/)
+    assert.match(timeline, /<details class="ai-ev-fold ai-ev-fold-l2">\s*<summary>Confidence evolution<\/summary>/)
     assert.match(timeline, /\*\*▶ Recommended next check:\*\*/)
     assert.match(timeline, /\*\*Missing evidence\*\*/)
     assert.doesNotMatch(timeline, /\| Task \|/)
@@ -447,5 +492,187 @@ describe('mergeEvidencePanelPayload', () => {
     })
     const merged = mergeEvidencePanelPayload(prev, late)
     assert.equal((merged.alternatives || []).length, 1)
+  })
+
+  it('renders Run next-step links and keeps conclusion when merging next_steps', () => {
+    const md = formatEvidencePanelMarkdown({
+      conclusion: 'Mutex stall',
+      confidence: 'Medium',
+      next_steps: [
+        {
+          label: 'Verify mutex contention',
+          prompt: 'Verify mutex contention in the current scope.',
+          reason: 'missing mutex',
+          kind: 'verify',
+        },
+        {
+          label: 'Inspect Waiter × Owner',
+          prompt: 'Open Waiter × Owner for CS[20].',
+          kind: 'statistics',
+        },
+      ],
+    }, 'English')
+    assert.match(md, /btfnext:run\/0/)
+    assert.match(md, /\[Run\]/)
+    assert.match(md, /More next steps/)
+    assert.match(md, /btfnext:run\/1/)
+    const done = formatEvidencePanelMarkdown({
+      conclusion: 'Mutex stall',
+      next_steps: [],
+      stop_reason: 'Evidence is sufficient; no further check is required.',
+    }, 'English')
+    assert.match(done, /Investigation complete/)
+    assert.doesNotMatch(done, /More next steps/)
+    assert.doesNotMatch(done, /btfnext:/)
+    const empty = formatEvidencePanelMarkdown({
+      conclusion: 'Mutex stall',
+      next_steps: [],
+    }, 'English')
+    assert.doesNotMatch(empty, /More next steps/)
+    assert.doesNotMatch(empty, /Investigation complete/)
+    const leftover = linkifyNextCheckLines(
+      'Remaining Findings (Title + Next Check)\n'
+      + '**Priority inversion (id=priority_inversion)**\n'
+      + 'Title: Priority inversion (L/M/H) suspected for Low[266] and PS[228].\n'
+      + 'Next check: Inspect Priority Inheritance boost episodes.\n',
+      [{
+        label: 'Priority inversion',
+        prompt: 'Investigate remaining finding Priority inversion (id=priority_inversion).',
+        kind: 'investigate',
+      }],
+      [{ id: 'priority_inversion', title: 'Priority inversion' }],
+    )
+    assert.doesNotMatch(leftover, /btfnext:/)
+    assert.doesNotMatch(leftover, /\[Run\]/)
+    assert.match(leftover, /Next check: Inspect Priority Inheritance boost episodes\./)
+    const heading = linkifyNextCheckLines(
+      'Next Check\n'
+      + 'Investigate Core-Pair Migration Summary to determine if the '
+      + 'high frequency of Med[267] interruptions correlates with '
+      + 'specific migrations of CS tasks between cores.\n'
+      + 'Viewer Action: focus_evidence applied '
+      + '(Cursors set to jump:3086233–jump:3134897, Task Med[267] highlighted).\n',
+      [{
+        label: 'Inspect core-pair migrations',
+        prompt: 'Inspect Core-Pair Migration Summary in the current scope.',
+        kind: 'statistics',
+      }],
+    )
+    assert.doesNotMatch(heading, /btfnext:/)
+    assert.doesNotMatch(heading, /\[Run\]/)
+    assert.match(heading, /Viewer Action: focus_evidence applied/)
+    const taggedFindings = []
+    const remaining = linkifyNextCheckLines(
+      'Remaining Findings\n'
+      + '**Priority inversion (id=priority_inversion)**\n'
+      + 'Title: Priority inversion (L/M/H) suspected for Low[266] and PS[228].\n'
+      + 'nextstep:{Inspect Priority Inheritance boost episodes.}\n',
+      null,
+      [{ id: 'priority_inversion', title: 'Priority inversion' }],
+      taggedFindings,
+    )
+    assert.deepEqual(taggedFindings, ['Inspect Priority Inheritance boost episodes.'])
+    assert.match(remaining, /btfnext:text\/0/)
+    assert.match(remaining, /btfstats:section\/priority/)
+    assert.doesNotMatch(remaining, /btfnext:run/)
+    assert.doesNotMatch(remaining, /nextstep:/)
+    const zhAction = (
+      '建議將 CS[20] 任務固定 (pin) 至單一核心 (設定 CPU Affinity)，'
+      + '以消除頻繁的上下文切換開銷與快取失效問題，隨後重新觀察系統整體'
+      + '遷移負載是否下降。'
+    )
+    const tagged = []
+    const zh = linkifyNextCheckLines(
+      '下一步檢查 (Next check)\n'
+      + `nextstep:{${zhAction}}\n`,
+      [{
+        label: 'Inspect core migrations',
+        prompt: 'Inspect Core Migrations in the current scope.',
+        kind: 'statistics',
+      }],
+      null,
+      tagged,
+    )
+    assert.deepEqual(tagged, [zhAction])
+    assert.match(zh, /btfnext:text\/0/)
+    assert.doesNotMatch(zh, /btfnext:run\/0/)
+    assert.match(zh, /\[Run\]/)
+    assert.ok(zh.includes(zhAction))
+    assert.doesNotMatch(zh, /nextstep:/)
+    const plain = []
+    const unbraced = linkifyNextCheckLines(
+      'nextstep: Pin CS[20] to one core\n',
+      null,
+      null,
+      plain,
+    )
+    assert.deepEqual(plain, ['Pin CS[20] to one core'])
+    assert.match(unbraced, /btfnext:text\/0/)
+    assert.match(unbraced, /Pin CS\[20\] to one core \[Run\]\(btfnext:text\/0\)/)
+    assert.doesNotMatch(unbraced, /nextstep:/)
+    const prev = extractEvidencePanelPayload('correlate_events', {
+      ok: true,
+      data: {
+        task: 'CS[22]',
+        events: [{ kind: 'migration', detail: 'c0->c1', time: 1487000 }],
+        correlation: 0.9,
+      },
+    })
+    const late = extractEvidencePanelPayload('plan_investigation', {
+      ok: true,
+      message: '1 next step(s)',
+      data: {
+        steps: [{
+          label: 'Verify mutex contention',
+          prompt: 'Verify mutex contention in the current scope.',
+          kind: 'verify',
+        }],
+      },
+    })
+    assert.ok(late)
+    assert.equal(late.conclusion, undefined)
+    const merged = mergeEvidencePanelPayload(prev, late)
+    assert.equal(merged.conclusion, prev.conclusion)
+    assert.equal(merged.next_steps[0].label, 'Verify mutex contention')
+  })
+
+  it('skips Collect scoped evidence after investigate has already run', () => {
+    const out = refreshEvidencePanelNextSteps({
+      conclusion: 'Mutex stall',
+      confidence: 'low',
+      coverage: { percent: 20 },
+      investigation_case: { tools_executed: ['investigate'] },
+    })
+    assert.equal(
+      (out.next_steps || []).some(s => s.label === 'Collect scoped evidence'),
+      false,
+    )
+    const again = refreshEvidencePanelNextSteps({
+      conclusion: 'Mutex stall',
+      confidence: 'low',
+      coverage: { percent: 20 },
+    })
+    assert.equal(
+      (again.next_steps || []).some(s => s.label === 'Collect scoped evidence'),
+      true,
+    )
+  })
+
+  it('appends missing nextstep tags from host next_steps', () => {
+    const prose = (
+      'Remaining Findings\n'
+      + '[WARNING] Off-CPU (id=blocking): check Med[267].\n'
+    )
+    const out = ensureNextstepLines(prose, [{
+      label: 'Off-CPU',
+      prompt: 'Investigate remaining finding Off-CPU (id=blocking).',
+      kind: 'investigate',
+    }])
+    assert.match(out, /nextstep:\{Investigate remaining finding Off-CPU/)
+    assert.equal(ensureNextstepLines(out, [{
+      label: 'Off-CPU',
+      prompt: 'Investigate remaining finding Off-CPU (id=blocking).',
+      kind: 'investigate',
+    }]).split('nextstep:').length - 1, 1)
   })
 })

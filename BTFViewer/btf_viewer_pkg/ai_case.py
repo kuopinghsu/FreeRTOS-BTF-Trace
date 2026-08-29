@@ -161,12 +161,40 @@ AI_CONTEXT_PROMPTS: Dict[str, str] = {
     AI_CONTEXT_MODE_FULL: "MODE: FULL EVIDENCE\n- Use all relevant scoped evidence and compact investigation history.\n- Rank hypotheses for broad questions; skip planning for an explicit finding,\n  task, and window.\n- Build causal or dependency chains only as far as evidence supports.\n- Examine contradictions and credible alternatives. Assess sufficiency before\n  opening another branch; stop when more tools will not change the verdict.\n- Verify and challenge before a High-confidence root-cause conclusion.\n- Distinguish observed, derived, heuristic, and simulated results.\n- Preserve unrelated viewer marks. Use diagrams only for supported relationships.\n- State each material fact once. Return Inconclusive when evidence remains\n  incomplete or contradictory.\n- Target a thorough write-up (about 1000\u20132000 answer tokens) when evidence\n  supports it. Output: Scope; Verdict; Evidence chain with times/values;\n  Contradictions/alternatives; Root cause or leading explanation;\n  Confidence/quality/coverage; Requested mitigation; Next verification;\n  Viewer changes.",
 }
 
-AI_LANGUAGE_PROMPT_TEMPLATE = "Always write your entire reply in {language}.\nWrite the complete user-facing reply in {language}. Preserve task names, core\nnames, UI labels, tool names, metric identifiers, jump:TIME, range:LO/HI, code,\nand file formats. Do not translate trace identifiers."
-AI_LANGUAGE_TRADITIONAL_CHINESE_NOTE = "Use natural Traditional Chinese and terminology customary in Taiwan.\nDo not switch to English or Simplified Chinese for the prose answer."
-AI_LANGUAGE_SIMPLIFIED_CHINESE_NOTE = "Use natural Simplified Chinese. Do not switch to English or Traditional Chinese for the prose answer."
+AI_LANGUAGE_PROMPT_TEMPLATE = (
+    "Always write your entire reply in {language}.\n"
+    "Write the complete user-facing reply in {language}, including section "
+    "headings and bullet labels.\n"
+    "Preserve task names, core names, UI labels, tool names, metric "
+    "identifiers, jump:TIME, range:LO/HI, code, and file formats. Do not "
+    "translate trace identifiers."
+)
+AI_LANGUAGE_TRADITIONAL_CHINESE_NOTE = (
+    "Use natural Traditional Chinese and terminology customary in Taiwan.\n"
+    "Write section headings in Traditional Chinese too "
+    "(for example 結論、證據、置信度), not English.\n"
+    "Do not switch to English or Simplified Chinese for the prose answer."
+)
+AI_LANGUAGE_SIMPLIFIED_CHINESE_NOTE = (
+    "Use natural Simplified Chinese.\n"
+    "Write section headings in Simplified Chinese too "
+    "(for example 结论、证据、置信度), not English.\n"
+    "Do not switch to English or Traditional Chinese for the prose answer."
+)
 AI_LANGUAGE_KOREAN_NOTE = (
-    "Use natural Korean Hangul (한국어). Do not switch to English or Chinese "
-    "for the prose answer."
+    "Use natural Korean Hangul (한국어).\n"
+    "Write section headings in Korean too, not English.\n"
+    "Do not switch to English or Chinese for the prose answer."
+)
+AI_LANGUAGE_REMINDER_MARKER = "REPLY LANGUAGE (mandatory)"
+AI_TOOL_ROUND_LIMIT_PROMPT = (
+    "You have reached the tool-call limit for this turn. "
+    "Do not call any more tools — summarize your findings and "
+    "give your final answer now in plain text."
+)
+AI_EMPTY_REPLY_NUDGE = (
+    "Your previous reply was empty (no text and no tool call). "
+    "Answer now with a short analysis, or call a tool."
 )
 
 # Stage-only tool names for Compact; Balanced adds neighbours + extras.
@@ -278,6 +306,59 @@ def ai_language_prompt(language: Any = None) -> str:
             + f"All headings, bullets, and explanations must be in {lang}."
         )
     return text
+
+
+def ai_language_reminder(language: Any = None) -> str:
+    """Short sticky reminder for non-English turns (user + follow-up nudges)."""
+    lang = str(language or "English").strip() or "English"
+    low = lang.lower()
+    if low == "english":
+        return ""
+    marker = AI_LANGUAGE_REMINDER_MARKER
+    keep = (
+        "Keep task/core names, jump:TIME, range:LO/HI, tool names, and UI "
+        "labels unchanged."
+    )
+    if "traditional chinese" in low or "繁體" in lang or "繁体" in lang:
+        return (
+            f"{marker}: Traditional Chinese (繁體中文) / 台灣用語. "
+            "Write all user-facing prose and section headings in 繁體中文. "
+            "Do not answer in English or Simplified Chinese. "
+            f"{keep}"
+        )
+    if "simplified chinese" in low or "简体" in lang or "簡體" in lang:
+        return (
+            f"{marker}: Simplified Chinese (简体中文). "
+            "Write all user-facing prose and section headings in 简体中文. "
+            "Do not answer in English or Traditional Chinese. "
+            f"{keep}"
+        )
+    if "한국" in lang or "korean" in low:
+        return (
+            f"{marker}: Korean (한국어). "
+            "Write all user-facing prose and section headings in 한국어. "
+            "Do not answer in English or Chinese. "
+            f"{keep}"
+        )
+    return (
+        f"{marker}: {lang}. "
+        f"Write all user-facing prose and section headings in {lang}. "
+        "Do not answer in English unless the user explicitly asks for English. "
+        f"{keep}"
+    )
+
+
+def with_ai_language_reminder(text: Any = "", language: Any = None) -> str:
+    """Append ``ai_language_reminder`` when the selected language is not English."""
+    body = str(text or "").strip()
+    rem = ai_language_reminder(language)
+    if not rem:
+        return body
+    if not body:
+        return rem
+    if rem in body:
+        return body
+    return f"{body}\n\n{rem}"
 
 
 def _stage_tool_names(stage: Any) -> Tuple[str, ...]:
@@ -709,6 +790,8 @@ def compact_chat_history(
             continue
         content = str(msg.get("content") or "").lower()
         if "tool-call limit" in content:
+            continue
+        if "reply language (mandatory)" in content:
             continue
         user_idxs.append(i)
     omitted = 0
@@ -1661,6 +1744,401 @@ def falsification_checks(finding: Optional[dict] = None) -> Dict[str, Any]:
         "supporting": [],
         "next_check": next_check,
     }
+
+
+NEXT_STEP_KINDS: Tuple[str, ...] = (
+    "investigate", "verify", "scope", "statistics", "compare",
+    "experiment", "follow_up",
+)
+NEXT_STEP_LIMIT_DEFAULT = 3
+NEXT_STEP_LIMIT_MAX = 3
+_STATS_NEXT_HINTS = (
+    "mutex", "blocking", "migration", "heatmap", "priority", "inheritance",
+    "utilisation", "utilization", "load balance", "tick", "execution max",
+    "statistics", "core util",
+)
+_EXPERIMENT_TOOLS = frozenset({
+    "what_if", "optimize", "optimize_experiment", "recommend_experiments",
+})
+
+
+def _next_step_limit(raw: Any) -> int:
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        n = NEXT_STEP_LIMIT_DEFAULT
+    return max(0, min(NEXT_STEP_LIMIT_MAX, n))
+
+
+def _completed_tool_names(payload: Optional[dict] = None) -> List[str]:
+    data = payload if isinstance(payload, dict) else {}
+    case = data.get("investigation_case") if isinstance(
+        data.get("investigation_case"), dict) else {}
+    names: List[str] = []
+    for src in (
+        case.get("tools_executed"),
+        data.get("tools_executed"),
+        data.get("tools_used"),
+        data.get("tools_run"),
+    ):
+        if not isinstance(src, (list, tuple)):
+            continue
+        for item in src:
+            name = ""
+            if isinstance(item, dict):
+                name = str(item.get("name") or item.get("tool") or "").strip()
+            else:
+                name = str(item or "").strip()
+            if name and name not in names:
+                names.append(name)
+    return names
+
+
+def _coverage_percent(payload: Optional[dict] = None) -> int:
+    data = payload if isinstance(payload, dict) else {}
+    cov = data.get("coverage") if isinstance(data.get("coverage"), dict) else None
+    if cov is None:
+        cov = data.get("evidence_coverage") if isinstance(
+            data.get("evidence_coverage"), dict) else {}
+    try:
+        return max(0, min(100, int(cov.get("percent") or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _missing_evidence_items(payload: Optional[dict] = None) -> List[str]:
+    data = payload if isinstance(payload, dict) else {}
+    falsify = data.get("falsification") if isinstance(
+        data.get("falsification"), dict) else None
+    if falsify is None:
+        falsify = data.get("falsify") if isinstance(data.get("falsify"), dict) else {}
+    out: List[str] = []
+    for src in (
+        falsify.get("would_disprove"),
+        falsify.get("disprove"),
+        data.get("missing_evidence"),
+    ):
+        if not isinstance(src, (list, tuple)):
+            continue
+        for item in src:
+            text = str(item or "").strip()
+            if text and text not in out:
+                out.append(text)
+    return out
+
+
+def _prose_next_check(payload: Optional[dict] = None) -> str:
+    data = payload if isinstance(payload, dict) else {}
+    falsify = data.get("falsification") if isinstance(
+        data.get("falsification"), dict) else None
+    if falsify is None:
+        falsify = data.get("falsify") if isinstance(data.get("falsify"), dict) else {}
+    return str(falsify.get("next_check") or data.get("recommended_action") or "").strip()
+
+
+_MATERIAL_FINDING_SEV = frozenset({
+    "warning", "error", "critical", "high", "warn",
+})
+
+
+def _finding_dicts(raw: Any) -> List[Dict[str, Any]]:
+    src = raw if isinstance(raw, (list, tuple)) else []
+    return [f for f in src if isinstance(f, dict) and (
+        str(f.get("id") or "").strip() or str(f.get("title") or "").strip()
+    )]
+
+
+def _primary_finding_keys(payload: Optional[dict] = None) -> set:
+    data = payload if isinstance(payload, dict) else {}
+    keys: set = set()
+    for src in (
+        data.get("finding") if isinstance(data.get("finding"), dict) else {},
+        (data.get("investigation_case") or {}).get("finding")
+        if isinstance(data.get("investigation_case"), dict) else {},
+    ):
+        if not isinstance(src, dict):
+            continue
+        fid = str(src.get("id") or "").strip().lower()
+        title = str(src.get("title") or "").strip().lower()
+        if fid:
+            keys.add(fid)
+        if title:
+            keys.add(title)
+    return keys
+
+
+def remaining_analysis_findings(
+    payload: Optional[dict] = None,
+    findings: Any = None,
+) -> List[Dict[str, Any]]:
+    """Warning/error findings not covered by the current Investigation Case."""
+    data = payload if isinstance(payload, dict) else {}
+    items = _finding_dicts(findings)
+    if not items:
+        items = _finding_dicts(data.get("analysis_findings"))
+    if not items:
+        items = _finding_dicts(data.get("findings"))
+    skip = _primary_finding_keys(data)
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for finding in items:
+        fid = str(finding.get("id") or "").strip()
+        title = str(finding.get("title") or "").strip()
+        key = (fid or title).lower()
+        if not key or key in seen or key in skip:
+            continue
+        if title.lower() in skip:
+            continue
+        sev = str(finding.get("severity") or "").strip().lower()
+        if sev and sev not in _MATERIAL_FINDING_SEV:
+            continue
+        seen.add(key)
+        out.append(finding)
+    return out
+
+
+def _finding_follow_up_step(finding: Dict[str, Any]) -> Dict[str, str]:
+    fid = str(finding.get("id") or "").strip()
+    title = str(finding.get("title") or fid or "this finding").strip()
+    task = str(finding.get("task") or "").strip()
+    nxt = str(falsification_checks(finding).get("next_check") or "").strip()
+    focus = f" for {task}" if task else ""
+    id_bit = f" (id={fid})" if fid else ""
+    prompt = f"Investigate remaining finding {title}{id_bit}{focus}. "
+    if nxt:
+        prompt += f"{nxt} "
+    if fid:
+        prompt += f"Call investigate(finding_id={fid}) if more evidence is needed. "
+    prompt += "Preserve the current Investigation Case, Context, and Scope."
+    kind = "statistics" if _looks_like_stats_check(nxt) else "investigate"
+    return {
+        "label": (title or _short_next_label(nxt))[:80],
+        "prompt": prompt.strip(),
+        "reason": nxt or f"Remaining finding {fid or title}",
+        "kind": kind,
+    }
+
+
+def _short_next_label(text: str, fallback: str = "Next check") -> str:
+    src = re.sub(r"\s+", " ", str(text or "").strip())
+    if not src:
+        return fallback
+    src = re.sub(r"^[.►▶\-\s]+", "", src)
+    if len(src) <= 48:
+        return src.rstrip(".")
+    cut = src[:48]
+    sp = cut.rfind(" ")
+    if sp >= 20:
+        cut = cut[:sp]
+    return cut.rstrip(".,;:") + "…"
+
+
+def _looks_like_stats_check(text: str) -> bool:
+    blob = str(text or "").lower()
+    return any(h in blob for h in _STATS_NEXT_HINTS)
+
+
+def normalize_next_steps(
+    raw: Any = None,
+    *,
+    limit: Any = NEXT_STEP_LIMIT_DEFAULT,
+) -> List[Dict[str, str]]:
+    """Clip and validate 0–3 next-step dicts (label, prompt, reason, kind)."""
+    cap = _next_step_limit(limit if limit is not None else NEXT_STEP_LIMIT_DEFAULT)
+    if cap <= 0:
+        return []
+    src = raw if isinstance(raw, (list, tuple)) else []
+    out: List[Dict[str, str]] = []
+    seen: set = set()
+    for item in src:
+        if len(out) >= cap:
+            break
+        if not isinstance(item, dict):
+            continue
+        prompt = str(item.get("prompt") or "").strip()
+        if not prompt:
+            continue
+        key = prompt.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        kind = str(item.get("kind") or "follow_up").strip().lower().replace("-", "_")
+        if kind not in NEXT_STEP_KINDS:
+            kind = "follow_up"
+        label = str(item.get("label") or "").strip() or _short_next_label(prompt)
+        reason = str(item.get("reason") or "").strip()
+        out.append({
+            "label": label[:80],
+            "prompt": prompt,
+            "reason": reason,
+            "kind": kind,
+        })
+    return out
+
+
+def compute_next_steps(
+    payload: Optional[dict] = None,
+    *,
+    limit: Any = NEXT_STEP_LIMIT_DEFAULT,
+    loaded_tab_count: Any = 1,
+    findings: Any = None,
+) -> Dict[str, Any]:
+    """Host next-step prompts from the current Investigation Case (read-only)."""
+    cap = _next_step_limit(limit if limit is not None else NEXT_STEP_LIMIT_DEFAULT)
+    data = payload if isinstance(payload, dict) else {}
+    try:
+        tabs = int(loaded_tab_count)
+    except (TypeError, ValueError):
+        tabs = 1
+    completed = {n.lower() for n in _completed_tool_names(data)}
+    cov = _coverage_percent(data)
+    missing = _missing_evidence_items(data)
+    nxt = _prose_next_check(data)
+    conf = str(data.get("confidence") or "").strip().lower()
+    finding = data.get("finding") if isinstance(data.get("finding"), dict) else {}
+    case = data.get("investigation_case") if isinstance(
+        data.get("investigation_case"), dict) else {}
+    title = str(
+        data.get("conclusion") or finding.get("title") or case.get("goal") or ""
+    ).strip()
+    task = str(finding.get("task") or data.get("task") or case.get("task") or "").strip()
+    focus = f" for {task}" if task else ""
+    subject = title or "the current finding"
+    remaining = remaining_analysis_findings(data, findings)
+
+    if cap <= 0:
+        return {"steps": [], "stop_reason": "No further check requested."}
+    case_complete = cov >= 80 and not missing and conf in ("high", "medium")
+    if case_complete and not remaining:
+        return {
+            "steps": [],
+            "stop_reason": "Evidence is sufficient; no further check is required.",
+        }
+
+    steps: List[Dict[str, str]] = []
+
+    def _add(kind: str, label: str, prompt: str, reason: str) -> None:
+        if len(steps) >= cap:
+            return
+        blob = prompt.casefold()
+        if any(blob == str(s.get("prompt") or "").casefold() for s in steps):
+            return
+        steps.append({
+            "label": label[:80],
+            "prompt": prompt,
+            "reason": reason,
+            "kind": kind if kind in NEXT_STEP_KINDS else "follow_up",
+        })
+
+    if not case_complete and missing and "verify_claim" not in completed:
+        gap = missing[0]
+        _add(
+            "verify",
+            "Verify missing evidence",
+            (
+                f"Verify the leading explanation{focus}. Missing evidence: {gap}. "
+                "Stay in the current Investigation Case, Context, and Scope. "
+                "Call verify_claim and collect query_raw_metric / correlate_events "
+                "only if another result could change the verdict."
+            ),
+            gap,
+        )
+    elif missing:
+        gap = missing[0]
+        _add(
+            "investigate",
+            "Collect missing evidence",
+            (
+                f"Collect evidence for {subject}{focus}. Missing: {gap}. "
+                "Preserve the current Scope. Call correlate_events or "
+                "query_raw_metric for any missing jump:TIME values."
+            ),
+            gap,
+        )
+
+    if not case_complete and nxt:
+        kind = "statistics" if _looks_like_stats_check(nxt) else "follow_up"
+        if kind != "experiment" or cov >= 40:
+            _add(
+                kind,
+                _short_next_label(nxt),
+                (
+                    f"{nxt} Preserve the current Investigation Case, Context, "
+                    "and Scope."
+                ),
+                "Recommended next check from the current case.",
+            )
+
+    if not case_complete and cov < 40 and "investigate" not in completed:
+        _add(
+            "investigate",
+            "Collect scoped evidence",
+            (
+                f"Investigate {subject}{focus} in the current scope. "
+                "Call investigate, then correlate_events / query_raw_metric "
+                "for missing jump:TIME values. Do not change Scope."
+            ),
+            "Evidence coverage is still missing.",
+        )
+
+    if not case_complete and tabs >= 2 and "compare_performance" not in completed:
+        _add(
+            "compare",
+            "Compare traces",
+            (
+                "Compare Trace A vs Trace B in the current compare scope. "
+                "Call compare_performance. Preserve direction A − B. "
+                "Do not switch to Full Trace unless the user asks."
+            ),
+            "A second trace is loaded and comparison has not been run.",
+        )
+
+    if (
+        not case_complete
+        and cov >= 40
+        and conf in ("high", "medium")
+        and not (completed & _EXPERIMENT_TOOLS)
+        and not missing
+    ):
+        _add(
+            "experiment",
+            "Validate with a what-if",
+            (
+                "If the leading explanation is supported, call what_if or "
+                "recommend_experiments for one validation experiment. "
+                "Preserve the current Scope."
+            ),
+            "Evidence is sufficient to consider a validation experiment.",
+        )
+
+    for extra in remaining:
+        step = _finding_follow_up_step(extra)
+        _add(
+            str(step.get("kind") or "investigate"),
+            str(step.get("label") or ""),
+            str(step.get("prompt") or ""),
+            str(step.get("reason") or ""),
+        )
+
+    if not steps and nxt:
+        _add("follow_up", _short_next_label(nxt), nxt, "")
+    if not steps and title:
+        _add(
+            "follow_up",
+            "Inspect cited evidence",
+            (
+                "Inspect the strongest jump:TIME on the timeline in the current "
+                "scope and report whether it supports the leading explanation. "
+                "Preserve the current Investigation Case and Scope."
+            ),
+            "No unused structured check remained.",
+        )
+    if not steps:
+        return {
+            "steps": [],
+            "stop_reason": "No unused follow-up check remains.",
+        }
+    return {"steps": normalize_next_steps(steps, limit=cap), "stop_reason": None}
 
 
 def extract_claims(

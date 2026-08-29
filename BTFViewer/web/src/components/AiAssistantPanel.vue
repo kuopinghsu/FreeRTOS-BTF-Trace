@@ -632,6 +632,15 @@
       <button
         type="button"
         class="ai-ctx-item"
+        :disabled="!logMenu.canAskAi || busy || !aiEnabled"
+        @click="askSelection"
+      >
+        {{ askAiSelectionMenuLabel(logMenu.selectedText) }}
+      </button>
+      <div class="ai-ctx-sep" />
+      <button
+        type="button"
+        class="ai-ctx-item"
         :disabled="!logMenu.hasSelection"
         @click="copySelection"
       >
@@ -745,6 +754,7 @@ import {
   canonicalAssistantToolMessage,
   filterEntriesForAiReport,
   toolBatchAutoRuns,
+  isEmptyAssistantMessageError,
   isExportTool,
   isQueryTool,
   maxToolRounds,
@@ -815,6 +825,10 @@ import {
   dumpInvestigationSession,
   parseInvestigationSession,
   investigationSessionHasChat,
+  computeNextSteps,
+  AI_TOOL_ROUND_LIMIT_PROMPT,
+  aiLanguageReminder,
+  withAiLanguageReminder,
 } from '../utils/aiCase.js'
 import {
   buildInvestigationPackage,
@@ -823,18 +837,23 @@ import {
   EVIDENCE_PANEL_TOOLS,
   extractEvidencePanelPayload,
   formatEvidencePanelMarkdown,
+  formatSnsFallbackReply,
+  ensureNextstepLines,
   evidencePanelSummaryLine,
   evidencePanelToggleLabel,
   syncEvidenceSubfolds,
   mergeEvidencePanelPayload,
   refreshEvidencePanelScores,
+  refreshEvidencePanelNextSteps,
   formatInvestigationPlanStatus,
   elevateGuideStageForTemplate,
   isAgentTemplate,
   markPlanStepsFromTools,
   parseBtfExpHref,
   parseBtfHypHref,
+  parseBtfNextHref,
   parseBtfScopeHref,
+  linkifyNextCheckLines,
 } from '../utils/aiInvestigation.js'
 import {
   aiFileStamp,
@@ -844,6 +863,8 @@ import {
   formatAiConversationMarkdown,
   formatAiConversationText,
   formatAiMessageHtml,
+  askAiSelectionCanAsk,
+  askAiSelectionMenuLabel,
 } from '../utils/aiMarkdown.js'
 import {
   loadAiRecentTemplates,
@@ -964,7 +985,9 @@ const moreMenuEl = ref(null)
 const moreMenuStyle = ref({})
 const langDraft = ref(props.responseLanguage || DEFAULT_AI_RESPONSE_LANGUAGE)
 const loadedTabs = ref([])
-const logMenu = reactive({ visible: false, x: 0, y: 0, hasSelection: false })
+const logMenu = reactive({
+  visible: false, x: 0, y: 0, hasSelection: false, canAskAi: false, selectedText: '',
+})
 const comparePickOpen = ref(false)
 const comparePickA = ref(null)
 const comparePickB = ref(null)
@@ -973,6 +996,7 @@ const mermaidZoom = ref(null)
 let abortCtrl = null
 let chatMessages = []
 let toolRound = 0
+let lastAnalysisFindings = []
 let batchSeq = 0
 let activeTemplateId = ''
 let skipInterpretOnce = false
@@ -1056,7 +1080,8 @@ function syncEvidenceLogEntry(data, language = props.responseLanguage) {
   evidenceSubfoldsExpanded.value = false
   bumpEvidence()
   scrollLog()
-  nextTick(() => syncEvidenceSubfolds(logRef.value, false))
+  // Markdown already encodes defaults: one-level folds closed,
+  // Investigation details open, nested L2 closed. Do not force-collapse.
 }
 
 function toggleEvidenceSubfolds() {
@@ -1104,6 +1129,12 @@ function updateEvidenceFromToolResult(name, res) {
       userCatalog: loadAiUserHistoricalKnowledge(),
     })
   }
+  refreshEvidencePanelNextSteps(merged, {
+    loadedTabCount: loadedTabs.value.length || 1,
+    findings: analysisFindingsList(),
+  })
+  const extra = analysisFindingsList()
+  if (extra.length) merged.analysis_findings = extra
   evidencePayload = merged
   syncEvidenceLogEntry(merged)
 }
@@ -1587,7 +1618,11 @@ function evidencePanelSummary(content) {
 }
 
 function formatMessage(role, text) {
-  return formatAiMessageHtml(role, text, { dark: props.darkMode !== false })
+  try {
+    return formatAiMessageHtml(role, text, { dark: props.darkMode !== false })
+  } catch (err) {
+    return `<p>${String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')}</p>`
+  }
 }
 
 function closeMermaidZoom() {
@@ -1644,6 +1679,19 @@ function onMsgClick(ev) {
     if (parsed.action) onExperimentAction(parsed.action, parsed.key)
     return
   }
+  const nextA = from.closest('a[href^="btfnext:"]')
+  if (nextA) {
+    ev.preventDefault()
+    const parsed = parseBtfNextHref(nextA.getAttribute('href') || '')
+    if (parsed.action === 'run') {
+      const idx = Number.parseInt(parsed.key, 10)
+      runGeneratedNextStep(Number.isFinite(idx) ? idx : 0)
+    } else if (parsed.action === 'text') {
+      const idx = Number.parseInt(parsed.key, 10)
+      runProseNextStep(Number.isFinite(idx) ? idx : 0)
+    }
+    return
+  }
   const statsA = from.closest('a[href^="btfstats:"]')
   if (statsA) {
     ev.preventDefault()
@@ -1651,7 +1699,7 @@ function onMsgClick(ev) {
     if (sid) emit('open-stats', sid)
     return
   }
-  const a = from.closest('a[data-jump], a[href^="btfjump:"], a[href^="btfrange:"], a[href^="btfhyp:"], a[href^="btfscope:"], a[href^="btfexp:"], a[href^="btftool:"], a[href^="btfstats:"], a[data-highlight], a[href^="btfhighlight:"]')
+  const a = from.closest('a[data-jump], a[href^="btfjump:"], a[href^="btfrange:"], a[href^="btfhyp:"], a[href^="btfscope:"], a[href^="btfexp:"], a[href^="btfnext:"], a[href^="btftool:"], a[href^="btfstats:"], a[data-highlight], a[href^="btfhighlight:"]')
   if (a && !a.classList.contains('ai-mermaid-zoom')) {
     ev.preventDefault()
     const href = a.getAttribute('href') || ''
@@ -1686,8 +1734,15 @@ function onMsgClick(ev) {
   openMermaidZoom(zoomHit)
 }
 
+function logSelectedText() {
+  return String(window.getSelection?.() || '').replace(/\u2029/g, '\n').trim()
+}
+
 function onLogContextMenu(ev) {
-  logMenu.hasSelection = !!String(window.getSelection?.() || '').trim()
+  const selected = logSelectedText()
+  logMenu.hasSelection = !!selected
+  logMenu.canAskAi = askAiSelectionCanAsk(selected)
+  logMenu.selectedText = selected
   logMenu.x = ev.clientX
   logMenu.y = ev.clientY
   logMenu.visible = true
@@ -1697,8 +1752,15 @@ function closeLogMenu() {
   logMenu.visible = false
 }
 
+async function askSelection() {
+  const text = String(logMenu.selectedText || '').trim()
+  closeLogMenu()
+  if (!askAiSelectionCanAsk(text)) return
+  await ask(text)
+}
+
 function copySelection() {
-  const text = String(window.getSelection?.() || '')
+  const text = String(logMenu.selectedText || logSelectedText() || '')
   closeLogMenu()
   if (text) writeClipboard(text)
 }
@@ -1733,7 +1795,7 @@ function triggerBrowserDownload(data, name, mime) {
 function saveConversationAs(format) {
   closeLogMenu()
   if (!messages.value.length) return
-  const entries = messages.value
+  const entries = filterEntriesForAiReport(messages.value)
   let data
   let mime
   const lang = props.responseLanguage
@@ -1898,6 +1960,7 @@ function clear() {
   messages.value = []
   chatMessages = []
   toolRound = 0
+  lastAnalysisFindings = []
   error.value = ''
   mermaidZoom.value = null
   interpretedQuery = null
@@ -1993,6 +2056,34 @@ function onSaveInvestigationTemplate() {
   saveAiUserInvestigationTemplates(items)
   userInvestigationTemplates.value = items
   status.value = `Saved template “${tpl.label}”.`
+}
+
+function runGeneratedNextStep(index) {
+  const steps = Array.isArray(evidencePayload?.next_steps) ? evidencePayload.next_steps : []
+  let prompt = ''
+  if (index >= 0 && index < steps.length && steps[index] && typeof steps[index] === 'object') {
+    prompt = String(steps[index].prompt || '').trim()
+  }
+  if (!prompt && index === 0) {
+    const falsify = evidencePayload?.falsify && typeof evidencePayload.falsify === 'object'
+      ? evidencePayload.falsify
+      : {}
+    prompt = String(falsify.next_check || evidencePayload?.recommended_action || '').trim()
+  }
+  if (!prompt) return
+  skipInterpretOnce = true
+  draft.value = prompt
+  send()
+}
+
+function runProseNextStep(index) {
+  const rows = Array.isArray(evidencePayload?.prose_nextsteps)
+    ? evidencePayload.prose_nextsteps : []
+  const prompt = String(rows[index] || '').trim()
+  if (!prompt) return
+  skipInterpretOnce = true
+  draft.value = prompt
+  send()
 }
 
 function onHypothesisAction(action, hypId) {
@@ -2287,15 +2378,19 @@ async function askValidateExperiment(idA, idB) {
 
 async function runCompletion(active, finalRound = false) {
   let messages = chatMessages
+  const lang = props.responseLanguage
   if (finalRound) {
     // Last allowed round: drop tools so the model must answer in text
     // now, instead of silently hitting the round cap next.
     messages = [...chatMessages, {
       role: 'user',
-      content: 'You have reached the tool-call limit for this turn. '
-        + 'Do not call any more tools — summarize your findings and '
-        + 'give your final answer now in plain text.',
+      content: withAiLanguageReminder(AI_TOOL_ROUND_LIMIT_PROMPT, lang),
     }]
+  } else {
+    const rem = aiLanguageReminder(lang)
+    if (rem) {
+      messages = [...chatMessages, { role: 'user', content: rem }]
+    }
   }
   costStarted = Date.now()
   return aiChatCompletion({
@@ -2315,12 +2410,104 @@ async function runCompletion(active, finalRound = false) {
   })
 }
 
+function analysisFindingsList() {
+  if (Array.isArray(lastAnalysisFindings) && lastAnalysisFindings.length) {
+    return lastAnalysisFindings.filter(f => f && typeof f === 'object')
+  }
+  return []
+}
+
+function finalizeAssistantText(text) {
+  const findings = analysisFindingsList()
+  const hasCase = !!(evidencePayload && typeof evidencePayload === 'object'
+    && Object.keys(evidencePayload).length)
+  const src = String(text || '')
+  const hasTags = /nextstep:/i.test(src)
+  if (!hasCase && !findings.length && !hasTags) return text
+  const payload = { ...(evidencePayload || {}) }
+  if (findings.length) payload.analysis_findings = findings
+  if (hasCase || findings.length) {
+    const recomputed = computeNextSteps(payload, {
+      loadedTabCount: loadedTabs.value.length || 1,
+      findings,
+    })
+    payload.next_steps = recomputed.steps || []
+    payload.stop_reason = recomputed.stop_reason
+    evidencePayload = payload
+    if (hasCase || (payload.next_steps && payload.next_steps.length)) {
+      syncEvidenceLogEntry(payload)
+    }
+  }
+  const prose = []
+  const tagged = ensureNextstepLines(text, payload.next_steps)
+  const shown = linkifyNextCheckLines(tagged, payload.next_steps, findings, prose)
+  if (prose.length) {
+    payload.prose_nextsteps = prose
+    evidencePayload = payload
+  }
+  return shown
+}
+
+function maybeLinkifyAssistantText(text) {
+  const src = String(text || '')
+  if (!src.trim()) return src
+  if (!/nextstep:/i.test(src)) return src
+  return finalizeAssistantText(src)
+}
+
+function doneStatusForText(text) {
+  const jumps = extractJumpTimes(text)
+  if (jumps.length) {
+    const m = /jump:([0-9]+(?:\.[0-9]+)?)/.exec(text || '')
+    const label = m ? m[1] : String(jumps[0])
+    status.value = `Done. Click jump:${label} to annotate the timeline and jump there.`
+  } else {
+    status.value = 'Done.'
+  }
+}
+
+function hasProseAssistantReply() {
+  return messages.value.some(
+    m => m && m.role === 'assistant' && String(m.content || '').trim(),
+  )
+}
+
+function completeFinalAssistantReply(text) {
+  // After tools, the model often returns an empty follow-up. Always synthesize
+  // a wrap-up from Evidence so the log is never tools + Evidence only.
+  const source = String(text || '').trim() || snsFallbackReply()
+  if (source) {
+    let content = source
+    try {
+      content = finalizeAssistantText(source)
+    } catch {
+      content = source
+    }
+    messages.value.push({
+      role: 'assistant',
+      content,
+      requestContext: lastRequestContext,
+    })
+  }
+  finishInvestigationPlan()
+  attachResponseValidation(source)
+  pinEvidenceLogEntry()
+  doneStatusForText(source)
+}
+
+function snsFallbackReply() {
+  return formatSnsFallbackReply(evidencePayload, props.responseLanguage)
+}
+
 function ingestTurn(turn) {
   const text = String(turn.content || '').trim()
   const calls = Array.isArray(turn.tool_calls) ? turn.tool_calls : []
   recordTurnUsage(turn, calls)
-  if (calls.length) chatMessages.push(canonicalAssistantToolMessage(text, calls))
-  else if (text) chatMessages.push({ role: 'assistant', content: text })
+  if (calls.length) {
+    chatMessages.push(canonicalAssistantToolMessage(text, calls))
+  } else if (text) {
+    chatMessages.push({ role: 'assistant', content: text })
+  }
 
   const toolsNorm = calls.map((c, i) => {
     const name = String(c.name || '')
@@ -2340,7 +2527,7 @@ function ingestTurn(turn) {
     const batchId = `b${batchSeq}`
     messages.value.push({
       role: 'assistant',
-      content: text,
+      content: text ? maybeLinkifyAssistantText(text) : text,
       tools: toolsNorm,
       batchId,
       requestContext: lastRequestContext,
@@ -2349,23 +2536,10 @@ function ingestTurn(turn) {
     return { batchId, text, auto }
   }
   if (text) {
-    messages.value.push({
-      role: 'assistant',
-      content: text,
-      requestContext: lastRequestContext,
-    })
+    completeFinalAssistantReply(text)
+    return null
   }
-  finishInvestigationPlan()
-  attachResponseValidation(text)
-  pinEvidenceLogEntry()
-  const jumps = extractJumpTimes(text)
-  if (jumps.length) {
-    const m = /jump:([0-9]+(?:\.[0-9]+)?)/.exec(text || '')
-    const label = m ? m[1] : String(jumps[0])
-    status.value = `Done. Click jump:${label} to annotate the timeline and jump there.`
-  } else {
-    status.value = 'Done.'
-  }
+  completeFinalAssistantReply('')
   return null
 }
 
@@ -2418,12 +2592,14 @@ function commitBatch(batchId, skipped) {
 }
 
 async function continueAfterTools() {
-  if (toolRound >= maxToolRounds(activeTemplateId || '')) {
+  const cap = maxToolRounds(activeTemplateId || '')
+  if (toolRound >= cap) {
+    completeFinalAssistantReply('')
     status.value = 'Done (tool round limit).'
     return
   }
-  toolRound += 1
-  const finalRound = toolRound >= maxToolRounds(activeTemplateId || '')
+  if (toolRound < cap) toolRound += 1
+  const finalRound = toolRound >= cap
   const active = resolveAiSettings({ aiPreset: props.aiPreset, aiPresets: props.aiPresets })
   busy.value = true
   status.value = `Waiting for ${aiPresetInfo(active.preset).label} (${active.model})…`
@@ -2444,15 +2620,32 @@ async function continueAfterTools() {
     if (err?.name === 'AbortError') {
       status.value = 'Stopped.'
       error.value = ''
+      // Still surface Evidence wrap-up when the user stops mid follow-up.
+      if (evidencePayload && !hasProseAssistantReply() && !pendingBatchId.value) {
+        completeFinalAssistantReply('')
+      }
     } else {
       const errMsg = err?.message || String(err)
-      messages.value.push({ role: 'assistant', content: `(Error) ${errMsg}` })
-      setErrorStatus(errMsg)
-      noteAuthError(errMsg)
+      if (evidencePayload) completeFinalAssistantReply('')
+      if (!(evidencePayload && isEmptyAssistantMessageError(errMsg))) {
+        if (!evidencePayload) {
+          messages.value.push({ role: 'assistant', content: `(Error) ${errMsg}` })
+        }
+        setErrorStatus(errMsg)
+        noteAuthError(errMsg)
+      }
     }
   } finally {
     busy.value = false
     abortCtrl = null
+    // Belt-and-suspenders: tools + Evidence with no prose and nothing to Apply.
+    if (
+      evidencePayload
+      && !hasProseAssistantReply()
+      && !pendingBatchId.value
+    ) {
+      completeFinalAssistantReply('')
+    }
     await scrollLog()
   }
 }
@@ -2519,6 +2712,7 @@ async function send(overrideQuery = null, overrideCtx = null) {
   busy.value = true
   error.value = ''
   toolRound = 0
+  lastAnalysisFindings = []
   const active = resolveAiSettings({ aiPreset: props.aiPreset, aiPresets: props.aiPresets })
   status.value = `Waiting for ${aiPresetInfo(active.preset).label} (${active.model})…`
   await scrollLog()
@@ -2546,6 +2740,9 @@ async function send(overrideQuery = null, overrideCtx = null) {
       if (last && last.role === 'user') last.content = sendQuery
     }
     if (overrideCtx == null) refreshLoadedTabs()
+    lastAnalysisFindings = Array.isArray(ctx.findings)
+      ? ctx.findings.filter(f => f && typeof f === 'object')
+      : []
     const mode = normalizeAiContextMode(props.aiContextMode)
     const invSummary = investigationContextSummary(evidencePayload)
     lastRequestContext = {
@@ -2599,10 +2796,15 @@ async function send(overrideQuery = null, overrideCtx = null) {
       error.value = ''
     } else {
       const msg = err?.message || String(err)
-      messages.value.push({ role: 'assistant', content: `(Error) ${msg}` })
-      draft.value = query
-      setErrorStatus(`${msg} — prompt restored; Send to retry.`)
-      noteAuthError(msg)
+      if (evidencePayload) completeFinalAssistantReply('')
+      if (!(evidencePayload && isEmptyAssistantMessageError(msg))) {
+        if (!evidencePayload) {
+          messages.value.push({ role: 'assistant', content: `(Error) ${msg}` })
+        }
+        draft.value = query
+        setErrorStatus(`${msg} — prompt restored; Send to retry.`)
+        noteAuthError(msg)
+      }
     }
   } finally {
     busy.value = false
@@ -2669,6 +2871,7 @@ defineExpose({
   investigationSnapshot,
   restoreInvestigation,
   addFindingToInvestigationCase,
+  getEvidencePayload: () => evidencePayload,
 })
 </script>
 
@@ -3111,6 +3314,7 @@ defineExpose({
   font-size: inherit;
   padding: 5px 10px;
   text-align: left;
+  white-space: nowrap;
 }
 .ai-ctx-item:hover:not(:disabled) { background: rgba(91, 155, 213, 0.22); }
 .ai-ctx-item:disabled { color: var(--muted, #8a96a8); cursor: default; }
@@ -3215,6 +3419,7 @@ defineExpose({
   padding: 8px 10px;
   border: 1px solid #3a4658;
   border-left-width: 3px;
+  user-select: text;
 }
 .ai-msg.user .ai-msg-body {
   color: var(--ai-user-fg, #e8eef7);

@@ -48,6 +48,9 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     build_ai_system_prompt,
     build_ai_user_message,
     ai_jump_annotation_note,
+    ask_ai_selection_can_ask,
+    ask_ai_selection_menu_label,
+    ASK_AI_SELECTION_PREVIEW_CHARS,
     cursor_region_bounds,
     extract_jump_times,
     dump_ai_template_usage,
@@ -716,6 +719,34 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(ai_jump_annotation_note(1386000.0), "AI jump:1386000")
         self.assertEqual(ai_jump_annotation_note(99.5), "AI jump:99.5")
 
+    def test_ask_ai_selection_menu_label(self) -> None:
+        self.assertEqual(ask_ai_selection_menu_label(""), "Ask AI…")
+        self.assertEqual(ask_ai_selection_menu_label("   "), "Ask AI…")
+        self.assertEqual(ask_ai_selection_menu_label("hello"), "Ask AI…")
+        self.assertEqual(ask_ai_selection_menu_label("Low[266]"), "Ask AI…")
+        self.assertFalse(ask_ai_selection_can_ask(""))
+        self.assertFalse(ask_ai_selection_can_ask("hello"))
+        self.assertFalse(ask_ai_selection_can_ask("Low[266]"))
+        self.assertFalse(ask_ai_selection_can_ask("優化"))
+        self.assertTrue(ask_ai_selection_can_ask("Why is Low[266] blocked?"))
+        self.assertTrue(ask_ai_selection_can_ask("Mutex Blocking"))
+        self.assertTrue(ask_ai_selection_can_ask("若需進一步優化"))
+        long_zh = (
+            "若需進一步優化，建議檢視該任務在系統全域範圍內的 Mutex Blocking "
+            "統計資料，以找出導致反轉的具體臨界區間（Critical Section）"
+        )
+        collapsed = " ".join(long_zh.split())
+        self.assertEqual(
+            ask_ai_selection_menu_label(long_zh),
+            f"Ask AI ({collapsed[:ASK_AI_SELECTION_PREVIEW_CHARS]}...)",
+        )
+        self.assertTrue(ask_ai_selection_menu_label(long_zh).startswith(
+            "Ask AI (若需進一步優化，建議檢視"))
+        self.assertEqual(
+            ask_ai_selection_menu_label("  Why   is\nLow[266]  "),
+            "Ask AI (Why is Low[266])",
+        )
+
     def test_format_ai_log_html_links(self) -> None:
         html_out = _format_ai_log_html("assistant", "Open jump:1805120 next")
         self.assertIn('href="btfjump:time/1805120"', html_out)
@@ -819,6 +850,33 @@ class AiAssistantHelpersTests(unittest.TestCase):
         )
         self.assertIn('href="btfaction:apply/b1"', html_out)
         self.assertNotIn("btfaction:apply:b1", html_out)
+
+    def test_format_ai_log_html_tool_card_outside_assistant_bubble(self) -> None:
+        """Calculation cards sit below the written reply, matching Web."""
+        html_out = _format_ai_log_html(
+            "assistant",
+            "Verdict: mutex stall.",
+            [{
+                "name": "query_raw_metric",
+                "arguments": {"metric": "blocking"},
+                "status": "applied",
+            }],
+            "b1",
+        )
+        self.assertIn("Verdict: mutex stall.", html_out)
+        self.assertIn("ai-tool-card", html_out)
+        self.assertIn("(applied)", html_out)
+        bubble_at = html_out.find('class="ai-bubble"')
+        self.assertGreaterEqual(bubble_at, 0)
+        bubble_end = html_out.find("</td>", bubble_at)
+        self.assertGreater(bubble_end, bubble_at)
+        tool_at = html_out.find("ai-tool-card")
+        self.assertGreater(tool_at, bubble_end)
+        self.assertIn('class="ai-tool-cards"', html_out)
+        bubble_html = html_out[bubble_at:bubble_end]
+        self.assertIn("Verdict: mutex stall.", bubble_html)
+        self.assertNotIn("ai-tool-card", bubble_html)
+        self.assertNotIn("Suggest next steps", bubble_html)
 
     def test_chat_completion_sends_tools_and_parses_btftool(self) -> None:
         captured: list = []
@@ -1330,6 +1388,66 @@ class AiAssistantHelpersTests(unittest.TestCase):
             )
         self.assertEqual(calls["n"], 2)
         self.assertEqual(turn["content"], "Retry worked.")
+
+    def test_chat_completion_retries_malformed_function_call_without_tools(self) -> None:
+        """Gemini functioncallfilter: retry once with tools stripped."""
+        from btf_viewer_pkg.ai_tools import AI_MALFORMED_FUNCTION_CALL_NUDGE
+
+        captured = []
+
+        class _FakeResp:
+            def __init__(self, body: bytes) -> None:
+                self._body = body
+
+            def read(self, n: int = -1) -> bytes:
+                if not self._body:
+                    return b""
+                if n is None or n < 0:
+                    out, self._body = self._body, b""
+                    return out
+                out, self._body = self._body[:n], self._body[n:]
+                return out
+
+            def close(self) -> None:
+                return None
+
+        def _urlopen(req, timeout=None, **_kw):  # noqa: ANN001
+            captured.append(json.loads(req.data.decode("utf-8")))
+            if len(captured) == 1:
+                payload = {
+                    "choices": [{
+                        "finish_reason": "functioncallfilter: malformedfunctioncall",
+                        "index": 0,
+                        "message": {"role": "assistant"},
+                    }],
+                    "model": "models/gemini-3.5-flash-lite",
+                    "usage": {"completion_tokens": 47, "prompt_tokens": 8000},
+                }
+            else:
+                payload = {
+                    "choices": [{
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "Mutex stall."},
+                    }],
+                }
+            return _FakeResp(json.dumps(payload).encode("utf-8"))
+
+        with patch("btf_viewer_pkg.ai_assistant.urllib.request.urlopen", _urlopen):
+            turn = ai_chat_completion(
+                query="investigate",
+                tools=ai_viewer_tools(),
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+                model="gemini-3.5-flash-lite",
+                api_key="test-key",
+            )
+        self.assertEqual(len(captured), 2)
+        self.assertTrue(captured[0].get("tools"))
+        self.assertNotIn("tools", captured[1])
+        self.assertEqual(
+            captured[1]["messages"][-1]["content"],
+            AI_MALFORMED_FUNCTION_CALL_NUDGE,
+        )
+        self.assertEqual(turn["content"], "Mutex stall.")
 
     def test_live_benchmark_chat_follows_tool_only_turn(self) -> None:
         n = {"n": 0}
@@ -1955,6 +2073,25 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertIn("Always write your entire reply in English.", en)
         zh = build_ai_system_prompt("Traditional Chinese (繁體中文)")
         self.assertIn("Traditional Chinese (繁體中文)", zh)
+        self.assertIn("結論、證據、置信度", zh)
+        from btf_viewer_pkg.ai_case import (
+            ai_language_reminder,
+            with_ai_language_reminder,
+        )
+        rem = ai_language_reminder("Traditional Chinese (繁體中文)")
+        self.assertIn("REPLY LANGUAGE (mandatory)", rem)
+        self.assertIn("繁體中文", rem)
+        self.assertEqual(ai_language_reminder("English"), "")
+        msg = build_ai_user_message(
+            "Why is Low slow?",
+            findings_text="1. [WARNING] stall",
+            reply_language="Traditional Chinese (繁體中文)",
+        )
+        self.assertIn("REPLY LANGUAGE (mandatory)", msg)
+        self.assertIn(
+            "REPLY LANGUAGE (mandatory)",
+            with_ai_language_reminder("Summarize now.", "Traditional Chinese (繁體中文)"),
+        )
 
 
 if __name__ == "__main__":

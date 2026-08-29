@@ -1488,11 +1488,17 @@ export function aiViewerTools() {
         name: AI_TOOL_VERIFY_CLAIM,
         description:
           'Check a causal claim against findings and optional cursor scope. '
-          + 'Verdict: confirmed | rejected | inconclusive.',
+          + 'Always pass claim as a non-empty string stating the hypothesis '
+          + 'to verify. Verdict: confirmed | rejected | inconclusive.',
         parameters: {
           type: 'object',
           properties: {
-            claim: { type: 'string' },
+            claim: {
+              type: 'string',
+              description:
+                'Required. The hypothesis or causal statement to verify '
+                + '(for example "mutex hold blocks Low[266]").',
+            },
             claim_type: { type: 'string' },
             subject: { type: 'string' },
             object: { type: 'string' },
@@ -1510,10 +1516,17 @@ export function aiViewerTools() {
       type: 'function',
       function: {
         name: AI_TOOL_CHALLENGE_CONCLUSION,
-        description: 'List alternative mechanisms and missing evidence for a conclusion.',
+        description:
+          'List alternative mechanisms and missing evidence for a conclusion. '
+          + 'Pass conclusion as a non-empty string when possible.',
         parameters: {
           type: 'object',
-          properties: { conclusion: { type: 'string' } },
+          properties: {
+            conclusion: {
+              type: 'string',
+              description: 'The conclusion or claim to challenge.',
+            },
+          },
         },
       },
     },
@@ -1677,6 +1690,24 @@ function choiceFinishReason(choice) {
   return ''
 }
 
+function choice0FromChatBody(body) {
+  const choices = body && typeof body === 'object' ? body.choices : null
+  return Array.isArray(choices) && choices[0] && typeof choices[0] === 'object'
+    ? choices[0]
+    : {}
+}
+
+export function isMalformedFunctionCallFinish(body) {
+  const compact = (choiceFinishReason(choice0FromChatBody(body)) || '')
+    .replace(/[_\s-]/g, '')
+  return compact.includes('malformedfunction') || compact.includes('functioncallfilter')
+}
+
+export const AI_MALFORMED_FUNCTION_CALL_NUDGE = (
+  'Your last function call was rejected as malformed. '
+  + 'Answer in plain text now. Do not call tools.'
+)
+
 function usageCompletionTokens(body) {
   const usage = body && typeof body === 'object' ? body.usage : null
   if (!usage || typeof usage !== 'object') return -1
@@ -1693,10 +1724,7 @@ function usageCompletionTokens(body) {
  * Avoid snake_case that Markdown italicizes in the AI log.
  */
 export function emptyChatCompletionError(body, { hadTools = false } = {}) {
-  const choices = body && typeof body === 'object' ? body.choices : null
-  const choice0 = Array.isArray(choices) && choices[0] && typeof choices[0] === 'object'
-    ? choices[0]
-    : {}
+  const choice0 = choice0FromChatBody(body)
   const reason = choiceFinishReason(choice0) || 'unknown'
   const tokens = usageCompletionTokens(body)
   const model = body && typeof body === 'object' ? String(body.model || '').trim() : ''
@@ -1718,6 +1746,10 @@ export function emptyChatCompletionError(body, { hadTools = false } = {}) {
     )
   }
   return tips.join(' ')
+}
+
+export function isEmptyAssistantMessageError(msg) {
+  return String(msg || '').toLowerCase().includes('empty assistant message')
 }
 
 export const GEMINI_SKIP_THOUGHT_SIGNATURE = 'skip_thought_signature_validator'
@@ -2195,6 +2227,28 @@ export function normalizeConfidenceBand(value) {
   if (raw.includes('high')) return 'high'
   if (raw.includes('medium') || raw.includes('med')) return 'medium'
   if (raw.includes('low')) return 'low'
+  return ''
+}
+
+/**
+ * Coerce verify_claim / challenge_conclusion text from common model aliases.
+ * Small local models often omit ``claim`` and send hypothesis/statement/etc.
+ */
+export function coerceClaimText(args = null) {
+  const a = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
+  const keys = [
+    'claim', 'statement', 'hypothesis', 'conclusion', 'text', 'assertion',
+    'finding', 'summary', 'message', 'query', 'description',
+  ]
+  for (const key of keys) {
+    const v = String(a[key] ?? '').trim()
+    if (v) return v
+  }
+  const subject = String(a.subject || '').trim()
+  const object = String(a.object || a.target || '').trim()
+  if (subject && object) return `${subject} causes ${object}`
+  if (subject) return subject
+  if (object) return object
   return ''
 }
 
@@ -2707,7 +2761,7 @@ export function validateToolCall(name, args) {
   }
   if (name === AI_TOOL_RANK_ROOT_CAUSES) return { args: {}, error: '' }
   if (name === AI_TOOL_VERIFY_CLAIM) {
-    const claim = String(a.claim || '').trim()
+    const claim = coerceClaimText(a)
     if (!claim) return { args: null, error: 'claim must be a non-empty string' }
     if (a.evidence != null && !Array.isArray(a.evidence)) {
       return { args: null, error: 'evidence must be an array' }
@@ -2724,7 +2778,10 @@ export function validateToolCall(name, args) {
     }
   }
   if (name === AI_TOOL_CHALLENGE_CONCLUSION) {
-    return { args: { conclusion: String(a.conclusion || '').trim() }, error: '' }
+    return {
+      args: { conclusion: coerceClaimText(a) || String(a.conclusion || '').trim() },
+      error: '',
+    }
   }
   if (name === AI_TOOL_INVESTIGATION_MEMORY) {
     const rec = a.record && typeof a.record === 'object' ? a.record : null
@@ -3289,22 +3346,29 @@ export function filterEntriesForAiReport(entries = []) {
     if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
       tools = [...(entry.tools || [])]
     }
-    const keptTools = tools.filter(t => t && typeof t === 'object' && !isExportTool(t.name))
-    if (tools.length && !keptTools.length) continue
-    let next = entry
-    if (entry && typeof entry === 'object' && !Array.isArray(entry) && tools.length && keptTools.length !== tools.length) {
-      next = { ...entry, tools: keptTools }
-    }
     let text = ''
-    if (next && typeof next === 'object' && !Array.isArray(next)) {
-      text = String(next.text || next.content || '')
-    } else if (Array.isArray(next) && next.length >= 2) {
-      text = String(next[1] || '')
+    let role = ''
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      text = String(entry.text || entry.content || '')
+      role = String(entry.role || '')
+    } else if (Array.isArray(entry) && entry.length >= 2) {
+      role = String(entry[0] || '')
+      text = String(entry[1] || '')
     }
+    // Tools-only assistant bubble (no prose) — omit entirely.
+    if (tools.length && !text.trim() && role !== 'evidence') continue
     const low = text.toLowerCase()
-    if ((low.includes('export html report') || (low.includes('export_report') && low.includes('pending')))
-      && low.includes('pending') && text.trim().length < 80) {
+    if (
+      (low.includes('export html report') || low.includes('export_report'))
+      && low.includes('pending')
+      && text.trim().length < 80
+    ) {
       continue
+    }
+    let next = entry
+    if (entry && typeof entry === 'object' && !Array.isArray(entry) && 'tools' in entry) {
+      next = { ...entry }
+      delete next.tools
     }
     out.push(next)
   }

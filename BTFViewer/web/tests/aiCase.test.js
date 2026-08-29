@@ -39,8 +39,11 @@ import {
   toolNamesForContextMode,
   clampAiSplitBottom,
   metricMentioned,
+  NEXT_STEP_LIMIT_MAX,
+  normalizeNextSteps,
   scoreAdversarialMetrics,
   scoreBenchmarkCase,
+  computeNextSteps,
   validateAiResponse,
 } from '../src/utils/aiCase.js'
 import {
@@ -418,5 +421,52 @@ describe('aiCase investigation lifecycle', () => {
     const parsed = parseInvestigationSession(blob)
     assert.equal(investigationSessionHasChat(parsed.messages), true)
     assert.equal(parseInvestigationSession('').messages.length, 0)
+  })
+
+  it('suggests at most 3 next steps and can stop', () => {
+    const raw = Array.from({ length: 5 }, (_, i) => ({
+      label: `s${i}`, prompt: `Do check ${i}`, kind: 'follow_up',
+    }))
+    assert.equal(normalizeNextSteps(raw, { limit: 10 }).length, NEXT_STEP_LIMIT_MAX)
+    const done = computeNextSteps({
+      coverage: { percent: 90 },
+      confidence: 'high',
+      falsification: { would_disprove: [] },
+    })
+    assert.deepEqual(done.steps, [])
+    assert.ok(done.stop_reason)
+    const missing = computeNextSteps({
+      coverage: { percent: 50 },
+      confidence: 'medium',
+      conclusion: 'Mutex stall',
+      falsification: {
+        would_disprove: ['No mutex waiters in scope'],
+        next_check: 'What-if pin TaskA',
+      },
+    })
+    assert.equal(missing.steps[0].kind, 'verify')
+    assert.equal(missing.steps.some(s => s.kind === 'experiment'), false)
+    const oneTab = computeNextSteps({ coverage: { percent: 20 } }, { loadedTabCount: 1 })
+    assert.equal(oneTab.steps.some(s => s.kind === 'compare'), false)
+    const twoTab = computeNextSteps({ coverage: { percent: 20 } }, { loadedTabCount: 2 })
+    assert.equal(twoTab.steps.some(s => s.kind === 'compare'), true)
+    assert.ok(twoTab.steps.length <= NEXT_STEP_LIMIT_MAX)
+    const leftover = computeNextSteps({
+      coverage: { percent: 90 },
+      confidence: 'high',
+      finding: { id: 'mutex', title: 'Mutex stall' },
+    }, {
+      findings: [
+        { id: 'priority_inversion', title: 'Priority inversion', severity: 'warning', task: 'Low[266]' },
+        { id: 'thrashing', title: 'Excessive core migration', severity: 'warning' },
+        { id: 'tick_health', title: 'Trace Health / TICK', severity: 'info' },
+      ],
+    })
+    const ids = leftover.steps.map(s => s.prompt).join(' ')
+    assert.match(ids, /priority_inversion/)
+    assert.match(ids, /thrashing/)
+    assert.equal(ids.includes('tick_health'), false)
+    assert.equal(leftover.stop_reason, null)
+    assert.ok(leftover.steps.length <= NEXT_STEP_LIMIT_MAX)
   })
 })

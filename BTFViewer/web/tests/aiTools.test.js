@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
+  AI_MALFORMED_FUNCTION_CALL_NUDGE,
   AI_RAW_METRIC_PRIORITY,
+  AI_TOOL_PROMPT,
   AI_TOOL_SYSTEM_ADDENDUM,
   AI_VIEWER_TOOL_NAMES,
   GEMINI_SKIP_THOUGHT_SIGNATURE,
@@ -16,6 +18,7 @@ import {
   parseBtfRangeHref,
   extractToolCalls,
   ensureGeminiThoughtSignatures,
+  isMalformedFunctionCallFinish,
   mergeToolCalls,
   needsGeminiThoughtSignatures,
   canonicalAssistantToolMessage,
@@ -36,6 +39,7 @@ import {
   toolMutatesGui,
   toolResultMessage,
   validateToolCall,
+  filterEntriesForAiReport,
 } from '../src/utils/aiTools.js'
 
 describe('aiTools', () => {
@@ -165,6 +169,50 @@ describe('aiTools', () => {
     })
     assert.match(label, /3087194/)
     assert.equal(label.includes('[3087194]'), false)
+  })
+
+  it('verify_claim accepts hypothesis alias and subject/object', async () => {
+    const { coerceClaimText } = await import('../src/utils/aiTools.js')
+    assert.equal(
+      coerceClaimText({ hypothesis: 'mutex hold blocks Low[266]' }),
+      'mutex hold blocks Low[266]',
+    )
+    const v = validateToolCall('verify_claim', {
+      hypothesis: 'blocking warning is mutex-related',
+    })
+    assert.equal(v.error, '')
+    assert.equal(v.args.claim, 'blocking warning is mutex-related')
+    const v2 = validateToolCall('verify_claim', {
+      subject: 'MutexA', object: 'Low[266]',
+    })
+    assert.equal(v2.error, '')
+    assert.equal(v2.args.claim, 'MutexA causes Low[266]')
+    assert.match(validateToolCall('verify_claim', {}).error, /claim must be/)
+  })
+
+  it('filterEntriesForAiReport drops all tool-usage cards', () => {
+    const kept = filterEntriesForAiReport([
+      {
+        role: 'assistant',
+        content: 'Blocking is mutex-related.',
+        tools: [{ name: 'investigate', status: 'applied' }],
+      },
+      {
+        role: 'assistant',
+        content: '',
+        tools: [
+          { name: 'query_raw_metric', status: 'applied' },
+          { name: 'query_raw_metric', status: 'applied' },
+        ],
+      },
+      { role: 'user', content: 'why' },
+      { role: 'evidence', content: '**Verdict:** Suspected' },
+    ])
+    assert.equal(kept.length, 3)
+    assert.equal(kept[0].content, 'Blocking is mutex-related.')
+    assert.equal('tools' in kept[0], false)
+    assert.equal(kept[1].role, 'user')
+    assert.equal(kept[2].role, 'evidence')
   })
 
   it('searchTimelineHits wraps Find', () => {
@@ -515,5 +563,27 @@ describe('aiTools', () => {
       model: 'gemini-2.5-flash',
       preset: 'ollama',
     }), false)
+  })
+
+  it('detects Gemini malformed function-call finish reasons', () => {
+    assert.equal(isMalformedFunctionCallFinish({
+      choices: [{
+        finish_reason: 'functioncallfilter: malformedfunctioncall',
+        message: { role: 'assistant' },
+      }],
+    }), true)
+    assert.equal(isMalformedFunctionCallFinish({
+      choices: [{
+        finishReason: 'MALFORMED_FUNCTION_CALL',
+        message: { role: 'assistant' },
+      }],
+    }), true)
+    assert.equal(isMalformedFunctionCallFinish({
+      choices: [{
+        finish_reason: 'stop',
+        message: { role: 'assistant' },
+      }],
+    }), false)
+    assert.match(AI_MALFORMED_FUNCTION_CALL_NUDGE, /Do not call tools/)
   })
 })

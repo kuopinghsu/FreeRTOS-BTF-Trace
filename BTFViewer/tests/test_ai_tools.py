@@ -34,6 +34,7 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_TOOL_PROMPT,
     AI_TOOL_SYSTEM_ADDENDUM,
     AI_TOOL_TRIGGER_COMPARE,
+    AI_TOOL_VERIFY_CLAIM,
     AI_TOOL_ZOOM_TO_RANGE,
     AI_VIEWER_TOOL_NAMES,
     ai_viewer_tools,
@@ -317,6 +318,29 @@ class AiToolsTests(unittest.TestCase):
         )
         self.assertIn("3087194", label)
         self.assertNotIn("[3087194]", label)
+
+    def test_verify_claim_accepts_hypothesis_alias(self) -> None:
+        """Small models often omit claim and send hypothesis/statement instead."""
+        from btf_viewer_pkg.ai_tools import coerce_claim_text
+
+        self.assertEqual(
+            coerce_claim_text({"hypothesis": "mutex hold blocks Low[266]"}),
+            "mutex hold blocks Low[266]",
+        )
+        args, err = validate_tool_call(
+            AI_TOOL_VERIFY_CLAIM,
+            {"hypothesis": "blocking warning is mutex-related"},
+        )
+        self.assertEqual(err, "")
+        self.assertEqual(args["claim"], "blocking warning is mutex-related")
+        args2, err2 = validate_tool_call(
+            AI_TOOL_VERIFY_CLAIM,
+            {"subject": "MutexA", "object": "Low[266]"},
+        )
+        self.assertEqual(err2, "")
+        self.assertEqual(args2["claim"], "MutexA causes Low[266]")
+        _, err3 = validate_tool_call(AI_TOOL_VERIFY_CLAIM, {})
+        self.assertIn("claim must be a non-empty string", err3)
 
     def test_task_match_aliases_med267_bracket_id(self) -> None:
         """Name[id] must yield id/prefix aliases even if _TASK_ID_* patterns collide."""
@@ -641,6 +665,27 @@ class AiToolsTests(unittest.TestCase):
             preset="ollama",
         ))
 
+    def test_malformed_function_call_finish_detects_gemini_filter(self) -> None:
+        from btf_viewer_pkg.ai_tools import is_malformed_function_call_finish
+        self.assertTrue(is_malformed_function_call_finish({
+            "choices": [{
+                "finish_reason": "functioncallfilter: malformedfunctioncall",
+                "message": {"role": "assistant"},
+            }],
+        }))
+        self.assertTrue(is_malformed_function_call_finish({
+            "choices": [{
+                "finishReason": "MALFORMED_FUNCTION_CALL",
+                "message": {"role": "assistant"},
+            }],
+        }))
+        self.assertFalse(is_malformed_function_call_finish({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {"role": "assistant"},
+            }],
+        }))
+
     def test_query_raw_metric_priority_episodes(self) -> None:
         from btf_viewer_pkg.parser import (  # noqa: WPS433
             BtfTrace,
@@ -749,10 +794,21 @@ class AiToolsTests(unittest.TestCase):
         from btf_viewer_pkg.ai_tools import filter_entries_for_ai_report
         kept = filter_entries_for_ai_report([
             {"role": "assistant", "text": "ok",
+             "tools": [{"name": "investigate", "status": "applied"}]},
+            {"role": "assistant", "text": "",
+             "tools": [{"name": "query_raw_metric", "status": "applied"}]},
+            {"role": "assistant", "text": "",
              "tools": [{"name": "export_report", "status": "pending"}]},
             {"role": "user", "text": "why"},
+            {"role": "evidence", "content": "**Verdict:** Suspected"},
         ])
-        self.assertEqual(len(kept), 1)
+        self.assertEqual(len(kept), 3)
+        self.assertEqual(kept[0]["text"], "ok")
+        self.assertNotIn("tools", kept[0])
+        self.assertEqual(kept[1]["role"], "user")
+        self.assertEqual(kept[2]["role"], "evidence")
+        self.assertNotIn("⚡", str(kept))
+        self.assertNotIn("Evidence queries", str(kept))
 
     def test_tools_match_web(self) -> None:
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")

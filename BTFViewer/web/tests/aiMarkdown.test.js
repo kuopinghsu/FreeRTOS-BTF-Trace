@@ -7,6 +7,8 @@ import {
   formatAiConversationText,
   formatAiMessageHtml,
   markdownToSafeHtml,
+  askAiSelectionCanAsk,
+  askAiSelectionMenuLabel,
 } from '../src/utils/aiMarkdown.js'
 
 describe('aiMarkdown', () => {
@@ -219,5 +221,29 @@ describe('ai conversation export', () => {
 
   it('builds a sortable file stamp', () => {
     assert.equal(aiFileStamp(when), '20260808-084102')
+  })
+
+  it('formats Ask AI context-menu labels like Chrome search', () => {
+    assert.equal(askAiSelectionMenuLabel(''), 'Ask AI…')
+    assert.equal(askAiSelectionMenuLabel('hello'), 'Ask AI…')
+    assert.equal(askAiSelectionMenuLabel('Low[266]'), 'Ask AI…')
+    assert.equal(askAiSelectionCanAsk(''), false)
+    assert.equal(askAiSelectionCanAsk('hello'), false)
+    assert.equal(askAiSelectionCanAsk('Low[266]'), false)
+    assert.equal(askAiSelectionCanAsk('優化'), false)
+    assert.equal(askAiSelectionCanAsk('Why is Low[266] blocked?'), true)
+    assert.equal(askAiSelectionCanAsk('Mutex Blocking'), true)
+    assert.equal(askAiSelectionCanAsk('若需進一步優化'), true)
+    const longZh = (
+      '若需進一步優化，建議檢視該任務在系統全域範圍內的 Mutex Blocking '
+      + '統計資料，以找出導致反轉的具體臨界區間（Critical Section）'
+    )
+    const collapsed = longZh.trim().split(/\s+/).join(' ')
+    assert.equal(
+      askAiSelectionMenuLabel(longZh),
+      `Ask AI (${collapsed.slice(0, 28)}...)`,
+    )
+    assert.ok(askAiSelectionMenuLabel(longZh).startsWith('Ask AI (若需進一步優化，建議檢視'))
+    assert.equal(askAiSelectionMenuLabel('  Why   is\nLow[266]  '), 'Ask AI (Why is Low[266])')
   })
 })

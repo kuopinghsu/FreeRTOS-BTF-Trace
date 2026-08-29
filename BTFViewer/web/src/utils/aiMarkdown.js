@@ -15,6 +15,44 @@ export const AI_ROLE_LABEL_USER = 'Your prompt'
 export const AI_ROLE_LABEL_ASSISTANT = 'AI Assistant'
 export const AI_ROLE_LABEL_EVIDENCE = 'Evidence & Validation'
 
+/** Conversation "Ask AI" context menu. Keep in sync with ai_assistant.py. */
+export const ASK_AI_SELECTION_PREVIEW_CHARS = 28
+export const ASK_AI_SELECTION_CJK_PHRASE_CHARS = 4
+
+function askAiIsCjk(ch) {
+  const o = ch.codePointAt(0) || 0
+  return (
+    (o >= 0x2E80 && o <= 0x9FFF)
+    || (o >= 0xAC00 && o <= 0xD7A3)
+    || (o >= 0xF900 && o <= 0xFAFF)
+    || (o >= 0xFF00 && o <= 0xFF60)
+    || (o >= 0xFFE0 && o <= 0xFFE6)
+    || (o >= 0x20000 && o <= 0x3FFFD)
+  )
+}
+
+/** True when the highlight is a phrase (not empty / a single word). */
+export function askAiSelectionCanAsk(selected) {
+  const text = String(selected || '').trim().split(/\s+/).join(' ')
+  if (!text) return false
+  if (text.split(' ').length >= 2) return true
+  let cjk = 0
+  for (const ch of text) {
+    if (askAiIsCjk(ch)) cjk += 1
+  }
+  return cjk >= ASK_AI_SELECTION_CJK_PHRASE_CHARS
+}
+
+/** Context-menu label: `Ask AI (preview...)` for a phrase, else `Ask AI…`. */
+export function askAiSelectionMenuLabel(selected) {
+  if (!askAiSelectionCanAsk(selected)) return 'Ask AI…'
+  const text = String(selected || '').trim().split(/\s+/).join(' ')
+  if (text.length > ASK_AI_SELECTION_PREVIEW_CHARS) {
+    return `Ask AI (${text.slice(0, ASK_AI_SELECTION_PREVIEW_CHARS)}...)`
+  }
+  return `Ask AI (${text})`
+}
+
 export function aiRoleLabel(role, responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE) {
   if (role === 'user') return AI_ROLE_LABEL_USER
   if (role === 'evidence') return evidencePanelLabels(responseLanguage).role
@@ -107,6 +145,7 @@ function inlineToHtml(text) {
         || low.startsWith('btfhyp:')
         || low.startsWith('btfscope:')
         || low.startsWith('btfexp:')
+        || low.startsWith('btfnext:')
         || low.startsWith('btftool:')
         || low.startsWith('btfstats:')
         || low.startsWith('mailto:')

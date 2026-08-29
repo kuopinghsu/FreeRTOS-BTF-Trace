@@ -467,6 +467,9 @@ For the running example:
 3. Check that every cited time lies inside C1–Cn.
 4. Use **Verify finding** to request supporting evidence, contradictory evidence, alternatives, and missing information.
 5. Reject any statement that cannot be reproduced in Statistics or assumes an unrecorded event.
+6. In **Evidence & Validation**, click **[Run]** on **▶ Next check** to continue in the same Investigation Case, Context, and Scope. Extra host follow-ups are under **More next steps…**.
+7. If the reply includes a dedicated `nextstep:{action}` line (`nextstep:` in English; the action in the reply language), that line also has **[Run]** and sends that sentence. A heading such as **Next check:** without that tag is not a button.
+8. Confirm the follow-up on the timeline and named Statistics pages before treating it as done.
 
 ### Understand AI tool actions
 
@@ -485,7 +488,7 @@ Viewer-changing tools can place Cursors, zoom, highlight a task, change View Mod
 - supporting and contradictory evidence;
 - alternative explanations;
 - a verdict such as Supported, Rejected, or Inconclusive;
-- missing evidence and one useful next check; and
+- missing evidence and a tagged `nextstep:{action}` follow-up (`nextstep:` stays English; the action uses the reply language); and
 - a clear estimate disclaimer for What-if or Optimize.
 
 ### Continue when
@@ -564,7 +567,7 @@ The following example shows the entire path without inventing numeric results.
 | 7 | Place C1 before the trigger and C2 after completion; enable Limit | Statistics now describe one incident |
 | 8 | Follow Response → Execution/Blocking → Preemption/Mutex/Migration | The smallest supporting dependency path is collected |
 | 9 | Verify exact task/core/event order on the timeline | Explanation is Supported, Plausible, Inconclusive, or Unsupported |
-| 10 | Ask AI to Investigate, then Verify finding | AI explanation is checked against the same evidence |
+| 10 | Ask AI to Investigate, then Verify finding; continue with Evidence **[Run]** or a tagged `nextstep:{…}` **[Run]** | AI explanation is checked against the same evidence |
 | 11 | Define one expected metric change, capture Candidate, Compare | The change is measured rather than assumed |
 | 12 | Save Scope, values, evidence times, conclusion, and report | Another engineer can reproduce the investigation |
 
@@ -581,6 +584,7 @@ The following example shows the entire path without inventing numeric results.
 - [ ] I opened the exact sample on the timeline.
 - [ ] I checked contradictory evidence and alternative explanations.
 - [ ] I used AI only after selecting evidence.
+- [ ] I continued the AI investigation with Evidence **[Run]** or a conversation `nextstep:{…}` **[Run]**.
 - [ ] I verified every AI measurement and timestamp.
 - [ ] I treated What-if and Optimize as estimates.
 - [ ] I captured an equivalent Candidate and repeated the same measurements.
@@ -600,6 +604,7 @@ The following example shows the entire path without inventing numeric results.
 | Assuming two nearby events prove causation | Check event order, alternatives, and contradictory evidence |
 | Comparing different workload phases | Match workload, instrumentation, Scope, and Filters |
 | Treating an AI explanation as a measurement | Reproduce it in Statistics and on the timeline |
+| Expecting **Next check:** in the reply to be a button | Use Evidence **[Run]**, or a dedicated `nextstep:{action}` line |
 | Treating What-if as a verified improvement | Apply the change, capture again, and Compare |
 
 ## When to stop and recapture

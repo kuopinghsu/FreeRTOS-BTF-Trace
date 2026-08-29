@@ -53,7 +53,7 @@ AI 助理不會取代追蹤分析，而是協助你按照一致的順序完成�
 2. [開始使用（Getting started）](#getting-started)
 3. [分析流程（Investigation workflows）](#investigation-workflows)
 4. [常見使用案例（Common use cases）](#common-use-cases)
-5. [如何解讀 AI 結果（Understanding AI results）](#understanding-ai-results)
+5. [如何解讀 AI 結果（Understanding AI results）](#understanding-ai-results) — [繼續調查（Continue the investigation）](#continue-the-investigation)
 6. [設定、模型與隱私（Configuration, models, and privacy）](#configuration-models-and-privacy)
 7. [AI 工具參考（AI tools reference）](#ai-tools-reference)
 8. [檢視器行為](#viewer-behavior)
@@ -108,11 +108,13 @@ AI 可以解釋證據、找出關聯、排序可能原因、檢查假設，也�
 - 流程指示器會追蹤 **Triage → Scope → Investigate → Verify → Experiment → Compare**。選擇已完成的階段，可回到該階段的輸出結果。
 - **Start Investigation** 與模板列分開。最多五個動態捷徑依「最近可用 → 最常用 → 工作流程預設順序」排列。系統可依目前 Finding、游標、選取的工作與引導階段以外框標示建議模板。Compare／SMP 未滿足的先決條件會以行內提示顯示在晶片下方。**More templates…** 永遠列出全部模板（Analysis Findings、Explain region、Auto investigate、Compare、Report、What-if、Optimize 與專項檢查等）。最近／使用次數僅本機保存（Web `localStorage`、Desktop `.rc`），不跨端同步；**Clear** 不會清除這些歷程。
 - 輸入區上方有可收合的 **Context** 一列摘要（`Stage · Scope · Focus · Mode · Privacy`）。展開後可看到 Trace、Scope、Filters、Finding 數量、語言、端點與使用量。Web 版每則助理回覆可開啟 **View request context**。
-- 面板標頭提供 **Clear、Language…** 與 **Settings…**。**Clear** 會清除對話、使用量摘要與目前的調查狀態。
+- 面板標頭提供 **Clear、Language…** 與 **Settings…**。**Clear** 會清除對話、使用量摘要與目前的調查狀態。**Language…** 會把回覆語言寫入系統提示，並在每次使用者回合與工具後續催促中再次強調（對本機小型模型特別重要）。模型若未寫出正文，主程式填入的摘要也會在地化常見 Evidence 標題（例如關鍵路徑）。
+- 在對話中選取文字後按右鍵 **Ask AI (預覽…)**，會把該片段當成下一個問題送出（不會寫入範本紀錄）。僅在選取兩個以上詞時才可使用 Ask AI。同一選單也提供 **Copy、Copy conversation** 與 **Save As…**。
+- 回覆之後，可用 Evidence **[Run]**（主程式下一步）或對話中 `nextstep:{action}` 列的 **[Run]** 繼續調查。回覆裡的英文 **Next check:** 正文不是按鈕。
 - 使用量列會顯示例如 **Context: Compact · 4.6k tok · 3 tools · 12s**，依序代表內容模式、Token 數、工具數量與模型執行時間。可在 **Settings → AI → Context** 選擇 **Compact、Balanced（預設）或 Full Evidence**。信心程度來自證據，不是來自模式。
 - 檢視器可還原未清除的調查內容；清除對話時，也會清除已儲存的調查狀態。
-- **Evidence & Validation** 一律顯示第一層摘要（Verdict、Leading explanation、Missing evidence、Next check）。巢狀區塊（Direct/Timeline evidence、Checks、Alternatives、Investigation details，以及其內 Confidence evolution、Tools used 等）預設**摺疊**。標題右側 **⊞**／**⊟** 可一次全部展開／全部摺疊（Desktop 將該控制固定在日誌視窗右側，避免「全部展開」後寬表格把圖示推離可視範圍）；每次證據更新後子層恢復為摺疊。標籤字級分層：面板標題 12px、Checks／Investigation details 等第一層摺疊 12px（帶邊框盒）、Investigation details 內的 Confidence evolution／Tools used 等第二層 11px 並略為縮排（較淡邊框盒）。**另存為 HTML** 同樣保留字級分層與可用的「全部展開」控制。
-- 已完成的唯讀證據查詢工具批次會摺疊為 **Evidence queries · N completed**；待 **Apply**、失敗與會變更檢視器的卡片維持展開。其他會改變檢視器的動作會顯示為工具卡片，並標示 **Navigation／Scope／Filter／Annotation／Export／Calculation**；除非啟用 **Auto-apply GUI actions**，否則等待 **Apply** 或 **Skip**。**Undo** 會還原游標、視窗、反白、註解、**Scope（Limit to C1–Cn）** 與 **Filters**。
+- **Evidence & Validation** 一律顯示第一層摘要（Verdict、Leading explanation、Missing evidence、Next check）。巢狀區塊包含 Direct/Timeline evidence、Checks、Alternatives、Investigation details，以及其內 Confidence evolution、Tools used 等。標題右側 **⊞**／**⊟** 可一次全部展開／全部摺疊（Desktop 將該控制固定在日誌視窗右側，避免「全部展開」後寬表格把圖示推離可視範圍）。標籤字級分層：面板標題 12px、Checks／Investigation details 等第一層摺疊 12px（帶邊框盒）、Investigation details 內的 Confidence evolution／Tools used 等第二層 11px 並略為縮排（較淡邊框盒）。**另存為 HTML**（以及 Markdown／Text）同樣保留 Evidence 字級分層，並省略工具使用卡片（Calculation／Evidence queries／Apply）；儲存的 HTML 仍可「全部展開」。
+- 已完成的唯讀證據查詢工具批次會摺疊為 **Evidence queries · N completed**；待 **Apply**、失敗與會變更檢視器的卡片維持展開。其他會改變檢視器的動作會顯示為工具卡片，並標示 **Navigation／Scope／Filter／Annotation／Export／Calculation**；除非啟用 **Auto-apply GUI actions**，否則等待 **Apply** 或 **Skip**。工具卡片在書面回覆下方（琥珀色 Calculation 卡片），不會當成助理氣泡的最後一行。**Undo** 會還原游標、視窗、反白、註解、**Scope（Limit to C1–Cn）** 與 **Filters**。
 - What-if／Optimize 結果會顯示：`Simulation / estimate — not measured RTOS behavior.`
 
 至少開啟兩份追蹤資料後，工具列上的 **Compare** 才會啟用。**Query with AI…** 傳送的是 **Trace Compare** 表格，而不是目前的 Findings。**Save as baseline** 與 **Score vs baseline** 使用與 `baseline_score` 相同的已儲存設定檔。按下 **Ctrl+K** 可快速存取 Analysis、AI、Compare、Workspace Preset 與 Inspect task。
@@ -154,7 +156,7 @@ AI 內容也會帶入與狀態列及圖例相同的 **Filter** 與 **Selection**
 | --- | --- | --- | --- |
 | **1. Triage** | **Triage findings** 或工具列 **Analysis** | 依 Critical、Warning、Info 排序問題 | 指定的 **Statistics** 頁面也顯示相同問題 |
 | **2. Scope** | 選擇 Finding，並設定或套用 C1–Cn | 鎖定一個工作、事件或時間範圍 | 分析特定階段時啟用 **Limit to C1–Cn** |
-| **3. Investigate** | **Investigate**；已知可疑工作時使用 **Root cause** | 取得假設、關聯、相依性與關鍵路徑 | 開啟引用的 `jump:TIME`、`range:LO/HI` 與 **Statistics** 頁面確認 |
+| **3. Investigate** | **Investigate**；已知可疑工作時使用 **Root cause** | 取得假設、關聯、相依性與關鍵路徑 | 開啟引用的 `jump:TIME`、`range:LO/HI` 與 **Statistics** 頁面確認。接著用 Evidence **[Run]** 或對話中的 `nextstep:{action}` **[Run]** 繼續 |
 | **4. Verify** | **Verify with AI…** 或繼續 Investigation plan | Supported、Rejected 或 Insufficient 的判定 | 確認 Scope、工作名稱、時間、矛盾證據與替代解釋 |
 | **5. Experiment** | **What-if**、**Optimize** 或 Experiment plan | 依優先順序排列的預估修改 | 將結果視為估算；實際修改系統後重新擷取 Trace |
 | **6. Compare** | 開啟修改前／後的追蹤資料 → **Compare** | 實際量測的差異與實驗結論 | 使用相同工作負載與可比較的游標範圍 |
@@ -244,7 +246,7 @@ flowchart TD
 | 7 | `rank_root_causes` / `challenge_conclusion` | 在執行 `what_if` 前先排序原因並檢查替代解釋 |
 | 8 | `find_related_findings` / `compare_tasks` | 尋找相關 Finding，或並排比較工作差異 |
 | 9 | `set_cursors` / `zoom_to_range` / `highlight_task` / `bookmark_finding` | 縮小 Timeline 範圍；未啟用 Auto-apply 時需 Apply Cursor。可點選 Critical Path 證據中的 `range:LO/HI` / `btfrange:` |
-| 10 | Evidence & Validation panel | Verdict · Coverage · Evidence · Confidence、直接證據表、Checks、Supporting／Contradicting／Missing、▶ Next check；詳細區放 quality/cost/trees |
+| 10 | Evidence & Validation panel | Verdict · Coverage · Evidence · Confidence、直接證據表、Checks、Missing；▶ Next check 的 **[Run]** 送出主程式產生的下一步提示。對話 **[Run]** 需要 `nextstep:{action}` |
 | 11 | `investigation_replay` / `generate_report` / `export_investigation` | 結構化完成分析；可選擇使用 `export_report` |
 
 **Root cause** 會針對排名最高的 Finding，依序檢查 **Deadline/WCET → Preemption → Blocking → Mutex → Inheritance → Migration**。如果 Triage 已經指出可疑工作，適合直接使用這個功能。
@@ -372,6 +374,7 @@ AI 的輸出是對量測證據的解讀。接受結論前，應先確認證據�
 重要結論應包含：
 
 - `jump:TIME`、`range:LO/HI` 等證據連結，以及明確的指標名稱。
+- 後續檢查以獨立一行 `nextstep:{action}` 標記（`nextstep:` 維持英文，與 `jump:TIME` 相同；大括號內的 action 使用目前回覆語言）。
 - 信心程度（Confidence）：**High、Medium 或 Low**。
 - 證據品質（Evidence Quality）：**Directly observed、Strong correlation、Possible explanation 或 Insufficient evidence**。
 - 其他可能的解釋，以及哪些證據可以推翻目前的結論。
@@ -384,10 +387,29 @@ AI 的輸出是對量測證據的解讀。接受結論前，應先確認證據�
 * `btfrange:`／Zoom C1–Cn — 放置游標並縮放範圍
 * `btfhighlight:` — 醒目提示工作
 * `btfstats:` — 開啟指定 Statistics 區段
+* `btfnext:text/N` — 立刻送出對話中 `nextstep:{action}` 標記的那一句
+* `btfnext:run/N` — 立刻送出 Evidence 面板中主程式產生的下一步調查提示（不是範本）
 
 請求進行中時可用 **Stop** 取消；時間軸保持可回應，對話仍可見。失敗時會還原提示文字以便編輯後再次 **Send**。隱私晶片顯示 **Local**／**Cloud**；雲端傳送前可套用工作名稱遮罩與敏感追蹤封鎖。
 
-**Evidence & Validation** 面板開頭會顯示精簡的 **Verdict · Coverage · Evidence · Confidence** 列，接著是可點擊的 **Direct evidence** 表、**Interpretation**、**Checks**、替代解釋，以及僅在有內容時出現的 **Supporting／Contradicting／Missing evidence**，並以 **▶ Next check** 標示建議下一步。確認強度足夠時，標題會使用 **Root cause**；否則使用 **Leading explanation**。證據列可加上 `[measured]`／`[derived]`／`[heuristic]`／`[simulated]` 標籤。品質等級、成本、工具理由與調查樹則放在 **Investigation details**。Evidence Quality 是用於診斷的啟發式指標，**不是機率值**。先前工具（`investigate`、`correlate_events`、`find_critical_path`）收集到的 `jump:TIME` 列，在後續規劃工具（`rank_root_causes`、`challenge_conclusion` 等）只回傳判決時仍會保留——否則 **Start Investigation** 會在中段高分之後顯示 Evidence Score **0%**。AI 完成最後回覆後，主程式驗證器會標示不存在的工作名稱，以及落在游標範圍之外的時間戳記。
+**Evidence & Validation** 面板開頭會顯示精簡的 **Verdict · Coverage · Evidence · Confidence** 列，接著是可點擊的 **Direct evidence** 表、**Interpretation**、**Checks**、替代解釋，以及僅在有內容時出現的 **Supporting／Contradicting／Missing evidence**，並以 **▶ Next check** 標示建議下一步。點 **[Run]** 會立刻送出主程式產生的下一步提示，並沿用目前的 Investigation Case、Context 與 Scope；額外步驟收在 **More next steps…**。若模型有呼叫工具但沒有寫正文，下一輪改為純文字；若仍空白，主程式會用目前案件內容填入助理氣泡。`find_critical_path` 這類證據工具若是最後一次套用、而模型沒有最終回覆（或已達工具輪次上限），也會用同一段主程式收尾，且不會把空白回覆當成硬錯誤。`find_critical_path` 會在 Evidence & Validation 放入路徑表與 **Evidence graph** 圖。Auto investigate 結束後，尚未涵蓋的 warning／error Remaining findings 也會成為 Evidence 下一步（即使主要判決已驗證）。對話與 Evidence 的 **[Run]** 差異見下節 **繼續調查**。調查應結束時改顯示 **Investigation complete** 與停止原因，而不會留下空白的 Next Steps 區塊。確認強度足夠時，標題會使用 **Root cause**；否則使用 **Leading explanation**。證據列可加上 `[measured]`／`[derived]`／`[heuristic]`／`[simulated]` 標籤。品質等級、成本、工具理由與調查樹則放在 **Investigation details**。Evidence Quality 是用於診斷的啟發式指標，**不是機率值**。先前工具（`investigate`、`correlate_events`、`find_critical_path`）收集到的 `jump:TIME` 列，在後續規劃工具（`rank_root_causes`、`challenge_conclusion` 等）只回傳判決時仍會保留——否則 **Start Investigation** 會在中段高分之後顯示 Evidence Score **0%**。AI 完成最後回覆後，主程式驗證器會標示不存在的工作名稱，以及落在游標範圍之外的時間戳記。
+
+<a id="continue-the-investigation" name="continue-the-investigation">&#x200B;</a>
+
+### 繼續調查（Continue the investigation）
+
+使用 **[Run]** 可在目前的 Investigation Case、Context 與 Scope 中繼續調查。這些提示不是 AI 範本，也不會寫入範本使用紀錄。
+
+| 位置 | **[Run]** 送出的內容 | 檢視器如何辨識 |
+| --- | --- | --- |
+| **Evidence & Validation** ▶ Next check（以及 **More next steps…**） | 主程式產生的下一步提示（`btfnext:run/N`） | 存在 Evidence 面板（最多三項） |
+| 對話 | 標記的後續檢查句子（`btfnext:text/N`） | 獨立一行 `nextstep:{action}`（`nextstep:` 維持英文，與 `jump:TIME` 相同；大括號內的 action 使用目前回覆語言） |
+
+1. 先開啟引用的 `jump:TIME`／`range:LO/HI` 與指定 Statistics 頁面。
+2. 若要執行主程式後續檢查（覆蓋率、Remaining findings、缺失證據），點 Evidence **[Run]**。
+3. 對話 **[Run]** 只出現在 `nextstep:{action}` 列（也接受沒有大括號的 `nextstep: …`）。檢視器會顯示該 action 與 **[Run]**；若能對應 Statistics 區段則加上 **Open Statistics**。
+4. 回覆裡的英文 **Next check:** 正文不會變成對話 **[Run]**。`下一步檢查` 這類本地化標題也不會被解析，除非模型同時輸出 `nextstep:{…}`。
+5. 把後續回覆當成完成前，先在時間軸與 Statistics 確認。
 
 建議優先使用內建範本。這些範本已選好相關指標與 **Statistics** 頁面。必要時也可以使用自然語言，例如「find STI wait around TaskA」；主程式會將這類問題導向 `search_timeline`。
 
@@ -549,7 +571,7 @@ Live `ai-test` 預設使用 **Full Evidence**。使用 **`--compare-context`** �
 
 ## AI 工具參考（AI tools reference）
 
-目前實作提供 60 個工具。證據查詢、調查狀態與匯出工具會立即執行。僅導覽的批次（`set_cursors`、`zoom_to_range`、`highlight_task`）也會立即套用。其餘會改變檢視器的工具，除非已啟用 **Auto-apply GUI actions**，否則會等待使用者按下 **Apply**：`set_view_mode`、`open_corridor_inspector`、`add_annotation`、`bookmark_finding`、`clear_marks`、`reset_view`。
+目前實作提供 61 個工具。證據查詢、調查狀態與匯出工具會立即執行。僅導覽的批次（`set_cursors`、`zoom_to_range`、`highlight_task`）也會立即套用。其餘會改變檢視器的工具，除非已啟用 **Auto-apply GUI actions**，否則會等待使用者按下 **Apply**：`set_view_mode`、`open_corridor_inspector`、`add_annotation`、`bookmark_finding`、`clear_marks`、`reset_view`。
 
 完整工具名稱與參數請參閱下方的[完整工具參考](#complete-gui-tool-reference)。
 
@@ -730,7 +752,7 @@ HTML `export_report` 會產生**診斷報告**：Executive summary（狀態與�
 | `open_corridor_inspector` | 可選 `core_from` / `core_to`（`Core_0`、`0`、`c0`、`Core 0`） | 開啟 Migration Inspector；不同 Alias 使用相同解析方式 |
 | `add_annotation` | `time`, `note`（≤240 字元） | 在指定時間點加入橘色 Timeline Note；目前右側 Panel Tab 不會切換 |
 | `query_raw_metric` | `task`, `metric`（`priority_inheritance`, `execution`, `migrations`, `blocking`, `sync`, `findings`） | Read-only：回傳目前 Statistics Scope 中指定工作的 Series，最多 40 Rows |
-| `export_report` | 可選 `format`（`html` / `csv` / `json`）、可選 `mode`（`summary` / `technical` / `full`） | HTML 診斷報告：Executive summary、Coverage、Ranked findings、範圍內 Evidence、Next action；Conversation／GUI／Rejected evidence 放在 `<details>` 附錄。立即執行（不必 Apply）。進行中仍會下載，並在 HTML 標示 **Analysis incomplete**。會剔除 `export_report` tool cards。`json` 儲存完整 Investigation Package，參閱 `export_investigation` |
+| `export_report` | 可選 `format`（`html` / `csv` / `json`）、可選 `mode`（`summary` / `technical` / `full`） | HTML 診斷報告：Executive summary、Coverage、Ranked findings、範圍內 Evidence、Next action；Conversation／GUI／Rejected evidence 放在 `<details>` 附錄。立即執行（不必 Apply）。進行中仍會下載，並在 HTML 標示 **Analysis incomplete**。會剔除所有工具使用卡片（Calculation／Evidence queries／Apply）。`json` 儲存完整 Investigation Package，參閱 `export_investigation` |
 | `clear_marks` | 可選 `what`（`annotations` / `cursors` / `bookmarks` / `all` / `everything`） | 清除 AI 產生的標記。`all`（預設）清除 Annotation + Cursor；`everything` 也會清除 Bookmark |
 | `reset_view` | 無 | 將 Timeline Fit 回完整範圍並清除 Task Highlight；Mark 保留 |
 | `search_timeline` | `query`；可選 `mode`（`contains` / `exact` / `regex` / `sti` / `tags` / `intervals` / `lifecycle` / `pointers` / `migrations`） | Find Panel Search；回傳最多 40 個符合條件的 Timestamp |
@@ -822,9 +844,11 @@ BTFViewer 使用同一套 AI 分析流程與控制方式，使用者看到的行
 | Chat Probe Timeout / `The read operation timed out` | `GET /models` 只列出 ID；推論本身過慢或卡住 | **Test connection** 會以非串流 POST 呼叫 `/chat/completions`，逾時時間為 120 秒。先執行 `ollama run MODEL` 預熱，再重試。可使用下方 curl 測試除錯；若 curl 也卡住，代表閘道上游的聊天服務卡住。非串流沒有回應時可嘗試 `"stream": true`。本機顯示記憶體不足時，請降低內容長度 |
 | Model not found | 輸入的模型 ID 並非目前服務端點所提供 | 重新整理模型清單或執行 **Test connection**，再從下拉選單選擇可用 ID；Ollama 可先執行 `ollama pull` |
 | Gemini HTTP 400 `thought_signature` | Gemini 3 的後續工具呼叫需要 Thought Blob | 重新送出問題；BTFViewer 會回傳 Gemini Thought Signature |
+| 空白回覆（`functioncallfilter` / `malformedfunctioncall`） | Gemini（尤其 Flash-Lite）產生了被 API 拒絕的工具呼叫 | 檢視器會改以無工具再打一輪。若仍失敗，改用較完整的模型（例如 `gemini-2.5-flash`）或縮小 Statistics 範圍 |
 | 顯示原始 `btftool` JSON，而不是原生工具呼叫 | 模型不支援或略過函式呼叫 | BTFViewer 仍會顯示相同卡片。選擇 **Apply**，或啟用 **Auto-apply GUI actions**。需要穩定的原生呼叫時，使用 `qwen3.5:9b` 或支援工具呼叫的雲端模型 |
 | Ask 超過 120 秒逾時，或一直停在 Waiting… | 冷啟動、CPU 卸載或顯示記憶體溢出 | 按 **Stop**，使用 `ollama run MODEL` 預熱後重試。長對話之間可使用 **Clear**。Findings 卡片太大時，改用較小模型或縮小 **Statistics** 範圍 |
 | 後續對話忽略前面已知資訊 | 對話記錄超出內容長度 | 在 AI 列按 **Clear**；或使用 **Analysis → Query with AI…** / **Compare → Query with AI…** 建立新的限定範圍提示 |
+| 對話出現 **Next check:** 卻沒有 **[Run]** | 檢視器只會把 `nextstep:{action}`（或沒有大括號的 `nextstep: …`）變成連結 | 改點 Evidence **[Run]**，或再問一次，讓回覆包含獨立的 `nextstep:{…}` 列 |
 | 需要原始 AI 請求／回覆記錄 | 除錯工具回合或服務供應商相容性問題 | 若環境提供 **Settings → AI → Log MCP messages to file**，只在除錯期間啟用，完成後刪除 `./ai_mcp_messages.log`。 |
 
 ### 使用 curl 測試連線（Test connection）

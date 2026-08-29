@@ -35,6 +35,7 @@ from btf_viewer_pkg.ai_investigation import (  # noqa: E402
     evidence_score_bar,
     extract_evidence_panel_payload,
     find_related_findings,
+    format_evidence_panel_markdown,
     investigation_tree_mermaid,
     recommend_validation_experiments,
     run_optimization_experiments,
@@ -450,7 +451,7 @@ class AiInvestigationTests(unittest.TestCase):
         events = [
             {"time": 1000, "kind": "blocking", "detail": "dur=500"},
             {"time": 1200, "kind": "sync", "detail": "mutex take"},
-            {"time": 1400, "kind": "execution", "detail": "dur=80 core=0"},
+            {"time": 1400, "kind": "execution", "detail": "CS[28] dur=80 core=0"},
             {"time": 1500, "kind": "priority", "detail": "PI base=2 peak=5"},
             {"time": 1600, "kind": "migration", "detail": "Core_0 -> Core_1"},
         ]
@@ -470,6 +471,22 @@ class AiInvestigationTests(unittest.TestCase):
         self.assertTrue(preemption_kinds <= {"priority", "migration"})
         self.assertTrue(path["blocking_steps"])
         self.assertTrue(path["preemption_steps"])
+        self.assertNotIn("[28]", path["mermaid"])
+        payload = extract_evidence_panel_payload("find_critical_path", {
+            "ok": True,
+            "message": path["message"],
+            "data": path,
+        })
+        self.assertIsNotNone(payload)
+        self.assertTrue(str(payload.get("conclusion") or "").startswith("Critical path"))
+        self.assertIn("graph LR", str(payload.get("graph_mermaid") or ""))
+        md = format_evidence_panel_markdown(payload, "English")
+        self.assertIn("Critical path", md)
+        self.assertIn("```mermaid", md)
+        mermaid_at = md.find("```mermaid")
+        details_at = md.find("Investigation details")
+        self.assertGreaterEqual(mermaid_at, 0)
+        self.assertTrue(details_at < 0 or mermaid_at < details_at)
 
     def test_find_critical_path_empty_events_has_empty_rich_fields(self) -> None:
         empty = build_critical_path([], task="CS[28]", timestamp=1300)
@@ -817,6 +834,61 @@ class AiInvestigationTests(unittest.TestCase):
         )
         ids = evidence_panel_inner_fold_ids(md)
         self.assertEqual(len(ids), 2)
+
+    def test_evidence_panel_fold_defaults_expand_investigation_details(self) -> None:
+        from btf_viewer_pkg.ai_assistant import markdown_to_safe_html
+        from btf_viewer_pkg.ai_investigation import (
+            evidence_panel_default_closed_fold_ids,
+            evidence_panel_inner_fold_ids,
+            format_evidence_panel_markdown,
+        )
+
+        md = format_evidence_panel_markdown({
+            "conclusion": "Hits near CS[20]",
+            "confidence": "medium",
+            "evidence": [
+                {"label": "timeline hit", "time": 100},
+                {"label": "timeline hit", "time": 200},
+            ],
+            "graph_mermaid": "graph LR\nA-->B",
+            "confidence_evolution": "Start → medium",
+            "tool_reasons": [{"tool": "search_timeline", "reason": "locate hits"}],
+        }, "English")
+        self.assertRegex(
+            md,
+            r'<details class="ai-ev-fold ai-ev-fold-l1" open>\s*'
+            r"<summary>Investigation details</summary>",
+        )
+        self.assertRegex(
+            md,
+            r'<details class="ai-ev-fold ai-ev-fold-l1">\s*'
+            r"<summary>Timeline evidence · 2</summary>",
+        )
+        self.assertRegex(
+            md,
+            r'<details class="ai-ev-fold ai-ev-fold-l1">\s*'
+            r"<summary>Evidence graph</summary>",
+        )
+        self.assertRegex(
+            md,
+            r'<details class="ai-ev-fold ai-ev-fold-l2">\s*'
+            r"<summary>Confidence evolution</summary>",
+        )
+        self.assertRegex(
+            md,
+            r'<details class="ai-ev-fold ai-ev-fold-l2">\s*'
+            r"<summary>Tools used · 1</summary>",
+        )
+        inner = evidence_panel_inner_fold_ids(md)
+        closed = evidence_panel_default_closed_fold_ids(md)
+        self.assertEqual(len(inner), 5)
+        self.assertEqual(len(closed), 4)
+        html_out = markdown_to_safe_html(md, as_img=True)
+        self.assertIn("▾ Investigation details", html_out)
+        self.assertIn("▸ Timeline evidence", html_out)
+        self.assertIn("▸ Evidence graph", html_out)
+        self.assertIn("▸ Confidence evolution", html_out)
+        self.assertIn("▸ Tools used", html_out)
 
     def test_format_evidence_panel_markdown_includes_jumps(self) -> None:
         from btf_viewer_pkg.ai_assistant import format_ai_conversation_markdown
@@ -1252,6 +1324,262 @@ class AiInvestigationTests(unittest.TestCase):
         self.assertTrue(
             any(e.get("time") == 3087194 for e in (payload.get("evidence") or []))
         )
+
+    def test_format_next_action_run_link_and_complete(self) -> None:
+        from btf_viewer_pkg.ai_investigation import (
+            extract_evidence_panel_payload,
+            format_evidence_panel_markdown,
+            merge_evidence_panel_payload,
+        )
+
+        md = format_evidence_panel_markdown({
+            "conclusion": "Mutex stall",
+            "confidence": "Medium",
+            "next_steps": [
+                {
+                    "label": "Verify mutex contention",
+                    "prompt": "Verify mutex contention in the current scope.",
+                    "reason": "missing mutex",
+                    "kind": "verify",
+                },
+                {
+                    "label": "Inspect Waiter × Owner",
+                    "prompt": "Open Waiter × Owner for CS[20].",
+                    "reason": "sync",
+                    "kind": "statistics",
+                },
+                {
+                    "label": "Compare traces",
+                    "prompt": "Compare Trace A vs Trace B.",
+                    "reason": "second tab",
+                    "kind": "compare",
+                },
+            ],
+        }, "English")
+        self.assertIn("btfnext:run/0", md)
+        self.assertIn("[Run]", md)
+        self.assertIn("Verify mutex contention", md)
+        self.assertIn("More next steps", md)
+        self.assertIn("btfnext:run/1", md)
+        self.assertIn("btfnext:run/2", md)
+        self.assertNotIn("btfnext:run/3", md)
+
+        done = format_evidence_panel_markdown({
+            "conclusion": "Mutex stall",
+            "confidence": "High",
+            "next_steps": [],
+            "stop_reason": "Evidence is sufficient; no further check is required.",
+        }, "English")
+        self.assertIn("Investigation complete", done)
+        self.assertIn("Evidence is sufficient", done)
+        self.assertNotIn("More next steps", done)
+        self.assertNotIn("btfnext:", done)
+
+        empty = format_evidence_panel_markdown({
+            "conclusion": "Mutex stall",
+            "next_steps": [],
+        }, "English")
+        self.assertNotIn("More next steps", empty)
+        self.assertNotIn("Investigation complete", empty)
+
+        from btf_viewer_pkg.ai_investigation import linkify_next_check_lines
+
+        leftover = linkify_next_check_lines(
+            "Remaining Findings (Title + Next Check)\n"
+            "**Priority inversion (id=priority_inversion)**\n"
+            "Title: Priority inversion (L/M/H) suspected for Low[266] and PS[228].\n"
+            "Next check: Inspect Priority Inheritance boost episodes.\n",
+            [{
+                "label": "Priority inversion",
+                "prompt": "Investigate remaining finding Priority inversion (id=priority_inversion).",
+                "kind": "investigate",
+            }],
+            [{"id": "priority_inversion", "title": "Priority inversion"}],
+        )
+        self.assertNotIn("btfnext:", leftover)
+        self.assertNotIn("[Run]", leftover)
+        self.assertIn("Next check: Inspect Priority Inheritance boost episodes.", leftover)
+
+        heading = linkify_next_check_lines(
+            "Next Check\n"
+            "Investigate Core-Pair Migration Summary to determine if the "
+            "high frequency of Med[267] interruptions correlates with "
+            "specific migrations of CS tasks between cores.\n"
+            "Viewer Action: focus_evidence applied "
+            "(Cursors set to jump:3086233–jump:3134897, Task Med[267] "
+            "highlighted).\n",
+            [{
+                "label": "Inspect core-pair migrations",
+                "prompt": "Inspect Core-Pair Migration Summary in the current scope.",
+                "kind": "statistics",
+            }],
+        )
+        self.assertNotIn("btfnext:", heading)
+        self.assertNotIn("[Run]", heading)
+        self.assertIn("Viewer Action: focus_evidence applied", heading)
+
+        tagged_findings = []
+        remaining = linkify_next_check_lines(
+            "Remaining Findings\n"
+            "**Priority inversion (id=priority_inversion)**\n"
+            "Title: Priority inversion (L/M/H) suspected for Low[266] and PS[228].\n"
+            "nextstep:{Inspect Priority Inheritance boost episodes.}\n",
+            None,
+            [{"id": "priority_inversion", "title": "Priority inversion"}],
+            tagged_findings,
+        )
+        self.assertEqual(tagged_findings, ["Inspect Priority Inheritance boost episodes."])
+        self.assertIn("btfnext:text/0", remaining)
+        self.assertIn("btfstats:section/priority", remaining)
+        self.assertNotIn("btfnext:run", remaining)
+        self.assertNotIn("nextstep:", remaining)
+
+        zh_action = (
+            "建議將 CS[20] 任務固定 (pin) 至單一核心 (設定 CPU Affinity)，"
+            "以消除頻繁的上下文切換開銷與快取失效問題，隨後重新觀察系統整體"
+            "遷移負載是否下降。"
+        )
+        tagged = []
+        zh = linkify_next_check_lines(
+            "下一步檢查 (Next check)\n"
+            f"nextstep:{{{zh_action}}}\n",
+            [{
+                "label": "Inspect core migrations",
+                "prompt": "Inspect Core Migrations in the current scope.",
+                "kind": "statistics",
+            }],
+            None,
+            tagged,
+        )
+        self.assertEqual(tagged, [zh_action])
+        self.assertIn("btfnext:text/0", zh)
+        self.assertNotIn("btfnext:run/0", zh)
+        self.assertIn("[Run]", zh)
+        self.assertIn(zh_action, zh)
+        self.assertNotIn("nextstep:", zh)
+        self.assertNotIn("{", zh.split("[Run]")[0])
+
+        plain = []
+        unbraced = linkify_next_check_lines(
+            "nextstep: Pin CS[20] to one core\n",
+            None,
+            None,
+            plain,
+        )
+        self.assertEqual(plain, ["Pin CS[20] to one core"])
+        self.assertIn("btfnext:text/0", unbraced)
+        self.assertIn("Pin CS[20] to one core [Run](btfnext:text/0)", unbraced)
+        self.assertNotIn("nextstep:", unbraced)
+
+        prev = extract_evidence_panel_payload("correlate_events", {
+            "ok": True,
+            "data": {
+                "task": "CS[22]",
+                "events": [
+                    {"kind": "migration", "detail": "c0->c1", "time": 1487000},
+                ],
+                "correlation": 0.9,
+            },
+        })
+        late = extract_evidence_panel_payload("plan_investigation", {
+            "ok": True,
+            "message": "1 next step(s)",
+            "data": {
+                "steps": [{
+                    "label": "Verify mutex contention",
+                    "prompt": "Verify mutex contention in the current scope.",
+                    "kind": "verify",
+                }],
+            },
+        })
+        self.assertIsNotNone(late)
+        self.assertFalse(late.get("conclusion"))
+        merged = merge_evidence_panel_payload(prev, late)
+        self.assertEqual(merged.get("conclusion"), prev.get("conclusion"))
+        self.assertEqual(merged["next_steps"][0]["label"], "Verify mutex contention")
+
+    def test_refresh_next_steps_skips_completed_investigate(self) -> None:
+        from btf_viewer_pkg.ai_investigation import refresh_evidence_panel_next_steps
+
+        payload = {
+            "conclusion": "Mutex stall",
+            "confidence": "low",
+            "coverage": {"percent": 20},
+            "investigation_case": {"tools_executed": ["investigate"]},
+        }
+        out = refresh_evidence_panel_next_steps(payload)
+        labels = [s.get("label") for s in (out.get("next_steps") or [])]
+        self.assertNotIn("Collect scoped evidence", labels)
+        again = refresh_evidence_panel_next_steps({
+            "conclusion": "Mutex stall",
+            "confidence": "low",
+            "coverage": {"percent": 20},
+        })
+        self.assertIn(
+            "Collect scoped evidence",
+            [s.get("label") for s in (again.get("next_steps") or [])],
+        )
+
+    def test_sns_fallback_reply_uses_conclusion_and_next_steps(self) -> None:
+        from btf_viewer_pkg.ai_investigation import format_sns_fallback_reply
+
+        text = format_sns_fallback_reply({
+            "conclusion": "Mutex stall",
+            "next_steps": [{"label": "Verify mutex", "prompt": "Check owners."}],
+        })
+        self.assertIn("Mutex stall", text)
+        self.assertIn("Verify mutex", text)
+        self.assertIn("nextstep:{Verify mutex}", text)
+        empty = format_sns_fallback_reply({})
+        self.assertIn("Evidence & Validation", empty)
+        path = format_sns_fallback_reply({
+            "conclusion": "Critical path: Low[266]",
+            "evidence": [
+                {"label": "Blocked / off-CPU: wait", "time": 3100477},
+            ],
+        })
+        self.assertIn("Critical path: Low[266]", path)
+        self.assertIn("Blocked / off-CPU: wait", path)
+        self.assertIn("jump:3100477", path)
+        zh = format_sns_fallback_reply(
+            {
+                "conclusion": "Critical path: Low[266]",
+                "evidence": [
+                    {"label": "Blocked / off-CPU: wait", "time": 3100477},
+                ],
+            },
+            "Traditional Chinese (繁體中文)",
+        )
+        self.assertIn("關鍵路徑", zh)
+        self.assertIn("Low[266]", zh)
+        zh_empty = format_sns_fallback_reply({}, "Traditional Chinese (繁體中文)")
+        self.assertIn("證據與驗證", zh_empty)
+
+    def test_ensure_nextstep_lines_appends_missing_tags(self) -> None:
+        from btf_viewer_pkg.ai_investigation import ensure_nextstep_lines
+
+        prose = (
+            "Remaining Findings\n"
+            "[WARNING] Off-CPU (id=blocking): check Med[267].\n"
+            "[WARNING] Thrash (id=thrashing): check CS[20].\n"
+        )
+        steps = [
+            {
+                "label": "Off-CPU",
+                "prompt": "Investigate remaining finding Off-CPU (id=blocking).",
+                "kind": "investigate",
+            },
+            {
+                "label": "Thrash",
+                "prompt": "Investigate remaining finding Thrash (id=thrashing).",
+                "kind": "investigate",
+            },
+        ]
+        out = ensure_nextstep_lines(prose, steps)
+        self.assertIn("nextstep:{Investigate remaining finding Off-CPU", out)
+        self.assertIn("nextstep:{Investigate remaining finding Thrash", out)
+        again = ensure_nextstep_lines(out, steps)
+        self.assertEqual(again.count("nextstep:"), 2)
 
 
 if __name__ == "__main__":
