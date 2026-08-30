@@ -658,15 +658,19 @@ def compare_summary_decision_html(
         )
     else:
         largest = str(notable.get("verdict") or "").strip() or "No significant regressions"
-    why = str(data.get("why") or "").strip()
     nxt = str(notable.get("next_investigation") or "").strip()
     omitted = int(notable.get("small_omitted_count") or 0)
     sig_note = (
         "Showing engineering-significant deltas only (small changes omitted)"
         if (int(cards.get("significant") or 0) or omitted) else ""
     )
+    label = str(notable.get("verdict_label") or "SIMILAR")
+    tone = str(notable.get("verdict_tone") or "neutral")
+    bullets = notable.get("verdict_bullets") or []
+    comparability = notable.get("comparability") or {}
+    comp_warnings = list(comparability.get("warnings") or [])
     visible = bool(
-        n_reg or n_imp or n_warn or top or why or nxt or notable.get("verdict")
+        n_reg or n_imp or n_warn or top or nxt or comp_warnings or notable.get("verdict")
     )
     if not visible:
         return ""
@@ -679,15 +683,45 @@ def compare_summary_decision_html(
         f"{n_reg} REGRESSIONS    {n_imp} IMPROVEMENTS"
         + (f"    {n_warn} WARNING{'S' if n_warn != 1 else ''}" if n_warn else "")
     )
-    parts = [
-        '<div class="compare-decision">',
-        f'<div class="compare-decision-identity">{html.escape(ident)}</div>',
-        f'<div class="compare-decision-counts">{html.escape(counts)}</div>',
-        f'<div class="compare-decision-largest">{html.escape(largest)}</div>',
-    ]
-    if why:
+    parts = ['<div class="compare-decision">']
+    if comp_warnings:
+        parts.append('<div class="compare-comparability-warn">')
         parts.append(
-            f'<div class="compare-decision-why">Why? {html.escape(why)}</div>'
+            '<div class="compare-comparability-head">⚠ Traces may not be '
+            'directly comparable</div><ul>'
+        )
+        for w in comp_warnings:
+            parts.append(f"<li>{html.escape(str(w))}</li>")
+        parts.append("</ul></div>")
+    parts.append(
+        f'<div class="compare-decision-identity">{html.escape(ident)}</div>'
+    )
+    parts.append(
+        f'<div class="compare-verdict">'
+        f'<span class="compare-verdict-chip tone-{html.escape(tone)}">'
+        f'{html.escape(label)}</span>'
+    )
+    if bullets:
+        parts.append('<ul class="compare-verdict-bullets">')
+        for b in bullets:
+            st = str(b.get("status") or "")
+            glyph = "▲" if st == "Regressed" else "▼" if st == "Improved" else "•"
+            cls = "reg" if st == "Regressed" else "imp" if st == "Improved" else ""
+            txt = f"{b.get('label')} — {b.get('change')}"
+            parts.append(
+                f'<li class="{cls}">{html.escape(glyph)} {html.escape(txt)}</li>'
+            )
+        parts.append("</ul>")
+    else:
+        parts.append(
+            '<div class="compare-verdict-none">No metric changed beyond the '
+            'significance threshold.</div>'
+        )
+    parts.append("</div>")  # .compare-verdict
+    parts.append(f'<div class="compare-decision-counts">{html.escape(counts)}</div>')
+    if top:
+        parts.append(
+            f'<div class="compare-decision-largest">{html.escape(largest)}</div>'
         )
     if nxt:
         parts.append(
@@ -953,6 +987,51 @@ def _extra_summary_candidates(tables: dict) -> List[dict]:
     return extra
 
 
+def compare_trace_shape_warnings(
+    cores_a, cores_b, task_names_a, task_names_b, span_a_ns, span_b_ns,
+) -> List[str]:
+    """Flag structural mismatches that make an A/B trace comparison unreliable.
+
+    Returns human-readable warning strings (empty when the two traces are
+    structurally similar enough to compare): different CPU-core count,
+    substantially different task sets (<60% shared names), or trace spans
+    that differ by more than 4x.
+    """
+    out: List[str] = []
+    n_ca, n_cb = int(cores_a or 0), int(cores_b or 0)
+    if n_ca and n_cb and n_ca != n_cb:
+        out.append(
+            f"Core count differs — Baseline A ran on {n_ca} core(s), "
+            f"Candidate B on {n_cb}. Per-core, migration and load-balance "
+            f"metrics are not directly comparable."
+        )
+    set_a = {str(t) for t in (task_names_a or []) if str(t)}
+    set_b = {str(t) for t in (task_names_b or []) if str(t)}
+    if set_a and set_b:
+        inter, union = set_a & set_b, set_a | set_b
+        jaccard = len(inter) / len(union) if union else 1.0
+        if jaccard < 0.6:
+            bits: List[str] = []
+            only_a, only_b = sorted(set_a - set_b)[:3], sorted(set_b - set_a)[:3]
+            if only_a:
+                bits.append("only in A: " + ", ".join(only_a))
+            if only_b:
+                bits.append("only in B: " + ", ".join(only_b))
+            tail = (" " + "; ".join(bits) + ".") if bits else ""
+            out.append(
+                f"Task sets differ substantially — {len(inter)}/{len(union)} "
+                f"task names in common ({jaccard * 100:.0f}%).{tail}"
+            )
+    span_a, span_b = float(span_a_ns or 0.0), float(span_b_ns or 0.0)
+    hi, lo = max(span_a, span_b), min(span_a, span_b)
+    if lo > 0 and hi / lo > 4.0:
+        out.append(
+            f"Trace durations differ by {hi / lo:.1f}× — rates and "
+            f"totals across such different spans may be misleading."
+        )
+    return out
+
+
 def compare_notable_changes(
     tables: dict,
     limit: int = 8,
@@ -1083,8 +1162,48 @@ def compare_notable_changes(
         )
     span_a, span_b = _compare_summary_pair(tables, "Span")
     mode_a, mode_b = _compare_summary_pair(tables, "Tick mode")
+
+    # Structured verdict (one-word label + tone + top-change bullets) so the
+    # UI can show a scannable result instead of a long prose sentence.
+    if n_reg and n_imp:
+        verdict_label = "MIXED"
+    elif n_reg:
+        verdict_label = "REGRESSED"
+    elif n_imp:
+        verdict_label = "IMPROVED"
+    else:
+        verdict_label = "SIMILAR"
+    verdict_tone = {
+        "MIXED": "mixed", "REGRESSED": "regressed",
+        "IMPROVED": "improved", "SIMILAR": "neutral",
+    }[verdict_label]
+    verdict_bullets = [
+        {"label": r["label"], "change": r["change"], "status": r["status"]}
+        for r in classified[:3]
+    ]
+
+    # Comparability check — flag structural mismatches (core count, task set,
+    # span) that make an A/B comparison unreliable.  `shape` is injected by
+    # the table builder / dialog, which have the raw traces.
+    shape = tables.get("shape") if isinstance(tables, dict) else None
+    comparability_warnings: List[str] = []
+    if isinstance(shape, dict) and shape:
+        comparability_warnings = compare_trace_shape_warnings(
+            shape.get("cores_a"), shape.get("cores_b"),
+            shape.get("task_names_a"), shape.get("task_names_b"),
+            shape.get("span_a_ns"), shape.get("span_b_ns"),
+        )
+    cards["comparability"] = len(comparability_warnings)
+
     return {
         "verdict": verdict.strip(),
+        "verdict_label": verdict_label,
+        "verdict_tone": verdict_tone,
+        "verdict_bullets": verdict_bullets,
+        "comparability": {
+            "comparable": not comparability_warnings,
+            "warnings": comparability_warnings,
+        },
         "formula": COMPARE_DELTA_FORMULA,
         "identity": {
             "a": {"file": name_a or "Trace A", "span": span_a, "tick_mode": mode_a},

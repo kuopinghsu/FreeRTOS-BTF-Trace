@@ -21,6 +21,7 @@ from btf_viewer_pkg.ux_explore import (  # noqa: E402
     compare_summary_strip,
     compare_summary_decision_html,
     compare_notable_changes,
+    compare_trace_shape_warnings,
     compare_investigate_target,
     compare_section_for_metric,
     compare_task_for_row,
@@ -410,6 +411,46 @@ class UxExploreTest(unittest.TestCase):
             compare_task_for_row("QP[198] response p99", "response p99"), "QP[198]")
         empty = compare_investigate_target({"rows": []})
         self.assertEqual(empty["section_id"], "response")
+        # Structured verdict: one-word label + tone + top-change bullets.
+        self.assertEqual(notable["verdict_label"], "MIXED")
+        self.assertEqual(notable["verdict_tone"], "mixed")
+        self.assertTrue(notable["verdict_bullets"])
+        self.assertLessEqual(len(notable["verdict_bullets"]), 3)
+        self.assertIn("comparability", notable)
+
+    def test_trace_shape_warnings_and_comparability(self) -> None:
+        # Core count + task set + span-ratio mismatches all flagged.
+        warns = compare_trace_shape_warnings(
+            cores_a=4, cores_b=8,
+            task_names_a=["A", "B", "C", "D"],
+            task_names_b=["A", "X", "Y", "Z", "W"],
+            span_a_ns=1_000_000, span_b_ns=9_000_000,
+        )
+        self.assertEqual(len(warns), 3)
+        self.assertTrue(any("Core count differs" in w for w in warns))
+        self.assertTrue(any("Task sets differ" in w for w in warns))
+        self.assertTrue(any("durations differ" in w for w in warns))
+        # Structurally similar traces → no warnings.
+        self.assertEqual(
+            compare_trace_shape_warnings(
+                4, 4, ["A", "B", "C"], ["A", "B", "C"], 1_000_000, 1_100_000),
+            [],
+        )
+        # compare_notable_changes threads shape info into `comparability`.
+        notable = compare_notable_changes(
+            {
+                "summary": [["Span", "1 ms", "9 ms", "-8 ms"]],
+                "shape": {
+                    "cores_a": 4, "cores_b": 8,
+                    "task_names_a": ["A"], "task_names_b": ["B"],
+                    "span_a_ns": 1_000_000, "span_b_ns": 9_000_000,
+                },
+            },
+            8, "a.btf", "b.btf",
+        )
+        self.assertFalse(notable["comparability"]["comparable"])
+        self.assertTrue(notable["comparability"]["warnings"])
+        self.assertEqual(notable["verdict_label"], "SIMILAR")
 
     def test_compare_charts_and_migration_views(self) -> None:
         util = compare_core_util_chart_rows({

@@ -887,6 +887,7 @@ function normalizeCompareTables(tables = {}) {
     mutex_block: tables.mutex_block || tables.mutexBlock || [],
     shared_patterns: tables.shared_patterns || tables.sharedPatterns || [],
     trends: tables.trends || tables.trend || [],
+    shape: tables.shape || null,
   }
 }
 
@@ -953,6 +954,29 @@ export function buildAllCompareTables(traceA, traceB, tabA = null, tabB = null, 
     response: buildResponseCompareRows(traceA, traceB, tabA, tabB, scopeEnabled, deadlines, cap),
     mutex_block: buildMutexBlockCompareRows(traceA, traceB, tabA, tabB, scopeEnabled, deadlines, cap),
     shared_patterns: buildSharedPatternCompareRows(traceA, traceB, tabA, tabB, scopeEnabled, deadlines, cap),
+    shape: compareTraceShapeInfo(traceA, traceB, tabA, tabB, scopeEnabled),
+  }
+}
+
+/** Structural fingerprint of the two traces for the comparability check. */
+export function compareTraceShapeInfo(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false) {
+  const ra = rangeForTab(tabA, scopeEnabled)
+  const rb = rangeForTab(tabB, scopeEnabled)
+  const spanOf = (trace, r) => {
+    if (!trace) return 0
+    if (r && r.lo != null && r.hi != null) return Math.max(0, r.hi - r.lo)
+    return Math.max(0, (trace.timeMax ?? 0) - (trace.timeMin ?? 0))
+  }
+  const names = trace => [...new Set(
+    (trace?.tasks || []).map(mk => taskDisplayName(taskReprGet(trace, mk) || mk)),
+  )].sort()
+  return {
+    cores_a: (traceA?.coreNames || []).length,
+    cores_b: (traceB?.coreNames || []).length,
+    task_names_a: names(traceA),
+    task_names_b: names(traceB),
+    span_a_ns: spanOf(traceA, ra),
+    span_b_ns: spanOf(traceB, rb),
   }
 }
 
@@ -970,7 +994,13 @@ export function buildCompareCsv(nameA, nameB, scopeEnabled, tables = {}) {
   lines.push(`Cursor scope per tab,${scopeEnabled ? 'yes' : 'no'}`)
   lines.push('')
   lines.push('Overview')
-  lines.push(`Verdict,${csvCell(notable.verdict || '')}`)
+  lines.push(`Verdict,${csvCell(notable.verdict_label || 'SIMILAR')}`)
+  for (const b of notable.verdict_bullets || []) {
+    lines.push(`Verdict change,${csvCell(b.status)},${csvCell(b.label)},${csvCell(b.change)}`)
+  }
+  const comp = notable.comparability || {}
+  lines.push(`Comparability,${comp.comparable === false ? 'WARNING' : 'ok'}`)
+  for (const cw of comp.warnings || []) lines.push(`Comparability warning,${csvCell(cw)}`)
   const nxt = String(notable.next_investigation || '').trim()
   if (nxt) lines.push(`Next investigation,${csvCell(nxt)}`)
   const omitted = Number(notable.small_omitted_count || 0) || 0
@@ -1201,6 +1231,27 @@ tbody tr:nth-child(even) td:first-child { background: #f7f9fc; }
 .compare-decision-largest { margin-top: 4px; color: #182230; }
 .compare-decision-why, .compare-decision-next { margin-top: 2px; font-size: 11px; color: #5f6f82; }
 .compare-decision-sig { margin-top: 2px; font-size: 10px; color: #7a8690; }
+.compare-verdict { margin-top: 6px; }
+.compare-verdict-chip {
+  display: inline-block; padding: 2px 10px; border-radius: 999px;
+  font-weight: 700; font-size: 12px; letter-spacing: 0.04em; color: #fff;
+}
+.compare-verdict-chip.tone-regressed { background: #c0392b; }
+.compare-verdict-chip.tone-improved { background: #1f6b45; }
+.compare-verdict-chip.tone-mixed { background: #c87a12; }
+.compare-verdict-chip.tone-neutral { background: #6b7a8d; }
+.compare-verdict-bullets { margin: 6px 0 0; padding-left: 18px; }
+.compare-verdict-bullets li { margin: 1px 0; color: #182230; }
+.compare-verdict-bullets li.reg { color: #9b2c2c; }
+.compare-verdict-bullets li.imp { color: #1f6b45; }
+.compare-verdict-none { margin-top: 6px; color: #5f6f82; font-size: 11px; }
+.compare-comparability-warn {
+  margin: 0 0 8px; padding: 8px 10px; border-radius: 6px;
+  background: #fdf0e2; border-left: 4px solid #c87a12; color: #6b4a12;
+}
+.compare-comparability-head { font-weight: 700; }
+.compare-comparability-warn ul { margin: 4px 0 0; padding-left: 18px; }
+.compare-comparability-warn li { margin: 1px 0; }
 .compare-chart { margin: 0 0 12px; overflow-x: auto; }
 .compare-chart svg { max-width: 100%; height: auto; display: block; }
 .table-tools { margin: 8px 0 12px; }
@@ -1261,7 +1312,10 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
     ['Tick mode', identA.tick_mode || '—', identB.tick_mode || '—'],
   ]
   const notableRows = (notable.rows || []).filter(r => r && typeof r === 'object')
-  const verdict = String(notable.verdict || '').trim()
+  const verdictLabel = String(notable.verdict_label || 'SIMILAR')
+  const verdictTone = String(notable.verdict_tone || 'neutral')
+  const verdictBullets = notable.verdict_bullets || []
+  const compWarnings = (notable.comparability || {}).warnings || []
   const nextInv = String(notable.next_investigation || '').trim()
   const omitted = Number(notable.small_omitted_count || 0) || 0
   const warnHtml = (notable.warnings || []).map(w => `<p class="warn-banner">${htmlCell(w)}</p>`).join('')
@@ -1298,10 +1352,24 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
       + evRefs.map(r => `<tr><td>${htmlCell(r[0])}</td><td>${htmlCell(r[1])}</td></tr>`).join('')
       + '</tbody></table></div>'
     : ''
+  const verdictBulletsHtml = verdictBullets.length
+    ? '<ul class="compare-verdict-bullets">' + verdictBullets.map(b => {
+      const st = String(b.status || '')
+      const glyph = st === 'Regressed' ? '▲' : st === 'Improved' ? '▼' : '•'
+      const cls = st === 'Regressed' ? 'reg' : st === 'Improved' ? 'imp' : ''
+      return `<li class="${cls}">${glyph} ${htmlCell(b.label)} — ${htmlCell(b.change)}</li>`
+    }).join('') + '</ul>'
+    : '<div class="compare-verdict-none">No metric changed beyond the significance threshold.</div>'
   const overviewHtml = `<section class="report-card"><h2>Overview</h2>`
     + '<p class="detail-note">Verdict, identity, and engineering-significant '
     + 'deltas between Baseline A and Candidate B.</p>'
-    + (verdict ? `<p class="overview-why">${htmlCell(verdict)}</p>` : '')
+    + (compWarnings.length
+      ? '<div class="compare-comparability-warn"><div class="compare-comparability-head">'
+        + '⚠ Traces may not be directly comparable</div><ul>'
+        + compWarnings.map(w => `<li>${htmlCell(w)}</li>`).join('') + '</ul></div>'
+      : '')
+    + `<div class="compare-verdict"><span class="compare-verdict-chip tone-${htmlCell(verdictTone)}">`
+    + `${htmlCell(verdictLabel)}</span>${verdictBulletsHtml}</div>`
     + (nextInv ? `<p class="overview-why">${htmlCell(nextInv)}</p>` : '')
     + ((omitted || Number(cards.significant || 0))
       ? '<p class="overview-formula">Showing engineering-significant deltas only (small changes omitted)</p>'

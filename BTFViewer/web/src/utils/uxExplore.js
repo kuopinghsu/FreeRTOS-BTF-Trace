@@ -577,16 +577,18 @@ export function compareSummaryDecisionHtml(tables, nameA = '', nameB = '') {
   const nImp = Number(cards.improvements ?? (data.improvements || []).length) || 0
   const nWarn = Number(cards.warnings ?? (data.warnings || []).length) || 0
   const top = regs[0]
-  const largest = top
-    ? `Largest regression — ${top.label}: ${top.change}`
-    : (String(notable.verdict || '').trim() || 'No significant regressions')
-  const why = String(data.why || '').trim()
+  const largest = top ? `Largest regression — ${top.label}: ${top.change}` : ''
   const next = String(notable.next_investigation || '').trim()
   const omitted = Number(notable.small_omitted_count || 0) || 0
   const sigNote = (Number(cards.significant || 0) || omitted)
     ? 'Showing engineering-significant deltas only (small changes omitted)'
     : ''
-  const visible = !!(nReg || nImp || nWarn || top || why || next || notable.verdict)
+  const label = String(notable.verdict_label || 'SIMILAR')
+  const tone = String(notable.verdict_tone || 'neutral')
+  const bullets = notable.verdict_bullets || []
+  const comp = notable.comparability || {}
+  const compWarnings = comp.warnings || []
+  const visible = !!(nReg || nImp || nWarn || top || next || compWarnings.length || notable.verdict)
   if (!visible) return ''
   const ident =
     `Baseline: ${nameA || 'Baseline'} · Scope ${idA.span || 'Full Trace'}    |    ` +
@@ -594,13 +596,33 @@ export function compareSummaryDecisionHtml(tables, nameA = '', nameB = '') {
   const counts =
     `${nReg} REGRESSIONS    ${nImp} IMPROVEMENTS` +
     (nWarn ? `    ${nWarn} WARNING${nWarn === 1 ? '' : 'S'}` : '')
-  const parts = [
-    '<div class="compare-decision">',
-    `<div class="compare-decision-identity">${svgEscape(ident)}</div>`,
-    `<div class="compare-decision-counts">${svgEscape(counts)}</div>`,
-    `<div class="compare-decision-largest">${svgEscape(largest)}</div>`,
-  ]
-  if (why) parts.push(`<div class="compare-decision-why">Why? ${svgEscape(why)}</div>`)
+  const parts = ['<div class="compare-decision">']
+  if (compWarnings.length) {
+    parts.push('<div class="compare-comparability-warn">')
+    parts.push('<div class="compare-comparability-head">⚠ Traces may not be directly comparable</div><ul>')
+    for (const w of compWarnings) parts.push(`<li>${svgEscape(String(w))}</li>`)
+    parts.push('</ul></div>')
+  }
+  parts.push(`<div class="compare-decision-identity">${svgEscape(ident)}</div>`)
+  parts.push(
+    '<div class="compare-verdict">'
+    + `<span class="compare-verdict-chip tone-${svgEscape(tone)}">${svgEscape(label)}</span>`,
+  )
+  if (bullets.length) {
+    parts.push('<ul class="compare-verdict-bullets">')
+    for (const b of bullets) {
+      const st = String(b.status || '')
+      const glyph = st === 'Regressed' ? '▲' : st === 'Improved' ? '▼' : '•'
+      const cls = st === 'Regressed' ? 'reg' : st === 'Improved' ? 'imp' : ''
+      parts.push(`<li class="${cls}">${glyph} ${svgEscape(`${b.label} — ${b.change}`)}</li>`)
+    }
+    parts.push('</ul>')
+  } else {
+    parts.push('<div class="compare-verdict-none">No metric changed beyond the significance threshold.</div>')
+  }
+  parts.push('</div>')
+  parts.push(`<div class="compare-decision-counts">${svgEscape(counts)}</div>`)
+  if (largest) parts.push(`<div class="compare-decision-largest">${svgEscape(largest)}</div>`)
   if (next) parts.push(`<div class="compare-decision-next">${svgEscape(next)}</div>`)
   if (sigNote) parts.push(`<div class="compare-decision-sig">${svgEscape(sigNote)}</div>`)
   parts.push('</div>')
@@ -905,8 +927,34 @@ export function compareNotableChanges(tables, limit = 8, nameA = '', nameB = '')
     nextInvestigation = 'Next: Spot-check Response P99 and Migration rate if you still expect a change'
   }
   const [spanA, spanB] = compareSummaryPair(tables, 'Span')
+
+  // Structured verdict: one-word label + tone + top-change bullets, so the UI
+  // can show a scannable result instead of a long prose sentence.
+  const verdictLabel = (nReg && nImp) ? 'MIXED' : nReg ? 'REGRESSED' : nImp ? 'IMPROVED' : 'SIMILAR'
+  const verdictTone = { MIXED: 'mixed', REGRESSED: 'regressed', IMPROVED: 'improved', SIMILAR: 'neutral' }[verdictLabel]
+  const verdictBullets = classified.slice(0, 3).map(r => ({
+    label: r.label, change: r.change, status: r.status,
+  }))
+
+  // Comparability check — structural mismatches that make the A/B compare
+  // unreliable.  `tables.shape` is injected by the table builder / dialog.
+  const shape = (tables && typeof tables === 'object') ? tables.shape : null
+  const comparabilityWarnings = (shape && typeof shape === 'object')
+    ? compareTraceShapeWarnings(
+      shape.cores_a, shape.cores_b, shape.task_names_a, shape.task_names_b,
+      shape.span_a_ns, shape.span_b_ns)
+    : []
+  cards.comparability = comparabilityWarnings.length
+
   return {
     verdict: verdict.trim(),
+    verdict_label: verdictLabel,
+    verdict_tone: verdictTone,
+    verdict_bullets: verdictBullets,
+    comparability: {
+      comparable: comparabilityWarnings.length === 0,
+      warnings: comparabilityWarnings,
+    },
     formula: COMPARE_DELTA_FORMULA,
     identity: {
       a: { file: nameA || 'Trace A', span: spanA, tick_mode: modeA },
@@ -919,6 +967,55 @@ export function compareNotableChanges(tables, limit = 8, nameA = '', nameB = '')
     small_omitted_count: smallOmitted,
     investigate: compareInvestigateTarget({ rows }),
   }
+}
+
+/**
+ * Flag structural mismatches that make an A/B trace comparison unreliable:
+ * different CPU-core count, substantially different task sets (<60% shared
+ * names), or trace spans differing by more than 4x.  Returns warning strings
+ * (empty when the two traces are structurally similar).
+ */
+export function compareTraceShapeWarnings(coresA, coresB, taskNamesA, taskNamesB, spanANs, spanBNs) {
+  const out = []
+  const nCa = Number(coresA) || 0
+  const nCb = Number(coresB) || 0
+  if (nCa && nCb && nCa !== nCb) {
+    out.push(
+      `Core count differs — Baseline A ran on ${nCa} core(s), Candidate B on ${nCb}. `
+      + 'Per-core, migration and load-balance metrics are not directly comparable.',
+    )
+  }
+  const setA = new Set((taskNamesA || []).map(String).filter(Boolean))
+  const setB = new Set((taskNamesB || []).map(String).filter(Boolean))
+  if (setA.size && setB.size) {
+    let inter = 0
+    for (const t of setA) if (setB.has(t)) inter++
+    const union = setA.size + setB.size - inter
+    const jaccard = union ? inter / union : 1
+    if (jaccard < 0.6) {
+      const onlyA = [...setA].filter(t => !setB.has(t)).sort().slice(0, 3)
+      const onlyB = [...setB].filter(t => !setA.has(t)).sort().slice(0, 3)
+      const bits = []
+      if (onlyA.length) bits.push(`only in A: ${onlyA.join(', ')}`)
+      if (onlyB.length) bits.push(`only in B: ${onlyB.join(', ')}`)
+      const tail = bits.length ? ` ${bits.join('; ')}.` : ''
+      out.push(
+        `Task sets differ substantially — ${inter}/${union} task names in common `
+        + `(${Math.round(jaccard * 100)}%).${tail}`,
+      )
+    }
+  }
+  const sA = Number(spanANs) || 0
+  const sB = Number(spanBNs) || 0
+  const hi = Math.max(sA, sB)
+  const lo = Math.min(sA, sB)
+  if (lo > 0 && hi / lo > 4) {
+    out.push(
+      `Trace durations differ by ${(hi / lo).toFixed(1)}× — rates and totals `
+      + 'across such different spans may be misleading.',
+    )
+  }
+  return out
 }
 
 export const COMPARE_CHART_BASELINE = '#2a6fb2'

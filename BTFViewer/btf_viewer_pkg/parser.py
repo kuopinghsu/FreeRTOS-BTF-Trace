@@ -3201,15 +3201,17 @@ def _migration_rows(trace: "BtfTrace",
         dwell_samples = _core_dwell_samples(segs, lo, hi)
         avg_dwell_tu = int(round(sum(dwell_samples) / len(dwell_samples))) if dwell_samples else 0
         migr_rate, rate_per_s = _format_migration_rate(len(migs), total, tick_count, scale)
-        avg_dwell = _format_time(avg_dwell_tu, scale) if avg_dwell_tu else "-"
+        # Dwell / gap columns: trim trailing zeros to match the web Core
+        # Migrations table + Analysis finding (web uses formatTime/formatMigrationGapTime).
+        avg_dwell = _format_time_web(avg_dwell_tu, scale) if avg_dwell_tu else "-"
         raw = trace.task_repr.get(mk, mk)
         disp = _task_display_name(raw)
         cores_str = ", ".join(sorted(cores_in_scope or cores, key=_core_sort_key_tuple))
         rows.append((
             mk, disp, len(migs), n_cores, cores_str, primary, primary_pct,
             ping, sti_near,
-            _format_time(int(avg_after), scale) if avg_after else "-",
-            _format_time(int(avg_other), scale) if avg_other else "-",
+            _format_time_web(int(avg_after), scale) if avg_after else "-",
+            _format_time_web(int(avg_other), scale) if avg_other else "-",
             migr_rate, rate_per_s, avg_dwell, avg_dwell_tu,
         ))
     rows.sort(key=lambda r: (-r[2], r[1].lower()))
@@ -5763,6 +5765,16 @@ def _build_trace_compare_rows(
         "mutex_block": mutex_rows,
         "shared_patterns": extras.get("shared_patterns") or [],
         "trends": trend_rows,
+        "shape": {
+            "cores_a": len(trace_a.core_names or []),
+            "cores_b": len(trace_b.core_names or []),
+            "task_names_a": sorted({_task_display_name(trace_a.task_repr.get(mk, mk))
+                                    for mk in trace_a.tasks}),
+            "task_names_b": sorted({_task_display_name(trace_b.task_repr.get(mk, mk))
+                                    for mk in trace_b.tasks}),
+            "span_a_ns": a["span_ns"],
+            "span_b_ns": b["span_ns"],
+        },
     }
 
 _CSV_FORMULA_LEAD_CHARS = ("=", "+", "-", "@", "\t", "\r")
@@ -5827,7 +5839,20 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
     lines.append(f"Cursor scope per tab,{'yes' if scope_enabled else 'no'}")
     lines.append("")
     lines.append("Overview")
-    lines.append(f"Verdict,{_compare_csv_cell(notable.get('verdict') or '')}")
+    lines.append(f"Verdict,{_compare_csv_cell(notable.get('verdict_label') or 'SIMILAR')}")
+    for _b in notable.get("verdict_bullets") or []:
+        lines.append(
+            "Verdict change,"
+            f"{_compare_csv_cell(_b.get('status'))},"
+            f"{_compare_csv_cell(_b.get('label'))},"
+            f"{_compare_csv_cell(_b.get('change'))}"
+        )
+    _comp = notable.get("comparability") or {}
+    lines.append(
+        f"Comparability,{'ok' if _comp.get('comparable', True) else 'WARNING'}"
+    )
+    for _cw in _comp.get("warnings") or []:
+        lines.append(f"Comparability warning,{_compare_csv_cell(_cw)}")
     nxt = str(notable.get("next_investigation") or "").strip()
     if nxt:
         lines.append(f"Next investigation,{_compare_csv_cell(nxt)}")
@@ -5981,6 +6006,27 @@ tbody tr:nth-child(even) td:first-child {{ background: #f7f9fc; }}
 .compare-decision-largest {{ margin-top: 4px; color: #182230; }}
 .compare-decision-why, .compare-decision-next {{ margin-top: 2px; font-size: 11px; color: #5f6f82; }}
 .compare-decision-sig {{ margin-top: 2px; font-size: 10px; color: #7a8690; }}
+.compare-verdict {{ margin-top: 6px; }}
+.compare-verdict-chip {{
+  display: inline-block; padding: 2px 10px; border-radius: 999px;
+  font-weight: 700; font-size: 12px; letter-spacing: 0.04em; color: #fff;
+}}
+.compare-verdict-chip.tone-regressed {{ background: #c0392b; }}
+.compare-verdict-chip.tone-improved {{ background: #1f6b45; }}
+.compare-verdict-chip.tone-mixed {{ background: #c87a12; }}
+.compare-verdict-chip.tone-neutral {{ background: #6b7a8d; }}
+.compare-verdict-bullets {{ margin: 6px 0 0; padding-left: 18px; }}
+.compare-verdict-bullets li {{ margin: 1px 0; color: #182230; }}
+.compare-verdict-bullets li.reg {{ color: #9b2c2c; }}
+.compare-verdict-bullets li.imp {{ color: #1f6b45; }}
+.compare-verdict-none {{ margin-top: 6px; color: #5f6f82; font-size: 11px; }}
+.compare-comparability-warn {{
+  margin: 0 0 8px; padding: 8px 10px; border-radius: 6px;
+  background: #fdf0e2; border-left: 4px solid #c87a12; color: #6b4a12;
+}}
+.compare-comparability-head {{ font-weight: 700; }}
+.compare-comparability-warn ul {{ margin: 4px 0 0; padding-left: 18px; }}
+.compare-comparability-warn li {{ margin: 1px 0; }}
 .compare-chart {{ margin: 0 0 12px; overflow-x: auto; }}
 .compare-chart svg {{ max-width: 100%; height: auto; display: block; }}
 .table-tools {{ margin: 8px 0 12px; }}
@@ -6063,7 +6109,11 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
             ["Range", ident_a.get("span") or "—", ident_b.get("span") or "—"],
             ["Tick mode", ident_a.get("tick_mode") or "—", ident_b.get("tick_mode") or "—"],
         ]
-        verdict = str(notable.get("verdict") or "").strip()
+        verdict_label = str(notable.get("verdict_label") or "SIMILAR")
+        verdict_tone = str(notable.get("verdict_tone") or "neutral")
+        verdict_bullets = notable.get("verdict_bullets") or []
+        comparability = notable.get("comparability") or {}
+        comp_warnings = list(comparability.get("warnings") or [])
         cards = notable.get("cards") or {}
         notable_rows = [
             [r.get("status"), r.get("label"), r.get("a"), r.get("b"), r.get("change")]
@@ -6104,8 +6154,36 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
         parts = ['<section class="report-card"><h2>Overview</h2>'
                  '<p class="detail-note">Verdict, identity, and engineering-significant '
                  "deltas between Baseline A and Candidate B.</p>"]
-        if verdict:
-            parts.append(f'<p class="overview-why">{_esc(verdict)}</p>')
+        if comp_warnings:
+            parts.append(
+                '<div class="compare-comparability-warn">'
+                '<div class="compare-comparability-head">⚠ Traces may not be '
+                'directly comparable</div><ul>'
+                + "".join(f"<li>{_esc(w)}</li>" for w in comp_warnings)
+                + "</ul></div>"
+            )
+        parts.append(
+            '<div class="compare-verdict">'
+            f'<span class="compare-verdict-chip tone-{_esc(verdict_tone)}">'
+            f'{_esc(verdict_label)}</span>'
+        )
+        if verdict_bullets:
+            parts.append('<ul class="compare-verdict-bullets">')
+            for _b in verdict_bullets:
+                _st = str(_b.get("status") or "")
+                _gl = "▲" if _st == "Regressed" else "▼" if _st == "Improved" else "•"
+                _cls = "reg" if _st == "Regressed" else "imp" if _st == "Improved" else ""
+                parts.append(
+                    f'<li class="{_cls}">{_gl} {_esc(_b.get("label"))} — '
+                    f'{_esc(_b.get("change"))}</li>'
+                )
+            parts.append("</ul>")
+        else:
+            parts.append(
+                '<div class="compare-verdict-none">No metric changed beyond the '
+                "significance threshold.</div>"
+            )
+        parts.append("</div>")
         nxt = str(notable.get("next_investigation") or "").strip()
         if nxt:
             parts.append(f'<p class="overview-why">{_esc(nxt)}</p>')

@@ -8,6 +8,7 @@ import {
   collectWorstEvents,
   compareSummaryStrip,
   compareNotableChanges,
+  compareTraceShapeWarnings,
   compareInvestigateTarget,
   compareSectionForMetric,
   compareTaskForRow,
@@ -333,6 +334,33 @@ describe('uxExplore', () => {
     assert.equal(compareSectionForMetric('T1 exec max', 'exec max'), 'exec')
     assert.equal(compareTaskForRow('QP[198] response p99', 'response p99'), 'QP[198]')
     assert.equal(compareInvestigateTarget({ rows: [] }).section_id, 'response')
+    // Structured verdict: one-word label + tone + top-change bullets.
+    assert.equal(notable.verdict_label, 'MIXED')
+    assert.equal(notable.verdict_tone, 'mixed')
+    assert.ok(notable.verdict_bullets.length > 0 && notable.verdict_bullets.length <= 3)
+    assert.ok(notable.comparability)
+  })
+
+  it('trace shape warnings feed comparability', () => {
+    const warns = compareTraceShapeWarnings(
+      4, 8, ['A', 'B', 'C', 'D'], ['A', 'X', 'Y', 'Z', 'W'], 1_000_000, 9_000_000)
+    assert.equal(warns.length, 3)
+    assert.ok(warns.some(w => w.includes('Core count differs')))
+    assert.ok(warns.some(w => w.includes('Task sets differ')))
+    assert.ok(warns.some(w => w.includes('durations differ')))
+    assert.deepEqual(
+      compareTraceShapeWarnings(4, 4, ['A', 'B', 'C'], ['A', 'B', 'C'], 1e6, 1.1e6), [])
+    const notable = compareNotableChanges({
+      summary: [{ label: 'Span', a: '1 ms', b: '9 ms', delta: '-8 ms' }],
+      shape: {
+        cores_a: 4, cores_b: 8,
+        task_names_a: ['A'], task_names_b: ['B'],
+        span_a_ns: 1_000_000, span_b_ns: 9_000_000,
+      },
+    }, 8, 'a.btf', 'b.btf')
+    assert.equal(notable.comparability.comparable, false)
+    assert.ok(notable.comparability.warnings.length > 0)
+    assert.equal(notable.verdict_label, 'SIMILAR')
   })
 
   it('compare charts and migration views', () => {

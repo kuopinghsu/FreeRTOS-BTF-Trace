@@ -85,9 +85,50 @@
             v-if="compareDecision.visible"
             class="compare-decision"
           >
+            <div
+              v-if="!compareDecision.comparability.comparable"
+              class="compare-comparability-warn"
+            >
+              <div class="compare-comparability-head">
+                ⚠ Traces may not be directly comparable
+              </div>
+              <ul>
+                <li
+                  v-for="(w, i) in compareDecision.comparability.warnings"
+                  :key="i"
+                >
+                  {{ w }}
+                </li>
+              </ul>
+            </div>
             <div class="compare-decision-identity">{{ compareDecision.identity }}</div>
+            <div class="compare-verdict">
+              <span
+                class="compare-verdict-chip"
+                :class="'tone-' + compareDecision.verdictTone"
+              >{{ compareDecision.verdictLabel }}</span>
+              <ul
+                v-if="compareDecision.bullets.length"
+                class="compare-verdict-bullets"
+              >
+                <li
+                  v-for="(b, i) in compareDecision.bullets"
+                  :key="i"
+                  :class="b.status === 'Regressed' ? 'reg' : b.status === 'Improved' ? 'imp' : ''"
+                >
+                  {{ b.glyph }} {{ b.label }} — {{ b.change }}
+                </li>
+              </ul>
+              <div
+                v-else
+                class="compare-verdict-none"
+              >
+                No metric changed beyond the significance threshold.
+              </div>
+            </div>
             <div class="compare-decision-counts">{{ compareDecision.counts }}</div>
             <div
+              v-if="compareDecision.largest"
               class="compare-decision-largest"
               :class="{ clickable: compareDecision.largestClickable }"
               :title="compareDecision.largestClickable
@@ -96,12 +137,6 @@
               @click="compareDecision.largestClickable && investigateSide('b')"
             >
               {{ compareDecision.largest }}
-            </div>
-            <div
-              v-if="compareDecision.why"
-              class="compare-decision-why"
-            >
-              Why? {{ compareDecision.why }}
             </div>
             <div
               v-if="compareDecision.next"
@@ -735,6 +770,14 @@
           </svg>
           Export HTML
         </button>
+        <button
+          type="button"
+          class="compare-export-btn"
+          title="Close"
+          @click="emit('close')"
+        >
+          Close
+        </button>
         </div>
       </div>
     </div>
@@ -759,6 +802,7 @@ import {
   buildMutexBlockCompareRows,
   buildSharedPatternCompareRows,
   buildAllCompareTables,
+  compareTraceShapeInfo,
   downloadCompareHtml,
   crossTraceTrends,
   traceSummarySnapshot,
@@ -1114,6 +1158,8 @@ const compareDecision = computed(() => {
     response: responseCompareRows.value,
     mutex_block: mutexBlockCompareRows.value,
     shared_patterns: sharedPatternRows.value,
+    shape: compareTraceShapeInfo(
+      traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value),
   }, 4, tabA.value?.name ?? '', tabB.value?.name ?? '')
   const notable = data.notable || {}
   const identity = notable.identity || {}
@@ -1127,16 +1173,22 @@ const compareDecision = computed(() => {
   const nImp = Number(cards.improvements ?? (data.improvements || []).length) || 0
   const nWarn = Number(cards.warnings ?? (data.warnings || []).length) || 0
   const top = regs[0]
-  const largest = top
-    ? `Largest regression — ${top.label}: ${top.change}`
-    : (String(notable.verdict || '').trim() || 'No significant regressions')
-  const why = String(data.why || '').trim()
+  const largest = top ? `Largest regression — ${top.label}: ${top.change}` : ''
   const next = String(notable.next_investigation || '').trim()
   const omitted = Number(notable.small_omitted_count || 0) || 0
   const sigNote = (Number(cards.significant || 0) || omitted)
     ? 'Showing engineering-significant deltas only (small changes omitted)'
     : ''
-  const visible = !!(nReg || nImp || nWarn || top || why || next || notable.verdict)
+  const comparability = notable.comparability || { comparable: true, warnings: [] }
+  const bullets = (notable.verdict_bullets || []).map(b => ({
+    label: b.label,
+    change: b.change,
+    status: b.status,
+    glyph: b.status === 'Regressed' ? '▲' : b.status === 'Improved' ? '▼' : '•',
+  }))
+  const visible = !!(
+    nReg || nImp || nWarn || top || next
+    || (comparability.warnings || []).length || notable.verdict)
   const investigate = notable.investigate || compareInvestigateTarget(notable)
   return {
     visible,
@@ -1146,9 +1198,12 @@ const compareDecision = computed(() => {
     counts:
       `${nReg} REGRESSIONS    ${nImp} IMPROVEMENTS` +
       (nWarn ? `    ${nWarn} WARNING${nWarn === 1 ? '' : 'S'}` : ''),
+    verdictLabel: String(notable.verdict_label || 'SIMILAR'),
+    verdictTone: String(notable.verdict_tone || 'neutral'),
+    bullets,
+    comparability,
     largest,
     largestClickable: !!top,
-    why,
     next,
     sigNote,
     investigate,
@@ -1510,6 +1565,55 @@ function onScoreBaseline() {
   margin-top: 2px;
   color: var(--fg-dim, #7a8690);
   font-size: 10px;
+}
+.compare-verdict {
+  margin-top: 6px;
+}
+.compare-verdict-chip {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: #fff;
+}
+.compare-verdict-chip.tone-regressed { background: #c0392b; }
+.compare-verdict-chip.tone-improved { background: #1f6b45; }
+.compare-verdict-chip.tone-mixed { background: #c87a12; }
+.compare-verdict-chip.tone-neutral { background: #6b7a8d; }
+.compare-verdict-bullets {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.compare-verdict-bullets li {
+  margin: 1px 0;
+  color: var(--fg, #e0e0e0);
+}
+.compare-verdict-bullets li.reg { color: #e57373; }
+.compare-verdict-bullets li.imp { color: #81c784; }
+.compare-verdict-none {
+  margin-top: 6px;
+  color: var(--fg-dim, #9a9a9a);
+  font-size: 11px;
+}
+.compare-comparability-warn {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(200, 122, 18, 0.16);
+  border-left: 3px solid #c87a12;
+  color: var(--fg, #e8c9a0);
+}
+.compare-comparability-head {
+  font-weight: 700;
+}
+.compare-comparability-warn ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.compare-comparability-warn li {
+  margin: 1px 0;
 }
 .compare-strip {
   margin: 8px 14px 0;

@@ -2394,13 +2394,16 @@ class TimelineScene(QGraphicsScene):
                     seg,
                 ))
                 xs.append((x1, x1 + w, i_s))
-            _inline_labels = len(seg_data) <= 48
+            # Inline "Name[id] · pri N" on every wide-enough segment, matching the
+            # web renderer (paintSegments: label on any seg ≥ ~40px at full LOD).
+            # _BatchRowItem.paint() gates the text pass by LOD tier + per-segment
+            # width, so no row-level segment-count cap is needed here.
             batch = _BatchRowItem(
                 QRectF(lw, y_top, timeline_w, self._row_height),
                 seg_data, trace.time_scale,
-                label_font=font_inline if _inline_labels else None,
-                label_fm=fm_inline if _inline_labels else None,
-                label_text=disp if _inline_labels else "",
+                label_font=font_inline,
+                label_fm=fm_inline,
+                label_text=disp,
                 trace=trace,
                 xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px)
             batch.setZValue(1)
@@ -2653,13 +2656,16 @@ class TimelineScene(QGraphicsScene):
                     seg,
                 ))
                 xs.append((y1, y1 + h, i_s))
-            _inline_labels = len(seg_data) <= 48
+            # Inline "Name[id] · pri N" on every wide-enough segment, matching the
+            # web renderer (paintSegments: label on any seg ≥ ~40px at full LOD).
+            # _BatchRowItem.paint() gates the text pass by LOD tier + per-segment
+            # width, so no column-level segment-count cap is needed here.
             batch = _BatchRowItem(
                 QRectF(x_left, label_row_h, col_w, timeline_h),
                 seg_data, trace.time_scale,
-                label_font=font_inline if _inline_labels else None,
-                label_fm=fm_inline if _inline_labels else None,
-                label_text=disp if _inline_labels else "",
+                label_font=font_inline,
+                label_fm=fm_inline,
+                label_text=disp,
                 trace=trace,
                 xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px,
                 time_decimals=self._time_decimals)
@@ -2995,7 +3001,7 @@ class TimelineScene(QGraphicsScene):
                 self._frozen_items.append((stripe, 0))
 
                 # Clickable label background for sub-task row
-                disp      = _task_display_name(task_name)
+                disp      = _task_display_name(task_name) + _task_priority_label_suffix(trace, _tmk)
                 sub_lbl_bg = _TaskLabelItem(
                     QRectF(0, y_top2, lw, self._row_height), _tmk, self,
                     tooltip_text=disp, core_name=core)
@@ -3306,7 +3312,7 @@ class TimelineScene(QGraphicsScene):
                 self._frozen_top_items.append((stripe, stripe.pos().y()))
 
                 # Clickable sub-task column label
-                disp      = _task_display_name(task_name)
+                disp      = _task_display_name(task_name) + _task_priority_label_suffix(trace, _tmk)
                 sub_lbl_bg = _TaskLabelItem(
                     QRectF(x_left2, 0, col_w, label_row_h), _tmk, self,
                     tooltip_text=disp, core_name=core)

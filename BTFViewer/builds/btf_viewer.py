@@ -6736,15 +6736,17 @@ def _migration_rows(trace: "BtfTrace",
         dwell_samples = _core_dwell_samples(segs, lo, hi)
         avg_dwell_tu = int(round(sum(dwell_samples) / len(dwell_samples))) if dwell_samples else 0
         migr_rate, rate_per_s = _format_migration_rate(len(migs), total, tick_count, scale)
-        avg_dwell = _format_time(avg_dwell_tu, scale) if avg_dwell_tu else "-"
+        # Dwell / gap columns: trim trailing zeros to match the web Core
+        # Migrations table + Analysis finding (web uses formatTime/formatMigrationGapTime).
+        avg_dwell = _format_time_web(avg_dwell_tu, scale) if avg_dwell_tu else "-"
         raw = trace.task_repr.get(mk, mk)
         disp = _task_display_name(raw)
         cores_str = ", ".join(sorted(cores_in_scope or cores, key=_core_sort_key_tuple))
         rows.append((
             mk, disp, len(migs), n_cores, cores_str, primary, primary_pct,
             ping, sti_near,
-            _format_time(int(avg_after), scale) if avg_after else "-",
-            _format_time(int(avg_other), scale) if avg_other else "-",
+            _format_time_web(int(avg_after), scale) if avg_after else "-",
+            _format_time_web(int(avg_other), scale) if avg_other else "-",
             migr_rate, rate_per_s, avg_dwell, avg_dwell_tu,
         ))
     rows.sort(key=lambda r: (-r[2], r[1].lower()))
@@ -9298,6 +9300,16 @@ def _build_trace_compare_rows(
         "mutex_block": mutex_rows,
         "shared_patterns": extras.get("shared_patterns") or [],
         "trends": trend_rows,
+        "shape": {
+            "cores_a": len(trace_a.core_names or []),
+            "cores_b": len(trace_b.core_names or []),
+            "task_names_a": sorted({_task_display_name(trace_a.task_repr.get(mk, mk))
+                                    for mk in trace_a.tasks}),
+            "task_names_b": sorted({_task_display_name(trace_b.task_repr.get(mk, mk))
+                                    for mk in trace_b.tasks}),
+            "span_a_ns": a["span_ns"],
+            "span_b_ns": b["span_ns"],
+        },
     }
 
 _CSV_FORMULA_LEAD_CHARS = ("=", "+", "-", "@", "\t", "\r")
@@ -9362,7 +9374,20 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
     lines.append(f"Cursor scope per tab,{'yes' if scope_enabled else 'no'}")
     lines.append("")
     lines.append("Overview")
-    lines.append(f"Verdict,{_compare_csv_cell(notable.get('verdict') or '')}")
+    lines.append(f"Verdict,{_compare_csv_cell(notable.get('verdict_label') or 'SIMILAR')}")
+    for _b in notable.get("verdict_bullets") or []:
+        lines.append(
+            "Verdict change,"
+            f"{_compare_csv_cell(_b.get('status'))},"
+            f"{_compare_csv_cell(_b.get('label'))},"
+            f"{_compare_csv_cell(_b.get('change'))}"
+        )
+    _comp = notable.get("comparability") or {}
+    lines.append(
+        f"Comparability,{'ok' if _comp.get('comparable', True) else 'WARNING'}"
+    )
+    for _cw in _comp.get("warnings") or []:
+        lines.append(f"Comparability warning,{_compare_csv_cell(_cw)}")
     nxt = str(notable.get("next_investigation") or "").strip()
     if nxt:
         lines.append(f"Next investigation,{_compare_csv_cell(nxt)}")
@@ -9516,6 +9541,27 @@ tbody tr:nth-child(even) td:first-child {{ background: #f7f9fc; }}
 .compare-decision-largest {{ margin-top: 4px; color: #182230; }}
 .compare-decision-why, .compare-decision-next {{ margin-top: 2px; font-size: 11px; color: #5f6f82; }}
 .compare-decision-sig {{ margin-top: 2px; font-size: 10px; color: #7a8690; }}
+.compare-verdict {{ margin-top: 6px; }}
+.compare-verdict-chip {{
+  display: inline-block; padding: 2px 10px; border-radius: 999px;
+  font-weight: 700; font-size: 12px; letter-spacing: 0.04em; color: #fff;
+}}
+.compare-verdict-chip.tone-regressed {{ background: #c0392b; }}
+.compare-verdict-chip.tone-improved {{ background: #1f6b45; }}
+.compare-verdict-chip.tone-mixed {{ background: #c87a12; }}
+.compare-verdict-chip.tone-neutral {{ background: #6b7a8d; }}
+.compare-verdict-bullets {{ margin: 6px 0 0; padding-left: 18px; }}
+.compare-verdict-bullets li {{ margin: 1px 0; color: #182230; }}
+.compare-verdict-bullets li.reg {{ color: #9b2c2c; }}
+.compare-verdict-bullets li.imp {{ color: #1f6b45; }}
+.compare-verdict-none {{ margin-top: 6px; color: #5f6f82; font-size: 11px; }}
+.compare-comparability-warn {{
+  margin: 0 0 8px; padding: 8px 10px; border-radius: 6px;
+  background: #fdf0e2; border-left: 4px solid #c87a12; color: #6b4a12;
+}}
+.compare-comparability-head {{ font-weight: 700; }}
+.compare-comparability-warn ul {{ margin: 4px 0 0; padding-left: 18px; }}
+.compare-comparability-warn li {{ margin: 1px 0; }}
 .compare-chart {{ margin: 0 0 12px; overflow-x: auto; }}
 .compare-chart svg {{ max-width: 100%; height: auto; display: block; }}
 .table-tools {{ margin: 8px 0 12px; }}
@@ -9598,7 +9644,11 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
             ["Range", ident_a.get("span") or "—", ident_b.get("span") or "—"],
             ["Tick mode", ident_a.get("tick_mode") or "—", ident_b.get("tick_mode") or "—"],
         ]
-        verdict = str(notable.get("verdict") or "").strip()
+        verdict_label = str(notable.get("verdict_label") or "SIMILAR")
+        verdict_tone = str(notable.get("verdict_tone") or "neutral")
+        verdict_bullets = notable.get("verdict_bullets") or []
+        comparability = notable.get("comparability") or {}
+        comp_warnings = list(comparability.get("warnings") or [])
         cards = notable.get("cards") or {}
         notable_rows = [
             [r.get("status"), r.get("label"), r.get("a"), r.get("b"), r.get("change")]
@@ -9639,8 +9689,36 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
         parts = ['<section class="report-card"><h2>Overview</h2>'
                  '<p class="detail-note">Verdict, identity, and engineering-significant '
                  "deltas between Baseline A and Candidate B.</p>"]
-        if verdict:
-            parts.append(f'<p class="overview-why">{_esc(verdict)}</p>')
+        if comp_warnings:
+            parts.append(
+                '<div class="compare-comparability-warn">'
+                '<div class="compare-comparability-head">⚠ Traces may not be '
+                'directly comparable</div><ul>'
+                + "".join(f"<li>{_esc(w)}</li>" for w in comp_warnings)
+                + "</ul></div>"
+            )
+        parts.append(
+            '<div class="compare-verdict">'
+            f'<span class="compare-verdict-chip tone-{_esc(verdict_tone)}">'
+            f'{_esc(verdict_label)}</span>'
+        )
+        if verdict_bullets:
+            parts.append('<ul class="compare-verdict-bullets">')
+            for _b in verdict_bullets:
+                _st = str(_b.get("status") or "")
+                _gl = "▲" if _st == "Regressed" else "▼" if _st == "Improved" else "•"
+                _cls = "reg" if _st == "Regressed" else "imp" if _st == "Improved" else ""
+                parts.append(
+                    f'<li class="{_cls}">{_gl} {_esc(_b.get("label"))} — '
+                    f'{_esc(_b.get("change"))}</li>'
+                )
+            parts.append("</ul>")
+        else:
+            parts.append(
+                '<div class="compare-verdict-none">No metric changed beyond the '
+                "significance threshold.</div>"
+            )
+        parts.append("</div>")
         nxt = str(notable.get("next_investigation") or "").strip()
         if nxt:
             parts.append(f'<p class="overview-why">{_esc(nxt)}</p>')
@@ -11124,6 +11202,48 @@ def _format_time_trim(value: float, time_scale: str = "ns") -> str:
     if not frac:
         return f"{whole} {unit}"
     return f"{whole}.{frac} {unit}"
+
+
+def _format_time_web(value: float, time_scale: str = "ns", decimals: int = 3) -> str:
+    """1:1 port of the web app's ``formatTime`` (``web/src/utils/timeFormat.js``).
+
+    Used only by the Marks / Cursor panels so their rows render byte-for-byte
+    like the web ``CursorPanel`` / ``MarksPanel`` / cursor-range block.  It
+    differs from :func:`_format_time` in the two ways the web helper is spec'd
+    to behave:
+
+    * whole values in the trace's base unit print with no decimals
+      (``2 µs`` — not ``2.000 µs``);
+    * a value smaller than one base unit is NOT down-shifted when
+      *time_scale* is not ``ns`` (``0.5`` in a ``us`` trace → ``0.500 µs``,
+      not ``500.000 ns``).
+
+    Scaling *up* from the base unit to µs / ms / s is unchanged from
+    :func:`_format_time` — keep the two in step if either side moves.
+    """
+    def _base(v: float, unit: str) -> str:
+        return f"{int(v)} {unit}" if float(v).is_integer() else f"{v:.{decimals}f} {unit}"
+
+    t = value
+    if time_scale == "ns":
+        if t >= 1e9:
+            return f"{t / 1e9:.{decimals}f} s"
+        if t >= 1e6:
+            return f"{t / 1e6:.{decimals}f} ms"
+        if t >= 1e3:
+            return f"{t / 1e3:.{decimals}f} µs"
+        return _base(t, "ns")
+    if time_scale == "us":
+        if t >= 1e6:
+            return f"{t / 1e6:.{decimals}f} s"
+        if t >= 1e3:
+            return f"{t / 1e3:.{decimals}f} ms"
+        return _base(t, "µs")
+    if time_scale == "ms":
+        if t >= 1e3:
+            return f"{t / 1e3:.{decimals}f} s"
+        return _base(t, "ms")
+    return _base(t, time_scale)
 
 _TIME_LABEL_TO_NS: Dict[str, float] = {
     "ns": 1.0,
@@ -14044,13 +14164,16 @@ class TimelineScene(QGraphicsScene):
                     seg,
                 ))
                 xs.append((x1, x1 + w, i_s))
-            _inline_labels = len(seg_data) <= 48
+            # Inline "Name[id] · pri N" on every wide-enough segment, matching the
+            # web renderer (paintSegments: label on any seg ≥ ~40px at full LOD).
+            # _BatchRowItem.paint() gates the text pass by LOD tier + per-segment
+            # width, so no row-level segment-count cap is needed here.
             batch = _BatchRowItem(
                 QRectF(lw, y_top, timeline_w, self._row_height),
                 seg_data, trace.time_scale,
-                label_font=font_inline if _inline_labels else None,
-                label_fm=fm_inline if _inline_labels else None,
-                label_text=disp if _inline_labels else "",
+                label_font=font_inline,
+                label_fm=fm_inline,
+                label_text=disp,
                 trace=trace,
                 xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px)
             batch.setZValue(1)
@@ -14303,13 +14426,16 @@ class TimelineScene(QGraphicsScene):
                     seg,
                 ))
                 xs.append((y1, y1 + h, i_s))
-            _inline_labels = len(seg_data) <= 48
+            # Inline "Name[id] · pri N" on every wide-enough segment, matching the
+            # web renderer (paintSegments: label on any seg ≥ ~40px at full LOD).
+            # _BatchRowItem.paint() gates the text pass by LOD tier + per-segment
+            # width, so no column-level segment-count cap is needed here.
             batch = _BatchRowItem(
                 QRectF(x_left, label_row_h, col_w, timeline_h),
                 seg_data, trace.time_scale,
-                label_font=font_inline if _inline_labels else None,
-                label_fm=fm_inline if _inline_labels else None,
-                label_text=disp if _inline_labels else "",
+                label_font=font_inline,
+                label_fm=fm_inline,
+                label_text=disp,
                 trace=trace,
                 xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px,
                 time_decimals=self._time_decimals)
@@ -14645,7 +14771,7 @@ class TimelineScene(QGraphicsScene):
                 self._frozen_items.append((stripe, 0))
 
                 # Clickable label background for sub-task row
-                disp      = _task_display_name(task_name)
+                disp      = _task_display_name(task_name) + _task_priority_label_suffix(trace, _tmk)
                 sub_lbl_bg = _TaskLabelItem(
                     QRectF(0, y_top2, lw, self._row_height), _tmk, self,
                     tooltip_text=disp, core_name=core)
@@ -14956,7 +15082,7 @@ class TimelineScene(QGraphicsScene):
                 self._frozen_top_items.append((stripe, stripe.pos().y()))
 
                 # Clickable sub-task column label
-                disp      = _task_display_name(task_name)
+                disp      = _task_display_name(task_name) + _task_priority_label_suffix(trace, _tmk)
                 sub_lbl_bg = _TaskLabelItem(
                     QRectF(x_left2, 0, col_w, label_row_h), _tmk, self,
                     tooltip_text=disp, core_name=core)
@@ -49365,15 +49491,19 @@ def compare_summary_decision_html(
         )
     else:
         largest = str(notable.get("verdict") or "").strip() or "No significant regressions"
-    why = str(data.get("why") or "").strip()
     nxt = str(notable.get("next_investigation") or "").strip()
     omitted = int(notable.get("small_omitted_count") or 0)
     sig_note = (
         "Showing engineering-significant deltas only (small changes omitted)"
         if (int(cards.get("significant") or 0) or omitted) else ""
     )
+    label = str(notable.get("verdict_label") or "SIMILAR")
+    tone = str(notable.get("verdict_tone") or "neutral")
+    bullets = notable.get("verdict_bullets") or []
+    comparability = notable.get("comparability") or {}
+    comp_warnings = list(comparability.get("warnings") or [])
     visible = bool(
-        n_reg or n_imp or n_warn or top or why or nxt or notable.get("verdict")
+        n_reg or n_imp or n_warn or top or nxt or comp_warnings or notable.get("verdict")
     )
     if not visible:
         return ""
@@ -49386,15 +49516,45 @@ def compare_summary_decision_html(
         f"{n_reg} REGRESSIONS    {n_imp} IMPROVEMENTS"
         + (f"    {n_warn} WARNING{'S' if n_warn != 1 else ''}" if n_warn else "")
     )
-    parts = [
-        '<div class="compare-decision">',
-        f'<div class="compare-decision-identity">{html.escape(ident)}</div>',
-        f'<div class="compare-decision-counts">{html.escape(counts)}</div>',
-        f'<div class="compare-decision-largest">{html.escape(largest)}</div>',
-    ]
-    if why:
+    parts = ['<div class="compare-decision">']
+    if comp_warnings:
+        parts.append('<div class="compare-comparability-warn">')
         parts.append(
-            f'<div class="compare-decision-why">Why? {html.escape(why)}</div>'
+            '<div class="compare-comparability-head">⚠ Traces may not be '
+            'directly comparable</div><ul>'
+        )
+        for w in comp_warnings:
+            parts.append(f"<li>{html.escape(str(w))}</li>")
+        parts.append("</ul></div>")
+    parts.append(
+        f'<div class="compare-decision-identity">{html.escape(ident)}</div>'
+    )
+    parts.append(
+        f'<div class="compare-verdict">'
+        f'<span class="compare-verdict-chip tone-{html.escape(tone)}">'
+        f'{html.escape(label)}</span>'
+    )
+    if bullets:
+        parts.append('<ul class="compare-verdict-bullets">')
+        for b in bullets:
+            st = str(b.get("status") or "")
+            glyph = "▲" if st == "Regressed" else "▼" if st == "Improved" else "•"
+            cls = "reg" if st == "Regressed" else "imp" if st == "Improved" else ""
+            txt = f"{b.get('label')} — {b.get('change')}"
+            parts.append(
+                f'<li class="{cls}">{html.escape(glyph)} {html.escape(txt)}</li>'
+            )
+        parts.append("</ul>")
+    else:
+        parts.append(
+            '<div class="compare-verdict-none">No metric changed beyond the '
+            'significance threshold.</div>'
+        )
+    parts.append("</div>")  # .compare-verdict
+    parts.append(f'<div class="compare-decision-counts">{html.escape(counts)}</div>')
+    if top:
+        parts.append(
+            f'<div class="compare-decision-largest">{html.escape(largest)}</div>'
         )
     if nxt:
         parts.append(
@@ -49660,6 +49820,51 @@ def _extra_summary_candidates(tables: dict) -> List[dict]:
     return extra
 
 
+def compare_trace_shape_warnings(
+    cores_a, cores_b, task_names_a, task_names_b, span_a_ns, span_b_ns,
+) -> List[str]:
+    """Flag structural mismatches that make an A/B trace comparison unreliable.
+
+    Returns human-readable warning strings (empty when the two traces are
+    structurally similar enough to compare): different CPU-core count,
+    substantially different task sets (<60% shared names), or trace spans
+    that differ by more than 4x.
+    """
+    out: List[str] = []
+    n_ca, n_cb = int(cores_a or 0), int(cores_b or 0)
+    if n_ca and n_cb and n_ca != n_cb:
+        out.append(
+            f"Core count differs — Baseline A ran on {n_ca} core(s), "
+            f"Candidate B on {n_cb}. Per-core, migration and load-balance "
+            f"metrics are not directly comparable."
+        )
+    set_a = {str(t) for t in (task_names_a or []) if str(t)}
+    set_b = {str(t) for t in (task_names_b or []) if str(t)}
+    if set_a and set_b:
+        inter, union = set_a & set_b, set_a | set_b
+        jaccard = len(inter) / len(union) if union else 1.0
+        if jaccard < 0.6:
+            bits: List[str] = []
+            only_a, only_b = sorted(set_a - set_b)[:3], sorted(set_b - set_a)[:3]
+            if only_a:
+                bits.append("only in A: " + ", ".join(only_a))
+            if only_b:
+                bits.append("only in B: " + ", ".join(only_b))
+            tail = (" " + "; ".join(bits) + ".") if bits else ""
+            out.append(
+                f"Task sets differ substantially — {len(inter)}/{len(union)} "
+                f"task names in common ({jaccard * 100:.0f}%).{tail}"
+            )
+    span_a, span_b = float(span_a_ns or 0.0), float(span_b_ns or 0.0)
+    hi, lo = max(span_a, span_b), min(span_a, span_b)
+    if lo > 0 and hi / lo > 4.0:
+        out.append(
+            f"Trace durations differ by {hi / lo:.1f}× — rates and "
+            f"totals across such different spans may be misleading."
+        )
+    return out
+
+
 def compare_notable_changes(
     tables: dict,
     limit: int = 8,
@@ -49790,8 +49995,48 @@ def compare_notable_changes(
         )
     span_a, span_b = _compare_summary_pair(tables, "Span")
     mode_a, mode_b = _compare_summary_pair(tables, "Tick mode")
+
+    # Structured verdict (one-word label + tone + top-change bullets) so the
+    # UI can show a scannable result instead of a long prose sentence.
+    if n_reg and n_imp:
+        verdict_label = "MIXED"
+    elif n_reg:
+        verdict_label = "REGRESSED"
+    elif n_imp:
+        verdict_label = "IMPROVED"
+    else:
+        verdict_label = "SIMILAR"
+    verdict_tone = {
+        "MIXED": "mixed", "REGRESSED": "regressed",
+        "IMPROVED": "improved", "SIMILAR": "neutral",
+    }[verdict_label]
+    verdict_bullets = [
+        {"label": r["label"], "change": r["change"], "status": r["status"]}
+        for r in classified[:3]
+    ]
+
+    # Comparability check — flag structural mismatches (core count, task set,
+    # span) that make an A/B comparison unreliable.  `shape` is injected by
+    # the table builder / dialog, which have the raw traces.
+    shape = tables.get("shape") if isinstance(tables, dict) else None
+    comparability_warnings: List[str] = []
+    if isinstance(shape, dict) and shape:
+        comparability_warnings = compare_trace_shape_warnings(
+            shape.get("cores_a"), shape.get("cores_b"),
+            shape.get("task_names_a"), shape.get("task_names_b"),
+            shape.get("span_a_ns"), shape.get("span_b_ns"),
+        )
+    cards["comparability"] = len(comparability_warnings)
+
     return {
         "verdict": verdict.strip(),
+        "verdict_label": verdict_label,
+        "verdict_tone": verdict_tone,
+        "verdict_bullets": verdict_bullets,
+        "comparability": {
+            "comparable": not comparability_warnings,
+            "warnings": comparability_warnings,
+        },
         "formula": COMPARE_DELTA_FORMULA,
         "identity": {
             "a": {"file": name_a or "Trace A", "span": span_a, "tick_mode": mode_a},
@@ -52488,15 +52733,24 @@ PERCENTILE_DECIMALS = 3
 NUMERIC_CELL_CLASS = "num-cell"
 
 
-def _format_time_trim(value: float, scale: str) -> str:
-    """Minimal parity with web formatTimeTrim — defers to timeline util when available."""
-    try:
-        format_time_trim # noqa: WPS433 = globals().get("format_time_trim # noqa: WPS433")
+def _num_format_time_trim(value: float, scale: str) -> str:
+    """Minimal parity with web formatTimeTrim.
 
-        return format_time_trim(value, scale)
+    Named distinctly from ``timeline_util._format_time_trim`` on purpose: the
+    monolithic bundle flattens every module into one namespace, so a second
+    ``_format_time_trim`` here would shadow the real (unit-scaling) helper and
+    every ``_build_trace_compare_rows`` cell would render as raw ``2.4e+06 us``.
+    """
+    try:
+        return _format_time_trim(value, scale)  # timeline_util's, via bundle/bootstrap flatten
+    except NameError:
+        pass
+    try:
+        _impl # noqa: WPS433 = globals().get("_format_time_trim")
+
+        return _impl(value, scale)
     except Exception:
-        v = float(value)
-        return f"{v:g} {scale}"
+        return f"{float(value):g} {scale}"
 
 
 def format_percentile(value: Optional[float], scale: str, kind: str = "") -> str:
@@ -52508,7 +52762,7 @@ def format_percentile(value: Optional[float], scale: str, kind: str = "") -> str
         return "—"
     if not v and v != 0:
         return "—"
-    return _format_time_trim(v, scale)
+    return _num_format_time_trim(v, scale)
 
 
 def format_ratio_pct(ratio: Optional[float]) -> str:
@@ -52550,7 +52804,7 @@ def format_signed_delta(delta: Optional[float], scale: str) -> str:
     if v == 0:
         return "—"
     sign = "+" if v > 0 else "−"
-    return f"{sign}{_format_time_trim(abs(v), scale)}"
+    return f"{sign}{_num_format_time_trim(abs(v), scale)}"
 # ===========================================================================
 # Semantic vs data colors (Step 3)
 # ===========================================================================
@@ -56566,10 +56820,24 @@ class _TraceCompareDialog(QDialog):
             "QWidget#compareDecision {"
             " background: rgba(52, 152, 219, 0.10); border-radius: 6px; }"
         )
+        self._dec_comparability = QLabel("")
+        self._dec_comparability.setWordWrap(True)
+        self._dec_comparability.setTextFormat(Qt.TextFormat.RichText)
+        self._dec_comparability.setStyleSheet(
+            "QLabel { background: rgba(200,122,18,0.18);"
+            " border-left: 3px solid #c87a12; color: #e8c9a0;"
+            " font-size: 11px; padding: 4px 8px; border-radius: 3px; }")
+        self._dec_comparability.hide()
+        dec.addWidget(self._dec_comparability)
         self._dec_identity = QLabel("")
         self._dec_identity.setWordWrap(True)
         self._dec_identity.setStyleSheet("QLabel { color: #9a9a9a; font-size: 11px; }")
         dec.addWidget(self._dec_identity)
+        self._dec_verdict = QLabel("")
+        self._dec_verdict.setWordWrap(True)
+        self._dec_verdict.setTextFormat(Qt.TextFormat.RichText)
+        self._dec_verdict.setStyleSheet("QLabel { font-size: 12px; }")
+        dec.addWidget(self._dec_verdict)
         self._dec_counts = QLabel("")
         self._dec_counts.setStyleSheet(
             "QLabel { color: #cfd8dc; font-weight: 600; font-size: 12px; }")
@@ -56726,10 +56994,40 @@ class _TraceCompareDialog(QDialog):
         self._pages.addTab(self._trends_table, "Trends")
         lay.addWidget(self._pages, 1)
 
-        exp_row = QHBoxLayout()
-        exp_row.setContentsMargins(8, 6, 8, 8)
-        exp_row.setSpacing(8)
+        # Footer — single row mirroring the web dialog (compare-dialog-footer):
+        #   [ Validate · Query AI · Save baseline · Score baseline ]  …  [ Export HTML · Close ]
+        self._ai_enabled = bool(ai_enabled)
+        self._on_query_ai = on_query_ai
+        self._on_validate_experiment = on_validate_experiment
+        self._on_compare = on_compare
+
+        foot_row = QHBoxLayout()
+        foot_row.setContentsMargins(8, 6, 8, 8)
+        foot_row.setSpacing(8)
         _ic = "#9E9E9E"
+
+        self._validate_btn = QPushButton("Validate experiment…")
+        self._validate_btn.clicked.connect(self._validate_with_ai)
+        foot_row.addWidget(self._validate_btn)
+
+        self._ai_btn = QPushButton("Query with AI…")
+        self._ai_btn.clicked.connect(self._query_with_ai)
+        foot_row.addWidget(self._ai_btn)
+
+        self._btn_save_baseline = QPushButton("Save as baseline")
+        self._btn_save_baseline.setToolTip(
+            "Store Trace A per-task metrics as the regression baseline")
+        self._btn_save_baseline.clicked.connect(self._save_as_baseline)
+        foot_row.addWidget(self._btn_save_baseline)
+
+        self._btn_score_baseline = QPushButton("Score vs baseline")
+        self._btn_score_baseline.setToolTip(
+            "Z-score Trace A metrics against the stored baseline")
+        self._btn_score_baseline.clicked.connect(self._score_vs_baseline)
+        foot_row.addWidget(self._btn_score_baseline)
+
+        foot_row.addStretch(1)
+
         self._btn_export_html = QPushButton("Export HTML")
         self._btn_export_html.setIcon(_svg_icon_markup(
             '<rect x="2.5" y="2" width="11" height="12" rx="1" fill="none" '
@@ -56738,37 +57036,16 @@ class _TraceCompareDialog(QDialog):
             f'stroke="{_ic}" stroke-width="1.2" stroke-linecap="round"/>',
         ))
         self._btn_export_html.setToolTip(
-            "Export compare report as HTML (tables include Search / Show all)")
+            "Export compare report as HTML (tables include Search / Show all / CSV)")
         self._btn_export_html.clicked.connect(self._export_html)
-        exp_row.addWidget(self._btn_export_html)
-        self._btn_save_baseline = QPushButton("Save as baseline")
-        self._btn_save_baseline.setToolTip(
-            "Store Trace A per-task metrics as the regression baseline")
-        self._btn_save_baseline.clicked.connect(self._save_as_baseline)
-        exp_row.addWidget(self._btn_save_baseline)
-        self._btn_score_baseline = QPushButton("Score vs baseline")
-        self._btn_score_baseline.setToolTip(
-            "Z-score Trace A metrics against the stored baseline")
-        self._btn_score_baseline.clicked.connect(self._score_vs_baseline)
-        exp_row.addWidget(self._btn_score_baseline)
-        exp_row.addStretch(1)
-        lay.addLayout(exp_row)
+        foot_row.addWidget(self._btn_export_html)
 
-        btns = QDialogButtonBox(QDialogButtonBox.Close)
-        self._ai_enabled = bool(ai_enabled)
-        self._on_query_ai = on_query_ai
-        self._on_validate_experiment = on_validate_experiment
-        self._on_compare = on_compare
-        self._validate_btn = btns.addButton(
-            "Validate experiment…", QDialogButtonBox.ButtonRole.ActionRole)
-        self._validate_btn.clicked.connect(self._validate_with_ai)
-        self._ai_btn = btns.addButton(
-            "Query with AI…", QDialogButtonBox.ButtonRole.ActionRole)
-        self._ai_btn.clicked.connect(self._query_with_ai)
+        self._btn_close = QPushButton("Close")
+        self._btn_close.clicked.connect(self.reject)
+        foot_row.addWidget(self._btn_close)
+
+        lay.addLayout(foot_row)
         self.set_ai_enabled(self._ai_enabled)
-        btns.rejected.connect(self.reject)
-        btns.accepted.connect(self.accept)
-        lay.addWidget(btns)
         self._win = win
         for i, tab in enumerate(win._tabs):
             label = os.path.basename(tab.path)
@@ -57167,6 +57444,50 @@ class _TraceCompareDialog(QDialog):
             f"{n_reg} REGRESSIONS    {n_imp} IMPROVEMENTS"
             + (f"    {n_warn} WARNING{'S' if n_warn != 1 else ''}" if n_warn else "")
         )
+        # Structured verdict: one-word chip + up to 3 top-change bullets
+        # (replaces the old prose sentence).
+        _tone_bg = {
+            "regressed": "#c0392b", "improved": "#1f6b45",
+            "mixed": "#c87a12", "neutral": "#6b7a8d",
+        }
+        label = str(notable.get("verdict_label") or "SIMILAR")
+        tone = str(notable.get("verdict_tone") or "neutral")
+        chip_bg = _tone_bg.get(tone, "#6b7a8d")
+        bullets = notable.get("verdict_bullets") or []
+        _b_html = []
+        for b in bullets:
+            st = str(b.get("status") or "")
+            glyph = "▲" if st == "Regressed" else "▼" if st == "Improved" else "•"
+            color = ("#e57373" if st == "Regressed"
+                     else "#81c784" if st == "Improved" else "#cfd8dc")
+            _b_html.append(
+                f'<div style="color:{color}; margin-top:2px;">{glyph} '
+                f'{html.escape(str(b.get("label")))} — '
+                f'{html.escape(str(b.get("change")))}</div>'
+            )
+        if not _b_html:
+            _b_html.append(
+                '<div style="color:#9a9a9a; margin-top:2px;">'
+                'No metric changed beyond the significance threshold.</div>'
+            )
+        self._dec_verdict.setText(
+            f'<span style="background:{chip_bg}; color:#fff; padding:1px 8px;'
+            f' border-radius:8px; font-weight:700;">{html.escape(label)}</span>'
+            + "".join(_b_html)
+        )
+        comp = notable.get("comparability") or {}
+        comp_warnings = list(comp.get("warnings") or [])
+        if comp_warnings:
+            self._dec_comparability.setText(
+                '<b>⚠ Traces may not be directly comparable</b>'
+                + "".join(
+                    f'<div style="margin-top:2px;">• {html.escape(str(w))}</div>'
+                    for w in comp_warnings
+                )
+            )
+            self._dec_comparability.show()
+        else:
+            self._dec_comparability.hide()
         regs = list(data.get("regressions") or [])
         if regs:
             top = regs[0]
@@ -57177,18 +57498,13 @@ class _TraceCompareDialog(QDialog):
             self._dec_largest.setCursor(Qt.CursorShape.PointingHandCursor)
             self._dec_largest.setToolTip(
                 "Open Statistics for this regression on the Candidate tab")
+            self._dec_largest.show()
         else:
-            verdict = str(notable.get("verdict") or "").strip()
-            self._dec_largest.setText(verdict or "No significant regressions")
             self._dec_largest_clickable = False
             self._dec_largest.setCursor(Qt.CursorShape.ArrowCursor)
             self._dec_largest.setToolTip("")
-        why = str(data.get("why") or "").strip()
-        if why:
-            self._dec_why.setText(f"Why? {why}")
-            self._dec_why.show()
-        else:
-            self._dec_why.hide()
+            self._dec_largest.hide()
+        self._dec_why.hide()
         nxt = str(notable.get("next_investigation") or "").strip()
         if nxt:
             self._dec_next.setText(nxt)
@@ -57204,7 +57520,7 @@ class _TraceCompareDialog(QDialog):
         else:
             self._dec_sig_note.hide()
         has = bool(
-            n_reg or n_imp or n_warn or regs or why or nxt
+            n_reg or n_imp or n_warn or regs or nxt or comp_warnings
             or notable.get("verdict")
         )
         decision.setVisible(has)
@@ -62503,6 +62819,73 @@ def _render_workflow_analysis_html(
     return html_finding_cards(findings, scope_title)
 
 
+class _SeamSplitterHandle(QSplitterHandle):
+    """Splitter handle painted like the timeline / stats-panel seam.
+
+    Qt's ``QSplitter::handle:hover`` QSS pseudo-state is unreliable (worse with
+    a custom ``createHandle``), so paint the 2px accent bar ourselves — same as
+    ``_PanelSeamResizer.paintEvent`` (``#4C8BF5`` alpha 150, centred, hover /
+    drag only).
+    """
+
+    def __init__(self, orientation, parent):
+        super().__init__(orientation, parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setMouseTracking(True)
+        self.setCursor(
+            Qt.CursorShape.SizeVerCursor
+            if orientation == Qt.Orientation.Vertical
+            else Qt.CursorShape.SizeHorCursor)
+        self._hover = False
+        self._pressed = False
+
+    def enterEvent(self, event):  # noqa: N802
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):  # noqa: N802
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):  # noqa: N802
+        self._pressed = True
+        self.update()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):  # noqa: N802
+        self._pressed = False
+        self.update()
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):  # noqa: N802
+        super().paintEvent(event)
+        if not (self._hover or self._pressed):
+            return
+        accent = QColor("#4C8BF5")
+        accent.setAlpha(150)
+        p = QPainter(self)
+        if self.orientation() == Qt.Orientation.Horizontal:
+            x = max(0, self.width() // 2 - 1)
+            p.fillRect(x, 0, 2, self.height(), accent)
+        else:
+            y = max(0, self.height() // 2 - 1)
+            p.fillRect(0, y, self.width(), 2, accent)
+        p.end()
+
+
+class _SeamSplitter(_ResizeSplitter):
+    """`_ResizeSplitter` that paints a seam-style hover bar on its handles."""
+
+    def createHandle(self):
+        handle = _SeamSplitterHandle(self.orientation(), self)
+        idx = self.count() - 1
+        if idx >= 1:
+            _install_splitter_handle_cursor(self, idx)
+        return handle
+
+
 class _AnalysisFindingsDialog(QDialog):
     """Toolbar Analysis dialog — triage queue for current-scope findings."""
 
@@ -62512,6 +62895,8 @@ class _AnalysisFindingsDialog(QDialog):
                  ux_events: Optional[List[dict]] = None,
                  time_min: int = 0, time_max: int = 0,
                  quality_warnings: Optional[List[str]] = None,
+                 analysis_context: Optional[dict] = None,
+                 on_recalculate: Optional[Callable] = None,
                  is_dark: bool = True, on_investigate=None,
                  on_show_evidence=None, on_ai_query=None,
                  triage_state: Optional[dict] = None,
@@ -62629,15 +63014,32 @@ class _AnalysisFindingsDialog(QDialog):
         self.setMinimumSize(900, 480)
         self.resize(960, 600)
 
-        note = QLabel(
-            "Heuristic summary of load balance, WCET, blocking, thrashing, "
-            "deadlines, tick health, and sync.\n"
-            "Select a finding, then triage or Investigate."
-        )
-        note.setWordWrap(True)
-        note.setObjectName("analysisNote")
-        note.setStyleSheet(
-            f"color: {muted}; font-size: {ui_fs}; padding-bottom: 2px;")
+        # Context strip — web `<AnalysisContextStrip>`: trace · scope · filters
+        # as small chips with a hairline rule under them, plus a
+        # "Recalculate with current context" button once the scope goes stale.
+        self._analysis_context = analysis_context
+        self._on_recalculate = on_recalculate
+        self._ctx_stale = False
+        self._ctx_strip = QWidget()
+        self._ctx_lay = QHBoxLayout(self._ctx_strip)
+        self._ctx_lay.setContentsMargins(0, 0, 0, 6)
+        self._ctx_lay.setSpacing(6)
+        self._ctx_chip_css = (
+            f"color: {muted}; font-size: {ui_fs};"
+            " padding: 2px 6px; border-radius: 4px;"
+            " background: rgba(127, 127, 127, 0.12);")
+        self._ctx_recalc_css = (
+            f"QPushButton {{ color: {warn}; font-size: {ui_fs};"
+            f" padding: 2px 8px; border: 1px solid {warn}; border-radius: 4px;"
+            " background: transparent; }"
+            "QPushButton:hover { background: rgba(200, 122, 18, 0.14); }")
+        try:
+            format_analysis_context_lines = globals().get("format_analysis_context_lines")
+            _ctx_lines = format_analysis_context_lines(analysis_context)
+        except Exception:
+            _ctx_lines = []
+        self._has_ctx_strip = bool(_ctx_lines) or callable(on_recalculate)
+        self._rebuild_ctx_strip()
 
         queue_row = QHBoxLayout()
         queue_row.setContentsMargins(0, 0, 0, 0)
@@ -62727,29 +63129,43 @@ class _AnalysisFindingsDialog(QDialog):
 
         list_w = QListWidget()
         list_w.setFont(ui_font)
-        list_w.setWordWrap(True)
-        list_w.setSpacing(6)
+        list_w.setWordWrap(False)
+        list_w.setSpacing(2)
         list_w.setUniformItemSizes(False)
-        list_w.setAlternatingRowColors(True)
+        list_w.setAlternatingRowColors(False)
         list_w.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         list_w.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        list_w.setTextElideMode(Qt.TextElideMode.ElideNone)
+        list_w.setTextElideMode(Qt.TextElideMode.ElideRight)
         list_w.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         list_w.setStyleSheet(
-            f"QListWidget {{ padding: 8px; outline: none; border-radius: 6px;"
+            f"QListWidget {{ padding: 4px; outline: none; border-radius: 6px;"
             f" font-size: {ui_fs}; color: {ink}; }}"
-            "QListWidget::item {"
-            "  padding: 10px 12px;"
-            "  margin: 3px 0;"
-            "  border-radius: 6px;"
+            "QListWidget::item { padding: 2px 6px; border-radius: 5px; }"
+            "QListWidget::item:hover:!selected {"
+            "  background: rgba(52, 152, 219, 0.12);"
             "}"
             "QListWidget::item:selected {"
-            "  background: rgba(52, 152, 219, 0.30);"
+            "  background: rgba(52, 152, 219, 0.28);"
             "}"
         )
         self._list_w = list_w
         list_w.currentItemChanged.connect(lambda *_: self._on_selection_changed())
         list_w.itemClicked.connect(self._on_list_item_clicked)
+
+        # Flat outlined button style shared by every bottom-row control, 1:1
+        # with the web dialog's `.analysis-btn` / `.analysis-btn-primary`.
+        _bbtn = (
+            f"QPushButton, QToolButton {{ border: 1px solid {border};"
+            f" background: transparent; color: {ink}; border-radius: 6px;"
+            f" padding: 4px 12px; font-size: {ui_fs}; min-height: 22px; }}"
+            "QPushButton:hover, QToolButton:hover {"
+            " background: rgba(127, 127, 127, 0.12); }"
+            f"QPushButton:disabled, QToolButton:disabled {{ color: {muted}; }}"
+        )
+        _bbtn_primary = _bbtn + (
+            "QPushButton { border-color: #4a9eff; color: #4a9eff;"
+            " font-weight: 600; }"
+        )
 
         def _menu_btn(label: str, tip: str) -> QToolButton:
             btn = QToolButton()
@@ -62757,12 +63173,11 @@ class _AnalysisFindingsDialog(QDialog):
             btn.setFont(ui_font)
             btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setMinimumHeight(max(28, int(round(ui_pt * 3.2))))
             btn.setToolTip(tip)
+            # Suppress Qt's native drop-down arrow — the label already carries a
+            # "▾" (web `Ask AI ▾` / `More ▾`), so the native one is a duplicate.
             btn.setStyleSheet(
-                f"QToolButton {{ padding: 7px 16px; border-radius: 6px;"
-                f" font-size: {ui_fs}; }}"
-            )
+                _bbtn + "QToolButton::menu-indicator { image: none; width: 0; }")
             return btn
 
         ask_btn = _menu_btn(
@@ -62798,26 +63213,22 @@ class _AnalysisFindingsDialog(QDialog):
         more_menu.addAction("Save as text…").triggered.connect(self._save_as_text)
         more_btn.setMenu(more_menu)
 
-        btn_h = max(28, int(round(ui_pt * 3.2)))
+        def _hsep() -> QFrame:
+            # 1px rule = web `.analysis-scope` / `.analysis-footer` border-top.
+            line = QFrame()
+            line.setFrameShape(QFrame.Shape.HLine)
+            line.setFrameShadow(QFrame.Shadow.Plain)
+            line.setStyleSheet(f"color: {border}; background: {border};")
+            line.setFixedHeight(1)
+            return line
+
         close_btn = QPushButton("Close")
         close_btn.setFont(ui_font)
-        close_btn.setMinimumHeight(btn_h)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_btn.setDefault(True)
-        close_btn.setStyleSheet(
-            f"QPushButton {{ padding: 7px 18px; border-radius: 6px;"
-            f" font-size: {ui_fs}; }}"
-        )
+        close_btn.setStyleSheet(_bbtn)
         close_btn.clicked.connect(self.reject)
 
-        footer = QHBoxLayout()
-        footer.setContentsMargins(0, 4, 0, 0)
-        footer.setSpacing(8)
-        footer.addWidget(ask_btn)
-        footer.addWidget(more_btn)
-        footer.addStretch(1)
-        footer.addWidget(close_btn)
-
+        # Triage row — web `.analysis-triage`: left-aligned, no rule above.
         triage_row = QHBoxLayout()
         triage_row.setContentsMargins(0, 0, 0, 0)
         triage_row.setSpacing(8)
@@ -62827,38 +63238,37 @@ class _AnalysisFindingsDialog(QDialog):
         for b in (self._done_btn, self._dismiss_btn, self._case_btn):
             b.setFont(ui_font)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setMinimumHeight(btn_h)
-            b.setStyleSheet(
-                f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
-                f" font-size: {ui_fs}; }}"
-            )
+            b.setStyleSheet(_bbtn)
             triage_row.addWidget(b)
         triage_row.addStretch(1)
         self._done_btn.clicked.connect(self._toggle_done)
         self._dismiss_btn.clicked.connect(self._toggle_dismiss)
         self._case_btn.clicked.connect(self._add_to_case)
 
-        scope_row = QHBoxLayout()
+        # Bottom block — web `.analysis-footer`: full-width scope hint, then a
+        # single button line with scope actions left, Ask AI / More / Close right.
+        scope_row = QVBoxLayout()
         scope_row.setContentsMargins(0, 0, 0, 0)
-        scope_row.setSpacing(8)
+        scope_row.setSpacing(6)
         self._scope_lbl = QLabel(
             self._scope_hint or "Select a finding to recommend a cursor window.")
         self._scope_lbl.setWordWrap(True)
         self._scope_lbl.setStyleSheet(
             f"color: {muted}; font-size: {ui_fs};")
+        scope_row.addWidget(self._scope_lbl)
+
+        scope_btn_row = QHBoxLayout()
+        scope_btn_row.setContentsMargins(0, 0, 0, 0)
+        scope_btn_row.setSpacing(8)
         apply_scope = QPushButton("Apply cursors")
         apply_scope.setFont(ui_font)
         apply_scope.setCursor(Qt.CursorShape.PointingHandCursor)
         apply_scope.setToolTip(
             "Place C1–C2 on the recommended window and zoom the timeline")
-        apply_scope.setStyleSheet(
-            f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
-            f" font-size: {ui_fs}; }}"
-        )
+        apply_scope.setStyleSheet(_bbtn)
         apply_scope.clicked.connect(self._apply_recommended_scope)
         apply_scope.setEnabled(self._on_apply_scope is not None)
-        scope_row.addWidget(self._scope_lbl, 1)
-        scope_row.addWidget(apply_scope, 0)
+        scope_btn_row.addWidget(apply_scope)
 
         show_evidence_btn = QPushButton("Show on timeline")
         show_evidence_btn.setFont(ui_font)
@@ -62866,69 +63276,225 @@ class _AnalysisFindingsDialog(QDialog):
         show_evidence_btn.setToolTip(
             "Jump to Timeline Evidence for the selected finding "
             "(does not change Scope or Filters)")
-        show_evidence_btn.setStyleSheet(
-            f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
-            f" font-size: {ui_fs}; }}"
-        )
+        show_evidence_btn.setStyleSheet(_bbtn)
         show_evidence_btn.clicked.connect(self._show_evidence_selected)
         show_evidence_btn.setEnabled(self._on_show_evidence is not None)
         self._show_evidence_btn = show_evidence_btn
-        scope_row.addWidget(show_evidence_btn, 0)
+        scope_btn_row.addWidget(show_evidence_btn)
 
         self._investigate_btn = QPushButton("Investigate…")
         self._investigate_btn.setFont(ui_font)
         self._investigate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._investigate_btn.setStyleSheet(
-            f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
-            f" font-size: {ui_fs}; font-weight: 600; }}"
-        )
-        self._investigate_btn.clicked.connect(self._investigate_selected)
-        scope_row.addWidget(self._investigate_btn, 0)
+        self._investigate_btn.setStyleSheet(_bbtn_primary)
+        self._investigate_btn.clicked.connect(self._begin_investigate)
+        scope_btn_row.addWidget(self._investigate_btn)
+
+        # Inline preview→confirm (web `Confirm Investigate` / `Cancel`,
+        # shown only while `investigatePending`), replacing the modal QMessageBox.
+        self._pending_investigate = None
+        self._confirm_investigate_btn = QPushButton("Confirm Investigate")
+        self._confirm_investigate_btn.setFont(ui_font)
+        self._confirm_investigate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._confirm_investigate_btn.setStyleSheet(_bbtn_primary)
+        self._confirm_investigate_btn.clicked.connect(self._confirm_investigate)
+        self._confirm_investigate_btn.setVisible(False)
+        scope_btn_row.addWidget(self._confirm_investigate_btn)
+        self._cancel_investigate_btn = QPushButton("Cancel")
+        self._cancel_investigate_btn.setFont(ui_font)
+        self._cancel_investigate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cancel_investigate_btn.setStyleSheet(_bbtn)
+        self._cancel_investigate_btn.clicked.connect(self._cancel_investigate)
+        self._cancel_investigate_btn.setVisible(False)
+        scope_btn_row.addWidget(self._cancel_investigate_btn)
+
         self._undo_scope_btn = QPushButton("Undo Scope")
         self._undo_scope_btn.setFont(ui_font)
         self._undo_scope_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._undo_scope_btn.setStyleSheet(
-            f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
-            f" font-size: {ui_fs}; }}"
-        )
+        self._undo_scope_btn.setStyleSheet(_bbtn)
         self._undo_scope_btn.clicked.connect(self._undo_investigate_scope)
         self._undo_scope_btn.setEnabled(False)
         self._undo_scope_btn.setVisible(callable(self._on_undo_investigate))
-        scope_row.addWidget(self._undo_scope_btn, 0)
+        scope_btn_row.addWidget(self._undo_scope_btn)
 
-        self._investigate_preview = QLabel("")
-        self._investigate_preview.setWordWrap(True)
-        self._investigate_preview.setVisible(False)
-        self._investigate_preview.setStyleSheet(
-            f"color: {ink}; font-size: {ui_fs}; padding: 8px 10px;"
-            f"border: 1px solid {border}; border-radius: 6px;"
-            "background: rgba(52, 152, 219, 0.08);"
-        )
+        scope_btn_row.addStretch(1)
+        scope_row.addLayout(scope_btn_row)
 
-        overview = QLabel(str(self._dashboard.get("summary") or ""))
-        overview.setWordWrap(True)
-        overview.setObjectName("analysisOverview")
-        overview.setStyleSheet(
-            f"color: {ink}; font-size: {ui_fs}; padding: 8px 10px;"
-            f"border: 1px solid {border}; border-radius: 6px;"
-            "background: rgba(52, 152, 219, 0.08);"
-        )
+        # Boxed, word-wrapped text panel. A QLabel's sizeHint ignores its own
+        # stylesheet `padding`, so a bordered+padded QLabel clips wrapped text
+        # top & bottom — put border/background on a QFrame instead.
+        def _boxed_label(text: str = "", *, name: str = "") -> tuple:
+            box = QFrame()
+            box.setStyleSheet(
+                f"QFrame {{ border: 1px solid {border}; border-radius: 6px;"
+                " background: rgba(52, 152, 219, 0.08); padding: 12px 12px; }"
+                "QLabel { border: none; background: transparent; padding: 0; }"
+            )
+            bl = QVBoxLayout(box)
+            bl.setContentsMargins(0, 0, 0, 0)
+            lbl = QLabel(text)
+            lbl.setWordWrap(True)
+            lbl.setFont(ui_font)
+            lbl.setStyleSheet(f"QLabel {{ color: {ink}; }}")
+            if name:
+                lbl.setObjectName(name)
+            bl.addWidget(lbl)
+            return box, lbl
+
+        self._investigate_preview_box, self._investigate_preview = _boxed_label()
+        self._investigate_preview_box.setVisible(False)
+        self._overview_lbl = None  # overview box removed in the master/detail redesign
+
+        # ---- Right-hand detail pane (master/detail split) ------------------
+        def _dlbl(css: str) -> QLabel:
+            q = QLabel("")
+            q.setWordWrap(True)
+            q.setFont(ui_font)
+            q.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            q.setStyleSheet(css)
+            q.setVisible(False)
+            return q
+
+        _mono = _get_fixed_font_family()
+        self._detail_title = _dlbl(f"font-weight: 700; font-size: {ui_fs};")
+        self._detail_title.setObjectName("analysisDetailTitle")
+        self._detail_body = _dlbl(f"color: {ink}; font-size: {ui_fs};")
+        self._detail_body.setObjectName("analysisFindingText")
+        self._detail_strength = _dlbl(f"color: {muted}; font-size: {ui_fs};")
+        self._detail_evidence = _dlbl(
+            f"color: {muted}; font-size: {ui_fs}; font-family: '{_mono}';")
+        self._detail_checknext = _dlbl(f"color: {ask}; font-size: {ui_fs};")
+        self._detail_dismissed = _dlbl(
+            f"color: {muted}; font-size: {ui_fs}; font-style: italic;")
+        self._detail_empty = QLabel("Select a finding to see details.")
+        self._detail_empty.setFont(ui_font)
+        self._detail_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._detail_empty.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+
+        self._detail_actions = QWidget()   # hidden together with the text when empty
+        _da = QVBoxLayout(self._detail_actions)
+        _da.setContentsMargins(0, 0, 0, 0)
+        _da.setSpacing(8)
+        _da.addWidget(_hsep())
+        _da.addLayout(scope_row)
+        _da.addWidget(self._investigate_preview_box)
+        _da.addWidget(_hsep())
+        _da.addLayout(triage_row)
+
+        detail_host = QWidget()
+        _dv = QVBoxLayout(detail_host)
+        _dv.setContentsMargins(2, 0, 2, 0)
+        _dv.setSpacing(8)
+        _dv.addWidget(self._detail_empty)
+        for w in (self._detail_title, self._detail_body, self._detail_strength,
+                  self._detail_evidence, self._detail_checknext,
+                  self._detail_dismissed):
+            _dv.addWidget(w)
+        _dv.addWidget(self._detail_actions)
+        _dv.addStretch(1)
+        self._detail_actions.setVisible(False)
+
+        self._detail_scroll = QScrollArea()
+        self._detail_scroll.setWidgetResizable(True)
+        self._detail_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._detail_scroll.setWidget(detail_host)
+
+        # ---- Master/detail splitter --------------------------------------
+        # Match the timeline / statistics-panel seam (_PanelSeamResizer):
+        # an 8px transparent hit target with a thin 2px accent bar that
+        # only appears on hover — not the app-wide solid grey handle.
+        split = _SeamSplitter(Qt.Orientation.Horizontal)
+        split.setChildrenCollapsible(False)
+        split.setHandleWidth(8)
+        # Transparent chrome; _SeamSplitterHandle.paintEvent draws the 2px
+        # accent bar on hover / drag (Qt's ::handle:hover QSS is unreliable).
+        split.setStyleSheet("QSplitter::handle { background: transparent; }")
+        split.addWidget(list_w)
+        split.addWidget(self._detail_scroll)
+        split.setStretchFactor(0, 2)
+        split.setStretchFactor(1, 3)
+        self._split = split
+        self._split_ratio = self._load_split_ratio()
+        split.setSizes(self._split_ratio or [360, 560])
+        split.splitterMoved.connect(self._on_split_moved)
+
+        # ---- Global footer (Ask AI / More / Close only) -----------------
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.setSpacing(8)
+        footer.addWidget(ask_btn)
+        footer.addWidget(more_btn)
+        footer.addStretch(1)
+        footer.addWidget(close_btn)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 14, 16, 14)
-        lay.setSpacing(10)
-        lay.addWidget(note)
+        lay.setSpacing(8)
+        if self._has_ctx_strip:
+            lay.addWidget(self._ctx_strip)
+            lay.addWidget(_hsep())
+        else:
+            self._ctx_strip.setParent(None)
         lay.addLayout(queue_row)
         lay.addLayout(filt_row)
-        lay.addWidget(overview)
-        lay.addWidget(list_w, 1)
-        lay.addLayout(triage_row)
-        lay.addWidget(self._investigate_preview)
-        lay.addLayout(scope_row)
+        lay.addWidget(split, 1)
+        lay.addWidget(_hsep())
         lay.addLayout(footer)
         self._rebuild_list()
+        self._rebuild_detail()
         self._refresh_scope_hint()
         self._refresh_triage_buttons()
+
+    # ---- master/detail divider persistence (btf_viewer.rc) --------------
+    def _findings_rc(self):
+        parent = self.parent()
+        while parent is not None:
+            settings = getattr(parent, "_settings", None)
+            if settings is not None:
+                return settings
+            parent = parent.parent()
+        return None
+
+    def _load_split_ratio(self):
+        rc = self._findings_rc()
+        if rc is None:
+            return None
+        vals = list(_parse_int_csv(
+            rc.get("analysis_findings", "split_sizes", ""),
+            2, (0, 0), lo=1, hi=8000))
+        if len(vals) == 2 and sum(vals) > 0:
+            return vals
+        return None
+
+    def _on_split_moved(self, _pos: int = 0, _index: int = 0) -> None:
+        sizes = self._split.sizes()
+        if len(sizes) == 2 and sum(sizes) > 0:
+            self._split_ratio = list(sizes)
+        timer = getattr(self, "_split_save_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(250)
+            timer.timeout.connect(self._save_split_ratio)
+            self._split_save_timer = timer
+        timer.start()
+
+    def _save_split_ratio(self) -> None:
+        rc = self._findings_rc()
+        if rc is None:
+            return
+        sizes = self._split.sizes()
+        if len(sizes) == 2 and sum(sizes) > 0:
+            rc.set("analysis_findings", "split_sizes",
+                   _format_int_csv(sizes), flush=True)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        ratio = getattr(self, "_split_ratio", None)
+        if ratio and len(ratio) == 2 and sum(ratio) > 0:
+            total = max(self._split.width() - self._split.handleWidth(), 200)
+            s = sum(ratio)
+            left = min(max(160, int(total * ratio[0] / s)), total - 200)
+            self._split.setSizes([left, total - left])
 
     def triage_state(self) -> dict:
         return dict(self._triage_state)
@@ -62966,6 +63532,80 @@ class _AnalysisFindingsDialog(QDialog):
             btn.setChecked(qid == queue)
         self._rebuild_list()
 
+    def _rebuild_ctx_strip(self) -> None:
+        """Repopulate the context chips + optional Recalculate button
+        (web `<AnalysisContextStrip>` / `.ctx-recalc`)."""
+        lay = getattr(self, "_ctx_lay", None)
+        if lay is None:
+            return
+        while lay.count():
+            it = lay.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        try:
+            format_analysis_context_lines = globals().get("format_analysis_context_lines")
+            lines = format_analysis_context_lines(self._analysis_context)
+        except Exception:
+            lines = []
+        for ln in lines:
+            chip = QLabel(ln)
+            chip.setStyleSheet(self._ctx_chip_css)
+            lay.addWidget(chip, 0)
+        if self._ctx_stale and callable(self._on_recalculate):
+            btn = QPushButton("Recalculate with current context")
+            btn.setFont(self._ui_font)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(self._ctx_recalc_css)
+            btn.clicked.connect(self._recalculate_context)
+            lay.addWidget(btn, 0)
+        lay.addStretch(1)
+
+    def _mark_context_stale(self) -> None:
+        """Scope/Filters changed since these findings were built."""
+        if not callable(self._on_recalculate) or self._ctx_stale:
+            return
+        self._ctx_stale = True
+        self._rebuild_ctx_strip()
+        if getattr(self, "_has_ctx_strip", False):
+            self._ctx_strip.setVisible(True)
+
+    def _recalculate_context(self) -> None:
+        if not callable(self._on_recalculate):
+            return
+        try:
+            result = self._on_recalculate()
+        except Exception:
+            return
+        if not result:
+            return
+        findings, scope_title, ctx = result
+        self._findings = list(findings or [])
+        self._scope_title = scope_title or ""
+        self._analysis_context = ctx
+        self.setWindowTitle(f"Analysis Findings{self._scope_title}")
+        self._dashboard = analysis_dashboard(
+            self._findings, quality_warnings=self._quality_warnings)
+        title_cluster: dict = {}
+        id_cluster: dict = {}
+        for inc in self._dashboard.get("clusters") or []:
+            cid = str(inc.get("id") or "")
+            for t in inc.get("findings") or []:
+                title_cluster.setdefault(str(t), cid)
+            for fid in inc.get("finding_ids") or []:
+                if fid:
+                    id_cluster.setdefault(str(fid), cid)
+        self._title_cluster = title_cluster
+        self._id_cluster = id_cluster
+        if getattr(self, "_overview_lbl", None) is not None:
+            self._overview_lbl.setText(str(self._dashboard.get("summary") or ""))
+        self._ctx_stale = False
+        self._rebuild_ctx_strip()
+        self._rebuild_list()
+        self._refresh_scope_hint()
+        self._refresh_triage_buttons()
+
     def _rebuild_list(self) -> None:
         muted = self._palette["muted"]
         ink = self._palette["ink"]
@@ -62975,8 +63615,7 @@ class _AnalysisFindingsDialog(QDialog):
         ok_ink = self._palette["ok_ink"]
         ui_font = self._ui_font
         ui_fs = self._ui_fs
-        ui_pt = self._ui_pt
-        min_h = max(40, int(round(ui_pt * 5.0)))
+        _line_h = QFontMetrics(ui_font).height()
         base = self._filtered_base()
         counts = self._queue_counts(base, self._triage_state)
         for qid, btn in self._queue_btns.items():
@@ -63004,102 +63643,166 @@ class _AnalysisFindingsDialog(QDialog):
             self._list_w.addItem(empty)
             self._on_selection_changed()
             return
-        select_row = 0
-        for i, row in enumerate(rows):
+        _acc = "52, 152, 219"   # desktop accent (matches list selection tint)
+        select_row = -1         # row of the previously-selected finding, if any
+        first_finding_row = -1  # row of the first real finding (web: items[0])
+        for row in rows:
             if row.get("kind") == "header":
                 cid = str(row.get("incident_id") or "")
                 collapsed = cid in self._collapsed_incidents
                 mark = "▸" if collapsed else "▾"
-                label = f"{mark}  {row.get('label')}  ({row.get('count')} related)"
-                item = QListWidgetItem(label)
+                # Web `.analysis-incident-header`: accent-tinted rounded chip.
+                hdr_w = QFrame()
+                hdr_w.setObjectName("analysisIncidentHeader")
+                hdr_w.setStyleSheet(
+                    "QFrame#analysisIncidentHeader {"
+                    f" background: rgba({_acc}, 0.12);"
+                    f" border: 1px solid rgba({_acc}, 0.35);"
+                    " border-radius: 6px; }"
+                    "QLabel { background: transparent; border: none; }")
+                hl = QHBoxLayout(hdr_w)
+                hl.setContentsMargins(9, 5, 9, 5)
+                hl.setSpacing(8)
+                tgl = QLabel(mark)
+                tgl.setFont(ui_font)
+                tgl.setStyleSheet(f"color: {ink}; font-weight: 600;")
+                nm = QLabel(str(row.get("label") or ""))
+                nm.setFont(ui_font)
+                nm.setStyleSheet(
+                    f"color: {ink}; font-weight: 600; font-size: {ui_fs};")
+                ct = QLabel(f"{row.get('count')} related")
+                ct.setFont(ui_font)
+                ct.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+                hl.addWidget(tgl, 0)
+                hl.addWidget(nm, 0)
+                hl.addStretch(1)
+                hl.addWidget(ct, 0)
+                item = QListWidgetItem()
                 item.setData(Qt.ItemDataRole.UserRole, f"__incident__:{cid}")
-                item.setFont(ui_font)
-                item.setForeground(QBrush(QColor(ink)))
+                item.setSizeHint(QSize(180, _line_h + 16))
                 self._list_w.addItem(item)
+                self._list_w.setItemWidget(item, hdr_w)
                 continue
             if row.get("incident_id") and str(row.get("incident_id")) in self._collapsed_incidents:
                 continue
             f = row
             sev = f.get("severity", "info")
             title = str(f.get("observation") or f.get("title", "Finding")).strip() or "Finding"
-            text_body = str(f.get("why_it_matters") or f.get("text", "")).strip()
-            strength = str(f.get("evidence_strength_label") or "").strip()
-            check_next = str(f.get("check_next") or "").strip()
             fid = str(f.get("id") or "")
             cid = self._id_cluster.get(fid) or self._title_cluster.get(title, "")
             prefix = f"[{cid}] " if cid else ""
             if sev == "error":
-                badge = SEMANTIC_GLYPHS["error"]
-                color = err
+                badge, color = SEMANTIC_GLYPHS["error"], err
             elif sev == "warning":
-                badge = SEMANTIC_GLYPHS["warning"]
-                color = warn
+                badge, color = SEMANTIC_GLYPHS["warning"], warn
             elif fid == "load_balance_ok":
-                badge = SEMANTIC_GLYPHS["improved"]
-                color = ok_ink
+                badge, color = SEMANTIC_GLYPHS["improved"], ok_ink
             else:
-                badge = "○"
-                color = ink
-            row_w = QWidget()
+                badge, color = "○", ink
+            # Compact index row: icon + [Ix] title on one elided line, faint
+            # single-line meta below. Detail/evidence live in the right pane.
+            # Web `.analysis-list li.in-incident`: accent left bar + indent.
+            in_incident = bool(row.get("incident_id"))
+            row_w = QFrame()
+            if in_incident:
+                row_w.setObjectName("analysisInIncident")
+                row_w.setStyleSheet(
+                    "QFrame#analysisInIncident {"
+                    f" border-left: 3px solid rgba({_acc}, 0.6); }}"
+                    "QLabel { border: none; }")
             vbox = QVBoxLayout(row_w)
-            vbox.setContentsMargins(4, 2, 4, 2)
-            vbox.setSpacing(4)
+            vbox.setContentsMargins(18 if in_incident else 4, 4, 4, 4)
+            vbox.setSpacing(2)
             title_l = QLabel(f"{badge}  {prefix}{title}")
             title_l.setObjectName("analysisFindingTitle")
-            title_l.setWordWrap(True)
             title_l.setFont(ui_font)
+            title_l.setTextFormat(Qt.TextFormat.PlainText)
             title_l.setStyleSheet(
-                f"color: {color}; font-weight: 700; font-size: {ui_fs};")
+                f"color: {color}; font-weight: 600; font-size: {ui_fs};")
             vbox.addWidget(title_l)
-            if text_body:
-                text_l = QLabel(text_body)
-                text_l.setObjectName("analysisFindingText")
-                text_l.setWordWrap(True)
-                text_l.setFont(ui_font)
-                text_l.setStyleSheet(f"color: {color}; font-size: {ui_fs};")
-                vbox.addWidget(text_l)
-            if strength:
-                s_l = QLabel(f"EVIDENCE STRENGTH  {strength}")
-                s_l.setWordWrap(True)
-                s_l.setFont(ui_font)
-                s_l.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
-                vbox.addWidget(s_l)
-            evidence_text = str(f.get("evidence_text") or "").strip()
-            if evidence_text:
-                ev_l = QLabel(f"EVIDENCE  {evidence_text}")
-                ev_l.setWordWrap(True)
-                ev_l.setFont(ui_font)
-                ev_l.setStyleSheet(
-                    f"color: {muted}; font-size: {ui_fs};"
-                    f" font-family: '{_get_fixed_font_family()}';")
-                vbox.addWidget(ev_l)
-            if check_next:
-                cn_l = QLabel(f"CHECK NEXT  {check_next}")
-                cn_l.setWordWrap(True)
-                cn_l.setFont(ui_font)
-                cn_l.setStyleSheet(f"color: {ask}; font-size: {ui_fs};")
-                vbox.addWidget(cn_l)
-            reason = (self._triage_state.get("dismissed") or {}).get(fid)
-            if reason:
-                dr = QLabel(f"Dismissed: {reason}")
-                dr.setWordWrap(True)
-                dr.setFont(ui_font)
-                dr.setStyleSheet(
-                    f"color: {muted}; font-size: {ui_fs}; font-style: italic;")
-                vbox.addWidget(dr)
+            n_lines = 1
+            meta_bits = []
+            _cat = str(f.get("category") or "").strip()
+            if _cat:
+                meta_bits.append(_cat)
+            _str = str(f.get("evidence_strength_label") or "").strip()
+            if _str:
+                meta_bits.append(_str)
+            if fid in (self._triage_state.get("dismissed") or {}):
+                meta_bits.append("dismissed")
+            elif fid in (self._triage_state.get("reviewed") or []):
+                meta_bits.append("done")
+            elif fid in (self._triage_state.get("case") or []):
+                meta_bits.append("in case")
+            if meta_bits:
+                meta_l = QLabel(" · ".join(meta_bits))
+                meta_l.setFont(ui_font)
+                meta_l.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+                vbox.addWidget(meta_l)
+                n_lines = 2
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, fid)
             item.setFont(ui_font)
-            item.setForeground(QBrush(QColor(color)))
+            item.setSizeHint(QSize(180, _line_h * n_lines + 14))
             self._list_w.addItem(item)
             self._list_w.setItemWidget(item, row_w)
-            row_w.adjustSize()
-            hint = row_w.sizeHint()
-            item.setSizeHint(QSize(max(hint.width(), 200), max(hint.height(), min_h)))
+            row_idx = self._list_w.count() - 1
+            if first_finding_row < 0:
+                first_finding_row = row_idx
             if fid and fid == prev:
-                select_row = self._list_w.count() - 1
+                select_row = row_idx
+        if select_row < 0:
+            # Web `selectedFinding` falls back to items[0]; mirror that so the
+            # detail pane shows the first finding instead of the empty hint.
+            select_row = first_finding_row if first_finding_row >= 0 else 0
         self._list_w.setCurrentRow(select_row)
         self._on_selection_changed()
+
+    def _rebuild_detail(self) -> None:
+        """Populate the right-hand pane for the selected finding (master/detail)."""
+        muted = self._palette["muted"]
+        err = self._palette["err"]
+        warn = self._palette["warn"]
+        ok_ink = self._palette["ok_ink"]
+        ink = self._palette["ink"]
+        f = self._selected_finding()
+        text_widgets = (
+            self._detail_title, self._detail_body, self._detail_strength,
+            self._detail_evidence, self._detail_checknext, self._detail_dismissed,
+        )
+        if not f:
+            for w in text_widgets:
+                w.setVisible(False)
+            self._detail_actions.setVisible(False)
+            self._detail_empty.setVisible(True)
+            return
+        self._detail_empty.setVisible(False)
+        self._detail_actions.setVisible(True)
+        sev = f.get("severity", "info")
+        fid = str(f.get("id") or "")
+        color = (err if sev == "error" else warn if sev == "warning"
+                 else ok_ink if fid == "load_balance_ok" else ink)
+        title = str(f.get("observation") or f.get("title", "Finding")).strip() or "Finding"
+        cid = self._id_cluster.get(fid) or self._title_cluster.get(title, "")
+        self._detail_title.setText(f"{('[' + cid + ']  ') if cid else ''}{title}")
+        self._detail_title.setStyleSheet(
+            f"color: {color}; font-weight: 700; font-size: {self._ui_fs};")
+        self._detail_title.setVisible(True)
+        self._detail_body.setStyleSheet(
+            f"color: {color}; font-size: {self._ui_fs};")
+
+        def _set(widget, prefix, value):
+            v = str(value or "").strip()
+            widget.setText(f"{prefix}{v}" if prefix else v)
+            widget.setVisible(bool(v))
+
+        _set(self._detail_body, "", f.get("why_it_matters") or f.get("text", ""))
+        _set(self._detail_strength, "Evidence strength: ",
+             f.get("evidence_strength_label"))
+        _set(self._detail_evidence, "Evidence: ", f.get("evidence_text"))
+        _set(self._detail_checknext, "Check next: ", f.get("check_next"))
+        _set(self._detail_dismissed, "Dismissed: ",
+             (self._triage_state.get("dismissed") or {}).get(fid))
 
     def _on_list_item_clicked(self, item) -> None:
         if item is None:
@@ -63115,6 +63818,11 @@ class _AnalysisFindingsDialog(QDialog):
         self._rebuild_list()
 
     def _on_selection_changed(self) -> None:
+        # Web `watch(selectedId)` — switching findings drops a pending confirm.
+        if getattr(self, "_pending_investigate", None) is not None:
+            self._set_investigate_pending(False)
+        if hasattr(self, "_detail_title"):
+            self._rebuild_detail()
         self._refresh_scope_hint()
         self._refresh_triage_buttons()
 
@@ -63140,10 +63848,10 @@ class _AnalysisFindingsDialog(QDialog):
         in_case = fid in (self._triage_state.get("case") or [])
         self._done_btn.setEnabled(enabled)
         self._dismiss_btn.setEnabled(enabled)
-        self._case_btn.setEnabled(enabled and not in_case)
+        self._case_btn.setEnabled(enabled)
         self._done_btn.setText("Undo" if reviewed else "Done")
         self._dismiss_btn.setText("Restore" if dismissed else "Dismiss…")
-        self._case_btn.setText("In case" if in_case else "Add to case")
+        self._case_btn.setText("Remove from case" if in_case else "Add to case")
 
     def _toggle_done(self) -> None:
         finding = self._selected_finding()
@@ -63178,6 +63886,8 @@ class _AnalysisFindingsDialog(QDialog):
         if not fid:
             return
         if fid in (self._triage_state.get("case") or []):
+            self._commit_triage(
+                self._apply_triage_action(self._triage_state, fid, "uncase"))
             return
         self._commit_triage(
             self._apply_triage_action(self._triage_state, fid, "case"))
@@ -63223,6 +63933,7 @@ class _AnalysisFindingsDialog(QDialog):
         if finding is None:
             return
         self._on_apply_scope(finding)
+        self._mark_context_stale()
 
     def _show_evidence_selected(self) -> None:
         if self._on_show_evidence is None:
@@ -63232,7 +63943,19 @@ class _AnalysisFindingsDialog(QDialog):
             return
         self._on_show_evidence(finding)
 
-    def _investigate_selected(self) -> None:
+    def _set_investigate_pending(self, pending: bool) -> None:
+        """Toggle the inline confirm state (web `investigatePending`)."""
+        if not pending:
+            self._pending_investigate = None
+        self._investigate_preview_box.setVisible(pending)
+        self._investigate_btn.setVisible(not pending)
+        self._confirm_investigate_btn.setVisible(pending)
+        self._cancel_investigate_btn.setVisible(pending)
+        # Web: Undo Scope is `v-if="canUndoInvestigate && !investigatePending"`.
+        if callable(self._on_undo_investigate):
+            self._undo_scope_btn.setVisible(not pending)
+
+    def _begin_investigate(self) -> None:
         if self._on_investigate is None:
             return
         finding = self._selected_finding()
@@ -63253,25 +63976,37 @@ class _AnalysisFindingsDialog(QDialog):
             current_lo=self._current_cursor_lo,
             current_hi=self._current_cursor_hi,
         )
+        self._pending_investigate = (finding, sid)
         self._investigate_preview.setText(preview)
-        self._investigate_preview.setVisible(True)
-        reply = QMessageBox.question(
-            self, "Confirm Investigate",
-            preview + "\n\nContinue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        self._investigate_preview.setVisible(False)
-        if reply != QMessageBox.StandardButton.Yes:
+        # Reserve the full wrapped-text height explicitly (the box sits in a
+        # nested QWidget whose default size policy drops heightForWidth
+        # propagation, so the layout would otherwise squeeze it to one line).
+        lbl = self._investigate_preview
+        _avail = max(320, (self._investigate_preview_box.width()
+                           or self.width() - 60) - 24)
+        lbl.setMinimumHeight(
+            max(lbl.heightForWidth(_avail), lbl.sizeHint().height()) + 6)
+        self._set_investigate_pending(True)
+
+    def _cancel_investigate(self) -> None:
+        self._set_investigate_pending(False)
+
+    def _confirm_investigate(self) -> None:
+        pend = getattr(self, "_pending_investigate", None)
+        self._set_investigate_pending(False)
+        if not pend:
             return
+        finding, sid = pend
         self._on_investigate(finding, sid)
         if callable(self._on_undo_investigate):
             self._undo_scope_btn.setEnabled(True)
+        self._mark_context_stale()
 
     def _undo_investigate_scope(self) -> None:
         if callable(self._on_undo_investigate):
             self._on_undo_investigate()
         self._undo_scope_btn.setEnabled(False)
+        self._mark_context_stale()
 
     def _query_with_ai(
         self, ai_enabled: bool, template_id: str = "findings",
@@ -79045,7 +79780,7 @@ class _CursorListWidget(QWidget):
                 f" font-weight:700; padding:1px 6px;")
             rl.addWidget(badge, 0)
 
-            time_btn = QPushButton(_format_time(t, ts, decimals=decimals))
+            time_btn = QPushButton(_format_time_web(t, ts, decimals=decimals))
             time_btn.setFlat(True)
             time_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             time_btn.setToolTip("Jump to cursor")
@@ -79088,7 +79823,7 @@ class _CursorListWidget(QWidget):
                 lbl = QLabel(f"Δ{i}")
                 lbl.setStyleSheet("color:#999;")
                 lbl.setMinimumWidth(48)                       # web .delta-label
-                val = QLabel(_format_time(d, ts, decimals=decimals))
+                val = QLabel(_format_time_web(d, ts, decimals=decimals))
                 val.setStyleSheet("font-weight:500;")         # web .delta-value
                 frq = QLabel(f"({freq})")
                 frq.setStyleSheet("color:#999;")
@@ -86451,8 +87186,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if old is not None:
             try:
                 old.close()
+                old.deleteLater()
             except Exception:
                 pass
+        self._ai_compare_dlg = None
         dlg = _TraceCompareDialog(
             self, parent=self, idx_a=idx_a, idx_b=idx_b,
             ai_enabled=self._ai_feature_enabled(),
@@ -86915,11 +87652,48 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         cur_lo = cur_hi = None
         cur_limit = False
         panel = self._stats_panel
+        _all_cur = list(getattr(panel, "_cursor_times", None) or []) if panel is not None else []
         if panel is not None and getattr(panel, "_scope_to_cursors", False):
-            times = list(getattr(panel, "_cursor_times", None) or [])
+            times = list(_all_cur)
             if len(times) >= 2:
                 cur_limit = True
                 cur_lo, cur_hi = min(times), max(times)
+
+        # Context strip (web `<AnalysisContextStrip>`): trace · scope · filters.
+        build_analysis_context = globals().get("build_analysis_context")
+
+        def _build_findings_ctx() -> dict:
+            _tab = getattr(self, "_active_tab", None)
+            _flabel = self._active_filter_summary_label()
+            _p = self._stats_panel
+            _cur = list(getattr(_p, "_cursor_times", None) or []) if _p is not None else []
+            _lim = bool(_p is not None and getattr(_p, "_scope_to_cursors", False)
+                        and len(_cur) >= 2)
+            _lo = min(_cur) if _lim else None
+            _hi = max(_cur) if _lim else None
+            return build_analysis_context(
+                trace_name=os.path.basename(getattr(_tab, "path", "") or "") if _tab else "",
+                scope_label=(f"C1–C{len(_cur)}" if _lim else "Full Trace"),
+                scope_duration=(
+                    _format_time(int(_hi - _lo), self._trace.time_scale)
+                    if _lim else ""),
+                filter_labels=[_flabel] if _flabel else [],
+                sample_count=len(getattr(self._trace, "segments", []) or []),
+                cursor_count=len(_cur),
+                limit_to_cursors=_lim,
+                panel="analysis",
+            )
+
+        _findings_ctx = _build_findings_ctx()
+
+        def _recompute_findings():
+            """Re-run analysis for the current cursor Scope (Recalculate button)."""
+            if self._trace is None or self._stats_panel is None:
+                return None
+            f2, st2 = self._stats_panel.build_analysis_findings()
+            self._refresh_finding_overlays()
+            return f2, st2, _build_findings_ctx()
+
         dlg = _AnalysisFindingsDialog(
             findings, scope_title, parent=self,
             ai_enabled=self._ai_feature_enabled(),
@@ -86939,6 +87713,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             time_min=self._trace.time_min,
             time_max=self._trace.time_max,
             quality_warnings=collect_trace_quality_warnings(self._trace),
+            analysis_context=_findings_ctx,
+            on_recalculate=_recompute_findings,
             is_dark=self._is_dark,
         )
         self._analysis_findings_dlg = dlg
@@ -87929,7 +88705,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         self._push_undo_snapshot()
         unit = self._current_time_unit()
-        label = f"Bookmark @{_format_time(ns, unit, decimals=self._time_decimals_val)}"
+        label = f"Bookmark @{_format_time_web(ns, unit, decimals=self._time_decimals_val)}"
         self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
         self._mark_next_id += 1
         self._bookmarks.sort(key=lambda b: b.ns)
@@ -87968,7 +88744,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             unit = self._current_time_unit()
             for b in self._bookmarks:
                 if b.id == mark_id:
-                    b.label = new_text or f"Bookmark @{_format_time(b.ns, unit, decimals=self._time_decimals_val)}"
+                    b.label = new_text or f"Bookmark @{_format_time_web(b.ns, unit, decimals=self._time_decimals_val)}"
                     break
         self._recompute_find_hits()
         self._save_current_trace_state()
@@ -87998,7 +88774,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         self._push_undo_snapshot()
         unit = self._current_time_unit()
-        label = f"Bookmark @{_format_time(ns, unit, decimals=self._time_decimals_val)}"
+        label = f"Bookmark @{_format_time_web(ns, unit, decimals=self._time_decimals_val)}"
         self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
         self._mark_next_id += 1
         self._bookmarks.sort(key=lambda b: b.ns)
@@ -88087,13 +88863,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             unit = self._current_time_unit()
             rows = []
             for b in self._bookmarks:
-                label = b.label or f"Bookmark @{_format_time(b.ns, unit, decimals=self._time_decimals_val)}"
+                label = b.label or f"Bookmark @{_format_time_web(b.ns, unit, decimals=self._time_decimals_val)}"
                 rows.append(("bookmark", b.id, b.ns, label))
             for a in self._annotations:
                 rows.append(("annotation", a.id, a.ns, a.note or ""))
             rows.sort(key=lambda r: r[2])
             for kind, mid, ns, text in rows:
-                time_str = _format_time(ns, unit, decimals=self._time_decimals_val)
+                time_str = _format_time_web(ns, unit, decimals=self._time_decimals_val)
                 kind_label = "Annotation" if kind == "annotation" else "Bookmark"
                 tooltip = f"{kind_label} @ {time_str}"
                 item = QListWidgetItem()
@@ -89233,7 +90009,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # Web `rangeStats.js` formats every value with the app's timeDecimals
         # (Seg avg is rounded to whole ns first, like `Math.round`).
         _rd = self._time_decimals_val
-        self._cr_span_val.setText(_format_time(dt, unit, decimals=_rd))
+        self._cr_span_val.setText(_format_time_web(dt, unit, decimals=_rd))
         self._cr_slices_val.setText(str(switches))
         self._cr_top_row.setVisible(bool(task_acc))
         if task_acc:
@@ -89243,9 +90019,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._cr_avg_row.setVisible(has_durations)
         self._cr_max_row.setVisible(has_durations)
         if has_durations:
-            self._cr_min_val.setText(_format_time(min(durations), unit, decimals=_rd))
-            self._cr_avg_val.setText(_format_time(round(sum(durations) / len(durations)), unit, decimals=_rd))
-            self._cr_max_val.setText(_format_time(max(durations), unit, decimals=_rd))
+            self._cr_min_val.setText(_format_time_web(min(durations), unit, decimals=_rd))
+            self._cr_avg_val.setText(_format_time_web(round(sum(durations) / len(durations)), unit, decimals=_rd))
+            self._cr_max_val.setText(_format_time_web(max(durations), unit, decimals=_rd))
         # Compact status-bar version: span + segment min/max/avg
         if durations:
             d_min = _format_time(min(durations), unit, decimals=1)
@@ -89271,7 +90047,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 if b.id == mark_id:
                     b.ns = new_ns
                     if b.label.startswith("Bookmark @"):
-                        b.label = f"Bookmark @{_format_time(new_ns, unit, decimals=self._time_decimals_val)}"
+                        b.label = f"Bookmark @{_format_time_web(new_ns, unit, decimals=self._time_decimals_val)}"
                     break
             self._rebuild_bookmark_list()
         else:
@@ -89351,7 +90127,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         for row, ns in enumerate(sorted_times):
             ci = QTableWidgetItem(f"C{row + 1}")
             ci.setData(Qt.ItemDataRole.UserRole, ns)
-            ti = QTableWidgetItem(_format_time(ns, unit, decimals=self._time_decimals_val))
+            ti = QTableWidgetItem(_format_time_web(ns, unit, decimals=self._time_decimals_val))
             task_text = self._task_at_time(ns)
             task_item = QTableWidgetItem(task_text)
             # Full list on hover; the cell itself stays compact (elided) like
@@ -89363,8 +90139,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 delta_item = QTableWidgetItem("—")
             else:
                 dt = ns - c1
-                sign = "+" if dt >= 0 else ""
-                delta_item = QTableWidgetItem(f"{sign}{_format_time(abs(dt), unit, decimals=self._time_decimals_val)}")
+                sign = "+" if dt >= 0 else "-"
+                delta_item = QTableWidgetItem(f"{sign}{_format_time_web(abs(dt), unit, decimals=self._time_decimals_val)}")
             delta_item.setTextAlignment(
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             for it in (ci, ti, task_item, delta_item):
@@ -89519,13 +90295,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 self, "Trace Compare",
                 "Open at least two trace tabs to compare traces.")
             return
-        _exec_centred(_TraceCompareDialog(
+        dlg = _TraceCompareDialog(
             self, parent=self,
             ai_enabled=self._ai_feature_enabled(),
             on_query_ai=self._query_compare_with_ai,
             on_validate_experiment=self._validate_compare_with_ai,
             on_compare=self._remember_trace_compare,
-        ), self)
+        )
+        try:
+            _exec_centred(dlg, self)
+        finally:
+            # Tear the widget tree down deterministically via Qt instead of
+            # leaving a wrapper cycle for a later cyclic-GC pass to collect
+            # (which has crashed mid-teardown of the QLabel children).
+            dlg.deleteLater()
 
     def _scroll_view_to_task(self, task: str, *, center: bool = False) -> None:
         """Scroll the orthogonal axis to bring *task*'s row/column fully into view.
@@ -89898,8 +90681,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
 
         def _csv_time_text(ns: int, unit: str) -> str:
-            # Keep CSV locale-safe for tools that misdecode micro-sign glyphs.
-            return _format_time(ns, unit).replace("µs", "us").replace("μs", "us")
+            # Same rendering as the Marks panel / web CSV (_format_time_web +
+            # timeDecimals); micro-sign folded to "us" for locale-safe files.
+            return _format_time_web(
+                ns, unit, decimals=self._time_decimals_val
+            ).replace("µs", "us").replace("μs", "us")
 
         unit = self._current_time_unit()
         time_scale = self._trace.time_scale

@@ -212,6 +212,105 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         self.assertEqual(dlg.font().pointSize(), expected.pointSize())
         self.assertEqual(dlg.font().pixelSize(), expected.pixelSize())
 
+    def test_analysis_dialog_selects_first_finding_on_open(self):
+        """Web shows the first finding's detail on open; desktop must too."""
+        from PySide6.QtWidgets import QApplication
+        from btf_viewer_pkg.stats import _AnalysisFindingsDialog
+
+        if QApplication.instance() is None:
+            QApplication([])
+        findings = [
+            {"id": "f1", "severity": "warning", "title": "Load imbalance",
+             "observation": "Core 0 hot", "why_it_matters": "uneven work"},
+            {"id": "f2", "severity": "info", "title": "Tick OK", "text": "steady"},
+        ]
+        dlg = _AnalysisFindingsDialog(findings, "", ai_enabled=False)
+        self.addCleanup(dlg.deleteLater)
+
+        sel = dlg._selected_finding()
+        self.assertIsNotNone(sel)
+        self.assertEqual(sel.get("id"), "f1")
+        # Detail pane populated, not the empty hint (dialog never shown, so
+        # use isVisibleTo() which reflects the explicit setVisible() calls).
+        self.assertFalse(dlg._detail_empty.isVisibleTo(dlg))
+        self.assertTrue(dlg._detail_title.isVisibleTo(dlg))
+        self.assertIn("Load imbalance", dlg._detail_title.text())
+        self.assertTrue(dlg._detail_body.text().strip())
+
+    def test_analysis_dialog_add_to_case_is_undoable(self):
+        from PySide6.QtWidgets import QApplication
+        from btf_viewer_pkg.stats import _AnalysisFindingsDialog
+
+        if QApplication.instance() is None:
+            QApplication([])
+        findings = [{"id": "f1", "severity": "warning", "title": "Load imbalance",
+                     "observation": "hot", "why_it_matters": "x"}]
+        dlg = _AnalysisFindingsDialog(findings, "", ai_enabled=False)
+        self.addCleanup(dlg.deleteLater)
+
+        dlg._add_to_case()
+        self.assertIn("f1", dlg._triage_state.get("case") or [])
+
+        # In the Case queue the finding is selectable and the button offers the
+        # undo: it stays enabled and reads "Remove from case".
+        dlg._set_queue(dlg._QUEUE_CASE)
+        self.assertEqual((dlg._selected_finding() or {}).get("id"), "f1")
+        self.assertTrue(dlg._case_btn.isEnabled())
+        self.assertEqual(dlg._case_btn.text(), "Remove from case")
+
+        # Clicking it undoes the add.
+        dlg._add_to_case()
+        self.assertNotIn("f1", dlg._triage_state.get("case") or [])
+
+    def test_analysis_dialog_divider_ratio_persists_to_rc(self):
+        import os
+        import tempfile
+        from PySide6.QtWidgets import QApplication, QSplitter, QWidget
+        from btf_viewer_pkg import stats as _stats
+        from btf_viewer_pkg.stats import (
+            _AnalysisFindingsDialog, _SeamSplitterHandle,
+        )
+        from btf_viewer_pkg.view import _ResizeSplitter
+
+        if QApplication.instance() is None:
+            QApplication([])
+
+        tmp = tempfile.mkdtemp()
+        rc_path = os.path.join(tmp, "btf_viewer.rc")
+        old = _stats._RcSettings.RC_PATH
+        _stats._RcSettings.RC_PATH = rc_path
+        self.addCleanup(setattr, _stats._RcSettings, "RC_PATH", old)
+        rc = _stats._RcSettings()
+        rc.set("analysis_findings", "split_sizes", "300,700", flush=True)
+
+        host = QWidget()
+        host._settings = rc
+        self.addCleanup(host.deleteLater)
+
+        dlg = _AnalysisFindingsDialog([], "", parent=host, ai_enabled=False)
+        self.addCleanup(dlg.deleteLater)
+
+        # Divider matches the timeline/stats seam: 8px transparent hit
+        # target, thin accent bar on hover (resize-cursor handle).
+        self.assertIsInstance(dlg._split, _ResizeSplitter)
+        self.assertEqual(dlg._split.handleWidth(), 8)
+        self.assertIn("transparent", dlg._split.styleSheet())
+        # Handle paints its own hover bar (Qt ::handle:hover QSS is unreliable).
+        handle = dlg._split.handle(1)
+        self.assertIsInstance(handle, _SeamSplitterHandle)
+        handle._hover = True
+        handle.grab()  # forces paintEvent; must not raise with hover on
+        # Saved ratio restored from btf_viewer.rc.
+        self.assertEqual(dlg._split_ratio, [300, 700])
+
+        # A drag writes the live pane sizes back to the same rc section
+        # (exact px depend on layout; assert a valid 2-int csv round-trips).
+        dlg._save_split_ratio()
+        saved = _stats._RcSettings().get("analysis_findings", "split_sizes", "")
+        parts = [int(p) for p in saved.split(",") if p.strip()]
+        self.assertEqual(len(parts), 2)
+        self.assertTrue(all(p > 0 for p in parts))
+
     def test_analysis_dialog_combos_use_inspector_popup(self):
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QApplication
@@ -256,9 +355,6 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         tool_labels = [b.text().replace("&", "") for b in dlg.findChildren(QToolButton)]
         self.assertIn("Ask AI ▾", tool_labels)
         self.assertIn("More ▾", tool_labels)
-        overview = dlg.findChild(QLabel, "analysisOverview")
-        self.assertIsNotNone(overview)
-        self.assertIn("Top issues:", overview.text())
         ask_btn = next(
             b for b in dlg.findChildren(QToolButton)
             if "Ask AI" in b.text().replace("&", "")
@@ -283,7 +379,7 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         }
         self.assertIn("Save as text…", more_acts)
 
-    def test_analysis_dialog_light_theme_overview_ink(self):
+    def test_analysis_dialog_light_theme_detail_ink(self):
         from PySide6.QtWidgets import QApplication, QLabel
         from btf_viewer_pkg.stats import _AnalysisFindingsDialog
 
@@ -292,19 +388,15 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         findings = [{"severity": "info", "title": "Tick OK", "text": "steady"}]
         dlg = _AnalysisFindingsDialog(
             findings, "", ai_enabled=False, is_dark=False)
-        overview = dlg.findChild(QLabel, "analysisOverview")
-        note = dlg.findChild(QLabel, "analysisNote")
-        self.assertIsNotNone(overview)
-        self.assertIn("color: #1E1E1E", overview.styleSheet())
-        self.assertNotIn("#c5d0dc", overview.styleSheet())
-        self.assertIn("color: #555555", note.styleSheet())
-        self.assertEqual(
-            dlg._list_w.item(0).foreground().color().name().upper(),
-            "#1E1E1E",
-        )
+        # Master/detail: row 0 auto-selects and populates the right-hand pane.
         body = dlg.findChild(QLabel, "analysisFindingText")
         self.assertIsNotNone(body)
+        self.assertIn("steady", body.text())
         self.assertIn("color: #1E1E1E", body.styleSheet())
+        self.assertNotIn("#c5d0dc", body.styleSheet())
+        row_title = dlg.findChild(QLabel, "analysisFindingTitle")
+        self.assertIsNotNone(row_title)
+        self.assertIn("color: #1E1E1E", row_title.styleSheet())
 
     def test_analysis_dialog_balance_ok_shows_metrics_and_light_ok_ink(self):
         from PySide6.QtWidgets import QApplication, QLabel
@@ -320,8 +412,8 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         }]
         dlg = _AnalysisFindingsDialog(
             findings, "", ai_enabled=False, is_dark=False)
-        title = dlg.findChild(QLabel, "analysisFindingTitle")
-        body = dlg.findChild(QLabel, "analysisFindingText")
+        title = dlg.findChild(QLabel, "analysisFindingTitle")   # left-pane row
+        body = dlg.findChild(QLabel, "analysisFindingText")     # right-pane detail
         self.assertIsNotNone(title)
         self.assertIsNotNone(body)
         self.assertIn("Core utilisation balance", title.text())

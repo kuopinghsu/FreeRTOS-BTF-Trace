@@ -161,6 +161,7 @@ from .timeline_util import (  # noqa: F401 — star-import skips leading _
 from .graphics_items import *  # noqa: F403,F401
 from .scene import *  # noqa: F403,F401
 from .view import *  # noqa: F403,F401
+from .view import _ResizeSplitter  # underscore name: not re-exported by ``*``
 from .ai_case import (
     AI_CONTEXT_MODE_LABELS,
     AI_CONTEXT_MODES,
@@ -3221,10 +3222,24 @@ class _TraceCompareDialog(QDialog):
             "QWidget#compareDecision {"
             " background: rgba(52, 152, 219, 0.10); border-radius: 6px; }"
         )
+        self._dec_comparability = QLabel("")
+        self._dec_comparability.setWordWrap(True)
+        self._dec_comparability.setTextFormat(Qt.TextFormat.RichText)
+        self._dec_comparability.setStyleSheet(
+            "QLabel { background: rgba(200,122,18,0.18);"
+            " border-left: 3px solid #c87a12; color: #e8c9a0;"
+            " font-size: 11px; padding: 4px 8px; border-radius: 3px; }")
+        self._dec_comparability.hide()
+        dec.addWidget(self._dec_comparability)
         self._dec_identity = QLabel("")
         self._dec_identity.setWordWrap(True)
         self._dec_identity.setStyleSheet("QLabel { color: #9a9a9a; font-size: 11px; }")
         dec.addWidget(self._dec_identity)
+        self._dec_verdict = QLabel("")
+        self._dec_verdict.setWordWrap(True)
+        self._dec_verdict.setTextFormat(Qt.TextFormat.RichText)
+        self._dec_verdict.setStyleSheet("QLabel { font-size: 12px; }")
+        dec.addWidget(self._dec_verdict)
         self._dec_counts = QLabel("")
         self._dec_counts.setStyleSheet(
             "QLabel { color: #cfd8dc; font-weight: 600; font-size: 12px; }")
@@ -3381,10 +3396,40 @@ class _TraceCompareDialog(QDialog):
         self._pages.addTab(self._trends_table, "Trends")
         lay.addWidget(self._pages, 1)
 
-        exp_row = QHBoxLayout()
-        exp_row.setContentsMargins(8, 6, 8, 8)
-        exp_row.setSpacing(8)
+        # Footer — single row mirroring the web dialog (compare-dialog-footer):
+        #   [ Validate · Query AI · Save baseline · Score baseline ]  …  [ Export HTML · Close ]
+        self._ai_enabled = bool(ai_enabled)
+        self._on_query_ai = on_query_ai
+        self._on_validate_experiment = on_validate_experiment
+        self._on_compare = on_compare
+
+        foot_row = QHBoxLayout()
+        foot_row.setContentsMargins(8, 6, 8, 8)
+        foot_row.setSpacing(8)
         _ic = "#9E9E9E"
+
+        self._validate_btn = QPushButton("Validate experiment…")
+        self._validate_btn.clicked.connect(self._validate_with_ai)
+        foot_row.addWidget(self._validate_btn)
+
+        self._ai_btn = QPushButton("Query with AI…")
+        self._ai_btn.clicked.connect(self._query_with_ai)
+        foot_row.addWidget(self._ai_btn)
+
+        self._btn_save_baseline = QPushButton("Save as baseline")
+        self._btn_save_baseline.setToolTip(
+            "Store Trace A per-task metrics as the regression baseline")
+        self._btn_save_baseline.clicked.connect(self._save_as_baseline)
+        foot_row.addWidget(self._btn_save_baseline)
+
+        self._btn_score_baseline = QPushButton("Score vs baseline")
+        self._btn_score_baseline.setToolTip(
+            "Z-score Trace A metrics against the stored baseline")
+        self._btn_score_baseline.clicked.connect(self._score_vs_baseline)
+        foot_row.addWidget(self._btn_score_baseline)
+
+        foot_row.addStretch(1)
+
         self._btn_export_html = QPushButton("Export HTML")
         self._btn_export_html.setIcon(_svg_icon_markup(
             '<rect x="2.5" y="2" width="11" height="12" rx="1" fill="none" '
@@ -3393,37 +3438,16 @@ class _TraceCompareDialog(QDialog):
             f'stroke="{_ic}" stroke-width="1.2" stroke-linecap="round"/>',
         ))
         self._btn_export_html.setToolTip(
-            "Export compare report as HTML (tables include Search / Show all)")
+            "Export compare report as HTML (tables include Search / Show all / CSV)")
         self._btn_export_html.clicked.connect(self._export_html)
-        exp_row.addWidget(self._btn_export_html)
-        self._btn_save_baseline = QPushButton("Save as baseline")
-        self._btn_save_baseline.setToolTip(
-            "Store Trace A per-task metrics as the regression baseline")
-        self._btn_save_baseline.clicked.connect(self._save_as_baseline)
-        exp_row.addWidget(self._btn_save_baseline)
-        self._btn_score_baseline = QPushButton("Score vs baseline")
-        self._btn_score_baseline.setToolTip(
-            "Z-score Trace A metrics against the stored baseline")
-        self._btn_score_baseline.clicked.connect(self._score_vs_baseline)
-        exp_row.addWidget(self._btn_score_baseline)
-        exp_row.addStretch(1)
-        lay.addLayout(exp_row)
+        foot_row.addWidget(self._btn_export_html)
 
-        btns = QDialogButtonBox(QDialogButtonBox.Close)
-        self._ai_enabled = bool(ai_enabled)
-        self._on_query_ai = on_query_ai
-        self._on_validate_experiment = on_validate_experiment
-        self._on_compare = on_compare
-        self._validate_btn = btns.addButton(
-            "Validate experiment…", QDialogButtonBox.ButtonRole.ActionRole)
-        self._validate_btn.clicked.connect(self._validate_with_ai)
-        self._ai_btn = btns.addButton(
-            "Query with AI…", QDialogButtonBox.ButtonRole.ActionRole)
-        self._ai_btn.clicked.connect(self._query_with_ai)
+        self._btn_close = QPushButton("Close")
+        self._btn_close.clicked.connect(self.reject)
+        foot_row.addWidget(self._btn_close)
+
+        lay.addLayout(foot_row)
         self.set_ai_enabled(self._ai_enabled)
-        btns.rejected.connect(self.reject)
-        btns.accepted.connect(self.accept)
-        lay.addWidget(btns)
         self._win = win
         for i, tab in enumerate(win._tabs):
             label = os.path.basename(tab.path)
@@ -3822,6 +3846,50 @@ class _TraceCompareDialog(QDialog):
             f"{n_reg} REGRESSIONS    {n_imp} IMPROVEMENTS"
             + (f"    {n_warn} WARNING{'S' if n_warn != 1 else ''}" if n_warn else "")
         )
+        # Structured verdict: one-word chip + up to 3 top-change bullets
+        # (replaces the old prose sentence).
+        _tone_bg = {
+            "regressed": "#c0392b", "improved": "#1f6b45",
+            "mixed": "#c87a12", "neutral": "#6b7a8d",
+        }
+        label = str(notable.get("verdict_label") or "SIMILAR")
+        tone = str(notable.get("verdict_tone") or "neutral")
+        chip_bg = _tone_bg.get(tone, "#6b7a8d")
+        bullets = notable.get("verdict_bullets") or []
+        _b_html = []
+        for b in bullets:
+            st = str(b.get("status") or "")
+            glyph = "▲" if st == "Regressed" else "▼" if st == "Improved" else "•"
+            color = ("#e57373" if st == "Regressed"
+                     else "#81c784" if st == "Improved" else "#cfd8dc")
+            _b_html.append(
+                f'<div style="color:{color}; margin-top:2px;">{glyph} '
+                f'{html.escape(str(b.get("label")))} — '
+                f'{html.escape(str(b.get("change")))}</div>'
+            )
+        if not _b_html:
+            _b_html.append(
+                '<div style="color:#9a9a9a; margin-top:2px;">'
+                'No metric changed beyond the significance threshold.</div>'
+            )
+        self._dec_verdict.setText(
+            f'<span style="background:{chip_bg}; color:#fff; padding:1px 8px;'
+            f' border-radius:8px; font-weight:700;">{html.escape(label)}</span>'
+            + "".join(_b_html)
+        )
+        comp = notable.get("comparability") or {}
+        comp_warnings = list(comp.get("warnings") or [])
+        if comp_warnings:
+            self._dec_comparability.setText(
+                '<b>⚠ Traces may not be directly comparable</b>'
+                + "".join(
+                    f'<div style="margin-top:2px;">• {html.escape(str(w))}</div>'
+                    for w in comp_warnings
+                )
+            )
+            self._dec_comparability.show()
+        else:
+            self._dec_comparability.hide()
         regs = list(data.get("regressions") or [])
         if regs:
             top = regs[0]
@@ -3832,18 +3900,13 @@ class _TraceCompareDialog(QDialog):
             self._dec_largest.setCursor(Qt.CursorShape.PointingHandCursor)
             self._dec_largest.setToolTip(
                 "Open Statistics for this regression on the Candidate tab")
+            self._dec_largest.show()
         else:
-            verdict = str(notable.get("verdict") or "").strip()
-            self._dec_largest.setText(verdict or "No significant regressions")
             self._dec_largest_clickable = False
             self._dec_largest.setCursor(Qt.CursorShape.ArrowCursor)
             self._dec_largest.setToolTip("")
-        why = str(data.get("why") or "").strip()
-        if why:
-            self._dec_why.setText(f"Why? {why}")
-            self._dec_why.show()
-        else:
-            self._dec_why.hide()
+            self._dec_largest.hide()
+        self._dec_why.hide()
         nxt = str(notable.get("next_investigation") or "").strip()
         if nxt:
             self._dec_next.setText(nxt)
@@ -3859,7 +3922,7 @@ class _TraceCompareDialog(QDialog):
         else:
             self._dec_sig_note.hide()
         has = bool(
-            n_reg or n_imp or n_warn or regs or why or nxt
+            n_reg or n_imp or n_warn or regs or nxt or comp_warnings
             or notable.get("verdict")
         )
         decision.setVisible(has)
@@ -9158,6 +9221,73 @@ def _render_workflow_analysis_html(
     return html_finding_cards(findings, scope_title)
 
 
+class _SeamSplitterHandle(QSplitterHandle):
+    """Splitter handle painted like the timeline / stats-panel seam.
+
+    Qt's ``QSplitter::handle:hover`` QSS pseudo-state is unreliable (worse with
+    a custom ``createHandle``), so paint the 2px accent bar ourselves — same as
+    ``_PanelSeamResizer.paintEvent`` (``#4C8BF5`` alpha 150, centred, hover /
+    drag only).
+    """
+
+    def __init__(self, orientation, parent):
+        super().__init__(orientation, parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setMouseTracking(True)
+        self.setCursor(
+            Qt.CursorShape.SizeVerCursor
+            if orientation == Qt.Orientation.Vertical
+            else Qt.CursorShape.SizeHorCursor)
+        self._hover = False
+        self._pressed = False
+
+    def enterEvent(self, event):  # noqa: N802
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):  # noqa: N802
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):  # noqa: N802
+        self._pressed = True
+        self.update()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):  # noqa: N802
+        self._pressed = False
+        self.update()
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):  # noqa: N802
+        super().paintEvent(event)
+        if not (self._hover or self._pressed):
+            return
+        accent = QColor("#4C8BF5")
+        accent.setAlpha(150)
+        p = QPainter(self)
+        if self.orientation() == Qt.Orientation.Horizontal:
+            x = max(0, self.width() // 2 - 1)
+            p.fillRect(x, 0, 2, self.height(), accent)
+        else:
+            y = max(0, self.height() // 2 - 1)
+            p.fillRect(0, y, self.width(), 2, accent)
+        p.end()
+
+
+class _SeamSplitter(_ResizeSplitter):
+    """`_ResizeSplitter` that paints a seam-style hover bar on its handles."""
+
+    def createHandle(self):
+        handle = _SeamSplitterHandle(self.orientation(), self)
+        idx = self.count() - 1
+        if idx >= 1:
+            _install_splitter_handle_cursor(self, idx)
+        return handle
+
+
 class _AnalysisFindingsDialog(QDialog):
     """Toolbar Analysis dialog — triage queue for current-scope findings."""
 
@@ -9167,6 +9297,8 @@ class _AnalysisFindingsDialog(QDialog):
                  ux_events: Optional[List[dict]] = None,
                  time_min: int = 0, time_max: int = 0,
                  quality_warnings: Optional[List[str]] = None,
+                 analysis_context: Optional[dict] = None,
+                 on_recalculate: Optional[Callable] = None,
                  is_dark: bool = True, on_investigate=None,
                  on_show_evidence=None, on_ai_query=None,
                  triage_state: Optional[dict] = None,
@@ -9276,15 +9408,32 @@ class _AnalysisFindingsDialog(QDialog):
         self.setMinimumSize(900, 480)
         self.resize(960, 600)
 
-        note = QLabel(
-            "Heuristic summary of load balance, WCET, blocking, thrashing, "
-            "deadlines, tick health, and sync.\n"
-            "Select a finding, then triage or Investigate."
-        )
-        note.setWordWrap(True)
-        note.setObjectName("analysisNote")
-        note.setStyleSheet(
-            f"color: {muted}; font-size: {ui_fs}; padding-bottom: 2px;")
+        # Context strip — web `<AnalysisContextStrip>`: trace · scope · filters
+        # as small chips with a hairline rule under them, plus a
+        # "Recalculate with current context" button once the scope goes stale.
+        self._analysis_context = analysis_context
+        self._on_recalculate = on_recalculate
+        self._ctx_stale = False
+        self._ctx_strip = QWidget()
+        self._ctx_lay = QHBoxLayout(self._ctx_strip)
+        self._ctx_lay.setContentsMargins(0, 0, 0, 6)
+        self._ctx_lay.setSpacing(6)
+        self._ctx_chip_css = (
+            f"color: {muted}; font-size: {ui_fs};"
+            " padding: 2px 6px; border-radius: 4px;"
+            " background: rgba(127, 127, 127, 0.12);")
+        self._ctx_recalc_css = (
+            f"QPushButton {{ color: {warn}; font-size: {ui_fs};"
+            f" padding: 2px 8px; border: 1px solid {warn}; border-radius: 4px;"
+            " background: transparent; }"
+            "QPushButton:hover { background: rgba(200, 122, 18, 0.14); }")
+        try:
+            from .analysis_context import format_analysis_context_lines
+            _ctx_lines = format_analysis_context_lines(analysis_context)
+        except Exception:
+            _ctx_lines = []
+        self._has_ctx_strip = bool(_ctx_lines) or callable(on_recalculate)
+        self._rebuild_ctx_strip()
 
         queue_row = QHBoxLayout()
         queue_row.setContentsMargins(0, 0, 0, 0)
@@ -9374,29 +9523,43 @@ class _AnalysisFindingsDialog(QDialog):
 
         list_w = QListWidget()
         list_w.setFont(ui_font)
-        list_w.setWordWrap(True)
-        list_w.setSpacing(6)
+        list_w.setWordWrap(False)
+        list_w.setSpacing(2)
         list_w.setUniformItemSizes(False)
-        list_w.setAlternatingRowColors(True)
+        list_w.setAlternatingRowColors(False)
         list_w.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         list_w.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        list_w.setTextElideMode(Qt.TextElideMode.ElideNone)
+        list_w.setTextElideMode(Qt.TextElideMode.ElideRight)
         list_w.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         list_w.setStyleSheet(
-            f"QListWidget {{ padding: 8px; outline: none; border-radius: 6px;"
+            f"QListWidget {{ padding: 4px; outline: none; border-radius: 6px;"
             f" font-size: {ui_fs}; color: {ink}; }}"
-            "QListWidget::item {"
-            "  padding: 10px 12px;"
-            "  margin: 3px 0;"
-            "  border-radius: 6px;"
+            "QListWidget::item { padding: 2px 6px; border-radius: 5px; }"
+            "QListWidget::item:hover:!selected {"
+            "  background: rgba(52, 152, 219, 0.12);"
             "}"
             "QListWidget::item:selected {"
-            "  background: rgba(52, 152, 219, 0.30);"
+            "  background: rgba(52, 152, 219, 0.28);"
             "}"
         )
         self._list_w = list_w
         list_w.currentItemChanged.connect(lambda *_: self._on_selection_changed())
         list_w.itemClicked.connect(self._on_list_item_clicked)
+
+        # Flat outlined button style shared by every bottom-row control, 1:1
+        # with the web dialog's `.analysis-btn` / `.analysis-btn-primary`.
+        _bbtn = (
+            f"QPushButton, QToolButton {{ border: 1px solid {border};"
+            f" background: transparent; color: {ink}; border-radius: 6px;"
+            f" padding: 4px 12px; font-size: {ui_fs}; min-height: 22px; }}"
+            "QPushButton:hover, QToolButton:hover {"
+            " background: rgba(127, 127, 127, 0.12); }"
+            f"QPushButton:disabled, QToolButton:disabled {{ color: {muted}; }}"
+        )
+        _bbtn_primary = _bbtn + (
+            "QPushButton { border-color: #4a9eff; color: #4a9eff;"
+            " font-weight: 600; }"
+        )
 
         def _menu_btn(label: str, tip: str) -> QToolButton:
             btn = QToolButton()
@@ -9404,12 +9567,11 @@ class _AnalysisFindingsDialog(QDialog):
             btn.setFont(ui_font)
             btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setMinimumHeight(max(28, int(round(ui_pt * 3.2))))
             btn.setToolTip(tip)
+            # Suppress Qt's native drop-down arrow — the label already carries a
+            # "▾" (web `Ask AI ▾` / `More ▾`), so the native one is a duplicate.
             btn.setStyleSheet(
-                f"QToolButton {{ padding: 7px 16px; border-radius: 6px;"
-                f" font-size: {ui_fs}; }}"
-            )
+                _bbtn + "QToolButton::menu-indicator { image: none; width: 0; }")
             return btn
 
         ask_btn = _menu_btn(
@@ -9445,26 +9607,22 @@ class _AnalysisFindingsDialog(QDialog):
         more_menu.addAction("Save as text…").triggered.connect(self._save_as_text)
         more_btn.setMenu(more_menu)
 
-        btn_h = max(28, int(round(ui_pt * 3.2)))
+        def _hsep() -> QFrame:
+            # 1px rule = web `.analysis-scope` / `.analysis-footer` border-top.
+            line = QFrame()
+            line.setFrameShape(QFrame.Shape.HLine)
+            line.setFrameShadow(QFrame.Shadow.Plain)
+            line.setStyleSheet(f"color: {border}; background: {border};")
+            line.setFixedHeight(1)
+            return line
+
         close_btn = QPushButton("Close")
         close_btn.setFont(ui_font)
-        close_btn.setMinimumHeight(btn_h)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_btn.setDefault(True)
-        close_btn.setStyleSheet(
-            f"QPushButton {{ padding: 7px 18px; border-radius: 6px;"
-            f" font-size: {ui_fs}; }}"
-        )
+        close_btn.setStyleSheet(_bbtn)
         close_btn.clicked.connect(self.reject)
 
-        footer = QHBoxLayout()
-        footer.setContentsMargins(0, 4, 0, 0)
-        footer.setSpacing(8)
-        footer.addWidget(ask_btn)
-        footer.addWidget(more_btn)
-        footer.addStretch(1)
-        footer.addWidget(close_btn)
-
+        # Triage row — web `.analysis-triage`: left-aligned, no rule above.
         triage_row = QHBoxLayout()
         triage_row.setContentsMargins(0, 0, 0, 0)
         triage_row.setSpacing(8)
@@ -9474,38 +9632,37 @@ class _AnalysisFindingsDialog(QDialog):
         for b in (self._done_btn, self._dismiss_btn, self._case_btn):
             b.setFont(ui_font)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setMinimumHeight(btn_h)
-            b.setStyleSheet(
-                f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
-                f" font-size: {ui_fs}; }}"
-            )
+            b.setStyleSheet(_bbtn)
             triage_row.addWidget(b)
         triage_row.addStretch(1)
         self._done_btn.clicked.connect(self._toggle_done)
         self._dismiss_btn.clicked.connect(self._toggle_dismiss)
         self._case_btn.clicked.connect(self._add_to_case)
 
-        scope_row = QHBoxLayout()
+        # Bottom block — web `.analysis-footer`: full-width scope hint, then a
+        # single button line with scope actions left, Ask AI / More / Close right.
+        scope_row = QVBoxLayout()
         scope_row.setContentsMargins(0, 0, 0, 0)
-        scope_row.setSpacing(8)
+        scope_row.setSpacing(6)
         self._scope_lbl = QLabel(
             self._scope_hint or "Select a finding to recommend a cursor window.")
         self._scope_lbl.setWordWrap(True)
         self._scope_lbl.setStyleSheet(
             f"color: {muted}; font-size: {ui_fs};")
+        scope_row.addWidget(self._scope_lbl)
+
+        scope_btn_row = QHBoxLayout()
+        scope_btn_row.setContentsMargins(0, 0, 0, 0)
+        scope_btn_row.setSpacing(8)
         apply_scope = QPushButton("Apply cursors")
         apply_scope.setFont(ui_font)
         apply_scope.setCursor(Qt.CursorShape.PointingHandCursor)
         apply_scope.setToolTip(
             "Place C1–C2 on the recommended window and zoom the timeline")
-        apply_scope.setStyleSheet(
-            f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
-            f" font-size: {ui_fs}; }}"
-        )
+        apply_scope.setStyleSheet(_bbtn)
         apply_scope.clicked.connect(self._apply_recommended_scope)
         apply_scope.setEnabled(self._on_apply_scope is not None)
-        scope_row.addWidget(self._scope_lbl, 1)
-        scope_row.addWidget(apply_scope, 0)
+        scope_btn_row.addWidget(apply_scope)
 
         show_evidence_btn = QPushButton("Show on timeline")
         show_evidence_btn.setFont(ui_font)
@@ -9513,69 +9670,225 @@ class _AnalysisFindingsDialog(QDialog):
         show_evidence_btn.setToolTip(
             "Jump to Timeline Evidence for the selected finding "
             "(does not change Scope or Filters)")
-        show_evidence_btn.setStyleSheet(
-            f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
-            f" font-size: {ui_fs}; }}"
-        )
+        show_evidence_btn.setStyleSheet(_bbtn)
         show_evidence_btn.clicked.connect(self._show_evidence_selected)
         show_evidence_btn.setEnabled(self._on_show_evidence is not None)
         self._show_evidence_btn = show_evidence_btn
-        scope_row.addWidget(show_evidence_btn, 0)
+        scope_btn_row.addWidget(show_evidence_btn)
 
         self._investigate_btn = QPushButton("Investigate…")
         self._investigate_btn.setFont(ui_font)
         self._investigate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._investigate_btn.setStyleSheet(
-            f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
-            f" font-size: {ui_fs}; font-weight: 600; }}"
-        )
-        self._investigate_btn.clicked.connect(self._investigate_selected)
-        scope_row.addWidget(self._investigate_btn, 0)
+        self._investigate_btn.setStyleSheet(_bbtn_primary)
+        self._investigate_btn.clicked.connect(self._begin_investigate)
+        scope_btn_row.addWidget(self._investigate_btn)
+
+        # Inline preview→confirm (web `Confirm Investigate` / `Cancel`,
+        # shown only while `investigatePending`), replacing the modal QMessageBox.
+        self._pending_investigate = None
+        self._confirm_investigate_btn = QPushButton("Confirm Investigate")
+        self._confirm_investigate_btn.setFont(ui_font)
+        self._confirm_investigate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._confirm_investigate_btn.setStyleSheet(_bbtn_primary)
+        self._confirm_investigate_btn.clicked.connect(self._confirm_investigate)
+        self._confirm_investigate_btn.setVisible(False)
+        scope_btn_row.addWidget(self._confirm_investigate_btn)
+        self._cancel_investigate_btn = QPushButton("Cancel")
+        self._cancel_investigate_btn.setFont(ui_font)
+        self._cancel_investigate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cancel_investigate_btn.setStyleSheet(_bbtn)
+        self._cancel_investigate_btn.clicked.connect(self._cancel_investigate)
+        self._cancel_investigate_btn.setVisible(False)
+        scope_btn_row.addWidget(self._cancel_investigate_btn)
+
         self._undo_scope_btn = QPushButton("Undo Scope")
         self._undo_scope_btn.setFont(ui_font)
         self._undo_scope_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._undo_scope_btn.setStyleSheet(
-            f"QPushButton {{ padding: 7px 14px; border-radius: 6px;"
-            f" font-size: {ui_fs}; }}"
-        )
+        self._undo_scope_btn.setStyleSheet(_bbtn)
         self._undo_scope_btn.clicked.connect(self._undo_investigate_scope)
         self._undo_scope_btn.setEnabled(False)
         self._undo_scope_btn.setVisible(callable(self._on_undo_investigate))
-        scope_row.addWidget(self._undo_scope_btn, 0)
+        scope_btn_row.addWidget(self._undo_scope_btn)
 
-        self._investigate_preview = QLabel("")
-        self._investigate_preview.setWordWrap(True)
-        self._investigate_preview.setVisible(False)
-        self._investigate_preview.setStyleSheet(
-            f"color: {ink}; font-size: {ui_fs}; padding: 8px 10px;"
-            f"border: 1px solid {border}; border-radius: 6px;"
-            "background: rgba(52, 152, 219, 0.08);"
-        )
+        scope_btn_row.addStretch(1)
+        scope_row.addLayout(scope_btn_row)
 
-        overview = QLabel(str(self._dashboard.get("summary") or ""))
-        overview.setWordWrap(True)
-        overview.setObjectName("analysisOverview")
-        overview.setStyleSheet(
-            f"color: {ink}; font-size: {ui_fs}; padding: 8px 10px;"
-            f"border: 1px solid {border}; border-radius: 6px;"
-            "background: rgba(52, 152, 219, 0.08);"
-        )
+        # Boxed, word-wrapped text panel. A QLabel's sizeHint ignores its own
+        # stylesheet `padding`, so a bordered+padded QLabel clips wrapped text
+        # top & bottom — put border/background on a QFrame instead.
+        def _boxed_label(text: str = "", *, name: str = "") -> tuple:
+            box = QFrame()
+            box.setStyleSheet(
+                f"QFrame {{ border: 1px solid {border}; border-radius: 6px;"
+                " background: rgba(52, 152, 219, 0.08); padding: 12px 12px; }"
+                "QLabel { border: none; background: transparent; padding: 0; }"
+            )
+            bl = QVBoxLayout(box)
+            bl.setContentsMargins(0, 0, 0, 0)
+            lbl = QLabel(text)
+            lbl.setWordWrap(True)
+            lbl.setFont(ui_font)
+            lbl.setStyleSheet(f"QLabel {{ color: {ink}; }}")
+            if name:
+                lbl.setObjectName(name)
+            bl.addWidget(lbl)
+            return box, lbl
+
+        self._investigate_preview_box, self._investigate_preview = _boxed_label()
+        self._investigate_preview_box.setVisible(False)
+        self._overview_lbl = None  # overview box removed in the master/detail redesign
+
+        # ---- Right-hand detail pane (master/detail split) ------------------
+        def _dlbl(css: str) -> QLabel:
+            q = QLabel("")
+            q.setWordWrap(True)
+            q.setFont(ui_font)
+            q.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            q.setStyleSheet(css)
+            q.setVisible(False)
+            return q
+
+        _mono = _get_fixed_font_family()
+        self._detail_title = _dlbl(f"font-weight: 700; font-size: {ui_fs};")
+        self._detail_title.setObjectName("analysisDetailTitle")
+        self._detail_body = _dlbl(f"color: {ink}; font-size: {ui_fs};")
+        self._detail_body.setObjectName("analysisFindingText")
+        self._detail_strength = _dlbl(f"color: {muted}; font-size: {ui_fs};")
+        self._detail_evidence = _dlbl(
+            f"color: {muted}; font-size: {ui_fs}; font-family: '{_mono}';")
+        self._detail_checknext = _dlbl(f"color: {ask}; font-size: {ui_fs};")
+        self._detail_dismissed = _dlbl(
+            f"color: {muted}; font-size: {ui_fs}; font-style: italic;")
+        self._detail_empty = QLabel("Select a finding to see details.")
+        self._detail_empty.setFont(ui_font)
+        self._detail_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._detail_empty.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+
+        self._detail_actions = QWidget()   # hidden together with the text when empty
+        _da = QVBoxLayout(self._detail_actions)
+        _da.setContentsMargins(0, 0, 0, 0)
+        _da.setSpacing(8)
+        _da.addWidget(_hsep())
+        _da.addLayout(scope_row)
+        _da.addWidget(self._investigate_preview_box)
+        _da.addWidget(_hsep())
+        _da.addLayout(triage_row)
+
+        detail_host = QWidget()
+        _dv = QVBoxLayout(detail_host)
+        _dv.setContentsMargins(2, 0, 2, 0)
+        _dv.setSpacing(8)
+        _dv.addWidget(self._detail_empty)
+        for w in (self._detail_title, self._detail_body, self._detail_strength,
+                  self._detail_evidence, self._detail_checknext,
+                  self._detail_dismissed):
+            _dv.addWidget(w)
+        _dv.addWidget(self._detail_actions)
+        _dv.addStretch(1)
+        self._detail_actions.setVisible(False)
+
+        self._detail_scroll = QScrollArea()
+        self._detail_scroll.setWidgetResizable(True)
+        self._detail_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._detail_scroll.setWidget(detail_host)
+
+        # ---- Master/detail splitter --------------------------------------
+        # Match the timeline / statistics-panel seam (_PanelSeamResizer):
+        # an 8px transparent hit target with a thin 2px accent bar that
+        # only appears on hover — not the app-wide solid grey handle.
+        split = _SeamSplitter(Qt.Orientation.Horizontal)
+        split.setChildrenCollapsible(False)
+        split.setHandleWidth(8)
+        # Transparent chrome; _SeamSplitterHandle.paintEvent draws the 2px
+        # accent bar on hover / drag (Qt's ::handle:hover QSS is unreliable).
+        split.setStyleSheet("QSplitter::handle { background: transparent; }")
+        split.addWidget(list_w)
+        split.addWidget(self._detail_scroll)
+        split.setStretchFactor(0, 2)
+        split.setStretchFactor(1, 3)
+        self._split = split
+        self._split_ratio = self._load_split_ratio()
+        split.setSizes(self._split_ratio or [360, 560])
+        split.splitterMoved.connect(self._on_split_moved)
+
+        # ---- Global footer (Ask AI / More / Close only) -----------------
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.setSpacing(8)
+        footer.addWidget(ask_btn)
+        footer.addWidget(more_btn)
+        footer.addStretch(1)
+        footer.addWidget(close_btn)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 14, 16, 14)
-        lay.setSpacing(10)
-        lay.addWidget(note)
+        lay.setSpacing(8)
+        if self._has_ctx_strip:
+            lay.addWidget(self._ctx_strip)
+            lay.addWidget(_hsep())
+        else:
+            self._ctx_strip.setParent(None)
         lay.addLayout(queue_row)
         lay.addLayout(filt_row)
-        lay.addWidget(overview)
-        lay.addWidget(list_w, 1)
-        lay.addLayout(triage_row)
-        lay.addWidget(self._investigate_preview)
-        lay.addLayout(scope_row)
+        lay.addWidget(split, 1)
+        lay.addWidget(_hsep())
         lay.addLayout(footer)
         self._rebuild_list()
+        self._rebuild_detail()
         self._refresh_scope_hint()
         self._refresh_triage_buttons()
+
+    # ---- master/detail divider persistence (btf_viewer.rc) --------------
+    def _findings_rc(self):
+        parent = self.parent()
+        while parent is not None:
+            settings = getattr(parent, "_settings", None)
+            if settings is not None:
+                return settings
+            parent = parent.parent()
+        return None
+
+    def _load_split_ratio(self):
+        rc = self._findings_rc()
+        if rc is None:
+            return None
+        vals = list(_parse_int_csv(
+            rc.get("analysis_findings", "split_sizes", ""),
+            2, (0, 0), lo=1, hi=8000))
+        if len(vals) == 2 and sum(vals) > 0:
+            return vals
+        return None
+
+    def _on_split_moved(self, _pos: int = 0, _index: int = 0) -> None:
+        sizes = self._split.sizes()
+        if len(sizes) == 2 and sum(sizes) > 0:
+            self._split_ratio = list(sizes)
+        timer = getattr(self, "_split_save_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(250)
+            timer.timeout.connect(self._save_split_ratio)
+            self._split_save_timer = timer
+        timer.start()
+
+    def _save_split_ratio(self) -> None:
+        rc = self._findings_rc()
+        if rc is None:
+            return
+        sizes = self._split.sizes()
+        if len(sizes) == 2 and sum(sizes) > 0:
+            rc.set("analysis_findings", "split_sizes",
+                   _format_int_csv(sizes), flush=True)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        ratio = getattr(self, "_split_ratio", None)
+        if ratio and len(ratio) == 2 and sum(ratio) > 0:
+            total = max(self._split.width() - self._split.handleWidth(), 200)
+            s = sum(ratio)
+            left = min(max(160, int(total * ratio[0] / s)), total - 200)
+            self._split.setSizes([left, total - left])
 
     def triage_state(self) -> dict:
         return dict(self._triage_state)
@@ -9613,6 +9926,80 @@ class _AnalysisFindingsDialog(QDialog):
             btn.setChecked(qid == queue)
         self._rebuild_list()
 
+    def _rebuild_ctx_strip(self) -> None:
+        """Repopulate the context chips + optional Recalculate button
+        (web `<AnalysisContextStrip>` / `.ctx-recalc`)."""
+        lay = getattr(self, "_ctx_lay", None)
+        if lay is None:
+            return
+        while lay.count():
+            it = lay.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        try:
+            from .analysis_context import format_analysis_context_lines
+            lines = format_analysis_context_lines(self._analysis_context)
+        except Exception:
+            lines = []
+        for ln in lines:
+            chip = QLabel(ln)
+            chip.setStyleSheet(self._ctx_chip_css)
+            lay.addWidget(chip, 0)
+        if self._ctx_stale and callable(self._on_recalculate):
+            btn = QPushButton("Recalculate with current context")
+            btn.setFont(self._ui_font)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(self._ctx_recalc_css)
+            btn.clicked.connect(self._recalculate_context)
+            lay.addWidget(btn, 0)
+        lay.addStretch(1)
+
+    def _mark_context_stale(self) -> None:
+        """Scope/Filters changed since these findings were built."""
+        if not callable(self._on_recalculate) or self._ctx_stale:
+            return
+        self._ctx_stale = True
+        self._rebuild_ctx_strip()
+        if getattr(self, "_has_ctx_strip", False):
+            self._ctx_strip.setVisible(True)
+
+    def _recalculate_context(self) -> None:
+        if not callable(self._on_recalculate):
+            return
+        try:
+            result = self._on_recalculate()
+        except Exception:
+            return
+        if not result:
+            return
+        findings, scope_title, ctx = result
+        self._findings = list(findings or [])
+        self._scope_title = scope_title or ""
+        self._analysis_context = ctx
+        self.setWindowTitle(f"Analysis Findings{self._scope_title}")
+        self._dashboard = analysis_dashboard(
+            self._findings, quality_warnings=self._quality_warnings)
+        title_cluster: dict = {}
+        id_cluster: dict = {}
+        for inc in self._dashboard.get("clusters") or []:
+            cid = str(inc.get("id") or "")
+            for t in inc.get("findings") or []:
+                title_cluster.setdefault(str(t), cid)
+            for fid in inc.get("finding_ids") or []:
+                if fid:
+                    id_cluster.setdefault(str(fid), cid)
+        self._title_cluster = title_cluster
+        self._id_cluster = id_cluster
+        if getattr(self, "_overview_lbl", None) is not None:
+            self._overview_lbl.setText(str(self._dashboard.get("summary") or ""))
+        self._ctx_stale = False
+        self._rebuild_ctx_strip()
+        self._rebuild_list()
+        self._refresh_scope_hint()
+        self._refresh_triage_buttons()
+
     def _rebuild_list(self) -> None:
         muted = self._palette["muted"]
         ink = self._palette["ink"]
@@ -9622,8 +10009,7 @@ class _AnalysisFindingsDialog(QDialog):
         ok_ink = self._palette["ok_ink"]
         ui_font = self._ui_font
         ui_fs = self._ui_fs
-        ui_pt = self._ui_pt
-        min_h = max(40, int(round(ui_pt * 5.0)))
+        _line_h = QFontMetrics(ui_font).height()
         base = self._filtered_base()
         counts = self._queue_counts(base, self._triage_state)
         for qid, btn in self._queue_btns.items():
@@ -9651,102 +10037,166 @@ class _AnalysisFindingsDialog(QDialog):
             self._list_w.addItem(empty)
             self._on_selection_changed()
             return
-        select_row = 0
-        for i, row in enumerate(rows):
+        _acc = "52, 152, 219"   # desktop accent (matches list selection tint)
+        select_row = -1         # row of the previously-selected finding, if any
+        first_finding_row = -1  # row of the first real finding (web: items[0])
+        for row in rows:
             if row.get("kind") == "header":
                 cid = str(row.get("incident_id") or "")
                 collapsed = cid in self._collapsed_incidents
                 mark = "▸" if collapsed else "▾"
-                label = f"{mark}  {row.get('label')}  ({row.get('count')} related)"
-                item = QListWidgetItem(label)
+                # Web `.analysis-incident-header`: accent-tinted rounded chip.
+                hdr_w = QFrame()
+                hdr_w.setObjectName("analysisIncidentHeader")
+                hdr_w.setStyleSheet(
+                    "QFrame#analysisIncidentHeader {"
+                    f" background: rgba({_acc}, 0.12);"
+                    f" border: 1px solid rgba({_acc}, 0.35);"
+                    " border-radius: 6px; }"
+                    "QLabel { background: transparent; border: none; }")
+                hl = QHBoxLayout(hdr_w)
+                hl.setContentsMargins(9, 5, 9, 5)
+                hl.setSpacing(8)
+                tgl = QLabel(mark)
+                tgl.setFont(ui_font)
+                tgl.setStyleSheet(f"color: {ink}; font-weight: 600;")
+                nm = QLabel(str(row.get("label") or ""))
+                nm.setFont(ui_font)
+                nm.setStyleSheet(
+                    f"color: {ink}; font-weight: 600; font-size: {ui_fs};")
+                ct = QLabel(f"{row.get('count')} related")
+                ct.setFont(ui_font)
+                ct.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+                hl.addWidget(tgl, 0)
+                hl.addWidget(nm, 0)
+                hl.addStretch(1)
+                hl.addWidget(ct, 0)
+                item = QListWidgetItem()
                 item.setData(Qt.ItemDataRole.UserRole, f"__incident__:{cid}")
-                item.setFont(ui_font)
-                item.setForeground(QBrush(QColor(ink)))
+                item.setSizeHint(QSize(180, _line_h + 16))
                 self._list_w.addItem(item)
+                self._list_w.setItemWidget(item, hdr_w)
                 continue
             if row.get("incident_id") and str(row.get("incident_id")) in self._collapsed_incidents:
                 continue
             f = row
             sev = f.get("severity", "info")
             title = str(f.get("observation") or f.get("title", "Finding")).strip() or "Finding"
-            text_body = str(f.get("why_it_matters") or f.get("text", "")).strip()
-            strength = str(f.get("evidence_strength_label") or "").strip()
-            check_next = str(f.get("check_next") or "").strip()
             fid = str(f.get("id") or "")
             cid = self._id_cluster.get(fid) or self._title_cluster.get(title, "")
             prefix = f"[{cid}] " if cid else ""
             if sev == "error":
-                badge = SEMANTIC_GLYPHS["error"]
-                color = err
+                badge, color = SEMANTIC_GLYPHS["error"], err
             elif sev == "warning":
-                badge = SEMANTIC_GLYPHS["warning"]
-                color = warn
+                badge, color = SEMANTIC_GLYPHS["warning"], warn
             elif fid == "load_balance_ok":
-                badge = SEMANTIC_GLYPHS["improved"]
-                color = ok_ink
+                badge, color = SEMANTIC_GLYPHS["improved"], ok_ink
             else:
-                badge = "○"
-                color = ink
-            row_w = QWidget()
+                badge, color = "○", ink
+            # Compact index row: icon + [Ix] title on one elided line, faint
+            # single-line meta below. Detail/evidence live in the right pane.
+            # Web `.analysis-list li.in-incident`: accent left bar + indent.
+            in_incident = bool(row.get("incident_id"))
+            row_w = QFrame()
+            if in_incident:
+                row_w.setObjectName("analysisInIncident")
+                row_w.setStyleSheet(
+                    "QFrame#analysisInIncident {"
+                    f" border-left: 3px solid rgba({_acc}, 0.6); }}"
+                    "QLabel { border: none; }")
             vbox = QVBoxLayout(row_w)
-            vbox.setContentsMargins(4, 2, 4, 2)
-            vbox.setSpacing(4)
+            vbox.setContentsMargins(18 if in_incident else 4, 4, 4, 4)
+            vbox.setSpacing(2)
             title_l = QLabel(f"{badge}  {prefix}{title}")
             title_l.setObjectName("analysisFindingTitle")
-            title_l.setWordWrap(True)
             title_l.setFont(ui_font)
+            title_l.setTextFormat(Qt.TextFormat.PlainText)
             title_l.setStyleSheet(
-                f"color: {color}; font-weight: 700; font-size: {ui_fs};")
+                f"color: {color}; font-weight: 600; font-size: {ui_fs};")
             vbox.addWidget(title_l)
-            if text_body:
-                text_l = QLabel(text_body)
-                text_l.setObjectName("analysisFindingText")
-                text_l.setWordWrap(True)
-                text_l.setFont(ui_font)
-                text_l.setStyleSheet(f"color: {color}; font-size: {ui_fs};")
-                vbox.addWidget(text_l)
-            if strength:
-                s_l = QLabel(f"EVIDENCE STRENGTH  {strength}")
-                s_l.setWordWrap(True)
-                s_l.setFont(ui_font)
-                s_l.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
-                vbox.addWidget(s_l)
-            evidence_text = str(f.get("evidence_text") or "").strip()
-            if evidence_text:
-                ev_l = QLabel(f"EVIDENCE  {evidence_text}")
-                ev_l.setWordWrap(True)
-                ev_l.setFont(ui_font)
-                ev_l.setStyleSheet(
-                    f"color: {muted}; font-size: {ui_fs};"
-                    f" font-family: '{_get_fixed_font_family()}';")
-                vbox.addWidget(ev_l)
-            if check_next:
-                cn_l = QLabel(f"CHECK NEXT  {check_next}")
-                cn_l.setWordWrap(True)
-                cn_l.setFont(ui_font)
-                cn_l.setStyleSheet(f"color: {ask}; font-size: {ui_fs};")
-                vbox.addWidget(cn_l)
-            reason = (self._triage_state.get("dismissed") or {}).get(fid)
-            if reason:
-                dr = QLabel(f"Dismissed: {reason}")
-                dr.setWordWrap(True)
-                dr.setFont(ui_font)
-                dr.setStyleSheet(
-                    f"color: {muted}; font-size: {ui_fs}; font-style: italic;")
-                vbox.addWidget(dr)
+            n_lines = 1
+            meta_bits = []
+            _cat = str(f.get("category") or "").strip()
+            if _cat:
+                meta_bits.append(_cat)
+            _str = str(f.get("evidence_strength_label") or "").strip()
+            if _str:
+                meta_bits.append(_str)
+            if fid in (self._triage_state.get("dismissed") or {}):
+                meta_bits.append("dismissed")
+            elif fid in (self._triage_state.get("reviewed") or []):
+                meta_bits.append("done")
+            elif fid in (self._triage_state.get("case") or []):
+                meta_bits.append("in case")
+            if meta_bits:
+                meta_l = QLabel(" · ".join(meta_bits))
+                meta_l.setFont(ui_font)
+                meta_l.setStyleSheet(f"color: {muted}; font-size: {ui_fs};")
+                vbox.addWidget(meta_l)
+                n_lines = 2
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, fid)
             item.setFont(ui_font)
-            item.setForeground(QBrush(QColor(color)))
+            item.setSizeHint(QSize(180, _line_h * n_lines + 14))
             self._list_w.addItem(item)
             self._list_w.setItemWidget(item, row_w)
-            row_w.adjustSize()
-            hint = row_w.sizeHint()
-            item.setSizeHint(QSize(max(hint.width(), 200), max(hint.height(), min_h)))
+            row_idx = self._list_w.count() - 1
+            if first_finding_row < 0:
+                first_finding_row = row_idx
             if fid and fid == prev:
-                select_row = self._list_w.count() - 1
+                select_row = row_idx
+        if select_row < 0:
+            # Web `selectedFinding` falls back to items[0]; mirror that so the
+            # detail pane shows the first finding instead of the empty hint.
+            select_row = first_finding_row if first_finding_row >= 0 else 0
         self._list_w.setCurrentRow(select_row)
         self._on_selection_changed()
+
+    def _rebuild_detail(self) -> None:
+        """Populate the right-hand pane for the selected finding (master/detail)."""
+        muted = self._palette["muted"]
+        err = self._palette["err"]
+        warn = self._palette["warn"]
+        ok_ink = self._palette["ok_ink"]
+        ink = self._palette["ink"]
+        f = self._selected_finding()
+        text_widgets = (
+            self._detail_title, self._detail_body, self._detail_strength,
+            self._detail_evidence, self._detail_checknext, self._detail_dismissed,
+        )
+        if not f:
+            for w in text_widgets:
+                w.setVisible(False)
+            self._detail_actions.setVisible(False)
+            self._detail_empty.setVisible(True)
+            return
+        self._detail_empty.setVisible(False)
+        self._detail_actions.setVisible(True)
+        sev = f.get("severity", "info")
+        fid = str(f.get("id") or "")
+        color = (err if sev == "error" else warn if sev == "warning"
+                 else ok_ink if fid == "load_balance_ok" else ink)
+        title = str(f.get("observation") or f.get("title", "Finding")).strip() or "Finding"
+        cid = self._id_cluster.get(fid) or self._title_cluster.get(title, "")
+        self._detail_title.setText(f"{('[' + cid + ']  ') if cid else ''}{title}")
+        self._detail_title.setStyleSheet(
+            f"color: {color}; font-weight: 700; font-size: {self._ui_fs};")
+        self._detail_title.setVisible(True)
+        self._detail_body.setStyleSheet(
+            f"color: {color}; font-size: {self._ui_fs};")
+
+        def _set(widget, prefix, value):
+            v = str(value or "").strip()
+            widget.setText(f"{prefix}{v}" if prefix else v)
+            widget.setVisible(bool(v))
+
+        _set(self._detail_body, "", f.get("why_it_matters") or f.get("text", ""))
+        _set(self._detail_strength, "Evidence strength: ",
+             f.get("evidence_strength_label"))
+        _set(self._detail_evidence, "Evidence: ", f.get("evidence_text"))
+        _set(self._detail_checknext, "Check next: ", f.get("check_next"))
+        _set(self._detail_dismissed, "Dismissed: ",
+             (self._triage_state.get("dismissed") or {}).get(fid))
 
     def _on_list_item_clicked(self, item) -> None:
         if item is None:
@@ -9762,6 +10212,11 @@ class _AnalysisFindingsDialog(QDialog):
         self._rebuild_list()
 
     def _on_selection_changed(self) -> None:
+        # Web `watch(selectedId)` — switching findings drops a pending confirm.
+        if getattr(self, "_pending_investigate", None) is not None:
+            self._set_investigate_pending(False)
+        if hasattr(self, "_detail_title"):
+            self._rebuild_detail()
         self._refresh_scope_hint()
         self._refresh_triage_buttons()
 
@@ -9787,10 +10242,10 @@ class _AnalysisFindingsDialog(QDialog):
         in_case = fid in (self._triage_state.get("case") or [])
         self._done_btn.setEnabled(enabled)
         self._dismiss_btn.setEnabled(enabled)
-        self._case_btn.setEnabled(enabled and not in_case)
+        self._case_btn.setEnabled(enabled)
         self._done_btn.setText("Undo" if reviewed else "Done")
         self._dismiss_btn.setText("Restore" if dismissed else "Dismiss…")
-        self._case_btn.setText("In case" if in_case else "Add to case")
+        self._case_btn.setText("Remove from case" if in_case else "Add to case")
 
     def _toggle_done(self) -> None:
         finding = self._selected_finding()
@@ -9825,6 +10280,8 @@ class _AnalysisFindingsDialog(QDialog):
         if not fid:
             return
         if fid in (self._triage_state.get("case") or []):
+            self._commit_triage(
+                self._apply_triage_action(self._triage_state, fid, "uncase"))
             return
         self._commit_triage(
             self._apply_triage_action(self._triage_state, fid, "case"))
@@ -9870,6 +10327,7 @@ class _AnalysisFindingsDialog(QDialog):
         if finding is None:
             return
         self._on_apply_scope(finding)
+        self._mark_context_stale()
 
     def _show_evidence_selected(self) -> None:
         if self._on_show_evidence is None:
@@ -9879,7 +10337,19 @@ class _AnalysisFindingsDialog(QDialog):
             return
         self._on_show_evidence(finding)
 
-    def _investigate_selected(self) -> None:
+    def _set_investigate_pending(self, pending: bool) -> None:
+        """Toggle the inline confirm state (web `investigatePending`)."""
+        if not pending:
+            self._pending_investigate = None
+        self._investigate_preview_box.setVisible(pending)
+        self._investigate_btn.setVisible(not pending)
+        self._confirm_investigate_btn.setVisible(pending)
+        self._cancel_investigate_btn.setVisible(pending)
+        # Web: Undo Scope is `v-if="canUndoInvestigate && !investigatePending"`.
+        if callable(self._on_undo_investigate):
+            self._undo_scope_btn.setVisible(not pending)
+
+    def _begin_investigate(self) -> None:
         if self._on_investigate is None:
             return
         finding = self._selected_finding()
@@ -9900,25 +10370,37 @@ class _AnalysisFindingsDialog(QDialog):
             current_lo=self._current_cursor_lo,
             current_hi=self._current_cursor_hi,
         )
+        self._pending_investigate = (finding, sid)
         self._investigate_preview.setText(preview)
-        self._investigate_preview.setVisible(True)
-        reply = QMessageBox.question(
-            self, "Confirm Investigate",
-            preview + "\n\nContinue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        self._investigate_preview.setVisible(False)
-        if reply != QMessageBox.StandardButton.Yes:
+        # Reserve the full wrapped-text height explicitly (the box sits in a
+        # nested QWidget whose default size policy drops heightForWidth
+        # propagation, so the layout would otherwise squeeze it to one line).
+        lbl = self._investigate_preview
+        _avail = max(320, (self._investigate_preview_box.width()
+                           or self.width() - 60) - 24)
+        lbl.setMinimumHeight(
+            max(lbl.heightForWidth(_avail), lbl.sizeHint().height()) + 6)
+        self._set_investigate_pending(True)
+
+    def _cancel_investigate(self) -> None:
+        self._set_investigate_pending(False)
+
+    def _confirm_investigate(self) -> None:
+        pend = getattr(self, "_pending_investigate", None)
+        self._set_investigate_pending(False)
+        if not pend:
             return
+        finding, sid = pend
         self._on_investigate(finding, sid)
         if callable(self._on_undo_investigate):
             self._undo_scope_btn.setEnabled(True)
+        self._mark_context_stale()
 
     def _undo_investigate_scope(self) -> None:
         if callable(self._on_undo_investigate):
             self._on_undo_investigate()
         self._undo_scope_btn.setEnabled(False)
+        self._mark_context_stale()
 
     def _query_with_ai(
         self, ai_enabled: bool, template_id: str = "findings",

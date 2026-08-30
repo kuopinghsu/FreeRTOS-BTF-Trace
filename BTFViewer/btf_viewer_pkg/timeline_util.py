@@ -412,6 +412,48 @@ def _format_time_trim(value: float, time_scale: str = "ns") -> str:
         return f"{whole} {unit}"
     return f"{whole}.{frac} {unit}"
 
+
+def _format_time_web(value: float, time_scale: str = "ns", decimals: int = 3) -> str:
+    """1:1 port of the web app's ``formatTime`` (``web/src/utils/timeFormat.js``).
+
+    Used only by the Marks / Cursor panels so their rows render byte-for-byte
+    like the web ``CursorPanel`` / ``MarksPanel`` / cursor-range block.  It
+    differs from :func:`_format_time` in the two ways the web helper is spec'd
+    to behave:
+
+    * whole values in the trace's base unit print with no decimals
+      (``2 µs`` — not ``2.000 µs``);
+    * a value smaller than one base unit is NOT down-shifted when
+      *time_scale* is not ``ns`` (``0.5`` in a ``us`` trace → ``0.500 µs``,
+      not ``500.000 ns``).
+
+    Scaling *up* from the base unit to µs / ms / s is unchanged from
+    :func:`_format_time` — keep the two in step if either side moves.
+    """
+    def _base(v: float, unit: str) -> str:
+        return f"{int(v)} {unit}" if float(v).is_integer() else f"{v:.{decimals}f} {unit}"
+
+    t = value
+    if time_scale == "ns":
+        if t >= 1e9:
+            return f"{t / 1e9:.{decimals}f} s"
+        if t >= 1e6:
+            return f"{t / 1e6:.{decimals}f} ms"
+        if t >= 1e3:
+            return f"{t / 1e3:.{decimals}f} µs"
+        return _base(t, "ns")
+    if time_scale == "us":
+        if t >= 1e6:
+            return f"{t / 1e6:.{decimals}f} s"
+        if t >= 1e3:
+            return f"{t / 1e3:.{decimals}f} ms"
+        return _base(t, "µs")
+    if time_scale == "ms":
+        if t >= 1e3:
+            return f"{t / 1e3:.{decimals}f} s"
+        return _base(t, "ms")
+    return _base(t, time_scale)
+
 _TIME_LABEL_TO_NS: Dict[str, float] = {
     "ns": 1.0,
     "µs": 1_000.0,

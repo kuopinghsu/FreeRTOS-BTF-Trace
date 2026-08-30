@@ -35,11 +35,6 @@
         :on-clear-filters="onClearFilters"
         @recalculate="emit('recalculate-context')"
       />
-      <!-- Desktop parity: note, then queues/filters, then overview box (no height clip). -->
-      <p class="analysis-note">
-        Heuristic summary of load balance, WCET, blocking, thrashing, deadlines, tick health, and sync.<br>
-        Select a finding, then triage or Investigate.
-      </p>
       <div class="analysis-queue">
         <button
           v-for="q in queueTabs"
@@ -97,14 +92,14 @@
           Group incidents
         </label>
       </div>
-      <pre
-        v-if="dashboard.summary"
-        class="analysis-overview"
-      >{{ dashboard.summary }}</pre>
-      <div class="analysis-body">
+      <div
+        ref="bodyEl"
+        class="analysis-body"
+      >
         <ul
           v-if="displayRows.length"
           class="analysis-list"
+          :style="listStyle"
         >
           <template
             v-for="(row, i) in displayRows"
@@ -122,6 +117,7 @@
             </li>
             <li
               v-else-if="!row.incident_id || !collapsedIncidents[row.incident_id]"
+              class="analysis-row"
               :class="[
                 `sev-${row.severity || 'info'}`,
                 { 'sev-ok': row.id === 'load_balance_ok' },
@@ -132,114 +128,143 @@
             >
               <div class="finding-title">{{ severityGlyph(row) }}{{ clusterPrefix(row) }}{{ row.observation || row.title }}</div>
               <div
-                v-if="row.evidence_strength_label"
-                class="finding-strength"
-                :title="row.evidence_strength_label"
-              >{{ row.evidence_strength_label }}</div>
-              <div class="finding-text">{{ row.why_it_matters || row.text }}</div>
-              <div
-                v-if="row.evidence_text"
-                class="finding-evidence"
-              ><span class="finding-evidence-label">Evidence</span> {{ row.evidence_text }}</div>
-              <div
-                v-if="row.check_next"
-                class="finding-check-next"
-              ><span class="finding-evidence-label">Check next</span> {{ row.check_next }}</div>
-              <div
-                v-if="dismissReason(row)"
-                class="finding-dismiss-reason"
-              >Dismissed: {{ dismissReason(row) }}</div>
+                v-if="rowMeta(row)"
+                class="finding-meta"
+              >{{ rowMeta(row) }}</div>
             </li>
           </template>
         </ul>
         <div
           v-else
-          class="analysis-empty"
+          class="analysis-list analysis-empty"
+          :style="listStyle"
         >
           No findings in this queue
         </div>
+
+        <div
+          class="analysis-divider"
+          @pointerdown="onDividerPointerDown"
+        />
+
+        <div class="analysis-detail">
+          <div
+            v-if="!selectedFinding"
+            class="analysis-detail-empty"
+          >
+            Select a finding to see details.
+          </div>
+          <template v-else>
+            <div
+              class="analysis-detail-title"
+              :class="[`sev-${selectedFinding.severity || 'info'}`,
+                       { 'sev-ok': selectedFinding.id === 'load_balance_ok' }]"
+            >{{ clusterPrefix(selectedFinding) }}{{ selectedFinding.observation || selectedFinding.title }}</div>
+            <div class="analysis-detail-body">{{ selectedFinding.why_it_matters || selectedFinding.text }}</div>
+            <div
+              v-if="selectedFinding.evidence_strength_label"
+              class="analysis-detail-meta"
+            >Evidence strength: {{ selectedFinding.evidence_strength_label }}</div>
+            <div
+              v-if="selectedFinding.evidence_text"
+              class="analysis-detail-meta mono"
+            >Evidence: {{ selectedFinding.evidence_text }}</div>
+            <div
+              v-if="selectedFinding.check_next"
+              class="analysis-detail-checknext"
+            >Check next: {{ selectedFinding.check_next }}</div>
+            <div
+              v-if="dismissReason(selectedFinding)"
+              class="analysis-detail-meta italic"
+            >Dismissed: {{ dismissReason(selectedFinding) }}</div>
+
+            <hr class="analysis-detail-rule">
+            <div class="analysis-scope-text">{{ scopeHint }}</div>
+            <pre
+              v-if="investigatePending"
+              class="analysis-investigate-preview"
+            >{{ investigatePreviewText }}</pre>
+            <div class="analysis-detail-actions">
+              <button
+                type="button"
+                class="analysis-btn"
+                title="Place C1–C2 on the recommended window and zoom the timeline"
+                @click="applyScope"
+              >
+                Apply cursors
+              </button>
+              <button
+                type="button"
+                class="analysis-btn"
+                title="Jump to Timeline Evidence for the selected finding (does not change Scope or Filters)"
+                @click="showEvidence"
+              >
+                {{ showOnTimelineLabel }}
+              </button>
+              <button
+                v-if="!investigatePending"
+                type="button"
+                class="analysis-btn analysis-btn-primary"
+                :disabled="!investigateSectionId"
+                :title="investigateSectionId
+                  ? 'Preview Scope and Statistics changes, then Confirm'
+                  : 'No specific Statistics section is associated with this finding'"
+                @click="beginInvestigate"
+              >
+                Investigate…
+              </button>
+              <button
+                v-if="investigatePending"
+                type="button"
+                class="analysis-btn analysis-btn-primary"
+                @click="confirmInvestigate"
+              >
+                Confirm Investigate
+              </button>
+              <button
+                v-if="investigatePending"
+                type="button"
+                class="analysis-btn"
+                @click="cancelInvestigate"
+              >
+                Cancel
+              </button>
+              <button
+                v-if="canUndoInvestigate && !investigatePending"
+                type="button"
+                class="analysis-btn"
+                title="Restore cursors and Limit-to-cursors from before Investigate"
+                @click="emit('undo-investigate')"
+              >
+                Undo Scope
+              </button>
+            </div>
+
+            <hr class="analysis-detail-rule">
+            <div class="analysis-detail-actions">
+              <button
+                type="button"
+                class="analysis-btn"
+                :disabled="!selectedFinding?.id"
+                @click="toggleDone"
+              >{{ isDone ? 'Undo' : 'Done' }}</button>
+              <button
+                type="button"
+                class="analysis-btn"
+                :disabled="!selectedFinding?.id"
+                @click="toggleDismiss"
+              >{{ isDismissed ? 'Restore' : 'Dismiss…' }}</button>
+              <button
+                type="button"
+                class="analysis-btn"
+                :disabled="!selectedFinding?.id"
+                @click="addToCase"
+              >{{ isInCase ? 'Remove from case' : 'Add to case' }}</button>
+            </div>
+          </template>
+        </div>
       </div>
-      <div class="analysis-triage">
-        <button
-          type="button"
-          class="analysis-btn"
-          :disabled="!selectedFinding?.id"
-          @click="toggleDone"
-        >{{ isDone ? 'Undo' : 'Done' }}</button>
-        <button
-          type="button"
-          class="analysis-btn"
-          :disabled="!selectedFinding?.id"
-          @click="toggleDismiss"
-        >{{ isDismissed ? 'Restore' : 'Dismiss…' }}</button>
-        <button
-          type="button"
-          class="analysis-btn"
-          :disabled="!selectedFinding?.id || isInCase"
-          @click="addToCase"
-        >{{ isInCase ? 'In case' : 'Add to case' }}</button>
-      </div>
-      <div class="analysis-scope">
-        <div class="analysis-scope-text">{{ scopeHint }}</div>
-        <pre
-          v-if="investigatePending"
-          class="analysis-investigate-preview"
-        >{{ investigatePreviewText }}</pre>
-        <button
-          type="button"
-          class="analysis-btn"
-          title="Place C1–C2 on the recommended window and zoom the timeline"
-          @click="applyScope"
-        >
-          Apply cursors
-        </button>
-        <button
-          type="button"
-          class="analysis-btn"
-          :disabled="!selectedFinding"
-          title="Jump to Timeline Evidence for the selected finding (does not change Scope or Filters)"
-          @click="showEvidence"
-        >
-          {{ showOnTimelineLabel }}
-        </button>
-        <button
-          v-if="!investigatePending"
-          type="button"
-          class="analysis-btn analysis-btn-primary"
-          :disabled="!investigateSectionId"
-          :title="investigateSectionId
-            ? 'Preview Scope and Statistics changes, then Confirm'
-            : 'No specific Statistics section is associated with this finding'"
-          @click="beginInvestigate"
-        >
-          Investigate…
-        </button>
-        <button
-          v-if="investigatePending"
-          type="button"
-          class="analysis-btn analysis-btn-primary"
-          @click="confirmInvestigate"
-        >
-          Confirm Investigate
-        </button>
-        <button
-          v-if="investigatePending"
-          type="button"
-          class="analysis-btn"
-          @click="cancelInvestigate"
-        >
-          Cancel
-        </button>
-        <button
-          v-if="canUndoInvestigate && !investigatePending"
-          type="button"
-          class="analysis-btn"
-          title="Restore cursors and Limit-to-cursors from before Investigate"
-          @click="emit('undo-investigate')"
-        >
-          Undo Scope
-        </button>
-      </div>
+
       <div class="analysis-footer">
         <div class="analysis-footer-row">
           <div class="analysis-menu-wrap">
@@ -267,6 +292,14 @@
             </button>
           </div>
           <div class="analysis-footer-spacer" />
+          <button
+            type="button"
+            class="analysis-btn"
+            title="Close"
+            @click="emit('close')"
+          >
+            Close
+          </button>
         </div>
       </div>
     </div>
@@ -374,6 +407,48 @@ const sortBy = ref(SORT_SEVERITY)
 const groupIncidents = ref(true)
 const collapsedIncidents = ref({})
 const investigatePending = ref(false)
+
+// ---- master/detail divider (persisted to localStorage) ----------------
+const SPLIT_LS_KEY = 'btfviewer.analysisFindings.splitPx'
+const bodyEl = ref(null)
+let _splitDrag = null
+
+function loadSplitPx() {
+  try {
+    const v = parseInt(window.localStorage.getItem(SPLIT_LS_KEY) || '', 10)
+    return Number.isFinite(v) && v >= 160 ? v : null
+  } catch { return null }
+}
+
+const splitPx = ref(loadSplitPx())
+const listStyle = computed(() => (splitPx.value ? { flex: `0 0 ${splitPx.value}px` } : {}))
+
+function onDividerPointerDown(ev) {
+  if (ev.pointerType === 'mouse' && ev.button !== 0) return
+  const host = bodyEl.value
+  if (!host) return
+  _splitDrag = host.getBoundingClientRect()
+  window.addEventListener('pointermove', onDividerPointerMove)
+  window.addEventListener('pointerup', onDividerPointerUp)
+  ev.preventDefault()
+}
+
+function onDividerPointerMove(ev) {
+  if (!_splitDrag) return
+  const min = 200
+  const max = Math.max(min, _splitDrag.width - 260)
+  splitPx.value = Math.round(Math.min(max, Math.max(min, ev.clientX - _splitDrag.left)))
+}
+
+function onDividerPointerUp() {
+  if (!_splitDrag) return
+  _splitDrag = null
+  window.removeEventListener('pointermove', onDividerPointerMove)
+  window.removeEventListener('pointerup', onDividerPointerUp)
+  try {
+    if (splitPx.value) window.localStorage.setItem(SPLIT_LS_KEY, String(splitPx.value))
+  } catch { /* ignore */ }
+}
 const severityOptions = [
   { value: '', label: 'All' },
   { value: 'error', label: 'Critical' },
@@ -511,6 +586,18 @@ function dismissReason(f) {
   return triageState.value.dismissed?.[fid] || ''
 }
 
+/** Faint one-line meta under a list row: category · strength · triage state. */
+function rowMeta(f) {
+  const fid = String(f?.id || '').trim()
+  const bits = []
+  if (f?.category) bits.push(String(f.category))
+  if (f?.evidence_strength_label) bits.push(String(f.evidence_strength_label))
+  if (triageState.value.dismissed?.[fid]) bits.push('dismissed')
+  else if ((triageState.value.reviewed || []).includes(fid)) bits.push('done')
+  else if ((triageState.value.case || []).includes(fid)) bits.push('in case')
+  return bits.join(' · ')
+}
+
 function toggleIncident(cid) {
   const id = String(cid || '')
   if (!id) return
@@ -577,7 +664,11 @@ function toggleDismiss() {
 
 function addToCase() {
   const f = selectedFinding.value
-  if (!f?.id || isInCase.value) return
+  if (!f?.id) return
+  if (isInCase.value) {
+    commitTriage(applyTriageAction(triageState.value, f.id, 'uncase'))
+    return
+  }
   commitTriage(applyTriageAction(triageState.value, f.id, 'case'))
   emit('add-to-case', f)
 }
@@ -707,6 +798,7 @@ onUnmounted(() => {
   document.removeEventListener('mousedown', onDocMouseDown)
   document.removeEventListener('keydown', onDocKeyDown)
   onDialogPointerUp()
+  onDividerPointerUp()
 })
 
 function askAi(payload) {
@@ -771,6 +863,9 @@ function moreAction(kind) {
 .analysis-dialog {
   pointer-events: auto;
   width: min(960px, calc(100vw - 24px));
+  /* Fixed height so switching to an empty Done/Case/Dismissed queue doesn't
+     shrink the window to fit the "No findings" placeholder. */
+  height: min(92vh, 900px);
   max-height: min(92vh, 900px);
   display: flex;
   flex-direction: column;
@@ -927,7 +1022,7 @@ function moreAction(kind) {
   border-left: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
 }
 .analysis-investigate-preview {
-  flex: 1 1 100%;
+  width: 100%;
   margin: 0 0 4px;
   padding: 8px 10px;
   font: inherit;
@@ -949,52 +1044,62 @@ function moreAction(kind) {
   color: var(--fg-dim);
   font-style: italic;
 }
-.analysis-note {
-  margin: 0;
-  padding: 8px 16px 10px;
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--fg-dim);
-  flex: 0 0 auto;
-}
-
-/* Desktop QLabel overview: bordered strip that grows with content (no 28vh clip). */
-.analysis-overview {
-  margin: 0 16px 8px;
-  padding: 8px 10px;
-  font: inherit;
-  font-size: 12px;
-  line-height: 1.4;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  flex: 0 0 auto;
-  overflow: visible;
-}
-
+/* ---- Master / detail split ------------------------------------------ */
 .analysis-body {
   flex: 1 1 auto;
-  overflow: auto;
-  padding: 8px 16px 14px;
+  display: flex;
+  align-items: stretch;
   min-height: 0;
+  border-top: 1px solid var(--border);
 }
 
 .analysis-list {
+  flex: 0 0 34%;
+  min-width: 200px;
+  max-width: 70%;
   margin: 0;
-  padding: 0;
+  padding: 6px;
   list-style: none;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* draggable master/detail divider — same style as App.vue .panel-resizer:
+   8px transparent hit target, thin 2px accent bar shown on hover only */
+.analysis-divider {
+  flex: 0 0 8px;
+  align-self: stretch;
+  position: relative;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.analysis-divider::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+
+.analysis-divider:hover::before {
+  background: color-mix(in srgb, var(--accent) 50%, var(--border));
 }
 
 .analysis-list li {
-  margin: 0 0 8px;
-  line-height: 1.45;
+  margin: 1px 0;
+  line-height: 1.35;
   font-size: 13px;
   cursor: pointer;
-  border-radius: 6px;
-  padding: 10px 12px;
+  border-radius: 5px;
+  padding: 5px 8px;
+}
+
+.analysis-list li.analysis-row:hover:not(.selected) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .analysis-list li.selected {
@@ -1002,61 +1107,92 @@ function moreAction(kind) {
   outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
-.finding-title {
-  font-weight: 700;
-  margin-bottom: 4px;
+.analysis-list li.analysis-row .finding-title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.finding-text {
-  line-height: 1.45;
-}
-
-.finding-evidence {
-  margin-top: 4px;
+.finding-meta {
   font-size: 11px;
-  font-family: monospace;
-  opacity: 0.85;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.finding-evidence-label {
-  font-weight: 700;
-  text-transform: uppercase;
-  font-size: var(--type-min, 11px);
-  letter-spacing: 0.4px;
-  margin-right: 4px;
-}
-
-.analysis-list .sev-warning { color: var(--analysis-warn); }
-.analysis-list .sev-error { color: var(--analysis-err); }
-.analysis-list .sev-info { color: var(--fg); }
-.analysis-list .sev-ok { color: var(--analysis-ok); }
+.analysis-list .sev-warning .finding-title { color: var(--analysis-warn); }
+.analysis-list .sev-error .finding-title { color: var(--analysis-err); }
+.analysis-list .sev-ok .finding-title { color: var(--analysis-ok); }
 
 .analysis-empty {
   font-size: 13px;
   color: var(--fg-dim);
-  padding: 12px 0;
+  padding: 12px;
 }
 
-.analysis-triage {
+.analysis-detail {
+  flex: 1 1 0;
+  overflow-y: auto;
+  min-height: 0;
+  min-width: 0;
+  padding: 12px 16px;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 8px;
-  padding: 0 14px 8px;
-  flex: 0 0 auto;
 }
 
-.analysis-scope {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
+.analysis-detail-empty {
+  color: var(--fg-dim);
+  font-size: 13px;
+  text-align: center;
+  padding-top: 32px;
+}
+
+.analysis-detail-title {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--fg);
+}
+.analysis-detail-title.sev-warning { color: var(--analysis-warn); }
+.analysis-detail-title.sev-error { color: var(--analysis-err); }
+.analysis-detail-title.sev-ok { color: var(--analysis-ok); }
+
+.analysis-detail-body {
+  line-height: 1.5;
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.analysis-detail-meta {
+  font-size: 12px;
+  color: var(--fg-dim);
+  line-height: 1.4;
+}
+.analysis-detail-meta.mono { font-family: monospace; }
+.analysis-detail-meta.italic { font-style: italic; }
+
+.analysis-detail-checknext {
+  font-size: 12px;
+  line-height: 1.4;
+  color: color-mix(in srgb, var(--accent) 80%, var(--fg));
+}
+
+.analysis-detail-rule {
+  border: none;
   border-top: 1px solid var(--border);
-  flex: 0 0 auto;
+  margin: 4px 0;
+}
+
+.analysis-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .analysis-scope-text {
-  flex: 1 1 100%;
+  width: 100%;
   font-size: 12px;
   color: var(--fg-dim);
   line-height: 1.4;
@@ -1065,8 +1201,8 @@ function moreAction(kind) {
 .analysis-footer {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 16px 14px;
+  gap: 8px;
+  padding: 10px 16px 12px;
   border-top: 1px solid var(--border);
   flex: 0 0 auto;
 }

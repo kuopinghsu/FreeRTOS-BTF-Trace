@@ -117,7 +117,7 @@ class TraceCompareTests(unittest.TestCase):
         expected = {
             "summary", "top", "core_util", "migrations", "execution",
             "blocking", "inter_arrival", "preemption", "sync",
-            "response", "mutex_block", "shared_patterns", "trends",
+            "response", "mutex_block", "shared_patterns", "trends", "shape",
         }
         self.assertEqual(set(tables.keys()), expected)
         self.assertTrue(tables["core_util"])

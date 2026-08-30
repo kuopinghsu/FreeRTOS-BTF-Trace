@@ -22,6 +22,19 @@ import { htmlFindingCards } from './statsHtmlReport.js'
 import { formatTriageAuditText } from './findingsTriage.js'
 
 const FINDING_CAP = 5
+
+const _LABEL_UNIT_NS = { ns: 1, 'µs': 1e3, us: 1e3, ms: 1e6, s: 1e9 }
+
+/** Formatted duration label ("109.744 ms") → nanoseconds, for numeric sorting.
+ *  Mirrors desktop `_time_label_sort_key`. */
+function timeLabelToNs(text) {
+  const s = String(text ?? '').trim()
+  if (!s || s === '-' || s === '—') return -1
+  const parts = s.split(/\s+/)
+  const val = parseFloat(parts[0])
+  if (!Number.isFinite(val)) return 0
+  return parts.length < 2 ? val : val * (_LABEL_UNIT_NS[parts[1]] ?? 1)
+}
 const LOAD_SIGMA_WARN = 30.0
 const LOAD_SCORE_WARN = 70.0
 const LOAD_SCORE_OK = 85.0
@@ -154,7 +167,8 @@ export function buildWorkflowAnalysisFindings({
         evidence_text: names,
       },
     ))
-    const byMax = [...execRows].sort((a, b) => String(b.max || '').localeCompare(String(a.max || ''), undefined, { numeric: true }))
+    const maxKey = r => (Number.isFinite(r.maxNs) ? r.maxNs : timeLabelToNs(r.max))
+    const byMax = [...execRows].sort((a, b) => maxKey(b) - maxKey(a))
     const maxNames = byMax.slice(0, FINDING_CAP).map(r => `${r.name} (Max ${r.max})`).join(', ')
     if (maxNames) {
       findings.push(finding(

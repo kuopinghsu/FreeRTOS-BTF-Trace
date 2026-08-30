@@ -33,6 +33,11 @@ describe('findings triage queue', () => {
     assert.equal(findingQueueStatus('b', st), QUEUE_OPEN)
     st = applyTriageAction(st, 'a', 'case')
     assert.equal(findingQueueStatus('a', st), QUEUE_CASE)
+    // 'Add to case' must be undoable: 'uncase' clears the case tag.
+    const undo = applyTriageAction(
+      applyTriageAction(null, 'z', 'case'), 'z', 'uncase')
+    assert.equal(findingQueueStatus('z', undo), QUEUE_OPEN)
+    assert.deepEqual(undo.case, [])
     st = applyTriageAction(st, 'b', 'dismiss', { reason: 'noise' })
     assert.equal(findingQueueStatus('b', st), QUEUE_DISMISSED)
     const counts = queueCounts(findings, st)

@@ -10,15 +10,24 @@ PERCENTILE_DECIMALS = 3
 NUMERIC_CELL_CLASS = "num-cell"
 
 
-def _format_time_trim(value: float, scale: str) -> str:
-    """Minimal parity with web formatTimeTrim — defers to timeline util when available."""
-    try:
-        from .timeline_util import format_time_trim  # noqa: WPS433
+def _num_format_time_trim(value: float, scale: str) -> str:
+    """Minimal parity with web formatTimeTrim.
 
-        return format_time_trim(value, scale)
+    Named distinctly from ``timeline_util._format_time_trim`` on purpose: the
+    monolithic bundle flattens every module into one namespace, so a second
+    ``_format_time_trim`` here would shadow the real (unit-scaling) helper and
+    every ``_build_trace_compare_rows`` cell would render as raw ``2.4e+06 us``.
+    """
+    try:
+        return _format_time_trim(value, scale)  # timeline_util's, via bundle/bootstrap flatten
+    except NameError:
+        pass
+    try:
+        from .timeline_util import _format_time_trim as _impl  # noqa: WPS433
+
+        return _impl(value, scale)
     except Exception:
-        v = float(value)
-        return f"{v:g} {scale}"
+        return f"{float(value):g} {scale}"
 
 
 def format_percentile(value: Optional[float], scale: str, kind: str = "") -> str:
@@ -30,7 +39,7 @@ def format_percentile(value: Optional[float], scale: str, kind: str = "") -> str
         return "—"
     if not v and v != 0:
         return "—"
-    return _format_time_trim(v, scale)
+    return _num_format_time_trim(v, scale)
 
 
 def format_ratio_pct(ratio: Optional[float]) -> str:
@@ -72,4 +81,4 @@ def format_signed_delta(delta: Optional[float], scale: str) -> str:
     if v == 0:
         return "—"
     sign = "+" if v > 0 else "−"
-    return f"{sign}{_format_time_trim(abs(v), scale)}"
+    return f"{sign}{_num_format_time_trim(abs(v), scale)}"

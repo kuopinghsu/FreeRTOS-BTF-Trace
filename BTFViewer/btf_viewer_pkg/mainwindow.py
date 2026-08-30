@@ -1330,7 +1330,7 @@ class _CursorListWidget(QWidget):
                 f" font-weight:700; padding:1px 6px;")
             rl.addWidget(badge, 0)
 
-            time_btn = QPushButton(_format_time(t, ts, decimals=decimals))
+            time_btn = QPushButton(_format_time_web(t, ts, decimals=decimals))
             time_btn.setFlat(True)
             time_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             time_btn.setToolTip("Jump to cursor")
@@ -1373,7 +1373,7 @@ class _CursorListWidget(QWidget):
                 lbl = QLabel(f"Δ{i}")
                 lbl.setStyleSheet("color:#999;")
                 lbl.setMinimumWidth(48)                       # web .delta-label
-                val = QLabel(_format_time(d, ts, decimals=decimals))
+                val = QLabel(_format_time_web(d, ts, decimals=decimals))
                 val.setStyleSheet("font-weight:500;")         # web .delta-value
                 frq = QLabel(f"({freq})")
                 frq.setStyleSheet("color:#999;")
@@ -8735,8 +8735,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if old is not None:
             try:
                 old.close()
+                old.deleteLater()
             except Exception:
                 pass
+        self._ai_compare_dlg = None
         dlg = _TraceCompareDialog(
             self, parent=self, idx_a=idx_a, idx_b=idx_b,
             ai_enabled=self._ai_feature_enabled(),
@@ -9199,11 +9201,48 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         cur_lo = cur_hi = None
         cur_limit = False
         panel = self._stats_panel
+        _all_cur = list(getattr(panel, "_cursor_times", None) or []) if panel is not None else []
         if panel is not None and getattr(panel, "_scope_to_cursors", False):
-            times = list(getattr(panel, "_cursor_times", None) or [])
+            times = list(_all_cur)
             if len(times) >= 2:
                 cur_limit = True
                 cur_lo, cur_hi = min(times), max(times)
+
+        # Context strip (web `<AnalysisContextStrip>`): trace · scope · filters.
+        from .analysis_context import build_analysis_context
+
+        def _build_findings_ctx() -> dict:
+            _tab = getattr(self, "_active_tab", None)
+            _flabel = self._active_filter_summary_label()
+            _p = self._stats_panel
+            _cur = list(getattr(_p, "_cursor_times", None) or []) if _p is not None else []
+            _lim = bool(_p is not None and getattr(_p, "_scope_to_cursors", False)
+                        and len(_cur) >= 2)
+            _lo = min(_cur) if _lim else None
+            _hi = max(_cur) if _lim else None
+            return build_analysis_context(
+                trace_name=os.path.basename(getattr(_tab, "path", "") or "") if _tab else "",
+                scope_label=(f"C1–C{len(_cur)}" if _lim else "Full Trace"),
+                scope_duration=(
+                    _format_time(int(_hi - _lo), self._trace.time_scale)
+                    if _lim else ""),
+                filter_labels=[_flabel] if _flabel else [],
+                sample_count=len(getattr(self._trace, "segments", []) or []),
+                cursor_count=len(_cur),
+                limit_to_cursors=_lim,
+                panel="analysis",
+            )
+
+        _findings_ctx = _build_findings_ctx()
+
+        def _recompute_findings():
+            """Re-run analysis for the current cursor Scope (Recalculate button)."""
+            if self._trace is None or self._stats_panel is None:
+                return None
+            f2, st2 = self._stats_panel.build_analysis_findings()
+            self._refresh_finding_overlays()
+            return f2, st2, _build_findings_ctx()
+
         dlg = _AnalysisFindingsDialog(
             findings, scope_title, parent=self,
             ai_enabled=self._ai_feature_enabled(),
@@ -9223,6 +9262,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             time_min=self._trace.time_min,
             time_max=self._trace.time_max,
             quality_warnings=collect_trace_quality_warnings(self._trace),
+            analysis_context=_findings_ctx,
+            on_recalculate=_recompute_findings,
             is_dark=self._is_dark,
         )
         self._analysis_findings_dlg = dlg
@@ -10213,7 +10254,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         self._push_undo_snapshot()
         unit = self._current_time_unit()
-        label = f"Bookmark @{_format_time(ns, unit, decimals=self._time_decimals_val)}"
+        label = f"Bookmark @{_format_time_web(ns, unit, decimals=self._time_decimals_val)}"
         self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
         self._mark_next_id += 1
         self._bookmarks.sort(key=lambda b: b.ns)
@@ -10252,7 +10293,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             unit = self._current_time_unit()
             for b in self._bookmarks:
                 if b.id == mark_id:
-                    b.label = new_text or f"Bookmark @{_format_time(b.ns, unit, decimals=self._time_decimals_val)}"
+                    b.label = new_text or f"Bookmark @{_format_time_web(b.ns, unit, decimals=self._time_decimals_val)}"
                     break
         self._recompute_find_hits()
         self._save_current_trace_state()
@@ -10282,7 +10323,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         self._push_undo_snapshot()
         unit = self._current_time_unit()
-        label = f"Bookmark @{_format_time(ns, unit, decimals=self._time_decimals_val)}"
+        label = f"Bookmark @{_format_time_web(ns, unit, decimals=self._time_decimals_val)}"
         self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
         self._mark_next_id += 1
         self._bookmarks.sort(key=lambda b: b.ns)
@@ -10371,13 +10412,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             unit = self._current_time_unit()
             rows = []
             for b in self._bookmarks:
-                label = b.label or f"Bookmark @{_format_time(b.ns, unit, decimals=self._time_decimals_val)}"
+                label = b.label or f"Bookmark @{_format_time_web(b.ns, unit, decimals=self._time_decimals_val)}"
                 rows.append(("bookmark", b.id, b.ns, label))
             for a in self._annotations:
                 rows.append(("annotation", a.id, a.ns, a.note or ""))
             rows.sort(key=lambda r: r[2])
             for kind, mid, ns, text in rows:
-                time_str = _format_time(ns, unit, decimals=self._time_decimals_val)
+                time_str = _format_time_web(ns, unit, decimals=self._time_decimals_val)
                 kind_label = "Annotation" if kind == "annotation" else "Bookmark"
                 tooltip = f"{kind_label} @ {time_str}"
                 item = QListWidgetItem()
@@ -11517,7 +11558,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # Web `rangeStats.js` formats every value with the app's timeDecimals
         # (Seg avg is rounded to whole ns first, like `Math.round`).
         _rd = self._time_decimals_val
-        self._cr_span_val.setText(_format_time(dt, unit, decimals=_rd))
+        self._cr_span_val.setText(_format_time_web(dt, unit, decimals=_rd))
         self._cr_slices_val.setText(str(switches))
         self._cr_top_row.setVisible(bool(task_acc))
         if task_acc:
@@ -11527,9 +11568,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._cr_avg_row.setVisible(has_durations)
         self._cr_max_row.setVisible(has_durations)
         if has_durations:
-            self._cr_min_val.setText(_format_time(min(durations), unit, decimals=_rd))
-            self._cr_avg_val.setText(_format_time(round(sum(durations) / len(durations)), unit, decimals=_rd))
-            self._cr_max_val.setText(_format_time(max(durations), unit, decimals=_rd))
+            self._cr_min_val.setText(_format_time_web(min(durations), unit, decimals=_rd))
+            self._cr_avg_val.setText(_format_time_web(round(sum(durations) / len(durations)), unit, decimals=_rd))
+            self._cr_max_val.setText(_format_time_web(max(durations), unit, decimals=_rd))
         # Compact status-bar version: span + segment min/max/avg
         if durations:
             d_min = _format_time(min(durations), unit, decimals=1)
@@ -11555,7 +11596,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 if b.id == mark_id:
                     b.ns = new_ns
                     if b.label.startswith("Bookmark @"):
-                        b.label = f"Bookmark @{_format_time(new_ns, unit, decimals=self._time_decimals_val)}"
+                        b.label = f"Bookmark @{_format_time_web(new_ns, unit, decimals=self._time_decimals_val)}"
                     break
             self._rebuild_bookmark_list()
         else:
@@ -11635,7 +11676,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         for row, ns in enumerate(sorted_times):
             ci = QTableWidgetItem(f"C{row + 1}")
             ci.setData(Qt.ItemDataRole.UserRole, ns)
-            ti = QTableWidgetItem(_format_time(ns, unit, decimals=self._time_decimals_val))
+            ti = QTableWidgetItem(_format_time_web(ns, unit, decimals=self._time_decimals_val))
             task_text = self._task_at_time(ns)
             task_item = QTableWidgetItem(task_text)
             # Full list on hover; the cell itself stays compact (elided) like
@@ -11647,8 +11688,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 delta_item = QTableWidgetItem("—")
             else:
                 dt = ns - c1
-                sign = "+" if dt >= 0 else ""
-                delta_item = QTableWidgetItem(f"{sign}{_format_time(abs(dt), unit, decimals=self._time_decimals_val)}")
+                sign = "+" if dt >= 0 else "-"
+                delta_item = QTableWidgetItem(f"{sign}{_format_time_web(abs(dt), unit, decimals=self._time_decimals_val)}")
             delta_item.setTextAlignment(
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             for it in (ci, ti, task_item, delta_item):
@@ -11803,13 +11844,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 self, "Trace Compare",
                 "Open at least two trace tabs to compare traces.")
             return
-        _exec_centred(_TraceCompareDialog(
+        dlg = _TraceCompareDialog(
             self, parent=self,
             ai_enabled=self._ai_feature_enabled(),
             on_query_ai=self._query_compare_with_ai,
             on_validate_experiment=self._validate_compare_with_ai,
             on_compare=self._remember_trace_compare,
-        ), self)
+        )
+        try:
+            _exec_centred(dlg, self)
+        finally:
+            # Tear the widget tree down deterministically via Qt instead of
+            # leaving a wrapper cycle for a later cyclic-GC pass to collect
+            # (which has crashed mid-teardown of the QLabel children).
+            dlg.deleteLater()
 
     def _scroll_view_to_task(self, task: str, *, center: bool = False) -> None:
         """Scroll the orthogonal axis to bring *task*'s row/column fully into view.
@@ -12182,8 +12230,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
 
         def _csv_time_text(ns: int, unit: str) -> str:
-            # Keep CSV locale-safe for tools that misdecode micro-sign glyphs.
-            return _format_time(ns, unit).replace("µs", "us").replace("μs", "us")
+            # Same rendering as the Marks panel / web CSV (_format_time_web +
+            # timeDecimals); micro-sign folded to "us" for locale-safe files.
+            return _format_time_web(
+                ns, unit, decimals=self._time_decimals_val
+            ).replace("µs", "us").replace("μs", "us")
 
         unit = self._current_time_unit()
         time_scale = self._trace.time_scale
