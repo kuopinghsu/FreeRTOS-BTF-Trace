@@ -11,12 +11,23 @@
       aria-modal="true"
       aria-label="Trace compare"
       :style="dialogStyle"
+      @keydown="onDialogKeydown"
     >
       <div
         class="compare-dialog-header"
         @pointerdown="onHeaderPointerDown"
       >
-        <div class="compare-dialog-title">Trace Compare</div>
+        <div class="compare-dialog-title">
+          Trace Compare
+        </div>
+        <div class="compare-legend">
+          <span class="compare-legend-id compare-legend-a">
+            <span class="compare-legend-dot" />Baseline: {{ tabA?.name || '—' }}
+          </span>
+          <span class="compare-legend-id compare-legend-b">
+            <span class="compare-legend-dot" />Candidate: {{ tabB?.name || '—' }}
+          </span>
+        </div>
         <button
           type="button"
           class="compare-close-btn"
@@ -24,7 +35,9 @@
           aria-label="Close"
           @pointerdown.stop
           @click="emit('close')"
-        >×</button>
+        >
+          ×
+        </button>
       </div>
 
       <AnalysisContextStrip
@@ -51,739 +64,1219 @@
         </label>
       </div>
 
-      <label class="compare-scope">
+      <label
+        class="compare-scope"
+        title="Needs 2+ cursors placed on a tab; otherwise the full trace span is used."
+      >
         <input
           v-model="scopeToCursors"
           type="checkbox"
-        />
-        Limit to each tab's cursor range (C1–Cn, when 2+ cursors placed)
+        >
+        Compare only the selected cursor range on each tab
       </label>
 
-      <div class="compare-formula">{{ compareFormula }}</div>
-
-      <div class="compare-tabs" role="tablist">
-        <button
-          v-for="tab in pageTabs"
-          :key="tab.id"
-          type="button"
-          class="compare-tab"
-          :class="{ active: activePage === tab.id }"
-          role="tab"
-          :aria-selected="activePage === tab.id"
-          @click="activePage = tab.id"
-        >
-          {{ tab.label }}
-        </button>
+      <div class="compare-formula">
+        {{ compareFormula }}
       </div>
 
-      <div class="compare-table-wrap">
+      <div class="compare-body">
+        <nav
+          class="compare-rail"
+          role="tablist"
+          aria-label="Compare sections"
+        >
+          <template
+            v-for="grp in railGroups"
+            :key="grp.name"
+          >
+            <div class="compare-rail-group">
+              {{ grp.name }}
+            </div>
+            <button
+              v-for="tab in grp.tabs"
+              :key="tab.id"
+              type="button"
+              class="compare-rail-item"
+              :class="{ active: activePage === tab.id }"
+              role="tab"
+              :aria-selected="activePage === tab.id"
+              :tabindex="activePage === tab.id ? 0 : -1"
+              @click="activePage = tab.id"
+              @keydown="onRailKey($event, tab.id)"
+            >
+              {{ tab.label }}
+            </button>
+          </template>
+        </nav>
+
         <div
-          v-if="activePage === 'summary'"
-          class="compare-page"
+          class="compare-table-wrap"
+          role="tabpanel"
         >
           <div
-            v-if="compareDecision.visible"
-            class="compare-decision"
+            v-if="activePage === 'summary'"
+            class="compare-page"
           >
             <div
-              v-if="!compareDecision.comparability.comparable"
-              class="compare-comparability-warn"
+              v-if="compareDecision.visible"
+              class="compare-decision"
             >
-              <div class="compare-comparability-head">
-                ⚠ Traces may not be directly comparable
-              </div>
-              <ul>
-                <li
-                  v-for="(w, i) in compareDecision.comparability.warnings"
-                  :key="i"
-                >
-                  {{ w }}
-                </li>
-              </ul>
-            </div>
-            <div class="compare-decision-identity">{{ compareDecision.identity }}</div>
-            <div class="compare-verdict">
-              <span
-                class="compare-verdict-chip"
-                :class="'tone-' + compareDecision.verdictTone"
-              >{{ compareDecision.verdictLabel }}</span>
-              <ul
-                v-if="compareDecision.bullets.length"
-                class="compare-verdict-bullets"
-              >
-                <li
-                  v-for="(b, i) in compareDecision.bullets"
-                  :key="i"
-                  :class="b.status === 'Regressed' ? 'reg' : b.status === 'Improved' ? 'imp' : ''"
-                >
-                  {{ b.glyph }} {{ b.label }} — {{ b.change }}
-                </li>
-              </ul>
               <div
-                v-else
-                class="compare-verdict-none"
+                v-if="!compareDecision.comparability.comparable"
+                class="compare-comparability-warn"
               >
-                No metric changed beyond the significance threshold.
+                <div class="compare-comparability-head">
+                  ⚠ Traces may not be directly comparable
+                </div>
+                <ul>
+                  <li
+                    v-for="(w, i) in compareDecision.comparability.warnings"
+                    :key="i"
+                  >
+                    {{ w }}
+                  </li>
+                </ul>
               </div>
-            </div>
-            <div class="compare-decision-counts">{{ compareDecision.counts }}</div>
-            <div
-              v-if="compareDecision.largest"
-              class="compare-decision-largest"
-              :class="{ clickable: compareDecision.largestClickable }"
-              :title="compareDecision.largestClickable
-                ? 'Open Statistics for this regression on the Candidate tab'
-                : undefined"
-              @click="compareDecision.largestClickable && investigateSide('b')"
-            >
-              {{ compareDecision.largest }}
-            </div>
-            <div
-              v-if="compareDecision.next"
-              class="compare-decision-next"
-            >
-              {{ compareDecision.next }}
-            </div>
-            <div
-              v-if="compareDecision.sigNote"
-              class="compare-decision-sig"
-            >
-              {{ compareDecision.sigNote }}
-            </div>
-          </div>
-          <div
-            v-if="summaryChartModel.length"
-            class="compare-chart"
-          >
-            <div class="compare-chart-head">
-              <span class="compare-chart-title">Summary changes</span>
-              <span class="compare-chart-legend">Candidate B − Baseline A</span>
-            </div>
-            <div class="p99-axis">
-              <span class="p99-improved">{{ statusLegend('improved') }}</span>
-              <span class="p99-regressed">{{ statusLegend('regressed') }}</span>
-            </div>
-            <div
-              v-for="row in summaryChartModel"
-              :key="row.label"
-              class="p99-chart-row"
-            >
-              <span class="chart-label">{{ row.label }}</span>
-              <div class="p99-track">
-                <div class="p99-mid" />
+
+              <div
+                class="compare-verdict-banner"
+                :class="'tone-' + compareDecision.verdictTone"
+              >
+                <span
+                  class="compare-verdict-glyph"
+                  aria-hidden="true"
+                >{{ compareDecision.verdictGlyph }}</span>
+                <span class="compare-verdict-main">
+                  <span class="compare-verdict-label">{{ compareDecision.verdictLabel }}</span>
+                  <span
+                    v-if="compareDecision.verdictSentence"
+                    class="compare-verdict-sentence"
+                  >{{ compareDecision.verdictSentence }}</span>
+                </span>
+              </div>
+
+              <div class="compare-cards">
+                <div class="compare-card tone-regressed">
+                  <span class="compare-card-k">Regressions</span>
+                  <span class="compare-card-v">{{ compareDecision.cards.regressions }}</span>
+                </div>
+                <div class="compare-card tone-improved">
+                  <span class="compare-card-k">Improvements</span>
+                  <span class="compare-card-v">{{ compareDecision.cards.improvements }}</span>
+                </div>
+                <div class="compare-card tone-warn">
+                  <span class="compare-card-k">Warnings</span>
+                  <span class="compare-card-v">{{ compareDecision.cards.warnings }}</span>
+                </div>
                 <div
-                  class="p99-bar"
-                  :class="row.side"
-                  :style="row.barStyle"
-                />
+                  class="compare-card compare-card-mover"
+                  :class="{ clickable: compareDecision.largestClickable }"
+                  :title="compareDecision.largestClickable
+                    ? 'Open Statistics for this change on the Candidate tab'
+                    : undefined"
+                  @click="compareDecision.largestClickable && investigateSide('b')"
+                >
+                  <span class="compare-card-k">Biggest mover</span>
+                  <span class="compare-card-v">{{ compareDecision.mover || '—' }}</span>
+                </div>
               </div>
-              <span
-                class="p99-change"
-                :class="row.side"
-              >{{ row.change }}</span>
+
+              <div class="compare-decision-identity">
+                {{ compareDecision.identity }}
+              </div>
+
+              <button
+                v-if="compareDecision.next"
+                type="button"
+                class="compare-next-btn"
+                @click="compareDecision.largestClickable && investigateSide('b')"
+              >
+                {{ compareDecision.next }} <span aria-hidden="true">→</span>
+              </button>
+              <div
+                v-if="compareDecision.sigNote"
+                class="compare-decision-sig"
+              >
+                {{ compareDecision.sigNote }}
+              </div>
             </div>
-          </div>
-          <table class="compare-table">
-            <thead>
-              <tr>
-                <th :class="thSortClass('summary', 'label')" @click="toggleTableSort('summary', 'label')">Metric</th>
-                <th :class="thSortClass('summary', 'a')" @click="toggleTableSort('summary', 'a')">Baseline A</th>
-                <th :class="thSortClass('summary', 'b')" @click="toggleTableSort('summary', 'b')">Candidate B</th>
-                <th :class="thSortClass('summary', 'delta')" @click="toggleTableSort('summary', 'delta')">Δ</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="row in sortedSummaryRows"
+            <div
+              v-if="summaryChartModel.length"
+              class="compare-chart"
+            >
+              <div class="compare-chart-head">
+                <span class="compare-chart-title">Summary changes</span>
+                <span class="compare-chart-legend">Candidate B − Baseline A</span>
+              </div>
+              <div class="p99-axis">
+                <span class="p99-improved">{{ statusLegend('improved') }}</span>
+                <span class="p99-regressed">{{ statusLegend('regressed') }}</span>
+              </div>
+              <div
+                v-for="row in summaryChartModel"
                 :key="row.label"
+                class="p99-chart-row"
               >
-                <td class="task-col">{{ row.label }}</td>
-                <td>{{ row.a }}</td>
-                <td>{{ row.b }}</td>
-                <td :class="deltaClass(row.label, row.delta)">{{ deltaText(row.label, row.delta) }}</td>
-              </tr>
-            </tbody>
-          </table>
-          <p class="compare-page-note">{{ noteSigma }}</p>
-        </div>
-
-        <table
-          v-else-if="activePage === 'top'"
-          class="compare-table"
-        >
-          <thead>
-            <tr>
-              <th :class="thSortClass('top', 'name')" @click="toggleTableSort('top', 'name')">Task</th>
-              <th :class="thSortClass('top', 'cpuA')" @click="toggleTableSort('top', 'cpuA')">CPU A (%)</th>
-              <th :class="thSortClass('top', 'cpuB')" @click="toggleTableSort('top', 'cpuB')">CPU B (%)</th>
-              <th :class="thSortClass('top', 'delta')" @click="toggleTableSort('top', 'delta')">Δ (pp)</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in sortedTopTaskRows"
-              :key="row.name"
-            >
-              <td class="task-col">{{ row.name }}</td>
-              <td>{{ row.cpuA }}</td>
-              <td>{{ row.cpuB }}</td>
-              <td :class="deltaClass(row.name, row.delta, 'cpu')">{{ deltaText(row.name, row.delta, 'cpu') }}</td>
-            </tr>
-            <tr v-if="topTaskRows.length === 0">
-              <td
-                colspan="4"
-                class="compare-empty"
-              >
-                No user tasks in either trace
-              </td>
-            </tr>
-          </tbody>
-        </table>
-
-        <div
-          v-else-if="activePage === 'coreUtil'"
-          class="compare-page"
-        >
-          <div
-            v-if="coreUtilChartModel.length"
-            class="compare-chart"
-          >
-            <div class="compare-chart-head">
-              <span class="compare-chart-title">Core utilisation</span>
-              <span class="compare-chart-legend">
-                <span class="swatch swatch-a"></span>Baseline A
-                <span class="swatch swatch-b"></span>Candidate B
-              </span>
-            </div>
-            <div
-              v-for="row in coreUtilChartModel"
-              :key="row.label"
-              class="util-chart-row"
-            >
-              <span class="chart-label">{{ row.label }}</span>
-              <div class="util-chart-bars">
-                <div class="util-track">
+                <span class="chart-label">{{ row.label }}</span>
+                <div class="p99-track">
+                  <div class="p99-mid" />
                   <div
-                    class="util-fill util-fill-a"
-                    :style="{ width: row.aPct + '%' }"
+                    class="p99-bar"
+                    :class="row.side"
+                    :style="row.barStyle"
                   />
                 </div>
-                <div class="util-track">
-                  <div
-                    class="util-fill util-fill-b"
-                    :style="{ width: row.bPct + '%' }"
-                  />
-                </div>
-              </div>
-              <span class="chart-pct">
-                <span class="pct-a">{{ row.a.toFixed(1) }}%</span>
-                <span class="pct-b">{{ row.b.toFixed(1) }}%</span>
-              </span>
-            </div>
-          </div>
-          <table class="compare-table">
-            <thead>
-              <tr>
-                <th :class="thSortClass('coreUtil', 'core')" @click="toggleTableSort('coreUtil', 'core')">Core</th>
-                <th :class="thSortClass('coreUtil', 'utilA')" @click="toggleTableSort('coreUtil', 'utilA')">Util A (%)</th>
-                <th :class="thSortClass('coreUtil', 'utilB')" @click="toggleTableSort('coreUtil', 'utilB')">Util B (%)</th>
-                <th :class="thSortClass('coreUtil', 'delta')" @click="toggleTableSort('coreUtil', 'delta')">Δ (pp)</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="row in sortedCoreUtilRows"
-                :key="row.core"
-              >
-                <td class="task-col">{{ row.core }}</td>
-                <td>{{ row.utilA }}</td>
-                <td>{{ row.utilB }}</td>
-                <td :class="deltaClass(row.core, row.delta, 'util')">{{ deltaText(row.core, row.delta, 'util') }}</td>
-              </tr>
-              <tr v-if="coreUtilRows.length === 0">
-                <td colspan="4" class="compare-empty">No core utilisation data</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div
-          v-else-if="activePage === 'migrations'"
-          class="compare-page"
-        >
-          <div class="compare-mig-controls">
-            <select v-model="migView" class="compare-mig-select">
-              <option value="count">Count &amp; rate</option>
-              <option value="dwell">Dwell &amp; ping</option>
-              <option value="cores">Cores</option>
-            </select>
-            <select v-model="migFilter" class="compare-mig-select">
-              <option value="top">Top 10 changes</option>
-              <option value="changed">Changed only</option>
-              <option value="regressed">Regressions only</option>
-              <option value="all">Show all</option>
-            </select>
-            <select v-model="migSort" class="compare-mig-select">
-              <option value="abs">Sort |Δ|</option>
-              <option value="rel">Sort relative</option>
-            </select>
-            <select v-model="migFamily" class="compare-mig-select">
-              <option value="">All families</option>
-              <option
-                v-for="fam in migFamilies"
-                :key="fam"
-                :value="fam"
-              >
-                {{ fam }}
-              </option>
-            </select>
-            <span class="compare-mig-hint">{{ migHint }}</span>
-          </div>
-          <div
-            v-if="migHeatmapModel.length"
-            class="compare-chart"
-          >
-            <div class="compare-chart-head">
-              <span class="compare-chart-title">Migration Δ</span>
-              <span class="compare-chart-legend">Δ = A − B</span>
-            </div>
-            <div class="p99-axis">
-              <span class="p99-improved">{{ statusLegend('improved') }}</span>
-              <span class="p99-regressed">{{ statusLegend('regressed') }}</span>
-            </div>
-            <div
-              v-for="row in migHeatmapModel"
-              :key="row.label"
-              class="p99-chart-row"
-            >
-              <span class="chart-label">{{ row.label }}</span>
-              <div class="p99-track">
-                <div class="p99-mid" />
-                <div
-                  class="p99-bar"
+                <span
+                  class="p99-change"
                   :class="row.side"
-                  :style="row.barStyle"
-                />
+                >{{ row.change }}</span>
               </div>
-              <span
-                class="p99-change"
-                :class="row.side"
-              >{{ row.change }}</span>
             </div>
+            <details
+              class="compare-allmetrics"
+              open
+            >
+              <summary>All summary metrics</summary>
+              <table class="compare-table">
+                <thead>
+                  <tr>
+                    <th
+                      :class="thSortClass('summary', 'label')"
+                      @click="toggleTableSort('summary', 'label')"
+                    >
+                      Metric
+                    </th>
+                    <th
+                      class="col-a"
+                      :class="thSortClass('summary', 'a')"
+                      @click="toggleTableSort('summary', 'a')"
+                    >
+                      Baseline A
+                    </th>
+                    <th
+                      class="col-b"
+                      :class="thSortClass('summary', 'b')"
+                      @click="toggleTableSort('summary', 'b')"
+                    >
+                      Candidate B
+                    </th>
+                    <th
+                      :class="thSortClass('summary', 'delta')"
+                      @click="toggleTableSort('summary', 'delta')"
+                    >
+                      Change (A → B)
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="row in sortedSummaryRows"
+                    :key="row.label"
+                  >
+                    <td class="task-col">
+                      {{ row.label }}
+                    </td>
+                    <td>{{ row.a }}</td>
+                    <td>{{ row.b }}</td>
+                    <td :class="deltaClass(row.label, row.delta)">
+                      {{ deltaText(row.label, row.delta, '', row.a) }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <p class="compare-page-note">
+                {{ noteSigma }}
+              </p>
+            </details>
           </div>
-          <table class="compare-table">
+
+          <table
+            v-else-if="activePage === 'top'"
+            class="compare-table"
+          >
             <thead>
               <tr>
                 <th
-                  v-for="(h, hi) in migHeaders"
-                  :key="h"
-                  :class="thSortClass('migrations', String(hi))"
-                  @click="toggleTableSort('migrations', String(hi))"
+                  :class="thSortClass('top', 'name')"
+                  @click="toggleTableSort('top', 'name')"
                 >
-                  {{ h }}
+                  Task
+                </th>
+                <th
+                  :class="thSortClass('top', 'cpuA')"
+                  @click="toggleTableSort('top', 'cpuA')"
+                >
+                  CPU A (%)
+                </th>
+                <th
+                  :class="thSortClass('top', 'cpuB')"
+                  @click="toggleTableSort('top', 'cpuB')"
+                >
+                  CPU B (%)
+                </th>
+                <th
+                  :class="thSortClass('top', 'delta')"
+                  @click="toggleTableSort('top', 'delta')"
+                >
+                  Change (A → B)
                 </th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="(row, ri) in sortedMigViewRows"
-                :key="ri"
-              >
-                <td
-                  v-for="(cell, ci) in row"
-                  :key="ci"
-                  :class="migCellClass(ci, row)"
-                >
-                  {{ cell }}
-                </td>
-              </tr>
-              <tr v-if="migViewRows.length === 0">
-                <td
-                  :colspan="Math.max(migHeaders.length, 1)"
-                  class="compare-empty"
-                >
-                  No migrated tasks in either trace
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <p class="compare-page-note">{{ noteMigration }}</p>
-        </div>
-
-        <table
-          v-else-if="activePage === 'execution'"
-          class="compare-table"
-        >
-          <thead>
-            <tr>
-              <th :class="thSortClass('execution', 'name')" @click="toggleTableSort('execution', 'name')">Task</th>
-              <th :class="thSortClass('execution', 'runsA')" @click="toggleTableSort('execution', 'runsA')">Runs A</th>
-              <th :class="thSortClass('execution', 'runsB')" @click="toggleTableSort('execution', 'runsB')">Runs B</th>
-              <th :class="thSortClass('execution', 'avgA')" @click="toggleTableSort('execution', 'avgA')">Avg A</th>
-              <th :class="thSortClass('execution', 'avgB')" @click="toggleTableSort('execution', 'avgB')">Avg B</th>
-              <th :class="thSortClass('execution', 'maxA')" @click="toggleTableSort('execution', 'maxA')">Max A</th>
-              <th :class="thSortClass('execution', 'maxB')" @click="toggleTableSort('execution', 'maxB')">Max B</th>
-              <th :class="thSortClass('execution', 'deltaMax')" @click="toggleTableSort('execution', 'deltaMax')">Δ max</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in sortedExecutionRows"
-              :key="row.name"
-            >
-              <td class="task-col">{{ row.name }}</td>
-              <td>{{ row.runsA }}</td>
-              <td>{{ row.runsB }}</td>
-              <td>{{ row.avgA }}</td>
-              <td>{{ row.avgB }}</td>
-              <td>{{ row.maxA }}</td>
-              <td>{{ row.maxB }}</td>
-              <td :class="deltaClass(row.name, row.deltaMax, 'exec max')">{{ deltaText(row.name, row.deltaMax, 'exec max') }}</td>
-            </tr>
-            <tr v-if="executionRows.length === 0">
-              <td colspan="8" class="compare-empty">No execution samples in either trace</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <table
-          v-else-if="activePage === 'blocking'"
-          class="compare-table"
-        >
-          <thead>
-            <tr>
-              <th :class="thSortClass('blocking', 'name')" @click="toggleTableSort('blocking', 'name')">Task</th>
-              <th :class="thSortClass('blocking', 'gapsA')" @click="toggleTableSort('blocking', 'gapsA')">Gaps A</th>
-              <th :class="thSortClass('blocking', 'gapsB')" @click="toggleTableSort('blocking', 'gapsB')">Gaps B</th>
-              <th :class="thSortClass('blocking', 'avgA')" @click="toggleTableSort('blocking', 'avgA')">Avg A</th>
-              <th :class="thSortClass('blocking', 'avgB')" @click="toggleTableSort('blocking', 'avgB')">Avg B</th>
-              <th :class="thSortClass('blocking', 'maxA')" @click="toggleTableSort('blocking', 'maxA')">Max A</th>
-              <th :class="thSortClass('blocking', 'maxB')" @click="toggleTableSort('blocking', 'maxB')">Max B</th>
-              <th :class="thSortClass('blocking', 'delta')" @click="toggleTableSort('blocking', 'delta')">Δ avg</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in sortedBlockingRows"
-              :key="row.name"
-            >
-              <td class="task-col">{{ row.name }}</td>
-              <td>{{ row.gapsA }}</td>
-              <td>{{ row.gapsB }}</td>
-              <td>{{ row.avgA }}</td>
-              <td>{{ row.avgB }}</td>
-              <td>{{ row.maxA }}</td>
-              <td>{{ row.maxB }}</td>
-              <td :class="deltaClass(row.name, row.delta, 'block')">{{ deltaText(row.name, row.delta, 'block') }}</td>
-            </tr>
-            <tr v-if="blockingRows.length === 0">
-              <td colspan="8" class="compare-empty">No blocking samples in either trace</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <table
-          v-else-if="activePage === 'interArrival'"
-          class="compare-table"
-        >
-          <thead>
-            <tr>
-              <th :class="thSortClass('interArrival', 'name')" @click="toggleTableSort('interArrival', 'name')">Task</th>
-              <th :class="thSortClass('interArrival', 'runsA')" @click="toggleTableSort('interArrival', 'runsA')">Runs A</th>
-              <th :class="thSortClass('interArrival', 'runsB')" @click="toggleTableSort('interArrival', 'runsB')">Runs B</th>
-              <th :class="thSortClass('interArrival', 'avgA')" @click="toggleTableSort('interArrival', 'avgA')">Avg A</th>
-              <th :class="thSortClass('interArrival', 'avgB')" @click="toggleTableSort('interArrival', 'avgB')">Avg B</th>
-              <th :class="thSortClass('interArrival', 'maxA')" @click="toggleTableSort('interArrival', 'maxA')">Max A</th>
-              <th :class="thSortClass('interArrival', 'maxB')" @click="toggleTableSort('interArrival', 'maxB')">Max B</th>
-              <th :class="thSortClass('interArrival', 'delta')" @click="toggleTableSort('interArrival', 'delta')">Δ avg</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in sortedInterArrivalRows"
-              :key="row.name"
-            >
-              <td class="task-col">{{ row.name }}</td>
-              <td>{{ row.runsA }}</td>
-              <td>{{ row.runsB }}</td>
-              <td>{{ row.avgA }}</td>
-              <td>{{ row.avgB }}</td>
-              <td>{{ row.maxA }}</td>
-              <td>{{ row.maxB }}</td>
-              <td :class="deltaClass(row.name, row.delta, 'inter')">{{ deltaText(row.name, row.delta, 'inter') }}</td>
-            </tr>
-            <tr v-if="interArrivalRows.length === 0">
-              <td colspan="8" class="compare-empty">No inter-arrival samples in either trace</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <table
-          v-else-if="activePage === 'preemption'"
-          class="compare-table"
-        >
-          <thead>
-            <tr>
-              <th :class="thSortClass('preemption', 'name')" @click="toggleTableSort('preemption', 'name')">Victim</th>
-              <th :class="thSortClass('preemption', 'countA')" @click="toggleTableSort('preemption', 'countA')">Count A</th>
-              <th :class="thSortClass('preemption', 'countB')" @click="toggleTableSort('preemption', 'countB')">Count B</th>
-              <th :class="thSortClass('preemption', 'delta')" @click="toggleTableSort('preemption', 'delta')">Δ</th>
-              <th :class="thSortClass('preemption', 'totalA')" @click="toggleTableSort('preemption', 'totalA')">Total A</th>
-              <th :class="thSortClass('preemption', 'totalB')" @click="toggleTableSort('preemption', 'totalB')">Total B</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in sortedPreemptionCompareRows"
-              :key="row.name"
-            >
-              <td class="task-col">{{ row.name }}</td>
-              <td>{{ row.countA }}</td>
-              <td>{{ row.countB }}</td>
-              <td :class="deltaClass(row.name, row.delta, 'preempt')">{{ deltaText(row.name, row.delta, 'preempt') }}</td>
-              <td>{{ row.totalA }}</td>
-              <td>{{ row.totalB }}</td>
-            </tr>
-            <tr v-if="preemptionCompareRows.length === 0">
-              <td colspan="6" class="compare-empty">No preemption chains in either trace</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <div
-          v-else-if="activePage === 'sync'"
-          class="compare-page"
-        >
-          <table class="compare-table">
-            <thead>
-              <tr>
-                <th :class="thSortClass('sync', 'label')" @click="toggleTableSort('sync', 'label')">Metric</th>
-                <th :class="thSortClass('sync', 'a')" @click="toggleTableSort('sync', 'a')">Baseline A</th>
-                <th :class="thSortClass('sync', 'b')" @click="toggleTableSort('sync', 'b')">Candidate B</th>
-                <th :class="thSortClass('sync', 'delta')" @click="toggleTableSort('sync', 'delta')">Δ</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="row in sortedSyncCompareRows"
-                :key="row.label"
-              >
-                <td class="task-col">{{ row.label }}</td>
-                <td>{{ row.a }}</td>
-                <td>{{ row.b }}</td>
-                <td :class="deltaClass(row.label, row.delta)">{{ deltaText(row.label, row.delta) }}</td>
-              </tr>
-              <tr v-if="syncCompareRows.length === 0">
-                <td colspan="4" class="compare-empty">No sync instrumentation in either trace</td>
-              </tr>
-            </tbody>
-          </table>
-          <p class="compare-page-note">{{ noteSti }}</p>
-        </div>
-
-        <div
-          v-else-if="activePage === 'response'"
-          class="compare-page"
-        >
-          <div
-            v-if="p99ChartModel.length"
-            class="compare-chart"
-          >
-            <div class="compare-chart-head">
-              <span class="compare-chart-title">Response P99 change</span>
-              <span class="compare-chart-legend">Candidate B − Baseline A</span>
-            </div>
-            <div class="p99-axis">
-              <span class="p99-improved">{{ statusLegend('improved') }}</span>
-              <span class="p99-regressed">{{ statusLegend('regressed') }}</span>
-            </div>
-            <div
-              v-for="row in p99ChartModel"
-              :key="row.label"
-              class="p99-chart-row"
-            >
-              <span class="chart-label">{{ row.label }}</span>
-              <div class="p99-track">
-                <div class="p99-mid" />
-                <div
-                  class="p99-bar"
-                  :class="row.side"
-                  :style="row.barStyle"
-                />
-              </div>
-              <span
-                class="p99-change"
-                :class="row.side"
-              >{{ row.change }}</span>
-            </div>
-          </div>
-          <table class="compare-table">
-            <thead>
-              <tr>
-                <th :class="thSortClass('response', 'name')" @click="toggleTableSort('response', 'name')">Task</th>
-                <th :class="thSortClass('response', 'a')" @click="toggleTableSort('response', 'a')">P99 A</th>
-                <th :class="thSortClass('response', 'b')" @click="toggleTableSort('response', 'b')">P99 B</th>
-                <th :class="thSortClass('response', 'delta')" @click="toggleTableSort('response', 'delta')">Δ</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="row in sortedResponseCompareRows"
+                v-for="row in sortedTopTaskRows"
                 :key="row.name"
               >
-                <td class="task-col">{{ row.name }}</td>
-                <td>{{ row.a }}</td>
-                <td>{{ row.b }}</td>
-                <td :class="deltaClass(row.name, row.delta, 'response')">{{ deltaText(row.name, row.delta, 'response') }}</td>
+                <td class="task-col">
+                  {{ row.name }}
+                </td>
+                <td>{{ row.cpuA }}</td>
+                <td>{{ row.cpuB }}</td>
+                <td :class="deltaClass(row.name, row.delta, 'cpu')">
+                  {{ deltaText(row.name, row.delta, 'cpu') }}
+                </td>
               </tr>
-              <tr v-if="responseCompareRows.length === 0">
-                <td colspan="4" class="compare-empty">No response samples in either trace</td>
+              <tr v-if="topTaskRows.length === 0">
+                <td
+                  colspan="4"
+                  class="compare-empty"
+                >
+                  No user tasks in either trace
+                </td>
               </tr>
             </tbody>
           </table>
-          <p class="compare-page-note">{{ noteP99 }}</p>
+
+          <div
+            v-else-if="activePage === 'coreUtil'"
+            class="compare-page"
+          >
+            <div
+              v-if="coreUtilChartModel.length"
+              class="compare-chart"
+            >
+              <div class="compare-chart-head">
+                <span class="compare-chart-title">Core utilisation</span>
+                <span class="compare-chart-legend">
+                  <span class="swatch swatch-a" />Baseline A
+                  <span class="swatch swatch-b" />Candidate B
+                </span>
+              </div>
+              <div
+                v-for="row in coreUtilChartModel"
+                :key="row.label"
+                class="util-chart-row"
+              >
+                <span class="chart-label">{{ row.label }}</span>
+                <div class="util-chart-bars">
+                  <div class="util-track">
+                    <div
+                      class="util-fill util-fill-a"
+                      :style="{ width: row.aPct + '%' }"
+                    />
+                  </div>
+                  <div class="util-track">
+                    <div
+                      class="util-fill util-fill-b"
+                      :style="{ width: row.bPct + '%' }"
+                    />
+                  </div>
+                </div>
+                <span class="chart-pct">
+                  <span class="pct-a">{{ row.a.toFixed(1) }}%</span>
+                  <span class="pct-b">{{ row.b.toFixed(1) }}%</span>
+                </span>
+              </div>
+            </div>
+            <table class="compare-table">
+              <thead>
+                <tr>
+                  <th
+                    :class="thSortClass('coreUtil', 'core')"
+                    @click="toggleTableSort('coreUtil', 'core')"
+                  >
+                    Core
+                  </th>
+                  <th
+                    :class="thSortClass('coreUtil', 'utilA')"
+                    @click="toggleTableSort('coreUtil', 'utilA')"
+                  >
+                    Util A (%)
+                  </th>
+                  <th
+                    :class="thSortClass('coreUtil', 'utilB')"
+                    @click="toggleTableSort('coreUtil', 'utilB')"
+                  >
+                    Util B (%)
+                  </th>
+                  <th
+                    :class="thSortClass('coreUtil', 'delta')"
+                    @click="toggleTableSort('coreUtil', 'delta')"
+                  >
+                    Change (A → B)
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedCoreUtilRows"
+                  :key="row.core"
+                >
+                  <td class="task-col">
+                    {{ row.core }}
+                  </td>
+                  <td>{{ row.utilA }}</td>
+                  <td>{{ row.utilB }}</td>
+                  <td :class="deltaClass(row.core, row.delta, 'util')">
+                    {{ deltaText(row.core, row.delta, 'util') }}
+                  </td>
+                </tr>
+                <tr v-if="coreUtilRows.length === 0">
+                  <td
+                    colspan="4"
+                    class="compare-empty"
+                  >
+                    No core utilisation data
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div
+            v-else-if="activePage === 'migrations'"
+            class="compare-page"
+          >
+            <div class="compare-mig-controls">
+              <select
+                v-model="migView"
+                class="compare-mig-select"
+              >
+                <option value="count">
+                  Count &amp; rate
+                </option>
+                <option value="dwell">
+                  Dwell &amp; ping
+                </option>
+                <option value="cores">
+                  Cores
+                </option>
+              </select>
+              <select
+                v-model="migFilter"
+                class="compare-mig-select"
+              >
+                <option value="top">
+                  Top 10 changes
+                </option>
+                <option value="changed">
+                  Changed only
+                </option>
+                <option value="regressed">
+                  Regressions only
+                </option>
+                <option value="all">
+                  Show all
+                </option>
+              </select>
+              <select
+                v-model="migSort"
+                class="compare-mig-select"
+              >
+                <option value="abs">
+                  Sort |Δ|
+                </option>
+                <option value="rel">
+                  Sort relative
+                </option>
+              </select>
+              <select
+                v-model="migFamily"
+                class="compare-mig-select"
+              >
+                <option value="">
+                  All families
+                </option>
+                <option
+                  v-for="fam in migFamilies"
+                  :key="fam"
+                  :value="fam"
+                >
+                  {{ fam }}
+                </option>
+              </select>
+              <span class="compare-mig-hint">{{ migHint }}</span>
+            </div>
+            <div
+              v-if="migHeatmapModel.length"
+              class="compare-chart"
+            >
+              <div class="compare-chart-head">
+                <span class="compare-chart-title">Migration Δ</span>
+                <span class="compare-chart-legend">Δ = A − B</span>
+              </div>
+              <div class="p99-axis">
+                <span class="p99-improved">{{ statusLegend('improved') }}</span>
+                <span class="p99-regressed">{{ statusLegend('regressed') }}</span>
+              </div>
+              <div
+                v-for="row in migHeatmapModel"
+                :key="row.label"
+                class="p99-chart-row"
+              >
+                <span class="chart-label">{{ row.label }}</span>
+                <div class="p99-track">
+                  <div class="p99-mid" />
+                  <div
+                    class="p99-bar"
+                    :class="row.side"
+                    :style="row.barStyle"
+                  />
+                </div>
+                <span
+                  class="p99-change"
+                  :class="row.side"
+                >{{ row.change }}</span>
+              </div>
+            </div>
+            <table class="compare-table">
+              <thead>
+                <tr>
+                  <th
+                    v-for="(h, hi) in migHeaders"
+                    :key="h"
+                    :class="thSortClass('migrations', String(hi))"
+                    @click="toggleTableSort('migrations', String(hi))"
+                  >
+                    {{ h }}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(row, ri) in sortedMigViewRows"
+                  :key="ri"
+                >
+                  <td
+                    v-for="(cell, ci) in row"
+                    :key="ci"
+                    :class="migCellClass(ci, row)"
+                  >
+                    {{ cell }}
+                  </td>
+                </tr>
+                <tr v-if="migViewRows.length === 0">
+                  <td
+                    :colspan="Math.max(migHeaders.length, 1)"
+                    class="compare-empty"
+                  >
+                    No migrated tasks in either trace
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p class="compare-page-note">
+              {{ noteMigration }}
+            </p>
+          </div>
+
+          <table
+            v-else-if="activePage === 'execution'"
+            class="compare-table"
+          >
+            <thead>
+              <tr>
+                <th
+                  :class="thSortClass('execution', 'name')"
+                  @click="toggleTableSort('execution', 'name')"
+                >
+                  Task
+                </th>
+                <th
+                  :class="thSortClass('execution', 'runsA')"
+                  @click="toggleTableSort('execution', 'runsA')"
+                >
+                  Runs A
+                </th>
+                <th
+                  :class="thSortClass('execution', 'runsB')"
+                  @click="toggleTableSort('execution', 'runsB')"
+                >
+                  Runs B
+                </th>
+                <th
+                  :class="thSortClass('execution', 'avgA')"
+                  @click="toggleTableSort('execution', 'avgA')"
+                >
+                  Avg A
+                </th>
+                <th
+                  :class="thSortClass('execution', 'avgB')"
+                  @click="toggleTableSort('execution', 'avgB')"
+                >
+                  Avg B
+                </th>
+                <th
+                  :class="thSortClass('execution', 'maxA')"
+                  @click="toggleTableSort('execution', 'maxA')"
+                >
+                  Max A
+                </th>
+                <th
+                  :class="thSortClass('execution', 'maxB')"
+                  @click="toggleTableSort('execution', 'maxB')"
+                >
+                  Max B
+                </th>
+                <th
+                  :class="thSortClass('execution', 'deltaMax')"
+                  @click="toggleTableSort('execution', 'deltaMax')"
+                >
+                  Change (A → B)
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in sortedExecutionRows"
+                :key="row.name"
+              >
+                <td class="task-col">
+                  {{ row.name }}
+                </td>
+                <td>{{ row.runsA }}</td>
+                <td>{{ row.runsB }}</td>
+                <td>{{ row.avgA }}</td>
+                <td>{{ row.avgB }}</td>
+                <td>{{ row.maxA }}</td>
+                <td>{{ row.maxB }}</td>
+                <td :class="deltaClass(row.name, row.deltaMax, 'exec max')">
+                  {{ deltaText(row.name, row.deltaMax, 'exec max') }}
+                </td>
+              </tr>
+              <tr v-if="executionRows.length === 0">
+                <td
+                  colspan="8"
+                  class="compare-empty"
+                >
+                  No execution samples in either trace
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <table
+            v-else-if="activePage === 'blocking'"
+            class="compare-table"
+          >
+            <thead>
+              <tr>
+                <th
+                  :class="thSortClass('blocking', 'name')"
+                  @click="toggleTableSort('blocking', 'name')"
+                >
+                  Task
+                </th>
+                <th
+                  :class="thSortClass('blocking', 'gapsA')"
+                  @click="toggleTableSort('blocking', 'gapsA')"
+                >
+                  Gaps A
+                </th>
+                <th
+                  :class="thSortClass('blocking', 'gapsB')"
+                  @click="toggleTableSort('blocking', 'gapsB')"
+                >
+                  Gaps B
+                </th>
+                <th
+                  :class="thSortClass('blocking', 'avgA')"
+                  @click="toggleTableSort('blocking', 'avgA')"
+                >
+                  Avg A
+                </th>
+                <th
+                  :class="thSortClass('blocking', 'avgB')"
+                  @click="toggleTableSort('blocking', 'avgB')"
+                >
+                  Avg B
+                </th>
+                <th
+                  :class="thSortClass('blocking', 'maxA')"
+                  @click="toggleTableSort('blocking', 'maxA')"
+                >
+                  Max A
+                </th>
+                <th
+                  :class="thSortClass('blocking', 'maxB')"
+                  @click="toggleTableSort('blocking', 'maxB')"
+                >
+                  Max B
+                </th>
+                <th
+                  :class="thSortClass('blocking', 'delta')"
+                  @click="toggleTableSort('blocking', 'delta')"
+                >
+                  Change (A → B)
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in sortedBlockingRows"
+                :key="row.name"
+              >
+                <td class="task-col">
+                  {{ row.name }}
+                </td>
+                <td>{{ row.gapsA }}</td>
+                <td>{{ row.gapsB }}</td>
+                <td>{{ row.avgA }}</td>
+                <td>{{ row.avgB }}</td>
+                <td>{{ row.maxA }}</td>
+                <td>{{ row.maxB }}</td>
+                <td :class="deltaClass(row.name, row.delta, 'block')">
+                  {{ deltaText(row.name, row.delta, 'block') }}
+                </td>
+              </tr>
+              <tr v-if="blockingRows.length === 0">
+                <td
+                  colspan="8"
+                  class="compare-empty"
+                >
+                  No blocking samples in either trace
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <table
+            v-else-if="activePage === 'interArrival'"
+            class="compare-table"
+          >
+            <thead>
+              <tr>
+                <th
+                  :class="thSortClass('interArrival', 'name')"
+                  @click="toggleTableSort('interArrival', 'name')"
+                >
+                  Task
+                </th>
+                <th
+                  :class="thSortClass('interArrival', 'runsA')"
+                  @click="toggleTableSort('interArrival', 'runsA')"
+                >
+                  Runs A
+                </th>
+                <th
+                  :class="thSortClass('interArrival', 'runsB')"
+                  @click="toggleTableSort('interArrival', 'runsB')"
+                >
+                  Runs B
+                </th>
+                <th
+                  :class="thSortClass('interArrival', 'avgA')"
+                  @click="toggleTableSort('interArrival', 'avgA')"
+                >
+                  Avg A
+                </th>
+                <th
+                  :class="thSortClass('interArrival', 'avgB')"
+                  @click="toggleTableSort('interArrival', 'avgB')"
+                >
+                  Avg B
+                </th>
+                <th
+                  :class="thSortClass('interArrival', 'maxA')"
+                  @click="toggleTableSort('interArrival', 'maxA')"
+                >
+                  Max A
+                </th>
+                <th
+                  :class="thSortClass('interArrival', 'maxB')"
+                  @click="toggleTableSort('interArrival', 'maxB')"
+                >
+                  Max B
+                </th>
+                <th
+                  :class="thSortClass('interArrival', 'delta')"
+                  @click="toggleTableSort('interArrival', 'delta')"
+                >
+                  Change (A → B)
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in sortedInterArrivalRows"
+                :key="row.name"
+              >
+                <td class="task-col">
+                  {{ row.name }}
+                </td>
+                <td>{{ row.runsA }}</td>
+                <td>{{ row.runsB }}</td>
+                <td>{{ row.avgA }}</td>
+                <td>{{ row.avgB }}</td>
+                <td>{{ row.maxA }}</td>
+                <td>{{ row.maxB }}</td>
+                <td :class="deltaClass(row.name, row.delta, 'inter')">
+                  {{ deltaText(row.name, row.delta, 'inter') }}
+                </td>
+              </tr>
+              <tr v-if="interArrivalRows.length === 0">
+                <td
+                  colspan="8"
+                  class="compare-empty"
+                >
+                  No inter-arrival samples in either trace
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <table
+            v-else-if="activePage === 'preemption'"
+            class="compare-table"
+          >
+            <thead>
+              <tr>
+                <th
+                  :class="thSortClass('preemption', 'name')"
+                  @click="toggleTableSort('preemption', 'name')"
+                >
+                  Victim
+                </th>
+                <th
+                  :class="thSortClass('preemption', 'countA')"
+                  @click="toggleTableSort('preemption', 'countA')"
+                >
+                  Count A
+                </th>
+                <th
+                  :class="thSortClass('preemption', 'countB')"
+                  @click="toggleTableSort('preemption', 'countB')"
+                >
+                  Count B
+                </th>
+                <th
+                  :class="thSortClass('preemption', 'delta')"
+                  @click="toggleTableSort('preemption', 'delta')"
+                >
+                  Change (A → B)
+                </th>
+                <th
+                  :class="thSortClass('preemption', 'totalA')"
+                  @click="toggleTableSort('preemption', 'totalA')"
+                >
+                  Total A
+                </th>
+                <th
+                  :class="thSortClass('preemption', 'totalB')"
+                  @click="toggleTableSort('preemption', 'totalB')"
+                >
+                  Total B
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in sortedPreemptionCompareRows"
+                :key="row.name"
+              >
+                <td class="task-col">
+                  {{ row.name }}
+                </td>
+                <td>{{ row.countA }}</td>
+                <td>{{ row.countB }}</td>
+                <td :class="deltaClass(row.name, row.delta, 'preempt')">
+                  {{ deltaText(row.name, row.delta, 'preempt') }}
+                </td>
+                <td>{{ row.totalA }}</td>
+                <td>{{ row.totalB }}</td>
+              </tr>
+              <tr v-if="preemptionCompareRows.length === 0">
+                <td
+                  colspan="6"
+                  class="compare-empty"
+                >
+                  No preemption chains in either trace
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div
+            v-else-if="activePage === 'sync'"
+            class="compare-page"
+          >
+            <table class="compare-table">
+              <thead>
+                <tr>
+                  <th
+                    :class="thSortClass('sync', 'label')"
+                    @click="toggleTableSort('sync', 'label')"
+                  >
+                    Metric
+                  </th>
+                  <th
+                    :class="thSortClass('sync', 'a')"
+                    @click="toggleTableSort('sync', 'a')"
+                  >
+                    Baseline A
+                  </th>
+                  <th
+                    :class="thSortClass('sync', 'b')"
+                    @click="toggleTableSort('sync', 'b')"
+                  >
+                    Candidate B
+                  </th>
+                  <th
+                    :class="thSortClass('sync', 'delta')"
+                    @click="toggleTableSort('sync', 'delta')"
+                  >
+                    Change (A → B)
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedSyncCompareRows"
+                  :key="row.label"
+                >
+                  <td class="task-col">
+                    {{ row.label }}
+                  </td>
+                  <td>{{ row.a }}</td>
+                  <td>{{ row.b }}</td>
+                  <td :class="deltaClass(row.label, row.delta)">
+                    {{ deltaText(row.label, row.delta) }}
+                  </td>
+                </tr>
+                <tr v-if="syncCompareRows.length === 0">
+                  <td
+                    colspan="4"
+                    class="compare-empty"
+                  >
+                    No sync instrumentation in either trace
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p class="compare-page-note">
+              {{ noteSti }}
+            </p>
+          </div>
+
+          <div
+            v-else-if="activePage === 'response'"
+            class="compare-page"
+          >
+            <div
+              v-if="p99ChartModel.length"
+              class="compare-chart"
+            >
+              <div class="compare-chart-head">
+                <span class="compare-chart-title">Response P99 change</span>
+                <span class="compare-chart-legend">Candidate B − Baseline A</span>
+              </div>
+              <div class="p99-axis">
+                <span class="p99-improved">{{ statusLegend('improved') }}</span>
+                <span class="p99-regressed">{{ statusLegend('regressed') }}</span>
+              </div>
+              <div
+                v-for="row in p99ChartModel"
+                :key="row.label"
+                class="p99-chart-row"
+              >
+                <span class="chart-label">{{ row.label }}</span>
+                <div class="p99-track">
+                  <div class="p99-mid" />
+                  <div
+                    class="p99-bar"
+                    :class="row.side"
+                    :style="row.barStyle"
+                  />
+                </div>
+                <span
+                  class="p99-change"
+                  :class="row.side"
+                >{{ row.change }}</span>
+              </div>
+            </div>
+            <table class="compare-table">
+              <thead>
+                <tr>
+                  <th
+                    :class="thSortClass('response', 'name')"
+                    @click="toggleTableSort('response', 'name')"
+                  >
+                    Task
+                  </th>
+                  <th
+                    :class="thSortClass('response', 'a')"
+                    @click="toggleTableSort('response', 'a')"
+                  >
+                    P99 A
+                  </th>
+                  <th
+                    :class="thSortClass('response', 'b')"
+                    @click="toggleTableSort('response', 'b')"
+                  >
+                    P99 B
+                  </th>
+                  <th
+                    :class="thSortClass('response', 'delta')"
+                    @click="toggleTableSort('response', 'delta')"
+                  >
+                    Change (A → B)
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedResponseCompareRows"
+                  :key="row.name"
+                >
+                  <td class="task-col">
+                    {{ row.name }}
+                  </td>
+                  <td>{{ row.a }}</td>
+                  <td>{{ row.b }}</td>
+                  <td :class="deltaClass(row.name, row.delta, 'response')">
+                    {{ deltaText(row.name, row.delta, 'response') }}
+                  </td>
+                </tr>
+                <tr v-if="responseCompareRows.length === 0">
+                  <td
+                    colspan="4"
+                    class="compare-empty"
+                  >
+                    No response samples in either trace
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p class="compare-page-note">
+              {{ noteP99 }}
+            </p>
+          </div>
+
+          <table
+            v-else-if="activePage === 'mutex'"
+            class="compare-table"
+          >
+            <thead>
+              <tr>
+                <th
+                  :class="thSortClass('mutex', 'name')"
+                  @click="toggleTableSort('mutex', 'name')"
+                >
+                  Task
+                </th>
+                <th
+                  :class="thSortClass('mutex', 'a')"
+                  @click="toggleTableSort('mutex', 'a')"
+                >
+                  Total A
+                </th>
+                <th
+                  :class="thSortClass('mutex', 'b')"
+                  @click="toggleTableSort('mutex', 'b')"
+                >
+                  Total B
+                </th>
+                <th
+                  :class="thSortClass('mutex', 'delta')"
+                  @click="toggleTableSort('mutex', 'delta')"
+                >
+                  Change (A → B)
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in sortedMutexBlockCompareRows"
+                :key="row.name"
+              >
+                <td class="task-col">
+                  {{ row.name }}
+                </td>
+                <td>{{ row.a }}</td>
+                <td>{{ row.b }}</td>
+                <td :class="deltaClass(row.name, row.delta, 'mutex')">
+                  {{ deltaText(row.name, row.delta, 'mutex') }}
+                </td>
+              </tr>
+              <tr v-if="mutexBlockCompareRows.length === 0">
+                <td
+                  colspan="4"
+                  class="compare-empty"
+                >
+                  No mutex blocking in either trace
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <table
+            v-else-if="activePage === 'trends'"
+            class="compare-table"
+          >
+            <thead>
+              <tr>
+                <th
+                  :class="thSortClass('trends', 'name')"
+                  @click="toggleTableSort('trends', 'name')"
+                >
+                  Trace
+                </th>
+                <th
+                  :class="thSortClass('trends', 'tasks')"
+                  @click="toggleTableSort('trends', 'tasks')"
+                >
+                  Tasks
+                </th>
+                <th
+                  :class="thSortClass('trends', 'migrations')"
+                  @click="toggleTableSort('trends', 'migrations')"
+                >
+                  Migrations
+                </th>
+                <th
+                  :class="thSortClass('trends', 'loadBalance')"
+                  @click="toggleTableSort('trends', 'loadBalance')"
+                >
+                  Load balance
+                </th>
+                <th
+                  :class="thSortClass('trends', 'tickHealth')"
+                  @click="toggleTableSort('trends', 'tickHealth')"
+                >
+                  Tick health
+                </th>
+                <th
+                  :class="thSortClass('trends', 'spanNs')"
+                  @click="toggleTableSort('trends', 'spanNs')"
+                >
+                  Span
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in sortedTrendRows"
+                :key="row.name"
+              >
+                <td class="task-col">
+                  {{ row.name }}
+                </td>
+                <td>{{ row.tasks ?? '—' }}</td>
+                <td>{{ row.migrations ?? '—' }}</td>
+                <td>{{ row.loadBalance == null ? '—' : `${Math.round(row.loadBalance)}%` }}</td>
+                <td>{{ row.tickHealth || '—' }}</td>
+                <td>{{ row.spanNs ?? '—' }}</td>
+              </tr>
+              <tr v-if="trendRows.length === 0">
+                <td
+                  colspan="6"
+                  class="compare-empty"
+                >
+                  Open 2+ traces to trend summaries
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-
-        <table
-          v-else-if="activePage === 'mutex'"
-          class="compare-table"
-        >
-          <thead>
-            <tr>
-              <th :class="thSortClass('mutex', 'name')" @click="toggleTableSort('mutex', 'name')">Task</th>
-              <th :class="thSortClass('mutex', 'a')" @click="toggleTableSort('mutex', 'a')">Total A</th>
-              <th :class="thSortClass('mutex', 'b')" @click="toggleTableSort('mutex', 'b')">Total B</th>
-              <th :class="thSortClass('mutex', 'delta')" @click="toggleTableSort('mutex', 'delta')">Δ</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in sortedMutexBlockCompareRows"
-              :key="row.name"
-            >
-              <td class="task-col">{{ row.name }}</td>
-              <td>{{ row.a }}</td>
-              <td>{{ row.b }}</td>
-              <td :class="deltaClass(row.name, row.delta, 'mutex')">{{ deltaText(row.name, row.delta, 'mutex') }}</td>
-            </tr>
-            <tr v-if="mutexBlockCompareRows.length === 0">
-              <td colspan="4" class="compare-empty">No mutex blocking in either trace</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <table
-          v-else-if="activePage === 'trends'"
-          class="compare-table"
-        >
-          <thead>
-            <tr>
-              <th :class="thSortClass('trends', 'name')" @click="toggleTableSort('trends', 'name')">Trace</th>
-              <th :class="thSortClass('trends', 'tasks')" @click="toggleTableSort('trends', 'tasks')">Tasks</th>
-              <th :class="thSortClass('trends', 'migrations')" @click="toggleTableSort('trends', 'migrations')">Migrations</th>
-              <th :class="thSortClass('trends', 'loadBalance')" @click="toggleTableSort('trends', 'loadBalance')">Load balance</th>
-              <th :class="thSortClass('trends', 'tickHealth')" @click="toggleTableSort('trends', 'tickHealth')">Tick health</th>
-              <th :class="thSortClass('trends', 'spanNs')" @click="toggleTableSort('trends', 'spanNs')">Span</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in sortedTrendRows"
-              :key="row.name"
-            >
-              <td class="task-col">{{ row.name }}</td>
-              <td>{{ row.tasks ?? '—' }}</td>
-              <td>{{ row.migrations ?? '—' }}</td>
-              <td>{{ row.loadBalance == null ? '—' : `${Math.round(row.loadBalance)}%` }}</td>
-              <td>{{ row.tickHealth || '—' }}</td>
-              <td>{{ row.spanNs ?? '—' }}</td>
-            </tr>
-            <tr v-if="trendRows.length === 0">
-              <td colspan="6" class="compare-empty">Open 2+ traces to trend summaries</td>
-            </tr>
-          </tbody>
-        </table>
       </div>
 
       <div class="compare-dialog-footer">
         <div class="compare-footer-left">
-        <button
-          type="button"
-          class="compare-export-btn"
-          :title="aiEnabled
-            ? 'Score expected vs actual deltas from this Trace Compare'
-            : 'Enable AI Assistant in Settings → AI'"
-          @click="onValidateExperiment"
-        >
-          Validate experiment…
-        </button>
-        <button
-          type="button"
-          class="compare-export-btn"
-          :title="aiEnabled
-            ? 'Open the AI Assistant and walk through these Trace Compare tables'
-            : 'Enable AI Assistant in Settings → AI'"
-          @click="onQueryAi"
-        >
-          Query with AI…
-        </button>
-        <button
-          type="button"
-          class="compare-export-btn"
-          title="Store Trace A per-task metrics as the regression baseline"
-          @click="onSaveBaseline"
-        >
-          Save as baseline
-        </button>
-        <button
-          type="button"
-          class="compare-export-btn"
-          title="Z-score Trace A metrics against the stored baseline"
-          @click="onScoreBaseline"
-        >
-          Score vs baseline
-        </button>
+          <button
+            type="button"
+            class="compare-export-btn"
+            title="Export compare report as HTML (tables include Search / Show all / CSV)"
+            @click="onExportHtml"
+          >
+            <svg
+              class="export-icon"
+              viewBox="0 0 16 16"
+              width="14"
+              height="14"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.2"
+              aria-hidden="true"
+            >
+              <rect
+                x="2.5"
+                y="2"
+                width="11"
+                height="12"
+                rx="1"
+              />
+              <path
+                d="M5.5 6.5 3.5 8.5l2 2M10.5 6.5l2 2-2 2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            Export HTML
+          </button>
         </div>
         <div class="compare-footer-right">
-        <button
-          type="button"
-          class="compare-export-btn"
-          title="Export compare report as HTML (tables include Search / Show all / CSV)"
-          @click="onExportHtml"
-        >
-          <svg
-            class="export-icon"
-            viewBox="0 0 16 16"
-            width="14"
-            height="14"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.2"
-            aria-hidden="true"
+          <button
+            type="button"
+            class="compare-export-btn"
+            title="Store Trace A per-task metrics as the regression baseline"
+            @click="onSaveBaseline"
           >
-            <rect
-              x="2.5"
-              y="2"
-              width="11"
-              height="12"
-              rx="1"
-            />
-            <path
-              d="M5.5 6.5 3.5 8.5l2 2M10.5 6.5l2 2-2 2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-          Export HTML
-        </button>
-        <button
-          type="button"
-          class="compare-export-btn"
-          title="Close"
-          @click="emit('close')"
-        >
-          Close
-        </button>
+            Save baseline
+          </button>
+          <button
+            type="button"
+            class="compare-export-btn"
+            title="Z-score Trace A metrics against the stored baseline"
+            @click="onScoreBaseline"
+          >
+            Score vs baseline
+          </button>
+          <button
+            type="button"
+            class="compare-export-btn"
+            :disabled="!aiEnabled"
+            :title="aiEnabled
+              ? 'Score expected vs actual deltas from this Trace Compare'
+              : 'Enable AI Assistant in Settings → AI'"
+            @click="onValidateExperiment"
+          >
+            Validate experiment…
+          </button>
+          <button
+            type="button"
+            class="compare-export-btn compare-primary-btn"
+            :disabled="!aiEnabled"
+            :title="aiEnabled
+              ? 'Open the AI Assistant and walk through these Trace Compare tables'
+              : 'Enable AI Assistant in Settings → AI'"
+            @click="onQueryAi"
+          >
+            Ask AI about this
+          </button>
+          <a
+            v-if="!aiEnabled"
+            class="compare-ai-hint"
+            href="#"
+            @click.prevent="emit('close')"
+          >Enable in Settings → AI</a>
+          <button
+            type="button"
+            class="compare-export-btn"
+            title="Close"
+            @click="emit('close')"
+          >
+            Close
+          </button>
         </div>
       </div>
     </div>
@@ -791,7 +1284,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import DomSelect from './DomSelect.vue'
 import AnalysisContextStrip from './AnalysisContextStrip.vue'
 import {
@@ -827,6 +1320,7 @@ import {
   compareSummaryChangeBarRows,
   compareMigrationHeatmapRows,
   compareRowDeltaStatus,
+  compareDirectionalDelta,
   filterCompareMigrationRows,
   compareFieldSortAccessors,
 } from '../utils/uxExplore.js'
@@ -880,6 +1374,59 @@ const dialogStyle = computed(() => {
   }
 })
 
+const SIZE_KEY = 'tc-dialog-size'
+let _prevFocus = null
+
+function onRailKey(ev, id) {
+  const keys = ['ArrowDown', 'ArrowUp', 'Home', 'End']
+  if (!keys.includes(ev.key)) return
+  ev.preventDefault()
+  const ids = pageTabs.map(t => t.id)
+  let i = ids.indexOf(id)
+  if (ev.key === 'ArrowDown') i = (i + 1) % ids.length
+  else if (ev.key === 'ArrowUp') i = (i - 1 + ids.length) % ids.length
+  else if (ev.key === 'Home') i = 0
+  else if (ev.key === 'End') i = ids.length - 1
+  activePage.value = ids[i]
+  nextTick(() => {
+    dialogEl.value?.querySelector('.compare-rail-item.active')?.focus()
+  })
+}
+
+function onDialogKeydown(ev) {
+  if (ev.key === 'Escape') {
+    ev.stopPropagation()
+    emit('close')
+  }
+}
+
+function persistSize() {
+  const el = dialogEl.value
+  if (!el) return
+  try {
+    localStorage.setItem(SIZE_KEY, JSON.stringify({ w: el.offsetWidth, h: el.offsetHeight }))
+  } catch { /* private mode / disabled storage */ }
+}
+
+onMounted(() => {
+  _prevFocus = document.activeElement
+  try {
+    const saved = JSON.parse(localStorage.getItem(SIZE_KEY) || 'null')
+    if (saved && saved.w && saved.h && dialogEl.value) {
+      dialogEl.value.style.width = `${saved.w}px`
+      dialogEl.value.style.height = `${saved.h}px`
+    }
+  } catch { /* ignore */ }
+  nextTick(() => {
+    dialogEl.value?.querySelector('.compare-rail-item.active')?.focus()
+  })
+})
+
+onBeforeUnmount(() => {
+  persistSize()
+  if (_prevFocus && typeof _prevFocus.focus === 'function') _prevFocus.focus()
+})
+
 function onHeaderPointerDown(ev) {
   if (ev.pointerType === 'mouse' && ev.button !== 0) return
   if (ev.target.closest('button')) return
@@ -925,19 +1472,32 @@ function pickTabId(preferred, fallbackIndex) {
 }
 
 const pageTabs = [
-  { id: 'summary', label: 'Summary' },
-  { id: 'top', label: 'Top Tasks' },
-  { id: 'coreUtil', label: 'Core Util' },
-  { id: 'migrations', label: 'Core Migrations' },
-  { id: 'execution', label: 'Execution' },
-  { id: 'blocking', label: 'Blocking' },
-  { id: 'interArrival', label: 'Inter-Arrival' },
-  { id: 'preemption', label: 'Preemption' },
-  { id: 'sync', label: 'Sync' },
-  { id: 'response', label: 'Response' },
-  { id: 'mutex', label: 'Mutex' },
-  { id: 'trends', label: 'Trends' },
+  { id: 'summary', label: 'Summary', group: 'Overview' },
+  { id: 'top', label: 'Top Tasks', group: 'CPU & Cores' },
+  { id: 'coreUtil', label: 'Core Utilisation', group: 'CPU & Cores' },
+  { id: 'migrations', label: 'Migrations', group: 'CPU & Cores' },
+  { id: 'execution', label: 'Execution', group: 'Timing' },
+  { id: 'blocking', label: 'Blocking', group: 'Timing' },
+  { id: 'interArrival', label: 'Inter-Arrival', group: 'Timing' },
+  { id: 'response', label: 'Response', group: 'Timing' },
+  { id: 'preemption', label: 'Preemption', group: 'Contention' },
+  { id: 'sync', label: 'Sync', group: 'Contention' },
+  { id: 'mutex', label: 'Mutex', group: 'Contention' },
+  { id: 'trends', label: 'Trends', group: 'Cross-trace' },
 ]
+
+const railGroups = computed(() => {
+  const out = []
+  for (const tab of pageTabs) {
+    let g = out[out.length - 1]
+    if (!g || g.name !== tab.group) {
+      g = { name: tab.group, tabs: [] }
+      out.push(g)
+    }
+    g.tabs.push(tab)
+  }
+  return out
+})
 
 const activePage = ref('summary')
 const scopeToCursors = ref(true)
@@ -1090,7 +1650,10 @@ function deltaClass(label, delta, metric = '') {
   if (status === 'Regressed') return 'delta-regressed'
   return ''
 }
-function deltaText(label, delta, metric = '') {
+function deltaText(label, delta, metric = '', aText = null) {
+  // Direction-aware "Change (A → B)" cell: signed value + % + ▲/▼ + word.
+  const dir = compareDirectionalDelta(label, delta, metric, aText)
+  if (dir) return dir.text
   const status = compareRowDeltaStatus(label, delta, metric)
   const colorblind = !!props.analysisSettings?.colorblindSafe
   return formatSemanticDelta(String(delta ?? ''), status || '', colorblind)
@@ -1189,19 +1752,14 @@ const compareDecision = computed(() => {
   const nImp = Number(cards.improvements ?? (data.improvements || []).length) || 0
   const nWarn = Number(cards.warnings ?? (data.warnings || []).length) || 0
   const top = regs[0]
-  const largest = top ? `Largest regression — ${top.label}: ${top.change}` : ''
+  const mover = top || (data.improvements || [])[0] || null
   const next = String(notable.next_investigation || '').trim()
   const omitted = Number(notable.small_omitted_count || 0) || 0
   const sigNote = (Number(cards.significant || 0) || omitted)
     ? 'Showing engineering-significant deltas only (small changes omitted)'
     : ''
   const comparability = notable.comparability || { comparable: true, warnings: [] }
-  const bullets = (notable.verdict_bullets || []).map(b => ({
-    label: b.label,
-    change: b.change,
-    status: b.status,
-    glyph: b.status === 'Regressed' ? '▲' : b.status === 'Improved' ? '▼' : '•',
-  }))
+  const tone = String(notable.verdict_tone || 'neutral')
   const visible = !!(
     nReg || nImp || nWarn || top || next
     || (comparability.warnings || []).length || notable.verdict)
@@ -1211,14 +1769,13 @@ const compareDecision = computed(() => {
     identity:
       `Baseline: ${nameA} · Scope ${idA.span || 'Full Trace'}    |    ` +
       `Candidate: ${nameB} · Scope ${idB.span || 'Full Trace'}`,
-    counts:
-      `${nReg} REGRESSIONS    ${nImp} IMPROVEMENTS` +
-      (nWarn ? `    ${nWarn} WARNING${nWarn === 1 ? '' : 'S'}` : ''),
     verdictLabel: String(notable.verdict_label || 'SIMILAR'),
-    verdictTone: String(notable.verdict_tone || 'neutral'),
-    bullets,
+    verdictTone: tone,
+    verdictGlyph: { regressed: '▲', improved: '▼', mixed: '◆' }[tone] || '●',
+    verdictSentence: String(notable.verdict || '').replace(/^Overall:\s*/i, '').trim(),
+    cards: { regressions: nReg, improvements: nImp, warnings: nWarn },
+    mover: mover ? `${mover.label}: ${mover.change}` : '',
     comparability,
-    largest,
     largestClickable: !!top,
     next,
     sigNote,
@@ -1261,7 +1818,13 @@ function onExportHtml() {
 }
 
 function onQueryAi() {
-  emit('query-ai', { idA: tabAId.value, idB: tabBId.value })
+  const sec = pageTabs.find(t => t.id === activePage.value)
+  emit('query-ai', {
+    idA: tabAId.value,
+    idB: tabBId.value,
+    section: activePage.value,
+    sectionLabel: sec?.label || '',
+  })
 }
 
 function onValidateExperiment() {
@@ -1294,8 +1857,12 @@ function onScoreBaseline() {
 }
 
 .compare-dialog {
-  width: min(1080px, 98vw);
-  height: min(88vh, 640px);
+  width: min(1200px, 96vw);
+  height: min(85vh, 820px);
+  min-width: 720px;
+  min-height: 460px;
+  max-width: 98vw;
+  max-height: 94vh;
   background: var(--panel-bg);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -1303,6 +1870,8 @@ function onScoreBaseline() {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  resize: both;
+  font-size: 13px;
 }
 
 .compare-dialog-header {
@@ -1321,8 +1890,9 @@ function onScoreBaseline() {
 }
 
 .compare-dialog-title {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
+  flex: none;
 }
 
 .compare-close-btn {
@@ -1545,80 +2115,149 @@ function onScoreBaseline() {
 }
 
 .compare-decision {
-  margin: 8px 0;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: rgba(52, 152, 219, 0.10);
-  color: var(--fg-dim, #9a9a9a);
-  font-size: 12px;
-  line-height: 1.45;
+  margin: 8px 0 4px;
 }
 .compare-decision-identity {
-  color: var(--fg-dim, #9a9a9a);
+  color: var(--fg-dim);
   font-size: 11px;
-}
-.compare-decision-counts {
-  margin-top: 4px;
-  color: var(--fg, #cfd8dc);
-  font-weight: 600;
-}
-.compare-decision-largest {
-  margin-top: 4px;
-  color: var(--fg, #e0e0e0);
-}
-.compare-decision-largest.clickable {
-  cursor: pointer;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--fg, #e0e0e0) 35%, transparent);
-}
-.compare-decision-largest.clickable:hover {
-  color: var(--accent, #0e639c);
-}
-.compare-decision-why {
-  margin-top: 2px;
-  color: var(--fg-dim, #9a9a9a);
-  font-size: 11px;
-}
-.compare-decision-next {
-  margin-top: 2px;
-  color: var(--fg-dim, #b0bec5);
-  font-size: 11px;
+  margin-top: 8px;
 }
 .compare-decision-sig {
-  margin-top: 2px;
-  color: var(--fg-dim, #7a8690);
+  margin-top: 4px;
+  color: var(--fg-dim);
   font-size: 10px;
 }
-.compare-verdict {
-  margin-top: 6px;
+
+/* Verdict banner — the answer as the hero. Glyph carries meaning w/o colour. */
+.compare-verdict-banner {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
-.compare-verdict-chip {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 999px;
+.compare-verdict-glyph {
+  font-size: 15px;
+  line-height: 1.25;
+  flex: none;
+}
+.compare-verdict-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.compare-verdict-label {
   font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+}
+.compare-verdict-sentence {
   font-size: 12px;
-  letter-spacing: 0.04em;
-  color: #fff;
+  color: var(--fg);
+  max-width: 68ch;
 }
-.compare-verdict-chip.tone-regressed { background: #c0392b; }
-.compare-verdict-chip.tone-improved { background: #1f6b45; }
-.compare-verdict-chip.tone-mixed { background: #c87a12; }
-.compare-verdict-chip.tone-neutral { background: #6b7a8d; }
-.compare-verdict-bullets {
-  margin: 6px 0 0;
-  padding-left: 18px;
+.compare-verdict-banner.tone-regressed {
+  border-color: color-mix(in srgb, var(--semantic-error, #e07070) 55%, var(--border));
+  background: color-mix(in srgb, var(--semantic-error, #e07070) 13%, transparent);
 }
-.compare-verdict-bullets li {
-  margin: 1px 0;
-  color: var(--fg, #e0e0e0);
+.compare-verdict-banner.tone-regressed .compare-verdict-label,
+.compare-verdict-banner.tone-regressed .compare-verdict-glyph {
+  color: var(--semantic-error, #e07070);
 }
-.compare-verdict-bullets li.reg { color: #e57373; }
-.compare-verdict-bullets li.imp { color: #81c784; }
-.compare-verdict-none {
-  margin-top: 6px;
-  color: var(--fg-dim, #9a9a9a);
+.compare-verdict-banner.tone-improved {
+  border-color: color-mix(in srgb, var(--semantic-improvement, #3cb371) 55%, var(--border));
+  background: color-mix(in srgb, var(--semantic-improvement, #3cb371) 13%, transparent);
+}
+.compare-verdict-banner.tone-improved .compare-verdict-label,
+.compare-verdict-banner.tone-improved .compare-verdict-glyph {
+  color: var(--semantic-improvement, #3cb371);
+}
+.compare-verdict-banner.tone-mixed {
+  border-color: color-mix(in srgb, var(--semantic-warning, #e67e22) 55%, var(--border));
+  background: color-mix(in srgb, var(--semantic-warning, #e67e22) 13%, transparent);
+}
+.compare-verdict-banner.tone-mixed .compare-verdict-label,
+.compare-verdict-banner.tone-mixed .compare-verdict-glyph {
+  color: var(--semantic-warning, #e67e22);
+}
+
+.compare-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 12px;
+}
+.compare-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--panel-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.compare-card-k {
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+.compare-card-v {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+}
+.compare-card.tone-regressed .compare-card-v { color: var(--semantic-error, #e07070); }
+.compare-card.tone-improved .compare-card-v { color: var(--semantic-improvement, #3cb371); }
+.compare-card.tone-warn .compare-card-v { color: var(--semantic-warning, #e67e22); }
+.compare-card-mover .compare-card-v {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: normal;
+  word-break: break-word;
+}
+.compare-card-mover.clickable {
+  cursor: pointer;
+}
+.compare-card-mover.clickable:hover {
+  border-color: var(--accent);
+}
+
+.compare-next-btn {
+  margin-top: 12px;
+  align-self: flex-start;
+  appearance: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 7px;
+  padding: 8px 13px;
+  cursor: pointer;
+}
+.compare-next-btn:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.compare-allmetrics {
+  margin-top: 14px;
+}
+.compare-allmetrics > summary {
+  cursor: pointer;
   font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-dim);
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+.compare-allmetrics > summary:hover {
+  color: var(--fg);
 }
 .compare-comparability-warn {
   margin: 0 0 8px;
@@ -1679,50 +2318,136 @@ function onScoreBaseline() {
   font-size: 11px;
 }
 
-.compare-tabs {
+.compare-body {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-  padding: 8px 14px 0;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
 }
 
-.compare-tab {
+/* Left panel — same style as the Analysis Findings dialog's .analysis-list. */
+.compare-rail {
+  flex: none;
+  width: 178px;
+  overflow-y: auto;
+  padding: 6px;
+  border-right: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+}
+
+/* Non-interactive section header — same font as the items, gray band. */
+.compare-rail-group {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  margin: 8px -6px 3px;
+  padding: 4px 14px;
+}
+.compare-rail-group:first-child {
+  margin-top: 0;
+}
+
+.compare-rail-item {
+  display: block;
+  width: 100%;
+  text-align: left;
   appearance: none;
   border: none;
-  border-bottom: 2px solid transparent;
+  border-left: 2px solid transparent;
   background: transparent;
-  color: var(--fg-dim);
+  color: var(--fg);
   font-size: 11px;
-  font-weight: 600;
-  padding: 6px 12px;
+  line-height: 1.3;
+  padding: 4px 8px;
+  border-radius: 4px;
   cursor: pointer;
-  margin-bottom: -1px;
 }
-
-.compare-tab:hover {
+.compare-rail-item:hover:not(.active) {
   color: var(--fg);
   background: var(--tb-btn-hover);
 }
-
-.compare-tab.active {
+.compare-rail-item.active {
   color: var(--accent);
-  border-bottom-color: var(--accent);
+  font-weight: 600;
+  border-left-color: var(--accent);
+  background: transparent;
 }
 
 .compare-table-wrap {
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: 0 14px 14px;
+  padding: 4px 14px 14px;
+  border-top: 1px solid var(--border);
 }
 
 .compare-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 11px;
+  font-size: 12px;
   margin-top: 10px;
+}
+
+.compare-table th.col-a { box-shadow: inset 0 2px 0 var(--cmp-a, #4F8BFF); }
+.compare-table th.col-b { box-shadow: inset 0 2px 0 var(--cmp-b, #E0A34E); }
+
+.compare-legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--fg-dim);
+  cursor: default;
+}
+.compare-legend-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.compare-legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex: none;
+}
+.compare-legend-a .compare-legend-dot { background: var(--cmp-a, #4F8BFF); }
+.compare-legend-b .compare-legend-dot { background: var(--cmp-b, #E0A34E); }
+
+.compare-primary-btn {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.compare-primary-btn:hover {
+  filter: brightness(1.06);
+  background: var(--accent);
+  color: #fff;
+}
+.compare-export-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.compare-ai-hint {
+  font-size: 10px;
+  color: var(--accent);
+  align-self: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compare-dialog,
+  .compare-dialog * {
+    transition: none !important;
+    animation: none !important;
+  }
 }
 
 .compare-table th,

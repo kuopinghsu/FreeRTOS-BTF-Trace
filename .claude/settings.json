@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(QT_QPA_PLATFORM=offscreen python3 -m pytest tests/test_trace_compare_dialog_layout.py tests/test_workflow_analysis.py tests/test_ai_web_parity.py tests/test_ux_explore.py tests/test_trace_compare.py -q)",
+      "Bash(python3 -m py_compile btf_viewer_pkg/ai_assistant.py btf_viewer_pkg/mainwindow.py btf_viewer_pkg/stats.py)"
+    ]
+  }
+}

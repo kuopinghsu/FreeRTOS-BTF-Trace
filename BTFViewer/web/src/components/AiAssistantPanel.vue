@@ -2336,13 +2336,16 @@ async function askTemplate(templateId, promptOverride = '') {
   await send()
 }
 
-async function askCompare(idA, idB) {
-  const prompt = templates.find(t => t.id === AI_COMPARE_TEMPLATE_ID)?.prompt
-  if (!prompt) return
+async function askCompare(idA, idB, sectionLabel = '') {
+  const base = templates.find(t => t.id === AI_COMPARE_TEMPLATE_ID)?.prompt
+  if (!base) return
   if (idA == null || idB == null || idA === idB) {
     status.value = 'Choose two different traces.'
     return
   }
+  const prompt = sectionLabel
+    ? `${base}\n\nFocus your analysis on the "${sectionLabel}" section of the comparison.`
+    : base
   try {
     const ctx = normalizeAiContext(await buildCompareCtx(idA, idB))
     if (!(ctx.findingsText || '').trim()) {

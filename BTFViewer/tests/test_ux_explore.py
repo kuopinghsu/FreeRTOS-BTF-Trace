@@ -34,6 +34,8 @@ from btf_viewer_pkg.ux_explore import (  # noqa: E402
     compare_migration_heatmap_rows,
     compare_migration_heatmap_svg,
     compare_row_delta_status,
+    compare_directional_delta,
+    compare_dumbbell_rows,
     filter_compare_migration_rows,
     format_burst_reason,
     format_burst_window_ns,
@@ -522,14 +524,50 @@ class UxExploreTest(unittest.TestCase):
             ],
         }, "A.btf", "B.btf")
         self.assertIn('class="compare-decision"', decision)
-        self.assertIn("REGRESSIONS", decision)
-        self.assertIn("Largest regression", decision)
+        self.assertIn('class="compare-verdict-banner tone-', decision)
+        self.assertIn('class="compare-card tone-regressed"', decision)
+        self.assertIn("Biggest mover", decision)
         self.assertEqual(
             compare_row_delta_status("Migrations (total)", "−100"), "Regressed")
         self.assertEqual(
             compare_row_delta_status("Load Balance Score", "−0.5 pp"), "Improved")
         self.assertIn("pp = percentage points", COMPARE_DELTA_FORMULA)
         self.assertGreater(regs["shown"], 0)
+
+    def test_compare_directional_delta_resolves_arrow_and_word(self) -> None:
+        worse = compare_directional_delta(
+            "Response P99", "−80 µs", "response", "210 µs")
+        self.assertEqual(worse["status"], "Regressed")
+        self.assertEqual(worse["arrow"], "▲")
+        self.assertEqual(worse["word"], "worse")
+        self.assertIn("+80 µs · +38.1% ▲ worse", worse["text"])
+
+        better = compare_directional_delta(
+            "Blocking time /s", "+35 µs/s", "block", "540 µs/s")
+        self.assertEqual(better["status"], "Improved")
+        self.assertEqual(better["arrow"], "▼")
+        self.assertEqual(better["word"], "better")
+
+        flat = compare_directional_delta("Tasks", "+2", "")
+        self.assertEqual(flat["arrow"], "•")
+        self.assertEqual(flat["word"], "flat")
+
+        self.assertIsNone(compare_directional_delta("Response P99", "0"))
+        self.assertIsNone(compare_directional_delta("Response P99", "—"))
+
+    def test_compare_dumbbell_rows_scale_and_better_side(self) -> None:
+        rows = [
+            {"name": "ctrl_loop", "a": "210 µs", "b": "290 µs"},
+            {"name": "net_worker", "a": "320 µs", "b": "300 µs"},
+            {"name": "ui_task", "a": "88 µs", "b": "92 µs"},
+        ]
+        db = compare_dumbbell_rows(rows, limit=2)
+        self.assertEqual(len(db), 2)
+        self.assertEqual(db[0]["label"], "ctrl_loop")
+        self.assertFalse(db[0]["better"])
+        self.assertTrue(db[1]["better"])
+        self.assertGreater(db[0]["b_pct"], db[0]["a_pct"])
+        self.assertTrue(all(0 <= r["a_pct"] <= 100 for r in db))
 
     def test_anomaly_flags_deadline_and_mutex(self) -> None:
         evs = [_ev("exec", "A[1]", i * 20, 10) for i in range(4)]

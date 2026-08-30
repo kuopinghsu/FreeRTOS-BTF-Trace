@@ -65,7 +65,7 @@ describe('AI conversation turn layout', () => {
     assert.match(aiPanel, /dumpInvestigationSession/)
     assert.match(aiPanel, /investigationSessionHasChat/)
     assert.match(aiPanel, /if \(!investigationSessionHasChat\(msgs\)\)/)
-    assert.match(compareDlg, /Save as baseline/)
+    assert.match(compareDlg, /Save baseline/)
     assert.match(compareDlg, /Score vs baseline/)
     assert.match(compareDlg, /@click="onSaveBaseline"/)
     assert.match(compareDlg, /@click="onScoreBaseline"/)
@@ -151,14 +151,14 @@ describe('Migration inspector Investigate with AI', () => {
 
 describe('Trace Compare Query with AI', () => {
   it('footer emits query-ai and App runs the compare template', () => {
-    assert.match(compareDlg, /Query with AI/)
+    assert.match(compareDlg, /Ask AI about this/)
     assert.match(compareDlg, /emit\('query-ai'/)
     assert.match(app, /@query-ai="queryCompareWithAi"/)
     assert.match(compareDlg, /emit\('compared'/)
     assert.match(compareDlg, /scopeToCursors: !!scopeToCursors\.value/)
     assert.match(app, /@compared="onTraceCompared"/)
     assert.match(app, /function compareAiPerformance\(tabARef, tabBRef, \{ scopeToCursors = true \} = \{\}\)/)
-    assert.match(app, /askCompare\?\.\(idA, idB\)/)
+    assert.match(app, /askCompare\?\.\(idA, idB, payload\?\.sectionLabel/)
     assert.match(aiPanel, /async function askCompare/)
     assert.doesNotMatch(compareDlg, /Investigate on Baseline/)
     assert.doesNotMatch(compareDlg, /Investigate on Candidate/)

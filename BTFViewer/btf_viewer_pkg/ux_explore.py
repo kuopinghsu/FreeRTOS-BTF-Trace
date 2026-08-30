@@ -664,12 +664,6 @@ def compare_summary_decision_html(
     n_imp = int(cards.get("improvements") or len(data.get("improvements") or []) or 0)
     n_warn = int(cards.get("warnings") or len(data.get("warnings") or []) or 0)
     top = regs[0] if regs else None
-    if top:
-        largest = (
-            f"Largest regression — {top.get('label')}: {top.get('change')}"
-        )
-    else:
-        largest = str(notable.get("verdict") or "").strip() or "No significant regressions"
     nxt = str(notable.get("next_investigation") or "").strip()
     omitted = int(notable.get("small_omitted_count") or 0)
     sig_note = (
@@ -678,7 +672,7 @@ def compare_summary_decision_html(
     )
     label = str(notable.get("verdict_label") or "SIMILAR")
     tone = str(notable.get("verdict_tone") or "neutral")
-    bullets = notable.get("verdict_bullets") or []
+    sentence = re.sub(r"^Overall:\s*", "", str(notable.get("verdict") or "")).strip()
     comparability = notable.get("comparability") or {}
     comp_warnings = list(comparability.get("warnings") or [])
     visible = bool(
@@ -691,10 +685,9 @@ def compare_summary_decision_html(
         f"    |    Candidate: {name_b or 'Candidate'} · Scope "
         f"{id_b.get('span') or 'Full Trace'}"
     )
-    counts = (
-        f"{n_reg} REGRESSIONS    {n_imp} IMPROVEMENTS"
-        + (f"    {n_warn} WARNING{'S' if n_warn != 1 else ''}" if n_warn else "")
-    )
+    mover = top or (list(data.get("improvements") or []) or [None])[0]
+    mover_text = f"{mover.get('label')}: {mover.get('change')}" if mover else "—"
+    glyph = {"regressed": "▲", "improved": "▼", "mixed": "◆"}.get(tone, "●")
     parts = ['<div class="compare-decision">']
     if comp_warnings:
         parts.append('<div class="compare-comparability-warn">')
@@ -706,39 +699,32 @@ def compare_summary_decision_html(
             parts.append(f"<li>{html.escape(str(w))}</li>")
         parts.append("</ul></div>")
     parts.append(
-        f'<div class="compare-decision-identity">{html.escape(ident)}</div>'
+        f'<div class="compare-verdict-banner tone-{html.escape(tone)}">'
+        f'<span class="compare-verdict-glyph">{glyph}</span>'
+        f'<span class="compare-verdict-main">'
+        f'<span class="compare-verdict-label">{html.escape(label)}</span>'
+        + (f'<span class="compare-verdict-sentence">{html.escape(sentence)}</span>'
+           if sentence else "")
+        + "</span></div>"
     )
     parts.append(
-        f'<div class="compare-verdict">'
-        f'<span class="compare-verdict-chip tone-{html.escape(tone)}">'
-        f'{html.escape(label)}</span>'
+        '<div class="compare-cards">'
+        f'<div class="compare-card tone-regressed"><span class="compare-card-k">'
+        f'Regressions</span><span class="compare-card-v">{n_reg}</span></div>'
+        f'<div class="compare-card tone-improved"><span class="compare-card-k">'
+        f'Improvements</span><span class="compare-card-v">{n_imp}</span></div>'
+        f'<div class="compare-card tone-warn"><span class="compare-card-k">'
+        f'Warnings</span><span class="compare-card-v">{n_warn}</span></div>'
+        f'<div class="compare-card compare-card-mover"><span class="compare-card-k">'
+        f'Biggest mover</span><span class="compare-card-v">'
+        f'{html.escape(mover_text)}</span></div>'
+        "</div>"
     )
-    if bullets:
-        parts.append('<ul class="compare-verdict-bullets">')
-        for b in bullets:
-            st = str(b.get("status") or "")
-            glyph = "▲" if st == "Regressed" else "▼" if st == "Improved" else "•"
-            cls = "reg" if st == "Regressed" else "imp" if st == "Improved" else ""
-            txt = f"{b.get('label')} — {b.get('change')}"
-            parts.append(
-                f'<li class="{cls}">{html.escape(glyph)} {html.escape(txt)}</li>'
-            )
-        parts.append("</ul>")
-    else:
-        parts.append(
-            '<div class="compare-verdict-none">No metric changed beyond the '
-            'significance threshold.</div>'
-        )
-    parts.append("</div>")  # .compare-verdict
-    parts.append(f'<div class="compare-decision-counts">{html.escape(counts)}</div>')
-    if top:
-        parts.append(
-            f'<div class="compare-decision-largest">{html.escape(largest)}</div>'
-        )
+    parts.append(
+        f'<div class="compare-decision-identity">{html.escape(ident)}</div>'
+    )
     if nxt:
-        parts.append(
-            f'<div class="compare-decision-next">{html.escape(nxt)}</div>'
-        )
+        parts.append(f'<div class="compare-next">{html.escape(nxt)}</div>')
     if sig_note:
         parts.append(
             f'<div class="compare-decision-sig">{html.escape(sig_note)}</div>'
@@ -1538,6 +1524,92 @@ def compare_row_delta_status(label: str, delta: Any, metric: str = "") -> Option
     if pol is None:
         return "Changed"
     return _compare_status(pol, signed)
+
+
+def compare_directional_delta(
+    label: str, delta: Any, metric: str = "", a_text: Any = None,
+) -> Optional[dict]:
+    """Direction-aware "Change (A -> B)" cell for the redesigned detail tables.
+
+    The stored delta is ``A - B``; the reader sees the Candidate-vs-Baseline
+    change (``B - A``) plus an explicit arrow + word so the table never relies on
+    colour or on the reader doing the arithmetic.  Returns ``None`` when there is
+    no parseable, non-zero change; otherwise a dict with keys ``signed``, ``pct``
+    (or None), ``status``, ``arrow`` ('u25b2'/'u25bc'/'u2022'), ``word``
+    ('worse'/'better'/'flat') and ``text`` (e.g. ``"+80 us  +38%  worse"``).
+    """
+    parsed = parse_signed_delta(delta)
+    if parsed is None or parsed[0] == 0:
+        return None
+    signed, _kind = parsed
+    pol = _compare_metric_polarity(label, metric)
+    if pol is None and metric:
+        pol = _compare_metric_polarity(metric)
+    status = _compare_status(pol, signed) if pol is not None else "Changed"
+    arrow = {"Regressed": "▲", "Improved": "▼"}.get(status, "•")
+    word = {"Regressed": "worse", "Improved": "better"}.get(status, "flat")
+    cand_text = _flip_delta_text(delta)
+    a_mag = _cell_magnitude(a_text) if a_text is not None else None
+    pct: Optional[float] = None
+    head = cand_text
+    if a_mag and a_mag > 0:
+        pct = (-signed) * 100.0 / a_mag
+        head = f"{cand_text} · {'+' if pct >= 0 else '−'}{abs(pct):.1f}%"
+    return {
+        "signed": signed,
+        "pct": pct,
+        "status": status,
+        "arrow": arrow,
+        "word": word,
+        "text": f"{head} {arrow} {word}",
+    }
+
+
+def compare_dumbbell_rows(rows: Any, **opts: Any) -> List[dict]:
+    """Rows for a per-task "dumbbell" plot (Baseline dot, Candidate dot,
+    connector) - the visual-first view for the redesigned detail tabs.
+
+    ``a_key`` / ``b_key`` (default 'a' / 'b'), ``a_idx`` / ``b_idx`` (default
+    1 / 2), ``label_key`` (default 'name'), ``limit`` (default 12, sorted by
+    ``|B - A|``).  Returns ``[{label, a_val, b_val, a_pct, b_pct, better}]``
+    where ``*_pct`` is 0..100 of the shared max and ``better`` is ``B < A``.
+    """
+    a_key = opts.get("a_key", "a")
+    b_key = opts.get("b_key", "b")
+    a_idx = int(opts.get("a_idx", 1))
+    b_idx = int(opts.get("b_idx", 2))
+    label_key = opts.get("label_key", "name")
+    limit = max(1, int(opts.get("limit", 12) or 12))
+    items: List[dict] = []
+    for row in rows or []:
+        if isinstance(row, dict):
+            label = str(row.get(label_key) or row.get("label") or row.get("name") or "")
+            a_raw = row.get(a_key)
+            b_raw = row.get(b_key)
+        elif isinstance(row, (list, tuple)):
+            label = str(row[0] or "") if row else ""
+            a_raw = row[a_idx] if len(row) > a_idx else None
+            b_raw = row[b_idx] if len(row) > b_idx else None
+        else:
+            continue
+        if not label:
+            continue
+        a_val = _cell_magnitude(a_raw)
+        b_val = _cell_magnitude(b_raw)
+        if a_val is None and b_val is None:
+            continue
+        items.append({"label": label, "a_val": a_val or 0.0, "b_val": b_val or 0.0})
+    max_v = max([1.0] + [max(r["a_val"], r["b_val"]) for r in items])
+    items.sort(key=lambda r: -abs(r["b_val"] - r["a_val"]))
+    out: List[dict] = []
+    for r in items[:limit]:
+        out.append({
+            **r,
+            "a_pct": r["a_val"] / max_v * 100.0,
+            "b_pct": r["b_val"] / max_v * 100.0,
+            "better": r["b_val"] < r["a_val"],
+        })
+    return out
 
 
 def compare_summary_change_bar_rows(tables: dict, limit: int = 8) -> List[dict]:

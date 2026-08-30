@@ -587,7 +587,6 @@ export function compareSummaryDecisionHtml(tables, nameA = '', nameB = '') {
   const nImp = Number(cards.improvements ?? (data.improvements || []).length) || 0
   const nWarn = Number(cards.warnings ?? (data.warnings || []).length) || 0
   const top = regs[0]
-  const largest = top ? `Largest regression — ${top.label}: ${top.change}` : ''
   const next = String(notable.next_investigation || '').trim()
   const omitted = Number(notable.small_omitted_count || 0) || 0
   const sigNote = (Number(cards.significant || 0) || omitted)
@@ -595,7 +594,7 @@ export function compareSummaryDecisionHtml(tables, nameA = '', nameB = '') {
     : ''
   const label = String(notable.verdict_label || 'SIMILAR')
   const tone = String(notable.verdict_tone || 'neutral')
-  const bullets = notable.verdict_bullets || []
+  const sentence = String(notable.verdict || '').replace(/^Overall:\s*/i, '').trim()
   const comp = notable.comparability || {}
   const compWarnings = comp.warnings || []
   const visible = !!(nReg || nImp || nWarn || top || next || compWarnings.length || notable.verdict)
@@ -603,9 +602,9 @@ export function compareSummaryDecisionHtml(tables, nameA = '', nameB = '') {
   const ident =
     `Baseline: ${nameA || 'Baseline'} · Scope ${idA.span || 'Full Trace'}    |    ` +
     `Candidate: ${nameB || 'Candidate'} · Scope ${idB.span || 'Full Trace'}`
-  const counts =
-    `${nReg} REGRESSIONS    ${nImp} IMPROVEMENTS` +
-    (nWarn ? `    ${nWarn} WARNING${nWarn === 1 ? '' : 'S'}` : '')
+  const mover = top || (data.improvements || [])[0] || null
+  const moverText = mover ? `${mover.label}: ${mover.change}` : '—'
+  const glyph = { regressed: '▲', improved: '▼', mixed: '◆' }[tone] || '●'
   const parts = ['<div class="compare-decision">']
   if (compWarnings.length) {
     parts.push('<div class="compare-comparability-warn">')
@@ -613,27 +612,24 @@ export function compareSummaryDecisionHtml(tables, nameA = '', nameB = '') {
     for (const w of compWarnings) parts.push(`<li>${svgEscape(String(w))}</li>`)
     parts.push('</ul></div>')
   }
-  parts.push(`<div class="compare-decision-identity">${svgEscape(ident)}</div>`)
   parts.push(
-    '<div class="compare-verdict">'
-    + `<span class="compare-verdict-chip tone-${svgEscape(tone)}">${svgEscape(label)}</span>`,
+    `<div class="compare-verdict-banner tone-${svgEscape(tone)}">`
+    + `<span class="compare-verdict-glyph">${glyph}</span>`
+    + '<span class="compare-verdict-main">'
+    + `<span class="compare-verdict-label">${svgEscape(label)}</span>`
+    + (sentence ? `<span class="compare-verdict-sentence">${svgEscape(sentence)}</span>` : '')
+    + '</span></div>',
   )
-  if (bullets.length) {
-    parts.push('<ul class="compare-verdict-bullets">')
-    for (const b of bullets) {
-      const st = String(b.status || '')
-      const glyph = st === 'Regressed' ? '▲' : st === 'Improved' ? '▼' : '•'
-      const cls = st === 'Regressed' ? 'reg' : st === 'Improved' ? 'imp' : ''
-      parts.push(`<li class="${cls}">${glyph} ${svgEscape(`${b.label} — ${b.change}`)}</li>`)
-    }
-    parts.push('</ul>')
-  } else {
-    parts.push('<div class="compare-verdict-none">No metric changed beyond the significance threshold.</div>')
-  }
-  parts.push('</div>')
-  parts.push(`<div class="compare-decision-counts">${svgEscape(counts)}</div>`)
-  if (largest) parts.push(`<div class="compare-decision-largest">${svgEscape(largest)}</div>`)
-  if (next) parts.push(`<div class="compare-decision-next">${svgEscape(next)}</div>`)
+  parts.push(
+    '<div class="compare-cards">'
+    + `<div class="compare-card tone-regressed"><span class="compare-card-k">Regressions</span><span class="compare-card-v">${nReg}</span></div>`
+    + `<div class="compare-card tone-improved"><span class="compare-card-k">Improvements</span><span class="compare-card-v">${nImp}</span></div>`
+    + `<div class="compare-card tone-warn"><span class="compare-card-k">Warnings</span><span class="compare-card-v">${nWarn}</span></div>`
+    + `<div class="compare-card compare-card-mover"><span class="compare-card-k">Biggest mover</span><span class="compare-card-v">${svgEscape(moverText)}</span></div>`
+    + '</div>',
+  )
+  parts.push(`<div class="compare-decision-identity">${svgEscape(ident)}</div>`)
+  if (next) parts.push(`<div class="compare-next">${svgEscape(next)}</div>`)
   if (sigNote) parts.push(`<div class="compare-decision-sig">${svgEscape(sigNote)}</div>`)
   parts.push('</div>')
   return parts.join('')
@@ -1283,6 +1279,90 @@ export function compareRowDeltaStatus(label, delta, metric = '') {
   if (!pol && metric) pol = compareMetricPolarity(metric)
   if (!pol) return 'Changed'
   return compareStatus(pol, parsed.signed)
+}
+
+/**
+ * Direction-aware rendering of a Trace Compare Δ cell for the redesigned
+ * "Change (A → B)" column.  The stored delta is ``A − B``; the reader sees the
+ * Candidate-vs-Baseline change (``B − A``) plus an explicit arrow and word so
+ * the table never relies on colour or on the reader doing the arithmetic.
+ *
+ * Returns ``null`` when there is no parseable, non-zero change.  Otherwise:
+ *   { signed, pct, status, arrow, word, text }
+ *     signed  – A − B in the cell's native unit (ns / pp / count / rate)
+ *     pct     – Candidate-vs-Baseline percent change, or null (no baseline mag)
+ *     status  – 'Regressed' | 'Improved' | 'Changed'
+ *     arrow   – '▲' worse · '▼' better · '•' non-directional
+ *     word    – 'worse' | 'better' | 'flat'
+ *     text    – e.g. "+80 µs · +38% ▲ worse" (arrow carries meaning without
+ *               colour, so this doubles as the colour-blind-safe string)
+ */
+export function compareDirectionalDelta(label, delta, metric = '', aText = null) {
+  const parsed = parseSignedDelta(delta)
+  if (!parsed || Number(parsed.signed) === 0) return null
+  const signed = Number(parsed.signed)
+  let pol = compareMetricPolarity(label, metric)
+  if (!pol && metric) pol = compareMetricPolarity(metric)
+  const status = pol ? compareStatus(pol, signed) : 'Changed'
+  const arrow = status === 'Regressed' ? '▲' : status === 'Improved' ? '▼' : '•'
+  const word = status === 'Regressed' ? 'worse' : status === 'Improved' ? 'better' : 'flat'
+  const candText = flipDeltaText(String(delta))
+  const aMag = aText != null ? cellMagnitude(aText) : null
+  let pct = null
+  let head = candText
+  if (aMag && aMag > 0) {
+    pct = (-signed) * 100 / aMag
+    head = `${candText} · ${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%`
+  }
+  return { signed, pct, status, arrow, word, text: `${head} ${arrow} ${word}` }
+}
+
+/**
+ * Rows for a per-task "dumbbell" plot (Baseline dot, Candidate dot, connector) —
+ * the visual-first view for the redesigned detail tabs.  Generic over any
+ * compare table that carries an A value and a B value.
+ *
+ *   opts.aKey / bKey  – object keys (default 'a' / 'b')
+ *   opts.aIdx / bIdx  – array positions (default 1 / 2)
+ *   opts.labelKey     – default 'name', falling back to 'label' / 'name'
+ *   opts.limit        – max rows, sorted by |B − A| (default 12)
+ *
+ * Returns [{ label, aVal, bVal, aPct, bPct, better }] where *Pct is 0..100 of
+ * the shared max and `better` is true when B < A (tables are pre-polarised so
+ * lower is the good direction).
+ */
+export function compareDumbbellRows(rows, opts = {}) {
+  const {
+    aKey = 'a', bKey = 'b', aIdx = 1, bIdx = 2, labelKey = 'name', limit = 12,
+  } = opts
+  const items = []
+  for (const row of rows || []) {
+    let label
+    let aRaw
+    let bRaw
+    if (row && typeof row === 'object' && !Array.isArray(row)) {
+      label = String(row[labelKey] || row.label || row.name || '')
+      aRaw = row[aKey]
+      bRaw = row[bKey]
+    } else if (Array.isArray(row)) {
+      label = String(row[0] || '')
+      aRaw = row[aIdx]
+      bRaw = row[bIdx]
+    } else continue
+    if (!label) continue
+    const aVal = cellMagnitude(aRaw)
+    const bVal = cellMagnitude(bRaw)
+    if (aVal == null && bVal == null) continue
+    items.push({ label, aVal: aVal || 0, bVal: bVal || 0 })
+  }
+  const maxV = Math.max(1, ...items.map(r => Math.max(r.aVal, r.bVal)))
+  items.sort((x, y) => Math.abs(y.bVal - y.aVal) - Math.abs(x.bVal - x.aVal))
+  return items.slice(0, Math.max(1, Number(limit) || 12)).map(r => ({
+    ...r,
+    aPct: r.aVal / maxV * 100,
+    bPct: r.bVal / maxV * 100,
+    better: r.bVal < r.aVal,
+  }))
 }
 
 export function compareSummaryChangeBarRows(tables, limit = 8) {

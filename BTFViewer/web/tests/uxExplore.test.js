@@ -17,6 +17,8 @@ import {
   compareP99DeltaChartRows,
   compareP99DeltaChartSvg,
   compareRowDeltaStatus,
+  compareDirectionalDelta,
+  compareDumbbellRows,
   compareSummaryChangeBarRows,
   compareSummaryChangeBarsSvg,
   compareSummaryDecisionHtml,
@@ -447,8 +449,9 @@ describe('uxExplore', () => {
       ],
     }, 'A.btf', 'B.btf')
     assert.match(decision, /class="compare-decision"/)
-    assert.match(decision, /REGRESSIONS/)
-    assert.match(decision, /Largest regression/)
+    assert.match(decision, /class="compare-verdict-banner tone-/)
+    assert.match(decision, /class="compare-card tone-regressed"/)
+    assert.match(decision, /Biggest mover/)
 
     const heat = compareMigrationHeatmapRows(mig, 5)
     assert.equal(heat.length, 5)
@@ -458,6 +461,46 @@ describe('uxExplore', () => {
 
     assert.equal(compareRowDeltaStatus('Migrations (total)', '−15'), 'Regressed')
     assert.equal(compareRowDeltaStatus('QP[1]', '+8', 'migrations'), 'Improved')
+  })
+
+  it('compareDirectionalDelta resolves arrow + word per polarity', () => {
+    // Response P99 is "lower is better"; stored delta is A − B, so a Candidate
+    // that got 80 µs slower stores −80 µs and the reader sees +80 µs ▲ worse.
+    const worse = compareDirectionalDelta('Response P99', '−80 µs', 'response', '210 µs')
+    assert.equal(worse.status, 'Regressed')
+    assert.equal(worse.arrow, '▲')
+    assert.equal(worse.word, 'worse')
+    assert.match(worse.text, /\+80 µs · \+38\.1% ▲ worse/)
+
+    const better = compareDirectionalDelta('Blocking time /s', '+35 µs/s', 'block', '540 µs/s')
+    assert.equal(better.status, 'Improved')
+    assert.equal(better.arrow, '▼')
+    assert.equal(better.word, 'better')
+
+    // Non-directional metric → flat bullet, no colour reliance.
+    const flat = compareDirectionalDelta('Tasks', '+2', '')
+    assert.equal(flat.arrow, '•')
+    assert.equal(flat.word, 'flat')
+
+    assert.equal(compareDirectionalDelta('Response P99', '0'), null)
+    assert.equal(compareDirectionalDelta('Response P99', '—'), null)
+  })
+
+  it('compareDumbbellRows scales dots and flags the better side', () => {
+    const rows = [
+      { name: 'ctrl_loop', a: '210 µs', b: '290 µs' },
+      { name: 'net_worker', a: '320 µs', b: '300 µs' },
+      { name: 'ui_task', a: '88 µs', b: '92 µs' },
+    ]
+    const db = compareDumbbellRows(rows, { limit: 2 })
+    assert.equal(db.length, 2)
+    // Sorted by |B − A|: ctrl_loop (80) before net_worker (20).
+    assert.equal(db[0].label, 'ctrl_loop')
+    assert.equal(db[0].better, false)
+    assert.equal(db[1].better, true)
+    // Percent is of the shared max magnitude (320).
+    assert.ok(db[0].bPct > db[0].aPct)
+    assert.ok(db.every(r => r.aPct >= 0 && r.aPct <= 100))
   })
 
   it('unified jitter has dispatch/wakeup and period spark', () => {

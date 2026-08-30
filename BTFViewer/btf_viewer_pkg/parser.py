@@ -6024,6 +6024,40 @@ tbody tr:nth-child(even) td:first-child {{ background: #f7f9fc; }}
 .compare-verdict-bullets li.reg {{ color: #9b2c2c; }}
 .compare-verdict-bullets li.imp {{ color: #1f6b45; }}
 .compare-verdict-none {{ margin-top: 6px; color: #5f6f82; font-size: 11px; }}
+.compare-verdict-banner {{
+  display: flex; gap: 10px; align-items: flex-start;
+  margin: 6px 0 10px; padding: 10px 12px; border-radius: 8px; border: 1px solid #d9e0ea;
+}}
+.compare-verdict-glyph {{ font-size: 15px; line-height: 1.3; }}
+.compare-verdict-main {{ display: flex; flex-direction: column; gap: 2px; }}
+.compare-verdict-label {{ font-weight: 700; font-size: 13px; letter-spacing: 0.04em; }}
+.compare-verdict-sentence {{ font-size: 12px; color: #3d4f63; }}
+.compare-verdict-banner.tone-regressed {{ background: #fdecea; border-color: #e6b3ac; }}
+.compare-verdict-banner.tone-regressed .compare-verdict-label,
+.compare-verdict-banner.tone-regressed .compare-verdict-glyph {{ color: #b23125; }}
+.compare-verdict-banner.tone-improved {{ background: #e9f5ee; border-color: #a9d3ba; }}
+.compare-verdict-banner.tone-improved .compare-verdict-label,
+.compare-verdict-banner.tone-improved .compare-verdict-glyph {{ color: #1f6b45; }}
+.compare-verdict-banner.tone-mixed {{ background: #fdf3e2; border-color: #e2c48a; }}
+.compare-verdict-banner.tone-mixed .compare-verdict-label,
+.compare-verdict-banner.tone-mixed .compare-verdict-glyph {{ color: #b4670e; }}
+.compare-verdict-banner.tone-neutral {{ background: #eef1f5; border-color: #d1d8e0; }}
+.compare-cards {{ display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 10px; }}
+.compare-card {{
+  flex: 1 1 120px; border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; background: #fff; display: flex; flex-direction: column; gap: 3px;
+}}
+.compare-card-k {{ font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }}
+.compare-card-v {{ font-size: 18px; font-weight: 700; line-height: 1.1; }}
+.compare-card.tone-regressed {{ border-left: 4px solid #c0392b; }}
+.compare-card.tone-regressed .compare-card-v {{ color: #b23125; }}
+.compare-card.tone-improved {{ border-left: 4px solid #1f6b45; }}
+.compare-card.tone-improved .compare-card-v {{ color: #1f6b45; }}
+.compare-card.tone-warn {{ border-left: 4px solid #c87a12; }}
+.compare-card.tone-warn .compare-card-v {{ color: #b4670e; }}
+.compare-card-mover {{ flex: 2 1 200px; }}
+.compare-card-mover .compare-card-v {{ font-size: 13px; font-weight: 600; }}
+.compare-next {{ margin: 6px 0 4px; font-size: 12px; font-weight: 600; color: #123355; }}
 .compare-comparability-warn {{
   margin: 0 0 8px; padding: 8px 10px; border-radius: 6px;
   background: #fdf0e2; border-left: 4px solid #c87a12; color: #6b4a12;
@@ -6049,18 +6083,21 @@ tbody tr:nth-child(even) td:first-child {{ background: #f7f9fc; }}
 {HTML_REPORT_TOC_CSS}
 """.strip()
 
+# Same grouping as the Trace Compare dialog's nav rail (pageTabs `group`).
 COMPARE_TOC_GROUPS = (
     ("Overview", (
-        "Overview", "Summary", "Top Tasks",
+        "Overview", "Summary",
     )),
-    ("CPU and Migrations", (
-        "Core Utilisation", "Core Migrations",
+    ("CPU & Cores", (
+        "Top Tasks", "Core Utilisation", "Core Migrations",
     )),
-    ("Timing and Latency", (
-        "Execution Time", "Blocking Time", "Inter-Arrival", "Response P99",
+    ("Timing", (
+        "Execution Time", "Blocking Time", "Inter-Arrival Time", "Response P99",
     )),
-    ("Scheduling and Sync", (
+    ("Contention", (
         "Preemption Chains", "Sync Objects", "Mutex Blocking",
+    )),
+    ("Cross-trace", (
         "Shared Patterns", "Trends",
     )),
 )
@@ -6128,7 +6165,11 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
         ]
         verdict_label = str(notable.get("verdict_label") or "SIMILAR")
         verdict_tone = str(notable.get("verdict_tone") or "neutral")
-        verdict_bullets = notable.get("verdict_bullets") or []
+        import re as _re
+        verdict_sentence = _re.sub(
+            r"^Overall:\s*", "", str(notable.get("verdict") or "")).strip()
+        verdict_glyph = {"regressed": "▲", "improved": "▼", "mixed": "◆"}.get(
+            verdict_tone, "●")
         comparability = notable.get("comparability") or {}
         comp_warnings = list(comparability.get("warnings") or [])
         cards = notable.get("cards") or {}
@@ -6180,30 +6221,17 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
                 + "</ul></div>"
             )
         parts.append(
-            '<div class="compare-verdict">'
-            f'<span class="compare-verdict-chip tone-{_esc(verdict_tone)}">'
-            f'{_esc(verdict_label)}</span>'
+            f'<div class="compare-verdict-banner tone-{_esc(verdict_tone)}">'
+            f'<span class="compare-verdict-glyph">{verdict_glyph}</span>'
+            '<span class="compare-verdict-main">'
+            f'<span class="compare-verdict-label">{_esc(verdict_label)}</span>'
+            + (f'<span class="compare-verdict-sentence">{_esc(verdict_sentence)}</span>'
+               if verdict_sentence else "")
+            + "</span></div>"
         )
-        if verdict_bullets:
-            parts.append('<ul class="compare-verdict-bullets">')
-            for _b in verdict_bullets:
-                _st = str(_b.get("status") or "")
-                _gl = "▲" if _st == "Regressed" else "▼" if _st == "Improved" else "•"
-                _cls = "reg" if _st == "Regressed" else "imp" if _st == "Improved" else ""
-                parts.append(
-                    f'<li class="{_cls}">{_gl} {_esc(_b.get("label"))} — '
-                    f'{_esc(_b.get("change"))}</li>'
-                )
-            parts.append("</ul>")
-        else:
-            parts.append(
-                '<div class="compare-verdict-none">No metric changed beyond the '
-                "significance threshold.</div>"
-            )
-        parts.append("</div>")
         nxt = str(notable.get("next_investigation") or "").strip()
         if nxt:
-            parts.append(f'<p class="overview-why">{_esc(nxt)}</p>')
+            parts.append(f'<p class="compare-next">{_esc(nxt)}</p>')
         omitted = int(notable.get("small_omitted_count") or 0)
         if omitted or int(cards.get("significant") or 0):
             parts.append(
@@ -6212,16 +6240,31 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
                 "(small changes omitted)</p>"
             )
         parts.append(f'<p class="overview-formula">{_esc(formula)}</p>')
+        _mover = None
+        for _r in notable_rows:
+            if str(_r[0]) == "Regressed":
+                _mover = _r
+                break
+        if _mover is None:
+            for _r in notable_rows:
+                if str(_r[0]) == "Improved":
+                    _mover = _r
+                    break
+        _mover_text = f"{_mover[1]}: {_mover[4]}" if _mover else "—"
         parts.append(
-            '<div class="status-cards">'
-            f'<div class="status-card status-regressed"><div class="n">'
-            f'{int(cards.get("regressions") or 0)}</div>Regressions</div>'
-            f'<div class="status-card status-improved"><div class="n">'
-            f'{int(cards.get("improvements") or 0)}</div>Improvements</div>'
-            f'<div class="status-card status-changed"><div class="n">'
-            f'{int(cards.get("significant") or 0)}</div>Significant changes</div>'
-            f'<div class="status-card status-warn"><div class="n">'
-            f'{int(cards.get("warnings") or 0)}</div>Validation warnings</div>'
+            '<div class="compare-cards">'
+            f'<div class="compare-card tone-regressed"><span class="compare-card-k">'
+            f'Regressions</span><span class="compare-card-v">'
+            f'{int(cards.get("regressions") or 0)}</span></div>'
+            f'<div class="compare-card tone-improved"><span class="compare-card-k">'
+            f'Improvements</span><span class="compare-card-v">'
+            f'{int(cards.get("improvements") or 0)}</span></div>'
+            f'<div class="compare-card tone-warn"><span class="compare-card-k">'
+            f'Warnings</span><span class="compare-card-v">'
+            f'{int(cards.get("warnings") or 0)}</span></div>'
+            f'<div class="compare-card compare-card-mover"><span class="compare-card-k">'
+            f'Biggest mover</span><span class="compare-card-v">'
+            f'{_esc(_mover_text)}</span></div>'
             "</div>"
         )
         if warn_html:

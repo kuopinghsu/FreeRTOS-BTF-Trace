@@ -3898,7 +3898,7 @@ async function queryCompareWithAi(payload) {
   rightPanelTab.value = 'ai'
   await nextTick()
   if (!aiPanelRef.value) await nextTick()
-  await aiPanelRef.value?.askCompare?.(idA, idB)
+  await aiPanelRef.value?.askCompare?.(idA, idB, payload?.sectionLabel || '')
 }
 
 async function queryValidateExperimentWithAi(payload) {
@@ -6358,6 +6358,11 @@ watch(
   --fg:            #D4D4D4;
   --fg-dim:        #858585;
   --accent:        #4F8BFF;
+  /* Trace Compare A/B identity anchor (Baseline / Candidate). Blue + amber is a
+     colour-blind-safe pair; the tables also carry ▲/▼ glyphs so colour is never
+     load-bearing. Revisit against Settings → colourblindSafe if the palette shifts. */
+  --cmp-a:         #4F8BFF;
+  --cmp-b:         #E0A34E;
   --tick-dist-icon:  #FFB74D;
   --tick-dist-fg:    #FFCC80;
   --tick-dist-border: color-mix(in srgb, #FFB74D 55%, #3C3C3C);
@@ -6437,6 +6442,8 @@ body:has(.app:not(.dark)) {
   --fg:            #1E1E1E;
   --fg-dim:        #666666;
   --accent:        #0066CC;
+  --cmp-a:         #1D6FD0;
+  --cmp-b:         #C77A12;
   --tick-dist-icon:  #E65100;
   --tick-dist-fg:    #BF360C;
   --tick-dist-border: color-mix(in srgb, #E65100 45%, #DDDDDD);

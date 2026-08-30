@@ -514,11 +514,11 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
                 (enabled, a, b)),
         )
         labels = [b.text().replace("&", "") for b in dlg.findChildren(QPushButton)]
-        self.assertIn("Query with AI…", labels)
+        self.assertIn("Ask AI about this", labels)
         self.assertIn("Validate experiment…", labels)
         ai_btn = next(
             b for b in dlg.findChildren(QPushButton)
-            if "Query with AI" in b.text().replace("&", "")
+            if "Ask AI about this" in b.text().replace("&", "")
         )
         self.assertIn("Trace Compare", ai_btn.toolTip())
         ai_btn.click()

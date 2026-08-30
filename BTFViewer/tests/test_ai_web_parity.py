@@ -209,6 +209,8 @@ class AiWebParityTests(unittest.TestCase):
             ("def compare_migration_heatmap_svg", "export function compareMigrationHeatmapSvg"),
             ("def compare_migration_heatmap_rows", "export function compareMigrationHeatmapRows"),
             ("def compare_row_delta_status", "export function compareRowDeltaStatus"),
+            ("def compare_directional_delta", "export function compareDirectionalDelta"),
+            ("def compare_dumbbell_rows", "export function compareDumbbellRows"),
             ("def filter_compare_migration_rows", "export function filterCompareMigrationRows"),
             ("COMPARE_DELTA_FORMULA", "export const COMPARE_DELTA_FORMULA"),
             ("COMPARE_METRIC_GLOSSARY", "export const COMPARE_METRIC_GLOSSARY"),
@@ -523,7 +525,7 @@ class AiWebParityTests(unittest.TestCase):
         for needle in ("Save recipe…", "Story…"):
             self.assertIn(needle, stats, needle)
             self.assertIn(needle, dlg, needle)
-        for needle in ("Save as baseline", "Score vs baseline"):
+        for needle in ("Save baseline", "Score vs baseline"):
             self.assertIn(needle, stats, needle)
             self.assertIn(needle, compare, needle)
         self.assertNotIn("Investigate on Baseline", stats)
@@ -534,7 +536,7 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("toggleTableSort('summary', 'delta')", compare)
         self.assertIn("compare_cell_sort_key(val)", stats)
         self.assertIn('addTab(self._trends_table, "Trends")', stats)
-        self.assertIn("{ id: 'trends', label: 'Trends' }", compare)
+        self.assertIn("id: 'trends', label: 'Trends'", compare)
         self.assertIn("Start Investigation", assist)
         self.assertIn("Start Investigation", panel)
         self.assertIn("Inspect task", mw)
@@ -2078,12 +2080,12 @@ class AiWebParityTests(unittest.TestCase):
         compare_dlg = (BTF_ROOT / "web/src/components/TraceCompareDialog.vue").read_text(
             encoding="utf-8")
         self.assertIn("Validate experiment…", compare_dlg)
-        self.assertIn("Save as baseline", stats)
-        self.assertIn("Save as baseline", compare_dlg)
+        self.assertIn("Save baseline", stats)
+        self.assertIn("Save baseline", compare_dlg)
         self.assertIn("Score vs baseline", stats)
         self.assertIn("Score vs baseline", compare_dlg)
         self.assertIn('addTab(self._trends_table, "Trends")', stats)
-        self.assertIn("{ id: 'trends', label: 'Trends' }", compare_dlg)
+        self.assertIn("id: 'trends', label: 'Trends'", compare_dlg)
         parser_py = (BTF_ROOT / "btf_viewer_pkg/parser.py").read_text(encoding="utf-8")
         cmp_js = (BTF_ROOT / "web/src/utils/traceCompare.js").read_text(encoding="utf-8")
         self.assertIn("def cross_trace_trends", parser_py)

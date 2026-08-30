@@ -7307,15 +7307,25 @@ def create_ai_assistant_panel(
             """Run the Migration thrash template (inspector → Investigate with AI)."""
             self.query_template("migrations", extra=extra)
 
-        def query_trace_compare(self, idx_a: int, idx_b: int) -> None:
-            """Run the Trace Compare template for two already-chosen tabs."""
+        def query_trace_compare(
+            self, idx_a: int, idx_b: int, section: str = "",
+        ) -> None:
+            """Run the Trace Compare template for two already-chosen tabs,
+            focused on the section selected in the dialog's left rail."""
             prompt = next(
                 (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS
                  if tid == AI_COMPARE_TEMPLATE_ID),
                 "",
             )
-            if prompt:
-                self._run_compare_template(prompt, idx_a=idx_a, idx_b=idx_b)
+            if not prompt:
+                return
+            sec = str(section or "").strip()
+            if sec:
+                prompt = (
+                    f'{prompt}\n\nFocus your analysis on the "{sec}" section '
+                    "of the comparison."
+                )
+            self._run_compare_template(prompt, idx_a=idx_a, idx_b=idx_b)
 
         def query_validate_experiment(self, idx_a: int, idx_b: int) -> None:
             """Ask the model to call validate_experiment for two chosen tabs."""

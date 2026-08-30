@@ -267,7 +267,8 @@ describe('new compare builders', () => {
     assert.match(html, /compare-chart/)
     assert.match(html, /Core utilisation/)
     assert.match(html, /class="compare-decision"/)
-    assert.match(html, /REGRESSIONS/)
+    assert.match(html, /class="compare-verdict-banner tone-/)
+    assert.match(html, /class="compare-card compare-card-mover"/)
     assert.match(html, /<h2>Summary<\/h2>[\s\S]*class="compare-decision"/)
     assert.match(html, /Expand all/)
     assert.match(html, /Collapse all/)
@@ -285,7 +286,7 @@ describe('new compare builders', () => {
     assert.doesNotMatch(html, /data-csv/)
     assert.match(html, /toc-count/)
     assert.match(html, /report-toc-lead/)
-    assert.match(html, /CPU and Migrations/)
+    assert.match(html, /CPU &amp; Cores/)
   })
 
   it('exports summary change bars and migration heatmap in HTML', () => {
@@ -311,7 +312,7 @@ describe('new compare builders', () => {
     const html = buildCompareHtml('A.btf', 'B.btf', false, { summary, migrations })
     assert.match(html, /Summary changes/)
     assert.match(html, /class="compare-decision"/)
-    assert.match(html, /REGRESSIONS/)
+    assert.match(html, /class="compare-verdict-banner tone-/)
     assert.match(html, /Migration Δ heatmap/)
     assert.match(html, /QP\[1\]/)
   })

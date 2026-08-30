@@ -9472,8 +9472,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         ai_enabled: bool = True,
         idx_a: Optional[int] = None,
         idx_b: Optional[int] = None,
+        section: str = "",
     ) -> None:
-        """Trace Compare → Query with AI… uses the dialog's Trace A / B."""
+        """Trace Compare → Ask AI about this uses the dialog's Trace A / B and
+        focuses the prompt on the section selected in the left rail."""
         if not ai_enabled:
             self._open_settings("AI")
             return
@@ -9485,8 +9487,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._focus_ai_panel()
         panel = getattr(self, "_ai_panel", None)
         if panel is not None and hasattr(panel, "query_trace_compare"):
-            a, b = int(idx_a), int(idx_b)
-            QTimer.singleShot(0, lambda: panel.query_trace_compare(a, b))
+            a, b, sec = int(idx_a), int(idx_b), str(section or "")
+            QTimer.singleShot(0, lambda: panel.query_trace_compare(a, b, sec))
 
     def _validate_compare_with_ai(
         self,

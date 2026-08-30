@@ -9559,6 +9559,40 @@ tbody tr:nth-child(even) td:first-child {{ background: #f7f9fc; }}
 .compare-verdict-bullets li.reg {{ color: #9b2c2c; }}
 .compare-verdict-bullets li.imp {{ color: #1f6b45; }}
 .compare-verdict-none {{ margin-top: 6px; color: #5f6f82; font-size: 11px; }}
+.compare-verdict-banner {{
+  display: flex; gap: 10px; align-items: flex-start;
+  margin: 6px 0 10px; padding: 10px 12px; border-radius: 8px; border: 1px solid #d9e0ea;
+}}
+.compare-verdict-glyph {{ font-size: 15px; line-height: 1.3; }}
+.compare-verdict-main {{ display: flex; flex-direction: column; gap: 2px; }}
+.compare-verdict-label {{ font-weight: 700; font-size: 13px; letter-spacing: 0.04em; }}
+.compare-verdict-sentence {{ font-size: 12px; color: #3d4f63; }}
+.compare-verdict-banner.tone-regressed {{ background: #fdecea; border-color: #e6b3ac; }}
+.compare-verdict-banner.tone-regressed .compare-verdict-label,
+.compare-verdict-banner.tone-regressed .compare-verdict-glyph {{ color: #b23125; }}
+.compare-verdict-banner.tone-improved {{ background: #e9f5ee; border-color: #a9d3ba; }}
+.compare-verdict-banner.tone-improved .compare-verdict-label,
+.compare-verdict-banner.tone-improved .compare-verdict-glyph {{ color: #1f6b45; }}
+.compare-verdict-banner.tone-mixed {{ background: #fdf3e2; border-color: #e2c48a; }}
+.compare-verdict-banner.tone-mixed .compare-verdict-label,
+.compare-verdict-banner.tone-mixed .compare-verdict-glyph {{ color: #b4670e; }}
+.compare-verdict-banner.tone-neutral {{ background: #eef1f5; border-color: #d1d8e0; }}
+.compare-cards {{ display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 10px; }}
+.compare-card {{
+  flex: 1 1 120px; border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; background: #fff; display: flex; flex-direction: column; gap: 3px;
+}}
+.compare-card-k {{ font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }}
+.compare-card-v {{ font-size: 18px; font-weight: 700; line-height: 1.1; }}
+.compare-card.tone-regressed {{ border-left: 4px solid #c0392b; }}
+.compare-card.tone-regressed .compare-card-v {{ color: #b23125; }}
+.compare-card.tone-improved {{ border-left: 4px solid #1f6b45; }}
+.compare-card.tone-improved .compare-card-v {{ color: #1f6b45; }}
+.compare-card.tone-warn {{ border-left: 4px solid #c87a12; }}
+.compare-card.tone-warn .compare-card-v {{ color: #b4670e; }}
+.compare-card-mover {{ flex: 2 1 200px; }}
+.compare-card-mover .compare-card-v {{ font-size: 13px; font-weight: 600; }}
+.compare-next {{ margin: 6px 0 4px; font-size: 12px; font-weight: 600; color: #123355; }}
 .compare-comparability-warn {{
   margin: 0 0 8px; padding: 8px 10px; border-radius: 6px;
   background: #fdf0e2; border-left: 4px solid #c87a12; color: #6b4a12;
@@ -9584,18 +9618,21 @@ tbody tr:nth-child(even) td:first-child {{ background: #f7f9fc; }}
 {HTML_REPORT_TOC_CSS}
 """.strip()
 
+# Same grouping as the Trace Compare dialog's nav rail (pageTabs `group`).
 COMPARE_TOC_GROUPS = (
     ("Overview", (
-        "Overview", "Summary", "Top Tasks",
+        "Overview", "Summary",
     )),
-    ("CPU and Migrations", (
-        "Core Utilisation", "Core Migrations",
+    ("CPU & Cores", (
+        "Top Tasks", "Core Utilisation", "Core Migrations",
     )),
-    ("Timing and Latency", (
-        "Execution Time", "Blocking Time", "Inter-Arrival", "Response P99",
+    ("Timing", (
+        "Execution Time", "Blocking Time", "Inter-Arrival Time", "Response P99",
     )),
-    ("Scheduling and Sync", (
+    ("Contention", (
         "Preemption Chains", "Sync Objects", "Mutex Blocking",
+    )),
+    ("Cross-trace", (
         "Shared Patterns", "Trends",
     )),
 )
@@ -9661,7 +9698,11 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
         ]
         verdict_label = str(notable.get("verdict_label") or "SIMILAR")
         verdict_tone = str(notable.get("verdict_tone") or "neutral")
-        verdict_bullets = notable.get("verdict_bullets") or []
+        import re as _re
+        verdict_sentence = _re.sub(
+            r"^Overall:\s*", "", str(notable.get("verdict") or "")).strip()
+        verdict_glyph = {"regressed": "▲", "improved": "▼", "mixed": "◆"}.get(
+            verdict_tone, "●")
         comparability = notable.get("comparability") or {}
         comp_warnings = list(comparability.get("warnings") or [])
         cards = notable.get("cards") or {}
@@ -9713,30 +9754,17 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
                 + "</ul></div>"
             )
         parts.append(
-            '<div class="compare-verdict">'
-            f'<span class="compare-verdict-chip tone-{_esc(verdict_tone)}">'
-            f'{_esc(verdict_label)}</span>'
+            f'<div class="compare-verdict-banner tone-{_esc(verdict_tone)}">'
+            f'<span class="compare-verdict-glyph">{verdict_glyph}</span>'
+            '<span class="compare-verdict-main">'
+            f'<span class="compare-verdict-label">{_esc(verdict_label)}</span>'
+            + (f'<span class="compare-verdict-sentence">{_esc(verdict_sentence)}</span>'
+               if verdict_sentence else "")
+            + "</span></div>"
         )
-        if verdict_bullets:
-            parts.append('<ul class="compare-verdict-bullets">')
-            for _b in verdict_bullets:
-                _st = str(_b.get("status") or "")
-                _gl = "▲" if _st == "Regressed" else "▼" if _st == "Improved" else "•"
-                _cls = "reg" if _st == "Regressed" else "imp" if _st == "Improved" else ""
-                parts.append(
-                    f'<li class="{_cls}">{_gl} {_esc(_b.get("label"))} — '
-                    f'{_esc(_b.get("change"))}</li>'
-                )
-            parts.append("</ul>")
-        else:
-            parts.append(
-                '<div class="compare-verdict-none">No metric changed beyond the '
-                "significance threshold.</div>"
-            )
-        parts.append("</div>")
         nxt = str(notable.get("next_investigation") or "").strip()
         if nxt:
-            parts.append(f'<p class="overview-why">{_esc(nxt)}</p>')
+            parts.append(f'<p class="compare-next">{_esc(nxt)}</p>')
         omitted = int(notable.get("small_omitted_count") or 0)
         if omitted or int(cards.get("significant") or 0):
             parts.append(
@@ -9745,16 +9773,31 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
                 "(small changes omitted)</p>"
             )
         parts.append(f'<p class="overview-formula">{_esc(formula)}</p>')
+        _mover = None
+        for _r in notable_rows:
+            if str(_r[0]) == "Regressed":
+                _mover = _r
+                break
+        if _mover is None:
+            for _r in notable_rows:
+                if str(_r[0]) == "Improved":
+                    _mover = _r
+                    break
+        _mover_text = f"{_mover[1]}: {_mover[4]}" if _mover else "—"
         parts.append(
-            '<div class="status-cards">'
-            f'<div class="status-card status-regressed"><div class="n">'
-            f'{int(cards.get("regressions") or 0)}</div>Regressions</div>'
-            f'<div class="status-card status-improved"><div class="n">'
-            f'{int(cards.get("improvements") or 0)}</div>Improvements</div>'
-            f'<div class="status-card status-changed"><div class="n">'
-            f'{int(cards.get("significant") or 0)}</div>Significant changes</div>'
-            f'<div class="status-card status-warn"><div class="n">'
-            f'{int(cards.get("warnings") or 0)}</div>Validation warnings</div>'
+            '<div class="compare-cards">'
+            f'<div class="compare-card tone-regressed"><span class="compare-card-k">'
+            f'Regressions</span><span class="compare-card-v">'
+            f'{int(cards.get("regressions") or 0)}</span></div>'
+            f'<div class="compare-card tone-improved"><span class="compare-card-k">'
+            f'Improvements</span><span class="compare-card-v">'
+            f'{int(cards.get("improvements") or 0)}</span></div>'
+            f'<div class="compare-card tone-warn"><span class="compare-card-k">'
+            f'Warnings</span><span class="compare-card-v">'
+            f'{int(cards.get("warnings") or 0)}</span></div>'
+            f'<div class="compare-card compare-card-mover"><span class="compare-card-k">'
+            f'Biggest mover</span><span class="compare-card-v">'
+            f'{_esc(_mover_text)}</span></div>'
             "</div>"
         )
         if warn_html:
@@ -47334,15 +47377,25 @@ def create_ai_assistant_panel(
             """Run the Migration thrash template (inspector → Investigate with AI)."""
             self.query_template("migrations", extra=extra)
 
-        def query_trace_compare(self, idx_a: int, idx_b: int) -> None:
-            """Run the Trace Compare template for two already-chosen tabs."""
+        def query_trace_compare(
+            self, idx_a: int, idx_b: int, section: str = "",
+        ) -> None:
+            """Run the Trace Compare template for two already-chosen tabs,
+            focused on the section selected in the dialog's left rail."""
             prompt = next(
                 (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS
                  if tid == AI_COMPARE_TEMPLATE_ID),
                 "",
             )
-            if prompt:
-                self._run_compare_template(prompt, idx_a=idx_a, idx_b=idx_b)
+            if not prompt:
+                return
+            sec = str(section or "").strip()
+            if sec:
+                prompt = (
+                    f'{prompt}\n\nFocus your analysis on the "{sec}" section '
+                    "of the comparison."
+                )
+            self._run_compare_template(prompt, idx_a=idx_a, idx_b=idx_b)
 
         def query_validate_experiment(self, idx_a: int, idx_b: int) -> None:
             """Ask the model to call validate_experiment for two chosen tabs."""
@@ -49513,12 +49566,6 @@ def compare_summary_decision_html(
     n_imp = int(cards.get("improvements") or len(data.get("improvements") or []) or 0)
     n_warn = int(cards.get("warnings") or len(data.get("warnings") or []) or 0)
     top = regs[0] if regs else None
-    if top:
-        largest = (
-            f"Largest regression — {top.get('label')}: {top.get('change')}"
-        )
-    else:
-        largest = str(notable.get("verdict") or "").strip() or "No significant regressions"
     nxt = str(notable.get("next_investigation") or "").strip()
     omitted = int(notable.get("small_omitted_count") or 0)
     sig_note = (
@@ -49527,7 +49574,7 @@ def compare_summary_decision_html(
     )
     label = str(notable.get("verdict_label") or "SIMILAR")
     tone = str(notable.get("verdict_tone") or "neutral")
-    bullets = notable.get("verdict_bullets") or []
+    sentence = re.sub(r"^Overall:\s*", "", str(notable.get("verdict") or "")).strip()
     comparability = notable.get("comparability") or {}
     comp_warnings = list(comparability.get("warnings") or [])
     visible = bool(
@@ -49540,10 +49587,9 @@ def compare_summary_decision_html(
         f"    |    Candidate: {name_b or 'Candidate'} · Scope "
         f"{id_b.get('span') or 'Full Trace'}"
     )
-    counts = (
-        f"{n_reg} REGRESSIONS    {n_imp} IMPROVEMENTS"
-        + (f"    {n_warn} WARNING{'S' if n_warn != 1 else ''}" if n_warn else "")
-    )
+    mover = top or (list(data.get("improvements") or []) or [None])[0]
+    mover_text = f"{mover.get('label')}: {mover.get('change')}" if mover else "—"
+    glyph = {"regressed": "▲", "improved": "▼", "mixed": "◆"}.get(tone, "●")
     parts = ['<div class="compare-decision">']
     if comp_warnings:
         parts.append('<div class="compare-comparability-warn">')
@@ -49555,39 +49601,32 @@ def compare_summary_decision_html(
             parts.append(f"<li>{html.escape(str(w))}</li>")
         parts.append("</ul></div>")
     parts.append(
-        f'<div class="compare-decision-identity">{html.escape(ident)}</div>'
+        f'<div class="compare-verdict-banner tone-{html.escape(tone)}">'
+        f'<span class="compare-verdict-glyph">{glyph}</span>'
+        f'<span class="compare-verdict-main">'
+        f'<span class="compare-verdict-label">{html.escape(label)}</span>'
+        + (f'<span class="compare-verdict-sentence">{html.escape(sentence)}</span>'
+           if sentence else "")
+        + "</span></div>"
     )
     parts.append(
-        f'<div class="compare-verdict">'
-        f'<span class="compare-verdict-chip tone-{html.escape(tone)}">'
-        f'{html.escape(label)}</span>'
+        '<div class="compare-cards">'
+        f'<div class="compare-card tone-regressed"><span class="compare-card-k">'
+        f'Regressions</span><span class="compare-card-v">{n_reg}</span></div>'
+        f'<div class="compare-card tone-improved"><span class="compare-card-k">'
+        f'Improvements</span><span class="compare-card-v">{n_imp}</span></div>'
+        f'<div class="compare-card tone-warn"><span class="compare-card-k">'
+        f'Warnings</span><span class="compare-card-v">{n_warn}</span></div>'
+        f'<div class="compare-card compare-card-mover"><span class="compare-card-k">'
+        f'Biggest mover</span><span class="compare-card-v">'
+        f'{html.escape(mover_text)}</span></div>'
+        "</div>"
     )
-    if bullets:
-        parts.append('<ul class="compare-verdict-bullets">')
-        for b in bullets:
-            st = str(b.get("status") or "")
-            glyph = "▲" if st == "Regressed" else "▼" if st == "Improved" else "•"
-            cls = "reg" if st == "Regressed" else "imp" if st == "Improved" else ""
-            txt = f"{b.get('label')} — {b.get('change')}"
-            parts.append(
-                f'<li class="{cls}">{html.escape(glyph)} {html.escape(txt)}</li>'
-            )
-        parts.append("</ul>")
-    else:
-        parts.append(
-            '<div class="compare-verdict-none">No metric changed beyond the '
-            'significance threshold.</div>'
-        )
-    parts.append("</div>")  # .compare-verdict
-    parts.append(f'<div class="compare-decision-counts">{html.escape(counts)}</div>')
-    if top:
-        parts.append(
-            f'<div class="compare-decision-largest">{html.escape(largest)}</div>'
-        )
+    parts.append(
+        f'<div class="compare-decision-identity">{html.escape(ident)}</div>'
+    )
     if nxt:
-        parts.append(
-            f'<div class="compare-decision-next">{html.escape(nxt)}</div>'
-        )
+        parts.append(f'<div class="compare-next">{html.escape(nxt)}</div>')
     if sig_note:
         parts.append(
             f'<div class="compare-decision-sig">{html.escape(sig_note)}</div>'
@@ -50387,6 +50426,92 @@ def compare_row_delta_status(label: str, delta: Any, metric: str = "") -> Option
     if pol is None:
         return "Changed"
     return _compare_status(pol, signed)
+
+
+def compare_directional_delta(
+    label: str, delta: Any, metric: str = "", a_text: Any = None,
+) -> Optional[dict]:
+    """Direction-aware "Change (A -> B)" cell for the redesigned detail tables.
+
+    The stored delta is ``A - B``; the reader sees the Candidate-vs-Baseline
+    change (``B - A``) plus an explicit arrow + word so the table never relies on
+    colour or on the reader doing the arithmetic.  Returns ``None`` when there is
+    no parseable, non-zero change; otherwise a dict with keys ``signed``, ``pct``
+    (or None), ``status``, ``arrow`` ('u25b2'/'u25bc'/'u2022'), ``word``
+    ('worse'/'better'/'flat') and ``text`` (e.g. ``"+80 us  +38%  worse"``).
+    """
+    parsed = parse_signed_delta(delta)
+    if parsed is None or parsed[0] == 0:
+        return None
+    signed, _kind = parsed
+    pol = _compare_metric_polarity(label, metric)
+    if pol is None and metric:
+        pol = _compare_metric_polarity(metric)
+    status = _compare_status(pol, signed) if pol is not None else "Changed"
+    arrow = {"Regressed": "▲", "Improved": "▼"}.get(status, "•")
+    word = {"Regressed": "worse", "Improved": "better"}.get(status, "flat")
+    cand_text = _flip_delta_text(delta)
+    a_mag = _cell_magnitude(a_text) if a_text is not None else None
+    pct: Optional[float] = None
+    head = cand_text
+    if a_mag and a_mag > 0:
+        pct = (-signed) * 100.0 / a_mag
+        head = f"{cand_text} · {'+' if pct >= 0 else '−'}{abs(pct):.1f}%"
+    return {
+        "signed": signed,
+        "pct": pct,
+        "status": status,
+        "arrow": arrow,
+        "word": word,
+        "text": f"{head} {arrow} {word}",
+    }
+
+
+def compare_dumbbell_rows(rows: Any, **opts: Any) -> List[dict]:
+    """Rows for a per-task "dumbbell" plot (Baseline dot, Candidate dot,
+    connector) - the visual-first view for the redesigned detail tabs.
+
+    ``a_key`` / ``b_key`` (default 'a' / 'b'), ``a_idx`` / ``b_idx`` (default
+    1 / 2), ``label_key`` (default 'name'), ``limit`` (default 12, sorted by
+    ``|B - A|``).  Returns ``[{label, a_val, b_val, a_pct, b_pct, better}]``
+    where ``*_pct`` is 0..100 of the shared max and ``better`` is ``B < A``.
+    """
+    a_key = opts.get("a_key", "a")
+    b_key = opts.get("b_key", "b")
+    a_idx = int(opts.get("a_idx", 1))
+    b_idx = int(opts.get("b_idx", 2))
+    label_key = opts.get("label_key", "name")
+    limit = max(1, int(opts.get("limit", 12) or 12))
+    items: List[dict] = []
+    for row in rows or []:
+        if isinstance(row, dict):
+            label = str(row.get(label_key) or row.get("label") or row.get("name") or "")
+            a_raw = row.get(a_key)
+            b_raw = row.get(b_key)
+        elif isinstance(row, (list, tuple)):
+            label = str(row[0] or "") if row else ""
+            a_raw = row[a_idx] if len(row) > a_idx else None
+            b_raw = row[b_idx] if len(row) > b_idx else None
+        else:
+            continue
+        if not label:
+            continue
+        a_val = _cell_magnitude(a_raw)
+        b_val = _cell_magnitude(b_raw)
+        if a_val is None and b_val is None:
+            continue
+        items.append({"label": label, "a_val": a_val or 0.0, "b_val": b_val or 0.0})
+    max_v = max([1.0] + [max(r["a_val"], r["b_val"]) for r in items])
+    items.sort(key=lambda r: -abs(r["b_val"] - r["a_val"]))
+    out: List[dict] = []
+    for r in items[:limit]:
+        out.append({
+            **r,
+            "a_pct": r["a_val"] / max_v * 100.0,
+            "b_pct": r["b_val"] / max_v * 100.0,
+            "better": r["b_val"] < r["a_val"],
+        })
+    return out
 
 
 def compare_summary_change_bar_rows(tables: dict, limit: int = 8) -> List[dict]:
@@ -56794,6 +56919,147 @@ class _CompareBarChart(QWidget):
         p.end()
 
 
+class _CompareNavPages(QWidget):
+    """Grouped left-rail navigation (``QListWidget``) + ``QStackedWidget``,
+    mirroring the web Trace Compare dialog's ``.compare-rail`` groups.
+
+    Exposes the slice of the ``QTabWidget`` surface the dialog and its tests
+    rely on (``addTab`` / ``count`` / ``currentIndex`` / ``setCurrentIndex`` /
+    ``widget`` / ``tabText`` / ``currentChanged``) so nothing else in
+    ``_TraceCompareDialog`` had to change.
+    """
+
+    currentChanged = Signal(int)
+
+    # tab label -> section header (same grouping as web pageTabs `group`).
+    _GROUPS = {
+        "Summary": "Overview",
+        "Top Tasks": "CPU & Cores",
+        "Core Util": "CPU & Cores",
+        "Core Migrations": "CPU & Cores",
+        "Execution": "Timing",
+        "Blocking": "Timing",
+        "Inter-Arrival": "Timing",
+        "Response": "Timing",
+        "Preemption": "Contention",
+        "Sync": "Contention",
+        "Mutex": "Contention",
+        "Trends": "Cross-trace",
+    }
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._labels: List[str] = []
+        # Match the Analysis Findings dialog's left list: explicit UI font
+        # (macOS ignores CSS font-size on the native item delegate), blue-tint
+        # hover/selection, 2px 6px item padding.
+        ui_pt = max(6, min(int(UI_FONT_SIZE), 24))
+        ui_font = _application_ui_font(ui_pt)
+        ui_fs = _ui_font_stylesheet_size(ui_pt)
+        try:
+            _dark = QApplication.instance().palette().color(
+                QPalette.Window).lightness() < 128
+        except Exception:
+            _dark = True
+        ink = "#c5d0dc" if _dark else "#1E1E1E"
+        muted = "#9a9a9a" if _dark else "#555555"
+        self._hdr_ink = QColor(muted)
+        self._hdr_bg = QColor(255, 255, 255, 20) if _dark else QColor(0, 0, 0, 16)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        self._list = QListWidget()
+        self._list.setObjectName("compareRail")
+        self._list.setFixedWidth(178)
+        self._list.setFont(ui_font)
+        self._list.setSpacing(0)
+        self._list.setWordWrap(False)
+        self._list.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self._list.setFrameShape(QFrame.Shape.NoFrame)
+        self._list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        _hdr_css = ("rgba(255,255,255,0.08)" if _dark else "rgba(0,0,0,0.06)")
+        self._list.setStyleSheet(
+            f"QListWidget#compareRail {{ padding: 0; outline: none;"
+            f" border: none; background: transparent;"
+            f" font-size: {ui_fs}; color: {ink}; }}"
+            "QListWidget#compareRail::item { padding: 4px 8px; margin: 1px 6px;"
+            " border-radius: 4px; border-left: 2px solid transparent; }"
+            "QListWidget#compareRail::item:hover:!selected:enabled {"
+            " background: rgba(127, 127, 127, 0.14); }"
+            "QListWidget#compareRail::item:selected {"
+            " background: transparent; color: #4a9eff;"
+            " border-left-color: #4a9eff; }"
+            # Section header (NoItemFlags -> disabled): full-width gray band,
+            # same font as the items, bold — matches web .compare-rail-group.
+            f"QListWidget#compareRail::item:disabled {{ margin: 6px 0 2px;"
+            f" padding: 4px 14px; border-radius: 0; border-left: 0;"
+            f" background: {_hdr_css}; color: {muted}; }}"
+        )
+        self._stack = QStackedWidget()
+        row.addWidget(self._list)
+        row.addWidget(self._stack, 1)
+        self._list.currentRowChanged.connect(self._on_row)
+
+    def _on_row(self, _row: int) -> None:
+        it = self._list.currentItem()
+        if it is None:
+            return
+        idx = it.data(Qt.ItemDataRole.UserRole)
+        if idx is None:  # a section header — not selectable, ignore
+            return
+        self._stack.setCurrentIndex(int(idx))
+        self.currentChanged.emit(int(idx))
+
+    def _has_group(self, name: str) -> bool:
+        for i in range(self._list.count()):
+            if self._list.item(i).data(Qt.ItemDataRole.UserRole + 1) == name:
+                return True
+        return False
+
+    # --- QTabWidget-compatible surface -----------------------------------
+    def addTab(self, widget: QWidget, label: str) -> int:
+        page_idx = self._stack.count()
+        group = self._GROUPS.get(label, "Cross-trace")
+        if not self._has_group(group):
+            hdr = QListWidgetItem(group.upper())
+            hdr.setFlags(Qt.ItemFlag.NoItemFlags)
+            hdr.setData(Qt.ItemDataRole.UserRole + 1, group)
+            f = hdr.font()          # same size as the items; just bold
+            f.setBold(True)
+            hdr.setFont(f)
+            hdr.setForeground(self._hdr_ink)
+            hdr.setBackground(self._hdr_bg)
+            self._list.addItem(hdr)
+        item = QListWidgetItem(label)
+        item.setData(Qt.ItemDataRole.UserRole, page_idx)
+        self._list.addItem(item)
+        self._stack.addWidget(widget)
+        self._labels.append(label)
+        if self._stack.count() == 1:
+            self._list.setCurrentItem(item)
+        return page_idx
+
+    def count(self) -> int:
+        return self._stack.count()
+
+    def currentIndex(self) -> int:
+        return self._stack.currentIndex()
+
+    def setCurrentIndex(self, idx: int) -> None:
+        for i in range(self._list.count()):
+            if self._list.item(i).data(Qt.ItemDataRole.UserRole) == idx:
+                self._list.setCurrentRow(i)
+                return
+        self._stack.setCurrentIndex(idx)
+
+    def widget(self, idx: int) -> QWidget:
+        return self._stack.widget(idx)
+
+    def tabText(self, idx: int) -> str:
+        return self._labels[idx] if 0 <= idx < len(self._labels) else ""
+
+
 class _TraceCompareDialog(QDialog):
     """Compare summary and Statistics-aligned metrics between two tabs."""
 
@@ -56895,7 +57161,7 @@ class _TraceCompareDialog(QDialog):
         # Back-compat alias for tests that look for _strip
         self._strip = self._dec_largest
 
-        self._pages = QTabWidget()
+        self._pages = _CompareNavPages()
         self._summary_table = QTableWidget(0, 4)
         self._summary_table.setHorizontalHeaderLabels(
             ["Metric", "Baseline A", "Candidate B", "Δ"])
@@ -57050,7 +57316,9 @@ class _TraceCompareDialog(QDialog):
         lay.addWidget(self._pages, 1)
 
         # Footer — single row mirroring the web dialog (compare-dialog-footer):
-        #   [ Validate · Query AI · Save baseline · Score baseline ]  …  [ Export HTML · Close ]
+        #   [ Export HTML ]  …  [ Save baseline · Score vs baseline · Validate · **Ask AI** ]
+        # One primary action (Ask AI); the rest recede. No redundant Close
+        # (window chrome + Esc already dismiss).
         self._ai_enabled = bool(ai_enabled)
         self._on_query_ai = on_query_ai
         self._on_validate_experiment = on_validate_experiment
@@ -57060,28 +57328,6 @@ class _TraceCompareDialog(QDialog):
         foot_row.setContentsMargins(8, 6, 8, 8)
         foot_row.setSpacing(8)
         _ic = "#9E9E9E"
-
-        self._validate_btn = QPushButton("Validate experiment…")
-        self._validate_btn.clicked.connect(self._validate_with_ai)
-        foot_row.addWidget(self._validate_btn)
-
-        self._ai_btn = QPushButton("Query with AI…")
-        self._ai_btn.clicked.connect(self._query_with_ai)
-        foot_row.addWidget(self._ai_btn)
-
-        self._btn_save_baseline = QPushButton("Save as baseline")
-        self._btn_save_baseline.setToolTip(
-            "Store Trace A per-task metrics as the regression baseline")
-        self._btn_save_baseline.clicked.connect(self._save_as_baseline)
-        foot_row.addWidget(self._btn_save_baseline)
-
-        self._btn_score_baseline = QPushButton("Score vs baseline")
-        self._btn_score_baseline.setToolTip(
-            "Z-score Trace A metrics against the stored baseline")
-        self._btn_score_baseline.clicked.connect(self._score_vs_baseline)
-        foot_row.addWidget(self._btn_score_baseline)
-
-        foot_row.addStretch(1)
 
         self._btn_export_html = QPushButton("Export HTML")
         self._btn_export_html.setIcon(_svg_icon_markup(
@@ -57095,7 +57341,37 @@ class _TraceCompareDialog(QDialog):
         self._btn_export_html.clicked.connect(self._export_html)
         foot_row.addWidget(self._btn_export_html)
 
+        foot_row.addStretch(1)
+
+        self._btn_save_baseline = QPushButton("Save baseline")
+        self._btn_save_baseline.setToolTip(
+            "Store Trace A per-task metrics as the regression baseline")
+        self._btn_save_baseline.clicked.connect(self._save_as_baseline)
+        foot_row.addWidget(self._btn_save_baseline)
+
+        self._btn_score_baseline = QPushButton("Score vs baseline")
+        self._btn_score_baseline.setToolTip(
+            "Z-score Trace A metrics against the stored baseline")
+        self._btn_score_baseline.clicked.connect(self._score_vs_baseline)
+        foot_row.addWidget(self._btn_score_baseline)
+
+        self._validate_btn = QPushButton("Validate experiment…")
+        self._validate_btn.clicked.connect(self._validate_with_ai)
+        foot_row.addWidget(self._validate_btn)
+
+        self._ai_btn = QPushButton("Ask AI about this")
+        self._ai_btn.setDefault(True)
+        self._ai_btn.setStyleSheet(
+            "QPushButton { background: #4F8BFF; color: #fff; font-weight: 600;"
+            " border: 1px solid #4F8BFF; border-radius: 4px; padding: 4px 12px; }"
+            " QPushButton:disabled { background: transparent; color: #888;"
+            " border-color: #555; }"
+        )
+        self._ai_btn.clicked.connect(self._query_with_ai)
+        foot_row.addWidget(self._ai_btn)
+
         self._btn_close = QPushButton("Close")
+        self._btn_close.setToolTip("Close")
         self._btn_close.clicked.connect(self.reject)
         foot_row.addWidget(self._btn_close)
 
@@ -57136,9 +57412,17 @@ class _TraceCompareDialog(QDialog):
         idx_a, idx_b = self._selected_tab_indices()
         enabled = self._ai_enabled
         cb = self._on_query_ai
+        section = ""
+        try:
+            section = self._pages.tabText(self._pages.currentIndex())
+        except Exception:
+            section = ""
         self.done(int(QDialog.DialogCode.Accepted))
         if cb is not None:
-            cb(enabled, idx_a, idx_b)
+            try:
+                cb(enabled, idx_a, idx_b, section=section)
+            except TypeError:
+                cb(enabled, idx_a, idx_b)
 
     def _validate_with_ai(self) -> None:
         idx_a, idx_b = self._selected_tab_indices()
@@ -57186,6 +57470,10 @@ class _TraceCompareDialog(QDialog):
         for w in widgets:
             if w is not None:
                 lay.addWidget(w)
+        # Pin content to the top — otherwise a sparse/empty page (e.g. no core
+        # migrations) gets vertically centred in the viewport. Matches the web
+        # dialog's top-aligned .compare-page.
+        lay.addStretch(1)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -57496,40 +57784,42 @@ class _TraceCompareDialog(QDialog):
         n_reg = int(cards.get("regressions") or len(data.get("regressions") or []))
         n_imp = int(cards.get("improvements") or len(data.get("improvements") or []))
         n_warn = int(cards.get("warnings") or len(data.get("warnings") or []))
-        self._dec_counts.setText(
-            f"{n_reg} REGRESSIONS    {n_imp} IMPROVEMENTS"
-            + (f"    {n_warn} WARNING{'S' if n_warn != 1 else ''}" if n_warn else "")
-        )
-        # Structured verdict: one-word chip + up to 3 top-change bullets
-        # (replaces the old prose sentence).
-        _tone_bg = {
-            "regressed": "#c0392b", "improved": "#1f6b45",
-            "mixed": "#c87a12", "neutral": "#6b7a8d",
+        # Redesigned verdict: a tone-tinted banner (glyph carries meaning without
+        # colour) + a plain-language stat line, replacing the ALL-CAPS counts and
+        # the bullet stack.
+        _tone_hex = {
+            "regressed": "#e74c3c", "improved": "#27ae60",
+            "mixed": "#e67e22", "neutral": "#95a5a6",
         }
         label = str(notable.get("verdict_label") or "SIMILAR")
         tone = str(notable.get("verdict_tone") or "neutral")
-        chip_bg = _tone_bg.get(tone, "#6b7a8d")
-        bullets = notable.get("verdict_bullets") or []
-        _b_html = []
-        for b in bullets:
-            st = str(b.get("status") or "")
-            glyph = "▲" if st == "Regressed" else "▼" if st == "Improved" else "•"
-            color = ("#e57373" if st == "Regressed"
-                     else "#81c784" if st == "Improved" else "#cfd8dc")
-            _b_html.append(
-                f'<div style="color:{color}; margin-top:2px;">{glyph} '
-                f'{html.escape(str(b.get("label")))} — '
-                f'{html.escape(str(b.get("change")))}</div>'
-            )
-        if not _b_html:
-            _b_html.append(
-                '<div style="color:#9a9a9a; margin-top:2px;">'
-                'No metric changed beyond the significance threshold.</div>'
-            )
+        accent = _tone_hex.get(tone, "#95a5a6")
+        glyph = {"regressed": "▲", "improved": "▼", "mixed": "◆"}.get(tone, "●")
+        sentence = re.sub(
+            r"^Overall:\s*", "", str(notable.get("verdict") or "")).strip()
+        self._dec_verdict.setStyleSheet(
+            f"QLabel {{ background: rgba(0,0,0,0); border-left: 3px solid {accent};"
+            f" padding: 6px 10px; font-size: 12px;"
+            f" background-color: {accent}1f; border-radius: 4px; }}"
+        )
         self._dec_verdict.setText(
-            f'<span style="background:{chip_bg}; color:#fff; padding:1px 8px;'
-            f' border-radius:8px; font-weight:700;">{html.escape(label)}</span>'
-            + "".join(_b_html)
+            f'<span style="font-weight:700; letter-spacing:0.6px; color:{accent};">'
+            f'{glyph} {html.escape(label)}</span>'
+            + (f'<div style="margin-top:3px; color:#cfd8dc;">{html.escape(sentence)}'
+               f'</div>' if sentence else "")
+        )
+        regs_now = list(data.get("regressions") or [])
+        mover = (regs_now or (list(data.get("improvements") or []) or [None]))[0]
+        mover_txt = (f"{mover.get('label')}: {mover.get('change')}"
+                     if mover else "—")
+        self._dec_counts.setTextFormat(Qt.TextFormat.RichText)
+        self._dec_counts.setText(
+            f'<span style="color:#e57373;">Regressions {n_reg}</span>'
+            f'&nbsp;&nbsp;&nbsp;<span style="color:#81c784;">Improvements '
+            f'{n_imp}</span>'
+            + (f'&nbsp;&nbsp;&nbsp;<span style="color:#e6b877;">Warnings '
+               f'{n_warn}</span>' if n_warn else "")
+            + f'&nbsp;&nbsp;·&nbsp;&nbsp;Biggest mover: {html.escape(mover_txt)}'
         )
         comp = notable.get("comparability") or {}
         comp_warnings = list(comp.get("warnings") or [])
@@ -57548,7 +57838,7 @@ class _TraceCompareDialog(QDialog):
         if regs:
             top = regs[0]
             self._dec_largest.setText(
-                f"Largest regression — {top.get('label')}: {top.get('change')}"
+                f"→ Investigate {top.get('label')} on Candidate"
             )
             self._dec_largest_clickable = True
             self._dec_largest.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -87979,8 +88269,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         ai_enabled: bool = True,
         idx_a: Optional[int] = None,
         idx_b: Optional[int] = None,
+        section: str = "",
     ) -> None:
-        """Trace Compare → Query with AI… uses the dialog's Trace A / B."""
+        """Trace Compare → Ask AI about this uses the dialog's Trace A / B and
+        focuses the prompt on the section selected in the left rail."""
         if not ai_enabled:
             self._open_settings("AI")
             return
@@ -87992,8 +88284,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._focus_ai_panel()
         panel = getattr(self, "_ai_panel", None)
         if panel is not None and hasattr(panel, "query_trace_compare"):
-            a, b = int(idx_a), int(idx_b)
-            QTimer.singleShot(0, lambda: panel.query_trace_compare(a, b))
+            a, b, sec = int(idx_a), int(idx_b), str(section or "")
+            QTimer.singleShot(0, lambda: panel.query_trace_compare(a, b, sec))
 
     def _validate_compare_with_ai(
         self,

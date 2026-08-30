@@ -1251,6 +1251,42 @@ tbody tr:nth-child(even) td:first-child { background: #f7f9fc; }
 .compare-verdict-bullets li.reg { color: #9b2c2c; }
 .compare-verdict-bullets li.imp { color: #1f6b45; }
 .compare-verdict-none { margin-top: 6px; color: #5f6f82; font-size: 11px; }
+/* Redesigned verdict: full-width banner + stat cards (arrow glyph carries
+   meaning without colour). */
+.compare-verdict-banner {
+  display: flex; gap: 10px; align-items: flex-start;
+  margin: 6px 0 10px; padding: 10px 12px; border-radius: 8px; border: 1px solid #d9e0ea;
+}
+.compare-verdict-glyph { font-size: 15px; line-height: 1.3; }
+.compare-verdict-main { display: flex; flex-direction: column; gap: 2px; }
+.compare-verdict-label { font-weight: 700; font-size: 13px; letter-spacing: 0.04em; }
+.compare-verdict-sentence { font-size: 12px; color: #3d4f63; }
+.compare-verdict-banner.tone-regressed { background: #fdecea; border-color: #e6b3ac; }
+.compare-verdict-banner.tone-regressed .compare-verdict-label,
+.compare-verdict-banner.tone-regressed .compare-verdict-glyph { color: #b23125; }
+.compare-verdict-banner.tone-improved { background: #e9f5ee; border-color: #a9d3ba; }
+.compare-verdict-banner.tone-improved .compare-verdict-label,
+.compare-verdict-banner.tone-improved .compare-verdict-glyph { color: #1f6b45; }
+.compare-verdict-banner.tone-mixed { background: #fdf3e2; border-color: #e2c48a; }
+.compare-verdict-banner.tone-mixed .compare-verdict-label,
+.compare-verdict-banner.tone-mixed .compare-verdict-glyph { color: #b4670e; }
+.compare-verdict-banner.tone-neutral { background: #eef1f5; border-color: #d1d8e0; }
+.compare-cards { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 10px; }
+.compare-card {
+  flex: 1 1 120px; border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; background: #fff; display: flex; flex-direction: column; gap: 3px;
+}
+.compare-card-k { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.compare-card-v { font-size: 18px; font-weight: 700; line-height: 1.1; }
+.compare-card.tone-regressed { border-left: 4px solid #c0392b; }
+.compare-card.tone-regressed .compare-card-v { color: #b23125; }
+.compare-card.tone-improved { border-left: 4px solid #1f6b45; }
+.compare-card.tone-improved .compare-card-v { color: #1f6b45; }
+.compare-card.tone-warn { border-left: 4px solid #c87a12; }
+.compare-card.tone-warn .compare-card-v { color: #b4670e; }
+.compare-card-mover { flex: 2 1 200px; }
+.compare-card-mover .compare-card-v { font-size: 13px; font-weight: 600; }
+.compare-next { margin: 6px 0 4px; font-size: 12px; font-weight: 600; color: #123355; }
 .compare-comparability-warn {
   margin: 0 0 8px; padding: 8px 10px; border-radius: 6px;
   background: #fdf0e2; border-left: 4px solid #c87a12; color: #6b4a12;
@@ -1276,13 +1312,13 @@ tbody tr:nth-child(even) td:first-child { background: #f7f9fc; }
 ${HTML_REPORT_TOC_CSS}
 `.trim()
 
+// Same grouping as the Trace Compare dialog's nav rail (pageTabs `group`).
 export const COMPARE_TOC_GROUPS = [
-  ['Overview', ['Overview', 'Summary', 'Top Tasks']],
-  ['CPU and Migrations', ['Core Utilisation', 'Core Migrations']],
-  ['Timing and Latency', ['Execution Time', 'Blocking Time', 'Inter-Arrival', 'Response P99']],
-  ['Scheduling and Sync', [
-    'Preemption Chains', 'Sync Objects', 'Mutex Blocking', 'Shared Patterns', 'Trends',
-  ]],
+  ['Overview', ['Overview', 'Summary']],
+  ['CPU & Cores', ['Top Tasks', 'Core Utilisation', 'Core Migrations']],
+  ['Timing', ['Execution Time', 'Blocking Time', 'Inter-Arrival Time', 'Response P99']],
+  ['Contention', ['Preemption Chains', 'Sync Objects', 'Mutex Blocking']],
+  ['Cross-trace', ['Shared Patterns', 'Trends']],
 ]
 
 function _rowsOrEmpty(rows, cols, mapFn, empty) {
@@ -1320,7 +1356,6 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
   const notableRows = (notable.rows || []).filter(r => r && typeof r === 'object')
   const verdictLabel = String(notable.verdict_label || 'SIMILAR')
   const verdictTone = String(notable.verdict_tone || 'neutral')
-  const verdictBullets = notable.verdict_bullets || []
   const compWarnings = (notable.comparability || {}).warnings || []
   const nextInv = String(notable.next_investigation || '').trim()
   const omitted = Number(notable.small_omitted_count || 0) || 0
@@ -1358,14 +1393,11 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
       + evRefs.map(r => `<tr><td>${htmlCell(r[0])}</td><td>${htmlCell(r[1])}</td></tr>`).join('')
       + '</tbody></table></div>'
     : ''
-  const verdictBulletsHtml = verdictBullets.length
-    ? '<ul class="compare-verdict-bullets">' + verdictBullets.map(b => {
-      const st = String(b.status || '')
-      const glyph = st === 'Regressed' ? '▲' : st === 'Improved' ? '▼' : '•'
-      const cls = st === 'Regressed' ? 'reg' : st === 'Improved' ? 'imp' : ''
-      return `<li class="${cls}">${glyph} ${htmlCell(b.label)} — ${htmlCell(b.change)}</li>`
-    }).join('') + '</ul>'
-    : '<div class="compare-verdict-none">No metric changed beyond the significance threshold.</div>'
+  const verdictSentence = String(notable.verdict || '').replace(/^Overall:\s*/i, '').trim()
+  const verdictGlyph = { regressed: '▲', improved: '▼', mixed: '◆' }[verdictTone] || '●'
+  const moverRow = notableRows.find(r => r.status === 'Regressed')
+    || notableRows.find(r => r.status === 'Improved') || null
+  const moverText = moverRow ? `${moverRow.label}: ${moverRow.change}` : '—'
   const overviewHtml = `<section class="report-card"><h2>Overview</h2>`
     + '<p class="detail-note">Verdict, identity, and engineering-significant '
     + 'deltas between Baseline A and Candidate B.</p>'
@@ -1374,18 +1406,22 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
         + '⚠ Traces may not be directly comparable</div><ul>'
         + compWarnings.map(w => `<li>${htmlCell(w)}</li>`).join('') + '</ul></div>'
       : '')
-    + `<div class="compare-verdict"><span class="compare-verdict-chip tone-${htmlCell(verdictTone)}">`
-    + `${htmlCell(verdictLabel)}</span>${verdictBulletsHtml}</div>`
-    + (nextInv ? `<p class="overview-why">${htmlCell(nextInv)}</p>` : '')
+    + `<div class="compare-verdict-banner tone-${htmlCell(verdictTone)}">`
+    + `<span class="compare-verdict-glyph">${verdictGlyph}</span>`
+    + '<span class="compare-verdict-main">'
+    + `<span class="compare-verdict-label">${htmlCell(verdictLabel)}</span>`
+    + (verdictSentence ? `<span class="compare-verdict-sentence">${htmlCell(verdictSentence)}</span>` : '')
+    + '</span></div>'
+    + (nextInv ? `<p class="compare-next">${htmlCell(nextInv)}</p>` : '')
     + ((omitted || Number(cards.significant || 0))
       ? '<p class="overview-formula">Showing engineering-significant deltas only (small changes omitted)</p>'
       : '')
     + `<p class="overview-formula">${htmlCell(COMPARE_DELTA_FORMULA)}</p>`
-    + '<div class="status-cards">'
-    + `<div class="status-card status-regressed"><div class="n">${Number(cards.regressions || 0)}</div>Regressions</div>`
-    + `<div class="status-card status-improved"><div class="n">${Number(cards.improvements || 0)}</div>Improvements</div>`
-    + `<div class="status-card status-changed"><div class="n">${Number(cards.significant || 0)}</div>Significant changes</div>`
-    + `<div class="status-card status-warn"><div class="n">${Number(cards.warnings || 0)}</div>Validation warnings</div>`
+    + '<div class="compare-cards">'
+    + `<div class="compare-card tone-regressed"><span class="compare-card-k">Regressions</span><span class="compare-card-v">${Number(cards.regressions || 0)}</span></div>`
+    + `<div class="compare-card tone-improved"><span class="compare-card-k">Improvements</span><span class="compare-card-v">${Number(cards.improvements || 0)}</span></div>`
+    + `<div class="compare-card tone-warn"><span class="compare-card-k">Warnings</span><span class="compare-card-v">${Number(cards.warnings || 0)}</span></div>`
+    + `<div class="compare-card compare-card-mover"><span class="compare-card-k">Biggest mover</span><span class="compare-card-v">${htmlCell(moverText)}</span></div>`
     + '</div>'
     + warnHtml
     + '<h3 class="overview-sub">Comparison identity</h3>'

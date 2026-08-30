@@ -3172,6 +3172,147 @@ class _CompareBarChart(QWidget):
         p.end()
 
 
+class _CompareNavPages(QWidget):
+    """Grouped left-rail navigation (``QListWidget``) + ``QStackedWidget``,
+    mirroring the web Trace Compare dialog's ``.compare-rail`` groups.
+
+    Exposes the slice of the ``QTabWidget`` surface the dialog and its tests
+    rely on (``addTab`` / ``count`` / ``currentIndex`` / ``setCurrentIndex`` /
+    ``widget`` / ``tabText`` / ``currentChanged``) so nothing else in
+    ``_TraceCompareDialog`` had to change.
+    """
+
+    currentChanged = Signal(int)
+
+    # tab label -> section header (same grouping as web pageTabs `group`).
+    _GROUPS = {
+        "Summary": "Overview",
+        "Top Tasks": "CPU & Cores",
+        "Core Util": "CPU & Cores",
+        "Core Migrations": "CPU & Cores",
+        "Execution": "Timing",
+        "Blocking": "Timing",
+        "Inter-Arrival": "Timing",
+        "Response": "Timing",
+        "Preemption": "Contention",
+        "Sync": "Contention",
+        "Mutex": "Contention",
+        "Trends": "Cross-trace",
+    }
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._labels: List[str] = []
+        # Match the Analysis Findings dialog's left list: explicit UI font
+        # (macOS ignores CSS font-size on the native item delegate), blue-tint
+        # hover/selection, 2px 6px item padding.
+        ui_pt = max(6, min(int(UI_FONT_SIZE), 24))
+        ui_font = _application_ui_font(ui_pt)
+        ui_fs = _ui_font_stylesheet_size(ui_pt)
+        try:
+            _dark = QApplication.instance().palette().color(
+                QPalette.Window).lightness() < 128
+        except Exception:
+            _dark = True
+        ink = "#c5d0dc" if _dark else "#1E1E1E"
+        muted = "#9a9a9a" if _dark else "#555555"
+        self._hdr_ink = QColor(muted)
+        self._hdr_bg = QColor(255, 255, 255, 20) if _dark else QColor(0, 0, 0, 16)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        self._list = QListWidget()
+        self._list.setObjectName("compareRail")
+        self._list.setFixedWidth(178)
+        self._list.setFont(ui_font)
+        self._list.setSpacing(0)
+        self._list.setWordWrap(False)
+        self._list.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self._list.setFrameShape(QFrame.Shape.NoFrame)
+        self._list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        _hdr_css = ("rgba(255,255,255,0.08)" if _dark else "rgba(0,0,0,0.06)")
+        self._list.setStyleSheet(
+            f"QListWidget#compareRail {{ padding: 0; outline: none;"
+            f" border: none; background: transparent;"
+            f" font-size: {ui_fs}; color: {ink}; }}"
+            "QListWidget#compareRail::item { padding: 4px 8px; margin: 1px 6px;"
+            " border-radius: 4px; border-left: 2px solid transparent; }"
+            "QListWidget#compareRail::item:hover:!selected:enabled {"
+            " background: rgba(127, 127, 127, 0.14); }"
+            "QListWidget#compareRail::item:selected {"
+            " background: transparent; color: #4a9eff;"
+            " border-left-color: #4a9eff; }"
+            # Section header (NoItemFlags -> disabled): full-width gray band,
+            # same font as the items, bold — matches web .compare-rail-group.
+            f"QListWidget#compareRail::item:disabled {{ margin: 6px 0 2px;"
+            f" padding: 4px 14px; border-radius: 0; border-left: 0;"
+            f" background: {_hdr_css}; color: {muted}; }}"
+        )
+        self._stack = QStackedWidget()
+        row.addWidget(self._list)
+        row.addWidget(self._stack, 1)
+        self._list.currentRowChanged.connect(self._on_row)
+
+    def _on_row(self, _row: int) -> None:
+        it = self._list.currentItem()
+        if it is None:
+            return
+        idx = it.data(Qt.ItemDataRole.UserRole)
+        if idx is None:  # a section header — not selectable, ignore
+            return
+        self._stack.setCurrentIndex(int(idx))
+        self.currentChanged.emit(int(idx))
+
+    def _has_group(self, name: str) -> bool:
+        for i in range(self._list.count()):
+            if self._list.item(i).data(Qt.ItemDataRole.UserRole + 1) == name:
+                return True
+        return False
+
+    # --- QTabWidget-compatible surface -----------------------------------
+    def addTab(self, widget: QWidget, label: str) -> int:
+        page_idx = self._stack.count()
+        group = self._GROUPS.get(label, "Cross-trace")
+        if not self._has_group(group):
+            hdr = QListWidgetItem(group.upper())
+            hdr.setFlags(Qt.ItemFlag.NoItemFlags)
+            hdr.setData(Qt.ItemDataRole.UserRole + 1, group)
+            f = hdr.font()          # same size as the items; just bold
+            f.setBold(True)
+            hdr.setFont(f)
+            hdr.setForeground(self._hdr_ink)
+            hdr.setBackground(self._hdr_bg)
+            self._list.addItem(hdr)
+        item = QListWidgetItem(label)
+        item.setData(Qt.ItemDataRole.UserRole, page_idx)
+        self._list.addItem(item)
+        self._stack.addWidget(widget)
+        self._labels.append(label)
+        if self._stack.count() == 1:
+            self._list.setCurrentItem(item)
+        return page_idx
+
+    def count(self) -> int:
+        return self._stack.count()
+
+    def currentIndex(self) -> int:
+        return self._stack.currentIndex()
+
+    def setCurrentIndex(self, idx: int) -> None:
+        for i in range(self._list.count()):
+            if self._list.item(i).data(Qt.ItemDataRole.UserRole) == idx:
+                self._list.setCurrentRow(i)
+                return
+        self._stack.setCurrentIndex(idx)
+
+    def widget(self, idx: int) -> QWidget:
+        return self._stack.widget(idx)
+
+    def tabText(self, idx: int) -> str:
+        return self._labels[idx] if 0 <= idx < len(self._labels) else ""
+
+
 class _TraceCompareDialog(QDialog):
     """Compare summary and Statistics-aligned metrics between two tabs."""
 
@@ -3273,7 +3414,7 @@ class _TraceCompareDialog(QDialog):
         # Back-compat alias for tests that look for _strip
         self._strip = self._dec_largest
 
-        self._pages = QTabWidget()
+        self._pages = _CompareNavPages()
         self._summary_table = QTableWidget(0, 4)
         self._summary_table.setHorizontalHeaderLabels(
             ["Metric", "Baseline A", "Candidate B", "Δ"])
@@ -3428,7 +3569,9 @@ class _TraceCompareDialog(QDialog):
         lay.addWidget(self._pages, 1)
 
         # Footer — single row mirroring the web dialog (compare-dialog-footer):
-        #   [ Validate · Query AI · Save baseline · Score baseline ]  …  [ Export HTML · Close ]
+        #   [ Export HTML ]  …  [ Save baseline · Score vs baseline · Validate · **Ask AI** ]
+        # One primary action (Ask AI); the rest recede. No redundant Close
+        # (window chrome + Esc already dismiss).
         self._ai_enabled = bool(ai_enabled)
         self._on_query_ai = on_query_ai
         self._on_validate_experiment = on_validate_experiment
@@ -3438,28 +3581,6 @@ class _TraceCompareDialog(QDialog):
         foot_row.setContentsMargins(8, 6, 8, 8)
         foot_row.setSpacing(8)
         _ic = "#9E9E9E"
-
-        self._validate_btn = QPushButton("Validate experiment…")
-        self._validate_btn.clicked.connect(self._validate_with_ai)
-        foot_row.addWidget(self._validate_btn)
-
-        self._ai_btn = QPushButton("Query with AI…")
-        self._ai_btn.clicked.connect(self._query_with_ai)
-        foot_row.addWidget(self._ai_btn)
-
-        self._btn_save_baseline = QPushButton("Save as baseline")
-        self._btn_save_baseline.setToolTip(
-            "Store Trace A per-task metrics as the regression baseline")
-        self._btn_save_baseline.clicked.connect(self._save_as_baseline)
-        foot_row.addWidget(self._btn_save_baseline)
-
-        self._btn_score_baseline = QPushButton("Score vs baseline")
-        self._btn_score_baseline.setToolTip(
-            "Z-score Trace A metrics against the stored baseline")
-        self._btn_score_baseline.clicked.connect(self._score_vs_baseline)
-        foot_row.addWidget(self._btn_score_baseline)
-
-        foot_row.addStretch(1)
 
         self._btn_export_html = QPushButton("Export HTML")
         self._btn_export_html.setIcon(_svg_icon_markup(
@@ -3473,7 +3594,37 @@ class _TraceCompareDialog(QDialog):
         self._btn_export_html.clicked.connect(self._export_html)
         foot_row.addWidget(self._btn_export_html)
 
+        foot_row.addStretch(1)
+
+        self._btn_save_baseline = QPushButton("Save baseline")
+        self._btn_save_baseline.setToolTip(
+            "Store Trace A per-task metrics as the regression baseline")
+        self._btn_save_baseline.clicked.connect(self._save_as_baseline)
+        foot_row.addWidget(self._btn_save_baseline)
+
+        self._btn_score_baseline = QPushButton("Score vs baseline")
+        self._btn_score_baseline.setToolTip(
+            "Z-score Trace A metrics against the stored baseline")
+        self._btn_score_baseline.clicked.connect(self._score_vs_baseline)
+        foot_row.addWidget(self._btn_score_baseline)
+
+        self._validate_btn = QPushButton("Validate experiment…")
+        self._validate_btn.clicked.connect(self._validate_with_ai)
+        foot_row.addWidget(self._validate_btn)
+
+        self._ai_btn = QPushButton("Ask AI about this")
+        self._ai_btn.setDefault(True)
+        self._ai_btn.setStyleSheet(
+            "QPushButton { background: #4F8BFF; color: #fff; font-weight: 600;"
+            " border: 1px solid #4F8BFF; border-radius: 4px; padding: 4px 12px; }"
+            " QPushButton:disabled { background: transparent; color: #888;"
+            " border-color: #555; }"
+        )
+        self._ai_btn.clicked.connect(self._query_with_ai)
+        foot_row.addWidget(self._ai_btn)
+
         self._btn_close = QPushButton("Close")
+        self._btn_close.setToolTip("Close")
         self._btn_close.clicked.connect(self.reject)
         foot_row.addWidget(self._btn_close)
 
@@ -3514,9 +3665,17 @@ class _TraceCompareDialog(QDialog):
         idx_a, idx_b = self._selected_tab_indices()
         enabled = self._ai_enabled
         cb = self._on_query_ai
+        section = ""
+        try:
+            section = self._pages.tabText(self._pages.currentIndex())
+        except Exception:
+            section = ""
         self.done(int(QDialog.DialogCode.Accepted))
         if cb is not None:
-            cb(enabled, idx_a, idx_b)
+            try:
+                cb(enabled, idx_a, idx_b, section=section)
+            except TypeError:
+                cb(enabled, idx_a, idx_b)
 
     def _validate_with_ai(self) -> None:
         idx_a, idx_b = self._selected_tab_indices()
@@ -3564,6 +3723,10 @@ class _TraceCompareDialog(QDialog):
         for w in widgets:
             if w is not None:
                 lay.addWidget(w)
+        # Pin content to the top — otherwise a sparse/empty page (e.g. no core
+        # migrations) gets vertically centred in the viewport. Matches the web
+        # dialog's top-aligned .compare-page.
+        lay.addStretch(1)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -3874,40 +4037,42 @@ class _TraceCompareDialog(QDialog):
         n_reg = int(cards.get("regressions") or len(data.get("regressions") or []))
         n_imp = int(cards.get("improvements") or len(data.get("improvements") or []))
         n_warn = int(cards.get("warnings") or len(data.get("warnings") or []))
-        self._dec_counts.setText(
-            f"{n_reg} REGRESSIONS    {n_imp} IMPROVEMENTS"
-            + (f"    {n_warn} WARNING{'S' if n_warn != 1 else ''}" if n_warn else "")
-        )
-        # Structured verdict: one-word chip + up to 3 top-change bullets
-        # (replaces the old prose sentence).
-        _tone_bg = {
-            "regressed": "#c0392b", "improved": "#1f6b45",
-            "mixed": "#c87a12", "neutral": "#6b7a8d",
+        # Redesigned verdict: a tone-tinted banner (glyph carries meaning without
+        # colour) + a plain-language stat line, replacing the ALL-CAPS counts and
+        # the bullet stack.
+        _tone_hex = {
+            "regressed": "#e74c3c", "improved": "#27ae60",
+            "mixed": "#e67e22", "neutral": "#95a5a6",
         }
         label = str(notable.get("verdict_label") or "SIMILAR")
         tone = str(notable.get("verdict_tone") or "neutral")
-        chip_bg = _tone_bg.get(tone, "#6b7a8d")
-        bullets = notable.get("verdict_bullets") or []
-        _b_html = []
-        for b in bullets:
-            st = str(b.get("status") or "")
-            glyph = "▲" if st == "Regressed" else "▼" if st == "Improved" else "•"
-            color = ("#e57373" if st == "Regressed"
-                     else "#81c784" if st == "Improved" else "#cfd8dc")
-            _b_html.append(
-                f'<div style="color:{color}; margin-top:2px;">{glyph} '
-                f'{html.escape(str(b.get("label")))} — '
-                f'{html.escape(str(b.get("change")))}</div>'
-            )
-        if not _b_html:
-            _b_html.append(
-                '<div style="color:#9a9a9a; margin-top:2px;">'
-                'No metric changed beyond the significance threshold.</div>'
-            )
+        accent = _tone_hex.get(tone, "#95a5a6")
+        glyph = {"regressed": "▲", "improved": "▼", "mixed": "◆"}.get(tone, "●")
+        sentence = re.sub(
+            r"^Overall:\s*", "", str(notable.get("verdict") or "")).strip()
+        self._dec_verdict.setStyleSheet(
+            f"QLabel {{ background: rgba(0,0,0,0); border-left: 3px solid {accent};"
+            f" padding: 6px 10px; font-size: 12px;"
+            f" background-color: {accent}1f; border-radius: 4px; }}"
+        )
         self._dec_verdict.setText(
-            f'<span style="background:{chip_bg}; color:#fff; padding:1px 8px;'
-            f' border-radius:8px; font-weight:700;">{html.escape(label)}</span>'
-            + "".join(_b_html)
+            f'<span style="font-weight:700; letter-spacing:0.6px; color:{accent};">'
+            f'{glyph} {html.escape(label)}</span>'
+            + (f'<div style="margin-top:3px; color:#cfd8dc;">{html.escape(sentence)}'
+               f'</div>' if sentence else "")
+        )
+        regs_now = list(data.get("regressions") or [])
+        mover = (regs_now or (list(data.get("improvements") or []) or [None]))[0]
+        mover_txt = (f"{mover.get('label')}: {mover.get('change')}"
+                     if mover else "—")
+        self._dec_counts.setTextFormat(Qt.TextFormat.RichText)
+        self._dec_counts.setText(
+            f'<span style="color:#e57373;">Regressions {n_reg}</span>'
+            f'&nbsp;&nbsp;&nbsp;<span style="color:#81c784;">Improvements '
+            f'{n_imp}</span>'
+            + (f'&nbsp;&nbsp;&nbsp;<span style="color:#e6b877;">Warnings '
+               f'{n_warn}</span>' if n_warn else "")
+            + f'&nbsp;&nbsp;·&nbsp;&nbsp;Biggest mover: {html.escape(mover_txt)}'
         )
         comp = notable.get("comparability") or {}
         comp_warnings = list(comp.get("warnings") or [])
@@ -3926,7 +4091,7 @@ class _TraceCompareDialog(QDialog):
         if regs:
             top = regs[0]
             self._dec_largest.setText(
-                f"Largest regression — {top.get('label')}: {top.get('change')}"
+                f"→ Investigate {top.get('label')} on Candidate"
             )
             self._dec_largest_clickable = True
             self._dec_largest.setCursor(Qt.CursorShape.PointingHandCursor)
