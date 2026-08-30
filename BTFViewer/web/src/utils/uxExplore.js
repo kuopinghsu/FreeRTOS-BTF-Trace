@@ -104,13 +104,23 @@ const SUMMARY_STRIP_LABELS = new Set([
   'Blocking time /s',
   'Deadline misses',
 ])
+// Notation that genuinely applies to every compare table.
 export const COMPARE_DELTA_FORMULA =
   'Δ = Baseline A − Candidate B (positive means A is larger). '
   + '— = unavailable (not zero). '
-  + 'pp = percentage points. '
-  + 'STI = software trace item; σ = util stddev; '
+  + 'pp = percentage points.'
+// Metric shorthand — each term only appears in one or two tables, so it is
+// folded into those tables' own notes rather than the all-tables banner.
+export const COMPARE_METRIC_GLOSSARY =
+  'STI = software trace item; σ = util stddev; '
   + 'Dwell = avg on-CPU slice; Ping = A↔B core ping-pong; '
   + 'P99 = 99th percentile; /tick = per TICK period.'
+// Per-table note fragments (appended to the relevant card notes).
+export const COMPARE_NOTE_SIGMA = 'σ = util stddev.'
+export const COMPARE_NOTE_MIGRATION =
+  'Dwell = avg on-CPU slice; Ping = A↔B core ping-pong; /tick = per TICK period.'
+export const COMPARE_NOTE_STI = 'STI = software trace item.'
+export const COMPARE_NOTE_P99 = 'P99 = 99th percentile.'
 export const COMPARE_NOTABLE_REL = 0.05
 export const COMPARE_NOTABLE_TIME_NS = 50_000
 export const COMPARE_NOTABLE_COUNT = 2

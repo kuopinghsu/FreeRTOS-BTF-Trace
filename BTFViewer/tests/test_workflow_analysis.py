@@ -589,6 +589,7 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         labels = {b.text().replace("&", "") for b in dlg.findChildren(QPushButton)}
         self.assertNotIn("Investigate on Baseline", labels)
         self.assertNotIn("Investigate on Candidate", labels)
+        # Summary tab page is a _CompareScrollPage wrapping a scrollable body.
         self.assertIs(dlg._decision.parent(), dlg._pages.widget(0).widget())
         self.assertTrue(dlg._summary_table.isSortingEnabled())
         self.assertTrue(dlg._summary_table.horizontalHeader().sectionsClickable())

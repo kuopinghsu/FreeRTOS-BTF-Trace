@@ -5826,9 +5826,12 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
     lines: List[str] = []
     notable_fn = globals().get("compare_notable_changes")
     formula = globals().get("COMPARE_DELTA_FORMULA")
+    glossary = globals().get("COMPARE_METRIC_GLOSSARY")
     if notable_fn is None or formula is None:
         from .ux_explore import COMPARE_DELTA_FORMULA as formula
         from .ux_explore import compare_notable_changes as notable_fn
+    if glossary is None:
+        from .ux_explore import COMPARE_METRIC_GLOSSARY as glossary
     notable = notable_fn(tables or {}, 8, name_a, name_b) or {}
     ident = notable.get("identity") or {}
     ident_a = ident.get("a") or {}
@@ -5836,6 +5839,7 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
     lines.append(f"Baseline A (Trace A),{_compare_csv_cell(ident_a.get('file') or name_a)}")
     lines.append(f"Candidate B (Trace B),{_compare_csv_cell(ident_b.get('file') or name_b)}")
     lines.append(f"Delta formula,{_compare_csv_cell(formula)}")
+    lines.append(f"Metric glossary,{_compare_csv_cell(glossary)}")
     lines.append(f"Cursor scope per tab,{'yes' if scope_enabled else 'no'}")
     lines.append("")
     lines.append("Overview")
@@ -6066,6 +6070,19 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
     scope_note = (
         "Each side uses its own tab cursor range (C1–Cn) when 2+ cursors are placed."
         if scope_enabled else "Full trace span on each side.")
+
+    _g = globals()
+    _note_sigma = _g.get("COMPARE_NOTE_SIGMA")
+    _note_mig = _g.get("COMPARE_NOTE_MIGRATION")
+    _note_sti = _g.get("COMPARE_NOTE_STI")
+    _note_p99 = _g.get("COMPARE_NOTE_P99")
+    if None in (_note_sigma, _note_mig, _note_sti, _note_p99):
+        from .ux_explore import (
+            COMPARE_NOTE_SIGMA as _note_sigma,
+            COMPARE_NOTE_MIGRATION as _note_mig,
+            COMPARE_NOTE_STI as _note_sti,
+            COMPARE_NOTE_P99 as _note_p99,
+        )
 
     def _esc(v: object) -> str:
         return html.escape(str(v), quote=True)
@@ -6320,7 +6337,7 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
               tables.get("summary", []), "No data",
               lead_html=sum_lead,
               note="KPI-style totals and rates. Δ = Baseline A − Candidate B "
-                   "(positive means A is numerically larger)."),
+                   "(positive means A is numerically larger). " + _note_sigma),
         _card("Top Tasks",
               ["Task", "CPU A (%)", "CPU B (%)", "Δ (pp)"],
               tables.get("top", []), "No user tasks in either trace",
@@ -6339,7 +6356,7 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
               tables.get("migrations", []), "No migrated tasks in either trace",
               lead_html=mig_lead,
               note="Migration count, rate, dwell, ping-pong, and primary-core "
-                   "affinity for tasks that ran on more than one core."),
+                   "affinity for tasks that ran on more than one core. " + _note_mig),
         _card("Execution Time",
               ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B", "Δ max"],
               tables.get("execution", []), "No execution samples in either trace",
@@ -6361,13 +6378,14 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
         _card("Sync Objects",
               ["Metric", "Baseline A", "Candidate B", "Δ"],
               tables.get("sync", []), "No sync instrumentation in either trace",
-              note="Mutex, semaphore, and queue STI instrumentation totals."),
+              note="Mutex, semaphore, and queue STI instrumentation totals. "
+                   + _note_sti),
         _card("Response P99",
               ["Task", "P99 A", "P99 B", "Δ"],
               tables.get("response", []), "No response samples in either trace",
               lead_html=p99_lead,
               note="Heuristic ready→completion P99 from adjacent slices "
-                   "(not an explicit BTF release/completion pair)."),
+                   "(not an explicit BTF release/completion pair). " + _note_p99),
         _card("Mutex Blocking",
               ["Task", "Total A", "Total B", "Δ"],
               tables.get("mutex_block", []), "No mutex blocking in either trace",

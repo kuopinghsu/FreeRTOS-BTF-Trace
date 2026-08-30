@@ -211,6 +211,8 @@ class AiWebParityTests(unittest.TestCase):
             ("def compare_row_delta_status", "export function compareRowDeltaStatus"),
             ("def filter_compare_migration_rows", "export function filterCompareMigrationRows"),
             ("COMPARE_DELTA_FORMULA", "export const COMPARE_DELTA_FORMULA"),
+            ("COMPARE_METRIC_GLOSSARY", "export const COMPARE_METRIC_GLOSSARY"),
+            ("COMPARE_NOTE_MIGRATION", "export const COMPARE_NOTE_MIGRATION"),
             ("def harvest_ux_events", "export function harvestUxEvents"),
             ("def prepare_ux_events", "export function prepareUxEvents"),
             ("def find_event_at_percentile", "export function findEventAtPercentile"),

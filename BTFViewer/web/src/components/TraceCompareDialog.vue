@@ -204,6 +204,7 @@
               </tr>
             </tbody>
           </table>
+          <p class="compare-page-note">{{ noteSigma }}</p>
         </div>
 
         <table
@@ -406,6 +407,7 @@
               </tr>
             </tbody>
           </table>
+          <p class="compare-page-note">{{ noteMigration }}</p>
         </div>
 
         <table
@@ -548,33 +550,36 @@
           </tbody>
         </table>
 
-        <table
+        <div
           v-else-if="activePage === 'sync'"
-          class="compare-table"
+          class="compare-page"
         >
-          <thead>
-            <tr>
-              <th :class="thSortClass('sync', 'label')" @click="toggleTableSort('sync', 'label')">Metric</th>
-              <th :class="thSortClass('sync', 'a')" @click="toggleTableSort('sync', 'a')">Baseline A</th>
-              <th :class="thSortClass('sync', 'b')" @click="toggleTableSort('sync', 'b')">Candidate B</th>
-              <th :class="thSortClass('sync', 'delta')" @click="toggleTableSort('sync', 'delta')">Δ</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in sortedSyncCompareRows"
-              :key="row.label"
-            >
-              <td class="task-col">{{ row.label }}</td>
-              <td>{{ row.a }}</td>
-              <td>{{ row.b }}</td>
-              <td :class="deltaClass(row.label, row.delta)">{{ deltaText(row.label, row.delta) }}</td>
-            </tr>
-            <tr v-if="syncCompareRows.length === 0">
-              <td colspan="4" class="compare-empty">No sync instrumentation in either trace</td>
-            </tr>
-          </tbody>
-        </table>
+          <table class="compare-table">
+            <thead>
+              <tr>
+                <th :class="thSortClass('sync', 'label')" @click="toggleTableSort('sync', 'label')">Metric</th>
+                <th :class="thSortClass('sync', 'a')" @click="toggleTableSort('sync', 'a')">Baseline A</th>
+                <th :class="thSortClass('sync', 'b')" @click="toggleTableSort('sync', 'b')">Candidate B</th>
+                <th :class="thSortClass('sync', 'delta')" @click="toggleTableSort('sync', 'delta')">Δ</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in sortedSyncCompareRows"
+                :key="row.label"
+              >
+                <td class="task-col">{{ row.label }}</td>
+                <td>{{ row.a }}</td>
+                <td>{{ row.b }}</td>
+                <td :class="deltaClass(row.label, row.delta)">{{ deltaText(row.label, row.delta) }}</td>
+              </tr>
+              <tr v-if="syncCompareRows.length === 0">
+                <td colspan="4" class="compare-empty">No sync instrumentation in either trace</td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="compare-page-note">{{ noteSti }}</p>
+        </div>
 
         <div
           v-else-if="activePage === 'response'"
@@ -636,6 +641,7 @@
               </tr>
             </tbody>
           </table>
+          <p class="compare-page-note">{{ noteP99 }}</p>
         </div>
 
         <table
@@ -812,6 +818,10 @@ import {
   compareSummaryStrip,
   compareInvestigateTarget,
   COMPARE_DELTA_FORMULA,
+  COMPARE_NOTE_SIGMA,
+  COMPARE_NOTE_MIGRATION,
+  COMPARE_NOTE_STI,
+  COMPARE_NOTE_P99,
   compareCoreUtilChartRows,
   compareP99DeltaChartRows,
   compareSummaryChangeBarRows,
@@ -1148,6 +1158,12 @@ const sharedPatternRows = computed(() =>
   buildSharedPatternCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value, deadlines.value))
 
 const compareFormula = COMPARE_DELTA_FORMULA
+// Metric shorthand shown under the specific table it applies to, not the
+// all-tabs formula banner.
+const noteSigma = COMPARE_NOTE_SIGMA
+const noteMigration = COMPARE_NOTE_MIGRATION
+const noteSti = COMPARE_NOTE_STI
+const noteP99 = COMPARE_NOTE_P99
 
 const compareDecision = computed(() => {
   const data = compareSummaryStrip({
@@ -1358,6 +1374,13 @@ function onScoreBaseline() {
   font-size: 11px;
   color: var(--fg-dim);
   flex-shrink: 0;
+}
+
+/* metric-shorthand note under the specific table it applies to */
+.compare-page-note {
+  margin: 6px 2px 0;
+  font-size: 11px;
+  color: var(--fg-dim);
 }
 
 .compare-page {

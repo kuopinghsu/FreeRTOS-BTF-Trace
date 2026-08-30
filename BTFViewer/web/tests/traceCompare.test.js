@@ -227,6 +227,7 @@ describe('new compare builders', () => {
     }
 
     const csv = buildCompareCsv('A.btf', 'B.btf', false, tables)
+    assert.match(csv, /Metric glossary,/)
     assert.match(csv, /Core Util/)
     assert.match(csv, /CPU A \(%\),CPU B \(%\),Δ \(pp\)/)
     assert.match(csv, /Util A \(%\),Util B \(%\),Δ \(pp\)/)
@@ -272,6 +273,13 @@ describe('new compare builders', () => {
     assert.match(html, /Collapse all/)
     assert.match(html, /data-toc="expand"/)
     assert.match(html, /detail-note/)
+    // Metric shorthand belongs to the owning table's note, not the top banner.
+    const overview = html.split('<h2>Overview</h2>')[1].split('<h2>Summary</h2>')[0]
+    assert.doesNotMatch(overview, /STI = software trace item/)
+    assert.match(html, /σ = util stddev\./)
+    assert.match(html, /Ping = A↔B core ping-pong; \/tick/)
+    assert.match(html, /STI = software trace item\./)
+    assert.match(html, /P99 = 99th percentile\./)
     assert.match(html, /Search table/)
     assert.match(html, /Show all/)
     assert.doesNotMatch(html, /data-csv/)

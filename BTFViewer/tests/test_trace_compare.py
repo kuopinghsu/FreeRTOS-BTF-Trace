@@ -161,6 +161,13 @@ class TraceCompareTests(unittest.TestCase):
         self.assertIn("Util A (%)", html)
         self.assertIn("Δ (pp)", html)
         self.assertIn("detail-note", html)
+        # Metric shorthand lives on the owning table's note, not the top banner.
+        self.assertNotIn("STI = software trace item", html.split("<h2>Overview</h2>")[1].split("<h2>Summary</h2>")[0])
+        self.assertIn("σ = util stddev.", html)          # Summary note
+        self.assertIn("Ping = A↔B core ping-pong; /tick", html)  # Core Migrations note
+        self.assertIn("STI = software trace item.", html)        # Sync Objects note
+        self.assertIn("P99 = 99th percentile.", html)            # Response P99 note
+        self.assertIn("Metric glossary,", csv)
         self.assertIn("Search table", html)
         self.assertIn("Show all", html)
         self.assertNotIn("data-csv", html)

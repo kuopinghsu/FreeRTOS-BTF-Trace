@@ -59,6 +59,10 @@ from .evidence_nav import (
 )
 from .ux_explore import (
     COMPARE_DELTA_FORMULA,
+    COMPARE_NOTE_MIGRATION,
+    COMPARE_NOTE_P99,
+    COMPARE_NOTE_SIGMA,
+    COMPARE_NOTE_STI,
     HEALTH_BAND_SECTION,
     HEALTH_MARK,
     KIND_LABEL,
@@ -3317,7 +3321,6 @@ class _TraceCompareDialog(QDialog):
         for tbl in self._all_tables:
             tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             tbl.verticalHeader().setVisible(False)
-            tbl.horizontalHeader().setStretchLastSection(True)
             tbl.setStyleSheet(
                 "QHeaderView::section { position: sticky; }"
             )
@@ -3326,6 +3329,15 @@ class _TraceCompareDialog(QDialog):
             hdr.setSortIndicatorShown(True)
             tbl.setSortingEnabled(True)
             tbl.setWordWrap(False)
+            if tbl is self._mig_table:
+                # Up to 16 columns — size to content and scroll horizontally.
+                tbl.setProperty("compareWideTable", True)
+                hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+                hdr.setStretchLastSection(True)
+            else:
+                # Few columns — divide the full width so the table always
+                # reaches the right edge (no dead column strip).
+                hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
         self._chart_tables = (
             self._summary_table,
@@ -3372,15 +3384,34 @@ class _TraceCompareDialog(QDialog):
         self._mig_sort.currentIndexChanged.connect(self._apply_mig_view)
         self._mig_family.currentIndexChanged.connect(self._apply_mig_view)
 
+        # Per-tab metric-shorthand notes (each term belongs to just this
+        # table, so it lives here rather than in the all-tabs formula banner).
+        def _pagenote(text: str) -> QLabel:
+            lb = QLabel(text)
+            lb.setWordWrap(True)
+            lb.setStyleSheet(
+                "QLabel { color: #8a8a8a; font-size: 11px; padding: 2px 8px 0; }")
+            return lb
+
         # Chart + table pages share one scroll viewport (Web compare-table-wrap parity).
         summary_page = self._make_compare_scroll_page(
-            self._decision, self._summary_chart, self._summary_table)
+            self._decision, self._summary_chart, self._summary_table,
+            _pagenote(COMPARE_NOTE_SIGMA))
         core_page = self._make_compare_scroll_page(
             self._core_util_chart, self._core_util_table)
         resp_page = self._make_compare_scroll_page(
-            self._response_chart, self._response_table)
+            self._response_chart, self._response_table,
+            _pagenote(COMPARE_NOTE_P99))
         mig_page = self._make_compare_scroll_page(
-            mig_ctrl_w, self._mig_heatmap, self._mig_table)
+            mig_ctrl_w, self._mig_heatmap, self._mig_table,
+            _pagenote(COMPARE_NOTE_MIGRATION))
+        # Sync keeps its own scrollbars; just append the STI note below it.
+        sync_page = QWidget()
+        _sync_v = QVBoxLayout(sync_page)
+        _sync_v.setContentsMargins(0, 4, 0, 0)
+        _sync_v.setSpacing(4)
+        _sync_v.addWidget(self._sync_table, 1)
+        _sync_v.addWidget(_pagenote(COMPARE_NOTE_STI))
 
         self._pages.addTab(summary_page, "Summary")
         self._pages.addTab(self._top_table, "Top Tasks")
@@ -3390,7 +3421,7 @@ class _TraceCompareDialog(QDialog):
         self._pages.addTab(self._block_table, "Blocking")
         self._pages.addTab(self._inter_table, "Inter-Arrival")
         self._pages.addTab(self._preempt_table, "Preemption")
-        self._pages.addTab(self._sync_table, "Sync")
+        self._pages.addTab(sync_page, "Sync")
         self._pages.addTab(resp_page, "Response")
         self._pages.addTab(self._mutex_table, "Mutex")
         self._pages.addTab(self._trends_table, "Trends")
@@ -3525,7 +3556,7 @@ class _TraceCompareDialog(QDialog):
 
     @staticmethod
     def _make_compare_scroll_page(*widgets) -> QScrollArea:
-        """One scroll viewport for chart + table (Web compare-table-wrap parity)."""
+        """One scroll viewport for chart + table so the two scroll together."""
         body = QWidget()
         lay = QVBoxLayout(body)
         lay.setContentsMargins(0, 4, 0, 0)
@@ -3550,25 +3581,26 @@ class _TraceCompareDialog(QDialog):
 
     @staticmethod
     def _fit_compare_embedded_table(table: QTableWidget) -> None:
-        """Size an embedded compare table to its content height (and min width)."""
+        """Size an embedded compare table to its content height."""
+        hdr = table.horizontalHeader()
         if table.rowCount() <= 0:
-            hdr_h = table.horizontalHeader().height()
-            table.setFixedHeight(max(hdr_h + 8, 28))
+            table.setFixedHeight(max(hdr.height() + 8, 28))
             return
         table.resizeRowsToContents()
-        table.resizeColumnsToContents()
-        hdr = table.horizontalHeader()
         hdr_h = hdr.height() if not hdr.isHidden() else 0
         rows_h = sum(table.rowHeight(i) for i in range(table.rowCount()))
         frame = table.frameWidth() * 2
         table.setFixedHeight(hdr_h + rows_h + frame + 2)
-        # Prefer content width so wide migration tables scroll with the page.
-        col_w = hdr.length() if hdr.length() > 0 else sum(
-            table.columnWidth(i) for i in range(table.columnCount()))
-        min_w = col_w + frame + 4
-        if table.verticalHeader().isVisible():
-            min_w += table.verticalHeader().width()
-        table.setMinimumWidth(min_w)
+        # Only the Migrations table is content-width + h-scroll; every other
+        # compare table uses Stretch-mode columns that already divide the full
+        # page width, so it must NOT get a min-width wider than the page.
+        if table.property("compareWideTable"):
+            table.resizeColumnsToContents()
+            col_w = hdr.length() if hdr.length() > 0 else sum(
+                table.columnWidth(i) for i in range(table.columnCount()))
+            table.setMinimumWidth(col_w + frame + 4)
+        else:
+            table.setMinimumWidth(0)
 
     @staticmethod
     def _fill_table(

@@ -9361,9 +9361,12 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
     lines: List[str] = []
     notable_fn = globals().get("compare_notable_changes")
     formula = globals().get("COMPARE_DELTA_FORMULA")
+    glossary = globals().get("COMPARE_METRIC_GLOSSARY")
     if notable_fn is None or formula is None:
         formula = globals().get("COMPARE_DELTA_FORMULA")
         notable_fn = globals().get("compare_notable_changes")
+    if glossary is None:
+        glossary = globals().get("COMPARE_METRIC_GLOSSARY")
     notable = notable_fn(tables or {}, 8, name_a, name_b) or {}
     ident = notable.get("identity") or {}
     ident_a = ident.get("a") or {}
@@ -9371,6 +9374,7 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
     lines.append(f"Baseline A (Trace A),{_compare_csv_cell(ident_a.get('file') or name_a)}")
     lines.append(f"Candidate B (Trace B),{_compare_csv_cell(ident_b.get('file') or name_b)}")
     lines.append(f"Delta formula,{_compare_csv_cell(formula)}")
+    lines.append(f"Metric glossary,{_compare_csv_cell(glossary)}")
     lines.append(f"Cursor scope per tab,{'yes' if scope_enabled else 'no'}")
     lines.append("")
     lines.append("Overview")
@@ -9601,6 +9605,17 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
     scope_note = (
         "Each side uses its own tab cursor range (C1–Cn) when 2+ cursors are placed."
         if scope_enabled else "Full trace span on each side.")
+
+    _g = globals()
+    _note_sigma = _g.get("COMPARE_NOTE_SIGMA")
+    _note_mig = _g.get("COMPARE_NOTE_MIGRATION")
+    _note_sti = _g.get("COMPARE_NOTE_STI")
+    _note_p99 = _g.get("COMPARE_NOTE_P99")
+    if None in (_note_sigma, _note_mig, _note_sti, _note_p99):
+        _note_sigma = globals().get("COMPARE_NOTE_SIGMA")
+        _note_mig = globals().get("COMPARE_NOTE_MIGRATION")
+        _note_sti = globals().get("COMPARE_NOTE_STI")
+        _note_p99 = globals().get("COMPARE_NOTE_P99")
 
     def _esc(v: object) -> str:
         return html.escape(str(v), quote=True)
@@ -9853,7 +9868,7 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
               tables.get("summary", []), "No data",
               lead_html=sum_lead,
               note="KPI-style totals and rates. Δ = Baseline A − Candidate B "
-                   "(positive means A is numerically larger)."),
+                   "(positive means A is numerically larger). " + _note_sigma),
         _card("Top Tasks",
               ["Task", "CPU A (%)", "CPU B (%)", "Δ (pp)"],
               tables.get("top", []), "No user tasks in either trace",
@@ -9872,7 +9887,7 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
               tables.get("migrations", []), "No migrated tasks in either trace",
               lead_html=mig_lead,
               note="Migration count, rate, dwell, ping-pong, and primary-core "
-                   "affinity for tasks that ran on more than one core."),
+                   "affinity for tasks that ran on more than one core. " + _note_mig),
         _card("Execution Time",
               ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B", "Δ max"],
               tables.get("execution", []), "No execution samples in either trace",
@@ -9894,13 +9909,14 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
         _card("Sync Objects",
               ["Metric", "Baseline A", "Candidate B", "Δ"],
               tables.get("sync", []), "No sync instrumentation in either trace",
-              note="Mutex, semaphore, and queue STI instrumentation totals."),
+              note="Mutex, semaphore, and queue STI instrumentation totals. "
+                   + _note_sti),
         _card("Response P99",
               ["Task", "P99 A", "P99 B", "Δ"],
               tables.get("response", []), "No response samples in either trace",
               lead_html=p99_lead,
               note="Heuristic ready→completion P99 from adjacent slices "
-                   "(not an explicit BTF release/completion pair)."),
+                   "(not an explicit BTF release/completion pair). " + _note_p99),
         _card("Mutex Blocking",
               ["Task", "Total A", "Total B", "Δ"],
               tables.get("mutex_block", []), "No mutex blocking in either trace",
@@ -48960,14 +48976,26 @@ _SUMMARY_STRIP_LABELS = (
     "Blocking time /s",
     "Deadline misses",
 )
+# Notation that genuinely applies to every compare table.
 COMPARE_DELTA_FORMULA = (
     "Δ = Baseline A − Candidate B (positive means A is larger). "
     "— = unavailable (not zero). "
-    "pp = percentage points. "
+    "pp = percentage points."
+)
+# Metric shorthand — each term only appears in one or two tables, so it is
+# folded into those tables' own notes rather than the all-tables banner.
+COMPARE_METRIC_GLOSSARY = (
     "STI = software trace item; σ = util stddev; "
     "Dwell = avg on-CPU slice; Ping = A↔B core ping-pong; "
     "P99 = 99th percentile; /tick = per TICK period."
 )
+# Per-table note fragments (appended to the relevant _card notes).
+COMPARE_NOTE_SIGMA = "σ = util stddev."
+COMPARE_NOTE_MIGRATION = (
+    "Dwell = avg on-CPU slice; Ping = A↔B core ping-pong; /tick = per TICK period."
+)
+COMPARE_NOTE_STI = "STI = software trace item."
+COMPARE_NOTE_P99 = "P99 = 99th percentile."
 COMPARE_NOTABLE_REL = 0.05
 COMPARE_NOTABLE_TIME_NS = 50_000
 COMPARE_NOTABLE_COUNT = 2
@@ -56915,7 +56943,6 @@ class _TraceCompareDialog(QDialog):
         for tbl in self._all_tables:
             tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             tbl.verticalHeader().setVisible(False)
-            tbl.horizontalHeader().setStretchLastSection(True)
             tbl.setStyleSheet(
                 "QHeaderView::section { position: sticky; }"
             )
@@ -56924,6 +56951,15 @@ class _TraceCompareDialog(QDialog):
             hdr.setSortIndicatorShown(True)
             tbl.setSortingEnabled(True)
             tbl.setWordWrap(False)
+            if tbl is self._mig_table:
+                # Up to 16 columns — size to content and scroll horizontally.
+                tbl.setProperty("compareWideTable", True)
+                hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+                hdr.setStretchLastSection(True)
+            else:
+                # Few columns — divide the full width so the table always
+                # reaches the right edge (no dead column strip).
+                hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
         self._chart_tables = (
             self._summary_table,
@@ -56970,15 +57006,34 @@ class _TraceCompareDialog(QDialog):
         self._mig_sort.currentIndexChanged.connect(self._apply_mig_view)
         self._mig_family.currentIndexChanged.connect(self._apply_mig_view)
 
+        # Per-tab metric-shorthand notes (each term belongs to just this
+        # table, so it lives here rather than in the all-tabs formula banner).
+        def _pagenote(text: str) -> QLabel:
+            lb = QLabel(text)
+            lb.setWordWrap(True)
+            lb.setStyleSheet(
+                "QLabel { color: #8a8a8a; font-size: 11px; padding: 2px 8px 0; }")
+            return lb
+
         # Chart + table pages share one scroll viewport (Web compare-table-wrap parity).
         summary_page = self._make_compare_scroll_page(
-            self._decision, self._summary_chart, self._summary_table)
+            self._decision, self._summary_chart, self._summary_table,
+            _pagenote(COMPARE_NOTE_SIGMA))
         core_page = self._make_compare_scroll_page(
             self._core_util_chart, self._core_util_table)
         resp_page = self._make_compare_scroll_page(
-            self._response_chart, self._response_table)
+            self._response_chart, self._response_table,
+            _pagenote(COMPARE_NOTE_P99))
         mig_page = self._make_compare_scroll_page(
-            mig_ctrl_w, self._mig_heatmap, self._mig_table)
+            mig_ctrl_w, self._mig_heatmap, self._mig_table,
+            _pagenote(COMPARE_NOTE_MIGRATION))
+        # Sync keeps its own scrollbars; just append the STI note below it.
+        sync_page = QWidget()
+        _sync_v = QVBoxLayout(sync_page)
+        _sync_v.setContentsMargins(0, 4, 0, 0)
+        _sync_v.setSpacing(4)
+        _sync_v.addWidget(self._sync_table, 1)
+        _sync_v.addWidget(_pagenote(COMPARE_NOTE_STI))
 
         self._pages.addTab(summary_page, "Summary")
         self._pages.addTab(self._top_table, "Top Tasks")
@@ -56988,7 +57043,7 @@ class _TraceCompareDialog(QDialog):
         self._pages.addTab(self._block_table, "Blocking")
         self._pages.addTab(self._inter_table, "Inter-Arrival")
         self._pages.addTab(self._preempt_table, "Preemption")
-        self._pages.addTab(self._sync_table, "Sync")
+        self._pages.addTab(sync_page, "Sync")
         self._pages.addTab(resp_page, "Response")
         self._pages.addTab(self._mutex_table, "Mutex")
         self._pages.addTab(self._trends_table, "Trends")
@@ -57123,7 +57178,7 @@ class _TraceCompareDialog(QDialog):
 
     @staticmethod
     def _make_compare_scroll_page(*widgets) -> QScrollArea:
-        """One scroll viewport for chart + table (Web compare-table-wrap parity)."""
+        """One scroll viewport for chart + table so the two scroll together."""
         body = QWidget()
         lay = QVBoxLayout(body)
         lay.setContentsMargins(0, 4, 0, 0)
@@ -57148,25 +57203,26 @@ class _TraceCompareDialog(QDialog):
 
     @staticmethod
     def _fit_compare_embedded_table(table: QTableWidget) -> None:
-        """Size an embedded compare table to its content height (and min width)."""
+        """Size an embedded compare table to its content height."""
+        hdr = table.horizontalHeader()
         if table.rowCount() <= 0:
-            hdr_h = table.horizontalHeader().height()
-            table.setFixedHeight(max(hdr_h + 8, 28))
+            table.setFixedHeight(max(hdr.height() + 8, 28))
             return
         table.resizeRowsToContents()
-        table.resizeColumnsToContents()
-        hdr = table.horizontalHeader()
         hdr_h = hdr.height() if not hdr.isHidden() else 0
         rows_h = sum(table.rowHeight(i) for i in range(table.rowCount()))
         frame = table.frameWidth() * 2
         table.setFixedHeight(hdr_h + rows_h + frame + 2)
-        # Prefer content width so wide migration tables scroll with the page.
-        col_w = hdr.length() if hdr.length() > 0 else sum(
-            table.columnWidth(i) for i in range(table.columnCount()))
-        min_w = col_w + frame + 4
-        if table.verticalHeader().isVisible():
-            min_w += table.verticalHeader().width()
-        table.setMinimumWidth(min_w)
+        # Only the Migrations table is content-width + h-scroll; every other
+        # compare table uses Stretch-mode columns that already divide the full
+        # page width, so it must NOT get a min-width wider than the page.
+        if table.property("compareWideTable"):
+            table.resizeColumnsToContents()
+            col_w = hdr.length() if hdr.length() > 0 else sum(
+                table.columnWidth(i) for i in range(table.columnCount()))
+            table.setMinimumWidth(col_w + frame + 4)
+        else:
+            table.setMinimumWidth(0)
 
     @staticmethod
     def _fill_table(

@@ -18,6 +18,11 @@ import {
   compareNotableChanges,
   compareSummaryDecisionHtml,
   COMPARE_DELTA_FORMULA,
+  COMPARE_METRIC_GLOSSARY,
+  COMPARE_NOTE_SIGMA,
+  COMPARE_NOTE_MIGRATION,
+  COMPARE_NOTE_STI,
+  COMPARE_NOTE_P99,
   compareCoreUtilChartRows,
   compareCoreUtilChartSvg,
   compareP99DeltaChartRows,
@@ -991,6 +996,7 @@ export function buildCompareCsv(nameA, nameB, scopeEnabled, tables = {}) {
   lines.push(`Baseline A (Trace A),${csvCell(identA.file || nameA)}`)
   lines.push(`Candidate B (Trace B),${csvCell(identB.file || nameB)}`)
   lines.push(`Delta formula,${csvCell(COMPARE_DELTA_FORMULA)}`)
+  lines.push(`Metric glossary,${csvCell(COMPARE_METRIC_GLOSSARY)}`)
   lines.push(`Cursor scope per tab,${scopeEnabled ? 'yes' : 'no'}`)
   lines.push('')
   lines.push('Overview')
@@ -1477,7 +1483,7 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
     '<!--TOC-->',
     overviewHtml,
     _cardHtml('Summary', '<th>Metric</th><th>Baseline A</th><th>Candidate B</th><th>Δ</th>', summaryHtml, sumLead,
-      'KPI-style totals and rates. Δ = Baseline A − Candidate B (positive means A is numerically larger).'),
+      `KPI-style totals and rates. Δ = Baseline A − Candidate B (positive means A is numerically larger). ${COMPARE_NOTE_SIGMA}`),
     _cardHtml('Top Tasks', '<th>Task</th><th>CPU A (%)</th><th>CPU B (%)</th><th>Δ (pp)</th>', topHtml, '',
       'Highest CPU consumers excluding IDLE/TICK. Δ is percentage points (pp).'),
     _cardHtml('Core Utilisation', '<th>Core</th><th>Util A (%)</th><th>Util B (%)</th><th>Δ (pp)</th>', coreHtml, utilLead,
@@ -1485,7 +1491,7 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
     _cardHtml('Core Migrations',
       '<th>Task</th><th>Migr A</th><th>Migr B</th><th>Δ</th><th>Rate A</th><th>Rate B</th><th>Rate Δ</th><th>Dwell A</th><th>Dwell B</th><th>Dwell Δ</th><th>Ping A</th><th>Ping B</th><th>Cores A</th><th>Cores B</th><th>Primary A</th><th>Primary B</th>',
       migHtml, migLead,
-      'Migration count, rate, dwell, ping-pong, and primary-core affinity for tasks that ran on more than one core.'),
+      `Migration count, rate, dwell, ping-pong, and primary-core affinity for tasks that ran on more than one core. ${COMPARE_NOTE_MIGRATION}`),
     _cardHtml('Execution Time',
       '<th>Task</th><th>Runs A</th><th>Runs B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ max</th>',
       execHtml, '',
@@ -1503,9 +1509,9 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
       preHtml, '',
       'Victim/preemptor pairs for off-CPU gaps on the same core.'),
     _cardHtml('Sync Objects', '<th>Metric</th><th>Baseline A</th><th>Candidate B</th><th>Δ</th>', syncHtml, '',
-      'Mutex, semaphore, and queue STI instrumentation totals.'),
+      `Mutex, semaphore, and queue STI instrumentation totals. ${COMPARE_NOTE_STI}`),
     _cardHtml('Response P99', '<th>Task</th><th>P99 A</th><th>P99 B</th><th>Δ</th>', responseHtml, p99Lead,
-      'Heuristic ready→completion P99 from adjacent slices (not an explicit BTF release/completion pair).'),
+      `Heuristic ready→completion P99 from adjacent slices (not an explicit BTF release/completion pair). ${COMPARE_NOTE_P99}`),
     _cardHtml('Mutex Blocking', '<th>Task</th><th>Total A</th><th>Total B</th><th>Δ</th>', mutexHtml, '',
       'Total mutex-attributed blocking time per task.'),
     _cardHtml('Shared Patterns',

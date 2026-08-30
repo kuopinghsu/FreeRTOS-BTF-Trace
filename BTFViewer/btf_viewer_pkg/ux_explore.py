@@ -127,14 +127,26 @@ _SUMMARY_STRIP_LABELS = (
     "Blocking time /s",
     "Deadline misses",
 )
+# Notation that genuinely applies to every compare table.
 COMPARE_DELTA_FORMULA = (
     "Δ = Baseline A − Candidate B (positive means A is larger). "
     "— = unavailable (not zero). "
-    "pp = percentage points. "
+    "pp = percentage points."
+)
+# Metric shorthand — each term only appears in one or two tables, so it is
+# folded into those tables' own notes rather than the all-tables banner.
+COMPARE_METRIC_GLOSSARY = (
     "STI = software trace item; σ = util stddev; "
     "Dwell = avg on-CPU slice; Ping = A↔B core ping-pong; "
     "P99 = 99th percentile; /tick = per TICK period."
 )
+# Per-table note fragments (appended to the relevant _card notes).
+COMPARE_NOTE_SIGMA = "σ = util stddev."
+COMPARE_NOTE_MIGRATION = (
+    "Dwell = avg on-CPU slice; Ping = A↔B core ping-pong; /tick = per TICK period."
+)
+COMPARE_NOTE_STI = "STI = software trace item."
+COMPARE_NOTE_P99 = "P99 = 99th percentile."
 COMPARE_NOTABLE_REL = 0.05
 COMPARE_NOTABLE_TIME_NS = 50_000
 COMPARE_NOTABLE_COUNT = 2
