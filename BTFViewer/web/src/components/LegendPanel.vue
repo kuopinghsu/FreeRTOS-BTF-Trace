@@ -4,13 +4,16 @@
       <div class="legend-title">
         Tasks
       </div>
-      <input
-        :value="taskFilterText"
-        class="legend-search"
-        type="search"
-        placeholder="Filter tasks…"
-        @input="onSearchInput"
-      >
+      <div class="legend-search-wrap">
+        <svg class="legend-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+        <input
+          :value="taskFilterText"
+          class="legend-search"
+          type="search"
+          placeholder="Filter tasks…"
+          @input="onSearchInput"
+        >
+      </div>
       <div
         v-if="taskFilterSet"
         class="heatmap-filter-banner"
@@ -62,6 +65,10 @@
     >
       <div class="legend-cores-header">
         <span class="legend-title legend-cores-title">Cores</span>
+        <span
+          v-if="coreFilterKeys?.length"
+          class="legend-cores-count"
+        >{{ coreFilterKeys.length }} of {{ trace.coreNames.length }}</span>
         <button
           v-if="coreFilterKeys?.length"
           type="button"
@@ -72,20 +79,12 @@
           Clear
         </button>
       </div>
-      <div class="legend-cores-scroll">
-        <label
-          v-for="coreName in trace.coreNames"
-          :key="coreName"
-          class="migrated-filter core-filter-item"
-        >
-          <input
-            :checked="coreChecked(coreName)"
-            type="checkbox"
-            @change="onCoreCheckChange(coreName, $event.target.checked)"
-          >
-          {{ coreName }}
-        </label>
-      </div>
+      <p class="legend-cores-hint">Shared filter — also scopes the timeline &amp; Cursors panel.</p>
+      <CoreFilterChips
+        :core-names="trace.coreNames"
+        :core-filter-keys="coreFilterKeys"
+        @core-filter-change="emit('coreFilterChange', $event)"
+      />
     </div>
   </div>
 </template>
@@ -95,7 +94,8 @@
 import { computed } from 'vue'
 import { taskColor, taskDisplayName } from '../utils/colors.js'
 import { isMigratedTask } from '../utils/migrationAnalysis.js'
-import { mergeKeyMatchesTextFilter, normalizeTaskFilterText } from '../utils/taskFilter.js'
+import { mergeKeyMatchesTextFilter, normalizeTaskFilterText, taskRunsOnSelectedCore } from '../utils/taskFilter.js'
+import CoreFilterChips from './CoreFilterChips.vue'
 
 const props = defineProps({
   trace:        { type: Object, default: null },
@@ -140,24 +140,20 @@ const visibleTasks = computed(() => {
   return tasks.filter((mk) => {
     if (taskFilterSet.value && !taskFilterSet.value.has(mk)) return false
     if (props.migratedOnlyFilter && props.trace && !isMigratedTask(props.trace, mk)) return false
+    // Core Filter — mirror the timeline task panel: hide tasks with no segment
+    // on any selected core.
+    if (!taskRunsOnSelectedCore(props.trace, mk, props.coreFilterKeys)) return false
     if (!q) return true
     return mergeKeyMatchesTextFilter(props.trace, mk, q)
   })
 })
 
-/** Core Filter (Core View only) — narrows Scope to a subset of cores, mirrors the Task list. */
-const showCoreFilter = computed(() => props.viewMode === 'core' && (props.trace?.coreNames?.length ?? 0) > 1)
-
-function coreChecked(coreName) {
-  return !props.coreFilterKeys?.length || props.coreFilterKeys.includes(coreName)
-}
-
-function onCoreCheckChange(coreName, checked) {
-  const all = props.trace?.coreNames || []
-  const cur = props.coreFilterKeys?.length ? props.coreFilterKeys : [...all]
-  const next = checked ? [...new Set([...cur, coreName])] : cur.filter(c => c !== coreName)
-  emit('coreFilterChange', next)
-}
+/**
+ * Core Filter — a subset of cores shared across the app (`timelineOptions.coreFilterKeys`):
+ * in Core View it narrows the timeline layout; it also scopes the Cursors panel's
+ * "Task at cursor" list and the status-bar Core chip. Shown for any multi-core trace.
+ */
+const showCoreFilter = computed(() => (props.trace?.coreNames?.length ?? 0) > 1)
 </script>
 
 <style scoped>
@@ -166,8 +162,9 @@ function onCoreCheckChange(coreName, checked) {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  padding: 8px;
-  font-size: 11px;
+  padding: var(--sp-3, 12px);
+  font-family: var(--font-ui, inherit);
+  font-size: var(--type-meta, 11px);
 }
 
 .legend-header {
@@ -175,39 +172,55 @@ function onCoreCheckChange(coreName, checked) {
 }
 
 .legend-title {
-  font-size: 10px;
+  font-family: var(--font-ui, inherit);
+  font-size: var(--type-meta, 11px);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.01em;
+  color: var(--fg);
+  margin-bottom: var(--sp-2, 8px);
+}
+
+.legend-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: var(--sp-2, 8px);
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--rp-r-1, 6px);
+  background: var(--rp-surface-2, var(--tb-bg));
+}
+.legend-search-wrap:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--rp-sel-bg, rgba(79, 139, 255, 0.15));
+}
+.legend-search-icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
   color: var(--fg-dim);
-  margin-bottom: 6px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--border);
 }
 
 .legend-search {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   box-sizing: border-box;
-  margin-bottom: 8px;
-  padding: 4px 6px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: var(--tb-bg);
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
   color: var(--fg);
-  font: inherit;
+  font-family: var(--font-ui, inherit);
+  font-size: var(--type-meta, 11px);
 }
-
-.legend-search:focus {
-  outline: none;
-  border-color: rgba(91, 155, 213, 0.65);
-}
+.legend-search:focus { outline: none; }
+.legend-search::-webkit-search-cancel-button { display: none; }
 
 .migrated-filter {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 8px;
-  font-size: 11px;
+  margin-bottom: var(--sp-2, 8px);
+  font-size: var(--type-meta, 11px);
   color: var(--fg);
   cursor: pointer;
 }
@@ -217,30 +230,36 @@ function onCoreCheckChange(coreName, checked) {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 8px;
-  padding: 5px 8px;
-  border-radius: 4px;
-  background: rgba(91, 155, 213, 0.12);
-  border: 1px solid rgba(91, 155, 213, 0.35);
+  margin-bottom: var(--sp-2, 8px);
+  padding: 4px 6px 4px 9px;
+  border-radius: 999px;
+  background: var(--rp-sel-bg, rgba(79, 139, 255, 0.12));
+  border: 1px solid var(--rp-accent-line, rgba(79, 139, 255, 0.35));
+  font-family: var(--font-mono, monospace);
   font-size: 10px;
-  color: var(--fg);
+  color: var(--accent);
 }
 
 .heatmap-filter-clear {
   flex-shrink: 0;
   border: 1px solid var(--border);
-  background: var(--tb-bg);
-  color: var(--fg);
-  border-radius: 3px;
-  padding: 1px 6px;
+  background: transparent;
+  color: var(--fg-dim);
+  border-radius: var(--rp-r-1, 6px);
+  padding: 2px 8px;
+  font-family: var(--font-ui, inherit);
   font-size: 10px;
   cursor: pointer;
+}
+.heatmap-filter-clear:hover {
+  color: var(--fg);
+  border-color: var(--rp-accent-line, var(--accent));
 }
 
 .legend-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 .legend-list-scroll {
@@ -251,63 +270,73 @@ function onCoreCheckChange(coreName, checked) {
 
 .legend-cores {
   flex-shrink: 0;
-  margin-top: 12px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-}
-
-.legend-cores-scroll {
-  max-height: 160px;
-  overflow-y: auto;
+  margin-top: var(--sp-3, 12px);
+  padding-top: var(--sp-2, 8px);
+  border-top: 1px solid var(--rp-border-soft, var(--border));
 }
 
 .legend-cores-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
+  gap: 6px;
+  margin-bottom: 2px;
 }
 
 .legend-cores-title {
   margin-bottom: 0;
-  padding-bottom: 0;
-  border-bottom: none;
+  flex: 1;
 }
 
-.core-filter-item {
-  margin-bottom: 4px;
+.legend-cores-count {
+  font-family: var(--font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 9px;
+  color: var(--fg-dim);
+  background: var(--rp-surface-3, var(--tb-btn-hover));
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.legend-cores-hint {
+  margin: 0 0 6px;
+  font-size: 9px;
+  color: var(--fg-dim);
+  opacity: 0.75;
+  line-height: 1.3;
 }
 
 .legend-item {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 4px;
-  border-radius: 3px;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: var(--rp-r-1, 6px);
   cursor: pointer;
   transition: background 0.08s;
 }
 .legend-item:hover {
-  background: var(--tb-btn-hover);
+  background: var(--rp-hover-bg, var(--tb-btn-hover));
 }
 .legend-item.highlighted {
-  background: rgba(255, 255, 180, 0.12);
+  background: var(--rp-hover-bg, rgba(255, 255, 180, 0.12));
 }
 .legend-item.selected {
-  background: rgba(255, 255, 180, 0.12);
-  border: 1px solid var(--accent);
-  padding: 1px 3px;
+  background: var(--rp-sel-bg, rgba(255, 255, 180, 0.12));
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 .legend-item.filtered {
-  border-left: 2px solid #5B9BD5;
-  padding-left: 2px;
+  box-shadow: inset 3px 0 0 var(--cmp-b, #5B9BD5);
+}
+.legend-item.selected.filtered {
+  box-shadow: inset 3px 0 0 var(--accent), inset 6px 0 0 var(--cmp-b, #5B9BD5);
 }
 
 .swatch {
   width: 10px;
   height: 10px;
-  border-radius: 2px;
+  border-radius: 3px;
   flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2);
 }
 
 .name {

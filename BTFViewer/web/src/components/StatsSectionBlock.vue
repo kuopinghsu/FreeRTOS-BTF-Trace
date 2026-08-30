@@ -1,5 +1,6 @@
 <template>
   <div
+    v-show="!categoryHidden"
     class="stats-section-block"
     :class="{ 'drag-over': dragOver, dragging: dragging }"
     :style="{ order }"
@@ -15,13 +16,23 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed, inject, unref } from 'vue'
+import { statsSectionCategory } from '../utils/statsPins.js'
 
 const MIME = 'application/x-btf-stats-section'
 
 const props = defineProps({
   sectionId: { type: String, required: true },
   order: { type: Number, default: 0 },
+})
+
+/** Set of category codes hidden by the Statistics category filter. */
+const hiddenCategories = inject('statsHiddenCategories', null)
+const categoryHidden = computed(() => {
+  const set = unref(hiddenCategories)
+  if (!set || typeof set.has !== 'function') return false
+  const cat = statsSectionCategory(props.sectionId)
+  return !!cat && set.has(cat)
 })
 
 const emit = defineEmits(['reorder'])

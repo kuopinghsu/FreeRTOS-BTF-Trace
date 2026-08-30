@@ -2642,7 +2642,7 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
   if (!isVert) {
     if (!isCore) {
       for (const mk of tr.tasks) {
-        if (!taskPassesRowFilter(tr, mk, migratedOnly, taskFilterKeys, taskFilterText)) continue
+        if (!taskPassesRowFilter(tr, mk, migratedOnly, taskFilterKeys, taskFilterText, coreFilterKeys)) continue
         const repr = tr.taskRepr.get(mk)
         const segs = tr.segLodUltraByMergeKey.get(mk) || tr.segByMergeKey.get(mk) || []
         if (!segs.length) continue

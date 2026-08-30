@@ -75,6 +75,35 @@
       >Filtered: {{ activeFilterLabel }}</span>
     </div>
 
+    <!-- Investigation-category filter -->
+    <div
+      v-if="trace"
+      class="stats-cat-filter"
+      role="group"
+      aria-label="Filter statistics by investigation category"
+    >
+      <button
+        v-for="pill in categoryPills"
+        :key="pill.cat"
+        type="button"
+        class="stats-cat-pill"
+        :class="[pill.cls, { on: pill.on }]"
+        :aria-pressed="pill.on"
+        :title="pill.on ? `Hide ${pill.label} sections` : `Show ${pill.label} sections`"
+        @click="toggleStatsCategory(pill.cat)"
+      >
+        {{ pill.label }}
+        <span class="stats-cat-count">{{ pill.count }}</span>
+      </button>
+      <button
+        v-if="categoryFilterActive"
+        type="button"
+        class="stats-cat-clear"
+        title="Show every category"
+        @click="showAllStatsCategories"
+      >Show all</button>
+    </div>
+
     <div
       v-if="trace && symptomGuideOpen"
       class="stats-symptom-dropdown"
@@ -4359,7 +4388,7 @@ import {
 import LoadBalanceGauge from './LoadBalanceGauge.vue'
 import StatsSectionHeader from './StatsSectionHeader.vue'
 import StatsSectionBlock from './StatsSectionBlock.vue'
-import { normalizeStatsPins, normalizeStatsSectionOrder, moveStatsSection, toggleStatsPin, isDefaultStatsSectionOrder, defaultStatsSectionOrder, mergeSectionCollapsed } from '../utils/statsPins.js'
+import { normalizeStatsPins, normalizeStatsSectionOrder, moveStatsSection, toggleStatsPin, isDefaultStatsSectionOrder, defaultStatsSectionOrder, mergeSectionCollapsed, STATS_SECTION_CATEGORIES, STATS_SECTION_CATEGORY } from '../utils/statsPins.js'
 import { buildHistogramModel, histogramBarTooltip } from '../utils/histogramModel.js'
 import { plotTabsForKind, resolvePlotTabSwitch } from '../utils/plotTabs.js'
 import { classifyLoadBalance, loadBalanceGaugeImgHtml, loadBalanceMetrics } from '../utils/loadBalanceGauge.js'
@@ -5158,6 +5187,46 @@ const scopeChipLabel = computed(() => {
 const filterChipLabel = computed(() => props.activeFilterLabel || '')
 provide('statsHeaderScopeLabel', scopeChipLabel)
 provide('statsHeaderFilterLabel', filterChipLabel)
+
+/* ---- Investigation-category filter (OVERVIEW / TRIAGE / TIMING / …) ---- */
+const CATEGORY_META = Object.freeze({
+  OVERVIEW: { label: 'Overview', cls: 'cat-overview' },
+  TRIAGE: { label: 'Triage', cls: 'cat-triage' },
+  TIMING: { label: 'Timing', cls: 'cat-timing' },
+  SCHED: { label: 'Scheduling', cls: 'cat-sched' },
+  SYNC: { label: 'Sync', cls: 'cat-sync' },
+  DETAIL: { label: 'Detail', cls: 'cat-detail' },
+})
+/** Categories currently hidden by the filter pills (empty = show all). */
+const statsHiddenCategories = ref(new Set())
+provide('statsHiddenCategories', statsHiddenCategories)
+
+const categoryPills = computed(() => {
+  const counts = {}
+  for (const cat of Object.values(STATS_SECTION_CATEGORY)) {
+    counts[cat] = (counts[cat] || 0) + 1
+  }
+  return STATS_SECTION_CATEGORIES
+    .filter(cat => counts[cat])
+    .map(cat => ({
+      cat,
+      label: CATEGORY_META[cat]?.label || cat,
+      cls: CATEGORY_META[cat]?.cls || 'cat-detail',
+      count: counts[cat],
+      on: !statsHiddenCategories.value.has(cat),
+    }))
+})
+const categoryFilterActive = computed(() => statsHiddenCategories.value.size > 0)
+
+function toggleStatsCategory(cat) {
+  const next = new Set(statsHiddenCategories.value)
+  if (next.has(cat)) next.delete(cat)
+  else next.add(cat)
+  statsHiddenCategories.value = next
+}
+function showAllStatsCategories() {
+  statsHiddenCategories.value = new Set()
+}
 
 const timeScale = computed(() => props.trace?.timeScale || 'ns')
 const uxEvents = computed(() => {
@@ -8171,6 +8240,65 @@ defineExpose({
   overflow-y: auto;
   padding: 8px 10px;
 }
+
+/* ---- Investigation-category filter pills ---- */
+.stats-cat-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.stats-cat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-dim);
+  font-family: var(--font-ui, inherit);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.stats-cat-pill:hover { color: var(--fg); }
+
+.stats-cat-count {
+  font-family: var(--font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 9px;
+  opacity: 0.75;
+}
+
+.stats-cat-pill.on.cat-overview { background: var(--badge-overview-bg); color: var(--badge-overview-fg); border-color: var(--badge-overview-border); }
+.stats-cat-pill.on.cat-triage   { background: var(--badge-triage-bg);   color: var(--badge-triage-fg);   border-color: var(--badge-triage-border); }
+.stats-cat-pill.on.cat-timing   { background: var(--badge-timing-bg);   color: var(--badge-timing-fg);   border-color: var(--badge-timing-border); }
+.stats-cat-pill.on.cat-sched    { background: var(--badge-sched-bg);    color: var(--badge-sched-fg);    border-color: var(--badge-sched-border); }
+.stats-cat-pill.on.cat-sync     { background: var(--badge-sync-bg);     color: var(--badge-sync-fg);     border-color: var(--badge-sync-border); }
+.stats-cat-pill.on.cat-detail   { background: var(--badge-detail-bg);   color: var(--badge-detail-fg);   border-color: var(--badge-detail-border); }
+
+.stats-cat-pill:not(.on) {
+  opacity: 0.6;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.stats-cat-clear {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--font-ui, inherit);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 3px 4px;
+}
+.stats-cat-clear:hover { text-decoration: underline; }
 
 .stats-scroll-tail {
   flex-shrink: 0;

@@ -1864,9 +1864,10 @@ function onScoreBaseline() {
   max-width: 98vw;
   max-height: 94vh;
   background: var(--panel-bg);
+  color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2421,19 +2422,14 @@ function onScoreBaseline() {
 .compare-legend-a .compare-legend-dot { background: var(--cmp-a, #4F8BFF); }
 .compare-legend-b .compare-legend-dot { background: var(--cmp-b, #E0A34E); }
 
+/* Primary = outlined accent, matching .analysis-btn-primary. */
 .compare-primary-btn {
-  background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent);
   font-weight: 600;
 }
-.compare-primary-btn:hover {
-  filter: brightness(1.06);
-  background: var(--accent);
-  color: #fff;
-}
 .compare-export-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 .compare-ai-hint {
@@ -2514,7 +2510,7 @@ function onScoreBaseline() {
   justify-content: space-between;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
+  padding: 10px 16px 12px;
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -2524,25 +2520,29 @@ function onScoreBaseline() {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
+/* Footer buttons — same as the Analysis Findings dialog's .analysis-btn. */
 .compare-export-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   appearance: none;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   background: transparent;
-  color: var(--fg-dim);
-  font-size: 11px;
-  padding: 5px 10px;
+  color: var(--fg);
+  font-size: 12px;
+  padding: 8px 16px;
+  min-height: 34px;
+  white-space: nowrap;
+  flex: 0 0 auto;
   cursor: pointer;
 }
 
-.compare-export-btn:hover {
+.compare-export-btn:hover:not(:disabled) {
   background: var(--tb-btn-hover);
-  color: var(--fg);
 }
 
 .export-icon {

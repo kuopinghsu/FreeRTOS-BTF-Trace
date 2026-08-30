@@ -220,13 +220,13 @@ function onDragEnd() {
   gap: 6px;
   width: 100%;
   box-sizing: border-box;
+  font-family: var(--font-ui, inherit);
   font-size: var(--type-meta, 11px);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--fg-dim, #9e9e9e);
+  letter-spacing: 0.02em;
+  color: var(--fg, #e0e0e0);
   margin-bottom: 4px;
-  min-height: 22px;
+  min-height: 24px;
 }
 
 .stats-section-title.collapsible {
@@ -234,8 +234,8 @@ function onDragEnd() {
   user-select: none;
 }
 
-.stats-section-title.collapsible:hover {
-  color: var(--fg, #e0e0e0);
+.stats-section-title.collapsible:hover .stats-section-label {
+  color: var(--accent, #4F8BFF);
 }
 
 .stats-drag-handle {
@@ -312,13 +312,14 @@ function onDragEnd() {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  font-size: 9px;
+  font-family: var(--font-ui, inherit);
+  font-size: 9.5px;
   font-weight: 700;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.5px;
   text-transform: uppercase;
-  border-radius: 8px;
-  padding: 2px 6px;
-  min-height: 14px;
+  border-radius: 999px;
+  padding: 2px 7px;
+  min-height: 15px;
   line-height: 1.2;
   /* Soft tinted round-rect — lockstep with Desktop category badges. */
   color: var(--badge-detail-fg, #c0c4c9);

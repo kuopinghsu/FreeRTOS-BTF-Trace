@@ -50,7 +50,8 @@
       v-else
       class="cursor-empty-msg"
     >
-      Click timeline to place cursors
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/><circle cx="12" cy="12" r="3"/></svg>
+      <span>Click the timeline to place a cursor. Add a second to measure a range.</span>
     </div>
 
     <div
@@ -60,6 +61,15 @@
       <div class="comparison-title">
         Task at cursor
       </div>
+      <CoreFilterChips
+        v-if="(trace?.coreNames?.length ?? 0) > 1"
+        class="cursor-core-filter"
+        label="Cores"
+        label-title="Same Core Filter as the Legend — also filters the timeline"
+        :core-names="trace.coreNames"
+        :core-filter-keys="coreFilterKeys"
+        @core-filter-change="emit('coreFilterChange', $event)"
+      />
       <table class="comparison-table">
         <thead>
           <tr>
@@ -105,21 +115,26 @@ import { computed } from 'vue'
 import { formatTime } from '../utils/timeFormat.js'
 import { CURSOR_COLORS } from '../utils/cursorColors.js'
 import { cursorComparisonRows, cursorSortedPlaced, cursorDeltaSegments } from '../utils/cursorAnalysis.js'
+import CoreFilterChips from './CoreFilterChips.vue'
 
 const props = defineProps({
   cursors:      { type: Array, required: true },
   trace:        { type: Object, default: null },
   timeScale:    { type: String, default: 'ns' },
   timeDecimals: { type: Number, default: 3 },
+  /** Shared with the Legend Core Filter (App `timelineOptions.coreFilterKeys`).
+   *  null / empty = every core. */
+  coreFilterKeys: { type: Array, default: null },
 })
 
-const emit = defineEmits(['deleteCursor', 'jumpToCursor', 'clearAll'])
+const emit = defineEmits(['deleteCursor', 'jumpToCursor', 'clearAll', 'coreFilterChange'])
 
 const validCursors = computed(() => props.cursors.filter(c => c !== null))
 
 const comparisonRows = computed(() => {
   if (!props.trace) return []
-  return cursorComparisonRows(props.trace, props.cursors, props.timeScale)
+  return cursorComparisonRows(
+    props.trace, props.cursors, props.timeScale, props.coreFilterKeys)
 })
 
 const deltas = computed(() => {
@@ -132,34 +147,48 @@ const deltas = computed(() => {
 .cursor-panel {
   display: flex;
   flex-direction: column;
-  font-size: 11px;
-  font-family: monospace;
+  font-family: var(--font-ui, inherit);
+  font-size: var(--type-meta, 11px);
 }
 
 .cursor-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 8px 12px 4px;
+  gap: 1px;
+  padding: var(--sp-2, 8px);
 }
 
 .cursor-empty-msg {
-  padding: 8px 12px 4px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: var(--sp-3, 12px);
   color: var(--fg-dim);
-  font-size: 11px;
-  font-family: monospace;
+  font-size: var(--type-meta, 11px);
+  line-height: 1.45;
+}
+.cursor-empty-msg svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  opacity: 0.7;
 }
 
 .cursor-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: var(--rp-r-1, 6px);
+}
+.cursor-row:hover {
+  background: var(--rp-hover-bg, rgba(127,127,127,0.08));
 }
 
 .cursor-time.clickable {
   cursor: pointer;
-  text-decoration: underline dotted;
-  opacity: 0.85;
+  opacity: 0.9;
 }
 .cursor-time.clickable:hover {
   opacity: 1;
@@ -174,12 +203,13 @@ const deltas = computed(() => {
   color: var(--fg-dim);
   font-size: 14px;
   line-height: 1;
-  padding: 0 3px;
-  border-radius: 3px;
-  opacity: 0.6;
+  padding: 0 4px;
+  border-radius: 4px;
+  opacity: 0;
 }
+.cursor-row:hover .cursor-del { opacity: 0.7; }
 .cursor-del:hover {
-  color: #FF5555;
+  color: var(--semantic-error, #FF5555);
   opacity: 1;
   background: var(--tb-btn-hover);
 }
@@ -187,8 +217,8 @@ const deltas = computed(() => {
 .cursor-badge {
   color: #000;
   padding: 1px 6px;
-  border-radius: 3px;
-  font-weight: bold;
+  border-radius: 4px;
+  font-weight: 700;
   font-size: 10px;
   min-width: 24px;
   text-align: center;
@@ -196,6 +226,8 @@ const deltas = computed(() => {
 
 .cursor-time {
   color: var(--fg);
+  font-family: var(--font-mono, monospace);
+  font-variant-numeric: tabular-nums;
 }
 
 .cursor-empty {
@@ -214,6 +246,9 @@ const deltas = computed(() => {
   align-items: center;
   gap: 6px;
   color: var(--fg-dim);
+  font-family: var(--font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  padding: 2px 6px;
 }
 
 .delta-label {
@@ -242,6 +277,11 @@ const deltas = computed(() => {
   margin-bottom: 4px;
   padding: 0 4px;
 }
+
+.cursor-core-filter {
+  padding: 2px 4px 6px;
+}
+
 .comparison-table {
   width: 100%;
   border-collapse: collapse;
@@ -272,22 +312,23 @@ const deltas = computed(() => {
 }
 
 .cursor-actions {
-  padding: 6px 12px 8px;
-  border-top: 1px solid var(--border);
-  margin-top: 2px;
+  padding: var(--sp-2, 8px);
+  border-top: 1px solid var(--rp-border-soft, var(--border));
 }
 
 .action-btn {
-  font-size: 11px;
-  padding: 2px 8px;
+  font-family: var(--font-ui, inherit);
+  font-size: var(--type-meta, 11px);
+  padding: 4px 10px;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--rp-r-1, 6px);
   background: transparent;
   color: var(--fg);
   cursor: pointer;
 }
 .action-btn:hover:not(:disabled) {
   background: var(--tb-btn-hover);
+  border-color: var(--rp-accent-line, var(--accent));
 }
 .action-btn:disabled {
   color: var(--fg-dim);

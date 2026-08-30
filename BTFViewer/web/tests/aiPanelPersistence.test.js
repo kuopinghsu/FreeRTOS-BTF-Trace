@@ -227,7 +227,7 @@ describe('right-panel tab visibility (desktop parity)', () => {
   it('gates Marks and Find tabs on settings flags and labels Marks Marks', () => {
     assert.match(app, /v-if="appSettings.showMarks"/)
     assert.match(app, /v-if="appSettings.showFind"/)
-    assert.match(app, /> Marks </)
+    assert.match(app, />\s*Marks\s*</)
     assert.doesNotMatch(app, /Cursor \/ Bookmark/)
   })
 

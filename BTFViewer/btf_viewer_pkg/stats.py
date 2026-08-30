@@ -3333,15 +3333,41 @@ class _TraceCompareDialog(QDialog):
         self.setWindowTitle("Trace Compare")
         self.setModal(True)
         self.resize(980, 560)
+        # Shared type + palette with the Analysis Findings dialog.
+        _ui_pt = max(6, min(int(UI_FONT_SIZE), 24))
+        _ui_font = _application_ui_font(_ui_pt)
+        _ui_fs = _ui_font_stylesheet_size(_ui_pt)
+        self.setFont(_ui_font)
+        try:
+            _dark = QApplication.instance().palette().color(
+                QPalette.Window).lightness() < 128
+        except Exception:
+            _dark = True
+        _ink = "#c5d0dc" if _dark else "#1E1E1E"
+        _muted = "#9a9a9a" if _dark else "#555555"
+        _brd = "#3a4658" if _dark else "#C0C0C0"
+        # Flat outlined footer buttons — 1:1 with .analysis-btn / -primary.
+        self._compare_btn_css = (
+            f"QPushButton, QToolButton {{ border: 1px solid {_brd};"
+            f" background: transparent; color: {_ink}; border-radius: 6px;"
+            f" padding: 4px 12px; font-size: {_ui_fs}; min-height: 22px; }}"
+            "QPushButton:hover, QToolButton:hover {"
+            " background: rgba(127, 127, 127, 0.12); }"
+            f"QPushButton:disabled, QToolButton:disabled {{ color: {_muted}; }}"
+        )
+        self._compare_btn_primary_css = self._compare_btn_css + (
+            "QPushButton { border-color: #4a9eff; color: #4a9eff;"
+            " font-weight: 600; }"
+        )
         lay = QVBoxLayout(self)
         row = QHBoxLayout()
         lab_a = QLabel("Trace A (Baseline):")
-        lab_a.setStyleSheet("QLabel { color: #2a6fb2; }")
+        lab_a.setStyleSheet("QLabel { color: #4F8BFF; }")
         row.addWidget(lab_a)
         self._combo_a = QComboBox()
         row.addWidget(self._combo_a, 1)
         lab_b = QLabel("Trace B (Candidate):")
-        lab_b.setStyleSheet("QLabel { color: #6b4ea8; }")
+        lab_b.setStyleSheet("QLabel { color: #E0A34E; }")
         row.addWidget(lab_b)
         self._combo_b = QComboBox()
         row.addWidget(self._combo_b, 1)
@@ -3591,6 +3617,7 @@ class _TraceCompareDialog(QDialog):
         ))
         self._btn_export_html.setToolTip(
             "Export compare report as HTML (tables include Search / Show all / CSV)")
+        self._btn_export_html.setStyleSheet(self._compare_btn_css)
         self._btn_export_html.clicked.connect(self._export_html)
         foot_row.addWidget(self._btn_export_html)
 
@@ -3599,32 +3626,31 @@ class _TraceCompareDialog(QDialog):
         self._btn_save_baseline = QPushButton("Save baseline")
         self._btn_save_baseline.setToolTip(
             "Store Trace A per-task metrics as the regression baseline")
+        self._btn_save_baseline.setStyleSheet(self._compare_btn_css)
         self._btn_save_baseline.clicked.connect(self._save_as_baseline)
         foot_row.addWidget(self._btn_save_baseline)
 
         self._btn_score_baseline = QPushButton("Score vs baseline")
         self._btn_score_baseline.setToolTip(
             "Z-score Trace A metrics against the stored baseline")
+        self._btn_score_baseline.setStyleSheet(self._compare_btn_css)
         self._btn_score_baseline.clicked.connect(self._score_vs_baseline)
         foot_row.addWidget(self._btn_score_baseline)
 
         self._validate_btn = QPushButton("Validate experiment…")
+        self._validate_btn.setStyleSheet(self._compare_btn_css)
         self._validate_btn.clicked.connect(self._validate_with_ai)
         foot_row.addWidget(self._validate_btn)
 
         self._ai_btn = QPushButton("Ask AI about this")
         self._ai_btn.setDefault(True)
-        self._ai_btn.setStyleSheet(
-            "QPushButton { background: #4F8BFF; color: #fff; font-weight: 600;"
-            " border: 1px solid #4F8BFF; border-radius: 4px; padding: 4px 12px; }"
-            " QPushButton:disabled { background: transparent; color: #888;"
-            " border-color: #555; }"
-        )
+        self._ai_btn.setStyleSheet(self._compare_btn_primary_css)
         self._ai_btn.clicked.connect(self._query_with_ai)
         foot_row.addWidget(self._ai_btn)
 
         self._btn_close = QPushButton("Close")
         self._btn_close.setToolTip("Close")
+        self._btn_close.setStyleSheet(self._compare_btn_css)
         self._btn_close.clicked.connect(self.reject)
         foot_row.addWidget(self._btn_close)
 

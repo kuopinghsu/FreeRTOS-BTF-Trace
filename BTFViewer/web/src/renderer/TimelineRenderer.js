@@ -355,7 +355,7 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
   if (viewMode === 'task') {
     let stripeIdx = 0
     for (const mk of trace.tasks) {
-      if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys, taskFilterText)) continue
+      if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys, taskFilterText, coreFilterKeys)) continue
       const repr = trace.taskRepr.get(mk)
       const label = taskDisplayName(repr || mk) + taskPriorityLabelSuffix(trace, mk)
       const color = taskColor(mk, repr)
@@ -540,7 +540,7 @@ function resolveRows(trace, options, viewMode, expanded, showSti, stiExpanded, m
   const taskFilterKeys = options.taskFilterKeys || null
   const taskFilterText = options.taskFilterText || ''
   if (options.rowLayout?.rows) return options.rowLayout.rows
-  return buildRowLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter, taskFilterKeys, taskFilterText).rows
+  return buildRowLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter, taskFilterKeys, taskFilterText, options.coreFilterKeys || null).rows
 }
 
 /** Cached scroll-independent column list from options, or build on demand. */
@@ -548,7 +548,7 @@ function resolveCols(trace, options, viewMode, expanded, showSti, stiExpanded, m
   const taskFilterKeys = options.taskFilterKeys || null
   const taskFilterText = options.taskFilterText || ''
   if (options.columnLayout?.cols) return options.columnLayout.cols
-  return buildColumnLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter, taskFilterKeys, taskFilterText).cols
+  return buildColumnLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter, taskFilterKeys, taskFilterText, options.coreFilterKeys || null).cols
 }
 
 // ---- Main render function --------------------------------------------------
@@ -612,7 +612,7 @@ export function render(ctx, trace, viewport, options = {}) {
   // ---- Row layout (scroll offset applied inline — no per-frame row copy) ----
   const rowLayoutBase = options.rowLayout
   const rows = rowLayoutBase?.rows
-    ?? buildRowLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter, options.taskFilterKeys || null, taskFilterText).rows
+    ?? buildRowLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter, options.taskFilterKeys || null, taskFilterText, options.coreFilterKeys || null).rows
   const yOff = RULER_H - scrollY
   const nTasks = trace.tasks?.length ?? rows.length
   const rowBuffer = orthRowBuffer(nTasks, lodFast)
@@ -2242,7 +2242,7 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
   if (viewMode === 'task') {
     let stripeIdx = 0
     for (const mk of trace.tasks) {
-      if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys, taskFilterText)) continue
+      if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys, taskFilterText, coreFilterKeys)) continue
       const repr = trace.taskRepr.get(mk)
       const label = taskDisplayName(repr || mk) + taskPriorityLabelSuffix(trace, mk)
       const color = taskColor(mk, repr)
@@ -3161,7 +3161,7 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
   const colLayoutBase = options.columnLayout
   const { cols } = colLayoutBase
     ? offsetColumnLayout(colLayoutBase, scrollX)
-    : buildColumnLayout(trace, viewMode, expanded, scrollX, showSti, stiExpanded, migratedOnlyFilter, options.taskFilterKeys || null, taskFilterText)
+    : buildColumnLayout(trace, viewMode, expanded, scrollX, showSti, stiExpanded, migratedOnlyFilter, options.taskFilterKeys || null, taskFilterText, options.coreFilterKeys || null)
 
   // Grid lines (horizontal, optional)
   if (showGrid && !paintFast) {

@@ -50,9 +50,46 @@ export function stiChannelMatchesTextFilter(trace, channel, q) {
   return false
 }
 
-/** Row visibility: heatmap task filter overrides migrated-only filter; text filter is ANDed. */
+/**
+ * Merge key → Set of core names its segments ever run on. Memoised on the trace.
+ * Built by inverting `trace.coreTaskOrder` (coreName → rawTask[]).
+ */
+export function taskCoreSets(trace) {
+  if (!trace) return new Map()
+  if (trace._taskCoreSets) return trace._taskCoreSets
+  const map = new Map()
+  const coreTaskOrder = trace.coreTaskOrder instanceof Map ? trace.coreTaskOrder : new Map()
+  for (const [coreName, order] of coreTaskOrder) {
+    for (const raw of order || []) {
+      const mk = taskMergeKey(raw)
+      let s = map.get(mk)
+      if (!s) { s = new Set(); map.set(mk, s) }
+      s.add(coreName)
+    }
+  }
+  try { Object.defineProperty(trace, '_taskCoreSets', { value: map, enumerable: false }) }
+  catch { trace._taskCoreSets = map }
+  return map
+}
+
+/** True when `mk` has at least one segment on a core in `coreFilterKeys`. */
+export function taskRunsOnSelectedCore(trace, mk, coreFilterKeys) {
+  if (!coreFilterKeys?.length) return true
+  const total = trace?.coreNames?.length ?? 0
+  if (coreFilterKeys.length >= total) return true
+  const cset = coreFilterKeys instanceof Set ? coreFilterKeys : new Set(coreFilterKeys)
+  const taskCores = taskCoreSets(trace).get(mk)
+  if (!taskCores) return true // unknown → don't hide
+  for (const c of taskCores) if (cset.has(c)) return true
+  return false
+}
+
+/**
+ * Row visibility: heatmap task filter overrides migrated-only filter; text filter
+ * and the Core Filter are ANDed on top.
+ */
 export function taskPassesRowFilter(
-  trace, mk, migratedOnlyFilter, taskFilterKeys, taskFilterText = '',
+  trace, mk, migratedOnlyFilter, taskFilterKeys, taskFilterText = '', coreFilterKeys = null,
 ) {
   if (taskFilterKeys?.length) {
     const set = taskFilterKeys instanceof Set ? taskFilterKeys : new Set(taskFilterKeys)
@@ -60,6 +97,7 @@ export function taskPassesRowFilter(
   } else if (migratedOnlyFilter) {
     if (!isMigratedTask(trace, mk)) return false
   }
+  if (!taskRunsOnSelectedCore(trace, mk, coreFilterKeys)) return false
   const q = normalizeTaskFilterText(taskFilterText)
   if (!q) return true
   return mergeKeyMatchesTextFilter(trace, mk, q)
@@ -113,10 +151,10 @@ export function filteredCoreViewTasks(
   return out
 }
 
-/** Merge keys visible in task view after active filters. */
+/** Merge keys visible in task view after active filters (incl. the Core Filter). */
 export function filteredTaskViewTasks(
-  trace, migratedOnlyFilter, taskFilterKeys, taskFilterText = '',
+  trace, migratedOnlyFilter, taskFilterKeys, taskFilterText = '', coreFilterKeys = null,
 ) {
   return (trace?.tasks || []).filter(mk =>
-    taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys, taskFilterText))
+    taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys, taskFilterText, coreFilterKeys))
 }

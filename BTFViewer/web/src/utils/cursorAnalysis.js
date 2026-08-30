@@ -52,9 +52,16 @@ export function cursorBarModel(cursors, timeScale = 'ns', decimals = 3) {
   }
 }
 
-/** Tasks running at timestamp ns (comma-separated display names). */
-export function tasksAtTime(trace, ns) {
+/**
+ * Tasks running at timestamp ns (comma-separated display names).
+ * @param {string[]|Set<string>|null} [coreFilter] when non-empty, only count
+ *   segments whose `.core` is in this set (shared with the Legend Core Filter).
+ */
+export function tasksAtTime(trace, ns, coreFilter = null) {
   if (!trace) return '—'
+  const coreSet = coreFilter && (coreFilter.size || coreFilter.length)
+    ? (coreFilter instanceof Set ? coreFilter : new Set(coreFilter))
+    : null
   const names = []
   const seen = new Set()
   for (const [mk, segs] of trace.segByMergeKey || []) {
@@ -62,6 +69,7 @@ export function tasksAtTime(trace, ns) {
     const starts = segs.map(s => s.start)
     const pos = bisectRight(starts, ns) - 1
     if (pos >= 0 && segs[pos].end >= ns) {
+      if (coreSet && !coreSet.has(segs[pos].core)) continue
       const raw = taskReprGet(trace, mk) || mk
       const disp = taskDisplayName(raw)
       if (!seen.has(disp)) {
@@ -73,8 +81,11 @@ export function tasksAtTime(trace, ns) {
   return names.length ? names.join(', ') : '—'
 }
 
-/** Rows for cursor comparison table. */
-export function cursorComparisonRows(trace, cursors, timeScale = 'ns') {
+/**
+ * Rows for cursor comparison table.
+ * @param {string[]|Set<string>|null} [coreFilter] passed through to tasksAtTime.
+ */
+export function cursorComparisonRows(trace, cursors, timeScale = 'ns', coreFilter = null) {
   const placed = cursors
     .map((t, i) => ({ t, i }))
     .filter(x => x.t != null)
@@ -89,7 +100,7 @@ export function cursorComparisonRows(trace, cursors, timeScale = 'ns') {
       idx: i,
       label: `C${row + 1}`,
       time: formatTime(t, timeScale),
-      task: tasksAtTime(trace, t),
+      task: tasksAtTime(trace, t, coreFilter),
       delta,
       ns: t,
     }

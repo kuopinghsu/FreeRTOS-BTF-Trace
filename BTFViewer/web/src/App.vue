@@ -476,82 +476,50 @@
         class="right-panel"
         :style="{ width: rightPanelWidth + 'px' }"
       >
-        <div class="panel-tabs" role="tablist" aria-label="Right panel tabs">
-          <button
-            v-if="appSettings.showStats"
-            class="panel-tab"
-            data-demo-target="stats_tab"
-            :class="{ active: rightPanelTab === 'stats' }"
-            role="tab"
-            :aria-selected="rightPanelTab === 'stats'"
-            @click="rightPanelTab = 'stats'"
-          >
-            Statistics
-          </button>
-          <button
-            v-if="appSettings.showMarks"
-            class="panel-tab"
-            :class="{ active: rightPanelTab === 'marks' }"
-            role="tab"
-            :aria-selected="rightPanelTab === 'marks'"
-            @click="rightPanelTab = 'marks'"
-          >
-            Marks
-          </button>
-          <button
-            v-if="appSettings.showFind"
-            class="panel-tab"
-            data-demo-target="find_tab"
-            :class="{ active: rightPanelTab === 'find' }"
-            role="tab"
-            :aria-selected="rightPanelTab === 'find'"
-            @click="rightPanelTab = 'find'"
-          >
-            Find
-          </button>
-          <button
-            v-if="appSettings.showLegend"
-            class="panel-tab"
-            :class="{ active: rightPanelTab === 'legend' }"
-            role="tab"
-            :aria-selected="rightPanelTab === 'legend'"
-            @click="rightPanelTab = 'legend'"
-          >
-            Legend
-          </button>
-          <button
-            v-if="aiTabVisible"
-            class="panel-tab"
-            data-demo-target="ai_tab"
-            :class="{ active: rightPanelTab === 'ai' }"
-            role="tab"
-            :aria-selected="rightPanelTab === 'ai'"
-            @click="rightPanelTab = 'ai'"
-          >
-            AI
-          </button>
-        </div>
+        <div class="rp-main">
+          <div class="rp-page-header">
+            <h2 class="rp-title">{{ rightPanelTitle }}</h2>
+          </div>
 
         <div class="panel-page-wrap">
           <div v-if="rightPanelTab === 'marks'" class="panel-page panel-page-marks">
-            <div class="panel-section">
-              <div class="panel-header">
-                Cursors
+            <div class="rp-card" :class="{ collapsed: !marksSectionOpen.cursors }">
+              <button
+                type="button"
+                class="rp-card-head"
+                :aria-expanded="marksSectionOpen.cursors"
+                @click="toggleMarksSection('cursors')"
+              >
+                <svg class="rp-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                <span class="rp-card-title">Cursors</span>
+                <span v-if="placedCursorTimes.length" class="rp-card-count">{{ placedCursorTimes.length }}</span>
+              </button>
+              <div v-show="marksSectionOpen.cursors" class="rp-card-body">
+                <CursorPanel
+                  :cursors="cursors"
+                  :trace="trace"
+                  :time-scale="trace.timeScale"
+                  :core-filter-keys="timelineOptions.coreFilterKeys"
+                  @delete-cursor="onDeleteCursor"
+                  @jump-to-cursor="timelinePanelRef?.jumpToNs($event)"
+                  @clear-all="clearCursors"
+                  @core-filter-change="onCoreFilterChange"
+                />
               </div>
-              <CursorPanel
-                :cursors="cursors"
-                :trace="trace"
-                :time-scale="trace.timeScale"
-                @delete-cursor="onDeleteCursor"
-                @jump-to-cursor="timelinePanelRef?.jumpToNs($event)"
-                @clear-all="clearCursors"
-              />
             </div>
 
-            <div class="panel-section">
-              <div class="panel-header">
-                Cursor Range
-              </div>
+            <div class="rp-card" :class="{ collapsed: !marksSectionOpen.range }">
+              <button
+                type="button"
+                class="rp-card-head"
+                :aria-expanded="marksSectionOpen.range"
+                @click="toggleMarksSection('range')"
+              >
+                <svg class="rp-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                <span class="rp-card-title">Cursor Range</span>
+                <span v-if="cursorRangeStats" class="rp-card-count">A&ndash;B</span>
+              </button>
+              <div v-show="marksSectionOpen.range" class="rp-card-body">
               <div
                 v-if="cursorRangeStats"
                 class="cursor-range-body"
@@ -599,27 +567,37 @@
               >
                 Place 2+ cursors to measure range
               </div>
+              </div>
             </div>
 
-            <div class="panel-section">
-              <div class="panel-header">
-                Marks
+            <div class="rp-card" :class="{ collapsed: !marksSectionOpen.marks }">
+              <button
+                type="button"
+                class="rp-card-head"
+                :aria-expanded="marksSectionOpen.marks"
+                @click="toggleMarksSection('marks')"
+              >
+                <svg class="rp-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                <span class="rp-card-title">Marks</span>
+                <span v-if="marks.length" class="rp-card-count">{{ marks.length }}</span>
+              </button>
+              <div v-show="marksSectionOpen.marks" class="rp-card-body">
+                <MarksPanel
+                  ref="marksPanelRef"
+                  :marks="marks"
+                  :time-scale="trace.timeScale"
+                  :time-decimals="appSettings.timeDecimals"
+                  @delete-mark="onDeleteMark"
+                  @jump-to="onJumpToMark"
+                  @update-label="onUpdateMarkLabel"
+                  @import-marks="onImportMarks"
+                  @clear-bookmarks="onClearBookmarks"
+                  @clear-annotations="onClearAnnotations"
+                  @export-session="onExportSession"
+                  @import-session="onImportSession"
+                  @select-mark="timelineOptions.selectedMarkId = $event"
+                />
               </div>
-              <MarksPanel
-                ref="marksPanelRef"
-                :marks="marks"
-                :time-scale="trace.timeScale"
-                :time-decimals="appSettings.timeDecimals"
-                @delete-mark="onDeleteMark"
-                @jump-to="onJumpToMark"
-                @update-label="onUpdateMarkLabel"
-                @import-marks="onImportMarks"
-                @clear-bookmarks="onClearBookmarks"
-                @clear-annotations="onClearAnnotations"
-                @export-session="onExportSession"
-                @import-session="onImportSession"
-                @select-mark="timelineOptions.selectedMarkId = $event"
-              />
             </div>
           </div>
 
@@ -646,10 +624,6 @@
             class="panel-page panel-page-legend"
           >
             <div class="panel-section flex-fill">
-              <div class="panel-header">
-                Legend
-                <span class="task-count">({{ trace.tasks.length }})</span>
-              </div>
               <LegendPanel
                 :trace="trace"
                 :highlight-key="timelineOptions.highlightKey"
@@ -753,6 +727,74 @@
             </div>
           </div>
         </div>
+        </div><!-- /rp-main -->
+
+        <nav class="icon-rail" role="tablist" aria-label="Right panel navigation">
+          <button
+            v-if="appSettings.showStats"
+            class="rail-btn"
+            data-demo-target="stats_tab"
+            :class="{ active: rightPanelTab === 'stats' }"
+            role="tab"
+            :aria-selected="rightPanelTab === 'stats'"
+            title="Statistics"
+            @click="rightPanelTab = 'stats'"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+            <span class="rail-tip">Statistics</span>
+          </button>
+          <button
+            v-if="appSettings.showMarks"
+            class="rail-btn"
+            :class="{ active: rightPanelTab === 'marks' }"
+            role="tab"
+            :aria-selected="rightPanelTab === 'marks'"
+            title="Marks"
+            @click="rightPanelTab = 'marks'"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
+            <span class="rail-tip">Marks</span>
+          </button>
+          <button
+            v-if="appSettings.showFind"
+            class="rail-btn"
+            data-demo-target="find_tab"
+            :class="{ active: rightPanelTab === 'find' }"
+            role="tab"
+            :aria-selected="rightPanelTab === 'find'"
+            title="Find"
+            @click="rightPanelTab = 'find'"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            <span class="rail-tip">Find</span>
+          </button>
+          <button
+            v-if="appSettings.showLegend"
+            class="rail-btn"
+            :class="{ active: rightPanelTab === 'legend' }"
+            role="tab"
+            :aria-selected="rightPanelTab === 'legend'"
+            title="Legend"
+            @click="rightPanelTab = 'legend'"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="5" cy="6" r="1.6"/><circle cx="5" cy="12" r="1.6"/><circle cx="5" cy="18" r="1.6"/><path d="M10 6h11M10 12h11M10 18h11"/></svg>
+            <span class="rail-tip">Legend</span>
+          </button>
+          <span v-if="aiTabVisible" class="rail-sep" aria-hidden="true"></span>
+          <button
+            v-if="aiTabVisible"
+            class="rail-btn"
+            data-demo-target="ai_tab"
+            :class="{ active: rightPanelTab === 'ai' }"
+            role="tab"
+            :aria-selected="rightPanelTab === 'ai'"
+            title="AI Assistant"
+            @click="rightPanelTab = 'ai'"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3l1.8 4.9L19 9.6l-4.2 2.4L14 17l-2-3.6L8 17l.2-5-4.2-2.4 5.2-1.7z"/></svg>
+            <span class="rail-tip">AI</span>
+          </button>
+        </nav>
       </div>
     </div>
 
@@ -1354,7 +1396,7 @@ import DomSelect from './components/DomSelect.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
 import { zoomStatusFromViewport } from './utils/timeFormat.js'
 import { taskDisplayName, taskMergeKey, setColorblindMode, setDarkMode } from './utils/colors.js'
-import { taskPassesRowFilter, rawTaskNameMatchesTextFilter, normalizeTaskFilterText, coreFilterActive } from './utils/taskFilter.js'
+import { taskPassesRowFilter, rawTaskNameMatchesTextFilter, normalizeTaskFilterText, coreFilterActive, taskRunsOnSelectedCore } from './utils/taskFilter.js'
 import {
   AI_TOOL_ADD_ANNOTATION,
   AI_TOOL_ANALYZE_TRACES,
@@ -1705,6 +1747,31 @@ const rightPanelTab = ref('stats')
 const aiTabVisible = computed(
   () => appSettings.showAi !== false && appSettings.aiEnabled !== false,
 )
+
+/** Collapsible-card open state for the Marks tab (Cursors / Range / Marks). */
+const marksSectionOpen = ref({ cursors: true, range: true, marks: true })
+function toggleMarksSection(key) {
+  marksSectionOpen.value[key] = !marksSectionOpen.value[key]
+}
+
+/** Title shown in the redesigned per-panel header row (icon-rail navigation). */
+/** Task count shown in the Legend title — reflects the Core Filter when active. */
+const legendTaskCount = computed(() => {
+  const tasks = trace.value?.tasks || []
+  const keys = timelineOptions.coreFilterKeys
+  if (!coreFilterActive(keys, trace.value)) return tasks.length
+  return tasks.reduce((n, mk) => n + (taskRunsOnSelectedCore(trace.value, mk, keys) ? 1 : 0), 0)
+})
+
+const rightPanelTitle = computed(() => {
+  switch (rightPanelTab.value) {
+    case 'marks': return 'Marks'
+    case 'find': return 'Find'
+    case 'legend': return `Legend (${legendTaskCount.value})`
+    case 'ai': return 'AI Assistant'
+    default: return 'Statistics'
+  }
+})
 
 function firstVisibleRightPanelTab(s = appSettings) {
   if (s.showStats) return 'stats'
@@ -2790,8 +2857,9 @@ function cycleHighlightedSegment(forward) {
   navSegs = navSegs.filter(s => taskPassesRowFilter(
     trace.value, taskMergeKey(s.task),
     timelineOptions.migratedOnlyFilter, timelineOptions.taskFilterKeys,
-    timelineOptions.taskFilterText,
+    timelineOptions.taskFilterText, timelineOptions.coreFilterKeys,
   ))
+  // Core view shows one row per core, so also drop segments on hidden cores.
   if (isCoreView && timelineOptions.coreFilterKeys?.length) {
     const coreSet = new Set(timelineOptions.coreFilterKeys)
     navSegs = navSegs.filter(s => coreSet.has(s.core))
@@ -6428,6 +6496,25 @@ watch(
   --badge-scope-fg: #9EC5E8;
   --badge-scope-bg: #283A47;
   --badge-scope-border: #3A6A8A;
+
+  /* ---- Right-panel redesign: spacing / radius / surface scale ---- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --rp-r-1: 6px;
+  --rp-r-2: 9px;
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* Surfaces derived from the existing panel tokens, biased toward the accent. */
+  --rp-surface:   var(--panel-bg);
+  --rp-surface-2: color-mix(in srgb, var(--panel-bg) 78%, var(--bg));
+  --rp-surface-3: color-mix(in srgb, var(--accent) 9%, var(--panel-bg));
+  --rp-border-soft: color-mix(in srgb, var(--border) 55%, transparent);
+  --rp-sel-bg:    color-mix(in srgb, var(--accent) 12%, transparent);
+  --rp-hover-bg:  color-mix(in srgb, var(--accent) 7%, transparent);
+  --rp-accent-line: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .app:not(.dark),
@@ -7300,7 +7387,7 @@ body.row-resizing * {
 
 .right-panel {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   width: 220px;
   flex-shrink: 0;
   border-left: 1px solid var(--border);
@@ -7308,40 +7395,125 @@ body.row-resizing * {
   overflow: hidden;
 }
 
-.panel-tabs {
+/* Left column: per-panel header + the active page. */
+.rp-main {
   display: flex;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--panel-bg) 86%, var(--tb-bg));
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.rp-page-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 34px;
+  padding: 0 var(--sp-3);
+  border-bottom: 1px solid var(--rp-border-soft);
+  background: var(--rp-surface-2);
   flex-shrink: 0;
 }
 
-.panel-tab {
+.rp-title {
   flex: 1;
+  min-width: 0;
+  font-family: var(--font-ui);
+  font-size: var(--type-section);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Right edge: vertical icon rail (replaces the old text tab strip). */
+.icon-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 44px;
+  flex-shrink: 0;
+  padding: var(--sp-2) 0;
+  border-left: 1px solid var(--rp-border-soft);
+  background: var(--rp-surface-2);
+}
+
+.rail-btn {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
   border: 0;
-  border-right: 1px solid var(--border);
+  border-radius: var(--rp-r-1);
   background: transparent;
   color: var(--fg-dim);
-  font-size: 11px;
-  font-family: monospace;
-  font-weight: 500;
-  padding: 3px 8px;
-  min-height: 24px;
   cursor: pointer;
 }
 
-.panel-tab:last-child {
-  border-right: 0;
+.rail-btn svg {
+  width: 18px;
+  height: 18px;
 }
 
-.panel-tab:hover {
-  background: var(--tb-btn-hover);
+.rail-btn:hover {
+  background: var(--rp-surface-3);
   color: var(--fg);
 }
 
-.panel-tab.active {
-  color: var(--fg);
-  background: var(--panel-bg);
-  box-shadow: inset 0 -2px 0 var(--accent);
+.rail-btn.active {
+  background: var(--rp-sel-bg);
+  color: var(--accent);
+}
+
+.rail-btn.active::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.rail-btn .rail-tip {
+  position: absolute;
+  right: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%) translateX(4px);
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: var(--fg);
+  color: var(--bg);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  z-index: 5;
+}
+
+.rail-btn:hover .rail-tip,
+.rail-btn:focus-visible .rail-tip {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+.rail-sep {
+  width: 22px;
+  height: 1px;
+  background: var(--border);
+  margin: var(--sp-2) 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail-btn .rail-tip { transition: none; }
 }
 
 .panel-page-wrap {
@@ -7358,6 +7530,72 @@ body.row-resizing * {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+/* Marks tab: scrollable stack of collapsible cards. */
+.panel-page-marks {
+  overflow-y: auto;
+  padding: var(--sp-3);
+  gap: var(--sp-3);
+}
+
+/* ---- Right-panel collapsible section card ---- */
+.rp-card {
+  border: 1px solid var(--rp-border-soft);
+  border-radius: var(--rp-r-2);
+  background: var(--rp-surface-2);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.rp-card-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: var(--type-meta, 11px);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  text-align: left;
+}
+
+.rp-card-head:hover { background: var(--rp-hover-bg); }
+
+.rp-chevron {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  color: var(--fg-dim);
+  transition: transform 0.14s ease;
+}
+
+.rp-card.collapsed .rp-chevron { transform: rotate(-90deg); }
+
+.rp-card-title { flex: 1; min-width: 0; }
+
+.rp-card-count {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--fg-dim);
+  background: var(--rp-surface-3);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.rp-card-body {
+  border-top: 1px solid var(--rp-border-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-chevron { transition: none; }
 }
 
 .panel-resizer {
@@ -7400,13 +7638,13 @@ body.col-resizing * {
 }
 
 .panel-header {
-  font-size: 10px;
+  font-family: var(--font-ui);
+  font-size: var(--type-meta, 11px);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--fg-dim);
-  padding: 6px 10px 4px;
-  border-bottom: 1px solid var(--border);
+  letter-spacing: 0.01em;
+  color: var(--fg);
+  padding: var(--sp-2) var(--sp-3) var(--sp-1);
+  border-bottom: 1px solid var(--rp-border-soft);
   flex-shrink: 0;
 }
 

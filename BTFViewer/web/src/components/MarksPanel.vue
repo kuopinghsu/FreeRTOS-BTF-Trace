@@ -2,9 +2,6 @@
   <div class="marks-panel">
     <!-- Marks section -->
     <div class="marks-section">
-      <div class="marks-section-header">
-        <span>Marks ({{ marks.length }})</span>
-      </div>
       <div
         v-if="marks.length > 0"
         ref="listEl"
@@ -54,7 +51,8 @@
         v-else
         class="mark-empty"
       >
-        Right-click timeline to add · Double-click or press B / A
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
+        <span>No marks yet. Right-click the timeline to add one, or press <b>B</b> / <b>A</b>.</span>
       </div>
     </div>
 
@@ -293,7 +291,8 @@ defineExpose({ focusAnnotation })
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  font-size: 11px;
+  font-family: var(--font-ui, inherit);
+  font-size: var(--type-meta, 11px);
 }
 
 .marks-section {
@@ -303,30 +302,22 @@ defineExpose({ focusAnnotation })
   overflow: hidden;
 }
 
-.marks-section-header {
-  display: flex;
-  align-items: center;
-  padding: 4px 10px;
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--fg-dim);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
 .mark-list {
   overflow-y: auto;
   flex: 1;
-  padding: 4px 0;
+  padding: var(--sp-2, 8px);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .mark-item {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: var(--rp-r-1, 6px);
   cursor: pointer;
   transition: background 0.08s;
 }
@@ -352,16 +343,18 @@ defineExpose({ focusAnnotation })
   background: #FF8C00;
 }
 .mark-item:hover {
-  background: var(--tb-btn-hover);
+  background: var(--rp-hover-bg, var(--tb-btn-hover));
 }
 .mark-item.selected {
-  background: var(--tb-btn-active);
+  background: var(--rp-sel-bg, var(--tb-btn-active));
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .mark-time {
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
+  font-variant-numeric: tabular-nums;
   font-size: 10px;
-  min-width: 70px;
+  min-width: 68px;
   flex-shrink: 0;
 }
 
@@ -369,15 +362,15 @@ defineExpose({ focusAnnotation })
   flex: 1;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 3px;
+  border-radius: 4px;
   color: var(--fg);
-  font-size: 11px;
-  font-family: monospace;
-  padding: 1px 4px;
+  font-size: var(--type-meta, 11px);
+  font-family: var(--font-ui, inherit);
+  padding: 2px 5px;
   min-width: 0;
 }
 .mark-label:hover {
-  border-color: var(--border);
+  border-color: var(--rp-border-soft, var(--border));
 }
 .mark-label:focus {
   border-color: var(--accent);
@@ -391,48 +384,69 @@ defineExpose({ focusAnnotation })
   cursor: pointer;
   color: var(--fg-dim);
   padding: 1px 4px;
-  border-radius: 3px;
-  font-size: 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1;
   flex-shrink: 0;
+  opacity: 0;
 }
+.mark-item:hover .mark-btn,
+.mark-item.selected .mark-btn { opacity: 0.7; }
 .mark-btn:hover {
   background: var(--tb-btn-hover);
   color: var(--fg);
+  opacity: 1;
 }
 .mark-del:hover {
-  color: #FF5555;
+  color: var(--semantic-error, #FF5555);
 }
 
 .mark-empty {
-  padding: 8px 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: var(--sp-3, 12px);
   color: var(--fg-dim);
-  opacity: 0.6;
-  font-size: 10px;
-  font-style: italic;
+  font-size: var(--type-meta, 11px);
+  line-height: 1.45;
 }
+.mark-empty svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  opacity: 0.7;
+}
+.mark-empty b { font-weight: 600; color: var(--fg); }
 
 .marks-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  padding: 6px 8px;
-  border-top: 1px solid var(--border);
+  gap: var(--sp-1, 4px);
+  padding: var(--sp-2, 8px);
+  border-top: 1px solid var(--rp-border-soft, var(--border));
   flex-shrink: 0;
 }
 
 .action-btn {
   flex: 1 1 calc(33.333% - 4px);
   min-width: 4.5rem;
-  padding: 3px 8px;
+  padding: 4px 8px;
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--rp-r-1, 6px);
   color: var(--fg-dim);
   cursor: pointer;
-  font-size: 11px;
+  font-family: var(--font-ui, inherit);
+  font-size: var(--type-meta, 11px);
 }
-.action-btn:hover {
+.action-btn:hover:not(:disabled) {
   background: var(--tb-btn-hover);
   color: var(--fg);
+  border-color: var(--rp-accent-line, var(--accent));
+}
+.action-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 </style>
