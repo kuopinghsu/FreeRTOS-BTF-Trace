@@ -19,6 +19,15 @@
       >
         {{ privacyChipLabel }}
       </button>
+      <button
+        type="button"
+        class="ai-auth-chip"
+        data-testid="ai-mode-chip"
+        :title="`Context mode: ${contextRowSummary.mode} — change in Settings → AI`"
+        @click="emit('openSettings')"
+      >
+        {{ contextRowSummary.mode }}
+      </button>
     </div>
     <div class="ai-header-actions">
       <button
@@ -46,13 +55,6 @@
         Settings…
       </button>
     </div>
-
-    <AnalysisContextStrip
-      v-if="analysisContext"
-      :context="analysisContext"
-      :show-clear-filters="showClearFilters"
-      :on-clear-filters="onClearFilters"
-    />
 
     <div
       v-if="langOpen"
@@ -189,31 +191,14 @@
           type="button"
           class="ai-guide-step"
           :class="{ now: guideStage === sid, done: stageDone(sid) }"
+          :aria-current="guideStage === sid ? 'step' : undefined"
           @click="jumpGuideStage(sid)"
-        >{{ stageMark(sid) }} {{ guidedStageLabel(sid) }}</button>
+        ><span class="ai-guide-tick" />{{ guidedStageLabel(sid) }}</button>
       </div>
       <div
         v-if="guideStage === 'idle' && !messages.length"
         class="ai-start-inv"
       >
-        <div class="ai-start-workflow">
-          Triage → Scope → Investigate → Verify → Experiment → Compare
-        </div>
-        <p class="ai-start-blurb">
-          BTFViewer will start from the current Findings, selection,
-          or cursor region and guide the investigation step by step.
-        </p>
-        <div
-          v-if="startInvContextLines.length"
-          class="ai-start-context"
-        >
-          <div
-            v-for="(line, li) in startInvContextLines"
-            :key="li"
-          >
-            {{ line }}
-          </div>
-        </div>
         <button
           type="button"
           class="ai-btn primary"
@@ -276,10 +261,11 @@
             </button>
           </div>
         </div>
-        <span class="ai-empty-hint">
-          Conversation appears here… Uses Analysis Findings for the current
-          Statistics scope (Limit to C1–Cn when cursors are set).
-          Configure the endpoint in Settings → AI.
+        <span
+          class="ai-empty-hint"
+          title="Replies use the current Analysis Findings for the Statistics scope (limit to C1–Cn by setting timeline cursors). Configure the endpoint in Settings → AI."
+        >
+          Replies use the current Analysis Findings. Set the endpoint in Settings → AI.
         </span>
       </div>
       <div
@@ -439,7 +425,7 @@
           title="Uses Analysis Findings for the current Statistics scope. Configure the endpoint in Settings → AI."
           @click="toggleMore"
         >
-          More templates…
+          More…
         </button>
       </div>
     </div>
@@ -559,23 +545,6 @@
       class="ai-split-bottom"
       :style="{ height: `${splitBottom}px` }"
     >
-    <details class="ai-context-row">
-      <summary
-        class="ai-context-summary"
-        :title="contextRowSummary.usage"
-      >
-        {{ contextRowCollapsed }}
-      </summary>
-      <div class="ai-context-body">
-        <div><strong>Trace:</strong> {{ contextRowSummary.trace }}</div>
-        <div><strong>Scope:</strong> {{ contextRowSummary.scope }}</div>
-        <div><strong>Filters:</strong> {{ contextRowSummary.filters }}</div>
-        <div><strong>Findings:</strong> {{ contextRowSummary.findings }}</div>
-        <div><strong>Language:</strong> {{ contextRowSummary.language }}</div>
-        <div><strong>Endpoint:</strong> {{ contextRowSummary.endpoint }}</div>
-        <div><strong>Usage:</strong> {{ contextRowSummary.usage }}</div>
-      </div>
-    </details>
     <div class="ai-composer">
       <textarea
         v-model="draft"
@@ -681,17 +650,20 @@
       </button>
     </div>
 
-    <div
-      class="ai-status"
-      :class="{ error: !!error }"
-    >
-      {{ statusText }}
-    </div>
-    <div
-      class="ai-usage-bar"
-      :title="usageTip"
-    >
-      {{ usageText }}
+    <div class="ai-status-row">
+      <div
+        class="ai-status"
+        :class="{ error: !!error }"
+        :title="statusText"
+      >
+        {{ statusText }}
+      </div>
+      <div
+        class="ai-usage-bar"
+        :title="usageTip"
+      >
+        {{ usageText }}
+      </div>
     </div>
     <div
       v-if="showAuthCta"
@@ -719,7 +691,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import DomSelect from './DomSelect.vue'
-import AnalysisContextStrip from './AnalysisContextStrip.vue'
 import {
   AI_COMPARE_TEMPLATE_ID,
   AI_RESPONSE_LANGUAGES,
@@ -915,7 +886,7 @@ const emit = defineEmits([
 const templates = AI_TEMPLATE_QUESTIONS
 const recentTemplateIds = ref(loadAiRecentTemplates())
 const templateUsage = ref(loadAiTemplateUsage())
-/** Dynamic chip row: ≤5 applicable ids, ranked recent → most used → defaults. */
+/** Dynamic chip row: ≤3 applicable ids, ranked recent → most used → defaults. */
 const visibleTemplates = computed(() =>
   visibleAiTemplates({
     recent: recentTemplateIds.value,
@@ -1363,9 +1334,6 @@ function templateTitle(t) {
 }
 
 function templatePrerequisite(t) {
-  if (t.id === AI_COMPARE_TEMPLATE_ID && !compareEnabled.value) {
-    return 'Open at least two BTF tabs to use Trace Compare.'
-  }
   if (AI_SMP_ONLY_TEMPLATE_IDS.has(t.id) && !smpEnabled.value) {
     return 'This trace has a single core — not applicable.'
   }
@@ -1436,17 +1404,6 @@ const contextRowSummary = computed(() => {
   }
 })
 
-const contextRowCollapsed = computed(() => {
-  const s = contextRowSummary.value
-  const bits = [s.stage || 'Ready']
-  const scope = String(s.scope || '').trim()
-  if (scope) bits.push(scope)
-  const focus = String(s.focus || '').trim()
-  if (focus) bits.push(shortFocusLabel(focus))
-  if (s.mode) bits.push(s.mode)
-  if (s.privacy) bits.push(s.privacy)
-  return bits.join(' · ')
-})
 
 const evidenceExpandAllLabel = computed(() => (
   evidencePanelToggleLabel(false, props.responseLanguage)
@@ -1454,37 +1411,6 @@ const evidenceExpandAllLabel = computed(() => (
 const evidenceCollapseAllLabel = computed(() => (
   evidencePanelToggleLabel(true, props.responseLanguage)
 ))
-
-const startInvContextLines = computed(() => {
-  const s = contextRowSummary.value
-  let findings = []
-  try {
-    const ctx = typeof props.getContext === 'function'
-      ? normalizeAiContext(props.getContext() || {})
-      : {}
-    findings = Array.isArray(ctx.findings) ? ctx.findings : []
-  } catch { findings = [] }
-  const lines = []
-  const top = findings[0]
-  if (top && (top.title || top.id)) {
-    lines.push(`Finding: ${String(top.title || top.id).trim()}`)
-    const task = String(top.task || '').trim()
-    if (task) lines.push(`Task: ${task}`)
-  } else if (s.focus) {
-    lines.push(`Task: ${s.focus}`)
-  }
-  lines.push(`Scope: ${s.scope || 'Full Trace'}`)
-  if (!top && s.findings > 0) {
-    lines.push(`${s.findings} Analysis Findings available.`)
-  }
-  return lines
-})
-
-function shortFocusLabel(name) {
-  const s = String(name || '').trim()
-  if (!s) return ''
-  return s.length > 28 ? `${s.slice(0, 26)}…` : s
-}
 
 function pinnedFocusTask(ctx) {
   const f = Array.isArray(ctx?.findings) ? ctx.findings[0] : null
@@ -2905,6 +2831,7 @@ defineExpose({
   padding: 1px 8px;
   font: inherit;
   font-size: 0.92em;
+  white-space: nowrap;
   cursor: pointer;
 }
 .ai-auth-chip:hover {
@@ -3100,27 +3027,44 @@ defineExpose({
   gap: 6px;
   padding: 0 0 6px;
 }
+/* Segmented progress rail: a filled tick above each stage label,
+   done / current / upcoming states. */
 .ai-guide-stepper {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  font-size: 11px;
+  align-items: flex-start;
+  gap: 0;
   color: var(--muted, #8a96a8);
 }
 .ai-guide-step {
+  flex: 1;
+  min-width: 0;
   background: transparent;
   border: none;
-  padding: 0 4px;
+  padding: 3px 2px 0;
   cursor: pointer;
   font: inherit;
-  font-size: 11px;
+  font-size: 10px;
+  letter-spacing: 0.01em;
+  text-align: center;
   color: var(--muted, #8a96a8);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-guide-tick {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  margin-bottom: 5px;
+  background: var(--border, #3a4658);
 }
 .ai-guide-step.done { color: #2e7d57; }
+.ai-guide-step.done .ai-guide-tick { background: #2e7d57; }
 .ai-guide-step.now {
   color: var(--fg, #1E1E1E);
   font-weight: 600;
 }
+.ai-guide-step.now .ai-guide-tick { background: var(--accent, #5b9bd5); }
 .ai-verify-hint {
   font-size: 11px;
   color: var(--muted, #8a96a8);
@@ -3132,27 +3076,6 @@ defineExpose({
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
-}
-.ai-start-workflow {
-  font-size: 11px;
-  color: var(--fg-dim, #8a96a8);
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
-}
-.ai-start-blurb {
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.35;
-  color: var(--muted, #8a96a8);
-}
-.ai-start-context {
-  font-size: 11px;
-  font-family: monospace;
-  color: var(--fg, #dbe2ea);
-  line-height: 1.35;
 }
 .ai-issue-card {
   font-size: 12px;
@@ -3200,29 +3123,6 @@ defineExpose({
   font-size: 11px;
   color: #b08900;
   line-height: 1.35;
-}
-.ai-context-row {
-  margin: 0 0 6px;
-  font-size: 11px;
-  color: var(--muted, #8a96a8);
-}
-.ai-context-summary {
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ai-context-summary::-webkit-details-marker { display: none; }
-.ai-context-body {
-  margin-top: 4px;
-  padding: 6px 8px;
-  border: 1px solid var(--border, #3a4658);
-  border-radius: 6px;
-  background: var(--panel-inset, #1a2230);
-  display: grid;
-  gap: 2px;
 }
 .ai-view-context {
   margin-top: 4px;
@@ -3362,7 +3262,14 @@ defineExpose({
   border-color: var(--accent, #2a6fb2);
 }
 .ai-chip:disabled { opacity: 0.45; cursor: default; }
-.ai-msg { margin: 0 0 12px; }
+.ai-msg {
+  margin: 0 0 12px;
+  display: flex;
+  flex-direction: column;
+}
+/* "Your prompt" hugs the right; "AI Assistant" stays left. */
+.ai-msg.user { align-items: flex-end; }
+.ai-msg.user .ai-msg-body { max-width: 88%; }
 .ai-msg.ai-msg-flash {
   outline: 2px solid var(--accent, #5b9bd5);
   border-radius: 6px;
@@ -3742,19 +3649,31 @@ defineExpose({
   gap: 8px;
 }
 .ai-spacer { flex: 1; }
+/* Status (left) + token/cost usage (right) share one line. */
+.ai-status-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+  min-height: 1.2em;
+  padding-top: 2px;
+  border-top: 1px solid var(--border, #3a4658);
+}
 .ai-status {
+  flex: 1;
+  min-width: 0;
   font-size: 0.92em;
   color: var(--muted, #8a96a8);
-  min-height: 1.2em;
-  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .ai-status.error { color: #e07070; }
 .ai-usage-bar {
   flex-shrink: 0;
   font-size: 0.85em;
   color: var(--muted, #8a96a8);
-  padding: 2px 0 0;
-  border-top: 1px solid var(--border, #3a4658);
-  min-height: 1.2em;
+  white-space: nowrap;
 }
 </style>

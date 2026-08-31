@@ -443,7 +443,7 @@ describe('AI endpoint helpers', () => {
       AI_TEMPLATE_QUESTIONS.map(t => t.id).sort(),
     )
     assert.equal(new Set(menu).size, menu.length)
-    assert.equal(AI_TEMPLATE_MRU_MAX, 5)
+    assert.equal(AI_TEMPLATE_MRU_MAX, 3)
     assert.equal(AI_START_INVESTIGATION_ID, 'auto_investigate')
     assert.ok(AI_DEFAULT_TEMPLATE_ORDER.includes('investigate'))
     const recorded = recordAiTemplateUse(AI_START_INVESTIGATION_ID, [], {})
@@ -472,7 +472,8 @@ describe('AI endpoint helpers', () => {
         usage: { verify: 9 },
         isApplicable: id => id !== 'compare',
       }),
-      ['migrations', 'verify', 'investigate', 'explain_finding', 'triage'],
+      ['migrations', 'verify', 'investigate', 'explain_finding', 'triage']
+        .slice(0, AI_TEMPLATE_MRU_MAX),
     )
   })
 
@@ -504,7 +505,7 @@ describe('AI endpoint helpers', () => {
     assert.doesNotMatch(panel, /primaryTemplateRows/)
     assert.match(panel, /visibleTemplates/)
     assert.match(panel, /recordAiTemplateUse|recordTemplateUse/)
-    assert.match(panel, /More templates…/)
+    assert.match(panel, /\n\s*More…\n/)
     assert.match(panel, /Investigations/)
     assert.ok(panel.indexOf('Save as template…') > panel.indexOf('Investigations'))
     assert.deepEqual(
@@ -553,7 +554,7 @@ describe('AI endpoint helpers', () => {
     assert.match(dlg, /toggleAskAi/)
     assert.match(dlg, /Add to case/)
     assert.match(dlg, /analysis-queue/)
-    assert.match(panel, /Open at least two BTF tabs to use Trace Compare/)
+    assert.doesNotMatch(panel, /Open at least two BTF tabs to use Trace Compare/)
     assert.match(panel, /This trace has a single core — not applicable/)
     assert.equal(AI_TEMPLATE_QUESTIONS.at(-1).id, 'auto_investigate')
   })

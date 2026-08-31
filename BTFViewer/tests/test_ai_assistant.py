@@ -142,7 +142,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
         menu_ids = [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids]
         self.assertEqual(sorted(menu_ids), sorted(all_ids))
         self.assertEqual(len(menu_ids), len(set(menu_ids)))
-        self.assertEqual(AI_TEMPLATE_MRU_MAX, 5)
+        self.assertEqual(AI_TEMPLATE_MRU_MAX, 3)
         self.assertEqual(AI_START_INVESTIGATION_ID, "auto_investigate")
         self.assertIn("investigate", AI_DEFAULT_TEMPLATE_ORDER)
 
@@ -186,7 +186,8 @@ class AiAssistantHelpersTests(unittest.TestCase):
                 usage={"verify": 9},
                 is_applicable=lambda tid: tid != "compare",
             ),
-            ["migrations", "verify", "investigate", "explain_finding", "triage"],
+            ["migrations", "verify", "investigate", "explain_finding", "triage"][
+                :AI_TEMPLATE_MRU_MAX],
         )
 
         js = (BTF_ROOT / "web/src/utils/aiClient.js").read_text(encoding="utf-8")

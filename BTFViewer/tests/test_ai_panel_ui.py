@@ -178,13 +178,19 @@ class AiPanelUiTests(unittest.TestCase):
     def test_guided_investigation_chrome(self) -> None:
         from btf_viewer_pkg.ai_case import GUIDED_STAGES, GUIDED_STAGE_LABELS
 
-        panel = self._panel()
+        panel = self._panel(get_context=lambda: {
+            "findings_text": "findings",
+            "findings": [{"id": "f1", "title": "Queue bounce", "task": "CS[7]"}],
+        })
+        panel._refresh_guide_ui()
         self.assertEqual(panel._start_inv_btn.text(), "Start Investigation")
         self.assertFalse(panel._start_inv_btn.isHidden())
         self.assertFalse(panel._start_inv_host.isHidden())
-        self.assertIn("Triage → Scope → Investigate", panel._start_inv_workflow.text())
-        self.assertIn("guide the investigation", panel._start_inv_blurb.text())
-        self.assertIn("Scope:", panel._start_inv_context.text())
+        # The workflow arrow line, intro blurb and the Finding/Task context box
+        # were all removed — the Start Investigation button stands alone.
+        self.assertFalse(hasattr(panel, "_start_inv_workflow"))
+        self.assertFalse(hasattr(panel, "_start_inv_blurb"))
+        self.assertFalse(hasattr(panel, "_start_inv_context"))
         self.assertFalse(panel._guide_host.isHidden())
         self.assertFalse(panel._guide_stepper.isHidden())
         for sid in GUIDED_STAGES:
@@ -207,31 +213,30 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertIn("#1E1E1E", panel._guide_step_btns["investigate"].styleSheet())
         self.assertIn("Queue bounce", panel._issue_view.text())
 
-    def test_context_row_collapsed_one_liner(self) -> None:
-        """Collapsed Context: Stage · Scope · Focus · Mode · Privacy (Web lockstep)."""
+    def test_context_mode_chip_on_header_line(self) -> None:
+        """Only the context-mode chip lives on the header line now (e.g.
+        "AI Assistant · Google Gemini · Cloud · Compact"); the Statistics-scope
+        chip and the old collapsible Context row are both gone."""
         panel = create_ai_assistant_panel(
             None,
-            get_context=lambda: {
-                "findings_text": "findings",
-                "scope": "C1–C2",
-                "findings": [
-                    {"id": "f1", "title": "Late", "task": "CS[20]"},
-                ],
-            },
+            get_context=lambda: {"scope": "C1–C2"},
             get_settings=lambda: {"enabled": "true", "context_mode": "balanced"},
-            on_gui_state=lambda: {"highlight": "CS[20]", "scope": "C1–C2"},
+            on_gui_state=lambda: {"scope": "C1–C2"},
         )
-        panel._privacy_chip.setText("🟢 Local")
+        from PySide6.QtWidgets import QPushButton
         panel._refresh_context_row()
-        text = panel._context_toggle.text()
-        self.assertIn("Start", text)  # idle stage label
-        self.assertIn("C1–C2", text)
-        self.assertIn("CS[20]", text)
-        self.assertIn("Balanced", text)
-        self.assertIn("Local", text)
-        self.assertNotIn("findings", text.lower())
-        self.assertNotIn("English", text)
-        self.assertNotIn("Context ·", text)
+        self.assertEqual(panel._mode_chip.text(), "Balanced")
+        self.assertFalse(hasattr(panel, "_scope_chip"))
+        self.assertFalse(hasattr(panel, "_context_toggle"))
+        self.assertFalse(hasattr(panel, "_context_body"))
+        self.assertIsInstance(panel._mode_chip, QPushButton)
+        hdr = panel.findChild(QWidget, "aiHeader")
+        self.assertIs(panel._mode_chip.parentWidget(), hdr)
+        src = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(encoding="utf-8")
+        self.assertLess(
+            src.index('header_row.addWidget(self._privacy_chip)'),
+            src.index('header_row.addWidget(self._mode_chip)'))
+        self.assertNotIn("self._scope_chip", src)
 
     def test_tool_cards_collapse_completed_auto_batch(self) -> None:
         from btf_viewer_pkg.ai_assistant import _ev_fold_id, _tool_cards_html
@@ -879,10 +884,10 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertIsNotNone(tpl)
         more = [
             b.text() for b in tpl.findChildren(QPushButton)
-            if b.text().startswith("More templates")
+            if b.text().replace("&", "").startswith("More")
         ]
         self.assertEqual(len(more), 1)
-        self.assertEqual(panel._more_btn.text().replace("&", ""), "More templates…")
+        self.assertEqual(panel._more_btn.text().replace("&", ""), "More…")
         menu_ids = [tid for _g, ids in AI_TEMPLATE_MENU_GROUPS for tid in ids]
         self.assertEqual(set(panel._template_actions), set(menu_ids))
         self.assertEqual(set(menu_ids), {t[0] for t in AI_TEMPLATE_QUESTIONS})
@@ -951,6 +956,27 @@ class AiPanelUiTests(unittest.TestCase):
         })
         self.assertEqual(len(panel._entries), 1)
         self.assertIn("jump:3300000", ai_entry_text(panel._entries[0]))
+
+    def test_evidence_sync_shows_current_issue_card(self) -> None:
+        """CURRENT ISSUE card must appear from any evidence sync — e.g. the
+        end-of-turn `_pin_evidence_log_entry` — not only the tool-result path
+        (Web `syncEvidenceLogEntry` bumps `evidenceRev`)."""
+        panel = self._panel(get_context=lambda: {
+            "findings_text": "findings",
+            "findings": [{"id": "f1", "title": "Queue bounce", "task": "CS[7]"}],
+        })
+        panel._append("user", "start investigation")
+        panel._append("assistant", "Investigated. Root cause is X.")
+        self.assertTrue(panel._issue_view.isHidden())
+        # Evidence built outside the tool-result path (interpret / _finalize).
+        panel._evidence_payload = {
+            "finding": {"title": "Queue bounce", "task": "CS[7]",
+                        "evidence": [{"label": "b", "time": 3200000.0}]},
+            "confidence": "Medium",
+        }
+        panel._pin_evidence_log_entry()
+        self.assertFalse(panel._issue_view.isHidden())
+        self.assertIn("Queue bounce", panel._issue_view.text())
 
     def test_evidence_fold_toggle_does_not_scroll_to_earlier_reply(self) -> None:
         """Expanding Checks must keep Evidence in view (Web <details> lockstep)."""
@@ -1605,7 +1631,7 @@ class AiPanelUiTests(unittest.TestCase):
             self.assertEqual(btn.minimumHeight(), 28, btn.text())
         more = next(
             b for b in panel.findChildren(QPushButton)
-            if b.text().replace("&", "") == "More templates…"
+            if b.text().replace("&", "") == "More…"
         )
         self.assertEqual(more.minimumHeight(), 28)
 

@@ -82,8 +82,8 @@ export const AI_COMPARE_TEMPLATE_ID = 'compare'
 // with btf_viewer_pkg/ai_assistant.py AI_SMP_ONLY_TEMPLATE_IDS.
 export const AI_SMP_ONLY_TEMPLATE_IDS = new Set(['migrations', 'balance'])
 
-/** Dynamic template chips shown next to More templates… (Start Investigation is separate). */
-export const AI_TEMPLATE_MRU_MAX = 5
+/** Dynamic template chips shown next to the More… button (Start Investigation is separate). */
+export const AI_TEMPLATE_MRU_MAX = 3
 
 /** Start Investigation runs this template; it never enters MRU/usage ranking. */
 export const AI_START_INVESTIGATION_ID = 'auto_investigate'

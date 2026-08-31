@@ -382,6 +382,34 @@ class SettingsInitialPageTests(unittest.TestCase):
             names = {n.strip() for n in m.group(1).split(",") if n.strip()}
             self.assertIn("QDesktopServices", names, label)
 
+    def test_bundle_imports_guide_stepper_jump_symbols(self) -> None:
+        """``_jump_guide_stage`` selects log text with QTextCursor /
+        QTextCharFormat / QTextEdit — the bundler's SHARED_IMPORTS must carry
+        them (per-module ``from ._imports import *`` is stripped when bundling)."""
+        imports = (BTF_ROOT / "btf_viewer_pkg/_imports.py").read_text(
+            encoding="utf-8")
+        script = (BTF_ROOT / "scripts/bundle_viewer.py").read_text(
+            encoding="utf-8")
+        bundle = (BTF_ROOT / "builds/btf_viewer.py").read_text(encoding="utf-8")
+        gui_pat = re.compile(
+            r"from PySide6\.QtGui import \(\s*(.*?)\s*\)", re.S)
+        wid_pat = re.compile(
+            r"from PySide6\.QtWidgets import \(\s*(.*?)\s*\)", re.S)
+        for src, label in (
+            (imports, "_imports.py"),
+            (script, "bundle_viewer.py"),
+            (bundle, "builds/btf_viewer.py"),
+        ):
+            gui = gui_pat.search(src)
+            wid = wid_pat.search(src)
+            self.assertIsNotNone(gui, label)
+            self.assertIsNotNone(wid, label)
+            gui_names = {n.strip() for n in gui.group(1).split(",") if n.strip()}
+            wid_names = {n.strip() for n in wid.group(1).split(",") if n.strip()}
+            self.assertIn("QTextCursor", gui_names, label)
+            self.assertIn("QTextCharFormat", gui_names, label)
+            self.assertIn("QTextEdit", wid_names, label)
+
     def test_bundle_includes_html_parser(self) -> None:
         """Markdown HTML-table sanitizer needs HTMLParser in the monolith."""
         needle = "from html.parser import HTMLParser"

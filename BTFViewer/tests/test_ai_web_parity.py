@@ -1831,15 +1831,17 @@ class AiWebParityTests(unittest.TestCase):
         self.assertNotIn('class="ai-modes"', panel)
         self.assertLess(panel.find('class="ai-plan-status"'),
                         panel.find('class="ai-templates"'))
-        self.assertIn("More templates", assist)
-        self.assertIn("More templates…", panel)
+        self.assertRegex(assist, r'QPushButton\("More(…|\\u2026)"\)')
+        self.assertIn("More…", panel)
         self.assertIn(
             "Uses Analysis Findings for the current Statistics scope.", assist)
         self.assertIn(
             "Uses Analysis Findings for the current Statistics scope.", panel)
-        self.assertIn(
+        # The Trace-Compare prerequisite text was removed (button still greys
+        # out when < 2 tabs are open).
+        self.assertNotIn(
             "Open at least two BTF tabs to use Trace Compare.", assist)
-        self.assertIn(
+        self.assertNotIn(
             "Open at least two BTF tabs to use Trace Compare.", panel)
         self.assertIn("This trace has a single core — not applicable.", assist)
         self.assertIn("This trace has a single core — not applicable.", panel)
@@ -1855,7 +1857,7 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn('"CURRENT ISSUE\\n"', case_py)
         self.assertIn("CURRENT ISSUE\\n", case_js_src)
 
-        self.assertEqual(AI_TEMPLATE_MRU_MAX, 5)
+        self.assertEqual(AI_TEMPLATE_MRU_MAX, 3)
         self.assertEqual(
             visible_ai_templates(recent=[], usage={}),
             list(AI_DEFAULT_TEMPLATE_ORDER[:AI_TEMPLATE_MRU_MAX]),

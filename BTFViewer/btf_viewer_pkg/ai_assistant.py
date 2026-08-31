@@ -628,9 +628,9 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
     ),
 )
 
-# Dynamic template chips shown next to More templates… (Start Investigation is
+# Dynamic template chips shown next to the More… button (Start Investigation is
 # separate). Keep in sync with web/src/utils/aiClient.js.
-AI_TEMPLATE_MRU_MAX = 5
+AI_TEMPLATE_MRU_MAX = 3
 
 # Start Investigation runs this template; it never enters MRU/usage ranking.
 AI_START_INVESTIGATION_ID = "auto_investigate"
@@ -3122,14 +3122,24 @@ def _format_ai_log_html(
         tools or [], batch_id, light=not is_dark, open_folds=open_folds)
     if not body and not cards:
         body = "<p></p>"
+    _align = ' align="right"' if is_user else ""
     rows = (
-        f'<tr><td class="ai-role {role_cls}" style="padding:10px 0 3px 0;">'
+        f'<tr><td class="ai-role {role_cls}"{_align} style="padding:10px 0 3px 0;">'
         f"{label}</td></tr>"
     )
     # Written reply and tool cards are siblings (Web: .ai-msg-body then
     # .ai-tool-card). Nesting cards inside the green bubble made Calculation
     # cards look like the last line of the assistant answer.
-    if body:
+    if body and is_user:
+        # "Your prompt" hugs the right; "AI Assistant" stays left (web parity).
+        rows += (
+            '<tr><td style="padding:0;"><table align="right" width="82%" '
+            'cellspacing="0" cellpadding="0" style="table-layout:fixed;"><tr>'
+            f'<td class="ai-bubble" bgcolor="{bg}" '
+            f'style="border:1px solid {bar};padding:8px 10px;color:{fg};">'
+            f"{body}</td></tr></table></td></tr>"
+        )
+    elif body:
         rows += (
             f'<tr><td class="ai-bubble" bgcolor="{bg}" '
             f'style="border-left:3px solid {bar};padding:8px 10px;color:{fg};">'
@@ -5003,6 +5013,26 @@ def create_ai_assistant_panel(
             )
             self._privacy_chip.clicked.connect(self._on_auth_chip)
             header_row.addWidget(self._privacy_chip)
+
+            # Context mode inline on the header line
+            # (e.g. "AI Assistant · Google Gemini · Cloud · Compact").
+            _chip_css = (
+                "QPushButton#%s {"
+                "  background: transparent; color: #8b98a8;"
+                "  border: 1px solid #3a4658; border-radius: 10px;"
+                "  padding: 1px 8px; font-size: 11px;"
+                "}"
+                "QPushButton#%s:hover { color: #dbe2ea; border-color: #5b9bd5; }"
+            )
+            self._mode_chip = QPushButton("")
+            self._mode_chip.setObjectName("ai_mode_chip")
+            self._mode_chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._mode_chip.setToolTip("Context mode — change in Settings → AI")
+            self._mode_chip.setSizePolicy(
+                QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            self._mode_chip.setStyleSheet(_chip_css % ("ai_mode_chip", "ai_mode_chip"))
+            self._mode_chip.clicked.connect(self._on_auth_chip)
+            header_row.addWidget(self._mode_chip)
             root.addWidget(header_host)
 
             # Match web `.ai-header-actions { flex-wrap }`. objectName
@@ -5066,34 +5096,6 @@ def create_ai_assistant_panel(
             bottom_lay.setSpacing(4)
             self._split_bottom = split_bottom
 
-            self._context_toggle = QToolButton()
-            self._context_toggle.setObjectName("aiContextToggle")
-            self._context_toggle.setCheckable(True)
-            self._context_toggle.setToolButtonStyle(
-                Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-            self._context_toggle.setArrowType(Qt.ArrowType.RightArrow)
-            self._context_toggle.setText("Context")
-            self._context_toggle.setStyleSheet(
-                "QToolButton#aiContextToggle {"
-                "  color:#8a96a8; font-size:11px; border:none; padding:2px 0;"
-                "}"
-            )
-            self._context_toggle.toggled.connect(self._on_context_row_toggled)
-            self._context_body = QLabel("")
-            self._context_body.setObjectName("aiContextBody")
-            self._context_body.setWordWrap(True)
-            self._context_body.setTextFormat(Qt.TextFormat.RichText)
-            self._context_body.setStyleSheet(
-                "QLabel#aiContextBody {"
-                "  color:#8a96a8; font-size:11px;"
-                "  border:1px solid #3a4658; border-radius:6px;"
-                "  padding:6px 8px; background:#1a2230;"
-                "}"
-            )
-            self._context_body.hide()
-            bottom_lay.addWidget(self._context_toggle)
-            bottom_lay.addWidget(self._context_body)
-
             self._investigation_plan: Optional[Dict[str, Any]] = None
             self._evidence_payload: Optional[Dict[str, Any]] = None
             self._interpreted_query: Optional[Dict[str, Any]] = None
@@ -5136,10 +5138,14 @@ def create_ai_assistant_panel(
             self._intent_groups_lay.setSpacing(8)  # web `.ai-intent-group` margin
             self._rebuild_intent_landing()
             self._intent_hint = QLabel(
-                "Conversation appears here\u2026 Uses Analysis Findings for the "
-                "current Statistics scope (Limit to C1\u2013Cn when cursors are set). "
-                "Configure the endpoint in Settings \u2192 AI."
+                "Replies use the current Analysis Findings. "
+                "Set the endpoint in Settings \u2192 AI."
             )
+            self._intent_hint.setToolTip(qt_wrap_tooltip(
+                "Replies use the current Analysis Findings for the Statistics "
+                "scope (limit to C1\u2013Cn by setting timeline cursors). "
+                "Configure the endpoint in Settings \u2192 AI."
+            ))
             self._intent_hint.setWordWrap(True)
             self._intent_hint.setStyleSheet(
                 "QLabel { color:#8a96a8; font-size:11px; padding:6px 0 0; }")
@@ -5224,46 +5230,26 @@ def create_ai_assistant_panel(
                 btn = QPushButton(GUIDED_STAGE_LABELS.get(sid, sid))
                 btn.setFlat(True)
                 btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                # Equal-width rail segment with a filled tick on top.
                 btn.setSizePolicy(
-                    QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
                 btn.setMinimumHeight(20)
                 btn.setStyleSheet(
-                    "QPushButton { color:#8a96a8; font-size:11px; border:none;"
-                    " padding:0 3px; text-align:left; }"
+                    "QPushButton { color:#8a96a8; font-size:10px; border:none;"
+                    " border-top:3px solid #3a4658;"
+                    " padding:4px 2px 0; text-align:center;"
+                    " background:transparent; }"
                 )
                 btn.clicked.connect(
                     lambda _=False, s=sid: self._jump_guide_stage(s))
-                self._guide_step_row.addWidget(btn)
+                self._guide_step_row.addWidget(btn, 1)
                 self._guide_step_btns[sid] = btn
-            self._guide_step_row.addStretch(1)
             g_lay.addWidget(self._guide_stepper)
             self._start_inv_host = QWidget()
             self._start_inv_host.setObjectName("aiStartInv")
             start_lay = QVBoxLayout(self._start_inv_host)
             start_lay.setContentsMargins(0, 0, 0, 0)
             start_lay.setSpacing(6)
-            self._start_inv_workflow = QLabel(
-                "Triage → Scope → Investigate → Verify → Experiment → Compare")
-            self._start_inv_workflow.setObjectName("aiStartWorkflow")
-            self._start_inv_workflow.setWordWrap(False)
-            self._start_inv_workflow.setTextInteractionFlags(
-                Qt.TextInteractionFlag.NoTextInteraction)
-            start_lay.addWidget(self._start_inv_workflow)
-            self._start_inv_blurb = QLabel(
-                "BTFViewer will start from the current Findings, selection, "
-                "or cursor region and guide the investigation step by step.")
-            self._start_inv_blurb.setObjectName("aiStartBlurb")
-            self._start_inv_blurb.setWordWrap(True)
-            self._start_inv_blurb.setTextInteractionFlags(
-                Qt.TextInteractionFlag.NoTextInteraction)
-            start_lay.addWidget(self._start_inv_blurb)
-            self._start_inv_context = QLabel("")
-            self._start_inv_context.setObjectName("aiStartContext")
-            self._start_inv_context.setWordWrap(True)
-            self._start_inv_context.setTextInteractionFlags(
-                Qt.TextInteractionFlag.NoTextInteraction)
-            self._start_inv_context.hide()
-            start_lay.addWidget(self._start_inv_context)
             self._start_inv_btn = QPushButton("Start Investigation")
             self._start_inv_btn.setToolTip(qt_wrap_tooltip(
                 "Triage findings, scope the top issue, gather evidence, "
@@ -5320,7 +5306,7 @@ def create_ai_assistant_panel(
             self._tpl_host = tpl_host
             tpl_host.setObjectName("aiTemplates")
             tpl_host.setStyleSheet(_AI_TPL_BTN_STYLE)
-            # One dynamic row (≤5 chips + More); wraps at narrow width.
+            # One dynamic row (≤3 chips + More); wraps at narrow width.
             tpl_row = _FlowLayout(tpl_host, spacing=4)
             self._tpl_flow = tpl_row
 
@@ -5338,7 +5324,7 @@ def create_ai_assistant_panel(
                 if tid in AI_SMP_ONLY_TEMPLATE_IDS:
                     self._smp_only_btns[tid] = ctrl
 
-            more_btn = QPushButton("More templates\u2026")
+            more_btn = QPushButton("More\u2026")
             more_btn.setToolTip(qt_wrap_tooltip(
                 "Uses Analysis Findings for the current Statistics scope. "
                 "Configure the endpoint in Settings \u2192 AI."
@@ -5502,21 +5488,34 @@ def create_ai_assistant_panel(
             root.addWidget(split, 1)
             QTimer.singleShot(0, self._restore_ai_split)
 
+            # Status (left) + token/cost usage (right) share one line.
+            status_row = QWidget()
+            status_row.setObjectName("aiStatusRow")
+            status_row.setAttribute(
+                Qt.WidgetAttribute.WA_StyledBackground, True)
+            status_row.setStyleSheet(
+                "QWidget#aiStatusRow { border-top:1px solid #3a4658; }")
+            self._status_row = status_row
+            sr_lay = QHBoxLayout(status_row)
+            sr_lay.setContentsMargins(0, 2, 0, 0)
+            sr_lay.setSpacing(8)
             self._status = QLabel("")
             self._status.setObjectName("aiStatus")
             self._status.setStyleSheet("color:#999;font-size:11px;")
-            self._status.setWordWrap(True)
-            root.addWidget(self._status)
+            self._status.setWordWrap(False)
+            self._status.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            sr_lay.addWidget(self._status, 1)
 
             self._usage = QLabel("")
             self._usage.setObjectName("aiUsageBar")
-            self._usage.setStyleSheet(
-                "color:#8a96a8;font-size:11px;padding:2px 0;"
-                "border-top:1px solid #3a4658;"
-            )
+            self._usage.setStyleSheet("color:#8a96a8;font-size:11px;")
+            self._usage.setAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self._usage.setTextInteractionFlags(
                 Qt.TextInteractionFlag.TextSelectableByMouse)
-            root.addWidget(self._usage)
+            sr_lay.addWidget(self._usage, 0)
+            root.addWidget(status_row)
             self._refresh_usage()
 
             self._auth_cta = QWidget()
@@ -5550,7 +5549,6 @@ def create_ai_assistant_panel(
 
         def apply_theme(self, is_dark: bool) -> None:
             """Match AI chrome (More menu, chips, composer, log) to the app theme."""
-            from .timeline_util import _get_fixed_font_family
             self._is_dark = bool(is_dark)
             c = _ai_chrome_colors(self._is_dark)
             if getattr(self, "_mode_host", None) is not None:
@@ -5576,6 +5574,11 @@ def create_ai_assistant_panel(
                     "ai_privacy_chip", c["muted"], c["border"],
                     "ai_privacy_chip", c["chip_hover"], c["accent"],
                 ))
+            if getattr(self, "_mode_chip", None) is not None:
+                self._mode_chip.setStyleSheet(chip % (
+                    "ai_mode_chip", c["muted"], c["border"],
+                    "ai_mode_chip", c["chip_hover"], c["accent"],
+                ))
             if getattr(self, "_plan_view", None) is not None:
                 self._plan_view.setStyleSheet(
                     f"color:{c['muted']};font-size:11px;padding:1px 0;"
@@ -5589,26 +5592,13 @@ def create_ai_assistant_panel(
                 self._verify_hint.setStyleSheet(
                     f"color:{c['muted']};font-size:11px;"
                 )
-            if getattr(self, "_start_inv_workflow", None) is not None:
-                self._start_inv_workflow.setStyleSheet(
-                    f"color:{c['muted']};font-size:11px;"
-                )
-            if getattr(self, "_start_inv_blurb", None) is not None:
-                self._start_inv_blurb.setStyleSheet(
-                    f"color:{c['muted']};font-size:11px;"
-                )
-            if getattr(self, "_start_inv_context", None) is not None:
-                self._start_inv_context.setStyleSheet(
-                    f"color:{c['text']};font-size:11px;"
-                    f"font-family:'{_get_fixed_font_family()}';"
-                )
+            if getattr(self, "_status_row", None) is not None:
+                self._status_row.setStyleSheet(
+                    f"QWidget#aiStatusRow {{ border-top:1px solid {c['border']}; }}")
             if getattr(self, "_status", None) is not None:
                 self._status.setStyleSheet(f"color:{c['muted']};font-size:11px;")
             if getattr(self, "_usage", None) is not None:
-                self._usage.setStyleSheet(
-                    f"color:{c['muted']};font-size:11px;padding:2px 0;"
-                    f"border-top:1px solid {c['border']};"
-                )
+                self._usage.setStyleSheet(f"color:{c['muted']};font-size:11px;")
             if getattr(self, "_split", None) is not None:
                 # Hairline grip paints itself (Statistics ``_StatsSectionGrip`` lockstep).
                 self._split.setStyleSheet("")
@@ -5916,95 +5906,13 @@ def create_ai_assistant_panel(
             bar.setToolTip(qt_wrap_tooltip(format_cost_meter(self._cost_meter)))
             self._refresh_context_row()
 
-        def _on_context_row_toggled(self, checked: bool) -> None:
-            btn = getattr(self, "_context_toggle", None)
-            body = getattr(self, "_context_body", None)
-            if btn is not None:
-                btn.setArrowType(
-                    Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
-            if body is not None:
-                body.setVisible(bool(checked))
-            if checked:
-                self._refresh_context_row()
-
         def _refresh_context_row(self) -> None:
-            toggle = getattr(self, "_context_toggle", None)
-            body = getattr(self, "_context_body", None)
-            if toggle is None:
+            """Update the header context-mode chip (web: .ai-auth-chip mode).
+            The old collapsible Context row and the scope chip are gone."""
+            mode_chip = getattr(self, "_mode_chip", None)
+            if mode_chip is None:
                 return
-            gui: Dict[str, Any] = {}
-            ctx: Dict[str, Any] = {}
-            if on_gui_state:
-                try:
-                    gui = dict(on_gui_state() or {})
-                except Exception:
-                    gui = {}
-            if get_context:
-                try:
-                    ctx = normalize_ai_context(dict(get_context() or {}))
-                except Exception:
-                    ctx = {}
-            findings = ctx.get("findings") or []
-            if not isinstance(findings, list):
-                findings = []
-            n_find = len(findings)
-            filters = ctx.get("filters") or []
-            if not isinstance(filters, list):
-                filters = []
-            filters = [str(f) for f in filters if f]
-            mode = ai_context_mode_label(self._context_mode())
-            lang = self._reply_language()
-            priv = ""
-            try:
-                priv = str(self._privacy_chip.text() or "").strip()
-            except Exception:
-                priv = ""
-            stage_id = self._current_guide_stage()
-            stage = GUIDED_STAGE_LABELS.get(stage_id, stage_id) or "Ready"
-            scope = str(ctx.get("scope") or gui.get("scope") or "Full Trace").strip()
-            focus = str(
-                gui.get("selected_task")
-                or gui.get("highlight")
-                or ctx.get("selected_task")
-                or ctx.get("selection")
-                or ""
-            ).strip()
-            if not focus and findings:
-                top = findings[0] if isinstance(findings[0], dict) else None
-                if top and top.get("task"):
-                    focus = str(top.get("task") or "").strip()
-            # Stage · Scope · FocusTask · Mode · Privacy (no findings/language)
-            bits = [stage]
-            if scope:
-                bits.append(scope)
-            if focus:
-                bits.append(_short_focus_label(focus))
-            if mode:
-                bits.append(mode)
-            if priv:
-                bits.append(priv)
-            toggle.setText(" · ".join(bits))
-            start_host = getattr(self, "_start_inv_host", None)
-            if start_host is not None and start_host.isVisible():
-                self._refresh_start_inv_context(ctx=ctx, gui=gui)
-            if body is None or not body.isVisible():
-                return
-            endpoint = ""
-            try:
-                endpoint = str(self._auth_chip.text() or "").strip()
-            except Exception:
-                endpoint = ""
-            usage = format_context_usage_status(
-                self._cost_meter, self._context_mode())
-            body.setText(
-                f"<b>Trace:</b> {html.escape(str(gui.get('file') or gui.get('name') or '—'))}<br/>"
-                f"<b>Scope:</b> {html.escape(scope or 'Full Trace')}<br/>"
-                f"<b>Filters:</b> {html.escape(' · '.join(filters) if filters else 'None')}<br/>"
-                f"<b>Findings:</b> {n_find}<br/>"
-                f"<b>Language:</b> {html.escape(lang)}<br/>"
-                f"<b>Endpoint:</b> {html.escape(endpoint or '—')}<br/>"
-                f"<b>Usage:</b> {html.escape(usage)}"
-            )
+            mode_chip.setText(ai_context_mode_label(self._context_mode()))
 
         def _restore_ai_split(self) -> None:
             split = getattr(self, "_split", None)
@@ -6547,7 +6455,7 @@ def create_ai_assistant_panel(
             return True
 
         def _rebuild_dynamic_template_chips(self) -> None:
-            """Rebuild ≤5 ranked chips + More (Start Investigation stays separate)."""
+            """Rebuild ≤3 ranked chips + More (Start Investigation stays separate)."""
             flow = getattr(self, "_tpl_flow", None)
             more_btn = getattr(self, "_more_btn", None)
             if flow is None or more_btn is None:
@@ -7178,10 +7086,7 @@ def create_ai_assistant_panel(
                     self._compare_btn.setEnabled(False)
                 elif n < 2:
                     self._compare_btn.setEnabled(False)
-                    msg = "Open at least two BTF tabs to use Trace Compare."
-                    self._compare_btn.setToolTip(qt_wrap_tooltip(msg))
-                    if msg not in prereq_msgs:
-                        prereq_msgs.append(msg)
+                    self._compare_btn.setToolTip(qt_wrap_tooltip(prompt))
                 else:
                     self._compare_btn.setEnabled(True)
                     self._compare_btn.setToolTip(qt_wrap_tooltip(prompt))
@@ -7846,6 +7751,9 @@ def create_ai_assistant_panel(
             self._refresh_intent_landing()
 
         def _refresh_guide_ui(self) -> None:
+            # Keep the header mode/scope chips fresh (runs after every turn,
+            # template use, settings change, and stage change).
+            self._refresh_context_row()
             if not getattr(self, "_guide_step_btns", None):
                 return
             cursors = 0
@@ -7870,31 +7778,31 @@ def create_ai_assistant_panel(
             now_i = list(GUIDED_STAGES).index(stage) if stage in GUIDED_STAGES else -1
             c = _ai_chrome_colors(bool(getattr(self, "_is_dark", True)))
             pending, now_c, done_c = c["muted"], c["guide_now"], c["guide_done"]
+            sep = c["border"]
             for i, sid in enumerate(GUIDED_STAGES):
                 btn = self._guide_step_btns.get(sid)
                 if btn is None:
                     continue
                 lab = GUIDED_STAGE_LABELS.get(sid, sid)
                 if i < now_i:
-                    mark, color, weight = "✓", done_c, "400"
+                    color, weight, tick = done_c, "400", done_c
                 elif sid == stage:
-                    mark, color, weight = "●", now_c, "600"
+                    color, weight, tick = now_c, "600", c["accent"]
                 else:
-                    mark, color, weight = "○", pending, "400"
-                btn.setText(f"{mark} {lab}")
+                    color, weight, tick = pending, "400", sep
+                btn.setText(lab)
                 btn.setStyleSheet(
-                    "QPushButton { color:%s; font-size:11px; font-weight:%s;"
-                    " border:none; padding:0 3px; text-align:left;"
+                    "QPushButton { color:%s; font-size:10px; font-weight:%s;"
+                    " border:none; border-top:3px solid %s;"
+                    " padding:4px 2px 0; text-align:center;"
                     " background: transparent; }"
-                    % (color, weight)
+                    % (color, weight, tick)
                 )
             idle = stage == "idle"
             show_start = idle and not self._entries
             start_host = getattr(self, "_start_inv_host", None)
             if start_host is not None:
                 start_host.setVisible(show_start)
-                if show_start:
-                    self._refresh_start_inv_context()
             start_btn = getattr(self, "_start_inv_btn", None)
             if start_btn is not None:
                 start_btn.setVisible(show_start)
@@ -7916,60 +7824,6 @@ def create_ai_assistant_panel(
                 banner.setText(ESTIMATE_BANNER)
                 banner.setVisible(stage == "experiment")
             self.refresh_template_availability()
-
-        def _refresh_start_inv_context(
-            self,
-            ctx: Optional[Dict[str, Any]] = None,
-            gui: Optional[Dict[str, Any]] = None,
-        ) -> None:
-            """Finding/Task/Scope lines above Start Investigation (Web lockstep)."""
-            lab = getattr(self, "_start_inv_context", None)
-            if lab is None:
-                return
-            if gui is None:
-                gui = {}
-                if on_gui_state:
-                    try:
-                        gui = dict(on_gui_state() or {})
-                    except Exception:
-                        gui = {}
-            if ctx is None:
-                ctx = {}
-                if get_context:
-                    try:
-                        ctx = normalize_ai_context(dict(get_context() or {}))
-                    except Exception:
-                        ctx = {}
-            findings = ctx.get("findings") or []
-            if not isinstance(findings, list):
-                findings = []
-            scope = str(ctx.get("scope") or gui.get("scope") or "Full Trace").strip()
-            focus = str(
-                gui.get("selected_task")
-                or gui.get("highlight")
-                or ctx.get("selected_task")
-                or ctx.get("selection")
-                or ""
-            ).strip()
-            lines: List[str] = []
-            top = findings[0] if findings and isinstance(findings[0], dict) else None
-            if top and (top.get("title") or top.get("id")):
-                lines.append(
-                    f"Finding: {str(top.get('title') or top.get('id') or '').strip()}")
-                task = str(top.get("task") or "").strip()
-                if task:
-                    lines.append(f"Task: {task}")
-            elif focus:
-                lines.append(f"Task: {focus}")
-            lines.append(f"Scope: {scope or 'Full Trace'}")
-            if not top and len(findings) > 0:
-                lines.append(f"{len(findings)} Analysis Findings available.")
-            if lines:
-                lab.setText("\n".join(lines))
-                lab.show()
-            else:
-                lab.clear()
-                lab.hide()
 
         def _evidence_log_text(self) -> str:
             for entry in self._entries:
@@ -8013,6 +7867,13 @@ def create_ai_assistant_panel(
             """Keep evidence below the latest assistant reply."""
             if self._evidence_payload:
                 self._sync_evidence_log_entry(self._evidence_payload)
+                # End-of-turn refresh so the CURRENT ISSUE card is visible once
+                # the investigation finishes. The agent-template path already
+                # refreshes via `_finish_investigation_plan`; this covers plain
+                # Ask AI (verify / explain) turns that carry no plan. Kept out
+                # of `_sync_evidence_log_entry` so nothing new runs mid tool
+                # loop.
+                self._refresh_guide_ui()
 
         def _attach_response_validation(self, text: str) -> None:
             """Flag invented tasks / out-of-scope jump:TIME after the final reply."""
