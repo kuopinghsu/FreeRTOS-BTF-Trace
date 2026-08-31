@@ -303,9 +303,9 @@ function onDragEnd() {
 }
 
 .stats-meta-chip.filtered {
-  color: var(--badge-timing-fg, #e0c070);
-  background: rgba(230, 180, 60, 0.16);
-  border: 1px solid rgba(212, 172, 13, 0.45);
+  color: var(--badge-filtered-fg, #e0c070);
+  background: var(--badge-filtered-bg, rgba(230, 180, 60, 0.16));
+  border: 1px solid var(--badge-filtered-border, rgba(212, 172, 13, 0.45));
 }
 
 .stats-category-badge {
@@ -317,11 +317,12 @@ function onDragEnd() {
   font-weight: 700;
   letter-spacing: 0.5px;
   text-transform: uppercase;
-  border-radius: 999px;
+  border-radius: 8px;
   padding: 2px 7px;
   min-height: 15px;
   line-height: 1.2;
-  /* Soft tinted round-rect — lockstep with Desktop category badges. */
+  /* Soft tinted round-rect — lockstep with Desktop category badges
+     (stats_category_badge_stylesheet: border-radius:8px). */
   color: var(--badge-detail-fg, #c0c4c9);
   background: var(--badge-detail-bg, #303337);
   border: 1px solid var(--badge-detail-border, #565b61);

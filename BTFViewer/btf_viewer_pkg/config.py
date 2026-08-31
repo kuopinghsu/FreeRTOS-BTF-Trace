@@ -253,6 +253,16 @@ STATS_DEFAULT_EXPANDED_SECTIONS = frozenset()
 STATS_SECTION_CATEGORIES: Tuple[str, ...] = (
     "OVERVIEW", "TRIAGE", "TIMING", "SCHED", "SYNC", "DETAIL",
 )
+# Human labels for the investigation-category filter pills (web:
+# StatisticsPanel.vue CATEGORY_META). Keep lockstep with that map.
+STATS_CATEGORY_LABELS: Dict[str, str] = {
+    "OVERVIEW": "Overview",
+    "TRIAGE": "Triage",
+    "TIMING": "Timing",
+    "SCHED": "Scheduling",
+    "SYNC": "Sync",
+    "DETAIL": "Detail",
+}
 COMMAND_PALETTE_ACTIONS = (
     ("analysis", "Analysis Findings"),
     ("statistics", "Statistics"),
@@ -1520,6 +1530,7 @@ _IC_FIT    = "M1.5 1h5v1h-4v4h-1V1.5a.5.5 0 0 1 .5-.5zm13 0a.5.5 0 0 1 .5.5V6h-1
 _IC_CURSOR = "M1 1l5 12 2-4 4 4 1-1-4-4 4-2L1 1z"
 _IC_MARK   = "M3 2a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v12.5a.5.5 0 0 1-.777.416L8 12.101l-4.223 2.815A.5.5 0 0 1 3 14.5V2z"
 _IC_CLEAR  = "M2 2.5l.5-.5 5.5 5.5 5.5-5.5.5.5L8.5 8 14 13.5l-.5.5L8 8.5 2.5 14l-.5-.5L7.5 8 2 2.5z"
+_IC_FILTER = "M1.5 2h13a.5.5 0 0 1 .4.8L10 9.2V14a.5.5 0 0 1-.72.45l-3-1.5A.5.5 0 0 1 6 12.5V9.2L1.1 2.8A.5.5 0 0 1 1.5 2z"
 # Snapshot editor annotation tools (Bootstrap Icons paths — same style as main toolbar)
 _IC_SNAP_ARROW = (
     "M14 0.5a.5.5 0 0 0-.5-.5h-6a.5.5 0 0 0 0 1h4.793L2.146 13.146a.5.5 0 0 0 .708.708L13 2.707V7.5a.5.5 0 0 0 1 0v-7z"

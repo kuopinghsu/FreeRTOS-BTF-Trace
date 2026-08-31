@@ -4,6 +4,7 @@ from __future__ import annotations
 from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
 from .parser import *  # noqa: F403,F401
+from .parser import _task_runs_on_selected_core  # underscore: not re-exported by *
 from .timeline_util import *  # noqa: F403,F401
 from .graphics_items import *  # noqa: F403,F401
 
@@ -65,7 +66,7 @@ class TimelineScene(QGraphicsScene):
         self._migrated_only_filter: bool = False
         self._heatmap_filter_mks: Optional[set] = None
         self._heatmap_filter_label: Optional[str] = None
-        self._core_filter_keys: Optional[set] = None   # Core Filter (Core View only)
+        self._core_filter_keys: Optional[set] = None   # Core Filter (also scopes Task view)
         self._rebuild_suspend: int = 0
         # -- Viewport time bounds (updated at each rebuild for segment clipping) --
         # Set to None initially; _update_viewport_bounds() fills them from the
@@ -1847,6 +1848,12 @@ class TimelineScene(QGraphicsScene):
         elif tr is not None and self._migrated_only_filter:
             if not _is_migrated_task(tr, merge_key):
                 return False
+        # Core Filter also scopes Task view: hide tasks with no segment on a
+        # selected core (web: taskPassesRowFilter -> taskRunsOnSelectedCore).
+        if (tr is not None and self._core_filter_active()
+                and not _task_runs_on_selected_core(
+                    tr, merge_key, self._core_filter_keys)):
+            return False
         if not self._task_filter_q:
             return True
         if tr is None:

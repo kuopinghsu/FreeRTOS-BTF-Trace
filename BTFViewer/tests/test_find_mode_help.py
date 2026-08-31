@@ -42,20 +42,39 @@ class FindModeHelpTests(unittest.TestCase):
         mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
         self.assertIn("FIND_MODE_CHOICES", js)
         self.assertIn("findModeHelp", vue)
+
+        # Browser-style Find bar — the same anatomy on both sides:
+        #   leading magnifier, input, clear, inline "N / M" counter, ‹ ›
+        #   steppers, then a "Match" row, then an empty state with example chips.
+        for cls in ('class="findbar"', 'class="findbar-input"',
+                    'class="findbar-count"', 'class="findbar-step"',
+                    'class="find-mode-row"', 'class="find-empty"',
+                    'class="find-examples"'):
+            self.assertIn(cls, vue)
         self.assertRegex(
             vue,
-            re.compile(
-                r'<div class="find-panel">\s*'
-                r'<div\s*\n?\s*class="find-status"',
-                re.S,
-            ),
+            re.compile(r'<div class="find-panel">\s*<div\s*\n?\s*class="findbar"',
+                       re.S),
         )
-        self.assertIn("self._find_status = QLabel", mw)
+
+        self.assertIn('self._findbar = QFrame', mw)
+        self.assertIn('self._find_input = QLineEdit', mw)
+        self.assertIn('self._find_input.setClearButtonEnabled(True)', mw)
+        self.assertIn('QLineEdit.ActionPosition.LeadingPosition', mw)
+        # counter lives in the bar; created before the input (like the web span)
+        self.assertIn('self._find_status = QLabel', mw)
         self.assertLess(
-            mw.index("self._find_status = QLabel"),
-            mw.index("self._find_input = QLineEdit"),
+            mw.index('self._find_status = QLabel'),
+            mw.index('self._find_input = QLineEdit'),
         )
-        self.assertIn("_find_mode_help", mw)
+        self.assertIn('self._find_prev_btn', mw)
+        self.assertIn('self._find_next_btn', mw)
+        self.assertIn('self._find_empty', mw)
+        self.assertIn('_apply_find_example', mw)
+        self.assertIn('_find_mode_help', mw)
+        # counter format matches the web ("N / M", not "N of M matches")
+        self.assertIn('f"{idx + 1} / {n}"', mw)
+
         for _lab, key, tip in FIND_MODE_CHOICES:
             self.assertIn(f"key: '{key}'", js)
             self.assertIn(tip, js)

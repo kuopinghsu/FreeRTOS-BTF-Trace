@@ -2920,6 +2920,42 @@ def _concurrency_level_plot_points(
 def _task_cores_used(trace: "BtfTrace", merge_key: str) -> set:
     return {s.core for s in trace.seg_map_by_merge_key.get(merge_key, ())}
 
+
+def _task_core_sets(trace: "BtfTrace") -> dict:
+    """merge_key -> set of core names its segments run on (memoised on *trace*).
+
+    Parity with web ``taskCoreSets`` — the Core Filter uses this to scope the
+    Task view / legend list to tasks that actually run on a selected core.
+    """
+    cache = getattr(trace, "_task_core_sets_cache", None)
+    if cache is not None:
+        return cache
+    out: dict = {}
+    for mk, segs in (getattr(trace, "seg_map_by_merge_key", None) or {}).items():
+        out[mk] = {s.core for s in segs}
+    try:
+        trace._task_core_sets_cache = out
+    except Exception:
+        pass
+    return out
+
+
+def _task_runs_on_selected_core(trace: "BtfTrace", merge_key: str,
+                                core_keys) -> bool:
+    """True unless the Core Filter is active and *merge_key* never runs on a
+    selected core.  Parity with web ``taskRunsOnSelectedCore``.
+    """
+    if not core_keys:
+        return True
+    total = len(getattr(trace, "core_names", None) or ())
+    if total and len(core_keys) >= total:
+        return True
+    cset = core_keys if isinstance(core_keys, (set, frozenset)) else set(core_keys)
+    task_cores = _task_core_sets(trace).get(merge_key)
+    if not task_cores:
+        return True  # unknown -> don't hide
+    return not cset.isdisjoint(task_cores)
+
 def _is_migrated_task(trace: "BtfTrace", merge_key: str) -> bool:
     mks = trace.migrated_mks or trace.migrations_by_mk
     if mks:

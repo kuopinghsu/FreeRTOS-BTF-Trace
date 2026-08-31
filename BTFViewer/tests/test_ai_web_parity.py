@@ -1066,8 +1066,17 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("type === 'annotation'", app)
         self.assertIn("formatFindStatus", (
             BTF_ROOT / "web/src/utils/findAnalysis.js").read_text(encoding="utf-8"))
-        self.assertIn("formatFindStatus", (
-            BTF_ROOT / "web/src/components/FindPanel.vue").read_text(encoding="utf-8"))
+        # FindPanel.vue's browser-style bar (redesign) shows an inline
+        # "<pos> / <hitCount>" counter via `counterText`; desktop mirrors it
+        # with the same "<idx+1> / <n>" format in _find_status.
+        find_vue = (
+            BTF_ROOT / "web/src/components/FindPanel.vue").read_text(encoding="utf-8")
+        self.assertIn("counterText", find_vue)
+        self.assertIn("${pos} / ${props.hitCount}", find_vue)
+        self.assertIn(
+            'self._find_status.setText(f"{idx + 1} / {n}")',
+            mw,
+        )
         self.assertIn("migration matches", (
             BTF_ROOT / "btf_viewer_pkg/mvvm/find_logic.py").read_text(encoding="utf-8"))
         self.assertIn("archive.zip::", (

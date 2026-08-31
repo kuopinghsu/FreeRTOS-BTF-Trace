@@ -26,8 +26,11 @@
       :zoom-preset-value="zoomPresetValue"
       :zoom-preset-options="zoomPresetOptions"
       :limit-on="limitOn"
+      :filter-active="!!activeFilterSummaryLabel"
+      :filter-label="activeFilterSummaryLabel || ''"
       @update:model-value="onToolbarOptionsUpdate"
       @toggle-limit="onToggleLimit"
+      @clear-filters="clearAllActiveFilters"
       @file-error="onFileError"
       @trace-reading="onTraceReading"
       @trace-loaded="onTraceLoaded"
@@ -6496,6 +6499,10 @@ watch(
   --badge-scope-fg: #9EC5E8;
   --badge-scope-bg: #283A47;
   --badge-scope-border: #3A6A8A;
+  /* Statistics Filtered chip (dark) — lockstep with config.py stats_meta_chip_colors("filtered") */
+  --badge-filtered-fg: #E0C070;
+  --badge-filtered-bg: #3A3420;
+  --badge-filtered-border: #8A7040;
 
   /* ---- Right-panel redesign: spacing / radius / surface scale ---- */
   --sp-1: 4px;
@@ -6586,6 +6593,10 @@ body:has(.app:not(.dark)) {
   --badge-scope-fg: #1A5276;
   --badge-scope-bg: #D6EAF8;
   --badge-scope-border: #85C1E9;
+  /* Statistics Filtered chip (light) — lockstep with config.py stats_meta_chip_colors("filtered") */
+  --badge-filtered-fg: #7D6608;
+  --badge-filtered-bg: #F9E79F;
+  --badge-filtered-border: #D4AC0D;
   /* Step 3 typography + semantic roles */
   --type-section: calc(var(--ui-font-size, 13px) * 1.05);
   --type-body: var(--ui-font-size, 13px);

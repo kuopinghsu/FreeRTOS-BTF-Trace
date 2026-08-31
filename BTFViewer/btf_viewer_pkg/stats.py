@@ -156,6 +156,7 @@ from .parser import (  # private symbols are not pulled in by import *
     _pair_migrations,
     _migration_summary,
     _blocking_time_samples,
+    _task_runs_on_selected_core,
 )
 from .timeline_util import *  # noqa: F403,F401
 from .timeline_util import (  # noqa: F401 — star-import skips leading _
@@ -773,6 +774,202 @@ class _LegendTaskRow(QWidget):
             self.clicked.emit(self._task_name)
         event.accept()   # prevent bubbling up to _LegendWidget.mousePressEvent
 
+class _FlowLayout(QLayout):
+    """Wrapping row layout (trimmed Qt "Flow Layout" example).
+
+    Items flow left-to-right and wrap onto the next line when they no longer
+    fit — the Qt equivalent of the web chip row's ``flex-wrap: wrap`` — so the
+    trailing "All" button is never clipped on a narrow panel.
+    """
+
+    def __init__(self, parent=None, spacing: int = 4) -> None:
+        super().__init__(parent)
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(spacing)
+        self._items: list = []
+
+    def addItem(self, item) -> None:  # noqa: N802
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, i: int):  # noqa: N802
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i: int):  # noqa: N802
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):  # noqa: N802
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect) -> None:  # noqa: N802
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self):  # noqa: N802
+        return self.minimumSize()
+
+    def minimumSize(self):  # noqa: N802
+        size = QSize()
+        for it in self._items:
+            w = it.widget()
+            if w is not None and w.isHidden():
+                continue
+            size = size.expandedTo(it.minimumSize())
+        return size
+
+    def _do_layout(self, rect, test_only: bool) -> int:
+        space = self.spacing()
+        x = rect.x()
+        y = rect.y()
+        line: list = []          # (item, hint, x) buffered for the current line
+        line_h = 0
+
+        def flush() -> None:
+            # Vertically centre every item on the line against the tallest one.
+            for itm, h, ix in line:
+                off = (line_h - h.height()) // 2
+                itm.setGeometry(QRect(QPoint(ix, y + off), h))
+
+        for it in self._items:
+            w = it.widget()
+            if w is not None and w.isHidden():
+                continue
+            hint = it.sizeHint()
+            if x + hint.width() > rect.right() and line:
+                if not test_only:
+                    flush()
+                x = rect.x()
+                y += line_h + space
+                line = []
+                line_h = 0
+            line.append((it, hint, x))
+            x += hint.width() + space
+            line_h = max(line_h, hint.height())
+        if line and not test_only:
+            flush()
+        return y + line_h - rect.y()
+
+
+class _CoreFilterChips(QWidget):
+    """Wrapping row of per-core toggle chips for the shared Core Filter.
+
+    Web parity: ``web/src/components/CoreFilterChips.vue`` — compact chips
+    labelled with the core index (``Core_`` prefix stripped).  A persistent
+    leading **All** chip (checked while no per-core filter is active) resets the
+    filter.  Emits ``core_filter_changed`` with the selected core-name list
+    (``[]`` means no filter / every core).  Used by the Cursors panel
+    ("Task at cursor") and the Legend.
+    """
+
+    core_filter_changed = Signal(list)
+
+    @staticmethod
+    def _short(name: str) -> str:
+        for pre in ("Core_", "Core "):
+            if name.startswith(pre):
+                return name[len(pre):]
+        return name
+
+    def __init__(self, label: str = "Cores", parent=None) -> None:
+        super().__init__(parent)
+        self._core_names: List[str] = []
+        self._core_filter_keys: Optional[set] = None
+        self._chips: Dict[str, QToolButton] = {}
+        self._flow = _FlowLayout(self, spacing=4)
+        sp = self.sizePolicy()
+        sp.setHeightForWidth(True)
+        self.setSizePolicy(sp)
+        self._label = QLabel(label)
+        self._label.setObjectName("core_chip_label")
+        self._label.setVisible(bool(label))
+        self._flow.addWidget(self._label)
+        # Trailing "All" clear-link — web: <button class="core-chip-clear">,
+        # shown only while a per-core filter is active.
+        self._all_btn = QToolButton()
+        self._all_btn.setObjectName("core_chip_clear")
+        self._all_btn.setText("All")
+        self._all_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self._all_btn.setToolTip("Show every core")
+        self._all_btn.setVisible(False)
+        self._all_btn.clicked.connect(lambda: self._emit(None))
+        self._flow.addWidget(self._all_btn)
+
+    def _relayout(self) -> None:
+        self._flow.invalidate()
+        self.updateGeometry()
+
+    def set_cores(self, core_names, core_filter_keys=None) -> None:
+        """(Re)build the chip row for *core_names*; hidden for single-core traces."""
+        self._core_names = list(core_names or [])
+        # Tear the per-core chips down; keep the shared label + "All" link alive.
+        while self._flow.count():
+            it = self._flow.takeAt(0)
+            w = it.widget()
+            if w in (self._label, self._all_btn):
+                w.setParent(self)
+            elif w is not None:
+                w.deleteLater()
+        self._chips.clear()
+        self._core_filter_keys = set(core_filter_keys) if core_filter_keys else None
+        self._flow.addWidget(self._label)
+        for name in self._core_names:
+            b = QToolButton()
+            b.setObjectName("core_chip")
+            b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+            b.setCheckable(True)
+            short = self._short(name)
+            b.setText(short)
+            b.setToolTip(name)
+            # Fixed square-ish box (web .core-chip: min-width 20px / height 18px);
+            # widen only for multi-character labels ("10", "11" …).
+            b.setFixedSize(20 if len(short) <= 1 else 14 + 8 * len(short), 20)
+            b.setChecked(self._core_filter_keys is None
+                         or name in self._core_filter_keys)
+            b.toggled.connect(
+                lambda checked, n=name: self._on_toggle(n, checked))
+            self._flow.addWidget(b)
+            self._chips[name] = b
+        self._flow.addWidget(self._all_btn)          # trailing, like web
+        self._all_btn.setVisible(self._core_filter_keys is not None)
+        self.setVisible(len(self._core_names) > 1)
+        self._relayout()
+
+    def set_core_filter(self, keys) -> None:
+        """Reflect an external Core Filter change without re-emitting."""
+        self._core_filter_keys = set(keys) if keys else None
+        for name, b in self._chips.items():
+            b.blockSignals(True)
+            b.setChecked(self._core_filter_keys is None
+                         or name in self._core_filter_keys)
+            b.blockSignals(False)
+        self._all_btn.setVisible(self._core_filter_keys is not None)
+        self._relayout()
+
+    def _on_toggle(self, name: str, checked: bool) -> None:
+        all_cores = list(self._core_names)
+        cur = (set(self._core_filter_keys) if self._core_filter_keys
+               else set(all_cores))
+        if checked:
+            cur.add(name)
+        else:
+            cur.discard(name)
+        keys = ([c for c in all_cores if c in cur]
+                if len(cur) < len(all_cores) else None)
+        self._emit(keys)
+
+    def _emit(self, keys) -> None:
+        self.set_core_filter(keys)
+        self.core_filter_changed.emit(list(keys) if keys else [])
+
+
 class _LegendWidget(QWidget):
     """Compact scrollable colour legend with click -> timeline highlight."""
 
@@ -819,7 +1016,6 @@ class _LegendWidget(QWidget):
         self._locked_bg = QBrush(QColor(255, 215, 0, 45))
         self._view_mode: str = "task"
         self._core_filter_keys: Optional[set] = None
-        self._core_checks: Dict[str, QCheckBox] = {}
         self._search = QLineEdit()
         self._search.setPlaceholderText("Filter tasks...")
         self._sync_search_theme()
@@ -896,38 +1092,22 @@ class _LegendWidget(QWidget):
         self._scroll.viewport().setAutoFillBackground(True)
         outer.addWidget(self._scroll, 1)
 
-        # --- Cores section (Core View only) — Core Filter, mirrors Task list ---
+        # --- Cores section — shared Core Filter as one-line chips (web:
+        #     LegendPanel <CoreFilterChips>).  Shown for any multi-core trace,
+        #     not just Core View.
         self._cores_section = QWidget()
         cs_outer = QVBoxLayout(self._cores_section)
         cs_outer.setContentsMargins(0, 8, 0, 0)
         cs_outer.setSpacing(2)
-        cs_hdr_row = QHBoxLayout()
-        cs_hdr_row.setContentsMargins(0, 0, 0, 0)
-        self._cores_header = QLabel()
-        self._cores_header.setTextFormat(Qt.TextFormat.RichText)
-        cs_hdr_row.addWidget(self._cores_header, 1)
-        self._cores_clear_btn = QPushButton("Clear")
-        self._cores_clear_btn.setToolTip("Clear Core Filter and show all cores")
-        self._cores_clear_btn.clicked.connect(self._on_core_filter_clear_clicked)
-        self._cores_clear_btn.setVisible(False)
-        cs_hdr_row.addWidget(self._cores_clear_btn)
-        cs_outer.addLayout(cs_hdr_row)
-        # Own bounded QScrollArea — Cores scrolls independently of the Task
-        # list above rather than sharing one scrollbar or growing unbounded.
-        self._cores_list_host = QWidget()
-        self._cores_list_layout = QVBoxLayout(self._cores_list_host)
-        self._cores_list_layout.setContentsMargins(0, 0, 0, 0)
-        self._cores_list_layout.setSpacing(2)
-        self._cores_list_layout.addStretch(1)
-        self._cores_scroll = QScrollArea()
-        self._cores_scroll.setObjectName("legend_cores_scroll")
-        self._cores_scroll.setWidgetResizable(True)
-        self._cores_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._cores_scroll.setWidget(self._cores_list_host)
-        self._cores_scroll.setMaximumHeight(160)
-        self._cores_scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        cs_outer.addWidget(self._cores_scroll)
+        self._core_chips = _CoreFilterChips(label="Cores")
+        self._core_chips.core_filter_changed.connect(self._on_core_chips_changed)
+        cs_outer.addWidget(self._core_chips)
+        self._cores_hint = QLabel(
+            "Shared filter — also scopes the timeline & Cursors panel.")
+        self._cores_hint.setObjectName("legend_cores_hint")
+        self._cores_hint.setWordWrap(True)
+        self._cores_hint.setStyleSheet("color:#888; font-size:10px;")
+        cs_outer.addWidget(self._cores_hint)
         self._cores_section.setVisible(False)
         outer.addWidget(self._cores_section)
 
@@ -953,8 +1133,7 @@ class _LegendWidget(QWidget):
         self.setPalette(palette)
         # Keep child surfaces explicitly in sync; otherwise some platforms keep
         # stale dark backgrounds on the scroll viewport when switching theme.
-        for w in (self._list_host, self._scroll.viewport(), self._task_list,
-                  self._cores_list_host, self._cores_scroll.viewport()):
+        for w in (self._list_host, self._scroll.viewport(), self._task_list):
             p = w.palette()
             p.setColor(QPalette.ColorRole.Window, bg)
             p.setColor(QPalette.ColorRole.Base, bg)
@@ -1000,59 +1179,31 @@ class _LegendWidget(QWidget):
         self._migrated_only_cb.blockSignals(False)
 
     def set_view_mode(self, mode: str) -> None:
-        """Core Filter only applies where cores have their own rows (Core View)."""
+        """View mode no longer gates the Core Filter (it scopes Task view too)."""
         self._view_mode = "core" if mode == "core" else "task"
         if self._trace_ref is not None:
             self._rebuild_cores_section(self._trace_ref)
 
     def set_core_filter(self, keys: Optional[list]) -> None:
-        """Set the Core Filter checkboxes without re-emitting core_filter_changed."""
+        """Set the Core Filter chips without re-emitting core_filter_changed."""
         self._core_filter_keys = set(keys) if keys else None
-        for name, cb in self._core_checks.items():
-            cb.blockSignals(True)
-            cb.setChecked(self._core_filter_keys is None or name in self._core_filter_keys)
-            cb.blockSignals(False)
-        self._cores_clear_btn.setVisible(self._core_filter_keys is not None)
+        self._core_chips.set_core_filter(list(keys) if keys else None)
+        self._filter_tasks(self._search.text())
 
     def _rebuild_cores_section(self, trace: Optional[BtfTrace]) -> None:
-        """Rebuild the Cores checkbox list (Core View only, mirrors the Task list)."""
-        # Remove only the checkbox widgets — keep the trailing stretch so
-        # short core lists stay top-aligned in the scroll area.
-        for cb in self._core_checks.values():
-            self._cores_list_layout.removeWidget(cb)
-            cb.deleteLater()
-        self._core_checks.clear()
+        """Rebuild the Cores chip row.  Shown for any multi-core trace."""
         core_names = list(getattr(trace, "core_names", None) or []) if trace else []
-        show = self._view_mode == "core" and len(core_names) > 1
+        show = len(core_names) > 1
         self._cores_section.setVisible(show)
-        hdr_color = "#AAAAAA" if self._is_dark else "#555555"
-        self._cores_header.setText(f"<b style='color:{hdr_color}'>Cores</b>")
-        if not show:
-            return
-        for core_name in core_names:
-            cb = QCheckBox(core_name)
-            cb.setChecked(self._core_filter_keys is None or core_name in self._core_filter_keys)
-            cb.toggled.connect(
-                lambda checked, c=core_name: self._on_core_check_toggled(c, checked))
-            self._cores_list_layout.insertWidget(self._cores_list_layout.count() - 1, cb)
-            self._core_checks[core_name] = cb
-        self._cores_clear_btn.setVisible(self._core_filter_keys is not None)
+        if show:
+            self._core_chips.set_cores(
+                core_names,
+                list(self._core_filter_keys) if self._core_filter_keys else None)
 
-    def _on_core_check_toggled(self, core_name: str, checked: bool) -> None:
-        all_cores = list(self._core_checks.keys())
-        cur = set(self._core_filter_keys) if self._core_filter_keys else set(all_cores)
-        if checked:
-            cur.add(core_name)
-        else:
-            cur.discard(core_name)
-        keys = [c for c in all_cores if c in cur] if len(cur) < len(all_cores) else None
+    def _on_core_chips_changed(self, keys: list) -> None:
         self._core_filter_keys = set(keys) if keys else None
-        self._cores_clear_btn.setVisible(self._core_filter_keys is not None)
+        self._filter_tasks(self._search.text())
         self.core_filter_changed.emit(list(keys) if keys else [])
-
-    def _on_core_filter_clear_clicked(self) -> None:
-        self.set_core_filter(None)
-        self.core_filter_changed.emit([])
 
     def set_filter_text(self, text: str) -> None:
         """Set legend search text without notifying the timeline scene."""
@@ -1149,6 +1300,11 @@ class _LegendWidget(QWidget):
                 visible = in_filter
             if visible and self._migrated_only_cb.isChecked() and trace is not None:
                 visible = _is_migrated_task(trace, mk)
+            # Core Filter also scopes the legend list (web: LegendPanel
+            # visibleTasks -> taskRunsOnSelectedCore).
+            if visible and self._core_filter_keys and trace is not None:
+                visible = _task_runs_on_selected_core(
+                    trace, mk, self._core_filter_keys)
             item.setHidden(not visible)
             # Step-1 item 10: mark rows that are part of the active Migration
             # Filter's scope, distinct from Highlight/Selection.
@@ -10890,6 +11046,46 @@ class _StatsPanel(QWidget):
         self._filter_label.setMinimumWidth(0)
         self._filter_label.setVisible(False)
         scope_block.addWidget(self._filter_label)
+
+        # --- Investigation-category filter pills (web: .stats-cat-filter) -----
+        # One toggle pill per category (Overview / Triage / Timing / …); turning
+        # a pill off hides every Statistics section in that category. Mirrors
+        # StatisticsPanel.vue `statsHiddenCategories` + StatsSectionBlock.vue
+        # `v-show="!categoryHidden"`.
+        self._stats_hidden_categories: set = set()
+        self._cat_pills: Dict[str, QToolButton] = {}
+        self._cat_pill_counts: Dict[str, int] = {}
+        self._cat_filter_row = QWidget()
+        self._cat_filter_row.setObjectName("stats_cat_filter")
+        self._cat_filter_row.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        _cat_flow = _FlowLayout(self._cat_filter_row, spacing=5)
+        for _cat in STATS_SECTION_CATEGORIES:
+            _pill = QToolButton()
+            _pill.setObjectName("stats_cat_pill")
+            _pill.setCheckable(True)
+            _pill.setChecked(True)
+            _pill.setCursor(Qt.CursorShape.PointingHandCursor)
+            _pill.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+            _pill.setProperty("cat", _cat)
+            _pill.setText(STATS_CATEGORY_LABELS.get(_cat, _cat))
+            _pill.toggled.connect(
+                lambda on, c=_cat: self._on_category_pill_toggled(c, on))
+            _cat_flow.addWidget(_pill)
+            self._cat_pills[_cat] = _pill
+        self._cat_clear_btn = QToolButton()
+        self._cat_clear_btn.setObjectName("stats_cat_clear")
+        self._cat_clear_btn.setText("Show all")
+        self._cat_clear_btn.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self._cat_clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cat_clear_btn.setToolTip("Show every category")
+        self._cat_clear_btn.setVisible(False)
+        self._cat_clear_btn.clicked.connect(self._show_all_stats_categories)
+        _cat_flow.addWidget(self._cat_clear_btn)
+        self._cat_filter_row.setVisible(False)
+        scope_block.addWidget(self._cat_filter_row)
+
         outer.addLayout(scope_block)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -10987,6 +11183,15 @@ class _StatsPanel(QWidget):
             self._btn_export_html,
         ):
             btn.setFont(font)
+        for pill in getattr(self, "_cat_pills", {}).values():
+            pill.setFont(font)
+        clear = getattr(self, "_cat_clear_btn", None)
+        if clear is not None:
+            clear.setFont(font)
+        if getattr(self, "_cat_pills", None):
+            self._sync_category_pills()
+        if getattr(self, "_section_headers", None):
+            self._restyle_section_headers()
 
     def apply_ui_font_size(self, ui_font_size: int) -> None:
         """Re-layout stats content when UI / menu font size changes."""
@@ -11119,13 +11324,48 @@ class _StatsPanel(QWidget):
             self._section_scope_chip = ""
         filt = ""
         lbl = getattr(self, "_filter_label", None)
-        if lbl is not None and lbl.isVisible():
-            raw = (lbl.text() or "").strip()
-            if raw.startswith("Filtered:"):
-                filt = raw.split(":", 1)[1].strip() or "Filtered"
-            elif raw:
-                filt = raw
+        # Key off the text, not isVisible(): the panel may not be shown yet when
+        # a filter toggle arrives, but the label text is always authoritative.
+        raw = ((lbl.text() if lbl is not None else "") or "").strip()
+        if raw.startswith("Filtered:"):
+            filt = raw.split(":", 1)[1].strip() or "Filtered"
+        elif raw:
+            filt = raw
         self._section_filter_chip = filt
+
+    def _apply_section_filter_chips(self) -> None:
+        """Add / remove the 'Filtered' meta chip on already-built section
+        headers so it tracks filter changes without a full stats rebuild
+        (web: <StatsSectionHeader> reacts to statsHeaderFilterLabel)."""
+        want = self._section_filter_chip
+        tip = f"Statistics reflect Filter: {want}" if want else ""
+        for row in getattr(self, "_section_header_rows", {}).values():
+            lay = row.layout()
+            if lay is None:
+                continue
+            existing = row.findChild(QLabel, "stats_meta_chip_filter")
+            if want and existing is None:
+                chip = self._meta_chip_label("Filtered", kind="filter", tip=tip)
+                # Keep the rebuilt order Scope -> Filtered -> category -> pin:
+                # drop the chip in front of the category badge (or the trailing
+                # pin slot when a section has no category).
+                idx = lay.count()
+                for i in range(lay.count()):
+                    it = lay.itemAt(i)
+                    w = it.widget() if it is not None else None
+                    if w is not None and w.objectName() in (
+                            "stats_section_category", "stats_section_pin_slot"):
+                        idx = i
+                        break
+                lay.insertWidget(
+                    idx, chip, 0,
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            elif want and existing is not None:
+                existing.setToolTip(tip)
+            elif not want and existing is not None:
+                lay.removeWidget(existing)
+                existing.setParent(None)
+                existing.deleteLater()
 
     def _restore_scroll_y(self, y: int) -> None:
         """Restore saved scroll unless Evidence/Investigate requested a jump."""
@@ -11210,6 +11450,111 @@ class _StatsPanel(QWidget):
             cat = STATS_SECTION_CATEGORY.get(sid) or badge.text()
             badge.setStyleSheet(
                 stats_category_badge_stylesheet(cat, dark=self._is_dark))
+
+    # ---- Investigation-category filter (web: toggleStatsCategory) -----------
+    def _category_filter_active(self) -> bool:
+        """True while at least one category is hidden (web: categoryFilterActive)."""
+        return bool(getattr(self, "_stats_hidden_categories", None))
+
+    def _on_category_pill_toggled(self, cat: str, on: bool) -> None:
+        hidden = self._stats_hidden_categories
+        if on:
+            hidden.discard(cat)
+        else:
+            hidden.add(cat)
+        self._apply_category_filter()
+        self._sync_category_pills()
+
+    def _show_all_stats_categories(self) -> None:
+        """Clear every category hide (web: showAllStatsCategories)."""
+        if not self._stats_hidden_categories:
+            return
+        self._stats_hidden_categories.clear()
+        for pill in self._cat_pills.values():
+            pill.blockSignals(True)
+            pill.setChecked(True)
+            pill.blockSignals(False)
+        self._apply_category_filter()
+        self._sync_category_pills()
+
+    def _apply_category_filter(self) -> None:
+        """Hide sep + header + body for sections in a hidden category
+        (web: StatsSectionBlock.vue ``v-show="!categoryHidden"``)."""
+        hidden = getattr(self, "_stats_hidden_categories", None)
+        if hidden is None:
+            return
+        for sid, row in self._section_header_rows.items():
+            cat = STATS_SECTION_CATEGORY.get(sid)
+            show = not (cat is not None and cat in hidden)
+            sep = self._section_seps.get(sid)
+            body = self._section_bodies.get(sid)
+            if sep is not None:
+                sep.setVisible(show)
+            row.setVisible(show)
+            if body is not None:
+                collapsed = bool(self._section_collapsed.get(sid, False))
+                body.setVisible(show and not collapsed)
+
+    def _sync_category_pills(self) -> None:
+        """Refresh per-category counts, pill colours and the 'Show all' link."""
+        pills = getattr(self, "_cat_pills", None)
+        if not pills:
+            return
+        counts: Dict[str, int] = {c: 0 for c in STATS_SECTION_CATEGORIES}
+        for sid in self._section_header_rows:
+            cat = STATS_SECTION_CATEGORY.get(sid)
+            if cat in counts:
+                counts[cat] += 1
+        self._cat_pill_counts = counts
+        hidden = getattr(self, "_stats_hidden_categories", set())
+        for cat, pill in pills.items():
+            n = counts.get(cat, 0)
+            label = STATS_CATEGORY_LABELS.get(cat, cat)
+            pill.setText(f"{label}  {n}" if n else label)
+            pill.setVisible(n > 0)
+            on = cat not in hidden
+            if pill.isChecked() != on:
+                pill.blockSignals(True)
+                pill.setChecked(on)
+                pill.blockSignals(False)
+            pill.setToolTip(
+                f"Hide {label} sections" if on else f"Show {label} sections")
+            pill.setStyleSheet(self._category_pill_stylesheet(cat, on))
+        row = getattr(self, "_cat_filter_row", None)
+        if row is not None:
+            row.setVisible(bool(self._trace) and any(counts.values()))
+            row.updateGeometry()
+        clear = getattr(self, "_cat_clear_btn", None)
+        if clear is not None:
+            clear.setVisible(self._category_filter_active())
+            clear.setStyleSheet(self._category_pill_stylesheet(None, True))
+
+    def _category_pill_stylesheet(self, cat: Optional[str], on: bool) -> str:
+        dark = self._is_dark
+        ui_fs = self._ui_fs()
+        if cat is None:  # the borderless "Show all" link
+            accent = "#5B9BD5" if dark else "#2a6fb2"
+            return (
+                "QToolButton#stats_cat_clear {"
+                f" color:{accent}; background:transparent; border:none;"
+                f" padding:3px 6px; font-size:{ui_fs}; font-weight:600; }}"
+                "QToolButton#stats_cat_clear:hover { text-decoration:underline; }"
+            )
+        muted = "#9AA0A6" if dark else "#5F6368"
+        sep = "#3a4658" if dark else "#C0C0C0"
+        if on:
+            bg, fg, border = stats_category_badge_colors(cat, dark=dark)
+            body = (
+                f" color:{fg}; background-color:{bg}; border:1px solid {border};")
+        else:
+            body = (
+                f" color:{muted}; background:transparent;"
+                f" border:1px solid {sep};")
+        return (
+            "QToolButton#stats_cat_pill {"
+            f"{body} border-radius:9px; padding:3px 8px;"
+            f" font-size:{ui_fs}; font-weight:600; }}"
+        )
 
 
     def capture_layout_state(self) -> dict:
@@ -11859,6 +12204,8 @@ class _StatsPanel(QWidget):
         for sid in self._section_headers:
             self._update_section_header_icon(sid)
         self._sync_category_badges()
+        self._sync_category_pills()
+        self._restyle_section_headers()
         self._sync_pin_buttons()
         for grip in self._table_grips:
             grip.set_dark(is_dark)
@@ -12509,6 +12856,23 @@ class _StatsPanel(QWidget):
         self._style_stats_sep(f)
         return f
 
+    def _section_header_stylesheet(self) -> str:
+        """Softened section-header title (web StatsSectionHeader.vue restyle:
+        UI-weight 600, not bold; hover tints the label with the accent)."""
+        ui_fs = self._ui_fs()
+        accent = "#5B9BD5" if self._is_dark else "#2a6fb2"
+        return (
+            "QPushButton {"
+            f" text-align:left; padding:2px 0 2px 2px; border:none;"
+            f" background:transparent; font-weight:600; font-size:{ui_fs}; }}"
+            f"QPushButton:hover {{ color:{accent}; }}"
+        )
+
+    def _restyle_section_headers(self) -> None:
+        sheet = self._section_header_stylesheet()
+        for hdr in self._section_headers.values():
+            hdr.setStyleSheet(sheet)
+
     def _update_section_header_icon(self, section_id: str) -> None:
         hdr = self._section_headers.get(section_id)
         if hdr is not None:
@@ -12557,6 +12921,9 @@ class _StatsPanel(QWidget):
             if section_id in self._section_bodies:
                 continue
             self._ensure_section_body(section_id)
+            # A just-mounted body must still respect a hidden category.
+            if self._category_filter_active():
+                self._apply_category_filter()
             app = QApplication.instance()
             if app is not None:
                 app.processEvents()
@@ -12772,10 +13139,7 @@ class _StatsPanel(QWidget):
         hdr.setIconSize(QSize(10, 10))
         hdr.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        hdr.setStyleSheet(
-            f"text-align:left; padding:2px 0 2px 2px; border:none; background:transparent;"
-            f" font-weight:bold; font-size:{ui_fs};"
-        )
+        hdr.setStyleSheet(self._section_header_stylesheet())
         hdr.clicked.connect(
             lambda _checked=False, sid=section_id: self._toggle_section(sid))
         pin = _StatsPinButton()
@@ -12976,6 +13340,8 @@ class _StatsPanel(QWidget):
             self._ilay.addWidget(tail)
             self._scroll_tail = tail
             self._update_scroll_tail_height()
+        if self._category_filter_active():
+            self._apply_category_filter()
 
     def _core_util_rows(self, trace: "BtfTrace",
                         lo: Optional[int] = None, hi: Optional[int] = None) -> List[Tuple[str, float]]:
@@ -14223,6 +14589,7 @@ class _StatsPanel(QWidget):
             lbl.setText("")
             lbl.setVisible(False)
         self._refresh_section_meta_chips()
+        self._apply_section_filter_chips()
 
     def _build_preemption_table(self, rows: List[tuple], ui_fs: str,
                                 empty_hint: str, on_row_click=None) -> QWidget:
@@ -18195,6 +18562,8 @@ class _StatsPanel(QWidget):
         )
 
         self._flush_pending_sections()
+        self._apply_category_filter()
+        self._sync_category_pills()
         self._ensure_scroll_tail()
         self.clear_scroll_tail_pin()
         self.relax_content_width()

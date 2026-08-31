@@ -673,11 +673,12 @@
 
     <div class="spacer" />
 
+    <!-- Cursor-scope + Filtered badges — shown independently: C1–Cn only while
+         Limit is on, Filtered only while a filter is active. -->
     <button
+      v-if="limitOn"
       type="button"
-      class="tb-limit-badge"
-      :class="{ on: limitOn }"
-      :disabled="!rangeEnabled"
+      class="tb-limit-badge on"
       :title="limitBadgeTitle"
       :aria-pressed="limitOn"
       :aria-label="limitBadgeTitle"
@@ -685,6 +686,18 @@
       @click="emit('toggleLimit')"
     >
       C1–Cn
+    </button>
+    <button
+      v-if="filterActive"
+      type="button"
+      class="tb-filter-badge"
+      :title="`Filtered: ${filterLabel} — click to clear all filters`"
+      aria-label="Clear all active filters"
+      data-demo-target="toolbar_filtered"
+      @click="emit('clearFilters')"
+    >
+      <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M1.5 3h13l-5 6v4l-3 1.5v-5.5z"/></svg>
+      Filtered
     </button>
 
     <span
@@ -816,6 +829,8 @@ const props = defineProps({
   zoomPresetValue: { type: String, default: 'fit' },
   zoomPresetOptions: { type: Array, default: () => [{ value: 'fit', label: 'Fit' }] },
   limitOn: { type: Boolean, default: false },
+  filterActive: { type: Boolean, default: false },
+  filterLabel: { type: String, default: '' },
 })
 
 const emit = defineEmits([
@@ -827,7 +842,7 @@ const emit = defineEmits([
   'exportSlice',
   'showHelp', 'showAbout', 'showSettings', 'showHeatmap', 'showAnalysis',
   'showCompare',
-  'clearTaskFilter', 'file-error', 'toggleLimit',
+  'clearTaskFilter', 'clearFilters', 'file-error', 'toggleLimit',
 ])
 
 const limitBadgeTitle = computed(() => {
@@ -1256,5 +1271,29 @@ watch(
   opacity: 0.55;
   cursor: not-allowed;
   filter: none;
+}
+
+.tb-filter-badge {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 2px 7px;
+  margin: 0 2px;
+  border-radius: 8px;
+  border: 1px solid var(--badge-filtered-border, rgba(212, 172, 13, 0.45));
+  background: var(--badge-filtered-bg, rgba(230, 180, 60, 0.16));
+  color: var(--badge-filtered-fg, #e0c070);
+  font: inherit;
+  font-size: inherit;
+  font-weight: 400;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.tb-filter-badge:hover {
+  filter: brightness(1.12);
 }
 </style>

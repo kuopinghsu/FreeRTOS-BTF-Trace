@@ -49,49 +49,72 @@ class ToolbarIconParityTests(unittest.TestCase):
         self.assertIn("_IC_HELP", mw)
         self.assertIn("_on_keyboard_shortcuts", mw)
 
-    def test_limit_badge_follows_settings(self) -> None:
+    def test_limit_and_filter_badges_are_independent(self) -> None:
+        """Toolbar shows C1–Cn only while Limit is on, and a separate Filtered
+        badge only while a Filter is active — the two are independent, on both
+        Desktop and Web."""
         tb = (BTF_ROOT / "web" / "src" / "components" / "Toolbar.vue").read_text(
             encoding="utf-8")
         mw = (BTF_ROOT / "btf_viewer_pkg" / "mainwindow.py").read_text(
             encoding="utf-8")
-        self.assertIn('class="tb-limit-badge"', tb)
+        app = (BTF_ROOT / "web" / "src" / "App.vue").read_text(encoding="utf-8")
+
+        # --- Web ---
+        self.assertIn('class="tb-limit-badge on"', tb)
+        self.assertRegex(tb, r'v-if="limitOn"[\s\S]{0,200}class="tb-limit-badge on"')
         self.assertRegex(tb, r">\s*C1–Cn\s*<")
-        self.assertNotIn("limitOn ? 'On'", tb)
-        self.assertLess(tb.find('tb-limit-badge'), tb.find('loadDemo'))
-        self.assertLess(tb.find('tb-limit-badge'), tb.find('showSettings'))
+        self.assertIn('class="tb-filter-badge"', tb)
+        self.assertIn('v-if="filterActive"', tb)
+        self.assertIn("emit('clearFilters')", tb)
+        # C1–Cn before Filtered before the demo/settings buttons.
+        self.assertLess(tb.find('tb-limit-badge'), tb.find('tb-filter-badge'))
+        self.assertLess(tb.find('tb-filter-badge'), tb.find('loadDemo'))
         self.assertIn('--badge-scope-fg', tb)
-        self.assertIn('--badge-detail-fg', tb)
+        # Filtered badge must use its own amber palette, NOT --badge-timing-*
+        # (which is blue) — desktop side is stats_meta_chip_colors("filtered").
+        self.assertIn('--badge-filtered-fg', tb)
+        self.assertNotIn('--badge-timing-fg', tb)
+        self.assertIn(':filter-active="!!activeFilterSummaryLabel"', app)
+        self.assertIn('@clear-filters="clearAllActiveFilters"', app)
+        self.assertIn("filterActive: { type: Boolean", tb)
+
+        # --- Desktop ---
         start = mw.index("def _build_toolbar")
         chunk = mw[start:mw.index("def _update_trace_quality_banner")]
         self.assertIn("tbLimitBadge", chunk)
-        self.assertLess(chunk.find("tbLimitBadge"), chunk.find('_ia("Settings"'))
-        self.assertLess(chunk.find('_ia("Settings"'), chunk.find('_ia("Help"'))
+        self.assertIn("tbFilterBadge", chunk)
+        self.assertLess(chunk.find("tbLimitBadge"), chunk.find("tbFilterBadge"))
+        self.assertLess(chunk.find("tbFilterBadge"), chunk.find('_ia("Settings"'))
         self.assertNotIn("setFlat", chunk)
         self.assertIn('setText("C1–Cn")', mw)
         self.assertNotIn("C1–Cn On", mw)
-        self.assertNotIn("C1–Cn Off", mw)
-        self.assertIn('stats_meta_chip_colors("scope"', mw)
-        self.assertIn('stats_category_badge_colors("DETAIL"', mw)
-        self.assertIn("_ui_font_stylesheet_size", mw[mw.index("def _update_limit_badge"):mw.index("def _on_limit_badge_clicked")])
-        self.assertNotIn("min-width:64px", mw)
-        app = (BTF_ROOT / "web" / "src" / "App.vue").read_text(encoding="utf-8")
+        # C1–Cn badge hides when Limit is off (no longer a greyed always-on chip).
+        upd = mw[mw.index("def _update_limit_badge"):mw.index("def _update_filter_badge")]
+        self.assertIn("btn.setVisible(on)", upd)
+        self.assertIn('stats_meta_chip_colors("scope"', upd)
+        # Filtered badge is driven by the shared filter summary + clears all.
+        fbadge = mw[mw.index("def _update_filter_badge"):mw.index("def _clear_all_filters")]
+        self.assertIn("_active_filter_summary_label()", fbadge)
+        self.assertIn("btn.setVisible(bool(label))", fbadge)
+        self.assertIn('stats_meta_chip_colors("filtered"', fbadge)
+        clr = mw[mw.index("def _clear_all_filters"):mw.index("def _on_limit_badge_clicked")]
+        self.assertIn("_clear_core_filter()", clr)
+        self.assertIn("_clear_heatmap_task_filter()", clr)
+        self.assertIn("_IC_FILTER", mw)
+
         self.assertIn(':limit-on="limitOn"', app)
         self.assertIn('@toggle-limit="onToggleLimit"', app)
-        self.assertIn("--badge-scope-fg: #9EC5E8", app)
-        self.assertIn("--badge-scope-fg: #1A5276", app)
-        from btf_viewer_pkg.config import (
-            stats_category_badge_colors,
-            stats_meta_chip_colors,
-        )
+        from btf_viewer_pkg.config import stats_meta_chip_colors
         fg, bg, border = stats_meta_chip_colors("scope", dark=True)
         self.assertIn(f"--badge-scope-fg: {fg}", app)
         self.assertIn(f"--badge-scope-bg: {bg}", app)
-        self.assertIn(f"--badge-scope-border: {border}", app)
-        fg, bg, border = stats_meta_chip_colors("scope", dark=False)
-        self.assertIn(f"--badge-scope-fg: {fg}", app)
-        det_bg, det_fg, det_border = stats_category_badge_colors("DETAIL", dark=True)
-        self.assertIn(f"--badge-detail-fg: {det_fg}", app)
-        self.assertIn(f"--badge-detail-bg: {det_bg}", app)
+        # Filtered-badge palette is lockstep on both sides (App.vue var ==
+        # config.py stats_meta_chip_colors("filtered")), dark + light.
+        for dark in (True, False):
+            fg, bg, border = stats_meta_chip_colors("filtered", dark=dark)
+            self.assertIn(f"--badge-filtered-fg: {fg}", app)
+            self.assertIn(f"--badge-filtered-bg: {bg}", app)
+            self.assertIn(f"--badge-filtered-border: {border}", app)
 
     def test_web_toolbar_uses_shared_file_icons(self) -> None:
         tb = (BTF_ROOT / "web" / "src" / "components" / "Toolbar.vue").read_text(

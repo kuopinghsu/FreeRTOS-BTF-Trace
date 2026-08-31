@@ -79,44 +79,59 @@ class PanelTabChromeTest(unittest.TestCase):
         self._app.processEvents()
         return win
 
-    def test_dock_title_hidden_and_tab_bars_align(self) -> None:
+    def test_dock_title_hidden_and_icon_rail_replaces_tab_strip(self) -> None:
+        """Web redesign: the text tab strip is gone — a vertical icon rail plus
+        a per-panel header row drive the right panel (App.vue .icon-rail /
+        .rp-page-header). The QTabWidget stays as the hidden content stack."""
         win = self._make_win()
         title = win._panel_dock.titleBarWidget()
         self.assertIsNotNone(title)
         self.assertEqual(title.height(), 0)
 
-        trace_tb = win._tab_widget.tabBar()
-        panel_tb = win._panel_tabs.tabBar()
-        self.assertFalse(trace_tb.expanding())
-        self.assertTrue(panel_tb.expanding())
-        self.assertLessEqual(
-            abs(trace_tb.height() - panel_tb.height()), 2,
-            "file tabs and panel tabs should share one strip height",
-        )
-        ty = trace_tb.mapTo(win, QPoint(0, 0)).y()
-        py = panel_tb.mapTo(win, QPoint(0, 0)).y()
-        self.assertLessEqual(
-            abs(ty - py), 3,
-            "panel tabs must sit on the same row as the task-window tabs",
-        )
+        # The panel QTabWidget's own tab bar is hidden.
+        self.assertTrue(win._panel_tabs.tabBar().isHidden())
 
-    def test_panel_tabs_fill_width_when_some_are_hidden(self) -> None:
+        rail = win._icon_rail
+        self.assertEqual(
+            [b.text() for b in rail._buttons],
+            ["Statistics", "Marks", "Find", "Legend", "AI"],
+        )
+        self.assertEqual(rail.width(), rail.RAIL_W)
+        # Header title tracks the current panel.
+        self.assertEqual(
+            win._rp_page_header.text(),
+            win._panel_tabs.tabText(win._panel_tabs.currentIndex()),
+        )
+        # The active rail button matches the active panel.
+        checked = [i for i, b in enumerate(rail._buttons) if b.isChecked()]
+        self.assertEqual(checked, [win._panel_tabs.currentIndex()])
+
+    def test_icon_rail_switches_panels_and_follows_visibility(self) -> None:
         win = self._make_win()
-        tb = win._panel_tabs.tabBar()
-        self.assertGreaterEqual(tb.width(), win._panel_tabs.width() - 6)
+        rail = win._icon_rail
 
-        win._panel_tabs.setTabVisible(_PANEL_TAB_MARKS, False)
-        win._panel_tabs.setTabVisible(_PANEL_TAB_FIND, False)
-        win._panel_tabs.setTabVisible(_PANEL_TAB_LEGEND, False)
-        win._panel_tabs._sync_tab_bar_width()
+        win._on_icon_rail_activated(_PANEL_TAB_FIND)
         self._app.processEvents()
-        self.assertFalse(win._panel_tabs.isTabVisible(_PANEL_TAB_FIND))
-        self.assertFalse(win._panel_tabs.isTabVisible(_PANEL_TAB_LEGEND))
-        self.assertTrue(tb.expanding())
-        self.assertGreaterEqual(tb.width(), win._panel_tabs.width() - 6)
-        # Remaining tabs still share the strip — no leftover hole after the last tab.
-        last = tb.tabAt(QPoint(tb.width() - 4, tb.height() // 2))
-        self.assertNotEqual(last, -1)
+        self.assertEqual(win._panel_tabs.currentIndex(), _PANEL_TAB_FIND)
+        self.assertEqual(win._rp_page_header.text(), "Find")
+        self.assertTrue(rail._buttons[_PANEL_TAB_FIND].isChecked())
+
+        # Hidden panels hide their rail button; current panel falls back to a
+        # still-visible one. Toggle through the real View-menu handlers (they
+        # call _sync_panel_tab_visibility synchronously); assert immediately —
+        # a deferred settings-restore in the test env re-reads show_* from rc.
+        _wait_ms(self._app, 50)
+        win._toggle_show_find_panel()
+        win._toggle_show_legend_panel()
+        self.assertFalse(win._show_find)
+        self.assertTrue(rail._buttons[_PANEL_TAB_FIND].isHidden())
+        self.assertTrue(rail._buttons[_PANEL_TAB_LEGEND].isHidden())
+        self.assertFalse(rail._buttons[_PANEL_TAB_MARKS].isHidden())
+        self.assertTrue(win._panel_tabs.isTabVisible(win._panel_tabs.currentIndex()))
+        self.assertEqual(
+            win._rp_page_header.text(),
+            win._panel_tabs.tabText(win._panel_tabs.currentIndex()),
+        )
 
 
 if __name__ == "__main__":

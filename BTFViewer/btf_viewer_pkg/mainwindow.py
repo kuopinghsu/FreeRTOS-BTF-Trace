@@ -11,7 +11,7 @@ from .view import *  # noqa: F403,F401
 from .stats import *  # noqa: F403,F401
 from .stats import (
     _RcSettings, _parse_task_deadlines_text, _AnalysisFindingsDialog,
-    _format_analysis_findings_text,
+    _format_analysis_findings_text, _CoreFilterChips,
 )
 from .trace_quality import collect_trace_quality_warnings, trace_quality_report
 from .evidence_history import (
@@ -1183,6 +1183,169 @@ def _critical_with_detail(parent, title: str, message: str, detail: str) -> None
     if detail:
         box.setDetailedText(detail)
     box.exec()
+
+
+class _CollapsibleCard(QWidget):
+    """Right-panel collapsible section card — mirrors the web app's Marks-tab
+    ``.rp-card`` (App.vue): a header button (chevron + title + optional count
+    badge) that toggles a body container.  Callers add section content to
+    ``card.body_layout``.  Collapse state is in-memory only, like the web
+    ``marksSectionOpen`` ref.
+    """
+
+    toggled = Signal(bool)
+
+    def __init__(self, title: str, *, expanding: bool = False, parent=None):
+        super().__init__(parent)
+        self.setObjectName("rp_card")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._open = True
+        self._expanding = bool(expanding)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self._head = QToolButton()
+        self._head.setObjectName("rp_card_head")
+        self._head.setText(title)
+        self._head.setCheckable(True)
+        self._head.setChecked(True)
+        self._head.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._head.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._head.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._head.toggled.connect(self._on_toggled)
+
+        self._count = QLabel("")
+        self._count.setObjectName("rp_card_count")
+        self._count.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._count.setVisible(False)
+
+        head_row = QWidget()
+        head_row.setObjectName("rp_card_head_row")
+        hr = QHBoxLayout(head_row)
+        hr.setContentsMargins(0, 0, 8, 0)
+        hr.setSpacing(0)
+        hr.addWidget(self._head, 1)
+        hr.addWidget(self._count, 0)
+        outer.addWidget(head_row)
+
+        self._body_sep = QFrame()
+        self._body_sep.setObjectName("rp_card_body_sep")
+        self._body_sep.setFixedHeight(1)
+        outer.addWidget(self._body_sep)
+
+        self._body = QWidget()
+        self._body.setObjectName("rp_card_body")
+        self._body_layout = QVBoxLayout(self._body)
+        self._body_layout.setContentsMargins(8, 6, 8, 8)
+        self._body_layout.setSpacing(4)
+        outer.addWidget(self._body, 1 if self._expanding else 0)
+
+        self._apply_size_policy()
+        self._refresh_chevron()
+
+    @property
+    def body_layout(self) -> QVBoxLayout:
+        return self._body_layout
+
+    def set_count(self, text) -> None:
+        s = "" if text is None else str(text)
+        self._count.setText(s)
+        self._count.setVisible(bool(s))
+
+    def set_open(self, is_open: bool) -> None:
+        if bool(is_open) != self._open:
+            self._head.setChecked(bool(is_open))   # fires _on_toggled
+
+    def is_open(self) -> bool:
+        return self._open
+
+    def _apply_size_policy(self) -> None:
+        vert = (
+            QSizePolicy.Policy.Expanding
+            if (self._expanding and self._open)
+            else QSizePolicy.Policy.Maximum
+        )
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, vert)
+
+    def _on_toggled(self, checked: bool) -> None:
+        self._open = bool(checked)
+        self._body.setVisible(self._open)
+        self._body_sep.setVisible(self._open)
+        self._apply_size_policy()
+        self._refresh_chevron()
+        self.toggled.emit(self._open)
+
+    def _refresh_chevron(self) -> None:
+        # Web rotates an SVG; a Qt arrow glyph is the cheap equivalent.
+        self._head.setArrowType(
+            Qt.ArrowType.DownArrow if self._open else Qt.ArrowType.RightArrow)
+
+
+class _IconRail(QWidget):
+    """Vertical icon navigation rail for the right panel — mirrors the web
+    App.vue ``.icon-rail``: a fixed-width column of glyph buttons (native
+    tooltip = the web ``.rail-tip``); the active panel's button carries an
+    accent bar.  Emits ``activated(index)`` on click; the current panel is
+    reflected via :meth:`set_active`.
+    """
+
+    activated = Signal(int)
+
+    RAIL_W = 44
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("icon_rail")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFixedWidth(self.RAIL_W)
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(0, 4, 0, 4)
+        self._lay.setSpacing(2)
+        self._lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        self._group.idClicked.connect(self.activated)
+        self._buttons: List[QToolButton] = []
+        self._icon_paths: List[str] = []
+
+    def add_item(self, icon_path: str, label: str) -> int:
+        btn = QToolButton()
+        btn.setObjectName("rail_btn")
+        btn.setText(label)                       # accessibility / tests
+        btn.setToolTip(label)
+        btn.setCheckable(True)
+        btn.setAutoRaise(True)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        btn.setIcon(_svg_icon(icon_path, "#9E9E9E", 18))
+        btn.setIconSize(QSize(18, 18))
+        btn.setFixedSize(self.RAIL_W, 40)
+        idx = len(self._buttons)
+        self._buttons.append(btn)
+        self._icon_paths.append(icon_path)
+        self._group.addButton(btn, idx)
+        self._lay.addWidget(btn)
+        return idx
+
+    def set_active(self, index: int) -> None:
+        if 0 <= index < len(self._buttons):
+            b = self._buttons[index]
+            if not b.isChecked():
+                b.blockSignals(True)
+                b.setChecked(True)
+                b.blockSignals(False)
+
+    def set_item_visible(self, index: int, visible: bool) -> None:
+        if 0 <= index < len(self._buttons):
+            self._buttons[index].setVisible(bool(visible))
+
+    def refresh_icons(self, color: str, accent: str) -> None:
+        for b, path in zip(self._buttons, self._icon_paths):
+            b.setIcon(_svg_icon(path, accent if b.isChecked() else color, 18))
 
 
 class _MarkRowWidget(QWidget):
@@ -2888,32 +3051,65 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if self._panel_tabs.isTabVisible(tab_index):
             self._panel_tabs.setCurrentIndex(tab_index)
 
+    def _on_icon_rail_activated(self, index: int) -> None:
+        """Icon-rail click → switch the right-panel content stack."""
+        tabs = getattr(self, "_panel_tabs", None)
+        if tabs is not None and 0 <= index < tabs.count() and tabs.isTabVisible(index):
+            tabs.setCurrentIndex(index)
+
     def _on_panel_tab_changed(self, index: int) -> None:
-        """When the AI tab becomes current, re-sync empty-state intent chips."""
+        """Sync the icon rail + per-panel header title to the active panel, and
+        re-sync AI empty-state chips when the AI panel becomes current."""
+        rail = getattr(self, "_icon_rail", None)
+        if rail is not None:
+            rail.set_active(index)
+            self._refresh_icon_rail_icons()
+        hdr = getattr(self, "_rp_page_header", None)
+        tabs = getattr(self, "_panel_tabs", None)
+        if hdr is not None and tabs is not None and 0 <= index < tabs.count():
+            hdr.setText(tabs.tabText(index))
         if index != _PANEL_TAB_AI:
             return
         panel = getattr(self, "_ai_panel", None)
         if panel is not None and hasattr(panel, "_on_ai_panel_shown"):
             panel._on_ai_panel_shown()
 
+    def _refresh_icon_rail_icons(self) -> None:
+        rail = getattr(self, "_icon_rail", None)
+        if rail is None:
+            return
+        dark = bool(getattr(self, "_is_dark", True))
+        muted = "#9E9E9E" if dark else "#666666"
+        accent = "#4a9eff" if dark else "#005A9E"
+        rail.refresh_icons(muted, accent)
+
     def _sync_panel_tab_visibility(self) -> None:
         """Apply show_stats / show_marks / show_find / show_ai to panel tab visibility."""
         if not hasattr(self, "_panel_tabs"):
             return
-        self._panel_tabs.setTabVisible(_PANEL_TAB_STATS, self._show_stats)
-        self._panel_tabs.setTabVisible(_PANEL_TAB_MARKS, self._show_marks)
-        self._panel_tabs.setTabVisible(_PANEL_TAB_FIND, self._show_find)
-        self._panel_tabs.setTabVisible(_PANEL_TAB_LEGEND, self._show_legend)
-        self._panel_tabs.setTabVisible(_PANEL_TAB_AI, self._ai_panel_wanted())
-        visible = [
-            i for i in (
-                _PANEL_TAB_STATS, _PANEL_TAB_MARKS, _PANEL_TAB_FIND,
-                _PANEL_TAB_LEGEND, _PANEL_TAB_AI,
-            )
-            if self._panel_tabs.isTabVisible(i)
-        ]
-        if visible and self._panel_tabs.currentIndex() not in visible:
+        want = {
+            _PANEL_TAB_STATS: self._show_stats,
+            _PANEL_TAB_MARKS: self._show_marks,
+            _PANEL_TAB_FIND: self._show_find,
+            _PANEL_TAB_LEGEND: self._show_legend,
+            _PANEL_TAB_AI: self._ai_panel_wanted(),
+        }
+        for i, flag in want.items():
+            self._panel_tabs.setTabVisible(i, flag)
+        visible = [i for i, flag in want.items() if flag]
+        # Fall back off a now-hidden current tab first: QTabWidget ignores
+        # setTabVisible(currentIndex(), False), so hiding the current panel only
+        # sticks once current has moved.
+        if visible and not want.get(self._panel_tabs.currentIndex(), False):
             self._panel_tabs.setCurrentIndex(visible[0])
+            for i, flag in want.items():
+                self._panel_tabs.setTabVisible(i, flag)
+        rail = getattr(self, "_icon_rail", None)
+        if rail is not None:
+            for i, flag in want.items():
+                rail.set_item_visible(i, flag)
+        # Keep the rail highlight + header title honest after a visibility change.
+        self._on_panel_tab_changed(self._panel_tabs.currentIndex())
         tb = self._panel_tabs.tabBar()
         if tb is not None:
             tb.setExpanding(True)
@@ -4101,6 +4297,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             # Application-wide font (menus, toolbar, status bar).
             _ui_font_size = getattr(self, '_ui_font_size_val', UI_FONT_SIZE)
             _ui_fs = _ui_font_stylesheet_size(_ui_font_size)
+            _mono_fam = _get_fixed_font_family()
+            # Bright interactive blue for chip outlines/text (web --accent is
+            # #4F8BFF in dark; the desktop token #0E4D80 is too dark to read).
+            _chip_accent = "#4a9eff" if is_dark else "#005A9E"
             base_font = _application_ui_font(_ui_font_size)
             app.setFont(base_font)
             # macOS native QToolTip often ignores QSS font-size; setFont is required
@@ -4114,9 +4314,23 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if combo is not None:
                 combo.setFont(base_font)
             badge = getattr(self, '_tb_limit_badge', None)
+            fbadge = getattr(self, '_tb_filter_badge', None)
+            if badge is not None or fbadge is not None:
+                # Recompute the shared pill height for the new UI font so both
+                # toolbar badges stay the same size.
+                self._tb_badge_h = QFontMetrics(base_font).height() + 6
+                _fic = max(10, self._tb_badge_h - 10)
             if badge is not None:
                 badge.setFont(base_font)
+                badge.setFixedHeight(self._tb_badge_h)
                 self._update_limit_badge()
+            if fbadge is not None:
+                fbadge.setFont(base_font)
+                fbadge.setFixedHeight(self._tb_badge_h)
+                fbadge.setIcon(_svg_icon(_IC_FILTER, "#e0c070", _fic))
+                fbadge.setIconSize(QSize(_fic, _fic))
+                self._update_filter_badge()
+            self._refresh_icon_rail_icons()
 
             c = self._theme_tokens(is_dark)
 
@@ -4288,6 +4502,70 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                          padding:4px 2px 3px; }}
             QFrame#marks_divider {{ background-color:{c['sep']}; border:none;
                          min-height:1px; max-height:1px; }}
+            /* Marks-tab collapsible cards — web App.vue .rp-card */
+            QWidget#rp_card {{ background:{c['win_base']};
+                         border:1px solid {c['input_border']};
+                         border-radius:6px; }}
+            QToolButton#rp_card_head {{ background:transparent; border:none;
+                         color:{c['text']}; font-weight:600; text-align:left;
+                         padding:6px 8px; font-size:{_ui_fs}; }}
+            QToolButton#rp_card_head:hover {{ background:{c['list_hover']}; }}
+            QFrame#rp_card_body_sep {{ background-color:{c['sep']}; border:none;
+                         min-height:1px; max-height:1px; }}
+            QLabel#rp_card_count {{ color:{c['muted_text']};
+                         background:{c['mid']}; border-radius:8px;
+                         padding:1px 6px; font-size:{_ui_fs}; }}
+            /* Right-panel icon rail + per-panel header — web App.vue
+               .icon-rail / .rail-btn / .rp-page-header */
+            QWidget#icon_rail {{ background:{c['mid']};
+                         border-left:1px solid {c['sep']}; }}
+            QToolButton#rail_btn {{ background:transparent; border:none;
+                         border-left:2px solid transparent; }}
+            QToolButton#rail_btn:hover {{ background:{c['list_hover']}; }}
+            QToolButton#rail_btn:checked {{ background:{c['win_base']};
+                         border-left:2px solid {c['accent']}; }}
+            QWidget#rp_page_header {{ background:{c['win_base']};
+                         border-bottom:1px solid {c['sep']}; }}
+            QLabel#rp_title {{ color:{c['text']}; font-weight:600;
+                         font-size:{_ui_fs}; }}
+            QLabel#core_chip_label {{ color:{c['muted_text']}; font-size:11px; }}
+            /* Compact square chips — mirrors web CoreFilterChips.vue .core-chip:
+               blue text on a GREY outline (accent border only on hover);
+               off = dim text (no strikethrough on desktop). */
+            QToolButton#core_chip {{ color:{_chip_accent};
+                         background:transparent;
+                         border:1px solid {c['sep']}; border-radius:4px;
+                         padding:0; margin:0;
+                         font-family:"{_mono_fam}"; font-size:10px;
+                         font-weight:600; }}
+            QToolButton#core_chip:hover {{ border-color:{_chip_accent}; }}
+            QToolButton#core_chip:!checked {{ color:{c['muted_text']};
+                         border-color:{c['sep']}; }}
+            QToolButton#core_chip_clear {{ color:{_chip_accent};
+                         background:transparent; border:none; padding:0 6px;
+                         font-size:10px; font-weight:600; }}
+            QToolButton#core_chip_clear:hover {{ text-decoration:underline; }}
+            /* Browser-style Find bar — web FindPanel.vue .findbar */
+            QFrame#findbar {{ border:1px solid {c['input_border']};
+                         border-radius:6px; background:{c['input_bg']}; }}
+            QLineEdit#find_input {{ border:none; background:transparent;
+                         padding:3px 2px; }}
+            QLabel#find_status {{ color:{c['muted_text']}; font-size:10px;
+                         padding:0 2px; }}
+            QLabel#find_mode_label {{ color:{c['muted_text']}; }}
+            QLabel#find_note {{ color:{c['muted_text']}; font-size:11px; }}
+            QLabel#find_empty_text {{ color:{c['muted_text']}; font-size:11px; }}
+            QToolButton#findbar_step {{ border:none; background:transparent;
+                         color:{c['muted_text']}; font-size:15px;
+                         padding:0 5px; }}
+            QToolButton#findbar_step:hover {{ color:{c['text']}; }}
+            QToolButton#findbar_step:disabled {{ color:{c['tb_disabled']}; }}
+            QToolButton#find_example {{ border:1px solid {c['sep']};
+                         border-radius:9px; padding:2px 9px;
+                         color:{c['muted_text']}; font-family:"{_mono_fam}";
+                         font-size:10px; }}
+            QToolButton#find_example:hover {{ border-color:{_chip_accent};
+                         color:{_chip_accent}; }}
             QTableWidget::item {{ font-size:{_ui_fs}; padding:2px 4px; }}
             QTableWidget::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
             QHeaderView::section {{ background:{c['mid']}; color:{c['text']};
@@ -4834,29 +5112,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         marks_v.setContentsMargins(6, 6, 6, 6)
         marks_v.setSpacing(6)
         marks_v.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
-
-        def _marks_hline() -> QFrame:
-            # A real 1px separator widget — a QLabel `border-bottom` in a Qt
-            # stylesheet does not paint reliably, so use a filled 1px strip.
-            line = QFrame()
-            line.setObjectName("marks_divider")
-            line.setFixedHeight(1)
-            line.setSizePolicy(
-                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            return line
-
-        def _section_header(text: str) -> QWidget:
-            # Web `.panel-header` / `.marks-section-header`: upper-case, muted
-            # caption closed off with a hairline rule.
-            box = QWidget()
-            v = QVBoxLayout(box)
-            v.setContentsMargins(0, 0, 0, 0)
-            v.setSpacing(3)
-            lbl = QLabel(text.upper())
-            lbl.setObjectName("marks_panel_hdr")
-            v.addWidget(lbl)
-            v.addWidget(_marks_hline())
-            return box
+        # In-memory open/closed state for the three Marks-tab cards (web:
+        # App.vue ``marksSectionOpen``; not persisted).
+        self._marks_card_state = {"cursors": True, "range": True, "marks": True}
 
         def _sub_header(text: str) -> QLabel:
             # Web `.comparison-title`: lighter inline caption, no rule.
@@ -4864,11 +5122,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             lbl.setObjectName("marks_sub_hdr")
             return lbl
 
-        # ---- Cursors section (mirrors the web app's CursorPanel.vue) ----
-        marks_v.addWidget(_section_header("Cursors"))
-        cur_v = QVBoxLayout()
-        cur_v.setContentsMargins(0, 0, 0, 0)
-        cur_v.setSpacing(4)
+        # ---- Cursors card (web App.vue .rp-card, key "cursors") ----
+        self._marks_card_cursors = _CollapsibleCard("Cursors")
+        self._marks_card_cursors.toggled.connect(
+            lambda o: self._marks_card_state.__setitem__("cursors", o))
+        marks_v.addWidget(self._marks_card_cursors)
+        cur_v = self._marks_card_cursors.body_layout
 
         # Per-cursor list + Δ rows (web: <div class="cursor-list">).  The whole
         # Cursors section is content-height (web sections are not fixed-size): it
@@ -4884,6 +5143,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # with a light `.comparison-title`, not a bordered panel header).
         self._cursor_task_header = _sub_header("Task at cursor")
         cur_v.addWidget(self._cursor_task_header)
+        # Per-core toggle chips — the shared Core Filter (web: the
+        # <CoreFilterChips> row above CursorPanel's comparison table).  Trims
+        # the Task column to the selected cores and also filters the timeline.
+        self._cursor_core_chips = _CoreFilterChips(label="Cores")
+        self._cursor_core_chips.setToolTip(
+            "Same Core Filter as the Legend — also filters the timeline")
+        self._cursor_core_chips.core_filter_changed.connect(
+            self._on_cursor_core_filter)
+        self._cursor_core_chips.setVisible(False)
+        cur_v.addWidget(self._cursor_core_chips)
         self._cursor_table = QTableWidget(0, 4)
         # Borderless / no-grid / no-zebra look, matching the web comparison
         # table and the Statistics tab tables (reuses the #stats_table QSS).
@@ -4925,10 +5194,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._cursors_clear_all_btn.clicked.connect(lambda: self._view.clear_cursors())
         cur_clear_row.addWidget(self._cursors_clear_all_btn, 1)
         cur_v.addLayout(cur_clear_row)
-        marks_v.addLayout(cur_v)
+        # (cur_v is the Cursors card body layout — already parented)
 
-        # ---- Cursor Range section ----
-        marks_v.addWidget(_section_header("Cursor Range"))
+        # ---- Cursor Range card (web App.vue .rp-card, key "range") ----
+        self._marks_card_range = _CollapsibleCard("Cursor Range")
+        self._marks_card_range.toggled.connect(
+            lambda o: self._marks_card_state.__setitem__("range", o))
+        marks_v.addWidget(self._marks_card_range)
+        _range_card_v = self._marks_card_range.body_layout
 
         _mono_fam = _get_fixed_font_family()
 
@@ -4964,21 +5237,21 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         cr_v.addWidget(self._cr_avg_row)
         self._cr_max_row, self._cr_max_val = _range_row("Seg max")
         cr_v.addWidget(self._cr_max_row)
-        marks_v.addWidget(self._cursor_range_body)
+        _range_card_v.addWidget(self._cursor_range_body)
         self._cursor_range_hint = QLabel("Place 2+ cursors to measure range")
         self._cursor_range_hint.setStyleSheet("color:#999; font-style:italic;")
         self._cursor_range_hint.setWordWrap(True)
-        marks_v.addWidget(self._cursor_range_hint)
+        _range_card_v.addWidget(self._cursor_range_hint)
         self._cursor_range_body.setVisible(False)
 
-        # ---- Marks section (flattened bookmarks + annotations, sorted by time) ----
-        # Web has BOTH the outer panel header ("Marks") and the component's own
-        # count header ("Marks (N)"), the latter closed off with a divider rule
-        # (web `.marks-section-header { border-bottom }`).
-        marks_v.addWidget(_section_header("Marks"))
-        self._marks_count_label = _sub_header("MARKS (0)")
-        marks_v.addWidget(self._marks_count_label)
-        marks_v.addWidget(_marks_hline())
+        # ---- Marks card (web App.vue .rp-card, key "marks") ----
+        # The web redesign dropped MarksPanel's own "Marks (N)" sub-header — the
+        # count now lives in the card badge (see _rebuild_marks_list).
+        self._marks_card_marks = _CollapsibleCard("Marks", expanding=True)
+        self._marks_card_marks.toggled.connect(
+            lambda o: self._marks_card_state.__setitem__("marks", o))
+        marks_v.addWidget(self._marks_card_marks, 1)
+        _marks_card_v = self._marks_card_marks.body_layout
 
         self._marks_list = QListWidget()
         self._marks_list.setObjectName("marks_list")
@@ -4994,7 +5267,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _mark_del_key = QShortcut(QKeySequence(Qt.Key.Key_Delete), self._marks_list)
         _mark_del_key.setContext(Qt.ShortcutContext.WidgetShortcut)
         _mark_del_key.activated.connect(self._delete_selected_mark)
-        marks_v.addWidget(self._marks_list, 1)
+        _marks_card_v.addWidget(self._marks_list, 1)
 
         self._marks_empty_hint = QLabel("Right-click timeline to add · Double-click or press B / A")
         self._marks_empty_hint.setWordWrap(True)
@@ -5007,8 +5280,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._marks_empty_hint.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self._marks_empty_hint.setVisible(False)
-        marks_v.addWidget(self._marks_empty_hint, 1)
-
+        _marks_card_v.addWidget(self._marks_empty_hint, 1)
 
         marks_io_row = QGridLayout()
         marks_io_row.setContentsMargins(0, 0, 0, 0)
@@ -5048,29 +5320,66 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     marks_session_btn, marks_session_import_btn):
             btn.setMinimumWidth(0)
             btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        marks_v.addLayout(marks_io_row)
+        _marks_card_v.addLayout(marks_io_row)
+        marks_v.addStretch(0)
 
-        # --- Find panel (tab content) ---
+        # --- Find panel (tab content) — browser-style bar (web: FindPanel.vue
+        #     .findbar: leading magnifier, input, clear, inline "N / M" counter,
+        #     ‹ › steppers), then the Match row, then an empty / no-match note.
         find_host = QWidget()
         find_host.setMinimumWidth(0)
         self._find_host = find_host
         find_v = QVBoxLayout(find_host)
-        find_v.setContentsMargins(6, 6, 6, 6)
-        find_v.setSpacing(6)
-        self._find_status = QLabel("0 matches")
+        find_v.setContentsMargins(8, 8, 8, 8)
+        find_v.setSpacing(8)
+
+        self._findbar = QFrame()
+        self._findbar.setObjectName("findbar")
+        _fb = QHBoxLayout(self._findbar)
+        _fb.setContentsMargins(6, 3, 4, 3)
+        _fb.setSpacing(4)
+        # Inline "N / M" counter — kept as ``_find_status`` (created before the
+        # input, web parity: FindPanel's counter span).
+        self._find_status = QLabel("")
         self._find_status.setObjectName("find_status")
         self._find_status.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        self._find_status.setStyleSheet("color:#999;")
-        find_v.addWidget(self._find_status, 0, Qt.AlignmentFlag.AlignTop)
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._find_input = QLineEdit()
-        self._find_input.setPlaceholderText("Find task, annotation, or migration…")
+        self._find_input.setObjectName("find_input")
+        self._find_input.setPlaceholderText("Find task, annotation, migration…")
+        self._find_input.setClearButtonEnabled(True)          # web .findbar-clear
+        self._find_input.addAction(
+            _svg_icon(_IC_FIND, "#9E9E9E", 14),
+            QLineEdit.ActionPosition.LeadingPosition)          # web .findbar-lead
         self._find_input.setToolTip(
             "Search the active tab. Enter = next match; Shift+Enter / F3 / "
             "Shift+F3 step hits on the timeline.")
         self._find_input.textChanged.connect(self._recompute_find_hits)
         self._find_input.returnPressed.connect(self._find_next)
-        find_v.addWidget(self._find_input)
+        _fb.addWidget(self._find_input, 1)
+        _fb.addWidget(self._find_status)
+        self._find_prev_btn = QToolButton()
+        self._find_prev_btn.setObjectName("findbar_step")
+        self._find_prev_btn.setText("‹")               # ‹
+        self._find_prev_btn.setToolTip("Find previous match  (Shift+F3)")
+        self._find_prev_btn.clicked.connect(self._find_prev)
+        self._find_next_btn = QToolButton()
+        self._find_next_btn.setObjectName("findbar_step")
+        self._find_next_btn.setText("›")               # ›
+        self._find_next_btn.setToolTip("Find next match  (F3)")
+        self._find_next_btn.clicked.connect(self._find_next)
+        self._find_prev_btn.setEnabled(False)
+        self._find_next_btn.setEnabled(False)
+        _fb.addWidget(self._find_prev_btn)
+        _fb.addWidget(self._find_next_btn)
+        find_v.addWidget(self._findbar)
+
+        _mode_row = QHBoxLayout()
+        _mode_row.setContentsMargins(0, 0, 0, 0)
+        _mode_row.setSpacing(6)
+        _mode_lbl = QLabel("Match")
+        _mode_lbl.setObjectName("find_mode_label")
+        _mode_row.addWidget(_mode_lbl)
         self._find_mode_combo = QComboBox()
         for label, key, tip in FIND_MODE_CHOICES:
             self._find_mode_combo.addItem(label, key)
@@ -5080,28 +5389,54 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._find_mode_combo.setToolTip(
             "Choose what the query matches. Hover an item for a short description.")
         self._find_mode_combo.currentIndexChanged.connect(self._on_find_mode_changed)
-        find_v.addWidget(self._find_mode_combo)
+        _mode_row.addWidget(self._find_mode_combo, 1)
+        find_v.addLayout(_mode_row)
+
         self._find_mode_help = QLabel(find_mode_help("contains"))
         self._find_mode_help.setObjectName("find_mode_help")
         self._find_mode_help.setWordWrap(True)
         self._find_mode_help.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self._find_mode_help.setStyleSheet("color:#8b98a8; font-size:11px;")
-        # Step-1 item 8: keep the (long) mode explanation in the combo's
-        # Tooltip/Help only, not as a permanently-visible paragraph.
+        # Long explanation stays in the combo Tooltip only, not a visible line.
         self._find_mode_help.setVisible(False)
         find_v.addWidget(self._find_mode_help)
-        find_btns = QHBoxLayout()
-        find_btns.setContentsMargins(0, 0, 0, 0)
-        find_prev = QPushButton("Previous")
-        find_prev.clicked.connect(self._find_prev)
-        find_prev.setToolTip("Find previous match  (Shift+F3)")
-        find_next = QPushButton("Next")
-        find_next.clicked.connect(self._find_next)
-        find_next.setToolTip("Find next match  (F3)")
-        find_btns.addWidget(find_prev)
-        find_btns.addWidget(find_next)
-        find_v.addLayout(find_btns)
+
+        # "No matches" note (web: <p class="find-note">).
+        self._find_note = QLabel("")
+        self._find_note.setObjectName("find_note")
+        self._find_note.setWordWrap(True)
+        self._find_note.setVisible(False)
+        find_v.addWidget(self._find_note)
+
+        # Empty state — icon + prompt + example chips (web: <div class="find-empty">).
+        self._find_empty = QWidget()
+        _fe = QVBoxLayout(self._find_empty)
+        _fe.setContentsMargins(4, 12, 4, 4)
+        _fe.setSpacing(8)
+        _fe_icon = QLabel()
+        _fe_icon.setPixmap(_svg_icon(_IC_FIND, "#8b98a8", 22).pixmap(22, 22))
+        _fe_icon.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        _fe.addWidget(_fe_icon)
+        _fe_text = QLabel(
+            "Search across tasks, annotations and migration events "
+            "in the active trace.")
+        _fe_text.setObjectName("find_empty_text")
+        _fe_text.setWordWrap(True)
+        _fe_text.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        _fe.addWidget(_fe_text)
+        _fe_chips = QHBoxLayout()
+        _fe_chips.setSpacing(6)
+        _fe_chips.addStretch(1)
+        for _ex in ("IDLE", "TICK", "Core_0"):
+            _b = QToolButton()
+            _b.setObjectName("find_example")
+            _b.setText(_ex)
+            _b.clicked.connect(lambda _c=False, q=_ex: self._apply_find_example(q))
+            _fe_chips.addWidget(_b)
+        _fe_chips.addStretch(1)
+        _fe.addLayout(_fe_chips)
+        find_v.addWidget(self._find_empty)
         find_v.addStretch(1)
 
         # --- AI Assistant panel (tab content) ---
@@ -5132,10 +5467,51 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._panel_tabs.addTab(self._legend_host, "Legend")
         self._panel_tabs.addTab(self._ai_panel, "AI")
         self._panel_tabs.currentChanged.connect(self._on_panel_tab_changed)
+        # Web redesign: the text tab strip is replaced by a vertical icon rail
+        # on the right edge + a per-panel header row (App.vue .icon-rail /
+        # .rp-page-header).  The QTabWidget stays as the content stack; its own
+        # tab bar is hidden and the rail drives setCurrentIndex().
+        self._panel_tabs.tabBar().hide()
+
+        self._rp_page_header = QLabel("")
+        self._rp_page_header.setObjectName("rp_title")
+        _rp_hdr_wrap = QWidget()
+        _rp_hdr_wrap.setObjectName("rp_page_header")
+        _rp_hdr_wrap.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        _rp_hw = QHBoxLayout(_rp_hdr_wrap)
+        _rp_hw.setContentsMargins(10, 6, 10, 6)
+        _rp_hw.setSpacing(0)
+        _rp_hw.addWidget(self._rp_page_header, 1)
+
+        _rp_content = QWidget()
+        _rp_cc = QVBoxLayout(_rp_content)
+        _rp_cc.setContentsMargins(0, 0, 0, 0)
+        _rp_cc.setSpacing(0)
+        _rp_cc.addWidget(_rp_hdr_wrap, 0)
+        _rp_cc.addWidget(self._panel_tabs, 1)
+
+        self._icon_rail = _IconRail()
+        for _ic_path, _ic_label in (
+            (_IC_TICK_DIST, "Statistics"),
+            (_IC_MARK, "Marks"),
+            (_IC_FIND, "Find"),
+            (_IC_LEGEND, "Legend"),
+            (_IC_ANALYSIS, "AI"),
+        ):
+            self._icon_rail.add_item(_ic_path, _ic_label)
+        self._icon_rail.activated.connect(self._on_icon_rail_activated)
+
+        _rp_area = QWidget()
+        _rp_area.setObjectName("rp_area")
+        _rp_pa = QHBoxLayout(_rp_area)
+        _rp_pa.setContentsMargins(0, 0, 0, 0)
+        _rp_pa.setSpacing(0)
+        _rp_pa.addWidget(_rp_content, 1)
+        _rp_pa.addWidget(self._icon_rail, 0)
 
         panel_dock = QDockWidget("", self)
         panel_dock.setObjectName("dock_panel")
-        self._panel_dock_host = _RightDockHost(self._panel_tabs)
+        self._panel_dock_host = _RightDockHost(_rp_area)
         panel_dock.setWidget(self._panel_dock_host)
         # No title bar: stats tabs sit on the same row as the trace-file tabs.
         _hidden_title = QWidget(panel_dock)
@@ -5185,7 +5561,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._find_input.clear()
             self._find_input.blockSignals(False)
         if hasattr(self, "_find_status"):
-            self._find_status.setText("0 matches")
+            self._find_status.setText("")
+        if hasattr(self, "_find_empty"):
+            self._find_empty.setVisible(True)
+        if hasattr(self, "_find_note"):
+            self._find_note.setVisible(False)
         self._close_heatmap_dialog()
         self._close_chord_dialog()
         if hasattr(self, "_tb_analysis_btn"):
@@ -5619,14 +5999,42 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._tb_limit_badge.setCursor(Qt.CursorShape.PointingHandCursor)
         self._tb_limit_badge.setSizePolicy(
             QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-        self._tb_limit_badge.setFont(_application_ui_font(
-            getattr(self, "_ui_font_size_val", UI_FONT_SIZE)))
+        _badge_font = _application_ui_font(
+            getattr(self, "_ui_font_size_val", UI_FONT_SIZE))
+        # One shared pill height so C1–Cn and Filtered are the same size
+        # regardless of the icon on the Filtered badge (web: both `height:22px`).
+        self._tb_badge_h = QFontMetrics(_badge_font).height() + 6
+        self._tb_limit_badge.setFont(_badge_font)
+        self._tb_limit_badge.setFixedHeight(self._tb_badge_h)
         self._tb_limit_badge.clicked.connect(self._on_limit_badge_clicked)
-        tb.addWidget(self._tb_limit_badge)
+        # QToolBar controls a child widget's visibility through the QAction that
+        # addWidget() returns — QWidget.setVisible() on the button alone is
+        # ignored — so keep the action to show/hide the badge later.
+        self._tb_limit_badge_act = tb.addWidget(self._tb_limit_badge)
+        # Filtered badge — sits right after C1–Cn, shown independently whenever
+        # any Filter (task / migration / core) is active (web: .tb-filter-badge).
+        self._tb_filter_badge = QToolButton()
+        self._tb_filter_badge.setObjectName("tbFilterBadge")
+        self._tb_filter_badge.setText("Filtered")
+        _fic = max(10, self._tb_badge_h - 10)
+        self._tb_filter_badge.setIcon(_svg_icon(_IC_FILTER, "#e0c070", _fic))
+        self._tb_filter_badge.setIconSize(QSize(_fic, _fic))
+        self._tb_filter_badge.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._tb_filter_badge.setAutoRaise(True)
+        self._tb_filter_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._tb_filter_badge.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self._tb_filter_badge.setFont(_badge_font)
+        self._tb_filter_badge.setFixedHeight(self._tb_badge_h)
+        self._tb_filter_badge.clicked.connect(self._clear_all_filters)
+        self._tb_filter_badge_act = tb.addWidget(self._tb_filter_badge)
+        self._tb_filter_badge_act.setVisible(False)
         _ia("Settings", self._open_settings, _IC_SETTINGS, "Open Settings  (Ctrl+,)")
         _ia("Help", self._on_keyboard_shortcuts, _IC_HELP,
             "Help & keyboard shortcuts")
         self._update_limit_badge()
+        self._update_filter_badge()
 
     def _update_trace_quality_banner(self, trace: Optional[BtfTrace] = None) -> None:
         """Show BTF quality / version warnings above the timeline (web parity)."""
@@ -5779,7 +6187,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         return int(getattr(self, "_placed_cursor_count", 0) or 0) >= 2
 
     def _update_limit_badge(self) -> None:
-        """Sync the toolbar C1–Cn chip colour with the Statistics checkbox."""
+        """Toolbar C1–Cn chip — shown only while Limit to C1–Cn is on (web:
+        ``v-if="limitOn"``).  Off by default, at the same toolbar location."""
         btn = getattr(self, "_tb_limit_badge", None)
         if btn is None:
             return
@@ -5788,16 +6197,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             and int(getattr(self, "_placed_cursor_count", 0) or 0) >= 2
         )
         on = bool(can and self._limit_scope_is_on())
+        act = getattr(self, "_tb_limit_badge_act", None)
+        if act is not None:
+            act.setVisible(on)
+        btn.setVisible(on)
+        if not on:
+            return
         btn.blockSignals(True)
-        btn.setEnabled(can)
+        btn.setEnabled(True)
         btn.setText("C1–Cn")
         btn.blockSignals(False)
         dark = bool(getattr(self, "_is_dark", True))
-        if on:
-            fg, bg, border = stats_meta_chip_colors("scope", dark=dark)
-        else:
-            bg, fg, border = stats_category_badge_colors("DETAIL", dark=dark)
-        # Same face/size/weight as toolbar Compare (not bold header chips).
+        fg, bg, border = stats_meta_chip_colors("scope", dark=dark)
         ui_pt = int(getattr(self, "_ui_font_size_val", UI_FONT_SIZE) or UI_FONT_SIZE)
         ui_fs = _ui_font_stylesheet_size(ui_pt)
         chip = (
@@ -5810,21 +6221,59 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             f" {chip} "
             "}"
             "QToolButton#tbLimitBadge:hover,"
-            "QToolButton#tbLimitBadge:pressed,"
-            "QToolButton#tbLimitBadge:disabled {"
+            "QToolButton#tbLimitBadge:pressed {"
             f" {chip} "
             "}")
-        if not can:
-            btn.setToolTip(
-                "Limit to C1–Cn is Off — place at least two cursors to enable")
-        elif on:
-            btn.setToolTip(
-                "Limit to C1–Cn is On — Statistics use the cursor range. "
-                "Click to turn off.")
-        else:
-            btn.setToolTip(
-                "Limit to C1–Cn is Off — Statistics use the full trace. "
-                "Click to turn on.")
+        btn.setToolTip(
+            "Limit to C1–Cn is On — Statistics use the cursor range. "
+            "Click to turn off.")
+
+    def _update_filter_badge(self) -> None:
+        """Toolbar Filtered chip — shown independently whenever any Filter
+        (task / migration / core) is active (web: .tb-filter-badge)."""
+        btn = getattr(self, "_tb_filter_badge", None)
+        if btn is None:
+            return
+        label = self._active_filter_summary_label()
+        act = getattr(self, "_tb_filter_badge_act", None)
+        if act is not None:
+            act.setVisible(bool(label))
+        btn.setVisible(bool(label))
+        if not label:
+            return
+        dark = bool(getattr(self, "_is_dark", True))
+        fg, bg, border = stats_meta_chip_colors("filtered", dark=dark)
+        ui_pt = int(getattr(self, "_ui_font_size_val", UI_FONT_SIZE) or UI_FONT_SIZE)
+        ui_fs = _ui_font_stylesheet_size(ui_pt)
+        chip = (
+            f"color:{fg}; background-color:{bg}; border:1px solid {border};"
+            f" border-radius:6px; padding:1px 6px; min-width:0; min-height:0;"
+            f" font-size:{ui_fs}; font-weight:400;"
+        )
+        btn.setStyleSheet(
+            "QToolButton#tbFilterBadge {"
+            f" {chip} "
+            "}"
+            "QToolButton#tbFilterBadge:hover,"
+            "QToolButton#tbFilterBadge:pressed {"
+            f" {chip} "
+            "}")
+        btn.setToolTip(f"Filtered: {label} — click to clear all filters")
+
+    def _clear_all_filters(self, _checked: bool = False) -> None:
+        """Clear every active Filter (web: clearAllActiveFilters)."""
+        tab = self._active_tab
+        sc = tab.view._scene if tab is not None else None
+        if sc is None:
+            return
+        if sc._heatmap_filter_mks is not None:
+            self._clear_heatmap_task_filter()
+        if sc._migrated_only_filter:
+            self._legend.set_migrated_only_checked(False)
+            self._on_legend_migrated_filter(False)
+        if sc._core_filter_active():
+            self._clear_core_filter()
+        self._update_filter_badge()
 
     def _on_limit_badge_clicked(self, _checked: bool = False) -> None:
         """Toggle Limit to C1–Cn from the toolbar status chip (web parity)."""
@@ -5832,6 +6281,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._update_limit_badge()
             return
         self._demo_set_limit(not self._limit_scope_is_on())
+        self._update_limit_badge()
+        self._update_filter_badge()
 
     def _record_evidence_jump(self, entry: dict) -> None:
         """Push an evidence jump into history and refresh the inspector bar."""
@@ -7384,6 +7835,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         cb.blockSignals(False)
         panel._on_scope_toggled(want)
         self._update_cursor_scope_banner()
+        self._update_limit_badge()
 
     def _demo_settle_ms(self, ms: int) -> None:
         """Pump the GUI event loop for *ms* (used by demo scroll settle)."""
@@ -9650,6 +10102,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _sync_active_filter_label(self) -> None:
         if hasattr(self, "_stats_panel") and self._stats_panel is not None:
             self._stats_panel.set_active_filter_label(self._active_filter_summary_label())
+        self._update_filter_badge()
 
     def _sync_migrated_filter_chip(self) -> None:
         """Step-1 item 3: reflect the "Migrated tasks only" Task Filter as a chip."""
@@ -9664,12 +10117,27 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._sync_active_filter_label()
 
     def _on_legend_core_filter(self, keys: list) -> None:
-        """Core Filter (Legend "Cores" list, Core View only) — narrows Scope to some cores."""
+        """Core Filter (Legend "Cores" list) — narrows Scope to some cores."""
         tab = self._active_tab
         if tab is None:
             return
         tab.view._scene.set_core_filter(keys or None)
         self._sync_core_filter_chip()
+        self._rebuild_cursor_table()
+        if not self._cpu_splitter_user_sized:
+            self._autofit_cpu_load_height()
+
+    def _on_cursor_core_filter(self, keys: list) -> None:
+        """Core Filter driven from the Cursors panel chips — shares the Legend's
+        selection (web: CursorPanel emits `core-filter-change` -> App
+        `onCoreFilterChange`)."""
+        tab = self._active_tab
+        if tab is None:
+            return
+        tab.view._scene.set_core_filter(keys or None)
+        self._legend.set_core_filter(keys or None)
+        self._sync_core_filter_chip()
+        self._rebuild_cursor_table()
         if not self._cpu_splitter_user_sized:
             self._autofit_cpu_load_height()
 
@@ -9695,6 +10163,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             total = len(sc._trace.core_names) if sc._trace else 0
             n = len(sc._core_filter_keys or ())
             self._status_core_filter_btn.setText(f"Core: {n} of {total} ×")
+        # Keep the Cursors-panel core chips in lockstep with the shared filter.
+        if hasattr(self, "_cursor_core_chips") and sc is not None:
+            self._cursor_core_chips.set_core_filter(
+                list(sc._core_filter_keys) if sc._core_filter_keys else None)
         self._sync_active_filter_label()
 
     def _on_heatmap_drill(self, from_core: str, to_core: str, label: str,
@@ -10439,7 +10911,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._view._has_bookmarks = bool(self._bookmarks)
             self._view._has_annotations = bool(self._annotations)
         n = len(self._bookmarks) + len(self._annotations)
-        self._marks_count_label.setText(f"MARKS ({n})")
+        if hasattr(self, "_marks_card_marks"):
+            self._marks_card_marks.set_count(str(n) if n else None)
         # Web swaps the list out for the hint when there are no marks.
         _has_marks = n > 0 and self._trace is not None
         self._marks_list.setVisible(_has_marks)
@@ -10507,25 +10980,53 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._find_input.selectAll()
         self._recompute_find_hits()
 
+    def _set_find_ui_state(self, has_query: bool, n_hits: int,
+                           note: Optional[str] = None) -> None:
+        """Toggle the browser-style Find chrome: \u2039 \u203a steppers, empty state,
+        and the "no matches" note (web: FindPanel disabled steppers /
+        <div class="find-empty"> / <p class="find-note">)."""
+        if hasattr(self, "_find_prev_btn"):
+            self._find_prev_btn.setEnabled(n_hits > 0)
+            self._find_next_btn.setEnabled(n_hits > 0)
+        if hasattr(self, "_find_empty"):
+            self._find_empty.setVisible(not has_query)
+        if hasattr(self, "_find_note"):
+            self._find_note.setText(note or "")
+            self._find_note.setVisible(bool(note))
+
+    def _apply_find_example(self, query: str) -> None:
+        """Example-chip click in the Find empty state."""
+        self._find_input.setText(query)
+        self._find_input.setFocus()
+
     def _recompute_find_hits(self) -> None:
         vm = self._active_tab_vm
+        q = self._find_input.text() if hasattr(self, "_find_input") else ""
+        has_q = bool(str(q).strip())
         if vm is None or self._trace is None:
-            self._find_status.setText("0 matches")
+            self._find_status.setText("")
+            self._set_find_ui_state(has_q, 0, None)
             self._view._scene.set_find_hits([])
             return
-        vm.find_query = self._find_input.text()
+        vm.find_query = q
         mode = self._find_mode_combo.currentData()
         vm.find_mode = str(mode) if mode else normalize_find_mode(
             self._find_mode_combo.currentText())
-        status = vm.recompute_find_hits()
-        if not vm.find_hits and str(vm.find_query or "").strip():
-            status = f"{status} for \u201c{vm.find_query.strip()}\u201d \u2014 try a different Match Mode"
-        self._find_status.setText(status)
-        self._find_status.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        vm.recompute_find_hits()
+        n = len(vm.find_hits)
         self._view._scene.set_find_hits(vm.find_hits)
         if not vm.find_hits:
             self._set_find_marker_ns(None)
+        # Inline "N / M" counter (web: FindPanel counterText).
+        if n:
+            pos = self._find_hit_idx + 1 if self._find_hit_idx >= 0 else 1
+            self._find_status.setText(f"{pos} / {n}")
+        else:
+            self._find_status.setText("")
+        note = "" if (not has_q or n) else (
+            f"No matches for \u201c{str(q).strip()}\u201d. "
+            "Try a different Match mode.")
+        self._set_find_ui_state(has_q, n, note)
 
     def _on_find_mode_changed(self, _index: int = 0) -> None:
         self._update_find_mode_help()
@@ -10567,7 +11068,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._find_hit_idx = idx
         self._jump_to_ns(self._find_hits[idx])
         self._set_find_marker_ns(self._find_hits[idx])
-        self._find_status.setText(f"{idx + 1} of {n} matches")
+        self._find_status.setText(f"{idx + 1} / {n}")
 
     def _set_find_marker_ns(self, ns: Optional[int]) -> None:
         self._find_marker_ns = ns
@@ -11524,6 +12025,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if panel._scope_to_cursors and (placed_n >= 2 or prev_n >= 2):
                 refresh_stats = True
         self._placed_cursor_count = placed_n
+        if hasattr(self, "_marks_card_cursors"):
+            self._marks_card_cursors.set_count(
+                str(placed_n) if placed_n else None)
         if hasattr(self, "_stats_panel"):
             self._stats_panel.set_cursor_times(times, refresh_stats=refresh_stats)
         self._cursor_bar.rebuild(times, self._trace, time_decimals=self._time_decimals_val)
@@ -11533,6 +12037,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_zoom_range.setEnabled(has_range)
         self._tb_zoom_range_btn.setEnabled(has_range)
         self._sync_file_export_actions(has_range=has_range)
+        if hasattr(self, "_marks_card_range"):
+            self._marks_card_range.set_count("A–B" if has_range else None)
         if self._trace is None or not has_range:
             self._cursor_range_body.setVisible(False)
             self._cursor_range_hint.setVisible(True)
@@ -11618,10 +12124,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     # ------------------------------------------------------------------
 
     def _task_at_time(self, ns: int) -> str:
-        """Return the display name(s) of tasks running at *ns* (nanoseconds)."""
+        """Return the display name(s) of tasks running at *ns* (nanoseconds).
+
+        Honours the shared Core Filter: tasks whose active segment at *ns* is on
+        a deselected core are dropped (web: cursorAnalysis ``tasksAtTime`` +
+        the CursorPanel core chips).
+        """
         if self._trace is None:
             return "—"
         import bisect
+        sc = getattr(self._view, "_scene", None) if hasattr(self, "_view") else None
+        core_keys = getattr(sc, "_core_filter_keys", None) if sc is not None else None
+        active = bool(core_keys) and len(core_keys) < len(self._trace.core_names)
         found: list = []
         for mk, segs in self._trace.seg_map_by_merge_key.items():
             starts = self._trace.seg_start_by_merge_key.get(mk)
@@ -11629,6 +12143,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 continue
             pos = bisect.bisect_right(starts, ns) - 1
             if pos >= 0 and segs[pos].end >= ns:
+                if active and segs[pos].core not in core_keys:
+                    continue
                 raw = self._trace.task_repr.get(mk, mk)
                 found.append(_task_display_name(raw))
         return ", ".join(dict.fromkeys(found)) if found else "—"
@@ -11668,6 +12184,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if hasattr(self, "_cursor_task_header"):
             self._cursor_task_header.setVisible(_has_cursor)
         self._cursor_table.setVisible(_has_cursor)
+        if hasattr(self, "_cursor_core_chips"):
+            sc = self._view._scene
+            multi = _has_cursor and len(getattr(self._trace, "core_names", ())) > 1
+            if multi:
+                self._cursor_core_chips.set_cores(
+                    self._trace.core_names,
+                    list(sc._core_filter_keys) if sc._core_filter_keys else None)
+            self._cursor_core_chips.setVisible(bool(multi))
         if not _has_cursor:
             self._cursor_table.setRowCount(0)
             return

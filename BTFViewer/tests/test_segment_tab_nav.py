@@ -94,17 +94,30 @@ class SegmentTabNavWebParityTest(unittest.TestCase):
 
     def test_web_filters_navSegs_by_active_task_filters(self) -> None:
         """Tab/Shift+Tab must never surface a segment hidden by the active
-        task filter (search text / migrated-only / heatmap selection) -
-        matching Desktop's task_ok() check inside _pick_next_task_by_time."""
+        task filter (search text / migrated-only / heatmap selection / Core
+        Filter) - matching Desktop's task_ok() check inside
+        _pick_next_task_by_time (_task_merge_key_matches_filter)."""
         app = WEB_APP.read_text(encoding="utf-8")
         self.assertIn(
             "import { taskPassesRowFilter, rawTaskNameMatchesTextFilter, "
-            "normalizeTaskFilterText, coreFilterActive } from './utils/taskFilter.js'", app)
+            "normalizeTaskFilterText, coreFilterActive, taskRunsOnSelectedCore } "
+            "from './utils/taskFilter.js'", app)
         fn_start = app.index("function cycleHighlightedSegment(forward) {")
         fn_body = app[fn_start:fn_start + 2800]
         idx_filter = fn_body.index("navSegs = navSegs.filter(s => taskPassesRowFilter(")
         idx_empty_check = fn_body.index("if (!navSegs || navSegs.length === 0) return")
         self.assertLess(idx_filter, idx_empty_check)
+        # navSegs filter passes the Core Filter through (web) ...
+        self.assertIn("timelineOptions.taskFilterText, timelineOptions.coreFilterKeys,",
+                      app)
+        # ... and Desktop's row filter honours the Core Filter too.
+        scene_src = (BTF_ROOT / "btf_viewer_pkg" / "scene.py").read_text(
+            encoding="utf-8")
+        self.assertIn("_task_runs_on_selected_core(", scene_src)
+        parser_src = (BTF_ROOT / "btf_viewer_pkg" / "parser.py").read_text(
+            encoding="utf-8")
+        self.assertIn("def _task_runs_on_selected_core(", parser_src)
+        self.assertIn("def _task_core_sets(", parser_src)
 
 
 class _QtTestBase(unittest.TestCase):
